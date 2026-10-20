@@ -17,7 +17,24 @@ export const DESKTOP_ORIGIN = 'app://flow';
 /** The URL scheme the desktop app registers on every platform. */
 export const DESKTOP_URL_SCHEME = 'flow';
 
-export type DesktopPlatform = 'darwin' | 'win32' | 'linux';
+/** The Android shell's page origin (docs/design/ANDROID.md; `hostname` in
+ * apps/android/capacitor.config.ts). Capacitor serves the bundled client from
+ * a local server at this name: `.localhost` is reserved to loopback (RFC
+ * 6761), so nothing on the network can be it. Admitted as a bundled client
+ * the way DESKTOP_ORIGIN is. */
+export const ANDROID_ORIGIN = 'https://flow.localhost';
+
+/** Origins that are a bundled client — the desktop shell's renderer and the
+ * Android shell's WebView — rather than a page some site served: admitted
+ * without operator configuration, but they send an Origin and Chromium
+ * enforces CORS on the answer, so they still get the headers. */
+export function isBundledClientOrigin(origin: string | undefined | null): boolean {
+  return origin === DESKTOP_ORIGIN || origin === ANDROID_ORIGIN;
+}
+
+/** The desktop platforms, plus the Android shell, which exposes the same
+ * bridge (apps/android/README.md). */
+export type DesktopPlatform = 'darwin' | 'win32' | 'linux' | 'android';
 
 export interface DesktopInfo {
   platform: DesktopPlatform;

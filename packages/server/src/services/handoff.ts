@@ -30,10 +30,10 @@ type Context = z.infer<typeof HandoffContext>;
 const { authHandoffs, users, sessions } = schema;
 
 function validateContext(body: Context, requestOrigin: string | undefined, checkClient: boolean): void {
-  // The desktop app signs in the way the native apps do — a null client
-  // origin and a `flow://` return URL the OS routes back to it — but unlike
-  // them it sends an Origin header. Treat it as no origin here; the browser
-  // policy already admitted it.
+  // The desktop and Android shells sign in the way the native apps do — a
+  // null client origin and a `flow://` return URL the OS routes back to them
+  // — but unlike them they send an Origin header. Treat it as no origin
+  // here; the browser policy already admitted it.
   const origin = isDesktopOrigin(requestOrigin) ? undefined : requestOrigin;
   if (body.serverOrigin !== new URL(config.webUrlBase).origin) {
     throw badRequest('handoff_origin', 'Handoff must be exchanged at its initiating Flow server');

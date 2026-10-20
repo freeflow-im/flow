@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only (merged over src/main): trust user-installed CA
+     certificates too, so a debug APK can reach a development server behind
+     a private CA (an internal Caddy root, mkcert). A release build keeps
+     Android's default of system CAs only. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:networkSecurityConfig="@xml/network_security_config" />
+</manifest>

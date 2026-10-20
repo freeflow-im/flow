@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { Readable } from 'node:stream';
 import { randomBytes } from 'node:crypto';
-import { DESKTOP_ORIGIN } from '@flow/shared';
+import { isBundledClientOrigin } from '@flow/shared';
 import { Fault, MAX_FILE_BYTES } from './connector.js';
 
 export function createConnectorServer(connector) {
@@ -13,10 +13,11 @@ export function createConnectorServer(connector) {
     try {
       const path = new URL(req.url, connector.publicOrigin).pathname;
       const origin = req.headers.origin;
-      // The desktop app's renderer (docs/specs/desktop-electron.md) is a
-      // bundled client like the native apps and is admitted without
-      // configuration; it still gets CORS headers because Chromium checks them.
-      const desktop = origin === DESKTOP_ORIGIN;
+      // The desktop app's renderer (docs/specs/desktop-electron.md) and the
+      // Android shell (docs/design/ANDROID.md) are bundled clients like the
+      // native apps and are admitted without configuration; they still get
+      // CORS headers because Chromium checks them.
+      const desktop = isBundledClientOrigin(origin);
       if (origin && !desktop && !connector.clientOrigins.includes(origin)) throw new Fault('client_origin_not_allowed', 403);
       if (origin) {
         res.setHeader('Access-Control-Allow-Origin', origin);

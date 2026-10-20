@@ -1,0 +1,21 @@
+{
+  "name": "@flow/android",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Android client: packages/web in a Capacitor shell on the desktop's host seam (docs/design/ANDROID.md, apps/android/README.md). No `build` or `test` script on purpose — `pnpm -r build` and the root `pnpm test` must not need an Android SDK or a `cap sync`; the APK and the JUnit tests are `apk:debug` / `test:android`, run by the android.yml workflow.",
+  "scripts": {
+    "sync": "cap sync android",
+    "apk:debug": "cap sync android && cd android && ./gradlew --no-daemon assembleDebug",
+    "apk:debug:dev": "cross-env-shell FLOW_ANDROID_DEV=1 \"cap sync android && cd android && ./gradlew --no-daemon assembleDebug\"",
+    "open": "cap open android",
+    "test:android": "cd android && ./gradlew --no-daemon -q testDebugUnitTest"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.5.1",
+    "@capacitor/core": "^8.5.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.1",
+    "cross-env": "^7.0.3"
+  }
+}

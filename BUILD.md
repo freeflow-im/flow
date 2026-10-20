@@ -16,6 +16,7 @@ If you only want to run Flow locally, you want
 | macOS app | `apps/macos/tools/make-app.sh` | `apps/macos/tools/release-macos.sh` | No — run locally, needs signing credentials |
 | iOS app | `xcodegen generate` + Xcode | `apps/ios/tools/release-ios.sh` | No — run locally, needs the signing account |
 | `flow-agent-bridge` (npm) | `pnpm --filter flow-agent-bridge build` | bump `version`, merge to `main` | **Yes** — GitHub Actions publishes |
+| Android app | `pnpm --filter @flow/android apk:debug` | — (no release path yet, ANDROID.md phase 6) | No |
 | Marketing site (`flowlandingpage/`) | `pnpm build` (in `flowlandingpage/`) | merge to `main` | **Yes** — GitHub Actions deploys to Cloudflare Pages |
 | Desktop app (Electron, `apps/desktop`) | `pnpm --filter @flow/desktop build` then `start` | not yet — M5 of `docs/specs/desktop-electron.md` | No — runs from source only today |
 
@@ -247,6 +248,28 @@ First-time account setup (device registration, app record) is in
 
 Simulator, device install, signing, and server selection:
 [docs/design/IOS.md](docs/design/IOS.md).
+
+---
+
+## Android app
+
+The web client in a Capacitor shell — `apps/android` (route and phasing in
+[docs/design/ANDROID.md](docs/design/ANDROID.md); the seam is the desktop
+client's, [docs/specs/desktop-electron.md](docs/specs/desktop-electron.md)).
+The Gradle project is committed; the web bundle is synced into it at build
+time, and the server it talks to is baked into the shell, not the bundle:
+
+```sh
+pnpm --filter @flow/web build
+pnpm --filter @flow/android apk:debug            # -PflowServerUrl=… to target another server
+# → apps/android/android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+Needs JDK 21 + Android SDK 36 (`ANDROID_HOME`); `pnpm -r build` deliberately
+does not. `.github/workflows/android.yml` builds a debug APK artifact for PRs
+touching `apps/android/**`, `packages/web/**` or `packages/shared/**`. No Play
+listing or release script yet (ANDROID.md phase 6); nothing ships
+automatically. Details: [apps/android/README.md](apps/android/README.md).
 
 ---
 
