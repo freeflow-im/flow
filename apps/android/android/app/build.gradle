@@ -1,0 +1,83 @@
+apply plugin: 'com.android.application'
+
+// Build number from CI (-PflowVersionCode=$(git rev-list --count HEAD)) — the
+// same derivation apps/ios/tools/release-ios.sh uses, so no version ever gets
+// bumped in a feature PR (CLAUDE.md). A local build is simply 1.
+def flowVersionCode = project.hasProperty('flowVersionCode') ? project.flowVersionCode.toInteger() : 1
+def flowVersionName = project.hasProperty('flowVersionName') ? project.flowVersionName : '0.1.0-local'
+// The Flow server this build talks to, baked in the way apps/desktop bakes
+// FLOW_SERVER_URL, and handed to the page through the host seam (ShellBoot).
+def flowServerUrl = (project.hasProperty('flowServerUrl') ? project.flowServerUrl : 'https://app.freeflow.im').replaceAll('/+$', '')
+
+android {
+    namespace = "im.freeflow.app"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "im.freeflow.app"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode flowVersionCode
+        versionName flowVersionName
+        buildConfigField 'String', 'FLOW_SERVER_URL', "\"${flowServerUrl}\""
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    buildFeatures {
+        buildConfig = true
+    }
+    // A committed debug keystore (no secret in it — the conventional
+    // android/androiddebugkey credentials) so every debug APK, from CI or a
+    // dev box, carries the same signature and installs over the previous one
+    // instead of demanding an uninstall. Release signing comes with the
+    // Play release work (ANDROID.md phase 6).
+    signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation "androidx.browser:browser:1.8.0" // Chrome Custom Tabs: the system browser for sign-in (FlowShellPlugin.openExternal)
+    implementation "androidx.security:security-crypto:1.1.0-alpha06" // credentials at rest (Secrets.java)
+    implementation "androidx.webkit:webkit:$androidxWebkitVersion" // document-start script (ShellBoot.java)
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

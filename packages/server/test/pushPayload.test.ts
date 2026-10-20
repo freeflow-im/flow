@@ -270,7 +270,9 @@ describe('the custom keys are the macOS banner contract', () => {
   it('carries exactly the userInfo keys, plus notificationId', () => {
     const p = buildPushPayload(ctx({ threadRootId: 'root-1' }), 7);
     expect(Object.keys(p).filter((k) => k !== 'aps').sort()).toEqual([
+
       'channelId',
+      'kind',
       'messageId',
       'notificationId',
       'threadRootId',

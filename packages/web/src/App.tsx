@@ -6,6 +6,7 @@ import { OPEN_WORKSPACE_EVENT } from './lib/workspaceSwitcher';
 import { consumeHandoffCallback, pendingHandoff } from './lib/authHandoff';
 import { installDeepLinks, type DeepLink } from './lib/deepLinks';
 import { getHost } from './lib/host';
+import { disablePush, enablePush } from './lib/pushAndroid';
 import { originLabel } from './lib/serverOrigin';
 import { BackendError, type ArtifactDTO, type UserDTO, type AuthResponse, type WorkspaceDTO } from '@flow/shared';
 import { backgroundSync } from './lib/backgroundSync';
@@ -437,12 +438,33 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
   // Sign out of *this* connection only: its bearer, its caches and object URLs,
   // its query cache, its stored selection. Any other connection's runtime is
   // untouched, and a late response on this one cannot recreate what went.
+  // Push in the Android shell (ANDROID.md phase 3): register this device with
+  // the connection once its user is known — re-done on every launch, since
+  // tokens rotate silently. A tap on a notification is a bridge click, which
+  // the main pane already routes.
+  useEffect(() => {
+    if (!user || getHost().platform !== 'android') return;
+    let off = () => {};
+    let alive = true;
+    void enablePush(runtime).then((teardown) => { if (alive) off = teardown; else teardown(); });
+    return () => { alive = false; off(); };
+  }, [user?.id, runtime]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const signOut = useCallback(() => {
-    void backendFor(runtime).signOut().catch(() => {});
-    connectionManager().signOut(runtime.connectionId);
+    const finish = () => {
+      void backendFor(runtime).signOut().catch(() => {});
+      connectionManager().signOut(runtime.connectionId);
+      window.dispatchEvent(new Event('flow:registry'));
+    };
     qc.clear();
     setUser(null);
-    window.dispatchEvent(new Event('flow:registry'));
+    // In the Android shell the device stops being this user's *before* the
+    // session goes: the unregister needs the token that logout invalidates,
+    // and both need the runtime, which signing out disposes — so the
+    // registry cleanup waits for it (bounded; a dead server must not pin
+    // the sign-in screen behind a request that never returns).
+    if (getHost().platform === 'android') void disablePush(runtime).finally(finish);
+    else finish();
   }, [qc, runtime]);
 
   // Switch the main pane to a view, with all the usual channel-switch

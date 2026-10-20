@@ -9,6 +9,8 @@ import path from 'node:path';
 import {
   ApnsHttp2PushSender,
   DevPushSender,
+  FcmHttpV1PushSender,
+  PlatformPushSender,
   _setPushSenderForTests,
   apnsEnvFor,
   apnsTopicFor,
@@ -26,11 +28,18 @@ const saved = {
   key: process.env.FLOW_APNS_KEY,
   keyId: process.env.FLOW_APNS_KEY_ID,
   teamId: process.env.FLOW_APNS_TEAM_ID,
+  fcm: process.env.FLOW_FCM_SERVICE_ACCOUNT,
 };
 
 /** A throwaway P-256 key, so selecting the apns driver needs no real .p8 (#250). */
 const P8_PEM = crypto
   .generateKeyPairSync('ec', { namedCurve: 'P-256' })
+  .privateKey.export({ type: 'pkcs8', format: 'pem' })
+  .toString();
+
+/** A throwaway RSA key, so selecting the FCM driver needs no real Firebase key. */
+const RSA_PEM = crypto
+  .generateKeyPairSync('rsa', { modulusLength: 2048 })
   .privateKey.export({ type: 'pkcs8', format: 'pem' })
   .toString();
 
@@ -74,6 +83,7 @@ afterEach(async () => {
     ['FLOW_APNS_KEY', saved.key],
     ['FLOW_APNS_KEY_ID', saved.keyId],
     ['FLOW_APNS_TEAM_ID', saved.teamId],
+    ['FLOW_FCM_SERVICE_ACCOUNT', saved.fcm],
   ] as const) {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
@@ -88,14 +98,20 @@ async function onlyArtifact(): Promise<{ name: string; json: Record<string, unkn
 }
 
 describe('driver selection', () => {
-  it('defaults to the dev driver', () => {
+  const driverFor = (platform: string) => (pushSender() as PlatformPushSender).driverFor(platform);
+
+  it('defaults to the dev driver, for every platform', () => {
     delete process.env.FLOW_PUSH_DRIVER;
-    expect(pushSender()).toBeInstanceOf(DevPushSender);
+    delete process.env.FLOW_FCM_SERVICE_ACCOUNT;
+    expect(pushSender()).toBeInstanceOf(PlatformPushSender);
+    expect(driverFor('ios')).toBeInstanceOf(DevPushSender);
+    expect(driverFor('android')).toBeInstanceOf(DevPushSender);
+    expect(driverFor('watch')).toBeInstanceOf(DevPushSender); // unknown platform: the fallback
   });
 
   it('ignores an unknown driver name rather than half-configuring one', () => {
     process.env.FLOW_PUSH_DRIVER = 'firebase';
-    expect(pushSender()).toBeInstanceOf(DevPushSender);
+    expect(driverFor('ios')).toBeInstanceOf(DevPushSender);
   });
 
   it('selects the real apns driver when it is configured', () => {
@@ -103,7 +119,26 @@ describe('driver selection', () => {
     process.env.FLOW_APNS_KEY = Buffer.from(P8_PEM).toString('base64');
     process.env.FLOW_APNS_KEY_ID = 'ABCDE12345';
     process.env.FLOW_APNS_TEAM_ID = 'TEAM123456';
-    expect(pushSender()).toBeInstanceOf(ApnsHttp2PushSender);
+    expect(driverFor('ios')).toBeInstanceOf(ApnsHttp2PushSender);
+    // …and iOS being configured says nothing about Android.
+    expect(driverFor('android')).toBeInstanceOf(DevPushSender);
+  });
+
+  it('selects the FCM driver for android when a service account is configured, leaving iOS alone', () => {
+    delete process.env.FLOW_PUSH_DRIVER;
+    process.env.FLOW_FCM_SERVICE_ACCOUNT = JSON.stringify({
+      type: 'service_account',
+      project_id: 'freeflow-android',
+      client_email: 'firebase-adminsdk@freeflow-android.iam.gserviceaccount.com',
+      private_key: RSA_PEM,
+    });
+    expect(driverFor('android')).toBeInstanceOf(FcmHttpV1PushSender);
+    expect(driverFor('ios')).toBeInstanceOf(DevPushSender);
+  });
+
+  it('refuses a FLOW_FCM_SERVICE_ACCOUNT that is not a service-account key', () => {
+    process.env.FLOW_FCM_SERVICE_ACCOUNT = JSON.stringify({ project_id: 'p' });
+    expect(() => pushSender()).toThrow(/service-account/);
   });
 
   it('refuses to half-configure the apns driver rather than silently writing to disk', () => {

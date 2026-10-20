@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "847800307192",
+    "project_id": "freeflow-android",
+    "storage_bucket": "freeflow-android.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:847800307192:android:ec67888191e96cecf39a0d",
+        "android_client_info": {
+          "package_name": "im.freeflow.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAVwVsiQmIrj4JvgghPfE3pCQwM9RvHml8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

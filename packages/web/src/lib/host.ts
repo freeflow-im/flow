@@ -1,7 +1,9 @@
 // The host seam (docs/specs/desktop-electron.md, "Bridge contract").
 //
-// The web client runs in two hosts: a browser tab, and the desktop shell's
-// renderer, where the preload exposes `window.flowDesktop`. Everything the
+// The web client runs in three hosts: a browser tab, the desktop shell's
+// renderer, where the preload exposes `window.flowDesktop`, and the Android
+// shell's WebView, which builds the same bridge from a document-start script
+// and a Capacitor plugin (hostAndroid.ts). Everything the
 // shell can do that a tab cannot — keep a credential in the OS store, open
 // the system browser and get a `flow://` link back, know whether the window
 // is focused — is reached through `getHost()`. The browser fallback has the
@@ -21,10 +23,14 @@ import type {
   FlowDesktopBridge,
   NotificationRouting,
 } from '@flow/shared';
+import { androidBridge } from './hostAndroid';
 
 export interface FlowHost {
+  /** A packaged shell — desktop or Android — rather than a browser tab: it
+   * signs in through the system browser, keeps credentials out of
+   * localStorage, has no "open the app" pitch to make. */
   readonly isDesktop: boolean;
-  readonly platform: 'browser' | 'darwin' | 'win32' | 'linux';
+  readonly platform: 'browser' | 'darwin' | 'win32' | 'linux' | 'android';
   /** The Flow server this client is built for, or null when the page's own
    * origin is the server (the browser case). */
   readonly defaultServerOrigin: string | null;
@@ -174,7 +180,7 @@ let current: FlowHost | null = null;
 
 export function getHost(): FlowHost {
   if (current) return current;
-  const bridge = typeof window !== 'undefined' ? window.flowDesktop : undefined;
+  const bridge = typeof window !== 'undefined' ? window.flowDesktop ?? androidBridge() : undefined;
   current = bridge ? desktopHost(bridge) : browserHost();
   return current;
 }

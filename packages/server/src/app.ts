@@ -13,6 +13,11 @@ import { registerBrowserPolicy } from './lib/browserPolicy.js';
 export function buildApp(): FastifyInstance {
   const app = Fastify({
     logger: { level: process.env.LOG_LEVEL ?? 'info' },
+    // DELETE /v1/me/devices/:token carries the device's push token in the
+    // path. An APNs token is 64 hex characters; an FCM registration token is
+    // ~160, past Fastify's default of 100, which answers 414 before the route
+    // ever runs. DeviceTokenParam allows up to 4096.
+    maxParamLength: 4096,
   });
   registerBrowserPolicy(app);
   void app.register(formbody); // Slack SDKs send application/x-www-form-urlencoded

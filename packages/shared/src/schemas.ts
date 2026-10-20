@@ -748,19 +748,45 @@ export type ListScheduledMessagesQuery = z.infer<typeof ListScheduledMessagesQue
  * that sends uppercase on one launch and lowercase on the next still hits the
  * same row instead of creating a second one.
  */
+/** A push token: APNs' hex (32–256 chars) or FCM's opaque registration token
+ * (URL-safe characters, colons included, up to 4 KB). The per-platform rule
+ * below narrows it further at registration. */
 export const DeviceTokenParam = z
   .string()
-  .regex(/^[0-9a-fA-F]{32,256}$/, 'must be a hex APNs device token');
+  .regex(/^[A-Za-z0-9_:-]{20,4096}$/, 'must be a device push token');
 
-/** POST /v1/me/devices — register (or re-register) this device for push. */
-export const RegisterDeviceBody = z.object({
+const APNS_TOKEN_RE = /^[0-9a-fA-F]{32,256}$/;
+
+/** POST /v1/me/devices — register (or re-register) this device for push.
+ *
+ * `environment` and `bundleId` are APNs concepts (sandbox vs production, the
+ * topic) with no FCM counterpart (ANDROID.md phase 3): required for ios,
+ * absent for android. Enforced here, so the row shape follows the platform. */
+export const RegisterDeviceFields = z.object({
   token: DeviceTokenParam,
-  /** iOS only for now; macOS joins the enum when it registers for push. */
-  platform: z.enum(['ios']),
-  environment: z.enum(['sandbox', 'production']),
+  platform: z.enum(['ios', 'android']),
+  environment: z.enum(['sandbox', 'production']).optional(),
   /** APNs topic — the app's bundle id, e.g. `im.freeflow.app`. */
-  bundleId: z.string().min(1).max(255),
+  bundleId: z.string().min(1).max(255).optional(),
 });
+/** The per-platform rule, exported so a schema that extends the fields (the
+ * server's multi-server variant) can apply the same one. */
+export const refineDevicePlatform = (b: z.infer<typeof RegisterDeviceFields>, ctx: z.RefinementCtx): void => {
+    if (b.platform === 'android') {
+      // The row shape follows the platform both ways: an android row must not
+      // carry the APNs fields, or the sender would trust an environment/topic
+      // that means nothing to FCM.
+      if (b.environment !== undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['environment'], message: 'not used for android' });
+      if (b.bundleId !== undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['bundleId'], message: 'not used for android' });
+      return;
+    }
+    if (!APNS_TOKEN_RE.test(b.token)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['token'], message: 'must be a hex APNs device token' });
+    }
+    if (!b.environment) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['environment'], message: 'required for ios' });
+    if (!b.bundleId) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['bundleId'], message: 'required for ios' });
+};
+export const RegisterDeviceBody = RegisterDeviceFields.superRefine(refineDevicePlatform);
 export type RegisterDeviceBody = z.infer<typeof RegisterDeviceBody>;
 
 // ---- community email (#481) ------------------------------------
