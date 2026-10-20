@@ -7,6 +7,7 @@
 // the shell owns the backdrop, the button row, the caption and the two ways
 // out (Escape, click outside), and the caller passes its own buttons in.
 import { useEffect, useRef, type ReactNode } from 'react';
+import { useBackToClose } from '../lib/useBackToClose';
 
 /** One overlay button. Callers only vary the glyph and what it does. */
 export function LightboxButton({
@@ -48,6 +49,7 @@ export function LightboxShell({
   children: ReactNode;
 }) {
   const root = useRef<HTMLDivElement | null>(null);
+  useBackToClose(onClose); // the Android shell's Escape
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

@@ -25,6 +25,7 @@ import { ApiError, api, uploadAvatar, uploadWorkspaceAvatar } from '../lib/api';
 import { useAuth, useSelection } from '../state';
 import { useChannelMembers, useChannels, useMemberMap, useMembers, useSelfRegisterDomain, useWorkspaces } from '../hooks';
 import { useIsFlow } from '../lib/backend';
+import { useBackToClose } from '../lib/useBackToClose';
 import { AuthImg, Avatar } from './Avatar';
 
 export function Modal({
@@ -43,6 +44,7 @@ export function Modal({
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
+  useBackToClose(onClose); // the Android shell's Escape
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onMouseDown={onClose}>
       <div

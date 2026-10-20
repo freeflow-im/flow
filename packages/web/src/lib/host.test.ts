@@ -51,6 +51,15 @@ describe('getHost', () => {
     expect(store.has('flow.token')).toBe(false);
   });
 
+  it('reports no back button in a browser or on a desktop bridge without one', () => {
+    vi.stubGlobal('window', {});
+    const off = getHost().back.onBack(() => true);
+    expect(typeof off).toBe('function');
+    __setHost(null);
+    vi.stubGlobal('window', { flowDesktop: bridge('https://app.freeflow.im') });
+    expect(typeof getHost().back.onBack(() => true)).toBe('function');
+  });
+
   it('allows plaintext loopback only for a build baked against a loopback server', () => {
     vi.stubGlobal('window', { flowDesktop: bridge('http://127.0.0.1:8787') });
     expect(getHost().allowsInsecureLoopback).toBe(true);

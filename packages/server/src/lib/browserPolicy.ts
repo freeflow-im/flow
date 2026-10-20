@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { DESKTOP_ORIGIN } from '@flow/shared';
+import { isBundledClientOrigin } from '@flow/shared';
 import { config } from '../config.js';
 
 /** Accept serialized HTTP origins only; never suffix-match or trust forwarded headers. */
@@ -10,13 +10,13 @@ export function validOrigin(value: string): boolean {
   } catch { return false; }
 }
 
-/** The desktop app's renderer (docs/specs/desktop-electron.md). It is a
- * bundled client like the native apps, not a page some site served, so it is
- * accepted everywhere without operator configuration — but it does send an
- * Origin and Chromium enforces CORS on the answer, so it still gets the
- * allow-origin headers. */
+/** The desktop app's renderer (docs/specs/desktop-electron.md) or the
+ * Android shell's WebView (docs/design/ANDROID.md). A bundled client like the
+ * native apps, not a page some site served, so it is accepted everywhere
+ * without operator configuration — but it does send an Origin and Chromium
+ * enforces CORS on the answer, so it still gets the allow-origin headers. */
 export function isDesktopOrigin(origin: string | undefined): boolean {
-  return origin === DESKTOP_ORIGIN;
+  return isBundledClientOrigin(origin);
 }
 
 export function originAllowed(origin: string | undefined, requestOrigin?: string): boolean {

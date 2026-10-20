@@ -1,0 +1,143 @@
+# Debug APK for the Android shell (docs/design/ANDROID.md).
+#
+# Two outputs:
+#   1. On every PR touching the shell or the web client it bundles: the APK as
+#      a workflow artifact (needs a GitHub login to fetch). Reports, does not
+#      block — same posture as ci.yml.
+#   2. On a push to a branch this workflow watches, when the repository variable
+#      ANDROID_DEV_RELEASE_TAG is set (e.g. `android-dev`): the same APK is
+#      attached to a rolling pre-release under that tag, which gives testers a
+#      stable, login-free download URL:
+#        https://github.com/<owner>/flow/releases/download/<tag>/flow-android-debug.apk
+#      Unset (the default, and upstream's state) = no release is ever touched.
+#
+# Which server the app talks to is baked into the shell (BuildConfig), the
+# way apps/desktop bakes FLOW_SERVER_URL: the repository variable
+# ANDROID_SERVER_URL (default https://app.freeflow.im). The web bundle itself
+# is server-agnostic. ANDROID_RUNNER picks the runner label (default
+# ubuntu-latest). ANDROID_DEV_BUILD=1 additionally relaxes the WebView for a
+# plain-http loopback server (apps/android/README.md) — never for a public one.
+#
+# Why a separate workflow and not a step in ci.yml: `pnpm -r build` must stay
+# SDK-free (it is what Railway runs), and this lane needs the Android SDK,
+# JDK 21 and a Gradle download — minutes that server-only PRs should not pay.
+# ubuntu-latest ships the SDK; setup-java brings the JDK.
+name: android
+
+on:
+  pull_request:
+    paths:
+      - 'apps/android/**'
+      - 'packages/web/**'
+      - 'packages/shared/**'
+      - '.github/workflows/android.yml'
+  push:
+    branches:
+      - main
+      - 'feat/android-**'
+    paths:
+      - 'apps/android/**'
+      - 'packages/web/**'
+      - 'packages/shared/**'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  debug-apk:
+    # A fork can point this lane at its own runner with the ANDROID_RUNNER
+    # variable (e.g. `self-hosted`, or a JSON label list); unset — upstream's
+    # state — it is GitHub's Ubuntu image, which ships the Android SDK.
+    runs-on: ${{ vars.ANDROID_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    # `contents: write` only matters for the release step; it is harmless on a
+    # PR run, where that step is skipped.
+    permissions:
+      contents: write
+    env:
+      SERVER_URL: ${{ vars.ANDROID_SERVER_URL || 'https://app.freeflow.im' }}
+      DEV_BUILD: ${{ vars.ANDROID_DEV_BUILD || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # versionCode = commit count, like release-ios.sh
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # The same bundle the desktop shell serves: which server it talks to is
+      # the shell's business, not the build's.
+      - name: Build web client
+        run: |
+          pnpm --filter @flow/shared build
+          pnpm --filter @flow/web build
+
+      - name: Sync web assets into the Android project
+        env:
+          FLOW_ANDROID_DEV: ${{ env.DEV_BUILD }}
+        run: pnpm --filter @flow/android sync
+
+      # JUnit tests for the shell's own logic (boot script, link policy). Pure
+      # JVM — no emulator.
+      - name: Android unit tests
+        working-directory: apps/android/android
+        run: ./gradlew --no-daemon testDebugUnitTest
+
+      - name: Assemble debug APK
+        id: apk
+        working-directory: apps/android/android
+        run: |
+          count=$(git rev-list --count HEAD)
+          sha=$(git rev-parse --short HEAD)
+          ./gradlew --no-daemon assembleDebug \
+            -PflowVersionCode="$count" \
+            -PflowVersionName="0.1.0-dev.${count}+${sha}" \
+            -PflowServerUrl="$SERVER_URL"
+          cp app/build/outputs/apk/debug/app-debug.apk flow-android-debug.apk
+          echo "version=0.1.0-dev.${count}+${sha}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flow-android-debug-${{ github.sha }}
+          path: apps/android/android/flow-android-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      # Rolling pre-release for testers — opt-in per repository via the
+      # ANDROID_DEV_RELEASE_TAG variable, and only for pushes (a PR from a fork
+      # must never be able to publish).
+      - name: Publish rolling dev pre-release
+        if: github.event_name == 'push' && vars.ANDROID_DEV_RELEASE_TAG != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ vars.ANDROID_DEV_RELEASE_TAG }}
+          name: Flow for Android — dev build
+          prerelease: true
+          make_latest: false
+          files: apps/android/android/flow-android-debug.apk
+          body: |
+            Rolling **debug** build of the Android shell (`docs/design/ANDROID.md`).
+            Replaced on every push to `${{ github.ref_name }}`; not a release.
+
+            - Version: `${{ steps.apk.outputs.version }}`
+            - Commit: ${{ github.sha }}
+            - Talks to: `${{ env.SERVER_URL }}`${{ env.DEV_BUILD == '1' && ' (dev build: plain-http loopback allowed)' || '' }}
+
+            Install: download `flow-android-debug.apk` on the phone, open it, allow installs from your browser when asked. Updates install over the previous build (same debug signature).

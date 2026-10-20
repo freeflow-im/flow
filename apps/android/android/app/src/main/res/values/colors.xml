@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The workspace purple (packages/web index.html theme-color). Used for the
+         status bar so it reads as one surface with the sidebar. -->
+    <color name="flowPurple">#6b30af</color>
+</resources>

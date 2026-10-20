@@ -79,9 +79,11 @@ accepted automatically; additional origins must be listed. Configure canonical
 the same policy independently, before the authenticated socket handshake. Native
 clients without an Origin still require the existing session authentication.
 The desktop app's renderer origin, `app://flow`, is accepted automatically as
-well (docs/specs/desktop-electron.md): it is a bundled client like the native
-apps, but it sends an Origin and gets the CORS headers back. A server older
-than that change refuses the desktop app at discovery.
+well (docs/specs/desktop-electron.md), and so is the Android shell's,
+`https://flow.localhost` (docs/design/ANDROID.md; `.localhost` is reserved to
+loopback, so no site on the network can be it): both are bundled clients like
+the native apps, but they send an Origin and get the CORS headers back. A
+server older than these changes refuses them at discovery.
 
 The HTTP policy covers discovery, auth, API, and proxied media, including errors.
 Allowed preflights return 204 with GET/HEAD/POST/PUT/PATCH/DELETE/OPTIONS and

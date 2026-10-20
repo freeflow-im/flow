@@ -27,6 +27,7 @@ import { ACTIVITY_VIEW_ID, ADMIN_VIEW_ID, CHANNEL_BROWSER_VIEW_ID, DIRECTORY_VIE
 import { HuddleProvider, useHuddle, type HuddleState } from '../huddle';
 import { useNameMap, useSwitcherEntries, useWorkspaceInvites, useWorkspaces } from '../hooks';
 import { getHost, isLookingAtApp, onLookingChange } from '../lib/host';
+import { backAction } from '../lib/hardwareBack';
 import { useConnectionSync } from '../lib/backgroundSync';
 import type { NotificationRouting } from '@flow/shared';
 import { openWorkspace } from '../lib/workspaceSwitcher';
@@ -85,6 +86,27 @@ export default function Main() {
   // refs so the socket handler always sees current selection
   const selRef = useRef(sel);
   selRef.current = sel;
+
+  // The hardware back button (ANDROID.md phase 1): thread → side panel →
+  // drawer, and only then the OS. Registered for as long as the main pane is
+  // mounted; an overlay that opens later registers above it and wins. A
+  // browser or desktop host reports no back, so this never runs there.
+  useEffect(() => {
+    return getHost().back.onBack(() => {
+      const cur = selRef.current;
+      switch (backAction({
+        threadOpen: cur.threadRootId !== null,
+        panelOpen: cur.artifactId !== null || cur.filesOpen,
+        isMobile,
+        drawerOpen,
+      })) {
+        case 'close-thread': cur.openThread(null); return true;
+        case 'close-panel': cur.closeSidePanel(); return true;
+        case 'open-drawer': setDrawerOpen(true); return true;
+        case 'leave': return false;
+      }
+    });
+  }, [isMobile, drawerOpen]);
   const authRef = useRef(auth);
   authRef.current = auth;
   const names = useNameMap(sel.workspaceId);

@@ -1,7 +1,9 @@
 // The host seam (docs/specs/desktop-electron.md, "Bridge contract").
 //
-// The web client runs in two hosts: a browser tab, and the desktop shell's
-// renderer, where the preload exposes `window.flowDesktop`. Everything the
+// The web client runs in three hosts: a browser tab, the desktop shell's
+// renderer, where the preload exposes `window.flowDesktop`, and the Android
+// shell's WebView, which builds the same bridge from a document-start script
+// and a Capacitor plugin (hostAndroid.ts). Everything the
 // shell can do that a tab cannot — keep a credential in the OS store, open
 // the system browser and get a `flow://` link back, know whether the window
 // is focused — is reached through `getHost()`. The browser fallback has the
@@ -11,6 +13,7 @@
 // (sign-in goes through the system browser, the "open the desktop app" pitch
 // is pointless inside the desktop app), not for capability checks.
 import type {
+  DesktopBack,
   DesktopBadge,
   DesktopLinks,
   DesktopNotification,
@@ -21,10 +24,14 @@ import type {
   FlowDesktopBridge,
   NotificationRouting,
 } from '@flow/shared';
+import { androidBridge } from './hostAndroid';
 
 export interface FlowHost {
+  /** A packaged shell — desktop or Android — rather than a browser tab: it
+   * signs in through the system browser, keeps credentials out of
+   * localStorage, has no "open the app" pitch to make. */
   readonly isDesktop: boolean;
-  readonly platform: 'browser' | 'darwin' | 'win32' | 'linux';
+  readonly platform: 'browser' | 'darwin' | 'win32' | 'linux' | 'android';
   /** The Flow server this client is built for, or null when the page's own
    * origin is the server (the browser case). */
   readonly defaultServerOrigin: string | null;
@@ -40,6 +47,9 @@ export interface FlowHost {
   readonly zoom: DesktopZoom;
   readonly notifications: DesktopNotifications;
   readonly badge: DesktopBadge;
+  /** The hardware back button; a browser and the desktop report none, so a
+   * listener there is never called. */
+  readonly back: DesktopBack;
 }
 
 /** "Looking at it" (docs/design/NOTIFICATIONS.md): the page is visible, and
@@ -129,6 +139,9 @@ function browserWindow(): DesktopWindow {
 
 const browserZoom: DesktopZoom = { get: () => 0, set: () => {} };
 
+/** No back button here: the listener is kept nowhere and never called. */
+const noBack: DesktopBack = { onBack: () => () => {} };
+
 function browserHost(): FlowHost {
   return {
     isDesktop: false,
@@ -142,6 +155,7 @@ function browserHost(): FlowHost {
     zoom: browserZoom,
     notifications: browserNotifications(),
     badge: browserBadge,
+    back: noBack,
   };
 }
 
@@ -167,6 +181,7 @@ function desktopHost(bridge: FlowDesktopBridge): FlowHost {
     zoom: bridge.zoom,
     notifications: bridge.notifications,
     badge: bridge.badge,
+    back: bridge.back ?? noBack,
   };
 }
 
@@ -174,7 +189,7 @@ let current: FlowHost | null = null;
 
 export function getHost(): FlowHost {
   if (current) return current;
-  const bridge = typeof window !== 'undefined' ? window.flowDesktop : undefined;
+  const bridge = typeof window !== 'undefined' ? window.flowDesktop ?? androidBridge() : undefined;
   current = bridge ? desktopHost(bridge) : browserHost();
   return current;
 }
