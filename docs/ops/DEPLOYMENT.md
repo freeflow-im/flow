@@ -67,6 +67,7 @@ Secrets live only in Railway service variables — never in the repo.
 | `FLOW_APNS_TEAM_ID` | Apple Developer team id — the provider JWT's `iss`. |
 | `FLOW_APNS_TOPIC` | APNs topic = the app's bundle id; defaults to `im.freeflow.app`. A device that registered under a different bundle id wins over this. |
 | `FLOW_APNS_ENV` | `production` (set) or `sandbox`. **Fallback only — the per-device `environment` column wins**, so a TestFlight build (which uses *production* APNs) and a locally signed development build can both be live against this server at once. Getting this wrong is the classic first-deploy silence: pushes are accepted by the wrong host and simply never arrive. |
+| `FLOW_FCM_SERVICE_ACCOUNT` | Android push (ANDROID.md phase 3): the Firebase service-account key — a path to the JSON, the JSON itself, or its base64. Set = `android` device rows are sent through FCM HTTP v1; unset = the dev driver writes them to `FLOW_PUSH_OUTBOX` like an unconfigured iOS. One key per Firebase project; it can send as the app to every registered device, so treat it like `FLOW_APNS_KEY`. The app's own `google-services.json` (not secret) must come from the same project. |
 | `FLOW_PUSH_BODY_PREVIEW` | Defaults on: the message text rides in the push (operator ruling, decision_log 2026-09-01). Set to `0` to send who-messaged-you with no body, so no plaintext reaches Apple. |
 
 ## Operations

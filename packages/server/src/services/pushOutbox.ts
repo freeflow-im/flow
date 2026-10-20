@@ -365,13 +365,13 @@ export async function drainPendingPush(log: Logger): Promise<number> {
         continue;
       }
       if (result.disableDevice) {
-        // APNs 410 / BadDeviceToken: the app is gone or the token rotated.
+        // APNs 410 / BadDeviceToken, FCM UNREGISTERED: the app is gone or the token rotated.
         // Kept, not deleted — the next cold start's register revives the row.
         await db
           .update(deviceTokens)
           .set({ disabledAt: new Date() })
           .where(eq(deviceTokens.id, device.id));
-        log.info({ deviceId: device.id, reason: result.reason }, 'push device disabled by APNs');
+        log.info({ deviceId: device.id, reason: result.reason }, 'push device disabled by the push service');
       } else if (result.retryable) {
         anyRetryable = true;
       } else {
