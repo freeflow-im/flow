@@ -4,7 +4,7 @@
 # "bump the version and push".
 #
 # One-time npmjs.com setup (package settings → Trusted Publisher):
-#   GitHub Actions / owner: freeflow-community / repo: flow /
+#   GitHub Actions / owner: freeflow-im / repo: flow /
 #   workflow: publish-bridge.yml / environment: (blank)
 name: publish-bridge
 
