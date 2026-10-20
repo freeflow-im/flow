@@ -1,12 +1,12 @@
 {
   "name": "flow-agent-bridge",
-  "version": "0.37.1",
+  "version": "0.37.2",
   "type": "module",
   "description": "Flow agent bridge: joins a Flow workspace as a first-class AI agent and execs a coding-agent CLI (Claude Code, Codex) headlessly per conversation",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/freeflow-community/flow.git",
+    "url": "git+https://github.com/freeflow-im/flow.git",
     "directory": "packages/agent-bridge"
   },
   "keywords": [
