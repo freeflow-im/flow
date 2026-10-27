@@ -183,6 +183,7 @@ export default function AuthScreen({
   resetToken,
   signinToken,
   joinWorkspace,
+  startOnRegister,
 }: {
   onSignedIn: (r: AuthResponse & { autoJoined?: WorkspaceDTO[] }) => void;
   signupToken?: string | null;
@@ -191,6 +192,8 @@ export default function AuthScreen({
   /** Workspace name behind a join link, when JoinScreen is wrapping us — so
    * the card says what the visitor is signing in *for* (issue #85). */
   joinWorkspace?: string | null;
+  /** Open on Register rather than Sign In (the marketing site's Sign up). */
+  startOnRegister?: boolean;
 }) {
   const { api, scopedStorageKey } = useBoundApi();
   // A pending workspace invite means the visitor most likely has no account
@@ -203,7 +206,7 @@ export default function AuthScreen({
     signinToken ? 'signin-link'
       : signupToken ? 'complete'
       : resetToken ? 'reset'
-      : invited ? 'register'
+      : invited || startOnRegister ? 'register'
       : 'signin',
   );
   const [email, setEmail] = useState('');

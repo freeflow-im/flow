@@ -57,7 +57,7 @@ function AgentVisual() {
   return (
     <div className="rounded-[10px] border border-line bg-mist px-3.5 py-3">
       <code className="block truncate font-mono text-[11.5px] text-body">
-        reads freeflow-community/flow · can push
+        reads freeflow-im/flow · can push
       </code>
       <div className="mt-3 flex items-center gap-2">
         <span className="inline-flex size-6 items-center justify-center rounded-[6px] bg-accent text-[9px] font-semibold text-white">

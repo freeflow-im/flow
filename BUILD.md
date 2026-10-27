@@ -16,7 +16,8 @@ If you only want to run Flow locally, you want
 | macOS app | `apps/macos/tools/make-app.sh` | `apps/macos/tools/release-macos.sh` | No — run locally, needs signing credentials |
 | iOS app | `xcodegen generate` + Xcode | `apps/ios/tools/release-ios.sh` | No — run locally, needs the signing account |
 | `flow-agent-bridge` (npm) | `pnpm --filter flow-agent-bridge build` | bump `version`, merge to `main` | **Yes** — GitHub Actions publishes |
-| Marketing site (`flowlandingpage/`) | `pnpm build` (in `flowlandingpage/`) | merge to `main` | **Yes** — GitHub Actions deploys to Cloudflare Pages |
+| Flow marketing site (`flowlandingpage/`) | `pnpm build` (in `flowlandingpage/`) | merge to `main` | **Yes** — GitHub Actions deploys to Cloudflare Pages |
+| Home page (`freeflowhome/`) | `pnpm build` (in `freeflowhome/`) | merge to `main` | **Yes** — GitHub Actions deploys to Cloudflare Pages |
 | Desktop app (Electron, `apps/desktop`) | `pnpm --filter @flow/desktop build` then `start` | not yet — M5 of `docs/specs/desktop-electron.md` | No — runs from source only today |
 
 The desktop app is in the workspace but **not** in the Railway build
@@ -250,30 +251,37 @@ Simulator, device install, signing, and server selection:
 
 ---
 
-## Marketing site (freeflow.im)
+## Marketing sites (freeflow.im, flow.freeflow.im)
 
-The landing page in `flowlandingpage/` is a standalone Next.js project — **not
-part of the pnpm workspace** — built as a fully static export (`out/`) and
-served by Cloudflare Pages at `freeflow.im` (canonical apex; `www` redirects).
+Two standalone Next.js projects — **not part of the pnpm workspace** — each
+built as a fully static export (`out/`) and served by Cloudflare Pages:
+
+| Folder | Domain | Pages project | Workflow |
+|---|---|---|---|
+| `freeflowhome/` | `freeflow.im` (canonical apex; `www` redirects) — lists every Freeflow tool | `freeflow-home` | [`deploy-home.yml`](.github/workflows/deploy-home.yml) |
+| `flowlandingpage/` | `flow.freeflow.im` — the Flow page, with Log in / Sign up | `freeflow-landing` | [`deploy-landing.yml`](.github/workflows/deploy-landing.yml) |
 
 ```sh
-cd flowlandingpage
+cd freeflowhome                   # or flowlandingpage
 pnpm install --ignore-workspace   # the flag matters; keeps its lockfile local
 pnpm dev                          # local preview
 pnpm build                        # static export → out/
 ```
 
-[`.github/workflows/deploy-landing.yml`](.github/workflows/deploy-landing.yml)
-fires on any push to `main` touching `flowlandingpage/**` and deploys `out/` to
-the Cloudflare Pages project `freeflow-landing`. So releasing is just merging.
+Each workflow fires on any push to `main` touching its folder and deploys
+`out/`. So releasing is just merging. `deploy-home.yml` creates its Pages
+project on the first run if it is missing.
 
-One-time Cloudflare setup (already done for prod): Pages project
-`freeflow-landing`; custom domains `freeflow.im` and `www.freeflow.im`; a
+One-time Cloudflare setup: custom domain `flow.freeflow.im` on
+`freeflow-landing`; `freeflow.im` and `www.freeflow.im` on `freeflow-home`; a
 redirect rule sending `www` → apex (301); repo secrets `CLOUDFLARE_API_TOKEN`
-(Cloudflare Pages: Edit) and `CLOUDFLARE_ACCOUNT_ID`.
+(Cloudflare Pages: Edit) and `CLOUDFLARE_ACCOUNT_ID`. The home page's
+`public/_redirects` sends the old `freeflow.im/agents`, `/migrate` and
+`/self-host` paths to `flow.freeflow.im`.
 
 ```sh
-gh run list --workflow deploy-landing.yml   # check a deploy
+gh run list --workflow deploy-home.yml      # check a home page deploy
+gh run list --workflow deploy-landing.yml   # check a Flow page deploy
 ```
 
 ---

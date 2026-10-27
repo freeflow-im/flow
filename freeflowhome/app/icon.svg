@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="freeflowMark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8B46DE"/>
+      <stop offset="1" stop-color="#4C1188"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#freeflowMark)"/>
+  <path d="M140 258 L214 320 L52 392 Z" fill="#ffffff"/>
+  <rect x="86" y="72" width="340" height="248" rx="76" fill="#ffffff"/>
+  <g fill="none" stroke="#6D28D9" stroke-width="32" stroke-linecap="round">
+    <path d="M175 158 c 28 -32 58 -32 90 0 s 62 32 90 0"/>
+    <path d="M145 240 c 24 -27 50 -27 75 0 s 51 27 75 0"/>
+  </g>
+</svg>

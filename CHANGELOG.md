@@ -16,6 +16,7 @@ This file keeps two things:
 - Multi-server huddles (#541): web leaves the room when switching server; native keeps it running with a return control. Both limit the client to one joined room.
 - Web composer dictation (#594) is browser-web only, by design: it wraps the browser's SpeechRecognition API, while macOS and iOS already get system dictation in their text fields (Fn-Fn / keyboard mic). **The desktop (Electron) app hides the mic button**: Electron's Chromium exposes the API but has no speech service behind it, and macOS/Windows system dictation works in its text fields anyway. Native in-app dictation would need separate Speech framework work, and no ticket asks for it.
 - Background sync across connected servers (#542) is web + macOS, by design: iOS keeps its foreground/background lifecycle and push when suspended, and the spec promises no continuously running background sockets there. That is why the iOS aggregate badge is a client-side sum reconciled on foreground, with no exact icon badge while suspended.
+- The web app's `?register` link (opens the Register form) is web-only, by design: it is the entry point for the Sign up buttons on flow.freeflow.im, and the native apps are never opened from a web link that way.
 
 ### Gaps to close
 - **Spreadsheet previews are web + desktop only.** A message with an xlsx,
