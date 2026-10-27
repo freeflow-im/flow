@@ -625,14 +625,15 @@ export const deviceTokens = pgTable(
   {
     id: uuid('id').primaryKey(),
     userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
-    token: text('token').notNull().unique(), // APNs device token, hex
+    token: text('token').notNull().unique(), // APNs hex, or an FCM registration token
     routingId: text('routing_id'), // null is the legacy absolute-badge contract
-    platform: text('platform').notNull(), // 'ios' (macOS later)
+    platform: text('platform').notNull(), // 'ios' | 'android'
     // Narrowed at the type level so the sender seam's PushDevice takes a row
     // straight through with no adapter — the API's zod schema is what enforces
-    // it at the boundary (#247).
-    environment: text('environment').$type<'sandbox' | 'production'>().notNull(),
-    bundleId: text('bundle_id').notNull(), // APNs topic
+    // it at the boundary (#247). Nullable since 0047: APNs-only, so an android
+    // row carries neither (ANDROID.md phase 3).
+    environment: text('environment').$type<'sandbox' | 'production'>(),
+    bundleId: text('bundle_id'), // APNs topic
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
     /** Set when APNs answers 410 Unregistered — kept, not deleted, so a

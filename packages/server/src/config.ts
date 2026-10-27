@@ -98,6 +98,29 @@ export const config = {
   get apnsEnv(): 'sandbox' | 'production' {
     return process.env.FLOW_APNS_ENV === 'production' ? 'production' : 'sandbox';
   },
+  // ---- push (FCM, Android — docs/design/ANDROID.md phase 3) -----
+  /**
+   * The Firebase service-account key that lets this server send to Android
+   * devices: a path to the JSON file, the JSON itself, or its base64. Set =
+   * android rows go through the FCM driver; unset = the dev driver, like an
+   * unset FLOW_PUSH_DRIVER for iOS. Parsed at boot and fails loudly if it is
+   * not a service-account key, for the same reason the APNs driver does.
+   */
+  get fcmServiceAccount(): { project_id: string; client_email: string; private_key: string } | undefined {
+    const raw = process.env.FLOW_FCM_SERVICE_ACCOUNT;
+    if (!raw) return undefined;
+    const trimmed = raw.trim();
+    const text = trimmed.startsWith('{')
+      ? trimmed
+      : fs.existsSync(trimmed)
+        ? fs.readFileSync(trimmed, 'utf8')
+        : Buffer.from(trimmed, 'base64').toString('utf8');
+    const j = JSON.parse(text) as { project_id?: string; client_email?: string; private_key?: string };
+    if (!j.project_id || !j.client_email || !j.private_key) {
+      throw new Error('FLOW_FCM_SERVICE_ACCOUNT is not a Firebase service-account key');
+    }
+    return { project_id: j.project_id, client_email: j.client_email, private_key: j.private_key };
+  },
   /** Dev driver drops each push here as a simctl-ready JSON file (gitignored). */
   get pushOutboxDir(): string {
     return process.env.FLOW_PUSH_OUTBOX ?? path.join(pkgRoot, '.push');

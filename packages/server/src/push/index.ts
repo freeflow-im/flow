@@ -15,6 +15,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { config } from '../config.js';
 import { ApnsHttp2PushSender } from './apnsSender.js';
+import { FcmHttpV1PushSender } from './fcmSender.js';
 import { fitPayload } from './payload.js';
 import { apnsEnvFor, apnsTopicFor } from './target.js';
 import type { ApnsHeaders, ApnsPayload, PushDevice, PushResult, PushSender } from './types.js';
@@ -22,6 +23,7 @@ import type { ApnsHeaders, ApnsPayload, PushDevice, PushResult, PushSender } fro
 export { apnsEnvFor, apnsTopicFor };
 export type { ApnsAps, ApnsHeaders, ApnsPayload, PushDevice, PushResult, PushSender } from './types.js';
 export { ApnsHttp2PushSender } from './apnsSender.js';
+export { FcmHttpV1PushSender } from './fcmSender.js';
 
 /**
  * Writes each push to `.push/<stamp>-<token prefix>.json` and logs it.
@@ -52,15 +54,40 @@ export class DevPushSender implements PushSender {
   }
 }
 
+/**
+ * One sender per platform behind one seam (ANDROID.md phase 3): the outbox
+ * still calls `send` once per device and never asks what kind of phone it
+ * is. A platform nobody configured a driver for gets the fallback.
+ */
+export class PlatformPushSender implements PushSender {
+  constructor(
+    private readonly byPlatform: Record<string, PushSender>,
+    private readonly fallback: PushSender,
+  ) {}
+
+  send(device: PushDevice, payload: ApnsPayload, opts: ApnsHeaders): Promise<PushResult> {
+    return (this.byPlatform[device.platform] ?? this.fallback).send(device, payload, opts);
+  }
+
+  /** Which driver a platform would get — for the boot log and the tests. */
+  driverFor(platform: string): PushSender {
+    return this.byPlatform[platform] ?? this.fallback;
+  }
+}
+
 let sender: PushSender | null = null;
 
 export function pushSender(): PushSender {
   if (!sender) {
-    // Constructing the APNs driver validates FLOW_APNS_KEY / _KEY_ID /
-    // _TEAM_ID and throws if any is missing — deliberately not caught, so a
-    // half-configured deploy is loud instead of silently falling back to
-    // writing production pushes into a directory nobody reads.
-    sender = config.pushDriver === 'apns' ? new ApnsHttp2PushSender() : new DevPushSender(config.pushOutboxDir);
+    // Constructing a real driver validates its credentials and throws if any
+    // is missing — deliberately not caught, so a half-configured deploy is
+    // loud instead of silently falling back to writing production pushes into
+    // a directory nobody reads.
+    const dev = new DevPushSender(config.pushOutboxDir);
+    const ios = config.pushDriver === 'apns' ? new ApnsHttp2PushSender() : dev;
+    const fcm = config.fcmServiceAccount;
+    const android = fcm ? new FcmHttpV1PushSender({ serviceAccount: fcm }) : dev;
+    sender = new PlatformPushSender({ ios, android }, dev);
   }
   return sender;
 }

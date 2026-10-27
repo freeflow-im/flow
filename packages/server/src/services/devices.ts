@@ -1,28 +1,32 @@
 // APNs device-token registry (#245, PUSH_APNS.md § "Device-token registry").
 // Nothing here sends a push — this is only the two writes that keep the token
 // list current, so the sender (#246+) has something true to read.
-import { and, eq, isNull } from 'drizzle-orm';
-import { RegisterDeviceBody } from '@flow/shared';
+import { and, eq, isNull, or } from 'drizzle-orm';
+import { RegisterDeviceFields, refineDevicePlatform } from '@flow/shared';
 import { db, schema } from '../db/index.js';
 import { newId } from '../lib/ids.js';
 
 import { z } from 'zod';
 const RoutingId = z.string().regex(/^[A-Za-z0-9_-]{16,128}$/);
-export const ConnectionDeviceBody = RegisterDeviceBody.extend({
+export const ConnectionDeviceBody = RegisterDeviceFields.extend({
   routingId: RoutingId.optional(),
   badgeMode: z.literal('omit').optional(),
-}).superRefine((v, ctx) => {
-  if ((v.routingId !== undefined) !== (v.badgeMode !== undefined)) {
-    ctx.addIssue({ code: 'custom', message: 'routingId and badgeMode: omit must be supplied together' });
-  }
-});
+})
+  .superRefine(refineDevicePlatform) // the per-platform rule from RegisterDeviceBody
+  .superRefine((v, ctx) => {
+    if ((v.routingId !== undefined) !== (v.badgeMode !== undefined)) {
+      ctx.addIssue({ code: 'custom', message: 'routingId and badgeMode: omit must be supplied together' });
+    }
+  });
 export const UnregisterDeviceQuery = z.object({ routingId: RoutingId.optional() }).strict();
 const { deviceTokens } = schema;
 
-/** Tokens are hex and case-insensitive; one canonical form keeps the unique
- * index doing its job when a client changes its mind about capitalization. */
-function normalize(token: string): string {
-  return token.toLowerCase();
+/** APNs tokens are hex and case-insensitive, so they get one canonical form —
+ * that keeps the unique index doing its job when a client changes its mind
+ * about capitalization. FCM tokens are opaque and case-sensitive: stored as
+ * sent (ANDROID.md phase 3). */
+function normalize(token: string, platform: string): string {
+  return platform === 'ios' ? token.toLowerCase() : token;
 }
 
 /**
@@ -43,7 +47,7 @@ export async function registerDevice(
   userId: string,
   body: z.infer<typeof ConnectionDeviceBody>,
 ): Promise<{ ok: true }> {
-  const token = normalize(body.token);
+  const token = normalize(body.token, body.platform);
   const now = new Date();
   await db
     .insert(deviceTokens)
@@ -53,8 +57,8 @@ export async function registerDevice(
       token,
       routingId: body.routingId ?? null,
       platform: body.platform,
-      environment: body.environment,
-      bundleId: body.bundleId,
+      environment: body.environment ?? null, // APNs only; null for android
+      bundleId: body.bundleId ?? null,
       lastSeenAt: now,
     })
     .onConflictDoUpdate({
@@ -63,8 +67,8 @@ export async function registerDevice(
         userId,
         routingId: body.routingId ?? null,
         platform: body.platform,
-        environment: body.environment,
-        bundleId: body.bundleId,
+        environment: body.environment ?? null,
+        bundleId: body.bundleId ?? null,
         lastSeenAt: now,
         disabledAt: null,
       },
@@ -82,8 +86,16 @@ export async function registerDevice(
  * signing out anyway.
  */
 export async function unregisterDevice(userId: string, rawToken: string, routingId?: string): Promise<{ ok: true }> {
+  // The platform is not in the request, so match either spelling: the
+  // lower-cased form an ios row was stored under, or the exact FCM token.
   await db
     .delete(deviceTokens)
-    .where(and(eq(deviceTokens.userId, userId), eq(deviceTokens.token, normalize(rawToken)), routingId === undefined ? isNull(deviceTokens.routingId) : eq(deviceTokens.routingId, routingId)));
+    .where(
+      and(
+        eq(deviceTokens.userId, userId),
+        or(eq(deviceTokens.token, rawToken), eq(deviceTokens.token, rawToken.toLowerCase())),
+        routingId === undefined ? isNull(deviceTokens.routingId) : eq(deviceTokens.routingId, routingId),
+      ),
+    );
   return { ok: true };
 }
