@@ -1,0 +1,273 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   Design tokens
+   Colour language:
+     accent  (indigo)  → actions, links, anything clickable
+     free    (emerald) → reserved exclusively for open-source / free-forever
+     warn    (amber)   → reserved exclusively for honest limitations
+--------------------------------------------------------------------------- */
+@theme {
+  --color-paper: #fcfbf9;
+  --color-mist: #f6f3f8;
+  --color-line: #e9e3ec;
+  --color-line-strong: #d8d0dd;
+
+  --color-ink: #0b0c10;
+  --color-graphite: #17111f;
+  --color-slate: #2d2437;
+  --color-body: #554e5a;
+  --color-muted: #8b8390;
+
+  --color-accent: #6d35c6;
+  --color-accent-hover: #5827a8;
+  --color-accent-soft: #f2eafe;
+  --color-accent-line: #d9c8f3;
+
+  --color-free: #047857;
+  --color-free-soft: #e7f6f0;
+
+  --color-warn: #b45309;
+  --color-warn-soft: #fdf3e4;
+
+  --radius-card: 0.75rem;
+  --radius-panel: 1rem;
+  --radius-surface: 1.5rem;
+}
+
+@theme inline {
+  --font-sans: "Inter Variable", Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-serif: "Instrument Serif", Georgia, "Times New Roman", serif;
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* ---------------------------------------------------------------------------
+   Base
+--------------------------------------------------------------------------- */
+@layer base {
+  * {
+    border-color: var(--color-line);
+  }
+
+  html {
+    scroll-behavior: smooth;
+    scroll-padding-top: 5.5rem;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-paper);
+    color: var(--color-body);
+    font-size: 1.0625rem;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    color: var(--color-ink);
+    font-weight: 600;
+    letter-spacing: -0.025em;
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  ::selection {
+    background-color: var(--color-accent);
+    color: #fff;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 3px;
+    border-radius: 4px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Utilities
+--------------------------------------------------------------------------- */
+@utility serif-accent {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-weight: 400;
+  letter-spacing: -0.015em;
+}
+
+/* Fine dot grid used behind the hero and the final CTA. */
+@utility dot-grid {
+  background-image: radial-gradient(currentColor 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+/* Fades a strip of content out at both horizontal edges. */
+@utility edge-fade {
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 8%,
+    #000 92%,
+    transparent
+  );
+}
+
+/* ---------------------------------------------------------------------------
+   Motion
+--------------------------------------------------------------------------- */
+@keyframes freeflow-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes freeflow-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes freeflow-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-9px);
+  }
+}
+
+@keyframes freeflow-caret {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  50%,
+  95% {
+    opacity: 0;
+  }
+}
+
+@keyframes demo-progress {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes demo-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.reveal {
+  opacity: 0;
+}
+
+.reveal[data-shown="true"] {
+  animation: freeflow-rise 0.62s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.typing-dot {
+  animation: freeflow-pulse 1.25s ease-in-out infinite;
+}
+
+.float {
+  animation: freeflow-float 6s ease-in-out infinite;
+}
+
+.caret {
+  animation: freeflow-caret 1.1s step-end infinite;
+}
+
+.demo-progress {
+  animation: demo-progress 4.3s linear forwards;
+  transform-origin: left;
+}
+
+.demo-pop {
+  animation: demo-pop 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@utility square-grid {
+  background-image:
+    linear-gradient(currentColor 1px, transparent 1px),
+    linear-gradient(90deg, currentColor 1px, transparent 1px);
+  background-size: 52px 52px;
+}
+
+.stage-glow::before {
+  position: absolute;
+  inset: -40% 10% auto;
+  height: 70%;
+  border-radius: 999px;
+  background: rgba(109, 53, 198, 0.28);
+  filter: blur(90px);
+  content: "";
+}
+
+.hero-product-poster {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-product-video {
+    display: none;
+  }
+
+  .hero-product-poster {
+    display: block;
+  }
+}
+
+/* Thin, unobtrusive scrollbars inside mock UI panes. */
+.thin-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
+}
+.thin-scroll::-webkit-scrollbar {
+  height: 6px;
+  width: 6px;
+}
+.thin-scroll::-webkit-scrollbar-thumb {
+  background: var(--color-line-strong);
+  border-radius: 999px;
+}

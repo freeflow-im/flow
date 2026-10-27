@@ -44,13 +44,15 @@ const ACTIVE_WS = 'activeWorkspace';
 const ADMIN_PANEL = 'adminPanelOpen';
 export const PENDING_INVITE = 'pendingInvite';
 
-/** Pull ?signup= / ?reset= / ?signin= (emailed links) and ?native= (the native
- * Google handoff, phase16 §9) off the URL before rendering. */
+/** Pull ?signup= / ?reset= / ?signin= (emailed links), ?native= (the native
+ * Google handoff, phase16 §9) and ?register (the marketing site's Sign up
+ * button) off the URL before rendering. */
 function consumeEmailLinkParams(runtime: ConnectionRuntime): {
   signupToken: string | null;
   resetToken: string | null;
   signinToken: string | null;
   nativeHandoff: boolean;
+  register: boolean;
 } {
   // /invite/<token> (emailed invite link): stash in localStorage so it
   // survives the full register→confirm-email→sign-in round trip, then accept
@@ -77,10 +79,11 @@ function consumeEmailLinkParams(runtime: ConnectionRuntime): {
   // Kept in the URL, unlike the one-shot tokens: a reload of the handoff page
   // should still be the handoff page, not the ordinary app.
   const nativeHandoff = params.get('native') === 'google';
-  if (signupToken || resetToken || signinToken) {
+  const register = params.has('register');
+  if (signupToken || resetToken || signinToken || register) {
     history.replaceState(null, '', location.pathname);
   }
-  return { signupToken, resetToken, signinToken, nativeHandoff };
+  return { signupToken, resetToken, signinToken, nativeHandoff, register };
 }
 
 export default function App() {
@@ -209,7 +212,7 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
   const [user, setUser] = useState<UserDTO | null>(null);
   const [booting, setBooting] = useState(true);
   const [offline, setOffline] = useState(false);
-  const [{ signupToken, resetToken, signinToken, nativeHandoff }] = useState(() =>
+  const [{ signupToken, resetToken, signinToken, nativeHandoff, register }] = useState(() =>
     consumeEmailLinkParams(runtime),
   );
   // Active workspace survives reloads/restarts (phase 3.5 fixes), per session.
@@ -523,6 +526,7 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
         signupToken={signupToken}
         resetToken={resetToken}
         signinToken={signinToken}
+        startOnRegister={register}
       />
     );
   }

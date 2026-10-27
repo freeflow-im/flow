@@ -1,9 +1,10 @@
-# Deploy the marketing site (flowlandingpage/) to Cloudflare Pages. Runs on
+# Deploy the Flow marketing site (flowlandingpage/) to Cloudflare Pages. Runs on
 # any push to main that touches the site. The site is a static Next.js export
 # (`out/`) — no server, so Pages just serves files.
 #
 # One-time Cloudflare setup (see BUILD.md):
-#   - Pages project "freeflow-landing", custom domains freeflow.im + www
+#   - Pages project "freeflow-landing", custom domain flow.freeflow.im
+#     (freeflow.im itself is the home page: see deploy-home.yml)
 #   - Repo secrets: CLOUDFLARE_API_TOKEN (Cloudflare Pages: Edit),
 #     CLOUDFLARE_ACCOUNT_ID
 name: deploy-landing

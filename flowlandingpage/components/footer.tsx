@@ -23,6 +23,12 @@ export function Footer() {
 
           <nav aria-label="Footer" className="flex flex-wrap items-center gap-x-6 gap-y-3">
             <a
+              href={site.home}
+              className="text-[12px] text-muted transition-colors hover:text-ink"
+            >
+              More Freeflow tools
+            </a>
+            <a
               href={links.github}
               target="_blank"
               rel="noreferrer noopener"

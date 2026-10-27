@@ -1,0 +1,56 @@
+# Deploy the freeflow.im home page (freeflowhome/) to Cloudflare Pages. Runs on
+# any push to main that touches the site. The site is a static Next.js export
+# (`out/`) — no server, so Pages just serves files.
+#
+# One-time Cloudflare setup (see BUILD.md):
+#   - Pages project "freeflow-home" (the first run creates it), custom
+#     domains freeflow.im + www
+#   - Repo secrets: CLOUDFLARE_API_TOKEN (Cloudflare Pages: Edit),
+#     CLOUDFLARE_ACCOUNT_ID
+name: deploy-home
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'freeflowhome/**'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - run: corepack enable
+
+      # --ignore-workspace: the site is standalone, not part of the repo's
+      # pnpm workspace (packages/*); the flag keeps its lockfile local.
+      - name: Install
+        working-directory: freeflowhome
+        run: pnpm install --ignore-workspace --frozen-lockfile
+
+      - name: Build (static export)
+        working-directory: freeflowhome
+        run: pnpm build
+
+      # `pages deploy` cannot create a project when it runs without a
+      # terminal, so make it here. It fails harmlessly once the project exists.
+      - name: Create Pages project if missing
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler@3 pages project create freeflow-home --production-branch=main || true
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy freeflowhome/out --project-name=freeflow-home

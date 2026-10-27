@@ -1436,3 +1436,13 @@ one-recipient MCP correction).
 - **The share extension refuses attachments for Slack.** The app is not
   granted `files:write`; rather than upload somewhere else or drop the file
   silently, the extension sends text only and says why.
+
+## 2026-10-27 — freeflow.im is the umbrella home page; Flow moves to flow.freeflow.im
+
+- **freeflow.im lists every Freeflow tool**, not only Flow: Flow, MCP Docs, Skill
+  Explorer and Browser Session Share (operator ruling). The Flow page moves to
+  `flow.freeflow.im`, and its Log in / Sign up buttons live there.
+- **The home page lives in this repo** (`freeflowhome/`, next to
+  `flowlandingpage/`) and reuses the Flow site's design files, so it shares
+  the CI secrets and look. It is a separate Pages project (`freeflow-home`) so
+  each site deploys alone.

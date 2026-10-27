@@ -7,8 +7,10 @@ export const site = {
   tagline: "Team chat where humans and agents work together.",
   description:
     "Freeflow is team chat where people and AI agents work together. Agents join channels as members, use the shared conversation as context, and keep their work visible to the whole team.",
-  url: "https://freeflow.im",
-  repo: "freeflow-community/flow",
+  url: "https://flow.freeflow.im",
+  repo: "freeflow-im/flow",
+  /** The Freeflow home page, which lists every Freeflow tool. */
+  home: "https://freeflow.im",
 } as const;
 
 /**
@@ -21,11 +23,13 @@ export const routes: Record<"agents" | "migrate" | "selfHost", boolean> = {
   selfHost: false,
 };
 
-const repo = "https://github.com/freeflow-community/flow";
+const repo = "https://github.com/freeflow-im/flow";
 
 export const links = {
-  /** Hosted signup: the live app. Every Sign up button points here. */
-  signup: "https://app.freeflow.im",
+  /** The live app. Every Log in button points here. */
+  login: "https://app.freeflow.im",
+  /** The live app, opened on its Register form. Every Sign up button points here. */
+  signup: "https://app.freeflow.im/?register",
 
   github: repo,
   privacy: `${repo}/blob/main/packages/web/public/privacy.html`,

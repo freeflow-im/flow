@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { links } from "@/site.config";
+import { links, site } from "@/site.config";
 import { Button } from "@/components/ui";
 import { Github, Logo, Menu, Cross } from "@/components/icons";
 
@@ -74,6 +74,9 @@ export function Nav() {
           >
             <Github className="size-[19px]" />
           </a>
+          <Button href={links.login} variant="ghost" external>
+            Log in
+          </Button>
           <Button href={links.signup} variant="primary" external>
             Sign up free
           </Button>
@@ -115,9 +118,20 @@ export function Nav() {
                 </Link>
               </li>
             ))}
+            <li>
+              <a
+                href={site.home}
+                className="block border-b border-line py-3.5 text-[16px] font-medium text-ink"
+              >
+                More Freeflow tools
+              </a>
+            </li>
             <li className="flex flex-col gap-2 pt-4 pb-2">
               <Button href={links.signup} variant="primary" size="lg" external>
                 Sign up free
+              </Button>
+              <Button href={links.login} variant="secondary" size="lg" external>
+                Log in
               </Button>
             </li>
           </ul>
