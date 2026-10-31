@@ -58,6 +58,8 @@ import { DirWatchers } from './folderWatch.ts';
 import { SheetStore, validateWorkbook } from './sheets.ts';
 import { listSheetCharts, loadLinkedChart, loadLinkedTable } from './linkedTable.ts';
 import { importPptx } from './pptxImport.ts';
+import { isSharableVideo, PublicLinks, publicDeck, type PublicLink, type SharedKind } from './publicLinks.ts';
+import type { StoredFile } from '../shared/types.ts';
 import { ImportError, importExcel } from './xlsxImport.ts';
 import { WindowTools, type WindowToolAnswer, type WindowToolCall } from './windowTools.ts';
 import { ClaudeAgentDriver, type ClaudeAgentOptions } from './agent/claudeAgent.ts';
@@ -1140,6 +1142,117 @@ export async function buildApp(opts: AppOptions) {
     });
   });
 
+  // A file, or the part of it a Range header asks for: "a-b", "a-" (to the end) or "-n" (the last n bytes).
+  const sendRange = (req: FastifyRequest, reply: FastifyReply, file: string, size: number) => {
+    const range = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range ?? ''));
+    if (!range || (!range[1] && !range[2])) return reply.header('Content-Length', size).send(createReadStream(file));
+    const start = range[1] ? Number(range[1]) : Math.max(0, size - Number(range[2]));
+    const end = range[1] && range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+    if (start > end || start >= size) return reply.code(416).header('Content-Range', `bytes */${size}`).send();
+    return reply
+      .code(206)
+      .header('Content-Range', `bytes ${start}-${end}/${size}`)
+      .header('Content-Length', end - start + 1)
+      .send(createReadStream(file, { start, end }));
+  };
+
+  // --- Public links: a presentation or video anyone with the address can view (server/publicLinks.ts) -------
+  // Files stored on the server only: a file in the desktop app's folder is on the person's own computer.
+  if (!opts.local) {
+    const links = new PublicLinks(db);
+    const sharable = (ownerId: string, kind: SharedKind, id: string) => {
+      if (kind === 'deck') return !!sheets.get(ownerId, id, 'deck');
+      const f = storedFiles.get(ownerId, id);
+      return !!f && isSharableVideo(f.meta.type);
+    };
+    const linkAddress = (req: FastifyRequest, token: string | null) => ({ url: token ? `${originOf(req)}/p/${token}` : null });
+
+    app.register(async (r) => {
+      r.addHook('preHandler', requireUser);
+      // The owner's side: whether a file has a link, making one and stopping it.
+      r.addHook('preHandler', async (req, reply) => {
+        const { kind, id } = req.params as { kind: SharedKind; id: string };
+        if ((kind !== 'deck' && kind !== 'file') || !sharable(req.user!.id, kind, id)) return reply.code(404).send({ error: 'This file cannot be shared.' });
+      });
+      r.get('/api/sharing/:kind/:id', async (req) => {
+        const { kind, id } = req.params as { kind: SharedKind; id: string };
+        return linkAddress(req, links.tokenOf(req.user!.id, kind, id));
+      });
+      r.put('/api/sharing/:kind/:id', async (req) => {
+        const { kind, id } = req.params as { kind: SharedKind; id: string };
+        return linkAddress(req, links.create(req.user!.id, kind, id));
+      });
+      r.delete('/api/sharing/:kind/:id', async (req) => {
+        const { kind, id } = req.params as { kind: SharedKind; id: string };
+        links.remove(req.user!.id, kind, id);
+        return linkAddress(req, null);
+      });
+    });
+
+    // What a shared deck shows, kept until the deck changes: each picture and each seek of a video asks.
+    const shownByDeck = new Map<string, { rev: string; images: Set<string>; files: Set<string> }>();
+    const shownBy = async (link: PublicLink) => {
+      const rev = sheets.get(link.ownerId, link.fileId, 'deck')?.updatedAt;
+      if (!rev) return null;
+      const known = shownByDeck.get(link.fileId);
+      if (known?.rev === rev) return known;
+      const res = await sheets.loadDeck(link.ownerId, link.fileId);
+      if (!res) return null;
+      const { images: shownImages, files } = publicDeck(res.deck, link.token);
+      if (shownByDeck.size >= 500) shownByDeck.clear();
+      const shown = { rev: res.meta.updatedAt, images: shownImages, files };
+      shownByDeck.set(link.fileId, shown);
+      return shown;
+    };
+    // A guest's answers: the address is not passed on or indexed, and a file opened by itself runs nothing.
+    const forGuest = (reply: FastifyReply) => reply.header('Referrer-Policy', 'no-referrer').header('X-Robots-Tag', 'noindex').header('X-Content-Type-Options', 'nosniff').header('Content-Security-Policy', 'sandbox');
+    // Browsers keep a file a short while, so a link that is stopped soon stops working everywhere.
+    const GUEST_CACHE = 'private, max-age=300';
+    const sendGuestFile = (req: FastifyRequest, reply: FastifyReply, f: { meta: StoredFile; file: string }) =>
+      sendRange(req, reply.header('Content-Type', f.meta.type === 'video/quicktime' ? 'video/mp4' : f.meta.type).header('Content-Disposition', 'inline').header('Cache-Control', GUEST_CACHE).header('Accept-Ranges', 'bytes'), f.file, statSync(f.file).size);
+    const noLink = (reply: FastifyReply) => reply.code(404).send({ error: 'This link does not work. It may have been turned off, or the file was deleted.' });
+
+    app.get('/api/public/:token', async (req, reply) => {
+      forGuest(reply).header('Cache-Control', 'no-store');
+      const link = links.resolve((req.params as { token: string }).token);
+      if (!link) return noLink(reply);
+      if (link.kind === 'deck') {
+        const res = await sheets.loadDeck(link.ownerId, link.fileId);
+        if (!res) return noLink(reply);
+        return { kind: 'deck', title: res.meta.title, deck: publicDeck(res.deck, link.token).deck };
+      }
+      const f = storedFiles.get(link.ownerId, link.fileId);
+      if (!f || !isSharableVideo(f.meta.type)) return noLink(reply);
+      return { kind: 'video', title: f.meta.filename, url: `/api/public/${link.token}/video` };
+    });
+    app.get('/api/public/:token/video', async (req, reply) => {
+      forGuest(reply);
+      const link = links.resolve((req.params as { token: string }).token);
+      const f = link?.kind === 'file' ? storedFiles.get(link.ownerId, link.fileId) : null;
+      if (!f || !isSharableVideo(f.meta.type)) return noLink(reply);
+      return sendGuestFile(req, reply, f);
+    });
+    app.get('/api/public/:token/images/:id', async (req, reply) => {
+      forGuest(reply);
+      const { token, id } = req.params as { token: string; id: string };
+      const link = links.resolve(token);
+      const shown = link?.kind === 'deck' ? await shownBy(link) : null;
+      const img = link && shown?.images.has(id) ? images.get(link.ownerId, id) : null;
+      if (!img) return noLink(reply);
+      reply.header('Content-Type', img.type).header('Cache-Control', GUEST_CACHE);
+      return reply.send(createReadStream(img.file));
+    });
+    app.get('/api/public/:token/files/:id', async (req, reply) => {
+      forGuest(reply);
+      const { token, id } = req.params as { token: string; id: string };
+      const link = links.resolve(token);
+      const shown = link?.kind === 'deck' ? await shownBy(link) : null;
+      const f = link && shown?.files.has(id) ? storedFiles.get(link.ownerId, id) : null;
+      if (!f || !PREVIEW_FILE_TYPES.includes(f.meta.type)) return noLink(reply);
+      return sendGuestFile(req, reply, f);
+    });
+  }
+
   // --- Cell images -------------------------------------------------------------
   app.register(async (r) => {
     r.addHook('preHandler', requireUser);
@@ -1187,20 +1300,6 @@ export async function buildApp(opts: AppOptions) {
         .header('Content-Disposition', `attachment; filename="${name.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, "'")}"; filename*=UTF-8''${encodeURIComponent(name)}`)
         .header('Cache-Control', 'no-store')
         .header('X-Content-Type-Options', 'nosniff');
-
-    // A file, or the part of it a Range header asks for: "a-b", "a-" (to the end) or "-n" (the last n bytes).
-    const sendRange = (req: FastifyRequest, reply: FastifyReply, file: string, size: number) => {
-      const range = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range ?? ''));
-      if (!range || (!range[1] && !range[2])) return reply.header('Content-Length', size).send(createReadStream(file));
-      const start = range[1] ? Number(range[1]) : Math.max(0, size - Number(range[2]));
-      const end = range[1] && range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
-      if (start > end || start >= size) return reply.code(416).header('Content-Range', `bytes */${size}`).send();
-      return reply
-        .code(206)
-        .header('Content-Range', `bytes ${start}-${end}/${size}`)
-        .header('Content-Length', end - start + 1)
-        .send(createReadStream(file, { start, end }));
-    };
 
     // A PDF of a document, presentation, Markdown file or stored web page (server/pdf.ts): the file's page in the
     // app, loaded by a headless browser with a print ticket, or the web page's own HTML.
@@ -2302,6 +2401,8 @@ export async function buildApp(opts: AppOptions) {
       // everyone else, and for every other address.
       if (landing && !req.user && req.method === 'GET' && req.url.split('?')[0] === '/')
         return reply.type('text/html; charset=utf-8').header('cache-control', 'no-cache').send(landing.replaceAll(ORIGIN_MARK, originOf(req)));
+      // A public link's address is its secret: not passed on to other sites, not indexed.
+      if (req.url.startsWith('/p/')) reply.header('Referrer-Policy', 'no-referrer').header('X-Robots-Tag', 'noindex');
       return reply.sendFile('index.html');
     });
   }

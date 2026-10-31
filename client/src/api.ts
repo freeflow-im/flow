@@ -9,6 +9,12 @@ import type { FilePreview } from '../../shared/preview.ts';
 import { CELL_IMAGE_TOO_LARGE, type ConnectedAgent, type DeletedFile, type NewFilesSettings, type NewFilesUpdate, type SheetMeta, type StoredFile, type Workbook } from '../../shared/types.ts';
 import type { ZipEntry, ZipOfficeView } from '../../shared/zip.ts';
 
+/** What can have a public link: a presentation, or a stored file (a video). */
+export type SharedKind = 'deck' | 'file';
+
+/** What a public link shows. */
+export type PublicView = { kind: 'deck'; title: string; deck: Deck } | { kind: 'video'; title: string; url: string };
+
 export interface User {
   id: string;
   email: string;
@@ -197,6 +203,12 @@ export const api = {
   /** A Word, Excel or PowerPoint file in a zip, converted to be shown read-only. */
   zipOfficeView: (id: string, path: string) => request<{ view: ZipOfficeView }>('GET', `/api/files/${encodeURIComponent(id)}/zip/view?path=${encodeURIComponent(path)}`),
   deleteFile: (id: string) => request<{ ok: true }>('DELETE', `/api/files/${encodeURIComponent(id)}`),
+
+  sharing: (kind: SharedKind, id: string) => request<{ url: string | null }>('GET', `/api/sharing/${kind}/${encodeURIComponent(id)}`),
+  startSharing: (kind: SharedKind, id: string) => request<{ url: string | null }>('PUT', `/api/sharing/${kind}/${encodeURIComponent(id)}`),
+  stopSharing: (kind: SharedKind, id: string) => request<{ url: string | null }>('DELETE', `/api/sharing/${kind}/${encodeURIComponent(id)}`),
+  publicView: (token: string) => request<PublicView>('GET', `/api/public/${encodeURIComponent(token)}`),
+
   me: () => request<{ user: User | null; googleLogin: boolean; local?: { dir: string } }>('GET', '/api/auth/me'),
   /** Recents: the files last opened in the app (server/recents.ts). */
   /**

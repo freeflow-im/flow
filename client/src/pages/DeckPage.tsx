@@ -42,6 +42,8 @@ import { SheetTableDialog } from '../deck/SheetTableDialog.tsx';
 import { SheetChartDialog } from '../deck/SheetChartDialog.tsx';
 import { useLinkedTables } from '../deck/linkedTables.ts';
 import { PresentMode } from '../deck/PresentMode.tsx';
+import { useAuth } from '../auth.tsx';
+import { ShareDialog } from '../components/ShareDialog.tsx';
 import { checkPptxFile, pickPptxFile } from '../importFile.ts';
 import { SlideView } from '../deck/SlideView.tsx';
 import { ThumbnailStrip } from '../deck/ThumbnailStrip.tsx';
@@ -144,7 +146,7 @@ function guardFor(meta: SheetMeta, notKept: string[] | undefined) {
   return notKept?.length ? lockedGuard : pptxGuard;
 }
 
-type Dialog = { kind: 'rename' } | { kind: 'delete' } | null;
+type Dialog = { kind: 'rename' } | { kind: 'delete' } | { kind: 'share' } | null;
 
 function DeckWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta: SheetMeta; initialNotKept?: string[]; ctl: DeckController; sync: RevisionSync<Deck> }) {
   useDeckController(ctl);
@@ -476,6 +478,7 @@ function DeckWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta
   ];
 
   const openInTab = useOpenInTab();
+  const local = !!useAuth().local;
   const menus: { key: string; label: string; items: () => MenuItem[] }[] = [
     {
       key: 'file',
@@ -564,6 +567,8 @@ function DeckWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta
         { label: 'Send to back', disabled: !ctl.selection.length, action: () => ctl.reorder(ctl.selection, 'back') },
       ],
     },
+    // A public link is for a file on the server; the desktop app's files are on the person's computer.
+    ...(local ? [] : [{ key: 'sharing', label: 'Sharing', items: (): MenuItem[] => [{ label: 'Public link…', action: () => setDialog({ kind: 'share' }) }] }]),
   ];
 
   const saveLabel = {
@@ -705,6 +710,7 @@ function DeckWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta
       {insertingVideo && <VideoDialog folder={meta.folder} onInsert={(src) => ctl.addVideo(src)} onClose={() => setInsertingVideo(false)} />}
       {editingImage && editedPicture?.type === 'image' && <ImageEditDialog backgroundRemovalLoader={loadBackgroundRemoval} src={editedPicture.src} name="picture" onSave={(image, sizes) => saveEditedImage(editingImage, image, sizes)} onClose={() => setEditingImage(null)} />}
 
+      {dialog?.kind === 'share' && <ShareDialog kind="deck" id={meta.id} name={meta.title} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'rename' && <PromptModal title="Rename presentation" label="Name" initial={meta.title} confirmText="Rename" onConfirm={rename} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'delete' && (
         <ConfirmModal

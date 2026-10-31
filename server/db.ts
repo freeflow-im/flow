@@ -144,6 +144,22 @@ export function openDb(file: string): DB {
       openai_key_masked TEXT,
       updated_at TEXT NOT NULL
     );
+
+    -- Public links (server/publicLinks.ts). A file deleted by any path loses its link, also if it is restored later.
+    CREATE TABLE IF NOT EXISTS public_links (
+      token TEXT PRIMARY KEY,
+      owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      file_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE (owner_id, kind, file_id)
+    );
+    CREATE TRIGGER IF NOT EXISTS public_links_sheet_deleted AFTER DELETE ON sheets BEGIN
+      DELETE FROM public_links WHERE kind = 'deck' AND file_id = OLD.id;
+    END;
+    CREATE TRIGGER IF NOT EXISTS public_links_file_deleted AFTER DELETE ON stored_files BEGIN
+      DELETE FROM public_links WHERE kind = 'file' AND file_id = OLD.id;
+    END;
   `);
   migrate(db);
   return db;

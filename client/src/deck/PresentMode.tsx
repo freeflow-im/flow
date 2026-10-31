@@ -1,5 +1,5 @@
-// Full-screen slideshow. Arrow keys, space and clicks move between slides; N shows the speaker notes;
-// Escape leaves.
+// Full-screen slideshow. Arrow keys, space and clicks move between slides; N shows the speaker notes
+// (not on a public link, whose deck has none); Escape leaves.
 import { useEffect, useRef, useState } from 'react';
 import { SLIDE_H, SLIDE_W } from '../../../shared/deck.ts';
 import type { DeckController } from './controller.ts';
@@ -7,7 +7,7 @@ import { SlideView } from './SlideView.tsx';
 
 const NOTES_HEIGHT = 0.28; // share of the window given to the notes panel
 
-export function PresentMode({ ctl, onExit }: { ctl: DeckController; onExit(): void }) {
+export function PresentMode({ ctl, withNotes = true, onExit }: { ctl: Pick<DeckController, 'deck' | 'current' | 'goTo'>; withNotes?: boolean; onExit(): void }) {
   const [index, setIndex] = useState(ctl.current);
   const [notes, setNotes] = useState(false);
   const [size, setSize] = useState({ w: window.innerWidth, h: window.innerHeight });
@@ -42,14 +42,14 @@ export function PresentMode({ ctl, onExit }: { ctl: DeckController; onExit(): vo
       else if (['ArrowLeft', 'ArrowUp', 'PageUp', 'Backspace'].includes(e.key)) setIndex((i) => Math.max(0, i - 1));
       else if (e.key === 'Home') setIndex(0);
       else if (e.key === 'End') setIndex(n - 1);
-      else if (e.key.toLowerCase() === 'n' && !e.metaKey && !e.ctrlKey) setNotes((v) => !v);
+      else if (withNotes && e.key.toLowerCase() === 'n' && !e.metaKey && !e.ctrlKey) setNotes((v) => !v);
       else return;
       e.preventDefault();
       e.stopPropagation();
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [n]);
+  }, [n, withNotes]);
 
   // Leave the editor on the slide the show ended on (when the show ends, not at every slide).
   useEffect(() => () => ctl.goTo(indexRef.current), [ctl]);
@@ -76,9 +76,11 @@ export function PresentMode({ ctl, onExit }: { ctl: DeckController; onExit(): vo
         {index + 1} / {n}
       </div>
       <div className="present-controls" onClick={(e) => e.stopPropagation()}>
-        <button className={`present-notes-btn${notes ? ' active' : ''}`} onClick={() => setNotes(!notes)} title="Speaker notes (N)" aria-pressed={notes}>
-          Notes
-        </button>
+        {withNotes && (
+          <button className={`present-notes-btn${notes ? ' active' : ''}`} onClick={() => setNotes(!notes)} title="Speaker notes (N)" aria-pressed={notes}>
+            Notes
+          </button>
+        )}
         <button className="present-exit" onClick={onExit} title="Exit (Esc)" aria-label="Exit presentation">
           ×
         </button>

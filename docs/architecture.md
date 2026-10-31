@@ -255,6 +255,13 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   data, its FAQ section included) and as Markdown for agents at `/features/<slug>.md` (or with `Accept: text/markdown`),
   listed on `/features`, in `/sitemap.xml` and in `/llms.txt`. A new page is a new file there and a `page` on its
   box in `LandingPage`'s `FEATURES`.
+- Public links (`server/publicLinks.ts`, table `public_links`): the hosted app only, a presentation or a video (a stored file a browser plays)
+  can have an address, `/p/<token>`, that anyone can view without signing in (`PublicPage`). The owner turns it on and off in the Sharing menu
+  (`ShareDialog`, `/api/sharing/:kind/:id`); a link turned on again gets a new token, and deleting a file ends its link (triggers on `sheets` and
+  `stored_files`, whichever path deleted it, so a restored file is not public again). Guests use `/api/public/:token...` only: `publicDeck` gives them
+  a copy of the deck without speaker notes or links to spreadsheets, with its pictures and videos named under the token, and only what its elements
+  show can be fetched with it (`shownBy`, checked per request, so what leaves the deck stops being available). Answers carry `no-referrer`,
+  `noindex` and a `sandbox` CSP, and browsers keep files at most five minutes.
 - Folders (`shared/folders.ts`): a folder is named by its path (`Reports/2026`, `''` for the top). Files
   carry it in the `folder` column (`SheetMeta.folder`, `StoredFile.folder`); the folders themselves are
   rows on the server (`FolderStore`, `server/folders.ts`) and directories in the desktop app

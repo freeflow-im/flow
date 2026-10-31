@@ -10,6 +10,7 @@ import { isZipName } from '../../../shared/zip.ts';
 import { ImageFileEditor } from '../image/ImageFileEditor.tsx';
 import { PdfSigner } from '../pdf/PdfSigner.tsx';
 import { useAuth } from '../auth.tsx';
+import { ShareDialog } from '../components/ShareDialog.tsx';
 import { ImageSelector } from '../components/ImageSelector.tsx';
 import type { ImageRegion } from '../../../shared/agent/protocol.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
@@ -148,7 +149,7 @@ export function FilePage() {
   // A JSON file (small enough to edit as text) is shown as a tree; Edit opens it in the text editor.
   const json = !!file?.text && (file.type === 'application/json' || /\.json$/i.test(file.filename));
   const [openMenu, setOpenMenu] = useState<string | null>(null);
-  const [dialog, setDialog] = useState<'rename' | 'delete' | null>(null);
+  const [dialog, setDialog] = useState<'rename' | 'delete' | 'share' | null>(null);
   const openInTab = useOpenInTab();
   // Close menus on outside click.
   useEffect(() => {
@@ -225,6 +226,20 @@ export function FilePage() {
                 </button>
                 {openMenu === 'file' && <MenuList items={fileMenu(file)} onDone={() => setOpenMenu(null)} style={{ top: 26, left: 0 }} />}
               </div>
+              {!local && file.type.startsWith('video/') && PREVIEW_FILE_TYPES.includes(file.type) && (
+                <div className="menubar-entry">
+                  <button
+                    className={`menubar-btn${openMenu === 'sharing' ? ' open' : ''}`}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      setOpenMenu(openMenu === 'sharing' ? null : 'sharing');
+                    }}
+                  >
+                    Sharing
+                  </button>
+                  {openMenu === 'sharing' && <MenuList items={[{ label: 'Public link…', action: () => setDialog('share') }]} onDone={() => setOpenMenu(null)} style={{ top: 26, left: 0 }} />}
+                </div>
+              )}
             </nav>
           )}
         </div>
@@ -308,6 +323,7 @@ export function FilePage() {
           onClose={() => setDialog(null)}
         />
       )}
+      {dialog === 'share' && file && <ShareDialog kind="file" id={file.id} name={file.filename} onClose={() => setDialog(null)} />}
       <main className="file-page-body">
         {error ? (
           <div className="form-error">{error}</div>
