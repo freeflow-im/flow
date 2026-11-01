@@ -3,7 +3,7 @@
 //
 // The design in one line: a scheduled message is a *pending message*, not a
 // job. Firing it calls the ordinary `sendMessage` path as the author, so NATS
-// fanout, unreads, push, Slack-compat outbox rows and agent mentions all behave
+// fanout, unreads, push and agent mentions all behave
 // exactly as they do for a typed message — the only difference downstream is
 // `messages.scheduled = true`, which clients render as a badge.
 //

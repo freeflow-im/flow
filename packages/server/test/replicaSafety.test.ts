@@ -1,9 +1,10 @@
 // Phase 18 M1 (replica-readiness groundwork): the hard-state pieces that must
 // stay correct when two server replicas run the same code — serialized boot
-// migrations, exactly-once outbox claiming, a shared rate-limit window, and
-// the sweep singleton lock. DB-backed — scratch database on the dev postgres
-// (docker compose in packages/infra, host port 5442).
-import http from 'node:http';
+// migrations, a shared rate-limit window, and the sweep singleton lock.
+// (The exactly-once outbox claiming case went with the Slack-compatible Events
+// API; pushOutbox.test.ts covers the same claiming pattern for push.)
+// DB-backed — scratch database on the dev postgres (docker compose in
+// packages/infra, host port 5442).
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { randomBytes, randomUUID } from 'node:crypto';
 
@@ -24,17 +25,10 @@ process.env.FLOW_DATA_KEY = randomBytes(32).toString('base64');
 // dynamic imports so the env above is set before config/db read it
 const { migrate } = await import('../src/db/migrate.js');
 const { db, schema, closeDb } = await import('../src/db/index.js');
-const { drainAppEvents } = await import('../src/services/appEvents.js');
 const { rateAllowDb, purgeStaleRateWindows } = await import('../src/lib/rateLimitDb.js');
 const { runExclusive } = await import('../src/lib/singleton.js');
-const auth = await import('../src/services/auth.js');
-const ws = await import('../src/services/workspaces.js');
-const { newId } = await import('../src/lib/ids.js');
-const { eq, isNotNull } = await import('drizzle-orm');
+const { eq } = await import('drizzle-orm');
 
-const { apps, pendingAppEvents } = schema;
-
-const log = { info: () => {}, warn: () => {} };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 beforeAll(async () => {
@@ -72,64 +66,6 @@ describe('concurrent migrate() is serialized by the advisory lock', () => {
       const drop = postgres(url.toString().replace(`/${dbName}`, '/postgres'), { max: 1, onnotice: () => {} });
       await drop.unsafe(`DROP DATABASE "${dbName}" WITH (FORCE)`).catch(() => {});
       await drop.end();
-    }
-  });
-});
-
-describe('outbox claiming is exactly-once across concurrent drains', () => {
-  it('two drains racing the same due rows deliver each event once', async () => {
-    // A real HTTP endpoint counting deliveries — what a second replica's drain
-    // would double-hit without SKIP LOCKED claiming.
-    let received = 0;
-    const server = http.createServer((_req, res) => {
-      received += 1;
-      res.writeHead(200).end('ok');
-    });
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    const port = (server.address() as { port: number }).port;
-
-    try {
-      const reg = await auth.register('appowner@example.test', {
-        password: 'password123',
-        displayName: 'Owner',
-        autoVerify: true,
-      });
-      if (!('token' in reg)) throw new Error('expected autoVerify session');
-      const ownerId = reg.user.id;
-      const w = await ws.createWorkspace(ownerId, 'Replica Test', `replica-${randomUUID().slice(0, 8)}`);
-      const appId = newId();
-      await db.insert(apps).values({
-        id: appId,
-        workspaceId: w.id,
-        name: 'counter',
-        botUserId: ownerId,
-        botTokenHash: randomBytes(32),
-        createdBy: ownerId,
-        signingSecret: 'shhh',
-        eventUrl: `http://127.0.0.1:${port}/events`,
-        eventUrlVerifiedAt: new Date(),
-        eventTypes: ['message.channels'],
-      });
-
-      const rows = Array.from({ length: 15 }, (_, i) => ({
-        id: newId(),
-        appId,
-        eventType: 'message.channels',
-        payload: { type: 'message', n: i },
-      }));
-      await db.insert(pendingAppEvents).values(rows);
-
-      const [d1, d2] = await Promise.all([drainAppEvents(log), drainAppEvents(log)]);
-
-      expect(received).toBe(rows.length);
-      expect(d1 + d2).toBe(rows.length);
-      const delivered = await db
-        .select({ id: pendingAppEvents.id })
-        .from(pendingAppEvents)
-        .where(isNotNull(pendingAppEvents.deliveredAt));
-      expect(delivered.length).toBe(rows.length);
-    } finally {
-      await new Promise((resolve) => server.close(resolve));
     }
   });
 });

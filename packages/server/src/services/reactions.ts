@@ -7,7 +7,6 @@ import { resolveShortcodes } from './workspaceEmoji.js';
 import { db, schema } from '../db/index.js';
 import { badRequest, notFound } from '../lib/errors.js';
 import { requireChannelAccess } from './channels.js';
-import { enqueueReactionEvent } from './appEvents.js';
 import { notifyReaction } from './notifications.js';
 import { toMessageDTO } from './messages.js';
 import { publishEvent, subjectMsg } from '../bus.js';
@@ -33,17 +32,11 @@ export async function addReaction(messageId: string, userId: string, emoji: stri
   if (code !== null && !(await resolveShortcodes(chan.workspaceId, [code])).has(code)) {
     throw badRequest('unknown_emoji', `:${code}: is not a custom emoji in this workspace`);
   }
-  const inserted = await db.transaction(async (tx) => {
-    const ins = await tx
-      .insert(reactions)
-      .values({ messageId, userId, emoji })
-      .onConflictDoNothing()
-      .returning();
-    if (ins.length > 0) {
-      await enqueueReactionEvent(tx, chan, true, { messageId, userId, emoji, itemAuthorId: row.userId });
-    }
-    return ins;
-  });
+  const inserted = await db
+    .insert(reactions)
+    .values({ messageId, userId, emoji })
+    .onConflictDoNothing()
+    .returning();
   if (inserted.length > 0) {
     publishEvent(subjectMsg(chan.workspaceId, row.channelId), {
       type: 'reaction.added',
@@ -61,16 +54,10 @@ export async function addReaction(messageId: string, userId: string, emoji: stri
 
 export async function removeReaction(messageId: string, userId: string, emoji: string): Promise<ReactionAggDTO[]> {
   const { row, chan } = await loadMessage(messageId, userId);
-  const deleted = await db.transaction(async (tx) => {
-    const del = await tx
-      .delete(reactions)
-      .where(and(eq(reactions.messageId, messageId), eq(reactions.userId, userId), eq(reactions.emoji, emoji)))
-      .returning();
-    if (del.length > 0) {
-      await enqueueReactionEvent(tx, chan, false, { messageId, userId, emoji, itemAuthorId: row.userId });
-    }
-    return del;
-  });
+  const deleted = await db
+    .delete(reactions)
+    .where(and(eq(reactions.messageId, messageId), eq(reactions.userId, userId), eq(reactions.emoji, emoji)))
+    .returning();
   if (deleted.length > 0) {
     publishEvent(subjectMsg(chan.workspaceId, row.channelId), {
       type: 'reaction.removed',

@@ -14,7 +14,6 @@ import {
   publishNotificationRetirements,
   publishNotifications,
 } from './notifications.js';
-import { enqueueMessageEvents } from './appEvents.js';
 import { publishEvent, subjectMsg } from '../bus.js';
 import { scheduleForMessage, unfurlsForMessages } from './unfurl/index.js';
 import { requireMembership } from './workspaces.js';
@@ -256,13 +255,6 @@ export async function sendMessage(
     }
     // notification rows in the same transaction (phase2.md §4)
     planned = await insertNotifications(tx, recipients, id, channelId, userId);
-    // Slack-compat Events API outbox rows, same transaction (phase4.md §1)
-    await enqueueMessageEvents(
-      tx,
-      chan,
-      { id, userId, body, threadRootId: threadRootId ?? null },
-      mentionIds,
-    );
   });
 
   if (!row) {

@@ -94,12 +94,6 @@ export function subjectPresenceSync(replicaId: string): string {
 export function subjectPresenceSyncAll(): string {
   return prefixed(`presence.sync.*`);
 }
-/** Per-app Socket Mode envelope routing (phase 18 M3) — the replica holding
- * the app's socket subscribes (queue group, so exactly one responder when the
- * app holds sockets on several replicas) and replies with the ack result. */
-export function subjectAppSocketMode(appId: string): string {
-  return prefixed(`app.${appId}.socketmode`);
-}
 /** Per-user meta subject: tells a user's live sockets about workspace joins. */
 export function subjectUserMeta(userId: string): string {
   return prefixed(`user.${userId}.meta`);

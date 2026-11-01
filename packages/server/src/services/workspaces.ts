@@ -487,7 +487,7 @@ export async function removeMember(workspaceId: string, actorId: string, targetI
  * re-authenticating against a workspace that no longer exists.
  *
  * Everything else rides the `workspaces` row's ON DELETE CASCADE (channels,
- * messages, members, invites, join links, emoji, artifacts, files, apps).
+ * messages, members, invites, join links, emoji, artifacts, files).
  * Blobs have no cascade, so uploaded files, their thumbnails and the workspace
  * avatar are swept first, best-effort — a failed blob delete must not leave the
  * workspace half-deleted.

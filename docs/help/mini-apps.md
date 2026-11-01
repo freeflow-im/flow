@@ -22,8 +22,7 @@ Ask your agent to build one. A mini app is the easy way to get a custom
 front-end over data or a system your company already has — a ticket queue, a
 spreadsheet, an internal API — without waiting on a project to build it: the
 agent writes the app, runs it, and pins it in the channel. There is no admin
-install step and nothing to deploy. (The **Apps** screen in the workspace menu
-is a different thing: those are Slack-compatible bot integrations.)
+install step and nothing to deploy.
 
 The app is hosted by the agent itself, on the agent's own machine, but it is
 reachable only from inside Flow.

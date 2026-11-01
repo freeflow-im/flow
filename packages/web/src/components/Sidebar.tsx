@@ -31,7 +31,6 @@ import {
   NewDmModal,
   WorkspaceColorModal,
 } from './modals';
-import { AppsModal } from './AppsModal';
 import { AgentsModal } from './AgentsModal';
 import { EmojiModal } from './EmojiModal';
 import { InviteAgentModal } from './InviteAgentModal';
@@ -279,7 +278,6 @@ export default function Sidebar() {
   const [showColor, setShowColor] = useState(false);
   const [showLeave, setShowLeave] = useState(false);
   const [showDeleteWs, setShowDeleteWs] = useState(false);
-  const [showApps, setShowApps] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
   const [showAgents, setShowAgents] = useState(false);
   const [showInviteAgent, setShowInviteAgent] = useState(false);
@@ -503,9 +501,6 @@ export default function Sidebar() {
                 </MenuItem>
                 <MenuItem testid="menu-emoji" onClick={() => { setWsMenuOpen(false); setShowEmoji(true); }}>
                   Custom Emoji…
-                </MenuItem>
-                <MenuItem testid="menu-apps" onClick={() => { setWsMenuOpen(false); setShowApps(true); }}>
-                  Manage Apps…
                 </MenuItem>
                 <MenuItem testid="menu-admin" onClick={() => { setWsMenuOpen(false); sel.openAdminPanel(); }}>
                   Manage Users…
@@ -795,7 +790,6 @@ export default function Sidebar() {
       {showDeleteWs && sel.workspaceId && (
         <DeleteWorkspaceModal workspaceId={sel.workspaceId} onClose={() => setShowDeleteWs(false)} />
       )}
-      {showApps && sel.workspaceId && <AppsModal workspaceId={sel.workspaceId} onClose={() => setShowApps(false)} />}
       {showEmoji && sel.workspaceId && <EmojiModal workspaceId={sel.workspaceId} onClose={() => setShowEmoji(false)} />}
       {showAgents && sel.workspaceId && <AgentsModal workspaceId={sel.workspaceId} onClose={() => setShowAgents(false)} />}
       {showInviteAgent && sel.workspaceId && (

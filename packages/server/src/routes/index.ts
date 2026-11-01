@@ -31,7 +31,6 @@ import {
   PatchMeBody,
   PresignUploadBody,
   RegisterBody,
-  CreateAppBody,
   CreateArtifactBody,
   UpdateArtifactBody,
   AgentLoginBody,
@@ -49,7 +48,6 @@ import {
   SetMemberRoleBody,
   HuddleInviteReplyBody,
   SetNotifyLevelBody,
-  UpdateAppBody,
   UpdateChannelBody,
   UpdateWorkspaceBody,
   type UserDTO,
@@ -92,7 +90,6 @@ import * as cem from '../services/communityEmail.js';
 import { deleteMyAccount } from '../services/accountDeletion.js';
 import { detachUserFromWorkspace, disconnectUser } from '../gateway/index.js';
 import * as unfurl from '../services/unfurl/index.js';
-import * as ap from '../services/apps.js';
 import * as help from '../services/help.js';
 import * as ag from '../services/agents.js';
 import * as wi from '../services/workspaceInvites.js';
@@ -103,7 +100,7 @@ declare module 'fastify' {
   interface FastifyRequest {
     user: UserDTO;
     bearerToken: string;
-    /** How the bearer token authenticated — a client session or an agent/bot token (#415). */
+    /** How the bearer token authenticated — a client session or an agent token (#415). */
     authKind: auth.AuthKind;
   }
 }
@@ -180,8 +177,8 @@ export function registerRoutes(app: FastifyInstance): void {
   // client id is public by design — it ships in the page that calls Google.
   // Built-in help docs (#383). Public like /v1/config and served raw: the
   // content is documentation checked into the repo, and each client renders the
-  // markdown with its own pipeline. Lives under /v1 rather than /api because
-  // /api/* is the Slack-compat surface (it ends in a catch-all).
+  // markdown with its own pipeline. Lives under /v1 like the rest of the API;
+  // /api is reserved for the Workspace app (docs/specs/freeflow-suite.md).
   app.get('/v1/help/topics', async () => ({ topics: help.listTopics() }));
 
   app.get('/v1/help/pages/:slug', async (req) => {
@@ -548,54 +545,6 @@ export function registerRoutes(app: FastifyInstance): void {
       .send(img.content.data);
   });
 
-  // ---- Slack-compat app management (phase 4, owner/admin, web-only UI) ----
-  app.post('/v1/workspaces/:id/apps', { preHandler: requireAuth }, async (req, reply) => {
-    const { id } = req.params as { id: string };
-    const body = parse(CreateAppBody, req.body);
-    const res = await ap.createApp(id, req.user.id, body.name);
-    return reply.status(201).send(res); // { app, botToken, signingSecret } — shown once
-  });
-
-  app.get('/v1/workspaces/:id/apps', { preHandler: requireAuth }, async (req) => {
-    const { id } = req.params as { id: string };
-    return { apps: await ap.listApps(id, req.user.id) };
-  });
-
-  app.patch('/v1/apps/:id', { preHandler: requireAuth }, async (req) => {
-    const { id } = req.params as { id: string };
-    const body = parse(UpdateAppBody, req.body);
-    return ap.updateApp(id, req.user.id, body);
-  });
-
-  // Credentials stay viewable after creation (ui_nits; owner/admin only).
-  app.get('/v1/apps/:id/credentials', { preHandler: requireAuth }, async (req) => {
-    const { id } = req.params as { id: string };
-    return ap.getAppCredentials(id, req.user.id);
-  });
-
-  // New bot + app-level tokens; old ones stop working. Pre-0011 apps use this
-  // to become viewable.
-  app.post('/v1/apps/:id/credentials/rotate', { preHandler: requireAuth }, async (req) => {
-    const { id } = req.params as { id: string };
-    return ap.rotateAppTokens(id, req.user.id);
-  });
-
-  app.post('/v1/apps/:id/disable', { preHandler: requireAuth }, async (req) => {
-    const { id } = req.params as { id: string };
-    return ap.setAppDisabled(id, req.user.id, true);
-  });
-
-  app.post('/v1/apps/:id/enable', { preHandler: requireAuth }, async (req) => {
-    const { id } = req.params as { id: string };
-    return ap.setAppDisabled(id, req.user.id, false);
-  });
-
-  app.delete('/v1/apps/:id', { preHandler: requireAuth }, async (req) => {
-    const { id } = req.params as { id: string };
-    await ap.deleteApp(id, req.user.id);
-    return { ok: true };
-  });
-
   // ---- First-class AI agents (AGENT_MEMBERS.md): invite-code onboarding ----
   // Sponsor side: mint a one-time invite code for a workspace they belong to.
   app.post('/v1/workspaces/:id/agent-invites', { preHandler: requireAuth }, async (req, reply) => {
@@ -956,9 +905,9 @@ export function registerRoutes(app: FastifyInstance): void {
     const { purge } = req.query as { purge?: string };
     await msg.deleteMessage(id, req.user.id, {
       hard: purge === 'true' || purge === '1',
-      // The bridge's agent status row must vanish on completion. App bots use
-      // the separate Slack-compatible auth surface; session-authenticated
-      // human authors stay on the soft-delete path unless they are owner/admin.
+      // The bridge's agent status row must vanish on completion;
+      // session-authenticated human authors stay on the soft-delete path
+      // unless they are owner/admin.
       allowOwnPermanentDelete: req.user.isAgent,
     });
     return { ok: true };

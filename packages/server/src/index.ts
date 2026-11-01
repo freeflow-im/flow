@@ -6,12 +6,10 @@ import { initCrypto } from './crypto/index.js';
 import { connectBus, closeBus } from './bus.js';
 import { attachGateway } from './gateway/index.js';
 import { startPresenceSync } from './presenceSync.js';
-import { attachSocketMode } from './gateway/socketMode.js';
 import { purgeExpiredSessions } from './services/auth.js';
 import { purgeStaleRateWindows } from './lib/rateLimitDb.js';
 import { LOCK_KEYS, runExclusive } from './lib/singleton.js';
 import { startOrphanSweep } from './services/files.js';
-import { startAppEventsWorker } from './services/appEvents.js';
 import { startPushWorker } from './services/pushOutbox.js';
 import { startIndicatorSweeper } from './services/channelIndicators.js';
 import { startScheduler } from './services/scheduledMessages.js';
@@ -27,14 +25,12 @@ async function main(): Promise<void> {
   await connectBus();
   await app.listen({ port: config.port, host: config.host });
   const gateway = attachGateway(app.server);
-  const socketMode = attachSocketMode(app.server);
   // Distributed presence gossip (phase 18 M2) — inert at replicas: 1.
   const presenceSync = startPresenceSync();
   // Huddle roster convergence across replicas (design doc §1a) — the events
   // carry full rosters, so applying every replica's stream keeps caches equal.
   const huddleSync = startHuddleRosterSync();
   app.log.info(`ws gateway attached at ws://${config.host}:${config.port}/v1/ws`);
-  app.log.info(`socket-mode compat attached at ws://${config.host}:${config.port}/api/socket-mode`);
 
   if (process.env.FLOW_MIGRATE_BLOBS === '1') {
     // one-time volume → R2 copy; blocks boot-completion work but not serving
@@ -48,7 +44,6 @@ async function main(): Promise<void> {
     await purgeStaleRateWindows();
   }).catch(() => {});
   startOrphanSweep(app.log); // boot-time + daily orphan-file sweep (decision log ruling 5)
-  startAppEventsWorker(app.log); // Events API outbox drain (phase 4)
   startPushWorker(app.log); // APNs outbox drain (#247)
   const indicatorSweeper = startIndicatorSweeper(); // retract lapsed channel spinners (#137)
   // Scheduled messages (#419). The first pass runs immediately, which is also
@@ -73,7 +68,6 @@ async function main(): Promise<void> {
     indicatorSweeper.stop();
     scheduler.stop();
     gateway.close();
-    socketMode.close();
     await app.close();
     await closeBus();
     await closeDb();

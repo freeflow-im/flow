@@ -10,7 +10,6 @@ import {
 import { BackendError, dedupeMessages, emailDomain, isSelfRegisterableDomain } from '@flow/shared';
 import type {
   AgentInviteDTO,
-  AppDTO,
   ArtifactDTO,
   ChannelDTO,
   ChannelFilePage,
@@ -249,19 +248,6 @@ export function useAppArtifacts(workspaceId: string | null) {
     queryKey: ['app-artifacts', workspaceId],
     queryFn: () => api<{ artifacts: ArtifactDTO[] }>('GET', `/v1/workspaces/${workspaceId}/app-artifacts`),
     select: (d) => d.artifacts,
-    enabled: workspaceId !== null && isFlow,
-  });
-}
-
-/** Slack-compat apps for a workspace (phase4.md §1). Admin-only endpoint. */
-export function useApps(workspaceId: string | null) {
-  const runtime = useRuntime();
-  const api = runtime.api.bind(runtime);
-  const isFlow = useIsFlow();
-  return useQuery({
-    queryKey: ['apps', workspaceId],
-    queryFn: () => api<{ apps: AppDTO[] }>('GET', `/v1/workspaces/${workspaceId}/apps`),
-    select: (d) => d.apps,
     enabled: workspaceId !== null && isFlow,
   });
 }
