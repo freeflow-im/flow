@@ -116,7 +116,7 @@ export function createUpdater({ app, dialog, shell, onProgress }) {
 
   /** Whether this copy can replace itself: the installed app, in a folder it can write to (macOS). */
   function canInstall() {
-    if (!app.isPackaged) return 'This copy of the app runs from its project folder: update it there (git pull, npm run desktop).';
+    if (!app.isPackaged) return 'This copy of the app runs from its project folder: update it there (git pull, pnpm desktop).';
     if (mac) {
       if (!bundle().endsWith('.app')) return 'The app could not find where it is installed.';
       try {

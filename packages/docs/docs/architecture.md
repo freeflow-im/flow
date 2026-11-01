@@ -68,7 +68,7 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   (formatting, images, column sizes, frozen panes, filters, more tabs) and the page offers to convert the
   file to a native spreadsheet (`POST /api/sheets/:id/convert`); the assistant's tools get a `ToolError`
   telling it to ask the user to convert.
-- The desktop app (`desktop/`, `npm run desktop`) is Electron around the same server and client, named MCP Docs
+- The desktop app (`desktop/`, `pnpm desktop`) is Electron around the same server and client, named MCP Docs
   (the hosted app is MCP Docs too, the ChatGPT plugin Universal Docs; code shared by both names it with `appName` in
   `shared/brand.ts`, and the client with `appName()` in `client/src/brand.ts`, set from `/api/auth/me`). `main.js`
   starts `desktop/server.ts` as a child process for the folder being opened (the command-line argument or
@@ -159,7 +159,7 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   `.codex-plugin/plugin.json`; the marketplaces are `.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json`
   at the root), installed with the app by `npx @freeflow-im/mcp-docs` (`installer/`, its own npm package, which asks
   which agents to add it to and prints the MCP address for any other client; its version, the plugins' and the Claude
-  marketplace entry's are the desktop release's: `npm run release -- <version>` sets them all and tags
+  marketplace entry's are the desktop release's: `pnpm release -- <version>` sets them all and tags
   `desktop-v<version>`, and pushing the tag has `.github/workflows/desktop-release.yml` build the Mac and Windows apps, make the GitHub
   release and publish the installer to npm, with the notes in `release-notes/<version>.md`). Check for Updates… (the app menu; Help on Windows, `desktop/updater.js`)
   downloads that release's file and installs it over the running app: on macOS it unpacks the new app beside the old one
@@ -247,7 +247,7 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   knows is a new revision (`LocalSheetStore.fileChanged`/`retime`), and `GET /api/local/folder-changes?folder=` tells
   the home page's list to load again.
 - The hosted app's public site for visitors: the front page (`LandingPage`) is drawn when the app is built
-  (`npm run build` runs `scripts/prerender-landing.ts` on `client/src/landingPrerender.tsx`, making
+  (`pnpm build` runs `scripts/prerender-landing.ts` on `client/src/landingPrerender.tsx`, making
   `dist/client/landing.html` with its head for search engines), and the server sends it at / to a visitor who is not
   signed in, with the app's address for `ORIGIN_MARK`; the app keeps it while it asks who is signed in. Each box on
   it can link to a feature page: Markdown with front matter in `content/features/<slug>.md`, served by

@@ -310,7 +310,8 @@ The former MCP Docs repository, added as a git subtree for the FreeFlow suite
   names this repository.
 - `docs-desktop-release.yml` builds the macOS and Windows apps, makes the GitHub
   release and publishes the installer to npm when a `desktop-v<version>` tag is
-  pushed; the tag is made by `npm run release -- <version>` in `packages/docs`.
+  pushed; the tag is made by `pnpm --filter @flow/docs release -- <version>`. Both
+  workflows install with pnpm at the repository root.
 
 ## Open gaps
 

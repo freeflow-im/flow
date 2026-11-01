@@ -12,7 +12,8 @@
     "skipLibCheck": true,
     "noEmit": true,
     "isolatedModules": true,
-    "useDefineForClassFields": true
+    "useDefineForClassFields": true,
+    "types": ["node", "vite/client"]
   },
   "include": ["src"]
 }

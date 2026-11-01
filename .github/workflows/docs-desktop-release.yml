@@ -1,11 +1,8 @@
 # Publishes a desktop release of the Workspace app (packages/docs, the former MCP Docs repository) when its tag
-# (desktop-v<version>, made by `npm run release -- <version>` in packages/docs) is pushed: checks and builds the
+# (desktop-v<version>, made by `pnpm release -- <version>` in packages/docs) is pushed: checks and builds the
 # macOS and Windows apps, makes the GitHub release with both and publishes the installer to npm.
 # Run it by hand (Actions › Docs desktop release › Run workflow) to check that both build, without publishing
 # anything; the builds are kept as the run's artifacts for a few days.
-#
-# The package keeps its own npm lockfile for these builds (npm ci in packages/docs), separate from the pnpm
-# workspace the rest of the repository uses; the toolchain phase of the suite merge unifies them.
 name: Docs desktop release
 
 on:
@@ -18,7 +15,6 @@ concurrency: docs-desktop-release
 defaults:
   run:
     shell: bash
-    working-directory: packages/docs
 
 jobs:
   build:
@@ -38,13 +34,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The version comes from the root package.json's packageManager field, as in ci.yml.
+      - uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version-file: packages/docs/.node-version
-          cache: npm
-          cache-dependency-path: packages/docs/package-lock.json
+          cache: pnpm
 
       - name: Check the versions
+        working-directory: packages/docs
         run: |
           v=$(node -p "require('./package.json').version")
           for f in installer/package.json claude-plugin/.claude-plugin/plugin.json claude-plugin/.codex-plugin/plugin.json; do
@@ -57,12 +56,12 @@ jobs:
             echo "::error::tag $GITHUB_REF_NAME does not match version $v"; exit 1
           fi
 
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm test
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @flow/docs typecheck
+      - run: pnpm --filter @flow/docs test
 
       - name: Build the app
-        run: npm run ${{ matrix.script }}
+        run: pnpm --filter @flow/docs ${{ matrix.script }}
 
       - uses: actions/upload-artifact@v4
         with:
@@ -78,6 +77,10 @@ jobs:
     permissions:
       contents: write # the GitHub release
       id-token: write # npm trusted publishing
+    defaults:
+      run:
+        shell: bash
+        working-directory: packages/docs
     steps:
       - uses: actions/checkout@v4
 
@@ -116,6 +119,7 @@ jobs:
             gh release create "$GITHUB_REF_NAME" --verify-tag --title "MCP Docs $VERSION" --notes-file release/notes.md "${files[@]}"
           fi
 
+      # The installer is its own small npm package; npm publishes it (trusted publishing), pnpm is not involved.
       - name: Publish the installer to npm
         working-directory: packages/docs/installer
         run: |

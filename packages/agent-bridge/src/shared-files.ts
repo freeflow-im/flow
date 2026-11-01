@@ -53,7 +53,7 @@ export async function prepareSharedFile(
       if (message.result) finish(undefined, message.result);
       else finish(new Error(message.error ?? 'Could not read document'));
     });
-    worker.once('error', (error) => finish(error));
+    worker.once('error', (error) => finish(error instanceof Error ? error : new Error(String(error))));
     worker.once('exit', () => finish(new Error('Document reader stopped unexpectedly')));
   });
 }
