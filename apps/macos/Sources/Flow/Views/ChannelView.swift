@@ -168,10 +168,6 @@ struct ChannelView: View {
                     .background(Color.orange.opacity(0.08))
                     .accessibilityIdentifier("channel.archivedBanner")
             }
-            // A provider's limits, said once up here (#546): history budget,
-            // paused stream, and the "Open in Slack" way out. Empty on Flow.
-            ProviderLimitsBanner(channelId: channelId)
-
             MessageListView(
                 messages: transcript,
                 userNames: userNames,
@@ -189,7 +185,6 @@ struct ChannelView: View {
                 ),
                 hasMore: hasMoreCached || (app.hasMore[channelId] ?? false),
                 isLoadingHistory: app.loadingHistory.contains(channelId),
-                loadOlderRetryAt: hasMoreCached ? nil : app.loadOlderRetryAt(channelId: channelId),
                 showThreadAffordances: true,
                 unreadThreadRootIds: Set(currentChannel?.unreadThreadRootIds ?? []),
                 onLoadOlder: {
@@ -458,14 +453,6 @@ struct ChannelView: View {
             Spacer()
             huddleButton
             headerAvatars
-            // Another provider's conversation opens natively there (#546).
-            if let url = app.providerOpenURL(channelId: channelId) {
-                Link("Open in Slack ↗", destination: url)
-                    .flowFont(size: 12, weight: .semibold)
-                    .foregroundStyle(MC.accentSoft)
-                    .pointingHandCursor()
-                    .accessibilityIdentifier("channel.openInProvider.header")
-            }
             channelMenu
         }
         .padding(.horizontal, 22)

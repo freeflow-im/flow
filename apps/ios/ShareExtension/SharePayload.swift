@@ -160,18 +160,12 @@ enum ShareError: LocalizedError {
     /// Both sizes carried so the message can name them — "too large" on its own
     /// leaves the user with nothing to do about it (issue #219).
     case fileTooLarge(size: Int64, limit: Int64)
-    /// A file shared into a Slack team (#546). The connector has no upload
-    /// route, so the file is refused here, never dropped or sent elsewhere.
-    case slackFilesUnsupported
-
-    static let slackFilesMessage = "Files can't be shared to Slack from here yet. Share text, or open Slack."
 
     var errorDescription: String? {
         switch self {
         case .unreadableItem: "Couldn't read the shared item."
         case .notSignedIn: "Open Flow and sign in first, then share again."
         case .nothingToShare: "Nothing here that Flow can post."
-        case .slackFilesUnsupported: Self.slackFilesMessage
         case .fileTooLarge(let size, let limit):
             "That file is \(ShareFormat.binaryBytes(size)). "
                 + "Flow accepts files up to \(ShareFormat.binaryBytes(limit))."

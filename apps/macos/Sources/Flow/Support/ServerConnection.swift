@@ -7,17 +7,12 @@ import Foundation
 /// Shared by macOS and iOS. Nothing here touches storage or the network — it is
 /// the value layer that `ConnectionStore` persists and `ConnectionManager` runs.
 
-/// Providers a connection can speak. Only `flow` is created today; the field
-/// exists from the start so the persisted schema does not have to change when
-/// Slack connections arrive.
+/// Providers a connection can speak: Flow servers. The field stays in the
+/// persisted schema so stored registries keep their shape; a record whose
+/// provider this build does not know (the removed Slack provider) is dropped on
+/// read, see `ConnectionRegistry.init(from:)`.
 enum ConnectionProvider: String, Codable, Sendable {
     case flow
-    case slack
-}
-
-enum SlackConnectionError: Error, Equatable {
-    /// The team is already recorded with a different connector; remove it first.
-    case connectorChanged
 }
 
 enum SessionStatus: String, Codable, Sendable {
@@ -31,8 +26,7 @@ struct ServerConnection: Codable, Identifiable, Equatable, Sendable {
     /// itself equivalent to another connection through discovery metadata.
     let connectionId: String
     let provider: ConnectionProvider
-    /// The canonical origin for `flow`; for `slack` it will be the
-    /// `(environment, enterpriseId?, teamId)` tuple that workstream serializes.
+    /// The canonical origin. Never treated as an authentication claim.
     let providerIdentity: String
     /// Canonical origin / transport endpoint this connection's runtime dials.
     let origin: String
@@ -58,7 +52,7 @@ struct ServerConnection: Codable, Identifiable, Equatable, Sendable {
     /// How this connection names itself in the UI — the switcher sheet's rows
     /// and the iOS sidebar header both use it, so they can't drift (#563).
     var displayLabel: String {
-        provider == .slack ? "Slack · \(label)" : canonicalOrigin?.label ?? origin
+        canonicalOrigin?.label ?? origin
     }
     var connectionScope: StorageScope { StorageScope(storageKey: connectionStorageKey) }
 }
@@ -113,6 +107,31 @@ struct ConnectionRegistry: Codable, Equatable, Sendable {
     var bindings: [WorkspaceBinding] = []
     var navigation: [NavigationTarget] = []
     var activeConnectionId: String?
+
+    init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case version, connections, sessions, bindings, navigation, activeConnectionId
+    }
+
+    /// A registry written by an earlier build may hold connections to a
+    /// provider this build no longer speaks (Slack, removed 2026-11-01). Those
+    /// records are dropped on read, with every session, binding and navigation
+    /// target scoped to them, instead of failing the whole registry and signing
+    /// the person out of every server. Their Keychain credential is left for
+    /// the next sign-out sweep.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decodeIfPresent(Int.self, forKey: .version) ?? ConnectionRegistry.currentVersion
+        let kept = (try c.decodeIfPresent([Lenient<ServerConnection>].self, forKey: .connections) ?? []).compactMap(\.value)
+        let ids = Set(kept.map(\.connectionId))
+        connections = kept
+        sessions = (try c.decodeIfPresent([ServerSession].self, forKey: .sessions) ?? []).filter { ids.contains($0.connectionId) }
+        bindings = (try c.decodeIfPresent([WorkspaceBinding].self, forKey: .bindings) ?? []).filter { ids.contains($0.connectionId) }
+        navigation = (try c.decodeIfPresent([NavigationTarget].self, forKey: .navigation) ?? []).filter { ids.contains($0.connectionId) }
+        let active = try c.decodeIfPresent(String.self, forKey: .activeConnectionId)
+        activeConnectionId = active.flatMap { ids.contains($0) ? $0 : nil } ?? kept.first?.connectionId
+    }
 
     func connection(_ id: String) -> ServerConnection? {
         connections.first { $0.connectionId == id }
@@ -192,54 +211,6 @@ struct ConnectionRegistry: Codable, Equatable, Sendable {
         return connection
     }
 
-    /// Add a Slack team authorized through a connector, or refresh the one
-    /// already recorded for that identity (#545). Identity is the immutable
-    /// `(environment, enterpriseId?, teamId, userId)` tuple — never the team
-    /// domain or name — so two teams at slack.com stay two connections and a
-    /// renamed workspace keeps its record. Changing the connector for an
-    /// existing team is refused: remove it first. Each team is its own single
-    /// workspace in the switcher, bound by the team id.
-    @discardableResult
-    mutating func addSlackConnection(
-        connectorOrigin: String, enterpriseId: String?, teamId: String, userId: String,
-        teamName: String, userName: String, capabilities: [String: Bool]
-    ) throws -> ServerConnection {
-        let identity = SlackIdentity.identityString(enterpriseId: enterpriseId, teamId: teamId, userId: userId)
-        let label = "\(teamName) · \(userName)"
-        if let index = connections.firstIndex(where: { $0.provider == .slack && $0.providerIdentity == identity }) {
-            if connections[index].origin != connectorOrigin {
-                throw SlackConnectionError.connectorChanged
-            }
-            connections[index].label = label
-            connections[index].capabilities = capabilities
-            setBinding(WorkspaceBinding(connectionId: connections[index].connectionId, userId: userId, workspaceId: teamId, name: teamName, hidden: false, order: nil))
-            return connections[index]
-        }
-        let scope = StorageScope.fresh()
-        let connection = ServerConnection(
-            connectionId: UUID().uuidString,
-            provider: .slack,
-            providerIdentity: identity,
-            origin: connectorOrigin,
-            connectionStorageKey: StorageScope.fresh().storageKey,
-            label: label,
-            apiVersion: 1,
-            capabilities: capabilities,
-            addedAt: Date()
-        )
-        connections.append(connection)
-        sessions.append(ServerSession(
-            connectionId: connection.connectionId,
-            userId: userId,
-            credentialRef: scope.keychainAccount,
-            storageKey: scope.storageKey,
-            authGeneration: 0,
-            status: .authenticated
-        ))
-        setBinding(WorkspaceBinding(connectionId: connection.connectionId, userId: userId, workspaceId: teamId, name: teamName, hidden: false, order: nil))
-        return connection
-    }
-
     /// Forget a connection and every record scoped to it. The caller disposes
     /// the live runtime and its storage; this is only the durable half.
     mutating func removeConnection(_ id: String) {
@@ -268,5 +239,14 @@ struct ConnectionRegistry: Codable, Equatable, Sendable {
 
     func navigationTarget(connectionId: String, userId: String) -> NavigationTarget? {
         navigation.first { $0.connectionId == connectionId && $0.userId == userId }
+    }
+}
+
+/// Decodes to nil instead of failing, so one unreadable element does not take
+/// the whole array with it.
+private struct Lenient<Value: Decodable>: Decodable {
+    let value: Value?
+    init(from decoder: Decoder) {
+        value = try? Value(from: decoder)
     }
 }

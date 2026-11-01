@@ -8,8 +8,7 @@ import SwiftUI
 actor ImageLoader {
     static let shared = ImageLoader()
 
-    /// Where bytes come from: the Flow API client, or a provider backend
-    /// (Slack) whose connector proxies file bytes with its own credential.
+    /// Where bytes come from: the connection's API client.
     private var fetch: (@Sendable (String) async throws -> Data)?
     private var generation = 0
     // NSCache is internally thread-safe; `nonisolated(unsafe)` lets
@@ -26,11 +25,6 @@ actor ImageLoader {
 
     func configure(api: APIClient) {
         fetch = { try await api.getData($0) }
-        cache.countLimit = 500
-    }
-
-    func configure(backend: WorkspaceBackend) {
-        fetch = { try await backend.fileData(path: $0) }
         cache.countLimit = 500
     }
 

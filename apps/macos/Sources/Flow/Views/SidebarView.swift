@@ -52,9 +52,6 @@ struct SidebarView: View {
     @AppStorage("flow.sidebarAgentsCollapsed") private var agentsCollapsed = false
     /// Apps section (#394) collapsed? Same per-device memory as Agents.
     @AppStorage("flow.sidebarAppsCollapsed") private var appsCollapsed = false
-    /// Sections whose inactive provider conversations are unfolded, for the
-    /// selected workspace (loaded from SidebarInactivePreference).
-    @State private var shownInactive: Set<SidebarInactivePreference.Section> = []
 
     private var currentWorkspace: Workspace? {
         workspaces.value.first { $0.id == win.selectedWorkspaceId }
@@ -90,21 +87,8 @@ struct SidebarView: View {
     private var joinedChannels: [(channel: Channel, isNested: Bool)] {
         let dmIds = joinedDmIds
         let list = channels.value.filter { $0.isMember && !$0.isDM && !($0.parentId.map(dmIds.contains) ?? false) }
-        return Channel.nested(shownInactive.contains(.channels) ? list : channelSplit(list).active)
+        return Channel.nested(list)
     }
-
-    /// A provider workspace hides conversations not known to be active (Slack
-    /// teams carry years of dead ones); a Flow workspace splits nothing.
-    private func channelSplit(_ list: [Channel]) -> (active: [Channel], inactiveCount: Int) {
-        Channel.splitInactive(list, isProvider: app.isProviderWorkspace, selectedId: win.selectedChannelId)
-    }
-
-    private var inactiveChannelCount: Int {
-        let dmIds = joinedDmIds
-        return channelSplit(channels.value.filter { $0.isMember && !$0.isDM && !($0.parentId.map(dmIds.contains) ?? false) }).inactiveCount
-    }
-
-    private var inactiveDmCount: Int { channelSplit(agentSplit.rest).inactiveCount }
 
     /// Sub-channels hanging off a DM, keyed by that DM's id.
     private var dmChildren: [String: [Channel]] {
@@ -137,8 +121,7 @@ struct SidebarView: View {
         func isSelf(_ c: Channel) -> Bool {
             c.kind == "dm" && (c.memberIds ?? []).allSatisfy { $0 == me }
         }
-        let rest = shownInactive.contains(.dms) ? agentSplit.rest : channelSplit(agentSplit.rest).active
-        return rest
+        return agentSplit.rest
             .sorted {
                 if isSelf($0) != isSelf($1) { return !isSelf($0) }
                 return $0.displayTitle(userNames: names, currentUserId: me)
@@ -184,7 +167,6 @@ struct SidebarView: View {
                         channelRow(row.channel, isNested: row.isNested)
                     }
                 }
-                inactiveToggleRow(.channels, count: inactiveChannelCount)
                 // Channel browser (#590): one nav row replaces the inline Browse
                 // list of every unjoined channel, which didn't scale. As on web.
                 if app.can(.channelManagement) {
@@ -262,8 +244,6 @@ struct SidebarView: View {
                         channelWithArtifacts(child) { channelRow(child, isNested: true) }
                     }
                 }
-                inactiveToggleRow(.dms, count: inactiveDmCount)
-
             }
             .padding(.horizontal, 14)
             .padding(.bottom, 10)
@@ -340,9 +320,6 @@ struct SidebarView: View {
         }
         .task(id: win.selectedWorkspaceId) {
             guard let wsId = win.selectedWorkspaceId else { return }
-            shownInactive = Set([SidebarInactivePreference.Section.channels, .dms].filter {
-                SidebarInactivePreference.isShown($0, workspaceId: wsId)
-            })
             channels.start(db: app.db, reset: []) { db in
                 try Channel
                     .filter(Column("workspaceId") == wsId && Column("archivedAt") == nil)
@@ -897,35 +874,6 @@ struct SidebarView: View {
 
     /// "Browse all" at the end of the Channels section (#590) — opens the
     /// channel browser. Muted, so it reads as a nav affordance, not a channel.
-    /// "Show N inactive" / "Hide inactive" under a provider section; absent
-    /// when nothing is hidden.
-    @ViewBuilder
-    private func inactiveToggleRow(_ section: SidebarInactivePreference.Section, count: Int) -> some View {
-        if count > 0, let wsId = win.selectedWorkspaceId {
-            let shown = shownInactive.contains(section)
-            Button {
-                if shown { shownInactive.remove(section) } else { shownInactive.insert(section) }
-                SidebarInactivePreference.set(!shown, section, workspaceId: wsId)
-            } label: {
-                HStack(spacing: 9) {
-                    Image(systemName: shown ? "chevron.up" : "chevron.down")
-                        .flowFont(size: 10)
-                        .foregroundStyle(.white.opacity(0.5))
-                        .frame(width: 14)
-                    Text(shown ? "Hide inactive" : "Show \(count) inactive")
-                        .flowFont(size: 13)
-                        .foregroundStyle(.white.opacity(0.6))
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help(shown ? "Hide conversations with no activity in 30 days" : "Conversations with no activity in 30 days")
-            .accessibilityIdentifier("sidebar.inactive.\(section.rawValue)")
-        }
-    }
 
     private var browseAllRow: some View {
         let active = win.showChannelBrowser
@@ -1335,8 +1283,6 @@ struct StatusFooterView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                // A Slack grant without users.profile:write shows the status
-                // but cannot change it (#546 gating).
                 .capability(.status)
                 .accessibilityIdentifier("sidebar.statusFooter")
                 .accessibilityValue(

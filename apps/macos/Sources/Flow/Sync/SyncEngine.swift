@@ -44,16 +44,6 @@ actor SyncEngine {
     private let connectionId: String
     private var scope: StorageScope
 
-    /// A provider adapter for a non-Flow connection (#546). When set, the chat
-    /// core — identity, workspaces, channels, members, history, threads, send,
-    /// edit, delete, reactions, read marks, live events — goes through it and
-    /// the Flow socket, push registration and notification badge are never
-    /// touched. Flow-only features are gated by its capabilities.
-    private let backend: WorkspaceBackend?
-    private var backendEvents: Task<Void, Never>?
-    /// Provider history cursors per channel: opaque, never an id to compare.
-    private var backendCursors: [String: String] = [:]
-
     private var currentUserIdKey: String { scope.key("currentUserId") }
     private var keychainAccount: String { scope.keychainAccount }
 
@@ -62,15 +52,13 @@ actor SyncEngine {
         api: APIClient,
         socket: SocketClient,
         connectionId: String = "",
-        scope: StorageScope = .legacy,
-        backend: WorkspaceBackend? = nil
+        scope: StorageScope = .legacy
     ) {
         self.db = db
         self.api = api
         self.socket = socket
         self.connectionId = connectionId
         self.scope = scope
-        self.backend = backend
     }
 
     func attach(_ appState: AppState) {
@@ -105,7 +93,6 @@ actor SyncEngine {
     }
 
     func bootstrap() async {
-        if backend != nil { await bootstrapBackend(); return }
         await api.setUnauthorizedHandler { [weak self] in
             await self?.sessionExpired()
         }
@@ -230,7 +217,6 @@ actor SyncEngine {
 
     @discardableResult
     func logout() async -> Bool {
-        if backend != nil { return await signOutFromBackend() }
         let revocation = await api.revocationClient()
         let device = UserDefaults.standard.string(forKey: deviceTokenKey)
         let route = pushRoutingId
@@ -326,9 +312,7 @@ actor SyncEngine {
     /// failure: a device that fails to register still receives everything over
     /// the socket, so this must never surface as an error the user can see.
     func registerPushDevice(token: String, environment: String, bundleId: String) async {
-        // Flow's APNs token is never registered with another provider's
-        // connector (spec, "Notifications and parity").
-        guard currentUser != nil, backend == nil else { return }
+        guard currentUser != nil else { return }
         UserDefaults.standard.set(token, forKey: deviceTokenKey)
         let _: OkResponse? = try? await api.post(
             "/v1/me/devices",
@@ -480,14 +464,8 @@ actor SyncEngine {
     // MARK: - Workspaces
 
     func refreshWorkspaces() async {
-        let workspaces: [Workspace]
-        if let backend {
-            guard let listed = try? await backend.listWorkspaces() else { return }
-            workspaces = listed
-        } else {
-            guard let resp: WorkspacesResponse = try? await api.get("/v1/me/workspaces") else { return }
-            workspaces = resp.workspaces
-        }
+        guard let resp: WorkspacesResponse = try? await api.get("/v1/me/workspaces") else { return }
+        let workspaces = resp.workspaces
         try? await db.writer.write { db in
             let ids = workspaces.map(\.id)
             try Workspace.filter(!ids.contains(Column("id"))).deleteAll(db)
@@ -670,7 +648,6 @@ actor SyncEngine {
     }
 
     func refreshMembers(workspaceId: String) async {
-        if backend != nil { await refreshMembersFromBackend(workspaceId: workspaceId); return }
         guard let resp: MembersResponse = try? await api.get("/v1/workspaces/\(workspaceId)/members")
         else { return }
         let members = resp.members
@@ -739,26 +716,6 @@ actor SyncEngine {
     // MARK: - Channels
 
     func refreshChannels(workspaceId: String) async {
-        if let backend {
-            guard let channels = try? await backend.listConversations(workspaceId: workspaceId) else { return }
-            try? await db.writer.write { db in
-                let ids = channels.map(\.id)
-                try Channel.filter(Column("workspaceId") == workspaceId && !ids.contains(Column("id"))).deleteAll(db)
-                for c in channels {
-                    // Unread state is local for a provider without read-marker
-                    // sync: keep the cached count rather than the list's zero.
-                    var row = c
-                    if let cached = try Channel.fetchOne(db, key: c.id) {
-                        row.unreadCount = cached.unreadCount; row.lastReadMsgId = cached.lastReadMsgId
-                        // Activity the stream delivered since the list was built is newer
-                        // knowledge; the list's value wins only when it has one.
-                        if row.lastActivityAt == nil { row.lastActivityAt = cached.lastActivityAt }
-                    }
-                    try row.save(db)
-                }
-            }
-            return
-        }
         guard let resp: ChannelsResponse = try? await api.get("/v1/workspaces/\(workspaceId)/channels")
         else { return }
         let channels = resp.channels
@@ -827,8 +784,6 @@ actor SyncEngine {
     /// the browser this session. Looks it up through the browser list so the
     /// view can resolve it read-only instead of drawing a nameless composer.
     func resolveUncachedChannel(_ channelId: String, workspaceId: String) async {
-        // Flow's archived-channel browse; a provider's list is the conversation list.
-        guard backend == nil else { return }
         let cached = try? await db.writer.read { db in try Channel.fetchOne(db, key: channelId) }
         guard cached == nil, await appState?.archivedChannels[channelId] == nil else { return }
         _ = try? await browseChannels(workspaceId: workspaceId)
@@ -866,7 +821,6 @@ actor SyncEngine {
         // while this page is in flight (#191) — on a slow link it is the whole
         // difference between "still arriving" and "the conversation is gone".
         await appState?.setLoadingHistory(channelId: channelId, true)
-        if backend != nil { await selectChannelFromBackend(channelId); return }
         var resp: MessagesResponse? = nil
         // One request used to decide the whole transcript: a connection that
         // failed — the usual one being the first request after a phone wakes up
@@ -959,7 +913,6 @@ actor SyncEngine {
     }
 
     func loadOlder(channelId: String) async {
-        if backend != nil { await loadOlderFromBackend(channelId: channelId); return }
         let oldest: String? = try? await db.reader.read { db in
             try String.fetchOne(
                 db,
@@ -988,12 +941,6 @@ actor SyncEngine {
                 sql: "UPDATE channel SET unreadCount = 0, lastReadMsgId = ? WHERE id = ?",
                 arguments: [lastReadMsgId, channelId]
             )
-        }
-        if let backend {
-            // The backend decides whether the provider shares read markers; without
-            // the scope it is a local mark only (SlackBackend), never a Flow call.
-            try? await backend.markRead(channelId: channelId, messageId: lastReadMsgId, threadRootId: nil)
-            return
         }
         let _: OkResponse? = try? await api.post(
             "/v1/channels/\(channelId)/read",
@@ -1028,7 +975,6 @@ actor SyncEngine {
     /// "I'm looking at this thread" — reads the thread's notifications without
     /// touching the channel cursor (which only tracks top-level messages).
     private func markThreadRead(channelId: String, rootId: String) async {
-        if let backend { try? await backend.markRead(channelId: channelId, messageId: rootId, threadRootId: rootId); return }
         let _: OkResponse? = try? await api.post(
             "/v1/channels/\(channelId)/read",
             body: ReadBody(lastReadMsgId: rootId, threadRootId: rootId)
@@ -1119,26 +1065,16 @@ actor SyncEngine {
     @discardableResult
     private func deliver(_ local: Message, mentions: [String]) async -> Bool {
         do {
-            let server: Message
-            if let backend {
-                // The client id rides along so a retry after an unknown outcome
-                // reconciles at the provider instead of posting twice.
-                server = try await backend.send(SendMessageInput(
-                    channelId: local.channelId, body: local.body, clientMsgId: local.clientMsgId,
-                    threadRootId: local.threadRootId, fileIds: local.files.map(\.id)
-                ))
-            } else {
-                server = try await api.post(
-                    "/v1/channels/\(local.channelId)/messages",
-                    body: SendMessageBody(
-                        clientMsgId: local.clientMsgId,
-                        body: local.body,
-                        threadRootId: local.threadRootId,
-                        fileIds: local.files.isEmpty ? nil : local.files.map(\.id),
-                        mentions: mentions.isEmpty ? nil : mentions
-                    )
+            let server: Message = try await api.post(
+                "/v1/channels/\(local.channelId)/messages",
+                body: SendMessageBody(
+                    clientMsgId: local.clientMsgId,
+                    body: local.body,
+                    threadRootId: local.threadRootId,
+                    fileIds: local.files.isEmpty ? nil : local.files.map(\.id),
+                    mentions: mentions.isEmpty ? nil : mentions
                 )
-            }
+            )
             _ = await applyServerMessage(server)
             return true
         } catch {
@@ -1284,24 +1220,6 @@ actor SyncEngine {
         }) ?? false
         let path = "/v1/messages/\(messageId)/reactions/\(emoji.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? emoji)"
         do {
-            if let backend {
-                guard let channelId: String = try? await db.reader.read({ db in try Message.fetchOne(db, key: messageId)?.channelId }) else { return }
-                try await backend.setReaction(channelId: channelId, messageId: messageId, emoji: emoji, on: !mine)
-                // The provider's event stream carries the authoritative change;
-                // mirror it locally so the pill answers the tap now.
-                try? await db.writer.write { db in
-                    guard var m = try Message.fetchOne(db, key: messageId) else { return }
-                    if let at = m.reactions.firstIndex(where: { $0.emoji == emoji }) {
-                        var agg = m.reactions[at]
-                        if mine { agg.userIds.removeAll { $0 == uid }; agg.count = agg.userIds.count } else if !agg.userIds.contains(uid) { agg.userIds.append(uid); agg.count = agg.userIds.count }
-                        if agg.count == 0 { m.reactions.remove(at: at) } else { m.reactions[at] = agg }
-                    } else if !mine {
-                        m.reactions.append(ReactionAgg(emoji: emoji, count: 1, userIds: [uid]))
-                    }
-                    try m.save(db)
-                }
-                return
-            }
             let resp: ReactionsResponse = mine
                 ? try await api.delete(path)
                 : try await api.put(path)
@@ -1316,9 +1234,6 @@ actor SyncEngine {
     /// Fetch every pin in the channel so older pinned messages become part of
     /// the local cache even when normal history pagination has not reached them.
     func loadPinnedMessages(channelId: String) async {
-        // Pins are a Flow feature here: a provider workspace (Slack) has no
-        // pins route, and asking its connector only raised an HTTP 404 alert.
-        guard backend == nil else { return }
         do {
             let response: PinnedMessagesResponse = try await api.get("/v1/channels/\(channelId)/pins")
             // The list is authoritative: clear stale offline-era pins before
@@ -1359,7 +1274,6 @@ actor SyncEngine {
     /// same access check as a download). nil when the storage driver can't
     /// presign — callers must have a no-network fallback.
     func streamURL(fileId: String) async -> URL? {
-        guard backend == nil else { return nil } // a provider's connector proxies bytes; no presigned URLs
         guard let response: StreamUrlResponse = try? await api.get("/v1/files/\(fileId)/url"),
               let raw = response.url else { return nil }
         return URL(string: raw)
@@ -1416,17 +1330,14 @@ actor SyncEngine {
 
     // MARK: - Files
 
-    /// `channelId` is where the file will be sent: a provider workspace (Slack)
-    /// uploads through its backend, which needs the channel; a Flow server does not.
+    /// `channelId` is where the file will be sent. A Flow upload does not need
+    /// it (files belong to the workspace); callers pass it for the composer's
+    /// bookkeeping.
     func uploadFile(workspaceId: String, channelId: String? = nil, fileURL: URL) async throws -> FileAttachment {
+        _ = channelId
         let attrs = try FileManager.default.attributesOfItem(atPath: fileURL.path)
         let sizeBytes = (attrs[.size] as? Int) ?? 0
         let mime = Self.mimeType(for: fileURL)
-        if let backend {
-            guard let channelId else { throw BackendError(code: .invalid, message: "Choose a conversation before attaching a file.") }
-            let data = try Data(contentsOf: fileURL)
-            return try await backend.uploadFile(workspaceId: workspaceId, channelId: channelId, data: data, name: fileURL.lastPathComponent, mimeType: mime)
-        }
         // presign → PUT the bytes (direct to R2 in prod, server fallback in
         // local dev) → complete (server verifies size + generates thumbnails).
         // The PUT streams from disk — files can be hundreds of MB.
@@ -1443,24 +1354,16 @@ actor SyncEngine {
         return try await api.post("/v1/files/\(pres.file.id)/complete")
     }
 
-    /// A file's original bytes from whichever backend owns it.
+    /// A file's original bytes.
     private func fileBytes(_ file: FileAttachment) async throws -> Data {
-        if let backend { return try await backend.fileData(path: "/v1/files/\(file.id)") }
-        return try await api.getData("/v1/files/\(file.id)")
+        try await api.getData("/v1/files/\(file.id)")
     }
 
     /// Downloads a file to a temp path (original filename preserved) and
     /// returns the local URL — used for "open" on attachments.
     func downloadFile(_ file: FileAttachment) async throws -> URL {
-        let tmp: URL
-        if let backend {
-            // A provider's bytes come through its connector, never the Flow API.
-            tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-            try await backend.fileData(path: "/v1/files/\(file.id)").write(to: tmp)
-        } else {
-            // streamed to disk — videos can be hundreds of MB
-            tmp = try await api.downloadToFile("/v1/files/\(file.id)")
-        }
+        // streamed to disk — videos can be hundreds of MB
+        let tmp = try await api.downloadToFile("/v1/files/\(file.id)")
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("FlowDownloads-\(file.id)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -1605,17 +1508,6 @@ actor SyncEngine {
 
     /// Upsert a DM with the given other members (server dedupes by member set).
     func createDm(workspaceId: String, userIds: [String]) async throws -> Channel {
-        // A provider workspace opens the DM that already exists; Flow cannot
-        // start a new conversation there (no Slack permission to open one).
-        if backend != nil {
-            let me = currentUser?.id
-            let wanted = Set(userIds + [me].compactMap { $0 })
-            let existing = try? await db.reader.read { db in
-                try Channel.filter(Column("workspaceId") == workspaceId && Column("kind") == "dm").fetchAll(db)
-            }.first { Set(($0.memberIds ?? []) + [me].compactMap { $0 }) == wanted }
-            if let existing { return existing }
-            throw BackendError(code: .unsupported, message: "Start this conversation in Slack; Flow can open it once it exists.")
-        }
         let ch: Channel = try await api.post(
             "/v1/workspaces/\(workspaceId)/dms",
             body: CreateDmBody(userIds: userIds)
@@ -1630,8 +1522,6 @@ actor SyncEngine {
     /// carries `memberIds` for DMs, so standard channels have to ask the
     /// server. Returns [] on failure — callers fall back to what they have.
     func channelMemberIds(channelId: String) async -> [String] {
-        // No roster route on a provider; views keep the DTO's DM members.
-        guard backend == nil else { return [] }
         guard let resp: ChannelMembersResponse = try? await api.get("/v1/channels/\(channelId)/members")
         else { return [] }
         return resp.userIds
@@ -1783,19 +1673,13 @@ actor SyncEngine {
     /// Set (or clear, with two empty strings) the user's status emoji + label.
     /// `suppressAlerts` mirrors the web client's DND-family flag; nil leaves
     /// the server's current value alone.
-    /// A provider workspace sets it through its backend, never the Flow API.
     func setStatus(emoji: String, text: String, suppressAlerts: Bool? = nil) async throws {
-        let me: User
-        if let backend {
-            me = try await backend.setStatus(emoji: emoji, text: text, suppressAlerts: suppressAlerts)
-        } else {
-            me = try await api.patch(
-                "/v1/me",
-                body: PatchMeBody(
-                    statusEmoji: emoji, statusText: text, statusSuppressAlerts: suppressAlerts
-                )
+        let me: User = try await api.patch(
+            "/v1/me",
+            body: PatchMeBody(
+                statusEmoji: emoji, statusText: text, statusSuppressAlerts: suppressAlerts
             )
-        }
+        )
         currentUser = me
         try? await db.writer.write { db in try me.save(db) }
         await appState?.setPhase(.signedIn(me))
@@ -1846,7 +1730,7 @@ actor SyncEngine {
     }
 
     func fetchUser(_ userId: String) async throws -> User {
-        let u: User = if let backend { try await backend.fetchUser(id: userId) } else { try await api.get("/v1/users/\(userId)") }
+        let u: User = try await api.get("/v1/users/\(userId)")
         try? await db.writer.write { db in try u.save(db) }
         return u
     }
@@ -1948,7 +1832,6 @@ actor SyncEngine {
     /// show different workspaces, so each open one gets its own scoped fetch;
     /// with none open a single unscoped fetch still keeps the dock badge live.
     func refreshNotificationBadge() async {
-        guard backend == nil else { return } // notifications are a Flow feature; a provider's badge stays local
         let workspaceIds = await appState?.openWorkspaceIds ?? []
         if workspaceIds.isEmpty {
             guard let resp: NotificationsResponse = try? await api.get(
@@ -1977,16 +1860,10 @@ actor SyncEngine {
         let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         do {
-            let updated: Message
-            if let backend {
-                guard let channelId: String = try? await db.reader.read({ db in try Message.fetchOne(db, key: id)?.channelId }) else { return }
-                updated = try await backend.edit(channelId: channelId, messageId: id, body: trimmed)
-            } else {
-                updated = try await api.patch(
-                    "/v1/messages/\(id)",
-                    body: EditMessageBody(body: trimmed)
-                )
-            }
+            let updated: Message = try await api.patch(
+                "/v1/messages/\(id)",
+                body: EditMessageBody(body: trimmed)
+            )
             _ = await applyServerMessage(updated)
         } catch {
             await appState?.showError("Couldn't edit message: \(error.localizedDescription)")
@@ -1997,14 +1874,6 @@ actor SyncEngine {
         do {
             let local: Message? = try? await db.reader.read { db in
                 try Message.fetchOne(db, key: id)
-            }
-            if let backend {
-                // A provider without tombstones removes the row outright; its
-                // stream echoes the deletion to other clients.
-                guard let local else { return }
-                try await backend.delete(channelId: local.channelId, messageId: id, purge: permanently)
-                if await purgeMessage(local) { await appState?.messagePermanentlyDeleted(local) }
-                return
             }
             let query = permanently ? [URLQueryItem(name: "purge", value: "true")] : []
             let _: OkResponse = try await api.delete("/v1/messages/\(id)", query: query)
@@ -2069,7 +1938,6 @@ actor SyncEngine {
     /// Dropping `hasMore` broke both past 100 replies, and the orphaned
     /// pending row then spun forever (#328).
     private func fetchThread(rootId: String) async {
-        if backend != nil { await fetchThreadFromBackend(rootId: rootId); return }
         var after: String? = nil
         var pages = 0
         var channelId: String? = nil
@@ -2142,7 +2010,6 @@ actor SyncEngine {
     /// Throttled to one frame per ~3s per composer (a channel's main composer
     /// and each of its threads throttle independently).
     func typing(channelId: String, threadRootId: String? = nil) async {
-        guard backend == nil else { return } // no typing channel on the public baseline
         let now = Date()
         let key = TypingKey.make(channelId: channelId, threadRootId: threadRootId)
         if let last = typingLastSent[key], now.timeIntervalSince(last) < 3 { return }
@@ -2465,214 +2332,15 @@ actor SyncEngine {
         }
     }
 
-    // MARK: - Provider backend (#546)
-
-    /// Boot a non-Flow connection: identity from the provider, the one team as
-    /// its workspace, the connector's event stream instead of a Flow socket.
-    private func bootstrapBackend() async {
-        guard let backend else { return }
-        // The backend owns its credential (read from the Keychain per use);
-        // a signed-out state here means there is none to present.
-        guard await backend.auth().status != .signedOut else {
-            await appState?.markConnectionSignedOut(connectionId: connectionId)
-            await appState?.setPhase(.signedOut)
-            return
-        }
-        do {
-            let me = try await backend.currentUser()
-            currentUser = me
-            UserDefaults.standard.set(me.id, forKey: currentUserIdKey)
-            try? await db.writer.write { db in try me.save(db) }
-            await appState?.setCapabilities(await backend.capabilities())
-            await appState?.setPhase(.signedIn(me))
-            await refreshWorkspaces()
-            startBackendEvents()
-        } catch let error as BackendError where error.code == .unauthorized {
-            await appState?.markConnectionUnauthorized(connectionId: connectionId)
-            await appState?.setPhase(.signedOut)
-        } catch {
-            let cachedId = UserDefaults.standard.string(forKey: currentUserIdKey)
-            let cached: User? = if let cachedId { try? await db.reader.read { db in try User.fetchOne(db, key: cachedId) } } else { nil }
-            if let cached {
-                currentUser = cached
-                await appState?.setCapabilities(await backend.capabilities())
-                await appState?.setPhase(.signedIn(cached))
-                startBackendEvents()
-            } else {
-                await appState?.setPhase(.signedOut)
-            }
-        }
-    }
-
-    private func startBackendEvents() {
-        guard let backend else { return }
-        backendEvents?.cancel()
-        backendEvents = Task { [weak self] in
-            for await event in backend.events() {
-                guard let self, !Task.isCancelled else { return }
-                await self.apply(event)
-            }
-        }
-    }
-
-    /// The provider's normalized stream onto the same cache the Flow socket
-    /// feeds. Duplicate and late deliveries are absorbed by id; a gap means
-    /// the visible conversation is refetched, not every cached one.
-    func apply(_ event: BackendEvent) async {
-        switch event {
-        case .messageCreated(let m), .threadReply(let m):
-            let isNew = await applyServerMessage(m)
-            if isNew, m.userId != currentUser?.id, m.systemKind == nil {
-                if await appState?.isViewing(channelId: m.channelId) == true {
-                    await markRead(channelId: m.channelId, lastReadMsgId: m.id)
-                } else {
-                    try? await db.writer.write { db in
-                        try db.execute(sql: "UPDATE channel SET unreadCount = unreadCount + 1 WHERE id = ? AND isMember = 1", arguments: [m.channelId])
-                    }
-                    await appState?.providerMessageArrived(m)
-                }
-            }
-        case .messageUpdated(let m):
-            _ = await applyServerMessage(m)
-        case .messageDeleted(let channelId, let messageId, let threadRootId):
-            let local: Message? = try? await db.reader.read { db in try Message.fetchOne(db, key: messageId) }
-            let row = local ?? Message(id: messageId, channelId: channelId, userId: "", threadRootId: threadRootId, clientMsgId: "", body: "", createdAt: "", editedAt: nil, deletedAt: nil, replyCount: 0, lastReplyAt: nil, files: [], pending: false)
-            if await purgeMessage(row) { await appState?.messagePermanentlyDeleted(row) }
-        case .reactionChanged(_, let messageId, let emoji, let userId, let added):
-            try? await db.writer.write { db in
-                guard var m = try Message.fetchOne(db, key: messageId) else { return }
-                if let at = m.reactions.firstIndex(where: { $0.emoji == emoji }) {
-                    var agg = m.reactions[at]
-                    if added { if !agg.userIds.contains(userId) { agg.userIds.append(userId) } } else { agg.userIds.removeAll { $0 == userId } }
-                    agg.count = agg.userIds.count
-                    if agg.count == 0 { m.reactions.remove(at: at) } else { m.reactions[at] = agg }
-                } else if added {
-                    m.reactions.append(ReactionAgg(emoji: emoji, count: 1, userIds: [userId]))
-                }
-                try m.save(db)
-            }
-        case .channelUpdated(let channel):
-            try? await db.writer.write { db in try channel.save(db) }
-        case .channelActivity(let channelId, let lastActivityAt):
-            try? await db.writer.write { db in
-                try db.execute(sql: "UPDATE channel SET lastActivityAt = ? WHERE id = ?", arguments: [lastActivityAt, channelId])
-            }
-        case .memberUpdated(let user):
-            // Profile or status changed in the provider: the row every view
-            // draws names, avatars and statuses from, and the footer's own user.
-            try? await db.writer.write { db in try user.save(db) }
-            if user.id == currentUser?.id {
-                currentUser = user
-                await appState?.setPhase(.signedIn(user))
-            }
-            await pushAvatarPaths()
-        case .capabilitiesChanged(let caps):
-            await appState?.setCapabilities(caps)
-        case .authChanged(let auth):
-            if auth.status != .authenticated { await appState?.markConnectionUnauthorized(connectionId: connectionId) }
-        case .streamDegraded:
-            await appState?.setStreamDegraded(true)
-        case .streamRecovered:
-            await appState?.setStreamDegraded(false)
-            for channelId in await appState?.openChannelIds ?? [] {
-                historyLoaded.remove(channelId)
-                backendCursors[channelId] = nil
-                await selectChannel(channelId)
-            }
-            for rootId in await appState?.openThreadRootIds ?? [] { await fetchThreadFromBackend(rootId: rootId) }
-        case .channelRead, .typing, .presence:
-            break
-        }
-    }
-
-    private func refreshMembersFromBackend(workspaceId: String) async {
-        guard let backend, let users = try? await backend.listMembers(workspaceId: workspaceId) else { return }
-        try? await db.writer.write { db in
-            try Member.filter(Column("workspaceId") == workspaceId).deleteAll(db)
-            for u in users {
-                try u.save(db)
-                try Member(workspaceId: workspaceId, userId: u.id, role: "member").save(db)
-            }
-        }
-        await pushAvatarPaths()
-    }
-
-    /// First page of a provider transcript. A rate limit is an honest wait:
-    /// the transcript shows what is cached and says when more can load.
-    private func selectChannelFromBackend(_ channelId: String) async {
-        guard let backend else { return }
-        do {
-            let page = try await backend.history(channelId: channelId, cursor: nil, limit: 50)
-            historyLoaded.insert(channelId)
-            await storeMessages(page.messages)
-            backendCursors[channelId] = page.cursor
-            await appState?.setLoadingHistory(channelId: channelId, false)
-            await appState?.setHasMore(channelId: channelId, page.cursor != nil)
-            await appState?.setHistoryLimited(channelId: channelId, page.partial || page.cursor != nil, retryAfter: nil)
-            if let newest = page.messages.last?.id { await markRead(channelId: channelId, lastReadMsgId: newest) }
-        } catch let error as BackendError where error.code == .rateLimited {
-            await appState?.setLoadingHistory(channelId: channelId, false)
-            await appState?.setHistoryLimited(channelId: channelId, true, retryAfter: error.retryAfter)
-        } catch {
-            await appState?.setLoadingHistory(channelId: channelId, false)
-        }
-    }
-
-    private func loadOlderFromBackend(channelId: String) async {
-        guard let backend, let cursor = backendCursors[channelId] else { return }
-        do {
-            let page = try await backend.history(channelId: channelId, cursor: cursor, limit: 50)
-            await storeMessages(page.messages)
-            backendCursors[channelId] = page.cursor
-            await appState?.setHasMore(channelId: channelId, page.cursor != nil)
-            await appState?.setHistoryLimited(channelId: channelId, page.cursor != nil, retryAfter: nil)
-        } catch let error as BackendError where error.code == .rateLimited {
-            await appState?.setHistoryLimited(channelId: channelId, true, retryAfter: error.retryAfter)
-        } catch { /* the page stays where it was; the next scroll asks again */ }
-    }
-
-    private func fetchThreadFromBackend(rootId: String) async {
-        guard let backend else { return }
-        guard let channelId: String = try? await db.reader.read({ db in try Message.fetchOne(db, key: rootId)?.channelId }) else { return }
-        do {
-            let page = try await backend.thread(channelId: channelId, rootId: rootId, cursor: nil)
-            await storeMessages([page.root] + page.replies)
-            if !page.partial { await sweepStalePending(threadRootId: rootId) }
-            await markThreadRead(channelId: channelId, rootId: rootId)
-        } catch let error as BackendError where error.code == .rateLimited {
-            await appState?.setHistoryLimited(channelId: channelId, true, retryAfter: error.retryAfter)
-        } catch { /* the panel shows what is cached */ }
-    }
-
-    /// End a provider session: the connector forgets this client only; the
-    /// team's grant and every other client are untouched.
-    private func signOutFromBackend() async -> Bool {
-        guard let backend else { return false }
-        backendEvents?.cancel()
-        backendEvents = nil
-        let revoked: Bool = (try? await backend.signOut()) != nil
-        Keychain.deleteToken(account: keychainAccount)
-        UserDefaults.standard.removeObject(forKey: currentUserIdKey)
-        await appState?.markConnectionSignedOut(connectionId: connectionId)
-        currentUser = nil
-        historyLoaded.removeAll()
-        backendCursors.removeAll()
-        try? await db.writer.write { db in try AppDatabase.wipe(db) }
-        await appState?.images.clear()
-        ConnectionStore.clear(scope: scope, in: .standard)
-        await appState?.didSignOut()
-        return revoked
-    }
-
     // MARK: - Write helpers
 
     /// Saves a server-authoritative message row, removing any optimistic
     /// pending row with the same clientMsgId. Returns true if this message
     /// was not previously known in any form (drives unread/reply-count bumps).
-    private func applyServerMessage(_ m: Message) async -> Bool {
+    func applyServerMessage(_ m: Message) async -> Bool {
         let isNew: Bool? = try? await db.writer.write { db in
             let existed = try Message.filter(key: m.id).fetchCount(db) > 0
-            // An empty clientMsgId (a Slack app/API message, #620) names no
+            // An empty clientMsgId (an API or agent post, #620) names no
             // optimistic twin — matching on it would delete every other
             // key-less message in the channel.
             var pendingDeleted = 0

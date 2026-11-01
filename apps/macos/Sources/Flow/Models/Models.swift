@@ -417,10 +417,6 @@ struct Channel: Codable, Sendable, Equatable, Identifiable, FetchableRecord, Per
     /// belongs on the cached row: it is a server column, so a relaunch showing
     /// yesterday's emoji is showing the truth. nil = none.
     var emoji: String?
-    /// Newest top-level message a provider connector knows of (Slack), ISO-8601.
-    /// Drives "recently active" in a provider sidebar; nil = unknown, and a Flow
-    /// server never sends it.
-    var lastActivityAt: String?
 
     var isDM: Bool { kind != "standard" }
 
@@ -455,7 +451,6 @@ struct Channel: Codable, Sendable, Equatable, Identifiable, FetchableRecord, Per
         case id, workspaceId, name, kind, topic, isPrivate, createdBy, createdAt
         case archivedAt, isMember, lastReadMsgId, unreadCount, unreadNotifications
         case unreadThreadRootIds, oldestUnreadThreadReply, notifyLevel, parentId, memberIds, emoji
-        case lastActivityAt
     }
 
     init(
@@ -465,7 +460,7 @@ struct Channel: Codable, Sendable, Equatable, Identifiable, FetchableRecord, Per
         unreadThreadRootIds: [String]? = nil,
         oldestUnreadThreadReply: ThreadReplyRef? = nil,
         notifyLevel: Int = 1, parentId: String? = nil, memberIds: [String]? = nil,
-        emoji: String? = nil, lastActivityAt: String? = nil
+        emoji: String? = nil
     ) {
         self.id = id
         self.workspaceId = workspaceId
@@ -486,7 +481,6 @@ struct Channel: Codable, Sendable, Equatable, Identifiable, FetchableRecord, Per
         self.parentId = parentId
         self.memberIds = memberIds
         self.emoji = emoji
-        self.lastActivityAt = lastActivityAt
     }
 
     init(from decoder: Decoder) throws {
@@ -512,41 +506,6 @@ struct Channel: Codable, Sendable, Equatable, Identifiable, FetchableRecord, Per
         parentId = try c.decodeIfPresent(String.self, forKey: .parentId)
         memberIds = try c.decodeIfPresent([String].self, forKey: .memberIds)
         emoji = try c.decodeIfPresent(String.self, forKey: .emoji)
-        lastActivityAt = try c.decodeIfPresent(String.self, forKey: .lastActivityAt)
-    }
-}
-
-extension Channel {
-    /// How long a provider conversation stays "recently active" (Slack's own
-    /// "Active only" sidebar filter uses 30 days).
-    static let activeWindow: TimeInterval = 30 * 86_400
-
-    /// Whether a provider workspace's sidebar shows this conversation without
-    /// the "Show inactive" toggle. Slack teams carry years of dead channels and
-    /// group DMs, so the default is hidden: shown only when known active in the
-    /// window, unread, or open right now. Unknown activity (nil) stays hidden.
-    /// Shared by the macOS and iOS sidebars; a Flow workspace never calls it.
-    func isRecentlyActive(selectedId: String?, now: Date = Date()) -> Bool {
-        if id == selectedId || unreadCount > 0 || unreadNotifications > 0 { return true }
-        guard let lastActivityAt, let at = Channel.parseActivityDate(lastActivityAt) else { return false }
-        return now.timeIntervalSince(at) <= Channel.activeWindow
-    }
-
-    /// A sidebar section's conversations split for a provider workspace: the
-    /// ones shown by default, and how many fold behind "Show N inactive". A
-    /// Flow workspace (`isProvider` false) shows everything.
-    static func splitInactive(
-        _ list: [Channel], isProvider: Bool, selectedId: String?, now: Date = Date()
-    ) -> (active: [Channel], inactiveCount: Int) {
-        guard isProvider else { return (list, 0) }
-        let active = list.filter { $0.isRecentlyActive(selectedId: selectedId, now: now) }
-        return (active, list.count - active.count)
-    }
-
-    static func parseActivityDate(_ iso: String) -> Date? {
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return fractional.date(from: iso) ?? ISO8601DateFormatter().date(from: iso)
     }
 }
 
@@ -1508,22 +1467,5 @@ enum ServerFrame: Decodable, Sendable {
         default:
             self = .unknown
         }
-    }
-}
-
-/// "Show inactive" per sidebar section and workspace, remembered on this device.
-enum SidebarInactivePreference {
-    enum Section: String { case channels, dms }
-
-    static func key(_ section: Section, workspaceId: String) -> String {
-        "flow.sidebarShowInactive.\(section.rawValue).\(workspaceId)"
-    }
-
-    static func isShown(_ section: Section, workspaceId: String, defaults: UserDefaults = .standard) -> Bool {
-        defaults.bool(forKey: key(section, workspaceId: workspaceId))
-    }
-
-    static func set(_ shown: Bool, _ section: Section, workspaceId: String, defaults: UserDefaults = .standard) {
-        defaults.set(shown, forKey: key(section, workspaceId: workspaceId))
     }
 }
