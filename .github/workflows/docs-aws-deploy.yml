@@ -1,15 +1,20 @@
-# Deploys the hosted app to AWS (deploy/aws/template.yaml) on each push to main:
-# builds the image on an Arm runner (the instance is Graviton), pushes it to ECR and runs deploy.sh on the
-# instance through Systems Manager. Does nothing until the repository variables AWS_DEPLOY_ROLE_ARN,
-# AWS_INSTANCE_ID and AWS_ECR_REPOSITORY are set (the stack's outputs).
-name: AWS deploy
+# Deploys the hosted Workspace app (packages/docs, the former MCP Docs repository) to AWS
+# (packages/docs/deploy/aws/template.yaml) on each push to main that touches it: builds the image on an Arm
+# runner (the instance is Graviton), pushes it to ECR and runs deploy.sh on the instance through Systems
+# Manager. Does nothing until the repository variables AWS_DEPLOY_ROLE_ARN, AWS_INSTANCE_ID and
+# AWS_ECR_REPOSITORY are set on this repository (the stack's outputs; they lived on freeflow-im/mcp-docs
+# before the move, and the deploy role's trust policy must name this repository too).
+name: Docs AWS deploy
 
 on:
   push:
     branches: [main]
+    paths:
+      - 'packages/docs/**'
+      - '.github/workflows/docs-aws-deploy.yml'
   workflow_dispatch:
 
-concurrency: aws-deploy
+concurrency: docs-aws-deploy
 
 jobs:
   deploy:
@@ -33,7 +38,7 @@ jobs:
 
       - name: Build and push the image
         run: |
-          docker build -f deploy/aws/Dockerfile --build-arg GIT_COMMIT_SHA=${{ github.sha }} -t "$IMAGE" -t "${{ vars.AWS_ECR_REPOSITORY }}:latest" .
+          docker build -f packages/docs/deploy/aws/Dockerfile --build-arg GIT_COMMIT_SHA=${{ github.sha }} -t "$IMAGE" -t "${{ vars.AWS_ECR_REPOSITORY }}:latest" packages/docs
           docker push "$IMAGE"
           docker push "${{ vars.AWS_ECR_REPOSITORY }}:latest"
 

@@ -2,7 +2,7 @@
 // Starts a desktop release: `npm run release -- 0.3.0`.
 // Sets the version of the app, the Claude Code and Codex plugin, its Claude marketplace entry and the installer, commits that with
 // the release notes (release-notes/<version>.md, which you write first) and tags it desktop-v<version>. Pushing the
-// tag runs .github/workflows/desktop-release.yml, which builds the app, makes the GitHub release and publishes the
+// tag runs .github/workflows/docs-desktop-release.yml (at the repository root), which builds the app, makes the GitHub release and publishes the
 // installer to npm.
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';

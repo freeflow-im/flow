@@ -1,5 +1,9 @@
 # MCP Docs
 
+This package is the Workspace app of the FreeFlow suite, inside the Flow monorepo since 2026-11-01
+(`docs/specs/freeflow-suite.md` at the repository root). Install with `pnpm install` at the root; the
+`npm run …` commands below work from this directory (`pnpm --filter @flow/docs <script>` from the root).
+
 An editor for office files and more: spreadsheets, presentations, documents, Markdown, CSV, PDFs, pictures
 and videos, with a built-in AI assistant, and an MCP server so other agents can work on the same files. One
 codebase ships as three products (names in `shared/brand.ts`):

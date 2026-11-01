@@ -1,5 +1,5 @@
 {
-  "name": "universal-docs",
+  "name": "@flow/docs",
   "version": "0.2.37",
   "private": true,
   "type": "module",
