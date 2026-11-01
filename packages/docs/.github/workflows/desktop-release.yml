@@ -1,0 +1,116 @@
+# Publishes a desktop release when its tag (desktop-v<version>, made by `npm run release -- <version>`) is pushed:
+# checks and builds the macOS and Windows apps, makes the GitHub release with both and publishes the installer to npm.
+# Run it by hand (Actions › Desktop release › Run workflow) to check that both build, without publishing anything;
+# the builds are kept as the run's artifacts for a few days.
+name: Desktop release
+
+on:
+  push:
+    tags: ['desktop-v*']
+  workflow_dispatch:
+
+concurrency: desktop-release
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false # one platform's failure still shows whether the other builds
+      matrix:
+        include:
+          - os: macos-15 # Apple silicon, as the Mac app is built for
+            script: desktop:mac
+            files: release/MCP-Docs-*-mac-arm64.zip
+          - os: windows-latest
+            # The app's icon and details on the .exe (it is not signed); the publish job below makes the release, not
+            # electron-builder, which would on a CI machine.
+            script: desktop:win -- -c.win.signAndEditExecutable=true --publish never
+            files: release/MCP-Docs-*-win-x64-setup.exe
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Check the versions
+        run: |
+          v=$(node -p "require('./package.json').version")
+          for f in installer/package.json claude-plugin/.claude-plugin/plugin.json claude-plugin/.codex-plugin/plugin.json; do
+            [ "$(node -p "require('./$f').version")" = "$v" ] || { echo "::error::$f is not $v"; exit 1; }
+          done
+          [ "$(node -p "require('./.claude-plugin/marketplace.json').plugins.find(p => p.name === 'mcp-docs').version")" = "$v" ] \
+            || { echo "::error::.claude-plugin/marketplace.json is not $v"; exit 1; }
+          [ -f "release-notes/$v.md" ] || { echo "::error::release-notes/$v.md is missing"; exit 1; }
+          if [ "${{ github.event_name }}" = push ] && [ "$GITHUB_REF_NAME" != "desktop-v$v" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match version $v"; exit 1
+          fi
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+      - name: Build the app
+        run: npm run ${{ matrix.script }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.os }}
+          path: ${{ matrix.files }}
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # the GitHub release
+      id-token: write # npm trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          registry-url: https://registry.npmjs.org
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+
+      - name: Write the release notes
+        run: |
+          echo "VERSION=$(node -p "require('./package.json').version")" >> "$GITHUB_ENV"
+          node -e "
+            const fs = require('fs');
+            const v = require('./package.json').version;
+            const t = fs.readFileSync('release-notes/template.md', 'utf8');
+            const notes = fs.readFileSync('release-notes/' + v + '.md', 'utf8').trim();
+            fs.writeFileSync('release/notes.md', t.replace('{{NOTES}}', notes).replaceAll('{{VERSION}}', v));
+          "
+          cat release/notes.md
+          ls -l release
+
+      - name: Make the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Already made when a run that failed later is run again: then the files are uploaded again.
+        run: |
+          files=("release/MCP-Docs-$VERSION-mac-arm64.zip" "release/MCP-Docs-$VERSION-win-x64-setup.exe")
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "MCP Docs $VERSION" --notes-file release/notes.md "${files[@]}"
+          fi
+
+      - name: Publish the installer to npm
+        working-directory: installer
+        run: |
+          npm install -g npm@^11.5.1 # trusted publishing
+          npm publish --provenance

@@ -1,0 +1,10 @@
+[span] MCP Docs
+[h1] Sign in
+[a] Continue with Google
+[span] Email
+[span] Password
+[button] Sign in
+[div] New here?
+[a] Create an account
+[a] Forgot your password?
+[figcaption] MCP Docs improves itself: ask the assistant for something it can't do, and a coding agent adds it to the app.

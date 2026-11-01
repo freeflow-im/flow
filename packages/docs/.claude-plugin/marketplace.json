@@ -1,0 +1,16 @@
+{
+  "name": "mcp-docs",
+  "owner": {
+    "name": "Scott Persinger"
+  },
+  "description": "MCP Docs: office files on this Mac, edited by Claude Code through the MCP Docs desktop app.",
+  "plugins": [
+    {
+      "name": "mcp-docs",
+      "source": "./claude-plugin",
+      "description": "Work on the documents, presentations, spreadsheets, Markdown files, PDFs and pictures in a folder on this Mac, through the MCP Docs desktop app.",
+      "version": "0.2.37",
+      "category": "productivity"
+    }
+  ]
+}

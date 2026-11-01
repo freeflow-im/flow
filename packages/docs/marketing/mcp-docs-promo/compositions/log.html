@@ -1,0 +1,150 @@
+<template>
+  <style>
+    @font-face {
+      font-family: "Google Sans Flex";
+      src: url("assets/fonts/GoogleSansFlex-latin-var.woff2") format("woff2");
+      font-weight: 100 1000;
+    }
+    #root {
+      position: absolute;
+      inset: 0;
+      font-family: "Google Sans Flex", sans-serif;
+      color: #1f1f1f;
+    }
+    #log-head {
+      position: absolute;
+      left: 80px;
+      top: 214px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      font-size: 34px;
+      font-weight: 500;
+      color: #5f6368;
+    }
+    #log-list {
+      position: absolute;
+      left: 80px;
+      top: 300px;
+      width: 720px;
+    }
+    .log-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 20px;
+      margin-bottom: 30px;
+      font-size: 41px;
+      font-weight: 500;
+      line-height: 1.12;
+      letter-spacing: -0.01em;
+    }
+    .log-tick {
+      flex: 0 0 44px;
+      width: 44px;
+      height: 44px;
+      margin-top: 4px;
+    }
+    .log-text {
+      clip-path: inset(0 100% 0 0);
+    }
+    .log-quiet {
+      margin: 0 0 30px 64px;
+      font-size: 32px;
+      font-weight: 400;
+      line-height: 1.3;
+      color: #5f6368;
+    }
+    #log-window {
+      position: absolute;
+      left: 820px;
+      top: 72px;
+      width: 1052px;
+      height: 936px;
+      border-radius: 18px;
+      overflow: hidden;
+      background: #ffffff;
+      border: 1px solid #dadce0;
+      box-shadow: 0 24px 60px rgba(31, 31, 31, 0.16);
+    }
+    #log-cam {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 1796px;
+      height: 1080px;
+      transform-origin: 0 0;
+    }
+    #log-video-a,
+    #log-video-b {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 1796px;
+      height: 1080px;
+    }
+  </style>
+  <div data-hf-id="hf-695f" id="root" data-composition-id="log" data-width="1920" data-height="1080">
+    <div data-hf-id="hf-ma7i" id="log-window">
+      <div data-hf-id="hf-qb5b" id="log-cam">
+        <video data-hf-id="hf-9op2" id="log-video-a" class="clip" data-start="0" data-duration="3.4" data-media-start="5.1"
+          data-playback-rate="1.5" data-track-index="2" src="assets/demo.mp4" muted playsinline></video>
+        <video data-hf-id="hf-9zwi" id="log-video-b" class="clip" data-start="3.4" data-duration="3.1" data-media-start="19.6"
+          data-track-index="3" src="assets/demo.mp4" muted playsinline></video>
+      </div>
+    </div>
+
+    <div data-hf-id="hf-7hdk" id="log-head">
+      <svg data-hf-id="hf-kd5g" width="34" height="34" viewBox="0 0 24 24"><path data-hf-id="hf-xmsi" d="M12 2 C12.6 7.4 16.6 11.4 22 12 C16.6 12.6 12.6 16.6 12 22 C11.4 16.6 7.4 12.6 2 12 C7.4 11.4 11.4 7.4 12 2 Z" fill="#1a73e8"/></svg>
+      Assistant
+    </div>
+
+    <div data-hf-id="hf-n40e" id="log-list">
+      <div data-hf-id="hf-l44n" class="log-row" id="log-r1">
+        <svg data-hf-id="hf-frjg" class="log-tick" viewBox="0 0 24 24"><circle data-hf-id="hf-9jzq" cx="12" cy="12" r="11" fill="#e6f4ea"/><path data-hf-id="hf-2uo8" d="M7 12.5 L10.5 16 L17 8.5" fill="none" stroke="#0f9d58" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <div data-hf-id="hf-1fy6" class="log-text">Made a Markdown copy of a PDF</div>
+      </div>
+      <div data-hf-id="hf-cg8s" class="log-row" id="log-r2">
+        <svg data-hf-id="hf-ef9g" class="log-tick" viewBox="0 0 24 24"><circle data-hf-id="hf-i21m" cx="12" cy="12" r="11" fill="#e6f4ea"/><path data-hf-id="hf-r39c" d="M7 12.5 L10.5 16 L17 8.5" fill="none" stroke="#0f9d58" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <div data-hf-id="hf-vgim" class="log-text">Read another document</div>
+      </div>
+      <div data-hf-id="hf-odf4" class="log-quiet" id="log-q">“I’ll create a technical overview, with diagrams and speaker notes.”</div>
+      <div data-hf-id="hf-d7wl" class="log-row" id="log-r3">
+        <svg data-hf-id="hf-d8cd" class="log-tick" viewBox="0 0 24 24"><circle data-hf-id="hf-igcn" cx="12" cy="12" r="11" fill="#e6f4ea"/><path data-hf-id="hf-pwc9" d="M7 12.5 L10.5 16 L17 8.5" fill="none" stroke="#0f9d58" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <div data-hf-id="hf-j5xy" class="log-text">Created presentation</div>
+      </div>
+      <div data-hf-id="hf-vzma" class="log-row" id="log-r4">
+        <svg data-hf-id="hf-dmne" class="log-tick" viewBox="0 0 24 24"><circle data-hf-id="hf-iuno" cx="12" cy="12" r="11" fill="#e6f4ea"/><path data-hf-id="hf-qana" d="M7 12.5 L10.5 16 L17 8.5" fill="none" stroke="#0f9d58" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <div data-hf-id="hf-iuy8" class="log-text">Opened a presentation</div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function () {
+      const tl = gsap.timeline({ paused: true });
+      const cam = (s, cx, cy) => ({ scale: s, x: 526 - s * cx, y: 468 - s * cy });
+
+      // Continues the hook's framing on the prompt box, then rises to the top of the panel as the ticks arrive.
+      tl.set("#log-cam", cam(1.6, 1467, 780), 0);
+      tl.to("#log-cam", { ...cam(1.6, 1467, 330), duration: 0.6, ease: "power2.inOut" }, 0.05);
+      // The deck opens in the recording (source 20.7 = local 4.5): pull back to the whole app.
+      tl.to("#log-cam", { ...cam(0.586, 898, 540), duration: 0.6, ease: "power2.inOut" }, 4.55);
+
+      tl.fromTo("#log-head", { opacity: 0, filter: "blur(6px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.2, ease: "power4.out" }, 0.1);
+
+      // Each row ticks when its line appears in the recording.
+      const row = (sel, at) => {
+        tl.fromTo(sel + " .log-tick", { scale: 0.6, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.25, ease: "back.out(1.6)" }, at);
+        tl.fromTo(sel + " .log-text", { clipPath: "inset(0 100% 0 0)" }, { clipPath: "inset(0 0% 0 0)", duration: 0.3, ease: "power2.out" }, at + 0.05);
+      };
+      tl.set(".log-tick", { opacity: 0 }, 0);
+      tl.set("#log-q", { opacity: 0 }, 0);
+      row("#log-r1", 0.77);
+      row("#log-r2", 1.6);
+      tl.fromTo("#log-q", { opacity: 0, filter: "blur(6px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.2, ease: "power4.out" }, 2.95);
+      row("#log-r3", 3.8);
+      row("#log-r4", 4.3);
+
+      window.__timelines["log"] = tl;
+    })();
+  </script>
+</template>

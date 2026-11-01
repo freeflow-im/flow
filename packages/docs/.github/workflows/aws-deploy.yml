@@ -1,0 +1,53 @@
+# Deploys the hosted app to AWS (deploy/aws/template.yaml) on each push to main:
+# builds the image on an Arm runner (the instance is Graviton), pushes it to ECR and runs deploy.sh on the
+# instance through Systems Manager. Does nothing until the repository variables AWS_DEPLOY_ROLE_ARN,
+# AWS_INSTANCE_ID and AWS_ECR_REPOSITORY are set (the stack's outputs).
+name: AWS deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency: aws-deploy
+
+jobs:
+  deploy:
+    if: vars.AWS_DEPLOY_ROLE_ARN != ''
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      id-token: write # assumes the deploy role
+    env:
+      AWS_REGION: us-west-2
+      IMAGE: ${{ vars.AWS_ECR_REPOSITORY }}:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-west-2
+
+      - uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push the image
+        run: |
+          docker build -f deploy/aws/Dockerfile --build-arg GIT_COMMIT_SHA=${{ github.sha }} -t "$IMAGE" -t "${{ vars.AWS_ECR_REPOSITORY }}:latest" .
+          docker push "$IMAGE"
+          docker push "${{ vars.AWS_ECR_REPOSITORY }}:latest"
+
+      - name: Run it on the instance
+        env:
+          INSTANCE: ${{ vars.AWS_INSTANCE_ID }}
+        run: |
+          id=$(aws ssm send-command --instance-ids "$INSTANCE" --document-name AWS-RunShellScript \
+            --parameters "commands=['/opt/mcpdocs/deploy.sh ${{ github.sha }}']" --timeout-seconds 600 \
+            --query Command.CommandId --output text)
+          for i in $(seq 1 120); do
+            status=$(aws ssm get-command-invocation --command-id "$id" --instance-id "$INSTANCE" --query Status --output text 2>/dev/null || echo Pending)
+            case "$status" in Pending|InProgress|Delayed) sleep 5 ;; *) break ;; esac
+          done
+          aws ssm get-command-invocation --command-id "$id" --instance-id "$INSTANCE" \
+            --query '[StandardOutputContent,StandardErrorContent]' --output text
+          [ "$status" = Success ]

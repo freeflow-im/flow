@@ -1,0 +1,3356 @@
+{
+ "server": {
+  "name": "freeflow-docs",
+  "icons": [
+   {
+    "src": "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2220%22%20height%3D%2220%22%20viewBox%3D%220%200%2020%2020%22%20fill%3D%22none%22%20stroke%3D%22currentColor%22%20stroke-width%3D%221.33%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M5%202.5h7l3.5%203.5v11.5h-10.5z%22%2F%3E%3Cpath%20d%3D%22M12%202.5v3.5h3.5%22%2F%3E%3Cpath%20d%3D%22M7.5%2010h5M7.5%2013h5%22%2F%3E%3C%2Fsvg%3E",
+    "mimeType": "image/svg+xml",
+    "sizes": [
+     "20x20"
+    ]
+   }
+  ],
+  "version": "0.2.0"
+ },
+ "instructions": "Universal Docs: the user's text documents, slide presentations and spreadsheets, with an app that shows one file open for editing.\nDocument tools (read_doc, insert_content, replace_blocks, ...) act on the open document, presentation tools (read_deck, add_slides, update_slide, ...) on the open presentation and spreadsheet tools (get_sheet_overview, read_range, write_range, ...) on the open spreadsheet unless an id is given. Read first (read_doc, read_deck or get_sheet_overview) to learn block or slide numbers, element ids or the data layout; they change after inserts and deletes. Spreadsheet tools act on the tab the user is looking at unless a tab is given; write formulas (starting with =) rather than computed numbers. Write document content as Markdown. Keep edits targeted: change the blocks, slides, elements or cells that need changing rather than rewriting everything. A Markdown document (kind markdown) is a plain Markdown file, kept exactly as written: read_doc, insert_content, replace_blocks, delete_blocks and replace_text work on it, and its formatting is its text. After editing, the open file updates in the app by itself; do not call open_file again.",
+ "tools": [
+  {
+   "name": "list_files",
+   "title": "List files",
+   "description": "The user's documents, Markdown documents, presentations, spreadsheets and stored files (PDFs, web pages, videos and images), most recently edited first, with their ids. Optionally one kind, or filtered by a word in the title.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "kind": {
+      "type": "string",
+      "enum": [
+       "doc",
+       "deck",
+       "sheet",
+       "markdown",
+       "file"
+      ],
+      "description": "doc (text document), deck (slide presentation), sheet (spreadsheet), markdown (Markdown document: a plain Markdown file) or file (a PDF, web page, video or image, which is shown but not edited)."
+     },
+     "query": {
+      "description": "Only files whose title contains this text.",
+      "type": "string",
+      "maxLength": 200
+     }
+    },
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "docs_app",
+   "title": "Universal Docs",
+   "description": "Open the Docs app.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   },
+   "_meta": {
+    "ui": {
+     "resourceUri": "ui://freeflow-docs/app-abc.html",
+     "visibility": [
+      "app"
+     ]
+    },
+    "openai/outputTemplate": "ui://freeflow-docs/app-abc.html",
+    "openai/widgetAccessible": true,
+    "openai/ui": {
+     "entrypoints": [
+      {
+       "type": "global"
+      },
+      {
+       "type": "thread"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "get_profile",
+   "title": "Linked account",
+   "description": "The account the plugin is signed in as: its email address.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   },
+   "_meta": {
+    "openai/profile": true
+   }
+  },
+  {
+   "name": "create_doc",
+   "title": "Create document",
+   "description": "Create a new text document, or a Markdown document (kind \"markdown\"), optionally with content written as Markdown, and open it in the app. Make a Markdown document when the user asks for a Markdown or .md file (a README, a SKILL.md, notes kept as Markdown).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+     },
+     "markdown": {
+      "description": "Initial content as Markdown. Supports headings, lists, quotes, code blocks, images, links, bold and italics.",
+      "type": "string",
+      "maxLength": 200000
+     },
+     "kind": {
+      "description": "\"doc\" (the default) is a rich text document built from the Markdown; \"markdown\" is a plain Markdown file holding it exactly as written, front matter included.",
+      "type": "string",
+      "enum": [
+       "doc",
+       "markdown"
+      ]
+     }
+    },
+    "required": [
+     "title"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "create_deck",
+   "title": "Create presentation",
+   "description": "Create a new slide presentation, optionally with its slides, and open it in the app.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+     },
+     "theme": {
+      "description": "Defaults to light.",
+      "type": "string",
+      "enum": [
+       "light",
+       "dark",
+       "ocean",
+       "forest",
+       "sunset",
+       "paper"
+      ]
+     },
+     "slides": {
+      "description": "Initial slides, each built from a layout and plain content. Without them the deck has one title slide.",
+      "maxItems": 50,
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "layout": {
+         "description": "Defaults to title-body.",
+         "type": "string",
+         "enum": [
+          "title",
+          "section",
+          "title-body",
+          "two-column",
+          "image",
+          "blank"
+         ]
+        },
+        "title": {
+         "type": "string",
+         "maxLength": 500
+        },
+        "subtitle": {
+         "description": "For the title and section layouts.",
+         "type": "string",
+         "maxLength": 1000
+        },
+        "body": {
+         "description": "Body paragraphs, one string each; they become bullets. Start a line with two spaces per indent level for sub-bullets. \"[label](https://...)\" makes a link.",
+         "maxItems": 100,
+         "type": "array",
+         "items": {
+          "type": "string",
+          "maxLength": 2000
+         }
+        },
+        "body2": {
+         "description": "Right column of the two-column layout.",
+         "maxItems": 100,
+         "type": "array",
+         "items": {
+          "type": "string",
+          "maxLength": 2000
+         }
+        },
+        "image": {
+         "description": "For the image layout: an http(s) URL of a PNG, JPEG, GIF or WebP image, or the /api/images/... address of an image attached to the chat.",
+         "type": "string"
+        },
+        "caption": {
+         "description": "Caption under the image.",
+         "type": "string",
+         "maxLength": 1000
+        },
+        "notes": {
+         "description": "Speaker notes.",
+         "type": "string",
+         "maxLength": 5000
+        },
+        "background": {
+         "description": "Background CSS color for this slide; \"\" uses the theme background.",
+         "type": "string",
+         "maxLength": 64
+        }
+       }
+      }
+     }
+    },
+    "required": [
+     "title"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "create_sheet",
+   "title": "Create spreadsheet",
+   "description": "Create a new, empty spreadsheet and open it in the app. Fill it in with write_range.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+     }
+    },
+    "required": [
+     "title"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "import_file",
+   "title": "Import a file",
+   "description": "Import a file into the user's library and open it in the app. The file is either one the user attached in the chat (file) or one at a public web address (url). Use this whenever the user wants a file uploaded, saved or added to their files. A Word, PowerPoint, Excel, CSV or Markdown file becomes an editable document, presentation, spreadsheet or Markdown document. A PDF, web page (.html), video or image is stored as it is and shown in the app's viewer. Any other type returns an error saying it cannot be imported; tell the user rather than working around it.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "file": {
+      "description": "The attached file. Give this or url.",
+      "type": "object",
+      "properties": {
+       "download_url": {
+        "type": "string",
+        "description": "Where to download the file (filled in by ChatGPT)."
+       },
+       "file_id": {
+        "type": "string",
+        "description": "The id ChatGPT gives the attached file."
+       },
+       "mime_type": {
+        "type": "string"
+       },
+       "file_name": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "download_url",
+       "file_id"
+      ]
+     },
+     "url": {
+      "description": "The https address of a file on the web to import instead of an attachment: the file itself (an image, a PDF, a .docx), not a page that shows it.",
+      "type": "string",
+      "maxLength": 2000
+     },
+     "title": {
+      "description": "Title for the new file. Defaults to the file name.",
+      "type": "string",
+      "maxLength": 200
+     }
+    },
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": true
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   },
+   "_meta": {
+    "openai/fileParams": [
+     "file"
+    ]
+   }
+  },
+  {
+   "name": "open_file",
+   "title": "Open file",
+   "description": "Open a document, Markdown document, presentation or spreadsheet in the app so the user sees it, and return its outline (a document's first 300 blocks, every slide, or every tab's layout). The document, presentation or spreadsheet tools then act on it by default. A stored file (a PDF, video or image) is shown in the app's viewer; only its name, type and size come back.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "kind": {
+      "type": "string",
+      "enum": [
+       "doc",
+       "deck",
+       "sheet",
+       "markdown",
+       "file"
+      ],
+      "description": "doc (text document), deck (slide presentation), sheet (spreadsheet), markdown (Markdown document: a plain Markdown file) or file (a PDF, web page, video or image, which is shown but not edited)."
+     },
+     "id": {
+      "type": "string",
+      "description": "The file id (from list_files or the app)."
+     }
+    },
+    "required": [
+     "kind",
+     "id"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   },
+   "_meta": {
+    "ui": {
+     "resourceUri": "ui://freeflow-docs/app-abc.html"
+    },
+    "openai/outputTemplate": "ui://freeflow-docs/app-abc.html"
+   }
+  },
+  {
+   "name": "view_image",
+   "title": "Look at a picture",
+   "description": "Look at a stored picture (PNG, JPEG, GIF or WebP): it comes back for you to see, with its width and height in pixels, which positions in transform_image are given in. Use it before describing or editing a picture. Find ids with list_files.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "file_id": {
+      "type": "string",
+      "description": "The file id (from list_files or the app)."
+     }
+    },
+    "required": [
+     "file_id"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "transform_image",
+   "title": "Edit a picture",
+   "description": "Edit a stored picture (PNG, JPEG or WebP) exactly, with the app's image editor. Give the changes to make: crop, rotate, straighten, flip, adjust the colors, a filter, rectangles to redact, shapes and arrows to draw, text to write, and a width to resize to. They are applied in that order, as one edit, and every pixel you do not name stays as it was. Call view_image first: it reports the picture's width and height. Positions are in pixels of the picture; for redact, shapes and text they are pixels of the picture after any crop, rotation or flip in the same call. By default the result is saved as a new file and the original is kept. The result comes back as a picture: look at it, and if something landed in the wrong place call transform_image again on the original with better numbers. The editing is done by the app, so it must be showing: call open_file with the picture first. If the user has the picture open in the app's image editor, the edit is made there as one undo step and is saved when the user saves.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "file_id": {
+      "type": "string",
+      "description": "The file id (from list_files or the app)."
+     },
+     "crop": {
+      "description": "Keep only this rectangle of the picture.",
+      "type": "object",
+      "properties": {
+       "x": {
+        "type": "number",
+        "description": "Left edge, in pixels from the left of the picture."
+       },
+       "y": {
+        "type": "number",
+        "description": "Top edge, in pixels from the top of the picture."
+       },
+       "width": {
+        "type": "number",
+        "exclusiveMinimum": 0,
+        "description": "Width in pixels."
+       },
+       "height": {
+        "type": "number",
+        "exclusiveMinimum": 0,
+        "description": "Height in pixels."
+       }
+      },
+      "required": [
+       "x",
+       "y",
+       "width",
+       "height"
+      ]
+     },
+     "rotate": {
+      "description": "Turn the picture clockwise by this many degrees: 90, 180 or 270.",
+      "type": "integer",
+      "minimum": -9007199254740991,
+      "maximum": 9007199254740991
+     },
+     "straighten": {
+      "description": "Level a tilted picture: degrees clockwise, between -45 and 45.",
+      "type": "number",
+      "minimum": -45,
+      "maximum": 45
+     },
+     "flip": {
+      "description": "Mirror the picture: horizontal swaps left and right.",
+      "type": "string",
+      "enum": [
+       "horizontal",
+       "vertical"
+      ]
+     },
+     "adjust": {
+      "description": "Change the colors of the whole picture; give only the ones to change.",
+      "type": "object",
+      "properties": {
+       "brightness": {
+        "type": "number",
+        "minimum": -100,
+        "maximum": 100
+       },
+       "contrast": {
+        "type": "number",
+        "minimum": -100,
+        "maximum": 100
+       },
+       "saturation": {
+        "type": "number",
+        "minimum": -100,
+        "maximum": 100
+       },
+       "vibrance": {
+        "type": "number",
+        "minimum": -100,
+        "maximum": 100
+       },
+       "hue": {
+        "description": "Degrees.",
+        "type": "number",
+        "minimum": -180,
+        "maximum": 180
+       },
+       "blur": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 100
+       }
+      }
+     },
+     "filter": {
+      "description": "A look for the whole picture; none removes the filters.",
+      "type": "string",
+      "enum": [
+       "grayscale",
+       "sepia",
+       "invert",
+       "sharpen",
+       "none"
+      ]
+     },
+     "redact": {
+      "description": "Rectangles of the picture to hide.",
+      "maxItems": 10,
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "x": {
+         "type": "number",
+         "description": "Left edge, in pixels from the left of the picture."
+        },
+        "y": {
+         "type": "number",
+         "description": "Top edge, in pixels from the top of the picture."
+        },
+        "width": {
+         "type": "number",
+         "exclusiveMinimum": 0,
+         "description": "Width in pixels."
+        },
+        "height": {
+         "type": "number",
+         "exclusiveMinimum": 0,
+         "description": "Height in pixels."
+        },
+        "mode": {
+         "description": "Default solid, which cannot be seen through.",
+         "type": "string",
+         "enum": [
+          "solid",
+          "blur",
+          "pixelate"
+         ]
+        }
+       },
+       "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+       ]
+      }
+     },
+     "shapes": {
+      "description": "Shapes, lines and arrows to draw on the picture.",
+      "maxItems": 10,
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "kind": {
+         "type": "string",
+         "enum": [
+          "rect",
+          "ellipse",
+          "triangle",
+          "diamond",
+          "pentagon",
+          "hexagon",
+          "star",
+          "line",
+          "arrow"
+         ]
+        },
+        "x": {
+         "type": "number",
+         "description": "Left edge of the box the shape fills (every kind but line and arrow)."
+        },
+        "y": {
+         "type": "number",
+         "description": "Top edge of that box."
+        },
+        "width": {
+         "description": "Width of that box.",
+         "type": "number",
+         "exclusiveMinimum": 0
+        },
+        "height": {
+         "description": "Height of that box.",
+         "type": "number",
+         "exclusiveMinimum": 0
+        },
+        "x1": {
+         "type": "number",
+         "description": "Line and arrow: where it starts."
+        },
+        "y1": {
+         "type": "number"
+        },
+        "x2": {
+         "type": "number",
+         "description": "Line and arrow: where it ends (the arrow head)."
+        },
+        "y2": {
+         "type": "number"
+        },
+        "color": {
+         "description": "Outline color, a CSS color such as #ff0000. Default red.",
+         "type": "string"
+        },
+        "stroke_width": {
+         "description": "Outline thickness in pixels of the picture. Default 6.",
+         "type": "number",
+         "exclusiveMinimum": 0
+        },
+        "fill": {
+         "description": "A color inside the shape. Default none (outline only).",
+         "type": "string"
+        },
+        "corner_radius": {
+         "description": "Rounded corners, for rect.",
+         "type": "number",
+         "minimum": 0
+        }
+       },
+       "required": [
+        "kind"
+       ]
+      }
+     },
+     "text": {
+      "description": "Text to write on the picture.",
+      "maxItems": 10,
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "text": {
+         "type": "string",
+         "minLength": 1,
+         "maxLength": 2000
+        },
+        "x": {
+         "type": "number",
+         "description": "Left edge of the text, in pixels from the left of the picture."
+        },
+        "y": {
+         "type": "number",
+         "description": "Top edge of the text, in pixels from the top of the picture."
+        },
+        "width": {
+         "description": "Where the text wraps. Defaults to the rest of the picture.",
+         "type": "number",
+         "exclusiveMinimum": 0
+        },
+        "size": {
+         "description": "Font size in pixels of the picture. Default 48; a headline on a 3000 pixel wide photo wants 150 or more.",
+         "type": "number",
+         "exclusiveMinimum": 0
+        },
+        "color": {
+         "description": "A CSS color such as #ffffff. Default black.",
+         "type": "string"
+        },
+        "font": {
+         "description": "A font family.",
+         "type": "string"
+        },
+        "bold": {
+         "type": "boolean"
+        },
+        "italic": {
+         "type": "boolean"
+        },
+        "align": {
+         "description": "Within its width.",
+         "type": "string",
+         "enum": [
+          "left",
+          "center",
+          "right"
+         ]
+        },
+        "background": {
+         "description": "A color behind the text, to keep it readable over a busy picture.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "text",
+        "x",
+        "y"
+       ]
+      }
+     },
+     "resize_width": {
+      "description": "Scale the finished picture down to this width in pixels; the height follows. Never up.",
+      "type": "number",
+      "exclusiveMinimum": 0
+     },
+     "remove_background": {
+      "description": "Not available here: when true nothing is changed, and the answer says where in the full app the background can be removed.",
+      "type": "boolean"
+     },
+     "save": {
+      "description": "For file_id. copy (default): a new file next to the original, which stays as it is. replace: save over the original (the user is asked; the version before is kept for one undo).",
+      "type": "string",
+      "enum": [
+       "copy",
+       "replace"
+      ]
+     }
+    },
+    "required": [
+     "file_id"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "rename_file",
+   "title": "Rename file",
+   "description": "Change the title of a document, Markdown document, presentation or spreadsheet, or the name of a stored file (a PDF, video or image), which keeps its extension. Defaults to the open file.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "kind": {
+      "type": "string",
+      "enum": [
+       "doc",
+       "deck",
+       "sheet",
+       "markdown",
+       "file"
+      ],
+      "description": "doc (text document), deck (slide presentation), sheet (spreadsheet), markdown (Markdown document: a plain Markdown file) or file (a PDF, web page, video or image, which is shown but not edited)."
+     },
+     "id": {
+      "type": "string"
+     },
+     "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+     }
+    },
+    "required": [
+     "title"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "delete_file",
+   "title": "Delete file",
+   "description": "Delete a document, Markdown document, presentation, spreadsheet or stored file permanently. Only when the user clearly asks for it.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "kind": {
+      "type": "string",
+      "enum": [
+       "doc",
+       "deck",
+       "sheet",
+       "markdown",
+       "file"
+      ],
+      "description": "doc (text document), deck (slide presentation), sheet (spreadsheet), markdown (Markdown document: a plain Markdown file) or file (a PDF, web page, video or image, which is shown but not edited)."
+     },
+     "id": {
+      "type": "string",
+      "description": "The file id (from list_files or the app)."
+     }
+    },
+    "required": [
+     "kind",
+     "id"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "read_doc",
+   "description": "The open document as numbered blocks (paragraphs, headings, lists, quotes, code blocks, images, rules), each as Markdown, plus where the cursor is and the selected text. Call this before changing a document; block numbers change after inserts and deletes.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "from": {
+      "description": "First block to list. Defaults to 1.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+     },
+     "to": {
+      "description": "Last block to list. Defaults to the 300th block from \"from\".",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+     },
+     "doc_id": {
+      "description": "The document or Markdown document to act on. Defaults to the one open in the app.",
+      "type": "string"
+     }
+    },
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "get_doc_info",
+   "description": "Facts about the document that read_doc does not show: its default font, body size and the size of each block style (what text without a font or size mark uses), the fonts, sizes and colors in use, the fonts available to format_text, word and character counts, block counts by type, and the cursor position.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "doc_id": {
+      "description": "The document or Markdown document to act on. Defaults to the one open in the app.",
+      "type": "string"
+     }
+    },
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "insert_content",
+   "description": "Insert new blocks into the document, written as Markdown. Returns the numbers of the new blocks.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "markdown": {
+      "type": "string",
+      "maxLength": 200000,
+      "description": "The content to insert, as Markdown."
+     },
+     "after": {
+      "description": "Insert after this block number; 0 inserts at the top. Defaults to the end of the document.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+     },
+     "doc_id": {
+      "description": "The document or Markdown document to act on. Defaults to the one open in the app.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "markdown"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "replace_blocks",
+   "description": "Replace blocks from..to of the document with new content written as Markdown. Use this to rewrite a paragraph or a whole section; prefer replace_text for small wording changes.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "from": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "1-based block number, as listed by read_doc."
+     },
+     "to": {
+      "description": "Defaults to \"from\" (one block).",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+     },
+     "markdown": {
+      "type": "string",
+      "maxLength": 200000,
+      "description": "The replacement, as Markdown; may be any number of blocks."
+     },
+     "doc_id": {
+      "description": "The document or Markdown document to act on. Defaults to the one open in the app.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "from",
+     "markdown"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "delete_blocks",
+   "description": "Delete blocks from..to of the document.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "from": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "1-based block number, as listed by read_doc."
+     },
+     "to": {
+      "description": "Defaults to \"from\" (one block).",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+     },
+     "doc_id": {
+      "description": "The document or Markdown document to act on. Defaults to the one open in the app.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "from"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "replace_text",
+   "description": "Replace text in the document without retyping its block. Use for small wording changes; returns how many occurrences changed and in which blocks.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "find": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000,
+      "description": "Exact text to find (case-sensitive). Every occurrence is replaced."
+     },
+     "replace": {
+      "type": "string",
+      "maxLength": 5000,
+      "description": "The new text (plain; it takes the formatting of what it replaces)."
+     },
+     "block": {
+      "description": "Only replace inside this block. Defaults to the whole document.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+     },
+     "doc_id": {
+      "description": "The document or Markdown document to act on. Defaults to the one open in the app.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "find",
+     "replace"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "format_text",
+   "description": "Change the formatting of text in the document without retyping it: bold, italic, underline, strikethrough, code, color, highlight, font, size or link. true adds, false removes.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "find": {
+      "description": "Exact text to format (case-sensitive); every occurrence in the blocks is formatted. Omit to format whole blocks (then from is required).",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+     },
+     "from": {
+      "description": "First block to look in (or format). Defaults to the whole document when find is given.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+     },
+     "to": {
+      "description": "Last block. Defaults to \"from\".",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+     },
+     "bold": {
+      "type": "boolean"
+     },
+     "italic": {
+      "type": "boolean"
+     },
+     "underline": {
+      "type": "boolean"
+     },
+     "strike": {
+      "description": "Strikethrough.",
+      "type": "boolean"
+     },
+     "code": {
+      "description": "Inline code.",
+      "type": "boolean"
+     },
+     "color": {
+      "description": "Text color as a CSS color (e.g. #c00000); \"\" removes it.",
+      "type": "string",
+      "maxLength": 40
+     },
+     "highlight": {
+      "description": "Background color as a CSS color (e.g. #fff2a8); \"\" removes it.",
+      "type": "string",
+      "maxLength": 40
+     },
+     "font": {
+      "description": "Font family, e.g. \"Georgia\" or \"Open Sans\"; \"\" goes back to the document font.",
+      "type": "string",
+      "maxLength": 60
+     },
+     "size": {
+      "description": "Font size in points (body text is 12); 0 goes back to the default size.",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 200
+     },
+     "link": {
+      "description": "Link the text to this http(s) or mailto URL; \"\" removes the link.",
+      "type": "string",
+      "maxLength": 2000
+     },
+     "doc_id": {
+      "description": "The document or Markdown document to act on. Defaults to the one open in the app.",
+      "type": "string"
+     }
+    },
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "format_blocks",
+   "description": "Change the kind, alignment or spacing of blocks in the document, keeping their text and inline formatting.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "from": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "1-based block number, as listed by read_doc."
+     },
+     "to": {
+      "description": "Defaults to \"from\" (one block).",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+     },
+     "type": {
+      "description": "Turn the blocks into this kind: paragraph, title, subtitle, heading1-3, bullet_list, ordered_list (consecutive blocks become one list), blockquote or code_block.",
+      "type": "string",
+      "enum": [
+       "paragraph",
+       "title",
+       "subtitle",
+       "heading1",
+       "heading2",
+       "heading3",
+       "bullet_list",
+       "ordered_list",
+       "blockquote",
+       "code_block"
+      ]
+     },
+     "align": {
+      "description": "Text alignment of the blocks (and of images).",
+      "type": "string",
+      "enum": [
+       "left",
+       "center",
+       "right",
+       "justify"
+      ]
+     },
+     "space_before": {
+      "description": "Space above each paragraph, in points.",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 200
+     },
+     "space_after": {
+      "description": "Space below each paragraph, in points.",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 200
+     },
+     "line_spacing": {
+      "description": "Line height as a multiple of the font size (1 single, 1.5, 2 double); 0 goes back to the document default.",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 4
+     },
+     "doc_id": {
+      "description": "The document or Markdown document to act on. Defaults to the one open in the app.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "from"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "insert_image",
+   "description": "Add an image block to the document from an https URL, or from an image the user attached in the chat (pass it as file). To save a picture as a file of its own, use import_file instead. (Markdown ![alt](src) on its own line in insert_content does the same without a width.)",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "src": {
+      "description": "Image address: an https URL, a stored /api/images/... address (from <attached_images> or render_slide), or a data: URL. Leave out when passing the attached image as file.",
+      "type": "string"
+     },
+     "after": {
+      "description": "Insert after this block number; 0 inserts at the top. Defaults to the end.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+     },
+     "alt": {
+      "description": "Description of the picture.",
+      "type": "string",
+      "maxLength": 500
+     },
+     "width": {
+      "description": "Display width in pixels. Defaults to the natural size, capped at the page width (760).",
+      "type": "integer",
+      "minimum": 20,
+      "maximum": 10000
+     },
+     "align": {
+      "description": "left (default), center or right.",
+      "type": "string",
+      "enum": [
+       "left",
+       "center",
+       "right",
+       "justify"
+      ]
+     },
+     "file": {
+      "description": "An image the user attached in the chat (ChatGPT fills in its download address). Use this instead of an address for attachments.",
+      "type": "object",
+      "properties": {
+       "download_url": {
+        "type": "string",
+        "description": "Where to download the file (filled in by ChatGPT)."
+       },
+       "file_id": {
+        "type": "string",
+        "description": "The id ChatGPT gives the attached file."
+       },
+       "mime_type": {
+        "type": "string"
+       },
+       "file_name": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "download_url",
+       "file_id"
+      ]
+     },
+     "doc_id": {
+      "description": "The document or Markdown document to act on. Defaults to the one open in the app.",
+      "type": "string"
+     }
+    },
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": true
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   },
+   "_meta": {
+    "openai/fileParams": [
+     "file"
+    ]
+   }
+  },
+  {
+   "name": "set_doc_style",
+   "description": "Change the document's defaults: font, body size, line spacing and paragraph spacing, used by all text that has no font or size of its own. Only the settings given change.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "font": {
+      "description": "Default font family for the whole document, e.g. \"Arial\".",
+      "type": "string",
+      "maxLength": 60
+     },
+     "size": {
+      "description": "Body text size in points; headings scale with it.",
+      "type": "number",
+      "minimum": 6,
+      "maximum": 200
+     },
+     "line_spacing": {
+      "description": "Default line height as a multiple of the font size.",
+      "type": "number",
+      "minimum": 0.8,
+      "maximum": 4
+     },
+     "space_after": {
+      "description": "Default space after each paragraph, in points.",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 200
+     },
+     "doc_id": {
+      "description": "The document or Markdown document to act on. Defaults to the one open in the app.",
+      "type": "string"
+     }
+    },
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "set_page_setup",
+   "description": "Change the page setup of the document: pages or pageless, paper size, orientation, margins, page numbers, header and footer. Only the settings given change. A page break is \"\\newpage\" on its own line in Markdown.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "mode": {
+      "description": "pages: fixed pages with margins and visible boundaries; pageless: one continuous column.",
+      "type": "string",
+      "enum": [
+       "pages",
+       "pageless"
+      ]
+     },
+     "size": {
+      "description": "Paper size: letter, legal or a4.",
+      "type": "string",
+      "enum": [
+       "letter",
+       "legal",
+       "a4"
+      ]
+     },
+     "orientation": {
+      "type": "string",
+      "enum": [
+       "portrait",
+       "landscape"
+      ]
+     },
+     "margins": {
+      "description": "Margins in inches; only the ones given change.",
+      "type": "object",
+      "properties": {
+       "top": {
+        "type": "number",
+        "minimum": 0.25,
+        "maximum": 3
+       },
+       "right": {
+        "type": "number",
+        "minimum": 0.25,
+        "maximum": 3
+       },
+       "bottom": {
+        "type": "number",
+        "minimum": 0.25,
+        "maximum": 3
+       },
+       "left": {
+        "type": "number",
+        "minimum": 0.25,
+        "maximum": 3
+       }
+      }
+     },
+     "page_numbers": {
+      "description": "Where page numbers are printed, or none.",
+      "type": "string",
+      "enum": [
+       "none",
+       "bottom-center",
+       "bottom-right",
+       "top-right"
+      ]
+     },
+     "header": {
+      "description": "Text in the top margin of every page; {page} and {pages} are replaced. \"\" removes it.",
+      "type": "string",
+      "maxLength": 200
+     },
+     "footer": {
+      "description": "Text in the bottom margin of every page; {page} and {pages} are replaced. \"\" removes it.",
+      "type": "string",
+      "maxLength": 200
+     },
+     "doc_id": {
+      "description": "The document or Markdown document to act on. Defaults to the one open in the app.",
+      "type": "string"
+     }
+    },
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "read_deck",
+   "description": "Outline of the presentation: theme, every slide with its layout, elements (id, type, position, text) and notes, and which slide the user is on. Call this before changing slides.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "deck_id": {
+      "description": "The presentation to act on. Defaults to the presentation open in the app.",
+      "type": "string"
+     }
+    },
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "add_slides",
+   "description": "Add slides to the presentation, each built from a layout and plain content. Returns the new slide numbers. Use one call for a whole deck.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "slides": {
+      "minItems": 1,
+      "maxItems": 50,
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "layout": {
+         "description": "Defaults to title-body.",
+         "type": "string",
+         "enum": [
+          "title",
+          "section",
+          "title-body",
+          "two-column",
+          "image",
+          "blank"
+         ]
+        },
+        "title": {
+         "type": "string",
+         "maxLength": 500
+        },
+        "subtitle": {
+         "description": "For the title and section layouts.",
+         "type": "string",
+         "maxLength": 1000
+        },
+        "body": {
+         "description": "Body paragraphs, one string each; they become bullets. Start a line with two spaces per indent level for sub-bullets. \"[label](https://...)\" makes a link.",
+         "maxItems": 100,
+         "type": "array",
+         "items": {
+          "type": "string",
+          "maxLength": 2000
+         }
+        },
+        "body2": {
+         "description": "Right column of the two-column layout.",
+         "maxItems": 100,
+         "type": "array",
+         "items": {
+          "type": "string",
+          "maxLength": 2000
+         }
+        },
+        "image": {
+         "description": "For the image layout: an http(s) URL of a PNG, JPEG, GIF or WebP image, or the /api/images/... address of an image attached to the chat.",
+         "type": "string"
+        },
+        "caption": {
+         "description": "Caption under the image.",
+         "type": "string",
+         "maxLength": 1000
+        },
+        "notes": {
+         "description": "Speaker notes.",
+         "type": "string",
+         "maxLength": 5000
+        },
+        "background": {
+         "description": "Background CSS color for this slide; \"\" uses the theme background.",
+         "type": "string",
+         "maxLength": 64
+        }
+       }
+      },
+      "description": "Slides to add, in order."
+     },
+     "at": {
+      "description": "Insert before this slide number. Defaults to the end.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+     },
+     "deck_id": {
+      "description": "The presentation to act on. Defaults to the presentation open in the app.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "slides"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "update_slide",
+   "description": "Change the content of one slide by role: title, subtitle, body, body2, image, caption, notes, background. Only the properties given change, and elements keep their positions. Pass layout to rearrange the slide.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "slide": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "1-based slide number, as listed by read_deck."
+     },
+     "layout": {
+      "description": "Rebuild the slide with this layout (its text is kept where the layout has a place for it).",
+      "type": "string",
+      "enum": [
+       "title",
+       "section",
+       "title-body",
+       "two-column",
+       "image",
+       "blank"
+      ]
+     },
+     "title": {
+      "type": "string",
+      "maxLength": 500
+     },
+     "subtitle": {
+      "description": "For the title and section layouts.",
+      "type": "string",
+      "maxLength": 1000
+     },
+     "body": {
+      "description": "Body paragraphs, one string each; they become bullets. Start a line with two spaces per indent level for sub-bullets. \"[label](https://...)\" makes a link.",
+      "maxItems": 100,
+      "type": "array",
+      "items": {
+       "type": "string",
+       "maxLength": 2000
+      }
+     },
+     "body2": {
+      "description": "Right column of the two-column layout.",
+      "maxItems": 100,
+      "type": "array",
+      "items": {
+       "type": "string",
+       "maxLength": 2000
+      }
+     },
+     "image": {
+      "description": "For the image layout: an http(s) URL of a PNG, JPEG, GIF or WebP image, or the /api/images/... address of an image attached to the chat.",
+      "type": "string"
+     },
+     "caption": {
+      "description": "Caption under the image.",
+      "type": "string",
+      "maxLength": 1000
+     },
+     "notes": {
+      "description": "Speaker notes.",
+      "type": "string",
+      "maxLength": 5000
+     },
+     "background": {
+      "description": "Background CSS color for this slide; \"\" uses the theme background.",
+      "type": "string",
+      "maxLength": 64
+     },
+     "deck_id": {
+      "description": "The presentation to act on. Defaults to the presentation open in the app.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "slide"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "edit_elements",
+   "description": "Fine-grained changes to the elements of one slide: move, resize, restyle, add or remove text boxes, images, shapes, and lines/arrows/connectors (type \"line\"). Prefer update_slide for text changes.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "slide": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "1-based slide number, as listed by read_deck."
+     },
+     "set": {
+      "description": "Elements to add (no id) or change (with id).",
+      "maxItems": 50,
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "id": {
+         "description": "Id of an existing element (from read_deck) to change. Omit to add a new element.",
+         "type": "string"
+        },
+        "type": {
+         "description": "Required for a new element. Use \"line\" for lines, arrows and connectors.",
+         "type": "string",
+         "enum": [
+          "text",
+          "image",
+          "shape",
+          "line"
+         ]
+        },
+        "x": {
+         "description": "Left edge in points (the slide is 960 wide).",
+         "type": "number"
+        },
+        "y": {
+         "description": "Top edge in points (the slide is 540 tall).",
+         "type": "number"
+        },
+        "w": {
+         "type": "number",
+         "minimum": 0
+        },
+        "h": {
+         "type": "number",
+         "minimum": 0
+        },
+        "text": {
+         "description": "Text elements: the paragraphs, one per line; lines starting with \"- \" are bullets (two leading spaces per indent level); \"[label](https://...)\" makes a link. Shapes: a label centered in the shape.",
+         "type": "string",
+         "maxLength": 20000
+        },
+        "role": {
+         "description": "Text elements: picks the default size and font.",
+         "type": "string",
+         "enum": [
+          "title",
+          "subtitle",
+          "body",
+          "caption"
+         ]
+        },
+        "size": {
+         "description": "Font size in points (text elements and shape labels; shape labels default to 18).",
+         "type": "number",
+         "minimum": 4,
+         "maximum": 400
+        },
+        "bold": {
+         "type": "boolean"
+        },
+        "italic": {
+         "type": "boolean"
+        },
+        "color": {
+         "description": "Text CSS color (text elements and shape labels); \"\" uses the theme color.",
+         "type": "string",
+         "maxLength": 64
+        },
+        "align": {
+         "type": "string",
+         "enum": [
+          "left",
+          "center",
+          "right"
+         ]
+        },
+        "valign": {
+         "type": "string",
+         "enum": [
+          "top",
+          "middle",
+          "bottom"
+         ]
+        },
+        "font": {
+         "description": "Font family of text elements and shape labels, e.g. \"Inter\"; \"\" uses the theme font.",
+         "type": "string",
+         "maxLength": 64
+        },
+        "line_height": {
+         "description": "Text elements: line height as a multiple of the font size (default 1.25).",
+         "type": "number",
+         "minimum": 0.5,
+         "maximum": 4
+        },
+        "src": {
+         "description": "Image elements: an http(s) image URL, or the /api/images/... address of an image attached to the chat.",
+         "type": "string"
+        },
+        "fit": {
+         "description": "Image elements: how the picture fills its box.",
+         "type": "string",
+         "enum": [
+          "contain",
+          "cover"
+         ]
+        },
+        "shape": {
+         "description": "Shape elements: the kind of shape. Arrows point right. Use type \"line\" instead of shape \"line\".",
+         "type": "string",
+         "enum": [
+          "rect",
+          "rounded",
+          "ellipse",
+          "triangle",
+          "right-triangle",
+          "diamond",
+          "pentagon",
+          "hexagon",
+          "octagon",
+          "star",
+          "parallelogram",
+          "trapezoid",
+          "arrow",
+          "double-arrow",
+          "chevron",
+          "callout",
+          "plus",
+          "heart",
+          "cylinder",
+          "line",
+          "arc"
+         ]
+        },
+        "x1": {
+         "description": "Lines: x of the start point (the slide is 960 wide). A line can point in any direction.",
+         "type": "number"
+        },
+        "y1": {
+         "description": "Lines: y of the start point (the slide is 540 tall).",
+         "type": "number"
+        },
+        "x2": {
+         "description": "Lines: x of the end point.",
+         "type": "number"
+        },
+        "y2": {
+         "description": "Lines: y of the end point.",
+         "type": "number"
+        },
+        "kind": {
+         "description": "Lines: straight (default), elbow (right-angle route) or curved connector.",
+         "type": "string",
+         "enum": [
+          "straight",
+          "elbow",
+          "curved"
+         ]
+        },
+        "dash": {
+         "description": "Lines: dash style.",
+         "type": "string",
+         "enum": [
+          "solid",
+          "dash",
+          "dot"
+         ]
+        },
+        "start_arrow": {
+         "description": "Lines: arrowhead at the start point: none, arrow, open, triangle, circle or diamond.",
+         "type": "string",
+         "enum": [
+          "none",
+          "arrow",
+          "open",
+          "triangle",
+          "circle",
+          "diamond"
+         ]
+        },
+        "end_arrow": {
+         "description": "Lines: arrowhead at the end point: none, arrow, open, triangle, circle or diamond.",
+         "type": "string",
+         "enum": [
+          "none",
+          "arrow",
+          "open",
+          "triangle",
+          "circle",
+          "diamond"
+         ]
+        },
+        "connect_start": {
+         "description": "Lines: attach the start to a side of an existing element (id from read_deck); the line then follows it when it moves, and elbows re-route. null detaches. The start point is moved to that side.",
+         "anyOf": [
+          {
+           "type": "object",
+           "properties": {
+            "element_id": {
+             "type": "string",
+             "description": "Id of the element to attach to (from read_deck)."
+            },
+            "site": {
+             "type": "string",
+             "enum": [
+              "top",
+              "right",
+              "bottom",
+              "left"
+             ],
+             "description": "Which side: the connection point is the middle of that side."
+            }
+           },
+           "required": [
+            "element_id",
+            "site"
+           ]
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "connect_end": {
+         "description": "Lines: attach the end to a side of an existing element; null detaches.",
+         "anyOf": [
+          {
+           "type": "object",
+           "properties": {
+            "element_id": {
+             "type": "string",
+             "description": "Id of the element to attach to (from read_deck)."
+            },
+            "site": {
+             "type": "string",
+             "enum": [
+              "top",
+              "right",
+              "bottom",
+              "left"
+             ],
+             "description": "Which side: the connection point is the middle of that side."
+            }
+           },
+           "required": [
+            "element_id",
+            "site"
+           ]
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "arrow": {
+         "description": "Lines: shorthand for start_arrow / end_arrow with the \"arrow\" style: at the end point, the start point, or both.",
+         "type": "string",
+         "enum": [
+          "start",
+          "end",
+          "both",
+          "none"
+         ]
+        },
+        "fill": {
+         "description": "Shape fill CSS color, or \"none\".",
+         "type": "string",
+         "maxLength": 64
+        },
+        "stroke": {
+         "description": "Shape outline color, or the color of a line.",
+         "type": "string",
+         "maxLength": 64
+        },
+        "stroke_width": {
+         "description": "Outline width of a shape, or the thickness of a line (default 3).",
+         "type": "number",
+         "minimum": 0,
+         "maximum": 100
+        },
+        "start_angle": {
+         "description": "Arc shapes: start angle in degrees, clockwise from 3 o'clock (default 270 = top). The arc is an open stroke (no fill) along the ellipse in the shape's box, drawn clockwise to end_angle.",
+         "type": "number",
+         "minimum": -360,
+         "maximum": 720
+        },
+        "end_angle": {
+         "description": "Arc shapes: end angle in degrees, clockwise from 3 o'clock (default 0 = right).",
+         "type": "number",
+         "minimum": -360,
+         "maximum": 720
+        }
+       },
+       "description": "An element to add or change. Only the properties given change."
+      }
+     },
+     "remove": {
+      "description": "Ids of elements to remove.",
+      "maxItems": 50,
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "deck_id": {
+      "description": "The presentation to act on. Defaults to the presentation open in the app.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "slide"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "delete_slides",
+   "description": "Delete slides by number.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "slides": {
+      "minItems": 1,
+      "maxItems": 100,
+      "type": "array",
+      "items": {
+       "type": "integer",
+       "minimum": 1,
+       "maximum": 9007199254740991,
+       "description": "1-based slide number, as listed by read_deck."
+      }
+     },
+     "deck_id": {
+      "description": "The presentation to act on. Defaults to the presentation open in the app.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "slides"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "move_slide",
+   "description": "Move a slide to another position.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "slide": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "1-based slide number, as listed by read_deck."
+     },
+     "to": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "The slide number it should have afterwards."
+     },
+     "deck_id": {
+      "description": "The presentation to act on. Defaults to the presentation open in the app.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "slide",
+     "to"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "set_deck_theme",
+   "description": "Set the colors and fonts of the whole presentation: light, dark, ocean, forest, sunset or paper.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "theme": {
+      "type": "string",
+      "enum": [
+       "light",
+       "dark",
+       "ocean",
+       "forest",
+       "sunset",
+       "paper"
+      ]
+     },
+     "deck_id": {
+      "description": "The presentation to act on. Defaults to the presentation open in the app.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "theme"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "get_sheet_overview",
+   "description": "Describe the spreadsheet: every tab with its size, used range, frozen panes, filter and first few rows, plus the range the user has selected. Call this first when you need to know how the data is laid out.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "sheet_id": {
+      "description": "The spreadsheet to act on. Defaults to the spreadsheet open in the app.",
+      "type": "string"
+     }
+    },
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "read_range",
+   "description": "Read the displayed values of a range in the spreadsheet (clipped to the used area, at most 2500 cells per call).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "tab": {
+      "description": "Tab name. Defaults to the active tab.",
+      "type": "string"
+     },
+     "range": {
+      "type": "string",
+      "description": "Range in A1 notation, e.g. \"B2\", \"A1:D10\", \"C:E\" (whole columns) or \"3:5\" (whole rows). May be prefixed with a tab name: 'Q3 Sales'!A1:D10."
+     },
+     "include_formulas": {
+      "description": "Also return the formula of each formula cell.",
+      "type": "boolean"
+     },
+     "include_formats": {
+      "description": "Also return the formatting of each formatted cell.",
+      "type": "boolean"
+     },
+     "sheet_id": {
+      "description": "The spreadsheet to act on. Defaults to the spreadsheet open in the app.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "range"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "write_range",
+   "description": "Write values or formulas into the spreadsheet, starting at a cell. Keeps existing formatting. The tab grows if needed.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "tab": {
+      "description": "Tab name. Defaults to the active tab.",
+      "type": "string"
+     },
+     "start": {
+      "type": "string",
+      "description": "Top-left cell to write to, e.g. \"A1\"."
+     },
+     "rows": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+       "type": "array",
+       "items": {
+        "type": [
+         "string",
+         "number",
+         "boolean",
+         "null"
+        ]
+       }
+      },
+      "description": "Rows of cell inputs, written as if the user typed them: numbers, text, dates like \"2025-03-14\", or formulas starting with \"=\". null leaves a cell unchanged; \"\" clears it."
+     },
+     "sheet_id": {
+      "description": "The spreadsheet to act on. Defaults to the spreadsheet open in the app.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "start",
+     "rows"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "clear_range",
+   "description": "Clear the contents and/or formatting of a range.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "tab": {
+      "description": "Tab name. Defaults to the active tab.",
+      "type": "string"
+     },
+     "range": {
+      "type": "string",
+      "description": "Range in A1 notation, e.g. \"B2\", \"A1:D10\", \"C:E\" (whole columns) or \"3:5\" (whole rows). May be prefixed with a tab name: 'Q3 Sales'!A1:D10."
+     },
+     "what": {
+      "description": "What to clear. Defaults to contents.",
+      "type": "string",
+      "enum": [
+       "contents",
+       "formats",
+       "all"
+      ]
+     },
+     "sheet_id": {
+      "description": "The spreadsheet to act on. Defaults to the spreadsheet open in the app.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "range"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "format_range",
+   "description": "Format a range. Only the properties you pass change.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "tab": {
+      "description": "Tab name. Defaults to the active tab.",
+      "type": "string"
+     },
+     "range": {
+      "type": "string",
+      "description": "Range in A1 notation, e.g. \"B2\", \"A1:D10\", \"C:E\" (whole columns) or \"3:5\" (whole rows). May be prefixed with a tab name: 'Q3 Sales'!A1:D10."
+     },
+     "bold": {
+      "type": "boolean"
+     },
+     "italic": {
+      "type": "boolean"
+     },
+     "underline": {
+      "type": "boolean"
+     },
+     "strikethrough": {
+      "type": "boolean"
+     },
+     "wrap": {
+      "description": "true wraps long text onto several lines within the cell width; false shows it on one line (overflowing into empty neighbors).",
+      "type": "boolean"
+     },
+     "text_color": {
+      "description": "CSS color such as \"#1a73e8\"; \"\" removes it.",
+      "type": "string"
+     },
+     "fill_color": {
+      "description": "Background CSS color; \"\" removes it.",
+      "type": "string"
+     },
+     "align": {
+      "type": "string",
+      "enum": [
+       "left",
+       "center",
+       "right",
+       "default"
+      ]
+     },
+     "number_format": {
+      "type": "string",
+      "enum": [
+       "general",
+       "number",
+       "currency",
+       "percent",
+       "date",
+       "time",
+       "datetime",
+       "text"
+      ]
+     },
+     "decimals": {
+      "description": "Decimal places for number, currency and percent formats.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10
+     },
+     "sheet_id": {
+      "description": "The spreadsheet to act on. Defaults to the spreadsheet open in the app.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "range"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "insert_rows",
+   "description": "Insert empty rows.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "tab": {
+      "description": "Tab name. Defaults to the active tab.",
+      "type": "string"
+     },
+     "at_row": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "New rows are inserted before this row."
+     },
+     "count": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10000
+     },
+     "sheet_id": {
+      "description": "The spreadsheet to act on. Defaults to the spreadsheet open in the app.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "at_row",
+     "count"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "delete_rows",
+   "description": "Delete rows from_row to to_row (inclusive). The user is asked to confirm.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "tab": {
+      "description": "Tab name. Defaults to the active tab.",
+      "type": "string"
+     },
+     "from_row": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "1-based row number."
+     },
+     "to_row": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991,
+      "description": "1-based row number."
+     },
+     "sheet_id": {
+      "description": "The spreadsheet to act on. Defaults to the spreadsheet open in the app.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "from_row",
+     "to_row"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "insert_columns",
+   "description": "Insert empty columns.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "tab": {
+      "description": "Tab name. Defaults to the active tab.",
+      "type": "string"
+     },
+     "at_column": {
+      "type": "string",
+      "pattern": "^[A-Za-z]{1,3}$",
+      "description": "New columns are inserted before this column."
+     },
+     "count": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000
+     },
+     "sheet_id": {
+      "description": "The spreadsheet to act on. Defaults to the spreadsheet open in the app.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "at_column",
+     "count"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "delete_columns",
+   "description": "Delete columns (inclusive). The user is asked to confirm.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "tab": {
+      "description": "Tab name. Defaults to the active tab.",
+      "type": "string"
+     },
+     "from_column": {
+      "type": "string",
+      "pattern": "^[A-Za-z]{1,3}$",
+      "description": "Column letter, e.g. \"C\"."
+     },
+     "to_column": {
+      "type": "string",
+      "pattern": "^[A-Za-z]{1,3}$",
+      "description": "Column letter, e.g. \"C\"."
+     },
+     "sheet_id": {
+      "description": "The spreadsheet to act on. Defaults to the spreadsheet open in the app.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "from_column",
+     "to_column"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "move_columns",
+   "description": "Move one column or a block of adjacent columns to a new position; the columns in between shift over. Values, formulas, formatting, widths and filter criteria move with the columns, and formulas anywhere in the workbook are updated to keep pointing at the same data. Returns the new range of the moved columns.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "tab": {
+      "description": "Tab name. Defaults to the active tab.",
+      "type": "string"
+     },
+     "from_column": {
+      "type": "string",
+      "pattern": "^[A-Za-z]{1,3}$",
+      "description": "First (or only) column to move, e.g. \"F\"."
+     },
+     "to_column": {
+      "description": "Last column of the block when moving several adjacent columns. Defaults to from_column.",
+      "type": "string",
+      "pattern": "^[A-Za-z]{1,3}$"
+     },
+     "before_column": {
+      "type": "string",
+      "pattern": "^[A-Za-z]{1,3}$",
+      "description": "The moved block is placed immediately left of this column (as it is before the move), e.g. \"B\" moves it to between A and B. Use the column after the last one to move to the end."
+     },
+     "sheet_id": {
+      "description": "The spreadsheet to act on. Defaults to the spreadsheet open in the app.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "from_column",
+     "before_column"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "sort_range",
+   "description": "Sort the rows of a range by one column.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "tab": {
+      "description": "Tab name. Defaults to the active tab.",
+      "type": "string"
+     },
+     "range": {
+      "type": "string",
+      "description": "Range in A1 notation, e.g. \"B2\", \"A1:D10\", \"C:E\" (whole columns) or \"3:5\" (whole rows). May be prefixed with a tab name: 'Q3 Sales'!A1:D10."
+     },
+     "by_column": {
+      "type": "string",
+      "pattern": "^[A-Za-z]{1,3}$",
+      "description": "Column to sort by; must be inside the range."
+     },
+     "ascending": {
+      "description": "Defaults to true.",
+      "type": "boolean"
+     },
+     "has_header": {
+      "description": "Keep the first row of the range in place. Defaults to false.",
+      "type": "boolean"
+     },
+     "sheet_id": {
+      "description": "The spreadsheet to act on. Defaults to the spreadsheet open in the app.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "range",
+     "by_column"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "set_cell_image",
+   "description": "Show an image inside a cell, scaled to fit the cell: from an https URL, or from an image the user attached in the chat (pass it as file). Replaces the cell's value; keeps its formatting. Make the row taller or the column wider (set_row_height, set_column_width) if the image should appear larger.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "tab": {
+      "description": "Tab name. Defaults to the active tab.",
+      "type": "string"
+     },
+     "range": {
+      "type": "string",
+      "description": "Cell to put the image in, e.g. \"I9\". A range puts the image in every cell of it (100 cells at most)."
+     },
+     "url": {
+      "description": "Image address: an http(s) URL of a PNG, JPEG, GIF or WebP image, the /api/images/... address of an image attached to the chat, or a data:image/...;base64 URL. Leave out when passing the attached image as file.",
+      "type": "string"
+     },
+     "file": {
+      "description": "An image the user attached in the chat (ChatGPT fills in its download address). Use this instead of an address for attachments.",
+      "type": "object",
+      "properties": {
+       "download_url": {
+        "type": "string",
+        "description": "Where to download the file (filled in by ChatGPT)."
+       },
+       "file_id": {
+        "type": "string",
+        "description": "The id ChatGPT gives the attached file."
+       },
+       "mime_type": {
+        "type": "string"
+       },
+       "file_name": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "download_url",
+       "file_id"
+      ]
+     },
+     "sheet_id": {
+      "description": "The spreadsheet to act on. Defaults to the spreadsheet open in the app.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "range"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "openWorldHint": true
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   },
+   "_meta": {
+    "openai/fileParams": [
+     "file"
+    ]
+   }
+  },
+  {
+   "name": "set_cell_link",
+   "description": "Make cells show a clickable hyperlink (blue, underlined; opens in a new tab). Replaces the cell's value with =HYPERLINK(url, label); keeps its formatting. Plain-text cells that are a full http(s) URL are already clickable and need no change. read_range lists link cells and their URLs under \"links\".",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "tab": {
+      "description": "Tab name. Defaults to the active tab.",
+      "type": "string"
+     },
+     "range": {
+      "type": "string",
+      "description": "Cell to turn into a link, e.g. \"D2\". A range makes every cell of it the same link."
+     },
+     "url": {
+      "type": "string",
+      "description": "Address the link opens in a new browser tab: an http(s) or mailto: URL."
+     },
+     "label": {
+      "description": "Text shown in the cell. Defaults to the URL.",
+      "type": "string"
+     },
+     "sheet_id": {
+      "description": "The spreadsheet to act on. Defaults to the spreadsheet open in the app.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "range",
+     "url"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "set_filter",
+   "description": "Turn on a filter (with header dropdowns) for a range, or remove the tab's filter.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "tab": {
+      "description": "Tab name. Defaults to the active tab.",
+      "type": "string"
+     },
+     "range": {
+      "description": "Range to put a filter on, header row first. Omit to remove the filter.",
+      "type": "string"
+     },
+     "sheet_id": {
+      "description": "The spreadsheet to act on. Defaults to the spreadsheet open in the app.",
+      "type": "string"
+     }
+    },
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "set_filter_criteria",
+   "description": "Choose which values a column of the tab's filter shows, like picking values in the header dropdown. Criteria on different columns combine with AND. The tab must already have a filter (use set_filter first). Returns the number of visible data rows.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "tab": {
+      "description": "Tab name. Defaults to the active tab.",
+      "type": "string"
+     },
+     "column": {
+      "type": "string",
+      "pattern": "^[A-Za-z]{1,3}$",
+      "description": "Filter column; must be inside the filter range."
+     },
+     "values": {
+      "description": "Only rows whose displayed value in this column matches one of these (case-insensitive) stay visible. Use \"\" for blank cells. Required unless clear is true.",
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "clear": {
+      "description": "Remove the criteria for this column so it no longer hides rows.",
+      "type": "boolean"
+     },
+     "sheet_id": {
+      "description": "The spreadsheet to act on. Defaults to the spreadsheet open in the app.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "column"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "set_column_width",
+   "description": "Set column widths.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "tab": {
+      "description": "Tab name. Defaults to the active tab.",
+      "type": "string"
+     },
+     "columns": {
+      "type": "string",
+      "description": "Column or columns, e.g. \"B\" or \"B:D\"."
+     },
+     "width": {
+      "type": "integer",
+      "minimum": 20,
+      "maximum": 2000,
+      "description": "Width in pixels; the default is 100."
+     },
+     "sheet_id": {
+      "description": "The spreadsheet to act on. Defaults to the spreadsheet open in the app.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "columns",
+     "width"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "set_row_height",
+   "description": "Set row heights.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "tab": {
+      "description": "Tab name. Defaults to the active tab.",
+      "type": "string"
+     },
+     "rows": {
+      "type": "string",
+      "description": "Row or row span (1-based), e.g. \"1\" or \"1:3\"."
+     },
+     "height": {
+      "type": "integer",
+      "minimum": 10,
+      "maximum": 1000,
+      "description": "Height in pixels; the default is 21."
+     },
+     "sheet_id": {
+      "description": "The spreadsheet to act on. Defaults to the spreadsheet open in the app.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "rows",
+     "height"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "freeze",
+   "description": "Freeze the top rows and/or left columns. 0 unfreezes.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "tab": {
+      "description": "Tab name. Defaults to the active tab.",
+      "type": "string"
+     },
+     "rows": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+     },
+     "columns": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 50
+     },
+     "sheet_id": {
+      "description": "The spreadsheet to act on. Defaults to the spreadsheet open in the app.",
+      "type": "string"
+     }
+    },
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "add_tab",
+   "description": "Add a new empty tab after the active tab and switch to it.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "name": {
+      "type": "string"
+     },
+     "sheet_id": {
+      "description": "The spreadsheet to act on. Defaults to the spreadsheet open in the app.",
+      "type": "string"
+     }
+    },
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "rename_tab",
+   "description": "Rename a tab. Formulas that refer to it are updated.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "tab": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     },
+     "sheet_id": {
+      "description": "The spreadsheet to act on. Defaults to the spreadsheet open in the app.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "tab",
+     "name"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "delete_tab",
+   "description": "Delete a tab. The user is asked to confirm.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "tab": {
+      "type": "string"
+     },
+     "sheet_id": {
+      "description": "The spreadsheet to act on. Defaults to the spreadsheet open in the app.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "tab"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": true,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   }
+  },
+  {
+   "name": "getting_started",
+   "description": "The user's copy of the Getting started guide (made the first time), opened in the app.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   },
+   "_meta": {
+    "ui": {
+     "visibility": [
+      "app"
+     ]
+    },
+    "openai/widgetAccessible": true
+   }
+  },
+  {
+   "name": "app_state",
+   "description": "Which file is open and its revision, and the picture edits for the app to make.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   },
+   "_meta": {
+    "ui": {
+     "visibility": [
+      "app"
+     ]
+    },
+    "openai/widgetAccessible": true
+   }
+  },
+  {
+   "name": "image_job_result",
+   "description": "What the app did with a picture edit it took from app_state.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "job_id": {
+      "type": "string"
+     },
+     "ok": {
+      "type": "boolean"
+     },
+     "error": {
+      "type": "string",
+      "maxLength": 2000
+     },
+     "applied": {
+      "maxItems": 40,
+      "type": "array",
+      "items": {
+       "type": "string",
+       "maxLength": 300
+      }
+     },
+     "width": {
+      "type": "number"
+     },
+     "height": {
+      "type": "number"
+     },
+     "file_id": {
+      "type": "string"
+     },
+     "saved": {
+      "type": "boolean"
+     },
+     "preview_data": {
+      "description": "The picture as it is now, reduced, in base64.",
+      "type": "string",
+      "maxLength": 4000000
+     },
+     "preview_type": {
+      "type": "string",
+      "maxLength": 40
+     }
+    },
+    "required": [
+     "job_id",
+     "ok"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   },
+   "_meta": {
+    "ui": {
+     "visibility": [
+      "app"
+     ]
+    },
+    "openai/widgetAccessible": true
+   }
+  },
+  {
+   "name": "set_open_file",
+   "description": "The app reports which file it shows (none when omitted) and where the user is in it.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "kind": {
+      "type": "string",
+      "enum": [
+       "doc",
+       "deck",
+       "sheet",
+       "markdown",
+       "file"
+      ],
+      "description": "doc (text document), deck (slide presentation), sheet (spreadsheet), markdown (Markdown document: a plain Markdown file) or file (a PDF, web page, video or image, which is shown but not edited)."
+     },
+     "id": {
+      "type": "string"
+     },
+     "cursor_block": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+     },
+     "selected_text": {
+      "type": "string",
+      "maxLength": 500
+     },
+     "slide": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+     },
+     "selection": {
+      "maxItems": 50,
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "tab": {
+      "type": "string"
+     }
+    },
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   },
+   "_meta": {
+    "ui": {
+     "visibility": [
+      "app"
+     ]
+    },
+    "openai/widgetAccessible": true
+   }
+  },
+  {
+   "name": "library_files",
+   "description": "Every file of the account for the app's library, with when each was made and last changed.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   },
+   "_meta": {
+    "ui": {
+     "visibility": [
+      "app"
+     ]
+    },
+    "openai/widgetAccessible": true
+   }
+  },
+  {
+   "name": "get_file",
+   "description": "Load a whole file for the editor.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "kind": {
+      "type": "string",
+      "enum": [
+       "doc",
+       "deck",
+       "sheet",
+       "markdown"
+      ],
+      "description": "doc (text document), deck (slide presentation), sheet (spreadsheet) or markdown (Markdown document)."
+     },
+     "id": {
+      "type": "string",
+      "description": "The file id (from list_files or the app)."
+     }
+    },
+    "required": [
+     "kind",
+     "id"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   },
+   "_meta": {
+    "ui": {
+     "visibility": [
+      "app"
+     ]
+    },
+    "openai/widgetAccessible": true
+   }
+  },
+  {
+   "name": "save_file",
+   "description": "Save a whole file from the editor. Fails when the revision is stale.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "kind": {
+      "type": "string",
+      "enum": [
+       "doc",
+       "deck",
+       "sheet",
+       "markdown"
+      ],
+      "description": "doc (text document), deck (slide presentation), sheet (spreadsheet) or markdown (Markdown document)."
+     },
+     "id": {
+      "type": "string",
+      "description": "The file id (from list_files or the app)."
+     },
+     "rev": {
+      "type": "string",
+      "description": "The revision the editor loaded."
+     },
+     "data": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": {},
+      "description": "The whole file."
+     }
+    },
+    "required": [
+     "kind",
+     "id",
+     "rev",
+     "data"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   },
+   "_meta": {
+    "ui": {
+     "visibility": [
+      "app"
+     ]
+    },
+    "openai/widgetAccessible": true
+   }
+  },
+  {
+   "name": "upload_ticket",
+   "description": "A one-time ticket and URL for the app to upload a file to import.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   },
+   "_meta": {
+    "ui": {
+     "visibility": [
+      "app"
+     ]
+    },
+    "openai/widgetAccessible": true
+   }
+  },
+  {
+   "name": "file_link",
+   "description": "A stored file (a PDF, video or image) and an address the app can load it from for the next few hours.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "The file id (from list_files or the app)."
+     }
+    },
+    "required": [
+     "id"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   },
+   "_meta": {
+    "ui": {
+     "visibility": [
+      "app"
+     ]
+    },
+    "openai/widgetAccessible": true
+   }
+  },
+  {
+   "name": "upload_image",
+   "description": "Store an image pasted or dropped into the editor.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "type": {
+      "type": "string"
+     },
+     "data": {
+      "type": "string",
+      "description": "Base64 bytes."
+     }
+    },
+    "required": [
+     "type",
+     "data"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+   },
+   "annotations": {
+    "readOnlyHint": false,
+    "destructiveHint": false,
+    "openWorldHint": false
+   },
+   "execution": {
+    "taskSupport": "forbidden"
+   },
+   "_meta": {
+    "ui": {
+     "visibility": [
+      "app"
+     ]
+    },
+    "openai/widgetAccessible": true
+   }
+  }
+ ]
+}

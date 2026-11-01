@@ -1,0 +1,48 @@
+<template>
+  <style>
+    @font-face {
+      font-family: "Google Sans Flex";
+      src: url("assets/fonts/GoogleSansFlex-latin-var.woff2") format("woff2");
+      font-weight: 100 1000;
+    }
+    #root {
+      position: absolute;
+      inset: 0;
+      font-family: "Google Sans Flex", sans-serif;
+      color: #1f1f1f;
+    }
+    #int-field {
+      position: absolute;
+      inset: 0;
+      background: #ffffff;
+    }
+    #int-line {
+      position: absolute;
+      left: 160px;
+      top: 470px;
+      font-size: 120px;
+      font-weight: 500;
+      letter-spacing: -0.02em;
+      line-height: 1.05;
+    }
+    #int-line .w {
+      display: inline-block;
+    }
+  </style>
+  <div id="root" data-composition-id="intro" data-width="1920" data-height="1080">
+    <div id="int-field"></div>
+    <div id="int-line" class="clip" data-start="0" data-duration="3.0" data-track-index="2">
+      <span class="w">Every</span> <span class="w">file,</span> <span class="w">one</span> <span class="w">editor</span>
+    </div>
+  </div>
+  <script>
+    (function () {
+      const tl = gsap.timeline({ paused: true });
+      // A white field whips up over the last editor; the words darken from light grey to ink in place.
+      tl.fromTo("#int-field", { y: 1080 }, { y: 0, duration: 0.3, ease: "expo.out" }, 0);
+      tl.fromTo("#int-line .w", { color: "#dadce0", opacity: 0 },
+        { color: "#1f1f1f", opacity: 1, duration: 0.2, stagger: 0.1, ease: "power2.out" }, 0.25);
+      window.__timelines["intro"] = tl;
+    })();
+  </script>
+</template>

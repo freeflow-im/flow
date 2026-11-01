@@ -1,0 +1,63 @@
+<template>
+  <style>
+    @font-face {
+      font-family: "Google Sans Flex";
+      src: url("assets/fonts/GoogleSansFlex-latin-var.woff2") format("woff2");
+      font-weight: 100 1000;
+    }
+    #root {
+      position: absolute;
+      inset: 0;
+      font-family: "Google Sans Flex", sans-serif;
+      color: #1f1f1f;
+    }
+    #clm-field {
+      position: absolute;
+      inset: 0;
+      background: #ffffff;
+    }
+    .clm-line {
+      position: absolute;
+      left: 160px;
+      top: 470px;
+      font-size: 112px;
+      font-weight: 500;
+      letter-spacing: -0.02em;
+      line-height: 1.05;
+    }
+    .clm-line .w {
+      display: inline-block;
+    }
+    #clm-agents {
+      color: var(--color-accent, #1a73e8);
+    }
+  </style>
+  <div data-hf-id="hf-dc55" id="root" data-composition-id="claim" data-width="1920" data-height="1080">
+    <div data-hf-id="hf-58ke" id="clm-field"></div>
+    <div data-hf-id="hf-ttd1" id="clm-l1" class="clm-line clip" data-start="0" data-duration="2.75" data-track-index="2">
+      <span data-hf-id="hf-ufi3" class="w">A</span> <span data-hf-id="hf-oyu9" class="w">universal</span> <span data-hf-id="hf-qga9" class="w">editor</span>
+      <span data-hf-id="hf-eyfb" class="w">for</span> <span data-hf-id="hf-952a" class="w">any</span> <span data-hf-id="hf-lpam" class="w">file</span>
+    </div>
+    <div data-hf-id="hf-o71d" id="clm-l2" class="clm-line clip" data-start="2.7" data-duration="3.15" data-track-index="2">
+      <span data-hf-id="hf-epd3" class="w">for</span> <span data-hf-id="hf-bgxi" class="w">humans</span> <span data-hf-id="hf-difl" class="w">and</span>
+      <span data-hf-id="hf-630l" class="w" id="clm-agents">agents</span>
+    </div>
+  </div>
+  <script>
+    (function () {
+      const tl = gsap.timeline({ paused: true });
+      // A white field whips up over the last editor.
+      tl.fromTo("#clm-field", { y: 1080 }, { y: 0, duration: 0.3, ease: "expo.out" }, 0);
+      // Words arrive light grey and darken to ink one by one; no position change.
+      tl.fromTo("#clm-l1 .w", { color: "#dadce0", opacity: 0 },
+        { color: "#1f1f1f", opacity: 1, duration: 0.2, stagger: 0.09, ease: "power2.out" }, 0.3);
+      tl.to("#clm-l1 .w", { opacity: 0, filter: "blur(6px)", duration: 0.15, stagger: 0.03, ease: "power3.in" }, 2.5);
+      tl.fromTo("#clm-l2 .w:not(#clm-agents)", { color: "#dadce0", opacity: 0 },
+        { color: "#1f1f1f", opacity: 1, duration: 0.2, stagger: 0.09, ease: "power2.out" }, 2.75);
+      tl.fromTo("#clm-agents", { color: "#dadce0", opacity: 0 },
+        { color: "#1a73e8", opacity: 1, duration: 0.25, ease: "power2.out" }, 3.05);
+      tl.to("#clm-l2 .w", { opacity: 0, filter: "blur(6px)", duration: 0.15, stagger: 0.03, ease: "power3.in" }, 5.3);
+      window.__timelines["claim"] = tl;
+    })();
+  </script>
+</template>

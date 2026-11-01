@@ -1,0 +1,62 @@
+<template>
+  <style>
+    #root {
+      position: absolute;
+      inset: 0;
+    }
+    #pay-win {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 1920px;
+      height: 1080px;
+      overflow: hidden;
+      background: #f0f4f9;
+      clip-path: inset(72px 48px 72px 820px round 18px);
+    }
+    #pay-cam {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 1796px;
+      height: 1080px;
+      transform-origin: 0 0;
+    }
+    #pay-video-a,
+    #pay-video-b {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 1796px;
+      height: 1080px;
+    }
+  </style>
+  <div data-hf-id="hf-s4vk" id="root" data-composition-id="payoff" data-width="1920" data-height="1080">
+    <div data-hf-id="hf-dpuo" id="pay-win">
+      <div data-hf-id="hf-gdi7" id="pay-cam">
+        <video data-hf-id="hf-fk01" id="pay-video-a" class="clip" data-start="0" data-duration="1.6" data-media-start="22.7"
+          data-track-index="2" src="assets/demo.mp4" muted playsinline></video>
+        <video data-hf-id="hf-0sqs" id="pay-video-b" class="clip" data-start="1.6" data-duration="3.75" data-media-start="29.8"
+          data-track-index="3" src="assets/demo.mp4" muted playsinline></video>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function () {
+      const tl = gsap.timeline({ paused: true });
+      // Camera in source pixels: source point (cx, cy) lands at frame point (fx, fy).
+      const cam = (s, cx, cy, fx = 960, fy = 540) => ({ scale: s, x: fx - s * cx, y: fy - s * cy });
+
+      // The window becomes the world: its clip opens to full frame while the camera dives onto the slide.
+      tl.set("#pay-cam", cam(0.586, 898, 540, 1346, 540), 0);
+      tl.to("#pay-win", { clipPath: "inset(0px 0px 0px 0px round 0px)", duration: 0.65, ease: "power2.inOut" }, 0);
+      tl.to("#pay-cam", { ...cam(1.78, 801, 553), duration: 0.65, ease: "power2.inOut" }, 0);
+      // Punch cut to the results slide as the agent edits it (1.6), then pull back to the whole app.
+      tl.set("#pay-cam", cam(1.9, 801, 540), 1.6);
+      tl.to("#pay-cam", { ...cam(1.78, 801, 553), duration: 0.5, ease: "expo.out" }, 1.6);
+      tl.to("#pay-cam", { ...cam(1.0, 898, 540), duration: 0.6, ease: "power2.inOut" }, 3.0);
+
+      window.__timelines["payoff"] = tl;
+    })();
+  </script>
+</template>

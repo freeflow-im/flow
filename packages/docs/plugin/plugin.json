@@ -1,0 +1,35 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "freeflow-docs",
+  "version": "1.0.0",
+  "description": "Create, open and edit office files and pictures in ChatGPT: documents, presentations, spreadsheets, Markdown and images, in an editor inside the chat.",
+  "extensions": {
+    "com.openai": {
+      "onboardingSkill": "./skills/universal-docs/SKILL.md",
+      "interface": {
+        "displayName": "Universal Docs",
+        "shortDescription": "Office files, edited by chat",
+        "longDescription": "Universal Docs keeps your documents, presentations, spreadsheets, Markdown files and pictures in one library and opens them in a full editor inside ChatGPT. Edit by hand, or ask ChatGPT to write a document, rewrite a section, add slides, fill in cells, change formatting or crop a picture; the open file updates in place. Import Word, PowerPoint, Excel, CSV, Markdown, PDF, HTML, image and video files by attaching them in the chat, and open any file in the full app in one click.",
+        "developerName": "Supercog.ai",
+        "category": "Productivity",
+        "capabilities": [
+          "Create and edit documents, presentations, spreadsheets and Markdown files",
+          "Import Word, PowerPoint, Excel, CSV, Markdown, PDF, HTML, image and video files",
+          "Edit pictures: crop, rotate, resize, adjust, annotate and redact",
+          "Edit by hand in the editor that opens inside the chat"
+        ],
+        "websiteURL": "https://docs.freeflow.im",
+        "supportURL": "https://docs.freeflow.im/support",
+        "privacyPolicyURL": "https://docs.freeflow.im/privacy",
+        "termsOfServiceURL": "https://docs.freeflow.im/terms",
+        "defaultPrompt": [
+          "Create a one-page project brief in Universal Docs.",
+          "Import the file I attached into Universal Docs and open it.",
+          "Open my latest presentation and tighten the wording on the first slide."
+        ],
+        "brandColor": "#1A73E8",
+        "logo": "./assets/logo.svg"
+      }
+    }
+  }
+}

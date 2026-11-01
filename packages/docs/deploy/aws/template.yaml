@@ -1,0 +1,350 @@
+# MCP Docs on the web, on AWS: one EC2 instance running the app's container (deploy/aws/Dockerfile) behind
+# Caddy, which serves HTTPS with a certificate it gets for the domain. The app is one process with SQLite and its
+# files on a local disk (DATA_DIR), so it runs as exactly one copy: the data lives on its own EBS volume, kept
+# when the stack or instance goes, with a snapshot every day.
+#
+# Deploys: .github/workflows/aws-deploy.yml builds the image on each push to main, pushes it to the ECR
+# repository below and runs /opt/mcpdocs/deploy.sh <tag> on the instance through Systems Manager. The app's
+# secrets are SecureString parameters under /mcpdocs/ (ANTHROPIC_API_KEY, ...), read on every deploy.
+# See deploy/aws/README.md.
+AWSTemplateFormatVersion: '2010-09-09'
+Description: MCP Docs on the web (single instance)
+
+Parameters:
+  DomainName:
+    Type: String
+    Default: mcpdocs.freeflow.im
+  OtherDomains:
+    Type: String
+    Default: docs.freeflow.im
+    Description: More host names served as the app (comma-separated), each with its own certificate
+  InstanceType:
+    Type: String
+    Default: t4g.medium
+  DataVolumeSizeGiB:
+    Type: Number
+    Default: 20
+  GitHubRepo:
+    Type: String
+    Default: freeflow-im/mcp-docs
+  GitHubRepoIds:
+    Type: String
+    Default: freeflow-im@309602851/mcp-docs@1431919019
+    Description: The repository as GitHub's immutable OIDC subject names it (owner@id/name@id)
+  GitHubOidcProviderArn:
+    Type: String
+    Description: The account's token.actions.githubusercontent.com OIDC provider
+  LatestAmi:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+  UseElasticIp:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: A fixed address; without one the instance keeps its launch address until it is stopped or replaced
+
+Conditions:
+  ElasticIp: !Equals [!Ref UseElasticIp, 'true']
+
+Resources:
+  # --- Network: a small VPC of its own with one public subnet --------------------------------------------
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.80.0.0/24
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{ Key: Name, Value: mcpdocs }]
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: [{ Key: Name, Value: mcpdocs }]
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+  Subnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.80.0.0/26
+      AvailabilityZone: !Select [0, !GetAZs '']
+      # The instance needs the internet from its first boot (packages, images), before the fixed address is on.
+      MapPublicIpOnLaunch: true
+      Tags: [{ Key: Name, Value: mcpdocs }]
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+  DefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  SubnetRoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref Subnet
+      RouteTableId: !Ref RouteTable
+  # Web traffic only; shell access is through Systems Manager Session Manager, not SSH.
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: MCP Docs web
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0 }
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0 }
+        - { IpProtocol: udp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0 }
+
+  # --- Images and logs -----------------------------------------------------------------------------------
+  Repository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: mcpdocs
+      LifecyclePolicy:
+        LifecyclePolicyText: '{"rules":[{"rulePriority":1,"description":"Keep the last 20 images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":20},"action":{"type":"expire"}}]}'
+  AppLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /mcpdocs/app
+      RetentionInDays: 30
+
+  # --- The instance --------------------------------------------------------------------------------------
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - { Effect: Allow, Principal: { Service: ec2.amazonaws.com }, Action: sts:AssumeRole }
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+      Policies:
+        - PolicyName: mcpdocs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [ssm:GetParametersByPath, ssm:GetParameters]
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/mcpdocs*
+              - Effect: Allow
+                Action: kms:Decrypt
+                Resource: '*'
+                Condition: { StringEquals: { 'kms:ViaService': !Sub 'ssm.${AWS::Region}.amazonaws.com' } }
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents, logs:DescribeLogStreams]
+                Resource: !Sub '${AppLogs.Arn}'
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref InstanceRole]
+
+  # The data: SQLite databases, files, Caddy's certificates. Kept when the stack is deleted or the instance is
+  # replaced; DataSnapshots copies it daily.
+  DataVolume:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Size: !Ref DataVolumeSizeGiB
+      VolumeType: gp3
+      Encrypted: true
+      Tags:
+        - { Key: Name, Value: mcpdocs-data }
+        - { Key: Backup, Value: mcpdocs-data }
+
+  Instance:
+    Type: AWS::EC2::Instance
+    DependsOn: DefaultRoute
+    Properties:
+      ImageId: !Ref LatestAmi
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref InstanceProfile
+      SubnetId: !Ref Subnet
+      SecurityGroupIds: [!Ref SecurityGroup]
+      MetadataOptions: { HttpTokens: required, HttpPutResponseHopLimit: 2 }
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: { VolumeSize: 30, VolumeType: gp3, Encrypted: true }
+      Tags: [{ Key: Name, Value: mcpdocs }]
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+
+          dnf install -y docker
+          systemctl enable --now docker
+
+          # Swap, for the build and test runs of app-change jobs on top of the app and Chromium.
+          if [ ! -f /swapfile ]; then
+            dd if=/dev/zero of=/swapfile bs=1M count=4096
+            chmod 600 /swapfile
+            mkswap /swapfile
+            echo '/swapfile none swap defaults 0 0' >> /etc/fstab
+          fi
+          swapon -a
+
+          # The data volume, attached after the instance starts: format it the first time, mount it at /data.
+          VOL=${DataVolume}
+          DEV=/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${!VOL/-/}
+          for i in $(seq 1 120); do [ -e "$DEV" ] && break; sleep 5; done
+          blkid "$DEV" || mkfs.ext4 -L mcpdocs-data "$DEV"
+          mkdir -p /data
+          grep -q 'LABEL=mcpdocs-data' /etc/fstab || echo 'LABEL=mcpdocs-data /data ext4 defaults,nofail 0 2' >> /etc/fstab
+          mount -a
+          mkdir -p /data/app /data/caddy
+
+          mkdir -p /opt/mcpdocs
+          cat > /opt/mcpdocs/Caddyfile <<'EOF'
+          ${DomainName}, ${OtherDomains} {
+            reverse_proxy app:3001
+          }
+          EOF
+
+          cat > /opt/mcpdocs/deploy.sh <<'EOF'
+          #!/bin/bash
+          # Runs the app image with the given tag (the commit), replacing the running one. Called by the deploy
+          # workflow through Systems Manager; run by hand with no tag to restart the latest.
+          set -euo pipefail
+          TAG=${!1:-latest}
+          REGISTRY=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
+          IMAGE=$REGISTRY/${Repository}:$TAG
+
+          aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin $REGISTRY
+          # Only the running images are kept: the disk holds two app images, not a week of them. An older one is
+          # pulled again from the registry to roll back.
+          docker image prune -af >/dev/null || true
+          docker pull $IMAGE
+
+          # The app's secrets: every parameter under /mcpdocs/, named for its variable.
+          umask 077
+          aws ssm get-parameters-by-path --region ${AWS::Region} --path /mcpdocs/ --recursive --with-decryption \
+            --query 'Parameters[].[Name,Value]' --output text | sed -e 's#^/mcpdocs/##' -e 's#\t#=#' > /opt/mcpdocs/app.env
+
+          docker network inspect mcpdocs >/dev/null 2>&1 || docker network create mcpdocs
+          docker rm -f app >/dev/null 2>&1 || true
+          docker run -d --name app --network mcpdocs --restart unless-stopped --stop-timeout 30 \
+            -v /data/app:/data --env-file /opt/mcpdocs/app.env \
+            -e APP_URL=https://${DomainName} -e SECURE_COOKIES=1 -e GITHUB_REPO=${GitHubRepo} \
+            --log-driver awslogs --log-opt awslogs-region=${AWS::Region} --log-opt awslogs-group=${AppLogs} \
+            $IMAGE
+
+          if ! docker inspect caddy >/dev/null 2>&1; then
+            docker run -d --name caddy --network mcpdocs --restart unless-stopped \
+              -p 80:80 -p 443:443 -p 443:443/udp \
+              -v /opt/mcpdocs/Caddyfile:/etc/caddy/Caddyfile:ro -v /data/caddy:/data caddy:2.10.2
+          fi
+
+          for i in $(seq 1 60); do
+            [ "$(docker inspect -f '{{.State.Health.Status}}' app)" = healthy ] && { echo "deployed $TAG"; break; }
+            sleep 5
+          done
+          docker image prune -af >/dev/null || true
+          [ "$(docker inspect -f '{{.State.Health.Status}}' app)" = healthy ] || { echo "app is not healthy"; docker logs --tail 50 app || true; exit 1; }
+          EOF
+          chmod 755 /opt/mcpdocs/deploy.sh
+
+          # Start what is already in the registry (nothing before the first deploy).
+          /opt/mcpdocs/deploy.sh latest || echo 'no image yet; the first deploy starts the app'
+
+  DataAttachment:
+    Type: AWS::EC2::VolumeAttachment
+    Properties:
+      InstanceId: !Ref Instance
+      VolumeId: !Ref DataVolume
+      Device: /dev/sdf
+
+  # A fixed address for the domain's A record.
+  Address:
+    Type: AWS::EC2::EIP
+    Condition: ElasticIp
+    DependsOn: GatewayAttachment
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref Instance
+      Tags: [{ Key: Name, Value: mcpdocs }]
+
+  # --- Daily snapshots of the data volume, kept 14 days ---------------------------------------------------
+  SnapshotRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - { Effect: Allow, Principal: { Service: dlm.amazonaws.com }, Action: sts:AssumeRole }
+      ManagedPolicyArns: [arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole]
+  DataSnapshots:
+    Type: AWS::DLM::LifecyclePolicy
+    Properties:
+      Description: MCP Docs data daily
+      State: ENABLED
+      ExecutionRoleArn: !GetAtt SnapshotRole.Arn
+      PolicyDetails:
+        ResourceTypes: [VOLUME]
+        TargetTags: [{ Key: Backup, Value: mcpdocs-data }]
+        Schedules:
+          - Name: daily
+            CreateRule: { Interval: 24, IntervalUnit: HOURS, Times: ['10:00'] }
+            RetainRule: { Count: 14 }
+            CopyTags: true
+
+  # --- What the deploy workflow may do: push images and run deploy.sh ------------------------------------
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: mcpdocs-github-deploy
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Federated: !Ref GitHubOidcProviderArn }
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                # GitHub's subject names the repository either way: with its owner's and its own ids when the
+                # repository uses immutable subjects (GitHubRepoIds; `gh api repos/<repo>/actions/oidc/customization/sub`).
+                token.actions.githubusercontent.com:sub:
+                  - !Sub repo:${GitHubRepo}:ref:refs/heads/main
+                  - !Sub repo:${GitHubRepoIds}:ref:refs/heads/main
+      Policies:
+        - PolicyName: deploy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - { Effect: Allow, Action: ecr:GetAuthorizationToken, Resource: '*' }
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                Resource: !GetAtt Repository.Arn
+              - Effect: Allow
+                Action: ssm:SendCommand
+                Resource:
+                  - !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/${Instance}
+                  - !Sub arn:aws:ssm:${AWS::Region}::document/AWS-RunShellScript
+              - { Effect: Allow, Action: ssm:GetCommandInvocation, Resource: '*' }
+
+Outputs:
+  PublicIp:
+    Description: Point the domain's A record here
+    Value: !If [ElasticIp, !Ref Address, !GetAtt Instance.PublicIp]
+  InstanceId:
+    Value: !Ref Instance
+  RepositoryUri:
+    Value: !GetAtt Repository.RepositoryUri
+  DeployRoleArn:
+    Value: !GetAtt DeployRole.Arn
+  DataVolumeId:
+    Value: !Ref DataVolume
