@@ -2,7 +2,7 @@
 
 This package is the Workspace app of the FreeFlow suite, inside the Flow monorepo since 2026-11-01
 (`docs/specs/freeflow-suite.md` at the repository root). Install with `pnpm install` at the root; the
-`npm run …` commands below work from this directory (`pnpm --filter @flow/docs <script>` from the root).
+the `pnpm …` commands below run from this directory (`pnpm --filter @flow/docs <script>` from the root).
 
 An editor for office files and more: spreadsheets, presentations, documents, Markdown, CSV, PDFs, pictures
 and videos, with a built-in AI assistant, and an MCP server so other agents can work on the same files. One
@@ -39,13 +39,13 @@ for). Read the part you are changing before you change it, and keep it up to dat
 
 ## Working on it
 
-- Checks: `npm run typecheck` and `npm test` (vitest). Both must pass before a change is finished.
-- Run the desktop app: `npm run desktop -- <folder>` (builds the client first). `node desktop/server.ts` with
+- Checks: `pnpm typecheck` and `pnpm test` (vitest). Both must pass before a change is finished.
+- Run the desktop app: `pnpm desktop -- <folder>` (builds the client first). `node desktop/server.ts` with
   `LOCAL_DIR`, `DATA_DIR` and `PORT` serves one folder to a browser, without Electron. Rebuilding the client
   (`npx vite build`) needs that server restarted.
 - Formatting: long lines (up to ~230) and single quotes. Do not run Prettier with its defaults over a file; it rewraps all of it.
 - Pushing to main deploys the hosted app (`.github/workflows/aws-deploy.yml`).
-- A desktop release: write `release-notes/<version>.md`, run `npm run release -- <version>` (sets every version,
+- A desktop release: write `release-notes/<version>.md`, run `pnpm release -- <version>` (sets every version,
   commits and tags `desktop-v<version>`), then `git push origin main desktop-v<version>`. The tag runs
   `.github/workflows/desktop-release.yml`: the Mac and Windows builds (their tests run on Windows too), the GitHub
   release and the installer on npm.
@@ -104,4 +104,4 @@ When a change is made by the assistant's coding job (see `server/agent/worker.ts
 - Do not modify `CHANGELOG.md` (the job writes it), `data/`, `.env*`, `server/auth.ts`, or anything under
   `server/agent/` other than `tools.ts` and `prompt.ts`.
 - Do not commit. The job commits, opens a pull request and merges it after the checks pass.
-- Run `npm run typecheck` and `npm test` and fix any failures before finishing.
+- Run `pnpm typecheck` and `pnpm test` and fix any failures before finishing.

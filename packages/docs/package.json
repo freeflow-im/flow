@@ -7,7 +7,7 @@
     "mcp-docs-dev": "desktop/cli.js"
   },
   "scripts": {
-    "dev": "concurrently -k -n server,client -c blue,green \"npm:dev:server\" \"npm:dev:client\"",
+    "dev": "concurrently -k -n server,client -c blue,green \"pnpm:dev:server\" \"pnpm:dev:client\"",
     "dev:server": "node --watch --watch-path=server --watch-path=shared server/index.ts",
     "dev:client": "vite",
     "build": "vite build && node scripts/prerender-landing.ts && vite build --config plugin/vite.config.ts",
@@ -78,16 +78,16 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@types/node": "^26.6.3",
+    "@types/node": "catalog:",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^6.1.1",
+    "@vitejs/plugin-react": "catalog:",
     "concurrently": "^10.0.5",
-    "electron": "^44.7.0",
+    "electron": "catalog:",
     "electron-builder": "^26.15.3",
-    "typescript": "^7.0.2",
-    "vite": "^8.3.1",
-    "vitest": "^5.0.2"
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
   },
   "overrides": {
     "uuid": "^11.1.1"

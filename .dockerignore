@@ -1,0 +1,18 @@
+# Context for packages/docs/deploy/aws/Dockerfile, built from the repository root.
+.git
+**/node_modules
+**/dist
+**/release
+**/.build
+**/build
+apps/ios/build
+apps/macos/.build
+packages/docs/data
+packages/server/.keys
+packages/server/.emails
+packages/server/.push
+packages/server/.files
+.qa
+*.log
+.env
+.env.*

@@ -45,11 +45,11 @@
   },
   "devDependencies": {
     "@flow/shared": "workspace:*",
-    "@types/node": "^22.10.0",
+    "@types/node": "catalog:",
     "@types/ws": "^8.5.13",
     "jszip": "3.10.1",
     "tsx": "^4.19.2",
-    "typescript": "^5.6.0",
-    "vitest": "^2.1.8"
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   }
 }

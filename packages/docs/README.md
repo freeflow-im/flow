@@ -143,12 +143,12 @@ The app's own data for a folder (the assistant's chats, pasted images, branch sn
 
 ```sh
 npm install
-npm run desktop                 # build the client, then open the current directory in the desktop app
-npm run desktop -- ~/Documents  # or a folder you name
+pnpm desktop                 # build the client, then open the current directory in the desktop app
+pnpm desktop -- ~/Documents  # or a folder you name
 npm link                        # once, to get the `mcp-docs-dev` command:
-cd ~/Documents && mcp-docs-dev  # open the directory you are in (after `npm run build`)
-npm test                        # vitest
-npm run typecheck
+cd ~/Documents && mcp-docs-dev  # open the directory you are in (after `pnpm build`)
+pnpm test                        # vitest
+pnpm typecheck
 ```
 
 Requires Node 22.18+. The server runs TypeScript directly through Node's built-in type stripping and uses the
@@ -160,16 +160,16 @@ folder it may not read shows a message saying so.
 
 ### Packaging and releases
 
-`npm run desktop:win` builds the Windows app with electron-builder into `release/`: its setup program (`MCP-Docs-<version>-win-x64-setup.exe`), for x64. It can be run on macOS; there the `.exe` keeps Electron's icon (the release, built on Windows, has the app's). It is not code-signed, so Windows shows its "unknown publisher" warning on first run. `npm run desktop:pack` builds the unpacked app for the machine it runs on, to try the packaged layout.
+`pnpm desktop:win` builds the Windows app with electron-builder into `release/`: its setup program (`MCP-Docs-<version>-win-x64-setup.exe`), for x64. It can be run on macOS; there the `.exe` keeps Electron's icon (the release, built on Windows, has the app's). It is not code-signed, so Windows shows its "unknown publisher" warning on first run. `pnpm desktop:pack` builds the unpacked app for the machine it runs on, to try the packaged layout.
 
 The packaged app holds the server's TypeScript as plain files (`asar` is off), which Electron's Node runs as it does in development. Started from its icon it reopens the folder it showed last, or opens your home folder the first time; a folder can also be given on its command line. It reads no `.env`.
 
-`npm run desktop:mac` builds the macOS app and its zip in `release/`. A release is made by GitHub Actions
+`pnpm desktop:mac` builds the macOS app and its zip in `release/`. A release is made by GitHub Actions
 (`.github/workflows/desktop-release.yml`):
 
 1. Write what is new in `release-notes/<version>.md` (a Markdown list; `release-notes/template.md` adds the install
    steps).
-2. `npm run release -- <version>` sets the version of the app, the Claude Code and Codex plugin (`claude-plugin/`), its
+2. `pnpm release -- <version>` sets the version of the app, the Claude Code and Codex plugin (`claude-plugin/`), its
    Claude marketplace entry (`.claude-plugin/marketplace.json`) and the installer (`installer/`, the `@freeflow-im/mcp-docs`
    npm package), commits that and tags it `desktop-v<version>`.
 3. `git push origin main desktop-v<version>`. The workflow checks and builds the app on Apple silicon and on Windows,
@@ -348,13 +348,13 @@ OAuth 2.0).
 
 ## Web version
 
-The same app runs as a web service with accounts (`npm run dev`, or `npm run build && npm start`), hosted as
+The same app runs as a web service with accounts (`pnpm dev`, or `pnpm build && pnpm start`), hosted as
 MCP Docs at mcpdocs.freeflow.im, where it is also a plugin for ChatGPT (`plugin/`, named Universal Docs there, at docs.freeflow.im). The desktop app
 shows it in its Web tabs (see Your web files).
 
 ```sh
-npm run dev        # API on :3001 and Vite on :5173; open http://localhost:5173
-npm run build && npm start   # production: serves dist/client and the API on :3001
+pnpm dev        # API on :3001 and Vite on :5173; open http://localhost:5173
+pnpm build && pnpm start   # production: serves dist/client and the API on :3001
 ```
 
 Users register and sign in with email and password (verified by an emailed link) or with Google.
@@ -387,7 +387,7 @@ Every job is a record of the change (request, the coding agent's summary, files,
 
 - **Local development**: the dev server restarts and Vite hot-reloads as files change. Without `GITHUB_TOKEN` the change is left uncommitted in the working tree for review.
 - **A failed job** (checks still failing after the fix rounds, the time limit, or the server not starting again with the change) puts back every file it changed, and rebuilds the client if it had rebuilt it, so nothing unverified is left for the next start to load.
-- **Production (AWS, `deploy/aws`)**: the app edits its own source in the container. The worker makes the source tree a git checkout of the deployed commit (`GIT_COMMIT_SHA`, set in the image), runs Claude Code, verifies, rebuilds the client (`npm run build`), asks the server to restart (`npm start` runs `server/supervise.ts`, which restarts it on exit code 75), then commits the job's files plus an entry in `CHANGELOG.md` on a branch, pushes it, opens a pull request and squash-merges it. The push to main then redeploys the same code. Needs `GITHUB_TOKEN` (a fine-grained token with Contents and Pull requests read/write on the repo) and `GITHUB_REPO=owner/name` (set by `deploy.sh`). The image (`deploy/aws/Dockerfile`) has git and keeps the dev dependencies.
+- **Production (AWS, `deploy/aws`)**: the app edits its own source in the container. The worker makes the source tree a git checkout of the deployed commit (`GIT_COMMIT_SHA`, set in the image), runs Claude Code, verifies, rebuilds the client (`pnpm build`), asks the server to restart (`pnpm start` runs `server/supervise.ts`, which restarts it on exit code 75), then commits the job's files plus an entry in `CHANGELOG.md` on a branch, pushes it, opens a pull request and squash-merges it. The push to main then redeploys the same code. Needs `GITHUB_TOKEN` (a fine-grained token with Contents and Pull requests read/write on the repo) and `GITHUB_REPO=owner/name` (set by `deploy.sh`). The image (`deploy/aws/Dockerfile`) has git and keeps the dev dependencies.
 
 ## Storage
 
@@ -396,7 +396,7 @@ Every job is a record of the change (request, the coding agent's summary, files,
 
 ### Backups (Cloudflare R2)
 
-With `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` and `CLOUDFLARE_ACCOUNT_ID` set (or `R2_ENDPOINT` for another S3-compatible store), every save also puts the file to the bucket as `users/<owner>/<kind>/<id>/<revision>.json`, so the bucket holds a history; images go up on upload and branch bases beside their branch (`server/backup.ts`). Uploads are queued and retried, so a save never fails because the bucket is down. Deleting a file writes a marker instead of removing the objects: the home page's **Trash** lists files deleted in the last 30 days and restores them. Once a day (and at `npm run r2 -- maintenance`) the server snapshots `app.db` and `plugin.db` into `backups/<date>/`, re-uploads anything the bucket lacks, prunes snapshots older than 30 days and purges files deleted more than 30 days ago. `npm run r2 -- restore <empty dir>` rebuilds a data directory from the bucket; `npm run r2 -- list [prefix]` shows what is there. Without the variables, nothing changes.
+With `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` and `CLOUDFLARE_ACCOUNT_ID` set (or `R2_ENDPOINT` for another S3-compatible store), every save also puts the file to the bucket as `users/<owner>/<kind>/<id>/<revision>.json`, so the bucket holds a history; images go up on upload and branch bases beside their branch (`server/backup.ts`). Uploads are queued and retried, so a save never fails because the bucket is down. Deleting a file writes a marker instead of removing the objects: the home page's **Trash** lists files deleted in the last 30 days and restores them. Once a day (and at `pnpm r2 -- maintenance`) the server snapshots `app.db` and `plugin.db` into `backups/<date>/`, re-uploads anything the bucket lacks, prunes snapshots older than 30 days and purges files deleted more than 30 days ago. `pnpm r2 -- restore <empty dir>` rebuilds a data directory from the bucket; `pnpm r2 -- list [prefix]` shows what is there. Without the variables, nothing changes.
 
 ### Export
 
