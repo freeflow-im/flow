@@ -212,9 +212,9 @@ final class ThreadSyncTests: XCTestCase {
         XCTAssertNotNil(try message(db, "r001"))
     }
 
-    // MARK: Key-less provider messages (#620)
+    // MARK: Key-less messages (#620)
 
-    /// Slack app/bot replies arrive with an empty `clientMsgId`. A live one
+    /// API and agent replies can arrive with an empty `clientMsgId`. A live one
     /// used to "reconcile" against every other key-less row in the channel —
     /// deleting the rest of the thread it was replying to.
     func testALiveKeylessReplyDeletesNoOtherKeylessMessage() async throws {
@@ -229,7 +229,7 @@ final class ThreadSyncTests: XCTestCase {
             body: "app reply", createdAt: "2026-08-24T00:00:02.000Z", editedAt: nil, deletedAt: nil,
             replyCount: 0, lastReplyAt: nil, pending: false
         )
-        await engine.apply(.threadReply(reply))
+        _ = await engine.applyServerMessage(reply)
 
         XCTAssertNotNil(try message(db, "m-root"), "a key-less reply deleted its own root")
         XCTAssertNotNil(try message(db, "r001"), "a key-less reply deleted its sibling")

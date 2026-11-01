@@ -222,7 +222,7 @@ struct MemberProfileSheet: View {
             }
             // "Invite to workspace" (#358) — never on your own card, since you
             // are already in every workspace of yours.
-            if let user, userId != app.currentUser?.id, !app.isProviderWorkspace {
+            if let user, userId != app.currentUser?.id {
                 inviteSection(user)
             }
             HStack {

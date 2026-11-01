@@ -23,9 +23,6 @@ final class ConnectionRuntime {
     let socket: SocketClient
     let db: AppDatabase
     let engine: SyncEngine
-    /// Non-nil for a provider other than Flow (#546): the engine routes the
-    /// chat core through it and never opens the Flow socket.
-    let backend: WorkspaceBackend?
 
     init(connection: ServerConnection, sessionScope: StorageScope, db: AppDatabase) {
         self.connection = connection
@@ -34,28 +31,10 @@ final class ConnectionRuntime {
         let origin = connection.canonicalOrigin
         let baseURL = origin?.url ?? connection.url
         self.api = APIClient(baseURL: baseURL)
-        // A Slack runtime's socket points at its own connector origin, and the
-        // engine never starts it — but it must not point at another server.
         self.socket = SocketClient(url: origin?.socketURL ?? Server.wsURL)
-        self.backend = ConnectionRuntime.makeBackend(connection: connection, sessionScope: sessionScope)
         self.engine = SyncEngine(
             db: db, api: api, socket: socket,
-            connectionId: connection.connectionId, scope: sessionScope, backend: backend
-        )
-    }
-
-    /// The provider adapter for a non-Flow connection. Credentials are read
-    /// from the session's Keychain slot on each use, never copied.
-    static func makeBackend(connection: ServerConnection, sessionScope: StorageScope) -> WorkspaceBackend? {
-        guard connection.provider == .slack, let origin = connection.canonicalOrigin else { return nil }
-        let parts = (try? JSONSerialization.jsonObject(with: Data(connection.providerIdentity.utf8))) as? [Any] ?? []
-        let teamId = parts.count > 2 ? parts[2] as? String ?? "" : ""
-        let userId = parts.count > 3 ? parts[3] as? String ?? "" : ""
-        let account = sessionScope.keychainAccount
-        return SlackBackend(
-            connectionId: connection.connectionId, origin: origin.url, teamId: teamId, userId: userId,
-            label: connection.label, granted: connection.capabilities,
-            credential: { Keychain.loadToken(account: account) }
+            connectionId: connection.connectionId, scope: sessionScope
         )
     }
 
@@ -277,32 +256,6 @@ final class ConnectionManager: ObservableObject {
         let connection = next.addFlowConnection(origin: origin)
         commit(next)
         return connection
-    }
-
-    /// Record a Slack team the connector just verified (#546) and store its
-    /// client session credential in the session's Keychain slot. Re-adding the
-    /// same team refreshes its label and capabilities and replaces the
-    /// credential; a different connector for the same team is refused.
-    func addSlack(connector: CanonicalOrigin, handoff: SlackBrowserSignIn.Handoff) throws -> ServerConnection {
-        guard let identity = handoff.identity, let credential = handoff.credential else { throw SlackBrowserSignIn.Failure.identity }
-        var next = registry
-        let connection = try next.addSlackConnection(
-            connectorOrigin: connector.origin, enterpriseId: identity.enterpriseId, teamId: identity.teamId, userId: identity.userId,
-            teamName: handoff.teamName ?? identity.teamId, userName: handoff.userName ?? identity.userId, capabilities: handoff.capabilities ?? [:]
-        )
-        commit(next)
-        if let session = next.session(connection.connectionId) {
-            Keychain.saveToken(credential, account: session.credentialRef)
-        }
-        // A refreshed record must reach a runtime built before it.
-        runtimes.removeValue(forKey: connection.connectionId)
-        appStates.removeValue(forKey: connection.connectionId)
-        return connection
-    }
-
-    /// Is this connection served by a provider other than Flow?
-    func isFlow(_ connectionId: String) -> Bool {
-        registry.connection(connectionId)?.provider == .flow
     }
 
     private func commit(_ registry: ConnectionRegistry) {

@@ -1,6 +1,6 @@
 import Foundation
 
-/// One workspace list across every connection: Flow servers and Slack teams
+/// One workspace list across every connection: every Flow server's workspaces
 /// side by side on the rail, in the sidebar's workspace menu and in the
 /// chooser — the native twin of `packages/web/src/lib/workspaceSwitcher.ts`.
 ///
@@ -21,7 +21,7 @@ struct SwitcherEntry: Identifiable, Equatable, Sendable {
     let role: String?
     let avatarUrl: String?
     let provider: ConnectionProvider
-    /// Where the workspace lives: the server's host name, or "Slack".
+    /// Where the workspace lives: the server's host name.
     let source: String
     let unread: Int
     /// Belongs to the connection this window is showing.
@@ -61,7 +61,7 @@ extension ConnectionRegistry {
             // A connection that needs signing in again is listed in Workspaces
             // & servers with that prompt; it has nothing to open from a menu.
             if !foreground && session?.status != .authenticated { continue }
-            let source = connection.provider == .slack ? "Slack" : (connection.canonicalOrigin?.label ?? connection.origin)
+            let source = connection.canonicalOrigin?.label ?? connection.origin
             let unread = unreadByWorkspace[connection.connectionId] ?? [:]
             let rows: [(id: String, name: String, slug: String?, role: String?, avatarUrl: String?, unread: Int?)]
             if foreground, let foregroundWorkspaces {
