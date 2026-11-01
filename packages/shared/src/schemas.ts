@@ -552,26 +552,6 @@ export const PatchMeBody = z
   );
 export type PatchMeBody = z.infer<typeof PatchMeBody>;
 
-// ---- Phase 4: Slack app compatibility ---------------------------
-/** Outgoing Events API types an app may subscribe to (operator ruling 5). */
-export const APP_EVENT_TYPES = [
-  'message.channels',
-  'message.groups',
-  'message.im',
-  'app_mention',
-  'reaction_added',
-  'reaction_removed',
-  'member_joined_channel',
-  'member_left_channel',
-  'channel_created',
-  'channel_archive',
-] as const;
-
-export const CreateAppBody = z.object({
-  name: z.string().min(1).max(80),
-});
-export type CreateAppBody = z.infer<typeof CreateAppBody>;
-
 // ---- First-class AI agents (AGENT_MEMBERS.md) -------------------
 /** Agent usernames: lowercase handle, 3-32 chars, letter/digit first. */
 export const AGENT_USERNAME_RE = /^[a-z0-9][a-z0-9._-]{2,31}$/;
@@ -597,14 +577,6 @@ export const AgentLoginBody = z.object({
   key: z.string().min(16).max(128),
 });
 export type AgentLoginBody = z.infer<typeof AgentLoginBody>;
-
-export const UpdateAppBody = z
-  .object({
-    eventUrl: z.string().url().max(500).nullable().optional(),
-    eventTypes: z.array(z.enum(APP_EVENT_TYPES)).max(APP_EVENT_TYPES.length).optional(),
-  })
-  .refine((b) => b.eventUrl !== undefined || b.eventTypes !== undefined, 'nothing to update');
-export type UpdateAppBody = z.infer<typeof UpdateAppBody>;
 
 // ---- artifacts (phase 13: per-channel shared) -------------------
 /** POST /v1/artifacts — pin a file as an artifact in a channel. Any member of

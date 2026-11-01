@@ -29,7 +29,6 @@ const auth = await import('../src/services/auth.js');
 const ws = await import('../src/services/workspaces.js');
 const ch = await import('../src/services/channels.js');
 const ag = await import('../src/services/agents.js');
-const ap = await import('../src/services/apps.js');
 const { eq, and } = await import('drizzle-orm');
 
 const { users, workspaceMembers, channelMembers, channels, agentInvites, agentTokens } = schema;
@@ -221,14 +220,13 @@ describe('agent token auth + login', () => {
 });
 
 describe('role guard', () => {
-  it('agents cannot create workspaces, invite, or manage apps; redeemed agents are always role member', async () => {
+  it('agents cannot create workspaces or invite; redeemed agents are always role member', async () => {
     const a = await registerAgent('GuardBot');
     const agentId = a.user.id;
     await expect(ws.createWorkspace(agentId, 'Agent WS', `agent-ws-${Date.now()}`)).rejects.toMatchObject({
       statusCode: 403,
     });
     await expect(ws.createInvite(workspaceId, agentId, 'x@example.test')).rejects.toMatchObject({ statusCode: 403 });
-    await expect(ap.listApps(workspaceId, agentId)).rejects.toMatchObject({ statusCode: 403 });
     const m = (
       await db
         .select()

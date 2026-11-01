@@ -277,7 +277,6 @@ describe('bus subject namespacing (#542)', () => {
     expect(bus.subjectHuddleAll()).toBe('staging.ws.*.chan.*.huddle');
     expect(bus.subjectPresenceSyncAll()).toBe('staging.presence.sync.*');
     expect(bus.subjectUserMeta('u')).toBe('staging.user.u.meta');
-    expect(bus.subjectAppSocketMode('a')).toBe('staging.app.a.socketmode');
   });
 
   it('refuses characters that would inject a wildcard or another subject token', () => {

@@ -1,5 +1,29 @@
 # Decision log
 
+## 2026-11-01 — FreeFlow: Flow and MCP Docs become one app (docs/specs/freeflow-suite.md)
+
+Operator rulings on the suite design, recorded in the spec's §0:
+
+- The suite is **FreeFlow**; its apps are **Workspace** (the editors from MCP
+  Docs, email later) and **Chat** (Flow). Flow is the host repo and server;
+  MCP Docs moves in as `packages/docs` and becomes a Fastify plugin.
+- Flow's workspaces are **organizations** in UI copy; code keeps the names.
+- One identity: Flow's users and sessions, carried as a bearer and, for the
+  Workspace app's URL-named files, as an httpOnly cookie on the same session.
+- The mark is MCP Docs' sheet mark and its blue; Chat's accent is re-pointed.
+- Workspace files are private by default; an organization gets a file only by
+  an explicit act. Existing MCP Docs files all migrate as private.
+- Everything runs on the AWS stack (Postgres and NATS join it); Railway is
+  retired. The assistant's self-modifying app-change jobs are retired.
+- **Both Slack systems leave Flow before the merge**: the Slack-compatible
+  API (this entry's PR) and the Slack connector (next). Mini apps stay. `/api`
+  is reserved for the Workspace API.
+- The ChatGPT plugin keeps its Universal Docs name and version 1 tools, served
+  by the suite at `docs.freeflow.im`; a FreeFlow plugin is a later submission.
+
+Bot users of removed Slack apps are tombstoned, not deleted: their messages
+reference them, and history outranks a clean `users` table.
+
 ## 2026-09-14 — Web composer dictation uses the browser recognizer (#594, from #593)
 
 - The web composer uses the browser's built-in SpeechRecognition API: no Flow

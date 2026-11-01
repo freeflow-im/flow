@@ -277,8 +277,9 @@ This file keeps two things:
   wired through `MessageListView`. `UserDTO.sponsorId` (shared) already carries
   the data.
 - iOS: the new channel drawer (2026-07-23) omits several sidebar affordances the
-  web + macOS sidebars carry — the workspace color picker and the Manage Users /
-  Manage Apps workspace-menu items. Channel context actions
+  web + macOS sidebars carry — the workspace color picker and the Manage Users
+  workspace-menu item (Manage Apps went with the Slack-compatible API,
+  2026-11-01). Channel context actions
   (mute/leave/archive) are also not yet wired on iOS. The drawer's structure
   makes these straightforward ports; none are backed on-device yet. (The "new
   DM" composer was closed 2026-08-16, #257 — sidebar "+" and a profile-card

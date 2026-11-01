@@ -47,7 +47,7 @@ const TEST_WINDOW_MS = 60_000;
  * tell the author this copy is not the broadcast. */
 export const TEST_SUBJECT_PREFIX = '[Test] ';
 
-/** Owner/admin gate, following the `requireAdmin` pattern in services/apps.ts. */
+/** Owner/admin gate. */
 async function requireAdmin(workspaceId: string, actorId: string) {
   const m = await requireMembership(workspaceId, actorId);
   if (m.role !== 'owner' && m.role !== 'admin') {

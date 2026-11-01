@@ -29,7 +29,7 @@ export const users = pgTable('users', {
   displayName: text('display_name').notNull(),
   avatarUrl: text('avatar_url'),
   timezone: text('timezone').notNull().default('UTC'),
-  isBot: boolean('is_bot').notNull().default(false), // phase 4: app bot users
+  isBot: boolean('is_bot').notNull().default(false), // bot users of the removed Slack-compatible API (migration 0047); kept for their rows
   isAgent: boolean('is_agent').notNull().default(false), // first-class AI agents (AGENTS_DESIGN.md)
   // Agents only (AGENT_MEMBERS.md): the human member responsible for the agent,
   // and the agent's durable credentials (username + argon2 key hash) — nulled
@@ -471,51 +471,6 @@ export const agentTokens = pgTable(
   (t) => [index('agent_tokens_user_idx').on(t.userId)],
 );
 
-// ---- Phase 4: Slack app compatibility ---------------------------
-
-export const apps = pgTable(
-  'apps',
-  {
-    id: uuid('id').primaryKey(),
-    workspaceId: uuid('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
-    name: text('name').notNull(),
-    botUserId: uuid('bot_user_id').notNull().references(() => users.id),
-    botTokenHash: bytea('bot_token_hash').notNull().unique(),
-    appTokenHash: bytea('app_token_hash').unique(), // xapp- token (Socket Mode); null = HTTP-events only
-    // Raw tokens, viewable in Manage Apps (ui_nits; PM ruling pending operator
-    // review). NULL on apps created before 0011 — hash can't be reversed.
-    botToken: text('bot_token'),
-    appToken: text('app_token'),
-    signingSecret: text('signing_secret').notNull(),
-    eventUrl: text('event_url'),
-    eventUrlVerifiedAt: timestamp('event_url_verified_at', { withTimezone: true }),
-    eventTypes: text('event_types').array().notNull().default([]),
-    createdBy: uuid('created_by').notNull().references(() => users.id),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-    disabledAt: timestamp('disabled_at', { withTimezone: true }),
-  },
-  (t) => [index('apps_workspace_idx').on(t.workspaceId)],
-);
-
-/** Events API outbox (decision log 2026-07-18 ruling 3). */
-export const pendingAppEvents = pgTable(
-  'pending_app_events',
-  {
-    id: uuid('id').primaryKey(),
-    appId: uuid('app_id').notNull().references(() => apps.id, { onDelete: 'cascade' }),
-    eventType: text('event_type').notNull(),
-    payload: jsonb('payload').notNull(),
-    attempts: integer('attempts').notNull().default(0),
-    nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }).notNull().defaultNow(),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-    deliveredAt: timestamp('delivered_at', { withTimezone: true }),
-    failedAt: timestamp('failed_at', { withTimezone: true }),
-  },
-  (t) => [
-    index('pending_app_events_due').on(t.nextAttemptAt).where(sql`delivered_at IS NULL AND failed_at IS NULL`),
-  ],
-);
-
 // ---- Phase 11: URL unfurling (docs/specs/phase11.md) ----------------
 
 /** §7 cache, keyed by sha256 of the normalized URL. Holds negative entries
@@ -601,14 +556,6 @@ export const rateLimitWindows = pgTable('rate_limit_windows', {
   key: text('key').primaryKey(),
   windowStart: timestamp('window_start', { withTimezone: true }).notNull().defaultNow(),
   count: integer('count').notNull().default(1),
-});
-
-/** Phase 18 M3: one-time Socket Mode connection tickets, DB-backed so mint
- * and redeem may happen on different replicas (see gateway/socketMode.ts). */
-export const appSocketTickets = pgTable('app_socket_tickets', {
-  tokenHash: bytea('token_hash').primaryKey(),
-  appId: uuid('app_id').notNull().references(() => apps.id, { onDelete: 'cascade' }),
-  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
 });
 
 /**
