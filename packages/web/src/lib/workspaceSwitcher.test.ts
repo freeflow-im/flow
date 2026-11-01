@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { emptyRegistry, type ConnectionRegistry, type ServerConnection, type ServerSession } from './connections';
 import { showsSource, switcherEntries, syncedBindings } from './workspaceSwitcher';
 
-const connection = (connectionId: string, provider: 'flow' | 'slack', origin: string): ServerConnection => ({
-  connectionId, provider, origin, providerIdentity: origin, label: origin, apiVersion: 1, capabilities: {}, addedAt: '2026-09-15T00:00:00Z',
+const connection = (connectionId: string, origin: string): ServerConnection => ({
+  connectionId, provider: 'flow', origin, providerIdentity: origin, label: origin, apiVersion: 1, capabilities: {}, addedAt: '2026-09-15T00:00:00Z',
 });
 const session = (connectionId: string, userId: string, status: ServerSession['status'] = 'authenticated'): ServerSession => ({
   connectionId, userId, status, credentialRef: `flow.${connectionId}.token`, storageKey: connectionId, authGeneration: 0,
@@ -13,14 +13,14 @@ function registry(): ConnectionRegistry {
   return {
     ...emptyRegistry(),
     connections: [
-      connection('home', 'flow', 'https://app.freeflow.im'),
-      connection('slack', 'slack', 'https://slack.freeflow.im'),
-      connection('other', 'flow', 'https://flow.example.com'),
+      connection('home', 'https://app.freeflow.im'),
+      connection('team', 'https://flow.coderbots.example'),
+      connection('other', 'https://flow.example.com'),
     ],
-    sessions: [session('home', 'u1'), session('slack', 'U1'), session('other', 'u9')],
+    sessions: [session('home', 'u1'), session('team', 'u5'), session('other', 'u9')],
     bindings: [
       { connectionId: 'home', userId: 'u1', workspaceId: 'stale', name: 'Stale binding' },
-      { connectionId: 'slack', userId: 'U1', workspaceId: 'T1', name: 'Coderbots' },
+      { connectionId: 'team', userId: 'u5', workspaceId: 'T1', name: 'Coderbots' },
       { connectionId: 'other', userId: 'u9', workspaceId: 'w9', name: 'Partner' },
       { connectionId: 'other', userId: 'u9', workspaceId: 'hid', name: 'Hidden', hidden: true },
     ],
@@ -28,17 +28,17 @@ function registry(): ConnectionRegistry {
 }
 
 describe('switcherEntries', () => {
-  it('lists Slack teams and other servers alongside the foreground workspaces', () => {
+  it('lists other servers alongside the foreground workspaces', () => {
     const entries = switcherEntries(registry(), 'home', [{ id: 'w1', name: 'Flow Home' }]);
     expect(entries.map(e => [e.name, e.source, e.foreground])).toEqual([
       ['Flow Home', 'app.freeflow.im', true],
-      ['Coderbots', 'Slack', false],
+      ['Coderbots', 'flow.coderbots.example', false],
       ['Partner', 'flow.example.com', false],
     ]);
   });
 
   it('uses bindings for the foreground connection until its live list loads', () => {
-    const entries = switcherEntries(registry(), 'slack', undefined);
+    const entries = switcherEntries(registry(), 'team', undefined);
     expect(entries.find(e => e.foreground)?.name).toBe('Coderbots');
     expect(entries.map(e => e.name)).toContain('Stale binding');
   });
@@ -46,7 +46,7 @@ describe('switcherEntries', () => {
   it('leaves out connections that need signing in again', () => {
     const r = registry();
     r.sessions = r.sessions.map(s => s.connectionId === 'other' ? { ...s, status: 'unauthorized' } : s);
-    expect(switcherEntries(r, 'home', []).map(e => e.connectionId)).toEqual(['slack']);
+    expect(switcherEntries(r, 'home', []).map(e => e.connectionId)).toEqual(['team']);
   });
 
   it('carries unread counts from background sync', () => {
@@ -69,7 +69,7 @@ describe('syncedBindings', () => {
     // Other connections' bindings are untouched.
     expect(next.filter(b => b.connectionId !== 'home')).toEqual(registry().bindings.filter(b => b.connectionId !== 'home'));
     const r = { ...registry(), bindings: next };
-    expect(switcherEntries(r, 'slack', undefined).find(e => e.workspaceId === 'w1')?.avatarUrl).toBe('/v1/files/a1');
+    expect(switcherEntries(r, 'team', undefined).find(e => e.workspaceId === 'w1')?.avatarUrl).toBe('/v1/files/a1');
   });
 
   it('keeps a hidden workspace hidden and reports no change when nothing moved', () => {

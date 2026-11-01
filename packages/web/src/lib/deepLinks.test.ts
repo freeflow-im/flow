@@ -14,10 +14,10 @@ describe('parseDeepLink', () => {
     expect(parseDeepLink('flow://signin?code=abc&state=s1')).toEqual({ kind: 'signin-code', code: 'abc' });
     expect(parseDeepLink('flow://signin')).toEqual({ kind: 'unknown', url: 'flow://signin' });
   });
-  it('parses invites and Slack returns, and refuses other schemes and shapes', () => {
+  it('parses invites, and refuses other schemes and shapes', () => {
     expect(parseDeepLink('flow://invite/tok_123-x')).toEqual({ kind: 'invite', token: 'tok_123-x' });
     expect(parseDeepLink('flow://invite/')).toEqual({ kind: 'unknown', url: 'flow://invite/' });
-    expect(parseDeepLink('flow://slack/connected?operationId=op9')).toEqual({ kind: 'slack-connected', operationId: 'op9' });
+    expect(parseDeepLink('flow://slack/connected?operationId=op9')).toEqual({ kind: 'unknown', url: 'flow://slack/connected?operationId=op9' });
     expect(parseDeepLink('https://app.freeflow.im/invite/tok')).toEqual({ kind: 'unknown', url: 'https://app.freeflow.im/invite/tok' });
     expect(parseDeepLink('flow://signin/extra?code=abc')).toEqual({ kind: 'unknown', url: 'flow://signin/extra?code=abc' });
     expect(parseDeepLink('not a url')).toEqual({ kind: 'unknown', url: 'not a url' });

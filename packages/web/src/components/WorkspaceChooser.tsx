@@ -6,7 +6,6 @@ import { api } from '../lib/api';
 import { useAuth, useSelection } from '../state';
 import { useSelfRegisterDomain, useSwitcherEntries, useWorkspaceInvites, useWorkspaces } from '../hooks';
 import { openWorkspace, showsSource } from '../lib/workspaceSwitcher';
-import { useIsFlow } from '../lib/backend';
 import { EMPTY_SLUG_FIELD, slugEdited, slugForName } from '../lib/slugify';
 import { OpenInAppButton } from './OpenInApp';
 import { AuthImg } from './Avatar';
@@ -18,15 +17,13 @@ export default function WorkspaceChooser() {
   const sel = useSelection();
   const qc = useQueryClient();
   const workspaces = useWorkspaces();
-  // Workspaces on the other connections — Flow servers and Slack teams — so
-  // this screen answers "which workspace?" across all of them.
+  // Workspaces on the other connections (other Flow servers), so this screen
+  // answers "which workspace?" across all of them.
   const switcher = useSwitcherEntries();
   const elsewhere = switcher.filter((e) => !e.foreground);
   const labelSources = showsSource(switcher);
   const foreground = switcher.find((e) => e.foreground);
-  // A Slack team's slug is its team id, which means nothing to a person.
-  const subtitle = (slug: string) => foreground?.provider === 'slack' ? foreground.source
-    : labelSources && foreground ? `${slug} · ${foreground.source}` : slug;
+  const subtitle = (slug: string) => labelSources && foreground ? `${slug} · ${foreground.source}` : slug;
   // Invitations someone sent me from my profile popup (#359). They live here,
   // above the workspaces I'm already in, because this screen is exactly the
   // question they answer: which workspace do I go to?
@@ -45,9 +42,6 @@ export default function WorkspaceChooser() {
   const [openToDomain, setOpenToDomain] = useState(false);
   const [inviteToken, setInviteToken] = useState('');
   const [error, setError] = useState<string | null>(null);
-  // Creating or joining workspaces is a Flow account act; a Slack connection
-  // has exactly the team it was authorized for (#545).
-  const isFlow = useIsFlow();
 
   const create = async () => {
     setError(null);
@@ -179,19 +173,19 @@ export default function WorkspaceChooser() {
         ))}
       </div>
       <div className="flex gap-2">
-        {isFlow && <button
+        <button
           className="rounded border border-hairline2 bg-white px-3 py-1.5 text-sm hover:bg-daypill"
           onClick={() => { setShowCreate((v) => !v); setShowAccept(false); }}
         >
           Create Workspace…
-        </button>}
-        {isFlow && <button
+        </button>
+        <button
           data-testid="accept-invite-toggle"
           className="rounded border border-hairline2 bg-white px-3 py-1.5 text-sm hover:bg-daypill"
           onClick={() => { setShowAccept((v) => !v); setShowCreate(false); }}
         >
           Accept Invite…
-        </button>}
+        </button>
         {/* No workspace is selected here, so there is no sidebar menu to
             hold the switcher (#565). */}
         <button

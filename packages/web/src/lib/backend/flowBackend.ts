@@ -6,7 +6,7 @@
 // Live updates: the Flow socket carries far more than chat (artifacts, huddles,
 // notifications, presence), and Main.tsx keeps owning that socket. This
 // backend's `subscribe` is therefore a no-op for Flow; the normalized stream
-// exists for providers whose only feed is chat (see slackBackend.ts).
+// exists for a backend whose only feed is chat.
 import {
   BackendError, allSupported, unavailable,
   type BackendAuthState, type BackendChannel, type BackendEventHandler, type BackendMessage, type Capabilities,

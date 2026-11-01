@@ -281,7 +281,7 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
       }
       try {
         // Whichever provider this connection speaks, its backend answers "who
-        // am I" (#545); a Slack team synthesizes the user from its grant.
+        // am I" (#545).
         const me = await backendFor(runtime).me();
         connectionManager().bindIdentity(runtime.connectionId, me.id);
         setUser(me);

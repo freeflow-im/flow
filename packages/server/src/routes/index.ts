@@ -154,9 +154,6 @@ export function registerRoutes(app: FastifyInstance): void {
       displayName: config.serverDisplayName,
       authMethods: ['password', 'email-link', ...(config.googleEnabled ? ['google'] : []), ...(config.appleEnabled ? ['apple'] : [])],
       registrationAvailable: config.registrationEnabled,
-      // Where this deployment's Slack teams connect (#546). Null means Slack
-      // is not offered here; a client with its own build-time value wins.
-      slackConnectorOrigin: config.slackConnectorOrigin,
       capabilities: {
         browserConnections: true,
         authHandoff: config.handoffReturnUrls.length > 0,

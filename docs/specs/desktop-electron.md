@@ -17,7 +17,7 @@ huddles. It ships from one code base for all three operating systems.
 
 The app is an Electron shell around the existing web client in
 `packages/web`. The web client already has nearly everything the macOS app
-has (multi-server connections, Slack, huddles, artifacts, find bar, activity
+has (multi-server connections, huddles, artifacts, find bar, activity
 feed, notification preferences). What it lacks is the operating system: a
 window that outlives the tab, a place to keep a token safely, banners that
 open the right window, a badge, a URL scheme, an updater. That is what the
@@ -65,8 +65,8 @@ accepted.
 - First launch shows the same sign-in screen as the web client, pointed at
   the bundled default server (`https://app.freeflow.im`, or `FLOW_SERVER_URL`
   at build time, exactly as `apps/macos/tools/make-app.sh` bakes it).
-- Email + password signs in inside the app. **Continue with Google**, **sign
-  in to another Flow server** (PKCE) and **Connect Slack** all open the
+- Email + password signs in inside the app. **Continue with Google** and **sign
+  in to another Flow server** (PKCE) both open the
   *system browser* and return through `flow://` links, the same handoff the
   macOS app uses. Google blocks its sign-in inside embedded browsers, so this
   is required, not a preference. Registration and password reset work inside
@@ -299,8 +299,8 @@ for secrets, a no-op deep-link listener. That keeps every call site free of
    focus gate. `persistentBanners` hidden on desktop.
 5. Badge: after every `notification.read` and each refresh, call
    `host.badge.set(total)`; re-ask on focus.
-6. Auth: when the host is a desktop, Google, PKCE and Slack sign-in open the
-   system browser with `returnUrl: flow://signin` / `flow://slack`, and the
+6. Auth: when the host is a desktop, Google and PKCE sign-in open the
+   system browser with `returnUrl: flow://signin`, and the
    deep-link listener completes them through the existing
    `/v1/auth/app-link/exchange` and handoff paths. `NativeSignIn.tsx` already
    produces the code; `authHandoff.ts` already consumes it.
@@ -422,7 +422,7 @@ user-visible on web or macOS until stated.
   state restore; app menu with Edit roles; context menu and spell-check;
   external links; single instance; `flow://` registration and deep links;
   profiles; dev script that points at the local server.
-- Google, PKCE and Slack sign-in through the system browser and back.
+- Google and PKCE sign-in through the system browser and back.
 - Runs on all three OSes from source. No installer yet.
 
 ### M3 — Notifications, badge, tray `[desktop]` `[web]`

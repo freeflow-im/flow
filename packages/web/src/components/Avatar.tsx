@@ -87,7 +87,7 @@ export function AuthImg({
   useEffect(() => {
     let alive = true;
     setFailed(false);
-    // An absolute URL is another origin's public image (a Slack avatar): hand
+    // An absolute URL is another origin's public image: hand
     // it to the element as-is. The authenticated blob path is for our backend
     // only — it must never carry a bearer to a foreign origin.
     if (/^https?:\/\//.test(path)) { setUrl(path); return; }

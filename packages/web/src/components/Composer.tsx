@@ -60,7 +60,7 @@ export default function Composer({
   const send = useSendMessage(channelId);
   const edit = useEditMessage();
   // Capability gating (#545): a control whose capability is unavailable is not
-  // rendered, so it can never fall through to a Flow mutation on a Slack team.
+  // rendered, so it can never fall through to a mutation the server refuses.
   const caps = useCapabilities();
   // Mention-of-non-member CTA (Slack semantics): after sending an @mention of
   // someone outside a standard channel, offer to add them.
@@ -369,7 +369,7 @@ export default function Composer({
     for (const file of Array.from(files)) {
       setUploading((v) => v + 1);
       try {
-        // Through the backend: a Slack workspace uploads to Slack, never a Flow server.
+        // Through the backend, which knows which server this channel lives on.
         const dto = await backend.uploadFile({ workspaceId: sel.workspaceId, channelId }, file);
         setAttachments((prev) => (prev.length < 10 ? [...prev, dto] : prev));
       } catch (err) {

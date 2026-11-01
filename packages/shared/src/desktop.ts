@@ -2,8 +2,7 @@
 //
 // The desktop app bundles the web client and serves it from a privileged
 // custom scheme, so every request it makes carries `Origin: app://flow`. The
-// server and the Slack connector accept that origin as a client that is
-// neither a browser page (it has no hostile-page threat model) nor a native
+// server accepts that origin as a client that is neither a browser page (it has no hostile-page threat model) nor a native
 // app (it does send an Origin, and Chromium enforces CORS on the answer).
 //
 // `FlowDesktopBridge` is what the shell's preload exposes to the renderer as

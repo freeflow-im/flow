@@ -33,8 +33,6 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
-    "@slack/socket-mode": "^3.0.0",
-    "@slack/web-api": "^8.0.0",
     "@types/node": "^22.10.0",
     "@types/sanitize-html": "^2.16.1",
     "@types/ws": "^8.5.13",

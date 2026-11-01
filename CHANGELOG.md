@@ -12,7 +12,7 @@ This file keeps two things:
 
 ## Parity
 
-- Slack chat (#545, #546) is on web, macOS and iOS: Connect Slack, channels, DMs, limited history, threads, send/edit/delete, live updates, capability gating. Two deliberate platform constraints remain: **Slack alerts reach a client only while it is open** on every platform (no connector→push route exists; design recorded in `docs/dev/SLACK_CONNECTOR.md`), and **the iOS share extension sends text only** to a Slack team (the apps upload files to Slack since the connector gained `files:write`; the extension still uses its own Flow presign path — a gap to close). The agent bridge has no Slack backend, by design: it speaks to one Flow server per process.
+- **Slack connections are removed from web (2026-11-01, FreeFlow suite §2.0); macOS and iOS still carry the Slack provider until their own removal PRs land.** Gap to close, not a divergence to keep.
 - Multi-server huddles (#541): web leaves the room when switching server; native keeps it running with a return control. Both limit the client to one joined room.
 - Web composer dictation (#594) is browser-web only, by design: it wraps the browser's SpeechRecognition API, while macOS and iOS already get system dictation in their text fields (Fn-Fn / keyboard mic). **The desktop (Electron) app hides the mic button**: Electron's Chromium exposes the API but has no speech service behind it, and macOS/Windows system dictation works in its text fields anyway. Native in-app dictation would need separate Speech framework work, and no ticket asks for it.
 - Background sync across connected servers (#542) is web + macOS, by design: iOS keeps its foreground/background lifecycle and push when suspended, and the spec promises no continuously running background sockets there. That is why the iOS aggregate badge is a client-side sum reconciled on foreground, with no exact icon badge while suspended.
@@ -37,7 +37,7 @@ This file keeps two things:
   Google through the system browser, credentials in the OS store, and the
   channel name as a banner subtitle (#460).
 - **One workspace list across connections is not on iOS.** Web and macOS list
-  every connection's workspaces (Slack teams and other servers) on the rail, in
+  every connection's workspaces (other servers) on the rail, in
   the sidebar menu and in the chooser; the iOS drawer still shows only the
   foreground connection's.
 - **The channel Docs list is searchable and collapsible on web only** (#574).
@@ -177,8 +177,7 @@ This file keeps two things:
   the literal text `:shortcode:` rather than the image. The reaction itself is
   correct everywhere (count, who reacted, notifications) — only the glyph is
   missing. Each client needs to fetch `GET /v1/workspaces/:id/emoji` and swap in
-  the image (the Slack connector serves the same route, so one port covers
-  Slack teams too). Custom emoji inline in *message text* are web-only as well.
+  the image. Custom emoji inline in *message text* are web-only as well.
 - Emoji inside message text draw at 1.4x the text size on web only (Slack's
   look); macOS and iOS still draw them at text size.
 - Scroll-position memory exists on no client: leaving a channel mid-history and
@@ -529,7 +528,6 @@ This file keeps two things:
 - iOS message actions: long-press context menu (no hover on touch).
 - Link cursor (#81) and hover-menu tooltips (#110): macOS only. The browser
   gives web both for free, and touch has neither a cursor nor hover.
-- App management UI (Slack-compat apps): web only.
 - Agent-skill download link on the logged-out home: web only — the native
   clients link out to the web for the whole signed-out/auth surface (see the
   in-app-registration divergence in Gaps), so the skill CTA lives there too.

@@ -360,38 +360,6 @@ Phase-3.5 additions (run as part of WEB smoke once those features land):
     NOTE: the composer is now a contenteditable element (still testid
     `composer-input`) — type via keyboard events/insertText, not .value.
 
-Phase-4 addition (WEB smoke item 19 — Slack app admin UI, web-only feature):
-19. Apps admin: `menu-apps` must be ABSENT for bob (non-admin). Then open a
-    SECOND tab signed in as alice (explicitly permitted for admin-only UI
-    items: browser sessions are independent of her macOS Keychain profile —
-    do not sign alice out, just log in) → workspace menu → `menu-apps` →
-    `apps-modal`: create app "web-<runid>-app" via `app-create-name`/`-submit`
-    → `app-token` shows a copyable xoxb- token (shown once). Start the
-    external-bot receiver: get the signing secret via
-    `docker exec flow-postgres psql -U flow -d flow -t -A -c "SELECT
-    signing_secret FROM apps WHERE name='web-<runid>-app'"`, then
-    `node packages/server/scripts/qa-slackbot.mjs listen --port 8899 --secret
-    $SECRET --events /tmp/qa/<runid>-appevents.jsonl &`. In the modal set
-    event URL http://127.0.0.1:8899/ + check message.channels → `app-save-…`
-    → `app-verified-…` flips data-verified=true. Bob (browser tab 1) posts in
-    #general → grep an event_callback with that text in the events file
-    (signed: no `"sig_ok": false` lines). `app-disable-…` → curl
-    /api/auth.test with the token → invalid_auth. Close alice's tab when done.
-    CAVEAT (learned in w689912): the web client keeps ONE token in
-    localStorage['flow.token'] shared across same-origin tabs — signing
-    alice in makes bob's tab call the API as alice. Sequence around it (do
-    bob-side actions before/after the alice segment, or swap the stored token
-    for the specific call and restore it, verifying actor ids in evidence).
-    Also: form_input on React checkboxes doesn't reach component state — use a
-    real click; the JS bridge redacts xoxb tokens — read them from screenshots.
-
-Phase-4 suites (run before UI tiers, no desktop needed):
-`bash packages/server/scripts/smoke4.sh` (24 checks: envelopes, ts round-trip,
-mrkdwn, reactions errors, threads, DM upsert, events delivery incl. challenge
-+ echo suppression) and `node packages/server/scripts/slack-sdk-check.mjs
---token <xoxb-…>` (real @slack/web-api client, 10 steps). qa-slackbot.mjs
-supports `--fail N` to exercise outbox retries.
-
 Post-retheme layout notes ("Quiet, in violet"): a 64px workspace rail exists
 (`rail-workspace-<slug>`, `rail-add-workspace`); the notifications bell lives in
 the CHANNEL header now; `sidebar-new-dm` is the `+` in the **Direct messages**

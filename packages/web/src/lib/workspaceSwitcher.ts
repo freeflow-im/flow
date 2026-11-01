@@ -1,4 +1,4 @@
-// One workspace list across every connection: Flow servers and Slack teams
+// One workspace list across every connection: every Flow server's workspaces
 // side by side in the sidebar menu, the chooser and Workspaces & servers.
 // The foreground connection contributes its live list; every other connection
 // contributes the workspaces bound to it in the registry, which is what the
@@ -14,7 +14,7 @@ export interface SwitcherEntry {
   name: string;
   avatarUrl: string | null;
   provider: ConnectionProvider;
-  /** Where the workspace lives: the server's host name, or "Slack". */
+  /** Where the workspace lives: the server's host name. */
   source: string;
   unread: number;
   /** Belongs to the connection this window is showing. */
@@ -34,7 +34,7 @@ export function switcherEntries(
     // A connection that needs signing in again is listed in Workspaces &
     // servers with that prompt; it has nothing to open from a menu.
     if (!foreground && session?.status !== 'authenticated') continue;
-    const source = connection.provider === 'slack' ? 'Slack' : originLabel(connection.origin);
+    const source = originLabel(connection.origin);
     const unreadByWorkspace = syncStates.find(s => s.connectionId === connection.connectionId)?.unreadByWorkspace ?? {};
     const workspaces = foreground && foregroundWorkspaces
       ? foregroundWorkspaces

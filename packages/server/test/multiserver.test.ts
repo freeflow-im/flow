@@ -62,16 +62,7 @@ describe('browser contract', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ protocolVersion: 1, authMethods: ['password', 'email-link'], registrationAvailable: true,
       capabilities: { browserConnections: true, authHandoff: true, push: false, pushRouting: true } });
-    expect(Object.keys(res.json()).sort()).toEqual(['authMethods', 'capabilities', 'displayName', 'protocolVersion', 'registrationAvailable', 'slackConnectorOrigin']);
-    // Advertised so a native client can connect Slack without the origin baked
-    // into its build; null (not absent) where this deployment offers no connector.
-    expect(res.json().slackConnectorOrigin).toBeNull();
-    try {
-      process.env.SLACK_CONNECTOR_ORIGIN = 'https://slack.example.test/';
-      expect((await app.inject({ url: '/v1/client-info', headers: { origin } })).json().slackConnectorOrigin).toBe('https://slack.example.test');
-      process.env.SLACK_CONNECTOR_ORIGIN = 'http://slack.example.test';
-      expect((await app.inject({ url: '/v1/client-info', headers: { origin } })).json().slackConnectorOrigin).toBeNull();
-    } finally { delete process.env.SLACK_CONNECTOR_ORIGIN; }
+    expect(Object.keys(res.json()).sort()).toEqual(['authMethods', 'capabilities', 'displayName', 'protocolVersion', 'registrationAvailable']);
     expect(res.headers['access-control-allow-origin']).toBe(origin);
     expect(res.headers.vary).toContain('Origin');
   });

@@ -5,10 +5,10 @@ Platforms: web, macOS, iOS
 
 ## Outcome and scope
 
-A person can add a workspace hosted on another Flow backend or on Slack,
-authenticate with that provider, and use it alongside existing workspaces in the
-same client. Slack support includes OAuth and an explicit workstream to decode
-and implement its internal client communications protocol.
+A person can add a workspace hosted on another Flow backend, authenticate with
+that server, and use it alongside existing workspaces in the same client.
+(Slack workspaces were part of this proposal until 2026-11-01; the Slack
+provider was removed for the FreeFlow suite, docs/specs/freeflow-suite.md §2.0.)
 Switching workspaces automatically selects the owning backend and identity.
 Signing out of or losing connectivity to one backend does not affect others.
 
@@ -22,8 +22,7 @@ all three clients. The remaining decisions below are proposed defaults, subject
 to product review; this document does not describe shipped functionality.
 
 V1 supports one signed-in account per Flow server per client profile, and multiple
-selected workspaces from that account. Slack supports one account per Slack team
-per profile, with independent connections to multiple teams. It does not federate servers, move existing
+selected workspaces from that account. It does not federate servers, move existing
 workspaces, merge identities, share membership, or provide cross-server search
 or DMs. Adding a workspace means connecting to its existing host, not changing
 where the workspace's data lives. Connection settings are local to each device
@@ -36,9 +35,9 @@ server hostname and signed-in account visible in each group. Duplicate workspace
 names remain distinguishable. Each workspace shows its own unread indicator;
 each server group can show Offline or Sign in required.
 
-**Add workspace** offers the current server's workspaces, **Connect another Flow
-server**, and **Connect Slack**. Slack follows the provider flow below. The Flow
-server option accepts a server URL or Flow workspace invite URL:
+**Add workspace** offers the current server's workspaces and **Connect another
+Flow server**. The Flow server option accepts a server URL or Flow workspace
+invite URL:
 
 1. Normalize the address and check that it is a compatible Flow backend.
 2. Display the destination hostname before asking for credentials. Backend names
@@ -81,7 +80,7 @@ Persist a versioned connection registry, without embedding credentials:
 
 | Record | Required fields |
 | --- | --- |
-| ServerConnection | local connectionId, provider (`flow` or `slack`), provider identity, canonical origin/transport endpoint, display label, API/capability version |
+| ServerConnection | local connectionId, provider (`flow`), provider identity, canonical origin/transport endpoint, display label, API/capability version |
 | ServerSession | connectionId, server-issued userId, credential reference, auth generation, status |
 | WorkspaceBinding | connectionId, userId, workspaceId, cached name, local visibility/order |
 | NavigationTarget | connectionId, userId, workspaceId, optional channel/message/thread/artifact ids |
@@ -182,7 +181,7 @@ on the issuing server. Clean callback codes from browser history after handling.
 ## Notifications and native extensions
 
 For Flow providers, register each device with each authenticated backend separately.
-Slack notification transport and registrations are specified in its provider section. Registration
+Registration
 includes an opaque client-generated routing identifier unique to that connection
 and identity; backend pushes echo it. Map it locally rather than accepting a
 push-supplied URL. Unknown/removed identifiers cannot add connections or navigate.
@@ -205,239 +204,6 @@ attachment downloads, deep links, and native windows for the same assumption.
 Custom servers without configured APNs delivery advertise that limitation; the
 client does not promise background notifications for them. Sharing production APNs
 credentials with arbitrary backend operators is outside this feature.
-
-## Slack provider
-
-### Product contract
-
-Slack workspaces appear in the same switcher as Flow workspaces, labeled Slack,
-with workspace name/domain and signed-in Slack identity. Connecting Slack does not
-create a mirrored Flow workspace or import its members as Flow accounts. Slack
-remains authoritative for content, membership, retention, and permissions.
-
-**Connect Slack** opens Slack's authorization UI in a browser; optionally accept a
-workspace URL as a hint. After authorization, validate the actual team and user
-returned, show them, then add the workspace. A hint is not proof of which team was
-authorized. Handle workspace app approval, denied consent, canceled login, expired
-credentials, and missing permissions as distinct states. Never ask the user to
-enter their Slack password into a Flow form. Signing out disconnects Flow's Slack
-session; it does not globally sign the user out of Slack or uninstall a shared app.
-
-The initial target is everyday chat: channel/DM lists, history, threads, sending
-as the authenticated user, edits/deletes permitted by Slack, reactions, attachments,
-and live updates. Search, unread synchronization, typing, presence, and notifications
-must have individually verified capabilities. Slack huddles, calls, canvases,
-workflows, administration, and interactive app blocks may open in Slack until an
-adapter implementation is validated. Do not display Flow-only controls such as
-agent invitations or mini-app identity minting in a Slack workspace.
-
-OAuth integration and internal-protocol compatibility are both in scope. A working
-public-API subset is an incremental milestone, not completion of the internal
-protocol workstream. Full Slack-client parity is not presumed by this draft.
-
-### Provider abstraction and identity
-
-Introduce a WorkspaceBackend interface implemented by FlowBackend and SlackBackend.
-It exposes authentication state, capabilities, workspace/conversation listing,
-history and thread pagination, mutations, media, search, read state, and a normalized
-event stream. UI components consume it rather than constructing Flow REST paths.
-SlackBackend has separate public-API and internal-protocol transports behind the
-same interface; protocol-specific payloads stay out of shared UI models.
-
-A Slack provider identity is `(environment, enterpriseId?, teamId, userId)`; persist
-installation/grant identifiers separately. Use immutable IDs returned by Slack,
-not workspace domain or email. Multiple teams at `slack.com` must not deduplicate
-into one connection. An enterprise grant does not automatically authorize every
-team; bind only verified accessible teams. V1 targets standard Slack; GovSlack
-requires its own tested environment configuration before it is advertised.
-
-Preserve provider-native IDs as strings. A Slack message key includes connection,
-team, channel, and the exact `ts` string; never convert it through floating point
-or manufacture a Flow UUID as its authoritative identifier. Preserve `thread_ts`,
-provider cursors, message subtypes, and provenance. Normalize Slack mrkdwn, mentions,
-rich text, edits, deletions, and attachments with fixture-tested conversions.
-Unknown blocks get a safe textual fallback and Open in Slack action. Slack Connect
-conversations retain their local team context; do not merge records across teams
-based on a shared name or apparent duplicate content.
-
-The existing `packages/server/src/slackcompat/` implements Slack-shaped endpoints
-for apps talking to Flow. It is the opposite direction from this feature. Reuse
-validated formatting utilities where useful, but build a distinct outbound Slack
-adapter rather than treating that compatibility layer as a Slack client.
-
-### OAuth and transport ownership
-
-Use Slack OAuth authorization for API access as the Slack user. Identity-only
-Sign in with Slack does not establish chat permissions. The standard app flow uses
-`oauth/v2/authorize`, requested `user_scope`, and `oauth.v2.access`; persist the
-returned user grant and granted scopes independently of any bot grant. Slack also
-documents a user-specific OAuth flow; select and test the flow appropriate to the
-app configuration during the prototype. [OAuth documentation](https://docs.slack.dev/authentication/installing-with-oauth/),
-[Sign in with Slack](https://docs.slack.dev/authentication/sign-in-with-slack/).
-
-Proposed deployment: a dedicated Slack connector service handles OAuth exchange,
-credential rotation, API operations, and event delivery for all three clients.
-It may be operated with Flow or self-hosted, but its address and data handling role
-are explicit connection configuration. This is a provider-specific service, not an
-arbitrary URL proxy or a requirement that other Flow servers relay Slack content.
-Clients receive connection-scoped connector credentials, never an app-wide Slack
-secret. User access/refresh tokens live encrypted in the connector credential store.
-Keep Slack grants separate from a Flow login; connector authentication must not
-require membership in a mirrored Flow workspace. Connection discovery remains
-local even though its encrypted grant and runtime state are held by the connector.
-
-The connector terminates the Slack HTTPS callback, validates one-use state, and
-returns a short-lived, verifier-bound Flow handoff to the initiating web/native
-client. Implement Slack-leg PKCE according to the selected flow's documented
-support; do not assume Flow's handoff verifier also secures the Slack leg.
-[Slack PKCE documentation](https://docs.slack.dev/authentication/using-pkce/).
-
-Create a checked-in scope manifest mapping each enabled capability to method,
-token type, scope, and required event subscription. Request the minimum scopes for
-the selected feature set and honor partial grants. Verify sending uses the user's
-identity; never silently substitute bot authorship. Handle token refresh atomically,
-revocation, app removal, account deactivation, and reauthorization. Multiple local
-clients may share one upstream grant: a device disconnect removes its connector
-session without revoking another client's grant or uninstalling the app.
-
-The connector is a new trust boundary: explain that it handles Slack credentials
-and content, isolate users and grants, avoid message/token logging, and bound any
-transient event replay retention. It is not a permanent Slack archive. The prototype
-must establish distribution/app-approval requirements and whether the intended
-hosting model can support the needed grants and events before rollout.
-
-### Public API baseline and feature mapping
-
-These are implementation candidates, not claims that every grant permits them.
-The prototype resolves exact scopes and token compatibility in the manifest.
-
-| Capability | Public API baseline | Internal protocol investigation |
-| --- | --- | --- |
-| Workspace/users/conversations | auth/team/user and Conversations APIs | Client bootstrap, sidebar ordering, subscriptions |
-| History and threads | conversations.history / conversations.replies | Incremental history, thread hydration, gap repair |
-| Send/edit/delete | chat methods with user authorization | Acknowledgements, client IDs, retry reconciliation |
-| Reactions | reactions methods and events | Live changes and reconciliation |
-| Files | Current Slack upload/download interfaces | Attachment metadata and client previews |
-| Search | Scoped Slack search where available | Client query/result semantics |
-| Unread/read state | Validate available read-marker methods | Cross-device read cursors and unread counts |
-| Live updates | Events API via connector | Slack client stream, sequencing, resume, typing/presence |
-| Huddles and rich app surfaces | Open in Slack initially | Separate protocol/media feasibility; no Flow LiveKit reuse |
-
-The Events API delivers subscribed, authorized events through HTTP or Socket Mode;
-it is not assumed to be a complete copy of a user's Slack client stream. Route each
-event only to user grants authorized for that conversation, not all connector users
-in the same team. Verify event signatures/replay windows for HTTP and acknowledge
-according to Slack's contract. [Events API](https://docs.slack.dev/apis/events-api/).
-Modern granular-permission apps cannot use legacy RTM, so `rtm.connect` is not the
-plan for obtaining full client behavior. [RTM availability](https://docs.slack.dev/tools/node-slack-sdk/rtm-api/).
-
-Rate budgets belong to app/team/method, not only a local connection. Share budgets
-across connector sessions; honor Retry-After, paginate lazily, prioritize the visible
-conversation, and show delayed history/sync honestly. New commercially distributed
-non-Marketplace apps face tighter history/replies limits; record the actual app
-classification and measured capacity before promising a usable history experience.
-[Rate limits](https://docs.slack.dev/apis/web-api/rate-limits/).
-
-### Decode Slack's internal communications protocol
-
-The [first browser observation](../design/slack-protocol/README.md) records the
-2026-09-09 HTTP/bootstrap inventory, first-party socket authentication boundary,
-control frames, and counts schema. It is partial evidence, not a completed adapter
-or proof of OAuth compatibility.
-
-Run a bounded interoperability investigation using a dedicated Slack test workspace,
-accounts controlled by the team, and synthetic conversations. This spec authorizes
-planning that work; it does not claim any private endpoint has already been decoded.
-Observe the official client's requests and event frames while performing repeatable
-actions, then correlate each action with bootstrap calls, payloads, responses, and
-stream events. Start read-only; test mutations only against disposable test content.
-
-Deliver a versioned protocol notebook and sanitized replay fixtures covering:
-
-1. Authentication material actually required by each interface, its origin and
-   lifecycle, and whether the OAuth user grant works. Do not assume OAuth tokens
-   are interchangeable with a Slack first-party web session.
-2. Bootstrap requests, workspace/user identity, conversation discovery, initial
-   read state, websocket negotiation, and any transport/compression framing.
-3. Event envelopes, heartbeat, acknowledgements, ordering, duplicate delivery,
-   reconnect/resume behavior, and how the official client detects/fills gaps.
-4. Message/thread shapes, mutations, attachment references, read markers, typing,
-   presence, and their permission/failure behavior.
-5. A public-versus-internal capability matrix, with an observed client version/date,
-   confidence level, sample fixtures, and unresolved questions for each entry.
-
-Do not invent endpoint names or replay semantics from similarity to Flow or RTM.
-No actual production messages, session cookies, tokens, or signed media URLs belong
-in the repository. Investigation stays within the test accounts' permissions and
-does not bypass SSO, workspace approval, or access controls. If an interface requires
-a distinct first-party session, report that as a concrete authentication dependency
-and design an explicit supported session flow before implementation; do not silently
-extract credentials from an existing browser profile or convert an OAuth denial into
-an alternate access path.
-
-A credential or transport that works in a native test may not work in web/iOS.
-Test browser origin/cookie restrictions and native session acquisition independently.
-The connector proposal is not proof it can use the private protocol. A required
-session that cannot be acquired and renewed reliably across the intended deployment
-is a recorded blocker for that capability, not a reason to claim protocol completion.
-
-Implement verified internal interfaces behind a versioned adapter and capability
-switches. Validate payloads, tolerate unknown fields, and isolate parser failures to
-Slack. On protocol drift, disable the affected capability, preserve drafts, and use
-a public-API fallback only when its semantics and permissions are equivalent.
-A timeout after sending is an unknown outcome: reconcile using verified provider
-identifiers before retrying. Never retry blindly through the other transport.
-
-### Notifications and parity
-
-Slack cannot be assumed to send pushes to Flow's app bundle. The connector may
-translate authorized events into Flow push notifications using Flow's own delivery
-infrastructure and connection routing IDs. Deliver only for the authenticated
-recipient's eligible conversations and preferences. Scope token registration and
-notification deduplication to the Slack connection; do not register Flow's APNs token
-as if it were a Slack first-party device. Where exact Slack notification preferences
-or read state are unavailable, label the limitation and use explicit Flow notification
-settings instead of claiming parity. The aggregate iOS badge limitation still applies.
-
-All client controls use capabilities with supported/limited/unavailable states and
-human-readable reasons. The same Slack capability must behave consistently on web,
-macOS, and iOS, including the share extension, unless a documented platform constraint
-prevents it. Open in Slack targets are derived from the validated provider context.
-An unsupported action must never fall through to a Flow server mutation.
-
-### Slack delivery and acceptance
-
-1. Build the OAuth/connector proof of concept and scope manifest; demonstrate two
-   separately authenticated Slack teams alongside one Flow server.
-2. Complete the protocol notebook and credential/transport feasibility matrix on
-   web, macOS, and iOS. Record supported behavior and actual blockers.
-3. Implement and fixture-test the shared adapter contract and public baseline.
-4. Add verified internal protocol capabilities, reconnect/gap reconciliation, and
-   capability degradation. Complete multi-client parity and notification validation.
-
-Acceptance extends the Flow tests with:
-
-- Two Slack teams using the same API origin remain distinct; a renamed workspace
-  keeps its identity; Slack and Flow IDs/cache entries never collide.
-- OAuth consent returns the expected actual user/team; cancellation, wrong-team
-  selection, missing scopes, denied app approval, rotation, and revocation are handled.
-- Send as the user, thread replies, edits, deletes, reactions, and files round-trip
-  through Slack's official client and all three Flow clients without duplicates.
-- Private channels, DMs, guest restrictions, and Slack Connect events never leak
-  between grants; membership removal disables access and clears stale private state.
-- Duplicated/out-of-order events, disconnect during a send, missing replay windows,
-  429s, and protocol schema changes recover or show an accurate degraded state.
-- Partial history is visibly partial; Slack retention limits are not represented as
-  an empty complete archive. Exact message timestamps survive serialization.
-- Cross-device unread state is tested where supported; otherwise its limitation is
-  explicit. Push taps and share actions route to the right Slack identity/workspace.
-- Disconnect one client without revoking another's grant; remove one Slack team
-  without affecting another team or any Flow connection.
-
-Open implementation decisions: connector hosting/ownership, app distribution and
-scope approval, proven internal-session acquisition, event coverage, and the precise
-Slack capability set for initial release. OAuth and protocol investigation remain
-required deliverables regardless of which optional features ship first.
 
 ## Current implementation and migration
 
@@ -464,8 +230,7 @@ preserve QA profile isolation. Use a crash-safe, idempotent migration marker and
 retain the old state until the new state is committed. Unknown cache ownership is
 discarded and refetched, never assigned to another connection. Never copy a token
 to additional origins. Older backends remain usable as the existing default;
-adding remote Flow backends requires the new discovery/connection contract. Slack
-uses its provider-specific identity and authorization flow, not `/v1/client-info`.
+adding remote Flow backends requires the new discovery/connection contract.
 
 ## Delivery and acceptance
 
@@ -495,7 +260,7 @@ workspace, channel, and file IDs, and different credentials/content:
 - Upgrade existing profiles and interrupt migration midway; no lost session or
   credential reassignment. Verify all three clients against a legacy default server.
 
-Product decisions to confirm: one account per Flow server and per Slack team in V1; local-only connection
+Product decisions to confirm: one account per Flow server in V1; local-only connection
 configuration; all connected servers syncing while the client is running; and the
 iOS background badge limitation. These defaults keep the core per-workspace
 experience complete without introducing server federation or central identity.

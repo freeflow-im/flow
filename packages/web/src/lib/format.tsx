@@ -95,8 +95,8 @@ function InlineLink({ href, children }: { href: string; children: ReactNode }) {
   );
 }
 
-// User ids are Flow UUIDs or Slack ids (U…/W…, uppercase alphanumerics).
-const TOKEN_RE = /<@([0-9a-fA-F-]{36}|[UW][A-Z0-9]{6,20})>|<!(channel|here|everyone)>/g;
+// User ids are Flow UUIDs.
+const TOKEN_RE = /<@([0-9a-fA-F-]{36})>|<!(channel|here|everyone)>/g;
 
 // Inline markdown (agent replies lean on it heavily): `code`, **bold**,
 // *italic* / _italic_, ~~strike~~, [label](url), bare URLs. Code spans win

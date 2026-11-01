@@ -211,13 +211,6 @@ export default function Main() {
           case 'channel.updated':
             void qc.invalidateQueries({ queryKey: ['channels'] });
             break;
-          case 'channel.activity':
-            // Patched in place: a sidebar row may unfold, and a list refetch
-            // per message would spend the provider's conversation budget.
-            qc.setQueriesData<{ channels: ChannelDTO[] }>({ queryKey: ['channels'] }, (data) =>
-              data ? { ...data, channels: data.channels.map((c) => (c.id === event.channelId ? { ...c, lastActivityAt: event.lastActivityAt } : c)) } : data,
-            );
-            break;
           case 'stream.degraded':
             setStatus('reconnecting');
             break;
@@ -248,7 +241,7 @@ export default function Main() {
             // Patch the roster in place: a refetch per profile change would spend
             // the provider's member-list budget on every status anyone sets.
             const { member } = event;
-            // A sender the roster has not seen yet (a Slack app's first message) is added.
+            // A sender the roster has not seen yet (an agent's first message) is added.
             for (const [key, data] of qc.getQueriesData<{ members: WorkspaceMemberDTO[] }>({ queryKey: ['members'] })) {
               if (!data) continue;
               const known = data.members.some((m) => m.userId === member.userId);
@@ -724,27 +717,6 @@ function HuddleWiring({
   return null;
 }
 
-/** Marks a Slack team on the rail: a small corner tag, so it reads as Slack
- * without covering the unread badge on the opposite corner. */
-function RailSlackMark({ ringColor }: { ringColor: string }) {
-  return (
-    <span
-      data-testid="rail-slack-mark"
-      aria-hidden="true"
-      className="pointer-events-none absolute -bottom-1 -right-1 flex h-[18px] w-[18px] items-center justify-center rounded-full bg-white"
-      style={{ boxShadow: `0 0 0 2px ${ringColor}` }}
-    >
-      {/* Slack's four-colour hash, reduced to four bars. */}
-      <svg viewBox="0 0 12 12" className="h-3 w-3">
-        <rect x="2.6" y="0.5" width="2.2" height="11" rx="1.1" fill="#36C5F0" />
-        <rect x="7.2" y="0.5" width="2.2" height="11" rx="1.1" fill="#2EB67D" />
-        <rect x="0.5" y="2.6" width="11" height="2.2" rx="1.1" fill="#ECB22E" />
-        <rect x="0.5" y="7.2" width="11" height="2.2" rx="1.1" fill="#E01E5A" />
-      </svg>
-    </span>
-  );
-}
-
 /** Design 3a column 1: the 64px violet workspace rail. */
 function WorkspaceRail({ showHelp, onOpenHelp }: { showHelp: boolean; onOpenHelp: () => void }) {
   const sel = useSelection();
@@ -758,9 +730,9 @@ function WorkspaceRail({ showHelp, onOpenHelp }: { showHelp: boolean; onOpenHelp
       className="flex w-16 shrink-0 flex-col items-center gap-3.5 py-4"
       style={{ background: railBg }}
     >
-      {/* Every connection's workspaces (#592): Slack teams and other Flow
-          servers sit on the rail with this one's, and picking one on another
-          connection switches this window to it. */}
+      {/* Every connection's workspaces (#592): other Flow servers' sit on the
+          rail with this one's, and picking one on another connection switches
+          this window to it. */}
       {switcher.map((e) => {
         // The foreground connection's live row carries avatar and slug.
         const w = e.foreground ? (workspaces.data ?? []).find((ws) => ws.id === e.workspaceId) : undefined;
@@ -772,7 +744,7 @@ function WorkspaceRail({ showHelp, onOpenHelp }: { showHelp: boolean; onOpenHelp
         // Unread across this workspace's channels (#345): live for the
         // foreground connection, from background sync for the others.
         const unread = e.unread;
-        const where = e.provider === 'slack' ? ' (Slack)' : e.foreground ? '' : ` (${e.source})`;
+        const where = e.foreground ? '' : ` (${e.source})`;
         // With an avatar (#336) the image *is* the mark, so "active" can't be
         // the white fill any more — a white ring plus full opacity says it.
         return (
@@ -805,7 +777,6 @@ function WorkspaceRail({ showHelp, onOpenHelp }: { showHelp: boolean; onOpenHelp
               )}
             </button>
             <RailUnreadBadge count={unread} ringColor={railBg} testId={`rail-unread-${testKey}`} />
-            {e.provider === 'slack' && <RailSlackMark ringColor={railBg} />}
           </div>
         );
       })}

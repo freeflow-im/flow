@@ -75,25 +75,16 @@ describe('applyTopLevel', () => {
   });
 });
 
-describe('applyTopLevel with provider-ordered ids (Slack ts)', () => {
-  const ts = (n: number) => `1789171800.${String(n).padStart(6, '0')}`;
+describe('applyTopLevel with ids that carry no clientMsgId', () => {
   const page = (...ids: string[]): MessagesData => ({ pages: [{ messages: ids.map((id) => msg({ id, clientMsgId: '' })), hasMore: false }], pageParams: [''] });
 
-  it('a duplicate delivery of the same ts replaces in place — one row', () => {
-    const data = page(ts(3), ts(2), ts(1));
-    const twice = applyTopLevel(applyTopLevel(data, msg({ id: ts(4), clientMsgId: '' }), true).data, msg({ id: ts(4), clientMsgId: '' }), true).data;
-    expect(twice.pages[0]!.messages.map((m) => m.id)).toEqual([ts(4), ts(3), ts(2), ts(1)]);
+  it('a duplicate delivery of the same id replaces in place — one row', () => {
+    const data = page('01948-0003', '01948-0002', '01948-0001');
+    const twice = applyTopLevel(applyTopLevel(data, msg({ id: '01948-0004', clientMsgId: '' }), true).data, msg({ id: '01948-0004', clientMsgId: '' }), true).data;
+    expect(twice.pages[0]!.messages.map((m) => m.id)).toEqual(['01948-0004', '01948-0003', '01948-0002', '01948-0001']);
   });
 
-  it('a late (out-of-order) event lands by ts, not on top of a newer message', () => {
-    const data = page(ts(5), ts(3), ts(1));
-    const next = applyTopLevel(data, msg({ id: ts(4), clientMsgId: '' }), true).data;
-    expect(next.pages[0]!.messages.map((m) => m.id)).toEqual([ts(5), ts(4), ts(3), ts(1)]);
-    const oldest = applyTopLevel(next, msg({ id: ts(0), clientMsgId: '' }), true).data;
-    expect(oldest.pages[0]!.messages.map((m) => m.id).at(-1)).toBe(ts(0));
-  });
-
-  it('Flow ids keep arrival order on top', () => {
+  it('ids keep arrival order on top', () => {
     const data = page('01948-0002', '01948-0001');
     const next = applyTopLevel(data, msg({ id: '01948-0000', clientMsgId: '' }), true).data;
     expect(next.pages[0]!.messages[0]!.id).toBe('01948-0000');

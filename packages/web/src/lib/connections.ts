@@ -17,7 +17,6 @@
 // `storageKey` is minted locally and is not a server-supplied id, so two
 // backends that hand out deliberately colliding user/workspace UUIDs still get
 // disjoint namespaces.
-import { slackIdentityKey, type SlackConnection } from './slackConnector';
 import { getHost } from './host';
 import { canonicalizeOrigin, originLabel, type ConnectionProvider } from './serverOrigin';
 
@@ -32,9 +31,8 @@ export const LEGACY_TOKEN_KEY = 'flow.token';
 export interface ServerConnection {
   connectionId: string;
   provider: ConnectionProvider;
-  /** Provider identity: the canonical origin for `flow`; for `slack` it will be
-   * the `(environment, enterpriseId?, teamId)` tuple serialized by that
-   * workstream. Never treated as an authentication claim. */
+  /** Provider identity: the canonical origin. Never treated as an
+   * authentication claim. */
   providerIdentity: string;
   /** Canonical origin / transport endpoint the runtime dials. */
   origin: string;
@@ -216,27 +214,6 @@ export function addFlowConnection(
     },
     connection,
   };
-}
-
-/** Slack identity is independent of its connector's origin and team domain. */
-export function addSlackConnection(registry: ConnectionRegistry, origin: string, slack: SlackConnection): { registry: ConnectionRegistry; connection: ServerConnection } {
-  const providerIdentity = slackIdentityKey(slack.identity);
-  const canonical = canonicalizeOrigin(origin).origin;
-  const existing = registry.connections.find(c => c.provider === 'slack' && c.providerIdentity === providerIdentity);
-  if (existing) {
-    if (existing.origin !== canonical) throw new Error('Remove this Slack connection before changing its connector.');
-    const updated = { ...existing, label: `${slack.teamName} · ${slack.userName}`, capabilities: slack.capabilities };
-    return { registry: { ...registry, connections: registry.connections.map(c => c.connectionId === existing.connectionId ? updated : c) }, connection: updated };
-  }
-  const connection: ServerConnection = { connectionId: newId(), provider: 'slack', providerIdentity,
-    origin: canonical, label: `${slack.teamName} · ${slack.userName}`, apiVersion: 1, capabilities: slack.capabilities, addedAt: new Date().toISOString() };
-  const storageKey = newId();
-  // A Slack team is its own single workspace, so the switcher lists it from
-  // the moment it is added; the binding's workspace id is the immutable team id.
-  const binding: WorkspaceBinding = { connectionId: connection.connectionId, userId: slack.identity.userId, workspaceId: slack.identity.teamId, name: slack.teamName, hidden: false };
-  return { connection, registry: { ...registry, connections: [...registry.connections, connection], sessions: [...registry.sessions,
-    { connectionId: connection.connectionId, userId: slack.identity.userId, credentialRef: credentialRefFor(storageKey), storageKey, authGeneration: 0, status: 'authenticated' }],
-    bindings: [...registry.bindings.filter(b => b.connectionId !== connection.connectionId), binding] } };
 }
 
 export function updateSession(

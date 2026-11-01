@@ -1,7 +1,7 @@
 # Flow connection protocol 1: operator and client contract
 
-This is the Flow backend contract for multi-server clients (issue #539). It does
-not connect clients to Slack. Existing client releases keep their existing login,
+This is the Flow backend contract for multi-server clients (issue #539).
+Existing client releases keep their existing login,
 app-link, device registration, and badge behavior. Connection management and the
 browser/native handoff UI ship in later phases; these endpoints alone do not add
 a workspace switcher to current releases.

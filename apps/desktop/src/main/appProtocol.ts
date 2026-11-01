@@ -24,8 +24,8 @@ export function registerAppScheme(): void {
 }
 
 /** What the document may load. The web client is self-contained (fonts and
- * styles inline, mermaid bundled); it talks to any Flow server and Slack
- * connector over https/wss (http/ws for a loopback dev server), shows media
+ * styles inline, mermaid bundled); it talks to any Flow server over https/wss
+ * (http/ws for a loopback dev server), shows media
  * from presigned storage URLs, and frames artifacts and mini apps. Google's
  * sign-in script is deliberately absent: the shell signs in through the
  * system browser. */
