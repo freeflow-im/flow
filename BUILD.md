@@ -296,6 +296,22 @@ gh run list --workflow publish-bridge.yml   # check a release
 
 ---
 
+## Workspace app (packages/docs)
+
+The former MCP Docs repository, added as a git subtree for the FreeFlow suite
+(`docs/specs/freeflow-suite.md`). It keeps its own release map in
+`packages/docs/CLAUDE.md` ("Working on it"). Two root workflows carry its deploys:
+
+- `docs-aws-deploy.yml` builds `packages/docs/deploy/aws/Dockerfile` and deploys it
+  to the MCP Docs EC2 stack on a push to `main` that touches `packages/docs/**`. It
+  runs only once the repository variables `AWS_DEPLOY_ROLE_ARN`, `AWS_INSTANCE_ID` and
+  `AWS_ECR_REPOSITORY` are set on this repository (they were on `freeflow-im/mcp-docs`,
+  whose own workflow keeps deploying until then) and the deploy role's trust policy
+  names this repository.
+- `docs-desktop-release.yml` builds the macOS and Windows apps, makes the GitHub
+  release and publishes the installer to npm when a `desktop-v<version>` tag is
+  pushed; the tag is made by `npm run release -- <version>` in `packages/docs`.
+
 ## Open gaps
 
 - **iOS releases are manual and local.** TestFlight uploads work (see above)

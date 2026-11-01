@@ -1,0 +1,24 @@
+{
+  "name": "mcp-docs",
+  "version": "0.2.37",
+  "description": "Work on the documents, presentations, spreadsheets, Markdown files, PDFs and pictures in a folder on this Mac, through the MCP Docs desktop app, which shows each file as you change it.",
+  "author": {
+    "name": "Scott Persinger"
+  },
+  "homepage": "https://github.com/freeflow-im/mcp-docs",
+  "repository": "https://github.com/freeflow-im/mcp-docs",
+  "license": "UNLICENSED",
+  "keywords": ["documents", "spreadsheets", "presentations", "office", "markdown", "pdf", "mcp"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "MCP Docs",
+    "shortDescription": "Edit office files on this Mac in the MCP Docs app",
+    "longDescription": "Open, read, create and edit Word, PowerPoint and Excel files, Markdown, CSV, PDFs and pictures in the folder open in the MCP Docs desktop app, which shows each file as Codex changes it.",
+    "developerName": "Scott Persinger",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Read", "Write"],
+    "websiteURL": "https://github.com/freeflow-im/mcp-docs",
+    "defaultPrompt": ["Show me the files in the folder open in MCP Docs", "Summarize the presentation open in MCP Docs"]
+  }
+}

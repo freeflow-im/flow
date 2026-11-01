@@ -1,0 +1,71 @@
+<template>
+  <style>
+    @font-face {
+      font-family: "Google Sans Flex";
+      src: url("assets/fonts/GoogleSansFlex-latin-var.woff2") format("woff2");
+      font-weight: 100 1000;
+    }
+    #root {
+      position: absolute;
+      inset: 0;
+      font-family: "Google Sans Flex", sans-serif;
+      color: #ffffff;
+    }
+    #mcp-flood {
+      position: absolute;
+      inset: 0;
+      background: #1a73e8;
+      clip-path: circle(0px at 900px 535px);
+    }
+    #mcp-line {
+      position: absolute;
+      left: 160px;
+      top: 410px;
+      font-size: 120px;
+      font-weight: 500;
+      letter-spacing: -0.02em;
+      line-height: 1.05;
+    }
+    #mcp-sub {
+      position: absolute;
+      left: 164px;
+      top: 590px;
+      font-size: 54px;
+      font-weight: 400;
+      color: rgba(255, 255, 255, 0.85);
+    }
+    #mcp-line .w,
+    #mcp-sub .w {
+      display: inline-block;
+    }
+    .mcp-dot {
+      margin: 0 18px;
+      opacity: 0.6;
+    }
+  </style>
+  <div id="root" data-composition-id="mcp" data-width="1920" data-height="1080">
+    <div id="mcp-flood"></div>
+    <div id="mcp-line" class="clip" data-start="0" data-duration="3.4" data-track-index="2">
+      <span class="w">Connect</span> <span class="w">any</span> <span class="w">agent</span> <span class="w">with</span>
+      <span class="w">MCP</span>
+    </div>
+    <div id="mcp-sub" class="clip" data-start="0" data-duration="3.4" data-track-index="2">
+      <span class="w">Claude Code</span><span class="w mcp-dot">·</span><span class="w">Codex</span><span class="w mcp-dot">·</span><span class="w">any MCP client</span>
+    </div>
+  </div>
+  <script>
+    (function () {
+      const tl = gsap.timeline({ paused: true });
+      // Iris out of the word "editor", flooding the frame in the app's blue.
+      tl.to("#mcp-flood", { clipPath: "circle(2400px at 900px 535px)", duration: 0.45, ease: "power2.inOut" }, 0);
+      tl.fromTo("#mcp-line .w", { opacity: 0, filter: "blur(6px)" },
+        { opacity: 1, filter: "blur(0px)", duration: 0.13, stagger: 0.07, ease: "power4.out" }, 0.3);
+      tl.fromTo("#mcp-sub .w", { opacity: 0, filter: "blur(6px)" },
+        { opacity: 1, filter: "blur(0px)", duration: 0.16, stagger: 0.12, ease: "power4.out" }, 1.0);
+      tl.to("#mcp-line .w, #mcp-sub .w", { opacity: 0, filter: "blur(6px)", duration: 0.15, stagger: 0.02, ease: "power3.in" }, 3.15);
+      // The blue closes onto the spot where the app's window opens next.
+      tl.to("#mcp-flood", { clipPath: "circle(0px at 1346px 540px)", duration: 0.4, ease: "power3.in" }, 3.4);
+      window.__timelines["mcp"] = tl;
+    })();
+  </script>
+</template>

@@ -1,0 +1,22 @@
+{
+  "schema": "hyperframes.capture.icons.v1",
+  "headline": {
+    "file": "assets/favicon.svg",
+    "source": "assets/icon-icon-unsized.svg",
+    "rank": 0,
+    "shape": "badge",
+    "reason": "no bare-mark candidate among 1 icon(s); used the best-ranked badge"
+  },
+  "icons": [
+    {
+      "file": "assets/icon-icon-unsized.svg",
+      "url": "https://docs.freeflow.im/favicon-home.svg",
+      "rel": "icon",
+      "sizes": null,
+      "type": "image/svg+xml",
+      "rank": 0,
+      "shape": "badge",
+      "shapeReason": "first painted element is a full-bleed rounded rect (32x32 of 32x32)"
+    }
+  ]
+}

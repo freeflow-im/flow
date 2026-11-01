@@ -1,0 +1,440 @@
+{
+  "ok": true,
+  "strict": false,
+  "browserSkipped": false,
+  "lint": {
+    "ok": true,
+    "errorCount": 0,
+    "warningCount": 5,
+    "infoCount": 0,
+    "findings": [
+      {
+        "code": "duplicate_media_discovery_risk",
+        "severity": "warning",
+        "message": "Detected 4 matching img entries with the same source/start/duration.",
+        "selector": "[data-composition-id]",
+        "dataAttributes": {},
+        "sourceFile": "/Users/scottp/src/sheetsweb/marketing/mcp-docs-promo/compositions/files.html",
+        "bbox": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "time": 0,
+        "fixHint": "Avoid duplicated media nodes that can be discovered twice during compilation."
+      },
+      {
+        "code": "timeline_track_too_dense",
+        "severity": "warning",
+        "message": "Track 2 has 5 timed elements in this HTML file. Smaller sub-compositions keep timelines easier to read, iterate on, and diff.",
+        "selector": "[data-composition-id]",
+        "dataAttributes": {},
+        "sourceFile": "/Users/scottp/src/sheetsweb/marketing/mcp-docs-promo/compositions/files.html",
+        "bbox": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "time": 0,
+        "fixHint": "Move coherent scene groups into smaller .html files and mount them from the parent with data-composition-src so the timeline stays easier to inspect, revise, and validate."
+      },
+      {
+        "code": "nested_media_start_basis_ambiguous",
+        "severity": "warning",
+        "message": "<video id=\"hook-video\"> has data-start=\"1.4\" inside a sub-composition. Nested media timing is local to its composition by default; a nonzero value can be confused with a legacy root-global timestamp.",
+        "selector": "#hook-video",
+        "dataAttributes": {},
+        "sourceFile": "/Users/scottp/src/sheetsweb/marketing/mcp-docs-promo/compositions/hook.html",
+        "bbox": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "time": 0,
+        "fixHint": "Keep data-start=\"1.4\" if it is composition-local. If this is a legacy root-global timestamp, add data-hf-media-start-basis=\"global\"; otherwise convert it to local time by subtracting the host start."
+      },
+      {
+        "code": "nested_media_start_basis_ambiguous",
+        "severity": "warning",
+        "message": "<video id=\"log-video-b\"> has data-start=\"3.4\" inside a sub-composition. Nested media timing is local to its composition by default; a nonzero value can be confused with a legacy root-global timestamp.",
+        "selector": "#log-video-b",
+        "dataAttributes": {},
+        "sourceFile": "/Users/scottp/src/sheetsweb/marketing/mcp-docs-promo/compositions/log.html",
+        "bbox": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "time": 0,
+        "fixHint": "Keep data-start=\"3.4\" if it is composition-local. If this is a legacy root-global timestamp, add data-hf-media-start-basis=\"global\"; otherwise convert it to local time by subtracting the host start."
+      },
+      {
+        "code": "nested_media_start_basis_ambiguous",
+        "severity": "warning",
+        "message": "<video id=\"pay-video-b\"> has data-start=\"1.6\" inside a sub-composition. Nested media timing is local to its composition by default; a nonzero value can be confused with a legacy root-global timestamp.",
+        "selector": "#pay-video-b",
+        "dataAttributes": {},
+        "sourceFile": "/Users/scottp/src/sheetsweb/marketing/mcp-docs-promo/compositions/payoff.html",
+        "bbox": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "time": 0,
+        "fixHint": "Keep data-start=\"1.6\" if it is composition-local. If this is a legacy root-global timestamp, add data-hf-media-start-basis=\"global\"; otherwise convert it to local time by subtracting the host start."
+      }
+    ],
+    "filesScanned": 9
+  },
+  "runtime": {
+    "ok": true,
+    "errorCount": 0,
+    "warningCount": 0,
+    "infoCount": 0,
+    "findings": []
+  },
+  "layout": {
+    "ok": true,
+    "errorCount": 0,
+    "warningCount": 0,
+    "infoCount": 5,
+    "findings": [
+      {
+        "code": "container_overflow",
+        "severity": "info",
+        "time": 2.489,
+        "selector": "#fw-wd-cam",
+        "message": "Element extends outside a clipping layout container.",
+        "rect": {
+          "left": -424.76,
+          "top": -71.2,
+          "right": 2245.42,
+          "bottom": 1537.02,
+          "width": 2670.18,
+          "height": 1608.22
+        },
+        "containerSelector": "#fw-wd",
+        "fixHint": "Resize/reposition the child or container, or mark intentional overflow with data-layout-allow-overflow.",
+        "containerRect": {
+          "left": 0,
+          "top": 0,
+          "right": 1920,
+          "bottom": 1080,
+          "width": 1920,
+          "height": 1080
+        },
+        "overflow": {
+          "left": 424.76,
+          "right": 325.42,
+          "top": 71.2,
+          "bottom": 457.02
+        },
+        "dataAttributes": {
+          "data-hf-id": "hf-37ym"
+        },
+        "sourceFile": "compositions/files.html",
+        "bbox": {
+          "x": -424.76,
+          "y": -71.2,
+          "width": 2670.18,
+          "height": 1608.22
+        },
+        "firstSeen": 2.489,
+        "lastSeen": 2.489,
+        "occurrences": 1,
+        "heldMs": 0,
+        "times": [
+          2.489
+        ]
+      },
+      {
+        "code": "container_overflow",
+        "severity": "info",
+        "time": 7.467,
+        "selector": "#fw-ht-cam",
+        "message": "Element extends outside a clipping layout container.",
+        "rect": {
+          "left": 57.92,
+          "top": -462.31,
+          "right": 2701.99,
+          "bottom": 1440.05,
+          "width": 2644.07,
+          "height": 1902.37
+        },
+        "containerSelector": "#fw-ht",
+        "fixHint": "Resize/reposition the child or container, or mark intentional overflow with data-layout-allow-overflow.",
+        "containerRect": {
+          "left": 0,
+          "top": 0,
+          "right": 1920,
+          "bottom": 1080,
+          "width": 1920,
+          "height": 1080
+        },
+        "overflow": {
+          "right": 781.99,
+          "top": 462.31,
+          "bottom": 360.05
+        },
+        "dataAttributes": {
+          "data-hf-id": "hf-cxmj"
+        },
+        "sourceFile": "compositions/files.html",
+        "bbox": {
+          "x": 57.92,
+          "y": -462.31,
+          "width": 2644.07,
+          "height": 1902.37
+        },
+        "firstSeen": 7.467,
+        "lastSeen": 7.467,
+        "occurrences": 1,
+        "heldMs": 0,
+        "times": [
+          7.467
+        ]
+      },
+      {
+        "code": "container_overflow",
+        "severity": "info",
+        "time": 17.422,
+        "selector": "#hook-cam",
+        "message": "Element extends outside a clipping layout container.",
+        "rect": {
+          "left": 390,
+          "top": -31,
+          "right": 2365.6,
+          "bottom": 1157,
+          "width": 1975.6,
+          "height": 1188
+        },
+        "containerSelector": "#hook-window",
+        "fixHint": "Resize/reposition the child or container, or mark intentional overflow with data-layout-allow-overflow.",
+        "containerRect": {
+          "left": 820,
+          "top": 72,
+          "right": 1872,
+          "bottom": 1008,
+          "width": 1052,
+          "height": 936
+        },
+        "overflow": {
+          "left": 430,
+          "right": 493.6,
+          "top": 103,
+          "bottom": 149
+        },
+        "dataAttributes": {
+          "data-hf-id": "hf-7xtu"
+        },
+        "sourceFile": "compositions/hook.html",
+        "bbox": {
+          "x": 390,
+          "y": -31,
+          "width": 1975.6,
+          "height": 1188
+        },
+        "firstSeen": 17.422,
+        "lastSeen": 17.422,
+        "occurrences": 1,
+        "heldMs": 0,
+        "times": [
+          17.422
+        ]
+      },
+      {
+        "code": "container_overflow",
+        "severity": "info",
+        "time": 22.4,
+        "selector": "#log-cam",
+        "message": "Element extends outside a clipping layout container.",
+        "rect": {
+          "left": -1000.2,
+          "top": 13,
+          "right": 1873.4,
+          "bottom": 1741,
+          "width": 2873.6,
+          "height": 1728
+        },
+        "containerSelector": "#log-window",
+        "fixHint": "Resize/reposition the child or container, or mark intentional overflow with data-layout-allow-overflow.",
+        "containerRect": {
+          "left": 820,
+          "top": 72,
+          "right": 1872,
+          "bottom": 1008,
+          "width": 1052,
+          "height": 936
+        },
+        "overflow": {
+          "left": 1820.2,
+          "top": 59,
+          "bottom": 733
+        },
+        "dataAttributes": {
+          "data-hf-id": "hf-qb5b"
+        },
+        "sourceFile": "compositions/log.html",
+        "bbox": {
+          "x": -1000.2,
+          "y": 13,
+          "width": 2873.6,
+          "height": 1728
+        },
+        "firstSeen": 22.4,
+        "lastSeen": 22.4,
+        "occurrences": 1,
+        "heldMs": 0,
+        "times": [
+          22.4
+        ]
+      },
+      {
+        "code": "escaped_container",
+        "severity": "info",
+        "time": 22.4,
+        "selector": "#log-cam",
+        "message": "Positioned element renders far outside its offset parent — its coordinates were likely computed in a different frame (canvas/viewport pixels).",
+        "rect": {
+          "left": -1000.2,
+          "top": 13,
+          "right": 1873.4,
+          "bottom": 1741,
+          "width": 2873.6,
+          "height": 1728
+        },
+        "containerSelector": "#log-window",
+        "text": "",
+        "fixHint": "Compute left/top in the offset parent's frame (subtract its rect), or mark intentional placement with data-layout-allow-overflow.",
+        "containerRect": {
+          "left": 820,
+          "top": 72,
+          "right": 1872,
+          "bottom": 1008,
+          "width": 1052,
+          "height": 936
+        },
+        "dataAttributes": {
+          "data-hf-id": "hf-qb5b"
+        },
+        "sourceFile": "compositions/log.html",
+        "bbox": {
+          "x": -1000.2,
+          "y": 13,
+          "width": 2873.6,
+          "height": 1728
+        },
+        "firstSeen": 22.4,
+        "lastSeen": 22.4,
+        "occurrences": 1,
+        "heldMs": 0,
+        "times": [
+          22.4
+        ]
+      }
+    ],
+    "duration": 44.8,
+    "samples": [
+      2.489,
+      7.467,
+      12.444,
+      17.422,
+      22.4,
+      27.378,
+      32.356,
+      37.333,
+      42.311
+    ],
+    "transitionSamples": [],
+    "transitionSamplesDropped": 0,
+    "tolerance": 2,
+    "totalIssueCount": 5,
+    "truncated": false
+  },
+  "motion": {
+    "ok": true,
+    "errorCount": 0,
+    "warningCount": 0,
+    "infoCount": 0,
+    "findings": [],
+    "enabled": false,
+    "samples": 0
+  },
+  "contrast": {
+    "ok": true,
+    "errorCount": 0,
+    "warningCount": 0,
+    "infoCount": 0,
+    "findings": [],
+    "enabled": true,
+    "samples": [
+      2.489,
+      12.444,
+      22.4,
+      32.356,
+      42.311
+    ],
+    "checked": 16,
+    "passed": 16
+  },
+  "craft": {
+    "ok": true,
+    "errorCount": 0,
+    "warningCount": 2,
+    "infoCount": 0,
+    "findings": [
+      {
+        "code": "film_silent",
+        "severity": "warning",
+        "message": "This 45 s film has no sound source (no <audio>, no <video> with sound): add a music bed and sounds on the visible actions unless the person asked for silence; see references/sound.md.",
+        "selector": "[data-composition-id]",
+        "dataAttributes": {},
+        "sourceFile": "index.html",
+        "bbox": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "time": 0
+      },
+      {
+        "code": "line_unread",
+        "severity": "warning",
+        "message": "\"An 11-page paper\" (4 words) is on screen 1.08 s (±0.01 s), under its 1.27 s floor: hold it about 0.5 s + 0.3 s a word (1.70 s here) before it leaves or changes; see references/motion.md.",
+        "text": "An 11-page paper",
+        "selector": "#hook-l1",
+        "dataAttributes": {},
+        "sourceFile": "compositions/hook.html",
+        "bbox": {
+          "x": 96,
+          "y": 461,
+          "width": 403.38,
+          "height": 105
+        },
+        "time": 15.139,
+        "words": 4,
+        "seconds": 1.084,
+        "floorSeconds": 1.275
+      }
+    ],
+    "enabled": true,
+    "step": 0.125,
+    "samples": 359
+  },
+  "hdr": {
+    "autoPromotion": null,
+    "inspection": "available"
+  },
+  "snapshots": {
+    "enabled": false,
+    "files": [],
+    "times": [],
+    "findingFiles": []
+  }
+}

@@ -1,0 +1,6 @@
+tunnel: 3ea61a12-c3e6-4995-af32-6bfcad6fc894
+credentials-file: /Users/scottp/.cloudflared/3ea61a12-c3e6-4995-af32-6bfcad6fc894.json
+ingress:
+  - hostname: docs-mcp.biztrip.ai
+    service: http://127.0.0.1:3012
+  - service: http_status:404

@@ -1,0 +1,175 @@
+<template>
+  <style>
+    @font-face {
+      font-family: "Google Sans Flex";
+      src: url("assets/fonts/GoogleSansFlex-latin-var.woff2") format("woff2");
+      font-weight: 100 1000;
+    }
+    #root {
+      position: absolute;
+      inset: 0;
+      font-family: "Google Sans Flex", sans-serif;
+      color: #1f1f1f;
+    }
+    .fw {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+      background: #f0f4f9;
+    }
+    .fw-cam {
+      position: absolute;
+      left: 0;
+      top: 0;
+      transform-origin: 0 0;
+    }
+    .fw-cam img {
+      display: block;
+    }
+    .fw-sel {
+      position: absolute;
+      transform-origin: 0 0;
+      background: rgba(26, 115, 232, 0.22);
+      border: 4px solid #1a73e8;
+      mix-blend-mode: multiply;
+    }
+    .fw-mark {
+      position: absolute;
+      transform-origin: 0 50%;
+      background: rgba(26, 115, 232, 0.28);
+      mix-blend-mode: multiply;
+      border-radius: 4px;
+    }
+    .fw-plate {
+      position: absolute;
+      left: 96px;
+      top: 846px;
+      padding: 14px 36px 20px;
+      background: #ffffff;
+      border-radius: 18px;
+      box-shadow: 0 16px 40px rgba(31, 31, 31, 0.18);
+      font-size: 96px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      line-height: 1;
+    }
+    .fw-cursor {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 40px;
+      height: 60px;
+    }
+  </style>
+  <div data-hf-id="hf-1mai" id="root" data-composition-id="files" data-width="1920" data-height="1080">
+    <!-- Excel: a selection dragged over A2:B8 -->
+    <div data-hf-id="hf-2riy" id="fw-xl" class="fw clip" data-start="0" data-duration="1.75" data-track-index="2" style="z-index:1">
+      <div data-hf-id="hf-6sc3" id="fw-xl-cam" class="fw-cam">
+        <img data-hf-id="hf-8nzk" src="assets/screens/spreadsheet_example.png" alt="" />
+        <div data-hf-id="hf-bvt6" id="fw-xl-sel" class="fw-sel" style="left:93px;top:357px;width:879px;height:293px"></div>
+      </div>
+      <div data-hf-id="hf-e36d" class="fw-plate">Excel</div>
+      <img data-hf-id="hf-hxgc" id="fw-xl-cur" class="fw-cursor" src="assets/cursor.svg" alt="" />
+    </div>
+
+    <!-- Word: the title selected -->
+    <div data-hf-id="hf-u67s" id="fw-wd" class="fw clip" data-start="1.7" data-duration="1.75" data-track-index="2" style="z-index:2">
+      <div data-hf-id="hf-37ym" id="fw-wd-cam" class="fw-cam">
+        <img data-hf-id="hf-89m5" src="assets/screens/document_example.png" alt="" />
+        <div data-hf-id="hf-6izh" id="fw-wd-sel" class="fw-mark" style="left:956px;top:440px;width:770px;height:84px"></div>
+      </div>
+      <div data-hf-id="hf-f8hy" class="fw-plate">Word</div>
+      <img data-hf-id="hf-pe69" id="fw-wd-cur" class="fw-cursor" src="assets/cursor.svg" alt="" />
+    </div>
+
+    <!-- Markdown: the same heading lit in the source and in the live preview -->
+    <div data-hf-id="hf-3xoq" id="fw-md" class="fw clip" data-start="3.4" data-duration="1.75" data-track-index="2" style="z-index:3">
+      <div data-hf-id="hf-9sy8" id="fw-md-cam" class="fw-cam">
+        <img data-hf-id="hf-re51" src="assets/screens/markdown_example.png" alt="" />
+        <div data-hf-id="hf-88jb" id="fw-md-src" class="fw-mark" style="left:62px;top:418px;width:186px;height:48px"></div>
+        <div data-hf-id="hf-7gra" id="fw-md-pre" class="fw-mark" style="left:1400px;top:508px;width:200px;height:62px"></div>
+      </div>
+      <div data-hf-id="hf-8lev" class="fw-plate">Markdown</div>
+    </div>
+
+    <!-- PDF: a signature written beside the list -->
+    <div data-hf-id="hf-5dpj" id="fw-pdf" class="fw clip" data-start="5.1" data-duration="1.75" data-track-index="2" style="z-index:4">
+      <div data-hf-id="hf-4dbj" id="fw-pdf-cam" class="fw-cam">
+        <img data-hf-id="hf-sxoc" src="assets/screens/pdf_example.png" alt="" />
+        <svg data-hf-id="hf-onox" id="fw-pdf-sig" style="position:absolute;left:1700px;top:700px" width="560" height="260" viewBox="0 0 560 260">
+          <path data-hf-id="hf-vhkx" id="fw-pdf-path" pathLength="100" stroke-dasharray="100 120" stroke-dashoffset="110"
+            d="M20 170 C 40 60, 90 40, 80 120 C 72 190, 40 220, 60 160 C 80 100, 130 90, 140 150 C 146 190, 160 190, 175 150 C 190 110, 205 112, 210 150 C 214 180, 230 182, 245 140 C 255 112, 268 118, 270 150 C 272 178, 292 176, 300 140 L 318 60 M 300 140 C 310 175, 330 178, 345 130 L 360 70 M 345 130 C 352 172, 372 175, 395 140 C 420 100, 470 110, 540 120"
+            fill="none" stroke="#1f3a8a" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </div>
+      <div data-hf-id="hf-205c" class="fw-plate">PDF</div>
+      <img data-hf-id="hf-mzfm" id="fw-pdf-cur" class="fw-cursor" src="assets/cursor.svg" alt="" />
+    </div>
+
+    <!-- HTML: a click on the page's button -->
+    <div data-hf-id="hf-np7n" id="fw-ht" class="fw clip" data-start="6.8" data-duration="2.05" data-track-index="2" style="z-index:5">
+      <div data-hf-id="hf-cxmj" id="fw-ht-cam" class="fw-cam">
+        <img data-hf-id="hf-j0bx" src="assets/screens/html_example.png" alt="" />
+      </div>
+      <div data-hf-id="hf-zii7" class="fw-plate">HTML</div>
+      <img data-hf-id="hf-z32c" id="fw-ht-cur" class="fw-cursor" src="assets/cursor.svg" alt="" />
+    </div>
+  </div>
+  <script>
+    (function () {
+      const tl = gsap.timeline({ paused: true });
+      // Each world: a screenshot (2x pixels) under a camera. Source point (cx, cy) lands at frame (960, 540).
+      const cam = (s, cx, cy) => ({ scale: s, x: 960 - s * cx, y: 540 - s * cy });
+      const at = (c, px, py) => ({ x: c.x + c.scale * px, y: c.y + c.scale * py });
+
+      const worlds = [
+        { id: "#fw-xl", t: 0, from: { x: 1920 }, c: cam(0.82, 1000, 560) },
+        { id: "#fw-wd", t: 1.7, from: { y: 1080 }, c: cam(0.95, 1450, 640) },
+        { id: "#fw-md", t: 3.4, from: { x: -1920 }, c: cam(0.72, 1400, 760) },
+        { id: "#fw-pdf", t: 5.1, from: { y: -1080 }, c: cam(1.0, 1740, 580) },
+        { id: "#fw-ht", t: 6.8, from: { x: 1920 }, c: cam(1.0, 900, 1000) },
+      ];
+      worlds.forEach((w, i) => {
+        // Whip in: a fast smear that lands blurred and sharpens. The first world is the thumbnail: already there.
+        if (i === 0) tl.set(w.id + "-cam", { ...w.c, filter: "blur(0px)" }, 0);
+        else tl.fromTo(w.id + "-cam", { ...w.c, ...w.from, filter: "blur(18px)" },
+          { ...w.c, filter: "blur(0px)", duration: 0.28, ease: "expo.out" }, w.t);
+        // A small push while the gesture plays, so the world is never frozen.
+        tl.to(w.id + "-cam", { ...cam(w.c.scale * 1.04, (960 - w.c.x) / w.c.scale, (540 - w.c.y) / w.c.scale), duration: 1.3, ease: "power2.inOut" }, w.t + 0.35);
+        if (i > 0) tl.fromTo(w.id + " .fw-plate", { opacity: 0, x: -30, filter: "blur(6px)" },
+          { opacity: 1, x: 0, filter: "blur(0px)", duration: 0.35, ease: "expo.out" }, w.t + 0.18);
+      });
+
+      // Excel: drag from A2 to B8.
+      const xl = worlds[0].c;
+      tl.fromTo("#fw-xl-cur", { ...at(xl, 60, 900) }, { ...at(xl, 110, 375), duration: 0.35, ease: "expo.out" }, 0.25);
+      tl.fromTo("#fw-xl-sel", { scaleX: 0.21, scaleY: 0.12, opacity: 0 }, { scaleX: 0.21, scaleY: 0.12, opacity: 1, duration: 0.01 }, 0.62);
+      tl.to("#fw-xl-sel", { scaleX: 1, scaleY: 1, duration: 0.6, ease: "power2.inOut" }, 0.65);
+      tl.to("#fw-xl-cur", { ...at(xl, 960, 640), duration: 0.6, ease: "power2.inOut" }, 0.65);
+
+      // Word: select the title from its first letter to its last.
+      const wd = worlds[1].c;
+      tl.fromTo("#fw-wd-cur", { ...at(wd, 1600, 1200) }, { ...at(wd, 960, 470), duration: 0.35, ease: "expo.out" }, 1.95);
+      tl.fromTo("#fw-wd-sel", { scaleX: 0 }, { scaleX: 1, duration: 0.5, ease: "power2.inOut" }, 2.35);
+      tl.to("#fw-wd-cur", { ...at(wd, 1726, 470), duration: 0.5, ease: "power2.inOut" }, 2.35);
+
+      // Markdown: the source line lights, then its heading in the preview.
+      tl.fromTo("#fw-md-src", { scaleX: 0 }, { scaleX: 1, duration: 0.3, ease: "power2.out" }, 3.8);
+      tl.fromTo("#fw-md-pre", { scaleX: 0 }, { scaleX: 1, duration: 0.3, ease: "power2.out" }, 4.15);
+
+      // PDF: the pen writes the signature.
+      const pd = worlds[3].c;
+      tl.fromTo("#fw-pdf-path", { strokeDashoffset: 110 }, { strokeDashoffset: 0, duration: 0.9, ease: "power1.inOut" }, 5.5);
+      tl.fromTo("#fw-pdf-cur", { ...at(pd, 1700, 1100) }, { ...at(pd, 1720, 870), duration: 0.3, ease: "expo.out" }, 5.25);
+      tl.to("#fw-pdf-cur", { ...at(pd, 2240, 820), duration: 0.9, ease: "power1.inOut" }, 5.5);
+
+      // HTML: click "Get started free".
+      const ht = worlds[4].c;
+      tl.fromTo("#fw-ht-cur", { ...at(ht, 700, 1500) }, { ...at(ht, 230, 1235), duration: 0.4, ease: "expo.out" }, 7.05);
+      tl.to("#fw-ht-cur", { scale: 0.86, duration: 0.07, ease: "power2.in" }, 7.55);
+      tl.to("#fw-ht-cur", { scale: 1, duration: 0.15, ease: "power2.out" }, 7.62);
+
+      window.__timelines["files"] = tl;
+    })();
+  </script>
+</template>

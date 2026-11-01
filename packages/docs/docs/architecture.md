@@ -1,0 +1,321 @@
+# Architecture
+
+How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read the part you are working on.
+
+## The code, area by area
+
+- `client/src` — React app. Spreadsheet state lives in `client/src/state` (`WorkbookStore` + `Tx` transactions,
+  `SheetController` for selection/editing, `ops.ts` for workbook operations such as insert/delete/sort/filter).
+- `server` — Fastify API (`app.ts`), auth, sheet storage (`sheets.ts`), and the assistant (`server/agent`).
+- `shared` — code used by both: workbook types (`types.ts`), cell references, the formula engine, the slide deck
+  format with its layouts and themes (`deck.ts`), and the assistant protocol (`shared/agent`).
+- Presentations (slide decks) live in `client/src/deck` (`DeckStore` + `DeckController`, the `SlideView`
+  renderer, editor, toolbar, present mode) and `client/src/pages/DeckPage.tsx`. They are stored with
+  spreadsheets (`server/sheets.ts`, `kind` column) behind `/api/decks`.
+- Text documents live in `client/src/doc` (`DocStore` + `DocController` over a ProseMirror state, the
+  `DocEditor` view, toolbar) and `client/src/pages/DocPage.tsx`, behind `/api/docs`. The schema and
+  file format are in `shared/doc.ts`; `shared/docMarkdown.ts` converts documents to and from the Markdown
+  the assistant reads and writes.
+- Markdown documents live in `client/src/markdown` (`MarkdownController` over the plain text with autosave,
+  the GitHub-flavored `MarkdownPreview` built on react-markdown + remark-gfm) and
+  `client/src/pages/MarkdownPage.tsx` (a textarea editor with a resizable preview panel), behind
+  `/api/markdown`. The stored format is `shared/markdown.ts`. A ```mermaid code block is drawn as its diagram
+  (`MermaidDiagram.tsx`); Mermaid is loaded on demand by the page (`loadMermaid`), and the plugin, which is
+  built as one script, does not pass it, so there the block stays code. The assistant's content tools (`read_doc`,
+  `insert_content`, `replace_blocks`, `delete_blocks`, `replace_text`, plus `open_doc`, `list_docs`,
+  `create_doc`, `read_other_doc`) work on them too, through `client/src/agent/markdownTools.ts` and
+  `shared/agent/markdownBlocks.ts` (blocks are the top-level Markdown constructs, edits are text ranges
+  applied through the editor so they are undoable); the formatting and page tools do not.
+- A video in a presentation or a document is named by its address (`shared/video.ts`): a stored video
+  file (`/api/files/<id>`) or a YouTube video's watch address. It is a slide element of type `video`
+  (`shared/deck.ts`) and a `video` block in a document (`shared/doc.ts`; in Markdown an image whose address
+  is a video's). `VideoDialog` (`client/src/components/VideoDialog.tsx`: upload, YouTube link, or one of the
+  user's files) inserts one in either editor. It is drawn as its still until played (`VideoPlayer.tsx`; in a
+  document, `VideoView` in `DocEditor.tsx`): a double-click on a slide, the play button in a document, and
+  always in the show.
+- A table on a slide is an element of type `table` (`shared/deck.ts`): rows of text cells with their own look,
+  column shares, a header row and banding; `shared/deckTable.ts` has its operations and the colors both the
+  renderer (`SlideView`'s `TableView`) and the PowerPoint writer use. A cell is edited in place (`DeckController.selectCell`,
+  Tab moves on). It is written as a PowerPoint table (`writePptx` adds the header and banding flags pptxgenjs
+  cannot) and read back as one; a PowerPoint table with merged cells is still read as boxes and lines.
+  A table can be linked to a spreadsheet range (`TableElement.source`: a fixed range, or with `used` the tab's
+  used part, which it follows as it grows). Its cells are the range's values and look as last read
+  (`shared/sheetTable.ts`, `GET /api/sheets/:id/table`), so everything that draws or exports a table needs nothing
+  more; they are not edited on the slide. While a presentation is open `LinkedTableSync` (`client/src/deck/linkedTables.ts`)
+  follows each linked spreadsheet's revision feed and refreshes its tables as undo steps. Insert › Table from
+  spreadsheet… (`SheetTableDialog`) makes one, and the assistant's `edit_elements` takes `link`, read before the
+  tool runs by `linkDeckTables` (in `AgentProvider` and `FileService.editDeck`). In a PowerPoint file the source is
+  an extension in the table's frame (`TABLE_SOURCE_EXT`).
+- Charts (`shared/chart.ts`) float over a spreadsheet tab (`Tab.charts`): Excel's model (an anchor cell and
+  offset, a size in pixels, categories and series as ranges in formula syntax from the chart's own tab, so the
+  formula adjusters in `ops.ts` keep them on their data as rows, columns and tabs change). `chartData` reads what
+  one shows through the engine; `ChartView` (`client/src/chart/`) draws it as SVG (so it draws the same in
+  pictures and PDFs made from the DOM), `ChartLayer` puts the tab's charts over the grid's canvas (select, move,
+  resize, Delete) and `ChartEditor` is the panel beside it. Insert › Chart (`SheetController.insertChart`,
+  `suggestChart`) charts the selection. The assistant has `add_chart`, `edit_chart`, `delete_chart`
+  (`client/src/agent/chartTools.ts`) and sees charts in `get_sheet_overview`. ExcelJS neither reads nor writes
+  charts: `server/xlsxCharts.ts` adds the DrawingML parts after it writes a workbook and reads them on import
+  (kinds ours cannot be are counted as lost); it also hands ExcelJS the file without its drawings, which it can
+  fail on. A slide's `chart` element (`ChartElement`) is a sheet chart's look and data, linked to it
+  (`ChartSource`, `GET /api/sheets/:id/charts` and `/chart`, followed by `LinkedTableSync`); Insert › Chart from
+  spreadsheet… (`SheetChartDialog`) and `edit_elements` (type `chart`, `link: {sheet_id, chart_id}`) make one.
+  It is written as a native PowerPoint chart (pptxgenjs) with its link as an extension (`CHART_SOURCE_EXT`), and
+  a PowerPoint chart is read back from its cached data (`readChartWithData`).
+- CSV files are spreadsheets stored as CSV text (`shared/csv.ts`; `SheetMeta.format === 'csv'`, the `format`
+  column in `server/sheets.ts`). `SheetStore.load` parses the text into a one-tab workbook and `save` writes
+  CSV back for as long as the workbook holds only plain values, so everything that reads spreadsheets works
+  on them. In the editor `csvGuard` (`client/src/state/store.ts`) refuses a change CSV cannot store
+  (formatting, images, column sizes, frozen panes, filters, more tabs) and the page offers to convert the
+  file to a native spreadsheet (`POST /api/sheets/:id/convert`); the assistant's tools get a `ToolError`
+  telling it to ask the user to convert.
+- The desktop app (`desktop/`, `npm run desktop`) is Electron around the same server and client, named MCP Docs
+  (the hosted app is MCP Docs too, the ChatGPT plugin Universal Docs; code shared by both names it with `appName` in
+  `shared/brand.ts`, and the client with `appName()` in `client/src/brand.ts`, set from `/api/auth/me`). `main.js`
+  starts `desktop/server.ts` as a child process for the folder being opened (the command-line argument or
+  the current directory) and loads it in a window. Each window (a tab, on macOS) shows one folder, and each folder
+  open in a window has a server of its own, stopped when its last window closes; opening a folder (Open Folder…, a
+  file of Recents outside it) changes only the window it was asked in. File › New Tab (⌘T, `newTab`) opens the
+  folder and list of the window in front. A right-click the page leaves alone gets the menu a browser would show (copy or
+  save a picture, links, text, spelling: `desktop/contextMenu.js`). Open in Finder (File Explorer on Windows: a file's and a folder's menu in the list, the
+  folder button's menu, each editor's File menu) is `POST /api/local/reveal`, which `main.js` does with `shell`; a file
+  dragged out of the list is the file itself to other apps (Finder, a video editor): the page cancels its own drag and
+  asks `POST /api/local/drag`, and `main.js` runs the system's (`webContents.startDrag`, `dragOut`). Dropped on a folder
+  of the list it still moves there (`FileLibrary`'s `onDragOut`). The servers' token cookies are on one host, so each has its own cookie
+  name (`local.cookie`, `LOCAL_COOKIE`). `buildApp({ local: { dir, token } })` swaps in the
+  folder-backed stores of `server/localStore.ts` (`LocalSheetStore` and `LocalFileStore`, subclasses that
+  override the on-disk hooks of `SheetStore` and `FileStore`: real `.md`/`.csv` files, `.ffsheet`/`.ffslides`/
+  `.ffdoc` for the JSON formats, the tables synced with the folder on every list; a document's title is its whole file name,
+  extension included, and what is made from a title drops it with `titleBase` in `shared/docNames.ts`) and makes every request
+  the one local user. The client learns it is local from `useAuth().local`.
+  It has no background jobs (app changes, research): `AgentOptions.jobs` is false, so the assistant is not
+  offered `JOB_TOOLS` and its prompt is `PROMPT_WITHOUT_JOBS`, and `/api/agent/jobs` refuses.
+  There documents are Office files: spreadsheets Excel (`format === 'xlsx'`, `shared/xlsxFormat.ts`),
+  presentations PowerPoint (`'pptx'`, `shared/pptxFormat.ts`), documents Word (`'docx'`, `shared/docxFormat.ts`).
+  A file is imported when read and written back with its export (`workbookXlsx`, `deckPptx`, `docDocx` in
+  `server/docxExport.ts`); pictures read from one are stored once (`ImageStore.createOnce`). New documents
+  and CSV files that outgrow CSV become Office files (`SheetStore.richFormat`); only one its Office file
+  cannot hold (a picture in a cell, a gradient, a video in a document, ...) is kept as `.ffsheet`/`.ffslides`/
+  `.ffdoc`, and in the editor such a change asks first (`xlsxGuard`, `pptxGuard`, `docxGuard`, the stores'
+  `guard`). What writing back would remove (the import's losses, the export's approximations) is `notKept`
+  on a load of a file the app did not write: the editor is read-only (`lockedGuard`, `useOfficeFile` in
+  `client/src/components/OfficeFile.tsx`) until the user allows editing, and the first save over it keeps a
+  copy in the trash.
+  On macOS the app declares the file types it opens (`build.mac.extendInfo` in `package.json`: it owns
+  `.ffsheet`/`.ffslides`/`.ffdoc` and edits Markdown, CSV, Office files and PDFs, and is an Open With
+  choice, never the default, for PNG, JPEG, WebP and GIF pictures). macOS keeps Apple's apps
+  the default for the standard ones whatever the app declares, so the installed app offers once, and has
+  Make Default App… in the app menu, to set itself as the person's default (`setDefaultApp`). Finder's
+  `open-file` shows the file in the open folder when it is inside it, else opens the file's own folder.
+  New files in Downloads, Documents and Desktop (`app.getPath`, so Windows' known folders too) open the same way, but always in a new tab, and
+  bring the app to the front (`desktop/newFiles.js`, `watchFolders` in `main.js`): not recursively, only the kinds chosen in
+  Settings (`KINDS`: Office files, PDFs, Markdown, CSV, other text files, which are any name whose first 8 KB are text, pictures,
+  and videos, off at first), never hidden, lock or unfinished ones (`.crdownload`, `.part`, …), once a file stops changing, and
+  not when several settle at once (a copy). The app's own writes are not new: `writeAtomic` and Download to Folder tell `onOwnWrite` (`server/sheets.ts`),
+  which `desktop/server.ts` passes to `main.js` (a `wrote` message). It is on unless turned off in Settings' Desktop tab, which has the kinds too
+  (`#desktop`, `GET`/`PUT /api/settings/new-files`, `AppOptions.local.newFiles`, kept by `main.js` in `new-files.json`
+  in the app's data folder); Settings asks `main.js` for it, and for the agents below, with an `ask` message.
+  Its Recents (see Folders) adds, below the files opened in the app, the files last opened on the machine in any
+  app, as Finder's Recents lists them, read from Spotlight on macOS (`recentFiles` in `server/recents.ts`). Opening one outside the open folder
+  (`POST /api/local/open`) has the server ask `main.js` (a message to its parent) to open the file's own
+  folder instead; the new window starts at `/open?file=…&from=recents` (`pages/OpenLocalFile.tsx`), which
+  finds the file (`GET /api/local/resolve`) and makes Recents the first breadcrumb (`client/src/listing.ts`).
+  A window may instead be a Web tab: the hosted app (`UNIVERSAL_WEB_URL`) in a session of its own (`persist:web`),
+  beside the Local tabs (`createWebWindow`, `isWeb`). Both kinds show a Local | Web switch beside the logo (`PlaceSwitch`, shown
+  when the user agent has `MCPDocs/`) whose switch is an `mcpdocs://switch` link `main.js` catches (`handleAppLink`).
+  Google sign-in in a Web tab runs in the system browser with a key of the app's, which the app asks after
+  (`googleSignIn`, `/api/auth/handoff/status`) and trades for the tab's session at `/api/auth/handoff` (design in
+  `docs/web-and-pdf.md`). Upload to Web… and Download to Folder… copy files between
+  the folder and the web (`server/webCopy.ts`, `/api/web/*`, `WebCopyDialogs.tsx`): the folder's server asks the
+  hosted app through `WebBridge`, which `main.js` answers with the Web tab's session (`webRequest`).
+  Over the file list the breadcrumbs show only the folder and the one above it (`FileLibrary`'s `crumbsShown`; at the
+  open folder's top that is its parent on disk, `LocalFolderParent`), each with its full path as its tooltip, and the list
+  starts with a ".." row (`up`). The star before them marks the folder shown as a favorite (see Favorites); the house button that went to the home folder (`LocalFolderHome`) is hidden for now.
+  The folder button left of it (`LocalFolderMenu`) lists the usual folders in the home folder (`GET /api/local/places`: it, Documents, Downloads, Desktop), and offers Open Folder… (`POST /api/local/choose-folder`,
+  `main.js`'s dialog) and Open file by path… (`POST /api/local/open-path`: a file or folder, absolute, `~/` or
+  relative to the open folder; one outside it has `main.js` open it, or the file's own folder).
+  Each editor's File menu (a stored file's page too, `FilePage`: pictures, PDFs, text, web pages, videos) starts with an Open menu (`useOpenInTab`, `client/src/components/OpenInTab.tsx`): both of them, then
+  Open Favorites and Open Recents, the user's lists (on the web too). All open in a new tab instead (`tab` in the request): one
+  inside the folder by `window.open`, one outside by `main.js` (`openFileInTab`, `openFolder`'s `inTab`).
+  The home page's Scratch pad tile (`ScratchPadTile`) is a menu of the Markdown files in `~/.config/mcp-docs` (`SCRATCH_DIR`,
+  `GET /api/local/scratch-pads`) and New scratchpad, which makes `Scratch pad.md`, then ones named for the day
+  (`scratchPadName`: `Scratch pad-sep05.md`), and opens it (`POST /api/local/scratch-pad`, with a `name` to open one); outside
+  the open folder the window moves to that folder, as Open file by path… does, but keeps the folder it came from
+  (`/open?…&backDir=&backFolder=`, `returnTo` in `client/src/listing.ts`): the editor's breadcrumbs show it, and a list
+  asked for there (breadcrumbs, the logo, Home) moves the window back to it (`HomePage`, `POST /api/local/return`).
+  On the web the tile's scratch pads are the Markdown documents in the user's `Scratch pads` folder (`ScratchPadTile`).
+  Connect your agent goes to Settings' second tab (`#agents`; Assistant is the first), which shows the MCP address (`mcpUrl`
+  from `/api/settings/agents`) and the agents connected: on the web the hosted address with Copy agent instruction; in
+  the desktop app (`local: true`) the app's own server on this computer with Copy Claude Code command, its agents and
+  whether it is running, which `desktop/server.ts` asks `main.js` for (`AppOptions.local.agents`, an `ask` message).
+  The desktop app is also an MCP server for agents on the same machine (Claude Code, say), named MCP Docs
+  (`mcp-docs`; the hosted one is MCP Docs too from version 2, with the id `universal-docs`): `server/localMcp.ts`
+  serves the ChatGPT plugin's model tools (`plugin/server`, the newest version, no UI parts) over the open
+  folder's stores at `/mcp`. `main.js` serves it on a fixed port (127.0.0.1:39217, `UNIVERSAL_MCP_PORT`),
+  passing requests to the server of the window in front (`frontServer`) with a secret made for each run. Agents sign in
+  with OAuth 2.1 (`desktop/mcpAuth.js`: registration, PKCE, refresh; the person allows each agent in a native
+  dialog, not on the web page; tokens hashed in `mcp-auth.json` in the app's data folder), and File › Connect
+  an Agent (MCP)… opens Settings at `#agents`, which shows the `claude mcp add` command and disconnects them (`revoke`). For Claude Code and Codex it is also a plugin,
+  `claude-plugin/` (the server and a skill, `skills/mcp-docs/SKILL.md`; manifests `.claude-plugin/plugin.json` and
+  `.codex-plugin/plugin.json`; the marketplaces are `.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json`
+  at the root), installed with the app by `npx @freeflow-im/mcp-docs` (`installer/`, its own npm package, which asks
+  which agents to add it to and prints the MCP address for any other client; its version, the plugins' and the Claude
+  marketplace entry's are the desktop release's: `npm run release -- <version>` sets them all and tags
+  `desktop-v<version>`, and pushing the tag has `.github/workflows/desktop-release.yml` build the Mac and Windows apps, make the GitHub
+  release and publish the installer to npm, with the notes in `release-notes/<version>.md`). Check for Updates… (the app menu; Help on Windows, `desktop/updater.js`)
+  downloads that release's file and installs it over the running app: on macOS it unpacks the new app beside the old one
+  and a detached script swaps it in after the app quits (the app is not Developer ID signed, so Electron's updater cannot);
+  on Windows the setup program runs silently with `--force-run`. A file
+  the model opens, creates or imports is shown in the window (`FileHub.onShow`, a `show` message to `main.js`,
+  a `universal-show` event to the router), and the window reports the file it shows (`POST /api/local/showing`,
+  `client/src/desktopBridge.ts`, with the window's `WINDOW_ID`), which the tools act on when no id is given.
+  An edit tool on the file a window shows runs in that window, as the built-in assistant's tools do: `FileHub.live`
+  (`LiveEditor`) is `server/windowTools.ts`, which sends the call to the window (`GET /api/local/tool-calls`,
+  server-sent events) and waits for its answer (`POST /api/local/tool-calls/:id`); `AgentProvider`'s
+  `runWindowCall` runs it with `runTool` on the open editor, so it is undoable (calls less than a minute apart
+  share an undo group), asks about destructive changes (`confirmationFor`, opening the panel), and is saved by
+  the editor. A window that no longer has the file answers `unavailable`, and the tool runs headless on the
+  stored file (`FileService.editDoc`/`editDeck`/`editSheet`). `render_slide`, `export_deck` and `select_range`
+  only run in the window, and only the desktop MCP server has them (`McpOptions.local`), with `open_path`, which
+  opens a file by its path (`McpOptions.openPath`: in the folder as `open_file` does, else in a new tab on its own folder, `openFileInTab`).
+  There `transform_image` (remove_background included) runs in the window in front too, whatever it shows
+  (`WindowTools.runInFront`, `FileService.editImageInWindow`), with the built-in assistant's image tool; the
+  hosted plugin's goes to its app's job queue (`runImageJob`) and cannot remove a background.
+- The image editor (`client/src/image`, design in `docs/image-editor.md`) is our fork of react-image-editor
+  (github.com/freeflow-community/react-image-editor, on Fabric.js), installed from the tarball in `vendor/`.
+  `ImageEditorHost` is the editor itself, loaded on demand and unaware of where a picture comes from;
+  `ImageFileEditor` is a stored picture being edited on `FilePage` (Save rewrites the file through
+  `PUT /api/files/:id`, which keeps the version before for one revert; Save a copy makes a new file).
+  The assistant's `transform_image` (`client/src/agent/imageTools.ts`) applies its operations
+  (`client/src/image/imageOps.ts`) with the same engine: in the open editor when the picture is open there
+  (`activeEditor.ts`), else in one off screen (`hiddenEngine.ts`). Its `overlay` puts another picture (an attached one
+  by its `/api/images/...` address, or a stored picture) on top as a layer (`engine.addImageAt`); on a stored picture
+  with no `save` it opens the file in the editor first (`openImageEditor`, `/f/<id>?edit=1`), so the user can still
+  move and resize it before saving. The engine needs a browser canvas, so tests
+  use `fakeEngine.ts`. In the plugin the model's `transform_image` is a job the plugin's app takes with its
+  state and does in the browser (`FileService.runImageJob`, `plugin/web/imageJobs.ts`).
+  A picture inside a file is edited in `ImageEditDialog` over the page and never rewritten: the page uploads
+  the result and puts it in place as an undoable step (on a slide, `DeckController.replacePicture`; in a document, `DocController.replaceImage`).
+  A slide's own Crop (`client/src/deck/CropOverlay.tsx`, `shared/deckCrop.ts`) changes the image element's
+  `crop` and box, not the picture.
+- Importing a file's bytes, whatever they are, is `server/importFile.ts` (`importBytes`: a Word, PowerPoint,
+  Excel, CSV or Markdown file becomes a file the app edits, a Markdown file staying Markdown; a PDF, video, picture or web page is stored as
+  it is, and so is any other plain text file, edited as text). Both assistants have an `import_file` tool over it that takes a web address; the server fetches it
+  with `server/webFetch.ts`, which refuses addresses that are not on the public internet, at every redirect.
+- A PDF's text is read as Markdown by `server/pdfMarkdown.ts` (`pdfToMarkdown`, on LiteParse: PDFium for the text and
+  layout, Tesseract OCR for the pages that are scans, in worker processes with a deadline; pictures are left out).
+  `read_doc` on a stored PDF reads it, and Convert to Markdown (the PDF's page and its menu in the list,
+  `POST /api/files/:id/markdown`), the assistant's `convert_pdf` and the MCP `convert_pdf_to_markdown` (version 2)
+  make a Markdown file of it beside the PDF (`pdfToMarkdownFile`).
+- Download as PDF (documents, presentations, Markdown, stored web pages; design in `docs/web-and-pdf.md`) is made by
+  the server: `GET /api/files/:id/export?format=pdf` has a `PdfRenderer` (`server/pdf.ts`) load the file's page in
+  the app with `?print=pdf`, which lays itself out as File › Print does and sets `window.__printReady` when drawn
+  (`client/src/print.ts`), and print it. The headless browser is let in by a print ticket, a cookie making its
+  requests the user's for reading only (`PrintTickets`, the `onRequest` hook). A web page's HTML is printed
+  from its text with each request it makes checked as an import's (`webFetch.ts`). The hosted app's renderer is
+  Chromium through `playwright-core` (`CHROMIUM_PATH`, Debian's `chromium` in the hosted app's image); the desktop app's
+  (`ElectronRenderer`) asks `main.js` to print in a hidden window (`printPdf`). `PdfMaker` (made once in `buildApp`)
+  also serves `export_pdf`, for the assistant and the MCP, which keeps the PDF as a stored file beside the file.
+- A PDF is signed on its page (Edit, `client/src/pdf/PdfSigner.tsx`): the pages drawn by pdf.js with the user's
+  signature, lines of text and dates placed over them, which `signPdf` (`shared/pdfSign.ts`, on `@cantoo/pdf-lib`)
+  writes into the page content (Helvetica text, the signature as a picture; positions in points from the top left of
+  the page as shown). Save rewrites the PDF (`PUT /api/files/:id`, keeping the version before; in the desktop app a
+  copy goes in the trash) and Save a copy makes `<name>-signed.pdf`. The signature is drawn, typed or uploaded in
+  `SignatureDialog` (signature_pad); a user keeps several, picked from the Sign menu (`server/signatures.ts`,
+  `/api/settings/signatures`; in the desktop app in its settings database).
+- Find (⌘F) in the editors other than the spreadsheet's (`state/search.ts`, `FindBar`) is `client/src/find`: one find bar
+  (`FindBox`, which `FindBar` also uses), matches in a document as ProseMirror decorations (`docFind.ts`, `DocController.find`),
+  in a presentation's slides by element (`deckFind.ts`, `DeckController.find`), in Markdown over the textarea
+  (`TextareaMatches`) and in the preview, in a plain text file's editor (`TextFileEditor`, the same layer), and in the JSON tree; text the page draws is highlighted with the CSS Custom
+  Highlight API (`highlights.ts`). PDFs have none of their own yet (the browser's viewer).
+- A stored file that is plain text (`StoredFile.text`) is edited as text on its page (`TextFileEditor`, saved as it is typed by an `AutoSaver` as the other editors are; in the desktop app its Tail follows a growing file, a log, by asking
+  `GET /api/files/:id` for the bytes past those it has, a Range request); a JSON file
+  is shown as a tree first (`JsonViewer`: all open, Collapse all / Expand all, each object or array on its own; a very
+  large one opens only its top levels), with Edit for the text.
+- A zip file's page lists what it holds and opens each file in it read-only (`client/src/components/ZipBrowser.tsx`,
+  the folder and file in the address as `?dir=` / `?entry=`). The server never unpacks to disk
+  (`server/zipView.ts`): `GET /api/files/:id/zip` lists the files, `/zip/entry?path=` sends one (inline only
+  for PDFs, pictures and videos, as stored files are), and `/zip/view?path=` converts a Word, Excel or
+  PowerPoint file with the importers, its pictures inline as `data:` addresses. The browser shows text,
+  Markdown, CSV and web pages from the bytes; a spreadsheet is the `Grid` with a store guard that refuses
+  every change, a document the `DocEditor` with `readOnly`.
+- Open editors (spreadsheets, documents, Markdown, presentations) keep to the latest revision of their file: saves name the
+  revision loaded and the server answers 409 when it changed, and `GET /api/revisions/:id` (server-sent events,
+  `server/revisionFeed.ts`, fed by `SheetStore.onRevision`) announces each new one so an editor with nothing
+  unsaved reloads (`client/src/state/revisionSync.ts`). The feed is per process; more than one server node
+  would need shared pub/sub for it. In the desktop app other programs change files too: the directories open editors and lists look at
+  are watched (`DirWatchers`, `server/folderWatch.ts`, not recursively), a file whose time is not the one the store
+  knows is a new revision (`LocalSheetStore.fileChanged`/`retime`), and `GET /api/local/folder-changes?folder=` tells
+  the home page's list to load again.
+- The hosted app's public site for visitors: the front page (`LandingPage`) is drawn when the app is built
+  (`npm run build` runs `scripts/prerender-landing.ts` on `client/src/landingPrerender.tsx`, making
+  `dist/client/landing.html` with its head for search engines), and the server sends it at / to a visitor who is not
+  signed in, with the app's address for `ORIGIN_MARK`; the app keeps it while it asks who is signed in. Each box on
+  it can link to a feature page: Markdown with front matter in `content/features/<slug>.md`, served by
+  `server/marketing.ts` as HTML at `/features/<slug>` (styled by `client/public/marketing/site.css`, with structured
+  data, its FAQ section included) and as Markdown for agents at `/features/<slug>.md` (or with `Accept: text/markdown`),
+  listed on `/features`, in `/sitemap.xml` and in `/llms.txt`. A new page is a new file there and a `page` on its
+  box in `LandingPage`'s `FEATURES`.
+- Public links (`server/publicLinks.ts`, table `public_links`): the hosted app only, a presentation or a video (a stored file a browser plays)
+  can have an address, `/p/<token>`, that anyone can view without signing in (`PublicPage`). The owner turns it on and off in the Sharing menu
+  (`ShareDialog`, `/api/sharing/:kind/:id`); a link turned on again gets a new token, and deleting a file ends its link (triggers on `sheets` and
+  `stored_files`, whichever path deleted it, so a restored file is not public again). Guests use `/api/public/:token...` only: `publicDeck` gives them
+  a copy of the deck without speaker notes or links to spreadsheets, with its pictures and videos named under the token, and only what its elements
+  show can be fetched with it (`shownBy`, checked per request, so what leaves the deck stops being available). Answers carry `no-referrer`,
+  `noindex` and a `sandbox` CSP, and browsers keep files at most five minutes.
+- Folders (`shared/folders.ts`): a folder is named by its path (`Reports/2026`, `''` for the top). Files
+  carry it in the `folder` column (`SheetMeta.folder`, `StoredFile.folder`); the folders themselves are
+  rows on the server (`FolderStore`, `server/folders.ts`) and directories in the desktop app
+  (`LocalFolders`). The home page lists one folder through `GET /api/library?folder=`; a request that
+  names a `folder` (query or body) has it checked and put on `req.folder` by `requireUser`.
+  `GET /api/folders/download?folder=` is a folder as a zip (`exportFolder` in `server/export.ts`), and a file
+  dragged onto a folder in the list or the breadcrumbs is moved there (`FileLibrary`'s `onMove`).
+- Recents, a tab beside the folder's name on the home page (`/?recents=1`, `FileLibrary`'s `otherList`): the last
+  20 files the user opened, in any folder. Each page that shows a file reports it (`useRecentOpens`,
+  `POST /api/recents`) to `RecentOpens` (`server/recents.ts`), which names it by kind and id on the web and by
+  its absolute path in the desktop app (ids there are only the open folder's; the list is in the settings
+  database, for every folder). `GET /api/recents` lists them, forgetting web files that were deleted; in the
+  desktop app the page then asks `GET /api/recents/system` for Spotlight's (slow), shown below. Its last answer is
+  kept in the settings database and comes with `GET /api/recents` (`cached`), shown until the new one replaces it;
+  only without one is there a spinner.
+- Favorites, the tab after Recents (`/?favorites=1`, `FileLibrary`'s `otherLists`): folders and files the user marks with
+  Add to Favorites in their menu (`server/favorites.ts`, `GET`/`POST /api/favorites`). On the web each is named by kind and id
+  (`folder:<path>` for a folder) and one deleted is forgotten; in the desktop app by its absolute path, in the settings database,
+  so the list is the same in every folder and one outside the open folder opens as Open file by path… opens it. `keys` names
+  those in the list being shown, so each menu says Add or Remove; each editor's header starts with a star, before the file's folders and name (`FavoriteStar`, `GET /api/favorites/one`).
+
+## The assistant in more detail
+
+Each file has its own chat, and the home page one (`chatScope`, `HOME_CHAT` in `shared/agent/protocol.ts`;
+`agent_conversations.scope`, null for home): `GET /api/agent?scope=` is a chat with the file's title, and reset
+and turns name the chat (`AgentTurnRequest.scope`). The panel shows the open page's chat (`AgentProvider`'s
+`pageScope`), except that a turn stays in the chat it was sent from: when the assistant opens another file the
+turn's chat stays shown, with a link to the page's (`showPageChat`), until the user moves on.
+
+A user can run the assistant on their own Anthropic, OpenAI or OpenRouter API key instead (the Settings page,
+`/api/settings/assistant`, stored encrypted by `server/agent/settings.ts`; `server/agent/providers.ts` makes
+the model call and checks a key before it is saved). The loop and the stored history stay in the Claude
+message format; `server/agent/openai.ts` translates each request to OpenAI's Responses API and
+`server/agent/openrouter.ts` to Chat Completions, and the reply back. The model choices are
+`ANTHROPIC_MODELS`, `OPENAI_MODELS` and, as suggestions (any tool-calling model id is accepted),
+`OPENROUTER_MODELS` in `shared/agent/protocol.ts`. The desktop app has no model of its own
+(`AssistantSettings.builtIn` is false): its settings are the app's, in `settings.db` in its data folder
+(`local.settingsDir`), and on the first run a key found in the user's login shell (`desktop/main.js`) is used
+(`adoptFromEnvironment`: Anthropic's, then OpenAI's, then OpenRouter's).
+
+In the desktop app the assistant can instead run on the user's own Claude Code (provider `claude-agent`,
+`AssistantSettings.agents`): `AgentService` hands those turns to `ClaudeAgentDriver` (`server/agent/claudeAgent.ts`)
+instead of its loop. Each turn is a Claude Agent SDK `query` on the `claude` the user installed and signed in
+to (`findClaude`: their login shell's PATH; no key or sign-in in the app), in the open folder, resuming the
+conversation's session (`agent_conversations.session_id`; a conversation belongs to one `driver`, and switching
+starts a new one). It keeps all of Claude Code's own tools and gets the app's MCP server (`mcp-docs-app`, this
+server's `/mcp` with its own token; the user's plugin's copy is disallowed), whose edits on the open file run in
+the window (`windowTools.ts`, one undo group per turn: `pinGroup`). Its text and tool calls stream to the panel
+as the loop's do (labels for Claude Code's tools in `describe.ts`'s `agentToolLabel`) and are stored for the
+transcript. It runs in Claude Code's `auto` permission mode; a permission its classifier cannot decide is an
+AgentEvent `permission`, answered in the panel (`POST /api/agent/permission`). The desktop build ships the SDK's
+JavaScript but not its bundled binaries.
+
+Pictures among the stored files: `view_image` attaches one to the message after the tool results so the
+model can see it (as `render_slide` does), and `edit_image` asks the server (`POST /api/files/:id/edit-image`,
+`server/imageEdit.ts`) for an edited copy from OpenAI's image model, with the user's OpenAI key or the
+server's `OPENAI_API_KEY`. The copy is a new stored file; the original never changes.

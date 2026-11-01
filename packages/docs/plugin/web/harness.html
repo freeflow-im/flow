@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Docs plugin harness</title>
+    <style>
+      html, body { margin: 0; height: 100%; font: 13px system-ui, sans-serif; }
+      body { display: flex; flex-direction: column; }
+      #bar { display: flex; gap: 8px; align-items: center; padding: 6px 10px; background: #222; color: #eee; }
+      #bar input { width: 360px; }
+      #log { max-height: 120px; overflow: auto; background: #111; color: #9f9; padding: 4px 10px; font: 11px Menlo, monospace; white-space: pre-wrap; }
+      iframe { flex: 1; border: 0; width: 100%; }
+    </style>
+  </head>
+  <body>
+    <div id="bar">
+      <strong>Host stand-in</strong>
+      <label>MCP <input id="url" value="http://127.0.0.1:3002/mcp" /></label>
+      <button id="connect">Connect</button>
+      <label>Composer <input id="prompt" placeholder="(messages the app sends land here)" readonly /></label>
+      <span id="ctx"></span>
+    </div>
+    <div id="log"></div>
+    <iframe id="app" sandbox="allow-scripts allow-forms allow-popups allow-modals"></iframe>
+    <script type="module" src="./harness.ts"></script>
+  </body>
+</html>

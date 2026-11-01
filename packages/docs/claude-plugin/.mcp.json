@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "mcp-docs": {
+      "type": "http",
+      "url": "http://127.0.0.1:39217/mcp"
+    }
+  }
+}

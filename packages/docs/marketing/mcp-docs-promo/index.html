@@ -1,0 +1,99 @@
+<!doctype html>
+<html
+  lang="en"
+  data-resolution="landscape"
+  data-composition-variables='[
+    {"id":"color-ground","type":"color","label":"Background","default":"#f0f4f9"},
+    {"id":"color-ink","type":"color","label":"Text","default":"#1f1f1f"},
+    {"id":"color-accent","type":"color","label":"Accent","default":"#1a73e8"},
+    {"id":"install-command","type":"string","label":"Install command","default":"npx @freeflow-im/mcp-docs"}
+  ]'
+>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      @font-face {
+        font-family: "Google Sans Flex";
+        src: url("assets/fonts/GoogleSansFlex-latin-var.woff2") format("woff2");
+        font-weight: 100 1000;
+        font-style: normal;
+      }
+      :root {
+        --color-ground: #f0f4f9;
+        --color-ink: #1f1f1f;
+        --color-accent: #1a73e8;
+        --muted: #5f6368;
+        --hairline: #dadce0;
+        --check: #0f9d58;
+        --font-display: "Google Sans Flex", sans-serif;
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: var(--color-ground);
+        font-family: var(--font-display);
+        color: var(--color-ink);
+      }
+    </style>
+  </head>
+  <body>
+    <div data-hf-id="hf-da4w"
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-duration="44.8"
+      data-width="1920"
+      data-height="1080"
+      data-motion-blur="on"
+    >
+      <div data-hf-id="hf-crd8" id="bg" class="clip" data-start="0" data-duration="44.8" data-track-index="0"
+        style="position:absolute;inset:0;background:var(--color-ground);z-index:0"></div>
+
+      <div id="files" data-composition-id="files" data-composition-src="compositions/files.html"
+        data-start="0" data-duration="8.85" data-track-index="1" data-track-kind="graphics"
+        data-width="1920" data-height="1080" style="z-index:1"></div>
+
+      <div id="intro" data-composition-id="intro" data-composition-src="compositions/intro.html"
+        data-start="8.5" data-duration="3.0" data-track-index="1" data-track-kind="graphics"
+        data-width="1920" data-height="1080" style="z-index:2"></div>
+
+      <div id="mcp" data-composition-id="mcp" data-composition-src="compositions/mcp.html"
+        data-start="11" data-duration="3.8" data-track-index="1" data-track-kind="graphics"
+        data-width="1920" data-height="1080" style="z-index:3"></div>
+
+      <div id="hook" data-composition-id="hook" data-composition-src="compositions/hook.html"
+        data-start="14.8" data-duration="6.5" data-track-index="1" data-track-kind="graphics"
+        data-width="1920" data-height="1080" style="z-index:4"></div>
+
+      <div id="log" data-composition-id="log" data-composition-src="compositions/log.html"
+        data-start="21.3" data-duration="6.5" data-track-index="1" data-track-kind="graphics"
+        data-width="1920" data-height="1080" style="z-index:5"></div>
+
+      <div id="payoff" data-composition-id="payoff" data-composition-src="compositions/payoff.html"
+        data-start="27.8" data-duration="5.35" data-track-index="1" data-track-kind="graphics"
+        data-width="1920" data-height="1080" style="z-index:6"></div>
+
+      <div id="claim" data-composition-id="claim" data-composition-src="compositions/claim.html"
+        data-start="32.8" data-duration="5.85" data-track-index="1" data-track-kind="graphics"
+        data-width="1920" data-height="1080" style="z-index:7"></div>
+
+      <div id="endcard" data-composition-id="endcard" data-composition-src="compositions/endcard.html"
+        data-start="38.3" data-duration="6.5" data-track-index="1" data-track-kind="graphics"
+        data-width="1920" data-height="1080" style="z-index:8"></div>
+
+    </div>
+    <script>
+      window.__timelines = window.__timelines || {};
+      window.__timelines["main"] = gsap.timeline({ paused: true });
+    </script>
+  </body>
+</html>

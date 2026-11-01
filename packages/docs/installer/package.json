@@ -1,0 +1,40 @@
+{
+  "name": "@freeflow-im/mcp-docs",
+  "version": "0.2.37",
+  "description": "Install the MCP Docs desktop app and its plugin for Claude Code and Codex: office files on your Mac or Windows PC, edited by your coding agent or any MCP client.",
+  "type": "module",
+  "bin": {
+    "mcp-docs": "cli.js"
+  },
+  "files": [
+    "cli.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin",
+    "win32"
+  ],
+  "keywords": [
+    "mcp",
+    "claude-code",
+    "claude-code-plugin",
+    "codex",
+    "codex-plugin",
+    "documents",
+    "office"
+  ],
+  "author": "Scott Persinger",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/freeflow-im/mcp-docs.git",
+    "directory": "installer"
+  },
+  "homepage": "https://github.com/freeflow-im/mcp-docs#readme",
+  "publishConfig": {
+    "access": "public"
+  }
+}

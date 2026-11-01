@@ -1,0 +1,93 @@
+{
+  "typography": [
+    {
+      "role": "display",
+      "fontFamily": "Google Sans",
+      "fontSize": "24px",
+      "fontWeight": "400",
+      "lineHeight": "normal",
+      "letterSpacing": "normal",
+      "color": "#1F1F1F",
+      "sampleText": "Sign in"
+    },
+    {
+      "role": "body-small",
+      "fontFamily": "Google Sans",
+      "fontSize": "13px",
+      "fontWeight": "400",
+      "lineHeight": "normal",
+      "letterSpacing": "normal",
+      "color": "#5F6368",
+      "sampleText": "MCP Docs improves itself: ask the assistant for something it"
+    }
+  ],
+  "spacing": {
+    "observed": [
+      10,
+      12,
+      24
+    ],
+    "baseUnit": 4
+  },
+  "radius": [
+    "6px"
+  ],
+  "shadows": [
+    {
+      "value": "rgba(60, 64, 67, 0.15) 0px 1px 3px 0px, rgba(60, 64, 67, 0.1) 0px 4px 12px 0px",
+      "count": 2
+    }
+  ],
+  "buttons": [
+    {
+      "label": "Continue with Google",
+      "background": "#FFFFFF",
+      "backgroundImage": "",
+      "backdropFilter": "",
+      "color": "#1F1F1F",
+      "padding": "10px",
+      "borderRadius": "6px",
+      "border": "1px solid rgb(218, 220, 224)",
+      "boxShadow": "none",
+      "fontSize": "14px",
+      "fontWeight": "500",
+      "height": "40.1875px"
+    },
+    {
+      "label": "Sign in",
+      "background": "#1A73E8",
+      "backgroundImage": "",
+      "backdropFilter": "",
+      "color": "#FFFFFF",
+      "padding": "10px",
+      "borderRadius": "6px",
+      "border": "1px solid rgb(26, 115, 232)",
+      "boxShadow": "none",
+      "fontSize": "14px",
+      "fontWeight": "400",
+      "height": "40.1875px"
+    }
+  ],
+  "cards": [
+    {
+      "label": "card",
+      "background": "#FFFFFF",
+      "backgroundImage": "",
+      "backdropFilter": "",
+      "color": "#1F1F1F",
+      "padding": "36px 40px",
+      "borderRadius": "16px",
+      "border": "0px none rgb(31, 31, 31)",
+      "boxShadow": "rgba(60, 64, 67, 0.15) 0px 1px 3px 0px, rgba(60, 64, 67, 0.1) 0px 4px 12px 0px",
+      "fontSize": "14px",
+      "fontWeight": "400",
+      "height": "497.375px"
+    }
+  ],
+  "nav": null,
+  "chips": [],
+  "statCells": [],
+  "tabs": [],
+  "backgrounds": [],
+  "glass": []
+}

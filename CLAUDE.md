@@ -91,3 +91,12 @@
   `apps/macos/tools/make-app.sh` → `dist/Flow.app`.
 - UI automation requires an idle desktop or explicit operator authorization
   (see the QA manual in `.claude/agents/quality-assurance.md`).
+- **`packages/docs` is the Workspace app of the FreeFlow suite** (the former
+  `freeflow-im/mcp-docs` repository, added as a git subtree on 2026-11-01; design in
+  `docs/specs/freeflow-suite.md`). It has its own conventions in
+  `packages/docs/CLAUDE.md` and `packages/docs/docs/architecture.md`; read those
+  before changing it. It is in the pnpm workspace (`pnpm --filter @flow/docs
+  typecheck|test|build|dev`) and keeps its own npm lockfile only for its desktop
+  release workflow. Its deploys are the root workflows `docs-aws-deploy.yml`
+  (hosted app, on a push to main touching `packages/docs/**`) and
+  `docs-desktop-release.yml` (the `desktop-v*` tags).

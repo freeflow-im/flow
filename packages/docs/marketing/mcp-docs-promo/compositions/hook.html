@@ -1,0 +1,114 @@
+<template>
+  <style>
+    @font-face {
+      font-family: "Google Sans Flex";
+      src: url("assets/fonts/GoogleSansFlex-latin-var.woff2") format("woff2");
+      font-weight: 100 1000;
+    }
+    #root {
+      position: absolute;
+      inset: 0;
+      font-family: "Google Sans Flex", sans-serif;
+      color: #1f1f1f;
+    }
+    .hook-line {
+      position: absolute;
+      left: 96px;
+      top: 470px;
+      width: 680px;
+      font-size: 84px;
+      font-weight: 500;
+      letter-spacing: -0.015em;
+      line-height: 1.05;
+    }
+    .hook-line .w {
+      display: inline-block;
+    }
+    #hook-window {
+      position: absolute;
+      left: 820px;
+      top: 72px;
+      width: 1052px;
+      height: 936px;
+      border-radius: 18px;
+      overflow: hidden;
+      background: #ffffff;
+      border: 1px solid #dadce0;
+      box-shadow: 0 24px 60px rgba(31, 31, 31, 0.16);
+    }
+    #hook-cam {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 1796px;
+      height: 1080px;
+      transform-origin: 0 0;
+    }
+    #hook-still,
+    #hook-video {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 1796px;
+      height: 1080px;
+    }
+    #hook-cursor {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 40px;
+      height: 60px;
+    }
+  </style>
+  <div data-hf-id="hf-ktv8" id="root" data-composition-id="hook" data-width="1920" data-height="1080">
+    <div data-hf-id="hf-k26t" id="hook-window">
+      <div data-hf-id="hf-7xtu" id="hook-cam">
+        <img data-hf-id="hf-z3ko" id="hook-still" class="clip" data-start="0" data-duration="1.6" data-track-index="2"
+          src="assets/screens/demo-0.5.png" alt="" />
+        <video data-hf-id="hf-zeuy" id="hook-video" class="clip" data-start="1.4" data-duration="5.1" data-media-start="0"
+          data-track-index="3" src="assets/demo.mp4" muted playsinline></video>
+      </div>
+    </div>
+
+    <div data-hf-id="hf-pe1q" id="hook-l1" class="hook-line clip" data-start="0" data-duration="2.1" data-track-index="4">
+      <span data-hf-id="hf-x66n" class="w">An</span> <span data-hf-id="hf-032y" class="w">11-page</span> <span data-hf-id="hf-pay2" class="w">paper</span>
+    </div>
+    <div data-hf-id="hf-ypbt" id="hook-l3" class="hook-line clip" data-start="2.05" data-duration="4.45" data-track-index="4">
+      <span data-hf-id="hf-zdvt" class="w">Ask</span> <span data-hf-id="hf-9o0j" class="w">the</span> <span data-hf-id="hf-mvew" class="w">assistant</span>
+    </div>
+
+    <div data-hf-id="hf-d48w" id="hook-cursor-wrap" class="clip" data-start="4.6" data-duration="1.9" data-track-index="5"
+      style="position:absolute;inset:0">
+      <img data-hf-id="hf-f04e" id="hook-cursor" src="assets/cursor.svg" alt="" />
+    </div>
+  </div>
+  <script>
+    (function () {
+      const tl = gsap.timeline({ paused: true });
+      // Camera in source pixels: scale s, source point (cx, cy) lands at the window's centre (526, 468).
+      const cam = (s, cx, cy) => ({ scale: s, x: 526 - s * cx, y: 468 - s * cy });
+
+      tl.fromTo("#hook-window", { scale: 0.2, opacity: 0, filter: "blur(10px)" },
+        { scale: 1, opacity: 1, filter: "blur(0px)", duration: 0.5, ease: "expo.out" }, 0);
+      tl.set("#hook-cam", cam(1.1, 870, 520), 0);
+      tl.to("#hook-cam", { ...cam(1.6, 1467, 780), duration: 0.6, ease: "power2.inOut" }, 2.7);
+
+      const words = (sel, at) =>
+        tl.fromTo(sel + " .w", { opacity: 0, filter: "blur(6px)" },
+          { opacity: 1, filter: "blur(0px)", duration: 0.13, stagger: 0.07, ease: "power4.out" }, at);
+      const out = (sel, at) =>
+        tl.to(sel + " .w", { opacity: 0, filter: "blur(6px)", duration: 0.15, stagger: 0.03, ease: "power3.in" }, at);
+      words("#hook-l1", 0.12);
+      out("#hook-l1", 1.9);
+      words("#hook-l3", 2.1);
+      out("#hook-l3", 6.25);
+
+      // The cursor comes in from below and clicks Send (source 1745,1045 → frame 1791,964) at 6.0.
+      tl.fromTo("#hook-cursor", { x: 1700, y: 1120 }, { x: 1783, y: 958, duration: 0.6, ease: "expo.out" }, 4.75);
+      tl.to("#hook-cursor", { scale: 0.86, duration: 0.07, ease: "power2.in" }, 5.93);
+      tl.to("#hook-cursor", { scale: 1, duration: 0.15, ease: "power2.out" }, 6.0);
+
+      window.__timelines["hook"] = tl;
+    })();
+  </script>
+</template>
