@@ -24,7 +24,6 @@ import type {
 import { ApiError, api, uploadAvatar, uploadWorkspaceAvatar } from '../lib/api';
 import { useAuth, useSelection } from '../state';
 import { useChannelMembers, useChannels, useMemberMap, useMembers, useSelfRegisterDomain, useWorkspaces } from '../hooks';
-import { useIsFlow } from '../lib/backend';
 import { AuthImg, Avatar } from './Avatar';
 
 export function Modal({
@@ -1238,13 +1237,6 @@ export function UserCard({ userId, onClose }: { userId: string; onClose: () => v
   const sel = useSelection();
   const qc = useQueryClient();
   const memberMap = useMemberMap(sel.workspaceId);
-  const isFlow = useIsFlow();
-  const channels = useChannels(sel.workspaceId);
-  // A provider workspace (Slack) opens the DM you already have; Flow cannot
-  // start a new Slack conversation, so without one there is no Message button.
-  const existingDm = isFlow ? undefined : (channels.data ?? []).find(
-    (c) => c.kind === 'dm' && (c.memberIds ?? []).includes(userId) && userId !== auth.user.id,
-  );
   const [user, setUser] = useState<UserDTO | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -1269,7 +1261,6 @@ export function UserCard({ userId, onClose }: { userId: string; onClose: () => v
 
   const message = async () => {
     if (!sel.workspaceId) return;
-    if (existingDm) { onClose(); sel.selectChannel(existingDm.id); return; }
     try {
       const ch = await api<ChannelDTO>('POST', `/v1/workspaces/${sel.workspaceId}/dms`, { userIds: [userId] });
       await qc.invalidateQueries({ queryKey: ['channels', sel.workspaceId] });
@@ -1347,13 +1338,13 @@ export function UserCard({ userId, onClose }: { userId: string; onClose: () => v
             </div>
           )}
           <div className="mt-2 flex flex-wrap justify-center gap-2">
-            {userId !== auth.user.id && (isFlow || existingDm) && (
+            {userId !== auth.user.id && (
               <button data-testid="user-card-message"
                 className="rounded bg-accent px-4 py-1.5 text-sm font-semibold text-white"
                 onClick={() => void message()}>Message</button>
             )}
             {/* Never on your own profile: you are already in your workspaces. */}
-            {userId !== auth.user.id && isFlow && (
+            {userId !== auth.user.id && (
               <InviteToWorkspace
                 user={user}
                 onDone={() => void qc.invalidateQueries({ queryKey: ['workspaces'] })}

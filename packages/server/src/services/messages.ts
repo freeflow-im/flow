@@ -295,7 +295,7 @@ const SYSTEM_PREDICATE: Record<SystemMessageKind, string> = {
  * Post an inline channel-event line ("Alice joined the channel") — a normal
  * `messages` row authored by the subject user, tagged with `systemKind` so
  * clients render it as a centered muted notice. Unlike sendMessage it creates
- * no notifications, no Slack-events outbox rows, and no unfurls, and it never
+ * no notifications and no unfurls, and it never
  * throws into the caller's path: membership writes must not fail because the
  * courtesy notice couldn't be posted. Only standard channels get these.
  *

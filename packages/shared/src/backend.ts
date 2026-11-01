@@ -2,19 +2,15 @@
 // (docs/specs/multi-server-workspaces.md, "Provider abstraction and identity",
 // "Public API baseline and feature mapping", "Notifications and parity").
 //
-// One connection = one backend. FlowBackend speaks Flow REST/WS; SlackBackend
-// speaks the Slack connector's public-API baseline (and, later, verified
-// internal-protocol capabilities behind the same interface). UI code consumes
+// One connection = one backend. FlowBackend speaks Flow REST/WS to one Flow
+// server; a client holds one backend per connected server. UI code consumes
 // this interface and the normalized DTOs; it never builds a provider path, and
-// an action whose capability is not `supported` never falls through to a Flow
-// server mutation.
-//
-// Identity rules (spec lines 247-261) are enforced by the helpers at the bottom:
-// provider-native ids stay strings; a Slack message is keyed by the exact `ts`
-// string and never converted through a number or given a manufactured UUID.
+// an action whose capability is not `supported` never falls through to a
+// server mutation. (The Slack provider that once shared this seam was removed
+// for the FreeFlow suite, docs/specs/freeflow-suite.md §2.0.)
 import type { ChannelDTO, FileDTO, MessageDTO, MessagePage, UserDTO, WorkspaceDTO, WorkspaceMemberDTO } from './dto.js';
 
-export type BackendProvider = 'flow' | 'slack';
+export type BackendProvider = 'flow';
 
 // ---- capabilities -----------------------------------------------------------
 
@@ -60,7 +56,7 @@ export type BackendAuthStatus = 'authenticated' | 'unauthorized' | 'reauthorizat
 
 export interface BackendAuthState {
   status: BackendAuthStatus;
-  /** Provider-native user id of the signed-in identity ("U…" for Slack). */
+  /** The signed-in identity's user id on that server. */
   userId: string | null;
   /** Human-readable identity line for the switcher ("alice · Acme"). */
   label: string;
@@ -71,40 +67,8 @@ export interface BackendAuthState {
 
 // ---- normalized models ------------------------------------------------------
 
-/** Where a message came from and how to open it natively. Present only on
- * messages from a non-Flow provider. */
-export interface MessageProvenance {
-  provider: Exclude<BackendProvider, 'flow'>;
-  /** Deep link into the provider's own client ("Open in Slack"). */
-  openUrl: string | null;
-  /** True when the message carried content the client could not render
-   * faithfully (unknown blocks, unsupported attachments): the body is a safe
-   * textual fallback and the UI offers `openUrl`. */
-  degraded: boolean;
-  /** Provider message subtype, preserved verbatim for later phases. */
-  subtype?: string | null;
-}
-
-export type BackendMessage = MessageDTO & { provenance?: MessageProvenance };
-export type BackendChannel = ChannelDTO & {
-  provenance?: Pick<MessageProvenance, 'provider' | 'openUrl'>;
-  /** A provider conversation's newest known message (ISO), or null when the
-   * provider has not learned it yet. Absent for Flow channels. */
-  lastActivityAt?: string | null;
-};
-
-/** Slack's sidebar default: a conversation with no new message in 30 days is hidden. */
-export const INACTIVE_AFTER_MS = 30 * 86_400_000;
-
-/** True when a provider conversation should fold away as inactive: no known
- * message in the last 30 days (unknown counts as inactive), nothing unread,
- * and not the one open. Flow channels are never hidden. */
-export function hiddenAsInactive(channel: BackendChannel, selectedChannelId: string | null, now = Date.now()): boolean {
-  if (!channel.provenance) return false;
-  if (channel.id === selectedChannelId || channel.unreadCount > 0 || channel.unreadNotifications > 0) return false;
-  const at = channel.lastActivityAt ? Date.parse(channel.lastActivityAt) : NaN;
-  return !(Number.isFinite(at) && now - at <= INACTIVE_AFTER_MS);
-}
+export type BackendMessage = MessageDTO;
+export type BackendChannel = ChannelDTO;
 
 export interface HistoryPage {
   /** Oldest first, like the transcript. */
@@ -158,8 +122,6 @@ export type BackendEvent =
   | { type: 'thread.reply'; message: BackendMessage }
   | { type: 'reaction.added' | 'reaction.removed'; channelId: string; messageId: string; emoji: string; userId: string }
   | { type: 'channel.updated'; channel: BackendChannel }
-  /** A provider conversation's newest known message moved (sidebar activity). */
-  | { type: 'channel.activity'; channelId: string; lastActivityAt: string }
   | { type: 'channel.read'; channelId: string; lastReadMsgId: string | null }
   | { type: 'typing'; channelId: string; userId: string; threadRootId?: string | null }
   | { type: 'presence'; userId: string; online: boolean }
@@ -218,8 +180,6 @@ export interface WorkspaceBackend {
   /** Subscribe to the normalized stream; returns the unsubscribe function. */
   subscribe(handler: BackendEventHandler): () => void;
 
-  /** Deep link for "Open in <provider>", or null when the provider has none. */
-  openUrl(target: { channelId: string; messageId?: string }): string | null;
 }
 
 // ---- errors -----------------------------------------------------------------
@@ -246,66 +206,11 @@ export class BackendError extends Error {
   }
 }
 
-// ---- identity helpers -------------------------------------------------------
+// ---- helpers ----------------------------------------------------------------
 
-/** Slack's message timestamp string: seconds, a dot, six digits. It is an
- * identifier, not a number; it is never parsed for arithmetic and never
- * reformatted. */
-export const SLACK_TS_RE = /^\d{9,11}\.\d{6}$/;
-
-export function isSlackTs(value: unknown): value is string {
-  return typeof value === 'string' && SLACK_TS_RE.test(value);
-}
-
-export function assertSlackTs(value: unknown): string {
-  if (!isSlackTs(value)) throw new BackendError('invalid', `not a Slack ts string: ${typeof value === 'number' ? 'number' : JSON.stringify(value)}`);
-  return value;
-}
-
-/** A Slack message's identity inside Flow: connection, team, channel and the
- * exact `ts`. The `messageId` used in normalized DTOs is the `ts` itself,
- * scoped by channel — so two teams sharing a `ts` can never collide in a
- * cache that is already namespaced per connection. */
-export interface SlackMessageKey {
-  connectionId: string;
-  teamId: string;
-  channelId: string;
-  ts: string;
-}
-
-export function slackMessageKey(connectionId: string, teamId: string, channelId: string, ts: string): SlackMessageKey {
-  return { connectionId, teamId, channelId, ts: assertSlackTs(ts) };
-}
-
-/** Stable string form for cache keys and events; `ts` survives verbatim. */
-export function slackMessageKeyString(key: SlackMessageKey): string {
-  return `slack:${key.connectionId}:${key.teamId}:${key.channelId}:${key.ts}`;
-}
-
-/** Slack provider identity tuple, serialized for `providerIdentity` fields.
- * Two teams at slack.com never deduplicate into one connection. */
-export interface SlackIdentityTuple {
-  environment: 'slack' | 'slack-gov';
-  enterpriseId: string | null;
-  teamId: string;
-  userId: string;
-}
-
-export function slackIdentityString(identity: SlackIdentityTuple): string {
-  return JSON.stringify([identity.environment, identity.enterpriseId, identity.teamId, identity.userId]);
-}
-
-/** ISO timestamp for display from a Slack `ts` — display only; the `ts`
- * string remains the identity. Integer math on the two halves, no floats. */
-export function slackTsToIso(ts: string): string {
-  const [seconds, micros] = assertSlackTs(ts).split('.');
-  const ms = Number(seconds) * 1000 + Math.floor(Number(micros) / 1000);
-  return new Date(ms).toISOString();
-}
-
-/** Page contents from a provider that could cross pages, deduplicated by id
- * while preserving order — the Slack connector may deliver an event for a
- * message that a lazy history page also contains. */
+/** Page contents that could cross pages, deduplicated by id while preserving
+ * order — an event can arrive for a message that a lazy history page also
+ * contains. */
 export function dedupeMessages<T extends { id: string }>(messages: T[]): T[] {
   const seen = new Set<string>();
   return messages.filter(m => (seen.has(m.id) ? false : (seen.add(m.id), true)));

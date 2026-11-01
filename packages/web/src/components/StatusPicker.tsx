@@ -6,7 +6,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import type { UserDTO } from '@flow/shared';
 import { api } from '../lib/api';
 import { useAuth, useLive } from '../state';
-import { useCapabilities, useIsFlow } from '../lib/backend';
+import { useCapabilities } from '../lib/backend';
 import { Avatar } from './Avatar';
 import { ProfileModal } from './modals';
 
@@ -33,7 +33,6 @@ export default function StatusFooter() {
   const [busy, setBusy] = useState(false);
   const me = auth.user;
   const caps = useCapabilities();
-  const isFlow = useIsFlow();
   const canSetStatus = caps.status.state !== 'unavailable';
 
   const setStatus = async (emoji: string, text: string, suppresses = false) => {
@@ -71,8 +70,7 @@ export default function StatusFooter() {
             >
               <span className="w-[22px] text-center text-[17px]">{o.emoji}</span>
               <span className="text-[13.5px] font-semibold text-ink">{o.text}</span>
-              {/* Only Flow keeps the notification pause; Slack stores emoji and text. */}
-              {o.suppresses && isFlow && <span className="ml-auto text-[11px] text-faint">pauses notifications</span>}
+              {o.suppresses && <span className="ml-auto text-[11px] text-faint">pauses notifications</span>}
             </button>
           ))}
           <button

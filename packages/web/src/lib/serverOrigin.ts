@@ -11,10 +11,10 @@
 // at a server they did not name.
 import { getHost } from './host';
 
-/** Providers a connection can speak. Only `flow` is created today; the field
- * exists from the start so the registry schema does not have to change when
- * Slack connections arrive (spec, "Provider abstraction and identity"). */
-export type ConnectionProvider = 'flow' | 'slack';
+/** Providers a connection can speak. Only Flow servers; the field stays in the
+ * registry schema so stored registries keep their shape (spec, "Provider
+ * abstraction and identity"). */
+export type ConnectionProvider = 'flow';
 
 export class ServerOriginError extends Error {
   constructor(

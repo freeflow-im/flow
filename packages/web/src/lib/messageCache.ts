@@ -49,24 +49,11 @@ export function applyTopLevel(
   if (replaced) return { data: { ...data, pages }, inserted: false };
   if (!insert) return { data, inserted: false };
   const [first, ...rest] = pages;
+  // Flow ids arrive in order, so a new message goes on top.
   const newFirst: MessagePage = first
-    ? { ...first, messages: insertNewestFirst(first.messages, msg) }
+    ? { ...first, messages: [msg, ...first.messages] }
     : { messages: [msg], hasMore: false };
   return { data: { ...data, pages: [newFirst, ...rest], pageParams: data.pageParams }, inserted: true };
-}
-
-/** Slack's message id is its `ts` — a fixed-width, lexically ordered string. */
-const TS_ID_RE = /^\d{10}\.\d{6}$/;
-
-/** Place an arriving message in the newest page. Flow ids arrive in order, so
- * they go on top; a provider whose ids carry their own order (Slack `ts`)
- * may deliver events late, and a late one must land where it belongs rather
- * than on top of a newer message (#546). */
-function insertNewestFirst(messages: MessageDTO[], msg: MessageDTO): MessageDTO[] {
-  if (!TS_ID_RE.test(msg.id) || messages.length === 0 || !TS_ID_RE.test(messages[0]!.id)) return [msg, ...messages];
-  const at = messages.findIndex((m) => !TS_ID_RE.test(m.id) || m.id < msg.id);
-  if (at === -1) return [...messages, msg];
-  return [...messages.slice(0, at), msg, ...messages.slice(at)];
 }
 
 /** Upsert a reply into a thread query (ascending: new replies append). */

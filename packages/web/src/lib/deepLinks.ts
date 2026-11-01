@@ -18,10 +18,6 @@ export type DeepLink =
   | { kind: 'handoff-callback'; code: string; state: string; operationId: string }
   /** `flow://invite/<token>` */
   | { kind: 'invite'; token: string }
-  /** `flow://slack/connected?operationId=…` — Slack consent finished; the
-   * pending flow is already polling the connector, so this only means
-   * "come to the front". */
-  | { kind: 'slack-connected'; operationId: string }
   | { kind: 'unknown'; url: string };
 
 export function parseDeepLink(raw: string): DeepLink {
@@ -43,10 +39,6 @@ export function parseDeepLink(raw: string): DeepLink {
   if (target === 'invite') {
     const token = url.pathname.match(/^\/([A-Za-z0-9_-]+)\/?$/)?.[1];
     if (token) return { kind: 'invite', token };
-  }
-  if (target === 'slack' && url.pathname === '/connected') {
-    const operationId = p.get('operationId');
-    if (operationId) return { kind: 'slack-connected', operationId };
   }
   return { kind: 'unknown', url: raw };
 }

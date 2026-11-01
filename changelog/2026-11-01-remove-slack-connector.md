@@ -1,0 +1,6 @@
+# Remove the Slack connector (web, server, docs)
+
+- `[server]` `slackConnectorOrigin` leaves `GET /v1/client-info` and `config.ts` (`SLACK_CONNECTOR_ORIGIN`, `VITE_SLACK_CONNECTOR_ORIGIN` are no longer read). The `@slack/*` dev dependencies and the phase-4 QA scripts (`smoke4.sh`, `slack-sdk-check.mjs`, `qa-slackbot.mjs`, `socket-mode-e2e.mjs`) go with them.
+- `[web]` The Slack provider is gone: Connect Slack and Slack team cards in Workspaces and servers, the rail's Slack mark, "Open in Slack" links, provider-limited history, the sidebar's inactive-conversation fold, the `flow://slack/connected` deep link. `ConnectionProvider` and `BackendProvider` are `'flow'` only; `WorkspaceBackend` loses `openUrl`, message provenance, `channel.activity` and the Slack identity helpers; the `mrkdwn` helpers go with the connector that used them.
+- `[bridge]` `packages/slack-connector` (the `slack.freeflow.im` Railway service) is deleted, with `docs/dev/SLACK_CONNECTOR.md`, `docs/design/slack-protocol/` and the issue-543/545/546 QA fixtures. The multi-server spec keeps its Flow half.
+- `[macos]` `[ios]` Not in this PR: the native apps still carry the Slack provider (Parity ledger) until their removal PRs.

@@ -1,7 +1,7 @@
 import { useBoundApi } from '../lib/useBoundApi';
 import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { hiddenAsInactive, sidebarColor } from '@flow/shared';
+import { sidebarColor } from '@flow/shared';
 import type { ArtifactDTO, ChannelDTO, WorkspaceMemberDTO } from '@flow/shared';
 import { api } from '../lib/api';
 import { artifactGlyph } from '../lib/fileKind';
@@ -57,32 +57,6 @@ import StatusFooter from './StatusPicker';
  * but one arriving anyway (an old row, a future rule change) renders at top
  * level rather than being indented twice or — worse — silently dropped.
  */
-/** Per workspace: whether each section shows its inactive conversations. */
-function useInactiveToggle(workspaceId: string | null): [{ channels: boolean; dms: boolean }, (section: 'channels' | 'dms') => void] {
-  const key = `flow.sidebar.showInactive.${workspaceId ?? ''}`;
-  const read = () => {
-    try { return { channels: false, dms: false, ...(JSON.parse(localStorage.getItem(key) ?? '{}') as object) }; } catch { return { channels: false, dms: false }; }
-  };
-  const [state, setState] = useState(read);
-  useEffect(() => setState(read()), [key]); // eslint-disable-line react-hooks/exhaustive-deps
-  const toggle = (section: 'channels' | 'dms') => setState((prev) => {
-    const next = { ...prev, [section]: !prev[section] };
-    try { localStorage.setItem(key, JSON.stringify(next)); } catch { /* per-device convenience only */ }
-    return next;
-  });
-  return [state, toggle];
-}
-
-/** "Show N inactive" / "Hide inactive" under a section; nothing when none are hidden. */
-function InactiveToggle({ testid, count, shown, onToggle }: { testid: string; count: number; shown: boolean; onToggle: () => void }) {
-  if (count === 0) return null;
-  return (
-    <button data-testid={testid} className="mx-2 flex w-[calc(100%-1rem)] items-center rounded-md px-2 py-1 text-left text-[13px] text-white/55 hover:bg-white/10 hover:text-white/80" onClick={onToggle}>
-      {shown ? 'Hide inactive' : `Show ${count} inactive`}
-    </button>
-  );
-}
-
 /** Channels A→Z by name, ignoring case (matches the native `COLLATE NOCASE`). */
 export function sortChannelsByName(list: ChannelDTO[]): ChannelDTO[] {
   return [...list].sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', undefined, { sensitivity: 'base' }));
@@ -381,11 +355,6 @@ export default function Sidebar() {
     sel.selectChannel(ch.id);
   };
   const all = channels.data ?? [];
-  // Slack's sidebar default (hidden unless active in 30 days): a provider
-  // conversation with no known recent message folds behind a per-section
-  // toggle. Flow channels are never hidden (hiddenAsInactive).
-  const [showInactive, setShowInactive] = useInactiveToggle(sel.workspaceId);
-  const isInactive = (c: ChannelDTO) => hiddenAsInactive(c, sel.channelId);
   const dms = all.filter((c) => c.isMember && c.kind !== 'standard');
   // A sub-channel of a DM (an agent's log channel, say) belongs to that
   // conversation, not to the workspace — so it renders under its DM row down in
@@ -397,13 +366,10 @@ export default function Sidebar() {
       dmChildren.set(c.parentId, [...(dmChildren.get(c.parentId) ?? []), c]);
     }
   }
-  // Sorted here, not trusted from the backend: Slack returns its own order (the
-  // native sidebars sort by name in their local query too).
+  // Sorted here, not trusted from the server (the native sidebars sort by name
+  // in their local query too).
   const joinedAll = all.filter((c) => c.isMember && c.kind === 'standard' && !(c.parentId && dmIds.has(c.parentId)));
-  const inactiveChannels = joinedAll.filter(isInactive).length;
-  const joined = nestChannels(
-    sortChannelsByName(showInactive.channels ? joinedAll : joinedAll.filter((c) => !isInactive(c))),
-  );
+  const joined = nestChannels(sortChannelsByName(joinedAll));
   // The self-DM ("<you> (you)") is a personal scratchpad — it never carries an
   // unread badge (ui_nits): you can't have unread messages from yourself.
   const isSelfDm = (c: ChannelDTO) => isSelfDmChannel(c, auth.user.id);
@@ -444,9 +410,7 @@ export default function Sidebar() {
   // Direct messages is ONE alphabetically-sorted list (ui_nits). The self-DM
   // ("<you> (you)") is always pinned last: it's a personal scratchpad, not a
   // conversation, so it sinks below everyone else.
-  const inactiveDms = dmList.filter((c) => !isSelfDm(c) && isInactive(c)).length;
   const dmItems = dmList
-    .filter((c) => showInactive.dms || isSelfDm(c) || !isInactive(c))
     .map((c) => ({ title: dmTitle(c, displayNames, auth.user.id), self: isSelfDm(c), channel: c }))
     .sort((a, b) =>
       a.self !== b.self
@@ -466,7 +430,7 @@ export default function Sidebar() {
         <WorkspaceTitle name={ws?.name} onClick={() => setWsMenuOpen((v) => !v)} />
         {wsMenuOpen && (
           <div className="absolute top-12 left-3 right-3 z-20 rounded-lg bg-white py-1 text-ink shadow-[0_12px_40px_rgba(20,8,40,.4)]">
-            {/* Every connection's workspaces, Slack teams included; one on
+            {/* Every connection's workspaces, other servers' included; one on
                 another connection switches this window to it. */}
             {switcher.map((w) => (
               <MenuItem
@@ -594,7 +558,6 @@ export default function Sidebar() {
             <DocsGroup channelId={c.id} docs={artifactsByChannel.get(c.id) ?? []} />
           </div>
         ))}
-        <InactiveToggle testid="sidebar-inactive-channels" count={inactiveChannels} shown={showInactive.channels} onToggle={() => setShowInactive('channels')} />
         {/* Channel browser (#588): one nav row replaces the inline Browse list
             of every unjoined channel, which didn't scale. */}
         {canManage && (
@@ -733,7 +696,6 @@ export default function Sidebar() {
             </div>
           );
         })}
-        <InactiveToggle testid="sidebar-inactive-dms" count={inactiveDms} shown={showInactive.dms} onToggle={() => setShowInactive('dms')} />
 
       </div>
 

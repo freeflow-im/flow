@@ -50,7 +50,7 @@ needs none of this.
 - The renderer is the unmodified `packages/web/dist`. There is no desktop-only
   UI code.
 
-Sign-in with Google, with another Flow server, and with Slack all open the
+Sign-in with Google and with another Flow server both open the
 system browser and come back through `flow://` links, as the macOS app does.
 A server must accept the `app://flow` origin (any Flow server from this
 change on does); an older one refuses the desktop at discovery with a clear

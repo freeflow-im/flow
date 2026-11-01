@@ -1,4 +1,3 @@
-import ConnectSlack, { SlackConnectionCard } from './SlackConnections';
 import { useEffect, useRef, useState } from 'react';
 import { browserSignIn, desktopSignIn, DESKTOP_RETURN_URL } from '../lib/authHandoff';
 import { isDesktop } from '../lib/host';
@@ -38,7 +37,7 @@ export default function ServerConnections({ onSelect, onClose }: {
 
   useEffect(() => {
     let alive = true;
-    for (const connection of manager.connections.filter(c => c.provider === 'flow')) {
+    for (const connection of manager.connections) {
       const runtime = manager.runtime(connection.connectionId)!;
       if (!runtime.getToken()) continue;
       void Promise.all([
@@ -133,10 +132,8 @@ export default function ServerConnections({ onSelect, onClose }: {
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-label="Workspaces and servers">
     <div className="max-h-[90vh] w-full max-w-xl overflow-auto rounded-xl bg-white p-6 text-ink shadow-xl">
       <div className="mb-4 flex justify-between"><h2 className="text-lg font-semibold">Workspaces and servers</h2><button className={buttonSecondary} onClick={onClose} disabled={busy}>Close</button></div>
-      {/* Flow servers and Slack teams in one list, in the order they were added. */}
+      {/* Every connected server, in the order they were added. */}
       {manager.connections.map(connection => {
-        if (connection.provider === 'slack') return <SlackConnectionCard key={connection.connectionId} connection={connection}
-          onChange={() => refresh(n => n + 1)} onOpen={(connectionId, workspaceId) => { onSelect(connectionId, workspaceId); onClose(); }} />;
         // The live number when the supervisor has one, the sheet's own fetch
         // as the fallback for a connection it has not reached yet.
         const unreadFor = (connectionId: string, workspaceId: string) =>
@@ -161,7 +158,6 @@ export default function ServerConnections({ onSelect, onClose }: {
           </div>
         </section>;
       })}
-      <ConnectSlack onChange={() => refresh(n => n + 1)} />
       <h3 className="mb-2 font-semibold">Connect another Flow server</h3>
       <form onSubmit={e => { e.preventDefault(); void connect(); }} className="flex gap-2">
         <input className="min-w-0 flex-1 rounded border p-2" disabled={busy} aria-label="Server or invite URL" placeholder="https://flow.example.com or invite URL" value={address} onChange={e => { setAddress(e.target.value); setDiscovery(null); setAuth(null); setSelected([]); setWorkspaces([]); }} />

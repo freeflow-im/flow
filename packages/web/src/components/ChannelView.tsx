@@ -16,8 +16,7 @@ import { useHoverTooltip } from './HoverTooltip';
 import { ChannelOptionsModal, Modal, UserCard } from './modals';
 import { renderBody } from '../lib/format';
 import { useSyncBar } from '../lib/syncBar';
-import { useBackend, useCapabilities } from '../lib/backend';
-import { BackendError } from '@flow/shared';
+import { useCapabilities } from '../lib/backend';
 
 export default function ChannelView({ channelId }: { channelId: string }) {
   const auth = useAuth();
@@ -30,28 +29,9 @@ export default function ChannelView({ channelId }: { channelId: string }) {
   const messagesQ = useMessages(channelId);
   const pins = usePinnedMessages(channelId);
   const markRead = useMarkRead();
-  // Capability gating (#545): the header's Flow-only controls are not
-  // rendered for a backend that cannot do them; history that the provider
-  // limits is shown as limited rather than as the end of the transcript.
+  // Capability gating (#545): the header's controls are not rendered for a
+  // backend that cannot do them.
   const caps = useCapabilities();
-  const backend = useBackend();
-  const openUrl = backend.openUrl({ channelId });
-  const limitedHistory = caps.history.state === 'limited';
-  const historyError = messagesQ.error instanceof BackendError ? messagesQ.error : null;
-  const [retryAt, setRetryAt] = useState<number | null>(null);
-  useEffect(() => {
-    if (historyError?.code === 'rate_limited') setRetryAt(Date.now() + (historyError.retryAfterMs ?? 60_000));
-    else setRetryAt(null);
-  }, [historyError]);
-  const [, tick] = useState(0);
-  useEffect(() => {
-    if (retryAt === null) return;
-    const timer = window.setInterval(() => tick((n) => n + 1), 1000);
-    return () => window.clearInterval(timer);
-  }, [retryAt]);
-  // Slack's measured budget for this app: one history page a minute, 15 messages each.
-  const SLACK_HISTORY_PAGE = 15;
-  const waitSeconds = retryAt === null ? 0 : Math.max(0, Math.ceil((retryAt - Date.now()) / 1000));
   const lastReadRef = useRef<string | null>(null);
   const [cardUserId, setCardUserId] = useState<string | null>(null);
   const [editChannel, setEditChannel] = useState(false);
@@ -263,18 +243,6 @@ export default function ChannelView({ channelId }: { channelId: string }) {
             {/* nothing to stack yet (fetch in flight) — keep a clickable target */}
             {shown.length === 0 && <span className="text-sm text-muted">👥</span>}
           </button>
-          {/* Another provider's conversation opens natively there (#545). */}
-          {openUrl && (
-            <a
-              data-testid="open-in-provider"
-              className="rounded-lg px-2 py-1 text-xs font-semibold text-accent-soft hover:bg-daypill/60"
-              href={openUrl}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Open in Slack ↗
-            </a>
-          )}
           {/* #188: pins, artifacts and channel options share one "⋯" menu */}
           {caps.pins.state !== 'unavailable' && <button
             type="button"
@@ -327,17 +295,6 @@ export default function ChannelView({ channelId }: { channelId: string }) {
         </div>
       )}
 
-      {/* A provider with retention or read limits never gets to look like an
-          empty, complete archive (#546): when its history is exhausted, say
-          where the rest lives — at the old end, under the header, where the
-          reader who scrolled up is looking. */}
-      {openUrl && !messagesQ.hasNextPage && !messagesQ.isLoading && (
-        <p data-testid="history-end-note" role="status" className="shrink-0 border-b border-hairline px-[22px] py-1 text-[11px] text-faint">
-          Older messages may exist in Slack beyond what Flow can read here.{' '}
-          <a className="underline" href={openUrl} target="_blank" rel="noreferrer">Open in Slack</a>
-        </p>
-      )}
-
       {showSyncBar && (
         <div
           className="mc-sync-bar shrink-0"
@@ -349,8 +306,6 @@ export default function ChannelView({ channelId }: { channelId: string }) {
         </div>
       )}
 
-      {/* Provider-limited history (#545) says so on the load button itself:
-          the page size, or the wait after a 429 — never a retry loop. */}
       {/* key: fresh list per channel so the mount effect re-runs — it restores
           this channel's remembered scroll position (or lands at the bottom when
           there's none / it's stale), keyed by channelId in scrollMemory. */}
@@ -360,12 +315,8 @@ export default function ChannelView({ channelId }: { channelId: string }) {
         messages={messages}
         names={names}
         membersById={memberMap}
-        hasMore={(messagesQ.hasNextPage ?? false) || historyError?.code === 'rate_limited'}
-        onLoadOlder={() => { if (!limitedHistory || waitSeconds === 0) void messagesQ.fetchNextPage(); }}
-        loadOlder={limitedHistory ? {
-          label: waitSeconds > 0 ? `Load earlier messages (wait ${waitSeconds}s)` : `Load earlier messages (${SLACK_HISTORY_PAGE} max/min)`,
-          disabled: waitSeconds > 0 || messagesQ.isFetchingNextPage,
-        } : undefined}
+        hasMore={messagesQ.hasNextPage ?? false}
+        onLoadOlder={() => void messagesQ.fetchNextPage()}
         showThreadAffordances
         readOnly={archived}
         unreadThreadRootIds={channel?.unreadThreadRootIds ?? []}

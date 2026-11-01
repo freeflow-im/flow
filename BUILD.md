@@ -92,14 +92,6 @@ just deploying.
 
 Runbooks, environment variables, logs, rollback: **[docs/ops/DEPLOYMENT.md](docs/ops/DEPLOYMENT.md)**.
 
-**The Slack connector is a second Railway service, `slack-connector`, in the
-same project.** It also deploys from `main`, with its build, start and healthcheck
-(`/health`) set on the service in Railway (config files are deprecated there),
-a volume at `/data`, and only when files under `packages/slack-connector/` or
-`packages/shared/` change. Public origin
-`https://slack.freeflow.im`. Secrets, origins and the Slack app setup:
-[docs/dev/SLACK_CONNECTOR.md](docs/dev/SLACK_CONNECTOR.md).
-
 ---
 
 ## macOS app

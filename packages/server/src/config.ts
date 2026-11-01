@@ -11,13 +11,6 @@ if (fs.existsSync(rootEnv)) process.loadEnvFile(rootEnv);
 
 export const config = {
   get serverDisplayName(): string { return process.env.FLOW_SERVER_NAME ?? 'Flow'; },
-  /** The Slack connector this deployment offers, advertised to clients that
-   * cannot be built with it baked in (the native apps). The web build reads
-   * the same value at build time as VITE_SLACK_CONNECTOR_ORIGIN. */
-  get slackConnectorOrigin(): string | null {
-    const raw = (process.env.SLACK_CONNECTOR_ORIGIN ?? process.env.VITE_SLACK_CONNECTOR_ORIGIN ?? '').trim();
-    return raw.startsWith('https://') ? raw.replace(/\/+$/, '') : null;
-  },
   get allowedWebOrigins(): string[] {
     return (process.env.FLOW_ALLOWED_WEB_ORIGINS ?? '').split(',').map(v => v.trim()).filter(Boolean);
   },
@@ -218,7 +211,7 @@ export const config = {
   get maxFileBytes(): number {
     return Number(process.env.FLOW_MAX_FILE_MB ?? 500) * 1024 * 1024;
   },
-  /** Cap for server-buffered uploads (legacy multipart, Slack-compat files.upload,
+  /** Cap for server-buffered uploads (legacy multipart,
    * avatars): these paths hold the whole file in memory, so they keep the old limit. */
   maxServerUploadBytes: 20 * 1024 * 1024,
   /** Images larger than this get no thumbnail/dimensions — complete-time sidecar

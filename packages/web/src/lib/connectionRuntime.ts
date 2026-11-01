@@ -25,14 +25,12 @@ import {
   sessionFor,
   updateSession,
   addFlowConnection,
-  addSlackConnection,
   setWorkspaceBinding,
   type WorkspaceBinding,
   type ConnectionRegistry,
   type NavigationTarget,
   type ServerConnection,
 } from './connections';
-import type { SlackConnection } from './slackConnector';
 import { getHost } from './host';
 import { isSameOrigin, socketUrlFor } from './serverOrigin';
 
@@ -503,12 +501,6 @@ export class ConnectionManager {
 
   add(origin: string, label?: string): ConnectionRuntime {
     const { registry, connection } = addFlowConnection(this.registry, { origin, label });
-    this.commit(registry);
-    return this.runtime(connection.connectionId)!;
-  }
-
-  addSlack(origin: string, slack: SlackConnection): ConnectionRuntime {
-    const { registry, connection } = addSlackConnection(this.registry, origin, slack);
     this.commit(registry);
     return this.runtime(connection.connectionId)!;
   }
