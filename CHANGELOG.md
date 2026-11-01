@@ -12,6 +12,7 @@ This file keeps two things:
 
 ## Parity
 
+- **The Slack provider is removed on every client (2026-11-01, FreeFlow suite §2.0).** Web ships on merge; macOS and iOS carry it until their next release, which closes this line.
 - **Slack connections are removed from web (2026-11-01, FreeFlow suite §2.0); macOS and iOS still carry the Slack provider until their own removal PRs land.** Gap to close, not a divergence to keep.
 - Multi-server huddles (#541): web leaves the room when switching server; native keeps it running with a return control. Both limit the client to one joined room.
 - Web composer dictation (#594) is browser-web only, by design: it wraps the browser's SpeechRecognition API, while macOS and iOS already get system dictation in their text fields (Fn-Fn / keyboard mic). **The desktop (Electron) app hides the mic button**: Electron's Chromium exposes the API but has no speech service behind it, and macOS/Windows system dictation works in its text fields anyway. Native in-app dictation would need separate Speech framework work, and no ticket asks for it.

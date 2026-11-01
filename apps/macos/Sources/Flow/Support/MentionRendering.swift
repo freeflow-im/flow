@@ -5,8 +5,8 @@ import SwiftUI
 /// `<!channel|here|everyone>` (group mentions). Bodies keep tokens on the wire
 /// so renames stay correct (phase2.md §4); clients translate at display time.
 enum MentionRendering {
-    /// User ids are Flow UUIDs or Slack ids (`U…`/`W…`, uppercase alphanumerics).
-    static var userToken: Regex<(Substring, Substring)> { /<@([0-9a-fA-F-]{36}|[UW][A-Z0-9]{6,20})>/ }
+    /// User ids are Flow UUIDs.
+    static var userToken: Regex<(Substring, Substring)> { /<@([0-9a-fA-F-]{36})>/ }
     static var groupToken: Regex<(Substring, Substring)> { /<!(channel|here|everyone)>/ }
 
     /// Token-free plain text (banners, notification previews).

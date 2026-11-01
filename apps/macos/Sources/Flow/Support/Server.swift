@@ -46,18 +46,6 @@ enum Server {
 
     static var isDefaultLocal: Bool { baseURL == defaultLocal }
 
-    /// The Flow Slack connector this build may connect Slack teams through
-    /// (#546) — the native counterpart of the web build's
-    /// `VITE_SLACK_CONNECTOR_ORIGIN`. Resolution: `FLOW_SLACK_CONNECTOR_ORIGIN`
-    /// env var, then the `FlowSlackConnectorOrigin` Info.plist key. Nil means
-    /// "not configured on this deployment", and the switcher says so.
-    static var slackConnectorOrigin: CanonicalOrigin? {
-        let raw = ProcessInfo.processInfo.environment["FLOW_SLACK_CONNECTOR_ORIGIN"]
-            ?? Bundle.main.object(forInfoDictionaryKey: "FlowSlackConnectorOrigin") as? String
-        guard let raw, !raw.isEmpty, let origin = try? CanonicalOrigin.normalize(raw), origin.origin.hasPrefix("https://") else { return nil }
-        return origin
-    }
-
     /// Native "Continue with Google" (phase16 §9): we have no Google SDK, so
     /// the button opens this page in the system browser. It runs Google
     /// Identity Services, signs in, mints a one-time app-link code and bounces

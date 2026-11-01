@@ -42,11 +42,9 @@ struct MessageListView: View {
     @State private var restoredScroll = false
     /// Passed straight to each row: tapping a sender opens their card (#223).
     var onOpenProfile: (String) -> Void = { _ in }
-    /// What this workspace's provider allows (#546). Flow: everything.
+    /// What this conversation's controls may do (#546). Everything, unless the
+    /// channel is archived.
     var capabilities: Capabilities = .allSupported
-    /// The provider limited this channel's history (#546): the load-older
-    /// affordance shows the wait instead of retrying against the budget.
-    var historyLimit: AppState.HistoryLimit? = nil
 
     /// Precomputed rows (grouping, day dividers, parsed markdown) rebuilt only
     /// when the message array actually changes — never per render pass. A
@@ -140,16 +138,10 @@ struct MessageListView: View {
                     // becomes the ordinary "Load earlier messages" affordance.
                     if isLoadingHistory, !messages.isEmpty {
                         loadingRow("Loading earlier messages…")
-                    } else if let limit = historyLimit, limit.limited, hasMore || limit.retryAfter.map({ $0 > Date() }) == true {
-                        HistoryLimitFooter(limit: limit, capabilities: capabilities) {
-                            loadOlderAnchorId = messages.first?.id
-                            followBox.model.positionRestored(atBottom: false)
-                            onLoadOlder()
-                        }
                     } else if hasMore {
                         HStack {
                             Spacer()
-                            Button(capabilities.loadOlderLabel(wait: 0)) {
+                            Button("Load earlier messages") {
                                 // Reading history is a decision to leave the
                                 // end: unpin, remember the current top row,
                                 // and restore it once the page lands.

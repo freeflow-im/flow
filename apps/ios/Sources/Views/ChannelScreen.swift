@@ -240,13 +240,6 @@ struct ChannelScreen: View {
         )
     }
 
-    /// "Open in Slack" for a provider workspace (#546): the channel in the
-    /// provider's own client, for everything Flow cannot do here.
-    private var providerOpenURL: URL? {
-        guard app.capabilities.isProviderLimited, let ch = resolvedChannel else { return nil }
-        return ProviderLinks.slackURL(workspaceId: ch.workspaceId, channelId: ch.id)
-    }
-
     private var channelMenu: some View {
         Menu {
             // The header tap is the quick way into search (#570), but a bare
@@ -288,13 +281,6 @@ struct ChannelScreen: View {
 
             ArtifactsMenu(channelId: channelId)
                 .hiddenUnless(.artifacts, in: app.capabilities)
-
-            if let url = providerOpenURL {
-                Link(destination: url) {
-                    Label("Open in Slack", systemImage: "arrow.up.right.square")
-                }
-                .accessibilityIdentifier("channel.openInSlack.menu")
-            }
 
             if resolvedChannel?.kind == "standard", !isArchived, app.can(.channelManagement) {
                 Divider()
@@ -415,13 +401,6 @@ struct ChannelScreen: View {
     private var chatStack: some View {
         VStack(spacing: 0) {
             SyncBar(syncing: app.isSyncing)
-            // A provider workspace's one strip (#546): paused live updates,
-            // with the way out. Nothing for Flow.
-            ProviderNoticeView(
-                capabilities: app.capabilities,
-                streamDegraded: app.streamDegraded,
-                openURL: providerOpenURL
-            )
             // The chat area — everything above the composer. Tapping or
             // scrolling any of it puts the keyboard away (#139); the composer
             // is deliberately outside, since tapping it means "type".
@@ -466,8 +445,7 @@ struct ChannelScreen: View {
                     onFocused: { app.focusMessageId = nil },
                     scrollKey: app.sessionScope.key("scroll:\(channelId)"),
                     onOpenProfile: { profileRoute = ProfileRoute(userId: $0) },
-                    capabilities: capabilities,
-                    historyLimit: app.historyLimits[channelId]
+                    capabilities: capabilities
                 )
                 TypingIndicatorView(channelId: channelId, userNames: usersById.mapValues { $0.displayNameWithBadge })
                     .hiddenUnless(.typing, in: app.capabilities)

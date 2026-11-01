@@ -25,9 +25,6 @@ struct MessageListView: View {
     /// Drives the loading states below — an empty transcript with no
     /// explanation reads as a lost conversation on a slow link.
     var isLoadingHistory: Bool = false
-    /// A provider asked for a wait before the next history page (#546): the
-    /// "Load earlier messages" button stays put but disabled until then.
-    var loadOlderRetryAt: Date? = nil
     let showThreadAffordances: Bool
     /// Thread roots holding an unread notification for me (#270) — their reply
     /// chips get a dot, so a reply that needs you is visible here and not only
@@ -146,25 +143,18 @@ struct MessageListView: View {
                     } else if hasMore {
                         HStack {
                             Spacer()
-                            // A limited provider (#545) says its budget on the
-                            // button — the page size, or the wait after a 429 —
-                            // ticking down so the button comes back on its own.
-                            TimelineView(.periodic(from: .now, by: 1)) { timeline in
-                                let wait = loadOlderRetryAt.map { max(0, Int($0.timeIntervalSince(timeline.date).rounded(.up))) } ?? 0
-                                Button(context.capabilities.loadOlderLabel(wait: wait)) {
-                                    // Reading history is a decision to leave the
-                                    // end: unpin, remember the current top row,
-                                    // and restore it once the page lands.
-                                    loadOlderAnchorId = messages.first?.id
-                                    followBox.model.positionRestored(atBottom: false)
-                                    onLoadOlder()
-                                }
-                                .buttonStyle(.link)
-                                .flowFont(.callout)
-                                .pointingHandCursor()
-                                .disabled(wait > 0)
-                                .accessibilityIdentifier("transcript.loadOlder")
+                            Button("Load earlier messages") {
+                                // Reading history is a decision to leave the
+                                // end: unpin, remember the current top row,
+                                // and restore it once the page lands.
+                                loadOlderAnchorId = messages.first?.id
+                                followBox.model.positionRestored(atBottom: false)
+                                onLoadOlder()
                             }
+                            .buttonStyle(.link)
+                            .flowFont(.callout)
+                            .pointingHandCursor()
+                            .accessibilityIdentifier("transcript.loadOlder")
                             Spacer()
                         }
                         .padding(.vertical, 8)

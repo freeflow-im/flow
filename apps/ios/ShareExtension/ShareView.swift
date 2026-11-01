@@ -20,7 +20,7 @@ struct ShareView: View {
                 case .ready, .sending:
                     form
                 case .sent:
-                    status(icon: "checkmark.circle.fill", tint: .green, text: store.isSlack ? "Sent to Slack" : "Sent to Flow")
+                    status(icon: "checkmark.circle.fill", tint: .green, text: "Sent to Flow")
                 case .failed(let message):
                     status(icon: "exclamationmark.triangle.fill", tint: .orange, text: message)
                 }

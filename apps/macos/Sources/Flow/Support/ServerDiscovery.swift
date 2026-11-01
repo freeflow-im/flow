@@ -6,8 +6,6 @@ struct ServerDiscovery: Decodable, Sendable {
     let authMethods: [String]
     let registrationAvailable: Bool
     let capabilities: [String: Bool]
-    /// The Slack connector this server offers, when it offers one (#546).
-    let slackConnectorOrigin: String?
 }
 
 struct ServerAddress: Sendable {
