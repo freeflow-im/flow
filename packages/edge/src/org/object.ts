@@ -10,19 +10,32 @@ import { setMailEnv } from './email/index';
 import { presetWorkspaceId } from './lib/ids';
 import { CompatApp, type CallerContext } from './routes/compat';
 import { registerRoutes } from './routes/index';
+import { deleteMyAccount } from './services/accountDeletion';
+import { runSchedulerTick } from './services/scheduledMessages';
+import { announceJoin, enrollInWorkspace, toWorkspaceDTO } from './services/workspaces';
 import { socketControl } from './sockets';
 import { setStorageEnv, type StorageEnv } from './storage/index';
+import { insertRows, tableCounts } from '../importing';
 import { eq, and } from 'drizzle-orm';
 
 export type OrgEnv = StorageEnv & { FLOW_DATA_KEY?: string; DIRECTORY: DurableObjectNamespace<Directory> };
 
 /** What each id-only path needs (`routes/org.ts`), and who belongs here (`memberships`), reported to the directory by trigger. */
 const OUTBOX = [
-  `CREATE TABLE IF NOT EXISTS _outbox (seq INTEGER PRIMARY KEY, kind TEXT NOT NULL, id TEXT NOT NULL, user_id TEXT, role TEXT)`,
+  `CREATE TABLE IF NOT EXISTS _outbox (seq INTEGER PRIMARY KEY, kind TEXT NOT NULL, id TEXT NOT NULL, user_id TEXT, role TEXT, payload TEXT)`,
   ...[['channels', 'id'], ['messages', 'id'], ['files', 'id'], ['artifacts', 'id'], ['scheduled_messages', 'id']].map(([t, c]) =>
     `CREATE TRIGGER IF NOT EXISTS _index_${t} AFTER INSERT ON ${t} BEGIN INSERT INTO _outbox (kind, id) VALUES ('index', NEW.${c}); END`),
   `CREATE TRIGGER IF NOT EXISTS _index_invites AFTER INSERT ON invites BEGIN INSERT INTO _outbox (kind, id) VALUES ('index', lower(hex(NEW.token_hash))); INSERT INTO _outbox (kind, id) VALUES ('index', NEW.id); END`,
   `CREATE TRIGGER IF NOT EXISTS _index_links AFTER INSERT ON workspace_join_links BEGIN INSERT INTO _outbox (kind, id) VALUES ('token', NEW.token); END`,
+  `CREATE TRIGGER IF NOT EXISTS _index_huddle_invites AFTER INSERT ON huddle_invites BEGIN INSERT INTO _outbox (kind, id) VALUES ('index', NEW.id); END`,
+  // An agent's account and tokens begin here, at redeem, and have to reach the directory, which authenticates every request.
+  `CREATE TRIGGER IF NOT EXISTS _index_agent_invites AFTER INSERT ON agent_invites BEGIN INSERT INTO _outbox (kind, id) VALUES ('index', lower(hex(NEW.code_hash))); END`,
+  `CREATE TRIGGER IF NOT EXISTS _agent_add AFTER INSERT ON users WHEN NEW.is_agent BEGIN INSERT INTO _outbox (kind, id, payload) VALUES ('agent_user', NEW.id, json_object('username', NEW.agent_username, 'keyHash', NEW.agent_key_hash, 'passwordHash', NEW.password_hash, 'email', NEW.email, 'displayName', NEW.display_name, 'sponsorId', NEW.sponsor_user_id, 'createdAt', NEW.created_at)); END`,
+  `CREATE TRIGGER IF NOT EXISTS _agent_change AFTER UPDATE OF agent_username, agent_key_hash, display_name ON users WHEN NEW.is_agent BEGIN INSERT INTO _outbox (kind, id, payload) VALUES ('agent_user', NEW.id, json_object('username', NEW.agent_username, 'keyHash', NEW.agent_key_hash, 'passwordHash', NEW.password_hash, 'email', NEW.email, 'displayName', NEW.display_name, 'sponsorId', NEW.sponsor_user_id, 'createdAt', NEW.created_at)); END`,
+  `CREATE TRIGGER IF NOT EXISTS _agent_token AFTER INSERT ON agent_tokens BEGIN INSERT INTO _outbox (kind, id, user_id, payload) VALUES ('agent_token', NEW.id, NEW.user_id, lower(hex(NEW.token_hash))); END`,
+  `CREATE TRIGGER IF NOT EXISTS _agent_revoke AFTER UPDATE OF revoked_at ON agent_tokens WHEN NEW.revoked_at IS NOT NULL BEGIN INSERT INTO _outbox (kind, id) VALUES ('agent_revoke', NEW.id); END`,
+  `CREATE TRIGGER IF NOT EXISTS _domain_add AFTER INSERT ON workspaces WHEN NEW.google_self_register_domain IS NOT NULL BEGIN INSERT INTO _outbox (kind, id, payload) VALUES ('domain', NEW.id, NEW.google_self_register_domain); END`,
+  `CREATE TRIGGER IF NOT EXISTS _domain_change AFTER UPDATE OF google_self_register_domain ON workspaces BEGIN INSERT INTO _outbox (kind, id, payload) VALUES ('domain', NEW.id, NEW.google_self_register_domain); END`,
   `CREATE TRIGGER IF NOT EXISTS _member_add AFTER INSERT ON workspace_members BEGIN INSERT INTO _outbox (kind, id, user_id, role) VALUES ('join', NEW.workspace_id, NEW.user_id, NEW.role); END`,
   `CREATE TRIGGER IF NOT EXISTS _member_del AFTER DELETE ON workspace_members BEGIN INSERT INTO _outbox (kind, id, user_id) VALUES ('leave', OLD.workspace_id, OLD.user_id); END`,
 ];
@@ -116,7 +129,73 @@ export class Org extends DurableObject<OrgEnv> {
     });
     const res = await (newWorkspaceId ? presetWorkspaceId.run(newWorkspaceId, run) : run());
     await this.flushOutbox(newWorkspaceId);
+    await this.armAlarm();
     return res;
+  }
+
+  /** The next thing due. On Node a ticker polled for it; an object sleeps until then. */
+  private async armAlarm(): Promise<void> {
+    const next = this.ctx.storage.sql.exec('SELECT MIN(next_run_at) AS at FROM scheduled_messages WHERE enabled AND next_run_at IS NOT NULL').one().at as number | null;
+    if (next === null) await this.ctx.storage.deleteAlarm();
+    else await this.ctx.storage.setAlarm(next);
+  }
+
+  override async alarm(): Promise<void> {
+    await this.scoped(async () => { await runSchedulerTick(); });
+    await this.flushOutbox(null);
+    await this.armAlarm();
+  }
+
+  /** A person's whole account is going: leave this organization as the Node server's deletion did. */
+  async removeAccount(user: UserDTO): Promise<void> {
+    await this.scoped(async () => {
+      this.ensureUser(user);
+      await deleteMyAccount(user.id);
+    });
+    await this.flushOutbox(null);
+  }
+
+  /** Domain self-registration: someone signing in with an address at this organization's domain becomes a member. */
+  async joinByDomain(user: UserDTO): Promise<unknown> {
+    const joined = await this.scoped(async () => {
+      this.ensureUser(user);
+      const workspace = this.db.select().from(schema.workspaces).get();
+      if (!workspace) return null;
+      const isNew = await this.db.transaction((tx) => enrollInWorkspace(tx, workspace.id, user.id));
+      if (!isNew) return null;
+      await announceJoin(workspace.id, user.id);
+      return JSON.parse(JSON.stringify(toWorkspaceDTO(workspace, 'member')));
+    });
+    await this.flushOutbox(null);
+    return joined;
+  }
+
+  /** A member's profile changed in the directory: refresh this organization's copy and tell its sockets. */
+  async syncUser(user: UserDTO): Promise<void> {
+    this.ensureUser(user);
+    const workspace = this.db.select({ id: schema.workspaces.id }).from(schema.workspaces).get();
+    if (!workspace) return;
+    const redacted = user.privacyMode ? { ...user, email: '' } : user;
+    this.broadcast(`ws.${workspace.id}.meta`, { type: 'user.updated', workspaceId: workspace.id, ts: new Date().toISOString(), data: redacted } as Event);
+  }
+
+  /** The one-time import (routes/admin.ts). The triggers report ids and memberships as for any insert. */
+  async importRows(table: string, rows: Record<string, unknown>[]): Promise<{ added: number }> {
+    const added = insertRows(this.ctx.storage.sql, table, rows);
+    return { added };
+  }
+
+  /** Row counts per table, to compare an import with its source. */
+  counts(): Record<string, number> {
+    return tableCounts(this.ctx.storage.sql);
+  }
+
+  /** After the last table: tell the directory, and set the next scheduled message's alarm. */
+  async importDone(): Promise<{ reported: number }> {
+    const pending = this.ctx.storage.sql.exec('SELECT COUNT(*) AS n FROM _outbox').one().n as number;
+    await this.flushOutbox(null);
+    await this.armAlarm();
+    return { reported: pending };
   }
 
   /** The organization's own answer to GET /v1/me/workspaces. */
@@ -159,7 +238,8 @@ export class Org extends DurableObject<OrgEnv> {
       return;
     }
     if (!att) return ws.send(JSON.stringify({ op: 'error', code: 'unauthorized', message: 'authenticate first' }));
-    if (frame.op === 'typing' && frame.channelId && workspace) {
+    // A client sends typing to all its organizations' sockets, since it does not track which holds a channel.
+    if (frame.op === 'typing' && frame.channelId && workspace && this.ctx.storage.sql.exec('SELECT 1 FROM channels WHERE id = ?', frame.channelId).toArray().length) {
       this.broadcast(`ws.${workspace.id}.chan.${frame.channelId}.typing`, {
         type: 'typing', workspaceId: workspace.id, channelId: frame.channelId, ts: new Date().toISOString(),
         data: { userId: att.userId, channelId: frame.channelId, ...(frame.threadRootId ? { threadRootId: frame.threadRootId } : {}) },

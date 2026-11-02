@@ -119,7 +119,7 @@ export class ProgressReporter {
 
   constructor(
     private readonly api: FlowApi,
-    private readonly socket: FlowSocket,
+    private readonly socket: Pick<FlowSocket, 'sendTyping'>,
     private readonly mode: ProgressMode,
     /** Relay the agent's interim text (#162). Off → the pre-#162 quiet turn. */
     private readonly relayText: boolean,

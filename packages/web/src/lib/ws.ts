@@ -20,6 +20,7 @@ export interface SocketHandlers {
 // nothing arriving. Silence is the only signal there is. Deadlines mirror the
 // native clients (apps/macos/Sources/Flow/Networking/SocketClient.swift).
 export const SOCKET_DEADLINE_MS = 70_000; // two missed heartbeats, plus slack
+export const CLIENT_HEARTBEAT_MS = 30_000;
 export const SOCKET_WAKE_DEADLINE_MS = 30_000; // a tab just restored: one is enough
 const CHECK_INTERVAL_MS = 10_000;
 
@@ -47,6 +48,7 @@ export class SocketClient {
   private backoff = 500;
   private lastInboundAt = 0;
   private watchdog: ReturnType<typeof setInterval> | null = null;
+  private heartbeat: ReturnType<typeof setInterval> | null = null;
   private readonly onVisible = () => {
     if (document.visibilityState === 'visible') this.dropIfSilent(SOCKET_WAKE_DEADLINE_MS);
   };
@@ -72,6 +74,7 @@ export class SocketClient {
     this.stopped = true;
     document.removeEventListener('visibilitychange', this.onVisible);
     this.stopWatchdog();
+    this.stopHeartbeat();
     this.ws?.close();
     this.ws = null;
   }
@@ -107,6 +110,7 @@ export class SocketClient {
       if (frame.op === 'ping') {
         ws.send(JSON.stringify({ op: 'pong' }));
       } else if (frame.op === 'hello') {
+        this.startHeartbeat(ws, frame.heartbeat);
         this.backoff = 500;
         this.handlers.onSession?.(frame.sessionId);
         this.handlers.onStatus('connected');
@@ -115,6 +119,7 @@ export class SocketClient {
       }
     };
     ws.onclose = () => {
+      this.stopHeartbeat();
       this.stopWatchdog();
       this.scheduleReconnect();
     };
@@ -133,6 +138,20 @@ export class SocketClient {
   // reconnect. We take the reconnect path ourselves rather than waiting for
   // `onclose`, because closing a half-open socket waits on a close handshake
   // the dead peer will never answer.
+  /** A server that says so wants the client to ping, so that it can sleep between messages (Durable Objects hibernate). */
+  private startHeartbeat(ws: WebSocket, mode?: string): void {
+    this.stopHeartbeat();
+    if (mode !== 'client') return;
+    this.heartbeat = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) ws.send('{"op":"ping"}');
+    }, CLIENT_HEARTBEAT_MS);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeat !== null) clearInterval(this.heartbeat);
+    this.heartbeat = null;
+  }
+
   private dropIfSilent(deadline: number): void {
     const ws = this.ws;
     if (!ws || !isSocketDead(this.lastInboundAt, Date.now(), deadline)) return;

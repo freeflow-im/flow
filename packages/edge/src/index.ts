@@ -5,12 +5,18 @@ import { ApiError } from './errors';
 import { proxy, type ProxyEnv } from './proxy';
 import { authRoutes, type AuthEnv } from './routes/auth';
 import { orgRoutes } from './routes/org';
+import { docsRoutes } from './routes/docs';
+import { pageRoutes } from './routes/pages';
+import { adminRoutes } from './routes/admin';
 
 export { Directory } from './directory/object';
 export { Org } from './org/object';
+export { Docs } from './docs/object';
 import type { Org as OrgObject } from './org/object';
 
 export interface Env extends ProxyEnv, AuthEnv {
+  DOCS: DurableObjectNamespace<import('./docs/object').Docs>;
+  BLOBS: R2Bucket;
   ASSETS: Fetcher;
   ASSET_HOSTS: string;
   /** The hosts the ported API answers on: the rehearsal host until the cut-over, then the app's too. */
@@ -33,12 +39,15 @@ const onError = (err: Error, c: Context) => {
 app.onError(onError);
 
 app.get('/edge/health', (c) => c.json({ ok: true }));
+app.route('/', adminRoutes as never);
 
 // Ported routes, only on the hosts that have been switched. A path not ported yet falls through to the proxy.
 const ported = new Hono<{ Bindings: Env }>();
 ported.onError(onError);
+ported.route('/', docsRoutes as never);
 ported.route('/', authRoutes as never);
 ported.route('/', orgRoutes as never);
+ported.route('/', pageRoutes as never);
 app.use('*', async (c, next) => {
   if (!c.env.PORTED_HOSTS.split(',').includes(new URL(c.req.url).hostname)) return next();
   const res = await ported.fetch(c.req.raw, c.env, c.executionCtx);

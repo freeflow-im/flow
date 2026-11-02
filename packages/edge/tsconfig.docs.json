@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext", "moduleResolution": "Bundler", "lib": ["ES2024"], "types": ["@cloudflare/workers-types", "node"],
+    "declaration": false, "sourceMap": false, "noEmit": true, "allowImportingTsExtensions": true,
+    "noUncheckedIndexedAccess": false, "exactOptionalPropertyTypes": false, "noImplicitAny": false, "strictNullChecks": false, "useUnknownInCatchVariables": false
+  },
+  "include": ["src/docs"]
+}

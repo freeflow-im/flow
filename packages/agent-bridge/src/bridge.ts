@@ -27,7 +27,7 @@ import type {
 import { defaultVoiceConfig, mentionChainLimit, resolveWorkspace, type BridgeConfig } from './config.js';
 import { FlowApi } from './api.js';
 import { attachmentFilename, formatAttachments } from './attachments.js';
-import { FlowSocket } from './gateway.js';
+import { FlowSocket, openFlowSocket } from './gateway.js';
 import { ChannelIndicatorLeases, ProgressReporter } from './progress.js';
 import { killAllRuntimes, runRuntime, type RunResult } from './runtime.js';
 import { SessionManager, type SessionOpts } from './session.js';
@@ -162,7 +162,7 @@ class Semaphore {
 
 export class AgentBridge {
   private readonly api: FlowApi;
-  private socket!: FlowSocket;
+  private socket!: ReturnType<typeof openFlowSocket>;
   private me!: UserDTO;
   private workspace!: WorkspaceDTO;
   private channels = new Map<string, ChannelDTO>();
@@ -280,7 +280,7 @@ export class AgentBridge {
         `scope=${this.cfg.eventScope}+DMs progress=${this.cfg.progress} runtime=${this.cfg.runtime.kind} ` +
         `voice=${voiceState} cwd=${this.cfg.runtime.cwd}`,
     );
-    this.socket = new FlowSocket({
+    this.socket = openFlowSocket({
       serverUrl: this.cfg.serverUrl,
       token: this.cfg.agentToken,
       // one process, one workspace (#357) — so tell the server, or it lights

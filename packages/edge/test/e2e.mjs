@@ -42,4 +42,47 @@ r=await api(null,'GET',`/v1/channels/${gen.id}/messages`);t('no session refused'
 r=await api(A.token,'GET',`/v1/channels/00000000-0000-7000-8000-000000000000/messages`);t('unknown id 404',r.s===404,r.s);
 sb.ws.close();await sleep(300);t('offline presence',sa.ev.some(e=>e.type==='presence'&&e.data.status==='offline'));
 r=await api(A.token,'GET',`/v1/workspaces/${W}/members`);t('members join works',r.s===200,JSON.stringify(r.j).slice(0,100));
+// ---- what names no organization
+r=await api(null,'GET','/v1/client-info');t('client-info says one socket per organization',r.j.capabilities?.socketPerOrganization===true);
+r=await api(null,'GET','/v1/config');t('config',r.s===200&&r.j.maxFileBytes>0);
+r=await api(Bo.token,'POST','/v1/workspaces',{name:'Other',slug:'locked-in'});t('slug unique across organizations',r.s===409,r.s+' '+JSON.stringify(r.j).slice(0,80));
+r=await api(Bo.token,'POST','/v1/workspaces',{name:'Other',slug:'locked-in-2'});t('second organization',r.s===201,r.s);const W2=r.j.id;
+r=await api(Bo.token,'GET','/v1/me/workspaces');t('Bob sees both',r.j.workspaces?.length===2,r.j.workspaces?.length);
+const sa2=sa.ev.length;
+r=await api(Bo.token,'PATCH','/v1/me',{displayName:'Robert',title:'Builder'});t('profile edit',r.s===200&&r.j.displayName==='Robert',JSON.stringify(r.j).slice(0,80));
+await sleep(250);t('reaches other members live',sa.ev.slice(sa2).some(e=>e.type==='user.updated'&&e.data.displayName==='Robert'));
+r=await api(A.token,'GET',`/v1/workspaces/${W}/members`);t('the organization copy changed',(r.j.members??[]).some(m=>m.displayName==='Robert'),JSON.stringify((r.j.members??[]).map(m=>m.displayName)));
+r=await api(Bo.token,'GET','/v1/me');t('the directory changed',r.j.displayName==='Robert');
+const fd=new FormData();fd.append('file',new Blob([new Uint8Array([137,80,78,71])],{type:'image/png'}),'a.png');
+let rr=await fetch(B+'/v1/me/avatar',{method:'POST',headers:{authorization:'Bearer '+Bo.token},body:fd});let aj=await rr.json();t('avatar upload',rr.status===200&&aj.avatarUrl?.startsWith('/v1/avatars/'),rr.status+' '+JSON.stringify(aj).slice(0,90));
+rr=await fetch(B+aj.avatarUrl,{headers:{authorization:'Bearer '+A.token}});t('avatar read',rr.status===200&&rr.headers.get('content-type')==='image/png',rr.status);
+rr=await fetch(B+aj.avatarUrl);t('avatar needs a session',rr.status===401,rr.status);
+r=await api(Bo.token,'GET','/v1/me/notifications');t('notifications across organizations',r.s===200&&Array.isArray(r.j.notifications),r.s+' '+JSON.stringify(r.j).slice(0,90));
+r=await api(A.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'hey @Robert',mentions:[Bo.user.id]});t('mention sent',r.s===201);
+await sleep(200);r=await api(Bo.token,'GET','/v1/me/notifications');t('mention notifies',(r.j.notifications??[]).length>=1,JSON.stringify(r.j).slice(0,120));
+r=await api(Bo.token,'POST','/v1/me/notifications/read',{all:true});t('mark read',r.s<300,r.s+' '+JSON.stringify(r.j).slice(0,90));
+const at=new Date(Date.now()+3000).toISOString();const beforeSched=sa.ev.length;
+r=await api(A.token,'POST','/v1/scheduled-messages',{channelId:gen.id,body:'scheduled hello',recurrence:{type:'once',at}});t('schedule',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,130));
+r=await api(A.token,'GET',`/v1/scheduled-messages?workspaceId=${W}`);t('schedule listed',(r.j.scheduledMessages??[]).length===1,JSON.stringify(r.j).slice(0,100));
+await sleep(5000);t('the alarm posts it, with nobody calling',sa.ev.slice(beforeSched).some(e=>e.type==='message.created'&&e.data?.scheduled===true),sa.ev.slice(beforeSched).map(e=>e.type).join(','));
+r=await api(A.token,'POST',`/v1/workspaces/${W}/files/presign`,{channelId:gen.id,filename:'a.txt',name:'a.txt',mimeType:'text/plain',sizeBytes:5});t('presign',r.s<300,r.s+' '+JSON.stringify(r.j).slice(0,150));
+if(r.s<300){const f=r.j.file;let u=await fetch(B+r.j.upload.url,{method:'PUT',headers:{authorization:'Bearer '+A.token,'content-type':'text/plain'},body:'hello'});t('upload bytes',u.ok,u.status+' '+(await u.text()).slice(0,100));
+ r=await api(A.token,'POST',`/v1/files/${f.id}/complete`);t('complete',r.s<300,r.s+' '+JSON.stringify(r.j).slice(0,120));
+ r=await api(A.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'see attached',fileIds:[f.id]});t('attach',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,100));
+ let dl=await fetch(B+`/v1/files/${f.id}`,{headers:{authorization:'Bearer '+Bo.token},redirect:'manual'});const dt=await dl.text();t('Bob downloads',dl.status===200&&dt==='hello',dl.status+' '+dt.slice(0,100));}
+r=await api(A.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'link https://example.com/'});t('message with a link',r.s===201,r.s);
+// ---- agents
+r=await api(A.token,'POST',`/v1/workspaces/${W}/agent-invites`,{});t('agent invite',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,100));const code=r.j.code;
+r=await api(null,'POST','/v1/agents/redeem',{code,username:'flowbot',key:'a-long-agent-key-for-the-test',name:'Flowbot'});t('redeem',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,110));const AGT=r.j.agentToken;
+r=await api(AGT,'GET','/v1/me');t('the agent token works, via the directory',r.j.isAgent===true&&r.j.displayName==='Flowbot',JSON.stringify(r.j).slice(0,90));
+r=await api(AGT,'GET','/v1/me/workspaces');t('the agent sees its organization',r.j.workspaces?.[0]?.id===W);
+const sag=await sock(AGT);t('the agent socket',!!sag.hello);
+r=await api(A.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'hi @flowbot'});await sleep(250);t('the agent hears a message',sag.ev.some(e=>e.type==='message.created'&&e.data?.body==='hi @flowbot'),sag.ev.map(e=>e.type).join(','));
+r=await api(AGT,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'agent reply'});t('the agent replies',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,100));
+r=await api(null,'POST','/v1/agents/login',{username:'flowbot',key:'wrong-key-wrong-key-wrong-key'});t('wrong key refused',r.s===401,r.s);
+r=await api(null,'POST','/v1/agents/login',{username:'flowbot',key:'a-long-agent-key-for-the-test'});t('login',r.s===201&&!!r.j.agentToken,r.s);const AGT2=r.j.agentToken;
+r=await api(AGT,'GET','/v1/me');t('login ends the old token',r.s===401,r.s);r=await api(AGT2,'GET','/v1/me');t('new token works',r.s===200);
+// ---- leaving
+const del=await signup('cy@example.com','Cy');r=await api(del.token,'POST','/v1/workspaces',{name:'Cy co',slug:'cy-co'});
+r=await api(del.token,'DELETE','/v1/me');t('delete account',r.s===200,r.s+' '+JSON.stringify(r.j).slice(0,90));r=await api(del.token,'GET','/v1/me');t('its session ended',r.s===401,r.s);
 console.log(`\n${pass} passed, ${fail} failed`);process.exit(fail ? 1 : 0);

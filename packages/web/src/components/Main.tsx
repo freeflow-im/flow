@@ -20,7 +20,8 @@ import { applyChannelEmoji, applyHuddle, applyIndicator } from '../lib/channelCa
 import { api } from '../lib/api';
 import { shouldOpenArtifact } from '../lib/artifactDelivery';
 import { backendFor } from '../lib/backend';
-import { SocketClient, type SocketStatus } from '../lib/ws';
+import { SocketClient, type SocketStatus, type SocketHandlers } from '../lib/ws';
+import { OrganizationSockets } from '../lib/organizationSockets';
 import { plainBody } from '../lib/format';
 import { ACTIVITY_VIEW_ID, ADMIN_VIEW_ID, CHANNEL_BROWSER_VIEW_ID, DIRECTORY_VIEW_ID, SCHEDULED_VIEW_ID, LiveContext, MobileNavContext, typingKey, useAuth, useRuntime, useSelection } from '../state';
 import { HuddleProvider, useHuddle, type HuddleState } from '../huddle';
@@ -66,7 +67,7 @@ export default function Main({ onActivityUnread }: { onActivityUnread?: (count: 
     () => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches,
   );
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const socketRef = useRef<SocketClient | null>(null);
+  const socketRef = useRef<Pick<SocketClient, 'start' | 'stop' | 'sendTyping'> | null>(null);
   // The huddle controller lives *inside* HuddleProvider, which this component
   // renders — so socket events reach it through a ref that HuddleWiring (below
   // the provider) fills in, rather than a hook this scope cannot call.
@@ -255,7 +256,7 @@ export default function Main({ onActivityUnread }: { onActivityUnread?: (count: 
       });
       return unsubscribe;
     }
-    const client = new SocketClient(token, {
+    const socketHandlers: SocketHandlers = {
       onStatus: (s) => {
         setStatus(s);
         if (s === 'connected') {
@@ -272,11 +273,25 @@ export default function Main({ onActivityUnread }: { onActivityUnread?: (count: 
       },
       onEvent: (event: Event) => handleEvent(event),
       onSession: (sessionId) => huddleBridge.current?.setSessionId(sessionId),
-    }, runtime.socketUrl);
-    socketRef.current = client;
-    client.start();
+    };
+    let client: Pick<SocketClient, 'start' | 'stop' | 'sendTyping'> | null = null;
+    let cancelled = false;
+    void (async () => {
+      const info = await fetch(`${runtime.origin}/v1/client-info`).then((r) => r.json()).catch(() => null) as { capabilities?: { socketPerOrganization?: boolean } } | null;
+      if (cancelled) return;
+      client = info?.capabilities?.socketPerOrganization
+        ? new OrganizationSockets(
+          socketHandlers,
+          async () => (await runtime.api<{ workspaces: { id: string }[] }>('GET', '/v1/me/workspaces')).workspaces.map((w) => w.id),
+          (id, handlers) => new SocketClient(token, handlers, `${runtime.socketUrl}?workspace=${encodeURIComponent(id)}`),
+        )
+        : new SocketClient(token, socketHandlers, runtime.socketUrl);
+      socketRef.current = client;
+      client.start();
+    })();
     return () => {
-      client.stop();
+      cancelled = true;
+      client?.stop();
       socketRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

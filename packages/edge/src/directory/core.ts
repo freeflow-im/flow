@@ -290,13 +290,80 @@ export class DirectoryCore {
   }
 
   /** New ids and membership changes, reported by an organization's object (org/object.ts). Safe to apply twice. */
-  async applyOrgChanges(organizationId: string, changes: { kind: string; id: string; user_id: string | null; role: string | null }[]): Promise<void> {
+  async applyOrgChanges(organizationId: string, changes: { kind: string; id: string; user_id: string | null; role: string | null; payload: string | null }[]): Promise<void> {
     for (const c of changes) {
-      if (c.kind === 'token') this.sql.exec('INSERT OR IGNORE INTO id_index (id, organization_id) VALUES (?, ?)', await hashToken(c.id), organizationId);
+      if (c.kind === 'agent_user') {
+        const a = JSON.parse(c.payload!) as { username: string | null; keyHash: string | null; passwordHash: string; email: string; displayName: string; sponsorId: string | null; createdAt: number };
+        this.sql.exec(
+          `INSERT INTO users (id, email, password_hash, display_name, is_agent, sponsor_user_id, agent_username, agent_key_hash, email_verified_at, created_at)
+           VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
+           ON CONFLICT (id) DO UPDATE SET display_name = excluded.display_name, agent_username = excluded.agent_username, agent_key_hash = excluded.agent_key_hash`,
+          c.id, a.email, a.passwordHash, a.displayName, a.sponsorId, a.username, a.keyHash, a.createdAt, a.createdAt);
+      } else if (c.kind === 'agent_token') {
+        this.sql.exec('INSERT OR IGNORE INTO agent_tokens (id, token_hash, user_id, created_at) VALUES (?, ?, ?, ?)', c.id, c.payload, c.user_id, Date.now());
+      } else if (c.kind === 'agent_revoke') {
+        this.sql.exec('UPDATE agent_tokens SET revoked_at = ? WHERE id = ?', Date.now(), c.id);
+      } else if (c.kind === 'domain') {
+        if (c.payload) this.sql.exec('INSERT OR REPLACE INTO organization_domains (organization_id, domain) VALUES (?, ?)', organizationId, c.payload);
+        else this.sql.exec('DELETE FROM organization_domains WHERE organization_id = ?', organizationId);
+      } else if (c.kind === 'token') this.sql.exec('INSERT OR IGNORE INTO id_index (id, organization_id) VALUES (?, ?)', await hashToken(c.id), organizationId);
       else if (c.kind === 'index') this.sql.exec('INSERT OR IGNORE INTO id_index (id, organization_id) VALUES (?, ?)', c.id, organizationId);
       else if (c.kind === 'join') this.sql.exec('INSERT OR REPLACE INTO memberships (user_id, organization_id, role) VALUES (?, ?, ?)', c.user_id, organizationId, c.role);
       else if (c.kind === 'leave') this.sql.exec('DELETE FROM memberships WHERE user_id = ? AND organization_id = ?', c.user_id, organizationId);
     }
+  }
+
+  /** A workspace's slug is unique across every organization, which no single object can check. */
+  reserveSlug(slug: string, organizationId: string): void {
+    const taken = this.rows('INSERT INTO organization_slugs (slug, organization_id) VALUES (?, ?) ON CONFLICT (slug) DO NOTHING RETURNING slug', slug, organizationId);
+    if (!taken.length) throw conflict('slug_taken', 'that URL is already taken');
+  }
+
+  releaseSlug(slug: string, organizationId: string): void {
+    this.sql.exec('DELETE FROM organization_slugs WHERE slug = ? AND organization_id = ?', slug, organizationId);
+  }
+
+  /** The one place a person's profile is written. The Worker then copies it to their organizations. */
+  patchUser(userId: string, patch: Record<string, unknown>): UserDTO {
+    const user = this.userById(userId);
+    if (!user) throw notFound('user not found');
+    const columns: Record<string, string> = {
+      displayName: 'display_name', timezone: 'timezone', statusEmoji: 'status_emoji', statusText: 'status_text', website: 'website',
+      bio: 'bio', title: 'title', statusSuppressAlerts: 'status_suppress_alerts', unfurlOwnLinks: 'unfurl_own_links', privacyMode: 'privacy_mode', avatarUrl: 'avatar_url',
+    };
+    for (const [key, column] of Object.entries(columns)) {
+      const value = patch[key];
+      if (value !== undefined) this.sql.exec(`UPDATE users SET ${column} = ? WHERE id = ?`, typeof value === 'boolean' ? Number(value) : value, userId);
+    }
+    if (patch.notificationPrefs !== undefined) {
+      this.sql.exec('UPDATE users SET notification_prefs = json_patch(notification_prefs, ?) WHERE id = ?', JSON.stringify(patch.notificationPrefs), userId);
+    }
+    return toUserDTO(this.userById(userId)!, userId);
+  }
+
+  /** Username and key to a fresh token, which ends every earlier one. The "lost agent.json" path. */
+  async agentLogin(username: string, key: string): Promise<{ agentToken: string; user: UserDTO }> {
+    for (const user of this.rows('SELECT * FROM users WHERE agent_username = ? AND is_agent = 1', username)) {
+      if (!user.agent_key_hash || !(await verifyPassword(user.agent_key_hash as string, key))) continue;
+      const now = Date.now();
+      this.sql.exec('UPDATE agent_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL', now, user.id);
+      const agentToken = `flow-agent-token-${newToken()}`;
+      this.sql.exec('INSERT INTO agent_tokens (id, token_hash, user_id, created_at) VALUES (?, ?, ?, ?)', newId(), await hashToken(agentToken), user.id, now);
+      return { agentToken, user: toUserDTO(user, user.id as string) };
+    }
+    throw unauthorized('invalid agent credentials');
+  }
+
+  organizationsForDomain(domain: string): string[] {
+    return this.rows('SELECT organization_id FROM organization_domains WHERE domain = ?', domain).map((r) => r.organization_id as string);
+  }
+
+  /** The directory's half of deleting an account. The row stays for authorship; the address is freed. */
+  tombstoneUser(userId: string): void {
+    this.sql.exec('DELETE FROM sessions WHERE user_id = ?', userId);
+    this.sql.exec('DELETE FROM oauth_identities WHERE user_id = ?', userId);
+    this.sql.exec('DELETE FROM memberships WHERE user_id = ?', userId);
+    this.sql.exec("UPDATE users SET deleted_at = ?, email = 'deleted-' || id || '@deleted.invalid', password_hash = '!deleted', display_name = 'Deleted user', avatar_url = NULL WHERE id = ?", Date.now(), userId);
   }
 
   organizationsOf(userId: string): string[] {
