@@ -3,6 +3,7 @@
 // bodies go to R2 under that object's prefix.
 import { timingSafeEqual } from 'node:crypto';
 import { Hono } from 'hono';
+import { AwsClient } from 'aws4fetch';
 import type { Docs } from '../docs/object';
 import type { Directory } from '../directory/object';
 import type { Org } from '../org/object';
@@ -10,6 +11,10 @@ import type { ImportRow } from '../importing';
 
 export interface AdminEnv {
   EDGE_ORIGIN_SECRET: string;
+  R2_ACCESS_KEY_ID?: string;
+  R2_SECRET_ACCESS_KEY?: string;
+  R2_ENDPOINT?: string;
+  R2_BUCKET?: string;
   DIRECTORY: DurableObjectNamespace<Directory>;
   ORG: DurableObjectNamespace<Org>;
   DOCS: DurableObjectNamespace<Docs>;
@@ -44,6 +49,23 @@ adminRoutes.post('/edge/admin/docs/:id', async (c) => {
   const { table, rows } = await c.req.json<{ table: string; rows: ImportRow[] }>();
   return c.json(await docsStub(c.env, c.req.param('id')).importRows(table, rows, c.req.param('id')));
 });
+/**
+ * A signed address to put a large Docs file body straight into R2, at the same key the route below would use. Cloudflare
+ * refuses a request body over 100 MB, so a file larger than that cannot come through the Worker.
+ */
+adminRoutes.get('/edge/admin/docs/:id/upload-url', async (c) => {
+  const rel = c.req.query('path') ?? '';
+  if (!/^(sheets|files|images)\/[^/]+$/.test(rel)) return c.json({ error: 'bad path' }, 400);
+  const e = c.env;
+  if (!e.R2_ACCESS_KEY_ID || !e.R2_SECRET_ACCESS_KEY || !e.R2_ENDPOINT || !e.R2_BUCKET) return c.json({ error: 'the Worker has no R2 keys' }, 500);
+  const key = `docs/${e.DOCS.idFromName(c.req.param('id')).toString()}/data/${rel}`;
+  const url = new URL(`${e.R2_ENDPOINT.replace(/\/$/, '')}/${e.R2_BUCKET}/${key.split('/').map(encodeURIComponent).join('/')}`);
+  url.searchParams.set('X-Amz-Expires', '3600');
+  const client = new AwsClient({ accessKeyId: e.R2_ACCESS_KEY_ID, secretAccessKey: e.R2_SECRET_ACCESS_KEY, service: 's3', region: 'auto' });
+  const signed = await client.sign(new Request(url, { method: 'PUT' }), { aws: { signQuery: true } });
+  return c.json({ url: signed.url });
+});
+
 /** A Docs file body, at the key the object's file system will look for it (docs/runtime/fsp.ts). */
 adminRoutes.put('/edge/admin/docs/:id/file/*', async (c) => {
   const rel = new URL(c.req.url).pathname.split('/file/')[1]!;

@@ -25,6 +25,8 @@ const SECRET = process.env.EDGE_ORIGIN_SECRET ?? '';
 const DOCS_DIR = process.env.WORKSPACE_DATA_DIR ?? '/data/workspace';
 if (!EDGE || !SECRET) throw new Error('EDGE_URL and EDGE_ORIGIN_SECRET are needed');
 const sql = postgres(process.env.DATABASE_URL ?? '', { max: 2, onnotice: () => {} });
+/** Cloudflare refuses a request body over 100 MB; a file larger than this goes straight to R2 (routes/admin.ts upload-url). */
+const LARGE = 90 * 1024 * 1024;
 
 /** Postgres's values as SQLite holds them (packages/edge/src/org/db/schema.ts): ms timestamps, 0/1, JSON text, { $b64 } bytes. */
 function toSqlite(v: unknown): unknown {
@@ -233,8 +235,18 @@ if (existsSync(appDb)) {
       for (const name of names.filter((f) => ids.some((x) => f === x || f.startsWith(`${x}.`)))) {
         uploaded++;
         if (!apply) continue;
-        const res = await fetch(`${EDGE}/edge/admin/docs/${id}/file/${dir}/${encodeURIComponent(name)}`, { method: 'PUT', headers: { 'x-edge-secret': SECRET }, body: readFileSync(path.join(DOCS_DIR, dir, name)) });
-        if (!res.ok) throw new Error(`docs file ${dir}/${name}: ${res.status} ${await res.text()}`);
+        const body = readFileSync(path.join(DOCS_DIR, dir, name));
+        let res: Response;
+        if (body.length > LARGE) {
+          // Over Cloudflare's 100 MB request limit: straight to R2 at an address the Worker signed.
+          const signed = await fetch(`${EDGE}/edge/admin/docs/${id}/upload-url?path=${encodeURIComponent(`${dir}/${name}`)}`, { headers: { 'x-edge-secret': SECRET } });
+          if (!signed.ok) throw new Error(`docs file ${dir}/${name}: no upload address: ${signed.status} ${await signed.text()}`);
+          res = await fetch(((await signed.json()) as { url: string }).url, { method: 'PUT', body });
+          console.log(`  ${dir}/${name}: ${Math.round(body.length / 1e6)} MB straight to R2`);
+        } else {
+          res = await fetch(`${EDGE}/edge/admin/docs/${id}/file/${dir}/${encodeURIComponent(name)}`, { method: 'PUT', headers: { 'x-edge-secret': SECRET }, body });
+        }
+        if (!res.ok) throw new Error(`docs file ${dir}/${name}: ${res.status} ${(await res.text()).slice(0, 300)}`);
       }
     }
     console.log(`docs of ${w.slug}: ${n} rows, ${uploaded} files`);
