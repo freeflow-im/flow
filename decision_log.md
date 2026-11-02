@@ -15,6 +15,10 @@ organizations, sessions) is the only shared store. Consequences now:
 - The order from here: phase 3 (the bar, one web app), phase 4 (Docs respect the
   current organization), then the Cloudflare move, Chat first and Docs second,
   then Mail and Calendar on the new runtime. The §5 integrations are dropped.
+- **My files is per organization.** A person in company A and company B has a
+  distinct private locker in each; a private file carries its organization and a
+  private flag, never a per-user store. Files from before organizations are
+  assigned to one at migration.
 - One Durable Object per **organization**, not per channel: a tenant's sockets,
   members, channel list, unread counts and search live together, so a message
   fans out inside one object; every row keeps its channel id and no hot path

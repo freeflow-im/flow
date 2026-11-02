@@ -119,9 +119,9 @@ flag, not a restore).
 
 ## 6. Open questions, to settle before step 2
 
-- **Where private files live** when a user is in several organizations: in the object of the organization
-  selected when the file was made (the phase 4 answer), or in a per-user object. The former keeps one object
-  type; the latter makes "My files" one place. Decide with phase 4's design.
+- **Where private files live**: ruled with phase 4 (2026-11-02): My files is per organization, so a private file
+  lives in its organization's object with a private flag; no per-user object. Files from before organizations
+  are assigned to one at migration.
 - **Direct messages across organizations** do not exist in Flow today; keep it so.
 - **Search**: SQLite FTS5 inside each object (messages and file names), per organization. Cross-organization
   search is a fan-out over the user's objects; probably never needed.
