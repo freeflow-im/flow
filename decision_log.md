@@ -1,5 +1,10 @@
 # Decision log
 
+## 2026-11-02 — No users yet, so Cloudflare is one cut-over (docs/specs/cloudflare-migration.md)
+
+Ruled by the operator: nobody is using Flow or MCP Docs, so move as fast as possible. No dual-writes, flags, gradual
+moves or read copies. Build on the rehearsal host, import once, switch once. Existing data is still imported.
+
 ## 2026-11-02 — Cloudflare spikes: the socket topology and the libraries (docs/specs/cloudflare-spikes.md)
 
 Proposed from local prototypes in workerd, and not yet tried on Cloudflare's network:

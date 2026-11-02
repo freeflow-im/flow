@@ -5,9 +5,9 @@ packages:
 # One toolchain for every package (FreeFlow suite, docs/specs/freeflow-suite.md §2.5 "Build"):
 # the versions packages/docs arrived with. A package pins these as "catalog:".
 catalog:
+  '@types/node': ^26.6.6
+  '@vitejs/plugin-react': ^6.1.1
+  electron: ^44.7.0
   typescript: ^7.0.2
   vite: ^8.3.1
   vitest: ^5.0.2
-  '@vitejs/plugin-react': ^6.1.1
-  '@types/node': ^26.6.3
-  electron: ^44.7.0

@@ -6,6 +6,9 @@ function env(files: Record<string, string> = {}): Env {
     ORIGIN_URL: 'https://origin.example',
     EDGE_ORIGIN_SECRET: 's',
     ASSET_HOSTS: 'app.example',
+    PORTED_HOSTS: '',
+    WEB_URL_BASE: 'https://app.example',
+    DIRECTORY: {} as never,
     ASSETS: {
       fetch: async (req: Request) => {
         const body = files[new URL(req.url).pathname];
