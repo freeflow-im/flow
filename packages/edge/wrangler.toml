@@ -61,5 +61,8 @@ binding = "BLOBS"
 bucket_name = "flow-files"
 
 
+[browser]
+binding = "BROWSER"
+
 [observability]
 enabled = true

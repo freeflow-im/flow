@@ -152,6 +152,11 @@ const MAX_RESOURCE_BYTES = 20 * 1024 * 1024;
 /** Renders at once; the rest wait their turn. */
 const MAX_RENDERS = 2;
 
+/** Set by the Docs object from its environment. */
+let browser_: unknown = null;
+export const setBrowserBinding = (b: unknown) => { browser_ = b; };
+const browserBinding = () => browser_;
+
 type Browser = any;
 type BrowserContext = any;
 
@@ -167,8 +172,12 @@ export class PlaywrightRenderer implements PdfRenderer {
 
   private launch(): Promise<Browser> {
     this.browser ??= (async () => {
+      // On Workers the browser is Cloudflare's Browser Rendering, driven by its build of Playwright.
+      const endpoint = browserBinding();
+      if (!endpoint) throw new PrintError('PDFs cannot be made here: there is no browser binding.');
+      const { launch } = await import('@cloudflare/playwright');
+      return launch(endpoint as never);
       const chromium: any = null;
-      throw new PrintError('Making a PDF on the server is not available yet.');
       const path = process.env.CHROMIUM_PATH;
       if (path) return chromium.launch({ executablePath: path });
       try {

@@ -5,12 +5,14 @@ import type { Directory } from '../directory/object';
 import { withDocsContext, type DocsContext } from './runtime/context.ts';
 import { DocsApp, type Caller, type DocsRequest } from './runtime/fastify.ts';
 import { buildApp } from './server/app.ts';
+import { setBrowserBinding } from './server/pdf.ts';
 
 export interface DocsEnv {
   BLOBS: R2Bucket;
   DIRECTORY: DurableObjectNamespace<Directory>;
   FLOW_WEB_URL?: string;
   ANTHROPIC_API_KEY?: string;
+  BROWSER?: Fetcher;
 }
 const BASE = '/workspace';
 
@@ -21,6 +23,9 @@ export class Docs extends DurableObject<DocsEnv> {
 
   constructor(ctx: DurableObjectState, env: DocsEnv) {
     super(ctx, env);
+    setBrowserBinding(env.BROWSER ?? null);
+    // The headless browser loads Docs' print pages from the public address, through the Worker like any visitor.
+    process.env.PRINT_ORIGIN = (env.FLOW_WEB_URL ?? 'https://app.freeflow.im').replace(/\/+$/, '');
     this.context = {
       sql: ctx.storage.sql,
       bucket: env.BLOBS,

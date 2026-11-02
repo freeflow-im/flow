@@ -6,6 +6,7 @@ import { proxy, type ProxyEnv } from './proxy';
 import { authRoutes, type AuthEnv } from './routes/auth';
 import { orgRoutes } from './routes/org';
 import { docsRoutes } from './routes/docs';
+import { pageRoutes } from './routes/pages';
 
 export { Directory } from './directory/object';
 export { Org } from './org/object';
@@ -44,6 +45,7 @@ ported.onError(onError);
 ported.route('/', docsRoutes as never);
 ported.route('/', authRoutes as never);
 ported.route('/', orgRoutes as never);
+ported.route('/', pageRoutes as never);
 app.use('*', async (c, next) => {
   if (!c.env.PORTED_HOSTS.split(',').includes(new URL(c.req.url).hostname)) return next();
   const res = await ported.fetch(c.req.raw, c.env, c.executionCtx);
