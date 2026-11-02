@@ -124,3 +124,26 @@ no service has to remember to, and that is how a path naming only a channel or m
 organizations, invitations, sockets, presence, typing, messages, threads, reactions, encryption, private channels and refusals.
 
 **Still to do for Chat:** agents and the agent bridge (`/v1/agents/*`, and its socket); deleting an account; automatic joining by email domain; inviting someone from another organization; the PKCE handoff routes, which the desktop and native apps need; huddles, reported as off until LiveKit's keys are set and it has been tried; link previews, whose fetcher uses Node's `http` and has not been shown to work; help pages. `test/e2e.mjs` runs 54 checks locally. Nothing but the directory's refusals has run on Cloudflare's network, and many routes have not run at all.
+
+## How Docs ports: the same way, in its own object beside Chat's
+
+Tried on 2026-11-02. The hosted half of `packages/docs` (server, shared, the ChatGPT plugin's server, and the client modules the
+plugin's tools reuse) is copied to `packages/edge/src/docs`. Three small runtimes replace what Node gave it: `node:sqlite` over the
+object's own SQLite, `node:fs/promises` over R2 under the organization's prefix, and the part of Fastify it uses. Its bodies were
+already read and written asynchronously, so they go to R2 as the plan said, and the stores did not change.
+
+**One object per organization per app, a change to the ruling.** Docs and Chat both have `users`, `sessions` and `folders` tables,
+so each organization has a Docs object beside its Chat object rather than one shared one. A heavy save in Docs then does not hold
+up a message in Chat either.
+
+The real data is small: 343 MB of Docs files in 569 files, the largest 199 MB, and 76 MB of Postgres.
+
+The Worker with all of it bundles to 2.1 MB gzipped and starts in workerd. `test/e2e-docs.mjs` runs 14 checks locally: spreadsheets,
+documents and Markdown created, listed, read by id alone, saved with the body round-tripping through R2, uploads and downloads,
+the revision feed streaming, separation between organizations, and refusals. `test/e2e.mjs` still passes its 67.
+
+**Not working on Workers yet:** PDFs (Chromium; Browser Rendering is next), PDF to Markdown (LiteParse; a container), the ChatGPT plugin's
+own pages and file links (`plugin/server/http.ts` writes to Node's raw response), telling text files from others for the text editor
+(it reads the file synchronously, so every file counts as not text), the assistant (it should run, but has not been tried without
+a model key), Office imports (should run per Spike B; not tried here), and the Docs pages themselves, which the origin still serves.
+The copied files carry `// @ts-nocheck`, because they are typechecked in `packages/docs` under that package's settings.

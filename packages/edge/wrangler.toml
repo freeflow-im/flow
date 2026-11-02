@@ -44,9 +44,17 @@ class_name = "Directory"
 name = "ORG"
 class_name = "Org"
 
+[[durable_objects.bindings]]
+name = "DOCS"
+class_name = "Docs"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Directory", "Org"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Docs"]
 
 [[r2_buckets]]
 binding = "BLOBS"

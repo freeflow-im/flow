@@ -10,6 +10,8 @@ function env(files: Record<string, string> = {}): Env {
     WEB_URL_BASE: 'https://app.example',
     DIRECTORY: {} as never,
     ORG: {} as never,
+    DOCS: {} as never,
+    BLOBS: {} as never,
     ASSETS: {
       fetch: async (req: Request) => {
         const body = files[new URL(req.url).pathname];

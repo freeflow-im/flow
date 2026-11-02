@@ -62,7 +62,7 @@ export async function proxy(req: Request, env: ProxyEnv, deps: ProxyDeps = realD
   let last: Response | null = null;
   for (let attempt = 0; ; attempt++) {
     try {
-      last = await deps.fetch(outgoing.clone());
+      last = await deps.fetch(outgoing.clone() as Request);
       if (!RETRY_STATUS.has(last.status)) return last;
     } catch {
       last = null;
