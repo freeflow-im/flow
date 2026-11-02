@@ -14,6 +14,8 @@ export interface FlowSocketOpts {
   onEvent(event: Event): void;
   onOpen?(): void;
   log(msg: string): void;
+  /** On a server with one socket per organization, the one this socket serves. */
+  organization?: string;
 }
 
 const BACKOFF_MS = [1000, 2000, 5000, 10_000, 30_000];
@@ -34,10 +36,12 @@ export class FlowSocket {
 
   connect(): void {
     if (this.closed) return;
-    const wsUrl = this.opts.serverUrl.replace(/^http/, 'ws') + '/v1/ws';
+    const organization = this.opts.organization ? `?workspace=${encodeURIComponent(this.opts.organization)}` : '';
+    const wsUrl = this.opts.serverUrl.replace(/^http/, 'ws') + '/v1/ws' + organization;
     const ws = new WebSocket(wsUrl);
     this.ws = ws;
     let lastActivity = Date.now();
+    let heartbeat: ReturnType<typeof setInterval> | null = null;
     const watchdog = setInterval(() => {
       if (Date.now() - lastActivity > LIVENESS_TIMEOUT_MS) {
         this.opts.log('no server heartbeat for 90s (laptop sleep?) — dropping the dead socket');
@@ -62,6 +66,8 @@ export class FlowSocket {
       }
       if (frame.op === 'ping') return this.send({ op: 'pong' });
       if (frame.op === 'hello') {
+        // A server that says so wants the client to ping, so that it can sleep between messages (Durable Objects hibernate).
+        if (frame.heartbeat === 'client' && !heartbeat) heartbeat = setInterval(() => { if (ws.readyState === WebSocket.OPEN) ws.send('{"op":"ping"}'); }, 30_000);
         this.attempt = 0;
         this.opts.log('connected (presence online)');
         this.opts.onOpen?.();
@@ -71,6 +77,7 @@ export class FlowSocket {
       if (frame.op === 'error') this.opts.log(`ws error: ${frame.code} ${frame.message}`);
     });
     ws.on('close', () => {
+      if (heartbeat) clearInterval(heartbeat);
       clearInterval(watchdog);
       this.scheduleReconnect();
     });
@@ -99,4 +106,47 @@ export class FlowSocket {
     this.closed = true;
     this.ws?.close();
   }
+}
+
+type Socket = Pick<FlowSocket, 'connect' | 'sendTyping' | 'close'>;
+
+/**
+ * The bridge's connection to a server. Where each organization is its own object the server says so, and there is one
+ * socket per organization behind the same methods; elsewhere it is the one socket it always was.
+ */
+export function openFlowSocket(opts: FlowSocketOpts): Socket {
+  let sockets: FlowSocket[] = [];
+  let closed = false;
+  const api = async <T>(path: string): Promise<T> => {
+    const res = await fetch(opts.serverUrl + path, { headers: { authorization: `Bearer ${opts.token}` } });
+    if (!res.ok) throw new Error(`${path}: ${res.status}`);
+    return (await res.json()) as T;
+  };
+  const start = async (): Promise<void> => {
+    const info = await api<{ capabilities?: { socketPerOrganization?: boolean } }>('/v1/client-info').catch(() => null);
+    if (closed) return;
+    let organizations: (string | undefined)[] = [undefined];
+    if (info?.capabilities?.socketPerOrganization) {
+      const { workspaces } = await api<{ workspaces: { id: string }[] }>('/v1/me/workspaces');
+      organizations = workspaces.map((w) => w.id).filter((id) => !opts.workspaces || opts.workspaces.includes(id));
+    }
+    if (closed) return;
+    sockets = organizations.map((organization) => new FlowSocket({ ...opts, ...(organization ? { organization } : {}) }));
+    for (const socket of sockets) socket.connect();
+  };
+  return {
+    connect() {
+      start().catch((err: Error) => {
+        opts.log(`could not list organizations (${err.message}); trying again in 5s`);
+        if (!closed) setTimeout(() => this.connect(), 5_000);
+      });
+    },
+    sendTyping(channelId, threadRootId) {
+      for (const socket of sockets) socket.sendTyping(channelId, threadRootId);
+    },
+    close() {
+      closed = true;
+      for (const socket of sockets) socket.close();
+    },
+  };
 }

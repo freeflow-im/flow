@@ -2,9 +2,10 @@
 import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import type { ZodTypeAny, z } from 'zod';
-import { AppLinkExchangeBody, AppleAuthBody, CompleteSignupBody, ConsumeSigninLinkBody, ForgotPasswordBody, GoogleAuthBody, LoginBody, RegisterBody, ResetPasswordBody, SigninLinkBody, type UserDTO } from '@flow/shared';
+import { AgentLoginBody, AppLinkExchangeBody, AppleAuthBody, CompleteSignupBody, ConsumeSigninLinkBody, ForgotPasswordBody, GoogleAuthBody, LoginBody, RegisterBody, ResetPasswordBody, SigninLinkBody, emailDomain, type UserDTO } from '@flow/shared';
 import type { DirectoryCore } from '../directory/core';
 import type { Directory } from '../directory/object';
+import type { Org } from '../org/object';
 import { ApiError, badRequest, unauthorized } from '../errors';
 import { appleProfile, googleProfile } from '../oauth';
 
@@ -13,6 +14,7 @@ const SESSION_TTL = 30 * 86400;
 
 export interface AuthEnv {
   DIRECTORY: DurableObjectNamespace<Directory>;
+  ORG: DurableObjectNamespace<Org>;
   WEB_URL_BASE: string;
   GOOGLE_CLIENT_ID?: string;
   APPLE_AUDIENCE?: string;
@@ -54,6 +56,22 @@ export const requireAuth = async (c: C, next: () => Promise<void>) => {
   await next();
 };
 
+/** Every organization that opened its doors to this address's domain gains the person. One failure must not sink a sign-in. */
+async function withDomainJoins<T extends { user: UserDTO }>(c: C, profile: { email: string }, res: T): Promise<T & { autoJoined: unknown[] }> {
+  const domain = emailDomain(profile.email);
+  const ids = domain ? await directory(c, 'organizationsForDomain', domain) : [];
+  const autoJoined: unknown[] = [];
+  for (const id of ids) {
+    try {
+      const joined = await (c.env.ORG.get(c.env.ORG.idFromName(id)) as unknown as { joinByDomain(u: UserDTO): Promise<unknown> }).joinByDomain(res.user);
+      if (joined) autoJoined.push(joined);
+    } catch (err) {
+      console.error(`domain join ${id}: ${(err as Error).message}`);
+    }
+  }
+  return { ...res, autoJoined };
+}
+
 export const authRoutes = new Hono<{ Bindings: AuthEnv; Variables: Vars }>();
 const agent = (c: C) => c.req.header('user-agent');
 
@@ -86,12 +104,12 @@ authRoutes.post('/v1/auth/signin-link/consume', async (c) => {
 });
 authRoutes.post('/v1/auth/google', async (c) => {
   const profile = await googleProfile((await bodyOf(GoogleAuthBody, c)).idToken, c.env.GOOGLE_CLIENT_ID);
-  return signedIn(c, { ...(await directory(c, 'signInWithOAuth', profile, agent(c))), autoJoined: [] }, 201);
+  return signedIn(c, await withDomainJoins(c, profile, await directory(c, 'signInWithOAuth', profile, agent(c))), 201);
 });
 authRoutes.post('/v1/auth/apple', async (c) => {
   const body = await bodyOf(AppleAuthBody, c);
   const profile = await appleProfile(body.identityToken, body.name, c.env.APPLE_AUDIENCE);
-  return signedIn(c, { ...(await directory(c, 'signInWithOAuth', profile, agent(c))), autoJoined: [] }, 201);
+  return signedIn(c, await withDomainJoins(c, profile, await directory(c, 'signInWithOAuth', profile, agent(c))), 201);
 });
 authRoutes.post('/v1/auth/logout', requireAuth, async (c) => {
   await directory(c, 'logout', c.get('token'));
@@ -105,6 +123,10 @@ authRoutes.post('/v1/auth/session-cookie', requireAuth, (c) => {
 authRoutes.post('/v1/auth/app-link', requireAuth, async (c) => c.json(await directory(c, 'createAppLink', c.get('user').id)));
 authRoutes.post('/v1/auth/app-link/exchange', async (c) => {
   return signedIn(c, await directory(c, 'exchangeAppLink', (await bodyOf(AppLinkExchangeBody, c)).code, agent(c)));
+});
+authRoutes.post('/v1/agents/login', async (c) => {
+  const body = await bodyOf(AgentLoginBody, c);
+  return c.json(await directory(c, 'agentLogin', body.username.toLowerCase(), body.key), 201);
 });
 authRoutes.get('/v1/me', requireAuth, (c) => c.json(c.get('user')));
 authRoutes.get('/v1/me/identities', requireAuth, async (c) => c.json({ identities: await directory(c, 'listIdentities', c.get('user').id) }));

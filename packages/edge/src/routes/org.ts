@@ -4,12 +4,10 @@ import { getCookie } from 'hono/cookie';
 import { PatchMeBody, type UserDTO } from '@flow/shared';
 import type { AuthKind } from '../directory/core';
 import { hashToken, newId } from '../directory/core';
-import { badRequest, notFound, unauthorized } from '../errors';
-import type { Org } from '../org/object';
+import { ApiError, badRequest, notFound, unauthorized } from '../errors';
 import { directory, type AuthEnv } from './auth';
 
 export interface OrgRouteEnv extends AuthEnv {
-  ORG: DurableObjectNamespace<Org>;
   BLOBS: R2Bucket;
   GOOGLE_CLIENT_ID?: string;
   APPLE_AUDIENCE?: string;
@@ -98,6 +96,16 @@ orgRoutes.patch('/v1/me', async (c) => {
   return c.json(user);
 });
 
+orgRoutes.delete('/v1/me', async (c) => {
+  const who = await caller(c);
+  if (!who.user) throw unauthorized('missing bearer token');
+  if (who.user.isAgent) throw new ApiError(403, 'forbidden', 'agent accounts are removed by their sponsor or a workspace admin');
+  const ids = await directory(c, 'organizationsOf', who.user.id);
+  await Promise.all(ids.map((id) => orgStub(c, id).removeAccount(who.user!)));
+  await directory(c, 'tombstoneUser', who.user.id);
+  return c.json({ ok: true });
+});
+
 const AVATAR_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const AVATAR_KEY = /^[0-9a-f-]{36}-\d+\.[a-z]+$/;
 
@@ -159,14 +167,14 @@ orgRoutes.delete('/v1/me/devices/:token', (c) => acrossOrganizations(c));
 orgRoutes.get('/v1/me/workspace-invites', (c) => acrossOrganizations(c));
 
 /** An invitation or join link names its organization only through its token, whose hash the object reported when it was made. */
-const TOKEN_PATH = /^\/v1\/(?:invites\/(?:accept|decline)|join-links\/redeem)$/;
+const TOKEN_PATH = /^\/v1\/(?:invites\/(?:accept|decline)|join-links\/redeem|agents\/redeem)$/;
 const JOIN_PREVIEW = /^\/v1\/join-links\/([^/]+)$/;
 
 async function organizationOfToken(c: C, pathname: string): Promise<string | null> {
   const preview = c.req.method === 'GET' ? JOIN_PREVIEW.exec(pathname)?.[1] : undefined;
-  const body = preview || !TOKEN_PATH.test(pathname) ? {} : ((await c.req.raw.clone().json().catch(() => ({}))) as { token?: string; inviteId?: string });
+  const body = preview || !TOKEN_PATH.test(pathname) ? {} : ((await c.req.raw.clone().json().catch(() => ({}))) as { token?: string; code?: string; inviteId?: string });
   if (body.inviteId) return directory(c, 'organizationOfId', body.inviteId);
-  const token = preview ?? body.token;
+  const token = preview ?? body.token ?? body.code;
   return token ? directory(c, 'organizationOfId', await hashToken(token)) : null;
 }
 

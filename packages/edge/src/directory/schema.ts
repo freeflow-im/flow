@@ -88,4 +88,9 @@ export const DIRECTORY_MIGRATIONS: string[] = [
     slug TEXT PRIMARY KEY COLLATE NOCASE,
     organization_id TEXT NOT NULL
   );`,
+  `CREATE TABLE organization_domains (
+    organization_id TEXT PRIMARY KEY,
+    domain TEXT NOT NULL COLLATE NOCASE
+  );
+  CREATE INDEX organization_domains_domain ON organization_domains(domain);`,
 ];
