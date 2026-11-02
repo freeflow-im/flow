@@ -1,5 +1,30 @@
 # Decision log
 
+## 2026-11-02 — The suite's end state is Cloudflare, one Durable Object per organization (docs/specs/freeflow-suite.md §3.2)
+
+Ruled by the operator: the service is strictly multi-tenant with small tenants, so
+no central database is needed. Each organization becomes a Durable Object with its
+own SQLite and its sockets; blobs stay in R2; a tiny directory (email → user →
+organizations, sessions) is the only shared store. Consequences now:
+
+- Organization is the partition key: phase 4 puts `workspace_id` on every Docs row.
+- SQLite is the dialect of record for new code; Postgres-only features are avoided.
+- Postgres and NATS stay on the box but are not permanent: no RDS, no new NATS use,
+  an in-process bus when `NATS_URL` is unset. Docs' metadata does not move to Postgres.
+- Identity stays its own small service, the future directory.
+- The order from here: phase 3 (the bar, one web app), phase 4 (Docs respect the
+  current organization), then the Cloudflare move, Chat first and Docs second,
+  then Mail and Calendar on the new runtime. The §5 integrations are dropped.
+- **My files is per organization.** A person in company A and company B has a
+  distinct private locker in each; a private file carries its organization and a
+  private flag, never a per-user store. Files from before organizations are
+  assigned to one at migration.
+- One Durable Object per **organization**, not per channel: a tenant's sockets,
+  members, channel list, unread counts and search live together, so a message
+  fans out inside one object; every row keeps its channel id and no hot path
+  joins across channels, so a channel can be split out later if a tenant
+  outgrows the object.
+
 ## 2026-11-01 — The suite bar: one tab per app, Docs and Chat (docs/specs/freeflow-suite.md §2.5)
 
 Designed with the operator on the canvas "FreeFlow Suite Bar" (linked from the spec):

@@ -174,7 +174,28 @@ Environment: docs' variables keep their names (`DATA_DIR`, `ANTHROPIC_API_KEY`, 
 
 ### 3.2 Data
 
-Documents stay in SQLite on the EBS data volume (`/data`, as today), with the files beside it under `DATA_DIR`, because the docs stores are synchronous `node:sqlite` code shared with the desktop app's folder-backed subclasses (`localStore.ts`); making them async over Postgres touches 18 files and every caller, and the desktop app would still need SQLite. Consequences, accepted for this merge:
+**The target, ruled 2026-11-02: the suite moves to Cloudflare, one tenant at a time.** The service is strictly
+multi-tenant and every tenant (organization) is small, so there is no central database in the end state: each
+organization is one Durable Object holding its own SQLite (members, channels, messages, files' and documents'
+metadata, folders, the assistant's conversations) and its WebSocket connections (hibernating sockets replace NATS
+and the gateway); blobs stay in R2; the clients are static assets on a Worker; mail is Cloudflare's; PDFs are the
+Browser Rendering API; nightly jobs are Cron Triggers. The one thing that is not per tenant is the **directory**:
+email → user, user → organizations, sessions, OAuth identities, invites by email. It is tiny and lives in one
+directory object or a small D1 database. The plan for the move is `docs/specs/cloudflare-migration.md`. Until then, the rules that make the move cheap:
+
+- **Organization is the partition key.** Phase 4 gives every Docs row an organization id and filters by it; that
+  column is the tenant boundary later. New Chat data is keyed by workspace as it already is.
+- **SQLite is the dialect of record.** New code avoids Postgres-only features (`citext`, `jsonb`, `FOR UPDATE
+  SKIP LOCKED`); a service touched for another reason has its queries made to run on both.
+- **Postgres and NATS are not permanent.** They stay on the box as they are; no RDS move, no new NATS use, and an
+  in-process bus when `NATS_URL` is unset. Docs' metadata does not move to Postgres.
+- **Identity is the directory already.** Users, sessions and memberships stay small and reached through their own
+  services, so they lift out first.
+- Flow's server itself is the cost of the move: Fastify, drizzle over Postgres, native argon2, Playwright and the
+  file system do not run on Workers. It is ported one bounded context at a time behind the same API (Hono, the
+  Durable Object's SQL, WebAssembly argon2 or a hash migration), with both stacks running during the move.
+
+Until that move, the arrangement below holds. Documents stay in SQLite on the EBS data volume (`/data`, as today), with the files beside it under `DATA_DIR`, because the docs stores are synchronous `node:sqlite` code shared with the desktop app's folder-backed subclasses (`localStore.ts`); making them async over Postgres touches 18 files and every caller, and the desktop app would still need SQLite. Consequences, accepted for this merge:
 
 - The combined process runs as one replica (docs already does; the SSE revision feed is per process). `deploy.sh` starts the new container before stopping the old one, as it does now. If Chat needs replicas later, the docs plugin can run as its own service behind the same origin with the Flow server proxying `/api/*`; the plugin boundary is designed so that is a config change, not a rewrite.
 - `backup.ts` keeps copying SQLite and files to R2, and the volume's daily snapshots now cover Postgres too (§3.4); the volume is the primary.
@@ -254,11 +275,15 @@ Each phase ships on its own and leaves both products working.
 2. **One identity.** Cookie transport in Flow's auth; `registerDocs` plugin; docs' auth code removed; the plugin's OAuth over the suite's sign-in; user and OAuth-grant migration script; one image on the AWS stack (Flow plus the Workspace server, Chromium, LiteParse/Tesseract, `DATA_DIR` on the data volume); `mcpdocs.freeflow.im` redirects, `docs.freeflow.im` serves the plugin from the suite. Users sign in once with Flow's screen and land on their files. The two apps are still separate pages (`/` Chat, `/workspace` Docs) with no bar yet.
    *Code done (PR "One identity", 2026-11-01):* the cookie transport (`packages/server/src/lib/sessionCookie.ts`), the Workspace app mounted by `packages/server/src/workspace.ts` through docs' `buildApp({ host })` (its own sign-in routes, mailer and Google sign-in are off when hosted; its `users` table mirrors Flow's), the client under `/workspace`, the plugin's OAuth pages over the suite sign-in (`/oauth/resume`), `/?next=` in the web client, scrypt hashes accepted and rehashed at sign-in, and `packages/server/scripts/import-workspace-users.ts`. The suite's image holds the Workspace app (`packages/server/deploy/aws/Dockerfile`), and the stack's `workspace-to-suite.sh` moves it over: `docs/ops/WORKSPACE_TO_SUITE.md` is the cut-over, the operator's to run on its own day.
 3. **The suite bar.** Router, shell, bar, organization switcher replacing the rail, `useAuth` adapter, CSS scoping, Chat runtime hoisted into the shell, Chat badge. This is the phase the image shows.
-4. **Organization files.** `workspace_id`, Organization files / My files, access checks, MCP and assistant tools organization-aware.
-5. **Integrations** (§5), in the order listed.
-6. **Desktop and native** (§7).
+4. **Organization files.** `workspace_id` on every Docs row (the tenant partition key of §3.2), Organization files / My files, access checks, MCP and assistant tools organization-aware. Docs' metadata stays SQLite; it is not moved to Postgres (§3.2's ruling).
+5. **Cloudflare, Chat first** (§3.2's end state; ruled 2026-11-02 to come right after phase 4, and before any new app). Cloudflare in front of `app.freeflow.im`, routing by path, so a Worker takes one bounded context at a time while the AWS box serves the rest: the directory (users, sessions, memberships) first, then one Durable Object per organization with its SQLite and its sockets serving channels and messages. Postgres and NATS retire with the last context.
+6. **Cloudflare, Docs second.** The Docs server's SQLite-shaped stores port into the same per-organization object; PDFs to Browser Rendering; bodies and uploads stay in R2. The AWS instance then only builds the desktop app, and goes.
+7. **Mail and Calendar**, built on the new runtime, each its own tab with its own left column (the placeholders light up).
+8. **Desktop and native** (§7).
 
-Phases 1.5 and 2 are the risky ones: each moves live data. Rehearse both on copies, keep the Railway project and then the old docs app read-only but reachable for a week after their cut-overs, and do them on different days.
+The integrations of §5 (Share to Chat, Open in Docs, agents with Docs tools, the assistant reaching Chat, activity rows) are **dropped from the plan** (ruled 2026-11-02); §5 stays as a record of what was considered.
+
+Phases 1.5 and 2 were the risky ones (both done 2026-11-01); the Cloudflare phases move live data again, one context at a time, with both stacks running. Rehearse both on copies, keep the Railway project and then the old docs app read-only but reachable for a week after their cut-overs, and do them on different days.
 
 ## 9. Decisions taken, and what is still open
 
