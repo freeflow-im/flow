@@ -289,6 +289,24 @@ export class DirectoryCore {
     })) as OAuthIdentityDTO[];
   }
 
+  /** New ids and membership changes, reported by an organization's object (org/object.ts). Safe to apply twice. */
+  async applyOrgChanges(organizationId: string, changes: { kind: string; id: string; user_id: string | null; role: string | null }[]): Promise<void> {
+    for (const c of changes) {
+      if (c.kind === 'token') this.sql.exec('INSERT OR IGNORE INTO id_index (id, organization_id) VALUES (?, ?)', await hashToken(c.id), organizationId);
+      else if (c.kind === 'index') this.sql.exec('INSERT OR IGNORE INTO id_index (id, organization_id) VALUES (?, ?)', c.id, organizationId);
+      else if (c.kind === 'join') this.sql.exec('INSERT OR REPLACE INTO memberships (user_id, organization_id, role) VALUES (?, ?, ?)', c.user_id, organizationId, c.role);
+      else if (c.kind === 'leave') this.sql.exec('DELETE FROM memberships WHERE user_id = ? AND organization_id = ?', c.user_id, organizationId);
+    }
+  }
+
+  organizationsOf(userId: string): string[] {
+    return this.rows('SELECT organization_id FROM memberships WHERE user_id = ?', userId).map((r) => r.organization_id as string);
+  }
+
+  organizationOfId(id: string): string | null {
+    return (this.rows('SELECT organization_id FROM id_index WHERE id = ?', id)[0]?.organization_id as string | undefined) ?? null;
+  }
+
   getUser(id: string, viewerId: string): UserDTO {
     const user = this.userById(id);
     if (!user) throw notFound('user not found');

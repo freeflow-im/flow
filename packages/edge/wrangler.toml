@@ -33,6 +33,7 @@ ASSET_HOSTS = "app.freeflow.im,edge.freeflow.im"
 # The hosts the ported API answers on; the cut-over adds app.freeflow.im.
 PORTED_HOSTS = "edge.freeflow.im"
 WEB_URL_BASE = "https://edge.freeflow.im"
+FLOW_WEB_URL = "https://edge.freeflow.im"
 EMAIL_FROM = "noreply@mail.freeflow.im"
 
 [[durable_objects.bindings]]

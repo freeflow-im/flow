@@ -14,7 +14,7 @@ import {
   type WorkspaceMemberDTO,
 } from '@flow/shared';
 import { db, schema, type Tx } from '../db/index.js';
-import { newId } from '../lib/ids.js';
+import { newId, presetWorkspaceId } from '../lib/ids.js';
 import { hashToken, newLinkToken, newToken } from '../lib/tokens.js';
 import { badRequest, conflict, forbidden, notFound } from '../lib/errors.js';
 import { config } from '../config.js';
@@ -263,7 +263,7 @@ export async function createWorkspace(
   if (creator[0]?.isAgent) throw forbidden('agents cannot create workspaces');
   const domain = googleSelfRegisterDomain ? googleSelfRegisterDomain.trim().toLowerCase() : null;
   if (domain) await assertMaySelfRegisterDomain(userId, domain);
-  const wsId = newId();
+  const wsId = presetWorkspaceId.getStore() ?? newId();
   const chanId = newId();
   try {
     await db.transaction(async (tx) => {

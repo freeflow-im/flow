@@ -79,5 +79,9 @@ export const DIRECTORY_MIGRATIONS: string[] = [
     role TEXT NOT NULL,
     PRIMARY KEY (user_id, organization_id)
   );
-  CREATE INDEX memberships_organization ON memberships(organization_id);`,
+  CREATE INDEX memberships_organization ON memberships(organization_id);
+  CREATE TABLE id_index (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL
+  );`,
 ];

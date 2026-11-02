@@ -4,6 +4,7 @@ import { Hono, type Context } from 'hono';
 import { ApiError } from './errors';
 import { proxy, type ProxyEnv } from './proxy';
 import { authRoutes, type AuthEnv } from './routes/auth';
+import { orgRoutes } from './routes/org';
 
 export { Directory } from './directory/object';
 export { Org } from './org/object';
@@ -37,6 +38,7 @@ app.get('/edge/health', (c) => c.json({ ok: true }));
 const ported = new Hono<{ Bindings: Env }>();
 ported.onError(onError);
 ported.route('/', authRoutes as never);
+ported.route('/', orgRoutes as never);
 app.use('*', async (c, next) => {
   if (!c.env.PORTED_HOSTS.split(',').includes(new URL(c.req.url).hostname)) return next();
   const res = await ported.fetch(c.req.raw, c.env, c.executionCtx);

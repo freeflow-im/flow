@@ -117,3 +117,12 @@ object through `AsyncLocalStorage`, and the event bus becomes a call into the ob
 
 Not on Workers yet, each with a stand-in: image resizing (images are stored as they arrive), pushes (not sent), help
 pages and agent avatar presets (empty). Only the five calls above have run; the rest of the services compile but are untested.
+
+The API followed the same way. `src/org/routes/index.ts` is the Node route file with the directory's routes taken out, on a small layer
+that speaks the part of Fastify it uses (`routes/compat.ts`). SQLite triggers report new ids and membership changes to the directory, so
+no service has to remember to, and that is how a path naming only a channel or message finds its object. `test/e2e.mjs` runs 29 checks locally: sign-up,
+organizations, invitations, sockets, presence, typing, messages, threads, reactions, encryption, private channels and refusals.
+
+**Still to do for Chat:** the web client's socket per organization and its heartbeat; profile edits reaching every organization; a member's own
+notifications across organizations (these paths go to their first organization for now); avatars, which name no organization; workspace slugs, unique only
+within their object; scheduled messages and other timers, which need Alarms; domain self-registration; the PKCE handoff routes. No route has run on Cloudflare's network, and most of the 100 or so routes beyond those checks have not run at all.
