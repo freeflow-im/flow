@@ -76,21 +76,36 @@ do not retype it.
 `ELECTRON_SKIP_BINARY_DOWNLOAD` and any `RAILWAY_*`. Setting `/flow/DATABASE_URL` or `/flow/NATS_URL` makes the
 container use those instead of the box's: that is the RDS path later, and a mistake now.
 
-A loop for the bulk of it, from a file of `NAME=value` lines exported from Railway (keep the file in a private
-temporary directory and delete it afterwards; it holds every secret):
+A script for the bulk of it, from the file of `NAME=value` lines exported from Railway (keep the file in a private
+temporary directory and delete it afterwards; it holds every secret). Run it with bash; without `--apply` it only
+prints what it would do. It skips what the box sets, `FLOW_REDIRECT_FROM_HOSTS` (step 6), Railway's own and any
+`VITE_*` leftovers, sets the two rehearsal drivers to `dev`, and leaves the R2 key pair for you to set by hand to
+the read-only token (both undone in step 6):
 
 ```sh
-while IFS= read -r line; do
+cat > put-flow-params.sh <<'EOF'
+#!/bin/bash
+set -euo pipefail
+file=${1:?railway.env}; apply=${2:-}
+skip='^(DATABASE_URL|NATS_URL|HOST|PORT|NODE_ENV|FLOW_FILE_DIR|FLOW_MIGRATE_BLOBS|ELECTRON_SKIP_BINARY_DOWNLOAD|FLOW_REDIRECT_FROM_HOSTS|CLOUDFLARE_ACCESS_KEY_ID|CLOUDFLARE_SECRET_ACCESS_KEY|RAILWAY_.*|VITE_.*)$'
+put() {
+  if [ "$apply" = --apply ]; then
+    aws ssm put-parameter --region us-west-2 --type SecureString --overwrite --name "/flow/$1" --value "$2" >/dev/null && echo "put /flow/$1"
+  else
+    echo "would put /flow/$1 (${#2} chars)"
+  fi
+}
+while IFS= read -r line || [ -n "$line" ]; do
+  [ -z "$line" ] && continue
   name=${line%%=*}; value=${line#*=}
-  case $name in
-    DATABASE_URL|NATS_URL|HOST|PORT|NODE_ENV|FLOW_FILE_DIR|FLOW_MIGRATE_BLOBS|ELECTRON_SKIP_BINARY_DOWNLOAD|RAILWAY_*) continue ;;
-  esac
+  if [[ $name =~ $skip ]]; then echo "skip $name"; continue; fi
+  case $name in FLOW_EMAIL_DRIVER|FLOW_PUSH_DRIVER) value=dev ;; esac
   put "$name" "$value"
-done < railway.env
+done < "$file"
 put POSTGRES_PASSWORD "$(openssl rand -hex 32)"
-# the rehearsal overrides, undone in step 6
-put FLOW_EMAIL_DRIVER dev
-put FLOW_PUSH_DRIVER dev
+EOF
+bash put-flow-params.sh railway.env            # dry run: read the names
+bash put-flow-params.sh railway.env --apply
 put CLOUDFLARE_ACCESS_KEY_ID <read-only token's key id>
 put CLOUDFLARE_SECRET_ACCESS_KEY <read-only token's secret>
 aws ssm get-parameters-by-path --region us-west-2 --path /flow/ --query 'Parameters[].Name' --output text | tr '\t' '\n' | sort
