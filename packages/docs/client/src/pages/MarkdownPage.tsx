@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { appUrl } from '../basePath.ts';
 import { nameWithExt } from '../../../shared/docNames.ts';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { FolderCrumbs, lastListingHref } from '../components/FolderCrumbs.tsx';
@@ -287,7 +288,7 @@ function MarkdownWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta;
           label: 'New Markdown document',
           action: async () => {
             const { doc } = await api.createMarkdown('Untitled Markdown');
-            window.open(`/md/${doc.id}`, '_blank');
+            window.open(appUrl(`/md/${doc.id}`), '_blank');
           },
         },
         { label: 'Rename…', action: () => setDialog({ kind: 'rename' }) },

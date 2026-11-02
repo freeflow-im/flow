@@ -29,6 +29,28 @@ export const config = {
   },
   port: Number(process.env.PORT ?? 8787),
   host: process.env.HOST ?? '127.0.0.1', // local server only in phase 1
+  /** The session cookie's Secure flag (lib/sessionCookie.ts): on when the public address is https. */
+  get secureCookies(): boolean { return config.webUrlBase.startsWith('https://'); },
+  // ---- the Workspace app (packages/docs) hosted in this server (src/workspace.ts) ----
+  /** Its data directory (SQLite and files). Unset: the Workspace app is not served. */
+  get workspaceDataDir(): string | undefined { return process.env.WORKSPACE_DATA_DIR || undefined; },
+  /** Its built client (built with BASE_PATH=/workspace/). */
+  get workspaceStaticDir(): string {
+    return process.env.WORKSPACE_STATIC_DIR ?? path.resolve(pkgRoot, '..', 'docs', 'dist', 'client');
+  },
+  /** The ChatGPT plugin is served (at /mcp, /oauth/*) when this names its public origin(s), comma-separated. */
+  get workspacePluginUrl(): string | undefined { return process.env.WORKSPACE_PLUGIN_URL || undefined; },
+  /**
+   * The Workspace app’s host names from before the suite (mcpdocs.freeflow.im, docs.freeflow.im), comma-separated:
+   * a page asked for on one of them is sent to the same page under /workspace on the suite’s own host; the
+   * ChatGPT plugin’s paths (/mcp, /oauth/*, /plugin/*) are answered on them as before.
+   */
+  get workspaceLegacyHosts(): string[] {
+    return (process.env.WORKSPACE_LEGACY_HOSTS ?? '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
+  },
+  get workspacePluginWebDir(): string {
+    return process.env.WORKSPACE_PLUGIN_WEB_DIR ?? path.resolve(pkgRoot, '..', 'docs', 'plugin', 'dist', 'web');
+  },
   /** Sealed data-key file for local dev (KMS stand-in). Auto-created on first boot, chmod 600. */
   get dataKeyFile(): string {
     return process.env.FLOW_DATA_KEY_FILE ?? path.join(pkgRoot, '.keys', 'data.key.json');

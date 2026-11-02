@@ -4,6 +4,7 @@
 // (window.open, which the app makes a tab), one outside it a new tab on its own folder (desktop/main.js).
 // After it, the desktop app's Open in Finder shows the file being edited in the system's file browser.
 import { useEffect, useState, type ReactNode } from 'react';
+import { appUrl } from '../basePath.ts';
 import { useLocation } from 'react-router-dom';
 import { api, FAVORITES_CHANGED, type RecentFile } from '../api.ts';
 import { useAuth } from '../auth.tsx';
@@ -28,8 +29,8 @@ interface Entry {
 /** The desktop app: a file or folder by its path, in a new tab (one outside the open folder, a tab on its own folder). */
 async function openPathInTab(p: string, from?: 'recents' | 'favorites') {
   const res = await api.openLocalPath(p, true);
-  if (res.file !== undefined) window.open(`/open?file=${encodeURIComponent(res.file)}${from ? `&from=${from}` : ''}`, '_blank');
-  else if (res.folder !== undefined) window.open(res.folder ? `/?folder=${encodeURIComponent(res.folder)}` : '/', '_blank');
+  if (res.file !== undefined) window.open(appUrl(`/open?file=${encodeURIComponent(res.file)}${from ? `&from=${from}` : ''}`), '_blank');
+  else if (res.folder !== undefined) window.open(appUrl(res.folder ? `/?folder=${encodeURIComponent(res.folder)}` : '/'), '_blank');
 }
 
 const fileEntry = (f: RecentFile): Entry => ({ name: f.name, icon: kindIcon({ kind: f.kind, title: f.name }, 16), ...(f.path ? { path: f.path } : { page: pathOfFile(f.kind, f.id!) }) });
@@ -104,8 +105,8 @@ export function useOpenInTab(): { items: MenuItem[]; dialog: ReactNode } {
         confirmText="Open"
         onConfirm={async (p) => {
           const res = await api.openLocalPath(p, true);
-          if (res.file !== undefined) window.open(`/open?file=${encodeURIComponent(res.file)}`, '_blank');
-          else if (res.folder !== undefined) window.open(res.folder ? `/?folder=${encodeURIComponent(res.folder)}` : '/', '_blank');
+          if (res.file !== undefined) window.open(appUrl(`/open?file=${encodeURIComponent(res.file)}`), '_blank');
+          else if (res.folder !== undefined) window.open(appUrl(res.folder ? `/?folder=${encodeURIComponent(res.folder)}` : '/'), '_blank');
         }}
         onClose={() => setAsking(false)}
       />

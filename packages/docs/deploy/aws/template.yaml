@@ -236,18 +236,27 @@ Resources:
           mkdir -p /data/app /data/caddy /data/postgres /data/backups/postgres
 
           mkdir -p /opt/mcpdocs
-          # Routed by host: the docs app's hosts to `app`, Flow's to `flow` (WebSockets pass through reverse_proxy as is).
-          cat > /opt/mcpdocs/Caddyfile <<'EOF'
+          # Routed by host (WebSockets pass through reverse_proxy as is): Flow's host to `flow`; the Workspace app's hosts to
+          # `app`, the docs app in its own container, until the marker /data/workspace-on-suite exists (workspace-to-suite.sh
+          # below), then to `flow` too, which serves the Workspace app itself. A running Caddy picks up the new file.
+          cat > /opt/mcpdocs/caddyfile.sh <<'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          WORKSPACE_UPSTREAM=app:3001
+          [ -e /data/workspace-on-suite ] && WORKSPACE_UPSTREAM=flow:8787
+          cat > /opt/mcpdocs/Caddyfile <<CADDY
           ${DomainName}, ${OtherDomains} {
-            reverse_proxy app:3001
+            reverse_proxy $WORKSPACE_UPSTREAM
           }
 
           ${FlowDomainName} {
             reverse_proxy flow:8787
           }
-          EOF
-          # A running Caddy (this script run again after a stack update) picks up the new hosts.
+          CADDY
           if docker inspect caddy >/dev/null 2>&1; then docker exec caddy caddy reload --config /etc/caddy/Caddyfile || true; fi
+          EOF
+          chmod 755 /opt/mcpdocs/caddyfile.sh
+          /opt/mcpdocs/caddyfile.sh
 
           cat > /opt/mcpdocs/deploy.sh <<'EOF'
           #!/bin/bash
@@ -330,6 +339,8 @@ Resources:
           }
 
           deploy_docs() {
+            # Once the Workspace app is on the suite (workspace-to-suite.sh), the docs app's own container is retired.
+            [ -e /data/workspace-on-suite ] && { echo 'the Workspace app is served by the suite now; nothing to deploy'; exit 0; }
             IMAGE=$REGISTRY/${Repository}:$TAG
             pull $IMAGE
             # The app's secrets: every parameter under /mcpdocs/.
@@ -359,6 +370,18 @@ Resources:
             fi
             grep -q '^NATS_URL=' /opt/mcpdocs/flow.env || echo 'NATS_URL=nats://nats:4222' >> /opt/mcpdocs/flow.env
             rm -f /opt/mcpdocs/flow.params
+            # The Workspace app inside the suite, once workspace-to-suite.sh has moved it: the docs app's data directory
+            # (/data/app) mounted at /data/workspace, its settings from /mcpdocs/ (all but the docs app's own sign-in and
+            # mail, which the suite does now), the ChatGPT plugin at the old host names, and those names sent to /workspace.
+            WORKSPACE_MOUNT=()
+            if [ -e /data/workspace-on-suite ]; then
+              params /mcpdocs/ | grep -vE '^(GOOGLE_CLIENT_ID|GOOGLE_CLIENT_SECRET|CLOUDFLARE_ACCOUNT_ID|CLOUDFLARE_API_TOKEN|MAIL_FROM|PLUGIN_ENABLED|APP_URL|SECURE_COOKIES)=' \
+                | sed 's/^PLUGIN_PUBLIC_URL=/WORKSPACE_PLUGIN_URL=/' >> /opt/mcpdocs/flow.env
+              printf 'WORKSPACE_DATA_DIR=/data/workspace\nWORKSPACE_LEGACY_HOSTS=${DomainName},${OtherDomains}\n' >> /opt/mcpdocs/flow.env
+              # The image runs as `node` (uid 1000); the docs app's container ran as root.
+              mkdir -p /data/app && chown -R 1000:1000 /data/app
+              WORKSPACE_MOUNT=(-v /data/app:/data/workspace)
+            fi
             services
             pull $IMAGE
             # docker stop, not rm -f: the server gets SIGTERM and up to a minute to drain (sockets, in-flight requests).
@@ -369,7 +392,7 @@ Resources:
             # The image runs as `node` (uid 1000); /data/flow is where it may write.
           mkdir -p /data/flow && chown 1000:1000 /data/flow
           docker run -d --name flow --network mcpdocs --restart unless-stopped --stop-timeout 60 \
-              -v /data/flow:/data --env-file /opt/mcpdocs/flow.env -e HOST=0.0.0.0 -e PORT=8787 \
+              -v /data/flow:/data "${!WORKSPACE_MOUNT[@]}" --env-file /opt/mcpdocs/flow.env -e HOST=0.0.0.0 -e PORT=8787 \
               --log-driver awslogs --log-opt awslogs-region=$REGION --log-opt awslogs-group=${FlowLogs} \
               $IMAGE
             caddy
@@ -383,6 +406,31 @@ Resources:
           esac
           EOF
           chmod 755 /opt/mcpdocs/deploy.sh
+
+          # FreeFlow phase 2 (docs/ops/WORKSPACE_TO_SUITE.md): the Workspace app moves from its own container into the suite's.
+          # Stops the docs app, marks the move on the data volume, deploys the suite with the Workspace app on, imports the
+          # docs app's accounts into the suite's, and routes the old host names to the suite. Run again to retry; `undo`
+          # puts the docs app back in its own container (the accounts imported stay).
+          cat > /opt/mcpdocs/workspace-to-suite.sh <<'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          if [ "${!1:-}" = undo ]; then
+            rm -f /data/workspace-on-suite
+            /opt/mcpdocs/deploy.sh flow latest
+            /opt/mcpdocs/deploy.sh docs latest
+            /opt/mcpdocs/caddyfile.sh
+            echo 'the Workspace app is back in its own container'
+            exit 0
+          fi
+          docker stop -t 30 app >/dev/null 2>&1 || true
+          docker rm -f app >/dev/null 2>&1 || true
+          touch /data/workspace-on-suite
+          /opt/mcpdocs/deploy.sh flow latest
+          docker exec flow node packages/server/scripts/import-workspace-users.ts /data/workspace --apply
+          /opt/mcpdocs/caddyfile.sh
+          echo 'the Workspace app is on the suite'
+          EOF
+          chmod 755 /opt/mcpdocs/workspace-to-suite.sh
 
           # Nightly: a plain SQL dump of Flow's database on the data volume, the newest 14 kept. The volume's snapshots
           # copy the files; a dump is what a fresh Postgres (RDS, a new major version) is restored from:

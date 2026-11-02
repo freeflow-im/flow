@@ -203,6 +203,16 @@ export class ConnectionRuntime {
     return this.token ? { authorization: `Bearer ${this.token}` } : {};
   }
 
+  /**
+   * Bearer auth only; a cross-origin backend must never see ambient cookies (docs/dev/MULTISERVER.md, "Allowed
+   * browser origins"). The page's own server is the exception: it sets the session as a cookie too, for the
+   * Workspace app it hosts (FreeFlow suite, docs/specs/freeflow-suite.md §2.2), and 'omit' would make the
+   * browser drop that Set-Cookie.
+   */
+  private credentials(): RequestCredentials {
+    return typeof location !== 'undefined' && this.origin === location.origin ? 'same-origin' : 'omit';
+  }
+
   // -- REST ----------------------------------------------------------------
 
   async api<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -211,9 +221,7 @@ export class ConnectionRuntime {
     const generation = this.generation;
     const res = await fetch(url, {
       method,
-      // Bearer auth only; a cross-origin backend must never see ambient
-      // cookies (docs/dev/MULTISERVER.md, "Allowed browser origins").
-      credentials: 'omit',
+      credentials: this.credentials(),
       redirect: 'error',
       headers: {
         ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
@@ -271,7 +279,7 @@ export class ConnectionRuntime {
     const relative = !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(target) && !target.startsWith('//');
     const put = await fetch(relative ? this.url(target) : target, {
       method: pres.upload.method,
-      credentials: 'omit',
+      credentials: relative ? this.credentials() : 'omit',
       redirect: 'error',
       headers: {
         ...pres.upload.headers,
@@ -292,7 +300,7 @@ export class ConnectionRuntime {
     const generation = this.generation;
     const res = await fetch(this.url(path), {
       method: 'POST',
-      credentials: 'omit',
+      credentials: this.credentials(),
       redirect: 'error',
       headers: this.authHeaders(),
       body: form,
@@ -345,7 +353,7 @@ export class ConnectionRuntime {
         const fileId = path.match(/^\/v1\/files\/([^/?#]+)$/)?.[1];
         const direct = fileId ? (await this.fileStreamUrl(fileId)).url : null;
         const res = await fetch(direct ?? this.url(path), {
-          credentials: 'omit',
+          credentials: direct ? 'omit' : this.credentials(),
           redirect: 'error',
           headers: direct ? {} : this.authHeaders(),
         });

@@ -55,6 +55,10 @@ Secrets live only in Railway service variables — never in the repo.
 | `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_KEY` | Email Service REST API credentials |
 | `FLOW_EMAIL_FROM` | `noreply@mail.freeflow.im` |
 | `FLOW_WEB_URL` | `https://app.freeflow.im` — base URL baked into emailed signup/reset links |
+| `WORKSPACE_DATA_DIR` | The Workspace app (packages/docs, the former MCP Docs) is served from this process when set: its SQLite database and files live here (`src/workspace.ts`). Unset: not served. |
+| `WORKSPACE_STATIC_DIR` | Its built client (default `packages/docs/dist/client`, built with `BASE_PATH=/workspace/`). |
+| `WORKSPACE_PLUGIN_URL` | The ChatGPT plugin's public origin(s), comma-separated (`https://docs.freeflow.im`); set, the plugin (`/mcp`, `/oauth/*`) is served too. `WORKSPACE_PLUGIN_WEB_DIR` names its web view build. |
+| `WORKSPACE_LEGACY_HOSTS` | The Workspace app's host names from before the suite, comma-separated (`mcpdocs.freeflow.im,docs.freeflow.im`): a page asked for there is a 301 to the same page under `/workspace` here; the plugin's paths are served on them as before. |
 | `FLOW_FILE_DIR` | `/data/files` (on the persistent volume) — only read by the local blob driver and the one-time R2 migration |
 | `FLOW_BLOB_DRIVER` | `r2` — file/thumb/avatar blobs in Cloudflare R2, presigned direct upload/download. Unset/`local` = disk under `FLOW_FILE_DIR`. |
 | `CLOUDFLARE_S3_ENDPOINT` | `https://<account-id>.r2.cloudflarestorage.com` |

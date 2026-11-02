@@ -25,7 +25,7 @@ export interface PluginServerOptions {
   /** Log request bodies on the MCP endpoint. */
   logBodies?: boolean;
   /** When hosted inside the app: the account already signed in to the app in this browser, from its cookie. */
-  sessionUser?: (req: http.IncomingMessage) => string | null;
+  sessionUser?: (req: http.IncomingMessage) => Promise<string | null> | string | null;
   mcp?: Partial<McpOptions>;
 }
 
@@ -127,7 +127,7 @@ export function createPluginHandler(opts: PluginServerOptions): PluginHandler {
             const out = await oauth.authorize(Object.fromEntries(url.searchParams));
             if (out.kind === 'redirect') return redirect(res, out.url);
             // Already signed in to the app in this browser: straight to consent.
-            const known = opts.sessionUser?.(req) ?? null;
+            const known = (await opts.sessionUser?.(req)) ?? null;
             if (known) {
               oauth.setUser(out.pendingId, known);
               return redirect(res, `/oauth/consent?p=${encodeURIComponent(out.pendingId)}`);
@@ -137,6 +137,15 @@ export function createPluginHandler(opts: PluginServerOptions): PluginHandler {
             if (e instanceof OAuthError) return html(res, e.status, oauth.errorPage(e.message));
             throw e;
           }
+        }
+        // Hosted in the suite: back from its sign-in page, the browser now has the suite's session.
+        if (p === '/oauth/resume' && req.method === 'GET') {
+          const pendingId = url.searchParams.get('p') ?? '';
+          if (!oauth.pending(pendingId)) return html(res, 400, oauth.errorPage('This sign-in link has expired. Start again from ChatGPT.'));
+          const known = (await opts.sessionUser?.(req)) ?? null;
+          if (!known) return html(res, 200, oauth.signInPage(pendingId, 'You are not signed in yet.'));
+          oauth.setUser(pendingId, known);
+          return redirect(res, `/oauth/consent?p=${encodeURIComponent(pendingId)}`);
         }
         if (p === '/oauth/login' && req.method === 'POST') {
           const form = await readForm(req);
@@ -198,7 +207,7 @@ export function createPluginHandler(opts: PluginServerOptions): PluginHandler {
           const form = await readForm(req);
           const r = oauth.startDevice(form.code, clientAddress(req));
           if ('error' in r) return html(res, 200, oauth.devicePage(r.error));
-          const known = opts.sessionUser?.(req) ?? null;
+          const known = (await opts.sessionUser?.(req)) ?? null;
           if (known) {
             oauth.setUser(r.pendingId, known);
             return redirect(res, `/oauth/consent?p=${encodeURIComponent(r.pendingId)}`);

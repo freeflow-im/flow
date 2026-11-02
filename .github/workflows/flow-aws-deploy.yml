@@ -1,5 +1,5 @@
-# Deploys the Flow server (packages/server, serving packages/web/dist) to the AWS stack it shares with the Workspace
-# app (packages/docs/deploy/aws/template.yaml) on each push to main that touches what goes into its image: builds
+# Deploys the suite's server (packages/server, serving packages/web/dist, with the Workspace app of packages/docs
+# inside it: src/workspace.ts) to the AWS stack (packages/docs/deploy/aws/template.yaml) on each push to main that touches what goes into its image: builds
 # packages/server/deploy/aws/Dockerfile from the repository root on an Arm runner (the instance is Graviton), pushes
 # it to the stack's `flow` ECR repository and runs `deploy.sh flow <sha>` on the instance through Systems Manager.
 # Does nothing until the repository variables AWS_DEPLOY_ROLE_ARN, AWS_INSTANCE_ID and AWS_FLOW_ECR_REPOSITORY are
@@ -14,6 +14,7 @@ on:
       - 'packages/server/**'
       - 'packages/web/**'
       - 'packages/shared/**'
+      - 'packages/docs/**'
       - 'docs/help/**'
       - 'scripts/build-features.mjs'
       - '.claude/skills/flow-agent-member/**'

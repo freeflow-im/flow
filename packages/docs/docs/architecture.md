@@ -7,6 +7,16 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
 - `client/src` — React app. Spreadsheet state lives in `client/src/state` (`WorkbookStore` + `Tx` transactions,
   `SheetController` for selection/editing, `ops.ts` for workbook operations such as insert/delete/sort/filter).
 - `server` — Fastify API (`app.ts`), auth, sheet storage (`sheets.ts`), and the assistant (`server/agent`).
+- In the FreeFlow suite (design in `../../docs/specs/freeflow-suite.md`) this app is the Workspace app inside Flow's server
+  (`packages/server/src/workspace.ts`): `buildApp({ host })` wires its routes into the host's Fastify instance as an encapsulated
+  plugin (`wire()` in `app.ts`) instead of making a server, and the host says who is signed in (`host.authenticate`: Flow's
+  session, as a bearer or the `sid` cookie), signs out (`host.signOut`) and names the client's base path (`/workspace`, which
+  the client is built with: `BASE_PATH`, read as Vite's `BASE_URL` in `client/src/basePath.ts` and the router's basename). Hosted,
+  the app's own sign-in, sign-up, password and Google routes, its mailer and its legal pages are off; a visitor at the base is sent
+  to the suite's sign-in (`/?next=`), as are the ChatGPT plugin's OAuth pages (`suiteSignIn`, resumed at `/oauth/resume`); and the
+  `users` table is a mirror of the host's users, upserted as each request comes in, so the owner columns keep their foreign keys.
+  Flow's `scripts/import-workspace-users.ts` moves the hosted app's accounts over once. Standalone (`pnpm start`, the desktop app)
+  nothing changes.
 - `shared` — code used by both: workbook types (`types.ts`), cell references, the formula engine, the slide deck
   format with its layouts and themes (`deck.ts`), and the assistant protocol (`shared/agent`).
 - Presentations (slide decks) live in `client/src/deck` (`DeckStore` + `DeckController`, the `SlideView`

@@ -1,4 +1,5 @@
 import { StrictMode, type ReactElement } from 'react';
+import { BASE } from './basePath.ts';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AgentPanel } from './agent/AgentPanel.tsx';
@@ -28,10 +29,16 @@ import { useDesktopBridge, useRecentOpens } from './desktopBridge.ts';
 const PREVIEW = isPreview();
 if (PREVIEW) document.documentElement.classList.add('file-preview-page');
 
+/** In the suite, the sign-in is the suite's own page at /, which comes back here (?next=) once signed in. */
+function toSuiteSignIn(): null {
+  window.location.assign(`/?next=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`);
+  return null;
+}
+
 function RequireAuth({ children }: { children: ReactElement }) {
-  const { user, loading } = useAuth();
+  const { user, loading, suite } = useAuth();
   if (loading) return <div className="page-loading">Loading…</div>;
-  if (!user) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  if (!user) return suite ? toSuiteSignIn() : <Navigate to="/login" replace state={{ from: location.pathname }} />;
   return children;
 }
 
@@ -41,15 +48,17 @@ const PRERENDERED = !!document.getElementById('root')?.firstElementChild;
 
 /** The home page: the files of a user who is signed in, the front page (what the app is) for a visitor. */
 function Home() {
-  const { user, loading } = useAuth();
+  const { user, loading, suite } = useAuth();
   if (loading) return PRERENDERED ? <LandingPage /> : <div className="page-loading">Loading…</div>;
-  return user ? <HomePage /> : <LandingPage />;
+  if (user) return <HomePage />;
+  return suite ? toSuiteSignIn() : <LandingPage />;
 }
 
 function GuestOnly({ children }: { children: ReactElement }) {
-  const { user, loading } = useAuth();
+  const { user, loading, suite } = useAuth();
   if (loading) return <div className="page-loading">Loading…</div>;
   if (user) return <Navigate to="/" replace />;
+  if (suite) return toSuiteSignIn();
   return children;
 }
 
@@ -91,7 +100,8 @@ function AppShell() {
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <AuthProvider>
-      <BrowserRouter>
+      {/* The base path without its trailing slash: the router matches "/workspace" itself only then. */}
+      <BrowserRouter basename={BASE || '/'}>
         <AgentProvider>
           <AppShell />
         </AgentProvider>

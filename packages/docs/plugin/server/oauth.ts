@@ -44,7 +44,11 @@ export interface OAuthOptions {
   issuer: string;
   /** The resource tokens are for: the MCP endpoint. */
   resource: string;
-  auth: AuthService;
+  /** The app's accounts for the sign-in pages; null when hosted in the suite (see suiteSignIn). */
+  auth: AuthService | null;
+  /** Hosted in the suite: the path of its sign-in page on this origin. The sign-in page sends a visitor there and
+   * back to /oauth/resume; email, password and Google sign-in on the plugin's own pages are off. */
+  suiteSignIn?: string;
   /** The email behind an account id, for the consent page. */
   profile: (userId: string) => { email: string } | null;
   google?: GoogleLogin | null;
@@ -100,7 +104,8 @@ export class OAuthServer {
   private readonly db: DatabaseSync;
   readonly issuer: string;
   readonly resource: string;
-  private readonly auth: AuthService;
+  private readonly auth: AuthService | null;
+  private readonly suiteSignIn: string | null;
   private readonly profile: OAuthOptions['profile'];
   private readonly google: GoogleLogin | null;
   private readonly sendMail: Mailer | null;
@@ -116,9 +121,10 @@ export class OAuthServer {
     this.issuer = opts.issuer.replace(/\/$/, '');
     this.resource = opts.resource;
     this.auth = opts.auth;
+    this.suiteSignIn = opts.suiteSignIn ?? null;
     this.profile = opts.profile;
-    this.google = opts.google ?? null;
-    this.sendMail = opts.sendMail ?? null;
+    this.google = opts.auth ? (opts.google ?? null) : null;
+    this.sendMail = opts.auth ? (opts.sendMail ?? null) : null;
     this.mailAllowed = opts.mailAllowed ?? (() => true);
     this.fetchFn = opts.fetchFn ?? fetch;
     this.appName = opts.appName ?? 'Universal Docs';
@@ -301,6 +307,7 @@ export class OAuthServer {
   async passwordLogin(pendingId: string, email: unknown, password: unknown): Promise<{ ok: true } | { ok: false; error: string }> {
     const p = this.pending(pendingId);
     if (!p) return { ok: false, error: 'This sign-in link has expired. Start again from ChatGPT.' };
+    if (!this.auth) return { ok: false, error: 'Sign in to the app first, then continue.' };
     if (typeof email !== 'string' || typeof password !== 'string' || !email.trim() || !password) return { ok: false, error: 'Enter your email and password.' };
     const user = await this.auth.login(email.trim(), password);
     if (user === 'unverified') {
@@ -326,7 +333,7 @@ export class OAuthServer {
   /** A new account, as the app makes one: it has to verify its email, and the emailed link continues this sign-in. */
   async signUp(pendingId: string, email: unknown, password: unknown): Promise<{ ok: true; email: string } | { ok: false; error: string }> {
     const p = this.pending(pendingId);
-    if (!p || !this.sendMail) return { ok: false, error: 'This sign-in link has expired. Start again from ChatGPT.' };
+    if (!p || !this.sendMail || !this.auth) return { ok: false, error: 'This sign-in link has expired. Start again from ChatGPT.' };
     const problem = validateCredentials(email, password);
     if (problem) return { ok: false, error: problem };
     if (!this.mailAllowed(email as string)) return { ok: false, error: 'Too many sign-up attempts for this address. Try again in an hour.' };
@@ -343,7 +350,7 @@ export class OAuthServer {
 
   /** Emails the link that verifies the address and comes back to this sign-in, which waits longer for it. */
   private async sendVerification(p: Pending, user: User): Promise<void> {
-    const { token } = this.auth.createEmailVerification(user.id);
+    const { token } = this.auth!.createEmailVerification(user.id);
     this.db.prepare('UPDATE oauth_pending SET expires_at = ? WHERE id = ?').run(iso(now() + SIGNUP_TTL_MS), p.id);
     const link = `${this.issuer}/oauth/verify?p=${encodeURIComponent(p.id)}&token=${token}`;
     await this.sendMail!({
@@ -355,7 +362,7 @@ export class OAuthServer {
 
   /** The emailed link was opened and confirmed: the address is verified, and the sign-in continues as that account. */
   verifyEmail(pendingId: string | undefined, token: string | undefined): { next: string } | { error: string } {
-    const user = token ? this.auth.verifyEmail(token) : null;
+    const user = token && this.auth ? this.auth.verifyEmail(token) : null;
     if (!user) return { error: 'This verification link is invalid or has expired. Sign in with your email and password to get a new one.' };
     const p = this.pending(pendingId);
     if (!p) return { error: 'Your email address is verified, but this sign-in has expired. Start again from the app you were connecting, and sign in with your new account.' };
@@ -371,7 +378,7 @@ export class OAuthServer {
 
   /** Back from Google: sign the account in (creating it like the app does) and return where to continue. */
   async googleFinish(state: string | undefined, code: string | undefined, error: string | undefined): Promise<{ next: string } | { error: string }> {
-    if (!this.google) return { error: 'Google sign-in is not set up on this server.' };
+    if (!this.google || !this.auth) return { error: 'Google sign-in is not set up on this server.' };
     if (error === 'access_denied') return { error: 'The Google sign-in was cancelled.' };
     if (error || !state || !code) return { error: 'Google sign-in failed. Try again.' };
     try {
@@ -639,6 +646,20 @@ export class OAuthServer {
     const p = this.pending(pendingId);
     if (!p) return this.errorPage('This sign-in link has expired. Start again from ChatGPT.');
     const id = escapeHtml(pendingId);
+    if (this.suiteSignIn) {
+      // The suite signs people in; it comes back to /oauth/resume with its session in this browser.
+      const resume = `/oauth/resume?p=${pendingId}`;
+      const signIn = `${this.suiteSignIn}${this.suiteSignIn.includes('?') ? '&' : '?'}next=${encodeURIComponent(resume)}`;
+      return page(
+        `Sign in to continue`,
+        `<h1>Sign in to continue</h1>
+<p class="muted"><strong>${escapeHtml(p.client_name)}</strong> wants to read and edit the files in your ${escapeHtml(this.appName)} library: documents, presentations, spreadsheets, Markdown files, pictures and other stored files. Sign in to continue; you can choose what to allow on the next page.</p>
+${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+<a class="btn primary" href="${escapeHtml(signIn)}">Sign in</a>
+<p class="muted">Already signed in? <a href="${escapeHtml(resume)}">Continue</a></p>
+${POLICY_LINKS}`,
+      );
+    }
     return page(
       `Sign in to ${this.appName}`,
       `<h1>Sign in to ${escapeHtml(this.appName)}</h1>

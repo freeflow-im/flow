@@ -6,6 +6,7 @@
 // opens it here; its Open button, or ⌘/Ctrl+Enter, opens it in a new tab. ⌘P (Ctrl+P), as in VS Code, opens the
 // dialog too, instead of the browser's Print.
 import { useEffect, useRef, useState } from 'react';
+import { appUrl } from '../basePath.ts';
 import { useNavigate } from 'react-router-dom';
 import type { SheetMeta, StoredFile } from '../../../shared/types.ts';
 import { api, type RecentFile } from '../api.ts';
@@ -72,7 +73,7 @@ export function FileSearch({ onClose }: { onClose: () => void }) {
     item,
     where: item.folder ?? '',
     open: () => go(pathOfFile(item.kind, item.id)),
-    openInTab: () => void window.open(pathOfFile(item.kind, item.id), '_blank'),
+    openInTab: () => void window.open(appUrl(pathOfFile(item.kind, item.id)), '_blank'),
   });
   // On the web a recent file is named by its id. In the desktop app it is named by its path, and one outside the
   // open folder opens in its own folder (the window moves there, or a new tab is opened on it), as from Recents.
@@ -90,7 +91,7 @@ export function FileSearch({ onClose }: { onClose: () => void }) {
       },
       openInTab: async () => {
         const res = await api.openLocalPath(path, true);
-        if (res.file !== undefined) window.open(`/open?file=${encodeURIComponent(res.file)}`, '_blank');
+        if (res.file !== undefined) window.open(appUrl(`/open?file=${encodeURIComponent(res.file)}`), '_blank');
       },
     };
   };
