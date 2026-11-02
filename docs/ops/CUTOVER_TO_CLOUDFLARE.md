@@ -1,0 +1,71 @@
+# The cut-over: the suite onto Cloudflare
+
+The one switch of `docs/specs/cloudflare-migration.md` (ruled 2026-11-02: no users yet, so one cut-over). Before it,
+`app.freeflow.im` goes through the Worker to AWS (`EDGE_FRONT_DOOR.md`). After it, the Worker answers the app itself:
+accounts in the directory, each organization's Chat and Docs in its own objects, files in R2. AWS stays up, untouched,
+until it is retired, and switching back is one setting.
+
+Plan an afternoon: an hour to rehearse, an hour for the switch, and time to use the app between them.
+
+## What does not work on Cloudflare yet
+
+Decide these are acceptable before switching (`docs/specs/cloudflare-spikes.md`): push notifications, huddles, link
+previews, PDF to Markdown, the ChatGPT plugin's own pages and file links, help pages, and the desktop and native apps'
+sign-in handoff. PDFs have only been tried locally, where they did not work; the rehearsal is their first real test.
+
+## 1. Merge and deploy
+
+Merge the pull request that added this page. The server and the Worker both deploy; nothing changes for the app yet.
+
+## 2. The Worker's secrets
+
+From `packages/edge`, logged in to AWS and to Cloudflare (`pnpm exec wrangler login`):
+```sh
+bash scripts/put-secrets.sh            # what it would set
+bash scripts/put-secrets.sh --apply
+```
+Then the connectors' key, a file on the instance (Session Manager shell, as root):
+```sh
+docker exec flow cat /data/workspace/connector.key
+```
+and paste it into `pnpm exec wrangler secret put CONNECTOR_KEY_BASE64` on your machine.
+
+## 3. Rehearse on edge.freeflow.im
+
+On the instance, a dry run, then the import (it only reads Postgres and the Docs files):
+```sh
+docker exec -e EDGE_URL=https://edge.freeflow.im flow node packages/server/scripts/export-to-edge.ts
+docker exec -e EDGE_URL=https://edge.freeflow.im flow node packages/server/scripts/export-to-edge.ts --apply
+```
+The dry run's first line lists the message keys. **If it warns of more than one, stop**: messages under the others
+would not be readable, and that needs a decision first.
+
+Then check it as a person would, from the instance (the sign-in link is mailed for real; request it with
+`curl -X POST -H 'content-type: application/json' -d '{"email":"you@…"}' https://edge.freeflow.im/v1/auth/signin-link`
+and take the token from the mail's link):
+```sh
+docker exec -e EDGE_URL=https://edge.freeflow.im -e CHECK_EMAIL=you@… -e SIGNIN_TOKEN=… flow node packages/server/scripts/check-edge-import.ts
+```
+And by hand, at https://edge.freeflow.im with an emailed sign-in link (Google sign-in is not set up for that host):
+your organizations and channels, recent messages, sending one and seeing it arrive in a second window, a document, a
+file, the assistant, a PDF.
+
+## 4. Switch
+
+1. **Freeze.** Nobody should change anything on the old app from here on: the import does not carry edits made after
+   it. Run the import again (step 3's two commands), so it carries everything up to now. Rows already imported are
+   kept as they are.
+2. **Point the Worker at the app.** In `packages/edge/wrangler.toml`: `PORTED_HOSTS = "edge.freeflow.im,app.freeflow.im"`,
+   `WEB_URL_BASE` and `FLOW_WEB_URL` to `https://app.freeflow.im`. Merge that; the deploy is the switch.
+3. **Check:** `node packages/edge/scripts/check-front-door.mjs app.freeflow.im`, the check script against
+   `https://app.freeflow.im`, and the app by hand, Google sign-in included.
+
+## Rollback
+
+Take `app.freeflow.im` out of `PORTED_HOSTS` and deploy: the app is AWS again, with its data as it was at the freeze.
+Anything done on Cloudflare since is not on AWS.
+
+## After a week
+
+Retire AWS (`FLOW_TO_AWS.md` has the stack): confirm first, because it deletes Postgres, the Docs files and the
+instance. Keep a final `pg_dump` and a copy of `/data/app` in R2 before that.

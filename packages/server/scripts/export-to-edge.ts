@@ -100,6 +100,11 @@ console.log(`Chat: ${scoped.size} tables by organization, ${global.length} copie
 
 // ---- the directory -----------------------------------------------------------------------------------------------------
 
+// Messages are encrypted under a key id; the Worker reads only the one it is given (FLOW_DATA_KEY_ID, default env-1).
+const keys = await sql`SELECT enc_key_id AS id, count(*)::int AS n FROM messages GROUP BY 1 ORDER BY 2 DESC`;
+console.log(`message keys: ${keys.map((k) => `${k.id} (${k.n})`).join(', ') || 'none'}`);
+if (keys.length > 1) console.log('WARNING: more than one key id: messages under the others will not decrypt on the Worker');
+
 const users = await sql`SELECT * FROM users ORDER BY id`;
 await send('directory', 'users', convert(users).map((u) => ({ ...u, notification_prefs: u.notification_prefs ?? '{}' })));
 for (const t of ['sessions', 'oauth_identities', 'agent_tokens']) {
