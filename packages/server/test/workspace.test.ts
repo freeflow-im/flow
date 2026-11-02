@@ -14,6 +14,7 @@ process.env.FLOW_DATA_KEY = randomBytes(32).toString('base64');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-workspace-'));
 process.env.WORKSPACE_DATA_DIR = path.join(tmp, 'data');
 process.env.WORKSPACE_STATIC_DIR = path.join(tmp, 'client');
+process.env.WORKSPACE_LEGACY_HOSTS = 'mcpdocs.example.test, docs.example.test';
 fs.mkdirSync(process.env.WORKSPACE_STATIC_DIR);
 fs.writeFileSync(path.join(process.env.WORKSPACE_STATIC_DIR, 'index.html'), '<!doctype html><title>Workspace</title>');
 
@@ -154,6 +155,23 @@ describe('the Workspace app', () => {
     const old = await app.inject({ method: 'GET', url: '/p/secret' });
     expect(old.statusCode).toBe(301);
     expect(old.headers.location).toBe('/workspace/p/secret');
+  });
+
+  it("sends pages asked for on the app's old host names to /workspace on the suite's host", async () => {
+    const home = await app.inject({ method: 'GET', url: '/', headers: { host: 'mcpdocs.example.test' } });
+    expect(home.statusCode).toBe(301);
+    expect(home.headers.location).toMatch(/\/workspace$/);
+    const file = await app.inject({ method: 'GET', url: '/s/abc?x=1', headers: { host: 'docs.example.test:443' } });
+    expect(file.statusCode).toBe(301);
+    expect(file.headers.location).toMatch(/\/workspace\/s\/abc\?x=1$/);
+    // The plugin's paths and the API are not redirected (served or answered on that host as they are).
+    const mcp = await app.inject({ method: 'GET', url: '/mcp', headers: { host: 'docs.example.test' } });
+    expect(mcp.statusCode).not.toBe(301);
+    const api = await app.inject({ method: 'GET', url: '/api/auth/me', headers: { host: 'docs.example.test' } });
+    expect(api.statusCode).toBe(200);
+    // The suite's own host is untouched.
+    const own = await app.inject({ method: 'GET', url: '/', headers: { host: 'localhost' } });
+    expect(own.statusCode).not.toBe(301);
   });
 
   it('leaves the Chat API as it was: unknown /api and /v1 paths are JSON 404s', async () => {

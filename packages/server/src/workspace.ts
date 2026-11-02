@@ -16,6 +16,9 @@ import { clearSessionCookie, sessionTokenInCookieHeader, sessionTokenOf } from '
 
 export const WORKSPACE_BASE = '/workspace';
 
+/** The paths the ChatGPT plugin answers on any host (packages/docs/plugin/server/http.ts, PLUGIN_PATH). */
+const PLUGIN_PATH = /^(\/mcp(\/|$)|\/oauth\/|\/plugin\/|\/\.well-known\/)/;
+
 interface WorkspaceUser {
   id: string;
   email: string;
@@ -48,15 +51,32 @@ export async function mountWorkspace(app: FastifyInstance): Promise<boolean> {
   const file = workspaceAppFile();
   const mod = (await import(pathToFileURL(file).href)) as WorkspaceModule;
   const staticDir = config.workspaceStaticDir;
+  // The app's old host names: a page asked for there is the same page under /workspace here (a 301, so links and
+  // bookmarks learn), the plugin's paths are served as they are, and anything else (the old app's API, with the
+  // old app's cookies) is left to 404 or 401 as it does on this host.
+  const legacy = new Set(config.workspaceLegacyHosts);
+  if (legacy.size) {
+    const base = config.webUrlBase.replace(/\/+$/, '');
+    app.addHook('onRequest', async (req, reply) => {
+      const host = (req.hostname ?? '').toLowerCase().split(':')[0] ?? '';
+      if (!legacy.has(host) || PLUGIN_PATH.test(req.url) || req.url.startsWith('/api/')) return;
+      if (req.method !== 'GET' && req.method !== 'HEAD') return;
+      return reply.code(301).redirect(`${base}${WORKSPACE_BASE}${req.url === '/' ? '' : req.url}`);
+    });
+  }
   await mod.buildApp({
     dataDir,
     staticDir: fs.existsSync(path.join(staticDir, 'index.html')) ? staticDir : undefined,
     logger: false,
     appUrl: config.webUrlBase,
     plugin: config.workspacePluginUrl ? { publicUrl: config.workspacePluginUrl, webDir: config.workspacePluginWebDir } : undefined,
+    // The assistant's app-change jobs are retired in the suite (docs/specs/freeflow-suite.md §0).
+    agent: { jobs: false },
     host: {
       app,
       basePath: WORKSPACE_BASE,
+      // The suite's sign-in, as an absolute address: the plugin's OAuth pages are reached on the old host names too.
+      signInUrl: `${config.webUrlBase.replace(/\/+$/, '')}/`,
       authenticate: (req: FastifyRequest) => userOf(sessionTokenOf(req)),
       signOut: async (req: FastifyRequest, reply: FastifyReply) => {
         const token = sessionTokenOf(req);
