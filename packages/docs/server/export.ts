@@ -22,6 +22,7 @@ import { folderName } from '../shared/folders.ts';
 import type { Folders } from './folders.ts';
 import type { ImageStore } from './images.ts';
 import type { SheetStore } from './sheets.ts';
+import { scopeOf, type ScopeArg, type ViewerArg } from './scope.ts';
 import { titleBase } from '../shared/docNames.ts';
 
 export type ExportFormat = 'json' | 'md' | 'pptx' | 'csv' | 'xlsx';
@@ -65,7 +66,7 @@ export interface ImageSource {
   stored(src: string): Promise<{ type: string; bytes: Buffer } | null>;
 }
 
-export function imageSource(images: ImageStore, ownerId: string): ImageSource {
+export function imageSource(images: ImageStore, ownerId: ViewerArg): ImageSource {
   return {
     async stored(src) {
       if (!STORED_IMAGE_RE.test(src)) return null;
@@ -259,7 +260,7 @@ export async function deckPptx(deck: Deck, title: string, source: ImageSource): 
 
 export type FileData = { kind: 'doc'; doc: Doc } | { kind: 'markdown'; markdown: MarkdownDoc } | { kind: 'deck'; deck: Deck } | { kind: 'sheet'; workbook: Workbook };
 
-export async function loadFile(sheets: SheetStore, ownerId: string, id: string): Promise<{ meta: SheetMeta; data: FileData } | null> {
+export async function loadFile(sheets: SheetStore, ownerId: ViewerArg, id: string): Promise<{ meta: SheetMeta; data: FileData } | null> {
   const meta = sheets.get(ownerId, id);
   if (!meta) return null;
   if (meta.kind === 'doc') {
@@ -377,9 +378,10 @@ export async function exportAll(sheets: SheetStore, ownerId: string, source: Ima
  */
 export async function exportFolder(
   stores: { sheets: SheetStore; files: FileStore; folders: Folders },
-  ownerId: string,
+  ownerId: ScopeArg,
   folder: string,
   source: ImageSource,
+  viewer: ViewerArg = scopeOf(ownerId).ownerId,
 ): Promise<{ body: Buffer; files: number; problems: string[] }> {
   const zip = new JSZip();
   const problems: string[] = [];
@@ -410,7 +412,7 @@ export async function exportFolder(
   const add = async (path: string, dir: string, depth: number): Promise<void> => {
     for (const meta of stores.sheets.listIn(ownerId, path)) {
       try {
-        const loaded = await loadFile(stores.sheets, ownerId, meta.id);
+        const loaded = await loadFile(stores.sheets, viewer, meta.id);
         if (!loaded) continue;
         const { data } = loaded;
         if (data.kind === 'doc') {
@@ -428,7 +430,7 @@ export async function exportFolder(
     }
     for (const f of stores.files.listIn(ownerId, path)) {
       try {
-        const stored = stores.files.get(ownerId, f.id);
+        const stored = stores.files.get(viewer, f.id);
         if (!stored) continue;
         zip.file(unique(dir, f.filename.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '-') || 'file'), await readFile(stored.file));
         files++;

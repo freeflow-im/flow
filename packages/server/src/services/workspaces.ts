@@ -314,6 +314,26 @@ async function unreadByWorkspace(userId: string): Promise<Map<string, number>> {
   return new Map(rows.map((r) => [r.workspaceId, r.n]));
 }
 
+/** Whether the user is a member of the workspace (the Workspace app's organization files, packages/docs/server/scope.ts). */
+export async function isWorkspaceMember(workspaceId: string, userId: string): Promise<boolean> {
+  const rows = await db
+    .select({ userId: workspaceMembers.userId })
+    .from(workspaceMembers)
+    .where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, userId)))
+    .limit(1);
+  return rows.length > 0;
+}
+
+/** The workspaces the user is a member of, by id and name, oldest membership first: the Workspace app's organizations. */
+export async function workspaceNamesOf(userId: string): Promise<Array<{ id: string; name: string }>> {
+  return db
+    .select({ id: workspaces.id, name: workspaces.name })
+    .from(workspaceMembers)
+    .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
+    .where(eq(workspaceMembers.userId, userId))
+    .orderBy(workspaceMembers.joinedAt);
+}
+
 export async function myWorkspaces(userId: string): Promise<WorkspaceDTO[]> {
   const rows = await db
     .select({ w: workspaces, role: workspaceMembers.role })

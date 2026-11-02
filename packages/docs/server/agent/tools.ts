@@ -25,6 +25,7 @@ import { PrintError, type PdfMaker } from '../pdf.ts';
 import { STORED_IMAGE_RE } from '../../shared/types.ts';
 import type { SheetStore } from '../sheets.ts';
 import { fetchPublicFile, WebFetchError } from '../webFetch.ts';
+import type { ScopeArg, ViewerArg } from '../scope.ts';
 
 const tab = z.string().optional().describe('Tab name. Defaults to the active tab.');
 const range = z.string().describe('Range in A1 notation, e.g. "B2", "A1:D10", "C:E" (whole columns) or "3:5" (whole rows). May be prefixed with a tab name: \'Q3 Sales\'!A1:D10.');
@@ -751,6 +752,10 @@ export const TOOL_DEFS_WITHOUT_JOBS = TOOL_DEFS.filter((t) => !JOB_TOOLS.has(t.n
 
 export interface ServerToolEnv {
   userId: string;
+  /** The root the tools list and make files in (server/scope.ts): the chat's. The user's own files when not given. */
+  scope?: ScopeArg;
+  /** Who opens files by id (canAccess). The user alone when not given. */
+  viewer?: ViewerArg;
   sheets: SheetStore;
   /** Where imported pictures and files go; without them import_file is not available. */
   images?: ImageStore;
@@ -770,7 +775,7 @@ export async function runServerTool(name: string, input: Record<string, unknown>
   switch (name) {
     case 'list_sheets': {
       const q = typeof input.query === 'string' ? input.query.trim().toLowerCase() : '';
-      const all = env.sheets.list(env.userId).filter((s) => !q || s.title.toLowerCase().includes(q));
+      const all = env.sheets.list(env.scope ?? env.userId).filter((s) => !q || s.title.toLowerCase().includes(q));
       return JSON.stringify({
         total: all.length,
         sheets: all.slice(0, 50).map((s) => ({
@@ -788,7 +793,7 @@ export async function runServerTool(name: string, input: Record<string, unknown>
       if (env.context.page === 'sheet' && env.context.sheetId === id) {
         throw new ToolFailure('That spreadsheet is open right now; use get_sheet_overview and read_range so you see unsaved edits.');
       }
-      const res = await env.sheets.load(env.userId, id);
+      const res = await env.sheets.load(env.viewer ?? env.userId, id);
       if (!res) throw new ToolFailure(`No spreadsheet with id "${id}". Use list_sheets to find ids.`);
       const src = { workbook: res.workbook, engine: new Engine(res.workbook) };
       if (typeof input.range !== 'string') return JSON.stringify({ title: res.meta.title, ...sheetOverview(src) });
@@ -797,12 +802,12 @@ export async function runServerTool(name: string, input: Record<string, unknown>
       return JSON.stringify({ title: res.meta.title, ...readRange(src, rr.tab, rr.range) });
     }
     case 'create_sheet': {
-      const sheet = await env.sheets.create(env.userId, String(input.title).trim());
+      const sheet = await env.sheets.create(env.scope ?? env.userId, String(input.title).trim());
       return JSON.stringify({ id: sheet.id, title: sheet.title });
     }
     case 'list_decks': {
       const q = typeof input.query === 'string' ? input.query.trim().toLowerCase() : '';
-      const all = env.sheets.list(env.userId, 'deck').filter((s) => !q || s.title.toLowerCase().includes(q));
+      const all = env.sheets.list(env.scope ?? env.userId, 'deck').filter((s) => !q || s.title.toLowerCase().includes(q));
       return JSON.stringify({
         total: all.length,
         decks: all.slice(0, 50).map((s) => ({
@@ -820,12 +825,12 @@ export async function runServerTool(name: string, input: Record<string, unknown>
         theme: (input.theme as Deck['theme'] | undefined) ?? 'light',
         slides: specs.length ? specs.map((s, i) => buildSlide(s.layout ?? (i === 0 ? 'title' : 'title-body'), s, newId)) : [buildSlide('title', {}, newId)],
       };
-      const meta = await env.sheets.createDeck(env.userId, String(input.title).trim(), deck);
+      const meta = await env.sheets.createDeck(env.scope ?? env.userId, String(input.title).trim(), deck);
       return JSON.stringify({ id: meta.id, title: meta.title, slide_count: deck.slides.length, note: 'Call open_deck to show it to the user.' });
     }
     case 'list_docs': {
       const q = typeof input.query === 'string' ? input.query.trim().toLowerCase() : '';
-      const all = [...env.sheets.list(env.userId, 'doc'), ...env.sheets.list(env.userId, 'markdown')]
+      const all = [...env.sheets.list(env.scope ?? env.userId, 'doc'), ...env.sheets.list(env.scope ?? env.userId, 'markdown')]
         .filter((s) => !q || s.title.toLowerCase().includes(q))
         .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0));
       const openId = env.context.page === 'doc' || env.context.page === 'markdown' ? env.context.docId : null;
@@ -843,20 +848,20 @@ export async function runServerTool(name: string, input: Record<string, unknown>
     case 'create_doc': {
       const markdown = typeof input.markdown === 'string' ? input.markdown : '';
       if (input.kind === 'markdown') {
-        const meta = await env.sheets.createMarkdown(env.userId, String(input.title).trim(), newMarkdownDoc(markdown));
+        const meta = await env.sheets.createMarkdown(env.scope ?? env.userId, String(input.title).trim(), newMarkdownDoc(markdown));
         return JSON.stringify({ id: meta.id, kind: 'markdown', title: meta.title, block_count: markdownBlocks(markdown).length, note: 'Call open_doc to show it to the user.' });
       }
       const doc = markdownToDoc(markdown);
-      const meta = await env.sheets.createDoc(env.userId, String(input.title).trim(), doc);
+      const meta = await env.sheets.createDoc(env.scope ?? env.userId, String(input.title).trim(), doc);
       return JSON.stringify({ id: meta.id, kind: 'doc', title: meta.title, block_count: doc.content.content?.length ?? 0, note: 'Call open_doc to show it to the user.' });
     }
     case 'read_other_doc': {
       const id = input.doc_id as string;
       if ((env.context.page === 'doc' || env.context.page === 'markdown') && env.context.docId === id) throw new ToolFailure('That document is open right now; use read_doc so you see unsaved edits.');
       const range = { from: input.from as number | undefined, to: input.to as number | undefined };
-      const res = await env.sheets.loadDoc(env.userId, id);
+      const res = await env.sheets.loadDoc(env.viewer ?? env.userId, id);
       if (res) return JSON.stringify({ title: res.meta.title, ...docOutline(docNode(res.doc), range) });
-      const md = await env.sheets.loadMarkdown(env.userId, id);
+      const md = await env.sheets.loadMarkdown(env.viewer ?? env.userId, id);
       if (!md) throw new ToolFailure(`No document with id "${id}". Use list_docs to find ids.`);
       return JSON.stringify({ title: md.meta.title, format: 'markdown', ...markdownOutline(md.doc.text, range) });
     }
@@ -899,7 +904,7 @@ export async function runServerTool(name: string, input: Record<string, unknown>
       const id = typeof input.file_id === 'string' && input.file_id ? input.file_id : env.context.page === 'file' ? env.context.fileId : null;
       if (!id) throw new ToolFailure('Give file_id: the user has no file open. Find ids with list_files.');
       try {
-        const made = await pdfToMarkdownFile({ sheets: env.sheets, files: env.files }, env.userId, id);
+        const made = await pdfToMarkdownFile({ sheets: env.sheets, files: env.files }, env.viewer ?? env.userId, id);
         if (!made) throw new ToolFailure(`There is no file ${id}. Find ids with list_files.`);
         return JSON.stringify({
           converted: true,
@@ -922,7 +927,7 @@ export async function runServerTool(name: string, input: Record<string, unknown>
       const id = typeof input.file_id === 'string' && input.file_id ? input.file_id : open;
       if (!id) throw new ToolFailure('Give file_id: the user has no file open. Find ids with list_docs, list_decks or list_files.');
       try {
-        const file = await env.pdf.save(env.userId, id, input.paper === 'a4' ? 'a4' : 'letter');
+        const file = await env.pdf.save(env.viewer ?? env.userId, id, input.paper === 'a4' ? 'a4' : 'letter');
         if (!file) throw new ToolFailure(`There is no file ${id}.`);
         return JSON.stringify({ made: true, file_id: file.id, name: file.filename, folder: file.folder ?? '', size: file.size, note: 'A new PDF next to the file. open_file shows it to the user.' });
       } catch (e) {
@@ -940,11 +945,11 @@ export async function runServerTool(name: string, input: Record<string, unknown>
         const own = /^(?:https?:\/\/[^/]+)?(\/api\/images\/[0-9a-f-]{36})$/.exec(String(input.url).trim())?.[1];
         let fetched: { bytes: Buffer; name: string };
         if (own) {
-          const image = STORED_IMAGE_RE.test(own) ? env.images.get(env.userId, own.slice('/api/images/'.length)) : null;
+          const image = STORED_IMAGE_RE.test(own) ? env.images.get(env.viewer ?? env.userId, own.slice('/api/images/'.length)) : null;
           if (!image) throw new ToolFailure('There is no stored picture at that address. Use an address from <attached_images>.');
           fetched = { bytes: await readFile(image.file), name: '' };
         } else fetched = await fetchPublicFile(String(input.url), { limit: importLimit });
-        const made = await importBytes({ sheets: env.sheets, images: env.images, files: env.files }, env.userId, fetched.bytes, webImportName(fetched.name, title), title);
+        const made = await importBytes({ sheets: env.sheets, images: env.images, files: env.files }, env.scope ?? env.userId, fetched.bytes, webImportName(fetched.name, title), title);
         if (made.file) {
           const picture = made.file.type.startsWith('image/');
           return JSON.stringify({ imported: true, kind: 'file', file_id: made.file.id, filename: made.file.filename, type: made.file.type, size: made.file.size, note: `Saved in the user's files. open_file shows it to the user${picture ? '; view_image shows it to you' : ''}.` });

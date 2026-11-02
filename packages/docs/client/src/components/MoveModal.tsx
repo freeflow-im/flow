@@ -44,7 +44,7 @@ export function FolderBrowser(props: { at: string; setAt(folder: string): void; 
 }
 
 /** Pick a folder to move a file into, by browsing from the folder it is in. */
-export function MoveModal(props: { title: string; from: string; rootName: string; onMove(folder: string): Promise<void>; onClose(): void }) {
+export function MoveModal(props: { title: string; from: string; rootName: string; onMove(folder: string): Promise<void>; onClose(): void; /** The FreeFlow suite: the file's root (its organization, and whether shared there), whose folders it may go to. */ shared?: boolean; workspace?: string }) {
   const [at, setAt] = useState(props.from);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -52,7 +52,7 @@ export function MoveModal(props: { title: string; from: string; rootName: string
   const name = folderNameOf(at, props.rootName);
   return (
     <Modal title={`Move “${props.title}”`} onClose={props.onClose}>
-      <FolderBrowser at={at} setAt={setAt} rootName={props.rootName} list={async (f) => (await api.library(f)).folders} onError={setError} />
+      <FolderBrowser at={at} setAt={setAt} rootName={props.rootName} list={async (f) => (await api.library(props.workspace ? { folder: f, shared: props.shared, workspace: props.workspace } : f)).folders} onError={setError} />
       {error && <div className="form-error">{error}</div>}
       <div className="modal-actions">
         <button className="btn" onClick={props.onClose}>

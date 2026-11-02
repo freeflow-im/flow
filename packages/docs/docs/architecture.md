@@ -276,12 +276,35 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   listed on `/features`, in `/sitemap.xml` and in `/llms.txt`. A new page is a new file there and a `page` on its
   box in `LandingPage`'s `FEATURES`.
 - Public links (`server/publicLinks.ts`, table `public_links`): the hosted app only, a presentation or a video (a stored file a browser plays)
-  can have an address, `/p/<token>`, that anyone can view without signing in (`PublicPage`). The owner turns it on and off in the Sharing menu
-  (`ShareDialog`, `/api/sharing/:kind/:id`); a link turned on again gets a new token, and deleting a file ends its link (triggers on `sheets` and
+  can have an address, `/p/<token>`, that anyone can view without signing in (`PublicPage`). Whoever may open the file (its owner; in the suite, an organization file's members) turns it on and off in the Sharing menu
+  (`ShareDialog`, `/api/sharing/:kind/:id`), and a link stops working when the one who made it can no longer open the file; a link turned on again gets a new token, and deleting a file ends its link (triggers on `sheets` and
   `stored_files`, whichever path deleted it, so a restored file is not public again). Guests use `/api/public/:token...` only: `publicDeck` gives them
   a copy of the deck without speaker notes or links to spreadsheets, with its pictures and videos named under the token, and only what its elements
   show can be fetched with it (`shownBy`, checked per request, so what leaves the deck stops being available). Answers carry `no-referrer`,
   `noindex` and a `sandbox` CSP, and browsers keep files at most five minutes.
+- Organizations (the FreeFlow suite only; design in `../../docs/specs/freeflow-suite.md` §2.4, ruled 2026-11-02): every row that
+  belongs to someone (`sheets`, `stored_files`, `images`, `folders`, `public_links`, `agent_conversations`) carries `workspace_id`, the
+  organization (Flow's workspace), and files and folders `private` (1, the default). A root of the library is a `Scope`
+  (`server/scope.ts`: `{ ownerId, workspaceId, private }`): Organization files are an organization's `private = 0` rows, any member's;
+  My files in an organization are the user's `private = 1` rows there plus their rows from before organizations (`workspace_id IS NULL`),
+  shown in My files of every organization. A plain user id is a scope too (the standalone app, the desktop app, the ChatGPT plugin): all
+  of the user's private rows, and new rows with no organization, so without a host nothing changes. `scopeWhere` is the stores' WHERE for
+  listing and searching; creates write the scope's columns; a folder's path is unique per root (`folders.scope` is `scopeKey`). By-id reads
+  are `find(id)` and the one access check, `canAccess(viewer, row)`: a private row (or one with no organization) is its owner's, a shared
+  row a member's; the stores' by-id methods take the `Viewer` (`{ userId, workspaces }`) and act as if a row the viewer cannot access did
+  not exist (a 404). `requireUser` sets both on the request: `req.scope` from `workspace` and `shared` (query or body; `host.isMember`
+  checks the organization, else 403) and `req.viewer` from `host.organizationsOf` (Flow caches both a minute; an organization the
+  request names, or a file's of the `:id` it names, is checked by itself so one just joined works at once). Moving between roots is
+  `POST /api/files/:id/scope` and `POST /api/folders/scope` (the target is the request's scope; a folder goes to the target's top with its
+  contents): the file keeps its folder when the target has it, the one who makes it private becomes its owner, and its pictures
+  (`ImageStore.retag`: a picture is visible to the members of its `workspace_id`) and public link go with it. New files are private, in
+  the bar's organization, unless made in a folder of Organization files (the client passes `shared`); a file made beside another (a PDF,
+  a signed copy, a Markdown of a PDF, a branch) goes in that one's root. The assistant's server tools take the chat's root
+  (`ServerToolEnv.scope`/`viewer`): an organization file's chat, its root; the home chat, My files of `AgentTurnRequest.workspace`. On
+  the client the bar publishes its organization (`suite.ts`' organization state, `useOrganization`), `api.ts` names it on list and create
+  calls (`Place`, `placeFields`; `placeOf` for beside a file), the home page shows `RootSwitch` (Organization files with `?org=<id>`, My
+  files without), the breadcrumbs name the root, and `OrganizationActions.tsx` has the menus' Share with organization / Make private /
+  Move to organization… (a picker of the user's other organizations).
 - Folders (`shared/folders.ts`): a folder is named by its path (`Reports/2026`, `''` for the top). Files
   carry it in the `folder` column (`SheetMeta.folder`, `StoredFile.folder`); the folders themselves are
   rows on the server (`FolderStore`, `server/folders.ts`) and directories in the desktop app

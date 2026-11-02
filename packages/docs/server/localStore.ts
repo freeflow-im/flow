@@ -21,6 +21,7 @@ import { pptxGaps } from '../shared/pptxFormat.ts';
 import { fileTypeOf, VIDEO_TYPES, type DocKind, type SheetMeta, type StoredFile, type Workbook } from '../shared/types.ts';
 import { xlsxProblem } from '../shared/xlsxFormat.ts';
 import type { DB } from './db.ts';
+import { scopeOf, viewerId, type ScopeArg, type ViewerArg } from './scope.ts';
 import { docDocx } from './docxExport.ts';
 import { importDocx } from './docxImport.ts';
 import { deckPptx, type ImageSource } from './export.ts';
@@ -390,20 +391,20 @@ export class LocalFolders implements Folders {
     this.folder = folder;
   }
 
-  children(_ownerId: string, parent: string): string[] {
+  children(_scope: ScopeArg, parent: string): string[] {
     return this.folder.scanDir(parent).dirs;
   }
 
-  async search(_ownerId: string, text: string): Promise<string[]> {
+  async search(_scope: ScopeArg, text: string): Promise<string[]> {
     return (await this.folder.find(text)).dirs;
   }
 
-  exists(_ownerId: string, p: string): boolean {
+  exists(_scope: ScopeArg, p: string): boolean {
     return p === '' || this.folder.isDir(p);
   }
 
   /** A directory the system will not let the app read must not look like an empty one. */
-  problem(_ownerId: string, p: string): string | null {
+  problem(_scope: ScopeArg, p: string): string | null {
     try {
       readdirSync(this.folder.abs(p));
       return null;
@@ -418,14 +419,14 @@ export class LocalFolders implements Folders {
     }
   }
 
-  create(_ownerId: string, p: string): boolean {
+  create(_scope: ScopeArg, p: string): boolean {
     if (existsSync(this.folder.abs(p))) return false;
     mkdirSync(this.folder.abs(p), { recursive: true });
     return true;
   }
 
   /** Only a directory holding nothing at all is removed, whether or not the library lists what is in it. */
-  remove(_ownerId: string, p: string): 'ok' | 'not-empty' | 'missing' {
+  remove(_scope: ScopeArg, p: string): 'ok' | 'not-empty' | 'missing' {
     if (!p || !this.folder.isDir(p)) return 'missing';
     const dir = this.folder.abs(p);
     const entries = readdirSync(dir);
@@ -524,7 +525,8 @@ export class LocalSheetStore extends SheetStore {
   }
 
   /** Searches the directories themselves, so files the app has not listed yet are found too. */
-  override async search(ownerId: string, text: string): Promise<SheetMeta[]> {
+  override async search(scope: ScopeArg, text: string): Promise<SheetMeta[]> {
+    const ownerId = scopeOf(scope).ownerId;
     const found = (await this.folder.find(text)).files.filter((f) => f.ext in DOC_TYPES);
     this.sync(ownerId, found, undefined, true);
     const out: SheetMeta[] = [];
@@ -537,12 +539,14 @@ export class LocalSheetStore extends SheetStore {
   }
 
   /** Every document of a kind, wherever it is (the assistant's lists): looks through the whole mounted folder. */
-  override list(ownerId: string, kind: DocKind = 'sheet'): SheetMeta[] {
+  override list(scope: ScopeArg, kind: DocKind = 'sheet'): SheetMeta[] {
+    const ownerId = scopeOf(scope).ownerId;
     this.sync(ownerId, this.folder.scanAll());
     return super.list(ownerId, kind);
   }
 
-  override listIn(ownerId: string, folder: string): SheetMeta[] {
+  override listIn(scope: ScopeArg, folder: string): SheetMeta[] {
+    const ownerId = scopeOf(scope).ownerId;
     this.sync(ownerId, this.folder.scanDir(folder).files, folder);
     return super.listIn(ownerId, folder);
   }
@@ -554,13 +558,13 @@ export class LocalSheetStore extends SheetStore {
   }
 
   /** The absolute path of a document's file, or null when there is no such document. */
-  fileOf(ownerId: string, id: string): string | null {
+  fileOf(ownerId: ViewerArg, id: string): string | null {
     const r = this.row(ownerId, id);
     return r ? this.folder.abs(r.file) : null;
   }
 
   /** The path inside the folder of a document's file, or null when there is no such document. */
-  relOf(ownerId: string, id: string): string | null {
+  relOf(ownerId: ViewerArg, id: string): string | null {
     return this.row(ownerId, id)?.file ?? null;
   }
 
@@ -584,7 +588,7 @@ export class LocalSheetStore extends SheetStore {
   }
 
   /** A row is only as good as its file: one that was removed is gone, one that was edited has a new time. */
-  protected override row(ownerId: string, id: string, kind?: DocKind): SheetRow | undefined {
+  protected override row(ownerId: ViewerArg, id: string, kind?: DocKind): SheetRow | undefined {
     const r = super.row(ownerId, id, kind);
     if (!r) return undefined;
     const mtime = this.folder.mtime(r.file);
@@ -698,7 +702,7 @@ export class LocalSheetStore extends SheetStore {
   }
 
   /** Renaming a document renames its file. */
-  override rename(ownerId: string, id: string, title: string, kind?: DocKind): SheetMeta | null {
+  override rename(ownerId: ViewerArg, id: string, title: string, kind?: DocKind): SheetMeta | null {
     const r = this.row(ownerId, id, kind);
     if (!r) return null;
     // As a stored file is (renamed): what was typed, with the file's extension whether it was typed or not.
@@ -710,7 +714,7 @@ export class LocalSheetStore extends SheetStore {
   }
 
   /** Moving a document moves its file into that directory. */
-  override move(ownerId: string, id: string, folder: string): SheetMeta | null {
+  override move(ownerId: ViewerArg, id: string, folder: string): SheetMeta | null {
     const r = this.row(ownerId, id);
     if (!r) return null;
     if (folder !== r.folder) this.moveFile(r, this.folder.freePath(folder, baseOf(r.file), path.extname(r.file)));
@@ -772,7 +776,8 @@ export class LocalFileStore extends FileStore {
     for (const [rel, r] of byRel) if (r.filename.includes('/') || extOf(r.filename) in DOC_TYPES || (!seen.has(rel) && !existsSync(this.folder.abs(rel)))) this.db.prepare('DELETE FROM stored_files WHERE id = ?').run(r.id);
   }
 
-  override async search(ownerId: string, text: string): Promise<StoredFile[]> {
+  override async search(scope: ScopeArg, text: string): Promise<StoredFile[]> {
+    const ownerId = scopeOf(scope).ownerId;
     const found = (await this.folder.find(text)).files.filter((f) => !(f.ext in DOC_TYPES));
     this.sync(ownerId, found, undefined, true);
     const out: StoredFile[] = [];
@@ -786,7 +791,8 @@ export class LocalFileStore extends FileStore {
   }
 
   /** Saves the file in the folder under its name (numbered if the name is taken). */
-  override async create(ownerId: string, filename: string, type: string, data: Buffer, folder = ''): Promise<StoredFile> {
+  override async create(scope: ScopeArg, filename: string, type: string, data: Buffer, folder = ''): Promise<StoredFile> {
+    const ownerId = scopeOf(scope).ownerId;
     const ext = path.extname(filename);
     const rel = this.folder.freePath(folder, filename.slice(0, filename.length - ext.length), ext);
     await writeAtomic(this.folder.abs(rel), data);
@@ -797,12 +803,14 @@ export class LocalFileStore extends FileStore {
     return this.meta(row);
   }
 
-  override list(ownerId: string): StoredFile[] {
+  override list(scope: ScopeArg): StoredFile[] {
+    const ownerId = scopeOf(scope).ownerId;
     this.sync(ownerId, this.folder.scanAll());
     return super.list(ownerId);
   }
 
-  override listIn(ownerId: string, folder: string): StoredFile[] {
+  override listIn(scope: ScopeArg, folder: string): StoredFile[] {
+    const ownerId = scopeOf(scope).ownerId;
     this.sync(ownerId, this.folder.scanDir(folder).files, folder);
     return super.listIn(ownerId, folder);
   }
@@ -813,7 +821,7 @@ export class LocalFileStore extends FileStore {
     return this.listIn(ownerId, folder).find((f) => f.filename === path.posix.basename(rel))?.id ?? null;
   }
 
-  override get(ownerId: string, id: string): { meta: StoredFile; file: string } | null {
+  override get(ownerId: ViewerArg, id: string): { meta: StoredFile; file: string } | null {
     const f = super.get(ownerId, id);
     if (!f) return null;
     const file = this.folder.abs(joinFolder(f.meta.folder ?? '', f.meta.filename));
@@ -824,7 +832,7 @@ export class LocalFileStore extends FileStore {
     return { meta: f.meta, file };
   }
 
-  override move(ownerId: string, id: string, folder: string): StoredFile | null {
+  override move(ownerId: ViewerArg, id: string, folder: string): StoredFile | null {
     const f = this.get(ownerId, id);
     if (!f) return null;
     if (folder === (f.meta.folder ?? '')) return f.meta;
@@ -837,7 +845,7 @@ export class LocalFileStore extends FileStore {
   }
 
   /** Renaming a file renames it on disk (numbered if the name is taken). */
-  override rename(ownerId: string, id: string, name: string): StoredFile | null {
+  override rename(ownerId: ViewerArg, id: string, name: string): StoredFile | null {
     const f = this.get(ownerId, id);
     if (!f) return null;
     const wanted = renamed(f.meta.filename, name);
@@ -851,16 +859,16 @@ export class LocalFileStore extends FileStore {
   }
 
   /** A PDF signed over (the PDF signer) has no earlier version kept beside it, so a copy goes in the trash first. */
-  override async update(ownerId: string, id: string, data: Buffer): Promise<StoredFile | null> {
+  override async update(ownerId: ViewerArg, id: string, data: Buffer): Promise<StoredFile | null> {
     const f = this.get(ownerId, id);
     if (f?.meta.type === 'application/pdf') await this.folder.keepCopy(joinFolder(f.meta.folder ?? '', f.meta.filename));
     return super.update(ownerId, id, data);
   }
 
-  override async delete(ownerId: string, id: string): Promise<boolean> {
+  override async delete(ownerId: ViewerArg, id: string): Promise<boolean> {
     const f = this.get(ownerId, id);
     if (!f) return false;
-    this.db.prepare('DELETE FROM stored_files WHERE id = ? AND owner_id = ?').run(id, ownerId);
+    this.db.prepare('DELETE FROM stored_files WHERE id = ? AND owner_id = ?').run(id, viewerId(ownerId));
     await this.folder.trash(joinFolder(f.meta.folder ?? '', f.meta.filename));
     return true;
   }

@@ -9,7 +9,7 @@ import { LAYOUT_IDS, THEME_IDS, THEMES, type Deck } from '../../../shared/deck.t
 import type { SheetMeta } from '../../../shared/types.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { useAgent, useRegisterDeck } from '../agent/AgentProvider.tsx';
-import { api, ApiError } from '../api.ts';
+import { api, ApiError, placeOf } from '../api.ts';
 import { RevisionSync, takenMessage } from '../state/revisionSync.ts';
 import { Account } from '../components/Account.tsx';
 import { uploadImageFile, pickImageFile } from '../cellImage.ts';
@@ -52,6 +52,7 @@ import { SLIDE_TRAY } from '../panelSize.ts';
 import { appName } from '../brand.ts';
 import { downloadPdf, printingPdf, signalPrintReady } from '../print.ts';
 import { useOpenInTab } from '../components/OpenInTab.tsx';
+import { useOrganizationMenu, withScope } from '../components/OrganizationActions.tsx';
 
 /** Natural size of an image, for sizing a new image element. */
 function imageSize(src: string): Promise<{ w: number; h: number } | undefined> {
@@ -483,6 +484,8 @@ function DeckWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta
   ];
 
   const openInTab = useOpenInTab();
+  // Share with organization / Make private / Move to organization… (the FreeFlow suite).
+  const orgMenu = useOrganizationMenu(meta, (m) => setMeta((cur) => withScope(cur, m)), notify);
   const local = !!useAuth().local;
   const menus: { key: string; label: string; items: () => MenuItem[] }[] = [
     {
@@ -490,6 +493,7 @@ function DeckWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta
       label: 'File',
       items: () => [
         ...openInTab.items,
+        ...orgMenu.items,
         {
           label: 'New presentation',
           action: async () => {
@@ -609,6 +613,7 @@ function DeckWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta
   return (
     <div className="workbench deck-page">
       {openInTab.dialog}
+      {orgMenu.dialog}
       {!printing && (
         <>
           <header className="wb-header">
@@ -620,7 +625,7 @@ function DeckWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta
             <div className="wb-titles">
               <div className="wb-title-row">
                 <FavoriteStar kind="deck" id={meta.id} onError={notify} />
-                <FolderCrumbs folder={meta.folder} onLeave={() => void ctl.saver.flush()} />
+                <FolderCrumbs folder={meta.folder} file={meta} onLeave={() => void ctl.saver.flush()} />
                 <TitleInput title={meta.title} label="Presentation name" onRename={rename} onError={notify} />
                 <span className={`save-status ${ctl.saver.status}`}>{saveLabel}</span>
                 {office.chip}
@@ -714,7 +719,7 @@ function DeckWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta
       {ctl.presenting && <PresentMode ctl={ctl} onExit={() => ctl.setPresenting(false)} />}
       {insertingSheetChart && <SheetChartDialog onInsert={(id, chartId, c, keep) => ctl.addSheetChart(id, chartId, c, keep)} onClose={() => setInsertingSheetChart(false)} />}
       {insertingSheetTable && <SheetTableDialog onInsert={(id, table, keep, used) => ctl.addSheetTable(id, table, keep, used)} onClose={() => setInsertingSheetTable(false)} />}
-      {insertingVideo && <VideoDialog folder={meta.folder} onInsert={(src) => ctl.addVideo(src)} onClose={() => setInsertingVideo(false)} />}
+      {insertingVideo && <VideoDialog folder={placeOf(meta)} onInsert={(src) => ctl.addVideo(src)} onClose={() => setInsertingVideo(false)} />}
       {editingImage && editedPicture?.type === 'image' && <ImageEditDialog backgroundRemovalLoader={loadBackgroundRemoval} src={editedPicture.src} name="picture" onSave={(image, sizes) => saveEditedImage(editingImage, image, sizes)} onClose={() => setEditingImage(null)} />}
 
       {dialog?.kind === 'share' && <ShareDialog kind="deck" id={meta.id} name={meta.title} onClose={() => setDialog(null)} />}

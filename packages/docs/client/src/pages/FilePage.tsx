@@ -15,7 +15,7 @@ import { ImageSelector } from '../components/ImageSelector.tsx';
 import type { ImageRegion } from '../../../shared/agent/protocol.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { FILE_CHANGED_EVENT, useRegisterFile } from '../agent/AgentProvider.tsx';
-import { api } from '../api.ts';
+import { api, placeOf } from '../api.ts';
 import { fileIcon, formatFileSize } from '../components/FileChip.tsx';
 import { FavoriteStar } from '../components/FavoriteStar.tsx';
 import { FileSearchButton } from '../components/FileSearch.tsx';
@@ -25,6 +25,7 @@ import { HomeIcon } from '../components/Logo.tsx';
 import { MenuList, type MenuItem } from '../components/Menu.tsx';
 import { ConfirmModal, PromptModal } from '../components/Modal.tsx';
 import { useOpenInTab } from '../components/OpenInTab.tsx';
+import { useOrganizationMenu, withScope } from '../components/OrganizationActions.tsx';
 import { useFavicon } from '../favicon.ts';
 import { isPowerPointFile, isWordFile, titleFromFileName } from '../importFile.ts';
 import { downloadPdf } from '../print.ts';
@@ -78,7 +79,7 @@ export function FilePage() {
       const upload = new File([await res.blob()], stored.filename, { type: stored.type });
       const title = titleFromFileName(stored.filename);
       // The copy goes in the same folder as the original.
-      const folder = stored.folder;
+      const folder = placeOf(stored);
       if (isPowerPointFile(upload)) {
         const { deck, warnings } = await api.importPptx(upload, title, folder);
         navigate(`/d/${deck.id}`, { state: { importWarnings: warnings } });
@@ -153,6 +154,8 @@ export function FilePage() {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [dialog, setDialog] = useState<'rename' | 'delete' | 'share' | null>(null);
   const openInTab = useOpenInTab();
+  // Share with organization / Make private / Move to organization… (the FreeFlow suite).
+  const orgMenu = useOrganizationMenu(file ? { ...file, title: file.filename } : null, (m) => setFile((cur) => (cur ? withScope(cur, m) : cur)), setError);
   // Close menus on outside click.
   useEffect(() => {
     if (!openMenu) return;
@@ -190,6 +193,7 @@ export function FilePage() {
     ];
     return [
       ...openInTab.items,
+        ...orgMenu.items,
       { label: 'Rename…', action: () => setDialog('rename') },
       ...(kindItems.length ? (['sep', ...kindItems] as MenuItem[]) : []),
       'sep',
@@ -213,7 +217,7 @@ export function FilePage() {
         <div className="wb-titles">
           <div className="wb-title-row">
             {file && <FavoriteStar kind="file" id={file.id} onError={setError} />}
-            {file && <FolderCrumbs folder={file.folder} />}
+            {file && <FolderCrumbs folder={file.folder} file={file} />}
             {file && <TitleInput title={file.filename} label="File name" onRename={(name) => api.renameFile(file.id, name).then((r) => setFile(r.file))} onError={setError} />}
           </div>
           {file && (
@@ -303,6 +307,7 @@ export function FilePage() {
         </div>
       </header>
       {openInTab.dialog}
+      {orgMenu.dialog}
       {file && dialog === 'rename' && (
         <PromptModal
           title="Rename file"
@@ -351,7 +356,7 @@ export function FilePage() {
                 setCanRevert(!local);
                 setEditing(false);
               },
-              create: async (name, pdf) => navigate(`/f/${(await api.uploadFile(name, new File([pdf], name, { type: 'application/pdf' }), file.folder)).id}`),
+              create: async (name, pdf) => navigate(`/f/${(await api.uploadFile(name, new File([pdf], name, { type: 'application/pdf' }), placeOf(file))).id}`),
             }}
             onClose={() => setEditing(false)}
           />
@@ -381,7 +386,7 @@ export function FilePage() {
                 setCanRevert(true);
                 setEditing(false);
               },
-              create: async (name, image) => navigate(`/f/${(await api.uploadFile(name, image, file.folder)).id}`),
+              create: async (name, image) => navigate(`/f/${(await api.uploadFile(name, image, placeOf(file))).id}`),
             }}
             backgroundRemovalLoader={loadBackgroundRemoval}
             onClose={() => setEditing(false)}

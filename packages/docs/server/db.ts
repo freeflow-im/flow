@@ -193,14 +193,38 @@ function migrate(db: DB): void {
   }
   const fileCols = new Set((db.prepare('PRAGMA table_info(stored_files)').all() as { name: string }[]).map((c) => c.name));
   if (!fileCols.has('folder')) db.exec("ALTER TABLE stored_files ADD COLUMN folder TEXT NOT NULL DEFAULT ''");
-  db.exec(`
+  // A folder's path is unique within its root (server/scope.ts): `scope` is scopeKey of the root it is in.
+  const FOLDERS = `
     CREATE TABLE IF NOT EXISTS folders (
       owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      workspace_id TEXT,
+      private INTEGER NOT NULL DEFAULT 1,
+      scope TEXT NOT NULL,
       path TEXT NOT NULL,
       created_at TEXT NOT NULL,
-      PRIMARY KEY (owner_id, path)
-    );
-  `);
+      PRIMARY KEY (scope, path)
+    )`;
+  const folderCols = new Set((db.prepare('PRAGMA table_info(folders)').all() as { name: string }[]).map((c) => c.name));
+  if (folderCols.size && !folderCols.has('scope')) {
+    // Folders from before organizations were keyed by (owner_id, path): each becomes a folder of its owner's private files.
+    db.exec('ALTER TABLE folders RENAME TO folders_before_scope');
+    db.exec(FOLDERS);
+    db.exec("INSERT INTO folders (owner_id, workspace_id, private, scope, path, created_at) SELECT owner_id, NULL, 1, 'me:' || owner_id || ':', path, created_at FROM folders_before_scope");
+    db.exec('DROP TABLE folders_before_scope');
+  } else db.exec(FOLDERS);
+  db.exec('CREATE INDEX IF NOT EXISTS folders_owner ON folders(owner_id, workspace_id)');
+
+  // Organizations (FreeFlow suite, server/scope.ts): every row that belongs to someone names the organization it is in
+  // (null: none, as everything from before and everything the standalone and desktop apps make) and, for files and
+  // folders, whether it is private to its owner (1) or shared with the organization's members (0).
+  const columnsOf = (table: string) => new Set((db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name));
+  for (const table of ['sheets', 'stored_files', 'images', 'public_links', 'agent_conversations']) {
+    const have = columnsOf(table);
+    if (!have.has('workspace_id')) db.exec(`ALTER TABLE ${table} ADD COLUMN workspace_id TEXT`);
+    if ((table === 'sheets' || table === 'stored_files') && !have.has('private')) db.exec(`ALTER TABLE ${table} ADD COLUMN private INTEGER NOT NULL DEFAULT 1`);
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS sheets_workspace ON sheets(workspace_id, folder)');
+  db.exec('CREATE INDEX IF NOT EXISTS stored_files_workspace ON stored_files(workspace_id, folder)');
 
   // Google sign-in: the Google account id linked to the user. Accounts created by Google sign-in have an empty
   // password_hash (no password can match it) until the user sets one through "Forgot your password?".

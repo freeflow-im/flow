@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { MAX_VIDEO_BYTES, VIDEO_TYPES, videoTypeOf, type StoredFile } from '../../../shared/types.ts';
 import { youtubeId, youtubePoster, youtubeWatchUrl } from '../../../shared/video.ts';
-import { api } from '../api.ts';
+import { api, type Place } from '../api.ts';
 import { Modal } from './Modal.tsx';
 import { VideoPoster } from './VideoPlayer.tsx';
 
@@ -24,7 +24,7 @@ const sizeText = (bytes: number) => (bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1
 const isVideo = (f: StoredFile) => f.type.startsWith('video/') || videoTypeOf(f.filename) !== null;
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-export function VideoDialog({ folder, onInsert, onClose }: { /** Where an uploaded video is kept: the folder of the file it is put in. */ folder?: string; onInsert(src: string, title: string): void; onClose(): void }) {
+export function VideoDialog({ folder, onInsert, onClose }: { /** Where an uploaded video is kept: the folder of the file it is put in. */ folder?: Place; onInsert(src: string, title: string): void; onClose(): void }) {
   const [tab, setTab] = useState<Tab>('upload');
   const [error, setError] = useState<string | null>(null);
   const insert = (src: string, title: string) => {

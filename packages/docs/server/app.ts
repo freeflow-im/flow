@@ -13,7 +13,7 @@ import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import type { ServerResponse } from 'node:http';
-import { HOME_CHAT, isChatScope, type AgentEvent, type AgentTurnRequest, type AssistantSettingsUpdate } from '../shared/agent/protocol.ts';
+import { chatScope, HOME_CHAT, isChatScope, type AgentEvent, type AgentTurnRequest, type AssistantSettingsUpdate } from '../shared/agent/protocol.ts';
 import { newDeck, validateDeck, type Deck } from '../shared/deck.ts';
 import { newDoc, validateDoc, type Doc } from '../shared/doc.ts';
 import { MAX_MARKDOWN_CHARS, newMarkdownDoc, validateMarkdownDoc, type MarkdownDoc } from '../shared/markdown.ts';
@@ -46,6 +46,7 @@ import { ImageStore } from './images.ts';
 import { deckPreview, docPreview, markdownPreview, sheetPreview, type FilePreview } from '../shared/preview.ts';
 import { cleanFolderName, cleanFolderPath, folderName, joinFolder, parentFolder } from '../shared/folders.ts';
 import { FolderStore, type Folders } from './folders.ts';
+import { canAccess, inScope, scopeOf, scopeOfRow, viewerOf, type ScopeArg, type Viewer, type ViewerArg } from './scope.ts';
 import { LISTED_EXTS, listedKind, LocalFileStore, LocalFolder, LocalFolders, LocalSheetStore, type FindByName } from './localStore.ts';
 import { Favorites, FOLDER_REF } from './favorites.ts';
 import { openedFiles, recentFiles, RecentOpens, recentsAvailable, whereOf, type Recents } from './recents.ts';
@@ -91,6 +92,14 @@ declare module 'fastify' {
     user: User | null;
     /** The folder a request names (its "folder" query or body field), checked to exist; '' is the top. */
     folder: string;
+    /**
+     * The root a listing or a new file is in (server/scope.ts): in the suite, the organization the request names
+     * (`workspace`, checked to be one of the user's) and, with `shared`, its Organization files, else the user's
+     * files there; without one, the user's own files (the plain user id). Set by requireUser.
+     */
+    scope: ScopeArg;
+    /** Who asks for files by id (server/scope.ts' canAccess): the user, and in the suite their organizations. Set by requireUser. */
+    viewer: ViewerArg;
   }
   interface FastifyInstance {
     connectors: ConnectorService;
@@ -164,6 +173,10 @@ export interface AppOptions {
     basePath: string;
     /** The suite's sign-in page, for the plugin's OAuth pages (absolute, as they may be reached on another host); default "/". */
     signInUrl?: string;
+    /** Whether the user is a member of the organization (the host's workspace), whose files they may then list and make (server/scope.ts). */
+    isMember(userId: string, workspaceId: string): Promise<boolean>;
+    /** The organizations the user is a member of: their shared files are theirs to open, and Move to organization… offers them. */
+    organizationsOf(userId: string): Promise<Array<{ id: string; name: string }>>;
   };
   /**
    * The desktop app (desktop/): the library is the files of this folder (server/localStore.ts) and there
@@ -288,7 +301,7 @@ export async function buildApp(opts: AppOptions) {
    * since, by another editor or the ChatGPT plugin, the current metadata is returned so the save is refused
    * instead of silently overwriting that change.
    */
-  const staleRev = (ownerId: string, id: string, kind: DocKind, rev: unknown): SheetMeta | null => {
+  const staleRev = (ownerId: ViewerArg, id: string, kind: DocKind, rev: unknown): SheetMeta | null => {
     if (typeof rev !== 'string') return null;
     const cur = sheets.get(ownerId, id, kind);
     return cur && cur.updatedAt !== rev ? cur : null;
@@ -347,6 +360,7 @@ export async function buildApp(opts: AppOptions) {
         },
       })
     : null;
+  const publicLinks = opts.local ? null : new PublicLinks(db);
   const agent = new AgentService(new AgentStore(db), sheets, assistantSettings, { jobs: !opts.local, ...opts.agent, images, files: storedFiles, pdf: pdfMaker ?? undefined, claudeAgent });
   const jobs = new JobStore(db);
   const jobRunner = new JobRunner(jobs, opts.launchJob ?? workerLauncher(opts.dataDir));
@@ -385,6 +399,8 @@ export async function buildApp(opts: AppOptions) {
   app.decorate('connectors', connectors);
   if (!host) app.decorateRequest('user', null); // hosted: the host's own request decoration
   app.decorateRequest('folder', '');
+  app.decorateRequest('scope', '');
+  app.decorateRequest('viewer', '');
 
   // Requests to a retired host name go to the current one (same path and query). Hosted, the host does it.
   const appUrl = (opts.appUrl ?? process.env.APP_URL)?.replace(/\/$/, '');
@@ -494,14 +510,48 @@ export async function buildApp(opts: AppOptions) {
   const originOf = (req: FastifyRequest) =>
     (opts.appUrl ?? process.env.APP_URL ?? `${req.headers['x-forwarded-proto'] ?? req.protocol}://${req.headers.host}`).replace(/\/$/, '');
 
+  /**
+   * The root a request names (server/scope.ts): `workspace`, an organization of the user's (else 403), and `shared`
+   * for its Organization files rather than the user's files there; none, the user's own files. Null when refused.
+   */
+  const scopeNamed = async (userId: string, workspace: unknown, shared: unknown): Promise<ScopeArg | null> => {
+    if (workspace === undefined || workspace === null || workspace === '') return userId;
+    if (typeof workspace !== 'string' || !host || !(await host.isMember(userId, workspace))) return null;
+    return { ownerId: userId, workspaceId: workspace, private: !(shared === true || shared === '1' || shared === 'true') };
+  };
+
+  /** A file's organization and whether it is shared there, for the lists that name files of any root (Recents, Favorites). */
+  const scopeFields = (m: { workspaceId?: string; shared?: true }) => ({ ...(m.workspaceId ? { workspaceId: m.workspaceId } : {}), ...(m.shared ? { shared: true } : {}) });
+  /** How a favorite folder's path is prefixed by its root: Organization files' with their organization, My files' not at all. */
+  const folderRefPrefix = (scope: ScopeArg): string => {
+    const s = scopeOf(scope);
+    return s.private ? '' : `@${s.workspaceId}/`;
+  };
+
+  /** Who a user is when asking for files by id (server/scope.ts): in the suite, with the organizations they are in. */
+  const viewerFor = async (userId: string): Promise<ViewerArg> => (host ? { userId, workspaces: new Set((await host.organizationsOf(userId)).map((o) => o.id)) } : userId);
+
   const requireUser = async (req: FastifyRequest, reply: FastifyReply) => {
     if (!req.user) return reply.code(401).send({ error: 'Not signed in' });
+    const query = (req.query ?? {}) as { folder?: unknown; workspace?: unknown; shared?: unknown };
     // New files go into the folder the request names; uploads name it in the query, the rest in the body.
-    const body = req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body) ? (req.body as { folder?: unknown }) : {};
-    const named = (req.query as { folder?: unknown } | undefined)?.folder ?? body.folder;
+    const body = req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body) ? (req.body as { folder?: unknown; workspace?: unknown; shared?: unknown }) : {};
+    const scope = await scopeNamed(req.user.id, query.workspace ?? body.workspace, query.shared ?? body.shared);
+    if (scope === null) return reply.code(403).send({ error: 'You are not a member of this organization.' });
+    req.scope = scope;
+    req.viewer = await viewerFor(req.user.id);
+    // The user's organizations are cached a minute by the host: one they joined (or made) since is asked about by
+    // itself (isMember, per pair) when the request names it or a file of it, so it works at once.
+    if (host && typeof req.viewer !== 'string') {
+      const id = (req.params as { id?: unknown } | undefined)?.id;
+      const row = typeof id === 'string' && isFileId(id) ? (sheets.find(id) ?? storedFiles.find(id)) : undefined;
+      const more = [scopeOf(scope).workspaceId, row && !row.private ? row.workspace_id : null].filter((w): w is string => !!w && !(req.viewer as Viewer).workspaces.has(w));
+      for (const w of more) if (scopeOf(scope).workspaceId === w || (await host.isMember(req.user.id, w))) req.viewer = { userId: req.user.id, workspaces: new Set([...req.viewer.workspaces, w]) };
+    }
+    const named = query.folder ?? body.folder;
     if (named === undefined) return;
     const path = cleanFolderPath(named);
-    if (path === null || !folders.exists(req.user.id, path)) return reply.code(404).send({ error: 'Folder not found' });
+    if (path === null || !folders.exists(req.scope, path)) return reply.code(404).send({ error: 'Folder not found' });
     req.folder = path;
   };
 
@@ -746,7 +796,7 @@ export async function buildApp(opts: AppOptions) {
   app.register(async (r) => {
     r.addHook('preHandler', requireUser);
 
-    r.get('/api/sheets', async (req) => ({ sheets: sheets.list(req.user!.id) }));
+    r.get('/api/sheets', async (req) => ({ sheets: sheets.list(req.scope) }));
 
     // Create: empty, or a CSV file from its text (an uploaded .csv file, read by the browser).
     r.post('/api/sheets', async (req, reply) => {
@@ -755,13 +805,13 @@ export async function buildApp(opts: AppOptions) {
         if (typeof body.csv !== 'string') return reply.code(400).send({ error: 'CSV must be a string' });
         if (body.csv.length > MAX_CSV_CHARS) return reply.code(400).send({ error: 'This file is too large to import (10 MB maximum).' });
         try {
-          return { sheet: await sheets.createCsv(req.user!.id, cleanTitle(body.title) ?? 'Imported CSV', body.csv, req.folder) };
+          return { sheet: await sheets.createCsv(req.scope, cleanTitle(body.title) ?? 'Imported CSV', body.csv, req.folder) };
         } catch (e) {
           if (e instanceof CsvError) return reply.code(400).send({ error: e.message });
           throw e;
         }
       }
-      return { sheet: await sheets.create(req.user!.id, cleanTitle(body.title) ?? 'Untitled spreadsheet', undefined, req.folder) };
+      return { sheet: await sheets.create(req.scope, cleanTitle(body.title) ?? 'Untitled spreadsheet', undefined, req.folder) };
     });
 
     /** Parse an uploaded .xlsx body; sends a 400 and returns null on failure. */
@@ -793,7 +843,7 @@ export async function buildApp(opts: AppOptions) {
       const result = await convertUpload(req, reply);
       if (!result) return reply;
       const title = cleanTitle((req.query as { title?: unknown }).title) ?? 'Imported spreadsheet';
-      const sheet = await sheets.create(req.user!.id, title, result.workbook, req.folder);
+      const sheet = await sheets.create(req.scope, title, result.workbook, req.folder);
       return { sheet, warnings: result.warnings };
     });
 
@@ -807,7 +857,7 @@ export async function buildApp(opts: AppOptions) {
     r.get('/api/sheets/:id', async (req, reply) => {
       const { id } = req.params as { id: string };
       try {
-        const res = await sheets.load(req.user!.id, id);
+        const res = await sheets.load(req.viewer, id);
         if (!res) return reply.code(404).send({ error: 'Sheet not found' });
         return { sheet: res.meta, workbook: res.workbook, ...(res.notKept ? { notKept: res.notKept } : {}) };
       } catch (e) {
@@ -822,7 +872,7 @@ export async function buildApp(opts: AppOptions) {
       const { id } = req.params as { id: string };
       const q = req.query as { tabId?: string; tab?: string; range?: string };
       try {
-        const t = await loadLinkedTable(sheets, req.user!.id, id, { tabId: q.tabId || undefined, tab: q.tab || undefined, range: q.range || undefined });
+        const t = await loadLinkedTable(sheets, req.viewer, id, { tabId: q.tabId || undefined, tab: q.tab || undefined, range: q.range || undefined });
         if (!t) return reply.code(404).send({ error: 'Sheet not found' });
         if (typeof t === 'string') return reply.code(400).send({ error: t });
         return t;
@@ -836,7 +886,7 @@ export async function buildApp(opts: AppOptions) {
     r.get('/api/sheets/:id/charts', async (req, reply) => {
       const { id } = req.params as { id: string };
       try {
-        const list = await listSheetCharts(sheets, req.user!.id, id);
+        const list = await listSheetCharts(sheets, req.viewer, id);
         return list ?? reply.code(404).send({ error: 'Sheet not found' });
       } catch (e) {
         if (e instanceof CsvError || e instanceof ImportError) return reply.code(400).send({ error: e.message });
@@ -847,7 +897,7 @@ export async function buildApp(opts: AppOptions) {
       const { id } = req.params as { id: string };
       const chartId = (req.query as { chart?: string }).chart ?? '';
       try {
-        const c = await loadLinkedChart(sheets, req.user!.id, id, chartId);
+        const c = await loadLinkedChart(sheets, req.viewer, id, chartId);
         if (!c) return reply.code(404).send({ error: 'Sheet not found' });
         if (typeof c === 'string') return reply.code(404).send({ error: c });
         return c;
@@ -861,15 +911,15 @@ export async function buildApp(opts: AppOptions) {
     r.post('/api/sheets/:id/branch', async (req, reply) => {
       const { id } = req.params as { id: string };
       const title = cleanTitle((req.body as { title?: unknown } | undefined)?.title);
-      const source = sheets.get(req.user!.id, id, 'sheet');
+      const source = sheets.get(req.viewer, id, 'sheet');
       if (!source) return reply.code(404).send({ error: 'Sheet not found' });
-      const sheet = await sheets.branch(req.user!.id, id, title ?? `${source.title} (branch)`);
+      const sheet = await sheets.branch(req.viewer, id, title ?? `${source.title} (branch)`);
       return { sheet };
     });
 
     r.get('/api/sheets/:id/compare', async (req, reply) => {
       const { id } = req.params as { id: string };
-      const data = await sheets.compareData(req.user!.id, id);
+      const data = await sheets.compareData(req.viewer, id);
       if (data === null) return reply.code(404).send({ error: 'Sheet not found' });
       if (data === 'not-branch') return reply.code(400).send({ error: 'This spreadsheet is not a branch.' });
       return data;
@@ -881,9 +931,9 @@ export async function buildApp(opts: AppOptions) {
       const workbook = body?.workbook;
       const problem = validateWorkbook(workbook);
       if (problem) return reply.code(400).send({ error: problem });
-      const stale = staleRev(req.user!.id, id, 'sheet', body?.rev);
+      const stale = staleRev(req.viewer, id, 'sheet', body?.rev);
       if (stale) return reply.code(409).send({ error: 'The spreadsheet was changed elsewhere since you loaded it.', meta: stale });
-      const meta = await sheets.save(req.user!.id, id, workbook!);
+      const meta = await sheets.save(req.viewer, id, workbook!);
       if (!meta) return reply.code(404).send({ error: 'Sheet not found' });
       return { sheet: meta };
     });
@@ -892,7 +942,7 @@ export async function buildApp(opts: AppOptions) {
     // app's own format (pictures in cells).
     r.post('/api/sheets/:id/convert', async (req, reply) => {
       const { id } = req.params as { id: string };
-      const meta = await sheets.convertToNative(req.user!.id, id);
+      const meta = await sheets.convertToNative(req.viewer, id);
       if (!meta) return reply.code(404).send({ error: 'Sheet not found' });
       return { sheet: meta };
     });
@@ -901,14 +951,14 @@ export async function buildApp(opts: AppOptions) {
       const { id } = req.params as { id: string };
       const title = cleanTitle((req.body as { title?: unknown } | undefined)?.title);
       if (!title) return reply.code(400).send({ error: 'Title is required' });
-      const meta = sheets.rename(req.user!.id, id, title, 'sheet');
+      const meta = sheets.rename(req.viewer, id, title, 'sheet');
       if (!meta) return reply.code(404).send({ error: 'Sheet not found' });
       return { sheet: meta };
     });
 
     r.delete('/api/sheets/:id', async (req, reply) => {
       const { id } = req.params as { id: string };
-      if (!(await sheets.delete(req.user!.id, id, 'sheet'))) return reply.code(404).send({ error: 'Sheet not found' });
+      if (!(await sheets.delete(req.viewer, id, 'sheet'))) return reply.code(404).send({ error: 'Sheet not found' });
       return { ok: true };
     });
   });
@@ -930,7 +980,7 @@ export async function buildApp(opts: AppOptions) {
     // so this also covers saves missed while disconnected), then every new one.
     r.get('/api/revisions/:id', async (req, reply) => {
       const { id } = req.params as { id: string };
-      const meta = sheets.get(req.user!.id, id);
+      const meta = sheets.get(req.viewer, id);
       if (!meta) return reply.code(404).send({ error: 'File not found' });
       reply.hijack();
       const res = reply.raw;
@@ -940,7 +990,7 @@ export async function buildApp(opts: AppOptions) {
       const stop = revisions.watch(id, send);
       // In the desktop app the file can also be changed by another program: its directory is watched, and a
       // change the store did not make is a new revision (LocalSheetStore.fileChanged), announced as any other.
-      const rel = dirWatchers && sheets instanceof LocalSheetStore ? sheets.relOf(req.user!.id, id) : null;
+      const rel = dirWatchers && sheets instanceof LocalSheetStore ? sheets.relOf(req.viewer, id) : null;
       const unwatch =
         rel !== null && sheets instanceof LocalSheetStore
           ? dirWatchers!.watch(parentFolder(rel), (names) => {
@@ -963,7 +1013,7 @@ export async function buildApp(opts: AppOptions) {
   app.register(async (r) => {
     r.addHook('preHandler', requireUser);
 
-    r.get('/api/docs', async (req) => ({ docs: sheets.list(req.user!.id, 'doc') }));
+    r.get('/api/docs', async (req) => ({ docs: sheets.list(req.scope, 'doc') }));
 
     r.post('/api/docs', async (req, reply) => {
       const body = (req.body ?? {}) as { title?: unknown; doc?: unknown };
@@ -971,13 +1021,13 @@ export async function buildApp(opts: AppOptions) {
       const doc = body.doc === undefined ? newDoc() : body.doc;
       const problem = validateDoc(doc);
       if (problem) return reply.code(400).send({ error: problem });
-      return { doc: await sheets.createDoc(req.user!.id, title, doc as Doc, req.folder) };
+      return { doc: await sheets.createDoc(req.scope, title, doc as Doc, req.folder) };
     });
 
     r.get('/api/docs/:id', async (req, reply) => {
       const { id } = req.params as { id: string };
       try {
-        const res = await sheets.loadDoc(req.user!.id, id);
+        const res = await sheets.loadDoc(req.viewer, id);
         if (!res) return reply.code(404).send({ error: 'Document not found' });
         return { meta: res.meta, doc: res.doc, ...(res.notKept ? { notKept: res.notKept } : {}) };
       } catch (e) {
@@ -990,7 +1040,7 @@ export async function buildApp(opts: AppOptions) {
     // Keep a document stored as an Office file (desktop app) in the app's own format, which holds everything.
     r.post('/api/docs/:id/convert', async (req, reply) => {
       const { id } = req.params as { id: string };
-      const meta = await sheets.convertToOwnFormat(req.user!.id, id, 'doc');
+      const meta = await sheets.convertToOwnFormat(req.viewer, id, 'doc');
       if (!meta) return reply.code(404).send({ error: 'Document not found' });
       return { meta };
     });
@@ -1001,9 +1051,9 @@ export async function buildApp(opts: AppOptions) {
       const doc = body?.doc;
       const problem = validateDoc(doc);
       if (problem) return reply.code(400).send({ error: problem });
-      const stale = staleRev(req.user!.id, id, 'doc', body?.rev);
+      const stale = staleRev(req.viewer, id, 'doc', body?.rev);
       if (stale) return reply.code(409).send({ error: 'The document was changed elsewhere since you loaded it.', meta: stale });
-      const meta = await sheets.saveDoc(req.user!.id, id, doc as Doc);
+      const meta = await sheets.saveDoc(req.viewer, id, doc as Doc);
       if (!meta) return reply.code(404).send({ error: 'Document not found' });
       return { meta };
     });
@@ -1012,14 +1062,14 @@ export async function buildApp(opts: AppOptions) {
       const { id } = req.params as { id: string };
       const title = cleanTitle((req.body as { title?: unknown } | undefined)?.title);
       if (!title) return reply.code(400).send({ error: 'Title is required' });
-      const meta = sheets.rename(req.user!.id, id, title, 'doc');
+      const meta = sheets.rename(req.viewer, id, title, 'doc');
       if (!meta) return reply.code(404).send({ error: 'Document not found' });
       return { meta };
     });
 
     r.delete('/api/docs/:id', async (req, reply) => {
       const { id } = req.params as { id: string };
-      if (!(await sheets.delete(req.user!.id, id, 'doc'))) return reply.code(404).send({ error: 'Document not found' });
+      if (!(await sheets.delete(req.viewer, id, 'doc'))) return reply.code(404).send({ error: 'Document not found' });
       return { ok: true };
     });
 
@@ -1031,7 +1081,7 @@ export async function buildApp(opts: AppOptions) {
         return null;
       }
       try {
-        return await importDocx(body, (type, data) => images.create(req.user!.id, type, data));
+        return await importDocx(body, (type, data) => images.create(req.scope, type, data));
       } catch (e) {
         if (!(e instanceof ImportError)) req.log.warn({ err: e }, 'docx import failed');
         reply.code(400).send({ error: e instanceof ImportError ? e.message : 'This file could not be imported. Make sure it is a valid Word document (.docx).' });
@@ -1044,7 +1094,7 @@ export async function buildApp(opts: AppOptions) {
       const title = cleanTitle((req.query as { title?: unknown }).title) ?? 'Imported document';
       const result = await convertDocx(req, reply);
       if (!result) return reply;
-      const doc = await sheets.createDoc(req.user!.id, title, result.doc, req.folder);
+      const doc = await sheets.createDoc(req.scope, title, result.doc, req.folder);
       return { doc, warnings: result.warnings };
     });
 
@@ -1053,7 +1103,7 @@ export async function buildApp(opts: AppOptions) {
       if (!Buffer.isBuffer(req.body) || !isPdf(req.body)) return reply.code(400).send({ error: 'This file is not a valid PDF.' });
       const raw = String((req.query as { filename?: unknown }).filename ?? '');
       const name = raw.replace(/[\\/\u0000-\u001f]/g, '_').trim().slice(0, 200) || 'document.pdf';
-      return { file: await storedFiles.create(req.user!.id, /\.pdf$/i.test(name) ? name : `${name}.pdf`, 'application/pdf', req.body, req.folder) };
+      return { file: await storedFiles.create(req.scope, /\.pdf$/i.test(name) ? name : `${name}.pdf`, 'application/pdf', req.body, req.folder) };
     });
 
     r.post('/api/import/docx', async (req, reply) => {
@@ -1067,7 +1117,7 @@ export async function buildApp(opts: AppOptions) {
   app.register(async (r) => {
     r.addHook('preHandler', requireUser);
 
-    r.get('/api/markdown', async (req) => ({ docs: sheets.list(req.user!.id, 'markdown') }));
+    r.get('/api/markdown', async (req) => ({ docs: sheets.list(req.scope, 'markdown') }));
 
     // Create: empty, or from text (an uploaded .md file, read by the browser).
     r.post('/api/markdown', async (req, reply) => {
@@ -1076,12 +1126,12 @@ export async function buildApp(opts: AppOptions) {
       const text = body.text === undefined ? '' : body.text;
       if (typeof text !== 'string') return reply.code(400).send({ error: 'Text must be a string' });
       if (text.length > MAX_MARKDOWN_CHARS) return reply.code(400).send({ error: 'This file is too large to import (5 MB maximum).' });
-      return { doc: await sheets.createMarkdown(req.user!.id, title, newMarkdownDoc(text), req.folder) };
+      return { doc: await sheets.createMarkdown(req.scope, title, newMarkdownDoc(text), req.folder) };
     });
 
     r.get('/api/markdown/:id', async (req, reply) => {
       const { id } = req.params as { id: string };
-      const res = await sheets.loadMarkdown(req.user!.id, id);
+      const res = await sheets.loadMarkdown(req.viewer, id);
       if (!res) return reply.code(404).send({ error: 'Document not found' });
       return { meta: res.meta, doc: res.doc };
     });
@@ -1092,9 +1142,9 @@ export async function buildApp(opts: AppOptions) {
       const doc = body?.doc;
       const problem = validateMarkdownDoc(doc);
       if (problem) return reply.code(400).send({ error: problem });
-      const stale = staleRev(req.user!.id, id, 'markdown', body?.rev);
+      const stale = staleRev(req.viewer, id, 'markdown', body?.rev);
       if (stale) return reply.code(409).send({ error: 'The document was changed elsewhere since you loaded it.', meta: stale });
-      const meta = await sheets.saveMarkdown(req.user!.id, id, doc as MarkdownDoc);
+      const meta = await sheets.saveMarkdown(req.viewer, id, doc as MarkdownDoc);
       if (!meta) return reply.code(404).send({ error: 'Document not found' });
       return { meta };
     });
@@ -1103,14 +1153,14 @@ export async function buildApp(opts: AppOptions) {
       const { id } = req.params as { id: string };
       const title = cleanTitle((req.body as { title?: unknown } | undefined)?.title);
       if (!title) return reply.code(400).send({ error: 'Title is required' });
-      const meta = sheets.rename(req.user!.id, id, title, 'markdown');
+      const meta = sheets.rename(req.viewer, id, title, 'markdown');
       if (!meta) return reply.code(404).send({ error: 'Document not found' });
       return { meta };
     });
 
     r.delete('/api/markdown/:id', async (req, reply) => {
       const { id } = req.params as { id: string };
-      if (!(await sheets.delete(req.user!.id, id, 'markdown'))) return reply.code(404).send({ error: 'Document not found' });
+      if (!(await sheets.delete(req.viewer, id, 'markdown'))) return reply.code(404).send({ error: 'Document not found' });
       return { ok: true };
     });
   });
@@ -1119,7 +1169,7 @@ export async function buildApp(opts: AppOptions) {
   app.register(async (r) => {
     r.addHook('preHandler', requireUser);
 
-    r.get('/api/decks', async (req) => ({ decks: sheets.list(req.user!.id, 'deck') }));
+    r.get('/api/decks', async (req) => ({ decks: sheets.list(req.scope, 'deck') }));
 
     r.post('/api/decks', async (req, reply) => {
       const body = (req.body ?? {}) as { title?: unknown; deck?: unknown };
@@ -1127,7 +1177,7 @@ export async function buildApp(opts: AppOptions) {
       const deck = body.deck === undefined ? newDeck() : body.deck;
       const problem = validateDeck(deck);
       if (problem) return reply.code(400).send({ error: problem });
-      return { deck: await sheets.createDeck(req.user!.id, title, deck as Deck, req.folder) };
+      return { deck: await sheets.createDeck(req.scope, title, deck as Deck, req.folder) };
     });
 
     // The user's copy of the Getting started guide, made the first time they ask for it.
@@ -1136,7 +1186,7 @@ export async function buildApp(opts: AppOptions) {
     r.get('/api/decks/:id', async (req, reply) => {
       const { id } = req.params as { id: string };
       try {
-        const res = await sheets.loadDeck(req.user!.id, id);
+        const res = await sheets.loadDeck(req.viewer, id);
         if (!res) return reply.code(404).send({ error: 'Presentation not found' });
         return { meta: res.meta, deck: res.deck, ...(res.notKept ? { notKept: res.notKept } : {}) };
       } catch (e) {
@@ -1149,7 +1199,7 @@ export async function buildApp(opts: AppOptions) {
     // Keep a presentation stored as an Office file (desktop app) in the app's own format, which holds everything.
     r.post('/api/decks/:id/convert', async (req, reply) => {
       const { id } = req.params as { id: string };
-      const meta = await sheets.convertToOwnFormat(req.user!.id, id, 'deck');
+      const meta = await sheets.convertToOwnFormat(req.viewer, id, 'deck');
       if (!meta) return reply.code(404).send({ error: 'Presentation not found' });
       return { meta };
     });
@@ -1160,9 +1210,9 @@ export async function buildApp(opts: AppOptions) {
       const deck = body?.deck;
       const problem = validateDeck(deck);
       if (problem) return reply.code(400).send({ error: problem });
-      const stale = staleRev(req.user!.id, id, 'deck', body?.rev);
+      const stale = staleRev(req.viewer, id, 'deck', body?.rev);
       if (stale) return reply.code(409).send({ error: 'The presentation was changed elsewhere since you loaded it.', meta: stale });
-      const meta = await sheets.saveDeck(req.user!.id, id, deck as Deck);
+      const meta = await sheets.saveDeck(req.viewer, id, deck as Deck);
       if (!meta) return reply.code(404).send({ error: 'Presentation not found' });
       return { meta };
     });
@@ -1171,14 +1221,14 @@ export async function buildApp(opts: AppOptions) {
       const { id } = req.params as { id: string };
       const title = cleanTitle((req.body as { title?: unknown } | undefined)?.title);
       if (!title) return reply.code(400).send({ error: 'Title is required' });
-      const meta = sheets.rename(req.user!.id, id, title, 'deck');
+      const meta = sheets.rename(req.viewer, id, title, 'deck');
       if (!meta) return reply.code(404).send({ error: 'Presentation not found' });
       return { meta };
     });
 
     r.delete('/api/decks/:id', async (req, reply) => {
       const { id } = req.params as { id: string };
-      if (!(await sheets.delete(req.user!.id, id, 'deck'))) return reply.code(404).send({ error: 'Presentation not found' });
+      if (!(await sheets.delete(req.viewer, id, 'deck'))) return reply.code(404).send({ error: 'Presentation not found' });
       return { ok: true };
     });
 
@@ -1190,7 +1240,7 @@ export async function buildApp(opts: AppOptions) {
         return null;
       }
       try {
-        return await importPptx(body, (type, data) => images.create(req.user!.id, type, data));
+        return await importPptx(body, (type, data) => images.create(req.scope, type, data));
       } catch (e) {
         if (!(e instanceof ImportError)) req.log.warn({ err: e }, 'pptx import failed');
         reply.code(400).send({ error: e instanceof ImportError ? e.message : 'This file could not be imported. Make sure it is a valid PowerPoint presentation (.pptx).' });
@@ -1203,7 +1253,7 @@ export async function buildApp(opts: AppOptions) {
       const result = await convertPptx(req, reply);
       if (!result) return reply;
       const title = cleanTitle((req.query as { title?: unknown }).title) ?? 'Imported presentation';
-      const deck = await sheets.createDeck(req.user!.id, title, result.deck, req.folder);
+      const deck = await sheets.createDeck(req.scope, title, result.deck, req.folder);
       return { deck, warnings: result.warnings };
     });
 
@@ -1232,8 +1282,8 @@ export async function buildApp(opts: AppOptions) {
   // --- Public links: a presentation or video anyone with the address can view (server/publicLinks.ts) -------
   // Files stored on the server only: a file in the desktop app's folder is on the person's own computer.
   if (!opts.local) {
-    const links = new PublicLinks(db);
-    const sharable = (ownerId: string, kind: SharedKind, id: string) => {
+    const links = publicLinks!;
+    const sharable = (ownerId: ViewerArg, kind: SharedKind, id: string) => {
       if (kind === 'deck') return !!sheets.get(ownerId, id, 'deck');
       const f = storedFiles.get(ownerId, id);
       return !!f && isSharableVideo(f.meta.type);
@@ -1242,34 +1292,38 @@ export async function buildApp(opts: AppOptions) {
 
     app.register(async (r) => {
       r.addHook('preHandler', requireUser);
-      // The owner's side: whether a file has a link, making one and stopping it.
+      // The side of those who may open the file (its owner, or an organization file's members): whether it has a
+      // link, making one and stopping it.
       r.addHook('preHandler', async (req, reply) => {
         const { kind, id } = req.params as { kind: SharedKind; id: string };
-        if ((kind !== 'deck' && kind !== 'file') || !sharable(req.user!.id, kind, id)) return reply.code(404).send({ error: 'This file cannot be shared.' });
+        if ((kind !== 'deck' && kind !== 'file') || !sharable(req.viewer, kind, id)) return reply.code(404).send({ error: 'This file cannot be shared.' });
       });
       r.get('/api/sharing/:kind/:id', async (req) => {
         const { kind, id } = req.params as { kind: SharedKind; id: string };
-        return linkAddress(req, links.tokenOf(req.user!.id, kind, id));
+        return linkAddress(req, links.tokenOf(kind, id));
       });
       r.put('/api/sharing/:kind/:id', async (req) => {
         const { kind, id } = req.params as { kind: SharedKind; id: string };
-        return linkAddress(req, links.create(req.user!.id, kind, id));
+        const row = kind === 'deck' ? sheets.find(id) : storedFiles.find(id);
+        return linkAddress(req, links.create(req.user!.id, row?.workspace_id ?? null, kind, id));
       });
       r.delete('/api/sharing/:kind/:id', async (req) => {
         const { kind, id } = req.params as { kind: SharedKind; id: string };
-        links.remove(req.user!.id, kind, id);
+        links.remove(kind, id);
         return linkAddress(req, null);
       });
     });
 
     // What a shared deck shows, kept until the deck changes: each picture and each seek of a video asks.
     const shownByDeck = new Map<string, { rev: string; images: Set<string>; files: Set<string> }>();
+    // A link works while the one who made it may still open the file (an organization file made private since is not shown).
     const shownBy = async (link: PublicLink) => {
-      const rev = sheets.get(link.ownerId, link.fileId, 'deck')?.updatedAt;
+      const maker = await viewerFor(link.ownerId);
+      const rev = sheets.get(maker, link.fileId, 'deck')?.updatedAt;
       if (!rev) return null;
       const known = shownByDeck.get(link.fileId);
       if (known?.rev === rev) return known;
-      const res = await sheets.loadDeck(link.ownerId, link.fileId);
+      const res = await sheets.loadDeck(maker, link.fileId);
       if (!res) return null;
       const { images: shownImages, files } = publicDeck(res.deck, link.token);
       if (shownByDeck.size >= 500) shownByDeck.clear();
@@ -1289,19 +1343,20 @@ export async function buildApp(opts: AppOptions) {
       forGuest(reply).header('Cache-Control', 'no-store');
       const link = links.resolve((req.params as { token: string }).token);
       if (!link) return noLink(reply);
+      const maker = await viewerFor(link.ownerId);
       if (link.kind === 'deck') {
-        const res = await sheets.loadDeck(link.ownerId, link.fileId);
+        const res = await sheets.loadDeck(maker, link.fileId);
         if (!res) return noLink(reply);
         return { kind: 'deck', title: res.meta.title, deck: publicDeck(res.deck, link.token).deck };
       }
-      const f = storedFiles.get(link.ownerId, link.fileId);
+      const f = storedFiles.get(maker, link.fileId);
       if (!f || !isSharableVideo(f.meta.type)) return noLink(reply);
       return { kind: 'video', title: f.meta.filename, url: `/api/public/${link.token}/video` };
     });
     app.get('/api/public/:token/video', async (req, reply) => {
       forGuest(reply);
       const link = links.resolve((req.params as { token: string }).token);
-      const f = link?.kind === 'file' ? storedFiles.get(link.ownerId, link.fileId) : null;
+      const f = link?.kind === 'file' ? storedFiles.get(await viewerFor(link.ownerId), link.fileId) : null;
       if (!f || !isSharableVideo(f.meta.type)) return noLink(reply);
       return sendGuestFile(req, reply, f);
     });
@@ -1310,7 +1365,7 @@ export async function buildApp(opts: AppOptions) {
       const { token, id } = req.params as { token: string; id: string };
       const link = links.resolve(token);
       const shown = link?.kind === 'deck' ? await shownBy(link) : null;
-      const img = link && shown?.images.has(id) ? images.get(link.ownerId, id) : null;
+      const img = link && shown?.images.has(id) ? images.get(await viewerFor(link.ownerId), id) : null;
       if (!img) return noLink(reply);
       reply.header('Content-Type', img.type).header('Cache-Control', GUEST_CACHE);
       return reply.send(createReadStream(img.file));
@@ -1320,7 +1375,7 @@ export async function buildApp(opts: AppOptions) {
       const { token, id } = req.params as { token: string; id: string };
       const link = links.resolve(token);
       const shown = link?.kind === 'deck' ? await shownBy(link) : null;
-      const f = link && shown?.files.has(id) ? storedFiles.get(link.ownerId, id) : null;
+      const f = link && shown?.files.has(id) ? storedFiles.get(await viewerFor(link.ownerId), id) : null;
       if (!f || !PREVIEW_FILE_TYPES.includes(f.meta.type)) return noLink(reply);
       return sendGuestFile(req, reply, f);
     });
@@ -1337,7 +1392,7 @@ export async function buildApp(opts: AppOptions) {
       if (!CELL_IMAGE_TYPES.includes(type) || !Buffer.isBuffer(body) || body.length === 0) {
         return reply.code(400).send({ error: 'Upload a PNG, JPEG, GIF or WebP image as the request body.' });
       }
-      return { url: await images.create(req.user!.id, type, body) };
+      return { url: await images.create(req.scope, type, body) };
     });
 
     // Keep a copy of a picture that is on the web: the assistant puts pictures it found on slides, and one left
@@ -1350,7 +1405,7 @@ export async function buildApp(opts: AppOptions) {
         const { bytes } = await fetchPublicFile(url, { limit: MAX_CELL_IMAGE_BYTES, timeoutMs: 20_000 });
         const type = sniffImageType(bytes);
         if (!type) return reply.code(400).send({ error: 'That address does not hold a PNG, JPEG, GIF or WebP picture.' });
-        return { url: await images.create(req.user!.id, type, bytes) };
+        return { url: await images.create(req.scope, type, bytes) };
       } catch (e) {
         if (e instanceof WebFetchError) return reply.code(400).send({ error: e.message });
         throw e;
@@ -1359,7 +1414,7 @@ export async function buildApp(opts: AppOptions) {
 
     r.get('/api/images/:id', async (req, reply) => {
       const { id } = req.params as { id: string };
-      const img = /^[0-9a-f-]{36}$/.test(id) ? images.get(req.user!.id, id) : null;
+      const img = /^[0-9a-f-]{36}$/.test(id) ? images.get(req.viewer, id) : null;
       if (!img) return reply.code(404).send({ error: 'Image not found' });
       // Images never change once uploaded.
       reply.header('Content-Type', img.type).header('Cache-Control', 'private, max-age=31536000, immutable').header('X-Content-Type-Options', 'nosniff');
@@ -1382,7 +1437,7 @@ export async function buildApp(opts: AppOptions) {
       const paper = paperFor(locale ?? String(req.headers['accept-language'] ?? '').split(',')[0]);
       try {
         // In development the app's pages are where the request came from (Vite), not on this server.
-        const made = await pdfMaker.make(req.user!.id, id, { paper, origin: opts.staticDir ? undefined : `${req.protocol}://${req.headers.host}` });
+        const made = await pdfMaker.make(req.viewer, id, { paper, origin: opts.staticDir ? undefined : `${req.protocol}://${req.headers.host}` });
         if (!made) return reply.code(404).send({ error: 'File not found' });
         if (made.revision) reply.header('X-Revision', made.revision);
         return attachment(reply, made.name, 'application/pdf').send(made.pdf);
@@ -1396,11 +1451,11 @@ export async function buildApp(opts: AppOptions) {
       const { id } = req.params as { id: string };
       const { format, tab } = req.query as { format?: string; tab?: string };
       if (format === 'pdf') return sendPdf(req, reply, id);
-      const loaded = await loadFile(sheets, req.user!.id, id);
+      const loaded = await loadFile(sheets, req.viewer, id);
       if (!loaded) return reply.code(404).send({ error: 'File not found' });
       const fmt = (format ?? (loaded.meta.format === 'csv' ? 'csv' : EXPORT_FORMATS[loaded.meta.kind][0])) as ExportFormat;
       try {
-        const out = await exportFile(loaded.meta, loaded.data, fmt, imageSource(images, req.user!.id), tab);
+        const out = await exportFile(loaded.meta, loaded.data, fmt, imageSource(images, req.viewer), tab);
         return attachment(reply, out.name, out.type).send(out.body);
       } catch (e) {
         if (e instanceof ExportError) return reply.code(400).send({ error: e.message });
@@ -1423,21 +1478,21 @@ export async function buildApp(opts: AppOptions) {
       name = name.replace(/[\\/\u0000-\u001f]/g, '_').trim().slice(0, 200) || 'file';
       // A video or a web page is stored under the type of its extension, whatever the browser called it.
       // Plain bytes of any other file are stored as what their name says, when the app knows it.
-      return { file: await storedFiles.create(req.user!.id, name, videoTypeOf(name) ?? (isHtmlName(name) ? HTML_TYPE : type === 'application/octet-stream' ? (fileTypeOf(name) ?? type) : type), body, req.folder) };
+      return { file: await storedFiles.create(req.scope, name, videoTypeOf(name) ?? (isHtmlName(name) ? HTML_TYPE : type === 'application/octet-stream' ? (fileTypeOf(name) ?? type) : type), body, req.folder) };
     });
 
-    r.get('/api/files', async (req) => ({ files: storedFiles.list(req.user!.id) }));
+    r.get('/api/files', async (req) => ({ files: storedFiles.list(req.scope) }));
 
-    const storedFile = (req: { user?: { id: string } | null; params: unknown }) => {
+    const storedFile = (req: FastifyRequest) => {
       const { id } = req.params as { id: string };
-      return isFileId(id) ? storedFiles.get(req.user!.id, id) : null;
+      return isFileId(id) ? storedFiles.get(req.viewer, id) : null;
     };
 
     // The stored file called `name` in the request's folder, by a redirect to its own address: how a Markdown
     // preview shows a picture named by a path relative to the document (`images/chart.png`).
     r.get('/api/files/at', async (req, reply) => {
       const { name } = req.query as { name?: unknown };
-      const f = typeof name === 'string' && name && !/[\\/]/.test(name) ? storedFiles.listIn(req.user!.id, req.folder ?? '').find((m) => m.filename === name) : undefined;
+      const f = typeof name === 'string' && name && !/[\\/]/.test(name) ? storedFiles.listIn(req.scope, req.folder ?? '').find((m) => m.filename === name) : undefined;
       return f ? reply.header('Cache-Control', 'no-cache').redirect(`/api/files/${f.id}`) : reply.code(404).send({ error: 'File not found' });
     });
 
@@ -1477,7 +1532,7 @@ export async function buildApp(opts: AppOptions) {
     // A PDF's text as a new Markdown file beside it (server/pdfMarkdown.ts); the PDF stays as it is.
     r.post('/api/files/:id/markdown', async (req, reply) => {
       try {
-        const made = await pdfToMarkdownFile({ sheets, files: storedFiles }, req.user!.id, (req.params as { id: string }).id);
+        const made = await pdfToMarkdownFile({ sheets, files: storedFiles }, req.viewer, (req.params as { id: string }).id);
         if (!made) return reply.code(404).send({ error: 'File not found' });
         return { doc: made.sheet, pages: made.pageCount, ocrPages: made.ocrPages, warnings: made.warnings };
       } catch (e) {
@@ -1554,23 +1609,23 @@ export async function buildApp(opts: AppOptions) {
       if (f.meta.type === 'application/pdf') {
         const type = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
         if (type !== 'application/pdf' || !Buffer.isBuffer(req.body) || !req.body.subarray(0, 1024).includes('%PDF-')) return reply.code(400).send({ error: 'Send the PDF as the request body, as application/pdf.' });
-        return { file: await storedFiles.update(req.user!.id, f.meta.id, req.body) };
+        return { file: await storedFiles.update(req.viewer, f.meta.id, req.body) };
       }
       if (EDITABLE_IMAGE_TYPES.includes(f.meta.type)) {
         // A picture stays the type it is: its name and everything that shows it depend on that.
         const type = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
         if (type !== f.meta.type || !Buffer.isBuffer(req.body) || !isImageOfType(req.body, type)) return reply.code(400).send({ error: `Send the edited picture as the request body, as ${f.meta.type}.` });
-        return { file: await storedFiles.update(req.user!.id, f.meta.id, req.body) };
+        return { file: await storedFiles.update(req.viewer, f.meta.id, req.body) };
       }
       if (!isTextFileType(f.meta.type) || PREVIEW_FILE_TYPES.includes(f.meta.type)) return reply.code(400).send({ error: 'Only text files can be edited.' });
       if (!Buffer.isBuffer(req.body) || req.body.includes(0)) return reply.code(400).send({ error: 'Send the new text as the request body.' });
-      return { file: await storedFiles.update(req.user!.id, f.meta.id, req.body) };
+      return { file: await storedFiles.update(req.viewer, f.meta.id, req.body) };
     });
 
     // Put back the version before the last rewrite (the two swap, so reverting twice redoes it).
     r.post('/api/files/:id/revert', async (req, reply) => {
       const f = storedFile(req);
-      const file = f && (await storedFiles.revert(req.user!.id, f.meta.id));
+      const file = f && (await storedFiles.revert(req.viewer, f.meta.id));
       return file ? { file } : reply.code(404).send({ error: 'There is no earlier version of this file.' });
     });
 
@@ -1588,7 +1643,7 @@ export async function buildApp(opts: AppOptions) {
       try {
         checkImageEditRate(req.user!.id);
         const edited = await (opts.imageEditor ?? openaiImageEditor)({ apiKey, image: await readFile(f.file), filename: f.meta.filename, type: f.meta.type, prompt });
-        return { file: await storedFiles.create(req.user!.id, editedImageName(f.meta.filename), 'image/png', edited, f.meta.folder ?? '') };
+        return { file: await storedFiles.create(scopeOfRow(storedFiles.find(f.meta.id)!, req.viewer), editedImageName(f.meta.filename), 'image/png', edited, f.meta.folder ?? '') };
       } catch (e) {
         if (e instanceof ImageEditError) return reply.code(400).send({ error: e.message });
         throw e;
@@ -1600,27 +1655,27 @@ export async function buildApp(opts: AppOptions) {
       const name = (req.body as { name?: unknown } | null)?.name;
       if (typeof name !== 'string' || !name.trim()) return reply.code(400).send({ error: 'Give the file a name.' });
       const f = storedFile(req);
-      const file = f && storedFiles.rename(req.user!.id, f.meta.id, name);
+      const file = f && storedFiles.rename(req.viewer, f.meta.id, name);
       return file ? { file } : reply.code(404).send({ error: 'File not found' });
     });
 
     r.delete('/api/files/:id', async (req, reply) => {
       const f = storedFile(req);
-      if (!f || !(await storedFiles.delete(req.user!.id, f.meta.id))) return reply.code(404).send({ error: 'File not found' });
+      if (!f || !(await storedFiles.delete(req.viewer, f.meta.id))) return reply.code(404).send({ error: 'File not found' });
       return { ok: true };
     });
 
     // --- The library, one folder at a time (shared/folders.ts) ------------------------------------
     // What is in a folder: its folders, then documents of every kind and stored files.
     r.get('/api/library', async (req, reply) => {
-      const id = req.user!.id;
-      const problem = folders.problem?.(id, req.folder);
+      const scope = req.scope;
+      const problem = folders.problem?.(scope, req.folder);
       if (problem) return reply.code(403).send({ error: problem });
       return {
         folder: req.folder,
-        folders: folders.children(id, req.folder).map((path) => ({ name: folderName(path), path })),
-        docs: sheets.listIn(id, req.folder),
-        files: storedFiles.listIn(id, req.folder),
+        folders: folders.children(scope, req.folder).map((path) => ({ name: folderName(path), path })),
+        docs: sheets.listIn(scope, req.folder),
+        files: storedFiles.listIn(scope, req.folder),
       };
     });
 
@@ -1629,7 +1684,7 @@ export async function buildApp(opts: AppOptions) {
       const { id } = req.params as { id: string };
       let loaded;
       try {
-        loaded = isFileId(id) ? await loadFile(sheets, req.user!.id, id) : null;
+        loaded = isFileId(id) ? await loadFile(sheets, req.viewer, id) : null;
       } catch {
         // A file that cannot be read (a CSV too large to open, say) has no picture.
         return { preview: { kind: 'empty' } satisfies FilePreview };
@@ -1644,8 +1699,8 @@ export async function buildApp(opts: AppOptions) {
     r.get('/api/library/search', async (req, reply) => {
       const q = String((req.query as { q?: unknown }).q ?? '').trim().slice(0, 200);
       if (!q) return reply.code(400).send({ error: 'Say what to look for.' });
-      const id = req.user!.id;
-      const [paths, docs, files] = [await folders.search(id, q), await sheets.search(id, q), await storedFiles.search(id, q)];
+      const scope = req.scope;
+      const [paths, docs, files] = [await folders.search(scope, q), await sheets.search(scope, q), await storedFiles.search(scope, q)];
       return {
         folders: paths.map((path) => ({ name: folderName(path), path })),
         docs,
@@ -1685,7 +1740,7 @@ export async function buildApp(opts: AppOptions) {
         if (!file) return reply.code(404).send({ error: 'File not found' });
         recentOpens.record(user, file);
       } else {
-        if (!(shown === 'file' ? storedFiles.get(user, id as string) : sheets.get(user, id as string, shown))) return reply.code(404).send({ error: 'File not found' });
+        if (!(shown === 'file' ? storedFiles.get(req.viewer, id as string) : sheets.get(req.viewer, id as string, shown))) return reply.code(404).send({ error: 'File not found' });
         recentOpens.record(user, `${shown}:${id}`);
       }
       return { ok: true };
@@ -1703,14 +1758,16 @@ export async function buildApp(opts: AppOptions) {
       const files = [];
       for (const { ref, openedAt } of recentOpens.list(user)) {
         const [kind, id] = [ref.slice(0, ref.indexOf(':')), ref.slice(ref.indexOf(':') + 1)];
+        // One the user can no longer open (made private by someone else, or they left its organization) is not
+        // listed, but kept: it comes back if they can again.
         if (kind === 'file') {
-          const f = storedFiles.get(user, id);
-          if (f) files.push({ id, kind, name: f.meta.filename, folder: f.meta.folder ?? '', ...(f.meta.text ? { text: true } : {}), lastUsed: openedAt, size: f.meta.size, app: true });
-          else recentOpens.forget(user, ref);
+          const f = storedFiles.get(req.viewer, id);
+          if (f) files.push({ id, kind, name: f.meta.filename, folder: f.meta.folder ?? '', ...scopeFields(f.meta), ...(f.meta.text ? { text: true } : {}), lastUsed: openedAt, size: f.meta.size, app: true });
+          else if (!storedFiles.find(id)) recentOpens.forget(user, ref);
         } else {
-          const d = sheets.get(user, id, kind as DocKind);
-          if (d) files.push({ id, kind, name: d.title, folder: d.folder ?? '', ...(d.format ? { format: d.format } : {}), lastUsed: openedAt, app: true });
-          else recentOpens.forget(user, ref);
+          const d = sheets.get(req.viewer, id, kind as DocKind);
+          if (d) files.push({ id, kind, name: d.title, folder: d.folder ?? '', ...scopeFields(d), ...(d.format ? { format: d.format } : {}), lastUsed: openedAt, app: true });
+          else if (!sheets.find(id)) recentOpens.forget(user, ref);
         }
       }
       return { files, system: false };
@@ -1728,7 +1785,9 @@ export async function buildApp(opts: AppOptions) {
     // A request names a file by its kind and id, or a folder by `folder` (its path in the library, or in the open
     // folder); in the desktop app any file or folder by its absolute `path`, as the list names those outside the open
     // folder. Null when there is no such file or folder; more than one name when a path that is gone may have been either.
-    const favoriteRefs = (user: string, b: Record<string, unknown>): string[] | null => {
+    // On the web a folder of Organization files is named with its organization (`folder:@<id>/<path>`), as paths are per root.
+    const favoriteRefs = (req: FastifyRequest, b: Record<string, unknown>): string[] | null => {
+      const user = req.user!.id;
       if (folder) {
         if (typeof b.path === 'string' && path.isAbsolute(b.path)) {
           const p = path.resolve(b.path);
@@ -1746,7 +1805,7 @@ export async function buildApp(opts: AppOptions) {
         }
       } else if (typeof b.folder === 'string') {
         const p = cleanFolderPath(b.folder);
-        return p && folders.exists(user, p) ? [FOLDER_REF + p] : null;
+        return p && folders.exists(req.scope, p) ? [FOLDER_REF + folderRefPrefix(req.scope) + p] : null;
       }
       const kind = (['doc', 'deck', 'sheet', 'markdown', 'file'] as const).find((k) => k === b.kind);
       if (!kind || typeof b.id !== 'string') return null;
@@ -1754,12 +1813,12 @@ export async function buildApp(opts: AppOptions) {
         const file = kind === 'file' ? (storedFiles as LocalFileStore).get(user, b.id)?.file : (sheets as LocalSheetStore).fileOf(user, b.id);
         return file ? [file] : null;
       }
-      return (kind === 'file' ? storedFiles.get(user, b.id) : sheets.get(user, b.id, kind)) ? [`${kind}:${b.id}`] : null;
+      return (kind === 'file' ? storedFiles.get(req.viewer, b.id) : sheets.get(req.viewer, b.id, kind)) ? [`${kind}:${b.id}`] : null;
     };
 
     r.post('/api/favorites', async (req, reply) => {
       const body = (req.body ?? {}) as Record<string, unknown>;
-      const refs = favoriteRefs(req.user!.id, body);
+      const refs = favoriteRefs(req, body);
       if (!refs) return reply.code(404).send({ error: 'There is no such file or folder.' });
       if (body.on === false) for (const ref of refs) favorites.set(req.user!.id, ref, false);
       else favorites.set(req.user!.id, refs[0], true);
@@ -1768,7 +1827,7 @@ export async function buildApp(opts: AppOptions) {
 
     // Whether one file or folder (named as for POST) is a favorite: an editor's star.
     r.get('/api/favorites/one', async (req, reply) => {
-      const refs = favoriteRefs(req.user!.id, req.query as Record<string, unknown>);
+      const refs = favoriteRefs(req, req.query as Record<string, unknown>);
       if (!refs) return reply.code(404).send({ error: 'There is no such file or folder.' });
       return { on: refs.some((ref) => favorites.has(req.user!.id, ref)) };
     });
@@ -1806,24 +1865,36 @@ export async function buildApp(opts: AppOptions) {
           }
           continue;
         }
-        // On the web what was deleted is gone for good: it is forgotten.
+        // On the web what was deleted is gone for good: it is forgotten. What the user can no longer open (a folder of
+        // an organization they left, a file made private by someone else) is not listed, but kept.
         if (isFolder) {
-          if (folders.exists(user, at)) dirs.push({ name: folderName(at), path: at, where: parentFolder(at) });
+          const shared = /^@([^/]+)\/(.+)$/.exec(at);
+          const where: ScopeArg = shared ? { ownerId: user, workspaceId: shared[1], private: false } : user;
+          const p = shared ? shared[2] : at;
+          if (shared && !viewerOf(req.viewer).workspaces.has(shared[1])) continue;
+          if (folders.exists(where, p)) dirs.push({ name: folderName(p), path: p, where: parentFolder(p), ...(shared ? { workspaceId: shared[1], shared: true } : {}) });
           else favorites.set(user, ref, false);
           continue;
         }
         const [kind, id] = [ref.slice(0, ref.indexOf(':')), ref.slice(ref.indexOf(':') + 1)];
         if (kind === 'file') {
-          const f = storedFiles.get(user, id);
-          if (f) files.push({ id, kind, name: f.meta.filename, folder: f.meta.folder ?? '', ...(f.meta.text ? { text: true } : {}), lastUsed: addedAt, size: f.meta.size });
-          else favorites.set(user, ref, false);
+          const f = storedFiles.get(req.viewer, id);
+          if (f) files.push({ id, kind, name: f.meta.filename, folder: f.meta.folder ?? '', ...scopeFields(f.meta), ...(f.meta.text ? { text: true } : {}), lastUsed: addedAt, size: f.meta.size });
+          else if (!storedFiles.find(id)) favorites.set(user, ref, false);
         } else {
-          const d = sheets.get(user, id, kind as DocKind);
-          if (d) files.push({ id, kind, name: d.title, folder: d.folder ?? '', ...(d.format ? { format: d.format } : {}), lastUsed: addedAt });
-          else favorites.set(user, ref, false);
+          const d = sheets.get(req.viewer, id, kind as DocKind);
+          if (d) files.push({ id, kind, name: d.title, folder: d.folder ?? '', ...scopeFields(d), ...(d.format ? { format: d.format } : {}), lastUsed: addedAt });
+          else if (!sheets.find(id)) favorites.set(user, ref, false);
         }
       }
-      if (!folder) keys.push(...favorites.list(user).map((f) => f.ref));
+      // The keys as the list being shown names them: its folders by their path in its root.
+      if (!folder) {
+        const prefix = FOLDER_REF + folderRefPrefix(req.scope);
+        for (const { ref } of favorites.list(user)) {
+          if (!ref.startsWith(FOLDER_REF)) keys.push(ref);
+          else if (ref.startsWith(prefix) && (prefix !== FOLDER_REF || !ref.startsWith(`${FOLDER_REF}@`))) keys.push(FOLDER_REF + ref.slice(prefix.length));
+        }
+      }
       return { files, folders: dirs, keys };
     });
 
@@ -2120,13 +2191,13 @@ export async function buildApp(opts: AppOptions) {
       if (!name) return reply.code(400).send({ error: 'A folder name cannot be empty, start with a dot, or contain \\ / : * ? " < > |.' });
       const path = cleanFolderPath(joinFolder(req.folder, name));
       if (path === null) return reply.code(400).send({ error: 'Folders cannot be nested this deep.' });
-      if (!folders.create(req.user!.id, path)) return reply.code(409).send({ error: `There is already a folder called “${name}” here.` });
+      if (!folders.create(req.scope, path)) return reply.code(409).send({ error: `There is already a folder called “${name}” here.` });
       return { folder: { name, path } };
     });
 
     // Delete the request's folder, which must be empty.
     r.delete('/api/folders', async (req, reply) => {
-      const res = folders.remove(req.user!.id, req.folder);
+      const res = folders.remove(req.scope, req.folder);
       if (res === 'missing') return reply.code(404).send({ error: 'Folder not found' });
       if (res === 'not-empty') return reply.code(409).send({ error: 'This folder is not empty. Move or delete what is in it first.' });
       return { ok: true };
@@ -2134,8 +2205,7 @@ export async function buildApp(opts: AppOptions) {
 
     // The request's folder as a zip: its files in their readable formats, and the folders inside it.
     r.get('/api/folders/download', async (req, reply) => {
-      const id = req.user!.id;
-      const { body, files, problems } = await exportFolder({ sheets, files: storedFiles, folders }, id, req.folder, imageSource(images, id));
+      const { body, files, problems } = await exportFolder({ sheets, files: storedFiles, folders }, req.scope, req.folder, imageSource(images, req.viewer), req.viewer);
       req.log.info({ folder: req.folder, files, problems: problems.length }, 'downloaded folder');
       return attachment(reply, `${req.folder ? folderName(req.folder) : 'Files'}.zip`, 'application/zip').send(body);
     });
@@ -2144,9 +2214,55 @@ export async function buildApp(opts: AppOptions) {
     r.post('/api/library/move', async (req, reply) => {
       const { id, kind } = (req.body ?? {}) as { id?: unknown; kind?: unknown };
       if (!isFileId(id)) return reply.code(404).send({ error: 'File not found' });
-      const moved = kind === 'file' ? storedFiles.move(req.user!.id, id, req.folder) : sheets.move(req.user!.id, id, req.folder);
+      // Within its root: a folder of the root the request names (server/scope.ts); another root is a scope move.
+      const row = kind === 'file' ? storedFiles.find(id) : sheets.find(id);
+      if (row && canAccess(req.viewer, row) && !inScope(row, req.scope)) return reply.code(400).send({ error: 'That folder is in another part of the library. Use Share with organization or Make private.' });
+      const moved = kind === 'file' ? storedFiles.move(req.viewer, id, req.folder) : sheets.move(req.viewer, id, req.folder);
       if (!moved) return reply.code(404).send({ error: 'File not found' });
       return { ok: true };
+    });
+
+    // --- Organizations (FreeFlow suite; server/scope.ts): moving files and folders between the roots -------------
+    // The target is the request's scope: `workspace` (one of the user's organizations, checked by requireUser) and
+    // `shared` (Organization files) or not (the user's files there). A file keeps its folder when the target has one
+    // of that path, else goes to the top. Its pictures and its public link go with it.
+    r.post('/api/files/:id/scope', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const target = scopeOf(req.scope);
+      if (!host || !target.workspaceId) return reply.code(400).send({ error: 'Name the organization (workspace) the file goes to.' });
+      const doc = isFileId(id) ? sheets.find(id) : undefined;
+      const row = doc ?? (isFileId(id) ? storedFiles.find(id) : undefined);
+      if (!row || !canAccess(req.viewer, row)) return reply.code(404).send({ error: 'File not found' });
+      const folderThere = row.folder && folders.exists(target, row.folder) ? row.folder : '';
+      if (doc) {
+        const pictures = await sheets.picturesIn(req.viewer, id);
+        const meta = sheets.setScope(req.viewer, id, target, folderThere);
+        images.retag(req.viewer, pictures, target.workspaceId);
+        publicLinks?.moved('deck', id, target.workspaceId);
+        return { file: meta };
+      }
+      const file = storedFiles.setScope(req.viewer, id, target, folderThere);
+      publicLinks?.moved('file', id, target.workspaceId);
+      return { file };
+    });
+
+    // A folder with everything in it: from the root `from` names (`{ workspace, shared }`, as a request names one) to
+    // the request's, at the top there under its own name. `path` is the folder in `from`.
+    r.post('/api/folders/scope', async (req, reply) => {
+      const b = (req.body ?? {}) as { path?: unknown; from?: { workspace?: unknown; shared?: unknown } };
+      const target = scopeOf(req.scope);
+      if (!host || !target.workspaceId || !(folders instanceof FolderStore)) return reply.code(400).send({ error: 'Name the organization (workspace) the folder goes to.' });
+      const source = await scopeNamed(req.user!.id, b.from?.workspace, b.from?.shared);
+      if (source === null) return reply.code(403).send({ error: 'You are not a member of this organization.' });
+      const path = cleanFolderPath(b.path);
+      if (!path || !folders.exists(source, path)) return reply.code(404).send({ error: 'Folder not found' });
+      const moved = folders.moveTo(source, path, target);
+      for (const id of moved.sheets) {
+        images.retag(req.viewer, await sheets.picturesIn(req.viewer, id), target.workspaceId);
+        publicLinks?.moved('deck', id, target.workspaceId);
+      }
+      for (const id of moved.files) publicLinks?.moved('file', id, target.workspaceId);
+      return { folder: { name: folderName(moved.path), path: moved.path }, moved: moved.sheets.length + moved.files.length };
     });
 
     // --- Trash: files deleted in the last 30 days, kept in the off-box copy (server/backup.ts) ---------
@@ -2158,7 +2274,7 @@ export async function buildApp(opts: AppOptions) {
       if (!isFileId(id)) return reply.code(404).send({ error: 'File not found' });
       const entry = (await backup.listDeleted(req.user!.id)).find((f) => f.id === id);
       if (!entry) return reply.code(404).send({ error: 'File not found in the trash' });
-      if (sheets.get(req.user!.id, id)) return reply.code(409).send({ error: 'This file is not deleted' });
+      if (sheets.get(req.viewer, id)) return reply.code(409).send({ error: 'This file is not deleted' });
       const json = await backup.latestRevision(req.user!.id, entry.kind, id);
       if (!json) return reply.code(404).send({ error: 'No copy of this file is left' });
       const meta = await sheets.restore(req.user!.id, entry.kind, id, entry.title, json);
@@ -2285,7 +2401,7 @@ export async function buildApp(opts: AppOptions) {
       const scope = (req.query as { scope?: unknown }).scope ?? HOME_CHAT;
       if (!isChatScope(scope)) return reply.code(400).send({ error: 'That is not a chat.' });
       const userId = req.user!.id;
-      const title = scope === HOME_CHAT ? null : (sheets.get(userId, scope)?.title ?? (isFileId(scope) ? storedFiles.get(userId, scope)?.meta.filename : undefined) ?? null);
+      const title = scope === HOME_CHAT ? null : (sheets.get(req.viewer, scope)?.title ?? (isFileId(scope) ? storedFiles.get(req.viewer, scope)?.meta.filename : undefined) ?? null);
       return { items: agent.transcript(userId, scope), title };
     });
 
@@ -2329,8 +2445,13 @@ export async function buildApp(opts: AppOptions) {
       const emit = (e: AgentEvent) => {
         if (!res.writableEnded) res.write(`data: ${JSON.stringify(e)}\n\n`);
       };
+      // The root the server tools work in (server/scope.ts): a file's chat, that file's (an organization file's chat
+      // lists and makes Organization files); the home chat, the user's files in the organization the bar selected.
+      const chat = body.scope ?? chatScope(body.context);
+      const chatFile = chat === HOME_CHAT || !isFileId(chat) ? undefined : (sheets.find(chat) ?? storedFiles.find(chat));
+      const toolScope = chatFile?.workspace_id && canAccess(req.viewer, chatFile) ? scopeOfRow(chatFile, req.viewer) : req.scope;
       try {
-        await agent.runTurn(req.user!.id, body, emit, abort.signal);
+        await agent.runTurn(req.user!.id, body, emit, abort.signal, { scope: toolScope, viewer: req.viewer });
       } catch (e) {
         if (!abort.signal.aborted) {
           req.log.error({ err: e }, 'agent turn failed');
@@ -2416,7 +2537,7 @@ export async function buildApp(opts: AppOptions) {
       const kind = body.kind === 'research' ? 'research' : 'change';
       let sheetId: string | undefined;
       if (kind === 'research' && typeof body.sheetId === 'string' && body.sheetId) {
-        if (!sheets.get(req.user!.id, body.sheetId, 'sheet')) return reply.code(404).send({ error: 'Sheet not found' });
+        if (!sheets.get(req.viewer, body.sheetId, 'sheet')) return reply.code(404).send({ error: 'Sheet not found' });
         sheetId = body.sheetId;
       }
       const active = jobs.active();

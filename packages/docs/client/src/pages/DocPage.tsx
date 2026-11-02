@@ -13,7 +13,7 @@ import { safeLinkUrl } from '../../../shared/links.ts';
 import type { SheetMeta } from '../../../shared/types.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { useAgent, useRegisterDoc } from '../agent/AgentProvider.tsx';
-import { api, ApiError } from '../api.ts';
+import { api, ApiError, placeOf } from '../api.ts';
 import { RevisionSync, takenMessage } from '../state/revisionSync.ts';
 import { Account } from '../components/Account.tsx';
 import { useAuth } from '../auth.tsx';
@@ -51,6 +51,7 @@ import { useFavicon } from '../favicon.ts';
 import { appName } from '../brand.ts';
 import { downloadPdf, printingPdf, signalPrintReady } from '../print.ts';
 import { useOpenInTab } from '../components/OpenInTab.tsx';
+import { useOrganizationMenu, withScope } from '../components/OrganizationActions.tsx';
 
 function downloadFile(name: string, mime: string, content: string) {
   const url = URL.createObjectURL(new Blob([content], { type: mime }));
@@ -400,12 +401,15 @@ function DocWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta:
   const blockItem = (type: BlockType, label: string, shortcut?: string): MenuItem => ({ label, shortcut, checked: ctl.currentBlock() === type, action: () => ctl.setBlockType(type) });
 
   const openInTab = useOpenInTab();
+  // Share with organization / Make private / Move to organization… (the FreeFlow suite).
+  const orgMenu = useOrganizationMenu(meta, (m) => setMeta((cur) => withScope(cur, m)), notify);
   const menus: { key: string; label: string; items: () => MenuItem[] }[] = [
     {
       key: 'file',
       label: 'File',
       items: () => [
         ...openInTab.items,
+        ...orgMenu.items,
         {
           label: 'New document',
           action: async () => {
@@ -540,6 +544,7 @@ function DocWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta:
   return (
     <div className={`workbench doc-page${printing && ctl.pageSetup().mode === 'pages' ? ' doc-printing-pages' : ''}`}>
       {openInTab.dialog}
+      {orgMenu.dialog}
       <header className="wb-header">
         {!inSuite && (
           <Link to={lastListingHref()} className="wb-logo" title="Back to the file list" onClick={() => void ctl.saver.flush()}>
@@ -549,7 +554,7 @@ function DocWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta:
         <div className="wb-titles">
           <div className="wb-title-row">
             <FavoriteStar kind="doc" id={meta.id} onError={notify} />
-            <FolderCrumbs folder={meta.folder} onLeave={() => void ctl.saver.flush()} />
+            <FolderCrumbs folder={meta.folder} file={meta} onLeave={() => void ctl.saver.flush()} />
             <TitleInput title={meta.title} label="Document name" onRename={rename} onError={notify} />
             <span className={`save-status ${ctl.saver.status}`}>{saveLabel}</span>
             {office.chip}
@@ -659,7 +664,7 @@ function DocWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta:
       {dialog?.kind === 'pageSetup' && <PageSetupDialog ctl={ctl} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'docStyle' && <DocStyleDialog ctl={ctl} onClose={() => setDialog(null)} />}
       {signing && <SignatureDialog onUse={async (image, remember) => (setSigning(false), void signWith(await sigs.add(image, remember)))} onClose={() => setSigning(false)} />}
-      {insertingVideo && <VideoDialog folder={meta.folder} onInsert={(src, title) => ctl.insertVideo(src, { title: title.replace(/\.[^.]+$/, '') })} onClose={() => setInsertingVideo(false)} />}
+      {insertingVideo && <VideoDialog folder={placeOf(meta)} onInsert={(src, title) => ctl.insertVideo(src, { title: title.replace(/\.[^.]+$/, '') })} onClose={() => setInsertingVideo(false)} />}
       {editingImage && <ImageEditDialog backgroundRemovalLoader={loadBackgroundRemoval} src={editingImage.src} name="picture" onSave={(image, sizes) => saveEditedImage(editingImage, image, sizes)} onClose={() => setEditingImage(null)} />}
       {dialog?.kind === 'rename' && <PromptModal title="Rename document" label="Name" initial={meta.title} confirmText="Rename" onConfirm={rename} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'link' && (

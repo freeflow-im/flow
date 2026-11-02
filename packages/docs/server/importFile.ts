@@ -15,6 +15,7 @@ import { isPdf, MAX_PDF_BYTES } from './pdfMarkdown.ts';
 import { importPptx, isPptx } from './pptxImport.ts';
 import { validateWorkbook, type SheetStore } from './sheets.ts';
 import { importExcel, ImportError } from './xlsxImport.ts';
+import type { ScopeArg } from './scope.ts';
 
 /** A file that cannot be imported, with a reason to tell the user. */
 export class ImportFileError extends Error {}
@@ -67,7 +68,7 @@ export type Imported = { sheet: SheetMeta; file?: undefined; warnings: string[] 
  * Import a file for a user. The kind comes from the bytes where they tell (the name is not trusted for that),
  * and from the name for the text formats. Pictures inside a Word or PowerPoint file are stored for the account.
  */
-export async function importBytes(stores: ImportStores, userId: string, bytes: Buffer, name: string | undefined, title: string | undefined): Promise<Imported> {
+export async function importBytes(stores: ImportStores, userId: ScopeArg, bytes: Buffer, name: string | undefined, title: string | undefined): Promise<Imported> {
   const baseTitle = (title?.trim() || name?.replace(/\.[^.]+$/, '').trim() || '').slice(0, 200);
   const storeImage = (type: string, data: Buffer) => stores.images.create(userId, type, data);
   const stored = async (filename: string, type: string): Promise<Imported> => ({ file: await stores.files.create(userId, filename, type, bytes), warnings: [] });

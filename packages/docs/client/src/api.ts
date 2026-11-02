@@ -8,6 +8,7 @@ import type { MarkdownDoc } from '../../shared/markdown.ts';
 import type { FilePreview } from '../../shared/preview.ts';
 import { CELL_IMAGE_TOO_LARGE, type ConnectedAgent, type DeletedFile, type NewFilesSettings, type NewFilesUpdate, type SheetMeta, type StoredFile, type Workbook } from '../../shared/types.ts';
 import type { ZipEntry, ZipOfficeView } from '../../shared/zip.ts';
+import { activeOrganizationId } from './suite.ts';
 
 /** What can have a public link: a presentation, or a stored file (a video). */
 export type SharedKind = 'deck' | 'file';
@@ -65,7 +66,8 @@ async function uploadExcel<T>(url: string, file: File): Promise<T> {
 
 /** Store a cell image on the server; resolves to its URL. */
 async function uploadImage(file: Blob): Promise<string> {
-  const res = await fetch('/api/images', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': file.type }, body: file });
+  // A picture is the organization's it was uploaded in (its members see it in the file it is put in).
+  const res = await fetch(`/api/images${inFolder(undefined, true)}`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': file.type }, body: file });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const msg = res.status === 413 ? `${CELL_IMAGE_TOO_LARGE}.` : (data as { error?: string }).error;
@@ -75,8 +77,8 @@ async function uploadImage(file: Blob): Promise<string> {
 }
 
 /** Store a file (generated PDF, upload) on the server. */
-async function uploadFile(name: string, file: Blob, folder?: string): Promise<StoredFile> {
-  const res = await fetch(`/api/files${folder ? `?folder=${encodeURIComponent(folder)}` : ''}`, {
+async function uploadFile(name: string, file: Blob, folder?: Place): Promise<StoredFile> {
+  const res = await fetch(`/api/files${inFolder(folder, true)}`, {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': file.type || 'application/octet-stream', 'X-Filename': encodeURIComponent(name) },
@@ -107,8 +109,29 @@ export interface SavedSignature {
   createdAt: string;
 }
 
-/** `&folder=...` (or `?folder=...`) for an upload that goes into a folder; nothing at the top. */
-const inFolder = (folder: string | undefined, first = false) => (folder ? `${first ? '?' : '&'}folder=${encodeURIComponent(folder)}` : '');
+/**
+ * Where in the library (docs/specs/freeflow-suite.md §2.4): a folder of the user's files (its path, '' the top), or a
+ * folder of a root: with `shared`, the organization's shared files (Organization files). The organization is the one
+ * selected in the suite bar unless `workspace` names another (a file's own); outside the suite there is none.
+ */
+export type Place = string | { folder: string; shared?: boolean; workspace?: string };
+
+/** The fields of a request that name a place (folder, workspace, shared), for a query or a JSON body. */
+export function placeFields(place: Place | undefined): { folder?: string; workspace?: string; shared?: '1' } {
+  const folder = typeof place === 'string' ? place : (place?.folder ?? '');
+  const workspace = (typeof place === 'object' ? place.workspace : undefined) ?? activeOrganizationId() ?? undefined;
+  const shared = typeof place === 'object' && place.shared && workspace;
+  return { ...(folder ? { folder } : {}), ...(workspace ? { workspace } : {}), ...(shared ? { shared: '1' as const } : {}) };
+}
+
+/** Where a file made beside this one goes: its folder, in its root. */
+export const placeOf = (meta: { folder?: string; workspaceId?: string; shared?: true }): Place => (meta.workspaceId ? { folder: meta.folder ?? '', workspace: meta.workspaceId, shared: !!meta.shared } : (meta.folder ?? ''));
+
+/** `&folder=...&workspace=...` (or `?...`) for a request that names a place; nothing for the top of the user's files outside the suite. */
+const inFolder = (place: Place | undefined, first = false) => {
+  const q = new URLSearchParams(placeFields(place)).toString();
+  return q ? `${first ? '?' : '&'}${q}` : '';
+};
 
 /** A file of Recents. */
 /** The window event after a file or folder was made a favorite or not (api.setFavorite). */
@@ -124,6 +147,9 @@ export interface RecentFile {
   where?: string;
   /** On the web: the library folder it is in ('' at the top). */
   folder?: string;
+  /** In the FreeFlow suite: its organization, and whether it is one of the organization's shared files. */
+  workspaceId?: string;
+  shared?: true;
   format?: SheetMeta['format'];
   text?: boolean;
   lastUsed: string;
@@ -150,23 +176,34 @@ export const api = {
   webPreview: (kind: string, id: string) => request<{ formats: DownloadFormat[]; officeLosses: string[] }>('GET', `/api/web/preview?kind=${encodeURIComponent(kind)}&id=${encodeURIComponent(id)}`),
   downloadFromWeb: (file: { kind: string; id: string; title?: string }, folder: string, format: DownloadFormat) => request<CopiedFile>('POST', '/api/web/download', { ...file, folder, format }),
   /** What is in a folder ('' is the top): its folders, documents of every kind and stored files. */
-  library: (folder = '') => request<{ folder: string; folders: FolderInfo[]; docs: SheetMeta[]; files: StoredFile[] }>('GET', `/api/library${inFolder(folder, true)}`),
+  library: (folder: Place = '') => request<{ folder: string; folders: FolderInfo[]; docs: SheetMeta[]; files: StoredFile[] }>('GET', `/api/library${inFolder(folder, true)}`),
   /** A small picture of a document, for the thumbnail view. */
   preview: (id: string) => request<{ preview: FilePreview }>('GET', `/api/library/preview/${encodeURIComponent(id)}`),
   /** Folders, documents and stored files whose name contains the text, in every folder. */
-  searchLibrary: (q: string) => request<{ folders: FolderInfo[]; docs: SheetMeta[]; files: StoredFile[]; truncated: boolean }>('GET', `/api/library/search?q=${encodeURIComponent(q)}`),
+  searchLibrary: (q: string, root: Place = '') => request<{ folders: FolderInfo[]; docs: SheetMeta[]; files: StoredFile[]; truncated: boolean }>('GET', `/api/library/search?q=${encodeURIComponent(q)}${inFolder(typeof root === 'string' ? '' : { ...root, folder: '' })}`),
   /** The desktop app: files by name anywhere in the home folder outside the open one, by their paths. */
   searchHome: (q: string) => request<{ files: { path: string; name: string; where: string; kind: RecentFile['kind'] }[]; truncated: boolean }>('GET', `/api/local/search?q=${encodeURIComponent(q)}`),
-  createFolder: (parent: string, name: string) => request<{ folder: FolderInfo }>('POST', '/api/folders', { name, folder: parent || undefined }),
+  createFolder: (parent: Place, name: string) => request<{ folder: FolderInfo }>('POST', '/api/folders', { name, ...placeFields(parent) }),
   /** Delete an empty folder. */
-  deleteFolder: (path: string) => request<{ ok: true }>('DELETE', `/api/folders${inFolder(path, true)}`),
-  /** Move a document (any kind) or a stored file ('file') into a folder. */
-  moveToFolder: (kind: SheetMeta['kind'] | 'file', id: string, folder: string) => request<{ ok: true }>('POST', '/api/library/move', { kind, id, folder }),
+  deleteFolder: (path: Place) => request<{ ok: true }>('DELETE', `/api/folders${inFolder(path, true)}`),
+  /** Move a document (any kind) or a stored file ('file') into a folder (of the same root). */
+  moveToFolder: (kind: SheetMeta['kind'] | 'file', id: string, folder: Place) => request<{ ok: true }>('POST', '/api/library/move', { kind, id, ...placeFields(folder), folder: typeof folder === 'string' ? folder : folder.folder }),
+  /**
+   * Put a file in another root (FreeFlow suite): `shared` true shares it with the organization (Organization files),
+   * false makes it private (My files there); `workspace` is the organization (default: the one in the bar).
+   */
+  setFileScope: (id: string, target: { shared: boolean; workspace?: string }) =>
+    request<{ file: SheetMeta | StoredFile }>('POST', `/api/files/${encodeURIComponent(id)}/scope`, { workspace: target.workspace ?? activeOrganizationId() ?? undefined, shared: target.shared }),
+  /** Put a folder and everything in it in another root, at the top there; `from` is the root it is in now. */
+  setFolderScope: (path: string, from: Place, target: { shared: boolean; workspace?: string }) => {
+    const f = placeFields(typeof from === 'string' ? '' : { ...from, folder: '' });
+    return request<{ folder: FolderInfo; moved: number }>('POST', '/api/folders/scope', { path, from: { workspace: f.workspace, shared: f.shared }, workspace: target.workspace ?? activeOrganizationId() ?? undefined, shared: target.shared });
+  },
   uploadImage,
   uploadFile,
   /** Rename a stored file; it keeps its extension. */
   renameFile: (id: string, name: string) => request<{ file: StoredFile }>('PATCH', `/api/files/${encodeURIComponent(id)}`, { name }),
-  listFiles: () => request<{ files: StoredFile[] }>('GET', '/api/files'),
+  listFiles: (root: Place = '') => request<{ files: StoredFile[] }>('GET', `/api/files${inFolder(typeof root === 'string' ? '' : { ...root, folder: '' }, true)}`),
   /** Replace a stored text file's contents. */
   updateFile: async (id: string, text: string): Promise<StoredFile> => {
     const res = await fetch(`/api/files/${encodeURIComponent(id)}`, { method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/octet-stream' }, body: new Blob([text]) });
@@ -216,13 +253,13 @@ export const api = {
    * The favorites: files as Recents lists them, folders with where they are (in the desktop app by their absolute
    * paths), and `keys`, those in the library (the open folder) as the list names them: `doc:<id>`, `folder:<path>`.
    */
-  favorites: () => request<{ files: RecentFile[]; folders: { name: string; path: string; where: string }[]; keys: string[] }>('GET', '/api/favorites'),
+  favorites: (root: Place = '') => request<{ files: RecentFile[]; folders: { name: string; path: string; where: string; workspaceId?: string; shared?: true }[]; keys: string[] }>('GET', `/api/favorites${inFolder(typeof root === 'string' ? '' : { ...root, folder: '' }, true)}`),
   /** Whether a file is a favorite (an editor's star). */
   isFavorite: (kind: RecentFile['kind'], id: string) => request<{ on: boolean }>('GET', `/api/favorites/one?kind=${kind}&id=${encodeURIComponent(id)}`),
   /** Make a file (kind and id), a folder (its path in the list) or, in the desktop app, anything by its absolute path a favorite, or not. */
   /** Then FAVORITES_CHANGED is sent on the window, for the lists of them on the page (the File menu's). */
-  setFavorite: (what: { kind: RecentFile['kind']; id: string } | { folder: string } | { path: string }, on: boolean) =>
-    request<{ ok: true }>('POST', '/api/favorites', { ...what, on }).then((r) => (window.dispatchEvent(new Event(FAVORITES_CHANGED)), r)),
+  setFavorite: (what: { kind: RecentFile['kind']; id: string } | { folder: string; root?: Place } | { path: string }, on: boolean) =>
+    request<{ ok: true }>('POST', '/api/favorites', 'folder' in what ? { ...placeFields(what.root ?? ''), folder: what.folder, on } : { ...what, on }).then((r) => (window.dispatchEvent(new Event(FAVORITES_CHANGED)), r)),
   recents: () =>
     request<{
       files: RecentFile[];
@@ -279,9 +316,9 @@ export const api = {
     const q = new URLSearchParams(Object.entries(ref).filter((e): e is [string, string] => typeof e[1] === 'string' && e[1] !== ''));
     return request<LinkedTable>('GET', `/api/sheets/${encodeURIComponent(id)}/table${q.size ? `?${q}` : ''}`);
   },
-  createSheet: (title: string, folder?: string) => request<{ sheet: SheetMeta }>('POST', '/api/sheets', { title, folder: folder || undefined }),
+  createSheet: (title: string, folder?: Place) => request<{ sheet: SheetMeta }>('POST', '/api/sheets', { title, ...placeFields(folder) }),
   /** Create a CSV file from the text of an uploaded .csv file; it opens in the spreadsheet editor. */
-  importCsv: (title: string, csv: string, folder?: string) => request<{ sheet: SheetMeta }>('POST', '/api/sheets', { title, csv, folder: folder || undefined }),
+  importCsv: (title: string, csv: string, folder?: Place) => request<{ sheet: SheetMeta }>('POST', '/api/sheets', { title, csv, ...placeFields(folder) }),
   /** Turn a CSV file into a native spreadsheet. */
   convertSheet: (id: string) => request<{ sheet: SheetMeta }>('POST', `/api/sheets/${encodeURIComponent(id)}/convert`, {}),
   /** `notKept`: what an Excel file made elsewhere holds that saving it would remove (desktop app). */
@@ -290,7 +327,7 @@ export const api = {
   saveSheet: (id: string, workbook: Workbook, rev?: string, keepalive = false) =>
     request<{ sheet: SheetMeta }>('PUT', `/api/sheets/${encodeURIComponent(id)}`, { workbook, rev }, keepalive ? { keepalive: true } : undefined),
   /** Import an Excel file (.xlsx or .xls) as a new spreadsheet. */
-  importXlsx: (file: File, title: string, folder?: string) =>
+  importXlsx: (file: File, title: string, folder?: Place) =>
     uploadExcel<{ sheet: SheetMeta; warnings: string[] }>(`/api/sheets/import?title=${encodeURIComponent(title)}${inFolder(folder)}`, file),
   /** Convert an Excel file (.xlsx or .xls) to workbook tabs without creating a spreadsheet. */
   convertXlsx: (file: File) => uploadExcel<{ workbook: Workbook; warnings: string[] }>('/api/import/xlsx', file),
@@ -303,7 +340,7 @@ export const api = {
   listDecks: () => request<{ decks: SheetMeta[] }>('GET', '/api/decks'),
   /** The user's copy of the Getting started guide; the first call makes it. */
   gettingStarted: () => request<{ deck: SheetMeta }>('POST', '/api/getting-started'),
-  createDeck: (title: string, deck?: Deck, folder?: string) => request<{ deck: SheetMeta }>('POST', '/api/decks', { title, deck, folder: folder || undefined }),
+  createDeck: (title: string, deck?: Deck, folder?: Place) => request<{ deck: SheetMeta }>('POST', '/api/decks', { title, deck, ...placeFields(folder) }),
   /** `notKept`: what a PowerPoint file made elsewhere holds that saving it would remove (desktop app). */
   getDeck: (id: string) => request<{ meta: SheetMeta; deck: Deck; notKept?: string[] }>('GET', `/api/decks/${encodeURIComponent(id)}`),
   /** Keep a presentation stored as a PowerPoint file in the app's own format (desktop app). */
@@ -312,14 +349,14 @@ export const api = {
   saveDeck: (id: string, deck: Deck, rev?: string, keepalive = false) =>
     request<{ meta: SheetMeta }>('PUT', `/api/decks/${encodeURIComponent(id)}`, { deck, rev }, keepalive ? { keepalive: true } : undefined),
   /** Import a PowerPoint file (.pptx) as a new presentation. */
-  importPptx: (file: File, title: string, folder?: string) => uploadExcel<{ deck: SheetMeta; warnings: string[] }>(`/api/decks/import?title=${encodeURIComponent(title)}${inFolder(folder)}`, file),
+  importPptx: (file: File, title: string, folder?: Place) => uploadExcel<{ deck: SheetMeta; warnings: string[] }>(`/api/decks/import?title=${encodeURIComponent(title)}${inFolder(folder)}`, file),
   /** Convert a PowerPoint file (.pptx) to slides without creating a presentation. */
   convertPptx: (file: File) => uploadExcel<{ deck: Deck; warnings: string[] }>('/api/import/pptx', file),
   renameDeck: (id: string, title: string) => request<{ meta: SheetMeta }>('PATCH', `/api/decks/${encodeURIComponent(id)}`, { title }),
   deleteDeck: (id: string) => request<{ ok: true }>('DELETE', `/api/decks/${encodeURIComponent(id)}`),
 
   listDocs: () => request<{ docs: SheetMeta[] }>('GET', '/api/docs'),
-  createDoc: (title: string, doc?: Doc, folder?: string) => request<{ doc: SheetMeta }>('POST', '/api/docs', { title, doc, folder: folder || undefined }),
+  createDoc: (title: string, doc?: Doc, folder?: Place) => request<{ doc: SheetMeta }>('POST', '/api/docs', { title, doc, ...placeFields(folder) }),
   /** `notKept`: what a Word file made elsewhere holds that saving it would remove (desktop app). */
   getDoc: (id: string) => request<{ meta: SheetMeta; doc: Doc; notKept?: string[] }>('GET', `/api/docs/${encodeURIComponent(id)}`),
   /** Keep a document stored as a Word file in the app's own format (desktop app). */
@@ -328,8 +365,8 @@ export const api = {
   saveDoc: (id: string, doc: Doc, rev?: string, keepalive = false) =>
     request<{ meta: SheetMeta }>('PUT', `/api/docs/${encodeURIComponent(id)}`, { doc, rev }, keepalive ? { keepalive: true } : undefined),
   /** Import a Word file (.docx) as a new document. */
-  importPdf: (file: File, folder?: string) => uploadExcel<{ file: StoredFile }>(`/api/import/pdf?filename=${encodeURIComponent(file.name)}${inFolder(folder)}`, file),
-  importDocx: (file: File, title: string, folder?: string) => uploadExcel<{ doc: SheetMeta; warnings: string[] }>(`/api/docs/import?title=${encodeURIComponent(title)}${inFolder(folder)}`, file),
+  importPdf: (file: File, folder?: Place) => uploadExcel<{ file: StoredFile }>(`/api/import/pdf?filename=${encodeURIComponent(file.name)}${inFolder(folder)}`, file),
+  importDocx: (file: File, title: string, folder?: Place) => uploadExcel<{ doc: SheetMeta; warnings: string[] }>(`/api/docs/import?title=${encodeURIComponent(title)}${inFolder(folder)}`, file),
   /** Convert a Word file (.docx) to document blocks without creating a document. */
   convertDocx: (file: File) => uploadExcel<{ doc: Doc; warnings: string[] }>('/api/import/docx', file),
   renameDoc: (id: string, title: string) => request<{ meta: SheetMeta }>('PATCH', `/api/docs/${encodeURIComponent(id)}`, { title }),
@@ -337,7 +374,7 @@ export const api = {
 
   listMarkdown: () => request<{ docs: SheetMeta[] }>('GET', '/api/markdown'),
   /** Create a Markdown document, empty or from the text of an uploaded .md file. */
-  createMarkdown: (title: string, text = '', folder?: string) => request<{ doc: SheetMeta }>('POST', '/api/markdown', { title, text, folder: folder || undefined }),
+  createMarkdown: (title: string, text = '', folder?: Place) => request<{ doc: SheetMeta }>('POST', '/api/markdown', { title, text, ...placeFields(folder) }),
   getMarkdown: (id: string) => request<{ meta: SheetMeta; doc: MarkdownDoc }>('GET', `/api/markdown/${encodeURIComponent(id)}`),
   /** `rev` is the revision loaded; the server answers 409 when the document was saved elsewhere since. */
   saveMarkdown: (id: string, doc: MarkdownDoc, rev?: string, keepalive = false) =>
@@ -383,11 +420,13 @@ export const api = {
 
 /** Run or resume an agent turn, calling onEvent for each server-sent event until the stream ends. */
 async function streamAgentTurn(body: AgentTurnRequest, signal: AbortSignal, onEvent: (e: AgentEvent) => void): Promise<void> {
+  // The organization selected in the bar: the home chat's tools work in the user's files there.
+  const workspace = activeOrganizationId();
   const res = await fetch('/api/agent/turn', {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(workspace ? { ...body, workspace } : body),
     signal,
   });
   if (!res.ok || !res.body) {

@@ -92,6 +92,8 @@ Deleting a Flow user must also delete their private docs data: today SQLite casc
 
 ### 2.4 Files belong to an organization, or are private
 
+*Built in phase 4 (PR "Docs respect the current organization", 2026-11-02), with one ruling that differs from the text below (operator, 2026-11-02): **My files is per organization**, not one place per user. Rows carry `workspace_id` and `private`; Organization files are `workspace_id = X AND private = 0`; My files in X are the user's `private = 1` rows of X plus their rows from before organizations (`workspace_id IS NULL`), which show in My files of every organization. A private row is its owner's only, a shared row any member's. The menu actions are Share with organization, Make private and Move to organization… (another organization, same root). The move route is `POST /api/files/:id/scope` (and `/api/folders/scope`), not `/move`. Code: `packages/docs/server/scope.ts`; `packages/docs/docs/architecture.md` (Organizations).*
+
 Flow scopes everything by workspace; MCP Docs scopes everything by owner. The bar's organization switcher ("Harbor & Pine ▾") implies the Workspace tab shows that organization's files. The rule:
 
 - `sheets`, `stored_files`, `images`, `folders`, `public_links` gain `workspace_id TEXT NULL`. `NULL` means private to `owner_id`. A non-null value means every member of that Flow workspace can list, open and edit it; `owner_id` becomes "created by".

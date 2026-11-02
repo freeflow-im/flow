@@ -14,13 +14,23 @@ organization id it adds to every row is the tenant partition key of that move.
   every member of that organization (Flow's `workspace_members`) can list, open and edit it, and `owner_id`
   is "created by". Existing rows stay `NULL`: nothing private becomes visible at deploy.
 - The Docs home shows, for the organization selected in the bar, two roots: **Organization files** and
-  **My files**. My files are the user's, the same from every organization (one place; in the Cloudflare end
-  state they go to a per-user object — put that sentence in `cloudflare-migration.md` §6, resolving its first
-  open question). Favorites and Recents stay per user and may list files from either root.
+  **My files**. *Ruled 2026-11-02 (replacing "My files are the user's, the same from every organization"):*
+  **My files is specific to the organization**: someone at company A and company B has a private locker in each.
+  Every row carries `workspace_id` (the organization) and `private INTEGER NOT NULL DEFAULT 1`; Organization
+  files are `workspace_id = X AND private = 0`, My files in X are `workspace_id = X AND private = 1 AND owner_id
+  = me`, plus the user's rows from before organizations (`workspace_id IS NULL`), which show in My files of
+  whichever organization is selected. A private row is its owner's only, a shared row any member's of its
+  organization, a row without an organization its owner's only. The scope is `{ ownerId, workspaceId, private }`.
+  Without a host `workspace_id` stays NULL and everything behaves as today. In `cloudflare-migration.md` §6 the
+  first open question resolves as: private files live in the organization's object; rows without an
+  organization are assigned at migration to the organization the user chooses; no per-user object. Favorites
+  and Recents stay per user across organizations.
 - **New files are private**: new, imported, uploaded, pasted and assistant-made files land in My files
-  whatever organization is selected, unless made inside a folder of Organization files, which is the one act
-  that puts a file in the organization. "Move to organization…" (pick one of the user's organizations) and
-  "Make private" are row-menu and File-menu actions on files and folders; moving a folder moves its contents.
+  of the selected organization, unless made inside a folder of Organization files, which is the one act
+  that shares a file with the organization. "Share with organization" (private → Organization files, same
+  organization), "Make private" (back) and, for someone in several organizations, "Move to organization…"
+  (change `workspace_id`, keeping the private flag) are row-menu and File-menu actions on files and folders;
+  moving a folder moves its contents.
 - **The access check is one function**, `canAccess(user, row)`: owner, or member of `row.workspace_id`
   through the host (`host.isMember(userId, workspaceId)`, which `packages/server/src/workspace.ts` provides
   from Flow's `services/workspaces`, cached for a minute per pair). Every route that today loads a row by

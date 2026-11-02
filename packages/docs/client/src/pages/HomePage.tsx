@@ -4,7 +4,10 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { isHtmlName, type DeletedFile, type StoredFile } from '../../../shared/types.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { useAgent } from '../agent/AgentProvider.tsx';
-import { api, type FolderInfo, type RecentFile } from '../api.ts';
+import { api, placeFields as placeFieldsOf, type FolderInfo, type Place, type RecentFile } from '../api.ts';
+import { OrganizationPicker, scopeActionLabels } from '../components/OrganizationActions.tsx';
+import { useOrganization } from '../organization.ts';
+import { ORG_PARAM, RootSwitch } from '../components/RootSwitch.tsx';
 import { useAuth } from '../auth.tsx';
 import { Account } from '../components/Account.tsx';
 import { StarButton } from '../components/FavoriteStar.tsx';
@@ -36,7 +39,7 @@ const pathOf = (s: LibraryItem) => (s.kind === 'deck' ? `/d/${s.id}` : s.kind ==
 let lastFind: { text: string; result: Promise<{ folders: FolderInfo[]; items: LibraryItem[]; truncated: boolean }> } | null = null;
 
 /** A stored file as a row of the list. */
-const fileItem = (x: StoredFile): LibraryItem => ({ id: x.id, title: x.filename, kind: 'file', folder: x.folder, ...(x.text ? { text: true } : {}), createdAt: x.createdAt, updatedAt: x.createdAt });
+const fileItem = (x: StoredFile): LibraryItem => ({ id: x.id, title: x.filename, kind: 'file', folder: x.folder, ...(x.workspaceId ? { workspaceId: x.workspaceId } : {}), ...(x.shared ? { shared: true } : {}), ...(x.text ? { text: true } : {}), createdAt: x.createdAt, updatedAt: x.createdAt });
 
 /** The last part of a directory's path, to name the desktop app's mounted folder. */
 const dirName = (dir: string) => dir.split(/[\\/]/).filter(Boolean).pop() ?? dir;
@@ -66,6 +69,39 @@ function FileList() {
   // So is the search (&q=plan, and &find=1 for "Find files"): coming back from a file shows the same results.
   const [params, setParams] = useSearchParams();
   const folder = cleanFolderPath(params.get('folder') ?? '') ?? '';
+  // The FreeFlow suite: the organization selected in the bar, and which of its two roots is shown (?org=<id>:
+  // Organization files; none: My files). Outside the suite, or for a user in no organization, the one list as before.
+  const org = useOrganization();
+  const inOrg = !!suite && !!org.active;
+  const sharedRoot = inOrg && params.has(ORG_PARAM);
+  // Until the bar knows the organization, nothing is listed (it would be the wrong list for a moment).
+  const orgPending = !!suite && !org.ready && !org.active;
+  /** Where the list is: its folder, in the root shown. */
+  const place: Place = sharedRoot ? { folder, shared: true } : folder;
+  const placeAt = (path: string): Place => (sharedRoot ? { folder: path, shared: true } : path);
+  const rootKey = `${org.active?.id ?? ''}:${sharedRoot ? 'org' : 'me'}`;
+  // The bar selecting another organization while its Organization files are shown shows the new one's.
+  useEffect(() => {
+    if (!sharedRoot || !org.active || params.get(ORG_PARAM) === org.active.id) return;
+    setParams(
+      (cur) => {
+        const next = new URLSearchParams(cur);
+        next.set(ORG_PARAM, org.active!.id);
+        next.delete('folder');
+        return next;
+      },
+      { replace: true },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sharedRoot, org.active?.id]);
+  const selectRoot = (shared: boolean) =>
+    setParams((cur) => {
+      const next = new URLSearchParams();
+      if (shared && org.active) next.set(ORG_PARAM, org.active.id);
+      // The search and the other lists stay as they were; the folder is the new root's top.
+      for (const k of ['q', 'find', RECENTS_PARAM, FAVORITES_PARAM]) if (cur.has(k)) next.set(k, cur.get(k)!);
+      return next;
+    });
   const search = { text: params.get('q') ?? '', find: params.get('find') === '1' };
   const query = params.toString();
   useEffect(() => rememberListing(query ? `?${query}` : ''), [query]);
@@ -101,14 +137,14 @@ function FileList() {
     });
   const showRecents = (on: boolean) => showList(RECENTS_PARAM, on);
 
-  const [favorites, setFavorites] = useState<{ items: LibraryItem[]; folders: FolderInfo[]; where: Map<string, string>; keys: Set<string> } | null>(null);
+  const [favorites, setFavorites] = useState<{ items: LibraryItem[]; folders: FolderInfo[]; where: Map<string, string>; keys: Set<string>; sharedFolders: Set<string> } | null>(null);
   const [favoritesError, setFavoritesError] = useState<string | null>(null);
   const loadFavorites = () =>
-    api.favorites().then(
+    api.favorites(place).then(
       (r) => {
         const keyOf = (f: RecentFile) => f.id ?? f.path ?? '';
         const where = new Map<string, string>();
-        for (const f of r.files) where.set(keyOf(f), f.where ?? (f.folder || 'Your files'));
+        for (const f of r.files) where.set(keyOf(f), f.where ?? (suite ? `${f.shared ? 'Organization files' : 'My files'}${f.folder ? ` / ${f.folder}` : ''}` : f.folder || 'Your files'));
         for (const f of r.folders) where.set(`folder:${f.path}`, f.where || (local ? '' : 'Your files'));
         const items = r.files.map(
           (f): LibraryItem => ({
@@ -117,21 +153,24 @@ function FileList() {
             ...(f.format ? { format: f.format } : /\.csv$/i.test(f.name) && f.path ? { format: 'csv' as const } : {}),
             ...(f.text ? { text: true } : {}),
             ...(f.folder ? { folder: f.folder } : {}),
+            ...(f.workspaceId ? { workspaceId: f.workspaceId } : {}),
+            ...(f.shared ? { shared: true as const } : {}),
             title: f.name,
             updatedAt: f.lastUsed,
             createdAt: f.lastUsed,
           }),
         );
-        setFavorites({ items, folders: r.folders.map(({ name, path }) => ({ name, path })), where, keys: new Set(r.keys) });
+        if (inOrg) for (const f of r.folders) where.set(`folder:${f.path}`, `${f.shared ? 'Organization files' : 'My files'}${f.where ? ` / ${f.where}` : ''}`);
+        setFavorites({ items, folders: r.folders.map(({ name, path }) => ({ name, path })), where, keys: new Set(r.keys), sharedFolders: new Set(r.folders.filter((f) => f.shared).map((f) => f.path)) });
         setFavoritesError(null);
       },
       (e: Error) => setFavoritesError(e.message),
     );
   // Read once (the menus say whether each file is one), and again when the list is shown.
   useEffect(() => {
-    if (user) void loadFavorites();
+    if (user && !orgPending) void loadFavorites();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, favoritesShown]);
+  }, [user, favoritesShown, rootKey, orgPending]);
   const setFavorite = (what: Parameters<typeof api.setFavorite>[0], on: boolean) =>
     api.setFavorite(what, on).then(loadFavorites, (e: Error) => setError(e.message));
   const favoriteAction = (key: string, what: Parameters<typeof api.setFavorite>[0]) => {
@@ -144,7 +183,7 @@ function FileList() {
   // library is not a folder that can be). Not while another list is shown.
   const folderStar =
     user && !otherShown && (local || folder) ? (
-      <StarButton on={favorites ? favorites.keys.has(`folder:${folder}`) : null} onClick={() => void setFavorite({ folder }, !favorites?.keys.has(`folder:${folder}`))} />
+      <StarButton on={favorites ? favorites.keys.has(`folder:${folder}`) : null} onClick={() => void setFavorite({ folder, root: place }, !favorites?.keys.has(`folder:${folder}`))} />
     ) : null;
   const openFavorite = async (s: LibraryItem) => {
     if (!local) return navigate(pathOf(s));
@@ -156,7 +195,7 @@ function FileList() {
     }
   };
   const openFavoriteFolder = async (path: string) => {
-    if (!local) return openFolder(path);
+    if (!local) return openFolder(path, !!favorites?.sharedFolders.has(path));
     try {
       const res = await api.openLocalPath(path);
       if (res.folder !== undefined) openFolder(res.folder);
@@ -183,11 +222,15 @@ function FileList() {
       ...(f.format ? { format: f.format } : /\.csv$/i.test(f.name) && f.path ? { format: 'csv' as const } : {}),
       ...(f.text ? { text: true } : {}),
       ...(f.folder ? { folder: f.folder } : {}),
+      ...(f.workspaceId ? { workspaceId: f.workspaceId } : {}),
+      ...(f.shared ? { shared: true as const } : {}),
       title: f.name,
       updatedAt: f.lastUsed,
       createdAt: f.lastUsed,
     });
-    const whereOf = (f: RecentFile) => f.where ?? (f.folder ? f.folder : 'Your files');
+    // In the suite a file of Recents may be in either root, of any organization: it says which.
+    const rootOf = (f: RecentFile) => (f.shared ? 'Organization files' : 'My files');
+    const whereOf = (f: RecentFile) => f.where ?? (suite ? `${rootOf(f)}${f.folder ? ` / ${f.folder}` : ''}` : f.folder ? f.folder : 'Your files');
     api
       .recents()
       .then((mine) => {
@@ -249,6 +292,26 @@ function FileList() {
       { replace: true },
     );
   const [error, setError] = useState<string | null>(null);
+  // A file or folder being moved to another organization (FreeFlow suite): the picker is open for it.
+  const [orgMoving, setOrgMoving] = useState<{ kind: 'file' | 'folder'; id: string; title: string; workspaceId?: string; shared: boolean } | null>(null);
+  // Share with organization / Make private / Move to organization… (FreeFlow suite; OrganizationActions.tsx).
+  const fileScopeActions = (s: LibraryItem) => {
+    if (!inOrg || local) return [];
+    const labels = scopeActionLabels(s, org.organizations.length);
+    return [
+      { label: labels.share, onClick: () => api.setFileScope(s.id, { shared: !s.shared, workspace: s.workspaceId ?? org.active!.id }).then(() => load(), (e: Error) => setError(e.message)) },
+      ...(labels.move ? [{ label: labels.move, onClick: () => setOrgMoving({ kind: 'file', id: s.id, title: s.title, workspaceId: s.workspaceId, shared: !!s.shared }) }] : []),
+    ];
+  };
+  const folderScopeActions = (path: string) => {
+    if (!inOrg || local || otherShown) return [];
+    const labels = scopeActionLabels(sharedRoot ? { shared: true } : {}, org.organizations.length);
+    const name = path.slice(path.lastIndexOf('/') + 1);
+    return [
+      { label: labels.share, onClick: () => api.setFolderScope(path, place, { shared: !sharedRoot }).then(() => load(), (e: Error) => setError(e.message)) },
+      ...(labels.move ? [{ label: labels.move, onClick: () => setOrgMoving({ kind: 'folder', id: path, title: name, workspaceId: org.active!.id, shared: sharedRoot }) }] : []),
+    ];
+  };
   const [importing, setImporting] = useState<string | null>(null);
   const [branching, setBranching] = useState<LibraryItem | null>(null);
 
@@ -278,58 +341,58 @@ function FileList() {
     setImporting(file.name);
     try {
       if (isPowerPointFile(file)) {
-        const { deck, warnings } = await api.importPptx(file, titleFromFileName(file.name), folder);
+        const { deck, warnings } = await api.importPptx(file, titleFromFileName(file.name), place);
         navigate(`/d/${deck.id}`, { state: { importWarnings: warnings } });
         return;
       }
       if (isVideoFile(file)) {
         // Stored as the file it is and played in its own page.
-        const stored = await api.uploadFile(file.name, file, folder);
+        const stored = await api.uploadFile(file.name, file, place);
         navigate(`/f/${stored.id}`);
         return;
       }
       if (isImageFile(file)) {
         // Stored as the picture it is and shown in its own page.
-        const stored = await api.uploadFile(file.name, new Blob([file], { type: imageTypeOf(file.name)! }), folder);
+        const stored = await api.uploadFile(file.name, new Blob([file], { type: imageTypeOf(file.name)! }), place);
         navigate(`/f/${stored.id}`);
         return;
       }
       if (isHtmlFile(file)) {
         // Stored as the page it is and shown in a sandboxed frame. Sent as plain bytes: the server names its type.
-        const stored = await api.uploadFile(file.name, new Blob([file], { type: 'application/octet-stream' }), folder);
+        const stored = await api.uploadFile(file.name, new Blob([file], { type: 'application/octet-stream' }), place);
         navigate(`/f/${stored.id}`);
         return;
       }
       if (isPdfFile(file)) {
-        const { file: stored } = await api.importPdf(file, folder);
+        const { file: stored } = await api.importPdf(file, place);
         navigate(`/f/${stored.id}`);
         return;
       }
       if (isWordFile(file)) {
-        const { doc, warnings } = await api.importDocx(file, titleFromFileName(file.name), folder);
+        const { doc, warnings } = await api.importDocx(file, titleFromFileName(file.name), place);
         navigate(`/doc/${doc.id}`, { state: { importWarnings: warnings } });
         return;
       }
       if (isMarkdownFile(file)) {
         const text = await file.text();
-        const { doc } = await api.createMarkdown(markdownTitle(text, file.name), text, folder);
+        const { doc } = await api.createMarkdown(markdownTitle(text, file.name), text, place);
         navigate(`/md/${doc.id}`);
         return;
       }
       if (isCsvFile(file)) {
         // Stored as the CSV file it is, and opened in the spreadsheet editor.
-        const { sheet } = await api.importCsv(csvTitle(file.name), await file.text(), folder);
+        const { sheet } = await api.importCsv(csvTitle(file.name), await file.text(), place);
         navigate(`/s/${sheet.id}`);
         return;
       }
       if (!isKnownImport(file)) {
         // Any other file is kept as it is: it is listed here, to download, move or delete, but not opened.
-        await api.uploadFile(file.name, new Blob([file], { type: 'application/octet-stream' }), folder);
+        await api.uploadFile(file.name, new Blob([file], { type: 'application/octet-stream' }), place);
         setImporting(null);
         await load();
         return;
       }
-      const { sheet, warnings } = await api.importXlsx(file, titleFromFileName(file.name), folder);
+      const { sheet, warnings } = await api.importXlsx(file, titleFromFileName(file.name), place);
       navigate(`/s/${sheet.id}`, { state: { importWarnings: warnings } });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -339,21 +402,23 @@ function FileList() {
 
   // The folder's folders, and its spreadsheets, presentations, documents, Markdown documents and stored files in one list.
   const arrived = useRef(false);
-  const shown = useRef(folder);
-  shown.current = folder;
+  const listKey = `${rootKey}/${folder}`;
+  const shown = useRef(listKey);
+  shown.current = listKey;
   const load = (changed = true) => {
     if (changed) lastFind = null;
+    if (orgPending) return Promise.resolve();
     return api
-      .library(folder)
+      .library(place)
       .then((r) => {
-        if (shown.current !== folder) return; // Another folder was opened meanwhile.
+        if (shown.current !== listKey) return; // Another folder (or root) was opened meanwhile.
         setFolders(r.folders);
         setItems([...r.docs, ...r.files.map(fileItem)]);
         setListed(folder);
         setError(null);
       })
       .catch((e: Error) => {
-        if (shown.current !== folder) return;
+        if (shown.current !== listKey) return;
         // Nothing to list, and the reason: not a list that looks empty or one still loading.
         setFolders([]);
         setItems([]);
@@ -361,7 +426,12 @@ function FileList() {
         setError(e.message);
       });
   };
-  const openFolder = (path: string) => navigate(path ? `/?folder=${encodeURIComponent(path)}` : '/');
+  const openFolder = (path: string, shared = sharedRoot) => {
+    const q = new URLSearchParams();
+    if (shared && org.active) q.set(ORG_PARAM, org.active.id);
+    if (path) q.set('folder', path);
+    navigate(q.size ? `/?${q}` : '/');
+  };
 
   const openTrash = () => {
     setTrash('loading');
@@ -400,8 +470,8 @@ function FileList() {
     // Arriving at the list is not a change to it; the assistant finishing may be.
     if (!agentRunning) void load(arrived.current);
     arrived.current = true;
-  }, [agentRunning, folder]);
-  useEffect(() => setItems(null), [folder]);
+  }, [agentRunning, folder, rootKey, orgPending]);
+  useEffect(() => setItems(null), [folder, rootKey]);
   // In the desktop app, other programs add, remove and change files in the folder too: the list follows them.
   useEffect(() => {
     if (!local || otherShown || typeof EventSource === 'undefined') return;
@@ -442,7 +512,8 @@ function FileList() {
           </>
         )
       }
-      listTitle={local ? dirName(local.dir) : undefined}
+      listTitle={local ? dirName(local.dir) : inOrg ? (sharedRoot ? 'Organization files' : 'My files') : undefined}
+      roots={inOrg && !local ? <RootSwitch organization={org.active!.name} shared={sharedRoot} onSelect={selectRoot} /> : undefined}
       crumbsShown={local ? 2 : undefined}
       crumbTitle={local ? (p) => (p ? `${local.dir.replace(/[\\/]+$/, '')}/${p}` : local.dir) : undefined}
       listIcon={
@@ -532,7 +603,7 @@ function FileList() {
       onSearchChange={setSearch}
       onFind={otherShown ? undefined : async (q) => {
         // Coming back to results that were just shown does not search again; a change to the list does.
-        if (lastFind?.text !== q) lastFind = { text: q, result: api.searchLibrary(q).then((r) => ({ folders: r.folders, items: [...r.docs, ...r.files.map(fileItem)], truncated: r.truncated })) };
+        if (lastFind?.text !== `${rootKey}:${q}`) lastFind = { text: `${rootKey}:${q}`, result: api.searchLibrary(q, place).then((r) => ({ folders: r.folders, items: [...r.docs, ...r.files.map(fileItem)], truncated: r.truncated })) };
         const mine = lastFind;
         return mine.result.catch((e: unknown) => {
           if (lastFind === mine) lastFind = null;
@@ -540,23 +611,24 @@ function FileList() {
         });
       }}
       onCreateFolder={otherShown ? undefined : async (name) => {
-        await api.createFolder(folder, name);
+        await api.createFolder(place, name);
         await load();
       }}
       onDeleteFolder={async (path) => {
-        await api.deleteFolder(path);
+        await api.deleteFolder(placeAt(path));
         await load();
       }}
       cloud={!local}
-      onDownloadFolder={(path) => window.location.assign(`/api/folders/download?folder=${encodeURIComponent(path)}`)}
+      onDownloadFolder={(path) => window.location.assign(`/api/folders/download?${new URLSearchParams(placeFieldsOf(placeAt(path)))}`)}
       onMove={otherShown ? undefined : async (s, to) => {
-        await api.moveToFolder(s.kind, s.id, to);
+        await api.moveToFolder(s.kind, s.id, placeAt(to));
         await load();
       }}
       // The desktop app: a file dragged out of the list is the file itself to other apps (Finder, a video editor).
       onDragOut={local && !otherShown ? (s) => void api.dragOutLocal(s.kind, s.id).catch((e: Error) => setError(e.message)) : undefined}
       folderActions={(path) => [
-        ...(user ? [favoriteAction(`folder:${path}`, { folder: path })] : []),
+        ...(user ? [favoriteAction(`folder:${path}`, { folder: path, root: place })] : []),
+        ...folderScopeActions(path),
         ...(local ? [{ label: `Open in ${fileBrowserName()}`, onClick: () => void api.revealLocal({ folder: path }).catch((e: Error) => setError(e.message)) }] : []),
       ]}
       headerActions={
@@ -616,10 +688,11 @@ function FileList() {
       items={recents ? (recentFiles?.items ?? null) : favoritesShown ? (favorites?.items ?? null) : items}
       error={recents ? recentsError : error}
       onCreate={async (kind, title) => {
-        if (kind === 'sheet') navigate(`/s/${(await api.createSheet(title, folder)).sheet.id}`);
-        else if (kind === 'deck') navigate(`/d/${(await api.createDeck(title, undefined, folder)).deck.id}`);
-        else if (kind === 'markdown') navigate(`/md/${(await api.createMarkdown(title, '', folder)).doc.id}`);
-        else navigate(`/doc/${(await api.createDoc(title, undefined, folder)).doc.id}`);
+        // In a folder of Organization files a new file is the organization's; anywhere else it is the user's own.
+        if (kind === 'sheet') navigate(`/s/${(await api.createSheet(title, place)).sheet.id}`);
+        else if (kind === 'deck') navigate(`/d/${(await api.createDeck(title, undefined, place)).deck.id}`);
+        else if (kind === 'markdown') navigate(`/md/${(await api.createMarkdown(title, '', place)).doc.id}`);
+        else navigate(`/doc/${(await api.createDoc(title, undefined, place)).doc.id}`);
       }}
       // Any file can be added: the kinds the app knows open in it, the rest are kept to download, move or delete.
       importAccept=""
@@ -669,6 +742,7 @@ function FileList() {
           ? [{ label: 'Convert to Markdown', onClick: () => api.pdfToMarkdown(s.id).then(({ doc, warnings }) => navigate(`/md/${doc.id}`, { state: { importWarnings: warnings } }), (e: Error) => setError(e.message)) }]
           : []),
         { label: 'Move to…', onClick: () => setMoving(s) },
+        ...fileScopeActions(s),
         ...(local ? [{ label: `Open in ${fileBrowserName()}`, onClick: () => void api.revealLocal({ kind: s.kind, id: s.id }).catch((e: Error) => setError(e.message)) }] : []),
         // Copies between the folder and the web (desktop app): from a folder here, from the web to a folder.
         ...(local
@@ -724,15 +798,30 @@ function FileList() {
         <MoveModal
           title={moving.title}
           from={moving.folder ?? ''}
-          rootName={local ? dirName(local.dir) : 'Your files'}
+          rootName={local ? dirName(local.dir) : inOrg ? (moving.shared ? 'Organization files' : 'My files') : 'Your files'}
+          shared={!!moving.shared}
+          workspace={moving.workspaceId}
           onMove={async (to) => {
-            await api.moveToFolder(moving.kind, moving.id, to);
+            await api.moveToFolder(moving.kind, moving.id, moving.shared ? { folder: to, shared: true, workspace: moving.workspaceId } : moving.workspaceId ? { folder: to, workspace: moving.workspaceId } : to);
             await load();
           }}
           onClose={() => setMoving(null)}
         />
       )}
       {uploading && <UploadToWebDialog file={uploading} onClose={() => setUploading(null)} />}
+      {orgMoving && (
+        <OrganizationPicker
+          title={orgMoving.title}
+          current={orgMoving.workspaceId ?? org.active?.id ?? null}
+          shared={orgMoving.shared}
+          onPick={async (workspace) => {
+            if (orgMoving.kind === 'folder') await api.setFolderScope(orgMoving.id, place, { shared: orgMoving.shared, workspace });
+            else await api.setFileScope(orgMoving.id, { shared: orgMoving.shared, workspace });
+            await load();
+          }}
+          onClose={() => setOrgMoving(null)}
+        />
+      )}
       {webDownload && local && (
         <DownloadFromWebDialog
           file={webDownload}

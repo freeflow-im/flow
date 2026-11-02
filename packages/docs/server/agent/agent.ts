@@ -15,6 +15,7 @@ import type { FileStore } from '../files.ts';
 import type { ImageStore } from '../images.ts';
 import type { PdfMaker } from '../pdf.ts';
 import { runServerTool, TOOL_DEFS, TOOL_DEFS_WITHOUT_JOBS, ToolFailure, validateToolInput } from './tools.ts';
+import { scopeOf, type ScopeArg, type ViewerArg } from '../scope.ts';
 
 type Message = Anthropic.Beta.BetaMessage;
 type ToolUse = Anthropic.Beta.BetaToolUseBlock;
@@ -154,7 +155,11 @@ export class AgentService {
   }
 
   /** Run (or resume) a turn, emitting events until it finishes or pauses for client tools. */
-  async runTurn(userId: string, req: AgentTurnRequest, emit: (e: AgentEvent) => void, signal: AbortSignal): Promise<void> {
+  /**
+   * `access`: the root the server tools list and make files in, and who opens files by id (server/scope.ts); the
+   * user's own files when not given (standalone, the desktop app).
+   */
+  async runTurn(userId: string, req: AgentTurnRequest, emit: (e: AgentEvent) => void, signal: AbortSignal, access?: { scope: ScopeArg; viewer: ViewerArg }): Promise<void> {
     this.checkTurn(userId, req);
     this.busy.add(userId);
     try {
@@ -168,15 +173,15 @@ export class AgentService {
           // It is the user's own Claude Code: what it said is the useful part (not signed in, for one).
           throw new AgentError(500, `Claude Code stopped: ${e instanceof Error ? e.message : String(e)}`);
         }
-      } else await this.loop(userId, req, emit, signal);
+      } else await this.loop(userId, req, emit, signal, access ?? { scope: userId, viewer: userId });
     } finally {
       this.busy.delete(userId);
     }
   }
 
-  private async loop(userId: string, req: AgentTurnRequest, emit: (e: AgentEvent) => void, signal: AbortSignal): Promise<void> {
+  private async loop(userId: string, req: AgentTurnRequest, emit: (e: AgentEvent) => void, signal: AbortSignal, access: { scope: ScopeArg; viewer: ViewerArg }): Promise<void> {
     // The turn's chat: the one it was sent from, even after the assistant opened another file.
-    const conv = this.store.active(userId, 'builtin', req.scope ?? chatScope(req.context));
+    const conv = this.store.active(userId, 'builtin', req.scope ?? chatScope(req.context), scopeOf(access.scope).workspaceId);
 
     // 1. The new user message: results for any tool calls still pending, then the context, images and text.
     const content: (ToolResult | Anthropic.Beta.BetaTextBlockParam | Anthropic.Beta.BetaImageBlockParam)[] = [];
@@ -200,7 +205,7 @@ export class AgentService {
     if (!own && !this.settings.builtIn) throw new AgentError(400, 'Choose what the assistant runs on in Settings: add your Anthropic, OpenAI or OpenRouter API key.');
     // Search with the user's Brave key, else the server's, else the provider's own search.
     const search = { braveKey: this.settings.braveKey(userId), provider: this.providerSearch(own) };
-    const env = { userId, sheets: this.sheets, images: this.images, files: this.files, pdf: this.pdf, context: req.context, search };
+    const env = { userId, ...access, sheets: this.sheets, images: this.images, files: this.files, pdf: this.pdf, context: req.context, search };
     const callModel = own ? this.ownModel(own) : this.getModel();
     let parseRetries = 0;
 

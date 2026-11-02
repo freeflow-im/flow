@@ -141,6 +141,10 @@ export interface SheetMeta {
   title: string;
   /** The folder the file is in (shared/folders.ts); absent at the top of the library. */
   folder?: string;
+  /** In the FreeFlow suite: the organization the file is in (absent for one from before organizations; server/scope.ts). */
+  workspaceId?: string;
+  /** In the FreeFlow suite: one of the organization's shared files (Organization files), rather than one of the user's (My files). */
+  shared?: true;
   createdAt: string;
   updatedAt: string;
   /** Set when this sheet is a branch of another sheet. */
@@ -215,6 +219,9 @@ export interface StoredFile {
   filename: string;
   /** The folder the file is in; absent at the top of the library. */
   folder?: string;
+  /** In the FreeFlow suite: the organization the file is in, and whether it is shared there (see SheetMeta). */
+  workspaceId?: string;
+  shared?: true;
   /** MIME type. */
   type: string;
   size: number;

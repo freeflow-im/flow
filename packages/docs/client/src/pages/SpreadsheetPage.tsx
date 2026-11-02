@@ -46,6 +46,7 @@ import { csvGuard, lockedGuard, EDIT_NOT_ALLOWED, xlsxGuard } from '../state/sto
 import { useController } from '../state/useController.ts';
 import { appName } from '../brand.ts';
 import { useOpenInTab } from '../components/OpenInTab.tsx';
+import { useOrganizationMenu, withScope } from '../components/OrganizationActions.tsx';
 
 function downloadFile(name: string, mime: string, content: string) {
   const url = URL.createObjectURL(new Blob([content], { type: mime }));
@@ -368,8 +369,10 @@ function Workbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta: Sh
   }, [ctl]);
 
   const openInTab = useOpenInTab();
+  // Share with organization / Make private / Move to organization… (the FreeFlow suite).
+  const orgMenu = useOrganizationMenu(meta, (m) => setMeta((cur) => withScope(cur, m)), notify);
   const menus: { key: string; label: string; items: () => MenuItem[] }[] = [
-    { key: 'file', label: 'File', items: () => [...openInTab.items, ...fileItems(host)] },
+    { key: 'file', label: 'File', items: () => [...openInTab.items, ...orgMenu.items, ...fileItems(host)] },
     { key: 'edit', label: 'Edit', items: () => editItems(host) },
     { key: 'view', label: 'View', items: () => viewItems(host) },
     { key: 'insert', label: 'Insert', items: () => insertItems(host) },
@@ -391,6 +394,7 @@ function Workbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta: Sh
   return (
     <div className="workbench">
       {openInTab.dialog}
+      {orgMenu.dialog}
       <header className="wb-header">
         {!inSuite && (
           <Link to={lastListingHref()} className="wb-logo" title="Back to the file list" onClick={() => void ctl.saver.flush()}>
@@ -400,7 +404,7 @@ function Workbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta: Sh
         <div className="wb-titles">
           <div className="wb-title-row">
             <FavoriteStar kind="sheet" id={meta.id} onError={notify} />
-            <FolderCrumbs folder={meta.folder} onLeave={() => void ctl.saver.flush()} />
+            <FolderCrumbs folder={meta.folder} file={meta} onLeave={() => void ctl.saver.flush()} />
             <TitleInput title={meta.title} label="Spreadsheet name" onRename={renameSheet} onError={notify} />
             <span className={`save-status ${ctl.saver.status}`}>{saveLabel}</span>
             {meta.format === 'csv' && (
