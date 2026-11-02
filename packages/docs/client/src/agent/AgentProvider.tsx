@@ -6,7 +6,7 @@ import { rangeToString } from '../../../shared/cellref.ts';
 import { HOME_CHAT, isJobLive, JOB_ACTIVE_STATUSES, MAX_IMAGES_PER_MESSAGE, MAX_INLINE_SELECTED_TEXT, type AgentContext, type ImageRegion, type AgentImage, type AgentJob, type AgentTurnRequest, type ChatItem, type ClientToolCall, type ClientToolResult, type WindowToolCall } from '../../../shared/agent/protocol.ts';
 import type { SheetMeta, StoredFile } from '../../../shared/types.ts';
 import { shortenHtml } from '../htmlEdit.ts';
-import { api, ApiError } from '../api.ts';
+import { api, placeOf, ApiError } from '../api.ts';
 import { activeImageEditor } from '../image/activeEditor.ts';
 import { editedCopyName } from '../image/limits.ts';
 import { prepareImage } from './images.ts';
@@ -525,7 +525,11 @@ export function AgentProvider({ children }: { children: ReactNode }) {
       loadDeckTitle: async (id) => (await api.getDeck(id)).meta.title,
       makePdf: deckToPdf,
       uploadFile: api.uploadFile,
-      listFiles: async () => (await api.listFiles()).files,
+      // An organization file's chat lists the organization's files; any other, the user's own (FreeFlow suite).
+      listFiles: async () => {
+        const open = sheetRef.current?.meta ?? deckRef.current?.meta ?? docRef.current?.meta ?? markdownRef.current?.meta ?? fileRef.current;
+        return (await api.listFiles(open?.shared ? placeOf(open) : '')).files;
+      },
       openFile: openFileById,
       readFile: async (id) => {
         let file: StoredFile;
@@ -570,7 +574,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
         window.dispatchEvent(new CustomEvent(FILE_CHANGED_EVENT, { detail: id }));
         return file;
       },
-      saveImageCopy: (of, image) => api.uploadFile(editedCopyName(of.filename, image.type), image, of.folder),
+      saveImageCopy: (of, image) => api.uploadFile(editedCopyName(of.filename, image.type), image, placeOf(of)),
       // The picture's page with its editor, once the editor is ready to be edited in (activeEditor.ts).
       openImageEditor: async (id) => {
         if (!activeImageEditor(id)) await openFileById(id, true);

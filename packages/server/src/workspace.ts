@@ -12,6 +12,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { config } from './config.js';
 import * as auth from './services/auth.js';
+import { isWorkspaceMember, workspaceNamesOf } from './services/workspaces.js';
 import { clearSessionCookie, sessionTokenInCookieHeader, sessionTokenOf } from './lib/sessionCookie.js';
 
 export const WORKSPACE_BASE = '/workspace';
@@ -43,6 +44,26 @@ async function userOf(token: string | null): Promise<WorkspaceUser | null> {
   }
 }
 
+/** How long an answer about who is in which organization is kept (packages/docs/server/scope.ts' access check). */
+const MEMBERSHIP_TTL_MS = 60_000;
+
+/**
+ * A small cache of answers, each kept a minute: the Workspace app asks on every request, and a minute is how long a
+ * member who leaves (or is removed) may still open the organization's files.
+ */
+function cached<T>(load: (key: string) => Promise<T>): (key: string) => Promise<T> {
+  const answers = new Map<string, { value: T; until: number }>();
+  return async (key) => {
+    const now = Date.now();
+    const hit = answers.get(key);
+    if (hit && hit.until > now) return hit.value;
+    const value = await load(key);
+    if (answers.size > 10_000) answers.clear();
+    answers.set(key, { value, until: now + MEMBERSHIP_TTL_MS });
+    return value;
+  };
+}
+
 /** Mount the Workspace app when WORKSPACE_DATA_DIR is set; returns whether it was. */
 export async function mountWorkspace(app: FastifyInstance): Promise<boolean> {
   const dataDir = config.workspaceDataDir;
@@ -64,6 +85,12 @@ export async function mountWorkspace(app: FastifyInstance): Promise<boolean> {
       return reply.code(301).redirect(`${base}${WORKSPACE_BASE}${req.url === '/' ? '' : req.url}`);
     });
   }
+  // Organizations are this server's workspaces (docs/specs/freeflow-suite.md §2.4): membership per pair, and a user's list.
+  const member = cached((key) => {
+    const [userId, workspaceId] = key.split('\u0000') as [string, string];
+    return isWorkspaceMember(workspaceId, userId);
+  });
+  const organizationsOf = cached((userId) => workspaceNamesOf(userId));
   await mod.buildApp({
     dataDir,
     staticDir: fs.existsSync(path.join(staticDir, 'index.html')) ? staticDir : undefined,
@@ -84,6 +111,8 @@ export async function mountWorkspace(app: FastifyInstance): Promise<boolean> {
         clearSessionCookie(reply);
       },
       userForCookie: async (header: string | undefined) => (await userOf(sessionTokenInCookieHeader(header)))?.id ?? null,
+      isMember: (userId: string, workspaceId: string) => member(`${userId}\u0000${workspaceId}`),
+      organizationsOf,
     },
   });
   app.log.info({ dataDir, staticDir: fs.existsSync(staticDir) ? staticDir : null }, `Workspace app mounted at ${WORKSPACE_BASE}`);

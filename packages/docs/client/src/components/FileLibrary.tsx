@@ -24,6 +24,9 @@ export interface LibraryItem {
   folder?: string;
   /** A stored file that is plain text, which opens in the text editor. */
   text?: boolean;
+  /** In the FreeFlow suite: the file's organization, and whether it is shared there (Organization files). */
+  workspaceId?: string;
+  shared?: true;
   updatedAt: string;
   createdAt: string;
   branch?: SheetMeta['branch'];
@@ -191,6 +194,8 @@ export interface FileLibraryProps {
   headerActions?: ReactNode;
   /** The name of the top of the library, in the heading over the files table. Defaults to "Your files". */
   listTitle?: ReactNode;
+  /** Above the list: the FreeFlow suite's two roots, Organization files and My files (HomePage's RootSwitch). */
+  roots?: ReactNode;
   /** Shown left of the top of the library's name (the desktop app's folder menu). */
   listIcon?: ReactNode;
   /** A breadcrumb's tooltip, by the folder's path ('' for the top): the desktop app's full path on disk. */
@@ -880,6 +885,7 @@ export function FileLibrary(props: FileLibraryProps) {
       </section>
 
       <section className="home-inner">
+        {props.roots}
         <div className="list-heading">
           <div className={`list-tabs${others.length ? ' has-tabs' : ''}`}>
           {!results && props.listIcon}

@@ -45,16 +45,17 @@ export class AgentStore {
    * One run by another driver ends: its history is that driver's (the built-in loop replays its messages to
    * the model; an agent keeps its own session).
    */
-  active(userId: string, driver: Driver = 'builtin', scope: string = HOME_CHAT): Conversation {
+  active(userId: string, driver: Driver = 'builtin', scope: string = HOME_CHAT, workspaceId: string | null = null): Conversation {
     const row = this.db
       .prepare("SELECT id, pending, driver, session_id FROM agent_conversations WHERE user_id = ? AND COALESCE(scope, 'home') = ? AND ended_at IS NULL ORDER BY created_at DESC LIMIT 1")
       .get(userId, scope) as { id: string; pending: string | null; driver: string | null; session_id: string | null } | undefined;
     if (row && (row.driver ?? 'builtin') === driver) return { id: row.id, pending: row.pending ? (JSON.parse(row.pending) as Pending) : null, sessionId: row.session_id };
     if (row) this.reset(userId, scope);
     const id = randomUUID();
+    // workspace_id: the organization the chat was started in (server/scope.ts), the partition its rows belong to.
     this.db
-      .prepare('INSERT INTO agent_conversations (id, user_id, created_at, driver, scope) VALUES (?, ?, ?, ?, ?)')
-      .run(id, userId, new Date().toISOString(), driver === 'builtin' ? null : driver, scope === HOME_CHAT ? null : scope);
+      .prepare('INSERT INTO agent_conversations (id, user_id, workspace_id, created_at, driver, scope) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(id, userId, workspaceId, new Date().toISOString(), driver === 'builtin' ? null : driver, scope === HOME_CHAT ? null : scope);
     return { id, pending: null, sessionId: null };
   }
 

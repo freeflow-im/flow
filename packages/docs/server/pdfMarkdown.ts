@@ -8,6 +8,7 @@ import { readFile } from 'node:fs/promises';
 import type { LiteParse, LiteParseConfig, ParsedPage, PoolOptions } from '@llamaindex/liteparse';
 import type { FileStore } from './files.ts';
 import type { SheetStore } from './sheets.ts';
+import { scopeOfMeta, type ViewerArg } from './scope.ts';
 import { newMarkdownDoc } from '../shared/markdown.ts';
 import type { SheetMeta, StoredFile } from '../shared/types.ts';
 
@@ -129,13 +130,14 @@ export function pdfToMarkdown(bytes: Buffer): Promise<PdfMarkdown> {
  * A Markdown file of a stored PDF's text, made beside it: in the same folder, named after it. Null when the
  * user has no such file; PdfError when it is not a PDF or has no text that can be read.
  */
-export async function pdfToMarkdownFile(stores: { sheets: SheetStore; files: FileStore }, userId: string, fileId: string): Promise<{ sheet: SheetMeta; pdf: StoredFile; pageCount: number; ocrPages: number[]; warnings: string[] } | null> {
+export async function pdfToMarkdownFile(stores: { sheets: SheetStore; files: FileStore }, userId: ViewerArg, fileId: string): Promise<{ sheet: SheetMeta; pdf: StoredFile; pageCount: number; ocrPages: number[]; warnings: string[] } | null> {
   const f = stores.files.get(userId, fileId);
   if (!f) return null;
   if (f.meta.type !== 'application/pdf') throw new PdfError(`${f.meta.filename} is not a PDF.`);
   const made = await pdfToMarkdown(await readFile(f.file));
   if (!made.markdown.trim()) throw new PdfError(`No text could be read from ${f.meta.filename}.`);
   const title = f.meta.filename.replace(/\.pdf$/i, '') || 'Document';
-  const sheet = await stores.sheets.createMarkdown(userId, title, newMarkdownDoc(`${made.markdown}\n`), f.meta.folder ?? '');
+  // Beside it: in its folder and its root (server/scope.ts).
+  const sheet = await stores.sheets.createMarkdown(scopeOfMeta(f.meta, userId), title, newMarkdownDoc(`${made.markdown}\n`), f.meta.folder ?? '');
   return { sheet, pdf: f.meta, pageCount: made.pageCount, ocrPages: made.ocrPages, warnings: made.warnings };
 }

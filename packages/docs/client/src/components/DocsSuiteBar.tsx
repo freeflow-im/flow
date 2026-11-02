@@ -7,7 +7,7 @@ import { useNavigate } from 'react-router-dom';
 import { AWAY_STATUS, isAway, StatusDialog, statusPatch, SuiteBar, type StatusOption } from '@flow/suite-bar';
 import { useAgent } from '../agent/AgentProvider.tsx';
 import { useAuth } from '../auth.tsx';
-import { finishBeforeLeave, readActiveOrganization, suite, writeActiveOrganization, type SuiteOrganization, type SuiteUser } from '../suite.ts';
+import { finishBeforeLeave, readActiveOrganization, setOrganizationState, suite, writeActiveOrganization, type SuiteOrganization, type SuiteUser } from '../suite.ts';
 
 /** How often the organizations' unread counts are asked again. */
 const REFRESH_MS = 60_000;
@@ -30,6 +30,7 @@ export function DocsSuiteBar() {
     const [u, o] = await Promise.allSettled([suite.me(), suite.organizations()]);
     if (u.status === 'fulfilled') setMe(u.value);
     if (o.status === 'fulfilled') setOrgs(o.value);
+    setLoaded(true);
   }, []);
   useEffect(() => {
     void load();
@@ -43,7 +44,17 @@ export function DocsSuiteBar() {
     };
   }, [load]);
 
+  const [loaded, setLoaded] = useState(false);
   const active = orgs.find((o) => o.id === activeId) ?? orgs[0];
+  // The rest of the app lists and makes files in the organization shown here (suite.ts): Chat's last choice until the
+  // list arrives, then the one the bar shows.
+  useEffect(() => {
+    setOrganizationState(
+      loaded
+        ? { active: active ? { id: active.id, name: active.name } : null, organizations: orgs.map((o) => ({ id: o.id, name: o.name })), ready: true }
+        : { active: activeId ? { id: activeId, name: '' } : null, organizations: [], ready: false },
+    );
+  }, [loaded, active, activeId, orgs]);
   const status = me && (me.statusEmoji || me.statusText) ? { emoji: me.statusEmoji, text: me.statusText } : null;
   const away = isAway(status);
 

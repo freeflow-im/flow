@@ -154,6 +154,11 @@ export interface AgentTurnRequest {
    * so the turn stays in its chat when the assistant opens another file. Defaults to the context's.
    */
   scope?: string;
+  /**
+   * In the FreeFlow suite, the organization selected in the suite bar: the home chat's server tools list and make
+   * the user's files there (My files); a file's chat takes the file's own organization and root instead.
+   */
+  workspace?: string;
 }
 
 /** The home page's chat (every folder of the library shares it). */

@@ -201,3 +201,86 @@ describe('imported Workspace accounts', () => {
     expect(again.statusCode).toBe(200);
   });
 });
+
+// Phase 4 (docs/specs/freeflow-suite.md §2.4, ruled 2026-11-02): the Workspace app's files belong to an organization,
+// shared with its members (Organization files) or private to their owner there (My files).
+describe('organization files', () => {
+  let harbor = '';
+  let other = '';
+  let bobToken = '';
+  let daveToken = '';
+
+  beforeAll(async () => {
+    const workspaces = await import('../src/services/workspaces.js');
+    const { db: database } = await import('../src/db/index.js');
+    const bob = await auth.register('bob@example.test', { password: 'password123', displayName: 'Bob', autoVerify: true });
+    const dave = await auth.register('dave@example.test', { password: 'password123', displayName: 'Dave', autoVerify: true });
+    if (!('token' in bob) || !('token' in dave)) throw new Error('expected autoVerify sessions');
+    bobToken = bob.token;
+    daveToken = dave.token;
+    harbor = (await workspaces.createWorkspace(aliceId, 'Harbor & Pine', `harbor-${Date.now()}`)).id;
+    other = (await workspaces.createWorkspace(aliceId, 'Other Co', `other-${Date.now()}`)).id;
+    await database.transaction((tx) => workspaces.enrollInWorkspace(tx, harbor, bob.user.id));
+  });
+
+  const titles = (res: { json(): unknown }) => ((res.json() as { docs: { title: string }[] }).docs ?? []).map((d) => d.title).sort();
+
+  it('a member lists and opens an organization file; a non-member gets a 404, and a 403 for the list', async () => {
+    const made = await app.inject({ method: 'POST', url: '/api/docs', headers: cookie(aliceToken), payload: { title: 'Team plan', workspace: harbor, shared: true } });
+    expect(made.statusCode).toBe(200);
+    expect(made.json().doc).toMatchObject({ workspaceId: harbor, shared: true });
+    const id = made.json().doc.id as string;
+    const listed = await app.inject({ method: 'GET', url: `/api/library?workspace=${harbor}&shared=1`, headers: cookie(bobToken) });
+    expect(titles(listed)).toEqual(['Team plan']);
+    const opened = await app.inject({ method: 'GET', url: `/api/docs/${id}`, headers: cookie(bobToken) });
+    expect(opened.statusCode).toBe(200);
+    const saved = await app.inject({ method: 'PUT', url: `/api/docs/${id}`, headers: cookie(bobToken), payload: { doc: opened.json().doc } });
+    expect(saved.statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: `/api/docs/${id}`, headers: cookie(daveToken) })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'GET', url: `/api/library?workspace=${harbor}&shared=1`, headers: cookie(daveToken) })).statusCode).toBe(403);
+  });
+
+  it('a new file is private to its maker in the organization, unless made in Organization files', async () => {
+    const mine = await app.inject({ method: 'POST', url: '/api/docs', headers: cookie(aliceToken), payload: { title: 'Private notes', workspace: harbor } });
+    expect(mine.json().doc).toMatchObject({ workspaceId: harbor });
+    expect(mine.json().doc.shared).toBeUndefined();
+    const id = mine.json().doc.id as string;
+    expect(titles(await app.inject({ method: 'GET', url: `/api/library?workspace=${harbor}`, headers: cookie(aliceToken) }))).toContain('Private notes');
+    expect(titles(await app.inject({ method: 'GET', url: `/api/library?workspace=${harbor}&shared=1`, headers: cookie(bobToken) }))).not.toContain('Private notes');
+    expect((await app.inject({ method: 'GET', url: `/api/docs/${id}`, headers: cookie(bobToken) })).statusCode).toBe(404);
+    // My files are per organization: not in Alice's files of her other organization.
+    expect(titles(await app.inject({ method: 'GET', url: `/api/library?workspace=${other}`, headers: cookie(aliceToken) }))).not.toContain('Private notes');
+  });
+
+  it('creating in a folder of Organization files lands in the organization', async () => {
+    const folder = await app.inject({ method: 'POST', url: '/api/folders', headers: cookie(bobToken), payload: { name: 'Clients', workspace: harbor, shared: true } });
+    expect(folder.statusCode).toBe(200);
+    const made = await app.inject({ method: 'POST', url: '/api/sheets', headers: cookie(bobToken), payload: { title: 'Pipeline', folder: 'Clients', workspace: harbor, shared: true } });
+    expect(made.json().sheet).toMatchObject({ folder: 'Clients', workspaceId: harbor, shared: true });
+    const inFolder = await app.inject({ method: 'GET', url: `/api/library?workspace=${harbor}&shared=1&folder=Clients`, headers: cookie(aliceToken) });
+    expect(titles(inFolder)).toEqual(['Pipeline']);
+    // The folder is the organization's, not in Bob's own files.
+    expect((await app.inject({ method: 'GET', url: `/api/library?workspace=${harbor}&folder=Clients`, headers: cookie(bobToken) })).statusCode).toBe(404);
+  });
+
+  it('shares a private file with the organization and makes it private again', async () => {
+    const made = await app.inject({ method: 'POST', url: '/api/markdown', headers: cookie(aliceToken), payload: { title: 'Draft', text: '# Draft', workspace: harbor } });
+    const id = made.json().doc.id as string;
+    expect((await app.inject({ method: 'GET', url: `/api/markdown/${id}`, headers: cookie(bobToken) })).statusCode).toBe(404);
+    const shared = await app.inject({ method: 'POST', url: `/api/files/${id}/scope`, headers: cookie(aliceToken), payload: { workspace: harbor, shared: true } });
+    expect(shared.statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: `/api/markdown/${id}`, headers: cookie(bobToken) })).statusCode).toBe(200);
+    const back = await app.inject({ method: 'POST', url: `/api/files/${id}/scope`, headers: cookie(aliceToken), payload: { workspace: harbor, shared: false } });
+    expect(back.statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url: `/api/markdown/${id}`, headers: cookie(bobToken) })).statusCode).toBe(404);
+    // Not into an organization the user is not in.
+    expect((await app.inject({ method: 'POST', url: `/api/files/${id}/scope`, headers: cookie(bobToken), payload: { workspace: other, shared: true } })).statusCode).toBe(403);
+  });
+
+  it('a file from before organizations stays private, in My files of every organization', async () => {
+    const legacy = await app.inject({ method: 'POST', url: '/api/docs', headers: cookie(aliceToken), payload: { title: 'Old memo' } });
+    expect(legacy.json().doc.workspaceId).toBeUndefined();
+    for (const ws of [harbor, other]) expect(titles(await app.inject({ method: 'GET', url: `/api/library?workspace=${ws}`, headers: cookie(aliceToken) }))).toContain('Old memo');
+    expect((await app.inject({ method: 'GET', url: `/api/docs/${legacy.json().doc.id}`, headers: cookie(bobToken) })).statusCode).toBe(404);
+  });
+});

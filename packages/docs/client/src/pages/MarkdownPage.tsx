@@ -33,6 +33,7 @@ import { TextareaMatches } from '../markdown/TextareaMatches.tsx';
 import { appName } from '../brand.ts';
 import { downloadPdf, printingPdf, signalPrintReady } from '../print.ts';
 import { useOpenInTab } from '../components/OpenInTab.tsx';
+import { useOrganizationMenu, withScope } from '../components/OrganizationActions.tsx';
 
 // Diagrams in the preview: Mermaid is fetched when a document first has one.
 const loadMermaid = () => import('mermaid');
@@ -284,12 +285,15 @@ function MarkdownWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta;
   };
 
   const openInTab = useOpenInTab();
+  // Share with organization / Make private / Move to organization… (the FreeFlow suite).
+  const orgMenu = useOrganizationMenu(meta, (m) => setMeta((cur) => withScope(cur, m)), notify);
   const menus: { key: string; label: string; items: () => MenuItem[] }[] = [
     {
       key: 'file',
       label: 'File',
       items: () => [
         ...openInTab.items,
+        ...orgMenu.items,
         {
           label: 'New Markdown document',
           action: async () => {
@@ -351,6 +355,7 @@ function MarkdownWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta;
   return (
     <div className="workbench md-page">
       {openInTab.dialog}
+      {orgMenu.dialog}
       <header className="wb-header">
         {!inSuite && (
           <Link to={lastListingHref()} className="wb-logo" title="Back to the file list" onClick={() => void ctl.saver.flush()}>
@@ -360,7 +365,7 @@ function MarkdownWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta;
         <div className="wb-titles">
           <div className="wb-title-row">
             <FavoriteStar kind="markdown" id={meta.id} onError={notify} />
-            <FolderCrumbs folder={meta.folder} onLeave={() => void ctl.saver.flush()} />
+            <FolderCrumbs folder={meta.folder} file={meta} onLeave={() => void ctl.saver.flush()} />
             <TitleInput title={meta.title} label="Document name" onRename={rename} onError={notify} />
             <span className={`save-status ${ctl.saver.status}`}>{saveLabel}</span>
           </div>

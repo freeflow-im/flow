@@ -9,6 +9,7 @@ import { HTML_TYPE, type StoredFile } from '../shared/types.ts';
 import { titleBase } from '../shared/docNames.ts';
 import type { FileStore } from './files.ts';
 import type { SheetStore } from './sheets.ts';
+import { scopeOfMeta, viewerId, type ScopeArg, type ViewerArg } from './scope.ts';
 import { fetchPublicFile, WebFetchError } from './webFetch.ts';
 
 export type Paper = 'letter' | 'a4';
@@ -89,6 +90,8 @@ export interface MadePdf {
   name: string;
   /** The file's folder, where a PDF kept beside it goes. */
   folder: string;
+  /** The file's root (server/scope.ts), where a PDF kept beside it goes too. */
+  scope: ScopeArg;
   /** The file's revision (documents, presentations, Markdown), for following its changes. */
   revision?: string;
 }
@@ -113,16 +116,16 @@ export class PdfMaker {
   }
 
   /** The PDF of file `id`, or null when the user has no such file. Throws PrintError for one that cannot be printed. */
-  async make(userId: string, id: string, o: { paper: Paper; origin?: string }): Promise<MadePdf | null> {
+  async make(userId: ViewerArg, id: string, o: { paper: Paper; origin?: string }): Promise<MadePdf | null> {
     const meta = this.sheets.get(userId, id);
     if (meta) {
       if (meta.kind === 'sheet') throw new NotPrintableError('A spreadsheet cannot be made into a PDF yet.');
-      const ticket = this.tickets.create(userId);
+      const ticket = this.tickets.create(viewerId(userId));
       try {
         const url = `${o.origin ?? this.origin()}/${PAGES[meta.kind]}/${encodeURIComponent(id)}?print=pdf`;
         const deck = meta.kind === 'deck';
         const pdf = await this.renderer.page(url, { name: PRINT_COOKIE, value: ticket }, { paper: o.paper, margin: deck ? 0 : 0.5, timeoutMs: deck ? 60_000 : 30_000 });
-        return { pdf, name: pdfName(meta.title), folder: meta.folder ?? '', revision: meta.updatedAt };
+        return { pdf, name: pdfName(meta.title), folder: meta.folder ?? '', scope: scopeOfMeta(meta, userId), revision: meta.updatedAt };
       } finally {
         this.tickets.revoke(ticket);
       }
@@ -131,13 +134,14 @@ export class PdfMaker {
     if (!stored) return null;
     if (stored.meta.type !== HTML_TYPE) throw new NotPrintableError('Only documents, presentations, Markdown files and web pages can be made into PDFs.');
     const pdf = await this.renderer.html(await readFile(stored.file, 'utf8'), { paper: o.paper, margin: 0.5, timeoutMs: 30_000 });
-    return { pdf, name: pdfName(stored.meta.filename), folder: stored.meta.folder ?? '' };
+    return { pdf, name: pdfName(stored.meta.filename), folder: stored.meta.folder ?? '', scope: scopeOfMeta(stored.meta, userId) };
   }
 
   /** Make file `id`'s PDF and keep it as a stored file beside it (same folder, same name); null when there is no such file. */
-  async save(userId: string, id: string, paper: Paper): Promise<StoredFile | null> {
+  async save(userId: ViewerArg, id: string, paper: Paper): Promise<StoredFile | null> {
     const made = await this.make(userId, id, { paper });
-    return made && this.files.create(userId, made.name, 'application/pdf', made.pdf, made.folder);
+    // Beside it: in its root too (an organization file's PDF is the organization's).
+    return made && this.files.create(made.scope, made.name, 'application/pdf', made.pdf, made.folder);
   }
 }
 

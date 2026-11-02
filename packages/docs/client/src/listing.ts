@@ -70,10 +70,15 @@ export function returnTo(): ReturnTo | null {
 export const lastListingHref = (): string => `/${last()}`;
 
 /** The list showing a folder ('' or absent is the top), with the search it had if that is the folder last shown. */
-export function listingHref(folder?: string): string {
+/** In the FreeFlow suite, `org` names the organization whose Organization files the folder is in (HomePage's `?org=`). */
+export function listingHref(folder?: string, org?: string): string {
   const search = fromList() ? '' : last();
-  if ((new URLSearchParams(search).get('folder') ?? '') === (folder ?? '')) return `/${search}`;
-  return folder ? `/?folder=${encodeURIComponent(folder)}` : '/';
+  const was = new URLSearchParams(search);
+  if ((was.get('folder') ?? '') === (folder ?? '') && (was.get('org') ?? undefined) === org) return `/${search}`;
+  const q = new URLSearchParams();
+  if (org) q.set('org', org);
+  if (folder) q.set('folder', folder);
+  return q.size ? `/?${q}` : '/';
 }
 
 /** The element the pages scroll in (main.tsx, .app-main). */

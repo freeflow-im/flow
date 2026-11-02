@@ -12,8 +12,9 @@ import { xlsxProblem } from '../shared/xlsxFormat.ts';
 import { validateCharts } from '../shared/chart.ts';
 import type { Backup } from './backup.ts';
 import type { DB } from './db.ts';
+import { canAccess, scopeColumns, scopeMeta, scopeOfRow, scopeWhere, type Owned, type ScopeArg, type ViewerArg } from './scope.ts';
 
-export interface SheetRow {
+export interface SheetRow extends Owned {
   id: string;
   owner_id: string;
   kind: DocKind;
@@ -32,10 +33,11 @@ export interface SheetRow {
   live_parent_title: string | null;
 }
 
-// Every metadata read joins the parent so branch info (current title, detached) is always fresh.
+// Every metadata read joins the parent so branch info (current title, detached) is always fresh: the parent is
+// one of the same owner's, or a shared file of the same organization (a branch of an organization file).
 const SELECT_SHEETS = `
   SELECT s.*, p.title AS live_parent_title
-  FROM sheets s LEFT JOIN sheets p ON p.id = s.parent_id AND p.owner_id = s.owner_id`;
+  FROM sheets s LEFT JOIN sheets p ON p.id = s.parent_id AND (p.owner_id = s.owner_id OR (p.private = 0 AND p.workspace_id = s.workspace_id))`;
 
 const toMeta = (r: SheetRow): SheetMeta => ({
   id: r.id,
@@ -43,6 +45,7 @@ const toMeta = (r: SheetRow): SheetMeta => ({
   ...(r.format ? { format: r.format } : {}),
   title: r.title,
   ...(r.folder ? { folder: r.folder } : {}),
+  ...scopeMeta(r),
   createdAt: r.created_at,
   updatedAt: r.updated_at,
   ...(r.parent_id
@@ -176,23 +179,51 @@ export class SheetStore {
     await rm(this.filePath(r.file), { force: true });
   }
 
-  /** Documents of one kind (spreadsheets by default), most recently edited first. */
-  list(ownerId: string, kind: DocKind = 'sheet'): SheetMeta[] {
+  /** Documents of one kind (spreadsheets by default) in a scope (server/scope.ts), most recently edited first. */
+  list(scope: ScopeArg, kind: DocKind = 'sheet'): SheetMeta[] {
+    const where = scopeWhere(scope, 's');
     const rows = this.db
-      .prepare(`${SELECT_SHEETS} WHERE s.owner_id = ? AND s.kind = ? ORDER BY s.updated_at DESC`)
-      .all(ownerId, kind) as unknown as SheetRow[];
+      .prepare(`${SELECT_SHEETS} WHERE ${where.sql} AND s.kind = ? ORDER BY s.updated_at DESC`)
+      .all(...where.params, kind) as unknown as SheetRow[];
     return rows.map(toMeta);
   }
 
-  protected row(ownerId: string, id: string, kind?: DocKind): SheetRow | undefined {
-    const r = this.db.prepare(`${SELECT_SHEETS} WHERE s.id = ? AND s.owner_id = ?`).get(id, ownerId) as SheetRow | undefined;
-    return r && (!kind || r.kind === kind) ? r : undefined;
+  /** A document's row whoever may access it: for the caller to check (canAccess) or to learn its scope. */
+  find(id: string): SheetRow | undefined {
+    return this.db.prepare(`${SELECT_SHEETS} WHERE s.id = ?`).get(id) as SheetRow | undefined;
+  }
+
+  /** A document the viewer may access (server/scope.ts' canAccess), of the kind when one is given. */
+  protected row(who: ViewerArg, id: string, kind?: DocKind): SheetRow | undefined {
+    const r = this.find(id);
+    return r && canAccess(who, r) && (!kind || r.kind === kind) ? r : undefined;
   }
 
   /** Metadata of a document of any kind. */
-  get(ownerId: string, id: string, kind?: DocKind): SheetMeta | null {
-    const r = this.row(ownerId, id, kind);
+  get(who: ViewerArg, id: string, kind?: DocKind): SheetMeta | null {
+    const r = this.row(who, id, kind);
     return r ? toMeta(r) : null;
+  }
+
+  /** The ids of the stored pictures (`/api/images/<id>`) a document shows: what moves with it to another organization. */
+  async picturesIn(who: ViewerArg, id: string): Promise<string[]> {
+    const r = this.row(who, id);
+    if (!r) return [];
+    const text = JSON.stringify(await this.read<Stored>(r));
+    return [...new Set(Array.from(text.matchAll(/\/api\/images\/([0-9a-f-]{36})/g), (m) => m[1]))];
+  }
+
+  /**
+   * Put a document in another root (Share with organization, Make private, Move to organization…): its new
+   * organization, whether it is private (and to whom: the one who made it private keeps it) and the folder there.
+   */
+  setScope(who: ViewerArg, id: string, scope: ScopeArg, folder: string): SheetMeta | null {
+    const r = this.row(who, id);
+    if (!r) return null;
+    const c = scopeColumns(scope);
+    const owner = c.private ? c.owner_id : r.owner_id;
+    this.db.prepare('UPDATE sheets SET owner_id = ?, workspace_id = ?, private = ?, folder = ? WHERE id = ?').run(owner, c.workspace_id, c.private, folder, id);
+    return toMeta({ ...r, owner_id: owner, workspace_id: c.workspace_id, private: c.private, folder });
   }
 
   /** An id no document has yet. */
@@ -200,56 +231,61 @@ export class SheetStore {
     return newFileId((id) => !!this.db.prepare('SELECT 1 FROM sheets WHERE id = ?').get(id));
   }
 
-  private async insert(ownerId: string, kind: DocKind, wanted: string, doc: Stored, folder = '', format: SheetFormat | null = null): Promise<SheetMeta> {
+  private async insert(scope: ScopeArg, kind: DocKind, wanted: string, doc: Stored, folder = '', format: SheetFormat | null = null): Promise<SheetMeta> {
     const id = this.newId();
+    const c = scopeColumns(scope);
     const { file, title } = this.newFile(id, kind, format, wanted, folder);
     const json = await this.writeDoc(file, doc);
     const now = this.stamp(file);
     this.db
-      .prepare('INSERT INTO sheets (id, owner_id, kind, format, title, folder, file, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(id, ownerId, kind, format, title, folder, file, now, now);
-    this.backup?.putFile(ownerId, kind, id, now, json);
-    return { id, kind, ...(format ? { format } : {}), title, ...(folder ? { folder } : {}), createdAt: now, updatedAt: now };
+      .prepare('INSERT INTO sheets (id, owner_id, workspace_id, private, kind, format, title, folder, file, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, c.owner_id, c.workspace_id, c.private, kind, format, title, folder, file, now, now);
+    this.backup?.putFile(c.owner_id, kind, id, now, json);
+    return { id, kind, ...(format ? { format } : {}), title, ...(folder ? { folder } : {}), ...scopeMeta(c), createdAt: now, updatedAt: now };
   }
 
-  /** Documents of every kind in one folder, most recently edited first. */
-  listIn(ownerId: string, folder: string): SheetMeta[] {
-    const rows = this.db.prepare(`${SELECT_SHEETS} WHERE s.owner_id = ? AND s.folder = ? ORDER BY s.updated_at DESC`).all(ownerId, folder) as unknown as SheetRow[];
+  /** Documents of every kind in one folder of a scope, most recently edited first. */
+  listIn(scope: ScopeArg, folder: string): SheetMeta[] {
+    const where = scopeWhere(scope, 's');
+    const rows = this.db.prepare(`${SELECT_SHEETS} WHERE ${where.sql} AND s.folder = ? ORDER BY s.updated_at DESC`).all(...where.params, folder) as unknown as SheetRow[];
     return rows.map(toMeta);
   }
 
   /** Documents of every kind, in any folder, whose title contains the text (or whose path ends as it does: `nameSearch`); most recently edited first. */
-  async search(ownerId: string, text: string, limit = 200): Promise<SheetMeta[]> {
+  async search(scope: ScopeArg, text: string, limit = 200): Promise<SheetMeta[]> {
     const name = text.includes('/') ? `'/' || CASE s.folder WHEN '' THEN '' ELSE s.folder || '/' END || s.title` : 's.title';
+    const where = scopeWhere(scope, 's');
     const rows = this.db
-      .prepare(`${SELECT_SHEETS} WHERE s.owner_id = ? AND instr(lower(${name}), lower(?)) > 0 ORDER BY s.updated_at DESC LIMIT ?`)
-      .all(ownerId, text, limit) as unknown as SheetRow[];
+      .prepare(`${SELECT_SHEETS} WHERE ${where.sql} AND instr(lower(${name}), lower(?)) > 0 ORDER BY s.updated_at DESC LIMIT ?`)
+      .all(...where.params, text, limit) as unknown as SheetRow[];
     return rows.map(toMeta);
   }
 
   /** Put a document in another folder. */
-  move(ownerId: string, id: string, folder: string): SheetMeta | null {
-    const r = this.row(ownerId, id);
+  move(who: ViewerArg, id: string, folder: string): SheetMeta | null {
+    const r = this.row(who, id);
     if (!r) return null;
     this.db.prepare('UPDATE sheets SET folder = ? WHERE id = ?').run(folder, id);
     return toMeta({ ...r, folder });
   }
 
   /** Create a spreadsheet stored as CSV text. Throws CsvError if the text cannot be opened as one. */
-  async createCsv(ownerId: string, title: string, csv: string, folder = ''): Promise<SheetMeta> {
+  async createCsv(scope: ScopeArg, title: string, csv: string, folder = ''): Promise<SheetMeta> {
     csvToWorkbook(csv);
-    return this.insert(ownerId, 'sheet', title, newCsvDoc(csv), folder, 'csv');
+    return this.insert(scope, 'sheet', title, newCsvDoc(csv), folder, 'csv');
   }
 
-  async create(ownerId: string, title: string, workbook?: Workbook, folder = ''): Promise<SheetMeta> {
+  async create(scope: ScopeArg, title: string, workbook?: Workbook, folder = ''): Promise<SheetMeta> {
     const wb = workbook ?? newWorkbook(randomUUID());
-    return this.insert(ownerId, 'sheet', title, wb, folder, this.richFormat('sheet', wb));
+    return this.insert(scope, 'sheet', title, wb, folder, this.richFormat('sheet', wb));
   }
 
   /** Create a branch: a copy of the sheet that remembers its original and keeps a snapshot (base) of it. */
-  async branch(ownerId: string, sourceId: string, wanted: string): Promise<SheetMeta | null> {
-    const src = await this.load(ownerId, sourceId);
+  async branch(who: ViewerArg, sourceId: string, wanted: string): Promise<SheetMeta | null> {
+    const src = await this.load(who, sourceId);
     if (!src) return null;
+    // A branch starts in its original's root (server/scope.ts), next to it.
+    const c = scopeColumns(scopeOfRow(this.find(sourceId)!, who));
     const id = this.newId();
     // A branch starts next to its original.
     const folder = src.meta.folder ?? '';
@@ -260,22 +296,22 @@ export class SheetStore {
     const now = this.stamp(file);
     this.db
       .prepare(
-        `INSERT INTO sheets (id, owner_id, kind, format, title, folder, file, created_at, updated_at, parent_id, parent_title, branched_at)
-         VALUES (?, ?, 'sheet', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO sheets (id, owner_id, workspace_id, private, kind, format, title, folder, file, created_at, updated_at, parent_id, parent_title, branched_at)
+         VALUES (?, ?, ?, ?, 'sheet', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(id, ownerId, format, title, folder, file, now, now, sourceId, src.meta.title, now);
-    this.backup?.putFile(ownerId, 'sheet', id, now, json);
-    this.backup?.putBase(ownerId, id, json);
-    return this.get(ownerId, id);
+      .run(id, c.owner_id, c.workspace_id, c.private, format, title, folder, file, now, now, sourceId, src.meta.title, now);
+    this.backup?.putFile(c.owner_id, 'sheet', id, now, json);
+    this.backup?.putBase(c.owner_id, id, json);
+    return this.get(who, id);
   }
 
   /** Everything needed to compare a branch: its base snapshot and the original's current state. */
-  async compareData(ownerId: string, id: string): Promise<{ meta: SheetMeta; base: Workbook; original: Workbook | null; parent: SheetMeta | null } | 'not-branch' | null> {
-    const r = this.row(ownerId, id, 'sheet');
+  async compareData(who: ViewerArg, id: string): Promise<{ meta: SheetMeta; base: Workbook; original: Workbook | null; parent: SheetMeta | null } | 'not-branch' | null> {
+    const r = this.row(who, id, 'sheet');
     if (!r) return null;
     if (!r.parent_id) return 'not-branch';
     const base = JSON.parse(await readFile(this.basePath(id), 'utf8')) as Workbook;
-    const parent = await this.load(ownerId, r.parent_id);
+    const parent = await this.load(who, r.parent_id);
     return { meta: toMeta(r), base, original: parent?.workbook ?? null, parent: parent?.meta ?? null };
   }
 
@@ -285,8 +321,8 @@ export class SheetStore {
   }
 
   /** `notKept`: what the file holds that saving would lose, for an Excel file the app did not write (see notKept). */
-  async load(ownerId: string, id: string): Promise<{ meta: SheetMeta; workbook: Workbook; notKept?: string[] } | null> {
-    const r = this.row(ownerId, id, 'sheet');
+  async load(who: ViewerArg, id: string): Promise<{ meta: SheetMeta; workbook: Workbook; notKept?: string[] } | null> {
+    const r = this.row(who, id, 'sheet');
     if (!r) return null;
     const stored = await this.read<Workbook | CsvDoc>(r);
     const csv = isCsvDoc(stored);
@@ -313,8 +349,8 @@ export class SheetStore {
     return { ...toMeta(r), updatedAt: now };
   }
 
-  async save(ownerId: string, id: string, workbook: Workbook): Promise<SheetMeta | null> {
-    const r = this.row(ownerId, id, 'sheet');
+  async save(who: ViewerArg, id: string, workbook: Workbook): Promise<SheetMeta | null> {
+    const r = this.row(who, id, 'sheet');
     if (!r) return null;
     // An Excel file stays one while the workbook fits; otherwise it is kept in the app's own format rather
     // than lose what was added (the editor asks first; this is for changes made elsewhere).
@@ -334,18 +370,18 @@ export class SheetStore {
    * Turn a CSV file into a richer spreadsheet (see richFormat), or an Excel file into the app's own format,
    * which holds everything; same id and content. No-op for one in the app's own format already.
    */
-  async convertToNative(ownerId: string, id: string): Promise<SheetMeta | null> {
-    const res = await this.load(ownerId, id);
+  async convertToNative(who: ViewerArg, id: string): Promise<SheetMeta | null> {
+    const res = await this.load(who, id);
     if (!res) return null;
     if (!res.meta.format) return res.meta;
-    const r = this.row(ownerId, id, 'sheet')!;
+    const r = this.row(who, id, 'sheet')!;
     this.setFormat(r, res.meta.format === 'csv' ? this.richFormat('sheet', res.workbook) : null);
     return this.write(r, res.workbook);
   }
 
   /** Keep a presentation or document stored as an Office file in the app's own format instead, which holds everything. */
-  async convertToOwnFormat(ownerId: string, id: string, kind: 'deck' | 'doc'): Promise<SheetMeta | null> {
-    const r = this.row(ownerId, id, kind);
+  async convertToOwnFormat(who: ViewerArg, id: string, kind: 'deck' | 'doc'): Promise<SheetMeta | null> {
+    const r = this.row(who, id, kind);
     if (!r) return null;
     if (!r.format) return toMeta(r);
     const doc = await this.read<Deck | Doc>(r);
@@ -355,12 +391,12 @@ export class SheetStore {
 
   // --- Slide decks -------------------------------------------------------------
 
-  async createDeck(ownerId: string, title: string, deck: Deck, folder = ''): Promise<SheetMeta> {
-    return this.insert(ownerId, 'deck', title, deck, folder, this.richFormat('deck', deck));
+  async createDeck(scope: ScopeArg, title: string, deck: Deck, folder = ''): Promise<SheetMeta> {
+    return this.insert(scope, 'deck', title, deck, folder, this.richFormat('deck', deck));
   }
 
-  async loadDeck(ownerId: string, id: string): Promise<{ meta: SheetMeta; deck: Deck; notKept?: string[] } | null> {
-    const r = this.row(ownerId, id, 'deck');
+  async loadDeck(who: ViewerArg, id: string): Promise<{ meta: SheetMeta; deck: Deck; notKept?: string[] } | null> {
+    const r = this.row(who, id, 'deck');
     if (!r) return null;
     const deck = migrateDeck(await this.read<Deck>(r));
     const notKept = this.notKept(r);
@@ -374,51 +410,51 @@ export class SheetStore {
     return { meta: toMeta(r), deck: migrateDeck(await this.read<Deck>(r)), ownerId: r.owner_id };
   }
 
-  async saveDeck(ownerId: string, id: string, deck: Deck): Promise<SheetMeta | null> {
-    const r = this.row(ownerId, id, 'deck');
+  async saveDeck(who: ViewerArg, id: string, deck: Deck): Promise<SheetMeta | null> {
+    const r = this.row(who, id, 'deck');
     return r ? this.write(r, deck) : null;
   }
 
   // --- Text documents ------------------------------------------------------------
 
-  async createDoc(ownerId: string, title: string, doc: Doc, folder = ''): Promise<SheetMeta> {
-    return this.insert(ownerId, 'doc', title, doc, folder, this.richFormat('doc', doc));
+  async createDoc(scope: ScopeArg, title: string, doc: Doc, folder = ''): Promise<SheetMeta> {
+    return this.insert(scope, 'doc', title, doc, folder, this.richFormat('doc', doc));
   }
 
-  async loadDoc(ownerId: string, id: string): Promise<{ meta: SheetMeta; doc: Doc; notKept?: string[] } | null> {
-    const r = this.row(ownerId, id, 'doc');
+  async loadDoc(who: ViewerArg, id: string): Promise<{ meta: SheetMeta; doc: Doc; notKept?: string[] } | null> {
+    const r = this.row(who, id, 'doc');
     if (!r) return null;
     const doc = await this.read<Doc>(r);
     const notKept = this.notKept(r);
     return { meta: toMeta(r), doc, ...(notKept?.length ? { notKept } : {}) };
   }
 
-  async saveDoc(ownerId: string, id: string, doc: Doc): Promise<SheetMeta | null> {
-    const r = this.row(ownerId, id, 'doc');
+  async saveDoc(who: ViewerArg, id: string, doc: Doc): Promise<SheetMeta | null> {
+    const r = this.row(who, id, 'doc');
     return r ? this.write(r, doc) : null;
   }
 
   // --- Markdown documents --------------------------------------------------------
 
-  async createMarkdown(ownerId: string, title: string, doc: MarkdownDoc, folder = ''): Promise<SheetMeta> {
-    return this.insert(ownerId, 'markdown', title, doc, folder);
+  async createMarkdown(scope: ScopeArg, title: string, doc: MarkdownDoc, folder = ''): Promise<SheetMeta> {
+    return this.insert(scope, 'markdown', title, doc, folder);
   }
 
-  async loadMarkdown(ownerId: string, id: string): Promise<{ meta: SheetMeta; doc: MarkdownDoc } | null> {
-    const r = this.row(ownerId, id, 'markdown');
+  async loadMarkdown(who: ViewerArg, id: string): Promise<{ meta: SheetMeta; doc: MarkdownDoc } | null> {
+    const r = this.row(who, id, 'markdown');
     if (!r) return null;
     return { meta: toMeta(r), doc: await this.read<MarkdownDoc>(r) };
   }
 
-  async saveMarkdown(ownerId: string, id: string, doc: MarkdownDoc): Promise<SheetMeta | null> {
-    const r = this.row(ownerId, id, 'markdown');
+  async saveMarkdown(who: ViewerArg, id: string, doc: MarkdownDoc): Promise<SheetMeta | null> {
+    const r = this.row(who, id, 'markdown');
     return r ? this.write(r, doc) : null;
   }
 
   // --- Any kind ------------------------------------------------------------------
 
-  rename(ownerId: string, id: string, title: string, kind?: DocKind): SheetMeta | null {
-    const r = this.row(ownerId, id, kind);
+  rename(who: ViewerArg, id: string, title: string, kind?: DocKind): SheetMeta | null {
+    const r = this.row(who, id, kind);
     if (!r) return null;
     const now = new Date().toISOString();
     this.db.prepare('UPDATE sheets SET title = ?, updated_at = ? WHERE id = ?').run(title, now, id);
@@ -426,8 +462,8 @@ export class SheetStore {
     return { ...toMeta(r), title, updatedAt: now };
   }
 
-  async delete(ownerId: string, id: string, kind?: DocKind): Promise<boolean> {
-    const r = this.row(ownerId, id, kind);
+  async delete(who: ViewerArg, id: string, kind?: DocKind): Promise<boolean> {
+    const r = this.row(who, id, kind);
     if (!r) return false;
     this.db.prepare('DELETE FROM sheets WHERE id = ?').run(id);
     await this.writeChains.get(id);

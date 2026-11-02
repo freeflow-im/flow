@@ -87,6 +87,45 @@ export function writeActiveOrganization(id: string): void {
   }
 }
 
+// The organization the bar shows (the one Chat selected, else the user's first) and the user's organizations, for the
+// rest of the app: the home page lists that organization's files, new files go there, and Move to organization…
+// offers the others (docs/specs/freeflow-suite.md §2.4). The bar sets it (DocsSuiteBar.tsx); outside the suite it
+// stays null and nothing names an organization.
+export interface OrganizationState {
+  /** The organization selected in the bar; null outside the suite, or for a user in none. */
+  active: { id: string; name: string } | null;
+  organizations: { id: string; name: string }[];
+  /** Whether the bar has learnt the user's organizations yet (until then `active` is only Chat's last choice, unnamed). */
+  ready: boolean;
+}
+
+let organizationState: OrganizationState = { active: null, organizations: [], ready: false };
+const organizationListeners = new Set<() => void>();
+
+export const organizationSnapshot = (): OrganizationState => organizationState;
+
+export function subscribeOrganization(fn: () => void): () => void {
+  organizationListeners.add(fn);
+  return () => {
+    organizationListeners.delete(fn);
+  };
+}
+
+/** The bar's selection and list (DocsSuiteBar), or Chat's last choice before the list arrives (`ready` false). */
+export function setOrganizationState(next: OrganizationState): void {
+  const same =
+    next.ready === organizationState.ready &&
+    next.active?.id === organizationState.active?.id &&
+    next.active?.name === organizationState.active?.name &&
+    next.organizations.map((o) => `${o.id}\u0000${o.name}`).join('\u0001') === organizationState.organizations.map((o) => `${o.id}\u0000${o.name}`).join('\u0001');
+  if (same) return;
+  organizationState = next;
+  for (const fn of organizationListeners) fn();
+}
+
+/** The id of the organization selected in the bar, for the API (`workspace`); null outside the suite. */
+export const activeOrganizationId = (): string | null => organizationState.active?.id ?? null;
+
 // Work a page must finish before the session ends (an editor's unsaved changes): the bar's Log out waits for it, as
 // each page's own Sign out button did.
 const beforeLeave = new Set<() => Promise<unknown>>();
