@@ -39,9 +39,18 @@ EMAIL_FROM = "noreply@mail.freeflow.im"
 name = "DIRECTORY"
 class_name = "Directory"
 
+[[durable_objects.bindings]]
+name = "ORG"
+class_name = "Org"
+
 [[migrations]]
 tag = "v1"
-new_sqlite_classes = ["Directory"]
+new_sqlite_classes = ["Directory", "Org"]
+
+[[r2_buckets]]
+binding = "BLOBS"
+bucket_name = "flow-files"
+
 
 [observability]
 enabled = true

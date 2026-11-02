@@ -6,12 +6,15 @@ import { proxy, type ProxyEnv } from './proxy';
 import { authRoutes, type AuthEnv } from './routes/auth';
 
 export { Directory } from './directory/object';
+export { Org } from './org/object';
+import type { Org as OrgObject } from './org/object';
 
 export interface Env extends ProxyEnv, AuthEnv {
   ASSETS: Fetcher;
   ASSET_HOSTS: string;
   /** The hosts the ported API answers on: the rehearsal host until the cut-over, then the app's too. */
   PORTED_HOSTS: string;
+  ORG: DurableObjectNamespace<OrgObject>;
 }
 
 /** Paths that are never files: they skip the look in the assets. */
@@ -57,3 +60,4 @@ app.all('*', async (c) => {
 });
 
 export default app;
+
