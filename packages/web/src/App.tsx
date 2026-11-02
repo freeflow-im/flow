@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import ServerConnections from './components/ServerConnections';
 import { REGISTRY_KEY } from './lib/connections';
@@ -29,12 +29,13 @@ import {
   stepNav,
   type NavHistory,
 } from './lib/navHistory';
-import { ADMIN_VIEW_ID, AuthContext, ConnectionContext, SelectionContext } from './state';
+import { ACTIVITY_VIEW_ID, ADMIN_VIEW_ID, AuthContext, ConnectionContext, SelectionContext } from './state';
 import AuthScreen from './components/AuthScreen';
 import JoinScreen from './components/JoinScreen';
 import NativeSignIn from './components/NativeSignIn';
 import WorkspaceChooser from './components/WorkspaceChooser';
 import Main from './components/Main';
+import ChatSuiteBar, { type SuiteIntent } from './components/ChatSuiteBar';
 
 // Names, not keys. Every one of these is per connection+identity: the runtime
 // turns a name into the storage key its session owns, and the connection the
@@ -94,6 +95,19 @@ function consumeEmailLinkParams(runtime: ConnectionRuntime): {
     history.replaceState(null, '', location.pathname);
   }
   return { signupToken, resetToken, signinToken, nativeHandoff, register };
+}
+
+const SUITE_INTENTS: SuiteIntent[] = ['chooser', 'admin', 'invite', 'activity', 'profile'];
+
+/** Pull ?open= off the URL: what the Docs app's suite bar sends someone to Chat for (the organization menu's Add,
+ * Organization settings and Invite people, the notifications, My profile). */
+function consumeSuiteIntent(): SuiteIntent | null {
+  const params = new URLSearchParams(location.search);
+  const open = params.get('open');
+  if (open === null) return null;
+  params.delete('open');
+  history.replaceState(null, '', `${location.pathname}${params.size ? `?${params}` : ''}${location.hash}`);
+  return SUITE_INTENTS.includes(open as SuiteIntent) ? (open as SuiteIntent) : null;
 }
 
 export default function App() {
@@ -235,6 +249,9 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
   const [{ signupToken, resetToken, signinToken, nativeHandoff, register }] = useState(() =>
     consumeEmailLinkParams(runtime),
   );
+  const [intent] = useState(consumeSuiteIntent);
+  // The Activity count Main keeps live, for the suite bar's Chat tab (null while Main is not mounted).
+  const [activityUnread, setActivityUnread] = useState<number | null>(null);
   // Active workspace survives reloads/restarts (phase 3.5 fixes), per session.
   const [workspaceId, setWorkspaceId] = useState<string | null>(
     () => runtime.read(ACTIVE_WS),
@@ -450,6 +467,24 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
       ...(artifactId ? { artifactId } : {}),
     });
   }, [runtime, user, workspaceId, channelId, threadRootId, artifactId]);
+
+  // ?open= from the Docs app (consumeSuiteIntent): the views it names, once signed in. The bar opens its own
+  // dialogs (invite, profile).
+  const intentApplied = useRef(false);
+  useEffect(() => {
+    if (!user || !intent || intentApplied.current) return;
+    intentApplied.current = true;
+    if (intent === 'chooser') {
+      setWorkspaceId(null);
+      runtime.write(ACTIVE_WS, null);
+    } else if (intent === 'activity' && workspaceId) {
+      setChannelId(ACTIVITY_VIEW_ID);
+    } else if (intent === 'admin' && workspaceId) {
+      setAdminPanelOpen(true);
+      runtime.write(ADMIN_PANEL, '1');
+      setChannelId(ADMIN_VIEW_ID);
+    }
+  }, [user, intent, workspaceId, runtime]);
 
   useEffect(() => {
     if (!notice) return;
@@ -698,7 +733,13 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
             {notice}
           </div>
         )}
-        {workspaceId ? <Main /> : <WorkspaceChooser />}
+        {/* The suite bar above whichever is showing (packages/suite-bar); Main scrolls under it. */}
+        <div className="flex h-full flex-col">
+          <ChatSuiteBar activityUnread={workspaceId ? activityUnread : null} intent={intent} />
+          <div className="relative min-h-0 flex-1">
+            {workspaceId ? <Main onActivityUnread={setActivityUnread} /> : <WorkspaceChooser />}
+          </div>
+        </div>
       </SelectionContext.Provider>
     </AuthContext.Provider>
     </ConnectionContext.Provider>

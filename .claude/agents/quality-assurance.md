@@ -326,20 +326,21 @@ Items (tag bodies with the runid as always):
 11. Thread: alice replies --thread to bob's runid root → `thread-open-<id>`
     affordance appears; click → `thread-panel` shows both; reply from
     `thread-composer-input` → assert thread.reply in alice's events.
-12. Status (design 3a): click `status-footer` → `status-picker` → `status-option-1`
-    → `status-footer-label` updates and alice's events show user.updated with
+12. Status (the suite bar's account menu): click `suite-account-button` →
+    `suite-set-status` → `suite-status-dialog` → `suite-status-option-1` → the
+    account menu's status row shows it and alice's events show user.updated with
     bob's status; alice sets hers via qa-bot `profile --status-emoji/--status-text`
-    → her member row / `status-avatar-badge` updates live in the browser;
-    `status-clear` clears (verify in alice's events).
+    → her member row updates live in the browser; `suite-status-clear` clears
+    (verify in alice's events). `suite-presence` toggles Away (the status 💤 Away).
 
 Phase-3.5 additions (run as part of WEB smoke once those features land):
 13. Member-click DM: click `sidebar-member-Alice` → the Alice DM opens
     (channel-header shows Alice); hover the row → `member-menu-Alice` →
     `member-profile-Alice` → `user-card` opens.
-14. Avatar menu: `avatar-menu-trigger` → `avatar-menu` with `avatar-menu-profile`
-    (click, profile modal opens, close) and `avatar-menu-signout` (assert
-    EXISTS, never click). The old `menu-profile`/`menu-signout` workspace-menu
-    ids are GONE by design.
+14. Account menu (suite bar): `suite-account-button` → `suite-account-menu` with
+    `suite-profile` (click, profile modal opens, close), `suite-settings` and
+    `suite-logout` (assert EXISTS, never click). The sidebar's old avatar menu and
+    status footer are GONE by design (2026-11-02, the suite bar).
 15. Workspace color: browser user bob is NOT an admin → assert
     `menu-workspace-color` is ABSENT in his workspace menu (UI permission
     gate); then alice sets the color over REST (`workspace-color --workspace W
@@ -360,12 +361,15 @@ Phase-3.5 additions (run as part of WEB smoke once those features land):
     NOTE: the composer is now a contenteditable element (still testid
     `composer-input`) — type via keyboard events/insertText, not .value.
 
-Post-retheme layout notes ("Quiet, in violet"): a 64px workspace rail exists
-(`rail-workspace-<slug>`, `rail-add-workspace`); the notifications bell lives in
-the CHANNEL header now; `sidebar-new-dm` is the `+` in the **Direct messages**
-section header (it was a ✎ in the workspace header before #61);
-`connection-status` is a dot inside the status footer (state via its `title`
-attribute, no visible text).
+Layout notes: the FreeFlow suite bar (`suite-bar`, packages/suite-bar) is above
+Chat and the Workspace app. It replaced the 64px workspace rail: organizations are
+in its menu (`suite-org-button` → `suite-org-menu`, rows `suite-org-<connectionId>:<workspaceId>`,
+`suite-org-add` for the chooser and its invitations, `suite-org-settings`,
+`suite-org-invite`); its tabs are `suite-tab-docs` / `suite-tab-chat` (the badge is
+the organization's unread count); Help is in the account menu. The sidebar's own
+bell stays in its header; `sidebar-new-dm` is the `+` in the **Direct messages**
+section header. There is no `connection-status` dot any more (the reconnect bar
+under the channel header shows a dropped socket).
 
 Evidence: screenshots via the MCP screenshot tool + DOM assertions; same
 PASS/FAIL table format. Leave the browser tab open or close it — but never

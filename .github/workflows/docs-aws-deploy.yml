@@ -11,6 +11,7 @@ on:
     branches: [main]
     paths:
       - 'packages/docs/**'
+      - 'packages/suite-bar/**'
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
       - '.github/workflows/docs-aws-deploy.yml'

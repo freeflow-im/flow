@@ -59,7 +59,7 @@ export function HomePage() {
 }
 
 function FileList() {
-  const { local, user } = useAuth();
+  const { local, user, suite } = useAuth();
   const navigate = useNavigate();
   useFavicon('home');
   // The folder being shown is part of the address (/?folder=reports/2026), so Back and links work.
@@ -381,7 +381,21 @@ function FileList() {
   };
 
   // Reload after the assistant finishes a request, in case it created a spreadsheet.
-  const { running: agentRunning } = useAgent();
+  const { running: agentRunning, setOpen: setAgentOpen } = useAgent();
+  // ?assistant (the suite bar's Assistant on Chat sends people here): the panel opens once, and the address forgets it.
+  const askedForAssistant = params.has('assistant');
+  useEffect(() => {
+    if (!askedForAssistant) return;
+    setAgentOpen(true);
+    setParams(
+      (cur) => {
+        const next = new URLSearchParams(cur);
+        next.delete('assistant');
+        return next;
+      },
+      { replace: true },
+    );
+  }, [askedForAssistant, setAgentOpen, setParams]);
   useEffect(() => {
     // Arriving at the list is not a change to it; the assistant finishing may be.
     if (!agentRunning) void load(arrived.current);
@@ -418,12 +432,15 @@ function FileList() {
 
   return (
     <FileLibrary
+      // In the FreeFlow suite the suite bar is the brand, and has the Assistant and the account (DocsSuiteBar.tsx).
       brand={
-        <>
-          <HomeIcon />
-          <span>{appName()}</span>
-          <PlaceSwitch />
-        </>
+        suite ? undefined : (
+          <>
+            <HomeIcon />
+            <span>{appName()}</span>
+            <PlaceSwitch />
+          </>
+        )
       }
       listTitle={local ? dirName(local.dir) : undefined}
       crumbsShown={local ? 2 : undefined}
@@ -592,8 +609,8 @@ function FileList() {
               </div>
             )}
           </div>
-          <AgentButton />
-          <Account />
+          {!suite && <AgentButton />}
+          {!suite && <Account />}
         </>
       }
       items={recents ? (recentFiles?.items ?? null) : favoritesShown ? (favorites?.items ?? null) : items}

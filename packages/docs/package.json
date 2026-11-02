@@ -78,6 +78,7 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@flow/suite-bar": "workspace:*",
     "@types/node": "catalog:",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",

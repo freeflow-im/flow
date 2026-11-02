@@ -13,6 +13,7 @@ import { isDesktop } from '../lib/host';
 import { MAC_DOWNLOAD_URL } from './OpenInApp';
 import { openServerConnections } from './ServerConnections';
 import { useRuntime } from '../state';
+import { SuiteMark } from '@flow/suite-bar';
 
 type Mode =
   | 'signin'
@@ -524,7 +525,10 @@ export default function AuthScreen({
   return (
     <div className="flex h-full flex-col items-center justify-center gap-4 bg-base">
       <div className="w-80 rounded-xl border border-hairline bg-white p-6 shadow-sm">
-        <h1 className="mb-1 text-center text-2xl font-bold text-ink">Flow</h1>
+        <h1 className="mb-1 flex items-center justify-center gap-2.5 text-2xl font-bold tracking-[-0.2px] text-ink">
+          <SuiteMark size={32} title={null} />
+          FreeFlow
+        </h1>
         {invited && (
           <p data-testid="invite-banner" className="mb-3 rounded-lg bg-accent/10 px-3 py-2 text-center text-sm text-accent-deep">
             {joinWorkspace ? (

@@ -13,6 +13,8 @@ import { useAgent, useRegisterMarkdown } from '../agent/AgentProvider.tsx';
 import { api, ApiError } from '../api.ts';
 import { RevisionSync, takenMessage } from '../state/revisionSync.ts';
 import { Account } from '../components/Account.tsx';
+import { useAuth } from '../auth.tsx';
+import { onBeforeLeave } from '../suite.ts';
 import { MOD } from '../commands.ts';
 import { MarkdownIcon } from '../components/Logo.tsx';
 import { MenuList, type MenuItem } from '../components/Menu.tsx';
@@ -125,6 +127,10 @@ function loadShowPreview(): boolean {
 }
 
 function MarkdownWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl: MarkdownController; sync: RevisionSync<MarkdownDoc> }) {
+  // In the FreeFlow suite the suite bar replaces the logo, the Assistant button and Sign out (components/DocsSuiteBar.tsx).
+  const inSuite = !!useAuth().suite;
+  // The suite bar's Log out saves first, as Sign out here did.
+  useEffect(() => onBeforeLeave(() => ctl.saver.flush()), [ctl]);
   useMarkdownController(ctl);
   useFavicon('markdown');
   const navigate = useNavigate();
@@ -346,9 +352,11 @@ function MarkdownWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta;
     <div className="workbench md-page">
       {openInTab.dialog}
       <header className="wb-header">
-        <Link to={lastListingHref()} className="wb-logo" title="Back to the file list" onClick={() => void ctl.saver.flush()}>
-          <MarkdownIcon size={32} />
-        </Link>
+        {!inSuite && (
+          <Link to={lastListingHref()} className="wb-logo" title="Back to the file list" onClick={() => void ctl.saver.flush()}>
+            <MarkdownIcon size={32} />
+          </Link>
+        )}
         <div className="wb-titles">
           <div className="wb-title-row">
             <FavoriteStar kind="markdown" id={meta.id} onError={notify} />
@@ -379,8 +387,8 @@ function MarkdownWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta;
             Preview
           </button>
           <FileSearchButton />
-          <AgentButton />
-          <Account before={() => ctl.saver.flush()} />
+          {!inSuite && <AgentButton />}
+          {!inSuite && <Account before={() => ctl.saver.flush()} />}
         </div>
       </header>
       {importWarnings.length > 0 && (

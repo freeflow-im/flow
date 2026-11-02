@@ -5,6 +5,7 @@ import { MOD } from '../commands.ts';
 import { FileChip, fileOfResult } from '../components/FileChip.tsx';
 import { ResizeHandle, usePanelWidth } from '../components/ResizeHandle.tsx';
 import { ASSISTANT_PANEL } from '../panelSize.ts';
+import { useAuth } from '../auth.tsx';
 import { useAgent } from './AgentProvider.tsx';
 import { ChatMarkdown } from './ChatMarkdown.tsx';
 import { targetOf } from './clientTools.ts';
@@ -30,6 +31,8 @@ export function AgentButton() {
 
 export function AgentPanel() {
   const agent = useAgent();
+  // In the suite ⌘K is the suite bar's search, not this panel's.
+  const { suite } = useAuth();
   // The panel and the page beside it share the window; the panel takes at most half of it.
   const panel = usePanelWidth(ASSISTANT_PANEL, () => ({ available: window.innerWidth, viewport: window.innerWidth, maxFraction: 0.5 }));
   const [draft, setDraft] = useState('');
@@ -96,7 +99,7 @@ export function AgentPanel() {
         <button className="link agent-new" onClick={() => void agent.reset()} disabled={agent.running || !agent.items.length} title="Start a new conversation">
           New chat
         </button>
-        <button className="agent-close" onClick={() => agent.setOpen(false)} aria-label="Close assistant" title={`Close (${MOD}K)`}>
+        <button className="agent-close" onClick={() => agent.setOpen(false)} aria-label="Close assistant" title={suite ? 'Close' : `Close (${MOD}K)`}>
           ×
         </button>
       </div>

@@ -43,6 +43,7 @@ import { SheetChartDialog } from '../deck/SheetChartDialog.tsx';
 import { useLinkedTables } from '../deck/linkedTables.ts';
 import { PresentMode } from '../deck/PresentMode.tsx';
 import { useAuth } from '../auth.tsx';
+import { onBeforeLeave } from '../suite.ts';
 import { ShareDialog } from '../components/ShareDialog.tsx';
 import { checkPptxFile, pickPptxFile } from '../importFile.ts';
 import { SlideView } from '../deck/SlideView.tsx';
@@ -149,6 +150,10 @@ function guardFor(meta: SheetMeta, notKept: string[] | undefined) {
 type Dialog = { kind: 'rename' } | { kind: 'delete' } | { kind: 'share' } | null;
 
 function DeckWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta: SheetMeta; initialNotKept?: string[]; ctl: DeckController; sync: RevisionSync<Deck> }) {
+  // In the FreeFlow suite the suite bar replaces the logo, the Assistant button and Sign out (components/DocsSuiteBar.tsx).
+  const inSuite = !!useAuth().suite;
+  // The suite bar's Log out saves first, as Sign out here did.
+  useEffect(() => onBeforeLeave(() => ctl.saver.flush()), [ctl]);
   useDeckController(ctl);
   useDeckFonts(ctl.deck);
   useFavicon('deck');
@@ -607,9 +612,11 @@ function DeckWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta
       {!printing && (
         <>
           <header className="wb-header">
-            <Link to={lastListingHref()} className="wb-logo" title="Back to the file list" onClick={() => void ctl.saver.flush()}>
-              <DeckIcon size={32} />
-            </Link>
+            {!inSuite && (
+              <Link to={lastListingHref()} className="wb-logo" title="Back to the file list" onClick={() => void ctl.saver.flush()}>
+                <DeckIcon size={32} />
+              </Link>
+            )}
             <div className="wb-titles">
               <div className="wb-title-row">
                 <FavoriteStar kind="deck" id={meta.id} onError={notify} />
@@ -638,8 +645,8 @@ function DeckWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta
             </div>
             <div className="wb-user">
               <FileSearchButton />
-              <AgentButton />
-              <Account before={() => ctl.saver.flush()} />
+              {!inSuite && <AgentButton />}
+              {!inSuite && <Account before={() => ctl.saver.flush()} />}
             </div>
           </header>
           <DeckToolbar ctl={ctl} onPresent={() => ctl.setPresenting(true)} onInsertImage={() => void insertImage()} onInsertVideo={() => setInsertingVideo(true)} onEditImage={setEditingImage} onInsertSheetTable={() => setInsertingSheetTable(true)} linked={linked} onOpenSheet={(id) => navigate(`/s/${encodeURIComponent(id)}`)} />

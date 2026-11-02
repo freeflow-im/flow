@@ -6,12 +6,14 @@ import type { ConnectionInfo, ConnectorInfo } from '../../../shared/connectors.t
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { api } from '../api.ts';
 import { Account } from '../components/Account.tsx';
+import { useAuth } from '../auth.tsx';
 import { ConfirmModal, Modal } from '../components/Modal.tsx';
 import { appName } from '../brand.ts';
 
 const STATUS: Record<ConnectionInfo['status'], string> = { connected: 'Connected', error: 'Error', needs_reauth: 'Needs reconnecting' };
 
 export function ConnectorsPage() {
+  const { suite } = useAuth();
   const [params, setParams] = useSearchParams();
   const [connectors, setConnectors] = useState<ConnectorInfo[]>([]);
   const [connections, setConnections] = useState<ConnectionInfo[] | null>(null);
@@ -63,10 +65,13 @@ export function ConnectorsPage() {
           </Link>
           <span>Connectors</span>
         </div>
-        <div className="home-user">
-          <AgentButton />
-          <Account />
-        </div>
+        {/* In the FreeFlow suite the suite bar has the Assistant and the account (components/DocsSuiteBar.tsx). */}
+        {!suite && (
+          <div className="home-user">
+            <AgentButton />
+            <Account />
+          </div>
+        )}
       </header>
 
       <section className="home-inner changes connectors">

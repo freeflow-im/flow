@@ -7,6 +7,8 @@ export default defineConfig({
   // The suite serves the client under /workspace (BASE_PATH=/workspace/ when building for it); standalone, the root.
   base: process.env.BASE_PATH ?? '/',
   plugins: [react()],
+  // One React: the suite bar (packages/suite-bar) is bundled from its sources, and its own dev copy must not load.
+  resolve: { dedupe: ['react', 'react-dom'] },
   server: {
     port: 5173,
     // Keep the browser's Host header so OAuth redirect URIs built by the server point at this dev server.

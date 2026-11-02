@@ -17,6 +17,16 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   `users` table is a mirror of the host's users, upserted as each request comes in, so the owner columns keep their foreign keys.
   Flow's `scripts/import-workspace-users.ts` moves the hosted app's accounts over once. Standalone (`pnpm start`, the desktop app)
   nothing changes.
+- In the suite (`useAuth().suite`) every signed-in page has the suite bar above it (`@flow/suite-bar`, the package
+  `packages/suite-bar` both apps bundle): `main.tsx` wraps the shell in `.suite-frame` with `components/DocsSuiteBar.tsx`
+  on top, and the page scrolls under it. The bar replaces the page headers' `.wb-logo`, `Account`, `AgentButton` and the
+  home page's brand, which those pages draw only without `suite`; its Assistant button calls `useAgent().setOpen`, and
+  ⌘K is its search (the home page's file search, `?q=…&find=1`), so `AgentProvider` leaves ⌘K alone in the suite.
+  `suite.ts` reads the suite's API on the same origin with the cookie (`/v1/me`, `/v1/me/workspaces`, refreshed every
+  60 s, and `PATCH /v1/me` for presence and status), the organization Chat selected (its key in Chat's connection
+  registry in localStorage, which a selection here writes too), and the editors' saves the bar's Log out waits for
+  (`onBeforeLeave`). What is Chat's (adding an organization, its settings, inviting, notifications, the profile) opens
+  Chat at `/?open=…`; Chat's Assistant comes here as `?assistant`, which the home page turns into the open panel.
 - `shared` — code used by both: workbook types (`types.ts`), cell references, the formula engine, the slide deck
   format with its layouts and themes (`deck.ts`), and the assistant protocol (`shared/agent`).
 - Presentations (slide decks) live in `client/src/deck` (`DeckStore` + `DeckController`, the `SlideView`

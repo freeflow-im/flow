@@ -26,6 +26,8 @@ function buildSha(): string {
 // client is same-origin in both dev and prod (prod = Fastify static serving).
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // One React: the suite bar (packages/suite-bar) is bundled from its sources, and its own dev copy must not load.
+  resolve: { dedupe: ['react', 'react-dom'] },
   define: {
     __BUILD__: JSON.stringify(buildSha()),
   },
