@@ -84,4 +84,8 @@ export const DIRECTORY_MIGRATIONS: string[] = [
     id TEXT PRIMARY KEY,
     organization_id TEXT NOT NULL
   );`,
+  `CREATE TABLE organization_slugs (
+    slug TEXT PRIMARY KEY COLLATE NOCASE,
+    organization_id TEXT NOT NULL
+  );`,
 ];

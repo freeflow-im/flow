@@ -123,6 +123,4 @@ that speaks the part of Fastify it uses (`routes/compat.ts`). SQLite triggers re
 no service has to remember to, and that is how a path naming only a channel or message finds its object. `test/e2e.mjs` runs 29 checks locally: sign-up,
 organizations, invitations, sockets, presence, typing, messages, threads, reactions, encryption, private channels and refusals.
 
-**Still to do for Chat:** the web client's socket per organization and its heartbeat; profile edits reaching every organization; a member's own
-notifications across organizations (these paths go to their first organization for now); avatars, which name no organization; workspace slugs, unique only
-within their object; scheduled messages and other timers, which need Alarms; domain self-registration; the PKCE handoff routes. No route has run on Cloudflare's network, and most of the 100 or so routes beyond those checks have not run at all.
+**Still to do for Chat:** agents and the agent bridge (`/v1/agents/*`, and its socket); deleting an account; automatic joining by email domain; inviting someone from another organization; the PKCE handoff routes, which the desktop and native apps need; huddles, reported as off until LiveKit's keys are set and it has been tried; link previews, whose fetcher uses Node's `http` and has not been shown to work; help pages. `test/e2e.mjs` runs 54 checks locally. Nothing but the directory's refusals has run on Cloudflare's network, and many routes have not run at all.

@@ -10,6 +10,7 @@ import { setMailEnv } from './email/index';
 import { presetWorkspaceId } from './lib/ids';
 import { CompatApp, type CallerContext } from './routes/compat';
 import { registerRoutes } from './routes/index';
+import { runSchedulerTick } from './services/scheduledMessages';
 import { socketControl } from './sockets';
 import { setStorageEnv, type StorageEnv } from './storage/index';
 import { eq, and } from 'drizzle-orm';
@@ -23,6 +24,7 @@ const OUTBOX = [
     `CREATE TRIGGER IF NOT EXISTS _index_${t} AFTER INSERT ON ${t} BEGIN INSERT INTO _outbox (kind, id) VALUES ('index', NEW.${c}); END`),
   `CREATE TRIGGER IF NOT EXISTS _index_invites AFTER INSERT ON invites BEGIN INSERT INTO _outbox (kind, id) VALUES ('index', lower(hex(NEW.token_hash))); INSERT INTO _outbox (kind, id) VALUES ('index', NEW.id); END`,
   `CREATE TRIGGER IF NOT EXISTS _index_links AFTER INSERT ON workspace_join_links BEGIN INSERT INTO _outbox (kind, id) VALUES ('token', NEW.token); END`,
+  `CREATE TRIGGER IF NOT EXISTS _index_huddle_invites AFTER INSERT ON huddle_invites BEGIN INSERT INTO _outbox (kind, id) VALUES ('index', NEW.id); END`,
   `CREATE TRIGGER IF NOT EXISTS _member_add AFTER INSERT ON workspace_members BEGIN INSERT INTO _outbox (kind, id, user_id, role) VALUES ('join', NEW.workspace_id, NEW.user_id, NEW.role); END`,
   `CREATE TRIGGER IF NOT EXISTS _member_del AFTER DELETE ON workspace_members BEGIN INSERT INTO _outbox (kind, id, user_id) VALUES ('leave', OLD.workspace_id, OLD.user_id); END`,
 ];
@@ -116,7 +118,30 @@ export class Org extends DurableObject<OrgEnv> {
     });
     const res = await (newWorkspaceId ? presetWorkspaceId.run(newWorkspaceId, run) : run());
     await this.flushOutbox(newWorkspaceId);
+    await this.armAlarm();
     return res;
+  }
+
+  /** The next thing due. On Node a ticker polled for it; an object sleeps until then. */
+  private async armAlarm(): Promise<void> {
+    const next = this.ctx.storage.sql.exec('SELECT MIN(next_run_at) AS at FROM scheduled_messages WHERE enabled AND next_run_at IS NOT NULL').one().at as number | null;
+    if (next === null) await this.ctx.storage.deleteAlarm();
+    else await this.ctx.storage.setAlarm(next);
+  }
+
+  override async alarm(): Promise<void> {
+    await this.scoped(async () => { await runSchedulerTick(); });
+    await this.flushOutbox(null);
+    await this.armAlarm();
+  }
+
+  /** A member's profile changed in the directory: refresh this organization's copy and tell its sockets. */
+  async syncUser(user: UserDTO): Promise<void> {
+    this.ensureUser(user);
+    const workspace = this.db.select({ id: schema.workspaces.id }).from(schema.workspaces).get();
+    if (!workspace) return;
+    const redacted = user.privacyMode ? { ...user, email: '' } : user;
+    this.broadcast(`ws.${workspace.id}.meta`, { type: 'user.updated', workspaceId: workspace.id, ts: new Date().toISOString(), data: redacted } as Event);
   }
 
   /** The organization's own answer to GET /v1/me/workspaces. */
@@ -159,7 +184,8 @@ export class Org extends DurableObject<OrgEnv> {
       return;
     }
     if (!att) return ws.send(JSON.stringify({ op: 'error', code: 'unauthorized', message: 'authenticate first' }));
-    if (frame.op === 'typing' && frame.channelId && workspace) {
+    // A client sends typing to all its organizations' sockets, since it does not track which holds a channel.
+    if (frame.op === 'typing' && frame.channelId && workspace && this.ctx.storage.sql.exec('SELECT 1 FROM channels WHERE id = ?', frame.channelId).toArray().length) {
       this.broadcast(`ws.${workspace.id}.chan.${frame.channelId}.typing`, {
         type: 'typing', workspaceId: workspace.id, channelId: frame.channelId, ts: new Date().toISOString(),
         data: { userId: att.userId, channelId: frame.channelId, ...(frame.threadRootId ? { threadRootId: frame.threadRootId } : {}) },

@@ -176,7 +176,7 @@ export type ClientFrame =
   | { op: 'pong' };
 
 export type ServerFrame =
-  | { op: 'hello'; sessionId: string }
+  | { op: 'hello'; sessionId: string; heartbeat?: 'client' }
   | { op: 'event'; event: Event }
   | { op: 'ping' }
   | { op: 'error'; code: string; message: string };

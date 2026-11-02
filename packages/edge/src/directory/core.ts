@@ -299,6 +299,34 @@ export class DirectoryCore {
     }
   }
 
+  /** A workspace's slug is unique across every organization, which no single object can check. */
+  reserveSlug(slug: string, organizationId: string): void {
+    const taken = this.rows('INSERT INTO organization_slugs (slug, organization_id) VALUES (?, ?) ON CONFLICT (slug) DO NOTHING RETURNING slug', slug, organizationId);
+    if (!taken.length) throw conflict('slug_taken', 'that URL is already taken');
+  }
+
+  releaseSlug(slug: string, organizationId: string): void {
+    this.sql.exec('DELETE FROM organization_slugs WHERE slug = ? AND organization_id = ?', slug, organizationId);
+  }
+
+  /** The one place a person's profile is written. The Worker then copies it to their organizations. */
+  patchUser(userId: string, patch: Record<string, unknown>): UserDTO {
+    const user = this.userById(userId);
+    if (!user) throw notFound('user not found');
+    const columns: Record<string, string> = {
+      displayName: 'display_name', timezone: 'timezone', statusEmoji: 'status_emoji', statusText: 'status_text', website: 'website',
+      bio: 'bio', title: 'title', statusSuppressAlerts: 'status_suppress_alerts', unfurlOwnLinks: 'unfurl_own_links', privacyMode: 'privacy_mode', avatarUrl: 'avatar_url',
+    };
+    for (const [key, column] of Object.entries(columns)) {
+      const value = patch[key];
+      if (value !== undefined) this.sql.exec(`UPDATE users SET ${column} = ? WHERE id = ?`, typeof value === 'boolean' ? Number(value) : value, userId);
+    }
+    if (patch.notificationPrefs !== undefined) {
+      this.sql.exec('UPDATE users SET notification_prefs = json_patch(notification_prefs, ?) WHERE id = ?', JSON.stringify(patch.notificationPrefs), userId);
+    }
+    return toUserDTO(this.userById(userId)!, userId);
+  }
+
   organizationsOf(userId: string): string[] {
     return this.rows('SELECT organization_id FROM memberships WHERE user_id = ?', userId).map((r) => r.organization_id as string);
   }
