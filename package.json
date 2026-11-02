@@ -11,7 +11,8 @@
     "onlyBuiltDependencies": [
       "argon2",
       "electron",
-      "esbuild"
+      "esbuild",
+      "workerd"
     ]
   },
   "scripts": {

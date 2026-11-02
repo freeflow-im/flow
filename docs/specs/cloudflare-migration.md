@@ -150,9 +150,13 @@ needs a decision, a short spike comes first and its result goes in `decision_log
   A list with one line each.
 
 **Step 1, the front door.** (one PR, then a DNS change)
-- 1.1 The Worker serves the static clients (`packages/web/dist`, the Docs client under `/workspace`) and
+- 1.1 The Worker serves the clients' built files (`packages/web/dist`, the Docs client under `/workspace`) and
   proxies every other path to `origin.freeflow.im`, including WebSocket upgrades on `/v1/ws` and the
-  plugin's paths, with the client's IP and host forwarded.
+  plugin's paths, with the client's IP and host forwarded. Pages stay on the origin until step 5, because it decides
+  per request (the sign-in redirect on `/workspace`, the headers of `/p/*`); so do files over the 25 MiB Workers
+  Static Assets takes (the assistant's ONNX runtimes). A Worker cannot send the visitor's `Host` to another
+  hostname, so Caddy's `origin.freeflow.im` block restores it from headers, behind a shared secret.
+  The procedure is `docs/ops/EDGE_FRONT_DOOR.md`.
 - 1.2 `app.freeflow.im` and `docs.freeflow.im` move to the Worker (orange cloud). Everything behaves as
   before; deploys of the origin no longer show 502s because the Worker retries.
 - 1.3 Rollback: grey cloud, the records back to the instance.

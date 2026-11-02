@@ -29,6 +29,10 @@ Parameters:
     Type: String
     Default: app.freeflow.im
     Description: Host name(s) served as Flow (comma-separated), each with its own certificate
+  OriginDomainName:
+    Type: String
+    Default: origin.freeflow.im
+    Description: The name the Cloudflare Worker reaches this instance by (a DNS-only record; docs/ops/EDGE_FRONT_DOOR.md)
   InstanceType:
     Type: String
     Default: t4g.large
@@ -244,6 +248,29 @@ Resources:
           set -euo pipefail
           WORKSPACE_UPSTREAM=app:3001
           [ -e /data/workspace-on-suite ] && WORKSPACE_UPSTREAM=flow:8787
+          # The Cloudflare Worker's way in, once /flow/EDGE_ORIGIN_SECRET exists: a Worker cannot send the visitor's Host
+          # to another hostname, so it names the visitor in headers and proves itself with the secret, and this block puts
+          # them back where the server looks. Anything else gets a 403. packages/edge/src/proxy.ts is the other side.
+          EDGE_SECRET=$(aws ssm get-parameters --region ${AWS::Region} --names /flow/EDGE_ORIGIN_SECRET --with-decryption --query 'Parameters[0].Value' --output text 2>/dev/null || true)
+          ORIGIN_BLOCK=""
+          if [ -n "$EDGE_SECRET" ] && [ "$EDGE_SECRET" != None ]; then
+            ORIGIN_BLOCK="${OriginDomainName} {
+            @edge header X-Edge-Secret $EDGE_SECRET
+            handle @edge {
+              reverse_proxy flow:8787 {
+                header_up Host {http.request.header.X-Edge-Host}
+                header_up X-Forwarded-Host {http.request.header.X-Edge-Host}
+                header_up X-Forwarded-For {http.request.header.X-Edge-Client-IP}
+                header_up -X-Edge-Secret
+                header_up -X-Edge-Host
+                header_up -X-Edge-Client-IP
+              }
+            }
+            handle {
+              respond \"This host only answers the edge.\" 403
+            }
+          }"
+          fi
           cat > /opt/mcpdocs/Caddyfile <<CADDY
           ${DomainName}, ${OtherDomains} {
             reverse_proxy $WORKSPACE_UPSTREAM
@@ -252,7 +279,10 @@ Resources:
           ${FlowDomainName} {
             reverse_proxy flow:8787
           }
+
+          $ORIGIN_BLOCK
           CADDY
+          chmod 600 /opt/mcpdocs/Caddyfile
           if docker inspect caddy >/dev/null 2>&1; then docker exec caddy caddy reload --config /etc/caddy/Caddyfile || true; fi
           EOF
           chmod 755 /opt/mcpdocs/caddyfile.sh
@@ -392,7 +422,7 @@ Resources:
             # The image runs as `node` (uid 1000); /data/flow is where it may write.
           mkdir -p /data/flow && chown 1000:1000 /data/flow
           docker run -d --name flow --network mcpdocs --restart unless-stopped --stop-timeout 60 \
-              -v /data/flow:/data "${!WORKSPACE_MOUNT[@]}" --env-file /opt/mcpdocs/flow.env -e HOST=0.0.0.0 -e PORT=8787 \
+              -v /data/flow:/data "${!WORKSPACE_MOUNT[@]}" --env-file /opt/mcpdocs/flow.env -e HOST=0.0.0.0 -e PORT=8787 -e FLOW_TRUST_PROXY=1 \
               --log-driver awslogs --log-opt awslogs-region=$REGION --log-opt awslogs-group=${FlowLogs} \
               $IMAGE
             caddy

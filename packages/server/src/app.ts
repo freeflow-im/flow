@@ -16,6 +16,7 @@ export function buildApp(): FastifyInstance {
     // The Workspace app's spreadsheet saves are one JSON body each (its own server allowed 100 MB); Flow's
     // bodies were well inside the 1 MB default and still are.
     bodyLimit: 100 * 1024 * 1024,
+    trustProxy: config.trustProxy,
   });
   registerBrowserPolicy(app);
   void app.register(cookie); // the session as a cookie (lib/sessionCookie.ts)
