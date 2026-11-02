@@ -148,26 +148,37 @@ aws cloudformation create-change-set --region us-west-2 --stack-name mcpdocs --c
     ParameterKey=InstanceType,ParameterValue=t4g.large \
     ParameterKey=FlowDomainName,ParameterValue=app.freeflow.im \
     ParameterKey=DomainName,UsePreviousValue=true \
-    ParameterKey=OtherDomains,UsePreviousValue=true \
+    ParameterKey=OtherDomains,ParameterValue=docs.freeflow.im \
     ParameterKey=DataVolumeSizeGiB,UsePreviousValue=true \
     ParameterKey=GitHubRepo,UsePreviousValue=true \
-    ParameterKey=GitHubRepoIds,UsePreviousValue=true \
+    ParameterKey=GitHubRepoIds,ParameterValue=freeflow-im@309602851/mcp-docs@1431919019 \
+    ParameterKey=FlowGitHubRepo,ParameterValue=freeflow-im/flow \
+    ParameterKey=FlowGitHubRepoIds,ParameterValue=freeflow-im@309602851/flow@1305888551 \
     ParameterKey=GitHubOidcProviderArn,UsePreviousValue=true \
-    ParameterKey=UseElasticIp,UsePreviousValue=true
+    ParameterKey=UseElasticIp,ParameterValue=true
 aws cloudformation describe-change-set --region us-west-2 --stack-name mcpdocs --change-set-name flow-to-aws \
-  --query 'Changes[].ResourceChange.[Action,LogicalResourceId,Replacement]' --output table
+  --query 'Changes[].ResourceChange.[Action,LogicalResourceId,Replacement,join(`,`,Details[].Target.Name)]' --output table
 ```
 
-Expect `Add` for `FlowRepository` and `FlowLogs`, `Modify` for `Instance`, `InstanceRole` and `DeployRole`, and
-**`Instance` with `Replacement` `False`**. If `Instance` says `True` or `Conditional`, or `DataVolume`,
-`DataAttachment` or `Address` appear at all, delete the change set and find out why before going on. Otherwise:
+(`OtherDomains` and `GitHubRepoIds` are given, not `UsePreviousValue`: the stack was made before they existed. The
+instance has had no Elastic IP so far (`UseElasticIp=false`); since this update restarts it onto a new address
+anyway, `true` gives it one address that never changes again, at the cost of moving the docs A records once.)
+
+Expect `Add` for `FlowRepository`, `FlowLogs` and `Address` (the Elastic IP), `Modify` for `InstanceRole` and
+`DeployRole`, and `Modify` for `Instance` and `DataAttachment` with `Replacement` **`Conditional`** whose changed
+attributes are only `InstanceType` and `UserData`: CloudFormation says "conditional" because those replace an
+instance whose root disk is an instance store, and ours is EBS (`aws ec2 describe-instances … --query
+'Reservations[0].Instances[0].RootDeviceType'` says `ebs`), so they are a stop and start. If `ImageId` is among
+the attributes, `Instance` says `True`, or `DataVolume` appears at all, delete the change set and find out why
+before going on. Otherwise:
 
 ```sh
 aws cloudformation execute-change-set --region us-west-2 --stack-name mcpdocs --change-set-name flow-to-aws
 aws cloudformation wait stack-update-complete --region us-west-2 --stack-name mcpdocs
 ```
 
-**UserData runs only on an instance's first boot**, so the instance is back with the old scripts (Docker restarts
+The instance is back on the Elastic IP: **change the docs A records** (`mcpdocs` and `docs`, DNS only) to the new
+`PublicIp` output now. **UserData runs only on an instance's first boot**, so the instance is back with the old scripts (Docker restarts
 the docs app and Caddy by itself). Run the new UserData on it, from a Session Manager shell as root:
 
 ```sh
