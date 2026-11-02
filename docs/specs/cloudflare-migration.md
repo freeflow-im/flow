@@ -209,7 +209,7 @@ needs a decision, a short spike comes first and its result goes in `decision_log
   under `/api/*`, the revision feed as object events over the same socket.
 - 5.3 PDFs through Browser Rendering (the print pages are served by the Worker); Office import in the Worker;
   PDF to Markdown and OCR in a Cloudflare Container, starting with a trial on a real scanned PDF. Whether imports
-  and exports need their own Worker depends on the bundle size measured in 5.2 (Spike B).
+  and exports need their own Worker depends on the startup time measured in 5.2 (Spike B).
 - 5.4 The assistant's loop as a Cloudflare Workflow (an agent turn can run minutes; a request cannot), its
   server tools calling the object, its browser tools unchanged; the ChatGPT plugin's OAuth server and
   `/mcp` as Worker handlers over the directory's grants.

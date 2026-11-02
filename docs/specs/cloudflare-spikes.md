@@ -91,9 +91,10 @@ Each ran real work inside workerd with `nodejs_compat`. Sizes are one library's 
 - **A container replaces the "small origin service".** LiteParse and Tesseract have to run outside workerd. Cloudflare
   Containers (Workers Paid) run a Linux image started from a Durable Object, so PDF-to-Markdown can move too and step 7
   can really retire AWS. It has not been tried; step 5.3 starts with a trial on a real scanned PDF.
-- **Bundle size needs watching.** The libraries above add up to roughly 8 MB gzipped against the Worker limit. Imports
-  and exports may belong in their own Worker behind a service binding, which also keeps their load cost away from
-  chat. Measure it when 5.2 is built.
+- **Startup time needs watching.** Workers have no compressed size limit, but they allow 64 MiB uncompressed and 1 s to
+  start. The libraries above come to roughly 8 MB gzipped, and all of them are parsed at startup. Imports and exports
+  may belong in their own Worker behind a service binding, which also keeps their load cost away from chat. Measure
+  it when 5.2 is built.
 - **`node:fs` is the larger part of the Docs port.** 27 server files import the file system or `child_process`. The
   `child_process` ones (`supervise`, `claudeAgent`, `jobs`, `worker`, `git`, `localStore`, `recents`) belong to the
   desktop app and the retired jobs, so they stay out of the Worker. Step 5.1's split has to keep them on the desktop's side.
