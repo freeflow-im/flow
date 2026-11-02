@@ -4,6 +4,11 @@ Flow runs in production at **https://app.freeflow.im**. This documents what's
 deployed where, how to operate it, and what's deliberately not done yet.
 First deployed 2026-07-19.
 
+> **Moving to AWS.** Flow is moving from Railway to the AWS stack that hosts the
+> Workspace app (`packages/docs/deploy/aws/`). The cut-over is
+> [FLOW_TO_AWS.md](FLOW_TO_AWS.md); until its DNS step, everything below still
+> describes production, and this page is rewritten when Railway is retired.
+
 ## Architecture
 
 ```

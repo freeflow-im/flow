@@ -1,14 +1,21 @@
-# MCP Docs on the web, on AWS: one EC2 instance running the app's container (deploy/aws/Dockerfile) behind
-# Caddy, which serves HTTPS with a certificate it gets for the domain. The app is one process with SQLite and its
-# files on a local disk (DATA_DIR), so it runs as exactly one copy: the data lives on its own EBS volume, kept
-# when the stack or instance goes, with a snapshot every day.
+# The FreeFlow suite on AWS: one EC2 instance running two apps behind Caddy, which serves HTTPS with a certificate
+# it gets for each host name and routes by host.
 #
-# Deploys: .github/workflows/aws-deploy.yml builds the image on each push to main, pushes it to the ECR
-# repository below and runs /opt/mcpdocs/deploy.sh <tag> on the instance through Systems Manager. The app's
-# secrets are SecureString parameters under /mcpdocs/ (ANTHROPIC_API_KEY, ...), read on every deploy.
-# See deploy/aws/README.md.
+# - MCP Docs on the web (the Workspace app, packages/docs/deploy/aws/Dockerfile): container `app`, DomainName and
+#   OtherDomains. One process with SQLite and its files on a local disk (DATA_DIR), so it runs as exactly one copy.
+# - Flow (the Chat app, packages/server/deploy/aws/Dockerfile): container `flow`, FlowDomainName, with its Postgres
+#   and NATS as containers on the same docker network (neither published on a host port).
+#
+# The data (SQLite, files, Postgres and its nightly dumps, Caddy's certificates) lives on its own EBS volume at
+# /data, kept when the stack or instance goes, with a snapshot every day.
+#
+# Deploys: .github/workflows/docs-aws-deploy.yml and flow-aws-deploy.yml build each image on a push to main, push
+# it to its ECR repository below and run /opt/mcpdocs/deploy.sh {docs|flow} <tag> on the instance through Systems
+# Manager. Each app's secrets are SecureString parameters, under /mcpdocs/ and /flow/, read on every deploy.
+# UserData runs on the instance's first boot only: after a stack update that changes it, run it again on the
+# instance. See deploy/aws/README.md and docs/ops/FLOW_TO_AWS.md.
 AWSTemplateFormatVersion: '2010-09-09'
-Description: MCP Docs on the web (single instance)
+Description: FreeFlow on the web, MCP Docs and Flow (single instance)
 
 Parameters:
   DomainName:
@@ -18,9 +25,14 @@ Parameters:
     Type: String
     Default: docs.freeflow.im
     Description: More host names served as the app (comma-separated), each with its own certificate
+  FlowDomainName:
+    Type: String
+    Default: app.freeflow.im
+    Description: Host name(s) served as Flow (comma-separated), each with its own certificate
   InstanceType:
     Type: String
-    Default: t4g.medium
+    Default: t4g.large
+    Description: The instance holds both apps, Postgres and NATS
   DataVolumeSizeGiB:
     Type: Number
     Default: 20
@@ -31,6 +43,14 @@ Parameters:
     Type: String
     Default: freeflow-im@309602851/mcp-docs@1431919019
     Description: The repository as GitHub's immutable OIDC subject names it (owner@id/name@id)
+  FlowGitHubRepo:
+    Type: String
+    Default: freeflow-im/flow
+    Description: The repository both deploy workflows run from since the docs app moved into it
+  FlowGitHubRepoIds:
+    Type: String
+    Default: freeflow-im@309602851/flow@1305888551
+    Description: FlowGitHubRepo as GitHub's immutable OIDC subject names it (owner@id/name@id)
   GitHubOidcProviderArn:
     Type: String
     Description: The account's token.actions.githubusercontent.com OIDC provider
@@ -112,6 +132,17 @@ Resources:
     Properties:
       LogGroupName: /mcpdocs/app
       RetentionInDays: 30
+  FlowRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: flow
+      LifecyclePolicy:
+        LifecyclePolicyText: '{"rules":[{"rulePriority":1,"description":"Keep the last 20 images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":20},"action":{"type":"expire"}}]}'
+  FlowLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /flow/app
+      RetentionInDays: 30
 
   # --- The instance --------------------------------------------------------------------------------------
   InstanceRole:
@@ -131,21 +162,25 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: [ssm:GetParametersByPath, ssm:GetParameters]
-                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/mcpdocs*
+                Resource:
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/mcpdocs*
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/flow*
               - Effect: Allow
                 Action: kms:Decrypt
                 Resource: '*'
                 Condition: { StringEquals: { 'kms:ViaService': !Sub 'ssm.${AWS::Region}.amazonaws.com' } }
               - Effect: Allow
                 Action: [logs:CreateLogStream, logs:PutLogEvents, logs:DescribeLogStreams]
-                Resource: !Sub '${AppLogs.Arn}'
+                Resource:
+                  - !Sub '${AppLogs.Arn}'
+                  - !Sub '${FlowLogs.Arn}'
   InstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
       Roles: [!Ref InstanceRole]
 
-  # The data: SQLite databases, files, Caddy's certificates. Kept when the stack is deleted or the instance is
-  # replaced; DataSnapshots copies it daily.
+  # The data: SQLite databases, files, Flow's Postgres and its dumps, Caddy's certificates. Kept when the stack is
+  # deleted or the instance is replaced; DataSnapshots copies it daily.
   DataVolume:
     Type: AWS::EC2::Volume
     DeletionPolicy: Retain
@@ -198,60 +233,200 @@ Resources:
           mkdir -p /data
           grep -q 'LABEL=mcpdocs-data' /etc/fstab || echo 'LABEL=mcpdocs-data /data ext4 defaults,nofail 0 2' >> /etc/fstab
           mount -a
-          mkdir -p /data/app /data/caddy
+          mkdir -p /data/app /data/caddy /data/postgres /data/backups/postgres
 
           mkdir -p /opt/mcpdocs
+          # Routed by host: the docs app's hosts to `app`, Flow's to `flow` (WebSockets pass through reverse_proxy as is).
           cat > /opt/mcpdocs/Caddyfile <<'EOF'
           ${DomainName}, ${OtherDomains} {
             reverse_proxy app:3001
           }
+
+          ${FlowDomainName} {
+            reverse_proxy flow:8787
+          }
           EOF
+          # A running Caddy (this script run again after a stack update) picks up the new hosts.
+          if docker inspect caddy >/dev/null 2>&1; then docker exec caddy caddy reload --config /etc/caddy/Caddyfile || true; fi
 
           cat > /opt/mcpdocs/deploy.sh <<'EOF'
           #!/bin/bash
-          # Runs the app image with the given tag (the commit), replacing the running one. Called by the deploy
-          # workflow through Systems Manager; run by hand with no tag to restart the latest.
+          # Runs one app's image with the given tag (the commit), replacing its running container:
+          #   deploy.sh docs <tag>   the docs app (MCP Docs): container `app`, secrets under /mcpdocs/
+          #   deploy.sh flow <tag>   Flow: container `flow`, secrets under /flow/, with the `postgres` and `nats` containers
+          #   deploy.sh <tag>        the same as `docs <tag>` (the form the first version of this script took)
+          #   deploy.sh services     only Caddy, Postgres and NATS, each started if it is not there
+          # Called by the deploy workflows through Systems Manager; run by hand with no tag to restart the latest image.
           set -euo pipefail
-          TAG=${!1:-latest}
+          # One deploy at a time: the two workflows can run together, and each prunes images the other may be about to run.
+          exec 9>/opt/mcpdocs/deploy.lock
+          flock 9
+          case "${!1:-}" in
+            docs|flow|services) APP=$1; TAG=${!2:-latest} ;;
+            *) APP=docs; TAG=${!1:-latest} ;;
+          esac
+          REGION=${AWS::Region}
           REGISTRY=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
-          IMAGE=$REGISTRY/${Repository}:$TAG
-
-          aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin $REGISTRY
-          # Only the running images are kept: the disk holds two app images, not a week of them. An older one is
-          # pulled again from the registry to roll back.
-          docker image prune -af >/dev/null || true
-          docker pull $IMAGE
-
-          # The app's secrets: every parameter under /mcpdocs/, named for its variable.
           umask 077
-          aws ssm get-parameters-by-path --region ${AWS::Region} --path /mcpdocs/ --recursive --with-decryption \
-            --query 'Parameters[].[Name,Value]' --output text | sed -e 's#^/mcpdocs/##' -e 's#\t#=#' > /opt/mcpdocs/app.env
 
-          docker network inspect mcpdocs >/dev/null 2>&1 || docker network create mcpdocs
-          docker rm -f app >/dev/null 2>&1 || true
-          docker run -d --name app --network mcpdocs --restart unless-stopped --stop-timeout 30 \
-            -v /data/app:/data --env-file /opt/mcpdocs/app.env \
-            -e APP_URL=https://${DomainName} -e SECURE_COOKIES=1 -e GITHUB_REPO=${GitHubRepo} \
-            --log-driver awslogs --log-opt awslogs-region=${AWS::Region} --log-opt awslogs-group=${AppLogs} \
-            $IMAGE
+          # Every parameter under a path, named for its variable: NAME=value lines.
+          params() {
+            aws ssm get-parameters-by-path --region $REGION --path "$1" --recursive --with-decryption \
+              --query 'Parameters[].[Name,Value]' --output text | sed -e "s#^$1##" -e 's#\t#=#'
+          }
 
-          if ! docker inspect caddy >/dev/null 2>&1; then
-            docker run -d --name caddy --network mcpdocs --restart unless-stopped \
-              -p 80:80 -p 443:443 -p 443:443/udp \
-              -v /opt/mcpdocs/Caddyfile:/etc/caddy/Caddyfile:ro -v /data/caddy:/data caddy:2.10.2
-          fi
+          pull() {
+            aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $REGISTRY
+            # Only the running images are kept: the disk holds the running images, not a week of them. An older one is
+            # pulled again from the registry to roll back.
+            docker image prune -af >/dev/null || true
+            docker pull $1
+          }
 
-          for i in $(seq 1 60); do
-            [ "$(docker inspect -f '{{.State.Health.Status}}' app)" = healthy ] && { echo "deployed $TAG"; break; }
-            sleep 5
-          done
-          docker image prune -af >/dev/null || true
-          [ "$(docker inspect -f '{{.State.Health.Status}}' app)" = healthy ] || { echo "app is not healthy"; docker logs --tail 50 app || true; exit 1; }
+          network() {
+            docker network inspect mcpdocs >/dev/null 2>&1 || docker network create mcpdocs
+          }
+
+          caddy() {
+            if ! docker inspect caddy >/dev/null 2>&1; then
+              docker run -d --name caddy --network mcpdocs --restart unless-stopped \
+                -p 80:80 -p 443:443 -p 443:443/udp \
+                -v /opt/mcpdocs/Caddyfile:/etc/caddy/Caddyfile:ro -v /data/caddy:/data caddy:2.10.2
+            fi
+          }
+
+          # Flow's Postgres and NATS, started once and then kept running by Docker (also across reboots). Postgres's data is
+          # on the data volume; its superuser password, /flow/POSTGRES_PASSWORD, is set when the data directory is created.
+          # Upgrading either image: docker stop <name> && docker rm <name>, then deploy.sh services.
+          services() {
+            network
+            if ! docker inspect postgres >/dev/null 2>&1; then
+              if params /flow/ | grep '^POSTGRES_PASSWORD=' > /opt/mcpdocs/postgres.env; then
+                docker run -d --name postgres --network mcpdocs --restart unless-stopped --stop-timeout 120 --shm-size 256m \
+                  -v /data/postgres:/var/lib/postgresql/data --env-file /opt/mcpdocs/postgres.env \
+                  -e POSTGRES_USER=flow -e POSTGRES_DB=flow --log-opt max-size=10m --log-opt max-file=3 postgres:17-bookworm
+              else
+                echo 'no /flow/POSTGRES_PASSWORD yet: Postgres is not started'
+              fi
+            fi
+            if ! docker inspect nats >/dev/null 2>&1; then
+              # Core NATS only: no JetStream, no cluster, no monitoring port.
+              docker run -d --name nats --network mcpdocs --restart unless-stopped \
+                --log-opt max-size=10m --log-opt max-file=3 nats:2.10-alpine -p 4222
+            fi
+            docker inspect postgres >/dev/null 2>&1 || return 0
+            for i in $(seq 1 60); do docker exec postgres pg_isready -q -U flow -d flow && return 0; sleep 2; done
+            echo 'postgres is not ready'; return 1
+          }
+
+          healthy() {
+            [ "$(docker inspect -f '{{.State.Health.Status}}' $1 2>/dev/null)" = healthy ]
+          }
+
+          finish() {
+            for i in $(seq 1 60); do healthy $1 && { echo "deployed $APP $TAG"; break; }; sleep 5; done
+            docker image prune -af >/dev/null || true
+            healthy $1 || { echo "$1 is not healthy"; docker logs --tail 50 $1 || true; exit 1; }
+          }
+
+          deploy_docs() {
+            IMAGE=$REGISTRY/${Repository}:$TAG
+            pull $IMAGE
+            # The app's secrets: every parameter under /mcpdocs/.
+            params /mcpdocs/ > /opt/mcpdocs/app.env
+            network
+            docker rm -f app >/dev/null 2>&1 || true
+            docker run -d --name app --network mcpdocs --restart unless-stopped --stop-timeout 30 \
+              -v /data/app:/data --env-file /opt/mcpdocs/app.env \
+              -e APP_URL=https://${DomainName} -e SECURE_COOKIES=1 -e GITHUB_REPO=${GitHubRepo} \
+              --log-driver awslogs --log-opt awslogs-region=$REGION --log-opt awslogs-group=${AppLogs} \
+              $IMAGE
+            caddy
+            finish app
+          }
+
+          deploy_flow() {
+            IMAGE=$REGISTRY/${FlowRepository}:$TAG
+            # Flow's secrets: every parameter under /flow/ but Postgres's password, which goes into DATABASE_URL instead.
+            params /flow/ > /opt/mcpdocs/flow.params
+            grep -v '^POSTGRES_PASSWORD=' /opt/mcpdocs/flow.params > /opt/mcpdocs/flow.env || true
+            # The database and NATS on this box, unless a parameter names others (/flow/DATABASE_URL for RDS, say). The
+            # password goes into the URL as it is, so it is made of URL-safe characters (openssl rand -hex 32).
+            if ! grep -q '^DATABASE_URL=' /opt/mcpdocs/flow.env; then
+              PW=$(sed -n 's/^POSTGRES_PASSWORD=//p' /opt/mcpdocs/flow.params)
+              [ -n "$PW" ] || { rm -f /opt/mcpdocs/flow.params; echo 'set /flow/POSTGRES_PASSWORD first'; exit 1; }
+              echo "DATABASE_URL=postgres://flow:$PW@postgres:5432/flow" >> /opt/mcpdocs/flow.env
+            fi
+            grep -q '^NATS_URL=' /opt/mcpdocs/flow.env || echo 'NATS_URL=nats://nats:4222' >> /opt/mcpdocs/flow.env
+            rm -f /opt/mcpdocs/flow.params
+            services
+            pull $IMAGE
+            # docker stop, not rm -f: the server gets SIGTERM and up to a minute to drain (sockets, in-flight requests).
+            if docker inspect flow >/dev/null 2>&1; then
+              docker stop -t 60 flow >/dev/null || true
+              docker rm -f flow >/dev/null 2>&1 || true
+            fi
+            # The image runs as `node` (uid 1000); /data/flow is where it may write.
+          mkdir -p /data/flow && chown 1000:1000 /data/flow
+          docker run -d --name flow --network mcpdocs --restart unless-stopped --stop-timeout 60 \
+              -v /data/flow:/data --env-file /opt/mcpdocs/flow.env -e HOST=0.0.0.0 -e PORT=8787 \
+              --log-driver awslogs --log-opt awslogs-region=$REGION --log-opt awslogs-group=${FlowLogs} \
+              $IMAGE
+            caddy
+            finish flow
+          }
+
+          case $APP in
+            docs) deploy_docs ;;
+            flow) deploy_flow ;;
+            services) services; caddy ;;
+          esac
           EOF
           chmod 755 /opt/mcpdocs/deploy.sh
 
-          # Start what is already in the registry (nothing before the first deploy).
-          /opt/mcpdocs/deploy.sh latest || echo 'no image yet; the first deploy starts the app'
+          # Nightly: a plain SQL dump of Flow's database on the data volume, the newest 14 kept. The volume's snapshots
+          # copy the files; a dump is what a fresh Postgres (RDS, a new major version) is restored from:
+          #   gunzip -c <file> | docker exec -i postgres psql -U flow -d flow
+          cat > /opt/mcpdocs/pg-backup.sh <<'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          docker inspect postgres >/dev/null 2>&1 || exit 0
+          DIR=/data/backups/postgres
+          mkdir -p $DIR
+          OUT=$DIR/$(date -u +%F).sql.gz
+          docker exec postgres pg_dump -U flow -d flow | gzip > $OUT.tmp
+          mv $OUT.tmp $OUT
+          ls -1 $DIR/*.sql.gz | sort | head -n -14 | xargs -r rm -f --
+          EOF
+          chmod 700 /opt/mcpdocs/pg-backup.sh
+          # A systemd timer rather than cron, which Amazon Linux 2023 does not install; before the 10:00 UTC snapshot.
+          cat > /etc/systemd/system/flow-pg-backup.service <<'EOF'
+          [Unit]
+          Description=Dump Flow's Postgres to /data/backups/postgres
+          Requires=docker.service
+          After=docker.service
+
+          [Service]
+          Type=oneshot
+          ExecStart=/opt/mcpdocs/pg-backup.sh
+          EOF
+          cat > /etc/systemd/system/flow-pg-backup.timer <<'EOF'
+          [Unit]
+          Description=Nightly dump of Flow's Postgres
+
+          [Timer]
+          OnCalendar=*-*-* 09:30:00 UTC
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+          EOF
+          systemctl daemon-reload
+          systemctl enable --now flow-pg-backup.timer
+
+          # Start what is already in the registry (nothing before the first deploys).
+          /opt/mcpdocs/deploy.sh docs latest || echo 'no image yet; the first deploy starts the app'
+          /opt/mcpdocs/deploy.sh flow latest || echo 'no Flow image or /flow/ parameters yet; the first Flow deploy starts it'
 
   DataAttachment:
     Type: AWS::EC2::VolumeAttachment
@@ -310,9 +485,12 @@ Resources:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
                 # GitHub's subject names the repository either way: with its owner's and its own ids when the
                 # repository uses immutable subjects (GitHubRepoIds; `gh api repos/<repo>/actions/oidc/customization/sub`).
+                # FlowGitHubRepo is where both deploy workflows run now; GitHubRepo is the docs app's old repository.
                 token.actions.githubusercontent.com:sub:
                   - !Sub repo:${GitHubRepo}:ref:refs/heads/main
                   - !Sub repo:${GitHubRepoIds}:ref:refs/heads/main
+                  - !Sub repo:${FlowGitHubRepo}:ref:refs/heads/main
+                  - !Sub repo:${FlowGitHubRepoIds}:ref:refs/heads/main
       Policies:
         - PolicyName: deploy
           PolicyDocument:
@@ -328,7 +506,9 @@ Resources:
                   - ecr:UploadLayerPart
                   - ecr:CompleteLayerUpload
                   - ecr:PutImage
-                Resource: !GetAtt Repository.Arn
+                Resource:
+                  - !GetAtt Repository.Arn
+                  - !GetAtt FlowRepository.Arn
               - Effect: Allow
                 Action: ssm:SendCommand
                 Resource:
@@ -343,7 +523,11 @@ Outputs:
   InstanceId:
     Value: !Ref Instance
   RepositoryUri:
+    Description: The docs app's images (the repository variable AWS_ECR_REPOSITORY)
     Value: !GetAtt Repository.RepositoryUri
+  FlowRepositoryUri:
+    Description: Flow's images (the repository variable AWS_FLOW_ECR_REPOSITORY)
+    Value: !GetAtt FlowRepository.RepositoryUri
   DeployRoleArn:
     Value: !GetAtt DeployRole.Arn
   DataVolumeId:
