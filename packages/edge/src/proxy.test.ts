@@ -32,6 +32,11 @@ describe('originRequest', () => {
     expect(originRequest(new Request('https://app.example/'), env).redirect).toBe('manual');
   });
 
+  it('never lets Cloudflare\'s cache store an answer from the origin', () => {
+    expect(originRequest(new Request('https://app.example/v1/files/secret.pdf'), env).cache).toBe('no-store');
+    expect(originRequest(new Request('https://app.example/v1/files/secret.pdf'), env).clone().cache).toBe('no-store');
+  });
+
   it('passes the session cookie and the bearer through', () => {
     const out = originRequest(new Request('https://app.example/v1/me', { headers: { Cookie: 'sid=abc', Authorization: 'Bearer t' } }), env);
     expect(out.headers.get('Cookie')).toBe('sid=abc');
