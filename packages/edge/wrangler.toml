@@ -1,0 +1,34 @@
+# The suite's Worker. docs/specs/cloudflare-migration.md; going live is docs/ops/EDGE_FRONT_DOOR.md.
+#
+# A route only takes traffic for a hostname whose DNS record is proxied (orange cloud), so deploying this changes
+# nothing for app, docs or mcpdocs while their records are DNS only. edge.freeflow.im is the rehearsal host.
+name = "freeflow-edge"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+workers_dev = false
+
+routes = [
+  { pattern = "edge.freeflow.im", custom_domain = true },
+  { pattern = "app.freeflow.im/*", zone_name = "freeflow.im" },
+  { pattern = "docs.freeflow.im/*", zone_name = "freeflow.im" },
+  { pattern = "mcpdocs.freeflow.im/*", zone_name = "freeflow.im" },
+]
+
+# scripts/assemble.mjs fills public/: the built files of both clients, never their pages.
+# The Worker runs first so that it alone decides what a path is; a miss comes back to it and goes to the origin.
+[assets]
+directory = "public"
+binding = "ASSETS"
+run_worker_first = true
+html_handling = "none"
+not_found_handling = "none"
+
+[vars]
+ORIGIN_URL = "https://origin.freeflow.im"
+# The hosts the built files are served on. The other hosts' paths are the origin's (the plugin, the 301s to the app).
+ASSET_HOSTS = "app.freeflow.im,edge.freeflow.im"
+
+# Secret, set with `wrangler secret put EDGE_ORIGIN_SECRET`: the same value as /flow/EDGE_ORIGIN_SECRET on the instance.
+
+[observability]
+enabled = true

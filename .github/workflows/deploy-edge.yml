@@ -1,0 +1,54 @@
+# Deploys the suite's Cloudflare Worker (packages/edge) on each push to main that touches it or the clients whose built
+# files it serves. A deploy of the server and of this Worker need not land together: a file the Worker does not have
+# yet is answered by the origin.
+#
+# Does nothing until the repository variable EDGE_DEPLOY is `true` (docs/ops/EDGE_FRONT_DOOR.md). Secrets:
+# CLOUDFLARE_EDGE_API_TOKEN (Workers Scripts and Routes: Edit, Zone: Read) and CLOUDFLARE_ACCOUNT_ID.
+name: deploy-edge
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/edge/**'
+      - 'packages/web/**'
+      - 'packages/shared/**'
+      - 'packages/suite-bar/**'
+      - 'packages/docs/client/**'
+      - 'packages/docs/shared/**'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/deploy-edge.yml'
+  workflow_dispatch:
+
+concurrency: deploy-edge
+
+jobs:
+  deploy:
+    if: vars.EDGE_DEPLOY == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: packages/docs/.node-version
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile --filter @flow/edge... --filter @flow/web... --filter @flow/docs...
+      # The same commands and build tag as the server's image (packages/server/deploy/aws/Dockerfile), so a file has
+      # the same name on the edge and on the origin.
+      - name: Build the clients
+        run: |
+          pnpm --filter @flow/shared build
+          BUILD_SHA=$(printf '%.7s' "${{ github.sha }}") pnpm --filter @flow/web build
+          BASE_PATH=/workspace/ pnpm --filter @flow/docs build
+      - name: Assemble and deploy
+        working-directory: packages/edge
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_EDGE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          node scripts/assemble.mjs
+          pnpm exec wrangler deploy

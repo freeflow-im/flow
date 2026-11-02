@@ -29,6 +29,11 @@ export const config = {
   },
   port: Number(process.env.PORT ?? 8787),
   host: process.env.HOST ?? '127.0.0.1', // local server only in phase 1
+  /**
+   * The server is only reachable through a proxy that sets X-Forwarded-*, so believe them: the address the rate limits
+   * key on is the visitor's and not the proxy's. Set by the stack's deploy script; never on a server open to the internet.
+   */
+  get trustProxy(): boolean { return process.env.FLOW_TRUST_PROXY === '1'; },
   /** The session cookie's Secure flag (lib/sessionCookie.ts): on when the public address is https. */
   get secureCookies(): boolean { return config.webUrlBase.startsWith('https://'); },
   // ---- the Workspace app (packages/docs) hosted in this server (src/workspace.ts) ----

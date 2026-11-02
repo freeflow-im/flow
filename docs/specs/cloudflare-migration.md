@@ -48,8 +48,8 @@ move. It comes after phase 4 (Docs respecting the current organization) and befo
 | Fastify, `@fastify/*` | Hono. The 126 routes in `routes/index.ts` keep their paths and DTOs (`@flow/shared`); the handlers become thin: parse, pick the DO, call it. |
 | drizzle over Postgres, 48 SQL migrations | The DO's SQLite (`ctx.storage.sql`), migrations as numbered SQL run on first access of each object. `citext` → `COLLATE NOCASE`; `jsonb` → `TEXT` with JSON functions; `FOR UPDATE SKIP LOCKED` queues → Queues or Alarms. |
 | The `ws` gateway + NATS bus | Hibernating WebSockets on the Org DO; no bus, the object is the bus. The multi-server client contract (`shared/backend.ts`) is unchanged. |
-| argon2 (native) | argon2 in WebAssembly (`@noble/hashes` has argon2id), or re-hash to PBKDF2/scrypt on first sign-in as the scrypt → argon2 path does today. |
-| `sharp` (avatar resize) | Cloudflare Images, or decode in the client before upload. |
+| argon2 (native) | `@noble/hashes` argon2id, in JavaScript (`hash-wasm` cannot run: Workers forbid compiling WebAssembly at run time). |
+| `sharp` (avatar resize) | Cloudflare Images, or resize in the client before upload. It cannot load on Workers. |
 | Playwright + Chromium (Docs PDFs) | Browser Rendering API with the same print pages. |
 | `node:sqlite` in the Docs server (synchronous) | The DO's SQL is synchronous too: a `DatabaseSync`-shaped adapter over `ctx.storage.sql` lets `sheets.ts`, `files.ts`, `folders.ts` run almost as they are. |
 | Files on disk under `DATA_DIR` | R2 for every body; the stores already have a `blob` path (`backup.ts`). |
@@ -57,7 +57,7 @@ move. It comes after phase 4 (Docs respecting the current organization) and befo
 | APNs pushes (`pushOutbox`) | A Worker fetching APNs over HTTP/2 from a Queue consumer. |
 | Cloudflare Email (already) | Unchanged. Inbound community email (`communityEmail`) becomes an Email Worker. |
 | Nightly dumps, orphan sweeps | Cron Triggers; each Org DO exports itself to R2 on an alarm. |
-| LiteParse / Tesseract (PDF text, OCR in Docs import) | Stays on a small origin service until a Worker-side equivalent is chosen; proxied, like any path not yet ported. |
+| LiteParse / Tesseract (PDF to Markdown, OCR) | A Cloudflare Container started from a Durable Object: LiteParse does not load on Workers (`cloudflare-spikes.md`). Not tried yet. |
 
 ## 3. The order: one context at a time, both stacks live
 
@@ -92,16 +92,16 @@ flag, not a restore).
 
 ## 4. Sizing and limits that shape the design
 
-- A Durable Object is single-threaded: one organization's requests serialize. Thousands of requests a second
-  and tens of thousands of hibernating sockets per object; far beyond a tenant of a few hundred people.
+- A Durable Object is single-threaded: one organization's requests serialize. A soft limit of 1,000 requests a
+  second, and thousands of clients per object in Cloudflare's guidance; well beyond a tenant of a few hundred people.
 - 10 GB of SQLite per object; blobs are in R2, so metadata alone has to fit, which it does by a wide margin.
 - A Worker invocation has CPU time limits (ms per request on the paid plan, more for DOs); long jobs (a big
   Office import, a PDF of a long deck, the assistant's turns) run in a DO, a Queue consumer or Browser
   Rendering, never inline in a request.
 - Objects live in one location each; an organization's object sits near where it was first touched. Users on
   the other side of the world pay one round trip per request; fine for chat, and the sockets are long-lived.
-- No file system: every library that reads or writes files (LiteParse, Tesseract, some of the Office importers)
-  is checked before step 5; the ones that cannot run stay on a small origin service behind the proxy.
+- No file system: 27 Docs server files use it or `child_process` (`cloudflare-spikes.md`). The Office libraries work on
+  memory; what cannot run on Workers goes in a Cloudflare Container.
 
 ## 5. What the code does from now on (the rules of §3.2, as checklists)
 
@@ -138,21 +138,23 @@ needs a decision, a short spike comes first and its result goes in `decision_log
 - 0.1 `packages/edge`: the Worker package. Hono, TypeScript, `wrangler.toml` with the zone routes for
   `app.freeflow.im` and `docs.freeflow.im`, bindings declared but empty, a `deploy-edge.yml` workflow
   (`wrangler deploy` on main with an API token in the repo's secrets). Deploys nothing that answers yet.
-- 0.2 Cloudflare account: Workers paid plan (Durable Objects with SQLite need it), R2 already there, the
+- 0.2 Cloudflare account: Workers paid plan (argon2 needs its CPU limit, and an object gets 10 GB rather than 1), R2 already there, the
   `freeflow.im` zone already on Cloudflare DNS. An `origin.freeflow.im` A record for the instance, DNS only,
   so the Worker has a name to proxy to; Caddy serves it with its own certificate.
-- 0.3 Spike A, the socket topology: one client socket per organization (the multi-server runtime already
-  keeps one connection per server, so an organization on the edge is "another server" to it) versus one
-  socket into a per-user session object that fans out. Decide with a day's prototype; the first is simpler
-  and the plan assumes it.
-- 0.4 Spike B, Docs' libraries on Workers: LiteParse, Tesseract, `exceljs`, `pptxgenjs`, `@cantoo/pdf-lib`,
-  `sharp`. Each either runs in a Worker, runs in Browser Rendering, or stays on a small origin service.
-  A list with one line each.
+- 0.3 Spike A, the socket topology: done, `cloudflare-spikes.md`. One client runtime with one socket per
+  organization at `/v1/ws?workspace=<id>`, not an organization as "another server" and not a per-user object.
+  Clients ping and the runtime answers without waking the object, so that it can hibernate; an alarm serves old builds.
+- 0.4 Spike B, Docs' libraries on Workers: done, `cloudflare-spikes.md`. Office, PDF creation, PDF text and the model
+  SDKs run in a Worker. LiteParse and Tesseract need a container, and `sharp` is replaced.
 
 **Step 1, the front door.** (one PR, then a DNS change)
-- 1.1 The Worker serves the static clients (`packages/web/dist`, the Docs client under `/workspace`) and
+- 1.1 The Worker serves the clients' built files (`packages/web/dist`, the Docs client under `/workspace`) and
   proxies every other path to `origin.freeflow.im`, including WebSocket upgrades on `/v1/ws` and the
-  plugin's paths, with the client's IP and host forwarded.
+  plugin's paths, with the client's IP and host forwarded. Pages stay on the origin until step 5, because it decides
+  per request (the sign-in redirect on `/workspace`, the headers of `/p/*`); so do files over the 25 MiB Workers
+  Static Assets takes (the assistant's ONNX runtimes). A Worker cannot send the visitor's `Host` to another
+  hostname, so Caddy's `origin.freeflow.im` block restores it from headers, behind a shared secret.
+  The procedure is `docs/ops/EDGE_FRONT_DOOR.md`.
 - 1.2 `app.freeflow.im` and `docs.freeflow.im` move to the Worker (orange cloud). Everything behaves as
   before; deploys of the origin no longer show 502s because the Worker retries.
 - 1.3 Rollback: grey cloud, the records back to the instance.
@@ -162,8 +164,8 @@ needs a decision, a short spike comes first and its result goes in `decision_log
   `workspaces.ts`, `oauthGoogle/Apple`, `handoff`, `appToken` take a `DirectoryStore`; the Node
   implementation is today's Postgres code. No behaviour change. `pushOutbox`-style tables are not identity.
 - 2.2 The Directory Durable Object in `packages/edge`: its SQLite schema and migrations, the
-  `DirectoryStore` implementation over `ctx.storage.sql`, argon2id through WebAssembly (`hash-wasm`), the
-  scrypt check for imported Docs hashes through `@noble/hashes`. The Worker answers `/v1/auth/*`, `/v1/me`,
+  `DirectoryStore` implementation over `ctx.storage.sql`, argon2id through `@noble/hashes`, the
+  scrypt check for imported Docs hashes through `node:crypto`. The Worker answers `/v1/auth/*`, `/v1/me`,
   `/v1/me/workspaces` (memberships; the organizations' rows still come from the origin until step 3), the
   session cookie and bearer. A one-time import from Postgres (`scripts/import-directory.ts`) and
   **dual-write** from the origin: identity writes on the origin also go to the directory through a private
@@ -181,7 +183,9 @@ needs a decision, a short spike comes first and its result goes in `decision_log
 - 3.2 Routing by organization: the directory keeps `hosted_on` per organization (`origin` | `edge`) and an
   index `channel_id → organization` so a channel route finds its object. The Worker routes
   `/v1/workspaces/:id/*`, `/v1/channels/:id/*`, `/v1/messages/*` and the socket for an edge organization to
-  its object and proxies the rest to the origin. The client opens one socket per edge organization (Spike A).
+  its object and proxies the rest to the origin. The client opens one socket per edge organization and pings it
+  (Spike A); signing out or removing a member reaches the object, which closes that user's sockets.
+  **The native apps need the same socket change before an organization with native users moves.**
 - 3.3 The move tool: an admin route that exports one organization from Postgres (its rows and the blob keys
   it references) and imports it into its object; dual-write from the origin to the object while
   `hosted_on = origin` for that organization, so the switch is only the flag. Rehearse on a copy.
@@ -203,8 +207,9 @@ needs a decision, a short spike comes first and its result goes in `decision_log
 - 5.2 The Docs stores in the Org object (the organization's files, folders, public links, assistant
   conversations, the per-organization My files), bodies and uploads in R2, the Docs routes in the Worker
   under `/api/*`, the revision feed as object events over the same socket.
-- 5.3 PDFs through Browser Rendering (the print pages are served by the Worker); Office import and OCR per
-  Spike B's list, the ones that cannot run on Workers behind the proxy on a small origin service.
+- 5.3 PDFs through Browser Rendering (the print pages are served by the Worker); Office import in the Worker;
+  PDF to Markdown and OCR in a Cloudflare Container, starting with a trial on a real scanned PDF. Whether imports
+  and exports need their own Worker depends on the startup time measured in 5.2 (Spike B).
 - 5.4 The assistant's loop as a Cloudflare Workflow (an agent turn can run minutes; a request cannot), its
   server tools calling the object, its browser tools unchanged; the ChatGPT plugin's OAuth server and
   `/mcp` as Worker handlers over the directory's grants.
