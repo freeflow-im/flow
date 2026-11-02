@@ -39,7 +39,8 @@ export function initCrypto(): void {
   if (config.dataKeyInline) {
     const key = Buffer.from(config.dataKeyInline, 'base64');
     if (key.length !== 32) throw new Error('FLOW_DATA_KEY must be 32 bytes (base64)');
-    activeKey = { keyId: 'env-1', key };
+    // The id the key's rows carry: `env-1` for a key given this way, but the one a data-key file named when that is where it came from.
+    activeKey = { keyId: process.env.FLOW_DATA_KEY_ID || 'env-1', key };
   } else {
     throw new Error('FLOW_DATA_KEY is not set');
   }

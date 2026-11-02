@@ -15,6 +15,7 @@ import { runSchedulerTick } from './services/scheduledMessages';
 import { announceJoin, enrollInWorkspace, toWorkspaceDTO } from './services/workspaces';
 import { socketControl } from './sockets';
 import { setStorageEnv, type StorageEnv } from './storage/index';
+import { insertRows, tableCounts } from '../importing';
 import { eq, and } from 'drizzle-orm';
 
 export type OrgEnv = StorageEnv & { FLOW_DATA_KEY?: string; DIRECTORY: DurableObjectNamespace<Directory> };
@@ -176,6 +177,25 @@ export class Org extends DurableObject<OrgEnv> {
     if (!workspace) return;
     const redacted = user.privacyMode ? { ...user, email: '' } : user;
     this.broadcast(`ws.${workspace.id}.meta`, { type: 'user.updated', workspaceId: workspace.id, ts: new Date().toISOString(), data: redacted } as Event);
+  }
+
+  /** The one-time import (routes/admin.ts). The triggers report ids and memberships as for any insert. */
+  async importRows(table: string, rows: Record<string, unknown>[]): Promise<{ added: number }> {
+    const added = insertRows(this.ctx.storage.sql, table, rows);
+    return { added };
+  }
+
+  /** Row counts per table, to compare an import with its source. */
+  counts(): Record<string, number> {
+    return tableCounts(this.ctx.storage.sql);
+  }
+
+  /** After the last table: tell the directory, and set the next scheduled message's alarm. */
+  async importDone(): Promise<{ reported: number }> {
+    const pending = this.ctx.storage.sql.exec('SELECT COUNT(*) AS n FROM _outbox').one().n as number;
+    await this.flushOutbox(null);
+    await this.armAlarm();
+    return { reported: pending };
   }
 
   /** The organization's own answer to GET /v1/me/workspaces. */

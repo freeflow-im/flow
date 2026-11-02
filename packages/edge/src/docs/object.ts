@@ -5,6 +5,7 @@ import type { Directory } from '../directory/object';
 import { withDocsContext, type DocsContext } from './runtime/context.ts';
 import { DocsApp, type Caller, type DocsRequest } from './runtime/fastify.ts';
 import { buildApp } from './server/app.ts';
+import { insertRows, tableCounts } from '../importing';
 import { setBrowserBinding } from './server/pdf.ts';
 
 export interface DocsEnv {
@@ -81,6 +82,22 @@ export class Docs extends DurableObject<DocsEnv> {
     const stub = this.env.DIRECTORY.get(this.env.DIRECTORY.idFromName('directory'));
     const answer = await (stub.call as never as (m: string, a: unknown[]) => Promise<{ ok: boolean }>)('applyOrgChanges', [organizationId, rows]);
     if (answer.ok) sql.exec('DELETE FROM _outbox WHERE seq <= ?', rows.at(-1)!.seq as number);
+  }
+
+  /** The one-time import (routes/admin.ts). The object's tables are made first, by building the app as any request does. */
+  async importRows(table: string, rows: Record<string, unknown>[], organizationId: string): Promise<{ added: number }> {
+    const added = await withDocsContext(this.context, async () => {
+      await this.ready;
+      this.outbox();
+      return insertRows(this.ctx.storage.sql, table, rows);
+    });
+    await this.flush(organizationId);
+    return { added };
+  }
+
+  /** Row counts per table, to compare an import with its source. */
+  async counts(): Promise<Record<string, number>> {
+    return withDocsContext(this.context, async () => { await this.ready; return tableCounts(this.ctx.storage.sql); });
   }
 
   async handle(request: Request, caller: Caller, organizationId: string): Promise<Response> {

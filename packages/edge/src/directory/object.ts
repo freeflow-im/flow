@@ -4,6 +4,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { ApiError } from '../errors';
 import { sendMail, type MailEnv } from '../mail';
 import { DirectoryCore } from './core';
+import { insertRows, type ImportRow } from '../importing';
 
 export type DirectoryAnswer<T> = { ok: true; value: T } | { ok: false; status: number; code: string; message: string };
 
@@ -25,6 +26,12 @@ export class Directory extends DurableObject<DirectoryEnv> {
       registrationEnabled: env.REGISTRATION_ENABLED !== '0',
       send: (mail) => sendMail(env, mail),
     });
+  }
+
+  /** The one-time import (routes/admin.ts). Only identity's tables. */
+  importRows(table: string, rows: ImportRow[]): { added: number } {
+    if (!['users', 'sessions', 'oauth_identities', 'agent_tokens', 'memberships', 'organization_slugs'].includes(table)) throw new Error(`not a directory table: ${table}`);
+    return { added: insertRows(this.ctx.storage.sql, table, rows) };
   }
 
   async call(method: Method, args: unknown[]): Promise<DirectoryAnswer<unknown>> {

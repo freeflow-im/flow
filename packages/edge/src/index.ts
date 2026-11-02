@@ -7,6 +7,7 @@ import { authRoutes, type AuthEnv } from './routes/auth';
 import { orgRoutes } from './routes/org';
 import { docsRoutes } from './routes/docs';
 import { pageRoutes } from './routes/pages';
+import { adminRoutes } from './routes/admin';
 
 export { Directory } from './directory/object';
 export { Org } from './org/object';
@@ -38,6 +39,7 @@ const onError = (err: Error, c: Context) => {
 app.onError(onError);
 
 app.get('/edge/health', (c) => c.json({ ok: true }));
+app.route('/', adminRoutes as never);
 
 // Ported routes, only on the hosts that have been switched. A path not ported yet falls through to the proxy.
 const ported = new Hono<{ Bindings: Env }>();
