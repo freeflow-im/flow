@@ -31,8 +31,10 @@ export function originRequest(req: Request, env: ProxyEnv): Request {
   headers.set('X-Edge-Secret', env.EDGE_ORIGIN_SECRET);
   headers.set('X-Edge-Host', from.host);
   headers.set('X-Edge-Client-IP', req.headers.get('CF-Connecting-IP') ?? '');
+  // `no-store`: a Worker's fetch otherwise goes through Cloudflare's cache, which stores anything whose path looks like a
+  // static file, under a key that ignores who is asking. The origin answers per user, so nothing of it may be stored.
   // `duplex` is what Node's Request asks of a streamed body (the tests); Workers ignore it.
-  const init = { method: req.method, headers, body: req.body, redirect: 'manual', duplex: 'half' } as RequestInit;
+  const init = { method: req.method, headers, body: req.body, redirect: 'manual', cache: 'no-store', duplex: 'half' } as RequestInit;
   return new Request(target, init);
 }
 

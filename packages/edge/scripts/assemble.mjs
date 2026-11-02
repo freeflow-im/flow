@@ -1,7 +1,7 @@
 // Fills public/ for the Worker from the clients' builds: the web client at the root, the Workspace client under
 // /workspace. Pages stay out: the origin answers them, because it decides per request (the sign-in redirect on
 // /workspace, the headers of /p/*). So do files over the 25 MiB Workers takes (the assistant's ONNX runtimes): the
-// Worker misses and the origin answers. Build first: @flow/web, and @flow/docs with BASE_PATH=/workspace/.
+// Worker misses and the origin answers. Production copies the builds out of the server's image (deploy-edge.yml), so the names match the server's pages.
 import { cpSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

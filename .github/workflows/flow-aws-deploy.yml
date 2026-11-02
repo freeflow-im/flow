@@ -68,3 +68,14 @@ jobs:
           aws ssm get-command-invocation --command-id "$id" --instance-id "$INSTANCE" \
             --query '[StandardOutputContent,StandardErrorContent]' --output text
           [ "$status" = Success ]
+
+  # The Worker's files come from the image just pushed, so they have the names the server's pages use. A file it does
+  # not have yet is answered by the origin, so a failure here costs speed and no availability.
+  edge:
+    needs: deploy
+    if: vars.EDGE_DEPLOY == 'true'
+    uses: ./.github/workflows/deploy-edge.yml
+    permissions:
+      contents: read
+      id-token: write
+    secrets: inherit

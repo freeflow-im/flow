@@ -43,8 +43,8 @@ itself (step 6) has no downtime and is undone in the Cloudflare dashboard in sec
    node packages/edge/scripts/check-front-door.mjs app.freeflow.im
    ```
 
-4. **Connect the deploys.** Create a Cloudflare API token with Workers Scripts: Edit, Workers Routes: Edit and
-   Zone: Read on `freeflow.im`. In the GitHub repository add the secret `CLOUDFLARE_EDGE_API_TOKEN`, check that
+4. **Connect the deploys.** Create a Cloudflare API token with Workers Scripts: Edit, and Workers Routes: Edit, DNS: Edit
+   and Zone: Read on `freeflow.im`. In the GitHub repository add the secret `CLOUDFLARE_EDGE_API_TOKEN`, check that
    `CLOUDFLARE_ACCOUNT_ID` is there (the home page's deploy uses it), and set the variable `EDGE_DEPLOY` to `true`.
    Run `deploy-edge.yml` by hand. This creates `edge.freeflow.im` and the routes. The routes take no traffic while
    the three records are grey.
