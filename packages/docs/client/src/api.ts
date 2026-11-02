@@ -209,7 +209,8 @@ export const api = {
   stopSharing: (kind: SharedKind, id: string) => request<{ url: string | null }>('DELETE', `/api/sharing/${kind}/${encodeURIComponent(id)}`),
   publicView: (token: string) => request<PublicView>('GET', `/api/public/${encodeURIComponent(token)}`),
 
-  me: () => request<{ user: User | null; googleLogin: boolean; local?: { dir: string } }>('GET', '/api/auth/me'),
+  /** `suite`: hosted in the FreeFlow suite, whose sign-in (at /) is the only one; `local`: the desktop app. */
+  me: () => request<{ user: User | null; googleLogin: boolean; local?: { dir: string }; suite?: { basePath: string } }>('GET', '/api/auth/me'),
   /** Recents: the files last opened in the app (server/recents.ts). */
   /**
    * The favorites: files as Recents lists them, folders with where they are (in the desktop app by their absolute

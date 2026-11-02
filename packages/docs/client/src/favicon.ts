@@ -2,15 +2,16 @@
 // document or Markdown icon (client/public/favicon-*.svg, the same marks as the logos in components/Logo.tsx).
 import { useEffect } from 'react';
 import type { DocKind } from '../../shared/types.ts';
+import { appUrl } from './basePath.ts';
 
 export type FaviconKind = DocKind | 'home';
 
 export const FAVICONS: Record<FaviconKind, string> = {
-  home: '/favicon-home.svg',
-  sheet: '/favicon-sheet.svg',
-  deck: '/favicon-deck.svg',
-  doc: '/favicon-doc.svg',
-  markdown: '/favicon-markdown.svg',
+  home: appUrl('/favicon-home.svg'),
+  sheet: appUrl('/favicon-sheet.svg'),
+  deck: appUrl('/favicon-deck.svg'),
+  doc: appUrl('/favicon-doc.svg'),
+  markdown: appUrl('/favicon-markdown.svg'),
 };
 
 export function setFavicon(kind: FaviconKind): void {

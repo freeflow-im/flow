@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { appUrl } from '../basePath.ts';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { isHtmlName, type DeletedFile, type StoredFile } from '../../../shared/types.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
@@ -630,7 +631,7 @@ function FileList() {
       importing={importing}
       onImport={(file) => void importFile(file)}
       onOpen={(s) => (recents ? void openRecent(s) : favoritesShown ? void openFavorite(s) : navigate(pathOf(s)))}
-      onOpenInNewTab={elsewhere ? undefined : (s) => void window.open(pathOf(s), '_blank')}
+      onOpenInNewTab={elsewhere ? undefined : (s) => void window.open(appUrl(pathOf(s)), '_blank')}
       titleLink={elsewhere ? undefined : (s, children) => (
         <Link to={pathOf(s)} className="sheet-title" onClick={(e) => e.stopPropagation()}>
           {children}

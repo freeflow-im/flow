@@ -43,6 +43,17 @@ import Main from './components/Main';
 const ACTIVE_WS = 'activeWorkspace';
 const ADMIN_PANEL = 'adminPanelOpen';
 export const PENDING_INVITE = 'pendingInvite';
+/** sessionStorage: the path to go to once signed in (?next=, consumed in SessionApp). */
+export const NEXT_AFTER_SIGN_IN = 'flow.nextAfterSignIn';
+
+/** Leave for the ?next= destination if one is waiting; true when leaving. */
+export function goToNextAfterSignIn(): boolean {
+  const next = sessionStorage.getItem(NEXT_AFTER_SIGN_IN);
+  if (!next) return false;
+  sessionStorage.removeItem(NEXT_AFTER_SIGN_IN);
+  location.assign(next);
+  return true;
+}
 
 /** Pull ?signup= / ?reset= / ?signin= (emailed links), ?native= (the native
  * Google handoff, phase16 §9) and ?register (the marketing site's Sign up
@@ -73,6 +84,14 @@ function consumeEmailLinkParams(runtime: ConnectionRuntime): {
     history.replaceState(null, '', '/');
   }
   const params = new URLSearchParams(location.search);
+  // ?next=<path>: where to go once signed in — the Workspace app (/workspace/...) and the ChatGPT plugin's
+  // OAuth pages (/oauth/resume) send a visitor to this sign-in and back. Only a path on this origin is kept.
+  const next = params.get('next');
+  if (next && /^\/(?!\/)/.test(next)) {
+    sessionStorage.setItem(NEXT_AFTER_SIGN_IN, next);
+    params.delete('next');
+    history.replaceState(null, '', `${location.pathname}${params.size ? `?${params}` : ''}`);
+  }
   const signupToken = params.get('signup');
   const resetToken = params.get('reset');
   const signinToken = params.get('signin');
@@ -376,6 +395,8 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
     setUser(resp.user);
     runtime.write("cachedUser", JSON.stringify(resp.user));
     setOffline(false);
+    // Sent here to sign in by another part of the suite (?next=): back there, now that the session cookie is set.
+    if (goToNextAfterSignIn()) return;
     const joined = resp.autoJoined ?? [];
     if (joined.length > 0) {
       const first = joined[0]!;

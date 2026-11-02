@@ -31,3 +31,6 @@ packages/web/public/flow-agent-member-SKILL.md
 packages/web/public/FEATURES.md
 # generated at predev/prebuild from the mermaid package (3.5 MB browser bundle)
 packages/web/public/mermaid/mermaid.min.js
+
+# The suite server run from a worktree (src/workspace.ts): the Workspace app's local data
+.workspace-data/

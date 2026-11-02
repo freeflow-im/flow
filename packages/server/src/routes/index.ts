@@ -56,6 +56,7 @@ import { ApiError, badRequest, notFound, unauthorized } from '../lib/errors.js';
 import { rateAllow } from '../lib/rateLimit.js';
 import { rateAllowDb } from '../lib/rateLimitDb.js';
 import { parseByteRange } from '../lib/httpRange.js';
+import { clearSessionCookie, sessionTokenOf, setSessionCookie } from '../lib/sessionCookie.js';
 import { blobStore } from '../storage/index.js';
 
 /** Blob-store key the notarized macOS DMG is uploaded to (see /download/mac). */
@@ -115,9 +116,9 @@ function parse<S extends ZodTypeAny>(schema: S, data: unknown): z.output<S> {
 }
 
 async function requireAuth(req: FastifyRequest): Promise<void> {
-  const header = req.headers.authorization;
-  if (!header?.startsWith('Bearer ')) throw unauthorized('missing bearer token');
-  const token = header.slice('Bearer '.length).trim();
+  // A bearer header, or the session cookie the Workspace app's pages carry (lib/sessionCookie.ts).
+  const token = sessionTokenOf(req);
+  if (!token) throw unauthorized('missing bearer token');
   req.bearerToken = token;
   const authed = await auth.authenticateWithKind(token);
   req.user = authed.user;
@@ -130,6 +131,12 @@ async function readUpload(req: FastifyRequest): Promise<{ filename: string; mime
   if (!part) throw badRequest('no_file', 'multipart file field required');
   const data = await part.toBuffer();
   return { filename: part.filename ?? 'file', mimeType: part.mimetype, data };
+}
+
+/** A sign-in's response, with its session set as the cookie too (lib/sessionCookie.ts). */
+function signedIn<T extends { token: string }>(reply: FastifyReply, res: T): T {
+  setSessionCookie(reply, res.token);
+  return res;
 }
 
 export function registerRoutes(app: FastifyInstance): void {
@@ -273,12 +280,12 @@ export function registerRoutes(app: FastifyInstance): void {
   app.post('/v1/auth/register/complete', async (req, reply) => {
     const body = parse(CompleteSignupBody, req.body);
     const res = await auth.completeSignup(body.token, body.displayName, body.password, req.headers['user-agent']);
-    return reply.status(201).send(res);
+    return reply.status(201).send(signedIn(reply, res));
   });
 
-  app.post('/v1/auth/login', async (req) => {
+  app.post('/v1/auth/login', async (req, reply) => {
     const body = parse(LoginBody, req.body);
-    return auth.login(body.email, body.password, req.headers['user-agent']);
+    return signedIn(reply, await auth.login(body.email, body.password, req.headers['user-agent']));
   });
 
   app.post('/v1/auth/password/forgot', async (req) => {
@@ -287,9 +294,9 @@ export function registerRoutes(app: FastifyInstance): void {
     return { ok: true };
   });
 
-  app.post('/v1/auth/password/reset', async (req) => {
+  app.post('/v1/auth/password/reset', async (req, reply) => {
     const body = parse(ResetPasswordBody, req.body);
-    return auth.resetPassword(body.token, body.password, req.headers['user-agent']);
+    return signedIn(reply, await auth.resetPassword(body.token, body.password, req.headers['user-agent']));
   });
 
   // Passwordless sign-in: request a one-time link (open, no enumeration),
@@ -300,9 +307,9 @@ export function registerRoutes(app: FastifyInstance): void {
     return { ok: true };
   });
 
-  app.post('/v1/auth/signin-link/consume', async (req) => {
+  app.post('/v1/auth/signin-link/consume', async (req, reply) => {
     const body = parse(ConsumeSigninLinkBody, req.body);
-    return auth.consumeSigninLink(body.token, req.headers['user-agent']);
+    return signedIn(reply, await auth.consumeSigninLink(body.token, req.headers['user-agent']));
   });
 
   // Google Sign-In (phase 16). Open, like login — the ID token IS the proof.
@@ -314,7 +321,7 @@ export function registerRoutes(app: FastifyInstance): void {
     }
     const body = parse(GoogleAuthBody, req.body);
     const res = await google.signInWithGoogle(body.idToken, req.headers['user-agent']);
-    return reply.status(201).send(res);
+    return reply.status(201).send(signedIn(reply, res));
   });
 
   // Sign in with Apple (native iOS flow). Same contract as /v1/auth/google:
@@ -326,11 +333,12 @@ export function registerRoutes(app: FastifyInstance): void {
     }
     const body = parse(AppleAuthBody, req.body);
     const res = await apple.signInWithApple(body.identityToken, body.name, req.headers['user-agent']);
-    return reply.status(201).send(res);
+    return reply.status(201).send(signedIn(reply, res));
   });
 
-  app.post('/v1/auth/logout', { preHandler: requireAuth }, async (req) => {
+  app.post('/v1/auth/logout', { preHandler: requireAuth }, async (req, reply) => {
     await auth.logout(req.bearerToken);
+    clearSessionCookie(reply);
     return { ok: true };
   });
 
@@ -339,9 +347,9 @@ export function registerRoutes(app: FastifyInstance): void {
     return reply.status(201).send(await auth.createAppLink(req.user.id));
   });
 
-  app.post('/v1/auth/app-link/exchange', async (req) => {
+  app.post('/v1/auth/app-link/exchange', async (req, reply) => {
     const body = parse(AppLinkExchangeBody, req.body);
-    return auth.exchangeAppLink(body.code, req.headers['user-agent']);
+    return signedIn(reply, await auth.exchangeAppLink(body.code, req.headers['user-agent']));
   });
 
   // Bound handoff endpoints are separate so old app-link exchanges cannot downgrade PKCE.
@@ -358,7 +366,7 @@ export function registerRoutes(app: FastifyInstance): void {
   app.post('/v1/auth/handoff/exchange', async (req, reply) => {
     if (!await rateAllowDb(`handoff-exchange:${req.ip}`, 60, 10 * 60_000)) throw new ApiError(429, 'rate_limited', 'Too many handoff attempts');
     reply.header('Cache-Control', 'no-store');
-    return handoff.exchangeHandoff(parse(handoff.HandoffExchange, req.body), req.headers.origin, req.headers['user-agent']);
+    return signedIn(reply, await handoff.exchangeHandoff(parse(handoff.HandoffExchange, req.body), req.headers.origin, req.headers['user-agent']));
   });
 
   // ---- me ------------------------------------------------------

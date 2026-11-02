@@ -277,6 +277,9 @@ importers:
       '@aws-sdk/s3-request-presigner':
         specifier: ^3.1091.0
         version: 3.1091.0
+      '@fastify/cookie':
+        specifier: ^11.1.2
+        version: 11.1.5
       '@fastify/multipart':
         specifier: ^10.1.0
         version: 10.1.0

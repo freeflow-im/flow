@@ -4,6 +4,8 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   root: 'client',
+  // The suite serves the client under /workspace (BASE_PATH=/workspace/ when building for it); standalone, the root.
+  base: process.env.BASE_PATH ?? '/',
   plugins: [react()],
   server: {
     port: 5173,

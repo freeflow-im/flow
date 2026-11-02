@@ -1,4 +1,5 @@
 import { DOMSerializer } from 'prosemirror-model';
+import { appUrl } from '../basePath.ts';
 import { nameWithExt, titleBase } from '../../../shared/docNames.ts';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
@@ -403,7 +404,7 @@ function DocWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta:
           label: 'New document',
           action: async () => {
             const { doc } = await api.createDoc('Untitled document');
-            window.open(`/doc/${doc.id}`, '_blank');
+            window.open(appUrl(`/doc/${doc.id}`), '_blank');
           },
         },
         { label: 'Rename…', action: () => setDialog({ kind: 'rename' }) },

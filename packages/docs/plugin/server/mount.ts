@@ -25,11 +25,16 @@ export interface MountOptions {
   files?: FileStore;
   /** Makes PDFs of files (server/pdf.ts), for export_pdf. */
   pdf?: PdfMaker;
-  auth: AuthService;
+  /** The app's accounts, for the plugin's own sign-in pages; null when hosted in the suite, whose sign-in is used instead. */
+  auth: AuthService | null;
   google: GoogleLogin | null;
   /** The app's mailer and its limit on emails per address, for accounts created on the plugin's sign-in page. */
   sendMail: Mailer;
   mailAllowed: (email: string) => boolean;
+  /** Hosted in the suite: the user behind a raw Cookie header (the suite's session), in place of `auth` and `sessionCookie`. */
+  sessionUser?: (cookieHeader: string | undefined) => Promise<string | null>;
+  /** Hosted in the suite: where its sign-in page is (a path on this origin); the plugin's pages send a visitor there. */
+  suiteSignIn?: string;
   /**
    * Public origin of the app (the OAuth issuer and where images come from), e.g. https://docs.example.com. Several,
    * comma-separated, when the app is reached on more than one host: each is the issuer and resource of requests to
@@ -60,6 +65,7 @@ export async function mountPlugin(app: FastifyInstance, opts: MountOptions): Pro
       google: opts.google,
       sendMail: opts.sendMail,
       mailAllowed: opts.mailAllowed,
+      suiteSignIn: opts.suiteSignIn,
     });
     const handler = createPluginHandler({
       hub,
@@ -67,10 +73,12 @@ export async function mountPlugin(app: FastifyInstance, opts: MountOptions): Pro
       publicUrl: url,
       webDir: opts.webDir,
       production: opts.production,
-      sessionUser: (req) => {
-        const cookie = parseCookie(req.headers.cookie)[opts.sessionCookie];
-        return opts.auth.userForSession(cookie)?.id ?? null;
-      },
+      sessionUser: opts.sessionUser
+        ? (req) => opts.sessionUser!(req.headers.cookie)
+        : (req) => {
+            const cookie = parseCookie(req.headers.cookie)[opts.sessionCookie];
+            return opts.auth?.userForSession(cookie)?.id ?? null;
+          },
     });
     return { host: new URL(url).host, oauth, handler };
   });

@@ -9,6 +9,8 @@ interface AuthState {
   googleLogin: boolean;
   /** Set in the desktop app: the folder whose files are the library. There is no account to sign in or out of. */
   local: { dir: string } | null;
+  /** Set when hosted in the FreeFlow suite: accounts are the suite's, signed in to at /. */
+  suite: { basePath: string } | null;
   login(email: string, password: string): Promise<void>;
   /** Creates the account; the user is signed in by the link in the verification email, not here. */
   register(email: string, password: string): Promise<void>;
@@ -24,6 +26,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [googleLogin, setGoogleLogin] = useState(false);
   const [local, setLocal] = useState<{ dir: string } | null>(null);
+  const [suite, setSuite] = useState<{ basePath: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -38,6 +41,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setGoogleLogin(!!r.googleLogin);
             setLocalApp(!!r.local);
             setLocal(r.local ?? null);
+            setSuite(r.suite ?? null);
           }
           break;
         } catch (e) {
@@ -65,9 +69,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     await api.logout();
     setUser(null);
-  }, []);
+    // The suite's session ended with it: its sign-in page is where to go next.
+    if (suite) window.location.assign('/');
+  }, [suite]);
 
-  return <AuthContext.Provider value={{ user, loading, googleLogin, local, login, register, logout, setUser }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ user, loading, googleLogin, local, suite, login, register, logout, setUser }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth(): AuthState {

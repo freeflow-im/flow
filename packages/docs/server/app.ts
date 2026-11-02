@@ -6,7 +6,7 @@ import { featureHtml, featureMarkdown, featuresIndexHtml, robotsTxt, sitemapXml 
 import { scratchPadName } from '../shared/docNames.ts';
 import { sniffImageType } from './importFile.ts';
 import { fetchPublicFile, WebFetchError } from './webFetch.ts';
-import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import Anthropic from '@anthropic-ai/sdk';
 import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
@@ -147,6 +147,23 @@ export interface AppOptions {
    */
   blob?: ObjectStore | null;
   /**
+   * Hosted inside another Fastify server (the FreeFlow suite, packages/server): the routes join `app` as an
+   * encapsulated plugin, so their hooks run for them alone; the host says who is signed in (its own session,
+   * carried as a bearer or its cookie); the client is served under `basePath`. There are no accounts of this
+   * app's own then: /api/auth/* beyond `me` and `logout` is the host's, and `users` only mirrors the host's.
+   */
+  host?: {
+    app: FastifyInstance;
+    /** The signed-in user of a request by the host's session; null for a visitor. */
+    authenticate(req: FastifyRequest): Promise<User | null>;
+    /** End the request's session at the host (and clear its cookie): /api/auth/logout. */
+    signOut(req: FastifyRequest, reply: FastifyReply): Promise<void>;
+    /** The user id behind a raw Cookie header, for the plugin's OAuth pages, which answer outside Fastify. */
+    userForCookie(cookieHeader: string | undefined): Promise<string | null>;
+    /** Where the client lives, e.g. "/workspace". */
+    basePath: string;
+  };
+  /**
    * The desktop app (desktop/): the library is the files of this folder (server/localStore.ts) and there
    * are no accounts, every request is the one local user. With a token, only requests carrying it in the
    * "local" cookie are that user, which keeps other programs and web pages on this machine out.
@@ -236,8 +253,17 @@ function agentErrorMessage(e: unknown): string {
 export async function buildApp(opts: AppOptions) {
   const db = openDb(path.join(opts.dataDir, 'app.db'));
   const auth = new AuthService(db);
-  const sendMail = opts.sendMail ?? mailerFromEnv((msg) => app.log.info(msg));
-  const googleOpts = opts.google ?? googleFromEnv();
+  // Hosted (the FreeFlow suite, opts.host): the routes join the host's server as an encapsulated plugin (wire()
+  // below), so this app's hooks run for them alone and the host's own (cookies, static files, its routes) stay as
+  // they are; the host's server is the one whose log and address this app uses. Standalone: a server of its own.
+  const host = opts.host ?? null;
+  const basePath = host ? host.basePath.replace(/\/$/, '') : '';
+  const app: FastifyInstance = host ? host.app : Fastify({ logger: opts.logger ?? false, bodyLimit: 100 * 1024 * 1024, trustProxy: true });
+  if (!host) await app.register(cookie);
+  // Hosted, the suite signs people in and up and sends the mail: no mailer or Google sign-in of this app's own
+  // (the host's environment names its own mail and Google settings).
+  const sendMail: Mailer = opts.sendMail ?? (host ? async () => {} : mailerFromEnv((msg) => app.log.info(msg)));
+  const googleOpts = host ? null : (opts.google ?? googleFromEnv());
   const google = googleOpts ? new GoogleLogin(googleOpts) : null;
   // Emails sent per kind and address (password resets, verification links), to keep the mailbox and the
   // mailer quiet under abuse: at most 5 an hour.
@@ -284,6 +310,7 @@ export async function buildApp(opts: AppOptions) {
   registerConnectorService(sheets, connectors);
   // Created after the connector service, which makes the encryption key file they share.
   // The desktop app's settings are the app's, not the folder's: one database for every folder's server.
+  let windowTools: WindowTools | null = null; // made in wire(), used by the Claude Code driver's pins
   const settingsDir = opts.local?.settingsDir ?? opts.dataDir;
   const settingsDb = settingsDir === opts.dataDir ? db : openDb(path.join(settingsDir, 'settings.db'));
   if (settingsDb !== db) settingsDb.prepare("INSERT OR IGNORE INTO users (id, email, password_hash, created_at) VALUES ('local', 'local', '', ?)").run(new Date().toISOString());
@@ -311,9 +338,10 @@ export async function buildApp(opts: AppOptions) {
         renderer: pdfRenderer,
         sheets,
         files: storedFiles,
+        // The pages are this server's own (the host's, when hosted), under the client's base path.
         origin: () => {
           const address = app.server.address();
-          return opts.staticDir ? `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}` : (process.env.PRINT_ORIGIN ?? 'http://localhost:5173');
+          return (opts.staticDir ? `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}` : (process.env.PRINT_ORIGIN ?? 'http://localhost:5173')) + basePath;
         },
       })
     : null;
@@ -323,9 +351,25 @@ export async function buildApp(opts: AppOptions) {
   // A previous server process may have died (or been restarted by the job itself) with a job in flight.
   jobRunner.reconcile();
 
-  const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 100 * 1024 * 1024, trustProxy: true });
-  await app.register(cookie);
-  const pluginOAuth = opts.plugin ? await mountPlugin(app, { db, dataDir: opts.dataDir, sheets, images, files: storedFiles, auth, google, sendMail, mailAllowed: (email) => !tooManyMails('verify', email), pdf: pdfMaker ?? undefined, publicUrl: opts.plugin.publicUrl, webDir: opts.plugin.webDir, sessionCookie: SESSION_COOKIE, production: !!opts.staticDir }) : null;
+  if (host) {
+    let child!: FastifyInstance;
+    await host.app.register(async (c) => {
+      child = c;
+      await wire(c);
+    });
+    return child;
+  }
+  await wire(app);
+  return app;
+
+  // The routes, hooks and static files, on `app`: the host's encapsulated child, or the standalone server.
+
+  async function wire(app: FastifyInstance): Promise<void> {
+  // The plugin answers its paths (/mcp, /oauth/*, ...) in a hook before routing: on the host's server when
+  // hosted, as the hook of an encapsulated plugin runs only for that plugin's routes.
+  const pluginOAuth = opts.plugin
+    ? await mountPlugin(host?.app ?? app, { db, dataDir: opts.dataDir, sheets, images, files: storedFiles, auth: host ? null : auth, google: host ? null : google, sendMail, mailAllowed: (email) => !tooManyMails('verify', email), pdf: pdfMaker ?? undefined, publicUrl: opts.plugin.publicUrl, webDir: opts.plugin.webDir, sessionCookie: SESSION_COOKIE, sessionUser: host ? (cookieHeader) => host.userForCookie(cookieHeader) : undefined, suiteSignIn: host ? '/' : undefined, production: !!opts.staticDir })
+    : null;
   // Raw file uploads (xlsx import).
   app.addContentTypeParser([XLSX_MIME, PPTX_MIME, DOCX_MIME, 'application/vnd.ms-excel', 'application/octet-stream'], { parseAs: 'buffer', bodyLimit: MAX_IMPORT_BYTES }, (_req, body, done) =>
     done(null, body),
@@ -337,13 +381,13 @@ export async function buildApp(opts: AppOptions) {
   app.addContentTypeParser(CELL_IMAGE_TYPES, { parseAs: 'buffer', bodyLimit: MAX_CELL_IMAGE_BYTES }, (_req, body, done) => done(null, body));
 
   app.decorate('connectors', connectors);
-  app.decorateRequest('user', null);
+  if (!host) app.decorateRequest('user', null); // hosted: the host's own request decoration
   app.decorateRequest('folder', '');
 
-  // Requests to a retired host name go to the current one (same path and query).
+  // Requests to a retired host name go to the current one (same path and query). Hosted, the host does it.
   const appUrl = (opts.appUrl ?? process.env.APP_URL)?.replace(/\/$/, '');
   const legacyHosts = new Set((opts.legacyHosts ?? process.env.LEGACY_HOSTS?.split(',') ?? []).map((h) => h.trim().toLowerCase()).filter(Boolean));
-  if (appUrl && legacyHosts.size) {
+  if (!host && appUrl && legacyHosts.size) {
     const current = new URL(appUrl).host.toLowerCase();
     app.addHook('onRequest', async (req, reply) => {
       const host = String(req.headers.host ?? '').toLowerCase();
@@ -363,7 +407,7 @@ export async function buildApp(opts: AppOptions) {
   if (localUser && sheets instanceof LocalSheetStore) sheets.media = { store: (type, data) => images.createOnce(localUser.id, type, data), source: imageSource(images, localUser.id) };
   // The desktop app's MCP server, and the file its window shows (the one the tools act on by default). Its
   // edit tools on a file open in a window run in that window (windowTools.ts).
-  const windowTools = opts.local?.mcp ? new WindowTools() : null;
+  windowTools = opts.local?.mcp ? new WindowTools() : null;
   // A file named by its path, for the MCP server's open_path: one in the folder is its document or stored file;
   // for any other the app opens the file's own folder in a new tab.
   const openLocalPath = (given: string): { kind: LibraryKind; id: string } | { elsewhere: string } => {
@@ -391,6 +435,10 @@ export async function buildApp(opts: AppOptions) {
   const localMcp = opts.local?.mcp
     ? await mountLocalMcp(app, { db, dataDir: opts.dataDir, sheets, images, files: storedFiles, folders, userId: localUser!.id, token: opts.local.mcp.token, publicUrl: opts.local.mcp.url ?? null, show: opts.local.mcp.show, changed: opts.local.mcp.changed, live: windowTools, pdf: pdfMaker ?? undefined, openPath: openLocalPath })
     : null;
+  // Hosted, the host's users are mirrored into this database as they are seen, so that everything a user owns
+  // (sheets, files, folders, ...) keeps its foreign key to a users row of theirs; the row has no password.
+  const mirrorUser = db.prepare("INSERT INTO users (id, email, password_hash, created_at) VALUES (?, ?, '', ?) ON CONFLICT(id) DO UPDATE SET email = excluded.email WHERE email <> excluded.email");
+  const mirrored = new Map<string, string>();
   app.addHook('onRequest', async (req, reply) => {
     // The headless browser making a PDF carries a print ticket instead of a session (server/pdf.ts): it is the
     // user who asked, for reading only.
@@ -401,7 +449,19 @@ export async function buildApp(opts: AppOptions) {
       return;
     }
     if (localUser) req.user = !opts.local!.token || req.cookies[opts.local!.cookie ?? LOCAL_COOKIE] === opts.local!.token ? localUser : null;
-    else req.user = auth.userForSession(req.cookies[SESSION_COOKIE]);
+    else if (host) {
+      req.user = await host.authenticate(req);
+      if (req.user && mirrored.get(req.user.id) !== req.user.email) {
+        try {
+          mirrorUser.run(req.user.id, req.user.email, new Date().toISOString());
+          mirrored.set(req.user.id, req.user.email);
+        } catch (e) {
+          // Another row holds this email (an account from before the merge that the migration did not map).
+          req.log.error({ err: e, userId: req.user.id }, 'could not mirror the host user');
+          return reply.code(500).send({ error: 'This account is not set up for Workspace yet.' });
+        }
+      }
+    } else req.user = auth.userForSession(req.cookies[SESSION_COOKIE]);
   });
   app.addHook('onClose', async () => {
     await closePdfReaders();
@@ -456,6 +516,8 @@ export async function buildApp(opts: AppOptions) {
     });
   };
 
+  // Hosted, accounts are the host's: none of the sign-up, sign-in and password routes below exist.
+  if (!host) {
   // Sign-up creates the account but no session: the user is signed in by the link in the verification email.
   app.post('/api/auth/register', async (req, reply) => {
     const { email, password } = (req.body ?? {}) as { email?: unknown; password?: unknown };
@@ -554,8 +616,13 @@ export async function buildApp(opts: AppOptions) {
     setSessionCookie(reply, user.id);
     return { user };
   });
+  }
 
   app.post('/api/auth/logout', async (req, reply) => {
+    if (host) {
+      await host.signOut(req, reply);
+      return { ok: true };
+    }
     const token = req.cookies[SESSION_COOKIE];
     if (token) auth.destroySession(token);
     reply.clearCookie(SESSION_COOKIE, { path: '/' });
@@ -568,8 +635,10 @@ export async function buildApp(opts: AppOptions) {
   const recentOpens = new RecentOpens(settingsDb);
   const favorites = new Favorites(settingsDb);
   const recents = opts.local ? (opts.local.recents === undefined ? (recentsAvailable() ? () => recentFiles(LISTED_EXTS) : null) : opts.local.recents) : null;
-  app.get('/api/auth/me', async (req) => ({ user: req.user, googleLogin: !!google, ...(folder && req.user ? { local: { dir: folder.root } } : {}) }));
+  // `suite`: hosted in the FreeFlow suite, whose sign-in is at /; the client sends a visitor there.
+  app.get('/api/auth/me', async (req) => ({ user: req.user, googleLogin: !host && !!google, ...(folder && req.user ? { local: { dir: folder.root } } : {}), ...(host ? { suite: { basePath } } : {}) }));
 
+  if (!host) {
   // Google refuses to sign in inside an embedded browser, so the desktop app's Web tab (MCP Docs) has the
   // system browser do it, with a random key of the app's (?desktop=<key>). The callback gives that browser no
   // session: it keeps the sign-in under the key, which the app asks after (/api/auth/handoff/status) and then
@@ -637,9 +706,11 @@ export async function buildApp(opts: AppOptions) {
     setSessionCookie(reply, h.userId);
     return reply.redirect(h.next);
   });
+  }
 
   // The privacy policy, terms of service and support page: public, and plain HTML for readers without scripts.
-  for (const p of LEGAL_PATHS) app.get(p, async (_req, reply) => reply.type('text/html; charset=utf-8').header('cache-control', 'public, max-age=300').send(legalPage(p)));
+  // Hosted, the suite has a privacy page of its own at /privacy.
+  for (const p of LEGAL_PATHS) if (!(host && p === '/privacy')) app.get(p, async (_req, reply) => reply.type('text/html; charset=utf-8').header('cache-control', 'public, max-age=300').send(legalPage(p)));
 
   // For agents, which do not run the app's scripts: what this is and how to connect to its MCP server.
   app.get('/llms.txt', async (req, reply) => reply.type('text/markdown; charset=utf-8').header('cache-control', 'public, max-age=300').send(llmsTxt(originOf(req), !!pluginOAuth)));
@@ -2390,7 +2461,24 @@ export async function buildApp(opts: AppOptions) {
   });
 
   // --- Static client (production) ----------------------------------------------
-  if (opts.staticDir && existsSync(opts.staticDir)) {
+  if (host && opts.staticDir && existsSync(opts.staticDir)) {
+    // Under the base path (the client is built with it: BASE_PATH), its files and its page for every address of
+    // its own. The page is sent from memory: whether the host's static files decorate replies is the host's
+    // business. A visitor at the base goes to the suite's sign-in; the suite sends them back here once signed in
+    // (/?next=).
+    const staticDir = opts.staticDir;
+    await app.register(fastifyStatic, { root: staticDir, prefix: `${basePath}/`, wildcard: false, index: false, decorateReply: false });
+    const index = readFileSync(path.join(staticDir, 'index.html'), 'utf8');
+    const page = (req: FastifyRequest, reply: FastifyReply) => {
+      // A public link's address is its secret: not passed on to other sites, not indexed.
+      if (req.url.startsWith(`${basePath}/p/`)) reply.header('Referrer-Policy', 'no-referrer').header('X-Robots-Tag', 'noindex');
+      return reply.type('text/html; charset=utf-8').header('cache-control', 'no-cache').send(index);
+    };
+    app.get(basePath, async (req, reply) => (req.user ? page(req, reply) : reply.redirect(`/?next=${encodeURIComponent(req.url)}`)));
+    app.get(`${basePath}/*`, async (req, reply) => page(req, reply));
+    // Public links from before the move keep working at their old address.
+    app.get('/p/*', async (req, reply) => reply.code(301).redirect(`${basePath}${req.url}`));
+  } else if (opts.staticDir && existsSync(opts.staticDir)) {
     // `index: false`: / is answered below, as the front page already drawn for a visitor.
     await app.register(fastifyStatic, { root: opts.staticDir, wildcard: false, index: false });
     const landingFile = path.join(opts.staticDir, 'landing.html');
@@ -2406,6 +2494,5 @@ export async function buildApp(opts: AppOptions) {
       return reply.sendFile('index.html');
     });
   }
-
-  return app;
+  }
 }

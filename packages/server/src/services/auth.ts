@@ -1,4 +1,6 @@
 import argon2 from 'argon2';
+import { scrypt, timingSafeEqual } from 'node:crypto';
+import { promisify } from 'node:util';
 import { and, eq, gt, lt, sql } from 'drizzle-orm';
 import type { AuthResponse, RegisterResponse, UserDTO } from '@flow/shared';
 import { db, schema } from '../db/index.js';
@@ -28,6 +30,26 @@ export function hashSecret(secret: string): Promise<string> {
 }
 export function verifySecret(hash: string, secret: string): Promise<boolean> {
   return argon2.verify(hash, secret).catch(() => false);
+}
+
+const scryptAsync = promisify(scrypt) as (pw: string, salt: Buffer, len: number, opts: object) => Promise<Buffer>;
+
+/**
+ * A password against its stored hash: argon2 (ours), or the scrypt form the Workspace app (MCP Docs) stored
+ * before its accounts moved here — "scrypt$N$r$p$salt$hash" (packages/server/scripts/import-workspace-users.ts).
+ * The scrypt hashes are replaced by argon2 ones as their owners sign in (login()).
+ */
+export async function verifyPassword(stored: string, password: string): Promise<boolean> {
+  if (!stored.startsWith('scrypt$')) return verifySecret(stored, password);
+  const [, n, r, p, saltB64, hashB64] = stored.split('$');
+  if (!n || !r || !p || !saltB64 || !hashB64) return false;
+  try {
+    const expected = Buffer.from(hashB64, 'base64');
+    const actual = await scryptAsync(password, Buffer.from(saltB64, 'base64'), expected.length, { N: +n, r: +r, p: +p, maxmem: 256 * 1024 * 1024 });
+    return actual.length === expected.length && timingSafeEqual(actual, expected);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -215,8 +237,10 @@ export async function login(email: string, password: string, clientInfo?: string
   const rows = await db.select().from(users).where(eq(users.email, email)).limit(1);
   const user = rows[0];
   if (!user) throw unauthorized('invalid email or password');
-  const ok = await argon2.verify(user.passwordHash, password).catch(() => false);
+  const ok = await verifyPassword(user.passwordHash, password);
   if (!ok) throw unauthorized('invalid email or password');
+  // An imported Workspace account's scrypt hash becomes one of ours now that the password is in hand.
+  if (user.passwordHash.startsWith('scrypt$')) await db.update(users).set({ passwordHash: await argon2.hash(password, ARGON2_OPTS) }).where(eq(users.id, user.id));
   if (!user.emailVerifiedAt && !user.isBot) {
     // Only legacy pre-email-first accounts can be in this state; a password
     // reset (which proves address ownership) clears it.

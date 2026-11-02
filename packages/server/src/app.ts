@@ -2,17 +2,23 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Fastify, { type FastifyInstance } from 'fastify';
+import cookie from '@fastify/cookie';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import { registerRoutes } from './routes/index.js';
 import { config } from './config.js';
 import { registerBrowserPolicy } from './lib/browserPolicy.js';
+import { mountWorkspace } from './workspace.js';
 
 export function buildApp(): FastifyInstance {
   const app = Fastify({
     logger: { level: process.env.LOG_LEVEL ?? 'info' },
+    // The Workspace app's spreadsheet saves are one JSON body each (its own server allowed 100 MB); Flow's
+    // bodies were well inside the 1 MB default and still are.
+    bodyLimit: 100 * 1024 * 1024,
   });
   registerBrowserPolicy(app);
+  void app.register(cookie); // the session as a cookie (lib/sessionCookie.ts)
   void app.register(multipart, {
     // server-buffered path keeps the small cap; big files go via presign→R2
     limits: { fileSize: config.maxServerUploadBytes, files: 1, fields: 4 },
@@ -72,6 +78,11 @@ export function buildApp(): FastifyInstance {
   }
 
   registerRoutes(app);
+  // The Workspace app (src/workspace.ts), when WORKSPACE_DATA_DIR is set: its routes and its client at /workspace.
+  // A plugin, so this synchronous builder need not await it; without encapsulation (fastify-plugin's mark), so
+  // the instance it gets is this one and the ChatGPT plugin's hook it adds runs for every request.
+  const workspace = async (root: FastifyInstance) => { await mountWorkspace(root); };
+  void app.register(Object.assign(workspace, { [Symbol.for('skip-override')]: true }));
 
   // Web client (phase2.md §7): the production build is served as static files
   // by this same process — the local deployment stays one process. In dev the
