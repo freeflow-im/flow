@@ -274,10 +274,14 @@ Each phase ships on its own and leaves both products working.
    *Code done (PR "One identity", 2026-11-01):* the cookie transport (`packages/server/src/lib/sessionCookie.ts`), the Workspace app mounted by `packages/server/src/workspace.ts` through docs' `buildApp({ host })` (its own sign-in routes, mailer and Google sign-in are off when hosted; its `users` table mirrors Flow's), the client under `/workspace`, the plugin's OAuth pages over the suite sign-in (`/oauth/resume`), `/?next=` in the web client, scrypt hashes accepted and rehashed at sign-in, and `packages/server/scripts/import-workspace-users.ts`. The suite's image holds the Workspace app (`packages/server/deploy/aws/Dockerfile`), and the stack's `workspace-to-suite.sh` moves it over: `docs/ops/WORKSPACE_TO_SUITE.md` is the cut-over, the operator's to run on its own day.
 3. **The suite bar.** Router, shell, bar, organization switcher replacing the rail, `useAuth` adapter, CSS scoping, Chat runtime hoisted into the shell, Chat badge. This is the phase the image shows.
 4. **Organization files.** `workspace_id` on every Docs row (the tenant partition key of §3.2), Organization files / My files, access checks, MCP and assistant tools organization-aware. Docs' metadata stays SQLite; it is not moved to Postgres (§3.2's ruling).
-5. **Integrations** (§5), in the order listed.
-6. **Desktop and native** (§7).
+5. **Cloudflare, Chat first** (§3.2's end state; ruled 2026-11-02 to come right after phase 4, and before any new app). Cloudflare in front of `app.freeflow.im`, routing by path, so a Worker takes one bounded context at a time while the AWS box serves the rest: the directory (users, sessions, memberships) first, then one Durable Object per organization with its SQLite and its sockets serving channels and messages. Postgres and NATS retire with the last context.
+6. **Cloudflare, Docs second.** The Docs server's SQLite-shaped stores port into the same per-organization object; PDFs to Browser Rendering; bodies and uploads stay in R2. The AWS instance then only builds the desktop app, and goes.
+7. **Mail and Calendar**, built on the new runtime, each its own tab with its own left column (the placeholders light up).
+8. **Desktop and native** (§7).
 
-Phases 1.5 and 2 are the risky ones: each moves live data. Rehearse both on copies, keep the Railway project and then the old docs app read-only but reachable for a week after their cut-overs, and do them on different days.
+The integrations of §5 (Share to Chat, Open in Docs, agents with Docs tools, the assistant reaching Chat, activity rows) are **dropped from the plan** (ruled 2026-11-02); §5 stays as a record of what was considered.
+
+Phases 1.5 and 2 were the risky ones (both done 2026-11-01); the Cloudflare phases move live data again, one context at a time, with both stacks running. Rehearse both on copies, keep the Railway project and then the old docs app read-only but reachable for a week after their cut-overs, and do them on different days.
 
 ## 9. Decisions taken, and what is still open
 
