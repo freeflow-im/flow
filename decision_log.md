@@ -1,5 +1,18 @@
 # Decision log
 
+## 2026-11-02 — The suite's end state is Cloudflare, one Durable Object per organization (docs/specs/freeflow-suite.md §3.2)
+
+Ruled by the operator: the service is strictly multi-tenant with small tenants, so
+no central database is needed. Each organization becomes a Durable Object with its
+own SQLite and its sockets; blobs stay in R2; a tiny directory (email → user →
+organizations, sessions) is the only shared store. Consequences now:
+
+- Organization is the partition key: phase 4 puts `workspace_id` on every Docs row.
+- SQLite is the dialect of record for new code; Postgres-only features are avoided.
+- Postgres and NATS stay on the box but are not permanent: no RDS, no new NATS use,
+  an in-process bus when `NATS_URL` is unset. Docs' metadata does not move to Postgres.
+- Identity stays its own small service, the future directory.
+
 ## 2026-11-01 — The suite bar: one tab per app, Docs and Chat (docs/specs/freeflow-suite.md §2.5)
 
 Designed with the operator on the canvas "FreeFlow Suite Bar" (linked from the spec):
