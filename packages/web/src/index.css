@@ -1,10 +1,11 @@
 @import "tailwindcss";
 
-/* Design 3a "Quiet, in violet" tokens (design_handoff_chat_workspace/README.md) */
+/* Design 3a's tokens (design_handoff_chat_workspace/README.md), re-pointed from its violet to the FreeFlow suite's
+   blue and navy (docs/specs/freeflow-suite.md §2.5; the suite bar, packages/suite-bar, uses the same blue). */
 @theme {
-  --color-rail: oklch(0.42 0.19 292);
-  --color-side-top: oklch(0.5 0.19 305);
-  --color-side-bot: oklch(0.44 0.19 292);
+  --color-rail: #1a2442;
+  --color-side-top: #27365c;
+  --color-side-bot: #1e2a4a;
   --color-base: #fbfaf8;
   --color-ink: #39342f;
   --color-ink-soft: #635d56;
@@ -14,10 +15,10 @@
   --color-hairline2: #ddd8cf;
   --color-hairline3: #eee7dc;
   --color-daypill: #f0ede7;
-  --color-accent: oklch(0.46 0.19 300);
-  --color-accent-deep: oklch(0.44 0.19 300);
-  --color-accent-soft: oklch(0.42 0.16 292);
-  --color-send: oklch(0.5 0.19 305);
+  --color-accent: #1a73e8;
+  --color-accent-deep: #1558b0;
+  --color-accent-soft: #1765cc;
+  --color-send: #1a73e8;
   --color-online: #5ef0a8;
   --color-unread: #ff5c8a;
 }
@@ -115,7 +116,7 @@ html, body, #root {
 /* thin scrollbars for panels */
 .mc-scroll::-webkit-scrollbar { width: 8px; }
 .mc-scroll::-webkit-scrollbar-thumb { background: rgb(0 0 0 / 0.15); border-radius: 4px; }
-/* on-violet variant */
+/* on-navy variant (the sidebar) */
 .mc-scroll-dark::-webkit-scrollbar-thumb { background: rgb(255 255 255 / 0.2); }
 
 /* scrollable but no visible bar (e.g. the side-panel tab strip) */

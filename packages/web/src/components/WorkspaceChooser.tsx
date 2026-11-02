@@ -168,7 +168,7 @@ export default function WorkspaceChooser() {
               <span className="block font-semibold text-ink">{e.name}</span>
               <span className="block text-sm text-muted">{e.source}</span>
             </span>
-            {e.unread > 0 && <span className="rounded bg-violet-100 px-2 text-xs" aria-label="Unread notifications">{e.unread}</span>}
+            {e.unread > 0 && <span className="rounded bg-blue-100 px-2 text-xs" aria-label="Unread notifications">{e.unread}</span>}
           </button>
         ))}
       </div>

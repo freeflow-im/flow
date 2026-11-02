@@ -32,6 +32,7 @@ const TABS = [
 ] as const;
 
 export function SettingsPage() {
+  const { suite } = useAuth();
   const { hash } = useLocation();
   const navigate = useNavigate();
   const tabs = useAuth().local ? TABS : TABS.filter((t) => t.id !== 'desktop');
@@ -98,10 +99,13 @@ export function SettingsPage() {
           </Link>
           <span>Settings</span>
         </div>
-        <div className="home-user">
-          <AgentButton />
-          <Account />
-        </div>
+        {/* In the FreeFlow suite the suite bar has the Assistant and the account (components/DocsSuiteBar.tsx). */}
+        {!suite && (
+          <div className="home-user">
+            <AgentButton />
+            <Account />
+          </div>
+        )}
       </header>
 
       <div className="home-inner settings-tabs">

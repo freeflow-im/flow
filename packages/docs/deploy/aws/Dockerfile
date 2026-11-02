@@ -23,10 +23,13 @@ COPY packages/web/package.json packages/web/
 COPY packages/agent-bridge/package.json packages/agent-bridge/
 COPY packages/docs/package.json packages/docs/
 COPY packages/docs/vendor packages/docs/vendor
+COPY packages/suite-bar/package.json packages/suite-bar/
 COPY apps/desktop/package.json apps/desktop/
 RUN pnpm install --frozen-lockfile --filter @flow/docs
 
 COPY packages/docs packages/docs
+# The suite bar's sources: the client imports them (it draws the bar only when hosted in the suite).
+COPY packages/suite-bar packages/suite-bar
 RUN pnpm --filter @flow/docs build
 
 WORKDIR /app/packages/docs

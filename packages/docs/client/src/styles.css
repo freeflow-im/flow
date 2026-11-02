@@ -1649,6 +1649,21 @@ textarea {
   display: flex;
   height: 100%;
 }
+/* In the FreeFlow suite the suite bar (packages/suite-bar, its own .sb-* styles) sits above the pages, which scroll
+   under it (main.tsx, components/DocsSuiteBar.tsx). Without the logo an editor's header starts with its breadcrumbs. */
+.suite-frame {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.suite-frame > .app-shell {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+.suite-frame .wb-header {
+  padding-left: 16px;
+}
 /* Copying between the folder and the web (components/WebCopyDialogs.tsx). */
 .copy-formats {
   border: 0;
@@ -2436,6 +2451,11 @@ button.agent-tool-label:hover {
   .agent-panel-resize {
     display: none;
   }
+  /* Under the suite bar, which stays: its Assistant button closes the panel again. */
+  .suite-frame .agent-panel {
+    top: 56px;
+    height: auto;
+  }
 }
 
 /* Drag handle on the inner edge of a resizable side panel. */
@@ -3006,6 +3026,7 @@ button.agent-tool-label:hover {
   html,
   body,
   #root,
+  .suite-frame,
   .app-shell,
   .app-main {
     height: auto;

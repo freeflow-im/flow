@@ -1,7 +1,7 @@
 import { useBoundApi } from '../lib/useBoundApi';
 import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { sidebarColor } from '@flow/shared';
+import { webSidebarColor } from '../lib/sidebarTheme';
 import type { ArtifactDTO, ChannelDTO, WorkspaceMemberDTO } from '@flow/shared';
 import { api } from '../lib/api';
 import { artifactGlyph } from '../lib/fileKind';
@@ -38,7 +38,6 @@ import { openServerConnections } from './ServerConnections';
 import { openWorkspace, showsSource } from '../lib/workspaceSwitcher';
 import { FeaturesModal } from './FeaturesModal';
 import { useHoverTooltip } from './HoverTooltip';
-import StatusFooter from './StatusPicker';
 
 // Sidebar width (phase 3.5 ruling 5): local per-device preference.
 /**
@@ -309,7 +308,7 @@ export default function Sidebar() {
   // Which way out this workspace offers — see lib/workspaceExit, which is
   // mirrored in Swift and holds the "roster not loaded yet" rule.
   const exit = workspaceExit(ws?.role, members.data, auth.user.id);
-  const color = sidebarColor(ws?.sidebarColor);
+  const color = webSidebarColor(ws?.sidebarColor);
 
   // Restored-workspace guard + default channel: a stale persisted workspace id
   // falls back to the chooser; a workspace opened with no channel selected
@@ -699,9 +698,10 @@ export default function Sidebar() {
 
       </div>
 
-      {/* Invite your Agent (phase 15): pinned above the profile footer — a
-          slightly raised translucent CTA, noticeable without shouting. */}
-      {caps.agents.state !== 'unavailable' && <div className="px-3.5 pt-2 pb-1.5">
+      {/* Invite your Agent (phase 15): pinned to the sidebar's foot (the
+          profile footer moved into the suite bar's account menu) — a slightly
+          raised translucent CTA, noticeable without shouting. */}
+      {caps.agents.state !== 'unavailable' && <div className="px-3.5 pt-2 pb-3.5">
         <button
           data-testid="invite-agent-button"
           className="flex w-full items-center justify-center gap-2 rounded-lg border border-white/35 bg-white/[0.18] px-3 py-2 text-[13px] font-semibold text-white shadow-sm hover:bg-white/25"
@@ -711,8 +711,6 @@ export default function Sidebar() {
           Invite your Agent
         </button>
       </div>}
-
-      <StatusFooter />
 
       <div
         data-testid="sidebar-resizer"

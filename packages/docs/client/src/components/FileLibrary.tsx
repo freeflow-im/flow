@@ -185,8 +185,8 @@ export function formatWhen(iso: string): string {
 }
 
 export interface FileLibraryProps {
-  /** Shown top left, e.g. the logo and the app name. */
-  brand: ReactNode;
+  /** Shown top left, e.g. the logo and the app name; none in the FreeFlow suite, where the suite bar is the brand. */
+  brand?: ReactNode;
   /** Controls at the right of the header (menus, buttons). */
   headerActions?: ReactNode;
   /** The name of the top of the library, in the heading over the files table. Defaults to "Your files". */
@@ -792,7 +792,7 @@ export function FileLibrary(props: FileLibraryProps) {
       }}
     >
       <header className="home-header">
-        <div className="home-brand">{props.brand}</div>
+        {props.brand && <div className="home-brand">{props.brand}</div>}
         <input
           ref={searchRef}
           className="home-search"

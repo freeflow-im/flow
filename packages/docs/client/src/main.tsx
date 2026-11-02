@@ -1,10 +1,11 @@
 import { StrictMode, type ReactElement } from 'react';
 import { BASE } from './basePath.ts';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, matchPath, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { AgentPanel } from './agent/AgentPanel.tsx';
 import { AgentProvider, useAgent } from './agent/AgentProvider.tsx';
 import { AuthProvider, useAuth } from './auth.tsx';
+import { DocsSuiteBar } from './components/DocsSuiteBar.tsx';
 import { AuthPage } from './pages/AuthPage.tsx';
 import { ChangesPage } from './pages/ChangesPage.tsx';
 import { PublicPage } from './pages/PublicPage.tsx';
@@ -64,12 +65,16 @@ function GuestOnly({ children }: { children: ReactElement }) {
 
 /** The pages, with the assistant panel docked on the right when it is open. */
 function AppShell() {
-  const { user, local } = useAuth();
+  const { user, local, suite } = useAuth();
   const { open } = useAgent();
+  const { pathname } = useLocation();
   useHistoryKeys(!!local && !PREVIEW);
   useDesktopBridge(!!local && !!user && !PREVIEW);
   useRecentOpens(!!user && !PREVIEW);
-  return (
+  // In the FreeFlow suite the suite bar is above every signed-in page (not a public page, nor a file's preview), and
+  // the page scrolls under it. Standalone and in the desktop app there is none.
+  const bar = !!suite && !!user && !PREVIEW && !matchPath('/p/:token', pathname);
+  const shell = (
     <div className="app-shell">
       <div className="app-main">
         <Routes>
@@ -93,6 +98,13 @@ function AppShell() {
         </Routes>
       </div>
       {user && open && !PREVIEW && <AgentPanel />}
+    </div>
+  );
+  if (!bar) return shell;
+  return (
+    <div className="suite-frame">
+      <DocsSuiteBar />
+      {shell}
     </div>
   );
 }

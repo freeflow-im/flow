@@ -54,6 +54,8 @@ function download(url: string, filename: string) {
  * with what the page offers for the kind of file (Edit, Convert to Markdown, Download as PDF, Open as …).
  */
 export function FilePage() {
+  // In the FreeFlow suite the suite bar replaces the logo, the Assistant button and Sign out (components/DocsSuiteBar.tsx).
+  const inSuite = !!useAuth().suite;
   const { id = '' } = useParams();
   useFavicon('home');
   const [file, setFile] = useState<StoredFile | null>(null);
@@ -203,9 +205,11 @@ export function FilePage() {
   return (
     <div className="file-page">
       <header className="wb-header">
-        <Link to={lastListingHref()} className="wb-logo" title="Back to the file list">
-          <HomeIcon />
-        </Link>
+        {!inSuite && (
+          <Link to={lastListingHref()} className="wb-logo" title="Back to the file list">
+            <HomeIcon />
+          </Link>
+        )}
         <div className="wb-titles">
           <div className="wb-title-row">
             {file && <FavoriteStar kind="file" id={file.id} onError={setError} />}
@@ -295,7 +299,7 @@ export function FilePage() {
               Download
             </a>
           )}
-          <AgentButton />
+          {!inSuite && <AgentButton />}
         </div>
       </header>
       {openInTab.dialog}

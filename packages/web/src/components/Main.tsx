@@ -1,7 +1,6 @@
 import { useBoundApi } from '../lib/useBoundApi';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { sidebarColor } from '@flow/shared';
 import type {
   ArtifactDTO,
   ChannelDTO,
@@ -25,12 +24,10 @@ import { SocketClient, type SocketStatus } from '../lib/ws';
 import { plainBody } from '../lib/format';
 import { ACTIVITY_VIEW_ID, ADMIN_VIEW_ID, CHANNEL_BROWSER_VIEW_ID, DIRECTORY_VIEW_ID, SCHEDULED_VIEW_ID, LiveContext, MobileNavContext, typingKey, useAuth, useRuntime, useSelection } from '../state';
 import { HuddleProvider, useHuddle, type HuddleState } from '../huddle';
-import { useNameMap, useSwitcherEntries, useWorkspaceInvites, useWorkspaces } from '../hooks';
+import { useNameMap, useWorkspaces } from '../hooks';
 import { getHost, isLookingAtApp, onLookingChange } from '../lib/host';
 import { useConnectionSync } from '../lib/backgroundSync';
 import type { NotificationRouting } from '@flow/shared';
-import { openWorkspace } from '../lib/workspaceSwitcher';
-import { connectionManager } from '../lib/connectionRuntime';
 import Sidebar from './Sidebar';
 import ChannelView from './ChannelView';
 import AdminView from './AdminView';
@@ -44,11 +41,9 @@ import HuddleMiniBar from './HuddleMiniBar';
 import HuddleGrid from './HuddleGrid';
 import IncomingHuddle from './IncomingHuddle';
 import { MobileMenuButton } from './MobileMenuButton';
-import { HelpModal } from './HelpModal';
-import { AuthImg } from './Avatar';
-import { RailUnreadBadge } from './RailUnreadBadge';
 
-export default function Main() {
+/** `onActivityUnread`: the Activity count as it changes, for the suite bar's Chat tab (App.tsx), and null once gone. */
+export default function Main({ onActivityUnread }: { onActivityUnread?: (count: number | null) => void } = {}) {
   const { api } = useBoundApi();
   const auth = useAuth();
   const sel = useSelection();
@@ -71,9 +66,6 @@ export default function Main() {
     () => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches,
   );
   const [drawerOpen, setDrawerOpen] = useState(false);
-  // Built-in help docs (#383) — large layout only, so it closes with the
-  // breakpoint rather than being stranded open on a phone-width window.
-  const [helpOpen, setHelpOpen] = useState(false);
   const socketRef = useRef<SocketClient | null>(null);
   // The huddle controller lives *inside* HuddleProvider, which this component
   // renders — so socket events reach it through a ref that HuddleWiring (below
@@ -160,6 +152,11 @@ export default function Main() {
     void refreshNotificationBadge();
   }, [sel.workspaceId, refreshNotificationBadge]);
 
+  const reportUnread = useRef(onActivityUnread);
+  reportUnread.current = onActivityUnread;
+  useEffect(() => reportUnread.current?.(notificationUnread), [notificationUnread]);
+  useEffect(() => () => reportUnread.current?.(null), []);
+
   // Track the mobile breakpoint; leaving mobile always dismisses the drawer.
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 767px)');
@@ -170,10 +167,6 @@ export default function Main() {
     mq.addEventListener('change', onChange);
     return () => mq.removeEventListener('change', onChange);
   }, []);
-
-  useEffect(() => {
-    if (isMobile) setHelpOpen(false);
-  }, [isMobile]);
 
   // On mobile, picking a channel/artifact from the drawer closes it so the
   // conversation takes the full screen. (Covers every selection path at once.)
@@ -636,16 +629,16 @@ export default function Main() {
         <HuddleGrid />
         <IncomingHuddle />
         <div className="relative flex min-h-0 flex-1">
-          {/* Rail + sidebar. Desktop: inline flex columns. Mobile (<md): a
-              fixed slide-in drawer over the content, toggled by the header
+          {/* The sidebar (the workspace rail went into the suite bar's
+              organization menu). Desktop: an inline column. Mobile (<md): a
+              fixed slide-in drawer under the suite bar, toggled by the header
               hamburger and dismissed by the backdrop or a selection. */}
           <div
             data-testid="nav-drawer"
-            className={`z-40 flex shrink-0 max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:w-[min(86vw,320px)] max-md:shadow-[6px_0_28px_rgba(20,8,40,.4)] max-md:transition-transform max-md:duration-200 ${
+            className={`z-40 flex shrink-0 max-md:fixed max-md:top-14 max-md:bottom-0 max-md:left-0 max-md:w-[min(86vw,320px)] max-md:shadow-[6px_0_28px_rgba(20,8,40,.4)] max-md:transition-transform max-md:duration-200 ${
               drawerOpen ? 'max-md:translate-x-0' : 'max-md:-translate-x-full'
             }`}
           >
-            <WorkspaceRail showHelp={!isMobile} onOpenHelp={() => setHelpOpen(true)} />
             <Sidebar />
           </div>
           {isMobile && drawerOpen && (
@@ -685,7 +678,6 @@ export default function Main() {
             )}
           </div>
         </div>
-        {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}
       </div>
       </HuddleProvider>
      </MobileNavContext.Provider>
@@ -715,99 +707,4 @@ function HuddleWiring({
     };
   }, [bridge, huddle.applyInviteEvent, huddle.setSessionId]);
   return null;
-}
-
-/** Design 3a column 1: the 64px violet workspace rail. */
-function WorkspaceRail({ showHelp, onOpenHelp }: { showHelp: boolean; onOpenHelp: () => void }) {
-  const sel = useSelection();
-  const workspaces = useWorkspaces();
-  const switcher = useSwitcherEntries();
-  const activeWs = (workspaces.data ?? []).find((w) => w.id === sel.workspaceId);
-  const railBg = sidebarColor(activeWs?.sidebarColor).rail;
-  const invites = (useWorkspaceInvites().data ?? []).length;
-  return (
-    <nav
-      className="flex w-16 shrink-0 flex-col items-center gap-3.5 py-4"
-      style={{ background: railBg }}
-    >
-      {/* Every connection's workspaces (#592): other Flow servers' sit on the
-          rail with this one's, and picking one on another connection switches
-          this window to it. */}
-      {switcher.map((e) => {
-        // The foreground connection's live row carries avatar and slug.
-        const w = e.foreground ? (workspaces.data ?? []).find((ws) => ws.id === e.workspaceId) : undefined;
-        const active = e.foreground && e.workspaceId === sel.workspaceId;
-        const avatarUrl = w ? w.avatarUrl : e.avatarUrl;
-        // Another connection's avatar is fetched from, and authorized by, that server.
-        const avatarRuntime = e.foreground ? undefined : connectionManager().runtime(e.connectionId) ?? undefined;
-        const testKey = w?.slug ?? e.workspaceId;
-        // Unread across this workspace's channels (#345): live for the
-        // foreground connection, from background sync for the others.
-        const unread = e.unread;
-        const where = e.foreground ? '' : ` (${e.source})`;
-        // With an avatar (#336) the image *is* the mark, so "active" can't be
-        // the white fill any more — a white ring plus full opacity says it.
-        return (
-          // The badge overhangs the icon's corner, so it can't live inside the
-          // button — that one clips its children (overflow-hidden, for round
-          // avatars). The wrapper is what it's positioned against.
-          <div key={`${e.connectionId}:${e.workspaceId}`} className="relative">
-            <button
-              data-testid={`rail-workspace-${testKey}`}
-              title={`${e.name}${where}${unread > 0 ? ` — ${unread} unread` : ''}`}
-              className={`flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl ${
-                avatarUrl
-                  ? active
-                    ? 'ring-2 ring-white'
-                    : 'opacity-70 hover:opacity-100'
-                  : active
-                    ? 'bg-white text-[17px] font-extrabold text-accent'
-                    : 'bg-white/15 text-sm font-bold text-white hover:bg-white/25'
-              }`}
-              onClick={() => {
-                if (active) return;
-                if (e.foreground) sel.selectWorkspace(e.workspaceId);
-                else openWorkspace(e.connectionId, e.workspaceId);
-              }}
-            >
-              {avatarUrl ? (
-                <AuthImg path={avatarUrl} alt={e.name} className="h-10 w-10 object-cover" runtime={avatarRuntime} />
-              ) : (
-                e.name.slice(0, 1).toUpperCase()
-              )}
-            </button>
-            <RailUnreadBadge count={unread} ringColor={railBg} testId={`rail-unread-${testKey}`} />
-          </div>
-        );
-      })}
-      {/* Pending workspace invitations (#359) live on the chooser behind this
-          button, so it carries their badge — otherwise an invitation would be
-          found only by accident. */}
-      <div className="relative">
-        <button
-          data-testid="rail-add-workspace"
-          title={invites > 0 ? `${invites} workspace invitation${invites === 1 ? '' : 's'}` : 'Add a workspace'}
-          className="flex h-10 w-10 items-center justify-center rounded-xl border border-dashed border-white/40 text-white/70 hover:border-white/70 hover:text-white"
-          onClick={() => sel.selectWorkspace(null)}
-        >
-          +
-        </button>
-        <RailUnreadBadge count={invites} ringColor={railBg} testId="rail-workspace-invites" what="workspace invitations" />
-      </div>
-      {/* Built-in help (#383): far lower-left, large layout only. `max-md:hidden`
-          as well as the prop — the class is true the instant the window
-          narrows, before the media-query listener has re-rendered anything. */}
-      {showHelp && (
-        <button
-          data-testid="help-button"
-          title="Help"
-          aria-label="Help"
-          className="mt-auto flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/15 text-lg font-bold text-white hover:bg-white/25 max-md:hidden"
-          onClick={onOpenHelp}
-        >
-          ?
-        </button>
-      )}
-    </nav>
-  );
 }

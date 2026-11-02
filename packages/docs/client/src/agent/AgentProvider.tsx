@@ -126,7 +126,7 @@ function readOpen(): boolean {
 }
 
 export function AgentProvider({ children }: { children: ReactNode }) {
-  const { user, local } = useAuth();
+  const { user, local, suite } = useAuth();
   const navigate = useNavigate();
   const [open, setOpenState] = useState(readOpen);
   const [items, setItems] = useState<ChatItem[]>([]);
@@ -270,9 +270,9 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     setJob({ ...job, acknowledged: true });
   }, [job]);
 
-  // ⌘K / Ctrl+K toggles the panel.
+  // ⌘K / Ctrl+K toggles the panel. In the suite ⌘K is the suite bar's search, and the bar's Assistant button opens it.
   useEffect(() => {
-    if (!user) return;
+    if (!user || suite) return;
     const onKey = (e: KeyboardEvent) => {
       if ((isMac ? e.metaKey : e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k') {
         e.preventDefault();
@@ -281,7 +281,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [user, open, setOpen]);
+  }, [user, suite, open, setOpen]);
 
   const setOpenSheet = useCallback((sheet: OpenSheet | null) => {
     sheetRef.current = sheet;

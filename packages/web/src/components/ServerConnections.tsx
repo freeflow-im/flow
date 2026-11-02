@@ -145,10 +145,10 @@ export default function ServerConnections({ onSelect, onClose }: {
         const bindings = manager.state.bindings.filter(b => b.connectionId === connection.connectionId && !b.hidden);
         const needsSignIn = !manager.runtime(connection.connectionId)?.getToken() || session?.status === 'unauthorized';
         return <section key={connection.connectionId} className="mb-4 rounded border border-hairline2 p-3">
-          <h3 className="font-semibold">{originLabel(connection.origin)}{(syncFor(connection.connectionId)?.unread ?? 0) > 0 && <span className="ml-2 rounded bg-violet-100 px-2 text-xs font-normal" aria-label={`${syncFor(connection.connectionId)!.unread} unread on this server`}>{syncFor(connection.connectionId)!.unread}</span>}</h3>
+          <h3 className="font-semibold">{originLabel(connection.origin)}{(syncFor(connection.connectionId)?.unread ?? 0) > 0 && <span className="ml-2 rounded bg-blue-100 px-2 text-xs font-normal" aria-label={`${syncFor(connection.connectionId)!.unread} unread on this server`}>{syncFor(connection.connectionId)!.unread}</span>}</h3>
           <p className="text-sm text-faint">{account?.user?.email ?? session?.userId ?? 'Not signed in'}{needsSignIn ? ' · Sign in required' : syncFor(connection.connectionId)?.status === 'offline' || account?.offline ? ' · Offline' : ''}</p>
           {bindings.map(binding => <div className="mt-2 flex items-center justify-between" key={binding.workspaceId}>
-            <button className={buttonSecondary} disabled={busy || needsSignIn} onClick={() => { onSelect(connection.connectionId, binding.workspaceId); onClose(); }}>{binding.name}{unreadFor(connection.connectionId, binding.workspaceId) > 0 && <span className="ml-2 rounded bg-violet-100 px-2 text-xs" aria-label="Unread notifications">{unreadFor(connection.connectionId, binding.workspaceId)}</span>}</button>
+            <button className={buttonSecondary} disabled={busy || needsSignIn} onClick={() => { onSelect(connection.connectionId, binding.workspaceId); onClose(); }}>{binding.name}{unreadFor(connection.connectionId, binding.workspaceId) > 0 && <span className="ml-2 rounded bg-blue-100 px-2 text-xs" aria-label="Unread notifications">{unreadFor(connection.connectionId, binding.workspaceId)}</span>}</button>
             <button disabled={busy} className={buttonSecondary} onClick={() => { manager.setBinding({ ...binding, hidden: true }); refresh(n => n + 1); }}>Hide workspace</button>
           </div>)}
           <div className="mt-3 flex flex-wrap gap-2 text-sm">

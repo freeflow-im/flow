@@ -7,7 +7,7 @@
 # DATABASE_URL, NATS_URL, FLOW_DATA_KEY and FLOW_WEB_URL (DEPLOYMENT.md §4); the Workspace app's own settings are
 # listed in docs/ops/DEPLOYMENT.md. Node from packages/docs/.node-version. Chromium is for the Workspace app's PDFs.
 
-# --- Build: shared, web, server and the Workspace app with their dev dependencies ------------------------------------
+# --- Build: shared, web, server and the Workspace app with their dev dependencies (and the suite bar both clients bundle) ------------------------------------
 FROM node:24.22.1-bookworm-slim AS build
 
 # The workspace's pnpm, pinned by the root package.json's packageManager field.
@@ -24,6 +24,7 @@ COPY packages/web/package.json packages/web/
 COPY packages/agent-bridge/package.json packages/agent-bridge/
 COPY packages/docs/package.json packages/docs/
 COPY packages/docs/vendor packages/docs/vendor
+COPY packages/suite-bar/package.json packages/suite-bar/
 COPY apps/desktop/package.json apps/desktop/
 RUN pnpm install --frozen-lockfile --filter @flow/server... --filter @flow/web... --filter @flow/docs...
 
@@ -36,6 +37,8 @@ COPY packages/shared packages/shared
 COPY packages/server packages/server
 COPY packages/web packages/web
 COPY packages/docs packages/docs
+# The suite bar's sources, bundled into both clients (nothing of it is needed at run time).
+COPY packages/suite-bar packages/suite-bar
 
 # The build tag the web client shows (vite.config.ts reads BUILD_SHA first; there is no .git in the build context).
 # The Workspace app's client is built for /workspace (BASE_PATH), where the suite serves it.
@@ -65,6 +68,7 @@ COPY packages/web/package.json packages/web/
 COPY packages/agent-bridge/package.json packages/agent-bridge/
 COPY packages/docs/package.json packages/docs/
 COPY packages/docs/vendor packages/docs/vendor
+COPY packages/suite-bar/package.json packages/suite-bar/
 COPY apps/desktop/package.json apps/desktop/
 RUN pnpm install --frozen-lockfile --prod --filter @flow/server... --filter @flow/docs... && pnpm store prune
 

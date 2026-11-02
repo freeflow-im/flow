@@ -1,9 +1,8 @@
 import { isDesktop } from '../lib/host';
 import { useBoundApi } from '../lib/useBoundApi';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
-  SIDEBAR_COLORS,
   PROFILE_BIO_MAX,
   PROFILE_TITLE_MAX,
   PROFILE_WEBSITE_MAX,
@@ -25,6 +24,7 @@ import { ApiError, api, uploadAvatar, uploadWorkspaceAvatar } from '../lib/api';
 import { useAuth, useSelection } from '../state';
 import { useChannelMembers, useChannels, useMemberMap, useMembers, useSelfRegisterDomain, useWorkspaces } from '../hooks';
 import { AuthImg, Avatar } from './Avatar';
+import { WEB_SIDEBAR_COLORS } from '../lib/sidebarTheme';
 
 export function Modal({
   children,
@@ -829,7 +829,7 @@ export function WorkspaceColorModal({ workspaceId, onClose }: { workspaceId: str
       </div>
       <label className="mb-1 block text-xs font-semibold text-faint uppercase">Color</label>
       <div className="mb-3 grid grid-cols-4 gap-2">
-        {SIDEBAR_COLORS.map((c) => (
+        {WEB_SIDEBAR_COLORS.map((c) => (
           <button
             key={c.id}
             data-testid={`color-swatch-${c.id}`}
@@ -884,7 +884,13 @@ function PrefToggle({
   );
 }
 
-export function ProfileModal({ onClose }: { onClose: () => void }) {
+/** The profile and the account's settings. `section: 'notifications'` opens it at the notification settings: the
+ * suite bar's Settings row (its My profile row opens it at the top). */
+export function ProfileModal({ onClose, section }: { onClose: () => void; section?: 'notifications' }) {
+  const notificationsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (section === 'notifications') notificationsRef.current?.scrollIntoView({ block: 'start' });
+  }, [section]);
   const { serverOrigin, api, uploadAvatar } = useBoundApi();
   const auth = useAuth();
   const qc = useQueryClient();
@@ -1031,7 +1037,7 @@ export function ProfileModal({ onClose }: { onClose: () => void }) {
         className="mb-3 w-full resize-y rounded border border-hairline2 px-3 py-2 text-sm"
         value={bio} onChange={(e) => setBio(e.target.value)} />
 
-      <div className="mt-2 mb-1 border-t border-hairline pt-3 text-xs font-semibold text-faint uppercase">
+      <div ref={notificationsRef} className="mt-2 mb-1 border-t border-hairline pt-3 text-xs font-semibold text-faint uppercase">
         Notifications
       </div>
       <p className="mb-1 text-xs text-faint">Off means no banner — everything still lands in the 🔔 list.</p>

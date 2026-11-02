@@ -16,6 +16,8 @@ import { useAgent, useRegisterDoc } from '../agent/AgentProvider.tsx';
 import { api, ApiError } from '../api.ts';
 import { RevisionSync, takenMessage } from '../state/revisionSync.ts';
 import { Account } from '../components/Account.tsx';
+import { useAuth } from '../auth.tsx';
+import { onBeforeLeave } from '../suite.ts';
 import { pickImageFile, uploadImageFile } from '../cellImage.ts';
 import { ImageEditDialog } from '../image/ImageEditDialog.tsx';
 
@@ -161,6 +163,10 @@ function loadShowThumbs(): boolean {
 }
 
 function DocWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta: SheetMeta; initialNotKept?: string[]; ctl: DocController; sync: RevisionSync<Doc> }) {
+  // In the FreeFlow suite the suite bar replaces the logo, the Assistant button and Sign out (components/DocsSuiteBar.tsx).
+  const inSuite = !!useAuth().suite;
+  // The suite bar's Log out saves first, as Sign out here did.
+  useEffect(() => onBeforeLeave(() => ctl.saver.flush()), [ctl]);
   useDocController(ctl);
   useDocFonts(ctl.doc);
   useFavicon('doc');
@@ -535,9 +541,11 @@ function DocWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta:
     <div className={`workbench doc-page${printing && ctl.pageSetup().mode === 'pages' ? ' doc-printing-pages' : ''}`}>
       {openInTab.dialog}
       <header className="wb-header">
-        <Link to={lastListingHref()} className="wb-logo" title="Back to the file list" onClick={() => void ctl.saver.flush()}>
-          <DocIcon size={32} />
-        </Link>
+        {!inSuite && (
+          <Link to={lastListingHref()} className="wb-logo" title="Back to the file list" onClick={() => void ctl.saver.flush()}>
+            <DocIcon size={32} />
+          </Link>
+        )}
         <div className="wb-titles">
           <div className="wb-title-row">
             <FavoriteStar kind="doc" id={meta.id} onError={notify} />
@@ -566,8 +574,8 @@ function DocWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta:
         </div>
         <div className="wb-user">
           <FileSearchButton />
-          <AgentButton />
-          <Account before={() => ctl.saver.flush()} />
+          {!inSuite && <AgentButton />}
+          {!inSuite && <Account before={() => ctl.saver.flush()} />}
         </div>
       </header>
       <DocToolbar

@@ -6,6 +6,7 @@ import { JOB_ACTIVE_STATUSES, type AgentJob } from '../../../shared/agent/protoc
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { api, ApiError } from '../api.ts';
 import { Account } from '../components/Account.tsx';
+import { useAuth } from '../auth.tsx';
 import { ConfirmModal } from '../components/Modal.tsx';
 
 const STATUS: Record<AgentJob['status'], string> = {
@@ -21,6 +22,7 @@ const STATUS: Record<AgentJob['status'], string> = {
 };
 
 export function ChangesPage() {
+  const { suite } = useAuth();
   const [jobs, setJobs] = useState<AgentJob[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -66,10 +68,13 @@ export function ChangesPage() {
           </Link>
           <span>Changes</span>
         </div>
-        <div className="home-user">
-          <AgentButton />
-          <Account />
-        </div>
+        {/* In the FreeFlow suite the suite bar has the Assistant and the account (components/DocsSuiteBar.tsx). */}
+        {!suite && (
+          <div className="home-user">
+            <AgentButton />
+            <Account />
+          </div>
+        )}
       </header>
 
       <section className="home-inner changes">

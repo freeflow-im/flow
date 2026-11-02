@@ -12,6 +12,8 @@ import { useAgent, useRegisterSheet } from '../agent/AgentProvider.tsx';
 import { api, ApiError } from '../api.ts';
 import { RevisionSync, takenMessage } from '../state/revisionSync.ts';
 import { Account } from '../components/Account.tsx';
+import { useAuth } from '../auth.tsx';
+import { onBeforeLeave } from '../suite.ts';
 import {
   cellContextItems,
   dataItems,
@@ -160,6 +162,10 @@ type Dialog =
   | null;
 
 function Workbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta: SheetMeta; initialNotKept?: string[]; ctl: SheetController; sync: RevisionSync<Workbook> }) {
+  // In the FreeFlow suite the suite bar replaces the logo, the Assistant button and Sign out (components/DocsSuiteBar.tsx).
+  const inSuite = !!useAuth().suite;
+  // The suite bar's Log out saves first, as Sign out here did.
+  useEffect(() => onBeforeLeave(() => ctl.saver.flush()), [ctl]);
   useController(ctl);
   const navigate = useNavigate();
   const location = useLocation();
@@ -386,9 +392,11 @@ function Workbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta: Sh
     <div className="workbench">
       {openInTab.dialog}
       <header className="wb-header">
-        <Link to={lastListingHref()} className="wb-logo" title="Back to the file list" onClick={() => void ctl.saver.flush()}>
-          <Logo size={32} />
-        </Link>
+        {!inSuite && (
+          <Link to={lastListingHref()} className="wb-logo" title="Back to the file list" onClick={() => void ctl.saver.flush()}>
+            <Logo size={32} />
+          </Link>
+        )}
         <div className="wb-titles">
           <div className="wb-title-row">
             <FavoriteStar kind="sheet" id={meta.id} onError={notify} />
@@ -450,8 +458,8 @@ function Workbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta: Sh
         </div>
         <div className="wb-user">
           <FileSearchButton />
-          <AgentButton />
-          <Account before={() => ctl.saver.flush()} />
+          {!inSuite && <AgentButton />}
+          {!inSuite && <Account before={() => ctl.saver.flush()} />}
         </div>
       </header>
       <Toolbar host={host} />
