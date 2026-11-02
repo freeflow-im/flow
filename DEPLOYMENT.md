@@ -265,13 +265,21 @@ Run the server itself under systemd, Docker, or whatever supervisor you already
 use — it's a plain `node packages/server/dist/index.js`, it exits non-zero on
 fatal errors, and it shuts down cleanly on SIGTERM.
 
-### Deploying to Railway
+### As a Docker image
 
-`railway.json` in the repo root is committed and ready to use: Railpack builder,
-`pnpm -r build`, `node packages/server/dist/index.js`, healthcheck on
-`/healthz`. Point a Railway service at your fork, add a Postgres (or Neon) and a
-NATS service, set the variables from §4, and pushes to `main` deploy
-themselves. Set `HOST=::` — Railway routes over IPv6.
+[`packages/server/deploy/aws/Dockerfile`](packages/server/deploy/aws/Dockerfile)
+builds the server and the web client into one image (run
+`docker build -f packages/server/deploy/aws/Dockerfile .` from the repository
+root). It listens on `0.0.0.0:8787`, runs as an unprivileged user, has a
+`HEALTHCHECK` on `/healthz` and needs the variables from §4, with
+`DATABASE_URL` and `NATS_URL` pointing at your Postgres and NATS.
+
+The hosted instance at app.freeflow.im runs that image on one AWS instance, with
+Postgres and NATS as containers beside it and Caddy in front:
+[`packages/docs/deploy/aws/template.yaml`](packages/docs/deploy/aws/template.yaml)
+and its README. It is moving there from Railway; the move is
+[docs/ops/FLOW_TO_AWS.md](docs/ops/FLOW_TO_AWS.md), and `railway.json` goes when
+it is done.
 
 ## 8. Native clients
 

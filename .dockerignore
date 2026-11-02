@@ -1,4 +1,5 @@
-# Context for packages/docs/deploy/aws/Dockerfile, built from the repository root.
+# Context for the images built from the repository root: packages/docs/deploy/aws/Dockerfile (the Workspace app)
+# and packages/server/deploy/aws/Dockerfile (Flow).
 .git
 **/node_modules
 **/dist

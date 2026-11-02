@@ -12,7 +12,7 @@ If you only want to run Flow locally, you want
 
 | Artifact | Build | Release | Automatic? |
 |---|---|---|---|
-| Server + web client | `pnpm build` | `git push origin main` | **Yes** — Railway builds every push to `main` |
+| Server + web client | `pnpm build` | `git push origin main` | **Yes** — Railway builds every push to `main`; during the move to AWS, `flow-aws-deploy.yml` deploys it there too |
 | macOS app | `apps/macos/tools/make-app.sh` | `apps/macos/tools/release-macos.sh` | No — run locally, needs signing credentials |
 | iOS app | `xcodegen generate` + Xcode | `apps/ios/tools/release-ios.sh` | No — run locally, needs the signing account |
 | `flow-agent-bridge` (npm) | `pnpm --filter flow-agent-bridge build` | bump `version`, merge to `main` | **Yes** — GitHub Actions publishes |
@@ -75,10 +75,26 @@ see [apps/desktop/README.md](apps/desktop/README.md)) — `apps/macos` and
 deploy.** `pnpm -r build` writes `packages/web/dist`, and the running server
 serves it.
 
-Production is Railway, connected to `freeflow-community/flow`, so pushing to `main`
-builds and ships. The contract is in [`railway.json`](railway.json): Railpack,
-build `pnpm -r build`, start `node packages/server/dist/index.js`, gated on
-`/healthz`.
+**Production is moving from Railway to AWS** (phase 1.5 of the FreeFlow suite).
+The operator does the cut-over by hand with
+[docs/ops/FLOW_TO_AWS.md](docs/ops/FLOW_TO_AWS.md); until its DNS step,
+`app.freeflow.im` is still Railway.
+
+- **AWS** (the destination): the server's image is
+  [`packages/server/deploy/aws/Dockerfile`](packages/server/deploy/aws/Dockerfile),
+  built from the repository root, and runs as the `flow` container on the stack
+  that hosts the Workspace app
+  ([`packages/docs/deploy/aws/template.yaml`](packages/docs/deploy/aws/template.yaml)),
+  beside its Postgres and NATS containers, behind Caddy.
+  [`flow-aws-deploy.yml`](.github/workflows/flow-aws-deploy.yml) builds and
+  pushes the image and runs `deploy.sh flow <sha>` on the instance on a push to
+  `main` touching the server, web or shared packages (once the repository
+  variable `AWS_FLOW_ECR_REPOSITORY` is set). Logs: CloudWatch `/flow/app`.
+- **Railway** (until the cut-over, then retired): connected to
+  `freeflow-community/flow`, so pushing to `main` builds and ships. The contract is
+  in [`railway.json`](railway.json): Railpack, build `pnpm -r build`, start
+  `node packages/server/dist/index.js`, gated on `/healthz`. The runbook's last
+  step removes it.
 
 ```sh
 git push origin main
