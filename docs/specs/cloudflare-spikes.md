@@ -98,3 +98,31 @@ Each ran real work inside workerd with `nodejs_compat`. Sizes are one library's 
 - **`node:fs` is the larger part of the Docs port.** 27 server files import the file system or `child_process`. The
   `child_process` ones (`supervise`, `claudeAgent`, `jobs`, `worker`, `git`, `localStore`, `recents`) belong to the
   desktop app and the retired jobs, so they stay out of the Worker. Step 5.1's split has to keep them on the desktop's side.
+
+## How Chat ports: copy the services, do not rewrite them
+
+Tried on 2026-11-02. `packages/server/src/services` and the code around them are copied to `packages/edge/src/org`, and the
+schema is converted to SQLite. With no users and the Node server being retired, nothing has to stay in sync.
+
+| Measure | Result |
+|---|---|
+| Lines of services copied | About 8,500 |
+| Compiler errors after the mechanical changes | 62, then none after the missing modules were written |
+| Postgres-specific lines | About 25, mostly `count(*)::int` |
+| Tables and indexes on SQLite | 33 and 79 |
+| Real calls in a local object (workspace, channel, message, thread reply, list) | All worked, about 10–17 ms each after the first |
+
+What makes this work: the organization's copy of `users` keeps the services' joins valid, `db` resolves to the current
+object through `AsyncLocalStorage`, and the event bus becomes a call into the object.
+
+Not on Workers yet, each with a stand-in: image resizing (images are stored as they arrive), pushes (not sent), help
+pages and agent avatar presets (empty). Only the five calls above have run; the rest of the services compile but are untested.
+
+The API followed the same way. `src/org/routes/index.ts` is the Node route file with the directory's routes taken out, on a small layer
+that speaks the part of Fastify it uses (`routes/compat.ts`). SQLite triggers report new ids and membership changes to the directory, so
+no service has to remember to, and that is how a path naming only a channel or message finds its object. `test/e2e.mjs` runs 29 checks locally: sign-up,
+organizations, invitations, sockets, presence, typing, messages, threads, reactions, encryption, private channels and refusals.
+
+**Still to do for Chat:** the web client's socket per organization and its heartbeat; profile edits reaching every organization; a member's own
+notifications across organizations (these paths go to their first organization for now); avatars, which name no organization; workspace slugs, unique only
+within their object; scheduled messages and other timers, which need Alarms; domain self-registration; the PKCE handoff routes. No route has run on Cloudflare's network, and most of the 100 or so routes beyond those checks have not run at all.

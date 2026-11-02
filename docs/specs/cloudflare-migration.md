@@ -1,5 +1,12 @@
 # FreeFlow on Cloudflare: the migration plan
 
+> **Ruling, 2026-11-02: there are no users yet, so the move is one cut-over.** It replaces §3 and steps 2 to 4 of §7:
+> no dual-writes, no per-organization flags, no gradual moves, no Postgres read copy, and no identity refactor on the
+> Node side. The order now: (1) build the directory and the organization object in `packages/edge`, with Chat's routes,
+> served only on `edge.freeflow.im`; (2) port Docs the same way; (3) a script imports Postgres and the Docs data once;
+> (4) `app.freeflow.im` switches to the ported routes; (5) AWS is retired, after confirmation. The long-tail items
+> of step 6 are ported as part of (1) and (2) or dropped. Native apps follow afterwards and do not gate anything.
+
 The end state ruled on 2026-11-02 (`freeflow-suite.md` §3.2, `decision_log.md`): the suite runs on Cloudflare
 with no central database. Each organization is one Durable Object holding its own SQLite and its live
 connections; blobs are in R2; a small directory holds identity. This page is the plan for getting there from

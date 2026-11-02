@@ -5,6 +5,7 @@
 name = "freeflow-edge"
 main = "src/index.ts"
 compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
 workers_dev = false
 
 routes = [
@@ -23,12 +24,34 @@ run_worker_first = true
 html_handling = "none"
 not_found_handling = "none"
 
+# Secrets, set with `wrangler secret put`: EDGE_ORIGIN_SECRET (the same value as /flow/EDGE_ORIGIN_SECRET on the instance),
+# EMAIL_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, GOOGLE_CLIENT_ID, APPLE_AUDIENCE.
 [vars]
 ORIGIN_URL = "https://origin.freeflow.im"
 # The hosts the built files are served on. The other hosts' paths are the origin's (the plugin, the 301s to the app).
 ASSET_HOSTS = "app.freeflow.im,edge.freeflow.im"
+# The hosts the ported API answers on; the cut-over adds app.freeflow.im.
+PORTED_HOSTS = "edge.freeflow.im"
+WEB_URL_BASE = "https://edge.freeflow.im"
+FLOW_WEB_URL = "https://edge.freeflow.im"
+EMAIL_FROM = "noreply@mail.freeflow.im"
 
-# Secret, set with `wrangler secret put EDGE_ORIGIN_SECRET`: the same value as /flow/EDGE_ORIGIN_SECRET on the instance.
+[[durable_objects.bindings]]
+name = "DIRECTORY"
+class_name = "Directory"
+
+[[durable_objects.bindings]]
+name = "ORG"
+class_name = "Org"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Directory", "Org"]
+
+[[r2_buckets]]
+binding = "BLOBS"
+bucket_name = "flow-files"
+
 
 [observability]
 enabled = true

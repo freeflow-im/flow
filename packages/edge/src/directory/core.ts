@@ -1,0 +1,319 @@
+// Identity: accounts, sessions and sign-in. Ported from packages/server/src/services/auth.ts and oauthAccounts.ts, with
+// the same rules and the same mail. It runs over any `SqlStorage`-shaped database, so tests can use node:sqlite.
+import type { AuthResponse, OAuthIdentityDTO, RegisterResponse, UserDTO } from '@flow/shared';
+import { ApiError, conflict, notFound, unauthorized } from '../errors';
+import { hashPassword, verifyPassword } from './passwords';
+import { DIRECTORY_MIGRATIONS } from './schema';
+
+export interface Sql {
+  exec(query: string, ...bindings: unknown[]): { toArray(): Record<string, unknown>[] };
+}
+
+export interface Mail { to: string; subject: string; text: string }
+
+export interface DirectoryDeps {
+  webUrlBase: string;
+  registrationEnabled: boolean;
+  send(mail: Mail): Promise<void>;
+}
+
+export type AuthKind = 'session' | 'agent';
+export type OAuthProvider = 'google' | 'apple';
+export interface OAuthProfile { provider: OAuthProvider; sub: string; email: string; hostedDomain: string | null; name?: string | undefined }
+
+const DAY = 86_400_000;
+const SESSION_TTL_DAYS = 30;
+const VERIFY_TTL_HOURS = 48;
+const RESET_TTL_MINUTES = 60;
+const SIGNIN_TTL_MINUTES = 15;
+const APP_LINK_TTL = 2 * 60_000;
+const AGENT_TOUCH = 60_000;
+
+type Row = Record<string, unknown>;
+
+export async function hashToken(token: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
+  return Buffer.from(digest).toString('hex');
+}
+export const newToken = () => Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url');
+
+/** A UUIDv7, the id format the server already uses. */
+export function newId(): string {
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  const now = Date.now();
+  for (let i = 0; i < 6; i++) b[i] = Math.floor(now / 2 ** (8 * (5 - i))) & 0xff;
+  b[6] = (b[6]! & 0x0f) | 0x70;
+  b[8] = (b[8]! & 0x3f) | 0x80;
+  const h = Buffer.from(b).toString('hex');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+const iso = (ms: unknown) => new Date(ms as number).toISOString();
+
+/** A privacy-mode address goes out as '': the native clients decode `email` as a non-optional string. */
+export function toUserDTO(u: Row, viewerId?: string): UserDTO {
+  return {
+    id: u.id as string,
+    email: u.privacy_mode && u.id !== viewerId ? '' : (u.email as string),
+    privacyMode: !!u.privacy_mode,
+    displayName: u.display_name as string,
+    avatarUrl: (u.avatar_url as string | null) ?? null,
+    timezone: u.timezone as string,
+    statusEmoji: u.status_emoji as string,
+    statusText: u.status_text as string,
+    website: u.website as string,
+    bio: u.bio as string,
+    title: u.title as string,
+    isAgent: !!u.is_agent,
+    sponsorId: u.is_agent ? ((u.sponsor_user_id as string | null) ?? null) : null,
+    notificationPrefs: JSON.parse(u.notification_prefs as string),
+    statusSuppressAlerts: !!u.status_suppress_alerts,
+    createdAt: iso(u.created_at),
+  } as UserDTO;
+}
+
+export class DirectoryCore {
+  constructor(private readonly sql: Sql, private readonly deps: DirectoryDeps) {
+    this.sql.exec('CREATE TABLE IF NOT EXISTS _migrations (n INTEGER PRIMARY KEY)');
+    const done = (this.sql.exec('SELECT COALESCE(MAX(n), -1) AS n FROM _migrations').toArray()[0]!.n as number) + 1;
+    DIRECTORY_MIGRATIONS.slice(done).forEach((m, i) => {
+      this.sql.exec(m);
+      this.sql.exec('INSERT INTO _migrations (n) VALUES (?)', done + i);
+    });
+  }
+
+  private rows(query: string, ...args: unknown[]): Row[] {
+    return this.sql.exec(query, ...args).toArray();
+  }
+  private userById(id: string): Row | undefined {
+    return this.rows('SELECT * FROM users WHERE id = ?', id)[0];
+  }
+  private userByEmail(email: string): Row | undefined {
+    return this.rows('SELECT * FROM users WHERE email = ?', email)[0];
+  }
+  private insertUser(v: { email: string; passwordHash: string; displayName: string }): Row | undefined {
+    const now = Date.now();
+    return this.rows(
+      `INSERT INTO users (id, email, password_hash, display_name, email_verified_at, created_at) VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT (email) DO NOTHING RETURNING *`,
+      newId(), v.email, v.passwordHash, v.displayName, now, now,
+    )[0];
+  }
+
+  /** Every sign-in path ends here, so they all yield the same session. */
+  async issueSession(userId: string, clientInfo?: string): Promise<string> {
+    const token = newToken();
+    const now = Date.now();
+    this.sql.exec('INSERT INTO sessions (token_hash, user_id, created_at, expires_at, client_info) VALUES (?, ?, ?, ?, ?)',
+      await hashToken(token), userId, now, now + SESSION_TTL_DAYS * DAY, clientInfo ?? null);
+    return token;
+  }
+
+  private async mintEmailToken(userId: string, purpose: string, ttl: number): Promise<string> {
+    const now = Date.now();
+    this.sql.exec('DELETE FROM email_tokens WHERE expires_at < ?', now);
+    this.sql.exec('DELETE FROM email_tokens WHERE user_id = ? AND purpose = ?', userId, purpose);
+    const token = newToken();
+    this.sql.exec('INSERT INTO email_tokens (token_hash, user_id, purpose, created_at, expires_at) VALUES (?, ?, ?, ?, ?)',
+      await hashToken(token), userId, purpose, now, now + ttl);
+    return token;
+  }
+
+  private async consumeEmailToken(token: string, purpose: string): Promise<Row | undefined> {
+    const used = this.rows('DELETE FROM email_tokens WHERE token_hash = ? AND purpose = ? AND expires_at > ? RETURNING user_id',
+      await hashToken(token), purpose, Date.now())[0];
+    return used ? this.userById(used.user_id as string) : undefined;
+  }
+
+  async register(email: string): Promise<RegisterResponse> {
+    if (!this.deps.registrationEnabled) throw new ApiError(403, 'registration_disabled', 'Account registration is disabled on this server');
+    const existing = this.userByEmail(email);
+    if (existing && !existing.is_bot) {
+      await this.deps.send({
+        to: email,
+        subject: 'You already have a Flow account',
+        text: `Hi ${existing.display_name},\n\nSomeone (hopefully you) tried to create a Flow account with this address, but it already has one. You can sign in here:\n\n${this.deps.webUrlBase}/\n\nForgot your password? Use "Forgot password?" on the sign-in screen.\n`,
+      });
+    } else if (!existing) {
+      const now = Date.now();
+      this.sql.exec('DELETE FROM pending_signups WHERE expires_at < ?', now);
+      this.sql.exec('DELETE FROM pending_signups WHERE email = ?', email);
+      const token = newToken();
+      this.sql.exec('INSERT INTO pending_signups (token_hash, email, created_at, expires_at) VALUES (?, ?, ?, ?)',
+        await hashToken(token), email, now, now + VERIFY_TTL_HOURS * 3_600_000);
+      await this.deps.send({
+        to: email,
+        subject: 'Finish creating your Flow account',
+        text: `Welcome to Flow!\n\nConfirm your email address and finish setting up your account:\n\n${this.deps.webUrlBase}/?signup=${token}\n\nThis link expires in ${VERIFY_TTL_HOURS} hours. If you didn't request a Flow account, you can ignore this email.\n`,
+      });
+    }
+    return { requiresVerification: true, email };
+  }
+
+  async completeSignup(token: string, displayName: string, password: string, clientInfo?: string): Promise<AuthResponse> {
+    if (!this.deps.registrationEnabled) throw new ApiError(403, 'registration_disabled', 'Account registration is disabled on this server');
+    const used = this.rows('DELETE FROM pending_signups WHERE token_hash = ? AND expires_at > ? RETURNING email', await hashToken(token), Date.now())[0];
+    if (!used) throw unauthorized('invalid or expired signup link');
+    const user = this.insertUser({ email: used.email as string, passwordHash: hashPassword(password), displayName });
+    if (!user) throw conflict('email_taken', 'an account with this email already exists');
+    return { token: await this.issueSession(user.id as string, clientInfo), user: toUserDTO(user, user.id as string) };
+  }
+
+  async login(email: string, password: string, clientInfo?: string): Promise<AuthResponse> {
+    const user = this.userByEmail(email);
+    if (!user || !(await verifyPassword(user.password_hash as string, password))) throw unauthorized('invalid email or password');
+    if ((user.password_hash as string).startsWith('scrypt$')) this.sql.exec('UPDATE users SET password_hash = ? WHERE id = ?', hashPassword(password), user.id);
+    if (!user.email_verified_at && !user.is_bot) {
+      throw new ApiError(403, 'email_not_verified', 'this email is unverified — use "Forgot password?" to verify it');
+    }
+    return { token: await this.issueSession(user.id as string, clientInfo), user: toUserDTO(user, user.id as string) };
+  }
+
+  async forgotPassword(email: string): Promise<void> {
+    const user = this.userByEmail(email);
+    if (!user || user.is_bot) return;
+    const token = await this.mintEmailToken(user.id as string, 'password_reset', RESET_TTL_MINUTES * 60_000);
+    await this.deps.send({
+      to: user.email as string,
+      subject: 'Reset your Flow password',
+      text: `Hi ${user.display_name},\n\nSomeone (hopefully you) asked to reset the password for this Flow account.\n\n${this.deps.webUrlBase}/?reset=${token}\n\nThis link expires in ${RESET_TTL_MINUTES} minutes and can be used once. If you didn't ask for this, you can ignore this email — your password is unchanged.\n`,
+    });
+  }
+
+  /** Sets the password, ends every existing session and signs in fresh. The link proves the address, so it verifies too. */
+  async resetPassword(token: string, password: string, clientInfo?: string): Promise<AuthResponse> {
+    const user = await this.consumeEmailToken(token, 'password_reset');
+    if (!user) throw unauthorized('invalid or expired reset link');
+    this.sql.exec('UPDATE users SET password_hash = ?, email_verified_at = COALESCE(email_verified_at, ?) WHERE id = ?', hashPassword(password), Date.now(), user.id);
+    this.sql.exec('DELETE FROM sessions WHERE user_id = ?', user.id);
+    return { token: await this.issueSession(user.id as string, clientInfo), user: toUserDTO(user, user.id as string) };
+  }
+
+  async sendSigninLink(email: string): Promise<void> {
+    const user = this.userByEmail(email);
+    if (!user || user.is_bot) return;
+    const token = await this.mintEmailToken(user.id as string, 'signin', SIGNIN_TTL_MINUTES * 60_000);
+    await this.deps.send({
+      to: user.email as string,
+      subject: 'Your Flow sign-in link',
+      text: `Hi ${user.display_name},\n\nSomeone (hopefully you) asked to sign in to Flow with this email.\n\n${this.deps.webUrlBase}/?signin=${token}\n\nThis link expires in ${SIGNIN_TTL_MINUTES} minutes and can be used once. If you didn't ask for this, you can ignore this email — no one can sign in without it.\n`,
+    });
+  }
+
+  async consumeSigninLink(token: string, clientInfo?: string): Promise<AuthResponse> {
+    const user = await this.consumeEmailToken(token, 'signin');
+    if (!user) throw unauthorized('invalid or expired sign-in link');
+    if (!user.email_verified_at) this.sql.exec('UPDATE users SET email_verified_at = ? WHERE id = ?', Date.now(), user.id);
+    return { token: await this.issueSession(user.id as string, clientInfo), user: toUserDTO(user, user.id as string) };
+  }
+
+  async logout(token: string): Promise<void> {
+    this.sql.exec('DELETE FROM sessions WHERE token_hash = ?', await hashToken(token));
+  }
+
+  /** Sessions first, with a sliding expiry written at most daily; then agent tokens, which do not expire but can be revoked. */
+  async authenticate(token: string): Promise<{ user: UserDTO; kind: AuthKind }> {
+    const hash = await hashToken(token);
+    const now = Date.now();
+    const session = this.rows('SELECT user_id, expires_at FROM sessions WHERE token_hash = ? AND expires_at > ?', hash, now)[0];
+    if (session) {
+      const user = this.userById(session.user_id as string);
+      if (!user || user.deleted_at) throw unauthorized();
+      if ((session.expires_at as number) < now + (SESSION_TTL_DAYS - 1) * DAY) {
+        this.sql.exec('UPDATE sessions SET expires_at = ? WHERE token_hash = ?', now + SESSION_TTL_DAYS * DAY, hash);
+      }
+      return { user: toUserDTO(user, user.id as string), kind: 'session' };
+    }
+    const agent = this.rows('SELECT user_id, last_used_at FROM agent_tokens WHERE token_hash = ? AND revoked_at IS NULL', hash)[0];
+    const user = agent && this.userById(agent.user_id as string);
+    if (!agent || !user) throw unauthorized();
+    if (!agent.last_used_at || now - (agent.last_used_at as number) > AGENT_TOUCH) {
+      this.sql.exec('UPDATE agent_tokens SET last_used_at = ? WHERE token_hash = ?', now, hash);
+    }
+    return { user: toUserDTO(user, user.id as string), kind: 'agent' };
+  }
+
+  async createAppLink(userId: string): Promise<{ code: string; expiresAt: string }> {
+    const now = Date.now();
+    this.sql.exec('DELETE FROM app_link_codes WHERE expires_at < ?', now);
+    const code = newToken();
+    this.sql.exec('INSERT INTO app_link_codes (code_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)', await hashToken(code), userId, now, now + APP_LINK_TTL);
+    return { code, expiresAt: iso(now + APP_LINK_TTL) };
+  }
+
+  async exchangeAppLink(code: string, clientInfo?: string): Promise<AuthResponse> {
+    const used = this.rows('DELETE FROM app_link_codes WHERE code_hash = ? AND expires_at > ? RETURNING user_id', await hashToken(code), Date.now())[0];
+    const user = used && this.userById(used.user_id as string);
+    if (!user) throw unauthorized('invalid or expired app link code');
+    return { token: await this.issueSession(user.id as string, clientInfo), user: toUserDTO(user, user.id as string) };
+  }
+
+  /** Match by (provider, sub), then by verified email, else create a provider-first account. */
+  resolveOAuthUser(p: OAuthProfile): string {
+    const known = this.rows('SELECT user_id FROM oauth_identities WHERE provider = ? AND provider_subject = ?', p.provider, p.sub)[0];
+    if (known) {
+      this.sql.exec('UPDATE oauth_identities SET email = ?, hosted_domain = ? WHERE provider = ? AND provider_subject = ?', p.email, p.hostedDomain, p.provider, p.sub);
+      return known.user_id as string;
+    }
+    const link = (userId: string) => this.sql.exec(
+      'INSERT INTO oauth_identities (provider, provider_subject, user_id, email, hosted_domain, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      p.provider, p.sub, userId, p.email, p.hostedDomain, Date.now());
+    const existing = this.userByEmail(p.email);
+    if (existing) {
+      if (existing.is_bot || existing.is_agent) throw conflict('email_reserved', 'that email belongs to a bot or agent account');
+      if (existing.deleted_at) throw conflict('email_reserved', 'that account has been removed');
+      link(existing.id as string);
+      if (!existing.email_verified_at) this.sql.exec('UPDATE users SET email_verified_at = ? WHERE id = ?', Date.now(), existing.id);
+      return existing.id as string;
+    }
+    if (!this.deps.registrationEnabled) throw new ApiError(403, 'registration_disabled', 'Account registration is disabled on this server');
+    const user = this.insertUser({ email: p.email, passwordHash: `!${p.provider}:${newToken()}`, displayName: p.name?.trim() || p.email.split('@')[0]! });
+    if (!user) throw conflict('email_taken', 'an account with this email already exists');
+    link(user.id as string);
+    return user.id as string;
+  }
+
+  async signInWithOAuth(p: OAuthProfile, clientInfo?: string): Promise<AuthResponse> {
+    const userId = this.resolveOAuthUser(p);
+    const user = this.userById(userId);
+    if (!user) throw new ApiError(500, 'internal', 'user vanished during sign-in');
+    return { token: await this.issueSession(userId, clientInfo), user: toUserDTO(user, userId) };
+  }
+
+  listIdentities(userId: string): OAuthIdentityDTO[] {
+    return this.rows('SELECT * FROM oauth_identities WHERE user_id = ?', userId).map((r) => ({
+      provider: r.provider as OAuthProvider,
+      email: r.email as string,
+      hostedDomain: (r.hosted_domain as string | null) ?? null,
+      linkedAt: iso(r.created_at),
+    })) as OAuthIdentityDTO[];
+  }
+
+  /** New ids and membership changes, reported by an organization's object (org/object.ts). Safe to apply twice. */
+  async applyOrgChanges(organizationId: string, changes: { kind: string; id: string; user_id: string | null; role: string | null }[]): Promise<void> {
+    for (const c of changes) {
+      if (c.kind === 'token') this.sql.exec('INSERT OR IGNORE INTO id_index (id, organization_id) VALUES (?, ?)', await hashToken(c.id), organizationId);
+      else if (c.kind === 'index') this.sql.exec('INSERT OR IGNORE INTO id_index (id, organization_id) VALUES (?, ?)', c.id, organizationId);
+      else if (c.kind === 'join') this.sql.exec('INSERT OR REPLACE INTO memberships (user_id, organization_id, role) VALUES (?, ?, ?)', c.user_id, organizationId, c.role);
+      else if (c.kind === 'leave') this.sql.exec('DELETE FROM memberships WHERE user_id = ? AND organization_id = ?', c.user_id, organizationId);
+    }
+  }
+
+  organizationsOf(userId: string): string[] {
+    return this.rows('SELECT organization_id FROM memberships WHERE user_id = ?', userId).map((r) => r.organization_id as string);
+  }
+
+  organizationOfId(id: string): string | null {
+    return (this.rows('SELECT organization_id FROM id_index WHERE id = ?', id)[0]?.organization_id as string | undefined) ?? null;
+  }
+
+  getUser(id: string, viewerId: string): UserDTO {
+    const user = this.userById(id);
+    if (!user) throw notFound('user not found');
+    if (id !== viewerId) {
+      const shared = this.rows('SELECT 1 FROM memberships a JOIN memberships b ON a.organization_id = b.organization_id WHERE a.user_id = ? AND b.user_id = ? LIMIT 1', id, viewerId);
+      if (!shared.length) throw notFound('user not found');
+    }
+    return toUserDTO(user, viewerId);
+  }
+}
