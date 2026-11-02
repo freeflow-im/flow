@@ -179,7 +179,7 @@ metadata, folders, the assistant's conversations) and its WebSocket connections 
 and the gateway); blobs stay in R2; the clients are static assets on a Worker; mail is Cloudflare's; PDFs are the
 Browser Rendering API; nightly jobs are Cron Triggers. The one thing that is not per tenant is the **directory**:
 email → user, user → organizations, sessions, OAuth identities, invites by email. It is tiny and lives in one
-directory object or a small D1 database. Until then, the rules that make the move cheap:
+directory object or a small D1 database. The plan for the move is `docs/specs/cloudflare-migration.md`. Until then, the rules that make the move cheap:
 
 - **Organization is the partition key.** Phase 4 gives every Docs row an organization id and filters by it; that
   column is the tenant boundary later. New Chat data is keyed by workspace as it already is.
