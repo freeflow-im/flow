@@ -1,5 +1,15 @@
 # Decision log
 
+## 2026-11-02 — Cloudflare spikes: the socket topology and the libraries (docs/specs/cloudflare-spikes.md)
+
+Proposed from local prototypes in workerd, and not yet tried on Cloudflare's network:
+
+- One client runtime with one socket per organization (`/v1/ws?workspace=<id>`). An organization is not "another
+  server": a runtime is one origin and one token, and every organization shares both.
+- Clients ping and the runtime auto-answers, so objects hibernate. An alarm pings only while an old build is connected.
+- Native apps need the socket change before an organization with native users moves.
+- `@noble/hashes` for argon2id; `hash-wasm` cannot run on Workers. LiteParse and Tesseract go in a Cloudflare Container.
+
 ## 2026-11-02 — The suite's end state is Cloudflare, one Durable Object per organization (docs/specs/freeflow-suite.md §3.2)
 
 Ruled by the operator: the service is strictly multi-tenant with small tenants, so
