@@ -1,5 +1,21 @@
 # Decision log
 
+## 2026-11-01 — The suite bar: one tab per app, Docs and Chat (docs/specs/freeflow-suite.md §2.5)
+
+Designed with the operator on the canvas "FreeFlow Suite Bar" (linked from the spec):
+
+- The bar reads: mark, "FreeFlow", the organization's **name** (no avatar) with the
+  switcher behind it | **Docs** / **Chat** | search, Assistant, notifications,
+  the account button.
+- **One top tab per app**, each with its own left column (Docs its folders, Chat
+  its channels). Mail and Calendar become tabs when they exist. A "Work" hub
+  tab holding Mail, Calendar, Docs and Drive under one left nav was considered
+  and rejected: it nests three levels (tab, section, folder).
+- Search is the left-most of the right group so it can expand in place into the
+  free space. The Assistant button moves up from the Workspace header and works
+  in both apps. The account menu absorbs Chat's lower-left user block: presence,
+  status, My profile, Settings, Log out.
+
 ## 2026-11-01 — FreeFlow: Flow and MCP Docs become one app (docs/specs/freeflow-suite.md)
 
 Operator rulings on the suite design, recorded in the spec's §0:

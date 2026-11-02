@@ -110,7 +110,7 @@ Naming (ruled, §0): Flow calls the organization a "workspace" (`workspaces`, `w
 ```
 /                      → redirect to the last-used app (localStorage), default /chat
 /chat                  → Flow's SessionApp/Main, unchanged inside; its own state navigation
-/workspace             → Workspace home (FileLibrary) for the selected organization
+/workspace             → Docs home (FileLibrary) for the selected organization (the tab is "Docs"; the path stays /workspace)
 /workspace/s/:id  /workspace/d/:id  /workspace/doc/:id  /workspace/md/:id  /workspace/f/:id
 /workspace/settings    /workspace/connectors
 /p/:token              → public page (no sign-in)             — unchanged
@@ -120,18 +120,18 @@ Naming (ruled, §0): Flow calls the organization a "workspace" (`workspaces`, `w
 
 Old docs URLs (`/s/:id`, `/d/:id`, …) 301 to `/workspace/...`. `mcpdocs.freeflow.im` redirects to `app.freeflow.im` with the path kept (Flow's `FLOW_REDIRECT_FROM_HOSTS`, which exempts `/v1` and `/api`). `docs.freeflow.im` is different: it stays the ChatGPT plugin's address and is served by the suite itself (§6). File ids are UUIDs, globally unique, so a file URL needs no organization in it: opening `/workspace/doc/:id` selects the file's organization in the switcher.
 
-**The suite bar** (the image): one 56px bar on every signed-in page, above both apps' own chrome.
+**The suite bar** (designed 2026-11-01 on the canvas "FreeFlow Suite Bar", https://claude.ai/artifact/1LCEMk8dwyP6gEPaMBs2Av, which is the reference for phase 3): one 56px bar on every signed-in page, above both apps' own chrome.
 
 ```
-┌────────────────────────────────────────────────────────────────────────────────────┐
-│ [HP] Harbor & Pine ▾     ( Workspace │ Chat ●3 )              ⌕ Search   🔔   (SP)  │
-└────────────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│ [▤] FreeFlow │ Locked In ▾        ( Docs │ Chat ●3 )        ⌕  [✦ Assistant]  🔔  (SP) Scott │
+└──────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- Left: the organization's avatar (initials on a dark square, as in the image; `workspaces.avatar_url` when set) and name, with a caret. The menu is Flow's workspace switcher: the user's organizations with unread counts, Add organization, Organization settings (Flow's admin view), Invite people. This replaces Flow's vertical `WorkspaceRail` (`Main.tsx:749`) and the `WorkspaceChooser`; a user in no organization still gets the chooser as a page.
-- Centre-left: a segmented control, **Workspace** and **Chat**, the active one a white pill on the grey track. Chat shows the unread-notification count (Flow's `LiveContext`). Keyboard: ⌘1 / ⌘2.
-- Right: search (Workspace's file search on `/workspace`, Flow's message search on `/chat`; later one box), notifications (Flow's activity view), the account menu (Flow's profile, status, sign out; it absorbs docs' `Account` menu). In the desktop app the Local | Web `PlaceSwitch` sits here too.
-- Below 640px the bar keeps the avatar, the segmented control and the account menu; Chat's existing mobile drawer and Workspace's layout are unchanged.
+- Left, where you are: the mark (28px, the sheet on the blue), the wordmark "FreeFlow", a hairline, then the organization's **name** with a caret, no avatar (ruled out). The button is Flow's workspace switcher: the user's organizations (grouped by server when there is more than one) with unread counts and small avatars in the rows, Add organization, Organization settings (Flow's admin view), Invite people. This replaces Flow's vertical `WorkspaceRail` (`Main.tsx:749`) and the `WorkspaceChooser`; a user in no organization still gets the chooser as a page.
+- Centre, which app: a segmented control on a grey track, **Docs** and **Chat** (one tab per app, each with its own left column: Docs its folders, Chat its channels; **Mail** and **Calendar** become tabs when they land; a "Work" hub holding them under one tab was considered and rejected on 2026-11-01, as it nests three levels). The active one is a white pill; Chat shows the unread-notification count (Flow's `LiveContext`). Keyboard: ⌘1 / ⌘2. Centred whatever the sides measure.
+- Right, tools then you, in this order: **search** as an icon, left-most so that clicking it (or ⌘K) opens a 380px field in place growing leftwards into the free space (files on Docs, messages on Chat; Esc collapses it); the **Assistant** button (bordered, the spark in blue), which opens the assistant panel in either app and moves up from Workspace's own header; **notifications** (Flow's activity view); the **account** button (avatar and first name) whose menu is: name and email as a header; presence (Active, Set away) and Set a status…, moved up from Chat's lower-left user block, which goes away; My profile; Settings (the suite's settings page: Flow's account settings with Workspace's Assistant and Agents tabs inside); Log out, which ends the session for both apps. In the desktop app the Local | Web `PlaceSwitch` sits in this group too.
+- Below 640px the mark, the wordmark, the user's name, search and notifications go; the organization's name (truncated), the caret, the control, the Assistant spark and the avatar stay. Chat's existing mobile drawer and Workspace's layout are unchanged.
 - The Chat runtime (`ConnectionRuntime`, `SocketClient`, TanStack `QueryClient`, `HuddleProvider`) is created by the suite shell, not by the `/chat` route, so the socket stays open while the user is in Workspace: the Chat badge is live, OS notifications still arrive, and a huddle keeps running (the `HuddleMiniBar` renders in the bar's right group when a huddle is active).
 - Flow's multi-server connections (`ServerConnections`, `ConnectionManager`) are kept as they are: the switcher groups organizations by server, as the multi-server spec says. An organization on another Flow server has no Workspace yet; the Workspace tab is disabled for it with a tooltip.
 
