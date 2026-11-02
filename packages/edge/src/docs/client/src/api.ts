@@ -268,7 +268,7 @@ export const api = {
       system: boolean;
       /** recentsSystem's last answer, to show until it answers again. */
       cached?: { files: RecentFile[]; blocked: string[] };
-    }>('GET', '/api/recents'),
+    }>('GET', `/api/recents${inFolder({ folder: '' }, true)}`),
   /** The desktop app: the files last opened on this computer in any app, from Spotlight (slow). */
   recentsSystem: () => request<{ files: RecentFile[]; /** Folders macOS does not let the app read. */ blocked: string[] }>('GET', '/api/recents/system'),
   /** Tell the server a page shows this file, for Recents. */

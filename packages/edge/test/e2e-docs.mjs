@@ -19,6 +19,8 @@ const wb=r.j.sheet?.workbook??r.j.workbook;
 if(wb){const tab=wb.tabs[0];tab.cells={...(tab.cells??{}),A1:{v:'42'},B1:{v:'=A1*2'}};r=await api(A.token,'PUT',`/api/sheets/${S}`,{workbook:wb,base:r.j.sheet?.updatedAt??r.j.updatedAt});t('save it',r.s<300,r.s+' '+JSON.stringify(r.j).slice(0,140));
  r=await api(A.token,'GET',`/api/sheets/${S}`);t('the body came back from R2',JSON.stringify(r.j).includes('=A1*2'),JSON.stringify(r.j).slice(0,140));}
 r=await api(Bo.token,'GET',`/api/sheets/${S}`);t('a stranger cannot read it',r.s===404||r.s===403,r.s);
+r=await api(A.token,'POST','/api/recents',{kind:'sheet',id:S});t('record it as opened',r.s===200,r.s+' '+JSON.stringify(r.j).slice(0,100));
+r=await api(A.token,'GET',`/api/recents?workspace=${W}`);t('Recents lists it',r.s===200&&r.j.files?.[0]?.id===S,r.s+' '+JSON.stringify(r.j).slice(0,140));
 r=await api(A.token,'POST',`/api/docs?workspace=${W}&shared=1`,{title:'Notes'});t('create a document',r.s===200,r.s+' '+JSON.stringify(r.j).slice(0,100));const DOC=r.j.doc?.id;
 r=await api(A.token,'POST',`/api/markdown?workspace=${W}&shared=1`,{title:'Readme'});t('create Markdown',r.s===200,r.s+' '+JSON.stringify(r.j).slice(0,100));
 r=await api(A.token,'POST',`/api/files?workspace=${W}&shared=1`,'hello from R2','text/plain',{'x-filename':'hello.txt'});t('upload a file',r.s<300,r.s+' '+JSON.stringify(r.j).slice(0,130));const F=r.j.file?.id??r.j.id;
