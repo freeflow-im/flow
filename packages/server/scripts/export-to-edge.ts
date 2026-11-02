@@ -16,6 +16,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import postgres from 'postgres';
 
 const apply = process.argv.includes('--apply');
@@ -160,10 +161,54 @@ if (existsSync(appDb)) {
   const columns = (t: string) => new Set(all(`PRAGMA table_info(${t})`).map((c) => c.name as string));
   const firstOrg = new Map<string, string>();
   for (const m of await sql`SELECT user_id, workspace_id FROM workspace_members ORDER BY joined_at`) if (!firstOrg.has(m.user_id as string)) firstOrg.set(m.user_id as string, m.workspace_id as string);
+  const known = new Set(workspaces.map((w) => w.id as string));
+
+  // Someone who used Docs but joined no organization gets one of their own, so their files still have a home: named for
+  // them, with only them in it, their files private as they were. Its id comes from theirs, so a second run finds it again.
+  const ownerOf = (r: Record<string, unknown>) => (r.owner_id ?? r.user_id) as string | undefined;
+  const homeless = new Set<string>();
+  for (const t of ['sheets', 'stored_files', 'images', 'folders']) {
+    if (!all(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, t).length || !columns(t).has('owner_id')) continue;
+    for (const r of all(`SELECT * FROM ${t}`)) {
+      const owner = ownerOf(r);
+      const placed = (r.workspace_id && known.has(r.workspace_id as string)) || (owner && firstOrg.has(owner));
+      if (owner && !placed) homeless.add(owner);
+    }
+  }
+  const pgUsers = new Map(users.map((u) => [u.id as string, u]));
+  const docsUsers = new Map(all('SELECT * FROM users').map((u) => [u.id as string, u]));
+  for (const owner of homeless) {
+    const h = createHash('sha256').update(`personal-organization:${owner}`).digest('hex');
+    const id = `${h.slice(0, 8)}-${h.slice(8, 12)}-7${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
+    const docsUser = docsUsers.get(owner);
+    const pgUser = pgUsers.get(owner);
+    const email = (pgUser?.email ?? docsUser?.email ?? `${owner}@unknown.invalid`) as string;
+    const name = ((pgUser?.display_name as string) || email.split('@')[0]!).slice(0, 60);
+    const now = Date.now();
+    // Not a Flow account yet (a Docs account the suite's import missed): the directory gets one, with the same password.
+    const account = pgUser ? convert([pgUser])[0]! : {
+      id: owner, email, password_hash: (docsUser?.password_hash as string) ?? '!none', display_name: name,
+      email_verified_at: now, created_at: docsUser?.created_at ? Date.parse(docsUser.created_at as string) : now, notification_prefs: '{}',
+    };
+    if (!pgUser) await send('directory', 'users', [account]);
+    const slug = `files-${h.slice(0, 10)}`;
+    await send(`org/${id}`, 'users', [account]);
+    await send(`org/${id}`, 'workspaces', [{ id, slug, name: `${name}'s files`, created_by: owner, created_at: now }]);
+    await send(`org/${id}`, 'workspace_members', [{ workspace_id: id, user_id: owner, role: 'owner', joined_at: now }]);
+    await send('directory', 'organization_slugs', [{ slug, organization_id: id }]);
+    if (apply) {
+      const res = await fetch(`${EDGE}/edge/admin/org/${id}/done`, { method: 'POST', headers: { 'x-edge-secret': SECRET } });
+      if (!res.ok) throw new Error(`personal organization ${id}: ${res.status} ${await res.text()}`);
+    }
+    firstOrg.set(owner, id);
+    workspaces.push({ id, slug } as never);
+    console.log(`personal organization ${slug} for ${email}${pgUser ? '' : ' (a new account in the directory)'}`);
+  }
   // The tables of packages/docs/server/db.ts that hold an organization's things, owners before what they own.
   const owned = ['folders', 'sheets', 'stored_files', 'images', 'public_links', 'agent_conversations', 'agent_messages', 'favorites']
     .filter((t) => all(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, t).length);
-  const orgOf = (row: Record<string, unknown>) => (row.workspace_id as string | null) ?? firstOrg.get((row.owner_id ?? row.user_id) as string) ?? null;
+  // An organization the row names that no longer exists counts as none.
+  const orgOf = (row: Record<string, unknown>) => (row.workspace_id && known.has(row.workspace_id as string) ? (row.workspace_id as string) : null) ?? firstOrg.get((row.owner_id ?? row.user_id) as string) ?? null;
   const files = (dir: string) => (existsSync(path.join(DOCS_DIR, dir)) ? readdirSync(path.join(DOCS_DIR, dir)) : []);
   const bodies = { sheets: files('sheets'), files: files('files'), images: files('images') };
   for (const w of workspaces) {
