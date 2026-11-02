@@ -546,7 +546,8 @@ export async function buildApp(opts: AppOptions) {
     // The user's organizations are cached a minute by the host: one they joined (or made) since is asked about by
     // itself (isMember, per pair) when the request names it or a file of it, so it works at once.
     if (host && typeof req.viewer !== 'string') {
-      const id = (req.params as { id?: unknown } | undefined)?.id;
+      // A file named in the path, or in the body (POST /api/recents).
+      const id = (req.params as { id?: unknown } | undefined)?.id ?? (body as { id?: unknown }).id;
       const row = typeof id === 'string' && isFileId(id) ? (sheets.find(id) ?? storedFiles.find(id)) : undefined;
       const more = [scopeOf(scope).workspaceId, row && !row.private ? row.workspace_id : null].filter((w): w is string => !!w && !(req.viewer as Viewer).workspaces.has(w));
       for (const w of more) if (scopeOf(scope).workspaceId === w || (await host.isMember(req.user.id, w))) req.viewer = { userId: req.user.id, workspaces: new Set([...req.viewer.workspaces, w]) };

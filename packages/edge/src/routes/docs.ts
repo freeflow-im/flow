@@ -31,9 +31,16 @@ async function placeOfFile(c: C): Promise<string | null> {
   return id && !['import', 'at', 'fetch'].includes(id) ? directory(c, 'organizationOfId', decodeURIComponent(id)) : null;
 }
 
+/** A page reporting the file it shows (POST /api/recents, `{ kind, id }`): it is recorded where the file is. */
+async function placeOfOpened(c: C): Promise<string | null> {
+  if (c.req.method !== 'POST' || new URL(c.req.url).pathname !== '/api/recents') return null;
+  const id = ((await c.req.raw.clone().json().catch(() => null)) as { id?: unknown } | null)?.id;
+  return typeof id === 'string' ? directory(c, 'organizationOfId', id) : null;
+}
+
 docsRoutes.all('/api/*', async (c) => {
   const caller = await who(c);
-  const named = c.req.query('workspace') ?? c.req.query('org') ?? (await placeOfFile(c));
+  const named = (await placeOfOpened(c)) ?? c.req.query('workspace') ?? c.req.query('org') ?? (await placeOfFile(c));
   const first = caller.userId ? (await directory(c, 'organizationsOf', caller.userId))[0] ?? null : null;
   // Someone in no organization yet, and anyone not signed in, share an object that can only say so.
   const id = named ?? first ?? 'none';
