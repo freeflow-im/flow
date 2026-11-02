@@ -1,4 +1,5 @@
 import { StrictMode, type ReactElement } from 'react';
+import { BASE } from './basePath.ts';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AgentPanel } from './agent/AgentPanel.tsx';
@@ -99,7 +100,8 @@ function AppShell() {
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <AuthProvider>
-      <BrowserRouter basename={import.meta.env.BASE_URL}>
+      {/* The base path without its trailing slash: the router matches "/workspace" itself only then. */}
+      <BrowserRouter basename={BASE || '/'}>
         <AgentProvider>
           <AppShell />
         </AgentProvider>

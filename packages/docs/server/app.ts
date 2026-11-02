@@ -2463,16 +2463,16 @@ export async function buildApp(opts: AppOptions) {
   // --- Static client (production) ----------------------------------------------
   if (host && opts.staticDir && existsSync(opts.staticDir)) {
     // Under the base path (the client is built with it: BASE_PATH), its files and its page for every address of
-    // its own. The page is sent from memory: whether the host's static files decorate replies is the host's
-    // business. A visitor at the base goes to the suite's sign-in; the suite sends them back here once signed in
-    // (/?next=).
+    // its own. The page is read and sent here (whether the host's static files decorate replies is the host's
+    // business; read each time, so a rebuilt client is live without a restart). A visitor at the base goes to the
+    // suite's sign-in; the suite sends them back here once signed in (/?next=).
     const staticDir = opts.staticDir;
     await app.register(fastifyStatic, { root: staticDir, prefix: `${basePath}/`, wildcard: false, index: false, decorateReply: false });
-    const index = readFileSync(path.join(staticDir, 'index.html'), 'utf8');
+    const indexFile = path.join(staticDir, 'index.html');
     const page = (req: FastifyRequest, reply: FastifyReply) => {
       // A public link's address is its secret: not passed on to other sites, not indexed.
       if (req.url.startsWith(`${basePath}/p/`)) reply.header('Referrer-Policy', 'no-referrer').header('X-Robots-Tag', 'noindex');
-      return reply.type('text/html; charset=utf-8').header('cache-control', 'no-cache').send(index);
+      return reply.type('text/html; charset=utf-8').header('cache-control', 'no-cache').send(readFileSync(indexFile, 'utf8'));
     };
     app.get(basePath, async (req, reply) => (req.user ? page(req, reply) : reply.redirect(`/?next=${encodeURIComponent(req.url)}`)));
     app.get(`${basePath}/*`, async (req, reply) => page(req, reply));
