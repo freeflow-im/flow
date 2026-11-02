@@ -1443,7 +1443,7 @@ export async function buildApp(opts: AppOptions) {
       const paper = paperFor(locale ?? String(req.headers['accept-language'] ?? '').split(',')[0]);
       try {
         // In development the app's pages are where the request came from (Vite), not on this server.
-        const made = await pdfMaker.make(req.viewer, id, { paper, origin: opts.staticDir ? undefined : `${req.protocol}://${req.headers.host}` });
+        const made = await pdfMaker.make(req.viewer, id, { paper, origin: opts.staticDir ? undefined : `${req.protocol}://${req.headers.host}${basePath}` });
         if (!made) return reply.code(404).send({ error: 'File not found' });
         if (made.revision) reply.header('X-Revision', made.revision);
         return attachment(reply, made.name, 'application/pdf').send(made.pdf);
