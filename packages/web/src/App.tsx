@@ -46,15 +46,6 @@ export const PENDING_INVITE = 'pendingInvite';
 /** sessionStorage: the path to go to once signed in (?next=, consumed in SessionApp). */
 export const NEXT_AFTER_SIGN_IN = 'flow.nextAfterSignIn';
 
-/** Leave for the ?next= destination if one is waiting; true when leaving. */
-export function goToNextAfterSignIn(): boolean {
-  const next = sessionStorage.getItem(NEXT_AFTER_SIGN_IN);
-  if (!next) return false;
-  sessionStorage.removeItem(NEXT_AFTER_SIGN_IN);
-  location.assign(next);
-  return true;
-}
-
 /** Pull ?signup= / ?reset= / ?signin= (emailed links), ?native= (the native
  * Google handoff, phase16 §9) and ?register (the marketing site's Sign up
  * button) off the URL before rendering. */
@@ -229,6 +220,16 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
   // The connection this window is pointed at. One today (the migrated default);
   // the manager is what phase 3's switcher will drive.
   const [user, setUser] = useState<UserDTO | null>(null);
+  // Sent here to sign in by another part of the suite (?next=, kept above): back there once signed in. The
+  // session is set as the cookie first (a session from before the cookie existed has none), as the Workspace
+  // app's pages carry the cookie alone.
+  useEffect(() => {
+    if (!user) return;
+    const next = sessionStorage.getItem(NEXT_AFTER_SIGN_IN);
+    if (!next) return;
+    sessionStorage.removeItem(NEXT_AFTER_SIGN_IN);
+    void runtime.api('POST', '/v1/auth/session-cookie').catch(() => {}).then(() => location.assign(next));
+  }, [user, runtime]);
   const [booting, setBooting] = useState(true);
   const [offline, setOffline] = useState(false);
   const [{ signupToken, resetToken, signinToken, nativeHandoff, register }] = useState(() =>
@@ -395,8 +396,6 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
     setUser(resp.user);
     runtime.write("cachedUser", JSON.stringify(resp.user));
     setOffline(false);
-    // Sent here to sign in by another part of the suite (?next=): back there, now that the session cookie is set.
-    if (goToNextAfterSignIn()) return;
     const joined = resp.autoJoined ?? [];
     if (joined.length > 0) {
       const first = joined[0]!;

@@ -82,6 +82,14 @@ describe('the session as a cookie', () => {
     expect(anon.statusCode).toBe(401);
   });
 
+  it('a client holding only the bearer can have its session set as the cookie', async () => {
+    const res = await app.inject({ method: 'POST', url: '/v1/auth/session-cookie', headers: bearer(aliceToken) });
+    expect(res.statusCode).toBe(200);
+    expect(setCookie(res).startsWith(`sid=${aliceToken};`)).toBe(true);
+    const anon = await app.inject({ method: 'POST', url: '/v1/auth/session-cookie' });
+    expect(anon.statusCode).toBe(401);
+  });
+
   it('signing out clears the cookie and ends the session', async () => {
     const login = await app.inject({ method: 'POST', url: '/v1/auth/login', payload: { email: 'alice@example.test', password: 'password123' } });
     const token = login.json().token as string;

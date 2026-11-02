@@ -342,6 +342,13 @@ export function registerRoutes(app: FastifyInstance): void {
     return { ok: true };
   });
 
+  // The session as the cookie too (lib/sessionCookie.ts), for a client that holds only the bearer — a session
+  // from before the cookie existed — and is leaving for the Workspace app, whose pages carry the cookie alone.
+  app.post('/v1/auth/session-cookie', { preHandler: requireAuth }, async (req, reply) => {
+    setSessionCookie(reply, req.bearerToken);
+    return { ok: true };
+  });
+
   // Web-to-app handoff: mint a one-time code (auth'd), exchange it (open).
   app.post('/v1/auth/app-link', { preHandler: requireAuth }, async (req, reply) => {
     return reply.status(201).send(await auth.createAppLink(req.user.id));
