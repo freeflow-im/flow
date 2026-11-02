@@ -50,7 +50,7 @@ put() { aws ssm put-parameter --region us-west-2 --type SecureString --overwrite
 |---|---|
 | `/flow/POSTGRES_PASSWORD` | `openssl rand -hex 32`. Hex on purpose: `deploy.sh` puts it into `DATABASE_URL` as it is. It is set when `/data/postgres` is first created; changing the parameter later does not change the database's password (`ALTER USER flow PASSWORD '…'` in `docker exec -it postgres psql -U flow` first, then the parameter, then `deploy.sh flow`). |
 
-**Copied from Railway's `app` service** (`railway variable list --service app --json`). Copy the value exactly;
+**Copied from Railway's `app` service** (`railway variables --service app --environment production --kv`, one `NAME=value` line each; a value that spans lines, such as a PEM key, must be set by hand). Copy the value exactly;
 do not retype it.
 
 | Parameter | Where the value comes from |
@@ -76,21 +76,36 @@ do not retype it.
 `ELECTRON_SKIP_BINARY_DOWNLOAD` and any `RAILWAY_*`. Setting `/flow/DATABASE_URL` or `/flow/NATS_URL` makes the
 container use those instead of the box's: that is the RDS path later, and a mistake now.
 
-A loop for the bulk of it, from a file of `NAME=value` lines exported from Railway (keep the file in a private
-temporary directory and delete it afterwards; it holds every secret):
+A script for the bulk of it, from the file of `NAME=value` lines exported from Railway (keep the file in a private
+temporary directory and delete it afterwards; it holds every secret). Run it with bash; without `--apply` it only
+prints what it would do. It skips what the box sets, `FLOW_REDIRECT_FROM_HOSTS` (step 6), Railway's own and any
+`VITE_*` leftovers, sets the two rehearsal drivers to `dev`, and leaves the R2 key pair for you to set by hand to
+the read-only token (both undone in step 6):
 
 ```sh
-while IFS= read -r line; do
+cat > put-flow-params.sh <<'EOF'
+#!/bin/bash
+set -euo pipefail
+file=${1:?railway.env}; apply=${2:-}
+skip='^(DATABASE_URL|NATS_URL|HOST|PORT|NODE_ENV|FLOW_FILE_DIR|FLOW_MIGRATE_BLOBS|ELECTRON_SKIP_BINARY_DOWNLOAD|FLOW_REDIRECT_FROM_HOSTS|CLOUDFLARE_ACCESS_KEY_ID|CLOUDFLARE_SECRET_ACCESS_KEY|RAILWAY_.*|VITE_.*)$'
+put() {
+  if [ "$apply" = --apply ]; then
+    aws ssm put-parameter --region us-west-2 --type SecureString --overwrite --name "/flow/$1" --value "$2" >/dev/null && echo "put /flow/$1"
+  else
+    echo "would put /flow/$1 (${#2} chars)"
+  fi
+}
+while IFS= read -r line || [ -n "$line" ]; do
+  [ -z "$line" ] && continue
   name=${line%%=*}; value=${line#*=}
-  case $name in
-    DATABASE_URL|NATS_URL|HOST|PORT|NODE_ENV|FLOW_FILE_DIR|FLOW_MIGRATE_BLOBS|ELECTRON_SKIP_BINARY_DOWNLOAD|RAILWAY_*) continue ;;
-  esac
+  if [[ $name =~ $skip ]]; then echo "skip $name"; continue; fi
+  case $name in FLOW_EMAIL_DRIVER|FLOW_PUSH_DRIVER) value=dev ;; esac
   put "$name" "$value"
-done < railway.env
+done < "$file"
 put POSTGRES_PASSWORD "$(openssl rand -hex 32)"
-# the rehearsal overrides, undone in step 6
-put FLOW_EMAIL_DRIVER dev
-put FLOW_PUSH_DRIVER dev
+EOF
+bash put-flow-params.sh railway.env            # dry run: read the names
+bash put-flow-params.sh railway.env --apply
 put CLOUDFLARE_ACCESS_KEY_ID <read-only token's key id>
 put CLOUDFLARE_SECRET_ACCESS_KEY <read-only token's secret>
 aws ssm get-parameters-by-path --region us-west-2 --path /flow/ --query 'Parameters[].Name' --output text | tr '\t' '\n' | sort
@@ -133,26 +148,37 @@ aws cloudformation create-change-set --region us-west-2 --stack-name mcpdocs --c
     ParameterKey=InstanceType,ParameterValue=t4g.large \
     ParameterKey=FlowDomainName,ParameterValue=app.freeflow.im \
     ParameterKey=DomainName,UsePreviousValue=true \
-    ParameterKey=OtherDomains,UsePreviousValue=true \
+    ParameterKey=OtherDomains,ParameterValue=docs.freeflow.im \
     ParameterKey=DataVolumeSizeGiB,UsePreviousValue=true \
     ParameterKey=GitHubRepo,UsePreviousValue=true \
-    ParameterKey=GitHubRepoIds,UsePreviousValue=true \
+    ParameterKey=GitHubRepoIds,ParameterValue=freeflow-im@309602851/mcp-docs@1431919019 \
+    ParameterKey=FlowGitHubRepo,ParameterValue=freeflow-im/flow \
+    ParameterKey=FlowGitHubRepoIds,ParameterValue=freeflow-im@309602851/flow@1305888551 \
     ParameterKey=GitHubOidcProviderArn,UsePreviousValue=true \
-    ParameterKey=UseElasticIp,UsePreviousValue=true
+    ParameterKey=UseElasticIp,ParameterValue=true
 aws cloudformation describe-change-set --region us-west-2 --stack-name mcpdocs --change-set-name flow-to-aws \
-  --query 'Changes[].ResourceChange.[Action,LogicalResourceId,Replacement]' --output table
+  --query 'Changes[].ResourceChange.[Action,LogicalResourceId,Replacement,join(`,`,Details[].Target.Name)]' --output table
 ```
 
-Expect `Add` for `FlowRepository` and `FlowLogs`, `Modify` for `Instance`, `InstanceRole` and `DeployRole`, and
-**`Instance` with `Replacement` `False`**. If `Instance` says `True` or `Conditional`, or `DataVolume`,
-`DataAttachment` or `Address` appear at all, delete the change set and find out why before going on. Otherwise:
+(`OtherDomains` and `GitHubRepoIds` are given, not `UsePreviousValue`: the stack was made before they existed. The
+instance has had no Elastic IP so far (`UseElasticIp=false`); since this update restarts it onto a new address
+anyway, `true` gives it one address that never changes again, at the cost of moving the docs A records once.)
+
+Expect `Add` for `FlowRepository`, `FlowLogs` and `Address` (the Elastic IP), `Modify` for `InstanceRole` and
+`DeployRole`, and `Modify` for `Instance` and `DataAttachment` with `Replacement` **`Conditional`** whose changed
+attributes are only `InstanceType` and `UserData`: CloudFormation says "conditional" because those replace an
+instance whose root disk is an instance store, and ours is EBS (`aws ec2 describe-instances … --query
+'Reservations[0].Instances[0].RootDeviceType'` says `ebs`), so they are a stop and start. If `ImageId` is among
+the attributes, `Instance` says `True`, or `DataVolume` appears at all, delete the change set and find out why
+before going on. Otherwise:
 
 ```sh
 aws cloudformation execute-change-set --region us-west-2 --stack-name mcpdocs --change-set-name flow-to-aws
 aws cloudformation wait stack-update-complete --region us-west-2 --stack-name mcpdocs
 ```
 
-**UserData runs only on an instance's first boot**, so the instance is back with the old scripts (Docker restarts
+The instance is back on the Elastic IP: **change the docs A records** (`mcpdocs` and `docs`, DNS only) to the new
+`PublicIp` output now. **UserData runs only on an instance's first boot**, so the instance is back with the old scripts (Docker restarts
 the docs app and Caddy by itself). Run the new UserData on it, from a Session Manager shell as root:
 
 ```sh
@@ -350,6 +376,27 @@ restore and row-count commands above move a Postgres 16 database into the box's 
 and readable messages. Not checked: the stack update itself, IAM and the GitHub OIDC trust, the workflow's push to
 ECR, the awslogs driver, Caddy's certificate for `app.freeflow.im`, `pg_dump` against Neon, the real data and key,
 and R2, LiveKit, APNs and Cloudflare email from the instance's address.
+
+## As it went: 2026-11-01
+
+The switch was done on 2026-11-01, steps 1 to 7 in one evening, with no final copy (nothing had been written on
+Railway since the rehearsal copy, by the operator's judgment). What differed from the plan above, and is now in it:
+
+- **Railway's export is not the truth.** Two secrets had been shortened by hand in Railway long before
+  (`CLOUDFLARE_SECRET_ACCESS_KEY` to 23 characters, `LIVEKIT_API_SECRET` to 20), so the copy in `/flow/` failed
+  against R2 (every avatar and file a 404, downloads forbidden) and LiveKit ("invalid token" at boot). Check the
+  lengths before trusting an export: an R2 secret is 64 hex characters, a LiveKit Cloud secret 43 or 44. Test
+  the R2 pair from a laptop with `aws s3api head-object … --endpoint-url $CLOUDFLARE_S3_ENDPOINT --region auto`
+  (with `AWS_REQUEST_CHECKSUM_CALCULATION=when_required`) before the switch.
+- **The change set reads `Conditional`, not `False`,** for the instance (step 2 now says so), and the stack got
+  its Elastic IP in the same update, so the docs A records moved once, to 44.236.200.216.
+- **Caddy needed a nudge:** after the DNS change it was still backing off from the earlier failed challenges;
+  `docker exec caddy caddy reload --config /etc/caddy/Caddyfile --force` had the certificate in seconds.
+- **Google sign-in cannot be used on the port forward** (the Google client allows only `app.freeflow.im`); a
+  sign-in link works: request one at `POST /v1/auth/signin-link`, read it from the container's dev outbox
+  (`docker exec flow sh -c 'cat /data/emails/$(ls -t /data/emails | head -1)'`) and open it on `localhost`.
+- The UserData re-run through a Session Manager shell produced an empty file once (the IMDS fetch); through
+  `aws ssm send-command` it ran as written. `wc -c /root/user-data.sh` before `bash` is worth the second.
 
 ## Rollback
 
