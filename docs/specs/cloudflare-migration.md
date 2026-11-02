@@ -128,3 +128,97 @@ flag, not a restore).
 - **The data key**: one key for all tenants as today, or a key per organization wrapped by a master, which
   the per-object layout makes natural. Decide at step 3.
 - **Billing and limits** per organization become trivial to meter inside the object; out of scope here.
+
+## 7. The steps, as pull requests
+
+Each step is one or a few PRs on `main`, deployable on its own, with the previous step live. Where a step
+needs a decision, a short spike comes first and its result goes in `decision_log.md`.
+
+**Step 0, before any of it (after phase 4 merges).**
+- 0.1 `packages/edge`: the Worker package. Hono, TypeScript, `wrangler.toml` with the zone routes for
+  `app.freeflow.im` and `docs.freeflow.im`, bindings declared but empty, a `deploy-edge.yml` workflow
+  (`wrangler deploy` on main with an API token in the repo's secrets). Deploys nothing that answers yet.
+- 0.2 Cloudflare account: Workers paid plan (Durable Objects with SQLite need it), R2 already there, the
+  `freeflow.im` zone already on Cloudflare DNS. An `origin.freeflow.im` A record for the instance, DNS only,
+  so the Worker has a name to proxy to; Caddy serves it with its own certificate.
+- 0.3 Spike A, the socket topology: one client socket per organization (the multi-server runtime already
+  keeps one connection per server, so an organization on the edge is "another server" to it) versus one
+  socket into a per-user session object that fans out. Decide with a day's prototype; the first is simpler
+  and the plan assumes it.
+- 0.4 Spike B, Docs' libraries on Workers: LiteParse, Tesseract, `exceljs`, `pptxgenjs`, `@cantoo/pdf-lib`,
+  `sharp`. Each either runs in a Worker, runs in Browser Rendering, or stays on a small origin service.
+  A list with one line each.
+
+**Step 1, the front door.** (one PR, then a DNS change)
+- 1.1 The Worker serves the static clients (`packages/web/dist`, the Docs client under `/workspace`) and
+  proxies every other path to `origin.freeflow.im`, including WebSocket upgrades on `/v1/ws` and the
+  plugin's paths, with the client's IP and host forwarded.
+- 1.2 `app.freeflow.im` and `docs.freeflow.im` move to the Worker (orange cloud). Everything behaves as
+  before; deploys of the origin no longer show 502s because the Worker retries.
+- 1.3 Rollback: grey cloud, the records back to the instance.
+
+**Step 2, the directory.** (three PRs)
+- 2.1 Identity behind an interface: `services/auth.ts`, `users.ts`, the membership queries of
+  `workspaces.ts`, `oauthGoogle/Apple`, `handoff`, `appToken` take a `DirectoryStore`; the Node
+  implementation is today's Postgres code. No behaviour change. `pushOutbox`-style tables are not identity.
+- 2.2 The Directory Durable Object in `packages/edge`: its SQLite schema and migrations, the
+  `DirectoryStore` implementation over `ctx.storage.sql`, argon2id through WebAssembly (`hash-wasm`), the
+  scrypt check for imported Docs hashes through `@noble/hashes`. The Worker answers `/v1/auth/*`, `/v1/me`,
+  `/v1/me/workspaces` (memberships; the organizations' rows still come from the origin until step 3), the
+  session cookie and bearer. A one-time import from Postgres (`scripts/import-directory.ts`) and
+  **dual-write** from the origin: identity writes on the origin also go to the directory through a private
+  Worker route with a shared secret, for the first week.
+- 2.3 The origin trusts the Worker for the user: the Worker passes a short-lived signed token (HS256, a
+  shared secret) naming the user and session kind; the origin's `requireAuth` accepts it on requests that
+  arrived through the Worker and falls back to its own lookup otherwise. Flag `IDENTITY_SOURCE` in the
+  Worker (`origin` | `directory`) is the switch and the rollback.
+
+**Step 3, organizations, one at a time.** (the big one; four PRs and a per-organization procedure)
+- 3.1 The Org Durable Object: schema for everything in §1 that the organization owns, migrations, the
+  event protocol of `shared/events.ts` over hibernating WebSockets, presence and typing in memory. The
+  messages, channels, reactions, pins, notifications and scheduled-messages services ported over the
+  object's SQL (SQLite dialect; the `SKIP LOCKED` queue becomes an Alarm). Unit tests with `miniflare`.
+- 3.2 Routing by organization: the directory keeps `hosted_on` per organization (`origin` | `edge`) and an
+  index `channel_id → organization` so a channel route finds its object. The Worker routes
+  `/v1/workspaces/:id/*`, `/v1/channels/:id/*`, `/v1/messages/*` and the socket for an edge organization to
+  its object and proxies the rest to the origin. The client opens one socket per edge organization (Spike A).
+- 3.3 The move tool: an admin route that exports one organization from Postgres (its rows and the blob keys
+  it references) and imports it into its object; dual-write from the origin to the object while
+  `hosted_on = origin` for that organization, so the switch is only the flag. Rehearse on a copy.
+- 3.4 The procedure, per organization: import, dual-write a few days, flip the flag, verify (messages,
+  sockets, unread, search, huddles' invites), keep the flag reversible for a week. The smallest organization
+  first, then batches, then all. Postgres stays the system of record for organizations still on the origin.
+
+**Step 4, files and artifacts.** (two PRs)
+- 4.1 Blob keys gain the organization prefix; the Worker signs R2 upload and download URLs itself
+  (`aws4fetch` against R2's S3 API, or an R2 binding with a signed route). The files and artifacts services
+  move into the Org object with the rest of its rows; the move tool copies the organization's blobs to their
+  new keys.
+- 4.2 Avatars and custom emoji: Cloudflare Images for the resize, R2 for the bytes.
+
+**Step 5, Docs.** (four PRs, after Spike B)
+- 5.1 On the origin first: split `packages/docs/server/app.ts` into route modules and make the stores take
+  their database through the one interface `DatabaseSync` already implies, so the same modules run over
+  the object's SQL. No behaviour change; the desktop app keeps `node:sqlite`.
+- 5.2 The Docs stores in the Org object (the organization's files, folders, public links, assistant
+  conversations, the per-organization My files), bodies and uploads in R2, the Docs routes in the Worker
+  under `/api/*`, the revision feed as object events over the same socket.
+- 5.3 PDFs through Browser Rendering (the print pages are served by the Worker); Office import and OCR per
+  Spike B's list, the ones that cannot run on Workers behind the proxy on a small origin service.
+- 5.4 The assistant's loop as a Cloudflare Workflow (an agent turn can run minutes; a request cannot), its
+  server tools calling the object, its browser tools unchanged; the ChatGPT plugin's OAuth server and
+  `/mcp` as Worker handlers over the directory's grants.
+
+**Step 6, the long tail.** (small PRs as each is reached)
+- Pushes: a Queue consumer speaking APNs over HTTP/2. Email: already Cloudflare; inbound community email
+  as an Email Worker. Unfurls: a fetch with the Cache API. Huddles: LiveKit tokens minted in the Worker.
+  Help pages: static. Nightly: each object exports itself to R2 on an Alarm; a Cron Trigger checks they did.
+
+**Step 7, retire the origin.**
+- The desktop app's release build moves to CI (it already is for the Windows and Mac builds; the instance
+  is not needed for it), the proxy is removed, the stack deleted with Postgres, NATS and Caddy. The Electron
+  shell and the native apps point at the edge, which to them is one more server.
+
+Rough sizes: step 0 a few days (the spikes are most of it); step 1 two days; step 2 one to two weeks; step 3
+three to four weeks including the moves; step 4 one week; step 5 two to three weeks; step 6 one week spread
+out; step 7 a day. Steps 2 to 5 each end with a rehearsal, a switch and a flag to flip back.
