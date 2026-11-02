@@ -8,7 +8,8 @@ Designed with the operator on the canvas "FreeFlow Suite Bar" (linked from the s
   switcher behind it | **Docs** / **Chat** | search, Assistant, notifications,
   the account button.
 - **One top tab per app**, each with its own left column (Docs its folders, Chat
-  its channels). Mail and Calendar become tabs when they exist. A "Work" hub
+  its channels). Mail and Calendar sit in the bar now as
+  placeholders, grey and not clickable, until they exist. A "Work" hub
   tab holding Mail, Calendar, Docs and Drive under one left nav was considered
   and rejected: it nests three levels (tab, section, folder).
 - Search is the left-most of the right group so it can expand in place into the
