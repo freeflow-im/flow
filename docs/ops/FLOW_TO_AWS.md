@@ -50,7 +50,7 @@ put() { aws ssm put-parameter --region us-west-2 --type SecureString --overwrite
 |---|---|
 | `/flow/POSTGRES_PASSWORD` | `openssl rand -hex 32`. Hex on purpose: `deploy.sh` puts it into `DATABASE_URL` as it is. It is set when `/data/postgres` is first created; changing the parameter later does not change the database's password (`ALTER USER flow PASSWORD '…'` in `docker exec -it postgres psql -U flow` first, then the parameter, then `deploy.sh flow`). |
 
-**Copied from Railway's `app` service** (`railway variable list --service app --json`). Copy the value exactly;
+**Copied from Railway's `app` service** (`railway variables --service app --environment production --kv`, one `NAME=value` line each; a value that spans lines, such as a PEM key, must be set by hand). Copy the value exactly;
 do not retype it.
 
 | Parameter | Where the value comes from |
