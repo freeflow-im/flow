@@ -12,6 +12,14 @@ organizations, sessions) is the only shared store. Consequences now:
 - Postgres and NATS stay on the box but are not permanent: no RDS, no new NATS use,
   an in-process bus when `NATS_URL` is unset. Docs' metadata does not move to Postgres.
 - Identity stays its own small service, the future directory.
+- The order from here: phase 3 (the bar, one web app), phase 4 (Docs respect the
+  current organization), then the Cloudflare move, Chat first and Docs second,
+  then Mail and Calendar on the new runtime. The §5 integrations are dropped.
+- One Durable Object per **organization**, not per channel: a tenant's sockets,
+  members, channel list, unread counts and search live together, so a message
+  fans out inside one object; every row keeps its channel id and no hot path
+  joins across channels, so a channel can be split out later if a tenant
+  outgrows the object.
 
 ## 2026-11-01 — The suite bar: one tab per app, Docs and Chat (docs/specs/freeflow-suite.md §2.5)
 
