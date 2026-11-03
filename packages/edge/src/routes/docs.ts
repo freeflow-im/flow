@@ -38,9 +38,15 @@ async function placeOfOpened(c: C): Promise<string | null> {
   return typeof id === 'string' ? directory(c, 'organizationOfId', id) : null;
 }
 
+/** The headless browser making a PDF: its print ticket names the organization whose object made it (docs/server/pdf.ts). */
+function placeOfPrint(c: C): string | null {
+  const ticket = getCookie(c, 'print');
+  return ticket?.includes('~') ? ticket.slice(0, ticket.indexOf('~')) : null;
+}
+
 docsRoutes.all('/api/*', async (c) => {
   const caller = await who(c);
-  const named = (await placeOfOpened(c)) ?? c.req.query('workspace') ?? c.req.query('org') ?? (await placeOfFile(c));
+  const named = (caller.userId ? null : placeOfPrint(c)) ?? (await placeOfOpened(c)) ?? c.req.query('workspace') ?? c.req.query('org') ?? (await placeOfFile(c));
   const first = caller.userId ? (await directory(c, 'organizationsOf', caller.userId))[0] ?? null : null;
   // Someone in no organization yet, and anyone not signed in, share an object that can only say so.
   const id = named ?? first ?? 'none';

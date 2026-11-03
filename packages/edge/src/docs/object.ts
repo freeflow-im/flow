@@ -101,7 +101,7 @@ export class Docs extends DurableObject<DocsEnv> {
   }
 
   async handle(request: Request, caller: Caller, organizationId: string): Promise<Response> {
-    const res = await withDocsContext(this.context, async () => {
+    const res = await withDocsContext({ ...this.context, organizationId }, async () => {
       await this.ready;
       this.outbox();
       return this.app.handle(request, caller);

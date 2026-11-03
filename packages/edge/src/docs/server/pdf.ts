@@ -4,6 +4,7 @@
 // is drawn (client/src/print.ts), and prints it. The browser is let in with a print ticket: a cookie that makes
 // its requests the user's, for reading only. A stored web page is someone else's HTML, so it is printed from
 // its text with every request it makes checked as an import's are (webFetch.ts).
+import { currentOrganization } from '../runtime/context.ts';
 import { randomBytes } from 'node:crypto';
 import { readFile } from '../runtime/fsp.ts';
 import { HTML_TYPE, type StoredFile } from '../shared/types.ts';
@@ -47,7 +48,10 @@ export class PrintTickets<U> {
   create(user: U): string {
     const now = Date.now();
     for (const [t, v] of this.tickets) if (v.expires <= now) this.tickets.delete(t);
-    const token = randomBytes(32).toString('base64url');
+    // Prefixed with the organization: the headless browser has no session, so its requests that name no file (the
+    // page asks who it is) are sent by the Worker to the object that knows the ticket (routes/docs.ts).
+    const org = currentOrganization();
+    const token = `${org ? `${org}~` : ''}${randomBytes(32).toString('base64url')}`;
     this.tickets.set(token, { user, expires: now + TICKET_TTL_MS });
     return token;
   }
