@@ -7024,6 +7024,7 @@ a.landing-card {
 
 /* The suite's folder panel on the left of every page (components/DocsNav.tsx): neutral, as the suite bar. */
 .docs-nav {
+  position: relative;
   flex: none;
   width: 248px;
   height: 100%;
@@ -7121,6 +7122,16 @@ a.landing-card {
   padding: 4px 10px;
   font-size: 12px;
   color: #5f6368;
+}
+.docs-nav-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -4px;
+  width: 8px;
+}
+.docs-nav-resize::after {
+  left: 3px;
 }
 @media (max-width: 760px) {
   .docs-nav {

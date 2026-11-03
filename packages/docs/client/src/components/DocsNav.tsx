@@ -9,6 +9,8 @@ import { api, type FolderInfo, type Place } from '../api.ts';
 import { cleanFolderPath } from '../../../shared/folders.ts';
 import { FAVORITES_PARAM, last as lastListing, RECENTS_PARAM } from '../listing.ts';
 import { useOrganization } from '../organization.ts';
+import { FOLDER_PANEL } from '../panelSize.ts';
+import { ResizeHandle, usePanelWidth } from './ResizeHandle.tsx';
 import { ORG_PARAM } from './RootSwitch.tsx';
 
 /** The window event the home page sends after it made, deleted, moved or renamed a folder. */
@@ -64,6 +66,8 @@ export function DocsNav() {
   const selected = selectedOf(onHome ? params : new URLSearchParams(lastListing()), !!orgId);
   const [expanded, setExpanded] = useState(readExpanded);
   const [children, setChildren] = useState<Map<string, FolderInfo[] | 'error'>>(new Map());
+  // Its width, dragged on its right edge and remembered; the page beside it keeps its least width.
+  const panel = usePanelWidth(FOLDER_PANEL, () => ({ viewport: window.innerWidth, maxFraction: 0.4 }));
   const asked = useRef(new Set<string>());
   // The selection whose folders were last opened: a folder the user then closes stays closed.
   const opened = useRef('');
@@ -192,7 +196,7 @@ export function DocsNav() {
   };
 
   return (
-    <nav className="docs-nav" aria-label="Folders">
+    <nav className="docs-nav" aria-label="Folders" style={{ width: panel.width }}>
       <div className="dn-scroll">
         {listRow('recents', 'Recents', <ClockGlyph />)}
         {listRow('favorites', 'Favorites', <StarGlyph />)}
@@ -202,6 +206,7 @@ export function DocsNav() {
           {renderFolder('me', '', 'My files', 0, <LockGlyph />)}
         </ul>
       </div>
+      <ResizeHandle panel={panel} side="left" label="Resize folder panel" className="docs-nav-resize" />
     </nav>
   );
 }
