@@ -86,7 +86,7 @@ export const config = {
     return process.env.FLOW_EMAIL_OUTBOX ?? '/.emails';
   },
   // ---- push (APNs) ---------------------------------------------
-  /** 'dev' logs + writes each push to pushOutboxDir; 'apns' talks to Apple (#250). */
+  /** 'dev' logs each push (push/index.ts); 'apns' sends to Apple over fetch (push/apnsSender.ts). */
   get pushDriver(): 'dev' | 'apns' {
     return process.env.FLOW_PUSH_DRIVER === 'apns' ? 'apns' : 'dev';
   },

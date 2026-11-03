@@ -1,9 +1,11 @@
 // End-to-end check of Chat through the Worker, the directory and an organization object, against a local `wrangler dev`:
 //   printf 'EDGE_ORIGIN_SECRET=x\nFLOW_DATA_KEY=%s\n' "$(openssl rand -base64 32)" > .dev.vars; mkdir -p public
 //   npx wrangler dev --port 18796 --local --var PORTED_HOSTS:edge.freeflow.im,localhost --var ASSET_HOSTS:none \
-//     --var ORIGIN_URL:http://localhost:9 --var WEB_URL_BASE:http://localhost:18796 > /tmp/edge.log 2>&1 &
+//     --var ORIGIN_URL:http://localhost:9 --var WEB_URL_BASE:http://localhost:18796 \
+//     --var LIVEKIT_API_KEY:devkey --var LIVEKIT_API_SECRET:devsecret-devsecret-devsecret-00 --var LIVEKIT_URL:wss://dev.livekit.invalid > /tmp/edge.log 2>&1 &
 //   node test/e2e.mjs /tmp/edge.log
-// It reads signup links from the Worker's log, because local mail goes there.
+// It reads signup links and the dev push driver's lines from the Worker's log, because local mail and pushes go there.
+// Without the LIVEKIT_* vars the huddle checks expect huddles to be off instead.
 import fs from 'node:fs';
 const log=process.argv[2]; const B='http://localhost:18796', WS='ws://localhost:18796';
 let pass=0,fail=0; const t=(n,ok,d='')=>{ok?pass++:fail++;console.log((ok?'ok  ':'FAIL')+' '+n+(d?': '+String(d).slice(0,170):''));};
@@ -58,8 +60,11 @@ let rr=await fetch(B+'/v1/me/avatar',{method:'POST',headers:{authorization:'Bear
 rr=await fetch(B+aj.avatarUrl,{headers:{authorization:'Bearer '+A.token}});t('avatar read',rr.status===200&&rr.headers.get('content-type')==='image/png',rr.status);
 rr=await fetch(B+aj.avatarUrl);t('avatar needs a session',rr.status===401,rr.status);
 r=await api(Bo.token,'GET','/v1/me/notifications');t('notifications across organizations',r.s===200&&Array.isArray(r.j.notifications),r.s+' '+JSON.stringify(r.j).slice(0,90));
+const DEVICE='e2e0'+crypto.randomUUID().replace(/-/g,'')+'0'.repeat(28);
+r=await api(Bo.token,'POST','/v1/me/devices',{token:DEVICE,platform:'ios',environment:'sandbox',bundleId:'im.freeflow.app'});t('register a push device',r.s===200&&r.j.ok===true,r.s+' '+JSON.stringify(r.j).slice(0,90));
 r=await api(A.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'hey @Robert',mentions:[Bo.user.id]});t('mention sent',r.s===201);
 await sleep(200);r=await api(Bo.token,'GET','/v1/me/notifications');t('mention notifies',(r.j.notifications??[]).length>=1,JSON.stringify(r.j).slice(0,120));
+const pushed=await link(new RegExp('\\[push:dev\\] token='+DEVICE.slice(0,12)+'.*?type=alert title="([^"]*)"','g'));t('the alarm pushes the mention to the device (dev driver)',!!pushed&&pushed[1].includes('Ann'),pushed?.[0]);
 r=await api(Bo.token,'POST','/v1/me/notifications/read',{all:true});t('mark read',r.s<300,r.s+' '+JSON.stringify(r.j).slice(0,90));
 const at=new Date(Date.now()+3000).toISOString();const beforeSched=sa.ev.length;
 r=await api(A.token,'POST','/v1/scheduled-messages',{channelId:gen.id,body:'scheduled hello',recurrence:{type:'once',at}});t('schedule',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,130));
@@ -71,6 +76,15 @@ if(r.s<300){const f=r.j.file;let u=await fetch(B+r.j.upload.url,{method:'PUT',he
  r=await api(A.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'see attached',fileIds:[f.id]});t('attach',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,100));
  let dl=await fetch(B+`/v1/files/${f.id}`,{headers:{authorization:'Bearer '+Bo.token},redirect:'manual'});const dt=await dl.text();t('Bob downloads',dl.status===200&&dt==='hello',dl.status+' '+dt.slice(0,100));}
 r=await api(A.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'link https://example.com/'});t('message with a link',r.s===201,r.s);
+// ---- huddles
+const cfg=(await api(null,'GET','/v1/config')).j;
+r=await api(A.token,'POST',`/v1/channels/${gen.id}/huddle/join`);
+if(cfg.huddles){t('huddle join returns a LiveKit token',r.s===200&&typeof r.j.token==='string'&&r.j.token.split('.').length===3&&r.j.url.startsWith('wss://'),r.s+' '+JSON.stringify(r.j).slice(0,120));
+ const claims=r.j.token?JSON.parse(Buffer.from(r.j.token.split('.')[1],'base64url').toString()):{};t('the token is for the channel room',claims.video?.room===gen.id&&claims.sub===A.user.id,JSON.stringify(claims.video));
+ r=await api(A.token,'GET',`/v1/workspaces/${W}/channels`);const hc=(r.j.channels??r.j).find(c=>c.id===gen.id);t('the channel list shows who is in the huddle',hc?.huddleParticipants?.[0]?.userId===A.user.id,JSON.stringify(hc?.huddleParticipants));
+ r=await api(A.token,'POST',`/v1/channels/${gen.id}/huddle/leave`);t('huddle leave',r.s===200);
+ const wh=await fetch(B+'/v1/livekit/webhook',{method:'POST',headers:{'content-type':'application/webhook+json',authorization:'forged'},body:JSON.stringify({event:'room_finished',room:{name:gen.id}})});t('an unsigned LiveKit webhook is refused',wh.status===400,wh.status);}
+else{t('huddles off without LiveKit settings',r.s===503,r.s);}
 // ---- agents
 r=await api(A.token,'POST',`/v1/workspaces/${W}/agent-invites`,{});t('agent invite',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,100));const code=r.j.code;
 r=await api(null,'POST','/v1/agents/redeem',{code,username:'flowbot',key:'a-long-agent-key-for-the-test',name:'Flowbot'});t('redeem',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,110));const AGT=r.j.agentToken;

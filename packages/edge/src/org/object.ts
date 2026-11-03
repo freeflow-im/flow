@@ -4,6 +4,7 @@ import type { Event, UserDTO } from '@flow/shared';
 import type { DirectoryCore } from '../directory/core';
 import type { Directory } from '../directory/object';
 import { withPublisher } from './bus';
+import { HUDDLE_ROSTER_DDL } from './huddles';
 import { openDb, withDb, type DB, schema } from './db/index';
 import { ORG_MIGRATIONS } from './db/migrations';
 import { setMailEnv } from './email/index';
@@ -11,6 +12,7 @@ import { presetWorkspaceId } from './lib/ids';
 import { CompatApp, type CallerContext } from './routes/compat';
 import { registerRoutes } from './routes/index';
 import { deleteMyAccount } from './services/accountDeletion';
+import { drainDuePushes, nextPushDueAt } from './services/pushOutbox';
 import { runSchedulerTick } from './services/scheduledMessages';
 import { announceJoin, enrollInWorkspace, toWorkspaceDTO } from './services/workspaces';
 import { socketControl } from './sockets';
@@ -44,6 +46,7 @@ const app = new CompatApp();
 registerRoutes(app as never);
 
 interface Attachment { userId: string }
+const pushLog = { info: (o: unknown, msg?: string) => console.log(`[push] ${msg}`, JSON.stringify(o)), warn: (o: unknown, msg?: string) => console.warn(`[push] ${msg}`, JSON.stringify(o)) };
 const USER_SUBJECT = /(?:^|\.)user\.([0-9a-f-]{36})(?:\.|$)/;
 
 export class Org extends DurableObject<OrgEnv> {
@@ -62,6 +65,7 @@ export class Org extends DurableObject<OrgEnv> {
       sql.exec('INSERT INTO _migrations (n) VALUES (?)', done + i);
     });
     for (const statement of OUTBOX) sql.exec(statement);
+    sql.exec(HUDDLE_ROSTER_DDL);
     // Answered by the runtime, so a client's heartbeat does not wake the object.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('{"op":"ping"}', '{"op":"pong"}'));
   }
@@ -133,15 +137,21 @@ export class Org extends DurableObject<OrgEnv> {
     return res;
   }
 
-  /** The next thing due. On Node a ticker polled for it; an object sleeps until then. */
+  /** The next thing due: a scheduled message or a push. On Node tickers polled for them; an object sleeps until then. */
   private async armAlarm(): Promise<void> {
-    const next = this.ctx.storage.sql.exec('SELECT MIN(next_run_at) AS at FROM scheduled_messages WHERE enabled AND next_run_at IS NOT NULL').one().at as number | null;
-    if (next === null) await this.ctx.storage.deleteAlarm();
-    else await this.ctx.storage.setAlarm(next);
+    const scheduled = this.ctx.storage.sql.exec('SELECT MIN(next_run_at) AS at FROM scheduled_messages WHERE enabled AND next_run_at IS NOT NULL').one().at as number | null;
+    const push = withDb(this.db, nextPushDueAt);
+    const due = [scheduled, push].filter((n): n is number => n !== null);
+    if (!due.length) await this.ctx.storage.deleteAlarm();
+    else await this.ctx.storage.setAlarm(Math.min(...due));
   }
 
   override async alarm(): Promise<void> {
-    await this.scoped(async () => { await runSchedulerTick(); });
+    await this.scoped(async () => {
+      await runSchedulerTick();
+      // After the scheduler, so a scheduled message's mentions push in the same alarm.
+      await drainDuePushes(pushLog);
+    });
     await this.flushOutbox(null);
     await this.armAlarm();
   }
