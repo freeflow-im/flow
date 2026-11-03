@@ -5,6 +5,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { AlertCircle, ChevronDown, ChevronRight, ExternalLink, Loader2, Trash2 } from 'lucide-react';
 import { MailApiError, mailApi, type MailAccount, type ProviderPreset, type Security, type ServerSettings } from '../api';
 import { isEmail } from '../lib/addresses';
+import { setImagePref, useImagePref } from '../lib/imagePref';
 import { keys } from '../hooks/mail';
 import { cn } from '../lib/utils';
 import { Button } from './ui/button';
@@ -265,8 +266,23 @@ export function AccountSettingsDialog({ accounts, initialId, focusPassword, onCl
         ) : (
           <p className="text-sm text-muted">No accounts yet.</p>
         )}
+        <ImagesSetting />
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** For every account: load messages' images from the web, or ask first (lib/imagePref.ts). */
+function ImagesSetting() {
+  const pref = useImagePref();
+  return (
+    <label className="flex items-start gap-2.5 border-t border-border pt-4 text-[13px]">
+      <input type="checkbox" className="mt-0.5 size-4 accent-primary" checked={pref === 'always'} onChange={(e) => setImagePref(e.target.checked ? 'always' : 'ask')} />
+      <span>
+        <b className="font-semibold">Show images from the web</b>
+        <span className="block text-muted">Off: messages ask before loading them, so senders can't tell when you opened their mail.</span>
+      </span>
+    </label>
   );
 }
 
