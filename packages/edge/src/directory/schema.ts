@@ -93,4 +93,10 @@ export const DIRECTORY_MIGRATIONS: string[] = [
     domain TEXT NOT NULL COLLATE NOCASE
   );
   CREATE INDEX organization_domains_domain ON organization_domains(domain);`,
+  // The MCP Docs desktop app's Google sign-in (routes/handoff.ts): a key of the app's, approved in the browser.
+  `CREATE TABLE desktop_handoffs (
+    key_hash TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at INTEGER NOT NULL
+  );`,
 ];

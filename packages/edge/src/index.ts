@@ -6,6 +6,7 @@ import { proxy, type ProxyEnv } from './proxy';
 import { authRoutes, type AuthEnv } from './routes/auth';
 import { orgRoutes } from './routes/org';
 import { docsRoutes } from './routes/docs';
+import { handoffRoutes } from './routes/handoff';
 import { pageRoutes } from './routes/pages';
 import { adminRoutes } from './routes/admin';
 
@@ -44,6 +45,8 @@ app.route('/', adminRoutes as never);
 // Ported routes, only on the hosts that have been switched. A path not ported yet falls through to the proxy.
 const ported = new Hono<{ Bindings: Env }>();
 ported.onError(onError);
+// Before Docs' /api/*: the desktop app's sign-in lives under /api/auth on the Workspace app's old paths.
+ported.route('/', handoffRoutes as never);
 ported.route('/', docsRoutes as never);
 ported.route('/', authRoutes as never);
 ported.route('/', orgRoutes as never);

@@ -77,11 +77,14 @@ const lastWindow = (pred) => [...recent].reverse().find((w) => !w.isDestroyed() 
 const frontServer = () => serverOf(BrowserWindow.getFocusedWindow()) ?? serverOf(front) ?? serverOf(lastWindow((w) => !!serverOf(w))) ?? servers.values().next().value ?? null;
 
 // --- Web tabs ------------------------------------------------------------------------------------------------
-// A Web tab is the hosted app (UNIVERSAL_WEB_URL), with a session of its own kept on disk, so web cookies and
-// the folders' tokens never mix and the person stays signed in. The page gets nothing of the app's: it talks
-// to the app only through mcpdocs:// links (the Local | Web switch), which the app catches before they load.
-const WEB_URL = (process.env.UNIVERSAL_WEB_URL || 'https://mcpdocs.freeflow.im').replace(/\/$/, '');
+// A Web tab is the hosted app, with a session of its own kept on disk, so web cookies and the folders' tokens never
+// mix and the person stays signed in. The page gets nothing of the app's: it talks to the app only through mcpdocs://
+// links (the Local | Web switch), which the app catches before they load. The hosted app is FreeFlow's Docs, at
+// /workspace of app.freeflow.im (its API at /api of the same host); UNIVERSAL_WEB_URL names a standalone server instead.
+const WEB_URL = (process.env.UNIVERSAL_WEB_URL || 'https://app.freeflow.im').replace(/\/$/, '');
 const WEB_ORIGIN = new URL(WEB_URL).origin;
+/** Where the hosted app's pages are: a stranger is sent from here to sign in, and back. */
+const WEB_HOME = process.env.UNIVERSAL_WEB_URL ? WEB_URL : `${WEB_URL}/workspace`;
 /** Added to the pages' user agent, so the client knows it is in the app and shows the Local | Web switch (PlaceSwitch). */
 const UA_MARK = 'MCPDocs/1';
 let webSession = null;
@@ -530,7 +533,7 @@ function trackWeb(win) {
 }
 
 /** A Web tab on `url` (the hosted app's); with `tabOf`, a tab of that window where the system has them (macOS). */
-function createWebWindow(url = `${WEB_URL}/`, tabOf = null) {
+function createWebWindow(url = WEB_HOME, tabOf = null) {
   const win = new BrowserWindow({ ...WINDOW_OPTIONS, webPreferences: { session: webSession } });
   trackWeb(win);
   if (tabOf && !tabOf.isDestroyed() && process.platform === 'darwin') tabOf.addTabbedWindow(win);
@@ -559,7 +562,7 @@ async function switchTo(kind, from) {
     target.focus();
     return;
   }
-  if (kind === 'web') return void createWebWindow(`${WEB_URL}/`, from).focus();
+  if (kind === 'web') return void createWebWindow(WEB_HOME, from).focus();
   const server = await serverFor(lastFolder() ?? app.getPath('home'));
   createWindow(server, `${server.origin}/`, from).focus();
 }
@@ -587,12 +590,13 @@ async function webRequest(req) {
 /** Sign out of the hosted app: its session ends there and here, and Web tabs go to the sign-in page. */
 async function signOutOfWeb() {
   try {
-    await webSession.fetch(`${WEB_URL}/api/auth/logout`, { method: 'POST', credentials: 'include' });
+    // FreeFlow's session ends at /v1/auth/logout, a standalone server's at /api/auth/logout.
+    await Promise.allSettled(['/v1/auth/logout', '/api/auth/logout'].map((p) => webSession.fetch(`${WEB_URL}${p}`, { method: 'POST', credentials: 'include' })));
   } catch {
     // Offline: the session is forgotten here all the same.
   }
   await webSession.clearStorageData();
-  for (const win of webWindows) void win.loadURL(`${WEB_URL}/login`);
+  for (const win of webWindows) void win.loadURL(process.env.UNIVERSAL_WEB_URL ? `${WEB_URL}/login` : WEB_HOME);
 }
 
 /**
@@ -653,8 +657,8 @@ function handleAppLink(link, from = null) {
     const page = u.searchParams.get('path') ?? '/';
     if (!page.startsWith('/') || page.startsWith('//')) return;
     const win = lastWindow(isWeb);
-    if (!win) return void createWebWindow(`${WEB_URL}${page}`, from).focus();
-    void win.loadURL(`${WEB_URL}${page}`);
+    if (!win) return void createWebWindow(`${WEB_HOME}${page}`, from).focus();
+    void win.loadURL(`${WEB_HOME}${page}`);
     win.focus();
     return;
   }
@@ -770,7 +774,7 @@ async function showFile(file, inNewTab = false) {
  */
 async function newTab() {
   const win = BrowserWindow.getFocusedWindow() ?? front;
-  if (isWeb(win)) return void createWebWindow(`${WEB_URL}/`, win).focus();
+  if (isWeb(win)) return void createWebWindow(WEB_HOME, win).focus();
   const server = serverOf(win) ?? frontServer();
   if (!server) return openFolder(lastFolder() ?? app.getPath('home'));
   let listing = '/';

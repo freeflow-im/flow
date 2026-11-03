@@ -112,6 +112,18 @@ describe('signing in', () => {
     expect((await core.exchangeAppLink(code)).user.id).toBe(user.id);
     await expect(core.exchangeAppLink(code)).rejects.toThrow();
   });
+  it('the desktop app\'s key is ready once approved, and trades for a session once', async () => {
+    const { user } = await signUp();
+    const key = 'k'.repeat(43);
+    expect(await core.desktopHandoffReady(key)).toBe(false);
+    await expect(core.exchangeDesktopHandoff(key)).rejects.toThrow();
+    await core.approveDesktopHandoff(key, user.id);
+    expect(await core.desktopHandoffReady(key)).toBe(true);
+    const token = await core.exchangeDesktopHandoff(key);
+    expect((await core.authenticate(token)).user.id).toBe(user.id);
+    expect(await core.desktopHandoffReady(key)).toBe(false);
+    await expect(core.exchangeDesktopHandoff(key)).rejects.toThrow();
+  });
 });
 
 describe('OAuth', () => {

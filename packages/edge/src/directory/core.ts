@@ -27,6 +27,7 @@ const VERIFY_TTL_HOURS = 48;
 const RESET_TTL_MINUTES = 60;
 const SIGNIN_TTL_MINUTES = 15;
 const APP_LINK_TTL = 2 * 60_000;
+const DESKTOP_HANDOFF_TTL = 10 * 60_000;
 const AGENT_TOUCH = 60_000;
 
 type Row = Record<string, unknown>;
@@ -246,6 +247,27 @@ export class DirectoryCore {
     const user = used && this.userById(used.user_id as string);
     if (!user) throw unauthorized('invalid or expired app link code');
     return { token: await this.issueSession(user.id as string, clientInfo), user: toUserDTO(user, user.id as string) };
+  }
+
+  /**
+   * The MCP Docs desktop app's sign-in (routes/handoff.ts): the person, signed in in their browser, approves the key
+   * the app made; the app, asking after it, trades it once for a session of its own.
+   */
+  async approveDesktopHandoff(key: string, userId: string): Promise<void> {
+    const now = Date.now();
+    this.sql.exec('DELETE FROM desktop_handoffs WHERE expires_at < ?', now);
+    this.sql.exec('INSERT OR REPLACE INTO desktop_handoffs (key_hash, user_id, expires_at) VALUES (?, ?, ?)', await hashToken(key), userId, now + DESKTOP_HANDOFF_TTL);
+  }
+
+  async desktopHandoffReady(key: string): Promise<boolean> {
+    return this.rows('SELECT 1 FROM desktop_handoffs WHERE key_hash = ? AND expires_at > ?', await hashToken(key), Date.now()).length > 0;
+  }
+
+  async exchangeDesktopHandoff(key: string, clientInfo?: string): Promise<string> {
+    const used = this.rows('DELETE FROM desktop_handoffs WHERE key_hash = ? AND expires_at > ? RETURNING user_id', await hashToken(key), Date.now())[0];
+    const user = used && this.userById(used.user_id as string);
+    if (!user || user.deleted_at) throw unauthorized('invalid or expired sign-in key');
+    return this.issueSession(user.id as string, clientInfo);
   }
 
   /** Match by (provider, sub), then by verified email, else create a provider-first account. */
