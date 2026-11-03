@@ -85,6 +85,11 @@ export interface SuiteBarProps {
   assistant?: { onOpen(): void; active?: boolean };
   notifications?: { onOpen(): void; badge?: number };
   account: SuiteAccount;
+  /**
+   * Where the FreeFlow logo goes: the home of the app you are in (Docs' file list, Chat's #general, Mail's inbox).
+   * Without it, the active tab's own link.
+   */
+  home?: { href: string; onSelect?: () => void };
 }
 
 type Menu = 'org' | 'account' | null;
@@ -199,7 +204,7 @@ function followTab(tab: SuiteTab): void {
   else if (!tab.active) window.location.assign(tab.href);
 }
 
-export function SuiteBar({ tabs, organization, search, assistant, notifications, account }: SuiteBarProps) {
+export function SuiteBar({ tabs, organization, search, assistant, notifications, account, home }: SuiteBarProps) {
   const [menu, setMenu] = useState<Menu>(null);
   const [searching, setSearching] = useState(false);
   const [ownQuery, setOwnQuery] = useState('');
@@ -297,8 +302,32 @@ export function SuiteBar({ tabs, organization, search, assistant, notifications,
   return (
     <header className="sb-bar" data-testid="suite-bar">
       <div className="sb-left">
-        <SuiteMark />
-        <span className="sb-wordmark">FreeFlow</span>
+        {(() => {
+          const active = tabs.find((t) => t.active && !t.disabled);
+          const target = home ?? (active ? { href: active.href, onSelect: active.onSelect } : undefined);
+          const mark = (
+            <>
+              <SuiteMark />
+              <span className="sb-wordmark">FreeFlow</span>
+            </>
+          );
+          if (!target) return mark;
+          return (
+            <a
+              className="sb-home"
+              href={target.href}
+              title="Home"
+              data-testid="suite-home"
+              onClick={(e) => {
+                if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0 || !target.onSelect) return; // the browser's own
+                e.preventDefault();
+                target.onSelect();
+              }}
+            >
+              {mark}
+            </a>
+          );
+        })()}
         {organization && (
           <>
             <span className="sb-divider" aria-hidden="true" />

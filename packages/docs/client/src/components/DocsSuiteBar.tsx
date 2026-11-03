@@ -86,6 +86,8 @@ export function DocsSuiteBar() {
   return (
     <>
       <SuiteBar
+        // The logo: the top of the file list, whatever page is open.
+        home={{ href: `${import.meta.env.BASE_URL}`, onSelect: () => navigate('/') }}
         tabs={[
           { id: 'docs', label: 'Docs', href: `${import.meta.env.BASE_URL}`, active: true, onSelect: () => navigate('/') },
           // Chat's count: the selected organization's unread notifications, as Chat's own tab shows them.

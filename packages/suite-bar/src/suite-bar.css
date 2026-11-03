@@ -69,6 +69,18 @@
   min-width: 0;
   justify-self: start;
 }
+.sb-home {
+  display: flex;
+  align-items: center;
+  gap: inherit;
+  color: inherit;
+  text-decoration: none;
+  border-radius: 8px;
+}
+.sb-home:focus-visible {
+  outline: 2px solid var(--sb-accent);
+  outline-offset: 2px;
+}
 .sb-wordmark {
   font-size: 17px;
   font-weight: 700;
