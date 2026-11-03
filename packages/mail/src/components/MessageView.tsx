@@ -1,11 +1,13 @@
 // The reading pane, after shadcn/ui's Mail example's display (MIT, see LICENSE-shadcn.md): the actions (reply, reply
 // all, forward, archive, move, delete, unread, star), the header (from, to, cc, date), the body and the attachments.
 import { Archive, ArrowLeft, ChevronLeft, ChevronRight, Download, FileText, FolderInput, Forward, Loader2, Mail, MoreVertical, Reply, ReplyAll, Star, Trash2 } from 'lucide-react';
-import { attachmentUrl, type Address, type MailFolder, type MessageDetail } from '../api';
+import { attachmentUrl, type Address, type Category, type MailFolder, type MessageDetail } from '../api';
 import { displayName, formatAddress } from '../lib/addresses';
 import { folderLabel, orderFolders } from '../lib/folders';
 import { fileSize, fullDate, relativeDate } from '../lib/format';
+import { TAB_INFO } from '../lib/tabs';
 import { cn } from '../lib/utils';
+import { TAB_ICONS } from './InboxTabs';
 import { MessageBody } from './MessageBody';
 import { Button } from './ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
@@ -27,6 +29,8 @@ export interface MessageViewProps {
   onForward(): void;
   onArchive(): void;
   onMove(to: string): void;
+  /** "Move to tab" for an INBOX message of an account with tabs on: the tabs, and the move. */
+  tabMove?: { tabs: Category[]; current: Category | null; onMove(tab: Category): void } | undefined;
   onDelete(): void;
   onToggleSeen(): void;
   onToggleFlag(): void;
@@ -85,6 +89,22 @@ export function MessageView(p: MessageViewProps) {
                 {f.specialUse ? folderLabel(f) : f.path}
               </DropdownMenuItem>
             ))}
+            {p.tabMove && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>Move to tab</DropdownMenuLabel>
+                {p.tabMove.tabs
+                  .filter((t) => t !== p.tabMove!.current)
+                  .map((t) => {
+                    const Icon = TAB_ICONS[t];
+                    return (
+                      <DropdownMenuItem key={t} onSelect={() => p.tabMove!.onMove(t)}>
+                        <Icon /> {TAB_INFO[t].label}
+                      </DropdownMenuItem>
+                    );
+                  })}
+              </>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
         <Action label="Delete (#)" onClick={p.onDelete} disabled={!m}>

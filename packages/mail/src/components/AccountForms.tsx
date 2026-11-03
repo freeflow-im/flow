@@ -3,11 +3,13 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { AlertCircle, ChevronDown, ChevronRight, ExternalLink, Loader2, Trash2 } from 'lucide-react';
-import { MailApiError, mailApi, type MailAccount, type ProviderPreset, type Security, type ServerSettings } from '../api';
+import { MailApiError, mailApi, type MailAccount, type ProviderPreset, type Security, type ServerSettings, type TabCategory } from '../api';
 import { isEmail } from '../lib/addresses';
 import { setImagePref, useImagePref } from '../lib/imagePref';
 import { keys } from '../hooks/mail';
+import { TAB_INFO, TAB_ORDER } from '../lib/tabs';
 import { cn } from '../lib/utils';
+import { TAB_ICONS } from './InboxTabs';
 import { Button } from './ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
 import { Input, Label } from './ui/input';
@@ -266,9 +268,58 @@ export function AccountSettingsDialog({ accounts, initialId, focusPassword, onCl
         ) : (
           <p className="text-sm text-muted">No accounts yet.</p>
         )}
+        {account && <InboxTabsSetting key={`tabs-${account.id}`} account={account} onSaved={(a) => qc.setQueryData<MailAccount[]>(keys.accounts, (old) => (old ?? []).map((x) => (x.id === a.id ? a : x)))} />}
         <ImagesSetting />
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** Per account: Gmail's inbox tabs. Primary is always there; each other tab is switched on by itself, and saved at once. */
+function InboxTabsSetting({ account, onSaved }: { account: MailAccount; onSaved(a: MailAccount): void }) {
+  const qc = useQueryClient();
+  const [tabs, setTabs] = useState<TabCategory[]>(account.tabs ?? []);
+  const save = useMutation({
+    mutationFn: (next: TabCategory[]) => mailApi.updateAccount(account.id, { tabs: next }),
+    onSuccess: (a) => {
+      onSaved(a);
+      void qc.invalidateQueries({ queryKey: ['mail', 'messages', a.id] });
+      void qc.invalidateQueries({ queryKey: ['mail', 'categories', a.id] });
+    },
+    onError: () => setTabs(account.tabs ?? []),
+  });
+  const toggle = (t: TabCategory, on: boolean) => {
+    const next = TAB_ORDER.filter((x) => (x === t ? on : tabs.includes(x)));
+    setTabs(next);
+    save.mutate(next);
+  };
+  const row = (id: 'primary' | TabCategory, checked: boolean, disabled: boolean) => {
+    const Icon = TAB_ICONS[id];
+    return (
+      <label key={id} className={cn('flex items-start gap-2.5 rounded-md px-1 py-1.5', disabled ? 'opacity-60' : 'cursor-pointer hover:bg-hover')}>
+        <input type="checkbox" className="mt-0.5 size-4 accent-primary" checked={checked} disabled={disabled} onChange={(e) => id !== 'primary' && toggle(id, e.target.checked)} />
+        <Icon className="mt-px size-4 shrink-0 text-muted" />
+        <span className="min-w-0">
+          <span className="font-medium">{TAB_INFO[id].label}</span>
+          <span className="block text-muted">{TAB_INFO[id].description}</span>
+        </span>
+      </label>
+    );
+  };
+  return (
+    <section className="border-t border-border pt-4 text-[13px]" aria-label="Inbox tabs">
+      <div className="mb-1 flex items-center gap-2">
+        <b className="font-semibold">Inbox tabs</b>
+        <span className="text-muted">for {account.email}</span>
+        {save.isPending && <Loader2 className="size-3.5 animate-spin text-muted" />}
+      </div>
+      <p className="mb-2 text-muted">Sort the inbox into tabs, as Gmail does. Mail that fits no tab you turn on stays in Primary.</p>
+      <div className="grid gap-x-4 sm:grid-cols-2">
+        {row('primary', true, true)}
+        {TAB_ORDER.map((t) => row(t, tabs.includes(t), false))}
+      </div>
+      {save.error && <p className="mt-1 text-danger">Could not save: {save.error.message}</p>}
+    </section>
   );
 }
 

@@ -2,7 +2,7 @@
 // tab is visible and re-read when the window regains focus (the contract's polling; push comes later). Flag changes,
 // moves and deletes show at once and are undone if the server refuses them.
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
-import { mailApi, type MessagePage, type MessageSummary } from '../api';
+import { mailApi, type Category, type MessagePage, type MessageSummary } from '../api';
 
 export const POLL_MS = 60_000;
 export const PAGE_SIZE = 25;
@@ -10,7 +10,8 @@ export const PAGE_SIZE = 25;
 export const keys = {
   accounts: ['mail', 'accounts'] as const,
   folders: (accountId: string) => ['mail', 'folders', accountId] as const,
-  messages: (accountId: string, folder: string, q: string) => ['mail', 'messages', accountId, folder, q] as const,
+  messages: (accountId: string, folder: string, q: string, category: Category | null = null) => ['mail', 'messages', accountId, folder, q, category ?? ''] as const,
+  categories: (accountId: string, since: string) => ['mail', 'categories', accountId, since] as const,
   allMessages: (accountId: string) => ['mail', 'messages', accountId] as const,
   message: (accountId: string, folder: string, uid: number) => ['mail', 'message', accountId, folder, uid] as const,
 };
@@ -28,14 +29,27 @@ export function useFolders(accountId: string | null) {
   });
 }
 
-export function useMessages(accountId: string | null, folder: string | null, q: string) {
+/** A folder's messages, or with `category` one inbox tab's (whose pages may come back short while the server sorts). */
+export function useMessages(accountId: string | null, folder: string | null, q: string, category: Category | null = null) {
   return useInfiniteQuery({
-    queryKey: keys.messages(accountId ?? '', folder ?? '', q),
-    queryFn: ({ pageParam }) => mailApi.messages(accountId!, { folder: folder!, limit: PAGE_SIZE, ...(pageParam ? { before: pageParam } : {}), ...(q ? { q } : {}) }),
+    queryKey: keys.messages(accountId ?? '', folder ?? '', q, category),
+    queryFn: ({ pageParam }) =>
+      mailApi.messages(accountId!, { folder: folder!, limit: PAGE_SIZE, ...(pageParam ? { before: pageParam } : {}), ...(q ? { q } : {}), ...(category ? { category } : {}) }),
     initialPageParam: 0,
     getNextPageParam: (last: MessagePage) => last.next ?? undefined,
     enabled: !!accountId && !!folder,
     refetchInterval: POLL_MS,
+  });
+}
+
+/** The inbox tabs' counts (unread, new since `since`, latest), polled with the list; only for an account with tabs on. */
+export function useCategories(accountId: string | null, enabled: boolean, since: string) {
+  return useQuery({
+    queryKey: keys.categories(accountId ?? '', since),
+    queryFn: () => mailApi.categories(accountId!, since),
+    enabled: !!accountId && enabled,
+    refetchInterval: POLL_MS,
+    placeholderData: (prev) => prev,
   });
 }
 
@@ -54,14 +68,14 @@ type Pages = InfiniteData<MessagePage, number>;
 export function useMessageActions(accountId: string | null, folder: string | null) {
   const qc = useQueryClient();
 
-  const patchLists = (fn: (m: MessageSummary) => MessageSummary | null) => {
+  const patchLists = (fn: (m: MessageSummary, key: readonly unknown[]) => MessageSummary | null) => {
     if (!accountId) return [];
     const snapshots = qc.getQueriesData<Pages>({ queryKey: ['mail', 'messages', accountId, folder ?? ''] });
     for (const [key, data] of snapshots) {
       if (!data) continue;
       qc.setQueryData<Pages>(key, {
         ...data,
-        pages: data.pages.map((p) => ({ ...p, messages: p.messages.flatMap((m) => fn(m) ?? []) })),
+        pages: data.pages.map((p) => ({ ...p, messages: p.messages.flatMap((m) => fn(m, key) ?? []) })),
       });
     }
     return snapshots;
@@ -73,6 +87,7 @@ export function useMessageActions(accountId: string | null, folder: string | nul
     if (!accountId) return;
     void qc.invalidateQueries({ queryKey: keys.folders(accountId) });
     void qc.invalidateQueries({ queryKey: keys.allMessages(accountId) });
+    void qc.invalidateQueries({ queryKey: ['mail', 'categories', accountId] });
   };
 
   const flags = useMutation({
@@ -90,7 +105,11 @@ export function useMessageActions(accountId: string | null, folder: string | nul
       return { snapshots };
     },
     onError: (_e, _v, ctx) => ctx && restore(ctx.snapshots),
-    onSettled: () => accountId && void qc.invalidateQueries({ queryKey: keys.folders(accountId) }),
+    onSettled: () => {
+      if (!accountId) return;
+      void qc.invalidateQueries({ queryKey: keys.folders(accountId) });
+      void qc.invalidateQueries({ queryKey: ['mail', 'categories', accountId] });
+    },
   });
 
   const removeFromList = (uids: number[]) => {
@@ -112,5 +131,17 @@ export function useMessageActions(accountId: string | null, folder: string | nul
     onSettled: settle,
   });
 
-  return { flags, move, remove };
+  /** "Move to tab": leaves the open tab's list at once (the sender's other mail follows when the lists are re-read). */
+  const moveToTab = useMutation({
+    mutationFn: (v: { uids: number[]; category: Category }) => mailApi.moveToTab(accountId!, { folder: folder!, uids: v.uids, category: v.category }),
+    onMutate: (v) => {
+      const set = new Set(v.uids);
+      // A tab's list (the key's last part) loses them unless it is the tab they go to; other lists show their new tab.
+      return { snapshots: patchLists((m, key) => (!set.has(m.uid) ? m : key[5] && key[5] !== v.category ? null : { ...m, category: v.category })) };
+    },
+    onError: (_e, _v, ctx) => ctx && restore(ctx.snapshots),
+    onSettled: settle,
+  });
+
+  return { flags, move, remove, moveToTab };
 }
