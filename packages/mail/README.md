@@ -12,8 +12,9 @@ Worker holds the credentials and speaks IMAP and SMTP.
 - `src/api.ts` — the API contract as typed functions (`mailApi`), and the types the server returns. A 401 sends the
   browser to the suite's sign-in (`/?next=/mail…`).
 - `src/hooks/mail.ts` — react-query: accounts, folders and the open folder's messages (infinite, paged with `before=`)
-  are polled every 60 s while the tab is visible and on window focus. Flag, move and delete update the cached lists at
-  once and roll back on failure.
+  are polled every 60 s while the tab is visible and on window focus. An inbox tab's page that comes back short with
+  `sorting` is asked for again every 2 s until it is full. Flag, move and delete update the cached lists at once and roll
+  back on failure.
 - `src/App.tsx` — the layout: the suite bar (`MailSuiteBar.tsx`, with `@flow/suite-bar`), the resizable folder panel
   (`Sidebar.tsx`), the list (`MessageList.tsx`) and the reading pane (`MessageView.tsx`, `MessageBody.tsx`), side by
   side from 900px, one at a time below, with the folders behind a button under 760px. It also owns the keyboard
@@ -23,11 +24,12 @@ Worker holds the credentials and speaks IMAP and SMTP.
 - `src/components/AccountForms.tsx` — adding an account (email → `/v1/mail/providers` → name and password, Advanced
   for the servers) and changing or removing one.
 - `src/components/InboxTabs.tsx` — Gmail's inbox tabs above the INBOX list for an account with tabs on (the server
-  sorts the mail: docs/specs/mail-api.md, Inbox tabs). The tab is in the address (`&tab=`); when each tab was last
-  opened is kept in localStorage (`src/lib/tabs.ts`) for its "N new" pill. "Move to tab" is in the dense list's row
-  menu, the bulk actions and the message's Move menu; it moves the sender's mail, with Undo.
+  sorts the mail: docs/specs/mail-api.md, Inbox tabs), each its icon and name, without counts. The tab is in the
+  address (`&tab=`). "Move to tab" is in the dense list's row menu, the bulk actions and the message's Move menu, and
+  with a mouse a row (or the checked rows) drags onto a tab or a folder (`src/lib/dnd.ts`); it moves the sender's mail,
+  with Undo.
 - `src/lib/` — the pure parts, with tests: `sanitize.ts` (HTML), `addresses.ts` (chips), `compose.ts` (reply and
-  forward prefill), `folders.ts` (folder order and tree), `tabs.ts` (inbox tabs), `format.ts`.
+  forward prefill), `folders.ts` (folder order and tree), `tabs.ts` (inbox tabs), `dnd.ts` (dragging rows), `format.ts`.
 
 ## Running it
 

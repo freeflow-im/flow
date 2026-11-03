@@ -57,13 +57,6 @@ export interface MessageSummary {
   /** INBOX only, when the account has tabs on. */
   category?: Category;
 }
-export interface TabCount {
-  id: Category;
-  unread: number;
-  /** Unread that arrived after the tab was last opened (the `since` given for it). */
-  new: number;
-  latest: { from: Address | null; subject: string } | null;
-}
 export interface Attachment {
   index: number;
   filename: string;
@@ -116,6 +109,8 @@ export interface MessagePage {
   messages: MessageSummary[];
   /** The `before` for the next (older) page; null at the end. */
   next: number | null;
+  /** An inbox tab's page that came back short while the server sorts older mail into tabs: ask for it again shortly. */
+  sorting?: true;
 }
 
 export type ErrorCode = 'auth_failed' | 'connect_failed' | 'not_found' | 'bad_request' | 'rate_limited' | 'server_error' | 'unauthorized' | (string & {});
@@ -185,7 +180,6 @@ export const mailApi = {
   setFlags: (accountId: string, body: { folder: string; uids: number[]; seen?: boolean; flagged?: boolean }) => request<{ ok: true }>('PATCH', `${base(accountId)}/messages`, body),
   move: (accountId: string, body: { folder: string; uids: number[]; to: string }) => request<{ ok: true }>('POST', `${base(accountId)}/messages/move`, body),
   remove: (accountId: string, body: { folder: string; uids: number[] }) => request<{ ok: true }>('POST', `${base(accountId)}/messages/delete`, body),
-  categories: async (accountId: string, since: string) => (await request<{ categories: TabCount[] }>('GET', `${base(accountId)}/categories${query({ folder: 'INBOX', since })}`)).categories,
   /** "Move to tab": the messages' senders go there from now on; `previous` is what to restore to undo it. */
   moveToTab: (accountId: string, body: { folder: string; uids: number[]; category: Category }) =>
     request<{ ok: true; senders: string[]; previous: { address: string; category: Category | null }[] }>('POST', `${base(accountId)}/messages/category`, body),

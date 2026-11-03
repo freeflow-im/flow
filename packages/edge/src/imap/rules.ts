@@ -128,6 +128,22 @@ export const SendBody = z.object({
 });
 export const MAX_SEND_BYTES = 20 * 1024 * 1024;
 
+/** The response header that carries a request's lock wait and IMAP time from the Mail object to routes/mail.ts, for its log line. */
+export const TIMING_HEADER = 'x-mail-timing';
+
+/** A request's route for its log line, with the ids taken out (no account, message or folder ever appears). */
+export const routeOf = (method: string, url: string) =>
+  `${method} ${new URL(url).pathname.replace(/\/accounts\/[^/]+/, '/accounts/:id').replace(/\/messages\/\d+/, '/messages/:uid').replace(/\/attachments\/[^/]+/, '/attachments/:index')}`;
+
+/**
+ * The one log line of a mail request: `[mail] <METHOD> <route> <status> <ms>ms (lock wait <ms>ms, imap <ms>ms)`, from the
+ * total time and the Mail object's `x-mail-timing` header (`wait=<ms>;imap=<ms>`, absent when it never got there).
+ */
+export function timingLine(method: string, url: string, status: number, ms: number, header: string | null | undefined): string {
+  const part = (key: string) => Number(new RegExp(`(?:^|;)${key}=(\\d+)`).exec(header ?? '')?.[1] ?? 0);
+  return `[mail] ${routeOf(method, url)} ${status} ${ms}ms (lock wait ${part('wait')}ms, imap ${part('imap')}ms)`;
+}
+
 /** The bytes a message's parts come to: its bodies and its attachments decoded. */
 export function sendSize(body: z.output<typeof SendBody>): number {
   const b64 = (s: string) => Math.floor((s.replace(/[^A-Za-z0-9+/]/g, '').length * 3) / 4);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkServer, isPrivateHost, parse, providerFor, savesSentCopy, sendSize, SendBody, NewAccount, type ServerSettings } from './rules';
+import { checkServer, isPrivateHost, parse, providerFor, savesSentCopy, sendSize, SendBody, NewAccount, timingLine, type ServerSettings } from './rules';
 
 const s = (host: string, port: number, security: ServerSettings['security']): ServerSettings => ({ host, port, security });
 const refused = (fn: () => void) => { try { fn(); return null; } catch (err) { return (err as { code: string; statusCode: number }); } };
@@ -90,5 +90,16 @@ describe('request bodies', () => {
   it('counts the size of a message to send', () => {
     const body = parse(SendBody, { to: [{ address: 'a@b.co' }], subject: 'x', html: 'abcd', attachments: [{ filename: 'f', contentBase64: Buffer.alloc(300).toString('base64') }] });
     expect(sendSize(body)).toBe(304);
+  });
+});
+
+describe("a request's timing line", () => {
+  it('names the route without its ids, with the status, the total and the Mail object\'s lock wait and IMAP time', () => {
+    const line = timingLine('GET', 'https://edge.freeflow.im/v1/mail/accounts/3f2a-77/messages/4821?folder=INBOX', 200, 812, 'wait=3;imap=640');
+    expect(line).toBe('[mail] GET /v1/mail/accounts/:id/messages/:uid 200 812ms (lock wait 3ms, imap 640ms)');
+    expect(timingLine('GET', 'https://x/v1/mail/accounts/a/messages/9/attachments/2', 200, 5, 'wait=0;imap=4')).toContain('/v1/mail/accounts/:id/messages/:uid/attachments/:index 200');
+  });
+  it('says 0 for a request that never reached the object', () => {
+    expect(timingLine('GET', 'https://x/v1/mail/accounts', 401, 2, null)).toBe('[mail] GET /v1/mail/accounts 401 2ms (lock wait 0ms, imap 0ms)');
   });
 });

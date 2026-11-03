@@ -17,10 +17,11 @@ import { ResizeHandle } from './components/ResizeHandle';
 import { setReadingPane, useReadingPane } from './lib/layoutPref';
 import { Sidebar } from './components/Sidebar';
 import { useMediaQuery, useResizableWidth } from './hooks/layout';
-import { keys, prefetchMessage, useAccounts, useCategories, useFolders, useMessage, useMessageActions, useMessages } from './hooks/mail';
+import { keys, prefetchMessage, useAccounts, useFolders, useMessage, useMessageActions, useMessages } from './hooks/mail';
 import { emptyDraft, prefill, type ComposeMode } from './lib/compose';
 import { findSpecial, folderLabel } from './lib/folders';
-import { markOpened, TAB_INFO, tabFromParam, tabsOf, useSince, writeTabParam } from './lib/tabs';
+import { folderDropTarget, tabDropTarget, useCanDrag } from './lib/dnd';
+import { TAB_INFO, tabFromParam, tabsOf, writeTabParam } from './lib/tabs';
 import { cn } from './lib/utils';
 
 // The editor (TipTap) is most of the code: it loads when compose first opens.
@@ -86,8 +87,7 @@ export function App() {
   const showTabs = folder?.toUpperCase() === 'INBOX' && accountTabs.length > 0;
   const inboxTab = tabFromParam(tabChoice, accountTabs);
   const category: Category | null = showTabs && !q ? inboxTab : null;
-  const since = useSince(account?.id ?? null, accountTabs);
-  const tabCounts = useCategories(account?.id ?? null, showTabs, since);
+  const canDrag = useCanDrag();
 
   const messages = useMessages(account?.id ?? null, folder, q, category);
   const all = useMemo(() => messages.data?.pages.flatMap((p) => p.messages) ?? [], [messages.data]);
@@ -111,13 +111,6 @@ export function App() {
     window.history.replaceState(null, '', `${import.meta.env.BASE_URL}?${params}`);
   }, [account, folder, openUid, showTabs, inboxTab]);
 
-  // The open tab's mail is not "new": it is marked opened on arriving and again on leaving it.
-  useEffect(() => {
-    const id = account?.id;
-    if (!id || !category) return;
-    markOpened(id, category);
-    return () => markOpened(id, category);
-  }, [account?.id, category]);
 
   useEffect(() => {
     if (!toast) return;
@@ -250,7 +243,6 @@ export function App() {
                 void mailApi.setSenderTabs(accountIdNow, res.previous).then(
                   () => {
                     void qc.invalidateQueries({ queryKey: keys.allMessages(accountIdNow) });
-                    void qc.invalidateQueries({ queryKey: ['mail', 'categories', accountIdNow] });
                     setToast('Move undone.');
                   },
                   (e: unknown) => setToast(`Could not undo: ${errorText(e)}`),
@@ -503,6 +495,14 @@ export function App() {
       }}
       onAddAccount={() => setDialog({ kind: 'add' })}
       onSettings={() => setDialog({ kind: 'settings', accountId: account.id })}
+      onDropMessages={
+        canDrag
+          ? (path, uids) => {
+              const to = folderDropTarget(folder, path);
+              if (to) moveTo(to, uids);
+            }
+          : undefined
+      }
     />
   );
   const listEl = (
@@ -515,7 +515,6 @@ export function App() {
       onRefresh={() => {
         void messages.refetch();
         void folders.refetch();
-        if (showTabs) void tabCounts.refetch();
       }}
       hasMore={!!messages.hasNextPage}
       loadingMore={messages.isFetchingNextPage}
@@ -547,8 +546,26 @@ export function App() {
       folders={folders.data}
       currentFolder={folder}
       onShowFolders={tiny ? () => setDrawer(true) : undefined}
-      tabBar={showTabs ? <InboxTabs tabs={accountTabs} active={inboxTab} counts={tabCounts.data} onChange={chooseTab} /> : undefined}
+      tabBar={
+        showTabs ? (
+          <InboxTabs
+            tabs={accountTabs}
+            active={inboxTab}
+            onChange={chooseTab}
+            onDropMessages={
+              canDrag
+                ? (target, uids) => {
+                    const to = tabDropTarget(category, target);
+                    if (to) moveToTab(uids, to);
+                  }
+                : undefined
+            }
+          />
+        ) : undefined
+      }
       tabMove={showTabs ? { tabs: accountTabs, current: category, onMove: moveToTab } : undefined}
+      draggable={canDrag}
+      sorting={!!messages.data?.pages[messages.data.pages.length - 1]?.sorting}
       onSearch={
         tiny
           ? (text) => {

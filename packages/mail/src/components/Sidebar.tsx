@@ -1,9 +1,11 @@
 // The left panel, after shadcn/ui's Mail example's nav (MIT, see LICENSE-shadcn.md) and coloured like Docs' folder
 // panel: Compose, the account switcher (with more than one account), the special folders with their icons, the other
-// folders as a tree, and at the foot Add account and the accounts' settings.
+// folders as a tree, and at the foot Add account and the accounts' settings. Messages dragged from the list drop on a
+// folder to move them there (lib/dnd.ts).
 import { useState, type ComponentType } from 'react';
 import { Archive, ChevronDown, ChevronRight, File, Folder, Inbox, Mail, OctagonAlert, Pencil, Plus, Send, Settings, Star, Trash2, type LucideProps } from 'lucide-react';
 import type { MailAccount, MailFolder, SpecialUse } from '../api';
+import { useDropTarget } from '../lib/dnd';
 import { folderLabel, orderFolders, type FolderNode } from '../lib/folders';
 import { cn } from '../lib/utils';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
@@ -29,7 +31,12 @@ export interface SidebarProps {
   onCompose(): void;
   onAddAccount(): void;
   onSettings(): void;
+  /** Messages dropped on a folder (dragged from the list). */
+  onDropMessages?: ((path: string, uids: number[]) => void) | undefined;
 }
+
+/** Highlighted while dragged messages are over it. */
+const dropOver = 'bg-primary-tint ring-2 ring-primary ring-inset hover:bg-primary-tint';
 
 const row = 'flex h-[34px] w-full items-center gap-3 rounded-lg px-3 text-left text-sm text-ink transition-colors hover:bg-hover';
 const selected = 'bg-row-selected font-semibold hover:bg-row-selected';
@@ -43,16 +50,18 @@ function Avatar({ name, email }: { name: string; email: string }) {
   return <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-[11px] font-semibold text-white">{letter}</span>;
 }
 
-function TreeRow({ node, depth, folder, onFolder }: { node: FolderNode; depth: number; folder: string | null; onFolder(path: string): void }) {
+function TreeRow({ node, depth, folder, onFolder, onDrop }: { node: FolderNode; depth: number; folder: string | null; onFolder(path: string): void; onDrop: SidebarProps['onDropMessages'] }) {
   const [open, setOpen] = useState(true);
   const has = node.children.length > 0;
   const f = node.folder;
+  const drop = useDropTarget(f && onDrop ? (uids) => onDrop(f.path, uids) : undefined);
   return (
     <>
       <div className="relative">
         <button
           type="button"
-          className={cn(row, f && folder === f.path && selected, !f && 'cursor-default hover:bg-transparent')}
+          {...drop.props}
+          className={cn(row, f && folder === f.path && selected, !f && 'cursor-default hover:bg-transparent', drop.over && dropOver)}
           style={{ paddingLeft: 12 + depth * 16 }}
           onClick={() => (f ? onFolder(f.path) : setOpen(!open))}
           aria-current={f && folder === f.path ? 'page' : undefined}
@@ -73,8 +82,22 @@ function TreeRow({ node, depth, folder, onFolder }: { node: FolderNode; depth: n
           </button>
         )}
       </div>
-      {has && open && node.children.map((c) => <TreeRow key={c.path} node={c} depth={depth + 1} folder={folder} onFolder={onFolder} />)}
+      {has && open && node.children.map((c) => <TreeRow key={c.path} node={c} depth={depth + 1} folder={folder} onFolder={onFolder} onDrop={onDrop} />)}
     </>
+  );
+}
+
+function SpecialRow({ f, current, onFolder, onDrop }: { f: MailFolder; current: boolean; onFolder(path: string): void; onDrop: SidebarProps['onDropMessages'] }) {
+  const Icon = ICONS[f.specialUse!];
+  const drop = useDropTarget(onDrop ? (uids) => onDrop(f.path, uids) : undefined);
+  // Unread counts on the folders where they mean something to do.
+  const count = f.specialUse === 'inbox' || f.specialUse === 'junk' || f.specialUse === 'archive' ? f.unread : f.specialUse === 'drafts' ? f.total : 0;
+  return (
+    <button type="button" {...drop.props} className={cn(row, current && selected, drop.over && dropOver)} onClick={() => onFolder(f.path)} aria-current={current ? 'page' : undefined}>
+      <Icon className="size-4 shrink-0" strokeWidth={1.75} />
+      <span className="truncate">{folderLabel(f)}</span>
+      <Count n={count} />
+    </button>
   );
 }
 
@@ -129,23 +152,14 @@ export function Sidebar(p: SidebarProps) {
             ))}
           </div>
         )}
-        {special.map((f) => {
-          const Icon = ICONS[f.specialUse!];
-          // Unread counts on the folders where they mean something to do.
-          const count = f.specialUse === 'inbox' || f.specialUse === 'junk' || f.specialUse === 'archive' ? f.unread : f.specialUse === 'drafts' ? f.total : 0;
-          return (
-            <button key={f.path} type="button" className={cn(row, p.folder === f.path && selected)} onClick={() => p.onFolder(f.path)} aria-current={p.folder === f.path ? 'page' : undefined}>
-              <Icon className="size-4 shrink-0" strokeWidth={1.75} />
-              <span className="truncate">{folderLabel(f)}</span>
-              <Count n={count} />
-            </button>
-          );
-        })}
+        {special.map((f) => (
+          <SpecialRow key={f.path} f={f} current={p.folder === f.path} onFolder={p.onFolder} onDrop={p.onDropMessages} />
+        ))}
         {tree.length > 0 && (
           <>
             <div className="px-3 pt-4 pb-1 text-[11px] font-medium uppercase tracking-[.06em] text-muted">Folders</div>
             {tree.map((n) => (
-              <TreeRow key={n.path} node={n} depth={0} folder={p.folder} onFolder={p.onFolder} />
+              <TreeRow key={n.path} node={n} depth={0} folder={p.folder} onFolder={p.onFolder} onDrop={p.onDropMessages} />
             ))}
           </>
         )}

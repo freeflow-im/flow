@@ -1,10 +1,11 @@
 // FreeFlow Mail's API, /v1/mail/* (docs/specs/mail-api.md): the caller is authenticated here, then the request goes to
 // their own Mail object (src/imap/object.ts), which holds their mail accounts. Only the provider presets are answered here.
+// Each request logs one timing line here, not in the object: see `Mail.handle`.
 import { Hono } from 'hono';
 import { getCookie } from 'hono/cookie';
 import type { Mail } from '../imap/object';
-import { providerFor } from '../imap/rules';
-import { unauthorized } from '../errors';
+import { TIMING_HEADER, providerFor, timingLine } from '../imap/rules';
+import { ApiError, unauthorized } from '../errors';
 import { directory, type AuthEnv } from './auth';
 
 export interface MailRouteEnv extends AuthEnv { MAIL: DurableObjectNamespace<Mail> }
@@ -26,6 +27,20 @@ mailRoutes.get('/v1/mail/providers', async (c) => {
 });
 
 mailRoutes.all('/v1/mail/*', async (c) => {
-  const id = await userId(c, getCookie(c, 'sid'));
-  return c.env.MAIL.get(c.env.MAIL.idFromName(id)).handle(c.req.raw);
+  const start = Date.now();
+  let status = 500, timing: string | null = null;
+  try {
+    const id = await userId(c, getCookie(c, 'sid'));
+    const res = await c.env.MAIL.get(c.env.MAIL.idFromName(id)).handle(c.req.raw);
+    status = res.status;
+    timing = res.headers.get(TIMING_HEADER);
+    const out = new Response(res.body, res);
+    out.headers.delete(TIMING_HEADER);
+    return out;
+  } catch (err) {
+    if (err instanceof ApiError) status = err.statusCode;
+    throw err;
+  } finally {
+    console.log(timingLine(c.req.method, c.req.url, status, Date.now() - start, timing));
+  }
 });

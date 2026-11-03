@@ -4,7 +4,7 @@
 // and a server host containing "bad" answers connect_failed; "stale" connects an account whose password then stops working.
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
-import type { Category, MailAccount, MessageSummary, NewAccount, ProviderPreset, TabCategory, TabCount } from '../src/api';
+import type { Category, MailAccount, MessageSummary, NewAccount, ProviderPreset, TabCategory } from '../src/api';
 import { sampleMailbox, type Mailbox, type StoredMessage } from './data';
 
 const PRESETS: Record<string, ProviderPreset> = {
@@ -153,17 +153,6 @@ export function createMockApi(empty = false) {
         const page = all.slice(0, limit);
         await new Promise((r) => setTimeout(r, 150));
         return { status: 200, json: { messages: page.map((x) => withTab(b, x, summary(x))), next: all.length > limit ? page[page.length - 1]!.uid : null } };
-      }
-      if (rest === 'categories') {
-        const since = new Map((q.get('since') ?? '').split(',').map((part) => part.split(':') as [string, string]).map(([id, ms]) => [id, Number(ms)]));
-        const inbox = b.messages.filter((x) => x.folder === 'INBOX').sort((x, y) => y.uid - x.uid);
-        const categories: TabCount[] = (['primary', ...b.account.tabs] as Category[]).map((id) => {
-          const mine = inbox.filter((x) => tabOf(b, x) === id);
-          const unread = mine.filter((x) => !x.seen);
-          const latest = mine[0];
-          return { id, unread: unread.length, new: unread.filter((x) => Date.parse(x.date) > (since.get(id) ?? 0)).length, latest: latest ? { from: latest.from, subject: latest.subject } : null };
-        });
-        return { status: 200, json: { categories } };
       }
       if (rest === 'messages/category') {
         const { folder, uids, category } = body as { folder: string; uids: number[]; category: Category };

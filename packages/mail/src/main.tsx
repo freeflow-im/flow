@@ -16,6 +16,13 @@ const queryClient = new QueryClient({
   },
 });
 
+// When each inbox tab was last opened, kept for the tab counts' "N new", which are gone.
+try {
+  localStorage.removeItem('mail.tabsOpened');
+} catch {
+  // Nothing kept.
+}
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>

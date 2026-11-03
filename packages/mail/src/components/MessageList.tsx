@@ -1,10 +1,12 @@
 // The open folder's messages, after shadcn/ui's Mail example's list (MIT, see LICENSE-shadcn.md): All / Unread, the
 // rows (sender, subject, snippet, date, unread dot, flag, attachment), checkboxes for acting on several at once, and
-// more rows as the list scrolls to its end (`before=`).
-import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+// more rows as the list scrolls to its end (`before=`). With a mouse, rows drag onto an inbox tab or a folder (lib/dnd.ts);
+// a checked row takes the other checked ones with it.
+import { useEffect, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { Archive, ArrowLeft, Columns2, EllipsisVertical, FolderInput, PanelTop, Loader2, Mail, MailOpen, Menu, Paperclip, RefreshCw, Search, Star, Tag, Trash2, X } from 'lucide-react';
 import type { Category, MailFolder, MessageSummary } from '../api';
 import { displayName } from '../lib/addresses';
+import { dragUids, startDrag } from '../lib/dnd';
 import { folderLabel, orderFolders } from '../lib/folders';
 import { listDate, fullDate, relativeDate } from '../lib/format';
 import { TAB_INFO } from '../lib/tabs';
@@ -55,6 +57,10 @@ export interface MessageListProps {
   tabBar?: ReactNode | undefined;
   /** "Move to tab", for an inbox with tabs: the tabs, the one open (null while searching), and the move. */
   tabMove?: { tabs: Category[]; current: Category | null; onMove(uids: number[], tab: Category): void } | undefined;
+  /** Rows can be dragged onto a tab or a folder (a mouse or trackpad, not a touch screen). */
+  draggable?: boolean | undefined;
+  /** The last page came back short while the server sorts older mail into tabs; it is asked for again shortly. */
+  sorting?: boolean | undefined;
 }
 
 /** The list's date: "5 min ago" for the last hour, then the time today, the weekday this week, the date before. */
@@ -90,6 +96,9 @@ export function MessageList(p: MessageListProps) {
   const [menuUid, setMenuUid] = useState<number | null>(null);
   const tabTargets = (current: Category | null | undefined) => (p.tabMove?.tabs ?? []).filter((t) => t !== current);
   const allChecked = p.messages.length > 0 && p.messages.every((m) => p.checked.has(m.uid));
+  /** A row's drag: it, or every checked row when it is checked. */
+  const drag = (m: MessageSummary) =>
+    p.draggable ? { draggable: true, onDragStart: (e: ReactDragEvent) => startDrag(e, dragUids(m.uid, p.checked, p.messages.map((x) => x.uid))) } : {};
   const bulk = p.checked.size > 0;
   const moveTargets = (() => {
     const { special, tree } = orderFolders(p.folders ?? []);
@@ -231,7 +240,7 @@ export function MessageList(p: MessageListProps) {
           </div>
         )}
         {p.error && <div className="m-4 rounded-lg border border-danger/30 bg-danger/5 p-3 text-sm text-danger">{p.error}</div>}
-        {!p.loading && !p.error && p.messages.length === 0 && (
+        {!p.loading && !p.error && p.messages.length === 0 && !p.sorting && (
           <div className="p-10 text-center text-sm text-muted">{p.query
               ? 'No messages match your search.'
               : p.tab === 'unread'
@@ -262,6 +271,7 @@ export function MessageList(p: MessageListProps) {
                 aria-selected={isOpen}
                 tabIndex={-1}
                 onClick={() => p.onOpen(m.uid)}
+                {...drag(m)}
                 onContextMenu={(e) => {
                   if (!p.onRowAction) return;
                   e.preventDefault();
@@ -362,6 +372,7 @@ export function MessageList(p: MessageListProps) {
               aria-selected={isOpen}
               tabIndex={-1}
               onClick={() => p.onOpen(m.uid)}
+              {...drag(m)}
               className={cn(
                 'group relative flex cursor-pointer gap-3 border-b border-hairline py-2.5 pr-3 pl-3 text-sm transition-colors hover:bg-panel',
                 isChecked && 'bg-selected-blue hover:bg-selected-blue',
@@ -402,6 +413,11 @@ export function MessageList(p: MessageListProps) {
             </div>
           );
         })}
+        {p.sorting && (
+          <div role="status" className="flex items-center justify-center gap-2 p-4 text-xs text-muted">
+            <Loader2 className="size-3.5 animate-spin" /> Sorting older mail…
+          </div>
+        )}
         {p.hasMore && (
           <div ref={sentinel} className="flex items-center justify-center p-4 text-xs text-muted">
             {p.loadingMore ? <Loader2 className="size-4 animate-spin" /> : <button type="button" onClick={p.onLoadMore} className="hover:underline">Load more</button>}

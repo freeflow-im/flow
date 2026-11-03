@@ -161,8 +161,27 @@ export function gmailCategorySearches(uids: readonly number[]): { tab: TabCatego
   if (!uids.length) return [];
   let min = Infinity, max = 0;
   for (const u of uids) { if (u < min) min = u; if (u > max) max = u; }
-  const uid = min === max ? String(min) : `${min}:${max}`;
+  return gmailRangeSearches(min === max ? String(min) : `${min}:${max}`);
+}
+
+/** Gmail's four category searches over a UID range (`<min>:<max>`, or `<floor>:*` for the re-check of the newest mail). */
+export function gmailRangeSearches(uid: string): { tab: TabCategory; query: { uid: string; gmraw: string } }[] {
   return TAB_CATEGORIES.map((tab) => ({ tab, query: { uid, gmraw: `category:${tab}` } }));
+}
+
+/**
+ * A tab's page from its cached UIDs below the cursor, newest first (`rows`: up to limit + 1 of them, all at or above the
+ * cache's `low`). Full: `next` when more may follow (another cached row, or older mail not sorted yet). Short with older
+ * mail not sorted yet (`low > 1`): `sorting`, and `next` where the cache ends, so the page can be asked for again once the
+ * sorter has gone further, or the list carry on below it. Short with everything sorted: the end.
+ */
+export function tabPage(rows: readonly number[], limit: number, low: number, cursor: number): { page: number[]; next: number | null; sorting: boolean } {
+  const page = rows.slice(0, limit);
+  const last = page[page.length - 1];
+  if (rows.length > limit) return { page, next: last, sorting: false };
+  if (low <= 1) return { page, next: null, sorting: false };
+  if (page.length === limit) return { page, next: last, sorting: false };
+  return { page, next: Math.min(cursor, low), sorting: true };
 }
 
 /** A UID set for a command, runs collapsed: [1,2,3,7,9,10] gives `1:3,7,9:10`. */
