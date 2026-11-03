@@ -30,10 +30,10 @@ not_found_handling = "none"
 ORIGIN_URL = "https://origin.freeflow.im"
 # The hosts the built files are served on. The other hosts' paths are the origin's (the plugin, the 301s to the app).
 ASSET_HOSTS = "app.freeflow.im,edge.freeflow.im"
-# The hosts the ported API answers on; the cut-over adds app.freeflow.im.
-PORTED_HOSTS = "edge.freeflow.im"
-WEB_URL_BASE = "https://edge.freeflow.im"
-FLOW_WEB_URL = "https://edge.freeflow.im"
+# The hosts the ported API answers on: app.freeflow.im since the cut-over (2026-11-02).
+PORTED_HOSTS = "edge.freeflow.im,app.freeflow.im"
+WEB_URL_BASE = "https://app.freeflow.im"
+FLOW_WEB_URL = "https://app.freeflow.im"
 
 [[durable_objects.bindings]]
 name = "DIRECTORY"
