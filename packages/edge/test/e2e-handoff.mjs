@@ -27,4 +27,6 @@ t('the app trades it for a session and goes to /workspace',r.status===302&&r.hea
 r=await fetch(B+'/v1/me',{headers:{cookie:`sid=${sid}`}});const me=await r.text();t('the session is the person',r.status===200&&me.includes(email),r.status+' '+me.slice(0,80));
 r=await fetch(B+`/api/auth/handoff?key=${key}`,{redirect:'manual'});t('the key works once',!(r.headers.get('set-cookie')??'').includes('sid='),r.headers.get('set-cookie'));
 r=await fetch(B+'/api/auth/handoff/claim',{method:'POST',headers:{cookie:`sid=${token}`}});t('no key, no approval',r.status===400,r.status);
+r=await fetch(B+'/api/auth/logout',{method:'POST',headers:{cookie:`sid=${sid}`}});t('Docs sign out clears the cookie',r.status===200&&/sid=;|sid=(;|$)|Max-Age=0/i.test(r.headers.get('set-cookie')??''),r.headers.get('set-cookie'));
+r=await fetch(B+'/v1/me',{headers:{cookie:`sid=${sid}`}});t('and ends the session everywhere',r.status===401,r.status);
 console.log(`\n${pass} passed, ${fail} failed`);process.exit(fail?1:0);
