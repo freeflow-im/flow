@@ -40,6 +40,22 @@ export async function signalPrintReady(timeoutMs = 20_000): Promise<void> {
 }
 
 /** Fetch the PDF of a file (a document, presentation, Markdown file or stored web page) and save it. */
+/** Downloads a file exported by the server (`/api/files/:id/export?format=`), under the name the server gives it. */
+export async function downloadExport(id: string, format: 'docx', fallbackName: string): Promise<void> {
+  const res = await fetch(`/api/files/${encodeURIComponent(id)}/export?format=${format}`, { credentials: 'same-origin' });
+  if (!res.ok) {
+    const { error } = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new ApiError(res.status, error ?? `The file could not be made (${res.status}).`);
+  }
+  const name = /filename\*=UTF-8''([^;]+)/.exec(res.headers.get('content-disposition') ?? '')?.[1];
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name ? decodeURIComponent(name) : fallbackName;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 export async function downloadPdf(id: string): Promise<void> {
   const res = await fetch(`/api/files/${encodeURIComponent(id)}/export?format=pdf&locale=${encodeURIComponent(navigator.language)}`, { credentials: 'same-origin' });
   if (!res.ok) {
