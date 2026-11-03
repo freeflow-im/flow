@@ -411,7 +411,7 @@ export const api = {
   saveAssistantSettings: (body: AssistantSettingsUpdate) => request<{ settings: AssistantSettings }>('PUT', '/api/settings/assistant', body),
   /** Store a copy of a picture on the web; resolves to its /api/images/... address. */
   keepWebImage: async (url: string) => (await request<{ url: string }>('POST', '/api/images/fetch', { url })).url,
-  connectedAgents: () => request<{ enabled: boolean; agents: ConnectedAgent[]; mcpUrl?: string; local?: true; running?: boolean }>('GET', '/api/settings/agents'),
+  connectedAgents: () => request<{ enabled: boolean; agents: ConnectedAgent[]; mcpUrl?: string; local?: true; running?: boolean; everySignIn?: true }>('GET', '/api/settings/agents'),
   disconnectAgent: (id: string) => request<{ ok: true }>('DELETE', `/api/settings/agents/${encodeURIComponent(id)}`),
   newFilesSettings: () => request<NewFilesSettings>('GET', '/api/settings/new-files'),
   saveNewFilesSettings: (update: NewFilesUpdate) => request<NewFilesSettings>('PUT', '/api/settings/new-files', update),

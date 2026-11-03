@@ -119,4 +119,72 @@ export const DIRECTORY_MIGRATIONS: string[] = [
     window_start INTEGER NOT NULL,
     count INTEGER NOT NULL
   );`,
+  // OAuth for Docs' MCP endpoint on the suite's host (mcpOAuth.ts): the ChatGPT plugin's tables, with the organization the
+  // person chose on the consent page on every code, token, connection and device grant.
+  `CREATE TABLE oauth_clients (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    redirect_uris TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE TABLE oauth_pending (
+    id TEXT PRIMARY KEY,
+    params TEXT NOT NULL,
+    client_name TEXT NOT NULL,
+    user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+    csrf TEXT NOT NULL,
+    expires_at INTEGER NOT NULL
+  );
+  CREATE TABLE oauth_codes (
+    hash TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL,
+    client_name TEXT NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    org_id TEXT NOT NULL,
+    redirect_uri TEXT NOT NULL,
+    code_challenge TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    used_at INTEGER
+  );
+  CREATE TABLE oauth_tokens (
+    hash TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    org_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    family TEXT NOT NULL,
+    resource TEXT,
+    expires_at INTEGER NOT NULL,
+    revoked_at INTEGER,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX oauth_tokens_family ON oauth_tokens(family);
+  CREATE TABLE oauth_connections (
+    id TEXT PRIMARY KEY,
+    family TEXT NOT NULL UNIQUE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    org_id TEXT NOT NULL,
+    client_name TEXT NOT NULL,
+    origin TEXT NOT NULL,
+    resource TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX oauth_connections_user ON oauth_connections(user_id);
+  CREATE TABLE oauth_device (
+    hash TEXT PRIMARY KEY,
+    user_code TEXT NOT NULL UNIQUE,
+    client_id TEXT NOT NULL,
+    client_name TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    resource TEXT NOT NULL,
+    origin TEXT NOT NULL,
+    status TEXT NOT NULL,
+    user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+    org_id TEXT,
+    interval_s INTEGER NOT NULL,
+    last_poll_at INTEGER,
+    expires_at INTEGER NOT NULL
+  );`,
 ];
