@@ -1,10 +1,14 @@
 // End-to-end check of Chat through the Worker, the directory and an organization object, against a local `wrangler dev`:
 //   printf 'EDGE_ORIGIN_SECRET=x\nFLOW_DATA_KEY=%s\n' "$(openssl rand -base64 32)" > .dev.vars; mkdir -p public
 //   npx wrangler dev --port 18796 --local --var PORTED_HOSTS:edge.freeflow.im,localhost --var ASSET_HOSTS:none \
-//     --var ORIGIN_URL:http://localhost:9 --var WEB_URL_BASE:http://localhost:18796 > /tmp/edge.log 2>&1 &
+//     --var ORIGIN_URL:http://localhost:9 --var WEB_URL_BASE:http://localhost:18796 \
+//     --var FLOW_UNFURL_ALLOW_HOSTS:localhost > /tmp/edge.log 2>&1 &
+// (FLOW_UNFURL_ALLOW_HOSTS lets the link preview check fetch the test page this script serves on localhost.)
 //   node test/e2e.mjs /tmp/edge.log
 // It reads signup links from the Worker's log, because local mail goes there.
 import fs from 'node:fs';
+import http from 'node:http';
+import zlib from 'node:zlib';
 const log=process.argv[2]; const B='http://localhost:18796', WS='ws://localhost:18796';
 let pass=0,fail=0; const t=(n,ok,d='')=>{ok?pass++:fail++;console.log((ok?'ok  ':'FAIL')+' '+n+(d?': '+String(d).slice(0,170):''));};
 const api=async(tok,m,p,b)=>{const r=await fetch(B+p,{method:m,headers:{...(tok?{authorization:'Bearer '+tok}:{}),...(b?{'content-type':'application/json'}:{})},body:b?JSON.stringify(b):undefined});let j;const x=await r.text();try{j=JSON.parse(x)}catch{j=x}return{s:r.status,j}};
@@ -70,7 +74,20 @@ if(r.s<300){const f=r.j.file;let u=await fetch(B+r.j.upload.url,{method:'PUT',he
  r=await api(A.token,'POST',`/v1/files/${f.id}/complete`);t('complete',r.s<300,r.s+' '+JSON.stringify(r.j).slice(0,120));
  r=await api(A.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'see attached',fileIds:[f.id]});t('attach',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,100));
  let dl=await fetch(B+`/v1/files/${f.id}`,{headers:{authorization:'Bearer '+Bo.token},redirect:'manual'});const dt=await dl.text();t('Bob downloads',dl.status===200&&dt==='hello',dl.status+' '+dt.slice(0,100));}
-r=await api(A.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'link https://example.com/'});t('message with a link',r.s===201,r.s);
+// A page to preview, with a picture, served here: the Worker fetches it (FLOW_UNFURL_ALLOW_HOSTS lets it reach localhost).
+const chunk=(type,data)=>{const b=Buffer.alloc(8+data.length+4);b.writeUInt32BE(data.length,0);b.write(type,4,'latin1');data.copy(b,8);b.writeUInt32BE(zlib.crc32(Buffer.concat([Buffer.from(type,'latin1'),data])),8+data.length);return b;};
+const ihdr=Buffer.alloc(13);ihdr.writeUInt32BE(800,0);ihdr.writeUInt32BE(420,4);ihdr[8]=8;ihdr[9]=0;
+const png=Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',ihdr),chunk('IDAT',zlib.deflateSync(Buffer.alloc(420*801))),chunk('IEND',Buffer.alloc(0))]);
+const site=http.createServer((q,s)=>{if(q.url==='/pic.png'){s.setHeader('content-type','image/png');return s.end(png);}if(q.url==='/article'){s.setHeader('content-type','text/html; charset=utf-8');return s.end(`<html><head><title>Ignored</title><meta property="og:title" content="A page to preview"><meta property="og:description" content="Fetched by the Worker."><meta property="og:image" content="/pic.png"><meta property="og:site_name" content="Test Site"></head><body>${'x'.repeat(5000)}</body></html>`);}s.statusCode=404;s.end();});
+await new Promise(res=>site.listen(0,'127.0.0.1',res));const pageUrl=`http://localhost:${site.address().port}/article`;
+const beforeLink=sa.ev.length;
+r=await api(A.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:`link ${pageUrl}`});t('message with a link',r.s===201,r.s);const LM=r.j;
+let card;for(let i=0;i<40&&!card;i++){card=sa.ev.slice(beforeLink).find(e=>e.type==='message.updated'&&e.data?.id===LM.id&&e.data.unfurls?.length)?.data.unfurls[0];if(!card)await sleep(250);}
+t('its preview arrives over the socket',card?.title==='A page to preview'&&card.description==='Fetched by the Worker.'&&card.siteName==='Test Site',JSON.stringify(card??sa.ev.slice(beforeLink).map(e=>e.type)).slice(0,170));
+rr=card?.image?await fetch(B+card.image.url,{headers:{authorization:'Bearer '+A.token}}):null;const pic=rr?Buffer.from(await rr.arrayBuffer()):null;
+t('its picture is served by Flow, not hotlinked',rr?.status===200&&rr.headers.get('content-type')==='image/png'&&pic.equals(png)&&card.image.width===800&&card.image.height===420,rr?rr.status+' '+rr.headers.get('content-type'):JSON.stringify(card?.image));
+r=await api(Bo.token,'GET',`/v1/channels/${gen.id}/messages`);t('the preview stays with the message',(r.j.messages??[]).find(m=>m.id===LM.id)?.unfurls?.[0]?.title==='A page to preview',JSON.stringify((r.j.messages??[]).find(m=>m.id===LM.id)?.unfurls).slice(0,120));
+site.close();
 // ---- agents
 r=await api(A.token,'POST',`/v1/workspaces/${W}/agent-invites`,{});t('agent invite',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,100));const code=r.j.code;
 r=await api(null,'POST','/v1/agents/redeem',{code,username:'flowbot',key:'a-long-agent-key-for-the-test',name:'Flowbot'});t('redeem',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,110));const AGT=r.j.agentToken;
