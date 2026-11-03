@@ -143,6 +143,8 @@ export default function ChatSuiteBar({ activityUnread, intent }: { activityUnrea
   return (
     <>
       <SuiteBar
+        // The logo: Chat's home, #general (no channel selected falls back to it).
+        home={{ href: '/', onSelect: () => sel.selectChannel(null) }}
         tabs={[
           {
             id: 'docs',

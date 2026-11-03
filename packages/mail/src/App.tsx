@@ -379,6 +379,12 @@ export function App() {
   const inboxUnread = findSpecial(folders.data, 'inbox')?.unread ?? 0;
   const bar = (
     <MailSuiteBar
+      // The logo and the Mail tab: the inbox list, as Gmail's logo does (Primary, no search, nothing open).
+      onHome={() => {
+        chooseFolder(findSpecial(folders.data, 'inbox')?.path ?? 'INBOX');
+        setTab('all');
+        setDrawer(false);
+      }}
       search={{
         placeholder: folderInfo ? `Search ${folderLabel(folderInfo)}` : 'Search mail',
         value: searchText,

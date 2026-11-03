@@ -18,6 +18,16 @@ export const FOLDERS_CHANGED = 'docs:folders-changed';
 export const foldersChanged = (): void => void window.dispatchEvent(new Event(FOLDERS_CHANGED));
 
 const EXPANDED_KEY = 'docs.nav.expanded';
+/** The panel folded to a rail of icons, to give the page its room ('1'); remembered in this browser. */
+const COLLAPSED_KEY = 'docs.nav.collapsed';
+
+function readCollapsed(): boolean {
+  try {
+    return localStorage.getItem(COLLAPSED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
 
 /** A root of the tree: the organization's shared files, or the user's own. */
 type Root = 'org' | 'me';
@@ -67,6 +77,16 @@ export function DocsNav() {
   const [expanded, setExpanded] = useState(readExpanded);
   const [children, setChildren] = useState<Map<string, FolderInfo[] | 'error'>>(new Map());
   // Its width, dragged on its right edge and remembered; the page beside it keeps its least width.
+  const [collapsed, setCollapsedState] = useState(readCollapsed);
+  const setCollapsed = (on: boolean) => {
+    setCollapsedState(on);
+    try {
+      if (on) localStorage.setItem(COLLAPSED_KEY, '1');
+      else localStorage.removeItem(COLLAPSED_KEY);
+    } catch {
+      // This page keeps it until it reloads.
+    }
+  };
   const panel = usePanelWidth(FOLDER_PANEL, () => ({ viewport: window.innerWidth, maxFraction: 0.4 }));
   const asked = useRef(new Set<string>());
   // The selection whose folders were last opened: a folder the user then closes stays closed.
@@ -195,8 +215,33 @@ export function DocsNav() {
     );
   };
 
+  if (collapsed) {
+    const rail = (key: string, label: string, icon: ReactNode, active: boolean, go: () => void) => (
+      <button key={key} className={`dn-rail-btn${active ? ' active' : ''}`} title={label} aria-label={label} aria-current={active ? 'page' : undefined} onClick={go}>
+        {icon}
+      </button>
+    );
+    const isList = (l: 'recents' | 'favorites') => !!selected && 'list' in selected && selected.list === l;
+    const inRoot = (root: Root) => !!selected && 'root' in selected && selected.root === root;
+    return (
+      <nav className="docs-nav docs-nav-collapsed" aria-label="Folders">
+        <button className="dn-rail-btn" title="Show folders" aria-label="Show folders" aria-expanded={false} onClick={() => setCollapsed(false)}>
+          <PanelGlyph open />
+        </button>
+        <div className="dn-rail-sep" />
+        {rail('recents', 'Recents', <ClockGlyph />, isList('recents'), () => navigate(`/?${RECENTS_PARAM}=1`))}
+        {rail('favorites', 'Favorites', <StarGlyph />, isList('favorites'), () => navigate(`/?${FAVORITES_PARAM}=1`))}
+        {orgId && rail('org', 'Organization files', <PeopleGlyph />, inRoot('org'), () => openFolder('org', ''))}
+        {rail('me', 'My files', <LockGlyph />, inRoot('me'), () => openFolder('me', ''))}
+      </nav>
+    );
+  }
+
   return (
     <nav className="docs-nav" aria-label="Folders" style={{ width: panel.width }}>
+      <button className="dn-collapse" title="Hide folders" aria-label="Hide folders" aria-expanded onClick={() => setCollapsed(true)}>
+        <PanelGlyph />
+      </button>
       <div className="dn-scroll">
         {listRow('recents', 'Recents', <ClockGlyph />)}
         {listRow('favorites', 'Favorites', <StarGlyph />)}
@@ -220,4 +265,6 @@ const FolderGlyph = () => glyph('M3 7.5A1.5 1.5 0 0 1 4.5 6h4.4a1.5 1.5 0 0 1 1.
 const ClockGlyph = () => glyph('M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2');
 const StarGlyph = () => glyph('M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z');
 const PeopleGlyph = () => glyph('M16 19v-1a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v1M9 10a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7M22 19v-1a4 4 0 0 0-3-3.9M16 3.1a3.5 3.5 0 0 1 0 6.8');
+/** A panel beside a page, with the arrow that folds it away (or, `open`, brings it back). */
+const PanelGlyph = ({ open = false }: { open?: boolean }) => glyph(open ? 'M4 5h16v14H4zM9 5v14M13 10l2 2-2 2' : 'M4 5h16v14H4zM9 5v14M16 10l-2 2 2 2');
 const LockGlyph = () => glyph('M7 11V8a5 5 0 0 1 10 0v3M5 11h14v10H5z');

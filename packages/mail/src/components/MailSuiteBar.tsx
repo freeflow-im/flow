@@ -12,11 +12,13 @@ const toChat = (open?: string) => window.location.assign(open ? `/?open=${open}`
 export interface MailSuiteBarProps {
   /** The search: what is being searched for in the open folder, and how to change it. */
   search: { value: string; onChange(q: string): void; onSubmit(q: string): void; placeholder: string };
+  /** The logo and the Mail tab: back to the inbox list. */
+  onHome?: (() => void) | undefined;
   unread: number;
   onSettings(): void;
 }
 
-export function MailSuiteBar({ search, unread, onSettings }: MailSuiteBarProps) {
+export function MailSuiteBar({ search, unread, onSettings, onHome }: MailSuiteBarProps) {
   const me = useQuery({ queryKey: ['suite', 'me'], queryFn: suite.me, refetchInterval: REFRESH_MS });
   const orgs = useQuery({ queryKey: ['suite', 'organizations'], queryFn: suite.organizations, refetchInterval: REFRESH_MS });
   const [activeId, setActiveId] = useState(readActiveOrganization);
@@ -56,10 +58,11 @@ export function MailSuiteBar({ search, unread, onSettings }: MailSuiteBarProps) 
   return (
     <>
       <SuiteBar
+        home={{ href: import.meta.env.BASE_URL, onSelect: () => onHome?.() }}
         tabs={[
           { id: 'docs', label: 'Docs', href: '/workspace' },
           { id: 'chat', label: 'Chat', href: '/', badge: active?.unreadCount ?? 0 },
-          { id: 'mail', label: 'Mail', href: import.meta.env.BASE_URL, active: true, badge: unread, onSelect: () => {} },
+          { id: 'mail', label: 'Mail', href: import.meta.env.BASE_URL, active: true, badge: unread, onSelect: () => onHome?.() },
           { id: 'calendar', label: 'Calendar', href: '', disabled: true },
         ]}
         organization={{

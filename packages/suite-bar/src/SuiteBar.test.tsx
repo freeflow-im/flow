@@ -89,6 +89,23 @@ describe('SuiteBar', () => {
     expect(screen.getByLabelText('3 unread')).toBeTruthy();
   });
 
+  it("the logo goes to the app's home", () => {
+    const home = vi.fn();
+    setup({ home: { href: '/workspace/', onSelect: home } });
+    const link = screen.getByTestId('suite-home');
+    expect(link.getAttribute('href')).toBe('/workspace/');
+    fireEvent.click(link);
+    expect(home).toHaveBeenCalledTimes(1);
+    // A click for a new tab is the browser's.
+    fireEvent.click(link, { metaKey: true });
+    expect(home).toHaveBeenCalledTimes(1);
+  });
+
+  it("without a home, the logo is the active tab's link", () => {
+    setup();
+    expect(screen.getByTestId('suite-home').getAttribute('href')).toBe('/');
+  });
+
   it('draws no badge for nothing unread', () => {
     setup({ tabs: [{ id: 'chat', label: 'Chat', href: '/', active: true, badge: 0 }] });
     expect(screen.getByTestId('suite-tab-chat').textContent).toBe('Chat');
