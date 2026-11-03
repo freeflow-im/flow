@@ -8,6 +8,7 @@ import { HUDDLE_ROSTER_DDL } from './huddles';
 import { openDb, withDb, type DB, schema } from './db/index';
 import { ORG_MIGRATIONS } from './db/migrations';
 import { setMailEnv } from './email/index';
+import { setImagesEnv } from './lib/images';
 import { presetWorkspaceId } from './lib/ids';
 import { CompatApp, type CallerContext } from './routes/compat';
 import { registerRoutes } from './routes/index';
@@ -20,7 +21,8 @@ import { setStorageEnv, type StorageEnv } from './storage/index';
 import { insertRows, tableCounts } from '../importing';
 import { eq, and } from 'drizzle-orm';
 
-export type OrgEnv = StorageEnv & { FLOW_DATA_KEY?: string; DIRECTORY: DurableObjectNamespace<Directory> };
+/** IMAGES (Cloudflare Images) resizes preview images and thumbnails; without it they are kept as they came (lib/images.ts). */
+export type OrgEnv = StorageEnv & { FLOW_DATA_KEY?: string; DIRECTORY: DurableObjectNamespace<Directory>; IMAGES?: ImagesBinding };
 
 /** What each id-only path needs (`routes/org.ts`), and who belongs here (`memberships`), reported to the directory by trigger. */
 const OUTBOX = [
@@ -55,6 +57,7 @@ export class Org extends DurableObject<OrgEnv> {
   constructor(ctx: DurableObjectState, env: OrgEnv) {
     super(ctx, env);
     setStorageEnv(env);
+    setImagesEnv(env);
     setMailEnv(env as never);
     this.db = openDb(ctx.storage);
     const sql = ctx.storage.sql;

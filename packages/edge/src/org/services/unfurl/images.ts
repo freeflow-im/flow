@@ -6,15 +6,17 @@
 // see our own URLs, so a card can't leak a viewer's IP to a third-party CDN or
 // execute anything.
 //
-// On Node, sharp re-encoded each image to WebP at two sizes (which also dropped
-// its metadata). sharp cannot load on Workers, so the image is stored as it came,
-// once, after its real size is read from its header; both URLs name it, and the
-// clients scale it. A format whose size cannot be read (AVIF) is left out.
+// Cloudflare Images (lib/images.ts) re-encodes each image to WebP at the two
+// sizes sharp made on Node, which also drops its metadata. Without the binding,
+// or when it fails, the image is stored as it came, once, after its real size is
+// read from its header; both URLs name it, and the clients scale it. A format
+// whose size cannot be read that way (AVIF) is then left out.
 //
 // Every failure path returns null: §6 says an image problem must degrade the
 // card to text-only, never fail the whole unfurl.
 import { createHash } from 'node:crypto';
 import { imageSize } from '../../../docs/server/imageSize.ts';
+import { imageInfo, toWebp } from '../../lib/images.js';
 import { blobStore } from '../../storage/index.js';
 import { guardedFetch } from './fetcher.js';
 
@@ -24,7 +26,11 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_AXIS_PX = 12_000;
 const MAX_MEGAPIXELS = 100;
 
-/** Stored as fetched, so a smaller cap than the fetch's: every viewer downloads it. */
+/** §6 output sizes, as on Node. */
+const LARGE = { width: 1200, height: 630 };
+const THUMB = { width: 128, height: 128 };
+
+/** Stored as fetched (without the binding), so a smaller cap than the fetch's: every viewer downloads it. */
 const MAX_STORED_BYTES = 3 * 1024 * 1024;
 
 /** The stored key's extension and the type it is served with. */
@@ -80,17 +86,37 @@ export async function proxyImage(imageUrl: string, deadline?: number): Promise<P
     if (res.status < 200 || res.status >= 400) return null;
 
     const format = sniffImageFormat(res.bytes);
-    if (!format || format === 'avif') return null; // unrecognised, SVG, or a size we cannot read
-    if (res.bytes.length >= MAX_STORED_BYTES) return null; // possibly cut off by the cap, and too large to serve
+    if (!format) return null; // unrecognised, or SVG
+    if (res.bytes.length >= MAX_IMAGE_BYTES) return null; // cut off by the cap
 
-    const size = imageSize(res.bytes) as { width: number; height: number } | null;
+    // The binding reads every format we accept; the header reader all but AVIF.
+    const size = (await imageInfo(res.bytes)) ?? (format === 'avif' ? null : (imageSize(res.bytes) as { width: number; height: number } | null));
     if (!size) return null;
     const { width, height } = size;
+    if (width <= 0 || height <= 0) return null;
     if (width > MAX_AXIS_PX || height > MAX_AXIS_PX) return null;
     if ((width * height) / 1_000_000 > MAX_MEGAPIXELS) return null;
 
     // §6: keyed by content hash — the same image shared twice stores once.
     const hash = createHash('sha256').update(res.bytes).digest('hex').slice(0, 32);
+
+    // `scale-down` is sharp's inside-without-enlargement; re-encoding drops EXIF/XMP/ICC (§6).
+    const [large, thumb] = await Promise.all([
+      toWebp(res.bytes, { ...LARGE, fit: 'scale-down' }, 82),
+      toWebp(res.bytes, { ...THUMB, fit: 'cover' }, 80),
+    ]);
+    if (large && thumb) {
+      await Promise.all([
+        blobStore().put(`unfurl-images/${hash}-large.webp`, large.bytes),
+        blobStore().put(`unfurl-images/${hash}-thumb.webp`, thumb.bytes),
+      ]);
+      // Report the dimensions of what we actually serve, not of the original.
+      return { url: `/v1/unfurl-images/${hash}-large.webp`, thumbUrl: `/v1/unfurl-images/${hash}-thumb.webp`, width: large.width, height: large.height };
+    }
+
+    // No binding, or it failed: store the original, which every viewer then downloads.
+    if (format === 'avif') return null;
+    if (res.bytes.length >= MAX_STORED_BYTES) return null;
     const key = `${hash}-large.${EXTENSION[format]}`;
     await blobStore().put(`unfurl-images/${key}`, res.bytes);
     return { url: `/v1/unfurl-images/${key}`, thumbUrl: `/v1/unfurl-images/${key}`, width, height };

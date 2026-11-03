@@ -4,7 +4,7 @@
 // stored via the blob-store interface, unencrypted (they are not message
 // content and §6 requires cacheability), referenced by users.avatar_url. The
 // URL embeds a fresh key per upload, so clients may cache immutably.
-import sharp from '../lib/noSharp';
+import sharp from '../lib/sharp';
 import { and, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import type { NotificationPrefs, UserDTO } from '@flow/shared';
 import { db, schema } from '../db/index.js';

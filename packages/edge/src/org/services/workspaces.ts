@@ -1,4 +1,4 @@
-import sharp from '../lib/noSharp';
+import sharp from '../lib/sharp';
 import { z } from 'zod';
 import { and, eq, isNull, ne, sql } from 'drizzle-orm';
 import {
