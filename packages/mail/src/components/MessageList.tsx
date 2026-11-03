@@ -1,8 +1,8 @@
 // The open folder's messages, after shadcn/ui's Mail example's list (MIT, see LICENSE-shadcn.md): All / Unread, the
 // rows (sender, subject, snippet, date, unread dot, flag, attachment), checkboxes for acting on several at once, and
 // more rows as the list scrolls to its end (`before=`).
-import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, Columns2, FolderInput, PanelTop, Loader2, Mail, MailOpen, Menu, Paperclip, RefreshCw, Search, Star, Trash2, X } from 'lucide-react';
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { Archive, ArrowLeft, Columns2, FolderInput, PanelTop, Loader2, Mail, MailOpen, Menu, Paperclip, RefreshCw, Search, Star, Trash2, X } from 'lucide-react';
 import type { MailFolder, MessageSummary } from '../api';
 import { displayName } from '../lib/addresses';
 import { folderLabel, orderFolders } from '../lib/folders';
@@ -41,6 +41,10 @@ export interface MessageListProps {
   currentFolder: string | null;
   /** Wide screens: the open message beside the list ('split') or in its place ('full'). */
   readingPane?: { value: 'full' | 'split'; onChange(v: 'full' | 'split'): void } | undefined;
+  /** Gmail's list: one line a message (sender, subject - snippet, date), with actions on hover. */
+  dense?: boolean | undefined;
+  /** A row's own actions, on hover in the dense list. */
+  onRowAction?: ((m: MessageSummary, action: 'archive' | 'delete' | 'read' | 'unread') => void) | undefined;
   /** On a narrow screen, the button that opens the folders. */
   onShowFolders?: (() => void) | undefined;
   /** On a phone, where the suite bar has no search: a search field of the list's own. */
@@ -212,6 +216,72 @@ export function MessageList(p: MessageListProps) {
           const isCursor = p.cursorUid === m.uid;
           const isChecked = p.checked.has(m.uid);
           const who = p.currentFolder && /sent|draft/i.test(p.currentFolder) && m.to.length ? `To: ${m.to.map((a) => displayName(a)).join(', ')}` : displayName(m.from);
+          if (p.dense) {
+            const act = (e: ReactMouseEvent, a: 'archive' | 'delete' | 'read' | 'unread') => {
+              e.stopPropagation();
+              p.onRowAction?.(m, a);
+            };
+            const unread = !m.seen;
+            return (
+              <div
+                key={m.uid}
+                data-uid={m.uid}
+                role="option"
+                aria-selected={isOpen}
+                tabIndex={-1}
+                onClick={() => p.onOpen(m.uid)}
+                className={cn(
+                  'group relative flex h-10 cursor-pointer items-center gap-1 border-b border-hairline pr-3 pl-2 text-sm hover:z-10 hover:shadow-[inset_1px_0_0_#dadce0,inset_-1px_0_0_#dadce0,0_1px_2px_0_rgba(60,64,67,.3),0_1px_3px_1px_rgba(60,64,67,.15)]',
+                  unread ? 'bg-white' : 'bg-[#f2f6fc]',
+                  isChecked && 'bg-selected-blue',
+                  isCursor && 'shadow-[inset_3px_0_0_var(--color-primary)]',
+                )}
+              >
+                <div className="flex shrink-0 items-center" onClick={(e) => e.stopPropagation()}>
+                  <span className="flex size-8 items-center justify-center">
+                    <input
+                      type="checkbox"
+                      className="size-4 accent-primary"
+                      aria-label={`Select message from ${displayName(m.from)}`}
+                      checked={isChecked}
+                      onChange={(e) => p.onCheck(m.uid, e.target.checked, (e.nativeEvent as MouseEvent).shiftKey)}
+                    />
+                  </span>
+                  <button
+                    type="button"
+                    aria-label={m.flagged ? 'Unstar' : 'Star'}
+                    aria-pressed={m.flagged}
+                    className={cn('flex size-8 items-center justify-center rounded-full hover:bg-hover', m.flagged ? 'text-flag' : 'text-faint hover:text-muted')}
+                    onClick={() => p.onFlag(m)}
+                  >
+                    <Star className="size-[18px]" fill={m.flagged ? 'currentColor' : 'none'} strokeWidth={1.75} />
+                  </button>
+                </div>
+                <span className={cn('w-[200px] shrink-0 truncate pr-4 pl-1', unread ? 'font-bold text-ink' : 'text-ink')}>{who}</span>
+                <span className="min-w-0 flex-1 truncate">
+                  <span className={unread ? 'font-bold text-ink' : 'text-ink'}>{m.subject || '(no subject)'}</span>
+                  {m.snippet && <span className="text-muted"> - {m.snippet}</span>}
+                </span>
+                {m.hasAttachments && <Paperclip className="mx-2 size-4 shrink-0 text-muted" aria-label="Has attachments" />}
+                <time dateTime={m.date} title={fullDate(m.date)} className={cn('w-20 shrink-0 text-right text-xs whitespace-nowrap group-hover:hidden', unread ? 'font-bold text-ink' : 'text-muted')}>
+                  {listDate(m.date)}
+                </time>
+                {p.onRowAction && (
+                  <span className="hidden shrink-0 items-center group-hover:flex">
+                    <RowAction label="Archive" onClick={(e) => act(e, 'archive')}>
+                      <Archive />
+                    </RowAction>
+                    <RowAction label="Delete" onClick={(e) => act(e, 'delete')}>
+                      <Trash2 />
+                    </RowAction>
+                    <RowAction label={unread ? 'Mark as read' : 'Mark as unread'} onClick={(e) => act(e, unread ? 'read' : 'unread')}>
+                      {unread ? <MailOpen /> : <Mail />}
+                    </RowAction>
+                  </span>
+                )}
+              </div>
+            );
+          }
           return (
             <div
               key={m.uid}
@@ -267,5 +337,13 @@ export function MessageList(p: MessageListProps) {
         )}
       </div>
     </section>
+  );
+}
+
+function RowAction({ label, onClick, children }: { label: string; onClick(e: ReactMouseEvent): void; children: ReactNode }) {
+  return (
+    <button type="button" title={label} aria-label={label} onClick={onClick} className="flex size-8 items-center justify-center rounded-full text-muted hover:bg-hover hover:text-ink [&_svg]:size-[18px]">
+      {children}
+    </button>
   );
 }

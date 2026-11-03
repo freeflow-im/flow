@@ -431,6 +431,8 @@ export function App() {
       openUid={openUid}
       cursorUid={cursorUid}
       readingPane={narrow ? undefined : { value: readingPane, onChange: setReadingPane }}
+      dense={!narrow && readingPane === 'full'}
+      onRowAction={(m, a) => (a === 'archive' ? archive([m.uid]) : a === 'delete' ? remove([m.uid]) : setSeen([m.uid], a === 'read'))}
       onOpen={openMessage}
       checked={checked}
       onCheck={onCheck}
