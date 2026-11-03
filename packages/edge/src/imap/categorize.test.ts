@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
-import { searchCompiler } from 'imapflow/lib/search-compiler.js';
-import { addressOf, classify, classifyHeaders, effective, effectiveSql, gmailCategorySearches, gmailRangeSearches, normalizeTabs, parseHeaders, tabPage, uidSet, type Category, type TabCategory } from './categorize';
+import { addressOf, classify, classifyHeaders, effective, effectiveSql, normalizeTabs, parseHeaders, tabPage, uidSet, type Category, type TabCategory } from './categorize';
 
 const h = (raw: string) => parseHeaders(raw.trim().split('\n').map((l) => l.replace(/^ {4}/, '')).join('\r\n'));
 
@@ -119,25 +118,7 @@ describe('helpers', () => {
   it('normalizes the tab list', () => expect(normalizeTabs(['forums', 'social', 'social', 'nope'])).toEqual(['social', 'forums']));
 });
 
-describe('Gmail category searches over a UID range', () => {
-  it('asks each of the four categories, limited to the range of the UIDs', () => {
-    const q = gmailCategorySearches([120, 101, 117]);
-    expect(q.map((x) => x.tab)).toEqual(['promotions', 'social', 'updates', 'forums']);
-    expect(q[0].query).toEqual({ uid: '101:120', gmraw: 'category:promotions' });
-    expect(gmailCategorySearches([7])[3].query).toEqual({ uid: '7', gmraw: 'category:forums' });
-    expect(gmailCategorySearches([])).toEqual([]);
-  });
-  it('compiles, with imapflow, to UID <range> X-GM-RAW "category:..."', () => {
-    const compiled = searchCompiler({ capabilities: new Set(['X-GM-EXT-1']), enabled: new Set() } as never, gmailCategorySearches([500, 640])[1].query);
-    const words = compiled.map((a) => String((a as { value: unknown }).value));
-    expect(words).toEqual(['UID', '500:640', 'X-GM-RAW', 'category:social']);
-  });
-  it('the re-check asks over the newest mail only, from a floor UID up', () => {
-    const q = gmailRangeSearches('22000:*');
-    expect(q.map((x) => x.query)).toEqual(['promotions', 'social', 'updates', 'forums'].map((t) => ({ uid: '22000:*', gmraw: `category:${t}` })));
-    const compiled = searchCompiler({ capabilities: new Set(['X-GM-EXT-1']), enabled: new Set() } as never, q[0].query);
-    expect(compiled.map((a) => String((a as { value: unknown }).value))).toEqual(['UID', '22000:*', 'X-GM-RAW', 'category:promotions']);
-  });
+describe('UID sets', () => {
   it('collapses UID runs for a FETCH', () => {
     expect(uidSet([10, 1, 2, 3, 7, 9, 2])).toBe('1:3,7,9:10');
     expect(uidSet([5])).toBe('5');

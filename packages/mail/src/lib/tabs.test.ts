@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { tabFromParam, tabsOf, writeTabParam } from './tabs';
+import { reasonText, tabFromParam, tabsOf, writeTabParam } from './tabs';
 
 describe('which tabs an account shows', () => {
   it('none with tabs off, else Primary and the enabled ones in the bar order', () => {
@@ -25,5 +25,17 @@ describe('the tab in the address', () => {
     expect(p.toString()).toBe('account=a&folder=INBOX');
     writeTabParam(p, null);
     expect(p.has('tab')).toBe(false);
+  });
+});
+
+describe('why a message is in its tab', () => {
+  it('puts the server’s reasons into words', () => {
+    expect(reasonText('Gmail category:updates', 'updates')).toBe('Gmail puts this in Updates');
+    expect(reasonText('Gmail category:promotions', 'primary')).toBe('Gmail puts this in Promotions; the Promotions tab is off, so it is in Primary');
+    expect(reasonText('Gmail: no category', 'primary')).toBe('Gmail gives this no category, so it is in Primary');
+    expect(reasonText('sender moved to primary', 'primary')).toBe('You moved mail from this sender to Primary');
+    expect(reasonText('sender moved to social', 'social')).toBe('You moved mail from this sender to Social');
+    expect(reasonText('newsletter (List-Id, List-Unsubscribe)', 'promotions')).toBe('Sorted by its headers: newsletter (List-Id, List-Unsubscribe)');
+    expect(reasonText(undefined, 'forums')).toBe('No reason recorded for why this is in Forums');
   });
 });

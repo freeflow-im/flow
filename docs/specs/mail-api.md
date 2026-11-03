@@ -35,6 +35,8 @@ interface MessageSummary {
   seen: boolean; flagged: boolean; answered: boolean;
   hasAttachments: boolean; size: number;
   category?: Category;                         // INBOX only, and only when the account has tabs on
+  categoryReason?: string;                     // with category, when known: why it is there ("Gmail category:updates",
+                                               // "Gmail: no category", "sender moved to primary", or the header rule's reason)
 }
 interface MessageDetail extends MessageSummary {
   replyTo: Address[]; bcc: Address[];
@@ -67,6 +69,12 @@ interface MessageDetail extends MessageSummary {
   message's sender, so their later mail goes there too; `previous` is what each sender had, for undo.
 - `POST /v1/mail/accounts/:id/senders/category` body `{ senders: { address: string, category: Category | null }[] }` → `{ ok: true }`
   sets the tab chosen for senders, or forgets it (`null`, back to the automatic one): how a move is undone.
+- `GET  /v1/mail/accounts/:id/debug/tabs?folder=INBOX&uids=1,2,3` → `{ folder, sync, log, counts, messages? }`: how the inbox
+  tabs were sorted lately, for the account's owner (the object is theirs). `log` is the last 10 sorting runs and the last 10
+  re-checks (and repairs) since the object woke, in memory: `{ at, kind: 'sort' | 'recheck' | 'repair', checked, errors,
+  ... }` with `categorized`/`primary`/`skipped`/`confirmed` for a sort and `promoted`/`moved`/`demoted`/`confirmed`/`gone`
+  for a re-check. `sync` is the folder's `mail_sync` row, `counts` the cached rows per `(category, reason)`, and `messages`
+  `{ uid, category, reason }` for the UIDs asked about.
 - `GET  /v1/mail/accounts/:id/messages/:uid?folder=` → `{ message: MessageDetail }` (does NOT mark it seen; the client PATCHes seen)
 - `GET  /v1/mail/accounts/:id/messages/:uid/attachments/:index?folder=` → the bytes, with Content-Type and
   `Content-Disposition: attachment; filename*=…` (`?inline=1` → `inline`, used for cid: images). `index` is the
@@ -86,8 +94,14 @@ Gmail's Primary, Promotions, Social, Updates and Forums, for INBOX only. Each ta
 
 - **Gmail** (`imap.gmail.com`, or the server announces `X-GM-EXT-1`): Gmail's own categories, asked of Gmail once per
   message and cached (below): `UID <min>:<max> X-GM-RAW "category:<tab>"` for each of the four categories over a batch of
-  new UIDs (`gmailCategorySearches`), and one envelope FETCH of those UIDs for the sender, subject and date. A message in
-  none of them is Primary. Gmail's labels are never changed: the user's choices ("Move to tab") are ours.
+  at most 250 new UIDs (`sortBatch` in `src/imap/gmailTabs.ts`), and one envelope FETCH of those UIDs for the sender,
+  subject and date. A message in none of them is Primary (reason `Gmail: no category`). Gmail's labels are never changed:
+  the user's choices ("Move to tab") are ours.
+- **Never Primary by absence alone.** A search that fails, or that Gmail refuses (imapflow answers `false`, which is not an
+  empty answer), is an error: a new batch is then not stored at all (it stays unsorted, and the cache's reach stops above
+  it, so it is asked about again; a first list with nothing sorted answers 503 `unavailable`), and a re-check changes
+  nothing. A batch of over 50 where the four searches return nothing at all is asked about again by UID (`UID 5,9,12:14
+  X-GM-RAW ...`, 100 UIDs a command) before it is stored as Primary.
 - **Other servers**: `src/imap/categorize.ts` classifies a message from its From and a few headers (`CATEGORY_HEADERS`:
   List-Id, List-Unsubscribe, List-Post, Precedence, Auto-Submitted, Feedback-ID, X-Mailer, the ESPs' X-Campaign/X-MC-/X-SG-/
   X-SES- headers, X-GitHub-Reason, X-Google-Group-Id, Return-Path, ...) and gives a reason with each answer. In order: the
@@ -120,10 +134,20 @@ Gmail's Primary, Promotions, Social, Updates and Forums, for INBOX only. Each ta
   account at a time; a newer request's target replaces the running one's. A step only lowers `low` from the value it read,
   so new mail sorted past a gap meanwhile is never skipped.
 - **The background re-check**, at most every 10 minutes per account, started by a tab's list (`ctx.waitUntil`): over the
-  newest 2000 cached messages only, `UID SEARCH <floor>:*` (their UID range) forgets the rows of mail that left INBOX, and
-  on Gmail one `UID <floor>:* X-GM-RAW "category:<tab>"` search per category takes Gmail's current categories (re-sorting
-  done on gmail.com or by Gmail itself). Older rows are left as they are. It runs on the sorter connection, so it never
+  newest 2000 cached messages only, `UID SEARCH <floor>:*` (their UID range) forgets the rows of mail that left INBOX (a
+  refused search forgets nothing), and on Gmail `recheckRows` (`gmailTabs.ts`) takes Gmail's current categories (re-sorting
+  done on gmail.com or by Gmail itself): the four X-GM-RAW searches over explicit ranges of at most 250 cached messages
+  each (`UID <min>:<max>` between real cached UIDs, never `<floor>:*`). A row changes tab only when a search returns it
+  under another category. A row in Promotions, Social, Updates or Forums the range searches leave out is asked about again
+  by its own UID (100 to a command, all four categories), and goes to Primary only when none returns it then. Any failed
+  or refused search, or a category with 20 or more cached rows of which none came back, makes the whole pass change
+  nothing (logged, and in the debug route). Older rows are left as they are. It runs on the sorter connection, so it never
   holds up a list.
+- **The repair** of rows wrongly cached as `Gmail: no category` (before 2026-11-03 an incomplete or refused search was
+  read as "no category"): adding `mail_sync.repair_below` set, once, `checked_at = 0` (re-check on the next list) and
+  `repair_below = high + 1` for every folder with such rows. Each re-check then also asks about up to 1000 older such rows
+  below its floor (newest first, positive answers only: a row only ever leaves Primary), and moves `repair_below` down past
+  them, to 0 when none are left.
 - A list of the whole INBOX with tabs on (a search) carries each message's tab: other servers sort it from the headers fetched
   with the page, Gmail from the cache (sorting any UID it does not have).
 
@@ -131,6 +155,9 @@ The tabs have no counts: each is its name and icon (the open one blue, with the 
 the left panel comes from `/folders`. In the list, rows can be dragged (mouse or trackpad only; touch screens and the
 keyboard use the menus) onto a tab, which is the same "Move to tab" as the menu, or onto a folder, which is the same move as
 "Move to"; dragging a checked row drags all the checked rows, and a drop on the open tab or folder does nothing.
+A row's menu also has "Why is this in <Tab>?", which says `categoryReason` in plain words in the toast (`reasonText` in
+`lib/tabs.ts`): "Gmail puts this in Updates", "You moved mail from this sender to Primary", "Gmail gives this no category,
+so it is in Primary", "Sorted by its headers: newsletter (List-Id, List-Unsubscribe)".
 
 Polling: the client re-reads folders + the open list every 60 s while the tab is visible, and both on window focus. (Push
 over the websocket is a later phase.) After marking read or unread, flagging, moving or deleting, the client changes the
@@ -200,8 +227,8 @@ Bundle cost ≈ 600 KiB gzip.
 - `attachments/:index?inline=1` is only inline for an image type; every attachment is served with
   `Content-Security-Policy: sandbox` and `nosniff`, since it comes from the app's own origin. `contentId` is given without
   its angle brackets, as a `cid:` URL names it.
-- Tests: `src/imap/*.test.ts` (ports, hosts, presets, the FETCH-to-summary mapping, snippets, the tab rules, the Gmail UID-range
-  searches and the tab SQL, opening by parts against postal-mime reading the whole message) and `test/e2e-mail.mjs` against
+- Tests: `src/imap/*.test.ts` (ports, hosts, presets, the FETCH-to-summary mapping, snippets, the tab rules, the tab SQL,
+  the Gmail searches against a fake server in `gmailTabs.test.ts`: partial and refused answers, confirmation, chunking, opening by parts against postal-mime reading the whole message) and `test/e2e-mail.mjs` against
   GreenMail (its header says how to run it). Under `MAIL_ALLOW_INSECURE=1` only, three request headers help it:
   `x-mail-test-slow-ms` pauses each step of the sorter inside its lock (to show lists and opening a message are not held
   up), `x-mail-test-classify-cap` lowers the sorting budgets (100 new per request, 300 per step), and `x-mail-test-recheck: 1`

@@ -56,6 +56,11 @@ export interface MessageSummary {
   size: number;
   /** INBOX only, when the account has tabs on. */
   category?: Category;
+  /**
+   * Why it is in that tab, when the server knows: "Gmail category:updates", "Gmail: no category", "sender moved to primary",
+   * or the header rule's reason ("newsletter (List-Id, List-Unsubscribe)"). Put into words by `reasonText` (lib/tabs.ts).
+   */
+  categoryReason?: string;
 }
 export interface Attachment {
   index: number;
