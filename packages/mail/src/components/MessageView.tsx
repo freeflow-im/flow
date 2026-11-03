@@ -1,6 +1,6 @@
 // The reading pane, after shadcn/ui's Mail example's display (MIT, see LICENSE-shadcn.md): the actions (reply, reply
 // all, forward, archive, move, delete, unread, star), the header (from, to, cc, date), the body and the attachments.
-import { Archive, ArrowLeft, Download, FileText, FolderInput, Forward, Loader2, Mail, MoreVertical, Reply, ReplyAll, Star, Trash2 } from 'lucide-react';
+import { Archive, ArrowLeft, ChevronLeft, ChevronRight, Download, FileText, FolderInput, Forward, Loader2, Mail, MoreVertical, Reply, ReplyAll, Star, Trash2 } from 'lucide-react';
 import { attachmentUrl, type Address, type MailFolder, type MessageDetail } from '../api';
 import { displayName, formatAddress } from '../lib/addresses';
 import { folderLabel, orderFolders } from '../lib/folders';
@@ -18,6 +18,10 @@ export interface MessageViewProps {
   folders: MailFolder[] | undefined;
   canArchive: boolean;
   onBack?: (() => void) | undefined;
+  /** In place of the list: where the open message is in it ("3 of 50"), and the newer (k) / older (j) one. */
+  position?: { index: number; count: number } | undefined;
+  onNewer?: (() => void) | undefined;
+  onOlder?: (() => void) | undefined;
   onReply(): void;
   onReplyAll(): void;
   onForward(): void;
@@ -94,6 +98,20 @@ export function MessageView(p: MessageViewProps) {
           <Star className={cn(m?.flagged && 'text-flag')} fill={m?.flagged ? 'currentColor' : 'none'} />
         </Action>
         <div className="ml-auto flex items-center gap-0.5">
+          {p.position && p.position.index >= 0 && (
+            <>
+              <span className="px-1.5 text-xs whitespace-nowrap text-muted">
+                {p.position.index + 1} of {p.position.count}
+              </span>
+              <Action label="Newer (k)" onClick={() => p.onNewer?.()} disabled={p.position.index <= 0}>
+                <ChevronLeft />
+              </Action>
+              <Action label="Older (j)" onClick={() => p.onOlder?.()} disabled={p.position.index >= p.position.count - 1}>
+                <ChevronRight />
+              </Action>
+              <span className="mx-1 h-5 w-px bg-hairline" aria-hidden />
+            </>
+          )}
           <Action label="Reply (r)" onClick={p.onReply} disabled={!m}>
             <Reply />
           </Action>
@@ -181,9 +199,32 @@ export function MessageView(p: MessageViewProps) {
                 </div>
               </div>
             )}
+            {/* As Gmail ends a message: answer it without going back up to the toolbar. */}
+            <div className="mt-6 flex flex-wrap gap-2 pb-6">
+              <EndButton label="Reply" onClick={p.onReply}>
+                <Reply />
+              </EndButton>
+              {m.to.length + m.cc.length > 1 && (
+                <EndButton label="Reply all" onClick={p.onReplyAll}>
+                  <ReplyAll />
+                </EndButton>
+              )}
+              <EndButton label="Forward" onClick={p.onForward}>
+                <Forward />
+              </EndButton>
+            </div>
           </article>
         )}
       </div>
     </section>
+  );
+}
+
+function EndButton({ label, onClick, children }: { label: string; onClick(): void; children: React.ReactNode }) {
+  return (
+    <button type="button" onClick={onClick} className="inline-flex h-9 items-center gap-2 rounded-full border border-[#747775] bg-white px-5 text-sm font-medium text-ink hover:bg-hover [&_svg]:size-[18px]">
+      {children}
+      {label}
+    </button>
   );
 }

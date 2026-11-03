@@ -1,17 +1,19 @@
 // A message's body. HTML goes through sanitize.ts and into a sandboxed iframe: no allow-scripts (nothing in it can
 // run), allow-same-origin only so this page can measure its height, allow-popups so its links open in a new tab, and a
-// Content Security Policy in the document itself. Remote images wait for "Show images". Plain text is rendered by
+// Content Security Policy in the document itself. Remote images wait for "Show images" until the user has chosen it once
+// (lib/imagePref.ts); after that they load. Plain text is rendered by
 // React (so escaped), with its links made links.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ImageOff } from 'lucide-react';
 import { attachmentUrl, type MessageDetail } from '../api';
+import { setImagePref, useImagePref } from '../lib/imagePref';
 import { buildSrcdoc, linkify, sanitizeEmailHtml } from '../lib/sanitize';
 
 export const IFRAME_SANDBOX = 'allow-popups allow-popups-to-escape-sandbox allow-same-origin';
 
 export function MessageBody({ accountId, message }: { accountId: string; message: MessageDetail }) {
-  const [showImages, setShowImages] = useState(false);
-  useEffect(() => setShowImages(false), [message.uid, message.folder]);
+  const pref = useImagePref();
+  const showImages = pref === 'always';
 
   const clean = useMemo(() => {
     if (!message.html) return null;
@@ -45,8 +47,8 @@ export function MessageBody({ accountId, message }: { accountId: string; message
       {clean.hasRemote && !showImages && (
         <div className="mb-3 flex items-center gap-3 rounded-lg border border-warn-border bg-warn-bg px-3 py-2 text-[13px] text-ink">
           <ImageOff className="size-4 shrink-0 text-muted" />
-          <span className="flex-1">Images from the web are hidden to protect your privacy.</span>
-          <button type="button" className="font-medium text-primary hover:underline" onClick={() => setShowImages(true)}>
+          <span className="flex-1">Images from the web are hidden to protect your privacy. Show them, and they load in every message from now on.</span>
+          <button type="button" className="font-medium text-primary hover:underline" onClick={() => setImagePref('always')}>
             Show images
           </button>
         </div>
