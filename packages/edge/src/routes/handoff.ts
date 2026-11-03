@@ -87,3 +87,16 @@ handoffRoutes.get('/api/auth/handoff', async (c) => {
   }
   return c.redirect('/workspace');
 });
+
+// Docs' Sign out (the Workspace app's /api/auth/logout, ahead of Docs' own routes): the session ends in the directory,
+// so Chat, which holds the same session, is signed out too, and the cookie goes. Docs' object cannot do it: it has no
+// sessions (docs/object.ts signOut).
+handoffRoutes.post('/api/auth/logout', async (c) => {
+  const header = c.req.header('authorization');
+  const token = (header?.startsWith('Bearer ') ? header.slice(7).trim() : getCookie(c, 'sid')) || null;
+  if (token) await directory(c, 'logout', token).catch(() => {});
+  deleteCookie(c, 'sid', { path: '/', secure: secure(c) });
+  c.header('cache-control', 'no-store');
+  return c.json({ ok: true });
+});
+
