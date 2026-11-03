@@ -177,8 +177,8 @@ Bundle cost ≈ 600 KiB gzip.
   `rate_limit_windows` (the Directory's fixed window: 10 account verifications per person per 15 minutes, on `POST` and on a
   `PATCH` that changes the password or servers). While awake it keeps up to three ImapFlow connections per account
   (over `cloudflare:sockets`, which does both TLS and STARTTLS), each opened when first needed: **interactive** (opening a
-  message and its attachments, flags, moves, deletes, the IMAP side of sending, a tab move's sender lookup), **background**
-  (lists, folders, and the new mail a tab's list sorts) and **sorter** (sorting older mail into tabs and the re-check).
+  message and its attachments, moves, deletes, the IMAP side of sending, a tab move's sender lookup), **background**
+  (lists, folders, flags such as read and starred, and the new mail a tab's list sorts) and **sorter** (sorting older mail into tabs and the re-check).
   Locks are per connection (imapflow's `getMailboxLock`), so a slow list never holds up opening a message, and sorting
   never holds up a list. Each is reused, reconnects once if it had dropped, and logs out after 60 s idle. Three is well
   within Gmail's limit of about 15 IMAP connections per account. The folder list is cached in memory for 5 minutes (Trash and Sent lookups).
