@@ -599,6 +599,7 @@ function FileList() {
           : (s) => (s.kind === 'file' && !isHtmlName(s.title) && !s.text ? <FileThumb item={s} /> : <FilePreviewFrame href={pathOf(s)} title={s.title} text={s.kind === 'doc' || s.kind === 'markdown' || s.kind === 'sheet' || !!s.text} />)
       }
       onGettingStarted={() => void openGuide()}
+      searchInBar={!!suite}
       search={search}
       onSearchChange={setSearch}
       onFind={otherShown ? undefined : async (q) => {

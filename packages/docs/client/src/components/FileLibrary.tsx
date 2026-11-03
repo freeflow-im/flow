@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import { isHtmlName, opensInApp, type SheetMeta } from '../../../shared/types.ts';
 import { DeckIcon, DocIcon, FileIcon, Logo, MarkdownIcon } from './Logo.tsx';
+import { openSuiteSearch } from '@flow/suite-bar';
 import { pastedFile } from '../pastedFile.ts';
 import { ConfirmModal, PromptModal } from './Modal.tsx';
 
@@ -192,6 +193,12 @@ export interface FileLibraryProps {
   brand?: ReactNode;
   /** Controls at the right of the header (menus, buttons). */
   headerActions?: ReactNode;
+  /**
+   * The FreeFlow suite: the suite bar's search is this list's search (DocsSuiteBar.tsx, through the address), so the
+   * list has no search box or header row of its own, a key typed on the page opens the bar's search, and the header's
+   * controls sit in the list's toolbar.
+   */
+  searchInBar?: boolean;
   /** The name of the top of the library, in the heading over the files table. Defaults to "Your files". */
   listTitle?: ReactNode;
   /** Above the list: the FreeFlow suite's two roots, Organization files and My files (HomePage's RootSwitch). */
@@ -552,6 +559,7 @@ export function FileLibrary(props: FileLibraryProps) {
   // Typing anywhere on the page filters the list: the first key moves to the search box, which takes it
   // and the ones after. Not while a field or a dialog has the keyboard.
   const searchRef = useRef<HTMLInputElement>(null);
+  const searchInBar = !!props.searchInBar;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || e.isComposing) return;
@@ -560,11 +568,17 @@ export function FileLibrary(props: FileLibraryProps) {
       if (document.querySelector('.modal-backdrop')) return;
       // A key that types a character; a space is left to the button or link that has the focus.
       if (e.key.length !== 1 || e.key === ' ') return;
+      if (searchInBar) {
+        // The bar's field is not focused yet, so the key is handed to it as its first character.
+        e.preventDefault();
+        openSuiteSearch(e.key);
+        return;
+      }
       searchRef.current?.focus();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [searchInBar]);
 
   // Pasting on the page imports what was copied, as dropping a file does: a picture becomes a picture file and
   // text a Markdown document. Not while a field or a dialog has the keyboard: there a paste is typing.
@@ -796,6 +810,7 @@ export function FileLibrary(props: FileLibraryProps) {
         if (file && !importing) props.onImport(file);
       }}
     >
+      {!searchInBar && (
       <header className="home-header">
         {props.brand && <div className="home-brand">{props.brand}</div>}
         <input
@@ -813,6 +828,7 @@ export function FileLibrary(props: FileLibraryProps) {
         />
         <div className="home-user">{props.headerActions}</div>
       </header>
+      )}
 
       <section className="home-new">
         <div className="home-inner">
@@ -963,6 +979,7 @@ export function FileLibrary(props: FileLibraryProps) {
                 New folder
               </button>
             )}
+            {searchInBar && props.headerActions && <div className="home-user home-user-inline">{props.headerActions}</div>}
           </div>
         </div>
         {otherShown && other!.notice}

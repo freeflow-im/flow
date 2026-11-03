@@ -3,7 +3,7 @@
 // belongs to Chat (adding an organization, its settings, inviting people, notifications, the profile) opens Chat at
 // `/?open=…`, which Chat's App.tsx honours.
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { AWAY_STATUS, isAway, StatusDialog, statusPatch, SuiteBar, type StatusOption } from '@flow/suite-bar';
 import { useAgent } from '../agent/AgentProvider.tsx';
 import { useAuth } from '../auth.tsx';
@@ -15,10 +15,22 @@ const REFRESH_MS = 60_000;
 /** A page of Chat (the suite's root, outside this app's base path). */
 const toChat = (open?: string) => window.location.assign(open ? `/?open=${open}` : '/');
 
+/** The address's search, as HomePage's setSearch writes it: the text, and whether it looks in every folder. */
+function withSearch(cur: URLSearchParams, text: string, find: boolean): URLSearchParams {
+  const next = new URLSearchParams(cur);
+  if (text) next.set('q', text);
+  else next.delete('q');
+  if (text && find) next.set('find', '1');
+  else next.delete('find');
+  return next;
+}
+
 export function DocsSuiteBar() {
   const { user, logout } = useAuth();
   const agent = useAgent();
   const navigate = useNavigate();
+  const onHome = useLocation().pathname === '/';
+  const [params, setParams] = useSearchParams();
   const [me, setMe] = useState<SuiteUser | null>(null);
   const [orgs, setOrgs] = useState<SuiteOrganization[]>([]);
   const [activeId, setActiveId] = useState(readActiveOrganization);
@@ -92,11 +104,22 @@ export function DocsSuiteBar() {
           ...(active?.role === 'owner' || active?.role === 'admin' ? { onSettings: () => toChat('admin') } : {}),
           ...(active ? { onInvite: () => toChat('invite') } : {}),
         }}
-        search={{
-          placeholder: 'Search files',
-          // The home page's file search, in every folder (its address keeps it: ?q=…&find=1).
-          onSubmit: (q) => navigate(`/?${new URLSearchParams({ q, find: '1' })}`),
-        }}
+        search={
+          onHome
+            ? {
+                // The home page's search (HomePage.tsx keeps it in the address): typing filters the list shown (?q=),
+                // Enter looks in every folder (&find=1). It replaced the search box above the list.
+                placeholder: 'Search spreadsheets, presentations and documents',
+                value: params.get('q') ?? '',
+                onChange: (q) => setParams((cur) => withSearch(cur, q, false), { replace: true }),
+                onSubmit: (q) => setParams((cur) => withSearch(cur, q, true), { replace: true }),
+              }
+            : {
+                placeholder: 'Search files',
+                // From any other page: the home page's search in every folder.
+                onSubmit: (q) => navigate(`/?${new URLSearchParams({ q, find: '1' })}`),
+              }
+        }
         // The file's chat on a file's page, the home chat on the home page: the panel shows the page's own.
         assistant={{ onOpen: () => agent.setOpen(!agent.open), active: agent.open }}
         notifications={{ onOpen: () => toChat('activity') }}

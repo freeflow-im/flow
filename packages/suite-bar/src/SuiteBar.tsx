@@ -49,7 +49,18 @@ export interface SuiteOrganization {
 export interface SuiteSearch {
   placeholder: string;
   onSubmit(query: string): void;
+  /**
+   * A live search (Docs' file list): the app keeps the text (`value`) and hears each change, so a page can filter as
+   * the person types. The field then stays open while it has text, and Enter does not clear it. Without it the field
+   * is only a way to submit, and closes after.
+   */
+  value?: string;
+  onChange?(query: string): void;
 }
+
+/** Opens the bar's search from elsewhere on the page, with the text already typed (a key pressed on a list). */
+export const SUITE_SEARCH_EVENT = 'suite-search';
+export const openSuiteSearch = (text = '') => window.dispatchEvent(new CustomEvent(SUITE_SEARCH_EVENT, { detail: text }));
 
 export interface SuiteAccount {
   name: string;
@@ -191,7 +202,12 @@ function followTab(tab: SuiteTab): void {
 export function SuiteBar({ tabs, organization, search, assistant, notifications, account }: SuiteBarProps) {
   const [menu, setMenu] = useState<Menu>(null);
   const [searching, setSearching] = useState(false);
-  const [query, setQuery] = useState('');
+  const [ownQuery, setOwnQuery] = useState('');
+  const live = !!search?.onChange;
+  const query = live ? (search?.value ?? '') : ownQuery;
+  const setQuery = (q: string) => (live ? search!.onChange!(q) : setOwnQuery(q));
+  // A live search with text stays open, so the text that filters the page stays in view.
+  const open = searching || (live && !!query);
   const orgRef = useRef<HTMLDivElement>(null);
   const accountRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLFormElement>(null);
@@ -203,6 +219,23 @@ export function SuiteBar({ tabs, organization, search, assistant, notifications,
     setSearching(false);
     setQuery('');
   };
+  const searchRefs = useRef({ query, setQuery });
+  searchRefs.current = { query, setQuery };
+
+  // Another part of the page opens the search with what was typed there (openSuiteSearch).
+  useEffect(() => {
+    if (!search) return;
+    const onOpen = (e: Event) => {
+      const text = String((e as CustomEvent).detail ?? '');
+      setMenu(null);
+      setSearching(true);
+      // Typed while the field had no focus: it goes after the text already there.
+      if (text) searchRefs.current.setQuery(searchRefs.current.query + text);
+      inputRef.current?.focus();
+    };
+    window.addEventListener(SUITE_SEARCH_EVENT, onOpen);
+    return () => window.removeEventListener(SUITE_SEARCH_EVENT, onOpen);
+  }, [!!search]);
 
   // ⌘1 to ⌘4 switch apps, ⌘K opens the search. An app that already used the key (an editor's own ⌘K) wins.
   useEffect(() => {
@@ -232,11 +265,12 @@ export function SuiteBar({ tabs, organization, search, assistant, notifications,
       const t = e.target as Node;
       if (menu === 'org' && !orgRef.current?.contains(t)) setMenu(null);
       if (menu === 'account' && !accountRef.current?.contains(t)) setMenu(null);
-      if (searching && !searchRef.current?.contains(t)) closeSearch();
+      // A live search keeps its text (it is filtering the page); only the focus goes.
+      if (searching && !searchRef.current?.contains(t)) (live ? setSearching(false) : closeSearch());
     };
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
-  }, [menu, searching]);
+  }, [menu, searching, live]);
 
   useEffect(() => {
     if (searching) inputRef.current?.focus();
@@ -359,7 +393,7 @@ export function SuiteBar({ tabs, organization, search, assistant, notifications,
 
       <div className="sb-right">
         {search &&
-          (searching ? (
+          (open ? (
             <form
               ref={searchRef}
               className="sb-search"
@@ -368,7 +402,7 @@ export function SuiteBar({ tabs, organization, search, assistant, notifications,
                 e.preventDefault();
                 const q = query.trim();
                 if (!q) return;
-                closeSearch();
+                if (!live) closeSearch();
                 search.onSubmit(q);
               }}
             >
