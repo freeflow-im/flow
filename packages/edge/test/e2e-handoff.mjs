@@ -1,0 +1,30 @@
+// The MCP Docs desktop app's Google sign-in (src/routes/handoff.ts), against a local `wrangler dev` started as
+// test/e2e.mjs says: node test/e2e-handoff.mjs /tmp/edge.log
+import fs from 'node:fs';
+const log=process.argv[2]; const B='http://localhost:18796';
+let pass=0,fail=0; const t=(n,ok,d='')=>{ok?pass++:fail++;console.log((ok?'ok  ':'FAIL')+' '+n+(d?': '+String(d).slice(0,170):''));};
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const api=async(m,p,b)=>{const r=await fetch(B+p,{method:m,headers:{'content-type':'application/json'},body:JSON.stringify(b)});return {s:r.status,j:await r.json().catch(()=>null)};};
+const email=`hand-${Date.now().toString(36)}@example.com`;
+await api('POST','/v1/auth/register',{email});await sleep(400);
+const m=[...fs.readFileSync(log,'utf8').matchAll(new RegExp('to='+email+'.*?signup=([A-Za-z0-9_-]+)','g'))].at(-1);
+const {j:{token}}=await api('POST','/v1/auth/register/complete',{token:m[1],displayName:'Hana',password:'correct-horse-battery'});
+const key='A'.repeat(20)+Date.now().toString(36).padEnd(23,'b');
+let r=await fetch(B+`/api/auth/google/start?desktop=${key}`,{redirect:'manual'});
+const keyCookie=(r.headers.get('set-cookie')??'').split(';')[0];
+t('start sends the browser to sign in, keeping the key',r.status===302&&r.headers.get('location')==='/?next=%2Fapi%2Fauth%2Fhandoff%2Fclaim'&&keyCookie.startsWith('desktop_handoff='),r.status+' '+r.headers.get('location'));
+r=await fetch(B+'/api/auth/handoff/claim',{headers:{cookie:keyCookie},redirect:'manual'});
+t('signed out, the claim asks to sign in',r.status===302,r.status);
+const both=`${keyCookie}; sid=${token}`;
+r=await fetch(B+'/api/auth/handoff/claim',{headers:{cookie:both}});const h=await r.text();
+t('signed in, the claim asks to confirm',r.status===200&&h.includes('<form method="post"')&&h.includes(email),r.status);
+r=await fetch(B+`/api/auth/handoff/status?key=${key}`);t('not ready before confirming',(await r.json()).ready===false);
+r=await fetch(B+'/api/auth/handoff/claim',{method:'POST',headers:{cookie:both}});
+t('confirming approves it',r.status===200&&(await r.text()).includes('signed in'),r.status);
+r=await fetch(B+`/api/auth/handoff/status?key=${key}`);t('ready after',(await r.json()).ready===true);
+r=await fetch(B+`/api/auth/handoff?key=${key}`,{redirect:'manual'});const sid=(r.headers.get('set-cookie')??'').match(/sid=([^;]+)/)?.[1];
+t('the app trades it for a session and goes to /workspace',r.status===302&&r.headers.get('location')==='/workspace'&&!!sid,r.status+' '+r.headers.get('location'));
+r=await fetch(B+'/v1/me',{headers:{cookie:`sid=${sid}`}});const me=await r.text();t('the session is the person',r.status===200&&me.includes(email),r.status+' '+me.slice(0,80));
+r=await fetch(B+`/api/auth/handoff?key=${key}`,{redirect:'manual'});t('the key works once',!(r.headers.get('set-cookie')??'').includes('sid='),r.headers.get('set-cookie'));
+r=await fetch(B+'/api/auth/handoff/claim',{method:'POST',headers:{cookie:`sid=${token}`}});t('no key, no approval',r.status===400,r.status);
+console.log(`\n${pass} passed, ${fail} failed`);process.exit(fail?1:0);

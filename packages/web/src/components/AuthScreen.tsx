@@ -40,7 +40,39 @@ export function GoogleButton(props: {
   onSignedIn: (r: GoogleAuthResponse) => void;
   showDivider: boolean;
 }) {
+  if (inMcpDocsApp()) return <McpDocsGoogleButton showDivider={props.showDivider} />;
   return isDesktop() ? <DesktopGoogleButton {...props} /> : <BrowserGoogleButton {...props} />;
+}
+
+/** A Web tab of the MCP Docs desktop app, which marks its user agent (packages/docs/desktop/main.js, UA_MARK). */
+const inMcpDocsApp = () => typeof navigator !== 'undefined' && navigator.userAgent.includes('MCPDocs/');
+
+/**
+ * In MCP Docs' Web tab Google cannot sign in either: the app opens this address in the system browser with a key of
+ * its own and waits there for the sign-in (packages/edge/src/routes/handoff.ts), so this is a plain link to it.
+ */
+function McpDocsGoogleButton({ showDivider }: { showDivider: boolean }) {
+  const [started, setStarted] = useState(false);
+  return (
+    <div data-testid="auth-google">
+      {showDivider && (
+        <div className="my-3 flex items-center gap-2 text-xs text-faint">
+          <span className="h-px flex-1 bg-hairline2" />
+          or
+          <span className="h-px flex-1 bg-hairline2" />
+        </div>
+      )}
+      <a
+        href="/api/auth/google/start"
+        data-testid="auth-google-mcpdocs"
+        className="mb-2 block w-full rounded border border-hairline2 py-2 text-center text-sm font-semibold text-ink hover:bg-base"
+        onClick={() => setStarted(true)}
+      >
+        Continue with Google
+      </a>
+      {started && <p className="mt-2 text-center text-sm text-muted">Finish signing in in your browser, then come back here.</p>}
+    </div>
+  );
 }
 
 /** The desktop shell cannot host Google's sign-in (see `desktopGoogleSignIn`):
