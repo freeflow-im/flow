@@ -125,6 +125,9 @@ organizations, invitations, sockets, presence, typing, messages, threads, reacti
 
 **Still to do for Chat:** agents and the agent bridge (`/v1/agents/*`, and its socket); deleting an account; automatic joining by email domain; inviting someone from another organization; the PKCE handoff routes, which the desktop and native apps need; huddles, reported as off until LiveKit's keys are set and it has been tried; link previews, whose fetcher uses Node's `http` and has not been shown to work; help pages. `test/e2e.mjs` runs 54 checks locally. Nothing but the directory's refusals has run on Cloudflare's network, and many routes have not run at all.
 
+
+> **Status 2026-11-03:** since the cut-over (#659) the Worker serves pushes and huddles (#662, on once their settings are set), the sign-in handoff and help pages (#661), link previews and PDF to Markdown (#663), and PDFs through Browser Rendering (#658). Still open: OCR of scanned PDFs and resized preview pictures. The ChatGPT plugin stays on AWS by decision (decision_log 2026-11-03).
+
 ## How Docs ports: the same way, in its own object beside Chat's
 
 Tried on 2026-11-02. The hosted half of `packages/docs` (server, shared, the ChatGPT plugin's server, and the client modules the

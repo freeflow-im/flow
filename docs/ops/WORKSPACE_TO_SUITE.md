@@ -60,8 +60,8 @@ Then:
 - A Workspace user who had no suite account signs in to the suite with their Workspace password (the scrypt hash
   is accepted and replaced); one who had both signs in as before and sees their Workspace files.
 - Download as PDF works (Chromium is in the image).
-- The docs deploy workflow (`docs-aws-deploy.yml`) now does nothing on the instance ("served by the suite now");
-  retire it, the `mcpdocs` ECR repository and the `/mcpdocs/` parameters that the suite does not read
+- The docs deploy workflow (`docs-aws-deploy.yml`) did nothing on the instance ("served by the suite now"); it was
+  removed on 2026-11-03. Still to retire: the `mcpdocs` ECR repository and the `/mcpdocs/` parameters that the suite does not read
   (`GOOGLE_*`, `CLOUDFLARE_*`, `MAIL_FROM`, `PLUGIN_ENABLED`) in a follow-up once a week has passed.
 
 ## Rollback

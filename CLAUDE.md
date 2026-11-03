@@ -96,6 +96,6 @@
   `docs/specs/freeflow-suite.md`). It has its own conventions in
   `packages/docs/CLAUDE.md` and `packages/docs/docs/architecture.md`; read those
   before changing it. It is in the pnpm workspace (`pnpm --filter @flow/docs
-    release workflow. Its deploys are the root workflows `docs-aws-deploy.yml`
-  (hosted app, on a push to main touching `packages/docs/**`) and
-  `docs-desktop-release.yml` (the `desktop-v*` tags).
+    release workflow. The hosted app ships with the suite (`flow-aws-deploy.yml`,
+  `deploy-edge.yml`); `docs-desktop-release.yml` builds the `desktop-v*` tags, though
+  installed apps still update from freeflow-im/mcp-docs's releases.

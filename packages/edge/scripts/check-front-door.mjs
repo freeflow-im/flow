@@ -3,6 +3,7 @@
 //   node scripts/check-front-door.mjs app.freeflow.im
 //   node scripts/check-front-door.mjs docs.freeflow.im --legacy
 // Exits 1 if a check fails. `behind the Worker` is reported, not checked: the script runs on both sides of the switch.
+import https from 'node:https';
 const host = process.argv[2];
 const legacy = process.argv.includes('--legacy');
 if (!host) throw new Error('Name a host: node scripts/check-front-door.mjs app.freeflow.im');
@@ -16,14 +17,15 @@ function check(name, ok, detail = '') {
 
 const get = (path, init = {}) => fetch(base + path, { redirect: 'manual', ...init });
 
-/** The socket opens and the server, not a proxy, closes it or says something: no credentials were sent. */
-function socketOpens(url) {
+/** A socket upgrade's answer (HTTP/1.1, as browsers make it): its status, without credentials. */
+function upgradeStatus(path) {
   return new Promise((resolve) => {
-    const ws = new WebSocket(url);
-    const done = (value) => { clearTimeout(timer); try { ws.close(); } catch { /* already closed */ } resolve(value); };
-    const timer = setTimeout(() => done('timed out'), 8000);
-    ws.onopen = () => done('open');
-    ws.onerror = () => done('refused');
+    const req = https.request({ host, path, headers: { connection: 'Upgrade', upgrade: 'websocket', 'sec-websocket-version': '13', 'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==' }, timeout: 8000 });
+    req.on('upgrade', (res, socket) => { socket.destroy(); resolve(res.statusCode); });
+    req.on('response', (res) => { res.resume(); resolve(res.statusCode); });
+    req.on('timeout', () => { req.destroy(); resolve('timed out'); });
+    req.on('error', (e) => resolve(e.message));
+    req.end();
   });
 }
 
@@ -54,8 +56,12 @@ if (legacy) {
   check('the API refuses without a session', me.status === 401 && (me.headers.get('content-type') ?? '').includes('json'), String(me.status));
   const docsMe = await get('/api/auth/me');
   check('the Workspace API answers', docsMe.status < 500, String(docsMe.status));
-  const socket = await socketOpens(`wss://${host}/v1/ws`);
-  check('the socket opens', socket === 'open', socket);
+  // The socket is per organization (/v1/ws?workspace=<id>) and authenticates in its first frame; the Worker refuses an
+  // address with no organization, and an organization nobody belongs to, before waking an object.
+  const bare = await upgradeStatus('/v1/ws');
+  check('a socket must name its organization', bare === 404, String(bare));
+  const unknown = await upgradeStatus('/v1/ws?workspace=00000000-0000-4000-8000-000000000000');
+  check('a socket for no organization is refused', unknown === 404, String(unknown));
 }
 
 console.log(failed ? `${failed} failed` : 'all passed');

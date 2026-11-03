@@ -47,9 +47,11 @@ async function caller(c: C): Promise<{ user: UserDTO | null; token: string | nul
 export const orgRoutes = new Hono<{ Bindings: OrgRouteEnv }>();
 
 /** One socket per organization: `/v1/ws?workspace=<id>` (docs/specs/cloudflare-spikes.md, spike A). */
-orgRoutes.get('/v1/ws', (c) => {
+orgRoutes.get('/v1/ws', async (c) => {
   const id = c.req.query('workspace');
   if (!id || !/^[0-9a-f-]{36}$/.test(id)) throw notFound('name an organization: /v1/ws?workspace=<id>');
+  // An id nobody belongs to would wake (and make) an object for nothing; the socket still authenticates in its first frame.
+  if (!(await directory(c, 'organizationKnown', id))) throw notFound('no such organization');
   return orgStub(c, id).fetch(c.req.raw);
 });
 
