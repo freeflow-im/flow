@@ -4,6 +4,7 @@ import type { AuthResponse, OAuthIdentityDTO, RegisterResponse, UserDTO } from '
 import { ApiError, conflict, notFound, unauthorized } from '../errors';
 import { hashPassword, verifyPassword } from './passwords';
 import { DIRECTORY_MIGRATIONS } from './schema';
+import { HandoffApprove, HandoffExchange, HandoffStart, parseBody, pkceChallenge, validateContext, type HandoffContext, type HandoffPolicy } from './authHandoff';
 
 export interface Sql {
   exec(query: string, ...bindings: unknown[]): { toArray(): Record<string, unknown>[] };
@@ -15,6 +16,9 @@ export interface DirectoryDeps {
   webUrlBase: string;
   registrationEnabled: boolean;
   send(mail: Mail): Promise<void>;
+  /** FLOW_HANDOFF_RETURN_URLS and FLOW_ALLOWED_WEB_ORIGINS, for the web-to-app handoff. Without return URLs it is off. */
+  handoffReturnUrls?: string[];
+  allowedWebOrigins?: string[];
 }
 
 export type AuthKind = 'session' | 'agent';
@@ -29,6 +33,9 @@ const SIGNIN_TTL_MINUTES = 15;
 const APP_LINK_TTL = 2 * 60_000;
 const DESKTOP_HANDOFF_TTL = 10 * 60_000;
 const AGENT_TOUCH = 60_000;
+const HANDOFF_TTL = 10 * 60_000;
+const HANDOFF_CODE_TTL = 60_000;
+const HANDOFF_RATE_WINDOW = 10 * 60_000;
 
 type Row = Record<string, unknown>;
 
@@ -268,6 +275,89 @@ export class DirectoryCore {
     const user = used && this.userById(used.user_id as string);
     if (!user || user.deleted_at) throw unauthorized('invalid or expired sign-in key');
     return this.issueSession(user.id as string, clientInfo);
+  }
+
+  /** The server's `rateAllowDb`: a fixed window per key. True when the call is allowed. */
+  private rateAllow(key: string, limit: number, windowMs: number): boolean {
+    const now = Date.now();
+    const count = this.rows(
+      `INSERT INTO rate_limit_windows (key, window_start, count) VALUES (?, ?, 1)
+       ON CONFLICT (key) DO UPDATE SET
+         count = CASE WHEN window_start <= ? THEN 1 ELSE count + 1 END,
+         window_start = CASE WHEN window_start <= ? THEN ? ELSE window_start END
+       RETURNING count`,
+      key, now, now - windowMs, now - windowMs, now)[0]?.count as number | undefined;
+    return count === undefined || count <= limit;
+  }
+
+  private handoffPolicy(): HandoffPolicy {
+    return { webUrlBase: this.deps.webUrlBase, returnUrls: this.deps.handoffReturnUrls ?? [], allowedWebOrigins: this.deps.allowedWebOrigins ?? [] };
+  }
+
+  /** The row an approval or exchange names: every part of the context it started with, unexpired. */
+  private handoffBinding(body: HandoffContext, requestHash: string): [string, unknown[]] {
+    const client = body.clientOrigin === null ? [] : [body.clientOrigin];
+    return [
+      `request_hash = ? AND connection_id = ? AND operation_id = ? AND state = ? AND server_origin = ? AND
+       ${body.clientOrigin === null ? 'client_origin IS NULL' : 'client_origin = ?'} AND return_url = ? AND expires_at > ?`,
+      [requestHash, body.connectionId, body.operationId, body.state, body.serverOrigin, ...client, body.returnUrl, Date.now()],
+    ];
+  }
+
+  /**
+   * The web-to-app sign-in handoff (authHandoff.ts), the server's services/handoff.ts. A client with no session starts
+   * an operation with its PKCE challenge; `origin` is the request's Origin header and `ip` the caller's address.
+   */
+  async startHandoff(raw: unknown, origin: string | undefined, ip: string): Promise<{ requestId: string; expiresAt: string }> {
+    if (!this.rateAllow(`handoff-start:${ip}`, 30, HANDOFF_RATE_WINDOW)) throw new ApiError(429, 'rate_limited', 'Too many handoff attempts');
+    const body = parseBody(HandoffStart, raw);
+    validateContext(body, origin, true, this.handoffPolicy());
+    const now = Date.now();
+    this.sql.exec('DELETE FROM auth_handoffs WHERE expires_at < ?', now);
+    this.sql.exec('DELETE FROM rate_limit_windows WHERE window_start < ?', now - DAY);
+    const requestId = newToken();
+    const expiresAt = now + HANDOFF_TTL;
+    this.sql.exec(
+      `INSERT INTO auth_handoffs (request_hash, connection_id, operation_id, state, server_origin, client_origin, return_url, code_challenge, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      await hashToken(requestId), body.connectionId, body.operationId, body.state, body.serverOrigin, body.clientOrigin, body.returnUrl, body.codeChallenge, expiresAt);
+    return { requestId, expiresAt: iso(expiresAt) };
+  }
+
+  /** The person, signed in on the web, approves it: a one-minute code, sent back to the client in its return URL. */
+  async approveHandoff(userId: string, raw: unknown): Promise<{ callbackUrl: string; expiresAt: string }> {
+    const body = parseBody(HandoffApprove, raw);
+    validateContext(body, undefined, false, this.handoffPolicy());
+    const code = newToken();
+    const codeHash = await hashToken(code);
+    const [where, args] = this.handoffBinding(body, await hashToken(body.requestId));
+    const expiresAt = Date.now() + HANDOFF_CODE_TTL;
+    const row = this.rows(`UPDATE auth_handoffs SET user_id = ?, code_hash = ?, expires_at = ? WHERE ${where} AND code_hash IS NULL RETURNING *`,
+      userId, codeHash, expiresAt, ...args)[0];
+    if (!row) throw unauthorized('Unknown, expired, or already approved handoff operation');
+    const callback = new URL(row.return_url as string);
+    // No backend URL or session credential in the callback. The client resolves its pending operation.
+    callback.searchParams.set('code', code);
+    callback.searchParams.set('state', row.state as string);
+    callback.searchParams.set('operationId', row.operation_id as string);
+    return { callbackUrl: callback.href, expiresAt: iso(expiresAt) };
+  }
+
+  /** The client trades the code and its PKCE verifier, once, for a session of the person who approved. */
+  async exchangeHandoff(raw: unknown, origin: string | undefined, ip: string, clientInfo?: string): Promise<AuthResponse> {
+    if (!this.rateAllow(`handoff-exchange:${ip}`, 60, HANDOFF_RATE_WINDOW)) throw new ApiError(429, 'rate_limited', 'Too many handoff attempts');
+    const body = parseBody(HandoffExchange, raw);
+    validateContext(body, origin, true, this.handoffPolicy());
+    const [where, args] = this.handoffBinding(body, await hashToken(body.requestId));
+    const codeHash = await hashToken(body.code);
+    const challenge = await pkceChallenge(body.codeVerifier);
+    // Found, checked and used up with no await between: as the server's transaction, a refused person leaves the row.
+    const row = this.rows(`SELECT * FROM auth_handoffs WHERE ${where} AND code_hash = ? AND code_challenge = ?`, ...args, codeHash, challenge)[0];
+    if (!row?.user_id) throw unauthorized('Invalid, expired, or mismatched handoff');
+    const user = this.userById(row.user_id as string);
+    if (!user || user.deleted_at || user.is_bot || user.is_agent) throw unauthorized();
+    this.sql.exec('DELETE FROM auth_handoffs WHERE request_hash = ?', row.request_hash);
+    return { token: await this.issueSession(user.id as string, clientInfo), user: toUserDTO(user, user.id as string) };
   }
 
   /** Match by (provider, sub), then by verified email, else create a provider-first account. */

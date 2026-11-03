@@ -5,9 +5,10 @@
   "type": "module",
   "description": "The suite's Cloudflare Worker (docs/specs/cloudflare-migration.md): the front door today, the directory and the organizations' objects as each context is ported.",
   "scripts": {
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run",
+    "typecheck": "node scripts/help.mjs && tsc -p tsconfig.json --noEmit",
+    "build": "node scripts/help.mjs && tsc -p tsconfig.json --noEmit",
+    "test": "node scripts/help.mjs && vitest run",
+    "help": "node scripts/help.mjs",
     "assemble": "node scripts/assemble.mjs",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy"

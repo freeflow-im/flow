@@ -22,6 +22,9 @@ function nodeSql(): Sql {
   };
 }
 
+/** The database a core runs over, for a test to change a row behind its back. */
+const nodeSqlOf = (c: DirectoryCore) => (c as unknown as { sql: Sql }).sql;
+
 let sent: Mail[];
 let core: DirectoryCore;
 const lastLink = (param: string) => new RegExp(`[?]${param}=([A-Za-z0-9_-]+)`).exec(sent.at(-1)!.text)![1]!;
@@ -123,6 +126,100 @@ describe('signing in', () => {
     expect((await core.authenticate(token)).user.id).toBe(user.id);
     expect(await core.desktopHandoffReady(key)).toBe(false);
     await expect(core.exchangeDesktopHandoff(key)).rejects.toThrow();
+  });
+});
+
+describe('the web-to-app handoff', () => {
+  const b64url = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64url');
+  const opaque = () => b64url(crypto.getRandomValues(new Uint8Array(32)));
+  const challengeOf = async (v: string) => b64url(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(v))));
+  let h: DirectoryCore;
+  beforeEach(() => {
+    h = new DirectoryCore(nodeSql(), {
+      webUrlBase: 'https://app.test', registrationEnabled: true, send: async (m) => void sent.push(m),
+      handoffReturnUrls: ['flow://signin', 'https://app.test/', 'https://other.test/'], allowedWebOrigins: ['https://other.test'],
+    });
+  });
+  const nativeContext = () => ({ connectionId: 'conn-1', operationId: opaque(), state: opaque(), serverOrigin: 'https://app.test', clientOrigin: null, returnUrl: 'flow://signin' });
+  async function person() {
+    await h.register('p@example.com');
+    return h.completeSignup(lastLink('signup'), 'Pat', 'pw-pw-pw-pw');
+  }
+  async function begin(context: Omit<ReturnType<typeof nativeContext>, 'clientOrigin'> & { clientOrigin: string | null } = nativeContext(), origin?: string) {
+    const verifier = opaque();
+    const { requestId, expiresAt } = await h.startHandoff({ ...context, codeChallenge: await challengeOf(verifier), codeChallengeMethod: 'S256' }, origin, '1.2.3.4');
+    return { bound: { ...context, requestId }, verifier, expiresAt };
+  }
+  const codeOf = (callbackUrl: string) => new URL(callbackUrl).searchParams.get('code')!;
+
+  it('starts, is approved by a signed-in person, and is exchanged once for their session', async () => {
+    const { user } = await person();
+    const { bound, verifier, expiresAt } = await begin();
+    expect(Date.parse(expiresAt) - Date.now()).toBeGreaterThan(9 * 60_000);
+    const approved = await h.approveHandoff(user.id, bound);
+    const cb = new URL(approved.callbackUrl);
+    expect(cb.protocol + cb.host + cb.pathname).toBe('flow:signin');
+    expect(cb.searchParams.get('state')).toBe(bound.state);
+    expect(cb.searchParams.get('operationId')).toBe(bound.operationId);
+    const res = await h.exchangeHandoff({ ...bound, code: codeOf(approved.callbackUrl), codeVerifier: verifier }, undefined, '1.2.3.4', 'Flow for Mac');
+    expect(res.user.id).toBe(user.id);
+    expect((await h.authenticate(res.token)).user.id).toBe(user.id);
+    await expect(h.exchangeHandoff({ ...bound, code: codeOf(approved.callbackUrl), codeVerifier: verifier }, undefined, '1.2.3.4')).rejects.toThrow('Invalid, expired, or mismatched handoff');
+  });
+  it('refuses a wrong PKCE verifier, and the right one still works after', async () => {
+    const { user } = await person();
+    const { bound, verifier } = await begin();
+    const code = codeOf((await h.approveHandoff(user.id, bound)).callbackUrl);
+    await expect(h.exchangeHandoff({ ...bound, code, codeVerifier: opaque() }, undefined, '1.2.3.4')).rejects.toThrow('Invalid, expired, or mismatched handoff');
+    expect((await h.exchangeHandoff({ ...bound, code, codeVerifier: verifier }, undefined, '1.2.3.4')).user.id).toBe(user.id);
+  });
+  it('binds every part of the context', async () => {
+    const { user } = await person();
+    const { bound, verifier } = await begin();
+    await expect(h.approveHandoff(user.id, { ...bound, state: opaque() })).rejects.toThrow('Unknown, expired, or already approved');
+    await expect(h.approveHandoff(user.id, { ...bound, connectionId: 'other' })).rejects.toThrow('Unknown, expired, or already approved');
+    const code = codeOf((await h.approveHandoff(user.id, bound)).callbackUrl);
+    await expect(h.approveHandoff(user.id, bound)).rejects.toThrow('already approved');
+    await expect(h.exchangeHandoff({ ...bound, operationId: opaque(), code, codeVerifier: verifier }, undefined, '1.2.3.4')).rejects.toThrow('mismatched');
+  });
+  it('is not exchanged before it is approved', async () => {
+    await person();
+    const { bound, verifier } = await begin();
+    await expect(h.exchangeHandoff({ ...bound, code: opaque(), codeVerifier: verifier }, undefined, '1.2.3.4')).rejects.toThrow('mismatched');
+  });
+  it('checks the server, the return URL and the client origin', async () => {
+    await expect(begin({ ...nativeContext(), serverOrigin: 'https://elsewhere.test' })).rejects.toThrow('initiating Flow server');
+    await expect(begin({ ...nativeContext(), returnUrl: 'flow://other' })).rejects.toThrow('not allowlisted');
+    await expect(begin({ ...nativeContext(), returnUrl: 'https://app.test/?x=1' })).rejects.toThrow('not allowlisted');
+    // A native client sends no Origin; a browser must say the origin it binds.
+    await expect(begin(nativeContext(), 'https://app.test')).rejects.toThrow('does not match the initiating client');
+    const web = { ...nativeContext(), clientOrigin: 'https://app.test', returnUrl: 'https://app.test/' };
+    await expect(begin(web)).rejects.toThrow('does not match the initiating client');
+    expect((await begin(web, 'https://app.test')).bound.requestId).toBeTruthy();
+    expect((await begin({ ...web, clientOrigin: 'https://other.test', returnUrl: 'https://other.test/' }, 'https://other.test')).bound.requestId).toBeTruthy();
+    await expect(begin({ ...web, returnUrl: 'https://other.test/' }, 'https://app.test')).rejects.toThrow('must belong to the initiating origin');
+    // The desktop app's renderer sends its own Origin and binds no client origin, as a native app does.
+    expect((await begin(nativeContext(), 'app://flow')).bound.requestId).toBeTruthy();
+  });
+  it('validates bodies as the server does', async () => {
+    await expect(h.startHandoff({ ...nativeContext(), codeChallenge: 'short', codeChallengeMethod: 'S256' }, undefined, 'ip')).rejects.toThrow('codeChallenge');
+    await expect(h.startHandoff({ ...nativeContext(), codeChallenge: 'a'.repeat(43), codeChallengeMethod: 'plain' }, undefined, 'ip')).rejects.toThrow('codeChallengeMethod');
+    await expect(h.startHandoff({ ...nativeContext(), extra: 1 as unknown, codeChallenge: 'a'.repeat(43), codeChallengeMethod: 'S256' }, undefined, 'ip')).rejects.toThrow('Unrecognized key');
+    await expect(h.startHandoff(undefined, undefined, 'ip')).rejects.toMatchObject({ code: 'validation' });
+  });
+  it('is off without return URLs', async () => {
+    await expect(core.startHandoff({ ...nativeContext(), codeChallenge: 'a'.repeat(43), codeChallengeMethod: 'S256' }, undefined, 'ip')).rejects.toThrow('not allowlisted');
+  });
+  it('limits starts to 30 per address in ten minutes', async () => {
+    for (let i = 0; i < 30; i++) await begin();
+    await expect(begin()).rejects.toMatchObject({ statusCode: 429, code: 'rate_limited' });
+  });
+  it('signs in no agent', async () => {
+    const { user } = await person();
+    const { bound, verifier } = await begin();
+    const code = codeOf((await h.approveHandoff(user.id, bound)).callbackUrl);
+    nodeSqlOf(h).exec('UPDATE users SET is_agent = 1 WHERE id = ?', user.id);
+    await expect(h.exchangeHandoff({ ...bound, code, codeVerifier: verifier }, undefined, '1.2.3.4')).rejects.toThrow();
   });
 });
 

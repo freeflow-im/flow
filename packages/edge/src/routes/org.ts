@@ -4,6 +4,7 @@ import { getCookie } from 'hono/cookie';
 import { PatchMeBody, type UserDTO } from '@flow/shared';
 import type { AuthKind } from '../directory/core';
 import { hashToken, newId } from '../directory/core';
+import { listVar } from '../directory/authHandoff';
 import { ApiError, badRequest, notFound, unauthorized } from '../errors';
 import { directory, type AuthEnv } from './auth';
 
@@ -13,6 +14,7 @@ export interface OrgRouteEnv extends AuthEnv {
   APPLE_AUDIENCE?: string;
   FLOW_SERVER_NAME?: string;
   FLOW_MAX_FILE_BYTES?: string;
+  FLOW_HANDOFF_RETURN_URLS?: string;
 }
 type C = Context<{ Bindings: OrgRouteEnv }>;
 
@@ -68,7 +70,7 @@ orgRoutes.get('/v1/client-info', (c) => {
     displayName: c.env.FLOW_SERVER_NAME ?? 'Flow',
     authMethods: ['password', 'email-link', ...(c.env.GOOGLE_CLIENT_ID ? ['google'] : []), ...(c.env.APPLE_AUDIENCE ? ['apple'] : [])],
     registrationAvailable: true,
-    capabilities: { browserConnections: true, authHandoff: false, push: false, pushRouting: false, desktop: true, socketPerOrganization: true },
+    capabilities: { browserConnections: true, authHandoff: listVar(c.env.FLOW_HANDOFF_RETURN_URLS).length > 0, push: false, pushRouting: false, desktop: true, socketPerOrganization: true },
   });
 });
 orgRoutes.get('/v1/config', (c) => c.json({
@@ -78,7 +80,6 @@ orgRoutes.get('/v1/config', (c) => c.json({
   maxFileBytes: Number(c.env.FLOW_MAX_FILE_BYTES ?? 100 * 1024 * 1024),
   huddles: false,
 }));
-orgRoutes.get('/v1/help/topics', (c) => c.json({ topics: [] }));
 
 /** A person's profile lives in the directory, with a copy in each of their organizations. */
 async function afterProfileChange(c: C, user: UserDTO): Promise<void> {

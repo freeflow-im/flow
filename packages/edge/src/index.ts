@@ -9,6 +9,7 @@ import { docsRoutes } from './routes/docs';
 import { handoffRoutes } from './routes/handoff';
 import { pageRoutes } from './routes/pages';
 import { adminRoutes } from './routes/admin';
+import { helpRoutes } from './routes/help';
 
 export { Directory } from './directory/object';
 export { Org } from './org/object';
@@ -49,6 +50,7 @@ ported.onError(onError);
 ported.route('/', handoffRoutes as never);
 ported.route('/', docsRoutes as never);
 ported.route('/', authRoutes as never);
+ported.route('/', helpRoutes as never);
 ported.route('/', orgRoutes as never);
 ported.route('/', pageRoutes as never);
 app.use('*', async (c, next) => {
