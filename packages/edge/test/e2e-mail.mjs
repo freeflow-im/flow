@@ -256,6 +256,10 @@ r=await getRaw(`${P}/messages?folder=INBOX&category=forums&limit=5`,{'x-mail-tes
 const rl2=await recheckLine(at);
 t('cache: the re-check forgets a message moved away by another app',/ 1 gone, /.test(rl2??''),rl2);
 r=await api(A.token,'GET',`${P}/messages?folder=INBOX&category=primary&limit=50`);t('cache: and it is not in the tab list',r.s===200&&!r.j.messages?.some(m=>m.uid===gone?.uid),JSON.stringify(tagged(r.j.messages).map(m=>m.subject)));
+t('cache: each message in a tab says why',r.j.messages?.length>0&&r.j.messages.every(m=>typeof m.categoryReason==='string'&&m.categoryReason.length>0),JSON.stringify(r.j.messages?.map(m=>m.categoryReason)).slice(0,170));
+r=await api(A.token,'GET',`${P}/debug/tabs?uids=${r.j.messages?.[0]?.uid}`);
+t('debug: the last re-check and the cache by tab and reason',r.s===200&&r.j.log?.some(e=>e.kind==='recheck'&&e.gone===1)&&r.j.counts?.some(c=>c.category==='primary'&&c.n>0)&&r.j.messages?.length===1&&typeof r.j.messages[0].reason==='string',r.s+' '+JSON.stringify(r.j).slice(0,170));
+r=await api(Bo.token,'GET',`${P}/debug/tabs`);t('debug: not for anyone else',r.s===404,r.s);
 
 // A fresh account on the same mailbox, sorting one message per step: a page that comes back short says `sorting`, and asked
 // again (as the client does) it fills in; together the tabs list every INBOX message once, newest first.

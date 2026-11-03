@@ -35,3 +35,20 @@ export function writeTabParam(params: URLSearchParams, tab: Category | null): vo
   if (tab && tab !== 'primary') params.set('tab', tab);
   else params.delete('tab');
 }
+
+/**
+ * Why a message is in the tab it shows in, in plain words, from its `categoryReason` (see api.ts): "Gmail puts this in
+ * Updates", "You moved mail from this sender to Primary", "Gmail gives this no category", "Sorted by its headers:
+ * newsletter". `shown` is the tab it shows in: a category whose tab is off shows in Primary, and the words say so.
+ */
+export function reasonText(reason: string | undefined, shown: Category): string {
+  const label = (c: string) => TAB_INFO[c as Category]?.label ?? c;
+  const offNote = (c: string) => (c !== shown && shown === 'primary' ? `; the ${label(c)} tab is off, so it is in Primary` : '');
+  if (!reason) return `No reason recorded for why this is in ${label(shown)}`;
+  const moved = /^sender moved to (\w+)$/.exec(reason)?.[1];
+  if (moved) return `You moved mail from this sender to ${label(moved)}${offNote(moved)}`;
+  const gmail = /^Gmail category:(\w+)$/.exec(reason)?.[1];
+  if (gmail) return `Gmail puts this in ${label(gmail)}${offNote(gmail)}`;
+  if (reason === 'Gmail: no category') return 'Gmail gives this no category, so it is in Primary';
+  return `Sorted by its headers: ${reason}`;
+}

@@ -21,7 +21,7 @@ import { keys, prefetchMessage, useAccounts, useFolders, useMessage, useMessageA
 import { emptyDraft, prefill, type ComposeMode } from './lib/compose';
 import { findSpecial, folderLabel } from './lib/folders';
 import { folderDropTarget, tabDropTarget, useCanDrag } from './lib/dnd';
-import { TAB_INFO, tabFromParam, tabsOf, writeTabParam } from './lib/tabs';
+import { TAB_INFO, reasonText, tabFromParam, tabsOf, writeTabParam } from './lib/tabs';
 import { cn } from './lib/utils';
 
 // The editor (TipTap) is most of the code: it loads when compose first opens.
@@ -569,7 +569,7 @@ export function App() {
           />
         ) : undefined
       }
-      tabMove={showTabs ? { tabs: accountTabs, current: category, onMove: moveToTab } : undefined}
+      tabMove={showTabs ? { tabs: accountTabs, current: category, onMove: moveToTab, onWhy: (m) => setToast(`${reasonText(m.categoryReason, m.category ?? 'primary')}.`) } : undefined}
       draggable={canDrag}
       sorting={!!messages.data?.pages[messages.data.pages.length - 1]?.sorting}
       onSearch={

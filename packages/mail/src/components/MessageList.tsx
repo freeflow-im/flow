@@ -3,7 +3,7 @@
 // more rows as the list scrolls to its end (`before=`). With a mouse, rows drag onto an inbox tab or a folder (lib/dnd.ts);
 // a checked row takes the other checked ones with it.
 import { useEffect, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
-import { Archive, ArrowLeft, Columns2, EllipsisVertical, FolderInput, PanelTop, Loader2, Mail, MailOpen, Menu, Paperclip, RefreshCw, Search, Star, Tag, Trash2, X } from 'lucide-react';
+import { Archive, ArrowLeft, CircleHelp, Columns2, EllipsisVertical, FolderInput, PanelTop, Loader2, Mail, MailOpen, Menu, Paperclip, RefreshCw, Search, Star, Tag, Trash2, X } from 'lucide-react';
 import type { Category, MailFolder, MessageSummary } from '../api';
 import { displayName } from '../lib/addresses';
 import { dragUids, startDrag } from '../lib/dnd';
@@ -56,7 +56,7 @@ export interface MessageListProps {
   /** The inbox tabs (InboxTabs), above the rows. */
   tabBar?: ReactNode | undefined;
   /** "Move to tab", for an inbox with tabs: the tabs, the one open (null while searching), and the move. */
-  tabMove?: { tabs: Category[]; current: Category | null; onMove(uids: number[], tab: Category): void } | undefined;
+  tabMove?: { tabs: Category[]; current: Category | null; onMove(uids: number[], tab: Category): void; onWhy?(m: MessageSummary): void } | undefined;
   /** Rows can be dragged onto a tab or a folder (a mouse or trackpad, not a touch screen). */
   draggable?: boolean | undefined;
   /** The last page came back short while the server sorts older mail into tabs; it is asked for again shortly. */
@@ -355,6 +355,11 @@ export function MessageList(p: MessageListProps) {
                                 <TabItems tabs={tabTargets(m.category ?? p.tabMove.current)} onSelect={(t) => p.tabMove!.onMove([m.uid], t)} />
                               </DropdownMenuSubContent>
                             </DropdownMenuSub>
+                            {p.tabMove.onWhy && m.category && (
+                              <DropdownMenuItem onSelect={() => p.tabMove!.onWhy!(m)}>
+                                <CircleHelp /> Why is this in {TAB_INFO[m.category].label}?
+                              </DropdownMenuItem>
+                            )}
                           </>
                         )}
                       </DropdownMenuContent>

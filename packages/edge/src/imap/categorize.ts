@@ -1,6 +1,6 @@
 // Gmail-style inbox tabs (docs/specs/mail-api.md, "Inbox tabs"): which tab an INBOX message goes to. Pure, so
-// categorize.test.ts can feed it real header sets. Gmail accounts use Gmail's own categories (X-GM-RAW searches over a UID
-// range, `gmailCategorySearches` below); every other server is classified here from a handful of headers. Either answer is
+// categorize.test.ts can feed it real header sets. Gmail accounts use Gmail's own categories (X-GM-RAW searches over UID ranges,
+// gmailTabs.ts); every other server is classified here from a handful of headers. Either answer is
 // cached per message in the Mail object's SQLite, and the tabs are read from that cache.
 //
 // The rules, in order (the first that matches decides, and its reason is kept for debugging):
@@ -151,23 +151,6 @@ export function normalizeTabs(tabs: readonly string[] | null | undefined): TabCa
 }
 
 // ---- Gmail ---------------------------------------------------------------------------------------------------------
-
-/**
- * The X-GM-RAW searches that sort some INBOX UIDs into Gmail's own categories: one per category, each limited to the UIDs'
- * range (`UID min:max X-GM-RAW "category:promotions"`), so only those messages are looked at. All four are asked whatever
- * tabs are on: the cache keeps Gmail's answer, and which tabs are on applies when reading it (`effective`).
- */
-export function gmailCategorySearches(uids: readonly number[]): { tab: TabCategory; query: { uid: string; gmraw: string } }[] {
-  if (!uids.length) return [];
-  let min = Infinity, max = 0;
-  for (const u of uids) { if (u < min) min = u; if (u > max) max = u; }
-  return gmailRangeSearches(min === max ? String(min) : `${min}:${max}`);
-}
-
-/** Gmail's four category searches over a UID range (`<min>:<max>`, or `<floor>:*` for the re-check of the newest mail). */
-export function gmailRangeSearches(uid: string): { tab: TabCategory; query: { uid: string; gmraw: string } }[] {
-  return TAB_CATEGORIES.map((tab) => ({ tab, query: { uid, gmraw: `category:${tab}` } }));
-}
 
 /**
  * A tab's page from its cached UIDs below the cursor, newest first (`rows`: up to limit + 1 of them, all at or above the
