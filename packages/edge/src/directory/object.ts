@@ -4,6 +4,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { ApiError } from '../errors';
 import { sendMail, type MailEnv } from '../mail';
 import { DirectoryCore } from './core';
+import { listVar } from './authHandoff';
 import { insertRows, type ImportRow } from '../importing';
 
 export type DirectoryAnswer<T> = { ok: true; value: T } | { ok: false; status: number; code: string; message: string };
@@ -11,6 +12,8 @@ export type DirectoryAnswer<T> = { ok: true; value: T } | { ok: false; status: n
 export interface DirectoryEnv extends MailEnv {
   WEB_URL_BASE: string;
   REGISTRATION_ENABLED?: string;
+  FLOW_HANDOFF_RETURN_URLS?: string;
+  FLOW_ALLOWED_WEB_ORIGINS?: string;
 }
 
 /** The core's methods, which are what a Worker may call. */
@@ -25,6 +28,8 @@ export class Directory extends DurableObject<DirectoryEnv> {
       webUrlBase: env.WEB_URL_BASE,
       registrationEnabled: env.REGISTRATION_ENABLED !== '0',
       send: (mail) => sendMail(env, mail),
+      handoffReturnUrls: listVar(env.FLOW_HANDOFF_RETURN_URLS),
+      allowedWebOrigins: listVar(env.FLOW_ALLOWED_WEB_ORIGINS),
     });
   }
 

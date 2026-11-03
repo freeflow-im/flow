@@ -64,7 +64,7 @@ move. It comes after phase 4 (Docs respecting the current organization) and befo
 | APNs pushes (`pushOutbox`) | A Worker fetching APNs over HTTP/2 from a Queue consumer. |
 | Cloudflare Email (already) | Unchanged. Inbound community email (`communityEmail`) becomes an Email Worker. |
 | Nightly dumps, orphan sweeps | Cron Triggers; each Org DO exports itself to R2 on an alarm. |
-| LiteParse / Tesseract (PDF to Markdown, OCR) | A Cloudflare Container started from a Durable Object: LiteParse does not load on Workers (`cloudflare-spikes.md`). Not tried yet. |
+| LiteParse / Tesseract (PDF to Markdown, OCR) | PDF to Markdown runs in the Worker with pdf.js (`packages/edge/src/docs/runtime/pdfText.ts`): text PDFs only, with headings, lists and links, no tables. OCR of scanned pages is not available; if it is needed, a Cloudflare Container running LiteParse and Tesseract (`cloudflare-spikes.md`). |
 
 ## 3. The order: one context at a time, both stacks live
 
@@ -223,7 +223,7 @@ needs a decision, a short spike comes first and its result goes in `decision_log
 
 **Step 6, the long tail.** (small PRs as each is reached)
 - Pushes: a Queue consumer speaking APNs over HTTP/2. Email: already Cloudflare; inbound community email
-  as an Email Worker. Unfurls: a fetch with the Cache API. Huddles: LiveKit tokens minted in the Worker.
+  as an Email Worker. Unfurls: done, on the Workers `fetch`, cached in the organization's SQLite as on Node. Huddles: LiveKit tokens minted in the Worker.
   Help pages: static. Nightly: each object exports itself to R2 on an Alarm; a Cron Trigger checks they did.
 
 **Step 7, retire the origin.**

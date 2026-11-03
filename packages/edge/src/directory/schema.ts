@@ -99,4 +99,24 @@ export const DIRECTORY_MIGRATIONS: string[] = [
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     expires_at INTEGER NOT NULL
   );`,
+  // The web-to-app sign-in handoff (authHandoff.ts), the server's auth_handoffs; and the server's rate_limit_windows,
+  // for the limits on starting and exchanging one.
+  `CREATE TABLE auth_handoffs (
+    request_hash TEXT PRIMARY KEY,
+    connection_id TEXT NOT NULL,
+    operation_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    server_origin TEXT NOT NULL,
+    client_origin TEXT,
+    return_url TEXT NOT NULL,
+    code_challenge TEXT NOT NULL,
+    code_hash TEXT UNIQUE,
+    user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+    expires_at INTEGER NOT NULL
+  );
+  CREATE TABLE rate_limit_windows (
+    key TEXT PRIMARY KEY,
+    window_start INTEGER NOT NULL,
+    count INTEGER NOT NULL
+  );`,
 ];

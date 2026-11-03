@@ -30,6 +30,13 @@ if(ev.status===200){const rd=ev.body.getReader();const first=await Promise.race(
 // Opt in with PDF=1: it needs Browser Rendering, which has not yet worked under local `wrangler dev` (it hung downloading a browser).
 if(process.env.PDF){const pdf=await fetch(B+`/api/files/${DOC}/export?format=pdf`,{headers:{authorization:'Bearer '+A.token},signal:AbortSignal.timeout(90_000)});const pb=Buffer.from(await pdf.arrayBuffer());
 t('a document as a PDF, printed by the browser binding',pdf.status===200&&pb.subarray(0,5).toString()==='%PDF-',pdf.status+' '+pb.subarray(0,120).toString().replace(/\s+/g,' '));}
+// PDF to Markdown, with pdf.js on the Worker (src/docs/runtime/pdfText.ts).
+const fixture=n=>fs.readFileSync(new URL(`./fixtures/${n}`,import.meta.url));
+r=await api(A.token,'POST',`/api/import/pdf?workspace=${W}&shared=1&filename=${encodeURIComponent('Q3 Report.pdf')}`,fixture('report.pdf'),'application/octet-stream');t('upload a PDF',r.s===200&&r.j.file?.id,r.s+' '+JSON.stringify(r.j).slice(0,120));
+r=await api(A.token,'POST',`/api/files/${r.j.file?.id}/markdown`);t('turn it into Markdown',r.s===200&&r.j.doc?.kind==='markdown'&&r.j.doc?.title==='Q3 Report'&&r.j.pages===2,r.s+' '+JSON.stringify(r.j).slice(0,160));
+r=await api(A.token,'GET',`/api/markdown/${r.j.doc?.id}`);t('the Markdown has its text and headings',/^# Quarterly Report\n\nThe office filed every expense/.test(r.j.doc?.text??'')&&(r.j.doc?.text??'').includes('## Next Steps'),JSON.stringify(r.j.doc?.text??r.j).slice(0,160));
+r=await api(A.token,'POST',`/api/import/pdf?workspace=${W}&shared=1&filename=scan.pdf`,fixture('scan.pdf'),'application/octet-stream');
+r=await api(A.token,'POST',`/api/files/${r.j.file?.id}/markdown`);t('a scan says it needs OCR',r.s===400&&/OCR/.test(r.j.error),r.s+' '+JSON.stringify(r.j).slice(0,160));
 r=await api(Bo.token,'GET',`/api/sheets?workspace=${W2}&shared=1`);t('the other organization is separate',!JSON.stringify(r.j).includes(S),JSON.stringify(r.j).slice(0,100));
 r=await api(null,'GET','/api/sheets');t('no session refused',r.s===401,r.s);
 console.log(`\n${pass} passed, ${fail} failed`);process.exit(fail?1:0);

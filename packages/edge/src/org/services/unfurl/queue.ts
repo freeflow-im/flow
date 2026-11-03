@@ -5,6 +5,14 @@
 // un-unfurled until the message is edited. That is the accepted trade for not
 // adding JetStream or a jobs table. Everything here is therefore best-effort
 // and must never block or fail a message send.
+//
+// On Workers the queue lives in the organization's Durable Object, which keeps
+// running a job's fetches and retry timers after the request that queued it has
+// been answered, and does not hibernate while they are pending. One isolate can
+// hold several organizations' objects, so they share the queue: each job runs
+// in the async context it was queued from (the database and the sockets of its
+// own organization, org/db and org/bus), whichever job's completion starts it.
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { hostMatchesDomain } from './urls.js';
 
 /** §3: max concurrent connections to one host. */
@@ -60,7 +68,12 @@ export class UnfurlQueue {
     if (this.stopped) return false;
     if (this.inFlight.has(job.key) || this.pending.some((j) => j.key === job.key)) return false;
     if (this.depth >= MAX_QUEUE_DEPTH) return false;
-    this.pending.push(job);
+    const inContext = AsyncLocalStorage.snapshot();
+    this.pending.push({
+      ...job,
+      run: (attempt) => inContext(() => job.run(attempt)),
+      ...(job.onError ? { onError: (err: unknown) => inContext(() => job.onError!(err)) } : {}),
+    });
     void this.drain();
     return true;
   }

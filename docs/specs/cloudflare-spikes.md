@@ -142,7 +142,7 @@ The Worker with all of it bundles to 2.1 MB gzipped and starts in workerd. `test
 documents and Markdown created, listed, read by id alone, saved with the body round-tripping through R2, uploads and downloads,
 the revision feed streaming, separation between organizations, and refusals. `test/e2e.mjs` still passes its 67.
 
-**Not working on Workers yet:** PDFs (Chromium; Browser Rendering is next), PDF to Markdown (LiteParse; a container), the ChatGPT plugin's
+**Not working on Workers yet:** PDFs (Chromium; Browser Rendering is next), OCR of scanned PDFs (PDF to Markdown itself runs on pdf.js), the ChatGPT plugin's
 own pages and file links (`plugin/server/http.ts` writes to Node's raw response), telling text files from others for the text editor
 (it reads the file synchronously, so every file counts as not text), the assistant (it should run, but has not been tried without
 a model key), Office imports (should run per Spike B; not tried here), and the Docs pages themselves, which the origin still serves.

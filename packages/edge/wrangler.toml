@@ -15,6 +15,12 @@ routes = [
   { pattern = "mcpdocs.freeflow.im/*", zone_name = "freeflow.im" },
 ]
 
+# The built-in help (docs/help, and What's New from changelog/) bundled into src/help/bundle.generated.ts; runs before
+# `wrangler dev` and `wrangler deploy`.
+[build]
+command = "node scripts/help.mjs"
+watch_dir = ["../../docs/help", "../../changelog"]
+
 # scripts/assemble.mjs fills public/: the built files of both clients, never their pages.
 # The Worker runs first so that it alone decides what a path is; a miss comes back to it and goes to the origin.
 [assets]
@@ -37,6 +43,9 @@ ASSET_HOSTS = "app.freeflow.im,edge.freeflow.im"
 # The hosts the ported API answers on: app.freeflow.im since the cut-over (2026-11-02).
 PORTED_HOSTS = "edge.freeflow.im,app.freeflow.im"
 WEB_URL_BASE = "https://app.freeflow.im"
+# The web-to-app sign-in handoff's return destinations, exact (the server's FLOW_HANDOFF_RETURN_URLS): the Mac, iOS and
+# desktop apps' flow://signin, and the web client's own page. None turns the handoff off, and /v1/client-info says so.
+FLOW_HANDOFF_RETURN_URLS = "flow://signin,https://app.freeflow.im/"
 FLOW_WEB_URL = "https://app.freeflow.im"
 
 [[durable_objects.bindings]]

@@ -5,6 +5,7 @@ import { getCookie } from 'hono/cookie';
 import { PatchMeBody, type UserDTO } from '@flow/shared';
 import type { AuthKind } from '../directory/core';
 import { hashToken, newId } from '../directory/core';
+import { listVar } from '../directory/authHandoff';
 import { ApiError, badRequest, notFound, unauthorized } from '../errors';
 import { directory, type AuthEnv } from './auth';
 
@@ -23,6 +24,7 @@ export interface OrgRouteEnv extends AuthEnv {
   FLOW_APNS_KEY?: string;
   FLOW_APNS_KEY_ID?: string;
   FLOW_APNS_TEAM_ID?: string;
+  FLOW_HANDOFF_RETURN_URLS?: string;
 }
 
 const huddlesEnabled = (env: OrgRouteEnv) => !!(env.LIVEKIT_API_KEY && env.LIVEKIT_API_SECRET && env.LIVEKIT_URL);
@@ -81,7 +83,7 @@ orgRoutes.get('/v1/client-info', (c) => {
     displayName: c.env.FLOW_SERVER_NAME ?? 'Flow',
     authMethods: ['password', 'email-link', ...(c.env.GOOGLE_CLIENT_ID ? ['google'] : []), ...(c.env.APPLE_AUDIENCE ? ['apple'] : [])],
     registrationAvailable: true,
-    capabilities: { browserConnections: true, authHandoff: false, push: pushEnabled(c.env), pushRouting: true, desktop: true, socketPerOrganization: true },
+    capabilities: { browserConnections: true, authHandoff: listVar(c.env.FLOW_HANDOFF_RETURN_URLS).length > 0, push: pushEnabled(c.env), pushRouting: true, desktop: true, socketPerOrganization: true },
   });
 });
 orgRoutes.get('/v1/config', (c) => c.json({
@@ -91,7 +93,6 @@ orgRoutes.get('/v1/config', (c) => c.json({
   maxFileBytes: Number(c.env.FLOW_MAX_FILE_BYTES ?? 100 * 1024 * 1024),
   huddles: huddlesEnabled(c.env),
 }));
-orgRoutes.get('/v1/help/topics', (c) => c.json({ topics: [] }));
 
 /**
  * LiveKit's webhook names no organization, only a room, whose name is the channel's id. The signature is checked here

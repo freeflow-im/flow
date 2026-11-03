@@ -86,6 +86,7 @@ import * as us from '../services/users.js';
 import * as cem from '../services/communityEmail.js';
 import { deleteMyAccount } from '../services/accountDeletion.js';
 import * as unfurl from '../services/unfurl/index.js';
+import { UNFURL_IMAGE_TYPES } from '../services/unfurl/images.js';
 import * as ag from '../services/agents.js';
 import * as wi from '../services/workspaceInvites.js';
 import * as ar from '../services/artifacts.js';
@@ -280,8 +281,9 @@ export function registerRoutes(app: FastifyInstance): void {
   app.get('/v1/unfurl-images/:key', { preHandler: requireAuth }, async (req, reply) => {
     const { key } = req.params as { key: string };
     const data = await unfurl.getUnfurlImage(key);
+    const ext = key.slice(key.lastIndexOf('.') + 1) as keyof typeof UNFURL_IMAGE_TYPES;
     return reply
-      .header('content-type', 'image/webp')
+      .header('content-type', UNFURL_IMAGE_TYPES[ext] ?? 'application/octet-stream')
       .header('cache-control', 'private, max-age=31536000, immutable') // key is a content hash
       .header('x-content-type-options', 'nosniff')
       .send(data);
