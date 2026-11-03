@@ -90,7 +90,7 @@ export function DocsSuiteBar() {
           { id: 'docs', label: 'Docs', href: `${import.meta.env.BASE_URL}`, active: true, onSelect: () => navigate('/') },
           // Chat's count: the selected organization's unread notifications, as Chat's own tab shows them.
           { id: 'chat', label: 'Chat', href: '/', badge: active?.unreadCount ?? 0 },
-          { id: 'mail', label: 'Mail', href: '', disabled: true },
+          { id: 'mail', label: 'Mail', href: '/mail' },
           { id: 'calendar', label: 'Calendar', href: '', disabled: true },
         ]}
         organization={{

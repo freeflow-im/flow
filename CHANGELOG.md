@@ -13,6 +13,7 @@ This file keeps two things:
 ## Parity
 
 - **The FreeFlow suite bar and the blue accent are web-only for now (2026-11-02, FreeFlow suite §2.5).** Web replaced the workspace rail and the sidebar's status footer with the bar, and re-pointed the violet to the suite's blue and navy; macOS, iOS and the desktop shell keep the rail and the violet until phase 6 brings the suite to them. Gap to close.
+- **FreeFlow Mail (`/mail`) is web-only for now (2026-11-03, FreeFlow suite).** The suite bar's Mail tab opens it in the browser (and so in the desktop shell); macOS and iOS have no Mail yet. Gap to close with the suite's phase 6.
 - **The Slack provider is removed on every client (2026-11-01, FreeFlow suite §2.0).** Web ships on merge; macOS and iOS carry it until their next release, which closes this line.
 - **Slack connections are removed from web (2026-11-01, FreeFlow suite §2.0); macOS and iOS still carry the Slack provider until their own removal PRs land.** Gap to close, not a divergence to keep.
 - Multi-server huddles (#541): web leaves the room when switching server; native keeps it running with a return control. Both limit the client to one joined room.

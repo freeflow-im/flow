@@ -7,7 +7,7 @@
 # DATABASE_URL, NATS_URL, FLOW_DATA_KEY and FLOW_WEB_URL (DEPLOYMENT.md §4); the Workspace app's own settings are
 # listed in docs/ops/DEPLOYMENT.md. Node from packages/docs/.node-version. Chromium is for the Workspace app's PDFs.
 
-# --- Build: shared, web, server and the Workspace app with their dev dependencies (and the suite bar both clients bundle) ------------------------------------
+# --- Build: shared, web, server, the Workspace app and Mail with their dev dependencies (and the suite bar the clients bundle) ------------------------------------
 FROM node:24.22.1-bookworm-slim AS build
 
 # The workspace's pnpm, pinned by the root package.json's packageManager field.
@@ -25,8 +25,9 @@ COPY packages/agent-bridge/package.json packages/agent-bridge/
 COPY packages/docs/package.json packages/docs/
 COPY packages/docs/vendor packages/docs/vendor
 COPY packages/suite-bar/package.json packages/suite-bar/
+COPY packages/mail/package.json packages/mail/
 COPY apps/desktop/package.json apps/desktop/
-RUN pnpm install --frozen-lockfile --filter @flow/server... --filter @flow/web... --filter @flow/docs...
+RUN pnpm install --frozen-lockfile --filter @flow/server... --filter @flow/web... --filter @flow/docs... --filter @flow/mail...
 
 # The web build reads the changelog (FEATURES.md, through scripts/build-features.mjs) and the agent skill from the
 # repository root.
@@ -39,6 +40,9 @@ COPY packages/web packages/web
 COPY packages/docs packages/docs
 # The suite bar's sources, bundled into both clients (nothing of it is needed at run time).
 COPY packages/suite-bar packages/suite-bar
+# FreeFlow Mail's client. The server does not serve it: the edge Worker does, from this image's copy
+# (deploy-edge.yml copies packages/mail/dist out, as it does the other clients').
+COPY packages/mail packages/mail
 
 # The build tag the web client shows (vite.config.ts reads BUILD_SHA first; there is no .git in the build context).
 # The Workspace app's client is built for /workspace (BASE_PATH), where the suite serves it.
@@ -46,7 +50,8 @@ ARG GIT_COMMIT_SHA
 RUN pnpm --filter @flow/shared build \
   && BUILD_SHA=$(printf '%.7s' "${GIT_COMMIT_SHA:-dev}") pnpm --filter @flow/web build \
   && pnpm --filter @flow/server build \
-  && BASE_PATH=/workspace/ pnpm --filter @flow/docs build
+  && BASE_PATH=/workspace/ pnpm --filter @flow/docs build \
+  && pnpm --filter @flow/mail build
 
 # --- Run: the production dependencies and the built output, in the repository's layout ------------------------------
 FROM node:24.22.1-bookworm-slim
@@ -77,6 +82,8 @@ RUN pnpm install --frozen-lockfile --prod --filter @flow/server... --filter @flo
 COPY --from=build /app/packages/shared/dist packages/shared/dist
 COPY --from=build /app/packages/server/dist packages/server/dist
 COPY --from=build /app/packages/web/dist packages/web/dist
+# Not served from here: kept in the image for the edge Worker's deploy to copy out (deploy-edge.yml).
+COPY --from=build /app/packages/mail/dist packages/mail/dist
 COPY --from=build /app/FEATURES.md ./
 COPY packages/server/assets packages/server/assets
 COPY packages/server/scripts packages/server/scripts

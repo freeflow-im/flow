@@ -44,6 +44,11 @@ describe('the front door', () => {
     expect(res.headers.get('Cache-Control')).toContain('immutable');
   });
 
+  it('and for the Mail client', async () => {
+    const res = await app.request('https://app.example/mail/assets/m-1.js', {}, env({ '/mail/assets/m-1.js': 'js' }));
+    expect(res.headers.get('Cache-Control')).toContain('immutable');
+  });
+
   it('leaves the cache headers of a file whose name is not hashed', async () => {
     const res = await app.request('https://app.example/logo.svg', {}, env({ '/logo.svg': '<svg/>' }));
     expect(res.headers.get('Cache-Control')).toBe('public, max-age=0');

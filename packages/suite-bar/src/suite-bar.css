@@ -634,10 +634,13 @@
   .sb-notifications {
     display: none;
   }
+  /* Three live tabs (Docs, Chat, Mail) leave the organization's name what is left: it shrinks rather than overlap. */
   .sb-left {
     flex: 0 1 auto;
+    min-width: 0;
   }
   .sb-org-btn {
+    min-width: 0;
     max-width: 120px;
     gap: 4px;
     padding: 0 6px 0 8px;
@@ -651,7 +654,7 @@
   }
   .sb-tab {
     gap: 6px;
-    padding: 0 16px;
+    padding: 0 12px;
   }
   .sb-right {
     flex: none;
