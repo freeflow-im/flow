@@ -199,9 +199,32 @@ export function MessageView(p: MessageViewProps) {
                 </div>
               </div>
             )}
+            {/* As Gmail ends a message: answer it without going back up to the toolbar. */}
+            <div className="mt-6 flex flex-wrap gap-2 pb-6">
+              <EndButton label="Reply" onClick={p.onReply}>
+                <Reply />
+              </EndButton>
+              {m.to.length + m.cc.length > 1 && (
+                <EndButton label="Reply all" onClick={p.onReplyAll}>
+                  <ReplyAll />
+                </EndButton>
+              )}
+              <EndButton label="Forward" onClick={p.onForward}>
+                <Forward />
+              </EndButton>
+            </div>
           </article>
         )}
       </div>
     </section>
+  );
+}
+
+function EndButton({ label, onClick, children }: { label: string; onClick(): void; children: React.ReactNode }) {
+  return (
+    <button type="button" onClick={onClick} className="inline-flex h-9 items-center gap-2 rounded-full border border-[#747775] bg-white px-5 text-sm font-medium text-ink hover:bg-hover [&_svg]:size-[18px]">
+      {children}
+      {label}
+    </button>
   );
 }
