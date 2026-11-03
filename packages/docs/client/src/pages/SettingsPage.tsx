@@ -422,6 +422,8 @@ function ConnectedAgents() {
   const [mcpUrl, setMcpUrl] = useState<string | null>(null);
   // The desktop app's own server, and whether it is running (another copy of the app may hold its port).
   const [local, setLocal] = useState<{ running: boolean } | null>(null);
+  // In the suite every agent signed in to this account is listed (not only device sign-ins), each with its organization.
+  const [everySignIn, setEverySignIn] = useState(false);
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -434,6 +436,7 @@ function ConnectedAgents() {
         setAgents(res.agents);
         setMcpUrl(res.mcpUrl ?? null);
         setLocal(res.local ? { running: res.running !== false } : null);
+        setEverySignIn(!!res.everySignIn);
       })
       .catch((e) => setError(e instanceof Error ? e.message : String(e)));
   }, []);
@@ -492,7 +495,9 @@ function ConnectedAgents() {
         <p className="changes-intro">
           {local
             ? 'Agents you allowed on this computer can read and change the files in the folders you open. Disconnect one to stop its access right away; it would have to be allowed again.'
-            : 'Agents you signed in with a device code can read and change your files. Disconnect one to stop its access right away; it would have to be signed in again.'}
+            : everySignIn
+              ? 'Agents you allowed can read and change the Docs files of the organization you chose for each. Disconnect one to stop its access right away; it would have to be signed in again.'
+              : 'Agents you signed in with a device code can read and change your files. Disconnect one to stop its access right away; it would have to be signed in again.'}
         </p>
       )}
       {error && <div className="form-error">{error}</div>}
@@ -505,6 +510,7 @@ function ConnectedAgents() {
           <thead>
             <tr>
               <th>Agent</th>
+              {everySignIn && <th>Organization</th>}
               {!local && <th>Signed in from</th>}
               <th>Connected</th>
               {!local && <th>Last active</th>}
@@ -518,6 +524,7 @@ function ConnectedAgents() {
                   <div className="agents-name">{a.name}</div>
                   <div className="agents-endpoint">{a.endpoint}</div>
                 </td>
+                {everySignIn && <td>{a.organization ?? ''}</td>}
                 {!local && <td>{a.origin}</td>}
                 <td>{when(a.connectedAt)}</td>
                 {!local && <td>{a.lastActiveAt ? when(a.lastActiveAt) : ''}</td>}

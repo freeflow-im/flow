@@ -15,8 +15,13 @@ Plan an afternoon: an hour to rehearse, an hour for the switch, and time to use 
 - Fixed after the switch: the MCP Docs desktop app's Google sign-in (#660, desktop 0.2.38).
 - Ported after the switch: the native apps' sign-in handoff and help pages (#661), link previews and PDF to Markdown for
   text PDFs (#663), pushes and huddles (#662; on once their settings are copied with `scripts/put-secrets.sh`).
-- Not moved, by decision (decision_log 2026-11-03): the ChatGPT plugin, `/mcp` and its OAuth stay on AWS, behind the
-  Worker. So AWS is not retired yet ("After a week" below waits for the plugin).
+- Not moved, by decision (decision_log 2026-11-03): the ChatGPT plugin stays on AWS, behind the Worker: `docs.freeflow.im`
+  and `mcpdocs.freeflow.im`, with their `/mcp`, `/oauth/*` and `/.well-known/oauth-*`. So AWS is not retired yet ("After
+  a week" below waits for the plugin).
+- Added after the switch: Docs' own MCP endpoint on Cloudflare, `https://app.freeflow.im/mcp` (and `/mcp/v2`), with its
+  OAuth on the same host (`/oauth/*`, `/.well-known/oauth-*`). Its sign-in is FreeFlow's session and its consent page
+  chooses the organization; state in the directory object (`docs/specs/web-mcp.md`). Only the ported hosts serve it: the
+  plugin's hosts above still reach AWS for those paths.
 
 ## What does not work on Cloudflare yet
 

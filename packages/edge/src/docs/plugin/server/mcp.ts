@@ -84,6 +84,10 @@ export interface McpOptions {
    * for a file outside it, `elsewhere`, its folder, which the app opens in a new tab. Throws ToolError when there is no such file.
    */
   openPath?: (path: string) => { kind: LibraryKind; id: string } | { elsewhere: string };
+  /** Where upload_file sends the bytes, when not `<publicUrl>/plugin/import` (the suite's /mcp/import). */
+  uploadUrl?: string;
+  /** Where the app shows files (`<appUrl>/f/<id>`), when not publicUrl (the suite's /workspace). */
+  appUrl?: string;
   /** Fetches files ChatGPT hands to import_file (tests pass a fake). */
   fetchFn?: typeof fetch;
 }
@@ -555,7 +559,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
       // Its text comes back too, when it has any (a PDF, a web page, a text file), and a picture is shown.
       const file = service.storedFile(id);
       const read = await service.readStored(id, undefined, undefined, version >= 2).catch((e: unknown) => (e instanceof ToolError ? null : Promise.reject(e)));
-      const f = service.hub.files.get(service.userId, id);
+      const f = service.hub.files.get(service.who, id);
       const picture = f && f.meta.type.startsWith('image/') ? await shownImage(f.file, f.meta.type, f.meta.size) : [];
       const result = ok({ file, ...(read ? { text_content: read, note: 'Read more of it with read_doc and this id as doc_id (from, to).' } : {}), ...service.state() });
       return picture.length ? { ...result, content: [...result.content, ...picture] } : result;
@@ -659,10 +663,11 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
       },
       async ({ file_name, folder, title }) =>
         guard(() => {
-          if (!opts.publicUrl) return fail('This server has no public address to upload to.');
+          const uploadTo = opts.uploadUrl ?? (opts.publicUrl ? `${opts.publicUrl}/plugin/import` : null);
+          if (!uploadTo) return fail('This server has no public address to upload to.');
           const into = folder ? service.folderPath(folder) : '';
-          const q = new URLSearchParams({ ticket: service.hub.issueTicket(service.userId, into), name: file_name, ...(title ? { title } : {}) });
-          const url = `${opts.publicUrl}/plugin/import?${q}`;
+          const q = new URLSearchParams({ ticket: service.hub.issueTicket(service.userId, into, service.orgId), name: file_name, ...(title ? { title } : {}) });
+          const url = `${uploadTo}?${q}`;
           return ok({
             upload_url: url,
             method: 'POST',
@@ -695,7 +700,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     },
     async ({ file_id, offset, max_chars }) =>
       guard(async () => {
-        const f = service.hub.files.get(service.userId, file_id);
+        const f = service.hub.files.get(service.who, file_id);
         if (!f) return fail(`There is no file ${file_id}. Use list_files to find ids (kind file).`);
         const about = { file_id, filename: f.meta.filename, type: f.meta.type, size: f.meta.size };
         if (f.meta.size > MAX_READ_FILE_BYTES) {
@@ -937,7 +942,8 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
         // Removing a background takes a model the app here cannot load. Said at once, before anything is done,
         // with where it can be done.
         if (remove_background) {
-          const where = opts.publicUrl ? ` Open ${f.meta.filename} there: ${opts.publicUrl}/f/${encodeURIComponent(f.meta.id)} , choose Edit, then Magic and Remove background (or ask the assistant there).` : '';
+          const appAt = opts.appUrl ?? opts.publicUrl;
+          const where = appAt ? ` Open ${f.meta.filename} there: ${appAt}/f/${encodeURIComponent(f.meta.id)} , choose Edit, then Magic and Remove background (or ask the assistant there).` : '';
           throw new ToolError(`Removing a background is only available in the full ${appName(!!opts.local)} app, not here.${where} Nothing was changed. The other changes can be made here: call transform_image again without remove_background.`);
         }
         if (!operations.length) throw new ToolError('Give at least one change to make: crop, rotate, straighten, flip, adjust, filter, redact, shapes, text, overlays or resize_width.');

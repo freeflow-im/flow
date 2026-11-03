@@ -8,6 +8,8 @@ import { buildApp } from './server/app.ts';
 import { insertRows, tableCounts } from '../importing';
 import { setBrowserBinding } from './server/pdf.ts';
 import { setOcrBinding } from './runtime/pdfOcr.ts';
+import { handleMcp, handleMcpImport, suiteHub, type McpRequestCaller } from './plugin/server/worker.ts';
+import type { FileHub } from './plugin/server/files.ts';
 
 export interface DocsEnv {
   BLOBS: R2Bucket;
@@ -24,6 +26,8 @@ export class Docs extends DurableObject<DocsEnv> {
   private readonly app = new DocsApp();
   private readonly context: DocsContext;
   private readonly ready: Promise<unknown>;
+  /** The MCP endpoint's view of this object's stores (plugin/server/worker.ts), made once the app has opened them. */
+  private hub: FileHub | null = null;
 
   constructor(ctx: DurableObjectState, env: DocsEnv) {
     super(ctx, env);
@@ -66,6 +70,7 @@ export class Docs extends DurableObject<DocsEnv> {
         userForCookie: async () => null,
         isMember: async (userId: string, organizationId: string) => (await this.directory<string[]>('organizationsOf', userId)).includes(organizationId),
         organizationsOf: async (userId: string) => this.directory<string[]>('organizationsOf', userId),
+        stores: (stores: Parameters<typeof suiteHub>[0]) => { this.hub = suiteHub(stores, `${base}/workspace`); },
       },
     });
   }
@@ -102,6 +107,26 @@ export class Docs extends DurableObject<DocsEnv> {
   /** Row counts per table, to compare an import with its source. */
   async counts(): Promise<Record<string, number>> {
     return withDocsContext(this.context, async () => { await this.ready; return tableCounts(this.ctx.storage.sql); });
+  }
+
+  /** A request to /mcp, authenticated by the Worker against the directory (routes/mcp.ts), as `caller` in this organization. */
+  async mcp(request: Request, caller: McpRequestCaller): Promise<Response> {
+    return this.inOrganization(caller.orgId, () => handleMcp(request, this.hub!, caller));
+  }
+
+  /** An agent's upload to the address upload_file gave it; the ticket in it is the credential. */
+  async mcpImport(request: Request, organizationId: string): Promise<Response> {
+    return this.inOrganization(organizationId, () => handleMcpImport(request, this.hub!));
+  }
+
+  private async inOrganization(organizationId: string, fn: () => Promise<Response>): Promise<Response> {
+    const res = await withDocsContext({ ...this.context, organizationId }, async () => {
+      await this.ready;
+      this.outbox();
+      return fn();
+    });
+    await this.flush(organizationId);
+    return res;
   }
 
   async handle(request: Request, caller: Caller, organizationId: string): Promise<Response> {

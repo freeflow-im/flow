@@ -1,5 +1,13 @@
 # Decision log
 
+## 2026-11-03 — Docs' own MCP endpoint on app.freeflow.im, with its OAuth in the directory (docs/specs/web-mcp.md)
+
+`app.freeflow.im/mcp` is served on Cloudflare, separate from the ChatGPT plugin's `/mcp` (still AWS, on `docs.` and
+`mcpdocs.`). The OAuth state is the directory's, since authorization precedes the organization; sign-in is FreeFlow's
+session, and consent chooses one organization, which the grant carries. Chosen defaults: `/mcp` serves the newest tools
+(version 2), without the ChatGPT app; an agent's new files go in the person's My files in that organization (private,
+not Organization files); a token stops at once when its person leaves the organization.
+
 ## 2026-11-03 — The ChatGPT plugin stays on AWS; app.freeflow.im is on Cloudflare (docs/ops/CUTOVER_TO_CLOUDFLARE.md)
 
 Ruled by the operator after the cut-over (#659, 2026-11-02): the ChatGPT plugin (Universal Docs: `docs.freeflow.im`,

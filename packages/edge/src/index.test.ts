@@ -80,3 +80,34 @@ describe('the front door', () => {
     expect(await res.text()).toBe('posted');
   });
 });
+
+describe('the MCP endpoint and its OAuth', () => {
+  const ported = (e: Env): Env => ({ ...e, PORTED_HOSTS: 'app.example' });
+  const ctx = { waitUntil: () => {}, passThroughOnException: () => {}, props: {} } as unknown as ExecutionContext;
+
+  it('answers discovery on the ported host, with its own origin as issuer and resource', async () => {
+    const f = origin('aws');
+    const res = await app.request('https://app.example/.well-known/oauth-protected-resource/mcp', {}, ported(env()), ctx);
+    expect(await res.json()).toMatchObject({ resource: 'https://app.example/mcp', authorization_servers: ['https://app.example'] });
+    const as = await app.request('https://app.example/.well-known/oauth-authorization-server', {}, ported(env()), ctx);
+    expect(await as.json()).toMatchObject({ issuer: 'https://app.example', authorization_endpoint: 'https://app.example/oauth/authorize' });
+    const v2 = await app.request('https://app.example/mcp/v2/.well-known/oauth-protected-resource', {}, ported(env()), ctx);
+    expect(await v2.json()).toMatchObject({ resource: 'https://app.example/mcp/v2' });
+    expect(f).not.toHaveBeenCalled();
+  });
+
+  it('keeps /mcp, /oauth and the well-known documents of the plugin’s hosts on AWS', async () => {
+    const f = origin('aws');
+    for (const path of ['/mcp', '/oauth/authorize?client_id=x', '/.well-known/oauth-authorization-server', '/.well-known/oauth-protected-resource/mcp']) {
+      expect(await (await app.request(`https://docs.example${path}`, {}, ported(env()), ctx)).text()).toBe('aws');
+    }
+    expect(f).toHaveBeenCalledTimes(4);
+  });
+
+  it('answers an unknown /oauth or /mcp path on the ported host itself, never the plugin on AWS', async () => {
+    const f = origin('aws');
+    expect((await app.request('https://app.example/oauth/nothing', {}, ported(env()), ctx)).status).toBe(404);
+    expect((await app.request('https://app.example/mcp/nothing/here', {}, ported(env()), ctx)).status).toBe(404);
+    expect(f).not.toHaveBeenCalled();
+  });
+});

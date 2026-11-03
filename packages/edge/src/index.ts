@@ -11,6 +11,7 @@ import { pageRoutes } from './routes/pages';
 import { adminRoutes } from './routes/admin';
 import { helpRoutes } from './routes/help';
 import { mailRoutes } from './routes/mail';
+import { mcpRoutes } from './routes/mcp';
 
 export { Directory } from './directory/object';
 export { Org } from './org/object';
@@ -57,6 +58,9 @@ app.route('/', adminRoutes as never);
 // Ported routes, only on the hosts that have been switched. A path not ported yet falls through to the proxy.
 const ported = new Hono<{ Bindings: Env }>();
 ported.onError(onError);
+// Docs' MCP endpoint and its OAuth (/mcp, /oauth/*, /.well-known/oauth-*), and the agents it lists under Docs' /api/settings.
+// The plugin's hosts (docs., mcpdocs.) are not ported, so their /mcp and OAuth still go to AWS.
+ported.route('/', mcpRoutes as never);
 // Before Docs' /api/*: the desktop app's sign-in lives under /api/auth on the Workspace app's old paths.
 ported.route('/', handoffRoutes as never);
 ported.route('/', docsRoutes as never);

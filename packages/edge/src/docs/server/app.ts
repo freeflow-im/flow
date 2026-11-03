@@ -180,6 +180,8 @@ export interface AppOptions {
     isMember(userId: string, workspaceId: string): Promise<boolean>;
     /** The organizations the user is a member of: their shared files are theirs to open, and Move to organization… offers them. */
     organizationsOf(userId: string): Promise<Array<{ id: string; name: string }>>;
+    /** Handed the app's stores once they are open: the suite's MCP endpoint uses them (docs/plugin/server/worker.ts). */
+    stores?(stores: { db: DB; sheets: SheetStore; images: ImageStore; files: FileStore; folders: Folders; pdf?: PdfMaker }): void;
   };
   /**
    * The desktop app (desktop/): the library is the files of this folder (server/localStore.ts) and there
@@ -365,6 +367,8 @@ export async function buildApp(opts: AppOptions) {
     : null;
   const publicLinks = opts.local ? null : new PublicLinks(db);
   const agent = new AgentService(new AgentStore(db), sheets, assistantSettings, { jobs: !opts.local, ...opts.agent, images, files: storedFiles, pdf: pdfMaker ?? undefined, claudeAgent });
+  // The suite's Worker serves Docs' MCP endpoint from these same stores (docs/plugin/server/worker.ts), so one queue writes.
+  host?.stores?.({ db, sheets, images, files: storedFiles, folders, pdf: pdfMaker ?? undefined });
   const jobs = new JobStore(db);
   const jobRunner = new JobRunner(jobs, opts.launchJob ?? workerLauncher(opts.dataDir));
   // A previous server process may have died (or been restarted by the job itself) with a job in flight.

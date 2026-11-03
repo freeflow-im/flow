@@ -213,6 +213,8 @@ export interface ConnectedAgent {
   connectedAt: string;
   /** When it last got fresh tokens (it refreshes about hourly while in use); not known in the desktop app. */
   lastActiveAt?: string;
+  /** In the FreeFlow suite: the organization it was allowed to work in, by name. */
+  organization?: string;
 }
 
 export interface StoredFile {
