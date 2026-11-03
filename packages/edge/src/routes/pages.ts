@@ -1,5 +1,5 @@
 // The clients' pages, on the hosts the ported API answers on. Until the move the origin served them, because it decided per
-// request; now the Worker does: Docs at /workspace sends a stranger to sign in, a public link's page is kept out of search
+// request; now the Worker does: Docs at /workspace and Mail at /mail send a stranger to sign in, a public link's page is kept out of search
 // engines and referrers, and every other address of the web client gets its page. scripts/assemble.mjs files them under /_pages.
 import { Hono, type Context } from 'hono';
 import { getCookie } from 'hono/cookie';
@@ -30,6 +30,14 @@ pageRoutes.get(BASE, async (c) => ((await signedIn(c)) ? page(c, 'workspace.html
 pageRoutes.get(`${BASE}/p/*`, (c) => page(c, 'workspace.html', { 'referrer-policy': 'no-referrer', 'x-robots-tag': 'noindex' }));
 // A file under /workspace (its scripts and styles) is not a page: it falls through to the built files.
 pageRoutes.get(`${BASE}/*`, (c) => (/\.[a-z0-9]+$/i.test(new URL(c.req.url).pathname) ? c.notFound() : page(c, 'workspace.html')));
+// Mail at /mail (packages/mail): the same, from its own page; it routes in the browser, and its files fall through.
+const MAIL = '/mail';
+const toSignIn = (c: C) => c.redirect(`/?next=${encodeURIComponent(new URL(c.req.url).pathname + new URL(c.req.url).search)}`);
+pageRoutes.get(MAIL, async (c) => ((await signedIn(c)) ? page(c, 'mail.html') : toSignIn(c)));
+pageRoutes.get(`${MAIL}/*`, async (c) => {
+  if (/\.[a-z0-9]+$/i.test(new URL(c.req.url).pathname)) return c.notFound();
+  return (await signedIn(c)) ? page(c, 'mail.html') : toSignIn(c);
+});
 // Public links from before Docs moved under /workspace.
 pageRoutes.get('/p/*', (c) => c.redirect(`${BASE}${new URL(c.req.url).pathname}${new URL(c.req.url).search}`, 301));
 pageRoutes.get('/privacy', (c) => c.env.ASSETS.fetch(new URL('/privacy.html', c.req.url)));

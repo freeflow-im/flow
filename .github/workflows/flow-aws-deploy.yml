@@ -16,6 +16,7 @@ on:
       - 'packages/shared/**'
       - 'packages/docs/**'
       - 'packages/suite-bar/**'
+      - 'packages/mail/**'
       - 'docs/help/**'
       - 'scripts/build-features.mjs'
       - '.claude/skills/flow-agent-member/**'

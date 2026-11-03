@@ -31,8 +31,8 @@ export interface Env extends ProxyEnv, AuthEnv {
 
 /** Paths that are never files: they skip the look in the assets. */
 const NEVER_A_FILE = /^\/(v1|api|mcp|oauth|plugin|\.well-known)(\/|$)/;
-/** Vite's content-hashed output, under the web client's root and the Workspace client's. */
-const HASHED_FILE = /^(\/workspace)?\/assets\//;
+/** Vite's content-hashed output, under the web client's root, the Workspace client's and the Mail client's. */
+const HASHED_FILE = /^(\/workspace|\/mail)?\/assets\//;
 
 const app = new Hono<{ Bindings: Env }>();
 
