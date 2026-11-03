@@ -18,6 +18,8 @@ export const SLIDE_TRAY: PanelSpec = { key: 'ui.slideTrayWidth', def: 200, min: 
 export const DOC_TRAY: PanelSpec = { key: 'ui.docTrayWidth', def: 180, min: 100, max: 360 };
 /** The rendered preview beside a Markdown editor. */
 export const MARKDOWN_PREVIEW: PanelSpec = { key: 'ui.markdownPreviewWidth', def: 520, min: 240, max: 1400 };
+/** The suite's folder panel on the left of every page (components/DocsNav.tsx). */
+export const FOLDER_PANEL: PanelSpec = { key: 'ui.folderPanelWidth', def: 248, min: 180, max: 480 };
 export const ASSISTANT_PANEL: PanelSpec = { key: 'ui.assistantPanelWidth', def: 380, min: 280, max: 800 };
 
 /**

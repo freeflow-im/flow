@@ -201,6 +201,8 @@ export interface FileLibraryProps {
   searchInBar?: boolean;
   /** The name of the top of the library, in the heading over the files table. Defaults to "Your files". */
   listTitle?: ReactNode;
+  /** Whether Recents and Favorites are tabs beside the folder's name (default); without them, the list shown is named alone. */
+  listTabs?: boolean;
   /** Above the list: the FreeFlow suite's two roots, Organization files and My files (HomePage's RootSwitch). */
   roots?: ReactNode;
   /** Shown left of the top of the library's name (the desktop app's folder menu). */
@@ -903,7 +905,7 @@ export function FileLibrary(props: FileLibraryProps) {
       <section className="home-inner">
         {props.roots}
         <div className="list-heading">
-          <div className={`list-tabs${others.length ? ' has-tabs' : ''}`}>
+          <div className={`list-tabs${others.length && props.listTabs !== false ? ' has-tabs' : ''}`}>
           {!results && props.listIcon}
           {results ? (
             <h2>
@@ -912,8 +914,10 @@ export function FileLibrary(props: FileLibraryProps) {
                 Back to {trail?.length ? trail[trail.length - 1].name : top}
               </button>
             </h2>
+          ) : otherShown && props.listTabs === false ? (
+            <h2>{other!.label}</h2>
           ) : trail ? (
-            <h2 className={`breadcrumbs${others.length ? (otherShown ? ' list-tab' : ' list-tab active') : ''}`} aria-label="Folder">
+            <h2 className={`breadcrumbs${others.length && props.listTabs !== false ? (otherShown ? ' list-tab' : ' list-tab active') : ''}`} aria-label="Folder">
               {[{ name: '', path: '' }, ...trail].map((f, i, all) => i < Math.max(0, all.length - (props.crumbsShown ?? all.length)) ? null : (
                 <span key={f.path}>
                   {i > Math.max(0, all.length - (props.crumbsShown ?? all.length)) && <span className="crumb-sep">/</span>}
@@ -934,6 +938,7 @@ export function FileLibrary(props: FileLibraryProps) {
             <h2>{props.listTitle ?? 'Your files'}</h2>
           )}
           {!results &&
+            props.listTabs !== false &&
             others.map((l) => (
               <h2 key={l.label} className={`list-tab${l.active ? ' active' : ''}`}>
                 {l.active ? <span aria-current="page">{l.label}</span> : <button className="crumb" onClick={() => l.onSelect(true)}>{l.label}</button>}
