@@ -11,6 +11,7 @@ function env(files: Record<string, string> = {}): Env {
     DIRECTORY: {} as never,
     ORG: {} as never,
     DOCS: {} as never,
+    MAIL: {} as never,
     BLOBS: {} as never,
     ASSETS: {
       fetch: async (req: Request) => {

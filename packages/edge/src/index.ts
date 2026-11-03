@@ -10,11 +10,13 @@ import { handoffRoutes } from './routes/handoff';
 import { pageRoutes } from './routes/pages';
 import { adminRoutes } from './routes/admin';
 import { helpRoutes } from './routes/help';
+import { mailRoutes } from './routes/mail';
 
 export { Directory } from './directory/object';
 export { Org } from './org/object';
 export { Docs } from './docs/object';
 export { PdfOcr } from './pdfOcr';
+export { Mail } from './imap/object';
 import type { Org as OrgObject } from './org/object';
 
 export interface Env extends ProxyEnv, AuthEnv {
@@ -27,6 +29,12 @@ export interface Env extends ProxyEnv, AuthEnv {
   ORG: DurableObjectNamespace<OrgObject>;
   /** Scanned PDFs' OCR; only the Docs object calls it. */
   PDF_OCR?: DurableObjectNamespace<import('./pdfOcr').PdfOcr>;
+  /** FreeFlow Mail: one object per person, holding the mail accounts they connected (src/imap/object.ts). */
+  MAIL: DurableObjectNamespace<import('./imap/object').Mail>;
+  /** `1` in local dev only: mail accounts may then use unencrypted connections, any port and local hosts. Never set in production. */
+  MAIL_ALLOW_INSECURE?: string;
+  /** Seals Chat's messages and files, and the passwords of mail accounts (org/crypto). A secret. */
+  FLOW_DATA_KEY?: string;
 }
 
 /** Paths that are never files: they skip the look in the assets. */
@@ -54,6 +62,7 @@ ported.route('/', handoffRoutes as never);
 ported.route('/', docsRoutes as never);
 ported.route('/', authRoutes as never);
 ported.route('/', helpRoutes as never);
+ported.route('/', mailRoutes as never);
 ported.route('/', orgRoutes as never);
 ported.route('/', pageRoutes as never);
 app.use('*', async (c, next) => {
