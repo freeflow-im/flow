@@ -5,6 +5,7 @@ import { BrowserRouter, matchPath, Navigate, Route, Routes, useLocation } from '
 import { AgentPanel } from './agent/AgentPanel.tsx';
 import { AgentProvider, useAgent } from './agent/AgentProvider.tsx';
 import { AuthProvider, useAuth } from './auth.tsx';
+import { DocsNav } from './components/DocsNav.tsx';
 import { DocsSuiteBar } from './components/DocsSuiteBar.tsx';
 import { AuthPage } from './pages/AuthPage.tsx';
 import { ChangesPage } from './pages/ChangesPage.tsx';
@@ -76,6 +77,8 @@ function AppShell() {
   const bar = !!suite && !!user && !PREVIEW && !matchPath('/p/:token', pathname);
   const shell = (
     <div className="app-shell">
+      {/* In the suite, the folders on the left of every page (components/DocsNav.tsx). */}
+      {bar && !local && <DocsNav />}
       <div className="app-main">
         <Routes>
           <Route path="/login" element={<GuestOnly><AuthPage mode="login" /></GuestOnly>} />

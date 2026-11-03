@@ -12,7 +12,8 @@ export function rememberListing(search: string): void {
   }
 }
 
-function last(): string {
+/** The query of the list last shown in this tab ('' for none or the top of My files). */
+export function last(): string {
   try {
     return sessionStorage.getItem(KEY) ?? '';
   } catch {

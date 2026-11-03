@@ -14,6 +14,7 @@ import { StarButton } from '../components/FavoriteStar.tsx';
 import { FileSearchButton } from '../components/FileSearch.tsx';
 import { FileLibrary, formatWhen, kindIcon, type LibraryItem } from '../components/FileLibrary.tsx';
 import { FileThumb } from '../components/FileThumb.tsx';
+import { foldersChanged } from '../components/DocsNav.tsx';
 import { HomeIcon } from '../components/Logo.tsx';
 import { Modal, PromptModal } from '../components/Modal.tsx';
 import { MoveModal } from '../components/MoveModal.tsx';
@@ -416,6 +417,8 @@ function FileList() {
         setItems([...r.docs, ...r.files.map(fileItem)]);
         setListed(folder);
         setError(null);
+        // The suite's folder tree (DocsNav) reads its folders again.
+        if (changed && suite) foldersChanged();
       })
       .catch((e: Error) => {
         if (shown.current !== listKey) return;
@@ -513,7 +516,9 @@ function FileList() {
         )
       }
       listTitle={local ? dirName(local.dir) : inOrg ? (sharedRoot ? 'Organization files' : 'My files') : undefined}
-      roots={inOrg && !local ? <RootSwitch organization={org.active!.name} shared={sharedRoot} onSelect={selectRoot} /> : undefined}
+      // In the suite the folder tree on the left (DocsNav) has the roots, Recents and Favorites.
+      roots={inOrg && !local && !suite ? <RootSwitch organization={org.active!.name} shared={sharedRoot} onSelect={selectRoot} /> : undefined}
+      listTabs={!suite || !!local}
       crumbsShown={local ? 2 : undefined}
       crumbTitle={local ? (p) => (p ? `${local.dir.replace(/[\\/]+$/, '')}/${p}` : local.dir) : undefined}
       listIcon={

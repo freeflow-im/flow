@@ -302,8 +302,11 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   a signed copy, a Markdown of a PDF, a branch) goes in that one's root. The assistant's server tools take the chat's root
   (`ServerToolEnv.scope`/`viewer`): an organization file's chat, its root; the home chat, My files of `AgentTurnRequest.workspace`. On
   the client the bar publishes its organization (`suite.ts`' organization state, `useOrganization`), `api.ts` names it on list and create
-  calls (`Place`, `placeFields`; `placeOf` for beside a file), the home page shows `RootSwitch` (Organization files with `?org=<id>`, My
-  files without), the breadcrumbs name the root, and `OrganizationActions.tsx` has the menus' Share with organization / Make private /
+  calls (`Place`, `placeFields`; `placeOf` for beside a file), the folder panel on the left of every page (`components/DocsNav.tsx`, in `.app-shell`
+  beside `.app-main`) shows both roots as a tree (Organization files with `?org=<id>`, My files without) under Recents and Favorites,
+  reads each open folder's subfolders with `api.library` and again on `FOLDERS_CHANGED` (the home page sends it after a change), and on a
+  file's page selects the folder it was opened from (`listing.ts`' `last`); so the home page has no `RootSwitch` or Recents/Favorites
+  tabs there (`FileLibrary`'s `listTabs={false}`, `RootSwitch` only outside the suite), the breadcrumbs name the root, and `OrganizationActions.tsx` has the menus' Share with organization / Make private /
   Move to organization… (a picker of the user's other organizations).
 - Folders (`shared/folders.ts`): a folder is named by its path (`Reports/2026`, `''` for the top). Files
   carry it in the `folder` column (`SheetMeta.folder`, `StoredFile.folder`); the folders themselves are
