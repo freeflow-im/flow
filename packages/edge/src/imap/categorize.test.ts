@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { addressOf, classify, classifyHeaders, effective, gmailQuery, normalizeTabs, parseHeaders, type Category } from './categorize';
+import { DatabaseSync } from 'node:sqlite';
+import { searchCompiler } from 'imapflow/lib/search-compiler.js';
+import { addressOf, classify, classifyHeaders, effective, effectiveSql, gmailCategorySearches, normalizeTabs, parseHeaders, uidSet, type Category, type TabCategory } from './categorize';
 
 const h = (raw: string) => parseHeaders(raw.trim().split('\n').map((l) => l.replace(/^ {4}/, '')).join('\r\n'));
 
@@ -117,16 +119,41 @@ describe('helpers', () => {
   it('normalizes the tab list', () => expect(normalizeTabs(['forums', 'social', 'social', 'nope'])).toEqual(['social', 'forums']));
 });
 
-describe('gmailQuery', () => {
-  const none = new Map<string, Category>();
-  it("asks Gmail for its own category, and Primary is INBOX less the enabled tabs", () => {
-    expect(gmailQuery('promotions', ['promotions', 'social'], none)).toBe('category:promotions');
-    expect(gmailQuery('primary', ['promotions', 'social'], none)).toBe('-category:promotions -category:social');
+describe('Gmail category searches over a UID range', () => {
+  it('asks each of the four categories, limited to the range of the UIDs', () => {
+    const q = gmailCategorySearches([120, 101, 117]);
+    expect(q.map((x) => x.tab)).toEqual(['promotions', 'social', 'updates', 'forums']);
+    expect(q[0].query).toEqual({ uid: '101:120', gmraw: 'category:promotions' });
+    expect(gmailCategorySearches([7])[3].query).toEqual({ uid: '7', gmraw: 'category:forums' });
+    expect(gmailCategorySearches([])).toEqual([]);
   });
-  it("applies the user's senders: moved away, and moved here", () => {
-    const o = new Map<string, Category>([['deals@shop.com', 'primary'], ['friend@x.com', 'promotions'], ['bot@y.com', 'forums']]);
-    expect(gmailQuery('promotions', ['promotions', 'social'], o)).toBe('(category:promotions -from:deals@shop.com -from:bot@y.com) OR (from:friend@x.com)');
-    // Forums is off, so bot@y.com's mail falls into Primary.
-    expect(gmailQuery('primary', ['promotions', 'social'], o)).toBe('(-category:promotions -category:social -from:friend@x.com) OR (from:deals@shop.com) OR (from:bot@y.com)');
+  it('compiles, with imapflow, to UID <range> X-GM-RAW "category:..."', () => {
+    const compiled = searchCompiler({ capabilities: new Set(['X-GM-EXT-1']), enabled: new Set() } as never, gmailCategorySearches([500, 640])[1].query);
+    const words = compiled.map((a) => String((a as { value: unknown }).value));
+    expect(words).toEqual(['UID', '500:640', 'X-GM-RAW', 'category:social']);
   });
+  it('collapses UID runs for a FETCH', () => {
+    expect(uidSet([10, 1, 2, 3, 7, 9, 2])).toBe('1:3,7,9:10');
+    expect(uidSet([5])).toBe('5');
+    expect(uidSet([])).toBe('');
+  });
+});
+
+describe('the tab of a cached row, in SQL', () => {
+  const db = new DatabaseSync(':memory:');
+  db.exec(`CREATE TABLE mail_categories (account_id TEXT, uid INTEGER, sender TEXT, category TEXT);
+    CREATE TABLE mail_category_overrides (account_id TEXT, sender TEXT, category TEXT);
+    INSERT INTO mail_categories VALUES ('a', 1, 'deals@shop.com', 'promotions'), ('a', 2, 'bob@x.com', 'primary'), ('a', 3, 'bot@y.com', 'forums'),
+      ('a', 4, 'friend@x.com', 'primary'), ('a', 5, 'n@linkedin.com', 'social');
+    INSERT INTO mail_category_overrides VALUES ('a', 'deals@shop.com', 'primary'), ('a', 'friend@x.com', 'promotions'), ('b', 'n@linkedin.com', 'primary');`);
+  const tabsOfRows = (tabs: TabCategory[]) => {
+    const e = effectiveSql(tabs);
+    return db.prepare(`SELECT c.uid, ${e.sql} AS tab FROM mail_categories c LEFT JOIN mail_category_overrides o ON o.account_id = c.account_id AND o.sender = c.sender ORDER BY c.uid`).all(...e.params).map((r) => r.tab);
+  };
+  it('agrees with effective(), the user\'s senders first', () => {
+    // deals moved to Primary, friend moved to Promotions, Forums off so bot falls into Primary; b's choice is not a's.
+    expect(tabsOfRows(['promotions', 'social'])).toEqual(['primary', 'primary', 'primary', 'promotions', 'social']);
+    expect(tabsOfRows(['forums'])).toEqual(['primary', 'primary', 'forums', 'primary', 'primary']);
+  });
+  it('is all Primary with the tabs off', () => expect(tabsOfRows([])).toEqual(['primary', 'primary', 'primary', 'primary', 'primary']));
 });

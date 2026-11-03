@@ -43,7 +43,7 @@ move. It comes after phase 4 (Docs respecting the current organization) and befo
   wakes for a message, writes it, fans it out to the members' sockets, and sleeps. Presence and typing live in
   memory with a storage-backed fallback. Unread counts and the activity feed are local reads.
 - **Mail DO** (FreeFlow Mail). One object per person, keyed by the user id: the mail accounts they connected (IMAP and
-  SMTP servers, the password sealed with FLOW_DATA_KEY) and, while awake, one IMAP connection per account. Not the
+  SMTP servers, the password sealed with FLOW_DATA_KEY) and, while awake, up to two IMAP connections per account (interactive and background), plus a cache of the inbox tabs. Not the
   organization's: mail accounts are a person's own. `packages/edge/src/imap/object.ts`; the API is docs/specs/mail-api.md.
 - **Blobs** keep today's R2 layout with the organization id as the first path segment of every new key; keys
   made before the move are rewritten at migration (a rename is a copy in R2).

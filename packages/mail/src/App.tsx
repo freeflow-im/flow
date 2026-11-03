@@ -17,7 +17,7 @@ import { ResizeHandle } from './components/ResizeHandle';
 import { setReadingPane, useReadingPane } from './lib/layoutPref';
 import { Sidebar } from './components/Sidebar';
 import { useMediaQuery, useResizableWidth } from './hooks/layout';
-import { keys, useAccounts, useCategories, useFolders, useMessage, useMessageActions, useMessages } from './hooks/mail';
+import { keys, prefetchMessage, useAccounts, useCategories, useFolders, useMessage, useMessageActions, useMessages } from './hooks/mail';
 import { emptyDraft, prefill, type ComposeMode } from './lib/compose';
 import { findSpecial, folderLabel } from './lib/folders';
 import { markOpened, TAB_INFO, tabFromParam, tabsOf, useSince, writeTabParam } from './lib/tabs';
@@ -125,16 +125,38 @@ export function App() {
     return () => window.clearTimeout(t);
   }, [toast]);
 
-  // Opening a message marks it read (the server's GET does not).
+  // Opening a message marks it read (the server's GET does not): once it is on screen, after the frame that shows it, and
+  // not for one passed over before it was drawn.
   const marked = useRef(new Set<string>());
+  const markSeen = actions.flags.mutate;
   useEffect(() => {
     const m = message.data;
-    if (!m || m.seen || !account) return;
+    if (!m || m.seen || !account || m.uid !== openUid) return;
     const key = `${account.id}:${m.folder}:${m.uid}`;
     if (marked.current.has(key)) return;
-    marked.current.add(key);
-    actions.flags.mutate({ uids: [m.uid], seen: true });
-  }, [message.data, account, actions.flags]);
+    let timer = 0;
+    const frame = requestAnimationFrame(() => {
+      timer = window.setTimeout(() => {
+        marked.current.add(key);
+        markSeen({ uids: [m.uid], seen: true });
+      }, 0);
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
+  }, [message.data, account, openUid, markSeen]);
+
+  // The next (older) message is read ahead once this one is in, so j opens it at once.
+  const nextUid = useMemo(() => {
+    const i = visible.findIndex((m) => m.uid === openUid);
+    return i >= 0 ? (visible[i + 1]?.uid ?? null) : null;
+  }, [visible, openUid]);
+  const openLoaded = !!message.data && message.data.uid === openUid;
+  useEffect(() => {
+    if (!account || !folder || nextUid === null || !openLoaded) return;
+    void prefetchMessage(qc, account.id, folder, nextUid);
+  }, [qc, account, folder, nextUid, openLoaded]);
 
   const resetSelection = () => {
     setOpenUid(null);

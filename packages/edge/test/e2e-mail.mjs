@@ -11,6 +11,7 @@
 import fs from 'node:fs';
 import { ImapFlow } from 'imapflow';
 import nodemailer from 'nodemailer';
+import PostalMime from 'postal-mime';
 const log=process.argv[2]; const B=process.env.B??'http://localhost:18798';
 const MAIL_USER=process.env.MAIL_USER??'ann@test.local';
 let pass=0,fail=0; const t=(n,ok,d='')=>{ok?pass++:fail++;console.log((ok?'ok  ':'FAIL')+' '+n+(d?': '+String(d).slice(0,170):''));};
@@ -165,6 +166,111 @@ r=await api(A.token,'GET',`${P}/messages?folder=INBOX&category=social&limit=50`)
 r=await api(A.token,'PATCH',P,{tabs:[]});t('tabs: switch them off',r.s===200&&r.j.account?.tabs?.length===0);
 r=await api(A.token,'GET',`${P}/messages?folder=INBOX&limit=50`);t('tabs: off, the INBOX list has no categories',tagged(r.j.messages).length>=7&&r.j.messages.every(m=>!('category' in m)),tagged(r.j.messages).length);
 r=await api(A.token,'GET',`${P}/messages?folder=INBOX&category=promotions&limit=50`);t('tabs: off, category is ignored and everything is in INBOX',tagged(r.j.messages).length>=7&&r.j.messages.every(m=>!('category' in m)),tagged(r.j.messages).length);
+// ---- Opening a message by its parts ---------------------------------------------------------------------------------
+// The server fetches the structure, then only the text parts (and inline pictures, small parts); each answer must be what
+// postal-mime makes of the whole message, which is what it answered before.
+const CRLF='\r\n';
+const b64=(buf)=>Buffer.from(buf).toString('base64').replace(/(.{76})/g,'$1\r\n');
+const PNG=Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000'+'1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082','hex');
+const PDF=Buffer.concat([Buffer.from('%PDF-1.4\n'),Buffer.alloc(40000,0x41)]);
+const RAWS={
+  alt:['From: Bob Martin <bob@acme.test>',`To: ${MAIL_USER}`,'Reply-To: Team <team@acme.test>','In-Reply-To: <q2@acme.test>','References: <q1@acme.test> <q2@acme.test>',`Subject: Parts alt ${tag}`,'MIME-Version: 1.0','Content-Type: multipart/mixed; boundary="mix"','',
+    '--mix','Content-Type: multipart/related; boundary="rel"','','--rel','Content-Type: multipart/alternative; boundary="alt"','',
+    '--alt','Content-Type: text/plain; charset=utf-8','Content-Transfer-Encoding: quoted-printable','','Caf=C3=A9 numbers for '+tag+' are attached; a long line that wraps =','softly here.','',
+    '--alt','Content-Type: text/html; charset=utf-8','Content-Transfer-Encoding: base64','',b64(`<p>Café numbers for ${tag}: <img src="cid:chart-${tag}@acme"></p>`),'--alt--','',
+    '--rel','Content-Type: image/png; name="chart.png"','Content-Transfer-Encoding: base64',`Content-ID: <chart-${tag}@acme>`,'Content-Disposition: inline; filename="chart.png"','',b64(PNG),'--rel--','',
+    '--mix','Content-Type: application/pdf; name="q3.pdf"','Content-Transfer-Encoding: base64','Content-Disposition: attachment; filename="q3.pdf"','',b64(PDF),'--mix--',''].join(CRLF),
+  plain:['From: Ann <ann@acme.test>',`Subject: Parts plain ${tag}`,'Content-Type: text/plain; charset=us-ascii','','Just text,','two lines.',''].join(CRLF),
+  charsets:['From: Jens <jens@koeln.test>',`Subject: Parts charsets ${tag}`,'MIME-Version: 1.0','Content-Type: multipart/alternative; boundary="b"','',
+    '--b','Content-Type: text/plain; charset=iso-8859-1','Content-Transfer-Encoding: quoted-printable','','Gr=FC=DFe aus K=F6ln','',
+    '--b','Content-Type: text/html; charset=windows-1251','Content-Transfer-Encoding: base64','',b64(Buffer.from([0x3c,0x70,0x3e,0xcf,0xf0,0xe8,0xe2,0xe5,0xf2,0x3c,0x2f,0x70,0x3e])),'--b--',''].join(CRLF),
+  // An inline forwarded message: postal-mime folds its text and attachments into the message's own, so it is read whole.
+  forwarded:['From: Cy <cy@acme.test>',`Subject: Parts forwarded ${tag}`,'MIME-Version: 1.0','Content-Type: multipart/mixed; boundary="f"','',
+    '--f','Content-Type: text/plain; charset=utf-8','','See below.','','--f','Content-Type: message/rfc822','',
+    'From: Dee <dee@acme.test>','Subject: The original','MIME-Version: 1.0','Content-Type: multipart/mixed; boundary="g"','',
+    '--g','Content-Type: text/plain; charset=utf-8','','Original text.','','--g','Content-Type: text/csv; name="a.csv"','Content-Disposition: attachment; filename="a.csv"','','x,y','1,2','--g--','','--f--',''].join(CRLF),
+  koi8:['From: Ivan <ivan@example.ru>',`Subject: Parts koi8 ${tag}`,'Content-Type: text/plain; charset=koi8-r','Content-Transfer-Encoding: 8bit','',Buffer.from([0xf0,0xd2,0xc9,0xd7,0xc5,0xd4]).toString('latin1'),''].join(CRLF),
+};
+const appendRaw=(raw,box='INBOX')=>imapDirect(async(c)=>(await c.append(box,Buffer.from(raw,'latin1'))).uid);
+const UIDS={};for(const [k,raw] of Object.entries(RAWS))UIDS[k]=await appendRaw(raw);
+t('parts: test messages appended',Object.values(UIDS).every(u=>Number.isInteger(u)),JSON.stringify(UIDS));
+const getRaw=async(p,headers={})=>{const t0=Date.now();const res=await fetch(B+p,{headers:{authorization:'Bearer '+A.token,...headers}});const buf=Buffer.from(await res.arrayBuffer());return{s:res.status,buf,h:res.headers,ms:Date.now()-t0,j:(()=>{try{return JSON.parse(buf.toString())}catch{return null}})()};};
+for(const [k,raw] of Object.entries(RAWS)){
+  const want=await PostalMime.parse(Buffer.from(raw,'latin1'),{attachmentEncoding:'arraybuffer'});
+  const got=(await api(A.token,'GET',`${P}/messages/${UIDS[k]}?folder=INBOX`)).j.message;
+  // GreenMail leaves a part's last line break out of BODY[n] (other servers give the part's exact bytes), so the text is
+  // compared without the line breaks at its end.
+  const tail=(x)=>x==null?null:x.replace(/\n+$/,'');
+  const same=got&&(got.html??null)===(want.html??null)&&tail(got.text)===tail(want.text)&&got.attachments.length===want.attachments.length&&
+    got.attachments.every((a,i)=>a.index===i&&a.filename===(want.attachments[i].filename??`attachment-${i+1}`)&&a.mimeType===want.attachments[i].mimeType&&(a.contentId??null)===(want.attachments[i].contentId?.replace(/^<|>$/g,'')??null)&&a.size===want.attachments[i].content.byteLength);
+  const diff=got?{html:[got.html,want.html??null],text:[tail(got.text),tail(want.text)],att:[got.attachments,want.attachments.map((a,i)=>({i,filename:a.filename,mimeType:a.mimeType,contentId:a.contentId,size:a.content.byteLength}))]}:null;
+  t(`parts: ${k} opens as postal-mime reads the whole message`,same,JSON.stringify(diff&&Object.fromEntries(Object.entries(diff).filter(([,v])=>JSON.stringify(v[0])!==JSON.stringify(v[1])))).slice(0,600));
+  for(const a of got?.attachments??[]){const res=await getRaw(`${P}/messages/${UIDS[k]}/attachments/${a.index}?folder=INBOX`);t(`parts: ${k} attachment ${a.index} downloads`,res.s===200&&res.buf.equals(Buffer.from(want.attachments[a.index].content)),res.s+' '+res.buf.length);}
+}
+let D2=(await api(A.token,'GET',`${P}/messages/${UIDS.alt}?folder=INBOX`)).j.message;
+t('parts: replyTo, inReplyTo and references come with it',D2?.replyTo?.[0]?.address==='team@acme.test'&&D2.inReplyTo==='<q2@acme.test>'&&D2.references?.join()==='<q1@acme.test>,<q2@acme.test>',JSON.stringify([D2?.replyTo,D2?.inReplyTo,D2?.references]));
+t('parts: the inline picture is marked inline with its Content-ID',D2?.attachments?.[0]?.inline===true&&D2.attachments[0].contentId===`chart-${tag}@acme`&&D2.attachments[1].inline===false,JSON.stringify(D2?.attachments));
+res=await getRaw(`${P}/messages/${UIDS.alt}/attachments/0?folder=INBOX&inline=1`);t('parts: the cid: picture is served inline',res.s===200&&res.h.get('content-type')==='image/png'&&res.h.get('content-disposition')?.startsWith('inline')&&res.buf.equals(PNG),res.s+' '+res.h.get('content-type'));
+D2=(await api(A.token,'GET',`${P}/messages/${UIDS.charsets}?folder=INBOX`)).j.message;t('parts: iso-8859-1 and windows-1251 are decoded',D2?.text?.includes('Grüße aus Köln')&&D2.html==='<p>Привет</p>',JSON.stringify([D2?.text,D2?.html]));
+D2=(await api(A.token,'GET',`${P}/messages/${UIDS.koi8}?folder=INBOX`)).j.message;t('parts: koi8-r 8bit is decoded',D2?.text?.startsWith('Привет'),D2?.text);
+r=await api(A.token,'GET',`${P}/messages/${UIDS.plain}/attachments/0?folder=INBOX`);t('parts: a message with no attachments has none to download',r.s===404,r.s);
+
+// A message over the old 50 MB limit opens: only its text is fetched, and each attachment downloads by itself.
+const HUGE=Buffer.alloc(19*1024*1024,0x5a);
+const hugeRaw=['From: Bob <bob@acme.test>',`Subject: Parts huge ${tag}`,'MIME-Version: 1.0','Content-Type: multipart/mixed; boundary="h"','','--h','Content-Type: text/plain; charset=utf-8','','The big files.','',
+  ...[1,2,3].flatMap(n=>['--h','Content-Type: application/octet-stream; name="big'+n+'.bin"','Content-Transfer-Encoding: base64','Content-Disposition: attachment; filename="big'+n+'.bin"','',b64(HUGE)]),'--h--',''].join(CRLF);
+UIDS.huge=await appendRaw(hugeRaw);
+const sizeMB=Math.round(hugeRaw.length/1048576);
+res=await getRaw(`${P}/messages/${UIDS.huge}?folder=INBOX`);
+t(`parts: a ${sizeMB} MB message opens`,res.s===200&&res.j?.message?.text?.startsWith('The big files.')&&res.j.message.attachments.length===3&&res.j.message.attachments.every(a=>Math.abs(a.size-HUGE.length)<HUGE.length*0.01),res.s+' '+res.ms+'ms '+JSON.stringify(res.j?.message?.attachments??res.j).slice(0,150));
+t('parts: and quickly (it does not download the attachments)',res.ms<3000,res.ms+'ms');
+res=await getRaw(`${P}/messages/${UIDS.huge}/attachments/2?folder=INBOX`);t('parts: one of its attachments downloads by itself',res.s===200&&res.buf.equals(HUGE),res.s+' '+res.buf.length+' '+res.ms+'ms');
+
+// ---- Two connections: a slow sort never holds up opening a message --------------------------------------------------
+// x-mail-test-slow-ms (MAIL_ALLOW_INSECURE only) pauses the tab counts inside the background connection's INBOX lock.
+r=await api(A.token,'PATCH',P,{tabs:['promotions','social','updates','forums']});
+const SLOW=3000;
+const slowCounts=getRaw(`${P}/categories?folder=INBOX`,{'x-mail-test-slow-ms':String(SLOW)});
+await sleep(300);
+const [msgGet,seenPatch,listGet]=await Promise.all([
+  // plain is not among the last three opened, so this one reads from the server.
+  getRaw(`${P}/messages/${UIDS.plain}?folder=INBOX`),
+  (async()=>{const t0=Date.now();const x=await api(A.token,'PATCH',`${P}/messages`,{folder:'INBOX',uids:[UIDS.koi8],seen:true});return{...x,ms:Date.now()-t0};})(),
+  getRaw(`${P}/messages?folder=INBOX&limit=5`),
+]);
+const sc=await slowCounts;
+t('two connections: the slow counts took their time (the hook works)',sc.s===200&&sc.ms>=SLOW,sc.s+' '+sc.ms+'ms');
+t('two connections: a list waits behind them (same, background, connection)',listGet.s===200&&listGet.ms>=SLOW-800,listGet.ms+'ms');
+t('two connections: opening a message meanwhile is not held up',msgGet.s===200&&msgGet.ms<1500,msgGet.s+' '+msgGet.ms+'ms');
+t('two connections: nor is marking one seen',seenPatch.s===200&&seenPatch.ms<1500,seenPatch.s+' '+seenPatch.ms+'ms');
+
+// ---- The tabs' cache ------------------------------------------------------------------------------------------------
+r=await api(A.token,'GET',`${P}/categories?folder=INBOX`);const promoBefore=r.j.categories?.find(c=>c.id==='promotions')?.unread;
+const promoMsg=tagged((await api(A.token,'GET',`${P}/messages?folder=INBOX&category=promotions&limit=50`)).j.messages).find(m=>!m.seen);
+await api(A.token,'PATCH',`${P}/messages`,{folder:'INBOX',uids:[promoMsg?.uid],seen:true});
+r=await api(A.token,'GET',`${P}/categories?folder=INBOX`);t('cache: the counts follow a mark-seen at once',r.j.categories?.find(c=>c.id==='promotions')?.unread===promoBefore-1,`${promoBefore} -> ${r.j.categories?.find(c=>c.id==='promotions')?.unread}`);
+await api(A.token,'PATCH',`${P}/messages`,{folder:'INBOX',uids:[promoMsg?.uid],seen:false});
+await deliver('Dana Lee <dana@acme.test>','Gone soon',{});
+let gone;for(let i=0;i<20&&!gone;i++){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&category=primary&limit=10`);gone=r.j.messages?.find(m=>m.subject===`Gone soon ${tag}`);if(!gone)await sleep(300);}
+r=await api(A.token,'GET',`${P}/categories?folder=INBOX&since=primary:1`);t('cache: new mail is sorted into its tab, and is its latest',!!gone&&r.j.categories?.find(c=>c.id==='primary')?.latest?.subject===`Gone soon ${tag}`,JSON.stringify(r.j.categories?.find(c=>c.id==='primary')));
+const MOVED2=`Elsewhere-${tag}`;
+await imapDirect(async(c)=>{await c.mailboxCreate(MOVED2);const lock=await c.getMailboxLock('INBOX');try{await c.messageMove(String(gone.uid),MOVED2,{uid:true});}finally{lock.release();}});
+r=await api(A.token,'GET',`${P}/messages?folder=INBOX&category=primary&limit=50`);t('cache: a message moved away by another app leaves the tab list',r.s===200&&!r.j.messages?.some(m=>m.uid===gone?.uid),JSON.stringify(tagged(r.j.messages).map(m=>m.subject)));
+r=await getRaw(`${P}/categories?folder=INBOX`,{'x-mail-test-recheck':'1'});t('cache: and the re-check drops it from the counts',r.s===200&&r.j.categories?.find(c=>c.id==='primary')?.latest?.subject!==`Gone soon ${tag}`,JSON.stringify(r.j?.categories?.find(c=>c.id==='primary')?.latest));
+
+// A fresh account on the same mailbox, sorting one message per request: the tabs still page through all of INBOX.
+r=await api(A.token,'POST','/v1/mail/accounts',{email:MAIL_USER,displayName:'Ann',password:'x',imap:server(3143),smtp:server(3025)});
+const P2=`/v1/mail/accounts/${r.j.account?.id}`;await api(A.token,'PATCH',P2,{tabs:['promotions','social','updates','forums']});
+const inboxUids=await imapDirect(async(c)=>{const lock=await c.getMailboxLock('INBOX');try{return (await c.search({all:true},{uid:true})).sort((a,b)=>b-a);}finally{lock.release();}});
+const seenUids=[];let calls=0,short=0,ordered=true;
+for(const cat of ['forums','social','promotions','updates','primary']){let before=null;for(let i=0;i<400;i++){calls++;const x=await getRaw(`${P2}/messages?folder=INBOX&category=${cat}&limit=3${before?`&before=${before}`:''}`,{'x-mail-test-classify-cap':'1'});const ms=x.j?.messages??[];if(ms.length<3&&x.j?.next)short++;ms.forEach((m,j)=>{if(m.category!==cat||(j&&ms[j-1].uid<=m.uid)||(before&&m.uid>=before))ordered=false;seenUids.push(m.uid);});if(!x.j?.next)break;before=x.j.next;}}
+t('cache: with a small budget, tab pages come back short with next and carry on',short>0,`${calls} calls, ${short} short`);
+t('cache: and together the tabs list every INBOX message once, newest first in each',ordered&&seenUids.length===inboxUids.length&&new Set(seenUids).size===inboxUids.length&&inboxUids.every(u=>seenUids.includes(u)),`${seenUids.length} listed of ${inboxUids.length}`);
+await api(A.token,'DELETE',P2);
+const logText=fs.readFileSync(log,'utf8');const timingLines=logText.split('\n').filter(l=>/\[mail\] (GET|POST|PATCH|DELETE) \/v1\/mail/.test(l));
+t('timing: one line per request, with the lock wait and IMAP time',timingLines.some(l=>/\[mail\] GET \/v1\/mail\/accounts\/:id\/messages\/:uid 200 \d+ms \(lock wait \d+ms, imap \d+ms\)/.test(l)),timingLines.at(-1));
+t('timing: and nothing of the mail in them',timingLines.length>20&&!timingLines.some(l=>l.includes(tag)||l.includes(ACC)||l.includes(MAIL_USER)),timingLines.find(l=>l.includes(tag)||l.includes(ACC)));
+await imapDirect(async(c)=>{await c.mailboxDelete(MOVED2).catch(()=>{});const lock=await c.getMailboxLock('INBOX');try{await c.messageDelete(Object.values(UIDS).join(','),{uid:true});}finally{lock.release();}}).catch(()=>{});
 smtpDirect.close();
 
 r=await api(A.token,'PATCH',P,{displayName:'Ann Example'});t('rename the account',r.s===200&&r.j.account?.displayName==='Ann Example',JSON.stringify(r.j).slice(0,120));

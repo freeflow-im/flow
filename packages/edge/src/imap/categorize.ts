@@ -1,6 +1,7 @@
 // Gmail-style inbox tabs (docs/specs/mail-api.md, "Inbox tabs"): which tab an INBOX message goes to. Pure, so
-// categorize.test.ts can feed it real header sets. Gmail accounts use Gmail's own categories (an X-GM-RAW search,
-// `gmailQuery` below); every other server is classified here from a handful of headers, fetched with each list page.
+// categorize.test.ts can feed it real header sets. Gmail accounts use Gmail's own categories (X-GM-RAW searches over a UID
+// range, `gmailCategorySearches` below); every other server is classified here from a handful of headers. Either answer is
+// cached per message in the Mail object's SQLite, and the tabs are read from that cache.
 //
 // The rules, in order (the first that matches decides, and its reason is kept for debugging):
 //   1. the user's choice for this sender ("Move to tab") wins;
@@ -151,21 +152,39 @@ export function normalizeTabs(tabs: readonly string[] | null | undefined): TabCa
 
 // ---- Gmail ---------------------------------------------------------------------------------------------------------
 
-const gmFrom = (address: string) => `from:${address.replace(/[^\w.@+-]/g, '')}`;
+/**
+ * The X-GM-RAW searches that sort some INBOX UIDs into Gmail's own categories: one per category, each limited to the UIDs'
+ * range (`UID min:max X-GM-RAW "category:promotions"`), so only those messages are looked at. All four are asked whatever
+ * tabs are on: the cache keeps Gmail's answer, and which tabs are on applies when reading it (`effective`).
+ */
+export function gmailCategorySearches(uids: readonly number[]): { tab: TabCategory; query: { uid: string; gmraw: string } }[] {
+  if (!uids.length) return [];
+  let min = Infinity, max = 0;
+  for (const u of uids) { if (u < min) min = u; if (u > max) max = u; }
+  const uid = min === max ? String(min) : `${min}:${max}`;
+  return TAB_CATEGORIES.map((tab) => ({ tab, query: { uid, gmraw: `category:${tab}` } }));
+}
+
+/** A UID set for a command, runs collapsed: [1,2,3,7,9,10] gives `1:3,7,9:10`. */
+export function uidSet(uids: readonly number[]): string {
+  const sorted = [...new Set(uids)].sort((a, b) => a - b);
+  const out: string[] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    const start = sorted[i];
+    while (i + 1 < sorted.length && sorted[i + 1] === sorted[i] + 1) i++;
+    out.push(start === sorted[i] ? String(start) : `${start}:${sorted[i]}`);
+  }
+  return out.join(',');
+}
 
 /**
- * The X-GM-RAW query for one tab of a Gmail INBOX: Gmail's own category, less the senders the user moved elsewhere,
- * plus those moved here. Primary is INBOX less the enabled tabs (tabs that are off fall into Primary).
+ * The tab a cached row shows in, as SQL over `mail_categories c LEFT JOIN mail_category_overrides o` (the same as
+ * `effective(override ?? category, tabs)`): the sender's chosen tab, else the stored one, and Primary for a tab that is off.
  */
-export function gmailQuery(tab: Category, enabled: readonly TabCategory[], overrides: ReadonlyMap<string, Category>): string {
-  const here: string[] = [];
-  const elsewhere: string[] = [];
-  for (const [sender, cat] of overrides) (effective(cat, enabled) === tab ? here : elsewhere).push(sender);
-  const base = tab === 'primary'
-    ? enabled.map((t) => `-category:${t}`)
-    : [`category:${tab}`];
-  const main = [...base, ...elsewhere.map((s) => `-${gmFrom(s)}`)].join(' ') || 'in:inbox';
-  return here.length ? [`(${main})`, ...here.map((s) => `(${gmFrom(s)})`)].join(' OR ') : main;
+export function effectiveSql(tabs: readonly TabCategory[]): { sql: string; params: string[] } {
+  const enabled = normalizeTabs(tabs);
+  if (!enabled.length) return { sql: "'primary'", params: [] };
+  return { sql: `(CASE WHEN COALESCE(o.category, c.category) IN (${enabled.map(() => '?').join(', ')}) THEN COALESCE(o.category, c.category) ELSE 'primary' END)`, params: enabled };
 }
 
 export const isGmailHost = (host: string) => /(^|\.)(gmail|googlemail)\.com$/i.test(host.trim());
