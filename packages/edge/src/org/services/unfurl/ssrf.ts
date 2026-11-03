@@ -1,14 +1,11 @@
 // Phase 11 §4: SSRF guard.
 //
-// Runs before EVERY connection, including each redirect hop. The rule that
-// makes this actually safe (rather than theatre) is the pinning in
-// `assertPublicHost` + `pinnedAgent`: we resolve DNS ourselves, judge the
-// resolved addresses, then connect to *that* address with the hostname pinned
-// in Host/SNI. Resolving twice — once to check, once to connect — is the
-// classic DNS-rebinding hole, where the second lookup returns 127.0.0.1.
-import { lookup as dnsLookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
-
+// Runs before EVERY connection, including each redirect hop. On Node this resolved DNS itself and pinned the
+// connection to the vetted address, because the server sat in a private network with a metadata endpoint. A Worker's
+// subrequests go out through Cloudflare's network, which does not route to private, loopback or link-local
+// addresses, and a Worker can neither resolve a name to the address it will connect to nor choose that address.
+// So what is left here is what the URL itself says: the scheme (guardedFetch), IP literals in the blocked ranges,
+// names that are only ever internal, the operator's denylist, and an allowlist for local test runs.
 export class SsrfError extends Error {
   constructor(message: string) {
     super(message);
@@ -63,6 +60,13 @@ function isBlockedV6(ip: string): boolean {
   // IPv4-mapped/compatible (::ffff:127.0.0.1) — judge the embedded v4.
   const mapped = /^::(?:ffff:)?(\d{1,3}(?:\.\d{1,3}){3})$/.exec(addr);
   if (mapped) return isBlockedV4(mapped[1]!);
+  // The same, as the URL parser writes it: [::ffff:127.0.0.1] becomes [::ffff:7f00:1].
+  const mappedHex = /^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(addr);
+  if (mappedHex) {
+    const hi = parseInt(mappedHex[1]!, 16), lo = parseInt(mappedHex[2]!, 16);
+    return isBlockedV4(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
+  }
+  if (addr.startsWith('64:ff9b:')) return true; // NAT64: an IPv4 address in disguise
   const first = addr.split(':')[0] ?? '';
   const head = parseInt(first || '0', 16);
   if (Number.isNaN(head)) return true;
@@ -70,6 +74,12 @@ function isBlockedV6(ip: string): boolean {
   if ((head & 0xffc0) === 0xfe80) return true; // fe80::/10 link-local
   if ((head & 0xff00) === 0xff00) return true; // ff00::/8 multicast
   return false;
+}
+
+/** 4 for a dotted-quad IPv4 address, 6 for an IPv6 one (without brackets), else 0. */
+function isIP(host: string): 0 | 4 | 6 {
+  if (ipv4ToInt(host) !== null) return 4;
+  return /^[0-9a-f:.%]+$/i.test(host) && host.includes(':') ? 6 : 0;
 }
 
 export function isBlockedAddress(ip: string): boolean {
@@ -88,77 +98,33 @@ function egressDenylist(): string[] {
     .filter(Boolean);
 }
 
-export interface ResolvedHost {
-  hostname: string;
-  /** The address we will actually connect to. */
-  address: string;
-  family: 4 | 6;
+/** Hosts exempt from this guard, comma-separated in FLOW_UNFURL_ALLOW_HOSTS: only for a local test run, which links to
+ * a page on localhost. Never set in production. */
+function testAllowlist(): string[] {
+  return (process.env.FLOW_UNFURL_ALLOW_HOSTS ?? '')
+    .split(',')
+    .map((s: string) => s.trim().toLowerCase())
+    .filter(Boolean);
 }
 
+/** Names that only ever mean a machine on a private network. */
+const INTERNAL_NAME = /(^|\.)(localhost|local|internal|intranet|lan|home\.arpa|corp)$/;
+
 /**
- * §4: resolve `hostname`, reject if ANY resolved address is non-public, and
- * return the address to connect to. Judging every answer (not just the one we
- * pick) means a round-robin record mixing a public and a private address is
- * refused outright rather than gambled on.
+ * §4: refuse a URL whose host is a non-public address or an internal name. Throws SsrfError.
  */
-export async function assertPublicHost(hostname: string): Promise<ResolvedHost> {
-  const host = hostname.toLowerCase().replace(/\.$/, '');
+export function assertPublicUrl(url: URL): void {
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  if (testAllowlist().includes(host)) return;
   for (const denied of egressDenylist()) {
     if (host === denied || host.endsWith(`.${denied}`)) {
       throw new SsrfError(`host ${host} is denied by operator config`);
     }
   }
-
-  // An IP literal in the URL never hits DNS — judge it directly.
+  // An IP literal is judged directly. The URL parser has already turned 0x7f.1 and 2130706433 into 127.0.0.1.
   if (isIP(host)) {
     if (isBlockedAddress(host)) throw new SsrfError(`address ${host} is not public`);
-    return { hostname: host, address: host, family: isIP(host) === 6 ? 6 : 4 };
+    return;
   }
-
-  let answers: Array<{ address: string; family: number }>;
-  try {
-    answers = await dnsLookup(host, { all: true });
-  } catch (err) {
-    throw new SsrfError(`dns lookup failed for ${host}: ${(err as Error).message}`);
-  }
-  if (answers.length === 0) throw new SsrfError(`no addresses for ${host}`);
-  for (const a of answers) {
-    if (isBlockedAddress(a.address)) {
-      throw new SsrfError(`${host} resolves to non-public address ${a.address}`);
-    }
-  }
-  const chosen = answers[0]!;
-  return { hostname: host, address: chosen.address, family: chosen.family === 6 ? 6 : 4 };
+  if (!host.includes('.') || INTERNAL_NAME.test(host)) throw new SsrfError(`${host} is not a public name`);
 }
-
-/**
- * A `lookup` implementation for http.request/https.request that always answers
- * with the already-vetted address, whatever the resolver would say now. This
- * is what closes the rebinding window between check and connect: DNS is
- * resolved exactly once, by `assertPublicHost`.
- *
- * The request still carries the real hostname in Host and TLS SNI, so virtual
- * hosting and certificate validation behave normally.
- */
-export function pinnedLookup(resolved: ResolvedHost): NodeLookup {
-  return ((_hostname: string, options: unknown, callback: (...args: unknown[]) => void) => {
-    // net.connect calls this with `{ all: true }`, in which case the callback
-    // takes an ARRAY of {address, family}. Answering with the scalar form
-    // there makes Node read addresses[0].address off a string → "Invalid IP
-    // address: undefined". Both shapes must be handled.
-    const wantsAll =
-      typeof options === 'object' && options !== null && (options as { all?: boolean }).all === true;
-    if (wantsAll) {
-      callback(null, [{ address: resolved.address, family: resolved.family }]);
-    } else {
-      callback(null, resolved.address, resolved.family);
-    }
-  }) as unknown as NodeLookup;
-}
-
-/** The shape http.request/net.connect expect for a custom `lookup`. */
-type NodeLookup = (
-  hostname: string,
-  options: unknown,
-  callback: (err: NodeJS.ErrnoException | null, address: string, family: number) => void,
-) => void;

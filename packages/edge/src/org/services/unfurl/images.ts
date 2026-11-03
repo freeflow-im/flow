@@ -2,14 +2,19 @@
 //
 // We never hotlink. Every image referenced by a card is fetched here under the
 // same SSRF guard as the page, validated by its actual bytes (not its declared
-// content-type), re-encoded to WebP at two sizes, and stored under a
-// content-addressed key. Clients only ever see our own URLs, so a card can't
-// leak a viewer's IP to a third-party CDN or execute anything.
+// content-type), and stored under a content-addressed key. Clients only ever
+// see our own URLs, so a card can't leak a viewer's IP to a third-party CDN or
+// execute anything.
+//
+// On Node, sharp re-encoded each image to WebP at two sizes (which also dropped
+// its metadata). sharp cannot load on Workers, so the image is stored as it came,
+// once, after its real size is read from its header; both URLs name it, and the
+// clients scale it. A format whose size cannot be read (AVIF) is left out.
 //
 // Every failure path returns null: §6 says an image problem must degrade the
 // card to text-only, never fail the whole unfurl.
 import { createHash } from 'node:crypto';
-import sharp from '../../lib/noSharp';
+import { imageSize } from '../../../docs/server/imageSize.ts';
 import { blobStore } from '../../storage/index.js';
 import { guardedFetch } from './fetcher.js';
 
@@ -19,9 +24,12 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_AXIS_PX = 12_000;
 const MAX_MEGAPIXELS = 100;
 
-/** §6 output sizes. */
-const LARGE = { width: 1200, height: 630 };
-const THUMB = { width: 128, height: 128 };
+/** Stored as fetched, so a smaller cap than the fetch's: every viewer downloads it. */
+const MAX_STORED_BYTES = 3 * 1024 * 1024;
+
+/** The stored key's extension and the type it is served with. */
+export const UNFURL_IMAGE_TYPES = { jpg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp' } as const;
+const EXTENSION = { jpeg: 'jpg', png: 'png', gif: 'gif', webp: 'webp' } as const;
 
 export interface ProxiedImage {
   url: string;
@@ -72,43 +80,20 @@ export async function proxyImage(imageUrl: string, deadline?: number): Promise<P
     if (res.status < 200 || res.status >= 400) return null;
 
     const format = sniffImageFormat(res.bytes);
-    if (!format) return null; // unrecognised, or SVG
+    if (!format || format === 'avif') return null; // unrecognised, SVG, or a size we cannot read
+    if (res.bytes.length >= MAX_STORED_BYTES) return null; // possibly cut off by the cap, and too large to serve
 
-    const meta = await sharp(res.bytes).metadata();
-    const width = meta.width ?? 0;
-    const height = meta.height ?? 0;
-    if (width <= 0 || height <= 0) return null;
+    const size = imageSize(res.bytes) as { width: number; height: number } | null;
+    if (!size) return null;
+    const { width, height } = size;
     if (width > MAX_AXIS_PX || height > MAX_AXIS_PX) return null;
     if ((width * height) / 1_000_000 > MAX_MEGAPIXELS) return null;
 
-    // sharp drops EXIF/XMP/ICC unless explicitly asked to keep them, so the
-    // re-encode is also the metadata strip (§6).
-    const [large, thumb] = await Promise.all([
-      sharp(res.bytes)
-        .resize({ ...LARGE, fit: 'inside', withoutEnlargement: true })
-        .webp({ quality: 82 })
-        .toBuffer(),
-      sharp(res.bytes)
-        .resize({ ...THUMB, fit: 'cover' })
-        .webp({ quality: 80 })
-        .toBuffer(),
-    ]);
-
     // §6: keyed by content hash — the same image shared twice stores once.
     const hash = createHash('sha256').update(res.bytes).digest('hex').slice(0, 32);
-    await Promise.all([
-      blobStore().put(`unfurl-images/${hash}-large.webp`, large),
-      blobStore().put(`unfurl-images/${hash}-thumb.webp`, thumb),
-    ]);
-
-    // Report the dimensions of what we actually serve, not of the original.
-    const largeMeta = await sharp(large).metadata();
-    return {
-      url: `/v1/unfurl-images/${hash}-large.webp`,
-      thumbUrl: `/v1/unfurl-images/${hash}-thumb.webp`,
-      width: largeMeta.width ?? width,
-      height: largeMeta.height ?? height,
-    };
+    const key = `${hash}-large.${EXTENSION[format]}`;
+    await blobStore().put(`unfurl-images/${key}`, res.bytes);
+    return { url: `/v1/unfurl-images/${key}`, thumbUrl: `/v1/unfurl-images/${key}`, width, height };
   } catch {
     return null; // §6: never fail the card over its image
   }
@@ -146,4 +131,4 @@ export function layoutFor(width: number, height: number, twitterLargeImage: bool
 }
 
 /** Keys we will serve — content hash + size, nothing user-controlled. */
-export const UNFURL_IMAGE_KEY_RE = /^[0-9a-f]{32}-(large|thumb)\.webp$/;
+export const UNFURL_IMAGE_KEY_RE = /^[0-9a-f]{32}-(large|thumb)\.(webp|jpg|png|gif)$/;
