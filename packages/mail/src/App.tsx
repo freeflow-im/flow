@@ -13,6 +13,7 @@ import { MailSuiteBar } from './components/MailSuiteBar';
 import { MessageList, type ListTab } from './components/MessageList';
 import { MessageView } from './components/MessageView';
 import { ResizeHandle } from './components/ResizeHandle';
+import { setReadingPane, useReadingPane } from './lib/layoutPref';
 import { Sidebar } from './components/Sidebar';
 import { useMediaQuery, useResizableWidth } from './hooks/layout';
 import { keys, useAccounts, useFolders, useMessage, useMessageActions, useMessages } from './hooks/mail';
@@ -43,6 +44,9 @@ export function App() {
   const qc = useQueryClient();
   const accounts = useAccounts();
   const narrow = useMediaQuery('(max-width: 899px)');
+  // The open message in place of the list (Gmail's way, or any narrow screen), or beside it.
+  const readingPane = useReadingPane();
+  const stacked = narrow || readingPane === 'full';
   const tiny = useMediaQuery('(max-width: 759px)');
   const sidebar = useResizableWidth('flow.mail.sidebarWidth', 248, 180, 480);
   const listPane = useResizableWidth('flow.mail.listWidth', 420, 300, 720);
@@ -143,7 +147,7 @@ export function App() {
     if (openUid !== null && gone.has(openUid)) {
       const i = visible.findIndex((m) => m.uid === openUid);
       const next = visible.slice(i + 1).find((m) => !gone.has(m.uid)) ?? visible.slice(0, i).reverse().find((m) => !gone.has(m.uid));
-      if (next && !narrow) openMessage(next.uid);
+      if (next && !stacked) openMessage(next.uid);
       else {
         setOpenUid(null);
         setCursorUid(next?.uid ?? null);
@@ -180,7 +184,7 @@ export function App() {
     // Marking the open message unread closes it, so it stays unread.
     if (!anyUnread && openUid !== null && uids.includes(openUid)) {
       marked.current.add(`${account?.id}:${folder}:${openUid}`);
-      if (narrow) setOpenUid(null);
+      if (stacked) setOpenUid(null);
     }
   };
   const toggleFlag = (uids = targets()) => {
@@ -214,9 +218,18 @@ export function App() {
     lastChecked.current = uid;
   };
 
+  /** The message after (1, older) or before (-1, newer) the open one in the list. */
+  const step = (by: 1 | -1) => {
+    const i = visible.findIndex((m) => m.uid === openUid);
+    const m = i < 0 ? undefined : visible[i + by];
+    if (!m) return;
+    setCursorUid(m.uid);
+    setOpenUid(m.uid);
+  };
+
   // The keyboard, as in other mail apps. Not while typing, and not under a dialog.
-  const keyState = useRef({ visible, cursorUid, openUid, narrow });
-  keyState.current = { visible, cursorUid, openUid, narrow };
+  const keyState = useRef({ visible, cursorUid, openUid, narrow: stacked });
+  keyState.current = { visible, cursorUid, openUid, narrow: stacked };
   const handlers = useRef({ archive, remove, toggleSeen, startCompose });
   handlers.current = { archive, remove, toggleSeen, startCompose };
   useEffect(() => {
@@ -233,7 +246,8 @@ export function App() {
         const m = v[Math.max(0, Math.min(v.length - 1, i))];
         if (!m) return;
         setCursorUid(m.uid);
-        // Side by side, the message follows the keyboard; on a narrow screen it opens on Enter.
+        // Side by side, the message follows the keyboard. In place of the list, j/k move the selection in the list, and
+        // with a message open they open the next (older) or previous (newer) one, as Gmail does.
         if (!isNarrow || open !== null) setOpenUid(m.uid);
       };
       switch (e.key) {
@@ -416,6 +430,7 @@ export function App() {
       }}
       openUid={openUid}
       cursorUid={cursorUid}
+      readingPane={narrow ? undefined : { value: readingPane, onChange: setReadingPane }}
       onOpen={openMessage}
       checked={checked}
       onCheck={onCheck}
@@ -450,7 +465,10 @@ export function App() {
       error={errorText(message.error)}
       folders={folders.data}
       canArchive={!!(findSpecial(folders.data, 'archive') ?? findSpecial(folders.data, 'all')) && folderInfo?.specialUse !== 'archive'}
-      onBack={narrow ? () => setOpenUid(null) : undefined}
+      onBack={stacked ? () => setOpenUid(null) : undefined}
+      position={stacked && openUid !== null ? { index: visible.findIndex((m) => m.uid === openUid), count: visible.length } : undefined}
+      onNewer={stacked ? () => step(-1) : undefined}
+      onOlder={stacked ? () => step(1) : undefined}
       onReply={() => startCompose('reply')}
       onReplyAll={() => startCompose('replyAll')}
       onForward={() => startCompose('forward')}
@@ -497,8 +515,12 @@ export function App() {
           </div>
         )}
         <div className="flex min-w-0 flex-1">
-          {narrow ? (
-            <div className="min-w-0 flex-1">{openUid !== null ? view : listEl}</div>
+          {stacked ? (
+            // The list stays mounted under the open message, so going back finds it where it was.
+            <div className="relative min-w-0 flex-1">
+              <div className={cn('h-full', openUid !== null && 'invisible')}>{listEl}</div>
+              {openUid !== null && <div className="absolute inset-0 z-10">{view}</div>}
+            </div>
           ) : (
             <>
               <div style={{ width: listPane.width }} className={cn('shrink-0 border-r border-hairline')}>

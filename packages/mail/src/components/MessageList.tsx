@@ -2,7 +2,7 @@
 // rows (sender, subject, snippet, date, unread dot, flag, attachment), checkboxes for acting on several at once, and
 // more rows as the list scrolls to its end (`before=`).
 import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, FolderInput, Loader2, Mail, MailOpen, Menu, Paperclip, RefreshCw, Search, Star, Trash2, X } from 'lucide-react';
+import { ArrowLeft, Columns2, FolderInput, PanelTop, Loader2, Mail, MailOpen, Menu, Paperclip, RefreshCw, Search, Star, Trash2, X } from 'lucide-react';
 import type { MailFolder, MessageSummary } from '../api';
 import { displayName } from '../lib/addresses';
 import { folderLabel, orderFolders } from '../lib/folders';
@@ -39,6 +39,8 @@ export interface MessageListProps {
   onBulkMove(to: string): void;
   folders: MailFolder[] | undefined;
   currentFolder: string | null;
+  /** Wide screens: the open message beside the list ('split') or in its place ('full'). */
+  readingPane?: { value: 'full' | 'split'; onChange(v: 'full' | 'split'): void } | undefined;
   /** On a narrow screen, the button that opens the folders. */
   onShowFolders?: (() => void) | undefined;
   /** On a phone, where the suite bar has no search: a search field of the list's own. */
@@ -141,6 +143,17 @@ export function MessageList(p: MessageListProps) {
             {p.onSearch && (
               <Button variant="ghost" size="icon-sm" title="Search" aria-label="Search" aria-pressed={searching} onClick={() => setSearching(!searching)}>
                 <Search />
+              </Button>
+            )}
+            {p.readingPane && (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                title={p.readingPane.value === 'full' ? 'Show messages beside the list' : 'Show messages in place of the list'}
+                aria-label={p.readingPane.value === 'full' ? 'Show messages beside the list' : 'Show messages in place of the list'}
+                onClick={() => p.readingPane!.onChange(p.readingPane!.value === 'full' ? 'split' : 'full')}
+              >
+                {p.readingPane.value === 'full' ? <Columns2 /> : <PanelTop />}
               </Button>
             )}
             <Button variant="ghost" size="icon-sm" title="Refresh" aria-label="Refresh" onClick={p.onRefresh}>
