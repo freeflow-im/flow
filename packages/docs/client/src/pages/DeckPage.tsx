@@ -504,10 +504,15 @@ function DeckWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta
         { label: 'Rename…', action: () => setDialog({ kind: 'rename' }) },
         { label: 'Import PowerPoint slides…', action: () => void importPptxSlides() },
         'sep',
-        { label: 'Download as PowerPoint (.pptx)', action: () => void exportPptx() },
-        { label: 'Download as PDF', action: () => void exportPdf() },
+        {
+          label: 'Download',
+          submenu: [
+            { label: 'PowerPoint (.pptx)', action: () => void exportPptx() },
+            { label: 'PDF document (.pdf)', action: () => void exportPdf() },
+            { label: 'JSON (.json)', action: () => downloadFile(nameWithExt(meta.title, 'json'), 'application/json', JSON.stringify(ctl.deck, null, 2)) },
+          ],
+        },
         { label: 'Print / Save as PDF…', shortcut: `${MOD}P`, action: () => setPrinting(true) },
-        { label: 'Download as JSON', action: () => downloadFile(nameWithExt(meta.title, 'json'), 'application/json', JSON.stringify(ctl.deck, null, 2)) },
         'sep',
         { label: 'Delete presentation', danger: true, action: () => setDialog({ kind: 'delete' }) },
         'sep',

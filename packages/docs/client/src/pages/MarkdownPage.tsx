@@ -304,8 +304,13 @@ function MarkdownWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta;
         { label: 'Rename…', action: () => setDialog({ kind: 'rename' }) },
         { label: 'Import Markdown file…', action: () => void importMarkdownFile() },
         'sep',
-        { label: 'Download (.md)', action: () => downloadFile(nameWithExt(meta.title, 'md'), 'text/markdown', ctl.text) },
-        { label: 'Download as PDF', action: () => void exportPdf() },
+        {
+          label: 'Download',
+          submenu: [
+            { label: 'Markdown (.md)', action: () => downloadFile(nameWithExt(meta.title, 'md'), 'text/markdown', ctl.text) },
+            { label: 'PDF document (.pdf)', action: () => void exportPdf() },
+          ],
+        },
         'sep',
         { label: 'Delete document', danger: true, action: () => setDialog({ kind: 'delete' }) },
         'sep',

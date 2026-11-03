@@ -24,12 +24,13 @@ import type { ImageStore } from './images.ts';
 import type { SheetStore } from './sheets.ts';
 import { scopeOf, type ScopeArg, type ViewerArg } from './scope.ts';
 import { titleBase } from '../shared/docNames.ts';
+import { docDocx } from './docxExport.ts';
 
-export type ExportFormat = 'json' | 'md' | 'pptx' | 'csv' | 'xlsx';
+export type ExportFormat = 'json' | 'md' | 'docx' | 'pptx' | 'csv' | 'xlsx';
 
 /** Formats each kind can export to; the first is the readable default. */
 export const EXPORT_FORMATS: Record<DocKind, ExportFormat[]> = {
-  doc: ['md', 'json'],
+  doc: ['md', 'docx', 'json'],
   markdown: ['md', 'json'],
   deck: ['pptx', 'json'],
   sheet: ['xlsx', 'csv', 'json'],
@@ -38,6 +39,7 @@ export const EXPORT_FORMATS: Record<DocKind, ExportFormat[]> = {
 const MIME: Record<ExportFormat, string> = {
   json: 'application/json',
   md: 'text/markdown; charset=utf-8',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   csv: 'text/csv; charset=utf-8',
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -289,6 +291,15 @@ export async function exportFile(meta: SheetMeta, data: FileData, format: Export
       return { name: safeName(meta.title, 'json'), type, body: Buffer.from(JSON.stringify(raw, null, 2)) };
     case 'md':
       return { name: safeName(meta.title, 'md'), type, body: Buffer.from(data.kind === 'markdown' ? data.markdown.text : docMarkdown((data as { doc: Doc }).doc)) };
+    case 'docx':
+      return {
+        name: safeName(meta.title, 'docx'),
+        type,
+        body: await docDocx((data as { doc: Doc }).doc, titleBase(meta.title), async (src) => {
+          const img = await source.stored(src);
+          return img && { type: img.type, data: img.bytes };
+        }),
+      };
     case 'pptx':
       return { name: safeName(meta.title, 'pptx'), type, body: await deckPptx((data as { deck: Deck }).deck, titleBase(meta.title), source) };
     case 'xlsx':

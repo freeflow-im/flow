@@ -49,7 +49,7 @@ import { checkDocxFile, pickDocxFile } from '../importFile.ts';
 import { useDocFonts } from '../doc/fonts.ts';
 import { useFavicon } from '../favicon.ts';
 import { appName } from '../brand.ts';
-import { downloadPdf, printingPdf, signalPrintReady } from '../print.ts';
+import { downloadExport, downloadPdf, printingPdf, signalPrintReady } from '../print.ts';
 import { useOpenInTab } from '../components/OpenInTab.tsx';
 import { useOrganizationMenu, withScope } from '../components/OrganizationActions.tsx';
 
@@ -242,6 +242,17 @@ function DocWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta:
   }, []);
 
   /** File › Download as PDF: saved first, then made by the server (print.ts). */
+  /** A Word copy, made by the server from the saved document (server/docxExport.ts). */
+  const exportDocx = async () => {
+    notify('Making the Word document…');
+    try {
+      await ctl.saver.flush();
+      await downloadExport(meta.id, 'docx', nameWithExt(meta.title, 'docx'));
+      notify('Downloaded.');
+    } catch (e) {
+      notify(e instanceof Error ? e.message : String(e));
+    }
+  };
   const exportPdf = async () => {
     notify('Making the PDF…');
     try {
@@ -420,9 +431,15 @@ function DocWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta:
         { label: 'Rename…', action: () => setDialog({ kind: 'rename' }) },
         { label: 'Import Word document…', action: () => void importDocxBlocks() },
         'sep',
-        { label: 'Download as Markdown (.md)', action: () => downloadFile(nameWithExt(meta.title, 'md'), 'text/markdown', docToMarkdown(ctl.doc)) },
-        { label: 'Download as web page (.html)', action: () => downloadFile(nameWithExt(meta.title, 'html'), 'text/html', docToHtml(ctl, titleBase(meta.title))) },
-        { label: 'Download as PDF', action: () => void exportPdf() },
+        {
+          label: 'Download',
+          submenu: [
+            { label: 'Word document (.docx)', action: () => void exportDocx() },
+            { label: 'PDF document (.pdf)', action: () => void exportPdf() },
+            { label: 'Markdown (.md)', action: () => downloadFile(nameWithExt(meta.title, 'md'), 'text/markdown', docToMarkdown(ctl.doc)) },
+            { label: 'Web page (.html)', action: () => downloadFile(nameWithExt(meta.title, 'html'), 'text/html', docToHtml(ctl, titleBase(meta.title))) },
+          ],
+        },
         { label: 'Print / Save as PDF…', shortcut: `${MOD}P`, action: () => setPrinting(true) },
         'sep',
         { label: 'Delete document', danger: true, action: () => setDialog({ kind: 'delete' }) },

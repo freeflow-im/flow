@@ -109,6 +109,13 @@ describe('export routes', () => {
     expect(res.headers['content-disposition']).toContain('filename="Notes-2026.md"');
     expect(res.body).toContain('Hello');
 
+    // A Word document: a .docx (a zip, "PK"), named after the document.
+    res = await app.inject({ method: 'GET', url: `/api/files/${docId}/export?format=docx`, headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toMatch(/wordprocessingml/);
+    expect(res.headers['content-disposition']).toContain('filename="Notes-2026.docx"');
+    expect(res.rawPayload.subarray(0, 2).toString()).toBe('PK');
+
     res = await app.inject({ method: 'GET', url: `/api/files/${docId}/export?format=json`, headers: { cookie } });
     expect(JSON.parse(res.body)).toMatchObject({ version: 1 });
 
