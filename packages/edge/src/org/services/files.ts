@@ -8,7 +8,7 @@
 // Orphaned uploads — never attached, or presigned but never completed — are
 // swept at boot + daily in-process (decision log ruling 5).
 import path from 'node:path';
-import sharp from '../lib/noSharp';
+import sharp from '../lib/sharp';
 import { and, asc, desc, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
 import type { ChannelFilePage, FileDTO, PresignedUploadDTO } from '@flow/shared';
 import { db, schema } from '../db/index.js';

@@ -72,6 +72,11 @@ new_sqlite_classes = ["Docs"]
 binding = "BLOBS"
 bucket_name = "flow-files"
 
+# Cloudflare Images: resizes Chat's link-preview images and attachment thumbnails, and re-encodes them to WebP (which
+# drops their metadata), in the Org object (src/org/lib/images.ts). Billed per unique transformation; without the binding,
+# or past the free plan's monthly allowance, images are stored as they came. `wrangler dev` runs a local stand-in.
+[images]
+binding = "IMAGES"
 
 [browser]
 binding = "BROWSER"

@@ -81,8 +81,8 @@ if(r.s<300){const f=r.j.file;let u=await fetch(B+r.j.upload.url,{method:'PUT',he
  let dl=await fetch(B+`/v1/files/${f.id}`,{headers:{authorization:'Bearer '+Bo.token},redirect:'manual'});const dt=await dl.text();t('Bob downloads',dl.status===200&&dt==='hello',dl.status+' '+dt.slice(0,100));}
 // A page to preview, with a picture, served here: the Worker fetches it (FLOW_UNFURL_ALLOW_HOSTS lets it reach localhost).
 const chunk=(type,data)=>{const b=Buffer.alloc(8+data.length+4);b.writeUInt32BE(data.length,0);b.write(type,4,'latin1');data.copy(b,8);b.writeUInt32BE(zlib.crc32(Buffer.concat([Buffer.from(type,'latin1'),data])),8+data.length);return b;};
-const ihdr=Buffer.alloc(13);ihdr.writeUInt32BE(800,0);ihdr.writeUInt32BE(420,4);ihdr[8]=8;ihdr[9]=0;
-const png=Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',ihdr),chunk('IDAT',zlib.deflateSync(Buffer.alloc(420*801))),chunk('IEND',Buffer.alloc(0))]);
+const ihdr=Buffer.alloc(13);ihdr.writeUInt32BE(2400,0);ihdr.writeUInt32BE(1260,4);ihdr[8]=8;ihdr[9]=0;
+const png=Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',ihdr),chunk('IDAT',zlib.deflateSync(Buffer.alloc(1260*2401))),chunk('IEND',Buffer.alloc(0))]);
 const site=http.createServer((q,s)=>{if(q.url==='/pic.png'){s.setHeader('content-type','image/png');return s.end(png);}if(q.url==='/article'){s.setHeader('content-type','text/html; charset=utf-8');return s.end(`<html><head><title>Ignored</title><meta property="og:title" content="A page to preview"><meta property="og:description" content="Fetched by the Worker."><meta property="og:image" content="/pic.png"><meta property="og:site_name" content="Test Site"></head><body>${'x'.repeat(5000)}</body></html>`);}s.statusCode=404;s.end();});
 await new Promise(res=>site.listen(0,'127.0.0.1',res));const pageUrl=`http://localhost:${site.address().port}/article`;
 const beforeLink=sa.ev.length;
@@ -90,8 +90,22 @@ r=await api(A.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto
 let card;for(let i=0;i<40&&!card;i++){card=sa.ev.slice(beforeLink).find(e=>e.type==='message.updated'&&e.data?.id===LM.id&&e.data.unfurls?.length)?.data.unfurls[0];if(!card)await sleep(250);}
 t('its preview arrives over the socket',card?.title==='A page to preview'&&card.description==='Fetched by the Worker.'&&card.siteName==='Test Site',JSON.stringify(card??sa.ev.slice(beforeLink).map(e=>e.type)).slice(0,170));
 rr=card?.image?await fetch(B+card.image.url,{headers:{authorization:'Bearer '+A.token}}):null;const pic=rr?Buffer.from(await rr.arrayBuffer()):null;
-t('its picture is served by Flow, not hotlinked',rr?.status===200&&rr.headers.get('content-type')==='image/png'&&pic.equals(png)&&card.image.width===800&&card.image.height===420,rr?rr.status+' '+rr.headers.get('content-type'):JSON.stringify(card?.image));
+t('its picture is served by Flow, not hotlinked',rr?.status===200&&card.image.url.startsWith('/v1/unfurl-images/'),rr?rr.status+' '+rr.headers.get('content-type'):JSON.stringify(card?.image));
+// Cloudflare Images (the IMAGES binding) resizes it to fit 1200×630 as WebP, with a 128×128 thumbnail; without it the picture is kept as fetched.
+const webpSize=b=>{const k=b.subarray(12,16).toString('latin1');if(k==='VP8X')return[1+b.readUIntLE(24,3),1+b.readUIntLE(27,3)];if(k==='VP8 ')return[b.readUInt16LE(26)&0x3fff,b.readUInt16LE(28)&0x3fff];if(k==='VP8L'){const v=b.readUInt32LE(21);return[(v&0x3fff)+1,((v>>14)&0x3fff)+1];}return null;};
+const webp=pic&&pic.subarray(0,4).toString('latin1')==='RIFF'&&pic.subarray(8,12).toString('latin1')==='WEBP';
+if(webp){t('its picture is resized to 1200×630 WebP',rr.headers.get('content-type')==='image/webp'&&card.image.width===1200&&card.image.height===630&&pic.length<png.length,JSON.stringify(card.image));
+  const th=await fetch(B+card.image.thumbUrl,{headers:{authorization:'Bearer '+A.token}});const tb=Buffer.from(await th.arrayBuffer());t('with a 128×128 WebP thumbnail',th.status===200&&card.image.thumbUrl!==card.image.url&&tb.subarray(8,12).toString('latin1')==='WEBP'&&String(webpSize(tb))==='128,128',th.status+' '+webpSize(tb));}
+else t('its picture is kept as fetched (no Images binding)',rr?.headers.get('content-type')==='image/png'&&pic?.equals(png)&&card.image.width===2400&&card.image.height===1260,rr?.headers.get('content-type')+' '+JSON.stringify(card?.image));
 r=await api(Bo.token,'GET',`/v1/channels/${gen.id}/messages`);t('the preview stays with the message',(r.j.messages??[]).find(m=>m.id===LM.id)?.unfurls?.[0]?.title==='A page to preview',JSON.stringify((r.j.messages??[]).find(m=>m.id===LM.id)?.unfurls).slice(0,120));
+// An attached picture: its size is read and its thumbnail made (512 px at most, WebP) by the same binding.
+r=await api(A.token,'POST',`/v1/workspaces/${W}/files/presign`,{channelId:gen.id,filename:'pic.png',name:'pic.png',mimeType:'image/png',sizeBytes:png.length});
+if(r.s<300){const f=r.j.file;await fetch(B+r.j.upload.url,{method:'PUT',headers:{authorization:'Bearer '+A.token,'content-type':'image/png'},body:png});
+  r=await api(A.token,'POST',`/v1/files/${f.id}/complete`);const fd2=r.j.file??r.j;
+  const th=await fetch(B+`/v1/files/${f.id}/thumb`,{headers:{authorization:'Bearer '+A.token}});const tb=Buffer.from(await th.arrayBuffer());
+  if(webp)t('an attached picture gets its size and a 512 px WebP thumbnail',fd2.width===2400&&fd2.height===1260&&fd2.hasThumb&&String(webpSize(tb))==='512,269',JSON.stringify(fd2).slice(0,90)+' '+webpSize(tb));
+  else t('an attached picture keeps itself as its thumbnail (no Images binding)',th.status===200&&tb.equals(png),th.status);}
+else t('presign a picture',false,r.s);
 site.close();
 // ---- huddles
 const cfg=(await api(null,'GET','/v1/config')).j;
