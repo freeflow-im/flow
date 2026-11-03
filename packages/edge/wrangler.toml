@@ -72,7 +72,7 @@ new_sqlite_classes = ["Docs"]
 # Markdown calls for the pages pdf.js finds no text on. `wrangler deploy` builds the image with Docker for linux/amd64 and
 # pushes it to Cloudflare's registry. standard-1 is 1/2 vCPU, 4 GiB and 8 GB of disk: OCR peaks near 0.5 GiB and reads
 # about a page a second on half a vCPU (basic's quarter took four times as long). Billed per 10 ms while awake; PdfOcr
-# sleeps 3 minutes after its last PDF, and asleep costs nothing. Requests go to one of 3 instances (runtime/pdfOcr.ts).
+# sleeps 1 minute after its last PDF, and asleep costs nothing. Requests go to one of 3 instances (runtime/pdfOcr.ts).
 [[containers]]
 class_name = "PdfOcr"
 image = "./containers/pdf-ocr/Dockerfile"
