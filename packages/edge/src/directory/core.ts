@@ -482,6 +482,11 @@ export class DirectoryCore {
     return this.rows('SELECT organization_id FROM memberships WHERE user_id = ?', userId).map((r) => r.organization_id as string);
   }
 
+  /** Whether an organization exists (it has members): a socket for any other id is refused before an object is woken. */
+  organizationKnown(organizationId: string): boolean {
+    return this.rows('SELECT 1 FROM memberships WHERE organization_id = ? LIMIT 1', organizationId).length > 0;
+  }
+
   organizationOfId(id: string): string | null {
     return (this.rows('SELECT organization_id FROM id_index WHERE id = ?', id)[0]?.organization_id as string | undefined) ?? null;
   }

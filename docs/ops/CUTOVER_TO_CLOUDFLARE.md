@@ -7,11 +7,20 @@ until it is retired, and switching back is one setting.
 
 Plan an afternoon: an hour to rehearse, an hour for the switch, and time to use the app between them.
 
+## As run (2026-11-02 and 03)
+
+- Rehearsed on edge.freeflow.im, then switched by #659 (`PORTED_HOSTS` gained app.freeflow.im) on 2026-11-03 00:34 UTC.
+  The import ran once, before the switch; nobody used the old app in between, so it was not run again.
+- Fixed during the rehearsal: R2's CORS rules lacked edge.freeflow.im (uploads), Docs Recents (#657), PDFs (#658).
+- Fixed after the switch: the MCP Docs desktop app's Google sign-in (#660, desktop 0.2.38).
+- Ported after the switch: the native apps' sign-in handoff and help pages (#661), link previews and PDF to Markdown for
+  text PDFs (#663), pushes and huddles (#662; on once their settings are copied with `scripts/put-secrets.sh`).
+- Not moved, by decision (decision_log 2026-11-03): the ChatGPT plugin, `/mcp` and its OAuth stay on AWS, behind the
+  Worker. So AWS is not retired yet ("After a week" below waits for the plugin).
+
 ## What does not work on Cloudflare yet
 
-Decide these are acceptable before switching (`docs/specs/cloudflare-spikes.md`): push notifications, huddles, link
-previews, PDF to Markdown, the ChatGPT plugin's own pages and file links, help pages, and the desktop and native apps'
-sign-in handoff. PDFs have only been tried locally, where they did not work; the rehearsal is their first real test.
+OCR of scanned PDFs (a Cloudflare Container), resized link-preview pictures (the Images binding); both in progress.
 
 ## 1. Merge and deploy
 
@@ -65,7 +74,7 @@ file, the assistant, a PDF.
 Take `app.freeflow.im` out of `PORTED_HOSTS` and deploy: the app is AWS again, with its data as it was at the freeze.
 Anything done on Cloudflare since is not on AWS.
 
-## After a week
+## After a week (on hold while the plugin is on AWS)
 
 Retire AWS (`FLOW_TO_AWS.md` has the stack): confirm first, because it deletes Postgres, the Docs files and the
 instance. Keep a final `pg_dump` and a copy of `/data/app` in R2 before that.

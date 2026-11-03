@@ -1,5 +1,14 @@
 # Decision log
 
+## 2026-11-03 — The ChatGPT plugin stays on AWS; app.freeflow.im is on Cloudflare (docs/ops/CUTOVER_TO_CLOUDFLARE.md)
+
+Ruled by the operator after the cut-over (#659, 2026-11-02): the ChatGPT plugin (Universal Docs: `docs.freeflow.im`,
+`mcpdocs.freeflow.im`, `/mcp`, `/oauth/*`) has real users (17 since Oct 11) and its design is to be revisited, so it
+stays on the AWS server for now and is not ported. The Worker forwards those hosts to `origin.freeflow.im`.
+Consequences: AWS is not retired while the plugin lives there; the plugin's data (`/data/workspace/plugin.db` and its
+users' files) is AWS's, while the app's data is Cloudflare's since the import; links from the plugin into the app reach
+Cloudflare's copy.
+
 ## 2026-11-02 — No users yet, so Cloudflare is one cut-over (docs/specs/cloudflare-migration.md)
 
 Ruled by the operator: nobody is using Flow or MCP Docs, so move as fast as possible. No dual-writes, flags, gradual

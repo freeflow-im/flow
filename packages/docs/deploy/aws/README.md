@@ -35,8 +35,8 @@ SIGTERM and a minute to drain. `deploy.sh services` starts only Caddy, Postgres 
    `DATA_DIR` and `GITHUB_REPO` are set by `deploy.sh` and the image. `npm run aws:secret -- <NAME> ...` copies
    variables from the local `.env`.
 4. Set the repository variables `AWS_DEPLOY_ROLE_ARN`, `AWS_INSTANCE_ID` and `AWS_ECR_REPOSITORY` (the stack's
-   outputs). Each push to main then deploys (`.github/workflows/docs-aws-deploy.yml`); run the workflow by hand
-   for the first one.
+   outputs). Since the move into the suite the server's image (`.github/workflows/flow-aws-deploy.yml`) carries
+   the Workspace app; the standalone `docs-aws-deploy.yml` was removed on 2026-11-03.
 5. Flow's secrets are SecureString parameters named `/flow/<VARIABLE>` (the list, with where each value comes
    from, is in `docs/ops/FLOW_TO_AWS.md`), including `/flow/POSTGRES_PASSWORD` for the box's Postgres
    (`openssl rand -hex 32`); `deploy.sh` sets `DATABASE_URL`, `NATS_URL`, `HOST` and `PORT`. The repository

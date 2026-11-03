@@ -238,6 +238,17 @@ describe('OAuth', () => {
   });
 });
 
+describe('organizations', () => {
+  it('knows an organization once someone has joined it', async () => {
+    const a = await signUp('a@example.com');
+    const org = newId();
+    expect(core.organizationKnown(org)).toBe(false);
+    await core.applyOrgChanges(org, [{ kind: 'join', id: org, user_id: a.user.id, role: 'owner', payload: null }]);
+    expect(core.organizationKnown(org)).toBe(true);
+    expect(core.organizationKnown(newId())).toBe(false);
+  });
+});
+
 describe('profiles', () => {
   it('hides a stranger from a stranger', async () => {
     const a = await signUp('a@example.com');
