@@ -3,8 +3,8 @@
 //
 // The accounts are in the object's SQLite, each password sealed with FLOW_DATA_KEY (org/crypto, the same scheme as Chat's
 // files) and never returned or logged. While the object is awake it keeps up to three IMAP connections per account: an
-// "interactive" one for what the user is waiting on (opening a message and its attachments, flags, moves, deletes, the
-// IMAP side of sending), a "background" one for lists and folders, and a "sorter" for sorting older mail into tabs and the
+// "interactive" one for what the user is waiting on (opening a message and its attachments, moves, deletes, the
+// IMAP side of sending), a "background" one for lists, folders and flags (read, starred: the app shows them at once), and a "sorter" for sorting older mail into tabs and the
 // re-check, which take long on a large mailbox, so neither a slow list holds up opening a message nor sorting a list page.
 // Each is opened when first needed, reused, and logged out after a minute with nothing to do; a request finding it dropped
 // opens another. Every operation on a folder holds that connection's lock on it (imapflow's getMailboxLock, which is per
@@ -1094,7 +1094,9 @@ export class Mail extends DurableObject<MailEnv> {
     app.patch('/v1/mail/accounts/:id/messages', async (c: MailContext) => {
       const b = parse(FlagsBody, await json(c));
       const r = c.get('account');
-      await this.withFolder(r, b.folder, 'interactive', async (cl) => {
+      // Flags go on the background connection: the app has already shown the change, and marking the message just read
+      // must not hold up opening the next one, which uses the interactive connection.
+      await this.withFolder(r, b.folder, 'background', async (cl) => {
         const range = b.uids.join(',');
         const set = async (flag: string, on: boolean | undefined) => {
           if (on === undefined) return;
