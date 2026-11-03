@@ -5,6 +5,11 @@
 #
 # Does nothing until the repository variable EDGE_DEPLOY is `true` (docs/ops/EDGE_FRONT_DOOR.md). Secrets:
 # CLOUDFLARE_EDGE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID.
+#
+# `wrangler deploy` also builds the PDF OCR container (packages/edge/containers/pdf-ocr, wrangler.toml [[containers]]) with
+# this runner's Docker and pushes it to Cloudflare's registry. Cloudflare runs linux/amd64 only; the Dockerfile installs on
+# the builder's platform and its amd64 stage has no RUN step, so this Arm runner needs no QEMU. Containers need the
+# Workers Paid plan; if the push of the image is refused, the token lacks the account's Containers permission (Edit).
 name: deploy-edge
 
 on:
@@ -58,4 +63,5 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           node scripts/assemble.mjs
+          docker buildx version
           pnpm exec wrangler deploy

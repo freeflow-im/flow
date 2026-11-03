@@ -68,6 +68,25 @@ new_sqlite_classes = ["Directory", "Org"]
 tag = "v2"
 new_sqlite_classes = ["Docs"]
 
+# OCR of scanned PDFs (src/pdfOcr.ts, containers/pdf-ocr): a Linux container behind each PdfOcr object, which Docs' PDF to
+# Markdown calls for the pages pdf.js finds no text on. `wrangler deploy` builds the image with Docker for linux/amd64 and
+# pushes it to Cloudflare's registry. standard-1 is 1/2 vCPU, 4 GiB and 8 GB of disk: OCR peaks near 0.5 GiB and reads
+# about a page a second on half a vCPU (basic's quarter took four times as long). Billed per 10 ms while awake; PdfOcr
+# sleeps 1 minute after its last PDF, and asleep costs nothing. Requests go to one of 3 instances (runtime/pdfOcr.ts).
+[[containers]]
+class_name = "PdfOcr"
+image = "./containers/pdf-ocr/Dockerfile"
+instance_type = "standard-1"
+max_instances = 3
+
+[[durable_objects.bindings]]
+name = "PDF_OCR"
+class_name = "PdfOcr"
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["PdfOcr"]
+
 [[r2_buckets]]
 binding = "BLOBS"
 bucket_name = "flow-files"

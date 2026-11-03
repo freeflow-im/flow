@@ -36,7 +36,10 @@ r=await api(A.token,'POST',`/api/import/pdf?workspace=${W}&shared=1&filename=${e
 r=await api(A.token,'POST',`/api/files/${r.j.file?.id}/markdown`);t('turn it into Markdown',r.s===200&&r.j.doc?.kind==='markdown'&&r.j.doc?.title==='Q3 Report'&&r.j.pages===2,r.s+' '+JSON.stringify(r.j).slice(0,160));
 r=await api(A.token,'GET',`/api/markdown/${r.j.doc?.id}`);t('the Markdown has its text and headings',/^# Quarterly Report\n\nThe office filed every expense/.test(r.j.doc?.text??'')&&(r.j.doc?.text??'').includes('## Next Steps'),JSON.stringify(r.j.doc?.text??r.j).slice(0,160));
 r=await api(A.token,'POST',`/api/import/pdf?workspace=${W}&shared=1&filename=scan.pdf`,fixture('scan.pdf'),'application/octet-stream');
-r=await api(A.token,'POST',`/api/files/${r.j.file?.id}/markdown`);t('a scan says it needs OCR',r.s===400&&/OCR/.test(r.j.error),r.s+' '+JSON.stringify(r.j).slice(0,160));
+// With OCR=1, wrangler dev runs the PdfOcr container (Docker) and the scan is read; without it, the scan is refused, saying why.
+r=await api(A.token,'POST',`/api/files/${r.j.file?.id}/markdown`);
+if(process.env.OCR){const md=r.s===200?(await api(A.token,'GET',`/api/markdown/${r.j.doc?.id}`)).j.doc?.text??'':'';t('a scan is read with OCR in the container',r.s===200&&JSON.stringify(r.j.ocrPages)==='[1]'&&/Scanned Receipt/.test(md),r.s+' '+JSON.stringify(r.j).slice(0,160)+' '+md.slice(0,80));}
+else t('a scan says it needs OCR',r.s===400&&/OCR/.test(r.j.error),r.s+' '+JSON.stringify(r.j).slice(0,160));
 r=await api(Bo.token,'GET',`/api/sheets?workspace=${W2}&shared=1`);t('the other organization is separate',!JSON.stringify(r.j).includes(S),JSON.stringify(r.j).slice(0,100));
 r=await api(null,'GET','/api/sheets');t('no session refused',r.s===401,r.s);
 console.log(`\n${pass} passed, ${fail} failed`);process.exit(fail?1:0);

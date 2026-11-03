@@ -1,11 +1,13 @@
 // @ts-nocheck: copied from packages/docs, where it is typechecked under that package's settings (cloudflare-spikes.md).
 // PDF -> Markdown. On Node (packages/docs) this is LiteParse, with Tesseract OCR for scanned pages; neither loads on
 // Workers (cloudflare-spikes.md), so here pdf.js reads the text and runtime/pdfText.ts lays it out as Markdown (headings,
-// lists, links), leaving out running headers and footers. Scanned pages are not read: OCR is not available here, and
-// the user is told so. Pictures in the PDF are left out.
+// lists, links), leaving out running headers and footers. The pages where pdf.js finds no text (scans) go to the PdfOcr
+// container (runtime/pdfOcr.ts), which reads them with LiteParse and Tesseract; when it cannot be reached, the user is
+// told. Pictures in the PDF are left out.
 import { createHash } from 'node:crypto';
 import { readFile } from '../runtime/fsp.ts';
 import { PdfReadError, readPdfText } from '../runtime/pdfText.ts';
+import { MAX_OCR_PAGES, OcrUnavailable, ocrPages as readWithOcr, PdfOcrError } from '../runtime/pdfOcr.ts';
 import type { FileStore } from './files.ts';
 import type { SheetStore } from './sheets.ts';
 import { scopeOfMeta, type ViewerArg } from './scope.ts';
@@ -31,6 +33,8 @@ export interface PdfMarkdown {
   /** Pages read with OCR (1-based): their text may have mistakes. */
   ocrPages: number[];
   warnings: string[];
+  /** Why OCR of the scanned pages could not be done, when it could not: 'none' where there is no OCR, else why ("it is busy"). */
+  ocrUnavailable?: string;
 }
 
 /** Nothing to stop: pdf.js runs in this thread and keeps nothing between PDFs. Kept for its callers. */
@@ -59,11 +63,35 @@ async function convert(bytes: Buffer): Promise<PdfMarkdown> {
   }
   const warnings: string[] = [];
   if (read.totalPages > read.pages.length) warnings.push(`Only the first ${read.pages.length} of ${read.totalPages} pages were read.`);
+  // Pages with no text: scans, read with OCR in the container. pdf.js stays the fast path for everything else.
+  const pages = [...read.pages];
   const empty = read.emptyPages;
-  if (empty.length && empty.length < read.pages.length) {
-    warnings.push(`${empty.length === 1 ? 'Page' : 'Pages'} ${empty.join(', ')} ${empty.length === 1 ? 'has' : 'have'} no text that can be read, so ${empty.length === 1 ? 'it was' : 'they were'} left out. A scanned page needs OCR, which is not available here yet.`);
+  const ocrPages: number[] = [];
+  let ocrUnavailable: string | undefined;
+  if (empty.length) {
+    const reading = empty.slice(0, MAX_OCR_PAGES);
+    if (empty.length > reading.length) warnings.push(`Only ${reading.length} of the ${empty.length} pages with no text were read with OCR.`);
+    try {
+      const ocr = await readWithOcr(bytes, reading);
+      for (const p of ocr.pages) {
+        if (!reading.includes(p.page) || !/[\p{L}\p{N}]/u.test(p.markdown)) continue;
+        pages[p.page - 1] = p.markdown;
+        ocrPages.push(p.page);
+      }
+      warnings.push(...ocr.warnings);
+    } catch (e) {
+      if (e instanceof OcrUnavailable) ocrUnavailable = e.message === 'OCR is not available here' ? 'none' : e.message;
+      else if (e instanceof PdfOcrError) warnings.push(`The pages with no text could not be read with OCR: ${e.message}`);
+      else throw e;
+    }
+    const left = empty.filter((p) => !ocrPages.includes(p));
+    if (left.length && left.length < read.pages.length) {
+      const why = ocrUnavailable === 'none' ? ' A scanned page needs OCR, which is not available here.' : ocrUnavailable ? ` If ${left.length === 1 ? 'it is a scan' : 'they are scans'}, the OCR service could not read ${left.length === 1 ? 'it' : 'them'} just now: ${ocrUnavailable}. Try again in a minute.` : '';
+      warnings.push(`${left.length === 1 ? 'Page' : 'Pages'} ${left.join(', ')} ${left.length === 1 ? 'has' : 'have'} no text that can be read, so ${left.length === 1 ? 'it was' : 'they were'} left out.${why}`);
+    }
   }
-  return { markdown: joinPages(read.pages), pageCount: read.totalPages, ocrPages: [], warnings };
+  ocrPages.sort((a, b) => a - b);
+  return { markdown: joinPages(pages), pageCount: read.totalPages, ocrPages, warnings, ...(ocrUnavailable ? { ocrUnavailable } : {}) };
 }
 
 // The last few conversions, by content: reading a long PDF in parts converts it once.
@@ -76,7 +104,8 @@ export function pdfToMarkdown(bytes: Buffer): Promise<PdfMarkdown> {
   let made = recent.get(key);
   if (!made) {
     made = convert(bytes);
-    made.catch(() => recent.delete(key));
+    // A failure is not kept, and neither is a result OCR could not finish: the next try may reach it.
+    made.then((m) => { if (m.ocrUnavailable && recent.get(key) === made) recent.delete(key); }, () => recent.delete(key));
     recent.set(key, made);
     if (recent.size > RECENT) recent.delete(recent.keys().next().value!);
   }
@@ -92,7 +121,10 @@ export async function pdfToMarkdownFile(stores: { sheets: SheetStore; files: Fil
   if (!f) return null;
   if (f.meta.type !== 'application/pdf') throw new PdfError(`${f.meta.filename} is not a PDF.`);
   const made = await pdfToMarkdown(await readFile(f.file));
-  if (!made.markdown.trim()) throw new PdfError(`No text could be read from ${f.meta.filename}. If it is a scan, it needs OCR, which is not available here yet.`);
+  if (!made.markdown.trim()) {
+    const why = !made.ocrUnavailable ? '' : made.ocrUnavailable === 'none' ? ' If it is a scan, it needs OCR, which is not available here.' : ` If it is a scan, the OCR service could not read it just now: ${made.ocrUnavailable}. Try again in a minute.`;
+    throw new PdfError(`No text could be read from ${f.meta.filename}.${why}`);
+  }
   const title = f.meta.filename.replace(/\.pdf$/i, '') || 'Document';
   // Beside it: in its folder and its root (server/scope.ts).
   const sheet = await stores.sheets.createMarkdown(scopeOfMeta(f.meta, userId), title, newMarkdownDoc(`${made.markdown}\n`), f.meta.folder ?? '');
