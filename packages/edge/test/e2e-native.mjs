@@ -1,6 +1,7 @@
 // The web-to-app sign-in handoff (/v1/auth/handoff/*) and the built-in help (/v1/help/*), against a local `wrangler dev`
 // started as test/e2e.mjs says, with the handoff's return URLs for this address:
-//   ... --var FLOW_HANDOFF_RETURN_URLS:flow://signin,http://localhost:18796/ > /tmp/edge.log 2>&1 &
+//   ... --local-upstream localhost:18796 --var FLOW_HANDOFF_RETURN_URLS:flow://signin,http://localhost:18796/ > /tmp/edge.log 2>&1 &
+// (--local-upstream: otherwise wrangler rewrites the Origin header to the first route's host, edge.freeflow.im.)
 //   node test/e2e-native.mjs /tmp/edge.log
 import fs from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';

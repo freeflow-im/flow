@@ -231,10 +231,10 @@ interface Logger {
 }
 
 /**
- * One drain pass. Exported for tests/QA; the interval loop calls it. Returns
+ * One drain pass. Exported for tests; `drainDuePushes` calls it from the Org object's alarm. Returns
  * the number of rows resolved as delivered.
  *
- * Rows are claimed with `FOR UPDATE SKIP LOCKED` in a short transaction that
+ * Rows are claimed (on Node `FOR UPDATE SKIP LOCKED`; an object is single-threaded) in a short transaction that
  * pushes `nextAttemptAt` forward as a lease, so two replicas draining is
  * throughput rather than double delivery. Sending happens outside that
  * transaction; the success/backoff writes below overwrite the lease.
@@ -464,32 +464,32 @@ async function maybeAutoDisable(userId: string, log: Logger): Promise<void> {
   }
 }
 
-let workerTimer: ReturnType<typeof setInterval> | null = null;
+// ---- the Org object's alarm drives delivery ------------------------
+// On Node an interval polled the table every second. An object sleeps until its alarm, so it asks when the next row
+// is due (`nextPushDueAt`) whenever it sets that alarm, and drains in the alarm.
 
-export function startPushWorker(log: Logger): void {
-  if (workerTimer) return;
-  // Build the driver once at boot so a half-configured `apns` deploy says so
-  // here, next to the deploy that caused it, instead of at whatever hour the
-  // first notification happens to fire (#250).
-  try {
-    pushSender();
-  } catch (err) {
-    log.warn(err, 'push driver is misconfigured — no push will be delivered');
-  }
-  const tick = async () => {
+/** When the earliest undelivered push is due (ms), or null when nothing is owed. */
+export function nextPushDueAt(): number | null {
+  const row = db
+    .select({ at: pendingPush.nextAttemptAt })
+    .from(pendingPush)
+    .where(and(isNull(pendingPush.deliveredAt), isNull(pendingPush.failedAt)))
+    .orderBy(pendingPush.nextAttemptAt)
+    .limit(1)
+    .get();
+  return row ? row.at.getTime() : null;
+}
+
+/** Drain everything due now, a batch at a time. Bounded, so one alarm cannot run away; what is left re-arms it. */
+export async function drainDuePushes(log: Logger, maxPasses = 10): Promise<void> {
+  for (let i = 0; i < maxPasses; i++) {
+    const due = nextPushDueAt();
+    if (due === null || due > Date.now()) return;
     try {
       await drainPendingPush(log);
     } catch (err) {
-      log.warn(err, 'push outbox drain failed');
+      log.warn({ err: String(err) }, 'push outbox drain failed');
+      return;
     }
-  };
-  workerTimer = setInterval(tick, 1_000);
-  workerTimer.unref();
-  void tick();
-}
-
-/** Tests only: let a suite stop the interval it started. */
-export function _stopPushWorkerForTests(): void {
-  if (workerTimer) clearInterval(workerTimer);
-  workerTimer = null;
+  }
 }

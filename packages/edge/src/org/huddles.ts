@@ -1,4 +1,4 @@
-// Voice huddle (Phase 1) — the in-memory roster of who's live in a channel's
+// Voice huddle (Phase 1) — the roster of who's live in a channel's
 // ambient audio call. See CONTEXT.md for the Huddle glossary entry and
 // decision_log.md (2026-08-20) for the rulings behind this design.
 //
@@ -10,30 +10,33 @@
 //   2. the LiveKit webhook (participant_left / room_finished), the
 //      reconciliation safety net for a client that vanished without calling
 //      leave,
-//   3. boot-time reconciliation against LiveKit's REST API, since a server
-//      restart wipes this map while LiveKit's rooms keep running.
+//   3. on Node, boot-time reconciliation against LiveKit's REST API, since a
+//      server restart wiped its map while LiveKit's rooms kept running.
 // There is deliberately no TTL sweep here (contrast channelIndicators):
 // LiveKit's webhook already fires on a dead peer, so there's no "forgot to
 // refresh" failure mode to guard against.
+// On Workers the roster is a table in the organization's database, not a module-level map: an Org object is evicted
+// from memory between requests (its sockets hibernate), and a map would forget every live huddle each time. The
+// functions keep the Node signatures, synchronous, because the object's SQLite is.
+import { sql } from 'drizzle-orm';
 import type { HuddleParticipantDTO } from '@flow/shared';
+import { db } from './db/index.js';
 
-interface Entry {
-  workspaceId: string;
-  joinedAt: number; // epoch ms
-}
+/** Created by the Org object on start (object.ts), beside its migrations. */
+export const HUDDLE_ROSTER_DDL = 'CREATE TABLE IF NOT EXISTS _huddle_participants (channel_id TEXT NOT NULL, user_id TEXT NOT NULL, workspace_id TEXT NOT NULL, joined_at INTEGER NOT NULL, PRIMARY KEY (channel_id, user_id))';
 
-/** channelId -> userId -> entry. Room name is the channel id (1:1), so this
- * map's keys are exactly the set of channels with a live huddle. */
-const byChannel = new Map<string, Map<string, Entry>>();
+interface Row { channel_id: string; user_id: string; workspace_id: string; joined_at: number }
+
+const rows = (channelId: string): Row[] =>
+  db.all<Row>(sql`SELECT * FROM _huddle_participants WHERE channel_id = ${channelId} ORDER BY joined_at, user_id`);
 
 export interface HuddleParticipant {
   userId: string;
   joinedAt: number; // epoch ms
 }
 
-function toParticipants(users: Map<string, Entry> | undefined): HuddleParticipant[] {
-  if (!users) return [];
-  return [...users].map(([userId, e]) => ({ userId, joinedAt: e.joinedAt })).sort((a, b) => a.joinedAt - b.joinedAt);
+function toParticipants(list: Row[]): HuddleParticipant[] {
+  return list.map((r) => ({ userId: r.user_id, joinedAt: r.joined_at }));
 }
 
 export function toParticipantDTOs(participants: HuddleParticipant[]): HuddleParticipantDTO[] {
@@ -42,7 +45,7 @@ export function toParticipantDTOs(participants: HuddleParticipant[]): HuddlePart
 
 /** The channel's current roster — what clients render. Empty when no huddle is live. */
 export function huddleParticipants(channelId: string): HuddleParticipant[] {
-  return toParticipants(byChannel.get(channelId));
+  return toParticipants(rows(channelId));
 }
 
 /** Rosters for many channels at once (the channel-list overlay). Only
@@ -69,13 +72,8 @@ export function joinHuddle(
   now = Date.now(),
 ): { before: HuddleParticipant[]; after: HuddleParticipant[] } {
   const before = huddleParticipants(channelId);
-  let users = byChannel.get(channelId);
-  if (!users) {
-    users = new Map();
-    byChannel.set(channelId, users);
-  }
-  const existing = users.get(userId);
-  users.set(userId, { workspaceId, joinedAt: existing?.joinedAt ?? now });
+  db.run(sql`INSERT INTO _huddle_participants (channel_id, user_id, workspace_id, joined_at) VALUES (${channelId}, ${userId}, ${workspaceId}, ${now})
+    ON CONFLICT (channel_id, user_id) DO UPDATE SET workspace_id = excluded.workspace_id`);
   return { before, after: huddleParticipants(channelId) };
 }
 
@@ -88,22 +86,18 @@ export function leaveHuddle(
   channelId: string,
   userId: string,
 ): { before: HuddleParticipant[]; after: HuddleParticipant[]; workspaceId: string | undefined } {
-  const users = byChannel.get(channelId);
-  const before = toParticipants(users);
-  const workspaceId = users?.get(userId)?.workspaceId;
-  users?.delete(userId);
-  if (users?.size === 0) byChannel.delete(channelId);
-  return { before, after: huddleParticipants(channelId), workspaceId };
+  const list = rows(channelId);
+  const workspaceId = list.find((r) => r.user_id === userId)?.workspace_id;
+  db.run(sql`DELETE FROM _huddle_participants WHERE channel_id = ${channelId} AND user_id = ${userId}`);
+  return { before: toParticipants(list), after: huddleParticipants(channelId), workspaceId };
 }
 
 /** Wipe a whole channel's huddle — the webhook's `room_finished` safety net
  * (LiveKit itself says the room is gone, so every participant is gone). */
 export function clearChannelHuddle(channelId: string): { before: HuddleParticipant[]; workspaceId: string | undefined } {
-  const users = byChannel.get(channelId);
-  const before = toParticipants(users);
-  const workspaceId = users ? [...users.values()][0]?.workspaceId : undefined;
-  byChannel.delete(channelId);
-  return { before, workspaceId };
+  const list = rows(channelId);
+  db.run(sql`DELETE FROM _huddle_participants WHERE channel_id = ${channelId}`);
+  return { before: toParticipants(list), workspaceId: list[0]?.workspace_id };
 }
 
 /**
@@ -117,12 +111,9 @@ export function reconcileChannel(
   participants: HuddleParticipant[],
 ): { before: HuddleParticipant[]; after: HuddleParticipant[] } {
   const before = huddleParticipants(channelId);
-  if (participants.length === 0) {
-    byChannel.delete(channelId);
-  } else {
-    const users = new Map<string, Entry>();
-    for (const p of participants) users.set(p.userId, { workspaceId, joinedAt: p.joinedAt });
-    byChannel.set(channelId, users);
+  db.run(sql`DELETE FROM _huddle_participants WHERE channel_id = ${channelId}`);
+  for (const p of participants) {
+    db.run(sql`INSERT INTO _huddle_participants (channel_id, user_id, workspace_id, joined_at) VALUES (${channelId}, ${p.userId}, ${workspaceId}, ${p.joinedAt})`);
   }
   return { before, after: huddleParticipants(channelId) };
 }
@@ -135,18 +126,15 @@ export function reconcileChannel(
  * looks at channel rows.
  */
 export function activeHuddleChannelForUser(userId: string): string | undefined {
-  for (const [channelId, users] of byChannel) {
-    if (users.has(userId)) return channelId;
-  }
-  return undefined;
+  return db.all<{ channel_id: string }>(sql`SELECT channel_id FROM _huddle_participants WHERE user_id = ${userId} ORDER BY joined_at LIMIT 1`)[0]?.channel_id;
 }
 
 /** Every channel id with a live huddle right now (channel-list overlay input, tests). */
 export function activeHuddleChannelIds(): string[] {
-  return [...byChannel.keys()];
+  return db.all<{ channel_id: string }>(sql`SELECT DISTINCT channel_id FROM _huddle_participants`).map((r) => r.channel_id);
 }
 
 /** Tests only: forget everything. */
 export function resetHuddles(): void {
-  byChannel.clear();
+  db.run(sql`DELETE FROM _huddle_participants`);
 }

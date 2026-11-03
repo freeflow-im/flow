@@ -639,6 +639,23 @@ export function registerRoutes(app: FastifyInstance): void {
     return hd.joinHuddle(id, req.user.id);
   });
 
+  // LiveKit webhook: the safety net for a participant or room that vanished without a leave. Not a Flow user, so no
+  // requireAuth: the request's own signed Authorization header is verified instead (the Worker checked it once
+  // already, to find this organization by the room's name; routes/org.ts). LiveKit sends application/webhook+json,
+  // which arrives here as raw bytes, exactly what the signature covers.
+  app.post('/v1/livekit/webhook', async (req, reply) => {
+    const authHeader = (req.headers as Record<string, string | undefined>).authorization ?? '';
+    const raw: unknown = req.body;
+    const body = Buffer.isBuffer(raw) ? (raw as Buffer).toString('utf8') : typeof raw === 'string' ? raw : JSON.stringify(raw ?? '');
+    try {
+      await hd.handleLiveKitWebhook(body, authHeader);
+    } catch (err) {
+      console.warn('livekit webhook rejected', String(err));
+      return reply.status(400).send({ error: { code: 'invalid_webhook', message: 'invalid webhook' } });
+    }
+    return reply.status(200).send({ ok: true });
+  });
+
   app.post('/v1/channels/:id/huddle/leave', { preHandler: requireAuth }, async (req) => {
     const { id } = req.params as { id: string };
     await hd.leaveHuddle(id, req.user.id);

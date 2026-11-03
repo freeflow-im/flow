@@ -32,6 +32,10 @@ not_found_handling = "none"
 
 # Secrets, set with `wrangler secret put`: EDGE_ORIGIN_SECRET (the same value as /flow/EDGE_ORIGIN_SECRET on the instance),
 # EMAIL_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, GOOGLE_CLIENT_ID, APPLE_AUDIENCE.
+# Pushes (src/org/push): FLOW_PUSH_DRIVER=apns with the secrets FLOW_APNS_KEY (base64 of the .p8), FLOW_APNS_KEY_ID and
+# FLOW_APNS_TEAM_ID, the values in /flow/ on AWS; FLOW_APNS_ENV and FLOW_APNS_TOPIC are optional. Without them the dev
+# driver logs each push and Apple is never called. Huddles: LIVEKIT_API_KEY, LIVEKIT_API_SECRET and LIVEKIT_URL (/flow/
+# too); all three turn huddles on in /v1/config, and LiveKit's webhook comes to /v1/livekit/webhook.
 [vars]
 ORIGIN_URL = "https://origin.freeflow.im"
 # The hosts the built files are served on. The other hosts' paths are the origin's (the plugin, the 301s to the app).
