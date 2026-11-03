@@ -14,6 +14,7 @@ import { helpRoutes } from './routes/help';
 export { Directory } from './directory/object';
 export { Org } from './org/object';
 export { Docs } from './docs/object';
+export { PdfOcr } from './pdfOcr';
 import type { Org as OrgObject } from './org/object';
 
 export interface Env extends ProxyEnv, AuthEnv {
@@ -24,6 +25,8 @@ export interface Env extends ProxyEnv, AuthEnv {
   /** The hosts the ported API answers on: the rehearsal host until the cut-over, then the app's too. */
   PORTED_HOSTS: string;
   ORG: DurableObjectNamespace<OrgObject>;
+  /** Scanned PDFs' OCR; only the Docs object calls it. */
+  PDF_OCR?: DurableObjectNamespace<import('./pdfOcr').PdfOcr>;
 }
 
 /** Paths that are never files: they skip the look in the assets. */

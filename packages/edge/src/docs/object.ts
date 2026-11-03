@@ -7,6 +7,7 @@ import { DocsApp, type Caller, type DocsRequest } from './runtime/fastify.ts';
 import { buildApp } from './server/app.ts';
 import { insertRows, tableCounts } from '../importing';
 import { setBrowserBinding } from './server/pdf.ts';
+import { setOcrBinding } from './runtime/pdfOcr.ts';
 
 export interface DocsEnv {
   BLOBS: R2Bucket;
@@ -14,6 +15,8 @@ export interface DocsEnv {
   FLOW_WEB_URL?: string;
   ANTHROPIC_API_KEY?: string;
   BROWSER?: Fetcher;
+  /** The PdfOcr container (src/pdfOcr.ts), for scanned PDFs. */
+  PDF_OCR?: DurableObjectNamespace;
 }
 const BASE = '/workspace';
 
@@ -25,6 +28,7 @@ export class Docs extends DurableObject<DocsEnv> {
   constructor(ctx: DurableObjectState, env: DocsEnv) {
     super(ctx, env);
     setBrowserBinding(env.BROWSER ?? null);
+    setOcrBinding(env.PDF_OCR ?? null);
     // The headless browser loads Docs' print pages from the public address, through the Worker like any visitor.
     process.env.PRINT_ORIGIN = (env.FLOW_WEB_URL ?? 'https://app.freeflow.im').replace(/\/+$/, '');
     this.context = {

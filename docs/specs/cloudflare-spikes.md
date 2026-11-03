@@ -90,7 +90,8 @@ Each ran real work inside workerd with `nodejs_compat`. Sizes are one library's 
   is required for this reason. SQLite Durable Objects themselves are available on the Free plan, at 1 GB per object.
 - **A container replaces the "small origin service".** LiteParse and Tesseract have to run outside workerd. Cloudflare
   Containers (Workers Paid) run a Linux image started from a Durable Object, so PDF-to-Markdown can move too and step 7
-  can really retire AWS. It has not been tried; step 5.3 starts with a trial on a real scanned PDF.
+  can really retire AWS. Done on 2026-11-03: the PdfOcr container (`packages/edge/containers/pdf-ocr`) reads the pages pdf.js
+  finds no text on; `wrangler dev` runs it locally under Docker.
 - **Startup time needs watching.** Workers have no compressed size limit, but they allow 64 MiB uncompressed and 1 s to
   start. The libraries above come to roughly 8 MB gzipped, and all of them are parsed at startup. Imports and exports
   may belong in their own Worker behind a service binding, which also keeps their load cost away from chat. Measure
@@ -142,7 +143,7 @@ The Worker with all of it bundles to 2.1 MB gzipped and starts in workerd. `test
 documents and Markdown created, listed, read by id alone, saved with the body round-tripping through R2, uploads and downloads,
 the revision feed streaming, separation between organizations, and refusals. `test/e2e.mjs` still passes its 67.
 
-**Not working on Workers yet:** PDFs (Chromium; Browser Rendering is next), OCR of scanned PDFs (PDF to Markdown itself runs on pdf.js), the ChatGPT plugin's
+**Not working on Workers yet:** PDFs (Chromium; Browser Rendering is next), the ChatGPT plugin's
 own pages and file links (`plugin/server/http.ts` writes to Node's raw response), telling text files from others for the text editor
 (it reads the file synchronously, so every file counts as not text), the assistant (it should run, but has not been tried without
 a model key), Office imports (should run per Spike B; not tried here), and the Docs pages themselves, which the origin still serves.

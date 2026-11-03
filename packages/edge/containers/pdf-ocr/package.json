@@ -1,0 +1,11 @@
+{
+  "name": "flow-pdf-ocr",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The Worker's PDF OCR container: LiteParse with Tesseract, behind a small HTTP server (server.mjs). Not part of the pnpm workspace; built by wrangler from the Dockerfile.",
+  "scripts": { "start": "node server.mjs" },
+  "dependencies": {
+    "@llamaindex/liteparse": "2.17.0"
+  }
+}
