@@ -2,6 +2,7 @@
 // presets, and the request bodies. The Mail object (object.ts) and routes/mail.ts use them; rules.test.ts tests them.
 import { z } from 'zod';
 import { ApiError } from '../errors';
+import { CATEGORIES, TAB_CATEGORIES } from './categorize';
 
 export type Security = 'tls' | 'starttls' | 'none';
 export interface ServerSettings { host: string; port: number; security: Security; username?: string }
@@ -102,10 +103,16 @@ export const AccountPatch = z.object({
   password: z.string().min(1).max(1000).optional(),
   imap: Server.optional(),
   smtp: Server.optional(),
+  /** The inbox tabs that are on, besides Primary. Changing only these never re-verifies the login. */
+  tabs: z.array(z.enum(TAB_CATEGORIES)).max(8).optional(),
 });
 const Uids = z.array(z.number().int().positive()).min(1).max(1000);
 export const FlagsBody = z.object({ folder: z.string().min(1), uids: Uids, seen: z.boolean().optional(), flagged: z.boolean().optional() });
 export const MoveBody = z.object({ folder: z.string().min(1), uids: Uids, to: z.string().min(1) });
+/** "Move to tab": the messages' senders go to `category` from now on. */
+export const CategoryBody = z.object({ folder: z.string().min(1), uids: Uids, category: z.enum(CATEGORIES) });
+/** Sets (or, with `category: null`, forgets) the tab chosen for senders: how a move is undone. */
+export const SendersCategoryBody = z.object({ senders: z.array(z.object({ address: z.string().trim().toLowerCase().min(3).max(320), category: z.enum(CATEGORIES).nullable() })).min(1).max(1000) });
 export const DeleteBody = z.object({ folder: z.string().min(1), uids: Uids });
 const Address = z.object({ name: z.string().max(500).default(''), address: z.string().trim().email() });
 export const SendBody = z.object({

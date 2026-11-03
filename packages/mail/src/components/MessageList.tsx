@@ -2,14 +2,16 @@
 // rows (sender, subject, snippet, date, unread dot, flag, attachment), checkboxes for acting on several at once, and
 // more rows as the list scrolls to its end (`before=`).
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
-import { Archive, ArrowLeft, Columns2, FolderInput, PanelTop, Loader2, Mail, MailOpen, Menu, Paperclip, RefreshCw, Search, Star, Trash2, X } from 'lucide-react';
-import type { MailFolder, MessageSummary } from '../api';
+import { Archive, ArrowLeft, Columns2, EllipsisVertical, FolderInput, PanelTop, Loader2, Mail, MailOpen, Menu, Paperclip, RefreshCw, Search, Star, Tag, Trash2, X } from 'lucide-react';
+import type { Category, MailFolder, MessageSummary } from '../api';
 import { displayName } from '../lib/addresses';
 import { folderLabel, orderFolders } from '../lib/folders';
 import { listDate, fullDate, relativeDate } from '../lib/format';
+import { TAB_INFO } from '../lib/tabs';
 import { cn } from '../lib/utils';
+import { TAB_ICONS } from './InboxTabs';
 import { Button } from './ui/button';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from './ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from './ui/dropdown-menu';
 import { Tabs, TabsList, TabsTrigger } from './ui/tabs';
 
 export type ListTab = 'all' | 'unread';
@@ -49,6 +51,10 @@ export interface MessageListProps {
   onShowFolders?: (() => void) | undefined;
   /** On a phone, where the suite bar has no search: a search field of the list's own. */
   onSearch?: ((q: string) => void) | undefined;
+  /** The inbox tabs (InboxTabs), above the rows. */
+  tabBar?: ReactNode | undefined;
+  /** "Move to tab", for an inbox with tabs: the tabs, the one open (null while searching), and the move. */
+  tabMove?: { tabs: Category[]; current: Category | null; onMove(uids: number[], tab: Category): void } | undefined;
 }
 
 /** The list's date: "5 min ago" for the last hour, then the time today, the weekday this week, the date before. */
@@ -80,6 +86,9 @@ export function MessageList(p: MessageListProps) {
     scroller.current?.querySelector(`[data-uid="${p.cursorUid}"]`)?.scrollIntoView({ block: 'nearest' });
   }, [p.cursorUid]);
 
+  // The row whose menu is open (its ⋮, or a right-click on it): it keeps its hover actions while the menu is up.
+  const [menuUid, setMenuUid] = useState<number | null>(null);
+  const tabTargets = (current: Category | null | undefined) => (p.tabMove?.tabs ?? []).filter((t) => t !== current);
   const allChecked = p.messages.length > 0 && p.messages.every((m) => p.checked.has(m.uid));
   const bulk = p.checked.size > 0;
   const moveTargets = (() => {
@@ -134,6 +143,19 @@ export function MessageList(p: MessageListProps) {
                 ))}
               </DropdownMenuContent>
             </DropdownMenu>
+            {p.tabMove && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-sm" title="Move to tab" aria-label="Move to tab">
+                    <Tag />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  <DropdownMenuLabel>Move to tab</DropdownMenuLabel>
+                  <TabItems tabs={tabTargets(p.tabMove.current)} onSelect={(t) => p.tabMove!.onMove([...p.checked], t)} />
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
             <Button variant="ghost" size="icon-sm" title="Delete" aria-label="Delete" onClick={() => p.onBulk('delete')}>
               <Trash2 />
             </Button>
@@ -191,6 +213,7 @@ export function MessageList(p: MessageListProps) {
           />
         </form>
       )}
+      {!p.query && p.tabBar}
       {p.query && (
         <div className="flex shrink-0 items-center gap-2 border-b border-hairline bg-selected-blue px-4 py-1.5 text-[13px]">
           <span className="min-w-0 flex-1 truncate">
@@ -209,7 +232,15 @@ export function MessageList(p: MessageListProps) {
         )}
         {p.error && <div className="m-4 rounded-lg border border-danger/30 bg-danger/5 p-3 text-sm text-danger">{p.error}</div>}
         {!p.loading && !p.error && p.messages.length === 0 && (
-          <div className="p-10 text-center text-sm text-muted">{p.query ? 'No messages match your search.' : p.tab === 'unread' ? 'No unread messages.' : 'No messages in this folder.'}</div>
+          <div className="p-10 text-center text-sm text-muted">{p.query
+              ? 'No messages match your search.'
+              : p.tab === 'unread'
+                ? 'No unread messages.'
+                : p.tabMove?.current && p.tabBar
+                  ? p.hasMore
+                    ? `Looking for ${TAB_INFO[p.tabMove.current].label} mail…`
+                    : `No messages in ${TAB_INFO[p.tabMove.current].label}.`
+                  : 'No messages in this folder.'}</div>
         )}
         {p.messages.map((m) => {
           const isOpen = p.openUid === m.uid;
@@ -222,6 +253,7 @@ export function MessageList(p: MessageListProps) {
               p.onRowAction?.(m, a);
             };
             const unread = !m.seen;
+            const menuOpen = menuUid === m.uid;
             return (
               <div
                 key={m.uid}
@@ -230,11 +262,17 @@ export function MessageList(p: MessageListProps) {
                 aria-selected={isOpen}
                 tabIndex={-1}
                 onClick={() => p.onOpen(m.uid)}
+                onContextMenu={(e) => {
+                  if (!p.onRowAction) return;
+                  e.preventDefault();
+                  setMenuUid(m.uid);
+                }}
                 className={cn(
                   'group relative flex h-10 cursor-pointer items-center gap-1 border-b border-hairline pr-3 pl-2 text-sm hover:z-10 hover:shadow-[inset_1px_0_0_#dadce0,inset_-1px_0_0_#dadce0,0_1px_2px_0_rgba(60,64,67,.3),0_1px_3px_1px_rgba(60,64,67,.15)]',
                   unread ? 'bg-white' : 'bg-[#f2f6fc]',
                   isChecked && 'bg-selected-blue',
                   isCursor && 'shadow-[inset_3px_0_0_var(--color-primary)]',
+                  menuOpen && 'z-10 shadow-[inset_1px_0_0_#dadce0,inset_-1px_0_0_#dadce0,0_1px_2px_0_rgba(60,64,67,.3),0_1px_3px_1px_rgba(60,64,67,.15)]',
                 )}
               >
                 <div className="flex shrink-0 items-center" onClick={(e) => e.stopPropagation()}>
@@ -263,11 +301,11 @@ export function MessageList(p: MessageListProps) {
                   {m.snippet && <span className="text-muted"> - {m.snippet}</span>}
                 </span>
                 {m.hasAttachments && <Paperclip className="mx-2 size-4 shrink-0 text-muted" aria-label="Has attachments" />}
-                <time dateTime={m.date} title={fullDate(m.date)} className={cn('w-20 shrink-0 text-right text-xs whitespace-nowrap group-hover:hidden', unread ? 'font-bold text-ink' : 'text-muted')}>
+                <time dateTime={m.date} title={fullDate(m.date)} className={cn('w-20 shrink-0 text-right text-xs whitespace-nowrap group-hover:hidden', menuOpen && 'hidden', unread ? 'font-bold text-ink' : 'text-muted')}>
                   {listDate(m.date)}
                 </time>
                 {p.onRowAction && (
-                  <span className="hidden shrink-0 items-center group-hover:flex">
+                  <span className={cn('hidden shrink-0 items-center group-hover:flex', menuOpen && 'flex')}>
                     <RowAction label="Archive" onClick={(e) => act(e, 'archive')}>
                       <Archive />
                     </RowAction>
@@ -277,6 +315,40 @@ export function MessageList(p: MessageListProps) {
                     <RowAction label={unread ? 'Mark as read' : 'Mark as unread'} onClick={(e) => act(e, unread ? 'read' : 'unread')}>
                       {unread ? <MailOpen /> : <Mail />}
                     </RowAction>
+                    <DropdownMenu open={menuOpen} onOpenChange={(o) => setMenuUid(o ? m.uid : null)}>
+                      <DropdownMenuTrigger asChild>
+                        <button type="button" title="More" aria-label="More" onClick={(e) => e.stopPropagation()} className={rowActionClass}>
+                          <EllipsisVertical />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                        <DropdownMenuItem onSelect={() => p.onRowAction?.(m, unread ? 'read' : 'unread')}>
+                          {unread ? <MailOpen /> : <Mail />} {unread ? 'Mark as read' : 'Mark as unread'}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => p.onFlag(m)}>
+                          <Star /> {m.flagged ? 'Remove star' : 'Add star'}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => p.onRowAction?.(m, 'archive')}>
+                          <Archive /> Archive
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => p.onRowAction?.(m, 'delete')}>
+                          <Trash2 /> Delete
+                        </DropdownMenuItem>
+                        {p.tabMove && (
+                          <>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuSub>
+                              <DropdownMenuSubTrigger>
+                                <Tag /> Move to tab
+                              </DropdownMenuSubTrigger>
+                              <DropdownMenuSubContent>
+                                <TabItems tabs={tabTargets(m.category ?? p.tabMove.current)} onSelect={(t) => p.tabMove!.onMove([m.uid], t)} />
+                              </DropdownMenuSubContent>
+                            </DropdownMenuSub>
+                          </>
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </span>
                 )}
               </div>
@@ -340,9 +412,22 @@ export function MessageList(p: MessageListProps) {
   );
 }
 
+function TabItems({ tabs, onSelect }: { tabs: Category[]; onSelect(tab: Category): void }) {
+  return tabs.map((t) => {
+    const Icon = TAB_ICONS[t];
+    return (
+      <DropdownMenuItem key={t} onSelect={() => onSelect(t)}>
+        <Icon /> {TAB_INFO[t].label}
+      </DropdownMenuItem>
+    );
+  });
+}
+
+const rowActionClass = 'flex size-8 items-center justify-center rounded-full text-muted hover:bg-hover hover:text-ink [&_svg]:size-[18px]';
+
 function RowAction({ label, onClick, children }: { label: string; onClick(e: ReactMouseEvent): void; children: ReactNode }) {
   return (
-    <button type="button" title={label} aria-label={label} onClick={onClick} className="flex size-8 items-center justify-center rounded-full text-muted hover:bg-hover hover:text-ink [&_svg]:size-[18px]">
+    <button type="button" title={label} aria-label={label} onClick={onClick} className={rowActionClass}>
       {children}
     </button>
   );

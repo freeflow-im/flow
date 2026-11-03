@@ -22,8 +22,12 @@ Worker holds the credentials and speaks IMAP and SMTP.
   StarterKit with Link (`Editor.tsx`, loaded on first use), attachments as base64 up to 20 MB in all.
 - `src/components/AccountForms.tsx` — adding an account (email → `/v1/mail/providers` → name and password, Advanced
   for the servers) and changing or removing one.
+- `src/components/InboxTabs.tsx` — Gmail's inbox tabs above the INBOX list for an account with tabs on (the server
+  sorts the mail: docs/specs/mail-api.md, Inbox tabs). The tab is in the address (`&tab=`); when each tab was last
+  opened is kept in localStorage (`src/lib/tabs.ts`) for its "N new" pill. "Move to tab" is in the dense list's row
+  menu, the bulk actions and the message's Move menu; it moves the sender's mail, with Undo.
 - `src/lib/` — the pure parts, with tests: `sanitize.ts` (HTML), `addresses.ts` (chips), `compose.ts` (reply and
-  forward prefill), `folders.ts` (folder order and tree), `format.ts`.
+  forward prefill), `folders.ts` (folder order and tree), `tabs.ts` (inbox tabs), `format.ts`.
 
 ## Running it
 

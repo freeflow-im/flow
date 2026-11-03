@@ -5,9 +5,12 @@
 //     --var ASSET_HOSTS:none --var ORIGIN_URL:http://localhost:9 --var WEB_URL_BASE:http://localhost:18798 \
 //     --var MAIL_ALLOW_INSECURE:1 > /tmp/edge-mail.log 2>&1 &
 //   node test/e2e-mail.mjs /tmp/edge-mail.log
+// (B=http://localhost:<port> points it at another port.) The inbox tabs part sends mail with marketing, social, GitHub,
+// shipping and Google Groups headers straight to GreenMail's SMTP, as those senders would.
 // It reads signup links from the Worker's log, because local mail goes there. MAIL_USER picks the GreenMail address.
 import fs from 'node:fs';
 import { ImapFlow } from 'imapflow';
+import nodemailer from 'nodemailer';
 const log=process.argv[2]; const B=process.env.B??'http://localhost:18798';
 const MAIL_USER=process.env.MAIL_USER??'ann@test.local';
 let pass=0,fail=0; const t=(n,ok,d='')=>{ok?pass++:fail++;console.log((ok?'ok  ':'FAIL')+' '+n+(d?': '+String(d).slice(0,170):''));};
@@ -93,6 +96,76 @@ r=await api(A.token,'POST',`${P}/messages/delete`,{folder:'Trash',uids:[trashed?
 r=await api(A.token,'GET',`${P}/messages?folder=Trash&q=${encodeURIComponent(SUBJECT)}`);t('deleting it in Trash removes it for good',r.s===200&&!r.j.messages?.some(m=>m.subject===SUBJECT),JSON.stringify(r.j).slice(0,120));
 // Tidy the reply too, so INBOX does not grow run after run.
 if(reply)await api(A.token,'POST',`${P}/messages/delete`,{folder:'INBOX',uids:[reply.uid]});
+
+// ---- Inbox tabs ---------------------------------------------------------------------------------------------------
+const smtpDirect=nodemailer.createTransport({host:'127.0.0.1',port:3025,secure:false,ignoreTLS:true,auth:{user:MAIL_USER,pass:'x'}});
+const deliver=(from,subject,headers={})=>smtpDirect.sendMail({from,to:MAIL_USER,subject:`${subject} ${tag}`,text:`${subject}.`,headers});
+const KINDS={
+  promotions:['"The Outdoor Shop" <hello@outdoorshop.com>','20% off everything',{'List-Unsubscribe':'<https://outdoorshop.us5.list-manage.com/unsubscribe?u=abc>','List-Id':'Outdoor Shop <abc.list-id.mcsv.net>','X-MC-User':'abc123','X-Campaign':'mailchimpabc.9f8e7d','Precedence':'bulk'}],
+  social:['Priya Shah via LinkedIn <invitations@linkedin.com>','Priya Shah wants to connect',{'X-LinkedIn-Class':'INVITE-GUEST','List-Unsubscribe':'<https://www.linkedin.com/e/unsub>'}],
+  updates:['Chen Wei <notifications@github.com>','Re: [acme/web] Fix flaky upload test (PR #812)',{'X-GitHub-Reason':'review_requested','List-ID':'acme/web <web.acme.github.com>','Precedence':'list'}],
+  updates2:['"Amazon.com" <shipment-tracking@amazon.com>','Your Amazon.com order has shipped',{'X-SES-Outgoing':'2026.11.03-54.240.8.97','Feedback-ID':'1.us-east-1.abc=:AmazonSES'}],
+  forums:['Sam Rivera <sam@rivera.dev>','[rust-embedded] HAL traits for async SPI',{'List-Id':'<rust-embedded.googlegroups.com>','List-Post':'<mailto:rust-embedded@googlegroups.com>','X-Google-Group-Id':'123456789012','Precedence':'list'}],
+  primary:['Bob Martin <bob@acme.test>','Lunch on Thursday?',{}],
+};
+for(const [from,subject,headers] of Object.values(KINDS))await deliver(from,subject,headers);
+const tagged=(list)=>(list??[]).filter(m=>m.subject.endsWith(tag));
+const subj=(k)=>`${KINDS[k][1]} ${tag}`;
+let inbox;for(let i=0;i<20;i++){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&limit=50`);inbox=tagged(r.j.messages);if(inbox.length>=6)break;await sleep(300);}
+t('tabs: the six messages arrive',inbox.length>=6,inbox.length);
+t('tabs: off by default, and no category on summaries',r.j.messages?.every(m=>!('category' in m)),JSON.stringify(r.j.messages?.[0]).slice(0,120));
+r=await api(A.token,'GET',`${P}/categories?folder=INBOX`);t('tabs: with tabs off, the counts are Primary only',r.s===200&&r.j.categories?.length===1&&r.j.categories[0].id==='primary'&&r.j.categories[0].unread>=6,JSON.stringify(r.j).slice(0,160));
+r=await api(A.token,'PATCH',P,{tabs:['forums','promotions','social','updates','social']});
+t('tabs: switch them on (stored once each, in order, without signing in again)',r.s===200&&JSON.stringify(r.j.account?.tabs)==='["promotions","social","updates","forums"]'&&r.j.account.status==='ok',JSON.stringify(r.j).slice(0,200));
+r=await api(A.token,'GET','/v1/mail/accounts');t('tabs: listed with the account',JSON.stringify(r.j.accounts?.[0]?.tabs)==='["promotions","social","updates","forums"]',JSON.stringify(r.j.accounts?.[0]?.tabs));
+r=await api(A.token,'PATCH',P,{tabs:['spam']});t('tabs: an unknown tab is bad_request',r.s===400&&r.j.error?.code==='bad_request',r.s);
+r=await api(A.token,'GET',`${P}/messages?folder=INBOX&category=nope`);t('tabs: an unknown category is bad_request',r.s===400,r.s);
+
+r=await api(A.token,'GET',`${P}/categories?folder=INBOX`);const counts=Object.fromEntries((r.j.categories??[]).map(c=>[c.id,c]));
+t('tabs: counts for Primary and the four tabs',r.s===200&&r.j.categories?.map(c=>c.id).join()==='primary,promotions,social,updates,forums',JSON.stringify(r.j).slice(0,200));
+t('tabs: each tab has its unread',counts.promotions?.unread>=1&&counts.social?.unread>=1&&counts.updates?.unread>=2&&counts.forums?.unread>=1&&counts.primary?.unread>=1,JSON.stringify(Object.values(counts).map(c=>[c.id,c.unread,c.new])));
+t('tabs: and its latest message',counts.promotions?.latest?.subject===subj('promotions')&&counts.promotions.latest.from?.address==='hello@outdoorshop.com'&&counts.social?.latest?.subject===subj('social')&&counts.forums?.latest?.subject===subj('forums')&&counts.primary?.latest?.subject===subj('primary'),JSON.stringify(Object.values(counts).map(c=>c.latest?.subject)));
+t('tabs: unread that the user has not seen the tab since is new',counts.promotions?.new===counts.promotions?.unread,JSON.stringify(counts.promotions));
+r=await api(A.token,'GET',`${P}/categories?folder=INBOX&since=promotions:${Date.now()+60000}`);t('tabs: nothing is new after the tab was last opened',r.j.categories?.find(c=>c.id==='promotions')?.new===0&&r.j.categories.find(c=>c.id==='promotions').unread>=1,JSON.stringify(r.j.categories?.find(c=>c.id==='promotions')));
+r=await api(A.token,'GET',`${P}/categories?folder=Trash`);t('tabs: only INBOX has tabs',r.s===400,r.s);
+
+const lists={};for(const cat of ['primary','promotions','social','updates','forums']){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&category=${cat}&limit=50`);lists[cat]=r.j;}
+const has2=(j,k)=>tagged(j?.messages).some(m=>m.subject===subj(k));
+const has=(cat,k)=>tagged(lists[cat]?.messages).some(m=>m.subject===subj(k));
+t('tabs: the Mailchimp newsletter is in Promotions',has('promotions','promotions')&&!has('primary','promotions'),JSON.stringify(tagged(lists.promotions?.messages).map(m=>m.subject)));
+t('tabs: the LinkedIn invitation is in Social',has('social','social')&&!has('primary','social'));
+t('tabs: the GitHub notification and the shipping notice are in Updates',has('updates','updates')&&has('updates','updates2'),JSON.stringify(tagged(lists.updates?.messages).map(m=>m.subject)));
+t('tabs: the Google Groups thread is in Forums',has('forums','forums'));
+t("tabs: a colleague's mail is in Primary, and only there",has('primary','primary')&&!['promotions','social','updates','forums'].some(c=>has(c,'primary')),JSON.stringify(tagged(lists.primary?.messages).map(m=>m.subject)));
+t('tabs: a tab list says its category on each summary',['primary','promotions','social','updates','forums'].every(c=>lists[c]?.messages?.every(m=>m.category===c)));
+t('tabs: each tab list is newest first',['primary','updates'].every(c=>{const u=lists[c]?.messages?.map(m=>m.uid)??[];return u.every((x,i)=>!i||u[i-1]>x);}));
+r=await api(A.token,'GET',`${P}/messages?folder=INBOX&limit=50`);const byS=Object.fromEntries(tagged(r.j.messages).map(m=>[m.subject,m.category]));
+t('tabs: the whole INBOX carries each message\'s tab',byS[subj('promotions')]==='promotions'&&byS[subj('social')]==='social'&&byS[subj('updates')]==='updates'&&byS[subj('forums')]==='forums'&&byS[subj('primary')]==='primary',JSON.stringify(byS).slice(0,200));
+r=await api(A.token,'GET',`${P}/messages?folder=INBOX&category=updates&limit=1`);t('tabs: a tab pages with next',r.s===200&&r.j.messages?.length===1&&r.j.next!==null,JSON.stringify(r.j).slice(0,140));
+if(r.j.next){const more=await api(A.token,'GET',`${P}/messages?folder=INBOX&category=updates&limit=1&before=${r.j.next}`);t('tabs: and the next page is older, in the same tab',more.j.messages?.[0]?.uid<r.j.messages[0].uid&&more.j.messages[0].category==='updates',JSON.stringify(more.j).slice(0,140));}
+r=await api(A.token,'GET',`${P}/messages?folder=INBOX&category=promotions&q=${encodeURIComponent('Lunch on Thursday? '+tag)}`);t('tabs: a search covers the whole folder, whatever the tab',r.j.messages?.some(m=>m.subject===subj('primary')),JSON.stringify(r.j).slice(0,140));
+
+const social=tagged(lists.social?.messages).find(m=>m.subject===subj('social'));
+r=await api(A.token,'POST',`${P}/messages/category`,{folder:'INBOX',uids:[social?.uid],category:'primary'});
+t('tabs: move the LinkedIn message to Primary',r.s===200&&r.j.ok&&JSON.stringify(r.j.senders)==='["invitations@linkedin.com"]'&&r.j.previous?.[0]?.category===null,r.s+' '+JSON.stringify(r.j));
+r=await api(A.token,'GET',`${P}/messages?folder=INBOX&category=primary&limit=50`);t('tabs: it is in Primary now',tagged(r.j.messages).some(m=>m.uid===social?.uid&&m.category==='primary'));
+r=await api(A.token,'GET',`${P}/messages?folder=INBOX&category=social&limit=50`);t('tabs: and not in Social',!tagged(r.j.messages).some(m=>m.uid===social?.uid));
+await deliver(KINDS.social[0],'Priya Shah endorsed you',KINDS.social[2]);
+let later;for(let i=0;i<20&&!later;i++){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&category=primary&limit=50`);later=r.j.messages?.find(m=>m.subject===`Priya Shah endorsed you ${tag}`);if(!later)await sleep(300);}
+t('tabs: a later message from that sender lands in Primary',!!later&&later.category==='primary',JSON.stringify(later).slice(0,140));
+r=await api(A.token,'GET',`${P}/categories?folder=INBOX`);t('tabs: the counts follow the move',r.j.categories?.find(c=>c.id==='primary')?.latest?.subject===`Priya Shah endorsed you ${tag}`,JSON.stringify(r.j.categories?.find(c=>c.id==='primary')));
+r=await api(A.token,'POST',`${P}/senders/category`,{senders:[{address:'invitations@linkedin.com',category:null}]});t('tabs: undo the move',r.s===200&&r.j.ok,r.s);
+r=await api(A.token,'GET',`${P}/messages?folder=INBOX&category=social&limit=50`);t('tabs: and both are back in Social',tagged(r.j.messages).filter(m=>/Priya Shah/.test(m.subject)).length===2,JSON.stringify(tagged(r.j.messages).map(m=>m.subject)));
+r=await api(A.token,'POST',`${P}/messages/category`,{folder:'Trash',uids:[1],category:'primary'});t('tabs: moving to a tab is only for INBOX',r.s===400,r.s);
+r=await api(A.token,'POST',`${P}/messages/category`,{folder:'INBOX',uids:[social?.uid],category:'spam'});t('tabs: an unknown tab is refused',r.s===400,r.s);
+
+r=await api(A.token,'PATCH',P,{tabs:['promotions']});
+r=await api(A.token,'GET',`${P}/messages?folder=INBOX&category=primary&limit=50`);t('tabs: with only Promotions on, the other tabs\' mail is in Primary',has2(r.j,'social')&&has2(r.j,'forums')&&has2(r.j,'updates')&&!has2(r.j,'promotions'),JSON.stringify(tagged(r.j.messages).map(m=>m.subject)));
+r=await api(A.token,'GET',`${P}/messages?folder=INBOX&category=social&limit=50`);t('tabs: and a tab that is off is empty',r.s===200&&r.j.messages?.length===0&&r.j.next===null,JSON.stringify(r.j).slice(0,120));
+r=await api(A.token,'PATCH',P,{tabs:[]});t('tabs: switch them off',r.s===200&&r.j.account?.tabs?.length===0);
+r=await api(A.token,'GET',`${P}/messages?folder=INBOX&limit=50`);t('tabs: off, the INBOX list has no categories',tagged(r.j.messages).length>=7&&r.j.messages.every(m=>!('category' in m)),tagged(r.j.messages).length);
+r=await api(A.token,'GET',`${P}/messages?folder=INBOX&category=promotions&limit=50`);t('tabs: off, category is ignored and everything is in INBOX',tagged(r.j.messages).length>=7&&r.j.messages.every(m=>!('category' in m)),tagged(r.j.messages).length);
+smtpDirect.close();
 
 r=await api(A.token,'PATCH',P,{displayName:'Ann Example'});t('rename the account',r.s===200&&r.j.account?.displayName==='Ann Example',JSON.stringify(r.j).slice(0,120));
 r=await api(A.token,'PATCH',P,{password:'new-pw',imap:server(3998)});t('changing servers re-verifies, and a bad one is refused',r.s===422&&r.j.error?.code==='connect_failed',r.s+' '+JSON.stringify(r.j).slice(0,120));

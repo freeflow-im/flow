@@ -5,10 +5,11 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { openSuiteSearch } from '@flow/suite-bar';
-import { MailApiError, type MailAccount, type MessageSummary } from './api';
+import { MailApiError, mailApi, type Category, type MailAccount, type MessageSummary } from './api';
 import { AccountSettingsDialog, AddAccountDialog } from './components/AccountForms';
 import type { ComposeRequest } from './components/Compose';
 import { ConnectMail } from './components/ConnectMail';
+import { InboxTabs } from './components/InboxTabs';
 import { MailSuiteBar } from './components/MailSuiteBar';
 import { MessageList, type ListTab } from './components/MessageList';
 import { MessageView } from './components/MessageView';
@@ -16,9 +17,10 @@ import { ResizeHandle } from './components/ResizeHandle';
 import { setReadingPane, useReadingPane } from './lib/layoutPref';
 import { Sidebar } from './components/Sidebar';
 import { useMediaQuery, useResizableWidth } from './hooks/layout';
-import { keys, useAccounts, useFolders, useMessage, useMessageActions, useMessages } from './hooks/mail';
+import { keys, useAccounts, useCategories, useFolders, useMessage, useMessageActions, useMessages } from './hooks/mail';
 import { emptyDraft, prefill, type ComposeMode } from './lib/compose';
 import { findSpecial, folderLabel } from './lib/folders';
+import { markOpened, TAB_INFO, tabFromParam, tabsOf, useSince, writeTabParam } from './lib/tabs';
 import { cn } from './lib/utils';
 
 // The editor (TipTap) is most of the code: it loads when compose first opens.
@@ -37,6 +39,9 @@ function storedAccount(): string | null {
     return initialParam('account');
   }
 }
+
+/** A passing message at the bottom, with an action (Undo) for some. */
+type Toast = string | { text: string; action: { label: string; run(): void } };
 
 type Dialog = { kind: 'add' } | { kind: 'settings'; accountId: string | null; focusPassword?: boolean } | null;
 
@@ -73,9 +78,18 @@ export function App() {
   const [compose, setCompose] = useState<ComposeRequest | null>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [drawer, setDrawer] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<Toast | null>(null);
 
-  const messages = useMessages(account?.id ?? null, folder, q);
+  // Gmail's inbox tabs: in INBOX, for an account that has them on; a search covers the whole folder, whatever the tab.
+  const [tabChoice, setTabChoice] = useState<string | null>(() => initialParam('tab'));
+  const accountTabs = useMemo(() => tabsOf(account), [account]);
+  const showTabs = folder?.toUpperCase() === 'INBOX' && accountTabs.length > 0;
+  const inboxTab = tabFromParam(tabChoice, accountTabs);
+  const category: Category | null = showTabs && !q ? inboxTab : null;
+  const since = useSince(account?.id ?? null, accountTabs);
+  const tabCounts = useCategories(account?.id ?? null, showTabs, since);
+
+  const messages = useMessages(account?.id ?? null, folder, q, category);
   const all = useMemo(() => messages.data?.pages.flatMap((p) => p.messages) ?? [], [messages.data]);
   const visible = useMemo(() => (tab === 'unread' ? all.filter((m) => !m.seen || m.uid === openUid) : all), [all, tab, openUid]);
   const message = useMessage(account?.id ?? null, folder, openUid);
@@ -92,13 +106,22 @@ export function App() {
     const params = new URLSearchParams();
     params.set('account', account.id);
     if (folder) params.set('folder', folder);
+    writeTabParam(params, showTabs ? inboxTab : null);
     if (openUid !== null) params.set('uid', String(openUid));
     window.history.replaceState(null, '', `${import.meta.env.BASE_URL}?${params}`);
-  }, [account, folder, openUid]);
+  }, [account, folder, openUid, showTabs, inboxTab]);
+
+  // The open tab's mail is not "new": it is marked opened on arriving and again on leaving it.
+  useEffect(() => {
+    const id = account?.id;
+    if (!id || !category) return;
+    markOpened(id, category);
+    return () => markOpened(id, category);
+  }, [account?.id, category]);
 
   useEffect(() => {
     if (!toast) return;
-    const t = window.setTimeout(() => setToast(null), 4000);
+    const t = window.setTimeout(() => setToast(null), typeof toast === 'string' ? 4000 : 8000);
     return () => window.clearTimeout(t);
   }, [toast]);
 
@@ -120,6 +143,7 @@ export function App() {
   };
   const chooseFolder = (path: string) => {
     setFolderChoice(path);
+    setTabChoice(null);
     setQ('');
     setSearchText('');
     resetSelection();
@@ -128,6 +152,7 @@ export function App() {
   const chooseAccount = (id: string) => {
     setAccountId(id);
     setFolderChoice(null);
+    setTabChoice(null);
     setQ('');
     setSearchText('');
     resetSelection();
@@ -176,6 +201,45 @@ export function App() {
     actions.move.mutate({ uids, to }, { onSuccess: () => setToast(`${plural(uids.length)} moved to ${name ? folderLabel(name) : to}.`), onError: (e) => setToast(`Could not move: ${errorText(e)}`) });
   };
   const byUid = (uid: number): MessageSummary | undefined => all.find((m) => m.uid === uid);
+  const chooseTab = (tab: Category) => {
+    setTabChoice(tab);
+    resetSelection();
+  };
+  /**
+   * "Move to tab": the messages go there, and so does their senders' later mail (the server keeps the tab per sender);
+   * the toast says so, with Undo, which puts each sender back as it was.
+   */
+  const moveToTab = (uids: number[], tab: Category) => {
+    if (!uids.length || !account) return;
+    const accountIdNow = account.id;
+    if (category && category !== tab) afterRemoving(uids);
+    else setChecked(new Set());
+    const label = TAB_INFO[tab].label;
+    actions.moveToTab.mutate(
+      { uids, category: tab },
+      {
+        onSuccess: (res) => {
+          const who = res.senders.length === 1 ? (all.find((m) => m.from?.address.toLowerCase() === res.senders[0])?.from?.name || res.senders[0]) : `these ${res.senders.length} senders`;
+          setToast({
+            text: res.senders.length ? `Mail from ${who} now goes to ${label}.` : `${plural(uids.length)} moved to ${label}.`,
+            action: {
+              label: 'Undo',
+              run: () =>
+                void mailApi.setSenderTabs(accountIdNow, res.previous).then(
+                  () => {
+                    void qc.invalidateQueries({ queryKey: keys.allMessages(accountIdNow) });
+                    void qc.invalidateQueries({ queryKey: ['mail', 'categories', accountIdNow] });
+                    setToast('Move undone.');
+                  },
+                  (e: unknown) => setToast(`Could not undo: ${errorText(e)}`),
+                ),
+            },
+          });
+        },
+        onError: (e) => setToast(`Could not move: ${errorText(e)}`),
+      },
+    );
+  };
   const setSeen = (uids: number[], seen: boolean) => uids.length && actions.flags.mutate({ uids, seen });
   const toggleSeen = (uids = targets()) => {
     if (!uids.length) return;
@@ -349,8 +413,20 @@ export function App() {
         />
       )}
       {toast && (
-        <div role="status" className="fixed bottom-5 left-1/2 z-[60] -translate-x-1/2 rounded-lg bg-[#323232] px-4 py-2.5 text-sm text-white shadow-lg">
-          {toast}
+        <div role="status" className="fixed bottom-5 left-1/2 z-[60] flex max-w-[calc(100vw-32px)] -translate-x-1/2 items-center gap-4 rounded-lg bg-[#323232] px-4 py-2.5 text-sm text-white shadow-lg">
+          <span>{typeof toast === 'string' ? toast : toast.text}</span>
+          {typeof toast !== 'string' && (
+            <button
+              type="button"
+              className="shrink-0 rounded px-1.5 py-0.5 font-semibold text-[#8ab4f8] hover:bg-white/10"
+              onClick={() => {
+                setToast(null);
+                toast.action.run();
+              }}
+            >
+              {toast.action.label}
+            </button>
+          )}
         </div>
       )}
     </>
@@ -417,6 +493,7 @@ export function App() {
       onRefresh={() => {
         void messages.refetch();
         void folders.refetch();
+        if (showTabs) void tabCounts.refetch();
       }}
       hasMore={!!messages.hasNextPage}
       loadingMore={messages.isFetchingNextPage}
@@ -448,6 +525,8 @@ export function App() {
       folders={folders.data}
       currentFolder={folder}
       onShowFolders={tiny ? () => setDrawer(true) : undefined}
+      tabBar={showTabs ? <InboxTabs tabs={accountTabs} active={inboxTab} counts={tabCounts.data} onChange={chooseTab} /> : undefined}
+      tabMove={showTabs ? { tabs: accountTabs, current: category, onMove: moveToTab } : undefined}
       onSearch={
         tiny
           ? (text) => {
@@ -476,6 +555,7 @@ export function App() {
       onForward={() => startCompose('forward')}
       onArchive={() => archive(openUid !== null ? [openUid] : [])}
       onMove={(to) => moveTo(to, openUid !== null ? [openUid] : [])}
+      tabMove={showTabs && openUid !== null ? { tabs: accountTabs, current: byUid(openUid)?.category ?? category, onMove: (tab) => moveToTab([openUid], tab) } : undefined}
       onDelete={() => remove(openUid !== null ? [openUid] : [])}
       onToggleSeen={() => toggleSeen(openUid !== null ? [openUid] : [])}
       onToggleFlag={() => toggleFlag(openUid !== null ? [openUid] : [])}

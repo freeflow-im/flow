@@ -1,7 +1,8 @@
 // The sample mailbox behind the dev mock (plugin.ts): one account with a few folders, 30-odd messages in the inbox
-// including an HTML newsletter with remote images and a cid: image, and a thread with attachments.
+// including an HTML newsletter with remote images and a cid: image, and a thread with attachments, and mail for each of
+// the inbox tabs (its `category` is what the server's header rules would say; plugin.ts applies the account's tabs).
 import { crc32, deflateSync } from 'node:zlib';
-import type { Address, MailAccount, MailFolder, MessageDetail } from '../src/api';
+import type { Address, Category, MailAccount, MailFolder, MessageDetail } from '../src/api';
 
 export interface StoredAttachment {
   filename: string;
@@ -18,6 +19,8 @@ export interface Mailbox {
   folders: MailFolder[];
   messages: StoredMessage[];
   nextUid: number;
+  /** "Move to tab": the tab chosen per sender address. */
+  overrides: Map<string, Category>;
 }
 
 const me: Address = { name: 'Ann Lee', address: 'ann@example.com' };
@@ -104,6 +107,7 @@ export function sampleMailbox(): Mailbox {
     imap: { host: 'imap.example.com', port: 993, security: 'tls' },
     smtp: { host: 'smtp.example.com', port: 465, security: 'tls' },
     status: 'ok',
+    tabs: ['promotions', 'social', 'updates', 'forums'],
   };
   const folders: MailFolder[] = [
     { path: 'INBOX', name: 'INBOX', delimiter: '/', specialUse: 'inbox', unread: 0, total: 0 },
@@ -145,6 +149,7 @@ export function sampleMailbox(): Mailbox {
     const [subject, text] = SUBJECTS[i % SUBJECTS.length]!;
     const m = base('INBOX', people[i % people.length]!, 60 * 24 * (26 - i) + 37 * i, subject, `Hi Ann,\n\n${text}\n\nSee https://example.com/notes/${i} for more.\n\n— ${people[i % people.length]!.name}`);
     m.seen = i % 5 !== 0;
+    if (m.from?.address === 'noreply@github.test') m.category = 'updates';
     m.flagged = i % 9 === 3;
     if (i % 4 === 1) m.cc = [people[(i + 2) % people.length]!];
     messages.push(m);
@@ -210,7 +215,28 @@ export function sampleMailbox(): Mailbox {
   news.attachments = [{ filename: 'logo.png', mimeType: 'image/png', contentId: '<logo@weeklybyte>', inline: true, bytes: png(160, 60, [26, 115, 232]) }];
   news.hasAttachments = false;
   news.seen = false;
+  news.category = 'promotions';
   messages.push(news);
+
+  // Mail for the other tabs: a few of each, the newest unread, as the tab bar's "N new" shows.
+  const tabMail: [Category, Address, number, string, string, boolean][] = [
+    ['promotions', { name: 'The Outdoor Shop', address: 'hello@outdoorshop.test' }, 25, '20% off everything this weekend only', 'Our biggest sale of the season: 20% off tents, packs and boots until Sunday night.', false],
+    ['promotions', { name: 'Spotlight Cinemas', address: 'news@spotlight.test' }, 60 * 9, 'Your November film guide', 'Twelve new releases, a classics weekend and members-only screenings this month.', false],
+    ['promotions', { name: 'Grocer & Co', address: 'offers@grocer.test' }, 60 * 30, 'Fresh picks for you', 'Seasonal fruit boxes are back. Order by Friday for delivery next week.', true],
+    ['social', { name: 'LinkedIn', address: 'invitations@linkedin.test' }, 40, 'Priya Shah wants to connect', 'Priya Shah, Engineering Manager at Northwind, would like to join your professional network.', false],
+    ['social', { name: 'Strava', address: 'no-reply@strava.test' }, 60 * 14, 'Chen gave you kudos', 'Chen Wei gave you kudos on your Morning Ride.', true],
+    ['updates', { name: 'Amazon.com', address: 'shipment-tracking@amazon.test' }, 33, 'Your order has shipped', 'Your package with "USB-C hub, 7-in-1" is on its way. Arriving Thursday.', false],
+    ['updates', { name: 'Northwind Bank', address: 'alerts@northwind-bank.test' }, 60 * 7, 'Your October statement is ready', 'Your statement for the account ending 4421 is ready to view online.', false],
+    ['updates', { name: 'Google Calendar', address: 'calendar-notification@google.test' }, 60 * 26, 'Invitation: Design review @ Thu 3pm', 'Bob Martin has invited you to Design review on Thursday at 3pm.', true],
+    ['forums', { name: 'Sam Rivera via rust-embedded', address: 'sam@rivera.test' }, 52, '[rust-embedded] HAL traits for async SPI', 'Has anyone tried the new async SPI traits with DMA on the RP2040? I am seeing a stall after the first transfer.', false],
+    ['forums', { name: 'Typescript Users', address: 'forum@discourse.test' }, 60 * 20, '[TS] Narrowing a union by a template literal', 'A new reply in the thread "Narrowing a union by a template literal" from Mira.', true],
+  ];
+  for (const [category, from, minutes, subject, text, seen] of tabMail) {
+    const m = base('INBOX', from, minutes, subject, text);
+    m.category = category;
+    m.seen = seen;
+    messages.push(m);
+  }
 
   // The newest: a short unread note.
   const latest = base('INBOX', people[3]!, 6, 'Quick question about the logo', 'Do you still have the SVG of the old logo? Need it for the archive page. dana@studio.test if easier.');
@@ -223,5 +249,10 @@ export function sampleMailbox(): Mailbox {
   messages.push(base('Archive', people[4]!, 60 * 24 * 40, 'Tickets for March', 'Your tickets are attached to the booking page.'));
   messages.push(base('Projects/Acme', people[1]!, 60 * 24 * 3, 'Acme kickoff notes', 'Notes from the kickoff are in the doc. Next sync Tuesday.'));
 
-  return { account, folders, messages, nextUid: uid };
+  // The list is by UID, newest first: UIDs follow arrival, as on a real server.
+  const inbox = messages.filter((m) => m.folder === 'INBOX').sort((a, b) => a.date.localeCompare(b.date));
+  let next = 1;
+  for (const m of inbox) m.uid = next++;
+  for (const m of messages) if (m.folder !== 'INBOX') m.uid = next++;
+  return { account, folders, messages, nextUid: next, overrides: new Map() };
 }

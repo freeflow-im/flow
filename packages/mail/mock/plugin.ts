@@ -4,7 +4,7 @@
 // and a server host containing "bad" answers connect_failed; "stale" connects an account whose password then stops working.
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
-import type { MailAccount, MessageSummary, NewAccount, ProviderPreset } from '../src/api';
+import type { Category, MailAccount, MessageSummary, NewAccount, ProviderPreset, TabCategory, TabCount } from '../src/api';
 import { sampleMailbox, type Mailbox, type StoredMessage } from './data';
 
 const PRESETS: Record<string, ProviderPreset> = {
@@ -55,6 +55,12 @@ export function createMockApi(empty = false) {
       const inFolder = b.messages.filter((m) => m.folder === f.path);
       return { ...f, total: inFolder.length, unread: inFolder.filter((m) => !m.seen).length };
     });
+  /** The tab a message shows in: the sender's chosen tab, else its own, and Primary for a tab that is off. */
+  const tabOf = (b: Mailbox, m: StoredMessage): Category => {
+    const c = b.overrides.get(m.from?.address.toLowerCase() ?? '') ?? m.category ?? 'primary';
+    return c !== 'primary' && b.account.tabs.includes(c) ? c : 'primary';
+  };
+  const withTab = (b: Mailbox, m: StoredMessage, s: MessageSummary): MessageSummary => (m.folder === 'INBOX' && b.account.tabs.length ? { ...s, category: tabOf(b, m) } : s);
   const summary = (m: StoredMessage): MessageSummary => ({
     uid: m.uid,
     folder: m.folder,
@@ -105,6 +111,7 @@ export function createMockApi(empty = false) {
         imap: a.imap,
         smtp: a.smtp,
         status: stale ? 'auth_failed' : 'ok',
+        tabs: [],
         ...(stale ? { statusMessage: 'AUTHENTICATIONFAILED: Invalid credentials' } : {}),
       };
       const box = sampleMailbox();
@@ -118,8 +125,9 @@ export function createMockApi(empty = false) {
         boxes.delete(b.account.id);
         return { status: 200, json: { ok: true } };
       }
-      const patch = body as Partial<NewAccount>;
+      const patch = body as Partial<NewAccount> & { tabs?: TabCategory[] };
       verify(patch);
+      if (patch.tabs) b.account = { ...b.account, tabs: (['promotions', 'social', 'updates', 'forums'] as const).filter((t) => patch.tabs!.includes(t)) };
       b.account = { ...b.account, ...(patch.displayName ? { displayName: patch.displayName } : {}), ...(patch.imap ? { imap: patch.imap } : {}), ...(patch.smtp ? { smtp: patch.smtp } : {}) };
       if (patch.password) b.account = { ...b.account, status: 'ok' };
       delete b.account.statusMessage;
@@ -135,13 +143,41 @@ export function createMockApi(empty = false) {
         const limit = Number(q.get('limit') ?? 50);
         const before = q.get('before') ? Number(q.get('before')) : Infinity;
         const text = (q.get('q') ?? '').toLowerCase();
+        // A tab of INBOX (ignored while searching, or with tabs off).
+        const category = folder === 'INBOX' && !text && b.account.tabs.length ? (q.get('category') as Category | null) : null;
         const all = b.messages
           .filter((x) => x.folder === folder && x.uid < before)
           .filter((x) => !text || [x.subject, x.text ?? '', x.from?.name ?? '', x.from?.address ?? ''].some((s) => s.toLowerCase().includes(text)))
+          .filter((x) => !category || tabOf(b, x) === category)
           .sort((x, y) => y.uid - x.uid);
         const page = all.slice(0, limit);
         await new Promise((r) => setTimeout(r, 150));
-        return { status: 200, json: { messages: page.map(summary), next: all.length > limit ? page[page.length - 1]!.uid : null } };
+        return { status: 200, json: { messages: page.map((x) => withTab(b, x, summary(x))), next: all.length > limit ? page[page.length - 1]!.uid : null } };
+      }
+      if (rest === 'categories') {
+        const since = new Map((q.get('since') ?? '').split(',').map((part) => part.split(':') as [string, string]).map(([id, ms]) => [id, Number(ms)]));
+        const inbox = b.messages.filter((x) => x.folder === 'INBOX').sort((x, y) => y.uid - x.uid);
+        const categories: TabCount[] = (['primary', ...b.account.tabs] as Category[]).map((id) => {
+          const mine = inbox.filter((x) => tabOf(b, x) === id);
+          const unread = mine.filter((x) => !x.seen);
+          const latest = mine[0];
+          return { id, unread: unread.length, new: unread.filter((x) => Date.parse(x.date) > (since.get(id) ?? 0)).length, latest: latest ? { from: latest.from, subject: latest.subject } : null };
+        });
+        return { status: 200, json: { categories } };
+      }
+      if (rest === 'messages/category') {
+        const { folder, uids, category } = body as { folder: string; uids: number[]; category: Category };
+        const senders = [...new Set(uids.map((uid) => find(b, folder, uid).from?.address.toLowerCase() ?? '').filter(Boolean))];
+        const previous = senders.map((address) => ({ address, category: b.overrides.get(address) ?? null }));
+        for (const s of senders) b.overrides.set(s, category);
+        return { status: 200, json: { ok: true, senders, previous } };
+      }
+      if (rest === 'senders/category') {
+        for (const s of (body as { senders: { address: string; category: Category | null }[] }).senders) {
+          if (s.category) b.overrides.set(s.address, s.category);
+          else b.overrides.delete(s.address);
+        }
+        return { status: 200, json: { ok: true } };
       }
       if (rest === 'messages' && method === 'PATCH') {
         const { folder, uids, seen, flagged } = body as { folder: string; uids: number[]; seen?: boolean; flagged?: boolean };

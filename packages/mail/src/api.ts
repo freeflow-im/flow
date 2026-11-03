@@ -10,6 +10,9 @@ export interface ServerSettings {
   username?: string;
 }
 export type AccountStatus = 'ok' | 'auth_failed' | 'connect_failed';
+/** Gmail's inbox tabs. Primary is always there; the others are switched on per account. */
+export type Category = 'primary' | 'promotions' | 'social' | 'updates' | 'forums';
+export type TabCategory = Exclude<Category, 'primary'>;
 export interface MailAccount {
   id: string;
   email: string;
@@ -18,6 +21,8 @@ export interface MailAccount {
   smtp: ServerSettings;
   status: AccountStatus;
   statusMessage?: string;
+  /** The inbox tabs that are on besides Primary; [] means tabs off. */
+  tabs: TabCategory[];
 }
 export type SpecialUse = 'inbox' | 'sent' | 'drafts' | 'trash' | 'junk' | 'archive' | 'all' | 'flagged';
 export interface MailFolder {
@@ -49,6 +54,15 @@ export interface MessageSummary {
   answered: boolean;
   hasAttachments: boolean;
   size: number;
+  /** INBOX only, when the account has tabs on. */
+  category?: Category;
+}
+export interface TabCount {
+  id: Category;
+  unread: number;
+  /** Unread that arrived after the tab was last opened (the `since` given for it). */
+  new: number;
+  latest: { from: Address | null; subject: string } | null;
 }
 export interface Attachment {
   index: number;
@@ -81,7 +95,7 @@ export interface NewAccount {
   imap: ServerSettings;
   smtp: ServerSettings;
 }
-export type AccountPatch = Partial<Pick<NewAccount, 'displayName' | 'password' | 'imap' | 'smtp'>>;
+export type AccountPatch = Partial<Pick<NewAccount, 'displayName' | 'password' | 'imap' | 'smtp'> & { tabs: TabCategory[] }>;
 export interface OutgoingAttachment {
   filename: string;
   contentType: string;
@@ -164,12 +178,17 @@ export const mailApi = {
   updateAccount: async (id: string, patch: AccountPatch) => (await request<{ account: MailAccount }>('PATCH', base(id), patch)).account,
   deleteAccount: (id: string) => request<{ ok: true }>('DELETE', base(id)),
   folders: async (accountId: string) => (await request<{ folders: MailFolder[] }>('GET', `${base(accountId)}/folders`)).folders,
-  messages: (accountId: string, params: { folder: string; limit?: number; before?: number; q?: string }) =>
+  messages: (accountId: string, params: { folder: string; limit?: number; before?: number; q?: string; category?: Category }) =>
     request<MessagePage>('GET', `${base(accountId)}/messages${query(params)}`),
   message: async (accountId: string, folder: string, uid: number) =>
     (await request<{ message: MessageDetail }>('GET', `${base(accountId)}/messages/${uid}${query({ folder })}`)).message,
   setFlags: (accountId: string, body: { folder: string; uids: number[]; seen?: boolean; flagged?: boolean }) => request<{ ok: true }>('PATCH', `${base(accountId)}/messages`, body),
   move: (accountId: string, body: { folder: string; uids: number[]; to: string }) => request<{ ok: true }>('POST', `${base(accountId)}/messages/move`, body),
   remove: (accountId: string, body: { folder: string; uids: number[] }) => request<{ ok: true }>('POST', `${base(accountId)}/messages/delete`, body),
+  categories: async (accountId: string, since: string) => (await request<{ categories: TabCount[] }>('GET', `${base(accountId)}/categories${query({ folder: 'INBOX', since })}`)).categories,
+  /** "Move to tab": the messages' senders go there from now on; `previous` is what to restore to undo it. */
+  moveToTab: (accountId: string, body: { folder: string; uids: number[]; category: Category }) =>
+    request<{ ok: true; senders: string[]; previous: { address: string; category: Category | null }[] }>('POST', `${base(accountId)}/messages/category`, body),
+  setSenderTabs: (accountId: string, senders: { address: string; category: Category | null }[]) => request<{ ok: true }>('POST', `${base(accountId)}/senders/category`, { senders }),
   send: (accountId: string, message: OutgoingMessage) => request<{ ok: true; messageId: string }>('POST', `${base(accountId)}/send`, message),
 };

@@ -16,7 +16,10 @@ interface MailAccount {
   id: string; email: string; displayName: string;
   imap: ServerSettings; smtp: ServerSettings;
   status: 'ok' | 'auth_failed' | 'connect_failed'; statusMessage?: string;
+  tabs: TabCategory[];                         // inbox tabs that are on besides Primary; [] (the default) = tabs off
 }
+type Category = 'primary' | 'promotions' | 'social' | 'updates' | 'forums';
+type TabCategory = Exclude<Category, 'primary'>;
 interface MailFolder {
   path: string; name: string; delimiter: string;
   specialUse: 'inbox' | 'sent' | 'drafts' | 'trash' | 'junk' | 'archive' | 'all' | 'flagged' | null;
@@ -31,6 +34,12 @@ interface MessageSummary {
   date: string;                                // ISO
   seen: boolean; flagged: boolean; answered: boolean;
   hasAttachments: boolean; size: number;
+  category?: Category;                         // INBOX only, and only when the account has tabs on
+}
+interface TabCount {
+  id: Category; unread: number;
+  new: number;                                 // unread that arrived after the tab's `since` (all unread without one)
+  latest: { from: Address | null; subject: string } | null;
 }
 interface MessageDetail extends MessageSummary {
   replyTo: Address[]; bcc: Address[];
@@ -48,11 +57,23 @@ interface MessageDetail extends MessageSummary {
 - `GET  /v1/mail/accounts` → `{ accounts: MailAccount[] }`
 - `POST /v1/mail/accounts` body `{ email, displayName, password, imap: ServerSettings, smtp: ServerSettings }`
   → verifies IMAP login AND SMTP login before saving; `201 { account: MailAccount }` or 4xx with `auth_failed`/`connect_failed`.
-- `PATCH /v1/mail/accounts/:id` body: any of `{ displayName, password, imap, smtp }` (re-verifies when credentials/servers change) → `{ account }`
+- `PATCH /v1/mail/accounts/:id` body: any of `{ displayName, password, imap, smtp, tabs }` (re-verifies when credentials/servers change;
+  never for `displayName` or `tabs` alone) → `{ account }`. `tabs` is stored once each, in the order promotions, social, updates, forums.
 - `DELETE /v1/mail/accounts/:id` → `{ ok: true }` (forgets the credentials and any cache)
 - `GET  /v1/mail/accounts/:id/folders` → `{ folders: MailFolder[] }` (INBOX first, then special-use folders, then the rest alphabetically)
 - `GET  /v1/mail/accounts/:id/messages?folder=INBOX&limit=50&before=<uid>&q=<text>`
   → `{ messages: MessageSummary[], next: number | null }` newest first. `before` pages older (uids < before). `q` = IMAP SEARCH TEXT/OR FROM/SUBJECT in that folder.
+  `&category=<Category>` (INBOX, tabs on) lists one tab: Primary is everything not in an *enabled* tab, and a tab that is off is
+  empty. It is ignored while `q` is given (a search covers the whole folder, as Gmail's does) and when the account's tabs are off.
+  A tab's page may come back short, even empty, with `next` set: see Inbox tabs below.
+- `GET  /v1/mail/accounts/:id/categories?folder=INBOX&since=promotions:<ms>,social:<ms>` → `{ categories: TabCount[] }` for Primary
+  plus the enabled tabs, in the bar's order. `since` is when the user last opened each tab (ms since the epoch), for `new`.
+  Another folder is `bad_request`.
+- `POST /v1/mail/accounts/:id/messages/category` body `{ folder: 'INBOX', uids: number[], category: Category }` ("Move to tab")
+  → `{ ok: true, senders: string[], previous: { address: string, category: Category | null }[] }`. The tab is kept for each
+  message's sender, so their later mail goes there too; `previous` is what each sender had, for undo.
+- `POST /v1/mail/accounts/:id/senders/category` body `{ senders: { address: string, category: Category | null }[] }` → `{ ok: true }`
+  sets the tab chosen for senders, or forgets it (`null`, back to the automatic one): how a move is undone.
 - `GET  /v1/mail/accounts/:id/messages/:uid?folder=` → `{ message: MessageDetail }` (does NOT mark it seen; the client PATCHes seen)
 - `GET  /v1/mail/accounts/:id/messages/:uid/attachments/:index?folder=` → the bytes, with Content-Type and
   `Content-Disposition: attachment; filename*=…` (`?inline=1` → `inline`, used for cid: images).
@@ -63,6 +84,30 @@ interface MessageDetail extends MessageSummary {
   `{ to: Address[], cc?: Address[], bcc?: Address[], subject: string, html: string, text?: string, inReplyTo?: string, references?: string[], attachments?: { filename: string; contentType: string; contentBase64: string }[] }`
   → sends over SMTP as the account (From = displayName <email>), appends a copy to the Sent folder (skip if the provider auto-saves, e.g. Gmail),
   sets \Answered on the replied message when inReplyTo matches; → `{ ok: true, messageId: string }`. Max 20 MB total.
+
+## Inbox tabs
+
+Gmail's Primary, Promotions, Social, Updates and Forums, for INBOX only. Each tab but Primary is switched on per account
+(`tabs`); mail is sorted into the enabled ones by itself and the rest stays in Primary.
+
+- **Gmail** (`imap.gmail.com`, or the server announces `X-GM-EXT-1`): Gmail's own categories, by `X-GM-RAW` searches in INBOX
+  (`category:promotions` and so on; Primary is INBOX less the enabled ones). Gmail's labels are never changed: the user's
+  choices are ours, folded into the query (`-from:` for a sender moved away, `OR (from:…)` for one moved in) by `gmailQuery`.
+- **Other servers**: `src/imap/categorize.ts` classifies a message from its From and a few headers (`CATEGORY_HEADERS`:
+  List-Id, List-Unsubscribe, List-Post, Precedence, Auto-Submitted, Feedback-ID, X-Mailer, the ESPs' X-Campaign/X-MC-/X-SG-/
+  X-SES- headers, X-GitHub-Reason, X-Google-Group-Id, Return-Path, ...) and gives a reason with each answer. In order: the
+  user's choice for the sender; Social (a social network's domain); Updates for GitHub (as Gmail does); Forums (List-Post,
+  Google Groups, Mailman, Discourse, groups.io); Promotions (a marketing sender's headers or bounce domain, a campaign
+  Feedback-ID, or List-Unsubscribe with nothing transactional about it); Updates (auto-generated, no-reply/notifications
+  senders, transactional services, trackers, receipts); else Primary.
+- The answer is cached in the Mail object's SQLite, `mail_categories` keyed `(account_id, folder, uid_validity, uid)` with the
+  sender, From name, subject and arrival time (for the counts' `latest` and `new`). It stores the headers' category; the
+  user's choices (`mail_category_overrides`, per sender) and which tabs are on apply when reading, so neither re-classifies.
+  A list page of INBOX fetches the headers with its summaries and classifies what is new; the counts classify the unread
+  that are not cached yet, then the newest 50, and forget cached UIDs that have left the folder.
+- A tab's list walks INBOX newest first, classifying uncached UIDs in batches of 100, until it has `limit` messages, the
+  folder ends, or 300 headers have been fetched in that request; `next` is then one above the first UID not looked at, so
+  the client carries on with `before=next`.
 
 Polling: the client re-reads folders + the open list every 60 s while the tab is visible, and on window focus. (Push over the
 websocket is a later phase.)
@@ -98,5 +143,5 @@ Bundle cost ≈ 600 KiB gzip.
 - `attachments/:index?inline=1` is only inline for an image type; every attachment is served with
   `Content-Security-Policy: sandbox` and `nosniff`, since it comes from the app's own origin. `contentId` is given without
   its angle brackets, as a `cid:` URL names it.
-- Tests: `src/imap/*.test.ts` (ports, hosts, presets, the FETCH-to-summary mapping, snippets) and `test/e2e-mail.mjs` against
+- Tests: `src/imap/*.test.ts` (ports, hosts, presets, the FETCH-to-summary mapping, snippets, the tab rules) and `test/e2e-mail.mjs` against
   GreenMail (its header says how to run it).
