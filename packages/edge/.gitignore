@@ -1,3 +1,4 @@
 public/
 .wrangler/
 .dev.vars
+src/help/bundle.generated.ts

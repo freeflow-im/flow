@@ -124,6 +124,26 @@ authRoutes.post('/v1/auth/app-link', requireAuth, async (c) => c.json(await dire
 authRoutes.post('/v1/auth/app-link/exchange', async (c) => {
   return signedIn(c, await directory(c, 'exchangeAppLink', (await bodyOf(AppLinkExchangeBody, c)).code, agent(c)));
 });
+// The connection-bound handoff (directory/authHandoff.ts), separate so old app-link exchanges cannot downgrade PKCE.
+// The bodies go to the directory as they came: it counts the attempt before it reads them, as the server does.
+const ip = (c: C) => c.req.header('cf-connecting-ip') ?? '';
+const rawBody = (c: C) => c.req.json().catch(() => undefined);
+authRoutes.post('/v1/auth/handoff/start', async (c) => {
+  const res = await directory(c, 'startHandoff', await rawBody(c), c.req.header('origin'), ip(c));
+  c.header('Cache-Control', 'no-store');
+  return c.json(res, 201);
+});
+authRoutes.post('/v1/auth/handoff/approve', requireAuth, async (c) => {
+  if (c.get('authKind') !== 'session' || c.get('user').isAgent) throw unauthorized('A human session is required');
+  const res = await directory(c, 'approveHandoff', c.get('user').id, await rawBody(c));
+  c.header('Cache-Control', 'no-store');
+  return c.json(res);
+});
+authRoutes.post('/v1/auth/handoff/exchange', async (c) => {
+  const res = await directory(c, 'exchangeHandoff', await rawBody(c), c.req.header('origin'), ip(c), agent(c));
+  c.header('Cache-Control', 'no-store');
+  return signedIn(c, res);
+});
 authRoutes.post('/v1/agents/login', async (c) => {
   const body = await bodyOf(AgentLoginBody, c);
   return c.json(await directory(c, 'agentLogin', body.username.toLowerCase(), body.key), 201);
