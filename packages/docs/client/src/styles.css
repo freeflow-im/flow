@@ -272,6 +272,11 @@ textarea {
   color: var(--muted);
   font-size: 13px;
 }
+/* In the FreeFlow suite the header's controls sit at the end of the list's toolbar (FileLibrary searchInBar). */
+.home-user-inline {
+  margin-left: 0;
+  gap: 8px;
+}
 .home-new {
   background: var(--chrome);
   padding: 8px 0 18px;

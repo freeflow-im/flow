@@ -1,12 +1,21 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { SuiteBar, type SuiteBarProps } from './SuiteBar';
+import { openSuiteSearch, SuiteBar, type SuiteBarProps } from './SuiteBar';
 import { StatusDialog } from './StatusDialog';
 import { AWAY_STATUS, isAway, statusPatch, STATUS_OPTIONS } from './status';
 
 afterEach(cleanup);
 
 function setup(overrides: Partial<SuiteBarProps> = {}) {
+  const { props, calls } = build(overrides);
+  render(<SuiteBar {...props} />);
+  return calls;
+}
+
+/** The props a test renders with, without rendering them. */
+const setupProps = (overrides: Partial<SuiteBarProps> = {}) => build(overrides).props;
+
+function build(overrides: Partial<SuiteBarProps>) {
   const calls = {
     docs: vi.fn(),
     chat: vi.fn(),
@@ -58,8 +67,7 @@ function setup(overrides: Partial<SuiteBarProps> = {}) {
     },
     ...overrides,
   };
-  render(<SuiteBar {...props} />);
-  return calls;
+  return { props, calls };
 }
 
 describe('SuiteBar', () => {
@@ -141,6 +149,38 @@ describe('SuiteBar', () => {
     fireEvent.click(screen.getByTestId('suite-search'));
     fireEvent.mouseDown(document.body);
     expect(screen.queryByRole('searchbox')).toBeNull();
+  });
+
+  it('a live search reports each change, stays open while it has text, and clears on Esc', () => {
+    let value = '';
+    const change = vi.fn((q: string) => { value = q; });
+    const submit = vi.fn();
+    const live = () => ({ search: { placeholder: 'Search files', onSubmit: submit, value, onChange: change } });
+    const { rerender } = render(<SuiteBar {...setupProps(live())} />);
+    fireEvent.click(screen.getAllByTestId('suite-search')[0]!);
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'plan' } });
+    expect(change).toHaveBeenLastCalledWith('plan');
+    rerender(<SuiteBar {...setupProps(live())} />);
+    // A click elsewhere keeps the text that is filtering the page in view; Enter searches and keeps it too.
+    fireEvent.mouseDown(document.body);
+    const box = screen.getByRole('searchbox') as HTMLInputElement;
+    expect(box.value).toBe('plan');
+    fireEvent.submit(box.closest('form')!);
+    expect(submit).toHaveBeenCalledWith('plan');
+    expect(screen.getByRole('searchbox')).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole('searchbox'), { key: 'Escape' });
+    expect(change).toHaveBeenLastCalledWith('');
+    rerender(<SuiteBar {...setupProps(live())} />);
+    expect(screen.queryByRole('searchbox')).toBeNull();
+  });
+
+  it('opens from elsewhere on the page with what was typed there', () => {
+    let value = '';
+    const change = vi.fn((q: string) => { value = q; });
+    render(<SuiteBar {...setupProps({ search: { placeholder: 'Search files', onSubmit: vi.fn(), value, onChange: change } })} />);
+    act(() => openSuiteSearch('b'));
+    expect(change).toHaveBeenCalledWith('b');
+    expect(document.activeElement).toBe(screen.getByRole('searchbox'));
   });
 
   it('opens the organization menu, with unread counts, and its rows act', () => {
