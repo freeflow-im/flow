@@ -36,11 +36,6 @@ interface MessageSummary {
   hasAttachments: boolean; size: number;
   category?: Category;                         // INBOX only, and only when the account has tabs on
 }
-interface TabCount {
-  id: Category; unread: number;
-  new: number;                                 // unread that arrived after the tab's `since` (all unread without one)
-  latest: { from: Address | null; subject: string } | null;
-}
 interface MessageDetail extends MessageSummary {
   replyTo: Address[]; bcc: Address[];
   inReplyTo: string | null; references: string[];
@@ -62,13 +57,11 @@ interface MessageDetail extends MessageSummary {
 - `DELETE /v1/mail/accounts/:id` → `{ ok: true }` (forgets the credentials and any cache)
 - `GET  /v1/mail/accounts/:id/folders` → `{ folders: MailFolder[] }` (INBOX first, then special-use folders, then the rest alphabetically)
 - `GET  /v1/mail/accounts/:id/messages?folder=INBOX&limit=50&before=<uid>&q=<text>`
-  → `{ messages: MessageSummary[], next: number | null }` newest first. `before` pages older (uids < before). `q` = IMAP SEARCH TEXT/OR FROM/SUBJECT in that folder.
+  → `{ messages: MessageSummary[], next: number | null, sorting?: true }` newest first. `before` pages older (uids < before). `q` = IMAP SEARCH TEXT/OR FROM/SUBJECT in that folder.
   `&category=<Category>` (INBOX, tabs on) lists one tab: Primary is everything not in an *enabled* tab, and a tab that is off is
   empty. It is ignored while `q` is given (a search covers the whole folder, as Gmail's does) and when the account's tabs are off.
-  A tab's page may come back short, even empty, with `next` set: see Inbox tabs below.
-- `GET  /v1/mail/accounts/:id/categories?folder=INBOX&since=promotions:<ms>,social:<ms>` → `{ categories: TabCount[] }` for Primary
-  plus the enabled tabs, in the bar's order. `since` is when the user last opened each tab (ms since the epoch), for `new`.
-  Another folder is `bad_request`.
+  A tab's page may come back short, even empty, with `sorting: true` and `next` while older mail is still being sorted
+  into tabs: ask for the same page again shortly. See Inbox tabs below.
 - `POST /v1/mail/accounts/:id/messages/category` body `{ folder: 'INBOX', uids: number[], category: Category }` ("Move to tab")
   → `{ ok: true, senders: string[], previous: { address: string, category: Category | null }[] }`. The tab is kept for each
   message's sender, so their later mail goes there too; `previous` is what each sender had, for undo.
@@ -104,33 +97,46 @@ Gmail's Primary, Promotions, Social, Updates and Forums, for INBOX only. Each ta
   senders, transactional services, trackers, receipts); else Primary.
 - **The cache** (both kinds of server): `mail_categories` in the Mail object's SQLite, keyed `(account_id, folder,
   uid_validity, uid)`, with the category (Gmail's, or the headers'), the sender, From name, subject and arrival time (for the
-  counts' `latest` and `new`). The user's choices (`mail_category_overrides`, per sender) and which tabs are on are applied
+  list's summaries come from the server). The user's choices (`mail_category_overrides`, per sender) and which tabs are on are applied
   when reading, in SQL (`effectiveSql`: the sender's chosen tab, else the stored one, Primary for a tab that is off), so a
   "Move to tab" or its undo changes every cached row at once and nothing is sorted again. A new UIDVALIDITY drops the rows.
 - **How far it reaches**: `mail_sync (account_id, folder) → uid_validity, high, low, checked_at`. Every UID of INBOX from
-  `low` to `high` has its row; `high` is the high-water mark. Each list page of a tab and each counts call first asks only
-  for UIDs above it (`UID SEARCH <high+1>:*`) and sorts them (the first time, the newest 300). More than 300 new messages
-  at once: the newest 300 are sorted and `low` moves up to them; the rest is sorted as lists page down.
-- **A tab's list** reads its page from SQLite (`uid < before`, newest first) and fetches the summaries of just those UIDs in
-  one FETCH (with the snippets' partial FETCHes). Below `low`, older mail is sorted as the page needs it, at most 300
-  messages per request; a page can then come back short, even empty, with `next` set, and the client carries on with
-  `before=next`. A UID the server no longer returns (moved by another mail app) is dropped from the cache.
-- **The counts** (`GET .../categories`): the sync above, one `UID SEARCH UNSEEN`, and SQLite for the rest (unread per tab
-  joined with the cache, `new` from the cached arrival times, `latest` the newest cached row of each tab). Unread mail
-  below `low` is sorted then, 300 at most per call. The result is kept 20 s per account, and dropped at once by anything
-  done here that changes it (flags, moves, deletes, sending, a tab move, the account's tabs).
-- **The background re-check**, at most every 10 minutes per account, started by a list or counts call (`ctx.waitUntil`,
-  never awaited by the request): `UID SEARCH ALL` drops the rows of mail that left INBOX; on Gmail one X-GM-RAW search per
-  category over the whole INBOX takes Gmail's current categories (re-sorting done on gmail.com or by Gmail itself); then up
-  to 1000 unread messages that are not cached yet are sorted. Each step takes the background lock by itself.
+  `low` to `high` has its row; `high` is the high-water mark.
+- **A tab's list never sorts a large batch before answering.** It asks only for UIDs above `high` (`UID SEARCH <high+1>:*`,
+  usually a handful) and sorts at most 100 of them, the newest (the first time, the newest 100, found from UIDNEXT down
+  with a widening `UID SEARCH <from>:<top>` window, never a search of the whole folder). More new mail than that: `low`
+  moves up to what was sorted and the rest is the sorter's. Then the page is read from SQLite (`uid < before`, `uid >= low`,
+  newest first) and the summaries of just those UIDs fetched in one FETCH (with the snippets' partial FETCHes). A UID the
+  server no longer returns (moved by another mail app) is dropped from the cache.
+- **Short pages** (`tabPage` in `categorize.ts`): when the cache ends before the page is full and older mail is not sorted
+  yet (`low > 1`), the page comes back with what there is, `sorting: true` and `next` (where the cache ends). The client
+  shows it at once with a "Sorting older mail…" row and asks for the same page again every 2 s until it is full or
+  `sorting` is gone; only then does it go on to `next`. A client that carries on with `before=next` instead also gets
+  every message once.
+- **The sorter** (`sortSoon`): whenever a page comes back short, or fewer than two more pages of the tab are cached below
+  it, a background run (`ctx.waitUntil`, never awaited by the request) extends the cache below `low`, 300 messages a step,
+  each step under the sorter connection's lock by itself, until the tab has enough cached for the next two pages, the whole
+  folder is cached, or 3000 messages were sorted in that run (the next page that needs more starts another). One run per
+  account at a time; a newer request's target replaces the running one's. A step only lowers `low` from the value it read,
+  so new mail sorted past a gap meanwhile is never skipped.
+- **The background re-check**, at most every 10 minutes per account, started by a tab's list (`ctx.waitUntil`): over the
+  newest 2000 cached messages only, `UID SEARCH <floor>:*` (their UID range) forgets the rows of mail that left INBOX, and
+  on Gmail one `UID <floor>:* X-GM-RAW "category:<tab>"` search per category takes Gmail's current categories (re-sorting
+  done on gmail.com or by Gmail itself). Older rows are left as they are. It runs on the sorter connection, so it never
+  holds up a list.
 - A list of the whole INBOX with tabs on (a search) carries each message's tab: other servers sort it from the headers fetched
   with the page, Gmail from the cache (sorting any UID it does not have).
 
-Polling: the client re-reads folders + the open list every 60 s while the tab is visible, the tab counts every 2 minutes, and
-all on window focus. (Push over the websocket is a later phase.) After marking read or unread, flagging, moving or deleting,
-the client changes the folder's unread count and the tabs' counts in its own cache at once (`packages/mail/src/lib/counts.ts`)
-and re-reads folders and counts once, quietly, 4 s after the last such change and once none is still on its way (so a burst
-of j/k is one refresh). Opening a message reads the next (older) one ahead; it is marked read once it is on screen.
+The tabs have no counts: each is its name and icon (the open one blue, with the underline). The inbox's own unread count in
+the left panel comes from `/folders`. In the list, rows can be dragged (mouse or trackpad only; touch screens and the
+keyboard use the menus) onto a tab, which is the same "Move to tab" as the menu, or onto a folder, which is the same move as
+"Move to"; dragging a checked row drags all the checked rows, and a drop on the open tab or folder does nothing.
+
+Polling: the client re-reads folders + the open list every 60 s while the tab is visible, and both on window focus. (Push
+over the websocket is a later phase.) After marking read or unread, flagging, moving or deleting, the client changes the
+folder's unread count in its own cache at once (`packages/mail/src/lib/counts.ts`) and re-reads folders once, quietly, 4 s
+after the last such change and once none is still on its way (so a burst of j/k is one refresh). Opening a message reads
+the next (older) one ahead; it is marked read once it is on screen.
 
 ## Opening a message
 
@@ -169,16 +175,21 @@ Bundle cost ≈ 600 KiB gzip.
 - `src/imap/object.ts` is the Mail object. Its SQLite holds `accounts` (servers as JSON, the password sealed with
   FLOW_DATA_KEY through `org/crypto` `encryptBlob`, never returned or logged, and the `status` the client shows) and
   `rate_limit_windows` (the Directory's fixed window: 10 account verifications per person per 15 minutes, on `POST` and on a
-  `PATCH` that changes the password or servers). While awake it keeps up to two ImapFlow connections per account
+  `PATCH` that changes the password or servers). While awake it keeps up to three ImapFlow connections per account
   (over `cloudflare:sockets`, which does both TLS and STARTTLS), each opened when first needed: **interactive** (opening a
-  message and its attachments, flags, moves, deletes, the IMAP side of sending, a tab move's sender lookup) and
-  **background** (lists, folders, tab counts, sorting into tabs and the re-check). Locks are per connection (imapflow's
-  `getMailboxLock`), so a slow list or count never holds up opening a message or marking it read. Each is reused,
-  reconnects once if it had dropped, and logs out after 60 s idle. Two is well within Gmail's limit of about 15 IMAP
-  connections per account. The folder list is cached in memory for 5 minutes (Trash and Sent lookups).
+  message and its attachments, flags, moves, deletes, the IMAP side of sending, a tab move's sender lookup), **background**
+  (lists, folders, and the new mail a tab's list sorts) and **sorter** (sorting older mail into tabs and the re-check).
+  Locks are per connection (imapflow's `getMailboxLock`), so a slow list never holds up opening a message, and sorting
+  never holds up a list. Each is reused, reconnects once if it had dropped, and logs out after 60 s idle. Three is well
+  within Gmail's limit of about 15 IMAP connections per account. The folder list is cached in memory for 5 minutes (Trash and Sent lookups).
 - **Timing logs**: one line per request, `[mail] <METHOD> <route> <status> <ms>ms (lock wait <ms>, imap <ms>)`: the route with
-  its ids replaced (`/v1/mail/accounts/:id/messages/:uid`), the time spent waiting for a connection and a folder's lock, and
-  the time talking IMAP. Never an address, subject, folder or id, so `wrangler tail` shows where the time goes.
+  its ids replaced (`/v1/mail/accounts/:id/messages/:uid`), the total time, the time spent waiting for a connection and a
+  folder's lock, and the time talking IMAP. Never an address, subject, folder or id, so `wrangler tail` shows where the time
+  goes. The Mail object returns its two numbers in an `x-mail-timing` header and `routes/mail.ts` logs the line (and drops
+  the header): logged inside the object, the line reached `wrangler tail` late or never, because a Durable Object request's
+  tail event stays open while the object holds an open socket or a `waitUntil` job (it is sent when the next request
+  arrives, the socket closes or the job ends). The background runs log `[mail] sort: …` and `[mail] recheck: …` lines in the
+  object, which arrive late for that reason.
 - SMTP is nodemailer. The copy in Sent is the same message (Bcc kept) appended with `\Seen`, skipped for Gmail; a `Sent`
   folder is created when the account has none. `\Answered` is set on the INBOX message whose Message-ID is `inReplyTo`.
 - Only IMAP 993 (tls) / 143 (starttls) and SMTP 465 (tls) / 587 (starttls), and no host that is `localhost` or an IP literal
@@ -192,5 +203,6 @@ Bundle cost ≈ 600 KiB gzip.
 - Tests: `src/imap/*.test.ts` (ports, hosts, presets, the FETCH-to-summary mapping, snippets, the tab rules, the Gmail UID-range
   searches and the tab SQL, opening by parts against postal-mime reading the whole message) and `test/e2e-mail.mjs` against
   GreenMail (its header says how to run it). Under `MAIL_ALLOW_INSECURE=1` only, three request headers help it:
-  `x-mail-test-slow-ms` pauses the counts inside the background lock (to show opening a message is not held up),
-  `x-mail-test-classify-cap` lowers the 300-per-request sorting budget, and `x-mail-test-recheck: 1` runs the re-check now.
+  `x-mail-test-slow-ms` pauses each step of the sorter inside its lock (to show lists and opening a message are not held
+  up), `x-mail-test-classify-cap` lowers the sorting budgets (100 new per request, 300 per step), and `x-mail-test-recheck: 1`
+  starts the re-check now. The background work a request starts keeps its hooks.

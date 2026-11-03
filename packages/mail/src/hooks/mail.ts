@@ -1,15 +1,18 @@
 // The mail data, through react-query: accounts, folders and the open folder's messages are polled every 60 s while the
-// tab is visible, the inbox tabs' counts every 2 minutes, and all re-read when the window regains focus (the contract's
-// polling; push comes later). Flag changes, moves and deletes show at once, in the lists and in the unread counts
-// (lib/counts.ts), and are undone if the server refuses them; the counts are read again once, quietly, a few seconds
-// after the last change.
+// tab is visible, and all re-read when the window regains focus (the contract's polling; push comes later). An inbox tab's
+// page that comes back short while the server sorts older mail (`sorting`) is asked for again every 2 s until it is full.
+// Flag changes, moves and deletes show at once, in the lists and in the folders' unread counts (lib/counts.ts), and are
+// undone if the server refuses them; the counts are read again once, quietly, a few seconds after the last change.
+import { useEffect, useRef } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/react-query';
-import { mailApi, type Category, type MailFolder, type MessageDetail, type MessagePage, type MessageSummary, type TabCount } from '../api';
-import { adjustFolders, adjustTabs, debounced, tabDeltas, type Seen } from '../lib/counts';
+import { mailApi, type Category, type MailFolder, type MessageDetail, type MessagePage, type MessageSummary } from '../api';
+import { adjustFolders, debounced } from '../lib/counts';
 
 export const POLL_MS = 60_000;
-/** The tab counts are the costly read on a large Gmail inbox: polled less often than the list. */
-export const CATEGORIES_POLL_MS = 120_000;
+/** How soon a tab's page is asked for again while the server sorts older mail into tabs. */
+export const SORTING_RETRY_MS = 2_000;
+/** And how many times at most (a few minutes), in case the sorting never gets there. */
+export const SORTING_RETRIES = 90;
 /** The quiet refresh after a burst of changes. */
 export const REFRESH_DELAY_MS = 4_000;
 export const PAGE_SIZE = 25;
@@ -19,7 +22,6 @@ export const keys = {
   accounts: ['mail', 'accounts'] as const,
   folders: (accountId: string) => ['mail', 'folders', accountId] as const,
   messages: (accountId: string, folder: string, q: string, category: Category | null = null) => ['mail', 'messages', accountId, folder, q, category ?? ''] as const,
-  categories: (accountId: string, since: string) => ['mail', 'categories', accountId, since] as const,
   allMessages: (accountId: string) => ['mail', 'messages', accountId] as const,
   message: (accountId: string, folder: string, uid: number) => ['mail', 'message', accountId, folder, uid] as const,
 };
@@ -37,28 +39,58 @@ export function useFolders(accountId: string | null) {
   });
 }
 
-/** A folder's messages, or with `category` one inbox tab's (whose pages may come back short while the server sorts). */
+type Pages = InfiniteData<MessagePage, number>;
+
+/** The next page's `before`: none while the last page is still being sorted (that page is asked for again instead). */
+export function nextPageParam(last: MessagePage): number | undefined {
+  return last.sorting ? undefined : (last.next ?? undefined);
+}
+
+/** The list with its last page replaced by a newer answer for the same `before`; unchanged if the list has moved on since. */
+export function replaceLastPage(data: Pages | undefined, param: number, page: MessagePage): Pages | undefined {
+  if (!data || !data.pages.length || data.pageParams[data.pageParams.length - 1] !== param) return data;
+  return { ...data, pages: [...data.pages.slice(0, -1), page] };
+}
+
+/**
+ * A folder's messages, or with `category` one inbox tab's. A tab's last page may come back short (even empty) while the
+ * server sorts older mail into tabs (`sorting`): it shows at once, and is asked for again every SORTING_RETRY_MS until it
+ * is full or the sorting is done; only then does the list go on to older pages.
+ */
 export function useMessages(accountId: string | null, folder: string | null, q: string, category: Category | null = null) {
-  return useInfiniteQuery({
-    queryKey: keys.messages(accountId ?? '', folder ?? '', q, category),
-    queryFn: ({ pageParam }) =>
-      mailApi.messages(accountId!, { folder: folder!, limit: PAGE_SIZE, ...(pageParam ? { before: pageParam } : {}), ...(q ? { q } : {}), ...(category ? { category } : {}) }),
+  const qc = useQueryClient();
+  const queryKey = keys.messages(accountId ?? '', folder ?? '', q, category);
+  const fetchPage = (before: number) =>
+    mailApi.messages(accountId!, { folder: folder!, limit: PAGE_SIZE, ...(before ? { before } : {}), ...(q ? { q } : {}), ...(category ? { category } : {}) });
+  const query = useInfiniteQuery({
+    queryKey,
+    queryFn: ({ pageParam }) => fetchPage(pageParam),
     initialPageParam: 0,
-    getNextPageParam: (last: MessagePage) => last.next ?? undefined,
+    getNextPageParam: nextPageParam,
     enabled: !!accountId && !!folder,
     refetchInterval: POLL_MS,
   });
-}
-
-/** The inbox tabs' counts (unread, new since `since`, latest), polled with the list; only for an account with tabs on. */
-export function useCategories(accountId: string | null, enabled: boolean, since: string) {
-  return useQuery({
-    queryKey: keys.categories(accountId ?? '', since),
-    queryFn: () => mailApi.categories(accountId!, since),
-    enabled: !!accountId && enabled,
-    refetchInterval: CATEGORIES_POLL_MS,
-    placeholderData: (prev) => prev,
-  });
+  const pages = query.data?.pages;
+  const last = pages?.[pages.length - 1];
+  const lastParam = query.data?.pageParams[query.data.pageParams.length - 1] as number | undefined;
+  const keyText = JSON.stringify(queryKey);
+  const retries = useRef({ key: '', n: 0 });
+  useEffect(() => {
+    if (!last?.sorting || lastParam === undefined || !accountId || !folder) return;
+    const which = `${keyText}:${lastParam}`;
+    if (retries.current.key !== which) retries.current = { key: which, n: 0 };
+    if (retries.current.n >= SORTING_RETRIES) return;
+    const timer = setTimeout(() => {
+      retries.current.n++;
+      fetchPage(lastParam).then(
+        (page) => qc.setQueryData<Pages>(queryKey, (old) => replaceLastPage(old, lastParam, page)),
+        () => {}, // the next poll asks again
+      );
+    }, SORTING_RETRY_MS);
+    return () => clearTimeout(timer);
+    // (queryKey and fetchPage change with keyText.)
+  }, [last, lastParam, keyText, accountId, folder, qc]);
+  return query;
 }
 
 export function useMessage(accountId: string | null, folder: string | null, uid: number | null) {
@@ -87,7 +119,6 @@ function scheduleRefresh(qc: QueryClient, accountId: string, lists: boolean) {
       ...debounced(
         () => {
           void qc.invalidateQueries({ queryKey: keys.folders(accountId) });
-          void qc.invalidateQueries({ queryKey: ['mail', 'categories', accountId] });
           if (entry.lists) void qc.invalidateQueries({ queryKey: keys.allMessages(accountId) });
           entry.lists = false;
         },
@@ -101,29 +132,25 @@ function scheduleRefresh(qc: QueryClient, accountId: string, lists: boolean) {
   r.schedule();
 }
 
-type Pages = InfiniteData<MessagePage, number>;
+/** What the client last saw of a message an action changes: whether it was read. */
+interface Seen { uid: number; seen: boolean }
 
 /** Changes to messages in one folder, applied to the cached lists and unread counts at once and rolled back on failure. */
 export function useMessageActions(accountId: string | null, folder: string | null) {
   const qc = useQueryClient();
-  const inbox = folder?.toUpperCase() === 'INBOX';
   const mutationKey = ['mail', accountId ?? ''];
 
   /** What the client last saw of these messages (the lists, else the open message's own copy). */
   const seenOf = (uids: number[]): Seen[] => {
     const want = new Set(uids);
     const out = new Map<number, Seen>();
-    for (const [key, data] of qc.getQueriesData<Pages>({ queryKey: ['mail', 'messages', accountId ?? '', folder ?? ''] })) {
-      for (const m of data?.pages.flatMap((p) => p.messages) ?? []) {
-        if (!want.has(m.uid)) continue;
-        const prev = out.get(m.uid);
-        out.set(m.uid, { uid: m.uid, seen: m.seen, category: prev?.category ?? m.category ?? ((key[5] as Category) || null) });
-      }
+    for (const [, data] of qc.getQueriesData<Pages>({ queryKey: ['mail', 'messages', accountId ?? '', folder ?? ''] })) {
+      for (const m of data?.pages.flatMap((p) => p.messages) ?? []) if (want.has(m.uid) && !out.has(m.uid)) out.set(m.uid, { uid: m.uid, seen: m.seen });
     }
     for (const uid of uids) {
       if (out.has(uid)) continue;
       const d = qc.getQueryData<MessageDetail>(keys.message(accountId ?? '', folder ?? '', uid));
-      if (d) out.set(uid, { uid, seen: d.seen, category: d.category ?? null });
+      if (d) out.set(uid, { uid, seen: d.seen });
     }
     return [...out.values()];
   };
@@ -140,21 +167,14 @@ export function useMessageActions(accountId: string | null, folder: string | nul
     }
     return snapshots;
   };
-  /** The sidebar's and the tab bar's numbers, moved at once; returns what they were, for a rollback. */
-  const patchCounts = (folderDeltas: { path: string; unread?: number; total?: number }[], tabs: Map<Category, number> | null) => {
+  /** The sidebar's numbers, moved at once; returns what they were, for a rollback. */
+  const patchCounts = (folderDeltas: { path: string; unread?: number; total?: number }[]) => {
     if (!accountId) return [];
     const snapshots: [readonly unknown[], unknown][] = [];
     const folders = qc.getQueryData<MailFolder[]>(keys.folders(accountId));
     if (folders && folderDeltas.length) {
       snapshots.push([keys.folders(accountId), folders]);
       qc.setQueryData(keys.folders(accountId), adjustFolders(folders, folderDeltas));
-    }
-    if (tabs?.size) {
-      for (const [key, data] of qc.getQueriesData<TabCount[]>({ queryKey: ['mail', 'categories', accountId] })) {
-        if (!data) continue;
-        snapshots.push([key, data]);
-        qc.setQueryData(key, adjustTabs(data, tabs));
-      }
     }
     return snapshots;
   };
@@ -176,10 +196,10 @@ export function useMessageActions(accountId: string | null, folder: string | nul
           old ? { ...old, ...(v.seen !== undefined ? { seen: v.seen } : {}), ...(v.flagged !== undefined ? { flagged: v.flagged } : {}) } : old,
         );
       }
-      // The folder's unread count, and the tab's, follow a read/unread change at once.
+      // The folder's unread count follows a read/unread change at once.
       if (v.seen !== undefined) {
         const changed = before.filter((m) => m.seen !== v.seen).length;
-        snapshots.push(...patchCounts(changed ? [{ path: folder!, unread: v.seen ? -changed : changed }] : [], inbox ? tabDeltas(before, v.seen) : null));
+        snapshots.push(...patchCounts(changed ? [{ path: folder!, unread: v.seen ? -changed : changed }] : []));
       }
       return { snapshots };
     },
@@ -196,7 +216,7 @@ export function useMessageActions(accountId: string | null, folder: string | nul
     const set = new Set(uids);
     const snapshots: [readonly unknown[], unknown][] = patchLists((m) => (set.has(m.uid) ? null : m));
     const deltas = [{ path: folder!, unread: -unread, total: -uids.length }, ...(to ? [{ path: to, unread, total: uids.length }] : [])];
-    snapshots.push(...patchCounts(deltas, inbox ? tabDeltas(before, true) : null));
+    snapshots.push(...patchCounts(deltas));
     return snapshots;
   };
   const trashOf = () => qc.getQueryData<MailFolder[]>(keys.folders(accountId ?? ''))?.find((f) => f.specialUse === 'trash')?.path ?? null;
@@ -225,15 +245,9 @@ export function useMessageActions(accountId: string | null, folder: string | nul
     mutationKey,
     mutationFn: (v: { uids: number[]; category: Category }) => mailApi.moveToTab(accountId!, { folder: folder!, uids: v.uids, category: v.category }),
     onMutate: (v) => {
-      const before = seenOf(v.uids);
       const set = new Set(v.uids);
       // A tab's list (the key's last part) loses them unless it is the tab they go to; other lists show their new tab.
-      const snapshots: [readonly unknown[], unknown][] = patchLists((m, key) => (!set.has(m.uid) ? m : key[5] && key[5] !== v.category ? null : { ...m, category: v.category }));
-      // Their unread leaves the old tab's count for the new one's.
-      const tabs = tabDeltas(before, true);
-      for (const [, d] of [...tabs]) tabs.set(v.category, (tabs.get(v.category) ?? 0) - d);
-      snapshots.push(...patchCounts([], tabs));
-      return { snapshots };
+      return { snapshots: patchLists((m, key) => (!set.has(m.uid) ? m : key[5] && key[5] !== v.category ? null : { ...m, category: v.category })) };
     },
     onError: (_e, _v, ctx) => ctx && restore(ctx.snapshots),
     onSettled: () => refresh(true),

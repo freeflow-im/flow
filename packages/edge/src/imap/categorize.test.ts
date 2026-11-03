@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { searchCompiler } from 'imapflow/lib/search-compiler.js';
-import { addressOf, classify, classifyHeaders, effective, effectiveSql, gmailCategorySearches, normalizeTabs, parseHeaders, uidSet, type Category, type TabCategory } from './categorize';
+import { addressOf, classify, classifyHeaders, effective, effectiveSql, gmailCategorySearches, gmailRangeSearches, normalizeTabs, parseHeaders, tabPage, uidSet, type Category, type TabCategory } from './categorize';
 
 const h = (raw: string) => parseHeaders(raw.trim().split('\n').map((l) => l.replace(/^ {4}/, '')).join('\r\n'));
 
@@ -132,6 +132,12 @@ describe('Gmail category searches over a UID range', () => {
     const words = compiled.map((a) => String((a as { value: unknown }).value));
     expect(words).toEqual(['UID', '500:640', 'X-GM-RAW', 'category:social']);
   });
+  it('the re-check asks over the newest mail only, from a floor UID up', () => {
+    const q = gmailRangeSearches('22000:*');
+    expect(q.map((x) => x.query)).toEqual(['promotions', 'social', 'updates', 'forums'].map((t) => ({ uid: '22000:*', gmraw: `category:${t}` })));
+    const compiled = searchCompiler({ capabilities: new Set(['X-GM-EXT-1']), enabled: new Set() } as never, q[0].query);
+    expect(compiled.map((a) => String((a as { value: unknown }).value))).toEqual(['UID', '22000:*', 'X-GM-RAW', 'category:promotions']);
+  });
   it('collapses UID runs for a FETCH', () => {
     expect(uidSet([10, 1, 2, 3, 7, 9, 2])).toBe('1:3,7,9:10');
     expect(uidSet([5])).toBe('5');
@@ -156,4 +162,22 @@ describe('the tab of a cached row, in SQL', () => {
     expect(tabsOfRows(['forums'])).toEqual(['primary', 'primary', 'forums', 'primary', 'primary']);
   });
   it('is all Primary with the tabs off', () => expect(tabsOfRows([])).toEqual(['primary', 'primary', 'primary', 'primary', 'primary']));
+});
+
+describe("a tab's page from the cache", () => {
+  const MAX = Number.MAX_SAFE_INTEGER;
+  it('is full, with next, when the cache has more of the tab after it', () => {
+    expect(tabPage([90, 80, 70, 60], 3, 1, MAX)).toEqual({ page: [90, 80, 70], next: 70, sorting: false });
+  });
+  it('is full, with next, when older mail is not sorted yet; and the end once everything is', () => {
+    expect(tabPage([90, 80, 70], 3, 50, MAX)).toEqual({ page: [90, 80, 70], next: 70, sorting: false });
+    expect(tabPage([90, 80, 70], 3, 1, MAX)).toEqual({ page: [90, 80, 70], next: null, sorting: false });
+    expect(tabPage([90], 3, 1, 100)).toEqual({ page: [90], next: null, sorting: false });
+  });
+  it('comes back short, even empty, with sorting while older mail is still being sorted, and next where the cache ends', () => {
+    expect(tabPage([90], 3, 50, MAX)).toEqual({ page: [90], next: 50, sorting: true });
+    expect(tabPage([], 25, 221, MAX)).toEqual({ page: [], next: 221, sorting: true });
+    // A later page (before=40) already below where the cache reached when it was asked for.
+    expect(tabPage([], 25, 60, 40)).toEqual({ page: [], next: 40, sorting: true });
+  });
 });

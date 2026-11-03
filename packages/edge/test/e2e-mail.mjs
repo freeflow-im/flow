@@ -1,6 +1,6 @@
 // End-to-end check of FreeFlow Mail (/v1/mail/*, src/imap/object.ts) through the Worker and a person's Mail object, against
 // the GreenMail server in Docker (`flow-greenmail`: SMTP 127.0.0.1:3025, IMAP 127.0.0.1:3143, any password logs in) and a
-// local `wrangler dev` started as test/e2e.mjs says, on port 18798 and with mail's insecure dev mode on:
+// local `wrangler dev` started as test/e2e.mjs says, on port 18798 (B= for another) and with mail's insecure dev mode on:
 //   npx wrangler dev --port 18798 --local --enable-containers=false --var PORTED_HOSTS:edge.freeflow.im,localhost \
 //     --var ASSET_HOSTS:none --var ORIGIN_URL:http://localhost:9 --var WEB_URL_BASE:http://localhost:18798 \
 //     --var MAIL_ALLOW_INSECURE:1 > /tmp/edge-mail.log 2>&1 &
@@ -115,20 +115,12 @@ const subj=(k)=>`${KINDS[k][1]} ${tag}`;
 let inbox;for(let i=0;i<20;i++){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&limit=50`);inbox=tagged(r.j.messages);if(inbox.length>=6)break;await sleep(300);}
 t('tabs: the six messages arrive',inbox.length>=6,inbox.length);
 t('tabs: off by default, and no category on summaries',r.j.messages?.every(m=>!('category' in m)),JSON.stringify(r.j.messages?.[0]).slice(0,120));
-r=await api(A.token,'GET',`${P}/categories?folder=INBOX`);t('tabs: with tabs off, the counts are Primary only',r.s===200&&r.j.categories?.length===1&&r.j.categories[0].id==='primary'&&r.j.categories[0].unread>=6,JSON.stringify(r.j).slice(0,160));
 r=await api(A.token,'PATCH',P,{tabs:['forums','promotions','social','updates','social']});
 t('tabs: switch them on (stored once each, in order, without signing in again)',r.s===200&&JSON.stringify(r.j.account?.tabs)==='["promotions","social","updates","forums"]'&&r.j.account.status==='ok',JSON.stringify(r.j).slice(0,200));
 r=await api(A.token,'GET','/v1/mail/accounts');t('tabs: listed with the account',JSON.stringify(r.j.accounts?.[0]?.tabs)==='["promotions","social","updates","forums"]',JSON.stringify(r.j.accounts?.[0]?.tabs));
 r=await api(A.token,'PATCH',P,{tabs:['spam']});t('tabs: an unknown tab is bad_request',r.s===400&&r.j.error?.code==='bad_request',r.s);
 r=await api(A.token,'GET',`${P}/messages?folder=INBOX&category=nope`);t('tabs: an unknown category is bad_request',r.s===400,r.s);
 
-r=await api(A.token,'GET',`${P}/categories?folder=INBOX`);const counts=Object.fromEntries((r.j.categories??[]).map(c=>[c.id,c]));
-t('tabs: counts for Primary and the four tabs',r.s===200&&r.j.categories?.map(c=>c.id).join()==='primary,promotions,social,updates,forums',JSON.stringify(r.j).slice(0,200));
-t('tabs: each tab has its unread',counts.promotions?.unread>=1&&counts.social?.unread>=1&&counts.updates?.unread>=2&&counts.forums?.unread>=1&&counts.primary?.unread>=1,JSON.stringify(Object.values(counts).map(c=>[c.id,c.unread,c.new])));
-t('tabs: and its latest message',counts.promotions?.latest?.subject===subj('promotions')&&counts.promotions.latest.from?.address==='hello@outdoorshop.com'&&counts.social?.latest?.subject===subj('social')&&counts.forums?.latest?.subject===subj('forums')&&counts.primary?.latest?.subject===subj('primary'),JSON.stringify(Object.values(counts).map(c=>c.latest?.subject)));
-t('tabs: unread that the user has not seen the tab since is new',counts.promotions?.new===counts.promotions?.unread,JSON.stringify(counts.promotions));
-r=await api(A.token,'GET',`${P}/categories?folder=INBOX&since=promotions:${Date.now()+60000}`);t('tabs: nothing is new after the tab was last opened',r.j.categories?.find(c=>c.id==='promotions')?.new===0&&r.j.categories.find(c=>c.id==='promotions').unread>=1,JSON.stringify(r.j.categories?.find(c=>c.id==='promotions')));
-r=await api(A.token,'GET',`${P}/categories?folder=Trash`);t('tabs: only INBOX has tabs',r.s===400,r.s);
 
 const lists={};for(const cat of ['primary','promotions','social','updates','forums']){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&category=${cat}&limit=50`);lists[cat]=r.j;}
 const has2=(j,k)=>tagged(j?.messages).some(m=>m.subject===subj(k));
@@ -154,7 +146,6 @@ r=await api(A.token,'GET',`${P}/messages?folder=INBOX&category=social&limit=50`)
 await deliver(KINDS.social[0],'Priya Shah endorsed you',KINDS.social[2]);
 let later;for(let i=0;i<20&&!later;i++){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&category=primary&limit=50`);later=r.j.messages?.find(m=>m.subject===`Priya Shah endorsed you ${tag}`);if(!later)await sleep(300);}
 t('tabs: a later message from that sender lands in Primary',!!later&&later.category==='primary',JSON.stringify(later).slice(0,140));
-r=await api(A.token,'GET',`${P}/categories?folder=INBOX`);t('tabs: the counts follow the move',r.j.categories?.find(c=>c.id==='primary')?.latest?.subject===`Priya Shah endorsed you ${tag}`,JSON.stringify(r.j.categories?.find(c=>c.id==='primary')));
 r=await api(A.token,'POST',`${P}/senders/category`,{senders:[{address:'invitations@linkedin.com',category:null}]});t('tabs: undo the move',r.s===200&&r.j.ok,r.s);
 r=await api(A.token,'GET',`${P}/messages?folder=INBOX&category=social&limit=50`);t('tabs: and both are back in Social',tagged(r.j.messages).filter(m=>/Priya Shah/.test(m.subject)).length===2,JSON.stringify(tagged(r.j.messages).map(m=>m.subject)));
 r=await api(A.token,'POST',`${P}/messages/category`,{folder:'Trash',uids:[1],category:'primary'});t('tabs: moving to a tab is only for INBOX',r.s===400,r.s);
@@ -226,47 +217,77 @@ t(`parts: a ${sizeMB} MB message opens`,res.s===200&&res.j?.message?.text?.start
 t('parts: and quickly (it does not download the attachments)',res.ms<3000,res.ms+'ms');
 res=await getRaw(`${P}/messages/${UIDS.huge}/attachments/2?folder=INBOX`);t('parts: one of its attachments downloads by itself',res.s===200&&res.buf.equals(HUGE),res.s+' '+res.buf.length+' '+res.ms+'ms');
 
-// ---- Two connections: a slow sort never holds up opening a message --------------------------------------------------
-// x-mail-test-slow-ms (MAIL_ALLOW_INSECURE only) pauses the tab counts inside the background connection's INBOX lock.
+// ---- Three connections: sorting and the re-check never hold up a list, opening a message or marking it seen ------------
+// x-mail-test-recheck: 1 starts the re-check now (in the background, on the sorter connection), and x-mail-test-slow-ms
+// (MAIL_ALLOW_INSECURE only) pauses each of the sorter's steps inside its INBOX lock.
 r=await api(A.token,'PATCH',P,{tabs:['promotions','social','updates','forums']});
+await api(A.token,'GET',`${P}/messages?folder=INBOX&category=primary&limit=5`);
 const SLOW=3000;
-const slowCounts=getRaw(`${P}/categories?folder=INBOX`,{'x-mail-test-slow-ms':String(SLOW)});
-await sleep(300);
-const [msgGet,seenPatch,listGet]=await Promise.all([
+const logSize=()=>fs.statSync(log).size;
+const logSince=(at)=>{const fd=fs.openSync(log,'r');try{const len=fs.fstatSync(fd).size-at;const b=Buffer.alloc(Math.max(0,len));fs.readSync(fd,b,0,b.length,at);return b.toString('utf8');}finally{fs.closeSync(fd);}};
+const recheckLine=async(at,ms=20000)=>{for(const t0=Date.now();Date.now()-t0<ms;await sleep(200)){const l=logSince(at).split('\n').find(x=>/\[mail\] recheck: /.test(x));if(l)return l;}return null;};
+let at=logSize();
+const kick=await getRaw(`${P}/messages?folder=INBOX&category=forums&limit=5`,{'x-mail-test-recheck':'1','x-mail-test-slow-ms':String(SLOW)});
+t('three connections: the list that starts the re-check does not wait for it',kick.s===200&&kick.ms<1500,kick.s+' '+kick.ms+'ms');
+await sleep(200);
+const [msgGet,seenPatch,listGet,pageGet]=await Promise.all([
   // plain is not among the last three opened, so this one reads from the server.
   getRaw(`${P}/messages/${UIDS.plain}?folder=INBOX`),
   (async()=>{const t0=Date.now();const x=await api(A.token,'PATCH',`${P}/messages`,{folder:'INBOX',uids:[UIDS.koi8],seen:true});return{...x,ms:Date.now()-t0};})(),
-  getRaw(`${P}/messages?folder=INBOX&limit=5`),
+  getRaw(`${P}/messages?folder=INBOX&category=primary&limit=5`),
+  getRaw(`${P}/messages?folder=INBOX&category=updates&limit=2&before=${UIDS.plain}`),
 ]);
-const sc=await slowCounts;
-t('two connections: the slow counts took their time (the hook works)',sc.s===200&&sc.ms>=SLOW,sc.s+' '+sc.ms+'ms');
-t('two connections: a list waits behind them (same, background, connection)',listGet.s===200&&listGet.ms>=SLOW-800,listGet.ms+'ms');
-t('two connections: opening a message meanwhile is not held up',msgGet.s===200&&msgGet.ms<1500,msgGet.s+' '+msgGet.ms+'ms');
-t('two connections: nor is marking one seen',seenPatch.s===200&&seenPatch.ms<1500,seenPatch.s+' '+seenPatch.ms+'ms');
+const rl=await recheckLine(at);const rlMs=Number(/ (\d+)ms \(lock wait/.exec(rl??'')?.[1]);
+t('three connections: the slow re-check took its time (the hook works)',rlMs>=SLOW,rl);
+t('three connections: a tab list meanwhile is not held up',listGet.s===200&&listGet.j?.messages?.length>0&&listGet.ms<1500,listGet.s+' '+listGet.ms+'ms');
+t('three connections: nor is a later page',pageGet.s===200&&pageGet.ms<1500,pageGet.s+' '+pageGet.ms+'ms');
+t('three connections: nor is opening a message',msgGet.s===200&&msgGet.ms<1500,msgGet.s+' '+msgGet.ms+'ms');
+t('three connections: nor marking one seen',seenPatch.s===200&&seenPatch.ms<1500,seenPatch.s+' '+seenPatch.ms+'ms');
 
 // ---- The tabs' cache ------------------------------------------------------------------------------------------------
-r=await api(A.token,'GET',`${P}/categories?folder=INBOX`);const promoBefore=r.j.categories?.find(c=>c.id==='promotions')?.unread;
-const promoMsg=tagged((await api(A.token,'GET',`${P}/messages?folder=INBOX&category=promotions&limit=50`)).j.messages).find(m=>!m.seen);
-await api(A.token,'PATCH',`${P}/messages`,{folder:'INBOX',uids:[promoMsg?.uid],seen:true});
-r=await api(A.token,'GET',`${P}/categories?folder=INBOX`);t('cache: the counts follow a mark-seen at once',r.j.categories?.find(c=>c.id==='promotions')?.unread===promoBefore-1,`${promoBefore} -> ${r.j.categories?.find(c=>c.id==='promotions')?.unread}`);
-await api(A.token,'PATCH',`${P}/messages`,{folder:'INBOX',uids:[promoMsg?.uid],seen:false});
 await deliver('Dana Lee <dana@acme.test>','Gone soon',{});
 let gone;for(let i=0;i<20&&!gone;i++){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&category=primary&limit=10`);gone=r.j.messages?.find(m=>m.subject===`Gone soon ${tag}`);if(!gone)await sleep(300);}
-r=await api(A.token,'GET',`${P}/categories?folder=INBOX&since=primary:1`);t('cache: new mail is sorted into its tab, and is its latest',!!gone&&r.j.categories?.find(c=>c.id==='primary')?.latest?.subject===`Gone soon ${tag}`,JSON.stringify(r.j.categories?.find(c=>c.id==='primary')));
+t('cache: new mail is sorted into its tab',!!gone&&gone.category==='primary'&&r.j.messages[0]?.uid===gone.uid,JSON.stringify(gone).slice(0,140));
 const MOVED2=`Elsewhere-${tag}`;
 await imapDirect(async(c)=>{await c.mailboxCreate(MOVED2);const lock=await c.getMailboxLock('INBOX');try{await c.messageMove(String(gone.uid),MOVED2,{uid:true});}finally{lock.release();}});
-r=await api(A.token,'GET',`${P}/messages?folder=INBOX&category=primary&limit=50`);t('cache: a message moved away by another app leaves the tab list',r.s===200&&!r.j.messages?.some(m=>m.uid===gone?.uid),JSON.stringify(tagged(r.j.messages).map(m=>m.subject)));
-r=await getRaw(`${P}/categories?folder=INBOX`,{'x-mail-test-recheck':'1'});t('cache: and the re-check drops it from the counts',r.s===200&&r.j.categories?.find(c=>c.id==='primary')?.latest?.subject!==`Gone soon ${tag}`,JSON.stringify(r.j?.categories?.find(c=>c.id==='primary')?.latest));
+// The re-check (started by a list of another tab, which does not show it) forgets the message that left.
+at=logSize();
+r=await getRaw(`${P}/messages?folder=INBOX&category=forums&limit=5`,{'x-mail-test-recheck':'1'});
+const rl2=await recheckLine(at);
+t('cache: the re-check forgets a message moved away by another app',/ 1 gone, /.test(rl2??''),rl2);
+r=await api(A.token,'GET',`${P}/messages?folder=INBOX&category=primary&limit=50`);t('cache: and it is not in the tab list',r.s===200&&!r.j.messages?.some(m=>m.uid===gone?.uid),JSON.stringify(tagged(r.j.messages).map(m=>m.subject)));
 
-// A fresh account on the same mailbox, sorting one message per request: the tabs still page through all of INBOX.
+// A fresh account on the same mailbox, sorting one message per step: a page that comes back short says `sorting`, and asked
+// again (as the client does) it fills in; together the tabs list every INBOX message once, newest first.
 r=await api(A.token,'POST','/v1/mail/accounts',{email:MAIL_USER,displayName:'Ann',password:'x',imap:server(3143),smtp:server(3025)});
 const P2=`/v1/mail/accounts/${r.j.account?.id}`;await api(A.token,'PATCH',P2,{tabs:['promotions','social','updates','forums']});
 const inboxUids=await imapDirect(async(c)=>{const lock=await c.getMailboxLock('INBOX');try{return (await c.search({all:true},{uid:true})).sort((a,b)=>b-a);}finally{lock.release();}});
-const seenUids=[];let calls=0,short=0,ordered=true;
-for(const cat of ['forums','social','promotions','updates','primary']){let before=null;for(let i=0;i<400;i++){calls++;const x=await getRaw(`${P2}/messages?folder=INBOX&category=${cat}&limit=3${before?`&before=${before}`:''}`,{'x-mail-test-classify-cap':'1'});const ms=x.j?.messages??[];if(ms.length<3&&x.j?.next)short++;ms.forEach((m,j)=>{if(m.category!==cat||(j&&ms[j-1].uid<=m.uid)||(before&&m.uid>=before))ordered=false;seenUids.push(m.uid);});if(!x.j?.next)break;before=x.j.next;}}
-t('cache: with a small budget, tab pages come back short with next and carry on',short>0,`${calls} calls, ${short} short`);
+// Walks a tab as the client does: a page with `sorting` is asked for again a moment later, until it is full or done.
+const walk=async(path,cat,limit,headers={})=>{const out=[];let before=null,calls=0,sorting=0,ordered=true;for(let i=0;i<600;i++){calls++;const x=await getRaw(`${path}/messages?folder=INBOX&category=${cat}&limit=${limit}${before?`&before=${before}`:''}`,headers);if(x.s!==200)return{out,calls,sorting,ordered:false,err:x.s};const ms=x.j.messages??[];if(x.j.sorting){if(ms.length>=limit||x.j.next===null)ordered=false;sorting++;await sleep(100);continue;}ms.forEach((m,j)=>{if(m.category!==cat||(j&&ms[j-1].uid<=m.uid)||(before&&m.uid>=before))ordered=false;out.push(m.uid);});if(!x.j.next)break;before=x.j.next;}return{out,calls,sorting,ordered};};
+const seenUids=[];let calls=0,shortSorting=0,ordered=true;
+for(const cat of ['forums','social','promotions','updates','primary']){const w=await walk(P2,cat,3,{'x-mail-test-classify-cap':'1'});seenUids.push(...w.out);calls+=w.calls;shortSorting+=w.sorting;ordered&&=w.ordered;}
+t('cache: with a small budget, a short page says sorting, and asked again fills in',shortSorting>0,`${calls} calls, ${shortSorting} sorting`);
 t('cache: and together the tabs list every INBOX message once, newest first in each',ordered&&seenUids.length===inboxUids.length&&new Set(seenUids).size===inboxUids.length&&inboxUids.every(u=>seenUids.includes(u)),`${seenUids.length} listed of ${inboxUids.length}`);
 await api(A.token,'DELETE',P2);
+
+// A cold cache on a larger INBOX (another GreenMail user, 320 messages: the 20 oldest a mailing list's, the rest a
+// colleague's): the first Forums page answers at once, empty with `sorting`, though each sorting step is slowed, and
+// fills in as the sorter goes; Primary pages through all 300.
+const BULK=`bulk-${tag}@test.local`;
+const bulkImap=async(fn)=>{const c=new ImapFlow({host:'127.0.0.1',port:3143,secure:false,doSTARTTLS:false,auth:{user:BULK,pass:'x'},logger:false});await c.connect();try{return await fn(c)}finally{await c.logout()}};
+const raw=(i,forum)=>[`From: ${forum?'Sam Rivera <sam@rivera.dev>':'Dana Lee <dana@acme.test>'}`,`To: ${BULK}`,`Subject: ${forum?'[hikers] Trail report':'Notes'} ${i} ${tag}`,`Date: ${new Date(Date.UTC(2026,9,1)+i*60000).toUTCString()}`,`Message-ID: <bulk-${i}-${tag}@test.local>`,...(forum?['List-Id: <hikers.googlegroups.com>','List-Post: <mailto:hikers@googlegroups.com>','X-Google-Group-Id: 42']:[]),'Content-Type: text/plain; charset=utf-8','',`Message ${i}.`,''].join('\r\n');
+await bulkImap(async(c)=>{for(let i=0;i<320;i++)await c.append('INBOX',raw(i,i<20));});
+const Cy=await signup(`bulk-${tag}@example.com`,'Cy');
+r=await api(Cy.token,'POST','/v1/mail/accounts',{email:BULK,displayName:'Bulk',password:'x',imap:server(3143),smtp:server(3025)});
+const P3=`/v1/mail/accounts/${r.j.account?.id}`;await api(Cy.token,'PATCH',P3,{tabs:['promotions','social','updates','forums']});
+const cold=await (async()=>{const t0=Date.now();const x=await fetch(`${B}${P3}/messages?folder=INBOX&category=forums&limit=25`,{headers:{authorization:'Bearer '+Cy.token,'x-mail-test-slow-ms':'1500'}});return{s:x.status,j:await x.json(),ms:Date.now()-t0};})();
+t('cold cache: the first page of a tab answers at once, with sorting',cold.s===200&&cold.ms<1500&&cold.j.sorting===true&&cold.j.messages.length<25,cold.s+' '+cold.ms+'ms '+JSON.stringify(cold.j).slice(0,120));
+let filled=null,asks=0;for(const t0=Date.now();Date.now()-t0<30000;){asks++;const x=await fetch(`${B}${P3}/messages?folder=INBOX&category=forums&limit=25`,{headers:{authorization:'Bearer '+Cy.token}});const j=await x.json();if(!j.sorting){filled=j;break;}await sleep(500);}
+t('cold cache: asked again, the page fills in as the sorter goes',filled?.messages?.length===20&&filled.next===null&&filled.messages.every(m=>m.category==='forums'&&m.subject.includes('[hikers]')),`${asks} asks, ${filled?.messages?.length} messages`);
+const prim=await walk(P3,'primary',50,{authorization:'Bearer '+Cy.token});
+t('cold cache: and Primary pages through all 300, newest first',prim.ordered&&prim.out.length===300&&new Set(prim.out).size===300,`${prim.out.length} in ${prim.calls} calls, ${prim.sorting} sorting`);
+await api(Cy.token,'DELETE',P3);
+await bulkImap(async(c)=>{const lock=await c.getMailboxLock('INBOX');try{await c.messageDelete('1:*');}finally{lock.release();}}).catch(()=>{});
 const logText=fs.readFileSync(log,'utf8');const timingLines=logText.split('\n').filter(l=>/\[mail\] (GET|POST|PATCH|DELETE) \/v1\/mail/.test(l));
 t('timing: one line per request, with the lock wait and IMAP time',timingLines.some(l=>/\[mail\] GET \/v1\/mail\/accounts\/:id\/messages\/:uid 200 \d+ms \(lock wait \d+ms, imap \d+ms\)/.test(l)),timingLines.at(-1));
 t('timing: and nothing of the mail in them',timingLines.length>20&&!timingLines.some(l=>l.includes(tag)||l.includes(ACC)||l.includes(MAIL_USER)),timingLines.find(l=>l.includes(tag)||l.includes(ACC)));
