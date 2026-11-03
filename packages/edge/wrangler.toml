@@ -87,6 +87,17 @@ class_name = "PdfOcr"
 tag = "v3"
 new_sqlite_classes = ["PdfOcr"]
 
+# FreeFlow Mail (src/imap/object.ts, docs/specs/mail-api.md): one object per person, named by their user id, holding the
+# mail accounts they connected (passwords sealed with FLOW_DATA_KEY) and their open IMAP connections. MAIL_ALLOW_INSECURE=1
+# (unencrypted connections, any port, local hosts) is for local dev only, given with --var; it is never set here.
+[[durable_objects.bindings]]
+name = "MAIL"
+class_name = "Mail"
+
+[[migrations]]
+tag = "v4"
+new_sqlite_classes = ["Mail"]
+
 [[r2_buckets]]
 binding = "BLOBS"
 bucket_name = "flow-files"
