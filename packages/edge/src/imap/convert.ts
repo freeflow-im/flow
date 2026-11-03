@@ -139,8 +139,11 @@ export function toSummary(m: FetchMessageObject, folder: string, snippet = ''): 
 const byteLength = (c: ArrayBuffer | Uint8Array | string) => (typeof c === 'string' ? new TextEncoder().encode(c).length : c.byteLength);
 export const bareId = (id: string | undefined | null) => (id ? id.trim().replace(/^<|>$/g, '') : null);
 
-/** A message read in full: the list's fields, with the parsed bodies and attachments. */
-export function toDetail(summary: MessageSummary, email: Email): MessageDetail {
+/**
+ * A message opened: the list's fields, with the parsed bodies and the attachments. `attachments` is given when the message
+ * was opened by its parts (body.ts), which postal-mime then never saw; otherwise they are postal-mime's.
+ */
+export function toDetail(summary: MessageSummary, email: Email, attachments?: AttachmentInfo[]): MessageDetail {
   const references = (email.references ?? '').split(/\s+/).filter(Boolean);
   const text = email.text ?? null;
   return {
@@ -153,7 +156,7 @@ export function toDetail(summary: MessageSummary, email: Email): MessageDetail {
     references,
     html: email.html ?? null,
     text,
-    attachments: email.attachments.map((a, index) => ({
+    attachments: attachments ?? email.attachments.map((a, index) => ({
       index,
       filename: a.filename ?? `attachment-${index + 1}`,
       mimeType: a.mimeType || 'application/octet-stream',

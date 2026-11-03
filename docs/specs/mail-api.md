@@ -76,7 +76,8 @@ interface MessageDetail extends MessageSummary {
   sets the tab chosen for senders, or forgets it (`null`, back to the automatic one): how a move is undone.
 - `GET  /v1/mail/accounts/:id/messages/:uid?folder=` → `{ message: MessageDetail }` (does NOT mark it seen; the client PATCHes seen)
 - `GET  /v1/mail/accounts/:id/messages/:uid/attachments/:index?folder=` → the bytes, with Content-Type and
-  `Content-Disposition: attachment; filename*=…` (`?inline=1` → `inline`, used for cid: images).
+  `Content-Disposition: attachment; filename*=…` (`?inline=1` → `inline`, used for cid: images). `index` is the
+  attachment's `index` in MessageDetail; see "Opening a message" for what it maps to.
 - `PATCH /v1/mail/accounts/:id/messages` body `{ folder, uids: number[], seen?: boolean, flagged?: boolean }` → `{ ok: true }`
 - `POST /v1/mail/accounts/:id/messages/move` body `{ folder, uids: number[], to: string }` → `{ ok: true }`
 - `POST /v1/mail/accounts/:id/messages/delete` body `{ folder, uids: number[] }` → moves to Trash (or expunges if already in Trash) → `{ ok: true }`
@@ -90,9 +91,10 @@ interface MessageDetail extends MessageSummary {
 Gmail's Primary, Promotions, Social, Updates and Forums, for INBOX only. Each tab but Primary is switched on per account
 (`tabs`); mail is sorted into the enabled ones by itself and the rest stays in Primary.
 
-- **Gmail** (`imap.gmail.com`, or the server announces `X-GM-EXT-1`): Gmail's own categories, by `X-GM-RAW` searches in INBOX
-  (`category:promotions` and so on; Primary is INBOX less the enabled ones). Gmail's labels are never changed: the user's
-  choices are ours, folded into the query (`-from:` for a sender moved away, `OR (from:…)` for one moved in) by `gmailQuery`.
+- **Gmail** (`imap.gmail.com`, or the server announces `X-GM-EXT-1`): Gmail's own categories, asked of Gmail once per
+  message and cached (below): `UID <min>:<max> X-GM-RAW "category:<tab>"` for each of the four categories over a batch of
+  new UIDs (`gmailCategorySearches`), and one envelope FETCH of those UIDs for the sender, subject and date. A message in
+  none of them is Primary. Gmail's labels are never changed: the user's choices ("Move to tab") are ours.
 - **Other servers**: `src/imap/categorize.ts` classifies a message from its From and a few headers (`CATEGORY_HEADERS`:
   List-Id, List-Unsubscribe, List-Post, Precedence, Auto-Submitted, Feedback-ID, X-Mailer, the ESPs' X-Campaign/X-MC-/X-SG-/
   X-SES- headers, X-GitHub-Reason, X-Google-Group-Id, Return-Path, ...) and gives a reason with each answer. In order: the
@@ -100,17 +102,55 @@ Gmail's Primary, Promotions, Social, Updates and Forums, for INBOX only. Each ta
   Google Groups, Mailman, Discourse, groups.io); Promotions (a marketing sender's headers or bounce domain, a campaign
   Feedback-ID, or List-Unsubscribe with nothing transactional about it); Updates (auto-generated, no-reply/notifications
   senders, transactional services, trackers, receipts); else Primary.
-- The answer is cached in the Mail object's SQLite, `mail_categories` keyed `(account_id, folder, uid_validity, uid)` with the
-  sender, From name, subject and arrival time (for the counts' `latest` and `new`). It stores the headers' category; the
-  user's choices (`mail_category_overrides`, per sender) and which tabs are on apply when reading, so neither re-classifies.
-  A list page of INBOX fetches the headers with its summaries and classifies what is new; the counts classify the unread
-  that are not cached yet, then the newest 50, and forget cached UIDs that have left the folder.
-- A tab's list walks INBOX newest first, classifying uncached UIDs in batches of 100, until it has `limit` messages, the
-  folder ends, or 300 headers have been fetched in that request; `next` is then one above the first UID not looked at, so
-  the client carries on with `before=next`.
+- **The cache** (both kinds of server): `mail_categories` in the Mail object's SQLite, keyed `(account_id, folder,
+  uid_validity, uid)`, with the category (Gmail's, or the headers'), the sender, From name, subject and arrival time (for the
+  counts' `latest` and `new`). The user's choices (`mail_category_overrides`, per sender) and which tabs are on are applied
+  when reading, in SQL (`effectiveSql`: the sender's chosen tab, else the stored one, Primary for a tab that is off), so a
+  "Move to tab" or its undo changes every cached row at once and nothing is sorted again. A new UIDVALIDITY drops the rows.
+- **How far it reaches**: `mail_sync (account_id, folder) → uid_validity, high, low, checked_at`. Every UID of INBOX from
+  `low` to `high` has its row; `high` is the high-water mark. Each list page of a tab and each counts call first asks only
+  for UIDs above it (`UID SEARCH <high+1>:*`) and sorts them (the first time, the newest 300). More than 300 new messages
+  at once: the newest 300 are sorted and `low` moves up to them; the rest is sorted as lists page down.
+- **A tab's list** reads its page from SQLite (`uid < before`, newest first) and fetches the summaries of just those UIDs in
+  one FETCH (with the snippets' partial FETCHes). Below `low`, older mail is sorted as the page needs it, at most 300
+  messages per request; a page can then come back short, even empty, with `next` set, and the client carries on with
+  `before=next`. A UID the server no longer returns (moved by another mail app) is dropped from the cache.
+- **The counts** (`GET .../categories`): the sync above, one `UID SEARCH UNSEEN`, and SQLite for the rest (unread per tab
+  joined with the cache, `new` from the cached arrival times, `latest` the newest cached row of each tab). Unread mail
+  below `low` is sorted then, 300 at most per call. The result is kept 20 s per account, and dropped at once by anything
+  done here that changes it (flags, moves, deletes, sending, a tab move, the account's tabs).
+- **The background re-check**, at most every 10 minutes per account, started by a list or counts call (`ctx.waitUntil`,
+  never awaited by the request): `UID SEARCH ALL` drops the rows of mail that left INBOX; on Gmail one X-GM-RAW search per
+  category over the whole INBOX takes Gmail's current categories (re-sorting done on gmail.com or by Gmail itself); then up
+  to 1000 unread messages that are not cached yet are sorted. Each step takes the background lock by itself.
+- A list of the whole INBOX with tabs on (a search) carries each message's tab: other servers sort it from the headers fetched
+  with the page, Gmail from the cache (sorting any UID it does not have).
 
-Polling: the client re-reads folders + the open list every 60 s while the tab is visible, and on window focus. (Push over the
-websocket is a later phase.)
+Polling: the client re-reads folders + the open list every 60 s while the tab is visible, the tab counts every 2 minutes, and
+all on window focus. (Push over the websocket is a later phase.) After marking read or unread, flagging, moving or deleting,
+the client changes the folder's unread count and the tabs' counts in its own cache at once (`packages/mail/src/lib/counts.ts`)
+and re-reads folders and counts once, quietly, 4 s after the last such change and once none is still on its way (so a burst
+of j/k is one refresh). Opening a message reads the next (older) one ahead; it is marked read once it is on screen.
+
+## Opening a message
+
+`GET .../messages/:uid` never downloads the whole message: one FETCH of the summary, BODYSTRUCTURE and a few headers (From,
+Reply-To, Bcc, In-Reply-To, References), then one FETCH of just the text/plain and text/html parts (`BODY[1.1]`, …;
+`BODY[TEXT]` for a message that is not multipart), with any inline (cid:) picture up to 2 MB and any other part up to 64 KB,
+8 MB in all. `src/imap/body.ts` rebuilds a minimal message of the same multipart tree holding those text parts as the server
+holds them, and postal-mime parses it as it parsed the whole message before (charsets, quoted-printable/base64,
+format=flowed, HTML made from text and the other way round). A text part over 10 MB is `413`.
+
+- **Attachment indexes**: `planBody` walks BODYSTRUCTURE in order, as postal-mime walks the message: every leaf that is not an
+  inline text/plain or text/html body, and is not empty, is the next attachment, `index` 0, 1, … Each index maps to its
+  BODYSTRUCTURE part number, so `attachments/:index` FETCHes that one part (one round trip, decoded here) unless it came with
+  the bodies. The order does not depend on what was fetched, so an index stays the same for a message.
+- **Sizes**: an attachment fetched with the bodies has its exact size; a larger one's is its encoded size, less the base64
+  overhead for base64 (within about 1%).
+- **The exception**: a message with an inline `message/rfc822` part (a forwarded message postal-mime folds into the message's
+  own text and attachments) is still downloaded and parsed whole, up to 50 MB, and its indexes are postal-mime's.
+- The last three messages opened are kept with the parts fetched with them, so a message's inline pictures do not each
+  fetch again.
 
 ## Local dev fixture
 
@@ -129,10 +169,16 @@ Bundle cost ≈ 600 KiB gzip.
 - `src/imap/object.ts` is the Mail object. Its SQLite holds `accounts` (servers as JSON, the password sealed with
   FLOW_DATA_KEY through `org/crypto` `encryptBlob`, never returned or logged, and the `status` the client shows) and
   `rate_limit_windows` (the Directory's fixed window: 10 account verifications per person per 15 minutes, on `POST` and on a
-  `PATCH` that changes the password or servers). While awake it keeps one ImapFlow connection per account (over
-  `cloudflare:sockets`, which does both TLS and STARTTLS), reuses it, holds a mailbox lock per operation, reconnects once if
-  it had dropped, and logs out after 60 s idle. The folder list is cached in memory for 5 minutes (Trash and Sent lookups);
-  the last three parsed messages are kept so a message's inline images do not each download it again.
+  `PATCH` that changes the password or servers). While awake it keeps up to two ImapFlow connections per account
+  (over `cloudflare:sockets`, which does both TLS and STARTTLS), each opened when first needed: **interactive** (opening a
+  message and its attachments, flags, moves, deletes, the IMAP side of sending, a tab move's sender lookup) and
+  **background** (lists, folders, tab counts, sorting into tabs and the re-check). Locks are per connection (imapflow's
+  `getMailboxLock`), so a slow list or count never holds up opening a message or marking it read. Each is reused,
+  reconnects once if it had dropped, and logs out after 60 s idle. Two is well within Gmail's limit of about 15 IMAP
+  connections per account. The folder list is cached in memory for 5 minutes (Trash and Sent lookups).
+- **Timing logs**: one line per request, `[mail] <METHOD> <route> <status> <ms>ms (lock wait <ms>, imap <ms>)`: the route with
+  its ids replaced (`/v1/mail/accounts/:id/messages/:uid`), the time spent waiting for a connection and a folder's lock, and
+  the time talking IMAP. Never an address, subject, folder or id, so `wrangler tail` shows where the time goes.
 - SMTP is nodemailer. The copy in Sent is the same message (Bcc kept) appended with `\Seen`, skipped for Gmail; a `Sent`
   folder is created when the account has none. `\Answered` is set on the INBOX message whose Message-ID is `inReplyTo`.
 - Only IMAP 993 (tls) / 143 (starttls) and SMTP 465 (tls) / 587 (starttls), and no host that is `localhost` or an IP literal
@@ -143,5 +189,8 @@ Bundle cost ≈ 600 KiB gzip.
 - `attachments/:index?inline=1` is only inline for an image type; every attachment is served with
   `Content-Security-Policy: sandbox` and `nosniff`, since it comes from the app's own origin. `contentId` is given without
   its angle brackets, as a `cid:` URL names it.
-- Tests: `src/imap/*.test.ts` (ports, hosts, presets, the FETCH-to-summary mapping, snippets, the tab rules) and `test/e2e-mail.mjs` against
-  GreenMail (its header says how to run it).
+- Tests: `src/imap/*.test.ts` (ports, hosts, presets, the FETCH-to-summary mapping, snippets, the tab rules, the Gmail UID-range
+  searches and the tab SQL, opening by parts against postal-mime reading the whole message) and `test/e2e-mail.mjs` against
+  GreenMail (its header says how to run it). Under `MAIL_ALLOW_INSECURE=1` only, three request headers help it:
+  `x-mail-test-slow-ms` pauses the counts inside the background lock (to show opening a message is not held up),
+  `x-mail-test-classify-cap` lowers the 300-per-request sorting budget, and `x-mail-test-recheck: 1` runs the re-check now.
