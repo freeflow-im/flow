@@ -83,6 +83,9 @@ interface MessageDetail extends Omit<MessageSummary, 'attachments'> {
   ... }` with `categorized`/`primary`/`skipped`/`confirmed` for a sort and `promoted`/`moved`/`demoted`/`confirmed`/`gone`
   for a re-check. `sync` is the folder's `mail_sync` row, `counts` the cached rows per `(category, reason)`, and `messages`
   `{ uid, category, reason }` for the UIDs asked about.
+- `GET  /v1/mail/accounts/:id/contacts?q=<text>&limit=8` → `{ contacts: [{ name, address, sent, received, lastAt }] }` (2026-11-04): the
+  people written to and heard from, for the composer's address completion (Contacts below): those whose address, or a word of
+  whose name, starts with `q`, the most written to first, then the most heard from, then the latest; everyone with no `q`.
 - `GET  /v1/mail/accounts/:id/debug/cache` → `{ folders: [{ folder, kind, validity, high, low, modseq, syncedAt, openedAt, error, errorAt, rows }],
   log, lastActiveAt, nextAlarmAt, alarmStep }` (each folder also with `bodies` and `bodyBytes`; `alarmStep` is where the alarm's
   last run was, written before each step, which a run cut short by the runtime still shows): how the prefetch cache stands for the account
@@ -252,6 +255,16 @@ Gmail-style threads, on the prefetch cache (below): every cached message has a `
   merging, the index after a trim, the subject fallback, paging) and `test/e2e-mail.mjs` ("Conversations": a thread across
   INBOX and Sent, read oldest first, bodies after an alarm pass, a merge, the subject fallback and its limits, a tab's
   conversations, paging).
+
+## Contacts (2026-11-04)
+
+`mail_contacts (account_id, address, name, sent, received, last_at)`, kept by the prefetch cache as messages are cached
+(`noteContacts`): a message from the account's own address counts its To and Cc as written to (`sent`), any other its sender
+as heard from (`received`); the latest name is kept; the account's own address is never a contact. An account cached before
+the table existed gets its contacts built from every cached message on the first ask (`rebuildContacts`). The composer's
+To, Cc and Bcc fields (`AddressField`) ask `GET …/contacts?q=` after a pause in typing and offer the matches under the box
+(↑/↓, Enter, Tab or a click take one; Esc dismisses; addresses already chosen are left out); typing or pasting a full
+address works as before. No address book is read from the server (IMAP has none); Google contacts are a later change.
 
 ## The prefetch cache (2026-11-04)
 

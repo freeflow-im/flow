@@ -312,6 +312,13 @@ const inboxCache=r.j.folders?.find(f=>f.folder==='INBOX');
 t('cache: the alarm keeps INBOX, down to the oldest message',r.s===200&&inboxCache?.kind==='inbox'&&inboxCache.rows===inboxUids.length&&inboxCache.low===1&&r.j.log?.length>0&&r.j.log.at(-1).folders.some(x=>x.startsWith('inbox:')),JSON.stringify(r.j).slice(0,200));
 t('cache: and Sent, which was opened',r.j.folders?.some(f=>f.folder==='Sent'&&f.rows>0),JSON.stringify(r.j.folders?.map(f=>[f.folder,f.kind,f.rows])));
 r=await api(Bo.token,'GET',`${P}/debug/cache`);t('cache: the debug route is not for anyone else',r.s===404,r.s);
+// Contacts: the people on the cached mail, the ones written to first; a word of the name or the start of the address.
+r=await api(A.token,'GET',`${P}/contacts?q=dana`);
+t('contacts: someone who wrote in is offered by a word of her name',r.s===200&&r.j.contacts?.some(c=>c.address==='dana@acme.test'&&c.name==='Dana Lee'&&c.received>0),r.s+' '+JSON.stringify(r.j).slice(0,160));
+r=await api(A.token,'GET',`${P}/contacts?q=lee`);t('contacts: and by her last name',r.j.contacts?.some(c=>c.address==='dana@acme.test'),JSON.stringify(r.j).slice(0,120));
+r=await api(A.token,'GET',`${P}/contacts?q=zzz-${tag}`);t('contacts: nothing for nonsense',r.s===200&&r.j.contacts?.length===0,JSON.stringify(r.j));
+r=await api(A.token,'GET',`${P}/contacts`);t('contacts: never the account itself',r.s===200&&r.j.contacts?.length>0&&!r.j.contacts.some(c=>c.address===MAIL_USER),JSON.stringify(r.j.contacts?.map(c=>c.address)).slice(0,160));
+r=await api(Bo.token,'GET',`${P}/contacts`);t('contacts: not for anyone else',r.s===404,r.s);
 // Synced by the alarm within 45 s, a folder's pages are read without a round trip: a plain page, a tab's, the conversations.
 {const imapMs=(x)=>Number(/imap=(\d+)/.exec(x.h.get('x-mail-timing')??'')?.[1]??-1);
  const a=await getRaw(`${P}/messages?folder=INBOX&limit=5`),b=await getRaw(`${P}/messages?folder=INBOX&category=primary&limit=5`),c=await getRaw(`${P}/threads?folder=INBOX&limit=5`),d=await getRaw(`${P}/threads?folder=INBOX&category=primary&limit=5`);

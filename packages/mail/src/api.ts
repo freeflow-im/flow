@@ -37,6 +37,8 @@ export interface Address {
   name: string;
   address: string;
 }
+/** Someone written to (`sent` times) or heard from (`received`), as the composer completes addresses (from the account's cached mail). */
+export interface Contact { name: string; address: string; sent: number; received: number; lastAt: number }
 export interface MessageSummary {
   uid: number;
   folder: string;
@@ -233,6 +235,7 @@ export const mailApi = {
   updateAccount: async (id: string, patch: AccountPatch) => (await request<{ account: MailAccount }>('PATCH', base(id), patch)).account,
   deleteAccount: (id: string) => request<{ ok: true }>('DELETE', base(id)),
   folders: async (accountId: string) => (await request<{ folders: MailFolder[] }>('GET', `${base(accountId)}/folders`)).folders,
+  contacts: async (accountId: string, q: string, limit = 8) => (await request<{ contacts: Contact[] }>('GET', `${base(accountId)}/contacts?q=${encodeURIComponent(q)}&limit=${limit}`)).contacts,
   messages: (accountId: string, params: { folder: string; limit?: number; before?: number; q?: string; category?: Category }) =>
     request<MessagePage>('GET', `${base(accountId)}/messages${query(params)}`),
   message: async (accountId: string, folder: string, uid: number) =>
