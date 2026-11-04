@@ -329,6 +329,59 @@ t('bodies: the newest message opens from the cache',op.s===200&&op.cache==='hit'
  t('bodies: an attachment of a cached message downloads by the stored plan',dl.s===200&&dl.buf.toString()==='PK plan',dl.s+' '+dl.buf?.toString().slice(0,30));}
 const tabPage=await cacheOf(()=>getRaw(`${P}/messages?folder=INBOX&category=primary&limit=5`));
 t('cache: a tab\'s page takes its summaries from the cache',tabPage.s===200&&tabPage.j.messages?.length>0&&tabPage.cache==='hit'&&tabPage.j.messages.every(m=>m.category==='primary'&&typeof m.snippet==='string'),tabPage.s+' '+tabPage.cache);
+
+// ---- Conversations ---------------------------------------------------------------------------------------------------
+// A message to oneself, a reply and a reply to that, each from the API (so Sent holds a copy of each): one thread across
+// INBOX and Sent, each message counted once; read oldest first; its bodies filled in by the alarm.
+const TS=`Thread ${tag}`;
+r=await api(A.token,'POST',`${P}/send`,{to:[{name:'Ann',address:MAIL_USER}],subject:TS,html:'<p>one</p>',text:'one'});const T1=r.j.messageId;
+let t1;for(let i=0;i<20&&!t1;i++){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&limit=5`);t1=r.j.messages?.find(m=>m.messageId===T1);if(!t1)await sleep(300);}
+r=await api(A.token,'POST',`${P}/send`,{to:[{name:'Ann',address:MAIL_USER}],subject:'Re: '+TS,html:'<p>two</p>',text:'two',inReplyTo:T1,references:[T1]});const T2=r.j.messageId;
+let t2;for(let i=0;i<20&&!t2;i++){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&limit=5`);t2=r.j.messages?.find(m=>m.messageId===T2);if(!t2)await sleep(300);}
+r=await api(A.token,'POST',`${P}/send`,{to:[{name:'Ann',address:MAIL_USER}],subject:'Re: '+TS,html:'<p>three</p>',text:'three',inReplyTo:T2,references:[T1,T2]});const T3=r.j.messageId;
+let t3;for(let i=0;i<20&&!t3;i++){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&limit=5`);t3=r.j.messages?.find(m=>m.messageId===T3);if(!t3)await sleep(300);}
+await api(A.token,'GET',`${P}/messages?folder=Sent&limit=10`);
+t('threads: the summaries carry the thread id',t1?.threadId&&t1.threadId===t2?.threadId&&t2.threadId===t3?.threadId,JSON.stringify([t1?.threadId,t2?.threadId,t3?.threadId]));
+let th=await cacheOf(()=>getRaw(`${P}/threads?folder=INBOX&limit=5`));
+const conv=th.j.threads?.find(x=>x.threadId===t1?.threadId);
+t('threads: a folder lists its conversations, newest first, from the cache',th.s===200&&th.j.threads?.length>0&&th.cache==='hit'&&th.j.threads.every((x,i)=>!i||th.j.threads[i-1].uid>x.uid)&&th.j.threads[0].threadId===conv?.threadId,th.s+' '+th.cache+' '+JSON.stringify(th.j.threads?.[0]).slice(0,120));
+t('threads: the conversation across INBOX and Sent, each message once',conv&&conv.count===3&&conv.unread===3&&conv.uids.length===3&&conv.uid===t3.uid&&conv.latest.messageId===T3&&conv.folders.includes('INBOX')&&conv.folders.includes('Sent')&&conv.participants.length===1&&conv.participants[0].name==='me',JSON.stringify(conv).slice(0,220));
+r=await api(A.token,'GET',`${P}/threads/${encodeURIComponent(conv?.threadId??'x')}?folder=INBOX`);const convMsgs=r.j.thread?.messages;
+t('threads: read oldest first, one copy each',r.s===200&&convMsgs?.length===3&&convMsgs.map(m=>m.messageId).join()===[T1,T2,T3].join()&&convMsgs.every(m=>m.folder==='INBOX'&&m.threadId===conv.threadId),r.s+' '+JSON.stringify(convMsgs?.map(m=>[m.folder,m.uid,m.bodyPending])));
+await getRaw(`${P}/folders`,{'x-mail-test-alarm':'1'});
+r=await api(A.token,'GET',`${P}/threads/${encodeURIComponent(conv?.threadId??'x')}?folder=INBOX`);
+t('threads: after an alarm pass every message has its body',r.j.thread?.messages?.every(m=>!m.bodyPending&&(m.html||m.text))&&r.j.thread.messages[2].html?.includes('three'),JSON.stringify(r.j.thread?.messages?.map(m=>[m.uid,m.bodyPending,m.text])));
+r=await api(A.token,'GET',`${P}/threads/nope-${tag}`);t('threads: an unknown conversation is not_found',r.s===404&&r.j.error?.code==='not_found',r.s);
+// A reply that references two messages of different threads makes them one.
+r=await api(A.token,'POST',`${P}/send`,{to:[{name:'Ann',address:MAIL_USER}],subject:`Alpha ${tag}`,html:'<p>a</p>'});const MA=r.j.messageId;
+r=await api(A.token,'POST',`${P}/send`,{to:[{name:'Ann',address:MAIL_USER}],subject:`Beta ${tag}`,html:'<p>b</p>'});const MB=r.j.messageId;
+let ma,mb;for(let i=0;i<20&&!(ma&&mb);i++){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&limit=10`);ma=r.j.messages?.find(m=>m.messageId===MA);mb=r.j.messages?.find(m=>m.messageId===MB);if(!(ma&&mb))await sleep(300);}
+t('threads: two messages, two conversations',ma&&mb&&ma.threadId!==mb.threadId,JSON.stringify([ma?.threadId,mb?.threadId]));
+r=await api(A.token,'POST',`${P}/send`,{to:[{name:'Ann',address:MAIL_USER}],subject:`Re: Alpha ${tag}`,html:'<p>ab</p>',inReplyTo:MA,references:[MB,MA]});const MC=r.j.messageId;
+let mc;for(let i=0;i<20&&!mc;i++){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&limit=10`);mc=r.j.messages?.find(m=>m.messageId===MC);if(!mc)await sleep(300);}
+th=await getRaw(`${P}/threads?folder=INBOX&limit=10`);const merged=th.j.threads?.find(x=>x.uid===mc?.uid);
+t('threads: a reply that references both merges them into one',merged&&merged.count===3&&merged.uids.length===3&&merged.uids.includes(ma.uid)&&merged.uids.includes(mb.uid)&&!th.j.threads.some(x=>x!==merged&&(x.uids.includes(ma.uid)||x.uids.includes(mb.uid))),JSON.stringify(merged).slice(0,200));
+// A reply whose references lead nowhere joins the thread with the same subject and someone in common; a fresh message with
+// that subject, or a stranger's reply, does not.
+r=await api(A.token,'POST',`${P}/send`,{to:[{name:'Dana',address:'dana@acme.test'}],subject:`Lunch ${tag}`,html:'<p>lunch?</p>'});
+await api(A.token,'GET',`${P}/messages?folder=Sent&limit=5`);
+await deliver('Dana Lee <dana@acme.test>','Re: Lunch',{'In-Reply-To':`<lost-${tag}@acme.test>`});
+await deliver('Dana Lee <dana@acme.test>','Lunch',{});
+await deliver('Sam Rivera <sam@rivera.dev>','Re: Lunch',{'In-Reply-To':`<lost2-${tag}@acme.test>`});
+let lunch;for(let i=0;i<20;i++){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&limit=10`);lunch=r.j.messages?.filter(m=>m.subject.endsWith(`Lunch ${tag}`));if(lunch?.length===3)break;await sleep(300);}
+const danaReply=lunch?.find(m=>m.subject.startsWith('Re:')&&m.from?.address==='dana@acme.test'),fresh=lunch?.find(m=>!m.subject.startsWith('Re:')),samReply=lunch?.find(m=>m.from?.address==='sam@rivera.dev');
+th=await getRaw(`${P}/threads?folder=INBOX&limit=10`);const lunchThread=th.j.threads?.find(x=>x.uid===danaReply?.uid);
+t("threads: Dana's reply joins the lunch conversation by its subject",lunchThread&&lunchThread.count===2&&lunchThread.folders.includes('Sent')&&lunchThread.participants.map(p=>p.name).join()==='me,Dana Lee',JSON.stringify(lunchThread??null).slice(0,200));
+t('threads: a fresh message with that subject, and a stranger\'s reply, stay apart',fresh&&samReply&&fresh.threadId!==danaReply?.threadId&&samReply.threadId!==danaReply?.threadId&&fresh.threadId!==samReply.threadId,JSON.stringify([fresh?.threadId,samReply?.threadId,danaReply?.threadId]));
+// A tab's conversations.
+th=await getRaw(`${P}/threads?folder=INBOX&category=primary&limit=5`);
+t("threads: a tab's conversations say their tab",th.s===200&&th.j.threads?.length>0&&th.j.threads.every(x=>x.category==='primary'&&typeof x.categoryReason==='string'),th.s+' '+JSON.stringify(th.j.threads?.map(x=>[x.uid,x.category])).slice(0,120));
+// Paging: every conversation of INBOX once, newest first.
+{const seen=[];let b=null,ordered=true;for(let i=0;i<40;i++){const x=await getRaw(`${P}/threads?folder=INBOX&limit=4${b?`&before=${b}`:''}`);for(const th of x.j.threads??[]){if(seen.length&&seen.at(-1)<=th.uid)ordered=false;seen.push(th.uid);}if(!x.j.next)break;b=x.j.next;}
+ const all=await api(A.token,'GET',`${P}/threads?folder=INBOX&limit=100`);
+ t('threads: paging lists every conversation once, newest first',ordered&&new Set(seen).size===seen.length&&seen.length===all.j.threads?.length,`${seen.length} paged, ${all.j.threads?.length} at once`);}
+// Tidy: this run's conversations.
+for(const m of [t1,t2,t3,ma,mb,mc,...(lunch??[])])if(m)await api(A.token,'POST',`${P}/messages/delete`,{folder:'INBOX',uids:[m.uid]});
 // Flags: one set here shows in the cached page at once; one set by another mail app the next time the page is read
 // (the page's flags are checked against the server in one small FETCH).
 const pageUid=pc.j.messages[0].uid;

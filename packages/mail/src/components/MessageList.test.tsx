@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { MessageSummary } from '../api';
+import { threadOfMessage } from '../lib/threads';
 import { MessageList, type MessageListProps } from './MessageList';
 
 // Docs' preview of an Office file is not asked for here.
@@ -17,20 +18,20 @@ const file = (index: number, filename: string, mimeType: string) => ({ index, fi
 const FOUR = [file(1, 'report.pdf', 'application/pdf'), file(2, 'notes.docx', 'application/octet-stream'), file(3, 'photo.jpg', 'image/jpeg'), file(5, 'data.xlsx', 'application/octet-stream')];
 
 let root: Root, host: HTMLDivElement;
-const opened: number[] = [];
+const opened: string[] = [];
 const render = (props: Partial<MessageListProps> = {}) =>
   act(() =>
     root.render(
       createElement(MessageList, {
-        accountId: 'acc', title: 'Inbox', loading: false, error: null, refreshing: false, onRefresh() {}, hasMore: false, loadingMore: false, onLoadMore() {}, tab: 'all', onTab() {},
-        query: '', onClearQuery() {}, openUid: null, cursorUid: null, onOpen: (uid: number) => opened.push(uid), checked: new Set<number>(), onCheck() {}, onCheckAll() {},
+        accountId: 'acc', me: 'ann@example.com', title: 'Inbox', loading: false, error: null, refreshing: false, onRefresh() {}, hasMore: false, loadingMore: false, onLoadMore() {}, tab: 'all', onTab() {},
+        query: '', onClearQuery() {}, openId: null, cursorId: null, onOpen: (id: string) => opened.push(id), checked: new Set<string>(), onCheck() {}, onCheckAll() {},
         onFlag() {}, onBulk() {}, onBulkMove() {}, folders: [], currentFolder: 'INBOX',
-        messages: [msg(10, { hasAttachments: true, attachments: FOUR }), msg(9, { hasAttachments: true }), msg(8)],
+        rows: [msg(10, { hasAttachments: true, attachments: FOUR }), msg(9, { hasAttachments: true }), msg(8)].map(threadOfMessage),
         ...props,
       }),
     ),
   );
-const row = (uid: number) => host.querySelector(`[data-uid="${uid}"]`)!;
+const row = (uid: number) => host.querySelector(`[data-thread="m:${uid}"]`)!;
 const chipsOf = (uid: number) => [...row(uid).querySelectorAll('[role="group"] button')].map((b) => b.textContent);
 
 beforeEach(() => {
@@ -74,6 +75,6 @@ describe.each([false, true])('attachment chips in the list (dense: %s)', (dense)
     expect(opened).toEqual([]);
     await act(() => void window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
     await act(() => (row(10) as HTMLElement).click());
-    expect(opened).toEqual([10]);
+    expect(opened).toEqual(['m:10']);
   });
 });

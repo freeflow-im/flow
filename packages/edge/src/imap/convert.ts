@@ -15,6 +15,8 @@ export interface MessageSummary {
   hasAttachments: boolean; size: number;
   /** The files a list row shows as chips (body.ts `listedAttachments`); left out when there are none, or not known. */
   attachments?: ListedAttachment[];
+  /** The conversation the message belongs to (threads.ts), when the cache has it. */
+  threadId?: string;
 }
 export interface AttachmentInfo { index: number; filename: string; mimeType: string; size: number; contentId: string | null; inline: boolean }
 export interface MessageDetail extends Omit<MessageSummary, 'attachments'> {
@@ -23,6 +25,25 @@ export interface MessageDetail extends Omit<MessageSummary, 'attachments'> {
   html: string | null; text: string | null;
   attachments: AttachmentInfo[];
 }
+/** A conversation as a folder's threaded list shows it (docs/specs/mail-api.md, Conversations). */
+export interface ThreadSummary {
+  threadId: string; folder: string;
+  /** The newest message of the thread in this folder: the row's identity and the paging key. */
+  uid: number;
+  /** The thread's messages in this folder, newest first (what the row's actions act on). */
+  uids: number[];
+  latest: MessageSummary;
+  /** Messages in the thread account-wide (each counted once), and of them unread. */
+  count: number; unread: number;
+  flagged: boolean;
+  /** Each sender once, oldest first; `me` for the account's own address. */
+  participants: Address[];
+  /** The newest activity account-wide. */
+  date: string;
+  folders: string[];
+  category?: string; categoryReason?: string;
+}
+export interface ThreadPage { threads: ThreadSummary[]; next: number | null; sorting?: true }
 
 const address = (a: { name?: string; address?: string }): Address => ({ name: a.name ?? '', address: a.address ?? '' });
 const addresses = (list: MessageAddressObject[] | undefined): Address[] => (list ?? []).filter((a) => a.address || a.name).map(address);

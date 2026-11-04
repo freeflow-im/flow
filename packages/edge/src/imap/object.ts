@@ -25,8 +25,9 @@ import PostalMime, { type Email } from 'postal-mime';
 import { ApiError } from '../errors';
 import { decryptBlob, encryptBlob } from '../org/crypto/index';
 import { decodeTransfer, decodedSize, minimalMessage, planBody, prefetch, type BodyPlan } from './body';
-import { ALARM_BUDGET_MS, BACKFILL_STEP, BODY, BODY_BATCH, BODY_BATCH_BYTES, BODY_BUDGET_PER_FOLDER, BODY_MAX_HTML, BODY_MAX_TEXT, CACHE_ROWS, ERROR_BACKOFF_MS, MAIN_KINDS, MailCache, NEW_CAP, flagDiff, flagsOf, nextAlarmAt, walkDown, type CachedFolder, type Flags, type FolderKind, type NewRow, type QueuedBody } from './cache';
-import { contentDisposition, specialUseOf, snippetOf, textPartOf, toDetail, toFolders, toSummary, type AttachmentInfo, type MessageDetail, type MessageSummary, type SpecialUse, type TextPart } from './convert';
+import { ALARM_BUDGET_MS, BACKFILL_STEP, BODY, BODY_BATCH, BODY_BATCH_BYTES, BODY_BUDGET_PER_FOLDER, BODY_MAX_HTML, BODY_MAX_TEXT, CACHE_ROWS, ERROR_BACKOFF_MS, MAIN_KINDS, MailCache, NEW_CAP, flagDiff, flagsOf, nextAlarmAt, walkDown, type CachedFolder, type Flags, type FolderKind, type NewRow, type QueuedBody, type ThreadRow } from './cache';
+import { contentDisposition, specialUseOf, snippetOf, textPartOf, toDetail, toFolders, toSummary, type AttachmentInfo, type MessageDetail, type MessageSummary, type SpecialUse, type TextPart, type ThreadPage, type ThreadSummary } from './convert';
+import { participants } from './threads';
 import { CATEGORIES, CATEGORY_HEADERS, classifyHeaders, effective, effectiveSql, isGmailHost, normalizeTabs, parseHeaders, tabPage, uidSet, type Category, type TabCategory } from './categorize';
 import { GMAIL_NONE, GMAIL_REASON, GmailSearchError, recheckRows, sortBatch, type GmailSearcher, type RecheckResult } from './gmailTabs';
 import { compileMime, outgoingMessage, type OutgoingFile } from './drafts';
@@ -241,6 +242,8 @@ export class Mail extends DurableObject<MailEnv> {
   private readonly cacheLog: CacheLogEntry[] = [];
   /** When `last_active_at` was last written (written at most every 10 s). */
   private lastTouch = 0;
+  /** Accounts whose conversation bodies are being read in the background (`fetchBodiesSoon`). */
+  private readonly fetchingBodies = new Set<string>();
 
   constructor(ctx: DurableObjectState, env: MailEnv) {
     super(ctx, env);
@@ -1128,6 +1131,138 @@ export class Mail extends DurableObject<MailEnv> {
     else this.sql.exec('INSERT OR REPLACE INTO mail_category_overrides (account_id, sender, category, created_at) VALUES (?, ?, ?, ?)', accountId, sender, category, Date.now());
   }
 
+  // ---- conversations ------------------------------------------------------------------------------------------------
+
+  /**
+   * One page of a folder's conversations, newest first (docs/specs/mail-api.md, Conversations): the threads with a cached
+   * message in the folder, by their newest message there, from the prefetch cache. The first page takes in new mail first
+   * (`cacheNew`), as a plain page does; where the cache runs out, one backfill step extends it before answering. With a
+   * tab (INBOX, tabs on), new mail is sorted first (`sync`, as a tab's page does) and the threads whose newest message is
+   * in the tab are kept; a short page while older mail is not sorted yet says `sorting`, and the sorter is started. The
+   * flags of the messages shown are checked against the server in one FLAGS fetch.
+   */
+  private async threadList(r: AccountRow, folder: string, tabs: TabCategory[], category: Category | null, limit: number, before: number | null): Promise<ThreadPage> {
+    const t = timing.getStore();
+    const want = limit * (1 + SORT_AHEAD_PAGES);
+    const result = await this.withImap(r, 'background', async (c) => {
+      const wasOpen = c.mailbox && c.mailbox.path === folder;
+      return this.locked(c, folder, async (): Promise<ThreadPage & { ahead?: SortTarget }> => {
+        if (!c.mailbox) return { threads: [], next: null };
+        const gmail = tabs.length > 0 && this.isGmail(r, c);
+        const validity = this.validity(c);
+        const now = Date.now();
+        let state = this.cache.touchFolder(r.id, folder, await this.kindOf(r, c, folder), now, true);
+        if (state.validity !== validity) state = this.cache.resetFolder(r.id, folder, validity);
+        if (before === null) {
+          if (wasOpen) await c.noop();
+          await this.cacheNew(r, c, folder, state, this.budget(NEW_CAP));
+          state = this.cache.folder(r.id, folder)!;
+        }
+        let tab: { from: string; tab: string; params: string[]; category: string } | undefined;
+        let tabState: SyncState | null = null;
+        if (category && tabs.length) {
+          if (category !== 'primary' && !tabs.includes(category as TabCategory)) return { threads: [], next: null };
+          tabState = await this.sync(r, c, folder, gmail);
+          tab = { ...this.tabRows(tabs), category };
+        }
+        if (state.high === 0 || (before !== null && before <= 1)) return { threads: [], next: null };
+        const cursor = before ?? Number.MAX_SAFE_INTEGER;
+        const floor = () => (tabState ? Math.max(state.low, tabState.low) : state.low);
+        let tops = this.cache.threadPage(r.id, folder, validity, cursor, floor(), limit + 1, tab);
+        if (tops.length <= limit && state.low > 1 && !tabState) {
+          // The cache ends before the page is full: one step further down, then look again.
+          await this.backfill(r, c, folder, state, this.budget(BACKFILL_STEP));
+          state = this.cache.folder(r.id, folder)!;
+          tops = this.cache.threadPage(r.id, folder, validity, cursor, floor(), limit + 1, tab);
+        }
+        const page = tops.slice(0, limit);
+        const more = tops.length > limit || floor() > 1;
+        const sorting = !!tabState && page.length < limit && tabState.low > 1;
+        const rows = this.cache.threadRows(r.id, page.map((p) => p.threadId));
+        // The flags of the messages shown, as the server has them now; a message it no longer has is dropped.
+        const here = rows.filter((x) => x.folder === folder && x.validity === validity);
+        let kept = rows;
+        if (here.length) {
+          const { changed, vanished } = await this.refreshFlags(r, c, folder, validity, here.map((x) => x.uid), now, null);
+          if (vanished.size) { this.left(r.id, folder, [...vanished]); kept = rows.filter((x) => !(x.folder === folder && vanished.has(x.uid))); }
+          if (changed.size) kept = kept.map((x) => { const f = x.folder === folder ? changed.get(x.uid) : undefined; return f ? { ...x, summary: { ...x.summary, seen: f.seen, flagged: f.flagged, answered: f.answered } } : x; });
+        }
+        let threads = page.map((p) => this.threadSummary(r, folder, p, kept.filter((x) => x.threadId === p.threadId))).filter((x): x is ThreadSummary => !!x);
+        if (tabs.length) {
+          const categories = await this.categoriesOf(r, c, folder, tabs, threads.map((x) => x.uid), gmail, new Map());
+          threads = threads.map((x) => { const tab = categories.get(x.uid); return { ...x, category: tab?.category ?? 'primary', ...(tab?.reason ? { categoryReason: tab.reason } : {}) }; });
+        }
+        if (t) t.cache = 'hit';
+        const last = threads[threads.length - 1];
+        const ahead = tabState && tabState.low > 1 && (sorting || this.cachedInTab(r, folder, tabState, tabs, category as Category, cursor, want) < want) ? { tabs, category: category as Category, below: cursor, want } : undefined;
+        return { threads, next: more && last ? last.uid : sorting ? Math.min(cursor, tabState!.low) : null, ...(sorting ? { sorting: true as const } : {}), ...(ahead ? { ahead } : {}) };
+      });
+    });
+    if (tabs.length && category) this.recheckSoon(r, folder, timing.getStore()?.test.recheck);
+    if (result.ahead) this.sortSoon(r, folder, result.ahead);
+    const { ahead: _ahead, ...page } = result;
+    return page;
+  }
+
+  /** A thread's row for a folder's list, from its cached messages account-wide (each message counted once). */
+  private threadSummary(r: AccountRow, folder: string, top: { threadId: string; uid: number }, rows: ThreadRow[]): ThreadSummary | null {
+    const here = rows.filter((x) => x.folder === folder).sort((a, b) => b.uid - a.uid);
+    const latest = here.find((x) => x.uid === top.uid) ?? here[0];
+    if (!latest) return null;
+    const rank = (x: ThreadRow) => (x.folder === folder ? 0 : x.folder.toUpperCase() === INBOX ? 1 : 2);
+    const byKey = new Map<string, ThreadRow>();
+    for (const x of rows) { const have = byKey.get(x.key); if (!have || rank(x) < rank(have)) byKey.set(x.key, x); }
+    const unique = [...byKey.values()];
+    return {
+      threadId: top.threadId, folder, uid: latest.uid, uids: here.map((x) => x.uid), latest: { ...latest.summary, threadId: top.threadId },
+      count: unique.length, unread: unique.filter((x) => !x.summary.seen).length, flagged: unique.some((x) => x.summary.flagged),
+      participants: participants(unique.map((x) => x.summary), r.email), date: new Date(Math.max(...unique.map((x) => x.date))).toISOString(),
+      folders: [...new Set(rows.map((x) => x.folder))],
+    };
+  }
+
+  /**
+   * A conversation as read: every cached message of the thread across the account's folders, oldest first, each once (a
+   * copy in the folder it was opened from preferred, then INBOX), with its body when the cache has it; else without, as
+   * `bodyPending`, and those bodies are fetched now in the background for the next read.
+   */
+  private threadRead(r: AccountRow, threadId: string, folder: string | null): { threadId: string; messages: (MessageDetail & { bodyPending?: true })[] } {
+    const rows = this.cache.threadRows(r.id, [threadId]);
+    if (!rows.length) throw notFound('no such conversation');
+    const rank = (x: ThreadRow) => (x.folder === folder ? 0 : x.folder.toUpperCase() === INBOX ? 1 : 2);
+    const byKey = new Map<string, ThreadRow>();
+    for (const x of rows) { const have = byKey.get(x.key); if (!have || rank(x) < rank(have)) byKey.set(x.key, x); }
+    const messages: (MessageDetail & { bodyPending?: true })[] = [];
+    const pending: ThreadRow[] = [];
+    for (const x of [...byKey.values()].sort((a, b) => a.date - b.date || a.uid - b.uid)) {
+      const body = this.cache.body(r.id, x.folder, x.validity, x.uid);
+      if (body) { messages.push({ ...body.detail, threadId }); continue; }
+      const detail = this.cache.pendingDetail(r.id, x.folder, x.uid);
+      if (!detail) continue;
+      messages.push({ ...detail, html: null, text: null, bodyPending: true, threadId });
+      pending.push(x);
+    }
+    // Newest first: the last message is the one shown open.
+    if (pending.length) this.fetchBodiesSoon(r, pending.reverse().slice(0, 10));
+    return { threadId, messages };
+  }
+
+  /** Reads these messages in the background (each is kept by `read`), for a conversation opened before the alarm got to them. */
+  private fetchBodiesSoon(r: AccountRow, rows: ThreadRow[]): void {
+    const key = `${r.id}/bodies`;
+    if (this.fetchingBodies.has(key)) return;
+    this.fetchingBodies.add(key);
+    this.background('thread bodies', async () => {
+      try {
+        let n = 0;
+        for (const x of rows) { await this.read(r, x.folder, x.uid).catch((err) => console.warn(`[mail] thread body: ${(err as Error).message}`)); n++; }
+        return `${n} read`;
+      } finally {
+        this.fetchingBodies.delete(key);
+      }
+    });
+  }
+
   // ---- the prefetch cache: keeping it ---------------------------------------------------------------------------------
 
   /** The person made a request: the alarm runs often for a while (`last_active_at`, written at most every 10 s). */
@@ -1336,8 +1471,8 @@ export class Mail extends DurableObject<MailEnv> {
     if (!fetched.length) return { summaries: [] };
     const snippets = await this.snippets(c, fetched).catch((err) => { console.warn(`[mail] snippets: ${(err as Error).message}`); return new Map<number, string>(); });
     const rows: NewRow[] = fetched.map((m) => ({ m, summary: toSummary(m, folder, snippets.get(m.uid) ?? ''), headers: m.headers ? Buffer.from(m.headers).toString('latin1') : null, plan: m.bodyStructure ? planBody(m.bodyStructure) : null }));
-    this.cache.insert(r.id, folder, validity, rows, now);
-    return { summaries: rows.map((row) => row.summary) };
+    const threads = this.cache.insert(r.id, folder, validity, rows, now, r.email);
+    return { summaries: rows.map((row) => { const threadId = threads.get(row.m.uid); return threadId ? { ...row.summary, threadId } : row.summary; }) };
   }
 
   /**
@@ -1386,7 +1521,11 @@ export class Mail extends DurableObject<MailEnv> {
       const plan = planBody(m.bodyStructure);
       // A message the cache has a row for keeps the body once read (`cacheBody`), as the alarm would have fetched it.
       const row = state && state.validity === this.validity(c) ? this.cache.bodyStates(r.id, folder, state.validity, [uid]).get(uid) : undefined;
-      const keep = (o: Opened): Opened => { if (row === BODY.pending || row === BODY.evicted) this.cacheBody(r.id, folder, uid, o.detail, o.plan); return o; };
+      const threadId = state ? this.cache.threadOf(r.id, folder, uid) : null;
+      const keep = (o: Opened): Opened => {
+        if (row === BODY.pending || row === BODY.evicted) this.cacheBody(r.id, folder, uid, o.detail, o.plan);
+        return threadId ? { ...o, detail: { ...o.detail, threadId } } : o;
+      };
       if (!plan.simple) {
         if ((m.size ?? 0) > MAX_MESSAGE_BYTES) throw mailError(413, 'bad_request', 'the message is too large to open here');
         const download = await c.download(String(uid), undefined, { uid: true, chunkSize: 1024 * 1024 });
@@ -1752,6 +1891,25 @@ export class Mail extends DurableObject<MailEnv> {
     app.get('/v1/mail/accounts/:id/debug/cache', async (c: MailContext) => {
       const r = c.get('account');
       return c.json({ folders: this.cache.report(r.id), log: this.cacheLog, lastActiveAt: this.cache.lastActiveAt(), nextAlarmAt: await this.ctx.storage.getAlarm() });
+    });
+
+    app.get('/v1/mail/accounts/:id/threads', async (c: MailContext) => {
+      const limit = Math.min(100, Math.max(1, Number(c.req.query('limit')) || 25));
+      const beforeRaw = c.req.query('before');
+      const before = beforeRaw ? Number(beforeRaw) : null;
+      if (before !== null && (!Number.isInteger(before) || before < 1)) throw badRequest('before: not a message id');
+      const category = c.req.query('category') || null;
+      if (category !== null && !(CATEGORIES as readonly string[]).includes(category)) throw badRequest(`category: one of ${CATEGORIES.join(', ')}`);
+      const r = c.get('account');
+      const folder = c.req.query('folder') || 'INBOX';
+      const tabs = folder.toUpperCase() === INBOX ? this.tabsOf(r) : [];
+      return c.json(await this.threadList(r, folder, tabs, tabs.length ? (category as Category | null) : null, limit, before));
+    });
+
+    app.get('/v1/mail/accounts/:id/threads/:threadId', (c: MailContext) => {
+      const threadId = c.req.param('threadId');
+      if (!threadId) throw badRequest('threadId: required');
+      return c.json({ thread: this.threadRead(c.get('account'), threadId, c.req.query('folder') || null) });
     });
 
     app.get('/v1/mail/accounts/:id/messages/:uid', async (c: MailContext) => {

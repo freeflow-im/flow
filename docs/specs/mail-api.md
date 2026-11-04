@@ -39,6 +39,7 @@ interface MessageSummary {
                                                // "Gmail: no category", "sender moved to primary", or the header rule's reason)
   attachments?: { index: number; filename: string; mimeType: string; size: number }[];
                                                // (2026-11-04) the list row's attachment chips: see "Attachments in the list"
+  threadId?: string;                           // (2026-11-04) the conversation (Conversations below), when the cache knows it
 }
 interface MessageDetail extends Omit<MessageSummary, 'attachments'> {
   replyTo: Address[]; bcc: Address[];
@@ -201,6 +202,56 @@ folder's unread count in its own cache at once (`packages/mail/src/lib/counts.ts
 after the last such change and once none is still on its way (so a burst of j/k is one refresh). Opening a message reads
 the next (older) one ahead; it is marked read once it is on screen.
 
+## Conversations (2026-11-04)
+
+Gmail-style threads, on the prefetch cache (below): every cached message has a `thread_id`, decided when it is cached
+(`src/imap/threads.ts` `assignThread`, pure; the cache is its store).
+
+- **Which thread**: 1. the server's own thread id, on Gmail (X-GM-THRID) and OBJECTID servers (THREADID): `s:<id>`;
+  2. the thread of what the message answers or references (In-Reply-To and References, bare ids), or of a cached message
+  that references it (`mail_refs`), or of a copy of itself in another folder; several threads: the one of the oldest such
+  message, the others merged into it (`mergeThreads`); 3. for a reply (a `Re:`/`Fwd:` subject, or references that lead
+  nowhere) that found none, a thread with the same normalized subject (prefixes, `[tags]`, case and spacing dropped) in the
+  last 30 days whose message shares a participant other than the account's own address (that is on everything) — never for a
+  mailing list's post (`List-Id`), a draft, or a message with
+  a plain subject, so two fresh "Hi" never join; 4. a new `l:<uuid>` (never the Message-ID, which can be missing or reused).
+  A message cached again keeps its thread. Rows that leave the cache (trimmed, moved, deleted, a new UIDVALIDITY) leave
+  their Message-ID → thread behind in `mail_thread_index` (20 000 per account, the oldest dropped), so a late reply still
+  finds its thread.
+- `GET  /v1/mail/accounts/:id/threads?folder=INBOX&limit=25&before=<uid>&category=<Category>` → `{ threads: ThreadSummary[],
+  next: number | null, sorting?: true }`, newest first: the threads with a cached message in the folder, each by its newest
+  message there; `before` pages below that UID (a thread is listed once: by its newest message only). The first page takes
+  in new mail first, as a plain page does; where the cache runs out, one backfill step extends it before answering. The flags
+  of the messages shown are checked in one FLAGS fetch. With `category` (INBOX, tabs on): new mail is sorted first (`sync`,
+  as a tab's page does) and the threads whose newest message is in the tab are kept, with `category` and `categoryReason`
+  from it; a short page while older mail is not sorted yet says `sorting` (ask again shortly), and the sorter runs.
+  ```ts
+  interface ThreadSummary {
+    threadId: string; folder: string;
+    uid: number;              // the newest message of the thread in this folder: the row's identity and the paging key
+    uids: number[];           // the thread's messages in this folder, newest first: what archive, delete, flag and move act on
+    latest: MessageSummary;   // that newest message: the row's subject, snippet, date, attachments
+    count: number;            // messages in the thread account-wide, each once (a copy in another folder is the same message:
+    unread: number;           //   the server's message id, else the Message-ID); and of them unread
+    flagged: boolean;         // any flagged
+    participants: Address[];  // each sender once, oldest first; `me` for the account's own address
+    date: string;             // the newest activity account-wide
+    folders: string[];
+    category?: Category; categoryReason?: string;
+  }
+  ```
+- `GET  /v1/mail/accounts/:id/threads/:threadId?folder=` → `{ thread: { threadId, messages: (MessageDetail & { bodyPending?: true })[] } }`:
+  every cached message of the thread across the account's folders, oldest first, each once (the copy in `folder` preferred,
+  then INBOX), with its body from the cache; a message whose body is not cached yet comes without (`html`/`text` null,
+  `bodyPending: true`; its `attachments` from the body plan) and is read in the background for the next ask. An unknown
+  thread is `not_found`.
+- Searches and `unread=1` stay flat (`GET …/messages`); their rows carry `threadId` where the cache knows them, and the
+  client groups them. The agents' `search_mail` answers `thread_id` with each message.
+- Tests: `src/imap/threads.test.ts` (the rules), `cache.test.ts` ("MailCache threads": across folders and in either order,
+  merging, the index after a trim, the subject fallback, paging) and `test/e2e-mail.mjs` ("Conversations": a thread across
+  INBOX and Sent, read oldest first, bodies after an alarm pass, a merge, the subject fallback and its limits, a tab's
+  conversations, paging).
+
 ## The prefetch cache (2026-11-04)
 
 The newest messages of each account's main folders are kept in the Mail object's SQLite (`mail_messages`, `mail_cache_folders`
@@ -340,7 +391,7 @@ Bundle cost ≈ 600 KiB gzip.
   never holds up a list. Each is reused, reconnects once if it had dropped, and logs out after 60 s idle. Four is well
   within Gmail's limit of about 15 IMAP connections per account. The folder list is cached in memory for 5 minutes (Trash and Sent lookups).
 - **Timing logs**: one line per request, `[mail] <METHOD> <route> <status> <ms>ms (lock wait <ms>, imap <ms>)`: the route with
-  its ids replaced (`/v1/mail/accounts/:id/messages/:uid`), the total time, the time spent waiting for a connection and a
+  its ids replaced (`/v1/mail/accounts/:id/messages/:uid`, `/threads/:threadId`), the total time, the time spent waiting for a connection and a
   folder's lock, and the time talking IMAP. Never an address, subject, folder or id, so `wrangler tail` shows where the time
   goes. The Mail object returns its two numbers in an `x-mail-timing` header and `routes/mail.ts` logs the line (and drops
   the header, except under `MAIL_ALLOW_INSECURE=1`, where the e2e reads it): logged inside the object, the line reached `wrangler tail` late or never, because a Durable Object request's

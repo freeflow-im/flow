@@ -57,11 +57,15 @@ export interface MailView {
   message: Pick<MessageDetail | MessageSummary, 'uid' | 'folder' | 'subject' | 'from' | 'date'> | null;
   /** UIDs checked in the list (in `folder`). */
   checked: Iterable<number>;
+  /** The other messages of the open conversation (`message` is its last), each where it is: named as selected when nothing is checked. */
+  thread?: { folder: string; uid: number }[];
 }
 
 /** What a turn sent from Mail says the user is looking at (rendered for the model by the server's renderMailContext). */
 export function mailContext(v: MailView): MailContext {
-  const selected = [...v.checked].slice(0, MAX_MAIL_SELECTED).map((uid) => messageId({ account: v.account.id, folder: v.folder, uid }));
+  const checked = [...v.checked].map((uid) => messageId({ account: v.account.id, folder: v.folder, uid }));
+  const rest = checked.length ? [] : (v.thread ?? []).map((m) => messageId({ account: v.account.id, folder: m.folder, uid: m.uid }));
+  const selected = [...checked, ...rest].slice(0, MAX_MAIL_SELECTED);
   const m = v.message;
   return {
     page: 'mail',

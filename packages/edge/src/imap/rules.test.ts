@@ -98,6 +98,7 @@ describe("a request's timing line", () => {
     const line = timingLine('GET', 'https://edge.freeflow.im/v1/mail/accounts/3f2a-77/messages/4821?folder=INBOX', 200, 812, 'wait=3;imap=640');
     expect(line).toBe('[mail] GET /v1/mail/accounts/:id/messages/:uid 200 812ms (lock wait 3ms, imap 640ms)');
     expect(timingLine('GET', 'https://x/v1/mail/accounts/a/messages/9/attachments/2', 200, 5, 'wait=0;imap=4')).toContain('/v1/mail/accounts/:id/messages/:uid/attachments/:index 200');
+    expect(timingLine('GET', 'https://x/v1/mail/accounts/a/threads/l:9f1c-ab?folder=INBOX', 200, 5, 'wait=0;imap=0;cache=hit')).toBe('[mail] GET /v1/mail/accounts/:id/threads/:threadId 200 5ms (lock wait 0ms, imap 0ms) cache=hit');
   });
   it('says 0 for a request that never reached the object', () => {
     expect(timingLine('GET', 'https://x/v1/mail/accounts', 401, 2, null)).toBe('[mail] GET /v1/mail/accounts 401 2ms (lock wait 0ms, imap 0ms)');

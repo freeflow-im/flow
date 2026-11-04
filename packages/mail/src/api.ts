@@ -67,6 +67,46 @@ export interface MessageSummary {
    * the server cannot tell without reading the message whole (`hasAttachments` still says).
    */
   attachments?: AttachmentSummary[];
+  /** The conversation it belongs to, when the server knows (a cached message): `GET …/threads/:threadId`. */
+  threadId?: string;
+}
+/** One conversation as a list shows it: its newest message in the folder stands for it, and names the row (`uid`). */
+export interface ThreadSummary {
+  threadId: string;
+  folder: string;
+  /** The newest message of the thread in this folder: the row's identity, and the `before` of the page after it. */
+  uid: number;
+  /** The thread's messages in this folder, newest first: what archive, delete, flag and move act on. */
+  uids: number[];
+  /** The newest message in this folder: its subject, snippet, date and attachments are the row's. */
+  latest: MessageSummary;
+  /** Messages in the thread, in every folder of the account. */
+  count: number;
+  unread: number;
+  flagged: boolean;
+  /** Who wrote in it, oldest first. */
+  participants: Address[];
+  /** ISO 8601: the newest activity, in any folder. */
+  date: string;
+  folders: string[];
+  category?: Category;
+  categoryReason?: string;
+}
+export interface ThreadPage {
+  threads: ThreadSummary[];
+  next: number | null;
+  /** As a message page's: a tab's page came back short while the server sorts older mail; ask again shortly. */
+  sorting?: true;
+}
+/**
+ * A message of an open conversation: its body is `null` with `bodyPending` while the server has not fetched it yet (ask
+ * again shortly, or read the message itself: hooks/mail.ts `fetchBody`). `bodyFailed` is the client's: that read failed.
+ */
+export type ThreadMessage = MessageDetail & { bodyPending?: true; bodyFailed?: true };
+export interface ThreadDetail {
+  threadId: string;
+  /** Oldest first, across the account's folders. */
+  messages: ThreadMessage[];
 }
 /** An attachment as a list row knows it. */
 export interface AttachmentSummary {
@@ -197,6 +237,12 @@ export const mailApi = {
     request<MessagePage>('GET', `${base(accountId)}/messages${query(params)}`),
   message: async (accountId: string, folder: string, uid: number) =>
     (await request<{ message: MessageDetail }>('GET', `${base(accountId)}/messages/${uid}${query({ folder })}`)).message,
+  /** A folder's conversations (or one inbox tab's), newest first; `before` is the last row's `uid`. */
+  threads: (accountId: string, params: { folder: string; limit?: number; before?: number; category?: Category }) =>
+    request<ThreadPage>('GET', `${base(accountId)}/threads${query(params)}`),
+  /** One conversation, every message of it in the account; `folder` is where it was opened from. */
+  thread: async (accountId: string, threadId: string, folder: string) =>
+    (await request<{ thread: ThreadDetail }>('GET', `${base(accountId)}/threads/${enc(threadId)}${query({ folder })}`)).thread,
   setFlags: (accountId: string, body: { folder: string; uids: number[]; seen?: boolean; flagged?: boolean }) => request<{ ok: true }>('PATCH', `${base(accountId)}/messages`, body),
   move: (accountId: string, body: { folder: string; uids: number[]; to: string }) => request<{ ok: true }>('POST', `${base(accountId)}/messages/move`, body),
   remove: (accountId: string, body: { folder: string; uids: number[] }) => request<{ ok: true }>('POST', `${base(accountId)}/messages/delete`, body),

@@ -108,8 +108,9 @@ describe('MailCache', () => {
   it('keeps the server thread and message ids, and the header block', () => {
     const cache = cacheWith([row(fetched(1, { threadId: '17', emailId: 'e1' })), row(fetched(2))]);
     const [two, one] = cache.page(A, F, V, Number.MAX_SAFE_INTEGER, 1, 10);
-    expect(one).toMatchObject({ threadId: 's:17', emailId: 'e1' });
-    expect(two).toMatchObject({ threadId: null, emailId: null });
+    expect(one).toMatchObject({ threadId: 's:17', emailId: 'e1', summary: { threadId: 's:17' } });
+    expect(two.threadId).toMatch(/^l:/);
+    expect(two.emailId).toBeNull();
     expect(cache.flags(A, F, V, [1, 2]).get(1)).toMatchObject({ seen: false, flagsAt: 1000 });
   });
 
@@ -194,7 +195,7 @@ describe('MailCache bodies', () => {
     cache.setFlags(A, F, [1], { seen: true }, 2000);
     const got = cache.body(A, F, V, 1)!;
     expect(got.state).toBe(BODY.cached);
-    expect(got.detail).toMatchObject({ uid: 1, folder: F, html: '<p>hi</p>', text: 'hi', seen: true, subject: 'Message 1' });
+    expect(got.detail).toMatchObject({ uid: 1, folder: F, html: '<p>hi</p>', text: 'hi', seen: true, subject: 'Message 1', threadId: cache.threadOf(A, F, 1) });
     expect(got.plan).toEqual(plan);
     expect(cache.plan(A, F, 1)).toEqual(plan);
     expect(cache.bodyBytes(A, F)).toBe(11);
@@ -249,5 +250,91 @@ describe('MailCache bodies', () => {
     expect(rows.get(1)?.summary.answered).toBe(true);
     expect(rows.get(2)?.summary.answered).toBe(false);
     expect(rows.get(1)?.flagsAt).toBe(3000);
+  });
+});
+
+describe('MailCache threads', () => {
+  const withRefs = (uid: number, o: { subject?: string; inReplyTo?: number; references?: number[]; from?: string; to?: string; listId?: boolean; threadId?: string; date?: Date } = {}): NewRow => {
+    const m = fetched(uid, { subject: o.subject, from: o.from, threadId: o.threadId, date: o.date });
+    if (o.to) (m.envelope as { to: { address: string }[] }).to = [{ address: o.to }];
+    const lines = [`From: ${o.from ?? 'ann@example.com'}`];
+    if (o.inReplyTo) lines.push(`In-Reply-To: <m${o.inReplyTo}@example.com>`);
+    if (o.references?.length) lines.push(`References: ${o.references.map((r) => `<m${r}@example.com>`).join(' ')}`);
+    if (o.listId) lines.push('List-Id: <hikers.googlegroups.com>');
+    return { m, summary: toSummary(m, F, ''), headers: lines.join('\r\n') + '\r\n', plan: null };
+  };
+  const threadOf = (cache: MailCache, uid: number, folder = F) => cache.threadOf(A, folder, uid);
+
+  it('threads a reply with what it answers, in either order, and across folders', () => {
+    const cache = cacheWith([withRefs(1, { subject: 'Plans' })]);
+    cache.insert(A, F, V, [withRefs(2, { subject: 'Re: Plans', inReplyTo: 1, references: [1] })], 1000);
+    expect(threadOf(cache, 2)).toBe(threadOf(cache, 1));
+    // The reply to the reply arrives first, in Sent; the message it answers joins its thread when cached later.
+    cache.touchFolder(A, 'Sent', 'sent', 1000, false);
+    cache.resetFolder(A, 'Sent', V);
+    cache.insert(A, 'Sent', V, [withRefs(7, { subject: 'Re: Re: Plans', inReplyTo: 3, references: [1, 3] })], 1000);
+    expect(threadOf(cache, 7, 'Sent')).toBe(threadOf(cache, 1));
+    cache.insert(A, F, V, [withRefs(3, { subject: 'Re: Plans', inReplyTo: 2, references: [1, 2] })], 1000);
+    expect(threadOf(cache, 3)).toBe(threadOf(cache, 1));
+    expect(cache.threadRows(A, [threadOf(cache, 1)!]).map((r) => `${r.folder}:${r.uid}`)).toEqual(['INBOX:1', 'INBOX:2', 'INBOX:3', 'Sent:7']);
+    // Cached again (a page re-fetched), a message keeps its thread.
+    const before = threadOf(cache, 2);
+    cache.insert(A, F, V, [withRefs(2, { subject: 'Re: Plans' })], 2000);
+    expect(threadOf(cache, 2)).toBe(before);
+  });
+
+  it('merges two threads a message links, and remembers threads of rows that left', () => {
+    const cache = cacheWith([withRefs(1, { subject: 'A' }), withRefs(2, { subject: 'B' })]);
+    const [a, b] = [threadOf(cache, 1), threadOf(cache, 2)];
+    expect(a).not.toBe(b);
+    cache.insert(A, F, V, [withRefs(3, { subject: 'Re: A', references: [2, 1] })], 1000);
+    expect(threadOf(cache, 1)).toBe(threadOf(cache, 2));
+    expect(threadOf(cache, 3)).toBe(threadOf(cache, 1));
+    const t = threadOf(cache, 1)!;
+    // Trimmed out of the window, message 1 still leads a late reply to its thread.
+    cache.setMarks(A, F, { high: 3, low: 1 });
+    cache.trim(A, F, V, 2);
+    expect(cache.uids(A, F, V)).toEqual([3, 2]);
+    cache.insert(A, F, V, [withRefs(4, { subject: 'Re: A', inReplyTo: 1 })], 1000);
+    expect(threadOf(cache, 4)).toBe(t);
+    cache.remove(A, F, [2, 3, 4]);
+    cache.insert(A, F, V, [withRefs(5, { subject: 'Re: A', inReplyTo: 4 })], 1000);
+    expect(threadOf(cache, 5)).toBe(t);
+  });
+
+  it('threads a reply by its subject when its references lead nowhere, not a list post', () => {
+    const cache = cacheWith([withRefs(1, { subject: 'Lunch', from: 'ann@example.com', to: 'bo@example.com' })]);
+    cache.insert(A, F, V, [withRefs(2, { subject: 'Re: Lunch', inReplyTo: 99, from: 'bo@example.com', to: 'ann@example.com' })], 1000);
+    expect(threadOf(cache, 2)).toBe(threadOf(cache, 1));
+    cache.insert(A, F, V, [withRefs(3, { subject: 'Re: Lunch', from: 'cy@other.test', to: 'dee@other.test' })], 1000);
+    expect(threadOf(cache, 3)).not.toBe(threadOf(cache, 1));
+    cache.insert(A, F, V, [withRefs(4, { subject: 'Re: Lunch', from: 'bo@example.com', to: 'ann@example.com', listId: true })], 1000);
+    expect(threadOf(cache, 4)).not.toBe(threadOf(cache, 1));
+    cache.insert(A, F, V, [withRefs(5, { subject: 'Lunch', from: 'bo@example.com', to: 'ann@example.com' })], 1000);
+    expect(threadOf(cache, 5)).not.toBe(threadOf(cache, 1));
+    // Ann is the account: being on both messages, as everything is, counts for nothing.
+    cache.insert(A, F, V, [withRefs(6, { subject: 'Re: Lunch', from: 'cy@other.test', to: 'ann@example.com' })], 1000, 'ann@example.com');
+    expect(threadOf(cache, 6)).not.toBe(threadOf(cache, 1));
+  });
+
+  it('pages threads by their newest message in the folder, each thread once', () => {
+    const cache = cacheWith([withRefs(1, { subject: 'A' }), withRefs(2, { subject: 'B' }), withRefs(3, { subject: 'Re: A', inReplyTo: 1 }), withRefs(4, { subject: 'C' }), withRefs(5, { subject: 'Re: B', inReplyTo: 2 })]);
+    cache.setMarks(A, F, { high: 5, low: 1 });
+    const page = (cursor: number, limit: number) => cache.threadPage(A, F, V, cursor, 1, limit).map((p) => p.uid);
+    expect(page(Number.MAX_SAFE_INTEGER, 10)).toEqual([5, 4, 3]);
+    expect(page(Number.MAX_SAFE_INTEGER, 2)).toEqual([5, 4]);
+    // Below the cursor: thread A's newest is 3; thread B (newest 5) is not listed again by its older message 2.
+    expect(page(4, 10)).toEqual([3]);
+    const t = cache.threadOf(A, F, 1)!;
+    const rows = cache.threadRows(A, [t]);
+    expect(rows.map((r) => r.uid)).toEqual([1, 3]);
+    expect(rows[0].key).toBe('m1@example.com');
+  });
+
+  it('describes a message whose body is not cached yet for a conversation', () => {
+    const cache = cacheWith([withRefs(2, { subject: 'Re: Plans', inReplyTo: 1, references: [1] })]);
+    const d = cache.pendingDetail(A, F, 2)!;
+    expect(d).toMatchObject({ uid: 2, subject: 'Re: Plans', inReplyTo: 'm1@example.com', references: ['m1@example.com'], attachments: [], replyTo: [], bcc: [] });
+    expect(cache.pendingDetail(A, F, 9)).toBeNull();
   });
 });
