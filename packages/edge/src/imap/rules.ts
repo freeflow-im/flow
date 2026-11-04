@@ -148,7 +148,8 @@ export const routeOf = (method: string, url: string) =>
  */
 export function timingLine(method: string, url: string, status: number, ms: number, header: string | null | undefined): string {
   const part = (key: string) => Number(new RegExp(`(?:^|;)${key}=(\\d+)`).exec(header ?? '')?.[1] ?? 0);
-  return `[mail] ${routeOf(method, url)} ${status} ${ms}ms (lock wait ${part('wait')}ms, imap ${part('imap')}ms)`;
+  const cache = /(?:^|;)cache=(hit|fill|live)/.exec(header ?? '')?.[1];
+  return `[mail] ${routeOf(method, url)} ${status} ${ms}ms (lock wait ${part('wait')}ms, imap ${part('imap')}ms)${cache ? ` cache=${cache}` : ''}`;
 }
 
 /** The bytes a message's parts come to: its bodies and its attachments decoded. */

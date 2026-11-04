@@ -1,5 +1,20 @@
 # Decision log
 
+## 2026-11-04 — Mail's prefetch cache lives in the Mail object; conversations next (docs/specs/mail-api.md, The prefetch cache)
+
+Operator rulings (2026-11-04) on Mail's next pieces:
+
+- **A server-side prefetch cache, in the person's Mail Durable Object**, not in the browser: the newest ~1000 messages
+  per main folder (summaries first; bodies in the next change), filled and refreshed by the object's alarm, so lists and
+  opens come from SQLite on any device. The alarm runs every 30 s while the person is active and backs off to nothing
+  after a day idle; IMAP IDLE is a follow-up, not v1. A cached first page is never served without one `UID SEARCH` for
+  new mail, and a page's flags are checked against the server, so another device's reads and stars show at once.
+- **Gmail-style conversations across folders** (one row per thread; the pane shows the whole thread, INBOX + Sent +
+  Archive): Gmail's X-GM-THRID (and OBJECTID's THREADID) where the server has it, `References`/`In-Reply-To` plus a
+  bounded subject fallback elsewhere. Built on the cache, in the change after the bodies.
+- **Multiple accounts stay separate** (the sidebar's switcher); no unified inbox.
+- The inbox tabs' own cache (`mail_categories`, `mail_sync`) stays as it is; the two are joined, not merged.
+
 ## 2026-11-03 — Docs' own MCP endpoint on app.freeflow.im, with its OAuth in the directory (docs/specs/web-mcp.md)
 
 `app.freeflow.im/mcp` is served on Cloudflare, separate from the ChatGPT plugin's `/mcp` (still AWS, on `docs.` and

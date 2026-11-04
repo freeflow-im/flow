@@ -8,7 +8,7 @@ import { TIMING_HEADER, providerFor, timingLine } from '../imap/rules';
 import { ApiError, unauthorized } from '../errors';
 import { directory, type AuthEnv } from './auth';
 
-export interface MailRouteEnv extends AuthEnv { MAIL: DurableObjectNamespace<Mail> }
+export interface MailRouteEnv extends AuthEnv { MAIL: DurableObjectNamespace<Mail>; MAIL_ALLOW_INSECURE?: string }
 
 export const mailRoutes = new Hono<{ Bindings: MailRouteEnv }>();
 
@@ -35,7 +35,8 @@ mailRoutes.all('/v1/mail/*', async (c) => {
     status = res.status;
     timing = res.headers.get(TIMING_HEADER);
     const out = new Response(res.body, res);
-    out.headers.delete(TIMING_HEADER);
+    // The timing is for the log line; the e2e (local dev only) reads it from the header.
+    if (c.env.MAIL_ALLOW_INSECURE !== '1') out.headers.delete(TIMING_HEADER);
     return out;
   } catch (err) {
     if (err instanceof ApiError) status = err.statusCode;

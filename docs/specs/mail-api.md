@@ -65,6 +65,8 @@ interface MessageDetail extends Omit<MessageSummary, 'attachments'> {
   `&raw=1` (2026-11-03): on a Gmail account (`X-GM-EXT-1`), `q` is Gmail's own search syntax, sent as `X-GM-RAW`
   (`from:ann has:attachment newer_than:7d`); a query Gmail refuses is `bad_request`; elsewhere `raw` changes nothing.
   `&unread=1` keeps only unread messages (it also takes a tab's list through the search, so `category` is then ignored).
+  A plain page (no `q`, `unread` or `category`) is read from the prefetch cache (below, 2026-11-04): the first page after one
+  `UID SEARCH` for new mail, older pages outright.
   `&category=<Category>` (INBOX, tabs on) lists one tab: Primary is everything not in an *enabled* tab, and a tab that is off is
   empty. It is ignored while `q` is given (a search covers the whole folder, as Gmail's does) and when the account's tabs are off.
   A tab's page may come back short, even empty, with `sorting: true` and `next` while older mail is still being sorted
@@ -80,6 +82,9 @@ interface MessageDetail extends Omit<MessageSummary, 'attachments'> {
   ... }` with `categorized`/`primary`/`skipped`/`confirmed` for a sort and `promoted`/`moved`/`demoted`/`confirmed`/`gone`
   for a re-check. `sync` is the folder's `mail_sync` row, `counts` the cached rows per `(category, reason)`, and `messages`
   `{ uid, category, reason }` for the UIDs asked about.
+- `GET  /v1/mail/accounts/:id/debug/cache` → `{ folders: [{ folder, kind, validity, high, low, modseq, syncedAt, openedAt, error, errorAt, rows }],
+  log, lastActiveAt, nextAlarmAt }`: how the prefetch cache stands for the account (below), and the last 20 alarm runs since the
+  object woke (`{ at, ms, folders: ['inbox: 3 new, 0 flags, 0 gone, 100 older'], errors }`), for the account's owner.
 - `GET  /v1/mail/accounts/:id/messages/:uid?folder=` → `{ message: MessageDetail }` (does NOT mark it seen; the client PATCHes seen)
 - `GET  /v1/mail/accounts/:id/messages/:uid/attachments/:index?folder=` → the bytes, with Content-Type and
   `Content-Disposition: attachment; filename*=…` (`?inline=1` → `inline`, used for cid: images). `index` is the
@@ -195,6 +200,47 @@ folder's unread count in its own cache at once (`packages/mail/src/lib/counts.ts
 after the last such change and once none is still on its way (so a burst of j/k is one refresh). Opening a message reads
 the next (older) one ahead; it is marked read once it is on screen.
 
+## The prefetch cache (2026-11-04)
+
+The newest messages of each account's main folders are kept in the Mail object's SQLite (`mail_messages`, `mail_cache_folders`
+and `mail_state`; the tables and the pure rules in `src/imap/cache.ts`, the IMAP in `object.ts`), so a folder's list is read
+from it and the server is asked only for what is new.
+
+- **Which folders**: INBOX, Sent, Drafts and Archive or All Mail, by their special use (on Gmail `[Gmail]/All Mail`, the only
+  place archived mail lives), and any folder listed in the last 7 days (`kind: 'recent'`, forgotten after).
+- **A row** holds the summary as `GET …/messages` returns it (JSON), the flags as last known (columns, written through by
+  `PATCH`), the raw From/Reply-To/Bcc/In-Reply-To/References/List-Id header block and the body plan (to open the message by
+  its parts later), the server's own message and thread ids where it has them (Gmail's X-GM-MSGID/X-GM-THRID, OBJECTID's
+  EMAILID/THREADID: `email_id`, and `thread_id` as `s:<id>`), and room for the bodies (a later change; a list never reads them).
+- **How far it reaches**: `mail_cache_folders (account_id, folder) → uid_validity, high, low, modseq, kind, synced_at, opened_at,
+  error, error_at`. Every UID of the folder in [low, high] has a row, less what the server no longer has; at most CACHE_ROWS
+  (1000) per folder, the newest. A new UIDVALIDITY drops the folder's rows.
+- **A plain page** (`GET …/messages` with no `q`, `unread` or `category`; `cachedList`): the first page (no `before`) first asks
+  the server for new mail (`UID SEARCH <high+1>:*`, at most NEW_CAP = 200 of them fetched, the newest; a folder seen for the
+  first time gets its newest 200 from UIDNEXT down), so it is never stale; then the page is read from SQLite. The page's flags
+  are checked against the server in one `UID FETCH <set> (FLAGS)` (mail read or starred by another mail app shows at once),
+  which also drops a message that has left the folder. An older page (`before`) comes from SQLite outright; where the cache ends
+  before a page is full, the rest is fetched from the server as before and cached on the way (`low` moves down to it), so
+  scrolling never waits for the alarm. The timing line ends with `cache=hit|fill|live`. With tabs on, each message's tab
+  comes from `mail_categories` as for a fetched page (a cached message not sorted yet is sorted then).
+- **The alarm** (`alarm()`, `runCache`): every 30 s while the person is active (a request in the last 3 minutes), every 5 minutes
+  idle under an hour, every 30 under a day, then not at all until the next request; set after every request and every run
+  (`armAlarm`, cache.ts `nextAlarmAt`), and never for a person with no accounts. One run (ALARM_BUDGET_MS = 20 s) takes the
+  accounts in turn, starting after the one the last run ended with, on each account's **cache** connection (logged out right
+  after when the person is away, so the object can sleep). Per folder (`syncFolder`, under the folder's lock on that
+  connection): new mail as above; the flags of every cached message in one FLAGS fetch (CONDSTORE: only those changed since the
+  stored HIGHESTMODSEQ, and `UID SEARCH <low>:*` for what left), a row written through after the fetch began keeping what it
+  has; older mail below `low`, BACKFILL_STEP = 100 a step (`uidsBelow`, the widening UID window, never the whole folder) until
+  the folder holds CACHE_ROWS or the budget is spent; then the oldest rows past CACHE_ROWS go. A folder whose sync fails is
+  left alone for 10 minutes (`error`, `error_at`); an account whose server refuses it is skipped (its `status` says so). An
+  alarm run logs `[mail] cache: <n> folders <ms>ms (…)`.
+- **Write-through**: `PATCH` flags update the rows at once; a move or delete through us, a draft deleted, and a message the
+  server no longer returns remove them (`left`); `DELETE` of the account drops everything of it. Mail arriving in a cached
+  folder by a move or a send is picked up by that folder's next first page or alarm run. IMAP IDLE is a later change.
+- Tests: `src/imap/cache.test.ts` (the cadence, the flag diff, the walk down, the tables on node:sqlite) and `test/e2e-mail.mjs`
+  ("The prefetch cache", and the plain list of the cold 320-message INBOX). Under `MAIL_ALLOW_INSECURE=1`, `x-mail-test-alarm: 1`
+  runs one alarm pass before the request is answered, and `x-mail-test-classify-cap` lowers NEW_CAP and BACKFILL_STEP too.
+
 ## Opening a message
 
 `GET .../messages/:uid` never downloads the whole message: one FETCH of the summary, BODYSTRUCTURE and a few headers (From,
@@ -269,21 +315,22 @@ Bundle cost ≈ 600 KiB gzip.
 - `src/imap/object.ts` is the Mail object. Its SQLite holds `accounts` (servers as JSON, the password sealed with
   FLOW_DATA_KEY through `org/crypto` `encryptBlob`, never returned or logged, and the `status` the client shows) and
   `rate_limit_windows` (the Directory's fixed window: 10 account verifications per person per 15 minutes, on `POST` and on a
-  `PATCH` that changes the password or servers). While awake it keeps up to three ImapFlow connections per account
+  `PATCH` that changes the password or servers). While awake it keeps up to four ImapFlow connections per account
   (over `cloudflare:sockets`, which does both TLS and STARTTLS), each opened when first needed: **interactive** (opening a
   message and its attachments, moves, deletes, the IMAP side of sending, a tab move's sender lookup), **background**
-  (lists, folders, flags such as read and starred, and the new mail a tab's list sorts) and **sorter** (sorting older mail into tabs and the re-check).
+  (lists, folders, flags such as read and starred, and the new mail a tab's list sorts), **sorter** (sorting older mail into tabs and the re-check)
+  and **cache** (the alarm's: keeping the prefetch cache, so it never waits on the sorter).
   Locks are per connection (imapflow's `getMailboxLock`), so a slow list never holds up opening a message, and sorting
-  never holds up a list. Each is reused, reconnects once if it had dropped, and logs out after 60 s idle. Three is well
+  never holds up a list. Each is reused, reconnects once if it had dropped, and logs out after 60 s idle. Four is well
   within Gmail's limit of about 15 IMAP connections per account. The folder list is cached in memory for 5 minutes (Trash and Sent lookups).
 - **Timing logs**: one line per request, `[mail] <METHOD> <route> <status> <ms>ms (lock wait <ms>, imap <ms>)`: the route with
   its ids replaced (`/v1/mail/accounts/:id/messages/:uid`), the total time, the time spent waiting for a connection and a
   folder's lock, and the time talking IMAP. Never an address, subject, folder or id, so `wrangler tail` shows where the time
   goes. The Mail object returns its two numbers in an `x-mail-timing` header and `routes/mail.ts` logs the line (and drops
-  the header): logged inside the object, the line reached `wrangler tail` late or never, because a Durable Object request's
+  the header, except under `MAIL_ALLOW_INSECURE=1`, where the e2e reads it): logged inside the object, the line reached `wrangler tail` late or never, because a Durable Object request's
   tail event stays open while the object holds an open socket or a `waitUntil` job (it is sent when the next request
-  arrives, the socket closes or the job ends). The background runs log `[mail] sort: …` and `[mail] recheck: …` lines in the
-  object, which arrive late for that reason.
+  arrives, the socket closes or the job ends). The background runs log `[mail] sort: …`, `[mail] recheck: …` and `[mail] cache: …` lines in the
+  object, which arrive late for that reason. A plain list's line ends with `cache=hit|fill|live` (the prefetch cache).
 - SMTP is nodemailer. The copy in Sent is the same message (Bcc kept) appended with `\Seen`, skipped for Gmail; a `Sent`
   folder is created when the account has none. `\Answered` is set on the INBOX message whose Message-ID is `inReplyTo`.
 - Only IMAP 993 (tls) / 143 (starttls) and SMTP 465 (tls) / 587 (starttls), and no host that is `localhost` or an IP literal
@@ -298,5 +345,6 @@ Bundle cost ≈ 600 KiB gzip.
   the Gmail searches against a fake server in `gmailTabs.test.ts`: partial and refused answers, confirmation, chunking, opening by parts against postal-mime reading the whole message) and `test/e2e-mail.mjs` against
   GreenMail (its header says how to run it). Under `MAIL_ALLOW_INSECURE=1` only, three request headers help it:
   `x-mail-test-slow-ms` pauses each step of the sorter inside its lock (to show lists and opening a message are not held
-  up), `x-mail-test-classify-cap` lowers the sorting budgets (100 new per request, 300 per step), and `x-mail-test-recheck: 1`
-  starts the re-check now. The background work a request starts keeps its hooks.
+  up), `x-mail-test-classify-cap` lowers the sorting budgets (100 new per request, 300 per step), `x-mail-test-recheck: 1`
+  starts the re-check now, and `x-mail-test-alarm: 1` runs one alarm pass of the prefetch cache before the request is answered.
+  The background work a request starts keeps its hooks.
