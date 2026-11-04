@@ -282,6 +282,20 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   a copy of the deck without speaker notes or links to spreadsheets, with its pictures and videos named under the token, and only what its elements
   show can be fetched with it (`shownBy`, checked per request, so what leaves the deck stops being available). Answers carry `no-referrer`,
   `noindex` and a `sandbox` CSP, and browsers keep files at most five minutes.
+- Previews (`server/previews.ts`, table `previews`, bytes and converted views under `previews/` in the data directory): the hosted
+  app only, a file shown read-only for an hour without becoming one of the user's files. FreeFlow Mail opens an attachment through
+  one: the suite's Worker reads the bytes from the person's Mail object and posts them to `POST /api/previews?filename=&type=&key=`
+  (`packages/edge/src/routes/previews.ts`), so the browser uploads nothing. A Word, Excel or PowerPoint file is converted as a zip's
+  entry is (`zipOfficeView`, pictures inline as `data:` addresses), a CSV with `csvToWorkbook`, Markdown kept as text, a PDF kept as
+  it is; anything else is kept only to be saved. The importers' limits apply (20 MB for an Office file), and 25 MB for any preview.
+  A preview is its owner's only (anyone else gets 404), is not in the library, Recents or search, and `GET /api/previews?key=` finds
+  the owner's live one for the same source (`mail:<account>:<folder>:<uid>:<index>`) and gives it another hour. Expired ones are
+  swept on each use and, on the Worker, by the Docs object's alarm. `/preview/<id>?workspace=` (`client/src/pages/PreviewPage.tsx`)
+  draws one with no bar, folders or assistant, meant for a frame: `ReadOnlyDoc`/`ReadOnlySheet`/`ReadOnlyDeck` from `ZipBrowser`,
+  `MarkdownPreview`, and a PDF with pdf.js (`client/src/pdf/PdfView.tsx`; `/api/previews/:id/file` is a sandboxed download, so the
+  browser's own viewer would not show it). Escape, and ← / → where they do not move around in the file, are posted to the page
+  around it. `POST /api/previews/:id/save` imports the bytes with `importBytes` into the top of My files (once; again gives the same
+  file) and returns its page (`url`). On the Worker the page is served with `frame-ancestors 'self'`.
 - Organizations (the FreeFlow suite only; design in `../../docs/specs/freeflow-suite.md` §2.4, ruled 2026-11-02): every row that
   belongs to someone (`sheets`, `stored_files`, `images`, `folders`, `public_links`, `agent_conversations`) carries `workspace_id`, the
   organization (Flow's workspace), and files and folders `private` (1, the default). A root of the library is a `Scope`

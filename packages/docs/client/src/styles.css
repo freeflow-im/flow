@@ -7188,3 +7188,60 @@ a.landing-card {
     display: none;
   }
 }
+
+/* ------------------------------------------------------------------ Previews (pages/PreviewPage.tsx, in Mail's overlay) */
+.preview-page {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  overflow: hidden;
+}
+.preview-page > .doc-body {
+  margin: 0;
+  border-radius: 0;
+}
+.preview-message {
+  margin: auto;
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+}
+.pdf-view {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: #e3e6ea;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+.pdf-view-page {
+  flex-shrink: 0;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(60, 64, 67, 0.3);
+}
+.pdf-view-page canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.pdf-view-message {
+  margin: auto;
+  color: var(--muted);
+}
+/* No room left of the slides for their numbers here: the overlay counts the attachments, not the slides. */
+.preview-page .zip-slide-number {
+  display: none;
+}
+@media (max-width: 600px) {
+  .preview-page .zip-deck,
+  .pdf-view {
+    padding: 8px;
+  }
+  .preview-page .doc-body {
+    padding: 8px 4px 40px;
+  }
+}

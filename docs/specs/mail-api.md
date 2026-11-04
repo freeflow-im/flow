@@ -185,6 +185,30 @@ format=flowed, HTML made from text and the other way round). A text part over 10
 - The last three messages opened are kept with the parts fetched with them, so a message's inline pictures do not each
   fetch again.
 
+## Attachment previews
+
+The reading pane's attachment chips open a full-window overlay (`packages/mail/src/components/AttachmentPreview.tsx`); each chip
+keeps a small download link. The overlay's top bar has the name, size and type, Download, Save to Docs (then Open in Docs) and
+Close; ← / → (buttons and keys) step through the message's attachments, leaving out pictures already shown in the body; Esc closes.
+`lib/preview.ts` picks the viewer, by the name's extension first and then the MIME type:
+
+- pictures (png, jpeg, gif, webp, bmp, avif; an SVG from a blob of its own type, always as an `<img>`), video and audio: the
+  browser, from `attachments/:index`;
+- PDF, Word (.docx), Excel (.xlsx, .xls), PowerPoint (.pptx), CSV and Markdown: Docs' read-only views, in a frame of
+  `/workspace/preview/<id>?workspace=`, from a preview Docs makes (below);
+- text and code (.txt, .json, .log, .eml, …) up to 2 MB: monospace text; HTML: its source, or the page in an `<iframe sandbox="">`
+  with a CSP that loads nothing;
+- anything else: "No preview available" and Download.
+
+`POST /api/previews/mail` body `{ account, folder, uid, index, workspace? }` (`packages/edge/src/routes/previews.ts`) →
+`{ preview: { id, kind, filename, size, expiresAt, saved? }, workspace }`. The Worker authenticates the caller, picks the Docs
+object of `workspace` (Mail sends the organization selected in the suite bar; none → the caller's first), and asks it for the
+caller's live preview of `mail:<account>:<folder>:<uid>:<index>`. Only if there is none does it read the bytes from the caller's
+Mail object (`attachments/:index`, the route above) and post them to Docs' `POST /api/previews`, both as the caller. Over 25 MB is
+`413`; Mail's errors pass through. Docs' errors are `{ error: "message" }`. Save to Docs is `POST /api/previews/:id/save?workspace=`
+→ `{ saved: { kind, id, title, url } }`: a file at the top of My files in that organization. How previews are kept and expire is in
+`packages/docs/docs/architecture.md` (Previews). Tests: `src/routes/previews.test.ts` and `test/e2e-preview.mjs`.
+
 ## Local dev fixture
 
 A GreenMail server runs in Docker as `flow-greenmail`: SMTP on 127.0.0.1:3025, IMAP on 127.0.0.1:3143, plain (no TLS), any

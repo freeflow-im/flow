@@ -167,6 +167,22 @@ export function toDetail(summary: MessageSummary, email: Email, attachments?: At
   };
 }
 
+/** The file name a Content-Disposition header gives (RFC 6266: `filename*` first, as `contentDisposition` writes it), or null. */
+export function filenameFromDisposition(header: string | null | undefined): string | null {
+  if (!header) return null;
+  const star = /filename\*\s*=\s*([\w-]+)'[^']*'([^;]+)/i.exec(header);
+  if (star) {
+    try {
+      const name = decodeURIComponent(star[2]!.trim());
+      if (name) return name;
+    } catch {
+      // A malformed escape: the plain name below.
+    }
+  }
+  const plain = /filename\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^;]+))/i.exec(header);
+  return (plain?.[1]?.replace(/\\(.)/g, '$1') ?? plain?.[2]?.trim()) || null;
+}
+
 /** `filename*=` for Content-Disposition (RFC 6266/5987), with a plain ASCII fallback. */
 export function contentDisposition(kind: 'attachment' | 'inline', filename: string): string {
   const ascii = filename.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');

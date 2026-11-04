@@ -28,6 +28,8 @@ export const pageRoutes = new Hono<{ Bindings: PagesEnv }>();
 
 pageRoutes.get(BASE, async (c) => ((await signedIn(c)) ? page(c, 'workspace.html') : c.redirect(`/?next=${encodeURIComponent(BASE + new URL(c.req.url).search)}`)));
 pageRoutes.get(`${BASE}/p/*`, (c) => page(c, 'workspace.html', { 'referrer-policy': 'no-referrer', 'x-robots-tag': 'noindex' }));
+// A preview (Mail's attachment overlay frames it): framed by the suite's own pages only.
+pageRoutes.get(`${BASE}/preview/*`, (c) => page(c, 'workspace.html', { 'x-frame-options': 'SAMEORIGIN', 'content-security-policy': "frame-ancestors 'self'", 'x-robots-tag': 'noindex' }));
 // A file under /workspace (its scripts and styles) is not a page: it falls through to the built files.
 pageRoutes.get(`${BASE}/*`, (c) => (/\.[a-z0-9]+$/i.test(new URL(c.req.url).pathname) ? c.notFound() : page(c, 'workspace.html')));
 // Mail at /mail (packages/mail): the same, from its own page; it routes in the browser, and its files fall through.

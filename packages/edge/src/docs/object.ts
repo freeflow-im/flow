@@ -10,6 +10,8 @@ import { setBrowserBinding } from './server/pdf.ts';
 import { setOcrBinding } from './runtime/pdfOcr.ts';
 import { handleMcp, handleMcpImport, suiteHub, type McpRequestCaller } from './plugin/server/worker.ts';
 import type { FileHub } from './plugin/server/files.ts';
+import { DatabaseSync } from './runtime/sqlite.ts';
+import { PREVIEW_TTL_MS, Previews } from './server/previews.ts';
 
 export interface DocsEnv {
   BLOBS: R2Bucket;
@@ -136,6 +138,19 @@ export class Docs extends DurableObject<DocsEnv> {
       return this.app.handle(request, caller);
     });
     await this.flush(organizationId);
+    // A preview was made (server/previews.ts): the alarm removes it once it expires, if no use has swept it before.
+    if (request.method === 'POST' && new URL(request.url).pathname === '/api/previews' && res.ok && (await this.ctx.storage.getAlarm()) === null) {
+      await this.ctx.storage.setAlarm(Date.now() + PREVIEW_TTL_MS + 60_000);
+    }
     return res;
+  }
+
+  /** Expired previews and their files go; the alarm is set again for the next one to expire, while any is left. */
+  async alarm(): Promise<void> {
+    const next = await withDocsContext(this.context, async () => {
+      await this.ready;
+      return new Previews(new DatabaseSync() as never, 'data/previews').sweep();
+    });
+    if (next !== null) await this.ctx.storage.setAlarm(next + 60_000);
   }
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { FetchMessageObject, ListResponse, MessageStructureObject } from 'imapflow';
 import PostalMime from 'postal-mime';
-import { contentDisposition, hasAttachments, snippetOf, textPartOf, toDetail, toFolders, toSummary } from './convert';
+import { contentDisposition, filenameFromDisposition, hasAttachments, snippetOf, textPartOf, toDetail, toFolders, toSummary } from './convert';
 
 const multipart: MessageStructureObject = {
   type: 'multipart/mixed',
@@ -103,5 +103,11 @@ describe('a message in full', () => {
 
   it('names a download in ASCII and UTF-8', () => {
     expect(contentDisposition('attachment', 'Résumé "final".pdf')).toBe(`attachment; filename="R_sum_ _final_.pdf"; filename*=UTF-8''R%C3%A9sum%C3%A9%20%22final%22.pdf`);
+    expect(filenameFromDisposition(contentDisposition('attachment', 'Résumé "final".pdf'))).toBe('Résumé "final".pdf');
+    expect(filenameFromDisposition('attachment; filename="plain name.txt"')).toBe('plain name.txt');
+    expect(filenameFromDisposition('inline; filename=bare.csv')).toBe('bare.csv');
+    expect(filenameFromDisposition("attachment; filename=\"x\"; filename*=UTF-8''%E0%A4%A")).toBe('x');
+    expect(filenameFromDisposition('attachment')).toBeNull();
+    expect(filenameFromDisposition(null)).toBeNull();
   });
 });

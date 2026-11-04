@@ -63,6 +63,7 @@ import { SheetStore, validateWorkbook } from './sheets.ts';
 import { listSheetCharts, loadLinkedChart, loadLinkedTable } from './linkedTable.ts';
 import { importPptx } from './pptxImport.ts';
 import { isSharableVideo, PublicLinks, publicDeck, type PublicLink, type SharedKind } from './publicLinks.ts';
+import { previewRoutes, Previews } from './previews.ts';
 import type { StoredFile } from '../shared/types.ts';
 import { ImportError, importExcel } from './xlsxImport.ts';
 import { WindowTools, type WindowToolAnswer, type WindowToolCall } from './windowTools.ts';
@@ -1388,6 +1389,20 @@ export async function buildApp(opts: AppOptions) {
       const f = link && shown?.files.has(id) ? storedFiles.get(await viewerFor(link.ownerId), id) : null;
       if (!f || !PREVIEW_FILE_TYPES.includes(f.meta.type)) return noLink(reply);
       return sendGuestFile(req, reply, f);
+    });
+  }
+
+  // --- Previews: a file shown read-only for an hour, not in the library (server/previews.ts; Mail's attachments) ---
+  if (!opts.local) {
+    const previews = new Previews(db, path.join(opts.dataDir, 'previews'));
+    app.register(async (r) => {
+      r.addHook('preHandler', requireUser);
+      previewRoutes(r, {
+        previews,
+        stores: { sheets, images, files: storedFiles },
+        basePath,
+        exists: (req, saved) => (saved.kind === 'file' ? !!storedFiles.get(req.viewer, saved.id) : !!sheets.get(req.viewer, saved.id, saved.kind)),
+      });
     });
   }
 

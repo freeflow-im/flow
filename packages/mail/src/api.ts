@@ -191,3 +191,53 @@ export const mailApi = {
   setSenderTabs: (accountId: string, senders: { address: string; category: Category | null }[]) => request<{ ok: true }>('POST', `${base(accountId)}/senders/category`, { senders }),
   send: (accountId: string, message: OutgoingMessage) => request<{ ok: true; messageId: string }>('POST', `${base(accountId)}/send`, message),
 };
+
+// ---- Attachment previews in Docs (packages/docs/server/previews.ts, through the Worker's routes/previews.ts) ----------
+
+/** The file a preview became in Docs: its page there. */
+export interface SavedToDocs {
+  kind: string;
+  id: string;
+  title: string;
+  /** The file's page in Docs (/workspace/doc/<id>, ...). */
+  url: string;
+}
+export interface DocsPreview {
+  id: string;
+  kind: 'doc' | 'deck' | 'sheet' | 'markdown' | 'pdf' | 'file';
+  filename: string;
+  size: number;
+  expiresAt: number;
+  saved?: SavedToDocs;
+}
+
+/** Docs answers errors as `{ error: "message" }`; the Worker's own routes as `{ error: { code, message } }`. */
+async function docsRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method,
+    credentials: 'same-origin',
+    headers: body === undefined ? { accept: 'application/json' } : { accept: 'application/json', 'content-type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (res.status === 401) {
+    onSignedOut();
+    throw new MailApiError('unauthorized', 'Your session has ended. Sign in again.', 401);
+  }
+  const data = (await res.json().catch(() => null)) as { error?: string | { code?: string; message?: string } } | null;
+  if (!res.ok) {
+    const e = data?.error;
+    throw new MailApiError(typeof e === 'object' ? (e.code ?? 'server_error') : 'server_error', typeof e === 'string' ? e : (e?.message ?? `${res.status} ${res.statusText}`), res.status);
+  }
+  return data as T;
+}
+
+/** Where a preview is drawn: Docs' read-only page for it, in the organization it was made in. */
+export const previewPageUrl = (id: string, workspace: string) => `/workspace/preview/${enc(id)}?workspace=${enc(workspace)}`;
+
+export const previewApi = {
+  /** Make (or find, if made this hour) Docs' preview of an attachment; `workspace` is the organization (default: the first). */
+  create: (accountId: string, folder: string, uid: number, index: number, workspace: string | null) =>
+    docsRequest<{ preview: DocsPreview; workspace: string }>('POST', '/api/previews/mail', { account: accountId, folder, uid, index, ...(workspace ? { workspace } : {}) }),
+  /** Save it as a file in My files in Docs (once: again gives the same file). */
+  save: (id: string, workspace: string) => docsRequest<{ saved: SavedToDocs }>('POST', `/api/previews/${enc(id)}/save?workspace=${enc(workspace)}`),
+};
