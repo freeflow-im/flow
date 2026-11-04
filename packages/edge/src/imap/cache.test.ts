@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import type { FetchMessageObject } from 'imapflow';
-import { ACTIVE_CADENCE_MS, ACTIVE_MS, MailCache, cadenceMs, flagDiff, nextAlarmAt, walkDown, type Flags, type NewRow, type Sql } from './cache';
+import { ACTIVE_CADENCE_MS, ACTIVE_MS, BODY, MailCache, cadenceMs, flagDiff, nextAlarmAt, walkDown, type Flags, type NewRow, type Sql } from './cache';
 import { toSummary } from './convert';
 
 /** The object's SqlStorage, on node:sqlite. */
@@ -179,5 +179,75 @@ describe('MailCache', () => {
     expect(cache.lastActiveAt()).toBe(0);
     cache.setState('last_active_at', '12345');
     expect(cache.lastActiveAt()).toBe(12345);
+  });
+});
+
+describe('MailCache bodies', () => {
+  const plan = { simple: true, texts: [{ section: '1', type: 'text/plain', encoding: '7bit', parameters: {}, disposition: null, id: null, size: 10 }], attachments: [], tree: null } as never;
+  const detail = (uid: number) => ({ ...toSummary(fetched(uid), F), replyTo: [], bcc: [], inReplyTo: null, references: [], attachments: [] });
+  const withPlan = (uid: number, o: Parameters<typeof fetched>[1] = {}): NewRow => ({ ...row(fetched(uid, o)), plan });
+
+  it('keeps a body and opens the message from it, with the flags as last known', () => {
+    const cache = cacheWith([withPlan(1), withPlan(2)]);
+    expect(cache.body(A, F, V, 1)).toBeNull();
+    cache.setBody(A, F, 1, { detail: detail(1), html: '<p>hi</p>', text: 'hi', plan }, BODY.cached);
+    cache.setFlags(A, F, [1], { seen: true }, 2000);
+    const got = cache.body(A, F, V, 1)!;
+    expect(got.state).toBe(BODY.cached);
+    expect(got.detail).toMatchObject({ uid: 1, folder: F, html: '<p>hi</p>', text: 'hi', seen: true, subject: 'Message 1' });
+    expect(got.plan).toEqual(plan);
+    expect(cache.plan(A, F, 1)).toEqual(plan);
+    expect(cache.bodyBytes(A, F)).toBe(11);
+    // Marked too large: nothing kept, and the message opens from the server.
+    cache.setBody(A, F, 2, null, BODY.tooLarge);
+    expect(cache.body(A, F, V, 2)).toBeNull();
+    expect(cache.bodyStates(A, F, V, [1, 2])).toEqual(new Map([[1, BODY.cached], [2, BODY.tooLarge]]));
+  });
+
+  it('on a server with message ids, a copy in another folder stands in for the body', () => {
+    const cache = cacheWith([withPlan(1, { emailId: 'e1' })]);
+    cache.touchFolder(A, 'All', 'all', 1000, false);
+    cache.resetFolder(A, 'All', V);
+    cache.insert(A, 'All', V, [{ ...row(fetched(9, { emailId: 'e1', flags: ['\\Seen'] })), plan }], 1000);
+    cache.setBody(A, 'All', 9, { detail: { ...detail(9), folder: 'All' }, html: null, text: 'same message', plan }, BODY.cached);
+    const got = cache.body(A, F, V, 1)!;
+    expect(got.detail).toMatchObject({ uid: 1, folder: F, text: 'same message', seen: false });
+    // And the queue does not fetch it again: it is marked cached from there.
+    expect(cache.bodyQueue(A, F, V, 10)).toEqual([]);
+    expect(cache.bodyStates(A, F, V, [1]).get(1)).toBe(BODY.cached);
+  });
+
+  it('queues unread first, then newest, only rows with a plan, up to the limit', () => {
+    const cache = cacheWith([withPlan(5, { flags: ['\\Seen'] }), withPlan(4), row(fetched(3)), withPlan(2, { flags: ['\\Seen'] }), withPlan(1)]);
+    expect(cache.bodyQueue(A, F, V, 10).map((q) => q.uid)).toEqual([4, 1, 5, 2]);
+    expect(cache.bodyQueue(A, F, V, 2).map((q) => q.uid)).toEqual([4, 1]);
+    const q = cache.bodyQueue(A, F, V, 1)[0];
+    expect(q.summary.subject).toBe('Message 4');
+    expect(q.headers).toContain('From: Ann');
+    cache.setBody(A, F, 4, { detail: detail(4), html: null, text: 'x', plan }, BODY.cached);
+    expect(cache.bodyQueue(A, F, V, 10).map((q) => q.uid)).toEqual([1, 5, 2]);
+  });
+
+  it('evicts the oldest bodies past the budget, keeping the rows', () => {
+    const cache = cacheWith([withPlan(1), withPlan(2), withPlan(3)]);
+    for (const u of [1, 2, 3]) cache.setBody(A, F, u, { detail: detail(u), html: null, text: 'x'.repeat(100), plan }, BODY.cached);
+    expect(cache.bodyBytes(A, F)).toBe(300);
+    expect(cache.evictBodies(A, F, 250)).toBe(1);
+    expect(cache.bodyBytes(A, F)).toBe(200);
+    expect(cache.body(A, F, V, 1)).toBeNull();
+    expect(cache.bodyStates(A, F, V, [1]).get(1)).toBe(BODY.evicted);
+    expect(cache.body(A, F, V, 3)).not.toBeNull();
+    expect(cache.count(A, F, V)).toBe(3);
+    expect(cache.evictBodies(A, F, 250)).toBe(0);
+  });
+
+  it('marks the message with a Message-ID answered, and finds rows by UID', () => {
+    const cache = cacheWith([withPlan(1), withPlan(2)]);
+    cache.setAnswered(A, '<m1@example.com>', 3000);
+    const rows = cache.byUids(A, F, V, [1, 2, 7]);
+    expect([...rows.keys()]).toEqual([1, 2]);
+    expect(rows.get(1)?.summary.answered).toBe(true);
+    expect(rows.get(2)?.summary.answered).toBe(false);
+    expect(rows.get(1)?.flagsAt).toBe(3000);
   });
 });

@@ -83,8 +83,9 @@ interface MessageDetail extends Omit<MessageSummary, 'attachments'> {
   for a re-check. `sync` is the folder's `mail_sync` row, `counts` the cached rows per `(category, reason)`, and `messages`
   `{ uid, category, reason }` for the UIDs asked about.
 - `GET  /v1/mail/accounts/:id/debug/cache` → `{ folders: [{ folder, kind, validity, high, low, modseq, syncedAt, openedAt, error, errorAt, rows }],
-  log, lastActiveAt, nextAlarmAt }`: how the prefetch cache stands for the account (below), and the last 20 alarm runs since the
-  object woke (`{ at, ms, folders: ['inbox: 3 new, 0 flags, 0 gone, 100 older'], errors }`), for the account's owner.
+  log, lastActiveAt, nextAlarmAt }` (each folder also with `bodies` and `bodyBytes`): how the prefetch cache stands for the account
+  (below), and the last 20 alarm runs since the object woke (`{ at, ms, folders: ['inbox: 3 new, 0 flags, 0 gone, 100 older',
+  'bodies: 25 bodies'], errors }`), for the account's owner.
 - `GET  /v1/mail/accounts/:id/messages/:uid?folder=` → `{ message: MessageDetail }` (does NOT mark it seen; the client PATCHes seen)
 - `GET  /v1/mail/accounts/:id/messages/:uid/attachments/:index?folder=` → the bytes, with Content-Type and
   `Content-Disposition: attachment; filename*=…` (`?inline=1` → `inline`, used for cid: images). `index` is the
@@ -155,7 +156,7 @@ Gmail's Primary, Promotions, Social, Updates and Forums, for INBOX only. Each ta
   usually a handful) and sorts at most 100 of them, the newest (the first time, the newest 100, found from UIDNEXT down
   with a widening `UID SEARCH <from>:<top>` window, never a search of the whole folder). More new mail than that: `low`
   moves up to what was sorted and the rest is the sorter's. Then the page is read from SQLite (`uid < before`, `uid >= low`,
-  newest first) and the summaries of just those UIDs fetched in one FETCH (with the snippets' partial FETCHes). A UID the
+  newest first) and the summaries of just those UIDs taken from the prefetch cache (`pageSummaries`; the rest fetched). A UID the
   server no longer returns (moved by another mail app) is dropped from the cache.
 - **Short pages** (`tabPage` in `categorize.ts`): when the cache ends before the page is full and older mail is not sorted
   yet (`low > 1`), the page comes back with what there is, `sorting: true` and `next` (where the cache ends). The client
@@ -211,7 +212,7 @@ from it and the server is asked only for what is new.
 - **A row** holds the summary as `GET …/messages` returns it (JSON), the flags as last known (columns, written through by
   `PATCH`), the raw From/Reply-To/Bcc/In-Reply-To/References/List-Id header block and the body plan (to open the message by
   its parts later), the server's own message and thread ids where it has them (Gmail's X-GM-MSGID/X-GM-THRID, OBJECTID's
-  EMAILID/THREADID: `email_id`, and `thread_id` as `s:<id>`), and room for the bodies (a later change; a list never reads them).
+  EMAILID/THREADID: `email_id`, and `thread_id` as `s:<id>`), and the body once fetched (below; a list never reads it).
 - **How far it reaches**: `mail_cache_folders (account_id, folder) → uid_validity, high, low, modseq, kind, synced_at, opened_at,
   error, error_at`. Every UID of the folder in [low, high] has a row, less what the server no longer has; at most CACHE_ROWS
   (1000) per folder, the newest. A new UIDVALIDITY drops the folder's rows.
@@ -234,7 +235,22 @@ from it and the server is asked only for what is new.
   the folder holds CACHE_ROWS or the budget is spent; then the oldest rows past CACHE_ROWS go. A folder whose sync fails is
   left alone for 10 minutes (`error`, `error_at`); an account whose server refuses it is skipped (its `status` says so). An
   alarm run logs `[mail] cache: <n> folders <ms>ms (…)`.
-- **Write-through**: `PATCH` flags update the rows at once; a move or delete through us, a draft deleted, and a message the
+- **Bodies** (`body_state`: 0 pending, 1 cached, 2 too large, 3 not openable by its parts, 4 evicted). Each alarm run, after
+  the folders, fetches the bodies of cached messages not fetched yet (`prefetchBodies`): the folder looked at last first,
+  unread and then newest first within it, BODY_BATCH = 25 messages or BODY_BATCH_BYTES = 4 MB a run, within the budget.
+  Rows whose text parts sit in the same sections are fetched in one `UID FETCH <set> (BODY.PEEK[…])`; each is then parsed as
+  an opened message is (`minimalMessage` from the stored header block and plan, postal-mime, `toDetail`) and kept: the
+  detail (JSON), `html` and `text`. HTML over BODY_MAX_HTML = 1 MB or text over BODY_MAX_TEXT = 256 KB is not kept (2), nor
+  a message `planBody` says must be read whole (3); either opens from the server as before. A folder's bodies past
+  BODY_BUDGET_PER_FOLDER = 150 MB lose the oldest (4; the row stays). On a server with message ids (Gmail's X-GM-MSGID,
+  OBJECTID) a body is kept once per message: a copy in another folder stands in, and the queue skips it.
+  `GET …/messages/:uid` answers from the cache when the body is there (the flags from the row; the timing line says
+  `cache=hit`, else `live`); a message opened from the server whose row is pending or evicted is kept then too. An
+  attachment of a cached message is fetched by the stored plan, in one FETCH, with no BODYSTRUCTURE round trip.
+- **Inbox tabs' pages** (`tabList`) take their summaries from the cache (`pageSummaries`): the cached rows, their flags
+  checked in one FLAGS fetch (a message the server no longer has is dropped), and only the rest fetched and cached.
+  Searches and `unread=1` are not from the cache.
+- **Write-through**: `PATCH` flags update the rows at once; a reply sent here marks the cached original answered; a move or delete through us, a draft deleted, and a message the
   server no longer returns remove them (`left`); `DELETE` of the account drops everything of it. Mail arriving in a cached
   folder by a move or a send is picked up by that folder's next first page or alarm run. IMAP IDLE is a later change.
 - Tests: `src/imap/cache.test.ts` (the cadence, the flag diff, the walk down, the tables on node:sqlite) and `test/e2e-mail.mjs`
