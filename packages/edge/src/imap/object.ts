@@ -25,7 +25,7 @@ import PostalMime, { type Email } from 'postal-mime';
 import { ApiError } from '../errors';
 import { decryptBlob, encryptBlob } from '../org/crypto/index';
 import { decodeTransfer, decodedSize, minimalMessage, planBody, prefetch, type BodyPlan } from './body';
-import { ALARM_BUDGET_MS, BACKFILL_STEP, CACHE_ROWS, ERROR_BACKOFF_MS, MAIN_KINDS, MailCache, NEW_CAP, flagDiff, flagsOf, nextAlarmAt, walkDown, type CachedFolder, type Flags, type FolderKind, type NewRow } from './cache';
+import { ALARM_BUDGET_MS, BACKFILL_STEP, BODY, BODY_BATCH, BODY_BATCH_BYTES, BODY_BUDGET_PER_FOLDER, BODY_MAX_HTML, BODY_MAX_TEXT, CACHE_ROWS, ERROR_BACKOFF_MS, MAIN_KINDS, MailCache, NEW_CAP, flagDiff, flagsOf, nextAlarmAt, walkDown, type CachedFolder, type Flags, type FolderKind, type NewRow, type QueuedBody } from './cache';
 import { contentDisposition, specialUseOf, snippetOf, textPartOf, toDetail, toFolders, toSummary, type AttachmentInfo, type MessageDetail, type MessageSummary, type SpecialUse, type TextPart } from './convert';
 import { CATEGORIES, CATEGORY_HEADERS, classifyHeaders, effective, effectiveSql, isGmailHost, normalizeTabs, parseHeaders, tabPage, uidSet, type Category, type TabCategory } from './categorize';
 import { GMAIL_NONE, GMAIL_REASON, GmailSearchError, recheckRows, sortBatch, type GmailSearcher, type RecheckResult } from './gmailTabs';
@@ -492,15 +492,6 @@ export class Mail extends DurableObject<MailEnv> {
     return out;
   }
 
-  /** Summaries of these UIDs, newest first, with their snippets: one FETCH, then the snippets' partial FETCHes. */
-  private async summaries(c: ImapFlow, folder: string, uids: number[], query: FetchQueryObject = SUMMARY_QUERY): Promise<{ fetched: FetchMessageObject[]; snippets: Map<number, string> }> {
-    const fetched: FetchMessageObject[] = [];
-    if (uids.length) for await (const m of c.fetch(uidSet(uids), query, { uid: true })) fetched.push(m);
-    fetched.sort((a, b) => b.uid - a.uid);
-    const snippets = await this.snippets(c, fetched).catch((err) => { console.warn(`[mail] snippets: ${(err as Error).message}`); return new Map<number, string>(); });
-    return { fetched, snippets };
-  }
-
   /**
    * One page of a folder, newest first. `q` searches the whole folder (TEXT, FROM or SUBJECT); with `opts.raw` on a Gmail
    * account it is Gmail's own search syntax (X-GM-RAW). `opts.unread` keeps only unread messages.
@@ -620,6 +611,34 @@ export class Mail extends DurableObject<MailEnv> {
         return { messages, next: more && messages.length ? messages[messages.length - 1].uid : null };
       });
     });
+  }
+
+  /**
+   * The summaries of these UIDs of the open folder, for a page whose UIDs are already known (a tab's page): from the
+   * cache where it has them, with their flags checked against the server in one FLAGS fetch; the rest fetched and cached
+   * on the way. A UID the server no longer has is left out (and its rows dropped by the caller).
+   */
+  private async pageSummaries(r: AccountRow, c: ImapFlow, folder: string, validity: string, uids: number[]): Promise<Map<number, MessageSummary>> {
+    const t = timing.getStore();
+    const out = new Map<number, MessageSummary>();
+    if (!uids.length) return out;
+    const now = Date.now();
+    const cached = this.cache.byUids(r.id, folder, validity, uids);
+    if (cached.size) {
+      const { changed, vanished } = await this.refreshFlags(r, c, folder, validity, [...cached.keys()], now, null);
+      for (const [uid, row] of cached) {
+        if (vanished.has(uid)) continue;
+        const f = changed.get(uid);
+        out.set(uid, f ? { ...row.summary, seen: f.seen, flagged: f.flagged, answered: f.answered } : row.summary);
+      }
+    }
+    const missing = uids.filter((u) => !cached.has(u));
+    if (missing.length) {
+      const { summaries } = await this.cacheFetch(r, c, folder, validity, missing, now);
+      for (const s of summaries) out.set(s.uid, s);
+    }
+    if (t) t.cache = missing.length ? (cached.size ? 'fill' : 'live') : 'hit';
+    return out;
   }
 
   /** One page straight from the server, newest first: the newest `limit` of the open folder, or those below `before`. */
@@ -1066,12 +1085,11 @@ export class Mail extends DurableObject<MailEnv> {
       const reasons = new Map(found.map((row) => [row.uid, reasonOf(row.reason, row.chosen)]));
       const { page, next, sorting } = tabPage(rows, limit, state.low, cursor);
       const ahead = state.low > 1 && (sorting || this.cachedInTab(r, folder, state, tabs, category, cursor, want) < want);
-      const { fetched, snippets } = await this.summaries(c, folder, page);
+      const summaries = await this.pageSummaries(r, c, folder, state.validity, page);
       // What the cache had but the server no longer has has left the folder (moved elsewhere, from another mail app).
-      const back = new Set(fetched.map((m) => m.uid));
-      const gone = page.filter((u) => !back.has(u));
-      if (gone.length) this.forgetRows(r.id, folder, gone);
-      return { messages: fetched.map((m) => ({ ...toSummary(m, folder, snippets.get(m.uid) ?? ''), category, categoryReason: reasons.get(m.uid) })), next, sorting, ahead };
+      const gone = page.filter((u) => !summaries.has(u));
+      if (gone.length) this.left(r.id, folder, gone);
+      return { messages: page.filter((u) => summaries.has(u)).map((u) => ({ ...summaries.get(u)!, category, categoryReason: reasons.get(u) })), next, sorting, ahead };
     });
     this.recheckSoon(r, folder, timing.getStore()?.test.recheck);
     if (!result) return { messages: [], next: null };
@@ -1176,6 +1194,10 @@ export class Mail extends DurableObject<MailEnv> {
                   this.cache.setMarks(r.id, f.folder, { error: message, errorAt: Date.now() });
                   entry.errors.push(`${f.kind}: ${message}`);
                 }
+              }
+              // Then the bodies, with what is left of the budget.
+              if (Date.now() < deadline) {
+                try { entry.folders.push(`bodies: ${await this.prefetchBodies(r, c, deadline)}`); } catch (err) { entry.errors.push(`bodies: ${(err as Error).message}`); }
               }
             });
           } catch (err) {
@@ -1299,14 +1321,14 @@ export class Mail extends DurableObject<MailEnv> {
   }
 
   /** Fetches these messages of the open folder (CACHE_QUERY) and caches them. */
-  private async cacheFetch(r: AccountRow, c: ImapFlow, folder: string, validity: string, uids: number[], now: number): Promise<FetchMessageObject[]> {
+  private async cacheFetch(r: AccountRow, c: ImapFlow, folder: string, validity: string, uids: number[], now: number): Promise<{ fetched: FetchMessageObject[]; summaries: MessageSummary[] }> {
     const fetched: FetchMessageObject[] = [];
     for (let i = 0; i < uids.length; i += 500) {
       for await (const m of c.fetch(uidSet(uids.slice(i, i + 500)), CACHE_QUERY, { uid: true })) fetched.push(m);
     }
     fetched.sort((a, b) => b.uid - a.uid);
-    await this.cacheRows(r, c, folder, validity, fetched, now);
-    return fetched;
+    const { summaries } = await this.cacheRows(r, c, folder, validity, fetched, now);
+    return { fetched, summaries };
   }
 
   /** Caches fetched messages (with their snippets), and returns their summaries. */
@@ -1346,11 +1368,25 @@ export class Mail extends DurableObject<MailEnv> {
     const key = `${r.id}/${folder}/${uid}`;
     const have = this.opened.get(key);
     if (have) return have;
+    const t = timing.getStore();
+    // From the prefetch cache when it holds the body: no round trip (its attachments are fetched by the stored plan).
+    const state = this.cache.folder(r.id, folder);
+    const cached = state ? this.cache.body(r.id, folder, state.validity, uid) : null;
+    if (cached) {
+      if (t) t.cache = 'hit';
+      const opened: Opened = { detail: cached.detail, plan: cached.plan, parts: new Map() };
+      this.opened.set(key, opened);
+      return opened;
+    }
+    if (t) t.cache = 'live';
     const opened = await this.withFolder(r, folder, 'interactive', async (c): Promise<Opened> => {
-      const m = await c.fetchOne(String(uid), { ...SUMMARY_QUERY, headers: DETAIL_HEADERS }, { uid: true });
+      const m = await c.fetchOne(String(uid), { ...CACHE_QUERY, headers: DETAIL_HEADERS }, { uid: true });
       if (!m) throw notFound('no such message');
       const summary = toSummary(m, folder);
       const plan = planBody(m.bodyStructure);
+      // A message the cache has a row for keeps the body once read (`cacheBody`), as the alarm would have fetched it.
+      const row = state && state.validity === this.validity(c) ? this.cache.bodyStates(r.id, folder, state.validity, [uid]).get(uid) : undefined;
+      const keep = (o: Opened): Opened => { if (row === BODY.pending || row === BODY.evicted) this.cacheBody(r.id, folder, uid, o.detail, o.plan); return o; };
       if (!plan.simple) {
         if ((m.size ?? 0) > MAX_MESSAGE_BYTES) throw mailError(413, 'bad_request', 'the message is too large to open here');
         const download = await c.download(String(uid), undefined, { uid: true, chunkSize: 1024 * 1024 });
@@ -1362,7 +1398,7 @@ export class Mail extends DurableObject<MailEnv> {
           const content = typeof a.content === 'string' ? Buffer.from(a.content) : Buffer.from(a.content as ArrayBuffer);
           if (content.length <= PREFETCH.inlineMax) parts.set(i, { content, mimeType: a.mimeType, filename: a.filename ?? `attachment-${i + 1}` });
         });
-        return { detail: toDetail(summary, email), plan: null, parts };
+        return keep({ detail: toDetail(summary, email), plan: null, parts });
       }
       if (plan.texts.some((l) => l.size > MAX_TEXT_BYTES)) throw mailError(413, 'bad_request', 'the message is too large to open here');
       const extra = prefetch(plan.attachments, PREFETCH);
@@ -1384,11 +1420,71 @@ export class Mail extends DurableObject<MailEnv> {
       const attachments: AttachmentInfo[] = plan.attachments.map((a) => ({
         index: a.index, filename: a.filename, mimeType: a.mimeType, size: parts.get(a.index)?.content.length ?? decodedSize(a.leaf), contentId: a.contentId, inline: a.inline,
       }));
-      return { detail: toDetail(summary, email, attachments), plan, parts };
+      return keep({ detail: toDetail(summary, email, attachments), plan, parts });
     });
     this.opened.set(key, opened);
     while (this.opened.size > 3) this.opened.delete(this.opened.keys().next().value!);
     return opened;
+  }
+
+  /** Keeps a message's body in the cache (its row must exist), unless it is too large or was read whole (not by its parts). */
+  private cacheBody(accountId: string, folder: string, uid: number, detail: MessageDetail, plan: BodyPlan | null): void {
+    const { html, text, ...rest } = detail;
+    if (!plan) { this.cache.setBody(accountId, folder, uid, null, BODY.notByParts); return; }
+    if ((html?.length ?? 0) > BODY_MAX_HTML || (text?.length ?? 0) > BODY_MAX_TEXT) { this.cache.setBody(accountId, folder, uid, null, BODY.tooLarge); return; }
+    this.cache.setBody(accountId, folder, uid, { detail: rest, html, text, plan }, BODY.cached);
+  }
+
+  /**
+   * The alarm's body step: the bodies of cached messages not fetched yet, the folder looked at last first, unread and
+   * newest first within it, BODY_BATCH messages or BODY_BATCH_BYTES per run. Rows with the same text parts are fetched in
+   * one command (as the snippets are); each is then parsed as an opened message is (`minimalMessage`, postal-mime) and
+   * kept, or marked too large or not openable by its parts. A folder's bodies past BODY_BUDGET_PER_FOLDER lose the oldest.
+   */
+  private async prefetchBodies(r: AccountRow, c: ImapFlow, deadline: number): Promise<string> {
+    let fetched = 0, bytes = 0, skipped = 0;
+    const folders = this.cache.folders(r.id).sort((a, b) => b.openedAt - a.openedAt);
+    for (const f of folders) {
+      if (fetched >= BODY_BATCH || bytes >= BODY_BATCH_BYTES || Date.now() > deadline) break;
+      if (!f.validity || f.high === 0) continue;
+      const queue = this.cache.bodyQueue(r.id, f.folder, f.validity, BODY_BATCH - fetched);
+      if (!queue.length) continue;
+      await this.locked(c, f.folder, async () => {
+        if (this.validity(c) !== f.validity) return;
+        const todo: QueuedBody[] = [];
+        for (const q of queue) {
+          if (!q.plan.simple) { this.cache.setBody(r.id, f.folder, q.uid, null, BODY.notByParts); skipped++; continue; }
+          const size = q.plan.texts.reduce((n, l) => n + l.size, 0);
+          if (q.plan.texts.some((l) => l.size > MAX_TEXT_BYTES) || size > BODY_MAX_HTML + BODY_MAX_TEXT) { this.cache.setBody(r.id, f.folder, q.uid, null, BODY.tooLarge); skipped++; continue; }
+          if (bytes + size > BODY_BATCH_BYTES && todo.length) break;
+          bytes += size;
+          todo.push(q);
+        }
+        // One FETCH per distinct set of text sections.
+        const groups = new Map<string, QueuedBody[]>();
+        for (const q of todo) { const k = q.plan.texts.map((l) => l.section).join(','); groups.set(k, [...(groups.get(k) ?? []), q]); }
+        for (const [, rows] of groups) {
+          const sections = rows[0].plan.texts.map((l) => l.section);
+          const byUid = new Map(rows.map((q) => [q.uid, q]));
+          for await (const m of c.fetch(uidSet(rows.map((q) => q.uid)), { uid: true, bodyParts: sections }, { uid: true })) {
+            const q = byUid.get(m.uid);
+            if (!q) continue;
+            const bodies = new Map<string, Uint8Array>();
+            for (const s of sections) { const b = section(m, s); if (b) bodies.set(s, b); }
+            const email = await PostalMime.parse(minimalMessage(q.headers ?? undefined, q.plan, bodies), { attachmentEncoding: 'arraybuffer' });
+            const attachments: AttachmentInfo[] = q.plan.attachments.map((a) => ({ index: a.index, filename: a.filename, mimeType: a.mimeType, size: decodedSize(a.leaf), contentId: a.contentId, inline: a.inline }));
+            this.cacheBody(r.id, f.folder, q.uid, toDetail(q.summary, email, attachments), q.plan);
+            byUid.delete(m.uid);
+            fetched++;
+          }
+          // A message the server no longer returned has left the folder.
+          if (byUid.size) this.left(r.id, f.folder, [...byUid.keys()]);
+        }
+      });
+      const evicted = this.cache.evictBodies(r.id, f.folder, BODY_BUDGET_PER_FOLDER);
+      if (evicted) skipped += evicted;
+    }
+    return `${fetched} bodies${skipped ? `, ${skipped} skipped` : ''}`;
   }
 
   /** One attachment's bytes: kept from opening the message, else that part alone, in one FETCH. */
@@ -1397,7 +1493,8 @@ export class Mail extends DurableObject<MailEnv> {
     const kept = opened?.parts.get(index);
     if (kept) return kept;
     return this.withFolder(r, folder, 'interactive', async (c) => {
-      let plan = opened?.plan;
+      // The plan from the message as opened, else from its cached row, else from the server.
+      let plan = opened?.plan ?? this.cache.plan(r.id, folder, uid);
       if (!plan) {
         const m = await c.fetchOne(String(uid), { uid: true, bodyStructure: true }, { uid: true });
         if (!m) throw notFound('no such message');
@@ -1473,6 +1570,7 @@ export class Mail extends DurableObject<MailEnv> {
         const uids = (await c.search({ header: { 'message-id': body.inReplyTo! } }, { uid: true })) || [];
         if (uids.length) await c.messageFlagsAdd(uids.join(','), ['\\Answered'], { uid: true });
       }).catch((err) => console.warn(`[mail] answered flag: ${(err as Error).message}`));
+      this.cache.setAnswered(r.id, body.inReplyTo, Date.now());
     }
     return message.messageId;
   }
