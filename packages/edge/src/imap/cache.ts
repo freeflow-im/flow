@@ -5,7 +5,7 @@
 // against the small `Sql` interface so cache.test.ts can run it on node:sqlite.
 import type { FetchMessageObject } from 'imapflow';
 import type { BodyPlan } from './body';
-import type { MessageSummary } from './convert';
+import type { MessageDetail, MessageSummary } from './convert';
 
 /** What this file needs of the object's SqlStorage (and node:sqlite in tests, through the adapter in cache.test.ts). */
 export interface Sql {
@@ -32,6 +32,17 @@ export const IDLE_CADENCES: { under: number; every: number }[] = [
 export const RECENT_MS = 7 * 24 * 60 * 60_000;
 /** A folder whose sync failed is left alone this long. */
 export const ERROR_BACKOFF_MS = 10 * 60_000;
+/** A body larger than this is not kept (a SQLite value holds 2 MB at most); the message opens from the server. */
+export const BODY_MAX_HTML = 1024 * 1024;
+export const BODY_MAX_TEXT = 256 * 1024;
+/** Bodies fetched per alarm run at most: this many messages, or this many encoded bytes. */
+export const BODY_BATCH = 25;
+export const BODY_BATCH_BYTES = 4 * 1024 * 1024;
+/** Bodies kept per folder at most; past it the oldest go (their rows stay, to be opened from the server). */
+export const BODY_BUDGET_PER_FOLDER = 150 * 1024 * 1024;
+
+/** How a cached row's body stands. */
+export const BODY = { pending: 0, cached: 1, tooLarge: 2, notByParts: 3, evicted: 4 } as const;
 
 /** Why a folder is cached: one of the main folders by its special use, or one the person opened lately. */
 export type FolderKind = 'inbox' | 'sent' | 'drafts' | 'archive' | 'all' | 'recent';
@@ -55,6 +66,12 @@ export interface CachedMessage { summary: MessageSummary; threadId: string | nul
 
 /** One message to cache, from a FETCH with CACHE_QUERY (the summary made of it, and the raw header block kept for later). */
 export interface NewRow { m: FetchMessageObject; summary: MessageSummary; headers: string | null; plan: BodyPlan | null }
+/** A cached message with its body, as `GET …/messages/:uid` answers, and the plan its attachments are fetched by. */
+export interface CachedBody { detail: MessageDetail; plan: BodyPlan | null; state: number }
+/** A message whose body the alarm is to fetch, with what it was cached with. */
+export interface QueuedBody { uid: number; summary: MessageSummary; plan: BodyPlan; headers: string | null }
+type BodyRow = { uid: number; folder: string; email_id: string | null; seen: number; flagged: number; answered: number; detail: string | null; plan: string | null; html: string | null; text: string | null; body_state: number };
+const byteLength = (s: string | null) => (s ? new TextEncoder().encode(s).length : 0);
 
 export const DDL = [
   // One row per cached message per folder, its summary as JSON (the flags overlaid from the columns when read), the raw
@@ -314,13 +331,116 @@ export class MailCache {
     return n - keep;
   }
 
+  /** The cached rows of some UIDs of a folder (those it has), as a list shows them. */
+  byUids(accountId: string, folder: string, validity: string, uids: readonly number[]): Map<number, CachedMessage> {
+    const out = new Map<number, CachedMessage>();
+    for (const part of chunks(uids)) {
+      for (const r of this.sql.exec<{ uid: number; summary: string; thread_id: string | null; email_id: string | null; seen: number; flagged: number; answered: number; flags_at: number }>(
+        'SELECT uid, summary, thread_id, email_id, seen, flagged, answered, flags_at FROM mail_messages WHERE account_id = ? AND folder = ? AND uid_validity = ? AND uid IN (SELECT value FROM json_each(?))',
+        accountId, folder, validity, JSON.stringify(part)).toArray()) {
+        out.set(r.uid, { summary: { ...(JSON.parse(r.summary) as MessageSummary), seen: !!r.seen, flagged: !!r.flagged, answered: !!r.answered }, threadId: r.thread_id, emailId: r.email_id, flagsAt: r.flags_at });
+      }
+    }
+    return out;
+  }
+
+  // ---- bodies -----------------------------------------------------------------------------------------------------
+
+  /**
+   * A cached message as opened, when its body is here: the detail with the flags as last known, and the plan to fetch
+   * one of its attachments by. On a server with message ids (Gmail, OBJECTID), a copy in another folder with the body
+   * stands in (the bodies are kept once per message). Null when the body is not cached.
+   */
+  body(accountId: string, folder: string, validity: string, uid: number): CachedBody | null {
+    const own = this.sql.exec<BodyRow>('SELECT * FROM mail_messages WHERE account_id = ? AND folder = ? AND uid_validity = ? AND uid = ?', accountId, folder, validity, uid).toArray()[0];
+    if (!own) return null;
+    const r = own.body_state === BODY.cached ? own
+      : own.email_id ? this.sql.exec<BodyRow>('SELECT * FROM mail_messages WHERE account_id = ? AND email_id = ? AND body_state = ? LIMIT 1', accountId, own.email_id, BODY.cached).toArray()[0]
+        : undefined;
+    if (!r || !r.detail) return null;
+    const detail = { ...(JSON.parse(r.detail) as Omit<MessageDetail, 'html' | 'text'>), uid: own.uid, folder: own.folder, seen: !!own.seen, flagged: !!own.flagged, answered: !!own.answered, html: r.html, text: r.text };
+    return { detail, plan: own.plan ? (JSON.parse(own.plan) as BodyPlan) : null, state: own.body_state };
+  }
+
+  /** The body of a message as opened: kept when it fits, else marked (`state`) so it is opened from the server. */
+  setBody(accountId: string, folder: string, uid: number, body: { detail: Omit<MessageDetail, 'html' | 'text'>; html: string | null; text: string | null; plan: BodyPlan | null } | null, state: number): void {
+    const bytes = body ? byteLength(body.html) + byteLength(body.text) : 0;
+    this.sql.exec('UPDATE mail_messages SET body_state = ?, body_bytes = ?, detail = ?, html = ?, text = ?, plan = COALESCE(?, plan) WHERE account_id = ? AND folder = ? AND uid = ?',
+      state, bytes, body ? JSON.stringify(body.detail) : null, body?.html ?? null, body?.text ?? null, body?.plan ? JSON.stringify(body.plan) : null, accountId, folder, uid);
+  }
+
+  /** The body plan a message was cached with (to fetch one attachment by, without BODYSTRUCTURE), if any. */
+  plan(accountId: string, folder: string, uid: number): BodyPlan | null {
+    const r = this.sql.exec<{ plan: string | null }>('SELECT plan FROM mail_messages WHERE account_id = ? AND folder = ? AND uid = ?', accountId, folder, uid).toArray()[0];
+    return r?.plan ? (JSON.parse(r.plan) as BodyPlan) : null;
+  }
+
+  /** The state of the bodies of some UIDs (for the queue: which still want fetching). */
+  bodyStates(accountId: string, folder: string, validity: string, uids: readonly number[]): Map<number, number> {
+    const out = new Map<number, number>();
+    for (const part of chunks(uids)) {
+      for (const r of this.sql.exec<{ uid: number; body_state: number }>('SELECT uid, body_state FROM mail_messages WHERE account_id = ? AND folder = ? AND uid_validity = ? AND uid IN (SELECT value FROM json_each(?))',
+        accountId, folder, validity, JSON.stringify(part)).toArray()) out.set(r.uid, r.body_state);
+    }
+    return out;
+  }
+
+  /**
+   * Messages of a folder whose body is still to fetch, unread first and then newest first, with the plan and the raw
+   * headers each was cached with (a row without a plan is skipped: it cannot be opened by its parts). On a server with
+   * message ids, a message whose body another folder already holds is marked as cached from there and left out.
+   */
+  bodyQueue(accountId: string, folder: string, validity: string, limit: number): QueuedBody[] {
+    const rows = this.sql.exec<{ uid: number; email_id: string | null; summary: string; plan: string | null; headers: string | null }>(
+      `SELECT uid, email_id, summary, plan, headers FROM mail_messages WHERE account_id = ? AND folder = ? AND uid_validity = ? AND body_state = ? AND plan IS NOT NULL
+       ORDER BY seen ASC, uid DESC LIMIT ?`, accountId, folder, validity, BODY.pending, limit * 2).toArray();
+    const out: QueuedBody[] = [];
+    for (const r of rows) {
+      if (r.email_id && this.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM mail_messages WHERE account_id = ? AND email_id = ? AND body_state = ?', accountId, r.email_id, BODY.cached).toArray()[0]?.n) {
+        this.sql.exec('UPDATE mail_messages SET body_state = ? WHERE account_id = ? AND folder = ? AND uid = ?', BODY.cached, accountId, folder, r.uid);
+        continue;
+      }
+      out.push({ uid: r.uid, summary: JSON.parse(r.summary) as MessageSummary, plan: JSON.parse(r.plan!) as BodyPlan, headers: r.headers });
+      if (out.length >= limit) break;
+    }
+    return out;
+  }
+
+  /** What a folder's cached bodies come to, in bytes. */
+  bodyBytes(accountId: string, folder: string): number {
+    return this.sql.exec<{ n: number | null }>('SELECT SUM(body_bytes) AS n FROM mail_messages WHERE account_id = ? AND folder = ?', accountId, folder).toArray()[0]?.n ?? 0;
+  }
+
+  /** Drops a folder's oldest bodies until they fit `budget` bytes. Returns how many went. */
+  evictBodies(accountId: string, folder: string, budget: number): number {
+    let total = this.bodyBytes(accountId, folder), gone = 0;
+    if (total <= budget) return 0;
+    for (const r of this.sql.exec<{ uid: number; body_bytes: number }>('SELECT uid, body_bytes FROM mail_messages WHERE account_id = ? AND folder = ? AND body_state = ? ORDER BY uid ASC', accountId, folder, BODY.cached).toArray()) {
+      if (total <= budget) break;
+      this.sql.exec('UPDATE mail_messages SET body_state = ?, body_bytes = 0, html = NULL, text = NULL WHERE account_id = ? AND folder = ? AND uid = ?', BODY.evicted, accountId, folder, r.uid);
+      total -= r.body_bytes;
+      gone++;
+    }
+    return gone;
+  }
+
+  /** The message with this Message-ID was answered (a reply sent through us), wherever it is cached. */
+  setAnswered(accountId: string, messageId: string, at: number): void {
+    const id = bare(messageId);
+    if (id) this.sql.exec('UPDATE mail_messages SET answered = 1, flags_at = ? WHERE account_id = ? AND message_id = ?', at, accountId, id);
+  }
+
   forgetAccount(accountId: string): void {
     this.sql.exec('DELETE FROM mail_messages WHERE account_id = ?', accountId);
     this.sql.exec('DELETE FROM mail_cache_folders WHERE account_id = ?', accountId);
   }
 
-  /** For the debug route: each cached folder with how many rows it holds. */
-  report(accountId: string): (CachedFolder & { rows: number })[] {
-    return this.folders(accountId).map((f) => ({ ...f, rows: this.count(accountId, f.folder, f.validity) }));
+  /** For the debug route: each cached folder with how many rows it holds, how many of them with their body, and the bodies' bytes. */
+  report(accountId: string): (CachedFolder & { rows: number; bodies: number; bodyBytes: number })[] {
+    return this.folders(accountId).map((f) => ({
+      ...f, rows: this.count(accountId, f.folder, f.validity),
+      bodies: this.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM mail_messages WHERE account_id = ? AND folder = ? AND body_state = ?', accountId, f.folder, BODY.cached).toArray()[0]?.n ?? 0,
+      bodyBytes: this.bodyBytes(accountId, f.folder),
+    }));
   }
 }

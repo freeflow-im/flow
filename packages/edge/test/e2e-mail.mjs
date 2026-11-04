@@ -312,6 +312,23 @@ const inboxCache=r.j.folders?.find(f=>f.folder==='INBOX');
 t('cache: the alarm keeps INBOX, down to the oldest message',r.s===200&&inboxCache?.kind==='inbox'&&inboxCache.rows===inboxUids.length&&inboxCache.low===1&&r.j.log?.length>0&&r.j.log.at(-1).folders.some(x=>x.startsWith('inbox:')),JSON.stringify(r.j).slice(0,200));
 t('cache: and Sent, which was opened',r.j.folders?.some(f=>f.folder==='Sent'&&f.rows>0),JSON.stringify(r.j.folders?.map(f=>[f.folder,f.kind,f.rows])));
 r=await api(Bo.token,'GET',`${P}/debug/cache`);t('cache: the debug route is not for anyone else',r.s===404,r.s);
+// Bodies: a message opened before the alarm got to it is read from the server and kept; after an alarm pass the newest
+// are in the cache, and open from it with no round trip; an attachment is fetched by the plan the row was cached with.
+const [bodyA,bodyB]=[pc.j.messages[0].uid,pc.j.messages[1].uid];
+let op=await cacheOf(()=>getRaw(`${P}/messages/${bodyB}?folder=INBOX`));
+t('bodies: a message not prefetched yet opens from the server',op.s===200&&op.cache==='live'&&typeof op.j.message?.subject==='string',op.s+' '+op.cache);
+r=await api(A.token,'GET',`${P}/debug/cache`);
+t('bodies: and is kept',r.j.folders?.find(f=>f.folder==='INBOX')?.bodies>=1,JSON.stringify(r.j.folders?.map(f=>[f.folder,f.bodies])));
+await getRaw(`${P}/folders`,{'x-mail-test-alarm':'1'});
+r=await api(A.token,'GET',`${P}/debug/cache`);
+t('bodies: an alarm pass fetches bodies',r.j.folders?.find(f=>f.folder==='INBOX')?.bodies>=5&&r.j.log?.at(-1)?.folders.some(x=>/^bodies: [1-9]/.test(x)),JSON.stringify(r.j.log?.at(-1)).slice(0,170));
+op=await cacheOf(()=>getRaw(`${P}/messages/${bodyA}?folder=INBOX`));
+t('bodies: the newest message opens from the cache',op.s===200&&op.cache==='hit'&&op.j.message?.uid===bodyA&&(op.j.message.text!==null||op.j.message.html!==null)&&op.j.message.seen===false,op.s+' '+op.cache+' '+JSON.stringify({uid:op.j.message?.uid,seen:op.j.message?.seen,flagged:op.j.message?.flagged,text:op.j.message?.text?.slice(0,40),html:op.j.message?.html?.slice(0,40)}));
+{const live=await api(A.token,'GET',`${P}/messages/${UIDS.many}?folder=INBOX`);const m=live.j.message;
+ const dl=await getRaw(`${P}/messages/${UIDS.many}/attachments/${m?.attachments?.find(a=>/Plan\.docx/.test(a.filename))?.index}?folder=INBOX`);
+ t('bodies: an attachment of a cached message downloads by the stored plan',dl.s===200&&dl.buf.toString()==='PK plan',dl.s+' '+dl.buf?.toString().slice(0,30));}
+const tabPage=await cacheOf(()=>getRaw(`${P}/messages?folder=INBOX&category=primary&limit=5`));
+t('cache: a tab\'s page takes its summaries from the cache',tabPage.s===200&&tabPage.j.messages?.length>0&&tabPage.cache==='hit'&&tabPage.j.messages.every(m=>m.category==='primary'&&typeof m.snippet==='string'),tabPage.s+' '+tabPage.cache);
 // Flags: one set here shows in the cached page at once; one set by another mail app the next time the page is read
 // (the page's flags are checked against the server in one small FETCH).
 const pageUid=pc.j.messages[0].uid;
