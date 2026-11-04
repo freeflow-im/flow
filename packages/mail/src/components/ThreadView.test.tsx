@@ -75,6 +75,20 @@ describe('ThreadView', () => {
     expect(article(3).textContent).not.toContain('body of 3');
   });
 
+  it('Details opens the addresses under the header and leaves the message open', async () => {
+    await render();
+    const summary = article(5).querySelector<HTMLElement>('summary')!;
+    expect(summary.textContent).toBe('Details');
+    await act(() => summary.click());
+    expect(article(5).getAttribute('aria-expanded')).toBe('true');
+    expect(article(5).querySelector('details')?.open).toBe(true);
+    expect(article(5).textContent).toContain('From:');
+    expect(article(5).textContent).toContain('In:INBOX');
+    // A click on the addresses themselves does not fold the message either.
+    await act(() => article(5).querySelector<HTMLElement>('details > div')!.click());
+    expect(article(5).getAttribute('aria-expanded')).toBe('true');
+  });
+
   it('reply answers the last message from the toolbar and the end buttons, and a message\'s own button answers it', async () => {
     await render();
     await act(() => host.querySelector<HTMLButtonElement>('button[aria-label="Reply (r)"]')!.click());
