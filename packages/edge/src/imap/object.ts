@@ -1277,6 +1277,20 @@ export class Mail extends DurableObject<MailEnv> {
     this.cache.setState('alarm_step', `${new Date().toISOString()} ${what}`);
   }
 
+  /** The run's synchronous sections, by name: how long they took in all and the longest one (`mail_state.alarm_profile`). */
+  private profile = new Map<string, { ms: number; n: number; max: number; maxAt: string }>();
+  private timed<T>(name: string, what: string, fn: () => T): T {
+    const t0 = Date.now();
+    try { return fn(); } finally {
+      const ms = Date.now() - t0;
+      const p = this.profile.get(name) ?? { ms: 0, n: 0, max: 0, maxAt: '' };
+      p.ms += ms; p.n++;
+      if (ms > p.max) { p.max = ms; p.maxAt = what; }
+      this.profile.set(name, p);
+      if (ms > 50) this.cache.setState('alarm_profile', JSON.stringify(Object.fromEntries(this.profile)));
+    }
+  }
+
   /** The person made a request: the alarm runs often for a while (`last_active_at`, written at most every 10 s). */
   private touch(): void {
     const now = Date.now();
@@ -1320,6 +1334,8 @@ export class Mail extends DurableObject<MailEnv> {
     const start = Date.now();
     const entry: CacheLogEntry = { at: new Date(start).toISOString(), ms: 0, folders: [], errors: [] };
     const t: Timing = { wait: 0, imap: 0, test: timing.getStore()?.test ?? NO_TEST };
+    this.profile = new Map();
+    this.cache.setState('alarm_profile', '{}');
     try {
       await timing.run(t, async () => {
         const accounts = this.sql.exec<AccountRow & Record<string, SqlStorageValue>>('SELECT * FROM accounts ORDER BY created_at').toArray();
@@ -1363,6 +1379,7 @@ export class Mail extends DurableObject<MailEnv> {
       this.caching = false;
       entry.ms = Date.now() - start;
       this.step('done');
+      this.cache.setState('alarm_profile', JSON.stringify(Object.fromEntries(this.profile)));
       this.cacheLog.push(entry);
       while (this.cacheLog.length > CACHE_LOG_KEEP) this.cacheLog.shift();
       console.log(`[mail] cache: ${entry.folders.length} folders${entry.errors.length ? `, ${entry.errors.length} errors` : ''} ${entry.ms}ms (lock wait ${Math.round(t.wait)}ms, imap ${Math.round(t.imap)}ms)`);
@@ -1444,7 +1461,7 @@ export class Mail extends DurableObject<MailEnv> {
       if (!got.moved) break;
     }
     this.step(`${f.kind}: trim`);
-    const trimmed = this.cache.trim(r.id, folder, validity, CACHE_ROWS);
+    const trimmed = this.timed('trim', folder, () => this.cache.trim(r.id, folder, validity, CACHE_ROWS));
     this.cache.setMarks(r.id, folder, { syncedAt: Date.now(), error: null, errorAt: 0 });
     return `${added} new, ${changed} flags, ${gone} gone, ${older} older${trimmed ? `, ${trimmed} trimmed` : ''}${sorted}`;
   }
@@ -1504,7 +1521,7 @@ export class Mail extends DurableObject<MailEnv> {
     if (!fetched.length) return { summaries: [] };
     const snippets = await this.snippets(c, fetched).catch((err) => { console.warn(`[mail] snippets: ${(err as Error).message}`); return new Map<number, string>(); });
     const rows: NewRow[] = fetched.map((m) => ({ m, summary: toSummary(m, folder, snippets.get(m.uid) ?? ''), headers: m.headers ? Buffer.from(m.headers).toString('latin1') : null, plan: m.bodyStructure ? planBody(m.bodyStructure) : null }));
-    const threads = this.cache.insert(r.id, folder, validity, rows, now, r.email);
+    const threads = this.timed('insert', `${folder} ${rows.length} rows`, () => this.cache.insert(r.id, folder, validity, rows, now, r.email));
     return { summaries: rows.map((row) => { const threadId = threads.get(row.m.uid); return threadId ? { ...row.summary, threadId } : row.summary; }) };
   }
 
@@ -1519,7 +1536,7 @@ export class Mail extends DurableObject<MailEnv> {
       const set = uidSet(uids.slice(i, i + 2000));
       for await (const m of c.fetch(set, { uid: true, flags: true }, { uid: true, ...(since !== null ? { changedSince: since } : {}) })) fetched.set(m.uid, flagsOf(m.flags));
     }
-    const { changed, vanished } = flagDiff(this.cache.flags(r.id, folder, validity, uids), fetched, since === null, started);
+    const { changed, vanished } = this.timed('flagDiff', `${folder} ${uids.length} rows`, () => flagDiff(this.cache.flags(r.id, folder, validity, uids), fetched, since === null, started));
     const now = Date.now();
     for (const f of changed) {
       this.cache.setFlags(r.id, folder, [f.uid], f, now);
@@ -1623,7 +1640,7 @@ export class Mail extends DurableObject<MailEnv> {
     for (const f of folders) {
       if (fetched >= BODY_BATCH || bytes >= BODY_BATCH_BYTES || Date.now() > deadline) break;
       if (!f.validity || f.high === 0) continue;
-      const queue = this.cache.bodyQueue(r.id, f.folder, f.validity, BODY_BATCH - fetched);
+      const queue = this.timed('bodyQueue', f.folder, () => this.cache.bodyQueue(r.id, f.folder, f.validity, BODY_BATCH - fetched));
       if (!queue.length) continue;
       await this.locked(c, f.folder, async () => {
         if (this.validity(c) !== f.validity) return;
@@ -1649,9 +1666,12 @@ export class Mail extends DurableObject<MailEnv> {
             this.step(`bodies ${f.kind}: parse uid ${m.uid} (${q.plan.texts.reduce((n, l) => n + l.size, 0)} bytes)`);
             const bodies = new Map<string, Uint8Array>();
             for (const s of sections) { const b = section(m, s); if (b) bodies.set(s, b); }
-            const email = await PostalMime.parse(minimalMessage(q.headers ?? undefined, q.plan, bodies), { attachmentEncoding: 'arraybuffer' });
+            const raw = this.timed('minimalMessage', `${f.folder} uid ${m.uid}`, () => minimalMessage(q.headers ?? undefined, q.plan, bodies));
+            const t0 = Date.now();
+            const email = await PostalMime.parse(raw, { attachmentEncoding: 'arraybuffer' });
+            this.timed('parse', `${f.folder} uid ${m.uid} ${raw.length} bytes (${Date.now() - t0}ms)`, () => undefined);
             const attachments: AttachmentInfo[] = q.plan.attachments.map((a) => ({ index: a.index, filename: a.filename, mimeType: a.mimeType, size: decodedSize(a.leaf), contentId: a.contentId, inline: a.inline }));
-            this.cacheBody(r.id, f.folder, q.uid, toDetail(q.summary, email, attachments), q.plan);
+            this.timed('cacheBody', `${f.folder} uid ${m.uid}`, () => this.cacheBody(r.id, f.folder, q.uid, toDetail(q.summary, email, attachments), q.plan));
             byUid.delete(m.uid);
             fetched++;
           }
@@ -1660,7 +1680,7 @@ export class Mail extends DurableObject<MailEnv> {
         }
       });
       this.step(`bodies ${f.kind}: evict`);
-      const evicted = this.cache.evictBodies(r.id, f.folder, BODY_BUDGET_PER_FOLDER);
+      const evicted = this.timed('evictBodies', f.folder, () => this.cache.evictBodies(r.id, f.folder, BODY_BUDGET_PER_FOLDER));
       if (evicted) skipped += evicted;
     }
     return `${fetched} bodies${skipped ? `, ${skipped} skipped` : ''}`;
@@ -1930,7 +1950,21 @@ export class Mail extends DurableObject<MailEnv> {
     // memory), when the person was last active and when the alarm is next due. Only ever the caller's own account.
     app.get('/v1/mail/accounts/:id/debug/cache', async (c: MailContext) => {
       const r = c.get('account');
-      return c.json({ folders: this.cache.report(r.id), log: this.cacheLog, lastActiveAt: this.cache.lastActiveAt(), nextAlarmAt: await this.ctx.storage.getAlarm(), alarmStep: this.cache.state('alarm_step') });
+      const count = (table: string) => this.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM ${table} WHERE account_id = ?`, r.id).toArray()[0]?.n ?? 0;
+      return c.json({
+        folders: this.cache.report(r.id), log: this.cacheLog, lastActiveAt: this.cache.lastActiveAt(), nextAlarmAt: await this.ctx.storage.getAlarm(),
+        alarmStep: this.cache.state('alarm_step'), alarmProfile: JSON.parse(this.cache.state('alarm_profile') || '{}'), alarmOff: this.env.MAIL_ALARM === 'off',
+        tables: { messages: count('mail_messages'), categories: count('mail_categories'), refs: count('mail_refs'), threadIndex: count('mail_thread_index'), overrides: count('mail_category_overrides') },
+        databaseBytes: this.sql.databaseSize,
+      });
+    });
+
+    // One run of the prefetch cache now, for the account's owner (with the alarm off too): what the alarm would do.
+    app.post('/v1/mail/accounts/:id/debug/alarm', async (c: MailContext) => {
+      c.get('account');
+      const start = Date.now();
+      await this.runCache(Date.now() + ALARM_BUDGET_MS);
+      return c.json({ ok: true, ms: Date.now() - start, run: this.cacheLog[this.cacheLog.length - 1] ?? null, alarmProfile: JSON.parse(this.cache.state('alarm_profile') || '{}') });
     });
 
     app.get('/v1/mail/accounts/:id/threads', async (c: MailContext) => {
