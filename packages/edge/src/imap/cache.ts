@@ -170,6 +170,19 @@ const bare = bareId;
 export const participantsOf = (s: MessageSummary, me = ''): string[] => [...new Set([s.from, ...s.to, ...s.cc].map((a) => (a?.address ?? '').toLowerCase()).filter((a) => a && a !== me.toLowerCase()))];
 const headerText = (h: Uint8Array | string | undefined) => (h === undefined ? null : typeof h === 'string' ? h : Buffer.from(h).toString('latin1'));
 
+/**
+ * The SQL of a page of threads (`threadPage`): the threads with a cached message in the folder, each by its newest UID
+ * there (`tops`, at most CACHE_ROWS rows). With a tab's filter, `tops` is materialized and scanned first, and each top's
+ * row of `mail_categories` found by its key (CROSS JOIN fixes the order: left to itself SQLite scanned every cached
+ * category row of the folder — tens of thousands on a long-used inbox — re-running the GROUP BY for each, 30 s of CPU).
+ */
+export function threadPageSql(tab?: string): string {
+  const tops = 'SELECT thread_id, MAX(uid) AS top_uid FROM mail_messages WHERE account_id = ? AND folder = ? AND uid_validity = ? AND uid >= ? AND thread_id IS NOT NULL GROUP BY thread_id HAVING MAX(uid) < ?';
+  if (!tab) return `SELECT thread_id, top_uid FROM (${tops}) ORDER BY top_uid DESC LIMIT ?`;
+  return `WITH t AS MATERIALIZED (${tops}) SELECT t.thread_id, t.top_uid FROM t CROSS JOIN mail_categories c ON c.account_id = ? AND c.folder = ? AND c.uid_validity = ? AND c.uid = t.top_uid
+    LEFT JOIN mail_category_overrides o ON o.account_id = c.account_id AND o.sender = c.sender WHERE ${tab} = ? ORDER BY t.top_uid DESC LIMIT ?`;
+}
+
 /** A folder's row as read. */
 type FolderRow = { account_id: string; folder: string; uid_validity: string; high: number; low: number; modseq: string | null; kind: string; synced_at: number; opened_at: number; error: string | null; error_at: number };
 const toFolder = (r: FolderRow): CachedFolder => ({
@@ -360,13 +373,9 @@ export class MailCache {
    * the tab: `mail_categories` joined on that UID, with the overrides (categorize.ts `effectiveSql`, as object.ts `tabRows` uses it).
    */
   threadPage(accountId: string, folder: string, validity: string, cursor: number, low: number, limit: number, tab?: { tab: string; params: string[]; category: string }): { threadId: string; uid: number }[] {
-    const tops = `SELECT thread_id, MAX(uid) AS top_uid FROM mail_messages WHERE account_id = ? AND folder = ? AND uid_validity = ? AND uid >= ? AND thread_id IS NOT NULL GROUP BY thread_id HAVING MAX(uid) < ?`;
     const rows = tab
-      ? this.sql.exec<{ thread_id: string; top_uid: number }>(
-        `SELECT t.thread_id, t.top_uid FROM (${tops}) t JOIN mail_categories c ON c.account_id = ? AND c.folder = ? AND c.uid_validity = ? AND c.uid = t.top_uid
-         LEFT JOIN mail_category_overrides o ON o.account_id = c.account_id AND o.sender = c.sender WHERE ${tab.tab} = ? ORDER BY t.top_uid DESC LIMIT ?`,
-        accountId, folder, validity, Math.max(1, low), cursor, accountId, folder, validity, ...tab.params, tab.category, limit).toArray()
-      : this.sql.exec<{ thread_id: string; top_uid: number }>(`SELECT thread_id, top_uid FROM (${tops}) ORDER BY top_uid DESC LIMIT ?`, accountId, folder, validity, Math.max(1, low), cursor, limit).toArray();
+      ? this.sql.exec<{ thread_id: string; top_uid: number }>(threadPageSql(tab.tab), accountId, folder, validity, Math.max(1, low), cursor, accountId, folder, validity, ...tab.params, tab.category, limit).toArray()
+      : this.sql.exec<{ thread_id: string; top_uid: number }>(threadPageSql(), accountId, folder, validity, Math.max(1, low), cursor, limit).toArray();
     return rows.map((r) => ({ threadId: r.thread_id, uid: r.top_uid }));
   }
 

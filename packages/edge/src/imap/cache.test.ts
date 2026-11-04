@@ -1,13 +1,15 @@
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import type { FetchMessageObject } from 'imapflow';
-import { ACTIVE_CADENCE_MS, ACTIVE_MS, BODY, MailCache, cadenceMs, flagDiff, nextAlarmAt, walkDown, type Flags, type NewRow, type Sql } from './cache';
+import { ACTIVE_CADENCE_MS, ACTIVE_MS, BODY, MailCache, cadenceMs, flagDiff, nextAlarmAt, threadPageSql, walkDown, type Flags, type NewRow, type Sql } from './cache';
+import { effectiveSql } from './categorize';
 import { toSummary } from './convert';
 
 /** The object's SqlStorage, on node:sqlite. */
-function memory(): Sql {
+function memory(): Sql & { db: DatabaseSync } {
   const db = new DatabaseSync(':memory:');
   return {
+    db,
     exec(query, ...bindings) {
       const statement = db.prepare(query);
       // A statement that returns nothing (DDL, DELETE) has no columns; `all()` on it is fine too, but keep the cost down.
@@ -336,5 +338,28 @@ describe('MailCache threads', () => {
     const d = cache.pendingDetail(A, F, 2)!;
     expect(d).toMatchObject({ uid: 2, subject: 'Re: Plans', inReplyTo: 'm1@example.com', references: ['m1@example.com'], attachments: [], replyTo: [], bcc: [] });
     expect(cache.pendingDetail(A, F, 9)).toBeNull();
+  });
+});
+
+describe("a tab's thread page", () => {
+  it('finds each top message\'s category by its key, never scanning the categories (a long-used inbox has tens of thousands)', () => {
+    const sql = memory();
+    const cache = new MailCache(sql);
+    cache.init();
+    // The tabs' tables, as object.ts's DDL makes them.
+    sql.db.exec(`CREATE TABLE mail_categories (account_id TEXT NOT NULL, folder TEXT NOT NULL, uid_validity TEXT NOT NULL, uid INTEGER NOT NULL, sender TEXT NOT NULL, from_name TEXT NOT NULL, subject TEXT NOT NULL, date INTEGER NOT NULL, category TEXT NOT NULL, reason TEXT NOT NULL, PRIMARY KEY (account_id, folder, uid_validity, uid));
+      CREATE TABLE mail_category_overrides (account_id TEXT NOT NULL, sender TEXT NOT NULL, category TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (account_id, sender))`);
+    cache.touchFolder(A, F, 'inbox', 1000, true);
+    cache.resetFolder(A, F, V);
+    cache.insert(A, F, V, [1, 2, 3, 4].map((u) => row(fetched(u, { threadId: String(u % 2) }))), 1000);
+    const ins = sql.db.prepare('INSERT INTO mail_categories VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    for (let u = 1; u <= 20_000; u++) ins.run(A, F, V, u, 'ann@example.com', 'Ann', 's', u, u % 2 ? 'primary' : 'promotions', 'r');
+    const e = effectiveSql(['promotions']);
+    const plan = sql.db.prepare(`EXPLAIN QUERY PLAN ${threadPageSql(e.sql)}`).all(A, F, V, 1, Number.MAX_SAFE_INTEGER, A, F, V, ...e.params, 'promotions', 10).map((r) => String(r.detail));
+    expect(plan.some((d) => /SEARCH c USING .*uid=\?/.test(d))).toBe(true);
+    expect(plan.some((d) => /^SCAN c\b/.test(d))).toBe(false);
+    expect(cache.threadPage(A, F, V, Number.MAX_SAFE_INTEGER, 1, 10, { tab: e.sql, params: e.params, category: 'promotions' })).toEqual([{ threadId: 's:0', uid: 4 }]);
+    expect(cache.threadPage(A, F, V, Number.MAX_SAFE_INTEGER, 1, 10, { tab: e.sql, params: e.params, category: 'primary' })).toEqual([{ threadId: 's:1', uid: 3 }]);
+    expect(cache.threadPage(A, F, V, Number.MAX_SAFE_INTEGER, 1, 10).map((p) => p.uid)).toEqual([4, 3]);
   });
 });
