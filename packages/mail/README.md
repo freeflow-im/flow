@@ -25,7 +25,9 @@ Worker holds the credentials and speaks IMAP and SMTP.
   (j/k over the conversations, n/p over the open thread's messages, Enter, e, #, r, a, f, c, u, /, Esc). Reply, reply all
   and forward answer the thread's last message (`lib/threads.ts` `replyTarget`), or the one whose own buttons were used.
 - `src/components/Compose.tsx` — compose, reply, reply all, forward: address chips (`AddressField.tsx`), TipTap
-  StarterKit with Link (`Editor.tsx`, loaded on first use), attachments as base64 up to 20 MB in all.
+  StarterKit with Link and a picture node (`Editor.tsx`, loaded on first use; a picture pasted from the clipboard goes in at
+  the caret), attachments as base64 up to 20 MB in all. Sent, every picture the body shows from a data: URL or one of the
+  app's own attachment URLs (a quoted original's, a draft's) becomes an inline part shown by cid (`lib/inlineImages.ts`).
 - `src/components/AddressField.tsx` — the To/Cc/Bcc chips, with completion from the account's contacts (`GET …/contacts`:
   the people written to and heard from, docs/specs/mail-api.md Contacts) under the box as the person types.
 - `src/components/AccountForms.tsx` — adding an account (email → `/v1/mail/providers` → name and password, Advanced

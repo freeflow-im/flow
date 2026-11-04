@@ -39,20 +39,23 @@ function longDate(iso: string): string {
 
 const list = (as: Address[]) => as.map((a) => escapeHtml(formatAddress(a))).join(', ');
 
-/** The original's body as HTML to quote: cleaned, with nothing remote, and plain text kept readable. */
-function originalBody(m: MessageDetail): string {
-  if (m.html) return sanitizeEmailHtml(m.html, { allowRemote: false }).html;
+/** Where a message's cid: picture is read from (its attachment URL), by its Content-ID. */
+export type CidUrl = (contentId: string) => string | null;
+
+/** The original's body as HTML to quote: cleaned, with nothing remote, its own pictures from their attachments, and plain text kept readable. */
+function originalBody(m: MessageDetail, cidUrl?: CidUrl): string {
+  if (m.html) return sanitizeEmailHtml(m.html, { allowRemote: false, ...(cidUrl ? { cidUrl } : {}) }).html;
   return textToHtml(m.text ?? '');
 }
 
 /** A saved draft, opened to edit and send: as it was saved, its own attachments carried over. */
-export function fromDraft(m: MessageDetail): ComposeDraft {
+export function fromDraft(m: MessageDetail, cidUrl?: CidUrl): ComposeDraft {
   return {
     to: m.to,
     cc: m.cc,
     bcc: m.bcc,
     subject: m.subject,
-    html: originalBody(m),
+    html: originalBody(m, cidUrl),
     ...(m.inReplyTo ? { inReplyTo: m.inReplyTo } : {}),
     ...(m.references.length ? { references: m.references } : {}),
     forwardAttachments: m.attachments.filter((a) => !a.inline).map(({ index, filename, mimeType, size }) => ({ index, filename, mimeType, size })),
@@ -60,7 +63,7 @@ export function fromDraft(m: MessageDetail): ComposeDraft {
 }
 
 /** The new message for replying to, replying to everyone on, or forwarding `m`, sent from `me`. */
-export function prefill(mode: Exclude<ComposeMode, 'new' | 'draft'>, m: MessageDetail, me: string): ComposeDraft {
+export function prefill(mode: Exclude<ComposeMode, 'new' | 'draft'>, m: MessageDetail, me: string, cidUrl?: CidUrl): ComposeDraft {
   const references = [...m.references, ...(m.messageId ? [m.messageId] : [])].filter((r, i, all) => all.indexOf(r) === i);
   const threading = m.messageId ? { inReplyTo: m.messageId, references } : {};
   if (mode === 'forward') {
@@ -77,7 +80,7 @@ export function prefill(mode: Exclude<ComposeMode, 'new' | 'draft'>, m: MessageD
       cc: [],
       bcc: [],
       subject: forwardSubject(m.subject),
-      html: `<p></p><p>${header}</p>${originalBody(m)}`,
+      html: `<p></p><p>${header}</p>${originalBody(m, cidUrl)}`,
       forwardAttachments: m.attachments.filter((a) => !a.inline).map(({ index, filename, mimeType, size }) => ({ index, filename, mimeType, size })),
     };
   }
@@ -92,7 +95,7 @@ export function prefill(mode: Exclude<ComposeMode, 'new' | 'draft'>, m: MessageD
     cc,
     bcc: [],
     subject: replySubject(m.subject),
-    html: `<p></p><p>On ${escapeHtml(longDate(m.date))}, ${who} wrote:</p><blockquote>${originalBody(m)}</blockquote>`,
+    html: `<p></p><p>On ${escapeHtml(longDate(m.date))}, ${who} wrote:</p><blockquote>${originalBody(m, cidUrl)}</blockquote>`,
     ...threading,
   };
 }

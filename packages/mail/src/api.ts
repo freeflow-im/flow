@@ -153,6 +153,9 @@ export interface OutgoingAttachment {
   filename: string;
   contentType: string;
   contentBase64: string;
+  /** An inline picture the HTML shows as `cid:<contentId>` (bare): sent as a related part, not a file. */
+  contentId?: string;
+  inline?: boolean;
 }
 export interface OutgoingMessage {
   to: Address[];

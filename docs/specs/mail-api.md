@@ -100,11 +100,14 @@ interface MessageDetail extends Omit<MessageSummary, 'attachments'> {
 - `POST /v1/mail/accounts/:id/messages/delete` body `{ folder, uids: number[], trashOnly?: boolean }` → moves to Trash (or expunges if already in Trash) → `{ ok: true }`.
   With `trashOnly: true` it never expunges: an account with no Trash folder, or messages already in Trash, are `409 conflict` and nothing changes.
 - `POST /v1/mail/accounts/:id/send` body
-  `{ to: Address[], cc?: Address[], bcc?: Address[], subject: string, html: string, text?: string, inReplyTo?: string, references?: string[], attachments?: { filename: string; contentType: string; contentBase64: string }[] }`
+  `{ to: Address[], cc?: Address[], bcc?: Address[], subject: string, html: string, text?: string, inReplyTo?: string, references?: string[], attachments?: { filename: string; contentType: string; contentBase64: string; contentId?: string; inline?: boolean }[] }`
   → sends over SMTP as the account (From = displayName <email>), appends a copy to the Sent folder (skip if the provider auto-saves, e.g. Gmail),
   sets \Answered on the replied message when inReplyTo matches; → `{ ok: true, messageId: string }`. Max 20 MB total.
-  Two optional fields (2026-11-03): `attachFrom: { folder, uid }` attaches that message's attachments (not its inline
-  pictures), as a forward does, read in the Mail object instead of sent by the client; `replacesDraft: { folder, uid }`
+  An attachment with `contentId` (2026-11-04; bare, no angle brackets) is an inline picture the HTML shows as `cid:<contentId>`:
+  sent as a related part with that Content-ID and `inline` disposition, not as a file (the composer sends pasted pictures, and
+  the pictures of a quoted original or a draft, this way: `packages/mail/src/lib/inlineImages.ts`).
+  Two optional fields (2026-11-03): `attachFrom: { folder, uid }` attaches that message's attachments (and, since 2026-11-04, its
+  inline pictures where `html` still shows them by cid), as a forward does, read in the Mail object instead of sent by the client; `replacesDraft: { folder, uid }`
   deletes that draft once the message is sent (Mail's Edit draft, and `send_mail` with a draft).
 
 ### Drafts (2026-11-03)
