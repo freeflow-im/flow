@@ -103,6 +103,16 @@ object through the Worker's `MAIL` binding (`Docs.mailOf`), over its HTTP API (`
   `save_mail_attachment_to_docs` (`assistantMailSchemas`, `runAssistantMailTool`; never `send_mail`), with a line in its
   prompt: it drafts and gives the link, and the user sends from Mail. Saved attachments go in the chat's scope. These are
   on the Worker only; `packages/docs` (desktop, AWS) has no Mail. The Workspace client labels them (`describe.ts`).
+- **The assistant in Mail.** FreeFlow Mail's Assistant button opens the same assistant in a panel (`packages/mail`:
+  `components/AssistantPanel.tsx`, `hooks/assistant.ts`, `lib/assistant.ts`), in the Docs object of the organization the
+  suite bar has selected (`?workspace=` on `/api/agent*`), in a chat of its own (`MAIL_CHAT`, `'mail'`). Each turn sends a
+  `page: 'mail'` context (`MailContext` in `shared/agent/protocol.ts`): the account, folder, inbox tab and search, the open
+  message (`id` in the tools' form, subject, from, date) and the checked messages' ids; `renderMailContext` (`prompt.ts`)
+  quotes the email's text so it cannot close the block. The browser tool `open_mail_message` shows a message in Mail
+  (Docs refuses it; Mail refuses Docs' browser tools). `tool_end` and the transcript carry the result of the tools in
+  `SHOWN_RESULTS` (`create_mail_draft`, `save_mail_attachment_to_docs`), so the chat shows **Open draft** (Compose with the
+  draft) and **Open in Docs**; a draft made refreshes Mail's lists. The panel reuses Docs' protocol, stream reader
+  (`client/src/agent/stream.ts`), tool labels and `ChatMarkdown` from Docs' sources (`src/lib/docsAgent.ts`).
 - Tests: `src/imap/mailTools.test.ts` (ids, scope gating, the tools against a fake Mail object), `mailText.test.ts`
   (HTML to text, Markdown, reply and forward, a draft's MIME), `mailMcp.test.ts` (`tools/list` per scope set through
   `handleMcp`), `assistantMail.test.ts`, and `test/e2e-mail-mcp.mjs` against GreenMail (its header says how).

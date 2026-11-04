@@ -112,6 +112,8 @@ interface MessageDetail extends MessageSummary {
 
 Agents use Mail through the MCP endpoint (`docs/specs/web-mcp.md`, Mail tools) and the Docs assistant, both over this API in
 the caller's own Mail object (`src/imap/mailTools.ts`). Message ids there are `<accountId>:<folder>:<uid>`.
+Mail's own Assistant panel is that Docs assistant, with the open message as its context (`docs/specs/web-mcp.md`, The
+assistant in Mail); it drafts and never sends.
 
 ## Inbox tabs
 

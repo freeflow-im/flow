@@ -12,6 +12,7 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "types": ["node", "vite/client"]
   },
   "include": ["src", "mock", "vite.config.ts", "vitest.config.ts"]

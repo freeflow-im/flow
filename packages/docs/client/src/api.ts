@@ -9,6 +9,7 @@ import type { FilePreview } from '../../shared/preview.ts';
 import { CELL_IMAGE_TOO_LARGE, type ConnectedAgent, type DeletedFile, type NewFilesSettings, type NewFilesUpdate, type SheetMeta, type StoredFile, type Workbook } from '../../shared/types.ts';
 import type { ZipEntry, ZipOfficeView } from '../../shared/zip.ts';
 import { activeOrganizationId } from './suite.ts';
+import { readAgentEvents } from './agent/stream.ts';
 
 /** What can have a public link: a presentation, or a stored file (a video). */
 export type SharedKind = 'deck' | 'file';
@@ -454,26 +455,8 @@ async function streamAgentTurn(body: AgentTurnRequest, signal: AbortSignal, onEv
     const data = await res.json().catch(() => ({}));
     throw new ApiError(res.status, (data as { error?: string }).error ?? `Request failed (${res.status})`);
   }
-  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
-  let buf = '';
   // The server always ends a turn with done, client_tools or error; a stream that stops without one was cut
   // off (for example by the server restarting).
-  let ended = false;
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += value;
-    let end;
-    while ((end = buf.indexOf('\n\n')) >= 0) {
-      const chunk = buf.slice(0, end);
-      buf = buf.slice(end + 2);
-      for (const line of chunk.split('\n')) {
-        if (!line.startsWith('data: ')) continue;
-        const event = JSON.parse(line.slice(6)) as AgentEvent;
-        if (event.type === 'done' || event.type === 'client_tools' || event.type === 'error') ended = true;
-        onEvent(event);
-      }
-    }
-  }
+  const ended = await readAgentEvents(res.body, onEvent);
   if (!ended) throw new ApiError(0, 'The connection to the server was interrupted. Send your message again.');
 }

@@ -79,3 +79,82 @@ body {
   height: 0;
   pointer-events: none;
 }
+
+/* The assistant's replies (Docs' ChatMarkdown, components/AssistantPanel.tsx): Markdown under Tailwind's reset. */
+.agent-md {
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.agent-md > :first-child {
+  margin-top: 0;
+}
+.agent-md > :last-child {
+  margin-bottom: 0;
+}
+.agent-md p,
+.agent-md ul,
+.agent-md ol,
+.agent-md pre,
+.agent-md blockquote,
+.agent-md-table {
+  margin: 0 0 0.6em;
+}
+.agent-md ul,
+.agent-md ol {
+  padding-left: 1.4em;
+}
+.agent-md ul {
+  list-style: disc;
+}
+.agent-md ol {
+  list-style: decimal;
+}
+.agent-md h1,
+.agent-md h2,
+.agent-md h3,
+.agent-md h4 {
+  font-weight: 600;
+  margin: 0.8em 0 0.4em;
+}
+.agent-md a {
+  color: var(--color-primary);
+  text-decoration: underline;
+}
+.agent-md code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+  background: var(--color-track);
+  border-radius: 4px;
+  padding: 0 3px;
+}
+.agent-md pre {
+  background: var(--color-panel);
+  border-radius: 6px;
+  padding: 8px 10px;
+  overflow-x: auto;
+}
+.agent-md pre code {
+  background: none;
+  padding: 0;
+}
+.agent-md blockquote {
+  border-left: 3px solid var(--color-border);
+  padding-left: 10px;
+  color: var(--color-muted);
+}
+.agent-md-table {
+  overflow-x: auto;
+}
+.agent-md table {
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.agent-md th,
+.agent-md td {
+  border: 1px solid var(--color-hairline);
+  padding: 4px 8px;
+  text-align: left;
+}
+.agent-md-img {
+  color: var(--color-muted);
+}

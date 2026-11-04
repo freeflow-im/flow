@@ -28,6 +28,11 @@ Worker holds the credentials and speaks IMAP and SMTP.
   address (`&tab=`). "Move to tab" is in the dense list's row menu, the bulk actions and the message's Move menu, and
   with a mouse a row (or the checked rows) drags onto a tab or a folder (`src/lib/dnd.ts`); it moves the sender's mail,
   with Undo.
+- `src/components/AssistantPanel.tsx` — the suite bar's Assistant: a resizable panel on the right (over the mail under
+  1100px), open or closed per browser. It is Docs' assistant (`hooks/assistant.ts` talks to `/api/agent*` in the selected
+  organization's Docs, chat `mail`), told what is open (`lib/assistant.ts` `mailContext`), and it drafts but never sends:
+  a draft it made has **Open draft** (Compose). Docs' protocol, stream reader, tool labels and reply Markdown come from
+  Docs' sources (`src/lib/docsAgent.ts`); docs/specs/web-mcp.md, The assistant in Mail.
 - `src/lib/` — the pure parts, with tests: `sanitize.ts` (HTML), `addresses.ts` (chips), `compose.ts` (reply and
   forward prefill), `folders.ts` (folder order and tree), `tabs.ts` (inbox tabs), `dnd.ts` (dragging rows), `format.ts`.
 

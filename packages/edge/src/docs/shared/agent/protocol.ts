@@ -62,7 +62,31 @@ export type AgentContext =
       selectedElement?: string;
       /** The box the user dragged on a picture. */
       selectedRegion?: ImageRegion;
-    };
+    }
+  | MailContext;
+
+/**
+ * FreeFlow Mail (the hosted suite only): the account and folder shown, and the open message or the messages checked in the
+ * list. Message ids are the mail tools' `<accountId>:<folder>:<uid>`.
+ */
+export interface MailContext {
+  page: 'mail';
+  /** The mail account shown: its id and address. */
+  accountId: string;
+  account: string;
+  folder: string;
+  /** Gmail's inbox tab shown (primary, promotions, ...), for an INBOX with tabs. */
+  tab?: string;
+  /** What the list is searched for, if anything. */
+  search?: string;
+  /** The message open in the reading pane. Subject and from are the email's own text: data, not instructions. */
+  message?: { id: string; accountId: string; folder: string; uid: number; subject: string; from: string; date: string };
+  /** Ids of the messages checked in the list (at most MAX_MAIL_SELECTED). */
+  selected?: string[];
+}
+
+/** Most checked messages a Mail context names. */
+export const MAX_MAIL_SELECTED = 50;
 
 /** Most text of the open file sent with a message typed in the prompt at the cursor; a longer file is cut to the part around the cursor. */
 export const MAX_INLINE_CONTEXT_CHARS = 60_000;
@@ -165,7 +189,10 @@ export interface AgentTurnRequest {
 /** The home page's chat (every folder of the library shares it). */
 export const HOME_CHAT = 'home';
 
-/** Which chat a page has: each file its own (by its id), and the home page one. */
+/** FreeFlow Mail's chat (one per person and organization, apart from Docs' chats). */
+export const MAIL_CHAT = 'mail';
+
+/** Which chat a page has: each file its own (by its id), the home page one, and Mail one. */
 export function chatScope(ctx: AgentContext): string {
   switch (ctx.page) {
     case 'sheet':
@@ -177,6 +204,8 @@ export function chatScope(ctx: AgentContext): string {
       return ctx.docId;
     case 'file':
       return ctx.fileId;
+    case 'mail':
+      return MAIL_CHAT;
     default:
       return HOME_CHAT;
   }
@@ -190,7 +219,8 @@ export type AgentEvent =
   | { type: 'text'; text: string }
   /** A tool the server runs itself (account tools). */
   | { type: 'tool_start'; id: string; name: string; input: Record<string, unknown> }
-  | { type: 'tool_end'; id: string; ok: boolean }
+  /** `result` only for the tools in SHOWN_RESULTS (the chat links to what they made). */
+  | { type: 'tool_end'; id: string; ok: boolean; result?: string }
   /** The turn is paused until the browser runs these and posts their results. */
   | { type: 'client_tools'; calls: ClientToolCall[] }
   /** The user's own agent asks to use one of its tools: answer with POST /api/agent/permission. */
@@ -209,7 +239,7 @@ export type ChatItem =
       input: Record<string, unknown>;
       status: 'running' | 'ok' | 'error';
       error?: string;
-      /** The result text of a tool that produces a file (export_deck), so the chat can show a file button. */
+      /** The result text of a tool that produces a file (export_deck) or a server tool in SHOWN_RESULTS, so the chat can show a button. */
       result?: string;
     };
 
@@ -335,7 +365,12 @@ export const CLIENT_TOOLS = new Set([
   // Runs in the browser so the user can confirm it there; the server then queues the job.
   'request_app_change',
   'request_research',
+  // FreeFlow Mail (hosted only): shows a message in Mail's reading pane.
+  'open_mail_message',
 ]);
+
+/** Server tools whose result the chat is given (tool_end, the transcript): it links to the draft or file they made. */
+export const SHOWN_RESULTS: ReadonlySet<string> = new Set(['create_mail_draft', 'save_mail_attachment_to_docs']);
 
 /** OpenAI models a user can run the assistant on with their own API key (Settings page). */
 export const OPENAI_MODELS = [

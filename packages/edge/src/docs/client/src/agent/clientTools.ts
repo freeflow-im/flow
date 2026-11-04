@@ -302,6 +302,9 @@ export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): P
     return runDocTool(call, env);
   }
 
+  // FreeFlow Mail's own tool (packages/mail): Docs cannot show a message.
+  if (call.name === 'open_mail_message') throw new ToolError('Messages open only in FreeFlow Mail; the user is in Docs. Give them the message\'s link instead.');
+
   const ctl = requireSheet(env);
   const run = (fn: Parameters<SheetController['runAgent']>[1]) => {
     try {
