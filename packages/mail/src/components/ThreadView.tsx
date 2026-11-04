@@ -375,8 +375,8 @@ function ThreadMessageItem({ ref, accountId, me, message: m, open, last, focused
       <div
         className="flex cursor-pointer items-start gap-3 px-3 py-2.5"
         onClick={(e) => {
-          // The buttons in the header are their own; the rest opens or closes the message.
-          if ((e.target as HTMLElement).closest('button, a')) return;
+          // The buttons, links and the Details disclosure in the header are their own; the rest opens or closes the message.
+          if ((e.target as HTMLElement).closest('button, a, details')) return;
           onToggle();
         }}
       >
