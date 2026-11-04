@@ -4,7 +4,7 @@
 // and a server host containing "bad" answers connect_failed; "stale" connects an account whose password then stops working.
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
-import type { Category, MailAccount, MessageSummary, NewAccount, ProviderPreset, TabCategory } from '../src/api';
+import type { Category, MailAccount, MessageSummary, NewAccount, ProviderPreset, TabCategory, ThreadSummary } from '../src/api';
 import { sampleMailbox, type Mailbox, type StoredMessage } from './data';
 
 const PRESETS: Record<string, ProviderPreset> = {
@@ -61,10 +61,32 @@ export function createMockApi(empty = false) {
     return c !== 'primary' && b.account.tabs.includes(c) ? c : 'primary';
   };
   const withTab = (b: Mailbox, m: StoredMessage, s: MessageSummary): MessageSummary => (m.folder === 'INBOX' && b.account.tabs.length ? { ...s, category: tabOf(b, m) } : s);
-  const summary = (m: StoredMessage): MessageSummary => ({
+  /**
+   * The conversation each message is in, by its In-Reply-To and References (as the server threads mail without Gmail's
+   * thread ids): messages linked to one another share the thread of the oldest, named `t:<its Message-ID>`.
+   */
+  const threadIds = (b: Mailbox): Map<StoredMessage, string> => {
+    const byId = new Map(b.messages.filter((m) => m.messageId).map((m) => [m.messageId!, m]));
+    const parent = new Map<StoredMessage, StoredMessage>();
+    const rootOf = (m: StoredMessage): StoredMessage => {
+      let r = m;
+      while (parent.get(r) && parent.get(r) !== r) r = parent.get(r)!;
+      return r;
+    };
+    const join = (a: StoredMessage, c: StoredMessage) => {
+      const ra = rootOf(a), rc = rootOf(c);
+      if (ra === rc) return;
+      // The older message's thread wins.
+      ra.date <= rc.date ? parent.set(rc, ra) : parent.set(ra, rc);
+    };
+    for (const m of b.messages) for (const ref of [m.inReplyTo, ...m.references]) { const other = ref && byId.get(ref); if (other) join(m, other); }
+    return new Map(b.messages.map((m) => { const r = rootOf(m); return [m, `t:${r.messageId ?? `${r.folder}:${r.uid}`}`]; }));
+  };
+  const summary = (m: StoredMessage, threadId?: string): MessageSummary => ({
     uid: m.uid,
     folder: m.folder,
     messageId: m.messageId,
+    ...(threadId ? { threadId } : {}),
     from: m.from,
     to: m.to,
     cc: m.cc,
@@ -142,6 +164,44 @@ export function createMockApi(empty = false) {
       const rest = m[2]!;
       if (b.account.status !== 'ok') throw new HttpError(400, b.account.status, b.account.statusMessage ?? 'The mail server refused the login.');
       if (rest === 'folders') return { status: 200, json: { folders: counted(b) } };
+      if (rest === 'threads' && method === 'GET') {
+        const folder = q.get('folder') ?? 'INBOX';
+        const limit = Number(q.get('limit') ?? 50);
+        const before = q.get('before') ? Number(q.get('before')) : Infinity;
+        const category = folder === 'INBOX' && b.account.tabs.length ? (q.get('category') as Category | null) : null;
+        const ids = threadIds(b);
+        const rows = new Map<string, ThreadSummary>();
+        for (const x of [...b.messages].sort((x, y) => y.uid - x.uid)) {
+          if (x.folder !== folder || x.uid >= before || (category && tabOf(b, x) !== category)) continue;
+          const id = ids.get(x)!;
+          const all = b.messages.filter((y) => ids.get(y) === id).sort((x, y) => x.date.localeCompare(y.date));
+          const row = rows.get(id);
+          if (row) {
+            row.uids.push(x.uid);
+            continue;
+          }
+          const latest = withTab(b, x, summary(x, id));
+          rows.set(id, {
+            threadId: id, folder, uid: x.uid, uids: [x.uid], latest, count: all.length, unread: all.filter((y) => !y.seen).length, flagged: all.some((y) => y.flagged),
+            participants: all.flatMap((y) => (y.from ? [y.from] : [])).filter((a, i, list) => list.findIndex((o) => o.address === a.address) === i),
+            date: all[all.length - 1]!.date, folders: [...new Set(all.map((y) => y.folder))], ...(latest.category ? { category: latest.category } : {}),
+          });
+        }
+        const page = [...rows.values()].slice(0, limit);
+        await new Promise((r) => setTimeout(r, 150));
+        return { status: 200, json: { threads: page, next: rows.size > limit ? page[page.length - 1]!.uid : null } };
+      }
+      if ((m = rest.match(/^threads\/(.+)$/)) && method === 'GET') {
+        const id = decodeURIComponent(m[1]!);
+        const ids = threadIds(b);
+        const all = b.messages.filter((y) => ids.get(y) === id).sort((x, y) => x.date.localeCompare(y.date));
+        if (!all.length) throw new HttpError(404, 'not_found', 'No such conversation');
+        await new Promise((r) => setTimeout(r, 100));
+        return {
+          status: 200,
+          json: { thread: { threadId: id, messages: all.map((x) => ({ ...x, threadId: id, attachments: x.attachments.map((a, index) => ({ index, filename: a.filename, mimeType: a.mimeType, size: a.bytes.length, contentId: a.contentId, inline: a.inline })) })) } },
+        };
+      }
       if (rest === 'messages' && method === 'GET') {
         const folder = q.get('folder') ?? 'INBOX';
         const limit = Number(q.get('limit') ?? 50);
@@ -156,7 +216,8 @@ export function createMockApi(empty = false) {
           .sort((x, y) => y.uid - x.uid);
         const page = all.slice(0, limit);
         await new Promise((r) => setTimeout(r, 150));
-        return { status: 200, json: { messages: page.map((x) => withTab(b, x, summary(x))), next: all.length > limit ? page[page.length - 1]!.uid : null } };
+        const ids = threadIds(b);
+        return { status: 200, json: { messages: page.map((x) => withTab(b, x, summary(x, ids.get(x)))), next: all.length > limit ? page[page.length - 1]!.uid : null } };
       }
       if (rest === 'messages/category') {
         const { folder, uids, category } = body as { folder: string; uids: number[]; category: Category };
@@ -235,7 +296,7 @@ export function createMockApi(empty = false) {
         await new Promise((r) => setTimeout(r, 100));
         return {
           status: 200,
-          json: { message: { ...x, attachments: x.attachments.map((a, index) => ({ index, filename: a.filename, mimeType: a.mimeType, size: a.bytes.length, contentId: a.contentId, inline: a.inline })) } },
+          json: { message: { ...x, threadId: threadIds(b).get(x), attachments: x.attachments.map((a, index) => ({ index, filename: a.filename, mimeType: a.mimeType, size: a.bytes.length, contentId: a.contentId, inline: a.inline })) } },
         };
       }
     }

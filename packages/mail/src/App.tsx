@@ -1,23 +1,23 @@
-// FreeFlow Mail: the suite bar, the folders on the left, the list and the reading pane on the right (side by side on
-// wide screens; the list, then the message with a back button, under 900px; the folders behind a button under
-// 760px), compose and the account dialogs, and the keyboard.
+// FreeFlow Mail: the suite bar, the folders on the left, the list of conversations and the reading pane on the right
+// (side by side on wide screens; the list, then the thread with a back button, under 900px; the folders behind a button
+// under 760px), compose and the account dialogs, and the keyboard.
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { openSuiteSearch } from '@flow/suite-bar';
-import { MailApiError, mailApi, type Category, type MailAccount, type MessageSummary } from './api';
+import { MailApiError, mailApi, type Category, type MailAccount, type MessageDetail, type ThreadSummary } from './api';
 import { AccountSettingsDialog, AddAccountDialog } from './components/AccountForms';
 import type { ComposeRequest } from './components/Compose';
 import { ConnectMail } from './components/ConnectMail';
 import { InboxTabs } from './components/InboxTabs';
 import { MailSuiteBar } from './components/MailSuiteBar';
 import { MessageList, type ListTab } from './components/MessageList';
-import { MessageView } from './components/MessageView';
+import { ThreadView, type ThreadViewHandle } from './components/ThreadView';
 import { ResizeHandle } from './components/ResizeHandle';
 import { setReadingPane, useReadingPane } from './lib/layoutPref';
 import { Sidebar } from './components/Sidebar';
 import { useMediaQuery, useResizableWidth } from './hooks/layout';
-import { keys, prefetchMessage, useAccounts, useFolders, useMessage, useMessageActions, useMessages } from './hooks/mail';
+import { fetchBody, keys, prefetchThread, useAccounts, useFolders, useMessageActions, useMessages, useThread, useThreads } from './hooks/mail';
 import { useMailAssistant } from './hooks/assistant';
 import { useOrganizations } from './hooks/organization';
 import { mailContext, setAssistantOpen, useAssistantOpen, type MessageRef } from './lib/assistant';
@@ -25,6 +25,7 @@ import { emptyDraft, fromDraft, prefill, type ComposeMode } from './lib/compose'
 import { findSpecial, folderLabel } from './lib/folders';
 import { folderDropTarget, tabDropTarget, useCanDrag } from './lib/dnd';
 import { TAB_INFO, reasonText, tabFromParam, tabsOf, writeTabParam } from './lib/tabs';
+import { expandedByDefault, groupByThread, replyTarget, soloThreadId } from './lib/threads';
 import { cn } from './lib/utils';
 
 // The editor (TipTap) is most of the code: it loads when compose first opens.
@@ -55,7 +56,7 @@ export function App() {
   const qc = useQueryClient();
   const accounts = useAccounts();
   const narrow = useMediaQuery('(max-width: 899px)');
-  // The open message in place of the list (Gmail's way, or any narrow screen), or beside it.
+  // The open thread in place of the list (Gmail's way, or any narrow screen), or beside it.
   const readingPane = useReadingPane();
   const stacked = narrow || readingPane === 'full';
   const tiny = useMediaQuery('(max-width: 759px)');
@@ -82,10 +83,12 @@ export function App() {
   const [searchText, setSearchText] = useState('');
   const [q, setQ] = useState('');
   const [tab, setTab] = useState<ListTab>('all');
-  const [openUid, setOpenUid] = useState<number | null>(() => (initialParam('uid') ? Number(initialParam('uid')) : null));
-  const [cursorUid, setCursorUid] = useState<number | null>(null);
-  const [checked, setChecked] = useState<Set<number>>(new Set());
-  const lastChecked = useRef<number | null>(null);
+  // The open conversation; a link to one message (`uid=`) opens the thread it is in once that is known.
+  const [openId, setOpenId] = useState<string | null>(() => initialParam('thread'));
+  const [pendingUid, setPendingUid] = useState<number | null>(() => (initialParam('uid') && !initialParam('thread') ? Number(initialParam('uid')) : null));
+  const [cursorId, setCursorId] = useState<string | null>(null);
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const lastChecked = useRef<string | null>(null);
   const [compose, setCompose] = useState<ComposeRequest | null>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [drawer, setDrawer] = useState(false);
@@ -99,11 +102,49 @@ export function App() {
   const category: Category | null = showTabs && !q ? inboxTab : null;
   const canDrag = useCanDrag();
 
-  const messages = useMessages(account?.id ?? null, folder, q, category);
-  const all = useMemo(() => messages.data?.pages.flatMap((p) => p.messages) ?? [], [messages.data]);
-  const visible = useMemo(() => (tab === 'unread' ? all.filter((m) => !m.seen || m.uid === openUid) : all), [all, tab, openUid]);
-  const message = useMessage(account?.id ?? null, folder, openUid);
+  // A folder's own pages are conversations; a search is messages, grouped here.
+  const threads = useThreads(account?.id ?? null, folder, category, !q);
+  const messages = useMessages(account?.id ?? null, folder, q, null, !!q);
+  const listing = q ? messages : threads;
+  const rows = useMemo<ThreadSummary[]>(
+    () => (q ? groupByThread(messages.data?.pages.flatMap((p) => p.messages) ?? []) : (threads.data?.pages.flatMap((p) => p.threads) ?? [])),
+    [q, messages.data, threads.data],
+  );
+  const visible = useMemo(() => (tab === 'unread' ? rows.filter((t) => t.unread > 0 || t.threadId === openId) : rows), [rows, tab, openId]);
+  const rowOf = useCallback((id: string | null) => (id === null ? undefined : rows.find((t) => t.threadId === id)), [rows]);
+  const thread = useThread(account?.id ?? null, openId, folder);
   const actions = useMessageActions(account?.id ?? null, folder);
+
+  // A link to one message: its thread, from the list when it is there, else asked of the server (a message the server
+  // does not place in a thread opens on its own).
+  useEffect(() => {
+    if (pendingUid === null || !account || !folder) return;
+    const row = rows.find((t) => t.uids.includes(pendingUid));
+    if (row) {
+      setPendingUid(null);
+      setOpenId(row.threadId);
+      setCursorId(row.threadId);
+      return;
+    }
+    if (listing.isPending) return;
+    let cancelled = false;
+    void mailApi.message(account.id, folder, pendingUid).then(
+      (m) => {
+        if (cancelled) return;
+        setPendingUid(null);
+        const id = m.threadId ?? soloThreadId(m.uid);
+        qc.setQueryData(keys.thread(account.id, id), (old: unknown) => old ?? (m.threadId ? undefined : { threadId: id, messages: [m] }));
+        setOpenId(id);
+        setCursorId(id);
+      },
+      () => {
+        if (!cancelled) setPendingUid(null);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingUid, rows, account, folder, listing.isPending, qc]);
 
   // Where we are, in the address (so a reload comes back to it) and the account in this browser.
   useEffect(() => {
@@ -117,10 +158,9 @@ export function App() {
     params.set('account', account.id);
     if (folder) params.set('folder', folder);
     writeTabParam(params, showTabs ? inboxTab : null);
-    if (openUid !== null) params.set('uid', String(openUid));
+    if (openId !== null) params.set('thread', openId);
     window.history.replaceState(null, '', `${import.meta.env.BASE_URL}?${params}`);
-  }, [account, folder, openUid, showTabs, inboxTab]);
-
+  }, [account, folder, openId, showTabs, inboxTab]);
 
   useEffect(() => {
     if (!toast) return;
@@ -128,42 +168,44 @@ export function App() {
     return () => window.clearTimeout(t);
   }, [toast]);
 
-  // Opening a message marks it read (the server's GET does not): once it is on screen, after the frame that shows it, and
-  // not for one passed over before it was drawn.
+  // Opening a thread marks the messages it shows expanded (the unread ones) read, in this folder, once they are on
+  // screen: after the frame that shows them, and not for a thread passed over before it was drawn.
   const marked = useRef(new Set<string>());
   const markSeen = actions.flags.mutate;
+  const threadLoaded = !!thread.data && thread.data.threadId === openId;
   useEffect(() => {
-    const m = message.data;
-    if (!m || m.seen || !account || m.uid !== openUid) return;
-    const key = `${account.id}:${m.folder}:${m.uid}`;
-    if (marked.current.has(key)) return;
+    const t = thread.data;
+    if (!t || !threadLoaded || !account) return;
+    const shown = expandedByDefault(t.messages);
+    const uids = t.messages.filter((m, i) => shown.has(i) && !m.seen && m.folder === folder && !marked.current.has(`${account.id}:${m.folder}:${m.uid}`)).map((m) => m.uid);
+    if (!uids.length) return;
     let timer = 0;
     const frame = requestAnimationFrame(() => {
       timer = window.setTimeout(() => {
-        marked.current.add(key);
-        markSeen({ uids: [m.uid], seen: true });
+        for (const uid of uids) marked.current.add(`${account.id}:${folder}:${uid}`);
+        markSeen({ uids, seen: true });
       }, 0);
     });
     return () => {
       cancelAnimationFrame(frame);
       window.clearTimeout(timer);
     };
-  }, [message.data, account, openUid, markSeen]);
+  }, [thread.data, threadLoaded, account, folder, markSeen]);
 
-  // The next (older) message is read ahead once this one is in, so j opens it at once.
-  const nextUid = useMemo(() => {
-    const i = visible.findIndex((m) => m.uid === openUid);
-    return i >= 0 ? (visible[i + 1]?.uid ?? null) : null;
-  }, [visible, openUid]);
-  const openLoaded = !!message.data && message.data.uid === openUid;
+  // The next (older) conversation is read ahead once this one is in, so j opens it at once.
+  const nextId = useMemo(() => {
+    const i = visible.findIndex((t) => t.threadId === openId);
+    return i >= 0 ? (visible[i + 1]?.threadId ?? null) : null;
+  }, [visible, openId]);
   useEffect(() => {
-    if (!account || !folder || nextUid === null || !openLoaded) return;
-    void prefetchMessage(qc, account.id, folder, nextUid);
-  }, [qc, account, folder, nextUid, openLoaded]);
+    if (!account || !folder || nextId === null || !threadLoaded) return;
+    void prefetchThread(qc, account.id, nextId, folder);
+  }, [qc, account, folder, nextId, threadLoaded]);
 
   const resetSelection = () => {
-    setOpenUid(null);
-    setCursorUid(null);
+    setOpenId(null);
+    setPendingUid(null);
+    setCursorId(null);
     setChecked(new Set());
   };
   const chooseFolder = (path: string) => {
@@ -184,48 +226,53 @@ export function App() {
     setDrawer(false);
   };
 
-  const openMessage = useCallback((uid: number) => {
-    setOpenUid(uid);
-    setCursorUid(uid);
+  const openThread = useCallback((id: string) => {
+    setOpenId(id);
+    setCursorId(id);
   }, []);
 
-  /** The messages an action applies to: the checked ones, else the open one, else the keyboard's. */
-  const targets = (): number[] => (checked.size ? [...checked] : openUid !== null ? [openUid] : cursorUid !== null ? [cursorUid] : []);
-  /** After the open message leaves the list, the next one (older) opens on wide screens, as mail apps do. */
-  const afterRemoving = (uids: number[]) => {
-    const gone = new Set(uids);
-    if (openUid !== null && gone.has(openUid)) {
-      const i = visible.findIndex((m) => m.uid === openUid);
-      const next = visible.slice(i + 1).find((m) => !gone.has(m.uid)) ?? visible.slice(0, i).reverse().find((m) => !gone.has(m.uid));
-      if (next && !stacked) openMessage(next.uid);
+  /** The conversations an action applies to: the checked ones, else the open one, else the keyboard's. */
+  const targetIds = (): string[] => (checked.size ? [...checked] : openId !== null ? [openId] : cursorId !== null ? [cursorId] : []);
+  /** Their messages in this folder (an open thread not in the list, from a link: those of its messages here). */
+  const uidsOf = (ids: string[]): number[] =>
+    ids.flatMap((id) => rowOf(id)?.uids ?? (id === openId && threadLoaded ? thread.data!.messages.filter((m) => m.folder === folder).map((m) => m.uid) : []));
+  /** After the open conversation leaves the list, the next one (older) opens on wide screens, as mail apps do. */
+  const afterRemoving = (ids: string[]) => {
+    const gone = new Set(ids);
+    if (openId !== null && gone.has(openId)) {
+      const i = visible.findIndex((t) => t.threadId === openId);
+      const next = visible.slice(i + 1).find((t) => !gone.has(t.threadId)) ?? visible.slice(0, i).reverse().find((t) => !gone.has(t.threadId));
+      if (next && !stacked) openThread(next.threadId);
       else {
-        setOpenUid(null);
-        setCursorUid(next?.uid ?? null);
+        setOpenId(null);
+        setCursorId(next?.threadId ?? null);
       }
     }
     setChecked(new Set());
   };
-  const plural = (n: number) => (n === 1 ? 'Message' : `${n} messages`);
-  const archive = (uids = targets()) => {
+  const plural = (n: number) => (n === 1 ? 'Conversation' : `${n} conversations`);
+  const archive = (ids = targetIds()) => {
+    const uids = uidsOf(ids);
     if (!uids.length) return;
     const to = findSpecial(folders.data, 'archive') ?? findSpecial(folders.data, 'all');
     if (!to || to.path === folder) return setToast('This account has no Archive folder. Use Move to instead.');
-    afterRemoving(uids);
-    actions.move.mutate({ uids, to: to.path }, { onSuccess: () => setToast(`${plural(uids.length)} archived.`), onError: (e) => setToast(`Could not archive: ${errorText(e)}`) });
+    afterRemoving(ids);
+    actions.move.mutate({ uids, to: to.path }, { onSuccess: () => setToast(`${plural(ids.length)} archived.`), onError: (e) => setToast(`Could not archive: ${errorText(e)}`) });
   };
-  const remove = (uids = targets()) => {
+  const remove = (ids = targetIds()) => {
+    const uids = uidsOf(ids);
     if (!uids.length) return;
-    afterRemoving(uids);
+    afterRemoving(ids);
     const inTrash = folderInfo?.specialUse === 'trash';
-    actions.remove.mutate({ uids }, { onSuccess: () => setToast(inTrash ? `${plural(uids.length)} deleted forever.` : `${plural(uids.length)} moved to Trash.`), onError: (e) => setToast(`Could not delete: ${errorText(e)}`) });
+    actions.remove.mutate({ uids }, { onSuccess: () => setToast(inTrash ? `${plural(ids.length)} deleted forever.` : `${plural(ids.length)} moved to Trash.`), onError: (e) => setToast(`Could not delete: ${errorText(e)}`) });
   };
-  const moveTo = (to: string, uids = targets()) => {
+  const moveTo = (to: string, ids = targetIds()) => {
+    const uids = uidsOf(ids);
     if (!uids.length) return;
-    afterRemoving(uids);
+    afterRemoving(ids);
     const name = folders.data?.find((f) => f.path === to);
-    actions.move.mutate({ uids, to }, { onSuccess: () => setToast(`${plural(uids.length)} moved to ${name ? folderLabel(name) : to}.`), onError: (e) => setToast(`Could not move: ${errorText(e)}`) });
+    actions.move.mutate({ uids, to }, { onSuccess: () => setToast(`${plural(ids.length)} moved to ${name ? folderLabel(name) : to}.`), onError: (e) => setToast(`Could not move: ${errorText(e)}`) });
   };
-  const byUid = (uid: number): MessageSummary | undefined => all.find((m) => m.uid === uid);
   const chooseTab = (tab: Category) => {
     setTabChoice(tab);
     resetSelection();
@@ -237,22 +284,24 @@ export function App() {
   const moveToTab = (uids: number[], tab: Category) => {
     if (!uids.length || !account) return;
     const accountIdNow = account.id;
-    if (category && category !== tab) afterRemoving(uids);
+    const ids = rows.filter((t) => t.uids.some((u) => uids.includes(u))).map((t) => t.threadId);
+    if (category && category !== tab) afterRemoving(ids);
     else setChecked(new Set());
     const label = TAB_INFO[tab].label;
     actions.moveToTab.mutate(
       { uids, category: tab },
       {
         onSuccess: (res) => {
-          const who = res.senders.length === 1 ? (all.find((m) => m.from?.address.toLowerCase() === res.senders[0])?.from?.name || res.senders[0]) : `these ${res.senders.length} senders`;
+          const who = res.senders.length === 1 ? (rows.flatMap((t) => t.participants).find((a) => a.address.toLowerCase() === res.senders[0])?.name || res.senders[0]) : `these ${res.senders.length} senders`;
           setToast({
-            text: res.senders.length ? `Mail from ${who} now goes to ${label}.` : `${plural(uids.length)} moved to ${label}.`,
+            text: res.senders.length ? `Mail from ${who} now goes to ${label}.` : `${plural(ids.length)} moved to ${label}.`,
             action: {
               label: 'Undo',
               run: () =>
                 void mailApi.setSenderTabs(accountIdNow, res.previous).then(
                   () => {
                     void qc.invalidateQueries({ queryKey: keys.allMessages(accountIdNow) });
+                    void qc.invalidateQueries({ queryKey: keys.allThreads(accountIdNow) });
                     setToast('Move undone.');
                   },
                   (e: unknown) => setToast(`Could not undo: ${errorText(e)}`),
@@ -265,35 +314,41 @@ export function App() {
     );
   };
   const setSeen = (uids: number[], seen: boolean) => uids.length && actions.flags.mutate({ uids, seen });
-  const toggleSeen = (uids = targets()) => {
+  /** Whether any message of these conversations, in this folder, is unread (the open thread knows each of its own). */
+  const anyUnread = (ids: string[]) =>
+    ids.some((id) => (id === openId && threadLoaded ? thread.data!.messages.some((m) => m.folder === folder && !m.seen) : (rowOf(id)?.unread ?? 0) > 0));
+  const toggleSeen = (ids = targetIds()) => {
+    const uids = uidsOf(ids);
     if (!uids.length) return;
-    const anyUnread = uids.some((u) => byUid(u)?.seen === false || (u === openUid && message.data?.seen === false));
-    setSeen(uids, anyUnread);
-    // Marking the open message unread closes it, so it stays unread.
-    if (!anyUnread && openUid !== null && uids.includes(openUid)) {
-      marked.current.add(`${account?.id}:${folder}:${openUid}`);
-      if (stacked) setOpenUid(null);
+    const unread = anyUnread(ids);
+    setSeen(uids, unread);
+    // Marking the open conversation unread closes it, so it stays unread.
+    if (!unread && openId !== null && ids.includes(openId)) {
+      for (const uid of uids) marked.current.add(`${account?.id}:${folder}:${uid}`);
+      if (stacked) setOpenId(null);
     }
   };
-  const toggleFlag = (uids = targets()) => {
+  const toggleFlag = (ids = targetIds()) => {
+    const uids = uidsOf(ids);
     if (!uids.length) return;
-    const anyUnflagged = uids.some((u) => !(byUid(u)?.flagged ?? (u === openUid && message.data?.flagged)));
+    const anyUnflagged = ids.some((id) => (id === openId && threadLoaded ? thread.data!.messages.some((m) => m.folder === folder && !m.flagged) : !rowOf(id)?.flagged));
     actions.flags.mutate({ uids, flagged: anyUnflagged });
   };
 
+  /** Compose: new, or an answer to a message of the open thread (the last one unless given). */
   const startCompose = useCallback(
-    (mode: ComposeMode) => {
+    (mode: ComposeMode, m?: MessageDetail) => {
       if (!account) return;
       if (mode === 'new') return setCompose({ mode, draft: emptyDraft() });
-      const m = message.data;
-      if (!m) return;
-      if (mode === 'draft') return setCompose({ mode, draft: fromDraft(m), source: { folder: m.folder, uid: m.uid } });
-      setCompose({ mode, draft: prefill(mode, m, account.email), source: { folder: m.folder, uid: m.uid } });
+      const target = m ?? (thread.data && thread.data.threadId === openId ? replyTarget(thread.data.messages, folder) : undefined);
+      if (!target || ('bodyPending' in target && target.bodyPending)) return;
+      if (mode === 'draft') return setCompose({ mode, draft: fromDraft(target), source: { folder: target.folder, uid: target.uid } });
+      setCompose({ mode, draft: prefill(mode, target, account.email), source: { folder: target.folder, uid: target.uid } });
     },
-    [account, message.data],
+    [account, thread.data, openId, folder],
   );
 
-  /** Shows a message (the assistant's open_mail_message, a link in its chat): its account and folder, then it. */
+  /** Shows a message (the assistant's open_mail_message, a link in its chat): its account and folder, then its thread. */
   const showMessage = (ref: MessageRef): boolean => {
     if (!list.some((a) => a.id === ref.account)) return false;
     setAccountId(ref.account);
@@ -302,8 +357,8 @@ export function App() {
     setQ('');
     setSearchText('');
     setChecked(new Set());
-    setOpenUid(ref.uid);
-    setCursorUid(ref.uid);
+    setOpenId(null);
+    setPendingUid(ref.uid);
     setDrawer(false);
     return true;
   };
@@ -314,56 +369,62 @@ export function App() {
     else setToast('That draft is in a mail account that is not connected here.');
   };
   useEffect(() => {
-    const m = message.data;
-    if (!pendingDraft || !m || account?.id !== pendingDraft.account || m.uid !== pendingDraft.uid || m.folder !== pendingDraft.folder) return;
+    const m = pendingDraft && threadLoaded ? thread.data!.messages.find((x) => x.uid === pendingDraft.uid && x.folder === pendingDraft.folder && !x.bodyPending) : undefined;
+    if (!pendingDraft || !m || account?.id !== pendingDraft.account) return;
     setPendingDraft(null);
     setCompose({ mode: 'draft', draft: fromDraft(m), source: { folder: m.folder, uid: m.uid } });
-  }, [pendingDraft, message.data, account]);
+  }, [pendingDraft, thread.data, threadLoaded, account]);
 
   const chat = useMailAssistant({
     org,
-    context: () =>
-      mailContext({
+    context: () => {
+      const open = threadLoaded ? thread.data!.messages : [];
+      const last = replyTarget(open, folder);
+      return mailContext({
         account: account ? { id: account.id, email: account.email } : { id: '', email: '' },
         folder: folder ?? 'INBOX',
         tab: showTabs ? inboxTab : null,
         search: q,
-        message: message.data && message.data.uid === openUid && message.data.folder === folder ? message.data : null,
-        checked,
-      }),
+        message: last ?? null,
+        checked: uidsOf([...checked]),
+        thread: open.filter((m) => m !== last).map((m) => ({ folder: m.folder, uid: m.uid })),
+      });
+    },
     show: showMessage,
     onMailChanged: () => {
       void qc.invalidateQueries({ queryKey: ['mail', 'messages'] });
+      void qc.invalidateQueries({ queryKey: ['mail', 'threads'] });
       void qc.invalidateQueries({ queryKey: ['mail', 'folders'] });
     },
   });
 
-  const onCheck = (uid: number, on: boolean, range: boolean) => {
+  const onCheck = (id: string, on: boolean, range: boolean) => {
     setChecked((cur) => {
       const next = new Set(cur);
       if (range && lastChecked.current !== null) {
-        const a = visible.findIndex((m) => m.uid === lastChecked.current);
-        const b = visible.findIndex((m) => m.uid === uid);
-        if (a >= 0 && b >= 0) for (const m of visible.slice(Math.min(a, b), Math.max(a, b) + 1)) on ? next.add(m.uid) : next.delete(m.uid);
+        const a = visible.findIndex((t) => t.threadId === lastChecked.current);
+        const b = visible.findIndex((t) => t.threadId === id);
+        if (a >= 0 && b >= 0) for (const t of visible.slice(Math.min(a, b), Math.max(a, b) + 1)) on ? next.add(t.threadId) : next.delete(t.threadId);
       }
-      on ? next.add(uid) : next.delete(uid);
+      on ? next.add(id) : next.delete(id);
       return next;
     });
-    lastChecked.current = uid;
+    lastChecked.current = id;
   };
 
-  /** The message after (1, older) or before (-1, newer) the open one in the list. */
+  /** The conversation after (1, older) or before (-1, newer) the open one in the list. */
   const step = (by: 1 | -1) => {
-    const i = visible.findIndex((m) => m.uid === openUid);
-    const m = i < 0 ? undefined : visible[i + by];
-    if (!m) return;
-    setCursorUid(m.uid);
-    setOpenUid(m.uid);
+    const i = visible.findIndex((t) => t.threadId === openId);
+    const t = i < 0 ? undefined : visible[i + by];
+    if (!t) return;
+    setCursorId(t.threadId);
+    setOpenId(t.threadId);
   };
 
   // The keyboard, as in other mail apps. Not while typing, and not under a dialog.
-  const keyState = useRef({ visible, cursorUid, openUid, narrow: stacked });
-  keyState.current = { visible, cursorUid, openUid, narrow: stacked };
+  const pane = useRef<ThreadViewHandle | null>(null);
+  const keyState = useRef({ visible, cursorId, openId, narrow: stacked });
+  keyState.current = { visible, cursorId, openId, narrow: stacked };
   const handlers = useRef({ archive, remove, toggleSeen, startCompose });
   handlers.current = { archive, remove, toggleSeen, startCompose };
   useEffect(() => {
@@ -373,16 +434,16 @@ export function App() {
       const typing = t && (t.isContentEditable || /^(TEXTAREA|SELECT)$/.test(t.tagName) || (t.tagName === 'INPUT' && !/^(checkbox|radio|button)$/.test((t as HTMLInputElement).type)));
       if (typing) return;
       if (document.querySelector('[role="dialog"], [role="menu"]')) return;
-      const { visible: v, cursorUid: cur, openUid: open, narrow: isNarrow } = keyState.current;
+      const { visible: v, cursorId: cur, openId: open, narrow: isNarrow } = keyState.current;
       const h = handlers.current;
-      const at = v.findIndex((m) => m.uid === (cur ?? open));
+      const at = v.findIndex((x) => x.threadId === (cur ?? open));
       const go = (i: number) => {
-        const m = v[Math.max(0, Math.min(v.length - 1, i))];
-        if (!m) return;
-        setCursorUid(m.uid);
-        // Side by side, the message follows the keyboard. In place of the list, j/k move the selection in the list, and
-        // with a message open they open the next (older) or previous (newer) one, as Gmail does.
-        if (!isNarrow || open !== null) setOpenUid(m.uid);
+        const x = v[Math.max(0, Math.min(v.length - 1, i))];
+        if (!x) return;
+        setCursorId(x.threadId);
+        // Side by side, the thread follows the keyboard. In place of the list, j/k move the selection in the list, and
+        // with a thread open they open the next (older) or previous (newer) one, as Gmail does.
+        if (!isNarrow || open !== null) setOpenId(x.threadId);
       };
       switch (e.key) {
         case 'j':
@@ -391,8 +452,16 @@ export function App() {
         case 'k':
           go(at < 0 ? 0 : at - 1);
           break;
+        case 'n':
+          if (open === null) return;
+          pane.current?.step(1);
+          break;
+        case 'p':
+          if (open === null) return;
+          pane.current?.step(-1);
+          break;
         case 'Enter':
-          if (cur !== null) setOpenUid(cur);
+          if (cur !== null) setOpenId(cur);
           else return;
           break;
         case 'e':
@@ -420,7 +489,7 @@ export function App() {
           openSuiteSearch();
           break;
         case 'Escape':
-          if (isNarrow && open !== null) setOpenUid(null);
+          if (isNarrow && open !== null) setOpenId(null);
           setChecked(new Set());
           break;
         default:
@@ -562,27 +631,29 @@ export function App() {
         canDrag
           ? (path, uids) => {
               const to = folderDropTarget(folder, path);
-              if (to) moveTo(to, uids);
+              if (to) moveTo(to, rows.filter((t) => t.uids.some((u) => uids.includes(u))).map((t) => t.threadId));
             }
           : undefined
       }
     />
   );
+  const openRow = rowOf(openId);
   const listEl = (
     <MessageList
       accountId={account.id}
+      me={account.email}
       title={folderInfo ? folderLabel(folderInfo) : folder === 'INBOX' ? 'Inbox' : (folder ?? '')}
-      messages={visible}
-      loading={messages.isPending && !!folder && !needsLogin}
-      error={needsLogin ? `Mail from ${account.email} appears here once FreeFlow can sign in to it again.` : errorText(messages.error)}
-      refreshing={messages.isFetching && !messages.isFetchingNextPage && !messages.isPending}
+      rows={visible}
+      loading={listing.isPending && !!folder && !needsLogin}
+      error={needsLogin ? `Mail from ${account.email} appears here once FreeFlow can sign in to it again.` : errorText(listing.error)}
+      refreshing={listing.isFetching && !listing.isFetchingNextPage && !listing.isPending}
       onRefresh={() => {
-        void messages.refetch();
+        void listing.refetch();
         void folders.refetch();
       }}
-      hasMore={!!messages.hasNextPage}
-      loadingMore={messages.isFetchingNextPage}
-      onLoadMore={() => void messages.fetchNextPage()}
+      hasMore={!!listing.hasNextPage}
+      loadingMore={listing.isFetchingNextPage}
+      onLoadMore={() => void listing.fetchNextPage()}
       tab={tab}
       onTab={setTab}
       query={q}
@@ -590,21 +661,21 @@ export function App() {
         setQ('');
         setSearchText('');
       }}
-      openUid={openUid}
-      cursorUid={cursorUid}
+      openId={openId}
+      cursorId={cursorId}
       readingPane={narrow ? undefined : { value: readingPane, onChange: setReadingPane }}
       dense={!narrow && readingPane === 'full'}
-      onRowAction={(m, a) => (a === 'archive' ? archive([m.uid]) : a === 'delete' ? remove([m.uid]) : setSeen([m.uid], a === 'read'))}
-      onOpen={openMessage}
+      onRowAction={(t, a) => (a === 'archive' ? archive([t.threadId]) : a === 'delete' ? remove([t.threadId]) : setSeen(t.uids, a === 'read'))}
+      onOpen={openThread}
       checked={checked}
       onCheck={onCheck}
-      onCheckAll={(on) => setChecked(on ? new Set(visible.map((m) => m.uid)) : new Set())}
-      onFlag={(m) => actions.flags.mutate({ uids: [m.uid], flagged: !m.flagged })}
+      onCheckAll={(on) => setChecked(on ? new Set(visible.map((t) => t.threadId)) : new Set())}
+      onFlag={(t) => actions.flags.mutate({ uids: t.uids, flagged: !t.flagged })}
       onBulk={(a) => {
-        const uids = [...checked];
-        if (a === 'read' || a === 'unread') setSeen(uids, a === 'read');
-        else if (a === 'flag' || a === 'unflag') actions.flags.mutate({ uids, flagged: a === 'flag' });
-        else remove(uids);
+        const ids = [...checked];
+        if (a === 'read' || a === 'unread') setSeen(uidsOf(ids), a === 'read');
+        else if (a === 'flag' || a === 'unflag') actions.flags.mutate({ uids: uidsOf(ids), flagged: a === 'flag' });
+        else remove(ids);
       }}
       onBulkMove={(to) => moveTo(to, [...checked])}
       folders={folders.data}
@@ -627,9 +698,9 @@ export function App() {
           />
         ) : undefined
       }
-      tabMove={showTabs ? { tabs: accountTabs, current: category, onMove: moveToTab, onWhy: (m) => setToast(`${reasonText(m.categoryReason, m.category ?? 'primary')}.`) } : undefined}
+      tabMove={showTabs ? { tabs: accountTabs, current: category, onMove: moveToTab, onWhy: (t) => setToast(`${reasonText(t.categoryReason, t.category ?? 'primary')}.`) } : undefined}
       draggable={canDrag}
-      sorting={!!messages.data?.pages[messages.data.pages.length - 1]?.sorting}
+      sorting={!!listing.data?.pages[listing.data.pages.length - 1]?.sorting}
       onSearch={
         tiny
           ? (text) => {
@@ -642,27 +713,36 @@ export function App() {
     />
   );
   const view = (
-    <MessageView
+    <ThreadView
+      handle={pane}
       accountId={account.id}
-      message={message.data}
-      loading={openUid !== null && message.isPending}
-      error={errorText(message.error)}
+      me={account.email}
+      folder={folder}
+      thread={threadLoaded ? thread.data : undefined}
+      loading={openId !== null && (thread.isPending || !threadLoaded)}
+      error={errorText(thread.error)}
       folders={folders.data}
       canArchive={!!(findSpecial(folders.data, 'archive') ?? findSpecial(folders.data, 'all')) && folderInfo?.specialUse !== 'archive'}
-      onBack={stacked ? () => setOpenUid(null) : undefined}
-      position={stacked && openUid !== null ? { index: visible.findIndex((m) => m.uid === openUid), count: visible.length } : undefined}
+      onBack={stacked ? () => setOpenId(null) : undefined}
+      position={stacked && openId !== null ? { index: visible.findIndex((t) => t.threadId === openId), count: visible.length } : undefined}
       onNewer={stacked ? () => step(-1) : undefined}
       onOlder={stacked ? () => step(1) : undefined}
-      onReply={() => startCompose('reply')}
-      onReplyAll={() => startCompose('replyAll')}
-      onForward={() => startCompose('forward')}
-      onEditDraft={folderInfo?.specialUse === 'drafts' ? () => startCompose('draft') : undefined}
-      onArchive={() => archive(openUid !== null ? [openUid] : [])}
-      onMove={(to) => moveTo(to, openUid !== null ? [openUid] : [])}
-      tabMove={showTabs && openUid !== null ? { tabs: accountTabs, current: byUid(openUid)?.category ?? category, onMove: (tab) => moveToTab([openUid], tab) } : undefined}
-      onDelete={() => remove(openUid !== null ? [openUid] : [])}
-      onToggleSeen={() => toggleSeen(openUid !== null ? [openUid] : [])}
-      onToggleFlag={() => toggleFlag(openUid !== null ? [openUid] : [])}
+      onReply={(m) => startCompose('reply', m)}
+      onReplyAll={(m) => startCompose('replyAll', m)}
+      onForward={(m) => startCompose('forward', m)}
+      onEditDraft={folderInfo?.specialUse === 'drafts' ? (m) => startCompose('draft', m) : undefined}
+      onArchive={() => archive(openId !== null ? [openId] : [])}
+      onMove={(to) => moveTo(to, openId !== null ? [openId] : [])}
+      tabMove={showTabs && openId !== null ? { tabs: accountTabs, current: openRow?.category ?? category, onMove: (tab) => moveToTab(uidsOf([openId]), tab) } : undefined}
+      onDelete={() => remove(openId !== null ? [openId] : [])}
+      onToggleSeen={() => toggleSeen(openId !== null ? [openId] : [])}
+      onToggleFlag={() => toggleFlag(openId !== null ? [openId] : [])}
+      onNeedBody={(m) => openId !== null && void fetchBody(qc, account.id, openId, m)}
+      onFlagMessage={(m, flagged) => {
+        // A message of the thread in another folder is flagged there; this folder's actions flag here.
+        if (m.folder === folder) actions.flags.mutate({ uids: [m.uid], flagged });
+        else void mailApi.setFlags(account.id, { folder: m.folder, uids: [m.uid], flagged }).then(() => qc.invalidateQueries({ queryKey: keys.thread(account.id, openId ?? '') }), (e: unknown) => setToast(`Could not star: ${errorText(e)}`));
+      }}
     />
   );
 
@@ -702,10 +782,10 @@ export function App() {
         )}
         <div className="flex min-w-0 flex-1">
           {stacked ? (
-            // The list stays mounted under the open message, so going back finds it where it was.
+            // The list stays mounted under the open thread, so going back finds it where it was.
             <div className="relative min-w-0 flex-1">
-              <div className={cn('h-full', openUid !== null && 'invisible')}>{listEl}</div>
-              {openUid !== null && <div className="absolute inset-0 z-10">{view}</div>}
+              <div className={cn('h-full', openId !== null && 'invisible')}>{listEl}</div>
+              {openId !== null && <div className="absolute inset-0 z-10">{view}</div>}
             </div>
           ) : (
             <>
@@ -722,7 +802,7 @@ export function App() {
           <Suspense fallback={null}>
             <AssistantPanel
               chat={chat}
-              onMessage={openUid !== null}
+              onMessage={openId !== null}
               overlay={assistantOverlay}
               width={assistantPane.width}
               onClose={() => setAssistantOpen(false)}
@@ -744,10 +824,11 @@ export function App() {
             onClose={() => setCompose(null)}
             onSent={() => {
               // A draft sent is gone from Drafts, so it is no longer open either.
-              if (compose.mode === 'draft') setOpenUid(null);
+              if (compose.mode === 'draft') setOpenId(null);
               setCompose(null);
               setToast('Message sent.');
               void qc.invalidateQueries({ queryKey: keys.allMessages(account.id) });
+              void qc.invalidateQueries({ queryKey: keys.allThreads(account.id) });
               void qc.invalidateQueries({ queryKey: keys.folders(account.id) });
             }}
           />

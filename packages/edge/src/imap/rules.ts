@@ -140,7 +140,7 @@ export const TIMING_HEADER = 'x-mail-timing';
 
 /** A request's route for its log line, with the ids taken out (no account, message or folder ever appears). */
 export const routeOf = (method: string, url: string) =>
-  `${method} ${new URL(url).pathname.replace(/\/accounts\/[^/]+/, '/accounts/:id').replace(/\/messages\/\d+/, '/messages/:uid').replace(/\/attachments\/[^/]+/, '/attachments/:index')}`;
+  `${method} ${new URL(url).pathname.replace(/\/accounts\/[^/]+/, '/accounts/:id').replace(/\/messages\/\d+/, '/messages/:uid').replace(/\/attachments\/[^/]+/, '/attachments/:index').replace(/\/threads\/[^/]+/, '/threads/:threadId')}`;
 
 /**
  * The one log line of a mail request: `[mail] <METHOD> <route> <status> <ms>ms (lock wait <ms>ms, imap <ms>ms)`, from the

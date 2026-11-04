@@ -11,14 +11,19 @@ Worker holds the credentials and speaks IMAP and SMTP.
   (MIT, see `LICENSE-shadcn.md`); `src/components/ui/` holds the few shadcn primitives it uses, on Radix.
 - `src/api.ts` — the API contract as typed functions (`mailApi`), and the types the server returns. A 401 sends the
   browser to the suite's sign-in (`/?next=/mail…`).
-- `src/hooks/mail.ts` — react-query: accounts, folders and the open folder's messages (infinite, paged with `before=`)
-  are polled every 60 s while the tab is visible and on window focus. An inbox tab's page that comes back short with
-  `sorting` is asked for again every 2 s until it is full. Flag, move and delete update the cached lists at once and roll
-  back on failure.
+- `src/hooks/mail.ts` — react-query: accounts, folders and the open folder's conversations (`useThreads`, infinite, paged
+  with `before=` the last row's `uid`; a search is messages, `useMessages`, grouped into threads by `lib/threads.ts`) are
+  polled every 60 s while the tab is visible and on window focus. An inbox tab's page that comes back short with
+  `sorting` is asked for again every 2 s until it is full; so is an open thread (`useThread`) with a body the server has
+  not fetched yet (`bodyPending`), a few times. Flag, move and delete update the cached lists, thread rows and the open
+  thread at once and roll back on failure.
 - `src/App.tsx` — the layout: the suite bar (`MailSuiteBar.tsx`, with `@flow/suite-bar`), the resizable folder panel
-  (`Sidebar.tsx`), the list (`MessageList.tsx`) and the reading pane (`MessageView.tsx`, `MessageBody.tsx`), side by
+  (`Sidebar.tsx`), the list of conversations (`MessageList.tsx`, a row per thread) and the reading pane (`ThreadView.tsx`,
+  the thread's messages stacked oldest first, the unread and last ones open, runs of read ones folded; `MessageBody.tsx`
+  mounted only for an open message), side by
   side from 900px, one at a time below, with the folders behind a button under 760px. It also owns the keyboard
-  (j/k, Enter, e, #, r, a, f, c, u, /, Esc).
+  (j/k over the conversations, n/p over the open thread's messages, Enter, e, #, r, a, f, c, u, /, Esc). Reply, reply all
+  and forward answer the thread's last message (`lib/threads.ts` `replyTarget`), or the one whose own buttons were used.
 - `src/components/Compose.tsx` — compose, reply, reply all, forward: address chips (`AddressField.tsx`), TipTap
   StarterKit with Link (`Editor.tsx`, loaded on first use), attachments as base64 up to 20 MB in all.
 - `src/components/AccountForms.tsx` — adding an account (email → `/v1/mail/providers` → name and password, Advanced
@@ -37,7 +42,9 @@ Worker holds the credentials and speaks IMAP and SMTP.
   fewer on a narrow list by a container query), from the summary's `attachments`; a chip opens `AttachmentPreview.tsx`
   without opening the message.
 - `src/lib/` — the pure parts, with tests: `sanitize.ts` (HTML), `addresses.ts` (chips), `compose.ts` (reply and
-  forward prefill), `folders.ts` (folder order and tree), `tabs.ts` (inbox tabs), `dnd.ts` (dragging rows), `format.ts`.
+  forward prefill), `threads.ts` (search results grouped into threads, the row's "Ann, Bob, me", which messages of an
+  open thread start expanded and where runs fold), `folders.ts` (folder order and tree), `tabs.ts` (inbox tabs), `dnd.ts`
+  (dragging rows), `format.ts`.
 
 ## Running it
 
