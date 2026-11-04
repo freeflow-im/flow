@@ -3,6 +3,11 @@
 /* The suite's colours (packages/suite-bar/src/suite-bar.css and Docs' folder panel). */
 @theme {
   --font-sans: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+  /* One step larger than Tailwind's defaults (12 and 14px), for easier reading. */
+  --text-xs: 0.8125rem;
+  --text-xs--line-height: 1.25rem;
+  --text-sm: 0.9375rem;
+  --text-sm--line-height: 1.375rem;
   --color-primary: #1a73e8;
   --color-primary-deep: #1558b0;
   --color-primary-tint: #d9e7fb;

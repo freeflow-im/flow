@@ -670,7 +670,7 @@ export function App() {
     <div className="flex h-dvh flex-col overflow-hidden">
       {bar}
       {needsLogin && (
-        <div role="alert" className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-warn-border bg-warn-bg px-4 py-2 text-[13px]">
+        <div role="alert" className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-warn-border bg-warn-bg px-4 py-2 text-[14px]">
           <AlertTriangle className="size-4 shrink-0 text-[#b06000]" />
           <span className="min-w-0 flex-1">
             {account.status === 'connect_failed' || folderError?.code === 'connect_failed'

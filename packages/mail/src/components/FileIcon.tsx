@@ -16,7 +16,7 @@ export function FileIcon({ file, className }: { file: { filename: string; mimeTy
   const badge = BADGE[kind];
   if (badge) {
     return (
-      <span aria-hidden className={cn('inline-flex size-4 shrink-0 items-center justify-center rounded-[3px] font-bold leading-none text-white', badge.label.length > 1 ? 'text-[6.5px] tracking-[-.02em]' : 'text-[10px]', badge.color, className)}>
+      <span aria-hidden className={cn('inline-flex size-4 shrink-0 items-center justify-center rounded-[3px] font-bold leading-none text-white', badge.label.length > 1 ? 'text-[6.5px] tracking-[-.02em]' : 'text-[11px]', badge.color, className)}>
         {badge.label}
       </span>
     );

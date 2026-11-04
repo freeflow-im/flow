@@ -52,7 +52,7 @@ function Action({ label, onClick, children, disabled, pressed }: { label: string
 function Addresses({ label, list }: { label: string; list: Address[] }) {
   if (!list.length) return null;
   return (
-    <div className="flex gap-1 text-[13px] text-muted">
+    <div className="flex gap-1 text-[14px] text-muted">
       <span className="shrink-0">{label}</span>
       <span className="min-w-0 break-words text-ink/80">{list.map((a) => formatAddress(a)).join(', ')}</span>
     </div>
@@ -196,7 +196,7 @@ export function MessageView(p: MessageViewProps) {
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-baseline gap-x-2">
                   <span className="font-semibold text-ink">{displayName(m.from)}</span>
-                  {m.from && m.from.name && <span className="text-[13px] text-muted">&lt;{m.from.address}&gt;</span>}
+                  {m.from && m.from.name && <span className="text-[14px] text-muted">&lt;{m.from.address}&gt;</span>}
                   <span className="ml-auto shrink-0 text-xs text-muted" title={fullDate(m.date)}>
                     {fullDate(m.date)} ({relativeDate(m.date)})
                   </span>
@@ -210,12 +210,12 @@ export function MessageView(p: MessageViewProps) {
             <MessageBody accountId={p.accountId} message={m} />
             {files.length > 0 && (
               <div className="mt-4 border-t border-hairline pt-4">
-                <div className="mb-2 text-[11px] font-medium uppercase tracking-[.06em] text-muted">
+                <div className="mb-2 text-[12px] font-medium uppercase tracking-[.06em] text-muted">
                   {files.length} attachment{files.length === 1 ? '' : 's'}
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {files.map((a, i) => (
-                    <div key={a.index} className="group flex max-w-[260px] items-center rounded-lg border border-border bg-white text-[13px] hover:bg-hover">
+                    <div key={a.index} className="group flex max-w-[260px] items-center rounded-lg border border-border bg-white text-[14px] hover:bg-hover">
                       {/* Opens the preview; Enter and Space here are the chip's, not the list's (App.tsx skips a key already handled). */}
                       <button
                         type="button"

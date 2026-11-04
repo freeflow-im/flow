@@ -17,5 +17,5 @@ export function Input({ className, type, ...props }: ComponentProps<'input'>) {
 }
 
 export function Label({ className, ...props }: ComponentProps<'label'>) {
-  return <label data-slot="label" className={cn('text-[13px] font-medium text-ink', className)} {...props} />;
+  return <label data-slot="label" className={cn('text-[14px] font-medium text-ink', className)} {...props} />;
 }

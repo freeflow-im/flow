@@ -167,7 +167,7 @@ export function AttachmentPreview({ accountId, message, files, index, onIndex, o
         )}
       </header>
       {saveError && (
-        <div role="alert" className="mx-auto mb-2 max-w-xl rounded-lg bg-[#5c2b29] px-3 py-2 text-[13px] text-white">
+        <div role="alert" className="mx-auto mb-2 max-w-xl rounded-lg bg-[#5c2b29] px-3 py-2 text-[14px] text-white">
           {saveError}
         </div>
       )}
@@ -296,7 +296,7 @@ function TextView({ a, url, html }: { a: Attachment; url: string; html: boolean 
   return (
     <div className="flex h-full w-full max-w-[1000px] flex-col overflow-hidden rounded-lg bg-white text-ink shadow-2xl">
       {html && (
-        <div className="flex shrink-0 items-center gap-1 border-b border-hairline px-2 py-1.5 text-[13px]">
+        <div className="flex shrink-0 items-center gap-1 border-b border-hairline px-2 py-1.5 text-[14px]">
           <ToggleButton on={!asPage} onClick={() => setAsPage(false)}>
             <Code className="size-4" /> Source
           </ToggleButton>
@@ -309,7 +309,7 @@ function TextView({ a, url, html }: { a: Attachment; url: string; html: boolean 
       {html && asPage ? (
         <iframe sandbox="" srcDoc={inertHtml(text)} title={a.filename} className="min-h-0 flex-1 border-0 bg-white" />
       ) : (
-        <pre className="min-h-0 flex-1 overflow-auto p-4 font-mono text-[13px] leading-relaxed whitespace-pre-wrap break-words">{text}</pre>
+        <pre className="min-h-0 flex-1 overflow-auto p-4 font-mono text-[14px] leading-relaxed whitespace-pre-wrap break-words">{text}</pre>
       )}
     </div>
   );

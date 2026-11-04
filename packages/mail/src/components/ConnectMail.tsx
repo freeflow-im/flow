@@ -14,7 +14,7 @@ export function ConnectMail({ onAdd }: { onAdd(): void }) {
         <Button size="lg" onClick={onAdd} className="mx-auto">
           <Plus /> Add a mail account
         </Button>
-        <ul className="mt-8 space-y-3 text-left text-[13px] text-muted">
+        <ul className="mt-8 space-y-3 text-left text-[14px] text-muted">
           <li className="flex gap-3">
             <Server className="mt-0.5 size-4 shrink-0" />
             Your mail stays with your provider. FreeFlow connects to it over IMAP and SMTP.

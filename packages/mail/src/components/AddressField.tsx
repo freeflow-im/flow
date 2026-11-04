@@ -55,10 +55,10 @@ export function AddressField({ label, value, onChange, autoFocus, onPendingChang
 
   return (
     <div className="flex min-h-[40px] items-center gap-2 border-b border-hairline px-1">
-      <span className="w-10 shrink-0 text-[13px] text-muted">{label}</span>
+      <span className="w-10 shrink-0 text-[14px] text-muted">{label}</span>
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1 py-1">
         {value.map((a, i) => (
-          <span key={`${a.address}-${i}`} className="inline-flex max-w-full items-center gap-1 rounded-full border border-border bg-panel py-0.5 pr-1 pl-2.5 text-[13px]" title={a.address}>
+          <span key={`${a.address}-${i}`} className="inline-flex max-w-full items-center gap-1 rounded-full border border-border bg-panel py-0.5 pr-1 pl-2.5 text-[14px]" title={a.address}>
             <span className="truncate">{a.name || a.address}</span>
             <button type="button" className="rounded-full p-0.5 text-muted hover:bg-row-selected hover:text-ink" aria-label={`Remove ${a.address}`} onClick={() => onChange(value.filter((_, j) => j !== i))}>
               <X className="size-3" />
