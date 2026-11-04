@@ -4,7 +4,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AWAY_STATUS, isAway, StatusDialog, statusPatch, SuiteBar, type StatusOption } from '@flow/suite-bar';
-import { readActiveOrganization, suite, writeActiveOrganization, type SuiteUser } from '../suite';
+import { chooseOrganization, useOrganizations } from '../hooks/organization';
+import { suite, type SuiteUser } from '../suite';
 
 const REFRESH_MS = 60_000;
 const toChat = (open?: string) => window.location.assign(open ? `/?open=${open}` : '/');
@@ -16,12 +17,13 @@ export interface MailSuiteBarProps {
   onHome?: (() => void) | undefined;
   unread: number;
   onSettings(): void;
+  /** The Assistant button: opens and closes Mail's assistant panel. */
+  assistant: { open: boolean; onToggle(): void };
 }
 
-export function MailSuiteBar({ search, unread, onSettings, onHome }: MailSuiteBarProps) {
+export function MailSuiteBar({ search, unread, onSettings, onHome, assistant }: MailSuiteBarProps) {
   const me = useQuery({ queryKey: ['suite', 'me'], queryFn: suite.me, refetchInterval: REFRESH_MS });
-  const orgs = useQuery({ queryKey: ['suite', 'organizations'], queryFn: suite.organizations, refetchInterval: REFRESH_MS });
-  const [activeId, setActiveId] = useState(readActiveOrganization);
+  const { list, active } = useOrganizations();
   const [user, setUser] = useState<SuiteUser | null>(null);
   const [statusOpen, setStatusOpen] = useState(false);
   const [statusBusy, setStatusBusy] = useState(false);
@@ -30,15 +32,6 @@ export function MailSuiteBar({ search, unread, onSettings, onHome }: MailSuiteBa
   useEffect(() => {
     if (me.data) setUser(me.data);
   }, [me.data]);
-  useEffect(() => {
-    // Chat in another tab selecting an organization moves this bar too.
-    const onStorage = () => setActiveId(readActiveOrganization());
-    window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
-  }, []);
-
-  const list = orgs.data ?? [];
-  const active = list.find((o) => o.id === activeId) ?? list[0];
   const status = user && (user.statusEmoji || user.statusText) ? { emoji: user.statusEmoji, text: user.statusText } : null;
   const away = isAway(status);
 
@@ -68,16 +61,13 @@ export function MailSuiteBar({ search, unread, onSettings, onHome }: MailSuiteBa
         organization={{
           name: active?.name ?? '',
           entries: list.map((o) => ({ id: o.id, name: o.name, unread: o.unreadCount ?? 0, active: o.id === active?.id, avatarUrl: o.avatarUrl })),
-          onSelect: (id) => {
-            writeActiveOrganization(id);
-            setActiveId(id);
-          },
+          onSelect: chooseOrganization,
           onAdd: () => toChat('chooser'),
           ...(active?.role === 'owner' || active?.role === 'admin' ? { onSettings: () => toChat('admin') } : {}),
           ...(active ? { onInvite: () => toChat('invite') } : {}),
         }}
         search={search}
-        assistant={{ onOpen: () => window.location.assign('/workspace?assistant') }}
+        assistant={{ onOpen: assistant.onToggle, active: assistant.open }}
         notifications={{ onOpen: () => toChat('activity') }}
         account={{
           name: user?.displayName || user?.email || '',

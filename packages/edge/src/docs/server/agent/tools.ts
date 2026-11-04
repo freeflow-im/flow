@@ -720,6 +720,10 @@ export const schemas = {
     ),
   // The user's own email (search_mail, read_mail, create_mail_draft, save_mail_attachment_to_docs), on the Worker only.
   ...(assistantMailSchemas() as Record<'search_mail' | 'read_mail' | 'create_mail_draft' | 'save_mail_attachment_to_docs', z.ZodObject>),
+  // A browser tool in FreeFlow Mail (packages/mail, src/lib/assistant.ts): the message opens in its reading pane.
+  open_mail_message: z
+    .object({ id: z.string().min(5).max(1000).describe('The message to show: an id from search_mail, read_mail, create_mail_draft or the <app_context>.') })
+    .describe('Shows a message in FreeFlow Mail\'s reading pane, when the user is in Mail (the <app_context> says so) and asks to see or open it. A draft opens in Drafts, with Edit draft to change and send it. Only works in Mail; elsewhere give the user the message\'s link.'),
 } satisfies Record<string, z.ZodObject>;
 
 export type ToolName = keyof typeof schemas;

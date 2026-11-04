@@ -18,6 +18,9 @@ import { setReadingPane, useReadingPane } from './lib/layoutPref';
 import { Sidebar } from './components/Sidebar';
 import { useMediaQuery, useResizableWidth } from './hooks/layout';
 import { keys, prefetchMessage, useAccounts, useFolders, useMessage, useMessageActions, useMessages } from './hooks/mail';
+import { useMailAssistant } from './hooks/assistant';
+import { useOrganizations } from './hooks/organization';
+import { mailContext, setAssistantOpen, useAssistantOpen, type MessageRef } from './lib/assistant';
 import { emptyDraft, fromDraft, prefill, type ComposeMode } from './lib/compose';
 import { findSpecial, folderLabel } from './lib/folders';
 import { folderDropTarget, tabDropTarget, useCanDrag } from './lib/dnd';
@@ -26,6 +29,8 @@ import { cn } from './lib/utils';
 
 // The editor (TipTap) is most of the code: it loads when compose first opens.
 const Compose = lazy(() => import('./components/Compose').then((m) => ({ default: m.Compose })));
+// The assistant's panel (and the Markdown of its replies) loads when it first opens.
+const AssistantPanel = lazy(() => import('./components/AssistantPanel').then((m) => ({ default: m.AssistantPanel })));
 
 const ACCOUNT_KEY = 'flow.mail.account';
 const errorText = (e: unknown) => (e instanceof Error ? e.message : e ? String(e) : null);
@@ -56,6 +61,11 @@ export function App() {
   const tiny = useMediaQuery('(max-width: 759px)');
   const sidebar = useResizableWidth('flow.mail.sidebarWidth', 248, 180, 480);
   const listPane = useResizableWidth('flow.mail.listWidth', 420, 300, 720);
+  // The assistant: beside the mail, or over it below 1100px.
+  const assistantOpen = useAssistantOpen();
+  const assistantOverlay = useMediaQuery('(max-width: 1099px)');
+  const assistantPane = useResizableWidth('flow.mail.assistantWidth', 380, 300, 720, 'left');
+  const org = useOrganizations().active?.id ?? null;
 
   const [accountId, setAccountId] = useState<string | null>(storedAccount);
   const list = accounts.data ?? [];
@@ -283,6 +293,51 @@ export function App() {
     [account, message.data],
   );
 
+  /** Shows a message (the assistant's open_mail_message, a link in its chat): its account and folder, then it. */
+  const showMessage = (ref: MessageRef): boolean => {
+    if (!list.some((a) => a.id === ref.account)) return false;
+    setAccountId(ref.account);
+    setFolderChoice(ref.folder);
+    setTabChoice(null);
+    setQ('');
+    setSearchText('');
+    setChecked(new Set());
+    setOpenUid(ref.uid);
+    setCursorUid(ref.uid);
+    setDrawer(false);
+    return true;
+  };
+  // "Open draft" in the assistant's chat: the draft is shown, then opens in Compose once it has loaded.
+  const [pendingDraft, setPendingDraft] = useState<MessageRef | null>(null);
+  const openDraft = (ref: MessageRef) => {
+    if (showMessage(ref)) setPendingDraft(ref);
+    else setToast('That draft is in a mail account that is not connected here.');
+  };
+  useEffect(() => {
+    const m = message.data;
+    if (!pendingDraft || !m || account?.id !== pendingDraft.account || m.uid !== pendingDraft.uid || m.folder !== pendingDraft.folder) return;
+    setPendingDraft(null);
+    setCompose({ mode: 'draft', draft: fromDraft(m), source: { folder: m.folder, uid: m.uid } });
+  }, [pendingDraft, message.data, account]);
+
+  const chat = useMailAssistant({
+    org,
+    context: () =>
+      mailContext({
+        account: account ? { id: account.id, email: account.email } : { id: '', email: '' },
+        folder: folder ?? 'INBOX',
+        tab: showTabs ? inboxTab : null,
+        search: q,
+        message: message.data && message.data.uid === openUid && message.data.folder === folder ? message.data : null,
+        checked,
+      }),
+    show: showMessage,
+    onMailChanged: () => {
+      void qc.invalidateQueries({ queryKey: ['mail', 'messages'] });
+      void qc.invalidateQueries({ queryKey: ['mail', 'folders'] });
+    },
+  });
+
   const onCheck = (uid: number, on: boolean, range: boolean) => {
     setChecked((cur) => {
       const next = new Set(cur);
@@ -401,6 +456,7 @@ export function App() {
         },
       }}
       unread={inboxUnread}
+      assistant={{ open: assistantOpen, onToggle: () => setAssistantOpen(!assistantOpen) }}
       onSettings={() => setDialog({ kind: 'settings', accountId: account?.id ?? null })}
     />
   );
@@ -660,6 +716,22 @@ export function App() {
             </>
           )}
         </div>
+        {assistantOpen && !assistantOverlay && <ResizeHandle label="Resize the assistant" {...assistantPane.handleProps} />}
+        {assistantOpen && (
+          <Suspense fallback={null}>
+            <AssistantPanel
+              chat={chat}
+              onMessage={openUid !== null}
+              overlay={assistantOverlay}
+              width={assistantPane.width}
+              onClose={() => setAssistantOpen(false)}
+              onShow={(ref) => {
+                if (!showMessage(ref)) setToast('That message is in a mail account that is not connected here.');
+              }}
+              onOpenDraft={openDraft}
+            />
+          </Suspense>
+        )}
       </div>
       {compose && (
         <Suspense fallback={null}>

@@ -24,10 +24,12 @@ function readWidth(key: string, fallback: number, min: number, max: number): num
 }
 
 /**
- * A panel's width the user drags from its right edge: kept between `min` and `max`, remembered in localStorage under
- * `key`, back to `initial` on a double-click (Docs' folder panel works the same way).
+ * A panel's width the user drags from its right edge (or, for a panel on the right, `edge` 'left', its left one): kept
+ * between `min` and `max`, remembered in localStorage under `key`, back to `initial` on a double-click (Docs' folder
+ * panel works the same way).
  */
-export function useResizableWidth(key: string, initial: number, min: number, max: number) {
+export function useResizableWidth(key: string, initial: number, min: number, max: number, edge: 'left' | 'right' = 'right') {
+  const dir = edge === 'right' ? 1 : -1;
   const [width, setWidth] = useState(() => readWidth(key, initial, min, max));
   const drag = useRef<{ startX: number; startWidth: number } | null>(null);
 
@@ -55,21 +57,21 @@ export function useResizableWidth(key: string, initial: number, min: number, max
   const onPointerMove = useCallback(
     (e: ReactPointerEvent<HTMLElement>) => {
       if (!drag.current) return;
-      setWidth(clamp(drag.current.startWidth + e.clientX - drag.current.startX, min, max));
+      setWidth(clamp(drag.current.startWidth + dir * (e.clientX - drag.current.startX), min, max));
     },
-    [min, max],
+    [min, max, dir],
   );
   const onPointerUp = useCallback(
     (e: ReactPointerEvent<HTMLElement>) => {
       if (!drag.current) return;
-      const w = clamp(drag.current.startWidth + e.clientX - drag.current.startX, min, max);
+      const w = clamp(drag.current.startWidth + dir * (e.clientX - drag.current.startX), min, max);
       drag.current = null;
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
       setWidth(w);
       save(w);
     },
-    [min, max, save],
+    [min, max, save, dir],
   );
   const onDoubleClick = useCallback(() => {
     setWidth(initial);

@@ -195,6 +195,8 @@ export function toolLabel(name: string, i: Input): string {
       return i.reply_to_id ? 'Drafted a reply' : i.forward_id ? 'Drafted a forward' : 'Drafted an email';
     case 'save_mail_attachment_to_docs':
       return 'Saved an email attachment to your files';
+    case 'open_mail_message':
+      return 'Opened an email';
     default:
       return agentToolLabel(name, i) ?? name;
   }
