@@ -1,6 +1,6 @@
 // The reading pane, after shadcn/ui's Mail example's display (MIT, see LICENSE-shadcn.md): the actions (reply, reply
 // all, forward, archive, move, delete, unread, star), the header (from, to, cc, date), the body and the attachments.
-import { Archive, ArrowLeft, ChevronLeft, ChevronRight, Download, FileText, FolderInput, Forward, Loader2, Mail, MoreVertical, Pencil, Reply, ReplyAll, Star, Trash2 } from 'lucide-react';
+import { Archive, ArrowLeft, ChevronLeft, ChevronRight, Download, FolderInput, Forward, Loader2, Mail, MoreVertical, Pencil, Reply, ReplyAll, Star, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { attachmentUrl, type Address, type Category, type MailFolder, type MessageDetail } from '../api';
 import { displayName, formatAddress } from '../lib/addresses';
@@ -9,6 +9,7 @@ import { fileSize, fullDate, relativeDate } from '../lib/format';
 import { TAB_INFO } from '../lib/tabs';
 import { cn } from '../lib/utils';
 import { AttachmentPreview } from './AttachmentPreview';
+import { FileIcon } from './FileIcon';
 import { TAB_ICONS } from './InboxTabs';
 import { MessageBody } from './MessageBody';
 import { Button } from './ui/button';
@@ -228,7 +229,7 @@ export function MessageView(p: MessageViewProps) {
                         title={`Preview ${a.filename}`}
                         aria-label={`Preview ${a.filename || 'attachment'}, ${fileSize(a.size)}`}
                       >
-                        <FileText className="size-4 shrink-0 text-primary" />
+                        <FileIcon file={a} />
                         <span className="min-w-0 flex-1">
                           <span className="block truncate font-medium text-ink">{a.filename || 'attachment'}</span>
                           <span className="block text-xs text-muted">{fileSize(a.size)}</span>

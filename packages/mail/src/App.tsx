@@ -570,6 +570,7 @@ export function App() {
   );
   const listEl = (
     <MessageList
+      accountId={account.id}
       title={folderInfo ? folderLabel(folderInfo) : folder === 'INBOX' ? 'Inbox' : (folder ?? '')}
       messages={visible}
       loading={messages.isPending && !!folder && !needsLogin}

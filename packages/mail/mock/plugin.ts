@@ -76,6 +76,10 @@ export function createMockApi(empty = false) {
     answered: m.answered,
     hasAttachments: m.hasAttachments,
     size: m.size,
+    // As the server lists them (body.ts listedAttachments): the indexes the message opens with, less the cid: pictures.
+    ...(m.attachments.some((a) => !(a.inline && a.contentId))
+      ? { attachments: m.attachments.flatMap((a, index) => (a.inline && a.contentId ? [] : [{ index, filename: a.filename, mimeType: a.mimeType, size: a.bytes.length }])) }
+      : {}),
   });
   const find = (b: Mailbox, folder: string, uid: number) => {
     const m = b.messages.find((x) => x.folder === folder && x.uid === uid);

@@ -33,6 +33,9 @@ Worker holds the credentials and speaks IMAP and SMTP.
   organization's Docs, chat `mail`), told what is open (`lib/assistant.ts` `mailContext`), and it drafts but never sends:
   a draft it made has **Open draft** (Compose). Docs' protocol, stream reader, tool labels and reply Markdown come from
   Docs' sources (`src/lib/docsAgent.ts`); docs/specs/web-mcp.md, The assistant in Mail.
+- `src/components/AttachmentChips.tsx` — a list row's attachments as Gmail's chips (`FileIcon.tsx`, up to three and "+N",
+  fewer on a narrow list by a container query), from the summary's `attachments`; a chip opens `AttachmentPreview.tsx`
+  without opening the message.
 - `src/lib/` — the pure parts, with tests: `sanitize.ts` (HTML), `addresses.ts` (chips), `compose.ts` (reply and
   forward prefill), `folders.ts` (folder order and tree), `tabs.ts` (inbox tabs), `dnd.ts` (dragging rows), `format.ts`.
 

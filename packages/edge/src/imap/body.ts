@@ -80,6 +80,22 @@ export function planBody(root: MessageStructureObject | undefined): BodyPlan {
   return { simple, texts, attachments, tree };
 }
 
+/** An attachment as a list row shows it (a chip): `index` is the one `attachments/:index` and the opened message use. */
+export interface ListedAttachment { index: number; filename: string; mimeType: string; size: number }
+
+/**
+ * The attachments a list row shows, from the BODYSTRUCTURE the list already fetches (no bytes): `planBody`'s, with the
+ * same indexes, less the pictures the body shows by cid: (inline, with a Content-ID), which the reading pane leaves out
+ * too. Undefined for a structure that is opened whole (an inline forwarded message), whose indexes are postal-mime's and
+ * not known here; and for a message with none, so the field is left out.
+ */
+export function listedAttachments(root: MessageStructureObject | undefined): ListedAttachment[] | undefined {
+  const plan = planBody(root);
+  if (!plan.simple) return undefined;
+  const out = plan.attachments.filter((a) => !(a.inline && a.contentId)).map((a) => ({ index: a.index, filename: a.filename, mimeType: a.mimeType, size: decodedSize(a.leaf) }));
+  return out.length ? out : undefined;
+}
+
 /** A part's size once decoded, from its encoded size: exact for what is not encoded, close for base64 (76-character lines). */
 export function decodedSize(leaf: BodyLeaf): number {
   if (leaf.encoding === 'base64') return Math.max(0, Math.round((leaf.size * 76) / 78 * 0.75));

@@ -1,10 +1,12 @@
 // The open folder's messages, after shadcn/ui's Mail example's list (MIT, see LICENSE-shadcn.md): All / Unread, the
-// rows (sender, subject, snippet, date, unread dot, flag, attachment), checkboxes for acting on several at once, and
+// rows (sender, subject, snippet, date, unread dot, flag, and the attachments as chips that open the preview), checkboxes for acting on several at once, and
 // more rows as the list scrolls to its end (`before=`). With a mouse, rows drag onto an inbox tab or a folder (lib/dnd.ts);
 // a checked row takes the other checked ones with it.
 import { useEffect, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { Archive, ArrowLeft, CircleHelp, Columns2, EllipsisVertical, FolderInput, PanelTop, Loader2, Mail, MailOpen, Menu, Paperclip, RefreshCw, Search, Star, Tag, Trash2, X } from 'lucide-react';
 import type { Category, MailFolder, MessageSummary } from '../api';
+import { AttachmentChips, CHIPS_PAPERCLIP } from './AttachmentChips';
+import { AttachmentPreview } from './AttachmentPreview';
 import { displayName } from '../lib/addresses';
 import { dragUids, startDrag } from '../lib/dnd';
 import { folderLabel, orderFolders } from '../lib/folders';
@@ -19,6 +21,8 @@ import { Tabs, TabsList, TabsTrigger } from './ui/tabs';
 export type ListTab = 'all' | 'unread';
 
 export interface MessageListProps {
+  /** The account the rows are in: a row's attachment chips open the preview with it. */
+  accountId: string;
   title: string;
   messages: MessageSummary[];
   loading: boolean;
@@ -92,6 +96,11 @@ export function MessageList(p: MessageListProps) {
     scroller.current?.querySelector(`[data-uid="${p.cursorUid}"]`)?.scrollIntoView({ block: 'nearest' });
   }, [p.cursorUid]);
 
+  // The attachment open in the preview from a row's chip: that row's message (as it was) and the position in its files.
+  const [previewing, setPreviewing] = useState<{ m: MessageSummary; at: number } | null>(null);
+  const chips = (m: MessageSummary, className?: string) =>
+    m.attachments?.length ? <AttachmentChips files={m.attachments} dense={p.dense} onOpen={(at) => setPreviewing({ m, at })} className={className} /> : null;
+
   // The row whose menu is open (its ⋮, or a right-click on it): it keeps its hover actions while the menu is up.
   const [menuUid, setMenuUid] = useState<number | null>(null);
   const tabTargets = (current: Category | null | undefined) => (p.tabMove?.tabs ?? []).filter((t) => t !== current);
@@ -109,7 +118,7 @@ export function MessageList(p: MessageListProps) {
   })();
 
   return (
-    <section className="flex h-full min-w-0 flex-col bg-white" aria-label="Messages">
+    <section className="@container flex h-full min-w-0 flex-col bg-white" aria-label="Messages">
       <div className="flex h-[52px] shrink-0 items-center gap-2 border-b border-hairline px-3">
         {p.onShowFolders && !bulk && (
           <Button variant="ghost" size="icon-sm" onClick={p.onShowFolders} aria-label="Show folders">
@@ -278,13 +287,14 @@ export function MessageList(p: MessageListProps) {
                   setMenuUid(m.uid);
                 }}
                 className={cn(
-                  'group relative flex h-10 cursor-pointer items-center gap-1 border-b border-hairline pr-3 pl-2 text-sm hover:z-10 hover:shadow-[inset_1px_0_0_#dadce0,inset_-1px_0_0_#dadce0,0_1px_2px_0_rgba(60,64,67,.3),0_1px_3px_1px_rgba(60,64,67,.15)]',
+                  'group relative flex cursor-pointer flex-col border-b border-hairline pr-3 pl-2 text-sm hover:z-10 hover:shadow-[inset_1px_0_0_#dadce0,inset_-1px_0_0_#dadce0,0_1px_2px_0_rgba(60,64,67,.3),0_1px_3px_1px_rgba(60,64,67,.15)]',
                   unread ? 'bg-white' : 'bg-[#f2f6fc]',
                   isChecked && 'bg-selected-blue',
                   isCursor && 'shadow-[inset_3px_0_0_var(--color-primary)]',
                   menuOpen && 'z-10 shadow-[inset_1px_0_0_#dadce0,inset_-1px_0_0_#dadce0,0_1px_2px_0_rgba(60,64,67,.3),0_1px_3px_1px_rgba(60,64,67,.15)]',
                 )}
               >
+                <div className="flex h-10 items-center gap-1">
                 <div className="flex shrink-0 items-center" onClick={(e) => e.stopPropagation()}>
                   <span className="flex size-8 items-center justify-center">
                     <input
@@ -310,7 +320,8 @@ export function MessageList(p: MessageListProps) {
                   <span className={unread ? 'font-bold text-ink' : 'text-ink'}>{m.subject || '(no subject)'}</span>
                   {m.snippet && <span className="text-muted"> - {m.snippet}</span>}
                 </span>
-                {m.hasAttachments && <Paperclip className="mx-2 size-4 shrink-0 text-muted" aria-label="Has attachments" />}
+                {/* The chips below say it; a message whose files are not known until it is opened keeps the paperclip. */}
+                {m.hasAttachments && !m.attachments?.length && <Paperclip className="mx-2 size-4 shrink-0 text-muted" aria-label="Has attachments" />}
                 <time dateTime={m.date} title={fullDate(m.date)} className={cn('w-20 shrink-0 text-right text-xs whitespace-nowrap group-hover:hidden', menuOpen && 'hidden', unread ? 'font-bold text-ink' : 'text-muted')}>
                   {listDate(m.date)}
                 </time>
@@ -366,6 +377,9 @@ export function MessageList(p: MessageListProps) {
                     </DropdownMenu>
                   </span>
                 )}
+                </div>
+                {/* Under the subject, where Gmail puts them: past the checkbox, the star and the sender. */}
+                {chips(m, 'pb-2 pl-[272px]')}
               </div>
             );
           }
@@ -407,13 +421,16 @@ export function MessageList(p: MessageListProps) {
                 <div className="flex items-center gap-2">
                   {!m.seen && <span className="size-2 shrink-0 rounded-full bg-primary" aria-label="Unread" />}
                   <span className={cn('min-w-0 flex-1 truncate', !m.seen ? 'font-semibold text-ink' : 'text-ink')}>{who}</span>
-                  {m.hasAttachments && <Paperclip className="size-3.5 shrink-0 text-muted" aria-label="Has attachments" />}
+                  {(m.hasAttachments || !!m.attachments?.length) && (
+                    <Paperclip className={cn('size-3.5 shrink-0 text-muted', !!m.attachments?.length && CHIPS_PAPERCLIP)} aria-label="Has attachments" />
+                  )}
                   <time dateTime={m.date} title={fullDate(m.date)} className={cn('shrink-0 text-xs', !m.seen ? 'font-semibold text-ink' : 'text-muted')}>
                     {rowDate(m.date)}
                   </time>
                 </div>
                 <div className={cn('truncate text-[13px]', !m.seen ? 'font-semibold text-ink' : 'text-ink')}>{m.subject || '(no subject)'}</div>
                 {m.snippet && <div className="line-clamp-1 text-[13px] text-muted">{m.snippet}</div>}
+                {chips(m, 'mt-1.5')}
               </div>
             </div>
           );
@@ -429,6 +446,16 @@ export function MessageList(p: MessageListProps) {
           </div>
         )}
       </div>
+      {previewing && previewing.m.attachments?.[previewing.at] && (
+        <AttachmentPreview
+          accountId={p.accountId}
+          message={previewing.m}
+          files={previewing.m.attachments}
+          index={previewing.at}
+          onIndex={(at) => setPreviewing((v) => (v ? { ...v, at } : v))}
+          onClose={() => setPreviewing(null)}
+        />
+      )}
     </section>
   );
 }

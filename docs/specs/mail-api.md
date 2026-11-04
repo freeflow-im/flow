@@ -37,8 +37,10 @@ interface MessageSummary {
   category?: Category;                         // INBOX only, and only when the account has tabs on
   categoryReason?: string;                     // with category, when known: why it is there ("Gmail category:updates",
                                                // "Gmail: no category", "sender moved to primary", or the header rule's reason)
+  attachments?: { index: number; filename: string; mimeType: string; size: number }[];
+                                               // (2026-11-04) the list row's attachment chips: see "Attachments in the list"
 }
-interface MessageDetail extends MessageSummary {
+interface MessageDetail extends Omit<MessageSummary, 'attachments'> {
   replyTo: Address[]; bcc: Address[];
   inReplyTo: string | null; references: string[];
   html: string | null;                         // raw HTML from the message; THE CLIENT SANITIZES (DOMPurify + sandboxed iframe)
@@ -210,13 +212,26 @@ format=flowed, HTML made from text and the other way round). A text part over 10
   overhead for base64 (within about 1%).
 - **The exception**: a message with an inline `message/rfc822` part (a forwarded message postal-mime folds into the message's
   own text and attachments) is still downloaded and parsed whole, up to 50 MB, and its indexes are postal-mime's.
+- **Attachments in the list** (2026-11-04): every list (a folder, a search, an inbox tab) already FETCHes BODYSTRUCTURE with
+  the summaries (for `hasAttachments` and the snippet's part), so `MessageSummary.attachments` costs no round trip and no bytes
+  of any part. `listedAttachments` (body.ts) is `planBody`'s attachments, with the same `index` as the opened message and
+  `attachments/:index`, less those the body shows by cid: (inline, with a Content-ID; the reading pane leaves those out
+  when the HTML refers to them, which the list cannot see); `size` is the estimate above. The field is left out when there
+  are none, and for the exception below (an inline `message/rfc822`), whose indexes are postal-mime's and not known without
+  reading the message whole; `hasAttachments` still says, and the row shows a paperclip. Tests: `body.test.ts` ("the
+  attachments a list row shows": list indexes = the opened message's = postal-mime's, for a message with cid: pictures, an
+  inline photo and real files) and `test/e2e-mail.mjs` ("list attachments", the folder, search and tab lists).
 - The last three messages opened are kept with the parts fetched with them, so a message's inline pictures do not each
   fetch again.
 
 ## Attachment previews
 
 The reading pane's attachment chips open a full-window overlay (`packages/mail/src/components/AttachmentPreview.tsx`); each chip
-keeps a small download link. The overlay's top bar has the name, size and type, Download, Save to Docs (then Open in Docs) and
+keeps a small download link. A list row's chips (`components/AttachmentChips.tsx`, from `MessageSummary.attachments`: the file's
+icon, `components/FileIcon.tsx`, and its name, up to three and then "+N") open the same overlay without opening the message;
+the click and Enter/Space are the chip's, not the row's. How many chips show is by the list's width (a CSS container query on
+the list): the dense full-width rows show one to three under the subject; the stacked rows one to three under the snippet, and
+none below 240px, where the row's paperclip stands in for them. The overlay's top bar has the name, size and type, Download, Save to Docs (then Open in Docs) and
 Close; ← / → (buttons and keys) step through the message's attachments, leaving out pictures already shown in the body; Esc closes.
 `lib/preview.ts` picks the viewer, by the name's extension first and then the MIME type:
 

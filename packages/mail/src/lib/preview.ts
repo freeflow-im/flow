@@ -75,6 +75,38 @@ export function typeLabel(a: { filename: string; mimeType: string }): string {
   return a.mimeType.split(';')[0]!.trim() || 'File';
 }
 
+/** What kind of file an attachment is, for its icon (components/FileIcon.tsx): by the name's extension, else the MIME type. */
+export type FileKind = 'pdf' | 'word' | 'excel' | 'powerpoint' | 'image' | 'video' | 'audio' | 'archive' | 'text' | 'other';
+
+const KIND_EXT: Record<Exclude<FileKind, 'other'>, string[]> = {
+  pdf: ['pdf'],
+  word: ['doc', 'docx', 'docm', 'dot', 'dotx', 'odt', 'rtf', 'pages'],
+  excel: ['xls', 'xlsx', 'xlsm', 'xlsb', 'ods', 'csv', 'tsv', 'numbers'],
+  powerpoint: ['ppt', 'pptx', 'pptm', 'pps', 'ppsx', 'odp', 'key'],
+  image: [...BY_EXT.image, 'heic', 'heif', 'tif', 'tiff', 'ico'],
+  video: [...BY_EXT.video, 'avi', 'mkv', 'wmv'],
+  audio: BY_EXT.audio,
+  archive: ['zip', 'rar', '7z', 'gz', 'tgz', 'tar', 'bz2', 'xz'],
+  text: ['txt', 'md', 'markdown', 'rst', 'log', 'eml', 'ics', 'vcf'],
+};
+const EXT_KIND = new Map(Object.entries(KIND_EXT).flatMap(([kind, exts]) => exts.map((e) => [e, kind as FileKind])));
+
+export function fileKind(a: { filename: string; mimeType: string }): FileKind {
+  const byExt = EXT_KIND.get(extensionOf(a.filename));
+  if (byExt) return byExt;
+  const type = a.mimeType.split(';')[0]!.trim().toLowerCase();
+  if (type === 'application/pdf') return 'pdf';
+  if (/wordprocessingml|msword|opendocument\.text|rtf/.test(type)) return 'word';
+  if (/spreadsheetml|ms-excel|opendocument\.spreadsheet|^text\/csv/.test(type)) return 'excel';
+  if (/presentationml|ms-powerpoint|opendocument\.presentation/.test(type)) return 'powerpoint';
+  if (type.startsWith('image/')) return 'image';
+  if (type.startsWith('video/')) return 'video';
+  if (type.startsWith('audio/')) return 'audio';
+  if (/zip|compressed|x-tar|x-7z|x-rar|gzip/.test(type)) return 'archive';
+  if (type.startsWith('text/')) return 'text';
+  return 'other';
+}
+
 /**
  * A frame's document for an HTML attachment shown as a page: nothing loads from anywhere (no scripts, styles or
  * pictures from the web), and the frame it goes in has an empty sandbox, so nothing in it runs or reaches this page.

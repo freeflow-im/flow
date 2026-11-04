@@ -180,6 +180,12 @@ const RAWS={
     '--f','Content-Type: text/plain; charset=utf-8','','See below.','','--f','Content-Type: message/rfc822','',
     'From: Dee <dee@acme.test>','Subject: The original','MIME-Version: 1.0','Content-Type: multipart/mixed; boundary="g"','',
     '--g','Content-Type: text/plain; charset=utf-8','','Original text.','','--g','Content-Type: text/csv; name="a.csv"','Content-Disposition: attachment; filename="a.csv"','','x,y','1,2','--g--','','--f--',''].join(CRLF),
+  // Four files after the body's own (cid:) picture: the list's chips leave the picture out and keep the detail's indexes.
+  many:['From: Bob Martin <bob@acme.test>',`Subject: Parts many ${tag}`,'MIME-Version: 1.0','Content-Type: multipart/mixed; boundary="m"','',
+    '--m','Content-Type: multipart/related; boundary="r"','','--r','Content-Type: text/html; charset=utf-8','Content-Transfer-Encoding: base64','',b64(`<p>Four files <img src="cid:logo-${tag}@acme"></p>`),
+    '--r','Content-Type: image/png','Content-Transfer-Encoding: base64',`Content-ID: <logo-${tag}@acme>`,'',b64(PNG),'--r--','',
+    ...[['q3.pdf','application/pdf',PDF],['Plan.docx','application/vnd.openxmlformats-officedocument.wordprocessingml.document',Buffer.from('PK plan')],['photo.png','image/png',PNG],['Budget.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',Buffer.from('PK budget')]]
+      .flatMap(([name,type,buf])=>['--m',`Content-Type: ${type}; name="${name}"`,'Content-Transfer-Encoding: base64',`Content-Disposition: attachment; filename="${name}"`,'',b64(buf)]),'--m--',''].join(CRLF),
   koi8:['From: Ivan <ivan@example.ru>',`Subject: Parts koi8 ${tag}`,'Content-Type: text/plain; charset=koi8-r','Content-Transfer-Encoding: 8bit','',Buffer.from([0xf0,0xd2,0xc9,0xd7,0xc5,0xd4]).toString('latin1'),''].join(CRLF),
 };
 const appendRaw=(raw,box='INBOX')=>imapDirect(async(c)=>(await c.append(box,Buffer.from(raw,'latin1'))).uid);
@@ -216,6 +222,23 @@ res=await getRaw(`${P}/messages/${UIDS.huge}?folder=INBOX`);
 t(`parts: a ${sizeMB} MB message opens`,res.s===200&&res.j?.message?.text?.startsWith('The big files.')&&res.j.message.attachments.length===3&&res.j.message.attachments.every(a=>Math.abs(a.size-HUGE.length)<HUGE.length*0.01),res.s+' '+res.ms+'ms '+JSON.stringify(res.j?.message?.attachments??res.j).slice(0,150));
 t('parts: and quickly (it does not download the attachments)',res.ms<3000,res.ms+'ms');
 res=await getRaw(`${P}/messages/${UIDS.huge}/attachments/2?folder=INBOX`);t('parts: one of its attachments downloads by itself',res.s===200&&res.buf.equals(HUGE),res.s+' '+res.buf.length+' '+res.ms+'ms');
+
+// ---- Attachments in the list: names, types and sizes from BODYSTRUCTURE, with the indexes the opened message uses ------
+const chipsOf=(m)=>(m?.attachments??[]).map(a=>`${a.index}:${a.filename}:${a.mimeType}`).join(' ');
+const listed={};for(const path of [`${P}/messages?folder=INBOX&limit=50`,`${P}/messages?folder=INBOX&q=${encodeURIComponent('Parts')}&limit=50`]){const x=await getRaw(path);listed[path.includes('&q=')?'search':'folder']=x;}
+for(const [how,x] of Object.entries(listed)){
+  const byUid=Object.fromEntries((x.j?.messages??[]).map(m=>[m.uid,m]));
+  t(`list attachments (${how}): a PDF after the body's cid: picture keeps its index`,chipsOf(byUid[UIDS.alt])==='1:q3.pdf:application/pdf'&&Math.abs(byUid[UIDS.alt].attachments[0].size-PDF.length)<PDF.length*0.01,JSON.stringify(byUid[UIDS.alt]?.attachments));
+  t(`list attachments (${how}): four files, the cid: picture left out`,chipsOf(byUid[UIDS.many])==='1:q3.pdf:application/pdf 2:Plan.docx:application/vnd.openxmlformats-officedocument.wordprocessingml.document 3:photo.png:image/png 4:Budget.xlsx:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',chipsOf(byUid[UIDS.many]));
+  t(`list attachments (${how}): none on a message without, nor on one read whole (a forwarded message)`,byUid[UIDS.plain]&&!('attachments' in byUid[UIDS.plain])&&byUid[UIDS.forwarded]&&!('attachments' in byUid[UIDS.forwarded]),JSON.stringify([byUid[UIDS.plain],byUid[UIDS.forwarded]]));
+}
+for(const k of ['alt','many','huge']){
+  const m=(listed.folder.j?.messages??[]).find(x=>x.uid===UIDS[k]);const d=(await api(A.token,'GET',`${P}/messages/${UIDS[k]}?folder=INBOX`)).j.message;
+  const want=(d?.attachments??[]).filter(a=>!a.inline||!a.contentId||!(d.html??'').includes(a.contentId));
+  t(`list attachments: ${k}'s are the opened message's (index, name, type)`,!!m&&chipsOf(m)===chipsOf({attachments:want}),chipsOf(m)+' | '+chipsOf({attachments:want}));
+}
+{const a=(listed.folder.j?.messages??[]).find(x=>x.uid===UIDS.many)?.attachments?.[1];const res=await getRaw(`${P}/messages/${UIDS.many}/attachments/${a?.index}?folder=INBOX`);t('list attachments: a chip\'s index downloads that file',res.s===200&&res.buf.toString()==='PK plan'&&/Plan\.docx/.test(res.h.get('content-disposition')??''),res.s+' '+res.h.get('content-disposition'));}
+console.log(`     list timing: folder ${listed.folder.ms}ms (${listed.folder.h.get('x-mail-timing')??'-'}), search ${listed.search.ms}ms`);
 
 // ---- Three connections: sorting and the re-check never hold up a list, opening a message or marking it seen ------------
 // x-mail-test-recheck: 1 starts the re-check now (in the background, on the sorter connection), and x-mail-test-slow-ms
@@ -256,6 +279,7 @@ r=await getRaw(`${P}/messages?folder=INBOX&category=forums&limit=5`,{'x-mail-tes
 const rl2=await recheckLine(at);
 t('cache: the re-check forgets a message moved away by another app',/ 1 gone, /.test(rl2??''),rl2);
 r=await api(A.token,'GET',`${P}/messages?folder=INBOX&category=primary&limit=50`);t('cache: and it is not in the tab list',r.s===200&&!r.j.messages?.some(m=>m.uid===gone?.uid),JSON.stringify(tagged(r.j.messages).map(m=>m.subject)));
+t('list attachments (tab list): the same chips in a tab\'s list',chipsOf(r.j.messages?.find(m=>m.uid===UIDS.many))===chipsOf((listed.folder.j?.messages??[]).find(x=>x.uid===UIDS.many))&&!!r.j.messages?.find(m=>m.uid===UIDS.many)?.attachments,chipsOf(r.j.messages?.find(m=>m.uid===UIDS.many)));
 t('cache: each message in a tab says why',r.j.messages?.length>0&&r.j.messages.every(m=>typeof m.categoryReason==='string'&&m.categoryReason.length>0),JSON.stringify(r.j.messages?.map(m=>m.categoryReason)).slice(0,170));
 r=await api(A.token,'GET',`${P}/debug/tabs?uids=${r.j.messages?.[0]?.uid}`);
 t('debug: the last re-check and the cache by tab and reason',r.s===200&&r.j.log?.some(e=>e.kind==='recheck'&&e.gone===1)&&r.j.counts?.some(c=>c.category==='primary'&&c.n>0)&&r.j.messages?.length===1&&typeof r.j.messages[0].reason==='string',r.s+' '+JSON.stringify(r.j).slice(0,170));

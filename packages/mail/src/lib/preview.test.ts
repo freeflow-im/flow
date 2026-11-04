@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { inertHtml, isSvg, MAX_PREVIEW_BYTES, previewLimit, typeLabel, viewerFor } from './preview';
+import { fileKind, inertHtml, isSvg, MAX_PREVIEW_BYTES, previewLimit, typeLabel, viewerFor } from './preview';
 
 const v = (filename: string, mimeType = 'application/octet-stream') => viewerFor({ filename, mimeType });
 
@@ -57,5 +57,21 @@ describe('the viewer for an attachment', () => {
     const doc = inertHtml('<html><head><script>alert(1)</script></head><body><img src="https://tracker.example/p.gif"></body></html>');
     expect(doc.indexOf("default-src 'none'")).toBeLessThan(doc.indexOf('<html>'));
     expect(doc).toContain('img-src data:');
+  });
+});
+
+describe('the kind of file, for its icon', () => {
+  const k = (filename: string, mimeType = 'application/octet-stream') => fileKind({ filename, mimeType });
+  it('goes by the extension, then the MIME type', () => {
+    expect(['a.pdf', 'a.docx', 'a.doc', 'a.xlsx', 'a.csv', 'a.pptx', 'a.png', 'a.HEIC', 'a.mov', 'a.mp3', 'a.zip', 'a.txt', 'a.exe'].map((n) => k(n))).toEqual([
+      'pdf', 'word', 'word', 'excel', 'excel', 'powerpoint', 'image', 'image', 'video', 'audio', 'archive', 'text', 'other',
+    ]);
+    expect(k('attachment-1', 'application/pdf')).toBe('pdf');
+    expect(k('scan', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).toBe('word');
+    expect(k('sheet', 'application/vnd.ms-excel')).toBe('excel');
+    expect(k('deck', 'application/vnd.openxmlformats-officedocument.presentationml.presentation')).toBe('powerpoint');
+    expect(k('attachment-2', 'image/jpeg; name=x')).toBe('image');
+    expect(k('attachment-3', 'application/x-zip-compressed')).toBe('archive');
+    expect(k('attachment-4')).toBe('other');
   });
 });

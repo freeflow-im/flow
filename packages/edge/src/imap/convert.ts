@@ -2,6 +2,7 @@
 // convert.test.ts can feed it what imapflow returns.
 import type { FetchMessageObject, ListResponse, MessageAddressObject, MessageStructureObject } from 'imapflow';
 import type { Email } from 'postal-mime';
+import { listedAttachments, type ListedAttachment } from './body';
 
 export interface Address { name: string; address: string }
 export type SpecialUse = 'inbox' | 'sent' | 'drafts' | 'trash' | 'junk' | 'archive' | 'all' | 'flagged';
@@ -12,9 +13,11 @@ export interface MessageSummary {
   subject: string; snippet: string; date: string;
   seen: boolean; flagged: boolean; answered: boolean;
   hasAttachments: boolean; size: number;
+  /** The files a list row shows as chips (body.ts `listedAttachments`); left out when there are none, or not known. */
+  attachments?: ListedAttachment[];
 }
 export interface AttachmentInfo { index: number; filename: string; mimeType: string; size: number; contentId: string | null; inline: boolean }
-export interface MessageDetail extends MessageSummary {
+export interface MessageDetail extends Omit<MessageSummary, 'attachments'> {
   replyTo: Address[]; bcc: Address[];
   inReplyTo: string | null; references: string[];
   html: string | null; text: string | null;
@@ -116,6 +119,7 @@ export function snippetOf(raw: Uint8Array, part: TextPart, max = 160): string {
 /** One message as a list shows it, from a FETCH of uid, envelope, flags, bodyStructure, size and internalDate. */
 export function toSummary(m: FetchMessageObject, folder: string, snippet = ''): MessageSummary {
   const env = m.envelope ?? {};
+  const attachments = listedAttachments(m.bodyStructure);
   const flags = m.flags ?? new Set<string>();
   const from = env.from?.[0] ?? env.sender?.[0];
   return {
@@ -133,6 +137,7 @@ export function toSummary(m: FetchMessageObject, folder: string, snippet = ''): 
     answered: flags.has('\\Answered'),
     hasAttachments: hasAttachments(m.bodyStructure),
     size: m.size ?? 0,
+    ...(attachments ? { attachments } : {}),
   };
 }
 

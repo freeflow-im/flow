@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { MessageStructureObject } from 'imapflow';
 import PostalMime from 'postal-mime';
-import { decodeTransfer, decodedSize, minimalMessage, planBody, prefetch } from './body';
+import { decodeTransfer, decodedSize, listedAttachments, minimalMessage, planBody, prefetch } from './body';
 import { toDetail, toSummary } from './convert';
 
 // A small stand-in for the server: splits a raw message into what BODYSTRUCTURE says of it and each part's raw bytes
@@ -158,5 +158,54 @@ describe('opening a message by its parts', () => {
 
   it('decodes quoted-printable soft breaks and escapes', () => {
     expect(decodeTransfer(Buffer.from('a=3Db=\r\nc =C3=A9=\nd'), 'quoted-printable').toString('utf8')).toBe('a=bc éd');
+  });
+});
+
+// Two cid: pictures in the HTML (one with no filename), an Apple Mail-style picture sent inline but with no Content-ID (a
+// real attachment, shown in the reading pane's list), a PDF and a Word file, in a related/mixed tree.
+const MIXED = [
+  'From: Bob <bob@acme.test>', 'Subject: Mixed', 'MIME-Version: 1.0', 'Content-Type: multipart/mixed; boundary="mix"', '',
+  '--mix', 'Content-Type: multipart/related; boundary="rel"', '',
+  '--rel', 'Content-Type: text/html; charset=utf-8', '', '<p>Logo <img src="cid:logo@x"> and <img src="cid:sig@x"></p>', '',
+  '--rel', 'Content-Type: image/png; name="logo.png"', 'Content-Transfer-Encoding: base64', 'Content-ID: <logo@x>', 'Content-Disposition: inline; filename="logo.png"', '',
+  Buffer.from('\x89PNG logo').toString('base64'), '',
+  '--rel', 'Content-Type: image/gif', 'Content-Transfer-Encoding: base64', 'Content-ID: <sig@x>', '', Buffer.from('GIF89a sig').toString('base64'),
+  '--rel--', '',
+  '--mix', 'Content-Type: image/jpeg; name="photo.jpg"', 'Content-Transfer-Encoding: base64', 'Content-Disposition: inline; filename="photo.jpg"', '',
+  Buffer.from('\xff\xd8 a photo from the phone').toString('base64'), '',
+  '--mix', 'Content-Type: application/pdf; name="report.pdf"', 'Content-Transfer-Encoding: base64', 'Content-Disposition: attachment; filename="report.pdf"', '',
+  Buffer.from('%PDF-1.4 the report').toString('base64'), '',
+  '--mix', 'Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document; name="notes.docx"', 'Content-Transfer-Encoding: base64', 'Content-Disposition: attachment; filename="notes.docx"', '',
+  Buffer.from('PK notes').toString('base64'),
+  '--mix--', '',
+].join('\r\n');
+
+describe('the attachments a list row shows', () => {
+  it('have the indexes the opened message and attachments/:index use, without the cid: pictures', async () => {
+    const { byParts, whole } = await both(MIXED);
+    const listed = listedAttachments(serve(MIXED).structure)!;
+    expect(listed.map((a) => a.filename)).toEqual(['photo.jpg', 'report.pdf', 'notes.docx']);
+    // The same index as the opened message gives each file, and the same as postal-mime reading the whole message.
+    for (const a of listed) {
+      const opened = byParts.attachments.find((x) => x.index === a.index)!;
+      expect([opened.filename, opened.mimeType]).toEqual([a.filename, a.mimeType]);
+      expect(whole.attachments[a.index]!.filename).toBe(a.filename);
+      // The size is the estimate from BODYSTRUCTURE that a part not fetched with the bodies has (within a few bytes here).
+      expect(Math.abs(opened.size - a.size)).toBeLessThanOrEqual(Math.max(4, opened.size * 0.02));
+    }
+    // What the list leaves out is what the reading pane leaves out: the pictures the HTML shows by cid:.
+    const shown = byParts.attachments.filter((a) => !a.inline || !a.contentId || !(byParts.html ?? '').includes(a.contentId));
+    expect(shown.map((a) => a.index)).toEqual(listed.map((a) => a.index));
+  });
+
+  it('come on the summary, and are left out when there are none or the message is read whole', () => {
+    const summary = (raw: string) => toSummary({ seq: 1, uid: 9, envelope: {}, bodyStructure: serve(raw).structure } as never, 'INBOX');
+    expect(summary(MIXED).attachments?.map((a) => [a.index, a.filename, a.mimeType])).toEqual([
+      [2, 'photo.jpg', 'image/jpeg'], [3, 'report.pdf', 'application/pdf'], [4, 'notes.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+    ]);
+    expect('attachments' in summary(['Subject: x', 'Content-Type: text/plain', '', 'hi', ''].join('\r\n'))).toBe(false);
+    const forwarded = ['Subject: Fwd', 'MIME-Version: 1.0', 'Content-Type: multipart/mixed; boundary="f"', '', '--f', 'Content-Type: text/plain', '', 'See below.', '',
+      '--f', 'Content-Type: message/rfc822', '', 'Subject: inner', 'Content-Type: text/plain', '', 'inner', '', '--f--', ''].join('\r\n');
+    expect(summary(forwarded).attachments).toBeUndefined();
   });
 });
