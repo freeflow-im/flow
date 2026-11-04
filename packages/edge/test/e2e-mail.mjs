@@ -298,6 +298,41 @@ t('cache: with a small budget, a short page says sorting, and asked again fills 
 t('cache: and together the tabs list every INBOX message once, newest first in each',ordered&&seenUids.length===inboxUids.length&&new Set(seenUids).size===inboxUids.length&&inboxUids.every(u=>seenUids.includes(u)),`${seenUids.length} listed of ${inboxUids.length}`);
 await api(A.token,'DELETE',P2);
 
+// ---- The prefetch cache ------------------------------------------------------------------------------------------------
+// A plain page of a folder is read from the cache (x-mail-timing says `cache=hit`) after one small UID search for new
+// mail; x-mail-test-alarm: 1 (MAIL_ALLOW_INSECURE only) runs one alarm pass before answering the request, as the alarm would.
+// Where a page came from is in the x-mail-timing header, which the Worker keeps under MAIL_ALLOW_INSECURE=1 (else it is only logged).
+const cacheOf=async(fn)=>{const x=await fn();x.cache=/cache=(\w+)/.exec(x.h.get('x-mail-timing')??'')?.[1]??null;return x;};
+let pc=await cacheOf(()=>getRaw(`${P}/messages?folder=INBOX&limit=5`));
+t('cache: a plain page is read from the cache',pc.s===200&&pc.j.messages?.length>0&&pc.cache==='hit',pc.s+' '+pc.cache);
+await api(A.token,'GET',`${P}/messages?folder=Sent&limit=5`);
+r=await getRaw(`${P}/folders`,{'x-mail-test-alarm':'1'});
+r=await api(A.token,'GET',`${P}/debug/cache`);
+const inboxCache=r.j.folders?.find(f=>f.folder==='INBOX');
+t('cache: the alarm keeps INBOX, down to the oldest message',r.s===200&&inboxCache?.kind==='inbox'&&inboxCache.rows===inboxUids.length&&inboxCache.low===1&&r.j.log?.length>0&&r.j.log.at(-1).folders.some(x=>x.startsWith('inbox:')),JSON.stringify(r.j).slice(0,200));
+t('cache: and Sent, which was opened',r.j.folders?.some(f=>f.folder==='Sent'&&f.rows>0),JSON.stringify(r.j.folders?.map(f=>[f.folder,f.kind,f.rows])));
+r=await api(Bo.token,'GET',`${P}/debug/cache`);t('cache: the debug route is not for anyone else',r.s===404,r.s);
+// Flags: one set here shows in the cached page at once; one set by another mail app the next time the page is read
+// (the page's flags are checked against the server in one small FETCH).
+const pageUid=pc.j.messages[0].uid;
+r=await api(A.token,'PATCH',`${P}/messages`,{folder:'INBOX',uids:[pageUid],seen:true});
+pc=await cacheOf(()=>getRaw(`${P}/messages?folder=INBOX&limit=5`));
+t('cache: a flag set here shows in the cached page',pc.j.messages?.find(m=>m.uid===pageUid)?.seen===true&&pc.cache==='hit',JSON.stringify(pc.j.messages?.[0]).slice(0,120)+' '+pc.cache);
+await imapDirect(async(c)=>{const lock=await c.getMailboxLock('INBOX');try{await c.messageFlagsAdd(String(pageUid),['\\Flagged'],{uid:true});}finally{lock.release();}});
+pc=await cacheOf(()=>getRaw(`${P}/messages?folder=INBOX&limit=5`));
+t('cache: a flag set by another mail app shows too',pc.j.messages?.find(m=>m.uid===pageUid)?.flagged===true,JSON.stringify(pc.j.messages?.find(m=>m.uid===pageUid)).slice(0,120));
+// New mail: the first page asks the server for it before answering, so it is never stale.
+await deliver('Dana Lee <dana@acme.test>','Fresh from the cache',{});
+let freshRow;for(let i=0;i<20&&!freshRow;i++){pc=await cacheOf(()=>getRaw(`${P}/messages?folder=INBOX&limit=5`));freshRow=pc.j.messages?.find(m=>m.subject===`Fresh from the cache ${tag}`);if(!freshRow)await sleep(300);}
+t('cache: new mail is in the next page read, first',!!freshRow&&pc.j.messages[0].uid===freshRow.uid&&pc.cache==='hit',JSON.stringify(freshRow).slice(0,120)+' '+pc.cache);
+// Mail that left through another app is dropped by the page's flag check.
+await imapDirect(async(c)=>{const lock=await c.getMailboxLock('INBOX');try{await c.messageMove(String(freshRow.uid),MOVED2,{uid:true});}finally{lock.release();}});
+pc=await cacheOf(()=>getRaw(`${P}/messages?folder=INBOX&limit=5`));
+t('cache: mail moved away by another app is not in the page',pc.s===200&&!pc.j.messages?.some(m=>m.uid===freshRow?.uid),JSON.stringify(pc.j.messages?.map(m=>m.uid)));
+// Older pages come from the cache outright.
+const walked=[];let nb=null,hits=0,reads=0;for(let i=0;i<50;i++){reads++;const x=await cacheOf(()=>getRaw(`${P}/messages?folder=INBOX&limit=3${nb?`&before=${nb}`:''}`));if(x.cache==='hit')hits++;walked.push(...(x.j.messages??[]).map(m=>m.uid));if(!x.j.next)break;nb=x.j.next;}
+t('cache: paging through INBOX reads every message once, newest first, every page from the cache',walked.length===inboxUids.length&&new Set(walked).size===walked.length&&walked.every((u,i)=>!i||walked[i-1]>u)&&hits===reads,`${walked.length} of ${inboxUids.length} in ${reads} calls, ${hits} hits`);
+
 // A cold cache on a larger INBOX (another GreenMail user, 320 messages: the 20 oldest a mailing list's, the rest a
 // colleague's): the first Forums page answers at once, empty with `sorting`, though each sorting step is slowed, and
 // fills in as the sorter goes; Primary pages through all 300.
@@ -314,11 +349,23 @@ let filled=null,asks=0;for(const t0=Date.now();Date.now()-t0<30000;){asks++;cons
 t('cold cache: asked again, the page fills in as the sorter goes',filled?.messages?.length===20&&filled.next===null&&filled.messages.every(m=>m.category==='forums'&&m.subject.includes('[hikers]')),`${asks} asks, ${filled?.messages?.length} messages`);
 const prim=await walk(P3,'primary',50,{authorization:'Bearer '+Cy.token});
 t('cold cache: and Primary pages through all 300, newest first',prim.ordered&&prim.out.length===300&&new Set(prim.out).size===300,`${prim.out.length} in ${prim.calls} calls, ${prim.sorting} sorting`);
+
+// The same INBOX, plainly, from a cold cache: the first page seeds the cache with the newest messages and answers from
+// it; paging on past what is cached fills it from the server as it goes; one alarm pass then holds the whole folder.
+const coldPlain=await cacheOf(()=>getRaw(`${P3}/messages?folder=INBOX&limit=25`,{authorization:'Bearer '+Cy.token}));
+t('cold cache: a plain first page answers from the cache',coldPlain.s===200&&coldPlain.j.messages?.length===25&&coldPlain.cache==='hit',coldPlain.s+' '+coldPlain.cache);
+const plainWalk=[];let pb=null,fills=0;for(let i=0;i<40;i++){const x=await cacheOf(()=>getRaw(`${P3}/messages?folder=INBOX&limit=50${pb?`&before=${pb}`:''}`,{authorization:'Bearer '+Cy.token}));if(/^(fill|live)$/.test(x.cache??''))fills++;plainWalk.push(...(x.j.messages??[]).map(m=>m.uid));if(!x.j.next)break;pb=x.j.next;}
+t('cold cache: paging on fills the cache from the server and lists all 320 once',plainWalk.length===320&&new Set(plainWalk).size===320&&plainWalk.every((u,i)=>!i||plainWalk[i-1]>u)&&fills>0,`${plainWalk.length} listed, ${fills} pages filled from the server`);
+await getRaw(`${P3}/folders`,{authorization:'Bearer '+Cy.token,'x-mail-test-alarm':'1'});
+r=await api(Cy.token,'GET',`${P3}/debug/cache`);const bulkInbox=r.j.folders?.find(f=>f.folder==='INBOX');
+t('cold cache: after an alarm pass the cache holds the whole folder',bulkInbox?.rows===320&&bulkInbox.low===1&&bulkInbox.high>=bulkInbox.low,JSON.stringify(bulkInbox));
 await api(Cy.token,'DELETE',P3);
 await bulkImap(async(c)=>{const lock=await c.getMailboxLock('INBOX');try{await c.messageDelete('1:*');}finally{lock.release();}}).catch(()=>{});
 const logText=fs.readFileSync(log,'utf8');const timingLines=logText.split('\n').filter(l=>/\[mail\] (GET|POST|PATCH|DELETE) \/v1\/mail/.test(l));
 t('timing: one line per request, with the lock wait and IMAP time',timingLines.some(l=>/\[mail\] GET \/v1\/mail\/accounts\/:id\/messages\/:uid 200 \d+ms \(lock wait \d+ms, imap \d+ms\)/.test(l)),timingLines.at(-1));
 t('timing: and nothing of the mail in them',timingLines.length>20&&!timingLines.some(l=>l.includes(tag)||l.includes(ACC)||l.includes(MAIL_USER)),timingLines.find(l=>l.includes(tag)||l.includes(ACC)));
+
+t('timing: a cached list says so',timingLines.some(l=>/\/messages 200 \d+ms \(lock wait \d+ms, imap \d+ms\) cache=hit$/.test(l)),timingLines.find(l=>/cache=/.test(l)));
 await imapDirect(async(c)=>{await c.mailboxDelete(MOVED2).catch(()=>{});const lock=await c.getMailboxLock('INBOX');try{await c.messageDelete(Object.values(UIDS).join(','),{uid:true});}finally{lock.release();}}).catch(()=>{});
 smtpDirect.close();
 

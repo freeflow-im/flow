@@ -2,13 +2,19 @@
 // those accounts' own servers over IMAP and SMTP. The contract is docs/specs/mail-api.md.
 //
 // The accounts are in the object's SQLite, each password sealed with FLOW_DATA_KEY (org/crypto, the same scheme as Chat's
-// files) and never returned or logged. While the object is awake it keeps up to three IMAP connections per account: an
+// files) and never returned or logged. While the object is awake it keeps up to four IMAP connections per account: an
 // "interactive" one for what the user is waiting on (opening a message and its attachments, moves, deletes, the
-// IMAP side of sending), a "background" one for lists, folders and flags (read, starred: the app shows them at once), and a "sorter" for sorting older mail into tabs and the
-// re-check, which take long on a large mailbox, so neither a slow list holds up opening a message nor sorting a list page.
+// IMAP side of sending), a "background" one for lists, folders and flags (read, starred: the app shows them at once), a "sorter" for sorting older mail into tabs and the
+// re-check, which take long on a large mailbox, so neither a slow list holds up opening a message nor sorting a list page,
+// and a "cache" one for the alarm that keeps the prefetch cache (cache.ts) up to date, so it never waits on the sorter.
 // Each is opened when first needed, reused, and logged out after a minute with nothing to do; a request finding it dropped
 // opens another. Every operation on a folder holds that connection's lock on it (imapflow's getMailboxLock, which is per
 // connection).
+//
+// The prefetch cache: the newest messages of each account's main folders (INBOX, Sent, Drafts, Archive or All Mail, and any
+// folder opened lately) are kept in SQLite, so a folder's list is read from it (after one small `UID SEARCH` for new mail)
+// and older pages come from it outright; the object's alarm refreshes flags, forgets mail that left, and fills in older
+// mail, every 30 s while the person is using Mail and less often after.
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { DurableObject } from 'cloudflare:workers';
 import { connect } from 'cloudflare:sockets';
@@ -19,6 +25,7 @@ import PostalMime, { type Email } from 'postal-mime';
 import { ApiError } from '../errors';
 import { decryptBlob, encryptBlob } from '../org/crypto/index';
 import { decodeTransfer, decodedSize, minimalMessage, planBody, prefetch, type BodyPlan } from './body';
+import { ALARM_BUDGET_MS, BACKFILL_STEP, CACHE_ROWS, ERROR_BACKOFF_MS, MAIN_KINDS, MailCache, NEW_CAP, flagDiff, flagsOf, nextAlarmAt, walkDown, type CachedFolder, type Flags, type FolderKind, type NewRow } from './cache';
 import { contentDisposition, specialUseOf, snippetOf, textPartOf, toDetail, toFolders, toSummary, type AttachmentInfo, type MessageDetail, type MessageSummary, type SpecialUse, type TextPart } from './convert';
 import { CATEGORIES, CATEGORY_HEADERS, classifyHeaders, effective, effectiveSql, isGmailHost, normalizeTabs, parseHeaders, tabPage, uidSet, type Category, type TabCategory } from './categorize';
 import { GMAIL_NONE, GMAIL_REASON, GmailSearchError, recheckRows, sortBatch, type GmailSearcher, type RecheckResult } from './gmailTabs';
@@ -62,16 +69,24 @@ interface SortTarget { tabs: TabCategory[]; category: Category; below: number; w
 /** A message as opened: what GET returns, and the parts already here (so its inline pictures do not each fetch again). */
 interface Opened { detail: MessageDetail; plan: BodyPlan | null; parts: Map<number, { content: Buffer; mimeType: string; filename: string }> }
 
-type Kind = 'interactive' | 'background' | 'sorter';
-/** Where one request's time went, for its log line: waiting for a connection and a folder's lock, and talking IMAP. */
-interface Timing { wait: number; imap: number; test: TestHooks }
+type Kind = 'interactive' | 'background' | 'sorter' | 'cache';
+const KINDS: readonly Kind[] = ['interactive', 'background', 'sorter', 'cache'];
+/**
+ * Where one request's time went, for its log line: waiting for a connection and a folder's lock, and talking IMAP; and for
+ * a list, whether its rows came from the cache (`hit`), partly (`fill`) or from the server (`live`).
+ */
+interface Timing { wait: number; imap: number; cache?: 'hit' | 'fill' | 'live'; test: TestHooks }
 /**
  * Local dev only (MAIL_ALLOW_INSECURE=1), from x-mail-test-* headers, for test/e2e-mail.mjs, and carried into the
- * background work a request starts: a pause in each of the sorter's steps (holding its lock), a smaller sorting budget,
- * and the re-check started now.
+ * background work a request starts: a pause in each of the sorter's steps (holding its lock), a smaller sorting budget
+ * (and a smaller cache budget: new mail per sync, backfill step), the re-check started now, and one alarm run before the
+ * request is answered.
  */
-interface TestHooks { slowMs: number; cap: number | null; recheck: boolean }
-const NO_TEST: TestHooks = { slowMs: 0, cap: null, recheck: false };
+interface TestHooks { slowMs: number; cap: number | null; recheck: boolean; alarm: boolean }
+const NO_TEST: TestHooks = { slowMs: 0, cap: null, recheck: false, alarm: false };
+/** One alarm run's result, kept in memory for `GET /v1/mail/accounts/:id/debug/cache`. */
+interface CacheLogEntry { at: string; ms: number; folders: string[]; errors: string[] }
+const CACHE_LOG_KEEP = 20;
 const timing = new AsyncLocalStorage<Timing | undefined>();
 
 const IDLE_MS = 60_000;
@@ -132,6 +147,13 @@ type Failure = { code: 'auth_failed' | 'connect_failed'; message: string };
 const SUMMARY_QUERY: FetchQueryObject = { uid: true, envelope: true, flags: true, bodyStructure: true, size: true, internalDate: true };
 /** The headers kept for postal-mime when a message is opened by its parts: what MessageDetail needs beyond the envelope. */
 const DETAIL_HEADERS = ['from', 'reply-to', 'bcc', 'in-reply-to', 'references'];
+/** The headers a cached row keeps: DETAIL_HEADERS (to open the message by its parts later) and what threading reads. */
+const CACHE_HEADERS = [...DETAIL_HEADERS, 'list-id'];
+/**
+ * What a list fetches, and the cache keeps: the summary's fields, the few headers above, and the server's own message and
+ * thread ids where it has them (Gmail's X-GM-MSGID/X-GM-THRID, OBJECTID's; imapflow asks only servers that announce them).
+ */
+const CACHE_QUERY: FetchQueryObject = { ...SUMMARY_QUERY, threadId: true, headers: CACHE_HEADERS };
 
 /** What an IMAP login or connection failure means to the client: 422, so it is never mistaken for the session expiring. */
 function imapFailure(err: unknown): Failure {
@@ -211,6 +233,14 @@ export class Mail extends DurableObject<MailEnv> {
   private readonly sorting = new Map<string, { target: SortTarget }>();
   /** The last sorting and re-check results per account, for the debug route (memory only: gone when the object sleeps). */
   private readonly tabLog = new Map<string, TabLogEntry[]>();
+  /** The prefetch cache (cache.ts): its tables and the rules around them. */
+  private readonly cache: MailCache;
+  /** Whether an alarm run is going (one at a time; a request's test hook or an alarm that fires meanwhile waits for none). */
+  private caching = false;
+  /** The last alarm runs, for the debug route (memory only). */
+  private readonly cacheLog: CacheLogEntry[] = [];
+  /** When `last_active_at` was last written (written at most every 10 s). */
+  private lastTouch = 0;
 
   constructor(ctx: DurableObjectState, env: MailEnv) {
     super(ctx, env);
@@ -220,6 +250,8 @@ export class Mail extends DurableObject<MailEnv> {
       try { this.sql.exec(add); } catch { continue; /* already added */ }
       if (then) this.sql.exec(then);
     }
+    this.cache = new MailCache(this.sql);
+    this.cache.init();
     this.routes();
   }
 
@@ -230,15 +262,21 @@ export class Mail extends DurableObject<MailEnv> {
    * keep each request's tail event open (until the next request comes, or the socket closes).
    */
   async handle(request: Request): Promise<Response> {
-    const t: Timing = { wait: 0, imap: 0, test: { slowMs: 0, cap: null, recheck: false } };
+    const t: Timing = { wait: 0, imap: 0, test: NO_TEST };
     // Local dev only: a pause where sorting runs (holding the background lock), a smaller sorting budget, and the re-check now.
     if (this.allowInsecure) {
       const h = request.headers;
-      t.test = { slowMs: Math.min(10_000, Number(h.get('x-mail-test-slow-ms')) || 0), cap: Number(h.get('x-mail-test-classify-cap')) || null, recheck: h.get('x-mail-test-recheck') === '1' };
+      t.test = { slowMs: Math.min(10_000, Number(h.get('x-mail-test-slow-ms')) || 0), cap: Number(h.get('x-mail-test-classify-cap')) || null, recheck: h.get('x-mail-test-recheck') === '1', alarm: h.get('x-mail-test-alarm') === '1' };
     }
-    const res = await timing.run(t, () => this.app.fetch(request));
+    const res = await timing.run(t, async () => {
+      // The test hook: one alarm run first, so the request that follows sees the cache as the alarm leaves it.
+      if (t.test.alarm) await this.runCache(Date.now() + ALARM_BUDGET_MS).catch((err) => console.warn(`[mail] test alarm: ${(err as Error).message}`));
+      return this.app.fetch(request);
+    });
+    this.touch();
+    await this.armAlarm().catch((err) => console.warn(`[mail] alarm: ${(err as Error).message}`));
     const out = new Response(res.body, res);
-    out.headers.set(TIMING_HEADER, `wait=${Math.round(t.wait)};imap=${Math.round(t.imap)}`);
+    out.headers.set(TIMING_HEADER, `wait=${Math.round(t.wait)};imap=${Math.round(t.imap)}${t.cache ? `;cache=${t.cache}` : ''}`);
     return out;
   }
 
@@ -301,14 +339,7 @@ export class Mail extends DurableObject<MailEnv> {
   }
 
   private forget(id: string): void {
-    for (const kind of ['interactive', 'background', 'sorter'] as const) {
-      const key = `${id}/${kind}`;
-      const conn = this.conns.get(key);
-      this.conns.delete(key);
-      clearTimeout(this.timers.get(key));
-      this.timers.delete(key);
-      void conn?.then((c) => c.logout()).catch(() => {});
-    }
+    for (const kind of KINDS) this.closeNow(`${id}/${kind}`);
     this.folderLists.delete(id);
     for (const key of [...this.opened.keys()]) if (key.startsWith(`${id}/`)) this.opened.delete(key);
   }
@@ -374,8 +405,14 @@ export class Mail extends DurableObject<MailEnv> {
 
   private closeIdle(key: string): void {
     if (this.users.get(key)) return;
+    this.closeNow(key);
+  }
+
+  /** Logs a connection out now (the account is forgotten, or the alarm is done and the person is away). */
+  private closeNow(key: string): void {
     const conn = this.conns.get(key);
     this.conns.delete(key);
+    clearTimeout(this.timers.get(key));
     this.timers.delete(key);
     void conn?.then((c) => c.logout()).catch(() => {});
   }
@@ -473,50 +510,138 @@ export class Mail extends DurableObject<MailEnv> {
     const unread = !!opts.unread;
     // A search covers the whole folder, as Gmail's does; and with tabs off there is only the one list.
     if (category && !q && !unread && tabs.length) return this.tabList(r, folder, tabs, category, limit, before);
+    // A plain page of the folder: from the prefetch cache.
+    if (!q && !unread) return this.cachedList(r, folder, tabs, limit, before);
+    return this.withFolder(r, folder, 'background', async (c) => {
+      const box = c.mailbox;
+      const exists = box ? box.exists : 0;
+      if (!exists || (before !== null && before <= 1)) return { messages: [], next: null };
+      const fetched: FetchMessageObject[] = [];
+      const gmail = tabs.length > 0 && this.isGmail(r, c);
+      const range: SearchObject = { ...(before !== null ? { uid: `1:${before - 1}` } : {}), ...(unread ? { seen: false } : {}) };
+      const gmailRaw = !!q && !!opts.raw && c.capabilities.has('X-GM-EXT-1');
+      // TEXT already covers the headers; some servers (GreenMail) refuse FROM with a space in it, and then TEXT alone does.
+      let found = gmailRaw
+        ? await c.search({ ...range, gmraw: q }, { uid: true })
+        : q
+          ? await c.search({ ...range, or: [{ text: q }, { from: q }, { subject: q }] }, { uid: true })
+          : await c.search(Object.keys(range).length ? range : { all: true }, { uid: true });
+      if (found === false && gmailRaw) throw badRequest('Gmail refused the search: check its syntax');
+      if (found === false && q) found = await c.search({ ...range, text: q }, { uid: true });
+      if (found === false) throw badRequest('the mail server refused the search');
+      found = (found ?? []).sort((a, b) => a - b);
+      const more = found.length > limit;
+      const page = found.slice(-limit);
+      if (page.length) for await (const m of c.fetch(page.join(','), this.listQuery(tabs, gmail), { uid: true })) fetched.push(m);
+      fetched.sort((a, b) => b.uid - a.uid);
+      const { messages } = await this.summarize(r, c, folder, tabs, gmail, fetched);
+      return { messages, next: more && messages.length ? messages[messages.length - 1].uid : null };
+    });
+  }
+
+  /** What a list fetches: with tabs on, on a server that is not Gmail, the headers the tab rules read as well. */
+  private listQuery(tabs: TabCategory[], gmail: boolean): FetchQueryObject {
+    return tabs.length && !gmail ? { ...CACHE_QUERY, headers: [...CACHE_HEADERS, ...CATEGORY_HEADERS] } : CACHE_QUERY;
+  }
+
+  /** Fetched messages as a list shows them (with their snippets, and their tabs when the folder has them), newest first. */
+  private async summarize(r: AccountRow, c: ImapFlow, folder: string, tabs: TabCategory[], gmail: boolean, fetched: FetchMessageObject[]): Promise<{ messages: MessageSummary[]; snippets: Map<number, string> }> {
+    const snippets = await this.snippets(c, fetched).catch((err) => { console.warn(`[mail] snippets: ${(err as Error).message}`); return new Map<number, string>(); });
+    const summaries = fetched.map((m) => toSummary(m, folder, snippets.get(m.uid) ?? ''));
+    const messages = tabs.length ? await this.withTabs(r, c, folder, tabs, gmail, summaries, new Map(fetched.map((m) => [m.uid, m]))) : summaries;
+    return { messages, snippets };
+  }
+
+  /** Summaries with each one's tab and why (`categoriesOf`). */
+  private async withTabs(r: AccountRow, c: ImapFlow, folder: string, tabs: TabCategory[], gmail: boolean, summaries: MessageSummary[], fetched: Map<number, FetchMessageObject>): Promise<MessageSummary[]> {
+    const categories = await this.categoriesOf(r, c, folder, tabs, summaries.map((s) => s.uid), gmail, fetched);
+    return summaries.map((s) => {
+      const tab = categories.get(s.uid);
+      return { ...s, category: tab?.category ?? 'primary', ...(tab?.reason ? { categoryReason: tab.reason } : {}) };
+    });
+  }
+
+  // ---- the prefetch cache: lists ----------------------------------------------------------------------------------
+
+  /**
+   * One plain page of a folder, newest first, from the prefetch cache. The first page first asks the server for new mail
+   * (`cacheNew`: one `UID SEARCH` above the high-water mark, and a FETCH of what is new), so it is never stale; then the
+   * page is read from SQLite. Where the cache ends before the page is full (an older page, or a folder seen for the first
+   * time), the rest comes from the server as it always did, and is cached on the way, so scrolling never waits for the
+   * alarm. The page's flags are checked against the server in one small FETCH (mail read or starred elsewhere shows at
+   * once), which also drops what has left the folder.
+   */
+  private async cachedList(r: AccountRow, folder: string, tabs: TabCategory[], limit: number, before: number | null): Promise<MessagePage> {
+    const t = timing.getStore();
     return this.withImap(r, 'background', async (c) => {
       const wasOpen = c.mailbox && c.mailbox.path === folder;
       return this.locked(c, folder, async () => {
-        // A folder this connection already had open has not heard of new mail since (no IDLE): ask.
-        if (wasOpen && !q && before === null) await c.noop();
-        const box = c.mailbox;
-        const exists = box ? box.exists : 0;
-        if (!exists || (before !== null && before <= 1)) return { messages: [], next: null };
-        const fetched: FetchMessageObject[] = [];
-        let more: boolean;
-        // With tabs on, each page's messages are sorted into them (other servers: from the few headers fetched with it).
+        if (!c.mailbox) return { messages: [], next: null };
         const gmail = tabs.length > 0 && this.isGmail(r, c);
-        const query: FetchQueryObject = tabs.length && !gmail ? { ...SUMMARY_QUERY, headers: CATEGORY_HEADERS } : SUMMARY_QUERY;
-        if (!q && !unread && before === null) {
-          const start = Math.max(1, exists - limit + 1);
-          more = start > 1;
-          for await (const m of c.fetch(`${start}:${exists}`, query)) fetched.push(m);
-        } else {
-          const range: SearchObject = { ...(before !== null ? { uid: `1:${before - 1}` } : {}), ...(unread ? { seen: false } : {}) };
-          const gmailRaw = !!q && !!opts.raw && c.capabilities.has('X-GM-EXT-1');
-          // TEXT already covers the headers; some servers (GreenMail) refuse FROM with a space in it, and then TEXT alone does.
-          let found = gmailRaw
-            ? await c.search({ ...range, gmraw: q }, { uid: true })
-            : q
-              ? await c.search({ ...range, or: [{ text: q }, { from: q }, { subject: q }] }, { uid: true })
-              : await c.search(Object.keys(range).length ? range : { all: true }, { uid: true });
-          if (found === false && gmailRaw) throw badRequest('Gmail refused the search: check its syntax');
-          if (found === false && q) found = await c.search({ ...range, text: q }, { uid: true });
-          if (found === false) throw badRequest('the mail server refused the search');
-          found = (found ?? []).sort((a, b) => a - b);
-          more = found.length > limit;
-          const page = found.slice(-limit);
-          if (page.length) for await (const m of c.fetch(page.join(','), query, { uid: true })) fetched.push(m);
+        const validity = this.validity(c);
+        const now = Date.now();
+        let state = this.cache.touchFolder(r.id, folder, await this.kindOf(r, c, folder), now, true);
+        if (state.validity !== validity) state = this.cache.resetFolder(r.id, folder, validity);
+        if (before === null) {
+          // A folder this connection already had open has not heard of new mail since (no IDLE): ask.
+          if (wasOpen) await c.noop();
+          await this.cacheNew(r, c, folder, state, this.budget(NEW_CAP));
+          state = this.cache.folder(r.id, folder)!;
         }
-        fetched.sort((a, b) => b.uid - a.uid);
-        const snippets = await this.snippets(c, fetched).catch((err) => { console.warn(`[mail] snippets: ${(err as Error).message}`); return new Map<number, string>(); });
-        const categories = tabs.length ? await this.categoriesOf(r, c, folder, tabs, fetched, gmail) : null;
-        const messages = fetched.map((m) => {
-          const tab = categories?.get(m.uid);
-          return { ...toSummary(m, folder, snippets.get(m.uid) ?? ''), ...(categories ? { category: tab?.category ?? 'primary', ...(tab?.reason ? { categoryReason: tab.reason } : {}) } : {}) };
-        });
+        if (state.high === 0 || (before !== null && before <= 1)) { if (t) t.cache = 'hit'; return { messages: [], next: null }; }
+        const cursor = before ?? Number.MAX_SAFE_INTEGER;
+        const rows = cursor > state.low ? this.cache.page(r.id, folder, validity, cursor, state.low, limit + 1) : [];
+        // More below: another cached row, or the folder reaching further down than the cache does.
+        let more = rows.length > limit || state.low > 1;
+        let messages = rows.slice(0, limit).map((row) => row.summary);
+        const liveFetched = new Map<number, FetchMessageObject>();
+        let kind: Timing['cache'] = 'hit';
+        if (messages.length) {
+          // The page's flags as the server has them now; a message it no longer has (moved by another mail app) is dropped.
+          const { changed, vanished } = await this.refreshFlags(r, c, folder, validity, messages.map((m) => m.uid), now, null);
+          if (vanished.size) { messages = messages.filter((m) => !vanished.has(m.uid)); this.left(r.id, folder, [...vanished]); }
+          if (changed.size) messages = messages.map((m) => { const f = changed.get(m.uid); return f ? { ...m, seen: f.seen, flagged: f.flagged, answered: f.answered } : m; });
+        }
+        if (messages.length < limit && state.low > 1) {
+          // The cache ends before the page is full: the rest from the server, and cached on the way.
+          const under = messages.length ? messages[messages.length - 1].uid : before;
+          const live = await this.livePage(c, limit - messages.length, under, this.listQuery(tabs, gmail));
+          for (const m of live.fetched) liveFetched.set(m.uid, m);
+          const { summaries } = await this.cacheRows(r, c, folder, validity, live.fetched, now);
+          // The page read from the cache ended at `low`, so what follows is adjacent to it: the cache now reaches that far.
+          // (A page asked for from further down than the cache reaches is cached too, but leaves a gap for the backfill.)
+          if (under === null || under >= state.low) this.cache.lowerLow(r.id, folder, validity, state.low, live.more ? (live.fetched[live.fetched.length - 1]?.uid ?? 1) : 1);
+          kind = messages.length ? 'fill' : 'live';
+          messages.push(...summaries);
+          more = live.more;
+        }
+        if (t) t.cache = kind;
+        if (tabs.length) messages = await this.withTabs(r, c, folder, tabs, gmail, messages, liveFetched);
         return { messages, next: more && messages.length ? messages[messages.length - 1].uid : null };
       });
     });
+  }
+
+  /** One page straight from the server, newest first: the newest `limit` of the open folder, or those below `before`. */
+  private async livePage(c: ImapFlow, limit: number, before: number | null, query: FetchQueryObject): Promise<{ fetched: FetchMessageObject[]; more: boolean }> {
+    const exists = c.mailbox ? c.mailbox.exists : 0;
+    const fetched: FetchMessageObject[] = [];
+    if (!exists || (before !== null && before <= 1)) return { fetched, more: false };
+    let more: boolean;
+    if (before === null) {
+      const start = Math.max(1, exists - limit + 1);
+      more = start > 1;
+      for await (const m of c.fetch(`${start}:${exists}`, query)) fetched.push(m);
+    } else {
+      const found = await c.search({ uid: `1:${before - 1}` }, { uid: true });
+      if (found === false) throw badRequest('the mail server refused the search');
+      const sorted = (found ?? []).filter((u) => u < before).sort((a, b) => a - b);
+      more = sorted.length > limit;
+      const page = sorted.slice(-limit);
+      if (page.length) for await (const m of c.fetch(uidSet(page), query, { uid: true })) fetched.push(m);
+    }
+    fetched.sort((a, b) => b.uid - a.uid);
+    return { fetched, more };
   }
 
   // ---- inbox tabs: the cache ------------------------------------------------------------------------------------------
@@ -887,19 +1012,27 @@ export class Mail extends DurableObject<MailEnv> {
 
   // ---- inbox tabs: lists ----------------------------------------------------------------------------------------------
 
-  /** The tab of each message of a page listed without `category`, and why: cached, or sorted now. */
-  private async categoriesOf(r: AccountRow, c: ImapFlow, folder: string, tabs: TabCategory[], fetched: FetchMessageObject[], gmail: boolean): Promise<Map<number, { category: Category; reason?: string }>> {
+  /**
+   * The tab of each message of a page listed without `category`, and why: cached, or sorted now (Gmail: asked of Gmail;
+   * elsewhere from the headers of the message as fetched with the page, or fetched now for one that came from the cache).
+   */
+  private async categoriesOf(r: AccountRow, c: ImapFlow, folder: string, tabs: TabCategory[], uids: number[], gmail: boolean, fetched: Map<number, FetchMessageObject>): Promise<Map<number, { category: Category; reason?: string }>> {
     const overrides = this.overrides(r.id);
     const out = new Map<number, { category: Category; reason?: string }>();
-    if (!fetched.length) return out;
+    if (!uids.length) return out;
     const validity = this.validity(c);
-    const uids = fetched.map((m) => m.uid);
     const cache = this.cachedRows(r, folder, validity, uids);
-    if (gmail) await this.classify(r, c, folder, validity, uids.filter((u) => !cache.has(u)), true, cache);
-    for (const m of fetched) {
-      const row = cache.get(m.uid) ?? (gmail ? undefined : this.remember(r, folder, validity, m));
+    const missing = uids.filter((u) => !cache.has(u));
+    if (gmail) await this.classify(r, c, folder, validity, missing, true, cache);
+    else if (missing.length) {
+      for (const u of missing) { const m = fetched.get(u); if (m?.headers) cache.set(u, this.remember(r, folder, validity, m)); }
+      const ask = missing.filter((u) => !cache.has(u));
+      if (ask.length) for await (const m of c.fetch(uidSet(ask), { uid: true, envelope: true, internalDate: true, headers: CATEGORY_HEADERS }, { uid: true })) cache.set(m.uid, this.remember(r, folder, validity, m));
+    }
+    for (const uid of uids) {
+      const row = cache.get(uid);
       // (A Gmail message whose search failed is not cached: Primary for now, without a reason, and sorted next time.)
-      out.set(m.uid, row ? { category: this.tabOf(row, overrides, tabs), reason: reasonOf(row.reason, overrides.get(row.sender)) } : { category: 'primary' });
+      out.set(uid, row ? { category: this.tabOf(row, overrides, tabs), reason: reasonOf(row.reason, overrides.get(row.sender)) } : { category: 'primary' });
     }
     return out;
   }
@@ -975,6 +1108,231 @@ export class Mail extends DurableObject<MailEnv> {
   private setOverride(accountId: string, sender: string, category: Category | null): void {
     if (category === null) this.sql.exec('DELETE FROM mail_category_overrides WHERE account_id = ? AND sender = ?', accountId, sender);
     else this.sql.exec('INSERT OR REPLACE INTO mail_category_overrides (account_id, sender, category, created_at) VALUES (?, ?, ?, ?)', accountId, sender, category, Date.now());
+  }
+
+  // ---- the prefetch cache: keeping it ---------------------------------------------------------------------------------
+
+  /** The person made a request: the alarm runs often for a while (`last_active_at`, written at most every 10 s). */
+  private touch(): void {
+    const now = Date.now();
+    if (now - this.lastTouch < 10_000) return;
+    this.lastTouch = now;
+    this.cache.setState('last_active_at', String(now));
+  }
+
+  /**
+   * Sets the alarm for the next cache run (cache.ts `nextAlarmAt`: 30 s while the person is active, then less often, none
+   * after a day idle or with no accounts), unless one is already due sooner. After every request and every run.
+   */
+  private async armAlarm(now = Date.now()): Promise<void> {
+    const has = (this.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM accounts').toArray()[0]?.n ?? 0) > 0;
+    const at = nextAlarmAt(this.cache.lastActiveAt(), now, has);
+    const current = await this.ctx.storage.getAlarm();
+    if (at === null) { if (current !== null) await this.ctx.storage.deleteAlarm(); return; }
+    if (current === null || current > at || current < now) await this.ctx.storage.setAlarm(at);
+  }
+
+  async alarm(): Promise<void> {
+    try {
+      await this.runCache(Date.now() + ALARM_BUDGET_MS);
+    } catch (err) {
+      console.warn(`[mail] alarm: ${(err as Error).message}`);
+    }
+    await this.armAlarm().catch((err) => console.warn(`[mail] alarm: ${(err as Error).message}`));
+  }
+
+  /**
+   * One run of the cache: each account in turn (starting after the one the last run ended with, so a slow account never
+   * starves the rest), each of its cached folders synced on the cache connection, until the budget is spent. An account
+   * whose server refuses it is skipped (its status says so); a folder whose sync fails is left alone for a while. When
+   * the person is away, the cache connection is logged out right after, so the object can sleep.
+   */
+  private async runCache(deadline: number): Promise<void> {
+    if (this.caching) return;
+    this.caching = true;
+    const start = Date.now();
+    const entry: CacheLogEntry = { at: new Date(start).toISOString(), ms: 0, folders: [], errors: [] };
+    const t: Timing = { wait: 0, imap: 0, test: timing.getStore()?.test ?? NO_TEST };
+    try {
+      await timing.run(t, async () => {
+        const accounts = this.sql.exec<AccountRow & Record<string, SqlStorageValue>>('SELECT * FROM accounts ORDER BY created_at').toArray();
+        const last = this.cache.state('last_account');
+        const i = accounts.findIndex((a) => a.id === last);
+        const order = i < 0 ? accounts : [...accounts.slice(i + 1), ...accounts.slice(0, i + 1)];
+        const active = Date.now() - this.cache.lastActiveAt() < 3 * 60_000;
+        for (const r of order) {
+          if (Date.now() > deadline) break;
+          try {
+            await this.withImap(r, 'cache', async (c) => {
+              const now = Date.now();
+              for (const f of await this.cacheFolders(r, c, now)) {
+                if (Date.now() > deadline) break;
+                if (f.error && now - f.errorAt < ERROR_BACKOFF_MS) continue;
+                try {
+                  const what = await this.locked(c, f.folder, () => this.syncFolder(r, c, f, deadline));
+                  entry.folders.push(`${f.kind}: ${what}`);
+                } catch (err) {
+                  const message = (err as Error).message;
+                  this.cache.setMarks(r.id, f.folder, { error: message, errorAt: Date.now() });
+                  entry.errors.push(`${f.kind}: ${message}`);
+                }
+              }
+            });
+          } catch (err) {
+            entry.errors.push((err as Error).message);
+          } finally {
+            this.cache.setState('last_account', r.id);
+            if (!active) this.closeNow(`${r.id}/cache`);
+          }
+        }
+      });
+    } finally {
+      this.caching = false;
+      entry.ms = Date.now() - start;
+      this.cacheLog.push(entry);
+      while (this.cacheLog.length > CACHE_LOG_KEEP) this.cacheLog.shift();
+      console.log(`[mail] cache: ${entry.folders.length} folders${entry.errors.length ? `, ${entry.errors.length} errors` : ''} ${entry.ms}ms (lock wait ${Math.round(t.wait)}ms, imap ${Math.round(t.imap)}ms)`);
+    }
+  }
+
+  /** Why a folder is cached: INBOX, Sent, Drafts, Archive or All Mail by its special use, else because it was opened. */
+  private async kindOf(r: AccountRow, c: ImapFlow, folder: string): Promise<FolderKind> {
+    const f = (await this.folderList(r, c)).find((x) => x.path === folder);
+    const use = f ? specialUseOf(f) : null;
+    return use && (MAIN_KINDS as readonly string[]).includes(use) ? (use as FolderKind) : 'recent';
+  }
+
+  /** The folders the alarm keeps for an account: the main ones (rows made as needed) and those opened lately. */
+  private async cacheFolders(r: AccountRow, c: ImapFlow, now: number): Promise<CachedFolder[]> {
+    for (const f of await this.folderList(r, c)) {
+      if (f.flags.has('\\Noselect')) continue;
+      const use = specialUseOf(f);
+      if (use && (MAIN_KINDS as readonly string[]).includes(use)) this.cache.touchFolder(r.id, f.path, use as FolderKind, now, false);
+    }
+    this.cache.expireFolders(r.id, now);
+    return this.cache.folders(r.id);
+  }
+
+  /**
+   * Brings one cached folder up to date, under its lock on the cache connection: new mail above the high-water mark
+   * (`cacheNew`), the flags of every cached message and what has left (`refreshFlags`, CONDSTORE's `changedSince` where
+   * the server has it), older mail below `low` while there is budget (`backfill`), and the oldest rows past CACHE_ROWS
+   * dropped. Each step saves its marks before the next, so a run cut short leaves the cache consistent.
+   */
+  private async syncFolder(r: AccountRow, c: ImapFlow, f: CachedFolder, deadline: number): Promise<string> {
+    const folder = f.folder;
+    const validity = this.validity(c);
+    let state = f.validity === validity ? f : this.cache.resetFolder(r.id, folder, validity);
+    const started = Date.now();
+    const added = await this.cacheNew(r, c, folder, state, this.budget(NEW_CAP));
+    state = this.cache.folder(r.id, folder)!;
+    const uids = this.cache.uids(r.id, folder, validity);
+    const box = c.mailbox || null;
+    const condstore = c.enabled.has('CONDSTORE') && !!box && !box.noModseq && box.highestModseq !== undefined;
+    const modseq = condstore ? String(box.highestModseq) : null;
+    let changed = 0, gone = 0;
+    if (uids.length) {
+      const since = condstore && state.modseq && state.modseq !== modseq ? BigInt(state.modseq) : null;
+      if (condstore && state.modseq && state.modseq === modseq) {
+        // Nothing changed flags since the last run; only what left the folder is asked about.
+        const present = await c.search({ uid: `${Math.max(1, state.low)}:*` }, { uid: true });
+        if (Array.isArray(present)) { const have = new Set(present); const vanished = uids.filter((u) => !have.has(u)); if (vanished.length) this.left(r.id, folder, vanished); gone = vanished.length; }
+      } else {
+        const got = await this.refreshFlags(r, c, folder, validity, uids, started, since);
+        changed = got.changed.size;
+        gone = got.vanished.size;
+        if (got.vanished.size) this.left(r.id, folder, [...got.vanished]);
+      }
+      this.cache.setMarks(r.id, folder, { modseq });
+    }
+    let older = 0;
+    for (let steps = 0; steps < 50 && Date.now() < deadline; steps++) {
+      state = this.cache.folder(r.id, folder)!;
+      if (state.low <= 1 || this.cache.count(r.id, folder, validity) >= CACHE_ROWS) break;
+      await this.testSlow();
+      const got = await this.backfill(r, c, folder, state, this.budget(BACKFILL_STEP));
+      older += got.added;
+      if (!got.moved) break;
+    }
+    const trimmed = this.cache.trim(r.id, folder, validity, CACHE_ROWS);
+    this.cache.setMarks(r.id, folder, { syncedAt: Date.now(), error: null, errorAt: 0 });
+    return `${added} new, ${changed} flags, ${gone} gone, ${older} older${trimmed ? `, ${trimmed} trimmed` : ''}`;
+  }
+
+  /**
+   * New mail of the open folder above the high-water mark, into the cache: one `UID SEARCH <high+1>:*`, and a FETCH of at
+   * most `cap` of them, the newest. The first time (or after a new UIDVALIDITY), the newest `cap` found from UIDNEXT down
+   * (`uidsBelow`). More new mail than `cap`: `low` moves up to what was cached, and the backfill fills in below. Returns how
+   * many were cached.
+   */
+  private async cacheNew(r: AccountRow, c: ImapFlow, folder: string, state: CachedFolder, cap: number): Promise<number> {
+    const validity = this.validity(c);
+    const now = Date.now();
+    if (state.high === 0) {
+      const top = Number(c.mailbox ? c.mailbox.uidNext : 0) || 0;
+      const { uids, from } = top > 1 ? await this.uidsBelow(c, top, cap) : { uids: ((await c.search({ all: true }, { uid: true })) || []).sort((a, b) => b - a), from: 1 };
+      const take = uids.slice(0, cap);
+      if (!take.length) return 0;
+      await this.cacheFetch(r, c, folder, validity, take, now);
+      this.cache.setMarks(r.id, folder, { high: take[0], low: take.length < uids.length ? take[take.length - 1] : from });
+      return take.length;
+    }
+    const fresh = ((await c.search({ uid: `${state.high + 1}:*` }, { uid: true })) || []).filter((u) => u > state.high).sort((a, b) => b - a);
+    if (!fresh.length) return 0;
+    const take = fresh.slice(0, cap);
+    await this.cacheFetch(r, c, folder, validity, take, now);
+    if (take.length < fresh.length) this.cache.setMarks(r.id, folder, { high: fresh[0], low: take[take.length - 1] });
+    else this.cache.setMarks(r.id, folder, { high: fresh[0] });
+    return take.length;
+  }
+
+  /** One backfill step: the cache of the open folder extended below `low` by up to `budget` messages (`uidsBelow`, `walkDown`). */
+  private async backfill(r: AccountRow, c: ImapFlow, folder: string, state: CachedFolder, budget: number): Promise<{ added: number; moved: boolean }> {
+    if (state.low <= 1) return { added: 0, moved: false };
+    const { uids, from } = await this.uidsBelow(c, state.low, budget);
+    const have = this.cache.cachedUids(r.id, folder, state.validity, uids);
+    const { todo, last, done } = walkDown(uids, have, budget);
+    if (todo.length) await this.cacheFetch(r, c, folder, state.validity, todo, Date.now());
+    const low = done ? from : last;
+    if (low && low < state.low) this.cache.lowerLow(r.id, folder, state.validity, state.low, low);
+    return { added: todo.length, moved: !!low && low < state.low };
+  }
+
+  /** Fetches these messages of the open folder (CACHE_QUERY) and caches them. */
+  private async cacheFetch(r: AccountRow, c: ImapFlow, folder: string, validity: string, uids: number[], now: number): Promise<FetchMessageObject[]> {
+    const fetched: FetchMessageObject[] = [];
+    for (let i = 0; i < uids.length; i += 500) {
+      for await (const m of c.fetch(uidSet(uids.slice(i, i + 500)), CACHE_QUERY, { uid: true })) fetched.push(m);
+    }
+    fetched.sort((a, b) => b.uid - a.uid);
+    await this.cacheRows(r, c, folder, validity, fetched, now);
+    return fetched;
+  }
+
+  /** Caches fetched messages (with their snippets), and returns their summaries. */
+  private async cacheRows(r: AccountRow, c: ImapFlow, folder: string, validity: string, fetched: FetchMessageObject[], now: number): Promise<{ summaries: MessageSummary[] }> {
+    if (!fetched.length) return { summaries: [] };
+    const snippets = await this.snippets(c, fetched).catch((err) => { console.warn(`[mail] snippets: ${(err as Error).message}`); return new Map<number, string>(); });
+    const rows: NewRow[] = fetched.map((m) => ({ m, summary: toSummary(m, folder, snippets.get(m.uid) ?? ''), headers: m.headers ? Buffer.from(m.headers).toString('latin1') : null, plan: m.bodyStructure ? planBody(m.bodyStructure) : null }));
+    this.cache.insert(r.id, folder, validity, rows, now);
+    return { summaries: rows.map((row) => row.summary) };
+  }
+
+  /**
+   * The flags of these cached messages as the server has them: one `UID FETCH <set> (FLAGS)`, or with `since` (CONDSTORE)
+   * only those changed since that modseq. Rows written through after `started` keep what they have (cache.ts `flagDiff`).
+   * Returns what changed (applied to the rows) and, from a full fetch, which messages the server no longer has (not applied).
+   */
+  private async refreshFlags(r: AccountRow, c: ImapFlow, folder: string, validity: string, uids: number[], started: number, since: bigint | null): Promise<{ changed: Map<number, Flags>; vanished: Set<number> }> {
+    const fetched = new Map<number, Flags>();
+    for (let i = 0; i < uids.length; i += 2000) {
+      const set = uidSet(uids.slice(i, i + 2000));
+      for await (const m of c.fetch(set, { uid: true, flags: true }, { uid: true, ...(since !== null ? { changedSince: since } : {}) })) fetched.set(m.uid, flagsOf(m.flags));
+    }
+    const { changed, vanished } = flagDiff(this.cache.flags(r.id, folder, validity, uids), fetched, since === null, started);
+    const now = Date.now();
+    for (const f of changed) this.cache.setFlags(r.id, folder, [f.uid], f, now);
+    return { changed: new Map(changed.map((f) => [f.uid, f])), vanished: new Set(vanished) };
   }
 
   // ---- opening a message ----------------------------------------------------------------------------------------------
@@ -1236,6 +1594,7 @@ export class Mail extends DurableObject<MailEnv> {
       this.sql.exec('DELETE FROM mail_categories WHERE account_id = ?', r.id);
       this.sql.exec('DELETE FROM mail_category_overrides WHERE account_id = ?', r.id);
       this.sql.exec('DELETE FROM mail_sync WHERE account_id = ?', r.id);
+      this.cache.forgetAccount(r.id);
       return c.json({ ok: true });
     });
 
@@ -1290,6 +1649,13 @@ export class Mail extends DurableObject<MailEnv> {
       return c.json({ folder, sync: state, log: this.tabLog.get(r.id) ?? [], counts, ...(messages ? { messages } : {}) });
     });
 
+    // How the prefetch cache stands for the account: each cached folder's marks and row count, the last alarm runs (in
+    // memory), when the person was last active and when the alarm is next due. Only ever the caller's own account.
+    app.get('/v1/mail/accounts/:id/debug/cache', async (c: MailContext) => {
+      const r = c.get('account');
+      return c.json({ folders: this.cache.report(r.id), log: this.cacheLog, lastActiveAt: this.cache.lastActiveAt(), nextAlarmAt: await this.ctx.storage.getAlarm() });
+    });
+
     app.get('/v1/mail/accounts/:id/messages/:uid', async (c: MailContext) => {
       const { detail } = await this.read(c.get('account'), folderOf(c), uidOf(c));
       return c.json({ message: detail });
@@ -1327,11 +1693,12 @@ export class Mail extends DurableObject<MailEnv> {
         await set('\\Seen', b.seen);
         await set('\\Flagged', b.flagged);
       });
-      // The kept copy of an open message says what its flags are now.
+      // The kept copy of an open message, and the cached rows, say what the flags are now.
       for (const uid of b.uids) {
         const o = this.opened.get(`${r.id}/${b.folder}/${uid}`);
         if (o) o.detail = { ...o.detail, ...(b.seen !== undefined ? { seen: b.seen } : {}), ...(b.flagged !== undefined ? { flagged: b.flagged } : {}) };
       }
+      this.cache.setFlags(r.id, b.folder, b.uids, { ...(b.seen !== undefined ? { seen: b.seen } : {}), ...(b.flagged !== undefined ? { flagged: b.flagged } : {}) }, Date.now());
       return c.json({ ok: true });
     });
 
@@ -1384,9 +1751,10 @@ export class Mail extends DurableObject<MailEnv> {
     });
   }
 
-  /** Messages that left a folder through us: their kept copies and their cached tabs go. */
+  /** Messages that left a folder (through us, or seen gone): their kept copies, their cached tabs and their cached rows go. */
   private left(id: string, folder: string, uids: number[]): void {
     for (const key of [...this.opened.keys()]) if (key.startsWith(`${id}/${folder}/`)) this.opened.delete(key);
     this.forgetRows(id, folder, uids);
+    this.cache.remove(id, folder, uids);
   }
 }
