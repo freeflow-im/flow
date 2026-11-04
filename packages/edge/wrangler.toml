@@ -43,6 +43,8 @@ ASSET_HOSTS = "app.freeflow.im,edge.freeflow.im"
 # The hosts the ported API answers on: app.freeflow.im since the cut-over (2026-11-02).
 PORTED_HOSTS = "edge.freeflow.im,app.freeflow.im"
 WEB_URL_BASE = "https://app.freeflow.im"
+# The prefetch cache's alarm is off while its CPU use in production is worked out (2026-11-04, src/imap/object.ts).
+MAIL_ALARM = "off"
 # The web-to-app sign-in handoff's return destinations, exact (the server's FLOW_HANDOFF_RETURN_URLS): the Mac, iOS and
 # desktop apps' flow://signin, and the web client's own page. None turns the handoff off, and /v1/client-info says so.
 FLOW_HANDOFF_RETURN_URLS = "flow://signin,https://app.freeflow.im/"
@@ -90,6 +92,8 @@ new_sqlite_classes = ["PdfOcr"]
 # FreeFlow Mail (src/imap/object.ts, docs/specs/mail-api.md): one object per person, named by their user id, holding the
 # mail accounts they connected (passwords sealed with FLOW_DATA_KEY) and their open IMAP connections. MAIL_ALLOW_INSECURE=1
 # (unencrypted connections, any port, local hosts) is for local dev only, given with --var; it is never set here.
+# MAIL_ALARM = "off" stops the prefetch cache's alarm (src/imap/object.ts): a kill switch while its CPU use in production is
+# being worked out (2026-11-04); pages then check the mail server themselves.
 [[durable_objects.bindings]]
 name = "MAIL"
 class_name = "Mail"
