@@ -7,8 +7,10 @@ Operator rulings (2026-11-04) on Mail's next pieces:
 - **A server-side prefetch cache, in the person's Mail Durable Object**, not in the browser: the newest ~1000 messages
   per main folder (summaries first; bodies in the next change), filled and refreshed by the object's alarm, so lists and
   opens come from SQLite on any device. The alarm runs every 30 s while the person is active and backs off to nothing
-  after a day idle; IMAP IDLE is a follow-up, not v1. A cached first page is never served without one `UID SEARCH` for
-  new mail, and a page's flags are checked against the server, so another device's reads and stars show at once.
+  after a day idle; IMAP IDLE is a follow-up, not v1. A folder the alarm synced within 45 s is served as the cache
+  stands (no round trip: tabs and folders switch instantly; new mail and other devices' flags show within the alarm's
+  30 s); a folder synced longer ago gets one `UID SEARCH` for new mail and a FLAGS check on the request (ruling
+  2026-11-04, after the first version checked on every page).
 - **Gmail-style conversations across folders** (one row per thread; the pane shows the whole thread, INBOX + Sent +
   Archive): Gmail's X-GM-THRID (and OBJECTID's THREADID) where the server has it, `References`/`In-Reply-To` plus a
   bounded subject fallback elsewhere. Built on the cache, in the change after the bodies.
