@@ -267,6 +267,11 @@ from it and the server is asked only for what is new.
 - **How far it reaches**: `mail_cache_folders (account_id, folder) → uid_validity, high, low, modseq, kind, synced_at, opened_at,
   error, error_at`. Every UID of the folder in [low, high] has a row, less what the server no longer has; at most CACHE_ROWS
   (1000) per folder, the newest. A new UIDVALIDITY drops the folder's rows.
+- **Fresh folders** (2026-11-04): a folder the alarm synced within FRESH_MS = 45 s (`synced_at`) is served as the cache
+  stands — a plain page, a tab's page (`tabList`) and the conversations (`threadList`) do none of the round trips below (no
+  NOOP, `UID SEARCH`, tab sort or FLAGS fetch; the timing line shows `imap 0ms`), since the alarm takes in new mail, sorts
+  INBOX's new mail into the tabs and refreshes flags every 30 s while the person is active. A folder synced longer ago, or
+  never, gets the checks below on the request.
 - **A plain page** (`GET …/messages` with no `q`, `unread` or `category`; `cachedList`): the first page (no `before`) first asks
   the server for new mail (`UID SEARCH <high+1>:*`, at most NEW_CAP = 200 of them fetched, the newest; a folder seen for the
   first time gets its newest 200 from UIDNEXT down), so it is never stale; then the page is read from SQLite. The page's flags
@@ -280,7 +285,7 @@ from it and the server is asked only for what is new.
   (`armAlarm`, cache.ts `nextAlarmAt`), and never for a person with no accounts. One run (ALARM_BUDGET_MS = 20 s) takes the
   accounts in turn, starting after the one the last run ended with, on each account's **cache** connection (logged out right
   after when the person is away, so the object can sleep). Per folder (`syncFolder`, under the folder's lock on that
-  connection): new mail as above; the flags of every cached message in one FLAGS fetch (CONDSTORE: only those changed since the
+  connection): new mail as above; INBOX's new mail sorted into the inbox tabs (`sync`, when tabs are on); the flags of every cached message in one FLAGS fetch (CONDSTORE: only those changed since the
   stored HIGHESTMODSEQ, and `UID SEARCH <low>:*` for what left), a row written through after the fetch began keeping what it
   has; older mail below `low`, BACKFILL_STEP = 100 a step (`uidsBelow`, the widening UID window, never the whole folder) until
   the folder holds CACHE_ROWS or the budget is spent; then the oldest rows past CACHE_ROWS go. A folder whose sync fails is
@@ -301,6 +306,7 @@ from it and the server is asked only for what is new.
 - **Inbox tabs' pages** (`tabList`) take their summaries from the cache (`pageSummaries`): the cached rows, their flags
   checked in one FLAGS fetch (a message the server no longer has is dropped), and only the rest fetched and cached.
   Searches and `unread=1` are not from the cache.
+- A flag change found by the alarm or by a page's FLAGS fetch also reaches the kept copy of an open message (`opened`).
 - **Write-through**: `PATCH` flags update the rows at once; a reply sent here marks the cached original answered; a move or delete through us, a draft deleted, and a message the
   server no longer returns remove them (`left`); `DELETE` of the account drops everything of it. Mail arriving in a cached
   folder by a move or a send is picked up by that folder's next first page or alarm run. IMAP IDLE is a later change.

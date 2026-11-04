@@ -15,7 +15,7 @@ import PostalMime from 'postal-mime';
 const log=process.argv[2]; const B=process.env.B??'http://localhost:18798';
 const MAIL_USER=process.env.MAIL_USER??'ann@test.local';
 let pass=0,fail=0; const t=(n,ok,d='')=>{ok?pass++:fail++;console.log((ok?'ok  ':'FAIL')+' '+n+(d?': '+String(d).slice(0,170):''));};
-const api=async(tok,m,p,b)=>{const r=await fetch(B+p,{method:m,headers:{...(tok?{authorization:'Bearer '+tok}:{}),...(b!==undefined?{'content-type':'application/json'}:{})},body:b===undefined?undefined:JSON.stringify(b)});const x=await r.text();let j;try{j=JSON.parse(x)}catch{j=x}return{s:r.status,j,h:r.headers}};
+const api=async(tok,m,p,b,h={})=>{const r=await fetch(B+p,{method:m,headers:{...(tok?{authorization:'Bearer '+tok}:{}),...(b!==undefined?{'content-type':'application/json'}:{}),...h},body:b===undefined?undefined:JSON.stringify(b)});const x=await r.text();let j;try{j=JSON.parse(x)}catch{j=x}return{s:r.status,j,h:r.headers}};
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function signup(email,name){await api(null,'POST','/v1/auth/register',{email});await sleep(400);const m=[...fs.readFileSync(log,'utf8').matchAll(new RegExp('to='+email+'.*?signup=([A-Za-z0-9_-]+)','g'))].at(-1);return (await api(null,'POST','/v1/auth/register/complete',{token:m[1],displayName:name,password:'correct-horse-battery'})).j;}
 const tag=Date.now().toString(36);
@@ -312,6 +312,10 @@ const inboxCache=r.j.folders?.find(f=>f.folder==='INBOX');
 t('cache: the alarm keeps INBOX, down to the oldest message',r.s===200&&inboxCache?.kind==='inbox'&&inboxCache.rows===inboxUids.length&&inboxCache.low===1&&r.j.log?.length>0&&r.j.log.at(-1).folders.some(x=>x.startsWith('inbox:')),JSON.stringify(r.j).slice(0,200));
 t('cache: and Sent, which was opened',r.j.folders?.some(f=>f.folder==='Sent'&&f.rows>0),JSON.stringify(r.j.folders?.map(f=>[f.folder,f.kind,f.rows])));
 r=await api(Bo.token,'GET',`${P}/debug/cache`);t('cache: the debug route is not for anyone else',r.s===404,r.s);
+// Synced by the alarm within 45 s, a folder's pages are read without a round trip: a plain page, a tab's, the conversations.
+{const imapMs=(x)=>Number(/imap=(\d+)/.exec(x.h.get('x-mail-timing')??'')?.[1]??-1);
+ const a=await getRaw(`${P}/messages?folder=INBOX&limit=5`),b=await getRaw(`${P}/messages?folder=INBOX&category=primary&limit=5`),c=await getRaw(`${P}/threads?folder=INBOX&limit=5`),d=await getRaw(`${P}/threads?folder=INBOX&category=primary&limit=5`);
+ t('fresh: pages of a folder the alarm just synced do no IMAP',[a,b,c,d].every(x=>x.s===200&&imapMs(x)>=0&&imapMs(x)<40)&&a.j.messages.length>0&&b.j.messages.length>0&&c.j.threads.length>0&&d.j.threads.length>0,[a,b,c,d].map(x=>x.s+':'+imapMs(x)+'ms').join(' '));}
 // Bodies: a message opened before the alarm got to it is read from the server and kept; after an alarm pass the newest
 // are in the cache, and open from it with no round trip; an attachment is fetched by the plan the row was cached with.
 const [bodyA,bodyB]=[pc.j.messages[0].uid,pc.j.messages[1].uid];
@@ -335,12 +339,12 @@ t('cache: a tab\'s page takes its summaries from the cache',tabPage.s===200&&tab
 // INBOX and Sent, each message counted once; read oldest first; its bodies filled in by the alarm.
 const TS=`Thread ${tag}`;
 r=await api(A.token,'POST',`${P}/send`,{to:[{name:'Ann',address:MAIL_USER}],subject:TS,html:'<p>one</p>',text:'one'});const T1=r.j.messageId;
-let t1;for(let i=0;i<20&&!t1;i++){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&limit=5`);t1=r.j.messages?.find(m=>m.messageId===T1);if(!t1)await sleep(300);}
+let t1;for(let i=0;i<20&&!t1;i++){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&limit=5`,undefined,{'x-mail-test-alarm':'1'});t1=r.j.messages?.find(m=>m.messageId===T1);if(!t1)await sleep(300);}
 r=await api(A.token,'POST',`${P}/send`,{to:[{name:'Ann',address:MAIL_USER}],subject:'Re: '+TS,html:'<p>two</p>',text:'two',inReplyTo:T1,references:[T1]});const T2=r.j.messageId;
-let t2;for(let i=0;i<20&&!t2;i++){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&limit=5`);t2=r.j.messages?.find(m=>m.messageId===T2);if(!t2)await sleep(300);}
+let t2;for(let i=0;i<20&&!t2;i++){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&limit=5`,undefined,{'x-mail-test-alarm':'1'});t2=r.j.messages?.find(m=>m.messageId===T2);if(!t2)await sleep(300);}
 r=await api(A.token,'POST',`${P}/send`,{to:[{name:'Ann',address:MAIL_USER}],subject:'Re: '+TS,html:'<p>three</p>',text:'three',inReplyTo:T2,references:[T1,T2]});const T3=r.j.messageId;
-let t3;for(let i=0;i<20&&!t3;i++){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&limit=5`);t3=r.j.messages?.find(m=>m.messageId===T3);if(!t3)await sleep(300);}
-await api(A.token,'GET',`${P}/messages?folder=Sent&limit=10`);
+let t3;for(let i=0;i<20&&!t3;i++){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&limit=5`,undefined,{'x-mail-test-alarm':'1'});t3=r.j.messages?.find(m=>m.messageId===T3);if(!t3)await sleep(300);}
+await api(A.token,'GET',`${P}/messages?folder=Sent&limit=10`,undefined,{'x-mail-test-alarm':'1'});
 t('threads: the summaries carry the thread id',t1?.threadId&&t1.threadId===t2?.threadId&&t2.threadId===t3?.threadId,JSON.stringify([t1?.threadId,t2?.threadId,t3?.threadId]));
 let th=await cacheOf(()=>getRaw(`${P}/threads?folder=INBOX&limit=5`));
 const conv=th.j.threads?.find(x=>x.threadId===t1?.threadId);
@@ -355,20 +359,20 @@ r=await api(A.token,'GET',`${P}/threads/nope-${tag}`);t('threads: an unknown con
 // A reply that references two messages of different threads makes them one.
 r=await api(A.token,'POST',`${P}/send`,{to:[{name:'Ann',address:MAIL_USER}],subject:`Alpha ${tag}`,html:'<p>a</p>'});const MA=r.j.messageId;
 r=await api(A.token,'POST',`${P}/send`,{to:[{name:'Ann',address:MAIL_USER}],subject:`Beta ${tag}`,html:'<p>b</p>'});const MB=r.j.messageId;
-let ma,mb;for(let i=0;i<20&&!(ma&&mb);i++){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&limit=10`);ma=r.j.messages?.find(m=>m.messageId===MA);mb=r.j.messages?.find(m=>m.messageId===MB);if(!(ma&&mb))await sleep(300);}
+let ma,mb;for(let i=0;i<20&&!(ma&&mb);i++){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&limit=10`,undefined,{'x-mail-test-alarm':'1'});ma=r.j.messages?.find(m=>m.messageId===MA);mb=r.j.messages?.find(m=>m.messageId===MB);if(!(ma&&mb))await sleep(300);}
 t('threads: two messages, two conversations',ma&&mb&&ma.threadId!==mb.threadId,JSON.stringify([ma?.threadId,mb?.threadId]));
 r=await api(A.token,'POST',`${P}/send`,{to:[{name:'Ann',address:MAIL_USER}],subject:`Re: Alpha ${tag}`,html:'<p>ab</p>',inReplyTo:MA,references:[MB,MA]});const MC=r.j.messageId;
-let mc;for(let i=0;i<20&&!mc;i++){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&limit=10`);mc=r.j.messages?.find(m=>m.messageId===MC);if(!mc)await sleep(300);}
+let mc;for(let i=0;i<20&&!mc;i++){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&limit=10`,undefined,{'x-mail-test-alarm':'1'});mc=r.j.messages?.find(m=>m.messageId===MC);if(!mc)await sleep(300);}
 th=await getRaw(`${P}/threads?folder=INBOX&limit=10`);const merged=th.j.threads?.find(x=>x.uid===mc?.uid);
 t('threads: a reply that references both merges them into one',merged&&merged.count===3&&merged.uids.length===3&&merged.uids.includes(ma.uid)&&merged.uids.includes(mb.uid)&&!th.j.threads.some(x=>x!==merged&&(x.uids.includes(ma.uid)||x.uids.includes(mb.uid))),JSON.stringify(merged).slice(0,200));
 // A reply whose references lead nowhere joins the thread with the same subject and someone in common; a fresh message with
 // that subject, or a stranger's reply, does not.
 r=await api(A.token,'POST',`${P}/send`,{to:[{name:'Dana',address:'dana@acme.test'}],subject:`Lunch ${tag}`,html:'<p>lunch?</p>'});
-await api(A.token,'GET',`${P}/messages?folder=Sent&limit=5`);
+await api(A.token,'GET',`${P}/messages?folder=Sent&limit=5`,undefined,{'x-mail-test-alarm':'1'});
 await deliver('Dana Lee <dana@acme.test>','Re: Lunch',{'In-Reply-To':`<lost-${tag}@acme.test>`});
 await deliver('Dana Lee <dana@acme.test>','Lunch',{});
 await deliver('Sam Rivera <sam@rivera.dev>','Re: Lunch',{'In-Reply-To':`<lost2-${tag}@acme.test>`});
-let lunch;for(let i=0;i<20;i++){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&limit=10`);lunch=r.j.messages?.filter(m=>m.subject.endsWith(`Lunch ${tag}`));if(lunch?.length===3)break;await sleep(300);}
+let lunch;for(let i=0;i<20;i++){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&limit=10`,undefined,{'x-mail-test-alarm':'1'});lunch=r.j.messages?.filter(m=>m.subject.endsWith(`Lunch ${tag}`));if(lunch?.length===3)break;await sleep(300);}
 const danaReply=lunch?.find(m=>m.subject.startsWith('Re:')&&m.from?.address==='dana@acme.test'),fresh=lunch?.find(m=>!m.subject.startsWith('Re:')),samReply=lunch?.find(m=>m.from?.address==='sam@rivera.dev');
 th=await getRaw(`${P}/threads?folder=INBOX&limit=10`);const lunchThread=th.j.threads?.find(x=>x.uid===danaReply?.uid);
 t("threads: Dana's reply joins the lunch conversation by its subject",lunchThread&&lunchThread.count===2&&lunchThread.folders.includes('Sent')&&lunchThread.participants.map(p=>p.name).join()==='me,Dana Lee',JSON.stringify(lunchThread??null).slice(0,200));
@@ -389,15 +393,15 @@ r=await api(A.token,'PATCH',`${P}/messages`,{folder:'INBOX',uids:[pageUid],seen:
 pc=await cacheOf(()=>getRaw(`${P}/messages?folder=INBOX&limit=5`));
 t('cache: a flag set here shows in the cached page',pc.j.messages?.find(m=>m.uid===pageUid)?.seen===true&&pc.cache==='hit',JSON.stringify(pc.j.messages?.[0]).slice(0,120)+' '+pc.cache);
 await imapDirect(async(c)=>{const lock=await c.getMailboxLock('INBOX');try{await c.messageFlagsAdd(String(pageUid),['\\Flagged'],{uid:true});}finally{lock.release();}});
-pc=await cacheOf(()=>getRaw(`${P}/messages?folder=INBOX&limit=5`));
+pc=await cacheOf(()=>getRaw(`${P}/messages?folder=INBOX&limit=5`,{'x-mail-test-alarm':'1'}));
 t('cache: a flag set by another mail app shows too',pc.j.messages?.find(m=>m.uid===pageUid)?.flagged===true,JSON.stringify(pc.j.messages?.find(m=>m.uid===pageUid)).slice(0,120));
 // New mail: the first page asks the server for it before answering, so it is never stale.
 await deliver('Dana Lee <dana@acme.test>','Fresh from the cache',{});
-let freshRow;for(let i=0;i<20&&!freshRow;i++){pc=await cacheOf(()=>getRaw(`${P}/messages?folder=INBOX&limit=5`));freshRow=pc.j.messages?.find(m=>m.subject===`Fresh from the cache ${tag}`);if(!freshRow)await sleep(300);}
+let freshRow;for(let i=0;i<20&&!freshRow;i++){pc=await cacheOf(()=>getRaw(`${P}/messages?folder=INBOX&limit=5`,{'x-mail-test-alarm':'1'}));freshRow=pc.j.messages?.find(m=>m.subject===`Fresh from the cache ${tag}`);if(!freshRow)await sleep(300);}
 t('cache: new mail is in the next page read, first',!!freshRow&&pc.j.messages[0].uid===freshRow.uid&&pc.cache==='hit',JSON.stringify(freshRow).slice(0,120)+' '+pc.cache);
 // Mail that left through another app is dropped by the page's flag check.
 await imapDirect(async(c)=>{const lock=await c.getMailboxLock('INBOX');try{await c.messageMove(String(freshRow.uid),MOVED2,{uid:true});}finally{lock.release();}});
-pc=await cacheOf(()=>getRaw(`${P}/messages?folder=INBOX&limit=5`));
+pc=await cacheOf(()=>getRaw(`${P}/messages?folder=INBOX&limit=5`,{'x-mail-test-alarm':'1'}));
 t('cache: mail moved away by another app is not in the page',pc.s===200&&!pc.j.messages?.some(m=>m.uid===freshRow?.uid),JSON.stringify(pc.j.messages?.map(m=>m.uid)));
 // Older pages come from the cache outright.
 const walked=[];let nb=null,hits=0,reads=0;for(let i=0;i<50;i++){reads++;const x=await cacheOf(()=>getRaw(`${P}/messages?folder=INBOX&limit=3${nb?`&before=${nb}`:''}`));if(x.cache==='hit')hits++;walked.push(...(x.j.messages??[]).map(m=>m.uid));if(!x.j.next)break;nb=x.j.next;}
