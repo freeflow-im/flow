@@ -429,3 +429,27 @@ describe('MailCache contacts', () => {
     expect(cache.rebuildContacts(A, ME)).toBe(0);
   });
 });
+
+describe("the inbox tabs' badges", () => {
+  it('counts each tab\'s messages, unread and new since the newest seen, with the newest message', () => {
+    const sql = memory();
+    const cache = new MailCache(sql);
+    cache.init();
+    sql.db.exec(`CREATE TABLE mail_categories (account_id TEXT NOT NULL, folder TEXT NOT NULL, uid_validity TEXT NOT NULL, uid INTEGER NOT NULL, sender TEXT NOT NULL, from_name TEXT NOT NULL, subject TEXT NOT NULL, date INTEGER NOT NULL, category TEXT NOT NULL, reason TEXT NOT NULL, PRIMARY KEY (account_id, folder, uid_validity, uid));
+      CREATE TABLE mail_category_overrides (account_id TEXT NOT NULL, sender TEXT NOT NULL, category TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (account_id, sender))`);
+    cache.touchFolder(A, F, 'inbox', 1000, true);
+    cache.resetFolder(A, F, V);
+    cache.insert(A, F, V, [row(fetched(1, { subject: 'Old promo', flags: ['\\Seen'] })), row(fetched(2, { subject: 'Hello' })), row(fetched(3, { subject: 'Sale', from: 'shop@x.test' })), row(fetched(4, { subject: 'Unsorted yet' }))], 1000);
+    const ins = sql.db.prepare('INSERT INTO mail_categories VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    ins.run(A, F, V, 1, 'ann@example.com', 'Ann', 'Old promo', 1, 'promotions', 'r');
+    ins.run(A, F, V, 2, 'ann@example.com', 'Ann', 'Hello', 2, 'primary', 'r');
+    ins.run(A, F, V, 3, 'shop@x.test', 'Ann', 'Sale', 3, 'promotions', 'r');
+    const e = effectiveSql(['promotions']);
+    const status = cache.tabStatus(A, F, V, 1, { tab: e.sql, params: e.params }, new Map([['promotions', 1]]));
+    expect(status.find((t) => t.category === 'promotions')).toMatchObject({ total: 2, unread: 1, new: 1, newest: { uid: 3, subject: 'Sale' } });
+    // The unsorted row and the one in a tab that is off count as Primary; with no "seen" there, nothing is new.
+    expect(status.find((t) => t.category === 'primary')).toMatchObject({ total: 2, unread: 2, new: 0, newest: { uid: 4 } });
+    const off = cache.tabStatus(A, F, V, 1, { tab: effectiveSql([]).sql, params: [] }, new Map());
+    expect(off).toEqual([expect.objectContaining({ category: 'primary', total: 4 })]);
+  });
+});

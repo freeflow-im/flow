@@ -39,3 +39,26 @@ describe('why a message is in its tab', () => {
     expect(reasonText(undefined, 'forums')).toBe('No reason recorded for why this is in Forums');
   });
 });
+
+describe('the tabs\' badges', async () => {
+  const { markTabSeen, readTabSeen, tabBadge, tabPreview } = await import('./tabs');
+  const status = (n: number, newest: { uid: number; subject: string; from: { name: string; address: string } | null } | null) => ({ category: 'promotions' as const, total: 5, unread: 2, new: n, newest: newest as never });
+  it('remembers the newest seen per tab and account, never going backwards', () => {
+    localStorage.clear();
+    expect(readTabSeen('a')).toEqual({});
+    let seen = markTabSeen('a', {}, 'promotions', 10);
+    seen = markTabSeen('a', seen, 'social', 7);
+    expect(markTabSeen('a', seen, 'promotions', 4)).toBe(seen);
+    expect(readTabSeen('a')).toEqual({ promotions: 10, social: 7 });
+    expect(readTabSeen('b')).toEqual({});
+  });
+  it('says how many are new, and the newest message, Gmail\'s way', () => {
+    expect(tabBadge(status(0, null))).toBeNull();
+    expect(tabBadge(undefined)).toBeNull();
+    expect(tabBadge(status(2, null))).toBe('2 new');
+    expect(tabBadge(status(150, null))).toBe('99+ new');
+    expect(tabPreview(status(1, { uid: 1, subject: 'Coming soon: The Brex Fall Release', from: { name: 'Brex', address: 'hi@brex.com' } }))).toBe('Brex — Coming soon: The Brex Fall Release');
+    expect(tabPreview(status(1, { uid: 1, subject: '', from: { name: '', address: 'x@y.test' } }))).toBe('x@y.test — (no subject)');
+    expect(tabPreview(status(1, null))).toBeNull();
+  });
+});

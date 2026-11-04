@@ -271,6 +271,13 @@ t('three connections: nor marking one seen',seenPatch.s===200&&seenPatch.ms<1500
 await deliver('Dana Lee <dana@acme.test>','Gone soon',{});
 let gone;for(let i=0;i<20&&!gone;i++){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&category=primary&limit=10`);gone=r.j.messages?.find(m=>m.subject===`Gone soon ${tag}`);if(!gone)await sleep(300);}
 t('cache: new mail is sorted into its tab',!!gone&&gone.category==='primary'&&r.j.messages[0]?.uid===gone.uid,JSON.stringify(gone).slice(0,140));
+// The tabs' badges: how many arrived after the newest seen in each tab, and the newest message; from the cache (a plain page
+// seeds it; not an alarm pass, which would also fetch bodies and make the folder fresh for the checks that follow).
+await getRaw(`${P}/messages?folder=INBOX&limit=5`);
+r=await api(A.token,'GET',`${P}/tabs?after=primary:${gone.uid-1},forums:999999`);const primaryTab=r.j.tabs?.find(t=>t.category==='primary'),forumsTab=r.j.tabs?.find(t=>t.category==='forums');
+t('tabs: Primary says one new since the message before, and which',r.s===200&&r.j.tabs?.length===5&&primaryTab?.new===1&&primaryTab.unread>0&&primaryTab.newest?.subject===`Gone soon ${tag}`,r.s+' '+JSON.stringify(primaryTab).slice(0,160));
+t('tabs: a tab with nothing new says so, with its newest message',forumsTab&&forumsTab.new===0&&forumsTab.total>0&&forumsTab.unread>0&&typeof forumsTab.newest?.subject==='string',JSON.stringify(forumsTab).slice(0,160));
+r=await api(A.token,'GET',`${P}/tabs`);t('tabs: with nothing seen yet, nothing is new',r.j.tabs?.every(t=>t.new===0),JSON.stringify(r.j.tabs?.map(t=>[t.category,t.new])));
 const MOVED2=`Elsewhere-${tag}`;
 await imapDirect(async(c)=>{await c.mailboxCreate(MOVED2);const lock=await c.getMailboxLock('INBOX');try{await c.messageMove(String(gone.uid),MOVED2,{uid:true});}finally{lock.release();}});
 // The re-check (started by a list of another tab, which does not show it) forgets the message that left.
@@ -429,7 +436,7 @@ await imapDirect(async(c)=>{const lock=await c.getMailboxLock('INBOX');try{await
 pc=await cacheOf(()=>getRaw(`${P}/messages?folder=INBOX&limit=5`,{'x-mail-test-alarm':'1'}));
 t('cache: mail moved away by another app is not in the page',pc.s===200&&!pc.j.messages?.some(m=>m.uid===freshRow?.uid),JSON.stringify(pc.j.messages?.map(m=>m.uid)));
 // Older pages come from the cache outright.
-const walked=[];let nb=null,hits=0,reads=0;for(let i=0;i<50;i++){reads++;const x=await cacheOf(()=>getRaw(`${P}/messages?folder=INBOX&limit=3${nb?`&before=${nb}`:''}`));if(x.cache==='hit')hits++;walked.push(...(x.j.messages??[]).map(m=>m.uid));if(!x.j.next)break;nb=x.j.next;}
+const walked=[];let nb=null,hits=0,reads=0;for(let i=0;i<400;i++){reads++;const x=await cacheOf(()=>getRaw(`${P}/messages?folder=INBOX&limit=3${nb?`&before=${nb}`:''}`));if(x.cache==='hit')hits++;walked.push(...(x.j.messages??[]).map(m=>m.uid));if(!x.j.next)break;nb=x.j.next;}
 t('cache: paging through INBOX reads every message once, newest first, every page from the cache',walked.length===inboxUids.length&&new Set(walked).size===walked.length&&walked.every((u,i)=>!i||walked[i-1]>u)&&hits===reads,`${walked.length} of ${inboxUids.length} in ${reads} calls, ${hits} hits`);
 
 // A cold cache on a larger INBOX (another GreenMail user, 320 messages: the 20 oldest a mailing list's, the rest a

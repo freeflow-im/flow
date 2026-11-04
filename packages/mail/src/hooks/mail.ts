@@ -38,6 +38,18 @@ export function useAccounts() {
   return useQuery({ queryKey: keys.accounts, queryFn: mailApi.accounts, refetchInterval: POLL_MS });
 }
 
+/** The inbox tabs' badges, polled with the lists; `after` is what the person has seen in each tab (lib/tabs.ts). */
+export function useTabStatus(accountId: string | null, enabled: boolean, after: Partial<Record<Category, number>>) {
+  const afterKey = Object.entries(after).map(([t, u]) => `${t}:${u}`).sort().join(',');
+  return useQuery({
+    queryKey: ['mail', 'tabs', accountId ?? '', afterKey] as const,
+    queryFn: () => mailApi.tabStatus(accountId!, after),
+    enabled: !!accountId && enabled,
+    refetchInterval: POLL_MS,
+    placeholderData: (prev) => prev,
+  });
+}
+
 export function useFolders(accountId: string | null) {
   return useQuery({
     queryKey: keys.folders(accountId ?? ''),

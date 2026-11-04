@@ -33,7 +33,9 @@ Worker holds the credentials and speaks IMAP and SMTP.
 - `src/components/AccountForms.tsx` — adding an account (email → `/v1/mail/providers` → name and password, Advanced
   for the servers) and changing or removing one.
 - `src/components/InboxTabs.tsx` — Gmail's inbox tabs above the INBOX list for an account with tabs on (the server
-  sorts the mail: docs/specs/mail-api.md, Inbox tabs), each its icon and name, without counts. The tab is in the
+  sorts the mail: docs/specs/mail-api.md, Inbox tabs), each its icon and name; a tab that is not open says "N new" with the
+  newest message's sender and subject (`GET …/tabs`, polled with the lists; what was seen per tab is remembered in the browser,
+  `lib/tabs.ts`). The tab is in the
   address (`&tab=`). "Move to tab" is in the dense list's row menu, the bulk actions and the message's Move menu, and
   with a mouse a row (or the checked rows) drags onto a tab or a folder (`src/lib/dnd.ts`); it moves the sender's mail,
   with Undo.
