@@ -7,7 +7,7 @@ import { getCookie } from 'hono/cookie';
 import type { UserDTO } from '@flow/shared';
 import type { Docs } from '../docs/object';
 import type { OAuthMethod } from '../directory/object';
-import { authorizationServerMetadata, OAuthError, protectedResourceMetadata, wwwAuthenticate, type McpOAuth, type OAuthAnswer } from '../directory/mcpOAuth';
+import { authorizationServerMetadata, OAuthError, protectedResourceMetadata, SCOPE_GROUPS, wwwAuthenticate, type McpOAuth, type OAuthAnswer } from '../directory/mcpOAuth';
 import { directory, type AuthEnv } from './auth';
 import { consentPage, deviceDonePage, devicePage, errorPage } from './mcpPages';
 
@@ -171,7 +171,9 @@ mcpRoutes.post('/oauth/decision', async (c) => {
   if (!user) return html(errorPage('You are signed out. Start again from your agent.'), 401);
   const form = await readForm(c);
   try {
-    return redirect(await oauth(c, 'decide', issuerOf(c), form.p, user.id, form.csrf, form.allow === 'yes', form.org));
+    // The page's checkboxes (grant_docs, grant_mail, grant_send); a form without them takes each group as the page starts it.
+    const ticked = form.scopes_form === '1' ? SCOPE_GROUPS.map((g) => g.id).filter((id) => form[`grant_${id}`]) : undefined;
+    return redirect(await oauth(c, 'decide', issuerOf(c), form.p, user.id, form.csrf, form.allow === 'yes', form.org, ticked));
   } catch (e) {
     if (!(e instanceof OAuthError)) throw e;
     // The wrong organization: the page again, still pending, saying so.

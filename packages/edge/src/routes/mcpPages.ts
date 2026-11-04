@@ -1,11 +1,28 @@
-// The pages of the MCP endpoint's OAuth (routes/mcp.ts): consent with the choice of organization, the device code, and
-// the errors. The ChatGPT plugin's pages (docs/plugin/server/oauth.ts), in FreeFlow's colours: plain, centred, neutral.
+// The pages of the MCP endpoint's OAuth (routes/mcp.ts): consent with what the agent may use (Docs files, Mail, sending
+// email) and the choice of organization, the device code, and the errors. The ChatGPT plugin's pages
+// (docs/plugin/server/oauth.ts), in FreeFlow's colours: plain, centred, neutral.
+import { offeredGroups, type OfferedGroup } from '../directory/mcpOAuth';
+
 const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
-const SCOPE_TEXT: Record<string, string> = {
-  'files:read': 'See the names of the files and read them: documents, presentations, spreadsheets, Markdown files, PDFs, pictures and other stored files',
-  'files:write': 'Create, change, import, move and delete those files',
-};
+/** Each checkbox: its title, and what it lets the agent do (for the scopes the client asked for). */
+function groupText(g: OfferedGroup): { title: string; detail: string; warning?: string } {
+  if (g.id === 'docs') {
+    return g.scopes.includes('files:write')
+      ? { title: 'Docs files', detail: 'Read, create, change, import, move and delete the documents, presentations, spreadsheets, PDFs and other files of the organization below: its Organization files and your own My files there.' }
+      : { title: 'Docs files (read only)', detail: 'See and read the documents, presentations, spreadsheets, PDFs and other files of the organization below: its Organization files and your own My files there.' };
+  }
+  if (g.id === 'mail') {
+    const write = g.scopes.includes('mail:write');
+    return {
+      title: write ? 'Mail: read, search, organise and draft' : 'Mail: read and search',
+      detail: write
+        ? 'Your own email accounts in FreeFlow Mail: search and read messages and attachments, mark, move, archive and move them to Trash, and write drafts for you to review. It cannot send them.'
+        : 'Your own email accounts in FreeFlow Mail: search and read messages and attachments.',
+    };
+  }
+  return { title: 'Send email as you', detail: 'Send messages from your email accounts.', warning: 'It could send any email to anyone from your address, without asking you first. Only allow this for an agent you trust.' };
+}
 
 const POLICY_LINKS = '<p class="muted small"><a href="/privacy" target="_blank" rel="noopener">Privacy Policy</a></p>';
 
@@ -27,6 +44,8 @@ fieldset{border:0;padding:0;margin:14px 0}legend{font-weight:600;padding:0;margi
 .org{display:flex;gap:10px;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:8px;margin:6px 0;cursor:pointer}
 .org:has(input:checked){border-color:var(--accent);background:var(--pick)}
 .org input{margin:0;accent-color:var(--accent)}
+.pick{align-items:flex-start}.pick input{margin-top:3px}.pick strong{display:block;font-weight:600}.pick .small{display:block;margin-top:2px}
+.warn{color:var(--error)}
 label.field{display:block;margin:12px 0 4px;font-weight:600}
 input[type=text]{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font:inherit;background:var(--card);color:inherit}
 .btn{display:inline-block;padding:9px 16px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:inherit;font:inherit;cursor:pointer;text-decoration:none}
@@ -50,7 +69,15 @@ export interface ConsentView {
 
 export function consentPage(v: ConsentView): string {
   const name = escapeHtml(v.clientName);
-  const scopes = v.scopes.map((s) => `<li>${escapeHtml(SCOPE_TEXT[s] ?? s)}</li>`).join('');
+  const groups = offeredGroups(v.scopes.join(' '));
+  const picks = groups
+    .map((g) => {
+      const t = groupText(g);
+      return `<label class="org pick"><input type="checkbox" name="grant_${g.id}" value="on"${g.checked ? ' checked' : ''}> <span><strong>${escapeHtml(t.title)}</strong><span class="muted small">${escapeHtml(t.detail)}</span>${t.warning ? `<span class="small warn">${escapeHtml(t.warning)}</span>` : ''}</span></label>`;
+    })
+    .join('');
+  const mail = groups.some((g) => g.id !== 'docs');
+  const docs = groups.some((g) => g.id === 'docs');
   const device = v.device
     ? `<p class="error">Only allow this if you started this sign-in yourself, from an agent you trust. The request came from ${escapeHtml(v.device.origin)}, and "${name}" is the name the agent gave itself.</p>`
     : '';
@@ -62,19 +89,23 @@ export function consentPage(v: ConsentView): string {
     .join('');
   return page(
     `Allow ${v.clientName}?`,
-    `<h1>Allow ${name} to use your Docs?</h1>
+    `<h1>Allow ${name} to use your ${docs && mail ? 'Docs and Mail' : mail ? 'Mail' : 'Docs'}?</h1>
 <p class="muted">Signed in as <strong>${escapeHtml(v.email)}</strong>.</p>
 ${device}
 ${v.error ? `<p class="error">${escapeHtml(v.error)}</p>` : ''}
 <form method="post" action="/oauth/decision">
   <input type="hidden" name="p" value="${escapeHtml(v.pendingId)}">
   <input type="hidden" name="csrf" value="${escapeHtml(v.csrf)}">
+  <input type="hidden" name="scopes_form" value="1">
+  <fieldset>
+    <legend>${name} may use</legend>
+    ${picks}
+  </fieldset>
   <fieldset>
     <legend>Organization</legend>
     ${orgs}
+    ${mail ? '<p class="muted small">Mail is your own, whichever organization you choose.</p>' : ''}
   </fieldset>
-  <p>${name} will be able to read and edit this organization's Docs files: its <strong>Organization files</strong> and your own <strong>My files</strong> in it. It will be able to:</p>
-  <ul>${scopes}</ul>
   <div class="row">
     <button class="btn" type="submit" name="allow" value="no" formnovalidate>Deny</button>
     <button class="btn primary" type="submit" name="allow" value="yes">Allow</button>

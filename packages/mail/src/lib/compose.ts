@@ -1,10 +1,10 @@
 // What Reply, Reply all and Forward put in a new message: the recipients, "Re:"/"Fwd:", the original quoted, and the
-// headers that thread it (In-Reply-To and References).
+// headers that thread it (In-Reply-To and References). And a saved draft (one an agent wrote, say) opened to edit.
 import type { Address, MessageDetail } from '../api';
 import { formatAddress, uniqueAddresses } from './addresses';
 import { escapeHtml, sanitizeEmailHtml, textToHtml } from './sanitize';
 
-export type ComposeMode = 'new' | 'reply' | 'replyAll' | 'forward';
+export type ComposeMode = 'new' | 'reply' | 'replyAll' | 'forward' | 'draft';
 
 export interface ComposeDraft {
   to: Address[];
@@ -45,8 +45,22 @@ function originalBody(m: MessageDetail): string {
   return textToHtml(m.text ?? '');
 }
 
+/** A saved draft, opened to edit and send: as it was saved, its own attachments carried over. */
+export function fromDraft(m: MessageDetail): ComposeDraft {
+  return {
+    to: m.to,
+    cc: m.cc,
+    bcc: m.bcc,
+    subject: m.subject,
+    html: originalBody(m),
+    ...(m.inReplyTo ? { inReplyTo: m.inReplyTo } : {}),
+    ...(m.references.length ? { references: m.references } : {}),
+    forwardAttachments: m.attachments.filter((a) => !a.inline).map(({ index, filename, mimeType, size }) => ({ index, filename, mimeType, size })),
+  };
+}
+
 /** The new message for replying to, replying to everyone on, or forwarding `m`, sent from `me`. */
-export function prefill(mode: Exclude<ComposeMode, 'new'>, m: MessageDetail, me: string): ComposeDraft {
+export function prefill(mode: Exclude<ComposeMode, 'new' | 'draft'>, m: MessageDetail, me: string): ComposeDraft {
   const references = [...m.references, ...(m.messageId ? [m.messageId] : [])].filter((r, i, all) => all.indexOf(r) === i);
   const threading = m.messageId ? { inReplyTo: m.messageId, references } : {};
   if (mode === 'forward') {

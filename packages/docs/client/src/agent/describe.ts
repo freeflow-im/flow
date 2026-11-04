@@ -184,6 +184,17 @@ export function toolLabel(name: string, i: Input): string {
       return String(i.url ?? '').includes('/api/images/') ? 'Saved a picture to your files' : 'Saved a file from the web';
     case 'image_search':
       return `Searched for images of “${i.query}”`;
+    // The user's email, in the hosted app (FreeFlow Mail).
+    case 'search_mail':
+      return i.query ? `Searched your mail for “${i.query}”` : 'Looked at your latest mail';
+    case 'read_mail': {
+      const n = Array.isArray(i.ids) ? i.ids.length : 1;
+      return n === 1 ? 'Read an email' : `Read ${n} emails`;
+    }
+    case 'create_mail_draft':
+      return i.reply_to_id ? 'Drafted a reply' : i.forward_id ? 'Drafted a forward' : 'Drafted an email';
+    case 'save_mail_attachment_to_docs':
+      return 'Saved an email attachment to your files';
     default:
       return agentToolLabel(name, i) ?? name;
   }

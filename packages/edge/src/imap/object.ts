@@ -15,7 +15,6 @@ import { connect } from 'cloudflare:sockets';
 import { Hono, type Context } from 'hono';
 import { ImapFlow, createSocketsTransport, type FetchMessageObject, type FetchQueryObject, type ListResponse, type SearchObject } from 'imapflow';
 import nodemailer from 'nodemailer';
-import MailComposer from 'nodemailer/lib/mail-composer';
 import PostalMime, { type Email } from 'postal-mime';
 import { ApiError } from '../errors';
 import { decryptBlob, encryptBlob } from '../org/crypto/index';
@@ -23,7 +22,8 @@ import { decodeTransfer, decodedSize, minimalMessage, planBody, prefetch, type B
 import { contentDisposition, specialUseOf, snippetOf, textPartOf, toDetail, toFolders, toSummary, type AttachmentInfo, type MessageDetail, type MessageSummary, type SpecialUse, type TextPart } from './convert';
 import { CATEGORIES, CATEGORY_HEADERS, classifyHeaders, effective, effectiveSql, isGmailHost, normalizeTabs, parseHeaders, tabPage, uidSet, type Category, type TabCategory } from './categorize';
 import { GMAIL_NONE, GMAIL_REASON, GmailSearchError, recheckRows, sortBatch, type GmailSearcher, type RecheckResult } from './gmailTabs';
-import { AccountPatch, CategoryBody, DeleteBody, FlagsBody, MAX_SEND_BYTES, MoveBody, NewAccount, SendBody, SendersCategoryBody, TIMING_HEADER, checkServer, mailError, notFound, parse, savesSentCopy, sendSize, badRequest, type ServerSettings } from './rules';
+import { compileMime, outgoingMessage, type OutgoingFile } from './drafts';
+import { AccountPatch, CategoryBody, DeleteBody, DraftBody, FlagsBody, MAX_SEND_BYTES, MoveBody, NewAccount, SendBody, SendersCategoryBody, TIMING_HEADER, checkServer, mailError, notFound, parse, savesSentCopy, sendSize, badRequest, type ServerSettings } from './rules';
 
 export interface MailEnv {
   FLOW_DATA_KEY?: string;
@@ -464,10 +464,15 @@ export class Mail extends DurableObject<MailEnv> {
     return { fetched, snippets };
   }
 
-  private async list(r: AccountRow, folder: string, limit: number, before: number | null, q: string, category: Category | null = null): Promise<MessagePage> {
+  /**
+   * One page of a folder, newest first. `q` searches the whole folder (TEXT, FROM or SUBJECT); with `opts.raw` on a Gmail
+   * account it is Gmail's own search syntax (X-GM-RAW). `opts.unread` keeps only unread messages.
+   */
+  private async list(r: AccountRow, folder: string, limit: number, before: number | null, q: string, category: Category | null = null, opts: { raw?: boolean; unread?: boolean } = {}): Promise<MessagePage> {
     const tabs = folder.toUpperCase() === INBOX ? this.tabsOf(r) : [];
+    const unread = !!opts.unread;
     // A search covers the whole folder, as Gmail's does; and with tabs off there is only the one list.
-    if (category && !q && tabs.length) return this.tabList(r, folder, tabs, category, limit, before);
+    if (category && !q && !unread && tabs.length) return this.tabList(r, folder, tabs, category, limit, before);
     return this.withImap(r, 'background', async (c) => {
       const wasOpen = c.mailbox && c.mailbox.path === folder;
       return this.locked(c, folder, async () => {
@@ -481,14 +486,20 @@ export class Mail extends DurableObject<MailEnv> {
         // With tabs on, each page's messages are sorted into them (other servers: from the few headers fetched with it).
         const gmail = tabs.length > 0 && this.isGmail(r, c);
         const query: FetchQueryObject = tabs.length && !gmail ? { ...SUMMARY_QUERY, headers: CATEGORY_HEADERS } : SUMMARY_QUERY;
-        if (!q && before === null) {
+        if (!q && !unread && before === null) {
           const start = Math.max(1, exists - limit + 1);
           more = start > 1;
           for await (const m of c.fetch(`${start}:${exists}`, query)) fetched.push(m);
         } else {
-          const range: SearchObject = before !== null ? { uid: `1:${before - 1}` } : {};
+          const range: SearchObject = { ...(before !== null ? { uid: `1:${before - 1}` } : {}), ...(unread ? { seen: false } : {}) };
+          const gmailRaw = !!q && !!opts.raw && c.capabilities.has('X-GM-EXT-1');
           // TEXT already covers the headers; some servers (GreenMail) refuse FROM with a space in it, and then TEXT alone does.
-          let found = q ? await c.search({ ...range, or: [{ text: q }, { from: q }, { subject: q }] }, { uid: true }) : await c.search(range.uid ? range : { all: true }, { uid: true });
+          let found = gmailRaw
+            ? await c.search({ ...range, gmraw: q }, { uid: true })
+            : q
+              ? await c.search({ ...range, or: [{ text: q }, { from: q }, { subject: q }] }, { uid: true })
+              : await c.search(Object.keys(range).length ? range : { all: true }, { uid: true });
+          if (found === false && gmailRaw) throw badRequest('Gmail refused the search: check its syntax');
           if (found === false && q) found = await c.search({ ...range, text: q }, { uid: true });
           if (found === false) throw badRequest('the mail server refused the search');
           found = (found ?? []).sort((a, b) => a - b);
@@ -1053,21 +1064,28 @@ export class Mail extends DurableObject<MailEnv> {
     });
   }
 
+  /** A message's files: those sent with it, and the attachments (not inline pictures) of the one named in `attachFrom`. */
+  private async filesOf(r: AccountRow, body: ReturnType<typeof SendBody.parse>): Promise<OutgoingFile[]> {
+    const files: OutgoingFile[] = (body.attachments ?? []).map((a) => ({ filename: a.filename, contentType: a.contentType, content: Buffer.from(a.contentBase64, 'base64') }));
+    if (body.attachFrom) {
+      const { folder, uid } = body.attachFrom;
+      const { detail } = await this.read(r, folder, uid);
+      for (const a of detail.attachments.filter((x) => !x.inline)) {
+        const got = await this.attachment(r, folder, uid, a.index);
+        files.push({ filename: got.filename || a.filename, contentType: got.mimeType || a.mimeType, content: got.content });
+      }
+    }
+    const bodies = new TextEncoder().encode(body.html).length + new TextEncoder().encode(body.text ?? '').length;
+    if (bodies + files.reduce((n, f) => n + f.content.length, 0) > MAX_SEND_BYTES) throw mailError(413, 'bad_request', 'the message is larger than 20 MB');
+    return files;
+  }
+
   private async send(r: AccountRow, body: ReturnType<typeof SendBody.parse>): Promise<string> {
     const account = this.toAccount(r);
     const recipients = [...body.to, ...(body.cc ?? []), ...(body.bcc ?? [])];
     if (!recipients.length) throw badRequest('to: name at least one recipient');
     if (sendSize(body) > MAX_SEND_BYTES) throw mailError(413, 'bad_request', 'the message is larger than 20 MB');
-    const domain = account.email.split('@')[1] || 'freeflow.im';
-    const message = {
-      from: { name: account.displayName, address: account.email },
-      to: body.to, cc: body.cc, bcc: body.bcc,
-      subject: body.subject, html: body.html, text: body.text,
-      inReplyTo: body.inReplyTo, references: body.references,
-      messageId: `<${crypto.randomUUID()}@${domain}>`,
-      date: new Date(),
-      attachments: (body.attachments ?? []).map((a) => ({ filename: a.filename, contentType: a.contentType, content: Buffer.from(a.contentBase64, 'base64') })),
-    };
+    const message = outgoingMessage(account, body, await this.filesOf(r, body));
     const transport = smtpTransport(account.smtp, account.smtp.username || account.email, this.password(r));
     try {
       await transport.sendMail(message);
@@ -1088,12 +1106,10 @@ export class Mail extends DurableObject<MailEnv> {
           await c.mailboxCreate('Sent').catch(() => {});
           sent = (await this.folderList(r, c, true)).find((f) => specialUseOf(f) === 'sent')?.path ?? 'Sent';
         }
-        const composer = new MailComposer(message).compile();
-        composer.keepBcc = true;
-        const raw = await new Promise<Buffer>((resolve, reject) => composer.build((err, out) => (err ? reject(err) : resolve(out))));
-        await c.append(sent, raw, ['\\Seen']);
+        await c.append(sent, await compileMime(message, true), ['\\Seen']);
       }).catch((err) => console.warn(`[mail] sent copy: ${(err as Error).message}`));
     }
+    if (body.replacesDraft) await this.deleteDraft(r, body.replacesDraft.folder, body.replacesDraft.uid).catch((err) => console.warn(`[mail] sent draft: ${(err as Error).message}`));
     if (body.inReplyTo) {
       await this.withFolder(r, 'INBOX', 'interactive', async (c) => {
         const uids = (await c.search({ header: { 'message-id': body.inReplyTo! } }, { uid: true })) || [];
@@ -1101,6 +1117,70 @@ export class Mail extends DurableObject<MailEnv> {
       }).catch((err) => console.warn(`[mail] answered flag: ${(err as Error).message}`));
     }
     return message.messageId;
+  }
+
+  // ---- drafts -----------------------------------------------------------------------------------------------------
+
+  /** The account's Drafts folder (by its special use), made as "Drafts" when it has none. */
+  private async draftsFolder(r: AccountRow, c: ImapFlow): Promise<string> {
+    const found = await this.special(r, c, 'drafts');
+    if (found) return found;
+    await c.mailboxCreate('Drafts').catch(() => {});
+    return (await this.folderList(r, c, true)).find((f) => specialUseOf(f) === 'drafts')?.path ?? 'Drafts';
+  }
+
+  /**
+   * Saves a draft: the message built as a send would build it (Bcc kept), appended to Drafts with \Draft and \Seen. Its
+   * UID is the server's answer (UIDPLUS), else found by its Message-ID. A draft it replaces is deleted afterwards.
+   */
+  private async saveDraft(r: AccountRow, body: ReturnType<typeof DraftBody.parse>): Promise<{ folder: string; uid: number | null; messageId: string }> {
+    if (sendSize(body) > MAX_SEND_BYTES) throw mailError(413, 'bad_request', 'the message is larger than 20 MB');
+    const message = outgoingMessage(this.toAccount(r), body, await this.filesOf(r, body));
+    const raw = await compileMime(message, true);
+    const saved = await this.withImap(r, 'interactive', async (c) => {
+      const folder = await this.draftsFolder(r, c);
+      const appended = await c.append(folder, raw, ['\\Draft', '\\Seen']);
+      let uid = appended && typeof appended.uid === 'number' ? appended.uid : null;
+      if (uid === null) {
+        uid = await this.locked(c, folder, async () => {
+          const found = (await c.search({ header: { 'message-id': message.messageId } }, { uid: true })) || [];
+          return found.length ? Math.max(...found) : null;
+        });
+      }
+      this.folderLists.delete(r.id);
+      return { folder, uid };
+    });
+    if (body.replacesDraft) await this.deleteDraft(r, body.replacesDraft.folder, body.replacesDraft.uid).catch((err) => console.warn(`[mail] replaced draft: ${(err as Error).message}`));
+    return { ...saved, messageId: message.messageId };
+  }
+
+  /** Removes a draft for good: only a message in the Drafts folder, so this never deletes anything else. */
+  private async deleteDraft(r: AccountRow, folder: string, uid: number): Promise<void> {
+    await this.withImap(r, 'interactive', async (c) => {
+      const drafts = await this.special(r, c, 'drafts');
+      if (!drafts || drafts !== folder) throw badRequest('folder: only a message in the Drafts folder can be deleted as a draft');
+      await this.locked(c, folder, async () => {
+        const m = await c.fetchOne(String(uid), { uid: true, flags: true }, { uid: true });
+        if (!m) throw notFound('no such draft');
+        await c.messageDelete(String(uid), { uid: true });
+      });
+    });
+    this.left(r.id, folder, [uid]);
+  }
+
+  /** Sends a saved draft as it is (its recipients, bodies, threading and attachments), then deletes it. */
+  private async sendDraft(r: AccountRow, folder: string, uid: number): Promise<string> {
+    const drafts = await this.withImap(r, 'interactive', (c) => this.special(r, c, 'drafts'));
+    if (!drafts || drafts !== folder) throw badRequest('folder: only a message in the Drafts folder can be sent as a draft');
+    const { detail } = await this.read(r, folder, uid);
+    const body = parse(SendBody, {
+      to: detail.to, cc: detail.cc, bcc: detail.bcc, subject: detail.subject,
+      html: detail.html ?? '', ...(detail.text !== null ? { text: detail.text } : {}),
+      ...(detail.inReplyTo ? { inReplyTo: detail.inReplyTo } : {}), ...(detail.references.length ? { references: detail.references } : {}),
+      ...(detail.attachments.some((a) => !a.inline) ? { attachFrom: { folder, uid } } : {}),
+      replacesDraft: { folder, uid },
+    });
+    return this.send(r, body);
   }
 
   // ---- routes -----------------------------------------------------------------------------------------------------
@@ -1176,7 +1256,8 @@ export class Mail extends DurableObject<MailEnv> {
       if (before !== null && (!Number.isInteger(before) || before < 1)) throw badRequest('before: not a message id');
       const category = c.req.query('category') || null;
       if (category !== null && !(CATEGORIES as readonly string[]).includes(category)) throw badRequest(`category: one of ${CATEGORIES.join(', ')}`);
-      return c.json(await this.list(c.get('account'), c.req.query('folder') || 'INBOX', limit, before, (c.req.query('q') ?? '').trim(), category as Category | null));
+      const opts = { raw: c.req.query('raw') === '1', unread: c.req.query('unread') === '1' };
+      return c.json(await this.list(c.get('account'), c.req.query('folder') || 'INBOX', limit, before, (c.req.query('q') ?? '').trim(), category as Category | null, opts));
     });
 
     app.post('/v1/mail/accounts/:id/messages/category', async (c: MailContext) => {
@@ -1270,6 +1351,8 @@ export class Mail extends DurableObject<MailEnv> {
       const r = c.get('account');
       await this.withImap(r, 'interactive', async (cl) => {
         const trash = await this.special(r, cl, 'trash');
+        if (b.trashOnly && !trash) throw mailError(409, 'conflict', 'this account has no Trash folder, so nothing was deleted');
+        if (b.trashOnly && trash === b.folder) throw mailError(409, 'conflict', 'these messages are already in Trash; nothing was deleted');
         await this.locked(cl, b.folder, async () => {
           if (!trash || trash === b.folder) await cl.messageDelete(b.uids.join(','), { uid: true });
           else if (!(await cl.messageMove(b.uids.join(','), trash, { uid: true }))) throw badRequest('the mail server did not move the messages to Trash');
@@ -1283,6 +1366,21 @@ export class Mail extends DurableObject<MailEnv> {
       if (Number(c.req.header('content-length') ?? 0) > MAX_SEND_BYTES * 1.4 + 1_000_000) throw mailError(413, 'bad_request', 'the message is larger than 20 MB');
       const b = parse(SendBody, await json(c));
       return c.json({ ok: true, messageId: await this.send(c.get('account'), b) });
+    });
+
+    app.post('/v1/mail/accounts/:id/drafts', async (c: MailContext) => {
+      if (Number(c.req.header('content-length') ?? 0) > MAX_SEND_BYTES * 1.4 + 1_000_000) throw mailError(413, 'bad_request', 'the message is larger than 20 MB');
+      const b = parse(DraftBody, await json(c));
+      return c.json({ ok: true, ...(await this.saveDraft(c.get('account'), b)) }, 201);
+    });
+
+    app.delete('/v1/mail/accounts/:id/drafts/:uid', async (c: MailContext) => {
+      await this.deleteDraft(c.get('account'), folderOf(c), uidOf(c));
+      return c.json({ ok: true });
+    });
+
+    app.post('/v1/mail/accounts/:id/drafts/:uid/send', async (c: MailContext) => {
+      return c.json({ ok: true, messageId: await this.sendDraft(c.get('account'), folderOf(c), uidOf(c)) });
     });
   }
 

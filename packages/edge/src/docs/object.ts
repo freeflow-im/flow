@@ -12,6 +12,8 @@ import { handleMcp, handleMcpImport, suiteHub, type McpRequestCaller } from './p
 import type { FileHub } from './plugin/server/files.ts';
 import { DatabaseSync } from './runtime/sqlite.ts';
 import { PREVIEW_TTL_MS, Previews } from './server/previews.ts';
+import { importBytes, type ImportStores } from './server/importFile.ts';
+import type { MailToolContext } from '../imap/mailTools.ts';
 
 export interface DocsEnv {
   BLOBS: R2Bucket;
@@ -21,6 +23,8 @@ export interface DocsEnv {
   BROWSER?: Fetcher;
   /** The PdfOcr container (src/pdfOcr.ts), for scanned PDFs. */
   PDF_OCR?: DurableObjectNamespace;
+  /** FreeFlow Mail's objects, one per person (src/imap/object.ts): the MCP endpoint's Mail tools act on the caller's. */
+  MAIL?: DurableObjectNamespace<import('../imap/object').Mail>;
 }
 const BASE = '/workspace';
 
@@ -30,6 +34,8 @@ export class Docs extends DurableObject<DocsEnv> {
   private readonly ready: Promise<unknown>;
   /** The MCP endpoint's view of this object's stores (plugin/server/worker.ts), made once the app has opened them. */
   private hub: FileHub | null = null;
+  /** Where the assistant's save_mail_attachment_to_docs imports to: the app's own stores, once it has opened them. */
+  private importStores: ImportStores | null = null;
 
   constructor(ctx: DurableObjectState, env: DocsEnv) {
     super(ctx, env);
@@ -59,7 +65,7 @@ export class Docs extends DurableObject<DocsEnv> {
       dataDir: 'data',
       logger: false,
       appUrl: base,
-      agent: { jobs: false },
+      agent: { jobs: false, mail: (userId: string, scope: unknown) => this.assistantMail(userId, scope, base) },
       host: {
         app: this.app,
         basePath: BASE,
@@ -72,7 +78,10 @@ export class Docs extends DurableObject<DocsEnv> {
         userForCookie: async () => null,
         isMember: async (userId: string, organizationId: string) => (await this.directory<string[]>('organizationsOf', userId)).includes(organizationId),
         organizationsOf: async (userId: string) => this.directory<string[]>('organizationsOf', userId),
-        stores: (stores: Parameters<typeof suiteHub>[0]) => { this.hub = suiteHub(stores, `${base}/workspace`); },
+        stores: (stores: Parameters<typeof suiteHub>[0]) => {
+          this.hub = suiteHub(stores, `${base}/workspace`);
+          if (stores.sheets && stores.images && stores.files) this.importStores = { sheets: stores.sheets, images: stores.images, files: stores.files };
+        },
       },
     });
   }
@@ -113,7 +122,42 @@ export class Docs extends DurableObject<DocsEnv> {
 
   /** A request to /mcp, authenticated by the Worker against the directory (routes/mcp.ts), as `caller` in this organization. */
   async mcp(request: Request, caller: McpRequestCaller): Promise<Response> {
-    return this.inOrganization(caller.orgId, () => handleMcp(request, this.hub!, caller));
+    return this.inOrganization(caller.orgId, () => handleMcp(request, this.hub!, caller, this.mailOf(caller.userId, caller.origin)));
+  }
+
+  /**
+   * The assistant's mail tools (server/agent/tools.ts): the person's own Mail object, and saving an attachment into the
+   * chat's scope (their My files in this organization) with the importer the preview's Save to Docs uses.
+   */
+  private assistantMail(userId: string, scope: unknown, origin: string): MailToolContext | undefined {
+    const mail = this.mailOf(userId, origin);
+    const stores = this.importStores;
+    if (!mail) return undefined;
+    return {
+      mail,
+      origin,
+      ...(stores
+        ? {
+            saveToDocs: async (bytes: Buffer, filename: string) => {
+              const made = await importBytes(stores, scope as never, bytes, filename, undefined);
+              const file = made.sheet
+                ? { id: made.sheet.id, kind: made.sheet.kind, title: made.sheet.title, [made.sheet.kind === 'deck' ? 'deck_id' : made.sheet.kind === 'sheet' ? 'sheet_id' : 'doc_id']: made.sheet.id }
+                : { id: made.file!.id, kind: 'file', file_id: made.file!.id, filename: made.file!.filename, type: made.file!.type };
+              return { file, warnings: made.warnings ?? [] };
+            },
+          }
+        : {}),
+    };
+  }
+
+  /**
+   * A person's own Mail object, as its HTTP API (docs/specs/mail-api.md), for the Mail tools: mail is a person's, so this
+   * is theirs whatever organization this object is. Undefined where the Worker has no Mail.
+   */
+  private mailOf(userId: string, origin: string): ((path: string, init?: RequestInit) => Promise<Response>) | undefined {
+    const ns = this.env.MAIL;
+    if (!ns) return undefined;
+    return (path, init) => ns.get(ns.idFromName(userId)).handle(new Request(`${origin}${path}`, init));
   }
 
   /** An agent's upload to the address upload_file gave it; the ticket in it is the credential. */

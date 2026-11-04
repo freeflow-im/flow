@@ -1,6 +1,7 @@
 // Writing a message: a dialog on wide screens, the whole screen on narrow ones. To, Cc and Bcc as chips, the subject,
 // the rich-text body (Editor.tsx), files picked or dropped (sent as base64, 20 MB in all). Reply, Reply all and
-// Forward arrive prefilled (lib/compose.ts); closing a draft with something in it asks first.
+// Forward arrive prefilled (lib/compose.ts), as does a saved draft opened to edit (sending it removes it from Drafts);
+// closing a draft with something in it asks first.
 import { useEffect, useRef, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Loader2, Paperclip, Send, Trash2, X } from 'lucide-react';
@@ -17,7 +18,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 export interface ComposeRequest {
   mode: ComposeMode;
   draft: ComposeDraft;
-  /** The message replied to or forwarded (its folder and uid), for fetching a forward's attachments. */
+  /** The message replied to or forwarded (its folder and uid), for fetching a forward's attachments; for `draft`, the draft. */
   source?: { folder: string; uid: number };
 }
 
@@ -31,7 +32,7 @@ interface FileItem {
   forwarded: boolean;
 }
 
-const TITLES: Record<ComposeMode, string> = { new: 'New message', reply: 'Reply', replyAll: 'Reply all', forward: 'Forward' };
+const TITLES: Record<ComposeMode, string> = { new: 'New message', reply: 'Reply', replyAll: 'Reply all', forward: 'Forward', draft: 'Draft' };
 
 function toBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -115,6 +116,7 @@ export function Compose({ account, request, narrow, onClose, onSent }: { account
         ...(draft.inReplyTo ? { inReplyTo: draft.inReplyTo } : {}),
         ...(draft.references?.length ? { references: draft.references } : {}),
         ...(attachments.length ? { attachments } : {}),
+        ...(mode === 'draft' && request.source ? { replacesDraft: request.source } : {}),
       });
     },
     onSuccess: () => onSent(),
@@ -257,7 +259,7 @@ export function Compose({ account, request, narrow, onClose, onSent }: { account
           <DialogContent className="max-w-sm">
             <DialogHeader>
               <DialogTitle>Discard this draft?</DialogTitle>
-              <DialogDescription>What you have written will be lost. Drafts are not saved yet.</DialogDescription>
+              <DialogDescription>{mode === 'draft' ? 'Your changes will be lost. The saved draft stays in Drafts.' : 'What you have written will be lost. Drafts are not saved yet.'}</DialogDescription>
             </DialogHeader>
             <DialogFooter>
               <Button variant="outline" onClick={() => setConfirming(false)}>

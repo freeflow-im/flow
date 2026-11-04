@@ -113,7 +113,8 @@ export const MoveBody = z.object({ folder: z.string().min(1), uids: Uids, to: z.
 export const CategoryBody = z.object({ folder: z.string().min(1), uids: Uids, category: z.enum(CATEGORIES) });
 /** Sets (or, with `category: null`, forgets) the tab chosen for senders: how a move is undone. */
 export const SendersCategoryBody = z.object({ senders: z.array(z.object({ address: z.string().trim().toLowerCase().min(3).max(320), category: z.enum(CATEGORIES).nullable() })).min(1).max(1000) });
-export const DeleteBody = z.object({ folder: z.string().min(1), uids: Uids });
+/** `trashOnly`: move to Trash and never expunge; an account with no Trash, or messages already in it, are refused. */
+export const DeleteBody = z.object({ folder: z.string().min(1), uids: Uids, trashOnly: z.boolean().optional() });
 const Address = z.object({ name: z.string().max(500).default(''), address: z.string().trim().email() });
 export const SendBody = z.object({
   to: z.array(Address).default([]),
@@ -125,7 +126,13 @@ export const SendBody = z.object({
   inReplyTo: z.string().max(1000).optional(),
   references: z.array(z.string().max(1000)).max(500).optional(),
   attachments: z.array(z.object({ filename: z.string().min(1).max(500), contentType: z.string().max(200).default('application/octet-stream'), contentBase64: z.string() })).optional(),
+  /** A message in this account whose attachments (not its inline pictures) go with this one, as a forward's do. */
+  attachFrom: z.object({ folder: z.string().min(1), uid: z.number().int().positive() }).optional(),
+  /** A draft this message replaces: it is deleted from its folder once the message is sent (or the new draft saved). */
+  replacesDraft: z.object({ folder: z.string().min(1), uid: z.number().int().positive() }).optional(),
 });
+/** A draft is saved like a message is sent, without a recipient being required. */
+export const DraftBody = SendBody;
 export const MAX_SEND_BYTES = 20 * 1024 * 1024;
 
 /** The response header that carries a request's lock wait and IMAP time from the Mail object to routes/mail.ts, for its log line. */

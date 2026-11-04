@@ -60,6 +60,9 @@ interface MessageDetail extends MessageSummary {
 - `GET  /v1/mail/accounts/:id/folders` → `{ folders: MailFolder[] }` (INBOX first, then special-use folders, then the rest alphabetically)
 - `GET  /v1/mail/accounts/:id/messages?folder=INBOX&limit=50&before=<uid>&q=<text>`
   → `{ messages: MessageSummary[], next: number | null, sorting?: true }` newest first. `before` pages older (uids < before). `q` = IMAP SEARCH TEXT/OR FROM/SUBJECT in that folder.
+  `&raw=1` (2026-11-03): on a Gmail account (`X-GM-EXT-1`), `q` is Gmail's own search syntax, sent as `X-GM-RAW`
+  (`from:ann has:attachment newer_than:7d`); a query Gmail refuses is `bad_request`; elsewhere `raw` changes nothing.
+  `&unread=1` keeps only unread messages (it also takes a tab's list through the search, so `category` is then ignored).
   `&category=<Category>` (INBOX, tabs on) lists one tab: Primary is everything not in an *enabled* tab, and a tab that is off is
   empty. It is ignored while `q` is given (a search covers the whole folder, as Gmail's does) and when the account's tabs are off.
   A tab's page may come back short, even empty, with `sorting: true` and `next` while older mail is still being sorted
@@ -81,11 +84,34 @@ interface MessageDetail extends MessageSummary {
   attachment's `index` in MessageDetail; see "Opening a message" for what it maps to.
 - `PATCH /v1/mail/accounts/:id/messages` body `{ folder, uids: number[], seen?: boolean, flagged?: boolean }` → `{ ok: true }`
 - `POST /v1/mail/accounts/:id/messages/move` body `{ folder, uids: number[], to: string }` → `{ ok: true }`
-- `POST /v1/mail/accounts/:id/messages/delete` body `{ folder, uids: number[] }` → moves to Trash (or expunges if already in Trash) → `{ ok: true }`
+- `POST /v1/mail/accounts/:id/messages/delete` body `{ folder, uids: number[], trashOnly?: boolean }` → moves to Trash (or expunges if already in Trash) → `{ ok: true }`.
+  With `trashOnly: true` it never expunges: an account with no Trash folder, or messages already in Trash, are `409 conflict` and nothing changes.
 - `POST /v1/mail/accounts/:id/send` body
   `{ to: Address[], cc?: Address[], bcc?: Address[], subject: string, html: string, text?: string, inReplyTo?: string, references?: string[], attachments?: { filename: string; contentType: string; contentBase64: string }[] }`
   → sends over SMTP as the account (From = displayName <email>), appends a copy to the Sent folder (skip if the provider auto-saves, e.g. Gmail),
   sets \Answered on the replied message when inReplyTo matches; → `{ ok: true, messageId: string }`. Max 20 MB total.
+  Two optional fields (2026-11-03): `attachFrom: { folder, uid }` attaches that message's attachments (not its inline
+  pictures), as a forward does, read in the Mail object instead of sent by the client; `replacesDraft: { folder, uid }`
+  deletes that draft once the message is sent (Mail's Edit draft, and `send_mail` with a draft).
+
+### Drafts (2026-11-03)
+
+- `POST /v1/mail/accounts/:id/drafts` body: the same as `send` (no recipient required) → `201 { ok: true, folder, uid: number | null, messageId }`.
+  The message is built as `send` builds it (MailComposer, Bcc kept) and appended to the account's Drafts folder (by its special
+  use; `Drafts` is made when there is none) with `\Draft` and `\Seen`. `uid` is the server's APPENDUID, else found by the
+  Message-ID; `null` only when neither works. `replacesDraft` deletes the draft it replaces once the new one is saved.
+- `DELETE /v1/mail/accounts/:id/drafts/:uid?folder=` → `{ ok: true }`: removes a draft for good (`\Deleted` and expunge of that
+  UID only). Refused (`bad_request`) for any folder that is not the account's Drafts folder.
+- `POST /v1/mail/accounts/:id/drafts/:uid/send?folder=` → `{ ok: true, messageId }`: sends a saved draft as it is (its
+  recipients, bodies, threading and attachments, as `send` does, Sent copy included), then deletes it. Drafts folder only.
+- A draft is read like any message (`GET .../messages/:uid?folder=Drafts`). Mail shows **Edit draft** on a message in Drafts:
+  Compose opens prefilled from it (`lib/compose.ts` `fromDraft`, its attachments carried over as a forward's are) and sends
+  with `replacesDraft`, so the draft leaves Drafts once sent. Closing Compose leaves the saved draft as it was.
+
+### The Mail tools for agents
+
+Agents use Mail through the MCP endpoint (`docs/specs/web-mcp.md`, Mail tools) and the Docs assistant, both over this API in
+the caller's own Mail object (`src/imap/mailTools.ts`). Message ids there are `<accountId>:<folder>:<uid>`.
 
 ## Inbox tabs
 

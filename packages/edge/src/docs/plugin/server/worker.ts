@@ -9,6 +9,7 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { docsContext } from '../../runtime/context.ts';
 import { FileHub, importLimit, ToolError, type FileHubOptions } from './files.ts';
 import { createMcpServer, instructionsFor, MCP_VERSIONS, serverInfo, type McpVersion } from './mcp.ts';
+import { MAIL_INSTRUCTIONS, MailToolError, mailToolsFor, type MailFetch, type MailTool, type MailToolContext } from '../../../imap/mailTools.ts';
 import { adaptTransport, discoverResult, isDiscover, SDK_VERSION, STATELESS_VERSION } from './stateless.ts';
 
 export interface McpRequestCaller {
@@ -77,15 +78,46 @@ export function suiteHub(opts: FileHubOptions, appUrl: string): FileHub {
   return hub;
 }
 
-/** One MCP request, as `caller`. */
-export async function handleMcp(request: Request, hub: FileHub, caller: McpRequestCaller): Promise<Response> {
+/** What a token's scopes allow on /mcp: Docs' files (to read only, or to change too) and the Mail tools. */
+export function mcpAccess(scope: string, mailAvailable: boolean): { files: 'none' | 'read' | 'write'; mail: MailTool[] } {
+  const scopes = scope.split(' ').filter(Boolean);
+  const files = scopes.includes('files:write') ? 'write' : scopes.includes('files:read') ? 'read' : 'none';
+  return { files, mail: mailAvailable ? mailToolsFor(scopes) : [] };
+}
+
+/** The server's instructions for what the token can use: Docs' (when it has files), then Mail's (when it has mail). */
+export const suiteInstructions = (version: McpVersion, access: ReturnType<typeof mcpAccess>): string =>
+  [access.files !== 'none' ? instructionsFor(version) : 'FreeFlow, as the user allowed this agent to use it.', access.mail.length ? MAIL_INSTRUCTIONS : ''].filter(Boolean).join('\n');
+
+const toolResult = (data: Record<string, unknown>) => ({ content: [{ type: 'text' as const, text: JSON.stringify(data) }], structuredContent: data });
+const toolError = (message: string) => ({ content: [{ type: 'text' as const, text: message }], isError: true });
+
+/** The Mail tools on an MCP server, each acting on the caller's own Mail object. */
+function registerMailTools(mcp: ReturnType<typeof createMcpServer>, tools: MailTool[], ctx: MailToolContext): void {
+  for (const tool of tools) {
+    mcp.registerTool(tool.name, { title: tool.title, description: tool.description, inputSchema: tool.shape as never, annotations: tool.annotations }, (async (args: Record<string, unknown>) => {
+      try {
+        return toolResult(await tool.run(ctx, args ?? {}));
+      } catch (e) {
+        if (e instanceof MailToolError) return toolError(e.message);
+        console.error(`mcp ${tool.name}: ${(e as Error).message}`);
+        return toolError('The mail server could not do that just now. Try again in a moment.');
+      }
+    }) as never);
+  }
+}
+
+/** One MCP request, as `caller`. `mail` reaches the caller's own Mail object, where the Worker has it. */
+export async function handleMcp(request: Request, hub: FileHub, caller: McpRequestCaller, mail?: MailFetch): Promise<Response> {
   const version = suiteMcpVersion(caller.endpoint);
   if (!version) return json(404, { error: 'Not found' });
   if (request.method !== 'POST') return json(405, { error: 'This endpoint takes POST (Streamable HTTP, JSON responses); it has no GET stream.' }, { allow: 'POST' });
   const body = await request.json().catch(() => undefined);
   const info = serverInfo(version);
+  const access = mcpAccess(caller.scope, !!mail);
+  const instructions = suiteInstructions(version, access);
   // ChatGPT and newer clients speak 2026-07-28 (no initialize: server/discover); the SDK speaks 2025-11-25.
-  if (isDiscover(body)) return json(200, discoverResult(body, info, { tools: { listChanged: true } }, instructionsFor(version)));
+  if (isDiscover(body)) return json(200, discoverResult(body, info, { tools: { listChanged: true } }, instructions));
   const headers = new Headers(request.headers);
   const meta = body && typeof body === 'object' && !Array.isArray(body) ? (body as { params?: { _meta?: Record<string, unknown> } }).params?._meta : undefined;
   const stateless = headers.get('mcp-protocol-version') === STATELESS_VERSION || (!!meta && Object.values(meta).includes(STATELESS_VERSION));
@@ -104,11 +136,22 @@ export async function handleMcp(request: Request, hub: FileHub, caller: McpReque
     version,
     uploadUrl: `${caller.origin}/mcp/import/${encodeURIComponent(caller.orgId)}`,
     appUrl,
+    instructions,
   });
-  // A token without files:write gets the tools that only read.
-  if (!caller.scope.split(' ').includes('files:write')) {
+  // A token without files:write gets the Docs tools that only read; one without files:read either, none of them.
+  if (access.files !== 'write') {
     const tools = (mcp as unknown as { _registeredTools: Record<string, { annotations?: { readOnlyHint?: boolean }; remove(): void }> })._registeredTools;
-    for (const tool of Object.values(tools)) if (tool.annotations?.readOnlyHint !== true) tool.remove();
+    for (const tool of Object.values(tools)) if (access.files === 'none' || tool.annotations?.readOnlyHint !== true) tool.remove();
+  }
+  if (mail && access.mail.length) {
+    registerMailTools(mcp, access.mail, {
+      mail,
+      origin: caller.origin,
+      saveToDocs: async (bytes, filename) => {
+        const r = await service.importFile(bytes, filename, undefined);
+        return { file: r.file as unknown as Record<string, unknown>, warnings: r.warnings };
+      },
+    });
   }
   const transport = adaptTransport(new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true }) as never, info, stateless) as unknown as WebStandardStreamableHTTPServerTransport;
   try {
