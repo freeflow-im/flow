@@ -2,7 +2,7 @@
 // the rich-text body (Editor.tsx), files picked or dropped (sent as base64, 20 MB in all). Reply, Reply all and
 // Forward arrive prefilled (lib/compose.ts), as does a saved draft opened to edit (sending it removes it from Drafts);
 // closing a draft with something in it asks first.
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Loader2, Paperclip, Send, Trash2, X } from 'lucide-react';
 import { attachmentUrl, mailApi, MAX_SEND_BYTES, type Address, type MailAccount, type OutgoingAttachment } from '../api';
@@ -49,6 +49,8 @@ let nextFileId = 1;
 export function Compose({ account, request, narrow, onClose, onSent }: { account: MailAccount; request: ComposeRequest; narrow: boolean; onClose(): void; onSent(): void }) {
   const { draft, mode } = request;
   const [to, setTo] = useState<Address[]>(draft.to);
+  // The account's contacts, for the address fields' completion.
+  const suggest = useCallback((q: string) => mailApi.contacts(account.id, q), [account.id]);
   const [cc, setCc] = useState<Address[]>(draft.cc);
   const [bcc, setBcc] = useState<Address[]>(draft.bcc);
   const [showCc, setShowCc] = useState(draft.cc.length > 0 || draft.bcc.length > 0);
@@ -192,6 +194,7 @@ export function Compose({ account, request, narrow, onClose, onSent }: { account
             onChange={setTo}
             autoFocus={to.length === 0}
             onPendingChange={(t) => (pending.current.to = t)}
+            suggest={suggest}
             trailing={
               !showCc && (
                 <button type="button" className="shrink-0 rounded px-1.5 py-0.5 text-[14px] text-muted hover:bg-hover hover:text-ink" onClick={() => setShowCc(true)}>
@@ -202,8 +205,8 @@ export function Compose({ account, request, narrow, onClose, onSent }: { account
           />
           {showCc && (
             <>
-              <AddressField label="Cc" value={cc} onChange={setCc} onPendingChange={(t) => (pending.current.cc = t)} />
-              <AddressField label="Bcc" value={bcc} onChange={setBcc} onPendingChange={(t) => (pending.current.bcc = t)} />
+              <AddressField label="Cc" value={cc} onChange={setCc} onPendingChange={(t) => (pending.current.cc = t)} suggest={suggest} />
+              <AddressField label="Bcc" value={bcc} onChange={setBcc} onPendingChange={(t) => (pending.current.bcc = t)} suggest={suggest} />
             </>
           )}
           <div className="flex min-h-[40px] items-center border-b border-hairline px-1">

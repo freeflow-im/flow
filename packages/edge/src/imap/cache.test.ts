@@ -363,3 +363,69 @@ describe("a tab's thread page", () => {
     expect(cache.threadPage(A, F, V, Number.MAX_SAFE_INTEGER, 1, 10).map((p) => p.uid)).toEqual([4, 3]);
   });
 });
+
+describe('MailCache contacts', () => {
+  const msg = (uid: number, from: string, to: string[], o: { name?: string; cc?: string[]; date?: Date } = {}): NewRow => {
+    const m = fetched(uid, { from, date: o.date });
+    const env = m.envelope as { from: { name: string; address: string }[]; to: { address: string; name?: string }[]; cc?: { address: string }[] };
+    env.from = [{ name: o.name ?? '', address: from }];
+    env.to = to.map((address) => ({ address }));
+    env.cc = (o.cc ?? []).map((address) => ({ address }));
+    return { m, summary: toSummary(m, F, ''), headers: null, plan: null };
+  };
+  const ME = 'ann@example.com';
+
+  it('counts who was written to and who wrote, keeps the latest name, and never the account itself', () => {
+    const cache = new MailCache(memory());
+    cache.init();
+    cache.touchFolder(A, F, 'inbox', 1000, true);
+    cache.resetFolder(A, F, V);
+    cache.insert(A, F, V, [
+      msg(1, 'bo@example.com', [ME], { name: 'Bo Older', date: new Date(Date.UTC(2026, 9, 1)) }),
+      msg(2, 'Bo@Example.com', [ME], { name: 'Bo Newer', date: new Date(Date.UTC(2026, 9, 2)) }),
+      msg(3, ME, ['cy@example.com', 'bo@example.com'], { cc: ['dee@example.com'], date: new Date(Date.UTC(2026, 9, 3)) }),
+      msg(4, ME, ['cy@example.com'], { date: new Date(Date.UTC(2026, 9, 4)) }),
+    ], 1000, ME);
+    const all = cache.contacts(A, '', 10);
+    expect(all.map((c) => [c.address, c.name, c.sent, c.received])).toEqual([
+      ['cy@example.com', '', 2, 0], ['bo@example.com', 'Bo Newer', 1, 2], ['dee@example.com', '', 1, 0],
+    ]);
+    expect(all.some((c) => c.address === ME)).toBe(false);
+    // Cached again (a page re-fetched), a message counts once.
+    cache.insert(A, F, V, [msg(4, ME, ['cy@example.com'])], 2000, ME);
+    expect(cache.contacts(A, 'cy', 10)[0]?.sent).toBe(2);
+  });
+
+  it('matches the start of the address or of a word of the name, and escapes LIKE', () => {
+    const cache = new MailCache(memory());
+    cache.init();
+    cache.touchFolder(A, F, 'inbox', 1000, true);
+    cache.resetFolder(A, F, V);
+    cache.insert(A, F, V, [msg(1, 'lee.phillips@legora.com', [ME], { name: 'Lee David Phillips' }), msg(2, 'sam_r@rivera.dev', [ME], { name: 'Sam Rivera' }), msg(3, 'x@y.test', [ME], { name: '100% sure' })], 1000, ME);
+    const addresses = (q: string) => cache.contacts(A, q, 10).map((c) => c.address);
+    expect(addresses('lee')).toEqual(['lee.phillips@legora.com']);
+    expect(addresses('phil')).toEqual(['lee.phillips@legora.com']);
+    expect(addresses('riv')).toEqual(['sam_r@rivera.dev']);
+    expect(addresses('ee')).toEqual([]);
+    expect(addresses('100%')).toEqual(['x@y.test']);
+    expect(addresses('_r')).toEqual([]);
+  });
+
+  it('builds the contacts from the messages cached before the table existed, once', () => {
+    const cache = new MailCache(memory());
+    cache.init();
+    cache.touchFolder(A, F, 'inbox', 1000, true);
+    cache.resetFolder(A, F, V);
+    cache.insert(A, F, V, [msg(1, 'bo@example.com', [ME])], 1000, ME);
+    cache.forgetAccount(A);
+    cache.touchFolder(A, F, 'inbox', 1000, true);
+    cache.resetFolder(A, F, V);
+    cache.insert(A, F, V, [msg(2, 'cy@example.com', [ME]), msg(3, 'dee@example.com', [ME])], 1000, '');
+    (cache as unknown as { sql: Sql }).sql.exec('DELETE FROM mail_contacts');
+    // New mail counted since the deploy does not stand in for the rebuild.
+    cache.insert(A, F, V, [msg(4, 'ed@example.com', [ME])], 1000, ME);
+    expect(cache.rebuildContacts(A, ME)).toBe(3);
+    expect(cache.contacts(A, '', 10).map((c) => c.address).sort()).toEqual(['cy@example.com', 'dee@example.com', 'ed@example.com']);
+    expect(cache.rebuildContacts(A, ME)).toBe(0);
+  });
+});

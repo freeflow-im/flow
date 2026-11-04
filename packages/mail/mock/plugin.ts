@@ -219,6 +219,23 @@ export function createMockApi(empty = false) {
         const ids = threadIds(b);
         return { status: 200, json: { messages: page.map((x) => withTab(b, x, summary(x, ids.get(x)))), next: all.length > limit ? page[page.length - 1]!.uid : null } };
       }
+      if (rest === 'contacts') {
+        // The people on the sample mail, the ones written to first, as the server answers.
+        const me = b.account.email.toLowerCase();
+        const seen = new Map<string, { name: string; address: string; sent: number; received: number; lastAt: number }>();
+        const note = (a: { name: string; address: string } | null | undefined, sent: number, received: number, at: string) => {
+          const address = (a?.address ?? '').toLowerCase();
+          if (!address || address === me) return;
+          const c = seen.get(address) ?? { name: '', address, sent: 0, received: 0, lastAt: 0 };
+          c.sent += sent; c.received += received; const t = Date.parse(at) || 0;
+          if (a?.name && t >= c.lastAt) c.name = a.name;
+          c.lastAt = Math.max(c.lastAt, t); seen.set(address, c);
+        };
+        for (const x of b.messages) { if ((x.from?.address ?? '').toLowerCase() === me) for (const a of [...x.to, ...x.cc]) note(a, 1, 0, x.date); else note(x.from, 0, 1, x.date); }
+        const needle = (q.get('q') ?? '').trim().toLowerCase();
+        const contacts = [...seen.values()].filter((c) => !needle || c.address.startsWith(needle) || (' ' + c.name.toLowerCase()).includes(' ' + needle)).sort((x, y) => y.sent - x.sent || y.received - x.received || y.lastAt - x.lastAt).slice(0, Number(q.get('limit') ?? 8));
+        return { status: 200, json: { contacts } };
+      }
       if (rest === 'messages/category') {
         const { folder, uids, category } = body as { folder: string; uids: number[]; category: Category };
         const senders = [...new Set(uids.map((uid) => find(b, folder, uid).from?.address.toLowerCase() ?? '').filter(Boolean))];

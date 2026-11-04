@@ -1947,6 +1947,14 @@ export class Mail extends DurableObject<MailEnv> {
       return c.json({ folder, sync: state, log: this.tabLog.get(r.id) ?? [], counts, ...(messages ? { messages } : {}) });
     });
 
+    // The composer's address completion: the people written to and heard from, from the cached messages (cache.ts Contacts).
+    app.get('/v1/mail/accounts/:id/contacts', (c: MailContext) => {
+      const r = c.get('account');
+      const limit = Math.min(50, Math.max(1, Number(c.req.query('limit')) || 8));
+      this.cache.rebuildContacts(r.id, r.email);
+      return c.json({ contacts: this.cache.contacts(r.id, c.req.query('q') ?? '', limit) });
+    });
+
     // How the prefetch cache stands for the account: each cached folder's marks and row count, the last alarm runs (in
     // memory), when the person was last active and when the alarm is next due. Only ever the caller's own account.
     app.get('/v1/mail/accounts/:id/debug/cache', async (c: MailContext) => {

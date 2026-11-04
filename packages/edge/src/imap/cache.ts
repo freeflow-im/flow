@@ -70,6 +70,8 @@ export interface CachedMessage { summary: MessageSummary; threadId: string | nul
 
 /** One message to cache, from a FETCH with CACHE_QUERY (the summary made of it, and the raw header block kept for later). */
 export interface NewRow { m: FetchMessageObject; summary: MessageSummary; headers: string | null; plan: BodyPlan | null }
+/** Someone written to (`sent` times) or heard from (`received`), as the composer completes addresses. */
+export interface Contact { name: string; address: string; sent: number; received: number; lastAt: number }
 /** A cached message with its body, as `GET …/messages/:uid` answers, and the plan its attachments are fetched by. */
 export interface CachedBody { detail: MessageDetail; plan: BodyPlan | null; state: number }
 /** A cached message of a thread, as threads are listed and read: its folder and ids, and its summary with the flags as last known. */
@@ -105,6 +107,9 @@ export const DDL = [
     PRIMARY KEY (account_id, folder, uid_validity, uid, ref))`,
   `CREATE INDEX IF NOT EXISTS mail_refs_ref ON mail_refs (account_id, ref)`,
   `CREATE TABLE IF NOT EXISTS mail_thread_index (account_id TEXT NOT NULL, message_id TEXT NOT NULL, thread_id TEXT NOT NULL, date INTEGER NOT NULL, PRIMARY KEY (account_id, message_id))`,
+  // The people written to and heard from, from the cached messages (Contacts below): what the composer completes addresses from.
+  `CREATE TABLE IF NOT EXISTS mail_contacts (account_id TEXT NOT NULL, address TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', sent INTEGER NOT NULL DEFAULT 0, received INTEGER NOT NULL DEFAULT 0,
+    last_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (account_id, address))`,
 ];
 /** Message ids remembered per account after their rows left the cache, at most. */
 export const THREAD_INDEX_CAP = 20_000;
@@ -315,6 +320,7 @@ export class MailCache {
         accountId, folder, validity, m.uid, messageId, m.emailId ?? null, threadId, Date.parse(summary.date) || 0,
         f.seen ? 1 : 0, f.flagged ? 1 : 0, f.answered ? 1 : 0, f.draft ? 1 : 0, JSON.stringify([...(m.flags ?? [])]), m.modseq !== undefined ? String(m.modseq) : null, now,
         senderOf(summary), normalizeSubject(summary.subject), JSON.stringify(summary), plan ? JSON.stringify(plan) : null, headerText(headers ?? undefined));
+      if (!have.has(m.uid)) this.noteContacts(accountId, summary, me);
       const refs = [...new Set([inReplyTo ?? '', ...references].filter(Boolean))];
       this.sql.exec('DELETE FROM mail_refs WHERE account_id = ? AND folder = ? AND uid_validity = ? AND uid = ?', accountId, folder, validity, m.uid);
       for (const ref of refs) this.sql.exec('INSERT OR IGNORE INTO mail_refs (account_id, ref, folder, uid_validity, uid) VALUES (?, ?, ?, ?, ?)', accountId, ref, folder, validity, m.uid);
@@ -584,7 +590,64 @@ export class MailCache {
     if (id) this.sql.exec('UPDATE mail_messages SET answered = 1, flags_at = ? WHERE account_id = ? AND message_id = ?', at, accountId, id);
   }
 
+  // ---- contacts ---------------------------------------------------------------------------------------------------
+
+  /**
+   * The people on a message, counted: a message from the account's own address counts its To and Cc as written to
+   * (`sent`), any other its sender as heard from (`received`); the most recent name is kept. A copy in another folder counts
+   * again, which only weighs it a little more.
+   */
+  private noteContacts(accountId: string, s: MessageSummary, me: string): void {
+    const at = Date.parse(s.date) || 0;
+    const mine = me.toLowerCase();
+    const from = (s.from?.address ?? '').toLowerCase();
+    const note = (a: { name: string; address: string } | null, sent: number, received: number) => {
+      const address = (a?.address ?? '').toLowerCase();
+      if (!address || !address.includes('@') || address === mine) return;
+      this.sql.exec(
+        `INSERT INTO mail_contacts (account_id, address, name, sent, received, last_at) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT (account_id, address) DO UPDATE SET sent = sent + excluded.sent, received = received + excluded.received,
+           name = CASE WHEN excluded.name != '' AND excluded.last_at >= mail_contacts.last_at THEN excluded.name ELSE mail_contacts.name END, last_at = MAX(mail_contacts.last_at, excluded.last_at)`,
+        accountId, address, (a?.name ?? '').trim(), sent, received, at);
+    };
+    if (from && from === mine) for (const a of [...s.to, ...s.cc]) note(a, 1, 0);
+    else note(s.from, 0, 1);
+  }
+
+  /**
+   * Builds the contacts from every cached message, once per account (`mail_state` remembers), for an account cached
+   * before the table existed: what new mail counted meanwhile is counted again, which only weighs it a little more.
+   */
+  rebuildContacts(accountId: string, me: string): number {
+    const key = `contacts_built:${accountId}`;
+    if (this.state(key)) return 0;
+    let n = 0;
+    for (const r of this.sql.exec<{ summary: string }>('SELECT summary FROM mail_messages WHERE account_id = ?', accountId).toArray()) {
+      this.noteContacts(accountId, JSON.parse(r.summary) as MessageSummary, me);
+      n++;
+    }
+    this.setState(key, String(Date.now()));
+    return n;
+  }
+
+  /**
+   * The contacts matching `q` (the start of the address, or of a word of the name), the ones written to most first, then
+   * the most heard from, then the latest; with no `q`, the same order over everyone.
+   */
+  contacts(accountId: string, q: string, limit: number): Contact[] {
+    const needle = q.trim().toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`);
+    const rows = needle
+      ? this.sql.exec<{ address: string; name: string; sent: number; received: number; last_at: number }>(
+        `SELECT address, name, sent, received, last_at FROM mail_contacts WHERE account_id = ? AND (address LIKE ? ESCAPE '\\' OR (' ' || lower(name)) LIKE ? ESCAPE '\\')
+         ORDER BY sent DESC, received DESC, last_at DESC LIMIT ?`, accountId, `${needle}%`, `% ${needle}%`, limit).toArray()
+      : this.sql.exec<{ address: string; name: string; sent: number; received: number; last_at: number }>(
+        'SELECT address, name, sent, received, last_at FROM mail_contacts WHERE account_id = ? ORDER BY sent DESC, received DESC, last_at DESC LIMIT ?', accountId, limit).toArray();
+    return rows.map((r) => ({ name: r.name, address: r.address, sent: r.sent, received: r.received, lastAt: r.last_at }));
+  }
+
   forgetAccount(accountId: string): void {
+    this.sql.exec('DELETE FROM mail_contacts WHERE account_id = ?', accountId);
+    this.sql.exec('DELETE FROM mail_state WHERE key = ?', `contacts_built:${accountId}`);
     this.sql.exec('DELETE FROM mail_messages WHERE account_id = ?', accountId);
     this.sql.exec('DELETE FROM mail_cache_folders WHERE account_id = ?', accountId);
     this.sql.exec('DELETE FROM mail_refs WHERE account_id = ?', accountId);
