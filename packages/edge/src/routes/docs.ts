@@ -6,11 +6,11 @@ import type { Docs } from '../docs/object';
 import { directory, type AuthEnv } from './auth';
 
 export interface DocsRouteEnv extends AuthEnv { DOCS: DurableObjectNamespace<Docs> }
-type C = Context<{ Bindings: DocsRouteEnv }>;
+export type C = Context<{ Bindings: DocsRouteEnv }>;
 
 export const docsRoutes = new Hono<{ Bindings: DocsRouteEnv }>();
 
-async function who(c: C) {
+export async function who(c: C) {
   const header = c.req.header('authorization');
   const token = (header?.startsWith('Bearer ') ? header.slice(7).trim() : getCookie(c, 'sid')) || null;
   const ip = c.req.header('cf-connecting-ip') ?? '';

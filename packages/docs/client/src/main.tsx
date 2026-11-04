@@ -10,6 +10,7 @@ import { DocsSuiteBar } from './components/DocsSuiteBar.tsx';
 import { AuthPage } from './pages/AuthPage.tsx';
 import { ChangesPage } from './pages/ChangesPage.tsx';
 import { PublicPage } from './pages/PublicPage.tsx';
+import { PreviewPage } from './pages/PreviewPage.tsx';
 import { ConnectorsPage } from './pages/ConnectorsPage.tsx';
 import { DeckPage } from './pages/DeckPage.tsx';
 import { DocPage } from './pages/DocPage.tsx';
@@ -74,7 +75,9 @@ function AppShell() {
   useRecentOpens(!!user && !PREVIEW);
   // In the FreeFlow suite the suite bar is above every signed-in page (not a public page, nor a file's preview), and
   // the page scrolls under it. Standalone and in the desktop app there is none.
-  const bar = !!suite && !!user && !PREVIEW && !matchPath('/p/:token', pathname);
+  // A preview (/preview/<id>) sits in a frame in Mail's attachment overlay: the file only, no bar, folders or assistant.
+  const framed = !!matchPath('/preview/:id', pathname);
+  const bar = !!suite && !!user && !PREVIEW && !framed && !matchPath('/p/:token', pathname);
   const shell = (
     <div className="app-shell">
       {/* In the suite, the folders on the left of every page (components/DocsNav.tsx). */}
@@ -88,6 +91,7 @@ function AppShell() {
           <Route path="/verify" element={<GuestOnly><VerifyEmailPage /></GuestOnly>} />
           <Route path="/" element={<Home />} />
           <Route path="/p/:token" element={<PublicPage />} />
+          <Route path="/preview/:id" element={<RequireAuth><PreviewPage /></RequireAuth>} />
           <Route path="/s/:id" element={<RequireAuth><SpreadsheetPage /></RequireAuth>} />
           <Route path="/d/:id" element={<RequireAuth><DeckPage /></RequireAuth>} />
           <Route path="/doc/:id" element={<RequireAuth><DocPage /></RequireAuth>} />
@@ -100,7 +104,7 @@ function AppShell() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>
-      {user && open && !PREVIEW && <AgentPanel />}
+      {user && open && !PREVIEW && !framed && <AgentPanel />}
     </div>
   );
   if (!bar) return shell;

@@ -235,15 +235,15 @@ function ZipEntryView({ file, entry }: { file: StoredFile; entry: ZipEntry }) {
   }
 }
 
-/** A spreadsheet that can be looked through (selected, scrolled, its tabs switched) but not changed. */
-function ReadOnlySheet({ workbook }: { workbook: Workbook }) {
+/** A spreadsheet that can be looked through (selected, scrolled, its tabs switched) but not changed; `refusal` says why. */
+export function ReadOnlySheet({ workbook, refusal = READ_ONLY }: { workbook: Workbook; refusal?: string }) {
   const [notice, setNotice] = useState<string | null>(null);
   const ctl = useMemo(() => {
     const c = new SheetController(workbook, async () => {});
-    c.store.guard = (patches) => (patches.length ? READ_ONLY : null);
+    c.store.guard = (patches) => (patches.length ? refusal : null);
     c.onRefused = (reason) => setNotice(reason);
     return c;
-  }, [workbook]);
+  }, [workbook, refusal]);
   useEffect(() => () => ctl.dispose(), [ctl]);
   useController(ctl);
   const tabs = ctl.store.workbook.tabs;
@@ -275,7 +275,7 @@ function ReadOnlySheet({ workbook }: { workbook: Workbook }) {
   );
 }
 
-function ReadOnlyDoc({ doc }: { doc: Doc }) {
+export function ReadOnlyDoc({ doc }: { doc: Doc }) {
   const ctl = useMemo(() => new DocController(doc, async () => {}), [doc]);
   useEffect(() => () => ctl.dispose(), [ctl]);
   return (
@@ -286,7 +286,7 @@ function ReadOnlyDoc({ doc }: { doc: Doc }) {
 }
 
 /** A presentation's slides one under another, as wide as the page allows. */
-function ReadOnlyDeck({ deck }: { deck: Deck }) {
+export function ReadOnlyDeck({ deck }: { deck: Deck }) {
   const ref = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(SLIDE_W);
   useLayoutEffect(() => {

@@ -13,6 +13,24 @@ import { activeOrganizationId } from './suite.ts';
 /** What can have a public link: a presentation, or a stored file (a video). */
 export type SharedKind = 'deck' | 'file';
 
+/** A file previewed read-only for an hour (server/previews.ts): Mail's attachments. */
+export interface PreviewInfo {
+  id: string;
+  kind: 'doc' | 'deck' | 'sheet' | 'markdown' | 'pdf' | 'file';
+  filename: string;
+  type: string;
+  size: number;
+  expiresAt: number;
+  saved?: { kind: string; id: string; title: string; path: string; url: string };
+}
+export type PreviewView =
+  | { kind: 'doc'; doc: Doc }
+  | { kind: 'deck'; deck: Deck }
+  | { kind: 'sheet'; workbook: Workbook }
+  | { kind: 'markdown'; text: string }
+  | { kind: 'pdf'; url: string }
+  | { kind: 'file' };
+
 /** What a public link shows. */
 export type PublicView = { kind: 'deck'; title: string; deck: Deck } | { kind: 'video'; title: string; url: string };
 
@@ -245,6 +263,9 @@ export const api = {
   startSharing: (kind: SharedKind, id: string) => request<{ url: string | null }>('PUT', `/api/sharing/${kind}/${encodeURIComponent(id)}`),
   stopSharing: (kind: SharedKind, id: string) => request<{ url: string | null }>('DELETE', `/api/sharing/${kind}/${encodeURIComponent(id)}`),
   publicView: (token: string) => request<PublicView>('GET', `/api/public/${encodeURIComponent(token)}`),
+  /** A preview, in the organization it was made in (the Mail overlay names it in the page's address). */
+  openPreview: (id: string, workspace: string | null) =>
+    request<{ preview: PreviewInfo; view: PreviewView }>('GET', `/api/previews/${encodeURIComponent(id)}${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''}`),
 
   /** `suite`: hosted in the FreeFlow suite, whose sign-in (at /) is the only one; `local`: the desktop app. */
   me: () => request<{ user: User | null; googleLogin: boolean; local?: { dir: string }; suite?: { basePath: string } }>('GET', '/api/auth/me'),

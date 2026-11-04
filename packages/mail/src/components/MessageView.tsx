@@ -1,12 +1,14 @@
 // The reading pane, after shadcn/ui's Mail example's display (MIT, see LICENSE-shadcn.md): the actions (reply, reply
 // all, forward, archive, move, delete, unread, star), the header (from, to, cc, date), the body and the attachments.
 import { Archive, ArrowLeft, ChevronLeft, ChevronRight, Download, FileText, FolderInput, Forward, Loader2, Mail, MoreVertical, Reply, ReplyAll, Star, Trash2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { attachmentUrl, type Address, type Category, type MailFolder, type MessageDetail } from '../api';
 import { displayName, formatAddress } from '../lib/addresses';
 import { folderLabel, orderFolders } from '../lib/folders';
 import { fileSize, fullDate, relativeDate } from '../lib/format';
 import { TAB_INFO } from '../lib/tabs';
 import { cn } from '../lib/utils';
+import { AttachmentPreview } from './AttachmentPreview';
 import { TAB_ICONS } from './InboxTabs';
 import { MessageBody } from './MessageBody';
 import { Button } from './ui/button';
@@ -64,6 +66,10 @@ export function MessageView(p: MessageViewProps) {
     return flat.filter((f) => f.path !== m?.folder);
   })();
   const files = m?.attachments.filter((a) => !a.inline || !a.contentId || !(m.html ?? '').includes(a.contentId.replace(/^<|>$/g, ''))) ?? [];
+  // The attachment open in the preview overlay (an index into `files`), closed when another message opens.
+  const [previewing, setPreviewing] = useState<number | null>(null);
+  const shownKey = m ? `${m.folder}/${m.uid}` : '';
+  useEffect(() => setPreviewing(null), [shownKey]);
 
   return (
     <section className="flex h-full min-w-0 flex-col bg-white" aria-label="Message">
@@ -200,24 +206,43 @@ export function MessageView(p: MessageViewProps) {
                   {files.length} attachment{files.length === 1 ? '' : 's'}
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  {files.map((a) => (
-                    <a
-                      key={a.index}
-                      href={attachmentUrl(p.accountId, m.folder, m.uid, a.index)}
-                      download={a.filename}
-                      className="group flex max-w-[260px] items-center gap-2 rounded-lg border border-border bg-white px-3 py-2 text-[13px] hover:bg-hover"
-                      title={`Download ${a.filename}`}
-                    >
-                      <FileText className="size-4 shrink-0 text-primary" />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate font-medium text-ink">{a.filename || 'attachment'}</span>
-                        <span className="block text-xs text-muted">{fileSize(a.size)}</span>
-                      </span>
-                      <Download className="size-4 shrink-0 text-muted opacity-0 group-hover:opacity-100" />
-                    </a>
+                  {files.map((a, i) => (
+                    <div key={a.index} className="group flex max-w-[260px] items-center rounded-lg border border-border bg-white text-[13px] hover:bg-hover">
+                      {/* Opens the preview; Enter and Space here are the chip's, not the list's (App.tsx skips a key already handled). */}
+                      <button
+                        type="button"
+                        onClick={() => setPreviewing(i)}
+                        onKeyDown={(e) => {
+                          if (e.key !== 'Enter' && e.key !== ' ') return;
+                          e.preventDefault();
+                          setPreviewing(i);
+                        }}
+                        className="flex min-w-0 flex-1 items-center gap-2 rounded-l-lg py-2 pl-3 pr-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                        title={`Preview ${a.filename}`}
+                        aria-label={`Preview ${a.filename || 'attachment'}, ${fileSize(a.size)}`}
+                      >
+                        <FileText className="size-4 shrink-0 text-primary" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate font-medium text-ink">{a.filename || 'attachment'}</span>
+                          <span className="block text-xs text-muted">{fileSize(a.size)}</span>
+                        </span>
+                      </button>
+                      <a
+                        href={attachmentUrl(p.accountId, m.folder, m.uid, a.index)}
+                        download={a.filename}
+                        className="mr-1.5 flex size-7 shrink-0 items-center justify-center rounded-full text-muted hover:bg-black/5 hover:text-ink focus-visible:ring-2 focus-visible:ring-primary/40 outline-none"
+                        title={`Download ${a.filename}`}
+                        aria-label={`Download ${a.filename}`}
+                      >
+                        <Download className="size-4" />
+                      </a>
+                    </div>
                   ))}
                 </div>
               </div>
+            )}
+            {previewing !== null && files[previewing] && (
+              <AttachmentPreview accountId={p.accountId} message={m} files={files} index={previewing} onIndex={setPreviewing} onClose={() => setPreviewing(null)} />
             )}
             {/* As Gmail ends a message: answer it without going back up to the toolbar. */}
             <div className="mt-6 flex flex-wrap gap-2 pb-6">
