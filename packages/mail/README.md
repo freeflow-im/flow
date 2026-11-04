@@ -26,6 +26,8 @@ Worker holds the credentials and speaks IMAP and SMTP.
   and forward answer the thread's last message (`lib/threads.ts` `replyTarget`), or the one whose own buttons were used.
 - `src/components/Compose.tsx` — compose, reply, reply all, forward: address chips (`AddressField.tsx`), TipTap
   StarterKit with Link (`Editor.tsx`, loaded on first use), attachments as base64 up to 20 MB in all.
+- `src/components/AddressField.tsx` — the To/Cc/Bcc chips, with completion from the account's contacts (`GET …/contacts`:
+  the people written to and heard from, docs/specs/mail-api.md Contacts) under the box as the person types.
 - `src/components/AccountForms.tsx` — adding an account (email → `/v1/mail/providers` → name and password, Advanced
   for the servers) and changing or removing one.
 - `src/components/InboxTabs.tsx` — Gmail's inbox tabs above the INBOX list for an account with tabs on (the server
