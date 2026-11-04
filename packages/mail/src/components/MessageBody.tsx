@@ -45,7 +45,7 @@ export function MessageBody({ accountId, message }: { accountId: string; message
   return (
     <>
       {clean.hasRemote && !showImages && (
-        <div className="mb-3 flex items-center gap-3 rounded-lg border border-warn-border bg-warn-bg px-3 py-2 text-[13px] text-ink">
+        <div className="mb-3 flex items-center gap-3 rounded-lg border border-warn-border bg-warn-bg px-3 py-2 text-[14px] text-ink">
           <ImageOff className="size-4 shrink-0 text-muted" />
           <span className="flex-1">Images from the web are hidden to protect your privacy. Show them, and they load in every message from now on.</span>
           <button type="button" className="font-medium text-primary hover:underline" onClick={() => setImagePref('always')}>

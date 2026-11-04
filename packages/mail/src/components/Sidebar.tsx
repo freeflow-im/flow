@@ -47,7 +47,7 @@ function Count({ n }: { n: number }) {
 
 function Avatar({ name, email }: { name: string; email: string }) {
   const letter = (name || email).trim().slice(0, 1).toUpperCase();
-  return <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-[11px] font-semibold text-white">{letter}</span>;
+  return <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-[12px] font-semibold text-white">{letter}</span>;
 }
 
 function TreeRow({ node, depth, folder, onFolder, onDrop }: { node: FolderNode; depth: number; folder: string | null; onFolder(path: string): void; onDrop: SidebarProps['onDropMessages'] }) {
@@ -157,7 +157,7 @@ export function Sidebar(p: SidebarProps) {
         ))}
         {tree.length > 0 && (
           <>
-            <div className="px-3 pt-4 pb-1 text-[11px] font-medium uppercase tracking-[.06em] text-muted">Folders</div>
+            <div className="px-3 pt-4 pb-1 text-[12px] font-medium uppercase tracking-[.06em] text-muted">Folders</div>
             {tree.map((n) => (
               <TreeRow key={n.path} node={n} depth={0} folder={p.folder} onFolder={p.onFolder} onDrop={p.onDropMessages} />
             ))}

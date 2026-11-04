@@ -233,7 +233,7 @@ export function MessageList(p: MessageListProps) {
       )}
       {!p.query && p.tabBar}
       {p.query && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-hairline bg-selected-blue px-4 py-1.5 text-[13px]">
+        <div className="flex shrink-0 items-center gap-2 border-b border-hairline bg-selected-blue px-4 py-1.5 text-[14px]">
           <span className="min-w-0 flex-1 truncate">
             Results for <b>“{p.query}”</b>
           </span>
@@ -428,8 +428,8 @@ export function MessageList(p: MessageListProps) {
                     {rowDate(m.date)}
                   </time>
                 </div>
-                <div className={cn('truncate text-[13px]', !m.seen ? 'font-semibold text-ink' : 'text-ink')}>{m.subject || '(no subject)'}</div>
-                {m.snippet && <div className="line-clamp-1 text-[13px] text-muted">{m.snippet}</div>}
+                <div className={cn('truncate text-[14px]', !m.seen ? 'font-semibold text-ink' : 'text-ink')}>{m.subject || '(no subject)'}</div>
+                {m.snippet && <div className="line-clamp-1 text-[14px] text-muted">{m.snippet}</div>}
                 {chips(m, 'mt-1.5')}
               </div>
             </div>

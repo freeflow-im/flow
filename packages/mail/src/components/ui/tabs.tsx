@@ -10,7 +10,7 @@ export const TabsList = ({ className, ...props }: ComponentProps<typeof T.List>)
 export const TabsTrigger = ({ className, ...props }: ComponentProps<typeof T.Trigger>) => (
   <T.Trigger
     className={cn(
-      'inline-flex h-full items-center justify-center whitespace-nowrap rounded-md px-3 text-[13px] font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary/40 data-[state=active]:bg-white data-[state=active]:text-ink data-[state=active]:shadow-sm',
+      'inline-flex h-full items-center justify-center whitespace-nowrap rounded-md px-3 text-[14px] font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary/40 data-[state=active]:bg-white data-[state=active]:text-ink data-[state=active]:shadow-sm',
       className,
     )}
     {...props}

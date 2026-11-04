@@ -62,7 +62,7 @@ export function AssistantPanel({ chat, onMessage, overlay, width, onClose, onSho
     >
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-hairline px-4">
         <Sparkles className="size-4 text-primary" />
-        <span className="text-[15px] font-semibold">Assistant</span>
+        <span className="text-[16px] font-semibold">Assistant</span>
         <span className="flex-1" />
         <Button variant="link" size="sm" className="h-7 px-1.5" onClick={() => void chat.reset()} disabled={chat.running || !chat.items.length} title="Start a new conversation">
           New chat
@@ -158,10 +158,10 @@ function ToolRow({ item, onOpenDraft }: { item: ToolItem; onOpenDraft(ref: Messa
   const saved = savedFileOf(item);
   return (
     <div className="flex flex-col gap-1.5" title={item.error}>
-      <div className={cn('flex items-center gap-2 text-[13px]', item.status === 'error' ? 'text-danger' : 'text-muted')}>
+      <div className={cn('flex items-center gap-2 text-[14px]', item.status === 'error' ? 'text-danger' : 'text-muted')}>
         {item.status === 'running' ? <Loader2 className="size-3.5 animate-spin" /> : item.status === 'ok' ? <Check className="size-3.5" /> : <AlertCircle className="size-3.5" />}
         <span>{toolLabel(item.name, item.input)}</span>
-        {item.status === 'error' && <span className="text-[12px]">{item.error === 'Stopped' ? '· Stopped' : '· Failed'}</span>}
+        {item.status === 'error' && <span className="text-[13px]">{item.error === 'Stopped' ? '· Stopped' : '· Failed'}</span>}
       </div>
       {draft && (
         <Button size="sm" variant="secondary" className="self-start" onClick={() => onOpenDraft(draft)}>

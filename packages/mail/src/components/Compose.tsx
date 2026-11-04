@@ -171,13 +171,13 @@ export function Compose({ account, request, narrow, onClose, onSent }: { account
         }}
       >
         <div className="flex h-12 shrink-0 items-center gap-2 border-b border-hairline bg-panel px-4">
-          <DialogTitle className="flex-1 text-[15px] font-semibold">{TITLES[mode]}</DialogTitle>
+          <DialogTitle className="flex-1 text-[16px] font-semibold">{TITLES[mode]}</DialogTitle>
           <button type="button" onClick={requestClose} className="rounded-md p-1.5 text-muted hover:bg-hover hover:text-ink" aria-label="Close">
             <X className="size-4" />
           </button>
         </div>
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4">
-          <div className="flex min-h-[40px] items-center gap-2 border-b border-hairline px-1 text-[13px]">
+          <div className="flex min-h-[40px] items-center gap-2 border-b border-hairline px-1 text-[14px]">
             <span className="w-10 shrink-0 text-muted">From</span>
             <span className="truncate text-ink">
               {account.displayName ? `${account.displayName} <${account.email}>` : account.email}
@@ -191,7 +191,7 @@ export function Compose({ account, request, narrow, onClose, onSent }: { account
             onPendingChange={(t) => (pending.current.to = t)}
             trailing={
               !showCc && (
-                <button type="button" className="shrink-0 rounded px-1.5 py-0.5 text-[13px] text-muted hover:bg-hover hover:text-ink" onClick={() => setShowCc(true)}>
+                <button type="button" className="shrink-0 rounded px-1.5 py-0.5 text-[14px] text-muted hover:bg-hover hover:text-ink" onClick={() => setShowCc(true)}>
                   Cc Bcc
                 </button>
               )
@@ -212,7 +212,7 @@ export function Compose({ account, request, narrow, onClose, onSent }: { account
           {files.length > 0 && (
             <div className="flex flex-wrap gap-2 pb-3">
               {files.map((f) => (
-                <span key={f.id} className={cn('inline-flex max-w-[260px] items-center gap-2 rounded-lg border border-border bg-panel px-2.5 py-1.5 text-[13px]', f.status === 'error' && 'border-danger/40 text-danger')}>
+                <span key={f.id} className={cn('inline-flex max-w-[260px] items-center gap-2 rounded-lg border border-border bg-panel px-2.5 py-1.5 text-[14px]', f.status === 'error' && 'border-danger/40 text-danger')}>
                   {f.status === 'loading' ? <Loader2 className="size-3.5 animate-spin text-muted" /> : <Paperclip className="size-3.5 text-muted" />}
                   <span className="min-w-0 truncate">{f.name}</span>
                   <span className="shrink-0 text-xs text-muted">{f.status === 'error' ? 'failed' : fileSize(f.size)}</span>
@@ -226,7 +226,7 @@ export function Compose({ account, request, narrow, onClose, onSent }: { account
         </div>
         {dragging && <div className="pointer-events-none absolute inset-0 z-10 m-2 flex items-center justify-center rounded-xl border-2 border-dashed border-primary bg-selected-blue/80 text-sm font-medium text-primary">Drop files to attach</div>}
         {error && (
-          <div role="alert" className="mx-4 mb-2 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-[13px] text-danger">
+          <div role="alert" className="mx-4 mb-2 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-[14px] text-danger">
             {error}
           </div>
         )}

@@ -30,7 +30,7 @@ function ErrorBox({ error }: { error: unknown }) {
   if (!error) return null;
   const { title, detail } = accountErrorText(error);
   return (
-    <div role="alert" className="flex gap-2 rounded-lg border border-danger/30 bg-danger/5 p-3 text-[13px] text-ink">
+    <div role="alert" className="flex gap-2 rounded-lg border border-danger/30 bg-danger/5 p-3 text-[14px] text-ink">
       <AlertCircle className="mt-0.5 size-4 shrink-0 text-danger" />
       <div>
         <div className="font-semibold text-danger">{title}</div>
@@ -57,7 +57,7 @@ const SECURITY: { value: Security; label: string }[] = [
 function ServerFields({ id, title, value, onChange, email }: { id: string; title: string; value: ServerSettings; onChange(v: ServerSettings): void; email: string }) {
   return (
     <fieldset className="grid grid-cols-[1fr_88px] gap-2 sm:grid-cols-[1fr_88px_140px]">
-      <legend className="mb-1.5 text-[11px] font-medium uppercase tracking-[.06em] text-muted">{title}</legend>
+      <legend className="mb-1.5 text-[12px] font-medium uppercase tracking-[.06em] text-muted">{title}</legend>
       <Input id={`${id}-host`} aria-label={`${title} server`} placeholder="Server" value={value.host} onChange={(e) => onChange({ ...value, host: e.target.value.trim() })} />
       <Input id={`${id}-port`} aria-label={`${title} port`} placeholder="Port" inputMode="numeric" value={String(value.port || '')} onChange={(e) => onChange({ ...value, port: Number(e.target.value.replace(/\D/g, '')) || 0 })} />
       <select
@@ -90,7 +90,7 @@ function ServerFields({ id, title, value, onChange, email }: { id: string; title
 function Advanced({ open, onToggle, children }: { open: boolean; onToggle(): void; children: ReactNode }) {
   return (
     <div className="rounded-lg border border-hairline">
-      <button type="button" onClick={onToggle} className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[13px] font-medium text-ink hover:bg-hover" aria-expanded={open}>
+      <button type="button" onClick={onToggle} className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[14px] font-medium text-ink hover:bg-hover" aria-expanded={open}>
         {open ? <ChevronDown className="size-4 text-muted" /> : <ChevronRight className="size-4 text-muted" />}
         Advanced: mail servers
       </button>
@@ -192,7 +192,7 @@ export function AddAccountDialog({ onClose, onAdded, defaultName }: { onClose():
           </form>
         ) : (
           <form onSubmit={submit} className="flex flex-col gap-4">
-            <div className="flex items-center justify-between rounded-lg bg-panel px-3 py-2 text-[13px]">
+            <div className="flex items-center justify-between rounded-lg bg-panel px-3 py-2 text-[14px]">
               <span className="min-w-0 truncate">
                 <span className="font-medium">{email}</span>
                 {preset && <span className="text-muted"> · {preset.name}</span>}
@@ -246,7 +246,7 @@ export function AccountSettingsDialog({ accounts, initialId, focusPassword, onCl
                 key={a.id}
                 type="button"
                 onClick={() => setId(a.id)}
-                className={cn('rounded-full border px-3 py-1 text-[13px]', a.id === id ? 'border-primary bg-selected-blue font-semibold text-primary-deep' : 'border-border hover:bg-hover')}
+                className={cn('rounded-full border px-3 py-1 text-[14px]', a.id === id ? 'border-primary bg-selected-blue font-semibold text-primary-deep' : 'border-border hover:bg-hover')}
               >
                 {a.email}
                 {a.status !== 'ok' && <span className="ml-1 text-danger">!</span>}
@@ -307,7 +307,7 @@ function InboxTabsSetting({ account, onSaved }: { account: MailAccount; onSaved(
     );
   };
   return (
-    <section className="border-t border-border pt-4 text-[13px]" aria-label="Inbox tabs">
+    <section className="border-t border-border pt-4 text-[14px]" aria-label="Inbox tabs">
       <div className="mb-1 flex items-center gap-2">
         <b className="font-semibold">Inbox tabs</b>
         <span className="text-muted">for {account.email}</span>
@@ -327,7 +327,7 @@ function InboxTabsSetting({ account, onSaved }: { account: MailAccount; onSaved(
 function ImagesSetting() {
   const pref = useImagePref();
   return (
-    <label className="flex items-start gap-2.5 border-t border-border pt-4 text-[13px]">
+    <label className="flex items-start gap-2.5 border-t border-border pt-4 text-[14px]">
       <input type="checkbox" className="mt-0.5 size-4 accent-primary" checked={pref === 'always'} onChange={(e) => setImagePref(e.target.checked ? 'always' : 'ask')} />
       <span>
         <b className="font-semibold">Show images from the web</b>
@@ -371,7 +371,7 @@ function AccountEditor({ account, focusPassword, onSaved, onRemoved }: { account
       }}
     >
       {account.status !== 'ok' && (
-        <div className="rounded-lg border border-warn-border bg-warn-bg p-3 text-[13px]">
+        <div className="rounded-lg border border-warn-border bg-warn-bg p-3 text-[14px]">
           <b>{account.status === 'auth_failed' ? 'The mail server stopped accepting the password.' : 'The mail server could not be reached.'}</b>
           {account.statusMessage && <div className="mt-0.5 text-muted">{account.statusMessage}</div>}
         </div>
@@ -390,10 +390,10 @@ function AccountEditor({ account, focusPassword, onSaved, onRemoved }: { account
         <ServerFields id="edit-smtp" title="Outgoing (SMTP)" value={servers.smtp} onChange={(smtp) => setServers((s) => ({ ...s, smtp }))} email={account.email} />
       </Advanced>
       <ErrorBox error={save.error ?? remove.error} />
-      {saved && !dirty && <div className="text-[13px] text-[#1e8e3e]">Saved.</div>}
+      {saved && !dirty && <div className="text-[14px] text-[#1e8e3e]">Saved.</div>}
       <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
         {confirmRemove ? (
-          <div className="flex flex-wrap items-center gap-2 text-[13px]">
+          <div className="flex flex-wrap items-center gap-2 text-[14px]">
             <span>Remove {account.email} from FreeFlow? Your mail stays on the server.</span>
             <Button type="button" size="sm" variant="destructive" onClick={() => remove.mutate()} disabled={remove.isPending}>
               Remove

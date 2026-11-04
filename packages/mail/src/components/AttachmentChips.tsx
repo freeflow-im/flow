@@ -60,7 +60,7 @@ export function AttachmentChips({ files, dense, onOpen, className }: { files: At
           title={`${a.filename} (${fileSize(a.size)})`}
           aria-label={`Preview ${a.filename || 'attachment'}, ${fileSize(a.size)}`}
           className={cn(
-            'h-8 min-w-0 shrink items-center gap-2 rounded-full border border-[#dadce0] bg-white pr-3 pl-2 text-[13px] font-medium text-[#3c4043] outline-none hover:bg-[#f1f3f4] focus-visible:ring-2 focus-visible:ring-primary/40',
+            'h-8 min-w-0 shrink items-center gap-2 rounded-full border border-[#dadce0] bg-white pr-3 pl-2 text-[14px] font-medium text-[#3c4043] outline-none hover:bg-[#f1f3f4] focus-visible:ring-2 focus-visible:ring-primary/40',
             dense ? 'max-w-[200px]' : 'max-w-[180px]',
             bands.chip[i],
           )}
@@ -77,7 +77,7 @@ export function AttachmentChips({ files, dense, onOpen, className }: { files: At
             {...own(i + 1)}
             title={files.slice(i + 1).map((a) => a.filename).join(', ')}
             aria-label={`${files.length - i - 1} more attachment${files.length - i - 1 === 1 ? '' : 's'}`}
-            className={cn('h-8 shrink-0 items-center rounded-full border border-[#dadce0] bg-white px-2.5 text-[13px] font-medium text-[#3c4043] outline-none hover:bg-[#f1f3f4] focus-visible:ring-2 focus-visible:ring-primary/40', bands.more[i])}
+            className={cn('h-8 shrink-0 items-center rounded-full border border-[#dadce0] bg-white px-2.5 text-[14px] font-medium text-[#3c4043] outline-none hover:bg-[#f1f3f4] focus-visible:ring-2 focus-visible:ring-primary/40', bands.more[i])}
           >
             +{files.length - i - 1}
           </button>
