@@ -35,6 +35,8 @@ import { AccountPatch, CategoryBody, DeleteBody, DraftBody, FlagsBody, MAX_SEND_
 
 export interface MailEnv {
   FLOW_DATA_KEY?: string;
+  /** `off` stops the prefetch cache's alarm (a kill switch): pages then check the server themselves, as before it. */
+  MAIL_ALARM?: string;
   /** `1` lets an account use `security: 'none'`, any port and a local host: local dev against GreenMail only. */
   MAIL_ALLOW_INSECURE?: string;
 }
@@ -1288,6 +1290,7 @@ export class Mail extends DurableObject<MailEnv> {
    * after a day idle or with no accounts), unless one is already due sooner. After every request and every run.
    */
   private async armAlarm(now = Date.now()): Promise<void> {
+    if (this.env.MAIL_ALARM === 'off') { if ((await this.ctx.storage.getAlarm()) !== null) await this.ctx.storage.deleteAlarm(); return; }
     const has = (this.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM accounts').toArray()[0]?.n ?? 0) > 0;
     const at = nextAlarmAt(this.cache.lastActiveAt(), now, has);
     const current = await this.ctx.storage.getAlarm();
@@ -1296,6 +1299,7 @@ export class Mail extends DurableObject<MailEnv> {
   }
 
   async alarm(): Promise<void> {
+    if (this.env.MAIL_ALARM === 'off') return;
     try {
       await this.runCache(Date.now() + ALARM_BUDGET_MS);
     } catch (err) {
