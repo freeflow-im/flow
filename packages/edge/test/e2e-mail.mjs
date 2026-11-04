@@ -383,7 +383,7 @@ t("threads: a tab's conversations say their tab",th.s===200&&th.j.threads?.lengt
 // Paging: every conversation of INBOX once, newest first.
 {const seen=[];let b=null,ordered=true;for(let i=0;i<40;i++){const x=await getRaw(`${P}/threads?folder=INBOX&limit=4${b?`&before=${b}`:''}`);for(const th of x.j.threads??[]){if(seen.length&&seen.at(-1)<=th.uid)ordered=false;seen.push(th.uid);}if(!x.j.next)break;b=x.j.next;}
  const all=await api(A.token,'GET',`${P}/threads?folder=INBOX&limit=100`);
- t('threads: paging lists every conversation once, newest first',ordered&&new Set(seen).size===seen.length&&seen.length===all.j.threads?.length,`${seen.length} paged, ${all.j.threads?.length} at once`);}
+ t('threads: paging lists every conversation once, newest first',ordered&&new Set(seen).size===seen.length&&seen.length>=Math.min(100,all.j.threads?.length??0)&&all.j.threads.every(x=>seen.includes(x.uid)),`${seen.length} paged, ${all.j.threads?.length} at once (100 at most)`);}
 // Tidy: this run's conversations.
 for(const m of [t1,t2,t3,ma,mb,mc,...(lunch??[])])if(m)await api(A.token,'POST',`${P}/messages/delete`,{folder:'INBOX',uids:[m.uid]});
 // Flags: one set here shows in the cached page at once; one set by another mail app the next time the page is read
