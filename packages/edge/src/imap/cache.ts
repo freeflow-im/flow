@@ -34,6 +34,8 @@ export const IDLE_CADENCES: { under: number; every: number }[] = [
 export const RECENT_MS = 7 * 24 * 60 * 60_000;
 /** A folder whose sync failed is left alone this long. */
 export const ERROR_BACKOFF_MS = 10 * 60_000;
+/** A folder the alarm synced this recently is served as it stands: no new-mail, tab-sort or flags round trip for a page. */
+export const FRESH_MS = 45_000;
 /** A body larger than this is not kept (a SQLite value holds 2 MB at most); the message opens from the server. */
 export const BODY_MAX_HTML = 1024 * 1024;
 export const BODY_MAX_TEXT = 256 * 1024;

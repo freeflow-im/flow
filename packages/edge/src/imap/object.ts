@@ -25,7 +25,7 @@ import PostalMime, { type Email } from 'postal-mime';
 import { ApiError } from '../errors';
 import { decryptBlob, encryptBlob } from '../org/crypto/index';
 import { decodeTransfer, decodedSize, minimalMessage, planBody, prefetch, type BodyPlan } from './body';
-import { ALARM_BUDGET_MS, BACKFILL_STEP, BODY, BODY_BATCH, BODY_BATCH_BYTES, BODY_BUDGET_PER_FOLDER, BODY_MAX_HTML, BODY_MAX_TEXT, CACHE_ROWS, ERROR_BACKOFF_MS, MAIN_KINDS, MailCache, NEW_CAP, flagDiff, flagsOf, nextAlarmAt, walkDown, type CachedFolder, type Flags, type FolderKind, type NewRow, type QueuedBody, type ThreadRow } from './cache';
+import { ALARM_BUDGET_MS, BACKFILL_STEP, BODY, FRESH_MS, BODY_BATCH, BODY_BATCH_BYTES, BODY_BUDGET_PER_FOLDER, BODY_MAX_HTML, BODY_MAX_TEXT, CACHE_ROWS, ERROR_BACKOFF_MS, MAIN_KINDS, MailCache, NEW_CAP, flagDiff, flagsOf, nextAlarmAt, walkDown, type CachedFolder, type Flags, type FolderKind, type NewRow, type QueuedBody, type ThreadRow } from './cache';
 import { contentDisposition, specialUseOf, snippetOf, textPartOf, toDetail, toFolders, toSummary, type AttachmentInfo, type MessageDetail, type MessageSummary, type SpecialUse, type TextPart, type ThreadPage, type ThreadSummary } from './convert';
 import { participants } from './threads';
 import { CATEGORIES, CATEGORY_HEADERS, classifyHeaders, effective, effectiveSql, isGmailHost, normalizeTabs, parseHeaders, tabPage, uidSet, type Category, type TabCategory } from './categorize';
@@ -576,7 +576,9 @@ export class Mail extends DurableObject<MailEnv> {
         const now = Date.now();
         let state = this.cache.touchFolder(r.id, folder, await this.kindOf(r, c, folder), now, true);
         if (state.validity !== validity) state = this.cache.resetFolder(r.id, folder, validity);
-        if (before === null) {
+        // Synced by the alarm lately: the page as the cache stands, with no round trip (new mail and flags are the alarm's).
+        const fresh = now - state.syncedAt < FRESH_MS;
+        if (before === null && !fresh) {
           // A folder this connection already had open has not heard of new mail since (no IDLE): ask.
           if (wasOpen) await c.noop();
           await this.cacheNew(r, c, folder, state, this.budget(NEW_CAP));
@@ -590,7 +592,7 @@ export class Mail extends DurableObject<MailEnv> {
         let messages = rows.slice(0, limit).map((row) => row.summary);
         const liveFetched = new Map<number, FetchMessageObject>();
         let kind: Timing['cache'] = 'hit';
-        if (messages.length) {
+        if (messages.length && !fresh) {
           // The page's flags as the server has them now; a message it no longer has (moved by another mail app) is dropped.
           const { changed, vanished } = await this.refreshFlags(r, c, folder, validity, messages.map((m) => m.uid), now, null);
           if (vanished.size) { messages = messages.filter((m) => !vanished.has(m.uid)); this.left(r.id, folder, [...vanished]); }
@@ -621,14 +623,14 @@ export class Mail extends DurableObject<MailEnv> {
    * cache where it has them, with their flags checked against the server in one FLAGS fetch; the rest fetched and cached
    * on the way. A UID the server no longer has is left out (and its rows dropped by the caller).
    */
-  private async pageSummaries(r: AccountRow, c: ImapFlow, folder: string, validity: string, uids: number[]): Promise<Map<number, MessageSummary>> {
+  private async pageSummaries(r: AccountRow, c: ImapFlow, folder: string, validity: string, uids: number[], checkFlags = true): Promise<Map<number, MessageSummary>> {
     const t = timing.getStore();
     const out = new Map<number, MessageSummary>();
     if (!uids.length) return out;
     const now = Date.now();
     const cached = this.cache.byUids(r.id, folder, validity, uids);
     if (cached.size) {
-      const { changed, vanished } = await this.refreshFlags(r, c, folder, validity, [...cached.keys()], now, null);
+      const { changed, vanished } = checkFlags ? await this.refreshFlags(r, c, folder, validity, [...cached.keys()], now, null) : { changed: new Map<number, Flags>(), vanished: new Set<number>() };
       for (const [uid, row] of cached) {
         if (vanished.has(uid)) continue;
         const f = changed.get(uid);
@@ -1079,7 +1081,8 @@ export class Mail extends DurableObject<MailEnv> {
       // (Not `c.mailbox.exists`: on a connection that already had INBOX open it may not know of new mail yet; sync asks.)
       if (!c.mailbox || (before !== null && before <= 1)) return null;
       if (category !== 'primary' && !tabs.includes(category as TabCategory)) return null; // a tab that is off has nothing; its mail is in Primary
-      const state = await this.sync(r, c, folder, this.isGmail(r, c));
+      const fresh = this.isFresh(r, folder, this.validity(c));
+      const state = (fresh && this.syncState(r, folder)) || await this.sync(r, c, folder, this.isGmail(r, c));
       const q = this.tabRows(tabs);
       const found = this.sql.exec<{ uid: number; reason: string; chosen: string | null }>(
         `SELECT c.uid, c.reason, o.category AS chosen FROM ${q.from} WHERE c.account_id = ? AND c.folder = ? AND c.uid_validity = ? AND c.uid < ? AND c.uid >= ? AND ${q.tab} = ? ORDER BY c.uid DESC LIMIT ?`,
@@ -1088,7 +1091,7 @@ export class Mail extends DurableObject<MailEnv> {
       const reasons = new Map(found.map((row) => [row.uid, reasonOf(row.reason, row.chosen)]));
       const { page, next, sorting } = tabPage(rows, limit, state.low, cursor);
       const ahead = state.low > 1 && (sorting || this.cachedInTab(r, folder, state, tabs, category, cursor, want) < want);
-      const summaries = await this.pageSummaries(r, c, folder, state.validity, page);
+      const summaries = await this.pageSummaries(r, c, folder, state.validity, page, !fresh);
       // What the cache had but the server no longer has has left the folder (moved elsewhere, from another mail app).
       const gone = page.filter((u) => !summaries.has(u));
       if (gone.length) this.left(r.id, folder, gone);
@@ -1153,7 +1156,9 @@ export class Mail extends DurableObject<MailEnv> {
         const now = Date.now();
         let state = this.cache.touchFolder(r.id, folder, await this.kindOf(r, c, folder), now, true);
         if (state.validity !== validity) state = this.cache.resetFolder(r.id, folder, validity);
-        if (before === null) {
+        // Synced by the alarm lately: the page as the cache stands, with no round trip.
+        const fresh = now - state.syncedAt < FRESH_MS;
+        if (before === null && !fresh) {
           if (wasOpen) await c.noop();
           await this.cacheNew(r, c, folder, state, this.budget(NEW_CAP));
           state = this.cache.folder(r.id, folder)!;
@@ -1162,7 +1167,7 @@ export class Mail extends DurableObject<MailEnv> {
         let tabState: SyncState | null = null;
         if (category && tabs.length) {
           if (category !== 'primary' && !tabs.includes(category as TabCategory)) return { threads: [], next: null };
-          tabState = await this.sync(r, c, folder, gmail);
+          tabState = (fresh && this.syncState(r, folder)) || await this.sync(r, c, folder, gmail);
           tab = { ...this.tabRows(tabs), category };
         }
         if (state.high === 0 || (before !== null && before <= 1)) return { threads: [], next: null };
@@ -1182,7 +1187,7 @@ export class Mail extends DurableObject<MailEnv> {
         // The flags of the messages shown, as the server has them now; a message it no longer has is dropped.
         const here = rows.filter((x) => x.folder === folder && x.validity === validity);
         let kept = rows;
-        if (here.length) {
+        if (here.length && !fresh) {
           const { changed, vanished } = await this.refreshFlags(r, c, folder, validity, here.map((x) => x.uid), now, null);
           if (vanished.size) { this.left(r.id, folder, [...vanished]); kept = rows.filter((x) => !(x.folder === folder && vanished.has(x.uid))); }
           if (changed.size) kept = kept.map((x) => { const f = x.folder === folder ? changed.get(x.uid) : undefined; return f ? { ...x, summary: { ...x.summary, seen: f.seen, flagged: f.flagged, answered: f.answered } } : x; });
@@ -1352,6 +1357,12 @@ export class Mail extends DurableObject<MailEnv> {
     }
   }
 
+  /** Whether the alarm synced this folder (with this UIDVALIDITY) within FRESH_MS. */
+  private isFresh(r: AccountRow, folder: string, validity: string): boolean {
+    const f = this.cache.folder(r.id, folder);
+    return !!f && f.validity === validity && Date.now() - f.syncedAt < FRESH_MS;
+  }
+
   /** Why a folder is cached: INBOX, Sent, Drafts, Archive or All Mail by its special use, else because it was opened. */
   private async kindOf(r: AccountRow, c: ImapFlow, folder: string): Promise<FolderKind> {
     const f = (await this.folderList(r, c)).find((x) => x.path === folder);
@@ -1383,6 +1394,11 @@ export class Mail extends DurableObject<MailEnv> {
     const started = Date.now();
     const added = await this.cacheNew(r, c, folder, state, this.budget(NEW_CAP));
     state = this.cache.folder(r.id, folder)!;
+    // INBOX with tabs on: its new mail sorted into them here, so a tab's page need not (a refused Gmail search is logged, not fatal).
+    let sorted = '';
+    if (folder.toUpperCase() === INBOX && this.tabsOf(r).length) {
+      try { await this.sync(r, c, folder, this.isGmail(r, c)); sorted = ', tabs sorted'; } catch (err) { sorted = `, tabs not sorted (${(err as Error).message})`; }
+    }
     const uids = this.cache.uids(r.id, folder, validity);
     const box = c.mailbox || null;
     const condstore = c.enabled.has('CONDSTORE') && !!box && !box.noModseq && box.highestModseq !== undefined;
@@ -1413,7 +1429,7 @@ export class Mail extends DurableObject<MailEnv> {
     }
     const trimmed = this.cache.trim(r.id, folder, validity, CACHE_ROWS);
     this.cache.setMarks(r.id, folder, { syncedAt: Date.now(), error: null, errorAt: 0 });
-    return `${added} new, ${changed} flags, ${gone} gone, ${older} older${trimmed ? `, ${trimmed} trimmed` : ''}`;
+    return `${added} new, ${changed} flags, ${gone} gone, ${older} older${trimmed ? `, ${trimmed} trimmed` : ''}${sorted}`;
   }
 
   /**
@@ -1488,7 +1504,11 @@ export class Mail extends DurableObject<MailEnv> {
     }
     const { changed, vanished } = flagDiff(this.cache.flags(r.id, folder, validity, uids), fetched, since === null, started);
     const now = Date.now();
-    for (const f of changed) this.cache.setFlags(r.id, folder, [f.uid], f, now);
+    for (const f of changed) {
+      this.cache.setFlags(r.id, folder, [f.uid], f, now);
+      const o = this.opened.get(`${r.id}/${folder}/${f.uid}`);
+      if (o) o.detail = { ...o.detail, seen: f.seen, flagged: f.flagged, answered: f.answered };
+    }
     return { changed: new Map(changed.map((f) => [f.uid, f])), vanished: new Set(vanished) };
   }
 
