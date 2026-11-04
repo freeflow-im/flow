@@ -5,7 +5,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { openSuiteSearch } from '@flow/suite-bar';
-import { MailApiError, mailApi, type Category, type MailAccount, type MessageDetail, type ThreadSummary } from './api';
+import { MailApiError, mailApi, type Category, type MailAccount, type MessageDetail, type ThreadSummary, type TabStatus } from './api';
 import { AccountSettingsDialog, AddAccountDialog } from './components/AccountForms';
 import type { ComposeRequest } from './components/Compose';
 import { ConnectMail } from './components/ConnectMail';
@@ -17,14 +17,14 @@ import { ResizeHandle } from './components/ResizeHandle';
 import { setReadingPane, useReadingPane } from './lib/layoutPref';
 import { Sidebar } from './components/Sidebar';
 import { useMediaQuery, useResizableWidth } from './hooks/layout';
-import { fetchBody, keys, prefetchThread, useAccounts, useFolders, useMessageActions, useMessages, useThread, useThreads } from './hooks/mail';
+import { fetchBody, keys, prefetchThread, useAccounts, useFolders, useMessageActions, useMessages, useThread, useThreads, useTabStatus } from './hooks/mail';
 import { useMailAssistant } from './hooks/assistant';
 import { useOrganizations } from './hooks/organization';
 import { mailContext, setAssistantOpen, useAssistantOpen, type MessageRef } from './lib/assistant';
 import { emptyDraft, fromDraft, prefill, type ComposeMode } from './lib/compose';
 import { findSpecial, folderLabel } from './lib/folders';
 import { folderDropTarget, tabDropTarget, useCanDrag } from './lib/dnd';
-import { TAB_INFO, reasonText, tabFromParam, tabsOf, writeTabParam } from './lib/tabs';
+import { TAB_INFO, reasonText, tabFromParam, tabsOf, writeTabParam, markTabSeen, readTabSeen, type TabSeen } from './lib/tabs';
 import { expandedByDefault, groupByThread, replyTarget, soloThreadId } from './lib/threads';
 import { cn } from './lib/utils';
 
@@ -99,6 +99,20 @@ export function App() {
   const accountTabs = useMemo(() => tabsOf(account), [account]);
   const showTabs = folder?.toUpperCase() === 'INBOX' && accountTabs.length > 0;
   const inboxTab = tabFromParam(tabChoice, accountTabs);
+  // The tabs' badges: what arrived after the newest the person saw in each tab (remembered per browser), polled with the lists.
+  const [tabSeen, setTabSeen] = useState<TabSeen>(() => (account ? readTabSeen(account.id) : {}));
+  useEffect(() => { setTabSeen(account ? readTabSeen(account.id) : {}); }, [account?.id]);
+  const tabStatus = useTabStatus(account?.id ?? null, showTabs, tabSeen);
+  const tabStatusById = useMemo(() => Object.fromEntries((tabStatus.data ?? []).map((t) => [t.category, t])) as Partial<Record<Category, TabStatus>>, [tabStatus.data]);
+  useEffect(() => {
+    if (!account || !tabStatus.data) return;
+    let next = tabSeen;
+    for (const t of tabStatus.data) {
+      // The open tab is seen as far as it goes; a tab never seen starts from where it is (nothing is new until something arrives).
+      if (t.newest && (t.category === inboxTab || next[t.category] === undefined)) next = markTabSeen(account.id, next, t.category, t.newest.uid);
+    }
+    if (next !== tabSeen) setTabSeen(next);
+  }, [account, tabStatus.data, inboxTab, tabSeen]);
   const category: Category | null = showTabs && !q ? inboxTab : null;
   const canDrag = useCanDrag();
 
@@ -683,7 +697,7 @@ export function App() {
       onShowFolders={tiny ? () => setDrawer(true) : undefined}
       tabBar={
         showTabs ? (
-          <InboxTabs
+          <InboxTabs status={tabStatusById}
             tabs={accountTabs}
             active={inboxTab}
             onChange={chooseTab}

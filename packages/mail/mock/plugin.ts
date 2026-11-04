@@ -219,6 +219,18 @@ export function createMockApi(empty = false) {
         const ids = threadIds(b);
         return { status: 200, json: { messages: page.map((x) => withTab(b, x, summary(x, ids.get(x)))), next: all.length > limit ? page[page.length - 1]!.uid : null } };
       }
+      if (rest === 'tabs') {
+        // The badges, as the server counts them from its cache: by the message's tab, after what was seen.
+        const after = new Map((q.get('after') ?? '').split(',').filter(Boolean).map((p) => { const [t, u] = p.split(':'); return [t!, Number(u)] as const; }));
+        const tabs = ['primary', ...b.account.tabs] as Category[];
+        const inbox = b.messages.filter((x) => x.folder === 'INBOX');
+        const ids = threadIds(b);
+        return { status: 200, json: { tabs: tabs.map((category) => {
+          const mine = inbox.filter((x) => (b.account.tabs.length ? tabOf(b, x) : 'primary') === category).sort((x, y) => y.uid - x.uid);
+          const seen = after.get(category);
+          return { category, total: mine.length, unread: mine.filter((x) => !x.seen).length, new: seen === undefined ? 0 : mine.filter((x) => x.uid > seen).length, newest: mine[0] ? summary(mine[0], ids.get(mine[0])) : null };
+        }) } };
+      }
       if (rest === 'contacts') {
         // The people on the sample mail, the ones written to first, as the server answers.
         const me = b.account.email.toLowerCase();

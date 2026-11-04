@@ -1975,6 +1975,25 @@ export class Mail extends DurableObject<MailEnv> {
       return c.json({ ok: true, ms: Date.now() - start, run: this.cacheLog[this.cacheLog.length - 1] ?? null, alarmProfile: JSON.parse(this.cache.state('alarm_profile') || '{}') });
     });
 
+    // The inbox tabs' badges: per tab, how many messages arrived after the newest the person saw there (`after=tab:uid,…`),
+    // how many are unread, and the newest message; from the cache, so the tab bar can ask every minute at no cost.
+    app.get('/v1/mail/accounts/:id/tabs', (c: MailContext) => {
+      const r = c.get('account');
+      const folder = c.req.query('folder') || INBOX;
+      const tabs = folder.toUpperCase() === INBOX ? this.tabsOf(r) : [];
+      const state = this.cache.folder(r.id, folder);
+      if (!tabs.length || !state || !state.validity || state.high === 0) return c.json({ tabs: [] });
+      const after = new Map<string, number>();
+      for (const part of (c.req.query('after') ?? '').split(',')) {
+        const [tab, uid] = part.split(':');
+        if (tab && (CATEGORIES as readonly string[]).includes(tab) && Number.isInteger(Number(uid)) && Number(uid) > 0) after.set(tab, Number(uid));
+      }
+      const e = effectiveSql(tabs);
+      const status = this.cache.tabStatus(r.id, folder, state.validity, state.low, { tab: e.sql, params: e.params }, after);
+      const order = ['primary', ...tabs] as string[];
+      return c.json({ tabs: order.map((category) => status.find((s) => s.category === category) ?? { category, total: 0, unread: 0, new: 0, newest: null }) });
+    });
+
     app.get('/v1/mail/accounts/:id/threads', async (c: MailContext) => {
       const limit = Math.min(100, Math.max(1, Number(c.req.query('limit')) || 25));
       const beforeRaw = c.req.query('before');

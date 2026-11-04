@@ -39,6 +39,8 @@ export interface Address {
 }
 /** Someone written to (`sent` times) or heard from (`received`), as the composer completes addresses (from the account's cached mail). */
 export interface Contact { name: string; address: string; sent: number; received: number; lastAt: number }
+/** An inbox tab as the tab bar badges it: how many cached messages are in it, unread, arrived after the newest the person saw there (`after`), and the newest. */
+export interface TabStatus { category: Category; total: number; unread: number; new: number; newest: MessageSummary | null }
 export interface MessageSummary {
   uid: number;
   folder: string;
@@ -235,6 +237,8 @@ export const mailApi = {
   updateAccount: async (id: string, patch: AccountPatch) => (await request<{ account: MailAccount }>('PATCH', base(id), patch)).account,
   deleteAccount: (id: string) => request<{ ok: true }>('DELETE', base(id)),
   folders: async (accountId: string) => (await request<{ folders: MailFolder[] }>('GET', `${base(accountId)}/folders`)).folders,
+  tabStatus: async (accountId: string, after: Partial<Record<Category, number>>) =>
+    (await request<{ tabs: TabStatus[] }>('GET', `${base(accountId)}/tabs${query({ folder: 'INBOX', after: Object.entries(after).map(([t, u]) => `${t}:${u}`).join(',') || undefined })}`)).tabs,
   contacts: async (accountId: string, q: string, limit = 8) => (await request<{ contacts: Contact[] }>('GET', `${base(accountId)}/contacts?q=${encodeURIComponent(q)}&limit=${limit}`)).contacts,
   messages: (accountId: string, params: { folder: string; limit?: number; before?: number; q?: string; category?: Category }) =>
     request<MessagePage>('GET', `${base(accountId)}/messages${query(params)}`),

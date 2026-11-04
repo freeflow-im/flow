@@ -83,6 +83,12 @@ interface MessageDetail extends Omit<MessageSummary, 'attachments'> {
   ... }` with `categorized`/`primary`/`skipped`/`confirmed` for a sort and `promoted`/`moved`/`demoted`/`confirmed`/`gone`
   for a re-check. `sync` is the folder's `mail_sync` row, `counts` the cached rows per `(category, reason)`, and `messages`
   `{ uid, category, reason }` for the UIDs asked about.
+- `GET  /v1/mail/accounts/:id/tabs?folder=INBOX&after=<tab>:<uid>,…` → `{ tabs: [{ category, total, unread, new, newest: MessageSummary | null }] }`
+  (2026-11-04): the inbox tabs' badges, from the prefetch cache (no round trip): per tab (Primary first, then the enabled ones),
+  how many cached messages of the folder are in it, how many unread, how many arrived after the newest the person saw there
+  (`after`; 0 for a tab not named), and the newest message. A message not sorted yet counts as Primary. `[]` with tabs off
+  or nothing cached. The tab bar (`InboxTabs.tsx`) polls it with the lists, remembers the newest seen per tab in the browser
+  (`lib/tabs.ts`), and badges a tab that is not open with "N new" and the newest message's sender and subject, as Gmail does.
 - `GET  /v1/mail/accounts/:id/contacts?q=<text>&limit=8` → `{ contacts: [{ name, address, sent, received, lastAt }] }` (2026-11-04): the
   people written to and heard from, for the composer's address completion (Contacts below): those whose address, or a word of
   whose name, starts with `q`, the most written to first, then the most heard from, then the latest; everyone with no `q`.
@@ -192,7 +198,9 @@ Gmail's Primary, Promotions, Social, Updates and Forums, for INBOX only. Each ta
 - A list of the whole INBOX with tabs on (a search) carries each message's tab: other servers sort it from the headers fetched
   with the page, Gmail from the cache (sorting any UID it does not have).
 
-The tabs have no counts: each is its name and icon (the open one blue, with the underline). The inbox's own unread count in
+The tabs carry badges (2026-11-04): a tab that is not open says "N new" (what arrived after the newest the person saw there,
+from `GET …/tabs` above) with the newest message's sender and subject under its name; the open one is its name and icon (blue,
+with the underline). The inbox's own unread count in
 the left panel comes from `/folders`. In the list, rows can be dragged (mouse or trackpad only; touch screens and the
 keyboard use the menus) onto a tab, which is the same "Move to tab" as the menu, or onto a folder, which is the same move as
 "Move to"; dragging a checked row drags all the checked rows, and a drop on the open tab or folder does nothing.

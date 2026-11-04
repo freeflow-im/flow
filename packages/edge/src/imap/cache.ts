@@ -397,6 +397,33 @@ export class MailCache {
       }));
   }
 
+  /**
+   * The inbox tabs as the tab bar shows them (docs/specs/mail-api.md, Inbox tabs: the badges): for each tab, how many cached
+   * messages of the folder are in it, how many unread, how many arrived after `after[tab]` (the newest the person has seen
+   * there), and the newest message. `tab` is the tab of a row as categorize.ts `effectiveSql` writes it (a row not sorted yet
+   * is Primary). Reads the cached rows once and counts in JS.
+   */
+  tabStatus(accountId: string, folder: string, validity: string, low: number, tab: { tab: string; params: string[] }, after: ReadonlyMap<string, number>): { category: string; total: number; unread: number; new: number; newest: MessageSummary | null }[] {
+    const rows = this.sql.exec<{ uid: number; seen: number; tab: string }>(
+      `SELECT m.uid, m.seen, ${tab.tab} AS tab FROM mail_messages m
+       LEFT JOIN mail_categories c ON c.account_id = m.account_id AND c.folder = m.folder AND c.uid_validity = m.uid_validity AND c.uid = m.uid
+       LEFT JOIN mail_category_overrides o ON o.account_id = c.account_id AND o.sender = c.sender
+       WHERE m.account_id = ? AND m.folder = ? AND m.uid_validity = ? AND m.uid >= ?`,
+      ...tab.params, accountId, folder, validity, Math.max(1, low)).toArray();
+    const by = new Map<string, { total: number; unread: number; new: number; newest: number }>();
+    for (const r of rows) {
+      const t = by.get(r.tab) ?? { total: 0, unread: 0, new: 0, newest: 0 };
+      t.total++;
+      if (!r.seen) t.unread++;
+      const seen = after.get(r.tab);
+      if (seen !== undefined && r.uid > seen) t.new++;
+      if (r.uid > t.newest) t.newest = r.uid;
+      by.set(r.tab, t);
+    }
+    const newest = this.byUids(accountId, folder, validity, [...by.values()].map((t) => t.newest));
+    return [...by].map(([category, t]) => ({ category, total: t.total, unread: t.unread, new: t.new, newest: newest.get(t.newest)?.summary ?? null }));
+  }
+
   /** The thread of a cached message. */
   threadOf(accountId: string, folder: string, uid: number): string | null {
     return this.sql.exec<{ thread_id: string | null }>('SELECT thread_id FROM mail_messages WHERE account_id = ? AND folder = ? AND uid = ?', accountId, folder, uid).toArray()[0]?.thread_id ?? null;
