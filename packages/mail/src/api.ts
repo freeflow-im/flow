@@ -109,6 +109,8 @@ export interface OutgoingMessage {
   inReplyTo?: string;
   references?: string[];
   attachments?: OutgoingAttachment[];
+  /** A saved draft this message is: the server deletes it from Drafts once the message is sent. */
+  replacesDraft?: { folder: string; uid: number };
 }
 export interface MessagePage {
   messages: MessageSummary[];

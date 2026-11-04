@@ -1,6 +1,6 @@
 // The reading pane, after shadcn/ui's Mail example's display (MIT, see LICENSE-shadcn.md): the actions (reply, reply
 // all, forward, archive, move, delete, unread, star), the header (from, to, cc, date), the body and the attachments.
-import { Archive, ArrowLeft, ChevronLeft, ChevronRight, Download, FileText, FolderInput, Forward, Loader2, Mail, MoreVertical, Reply, ReplyAll, Star, Trash2 } from 'lucide-react';
+import { Archive, ArrowLeft, ChevronLeft, ChevronRight, Download, FileText, FolderInput, Forward, Loader2, Mail, MoreVertical, Pencil, Reply, ReplyAll, Star, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { attachmentUrl, type Address, type Category, type MailFolder, type MessageDetail } from '../api';
 import { displayName, formatAddress } from '../lib/addresses';
@@ -29,6 +29,8 @@ export interface MessageViewProps {
   onReply(): void;
   onReplyAll(): void;
   onForward(): void;
+  /** For a message in Drafts: open it in Compose, to edit and send. */
+  onEditDraft?: (() => void) | undefined;
   onArchive(): void;
   onMove(to: string): void;
   /** "Move to tab" for an INBOX message of an account with tabs on: the tabs, and the move. */
@@ -138,6 +140,11 @@ export function MessageView(p: MessageViewProps) {
               <span className="mx-1 h-5 w-px bg-hairline" aria-hidden />
             </>
           )}
+          {p.onEditDraft && (
+            <Button size="sm" className="mr-1 gap-1.5" onClick={p.onEditDraft} disabled={!m}>
+              <Pencil className="size-3.5" /> Edit draft
+            </Button>
+          )}
           <Action label="Reply (r)" onClick={p.onReply} disabled={!m}>
             <Reply />
           </Action>
@@ -246,6 +253,11 @@ export function MessageView(p: MessageViewProps) {
             )}
             {/* As Gmail ends a message: answer it without going back up to the toolbar. */}
             <div className="mt-6 flex flex-wrap gap-2 pb-6">
+              {p.onEditDraft && (
+                <EndButton label="Edit draft" onClick={p.onEditDraft}>
+                  <Pencil />
+                </EndButton>
+              )}
               <EndButton label="Reply" onClick={p.onReply}>
                 <Reply />
               </EndButton>

@@ -51,6 +51,11 @@ export interface AgentOptions {
   jobs?: boolean;
   /** Runs the turns of a user who chose their own Claude Code (the desktop app; claudeAgent.ts). */
   claudeAgent?: ClaudeAgentDriver;
+  /**
+   * Edge only: the user's own mail, for the mail tools (search_mail, read_mail, create_mail_draft,
+   * save_mail_attachment_to_docs). Given the user and where saved attachments go (the chat's scope).
+   */
+  mail?: (userId: string, scope: ScopeArg) => import('../../../imap/mailTools.ts').MailToolContext | undefined;
 }
 
 /** The model the live assistant runs on. Set AGENT_MODEL (e.g. claude-opus-5-5) to change it per deployment. */
@@ -81,6 +86,7 @@ export class AgentService {
   private pdf: PdfMaker | undefined;
   private jobs: boolean;
   private claudeAgent: ClaudeAgentDriver | null;
+  private mail: AgentOptions['mail'];
   /** Users with a turn in progress (one at a time per user). */
   private busy = new Set<string>();
 
@@ -96,6 +102,7 @@ export class AgentService {
     this.pdf = opts.pdf;
     this.jobs = opts.jobs ?? true;
     this.claudeAgent = opts.claudeAgent ?? null;
+    this.mail = opts.mail;
     this.dailyLimit = opts.dailyRequestLimit ?? Number(process.env.AGENT_DAILY_REQUEST_LIMIT ?? 500);
   }
 
@@ -206,7 +213,8 @@ export class AgentService {
     if (!own && !this.settings.builtIn) throw new AgentError(400, 'Choose what the assistant runs on in Settings: add your Anthropic, OpenAI or OpenRouter API key.');
     // Search with the user's Brave key, else the server's, else the provider's own search.
     const search = { braveKey: this.settings.braveKey(userId), provider: this.providerSearch(own) };
-    const env = { userId, ...access, sheets: this.sheets, images: this.images, files: this.files, pdf: this.pdf, context: req.context, search };
+    const mail = this.mail?.(userId, access.scope);
+    const env = { userId, ...access, sheets: this.sheets, images: this.images, files: this.files, pdf: this.pdf, context: req.context, search, ...(mail ? { mail } : {}) };
     const callModel = own ? this.ownModel(own) : this.getModel();
     let parseRetries = 0;
 

@@ -88,6 +88,8 @@ export interface McpOptions {
   uploadUrl?: string;
   /** Where the app shows files (`<appUrl>/f/<id>`), when not publicUrl (the suite's /workspace). */
   appUrl?: string;
+  /** The server's instructions, when not instructionsFor(version) (the suite's /mcp, which adds Mail's and may leave out Docs'). */
+  instructions?: string;
   /** Fetches files ChatGPT hands to import_file (tests pass a fake). */
   fetchFn?: typeof fetch;
 }
@@ -319,7 +321,7 @@ export function arcsAsEllipseBoxes(input: Record<string, unknown>): Record<strin
 
 export function createMcpServer(service: FileService, opts: McpOptions): McpServer {
   const version = opts.version ?? 1;
-  const server = new McpServer({ ...serverInfo(version, opts.local), icons: [DOC_ICON] }, { instructions: instructionsFor(version, opts.local) });
+  const server = new McpServer({ ...serverInfo(version, opts.local), icons: [DOC_ICON] }, { instructions: opts.instructions ?? instructionsFor(version, opts.local) });
   // What a tool returns to the model holds only what a request needs: revisions and dates are for the app's
   // own tools, which keep them.
   const register = server.registerTool.bind(server) as (name: string, config: { _meta?: Record<string, unknown> }, handler: (...args: unknown[]) => Promise<CallToolResult> | CallToolResult) => unknown;

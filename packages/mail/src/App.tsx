@@ -18,7 +18,7 @@ import { setReadingPane, useReadingPane } from './lib/layoutPref';
 import { Sidebar } from './components/Sidebar';
 import { useMediaQuery, useResizableWidth } from './hooks/layout';
 import { keys, prefetchMessage, useAccounts, useFolders, useMessage, useMessageActions, useMessages } from './hooks/mail';
-import { emptyDraft, prefill, type ComposeMode } from './lib/compose';
+import { emptyDraft, fromDraft, prefill, type ComposeMode } from './lib/compose';
 import { findSpecial, folderLabel } from './lib/folders';
 import { folderDropTarget, tabDropTarget, useCanDrag } from './lib/dnd';
 import { TAB_INFO, reasonText, tabFromParam, tabsOf, writeTabParam } from './lib/tabs';
@@ -277,6 +277,7 @@ export function App() {
       if (mode === 'new') return setCompose({ mode, draft: emptyDraft() });
       const m = message.data;
       if (!m) return;
+      if (mode === 'draft') return setCompose({ mode, draft: fromDraft(m), source: { folder: m.folder, uid: m.uid } });
       setCompose({ mode, draft: prefill(mode, m, account.email), source: { folder: m.folder, uid: m.uid } });
     },
     [account, message.data],
@@ -598,6 +599,7 @@ export function App() {
       onReply={() => startCompose('reply')}
       onReplyAll={() => startCompose('replyAll')}
       onForward={() => startCompose('forward')}
+      onEditDraft={folderInfo?.specialUse === 'drafts' ? () => startCompose('draft') : undefined}
       onArchive={() => archive(openUid !== null ? [openUid] : [])}
       onMove={(to) => moveTo(to, openUid !== null ? [openUid] : [])}
       tabMove={showTabs && openUid !== null ? { tabs: accountTabs, current: byUid(openUid)?.category ?? category, onMove: (tab) => moveToTab([openUid], tab) } : undefined}
@@ -668,6 +670,8 @@ export function App() {
             narrow={narrow}
             onClose={() => setCompose(null)}
             onSent={() => {
+              // A draft sent is gone from Drafts, so it is no longer open either.
+              if (compose.mode === 'draft') setOpenUid(null);
               setCompose(null);
               setToast('Message sent.');
               void qc.invalidateQueries({ queryKey: keys.allMessages(account.id) });

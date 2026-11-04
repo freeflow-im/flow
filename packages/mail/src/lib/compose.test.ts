@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MessageDetail } from '../api';
-import { forwardSubject, isDraftEmpty, prefill, replySubject } from './compose';
+import { forwardSubject, fromDraft, isDraftEmpty, prefill, replySubject } from './compose';
 
 const msg = (over: Partial<MessageDetail> = {}): MessageDetail => ({
   uid: 7,
@@ -96,5 +96,28 @@ describe('isDraftEmpty', () => {
     expect(isDraftEmpty(state, d)).toBe(true);
     expect(isDraftEmpty({ ...state, bodyChanged: true }, d)).toBe(false);
     expect(isDraftEmpty({ ...state, to: [] }, d)).toBe(false);
+  });
+});
+
+describe('fromDraft', () => {
+  it('opens a saved draft as it was: recipients, subject, body, threading and its own attachments', () => {
+    const d = fromDraft(
+      msg({
+        to: [{ name: 'Bo', address: 'bo@example.com' }],
+        bcc: [{ name: '', address: 'boss@example.com' }],
+        subject: 'Re: Plans',
+        html: '<p>Sounds good</p><script>x()</script>',
+        inReplyTo: '<orig@example.com>',
+        references: ['<orig@example.com>'],
+        attachments: [
+          { index: 0, filename: 'plan.csv', mimeType: 'text/csv', size: 4, contentId: null, inline: false },
+          { index: 1, filename: 'logo.png', mimeType: 'image/png', size: 9, contentId: 'logo', inline: true },
+        ],
+      }),
+    );
+    expect(d).toMatchObject({ to: [{ address: 'bo@example.com' }], bcc: [{ address: 'boss@example.com' }], subject: 'Re: Plans', inReplyTo: '<orig@example.com>', references: ['<orig@example.com>'] });
+    expect(d.html).toContain('Sounds good');
+    expect(d.html).not.toContain('script');
+    expect(d.forwardAttachments).toEqual([{ index: 0, filename: 'plan.csv', mimeType: 'text/csv', size: 4 }]);
   });
 });

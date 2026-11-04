@@ -43,7 +43,7 @@ r=await api(null,'POST','/oauth/register',{client_name:'E2E Agent',redirect_uris
 const cookie=(u)=>({cookie:`sid=${u.token}`});
 const pkce=()=>{const v=randomBytes(32).toString('base64url');return{v,c:createHash('sha256').update(v).digest('base64url')}};
 const authorizeUrl=(c,extra={})=>'/oauth/authorize?'+form({response_type:'code',client_id:CLIENT,redirect_uri:'http://localhost:51234/callback',code_challenge:c,code_challenge_method:'S256',state:'xyz',resource:`${B}/mcp`,...extra});
-const consentOf=(html)=>({p:/name="p" value="([^"]+)"/.exec(html)?.[1],csrf:/name="csrf" value="([^"]+)"/.exec(html)?.[1],orgs:[...html.matchAll(/name="org" value="([^"]+)"/g)].map((m)=>m[1]),checked:/value="([^"]+)" checked/.exec(html)?.[1]});
+const consentOf=(html)=>({p:/name="p" value="([^"]+)"/.exec(html)?.[1],csrf:/name="csrf" value="([^"]+)"/.exec(html)?.[1],orgs:[...html.matchAll(/name="org" value="([^"]+)"/g)].map((m)=>m[1]),checked:/name="org" value="([^"]+)" checked/.exec(html)?.[1]});
 /** The whole flow for a person and an organization, returning the token response. */
 async function connect(u,org,extra={}){const {v,c}=pkce();let x=await api(null,'GET',authorizeUrl(c,extra),undefined,undefined,cookie(u));const page=await api(null,'GET',x.h.get('location'),undefined,undefined,cookie(u));const f=consentOf(page.j);
   x=await api(null,'POST','/oauth/decision',form({p:f.p,csrf:f.csrf,org,allow:'yes'}),'application/x-www-form-urlencoded',{...cookie(u),origin:B});const code=new URL(x.h.get('location')).searchParams.get('code');
@@ -70,7 +70,7 @@ r=await decide({p:C.p,csrf:C.csrf,org:A,allow:'yes'},{...cookie(U),origin:B});co
 t('allowing Acme goes back to the client with a code',r.s===302&&back.origin==='http://localhost:51234'&&back.searchParams.get('code')&&back.searchParams.get('state')==='xyz'&&back.searchParams.get('iss')===B,r.s+' '+back.href.slice(0,120));
 r=await api(null,'POST','/oauth/token',form({grant_type:'authorization_code',code:back.searchParams.get('code'),code_verifier:'wrong-verifier-wrong-verifier-wrong-verifier',client_id:CLIENT}),'application/x-www-form-urlencoded');t('a wrong PKCE verifier is refused',r.s===400&&r.j.error==='invalid_grant',JSON.stringify(r.j));
 r=await api(null,'POST','/oauth/token',form({grant_type:'authorization_code',code:back.searchParams.get('code'),code_verifier:VER,client_id:CLIENT,redirect_uri:'http://localhost:51234/callback'}),'application/x-www-form-urlencoded');
-let TOK=r.j;t('the code exchanges for tokens',r.s===200&&TOK.access_token&&TOK.refresh_token&&TOK.scope==='files:read files:write',r.s+' '+JSON.stringify(r.j).slice(0,120));
+let TOK=r.j;t('the code exchanges for tokens',r.s===200&&TOK.access_token&&TOK.refresh_token&&TOK.scope==='files:read files:write mail:read mail:write',r.s+' '+JSON.stringify(r.j).slice(0,120));
 
 // --- MCP, as Uma in Acme --------------------------------------------------------------------------------------------------
 let rpcId=0;

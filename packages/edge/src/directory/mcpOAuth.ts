@@ -9,7 +9,36 @@
 import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto';
 import type { Sql } from './core';
 
-export const MCP_SCOPES = ['files:read', 'files:write'] as const;
+/** Docs' files (read, and change), and the person's own mail (read, organise and draft, and send). */
+export const MCP_SCOPES = ['files:read', 'files:write', 'mail:read', 'mail:write', 'mail:send'] as const;
+
+/**
+ * The consent page's checkboxes: each one a group of scopes, on or off until the person changes it. Sending email as the
+ * person is off unless they tick it: an agent drafts, and the person sends.
+ */
+export const SCOPE_GROUPS = [
+  { id: 'docs', scopes: ['files:read', 'files:write'], checked: true },
+  { id: 'mail', scopes: ['mail:read', 'mail:write'], checked: true },
+  { id: 'send', scopes: ['mail:send'], checked: false },
+] as const;
+export type ScopeGroupId = (typeof SCOPE_GROUPS)[number]['id'];
+export interface OfferedGroup { id: ScopeGroupId; scopes: string[]; checked: boolean }
+
+/** The groups the page offers for a request's scopes: those it asked for any of, each with only the scopes it asked for. */
+export function offeredGroups(scope: string): OfferedGroup[] {
+  const asked = new Set(scope.split(' ').filter(Boolean));
+  return SCOPE_GROUPS.map((g) => ({ id: g.id, scopes: g.scopes.filter((s) => asked.has(s)), checked: g.checked })).filter((g) => g.scopes.length > 0);
+}
+
+/**
+ * The scopes the person granted: those of the groups they ticked, among the ones offered. `ticked` undefined (a decision
+ * posted without the checkboxes) means each group as the page starts it. Null when nothing is granted.
+ */
+export function grantedScope(scope: string, ticked: readonly string[] | undefined): string | null {
+  const groups = offeredGroups(scope).filter((g) => (ticked ? ticked.includes(g.id) : g.checked));
+  const granted = MCP_SCOPES.filter((s) => groups.some((g) => g.scopes.includes(s)));
+  return granted.length ? granted.join(' ') : null;
+}
 export const ACCESS_TTL = 60 * 60_000;
 export const REFRESH_TTL = 30 * 86_400_000;
 /** A device sign-in's access tokens last a week: an agent driving the endpoint by hand often never refreshes. */
@@ -132,7 +161,7 @@ export const isResource = (issuer: string, resource: string): boolean => resourc
 
 /** RFC 9728: where the resource server's tokens come from. */
 export function protectedResourceMetadata(issuer: string, endpoint = '/mcp') {
-  return { resource: resourceAt(issuer, endpoint), authorization_servers: [issuer], scopes_supported: [...MCP_SCOPES], bearer_methods_supported: ['header'], resource_name: 'FreeFlow Docs' };
+  return { resource: resourceAt(issuer, endpoint), authorization_servers: [issuer], scopes_supported: [...MCP_SCOPES], bearer_methods_supported: ['header'], resource_name: 'FreeFlow Docs and Mail' };
 }
 
 /** RFC 8414: the authorization server's endpoints and features. */
@@ -302,16 +331,19 @@ export class McpOAuth {
    * The person allowed or denied, for one of their organizations: where to send the browser (back to the client, or for a
    * device to the done page). The organization must be one of theirs; a refusal leaves the authorization pending.
    */
-  decide(issuer: string, pendingId: string | undefined, userId: string, csrf: string | undefined, allow: boolean, orgId: string | undefined): string {
+  decide(issuer: string, pendingId: string | undefined, userId: string, csrf: string | undefined, allow: boolean, orgId: string | undefined, ticked?: string[]): string {
     const p = this.pending(pendingId);
     if (!p) throw new OAuthError('invalid_request', 'This sign-in link has expired. Start again from your agent.');
     if (p.userId !== userId || !csrf || csrf !== p.csrf) throw new OAuthError('invalid_request', 'This page is out of date or was opened in another account. Start again from your agent.', 403);
     if (allow && (!orgId || !this.isMember(userId, orgId))) throw new OAuthError('access_denied', 'Choose one of your organizations.', 403);
+    // What the person ticked on the page, within what the client asked for.
+    const scope = grantedScope(p.params.scope, ticked);
+    if (allow && !scope) throw new OAuthError('access_denied', 'Choose at least one thing the agent may use.', 403);
     this.sql.exec('DELETE FROM oauth_pending WHERE id = ?', p.id);
     if (p.params.device) {
       const changed = this.rows(
-        "UPDATE oauth_device SET status = ?, user_id = ?, org_id = ? WHERE hash = ? AND status = 'pending' AND expires_at >= ? RETURNING hash",
-        allow ? 'approved' : 'denied', allow ? userId : null, allow ? orgId! : null, p.params.device, Date.now());
+        "UPDATE oauth_device SET status = ?, user_id = ?, org_id = ?, scope = ? WHERE hash = ? AND status = 'pending' AND expires_at >= ? RETURNING hash",
+        allow ? 'approved' : 'denied', allow ? userId : null, allow ? orgId! : null, allow ? scope! : p.params.scope, p.params.device, Date.now());
       if (!changed.length) throw new OAuthError('invalid_request', 'This code has expired or was already used. Start again from your agent.');
       return `/oauth/device/done${allow ? '?ok=1' : ''}`;
     }
@@ -319,7 +351,7 @@ export class McpOAuth {
     const code = newToken();
     this.sql.exec(
       'INSERT INTO oauth_codes (hash, client_id, client_name, user_id, org_id, redirect_uri, code_challenge, scope, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      sha(code), p.params.client_id, p.clientName, userId, orgId!, p.params.redirect_uri, p.params.code_challenge, p.params.scope, Date.now() + CODE_TTL);
+      sha(code), p.params.client_id, p.clientName, userId, orgId!, p.params.redirect_uri, p.params.code_challenge, scope!, Date.now() + CODE_TTL);
     return this.redirect(issuer, p.params.redirect_uri, { code, state: p.params.state });
   }
 
