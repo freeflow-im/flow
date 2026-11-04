@@ -6,11 +6,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, Code, Download, ExternalLink, FileText, Globe, Loader2, Save, X } from 'lucide-react';
-import { attachmentUrl, previewApi, previewPageUrl, type Attachment, type DocsPreview, type MessageDetail, type SavedToDocs } from '../api';
+import { attachmentUrl, previewApi, previewPageUrl, type AttachmentSummary, type DocsPreview, type SavedToDocs } from '../api';
 import { fileSize } from '../lib/format';
 import { inertHtml, isSvg, MAX_PREVIEW_BYTES, previewLimit, typeLabel, viewerFor } from '../lib/preview';
 import { readActiveOrganization } from '../suite';
 import { cn } from '../lib/utils';
+import { FileIcon } from './FileIcon';
 
 /** What Docs' preview page sends up when a key is pressed in its frame (packages/docs/client/src/pages/PreviewPage.tsx). */
 const KEY_MESSAGE = 'freeflow-preview-key';
@@ -19,9 +20,13 @@ type Made = { preview: DocsPreview; workspace: string };
 
 /** Docs' previews made in this page, by attachment: opening one again (or going back to it) does not ask again. */
 const made = new Map<string, Promise<Made>>();
-const keyOf = (accountId: string, m: MessageDetail, a: Attachment) => `${accountId}\u0000${m.folder}\u0000${m.uid}\u0000${a.index}`;
+/** The message an attachment is in: the opened one, or a list row's (its chips open the preview without opening it). */
+export type PreviewMessage = { folder: string; uid: number };
+type Attachment = AttachmentSummary;
 
-function docsPreview(accountId: string, m: MessageDetail, a: Attachment): Promise<Made> {
+const keyOf = (accountId: string, m: PreviewMessage, a: Attachment) => `${accountId}\u0000${m.folder}\u0000${m.uid}\u0000${a.index}`;
+
+function docsPreview(accountId: string, m: PreviewMessage, a: Attachment): Promise<Made> {
   const key = keyOf(accountId, m, a);
   let p = made.get(key);
   if (!p) {
@@ -38,7 +43,7 @@ function docsPreview(accountId: string, m: MessageDetail, a: Attachment): Promis
 
 export interface AttachmentPreviewProps {
   accountId: string;
-  message: MessageDetail;
+  message: PreviewMessage;
   /** The attachments that can be stepped through (not the pictures already shown in the body). */
   files: Attachment[];
   index: number;
@@ -119,7 +124,7 @@ export function AttachmentPreview({ accountId, message, files, index, onIndex, o
         <BarButton ref={closeRef} label="Close (Esc)" onClick={onClose}>
           <X />
         </BarButton>
-        <FileText className="ml-1 hidden size-5 shrink-0 text-[#8ab4f8] sm:block" />
+        <FileIcon file={a} className="ml-1 hidden size-5 sm:inline-flex" />
         <div className="min-w-0 flex-1 px-1">
           <div className="truncate text-sm font-medium" title={a.filename}>
             {a.filename || 'attachment'}
@@ -178,7 +183,7 @@ export function AttachmentPreview({ accountId, message, files, index, onIndex, o
   );
 }
 
-function Shown({ accountId, message, a, viewer, download, frameRef }: { accountId: string; message: MessageDetail; a: Attachment; viewer: ReturnType<typeof viewerFor>; download: string; frameRef: React.RefObject<HTMLIFrameElement | null> }) {
+function Shown({ accountId, message, a, viewer, download, frameRef }: { accountId: string; message: PreviewMessage; a: Attachment; viewer: ReturnType<typeof viewerFor>; download: string; frameRef: React.RefObject<HTMLIFrameElement | null> }) {
   const limit = previewLimit(viewer, a.size);
   if (limit) return <NoPreview a={a} download={download} why={limit} />;
   switch (viewer) {
@@ -231,7 +236,7 @@ function Picture({ a, url }: { a: Attachment; url: string }) {
 }
 
 /** Docs' read-only view of the file, from the preview Docs makes of it. */
-function DocsFrame({ accountId, message, a, download, frameRef }: { accountId: string; message: MessageDetail; a: Attachment; download: string; frameRef: React.RefObject<HTMLIFrameElement | null> }) {
+function DocsFrame({ accountId, message, a, download, frameRef }: { accountId: string; message: PreviewMessage; a: Attachment; download: string; frameRef: React.RefObject<HTMLIFrameElement | null> }) {
   const [state, setState] = useState<{ url: string } | { error: string } | null>(null);
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {

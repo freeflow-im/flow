@@ -61,6 +61,19 @@ export interface MessageSummary {
    * or the header rule's reason ("newsletter (List-Id, List-Unsubscribe)"). Put into words by `reasonText` (lib/tabs.ts).
    */
   categoryReason?: string;
+  /**
+   * The files the row shows as chips (no bytes: names, types and sizes from the message's structure), with the `index` the
+   * opened message and `attachmentUrl` use; the pictures the body shows are left out. Absent when there are none, or when
+   * the server cannot tell without reading the message whole (`hasAttachments` still says).
+   */
+  attachments?: AttachmentSummary[];
+}
+/** An attachment as a list row knows it. */
+export interface AttachmentSummary {
+  index: number;
+  filename: string;
+  mimeType: string;
+  size: number;
 }
 export interface Attachment {
   index: number;
@@ -70,7 +83,7 @@ export interface Attachment {
   contentId: string | null;
   inline: boolean;
 }
-export interface MessageDetail extends MessageSummary {
+export interface MessageDetail extends Omit<MessageSummary, 'attachments'> {
   replyTo: Address[];
   bcc: Address[];
   inReplyTo: string | null;
