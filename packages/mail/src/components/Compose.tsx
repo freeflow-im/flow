@@ -12,6 +12,7 @@ import { fileSize } from '../lib/format';
 import { cn } from '../lib/utils';
 import { EditorArea, EditorToolbar, useMailEditor } from './Editor';
 import { AddressField } from './AddressField';
+import { inlineImages } from '../lib/inlineImages';
 import { Button } from './ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
 
@@ -103,9 +104,11 @@ export function Compose({ account, request, narrow, onClose, onSent }: { account
       if (toAll.length + ccAll.length + bccAll.length === 0) throw new Error('Add at least one recipient.');
       if (files.some((f) => f.status === 'loading')) throw new Error('Wait for the attachments to finish loading.');
       if (files.some((f) => f.status === 'error')) throw new Error('An attachment could not be loaded. Remove it to send.');
-      const html = editor?.getHTML() ?? '';
-      if (total + html.length > MAX_SEND_BYTES) throw new Error(`Messages can be at most 20 MB with their attachments (this one is ${fileSize(total + html.length)}).`);
-      const attachments: OutgoingAttachment[] = await Promise.all(files.map(async (f) => ({ filename: f.name, contentType: f.type, contentBase64: await toBase64(f.file!) })));
+      // Pictures pasted in (data:) or quoted from the original (its attachments) go as inline parts the HTML shows by cid.
+      const pictures = await inlineImages(editor?.getHTML() ?? '', (url) => fetch(url, { credentials: 'same-origin' }).then((r) => (r.ok ? r.blob() : null), () => null));
+      const html = pictures.html;
+      if (total + pictures.bytes + html.length > MAX_SEND_BYTES) throw new Error(`Messages can be at most 20 MB with their attachments (this one is ${fileSize(total + pictures.bytes + html.length)}).`);
+      const attachments: OutgoingAttachment[] = [...(await Promise.all(files.map(async (f) => ({ filename: f.name, contentType: f.type, contentBase64: await toBase64(f.file!) })))), ...pictures.attachments];
       return mailApi.send(account.id, {
         to: toAll,
         ...(ccAll.length ? { cc: ccAll } : {}),

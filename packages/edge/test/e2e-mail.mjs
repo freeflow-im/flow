@@ -312,6 +312,24 @@ const inboxCache=r.j.folders?.find(f=>f.folder==='INBOX');
 t('cache: the alarm keeps INBOX, down to the oldest message',r.s===200&&inboxCache?.kind==='inbox'&&inboxCache.rows===inboxUids.length&&inboxCache.low===1&&r.j.log?.length>0&&r.j.log.at(-1).folders.some(x=>x.startsWith('inbox:')),JSON.stringify(r.j).slice(0,200));
 t('cache: and Sent, which was opened',r.j.folders?.some(f=>f.folder==='Sent'&&f.rows>0),JSON.stringify(r.j.folders?.map(f=>[f.folder,f.kind,f.rows])));
 r=await api(Bo.token,'GET',`${P}/debug/cache`);t('cache: the debug route is not for anyone else',r.s===404,r.s);
+// An inline picture: sent as a related part the HTML shows by cid, read back as an inline attachment served as a picture.
+const DOT='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+r=await api(A.token,'POST',`${P}/send`,{to:[{name:'Ann',address:MAIL_USER}],subject:`Inline pic ${tag}`,html:`<p>Look:</p><img src="cid:pic-${tag}@freeflow.im" alt="dot"><p>end</p>`,text:'Look: [picture] end',attachments:[{filename:'dot.png',contentType:'image/png',contentBase64:DOT,contentId:`pic-${tag}@freeflow.im`,inline:true},{filename:'notes.txt',contentType:'text/plain',contentBase64:Buffer.from('notes').toString('base64')}]});
+t('inline: a message with a picture sends',r.s===200&&r.j.ok,r.s+' '+JSON.stringify(r.j).slice(0,120));
+let pic;for(let i=0;i<20&&!pic;i++){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&limit=5`,undefined,{'x-mail-test-alarm':'1'});pic=r.j.messages?.find(m=>m.subject===`Inline pic ${tag}`);if(!pic)await sleep(300);}
+t('inline: the list shows the file, not the picture, as a chip',pic&&pic.hasAttachments&&pic.attachments?.length===1&&pic.attachments[0].filename==='notes.txt',JSON.stringify(pic?.attachments));
+r=await api(A.token,'GET',`${P}/messages/${pic?.uid}?folder=INBOX`);const pm=r.j.message;const inlineA=pm?.attachments?.find(a=>a.filename==='dot.png');
+t('inline: read back, the picture is an inline attachment with its cid, shown by the HTML',inlineA&&inlineA.inline===true&&inlineA.contentId===`pic-${tag}@freeflow.im`&&pm.html?.includes(`cid:pic-${tag}@freeflow.im`)&&pm.attachments.some(a=>a.filename==='notes.txt'&&!a.inline),JSON.stringify(pm?.attachments));
+{const res=await getRaw(`${P}/messages/${pic?.uid}/attachments/${inlineA?.index}?folder=INBOX&inline=1`);
+ t('inline: and it is served as a picture, inline',res.s===200&&res.h.get('content-type')?.startsWith('image/png')&&res.h.get('content-disposition')?.startsWith('inline')&&res.buf.toString('base64')===DOT,res.s+' '+res.h.get('content-disposition'));}
+// Saved as a draft and sent as it is, the picture travels with it.
+r=await api(A.token,'POST',`${P}/drafts`,{to:[{name:'Ann',address:MAIL_USER}],subject:`Inline draft ${tag}`,html:`<img src="cid:pic2-${tag}@freeflow.im">`,attachments:[{filename:'dot.png',contentType:'image/png',contentBase64:DOT,contentId:`pic2-${tag}@freeflow.im`,inline:true}]});
+t('inline: a draft with a picture saves',r.s===201&&r.j.uid,r.s+' '+JSON.stringify(r.j).slice(0,120));
+r=await api(A.token,'POST',`${P}/drafts/${r.j.uid}/send?folder=${encodeURIComponent(r.j.folder)}`);t('inline: and sends as it is',r.s===200&&r.j.ok,r.s+' '+JSON.stringify(r.j).slice(0,120));
+let dpic;for(let i=0;i<20&&!dpic;i++){r=await api(A.token,'GET',`${P}/messages?folder=INBOX&limit=5`,undefined,{'x-mail-test-alarm':'1'});dpic=r.j.messages?.find(m=>m.subject===`Inline draft ${tag}`);if(!dpic)await sleep(300);}
+r=await api(A.token,'GET',`${P}/messages/${dpic?.uid}?folder=INBOX`);
+t('inline: with the picture still inline',r.j.message?.attachments?.some(a=>a.inline&&a.contentId===`pic2-${tag}@freeflow.im`)&&r.j.message.html?.includes(`cid:pic2-${tag}`),JSON.stringify(r.j.message?.attachments));
+for(const m of [pic,dpic])if(m)await api(A.token,'POST',`${P}/messages/delete`,{folder:'INBOX',uids:[m.uid]});
 // Synced by the alarm within 45 s, a folder's pages are read without a round trip: a plain page, a tab's, the conversations.
 {const imapMs=(x)=>Number(/imap=(\d+)/.exec(x.h.get('x-mail-timing')??'')?.[1]??-1);
  const a=await getRaw(`${P}/messages?folder=INBOX&limit=5`),b=await getRaw(`${P}/messages?folder=INBOX&category=primary&limit=5`),c=await getRaw(`${P}/threads?folder=INBOX&limit=5`),d=await getRaw(`${P}/threads?folder=INBOX&category=primary&limit=5`);

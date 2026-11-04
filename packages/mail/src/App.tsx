@@ -5,7 +5,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { openSuiteSearch } from '@flow/suite-bar';
-import { MailApiError, mailApi, type Category, type MailAccount, type MessageDetail, type ThreadSummary } from './api';
+import { MailApiError, mailApi, type Category, type MailAccount, type MessageDetail, type ThreadSummary, attachmentUrl } from './api';
 import { AccountSettingsDialog, AddAccountDialog } from './components/AccountForms';
 import type { ComposeRequest } from './components/Compose';
 import { ConnectMail } from './components/ConnectMail';
@@ -27,6 +27,12 @@ import { folderDropTarget, tabDropTarget, useCanDrag } from './lib/dnd';
 import { TAB_INFO, reasonText, tabFromParam, tabsOf, writeTabParam } from './lib/tabs';
 import { expandedByDefault, groupByThread, replyTarget, soloThreadId } from './lib/threads';
 import { cn } from './lib/utils';
+
+/** A message's cid: pictures, read from its attachments, for the composer (a quote, a draft). */
+const cidUrlOf = (accountId: string, m: MessageDetail) => (contentId: string) => {
+  const a = m.attachments.find((x) => x.contentId === contentId);
+  return a ? attachmentUrl(accountId, m.folder, m.uid, a.index, true) : null;
+};
 
 // The editor (TipTap) is most of the code: it loads when compose first opens.
 const Compose = lazy(() => import('./components/Compose').then((m) => ({ default: m.Compose })));
@@ -342,8 +348,9 @@ export function App() {
       if (mode === 'new') return setCompose({ mode, draft: emptyDraft() });
       const target = m ?? (thread.data && thread.data.threadId === openId ? replyTarget(thread.data.messages, folder) : undefined);
       if (!target || ('bodyPending' in target && target.bodyPending)) return;
-      if (mode === 'draft') return setCompose({ mode, draft: fromDraft(target), source: { folder: target.folder, uid: target.uid } });
-      setCompose({ mode, draft: prefill(mode, target, account.email), source: { folder: target.folder, uid: target.uid } });
+      const cidUrl = cidUrlOf(account.id, target);
+      if (mode === 'draft') return setCompose({ mode, draft: fromDraft(target, cidUrl), source: { folder: target.folder, uid: target.uid } });
+      setCompose({ mode, draft: prefill(mode, target, account.email, cidUrl), source: { folder: target.folder, uid: target.uid } });
     },
     [account, thread.data, openId, folder],
   );
@@ -372,7 +379,7 @@ export function App() {
     const m = pendingDraft && threadLoaded ? thread.data!.messages.find((x) => x.uid === pendingDraft.uid && x.folder === pendingDraft.folder && !x.bodyPending) : undefined;
     if (!pendingDraft || !m || account?.id !== pendingDraft.account) return;
     setPendingDraft(null);
-    setCompose({ mode: 'draft', draft: fromDraft(m), source: { folder: m.folder, uid: m.uid } });
+    setCompose({ mode: 'draft', draft: fromDraft(m, cidUrlOf(account.id, m)), source: { folder: m.folder, uid: m.uid } });
   }, [pendingDraft, thread.data, threadLoaded, account]);
 
   const chat = useMailAssistant({

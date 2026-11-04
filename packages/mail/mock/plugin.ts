@@ -256,7 +256,7 @@ export function createMockApi(empty = false) {
         return { status: 200, json: { ok: true } };
       }
       if (rest === 'send') {
-        const s = body as { to: { name: string; address: string }[]; cc?: []; subject: string; html: string; text?: string; inReplyTo?: string; references?: string[]; attachments?: { filename: string; contentType: string; contentBase64: string }[] };
+        const s = body as { to: { name: string; address: string }[]; cc?: []; subject: string; html: string; text?: string; inReplyTo?: string; references?: string[]; attachments?: { filename: string; contentType: string; contentBase64: string; contentId?: string; inline?: boolean }[] };
         const id = `<sent${b.nextUid}@mock.test>`;
         b.messages.push({
           uid: b.nextUid++,
@@ -279,7 +279,7 @@ export function createMockApi(empty = false) {
           references: s.references ?? [],
           html: s.html,
           text: s.text ?? null,
-          attachments: (s.attachments ?? []).map((a) => ({ filename: a.filename, mimeType: a.contentType, contentId: null, inline: false, bytes: Buffer.from(a.contentBase64, 'base64') })),
+          attachments: (s.attachments ?? []).map((a) => ({ filename: a.filename, mimeType: a.contentType, contentId: a.contentId ?? null, inline: !!(a.inline || a.contentId), bytes: Buffer.from(a.contentBase64, 'base64') })),
         });
         const original = s.inReplyTo && b.messages.find((x) => x.messageId === s.inReplyTo);
         if (original) original.answered = true;

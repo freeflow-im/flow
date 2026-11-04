@@ -125,7 +125,11 @@ export const SendBody = z.object({
   text: z.string().optional(),
   inReplyTo: z.string().max(1000).optional(),
   references: z.array(z.string().max(1000)).max(500).optional(),
-  attachments: z.array(z.object({ filename: z.string().min(1).max(500), contentType: z.string().max(200).default('application/octet-stream'), contentBase64: z.string() })).optional(),
+  attachments: z.array(z.object({
+    filename: z.string().min(1).max(500), contentType: z.string().max(200).default('application/octet-stream'), contentBase64: z.string(),
+    /** An inline picture the HTML shows as `cid:<contentId>` (bare, no angle brackets): sent as a related part, not a file. */
+    contentId: z.string().min(1).max(200).optional(), inline: z.boolean().optional(),
+  })).optional(),
   /** A message in this account whose attachments (not its inline pictures) go with this one, as a forward's do. */
   attachFrom: z.object({ folder: z.string().min(1), uid: z.number().int().positive() }).optional(),
   /** A draft this message replaces: it is deleted from its folder once the message is sent (or the new draft saved). */
