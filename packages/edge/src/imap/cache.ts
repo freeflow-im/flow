@@ -5,7 +5,9 @@
 // against the small `Sql` interface so cache.test.ts can run it on node:sqlite.
 import type { FetchMessageObject } from 'imapflow';
 import type { BodyPlan } from './body';
+import { parseHeaders } from './categorize';
 import type { MessageDetail, MessageSummary } from './convert';
+import { assignThread, bareId, dedupeKey, idsIn, normalizeSubject, type Known, type ThreadStore } from './threads';
 
 /** What this file needs of the object's SqlStorage (and node:sqlite in tests, through the adapter in cache.test.ts). */
 export interface Sql {
@@ -32,6 +34,8 @@ export const IDLE_CADENCES: { under: number; every: number }[] = [
 export const RECENT_MS = 7 * 24 * 60 * 60_000;
 /** A folder whose sync failed is left alone this long. */
 export const ERROR_BACKOFF_MS = 10 * 60_000;
+/** A folder the alarm synced this recently is served as it stands: no new-mail, tab-sort or flags round trip for a page. */
+export const FRESH_MS = 45_000;
 /** A body larger than this is not kept (a SQLite value holds 2 MB at most); the message opens from the server. */
 export const BODY_MAX_HTML = 1024 * 1024;
 export const BODY_MAX_TEXT = 256 * 1024;
@@ -68,9 +72,11 @@ export interface CachedMessage { summary: MessageSummary; threadId: string | nul
 export interface NewRow { m: FetchMessageObject; summary: MessageSummary; headers: string | null; plan: BodyPlan | null }
 /** A cached message with its body, as `GET …/messages/:uid` answers, and the plan its attachments are fetched by. */
 export interface CachedBody { detail: MessageDetail; plan: BodyPlan | null; state: number }
+/** A cached message of a thread, as threads are listed and read: its folder and ids, and its summary with the flags as last known. */
+export interface ThreadRow { uid: number; folder: string; validity: string; threadId: string; messageId: string; emailId: string | null; date: number; draft: boolean; bodyState: number; key: string; summary: MessageSummary }
 /** A message whose body the alarm is to fetch, with what it was cached with. */
 export interface QueuedBody { uid: number; summary: MessageSummary; plan: BodyPlan; headers: string | null }
-type BodyRow = { uid: number; folder: string; email_id: string | null; seen: number; flagged: number; answered: number; detail: string | null; plan: string | null; html: string | null; text: string | null; body_state: number };
+type BodyRow = { uid: number; folder: string; email_id: string | null; thread_id: string | null; seen: number; flagged: number; answered: number; detail: string | null; plan: string | null; html: string | null; text: string | null; body_state: number };
 const byteLength = (s: string | null) => (s ? new TextEncoder().encode(s).length : 0);
 
 export const DDL = [
@@ -91,7 +97,17 @@ export const DDL = [
     modseq TEXT, kind TEXT NOT NULL DEFAULT 'recent', synced_at INTEGER NOT NULL DEFAULT 0, opened_at INTEGER NOT NULL DEFAULT 0, error TEXT, error_at INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (account_id, folder))`,
   `CREATE TABLE IF NOT EXISTS mail_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+  // Conversations (threads.ts): every id a cached message answers or references, to find who references a message that
+  // arrives later; and the threads of messages that have left the cache (the window of CACHE_ROWS), so a late reply
+  // still finds its thread.
+  `CREATE INDEX IF NOT EXISTS mail_messages_subject ON mail_messages (account_id, subject_norm, date)`,
+  `CREATE TABLE IF NOT EXISTS mail_refs (account_id TEXT NOT NULL, ref TEXT NOT NULL, folder TEXT NOT NULL, uid_validity TEXT NOT NULL, uid INTEGER NOT NULL,
+    PRIMARY KEY (account_id, folder, uid_validity, uid, ref))`,
+  `CREATE INDEX IF NOT EXISTS mail_refs_ref ON mail_refs (account_id, ref)`,
+  `CREATE TABLE IF NOT EXISTS mail_thread_index (account_id TEXT NOT NULL, message_id TEXT NOT NULL, thread_id TEXT NOT NULL, date INTEGER NOT NULL, PRIMARY KEY (account_id, message_id))`,
 ];
+/** Message ids remembered per account after their rows left the cache, at most. */
+export const THREAD_INDEX_CAP = 20_000;
 
 /**
  * How long until the alarm should run again, from when the person last made a request: every 30 s while active, then
@@ -149,7 +165,9 @@ export function walkDown(desc: readonly number[], have: ReadonlySet<number>, bud
 
 /** A message's sender, lower-cased, for the cached row. */
 const senderOf = (s: MessageSummary) => (s.from?.address ?? '').toLowerCase();
-const bare = (id: string | null | undefined) => (id ? id.trim().replace(/^<|>$/g, '') : '');
+const bare = bareId;
+/** Everyone on a message but `me`, lower-cased: who it is from, to and cc. */
+export const participantsOf = (s: MessageSummary, me = ''): string[] => [...new Set([s.from, ...s.to, ...s.cc].map((a) => (a?.address ?? '').toLowerCase()).filter((a) => a && a !== me.toLowerCase()))];
 const headerText = (h: Uint8Array | string | undefined) => (h === undefined ? null : typeof h === 'string' ? h : Buffer.from(h).toString('latin1'));
 
 /** A folder's row as read. */
@@ -213,6 +231,7 @@ export class MailCache {
 
   /** A folder whose UIDs mean something else now (a new UIDVALIDITY, or seen for the first time): its rows go, its marks reset. */
   resetFolder(accountId: string, folder: string, validity: string): CachedFolder {
+    this.rememberThreads(accountId, 'account_id = ? AND folder = ? AND uid_validity != ?', accountId, folder, validity);
     this.sql.exec('DELETE FROM mail_messages WHERE account_id = ? AND folder = ? AND uid_validity != ?', accountId, folder, validity);
     this.sql.exec('UPDATE mail_cache_folders SET uid_validity = ?, high = 0, low = 0, modseq = NULL WHERE account_id = ? AND folder = ?', validity, accountId, folder);
     return this.folder(accountId, folder)!;
@@ -236,6 +255,7 @@ export class MailCache {
   expireFolders(accountId: string, now: number): string[] {
     const gone = this.sql.exec<{ folder: string }>("SELECT folder FROM mail_cache_folders WHERE account_id = ? AND kind = 'recent' AND opened_at < ?", accountId, now - RECENT_MS).toArray().map((r) => r.folder);
     for (const folder of gone) {
+      this.rememberThreads(accountId, 'account_id = ? AND folder = ?', accountId, folder);
       this.sql.exec('DELETE FROM mail_messages WHERE account_id = ? AND folder = ?', accountId, folder);
       this.sql.exec('DELETE FROM mail_cache_folders WHERE account_id = ? AND folder = ?', accountId, folder);
     }
@@ -244,20 +264,143 @@ export class MailCache {
 
   // ---- rows -------------------------------------------------------------------------------------------------------
 
-  insert(accountId: string, folder: string, validity: string, rows: readonly NewRow[], now: number): void {
-    for (const { m, summary, headers, plan } of rows) {
+  /**
+   * Caches fetched messages. A message new to the cache is given its thread (threads.ts `assignThread`, the cache as its
+   * store) and its references kept; one already cached keeps its thread and gets the fresh summary and flags. Returns each
+   * message's thread id.
+   */
+  insert(accountId: string, folder: string, validity: string, rows: readonly NewRow[], now: number, me = ''): Map<number, string> {
+    const out = new Map<number, string>();
+    const have = this.cachedUids(accountId, folder, validity, rows.map((r) => r.m.uid));
+    const store = this.threadStore(accountId, me);
+    // In the order they arrived (UID order), so a reply finds what it answers when both come in one batch.
+    for (const { m, summary, headers, plan } of [...rows].sort((a, b) => a.m.uid - b.m.uid)) {
       const f = flagsOf(m.flags);
+      const h = parseHeaders(headers ?? undefined);
+      const messageId = bareId(summary.messageId);
+      const references = idsIn(h.get('references'));
+      const inReplyTo = bareId(h.get('in-reply-to')) || null;
+      let threadId: string | null = null;
+      if (have.has(m.uid)) {
+        threadId = this.sql.exec<{ thread_id: string | null }>('SELECT thread_id FROM mail_messages WHERE account_id = ? AND folder = ? AND uid_validity = ? AND uid = ?', accountId, folder, validity, m.uid).toArray()[0]?.thread_id ?? null;
+      }
+      if (!threadId) {
+        const assigned = assignThread({
+          messageId, inReplyTo, references, subject: summary.subject, date: Date.parse(summary.date) || 0, serverThreadId: m.threadId ?? null,
+          list: h.has('list-id'), draft: f.draft, participants: participantsOf(summary, me),
+        }, store);
+        threadId = assigned.threadId;
+        if (assigned.merge.length) this.mergeThreads(accountId, threadId, assigned.merge);
+      }
       this.sql.exec(
-        `INSERT INTO mail_messages (account_id, folder, uid_validity, uid, message_id, email_id, thread_id, date, seen, flagged, answered, draft, flags, modseq, flags_at, sender, summary, plan, headers)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO mail_messages (account_id, folder, uid_validity, uid, message_id, email_id, thread_id, date, seen, flagged, answered, draft, flags, modseq, flags_at, sender, subject_norm, summary, plan, headers)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (account_id, folder, uid_validity, uid) DO UPDATE SET
-           message_id = excluded.message_id, email_id = excluded.email_id, thread_id = COALESCE(excluded.thread_id, mail_messages.thread_id), date = excluded.date,
+           message_id = excluded.message_id, email_id = excluded.email_id, thread_id = excluded.thread_id, date = excluded.date,
            seen = excluded.seen, flagged = excluded.flagged, answered = excluded.answered, draft = excluded.draft, flags = excluded.flags, modseq = excluded.modseq, flags_at = excluded.flags_at,
-           sender = excluded.sender, summary = excluded.summary, plan = COALESCE(excluded.plan, mail_messages.plan), headers = COALESCE(excluded.headers, mail_messages.headers)`,
-        accountId, folder, validity, m.uid, bare(summary.messageId), m.emailId ?? null, m.threadId ? `s:${m.threadId}` : null, Date.parse(summary.date) || 0,
+           sender = excluded.sender, subject_norm = excluded.subject_norm, summary = excluded.summary, plan = COALESCE(excluded.plan, mail_messages.plan), headers = COALESCE(excluded.headers, mail_messages.headers)`,
+        accountId, folder, validity, m.uid, messageId, m.emailId ?? null, threadId, Date.parse(summary.date) || 0,
         f.seen ? 1 : 0, f.flagged ? 1 : 0, f.answered ? 1 : 0, f.draft ? 1 : 0, JSON.stringify([...(m.flags ?? [])]), m.modseq !== undefined ? String(m.modseq) : null, now,
-        senderOf(summary), JSON.stringify(summary), plan ? JSON.stringify(plan) : null, headerText(headers ?? undefined));
+        senderOf(summary), normalizeSubject(summary.subject), JSON.stringify(summary), plan ? JSON.stringify(plan) : null, headerText(headers ?? undefined));
+      const refs = [...new Set([inReplyTo ?? '', ...references].filter(Boolean))];
+      this.sql.exec('DELETE FROM mail_refs WHERE account_id = ? AND folder = ? AND uid_validity = ? AND uid = ?', accountId, folder, validity, m.uid);
+      for (const ref of refs) this.sql.exec('INSERT OR IGNORE INTO mail_refs (account_id, ref, folder, uid_validity, uid) VALUES (?, ?, ?, ?, ?)', accountId, ref, folder, validity, m.uid);
+      out.set(m.uid, threadId);
     }
+    return out;
+  }
+
+  // ---- threads ----------------------------------------------------------------------------------------------------
+
+  /** The cache as threads.ts reads it. `me` (the account's address) is on every message, so it never counts as someone in common. */
+  private threadStore(accountId: string, me: string): ThreadStore {
+    return {
+      threadsOf: (ids) => {
+        const out = new Map<string, Known>();
+        if (!ids.length) return out;
+        const list = JSON.stringify([...ids]);
+        for (const r of this.sql.exec<{ message_id: string; thread_id: string; date: number }>('SELECT message_id, thread_id, date FROM mail_thread_index WHERE account_id = ? AND message_id IN (SELECT value FROM json_each(?))', accountId, list).toArray()) out.set(r.message_id, { threadId: r.thread_id, date: r.date });
+        for (const r of this.sql.exec<{ message_id: string; thread_id: string; date: number }>("SELECT message_id, thread_id, date FROM mail_messages WHERE account_id = ? AND thread_id IS NOT NULL AND message_id != '' AND message_id IN (SELECT value FROM json_each(?))", accountId, list).toArray()) out.set(r.message_id, { threadId: r.thread_id, date: r.date });
+        return out;
+      },
+      referencing: (id) => this.sql.exec<{ thread_id: string }>(
+        'SELECT DISTINCT m.thread_id FROM mail_refs r JOIN mail_messages m ON m.account_id = r.account_id AND m.folder = r.folder AND m.uid_validity = r.uid_validity AND m.uid = r.uid WHERE r.account_id = ? AND r.ref = ? AND m.thread_id IS NOT NULL',
+        accountId, id).toArray().map((r) => r.thread_id),
+      bySubject: (norm, since) => this.sql.exec<{ thread_id: string; date: number; summary: string }>(
+        "SELECT thread_id, date, summary FROM mail_messages WHERE account_id = ? AND subject_norm = ? AND date >= ? AND thread_id IS NOT NULL AND draft = 0 ORDER BY date DESC LIMIT 50",
+        accountId, norm, since).toArray().map((r) => ({ threadId: r.thread_id, date: r.date, participants: participantsOf(JSON.parse(r.summary) as MessageSummary, me) })),
+      newId: () => `l:${crypto.randomUUID()}`,
+    };
+  }
+
+  /** Threads found to be one (a message linking them arrived): the losers' messages move to the winner. */
+  mergeThreads(accountId: string, winner: string, losers: readonly string[]): void {
+    const list = JSON.stringify(losers);
+    this.sql.exec('UPDATE mail_messages SET thread_id = ? WHERE account_id = ? AND thread_id IN (SELECT value FROM json_each(?))', winner, accountId, list);
+    this.sql.exec('UPDATE mail_thread_index SET thread_id = ? WHERE account_id = ? AND thread_id IN (SELECT value FROM json_each(?))', winner, accountId, list);
+  }
+
+  /** Before rows leave the cache: their message ids keep pointing at their threads, so a later reply finds them. */
+  private rememberThreads(accountId: string, where: string, ...params: unknown[]): void {
+    this.sql.exec(`INSERT OR REPLACE INTO mail_thread_index (account_id, message_id, thread_id, date) SELECT account_id, message_id, thread_id, date FROM mail_messages WHERE message_id != '' AND thread_id IS NOT NULL AND ${where}`, ...params);
+    this.sql.exec(`DELETE FROM mail_refs WHERE (account_id, folder, uid_validity, uid) IN (SELECT account_id, folder, uid_validity, uid FROM mail_messages WHERE ${where})`, ...params);
+  }
+
+  /** Keeps the thread index within THREAD_INDEX_CAP per account (the oldest go). */
+  private trimThreadIndex(accountId: string): void {
+    const n = this.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM mail_thread_index WHERE account_id = ?', accountId).toArray()[0]?.n ?? 0;
+    if (n > THREAD_INDEX_CAP) {
+      this.sql.exec('DELETE FROM mail_thread_index WHERE account_id = ? AND message_id IN (SELECT message_id FROM mail_thread_index WHERE account_id = ? ORDER BY date ASC LIMIT ?)', accountId, accountId, n - THREAD_INDEX_CAP);
+    }
+  }
+
+  /**
+   * One page of a folder's threads, newest first: each thread with a cached message in the folder (from `low` up), ordered
+   * by its newest UID there, those below `cursor`. `tab` (INBOX with tabs on) keeps the threads whose newest message is in
+   * the tab: `mail_categories` joined on that UID, with the overrides (categorize.ts `effectiveSql`, as object.ts `tabRows` uses it).
+   */
+  threadPage(accountId: string, folder: string, validity: string, cursor: number, low: number, limit: number, tab?: { tab: string; params: string[]; category: string }): { threadId: string; uid: number }[] {
+    const tops = `SELECT thread_id, MAX(uid) AS top_uid FROM mail_messages WHERE account_id = ? AND folder = ? AND uid_validity = ? AND uid >= ? AND thread_id IS NOT NULL GROUP BY thread_id HAVING MAX(uid) < ?`;
+    const rows = tab
+      ? this.sql.exec<{ thread_id: string; top_uid: number }>(
+        `SELECT t.thread_id, t.top_uid FROM (${tops}) t JOIN mail_categories c ON c.account_id = ? AND c.folder = ? AND c.uid_validity = ? AND c.uid = t.top_uid
+         LEFT JOIN mail_category_overrides o ON o.account_id = c.account_id AND o.sender = c.sender WHERE ${tab.tab} = ? ORDER BY t.top_uid DESC LIMIT ?`,
+        accountId, folder, validity, Math.max(1, low), cursor, accountId, folder, validity, ...tab.params, tab.category, limit).toArray()
+      : this.sql.exec<{ thread_id: string; top_uid: number }>(`SELECT thread_id, top_uid FROM (${tops}) ORDER BY top_uid DESC LIMIT ?`, accountId, folder, validity, Math.max(1, low), cursor, limit).toArray();
+    return rows.map((r) => ({ threadId: r.thread_id, uid: r.top_uid }));
+  }
+
+  /** Every cached message of these threads, account-wide, with what a thread's row and reading need. */
+  threadRows(accountId: string, threadIds: readonly string[]): ThreadRow[] {
+    if (!threadIds.length) return [];
+    return this.sql.exec<{ uid: number; folder: string; uid_validity: string; thread_id: string; message_id: string; email_id: string | null; seen: number; flagged: number; answered: number; draft: number; date: number; body_state: number; summary: string }>(
+      'SELECT uid, folder, uid_validity, thread_id, message_id, email_id, seen, flagged, answered, draft, date, body_state, summary FROM mail_messages WHERE account_id = ? AND thread_id IN (SELECT value FROM json_each(?)) ORDER BY date ASC, uid ASC',
+      accountId, JSON.stringify([...threadIds])).toArray().map((r) => ({
+        uid: r.uid, folder: r.folder, validity: r.uid_validity, threadId: r.thread_id, messageId: r.message_id, emailId: r.email_id, date: r.date, draft: !!r.draft, bodyState: r.body_state,
+        key: dedupeKey({ emailId: r.email_id, messageId: r.message_id, folder: r.folder, uid: r.uid }),
+        summary: { ...(JSON.parse(r.summary) as MessageSummary), seen: !!r.seen, flagged: !!r.flagged, answered: !!r.answered, threadId: r.thread_id },
+      }));
+  }
+
+  /** The thread of a cached message. */
+  threadOf(accountId: string, folder: string, uid: number): string | null {
+    return this.sql.exec<{ thread_id: string | null }>('SELECT thread_id FROM mail_messages WHERE account_id = ? AND folder = ? AND uid = ?', accountId, folder, uid).toArray()[0]?.thread_id ?? null;
+  }
+
+  /** A message as a thread's reading shows it when its body is not cached: the detail from the row, without bodies. */
+  pendingDetail(accountId: string, folder: string, uid: number): Omit<MessageDetail, 'html' | 'text'> | null {
+    const r = this.sql.exec<{ summary: string; headers: string | null; plan: string | null; seen: number; flagged: number; answered: number }>(
+      'SELECT summary, headers, plan, seen, flagged, answered FROM mail_messages WHERE account_id = ? AND folder = ? AND uid = ?', accountId, folder, uid).toArray()[0];
+    if (!r) return null;
+    const summary = JSON.parse(r.summary) as MessageSummary;
+    const h = parseHeaders(r.headers ?? undefined);
+    const plan = r.plan ? (JSON.parse(r.plan) as BodyPlan) : null;
+    const { attachments: _listed, ...rest } = summary;
+    return {
+      ...rest, seen: !!r.seen, flagged: !!r.flagged, answered: !!r.answered,
+      replyTo: [], bcc: [], inReplyTo: bareId(h.get('in-reply-to')) || null, references: idsIn(h.get('references')),
+      attachments: plan ? plan.attachments.map((a) => ({ index: a.index, filename: a.filename, mimeType: a.mimeType, size: a.leaf.size, contentId: a.contentId, inline: a.inline })) : [],
+    };
   }
 
   /** Which of these UIDs have a row. */
@@ -284,7 +427,7 @@ export class MailCache {
     return this.sql.exec<{ summary: string; thread_id: string | null; email_id: string | null; seen: number; flagged: number; answered: number; flags_at: number }>(
       'SELECT summary, thread_id, email_id, seen, flagged, answered, flags_at FROM mail_messages WHERE account_id = ? AND folder = ? AND uid_validity = ? AND uid < ? AND uid >= ? ORDER BY uid DESC LIMIT ?',
       accountId, folder, validity, cursor, Math.max(1, low), limit).toArray().map((r) => ({
-        summary: { ...(JSON.parse(r.summary) as MessageSummary), seen: !!r.seen, flagged: !!r.flagged, answered: !!r.answered },
+        summary: { ...(JSON.parse(r.summary) as MessageSummary), seen: !!r.seen, flagged: !!r.flagged, answered: !!r.answered, ...(r.thread_id ? { threadId: r.thread_id } : {}) },
         threadId: r.thread_id, emailId: r.email_id, flagsAt: r.flags_at,
       }));
   }
@@ -315,6 +458,7 @@ export class MailCache {
   /** Rows of messages that left the folder. */
   remove(accountId: string, folder: string, uids: readonly number[]): void {
     for (const part of chunks(uids)) {
+      this.rememberThreads(accountId, 'account_id = ? AND folder = ? AND uid IN (SELECT value FROM json_each(?))', accountId, folder, JSON.stringify(part));
       this.sql.exec('DELETE FROM mail_messages WHERE account_id = ? AND folder = ? AND uid IN (SELECT value FROM json_each(?))', accountId, folder, JSON.stringify(part));
     }
   }
@@ -323,9 +467,10 @@ export class MailCache {
   trim(accountId: string, folder: string, validity: string, keep: number): number {
     const n = this.count(accountId, folder, validity);
     if (n <= keep) return 0;
-    this.sql.exec(
-      'DELETE FROM mail_messages WHERE account_id = ? AND folder = ? AND uid_validity = ? AND uid NOT IN (SELECT uid FROM mail_messages WHERE account_id = ? AND folder = ? AND uid_validity = ? ORDER BY uid DESC LIMIT ?)',
-      accountId, folder, validity, accountId, folder, validity, keep);
+    const past = 'account_id = ? AND folder = ? AND uid_validity = ? AND uid NOT IN (SELECT uid FROM mail_messages WHERE account_id = ? AND folder = ? AND uid_validity = ? ORDER BY uid DESC LIMIT ?)';
+    this.rememberThreads(accountId, past, accountId, folder, validity, accountId, folder, validity, keep);
+    this.sql.exec(`DELETE FROM mail_messages WHERE ${past}`, accountId, folder, validity, accountId, folder, validity, keep);
+    this.trimThreadIndex(accountId);
     const low = this.sql.exec<{ uid: number }>('SELECT MIN(uid) AS uid FROM mail_messages WHERE account_id = ? AND folder = ? AND uid_validity = ?', accountId, folder, validity).toArray()[0]?.uid ?? 0;
     this.sql.exec('UPDATE mail_cache_folders SET low = ? WHERE account_id = ? AND folder = ? AND uid_validity = ?', low, accountId, folder, validity);
     return n - keep;
@@ -338,7 +483,7 @@ export class MailCache {
       for (const r of this.sql.exec<{ uid: number; summary: string; thread_id: string | null; email_id: string | null; seen: number; flagged: number; answered: number; flags_at: number }>(
         'SELECT uid, summary, thread_id, email_id, seen, flagged, answered, flags_at FROM mail_messages WHERE account_id = ? AND folder = ? AND uid_validity = ? AND uid IN (SELECT value FROM json_each(?))',
         accountId, folder, validity, JSON.stringify(part)).toArray()) {
-        out.set(r.uid, { summary: { ...(JSON.parse(r.summary) as MessageSummary), seen: !!r.seen, flagged: !!r.flagged, answered: !!r.answered }, threadId: r.thread_id, emailId: r.email_id, flagsAt: r.flags_at });
+        out.set(r.uid, { summary: { ...(JSON.parse(r.summary) as MessageSummary), seen: !!r.seen, flagged: !!r.flagged, answered: !!r.answered, ...(r.thread_id ? { threadId: r.thread_id } : {}) }, threadId: r.thread_id, emailId: r.email_id, flagsAt: r.flags_at });
       }
     }
     return out;
@@ -358,7 +503,7 @@ export class MailCache {
       : own.email_id ? this.sql.exec<BodyRow>('SELECT * FROM mail_messages WHERE account_id = ? AND email_id = ? AND body_state = ? LIMIT 1', accountId, own.email_id, BODY.cached).toArray()[0]
         : undefined;
     if (!r || !r.detail) return null;
-    const detail = { ...(JSON.parse(r.detail) as Omit<MessageDetail, 'html' | 'text'>), uid: own.uid, folder: own.folder, seen: !!own.seen, flagged: !!own.flagged, answered: !!own.answered, html: r.html, text: r.text };
+    const detail = { ...(JSON.parse(r.detail) as Omit<MessageDetail, 'html' | 'text'>), uid: own.uid, folder: own.folder, seen: !!own.seen, flagged: !!own.flagged, answered: !!own.answered, html: r.html, text: r.text, ...(own.thread_id ? { threadId: own.thread_id } : {}) };
     return { detail, plan: own.plan ? (JSON.parse(own.plan) as BodyPlan) : null, state: own.body_state };
   }
 
@@ -433,6 +578,8 @@ export class MailCache {
   forgetAccount(accountId: string): void {
     this.sql.exec('DELETE FROM mail_messages WHERE account_id = ?', accountId);
     this.sql.exec('DELETE FROM mail_cache_folders WHERE account_id = ?', accountId);
+    this.sql.exec('DELETE FROM mail_refs WHERE account_id = ?', accountId);
+    this.sql.exec('DELETE FROM mail_thread_index WHERE account_id = ?', accountId);
   }
 
   /** For the debug route: each cached folder with how many rows it holds, how many of them with their body, and the bodies' bytes. */

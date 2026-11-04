@@ -127,6 +127,7 @@ function summary(account: string, m: MessageSummary & { category?: string }) {
     unread: !m.seen,
     starred: m.flagged,
     has_attachments: m.hasAttachments,
+    ...(m.threadId ? { thread_id: m.threadId } : {}),
     ...(m.category ? { tab: m.category } : {}),
   };
 }

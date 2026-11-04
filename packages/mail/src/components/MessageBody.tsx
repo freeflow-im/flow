@@ -3,7 +3,7 @@
 // Content Security Policy in the document itself. Remote images wait for "Show images" until the user has chosen it once
 // (lib/imagePref.ts); after that they load. Plain text is rendered by
 // React (so escaped), with its links made links.
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ImageOff } from 'lucide-react';
 import { attachmentUrl, type MessageDetail } from '../api';
 import { setImagePref, useImagePref } from '../lib/imagePref';
@@ -60,35 +60,44 @@ export function MessageBody({ accountId, message }: { accountId: string; message
 
 function HtmlFrame({ html, allowRemote, title }: { html: string; allowRemote: boolean; title: string }) {
   const ref = useRef<HTMLIFrameElement>(null);
+  const observer = useRef<ResizeObserver | null>(null);
   const [height, setHeight] = useState(120);
   const srcDoc = useMemo(() => buildSrcdoc(html, allowRemote, window.location.origin), [html, allowRemote]);
 
-  useEffect(() => {
-    const frame = ref.current;
-    if (!frame) return;
-    let observer: ResizeObserver | null = null;
-    const measure = () => {
-      const doc = frame.contentDocument;
-      if (!doc?.documentElement) return;
-      setHeight(Math.max(doc.documentElement.scrollHeight, doc.body?.scrollHeight ?? 0) + 2);
-    };
-    const onLoad = () => {
-      measure();
-      observer?.disconnect();
-      const body = frame.contentDocument?.body;
-      if (body) {
-        observer = new ResizeObserver(measure);
-        observer.observe(body);
-      }
-      // Images arriving late change the height without resizing the body's box in every browser.
-      frame.contentDocument?.querySelectorAll('img').forEach((img) => img.addEventListener('load', measure));
-    };
-    frame.addEventListener('load', onLoad);
-    return () => {
-      frame.removeEventListener('load', onLoad);
-      observer?.disconnect();
-    };
-  }, [srcDoc]);
+  // Sizes the frame to its document, and keeps it sized as the document's body and pictures change: on the iframe's
+  // `load` (a prop, so it is there before the document can load), and before that every 250 ms while the document is
+  // still loading (a message's remote pictures and tracking pixels can keep `load` from firing for a long time, and
+  // some never let it), from the moment its body exists.
+  const measure = useCallback(() => {
+    const doc = ref.current?.contentDocument;
+    if (!doc?.documentElement) return;
+    setHeight(Math.max(doc.documentElement.scrollHeight, doc.body?.scrollHeight ?? 0) + 2);
+  }, []);
+  const watch = useCallback(() => {
+    measure();
+    observer.current?.disconnect();
+    const doc = ref.current?.contentDocument;
+    if (doc?.body) {
+      observer.current = new ResizeObserver(measure);
+      observer.current.observe(doc.body);
+    }
+    // Images arriving late change the height without resizing the body's box in every browser.
+    doc?.querySelectorAll('img').forEach((img) => img.addEventListener('load', measure));
+  }, [measure]);
+  const onLoad = useCallback(() => watch(), [watch]);
 
-  return <iframe ref={ref} title={title} sandbox={IFRAME_SANDBOX} srcDoc={srcDoc} referrerPolicy="no-referrer" className="block w-full border-0" style={{ height }} />;
+  useEffect(() => {
+    let watched = false;
+    const tick = () => {
+      const doc = ref.current?.contentDocument;
+      if (!doc?.body?.childNodes.length) return;
+      if (!watched) { watched = true; watch(); } else measure();
+      if (doc.readyState === 'complete') clearInterval(timer);
+    };
+    const timer = setInterval(tick, 250);
+    tick();
+    return () => { clearInterval(timer); observer.current?.disconnect(); };
+  }, [srcDoc, watch, measure]);
+
+  return <iframe ref={ref} title={title} sandbox={IFRAME_SANDBOX} srcDoc={srcDoc} referrerPolicy="no-referrer" onLoad={onLoad} className="block w-full border-0" style={{ height }} />;
 }
