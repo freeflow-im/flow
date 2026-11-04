@@ -1720,13 +1720,14 @@ export class Mail extends DurableObject<MailEnv> {
 
   /** A message's files: those sent with it, and the attachments (not inline pictures) of the one named in `attachFrom`. */
   private async filesOf(r: AccountRow, body: ReturnType<typeof SendBody.parse>): Promise<OutgoingFile[]> {
-    const files: OutgoingFile[] = (body.attachments ?? []).map((a) => ({ filename: a.filename, contentType: a.contentType, content: Buffer.from(a.contentBase64, 'base64') }));
+    const files: OutgoingFile[] = (body.attachments ?? []).map((a) => ({ filename: a.filename, contentType: a.contentType, content: Buffer.from(a.contentBase64, 'base64'), contentId: a.contentId, inline: a.inline }));
     if (body.attachFrom) {
       const { folder, uid } = body.attachFrom;
       const { detail } = await this.read(r, folder, uid);
-      for (const a of detail.attachments.filter((x) => !x.inline)) {
+      // Its files, and its inline pictures where the HTML still shows them (a draft sent as it is).
+      for (const a of detail.attachments.filter((x) => !x.inline || (x.contentId && body.html.includes(`cid:${x.contentId}`)))) {
         const got = await this.attachment(r, folder, uid, a.index);
-        files.push({ filename: got.filename || a.filename, contentType: got.mimeType || a.mimeType, content: got.content });
+        files.push({ filename: got.filename || a.filename, contentType: got.mimeType || a.mimeType, content: got.content, ...(a.inline && a.contentId ? { contentId: a.contentId, inline: true } : {}) });
       }
     }
     const bodies = new TextEncoder().encode(body.html).length + new TextEncoder().encode(body.text ?? '').length;
@@ -1832,7 +1833,7 @@ export class Mail extends DurableObject<MailEnv> {
       to: detail.to, cc: detail.cc, bcc: detail.bcc, subject: detail.subject,
       html: detail.html ?? '', ...(detail.text !== null ? { text: detail.text } : {}),
       ...(detail.inReplyTo ? { inReplyTo: detail.inReplyTo } : {}), ...(detail.references.length ? { references: detail.references } : {}),
-      ...(detail.attachments.some((a) => !a.inline) ? { attachFrom: { folder, uid } } : {}),
+      ...(detail.attachments.length ? { attachFrom: { folder, uid } } : {}),
       replacesDraft: { folder, uid },
     });
     return this.send(r, body);

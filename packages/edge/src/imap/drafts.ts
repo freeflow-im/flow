@@ -14,7 +14,8 @@ export interface OutgoingParts {
   inReplyTo?: string | undefined;
   references?: string[] | undefined;
 }
-export interface OutgoingFile { filename: string; contentType: string; content: Buffer }
+/** A file to send: an attachment, or with `contentId` an inline part the HTML shows as `cid:<contentId>`. */
+export interface OutgoingFile { filename: string; contentType: string; content: Buffer; contentId?: string | undefined; inline?: boolean | undefined }
 
 /** Message-ID and the like want the angle brackets; the API passes ids with or without them. */
 export const angled = (id: string) => (/^<.*>$/.test(id.trim()) ? id.trim() : `<${id.trim()}>`);
@@ -30,7 +31,10 @@ export function outgoingMessage(from: { email: string; displayName: string }, pa
     ...(parts.references?.length ? { references: parts.references.map(angled) } : {}),
     messageId: `<${crypto.randomUUID()}@${domain}>`,
     date: now,
-    attachments: files.map((f) => ({ filename: f.filename, contentType: f.contentType, content: f.content })),
+    attachments: files.map((f) => ({
+      filename: f.filename, contentType: f.contentType, content: f.content,
+      ...(f.contentId ? { cid: f.contentId.replace(/^<|>$/g, ''), contentDisposition: 'inline' as const } : f.inline ? { contentDisposition: 'inline' as const } : {}),
+    })),
   };
 }
 
