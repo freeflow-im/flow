@@ -1270,6 +1270,11 @@ export class Mail extends DurableObject<MailEnv> {
 
   // ---- the prefetch cache: keeping it ---------------------------------------------------------------------------------
 
+  /** Where the alarm's run is (`mail_state.alarm_step`): kept in SQLite, so a run the runtime cut short still says where it was. */
+  private step(what: string): void {
+    this.cache.setState('alarm_step', `${new Date().toISOString()} ${what}`);
+  }
+
   /** The person made a request: the alarm runs often for a while (`last_active_at`, written at most every 10 s). */
   private touch(): void {
     const now = Date.now();
@@ -1327,6 +1332,7 @@ export class Mail extends DurableObject<MailEnv> {
                 if (Date.now() > deadline) break;
                 if (f.error && now - f.errorAt < ERROR_BACKOFF_MS) continue;
                 try {
+                  this.step(`${f.kind}: lock`);
                   const what = await this.locked(c, f.folder, () => this.syncFolder(r, c, f, deadline));
                   entry.folders.push(`${f.kind}: ${what}`);
                 } catch (err) {
@@ -1337,6 +1343,7 @@ export class Mail extends DurableObject<MailEnv> {
               }
               // Then the bodies, with what is left of the budget.
               if (Date.now() < deadline) {
+                this.step('bodies');
                 try { entry.folders.push(`bodies: ${await this.prefetchBodies(r, c, deadline)}`); } catch (err) { entry.errors.push(`bodies: ${(err as Error).message}`); }
               }
             });
@@ -1351,6 +1358,7 @@ export class Mail extends DurableObject<MailEnv> {
     } finally {
       this.caching = false;
       entry.ms = Date.now() - start;
+      this.step('done');
       this.cacheLog.push(entry);
       while (this.cacheLog.length > CACHE_LOG_KEEP) this.cacheLog.shift();
       console.log(`[mail] cache: ${entry.folders.length} folders${entry.errors.length ? `, ${entry.errors.length} errors` : ''} ${entry.ms}ms (lock wait ${Math.round(t.wait)}ms, imap ${Math.round(t.imap)}ms)`);
@@ -1392,11 +1400,13 @@ export class Mail extends DurableObject<MailEnv> {
     const validity = this.validity(c);
     let state = f.validity === validity ? f : this.cache.resetFolder(r.id, folder, validity);
     const started = Date.now();
+    this.step(`${f.kind}: new mail`);
     const added = await this.cacheNew(r, c, folder, state, this.budget(NEW_CAP));
     state = this.cache.folder(r.id, folder)!;
     // INBOX with tabs on: its new mail sorted into them here, so a tab's page need not (a refused Gmail search is logged, not fatal).
     let sorted = '';
     if (folder.toUpperCase() === INBOX && this.tabsOf(r).length) {
+      this.step(`${f.kind}: tabs`);
       try { await this.sync(r, c, folder, this.isGmail(r, c)); sorted = ', tabs sorted'; } catch (err) { sorted = `, tabs not sorted (${(err as Error).message})`; }
     }
     const uids = this.cache.uids(r.id, folder, validity);
@@ -1404,6 +1414,7 @@ export class Mail extends DurableObject<MailEnv> {
     const condstore = c.enabled.has('CONDSTORE') && !!box && !box.noModseq && box.highestModseq !== undefined;
     const modseq = condstore ? String(box.highestModseq) : null;
     let changed = 0, gone = 0;
+    this.step(`${f.kind}: flags (${uids.length} rows, modseq ${state.modseq} -> ${modseq})`);
     if (uids.length) {
       const since = condstore && state.modseq && state.modseq !== modseq ? BigInt(state.modseq) : null;
       if (condstore && state.modseq && state.modseq === modseq) {
@@ -1422,11 +1433,13 @@ export class Mail extends DurableObject<MailEnv> {
     for (let steps = 0; steps < 50 && Date.now() < deadline; steps++) {
       state = this.cache.folder(r.id, folder)!;
       if (state.low <= 1 || this.cache.count(r.id, folder, validity) >= CACHE_ROWS) break;
+      this.step(`${f.kind}: backfill below ${state.low}`);
       await this.testSlow();
       const got = await this.backfill(r, c, folder, state, this.budget(BACKFILL_STEP));
       older += got.added;
       if (!got.moved) break;
     }
+    this.step(`${f.kind}: trim`);
     const trimmed = this.cache.trim(r.id, folder, validity, CACHE_ROWS);
     this.cache.setMarks(r.id, folder, { syncedAt: Date.now(), error: null, errorAt: 0 });
     return `${added} new, ${changed} flags, ${gone} gone, ${older} older${trimmed ? `, ${trimmed} trimmed` : ''}${sorted}`;
@@ -1625,9 +1638,11 @@ export class Mail extends DurableObject<MailEnv> {
         for (const [, rows] of groups) {
           const sections = rows[0].plan.texts.map((l) => l.section);
           const byUid = new Map(rows.map((q) => [q.uid, q]));
+          this.step(`bodies ${f.kind}: fetch ${rows.length} (${sections.join(',')})`);
           for await (const m of c.fetch(uidSet(rows.map((q) => q.uid)), { uid: true, bodyParts: sections }, { uid: true })) {
             const q = byUid.get(m.uid);
             if (!q) continue;
+            this.step(`bodies ${f.kind}: parse uid ${m.uid} (${q.plan.texts.reduce((n, l) => n + l.size, 0)} bytes)`);
             const bodies = new Map<string, Uint8Array>();
             for (const s of sections) { const b = section(m, s); if (b) bodies.set(s, b); }
             const email = await PostalMime.parse(minimalMessage(q.headers ?? undefined, q.plan, bodies), { attachmentEncoding: 'arraybuffer' });
@@ -1640,6 +1655,7 @@ export class Mail extends DurableObject<MailEnv> {
           if (byUid.size) this.left(r.id, f.folder, [...byUid.keys()]);
         }
       });
+      this.step(`bodies ${f.kind}: evict`);
       const evicted = this.cache.evictBodies(r.id, f.folder, BODY_BUDGET_PER_FOLDER);
       if (evicted) skipped += evicted;
     }
@@ -1910,7 +1926,7 @@ export class Mail extends DurableObject<MailEnv> {
     // memory), when the person was last active and when the alarm is next due. Only ever the caller's own account.
     app.get('/v1/mail/accounts/:id/debug/cache', async (c: MailContext) => {
       const r = c.get('account');
-      return c.json({ folders: this.cache.report(r.id), log: this.cacheLog, lastActiveAt: this.cache.lastActiveAt(), nextAlarmAt: await this.ctx.storage.getAlarm() });
+      return c.json({ folders: this.cache.report(r.id), log: this.cacheLog, lastActiveAt: this.cache.lastActiveAt(), nextAlarmAt: await this.ctx.storage.getAlarm(), alarmStep: this.cache.state('alarm_step') });
     });
 
     app.get('/v1/mail/accounts/:id/threads', async (c: MailContext) => {

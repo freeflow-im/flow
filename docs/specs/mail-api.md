@@ -84,7 +84,8 @@ interface MessageDetail extends Omit<MessageSummary, 'attachments'> {
   for a re-check. `sync` is the folder's `mail_sync` row, `counts` the cached rows per `(category, reason)`, and `messages`
   `{ uid, category, reason }` for the UIDs asked about.
 - `GET  /v1/mail/accounts/:id/debug/cache` → `{ folders: [{ folder, kind, validity, high, low, modseq, syncedAt, openedAt, error, errorAt, rows }],
-  log, lastActiveAt, nextAlarmAt }` (each folder also with `bodies` and `bodyBytes`): how the prefetch cache stands for the account
+  log, lastActiveAt, nextAlarmAt, alarmStep }` (each folder also with `bodies` and `bodyBytes`; `alarmStep` is where the alarm's
+  last run was, written before each step, which a run cut short by the runtime still shows): how the prefetch cache stands for the account
   (below), and the last 20 alarm runs since the object woke (`{ at, ms, folders: ['inbox: 3 new, 0 flags, 0 gone, 100 older',
   'bodies: 25 bodies'], errors }`), for the account's owner.
 - `GET  /v1/mail/accounts/:id/messages/:uid?folder=` → `{ message: MessageDetail }` (does NOT mark it seen; the client PATCHes seen)
