@@ -64,15 +64,16 @@ function HtmlFrame({ html, allowRemote, title }: { html: string; allowRemote: bo
   const [height, setHeight] = useState(120);
   const srcDoc = useMemo(() => buildSrcdoc(html, allowRemote, window.location.origin), [html, allowRemote]);
 
-  // Sizes the frame to its document, and keeps it sized as the document's body and pictures change. On the iframe's
-  // `load` as a prop (so it is there before the document can load), and again from the effect for a document that had
-  // already loaded by then (a body arriving into an open conversation).
+  // Sizes the frame to its document, and keeps it sized as the document's body and pictures change: on the iframe's
+  // `load` (a prop, so it is there before the document can load), and before that every 250 ms while the document is
+  // still loading (a message's remote pictures and tracking pixels can keep `load` from firing for a long time, and
+  // some never let it), from the moment its body exists.
   const measure = useCallback(() => {
     const doc = ref.current?.contentDocument;
     if (!doc?.documentElement) return;
     setHeight(Math.max(doc.documentElement.scrollHeight, doc.body?.scrollHeight ?? 0) + 2);
   }, []);
-  const onLoad = useCallback(() => {
+  const watch = useCallback(() => {
     measure();
     observer.current?.disconnect();
     const doc = ref.current?.contentDocument;
@@ -83,12 +84,20 @@ function HtmlFrame({ html, allowRemote, title }: { html: string; allowRemote: bo
     // Images arriving late change the height without resizing the body's box in every browser.
     doc?.querySelectorAll('img').forEach((img) => img.addEventListener('load', measure));
   }, [measure]);
+  const onLoad = useCallback(() => watch(), [watch]);
 
   useEffect(() => {
-    const doc = ref.current?.contentDocument;
-    if (doc?.readyState === 'complete' && doc.body?.childNodes.length) onLoad();
-    return () => observer.current?.disconnect();
-  }, [srcDoc, onLoad]);
+    let watched = false;
+    const tick = () => {
+      const doc = ref.current?.contentDocument;
+      if (!doc?.body?.childNodes.length) return;
+      if (!watched) { watched = true; watch(); } else measure();
+      if (doc.readyState === 'complete') clearInterval(timer);
+    };
+    const timer = setInterval(tick, 250);
+    tick();
+    return () => { clearInterval(timer); observer.current?.disconnect(); };
+  }, [srcDoc, watch, measure]);
 
   return <iframe ref={ref} title={title} sandbox={IFRAME_SANDBOX} srcDoc={srcDoc} referrerPolicy="no-referrer" onLoad={onLoad} className="block w-full border-0" style={{ height }} />;
 }
