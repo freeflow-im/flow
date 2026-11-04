@@ -79,7 +79,12 @@ export function AddressField({ label, value, onChange, autoFocus, onPendingChang
           aria-invalid={invalid}
           className={cn('h-7 min-w-[140px] flex-1 bg-transparent text-sm outline-none', invalid && 'text-danger')}
           type="text"
-          autoComplete="email"
+          // The browser's and password managers' autofill would put a saved address in the box as it opens (and the blur
+          // would make it a chip); the field completes nothing but what is typed or pasted.
+          autoComplete="off"
+          data-1p-ignore="true"
+          data-lpignore="true"
+          data-form-type="other"
           spellCheck={false}
         />
       </div>
