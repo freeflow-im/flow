@@ -124,14 +124,23 @@ export class CalDav implements Driver {
       found = this.o.credential.kind === 'bearer'
         ? await (async () => {
           const base = { ...this.account, rootUrl: this.o.url };
-          const principalUrl = await fetchPrincipalUrl({ account: base, fetch: this.request });
+          // Google answers the PROPFIND for current-user-principal with a 207 that names none: the address given
+          // (/caldav/v2/<email>/user) is the principal itself, so it stands in when the lookup finds nothing.
+          const principalUrl = await fetchPrincipalUrl({ account: base, fetch: this.request }).catch((err: unknown) => {
+            if (err instanceof ApiError) throw err;
+            return this.o.url;
+          });
           const homeUrl = await fetchHomeUrl({ account: { ...base, principalUrl }, fetch: this.request });
           return { ...base, principalUrl, homeUrl };
         })()
         : await createAccount({ account: this.account, loadCollections: false, loadObjects: false, fetch: this.request });
     } catch (err) {
       if (err instanceof ApiError) throw err;
-      throw connectFailed(`No calendars were found at that address (${(err as Error).message})`);
+      // tsdav's message hides the server's answer; ask once more for the status, which says what is wrong (a 403 from
+      // Google means the CalDAV API is not enabled for the OAuth client's project; a 404, a wrong address).
+      const status = await this.request(this.o.url, { method: 'PROPFIND', headers: { depth: '0' } }).then((r) => r.status).catch(() => 0);
+      if (status === 403 && this.o.credential.kind === 'bearer') throw connectFailed('Google refused the calendar request (HTTP 403): the CalDAV API must be enabled for the Google Cloud project that owns the OAuth client');
+      throw connectFailed(`No calendars were found at that address (${status ? `HTTP ${status}, ` : ''}${(err as Error).message})`);
     }
     if (!found.homeUrl || !found.principalUrl) throw connectFailed('No calendars were found at that address');
     const account = { ...found, homeUrl: found.homeUrl, rootUrl: found.rootUrl ?? this.o.url };

@@ -131,6 +131,18 @@ END:VCALENDAR</C:calendar-data></C:response><C:response><C:recipient><D:href>mai
     expect(parseScheduleResponse(reply)).toEqual(new Map([['bo@example.com', [['2026-11-05T15:00:00.000Z', '2026-11-05T16:00:00.000Z'], ['2026-11-05T17:00:00.000Z', '2026-11-05T17:30:00.000Z']]]]));
   });
 
+  it('takes the address as the principal when the server names none for it (Google answers 207 with an empty prop)', async () => {
+    const { fetchFn } = fakeServer({
+      'PROPFIND apidata.example.com/caldav/v2/ann%40gmail.com/user': ({ body }) => body.includes('calendar-home-set')
+        ? xml(response('/caldav/v2/ann%40gmail.com/user', '<c:calendar-home-set><d:href>/caldav/v2/ann%40gmail.com/</d:href></c:calendar-home-set>'))
+        : body.includes('calendar-user-address-set')
+          ? xml(response('/caldav/v2/ann%40gmail.com/user', '<c:calendar-user-address-set><d:href>mailto:ann@gmail.com</d:href></c:calendar-user-address-set>'))
+          : xml(`<d:response><d:href>/caldav/v2/ann%40gmail.com/user</d:href><d:propstat><d:prop><d:current-user-principal/></d:prop><d:status>HTTP/1.1 404 Not Found</d:status></d:propstat></d:response>`),
+    });
+    const d = new CalDav({ url: 'https://apidata.example.com/caldav/v2/ann%40gmail.com/user', allowInsecure: false, fetch: fetchFn, credential: { kind: 'bearer', token: async () => 'tok', refresh: async () => 'tok' } });
+    expect(await d.discover()).toEqual({ principal: 'https://apidata.example.com/caldav/v2/ann%40gmail.com/user', home: 'https://apidata.example.com/caldav/v2/ann%40gmail.com/', addresses: ['ann@gmail.com'], outbox: null });
+  });
+
   it('signs in with an access token (Google), refreshing it once on a 401, and finds the principal without .well-known', async () => {
     let valid = 'tok-2', refreshes = 0;
     const { fetchFn, seen } = fakeServer({
