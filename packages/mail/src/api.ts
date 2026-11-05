@@ -196,7 +196,10 @@ export class MailApiError extends Error {
 export const MAX_SEND_BYTES = 20 * 1024 * 1024;
 
 /** Called on a 401: the session is gone (the default sends the browser to the suite's sign-in, then back). */
-let onSignedOut = () => window.location.assign(`/?next=${encodeURIComponent(window.location.pathname + window.location.search)}`);
+let onSignedOut = () => {
+  if (new URLSearchParams(window.location.search).has('next')) return; // already standing in for the sign-in page (the dev server): no loop
+  window.location.assign(`/?next=${encodeURIComponent(window.location.pathname + window.location.search)}`);
+};
 export const setSignedOutHandler = (fn: () => void) => {
   onSignedOut = fn;
 };

@@ -84,10 +84,21 @@ export class CalendarApiError extends Error {
   }
 }
 
-/** The session ended: to the suite's sign-in, which comes back here. */
+/** The session ended: to the suite's sign-in, which comes back here. Arriving with `next` already in the address means this
+ * page is standing in for the sign-in (the Vite dev server has none and serves the app at `/` too), so it stops there and
+ * App shows SignedOut instead of looping. */
 function onSignedOut(): void {
+  if (new URLSearchParams(window.location.search).has('next')) return;
   const next = window.location.pathname + window.location.search;
   window.location.assign(`/?next=${encodeURIComponent(next)}`);
+}
+
+/** Signs in with the suite's email and password (`POST /v1/auth/login`, which sets the session cookie): SignedOut's form. */
+export async function signIn(email: string, password: string): Promise<void> {
+  const res = await fetch('/v1/auth/login', { method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify({ email, password }) });
+  if (res.ok) return;
+  const err = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
+  throw new CalendarApiError('auth_failed', err?.error?.message ?? (res.status === 401 ? 'That email or password is not right.' : `${res.status} ${res.statusText}`), res.status);
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {

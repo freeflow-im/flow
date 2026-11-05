@@ -11,6 +11,7 @@ import { AccountSettingsDialog, AddAccountDialog } from './components/AccountFor
 import { CalendarGrid } from './components/CalendarGrid';
 import { CalendarSuiteBar } from './components/CalendarSuiteBar';
 import { ConnectCalendar, type ConnectKind } from './components/ConnectCalendar';
+import { SignedOut } from './components/SignedOut';
 import { EventDialog, draftOf, inputOf, newDraft, type Draft } from './components/EventDialog';
 import { EventPopover } from './components/EventPopover';
 import { QuickCreate } from './components/QuickCreate';
@@ -157,6 +158,7 @@ export function App() {
 
   const broken = (accounts.data ?? []).filter((a) => a.status !== 'ok');
   const none = accounts.isSuccess && accounts.data.length === 0;
+  const signedOut = accounts.isError && accounts.error instanceof CalendarApiError && accounts.error.code === 'unauthorized';
   const sidebar = (
     <Sidebar
       accounts={accounts.data ?? []} calendars={cals} date={place.date} range={range} weekStartsOn={WEEK_STARTS_ON}
@@ -180,6 +182,8 @@ export function App() {
       />
       {accounts.isPending ? (
         <div className="flex flex-1 items-center justify-center text-muted"><Loader2 className="size-5 animate-spin" /></div>
+      ) : signedOut ? (
+        <SignedOut />
       ) : none ? (
         <ConnectCalendar onAdd={(k) => (k === 'google' ? startGoogle() : setDialog({ kind: 'add', connect: k }))} />
       ) : (
