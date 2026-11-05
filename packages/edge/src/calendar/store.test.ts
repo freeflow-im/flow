@@ -70,7 +70,7 @@ describe('the window and sync queries, on a production-sized table', () => {
     expect(p.some((d) => /SEARCH events USING INDEX events_series \((calendar_id=\?|ANY\(calendar_id\)) AND kind=\? AND recur_until>\?\)/.test(d))).toBe(true);
     expect(scans(p)).toEqual([]);
     const e = plan(sql, exceptionsSql, ids, from - 3_600_000, to);
-    expect(e.some((d) => /SEARCH events USING INDEX events_rid \(calendar_id=\? AND rid>\? AND rid<\?\)/.test(d))).toBe(true);
+    expect(e.some((d) => /SEARCH events USING INDEX events_rid \((calendar_id=\?|ANY\(calendar_id\)) AND rid>\? AND rid<\?\)/.test(d))).toBe(true);
     expect(scans(e)).toEqual([]);
   });
 
