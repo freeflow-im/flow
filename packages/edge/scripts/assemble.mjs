@@ -1,5 +1,5 @@
 // Fills public/ for the Worker from the clients' builds: the web client at the root, the Workspace client under
-// /workspace, the Mail client under /mail. Pages stay out: the origin answers them, because it decides per request (the sign-in redirect on
+// /workspace, the Mail client under /mail, the Calendar client under /calendar. Pages stay out: the origin answers them, because it decides per request (the sign-in redirect on
 // /workspace, the headers of /p/*), except on the hosts the Worker answers for, where src/routes/pages.ts serves them from /_pages. So do files over the 25 MiB Workers takes (the assistant's ONNX runtimes): the
 // Worker misses and the origin answers. Production copies the builds out of the server's image (deploy-edge.yml), so the names match the server's pages.
 import { cpSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
@@ -35,6 +35,11 @@ const mail = path.join(packages, 'mail', 'dist');
 const hasMail = existsSync(path.join(mail, 'index.html'));
 if (hasMail) clients.push([mail, path.join(out, 'mail')]);
 else console.warn(`${mail} has no build; /mail is left out of this deploy`);
+// Calendar (packages/calendar) under /calendar, optional in the same way.
+const calendar = path.join(packages, 'calendar', 'dist');
+const hasCalendar = existsSync(path.join(calendar, 'index.html'));
+if (hasCalendar) clients.push([calendar, path.join(out, 'calendar')]);
+else console.warn(`${calendar} has no build; /calendar is left out of this deploy`);
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
 for (const [from, to] of clients) cpSync(from, to, { recursive: true, filter: belongsHere });
@@ -43,4 +48,5 @@ mkdirSync(path.join(out, '_pages'), { recursive: true });
 cpSync(path.join(clients[0][0], 'index.html'), path.join(out, '_pages', 'index.html'));
 cpSync(path.join(clients[1][0], 'index.html'), path.join(out, '_pages', 'workspace.html'));
 if (hasMail) cpSync(path.join(mail, 'index.html'), path.join(out, '_pages', 'mail.html'));
+if (hasCalendar) cpSync(path.join(calendar, 'index.html'), path.join(out, '_pages', 'calendar.html'));
 console.log(`assembled ${out}${left.length ? `; left to the origin: ${left.join(', ')}` : ''}`);

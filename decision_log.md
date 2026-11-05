@@ -1,5 +1,27 @@
 # Decision log
 
+## 2026-11-04 — FreeFlow Calendar: its own object, CalDAV first, FullCalendar for the views (docs/specs/calendar.md §2)
+
+Operator rulings (2026-11-04) on the suite's fourth tab, built the way Mail was:
+
+- **A separate `Calendar` Durable Object per person** (`idFromName(userId)`, class `Calendar`, migration `v5`), not the Mail
+  object: its own accounts (passwords sealed with FLOW_DATA_KEY), rate limits, alarm and timing line, so either app can be
+  off without the other. Invitations cross between the two by binding, never by session (PR 2).
+- **v1 is the CalDAV driver only**: iCloud, Fastmail, Nextcloud, Radicale and any CalDAV server.
+- **Google Calendar in PR 1, through the same CalDAV driver with an OAuth credential** (ruled 2026-11-04, later the same
+  day: it is the calendar there is to test with). Google's CalDAV v2 endpoint with a Bearer access token, refreshed from a
+  refresh token sealed like a password; an auth-code flow on the Worker (scope `calendar` plus `openid email`, offline,
+  `prompt=consent`). The REST driver (free/busy, `sendUpdates`, conference data, push) stays a later option.
+- **The cache is complete, not a window**: every event of every calendar in the object's SQLite, recurring ones expanded on
+  read; reads never touch the server; the alarm syncs every 60 s while Calendar is in use and backs off like Mail's. Writes
+  go to the server first with If-Match, then the cache; the client updates at once and rolls back on failure.
+- **Accounts overlay** (unlike Mail): every account's calendars show together; one default calendar per person.
+- **FullCalendar (MIT core) renders the views**, behind one component (`CalendarGrid.tsx`), occurrences expanded on the
+  server; everything around it is ours. A hand-built grid was considered and rejected: overlap layout, drag and DST are
+  where the bugs hide.
+- **The assistant may create and change events** on the person's calendars (undoable and visible), never deletes without
+  asking; invitations by email (iMIP) only for servers that do not schedule themselves (PR 2).
+
 ## 2026-11-04 — Mail's prefetch cache lives in the Mail object; conversations next (docs/specs/mail-api.md, The prefetch cache)
 
 Operator rulings (2026-11-04) on Mail's next pieces:

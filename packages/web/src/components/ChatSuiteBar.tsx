@@ -155,7 +155,7 @@ export default function ChatSuiteBar({ activityUnread, intent }: { activityUnrea
           },
           { id: 'chat', label: 'Chat', href: '/', active: true, badge: chatBadge },
           { id: 'mail', label: 'Mail', href: '/mail', disabled: !docsHere, ...(docsHere ? {} : { title: 'Mail is not available for an organization on another server yet' }) },
-          { id: 'calendar', label: 'Calendar', href: '', disabled: true },
+          { id: 'calendar', label: 'Calendar', href: '/calendar', disabled: !docsHere, ...(docsHere ? {} : { title: 'Calendar is not available for an organization on another server yet' }) },
         ]}
         organization={{
           name: ws?.name ?? '',

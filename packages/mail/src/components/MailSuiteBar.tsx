@@ -56,7 +56,7 @@ export function MailSuiteBar({ search, unread, onSettings, onHome, assistant }: 
           { id: 'docs', label: 'Docs', href: '/workspace' },
           { id: 'chat', label: 'Chat', href: '/', badge: active?.unreadCount ?? 0 },
           { id: 'mail', label: 'Mail', href: import.meta.env.BASE_URL, active: true, badge: unread, onSelect: () => onHome?.() },
-          { id: 'calendar', label: 'Calendar', href: '', disabled: true },
+          { id: 'calendar', label: 'Calendar', href: '/calendar' },
         ]}
         organization={{
           name: active?.name ?? '',

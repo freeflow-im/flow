@@ -93,7 +93,7 @@ export function DocsSuiteBar() {
           // Chat's count: the selected organization's unread notifications, as Chat's own tab shows them.
           { id: 'chat', label: 'Chat', href: '/', badge: active?.unreadCount ?? 0 },
           { id: 'mail', label: 'Mail', href: '/mail' },
-          { id: 'calendar', label: 'Calendar', href: '', disabled: true },
+          { id: 'calendar', label: 'Calendar', href: '/calendar' },
         ]}
         organization={{
           name: active?.name ?? '',

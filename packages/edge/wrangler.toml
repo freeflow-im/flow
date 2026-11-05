@@ -31,7 +31,9 @@ html_handling = "none"
 not_found_handling = "none"
 
 # Secrets, set with `wrangler secret put`: EDGE_ORIGIN_SECRET (the same value as /flow/EDGE_ORIGIN_SECRET on the instance),
-# EMAIL_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, GOOGLE_CLIENT_ID, APPLE_AUDIENCE.
+# EMAIL_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, GOOGLE_CLIENT_ID, APPLE_AUDIENCE; GOOGLE_CLIENT_SECRET (the same Google client's,
+# for Google Calendar's OAuth: src/calendar/google.ts; unset, Google Calendar is off). GOOGLE_REDIRECT_URL (a var) only in
+# local dev, where the callback is not the Worker's own origin.
 # Pushes (src/org/push): FLOW_PUSH_DRIVER=apns with the secrets FLOW_APNS_KEY (base64 of the .p8), FLOW_APNS_KEY_ID and
 # FLOW_APNS_TEAM_ID, the values in /flow/ on AWS; FLOW_APNS_ENV and FLOW_APNS_TOPIC are optional. Without them the dev
 # driver logs each push and Apple is never called. Huddles: LIVEKIT_API_KEY, LIVEKIT_API_SECRET and LIVEKIT_URL (/flow/
@@ -99,6 +101,18 @@ class_name = "Mail"
 [[migrations]]
 tag = "v4"
 new_sqlite_classes = ["Mail"]
+
+# FreeFlow Calendar (src/calendar/object.ts, docs/specs/calendar.md): one object per person, named by their user id, holding
+# the calendar accounts they connected (passwords sealed with FLOW_DATA_KEY) and a complete copy of their calendars, kept
+# fresh by its alarm. CALENDAR_ALLOW_INSECURE=1 (http and local hosts, for Radicale) is for local dev only, given with --var;
+# it is never set here. CALENDAR_ALARM = "off" (a var) stops the alarm, a kill switch.
+[[durable_objects.bindings]]
+name = "CALENDAR"
+class_name = "Calendar"
+
+[[migrations]]
+tag = "v5"
+new_sqlite_classes = ["Calendar"]
 
 [[r2_buckets]]
 binding = "BLOBS"

@@ -12,6 +12,7 @@ import { pageRoutes } from './routes/pages';
 import { adminRoutes } from './routes/admin';
 import { helpRoutes } from './routes/help';
 import { mailRoutes } from './routes/mail';
+import { calendarRoutes } from './routes/calendar';
 import { mcpRoutes } from './routes/mcp';
 
 export { Directory } from './directory/object';
@@ -19,6 +20,7 @@ export { Org } from './org/object';
 export { Docs } from './docs/object';
 export { PdfOcr } from './pdfOcr';
 export { Mail } from './imap/object';
+export { Calendar } from './calendar/object';
 import type { Org as OrgObject } from './org/object';
 
 export interface Env extends ProxyEnv, AuthEnv {
@@ -35,14 +37,22 @@ export interface Env extends ProxyEnv, AuthEnv {
   MAIL: DurableObjectNamespace<import('./imap/object').Mail>;
   /** `1` in local dev only: mail accounts may then use unencrypted connections, any port and local hosts. Never set in production. */
   MAIL_ALLOW_INSECURE?: string;
-  /** Seals Chat's messages and files, and the passwords of mail accounts (org/crypto). A secret. */
+  /** FreeFlow Calendar: one object per person, holding the calendar accounts they connected and their calendars (src/calendar/object.ts). */
+  CALENDAR: DurableObjectNamespace<import('./calendar/object').Calendar>;
+  /** `1` in local dev only: calendar accounts may then use http and local hosts (Radicale). Never set in production. */
+  CALENDAR_ALLOW_INSECURE?: string;
+  /** Google Calendar's OAuth client secret (with GOOGLE_CLIENT_ID). A secret; unset turns Google Calendar off. */
+  GOOGLE_CLIENT_SECRET?: string;
+  /** The OAuth callback's address when it is not the Worker's own origin (local dev). */
+  GOOGLE_REDIRECT_URL?: string;
+  /** Seals Chat's messages and files, and the passwords of mail and calendar accounts (org/crypto). A secret. */
   FLOW_DATA_KEY?: string;
 }
 
 /** Paths that are never files: they skip the look in the assets. */
 const NEVER_A_FILE = /^\/(v1|api|mcp|oauth|plugin|\.well-known)(\/|$)/;
-/** Vite's content-hashed output, under the web client's root, the Workspace client's and the Mail client's. */
-const HASHED_FILE = /^(\/workspace|\/mail)?\/assets\//;
+/** Vite's content-hashed output, under the web client's root, the Workspace client's, the Mail client's and the Calendar client's. */
+const HASHED_FILE = /^(\/workspace|\/mail|\/calendar)?\/assets\//;
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -70,6 +80,7 @@ ported.route('/', docsRoutes as never);
 ported.route('/', authRoutes as never);
 ported.route('/', helpRoutes as never);
 ported.route('/', mailRoutes as never);
+ported.route('/', calendarRoutes as never);
 ported.route('/', orgRoutes as never);
 ported.route('/', pageRoutes as never);
 app.use('*', async (c, next) => {
