@@ -123,7 +123,8 @@ export class AssistantSettingsStore {
       anthropicKey: masked('anthropic'),
       openaiKey: masked('openai'),
       openrouterKey: masked('openrouter'),
-      braveKey: row?.brave_key ? (row.brave_key_masked ?? '••••') : null,
+      // A Brave key this key cannot read counts as not set (the search tools fall back to the provider's own search).
+      braveKey: row?.brave_key && tryDecrypt(this.key, row.brave_key) !== null ? (row.brave_key_masked ?? '••••') : null,
     };
   }
 
@@ -140,13 +141,13 @@ export class AssistantSettingsStore {
   /** The user's stored OpenAI key, whatever the assistant runs on (image editing uses it), or null. */
   openaiKey(userId: string): string | null {
     const row = this.row(userId);
-    return row?.openai_key ? decrypt(this.key, row.openai_key).api_key : null;
+    return row?.openai_key ? tryDecrypt(this.key, row.openai_key) : null;
   }
 
   /** The user's Brave Search API key for the search tools, or null. */
   braveKey(userId: string): string | null {
     const row = this.row(userId);
-    return row?.brave_key ? decrypt(this.key, row.brave_key).api_key : null;
+    return row?.brave_key ? tryDecrypt(this.key, row.brave_key) : null;
   }
 
   /**
@@ -188,8 +189,8 @@ export class AssistantSettingsStore {
         }
       }
     }
-    // The Brave Search key, the same way: new, removed (null) or kept (omitted).
-    let brave = { stored: row?.brave_key ?? null, masked: row?.brave_key_masked ?? null };
+    // The Brave Search key, the same way: new, removed (null) or kept (omitted); one sealed under another key is gone.
+    let brave = row?.brave_key && tryDecrypt(this.key, row.brave_key) !== null ? { stored: row.brave_key, masked: row.brave_key_masked ?? null } : { stored: null, masked: null };
     if (body.braveKey === null) brave = { stored: null, masked: null };
     else if (body.braveKey !== undefined) {
       if (typeof body.braveKey !== 'string') throw new SettingsError('The Brave Search API key is not valid.');
