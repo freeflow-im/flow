@@ -17,6 +17,8 @@ import type { MailToolContext } from '../imap/mailTools.ts';
 
 export interface DocsEnv {
   BLOBS: R2Bucket;
+  /** The deployment's data key (org/crypto): also seals the assistant's keys and connector credentials in this object. */
+  FLOW_DATA_KEY?: string;
   DIRECTORY: DurableObjectNamespace<Directory>;
   FLOW_WEB_URL?: string;
   ANTHROPIC_API_KEY?: string;
@@ -44,6 +46,10 @@ export class Docs extends DurableObject<DocsEnv> {
     setOcrBinding(env.PDF_OCR ?? null);
     // The headless browser loads Docs' print pages from the public address, through the Worker like any visitor.
     process.env.PRINT_ORIGIN = (env.FLOW_WEB_URL ?? 'https://app.freeflow.im').replace(/\/+$/, '');
+    // The assistant's keys and the connectors' credentials are sealed with CONNECTOR_ENCRYPTION_KEY (connectors/secrets.ts
+    // loadKey); with none, and no key file on the object's disk, it would be a random key per instance, and a saved key
+    // stopped working whenever the object restarted. FLOW_DATA_KEY is the deployment's one secret, so it stands in.
+    if (!process.env.CONNECTOR_ENCRYPTION_KEY && env.FLOW_DATA_KEY) process.env.CONNECTOR_ENCRYPTION_KEY = env.FLOW_DATA_KEY;
     this.context = {
       sql: ctx.storage.sql,
       bucket: env.BLOBS,

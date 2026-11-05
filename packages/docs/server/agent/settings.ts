@@ -26,6 +26,15 @@ const PROVIDER_NAMES: Record<KeyProvider, string> = { anthropic: 'Anthropic', op
 /** The environment variables a key is looked for in, by provider. */
 const ENV_KEYS: Record<KeyProvider, string> = { anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', openrouter: 'OPENROUTER_API_KEY' };
 
+/** The stored key's plain text, or null when it was sealed under another key (not an error: the person enters it again). */
+function tryDecrypt(key: Buffer, stored: string): string | null {
+  try {
+    return decrypt(key, stored).api_key ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** What a user's assistant runs on when it is their own key. */
 export interface ModelChoice {
   provider: KeyProvider;
@@ -123,7 +132,9 @@ export class AssistantSettingsStore {
     const row = this.row(userId);
     const p = this.provider(row);
     if (p === 'default' || p === 'claude-agent') return null;
-    return { provider: p, apiKey: decrypt(this.key, row![keyCol(p)]!).api_key, model: modelOf(row, p) };
+    const apiKey = tryDecrypt(this.key, row![keyCol(p)]!);
+    if (apiKey === null) throw new SettingsError('Your saved API key can no longer be read. Enter it again in Settings › Assistant.');
+    return { provider: p, apiKey, model: modelOf(row, p) };
   }
 
   /** The user's stored OpenAI key, whatever the assistant runs on (image editing uses it), or null. */
@@ -162,7 +173,10 @@ export class AssistantSettingsStore {
     const keys = {} as Record<KeyProvider, { stored: string | null; masked: string | null; plain: string | null }>;
     for (const p of KEY_PROVIDERS) {
       const stored = row?.[keyCol(p)] ?? null;
-      keys[p] = { stored, masked: row?.[maskedCol(p)] ?? null, plain: stored ? decrypt(this.key, stored).api_key : null };
+      // A saved key this key cannot read (sealed under another key, before CONNECTOR_ENCRYPTION_KEY was fixed) counts as
+      // gone, so the person can enter it again instead of every save failing.
+      const plain = stored ? tryDecrypt(this.key, stored) : null;
+      keys[p] = plain === null ? { stored: null, masked: null, plain: null } : { stored, masked: row?.[maskedCol(p)] ?? null, plain };
       const entered = body[`${p}Key` as const];
       if (entered === null) keys[p] = { stored: null, masked: null, plain: null };
       else if (entered !== undefined) {
