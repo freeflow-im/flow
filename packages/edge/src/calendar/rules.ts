@@ -116,6 +116,25 @@ export const EventPatch = z.object({
   etag: z.string().max(500).optional(),
 });
 export const RespondBody = z.object({ response: z.enum(['accepted', 'declined', 'tentative']), comment: z.string().max(2000).optional() });
+/**
+ * An invitation in Mail (docs/specs/calendar.md §14): the mail account, the message (`<accountId>:<folder>:<uid>`, or its
+ * folder and UID) and the part (the attachment index Mail lists it under).
+ */
+export const InviteBody = z.object({
+  account: z.string().trim().min(1).max(200),
+  messageId: z.union([z.string().min(5).max(2000), z.object({ folder: z.string().min(1).max(1000), uid: z.number().int().positive() })]),
+  part: z.number().int().min(0).max(1000),
+});
+export const InviteRespondBody = InviteBody.extend({ response: z.enum(['accepted', 'declined', 'tentative']), calendarId: z.string().min(1).max(100).optional() });
+/** The folder and UID of an InviteBody's message; a string id names the same account. */
+export function messageOf(b: z.output<typeof InviteBody>): { folder: string; uid: number } {
+  if (typeof b.messageId !== 'string') return b.messageId;
+  const first = b.messageId.indexOf(':'), last = b.messageId.lastIndexOf(':');
+  const uid = Number(b.messageId.slice(last + 1));
+  if (first < 1 || last <= first + 1 || !Number.isInteger(uid) || uid < 1) throw badRequest('messageId: <accountId>:<folder>:<uid>');
+  if (b.messageId.slice(0, first) !== b.account) throw badRequest('messageId: a message of the account named');
+  return { folder: b.messageId.slice(first + 1, last), uid };
+}
 export const FreeBusyBody = z.object({ emails: z.array(z.string().trim().email()).max(50).default([]), from: Instant, to: Instant });
 
 /** Parses a body with a schema, or throws `bad_request` naming the first problem. */

@@ -31,6 +31,7 @@ import { participants } from './threads';
 import { CATEGORIES, CATEGORY_HEADERS, classifyHeaders, effective, effectiveSql, isGmailHost, normalizeTabs, parseHeaders, tabPage, uidSet, type Category, type TabCategory } from './categorize';
 import { GMAIL_NONE, GMAIL_REASON, GmailSearchError, recheckRows, sortBatch, type GmailSearcher, type RecheckResult } from './gmailTabs';
 import { compileMime, outgoingMessage, type OutgoingFile } from './drafts';
+import { calendarMessage, checkCalendarMail, type CalendarMail } from '../calendar/imip';
 import { AccountPatch, CategoryBody, DeleteBody, DraftBody, FlagsBody, MAX_SEND_BYTES, MoveBody, NewAccount, SendBody, SendersCategoryBody, TIMING_HEADER, checkServer, mailError, notFound, parse, savesSentCopy, sendSize, badRequest, type ServerSettings } from './rules';
 
 export interface MailEnv {
@@ -170,6 +171,14 @@ function smtpFailure(err: unknown): Failure {
   return { code: 'connect_failed', message: `Could not connect to the outgoing mail server: ${e.response || e.message || e.code || 'unknown error'}` };
 }
 const failed = (f: Failure) => mailError(422, f.code, f.message);
+/** What a method the Calendar object calls answers: its result, or the error's status, code and message. */
+export type CalendarAnswer<T> = ({ ok: true } & T) | { ok: false; status: number; code: string; message: string };
+function answerOf(err: unknown): { ok: false; status: number; code: string; message: string } {
+  if (err instanceof ApiError) return { ok: false, status: err.statusCode, code: err.code, message: err.message };
+  return { ok: false, status: 502, code: 'server_error', message: (err as Error)?.message?.slice(0, 300) || 'the mail server failed' };
+}
+/** The largest invitation part read for the Calendar object. */
+const MAX_INVITE_BYTES = 1024 * 1024;
 
 /** An IMAP command's refusal, once connected: a missing folder is `not_found`, anything else the server said no to `bad_request`. */
 function commandError(err: unknown): unknown {
@@ -1837,6 +1846,51 @@ export class Mail extends DurableObject<MailEnv> {
       replacesDraft: { folder, uid },
     });
     return this.send(r, body);
+  }
+
+  // ---- for the Calendar object (by binding; docs/specs/calendar.md §14) ------------------------------------------------
+  // The person's Calendar object reads an invitation's part and sends iMIP through these, never through a route: a route
+  // that sent prepared mail would be one anybody holding a session could use to send anything. Answers carry their error
+  // code (an ApiError does not cross a binding with its code).
+
+  /** The person's mail accounts, as the Calendar object matches addresses: who "me" is, and which account sends. */
+  async calendarIdentities(): Promise<{ id: string; email: string; displayName: string; status: string }[]> {
+    return this.sql.exec<AccountRow & Record<string, SqlStorageValue>>('SELECT * FROM accounts ORDER BY created_at').toArray().map((r) => ({ id: r.id, email: r.email, displayName: r.display_name, status: r.status }));
+  }
+
+  /** One part of a message (an invitation's text/calendar, or its .ics), as `attachments/:index` serves it. */
+  async calendarPart(accountId: string, folder: string, uid: number, index: number): Promise<CalendarAnswer<{ content: Uint8Array; mimeType: string; filename: string }>> {
+    try {
+      const a = await this.attachment(this.row(accountId), folder, uid, index);
+      if (a.content.length > MAX_INVITE_BYTES) return { ok: false, status: 413, code: 'bad_request', message: 'the invitation is too large to read' };
+      return { ok: true, content: new Uint8Array(a.content), mimeType: a.mimeType, filename: a.filename };
+    } catch (err) {
+      return answerOf(commandError(err));
+    }
+  }
+
+  /** Sends an iMIP message (an answer, an invitation, a cancellation) the Calendar object prepared, from one of the person's accounts. */
+  async sendCalendarMail(accountId: string, mail: CalendarMail): Promise<CalendarAnswer<{ messageId: string }>> {
+    try {
+      const r = this.row(accountId);
+      const account = this.toAccount(r);
+      const message = calendarMessage(account, checkCalendarMail(mail));
+      const transport = smtpTransport(account.smtp, account.smtp.username || account.email, this.password(r));
+      try {
+        await transport.sendMail(message);
+      } catch (err) {
+        const e = err as { code?: string; response?: string; message?: string };
+        if (e.code === 'EENVELOPE' || e.code === 'EMESSAGE') throw badRequest(`The outgoing mail server refused the message: ${e.response || e.message}`);
+        const f = smtpFailure(err);
+        if (f.code === 'auth_failed') this.setStatus(r.id, f.code, f.message);
+        throw failed(f);
+      } finally {
+        transport.close();
+      }
+      return { ok: true, messageId: message.messageId };
+    } catch (err) {
+      return answerOf(err);
+    }
   }
 
   // ---- routes -----------------------------------------------------------------------------------------------------

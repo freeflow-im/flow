@@ -1,5 +1,14 @@
 # Decision log
 
+## 2026-11-05 — Calendar invitations: iMIP from the person's own mail account, by binding (docs/specs/calendar.md §14)
+
+- A server "schedules" when it is Google or a CalDAV server whose discovery found a scheduling outbox; FreeFlow sends iMIP only
+  for the others, so Google, iCloud and Fastmail never get a second copy of an invitation or an answer.
+- Answers go from the mail account the invitation came to; an organizer's invitations from the mail account whose address is
+  the calendar's. With none, nothing is sent and the API says so (`invitationsSent: false`); a failed email never fails the write.
+- The Calendar object reaches the Mail object only by binding (`calendarPart`, `calendarIdentities`, `sendCalendarMail`, which
+  checks the message is an iMIP one): there is no route that sends prepared mail.
+
 ## 2026-11-04 — FreeFlow Calendar: its own object, CalDAV first, FullCalendar for the views (docs/specs/calendar.md §2)
 
 Operator rulings (2026-11-04) on the suite's fourth tab, built the way Mail was:

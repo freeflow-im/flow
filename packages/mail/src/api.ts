@@ -266,6 +266,55 @@ export const mailApi = {
   send: (accountId: string, message: OutgoingMessage) => request<{ ok: true; messageId: string }>('POST', `${base(accountId)}/send`, message),
 };
 
+// ---- Invitations, through Calendar (packages/edge src/calendar/invites.ts; docs/specs/calendar.md §14) -------------------
+
+export type InviteResponse = 'accepted' | 'declined' | 'tentative' | 'needs-action';
+export interface InvitePerson { name: string | null; email: string; role: 'required' | 'optional'; response: InviteResponse; self?: true }
+/** The event an invitation is about, as the card shows it (ISO instants; dates, the end exclusive, for an all-day one). */
+export interface InviteEvent {
+  uid: string;
+  summary: string;
+  location: string | null;
+  description: string | null;
+  start: string;
+  end: string;
+  allDay: boolean;
+  timezone: string | null;
+  status: 'confirmed' | 'tentative' | 'cancelled';
+  organizer: InvitePerson | null;
+  attendees: InvitePerson[];
+  myResponse?: InviteResponse;
+  /** The series' RRULE / RDATE / EXDATE lines. */
+  recurrence: string[];
+  /** One occurrence of a series (an update or a cancellation of it). */
+  recurrenceId?: string;
+  conference?: { url: string; label: string };
+  sequence: number;
+}
+export interface InviteAnswer {
+  action: 'request' | 'cancel' | 'reply';
+  event: InviteEvent;
+  /** On one of the person's calendars already (Google and iCloud put invitations there before the mail is read). */
+  onCalendar: { calendarId: string; id: string; eventId: string; myResponse: InviteResponse | null; cancelled: boolean } | null;
+  /** A reply to the person's own event: who answered, and what. */
+  reply?: { name: string | null; email: string; response: InviteResponse };
+  organizerIsMe: boolean;
+  /** The calendars an invitation can go on. */
+  calendars: { id: string; name: string; color: string; isDefault: boolean }[];
+}
+/** How the answer reached the organizer: their server's own way, an email from this account, nothing to tell, or an email that failed. */
+export type Replied = { replied: 'server' | 'email' | 'none' } | { replied: 'failed'; replyError: string };
+/** A message's invitation part, as the Calendar API names it. */
+export interface InviteRef { account: string; folder: string; uid: number; part: number }
+
+const inviteBody = (r: InviteRef) => ({ account: r.account, messageId: { folder: r.folder, uid: r.uid }, part: r.part });
+export const inviteApi = {
+  read: (r: InviteRef) => request<InviteAnswer>('POST', '/v1/calendar/invites', inviteBody(r)),
+  respond: (r: InviteRef, response: Exclude<InviteResponse, 'needs-action'>, calendarId?: string) =>
+    request<InviteAnswer & Replied>('POST', '/v1/calendar/invites/respond', { ...inviteBody(r), response, ...(calendarId ? { calendarId } : {}) }),
+  cancel: (r: InviteRef) => request<InviteAnswer & { removed: boolean }>('POST', '/v1/calendar/invites/cancel', inviteBody(r)),
+};
+
 // ---- Attachment previews in Docs (packages/docs/server/previews.ts, through the Worker's routes/previews.ts) ----------
 
 /** The file a preview became in Docs: its page there. */

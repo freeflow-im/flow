@@ -44,6 +44,10 @@ Worker holds the credentials and speaks IMAP and SMTP.
   organization's Docs, chat `mail`), told what is open (`lib/assistant.ts` `mailContext`), and it drafts but never sends:
   a draft it made has **Open draft** (Compose). Docs' protocol, stream reader, tool labels and reply Markdown come from
   Docs' sources (`src/lib/docsAgent.ts`); docs/specs/web-mcp.md, The assistant in Mail.
+- `src/components/InviteCard.tsx` — an invitation above an open message's body (a `text/calendar` part or an `.ics`,
+  picked by `lib/invites.ts`): Calendar's `POST /v1/calendar/invites*` read it, answer it (Yes · No · Maybe, the calendar to
+  put it on) and remove a cancelled one; its time and repeat read as Calendar's card has them (`lib/calendarShared.ts`, from
+  Calendar's sources). A thread's ⋮ menu has Create event (Calendar's `?new=`). docs/specs/calendar.md §14.
 - `src/components/AttachmentChips.tsx` — a list row's attachments as Gmail's chips (`FileIcon.tsx`, up to three and "+N",
   fewer on a narrow list by a container query), from the summary's `attachments`; a chip opens `AttachmentPreview.tsx`
   without opening the message.

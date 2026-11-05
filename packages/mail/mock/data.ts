@@ -238,6 +238,28 @@ export function sampleMailbox(): Mailbox {
     messages.push(m);
   }
 
+  // An invitation (Google's shape: the iCalendar as a text/calendar part and as invite.ics) and a cancellation of another
+  // event; plugin.ts answers /v1/calendar/invites* for them.
+  const day = (days: number, hour: number) => { const d = new Date(now + days * 86_400_000); d.setUTCHours(hour, 0, 0, 0); return d.toISOString().replace(/[-:]|\.\d{3}/g, ''); };
+  const calendar = (method: string, uid: string, summary: string, start: string, end: string, extra: string[] = []) => Buffer.from([
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Google Inc//Google Calendar 70.9054//EN', `METHOD:${method}`, 'BEGIN:VEVENT', `UID:${uid}`, `DTSTART:${start}`, `DTEND:${end}`,
+    `SUMMARY:${summary}`, `ORGANIZER;CN=${people[0]!.name}:mailto:${people[0]!.address}`, `ATTENDEE;PARTSTAT=ACCEPTED;CN=${people[0]!.name}:mailto:${people[0]!.address}`,
+    `ATTENDEE;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CN=${me.name}:mailto:${me.address}`, `ATTENDEE;PARTSTAT=TENTATIVE;CN=${people[1]!.name}:mailto:${people[1]!.address}`, ...extra, 'END:VEVENT', 'END:VCALENDAR', '',
+  ].join('\r\n'));
+  const invited = (minutes: number, subject: string, text: string, ics: Buffer) => {
+    const m = base('INBOX', people[0]!, minutes, subject, text);
+    m.seen = false;
+    m.hasAttachments = true;
+    m.attachments = [
+      { filename: 'attachment-1', mimeType: 'text/calendar', contentId: null, inline: false, bytes: ics },
+      { filename: 'invite.ics', mimeType: 'application/ics', contentId: null, inline: false, bytes: ics },
+    ];
+    messages.push(m);
+  };
+  invited(25, 'Invitation: Q3 planning', 'Bob Martin has invited you to Q3 planning.\n\nJoin with Google Meet: https://meet.google.com/abc-defg-hij',
+    calendar('REQUEST', 'q3-planning@mock.test', 'Q3 planning', day(2, 15), day(2, 16), ['LOCATION:Room 4', 'RRULE:FREQ=WEEKLY;COUNT=6', 'X-GOOGLE-CONFERENCE:https://meet.google.com/abc-defg-hij']));
+  invited(60 * 2, 'Cancelled event: Vendor call', 'This event has been cancelled.', calendar('CANCEL', 'vendor-call@mock.test', 'Vendor call', day(1, 18), day(1, 19), ['STATUS:CANCELLED']));
+
   // The newest: a short unread note.
   const latest = base('INBOX', people[3]!, 6, 'Quick question about the logo', 'Do you still have the SVG of the old logo? Need it for the archive page. dana@studio.test if easier.');
   latest.seen = false;

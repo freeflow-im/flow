@@ -50,6 +50,8 @@ export function createMockApi(empty = false) {
     if (!b) throw new HttpError(404, 'not_found', 'No such account');
     return b;
   };
+  /** Invitations answered in the mock (by UID): the person's response. */
+  const invites = new Map<string, 'accepted' | 'declined' | 'tentative'>();
   const counted = (b: Mailbox) =>
     b.folders.map((f) => {
       const inFolder = b.messages.filter((m) => m.folder === f.path);
@@ -120,6 +122,40 @@ export function createMockApi(empty = false) {
     if (p === '/v1/me') return { status: 200, json: { id: 'u1', email: 'ann@example.com', displayName: 'Ann Lee', avatarUrl: null, statusEmoji: '', statusText: '' } };
     if (p === '/v1/me/workspaces') return { status: 200, json: { workspaces: [{ id: 'w1', name: 'Acme', avatarUrl: null, role: 'owner', unreadCount: 3 }] } };
     if (p === '/v1/auth/logout') return { status: 200, json: { ok: true } };
+    // Invitations (the Calendar API Mail's card asks, src/calendar/invites.ts): read from the message's part with a few
+    // regexes, answered in memory. Not on a calendar until answered; the cancelled one is on it until removed.
+    if (p.startsWith('/v1/calendar/invites') && method === 'POST') {
+      const b = body as { account: string; messageId: { folder: string; uid: number }; part: number; response?: 'accepted' | 'declined' | 'tentative' };
+      const box = boxOf(b.account);
+      const msg = box.messages.find((x) => x.folder === b.messageId.folder && x.uid === b.messageId.uid);
+      const part = msg?.attachments[b.part];
+      if (!part) throw new HttpError(404, 'not_found', 'no such attachment');
+      const ics = part.bytes.toString('utf8').replace(/\r\n[ \t]/g, '');
+      const prop = (name: string) => new RegExp(`^${name}(?:;[^:\\r\\n]*)?:(.*)$`, 'm').exec(ics)?.[1]?.trim() ?? null;
+      const when = (v: string | null) => (v ? `${v.slice(0, 4)}-${v.slice(4, 6)}-${v.slice(6, 8)}T${v.slice(9, 11)}:${v.slice(11, 13)}:00.000Z` : '');
+      const person = (line: string) => ({ name: /CN=([^;:]+)/.exec(line)?.[1] ?? null, email: /mailto:(.+)$/i.exec(line)?.[1]!.toLowerCase() ?? '', role: 'required' as const, response: (/PARTSTAT=([A-Z-]+)/.exec(line)?.[1]?.toLowerCase() ?? 'needs-action') as 'accepted' });
+      const attendees = [...ics.matchAll(/^ATTENDEE.*$/gm)].map((x) => person(x[0])).map((a) => (a.email === box.account.email ? { ...a, self: true as const } : a));
+      const uidOf = prop('UID')!;
+      const action = (prop('METHOD') ?? 'REQUEST').toLowerCase() as 'request' | 'cancel' | 'reply';
+      if (!invites.has(uidOf) && action === 'cancel') invites.set(uidOf, 'accepted');
+      if (p.endsWith('/respond')) invites.set(uidOf, b.response!);
+      const removed = p.endsWith('/cancel') && invites.delete(uidOf);
+      const mine = invites.get(uidOf) ?? null;
+      const organizer = /^ORGANIZER.*$/m.exec(ics);
+      return {
+        status: 200,
+        json: {
+          action,
+          event: { uid: uidOf, summary: prop('SUMMARY') ?? '', location: prop('LOCATION'), description: null, start: when(prop('DTSTART')), end: when(prop('DTEND')), allDay: false, timezone: 'UTC', status: action === 'cancel' ? 'cancelled' : 'confirmed',
+            organizer: organizer ? person(organizer[0]) : null, attendees, myResponse: 'needs-action', recurrence: prop('RRULE') ? [`RRULE:${prop('RRULE')}`] : [], sequence: 0,
+            ...(prop('X-GOOGLE-CONFERENCE') ? { conference: { url: prop('X-GOOGLE-CONFERENCE'), label: 'Google Meet' } } : {}) },
+          onCalendar: mine ? { calendarId: 'work', id: `work:${uidOf}`, eventId: `work:${uidOf}`, myResponse: mine, cancelled: false } : null,
+          organizerIsMe: false,
+          calendars: [{ id: 'work', name: 'Work', color: '#3b82f6', isDefault: true }, { id: 'home', name: 'Home', color: '#10b981', isDefault: false }],
+          ...(p.endsWith('/respond') ? { replied: 'server' } : {}), ...(p.endsWith('/cancel') ? { removed } : {}),
+        },
+      };
+    }
     if (p === '/v1/mail/providers') {
       const domain = (q.get('email') ?? '').split('@')[1]?.toLowerCase() ?? '';
       return { status: 200, json: PRESETS[domain] ?? null };

@@ -759,6 +759,7 @@ export function App() {
       onToggleSeen={() => toggleSeen(openId !== null ? [openId] : [])}
       onToggleFlag={() => toggleFlag(openId !== null ? [openId] : [])}
       onNeedBody={(m) => openId !== null && void fetchBody(qc, account.id, openId, m)}
+      onNotice={setToast}
       onFlagMessage={(m, flagged) => {
         // A message of the thread in another folder is flagged there; this folder's actions flag here.
         if (m.folder === folder) actions.flags.mutate({ uids: [m.uid], flagged });

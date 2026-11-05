@@ -13,6 +13,8 @@ import { decryptBlob, encryptBlob } from '../org/crypto/index';
 import { CalDav, type Credential, type Discovery, type Driver, type Interval, type RemoteCalendar } from './drivers/caldav';
 import { googlePrincipal, refreshAccess, type GoogleClient } from './google';
 import { DAY_MS, deleteFromEvent, editEvent, newEvent, parseInstant, parseRid, respondTo, type Fields, type Scope, type WriteContext } from './ical';
+import type { CalendarMail } from './imip';
+import { Invites, type InviteMail, type Notified } from './invites';
 import { CalendarStore, type CalendarRow, type EventOccurrence } from './store';
 import {
   AccountPatch, CalendarPatch, EventInput, EventPatch, FreeBusyBody, NewAccount, RELIST_MS, RespondBody, SYNC_BUDGET_MS, TIMING_HEADER, badRequest, calendarError,
@@ -28,6 +30,8 @@ export interface CalendarEnv {
   /** Google's OAuth client (the Worker's): refreshing a Google account's access token. */
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
+  /** The person's Mail object (the same user id names both): invitations' parts, and iMIP sent from their mail accounts. */
+  MAIL?: DurableObjectNamespace<import('../imap/object').Mail>;
 }
 
 /** A Google account as the callback hands it over (routes/calendar.ts): who, and the tokens the consent gave. */
@@ -66,17 +70,24 @@ export class Calendar extends DurableObject<CalendarEnv> {
   private lastTouch = 0;
   /** Google accounts' access tokens, in memory only (an hour each; a woken object refreshes). Never logged or returned. */
   private readonly access = new Map<string, { token: string; exp: number }>();
+  /** Whose object this is (the name it was made by), for the Mail object of the same person. */
+  private userId: string | null = null;
 
   constructor(ctx: DurableObjectState, env: CalendarEnv) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
     this.store = new CalendarStore(this.sql);
     this.store.init();
+    this.userId = (ctx.id as { name?: string }).name ?? this.store.state('user_id');
     this.routes();
   }
 
-  /** A request from routes/calendar.ts. Its server time goes back in `x-calendar-timing`, which the route logs (as Mail's). */
-  async handle(request: Request): Promise<Response> {
+  /**
+   * A request from routes/calendar.ts, made by the person this object belongs to (`userId`, kept: the Mail object is named
+   * by it too). Its server time goes back in `x-calendar-timing`, which the route logs (as Mail's).
+   */
+  async handle(request: Request, userId?: string): Promise<Response> {
+    if (userId && userId !== this.userId) { this.userId = userId; this.store.setState('user_id', userId); }
     const t: Timing = { server: 0 };
     const res = await timing.run(t, () => this.app.fetch(request));
     this.touch();
@@ -362,6 +373,69 @@ export class Calendar extends DurableObject<CalendarEnv> {
     this.ctx.waitUntil(this.syncCalendar(calendarId).catch(() => {}));
   }
 
+  // ---- invitations (invites.ts) -----------------------------------------------------------------------------------
+
+  /** Whether a calendar's server sends and processes invitations itself: Google, or a CalDAV server with a scheduling outbox. */
+  private schedules(c: CalendarRow): boolean {
+    const a = this.account(c.account_id);
+    return a.kind === 'google' || !!this.serverOf(a).outbox;
+  }
+  private hrefIn(c: CalendarRow, uid: string): string {
+    return new URL(`${encodeURIComponent(uid)}.ics`, c.href.endsWith('/') ? c.href : `${c.href}/`).href;
+  }
+  /** The person's Mail object, by the binding (never a route): an invitation's part, their mail accounts, and iMIP sent from one. */
+  private mailPort(): InviteMail | null {
+    const ns = this.env.MAIL, user = this.userId;
+    if (!ns || !user) return null;
+    const stub = () => ns.get(ns.idFromName(user));
+    type Answer = { ok: true } | { ok: false; status: number; code: string; message: string };
+    const unwrap = <T extends Answer>(r: T): Extract<T, { ok: true }> => {
+      if (!r.ok) throw calendarError(r.status, r.code, r.message);
+      return r as Extract<T, { ok: true }>;
+    };
+    return {
+      identities: async () => (await stub().calendarIdentities()).map((i) => ({ id: i.id, email: i.email, displayName: i.displayName })),
+      part: async (account, folder, uid, index) => {
+        const r = unwrap((await stub().calendarPart(account, folder, uid, index)) as Answer & { content?: Uint8Array; mimeType?: string; filename?: string });
+        return { content: new Uint8Array(r.content!), mimeType: r.mimeType ?? '', filename: r.filename ?? '' };
+      },
+      send: async (account, mail: CalendarMail) => { unwrap((await stub().sendCalendarMail(account, mail)) as Answer); },
+    };
+  }
+  private invites(): Invites {
+    return new Invites({
+      store: this.store,
+      me: (calendarId) => {
+        if (calendarId) { const c = this.calendar(calendarId); return this.meOn(this.account(c.account_id), c); }
+        return new Set([...this.accountRows().flatMap((a) => [...this.me(a)]), ...this.store.calendars().flatMap((x) => (x.owner_address ? [x.owner_address.toLowerCase()] : []))]);
+      },
+      schedules: (calendarId) => this.schedules(this.calendar(calendarId)),
+      calendars: () => this.store.calendars().map((x) => this.toCalendar(x)),
+      put: async (calendarId, href, raw, etag) => {
+        const c = this.writable(this.calendar(calendarId));
+        const acct = this.account(c.account_id);
+        await this.locked(c.id, () => this.putAndStore(this.driverOf(acct), acct, c, href, raw, etag)).catch((err) => this.conflicted(c, err));
+        this.syncSoon(c.id);
+      },
+      remove: async (calendarId, href, etag) => {
+        const c = this.writable(this.calendar(calendarId));
+        const d = this.driverOf(this.account(c.account_id));
+        await this.locked(c.id, async () => { await d.delete(href, etag); this.store.deleteObject(c.id, href); }).catch((err) => this.conflicted(c, err));
+        this.syncSoon(c.id);
+      },
+      hrefFor: (calendarId, uid) => this.hrefIn(this.calendar(calendarId), uid),
+      now: () => Date.now(),
+    }, this.mailPort());
+  }
+  /** The guests of an event the person changed told by email, where the server does not (invites.ts `notify`); never fails the write. */
+  private async notify(calendarId: string, uid: string, before: string | null, after: string | null, opts: { cancelRid?: number } = {}): Promise<Notified | null> {
+    try {
+      return await this.invites().notify(calendarId, uid, before, after, opts);
+    } catch (err) {
+      return { invitationsSent: false, invitationsNote: `The guests could not be emailed: ${(err as Error).message.slice(0, 200)}` };
+    }
+  }
+
   // ---- events ---------------------------------------------------------------------------------------------------
 
   private writeContext(acct: AccountRow, c: CalendarRow, zone?: string | null): WriteContext {
@@ -544,7 +618,8 @@ export class Calendar extends DurableObject<CalendarEnv> {
       const d = this.driverOf(acct);
       await this.locked(cal.id, () => this.putAndStore(d, acct, cal, href, raw, null));
       this.syncSoon(cal.id);
-      return c.json({ event: this.view(cal.id, uid, 0) }, 201);
+      const sent = await this.notify(cal.id, uid, null, this.store.objectByUid(cal.id, uid)?.raw ?? raw);
+      return c.json({ event: this.view(cal.id, uid, 0), ...sent }, 201);
     });
 
     app.patch('/v1/calendar/events/:id', async (c) => {
@@ -555,6 +630,8 @@ export class Calendar extends DurableObject<CalendarEnv> {
       if (etag && etag !== t.obj.etag) throw conflict();
       const scope: Scope = asked ?? (t.rid ? 'this' : 'all');
       const ctx = this.writeContext(t.acct, cal, fields.timezone);
+      // A change the guests see (anything but the person's own reminders) is sent to them where the server does not schedule.
+      const guestsCare = Object.keys(fields).some((k) => k !== 'reminders');
       const d = this.driverOf(t.acct);
       if (moveTo && moveTo !== cal.id) {
         // To another calendar: the whole event, written there first and then deleted here.
@@ -568,7 +645,8 @@ export class Calendar extends DurableObject<CalendarEnv> {
         await this.locked(cal.id, async () => { await d.delete(t.obj.href, t.obj.etag); this.store.deleteObject(cal.id, t.obj.href); }).catch((err) => this.conflicted(cal, err));
         this.syncSoon(dest.id);
         this.syncSoon(cal.id);
-        return c.json({ event: this.view(dest.id, t.uid, 0) });
+        const sent = guestsCare ? await this.notify(dest.id, t.uid, t.obj.raw, this.store.objectByUid(dest.id, t.uid)?.raw ?? edited) : null;
+        return c.json({ event: this.view(dest.id, t.uid, 0), ...sent });
       }
       const out = editEvent(t.obj.raw, t.uid, t.rid, scope, fields as Fields, ctx, () => crypto.randomUUID());
       await this.locked(cal.id, async () => {
@@ -586,7 +664,12 @@ export class Calendar extends DurableObject<CalendarEnv> {
         } else await this.putAndStore(d, t.acct, cal, t.obj.href, out.raw, t.obj.etag);
       }).catch((err) => this.conflicted(cal, err));
       this.syncSoon(cal.id);
-      return c.json({ event: out.created ? this.view(cal.id, out.created.uid, 0) : this.view(cal.id, t.uid, scope === 'this' ? t.rid : 0) });
+      let sent: Notified | null = null;
+      if (guestsCare) {
+        sent = await this.notify(cal.id, t.uid, t.obj.raw, this.store.objectByUid(cal.id, t.uid)?.raw ?? out.raw);
+        if (out.created) sent = Invites.combine(sent, await this.notify(cal.id, out.created.uid, null, this.store.objectByUid(cal.id, out.created.uid)?.raw ?? out.created.raw));
+      }
+      return c.json({ event: out.created ? this.view(cal.id, out.created.uid, 0) : this.view(cal.id, t.uid, scope === 'this' ? t.rid : 0), ...sent });
     });
 
     app.delete('/v1/calendar/events/:id', async (c) => {
@@ -602,7 +685,8 @@ export class Calendar extends DurableObject<CalendarEnv> {
         else await this.putAndStore(d, t.acct, cal, t.obj.href, raw, t.obj.etag);
       }).catch((err) => this.conflicted(cal, err));
       this.syncSoon(cal.id);
-      return c.json({ ok: true });
+      const sent = await this.notify(cal.id, t.uid, t.obj.raw, raw === null ? null : (this.store.objectByUid(cal.id, t.uid)?.raw ?? raw), raw !== null && scope === 'this' ? { cancelRid: t.rid } : {});
+      return c.json({ ok: true, ...sent });
     });
 
     app.post('/v1/calendar/events/:id/respond', async (c) => {
@@ -612,8 +696,14 @@ export class Calendar extends DurableObject<CalendarEnv> {
       const d = this.driverOf(t.acct);
       await this.locked(t.c.id, () => this.putAndStore(d, t.acct, t.c, t.obj.href, raw, t.obj.etag)).catch((err) => this.conflicted(t.c, err));
       this.syncSoon(t.c.id);
-      return c.json({ event: this.view(t.c.id, t.uid, t.rid) });
+      const replied = await this.invites().replied(t.c.id, raw, t.uid, t.rid, b.response);
+      return c.json({ event: this.view(t.c.id, t.uid, t.rid), ...replied });
     });
+
+    // Invitations in Mail (invites.ts): what one is, the person's answer, a cancellation taken off the calendar.
+    app.post('/v1/calendar/invites', async (c) => c.json(await this.invites().read(await json(c))));
+    app.post('/v1/calendar/invites/respond', async (c) => c.json(await this.invites().respond(await json(c))));
+    app.post('/v1/calendar/invites/cancel', async (c) => c.json(await this.invites().cancel(await json(c))));
 
     app.post('/v1/calendar/freebusy', async (c) => {
       const b = parse(FreeBusyBody, await json(c));
