@@ -32,7 +32,9 @@ native and desktop clients.
    either app can be off without the other. A person's Calendar object and Mail object are both named by the user id, so
    invitations cross between them by binding (`MAIL` from the Calendar object, `CALENDAR` from the Mail object), never by
    session.
-2. **v1 is the CalDAV driver only** (ruled 2026-11-04). Google comes after v1, and needs OAuth either way: Google's own CalDAV
+2. **v1 is the CalDAV driver only** (ruled 2026-11-04). **Amended the same day: Google comes in PR 1 through the CalDAV
+   driver with an OAuth credential** (the cheapest choice below: no second driver), since Google is the calendar there is to
+   test with; the REST driver stays a later option (§8). As built: §12. What follows was the reasoning. Google needs OAuth either way: Google's own CalDAV
    endpoint (`apidata.googleusercontent.com/caldav/v2/`) refuses Basic auth and app passwords, supports ctag and sync-collection
    but has no free/busy lookup and only a stub of scheduling. So the later Google PR is a choice between the CalDAV driver with an
    OAuth credential (cheapest: no second driver) and the REST API (free/busy for find-free-time, `sendUpdates`, conference data,
@@ -72,7 +74,7 @@ native and desktop clients.
 ## 3. The server: the Calendar object (`packages/edge/src/calendar/`)
 
 - `src/routes/calendar.ts` authenticates (Bearer or `sid`, through the Directory, as `routes/mail.ts`) and forwards `/v1/calendar/*`
-  to the caller's Calendar object. It answers `GET /v1/calendar/providers?email=` itself (presets: iCloud, Fastmail; Google says "not yet" with a note), and later the Google OAuth start and callback.
+  to the caller's Calendar object. It answers `GET /v1/calendar/providers?email=` itself (presets: iCloud, Fastmail; Google says "not yet" with a note), and later the Google OAuth start and callback. (As built, 2026-11-04: Google answers `{ google: true, note }`, sign in with Google; the OAuth start and callback are here, §12.)
 - `src/calendar/object.ts` — the object. SQLite tables:
   - `accounts` (id, kind `caldav` | `google`, email, display_name, server JSON for CalDAV: url, username; secret sealed:
     password or refresh token; status `ok` | `auth_failed` | `connect_failed`, status_message, created).
@@ -195,7 +197,7 @@ sources (`lib/docsAgent.ts`) where Mail already does.
   person the event changed elsewhere.
 - **Keyboard**: t today, d w m a views, ← → or j k, c create, / search, Enter open, e edit, Backspace delete, Esc.
 - **Connecting**: "Connect your calendar" when there is none (iCloud and Fastmail with the app-password link, Other CalDAV with a URL field,
-  Google greyed with "coming soon"); an account whose token or password stopped working shows Mail's re-enter banner.
+  Google greyed with "coming soon"); an account whose token or password stopped working shows Mail's re-enter banner. (As built, 2026-11-04: Google is live, first on the page, with Reconnect instead of re-entering a password; §12.)
 - **The address**: `/calendar/week/2026-11-09`, `/calendar/month/2026-11`, `/calendar/day/…`, `/calendar/agenda`, with
   `?event=<id>` for an open one, so links from Mail and the assistant land on the event.
 - `src/lib/`: `occurrences.ts` (API rows ↔ FullCalendar events, colours), `recurrence.ts` (the presets ↔ RRULE,
@@ -266,11 +268,10 @@ its e2e green.
 
 ## 8. After v1
 
-- **Google Calendar**, the first follow-up: the OAuth flow and secrets, then either the CalDAV driver with the OAuth credential or a
-  Google REST driver (§2.2 has the trade-off; the REST driver brings free/busy, `sendUpdates: all`, `syncToken` deltas with the 410
-  full resync, revocation on delete), the Google button in Connect, the reconnect banner on a refused refresh, tests against recorded
-  responses, the Cloud console (Calendar API, redirect URI, test users). Until then `find_free_time` uses the person's own calendars
-  and CalDAV `free-busy-query` where the server has it.
+- **Google Calendar** (2026-11-04: done in PR 1 through the CalDAV driver with an OAuth credential, §12). Still after v1: a Google
+  REST driver, if CalDAV's limits matter (free/busy of other people, `sendUpdates: all`, conference data, push channels, `syncToken`
+  deltas with the 410 full resync); revoking the grant when the account is removed; OAuth verification of the app (below). Until
+  then `find_free_time` uses the person's own calendars, and Google accounts' other people are `unknown`.
 - **Reminders** as push notifications (the Worker already pushes to APNs; web push where the suite has it): the alarm looks ahead 15 minutes for
   VALARMs and the person's default reminder.
 - **Google push** (`events.watch` channels to a Worker URL) and **CalDAV polling tuned per server**, so changes show in seconds.
@@ -372,3 +373,51 @@ its e2e green.
   `scripts/assemble.mjs` files `packages/calendar/dist` under `public/calendar`, optionally; `deploy-edge.yml` copies it out of
   the server image, whose Dockerfile builds it; `flow-aws-deploy.yml` lists `packages/calendar/**`. Vite's hashed files under
   `/calendar/assets/` are cached for a year, as Mail's.
+
+## 12. As built: Google Calendar through CalDAV with OAuth (PR 1, 2026-11-04)
+
+- **The endpoint**: Google's CalDAV v2, `https://apidata.googleusercontent.com/caldav/v2/`; a person's principal is
+  `…/caldav/v2/<email>/user`, and the calendar home is discovered from it (`current-user-principal`, `calendar-home-set`;
+  no `.well-known`). It has ctag and sync-collection, no free/busy and a stub scheduling inbox, so a Google account has no
+  outbox (other people are `unknown` in `freebusy`). Subscribed calendars (holidays, birthdays, others' shared ones) come with
+  read-only privileges and are `reader`, as on any server.
+- **The credential** (`drivers/caldav.ts` `Credential`): `basic` (a password) or `bearer` (an access token from the object). A
+  401 with a bearer token refreshes it and tries the request once more; a second 401, or a refresh Google refuses
+  (`invalid_grant`: revoked, expired, the password changed), is `auth_failed`, and the account's status says so.
+- **The account**: `kind: 'google'`, `email` from the id_token, `secret` the refresh token sealed with FLOW_DATA_KEY (as a
+  password is); access tokens live in the object's memory for their hour, never stored, returned or logged. Connecting the same
+  Google address again replaces the refresh token (a reconnect). `PATCH` with a password or server is `bad_request` for one.
+- **The flow** (`src/calendar/google.ts`, `routes/calendar.ts`):
+  - `GET /v1/calendar/google/start?return=<url>&email=` (session) → `{ url }`: Google's consent page with
+    `scope=openid email https://www.googleapis.com/auth/calendar`, `access_type=offline`, `prompt=consent` (a refresh token every
+    time), `login_hint`, and `state`: `{ userId, nonce, returnTo, exp }` sealed with FLOW_DATA_KEY (AES-GCM: unreadable and
+    tamper-proof), good for 10 minutes. `return` is kept only if it is the suite's origin (WEB_URL_BASE), the Worker's, or, with
+    CALENDAR_ALLOW_INSECURE=1, a localhost dev server; else `<WEB_URL_BASE>/calendar/`.
+  - `GET /v1/calendar/google/callback?code&state` (no session: the state names the person) exchanges the code with
+    GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET, reads the address from the id_token (`oauth.ts` `googleProfile`), and has the
+    person's object make the account (`Calendar.connectGoogle`: discovery, the calendars, the first sync), then redirects to
+    `<return>?connected=<id>`. Refusals redirect with `?error=`: `access_denied` (Google's), `expired` (a state changed, from
+    another key, or past 10 minutes; to `<WEB_URL_BASE>/calendar/`, since the return is not known), `scope_denied` (the person
+    unticked the calendar box), `no_refresh_token`, `google_disabled` (no client secret), or the account's error code. The state
+    is not one-time: a replay needs a fresh code, which Google gives once.
+  - The redirect URI is `<Worker origin>/v1/calendar/google/callback`; `GOOGLE_REDIRECT_URL` overrides it (local dev, where the
+    Worker is `http://localhost:18799` and the client the Vite server on 5186: the return is `http://localhost:5186/calendar/`).
+- **The client**: Google Calendar is first on the Connect page and a tab in Add account ("Sign in with Google" leaves for the
+  consent page); `?connected=` and `?error=` are said in a toast and taken off the address; a Google account's settings have
+  Reconnect instead of a password, and its banner says "Google stopped giving FreeFlow access" with Reconnect. `dev:mock`
+  skips the consent (Start connects a Google account at once; `denied@gmail.com` comes back with `?error=access_denied`).
+- **Secrets**: GOOGLE_CLIENT_SECRET on the Worker (`scripts/put-secrets.sh`, from `/flow/GOOGLE_CLIENT_SECRET`, optional until
+  it is there); GOOGLE_CLIENT_ID is the sign-in's, already set. Locally both, and GOOGLE_REDIRECT_URL, go in
+  `packages/edge/.dev.vars`.
+- **Tests**: `google.test.ts` (the state's round trip, expiry and tampering; the consent URL; the return URL rule; the token
+  endpoint, faked; the callback's every outcome, its dependencies faked) and `caldav.test.ts` (the bearer credential: the refresh
+  on a 401, once; a refused refresh; no `.well-known`). The e2e cannot cover Google (no Google in Docker); it is verified by hand.
+- **The Google Cloud console** (the project of GOOGLE_CLIENT_ID; Scott):
+  1. APIs & Services → Library: enable **CalDAV API** (`caldav.googleapis.com`). Without it the endpoint answers 403.
+  2. Credentials → the OAuth 2.0 client (Web application) → Authorized redirect URIs: add
+     `https://app.freeflow.im/v1/calendar/google/callback` (production) and `http://localhost:18799/v1/calendar/google/callback`
+     (local); and `https://edge.freeflow.im/v1/calendar/google/callback` if the rehearsal host is used.
+  3. OAuth consent screen (Google Auth Platform → Data access): add the scope `https://www.googleapis.com/auth/calendar`; while
+     the app's publishing status is **Testing**, add each person who will connect (scottp@biztrip.ai and the Google address of
+     the calendar) under **Audience → Test users**. The scope is sensitive: anyone else gets "access blocked" until the app is
+     verified (§8). In Testing, Google also expires refresh tokens after 7 days, so a test account needs Reconnect weekly.

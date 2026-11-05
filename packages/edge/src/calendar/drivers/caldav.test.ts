@@ -21,7 +21,7 @@ const xml = (body: string, status = 207) => new Response(`<?xml version="1.0"?><
 const ok = (props: string) => `<d:propstat><d:prop>${props}</d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>`;
 const response = (href: string, props: string) => `<d:response><d:href>${href}</d:href>${ok(props)}</d:response>`;
 const EVENT = 'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:e1\r\nDTSTART:20261105T100000Z\r\nDTEND:20261105T110000Z\r\nSUMMARY:Hi\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n';
-const client = (fetchFn: typeof fetch, url = 'https://dav.example.com/') => new CalDav({ url, username: 'ann', password: 'pw', allowInsecure: false, fetch: fetchFn });
+const client = (fetchFn: typeof fetch, url = 'https://dav.example.com/') => new CalDav({ url, credential: { kind: 'basic', username: 'ann', password: 'pw' }, allowInsecure: false, fetch: fetchFn });
 const codeOf = async (p: Promise<unknown>) => p.then(() => 'none', (e) => (e instanceof ApiError ? e.code : String(e)));
 
 describe('the CalDAV driver, against a fake server', () => {
@@ -130,4 +130,36 @@ END:VFREEBUSY&#13;
 END:VCALENDAR</C:calendar-data></C:response><C:response><C:recipient><D:href>mailto:cy@example.com</D:href></C:recipient><C:request-status>3.7;Invalid calendar user</C:request-status></C:response></C:schedule-response>`;
     expect(parseScheduleResponse(reply)).toEqual(new Map([['bo@example.com', [['2026-11-05T15:00:00.000Z', '2026-11-05T16:00:00.000Z'], ['2026-11-05T17:00:00.000Z', '2026-11-05T17:30:00.000Z']]]]));
   });
+
+  it('signs in with an access token (Google), refreshing it once on a 401, and finds the principal without .well-known', async () => {
+    let valid = 'tok-2', refreshes = 0;
+    const { fetchFn, seen } = fakeServer({
+      'PROPFIND apidata.example.com/caldav/v2/ann%40gmail.com/user': ({ headers, body }) => {
+        if (headers.get('authorization') !== `Bearer ${valid}`) return new Response(null, { status: 401 });
+        return body.includes('calendar-home-set')
+          ? xml(response('/caldav/v2/ann%40gmail.com/user', '<c:calendar-home-set><d:href>/caldav/v2/ann%40gmail.com/</d:href></c:calendar-home-set>'))
+          : body.includes('calendar-user-address-set')
+            ? xml(response('/caldav/v2/ann%40gmail.com/user', '<c:calendar-user-address-set><d:href>mailto:ann@gmail.com</d:href></c:calendar-user-address-set>'))
+            : xml(response('/caldav/v2/ann%40gmail.com/user', '<d:current-user-principal><d:href>/caldav/v2/ann%40gmail.com/user</d:href></d:current-user-principal>'));
+      },
+    });
+    let current = 'tok-1';
+    const d = new CalDav({
+      url: 'https://apidata.example.com/caldav/v2/ann%40gmail.com/user', allowInsecure: false, fetch: fetchFn,
+      credential: { kind: 'bearer', token: async () => current, refresh: async () => { refreshes++; current = 'tok-2'; return current; } },
+    });
+    expect(await d.discover()).toEqual({ principal: 'https://apidata.example.com/caldav/v2/ann%40gmail.com/user', home: 'https://apidata.example.com/caldav/v2/ann%40gmail.com/', addresses: ['ann@gmail.com'], outbox: null });
+    expect(refreshes).toBe(1);
+    expect(seen.some((r) => r.path.includes('.well-known'))).toBe(false);
+    // A token Google keeps refusing after the refresh: auth_failed, and only one refresh per request.
+    valid = 'never';
+    refreshes = 0;
+    expect(await codeOf(d.discover())).toBe('auth_failed');
+    expect(refreshes).toBe(1);
+    // A refused refresh is the account's auth_failed too.
+    const refused = new CalDav({ url: 'https://apidata.example.com/caldav/v2/ann%40gmail.com/user', allowInsecure: false, fetch: fetchFn,
+      credential: { kind: 'bearer', token: async () => 'old', refresh: async () => { throw new ApiError(422, 'auth_failed', 'reconnect'); } } });
+    expect(await codeOf(refused.discover())).toBe('auth_failed');
+  });
 });
+

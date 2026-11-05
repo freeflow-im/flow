@@ -1,6 +1,7 @@
 // A dev-only stand-in for the edge Worker's /v1/calendar API (and the few suite routes the page reads), so the client
 // runs with no server: `pnpm --filter @flow/calendar dev:mock`. State is in memory and resets on restart.
-// CALENDAR_MOCK=empty starts with no account (the "Connect your calendar" page). Adding an account: the password "wrong"
+// CALENDAR_MOCK=empty starts with no account (the "Connect your calendar" page). Google's sign-in is skipped: Start
+// connects a Google account at once (denied@gmail.com comes back with ?error=access_denied). Adding a CalDAV account: the password "wrong"
 // answers auth_failed, a server address containing "bad" answers connect_failed, and "stale" connects an account whose
 // password then stops working (the re-enter banner). Repeating events are expanded here simply (daily, weekly on days,
 // monthly and yearly on the start's date), with the three scopes of a change.
@@ -128,10 +129,26 @@ export function createMockApi(empty = false) {
     }
     if (p === '/v1/calendar/providers') {
       const domain = (q.get('email') ?? '').split('@')[1]?.toLowerCase() ?? '';
-      if (['gmail.com', 'googlemail.com'].includes(domain)) return { status: 200, json: { google: true, note: 'Google Calendar is coming soon: it needs signing in with Google, not a password.' } };
+      if (['gmail.com', 'googlemail.com'].includes(domain)) return { status: 200, json: { google: true, note: 'Google Calendar connects by signing in with Google, not with a password.' } };
       if (['icloud.com', 'me.com', 'mac.com'].includes(domain)) return { status: 200, json: { name: 'iCloud', url: 'https://caldav.icloud.com/', username: q.get('email'), appPasswordUrl: 'https://account.apple.com/account/manage' } };
       if (domain === 'fastmail.com') return { status: 200, json: { name: 'Fastmail', url: 'https://caldav.fastmail.com/', username: q.get('email') } };
       return { status: 200, json: null };
+    }
+    // Google's consent, skipped: the mock connects a Google account at once and sends the browser straight back.
+    if (p === '/v1/calendar/google/start') {
+      const email = q.get('email') || 'ann@gmail.com';
+      let account = state.accounts.find((a) => a.kind === 'google' && a.email === email);
+      if (account) account.status = 'ok';
+      else {
+        account = { id: `google-${Date.now().toString(36)}`, kind: 'google', email, displayName: 'Ann (Google)', server: { url: `https://apidata.googleusercontent.com/caldav/v2/${encodeURIComponent(email)}/user`, username: email }, status: 'ok' };
+        state.accounts.push(account);
+        state.calendars.push({ id: `${account.id}-primary`, accountId: account.id, name: email, color: '#039be5', timezone: null, role: 'owner', hidden: false, isDefault: false, syncedAt: new Date().toISOString() },
+          { id: `${account.id}-holidays`, accountId: account.id, name: 'Holidays in United States', color: '#0b8043', timezone: null, role: 'reader', hidden: false, isDefault: false, syncedAt: new Date().toISOString() });
+        ensureDefault();
+      }
+      const back = new URL(q.get('return') ?? 'http://localhost:5186/calendar/');
+      back.searchParams.set(q.get('email') === 'denied@gmail.com' ? 'error' : 'connected', q.get('email') === 'denied@gmail.com' ? 'access_denied' : account.id);
+      return { status: 200, json: { url: back.href } };
     }
     if (p === '/v1/calendar/accounts' && method === 'GET') return { status: 200, json: { accounts: state.accounts } };
     if (p === '/v1/calendar/accounts' && method === 'POST') {

@@ -1,13 +1,13 @@
-// The page before any calendar is connected: iCloud and Fastmail (with an app password), any other CalDAV server by its
-// address, and Google, coming soon.
+// The page before any calendar is connected: Google (signing in with Google), iCloud and Fastmail (with an app password),
+// and any other CalDAV server by its address.
 import { CalendarDays, Lock, Server } from 'lucide-react';
 
-export type ConnectKind = 'icloud' | 'fastmail' | 'other';
-const OPTIONS: { kind: ConnectKind | 'google'; name: string; note: string }[] = [
+export type ConnectKind = 'icloud' | 'fastmail' | 'other' | 'google';
+const OPTIONS: { kind: ConnectKind; name: string; note: string }[] = [
+  { kind: 'google', name: 'Google Calendar', note: 'Sign in with Google' },
   { kind: 'icloud', name: 'iCloud', note: 'With an app-specific password' },
   { kind: 'fastmail', name: 'Fastmail', note: 'With an app password' },
   { kind: 'other', name: 'Other CalDAV', note: 'Nextcloud, Radicale, Baïkal, SOGo, Zimbra, Synology…' },
-  { kind: 'google', name: 'Google Calendar', note: 'Coming soon' },
 ];
 
 export function ConnectCalendar({ onAdd }: { onAdd(kind: ConnectKind): void }) {
@@ -22,8 +22,7 @@ export function ConnectCalendar({ onAdd }: { onAdd(kind: ConnectKind): void }) {
         <ul className="flex flex-col gap-2 text-left">
           {OPTIONS.map((o) => (
             <li key={o.kind}>
-              <button type="button" disabled={o.kind === 'google'} onClick={() => o.kind !== 'google' && onAdd(o.kind)}
-                className="flex w-full items-center justify-between rounded-xl border border-hairline px-4 py-3 text-left hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent">
+              <button type="button" onClick={() => onAdd(o.kind)} className="flex w-full items-center justify-between rounded-xl border border-hairline px-4 py-3 text-left hover:bg-hover">
                 <span className="shrink-0 whitespace-nowrap font-medium text-ink">{o.name}</span>
                 <span className="ml-3 text-right text-[13px] text-muted">{o.note}</span>
               </button>
@@ -32,7 +31,7 @@ export function ConnectCalendar({ onAdd }: { onAdd(kind: ConnectKind): void }) {
         </ul>
         <ul className="mt-8 space-y-3 text-left text-[14px] text-muted">
           <li className="flex gap-3"><Server className="mt-0.5 size-4 shrink-0" />Your calendars stay with your provider. FreeFlow keeps a copy in step with them over CalDAV.</li>
-          <li className="flex gap-3"><Lock className="mt-0.5 size-4 shrink-0" />Your password is stored encrypted, only for your account, and you can remove it at any time.</li>
+          <li className="flex gap-3"><Lock className="mt-0.5 size-4 shrink-0" />Your password (or Google's access) is stored encrypted, only for your account, and you can remove it at any time.</li>
         </ul>
       </div>
     </div>

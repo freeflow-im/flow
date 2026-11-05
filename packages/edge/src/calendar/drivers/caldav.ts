@@ -1,10 +1,11 @@
 // The CalDAV driver (docs/specs/calendar.md §2.3, §3): discovery (.well-known/caldav, current-user-principal,
 // calendar-home-set), the calendars of the home, sync (sync-collection, RFC 6578, where the server has it; else the ctag and
 // the etags of every VEVENT), calendar-multiget, PUT with If-Match / If-None-Match, DELETE, and free-busy. The DAV verbs and
-// their XML are tsdav's; every request goes through `request` here, which adds the login, follows redirects itself (each
-// target checked like the URL the person typed), times out, adds the time to the request's timing, and turns a 401 into
-// `auth_failed`. Later drivers (Google) sit behind the same `Driver` interface.
-import { calendarMultiGet, calendarQuery, createAccount, fetchCalendarUserAddresses, fetchCalendars, propfind, syncCollection } from 'tsdav';
+// their XML are tsdav's; every request goes through `request` here, which adds the credential, follows redirects itself
+// (each target checked like the URL the person typed), times out, adds the time to the request's timing, and turns a 401
+// into `auth_failed`. The credential is a password (Basic) or an OAuth access token (Bearer: Google's CalDAV endpoint),
+// refreshed once on a 401 before the login counts as refused. A later REST driver would sit behind the same `Driver`.
+import { calendarMultiGet, calendarQuery, createAccount, fetchCalendarUserAddresses, fetchCalendars, fetchHomeUrl, fetchPrincipalUrl, propfind, syncCollection } from 'tsdav';
 import { ApiError } from '../../errors';
 import { authFailed, calendarError, checkUrl, conflict, connectFailed } from '../rules';
 
@@ -32,8 +33,13 @@ export interface Driver {
   freebusy(d: Discovery, organizer: string, emails: string[], from: number, to: number): Promise<Map<string, Interval[]> | null>;
 }
 
+/** How requests sign in: a password, or an OAuth access token the caller keeps (and refreshes when the server refuses it). */
+export type Credential =
+  | { kind: 'basic'; username: string; password: string }
+  | { kind: 'bearer'; token(): Promise<string>; refresh(): Promise<string> };
+
 export interface CalDavOptions {
-  url: string; username: string; password: string; allowInsecure: boolean;
+  url: string; credential: Credential; allowInsecure: boolean;
   /** Added to the request's server time (the timing line). */
   onTime?: (ms: number) => void;
   /** Tests: a fake server. */
@@ -56,27 +62,41 @@ const absolute = (href: string, base: string) => new URL(href, base).href;
 const pathOf = (href: string) => new URL(href).pathname;
 
 export class CalDav implements Driver {
-  private readonly auth: string;
   private readonly base: typeof fetch;
   constructor(private readonly o: CalDavOptions) {
-    this.auth = `Basic ${Buffer.from(`${o.username}:${o.password}`, 'utf8').toString('base64')}`;
     this.base = o.fetch ?? ((input, init) => fetch(input, init));
   }
 
-  /** Every request: the login added, redirects followed here (each target checked), a timeout, a 401 as auth_failed. */
+  private async authorization(fresh: boolean): Promise<string> {
+    const c = this.o.credential;
+    if (c.kind === 'basic') return `Basic ${Buffer.from(`${c.username}:${c.password}`, 'utf8').toString('base64')}`;
+    return `Bearer ${fresh ? await c.refresh() : await c.token()}`;
+  }
+
+  /**
+   * Every request: the credential added, redirects followed here (each target checked), a timeout, and a 401 as
+   * auth_failed (an access token is refreshed and the request tried once more first).
+   */
   readonly request: typeof fetch = async (input, init) => {
     let url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     const started = Date.now();
+    let refreshed = false;
     try {
       for (let hop = 0; ; hop++) {
         checkUrl(url, this.o.allowInsecure);
         const headers = new Headers(init?.headers);
-        headers.set('authorization', this.auth);
+        headers.set('authorization', await this.authorization(false));
         let res: Response;
         try {
           res = await this.base(url, { ...init, headers, redirect: 'manual', signal: AbortSignal.timeout(this.o.timeoutMs ?? 20_000) });
         } catch (err) {
           throw connectFailed(`Could not reach the calendar server: ${(err as Error).message || 'no answer'}`);
+        }
+        if (res.status === 401 && this.o.credential.kind === 'bearer' && !refreshed) {
+          refreshed = true;
+          await this.authorization(true);
+          hop--;
+          continue;
         }
         if (res.status === 401) throw authFailed();
         const location = res.headers.get('location');
@@ -93,13 +113,22 @@ export class CalDav implements Driver {
   };
 
   private get account() {
-    return { serverUrl: this.o.url, accountType: 'caldav' as const, credentials: { username: this.o.username, password: this.o.password } };
+    return { serverUrl: this.o.url, accountType: 'caldav' as const };
   }
 
   async discover(): Promise<Discovery> {
     let found;
     try {
-      found = await createAccount({ account: this.account, loadCollections: false, loadObjects: false, fetch: this.request });
+      // With an access token (Google) the URL is the principal itself: no .well-known (Google has none there, and a 401
+      // from it would spend the token's one refresh).
+      found = this.o.credential.kind === 'bearer'
+        ? await (async () => {
+          const base = { ...this.account, rootUrl: this.o.url };
+          const principalUrl = await fetchPrincipalUrl({ account: base, fetch: this.request });
+          const homeUrl = await fetchHomeUrl({ account: { ...base, principalUrl }, fetch: this.request });
+          return { ...base, principalUrl, homeUrl };
+        })()
+        : await createAccount({ account: this.account, loadCollections: false, loadObjects: false, fetch: this.request });
     } catch (err) {
       if (err instanceof ApiError) throw err;
       throw connectFailed(`No calendars were found at that address (${(err as Error).message})`);
@@ -108,7 +137,8 @@ export class CalDav implements Driver {
     const account = { ...found, homeUrl: found.homeUrl, rootUrl: found.rootUrl ?? this.o.url };
     const addresses = await fetchCalendarUserAddresses({ account, fetch: this.request }).catch((err) => { if (err instanceof ApiError && err.code === 'auth_failed') throw err; return [] as string[]; });
     let outbox: string | null = null;
-    try {
+    // Google's scheduling inbox and outbox are stubs: free/busy of other people is not asked of it.
+    if (this.o.credential.kind === 'basic') try {
       const [r] = await propfind({ url: found.principalUrl, props: { 'c:schedule-outbox-URL': {} }, depth: '0', fetch: this.request });
       const href = textOf((r?.props?.scheduleOutboxURL as { href?: unknown } | undefined)?.href);
       if (href) outbox = absolute(href, found.principalUrl);

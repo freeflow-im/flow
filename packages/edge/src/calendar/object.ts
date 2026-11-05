@@ -10,7 +10,8 @@ import { DurableObject } from 'cloudflare:workers';
 import { Hono, type Context } from 'hono';
 import { ApiError } from '../errors';
 import { decryptBlob, encryptBlob } from '../org/crypto/index';
-import { CalDav, type Discovery, type Driver, type Interval, type RemoteCalendar } from './drivers/caldav';
+import { CalDav, type Credential, type Discovery, type Driver, type Interval, type RemoteCalendar } from './drivers/caldav';
+import { googlePrincipal, refreshAccess, type GoogleClient } from './google';
 import { DAY_MS, deleteFromEvent, editEvent, newEvent, parseInstant, parseRid, respondTo, type Fields, type Scope, type WriteContext } from './ical';
 import { CalendarStore, type CalendarRow, type EventOccurrence } from './store';
 import {
@@ -24,7 +25,13 @@ export interface CalendarEnv {
   CALENDAR_ALARM?: string;
   /** `1` lets an account use http and local hosts: local dev against Radicale only (a `--var`, never in wrangler.toml). */
   CALENDAR_ALLOW_INSECURE?: string;
+  /** Google's OAuth client (the Worker's): refreshing a Google account's access token. */
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
 }
+
+/** A Google account as the callback hands it over (routes/calendar.ts): who, and the tokens the consent gave. */
+export interface GoogleGrant { email: string; displayName: string; refreshToken: string; accessToken: string; expiresAt: number }
 
 interface AccountRow {
   id: string; kind: string; email: string; display_name: string; server: string; secret: ArrayBuffer; key_id: string;
@@ -57,6 +64,8 @@ export class Calendar extends DurableObject<CalendarEnv> {
   private readonly locks = new Map<string, Promise<unknown>>();
   private syncing = false;
   private lastTouch = 0;
+  /** Google accounts' access tokens, in memory only (an hour each; a woken object refreshes). Never logged or returned. */
+  private readonly access = new Map<string, { token: string; exp: number }>();
 
   constructor(ctx: DurableObjectState, env: CalendarEnv) {
     super(ctx, env);
@@ -100,12 +109,36 @@ export class Calendar extends DurableObject<CalendarEnv> {
   }
   private me(r: AccountRow): Set<string> { return new Set([r.email.toLowerCase(), ...this.serverOf(r).addresses]); }
 
-  private driver(o: { url: string; username: string; password: string }): Driver {
-    return new CalDav({ ...o, allowInsecure: this.allowInsecure, onTime: (ms) => { const t = timing.getStore(); if (t) t.server += ms; } });
+  private driver(url: string, credential: Credential): Driver {
+    return new CalDav({ url, credential, allowInsecure: this.allowInsecure, onTime: (ms) => { const t = timing.getStore(); if (t) t.server += ms; } });
+  }
+  private googleClient(): GoogleClient {
+    if (!this.env.GOOGLE_CLIENT_ID || !this.env.GOOGLE_CLIENT_SECRET) throw calendarError(503, 'google_disabled', 'Google Calendar is not configured on this server');
+    return { clientId: this.env.GOOGLE_CLIENT_ID, clientSecret: this.env.GOOGLE_CLIENT_SECRET };
+  }
+  /** An account's credential: its password, or (Google) an access token from its sealed refresh token, kept for its hour. */
+  private credentialOf(r: AccountRow): Credential {
+    if (r.kind !== 'google') return { kind: 'basic', username: this.serverOf(r).username, password: this.password(r) };
+    const refresh = async () => {
+      try {
+        const t = await refreshAccess(this.password(r), this.googleClient());
+        this.access.set(r.id, { token: t.accessToken, exp: t.expiresAt });
+        return t.accessToken;
+      } catch (err) {
+        this.access.delete(r.id);
+        if (err instanceof ApiError && err.code === 'auth_failed') this.setStatus(r.id, 'auth_failed', err.message);
+        throw err;
+      }
+    };
+    return {
+      kind: 'bearer',
+      token: async () => { const a = this.access.get(r.id); return a && a.exp > Date.now() + 60_000 ? a.token : refresh(); },
+      refresh,
+    };
   }
   private driverOf(r: AccountRow): Driver {
     const s = this.serverOf(r);
-    return this.driver({ url: s.home || s.url, username: s.username, password: this.password(r) });
+    return this.driver(s.home || s.url, this.credentialOf(r));
   }
 
   /** The Directory's fixed window, per person here since the object is theirs. True when the attempt is allowed. */
@@ -122,7 +155,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
   private async verify(url: string, username: string, password: string): Promise<{ found: Discovery; calendars: RemoteCalendar[] }> {
     checkUrl(url, this.allowInsecure);
     if (!this.rateAllow('verify', VERIFY_LIMIT, VERIFY_WINDOW_MS)) throw calendarError(429, 'rate_limited', 'Too many sign-in attempts; try again in a few minutes');
-    const d = this.driver({ url, username, password });
+    const d = this.driver(url, { kind: 'basic', username, password });
     const found = await d.discover();
     const calendars = await d.calendars(found.home);
     return { found, calendars };
@@ -227,6 +260,47 @@ export class Calendar extends DurableObject<CalendarEnv> {
         this.store.logSync({ calendarId: c.id, at: started, ms: Date.now() - started, mode, changed, deleted, error });
       }
     });
+  }
+
+  /** An account's first sync, as far as it gets in a few seconds; the rest goes on in the background. */
+  private async firstSync(accountId: string): Promise<void> {
+    const deadline = Date.now() + FIRST_SYNC_MS;
+    const rest: string[] = [];
+    for (const cal of this.store.calendarsOf(accountId)) {
+      if (Date.now() > deadline) { rest.push(cal.id); continue; }
+      await this.syncCalendar(cal.id).catch(() => {});
+    }
+    if (rest.length) this.ctx.waitUntil((async () => { for (const r of rest) await this.syncCalendar(r).catch(() => {}); })());
+  }
+
+  /**
+   * A Google account from the OAuth callback (routes/calendar.ts, the person's own object by the state's user id): made,
+   * or, for an address already connected, its refresh token replaced (a reconnect). The principal is Google's CalDAV one
+   * for the address; discovery and the first sync run as for any account. Returns its id.
+   */
+  async connectGoogle(g: GoogleGrant): Promise<{ id: string }> {
+    const email = g.email.toLowerCase();
+    const url = googlePrincipal(email);
+    const existing = this.accountRows().find((a) => a.kind === 'google' && a.email.toLowerCase() === email);
+    const id = existing?.id ?? crypto.randomUUID();
+    this.access.set(id, { token: g.accessToken, exp: g.expiresAt });
+    const sealed = encryptBlob(Buffer.from(g.refreshToken, 'utf8'));
+    const pending: AccountRow = { id, kind: 'google', email, display_name: g.displayName || email.split('@')[0], server: JSON.stringify({ url, username: email, principal: url, home: '', addresses: [], outbox: null }), secret: new Uint8Array(sealed.blob).buffer, key_id: sealed.encKeyId, status: 'ok', status_message: null, created_at: Date.now(), calendars_at: 0 };
+    const d = this.driver(url, this.credentialOf(pending));
+    const found = await d.discover();
+    const calendars = await d.calendars(found.home);
+    const server: ServerState = { url, username: email, principal: found.principal, home: found.home, addresses: [...new Set([email, ...found.addresses])], outbox: null };
+    if (existing) {
+      this.sql.exec("UPDATE accounts SET server = ?, secret = ?, key_id = ?, status = 'ok', status_message = NULL WHERE id = ?", JSON.stringify(server), pending.secret, pending.key_id, id);
+    } else {
+      this.sql.exec('INSERT INTO accounts (id, kind, email, display_name, server, secret, key_id, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        id, 'google', email, pending.display_name, JSON.stringify(server), pending.secret, pending.key_id, 'ok', Date.now());
+    }
+    this.applyCalendars(id, calendars);
+    this.touch();
+    await this.firstSync(id);
+    await this.armAlarm().catch(() => {});
+    return { id };
   }
 
   /** Lists an account's calendars again (RELIST_MS, or now): a calendar added or removed elsewhere. */
@@ -387,20 +461,14 @@ export class Calendar extends DurableObject<CalendarEnv> {
       this.sql.exec('INSERT INTO accounts (id, kind, email, display_name, server, secret, key_id, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
         id, 'caldav', b.email, b.displayName.trim() || b.email.split('@')[0], JSON.stringify(server), new Uint8Array(sealed.blob).buffer, sealed.encKeyId, 'ok', Date.now());
       this.applyCalendars(id, calendars);
-      // The first sync, as far as it gets in a few seconds; the rest goes on in the background.
-      const deadline = Date.now() + FIRST_SYNC_MS;
-      const rest: string[] = [];
-      for (const cal of this.store.calendarsOf(id)) {
-        if (Date.now() > deadline) { rest.push(cal.id); continue; }
-        await this.syncCalendar(cal.id).catch(() => {});
-      }
-      if (rest.length) this.ctx.waitUntil((async () => { for (const r of rest) await this.syncCalendar(r).catch(() => {}); })());
+      await this.firstSync(id);
       return c.json({ account: this.toAccount(this.account(id)), calendars: this.store.calendarsOf(id).map((x) => this.toCalendar(x)) }, 201);
     });
 
     app.patch('/v1/calendar/accounts/:id', async (c) => {
       const r = this.account(c.req.param('id'));
       const b = parse(AccountPatch, await json(c));
+      if (r.kind === 'google' && (b.password !== undefined || b.server)) throw badRequest('A Google account has no password here: reconnect it with Google');
       if (b.password !== undefined || b.server) {
         const s = this.serverOf(r);
         const url = normalizeUrl(b.server?.url ?? s.url);

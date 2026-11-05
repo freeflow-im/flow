@@ -31,7 +31,9 @@ html_handling = "none"
 not_found_handling = "none"
 
 # Secrets, set with `wrangler secret put`: EDGE_ORIGIN_SECRET (the same value as /flow/EDGE_ORIGIN_SECRET on the instance),
-# EMAIL_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, GOOGLE_CLIENT_ID, APPLE_AUDIENCE.
+# EMAIL_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, GOOGLE_CLIENT_ID, APPLE_AUDIENCE; GOOGLE_CLIENT_SECRET (the same Google client's,
+# for Google Calendar's OAuth: src/calendar/google.ts; unset, Google Calendar is off). GOOGLE_REDIRECT_URL (a var) only in
+# local dev, where the callback is not the Worker's own origin.
 # Pushes (src/org/push): FLOW_PUSH_DRIVER=apns with the secrets FLOW_APNS_KEY (base64 of the .p8), FLOW_APNS_KEY_ID and
 # FLOW_APNS_TEAM_ID, the values in /flow/ on AWS; FLOW_APNS_ENV and FLOW_APNS_TOPIC are optional. Without them the dev
 # driver logs each push and Apple is never called. Huddles: LIVEKIT_API_KEY, LIVEKIT_API_SECRET and LIVEKIT_URL (/flow/

@@ -1,9 +1,10 @@
-// Connecting a calendar account (iCloud and Fastmail by their presets, any other CalDAV server by its address; Google
-// coming soon) and changing one (name, password, server, removing it), as Mail's AccountForms do for mail.
+// Connecting a calendar account (Google by signing in with Google; iCloud and Fastmail by their presets, any other CalDAV
+// server by its address) and changing one (name, password, server, a Google account's Reconnect, removing it), as Mail's
+// AccountForms do for mail.
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { AlertCircle, ExternalLink, Loader2, Trash2 } from 'lucide-react';
-import { CalendarApiError, calendarApi, type CalendarAccount, type CalendarInfo } from '../api';
+import { CalendarApiError, calendarApi, connectGoogle, type CalendarAccount, type CalendarInfo } from '../api';
 import { keys, useAddAccount } from '../hooks/calendar';
 import { cn } from '../lib/utils';
 import type { ConnectKind } from './ConnectCalendar';
@@ -12,7 +13,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input, Label } from './ui/input';
 
 const isEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim());
-const PRESETS: Record<Exclude<ConnectKind, 'other'>, { name: string; url: string; appPasswordUrl: string; placeholder: string }> = {
+const PRESETS: Record<'icloud' | 'fastmail', { name: string; url: string; appPasswordUrl: string; placeholder: string }> = {
   icloud: { name: 'iCloud', url: 'https://caldav.icloud.com/', appPasswordUrl: 'https://account.apple.com/account/manage', placeholder: 'you@icloud.com' },
   fastmail: { name: 'Fastmail', url: 'https://caldav.fastmail.com/', appPasswordUrl: 'https://app.fastmail.com/settings/security/apps', placeholder: 'you@fastmail.com' },
 };
@@ -61,18 +62,27 @@ export function AddAccountDialog({ kind: initialKind, defaultName, onClose, onAd
   const [password, setPassword] = useState('');
   const [url, setUrl] = useState('');
   const [username, setUsername] = useState('');
-  const [google, setGoogle] = useState<string | null>(null);
-  const preset = kind === 'other' ? null : PRESETS[kind];
+  const [note, setNote] = useState<string | null>(null);
+  const preset = kind === 'icloud' || kind === 'fastmail' ? PRESETS[kind] : null;
+  const [leaving, setLeaving] = useState<string | null>(null);
+  const signInWithGoogle = async () => {
+    setLeaving('');
+    try {
+      await connectGoogle(isEmail(email) ? email.trim() : undefined);
+    } catch (e) {
+      setLeaving(e instanceof Error ? e.message : String(e));
+    }
+  };
   const add = useAddAccount(onAdded);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!isEmail(email) || !password) return;
-    setGoogle(null);
+    setNote(null);
     if (kind === 'other' && !url.trim()) {
       // An address with a preset needs no URL (the server knows it); any other needs one.
       const p = await calendarApi.provider(email.trim()).catch(() => null);
-      if (p && 'google' in p) return setGoogle(p.note);
-      if (!p) { setGoogle('Enter the server address of your calendar.'); document.getElementById('cal-url')?.focus(); return; }
+      if (p && 'google' in p) { setKind('google'); return; }
+      if (!p) { setNote('Enter the server address of your calendar.'); document.getElementById('cal-url')?.focus(); return; }
     }
     add.mutate({ email: email.trim(), displayName: displayName.trim(), password, server: preset ? { url: preset.url } : url.trim() ? { url: url.trim(), ...(username.trim() ? { username: username.trim() } : {}) } : undefined });
   };
@@ -87,8 +97,18 @@ export function AddAccountDialog({ kind: initialKind, defaultName, onClose, onAd
           {(['icloud', 'fastmail', 'other'] as const).map((k) => (
             <button key={k} type="button" role="tab" aria-selected={kind === k} onClick={() => setKind(k)} className={cn('flex-1 whitespace-nowrap rounded-md px-2 py-1.5', kind === k ? 'bg-white font-medium shadow-sm' : 'text-muted')}>{k === 'other' ? 'Other CalDAV' : PRESETS[k].name}</button>
           ))}
-          <button type="button" role="tab" aria-selected={false} disabled title="Coming soon" className="flex-1 cursor-not-allowed whitespace-nowrap rounded-md px-2 py-1.5 text-faint">Google</button>
+          <button type="button" role="tab" aria-selected={kind === 'google'} onClick={() => setKind('google')} className={cn('flex-1 whitespace-nowrap rounded-md px-2 py-1.5', kind === 'google' ? 'bg-white font-medium shadow-sm' : 'text-muted')}>Google</button>
         </div>
+        {kind === 'google' ? (
+          <div className="flex flex-col gap-4">
+            <p className="text-[14px] leading-relaxed text-muted">Sign in with Google and allow FreeFlow to see and change your calendars. You come back here when it is done; there is no password to type.</p>
+            {leaving && <p role="alert" className="rounded-lg border border-warn-border bg-warn-bg px-3 py-2 text-[14px]">{leaving}</p>}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+              <Button type="button" onClick={() => void signInWithGoogle()} disabled={leaving === ''}>{leaving === '' && <Loader2 className="animate-spin" />}Sign in with Google</Button>
+            </DialogFooter>
+          </div>
+        ) : (
         <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-4">
           <Field label={kind === 'icloud' ? 'Apple Account email' : 'Email address'} htmlFor="cal-email" hint="Events you create are organized by this address.">
             <Input id="cal-email" type="email" autoFocus autoComplete="email" placeholder={preset?.placeholder ?? 'you@example.com'} value={email} onChange={(e) => setEmail(e.target.value)} />
@@ -107,13 +127,14 @@ export function AddAccountDialog({ kind: initialKind, defaultName, onClose, onAd
           <Field label="Password" htmlFor="cal-password" hint={<PasswordHint name={preset?.name ?? null} url={preset?.appPasswordUrl ?? null} />}>
             <Input id="cal-password" type="password" autoComplete="off" value={password} onChange={(e) => setPassword(e.target.value)} aria-invalid={add.error instanceof CalendarApiError && add.error.code === 'auth_failed'} />
           </Field>
-          {google && <p role="alert" className="rounded-lg border border-warn-border bg-warn-bg px-3 py-2 text-[14px]">{google}</p>}
+          {note && <p role="alert" className="rounded-lg border border-warn-border bg-warn-bg px-3 py-2 text-[14px]">{note}</p>}
           <ErrorBox error={add.error} />
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose} disabled={add.isPending}>Cancel</Button>
             <Button type="submit" disabled={!isEmail(email) || !password || add.isPending}>{add.isPending && <Loader2 className="animate-spin" />}{add.isPending ? 'Connecting…' : 'Connect'}</Button>
           </DialogFooter>
         </form>
+        )}
       </DialogContent>
     </Dialog>
   );
@@ -175,12 +196,18 @@ function AccountEditor({ account, focusPassword, onRemoved }: { account: Calenda
     <form className="flex flex-col gap-4" onSubmit={(e) => { e.preventDefault(); setSaved(false); if (dirty) save.mutate(); }}>
       {account.status !== 'ok' && (
         <div className="rounded-lg border border-warn-border bg-warn-bg p-3 text-[14px]">
-          <b>{account.status === 'auth_failed' ? 'The calendar server stopped accepting the password.' : 'The calendar server could not be reached.'}</b>
+          <b>{account.status === 'auth_failed' ? (account.kind === 'google' ? 'Google stopped giving FreeFlow access to this calendar.' : 'The calendar server stopped accepting the password.') : 'The calendar server could not be reached.'}</b>
           {account.statusMessage && <div className="mt-0.5 text-muted">{account.statusMessage}</div>}
         </div>
       )}
       <Field label="Email address" htmlFor="edit-email"><Input id="edit-email" value={account.email} disabled /></Field>
       <Field label="Your name" htmlFor="edit-name"><Input id="edit-name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} /></Field>
+      {account.kind === 'google' ? (
+        <div className="flex flex-wrap items-center gap-3 text-[14px] text-muted">
+          <span className="min-w-0 flex-1">Connected by signing in with Google. If Google stops giving FreeFlow access, sign in again.</span>
+          <Button type="button" variant={account.status === 'auth_failed' ? 'default' : 'outline'} size="sm" onClick={() => void connectGoogle(account.email)}>Reconnect</Button>
+        </div>
+      ) : (<>
       <Field label={account.status === 'auth_failed' ? 'Password (enter it again)' : 'New password'} htmlFor="edit-password" hint={<PasswordHint name={null} url={null} />}>
         <Input id="edit-password" type="password" autoComplete="off" autoFocus={focusPassword} placeholder={account.status === 'auth_failed' ? '' : 'Leave empty to keep the current one'} value={password} onChange={(e) => setPassword(e.target.value)} />
       </Field>
@@ -188,6 +215,7 @@ function AccountEditor({ account, focusPassword, onRemoved }: { account: Calenda
         <Field label="Server address" htmlFor="edit-url"><Input id="edit-url" value={url} onChange={(e) => setUrl(e.target.value)} /></Field>
         <Field label="User name" htmlFor="edit-user"><Input id="edit-user" value={username} onChange={(e) => setUsername(e.target.value)} /></Field>
       </div>
+      </>)}
       <ErrorBox error={save.error ?? remove.error} />
       {saved && !dirty && <div className="text-[14px] text-[#1e8e3e]">Saved.</div>}
       <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center">

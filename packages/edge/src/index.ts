@@ -41,6 +41,10 @@ export interface Env extends ProxyEnv, AuthEnv {
   CALENDAR: DurableObjectNamespace<import('./calendar/object').Calendar>;
   /** `1` in local dev only: calendar accounts may then use http and local hosts (Radicale). Never set in production. */
   CALENDAR_ALLOW_INSECURE?: string;
+  /** Google Calendar's OAuth client secret (with GOOGLE_CLIENT_ID). A secret; unset turns Google Calendar off. */
+  GOOGLE_CLIENT_SECRET?: string;
+  /** The OAuth callback's address when it is not the Worker's own origin (local dev). */
+  GOOGLE_REDIRECT_URL?: string;
   /** Seals Chat's messages and files, and the passwords of mail and calendar accounts (org/crypto). A secret. */
   FLOW_DATA_KEY?: string;
 }

@@ -118,6 +118,8 @@ const query = (params: Record<string, string | number | undefined | null>) => {
 
 export const calendarApi = {
   provider: (email: string) => request<Provider>('GET', `/v1/calendar/providers${query({ email })}`),
+  /** Google's consent page for connecting (or reconnecting) a Google Calendar account; the callback comes back to `returnTo`. */
+  googleStart: async (returnTo: string, email?: string) => (await request<{ url: string }>('GET', `/v1/calendar/google/start${query({ return: returnTo, email })}`)).url,
   accounts: async () => (await request<{ accounts: CalendarAccount[] }>('GET', '/v1/calendar/accounts')).accounts,
   addAccount: (body: NewAccount) => request<{ account: CalendarAccount; calendars: CalendarInfo[] }>('POST', '/v1/calendar/accounts', body),
   updateAccount: async (id: string, patch: Partial<Pick<NewAccount, 'displayName' | 'password' | 'server'>>) => (await request<{ account: CalendarAccount }>('PATCH', `/v1/calendar/accounts/${enc(id)}`, patch)).account,
@@ -143,3 +145,21 @@ export const calendarApi = {
     }
   },
 };
+
+/** Leaves for Google's consent page; it comes back to this page with `?connected=<id>` or `?error=<code>`. */
+export async function connectGoogle(email?: string): Promise<void> {
+  window.location.assign(await calendarApi.googleStart(`${window.location.origin}${import.meta.env.BASE_URL}`, email));
+}
+
+/** What a `?error=` from Google's callback means to the person. */
+export function googleErrorText(code: string): string {
+  return ({
+    access_denied: 'Google Calendar was not connected: the access was declined.',
+    scope_denied: 'Google Calendar was not connected: FreeFlow needs access to your calendars. Try again and leave that box ticked.',
+    expired: 'That Google sign-in took too long or was already used. Try again.',
+    google_disabled: 'Google Calendar is not set up on this server yet.',
+    no_refresh_token: 'Google did not give FreeFlow lasting access. Try again.',
+    auth_failed: 'Google did not accept the sign-in. Try again.',
+    connect_failed: 'Could not reach Google Calendar. Try again in a moment.',
+  } as Record<string, string>)[code] ?? 'Google Calendar could not be connected. Try again.';
+}

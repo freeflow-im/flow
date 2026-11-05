@@ -1,7 +1,7 @@
 # @flow/calendar — FreeFlow Calendar
 
-The suite's calendar, served at `/calendar`. People connect the calendars they already have (iCloud and Fastmail with an
-app password, any CalDAV server by its address; Google later) and see them overlaid in day, week, month and agenda views,
+The suite's calendar, served at `/calendar`. People connect the calendars they already have (Google by signing in with Google,
+iCloud and Fastmail with an app password, any CalDAV server by its address) and see them overlaid in day, week, month and agenda views,
 and create, move, edit and delete events, repeating ones too. The client only talks to the edge Worker's `/v1/calendar/*`
 API (`packages/edge/src/routes/calendar.ts`, the contract in `docs/specs/calendar.md` §4); the Worker's Calendar object
 holds the credentials, keeps a copy of every calendar and expands repeating events.
@@ -28,7 +28,7 @@ holds the credentials, keeps a copy of every calendar and expands repeating even
 
 - `pnpm --filter @flow/calendar dev:mock` — no server: sample calendars in `mock/` (`CALENDAR_MOCK=empty` for none; in Add
   account the password `wrong` is refused, a server address with `bad` cannot be reached, `stale` connects an account
-  whose password then stops working).
+  whose password then stops working; Google's consent is skipped, and `denied@gmail.com` is refused).
 - `pnpm --filter @flow/calendar dev` — proxies `/v1` to `CALENDAR_API` (default `http://127.0.0.1:8787`): the edge
   Worker's `wrangler dev` with `--var CALENDAR_ALLOW_INSECURE:1` and Radicale, as `packages/edge/test/e2e-calendar.mjs`
   says; sign in on the Worker and set its `sid` cookie for the dev server's origin.

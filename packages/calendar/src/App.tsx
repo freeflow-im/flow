@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { addHours, startOfHour } from 'date-fns';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { openSuiteSearch } from '@flow/suite-bar';
-import { CalendarApiError, calendarApi, type EventOccurrence, type Response, type Scope } from './api';
+import { CalendarApiError, calendarApi, connectGoogle, googleErrorText, type EventOccurrence, type Response, type Scope } from './api';
 import { AccountSettingsDialog, AddAccountDialog } from './components/AccountForms';
 import { CalendarGrid } from './components/CalendarGrid';
 import { CalendarSuiteBar } from './components/CalendarSuiteBar';
@@ -64,6 +64,18 @@ export function App() {
     const t = setTimeout(() => setToast(null), 6000);
     return () => clearTimeout(t);
   }, [toast]);
+
+  // Back from Google's consent (routes/calendar.ts): `?connected=<id>` or `?error=<code>`, said once and taken off the address.
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const connected = q.get('connected'), error = q.get('error');
+    if (!connected && !error) return;
+    setToast(connected ? 'Google Calendar connected. Your events are on their way.' : googleErrorText(error ?? ''));
+    q.delete('connected');
+    q.delete('error');
+    history.replaceState(null, '', `${window.location.pathname}${q.size ? `?${q}` : ''}`);
+  }, []);
+  const startGoogle = (email?: string) => void connectGoogle(email).catch((e: unknown) => setToast(errorText(e)));
 
   // The address follows the view; back and forward move it.
   const navigate = useCallback((next: Partial<Place>, replace = false) => {
@@ -169,7 +181,7 @@ export function App() {
       {accounts.isPending ? (
         <div className="flex flex-1 items-center justify-center text-muted"><Loader2 className="size-5 animate-spin" /></div>
       ) : none ? (
-        <ConnectCalendar onAdd={(k) => setDialog({ kind: 'add', connect: k })} />
+        <ConnectCalendar onAdd={(k) => (k === 'google' ? startGoogle() : setDialog({ kind: 'add', connect: k }))} />
       ) : (
         <div className="flex min-h-0 flex-1">
           {!narrow && <aside className="w-64 shrink-0 border-r border-hairline">{sidebar}</aside>}
@@ -177,8 +189,12 @@ export function App() {
             {broken.map((a) => (
               <div key={a.id} role="alert" className="flex shrink-0 items-center gap-3 border-b border-warn-border bg-warn-bg px-4 py-2 text-[14px]">
                 <AlertTriangle className="size-4 shrink-0 text-[#b06000]" />
-                <span className="min-w-0 flex-1">{a.status === 'auth_failed' ? `${a.email}: the calendar server stopped accepting the password.` : `${a.email}: the calendar server could not be reached.`}</span>
-                <button type="button" className="shrink-0 font-medium text-primary hover:underline" onClick={() => setDialog({ kind: 'settings', accountId: a.id, focusPassword: a.status === 'auth_failed' })}>{a.status === 'auth_failed' ? 'Re-enter password' : 'Check settings'}</button>
+                <span className="min-w-0 flex-1">{a.status === 'auth_failed' ? (a.kind === 'google' ? `${a.email}: Google stopped giving FreeFlow access to this calendar.` : `${a.email}: the calendar server stopped accepting the password.`) : `${a.email}: the calendar server could not be reached.`}</span>
+                {a.kind === 'google' && a.status === 'auth_failed' ? (
+                  <button type="button" className="shrink-0 font-medium text-primary hover:underline" onClick={() => startGoogle(a.email)}>Reconnect</button>
+                ) : (
+                  <button type="button" className="shrink-0 font-medium text-primary hover:underline" onClick={() => setDialog({ kind: 'settings', accountId: a.id, focusPassword: a.status === 'auth_failed' })}>{a.status === 'auth_failed' ? 'Re-enter password' : 'Check settings'}</button>
+                )}
               </div>
             ))}
             {search ? (

@@ -20,11 +20,11 @@ const PROVIDERS: { domains: string[]; provider: Provider }[] = [
 ];
 const GOOGLE = ['gmail.com', 'googlemail.com'];
 
-/** `GET /v1/calendar/providers?email=`: a preset (with the address as the username), Google's "not yet", or null. */
+/** `GET /v1/calendar/providers?email=`: a preset (with the address as the username), `google` (sign in with Google), or null. */
 export function providerFor(email: string): (Provider & { username: string }) | { google: true; note: string } | null {
   const domain = email.trim().toLowerCase().split('@')[1];
   if (!domain) return null;
-  if (GOOGLE.includes(domain)) return { google: true, note: 'Google Calendar is coming soon: it needs signing in with Google, not a password.' };
+  if (GOOGLE.includes(domain)) return { google: true, note: 'Google Calendar connects by signing in with Google, not with a password.' };
   const found = PROVIDERS.find((p) => p.domains.includes(domain));
   return found ? { ...found.provider, username: email.trim() } : null;
 }

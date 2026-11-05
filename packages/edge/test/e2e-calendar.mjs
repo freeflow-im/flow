@@ -9,7 +9,8 @@
 //     --var CALENDAR_ALLOW_INSECURE:1 > /tmp/edge-calendar.log 2>&1 &
 //   node test/e2e-calendar.mjs /tmp/edge-calendar.log
 // Restart wrangler after editing the server: its hot reload has served a stale bundle. It reads signup links from the
-// Worker's log (local mail goes there), and checks the timing lines there too. The calendars are made, and some events put,
+// Worker's log (local mail goes there), and checks the timing lines there too. Google Calendar is not covered here (no
+// Google in Docker) beyond its routes' refusals; its flow is unit-tested and verified by hand (docs/specs/calendar.md §12). The calendars are made, and some events put,
 // straight into Radicale (MKCALENDAR and PUT from here), as another calendar app would. The last part waits for the
 // object's own alarm (every 60 s while the person is active) to pick up an event put straight into Radicale: about a minute.
 import fs from 'node:fs';
@@ -30,7 +31,12 @@ t('sign up',A.token&&Bo.token);
 
 let r=await api(null,'GET','/v1/calendar/accounts');t('no session refused',r.s===401,r.s);
 r=await api(A.token,'GET','/v1/calendar/providers?email=someone@icloud.com');t('an iCloud preset',r.s===200&&r.j?.name==='iCloud'&&r.j.url==='https://caldav.icloud.com/'&&r.j.username==='someone@icloud.com'&&!!r.j.appPasswordUrl,JSON.stringify(r.j));
-r=await api(A.token,'GET','/v1/calendar/providers?email=someone@gmail.com');t('Google says not yet',r.j?.google===true&&/coming soon/.test(r.j.note),JSON.stringify(r.j));
+r=await api(A.token,'GET','/v1/calendar/providers?email=someone@gmail.com');t('Google: sign in with Google',r.j?.google===true&&/signing in with Google/.test(r.j.note),JSON.stringify(r.j));
+// Google itself cannot be in the e2e (no Google in Docker): its consent and token exchange are unit-tested (google.test.ts).
+// What can be checked here: the start needs a session, and a callback with a forged state goes back with ?error=expired.
+r=await api(null,'GET','/v1/calendar/google/start');t('Google: the start needs a session',r.s===401,r.s);
+r=await api(A.token,'GET','/v1/calendar/google/start');t('Google: the start answers a consent URL, or google_disabled with no client secret',(r.s===200&&r.j.url?.startsWith('https://accounts.google.com/'))||(r.s===503&&r.j.error?.code==='google_disabled'),r.s+' '+String(r.j.url??JSON.stringify(r.j)).slice(0,60));
+let cb=await fetch(B+'/v1/calendar/google/callback?code=x&state=forged',{redirect:'manual'});t('Google: a forged state goes back with ?error=expired',cb.status===302&&/[?&]error=expired/.test(cb.headers.get('location')??''),cb.status+' '+cb.headers.get('location'));
 r=await api(A.token,'GET','/v1/calendar/providers?email=me@example.com');t('no preset for an unknown domain',r.s===200&&r.j===null,JSON.stringify(r.j));
 r=await api(A.token,'GET','/v1/calendar/accounts');t('no accounts yet',r.s===200&&r.j.accounts?.length===0,JSON.stringify(r.j));
 r=await api(A.token,'GET','/v1/calendar/calendars');t('no calendars yet',r.j.calendars?.length===0);

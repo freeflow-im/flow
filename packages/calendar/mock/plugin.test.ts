@@ -30,4 +30,17 @@ describe('the mock calendar API', () => {
     expect((await empty('GET', new URL('http://mock/v1/calendar/accounts'), undefined)).json).toEqual({ accounts: [] });
     await expect(empty('POST', new URL('http://mock/v1/calendar/accounts'), { email: 'a@b.c', displayName: '', password: 'wrong' })).rejects.toThrow(/refused/);
   });
+
+  it('connects a Google account by the skipped consent, with a read-only holidays calendar, and returns there', async () => {
+    const api = createMockApi(true);
+    const r = await api('GET', new URL('http://mock/v1/calendar/google/start?return=http%3A%2F%2Flocalhost%3A5186%2Fcalendar%2F'), undefined);
+    const back = new URL((r.json as { url: string }).url);
+    expect(back.origin + back.pathname).toBe('http://localhost:5186/calendar/');
+    const id = back.searchParams.get('connected');
+    const cals = ((await api('GET', new URL('http://mock/v1/calendar/calendars'), undefined)).json as { calendars: { accountId: string; role: string; isDefault: boolean }[] }).calendars;
+    expect(cals.filter((c) => c.accountId === id).map((c) => [c.role, c.isDefault])).toEqual([['owner', true], ['reader', false]]);
+    const denied = await api('GET', new URL('http://mock/v1/calendar/google/start?email=denied%40gmail.com'), undefined);
+    expect((denied.json as { url: string }).url).toContain('error=access_denied');
+  });
 });
+
