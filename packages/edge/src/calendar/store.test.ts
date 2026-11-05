@@ -160,5 +160,10 @@ describe('CalendarStore', () => {
     expect(store.calendars().filter((c) => c.is_default).map((c) => c.id)).toEqual(['b']);
     store.ensureDefault('a');
     expect(store.calendars().filter((c) => c.is_default).map((c) => c.id)).toEqual(['b']);
+    // A calendar shared by someone else (a writer) is not chosen over one's own.
+    calendarRow(sql, 'c');
+    sql.exec(`UPDATE calendars SET role = 'writer', is_default = 0 WHERE id = 'b'`);
+    store.ensureDefault();
+    expect(store.calendars().filter((c) => c.is_default).map((c) => c.id)).toEqual(['c']);
   });
 });

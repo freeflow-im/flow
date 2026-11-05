@@ -34,7 +34,9 @@ native and desktop clients.
    session.
 2. **v1 is the CalDAV driver only** (ruled 2026-11-04). **Amended the same day: Google comes in PR 1 through the CalDAV
    driver with an OAuth credential** (the cheapest choice below: no second driver), since Google is the calendar there is to
-   test with; the REST driver stays a later option (§8). As built: §12. What follows was the reasoning. Google needs OAuth either way: Google's own CalDAV
+   test with; the REST driver stays a later option (§8). As built: §12. Google's CalDAV exposes only the calendars ticked at
+   https://calendar.google.com/calendar/syncselect (Sync settings): a calendar shared into the account (a work calendar) is off
+   there by default, and Birthdays is never exposed; the client says so (§12). What follows was the reasoning. Google needs OAuth either way: Google's own CalDAV
    endpoint (`apidata.googleusercontent.com/caldav/v2/`) refuses Basic auth and app passwords, supports ctag and sync-collection
    but has no free/busy lookup and only a stub of scheduling. So the later Google PR is a choice between the CalDAV driver with an
    OAuth credential (cheapest: no second driver) and the REST API (free/busy for find-free-time, `sendUpdates`, conference data,
@@ -320,14 +322,16 @@ its e2e green.
   whose etag differs from ours are fetched by `calendar-multiget` in batches of 50; 404s dropped); without one, or when the
   server forgot it (403/409 valid-sync-token), the token and ctag first, then (unless the ctag is unchanged on a server
   without sync-collection) every VEVENT's etag by `calendar-query` against `objects`. The calendars of each account are listed
-  again every 10 minutes (one added or removed elsewhere). `sync_runs` keeps the last 200 runs (`GET …/debug/sync`).
+  again every 15 minutes (one added or removed elsewhere; 2026-11-04, was 10), and at once by `POST …/accounts/:id/refresh` →
+  `{ calendars, added, removed }`, the new ones synced as far as 8 s go (the account dialog's Refresh calendars). `sync_runs` keeps the last 200 runs (`GET …/debug/sync`).
 - **The alarm**: every 60 s while the person made a request in the last 10 minutes, every 10 minutes within a day, then none
   until the next request (`rules.ts` `nextAlarmAt`); a run takes the calendars due, sync-collection first, within 10 s. A
   write syncs its calendar in the background right after. `CALENDAR_ALARM = "off"` is the kill switch, as `MAIL_ALARM`.
 - **Accounts**: `server` JSON holds the URL and username as typed and what discovery found (principal, calendar home,
   `calendar-user-address-set`, the scheduling outbox); the password is sealed (`secret`, `key_id`). The account's addresses
   make an attendee `self` and pick the ORGANIZER of an event made here. Roles: `owner` when the privilege set allows writing,
-  else `reader` (`writer` for calendars shared with the person is not told apart yet).
+  else `reader`; since 2026-11-04 a writable calendar whose `DAV:owner` is another principal is `writer` (the client edits
+  it as its own; the default calendar prefers an `owner` one).
 - **Timing**: `[calendar] GET /v1/calendar/events 200 4ms (server 0ms)`, ids replaced (`/events/:id`, `/accounts/:id`,
   `/calendars/:id`); the alarm logs `[calendar] sync: <n> calendars <ms>ms`. The header is dropped unless
   `CALENDAR_ALLOW_INSECURE=1`, where the e2e reads it.
@@ -421,3 +425,16 @@ its e2e green.
      the app's publishing status is **Testing**, add each person who will connect (scottp@biztrip.ai and the Google address of
      the calendar) under **Audience → Test users**. The scope is sensitive: anyone else gets "access blocked" until the app is
      verified (§8). In Testing, Google also expires refresh tokens after 7 days, so a test account needs Reconnect weekly.
+- **Found on a real account (2026-11-04)**:
+  - *One missing event failed a whole calendar.* On a calendar shared by another person (`…/caldav/v2/andrea…%40gmail.com/events/`),
+    Google's calendar-query listed ~3200 events with etags, but its calendar-multiget answered 404 for one of them. tsdav's
+    `calendarQuery` and `calendarMultiGet` throw when any single entry is not 200 ("Collection query failed: 404 Not Found"), so
+    the full sync failed with nothing stored. The href was not at fault (`%40` and the trailing slash go back exactly as Google
+    gave them), nor sync-collection or the query itself. The driver now sends both REPORTs through tsdav's `davRequest` and
+    reads the multistatus entry by entry (`CalDav.report`): only the request failing as a whole is an error; an object that is
+    not there is left out, and asked for again at the next full sync.
+  - *Roles on Google.* Every Google calendar names itself as its owner (`…/<calendar-id>/user`), whether the person made it or
+    another person shared it, so only the primary calendar (the account's own principal) is `owner`; every other writable one is
+    `writer`, and subscribed ones (holidays, a read-only shared calendar) `reader`.
+  - *Which calendars.* Only those ticked in Google's Sync settings; the Connect page's Google row and a Google account's dialog
+    say so with the link, and Refresh calendars picks up one ticked since.

@@ -151,8 +151,8 @@ export const IDLE_CADENCE_MS = 10 * 60_000;
 export const IDLE_STOP_MS = 24 * 60 * 60_000;
 /** One alarm run may spend this long syncing; what is left waits for the next. */
 export const SYNC_BUDGET_MS = 10_000;
-/** An account's list of calendars is read again this often (a calendar added or removed elsewhere). */
-export const RELIST_MS = 10 * 60_000;
+/** An account's list of calendars is read again this often (a calendar added, ticked at Google, or removed elsewhere). */
+export const RELIST_MS = 15 * 60_000;
 
 /** How often the alarm runs now, from the person's last request; null: not at all. */
 export function cadenceMs(lastActiveAt: number, now: number): number | null {

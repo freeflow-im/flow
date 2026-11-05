@@ -1,6 +1,7 @@
 // The page before any calendar is connected: Google (signing in with Google), iCloud and Fastmail (with an app password),
 // and any other CalDAV server by its address.
-import { CalendarDays, Lock, Server } from 'lucide-react';
+import { CalendarDays, ExternalLink, Lock, Server } from 'lucide-react';
+import { GOOGLE_SYNC_SETTINGS } from '../api';
 
 export type ConnectKind = 'icloud' | 'fastmail' | 'other' | 'google';
 const OPTIONS: { kind: ConnectKind; name: string; note: string }[] = [
@@ -22,6 +23,13 @@ export function ConnectCalendar({ onAdd }: { onAdd(kind: ConnectKind): void }) {
         <ul className="flex flex-col gap-2 text-left">
           {OPTIONS.map((o) => (
             <li key={o.kind}>
+              {o.kind === 'google' && (
+                <p className="mb-1.5 px-1 text-[12px] leading-snug text-muted">
+                  Google shares only the calendars ticked in its{' '}
+                  <a href={GOOGLE_SYNC_SETTINGS} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 text-primary hover:underline">Sync settings <ExternalLink className="size-3" /></a>
+                  : calendars shared with you, such as a work calendar, are off there until you tick them.
+                </p>
+              )}
               <button type="button" onClick={() => onAdd(o.kind)} className="flex w-full items-center justify-between rounded-xl border border-hairline px-4 py-3 text-left hover:bg-hover">
                 <span className="shrink-0 whitespace-nowrap font-medium text-ink">{o.name}</span>
                 <span className="ml-3 text-right text-[13px] text-muted">{o.note}</span>

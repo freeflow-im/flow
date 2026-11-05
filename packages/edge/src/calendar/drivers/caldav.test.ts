@@ -173,5 +173,39 @@ END:VCALENDAR</C:calendar-data></C:response><C:response><C:recipient><D:href>mai
       credential: { kind: 'bearer', token: async () => 'old', refresh: async () => { throw new ApiError(422, 'auth_failed', 'reconnect'); } } });
     expect(await codeOf(refused.discover())).toBe('auth_failed');
   });
+
+  it('leaves out an event the multiget says is not there, and fails only when the whole request does', async () => {
+    const cal = 'https://dav.example.com/andrea/events/';
+    let down = false;
+    const { fetchFn, seen } = fakeServer({
+      'REPORT /andrea/events/': ({ body }) => {
+        if (down) return new Response('gone', { status: 404, headers: { 'content-type': 'text/plain' } });
+        if (body.includes('calendar-query')) return xml(response('/andrea/events/a%40google.com.ics', '<d:getetag>"1"</d:getetag>') + response('/andrea/events/b.ics', '<d:getetag>"2"</d:getetag>'));
+        // As Google: the second event, listed above, is 404 when asked for.
+        return xml(response('/andrea/events/a%40google.com.ics', `<d:getetag>"1"</d:getetag><c:calendar-data>${EVENT}</c:calendar-data>`) + '<d:response><d:href>/andrea/events/b.ics</d:href><d:status>HTTP/1.1 404 Not Found</d:status></d:response>');
+      },
+    });
+    const d = client(fetchFn);
+    const etags = await d.etags(cal);
+    expect(etags.map((e) => e.href)).toEqual(['https://dav.example.com/andrea/events/a%40google.com.ics', 'https://dav.example.com/andrea/events/b.ics']);
+    const got = await d.get(cal, etags.map((e) => e.href));
+    expect(got.map((o) => o.href)).toEqual(['https://dav.example.com/andrea/events/a%40google.com.ics']);
+    // The href goes as the server gave it: %40 stays %40.
+    expect(seen.at(-1)!.body).toContain('<d:href>/andrea/events/a%40google.com.ics</d:href>');
+    down = true;
+    expect(await codeOf(d.etags(cal))).toBe('connect_failed');
+    expect(await codeOf(d.get(cal, ['https://dav.example.com/andrea/events/b.ics']))).toBe('connect_failed');
+  });
+
+  it('tells the person\'s own calendars (owner) from those shared with them (writer) and read-only ones (reader)', async () => {
+    const write = '<d:current-user-privilege-set><d:privilege><d:read/></d:privilege><d:privilege><d:write/></d:privilege></d:current-user-privilege-set>';
+    const cal = (path: string, name: string, owner: string, privileges: string) => response(path, `<d:resourcetype><d:collection/><c:calendar/></d:resourcetype><d:displayname>${name}</d:displayname><d:owner><d:href>${owner}</d:href></d:owner><c:supported-calendar-component-set><c:comp name="VEVENT"/></c:supported-calendar-component-set>${privileges}`);
+    const { fetchFn } = fakeServer({
+      'PROPFIND /caldav/v2/scott/': () => xml(cal('/caldav/v2/scott/events/', 'Scott', '/caldav/v2/scott/user', write) + cal('/caldav/v2/andrea/events/', 'Andrea', '/caldav/v2/andrea/user', write)
+        + cal('/caldav/v2/holidays/events/', 'Holidays', '/caldav/v2/holidays/user', '<d:current-user-privilege-set><d:privilege><d:read/></d:privilege></d:current-user-privilege-set>')),
+    });
+    const cals = await client(fetchFn).calendars('https://dav.example.com/caldav/v2/scott/', 'https://dav.example.com/caldav/v2/scott/user');
+    expect(cals.map((c) => [c.name, c.role])).toEqual([['Scott', 'owner'], ['Andrea', 'writer'], ['Holidays', 'reader']]);
+  });
 });
 

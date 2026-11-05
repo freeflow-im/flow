@@ -134,6 +134,8 @@ export const calendarApi = {
   accounts: async () => (await request<{ accounts: CalendarAccount[] }>('GET', '/v1/calendar/accounts')).accounts,
   addAccount: (body: NewAccount) => request<{ account: CalendarAccount; calendars: CalendarInfo[] }>('POST', '/v1/calendar/accounts', body),
   updateAccount: async (id: string, patch: Partial<Pick<NewAccount, 'displayName' | 'password' | 'server'>>) => (await request<{ account: CalendarAccount }>('PATCH', `/v1/calendar/accounts/${enc(id)}`, patch)).account,
+  /** Lists the account's calendars again now (one ticked or added elsewhere since). */
+  refreshAccount: (id: string) => request<{ calendars: CalendarInfo[]; added: number; removed: number }>('POST', `/v1/calendar/accounts/${enc(id)}/refresh`),
   removeAccount: (id: string) => request<{ ok: true }>('DELETE', `/v1/calendar/accounts/${enc(id)}`),
   calendars: async () => (await request<{ calendars: CalendarInfo[] }>('GET', '/v1/calendar/calendars')).calendars,
   updateCalendar: async (id: string, patch: { hidden?: boolean; color?: string | null; isDefault?: true }) => (await request<{ calendar: CalendarInfo }>('PATCH', `/v1/calendar/calendars/${enc(id)}`, patch)).calendar,
@@ -158,6 +160,9 @@ export const calendarApi = {
 };
 
 /** Leaves for Google's consent page; it comes back to this page with `?connected=<id>` or `?error=<code>`. */
+/** Where a Google account chooses which calendars it shares (others' calendars are off there by default; Birthdays never). */
+export const GOOGLE_SYNC_SETTINGS = 'https://calendar.google.com/calendar/syncselect';
+
 export async function connectGoogle(email?: string): Promise<void> {
   window.location.assign(await calendarApi.googleStart(`${window.location.origin}${import.meta.env.BASE_URL}`, email));
 }

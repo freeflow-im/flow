@@ -3,8 +3,8 @@
 // AccountForms do for mail.
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { AlertCircle, ExternalLink, Loader2, Trash2 } from 'lucide-react';
-import { CalendarApiError, calendarApi, connectGoogle, type CalendarAccount, type CalendarInfo } from '../api';
+import { AlertCircle, ExternalLink, Loader2, RefreshCw, Trash2 } from 'lucide-react';
+import { CalendarApiError, GOOGLE_SYNC_SETTINGS, calendarApi, connectGoogle, type CalendarAccount, type CalendarInfo } from '../api';
 import { keys, useAddAccount } from '../hooks/calendar';
 import { cn } from '../lib/utils';
 import type { ConnectKind } from './ConnectCalendar';
@@ -183,6 +183,15 @@ function AccountEditor({ account, focusPassword, onRemoved }: { account: Calenda
       setSaved(true);
     },
   });
+  const [refreshed, setRefreshed] = useState<string | null>(null);
+  const refresh = useMutation({
+    mutationFn: () => calendarApi.refreshAccount(account.id),
+    onSuccess: (r) => {
+      qc.setQueryData<CalendarInfo[]>(keys.calendars, (old) => [...(old ?? []).filter((c) => c.accountId !== account.id), ...r.calendars]);
+      void qc.invalidateQueries({ queryKey: ['calendar'] });
+      setRefreshed(r.added || r.removed ? `${r.added} added, ${r.removed} removed.` : 'No new calendars.');
+    },
+  });
   const remove = useMutation({
     mutationFn: () => calendarApi.removeAccount(account.id),
     onSuccess: () => {
@@ -206,6 +215,11 @@ function AccountEditor({ account, focusPassword, onRemoved }: { account: Calenda
         <div className="flex flex-wrap items-center gap-3 text-[14px] text-muted">
           <span className="min-w-0 flex-1">Connected by signing in with Google. If Google stops giving FreeFlow access, sign in again.</span>
           <Button type="button" variant={account.status === 'auth_failed' ? 'default' : 'outline'} size="sm" onClick={() => void connectGoogle(account.email)}>Reconnect</Button>
+          <p className="w-full text-[13px] leading-relaxed">
+            Google shares only the calendars ticked in its{' '}
+            <a href={GOOGLE_SYNC_SETTINGS} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 font-medium text-primary hover:underline">Sync settings <ExternalLink className="size-3" /></a>
+            . Calendars shared with you (a work calendar, say) are off there until you tick them; Birthdays is never shared. Then use Refresh calendars below.
+          </p>
         </div>
       ) : (<>
       <Field label={account.status === 'auth_failed' ? 'Password (enter it again)' : 'New password'} htmlFor="edit-password" hint={<PasswordHint name={null} url={null} />}>
@@ -216,7 +230,13 @@ function AccountEditor({ account, focusPassword, onRemoved }: { account: Calenda
         <Field label="User name" htmlFor="edit-user"><Input id="edit-user" value={username} onChange={(e) => setUsername(e.target.value)} /></Field>
       </div>
       </>)}
-      <ErrorBox error={save.error ?? remove.error} />
+      <div className="flex flex-wrap items-center gap-3 text-[14px]">
+        <Button type="button" variant="outline" size="sm" onClick={() => { setRefreshed(null); refresh.mutate(); }} disabled={refresh.isPending}>
+          {refresh.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />} Refresh calendars
+        </Button>
+        <span className="text-muted">{refreshed ?? 'Reads the list of calendars again (FreeFlow does every 15 minutes).'}</span>
+      </div>
+      <ErrorBox error={save.error ?? remove.error ?? refresh.error} />
       {saved && !dirty && <div className="text-[14px] text-[#1e8e3e]">Saved.</div>}
       <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
         {confirmRemove ? (

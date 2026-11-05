@@ -5,7 +5,7 @@
 // (each target checked like the URL the person typed), times out, adds the time to the request's timing, and turns a 401
 // into `auth_failed`. The credential is a password (Basic) or an OAuth access token (Bearer: Google's CalDAV endpoint),
 // refreshed once on a 401 before the login counts as refused. A later REST driver would sit behind the same `Driver`.
-import { calendarMultiGet, calendarQuery, createAccount, fetchCalendarUserAddresses, fetchCalendars, fetchHomeUrl, fetchPrincipalUrl, propfind, syncCollection } from 'tsdav';
+import { createAccount, davRequest, fetchCalendarUserAddresses, fetchCalendars, fetchHomeUrl, fetchPrincipalUrl, propfind, syncCollection } from 'tsdav';
 import { ApiError } from '../../errors';
 import { authFailed, calendarError, checkUrl, conflict, connectFailed } from '../rules';
 
@@ -18,7 +18,8 @@ export type Interval = [string, string];
 /** What the Calendar object asks of a calendar server. */
 export interface Driver {
   discover(): Promise<Discovery>;
-  calendars(home: string): Promise<RemoteCalendar[]>;
+  /** The calendars of a home; `principal` (the person's) tells their own from those shared with them. */
+  calendars(home: string, principal?: string): Promise<RemoteCalendar[]>;
   /** The collection's sync token and ctag now (PROPFIND depth 0). */
   state(href: string): Promise<{ token: string | null; ctag: string | null }>;
   /** What changed since a sync token (sync-collection), or null when the server no longer knows the token. */
@@ -50,7 +51,10 @@ export interface CalDavOptions {
 const MULTIGET_BATCH = 50;
 const MAX_REDIRECTS = 5;
 const ETAG_PROPS = { 'd:getetag': {} };
-const VEVENTS = { 'c:comp-filter': { _attributes: { name: 'VCALENDAR' }, 'c:comp-filter': { _attributes: { name: 'VEVENT' } } } };
+
+const xmlText = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const ETAGS_QUERY = '<?xml version="1.0" encoding="utf-8"?><c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><d:getetag/></d:prop><c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT"/></c:comp-filter></c:filter></c:calendar-query>';
+const multigetBody = (paths: string[]) => `<?xml version="1.0" encoding="utf-8"?><c:calendar-multiget xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><d:getetag/><c:calendar-data/></d:prop>${paths.map((p) => `<d:href>${xmlText(p)}</d:href>`).join('')}</c:calendar-multiget>`;
 
 const textOf = (v: unknown): string | null => {
   if (typeof v === 'string') return v;
@@ -157,15 +161,15 @@ export class CalDav implements Driver {
     return { principal: found.principalUrl, home: account.homeUrl, addresses: addresses.map((a) => a.replace(/^mailto:/i, '').toLowerCase()).filter((a) => a.includes('@')), outbox };
   }
 
-  async calendars(home: string): Promise<RemoteCalendar[]> {
+  async calendars(home: string, principal?: string): Promise<RemoteCalendar[]> {
     const account = { ...this.account, rootUrl: home, homeUrl: home };
     const props = {
       'c:calendar-description': {}, 'c:calendar-timezone': {}, 'd:displayname': {}, 'ca:calendar-color': {}, 'cs:getctag': {}, 'd:resourcetype': {},
-      'c:supported-calendar-component-set': {}, 'd:sync-token': {}, 'd:current-user-privilege-set': {},
+      'c:supported-calendar-component-set': {}, 'd:sync-token': {}, 'd:current-user-privilege-set': {}, 'd:owner': {},
     };
     let list;
     try {
-      list = await fetchCalendars({ account, props, projectedProps: { currentUserPrivilegeSet: true }, fetch: this.request });
+      list = await fetchCalendars({ account, props, projectedProps: { currentUserPrivilegeSet: true, owner: true }, fetch: this.request });
     } catch (err) {
       if (err instanceof ApiError) throw err;
       throw connectFailed(`Could not list the calendars (${(err as Error).message})`);
@@ -175,11 +179,15 @@ export class CalDav implements Driver {
       .map((c) => {
         const privileges = JSON.stringify(c.projectedProps?.currentUserPrivilegeSet ?? null);
         const writable = privileges === 'null' || /"(write|write-content|writeContent|all)"/.test(privileges);
+        // Someone else's calendar shared with the person (Google: another person's primary calendar) names its owner.
+        const ownerHref = textOf((c.projectedProps?.owner as { href?: unknown } | undefined)?.href);
+        const theirs = !!ownerHref && !!principal && absolute(ownerHref, c.url).replace(/\/$/, '') !== principal.replace(/\/$/, '');
+        const role = !writable ? ('reader' as const) : theirs ? ('writer' as const) : ('owner' as const);
         const color = /#[0-9a-f]{6}/i.exec(textOf(c.calendarColor) ?? '')?.[0]?.toLowerCase() ?? null;
         const tz = /^TZID:(.+)$/m.exec(String(c.timezone ?? '').replace(/\r/g, ''))?.[1]?.trim() ?? null;
         const name = (typeof c.displayName === 'string' && c.displayName.trim()) || decodeURIComponent(new URL(c.url).pathname.split('/').filter(Boolean).at(-1) ?? 'Calendar');
         const reports = (c.reports ?? []) as string[];
-        return { href: c.url, name, color, timezone: tz, role: writable ? 'owner' as const : 'reader' as const, supportsSync: reports.includes('syncCollection'), ctag: c.ctag ?? null };
+        return { href: c.url, name, color, timezone: tz, role, supportsSync: reports.includes('syncCollection'), ctag: c.ctag ?? null };
       });
   }
 
@@ -208,10 +216,21 @@ export class CalDav implements Driver {
     return out;
   }
 
+  /**
+   * A REPORT whose multistatus answer is read entry by entry. tsdav's calendarQuery and calendarMultiGet throw when any one
+   * entry is not 200, and Google answers a multiget with a 404 for an event its own calendar-query listed (seen on a
+   * calendar shared by another person, 2026-11-04): one such event failed the whole calendar. Here only the request
+   * failing as a whole is an error; an entry that is not there is left out.
+   */
+  private async report(url: string, body: string, what: string) {
+    const res = await davRequest({ url, init: { method: 'REPORT', headers: { depth: '1', 'content-type': 'application/xml; charset=utf-8' }, body }, convertIncoming: false, fetch: this.request });
+    const whole = res.length === 1 && res[0].ok === false && typeof res[0].raw === 'string' ? res[0] : null;
+    if (whole) throw connectFailed(`The calendar server refused to ${what} (HTTP ${whole.status})`);
+    return res;
+  }
+
   async etags(href: string): Promise<{ href: string; etag: string }[]> {
-    const res = await calendarQuery({ url: href, props: ETAG_PROPS, filters: VEVENTS, depth: '1', fetch: this.request });
-    const failed = res.find((r) => r.ok === false && (r.status ?? 0) >= 400);
-    if (failed) throw connectFailed(`The calendar server refused to list the events (${failed.status})`);
+    const res = await this.report(href, ETAGS_QUERY, 'list the events');
     return res.flatMap((r) => {
       const etag = textOf(r.props?.getetag);
       if (!r.href || !etag) return [];
@@ -224,7 +243,7 @@ export class CalDav implements Driver {
     const out: RemoteObject[] = [];
     for (let i = 0; i < objects.length; i += MULTIGET_BATCH) {
       const batch = objects.slice(i, i + MULTIGET_BATCH);
-      const res = await calendarMultiGet({ url: href, props: { ...ETAG_PROPS, 'c:calendar-data': {} }, objectUrls: batch.map(pathOf), depth: '1', fetch: this.request });
+      const res = await this.report(href, multigetBody(batch.map(pathOf)), 'send the events');
       for (const r of res) {
         const data = textOf(r.props?.calendarData);
         const etag = textOf(r.props?.getetag);

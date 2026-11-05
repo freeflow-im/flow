@@ -119,10 +119,11 @@ export class CalendarStore {
     this.sql.exec('DELETE FROM calendars WHERE id = ?', id);
   }
 
-  /** Keeps exactly one default calendar: the one asked for, else the one there is, else the first writable one. */
+  /** Keeps exactly one default calendar: the one asked for, else the one there is, else the person's own first, else any writable one. */
   ensureDefault(preferred?: string): void {
     const cals = this.calendars();
-    const pick = (preferred && cals.find((c) => c.id === preferred && c.role !== 'reader')) || cals.find((c) => c.is_default && c.role !== 'reader') || cals.find((c) => c.role !== 'reader' && !c.hidden) || cals.find((c) => c.role !== 'reader');
+    // One's own before one shared with one (a writer), shown before hidden.
+    const pick = (preferred && cals.find((c) => c.id === preferred && c.role !== 'reader')) || cals.find((c) => c.is_default && c.role !== 'reader') || cals.find((c) => c.role === 'owner' && !c.hidden) || cals.find((c) => c.role !== 'reader' && !c.hidden) || cals.find((c) => c.role !== 'reader');
     for (const c of cals) {
       const want = pick && c.id === pick.id ? 1 : 0;
       if (c.is_default !== want) this.sql.exec('UPDATE calendars SET is_default = ? WHERE id = ?', want, c.id);

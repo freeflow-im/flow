@@ -76,6 +76,16 @@ r=await api(A.token,'GET','/v1/calendar/accounts');t('list accounts',r.j.account
 r=await api(Bo.token,'GET','/v1/calendar/calendars');t("someone else sees none of it",r.j.calendars?.length===0);
 r=await api(Bo.token,'GET',`/v1/calendar/events/${enc(work.id+':'+SERIES)}`);t("nor opens an event",r.s===404,r.s);
 
+// ---- a calendar added elsewhere after connecting: Refresh calendars lists it (the alarm does every 15 minutes)
+const LATER=`/${USER}/later-${tag}/`;
+res=await dav('MKCALENDAR',LATER,mk('Later','#AF52DEFF'),{'content-type':'application/xml'});
+r=await api(A.token,'POST',`/v1/calendar/accounts/${ACC}/refresh`);
+t('refresh calendars: one made since connecting is listed, and synced',r.s===200&&r.j.added===1&&r.j.calendars?.some(c=>c.name==='Later'&&c.syncedAt&&c.role==='owner'),r.s+' '+JSON.stringify(r.j).slice(0,160));
+await dav('DELETE',LATER);
+r=await api(A.token,'POST',`/v1/calendar/accounts/${ACC}/refresh`);
+t('refresh calendars: one deleted on the server is forgotten',r.j.removed===1&&!r.j.calendars?.some(c=>c.name==='Later'),JSON.stringify(r.j).slice(0,160));
+r=await api(Bo.token,'POST',`/v1/calendar/accounts/${ACC}/refresh`);t("refresh calendars: nobody else's account",r.s===404,r.s);
+
 // ---- a window
 const W='from=2026-10-19T00:00:00Z&to=2026-11-07T00:00:00Z';
 r=await api(A.token,'GET',`/v1/calendar/events?${W}`);

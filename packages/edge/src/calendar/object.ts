@@ -157,7 +157,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
     if (!this.rateAllow('verify', VERIFY_LIMIT, VERIFY_WINDOW_MS)) throw calendarError(429, 'rate_limited', 'Too many sign-in attempts; try again in a few minutes');
     const d = this.driver(url, { kind: 'basic', username, password });
     const found = await d.discover();
-    const calendars = await d.calendars(found.home);
+    const calendars = await d.calendars(found.home, found.principal);
     return { found, calendars };
   }
 
@@ -288,7 +288,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
     const pending: AccountRow = { id, kind: 'google', email, display_name: g.displayName || email.split('@')[0], server: JSON.stringify({ url, username: email, principal: url, home: '', addresses: [], outbox: null }), secret: new Uint8Array(sealed.blob).buffer, key_id: sealed.encKeyId, status: 'ok', status_message: null, created_at: Date.now(), calendars_at: 0 };
     const d = this.driver(url, this.credentialOf(pending));
     const found = await d.discover();
-    const calendars = await d.calendars(found.home);
+    const calendars = await d.calendars(found.home, found.principal);
     const server: ServerState = { url, username: email, principal: found.principal, home: found.home, addresses: [...new Set([email, ...found.addresses])], outbox: null };
     if (existing) {
       this.sql.exec("UPDATE accounts SET server = ?, secret = ?, key_id = ?, status = 'ok', status_message = NULL WHERE id = ?", JSON.stringify(server), pending.secret, pending.key_id, id);
@@ -307,7 +307,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
   private async relist(r: AccountRow): Promise<void> {
     const s = this.serverOf(r);
     try {
-      this.applyCalendars(r.id, await this.driverOf(r).calendars(s.home));
+      this.applyCalendars(r.id, await this.driverOf(r).calendars(s.home, s.principal));
     } catch (err) {
       if (err instanceof ApiError && (err.code === 'auth_failed' || err.code === 'connect_failed')) this.setStatus(r.id, err.code, err.message);
       this.sql.exec('UPDATE accounts SET calendars_at = ? WHERE id = ?', Date.now(), r.id);
@@ -486,6 +486,19 @@ export class Calendar extends DurableObject<CalendarEnv> {
       }
       if (b.displayName !== undefined) this.sql.exec('UPDATE accounts SET display_name = ? WHERE id = ?', b.displayName.trim() || r.email.split('@')[0], r.id);
       return c.json({ account: this.toAccount(this.account(r.id)) });
+    });
+
+    // The account's calendars listed again now (one ticked or added elsewhere since; the alarm does it every RELIST_MS),
+    // and the new ones synced, as far as a few seconds go.
+    app.post('/v1/calendar/accounts/:id/refresh', async (c) => {
+      const r = this.account(c.req.param('id'));
+      const before = new Set(this.store.calendarsOf(r.id).map((x) => x.id));
+      const s = this.serverOf(r);
+      this.applyCalendars(r.id, await this.driverOf(r).calendars(s.home, s.principal));
+      const fresh = this.store.calendarsOf(r.id).filter((x) => !before.has(x.id));
+      const deadline = Date.now() + 8_000;
+      for (const cal of fresh) { if (Date.now() > deadline) break; await this.syncCalendar(cal.id).catch(() => {}); }
+      return c.json({ calendars: this.store.calendarsOf(r.id).map((x) => this.toCalendar(x)), added: fresh.length, removed: [...before].filter((id) => !this.store.calendar(id)).length });
     });
 
     app.delete('/v1/calendar/accounts/:id', (c) => {

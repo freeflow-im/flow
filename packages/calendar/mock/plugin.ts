@@ -163,6 +163,11 @@ export function createMockApi(empty = false) {
       ensureDefault();
       return { status: 201, json: { account, calendars } };
     }
+    if ((m = p.match(/^\/v1\/calendar\/accounts\/([^/]+)\/refresh$/))) {
+      const id = m[1]!;
+      if (!state.accounts.some((a) => a.id === id)) throw new HttpError(404, 'not_found', 'no such calendar account');
+      return { status: 200, json: { calendars: state.calendars.filter((c) => c.accountId === id), added: 0, removed: 0 } };
+    }
     if ((m = p.match(/^\/v1\/calendar\/accounts\/([^/]+)$/))) {
       const a = state.accounts.find((x) => x.id === m![1]);
       if (!a) throw new HttpError(404, 'not_found', 'no such calendar account');
