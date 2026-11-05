@@ -56,6 +56,8 @@ export interface AgentOptions {
    * save_mail_attachment_to_docs). Given the user and where saved attachments go (the chat's scope).
    */
   mail?: (userId: string, scope: ScopeArg) => import('../../../imap/mailTools.ts').MailToolContext | undefined;
+  /** Edge only: the user's own calendars, for the Calendar tools (list_events, create_event and the rest). */
+  calendar?: (userId: string) => import('../../../calendar/calendarTools.ts').CalendarToolContext | undefined;
 }
 
 /** The model the live assistant runs on. Set AGENT_MODEL (e.g. claude-opus-5-5) to change it per deployment. */
@@ -87,6 +89,7 @@ export class AgentService {
   private jobs: boolean;
   private claudeAgent: ClaudeAgentDriver | null;
   private mail: AgentOptions['mail'];
+  private calendar: AgentOptions['calendar'];
   /** Users with a turn in progress (one at a time per user). */
   private busy = new Set<string>();
 
@@ -103,6 +106,7 @@ export class AgentService {
     this.jobs = opts.jobs ?? true;
     this.claudeAgent = opts.claudeAgent ?? null;
     this.mail = opts.mail;
+    this.calendar = opts.calendar;
     this.dailyLimit = opts.dailyRequestLimit ?? Number(process.env.AGENT_DAILY_REQUEST_LIMIT ?? 500);
   }
 
@@ -146,7 +150,7 @@ export class AgentService {
       if (!/^[A-Za-z0-9+/=]+$/.test(img.data) || (img.data.length * 3) / 4 > MAX_IMAGE_BYTES) throw new AgentError(400, 'An attached image is too large.');
       if (img.url !== undefined && !STORED_IMAGE_RE.test(img.url)) throw new AgentError(400, 'An attached image has an invalid address.');
     }
-    if (!req.context || !['home', 'sheet', 'deck', 'doc', 'markdown', 'file', 'mail'].includes(req.context.page)) throw new AgentError(400, 'Missing context.');
+    if (!req.context || !['home', 'sheet', 'deck', 'doc', 'markdown', 'file', 'mail', 'calendar'].includes(req.context.page)) throw new AgentError(400, 'Missing context.');
     if (req.scope !== undefined && !isChatScope(req.scope)) throw new AgentError(400, 'That is not a chat.');
     // The user's own agent: no key, no daily limit (their own plan pays), and no tools for the browser to run.
     if (this.driver(userId) === 'claude-agent') {
@@ -214,7 +218,8 @@ export class AgentService {
     // Search with the user's Brave key, else the server's, else the provider's own search.
     const search = { braveKey: this.settings.braveKey(userId), provider: this.providerSearch(own) };
     const mail = this.mail?.(userId, access.scope);
-    const env = { userId, ...access, sheets: this.sheets, images: this.images, files: this.files, pdf: this.pdf, context: req.context, search, ...(mail ? { mail } : {}) };
+    const calendar = this.calendar?.(userId);
+    const env = { userId, ...access, sheets: this.sheets, images: this.images, files: this.files, pdf: this.pdf, context: req.context, search, ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}) };
     const callModel = own ? this.ownModel(own) : this.getModel();
     let parseRetries = 0;
 

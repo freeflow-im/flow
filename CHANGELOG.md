@@ -13,6 +13,7 @@ This file keeps two things:
 ## Parity
 
 - **The FreeFlow suite bar and the blue accent are web-only for now (2026-11-02, FreeFlow suite §2.5).** Web replaced the workspace rail and the sidebar's status footer with the bar, and re-pointed the violet to the suite's blue and navy; macOS, iOS and the desktop shell keep the rail and the violet until phase 6 brings the suite to them. Gap to close.
+- **The Calendar tools are on the hosted suite only (2026-11-05, Calendar MCP).** `/mcp` on app.freeflow.im and the Worker's Docs assistant have them; the MCP Docs desktop app and the AWS-hosted plugin have no Calendar. Deliberate, while Calendar lives on the Worker.
 - **FreeFlow Calendar (`/calendar`) is web-only for now (2026-11-04, FreeFlow suite).** The suite bar's Calendar tab opens it in the browser (and so in the desktop shell); macOS and iOS have no Calendar yet. Gap to close with the suite's phase 6, as Mail's.
 - **FreeFlow Mail (`/mail`) is web-only for now (2026-11-03, FreeFlow suite).** The suite bar's Mail tab opens it in the browser (and so in the desktop shell); macOS and iOS have no Mail yet. Gap to close with the suite's phase 6.
 - **The Docs assistant's mail tools are on the hosted Workspace only (2026-11-03, Mail MCP).** The Worker's copy of the assistant can search and read the user's mail and write drafts; the MCP Docs desktop app and the AWS-hosted plugin have no Mail. Deliberate, while Mail lives on the Worker.

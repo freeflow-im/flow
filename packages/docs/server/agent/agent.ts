@@ -138,7 +138,7 @@ export class AgentService {
       if (!/^[A-Za-z0-9+/=]+$/.test(img.data) || (img.data.length * 3) / 4 > MAX_IMAGE_BYTES) throw new AgentError(400, 'An attached image is too large.');
       if (img.url !== undefined && !STORED_IMAGE_RE.test(img.url)) throw new AgentError(400, 'An attached image has an invalid address.');
     }
-    if (!req.context || !['home', 'sheet', 'deck', 'doc', 'markdown', 'file', 'mail'].includes(req.context.page)) throw new AgentError(400, 'Missing context.');
+    if (!req.context || !['home', 'sheet', 'deck', 'doc', 'markdown', 'file', 'mail', 'calendar'].includes(req.context.page)) throw new AgentError(400, 'Missing context.');
     if (req.scope !== undefined && !isChatScope(req.scope)) throw new AgentError(400, 'That is not a chat.');
     // The user's own agent: no key, no daily limit (their own plan pays), and no tools for the browser to run.
     if (this.driver(userId) === 'claude-agent') {

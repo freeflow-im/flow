@@ -18,7 +18,7 @@ returns OAuth errors as data (`OAuthAnswer`).
   registration; an `https` client id is a client metadata document), `/oauth/authorize`, `/oauth/consent`,
   `/oauth/decision`, `/oauth/token` (code with PKCE S256, refresh rotation with reuse detection, the device grant),
   `/oauth/revoke`, `/oauth/device_authorization` and `/oauth/device`. Scopes `files:read`, `files:write`, `mail:read`,
-  `mail:write` and `mail:send` (in `scopes_supported` of both metadata documents; see Scopes below). Only hashes
+  `mail:write`, `mail:send`, `calendar:read` and `calendar:write` (in `scopes_supported` of both metadata documents; see Scopes below). Only hashes
   of codes and tokens are stored; access tokens last an hour (a device sign-in's a week), refresh tokens 30 days.
 - **The issuer and resource are the request's origin**: `https://app.freeflow.im` and `https://app.freeflow.im/mcp` (on the
   rehearsal host, `edge.freeflow.im`'s).
@@ -116,6 +116,47 @@ object through the Worker's `MAIL` binding (`Docs.mailOf`), over its HTTP API (`
 - Tests: `src/imap/mailTools.test.ts` (ids, scope gating, the tools against a fake Mail object), `mailText.test.ts`
   (HTML to text, Markdown, reply and forward, a draft's MIME), `mailMcp.test.ts` (`tools/list` per scope set through
   `handleMcp`), `assistantMail.test.ts`, and `test/e2e-mail-mcp.mjs` against GreenMail (its header says how).
+
+## Calendar tools (2026-11-05)
+
+A calendar is a person's too: the Calendar tools act on the token's person's own **Calendar** object (`idFromName(userId)`,
+`src/calendar/object.ts`), whatever organization was chosen, defined once in `src/calendar/calendarTools.ts` (`CALENDAR_TOOLS`,
+as `MAIL_TOOLS` are) and registered beside the Docs and Mail tools (`registerCalendarTools` in `worker.ts`). The Docs object
+reaches the Calendar object through the Worker's `CALENDAR` binding (`Docs.calendarOf`), over its HTTP API
+(`docs/specs/calendar.md` §4). Consent has a **Calendar: see and change your events** checkbox (`calendar:read calendar:write`,
+on as the page starts; a client asking for `calendar:read` alone is offered "Calendar: see your events"). Tokens made before
+the scopes existed keep theirs: an agent reconnects to get the Calendar tools.
+
+| Tool | Scopes | What it does |
+| --- | --- | --- |
+| `list_calendars` | calendar:read | calendars: id, name, account, read_only, hidden, default, timezone; accounts needing attention |
+| `list_events` `{ from, to, calendars?, q?, limit? ≤ 200 }` | calendar:read | occurrences in a window of ≤ 93 days, oldest first: id, series_id, summary, start, end, all_day, timezone, calendar, location, video_call, repeats (in words), status, organizer, attendees with responses, my_response, link |
+| `get_event` `{ id }` | calendar:read | one event or occurrence in full (description, recurrence lines and in words, reminders), and its series |
+| `find_free_time` `{ duration_minutes, from, to, attendees?, working_hours?, timezone? }` | calendar:read | free slots in ≤ 31 days where the person (the shown calendars, less free and declined events) and the attendees (`POST …/freebusy`) are free, within working hours (09:00–17:00 Mon–Fri in `timezone` unless given; `null` for any time), longest first; `unknown` lists whose calendars cannot be seen |
+| `create_event` `{ summary, start, end, all_day?, timezone?, location?, description?, attendees?, optional_attendees?, recurrence?, reminders_minutes?, calendar_id? }` | calendar:write | creates on the default (or a named) calendar; the server invites the attendees where it schedules (Google, iCloud, Fastmail); returns the event and who was invited |
+| `update_event` `{ id, scope?, …the same fields }` | calendar:write | changes only what is given; `scope` this / following / all for an occurrence; `calendar_id` moves the whole event |
+| `delete_event` `{ id, scope? }` | calendar:write | deletes (destructive annotation); this / following / all for an occurrence |
+| `respond_to_event` `{ id, response, comment? }` | calendar:write | accepted / declined / tentative, for the series (its id) or an occurrence |
+
+- **Ids** are the API's `<calendarId>:<uid>[:<recurrenceId>]`, opaque (`checkEventId` checks the shape only). An id naming a
+  calendar the person's object does not have is "Not found".
+- Errors as tool errors (`CalendarToolError`): no calendar connected (with the link to Calendar), a refused login, a bad id,
+  a window too long, a conflict (read the event again and repeat).
+- **The Docs assistant** (edge copy of `server/agent`) has all eight (`assistantCalendarSchemas`, `runAssistantCalendarTool`),
+  with prompt lines: it creates and changes events on the person's calendars and says what it did, checks free time before
+  proposing one, and never deletes without being asked. Its `delete_event` is a browser tool (`CLIENT_TOOLS`): Calendar asks in
+  its panel (Delete / Keep it) and Docs asks with `confirmationFor`, then each deletes through `/v1/calendar`; Mail refuses it
+  as it refuses any tool it does not run. `packages/docs` (desktop, AWS) has no Calendar tools.
+- **The assistant in Calendar.** The suite bar's Assistant opens the same panel as Mail's (`packages/calendar`:
+  `components/AssistantPanel.tsx`, `hooks/assistant.ts`, `lib/assistant.ts`), in the organization the bar has selected, in a
+  chat of its own (`CALENDAR_CHAT`, `'calendar'`). Each turn sends a `page: 'calendar'` context (`CalendarContext`): the view,
+  the range shown, the browser's zone, the calendars shown and the open event (id, summary, when, calendar);
+  `renderCalendarContext` quotes the event's text so it cannot close the block. Browser tools `open_calendar_event` and
+  `show_calendar_range` run in Calendar (Docs refuses them). `create_event` and `update_event` are in `SHOWN_RESULTS`, so the
+  chat shows **Open event**; a change by a Calendar tool refreshes the views.
+- Tests: `src/calendar/calendarTools.test.ts` (ids, scope gating, the tools against a fake Calendar object, free slots),
+  `calendarMcp.test.ts` (`tools/list` per scope set), `assistantCalendar.test.ts`, Calendar's `lib/assistant.test.ts`, and
+  `test/e2e-calendar-mcp.mjs` against Radicale (its header says how).
 
 ## Managing connections
 

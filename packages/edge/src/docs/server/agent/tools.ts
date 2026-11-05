@@ -18,6 +18,8 @@ import { Engine } from '../../shared/formula/engine.ts';
 import type { ConnectorService } from '../connectors/service.ts';
 // Edge only: the person's own mail (FreeFlow Mail's object), for the assistant's mail tools. Not in packages/docs.
 import { assistantMailSchemas, MailToolError, runAssistantMailTool, type MailToolContext } from '../../../imap/mailTools.ts';
+// Edge only: the person's own calendars (FreeFlow Calendar's object), for the assistant's Calendar tools.
+import { assistantCalendarSchemas, CalendarToolError, runAssistantCalendarTool, type CalendarToolContext } from '../../../calendar/calendarTools.ts';
 import { ConnectorError } from '../connectors/types.ts';
 import type { FileStore } from '../files.ts';
 import type { ImageStore } from '../images.ts';
@@ -724,6 +726,19 @@ export const schemas = {
   open_mail_message: z
     .object({ id: z.string().min(5).max(1000).describe('The message to show: an id from search_mail, read_mail, create_mail_draft or the <app_context>.') })
     .describe('Shows a message in FreeFlow Mail\'s reading pane, when the user is in Mail (the <app_context> says so) and asks to see or open it. A draft opens in Drafts, with Edit draft to change and send it. Only works in Mail; elsewhere give the user the message\'s link.'),
+  // The user's own calendars (FreeFlow Calendar), on the Worker only. delete_event runs in the browser, which asks first.
+  ...(assistantCalendarSchemas() as Record<'list_calendars' | 'list_events' | 'get_event' | 'find_free_time' | 'create_event' | 'update_event' | 'respond_to_event' | 'delete_event', z.ZodObject>),
+  // Browser tools in FreeFlow Calendar (packages/calendar, src/lib/assistant.ts): the event opens, the view moves.
+  open_calendar_event: z
+    .object({ id: z.string().min(3).max(1200).describe('The event to show: an id from list_events, get_event, create_event or the <app_context>.') })
+    .describe('Shows an event in FreeFlow Calendar (its card, with the view moved to its day), when the user is in Calendar (the <app_context> says so) and asks to see it. Only works in Calendar; elsewhere give the user the event\'s link.'),
+  show_calendar_range: z
+    .object({
+      from: z.string().min(10).max(40).describe('The first day to show (a date or an ISO time).'),
+      to: z.string().min(10).max(40).optional().describe('The last day, for a range; the view is chosen to fit it.'),
+      view: z.enum(['day', 'week', 'month', 'agenda']).optional().describe('The view to show it in.'),
+    })
+    .describe('Moves FreeFlow Calendar\'s view to a day, week or month, when the user is in Calendar and asks to see a time ("show me next week"). Only works in Calendar.'),
 } satisfies Record<string, z.ZodObject>;
 
 export type ToolName = keyof typeof schemas;
@@ -779,6 +794,8 @@ export interface ServerToolEnv {
   search?: { braveKey?: string | null; provider?: ProviderSearch | null };
   /** The user's own Mail object, for the mail tools (the Worker's Docs object); without it they say mail is not here. */
   mail?: MailToolContext;
+  /** The user's own Calendar object, for the Calendar tools (the Worker's Docs object); without it they say Calendar is not here. */
+  calendar?: CalendarToolContext;
 }
 
 /** Run an account tool. Returns the result text for Claude; throws ToolFailure for errors Claude should see. */
@@ -943,6 +960,21 @@ export async function runServerTool(name: string, input: Record<string, unknown>
         return JSON.stringify({ made: true, file_id: file.id, name: file.filename, folder: file.folder ?? '', size: file.size, note: 'A new PDF next to the file. open_file shows it to the user.' });
       } catch (e) {
         if (e instanceof PrintError) throw new ToolFailure(e.message);
+        throw e;
+      }
+    }
+    case 'list_calendars':
+    case 'list_events':
+    case 'get_event':
+    case 'find_free_time':
+    case 'create_event':
+    case 'update_event':
+    case 'respond_to_event': {
+      if (!env.calendar) throw new ToolFailure('Calendar is not available here.');
+      try {
+        return JSON.stringify(await runAssistantCalendarTool(name, input, env.calendar));
+      } catch (e) {
+        if (e instanceof CalendarToolError) throw new ToolFailure(e.message);
         throw e;
       }
     }
