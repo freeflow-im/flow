@@ -9,8 +9,8 @@
 import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto';
 import type { Sql } from './core';
 
-/** Docs' files (read, and change), and the person's own mail (read, organise and draft, and send). */
-export const MCP_SCOPES = ['files:read', 'files:write', 'mail:read', 'mail:write', 'mail:send'] as const;
+/** Docs' files (read, and change), the person's own mail (read, organise and draft, and send), and their calendars (read, and change). */
+export const MCP_SCOPES = ['files:read', 'files:write', 'mail:read', 'mail:write', 'mail:send', 'calendar:read', 'calendar:write'] as const;
 
 /**
  * The consent page's checkboxes: each one a group of scopes, on or off until the person changes it. Sending email as the
@@ -20,6 +20,7 @@ export const SCOPE_GROUPS = [
   { id: 'docs', scopes: ['files:read', 'files:write'], checked: true },
   { id: 'mail', scopes: ['mail:read', 'mail:write'], checked: true },
   { id: 'send', scopes: ['mail:send'], checked: false },
+  { id: 'calendar', scopes: ['calendar:read', 'calendar:write'], checked: true },
 ] as const;
 export type ScopeGroupId = (typeof SCOPE_GROUPS)[number]['id'];
 export interface OfferedGroup { id: ScopeGroupId; scopes: string[]; checked: boolean }

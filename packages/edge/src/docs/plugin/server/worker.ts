@@ -10,6 +10,7 @@ import { docsContext } from '../../runtime/context.ts';
 import { FileHub, importLimit, ToolError, type FileHubOptions } from './files.ts';
 import { createMcpServer, instructionsFor, MCP_VERSIONS, serverInfo, type McpVersion } from './mcp.ts';
 import { MAIL_INSTRUCTIONS, MailToolError, mailToolsFor, type MailFetch, type MailTool, type MailToolContext } from '../../../imap/mailTools.ts';
+import { CALENDAR_INSTRUCTIONS, CalendarToolError, calendarToolsFor, type CalendarFetch, type CalendarTool, type CalendarToolContext } from '../../../calendar/calendarTools.ts';
 import { adaptTransport, discoverResult, isDiscover, SDK_VERSION, STATELESS_VERSION } from './stateless.ts';
 
 export interface McpRequestCaller {
@@ -78,16 +79,16 @@ export function suiteHub(opts: FileHubOptions, appUrl: string): FileHub {
   return hub;
 }
 
-/** What a token's scopes allow on /mcp: Docs' files (to read only, or to change too) and the Mail tools. */
-export function mcpAccess(scope: string, mailAvailable: boolean): { files: 'none' | 'read' | 'write'; mail: MailTool[] } {
+/** What a token's scopes allow on /mcp: Docs' files (to read only, or to change too), the Mail tools and the Calendar tools. */
+export function mcpAccess(scope: string, mailAvailable: boolean, calendarAvailable = false): { files: 'none' | 'read' | 'write'; mail: MailTool[]; calendar: CalendarTool[] } {
   const scopes = scope.split(' ').filter(Boolean);
   const files = scopes.includes('files:write') ? 'write' : scopes.includes('files:read') ? 'read' : 'none';
-  return { files, mail: mailAvailable ? mailToolsFor(scopes) : [] };
+  return { files, mail: mailAvailable ? mailToolsFor(scopes) : [], calendar: calendarAvailable ? calendarToolsFor(scopes) : [] };
 }
 
-/** The server's instructions for what the token can use: Docs' (when it has files), then Mail's (when it has mail). */
+/** The server's instructions for what the token can use: Docs' (when it has files), then Mail's and Calendar's (when it has them). */
 export const suiteInstructions = (version: McpVersion, access: ReturnType<typeof mcpAccess>): string =>
-  [access.files !== 'none' ? instructionsFor(version) : 'FreeFlow, as the user allowed this agent to use it.', access.mail.length ? MAIL_INSTRUCTIONS : ''].filter(Boolean).join('\n');
+  [access.files !== 'none' ? instructionsFor(version) : 'FreeFlow, as the user allowed this agent to use it.', access.mail.length ? MAIL_INSTRUCTIONS : '', access.calendar.length ? CALENDAR_INSTRUCTIONS : ''].filter(Boolean).join('\n');
 
 const toolResult = (data: Record<string, unknown>) => ({ content: [{ type: 'text' as const, text: JSON.stringify(data) }], structuredContent: data });
 const toolError = (message: string) => ({ content: [{ type: 'text' as const, text: message }], isError: true });
@@ -107,14 +108,29 @@ function registerMailTools(mcp: ReturnType<typeof createMcpServer>, tools: MailT
   }
 }
 
-/** One MCP request, as `caller`. `mail` reaches the caller's own Mail object, where the Worker has it. */
-export async function handleMcp(request: Request, hub: FileHub, caller: McpRequestCaller, mail?: MailFetch): Promise<Response> {
+/** The Calendar tools on an MCP server, each acting on the caller's own Calendar object. */
+function registerCalendarTools(mcp: ReturnType<typeof createMcpServer>, tools: CalendarTool[], ctx: CalendarToolContext): void {
+  for (const tool of tools) {
+    mcp.registerTool(tool.name, { title: tool.title, description: tool.description, inputSchema: tool.shape as never, annotations: tool.annotations }, (async (args: Record<string, unknown>) => {
+      try {
+        return toolResult(await tool.run(ctx, args ?? {}));
+      } catch (e) {
+        if (e instanceof CalendarToolError) return toolError(e.message);
+        console.error(`mcp ${tool.name}: ${(e as Error).message}`);
+        return toolError('The calendar could not do that just now. Try again in a moment.');
+      }
+    }) as never);
+  }
+}
+
+/** One MCP request, as `caller`. `mail` and `calendar` reach the caller's own Mail and Calendar objects, where the Worker has them. */
+export async function handleMcp(request: Request, hub: FileHub, caller: McpRequestCaller, mail?: MailFetch, calendar?: CalendarFetch): Promise<Response> {
   const version = suiteMcpVersion(caller.endpoint);
   if (!version) return json(404, { error: 'Not found' });
   if (request.method !== 'POST') return json(405, { error: 'This endpoint takes POST (Streamable HTTP, JSON responses); it has no GET stream.' }, { allow: 'POST' });
   const body = await request.json().catch(() => undefined);
   const info = serverInfo(version);
-  const access = mcpAccess(caller.scope, !!mail);
+  const access = mcpAccess(caller.scope, !!mail, !!calendar);
   const instructions = suiteInstructions(version, access);
   // ChatGPT and newer clients speak 2026-07-28 (no initialize: server/discover); the SDK speaks 2025-11-25.
   if (isDiscover(body)) return json(200, discoverResult(body, info, { tools: { listChanged: true } }, instructions));
@@ -153,6 +169,7 @@ export async function handleMcp(request: Request, hub: FileHub, caller: McpReque
       },
     });
   }
+  if (calendar && access.calendar.length) registerCalendarTools(mcp, access.calendar, { calendar, origin: caller.origin });
   const transport = adaptTransport(new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true }) as never, info, stateless) as unknown as WebStandardStreamableHTTPServerTransport;
   try {
     await mcp.connect(transport);

@@ -131,9 +131,30 @@ function nonEmptyCount(tab: Tab, rg: Range): number {
   return ops.existingKeysIn(tab, rg).filter(({ key }) => hasContent(tab.cells[key])).length;
 }
 
+/** Deletes an event (the Calendar tools' id and scope) through /v1/calendar, where the hosted suite has it. */
+export async function deleteCalendarEvent(i: Record<string, unknown>): Promise<string> {
+  const id = String(i.id ?? '');
+  const scope = typeof i.scope === 'string' && ['this', 'following', 'all'].includes(i.scope) ? i.scope : null;
+  const res = await fetch(`/v1/calendar/events/${encodeURIComponent(id)}${scope ? `?scope=${scope}` : ''}`, { method: 'DELETE', credentials: 'same-origin' }).catch(() => null);
+  if (!res) throw new ToolError('Calendar could not be reached. Try again in a moment.');
+  if (res.status === 404 && !res.headers.get('content-type')?.includes('json')) throw new ToolError('Calendar is not available here.');
+  if (!res.ok) {
+    const err = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
+    throw new ToolError(err?.error?.message ?? `Calendar answered ${res.status}.`);
+  }
+  return JSON.stringify({ deleted: id, ...(scope ? { scope } : {}) });
+}
+
+/** The question delete_event asks first: what goes (the summary the assistant gave, when it gave one). */
+export function deleteEventQuestion(i: Record<string, unknown>, summary?: string | null): string {
+  const what = summary ? `“${summary}”` : 'this event';
+  return i.scope === 'following' ? `Delete ${what} and the events after it in the series?` : i.scope === 'all' ? `Delete ${what}, every occurrence of it?` : `Delete ${what} from your calendar?`;
+}
+
 /** A question to ask the user before running a destructive call, or null if it can run straight away. */
 export function confirmationFor(call: ClientToolCall, ctl: SheetController | null, deck: DeckController | null = null, doc: DocController | null = null, markdown: MarkdownController | null = null): string | null {
   const i = call.input;
+  if (call.name === 'delete_event') return deleteEventQuestion(i);
   if (call.name === 'request_app_change') {
     // The spec is what the coding agent acts on, and the assistant may have written it after reading a web
     // page or a document: show it, so the user approves the change itself and not only its name.
@@ -304,6 +325,10 @@ export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): P
 
   // FreeFlow Mail's own tool (packages/mail): Docs cannot show a message.
   if (call.name === 'open_mail_message') throw new ToolError('Messages open only in FreeFlow Mail; the user is in Docs. Give them the message\'s link instead.');
+  // FreeFlow Calendar's own tools (packages/calendar): Docs shows no calendar.
+  if (call.name === 'open_calendar_event' || call.name === 'show_calendar_range') throw new ToolError('Events show only in FreeFlow Calendar; the user is in Docs. Give them the event\'s link instead.');
+  // A calendar event, deleted after the user confirmed it (confirmationFor), through the suite's Calendar API on this origin.
+  if (call.name === 'delete_event') return deleteCalendarEvent(i);
 
   const ctl = requireSheet(env);
   const run = (fn: Parameters<SheetController['runAgent']>[1]) => {

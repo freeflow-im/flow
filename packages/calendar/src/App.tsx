@@ -2,7 +2,8 @@
 // toolbar and the view (FullCalendar, behind CalendarGrid) in the main area; the event popover, quick create, the edit
 // dialog, the this / following / all question, the account dialogs, search, and the keyboard. Under 760px: agenda and
 // day only, the calendars behind a button.
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { addHours, startOfHour } from 'date-fns';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { openSuiteSearch } from '@flow/suite-bar';
@@ -20,12 +21,19 @@ import { SearchResults } from './components/SearchResults';
 import { Sidebar } from './components/Sidebar';
 import { Toolbar } from './components/Toolbar';
 import type { Anchor } from './components/ui/popover';
-import { useMediaQuery } from './hooks/layout';
+import { useMediaQuery, useResizableWidth } from './hooks/layout';
+import { useCalendarAssistant } from './hooks/assistant';
+import { useOrganizations } from './hooks/organization';
+import { calendarContext, setAssistantOpen, useAssistantOpen } from './lib/assistant';
+import { ResizeHandle } from './components/ResizeHandle';
 import { useAccounts, useCalendarPrefs, useCalendars, useEventMutations, useEvents, useSearch } from './hooks/calendar';
 import { movePatch } from './lib/occurrences';
 import { neighbours, parseDate, rangeOf, step, titleOf, type View } from './lib/ranges';
 import { parsePlace, pathOf, type Place } from './lib/route';
 import { cn } from './lib/utils';
+
+// The assistant's panel (and the Markdown of its replies) loads when it first opens.
+const AssistantPanel = lazy(() => import('./components/AssistantPanel').then((m) => ({ default: m.AssistantPanel })));
 
 const BASE = import.meta.env.BASE_URL;
 const WEEK_STARTS_ON = 0 as const;
@@ -104,6 +112,39 @@ export function App() {
     return () => { gone = true; };
   }, [place.eventId, cals.length, open?.event.id, navigate]);
 
+  // The assistant: beside the calendar, or over it below 1100px, in the organization the suite bar has selected.
+  const qc = useQueryClient();
+  const { active: org } = useOrganizations();
+  const assistantOpen = useAssistantOpen();
+  const assistantOverlay = useMediaQuery('(max-width: 1099px)');
+  const assistantPane = useResizableWidth('flow.calendar.assistantWidth', 380, 300, 720, 'left');
+  const viewNow = useRef({ view, range, cals, event: open?.event ?? null, search });
+  viewNow.current = { view, range, cals, event: open?.event ?? null, search };
+  /** An event by id (the assistant's open_calendar_event, Open event, a link in its chat): the view moves to it, its card opens. */
+  const openById = useCallback(async (id: string, start?: string) => {
+    if (start) navigate({ date: /^\d{4}-\d\d-\d\d$/.test(start) ? parseDate(start) : new Date(start) });
+    try {
+      const { event } = await calendarApi.event(id);
+      navigate({ date: event.allDay ? parseDate(event.start) : new Date(event.start), eventId: event.id }, true);
+      setQuick(null);
+      setOpen({ event, anchor: null });
+      return true;
+    } catch {
+      return false;
+    }
+  }, [navigate]);
+  const chat = useCalendarAssistant({
+    org: org?.id ?? null,
+    context: () => { const v = viewNow.current; return calendarContext({ view: v.view, range: v.range, calendars: v.cals, event: v.event, search: v.search || undefined }); },
+    handlers: {
+      open: openById,
+      show: (date, v) => navigate({ date, view: v }),
+      remove: async (id, sc) => { await calendarApi.deleteEvent(id, sc); setOpen((x) => (x?.event.id === id ? null : x)); },
+      summaryOf: (id) => (viewNow.current.event?.id === id ? viewNow.current.event.summary : (events.data ?? []).find((o) => o.id === id || o.eventId === id)?.summary ?? null),
+    },
+    onCalendarChanged: () => void qc.invalidateQueries({ queryKey: ['calendar'] }),
+  });
+
   const openEvent = (event: EventOccurrence, anchor: Anchor) => { setQuick(null); setOpen({ event, anchor }); navigate({ eventId: event.id }, true); };
   const closeEvent = () => { setOpen(null); navigate({ eventId: null }, true); };
   const createNew = () => {
@@ -181,6 +222,7 @@ export function App() {
         search={{ value: searchText, placeholder: 'Search events', onChange: (q) => { setSearchText(q); if (!q.trim()) setSearch(''); }, onSubmit: (q) => setSearch(q.trim()) }}
         onHome={() => { setSearch(''); setSearchText(''); today(); }}
         onSettings={() => setDialog({ kind: 'settings', accountId: null })}
+        assistant={{ open: assistantOpen, onToggle: () => setAssistantOpen(!assistantOpen) }}
       />
       {accounts.isPending ? (
         <div className="flex flex-1 items-center justify-center text-muted"><Loader2 className="size-5 animate-spin" /></div>
@@ -189,7 +231,7 @@ export function App() {
       ) : none ? (
         <ConnectCalendar onAdd={(k) => (k === 'google' ? startGoogle() : setDialog({ kind: 'add', connect: k }))} />
       ) : (
-        <div className="flex min-h-0 flex-1">
+        <div className="relative flex min-h-0 flex-1">
           {!narrow && <aside className="w-64 shrink-0 border-r border-hairline">{sidebar}</aside>}
           <main className="flex min-w-0 flex-1 flex-col">
             {broken.map((a) => (
@@ -224,6 +266,12 @@ export function App() {
               </>
             )}
           </main>
+          {assistantOpen && !assistantOverlay && <ResizeHandle label="Resize the assistant" {...assistantPane.handleProps} />}
+          {assistantOpen && (
+            <Suspense fallback={null}>
+              <AssistantPanel chat={chat} onEvent={!!open} overlay={assistantOverlay} width={assistantPane.width} onClose={() => setAssistantOpen(false)} onOpenEvent={(id, start) => void openById(id, start)} />
+            </Suspense>
+          )}
         </div>
       )}
       {narrow && sidebarOpen && (
