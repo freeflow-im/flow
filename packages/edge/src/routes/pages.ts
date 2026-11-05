@@ -1,5 +1,5 @@
 // The clients' pages, on the hosts the ported API answers on. Until the move the origin served them, because it decided per
-// request; now the Worker does: Docs at /workspace and Mail at /mail send a stranger to sign in, a public link's page is kept out of search
+// request; now the Worker does: Docs at /workspace, Mail at /mail and Calendar at /calendar send a stranger to sign in, a public link's page is kept out of search
 // engines and referrers, and every other address of the web client gets its page. scripts/assemble.mjs files them under /_pages.
 import { Hono, type Context } from 'hono';
 import { getCookie } from 'hono/cookie';
@@ -39,6 +39,13 @@ pageRoutes.get(MAIL, async (c) => ((await signedIn(c)) ? page(c, 'mail.html') : 
 pageRoutes.get(`${MAIL}/*`, async (c) => {
   if (/\.[a-z0-9]+$/i.test(new URL(c.req.url).pathname)) return c.notFound();
   return (await signedIn(c)) ? page(c, 'mail.html') : toSignIn(c);
+});
+// Calendar at /calendar (packages/calendar), as Mail.
+const CALENDAR = '/calendar';
+pageRoutes.get(CALENDAR, async (c) => ((await signedIn(c)) ? page(c, 'calendar.html') : toSignIn(c)));
+pageRoutes.get(`${CALENDAR}/*`, async (c) => {
+  if (/\.[a-z0-9]+$/i.test(new URL(c.req.url).pathname)) return c.notFound();
+  return (await signedIn(c)) ? page(c, 'calendar.html') : toSignIn(c);
 });
 // Public links from before Docs moved under /workspace.
 pageRoutes.get('/p/*', (c) => c.redirect(`${BASE}${new URL(c.req.url).pathname}${new URL(c.req.url).search}`, 301));

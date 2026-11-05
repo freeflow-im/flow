@@ -48,11 +48,13 @@ jobs:
         run: |
           docker pull "$IMAGE"
           id=$(docker create "$IMAGE")
-          mkdir -p packages/web packages/docs/dist packages/mail
+          mkdir -p packages/web packages/docs/dist packages/mail packages/calendar
           docker cp "$id:/app/packages/web/dist" packages/web/dist
           docker cp "$id:/app/packages/docs/dist/client" packages/docs/dist/client
           # Mail is in images built since it was added; an older image has none, and assemble.mjs leaves /mail out.
           docker cp "$id:/app/packages/mail/dist" packages/mail/dist || echo "no Mail client in this image"
+          # Calendar likewise: an image from before it has none, and assemble.mjs leaves /calendar out.
+          docker cp "$id:/app/packages/calendar/dist" packages/calendar/dist || echo "no Calendar client in this image"
           docker rm "$id"
       - name: Install
         run: pnpm install --frozen-lockfile --filter @flow/edge...

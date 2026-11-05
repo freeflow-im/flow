@@ -337,3 +337,38 @@ its e2e green.
   copy shown), a move to another calendar, a series' this / following / EXDATE / delete, hidden, colour and default
   calendars, free/busy, the alarm picking up an event put straight into Radicale (by a delta, about a minute), a deletion
   there, the timing lines (and no address, summary or id in them), and forgetting the account.
+
+## 11. As built: the client and the suite (PR 1, 2026-11-04)
+
+- **`packages/calendar`** (`@flow/calendar`, base `/calendar/`; `README.md` there has the files) on **FullCalendar 6.1**
+  (`@fullcalendar/react`, `core`, `daygrid`, `timegrid`, `list`, `interaction`). FullCalendar 7 (June 2026) folds the plugins
+  into a headless core on the Temporal polyfill and no longer publishes them as the packages §2.6 names; 6.1 is the line the
+  plan describes and its React adapter is stable, so 7 is a later, separate move behind `CalendarGrid.tsx`.
+- **Data**: `useEvents` asks for every calendar's occurrences of the visible range (hidden ones too, so a checkbox needs no
+  round trip; `hidden` is still stored by `PATCH …/calendars/:id`, so agents and other devices see the same choice) and reads
+  the ranges either side ahead; polled every 60 s, every 2 s while a calendar has `syncedAt: null`. A drag, a resize, an edit,
+  a delete and an RSVP change every cached range at once (a series' other occurrences move with `all` and `following`) and roll
+  back on failure; `conflict` says "This event changed elsewhere" and refetches. A drag sends the occurrence's `etag`.
+- **The edit dialog** shows times in the event's own zone (else the browser's), with the zone a list of the browser's IANA
+  zones; it sends wall-clock times and the zone (`2026-11-05T12:00` + `America/New_York`), and only the fields that changed.
+  Repeat: Google's presets for the start (daily, weekly on its day, weekdays, monthly on its date or its nth weekday, yearly)
+  and a custom rule (every N days, weeks on chosen days, months, years; never, after N times, until a date); changing the rule
+  keeps the series' EXDATEs, and then asks only "following" or "all". Guests complete from Mail's contacts
+  (`GET /v1/mail/accounts/:id/contacts`, the first three Mail accounts), as chips. Reminders are chips over a list of choices.
+  A move to another calendar takes the whole series.
+- **Quick create** opens by a click or drag on empty time (a click on a half-hour slot makes an hour); "More options" carries
+  what was typed into the dialog. **The popover**: when, the zone if not the browser's, the repeat in words, Join for a video
+  call (`conference`), location (a link when it is one), guests and their answers, description, calendar; Yes / Maybe / No for
+  an invitation (the series' answer); Edit and Delete unless the calendar is read-only.
+- **The sidebar's small month**: a click goes to that day in the open view; a drag over days goes to the week holding them
+  (more than seven days: their month), rather than a custom range of N days.
+- **Search** is the suite bar's: results a year either side of today, by day, replace the view until closed.
+- **Not in PR 1** (PR 2 and 3, as §7 has them): the Assistant panel and button (the suite bar on Calendar has no Assistant
+  yet), the invite card in Mail and `?new=` from a thread, the Calendar tools; week start and working hours (Sunday, 7:30
+  scrolled to); Undo on delete and move; printing.
+- **Suite**: the Calendar tab is live in Chat's, Mail's, Docs' and Calendar's bars (`href: '/calendar'`, ⌘4; in Chat it is
+  disabled with a tooltip for an organization on another server, as Mail's tab is). `routes/pages.ts` serves `/calendar` and
+  `/calendar/*` from `_pages/calendar.html` to a signed-in person (a file path falls through to the built files);
+  `scripts/assemble.mjs` files `packages/calendar/dist` under `public/calendar`, optionally; `deploy-edge.yml` copies it out of
+  the server image, whose Dockerfile builds it; `flow-aws-deploy.yml` lists `packages/calendar/**`. Vite's hashed files under
+  `/calendar/assets/` are cached for a year, as Mail's.

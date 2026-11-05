@@ -1,6 +1,6 @@
 // The suite bar (docs/specs/freeflow-suite.md §2.5): one 56px bar above every signed-in page of Chat and Docs.
 // Left, where you are: the mark, "FreeFlow", the organization's name with its switcher. Centre, which app: Docs,
-// Chat, Mail, then Calendar as a placeholder. Right, tools then you: search (opens in place, ⌘K), the Assistant,
+// Chat, Mail, then Calendar (⌘1 to ⌘4). Right, tools then you: search (opens in place, ⌘K), the Assistant,
 // notifications, the account menu. Presentational: every app passes its data and callbacks, the bar fetches nothing.
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { SuiteMark } from './SuiteMark';
