@@ -36,4 +36,23 @@ describe('a saved key sealed under another key', () => {
     expect(after.openaiKey).not.toBeNull();
     expect(second.choice('u')?.apiKey).toBe('sk-new-key');
   });
+
+  it('a Brave Search key sealed under another key is gone, not an error on every turn', async () => {
+    const db = openDb(path.join(dir, 'app.db'));
+    db.prepare("INSERT INTO users (id, email, password_hash, created_at) VALUES ('u', 'u@example.com', '', ?)").run(new Date().toISOString());
+    const first = new AssistantSettingsStore(db, keyFile('a.key'));
+    await first.update('u', { provider: 'openai', openaiKey: 'sk-old-key', braveKey: 'brave-old-key' }, ok);
+    expect(first.braveKey('u')).toBe('brave-old-key');
+
+    const second = new AssistantSettingsStore(db, keyFile('b.key'));
+    expect(second.braveKey('u')).toBeNull(); // the turn goes on without it
+    expect(second.openaiKey('u')).toBeNull();
+    expect(second.get('u').braveKey).toBeNull(); // Settings shows it as not set
+    // Entering the model key again keeps nothing of the unreadable search key.
+    const after = await second.update('u', { provider: 'openai', openaiKey: 'sk-new-key' }, ok);
+    expect(after.braveKey).toBeNull();
+    expect(second.braveKey('u')).toBeNull();
+    expect(second.choice('u')?.apiKey).toBe('sk-new-key');
+    expect(second.openaiKey('u')).toBe('sk-new-key');
+  });
 });

@@ -141,6 +141,20 @@ function compile(path: string): { pattern: RegExp; keys: string[]; rank: number 
   return { pattern: new RegExp(`^${source}$`), keys, rank: keys.length + (path.includes('*') ? 100 : 0) };
 }
 
+/** An Error written out as its name, message, stack and cause: console in Workers prints an Error inside an object as {}. */
+function loggable(a: unknown): unknown {
+  if (a instanceof Error) return { name: a.name, message: a.message, stack: a.stack, ...(a.cause !== undefined ? { cause: loggable(a.cause) } : {}) };
+  if (a && typeof a === 'object' && !Array.isArray(a)) return Object.fromEntries(Object.entries(a).map(([k, v]) => [k, v instanceof Error ? loggable(v) : v]));
+  return a;
+}
+
+/** Fastify's app.log and req.log over console, with errors readable in the Worker's logs (`req.log.error({ err }, 'msg')`). */
+export const log: Console = Object.assign(Object.create(console) as Console, {
+  error: (...a: unknown[]) => console.error(...a.map(loggable)),
+  warn: (...a: unknown[]) => console.warn(...a.map(loggable)),
+  info: (...a: unknown[]) => console.info(...a.map(loggable)),
+});
+
 export class DocsApp {
   private readonly hooks: { name: string; fn: Hook }[] = [];
   private readonly root: DocsApp;
@@ -148,7 +162,7 @@ export class DocsApp {
   private parsers: { types: string[]; parser: Parser }[] = [];
   private decorations: Record<string, unknown> = {};
   server = { address: () => null };
-  log = console;
+  log = log;
   constructor(private readonly parent: DocsApp | null = null) { this.root = parent?.root ?? this; }
 
   private add(method: string, path: string, a: Opts | Handler, b?: Handler) {
@@ -199,7 +213,7 @@ export class DocsApp {
     const req = {
       ...this.decorations, method: request.method, url: url.pathname + url.search, params, query: Object.fromEntries(url.searchParams), body: undefined,
       ip: caller.ip, hostname: url.hostname, protocol: url.protocol.replace(':', ''), headers: Object.fromEntries(request.headers), cookies, raw, id: crypto.randomUUID(),
-      routeOptions: { url: route.path }, log: console, caller,
+      routeOptions: { url: route.path }, log, caller,
     } as DocsRequest;
     const reply = new DocsReply();
     const run = async (): Promise<void> => {
