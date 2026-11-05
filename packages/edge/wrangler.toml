@@ -100,6 +100,18 @@ class_name = "Mail"
 tag = "v4"
 new_sqlite_classes = ["Mail"]
 
+# FreeFlow Calendar (src/calendar/object.ts, docs/specs/calendar.md): one object per person, named by their user id, holding
+# the calendar accounts they connected (passwords sealed with FLOW_DATA_KEY) and a complete copy of their calendars, kept
+# fresh by its alarm. CALENDAR_ALLOW_INSECURE=1 (http and local hosts, for Radicale) is for local dev only, given with --var;
+# it is never set here. CALENDAR_ALARM = "off" (a var) stops the alarm, a kill switch.
+[[durable_objects.bindings]]
+name = "CALENDAR"
+class_name = "Calendar"
+
+[[migrations]]
+tag = "v5"
+new_sqlite_classes = ["Calendar"]
+
 [[r2_buckets]]
 binding = "BLOBS"
 bucket_name = "flow-files"
