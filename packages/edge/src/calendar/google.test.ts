@@ -24,9 +24,12 @@ function tokenEndpoint(answer: (body: URLSearchParams) => { status: number; json
 describe('the OAuth state', () => {
   it('comes back as it was sealed, and not after 10 minutes, changed, or as nonsense', () => {
     const now = Date.now();
-    const s = sealState({ userId: 'u1', returnTo: 'https://app.freeflow.im/calendar/' }, now);
-    expect(s).not.toContain('u1');
-    expect(openState(s, now + 1000)).toMatchObject({ userId: 'u1', returnTo: 'https://app.freeflow.im/calendar/' });
+    // The user id is long enough that the sealed base64 cannot hold it by chance (two characters once did, in CI).
+    const userId = 'user-0123456789abcdef';
+    const s = sealState({ userId, returnTo: 'https://app.freeflow.im/calendar/' }, now);
+    expect(s).not.toContain(userId);
+    expect(s).not.toContain('freeflow');
+    expect(openState(s, now + 1000)).toMatchObject({ userId, returnTo: 'https://app.freeflow.im/calendar/' });
     expect(openState(s, now + STATE_TTL_MS + 1)).toBeNull();
     const [kid, blob] = s.split('.');
     const flipped = `${kid}.${blob!.slice(0, 20)}${blob![20] === 'A' ? 'B' : 'A'}${blob!.slice(21)}`;
