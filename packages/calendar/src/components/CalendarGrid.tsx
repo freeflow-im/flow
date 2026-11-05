@@ -63,6 +63,7 @@ export function CalendarGrid({ view, date, occurrences, calendars, weekStartsOn,
         height="100%"
         firstDay={weekStartsOn}
         events={events}
+        eventClassNames={(a) => ((a.event.end ?? a.event.start) ?? new Date()) < new Date() ? ['cal-past'] : []}
         nowIndicator
         navLinks
         navLinkDayClick={(d) => onDay(d)}

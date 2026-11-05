@@ -99,6 +99,14 @@ body {
 .cal-grid .fc .fc-list-day-cushion {
   background: var(--color-panel);
 }
+/* An event that is over is dimmed, as Google's are, so the day's remaining ones stand out (CalendarGrid's eventClassNames). */
+.cal-grid .fc-event.cal-past {
+  opacity: 0.55;
+}
+.cal-grid .fc-event.cal-past:hover,
+.cal-grid .fc-event.cal-past.fc-event-selected {
+  opacity: 1;
+}
 /* An invitation not answered yet (or a maybe): outlined in the calendar's colour; a declined one struck through. */
 .cal-grid .fc-event.cal-pending:not(.fc-daygrid-dot-event) {
   border-style: dashed !important;
