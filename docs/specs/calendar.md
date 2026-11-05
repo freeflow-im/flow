@@ -447,3 +447,17 @@ its e2e green.
     calendar whose stored objects are read again from `objects` before its next sync (no round trip): set for every calendar
     when the column was added (with the accounts' lists read again at the next alarm run), and whenever the owner address
     changes (`CalendarStore.applyCalendars`).
+
+## 13. The event card (2026-11-05)
+
+The popover (`EventPopover.tsx`) follows Google Calendar's card: edit, delete (not on a read-only calendar), a ⋮ menu (Copy link
+to event) and close at the top; the colour, the title, `cardWhen` ("Thursday, November 5 · 10:00 – 11:00am", am/pm once when both
+halves share it; "Nov 5 – 7, 2026" for days) and the repeat in words, asked of the series (`GET …/events/<eventId>`) when an
+occurrence moved on its own carries no rule; the video call (`lib/conference.ts`: the provider's "Join with Google Meet",
+"Join Zoom Meeting", …, the bare link, copy; Google Meet's `-::~:~::…::-` block and Zoom's invitation text read for Join by
+phone with its PIN in threes and More phone numbers, and taken out of the description shown); the guests ("11 guests", "5 yes,
+2 no, 4 awaiting", folded, the organizer first and the person second, a name only when it is not the address again); reminders;
+the organizer (else the calendar); the place, with a map link; the description with clickable links, six lines and Show more;
+and, for an invitation (`myResponse`), Going? Yes · No · Maybe in a grey band, the answer filled in the calendar's colour. The
+card is at most 440px wide and as tall as the space Radix gives it, the body scrolling; it takes the focus (Esc closes; Enter on
+one of its buttons presses that button, not Edit).
