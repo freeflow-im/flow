@@ -120,7 +120,7 @@ export function App() {
     else run('all');
   };
   const respond = (o: EventOccurrence, r: Exclude<Response, 'needs-action'>) => {
-    setOpen((x) => (x ? { ...x, event: { ...x.event, myResponse: r } } : x));
+    setOpen((x) => (x ? { ...x, event: { ...x.event, myResponse: r, attendees: x.event.attendees.map((g) => (g.self ? { ...g, response: r } : g)) } } : x));
     void m.respond(o, r).catch(() => {});
   };
   const moved = (o: EventOccurrence, start: Date, end: Date | null, allDay: boolean, revert: () => void) => {
@@ -136,7 +136,9 @@ export function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || typing(e.target)) return;
-      if (open && (e.key === 'Enter' || e.key === 'e')) { e.preventDefault(); if (byId.get(open.event.calendarId)?.role !== 'reader') edit(open.event); return; }
+      // Enter on one of the card's buttons or links (it takes the focus) presses that, not Edit.
+      const onControl = e.target instanceof HTMLElement && !!e.target.closest('button, a, [role="menuitem"]');
+      if (open && ((e.key === 'Enter' && !onControl) || e.key === 'e')) { e.preventDefault(); if (byId.get(open.event.calendarId)?.role !== 'reader') edit(open.event); return; }
       if (open && (e.key === 'Backspace' || e.key === 'Delete')) { e.preventDefault(); if (byId.get(open.event.calendarId)?.role !== 'reader') remove(open.event); return; }
       if (document.querySelector('[role="dialog"], [data-radix-popper-content-wrapper]')) return;
       const k = e.key;

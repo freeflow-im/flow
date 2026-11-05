@@ -59,3 +59,48 @@ export function allZones(): string[] {
 }
 
 export const reminderText = (m: number) => (m === 0 ? 'At the start' : m % 1440 === 0 ? `${m / 1440} ${m === 1440 ? 'day' : 'days'} before` : m % 60 === 0 ? `${m / 60} ${m === 60 ? 'hour' : 'hours'} before` : `${m} minutes before`);
+
+const clock = (d: Date) => format(d, 'h:mm');
+const half = (d: Date) => format(d, 'aaa');
+/**
+ * The event card's "when", as Google's: "Thursday, November 5 · 10:00 – 11:00am" (am/pm once when both halves share it),
+ * "Thursday, November 5" for a day, "Nov 5 – 7, 2026" for days, and a timed event across days with both dates.
+ */
+export function cardWhen(o: Pick<EventOccurrence, 'start' | 'end' | 'allDay'>): string {
+  if (o.allDay) {
+    const s = parseDate(o.start);
+    const last = addDays(parseDate(o.end), -1);
+    if (+last <= +s) return format(s, 'EEEE, MMMM d');
+    if (s.getFullYear() !== last.getFullYear()) return `${format(s, 'MMM d, yyyy')} – ${format(last, 'MMM d, yyyy')}`;
+    if (s.getMonth() !== last.getMonth()) return `${format(s, 'MMM d')} – ${format(last, 'MMM d, yyyy')}`;
+    return `${format(s, 'MMM d')} – ${format(last, 'd, yyyy')}`;
+  }
+  const s = new Date(o.start), e = new Date(o.end);
+  if (+e === +s) return `${format(s, 'EEEE, MMMM d')} · ${clock(s)}${half(s)}`;
+  if (isSameDay(s, e) || (+e - +s < 86_400_000 && e.getHours() === 0 && e.getMinutes() === 0)) {
+    return `${format(s, 'EEEE, MMMM d')} · ${clock(s)}${half(s) === half(e) ? '' : half(s)} – ${clock(e)}${half(e)}`;
+  }
+  return `${format(s, 'MMM d')}, ${clock(s)}${half(s)} – ${format(e, 'MMM d')}, ${clock(e)}${half(e)}`;
+}
+
+/** The card's guests: the organizer first, the person second, the rest as the event lists them; each once. */
+export function orderedGuests(o: Pick<EventOccurrence, 'organizer' | 'attendees'>): (EventOccurrence['attendees'][number] & { organizer?: true })[] {
+  const byEmail = new Map<string, EventOccurrence['attendees'][number] & { organizer?: true }>();
+  if (o.organizer) {
+    const asGuest = o.attendees.find((a) => a.email === o.organizer!.email);
+    byEmail.set(o.organizer.email, { ...o.organizer, ...asGuest, name: asGuest?.name ?? o.organizer.name, organizer: true });
+  }
+  for (const a of o.attendees) if (!byEmail.has(a.email)) byEmail.set(a.email, a);
+  const all = [...byEmail.values()];
+  const rank = (a: (typeof all)[number]) => (a.organizer ? 0 : a.self ? 1 : 2);
+  return all.map((a, i) => [a, i] as const).sort((x, y) => rank(x[0]) - rank(y[0]) || x[1] - y[1]).map(([a]) => a);
+}
+
+/** "5 yes, 2 no, 1 maybe, 4 awaiting", zeros left out. */
+export function guestSummary(guests: Pick<EventOccurrence['attendees'][number], 'response'>[]): string {
+  const n = (r: string) => guests.filter((g) => g.response === r).length;
+  return [[n('accepted'), 'yes'], [n('declined'), 'no'], [n('tentative'), 'maybe'], [n('needs-action'), 'awaiting']].filter(([c]) => c).map(([c, w]) => `${c} ${w}`).join(', ');
+}
+
+/** An attendee's name when the invitation has one that is not just the address again. */
+export const guestName = (a: { name: string | null; email: string }) => (a.name && a.name.trim().toLowerCase() !== a.email.toLowerCase() ? a.name.trim() : null);
