@@ -102,8 +102,11 @@ export function MessageList(p: MessageListProps) {
 
   // The attachment open in the preview from a row's chip: that row's newest message (as it was) and the position in its files.
   const [previewing, setPreviewing] = useState<{ m: MessageSummary; at: number } | null>(null);
-  const chips = (m: MessageSummary, className?: string) =>
-    m.attachments?.length ? <AttachmentChips files={m.attachments} dense={p.dense} onOpen={(at) => setPreviewing({ m, at })} className={className} /> : null;
+  // An invitation's text/calendar alternative is not a file (its invite.ics is, as Gmail shows it).
+  const chips = (row: MessageSummary, className?: string) => {
+    const m = row.attachments?.some((a) => /^text\/calendar/i.test(a.mimeType)) ? { ...row, attachments: row.attachments.filter((a) => !/^text\/calendar/i.test(a.mimeType)) } : row;
+    return m.attachments?.length ? <AttachmentChips files={m.attachments} dense={p.dense} onOpen={(at) => setPreviewing({ m, at })} className={className} /> : null;
+  };
 
   // The row whose menu is open (its ⋮, or a right-click on it): it keeps its hover actions while the menu is up.
   const [menuId, setMenuId] = useState<string | null>(null);

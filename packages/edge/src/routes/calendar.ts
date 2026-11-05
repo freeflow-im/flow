@@ -99,7 +99,7 @@ calendarRoutes.all('/v1/calendar/*', async (c) => {
   let status = 500, timing: string | null = null;
   try {
     const id = await userId(c, getCookie(c, 'sid'));
-    const res = await c.env.CALENDAR.get(c.env.CALENDAR.idFromName(id)).handle(c.req.raw);
+    const res = await c.env.CALENDAR.get(c.env.CALENDAR.idFromName(id)).handle(c.req.raw, id);
     status = res.status;
     timing = res.headers.get(TIMING_HEADER);
     const out = new Response(res.body, res);

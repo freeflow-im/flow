@@ -804,6 +804,159 @@ export function respondTo(raw: string, uid: string, rid: number, response: Exclu
   return vcal.toString();
 }
 
+// ---- invitations (iTIP, RFC 5546; by email, iMIP, RFC 6047) ---------------------------------------------------------
+
+export type ItipMethod = 'REQUEST' | 'CANCEL' | 'REPLY';
+/** An invitation as a message carries it: its METHOD, its event's rows (the series, or the occurrences it names), and who answered (a REPLY). */
+export interface Invitation {
+  method: ItipMethod; uid: string; sequence: number;
+  /** The rows of its UID: the master (or plain event) first when there is one, then its exceptions. */
+  events: ParsedEvent[];
+  /** What the card shows: the master or plain event, else the one occurrence the message is about. */
+  main: ParsedEvent;
+  /** A REPLY's attendee: the one who answered (the first attendee not the person, else the first). */
+  replier: Attendee | null;
+}
+
+/**
+ * Reads a `text/calendar` part (or an `.ics` file) as an invitation: METHOD REQUEST, CANCEL or REPLY, one UID. Anything
+ * else (no METHOD, PUBLISH, a file with no event) is `bad_request`, so the card is not shown.
+ */
+export function parseInvitation(raw: string, opts: { me: Set<string>; zone: string }): Invitation {
+  let vcal: Component;
+  try {
+    vcal = ICAL.Component.fromString(raw);
+  } catch {
+    throw badRequest('this is not iCalendar');
+  }
+  const method = String(vcal.getFirstPropertyValue('method') ?? '').trim().toUpperCase();
+  if (method !== 'REQUEST' && method !== 'CANCEL' && method !== 'REPLY') throw badRequest('this is not an invitation, a cancellation or a reply (METHOD)');
+  const rows = parseObject(raw, opts);
+  if (!rows.length) throw badRequest('the invitation has no event');
+  const uid = (rows.find((r) => !r.rid) ?? rows[0]).uid;
+  const events = rows.filter((r) => r.uid === uid).sort((a, b) => a.rid - b.rid);
+  const main = events[0];
+  const replier = method === 'REPLY' ? (main.data.attendees.find((a) => !a.self) ?? main.data.attendees[0] ?? null) : null;
+  return { method, uid, sequence: main.data.sequence, events, main, replier };
+}
+
+/** The SEQUENCE of an object's event (its master, else its first VEVENT), 0 when it has none. */
+export function sequenceOf(raw: string, uid: string): number {
+  const vcal = parseCalendar(raw);
+  const ev = masterOf(vcal, uid) ?? vevents(vcal, uid)[0];
+  return Number(ev?.getFirstPropertyValue('sequence') ?? 0) || 0;
+}
+
+/**
+ * An invitation as it goes on a calendar (the server does not schedule, or the invitation is not there yet): no METHOD
+ * (a CalDAV server refuses one, RFC 4791 §4.1), only its UID's VEVENTs, and the person's answer as their PARTSTAT, with
+ * RSVP gone. When none of the person's addresses is invited (a list's address was), `fallback` is added as an attendee.
+ */
+export function storedInvitation(raw: string, uid: string, response: Response, ctx: { me: string[]; fallback: { email: string; name: string } | null; now: number }): string {
+  const vcal = parseCalendar(raw);
+  vcal.removeAllProperties('method');
+  for (const e of vcal.getAllSubcomponents('vevent')) if (e.getFirstPropertyValue('uid') !== uid) vcal.removeSubcomponent(e);
+  for (const ev of vevents(vcal, uid)) {
+    let mine = ev.getAllProperties('attendee').filter((p) => ctx.me.includes(mailto(p.getFirstValue())));
+    if (!mine.length && ctx.fallback) {
+      const p = new ICAL.Property('attendee', ev);
+      p.setValue(`mailto:${ctx.fallback.email.toLowerCase()}`);
+      if (ctx.fallback.name) p.setParameter('cn', ctx.fallback.name);
+      p.setParameter('role', 'REQ-PARTICIPANT');
+      ev.addProperty(p);
+      mine = [p];
+    }
+    for (const p of mine) { p.setParameter('partstat', response.toUpperCase()); p.removeParameter('rsvp'); }
+  }
+  return vcal.toString();
+}
+
+/** A copy of a calendar's properties for a message (VERSION, PRODID and the METHOD), with the object's VTIMEZONEs. */
+function itipCalendar(from: Component, method: ItipMethod): Component {
+  const out = new ICAL.Component('vcalendar');
+  out.addPropertyWithValue('prodid', PRODID);
+  out.addPropertyWithValue('version', '2.0');
+  out.addPropertyWithValue('calscale', 'GREGORIAN');
+  out.addPropertyWithValue('method', method);
+  for (const z of from.getAllSubcomponents('vtimezone')) out.addSubcomponent(new ICAL.Component(JSON.parse(JSON.stringify(z.toJSON()))));
+  return out;
+}
+const cloneInto = (out: Component, e: Component) => { const c = new ICAL.Component(JSON.parse(JSON.stringify(e.toJSON())), out); out.addSubcomponent(c); return c; };
+
+/**
+ * The REPLY that tells the organizer an answer (iMIP, for a server that does not schedule): from the object as written
+ * with the answer (`respondTo` or `storedInvitation`), the series' VEVENTs (or the one occurrence's, `rid`), each with only
+ * the person's ATTENDEE line, no alarms, stamped now.
+ */
+export function itipReply(stored: string, uid: string, rid: number, ctx: { me: string[]; now: number }): string {
+  const vcal = parseCalendar(stored);
+  const zones = new Zones(vcal, 'UTC');
+  const out = itipCalendar(vcal, 'REPLY');
+  const targets = rid ? [exceptionAt(vcal, uid, rid, zones)].filter((e): e is Component => !!e) : vevents(vcal, uid);
+  if (!targets.length) throw badRequest('no such occurrence');
+  for (const e of targets) {
+    const c = cloneInto(out, e);
+    for (const p of c.getAllProperties('attendee')) if (!ctx.me.includes(mailto(p.getFirstValue()))) c.removeProperty(p);
+    for (const a of c.getAllSubcomponents('valarm')) c.removeSubcomponent(a);
+    c.removeAllProperties('dtstamp');
+    c.addPropertyWithValue('dtstamp', icalUtc(ctx.now));
+  }
+  return out.toString();
+}
+
+/**
+ * A REQUEST (the event as it is now: every VEVENT, alarms left out, as they are the organizer's own) or a CANCEL (the
+ * series, or with `rid` one occurrence, STATUS:CANCELLED and its SEQUENCE moved on) for the attendees (iMIP).
+ */
+export function itipRequest(stored: string, uid: string, method: 'REQUEST' | 'CANCEL', ctx: { now: number; zone: string }, rid = 0): string {
+  const vcal = parseCalendar(stored);
+  const zones = new Zones(vcal, ianaOf(ctx.zone) ?? 'UTC');
+  const out = itipCalendar(vcal, method);
+  const master = masterOf(vcal, uid);
+  let targets: Component[];
+  if (method === 'REQUEST') targets = vevents(vcal, uid);
+  else if (rid && master) targets = [exceptionAt(vcal, uid, rid, zones) ?? makeException(vcal, master, rid, zones)];
+  else targets = [master ?? vevents(vcal, uid)[0]].filter((e): e is Component => !!e);
+  if (!targets.length) throw badRequest('no such event');
+  for (const e of targets) {
+    const c = cloneInto(out, e);
+    for (const a of c.getAllSubcomponents('valarm')) c.removeSubcomponent(a);
+    c.removeAllProperties('dtstamp');
+    c.addPropertyWithValue('dtstamp', icalUtc(ctx.now));
+    if (method === 'CANCEL') {
+      c.removeAllProperties('status');
+      c.addPropertyWithValue('status', 'CANCELLED');
+      const seq = Number(c.getFirstPropertyValue('sequence') ?? 0) || 0;
+      c.removeAllProperties('sequence');
+      c.addPropertyWithValue('sequence', seq + 1);
+    }
+  }
+  return out.toString();
+}
+
+/** The people an organizer's message goes to: every attendee of the event but the person's own addresses, each once. */
+export function guestsOf(raw: string, uid: string, me: string[]): { email: string; name: string | null }[] {
+  const vcal = parseCalendar(raw);
+  const out = new Map<string, string | null>();
+  for (const ev of vevents(vcal, uid)) {
+    for (const p of ev.getAllProperties('attendee')) {
+      const email = mailto(p.getFirstValue());
+      if (!email.includes('@') || me.includes(email) || out.has(email)) continue;
+      const cn = p.getFirstParameter('cn');
+      out.set(email, cn ? String(cn) : null);
+    }
+  }
+  return [...out].map(([email, name]) => ({ email, name }));
+}
+
+/** The organizer's address of an object's event, or null. */
+export function organizerOf(raw: string, uid: string): string | null {
+  const vcal = parseCalendar(raw);
+  const ev = masterOf(vcal, uid) ?? vevents(vcal, uid)[0];
+  const email = mailto(ev?.getFirstPropertyValue('organizer'));
+  return email.includes('@') ? email : null;
+}
+
 /** The UID of an object's events (an object holds one), for a resource the server sent. */
 export function uidOf(raw: string): string | null {
   const m = /^UID:(.*)$/im.exec(raw.replace(/\r?\n[ \t]/g, ''));

@@ -174,6 +174,9 @@ interface EventInput { calendarId?: string; summary: string; location?; descript
 - `POST /v1/calendar/invites` `{ account: <mail account id>, messageId, part: number }` (Mail's invite card, PR 5): parses the
   `text/calendar` part, answers `{ event, action: 'request' | 'cancel' | 'reply', alreadyOnCalendar: boolean }`; `POST …/invites/respond`
   `{ …same, response }` puts the event on the default calendar with the response and sends the REPLY (server or iMIP).
+  (As built, 2026-11-05: §14. `messageId` is `<accountId>:<folder>:<uid>` or `{ folder, uid }`; the answer is `{ action, event,
+  onCalendar: { calendarId, id, eventId, myResponse, cancelled } | null, reply?, organizerIsMe, calendars }`; `respond` takes a
+  `calendarId` and answers `replied`; `POST …/invites/cancel` takes a cancelled one off the calendar.)
 - `GET  …/debug/sync`, `POST …/debug/sync` (local dev and support).
 
 ## 5. The client: `packages/calendar` at `/calendar`
@@ -216,7 +219,7 @@ sources (`lib/docsAgent.ts`) where Mail already does.
 - **Mail**: the invite card in `ThreadView` for a message with a `text/calendar` part (`lib/invites.ts` reads METHOD, summary,
   when, organizer, attendees from the part through the API's parse); Accept / Tentative / Decline; "Added to your calendar" when it
   already is (the server processed it); a CANCEL card with Remove. "Create event" in a thread's menu opens Calendar's quick create
-  with the subject and participants (`/calendar?new=…`). The Mail object sends iMIP for the Calendar object through its SMTP route.
+  with the subject and participants (`/calendar?new=…`). The Mail object sends iMIP for the Calendar object through its SMTP route. (As built, 2026-11-05: §14; by binding, never a route.)
 - **Docs**: `CalendarContext` in `shared/agent/protocol.ts` (`page: 'calendar'`: the view and its range, the calendars shown, the
   open or selected event's id, summary, when) rendered by `prompt.ts` like `renderMailContext`; the browser tools
   `open_calendar_event` and `show_calendar_range` (Calendar runs them, the other apps refuse them, as with `open_mail_message`).
@@ -461,3 +464,72 @@ the organizer (else the calendar); the place, with a map link; the description w
 and, for an invitation (`myResponse`), Going? Yes · No · Maybe in a grey band, the answer filled in the calendar's colour. The
 card is at most 440px wide and as tall as the space Radix gives it, the body scrolling; it takes the focus (Esc closes; Enter on
 one of its buttons presses that button, not Edit).
+
+## 14. As built: invitations across Mail and Calendar (2026-11-05)
+
+- **What an invitation is**: a message with a `text/calendar` part (Google and Outlook send it as an alternative to the text
+  and again as `invite.ics`), else an `.ics` file (`application/ics`, or any type named `.ics`), whose METHOD is REQUEST, CANCEL
+  or REPLY. No METHOD, PUBLISH, or a file with no event is `bad_request`, and Mail shows no card. Mail's `lib/invites.ts`
+  `invitationPart` picks the part (the `text/calendar` one first) from the message's attachments.
+- **The routes** (`src/calendar/invites.ts`, the `Invites` class; the object implements its two ports, so `invites.test.ts`
+  runs it against a fake Mail and an in-memory store):
+  - `POST /v1/calendar/invites` `{ account, messageId: "<accountId>:<folder>:<uid>" | { folder, uid }, part }` → `{ action:
+    'request' | 'cancel' | 'reply', event: InviteEvent, onCalendar, reply?, organizerIsMe, calendars }`. The part is read from the
+    person's Mail object by the `MAIL` binding (`Mail.calendarPart`, the bytes `attachments/:index` serves, at most 1 MB) and
+    parsed by `ical.ts` `parseInvitation` (one UID; the master or plain event, else the one occurrence a message names by
+    RECURRENCE-ID). "Me" is every calendar account's addresses, the calendars' owner addresses and the mail account's
+    address. `InviteEvent` is EventOccurrence's fields that make sense off a calendar (summary, start, end, all-day, zone,
+    location, description, status, organizer, attendees with `self`, `myResponse`, `recurrence` lines, `recurrenceId`,
+    `conference`, `sequence`). `onCalendar`: the same UID on any calendar (a writable one first), or that occurrence of it, with
+    the person's answer there and whether it is cancelled. `calendars`: the writable ones (id, name, colour, default).
+  - `POST …/invites/respond` `{ …, response, calendarId? }` (REQUEST only) → the answer plus `replied: 'server' | 'email' |
+    'none' | 'failed'` (`replyError`). On a calendar already: `respondTo` there (the existing RSVP path; a copy that does not list
+    the person gets them added), and on a server that does not schedule a newer invitation (higher SEQUENCE) replaces the copy
+    first. Else the invitation is PUT on `calendarId` or the default calendar (`storedInvitation`: METHOD gone, as CalDAV
+    requires; only its UID's VEVENTs; the person's PARTSTAT, RSVP gone; the mail account's address added when none of theirs is
+    invited, a list's invitation).
+  - `POST …/invites/cancel` (CANCEL only) → the answer plus `removed`: the event deleted, or one occurrence EXDATEd (`deleteFromEvent`
+    `this`); nothing to remove is `removed: false`.
+- **Who schedules**: a Google account, or a CalDAV account whose discovery found a scheduling outbox (`ServerState.outbox`:
+  iCloud, Fastmail, Nextcloud). Those servers send and process invitations themselves; for the rest (Radicale) FreeFlow sends
+  iMIP (RFC 6047) from the person's mail account:
+  - **Answers**: `invites/respond`, and Calendar's own `events/:id/respond` (which now also answers `replied`), email the
+    organizer a REPLY (`itipReply`: the series' VEVENTs or the occurrence's, only the person's ATTENDEE line, no alarms), from
+    the mail account the invitation came to (Calendar's RSVP: the account with one of the calendar's addresses).
+  - **Organizing**: `POST`, `PATCH` and `DELETE …/events` on such a calendar, for an event the person organizes with guests,
+    email a REQUEST (new or updated; a guest taken off gets a CANCEL), a CANCEL (deleted), or a CANCEL of one occurrence
+    (`scope=this`), from the mail account whose address is the calendar's (its account's addresses or its owner's). A change
+    to reminders alone sends nothing. The answer gains `invitationsSent: true`, or `false` with `invitationsNote` (no such mail
+    account, or SMTP failed); a write that needed no mail has neither. A failed email never fails the write.
+  - **The message** (`src/calendar/imip.ts`): text ("Scott Persinger has accepted the invitation to Lunch.", "Ann has invited
+    you to …" with When, Where, Guests) and the iCalendar as nodemailer's `icalEvent` (a `text/calendar; method=…` alternative
+    and `invite.ics`, Google's shape); subjects "Accepted: Lunch @ Thursday, November 5, 2026 · 12 – 1pm (America/New_York)",
+    "Invitation:", "Updated invitation:", "Cancelled:". The Mail object sends it (`Mail.sendCalendarMail`, after
+    `checkCalendarMail`: one of the three METHODs and the iCalendar saying it, 1–100 plain addresses, sane lengths) through the
+    account's SMTP. No Sent copy is kept. These Mail methods are reachable only by binding (RPC), never as a route, and answer
+    `{ ok, … } | { ok: false, status, code, message }` since an ApiError's code does not cross a binding.
+- **The user id**: the Calendar object learns whose it is from `handle(request, userId)` (routes/calendar.ts), kept in
+  `calendar_state` (and `ctx.id.name` where the runtime gives it), to address the Mail object of the same person.
+- **Mail's card** (`packages/mail/src/components/InviteCard.tsx`, in `ThreadView` above the body of an open message with an
+  invitation part; there is no separate MessageView): the title, `cardWhen` and the repeat in words (both from Calendar's
+  sources, `lib/calendarShared.ts`), place, Join for a call, the organizer and "N guests"; for a REQUEST Going? Yes · No · Maybe
+  (the answer filled, "On your calendar · Going", when it is on one), a calendar picker when there is more than one writable
+  calendar and it is not on one, and "Connect a calendar" with none; for a CANCEL "This event was cancelled" with Remove from
+  calendar or "Not on your calendar"; for a REPLY "Ann Lee accepted". Answering updates the card from the route's answer and
+  says it in a toast ("You're going. Ann Lee was emailed your answer."). The invitation's iCalendar files are not listed under
+  the message; a list row leaves out the `text/calendar` alternative and keeps `invite.ics`. The mock has an invitation (a
+  weekly series with a Meet link) and a cancellation.
+- **Create event** in a thread's ⋮ menu opens `/calendar/?new=<subject>&guests=Name <address>,…` in a new tab (everyone on the
+  thread but the person); Calendar (`lib/deeplink.ts`) opens its edit dialog with them, the next hour on the default calendar,
+  and takes the parameters off the address.
+- **Tests**: `invites.test.ts` (Google- and Outlook-shaped REQUEST, CANCEL of an event and of one occurrence, REPLY, what is
+  refused; the stored invitation, the REPLY, REQUEST and CANCEL; the routes against a fake Mail on a scheduling and a
+  non-scheduling server; the organizer's messages), `imip.test.ts` (the words, the MIME read back by postal-mime, the checks),
+  Mail's `lib/invites.test.ts`, `InviteCard.test.tsx` (the card's states, the calls, ThreadView's card, hidden chips and Create
+  event), `mock/invites.test.ts`, Calendar's `lib/deeplink.test.ts`, and `test/e2e-calendar-invites.mjs` (GreenMail and
+  Radicale: an invitation sent into GreenMail, read, accepted onto Radicale with PARTSTAT=ACCEPTED and the REPLY in the
+  organizer's mailbox, maybe, a REPLY to the person's own event, a CANCEL removing it, an event made with a guest inviting,
+  updating and cancelling by email, an RSVP from Calendar emailing its organizer, the timing lines). Its header says how to run it.
+- **Not in this PR**: a REPLY that arrives is shown, not applied to the organizer's copy on a non-scheduling server (the
+  guest's answer shows there only when the server or another client records it); a COUNTER or REFRESH; a Sent copy of iMIP
+  mail; an `.ics` without METHOD (PUBLISH) offered as "Add to calendar"; Calendar's popover saying when an emailed answer failed.

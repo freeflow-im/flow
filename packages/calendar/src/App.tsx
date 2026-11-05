@@ -24,6 +24,7 @@ import { useMediaQuery } from './hooks/layout';
 import { useAccounts, useCalendarPrefs, useCalendars, useEventMutations, useEvents, useSearch } from './hooks/calendar';
 import { movePatch } from './lib/occurrences';
 import { neighbours, parseDate, rangeOf, step, titleOf, type View } from './lib/ranges';
+import { parseNewEvent, withoutNewEvent } from './lib/deeplink';
 import { parsePlace, pathOf, type Place } from './lib/route';
 import { cn } from './lib/utils';
 
@@ -76,6 +77,18 @@ export function App() {
     q.delete('error');
     history.replaceState(null, '', `${window.location.pathname}${q.size ? `?${q}` : ''}`);
   }, []);
+  // "Create event" from Mail (`?new=<title>&guests=…`, lib/deeplink.ts): the edit dialog, filled in, once the calendars are
+  // here; then taken off the address.
+  const [asked] = useState(() => parseNewEvent(window.location.search));
+  const [askedDone, setAskedDone] = useState(false);
+  useEffect(() => {
+    if (!asked || askedDone || !calendars.isSuccess) return;
+    setAskedDone(true);
+    history.replaceState(null, '', `${window.location.pathname}${withoutNewEvent(window.location.search)}`);
+    if (!defaultCalendar) return setToast('Connect a calendar you can write to first.');
+    const at = startOfHour(addHours(new Date(), 1));
+    setEditing({ draft: { ...newDraft(at, addHours(at, 1), false, defaultCalendar.id, asked.summary), attendees: asked.attendees } });
+  }, [asked, askedDone, calendars.isSuccess, defaultCalendar]);
   const startGoogle = (email?: string) => void connectGoogle(email).catch((e: unknown) => setToast(errorText(e)));
 
   // The address follows the view; back and forward move it.

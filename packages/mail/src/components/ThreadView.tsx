@@ -4,17 +4,19 @@
 // unread messages and the last one start expanded; the rest are one line each (who, the snippet, when), and a run of
 // three or more read ones is folded into "N older messages". A body is only mounted when its message is expanded (its
 // frame measures itself on load). n and p (App.tsx) step through the messages.
-import { Archive, ArrowLeft, ChevronLeft, ChevronRight, Download, FolderInput, Forward, Loader2, Mail, MoreVertical, Pencil, Reply, ReplyAll, Star, Trash2 } from 'lucide-react';
+import { Archive, ArrowLeft, CalendarPlus, ChevronLeft, ChevronRight, Download, FolderInput, Forward, Loader2, Mail, MoreVertical, Pencil, Reply, ReplyAll, Star, Trash2 } from 'lucide-react';
 import { useEffect, useImperativeHandle, useRef, useState, type Ref } from 'react';
 import { attachmentUrl, type Address, type Category, type MailFolder, type MessageDetail, type ThreadDetail, type ThreadMessage } from '../api';
 import { displayName, formatAddress } from '../lib/addresses';
 import { folderLabel, orderFolders } from '../lib/folders';
 import { fileSize, fullDate, listDate, relativeDate } from '../lib/format';
+import { createEventUrl, invitationPart, isCalendarFile, threadPeople } from '../lib/invites';
 import { TAB_INFO } from '../lib/tabs';
 import { conversationSubject, expandedByDefault, foldRuns, replyTarget } from '../lib/threads';
 import { cn } from '../lib/utils';
 import { AttachmentPreview } from './AttachmentPreview';
 import { FileIcon } from './FileIcon';
+import { InviteCard } from './InviteCard';
 import { TAB_ICONS } from './InboxTabs';
 import { MessageBody } from './MessageBody';
 import { Button } from './ui/button';
@@ -58,6 +60,10 @@ export interface ThreadViewProps {
   /** A message whose body the server has not fetched yet was opened (or Retry pressed): read it now (hooks/mail.ts `fetchBody`). */
   onNeedBody(m: ThreadMessage): void;
   handle?: Ref<ThreadViewHandle | null> | undefined;
+  /** A passing message (App.tsx's toast): an invitation answered. */
+  onNotice?: ((text: string) => void) | undefined;
+  /** "Create event" from the thread: opens Calendar at this address (default: a new tab). */
+  onOpenCalendar?: ((url: string) => void) | undefined;
 }
 
 function Action({ label, onClick, children, disabled, pressed }: { label: string; onClick(): void; children: React.ReactNode; disabled?: boolean; pressed?: boolean }) {
@@ -232,6 +238,14 @@ export function ThreadView(p: ThreadViewProps) {
             <DropdownMenuContent align="end">
               <DropdownMenuItem onSelect={p.onToggleSeen}>{anyUnread ? 'Mark as read' : 'Mark as unread'}</DropdownMenuItem>
               <DropdownMenuItem onSelect={p.onToggleFlag}>{anyFlagged ? 'Remove star' : 'Star'}</DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() => {
+                  const url = createEventUrl(threadSubject(messages), threadPeople(messages, p.me));
+                  (p.onOpenCalendar ?? ((u: string) => window.open(u, '_blank', 'noopener')))(url);
+                }}
+              >
+                <CalendarPlus /> Create event
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onSelect={p.onDelete} className="text-danger">
                 Delete
@@ -294,6 +308,7 @@ export function ThreadView(p: ThreadViewProps) {
                       onFlag={() => p.onFlagMessage(m, !m.flagged)}
                       onRetry={() => p.onNeedBody(m)}
                       onPreview={(at) => setPreviewing({ index: i, at })}
+                      onNotice={p.onNotice ?? (() => {})}
                     />
                   );
                 })
@@ -337,8 +352,14 @@ export function ThreadView(p: ThreadViewProps) {
   );
 }
 
-/** A message's attachments as listed under it: not the pictures its HTML shows by cid (nor, before the body is here, any inline part). */
-const shownFiles = (m: ThreadMessage) => m.attachments.filter((a) => (m.bodyPending ? !a.inline : !a.inline || !a.contentId || !(m.html ?? '').includes(a.contentId.replace(/^<|>$/g, ''))));
+/**
+ * A message's attachments as listed under it: not the pictures its HTML shows by cid (nor, before the body is here, any
+ * inline part), and not the iCalendar of an invitation, which its card shows.
+ */
+const shownFiles = (m: ThreadMessage) => {
+  const invite = !m.bodyPending && invitationPart(m);
+  return m.attachments.filter((a) => (m.bodyPending ? !a.inline : !a.inline || !a.contentId || !(m.html ?? '').includes(a.contentId.replace(/^<|>$/g, ''))) && !(invite && isCalendarFile(a)));
+};
 
 interface ItemProps {
   ref: Ref<HTMLElement>;
@@ -356,11 +377,13 @@ interface ItemProps {
   onFlag(): void;
   onRetry(): void;
   onPreview(at: number): void;
+  onNotice(text: string): void;
 }
 
 /** One message of the thread: a line when collapsed; its header, body and attachments when open. */
-function ThreadMessageItem({ ref, accountId, me, message: m, open, last, focused, onToggle, onReply, onReplyAll, onForward, onEditDraft, onFlag, onRetry, onPreview }: ItemProps) {
+function ThreadMessageItem({ ref, accountId, me, message: m, open, last, focused, onToggle, onReply, onReplyAll, onForward, onEditDraft, onFlag, onRetry, onPreview, onNotice }: ItemProps) {
   const files = shownFiles(m);
+  const invite = m.bodyPending ? null : invitationPart(m);
   const fromMe = m.from?.address.toLowerCase() === me.toLowerCase();
   const name = fromMe ? 'me' : displayName(m.from);
   const toLine = m.to.map((a) => (a.address.toLowerCase() === me.toLowerCase() ? 'me' : displayName(a))).join(', ');
@@ -452,7 +475,10 @@ function ThreadMessageItem({ ref, accountId, me, message: m, open, last, focused
               <Loader2 className="size-4 animate-spin" /> Loading…
             </div>
           ) : (
-            <MessageBody accountId={accountId} message={m} />
+            <>
+              {invite && <InviteCard invite={{ account: accountId, folder: m.folder, uid: m.uid, part: invite.index }} onNotice={onNotice} />}
+              <MessageBody accountId={accountId} message={m} />
+            </>
           )}
           {files.length > 0 && (
             <div className="mt-3 border-t border-hairline pt-3">
