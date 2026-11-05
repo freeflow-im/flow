@@ -10,7 +10,24 @@ import { ApiError } from '../../errors';
 import { authFailed, calendarError, checkUrl, conflict, connectFailed } from '../rules';
 
 export interface Discovery { principal: string; home: string; addresses: string[]; outbox: string | null }
-export interface RemoteCalendar { href: string; name: string; color: string | null; timezone: string | null; role: 'owner' | 'writer' | 'reader'; supportsSync: boolean; ctag: string | null }
+/**
+ * A calendar of the home. `ownerAddress`: the address of whoever the calendar belongs to, when that is not the person
+ * (a calendar shared into the account): on it, that address is "me" too, as Google's own UI has it, so an invitation to the
+ * owner shows as the person's (outlined until answered) and an RSVP answers for that attendee.
+ */
+export interface RemoteCalendar { href: string; name: string; color: string | null; timezone: string | null; role: 'owner' | 'writer' | 'reader'; supportsSync: boolean; ctag: string | null; ownerAddress: string | null }
+
+/** Google names each calendar by its id in the path (`/caldav/v2/<id>/events/`): for a person's calendar, their address. */
+export function googleOwnerAddress(href: string): string | null {
+  const m = /\/caldav\/v2\/([^/]+)\/events\/?$/.exec(new URL(href).pathname);
+  if (!m) return null;
+  try {
+    const id = decodeURIComponent(m[1]).toLowerCase();
+    return id.includes('@') ? id : null;
+  } catch {
+    return null;
+  }
+}
 export interface RemoteObject { href: string; etag: string; data: string }
 export interface Changes { changed: { href: string; etag: string }[]; deleted: string[]; token: string | null }
 export type Interval = [string, string];
@@ -174,9 +191,22 @@ export class CalDav implements Driver {
       if (err instanceof ApiError) throw err;
       throw connectFailed(`Could not list the calendars (${(err as Error).message})`);
     }
-    return list
+    const google = new URL(home).hostname.endsWith('googleusercontent.com');
+    const addresses = new Map<string, Promise<string | null>>();
+    /** An owner principal's first mailto address (calendar-user-address-set), asked once per owner; null when it says none. */
+    const addressOf = (owner: string) => {
+      let p = addresses.get(owner);
+      if (!p) {
+        p = propfind({ url: owner, props: { 'c:calendar-user-address-set': {} }, depth: '0', fetch: this.request })
+          .then(([r]) => JSON.stringify(r?.props?.calendarUserAddressSet ?? '').match(/mailto:([^"\\]+)/i)?.[1]?.toLowerCase() ?? null)
+          .catch((err) => { if (err instanceof ApiError && err.code === 'auth_failed') throw err; return null; });
+        addresses.set(owner, p);
+      }
+      return p;
+    };
+    return Promise.all(list
       .filter((c) => !c.components?.length || c.components.includes('VEVENT'))
-      .map((c) => {
+      .map(async (c) => {
         const privileges = JSON.stringify(c.projectedProps?.currentUserPrivilegeSet ?? null);
         const writable = privileges === 'null' || /"(write|write-content|writeContent|all)"/.test(privileges);
         // Someone else's calendar shared with the person (Google: another person's primary calendar) names its owner.
@@ -187,8 +217,9 @@ export class CalDav implements Driver {
         const tz = /^TZID:(.+)$/m.exec(String(c.timezone ?? '').replace(/\r/g, ''))?.[1]?.trim() ?? null;
         const name = (typeof c.displayName === 'string' && c.displayName.trim()) || decodeURIComponent(new URL(c.url).pathname.split('/').filter(Boolean).at(-1) ?? 'Calendar');
         const reports = (c.reports ?? []) as string[];
-        return { href: c.url, name, color, timezone: tz, role, supportsSync: reports.includes('syncCollection'), ctag: c.ctag ?? null };
-      });
+        const ownerAddress = google ? googleOwnerAddress(c.url) : theirs && ownerHref ? await addressOf(absolute(ownerHref, c.url)) : null;
+        return { href: c.url, name, color, timezone: tz, role, supportsSync: reports.includes('syncCollection'), ctag: c.ctag ?? null, ownerAddress };
+      }));
   }
 
   async state(href: string): Promise<{ token: string | null; ctag: string | null }> {

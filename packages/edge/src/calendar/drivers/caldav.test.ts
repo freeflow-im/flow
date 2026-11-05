@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../../errors';
-import { CalDav, parseScheduleResponse } from './caldav';
+import { CalDav, googleOwnerAddress, parseScheduleResponse } from './caldav';
 
 /** A fake CalDAV server: answers by method and path from a table, records every request. */
 function fakeServer(routes: Record<string, (req: { method: string; url: URL; body: string; headers: Headers }) => Response | Promise<Response>>) {
@@ -67,8 +67,8 @@ describe('the CalDAV driver, against a fake server', () => {
     });
     const cals = await client(fetchFn).calendars(home);
     expect(cals).toEqual([
-      { href: 'https://dav.example.com/ann/work/', name: 'Work', color: '#ff2968', timezone: 'Europe/Paris', role: 'owner', supportsSync: true, ctag: 'c1' },
-      { href: 'https://dav.example.com/ann/holidays/', name: 'Holidays', color: null, timezone: null, role: 'reader', supportsSync: false, ctag: null },
+      { href: 'https://dav.example.com/ann/work/', name: 'Work', color: '#ff2968', timezone: 'Europe/Paris', role: 'owner', supportsSync: true, ctag: 'c1', ownerAddress: null },
+      { href: 'https://dav.example.com/ann/holidays/', name: 'Holidays', color: null, timezone: null, role: 'reader', supportsSync: false, ctag: null, ownerAddress: null },
     ]);
   });
 
@@ -203,9 +203,16 @@ END:VCALENDAR</C:calendar-data></C:response><C:response><C:recipient><D:href>mai
     const { fetchFn } = fakeServer({
       'PROPFIND /caldav/v2/scott/': () => xml(cal('/caldav/v2/scott/events/', 'Scott', '/caldav/v2/scott/user', write) + cal('/caldav/v2/andrea/events/', 'Andrea', '/caldav/v2/andrea/user', write)
         + cal('/caldav/v2/holidays/events/', 'Holidays', '/caldav/v2/holidays/user', '<d:current-user-privilege-set><d:privilege><d:read/></d:privilege></d:current-user-privilege-set>')),
+      // The owner principals: Andrea's has an address; the holidays one answers with an error, which is no address.
+      'PROPFIND /caldav/v2/andrea/user': () => xml(response('/caldav/v2/andrea/user', '<c:calendar-user-address-set><d:href>mailto:Andrea@Example.com</d:href></c:calendar-user-address-set>')),
     });
     const cals = await client(fetchFn).calendars('https://dav.example.com/caldav/v2/scott/', 'https://dav.example.com/caldav/v2/scott/user');
     expect(cals.map((c) => [c.name, c.role])).toEqual([['Scott', 'owner'], ['Andrea', 'writer'], ['Holidays', 'reader']]);
+    // Not on Google: a shared calendar's owner address comes from the owner principal's calendar-user-address-set.
+    expect(cals.map((c) => c.ownerAddress)).toEqual([null, 'andrea@example.com', null]);
+    expect(googleOwnerAddress('https://apidata.googleusercontent.com/caldav/v2/scottp%40biztrip.ai/events/')).toBe('scottp@biztrip.ai');
+    expect(googleOwnerAddress('https://apidata.googleusercontent.com/caldav/v2/Andrea.Persinger%40gmail.com/events')).toBe('andrea.persinger@gmail.com');
+    expect(googleOwnerAddress('https://dav.example.com/ann/work/')).toBeNull();
   });
 });
 

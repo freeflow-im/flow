@@ -72,6 +72,16 @@ describe('reading an object', () => {
     expect(ev.recurUntil).toBe(at('2026-11-04T10:00:00Z'));
   });
 
+  it('takes a shared calendar\'s owner as "me" too: their invitation is the person\'s to answer', () => {
+    const raw = 'BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:w\r\nDTSTART:20261105T160000Z\r\nDTEND:20261105T163000Z\r\nSUMMARY:Pilot check-in\r\nORGANIZER:mailto:pm@moderna.test\r\nATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:scottp@biztrip.ai\r\nATTENDEE;PARTSTAT=ACCEPTED:mailto:pm@moderna.test\r\nEND:VEVENT\r\nEND:VCALENDAR';
+    expect(parseObject(raw, { me: new Set(['scottpersinger@gmail.com']), zone: 'UTC' })[0].data.myResponse).toBeUndefined();
+    const [ev] = parseObject(raw, { me: new Set(['scottpersinger@gmail.com', 'scottp@biztrip.ai']), zone: 'UTC' });
+    expect(ev.data.myResponse).toBe('needs-action');
+    expect(ev.data.attendees.find((a) => a.self)?.email).toBe('scottp@biztrip.ai');
+    const answered = respondTo(raw, 'w', 0, 'accepted', undefined, { ...ctx, me: ['scottpersinger@gmail.com', 'scottp@biztrip.ai'] });
+    expect(parseObject(answered, { me: new Set(['scottp@biztrip.ai']), zone: 'UTC' })[0].data.myResponse).toBe('accepted');
+  });
+
   it('reads all-day events as dates and Outlook\'s zones by their VTIMEZONE', () => {
     const [day] = parseObject(fixture('allday.ics'), { me: ME, zone: 'UTC' });
     expect(day).toMatchObject({ kind: 0, startUtc: at('2026-11-26T00:00:00Z'), endUtc: at('2026-11-28T00:00:00Z') });

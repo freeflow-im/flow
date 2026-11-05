@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { DAY_MS, LONG_MS, newEvent } from './ical';
-import { CalendarStore, deleteEventsSql, dueSql, eventsOfUidSql, etagsSql, exceptionsSql, objectByUidSql, seriesSql, singlesSql, type Sql } from './store';
+import { CalendarStore, deleteEventsSql, dueSql, eventsOfUidSql, etagsSql, exceptionsSql, objectByUidSql, objectsSql, seriesSql, singlesSql, type Sql } from './store';
 
 /** The object's SqlStorage, on node:sqlite (as cache.test.ts does for Mail). */
 function memory(): Sql & { db: DatabaseSync } {
@@ -78,6 +78,7 @@ describe('the window and sync queries, on a production-sized table', () => {
     expect(plan(sql, etagsSql, 'work').some((d) => /SEARCH objects USING COVERING INDEX objects_etag \(calendar_id=\?\)/.test(d))).toBe(true);
     expect(plan(sql, objectByUidSql, 'work', 'u1').some((d) => /SEARCH objects USING INDEX objects_uid \(calendar_id=\? AND uid=\?\)/.test(d))).toBe(true);
     expect(plan(sql, eventsOfUidSql, 'work', 'u1').some((d) => /SEARCH events USING INDEX events_uid \(calendar_id=\? AND uid=\?\)/.test(d))).toBe(true);
+    expect(plan(sql, objectsSql, 'work').some((d) => /SEARCH objects USING INDEX sqlite_autoindex_objects_1 \(calendar_id=\?\)/.test(d))).toBe(true);
     expect(plan(sql, deleteEventsSql, 'work', 'h').some((d) => /SEARCH events USING INDEX events_href \(calendar_id=\? AND href=\?\)/.test(d))).toBe(true);
     // The calendars table holds a person's few dozen calendars: a scan of it is the plan, and it joins nothing.
     expect(plan(sql, dueSql, 0).every((d) => !/events|objects/.test(d))).toBe(true);
@@ -166,4 +167,30 @@ describe('CalendarStore', () => {
     store.ensureDefault();
     expect(store.calendars().filter((c) => c.is_default).map((c) => c.id)).toEqual(['c']);
   });
+
+  it('keeps the calendars as the server lists them, the owner address of a shared one, and reparses when it changes', () => {
+    const sql = memory();
+    const store = new CalendarStore(sql);
+    store.init();
+    store.init();
+    sql.exec(`INSERT INTO accounts (id, email, display_name, server, secret, key_id, created_at) VALUES ('a', 'me@gmail.com', 'Me', '{}', x'00', 'k', 0)`);
+    const remote = (owner: string | null) => [
+      { href: 'https://g/caldav/v2/me%40gmail.com/events/', name: 'Me', color: null, timezone: null, role: 'owner' as const, supportsSync: true, ctag: null, ownerAddress: 'me@gmail.com' },
+      { href: 'https://g/caldav/v2/work%40corp.test/events/', name: 'Work', color: '#ff0000', timezone: null, role: 'reader' as const, supportsSync: true, ctag: null, ownerAddress: owner },
+    ];
+    store.applyCalendars('a', remote('work@corp.test'), ['#111111']);
+    const work = store.calendars().find((c) => c.name === 'Work')!;
+    expect(work).toMatchObject({ owner_address: 'work@corp.test', reparse: 0, role: 'reader', server_color: '#ff0000' });
+    const series = 'BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:s\r\nDTSTART:20261105T160000Z\r\nDTEND:20261105T163000Z\r\nATTENDEE;PARTSTAT=NEEDS-ACTION:mailto:boss@corp.test\r\nEND:VEVENT\r\nEND:VCALENDAR';
+    store.putObject(work.id, 'https://g/w/s.ics', '"1"', series, { me: new Set(['me@gmail.com', 'work@corp.test']), zone: 'UTC' });
+    expect(store.find(work.id, 's', null)?.event.myResponse).toBeUndefined();
+    store.applyCalendars('a', remote('boss@corp.test'), ['#111111']);
+    expect(store.calendar(work.id)).toMatchObject({ owner_address: 'boss@corp.test', reparse: 1 });
+    expect(store.reparse(work.id, { me: new Set(['me@gmail.com', 'boss@corp.test']), zone: 'UTC' })).toBe(1);
+    expect(store.find(work.id, 's', null)?.event.myResponse).toBe('needs-action');
+    expect(store.calendar(work.id)?.reparse).toBe(0);
+    store.applyCalendars('a', remote('boss@corp.test').slice(0, 1), ['#111111']);
+    expect(store.calendars().map((c) => c.name)).toEqual(['Me']);
+  });
 });
+

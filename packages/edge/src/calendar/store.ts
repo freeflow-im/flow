@@ -6,6 +6,7 @@
 // GROUP BY over an unindexed join. Written against the small `Sql` interface so the tests run it on node:sqlite.
 import type { Sql } from '../imap/cache';
 import { LONG_MS, expand, isoOf, parseObject, ridText, type EventData, type ParsedEvent, type Rules } from './ical';
+import type { RemoteCalendar } from './drivers/caldav';
 import { eventIdOf, occurrenceIdOf } from './rules';
 
 export type { Sql };
@@ -38,10 +39,21 @@ export const DDL = [
   `CREATE TABLE IF NOT EXISTS calendar_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
 ];
 const SYNC_RUNS_KEEP = 200;
+/**
+ * Columns added after the first release, each added once (ALTER fails when it is already there), with what runs once after.
+ * owner_address (2026-11-04): a shared calendar's owner, who is "me" on it; `reparse` marks a calendar whose stored objects
+ * must be read again (the rows' `self` and `myResponse` depend on who "me" is), done before its next sync, and the accounts'
+ * calendar lists are read again at the next alarm run, which fills owner_address in.
+ */
+const ADDED_COLUMNS: { add: string; then?: string }[] = [
+  { add: 'ALTER TABLE calendars ADD COLUMN owner_address TEXT' },
+  { add: 'ALTER TABLE calendars ADD COLUMN reparse INTEGER NOT NULL DEFAULT 1', then: 'UPDATE accounts SET calendars_at = 0' },
+];
 
 export interface CalendarRow {
   id: string; account_id: string; href: string; name: string; server_color: string | null; color: string | null; timezone: string | null;
   role: string; hidden: number; is_default: number; sync_token: string | null; ctag: string | null; supports_sync: number; last_synced: number; position: number; created_at: number;
+  owner_address: string | null; reparse: number;
 }
 export interface ObjectRow { calendar_id: string; href: string; uid: string; etag: string; raw: string }
 interface EventRow { id: string; calendar_id: string; uid: string; rid: number; etag: string; start_utc: number; end_utc: number; status: string; data: string; rules: string | null }
@@ -66,6 +78,7 @@ export const singlesSql = (like: boolean) =>
 export const seriesSql = (like: boolean) => `SELECT ${COLS} FROM events INDEXED BY events_series WHERE ${IN_CALENDARS} AND kind = 1 AND recur_until > ? AND start_utc < ?${like ? ' AND search LIKE ?' : ''}`;
 /** The exceptions whose original occurrence falls in a window: they replace those occurrences of their masters. */
 export const exceptionsSql = `SELECT calendar_id, uid, rid FROM events INDEXED BY events_rid WHERE ${IN_CALENDARS} AND rid > 0 AND rid >= ? AND rid < ?`;
+export const objectsSql = 'SELECT href, etag, raw FROM objects INDEXED BY sqlite_autoindex_objects_1 WHERE calendar_id = ?';
 export const etagsSql = 'SELECT href, etag FROM objects INDEXED BY objects_etag WHERE calendar_id = ?';
 export const objectByUidSql = 'SELECT calendar_id, href, uid, etag, raw FROM objects INDEXED BY objects_uid WHERE calendar_id = ? AND uid = ?';
 export const eventsOfUidSql = `SELECT ${COLS} FROM events INDEXED BY events_uid WHERE calendar_id = ? AND uid = ?`;
@@ -93,6 +106,10 @@ export class CalendarStore {
 
   init(): void {
     for (const s of DDL) this.sql.exec(s);
+    for (const { add, then } of ADDED_COLUMNS) {
+      try { this.sql.exec(add); } catch { continue; /* already added */ }
+      if (then) this.sql.exec(then);
+    }
   }
 
   // ---- calendars ----------------------------------------------------------------------------------------------
@@ -117,6 +134,33 @@ export class CalendarStore {
     this.sql.exec('DELETE FROM objects WHERE calendar_id = ?', id);
     this.sql.exec('DELETE FROM sync_runs WHERE calendar_id = ?', id);
     this.sql.exec('DELETE FROM calendars WHERE id = ?', id);
+  }
+
+  /**
+   * An account's calendars as the server lists them now: new ones added (a palette colour where the server gives none), gone
+   * ones forgotten with their events, names, colours, zones, roles and owner addresses updated (a changed owner address marks
+   * the calendar for reparsing), and when the list was read. The caller picks the default calendar again.
+   */
+  applyCalendars(accountId: string, remote: RemoteCalendar[], palette: string[]): void {
+    const now = Date.now();
+    const local = this.calendarsOf(accountId);
+    const byHref = new Map(local.map((c) => [c.href, c]));
+    let position = Math.max(0, ...this.calendars().map((c) => c.position + 1));
+    for (const r of remote) {
+      const have = byHref.get(r.href);
+      if (have) {
+        this.sql.exec('UPDATE calendars SET name = ?, server_color = ?, timezone = ?, role = ? WHERE id = ?', r.name, r.color, r.timezone, r.role, have.id);
+        // A new owner address changes who "me" is on the calendar: its events are read again before the next sync.
+        this.sql.exec('UPDATE calendars SET owner_address = ?, reparse = 1 WHERE id = ? AND owner_address IS NOT ?', r.ownerAddress, have.id, r.ownerAddress);
+        this.sql.exec('UPDATE calendars SET supports_sync = ? WHERE id = ? AND supports_sync != ?', r.supportsSync ? 1 : 0, have.id, r.supportsSync ? 1 : 0);
+        byHref.delete(r.href);
+      } else {
+        this.sql.exec('INSERT INTO calendars (id, account_id, href, name, server_color, color, timezone, role, supports_sync, position, created_at, owner_address, reparse) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)',
+          crypto.randomUUID(), accountId, r.href, r.name, r.color, r.color ? null : palette[position % palette.length], r.timezone, r.role, r.supportsSync ? 1 : 0, position++, now, r.ownerAddress);
+      }
+    }
+    for (const gone of byHref.values()) this.forgetCalendar(gone.id);
+    this.sql.exec('UPDATE accounts SET calendars_at = ? WHERE id = ?', now, accountId);
   }
 
   /** Keeps exactly one default calendar: the one asked for, else the one there is, else the person's own first, else any writable one. */
@@ -159,6 +203,13 @@ export class CalendarStore {
         JSON.stringify(e.data), e.rules ? JSON.stringify(e.rules) : null);
     }
     return parsed;
+  }
+  /** Reads every stored object of a calendar again (who "me" is changed), with no round trip; clears its `reparse` mark. */
+  reparse(calendarId: string, opts: { me: Set<string>; zone: string }): number {
+    const rows = this.sql.exec<{ href: string; etag: string; raw: string }>(objectsSql, calendarId).toArray();
+    for (const o of rows) this.putObject(calendarId, o.href, o.etag, o.raw, opts);
+    this.sql.exec('UPDATE calendars SET reparse = 0 WHERE id = ?', calendarId);
+    return rows.length;
   }
   deleteObject(calendarId: string, href: string): void {
     this.sql.exec(deleteEventsSql, calendarId, href);

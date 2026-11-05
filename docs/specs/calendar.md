@@ -438,3 +438,12 @@ its e2e green.
     `writer`, and subscribed ones (holidays, a read-only shared calendar) `reader`.
   - *Which calendars.* Only those ticked in Google's Sync settings; the Connect page's Google row and a Google account's dialog
     say so with the link, and Refresh calendars picks up one ticked since.
+  - *Invitations on a shared calendar* (the work calendar `scottp@biztrip.ai` shared into a Gmail account). Its events invite
+    `scottp@biztrip.ai`, not the account's address, so no attendee was `self` and nothing drew outlined. "Me" on a calendar is
+    now the account's addresses plus the calendar's owner (`calendars.owner_address`, `RemoteCalendar.ownerAddress`: on Google
+    the id in the href, `/caldav/v2/<id>/events/`; elsewhere, for a calendar owned by another principal, that principal's
+    `calendar-user-address-set`, asked once per owner at list time, null on failure), as Google's own UI has it. It is used when
+    events are parsed (sync and writes), when an RSVP is written (that attendee's PARTSTAT), and in free/busy. `reparse` marks a
+    calendar whose stored objects are read again from `objects` before its next sync (no round trip): set for every calendar
+    when the column was added (with the accounts' lists read again at the next alarm run), and whenever the owner address
+    changes (`CalendarStore.applyCalendars`).

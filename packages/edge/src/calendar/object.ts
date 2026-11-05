@@ -108,6 +108,12 @@ export class Calendar extends DurableObject<CalendarEnv> {
     this.sql.exec('UPDATE accounts SET status = ?, status_message = ? WHERE id = ? AND (status != ? OR status_message IS NOT ?)', status, message, id, status, message);
   }
   private me(r: AccountRow): Set<string> { return new Set([r.email.toLowerCase(), ...this.serverOf(r).addresses]); }
+  /** "Me" on one calendar: the account's addresses, and the calendar's owner when it is shared into the account. */
+  private meOn(r: AccountRow, c: CalendarRow): Set<string> {
+    const me = this.me(r);
+    if (c.owner_address) me.add(c.owner_address.toLowerCase());
+    return me;
+  }
 
   private driver(url: string, credential: Credential): Driver {
     return new CalDav({ url, credential, allowInsecure: this.allowInsecure, onTime: (ms) => { const t = timing.getStore(); if (t) t.server += ms; } });
@@ -161,25 +167,9 @@ export class Calendar extends DurableObject<CalendarEnv> {
     return { found, calendars };
   }
 
-  /** The account's calendars as the server lists them now: new ones added, gone ones forgotten, names and roles updated. */
+  /** The account's calendars as the server lists them now (store.ts `applyCalendars`), then one default calendar again. */
   private applyCalendars(accountId: string, remote: RemoteCalendar[]): void {
-    const now = Date.now();
-    const local = this.store.calendarsOf(accountId);
-    const byHref = new Map(local.map((c) => [c.href, c]));
-    let position = Math.max(0, ...this.store.calendars().map((c) => c.position + 1));
-    for (const r of remote) {
-      const have = byHref.get(r.href);
-      if (have) {
-        this.sql.exec('UPDATE calendars SET name = ?, server_color = ?, timezone = ?, role = ? WHERE id = ?', r.name, r.color, r.timezone, r.role, have.id);
-        this.sql.exec('UPDATE calendars SET supports_sync = ? WHERE id = ? AND supports_sync != ?', r.supportsSync ? 1 : 0, have.id, r.supportsSync ? 1 : 0);
-        byHref.delete(r.href);
-      } else {
-        this.sql.exec('INSERT INTO calendars (id, account_id, href, name, server_color, color, timezone, role, supports_sync, position, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          crypto.randomUUID(), accountId, r.href, r.name, r.color, r.color ? null : PALETTE[position % PALETTE.length], r.timezone, r.role, r.supportsSync ? 1 : 0, position++, now);
-      }
-    }
-    for (const gone of byHref.values()) this.store.forgetCalendar(gone.id);
-    this.sql.exec('UPDATE accounts SET calendars_at = ? WHERE id = ?', now, accountId);
+    this.store.applyCalendars(accountId, remote, PALETTE);
     this.store.ensureDefault();
   }
 
@@ -223,7 +213,9 @@ export class Calendar extends DurableObject<CalendarEnv> {
       const d = this.driverOf(acct);
       const started = Date.now();
       let mode = 'delta', changed = 0, deleted = 0, error: string | null = null;
-      const opts = { me: this.me(acct), zone: c.timezone ?? 'UTC' };
+      const opts = { me: this.meOn(acct, c), zone: c.timezone ?? 'UTC' };
+      // Who "me" is on this calendar changed (or the parser learnt it): its stored objects read again first, no round trip.
+      if (c.reparse) this.store.reparse(c.id, opts);
       const fetchAndStore = async (hrefs: string[]) => {
         for (const o of await d.get(c.href, hrefs)) { this.store.putObject(c.id, o.href, o.etag, o.data, opts); changed++; }
       };
@@ -375,13 +367,13 @@ export class Calendar extends DurableObject<CalendarEnv> {
   private writeContext(acct: AccountRow, c: CalendarRow, zone?: string | null): WriteContext {
     const s = this.serverOf(acct);
     const organizer = s.addresses.find((a) => a === acct.email.toLowerCase()) ?? acct.email.toLowerCase();
-    return { me: [...this.me(acct)], organizer, displayName: acct.display_name, zone: zone || c.timezone || 'UTC', now: Date.now() };
+    return { me: [...this.meOn(acct, c)], organizer, displayName: acct.display_name, zone: zone || c.timezone || 'UTC', now: Date.now() };
   }
 
   /** Writes an object to the server and then to the cache: the etag the PUT answered with, else the object as stored there. */
   private async putAndStore(d: Driver, acct: AccountRow, c: CalendarRow, href: string, raw: string, etag: string | null): Promise<void> {
     const put = await d.put(href, raw, etag);
-    const opts = { me: this.me(acct), zone: c.timezone ?? 'UTC' };
+    const opts = { me: this.meOn(acct, c), zone: c.timezone ?? 'UTC' };
     if (put.etag) { this.store.putObject(c.id, href, put.etag, raw, opts); return; }
     const [stored] = await d.get(c.href, [href]);
     if (stored) this.store.putObject(c.id, stored.href, stored.etag, stored.data, opts);
@@ -628,7 +620,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
       const from = parseInstant(b.from, null), to = parseInstant(b.to, null);
       if (to <= from || to - from > MAX_WINDOW_MS) throw badRequest('from and to: a window of at most 3 months');
       const accounts = this.accountRows();
-      const mine = new Set(accounts.flatMap((a) => [...this.me(a)]));
+      const mine = new Set([...accounts.flatMap((a) => [...this.me(a)]), ...this.store.calendars().flatMap((x) => (x.owner_address ? [x.owner_address.toLowerCase()] : []))]);
       const emails = [...new Set(b.emails.map((e) => e.toLowerCase()))];
       const busy: { email: string; intervals: Interval[] }[] = [];
       const unknown: string[] = [];
