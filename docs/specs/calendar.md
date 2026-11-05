@@ -241,6 +241,26 @@ sources (`lib/docsAgent.ts`) where Mail already does.
   with a prompt line: it creates and changes events on the person's calendars and says what it did; it checks free time before
   proposing one; it does not delete without asking. Tool labels in Docs' `describe.ts` and Calendar's copy.
 
+### §6 as built: the tools and the assistant (PR 2 less the invitation card, 2026-11-05)
+
+§6's Docs and Tools bullets, as `docs/specs/web-mcp.md` "Calendar tools" has them in full: `src/calendar/calendarTools.ts`
+(`CALENDAR_TOOLS`: `list_calendars`, `list_events`, `get_event`, `find_free_time`, `create_event`, `update_event`,
+`delete_event`, `respond_to_event`) on `/mcp` under `calendar:read` / `calendar:write` (a Calendar checkbox on the consent page,
+on by default), and in the Docs assistant with a `page: 'calendar'` context, the browser tools `open_calendar_event` and
+`show_calendar_range`, and Calendar's Assistant panel. Where it differs from §6:
+
+- **`delete_event` in the assistant is a browser tool**, not a server tool with `confirmationFor` on the server (there is no
+  such thing: confirmations are the browser's). Calendar asks in its panel (Delete / Keep it); Docs asks with its own
+  `confirmationFor` and deletes through `/v1/calendar` on the same origin; Mail refuses it. On `/mcp` it is a server tool with
+  the destructive annotation, as planned.
+- **`find_free_time`** answers free stretches (each can hold the meeting anywhere within it), not fixed slots; the person's own
+  busy time is the shown calendars' (`ownBusy`), and attendees come from `POST …/freebusy` (the scheduling outbox where the
+  server has one, else `unknown`, which is every attendee on Radicale and on Google, whose outbox is a stub).
+- **Inputs are snake_case** as the other tools' are (`all_day`, `optional_attendees`, `reminders_minutes`, `calendar_id`), with
+  attendees as `"Name <address>"` strings; the API's `EventInput` is built from them.
+- **The labels** (`describe.ts`) read only the tool's input, as all labels do: "Created “Lunch” Thu, Nov 5, 12:00 PM, invited Bo".
+- The Calendar mock has no canned assistant (Mail's has none either): the panel opens and its chat answers with the mock's 404.
+
 ## 7. The PRs (each with its `changelog/` entry; batched so a PR is something a person can use, as ruled 2026-11-04)
 
 1. **Calendar, reading and writing** (server + web, branch `calendar/app`). The whole of §3, §4 (less `invites`) and §5:

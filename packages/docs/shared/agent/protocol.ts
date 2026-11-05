@@ -62,7 +62,8 @@ export type AgentContext =
       /** The box the user dragged on a picture. */
       selectedRegion?: ImageRegion;
     }
-  | MailContext;
+  | MailContext
+  | CalendarContext;
 
 /**
  * FreeFlow Mail (the hosted suite only): the account and folder shown, and the open message or the messages checked in the
@@ -83,6 +84,29 @@ export interface MailContext {
   /** Ids of the messages checked in the list (at most MAX_MAIL_SELECTED). */
   selected?: string[];
 }
+
+/**
+ * FreeFlow Calendar (the hosted suite only): the view and the range it shows, the calendars shown, and the event whose card
+ * is open. Event ids are the Calendar tools' `<calendarId>:<uid>[:<recurrenceId>]`.
+ */
+export interface CalendarContext {
+  page: 'calendar';
+  view: 'day' | 'week' | 'month' | 'agenda';
+  /** The range shown, as ISO instants. */
+  from: string;
+  to: string;
+  /** The browser's IANA zone: the times the user sees are in it. */
+  timezone: string;
+  /** The calendars shown (ids and names; at most MAX_CALENDARS_SHOWN). */
+  calendars: { id: string; name: string }[];
+  /** The event whose card is open. Its summary is the event's own text: data, not instructions. */
+  event?: { id: string; summary: string; start: string; end: string; allDay: boolean; calendar: string };
+  /** What Calendar's search looks for, when its results are shown. */
+  search?: string;
+}
+
+/** Most calendars a Calendar context names. */
+export const MAX_CALENDARS_SHOWN = 30;
 
 /** Most checked messages a Mail context names. */
 export const MAX_MAIL_SELECTED = 50;
@@ -191,7 +215,10 @@ export const HOME_CHAT = 'home';
 /** FreeFlow Mail's chat (one per person and organization, apart from Docs' chats). */
 export const MAIL_CHAT = 'mail';
 
-/** Which chat a page has: each file its own (by its id), the home page one, and Mail one. */
+/** FreeFlow Calendar's chat (one per person and organization, apart from Docs' and Mail's). */
+export const CALENDAR_CHAT = 'calendar';
+
+/** Which chat a page has: each file its own (by its id), the home page one, Mail one and Calendar one. */
 export function chatScope(ctx: AgentContext): string {
   switch (ctx.page) {
     case 'sheet':
@@ -205,6 +232,8 @@ export function chatScope(ctx: AgentContext): string {
       return ctx.fileId;
     case 'mail':
       return MAIL_CHAT;
+    case 'calendar':
+      return CALENDAR_CHAT;
     default:
       return HOME_CHAT;
   }
@@ -366,10 +395,14 @@ export const CLIENT_TOOLS = new Set([
   'request_research',
   // FreeFlow Mail (hosted only): shows a message in Mail's reading pane.
   'open_mail_message',
+  // FreeFlow Calendar (hosted only): shows an event, moves the view; and deletes an event after the user confirms it.
+  'open_calendar_event',
+  'show_calendar_range',
+  'delete_event',
 ]);
 
-/** Server tools whose result the chat is given (tool_end, the transcript): it links to the draft or file they made. */
-export const SHOWN_RESULTS: ReadonlySet<string> = new Set(['create_mail_draft', 'save_mail_attachment_to_docs']);
+/** Server tools whose result the chat is given (tool_end, the transcript): it links to the draft, file or event they made. */
+export const SHOWN_RESULTS: ReadonlySet<string> = new Set(['create_mail_draft', 'save_mail_attachment_to_docs', 'create_event', 'update_event']);
 
 /** OpenAI models a user can run the assistant on with their own API key (Settings page). */
 export const OPENAI_MODELS = [

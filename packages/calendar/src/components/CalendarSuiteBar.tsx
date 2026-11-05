@@ -1,6 +1,6 @@
 // The suite bar on Calendar (packages/suite-bar), as Mail's MailSuiteBar draws it: the organization switcher, the apps
-// with Calendar active (⌘4), the search (which searches the calendars), notifications and the account menu. The Assistant
-// comes with Calendar's assistant panel (docs/specs/calendar.md §7, PR 2).
+// with Calendar active (⌘4), the search (which searches the calendars), the Assistant (Calendar's panel), notifications and
+// the account menu.
 // What belongs to Chat (organizations, invitations, notifications, the profile) opens Chat at `/?open=…`.
 import { useCallback, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -17,9 +17,11 @@ export interface CalendarSuiteBarProps {
   /** The logo and the Calendar tab: back to today. */
   onHome?: (() => void) | undefined;
   onSettings(): void;
+  /** The Assistant button: opens and closes Calendar's assistant panel. */
+  assistant: { open: boolean; onToggle(): void };
 }
 
-export function CalendarSuiteBar({ search, onSettings, onHome }: CalendarSuiteBarProps) {
+export function CalendarSuiteBar({ search, onSettings, onHome, assistant }: CalendarSuiteBarProps) {
   const me = useQuery({ queryKey: ['suite', 'me'], queryFn: suite.me, refetchInterval: REFRESH_MS });
   const { list, active } = useOrganizations();
   const [user, setUser] = useState<SuiteUser | null>(null);
@@ -65,6 +67,7 @@ export function CalendarSuiteBar({ search, onSettings, onHome }: CalendarSuiteBa
           ...(active ? { onInvite: () => toChat('invite') } : {}),
         }}
         search={search}
+        assistant={{ onOpen: assistant.onToggle, active: assistant.open }}
         notifications={{ onOpen: () => toChat('activity') }}
         account={{
           name: user?.displayName || user?.email || '',

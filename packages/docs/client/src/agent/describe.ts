@@ -21,6 +21,20 @@ function blocks(i: Input): string {
   return `${to === i.from ? 'block' : 'blocks'} ${span(i.from, to)}`;
 }
 
+/** A time as a label says it: "Thu, Nov 5, 12:00 PM", or "Thu, Nov 5" for a date; null for none. */
+function when(v: unknown): string | null {
+  if (typeof v !== 'string' || !v) return null;
+  const dateOnly = /^\d{4}-\d\d-\d\d$/.test(v);
+  const d = new Date(dateOnly ? `${v}T12:00:00` : v);
+  if (Number.isNaN(+d)) return null;
+  return d.toLocaleString('en-US', dateOnly ? { weekday: 'short', month: 'short', day: 'numeric' } : { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+/** People as a label names them: the names (or the part before @) of the first two, then "and N more". */
+function people(list: unknown[]): string {
+  const names = list.map((p) => { const s = String(p); return /^\s*"?([^"<]+?)"?\s*</.exec(s)?.[1] ?? s.split('@')[0]; });
+  return names.length <= 2 ? names.join(' and ') : `${names.slice(0, 2).join(', ')} and ${names.length - 2} more`;
+}
+
 export function toolLabel(name: string, i: Input): string {
   switch (name) {
     case 'get_sheet_overview':
@@ -197,6 +211,27 @@ export function toolLabel(name: string, i: Input): string {
       return 'Saved an email attachment to your files';
     case 'open_mail_message':
       return 'Opened an email';
+    // The user's calendars, in the hosted app (FreeFlow Calendar).
+    case 'list_calendars':
+      return 'Looked at your calendars';
+    case 'list_events':
+      return i.q ? `Searched your calendar for “${i.q}”` : `Looked at your calendar${when(i.from) ? ` from ${when(i.from)}` : ''}`;
+    case 'get_event':
+      return 'Read an event';
+    case 'find_free_time':
+      return `Found free time${Array.isArray(i.attendees) && i.attendees.length ? ` with ${people(i.attendees)}` : ''}`;
+    case 'create_event':
+      return `Created “${String(i.summary ?? 'an event')}”${when(i.start) ? ` ${when(i.start)}` : ''}${Array.isArray(i.attendees) && i.attendees.length ? `, invited ${people(i.attendees)}` : ''}`;
+    case 'update_event':
+      return i.start ? `Moved an event to ${when(i.start)}` : 'Changed an event';
+    case 'delete_event':
+      return i.scope === 'all' ? 'Deleted a repeating event' : i.scope === 'following' ? 'Deleted events from a series' : 'Deleted an event';
+    case 'respond_to_event':
+      return i.response === 'accepted' ? 'Accepted an invitation' : i.response === 'declined' ? 'Declined an invitation' : 'Answered maybe to an invitation';
+    case 'open_calendar_event':
+      return 'Opened an event';
+    case 'show_calendar_range':
+      return `Showed ${when(i.from) ?? 'the calendar'}`;
     default:
       return agentToolLabel(name, i) ?? name;
   }

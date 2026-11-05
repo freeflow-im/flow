@@ -54,8 +54,8 @@ describe('MCP OAuth in the directory', () => {
     expect(wwwAuthenticate(ISSUER, '/mcp', 'invalid_token')).toBe(`Bearer resource_metadata="${ISSUER}/.well-known/oauth-protected-resource/mcp", error="invalid_token"`);
     expect(isResource(ISSUER, `${ISSUER}/mcp/v2`)).toBe(true);
     expect(isResource(ISSUER, 'https://docs.freeflow.im/mcp')).toBe(false);
-    expect(cleanScope(undefined)).toBe('files:read files:write mail:read mail:write mail:send');
-    expect(protectedResourceMetadata(ISSUER).scopes_supported).toEqual(['files:read', 'files:write', 'mail:read', 'mail:write', 'mail:send']);
+    expect(cleanScope(undefined)).toBe('files:read files:write mail:read mail:write mail:send calendar:read calendar:write');
+    expect(protectedResourceMetadata(ISSUER).scopes_supported).toEqual(['files:read', 'files:write', 'mail:read', 'mail:write', 'mail:send', 'calendar:read', 'calendar:write']);
     expect(authorizationServerMetadata(ISSUER).scopes_supported).toContain('mail:send');
     expect(cleanScope('files:read nope')).toBeNull();
     expect(redirectMatches('http://localhost/cb', 'http://localhost:9999/cb')).toBe(true);
@@ -76,8 +76,8 @@ describe('MCP OAuth in the directory', () => {
   it('issues tokens for the chosen organization, which refreshes keep', async () => {
     const { client, code } = await codeFor('u1', 'orgB');
     const t = oauth.token(ISSUER, { grant_type: 'authorization_code', code, code_verifier: verifier, client_id: client });
-    // Nothing ticked on the page (a form without its checkboxes): Docs and Mail, as the page starts; never sending.
-    expect(oauth.authenticate(ISSUER, `Bearer ${t.access_token}`)).toEqual({ ok: true, caller: { userId: 'u1', email: 'u1@example.com', orgId: 'orgB', scope: 'files:read files:write mail:read mail:write' } });
+    // Nothing ticked on the page (a form without its checkboxes): Docs, Mail and Calendar, as the page starts; never sending.
+    expect(oauth.authenticate(ISSUER, `Bearer ${t.access_token}`)).toEqual({ ok: true, caller: { userId: 'u1', email: 'u1@example.com', orgId: 'orgB', scope: 'files:read files:write mail:read mail:write calendar:read calendar:write' } });
     const r = oauth.token(ISSUER, { grant_type: 'refresh_token', refresh_token: t.refresh_token, client_id: client });
     expect(oauth.authenticate(ISSUER, `Bearer ${r.access_token}`)).toMatchObject({ ok: true, caller: { orgId: 'orgB' } });
     // A rotated refresh token used again ends the family.
@@ -169,6 +169,10 @@ describe('MCP OAuth in the directory', () => {
       { id: 'mail', scopes: ['mail:read', 'mail:write'], checked: true },
       { id: 'send', scopes: ['mail:send'], checked: false },
     ]);
+    // Calendar is its own checkbox, on as the page starts; a client asking for calendar:read only is offered that.
+    expect(offeredGroups('files:read calendar:read calendar:write').map((g) => [g.id, g.checked])).toEqual([['docs', true], ['calendar', true]]);
+    expect(offeredGroups('calendar:read')).toEqual([{ id: 'calendar', scopes: ['calendar:read'], checked: true }]);
+    expect(grantedScope('files:read files:write calendar:read calendar:write', ['calendar'])).toBe('calendar:read calendar:write');
     // A client that asked for files alone is offered files alone, and cannot be given mail.
     expect(offeredGroups('files:read').map((g) => g.id)).toEqual(['docs']);
     expect(grantedScope('files:read', ['docs', 'mail', 'send'])).toBe('files:read');

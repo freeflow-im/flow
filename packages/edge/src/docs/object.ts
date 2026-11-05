@@ -25,6 +25,7 @@ export interface DocsEnv {
   PDF_OCR?: DurableObjectNamespace;
   /** FreeFlow Mail's objects, one per person (src/imap/object.ts): the MCP endpoint's Mail tools act on the caller's. */
   MAIL?: DurableObjectNamespace<import('../imap/object').Mail>;
+  CALENDAR?: DurableObjectNamespace<import('../calendar/object').Calendar>;
 }
 const BASE = '/workspace';
 
@@ -65,7 +66,7 @@ export class Docs extends DurableObject<DocsEnv> {
       dataDir: 'data',
       logger: false,
       appUrl: base,
-      agent: { jobs: false, mail: (userId: string, scope: unknown) => this.assistantMail(userId, scope, base) },
+      agent: { jobs: false, mail: (userId: string, scope: unknown) => this.assistantMail(userId, scope, base), calendar: (userId: string) => this.assistantCalendar(userId, base) },
       host: {
         app: this.app,
         basePath: BASE,
@@ -122,7 +123,7 @@ export class Docs extends DurableObject<DocsEnv> {
 
   /** A request to /mcp, authenticated by the Worker against the directory (routes/mcp.ts), as `caller` in this organization. */
   async mcp(request: Request, caller: McpRequestCaller): Promise<Response> {
-    return this.inOrganization(caller.orgId, () => handleMcp(request, this.hub!, caller, this.mailOf(caller.userId, caller.origin)));
+    return this.inOrganization(caller.orgId, () => handleMcp(request, this.hub!, caller, this.mailOf(caller.userId, caller.origin), this.calendarOf(caller.userId, caller.origin)));
   }
 
   /**
@@ -158,6 +159,22 @@ export class Docs extends DurableObject<DocsEnv> {
     const ns = this.env.MAIL;
     if (!ns) return undefined;
     return (path, init) => ns.get(ns.idFromName(userId)).handle(new Request(`${origin}${path}`, init));
+  }
+
+  /**
+   * A person's own Calendar object, as its HTTP API (docs/specs/calendar.md §4), for the Calendar tools: calendars are a
+   * person's, so this is theirs whatever organization this object is. Undefined where the Worker has no Calendar.
+   */
+  private calendarOf(userId: string, origin: string): ((path: string, init?: RequestInit) => Promise<Response>) | undefined {
+    const ns = this.env.CALENDAR;
+    if (!ns) return undefined;
+    return (path, init) => ns.get(ns.idFromName(userId)).handle(new Request(`${origin}${path}`, init));
+  }
+
+  /** The assistant's Calendar tools (server/agent/tools.ts): the person's own Calendar object. */
+  private assistantCalendar(userId: string, origin: string): import('../calendar/calendarTools').CalendarToolContext | undefined {
+    const calendar = this.calendarOf(userId, origin);
+    return calendar ? { calendar, origin } : undefined;
   }
 
   /** An agent's upload to the address upload_file gave it; the ticket in it is the credential. */
