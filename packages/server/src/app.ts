@@ -17,6 +17,9 @@ export function buildApp(): FastifyInstance {
     // bodies were well inside the 1 MB default and still are.
     bodyLimit: 100 * 1024 * 1024,
     trustProxy: config.trustProxy,
+    // The Workspace plugin below imports and boots the whole Docs app (hundreds of modules, its own migrations), which
+    // on a busy CI runner can pass Fastify's 10 s default and fail the boot with "Plugin did not start in time".
+    pluginTimeout: 60_000,
   });
   registerBrowserPolicy(app);
   void app.register(cookie); // the session as a cookie (lib/sessionCookie.ts)
