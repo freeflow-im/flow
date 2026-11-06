@@ -4,4 +4,4 @@
 export { CLIENT_TOOLS, MAIL_CHAT, MAX_MAIL_SELECTED, type AgentEvent, type AgentTurnRequest, type ChatItem, type ClientToolCall, type ClientToolResult, type MailContext } from '../../../docs/shared/agent/protocol';
 export { readAgentEvents } from '../../../docs/client/src/agent/stream';
 export { toolLabel } from '../../../docs/client/src/agent/describe';
-export { ChatMarkdown } from '../../../docs/client/src/agent/ChatMarkdown';
+export { ChatMarkdown, picturesOf } from '../../../docs/client/src/agent/ChatMarkdown';

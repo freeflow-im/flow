@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { ChatMarkdown, chatUrl } from './ChatMarkdown.tsx';
+import type { ChatItem } from '../../../shared/agent/protocol.ts';
+import { ChatMarkdown, chatUrl, picturesOf } from './ChatMarkdown.tsx';
 
 const render = (text: string) => renderToStaticMarkup(createElement(ChatMarkdown, { text }));
 
@@ -44,6 +45,26 @@ describe('assistant chat Markdown', () => {
     expect(chatUrl('vbscript:x')).toBe('');
     expect(chatUrl('mailto:a@b.c')).toBe('mailto:a@b.c');
     expect(chatUrl('/sheets/1')).toBe('/sheets/1');
+  });
+
+  it('loads a picture only from the app or from an image search in the chat; any other picture is a link', () => {
+    const items: ChatItem[] = [
+      { kind: 'tool', id: 't1', name: 'image_search', input: { query: 'tabby cat' }, status: 'ok', result: JSON.stringify({ note: 'untrusted', results: [{ title: 'Tabby', image_url: 'https://upload.example/a/tabby.jpg', source_page_url: null }] }) },
+      { kind: 'tool', id: 't2', name: 'image_search', input: { query: 'x' }, status: 'error', result: '{"results":[{"image_url":"https://upload.example/failed.jpg"}]}' },
+      { kind: 'tool', id: 't3', name: 'web_search', input: { query: 'x' }, status: 'ok', result: '{"results":[{"image_url":"https://upload.example/web.jpg"}]}' },
+      { kind: 'tool', id: 't4', name: 'image_search', input: { query: 'x' }, status: 'ok', result: 'not json' },
+    ];
+    const pictures = picturesOf(items);
+    expect([...pictures]).toEqual(['https://upload.example/a/tabby.jpg']);
+    const text = '![A tabby](https://upload.example/a/tabby.jpg)\n\n![Mine](/api/images/abc)\n\n![Other](https://evil.example/t.png?secret=1)\n\n![Also](//evil.example/t.png)';
+    const html = renderToStaticMarkup(createElement(ChatMarkdown, { text, pictures }));
+    expect(html.match(/<img /g)).toHaveLength(2);
+    expect(html).toContain('<a class="agent-md-picture" href="https://upload.example/a/tabby.jpg" target="_blank" rel="noopener noreferrer"><img src="https://upload.example/a/tabby.jpg" alt="A tabby" loading="lazy" referrerPolicy="no-referrer"/></a>');
+    expect(html).toContain('<img src="/api/images/abc" alt="Mine"');
+    expect(html).toContain('<a class="agent-md-img" href="https://evil.example/t.png?secret=1" target="_blank" rel="noopener noreferrer">[Other]</a>');
+    expect(html).toContain('>[Also]</a>');
+    // Without the chat's pictures, the same picture is a link.
+    expect(render('![A tabby](https://upload.example/a/tabby.jpg)')).not.toContain('<img');
   });
 
   it('renders every prefix of a streamed reply without throwing', () => {

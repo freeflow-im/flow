@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { HOME_CHAT, JOB_ACTIVE_STATUSES, type AgentJob, type ChatItem } from '../../../shared/agent/protocol.ts';
 import { MOD } from '../commands.ts';
@@ -7,7 +7,7 @@ import { ResizeHandle, usePanelWidth } from '../components/ResizeHandle.tsx';
 import { ASSISTANT_PANEL } from '../panelSize.ts';
 import { useAuth } from '../auth.tsx';
 import { useAgent } from './AgentProvider.tsx';
-import { ChatMarkdown } from './ChatMarkdown.tsx';
+import { ChatMarkdown, picturesOf } from './ChatMarkdown.tsx';
 import { targetOf } from './clientTools.ts';
 import { toolLabel } from './describe.ts';
 import { imageFiles, prepareImage, type PreparedImage } from './images.ts';
@@ -85,6 +85,7 @@ export function AgentPanel() {
   };
 
   const last = agent.items[agent.items.length - 1];
+  const pictures = useMemo(() => picturesOf(agent.items), [agent.items]);
   const thinking = agent.running && !agent.confirm && last?.kind !== 'assistant';
 
   return (
@@ -142,7 +143,7 @@ export function AgentPanel() {
             </div>
           ) : it.kind === 'assistant' ? (
             <div key={i} className="agent-msg assistant">
-              <ChatMarkdown text={it.text.trim()} />
+              <ChatMarkdown text={it.text.trim()} pictures={pictures} />
             </div>
           ) : (
             <ToolRow key={it.id} item={it} />
