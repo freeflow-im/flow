@@ -5,9 +5,8 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { openSuiteSearch } from '@flow/suite-bar';
-import { MailApiError, attachmentUrl, mailApi, type Category, type MailAccount, type MessageDetail, type ThreadSummary, type TabStatus } from './api';
+import { MailApiError, mailApi, type Category, type MailAccount, type MessageDetail, type ThreadSummary, type TabStatus } from './api';
 import { AccountSettingsDialog, AddAccountDialog } from './components/AccountForms';
-import type { ComposeRequest } from './components/Compose';
 import { ConnectMail } from './components/ConnectMail';
 import { InboxTabs } from './components/InboxTabs';
 import { MailSuiteBar } from './components/MailSuiteBar';
@@ -21,18 +20,14 @@ import { fetchBody, keys, prefetchThread, useAccounts, useFolders, useMessageAct
 import { useMailAssistant } from './hooks/assistant';
 import { useOrganizations } from './hooks/organization';
 import { mailContext, setAssistantOpen, useAssistantOpen, type MessageRef } from './lib/assistant';
-import { emptyDraft, fromDraft, prefill, type ComposeMode } from './lib/compose';
+import { cidUrlOf, emptyDraft, fromDraft, prefill, type ComposeMode, type ComposeRequest, type Outgoing } from './lib/compose';
+import type { Notice } from './lib/notice';
+import { sendInBackground } from './lib/outgoing';
 import { findSpecial, folderLabel } from './lib/folders';
 import { folderDropTarget, tabDropTarget, useCanDrag } from './lib/dnd';
 import { TAB_INFO, reasonText, tabFromParam, tabsOf, writeTabParam, markTabSeen, readTabSeen, type TabSeen } from './lib/tabs';
 import { expandedByDefault, groupByThread, replyTarget, soloThreadId } from './lib/threads';
 import { cn } from './lib/utils';
-
-/** A message's cid: pictures, read from its attachments, for the composer (a quote, a draft). */
-const cidUrlOf = (accountId: string, m: MessageDetail) => (contentId: string) => {
-  const a = m.attachments.find((x) => x.contentId === contentId);
-  return a ? attachmentUrl(accountId, m.folder, m.uid, a.index, true) : null;
-};
 
 // The editor (TipTap) is most of the code: it loads when compose first opens.
 const Compose = lazy(() => import('./components/Compose').then((m) => ({ default: m.Compose })));
@@ -53,8 +48,8 @@ function storedAccount(): string | null {
   }
 }
 
-/** A passing message at the bottom, with an action (Undo) for some. */
-type Toast = string | { text: string; action: { label: string; run(): void } };
+/** A passing message at the bottom, with an action (Undo, Open) for some; one in progress ("Sending…") stays until replaced. */
+type Toast = Notice;
 
 type Dialog = { kind: 'add' } | { kind: 'settings'; accountId: string | null; focusPassword?: boolean } | null;
 
@@ -95,10 +90,14 @@ export function App() {
   const [cursorId, setCursorId] = useState<string | null>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const lastChecked = useRef<string | null>(null);
-  const [compose, setCompose] = useState<ComposeRequest | null>(null);
+  // The composer dialog, and the account it writes from (the one shown when it opened).
+  const [compose, setCompose] = useState<{ accountId: string; request: ComposeRequest; key: number } | null>(null);
+  const composeKey = useRef(0);
+  const openCompose = useCallback((accountId: string, request: ComposeRequest) => setCompose({ accountId, request, key: ++composeKey.current }), []);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [drawer, setDrawer] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
+  const pane = useRef<ThreadViewHandle | null>(null);
 
   // Gmail's inbox tabs: in INBOX, for an account that has them on; a search covers the whole folder, whatever the tab.
   const [tabChoice, setTabChoice] = useState<string | null>(() => initialParam('tab'));
@@ -184,7 +183,7 @@ export function App() {
 
   useEffect(() => {
     if (!toast) return;
-    const t = window.setTimeout(() => setToast(null), typeof toast === 'string' ? 4000 : 8000);
+    const t = window.setTimeout(() => setToast(null), typeof toast === 'string' ? 4000 : toast.progress ? 60_000 : 8000);
     return () => window.clearTimeout(t);
   }, [toast]);
 
@@ -359,14 +358,18 @@ export function App() {
   const startCompose = useCallback(
     (mode: ComposeMode, m?: MessageDetail) => {
       if (!account) return;
-      if (mode === 'new') return setCompose({ mode, draft: emptyDraft() });
+      if (mode === 'new') return openCompose(account.id, { mode, draft: emptyDraft() });
       const target = m ?? (thread.data && thread.data.threadId === openId ? replyTarget(thread.data.messages, folder) : undefined);
       if (!target || ('bodyPending' in target && target.bodyPending)) return;
       const cidUrl = cidUrlOf(account.id, target);
-      if (mode === 'draft') return setCompose({ mode, draft: fromDraft(target, cidUrl), source: { folder: target.folder, uid: target.uid } });
-      setCompose({ mode, draft: prefill(mode, target, account.email, cidUrl), source: { folder: target.folder, uid: target.uid } });
+      const source = { folder: target.folder, uid: target.uid };
+      const threadId = openId ?? undefined;
+      if (mode === 'draft') return openCompose(account.id, { mode, draft: fromDraft(target, cidUrl), source, ...(threadId ? { threadId } : {}) });
+      const me = account.email;
+      const remode = (next: typeof mode) => prefill(next, target, me, cidUrl);
+      openCompose(account.id, { mode, draft: remode(mode), source, ...(threadId ? { threadId } : {}), remode });
     },
-    [account, thread.data, openId, folder],
+    [account, thread.data, openId, folder, openCompose],
   );
 
   /** Shows a message (the assistant's open_mail_message, a link in its chat): its account and folder, then its thread. */
@@ -393,8 +396,36 @@ export function App() {
     const m = pendingDraft && threadLoaded ? thread.data!.messages.find((x) => x.uid === pendingDraft.uid && x.folder === pendingDraft.folder && !x.bodyPending) : undefined;
     if (!pendingDraft || !m || account?.id !== pendingDraft.account) return;
     setPendingDraft(null);
-    setCompose({ mode: 'draft', draft: fromDraft(m, cidUrlOf(account.id, m)), source: { folder: m.folder, uid: m.uid } });
-  }, [pendingDraft, thread.data, threadLoaded, account]);
+    openCompose(account.id, { mode: 'draft', draft: fromDraft(m, cidUrlOf(account.id, m)), source: { folder: m.folder, uid: m.uid }, ...(openId ? { threadId: openId } : {}) });
+  }, [pendingDraft, thread.data, threadLoaded, account, openId, openCompose]);
+
+  /**
+   * Sends what a composer handed over, the composer already closed: "Sending…" while it goes, then "Message sent." (a sent
+   * draft leaves Drafts, and its conversation closes if it is still open); on failure the reason, with Open, which puts the
+   * composer back as it was (under its message if that conversation is open on a wide screen, else in the dialog).
+   */
+  const reopen = useRef<(accountId: string, request: ComposeRequest) => void>(() => {});
+  reopen.current = (accountId, request) => {
+    if (accountId === account?.id && !narrow && request.threadId === openId && pane.current?.reopen(request)) return;
+    if (accountId !== account?.id) setAccountId(accountId);
+    openCompose(accountId, request);
+  };
+  const sendMail = useCallback(
+    (out: Outgoing) =>
+      void sendInBackground(out, {
+        send: mailApi.send,
+        notice: setToast,
+        reopen: (o) => reopen.current(o.accountId, o.request),
+        onSent: () => {
+          const sentDraft = out.request.mode === 'draft' ? out.request.threadId : undefined;
+          if (sentDraft) setOpenId((cur) => (cur === sentDraft ? null : cur));
+          void qc.invalidateQueries({ queryKey: keys.allMessages(out.accountId) });
+          void qc.invalidateQueries({ queryKey: keys.allThreads(out.accountId) });
+          void qc.invalidateQueries({ queryKey: keys.folders(out.accountId) });
+        },
+      }),
+    [qc],
+  );
 
   const chat = useMailAssistant({
     org,
@@ -443,7 +474,6 @@ export function App() {
   };
 
   // The keyboard, as in other mail apps. Not while typing, and not under a dialog.
-  const pane = useRef<ThreadViewHandle | null>(null);
   const keyState = useRef({ visible, cursorId, openId, narrow: stacked });
   keyState.current = { visible, cursorId, openId, narrow: stacked };
   const handlers = useRef({ archive, remove, toggleSeen, startCompose });
@@ -495,13 +525,13 @@ export function App() {
           h.toggleSeen();
           break;
         case 'r':
-          h.startCompose('reply');
+          if (!pane.current?.compose('reply')) h.startCompose('reply');
           break;
         case 'a':
-          h.startCompose('replyAll');
+          if (!pane.current?.compose('replyAll')) h.startCompose('replyAll');
           break;
         case 'f':
-          h.startCompose('forward');
+          if (!pane.current?.compose('forward')) h.startCompose('forward');
           break;
         case 'c':
           h.startCompose('new');
@@ -581,14 +611,15 @@ export function App() {
       )}
       {toast && (
         <div role="status" className="fixed bottom-5 left-1/2 z-[60] flex max-w-[calc(100vw-32px)] -translate-x-1/2 items-center gap-4 rounded-lg bg-[#323232] px-4 py-2.5 text-sm text-white shadow-lg">
+          {typeof toast !== 'string' && toast.progress && <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden />}
           <span>{typeof toast === 'string' ? toast : toast.text}</span>
-          {typeof toast !== 'string' && (
+          {typeof toast !== 'string' && toast.action && (
             <button
               type="button"
               className="shrink-0 rounded px-1.5 py-0.5 font-semibold text-[#8ab4f8] hover:bg-white/10"
               onClick={() => {
                 setToast(null);
-                toast.action.run();
+                toast.action?.run();
               }}
             >
               {toast.action.label}
@@ -760,6 +791,7 @@ export function App() {
       onToggleFlag={() => toggleFlag(openId !== null ? [openId] : [])}
       onNeedBody={(m) => openId !== null && void fetchBody(qc, account.id, openId, m)}
       onNotice={setToast}
+      inline={narrow ? undefined : { account, onSend: sendMail, onDetach: (request) => openCompose(account.id, request) }}
       onFlagMessage={(m, flagged) => {
         // A message of the thread in another folder is flagged there; this folder's actions flag here.
         if (m.folder === folder) actions.flags.mutate({ uids: [m.uid], flagged });
@@ -839,19 +871,14 @@ export function App() {
       {compose && (
         <Suspense fallback={null}>
           <Compose
-            key={`${compose.mode}-${compose.source?.uid ?? 'new'}`}
-            account={account}
-            request={compose}
+            key={compose.key}
+            account={list.find((a) => a.id === compose.accountId) ?? account}
+            request={compose.request}
             narrow={narrow}
             onClose={() => setCompose(null)}
-            onSent={() => {
-              // A draft sent is gone from Drafts, so it is no longer open either.
-              if (compose.mode === 'draft') setOpenId(null);
+            onSend={(out) => {
               setCompose(null);
-              setToast('Message sent.');
-              void qc.invalidateQueries({ queryKey: keys.allMessages(account.id) });
-              void qc.invalidateQueries({ queryKey: keys.allThreads(account.id) });
-              void qc.invalidateQueries({ queryKey: keys.folders(account.id) });
+              sendMail(out);
             }}
           />
         </Suspense>

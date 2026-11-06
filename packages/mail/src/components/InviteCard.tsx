@@ -3,13 +3,16 @@
 // on a calendar already, "On your calendar · Going"), with a calendar to put it on when there is more than one and it is
 // not on one yet; for a cancellation, "This event was cancelled" with Remove from calendar (or "Not on your calendar");
 // for a reply, "Ann Lee accepted". The card asks Calendar (`inviteApi`) what the part is and where it stands; a message
-// whose part Calendar cannot read as an invitation shows no card. `InviteCardView` is the card itself, for the tests.
+// whose part Calendar cannot read as an invitation shows no card. An answer shows on the card at once, a toast says
+// "Replying…" while it goes (it may be emailed to the organizer, which takes a few seconds), then what happened; a failure
+// puts the card back and says why. `InviteCardView` is the card itself, for the tests.
 import { CalendarDays, Check, Loader2, MapPin, Repeat, Users, Video } from 'lucide-react';
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { MailApiError, inviteApi, type InviteAnswer, type InviteRef, type InviteResponse, type Replied } from '../api';
 import { cardWhen, describeRecurrence } from '../lib/calendarShared';
 import { answeredText, guestCount, nameOf, replyLine, responseWord } from '../lib/invites';
+import type { Notice } from '../lib/notice';
 import { cn } from '../lib/utils';
 
 type Answer = Exclude<InviteResponse, 'needs-action'>;
@@ -88,7 +91,7 @@ export function InviteCardView({ answer: a, pending, onRespond, onRemove }: Invi
                     onClick={() => onRespond(c.value, a.onCalendar ? undefined : calendarId)}
                     className={cn('inline-flex h-8 items-center gap-1 rounded-full border px-4 font-medium disabled:opacity-60', chosen ? 'border-primary bg-primary-tint text-primary-deep' : 'border-border bg-white text-ink hover:bg-hover')}
                   >
-                    {pending === c.value ? <Loader2 className="size-3.5 animate-spin" /> : chosen ? <Check className="size-3.5" /> : null}
+                    {chosen ? <Check className="size-3.5" /> : pending === c.value ? <Loader2 className="size-3.5 animate-spin" /> : null}
                     {c.label}
                   </button>
                 );
@@ -115,18 +118,34 @@ export function InviteCardView({ answer: a, pending, onRespond, onRemove }: Invi
 
 const inviteKey = (r: InviteRef) => ['mail', 'invite', r.account, r.folder, r.uid, r.part] as const;
 
-/** The card for one message's invitation part: Calendar asked, the answer sent, the toast said. Nothing while it loads or when Calendar cannot read it. */
-export function InviteCard({ invite, onNotice }: { invite: InviteRef; onNotice(text: string): void }) {
+/** The answer as the card shows it before Calendar has it: on the calendar chosen (or the one it is on), with this response. */
+export function answeredAt(a: InviteAnswer, response: Answer, calendarId: string | undefined): InviteAnswer {
+  const on = a.onCalendar ?? { calendarId: calendarId ?? a.calendars.find((c) => c.isDefault)?.id ?? a.calendars[0]?.id ?? '', id: '', eventId: '', cancelled: false, myResponse: null };
+  return { ...a, onCalendar: { ...on, myResponse: response } };
+}
+
+/** The card for one message's invitation part: Calendar asked, the answer shown and sent, the toast said. Nothing while it loads or when Calendar cannot read it. */
+export function InviteCard({ invite, onNotice }: { invite: InviteRef; onNotice(notice: Notice): void }) {
   const qc = useQueryClient();
   const key = inviteKey(invite);
   const q = useQuery({ queryKey: key, queryFn: () => inviteApi.read(invite), staleTime: 30_000, retry: (n, err) => n < 1 && !(err instanceof MailApiError && err.status < 500) });
   const respond = useMutation({
     mutationFn: ({ response, calendarId }: { response: Answer; calendarId: string | undefined }) => inviteApi.respond(invite, response, calendarId),
+    onMutate: async ({ response, calendarId }) => {
+      await qc.cancelQueries({ queryKey: key });
+      const before = qc.getQueryData<InviteAnswer>(key);
+      if (before) qc.setQueryData(key, answeredAt(before, response, calendarId));
+      onNotice({ text: 'Replying…', progress: true });
+      return { before };
+    },
     onSuccess: (answer: InviteAnswer & Replied, { response }) => {
       qc.setQueryData(key, answer);
       onNotice(answeredText(response, answer, nameOf(answer.event.organizer)));
     },
-    onError: (err) => onNotice(`Could not answer: ${err instanceof Error ? err.message : String(err)}`),
+    onError: (err, _v, ctx) => {
+      if (ctx?.before) qc.setQueryData(key, ctx.before);
+      onNotice(`Could not reply: ${err instanceof Error ? err.message : String(err)}`);
+    },
   });
   const remove = useMutation({
     mutationFn: () => inviteApi.cancel(invite),

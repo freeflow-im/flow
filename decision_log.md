@@ -1,5 +1,17 @@
 # Decision log
 
+## 2026-11-06 — Mail: sending is asynchronous, answers are written in the conversation (docs/specs/mail-api.md, Writing and sending)
+
+- **Send closes the composer at once** (operator ruling). The message is sent in the background while a toast says
+  "Sending…", then "Message sent."; a failure says why with **Open**, which reopens the composer exactly as it was
+  (recipients, subject, body, attachments). Checks that need no server (recipients, attachments still loading, size of the
+  files) still stop Send inside the composer. The same goes for answering an invitation in Mail and in Calendar: the answer
+  shows at once, a toast follows the request, a failure reverts and says why.
+- **Reply, Reply all and Forward open inline, Gmail style, on wide screens; the dialog stays on narrow ones** (operator
+  ruling). New message and Edit draft stay dialogs. One composer is shared by both frames (`ComposeForm.tsx`).
+- **One inline composer at a time** (operator ruling). Asking for another while one has something written focuses that one;
+  leaving the conversation moves a written one to the dialog rather than dropping it (there is no draft autosave yet).
+
 ## 2026-11-05 — Calendar invitations: iMIP from the person's own mail account, by binding (docs/specs/calendar.md §14)
 
 - A server "schedules" when it is Google or a CalDAV server whose discovery found a scheduling outbox; FreeFlow sends iMIP only

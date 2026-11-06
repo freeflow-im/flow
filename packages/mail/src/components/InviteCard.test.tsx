@@ -92,9 +92,9 @@ describe('InviteCard', () => {
       calls.push({ url, body: JSON.parse(String(init.body)) });
       return new Response(JSON.stringify(url.endsWith('/respond') ? { ...answered, replied: 'email' } : request()), { status: 200, headers: { 'content-type': 'application/json' } });
     }));
-    const notices: string[] = [];
+    const notices: unknown[] = [];
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    await act(() => root.render(createElement(QueryClientProvider, { client: qc }, createElement(InviteCard, { invite: { account: 'acc', folder: 'INBOX', uid: 7, part: 1 }, onNotice: (t: string) => notices.push(t) }))));
+    await act(() => root.render(createElement(QueryClientProvider, { client: qc }, createElement(InviteCard, { invite: { account: 'acc', folder: 'INBOX', uid: 7, part: 1 }, onNotice: (t: unknown) => notices.push(t) }))));
     await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
     expect(calls[0]).toEqual({ url: '/v1/calendar/invites', body: { account: 'acc', messageId: { folder: 'INBOX', uid: 7 }, part: 1 } });
     expect(host.textContent).toContain('Going?');
@@ -102,7 +102,29 @@ describe('InviteCard', () => {
     await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
     expect(calls[1]).toEqual({ url: '/v1/calendar/invites/respond', body: { account: 'acc', messageId: { folder: 'INBOX', uid: 7 }, part: 1, response: 'accepted', calendarId: 'work' } });
     expect(host.textContent).toContain('On your calendar · Going');
-    expect(notices).toEqual(["You're going. Ann Lee was emailed your answer."]);
+    expect(notices).toEqual([{ text: 'Replying…', progress: true }, "You're going. Ann Lee was emailed your answer."]);
+  });
+
+  it('shows the answer at once while it is sent, and puts the card back when it fails', async () => {
+    let fail: (r: Response) => void = () => {};
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.endsWith('/respond')) return new Promise<Response>((resolve) => (fail = resolve));
+      return new Response(JSON.stringify(request()), { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+    const notices: unknown[] = [];
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(() => root.render(createElement(QueryClientProvider, { client: qc }, createElement(InviteCard, { invite: { account: 'acc', folder: 'INBOX', uid: 7, part: 1 }, onNotice: (t: unknown) => notices.push(t) }))));
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    await act(() => host.querySelectorAll('button')[2]!.click());
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    // Maybe, on the default calendar, before the server has answered.
+    expect(host.textContent).toContain('On your calendar · Maybe');
+    expect([...host.querySelectorAll('button')].map((b) => b.getAttribute('aria-pressed'))).toEqual(['false', 'false', 'true']);
+    expect(notices).toEqual([{ text: 'Replying…', progress: true }]);
+    await act(async () => { fail(new Response(JSON.stringify({ error: { code: 'server_error', message: 'The mail server did not answer.' } }), { status: 502 })); await new Promise((r) => setTimeout(r, 20)); });
+    expect(host.textContent).toContain('Going?');
+    expect(host.textContent).not.toContain('On your calendar');
+    expect(notices[1]).toBe('Could not reply: The mail server did not answer.');
   });
 
   it('shows nothing when Calendar cannot read the part', async () => {

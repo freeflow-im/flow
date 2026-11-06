@@ -1,10 +1,12 @@
 // What Reply, Reply all and Forward put in a new message: the recipients, "Re:"/"Fwd:", the original quoted, and the
 // headers that thread it (In-Reply-To and References). And a saved draft (one an agent wrote, say) opened to edit.
-import type { Address, MessageDetail } from '../api';
+import { attachmentUrl, type Address, type MessageDetail, type OutgoingMessage } from '../api';
 import { formatAddress, uniqueAddresses } from './addresses';
 import { escapeHtml, sanitizeEmailHtml, textToHtml } from './sanitize';
 
 export type ComposeMode = 'new' | 'reply' | 'replyAll' | 'forward' | 'draft';
+/** The three ways of answering a message (the inline composer's menu switches between them). */
+export type AnswerMode = Exclude<ComposeMode, 'new' | 'draft'>;
 
 export interface ComposeDraft {
   to: Address[];
@@ -42,6 +44,12 @@ const list = (as: Address[]) => as.map((a) => escapeHtml(formatAddress(a))).join
 /** Where a message's cid: picture is read from (its attachment URL), by its Content-ID. */
 export type CidUrl = (contentId: string) => string | null;
 
+/** A message's cid: pictures, read from its attachments, for the composer (a quote, a draft). */
+export const cidUrlOf = (accountId: string, m: MessageDetail): CidUrl => (contentId) => {
+  const a = m.attachments.find((x) => x.contentId === contentId);
+  return a ? attachmentUrl(accountId, m.folder, m.uid, a.index, true) : null;
+};
+
 /** The original's body as HTML to quote: cleaned, with nothing remote, its own pictures from their attachments, and plain text kept readable. */
 function originalBody(m: MessageDetail, cidUrl?: CidUrl): string {
   if (m.html) return sanitizeEmailHtml(m.html, { allowRemote: false, ...(cidUrl ? { cidUrl } : {}) }).html;
@@ -63,7 +71,7 @@ export function fromDraft(m: MessageDetail, cidUrl?: CidUrl): ComposeDraft {
 }
 
 /** The new message for replying to, replying to everyone on, or forwarding `m`, sent from `me`. */
-export function prefill(mode: Exclude<ComposeMode, 'new' | 'draft'>, m: MessageDetail, me: string, cidUrl?: CidUrl): ComposeDraft {
+export function prefill(mode: AnswerMode, m: MessageDetail, me: string, cidUrl?: CidUrl): ComposeDraft {
   const references = [...m.references, ...(m.messageId ? [m.messageId] : [])].filter((r, i, all) => all.indexOf(r) === i);
   const threading = m.messageId ? { inReplyTo: m.messageId, references } : {};
   if (mode === 'forward') {
@@ -122,4 +130,40 @@ export function isDraftEmpty(d: DraftState, initial: ComposeDraft | null): boole
     return same(d.to, initial.to) && same(d.cc, initial.cc) && same(d.bcc, initial.bcc) && d.subject === initial.subject;
   }
   return d.to.length + d.cc.length + d.bcc.length === 0 && !d.subject.trim() && !d.text.trim();
+}
+
+/** A file in the composer that is ready to send (one picked, dropped, or carried over from a forward or a draft). */
+export interface ComposeFile {
+  name: string;
+  type: string;
+  size: number;
+  file: Blob;
+  /** Carried over from the original (a forward's, a draft's): it does not count as something the person added. */
+  forwarded: boolean;
+}
+
+/** What opens a composer: the mode and the message it starts as, and where it came from. */
+export interface ComposeRequest {
+  mode: ComposeMode;
+  draft: ComposeDraft;
+  /** The message replied to or forwarded (its folder and uid), for fetching a forward's attachments; for `draft`, the draft. */
+  source?: { folder: string; uid: number };
+  /** The conversation the message answered (or the draft) is in. */
+  threadId?: string;
+  /** For an answer: the message as another of the three modes would start it (the inline composer's menu). */
+  remode?: (mode: AnswerMode) => ComposeDraft;
+  /** Files already chosen: a composer opened again after its send failed, or moved out of its conversation. */
+  files?: ComposeFile[];
+  /** Opened again with what had been written: closing it asks first. */
+  restored?: boolean;
+}
+
+/** A message the composer handed over to send (App.tsx sends it while the composer is already gone). */
+export interface Outgoing {
+  accountId: string;
+  /** The message, its HTML as the editor had it (pasted pictures still data: URLs) and without its files. */
+  message: Omit<OutgoingMessage, 'attachments'>;
+  files: { filename: string; contentType: string; file: Blob }[];
+  /** The composer as it was, to open again if the send fails. */
+  request: ComposeRequest;
 }

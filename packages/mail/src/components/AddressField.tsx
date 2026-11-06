@@ -74,7 +74,7 @@ export function AddressField({ label, value, onChange, autoFocus, onPendingChang
     if (suggestions.length) {
       if (e.key === 'ArrowDown') { e.preventDefault(); setActive((i) => (i + 1) % suggestions.length); return; }
       if (e.key === 'ArrowUp') { e.preventDefault(); setActive((i) => (i - 1 + suggestions.length) % suggestions.length); return; }
-      if (e.key === 'Escape') { e.preventDefault(); clearSuggestions(); return; }
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); clearSuggestions(); return; }
       if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pick(suggestions[active] ?? suggestions[0]!); return; }
     }
     if (e.key === 'Enter' || e.key === ',' || e.key === ';' || (e.key === 'Tab' && text.trim())) {

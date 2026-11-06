@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement, createRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import type { MessageDetail, ThreadDetail, ThreadMessage } from '../api';
+import type { MailAccount, MessageDetail, ThreadDetail, ThreadMessage } from '../api';
+import type { ComposeRequest, Outgoing } from '../lib/compose';
 import { ThreadView, type ThreadViewHandle, type ThreadViewProps } from './ThreadView';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -136,5 +137,113 @@ describe('ThreadView', () => {
     expect(article(1).textContent).toContain("Couldn't load this message");
     await act(() => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Retry')!.click());
     expect(needed).toEqual([1]);
+  });
+
+  describe('answering in the conversation (wide screens)', () => {
+    const account = { id: 'acc', email: me, displayName: 'Ann' } as MailAccount;
+    const sent: Outgoing[] = [];
+    const detached: ComposeRequest[] = [];
+    const inline = { account, onSend: (o: Outgoing) => sent.push(o), onDetach: (r: ComposeRequest) => detached.push(r) };
+    const settle = () => act(async () => { await import('./InlineCompose'); for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0)); });
+    const card = () => host.querySelector<HTMLElement>('[data-inline-compose]');
+    const editorOf = () => (host.querySelector('.ProseMirror') as unknown as { editor: { commands: { insertContentAt(at: number, text: string): boolean } } }).editor;
+    const button = (label: string) => [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim() === label || b.getAttribute('aria-label') === label);
+    beforeEach(() => { sent.length = 0; detached.length = 0; });
+
+    it('r opens a reply under the last message, the recipient as one line, and the end buttons give way', async () => {
+      await render({ inline });
+      let opened = false;
+      await act(() => { opened = handle.current!.compose('reply'); });
+      await settle();
+      expect(opened).toBe(true);
+      expect(replied).toEqual([]);
+      const c = card()!;
+      expect(c).not.toBeNull();
+      // Right after the last message's article.
+      expect(article(5).nextElementSibling).toBe(c);
+      expect(c.textContent).toContain('Bob Martin (bob@acme.test)');
+      expect(c.querySelector('[aria-label="Message"]')?.innerHTML).toContain('wrote:');
+      expect(button('Forward')).toBeUndefined();
+      // Clicking the line opens the fields to edit.
+      await act(() => button('Edit recipients')!.click());
+      expect(c.querySelector('input[aria-label="To"]') ?? c.querySelector('input')).not.toBeNull();
+    });
+
+    it('the mode menu switches to Forward, which has nobody to send to yet', async () => {
+      await render({ inline });
+      await act(() => host.querySelector<HTMLButtonElement>('button[aria-label="Reply all (a)"]')!.click());
+      await settle();
+      const trigger = card()!.querySelector<HTMLButtonElement>('button[aria-label="Reply all: change"]')!;
+      expect(trigger).not.toBeNull();
+      await act(() => { trigger.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 })); });
+      const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((el) => el.textContent?.includes('Forward'))!;
+      await act(() => item.click());
+      expect(card()!.querySelector('button[aria-label="Forward: change"]')).not.toBeNull();
+      expect(button('Edit recipients')).toBeUndefined();
+      expect(card()!.querySelector('[aria-label="Message"]')?.innerHTML).toContain('Forwarded message');
+      // Sending with nobody to send to says so and stays.
+      await act(() => button('Send')!.click());
+      expect(card()!.textContent).toContain('Add at least one recipient.');
+      expect(sent).toEqual([]);
+    });
+
+    it('discard closes an untouched reply at once, and asks once something is written', async () => {
+      await render({ inline });
+      await act(() => { handle.current!.compose('reply'); });
+      await settle();
+      await act(() => button('Discard draft')!.click());
+      expect(card()).toBeNull();
+      await act(() => { handle.current!.compose('reply'); });
+      await settle();
+      await act(() => { editorOf().commands.insertContentAt(1, 'Sounds good'); });
+      // Escape asks, as the discard button does.
+      await act(() => { host.querySelector('.ProseMirror')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+      expect(document.body.textContent).toContain('Discard this draft?');
+      await act(() => button('Keep writing')!.click());
+      expect(document.body.textContent).not.toContain('Discard this draft?');
+      await act(() => button('Discard draft')!.click());
+      expect(document.body.textContent).toContain('Discard this draft?');
+      expect(card()).not.toBeNull();
+      await act(() => button('Discard')!.click());
+      expect(card()).toBeNull();
+      expect(detached).toEqual([]);
+    });
+
+    it('Send hands the message over and the card closes', async () => {
+      await render({ inline });
+      await act(() => { handle.current!.compose('reply'); });
+      await settle();
+      await act(() => { editorOf().commands.insertContentAt(1, 'Sounds good'); });
+      await act(() => button('Send')!.click());
+      expect(card()).toBeNull();
+      expect(sent).toHaveLength(1);
+      const o = sent[0]!;
+      expect(o.accountId).toBe('acc');
+      expect(o.message.to).toEqual([{ name: 'Bob Martin', address: 'bob@acme.test' }]);
+      expect(o.message.subject).toBe('Re: Plan 5');
+      expect(o.message.inReplyTo).toBe('<m5@x>');
+      expect(o.message.text).toContain('Sounds good');
+      // What Open puts back after a failed send: the same reply, as written.
+      expect(o.request.mode).toBe('reply');
+      expect(o.request.draft.html).toContain('Sounds good');
+      expect(o.request.threadId).toBe('t:1');
+    });
+
+    it('another conversation takes a written reply to the dialog; one composer at a time', async () => {
+      await render({ inline });
+      await act(() => { handle.current!.compose('reply'); });
+      await settle();
+      await act(() => { editorOf().commands.insertContentAt(1, 'Half a thought'); });
+      // A second answer does not replace what is being written.
+      await act(() => { handle.current!.compose('forward'); });
+      expect(host.querySelectorAll('[data-inline-compose]')).toHaveLength(1);
+      expect(card()!.querySelector('button[aria-label="Reply: change"]')).not.toBeNull();
+      await render({ inline, thread: { threadId: 't:9', messages: [m(9)] } });
+      await settle();
+      expect(card()).toBeNull();
+      expect(detached).toHaveLength(1);
+      expect(detached[0]!.draft.html).toContain('Half a thought');
+      expect(detached[0]!.restored).toBe(true);
+    });
   });
 });
