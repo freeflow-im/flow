@@ -13,14 +13,14 @@
 export interface PushDevice {
   /** Client-owned opaque connection/identity route; present means no absolute badge. */
   routingId?: string | null;
-  /** APNs device token, hex. */
+  /** APNs device token (hex) or FCM registration token (opaque). */
   token: string;
-  /** 'ios' today (macOS later). */
+  /** 'ios' | 'android' — what picks the driver (./index.ts). */
   platform: string;
-  /** Wins over config.apnsEnv when the row carries one (the registry's always does). */
-  environment?: 'sandbox' | 'production';
-  /** APNs topic this token registered under; falls back to config.apnsTopic. */
-  bundleId?: string;
+  /** APNs only. Wins over config.apnsEnv when the row carries one. */
+  environment?: 'sandbox' | 'production' | null;
+  /** APNs only. Topic this token registered under; falls back to config.apnsTopic. */
+  bundleId?: string | null;
 }
 
 /** The reserved `aps` dictionary. Apple owns these key names — keep them verbatim. */
@@ -62,6 +62,11 @@ export type PushResult =
   | { ok: true; apnsId?: string }
   | { ok: false; status?: number; reason: string; retryable: boolean; disableDevice: boolean };
 
+/**
+ * Every driver speaks this, in APNs' vocabulary: the outbox builds one payload
+ * and the FCM driver (./fcmSender.ts) translates on the way out, so no
+ * decision is made twice (ANDROID.md phase 3).
+ */
 export interface PushSender {
   send(device: PushDevice, payload: ApnsPayload, opts: ApnsHeaders): Promise<PushResult>;
 }

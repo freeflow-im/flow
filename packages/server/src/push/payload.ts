@@ -271,6 +271,9 @@ export function buildPushPayload(ctx: PushContext, badge: number, sound = true):
     messageId: ctx.messageId,
     ...(ctx.threadRootId ? { threadRootId: ctx.threadRootId } : {}),
     notificationId: ctx.notificationId, // lets the tap mark exactly this row read
+    // Which kind of notification this is: Android sorts it onto a per-kind
+    // channel (fcmSender.ts ANDROID_CHANNELS); iOS ignores the key.
+    kind: ctx.kind,
   };
   return fitPayload(payload);
 }
