@@ -85,8 +85,8 @@ export interface ListedAttachment { index: number; filename: string; mimeType: s
 
 /**
  * The attachments a list row shows, from the BODYSTRUCTURE the list already fetches (no bytes): `planBody`'s, with the
- * same indexes, less the pictures the body shows by cid: (inline, with a Content-ID), which the reading pane leaves out
- * too. Undefined for a structure that is opened whole (an inline forwarded message), whose indexes are postal-mime's and
+ * same indexes, less the pictures the body shows by cid: (inline, with a Content-ID); the opened message lists those too,
+ * so they can be saved. Undefined for a structure that is opened whole (an inline forwarded message), whose indexes are postal-mime's and
  * not known here; and for a message with none, so the field is left out.
  */
 export function listedAttachments(root: MessageStructureObject | undefined): ListedAttachment[] | undefined {

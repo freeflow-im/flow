@@ -359,8 +359,8 @@ format=flowed, HTML made from text and the other way round). A text part over 10
 - **Attachments in the list** (2026-11-04): every list (a folder, a search, an inbox tab) already FETCHes BODYSTRUCTURE with
   the summaries (for `hasAttachments` and the snippet's part), so `MessageSummary.attachments` costs no round trip and no bytes
   of any part. `listedAttachments` (body.ts) is `planBody`'s attachments, with the same `index` as the opened message and
-  `attachments/:index`, less those the body shows by cid: (inline, with a Content-ID; the reading pane leaves those out
-  when the HTML refers to them, which the list cannot see); `size` is the estimate above. The field is left out when there
+  `attachments/:index`, less those the body shows by cid: (inline, with a Content-ID); the opened message lists those
+  under it too (2026-11-06: a flyer pasted into the body is a file worth saving, as Gmail lists it), the row does not; `size` is the estimate above. The field is left out when there
   are none, and for the exception below (an inline `message/rfc822`), whose indexes are postal-mime's and not known without
   reading the message whole; `hasAttachments` still says, and the row shows a paperclip. Tests: `body.test.ts` ("the
   attachments a list row shows": list indexes = the opened message's = postal-mime's, for a message with cid: pictures, an
