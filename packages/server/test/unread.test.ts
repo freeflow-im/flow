@@ -28,6 +28,7 @@ const msg = await import('../src/services/messages.js');
 const { and, desc, eq, isNull } = await import('drizzle-orm');
 const { encryptBody } = await import('../src/crypto/index.js');
 const { newId } = await import('../src/lib/ids.js');
+const { _resetBadgeSyncForTests } = await import('../src/services/badgeSync.js');
 
 const { channelMembers, messages, notifications } = schema;
 
@@ -74,6 +75,8 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // Marking read queued badge syncs on 2 s timers that read the database; forget them before it closes.
+  _resetBadgeSyncForTests();
   await closeDb();
 });
 
