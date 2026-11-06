@@ -1,0 +1,3 @@
+# Server tests: the Workspace plugin gets 60 s to start, and a badge sync cannot fail the run
+
+- `[server]` `[qa]` Fastify's plugin start limit is 60 s (was its 10 s default): the Workspace plugin boots the whole Docs app, which passed 10 s on busy CI runners and failed `test/workspace.test.ts` with "Plugin did not start in time" in most runs on 2026-11-06. A badge sync's device read (on a timer, nothing awaiting it) no longer becomes an unhandled rejection when the database is gone, and `test/unread.test.ts` forgets queued badge syncs before closing its database (the `CONNECTION_ENDED` error after that file).

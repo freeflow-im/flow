@@ -183,10 +183,18 @@ async function flush(userId: string): Promise<void> {
   const previousSentAt = st.lastSentAt;
   st.lastSentAt = now;
 
-  const devices = await db
-    .select()
-    .from(deviceTokens)
-    .where(and(eq(deviceTokens.userId, userId), isNull(deviceTokens.disabledAt)));
+  let devices: (typeof deviceTokens.$inferSelect)[];
+  try {
+    devices = await db
+      .select()
+      .from(deviceTokens)
+      .where(and(eq(deviceTokens.userId, userId), isNull(deviceTokens.disabledAt)));
+  } catch {
+    // This runs on a timer, with nothing awaiting it: a failed read (the database going away under it, as when a
+    // test closes it) must not become an unhandled rejection. The next read or alert carries a fresher count.
+    st.lastSentAt = previousSentAt;
+    return;
+  }
   if (devices.length === 0) {
     // Only a real send opens a new throttle window — a user with no live device
     // shouldn't have their next genuine sync delayed by a no-op.
