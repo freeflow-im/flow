@@ -48,12 +48,13 @@ export async function insertImages(editor: TiptapEditor, files: readonly File[])
   return pictures.length;
 }
 
-export function useMailEditor(initialHtml: string) {
+/** The composer's editor; it takes the focus (at the start, above a quote) unless `autofocus` is false (a forward, whose To comes first). */
+export function useMailEditor(initialHtml: string, autofocus = true) {
   const ref = useRef<TiptapEditor | null>(null);
   const editor = useEditor({
     extensions: [StarterKit.configure({ link: { openOnClick: false, autolink: true, defaultProtocol: 'https' }, heading: { levels: [1, 2, 3] } }), Image, Placeholder.configure({ placeholder: 'Write your message…' })],
     content: initialHtml,
-    autofocus: initialHtml ? 'start' : false,
+    autofocus: autofocus && initialHtml ? 'start' : false,
     editorProps: {
       attributes: { class: 'px-1 py-2', 'aria-label': 'Message' },
       // A picture on the clipboard goes into the message where the caret is (a file dropped on the composer is attached).

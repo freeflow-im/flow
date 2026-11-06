@@ -3,10 +3,14 @@
 // the open folder; reply, reply all and forward answer the last message, or the one whose own buttons were used. The
 // unread messages and the last one start expanded; the rest are one line each (who, the snippet, when), and a run of
 // three or more read ones is folded into "N older messages". A body is only mounted when its message is expanded (its
-// frame measures itself on load). n and p (App.tsx) step through the messages.
+// frame measures itself on load). n and p (App.tsx) step through the messages. On wide screens (`inline`), Reply, Reply all
+// and Forward, from the buttons or r / a / f, open a composer under the message answered (InlineCompose.tsx, loaded with the
+// editor); one at a time, and one with something written in it is not replaced, it takes the focus again.
 import { Archive, ArrowLeft, CalendarPlus, ChevronLeft, ChevronRight, Download, FolderInput, Forward, Loader2, Mail, MoreVertical, Pencil, Reply, ReplyAll, Star, Trash2 } from 'lucide-react';
-import { useEffect, useImperativeHandle, useRef, useState, type Ref } from 'react';
-import { attachmentUrl, type Address, type Category, type MailFolder, type MessageDetail, type ThreadDetail, type ThreadMessage } from '../api';
+import { Fragment, lazy, Suspense, useEffect, useImperativeHandle, useRef, useState, type Ref } from 'react';
+import { attachmentUrl, type Address, type Category, type MailAccount, type MailFolder, type MessageDetail, type ThreadDetail, type ThreadMessage } from '../api';
+import { cidUrlOf, prefill, type AnswerMode, type ComposeRequest, type Outgoing } from '../lib/compose';
+import type { Notice } from '../lib/notice';
 import { displayName, formatAddress } from '../lib/addresses';
 import { folderLabel, orderFolders } from '../lib/folders';
 import { fileSize, fullDate, listDate, relativeDate } from '../lib/format';
@@ -20,11 +24,19 @@ import { InviteCard } from './InviteCard';
 import { TAB_ICONS } from './InboxTabs';
 import { MessageBody } from './MessageBody';
 import { Button } from './ui/button';
+import type { ComposerHandle } from './ComposeForm';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
 
-/** What App.tsx's keyboard asks of the pane: the next (1) or previous (-1) message of the thread, expanded and in view. */
+// The composer (and the editor in it) loads when the first answer opens.
+const InlineCompose = lazy(() => import('./InlineCompose'));
+
+/** What App.tsx asks of the pane: the next (1) or previous (-1) message of the thread, expanded and in view (n, p); an answer to the last message under it (r, a, f); a composer opened again there. */
 export interface ThreadViewHandle {
   step(by: 1 | -1): void;
+  /** Opens the inline composer for the last message; false when there is none here (narrow screens, no thread): App.tsx opens the dialog. */
+  compose(mode: AnswerMode): boolean;
+  /** Opens this composer under its message, if that message is in the open thread and composers are inline here. */
+  reopen(request: ComposeRequest): boolean;
 }
 
 export interface ThreadViewProps {
@@ -60,8 +72,10 @@ export interface ThreadViewProps {
   /** A message whose body the server has not fetched yet was opened (or Retry pressed): read it now (hooks/mail.ts `fetchBody`). */
   onNeedBody(m: ThreadMessage): void;
   handle?: Ref<ThreadViewHandle | null> | undefined;
-  /** A passing message (App.tsx's toast): an invitation answered. */
-  onNotice?: ((text: string) => void) | undefined;
+  /** A passing message (App.tsx's toast): an invitation being answered, then answered. */
+  onNotice?: ((notice: Notice) => void) | undefined;
+  /** Wide screens: Reply, Reply all and Forward open a composer under the message, instead of `onReply` and the others. */
+  inline?: { account: MailAccount; onSend(out: Outgoing): void; onDetach(request: ComposeRequest): void } | undefined;
   /** "Create event" from the thread: opens Calendar at this address (default: a new tab). */
   onOpenCalendar?: ((url: string) => void) | undefined;
 }
@@ -125,8 +139,45 @@ export function ThreadView(p: ThreadViewProps) {
     });
   };
 
+  // The inline composer: the message it answers and what it opened with. Another conversation closes it (one with something
+  // written moves to the dialog, InlineCompose.tsx).
+  const [composing, setComposing] = useState<{ key: number; at: { folder: string; uid: number }; request: ComposeRequest } | null>(null);
+  const composer = useRef<ComposerHandle | null>(null);
+  const composeKey = useRef(0);
+  const threadId = t?.threadId ?? null;
+  useEffect(() => setComposing(null), [threadId]);
+  const showComposer = (at: { folder: string; uid: number }, request: ComposeRequest) => {
+    const i = messages.findIndex((x) => x.folder === at.folder && x.uid === at.uid);
+    if (i < 0) return false;
+    setUnfolded(true);
+    setExpanded((cur) => (cur.has(i) ? cur : new Set(cur).add(i)));
+    setComposing({ key: ++composeKey.current, at, request });
+    return true;
+  };
+  /** Reply, Reply all or Forward to `m`: under it on wide screens, else App.tsx's dialog. */
+  const answer = (mode: AnswerMode, m: MessageDetail) => {
+    const inline = p.inline;
+    if (!inline || !t) return void (mode === 'reply' ? p.onReply : mode === 'replyAll' ? p.onReplyAll : p.onForward)(m);
+    // One composer at a time: one with something in it stays and takes the focus.
+    if (composing && composer.current && !composer.current.isEmpty()) return composer.current.focus();
+    const cidUrl = cidUrlOf(p.accountId, m);
+    const remode = (next: AnswerMode) => prefill(next, m, p.me, cidUrl);
+    showComposer({ folder: m.folder, uid: m.uid }, { mode, draft: remode(mode), source: { folder: m.folder, uid: m.uid }, threadId: t.threadId, remode });
+  };
+
   const articles = useRef(new Map<number, HTMLElement>());
   useImperativeHandle(p.handle, () => ({
+    compose(mode) {
+      const m = replyTarget(messages, p.folder);
+      if (!p.inline || !m || m.bodyPending) return false;
+      answer(mode, m);
+      return true;
+    },
+    reopen(request) {
+      if (!p.inline || !t || request.threadId !== t.threadId || !request.source) return false;
+      if (composing && composer.current && !composer.current.isEmpty()) return false;
+      return showComposer(request.source, request);
+    },
     step(by) {
       if (!messages.length) return;
       const from = focus ?? (by > 0 ? -1 : messages.length);
@@ -138,7 +189,7 @@ export function ThreadView(p: ThreadViewProps) {
       setExpanded((cur) => (cur.has(i) ? cur : new Set(cur).add(i)));
       articles.current.get(i)?.scrollIntoView?.({ block: 'nearest' });
     },
-  }), [messages, focus, expanded, p.onNeedBody]);
+  }));
 
   const last = messages[messages.length - 1];
   const target = replyTarget(messages, p.folder);
@@ -220,13 +271,13 @@ export function ThreadView(p: ThreadViewProps) {
               <Pencil className="size-3.5" /> Edit draft
             </Button>
           )}
-          <Action label="Reply (r)" onClick={() => target && p.onReply(target)} disabled={!target}>
+          <Action label="Reply (r)" onClick={() => target && answer('reply', target)} disabled={!target}>
             <Reply />
           </Action>
-          <Action label="Reply all (a)" onClick={() => target && p.onReplyAll(target)} disabled={!target}>
+          <Action label="Reply all (a)" onClick={() => target && answer('replyAll', target)} disabled={!target}>
             <ReplyAll />
           </Action>
-          <Action label="Forward (f)" onClick={() => target && p.onForward(target)} disabled={!target}>
+          <Action label="Forward (f)" onClick={() => target && answer('forward', target)} disabled={!target}>
             <Forward />
           </Action>
           <DropdownMenu>
@@ -288,9 +339,10 @@ export function ThreadView(p: ThreadViewProps) {
               ) : (
                 (s.kind === 'fold' ? s.indexes : [s.index]).map((i) => {
                   const m = messages[i]!;
+                  const here = composing && composing.at.folder === m.folder && composing.at.uid === m.uid && p.inline;
                   return (
+                    <Fragment key={`${m.folder}/${m.uid}`}>
                     <ThreadMessageItem
-                      key={`${m.folder}/${m.uid}`}
                       ref={(el) => {
                         el ? articles.current.set(i, el) : articles.current.delete(i);
                       }}
@@ -301,15 +353,32 @@ export function ThreadView(p: ThreadViewProps) {
                       last={i === messages.length - 1}
                       focused={focus === i}
                       onToggle={() => toggle(i)}
-                      onReply={() => p.onReply(m)}
-                      onReplyAll={() => p.onReplyAll(m)}
-                      onForward={() => p.onForward(m)}
+                      onReply={() => answer('reply', m)}
+                      onReplyAll={() => answer('replyAll', m)}
+                      onForward={() => answer('forward', m)}
                       onEditDraft={p.onEditDraft && m.folder === p.folder ? () => p.onEditDraft!(m) : undefined}
                       onFlag={() => p.onFlagMessage(m, !m.flagged)}
                       onRetry={() => p.onNeedBody(m)}
                       onPreview={(at) => setPreviewing({ index: i, at })}
                       onNotice={p.onNotice ?? (() => {})}
                     />
+                    {here && (
+                      <Suspense fallback={null}>
+                        <InlineCompose
+                          key={composing.key}
+                          account={p.inline!.account}
+                          request={composing.request}
+                          handle={composer}
+                          onClose={() => setComposing(null)}
+                          onSend={(out) => {
+                            setComposing(null);
+                            p.inline!.onSend(out);
+                          }}
+                          onDetach={p.inline!.onDetach}
+                        />
+                      </Suspense>
+                    )}
+                    </Fragment>
                   );
                 })
               ),
@@ -325,22 +394,22 @@ export function ThreadView(p: ThreadViewProps) {
               />
             )}
             {/* As Gmail ends a conversation: answer it without going back up to the toolbar. */}
-            {last && !last.bodyPending && (
+            {last && !last.bodyPending && !(composing && p.inline) && (
               <div className="mt-6 flex flex-wrap gap-2 pb-6">
                 {draft && p.onEditDraft && (
                   <EndButton label="Edit draft" onClick={() => p.onEditDraft!(draft)}>
                     <Pencil />
                   </EndButton>
                 )}
-                <EndButton label="Reply" onClick={() => target && p.onReply(target)}>
+                <EndButton label="Reply" onClick={() => target && answer('reply', target)}>
                   <Reply />
                 </EndButton>
                 {target && target.to.length + target.cc.length > 1 && (
-                  <EndButton label="Reply all" onClick={() => p.onReplyAll(target)}>
+                  <EndButton label="Reply all" onClick={() => answer('replyAll', target)}>
                     <ReplyAll />
                   </EndButton>
                 )}
-                <EndButton label="Forward" onClick={() => target && p.onForward(target)}>
+                <EndButton label="Forward" onClick={() => target && answer('forward', target)}>
                   <Forward />
                 </EndButton>
               </div>
@@ -378,7 +447,7 @@ interface ItemProps {
   onFlag(): void;
   onRetry(): void;
   onPreview(at: number): void;
-  onNotice(text: string): void;
+  onNotice(notice: Notice): void;
 }
 
 /** One message of the thread: a line when collapsed; its header, body and attachments when open. */

@@ -339,6 +339,27 @@ from it and the server is asked only for what is new.
   ("The prefetch cache", and the plain list of the cold 320-message INBOX). Under `MAIL_ALLOW_INSECURE=1`, `x-mail-test-alarm: 1`
   runs one alarm pass before the request is answered, and `x-mail-test-classify-cap` lowers NEW_CAP and BACKFILL_STEP too.
 
+## Writing and sending in the client (2026-11-06)
+
+- **One composer, two frames**: `packages/mail/src/components/ComposeForm.tsx` is the composer (recipients as chips, the
+  subject, the editor, files, Send / attach / discard, "Discard this draft?" before dropping what was written); `Compose.tsx`
+  frames it as a dialog (full screen under 900px), `InlineCompose.tsx` as a card in the conversation.
+- **Reply, Reply all and Forward answer inline on wide screens** (900px and over): from the toolbar, a message's own buttons,
+  the end of the thread or r / a / f, `ThreadView` opens the card under the message answered (after the last one, usually):
+  the person's avatar, a mode button with a caret (a menu switches between the three; what was written stays, recipients,
+  subject and quote follow the mode while the body is untouched), the recipients as "Name (address)" until clicked (a forward
+  starts with the fields open), the editor with the quote, files, Send / attach / discard; Escape asks like the dialog. It
+  scrolls into view and takes the focus. One at a time: another answer while one has something written focuses that one.
+  Another conversation (or a narrow window) moves a written card to the dialog with everything in it. New message, Edit draft
+  and every mode on narrow screens stay in the dialog.
+- **Send is asynchronous**: Send checks what it can at once (recipients, attachments still loading or failed, the files'
+  size) and says what is wrong in the composer; otherwise the composer closes and hands an `Outgoing` (the message, its files,
+  and the composer as it was) to App.tsx (`lib/outgoing.ts` `sendInBackground`): the toast says "Sending…" while the pictures
+  become inline parts, the files base64, the 20 MB check and `send` run, then "Message sent." (lists, threads and folders
+  refetched; a sent draft's conversation closes) or "Could not send: <reason>" with **Open**, which puts the composer back as it
+  was (inline under its message when that conversation is open on a wide screen, else the dialog). Drafts are not autosaved.
+- Tests: `ThreadView.test.tsx` (answering in the conversation), `Compose.test.tsx`, `lib/outgoing.test.ts`.
+
 ## Opening a message
 
 `GET .../messages/:uid` never downloads the whole message: one FETCH of the summary, BODYSTRUCTURE and a few headers (From,

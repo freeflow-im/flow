@@ -537,8 +537,9 @@ one of its buttons presses that button, not Edit).
   sources, `lib/calendarShared.ts`), place, Join for a call, the organizer and "N guests"; for a REQUEST Going? Yes · No · Maybe
   (the answer filled, "On your calendar · Going", when it is on one), a calendar picker when there is more than one writable
   calendar and it is not on one, and "Connect a calendar" with none; for a CANCEL "This event was cancelled" with Remove from
-  calendar or "Not on your calendar"; for a REPLY "Ann Lee accepted". Answering updates the card from the route's answer and
-  says it in a toast ("You're going. Ann Lee was emailed your answer."). The invitation's iCalendar files are not listed under
+  calendar or "Not on your calendar"; for a REPLY "Ann Lee accepted". Answering shows on the card at once with a toast
+  "Replying…" (an emailed answer can take seconds), then updates the card from the route's answer and says it in a toast
+  ("You're going. Ann Lee was emailed your answer."); a failure puts the card back and says "Could not reply: <reason>". The invitation's iCalendar files are not listed under
   the message; a list row leaves out the `text/calendar` alternative and keeps `invite.ics`. The mock has an invitation (a
   weekly series with a Meet link) and a cancellation.
 - **Create event** in a thread's ⋮ menu opens `/calendar/?new=<subject>&guests=Name <address>,…` in a new tab (everyone on the
