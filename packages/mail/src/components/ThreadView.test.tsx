@@ -112,16 +112,23 @@ describe('ThreadView', () => {
     expect(article(1).className).toContain('ring-2');
   });
 
-  it('a message whose body is still to come says so, lists only its real files, is not answered, and asks for its body when opened', async () => {
-    const pending = m(2, { html: null, text: null, bodyPending: true, attachments: [{ index: 0, filename: 'noname', mimeType: 'image/png', size: 44, contentId: '<a@b>', inline: true }, { index: 1, filename: 'plan.pdf', mimeType: 'application/pdf', size: 9, contentId: null, inline: false }] });
+  it('a message whose body is still to come says so, lists its files once open, is not answered, and asks for its body when opened', async () => {
+    const pending = m(2, { html: null, text: null, bodyPending: true, attachments: [{ index: 0, filename: 'flyer.png', mimeType: 'image/png', size: 44, contentId: '<a@b>', inline: true }, { index: 1, filename: 'plan.pdf', mimeType: 'application/pdf', size: 9, contentId: null, inline: false }] });
     await render({ thread: { threadId: 't:2', messages: [m(1), pending, m(3, { bodyPending: true, html: null, text: null })] } });
     expect(article(3).textContent).toContain('Loading…');
     expect([...article(2).querySelectorAll('button[aria-label^="Preview"]')].map((b) => b.getAttribute('aria-label'))).toEqual([]);
     await act(() => article(2).querySelector<HTMLElement>('div[class*="cursor-pointer"]')!.click());
     expect(needed).toEqual([2]);
-    expect([...article(2).querySelectorAll('button[aria-label^="Preview"]')].map((b) => b.getAttribute('aria-label'))).toEqual(['Preview plan.pdf, 9 B']);
+    // The picture the body shows by cid is listed too (a flyer pasted into the body is a file worth saving).
+    expect([...article(2).querySelectorAll('button[aria-label^="Preview"]')].map((b) => b.getAttribute('aria-label'))).toEqual(['Preview flyer.png, 44 B', 'Preview plan.pdf, 9 B']);
     await act(() => host.querySelector<HTMLButtonElement>('button[aria-label="Reply (r)"]')!.click());
     expect(replied.map((x) => x.uid)).toEqual([1]);
+  });
+
+  it('an open message lists the pictures its HTML shows by cid, so they can be saved', async () => {
+    const flyer = m(1, { html: '<p>See the flyer</p><img src="cid:a@b">', attachments: [{ index: 0, filename: 'flyer.png', mimeType: 'image/png', size: 44, contentId: 'a@b', inline: true }] });
+    await render({ thread: { threadId: 't:4', messages: [flyer] } });
+    expect([...article(1).querySelectorAll('button[aria-label^="Preview"]')].map((b) => b.getAttribute('aria-label'))).toEqual(['Preview flyer.png, 44 B']);
   });
 
   it('a body that could not be read offers Retry', async () => {

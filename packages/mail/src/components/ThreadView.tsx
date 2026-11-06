@@ -353,12 +353,13 @@ export function ThreadView(p: ThreadViewProps) {
 }
 
 /**
- * A message's attachments as listed under it: not the pictures its HTML shows by cid (nor, before the body is here, any
- * inline part), and not the iCalendar of an invitation, which its card shows.
+ * A message's attachments as listed under it: every part, the pictures its HTML shows by cid included (a flyer pasted into
+ * the body is a file worth saving; the list's row leaves those out, this row does not), less the iCalendar of an
+ * invitation, which its card shows.
  */
 const shownFiles = (m: ThreadMessage) => {
   const invite = !m.bodyPending && invitationPart(m);
-  return m.attachments.filter((a) => (m.bodyPending ? !a.inline : !a.inline || !a.contentId || !(m.html ?? '').includes(a.contentId.replace(/^<|>$/g, ''))) && !(invite && isCalendarFile(a)));
+  return m.attachments.filter((a) => !(invite && isCalendarFile(a)));
 };
 
 interface ItemProps {
