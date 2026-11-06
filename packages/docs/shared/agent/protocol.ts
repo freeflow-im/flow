@@ -267,7 +267,7 @@ export type ChatItem =
       input: Record<string, unknown>;
       status: 'running' | 'ok' | 'error';
       error?: string;
-      /** The result text of a tool that produces a file (export_deck) or a server tool in SHOWN_RESULTS, so the chat can show a button. */
+      /** The result text of a tool that produces a file (export_deck) or a server tool in SHOWN_RESULTS, so the chat can show a button, or load the pictures an image_search found. */
       result?: string;
     };
 
@@ -402,7 +402,7 @@ export const CLIENT_TOOLS = new Set([
 ]);
 
 /** Server tools whose result the chat is given (tool_end, the transcript): it links to the draft, file or event they made. */
-export const SHOWN_RESULTS: ReadonlySet<string> = new Set(['create_mail_draft', 'save_mail_attachment_to_docs', 'create_event', 'update_event']);
+export const SHOWN_RESULTS: ReadonlySet<string> = new Set(['create_mail_draft', 'save_mail_attachment_to_docs', 'create_event', 'update_event', 'image_search']);
 
 /** OpenAI models a user can run the assistant on with their own API key (Settings page). */
 export const OPENAI_MODELS = [

@@ -1,10 +1,10 @@
 // The assistant in Mail: a panel on the right, as Docs' is (beside the list and the message; over them on narrow
 // screens). The chat's replies and tool labels are Docs' own (lib/docsAgent.ts); a draft the assistant made has
 // "Open draft", which opens it in Compose, and links to messages in Mail open them here rather than in a new tab.
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Check, ExternalLink, Loader2, Pencil, Sparkles, X } from 'lucide-react';
 import { draftOf, refOfLink, savedFileOf, type MessageRef } from '../lib/assistant';
-import { ChatMarkdown, toolLabel, type ChatItem } from '../lib/docsAgent';
+import { ChatMarkdown, picturesOf, toolLabel, type ChatItem } from '../lib/docsAgent';
 import { cn } from '../lib/utils';
 import { Button } from './ui/button';
 import type { useMailAssistant } from '../hooks/assistant';
@@ -52,6 +52,7 @@ export function AssistantPanel({ chat, onMessage, overlay, width, onClose, onSho
   };
   const last = chat.items[chat.items.length - 1];
   const thinking = chat.running && last?.kind !== 'assistant';
+  const pictures = useMemo(() => picturesOf(chat.items), [chat.items]);
 
   return (
     <aside
@@ -101,7 +102,7 @@ export function AssistantPanel({ chat, onMessage, overlay, width, onClose, onSho
             </div>
           ) : it.kind === 'assistant' ? (
             <div key={i} className="mail-agent-md text-ink">
-              <ChatMarkdown text={it.text.trim()} />
+              <ChatMarkdown text={it.text.trim()} pictures={pictures} />
             </div>
           ) : (
             <ToolRow key={it.id} item={it} onOpenDraft={onOpenDraft} />

