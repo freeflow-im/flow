@@ -29,6 +29,12 @@ export const shortTime = (o: Pick<EventOccurrence, 'start' | 'allDay'>) => (o.al
 export const RESPONSE_LABEL: Record<Response, string> = { accepted: 'Going', tentative: 'Maybe', declined: 'Not going', 'needs-action': 'Not answered' };
 
 /** The browser's zone, as an IANA name. */
+/** The toast once an answer to an invitation is saved. */
+export const RESPONDED_TEXT: Record<Exclude<Response, 'needs-action'>, string> = { accepted: 'Accepted', declined: 'Declined', tentative: 'Tentatively accepted' };
+
+/** An occurrence with the person's own answer set (the popover shows it at once, before the server has it). */
+export const withMyResponse = (o: EventOccurrence, response: Response): EventOccurrence => ({ ...o, myResponse: response, attendees: o.attendees.map((g) => (g.self ? { ...g, response } : g)) });
+
 export const browserZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
 /** A zone's name with its offset now: "America/New_York (GMT-5)". */

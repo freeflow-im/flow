@@ -4,7 +4,7 @@ import { applyDelete, applyPatch, movePatch, textOn, toFcEvent } from './occurre
 import { neighbours, overlaps, rangeOf, step, titleOf } from './ranges';
 import { describeRecurrence, describeRule, parseRule, positionOf, presetOf, presetsFor, ruleLine, withRule } from './recurrence';
 import { parsePlace, pathOf } from './route';
-import { whenText } from './format';
+import { RESPONDED_TEXT, whenText, withMyResponse } from './format';
 
 const d = (y: number, m: number, day: number, h = 0, mi = 0) => new Date(y, m - 1, day, h, mi);
 const occ = (o: Partial<EventOccurrence> = {}): EventOccurrence => ({
@@ -136,5 +136,16 @@ describe('the dialog\'s times', () => {
     expect(wallIn('2026-11-05T17:00:00.000Z', 'Asia/Tokyo')).toEqual({ date: '2026-11-06', time: '02:00' });
     expect(reminderText(10)).toBe('10 minutes before');
     expect(reminderText(1440)).toBe('1 day before');
+  });
+});
+
+describe('answering an invitation', () => {
+  it('sets the person\'s own answer on the occurrence at once, and the toast names it', () => {
+    const o = occ({ myResponse: 'needs-action', attendees: [{ name: 'Ann', email: 'ann@x.test', role: 'required', response: 'accepted' }, { name: null, email: 'me@x.test', role: 'required', response: 'needs-action', self: true }] });
+    const answered = withMyResponse(o, 'tentative');
+    expect(answered.myResponse).toBe('tentative');
+    expect(answered.attendees.map((a) => a.response)).toEqual(['accepted', 'tentative']);
+    expect(o.myResponse).toBe('needs-action');
+    expect([RESPONDED_TEXT.accepted, RESPONDED_TEXT.declined, RESPONDED_TEXT.tentative]).toEqual(['Accepted', 'Declined', 'Tentatively accepted']);
   });
 });
