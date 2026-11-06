@@ -1,7 +1,8 @@
 // A message's body. HTML goes through sanitize.ts and into a sandboxed iframe: no allow-scripts (nothing in it can
 // run), allow-same-origin only so this page can measure its height, allow-popups so its links open in a new tab, and a
-// Content Security Policy in the document itself. Remote images wait for "Show images" until the user has chosen it once
-// (lib/imagePref.ts); after that they load. Plain text is rendered by
+// Content Security Policy in the document itself. A click in the frame puts the keyboard focus in its document, so the
+// frame relays its key presses to this window (relayKey) and the app's shortcuts keep working. Remote images wait for
+// "Show images" until the user has chosen it once (lib/imagePref.ts); after that they load. Plain text is rendered by
 // React (so escaped), with its links made links.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ImageOff } from 'lucide-react';
@@ -58,6 +59,17 @@ export function MessageBody({ accountId, message }: { accountId: string; message
   );
 }
 
+/**
+ * A key pressed in a message's frame, replayed on the app's window so the shortcuts (j/k, e, r, …) see it as they would a
+ * key pressed anywhere else. Not while typing in a field the message contains. When the app acts on the replay (it
+ * cancels it), the key is cancelled in the frame too, so it does not also scroll the message.
+ */
+export function relayKey(e: KeyboardEvent): void {
+  if ((e.target as Element | null)?.closest?.('input, textarea, select, [contenteditable]')) return;
+  const copy = new KeyboardEvent(e.type, { key: e.key, code: e.code, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, altKey: e.altKey, metaKey: e.metaKey, repeat: e.repeat, bubbles: true, cancelable: true });
+  if (!window.dispatchEvent(copy)) e.preventDefault();
+}
+
 function HtmlFrame({ html, allowRemote, title }: { html: string; allowRemote: boolean; title: string }) {
   const ref = useRef<HTMLIFrameElement>(null);
   const observer = useRef<ResizeObserver | null>(null);
@@ -81,6 +93,7 @@ function HtmlFrame({ html, allowRemote, title }: { html: string; allowRemote: bo
       observer.current = new ResizeObserver(measure);
       observer.current.observe(doc.body);
     }
+    doc?.addEventListener('keydown', relayKey);
     // Images arriving late change the height without resizing the body's box in every browser.
     doc?.querySelectorAll('img').forEach((img) => img.addEventListener('load', measure));
   }, [measure]);

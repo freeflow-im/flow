@@ -217,6 +217,12 @@ folder's unread count in its own cache at once (`packages/mail/src/lib/counts.ts
 after the last such change and once none is still on its way (so a burst of j/k is one refresh). Opening a message reads
 the next (older) one ahead; it is marked read once it is on screen.
 
+The keyboard shortcuts (j/k, n/p, Enter, e, #, u, r, a, f, c, /, Escape) are one `keydown` listener on the window in
+`App.tsx`, ignored while typing and under a dialog or menu. A message's HTML body is a same-origin sandboxed iframe, and a
+click in it (on a link, to select text) moves the focus into that document, whose key events never reach the window: so
+the frame relays its key presses to the window (`relayKey` in `MessageBody.tsx`, 2026-11-06), except while typing in a
+field the message contains, and cancels the key in the frame when the app acted on it.
+
 ## Conversations (2026-11-04)
 
 Gmail-style threads, on the prefetch cache (below): every cached message has a `thread_id`, decided when it is cached
