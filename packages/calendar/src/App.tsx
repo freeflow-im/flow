@@ -27,6 +27,7 @@ import { useOrganizations } from './hooks/organization';
 import { calendarContext, setAssistantOpen, useAssistantOpen } from './lib/assistant';
 import { ResizeHandle } from './components/ResizeHandle';
 import { useAccounts, useCalendarPrefs, useCalendars, useEventMutations, useEvents, useSearch } from './hooks/calendar';
+import { RESPONDED_TEXT, withMyResponse } from './lib/format';
 import { movePatch } from './lib/occurrences';
 import { neighbours, parseDate, rangeOf, step, titleOf, type View } from './lib/ranges';
 import { parseNewEvent, withoutNewEvent } from './lib/deeplink';
@@ -53,7 +54,8 @@ export function App() {
   const calendars = useCalendars();
   const cals = useMemo(() => calendars.data ?? [], [calendars.data]);
   const events = useEvents(range, ahead, calendars.data);
-  const [toast, setToast] = useState<string | null>(null);
+  // A passing message at the bottom; one in progress ("Updating…") stays until the result replaces it.
+  const [toast, setToast] = useState<string | { text: string; progress: true } | null>(null);
   const onError = useCallback((e: unknown) => setToast(errorText(e)), []);
   const m = useEventMutations(onError);
   const prefs = useCalendarPrefs(onError);
@@ -71,7 +73,7 @@ export function App() {
 
   useEffect(() => {
     if (!toast) return;
-    const t = setTimeout(() => setToast(null), 6000);
+    const t = setTimeout(() => setToast(null), typeof toast === 'string' ? 6000 : 60_000);
     return () => clearTimeout(t);
   }, [toast]);
 
@@ -173,9 +175,18 @@ export function App() {
     if (o.recurring) setAsk({ action: 'delete', allowThis: true, run, cancel: () => {} });
     else run('all');
   };
+  // The answer shows at once (the popover here, the cached occurrences in the hook); the toast follows the request, and a
+  // failure puts the popover back as it was (the hook restores the cache).
   const respond = (o: EventOccurrence, r: Exclude<Response, 'needs-action'>) => {
-    setOpen((x) => (x ? { ...x, event: { ...x.event, myResponse: r, attendees: x.event.attendees.map((g) => (g.self ? { ...g, response: r } : g)) } } : x));
-    void m.respond(o, r).catch(() => {});
+    setOpen((x) => (x ? { ...x, event: withMyResponse(x.event, r) } : x));
+    setToast({ text: 'Updating…', progress: true });
+    m.respond(o, r).then(
+      () => setToast(RESPONDED_TEXT[r]),
+      (e: unknown) => {
+        setOpen((x) => (x && x.event.id === o.id ? { ...x, event: o } : x));
+        setToast(`Could not respond: ${errorText(e)}`);
+      },
+    );
   };
   const moved = (o: EventOccurrence, start: Date, end: Date | null, allDay: boolean, revert: () => void) => {
     const run = (s: Scope | undefined) => void m.update(o, movePatch(o, start, end, allDay, s), s ?? 'all').catch(revert);
@@ -310,7 +321,10 @@ export function App() {
       {dialog?.kind === 'add' && <AddAccountDialog kind={dialog.connect} onClose={() => setDialog(null)} onAdded={() => { setDialog(null); setToast('Connected. Your events are on their way.'); }} />}
       {dialog?.kind === 'settings' && <AccountSettingsDialog accounts={accounts.data ?? []} initialId={dialog.accountId} focusPassword={dialog.focusPassword} onClose={() => setDialog(null)} onAdd={() => setDialog({ kind: 'add', connect: 'icloud' })} />}
       {toast && (
-        <div role="status" className={cn('fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-lg bg-[#323232] px-4 py-3 text-[14px] text-white shadow-lg')}>{toast}</div>
+        <div role="status" className={cn('fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-lg bg-[#323232] px-4 py-3 text-[14px] text-white shadow-lg')}>
+          {typeof toast !== 'string' && <Loader2 className="size-4 animate-spin" aria-hidden />}
+          {typeof toast === 'string' ? toast : toast.text}
+        </div>
       )}
     </div>
   );

@@ -481,7 +481,9 @@ occurrence moved on its own carries no rule; the video call (`lib/conference.ts`
 phone with its PIN in threes and More phone numbers, and taken out of the description shown); the guests ("11 guests", "5 yes,
 2 no, 4 awaiting", folded, the organizer first and the person second, a name only when it is not the address again); reminders;
 the organizer (else the calendar); the place, with a map link; the description with clickable links, six lines and Show more;
-and, for an invitation (`myResponse`), Going? Yes · No · Maybe in a grey band, the answer filled in the calendar's colour. The
+and, for an invitation (`myResponse`), Going? Yes · No · Maybe in a grey band, the answer filled in the calendar's colour (at
+once: the popover and the cached occurrences change before the server answers, a toast says "Updating…" and then "Accepted",
+"Declined" or "Tentatively accepted"; a failure puts both back and says "Could not respond: <reason>"). The
 card is at most 440px wide and as tall as the space Radix gives it, the body scrolling; it takes the focus (Esc closes; Enter on
 one of its buttons presses that button, not Edit).
 
