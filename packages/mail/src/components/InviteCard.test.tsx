@@ -7,7 +7,6 @@ import { InviteCard, InviteCardView, type InviteCardViewProps } from './InviteCa
 import { ThreadView } from './ThreadView';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-(globalThis as { ResizeObserver?: unknown }).ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} };
 
 const ann = { name: 'Ann Lee', email: 'ann@gmail.com', role: 'required' as const, response: 'accepted' as const };
 const me = { name: null, email: 'scott@example.com', role: 'required' as const, response: 'needs-action' as const, self: true as const };

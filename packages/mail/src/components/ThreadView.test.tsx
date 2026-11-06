@@ -6,8 +6,6 @@ import type { ComposeRequest, Outgoing } from '../lib/compose';
 import { ThreadView, type ThreadViewHandle, type ThreadViewProps } from './ThreadView';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-// jsdom has no ResizeObserver; a body's frame measures itself with one.
-(globalThis as { ResizeObserver?: unknown }).ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} };
 
 const me = 'ann@example.com';
 const m = (uid: number, extra: Partial<ThreadMessage> = {}): ThreadMessage => ({

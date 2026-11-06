@@ -5,7 +5,6 @@ import type { MessageDetail } from '../api';
 import { MessageBody } from './MessageBody';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-(globalThis as { ResizeObserver?: unknown }).ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} };
 
 const message: MessageDetail = {
   uid: 1, folder: 'INBOX', messageId: '<m1@x>', from: { name: 'Bob', address: 'bob@acme.test' }, to: [], cc: [], replyTo: [], bcc: [], subject: 'Plan',
