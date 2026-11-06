@@ -7,9 +7,7 @@ import type { TabStatus } from '../api';
 import { InboxTabs } from './InboxTabs';
 
 let root: Root, host: HTMLDivElement;
-// jsdom has no ResizeObserver (the bar measures itself for the compact layout); a quiet stand-in.
 beforeEach(() => {
-  (globalThis as { ResizeObserver?: unknown }).ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} };
   host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host);
 });
 afterEach(() => { act(() => root.unmount()); host.remove(); });
