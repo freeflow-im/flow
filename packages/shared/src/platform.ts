@@ -250,17 +250,55 @@ export interface DomainDTO {
 export const APP_SCOPES = ['organization', 'account'] as const;
 export type AppScope = (typeof APP_SCOPES)[number];
 
+/** A suite-bar tab's badge: Chat's unread count, Mail's (drawn only on Mail's own bar), or none (§6.1). Each bar keeps its own source for the number. */
+export type AppTabBadge = 'chat-unread' | 'mail-unread' | 'none';
+
+/**
+ * One checkbox of the MCP consent page (§6.1): a group of the app's scopes, its title and what it lets an agent do,
+ * on or off until the person changes it. `readOnly` is the text when the client asked for none of the group's
+ * `:write` scopes.
+ */
+export interface AppScopeGroup {
+  id: string;
+  label: string;
+  detail: string;
+  scopes: string[];
+  checkedByDefault: boolean;
+  warning?: string;
+  readOnly?: { label: string; detail: string };
+}
+
+/**
+ * A page the Worker serves for one of the app's paths (a Hono pattern), from `_pages/<html>`. `signIn`: a stranger is
+ * sent to sign in. `headers`: added to the page. `passFiles`: a name with an extension under it is a built file, not
+ * the page, and falls through.
+ */
+export interface AppPage {
+  path: string;
+  html: string;
+  signIn?: boolean;
+  headers?: Record<string, string>;
+  passFiles?: boolean;
+}
+
 /** One declaration per app, read by the shell, the registry and the consent
  * page (§6.1). `events` lists the types it publishes into the organization's log. */
 export interface AppManifest {
   name: string;
-  path: string;
+  /** Where its client lives; none for an app without a page (Events). */
+  path?: string;
   scope: AppScope;
   object?: { className: string; migrationTag: string };
+  /** Its Hono module, `src/routes/<routes>.ts` in the Worker. */
+  routes?: string;
   kinds: { kind: string; container?: boolean }[];
   tools?: string[];
-  scopes?: string[];
-  tab?: { label: string; shortcut?: string };
-  client?: { dist: string; basePath: string };
+  /** The consent page's groups for its scopes, in the order the page lists them. */
+  scopes?: AppScopeGroup[];
+  /** The suite-bar entry; `shortcut` is the digit after ⌘. */
+  tab?: { label: string; shortcut: string; badge?: AppTabBadge };
+  /** The Vite build folder (from the repository's root) and the path it is served under. `optional`: a deploy may lack it. */
+  client?: { dist: string; basePath: string; optional?: boolean };
+  pages?: AppPage[];
   events: string[];
 }

@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { UserDTO } from '@flow/shared';
-import { AWAY_STATUS, isAway, StatusDialog, statusPatch, SuiteBar, type StatusOption } from '@flow/suite-bar';
+import { APP_MANIFESTS, AWAY_STATUS, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type StatusOption } from '@flow/suite-bar';
 import { useSwitcherEntries, useWorkspaceInvites, useWorkspaces } from '../hooks';
 import { useCapabilities } from '../lib/backend';
 import { connectionManager, type ConnectionRuntime } from '../lib/connectionRuntime';
@@ -145,18 +145,10 @@ export default function ChatSuiteBar({ activityUnread, intent }: { activityUnrea
       <SuiteBar
         // The logo: Chat's home, #general (no channel selected falls back to it).
         home={{ href: '/', onSelect: () => sel.selectChannel(null) }}
-        tabs={[
-          {
-            id: 'docs',
-            label: 'Docs',
-            href: '/workspace',
-            disabled: !docsHere,
-            ...(docsHere ? {} : { title: 'Docs is not available for an organization on another server yet' }),
-          },
-          { id: 'chat', label: 'Chat', href: '/', active: true, badge: chatBadge },
-          { id: 'mail', label: 'Mail', href: '/mail', disabled: !docsHere, ...(docsHere ? {} : { title: 'Mail is not available for an organization on another server yet' }) },
-          { id: 'calendar', label: 'Calendar', href: '/calendar', disabled: !docsHere, ...(docsHere ? {} : { title: 'Calendar is not available for an organization on another server yet' }) },
-        ]}
+        // The other apps live on this page's own server: an organization on another server has none of them yet.
+        tabs={suiteTabsFrom(APP_MANIFESTS, 'chat', { 'chat-unread': chatBadge }, {
+          unavailable: (t) => (docsHere ? null : `${t.label} is not available for an organization on another server yet`),
+        })}
         organization={{
           name: ws?.name ?? '',
           entries,

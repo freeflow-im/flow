@@ -13,6 +13,10 @@
     "./grants": {
       "types": "./dist/grants.d.ts",
       "import": "./dist/grants.js"
+    },
+    "./manifests": {
+      "types": "./dist/manifests.d.ts",
+      "import": "./dist/manifests.js"
     }
   },
   "scripts": {

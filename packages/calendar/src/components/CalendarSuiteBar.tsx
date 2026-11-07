@@ -4,7 +4,7 @@
 // What belongs to Chat (organizations, invitations, notifications, the profile) opens Chat at `/?open=…`.
 import { useCallback, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { AWAY_STATUS, isAway, StatusDialog, statusPatch, SuiteBar, type StatusOption } from '@flow/suite-bar';
+import { APP_MANIFESTS, AWAY_STATUS, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type StatusOption } from '@flow/suite-bar';
 import { chooseOrganization, useOrganizations } from '../hooks/organization';
 import { suite, type SuiteUser } from '../suite';
 
@@ -52,12 +52,7 @@ export function CalendarSuiteBar({ search, onSettings, onHome, assistant }: Cale
     <>
       <SuiteBar
         home={{ href: import.meta.env.BASE_URL, onSelect: () => onHome?.() }}
-        tabs={[
-          { id: 'docs', label: 'Docs', href: '/workspace' },
-          { id: 'chat', label: 'Chat', href: '/', badge: active?.unreadCount ?? 0 },
-          { id: 'mail', label: 'Mail', href: '/mail' },
-          { id: 'calendar', label: 'Calendar', href: import.meta.env.BASE_URL, active: true, onSelect: () => onHome?.() },
-        ]}
+        tabs={suiteTabsFrom(APP_MANIFESTS, 'calendar', { 'chat-unread': active?.unreadCount ?? 0 }, { activeHref: import.meta.env.BASE_URL, onSelect: () => onHome?.() })}
         organization={{
           name: active?.name ?? '',
           entries: list.map((o) => ({ id: o.id, name: o.name, unread: o.unreadCount ?? 0, active: o.id === active?.id, avatarUrl: o.avatarUrl })),

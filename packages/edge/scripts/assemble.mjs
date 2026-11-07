@@ -1,10 +1,14 @@
-// Fills public/ for the Worker from the clients' builds: the web client at the root, the Workspace client under
-// /workspace, the Mail client under /mail, the Calendar client under /calendar. Pages stay out: the origin answers them, because it decides per request (the sign-in redirect on
+// Fills public/ for the Worker from the clients' builds, one per app manifest with a client (@flow/shared's
+// APP_MANIFESTS; scripts/lib/clients.mjs): the web client at the root, the Workspace client under /workspace, the Mail
+// client under /mail, the Calendar client under /calendar. Pages stay out: the origin answers them, because it decides per request (the sign-in redirect on
 // /workspace, the headers of /p/*), except on the hosts the Worker answers for, where src/routes/pages.ts serves them from /_pages. So do files over the 25 MiB Workers takes (the assistant's ONNX runtimes): the
 // Worker misses and the origin answers. Production copies the builds out of the server's image (deploy-edge.yml), so the names match the server's pages.
+// Reads the shared package's build, so `pnpm --filter @flow/shared build` comes first (deploy-edge.yml does).
 import { cpSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { APP_MANIFESTS } from '@flow/shared/manifests';
+import { clientsFrom } from './lib/clients.mjs';
 
 const edge = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const packages = path.resolve(edge, '..');
@@ -22,31 +26,18 @@ const belongsHere = (file) => {
   return true;
 };
 
-const clients = [
-  [path.join(packages, 'web', 'dist'), out],
-  [path.join(packages, 'docs', 'dist', 'client'), path.join(out, 'workspace')],
-];
-for (const [from] of clients) {
-  if (!existsSync(path.join(from, 'index.html'))) throw new Error(`${from} has no build; build the clients first`);
+// A required client (Chat's, Docs') missing fails the deploy. An optional one (Mail, Calendar) is left out: a server image
+// built before it existed has no build of it, and the Worker then answers its path with "not built into this deploy".
+const clients = [];
+for (const client of clientsFrom(APP_MANIFESTS, path.resolve(packages, '..'), out)) {
+  if (existsSync(path.join(client.from, 'index.html'))) clients.push(client);
+  else if (client.optional) console.warn(`${client.from} has no build; /${client.name} is left out of this deploy`);
+  else throw new Error(`${client.from} has no build; build the clients first`);
 }
-// Mail (packages/mail) under /mail. Optional for now: a server image built before Mail existed has no build of it, and
-// the Worker then answers /mail with "not built into this deploy" rather than fail the whole deploy.
-const mail = path.join(packages, 'mail', 'dist');
-const hasMail = existsSync(path.join(mail, 'index.html'));
-if (hasMail) clients.push([mail, path.join(out, 'mail')]);
-else console.warn(`${mail} has no build; /mail is left out of this deploy`);
-// Calendar (packages/calendar) under /calendar, optional in the same way.
-const calendar = path.join(packages, 'calendar', 'dist');
-const hasCalendar = existsSync(path.join(calendar, 'index.html'));
-if (hasCalendar) clients.push([calendar, path.join(out, 'calendar')]);
-else console.warn(`${calendar} has no build; /calendar is left out of this deploy`);
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
-for (const [from, to] of clients) cpSync(from, to, { recursive: true, filter: belongsHere });
+for (const { from, to } of clients) cpSync(from, to, { recursive: true, filter: belongsHere });
 // The clients' pages, which the Worker serves on the hosts it answers for (src/routes/pages.ts); the origin's own pages until then.
 mkdirSync(path.join(out, '_pages'), { recursive: true });
-cpSync(path.join(clients[0][0], 'index.html'), path.join(out, '_pages', 'index.html'));
-cpSync(path.join(clients[1][0], 'index.html'), path.join(out, '_pages', 'workspace.html'));
-if (hasMail) cpSync(path.join(mail, 'index.html'), path.join(out, '_pages', 'mail.html'));
-if (hasCalendar) cpSync(path.join(calendar, 'index.html'), path.join(out, '_pages', 'calendar.html'));
+for (const { from, page } of clients) if (page) cpSync(path.join(from, 'index.html'), path.join(out, '_pages', page));
 console.log(`assembled ${out}${left.length ? `; left to the origin: ${left.join(', ')}` : ''}`);

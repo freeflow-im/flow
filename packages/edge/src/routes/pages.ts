@@ -1,15 +1,18 @@
 // The clients' pages, on the hosts the ported API answers on. Until the move the origin served them, because it decided per
-// request; now the Worker does: Docs at /workspace, Mail at /mail and Calendar at /calendar send a stranger to sign in, a public link's page is kept out of search
-// engines and referrers, and every other address of the web client gets its page. scripts/assemble.mjs files them under /_pages.
+// request; now the Worker does, from each app's manifest (@flow/shared's APP_MANIFESTS, `pages`): Docs at /workspace, Mail
+// at /mail and Calendar at /calendar send a stranger to sign in, a public link's page is kept out of search engines and
+// referrers, and every other address of the web client gets its page. scripts/assemble.mjs files them under /_pages.
 import { Hono, type Context } from 'hono';
 import { getCookie } from 'hono/cookie';
+import type { AppPage } from '@flow/shared';
+import { APP_MANIFESTS } from '@flow/shared/manifests';
 import { directory, type AuthEnv } from './auth';
 
 export interface PagesEnv extends AuthEnv { ASSETS: Fetcher }
 type C = Context<{ Bindings: PagesEnv }>;
 
-const BASE = '/workspace';
 const NOT_A_PAGE = /^\/(v1|api|mcp|oauth|plugin|\.well-known|edge|download)(\/|$)/;
+const A_FILE = /\.[a-z0-9]+$/i;
 
 async function page(c: C, name: string, extra: Record<string, string> = {}): Promise<Response> {
   const file = await c.env.ASSETS.fetch(new URL(`/_pages/${name}`, c.req.url));
@@ -24,35 +27,22 @@ async function signedIn(c: C): Promise<boolean> {
   return directory(c, 'authenticate', token).then(() => true, () => false);
 }
 
+const toSignIn = (c: C) => c.redirect(`/?next=${encodeURIComponent(new URL(c.req.url).pathname + new URL(c.req.url).search)}`);
+
+/** One manifest page: a file under it falls through to the built files (`passFiles`), a stranger goes to sign in (`signIn`). */
+const servePage = (p: AppPage) => async (c: C) => {
+  const { pathname } = new URL(c.req.url);
+  if (p.passFiles && (NOT_A_PAGE.test(pathname) || A_FILE.test(pathname))) return c.notFound();
+  if (p.signIn && !(await signedIn(c))) return toSignIn(c);
+  return page(c, p.html, p.headers);
+};
+
 export const pageRoutes = new Hono<{ Bindings: PagesEnv }>();
 
-pageRoutes.get(BASE, async (c) => ((await signedIn(c)) ? page(c, 'workspace.html') : c.redirect(`/?next=${encodeURIComponent(BASE + new URL(c.req.url).search)}`)));
-pageRoutes.get(`${BASE}/p/*`, (c) => page(c, 'workspace.html', { 'referrer-policy': 'no-referrer', 'x-robots-tag': 'noindex' }));
-// A preview (Mail's attachment overlay frames it): framed by the suite's own pages only.
-pageRoutes.get(`${BASE}/preview/*`, (c) => page(c, 'workspace.html', { 'x-frame-options': 'SAMEORIGIN', 'content-security-policy': "frame-ancestors 'self'", 'x-robots-tag': 'noindex' }));
-// A file under /workspace (its scripts and styles) is not a page: it falls through to the built files.
-pageRoutes.get(`${BASE}/*`, (c) => (/\.[a-z0-9]+$/i.test(new URL(c.req.url).pathname) ? c.notFound() : page(c, 'workspace.html')));
-// Mail at /mail (packages/mail): the same, from its own page; it routes in the browser, and its files fall through.
-const MAIL = '/mail';
-const toSignIn = (c: C) => c.redirect(`/?next=${encodeURIComponent(new URL(c.req.url).pathname + new URL(c.req.url).search)}`);
-pageRoutes.get(MAIL, async (c) => ((await signedIn(c)) ? page(c, 'mail.html') : toSignIn(c)));
-pageRoutes.get(`${MAIL}/*`, async (c) => {
-  if (/\.[a-z0-9]+$/i.test(new URL(c.req.url).pathname)) return c.notFound();
-  return (await signedIn(c)) ? page(c, 'mail.html') : toSignIn(c);
-});
-// Calendar at /calendar (packages/calendar), as Mail.
-const CALENDAR = '/calendar';
-pageRoutes.get(CALENDAR, async (c) => ((await signedIn(c)) ? page(c, 'calendar.html') : toSignIn(c)));
-pageRoutes.get(`${CALENDAR}/*`, async (c) => {
-  if (/\.[a-z0-9]+$/i.test(new URL(c.req.url).pathname)) return c.notFound();
-  return (await signedIn(c)) ? page(c, 'calendar.html') : toSignIn(c);
-});
+// In the manifests' order, except the web client's catch-all, which goes last: the first route that answers wins.
+const pages = APP_MANIFESTS.flatMap((m) => m.pages ?? []);
+for (const p of pages.filter((p) => p.path !== '*')) pageRoutes.get(p.path, servePage(p));
 // Public links from before Docs moved under /workspace.
-pageRoutes.get('/p/*', (c) => c.redirect(`${BASE}${new URL(c.req.url).pathname}${new URL(c.req.url).search}`, 301));
+pageRoutes.get('/p/*', (c) => c.redirect(`/workspace${new URL(c.req.url).pathname}${new URL(c.req.url).search}`, 301));
 pageRoutes.get('/privacy', (c) => c.env.ASSETS.fetch(new URL('/privacy.html', c.req.url)));
-// The web client's page for every other address (a channel, a thread, a settings tab): it routes in the browser.
-pageRoutes.get('*', (c) => {
-  const { pathname } = new URL(c.req.url);
-  if (NOT_A_PAGE.test(pathname) || /\.[a-z0-9]+$/i.test(pathname)) return c.notFound();
-  return page(c, 'index.html');
-});
+for (const p of pages.filter((p) => p.path === '*')) pageRoutes.get(p.path, servePage(p));

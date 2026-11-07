@@ -15,6 +15,9 @@
     "build": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
+  "dependencies": {
+    "@flow/shared": "workspace:*"
+  },
   "peerDependencies": {
     "react": "^19.0.0"
   },

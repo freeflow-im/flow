@@ -4,7 +4,7 @@
 // `/?open=…`, which Chat's App.tsx honours.
 import { useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { AWAY_STATUS, isAway, StatusDialog, statusPatch, SuiteBar, type StatusOption } from '@flow/suite-bar';
+import { APP_MANIFESTS, AWAY_STATUS, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type StatusOption } from '@flow/suite-bar';
 import { useAgent } from '../agent/AgentProvider.tsx';
 import { useAuth } from '../auth.tsx';
 import { finishBeforeLeave, readActiveOrganization, setOrganizationState, suite, writeActiveOrganization, type SuiteOrganization, type SuiteUser } from '../suite.ts';
@@ -88,13 +88,8 @@ export function DocsSuiteBar() {
       <SuiteBar
         // The logo: the top of the file list, whatever page is open.
         home={{ href: `${import.meta.env.BASE_URL}`, onSelect: () => navigate('/') }}
-        tabs={[
-          { id: 'docs', label: 'Docs', href: `${import.meta.env.BASE_URL}`, active: true, onSelect: () => navigate('/') },
-          // Chat's count: the selected organization's unread notifications, as Chat's own tab shows them.
-          { id: 'chat', label: 'Chat', href: '/', badge: active?.unreadCount ?? 0 },
-          { id: 'mail', label: 'Mail', href: '/mail' },
-          { id: 'calendar', label: 'Calendar', href: '/calendar' },
-        ]}
+        // Chat's count: the selected organization's unread notifications, as Chat's own tab shows them.
+        tabs={suiteTabsFrom(APP_MANIFESTS, 'docs', { 'chat-unread': active?.unreadCount ?? 0 }, { activeHref: `${import.meta.env.BASE_URL}`, onSelect: () => navigate('/') })}
         organization={{
           name: active?.name ?? '',
           entries: orgs.map((o) => ({ id: o.id, name: o.name, unread: o.unreadCount ?? 0, active: o.id === active?.id, avatarUrl: o.avatarUrl })),

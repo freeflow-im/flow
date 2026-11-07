@@ -1,35 +1,18 @@
 // The pages of the MCP endpoint's OAuth (routes/mcp.ts): consent with what the agent may use (Docs files, Mail, sending
 // email, Calendar, Events) and the choice of organization, the device code, and the errors. The ChatGPT plugin's pages
 // (docs/plugin/server/oauth.ts), in FreeFlow's colours: plain, centred, neutral.
-import { offeredGroups, type OfferedGroup } from '../directory/mcpOAuth';
+import { offeredGroups, SCOPE_GROUPS, type OfferedGroup } from '../directory/mcpOAuth';
 
 const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
-/** Each checkbox: its title, and what it lets the agent do (for the scopes the client asked for). */
+/**
+ * Each checkbox: its title, and what it lets the agent do (for the scopes the client asked for), from the group in the
+ * apps' manifests; its read-only text when the client asked for none of the group's `:write` scopes.
+ */
 function groupText(g: OfferedGroup): { title: string; detail: string; warning?: string } {
-  if (g.id === 'docs') {
-    return g.scopes.includes('files:write')
-      ? { title: 'Docs files', detail: 'Read, create, change, import, move and delete the documents, presentations, spreadsheets, PDFs and other files of the organization below: its Organization files and your own My files there.' }
-      : { title: 'Docs files (read only)', detail: 'See and read the documents, presentations, spreadsheets, PDFs and other files of the organization below: its Organization files and your own My files there.' };
-  }
-  if (g.id === 'mail') {
-    const write = g.scopes.includes('mail:write');
-    return {
-      title: write ? 'Mail: read, search, organise and draft' : 'Mail: read and search',
-      detail: write
-        ? 'Your own email accounts in FreeFlow Mail: search and read messages and attachments, mark, move, archive and move them to Trash, and write drafts for you to review. It cannot send them.'
-        : 'Your own email accounts in FreeFlow Mail: search and read messages and attachments.',
-    };
-  }
-  if (g.id === 'calendar') {
-    return g.scopes.includes('calendar:write')
-      ? { title: 'Calendar: see and change your events', detail: 'Your own calendars in FreeFlow Calendar: see your events and when you are free, create, move and delete events, invite people and answer invitations.' }
-      : { title: 'Calendar: see your events', detail: 'Your own calendars in FreeFlow Calendar: see your events and when you are free.' };
-  }
-  if (g.id === 'events') {
-    return { title: 'Events: read the subscriptions you make', detail: 'Subscribe to what happens in the organization below (messages, mail, calendar changes) and read those subscriptions: only what you can see yourself.' };
-  }
-  return { title: 'Send email as you', detail: 'Send messages from your email accounts.', warning: 'It could send any email to anyone from your address, without asking you first. Only allow this for an agent you trust.' };
+  const group = SCOPE_GROUPS.find((x) => x.id === g.id)!;
+  const text = group.readOnly && !g.scopes.some((s) => s.endsWith(':write')) ? group.readOnly : group;
+  return { title: text.label, detail: text.detail, ...(group.warning ? { warning: group.warning } : {}) };
 }
 
 const POLICY_LINKS = '<p class="muted small"><a href="/privacy" target="_blank" rel="noopener">Privacy Policy</a></p>';
