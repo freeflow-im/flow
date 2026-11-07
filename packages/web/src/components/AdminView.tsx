@@ -5,7 +5,7 @@ import { useBoundApi } from '../lib/useBoundApi';
 // Lists workspace members and lets owners/admins change roles and remove people.
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import type { MemberRole, WorkspaceMemberDTO } from '@flow/shared';
+import { WORKSPACE_POLICY_DEFAULTS, type MemberRole, type WorkspaceDTO, type WorkspaceMemberDTO, type WorkspacePolicies } from '@flow/shared';
 import { api } from '../lib/api';
 import { useAuth, useSelection } from '../state';
 import { useMembers, useWorkspaces } from '../hooks';
@@ -54,6 +54,7 @@ export default function AdminView() {
           </p>
         ) : (
           <div className="mx-auto max-w-3xl">
+            {ws && <OrganizationSection ws={ws} roster={roster} meId={auth.user.id} />}
             <p className="mb-4 text-sm text-muted">
               {roster.length} {roster.length === 1 ? 'member' : 'members'}. Owners and admins can change
               roles and remove people. The workspace owner can't be changed or removed.
@@ -207,5 +208,152 @@ function MemberRow({
         )}
       </td>
     </tr>
+  );
+}
+
+/**
+ * The organization itself (platform.md §3.1): who owns it, its policies, and — for the owner — handing it to someone
+ * else. Policies save on change through the workspace PATCH, like the other workspace settings.
+ */
+export function OrganizationSection({
+  ws,
+  roster,
+  meId,
+}: {
+  ws: WorkspaceDTO;
+  roster: WorkspaceMemberDTO[];
+  meId: string;
+}) {
+  const { api } = useBoundApi();
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [heir, setHeir] = useState('');
+  const [confirming, setConfirming] = useState(false);
+
+  const owner = roster.find((m) => m.role === 'owner');
+  const policies: WorkspacePolicies = { ...WORKSPACE_POLICY_DEFAULTS, ...ws.policies };
+  const isOwner = ws.role === 'owner';
+  // Ownership goes to a person: never an agent or an app.
+  const candidates = roster.filter((m) => m.userId !== meId && !m.isAgent && !m.isBot);
+  const heirName = candidates.find((m) => m.userId === heir)?.displayName;
+
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['workspaces'] }),
+        qc.invalidateQueries({ queryKey: ['members', ws.id] }),
+      ]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const setPolicy = <K extends keyof WorkspacePolicies>(key: K, value: WorkspacePolicies[K]) =>
+    run(() => api('PATCH', `/v1/workspaces/${ws.id}`, { policies: { [key]: value } }));
+
+  const transfer = () =>
+    run(async () => {
+      await api('POST', `/v1/workspaces/${ws.id}/owner`, { userId: heir });
+      setConfirming(false);
+      setHeir('');
+    });
+
+  return (
+    <section data-testid="admin-organization" className="mb-6 rounded-lg border border-hairline p-4">
+      <h3 className="mb-3 text-sm font-bold">Organization</h3>
+      <p className="mb-3 text-sm">
+        <span className="text-muted">Owner: </span>
+        <span data-testid="admin-owner" className="font-semibold">{owner?.displayName ?? '—'}</span>
+      </p>
+      <div className="mb-3 grid gap-2 text-sm sm:grid-cols-2">
+        <label className="flex items-center justify-between gap-2">
+          <span className="text-muted">Who can invite people</span>
+          <select
+            data-testid="admin-policy-invite"
+            className="rounded border border-hairline bg-base px-2 py-1 text-sm disabled:opacity-50"
+            value={policies.inviteBy}
+            disabled={busy}
+            onChange={(e) => void setPolicy('inviteBy', e.target.value as WorkspacePolicies['inviteBy'])}
+          >
+            <option value="members">Every member</option>
+            <option value="admins">Owners and admins</option>
+          </select>
+        </label>
+        <label className="flex items-center justify-between gap-2">
+          <span className="text-muted">Who can add agents</span>
+          <select
+            data-testid="admin-policy-agents"
+            className="rounded border border-hairline bg-base px-2 py-1 text-sm disabled:opacity-50"
+            value={policies.agentsBy}
+            disabled={busy}
+            onChange={(e) => void setPolicy('agentsBy', e.target.value as WorkspacePolicies['agentsBy'])}
+          >
+            <option value="members">Every member</option>
+            <option value="admins">Owners and admins</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-2">
+          <input
+            data-testid="admin-policy-links"
+            type="checkbox"
+            checked={policies.linkSharing}
+            disabled={busy}
+            onChange={(e) => void setPolicy('linkSharing', e.target.checked)}
+          />
+          <span className="text-muted">Allow sharing by link</span>
+        </label>
+      </div>
+      {isOwner && (
+        <div className="flex flex-wrap items-center gap-2 border-t border-hairline pt-3 text-sm">
+          <span className="text-muted">Transfer ownership to</span>
+          <select
+            data-testid="admin-transfer-select"
+            className="rounded border border-hairline bg-base px-2 py-1 text-sm disabled:opacity-50"
+            value={heir}
+            disabled={busy || confirming}
+            onChange={(e) => setHeir(e.target.value)}
+          >
+            <option value="">Choose a member…</option>
+            {candidates.map((m) => (
+              <option key={m.userId} value={m.userId}>
+                {m.displayName}
+              </option>
+            ))}
+          </select>
+          {confirming ? (
+            <span className="inline-flex items-center gap-2">
+              <span className="text-xs text-muted">Make {heirName} the owner? You will become an admin.</span>
+              <button
+                data-testid="admin-transfer-confirm"
+                className="rounded bg-red-600 px-2 py-1 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+                disabled={busy}
+                onClick={() => void transfer()}
+              >
+                Yes
+              </button>
+              <button className="text-xs text-muted hover:underline" disabled={busy} onClick={() => setConfirming(false)}>
+                No
+              </button>
+            </span>
+          ) : (
+            <button
+              data-testid="admin-transfer"
+              className="rounded border border-hairline px-2.5 py-1 text-xs hover:bg-daypill disabled:opacity-50"
+              disabled={busy || !heir}
+              onClick={() => setConfirming(true)}
+            >
+              Transfer…
+            </button>
+          )}
+        </div>
+      )}
+      {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
+    </section>
   );
 }

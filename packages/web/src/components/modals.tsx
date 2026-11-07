@@ -893,6 +893,10 @@ export function ProfileModal({ onClose, section }: { onClose: () => void; sectio
   }, [section]);
   const { serverOrigin, api, uploadAvatar } = useBoundApi();
   const auth = useAuth();
+  const sel = useSelection();
+  const workspaces = useWorkspaces();
+  // platform.md §3.2: the caller's own address in the workspace they are in, when the server sends it.
+  const address = (workspaces.data ?? []).find((w) => w.id === sel.workspaceId)?.address;
   const qc = useQueryClient();
   const [displayName, setDisplayName] = useState(auth.user.displayName);
   const [title, setTitle] = useState(auth.user.title ?? '');
@@ -1001,6 +1005,11 @@ export function ProfileModal({ onClose, section }: { onClose: () => void; sectio
       <label className="mb-1 block text-xs font-semibold text-faint uppercase">Display name</label>
       <input data-testid="profile-name" className="mb-3 w-full rounded border border-hairline2 px-3 py-2 text-sm"
         value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
+      {address && (
+        <p data-testid="profile-address" className="-mt-2 mb-3 truncate text-xs text-muted select-all" title={address}>
+          {address}
+        </p>
+      )}
       {/* #434: directly under the name — the two together are what a Directory
           card shows, so they are edited together. */}
       <label className="mb-1 block text-xs font-semibold text-faint uppercase">Title</label>
@@ -1295,6 +1304,12 @@ export function UserCard({ userId, onClose }: { userId: string; onClose: () => v
             {user.displayName}
             {user.isAgent && <span title="AI agent"> 🤖</span>}
           </p>
+          {/* platform.md §3.2: their address in this organization, from the roster. */}
+          {memberMap[userId]?.address && (
+            <p data-testid="user-card-address" className="max-w-full truncate text-sm text-muted select-all">
+              {memberMap[userId]!.address}
+            </p>
+          )}
           {/* #434: under the name, same as the Directory card it opens from. */}
           {user.title && (
             <p data-testid="user-card-title" className="max-w-full truncate text-sm text-ink-soft">

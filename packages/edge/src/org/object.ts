@@ -1,8 +1,10 @@
 // One organization: its database and its sockets. HTTP requests arrive from the Worker with the caller already known.
 import { DurableObject } from 'cloudflare:workers';
-import type { AccountDTO, Event, UserDTO } from '@flow/shared';
+import type { AccountDTO, Event, MemberRole, UserDTO } from '@flow/shared';
 import { accountGate, type DirectoryCore } from '../directory/core';
-import type { Directory } from '../directory/object';
+import { ApiError } from '../errors';
+import { directoryLink } from './directoryLink';
+import type { Directory, DirectoryAnswer } from '../directory/object';
 import { withPublisher } from './bus';
 import { HUDDLE_ROSTER_DDL } from './huddles';
 import { openDb, withDb, type DB, schema } from './db/index';
@@ -15,7 +17,7 @@ import { registerRoutes } from './routes/index';
 import { deleteMyAccount } from './services/accountDeletion';
 import { drainDuePushes, nextPushDueAt } from './services/pushOutbox';
 import { runSchedulerTick } from './services/scheduledMessages';
-import { announceJoin, enrollInWorkspace, toWorkspaceDTO } from './services/workspaces';
+import { accountAddressForJoin, announceJoin, enrollInWorkspace, toWorkspaceDTO } from './services/workspaces';
 import { socketControl } from './sockets';
 import { setStorageEnv, type StorageEnv } from './storage/index';
 import { insertRows, tableCounts } from '../importing';
@@ -42,6 +44,9 @@ const OUTBOX = [
   `CREATE TRIGGER IF NOT EXISTS _domain_change AFTER UPDATE OF google_self_register_domain ON workspaces BEGIN INSERT INTO _outbox (kind, id, payload) VALUES ('domain', NEW.id, NEW.google_self_register_domain); END`,
   `CREATE TRIGGER IF NOT EXISTS _member_add AFTER INSERT ON workspace_members BEGIN INSERT INTO _outbox (kind, id, user_id, role) VALUES ('join', NEW.workspace_id, NEW.user_id, NEW.role); END`,
   `CREATE TRIGGER IF NOT EXISTS _member_del AFTER DELETE ON workspace_members BEGIN INSERT INTO _outbox (kind, id, user_id) VALUES ('leave', OLD.workspace_id, OLD.user_id); END`,
+  // A role change is a join with the new role to the directory; a new owner also moves the organization's owner (§3.1).
+  `CREATE TRIGGER IF NOT EXISTS _member_role AFTER UPDATE OF role ON workspace_members WHEN NEW.role <> OLD.role BEGIN INSERT INTO _outbox (kind, id, user_id, role) VALUES ('join', NEW.workspace_id, NEW.user_id, NEW.role); INSERT INTO _outbox (kind, id, user_id) SELECT 'owner', NEW.workspace_id, NEW.user_id WHERE NEW.role = 'owner'; END`,
+  `CREATE TRIGGER IF NOT EXISTS _policies_change AFTER UPDATE OF policies ON workspaces BEGIN INSERT INTO _outbox (kind, id, payload) VALUES ('policies', NEW.id, NEW.policies); END`,
 ];
 
 const app = new CompatApp();
@@ -71,6 +76,35 @@ export class Org extends DurableObject<OrgEnv> {
     sql.exec(HUDDLE_ROSTER_DDL);
     // Answered by the runtime, so a client's heartbeat does not wake the object.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('{"op":"ping"}', '{"op":"pong"}'));
+    if (sql.exec('SELECT 1 FROM workspace_members WHERE address IS NULL LIMIT 1').toArray().length) {
+      void ctx.blockConcurrencyWhile(() => this.backfillAddresses());
+    }
+  }
+
+  /** Members who joined before addresses (or whose address the join could not get): the directory's accounts fill
+   * them in, once. A failure leaves them for the next start. */
+  private async backfillAddresses(): Promise<void> {
+    const sql = this.ctx.storage.sql;
+    const org = sql.exec('SELECT id FROM workspaces LIMIT 1').toArray()[0]?.id as string | undefined;
+    if (!org) return;
+    try {
+      const answer = await this.directory().call('accountsOfOrganization' as never, [org] as never) as DirectoryAnswer<AccountDTO[]>;
+      if (!answer.ok) return console.error(`address backfill: ${answer.message}`);
+      for (const a of answer.value) {
+        sql.exec('UPDATE workspace_members SET address = ? WHERE workspace_id = ? AND user_id = ? AND address IS NULL', a.address, org, a.principalId);
+      }
+    } catch (err) {
+      console.error(`address backfill: ${(err as Error).message}`);
+    }
+  }
+
+  /** The directory's half of a join, asked for before the member row is written (directoryLink.ts). A new agent's
+   * principal reaches the directory through the outbox, so a pending one is sent first. */
+  private async ensureAccount(organizationId: string, userId: string, role: MemberRole, displayName: string): Promise<AccountDTO> {
+    if (this.ctx.storage.sql.exec("SELECT 1 FROM _outbox WHERE kind = 'agent_user' LIMIT 1").toArray().length) await this.flushOutbox(organizationId);
+    const answer = await this.directory().call('ensureAccount' as never, [userId, organizationId, role, displayName] as never) as DirectoryAnswer<AccountDTO>;
+    if (!answer.ok) throw new ApiError(answer.status, answer.code, answer.message);
+    return answer.value;
   }
 
   private directory() {
@@ -111,7 +145,8 @@ export class Org extends DurableObject<OrgEnv> {
   /** Runs with this object's database, event bus and socket controls in scope. */
   private scoped<T>(fn: () => Promise<T>): Promise<T> {
     return socketControl.run({ disconnectUser: (id) => this.closeUser(id) }, () =>
-      withPublisher((subject, event) => this.broadcast(subject, event), () => withDb(this.db, fn)));
+      directoryLink.run({ ensureAccount: (...args) => this.ensureAccount(...args) }, () =>
+        withPublisher((subject, event) => this.broadcast(subject, event), () => withDb(this.db, fn))));
   }
 
   private closeUser(userId: string): void {
@@ -174,7 +209,8 @@ export class Org extends DurableObject<OrgEnv> {
       this.ensureUser(user);
       const workspace = this.db.select().from(schema.workspaces).get();
       if (!workspace) return null;
-      const isNew = await this.db.transaction((tx) => enrollInWorkspace(tx, workspace.id, user.id));
+      const address = await accountAddressForJoin(workspace.id, user.id);
+      const isNew = await this.db.transaction((tx) => enrollInWorkspace(tx, workspace.id, user.id, 'member', undefined, address));
       if (!isNew) return null;
       await announceJoin(workspace.id, user.id);
       return JSON.parse(JSON.stringify(toWorkspaceDTO(workspace, 'member')));
@@ -207,6 +243,7 @@ export class Org extends DurableObject<OrgEnv> {
   async importDone(): Promise<{ reported: number }> {
     const pending = this.ctx.storage.sql.exec('SELECT COUNT(*) AS n FROM _outbox').one().n as number;
     await this.flushOutbox(null);
+    await this.backfillAddresses();
     await this.armAlarm();
     return { reported: pending };
   }

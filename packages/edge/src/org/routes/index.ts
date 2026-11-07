@@ -49,6 +49,7 @@ import {
   SetNotifyLevelBody,
   UpdateChannelBody,
   UpdateWorkspaceBody,
+  TransferOwnershipBody,
   type UserDTO,
 } from '@flow/shared';
 import { ApiError, badRequest, notFound, unauthorized } from '../lib/errors.js';
@@ -306,6 +307,13 @@ export function registerRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const body = parse(UpdateWorkspaceBody, req.body);
     return ws.updateWorkspace(id, req.user.id, body);
+  });
+
+  // platform.md §3.1: the owner hands the organization to another person and becomes an admin.
+  app.post('/v1/workspaces/:id/owner', { preHandler: requireAuth }, async (req) => {
+    const { id } = req.params as { id: string };
+    const body = parse(TransferOwnershipBody, req.body);
+    return ws.transferWorkspaceOwnership(id, req.user.id, body.userId);
   });
 
   // workspace avatar (#336): owner/admin sets or clears the image mark; both

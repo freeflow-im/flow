@@ -128,6 +128,19 @@ r=await api(AGT,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.ran
 r=await api(null,'POST','/v1/agents/login',{username:'flowbot',key:'wrong-key-wrong-key-wrong-key'});t('wrong key refused',r.s===401,r.s);
 r=await api(null,'POST','/v1/agents/login',{username:'flowbot',key:'a-long-agent-key-for-the-test'});t('login',r.s===201&&!!r.j.agentToken,r.s);const AGT2=r.j.agentToken;
 r=await api(AGT,'GET','/v1/me');t('login ends the old token',r.s===401,r.s);r=await api(AGT2,'GET','/v1/me');t('new token works',r.s===200);
+// ---- organizations: the address on every member, the policies, handing the organization on (platform.md §3.1, §3.2)
+r=await api(Bo.token,'GET','/v1/me');const bobAddr=r.j.accounts?.find(a=>a.organizationId===W)?.address;
+r=await api(A.token,'GET',`/v1/workspaces/${W}/members`);const ms=r.j.members??r.j??[];t('the members list carries Bob\'s address',!!bobAddr&&ms.find(m=>m.userId===Bo.user.id)?.address===bobAddr,JSON.stringify(ms.map(m=>m.address)));
+t('and the agent\'s, made after its redeem',!!ms.find(m=>m.isAgent)?.address?.startsWith('flowbot@'),JSON.stringify(ms.map(m=>m.address)));
+r=await api(Bo.token,'PATCH',`/v1/workspaces/${W}`,{policies:{inviteBy:'admins'}});t('a member cannot set policies',r.s===403,r.s);
+r=await api(A.token,'PATCH',`/v1/workspaces/${W}`,{policies:{inviteBy:'admins'}});t('Ann sets who may invite',r.s===200&&r.j.policies?.inviteBy==='admins'&&r.j.policies?.agentsBy==='members'&&r.j.policies?.linkSharing===true,r.s+' '+JSON.stringify(r.j.policies));
+r=await api(Bo.token,'POST',`/v1/workspaces/${W}/invites`,{email:'dee@example.com'});t('an invite by Bob is refused by the policy',r.s===403&&r.j.error?.code==='policy_forbids',r.s+' '+JSON.stringify(r.j).slice(0,90));
+r=await api(Bo.token,'POST',`/v1/workspaces/${W}/join-link`);t('and so is a join link',r.s===403&&r.j.error?.code==='policy_forbids',r.s+' '+JSON.stringify(r.j).slice(0,90));
+r=await api(A.token,'POST',`/v1/workspaces/${W}/owner`,{userId:Bo.user.id});t('Ann hands the organization to Bob',r.s===200&&r.j.role==='admin',r.s+' '+JSON.stringify(r.j).slice(0,90));
+r=await api(A.token,'POST',`/v1/workspaces/${W}/owner`,{userId:Bo.user.id});t('Ann cannot hand it on again',r.s===403,r.s);
+r=await api(Bo.token,'GET','/v1/me/workspaces');const bw=r.j.workspaces?.find(w=>w.id===W);t('Bob\'s workspaces say owner, with his address',bw?.role==='owner'&&bw.address===bobAddr,JSON.stringify(bw).slice(0,160));
+r=await api(Bo.token,'GET','/v1/me');t('his account in the directory says owner',r.j.accounts?.find(a=>a.organizationId===W)?.role==='owner',JSON.stringify(r.j.accounts));
+r=await api(Bo.token,'POST',`/v1/workspaces/${W}/owner`,{userId:A.user.id});t('Bob hands it back',r.s===200&&r.j.role==='admin',r.s);
 // ---- leaving
 const del=await signup('cy@example.com','Cy');r=await api(del.token,'POST','/v1/workspaces',{name:'Cy co',slug:'cy-co'});
 r=await api(del.token,'DELETE','/v1/me');t('delete account',r.s===200,r.s+' '+JSON.stringify(r.j).slice(0,90));r=await api(del.token,'GET','/v1/me');t('its session ended',r.s===401,r.s);

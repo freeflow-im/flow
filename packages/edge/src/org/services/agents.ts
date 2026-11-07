@@ -25,7 +25,8 @@ import { hashToken, newToken } from '../lib/tokens.js';
 import { badRequest, conflict, forbidden, notFound, unauthorized } from '../lib/errors.js';
 import { publishEvent, subjectMeta } from '../bus.js';
 import { postSystemMessage } from './messages.js';
-import { announceJoin, enrollInWorkspace, requireMembership, toWorkspaceDTO } from './workspaces.js';
+import { accountAddressForJoin, announceJoin, enrollInWorkspace, requireAgentSponsorRights, requireMembership, toWorkspaceDTO } from './workspaces.js';
+import { ensureAccount } from '../directoryLink.js';
 import { removeAgentFromWorkspace } from './memberRemoval.js';
 import { hashSecret, toUserDTO, verifySecret, visibleEmail } from './auth.js';
 import { setAvatar } from './users.js';
@@ -54,11 +55,11 @@ function pickRandomAvatarPreset(): string | null {
 
 /**
  * Generate a one-time invite code for the sponsor's workspace (any member can
- * sponsor — operator ruling; a permission knob can come later). The raw code is
- * returned once; only its hash is stored.
+ * sponsor — operator ruling — unless the organization's `agentsBy` policy says
+ * admins, platform.md §3.1). The raw code is returned once; only its hash is stored.
  */
 export async function createAgentInvite(workspaceId: string, sponsorId: string): Promise<AgentInviteDTO> {
-  await requireMembership(workspaceId, sponsorId);
+  await requireAgentSponsorRights(workspaceId, sponsorId);
   const code = newInviteCode();
   const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
   await db.insert(agentInvites).values({
@@ -189,6 +190,17 @@ export async function redeemAgentInvite(input: RedeemAgentInviteBody): Promise<A
     }
     await tx.insert(agentTokens).values({ id: newId(), tokenHash: hashToken(agentToken), userId });
   });
+  // The agent's principal is born in the transaction above, so its account (and address) comes after it
+  // (platform.md §3.2). Best-effort: the agent is in, and the object's start-up backfill fills a missed address.
+  try {
+    const account = await ensureAccount(invite.workspaceId, userId, 'member', input.name.trim());
+    if (account) {
+      await db.update(workspaceMembers).set({ address: account.address })
+        .where(and(eq(workspaceMembers.workspaceId, invite.workspaceId), eq(workspaceMembers.userId, userId)));
+    }
+  } catch (err) {
+    console.error(`agent account for ${userId}: ${(err as Error).message}`);
+  }
   // Random preset avatar through the normal pipeline (square-crop → webp → R2)
   // BEFORE announcing the join, so member.joined already carries the avatarUrl.
   // Best-effort: a failure here shouldn't undo a successful join. An account
@@ -250,7 +262,7 @@ export async function inviteAgentToWorkspace(
   workspaceId: string,
   inviterId: string,
 ): Promise<AgentWorkspaceInviteResponse> {
-  await requireMembership(workspaceId, inviterId); // 404s for non-members
+  await requireAgentSponsorRights(workspaceId, inviterId); // 404s for non-members
   const agent = (await db.select().from(users).where(eq(users.id, agentUserId)).limit(1))[0];
   if (!agent?.isAgent || agent.deletedAt) throw notFound('agent not found');
   if (!(await sharesWorkspace(inviterId, agentUserId))) throw notFound('agent not found');
@@ -265,8 +277,9 @@ export async function inviteAgentToWorkspace(
     throw conflict('username_taken', `@${agent.agentUsername} is already taken in that workspace`);
   }
 
+  const address = await accountAddressForJoin(workspaceId, agentUserId);
   const joined = await db.transaction((tx) =>
-    enrollInWorkspace(tx, workspaceId, agentUserId, 'member', inviterId),
+    enrollInWorkspace(tx, workspaceId, agentUserId, 'member', inviterId, address),
   );
   if (joined) await announceJoin(workspaceId, agentUserId);
   const wsRow = (await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1))[0]!;

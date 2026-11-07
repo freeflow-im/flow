@@ -323,6 +323,49 @@ describe('accounts', () => {
     core.setPolicies(org, { invite: 'admins' });
     expect(core.organization(org)).toMatchObject({ ownerUserId: b.user.id, policies: { invite: 'admins' } });
   });
+
+  it('ensures an account before the member row: creates it, then the outbox join changes nothing', async () => {
+    const { user } = await signUp();
+    const org = newId();
+    core.reserveSlug('acme', org);
+    const made = core.ensureAccount(user.id, org, 'owner', 'Ann Lee');
+    expect(made).toMatchObject({ principalId: user.id, organizationId: org, address: 'ann.lee@acme.freeflow.im', displayName: 'Ann Lee', role: 'owner', state: 'active' });
+    expect(core.organization(org)!.ownerUserId).toBe(user.id);
+    await join(org, user.id, 'owner');
+    expect(core.accountsOf(user.id)).toEqual([made]);
+    expect(nodeSqlOf(core).exec('SELECT COUNT(*) AS n FROM addresses').toArray()[0]!.n).toBe(1);
+  });
+
+  it('ensures an account: reactivates a removed one and sets the role, keeping the address', async () => {
+    const { user } = await signUp();
+    const org = newId();
+    core.reserveSlug('acme', org);
+    const made = core.ensureAccount(user.id, org, 'admin');
+    expect(made).toMatchObject({ address: 'ann@acme.freeflow.im', role: 'admin' });
+    await leave(org, user.id);
+    expect(core.ensureAccount(user.id, org, 'member')).toMatchObject({ id: made.id, address: made.address, role: 'member', state: 'active' });
+    expect(() => core.ensureAccount(newId(), org, 'member')).toThrow('user not found');
+  });
+
+  it('lists an organization\'s accounts, and follows the owner and policies the Org object reports', async () => {
+    const a = await signUp('a@example.com');
+    const b = await signUp('b@example.com');
+    const org = newId();
+    core.reserveSlug('acme', org);
+    await join(org, a.user.id, 'owner');
+    await join(org, b.user.id, 'member');
+    await core.applyOrgChanges(newId(), [{ kind: 'join', id: 'x', user_id: a.user.id, role: 'member', payload: null }]);
+    expect(core.accountsOfOrganization(org).map((x) => x.address).sort()).toEqual(['ann2@acme.freeflow.im', 'ann@acme.freeflow.im']);
+    await core.applyOrgChanges(org, [
+      { kind: 'join', id: org, user_id: b.user.id, role: 'owner', payload: null },
+      { kind: 'owner', id: org, user_id: b.user.id, role: null, payload: null },
+      { kind: 'join', id: org, user_id: a.user.id, role: 'admin', payload: null },
+      { kind: 'policies', id: org, user_id: null, role: null, payload: '{"inviteBy":"admins","agentsBy":"members","linkSharing":true}' },
+    ]);
+    expect(core.organization(org)).toMatchObject({ ownerUserId: b.user.id, policies: { inviteBy: 'admins', agentsBy: 'members', linkSharing: true } });
+    expect(core.accountFor(a.user.id, org)!.role).toBe('admin');
+    expect(core.accountFor(b.user.id, org)!.role).toBe('owner');
+  });
 });
 
 describe('the account gate', () => {

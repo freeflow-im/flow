@@ -90,7 +90,22 @@ export interface WorkspaceDTO {
    * reading the feed drains it. Present on "my workspaces" only; absent
    * elsewhere means "not computed", not zero. */
   unreadCount?: number;
+  /** The caller's own account address here (platform.md §3.2), on "my workspaces". */
+  address?: string;
+  /** Who may invite and sponsor agents, and whether link sharing is allowed (platform.md §3.1). Absent from older
+   * servers; read missing keys as `WORKSPACE_POLICY_DEFAULTS`. */
+  policies?: WorkspacePolicies;
 }
+
+/** An organization's policies (platform.md §3.1). The SSO policy stays `googleSelfRegisterDomain`. */
+export interface WorkspacePolicies {
+  inviteBy: 'admins' | 'members';
+  agentsBy: 'admins' | 'members';
+  /** Stored only until phase 3 enforces it. */
+  linkSharing: boolean;
+}
+
+export const WORKSPACE_POLICY_DEFAULTS: WorkspacePolicies = { inviteBy: 'members', agentsBy: 'members', linkSharing: true };
 
 export type MemberRole = 'owner' | 'admin' | 'member';
 
@@ -117,6 +132,8 @@ export interface WorkspaceMemberDTO {
   privacyMode: boolean;
   role: MemberRole;
   joinedAt: string;
+  /** The member's account address in this organization (platform.md §3.2); absent until known. */
+  address?: string;
 }
 
 export interface InviteDTO {

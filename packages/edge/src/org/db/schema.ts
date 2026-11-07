@@ -11,7 +11,7 @@ import {
   type AnySQLiteColumn,
 } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
-import type { Recurrence, ScheduledRunStatus } from '@flow/shared';
+import type { Recurrence, ScheduledRunStatus, WorkspacePolicies } from '@flow/shared';
 
 const citext = customType<{ data: string }>({ dataType: () => 'text COLLATE NOCASE' });
 const bytea = customType<{ data: Buffer; driverData: ArrayBuffer | Uint8Array }>({
@@ -155,6 +155,9 @@ export const workspaces = sqliteTable('workspaces', {
   // Phase 16 §5a: null = off; otherwise the email domain whose verified Google
   // users self-enroll on sign-in.
   googleSelfRegisterDomain: citext('google_self_register_domain'),
+  // platform.md §3.1: who may invite and sponsor agents, and link sharing; missing keys read as the defaults
+  // (WORKSPACE_POLICY_DEFAULTS). Mirrored to the directory through the outbox.
+  policies: text('policies', { mode: 'json' }).$type<Partial<WorkspacePolicies>>().notNull().default({}),
   createdBy: text('created_by').notNull().references(() => users.id),
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
 });
@@ -171,6 +174,8 @@ export const workspaceMembers = sqliteTable(
     // can be sponsored by different people in different workspaces.
     sponsorUserId: text('sponsor_user_id').references(() => users.id, { onDelete: 'set null' }),
     joinedAt: integer('joined_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+    // platform.md §3.2: the member's account address, from the directory at join (null until it is known).
+    address: text('address'),
   },
   (t) => [primaryKey({ columns: [t.workspaceId, t.userId] }), index('ix_1').on(t.userId)],
 );

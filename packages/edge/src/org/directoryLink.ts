@@ -1,0 +1,13 @@
+// What the services ask of the directory while handling a request. The object provides it, as it does the sockets.
+import { AsyncLocalStorage } from 'node:async_hooks';
+import type { AccountDTO, MemberRole } from '@flow/shared';
+
+export interface DirectoryLink {
+  /** The joiner's account in this organization, made or reactivated with this role (DirectoryCore.ensureAccount). */
+  ensureAccount(organizationId: string, userId: string, role: MemberRole, displayName: string): Promise<AccountDTO>;
+}
+export const directoryLink = new AsyncLocalStorage<DirectoryLink>();
+
+/** Null where no directory is attached (tests); the outbox's join and the object's backfill still give the address. */
+export const ensureAccount = (organizationId: string, userId: string, role: MemberRole, displayName: string): Promise<AccountDTO | null> =>
+  directoryLink.getStore()?.ensureAccount(organizationId, userId, role, displayName) ?? Promise.resolve(null);

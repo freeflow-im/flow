@@ -124,14 +124,15 @@ export class DirectoryCore {
       ?? organizationId;
   }
 
-  private createAccount(userId: string, organizationId: string, role: string): void {
+  private createAccount(userId: string, organizationId: string, role: string, displayName?: string): void {
     const user = this.userById(userId);
     if (!user) return;
-    const local = localPart(user.is_agent && user.agent_username ? (user.agent_username as string) : (user.display_name as string));
+    const name = displayName || (user.display_name as string);
+    const local = localPart(user.is_agent && user.agent_username ? (user.agent_username as string) : name);
     const address = uniqueAddress(local, organizationDomain(this.organizationSlug(organizationId)), (a) => this.rows('SELECT 1 FROM addresses WHERE address = ?', a).length > 0);
     const id = newId();
     this.sql.exec('INSERT INTO accounts (id, user_id, organization_id, address, display_name, role, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      id, userId, organizationId, address, user.display_name, role, Date.now());
+      id, userId, organizationId, address, name, role, Date.now());
     this.sql.exec('INSERT INTO addresses (address, account_id) VALUES (?, ?)', address, id);
   }
 
@@ -158,6 +159,20 @@ export class DirectoryCore {
     return this.accountRow('user_id = ? AND organization_id = ?', userId, organizationId)[0] ?? null;
   }
 
+  /** Every account in an organization, removed ones included. */
+  accountsOfOrganization(organizationId: string): AccountDTO[] {
+    return this.accountRow('organization_id = ?', organizationId);
+  }
+
+  /** A joiner's account, asked for by the Org object before it writes the member row so the row can carry the address:
+   * made when missing, reactivated when removed, its role set otherwise. The outbox's `join` repeats this later and
+   * changes nothing. A principal the directory does not know is a 404. */
+  ensureAccount(userId: string, organizationId: string, role: string, displayName?: string): AccountDTO {
+    if (!this.userById(userId)) throw notFound('user not found');
+    this.joinAccount(userId, organizationId, role, displayName);
+    return this.accountFor(userId, organizationId)!;
+  }
+
   accountByAddress(address: string): AccountDTO | null {
     return this.accountRow('address = ?', address)[0] ?? null;
   }
@@ -176,11 +191,11 @@ export class DirectoryCore {
   }
 
   /** A join's account: made when missing, reactivated with the new role when removed, its role updated otherwise. */
-  private joinAccount(userId: string, organizationId: string, role: string): void {
+  private joinAccount(userId: string, organizationId: string, role: string, displayName?: string): void {
     this.sql.exec('INSERT OR IGNORE INTO organizations (id, slug, created_at) VALUES (?, ?, ?)', organizationId, this.organizationSlug(organizationId), Date.now());
     if (role === 'owner') this.sql.exec('UPDATE organizations SET owner_user_id = ? WHERE id = ? AND owner_user_id IS NULL', userId, organizationId);
     if (this.accountFor(userId, organizationId)) this.sql.exec("UPDATE accounts SET role = ?, state = CASE WHEN state = 'removed' THEN 'active' ELSE state END WHERE user_id = ? AND organization_id = ?", role, userId, organizationId);
-    else this.createAccount(userId, organizationId, role);
+    else this.createAccount(userId, organizationId, role, displayName);
   }
 
   private rows(query: string, ...args: unknown[]): Row[] {
@@ -522,6 +537,10 @@ export class DirectoryCore {
       else if (c.kind === 'join') {
         this.sql.exec('INSERT OR REPLACE INTO memberships (user_id, organization_id, role) VALUES (?, ?, ?)', c.user_id, organizationId, c.role);
         this.joinAccount(c.user_id!, organizationId, c.role!);
+      } else if (c.kind === 'owner') {
+        this.setOwner(organizationId, c.user_id!);
+      } else if (c.kind === 'policies') {
+        this.setPolicies(organizationId, JSON.parse(c.payload ?? '{}') as Record<string, unknown>);
       } else if (c.kind === 'leave') {
         this.sql.exec('DELETE FROM memberships WHERE user_id = ? AND organization_id = ?', c.user_id, organizationId);
         // The organization keeps the account and its address (§3.3).
