@@ -59,9 +59,57 @@ export interface EventFilter {
   self?: boolean;
 }
 
-/** How a subscription is told of a match (§5.2, "Delivery modes"). */
-export const DELIVERY_MODES = ['pull', 'socket', 'webhook', 'wake'] as const;
+/** How a subscription is told of a match (§5.2, "Delivery modes"). `wake` files a job for an agent; `post` posts a
+ * message into a channel as the subscription's owner. Both carry an `action`. */
+export const DELIVERY_MODES = ['pull', 'socket', 'webhook', 'wake', 'post'] as const;
 export type DeliveryMode = (typeof DELIVERY_MODES)[number];
+
+/** Past this depth an event wakes no agent and posts nothing (§5.2, "Loop safety on the server"). */
+export const MAX_EVENT_DEPTH = 4;
+
+/** A `wake` subscription's action: the prompt (with `{{type}}`, `{{ref}}`, `{{channel}}`, `{{actor}}`, `{{data}}`)
+ * run as a turn of the consumer agent, in `channelId` or a channel of its own. `includeSelf` lets events the agent
+ * itself caused wake it too. */
+export interface WakeAction { kind: 'wake'; prompt: string; channelId?: string; includeSelf?: boolean }
+/** A `post` subscription's action: `body` (the same placeholders) posted into `channelId` as the owner. */
+export interface PostAction { kind: 'post'; channelId: string; body: string; includeSelf?: boolean }
+export type SubscriptionAction = WakeAction | PostAction;
+
+/** When a schedule fires: `hourly`, `daily@HH:MM`, `weekly@DAY HH:MM` (MON..SUN) or `monthly@D HH:MM`, local to its timezone. */
+export const SCHEDULE_EVERY = /^(hourly|daily@([01]\d|2[0-3]):[0-5]\d|weekly@(MON|TUE|WED|THU|FRI|SAT|SUN) ([01]\d|2[0-3]):[0-5]\d|monthly@([1-9]|[12]\d|3[01]) ([01]\d|2[0-3]):[0-5]\d)$/i;
+export interface ScheduleDTO { id: string; every: string; timezone: string; nextAt: string }
+
+/** A wake job's states: `queued`, `delivered` (its `agent.job` event is out), `running` (acked, under a lease), then
+ * `done` or `failed`; `parked` after three deliveries nobody took. */
+export const JOB_STATES = ['queued', 'delivered', 'running', 'done', 'failed', 'parked'] as const;
+export type JobState = (typeof JOB_STATES)[number];
+
+/** One row of `agent_jobs` in the Events object (§5.2). `agent` is the consumer's account id. */
+export interface AgentJobDTO {
+  id: string;
+  subscriptionId: string;
+  agent: string;
+  eventId: string;
+  eventSeq: number;
+  prompt: string;
+  channelId?: string;
+  state: JobState;
+  attempts: number;
+  leaseUntil?: string;
+  note?: string;
+  depth: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** The data of an `agent.job` event, on the agent's own account. */
+export interface AgentJobEventData {
+  jobId: string;
+  subscriptionId: string;
+  prompt: string;
+  channelId?: string;
+  event: { id: string; seq: number; type: string; ref?: string; channelId?: string };
+}
 
 /** A durable consumer with a cursor in the Events object (§5.2). `consumer` and
  * `owner` are account ids; `parkedAt` is set after repeated delivery failure. */
@@ -76,6 +124,10 @@ export interface SubscriptionDTO {
   createdBy: string;
   createdAt: string;
   parkedAt?: string;
+  /** For `wake` and `post`. */
+  action?: SubscriptionAction;
+  /** A schedule's subscription: its filter is `schedule.tick` on `<org>/events/schedule/<id>`. */
+  schedule?: ScheduleDTO;
 }
 
 // ---- grants (§4.3) ----------------------------------------------------------

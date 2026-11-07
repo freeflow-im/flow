@@ -12,6 +12,7 @@ import type {
   HuddleJoinDTO,
   MessageDTO,
   MessagePage,
+  AgentJobDTO,
   PlatformEvent,
   SubscriptionDTO,
   UserDTO,
@@ -89,11 +90,24 @@ async function parseError(res: Response): Promise<never> {
   throw new FlowApiError(res.status, code, message);
 }
 
+/** Headers every request of one client carries besides its token: a wake job's `x-flow-job`, during its turn. */
+export type ExtraHeaders = () => Record<string, string> | Promise<Record<string, string>>;
+
 export class FlowApi {
   constructor(
     private readonly serverUrl: string,
     private readonly token: string,
+    private readonly extraHeaders: ExtraHeaders = () => ({}),
   ) {}
+
+  /** This client, with every request marked as part of the wake job's turn (platform.md §5.2: its events carry the job). */
+  withJob(jobId: string): FlowApi {
+    return new FlowApi(this.serverUrl, this.token, () => ({ 'x-flow-job': jobId }));
+  }
+
+  private async auth(): Promise<Record<string, string>> {
+    return { ...(await this.extraHeaders()), authorization: `Bearer ${this.token}` };
+  }
 
   private async req<T>(method: string, path: string, body?: unknown): Promise<T> {
     let res: Response;
@@ -101,7 +115,7 @@ export class FlowApi {
       res = await fetch(`${this.serverUrl}${path}`, {
         method,
         headers: {
-          authorization: `Bearer ${this.token}`,
+          ...(await this.auth()),
           ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
         },
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
@@ -144,6 +158,16 @@ export class FlowApi {
   async ackSubscription(workspaceId: string, id: string, cursor: number): Promise<number> {
     const r = await this.req<{ cursor: number }>('POST', `/v1/events/subscriptions/${encodeURIComponent(id)}/ack?workspace=${encodeURIComponent(workspaceId)}`, { cursor });
     return r.cursor;
+  }
+
+  async deleteSubscription(workspaceId: string, id: string): Promise<void> {
+    await this.req('DELETE', `/v1/events/subscriptions/${encodeURIComponent(id)}?workspace=${encodeURIComponent(workspaceId)}`);
+  }
+
+  /** A wake job's steps (platform.md §5.2), as its agent: `ack` takes it under a lease, `extend` renews it, `done` closes it. */
+  async jobStep(workspaceId: string, jobId: string, step: 'ack' | 'extend' | 'done', body?: { ok: boolean; note?: string }): Promise<AgentJobDTO> {
+    const r = await this.req<{ job: AgentJobDTO }>('POST', `/v1/events/jobs/${encodeURIComponent(jobId)}/${step}?workspace=${encodeURIComponent(workspaceId)}`, body ?? {});
+    return r.job;
   }
 
   async myWorkspaces(): Promise<WorkspaceDTO[]> {
@@ -271,7 +295,7 @@ export class FlowApi {
   async downloadCallFile(fileId: string, signal: AbortSignal): Promise<Buffer> {
     const limit = 20 * 1024 * 1024;
     const res = await fetch(`${this.serverUrl}/v1/files/${encodeURIComponent(fileId)}`, {
-      headers: { authorization: `Bearer ${this.token}` },
+      headers: await this.auth(),
       signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]),
     });
     if (!res.ok) await parseError(res);
@@ -299,7 +323,7 @@ export class FlowApi {
     fileId: string,
   ): Promise<{ data: Buffer; filename: string | undefined; mimeType: string | undefined }> {
     const res = await fetch(`${this.serverUrl}/v1/files/${fileId}`, {
-      headers: { authorization: `Bearer ${this.token}` },
+      headers: await this.auth(),
     });
     if (!res.ok) await parseError(res);
     return {
@@ -315,7 +339,7 @@ export class FlowApi {
     form.append('file', new Blob([new Uint8Array(data)], { type: mimeType }), filename);
     const res = await fetch(`${this.serverUrl}/v1/me/avatar`, {
       method: 'POST',
-      headers: { authorization: `Bearer ${this.token}` },
+      headers: await this.auth(),
       body: form,
     });
     if (!res.ok) await parseError(res);
@@ -382,7 +406,7 @@ export class FlowApi {
     form.append('file', new Blob([new Uint8Array(data)], { type: mimeType }), filename);
     const res = await fetch(`${this.serverUrl}/v1/workspaces/${workspaceId}/files`, {
       method: 'POST',
-      headers: { authorization: `Bearer ${this.token}` },
+      headers: await this.auth(),
       body: form,
     });
     if (!res.ok) await parseError(res);

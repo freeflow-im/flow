@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { DELIVERY_MODES } from './platform.js';
+import { DELIVERY_MODES, SCHEDULE_EVERY } from './platform.js';
 
 // ---- auth ------------------------------------------------------
 /** Email-first: registration takes only an email; name + password are set on
@@ -796,13 +796,46 @@ export const EventFilterSchema = z
   .strict();
 export type EventFilterSchema = z.infer<typeof EventFilterSchema>;
 
-/** POST /v1/events/subscriptions. Delivery modes other than `pull` are kept but do nothing yet. */
+const channelIdField = z.string().min(1).max(100);
+/** A `wake` or `post` subscription's action (`SubscriptionAction`). */
+export const SubscriptionActionSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('wake'), prompt: z.string().trim().min(1).max(4000), channelId: channelIdField.optional(), includeSelf: z.boolean().optional() }).strict(),
+  z.object({ kind: z.literal('post'), channelId: channelIdField, body: z.string().trim().min(1).max(4000), includeSelf: z.boolean().optional() }).strict(),
+]);
+
+/** A schedule: `every` (`hourly`, `daily@HH:MM`, `weekly@DAY HH:MM`, `monthly@D HH:MM`) in an IANA timezone. */
+export const ScheduleSpecSchema = z.object({
+  every: z.string().trim().regex(SCHEDULE_EVERY, 'hourly, daily@HH:MM, weekly@DAY HH:MM or monthly@D HH:MM'),
+  timezone: z.string().trim().min(1).max(100).default('UTC'),
+}).strict();
+
+/**
+ * POST /v1/events/subscriptions. `wake` takes `consumer` (an agent's account) and a wake action; `post` a post action;
+ * the other modes neither. With `schedule` the filter is the schedule's own ticks, whatever is given. `webhook` is kept
+ * but does nothing yet.
+ */
 export const CreateSubscriptionBody = z.object({
   name: z.string().trim().min(1).max(100),
-  filter: EventFilterSchema,
+  filter: EventFilterSchema.default({}),
   delivery: z.enum(DELIVERY_MODES).optional(),
+  consumer: z.string().min(1).max(100).optional(),
+  action: SubscriptionActionSchema.optional(),
+  schedule: ScheduleSpecSchema.optional(),
+}).superRefine((b, ctx) => {
+  const say = (path: string, message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message });
+  if (b.consumer && b.delivery !== 'wake') say('consumer', 'only a wake subscription names its consumer');
+  if (b.delivery === 'wake' && !b.consumer) say('consumer', 'a wake subscription names the agent it wakes');
+  if ((b.delivery === 'wake' || b.delivery === 'post') && b.action?.kind !== b.delivery) say('action', `a ${b.delivery} subscription needs a ${b.delivery} action`);
+  if (b.action && b.delivery !== b.action.kind) say('action', `a ${b.action.kind} action needs delivery ${b.action.kind}`);
 });
 export type CreateSubscriptionBody = z.infer<typeof CreateSubscriptionBody>;
+
+/** POST /v1/events/jobs/:id/done: how the agent's turn ended, and a line about it. */
+export const JobDoneBody = z.object({
+  ok: z.boolean(),
+  note: z.string().max(500).optional(),
+});
+export type JobDoneBody = z.infer<typeof JobDoneBody>;
 
 /** POST /v1/events/subscriptions/:id/ack: the `next` of a read, or any seq up to it. */
 export const AckSubscriptionBody = z.object({

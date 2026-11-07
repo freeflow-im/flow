@@ -24,14 +24,14 @@ const ev = (type: string): PublishInput => ({ type, organizationId: 'org-1', act
 describe('Events.wait', () => {
   it('answers at once when something follows the cursor', async () => {
     const o = events();
-    const s = o.createSubscription({ name: 'n', consumer: 'acct-bob', owner: 'acct-bob', filter: {}, createdBy: 'acct-bob' });
+    const s = await o.createSubscription({ name: 'n', consumer: 'acct-bob', owner: 'acct-bob', filter: {}, createdBy: 'acct-bob' });
     await o.publish(ev('chat.a'));
     expect(await o.wait(s.id, BOB, undefined, 5_000)).toMatchObject({ events: [{ seq: 1 }], next: 1 });
   });
 
   it('resolves on a matching publish, not on one its filter skips', async () => {
     const o = events();
-    const s = o.createSubscription({ name: 'n', consumer: 'acct-bob', owner: 'acct-bob', filter: { types: ['chat.*'] }, createdBy: 'acct-bob' });
+    const s = await o.createSubscription({ name: 'n', consumer: 'acct-bob', owner: 'acct-bob', filter: { types: ['chat.*'] }, createdBy: 'acct-bob' });
     const started = Date.now();
     const waiting = o.wait(s.id, BOB, undefined, 5_000);
     setTimeout(() => void o.publish(ev('mail.received')), 20);
@@ -43,7 +43,7 @@ describe('Events.wait', () => {
 
   it('answers the empty read when the time runs out, and null for no such subscription', async () => {
     const o = events();
-    const s = o.createSubscription({ name: 'n', consumer: 'acct-bob', owner: 'acct-bob', filter: {}, createdBy: 'acct-bob' });
+    const s = await o.createSubscription({ name: 'n', consumer: 'acct-bob', owner: 'acct-bob', filter: {}, createdBy: 'acct-bob' });
     const started = Date.now();
     expect(await o.wait(s.id, BOB, undefined, 150)).toEqual({ events: [], next: 0 });
     expect(Date.now() - started).toBeGreaterThanOrEqual(140);

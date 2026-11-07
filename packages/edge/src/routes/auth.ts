@@ -65,7 +65,9 @@ export async function resolveCaller<E extends AuthEnv>(c: Context<{ Bindings: E 
   const { user, kind, account } = await directory(c, 'authenticateIn', token, org);
   const refused = accountGate(account);
   if (refused) throw refused;
-  return { user, token, authKind: kind, ip, organizationId: org, account };
+  // A wake job's turn (platform.md §5.2): the Org object stamps the request's events with it, once it has checked it.
+  const job = c.req.header('x-flow-job')?.trim();
+  return { user, token, authKind: kind, ip, organizationId: org, account, ...(job && /^[0-9a-f-]{36}$/.test(job) ? { jobId: job } : {}) };
 }
 
 /**

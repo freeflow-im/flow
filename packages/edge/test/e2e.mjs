@@ -6,6 +6,7 @@
 //     --var FLOW_UNFURL_ALLOW_HOSTS:localhost > /tmp/edge.log 2>&1 &
 // (FLOW_UNFURL_ALLOW_HOSTS lets the link preview check fetch the test page this script serves on localhost.)
 //   node test/e2e.mjs /tmp/edge.log
+// The wake-job checks want the flow-jobs queue's first check soon: add --var JOBS_ACK_DELAY_SECONDS:2.
 // It reads signup links and the dev push driver's lines from the Worker's log, because local mail and pushes go there.
 // Without the LIVEKIT_* vars the huddle checks expect huddles to be off instead.
 import fs from 'node:fs';
@@ -13,7 +14,7 @@ import http from 'node:http';
 import zlib from 'node:zlib';
 const log=process.argv[2]; const B='http://localhost:18796', WS='ws://localhost:18796';
 let pass=0,fail=0; const t=(n,ok,d='')=>{ok?pass++:fail++;console.log((ok?'ok  ':'FAIL')+' '+n+(d?': '+String(d).slice(0,170):''));};
-const api=async(tok,m,p,b)=>{const r=await fetch(B+p,{method:m,headers:{...(tok?{authorization:'Bearer '+tok}:{}),...(b?{'content-type':'application/json'}:{})},body:b?JSON.stringify(b):undefined});let j;const x=await r.text();try{j=JSON.parse(x)}catch{j=x}return{s:r.status,j}};
+const api=async(tok,m,p,b,h={})=>{const r=await fetch(B+p,{method:m,headers:{...h,...(tok?{authorization:'Bearer '+tok}:{}),...(b?{'content-type':'application/json'}:{})},body:b?JSON.stringify(b):undefined});let j;const x=await r.text();try{j=JSON.parse(x)}catch{j=x}return{s:r.status,j}};
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const link=async(re,tries=20)=>{for(let i=0;i<tries;i++){const m=[...fs.readFileSync(log,'utf8').matchAll(re)].at(-1);if(m)return m;await sleep(250)}};
 async function signup(email,name){await api(null,'POST','/v1/auth/register',{email});await sleep(400);const m=[...fs.readFileSync(log,'utf8').matchAll(new RegExp('to='+email+'.*?signup=([A-Za-z0-9_-]+)','g'))].at(-1);return (await api(null,'POST','/v1/auth/register/complete',{token:m[1],displayName:name,password:'correct-horse-battery'})).j;}
@@ -210,6 +211,59 @@ r=await api(del.token,'DELETE','/v1/me');t('delete account',r.s===200,r.s+' '+JS
 r=await api(Bo.token,'POST',`/v1/workspaces/${W}/agent-invites`,{});t('Bob sponsors an agent',r.s===201,r.s);
 r=await api(null,'POST','/v1/agents/redeem',{code:r.j.code,username:'bobbot',key:'another-long-agent-key-for-the-test',name:'Bobbot'});const BOT=r.j.agentToken;
 r=await api(BOT,'GET',`/v1/workspaces/${W}/channels`);t('his agent is in',r.s===200,r.s);
+// ---- wake jobs through the flow-jobs Queue, post actions and schedules (platform.md §5.2, phase 2.4)
+{const SP=`/v1/events/subscriptions?workspace=${W}`,JB=(id,step)=>`/v1/events/jobs/${id}/${step}?workspace=${W}`;
+ const acct=async(tok)=>(await api(tok,'GET','/v1/me')).j.accounts?.find(a=>a.organizationId===W)?.id;
+ const botAcct=await acct(BOT),bobAcct=await acct(Bo.token),flowbotAcct=await acct(AGT2);
+ r=await api(BOT,'POST',SP,{name:'my jobs',filter:{types:['agent.job'],self:true}});const JQ=r.j.subscription;t('the agent subscribes to its own jobs',r.s===201,r.s);
+ const jobsAfter=async(pred,ms)=>{const end=Date.now()+ms;for(;;){const q=(await api(BOT,'GET',`/v1/events/subscriptions/${JQ.id}?workspace=${W}&wait=1`)).j;const hit=q.events?.filter(pred)??[];if(q.next)await api(BOT,'POST',`/v1/events/subscriptions/${JQ.id}/ack?workspace=${W}`,{cursor:q.next});if(hit.length)return hit;if(Date.now()>end)return [];}};
+ r=await api(BOT,'POST',SP,{name:'not mine',delivery:'wake',consumer:flowbotAcct,filter:{},action:{kind:'wake',prompt:'p'}});t('an agent may not make a wake subscription for another\'s agent',r.s===403&&r.j.error?.code==='agent_forbidden',r.s+' '+JSON.stringify(r.j).slice(0,120));
+ r=await api(Bo.token,'POST',SP,{name:'bad',filter:{},consumer:botAcct});t('consumer is for wake only',r.s===400,r.s+' '+JSON.stringify(r.j).slice(0,120));
+ r=await api(Bo.token,'POST',SP,{name:'summaries',delivery:'wake',consumer:botAcct,filter:{types:['chat.message.created'],channelId:gen.id},action:{kind:'wake',prompt:'Summarize: {{data}}'}});const WS1=r.j.subscription;
+ t('Bob makes a wake subscription for his agent',r.s===201&&WS1?.delivery==='wake'&&WS1.consumer===botAcct&&WS1.owner===bobAcct&&WS1.action?.prompt==='Summarize: {{data}}',r.s+' '+JSON.stringify(r.j).slice(0,160));
+ r=await api(Bo.token,'GET',SP);t('and lists it as its owner',r.j.subscriptions?.some(x=>x.id===WS1?.id),JSON.stringify(r.j).slice(0,100));
+ const t0=Date.now();r=await api(A.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'please summarize me'});const MW=r.j;
+ let jobs=await jobsAfter(e=>e.type==='agent.job'&&e.data?.subscriptionId===WS1?.id,3000);const J=jobs[0];const JID=J?.data?.jobId;
+ t('within 3 s the agent\'s queue has an agent.job',!!J&&Date.now()-t0<3500,(Date.now()-t0)+'ms '+JSON.stringify(J??null).slice(0,160));
+ t('with the rendered prompt, depth 1, caused by the job',J?.data?.prompt?.startsWith('Summarize: {')&&J.data.prompt.includes('please summarize me')&&J.depth===1&&J.causedBy===JID&&J.data.event?.channelId===gen.id,JSON.stringify(J?.data??null).slice(0,160));
+ r=await api(A.token,'POST',JB(JID,'ack'));t('Ann cannot ack the agent\'s job',r.s===404,r.s);
+ r=await api(BOT,'POST',JB(JID,'ack'));t('the agent acks: running, under a lease',r.s===200&&r.j.job?.state==='running'&&Date.parse(r.j.job.leaseUntil)>Date.now()+500_000,r.s+' '+JSON.stringify(r.j).slice(0,140));
+ r=await api(BOT,'POST',JB(JID,'extend'));t('and extends it',r.s===200&&r.j.job?.state==='running',r.s);
+ r=await api(BOT,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'Summary: Ann asked for one.'},{'x-flow-job':JID});const MJ=r.j;t('the agent posts during the job\'s turn',r.s===201,r.s);
+ await sleep(400);r=await api(Bo.token,'GET',`/v1/events?workspace=${W}&since=0&limit=500&types=chat.message.created&channel=${gen.id}`);let all=r.j.events??[];while(r.j.events?.length===500){r=await api(Bo.token,'GET',`/v1/events?workspace=${W}&since=${r.j.next}&limit=500&types=chat.message.created&channel=${gen.id}`);all=all.concat(r.j.events)}
+ const EJ=all.find(e=>e.data?.id===MJ.id),EA=all.find(e=>e.data?.id===MW.id);
+ t('its message\'s event carries causedBy the job and depth 2',EJ?.causedBy===JID&&EJ.depth===2,JSON.stringify(EJ&&{causedBy:EJ.causedBy,depth:EJ.depth}));
+ t('and Ann\'s, no cause and depth 0',EA&&!EA.causedBy&&EA.depth===0,JSON.stringify(EA&&{causedBy:EA.causedBy,depth:EA.depth}));
+ r=await api(BOT,'POST',JB(JID,'done'),{ok:true,note:'summarized'});t('the agent reports done',r.s===200&&r.j.job?.state==='done'&&r.j.job.note==='summarized',r.s+' '+JSON.stringify(r.j).slice(0,120));
+ r=await api(Bo.token,'GET',`/v1/events/jobs?subscription=${WS1.id}&workspace=${W}`);t('Bob\'s job list says done, and the agent\'s own post woke nothing',r.s===200&&r.j.jobs?.length===1&&r.j.jobs[0].state==='done'&&r.j.jobs[0].id===JID,r.s+' '+JSON.stringify(r.j).slice(0,160));
+ r=await api(BOT,'GET',`/v1/events/jobs?subscription=${WS1.id}&workspace=${W}`);t('so does the agent\'s',r.j.jobs?.[0]?.state==='done',r.s);
+ r=await api(A.token,'GET',`/v1/events/jobs?subscription=${WS1.id}&workspace=${W}`);t('Ann\'s is 404',r.s===404,r.s);
+ r=await api(BOT,'POST',JB(JID,'extend'));t('a done job cannot be extended',r.s===409&&r.j.error?.code==='job_state',r.s);
+ r=await api(Bo.token,'DELETE',`/v1/events/subscriptions/${WS1.id}?workspace=${W}`);t('the owner deletes the wake subscription',r.s===200,r.s);
+ // A job nobody acks is delivered again by the flow-jobs Queue's check (JOBS_ACK_DELAY_SECONDS=2 here).
+ r=await api(Bo.token,'POST',SP,{name:'unanswered',delivery:'wake',consumer:botAcct,filter:{types:['chat.message.created'],channelId:gen.id},action:{kind:'wake',prompt:'Again: {{type}}'}});const WS2=r.j.subscription;
+ r=await api(A.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'nobody answers this'});
+ jobs=await jobsAfter(e=>e.type==='agent.job'&&e.data?.subscriptionId===WS2?.id,3000);const J2=jobs[0],t2=Date.now();
+ t('a second wake subscription files a job',!!J2&&J2.data.prompt==='Again: chat.message.created',JSON.stringify(J2?.data??null).slice(0,120));
+ const again=await jobsAfter(e=>e.type==='agent.job'&&e.data?.jobId===J2?.data?.jobId&&e.id!==J2.id,8000);
+ t('not acked, it is delivered again: a second agent.job for the same job within ~5 s',again.length>=1&&Date.now()-t2<6500,(Date.now()-t2)+'ms '+again.length);
+ r=await api(Bo.token,'GET',`/v1/events/jobs?subscription=${WS2.id}&workspace=${W}`);t('the job says one more attempt',r.j.jobs?.[0]?.attempts===1&&r.j.jobs[0].state==='delivered',JSON.stringify(r.j.jobs?.[0]??r.j).slice(0,160));
+ r=await api(BOT,'POST',JB(J2.data.jobId,'ack'));t('and the agent can still take it',r.j.job?.state==='running',r.s);
+ await api(Bo.token,'DELETE',`/v1/events/subscriptions/${WS2.id}?workspace=${W}`);
+ // A post subscription posts as its owner when it matches.
+ r=await api(Bo.token,'POST',SP,{name:'reaction echo',delivery:'post',filter:{types:['chat.reaction.added'],channelId:gen.id},action:{kind:'post',channelId:gen.id,body:'Someone reacted with {{type}}'}});const PS=r.j.subscription;
+ t('Bob makes a post subscription',r.s===201&&PS?.delivery==='post',r.s+' '+JSON.stringify(r.j).slice(0,120));
+ r=await api(A.token,'PUT',`/v1/messages/${MW.id}/reactions/${encodeURIComponent('🎉')}`);
+ let posted=null;for(let i=0;i<15&&!posted;i++){await sleep(200);r=await api(A.token,'GET',`/v1/channels/${gen.id}/messages?limit=10`);posted=r.j.messages?.find(m=>m.body==='Someone reacted with chat.reaction.added')}
+ t('a match posts into the channel as Bob',posted?.userId===Bo.user.id,JSON.stringify(posted??r.j.messages?.map(m=>m.body)).slice(0,140));
+ await api(Bo.token,'DELETE',`/v1/events/subscriptions/${PS.id}?workspace=${W}`);
+ // A schedule: the filter is forced to its own ticks, and its first is within the hour (the tick itself is unit-tested).
+ r=await api(Bo.token,'POST',SP,{name:'hourly digest',delivery:'wake',consumer:botAcct,filter:{types:['chat.*']},action:{kind:'wake',prompt:'Digest'},schedule:{every:'hourly',timezone:'UTC'}});const SC=r.j.subscription;
+ const left=SC?.schedule&&Date.parse(SC.schedule.nextAt)-Date.now();
+ t('an hourly schedule forces the filter to its ticks',r.s===201&&SC.filter?.types?.[0]==='schedule.tick'&&SC.filter.types.length===1&&SC.filter.ref?.kind==='schedule'&&SC.filter.ref.id===SC.schedule.id&&SC.filter.ref.organizationId===W,r.s+' '+JSON.stringify(r.j).slice(0,180));
+ t('with next_at within the hour',left>0&&left<=3_600_000,left);
+ r=await api(Bo.token,'POST',SP,{name:'bad',filter:{},schedule:{every:'every 5 minutes'}});t('a bad schedule is refused',r.s===400,r.s);
+ await api(Bo.token,'DELETE',`/v1/events/subscriptions/${SC.id}?workspace=${W}`);}
 const sbot=await sock(BOT);const botClosed=new Promise((res)=>{sbot.ws.onclose=e=>res(e);setTimeout(()=>res(null),6000)});
 r=await api(A.token,'DELETE',`/v1/workspaces/${W}/members/${Bo.user.id}`);t('Ann removes Bob',r.s===200,r.s+' '+JSON.stringify(r.j).slice(0,90));
 const bc=await botClosed;t('his agent\'s socket closes with him',bc?.code===4003,bc&&bc.code+' '+bc.reason);

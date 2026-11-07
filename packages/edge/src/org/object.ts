@@ -1,6 +1,6 @@
 // One organization: its database and its sockets. HTTP requests arrive from the Worker with the caller already known.
 import { DurableObject } from 'cloudflare:workers';
-import type { AccountDTO, Event, MemberRole, UserDTO } from '@flow/shared';
+import { MAX_EVENT_DEPTH, type AccountDTO, type Event, type MemberRole, type UserDTO } from '@flow/shared';
 import { accountGate, type DirectoryCore } from '../directory/core';
 import { ApiError } from '../errors';
 import { directoryLink } from './directoryLink';
@@ -65,11 +65,17 @@ const USER_SUBJECT = /(?:^|\.)user\.([0-9a-f-]{36})(?:\.|$)/;
 const BACKLOG_PAGE = 200;
 const BACKLOG_MAX = 2_000;
 
+/** What the events a request publishes carry into the log (platform.md §5.2, loop safety): a job's turn stamps its id
+ * and one more than the job's depth; an automation's post, one more than its trigger's. */
+interface Stamp { causedBy?: string; depth: number }
+
 export class Org extends DurableObject<OrgEnv> {
   private readonly db: DB;
   /** Socket events waiting to go into the event log, and the chain of sends, so they arrive in the order they happened. */
   private logQueue: PublishInput[] = [];
   private logging: Promise<void> = Promise.resolve();
+  /** Each job's depth, once asked of the Events object: it never changes. */
+  private readonly jobDepths = new Map<string, number>();
 
   constructor(ctx: DurableObjectState, env: OrgEnv) {
     super(ctx, env);
@@ -141,7 +147,7 @@ export class Org extends DurableObject<OrgEnv> {
   }
 
   /** Who may see an event, as the gateway decided on Node: a user's own subject goes to that user, and a private channel to its members. */
-  private broadcast(subject: string, event: Event): void {
+  private broadcast(subject: string, event: Event, stamp?: Stamp): void {
     const onlyUser = USER_SUBJECT.exec(subject)?.[1];
     let allowed: Set<string> | null = null;
     if (!onlyUser && event.channelId) {
@@ -158,11 +164,11 @@ export class Org extends DurableObject<OrgEnv> {
       if (!userId || (onlyUser && userId !== onlyUser) || (allowed && !allowed.has(userId))) continue;
       try { ws.send(frame); } catch { /* the socket is closing */ }
     }
-    this.logEvent(subject, event, frame);
+    this.logEvent(subject, event, frame, stamp);
   }
 
   /** Into the organization's event log as well (platform.md §5.2), in order, batched per turn of the event loop. */
-  private logEvent(subject: string, event: Event, frame: string): void {
+  private logEvent(subject: string, event: Event, frame: string, stamp?: Stamp): void {
     if (!this.env.EVENTS) return;
     let entry: PublishInput | null;
     try {
@@ -172,7 +178,7 @@ export class Org extends DurableObject<OrgEnv> {
     }
     if (!entry) return;
     // The data as the sockets got it (dates as strings), which the log stores as JSON.
-    this.logQueue.push({ ...entry, data: (JSON.parse(frame) as { event: Event }).event.data });
+    this.logQueue.push({ ...entry, ...(stamp ?? {}), data: (JSON.parse(frame) as { event: Event }).event.data });
     if (this.logQueue.length === 1) this.logging = this.logging.then(() => this.flushLog());
   }
 
@@ -243,17 +249,98 @@ export class Org extends DurableObject<OrgEnv> {
       .toArray().map((r) => r.id as string);
   }
 
+  /** Each account's private channels, for an action subscription's owner (events/object.ts reads as the owner). */
+  privateChannelIdsOfAccounts(accountIds: string[]): Record<string, string[]> {
+    const out: Record<string, string[]> = {};
+    for (const id of accountIds) {
+      const user = this.userOfAccount(id);
+      out[id] = user ? this.privateChannelIdsOf(user) : [];
+    }
+    return out;
+  }
+
+  private userOfAccount(accountId: string): string | null {
+    return (this.ctx.storage.sql.exec('SELECT user_id FROM workspace_members WHERE account_id = ?', accountId).toArray()[0]?.user_id as string | undefined) ?? null;
+  }
+
+  /**
+   * Who may make a `wake` subscription for the agent whose account this is (routes/events.ts): its sponsor, or an
+   * owner or admin of the organization. Null when the account is no agent of this organization.
+   */
+  agentSponsorOf(agentAccountId: string): { userId: string; sponsorUserId: string | null } | null {
+    const row = this.ctx.storage.sql.exec(
+      'SELECT m.user_id, COALESCE(m.sponsor_user_id, u.sponsor_user_id) AS sponsor FROM workspace_members m JOIN users u ON u.id = m.user_id WHERE m.account_id = ? AND u.is_agent',
+      agentAccountId,
+    ).toArray()[0];
+    return row ? { userId: row.user_id as string, sponsorUserId: (row.sponsor as string | null) ?? null } : null;
+  }
+
+  /**
+   * A `post` subscription's action: the message posted into the channel as the owner, through the message service, with
+   * the trigger's depth plus one on its event. `clientMsgId` names the subscription and the event, so it posts once.
+   */
+  async postAutomation(p: { ownerAccountId: string; channelId: string; body: string; clientMsgId: string; depth: number }): Promise<string | null> {
+    const user = this.userOfAccount(p.ownerAccountId);
+    if (!user) return null;
+    const { sendMessage } = await import('./services/messages');
+    const msg = await this.scoped(() => sendMessage(p.channelId, user, p.clientMsgId, p.body, undefined, undefined, undefined, { expandMentions: true }), { depth: p.depth });
+    await this.logging;
+    await this.armAlarm();
+    return msg.id;
+  }
+
+  /**
+   * Tells an automation's owner it stopped: "Automation X could not wake Y" (a job parked) or reached the depth cap.
+   * The agent says so in its DM with the owner, so it arrives as a DM notification; its event is at the depth cap, so it
+   * wakes nothing. With no agent (a post automation) it is a log line.
+   */
+  async automationNotice(p: { ownerAccountId: string; agentAccountId: string | null; name: string; why: 'parked' | 'capped' }): Promise<void> {
+    const owner = this.userOfAccount(p.ownerAccountId);
+    const agent = p.agentAccountId ? this.userOfAccount(p.agentAccountId) : null;
+    const workspace = this.db.select({ id: schema.workspaces.id }).from(schema.workspaces).get();
+    if (!owner || !agent || !workspace) return console.log(`[events] automation "${p.name}": ${p.why} (no one to tell)`);
+    const agentName = (this.ctx.storage.sql.exec('SELECT display_name FROM users WHERE id = ?', agent).toArray()[0]?.display_name as string | undefined) ?? 'its agent';
+    const text = p.why === 'parked'
+      ? `⚠️ Automation “${p.name}” could not wake ${agentName}: the job was delivered several times and never finished, so it is parked.`
+      : `⚠️ Automation “${p.name}” stopped waking ${agentName}: a chain of events it set off reached the depth limit (${MAX_EVENT_DEPTH}).`;
+    const [{ createDm }, { sendMessage }] = await Promise.all([import('./services/channels'), import('./services/messages')]);
+    await this.scoped(async () => {
+      const dm = await createDm(workspace.id, agent, [owner]);
+      await sendMessage(dm.id, agent, crypto.randomUUID(), text);
+    }, { depth: MAX_EVENT_DEPTH });
+    await this.logging;
+    await this.armAlarm();
+  }
+
   /** The account ids of this organization's agents, for an `actorKind` filter. */
   agentAccountIds(): string[] {
     return this.ctx.storage.sql.exec('SELECT m.account_id FROM workspace_members m JOIN users u ON u.id = m.user_id WHERE u.is_agent AND m.account_id IS NOT NULL')
       .toArray().map((r) => r.account_id as string);
   }
 
-  /** Runs with this object's database, event bus and socket controls in scope. */
-  private scoped<T>(fn: () => Promise<T>): Promise<T> {
+  /** Runs with this object's database, event bus and socket controls in scope; `stamp` marks the events it publishes. */
+  private scoped<T>(fn: () => Promise<T>, stamp?: Stamp): Promise<T> {
     return socketControl.run({ disconnectUser: (id) => this.closeUser(id) }, () =>
       directoryLink.run({ ensureAccount: (...args) => this.ensureAccount(...args), accountFor: (...args) => this.accountFor(...args) }, () =>
-        withPublisher((subject, event) => this.broadcast(subject, event), () => withDb(this.db, fn))));
+        withPublisher((subject, event) => this.broadcast(subject, event, stamp), () => withDb(this.db, fn))));
+  }
+
+  /**
+   * A request made during a job's turn (`x-flow-job`, on the caller context): its events carry the job's id and one
+   * more than the job's depth. A job that is not the caller's, or unknown, stamps nothing.
+   */
+  private async stampOf(caller: CallerContext): Promise<Stamp | undefined> {
+    const jobId = caller.jobId;
+    if (!jobId || !caller.account || !caller.organizationId || !this.env.EVENTS) return undefined;
+    const key = `${caller.account.id}|${jobId}`;
+    let depth = this.jobDepths.get(key);
+    if (depth === undefined) {
+      const found = await this.env.EVENTS.get(this.env.EVENTS.idFromName(caller.organizationId)).jobDepth(jobId, caller.account.id).catch(() => null);
+      if (found === null) return undefined;
+      depth = found;
+      this.jobDepths.set(key, depth);
+    }
+    return { causedBy: jobId, depth: depth + 1 };
   }
 
   private closeUser(userId: string): void {
@@ -272,10 +359,11 @@ export class Org extends DurableObject<OrgEnv> {
   }
 
   async handle(request: Request, caller: CallerContext, newWorkspaceId: string | null): Promise<Response> {
+    const stamp = await this.stampOf(caller);
     const run = () => this.scoped(async () => {
       if (caller.user) this.ensureUser(caller.user);
       return app.handle(request, caller);
-    });
+    }, stamp);
     const res = await (newWorkspaceId ? presetWorkspaceId.run(newWorkspaceId, run) : run()).finally(() => this.logging);
     await this.flushOutbox(newWorkspaceId);
     await this.armAlarm();

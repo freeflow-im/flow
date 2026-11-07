@@ -214,7 +214,7 @@ export class Docs extends DurableObject<DocsEnv> {
     return lazySubscriptions(async () => {
       const who = await caller();
       if (!who?.account) throw Object.assign(new Error('no account in this organization'), { status: 403 });
-      return subscriptionsAs(events.get(events.idFromName(organizationId)), org.get(org.idFromName(organizationId)), who.account.id, userId);
+      return subscriptionsAs(events.get(events.idFromName(organizationId)), org.get(org.idFromName(organizationId)), who.account.id, userId, who.account.role, organizationId);
     });
   }
 

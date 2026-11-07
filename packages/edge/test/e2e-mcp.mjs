@@ -80,7 +80,7 @@ const call=async(tok,name,args)=>{const x=await mcp(tok,'tools/call',{name,argum
 r=await mcp(TOK.access_token,'initialize',{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'e2e',version:'1'}});t('initialize',r.s===200&&r.j.result?.serverInfo?.name==='universal-docs',r.s+' '+JSON.stringify(r.j).slice(0,160));
 r=await mcp(TOK.access_token,'tools/list');const names=(r.j.result?.tools??[]).map((x)=>x.name);
 t('tools/list has the file and spreadsheet tools, and no ChatGPT app tools',['list_files','search_files','read_range','write_range','create_sheet','upload_file'].every((n)=>names.includes(n))&&!names.includes('docs_app')&&!names.includes('app_state'),names.length+' '+names.slice(0,12).join(','));
-t('and the event tools, with events:read',['list_subscriptions','create_subscription','read_events','ack_events'].every((n)=>names.includes(n)),names.filter((n)=>/subscri|events/.test(n)).join(','));
+t('and the event tools, with events:read',['list_subscriptions','create_subscription','read_events','ack_events','list_jobs'].every((n)=>names.includes(n)),names.filter((n)=>/subscri|events|jobs/.test(n)).join(','));
 {r=await call(TOK.access_token,'create_subscription',{name:'acme chat',filter:{types:['chat.*']}});const SUB=r.v?.subscription;t('create_subscription as Uma’s account in Acme',!r.isError&&SUB?.id&&SUB.filter?.types?.[0]==='chat.*',JSON.stringify(r.v??r.j).slice(0,160));
  r=await call(TOK.access_token,'create_subscription',{name:'bad',filter:{types:['a b']}});t('a bad filter is the agent’s error',r.isError===true,JSON.stringify(r.j).slice(0,140));
  r=await call(TOK.access_token,'list_subscriptions',{});t('list_subscriptions has it',r.v?.subscriptions?.some((x)=>x.id===SUB?.id),JSON.stringify(r.v).slice(0,140));
@@ -90,6 +90,9 @@ t('and the event tools, with events:read',['list_subscriptions','create_subscrip
  r=await waiting;const ev=r.v?.events?.find((e)=>e.type==='chat.message.created'&&e.data?.id===MSG.id);t('read_events waits for Olga’s message',!r.isError&&!!ev,JSON.stringify(r.v??r.j).slice(0,160));
  r=await call(TOK.access_token,'ack_events',{subscription_id:SUB?.id,cursor:r.v?.next});t('ack_events moves the cursor',r.v?.cursor>0,JSON.stringify(r.v));
  r=await call(TOK.access_token,'read_events',{subscription_id:SUB?.id});t('then nothing is left',r.v?.events?.length===0,JSON.stringify(r.v).slice(0,120));
+ r=await call(TOK.access_token,'list_jobs',{subscription_id:SUB?.id});t('list_jobs: a pull subscription has none',!r.isError&&Array.isArray(r.v?.jobs)&&r.v.jobs.length===0,JSON.stringify(r.v??r.j).slice(0,120));
+ r=await call(TOK.access_token,'create_subscription',{name:'wake nobody',delivery:'wake',consumer:'acct-x',action:{kind:'wake',prompt:'p'}});t('a wake subscription for no agent is the agent’s error',r.isError===true,JSON.stringify(r.j).slice(0,140));
+ r=await call(TOK.access_token,'create_subscription',{name:'tick',delivery:'post',action:{kind:'post',channelId:'c1',body:'tick'},schedule:{every:'daily@09:00',timezone:'UTC'}});t('create_subscription with a schedule forces its filter',!r.isError&&r.v?.subscription?.filter?.types?.[0]==='schedule.tick'&&!!r.v.subscription.schedule?.nextAt,JSON.stringify(r.v??r.j).slice(0,160));
  r=await call(TOK.access_token,'read_events',{subscription_id:'nope'});t('an unknown subscription is the agent’s error',r.isError===true,JSON.stringify(r.j).slice(0,120));
  r=await api(U.token,'GET',`/v1/events/subscriptions?workspace=${A}`);t('the same subscription over HTTP',r.j.subscriptions?.some((x)=>x.id===SUB?.id),JSON.stringify(r.j).slice(0,120));}
 r=await call(TOK.access_token,'list_files',{});const listed=JSON.stringify(r.v);

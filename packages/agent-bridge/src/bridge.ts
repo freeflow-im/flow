@@ -14,17 +14,19 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import type {
+  AgentJobEventData,
   ChannelDTO,
   Event,
   HuddleInviteData,
   HuddleUpdatedData,
   MessageDTO,
+  PlatformEvent,
   ReactionEventData,
   WorkspaceDTO,
   WorkspaceMemberDTO,
 } from '@flow/shared';
 import { defaultVoiceConfig, mentionChainLimit, resolveWorkspace, type BridgeConfig } from './config.js';
-import { accountLines, addressIn, FlowApi, type MeDTO } from './api.js';
+import { accountLines, addressIn, FlowApi, FlowApiError, type MeDTO } from './api.js';
 import { attachmentFilename, formatAttachments } from './attachments.js';
 import { FlowSocket, openFlowSocket } from './gateway.js';
 import { ChannelIndicatorLeases, ProgressReporter } from './progress.js';
@@ -33,10 +35,14 @@ import { SessionManager, type SessionOpts } from './session.js';
 import { EXIT_RESTART, EXIT_UPDATE } from './supervisor.js';
 import { currentVersion, isOutdated, latestPublishedVersion } from './version.js';
 import { HuddleVoiceManager } from './huddle-voice.js';
-import { catchUp, ensureSubscription, HandledMessages } from './catch-up.js';
+import { CATCH_UP_TYPES, catchUp, ensureSubscription, HandledMessages, jobsSpec, subscriptionName } from './catch-up.js';
 
 /** How often the socket's latest cursor is acked to the bridge's subscription. */
 const CURSOR_ACK_MS = 30_000;
+/** A wake job's lease is renewed this often while its turn runs (the server's lease is 10 minutes). */
+export const JOB_EXTEND_MS = 5 * 60_000;
+/** A job whose turn never got to run (a `/reset` dropped it, say) is reported failed after this long. */
+const JOB_WAIT_MAX_MS = 6 * 3_600_000;
 
 const THINKING_PREFIX = '🤖 *thinking…*';
 /** The loop breaker's visible notice (#583). Never counts toward a chain, never wakes anyone. */
@@ -218,10 +224,24 @@ export class AgentBridge {
   private latestCursor = 0;
   private cursorTimer: NodeJS.Timeout | null = null;
 
+  /** Wake jobs taken (platform.md §5.2, phase 2.4), across restarts, so a job delivered again or replayed runs once. */
+  private handledJobs: HandledMessages;
+  /** Jobs whose ack is in flight, so two copies of one `agent.job` arriving together are taken once. */
+  private readonly takingJobs = new Set<string>();
+  /** The `bridge-jobs:` socket subscription, whose poke means an `agent.job` came; one read at a time. */
+  private jobsSub: { id: string } | null = null;
+  private jobsReading = false;
+  private jobsAgain = false;
+  /** A job's turn, by its synthetic message's id: the client that marks its requests, and how the turn ended. */
+  private readonly jobTurns = new Map<string, { jobId: string; api: FlowApi; settle: (r: { ok: boolean; note: string }) => void }>();
+  /** convKey → the job whose turn is running there, which the MCP server asks for (`/job` on the task IPC). */
+  private readonly activeJobs = new Map<string, string>();
+
   constructor(private readonly cfg: BridgeConfig) {
     this.api = new FlowApi(cfg.serverUrl, cfg.agentToken);
     this.sem = new Semaphore(cfg.concurrency);
     this.handled = new HandledMessages(cfg.stateFile ?? null, (m) => this.log(m));
+    this.handledJobs = new HandledMessages(cfg.stateFile ?? null, (m) => this.log(m), undefined, 'handledJobIds');
     this.sessions = new SessionManager({
       cfg: cfg.runtime,
       idleMs: cfg.runtime.sessionIdleSec * 1000,
@@ -298,6 +318,7 @@ export class AgentBridge {
     );
     for (const line of accountLines(this.me, workspaces)) this.log(line);
     const since = await this.catchUp();
+    if (since !== null) await this.ensureJobsSubscription();
     this.socket = openFlowSocket({
       serverUrl: this.cfg.serverUrl,
       token: this.cfg.agentToken,
@@ -310,6 +331,7 @@ export class AgentBridge {
       // What happened between the catch-up's read and the socket's hello comes as the socket's backlog.
       ...(since !== null ? { since } : {}),
       onCursor: (seq) => { this.latestCursor = Math.max(this.latestCursor, seq); },
+      onSubscription: (id) => void this.readJobs(id),
     });
     this.socket.connect();
     if (this.subscription) {
@@ -339,14 +361,151 @@ export class AgentBridge {
     this.latestCursor = sub.cursor;
     const before = this.answered;
     try {
-      const out = await catchUp(this.api, this.workspace.id, sub, (ev) => this.handleEvent(ev), (m) => this.log(m));
+      const out = await catchUp(this.api, this.workspace.id, sub, (ev) => this.handleEvent(ev), (m) => this.log(m), (e) => this.handleJob(e));
       this.subscription.acked = out.next;
       this.latestCursor = Math.max(this.latestCursor, out.next);
       this.log(`caught up: ${out.events} events, answered ${this.answered - before}`);
+      if (sub.outdated) await this.replaceSubscription(sub.id);
       return out.next;
     } catch (err) {
       this.log(`catch-up failed (${(err as Error).message}) — continuing with live events`);
       return this.subscription.acked;
+    }
+  }
+
+  /** An older bridge's subscription, caught up: replaced by one with today's types (`agent.job`), starting at the head. */
+  private async replaceSubscription(oldId: string): Promise<void> {
+    try {
+      const fresh = await this.api.createSubscription(this.workspace.id, { name: subscriptionName(this.me.id), filter: { types: CATCH_UP_TYPES }, delivery: 'pull' });
+      await this.api.deleteSubscription(this.workspace.id, oldId).catch((err: Error) => this.log(`old subscription not deleted: ${err.message}`));
+      this.subscription = { id: fresh.id, acked: fresh.cursor };
+      this.latestCursor = Math.max(this.latestCursor, fresh.cursor);
+      this.log('event subscription renewed with agent.job');
+    } catch (err) {
+      this.log(`event subscription not renewed: ${(err as Error).message}`);
+    }
+  }
+
+  /** The socket subscription that pokes when a wake job comes (catch-up.ts `jobsSpec`). Without it jobs still come, late. */
+  private async ensureJobsSubscription(): Promise<void> {
+    try {
+      this.jobsSub = { id: (await ensureSubscription(this.api, this.workspace.id, this.me.id, jobsSpec(this.me.id))).id };
+    } catch (err) {
+      this.log(`no job subscription (${(err as Error).message}) — wake jobs arrive with the next catch-up or delivery`);
+    }
+  }
+
+  /** A poke for the job subscription: read it until empty, taking each job, acking as it goes. */
+  async readJobs(id: string): Promise<void> {
+    if (!this.jobsSub || id !== this.jobsSub.id) return;
+    if (this.jobsReading) {
+      this.jobsAgain = true;
+      return;
+    }
+    this.jobsReading = true;
+    try {
+      do {
+        this.jobsAgain = false;
+        await catchUp(this.api, this.workspace.id, { id, cursor: 0 }, () => {}, (m) => this.log(m), (e) => this.handleJob(e));
+      } while (this.jobsAgain);
+    } catch (err) {
+      this.log(`job subscription read failed: ${(err as Error).message}`);
+    } finally {
+      this.jobsReading = false;
+    }
+  }
+
+  /**
+   * An `agent.job` event (live or from a catch-up): acked as this agent, then run as a turn the way `start_task` runs
+   * one. Taken once: a job id already taken (state.json) or being taken is passed over. A job the server no longer
+   * offers (409) is remembered and dropped; an ack that failed otherwise is left for the server's next delivery.
+   */
+  async handleJob(e: PlatformEvent): Promise<void> {
+    const d = e.data as AgentJobEventData | null;
+    const jobId = d?.jobId;
+    if (!jobId || !d.prompt) return;
+    if (this.handledJobs.has(jobId) || this.takingJobs.has(jobId)) {
+      this.log(`job ${jobId} already taken — skipping the copy`);
+      return;
+    }
+    this.takingJobs.add(jobId);
+    try {
+      const api = this.api.withJob(jobId);
+      try {
+        await api.jobStep(this.workspace.id, jobId, 'ack');
+      } catch (err) {
+        if (err instanceof FlowApiError && (err.status === 409 || err.status === 404)) this.handledJobs.add(jobId);
+        this.log(`job ${jobId}: ack failed (${(err as Error).message})`);
+        return;
+      }
+      this.handledJobs.add(jobId);
+      this.log(`job ${jobId}: acked, running`);
+      void this.runJob(jobId, d, api);
+    } finally {
+      this.takingJobs.delete(jobId);
+    }
+  }
+
+  /**
+   * The job's turn: in its channel (joined first when public), or a new `job-<id>` channel of its own, as a task run
+   * there (`startTask`), every request of it marked with the job (`x-flow-job`). The lease is extended every 5 minutes
+   * while it runs; at the end the job is reported done or failed with a line about it.
+   */
+  private async runJob(jobId: string, d: AgentJobEventData, api: FlowApi): Promise<{ ok: boolean; note: string }> {
+    let outcome = { ok: false, note: '' };
+    const msgId = `job-${jobId}`;
+    const extend = setInterval(() => {
+      void api.jobStep(this.workspace.id, jobId, 'extend').catch((err: Error) => this.log(`job ${jobId}: extend failed: ${err.message}`));
+    }, this.jobExtendMs);
+    extend.unref();
+    try {
+      const channelId = await this.jobChannel(jobId, d.channelId, api);
+      const ended = new Promise<{ ok: boolean; note: string }>((settle) => {
+        let done = false;
+        const once = (r: { ok: boolean; note: string }) => { if (!done) { done = true; settle(r); } };
+        this.jobTurns.set(msgId, { jobId, api, settle: once });
+        setTimeout(() => once({ ok: false, note: 'the turn never ran' }), JOB_WAIT_MAX_MS).unref();
+      });
+      this.taskChannels.add(channelId);
+      this.enqueue(this.taskMessage(msgId, channelId, this.me.id, d.prompt));
+      outcome = await ended;
+    } catch (err) {
+      outcome = { ok: false, note: (err as Error).message };
+    } finally {
+      clearInterval(extend);
+      this.jobTurns.delete(msgId);
+    }
+    const note = oneLine(outcome.note) || (outcome.ok ? 'done' : 'failed');
+    await api.jobStep(this.workspace.id, jobId, 'done', { ok: outcome.ok, note })
+      .catch((err: Error) => this.log(`job ${jobId}: done not reported: ${err.message}`));
+    this.log(`job ${jobId}: ${outcome.ok ? 'done' : 'failed'} — ${note}`);
+    return { ok: outcome.ok, note };
+  }
+
+  /** Where a job runs: its channel, which the agent must be in (a public one it joins), or a new one named for the job. */
+  private async jobChannel(jobId: string, channelId: string | undefined, api: FlowApi): Promise<string> {
+    if (channelId) {
+      if (!this.channels.has(channelId)) await this.refreshDirectory().catch((err: Error) => this.log(`directory refresh failed: ${err.message}`));
+      const chan = this.channels.get(channelId);
+      if (!chan) throw new Error('no such channel');
+      if (!chan.isMember) {
+        if (chan.kind !== 'standard' || chan.isPrivate) throw new Error('not a member of that channel');
+        await api.joinChannel(channelId);
+        this.channels.set(channelId, { ...chan, isMember: true });
+      }
+      return channelId;
+    }
+    const name = `job-${jobId.slice(0, 8)}`;
+    try {
+      const chan = await api.createChannel(this.workspace.id, { name, topic: `Wake job ${jobId}` });
+      this.channels.set(chan.id, chan);
+      return chan.id;
+    } catch (err) {
+      if (!(err instanceof FlowApiError && err.status === 409)) throw err;
+      await this.refreshDirectory();
+      const found = [...this.channels.values()].find((c) => c.name === name);
+      if (!found) throw err;
+      return found.id;
     }
   }
 
@@ -407,7 +566,7 @@ export class AgentBridge {
         fs.rmSync(sock, { force: true }); // stale socket from a previous run
       }
       const server = http.createServer((req, res) => {
-        if (req.method !== 'POST' || req.url !== '/task') {
+        if (req.method !== 'POST' || (req.url !== '/task' && req.url !== '/job')) {
           res.writeHead(404).end();
           return;
         }
@@ -418,6 +577,17 @@ export class AgentBridge {
         });
         req.on('end', () => {
           void (async () => {
+            if (req.url === '/job') {
+              // The MCP server's question before each request: is a wake job's turn running in this conversation?
+              let jobId: string | null = null;
+              try {
+                const q = JSON.parse(body) as { channelId?: string; threadRootId?: string };
+                jobId = this.activeJobs.get(`${q.channelId ?? ''}|${q.threadRootId ?? ''}`) ?? null;
+              } catch { /* no job */ }
+              res.writeHead(200, { 'content-type': 'application/json' });
+              res.end(JSON.stringify({ jobId }));
+              return;
+            }
             let out: { ok: true; note: string } | { error: string };
             try {
               out = await this.startTask(JSON.parse(body) as Record<string, unknown>);
@@ -470,13 +640,19 @@ export class AgentBridge {
         )
         .catch((err: Error) => this.log(`task kickoff post failed: ${err.message}`));
     }
-    this.enqueue({
-      id: `task-${randomUUID()}`,
+    this.enqueue(this.taskMessage(`task-${randomUUID()}`, channelId, requester, prompt));
+    return { ok: true, note: `task run queued in ${this.channelLabel(channelId)}` };
+  }
+
+  /** A run's opening message: what a task run (or a wake job) is asked, as if posted to its channel. */
+  private taskMessage(id: string, channelId: string, userId: string, body: string): MessageDTO {
+    return {
+      id,
       channelId,
-      userId: requester,
+      userId,
       threadRootId: null,
-      clientMsgId: `task-${randomUUID()}`,
-      body: prompt,
+      clientMsgId: id,
+      body,
       createdAt: new Date().toISOString(),
       editedAt: null,
       deletedAt: null,
@@ -490,8 +666,7 @@ export class AgentBridge {
       reactions: [],
       files: [],
       unfurls: [],
-    });
-    return { ok: true, note: `task run queued in ${this.channelLabel(channelId)}` };
+    };
   }
 
   /**
@@ -740,6 +915,9 @@ export class AgentBridge {
     if (this.huddleVoice?.handleMessage(msg)) return;
     this.enqueue(msg);
   }
+
+  /** How often a job's lease is extended; swappable in tests. */
+  jobExtendMs = JOB_EXTEND_MS;
 
   /** Swappable in tests — the real thing takes the process down. */
   exitProcess: (code: number) => void = (code) => process.exit(code);
@@ -1033,8 +1211,12 @@ export class AgentBridge {
     // — targets the same thread (a new one when we're answering a top-level
     // channel message).
     const replyRoot = this.replyRoot(msg);
+    // A wake job's turn: every request of it carries the job (x-flow-job), the MCP server's too (via `activeJobs`).
+    const job = this.jobTurns.get(msg.id);
+    const api = job?.api ?? this.api;
+    if (job) this.activeJobs.set(key, job.jobId);
     const progress = new ProgressReporter(
-      this.api,
+      api,
       this.socket,
       this.cfg.progress,
       this.cfg.relayText,
@@ -1095,18 +1277,20 @@ export class AgentBridge {
         // transcript), so the next message continues where this left off.
         this.log('run stopped by request');
         if (result.sawSession) conv.started = true;
-        await this.api.sendMessage(msg.channelId, interruptReply(result, live.stoppedBy), replyRoot).catch(() => {});
+        await api.sendMessage(msg.channelId, interruptReply(result, live.stoppedBy), replyRoot).catch(() => {});
         if (replyRoot) this.threadParticipation.set(replyRoot, true);
+        job?.settle({ ok: false, note: 'stopped by request' });
         return;
       }
       if (result.ok) {
         conv.started = true;
         const text = result.text.trim();
         if (text.length > 0) {
-          await this.api.sendMessage(msg.channelId, text, replyRoot);
+          await api.sendMessage(msg.channelId, text, replyRoot);
           // We've now spoken here — every later reply in this thread is ours to answer.
           if (replyRoot) this.threadParticipation.set(replyRoot, true);
         }
+        job?.settle({ ok: true, note: text || 'done' });
       } else {
         this.log(`runtime error: ${result.error ?? 'unknown'}`);
         // Self-heal for the NEXT turn: a run the CLI got far enough to create a
@@ -1129,9 +1313,14 @@ export class AgentBridge {
           this.log(`codex resume of ${conv.codexSessionId} failed — next turn starts a fresh session`);
           conv.codexSessionId = undefined;
         }
-        await this.api.sendMessage(msg.channelId, failureReply(result), replyRoot).catch(() => {});
+        await api.sendMessage(msg.channelId, failureReply(result), replyRoot).catch(() => {});
+        job?.settle({ ok: false, note: result.error ?? 'runtime error' });
       }
+    } catch (err) {
+      job?.settle({ ok: false, note: (err as Error).message });
+      throw err;
     } finally {
+      if (job && this.activeJobs.get(key) === job.jobId) this.activeJobs.delete(key);
       if (this.liveRuns.get(key) === live) this.liveRuns.delete(key);
       await progress.finish().catch(() => {});
       if (mcpConfigPath) fs.rmSync(mcpConfigPath, { force: true });
@@ -1396,4 +1585,10 @@ export class AgentBridge {
     fs.writeFileSync(p, JSON.stringify(cfg));
     return p;
   }
+}
+
+/** The first line of a turn's text or error, short enough for a job's note. */
+function oneLine(text: string): string {
+  const line = text.split('\n').map((l) => l.trim()).find(Boolean) ?? '';
+  return line.length > 200 ? `${line.slice(0, 199)}…` : line;
 }

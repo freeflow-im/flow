@@ -38,6 +38,8 @@ export interface FlowSocketOpts {
   since?: number;
   /** The log reached `seq` and every event so far has been handed to `onEvent`. */
   onCursor?(seq: number): void;
+  /** A `socket` subscription of this account has new events (platform.md §5.2): read it over HTTP. */
+  onSubscription?(id: string): void;
 }
 
 const BACKOFF_MS = [1000, 2000, 5000, 10_000, 30_000];
@@ -111,6 +113,7 @@ export class FlowSocket {
         this.opts.onCursor?.(this.cursor);
         return;
       }
+      if (frame.op === 'subscription') return this.opts.onSubscription?.(frame.id);
       if (frame.op === 'gap') return this.opts.log(`events ${frame.from}–${frame.to} aged out of the log before this socket read them`);
       if (frame.op === 'error') this.opts.log(`ws error: ${frame.code} ${frame.message}`);
     });

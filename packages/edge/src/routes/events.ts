@@ -1,10 +1,11 @@
 // The event bus's one-shot read (docs/specs/platform.md §5.2): GET /v1/events?workspace=<id>&since=<seq>&limit=&types=a,b
 // &ref=&channel=&actor=person|agent. The caller's account in the organization names the reader; the Org object says
 // which private channels it is in; the organization's Events object answers what follows `since` that it may see.
-// Subscriptions (durable consumers with a cursor) under /v1/events/subscriptions: the caller's account is the consumer.
+// Subscriptions (durable consumers with a cursor) under /v1/events/subscriptions: the caller's account is the consumer (an
+// agent it sponsors, for `wake`). A wake job's agent acks it, extends its lease and says it is done under /v1/events/jobs.
 import { Hono, type Context } from 'hono';
 import type { ZodTypeAny, z } from 'zod';
-import { AckSubscriptionBody, CreateSubscriptionBody } from '@flow/shared';
+import { AckSubscriptionBody, CreateSubscriptionBody, JobDoneBody } from '@flow/shared';
 import type { Events } from '../events/object';
 import type { ReadQuery } from '../events/core';
 import { subscriptionsAs } from '../events/subscriptions';
@@ -54,7 +55,7 @@ async function opsOf(c: Context<{ Bindings: EventRouteEnv }>) {
   const who = await resolveAccountCaller(c, 'events');
   const org = who.account.organizationId;
   c.header('Cache-Control', 'no-store');
-  return subscriptionsAs(c.env.EVENTS.get(c.env.EVENTS.idFromName(org)), c.env.ORG.get(c.env.ORG.idFromName(org)), who.account.id, who.user.id);
+  return subscriptionsAs(c.env.EVENTS.get(c.env.EVENTS.idFromName(org)), c.env.ORG.get(c.env.ORG.idFromName(org)), who.account.id, who.user.id, who.account.role, org);
 }
 
 const noSuch = () => notFound('no such subscription');
@@ -87,3 +88,26 @@ eventRoutes.delete('/v1/events/subscriptions/:id', async (c) => {
   if (!(await (await opsOf(c)).remove(c.req.param('id')))) throw noSuch();
   return c.json({ ok: true });
 });
+
+// ---- wake jobs (§5.2): the agent's ack, lease and outcome; the owner's (or agent's) list -------------------------------
+
+const noJob = () => notFound('no such job');
+
+eventRoutes.get('/v1/events/jobs', async (c) => {
+  const ops = await opsOf(c);
+  const sub = c.req.query('subscription');
+  if (!sub) throw notFound('name a subscription: ?subscription=<id>');
+  const jobs = await ops.jobs(sub);
+  if (!jobs) throw noSuch();
+  return c.json({ jobs });
+});
+
+for (const step of ['ack', 'extend', 'done'] as const) {
+  eventRoutes.post(`/v1/events/jobs/:id/${step}`, async (c) => {
+    const ops = await opsOf(c);
+    const opts = step === 'done' ? await bodyOf(JobDoneBody, c) : {};
+    const job = await ops.jobStep(c.req.param('id'), step, opts);
+    if (!job) throw noJob();
+    return c.json({ job });
+  });
+}

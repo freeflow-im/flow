@@ -1,7 +1,11 @@
 // The event bus's log (docs/specs/platform.md §5.2): one append-only table per organization, in the Events object.
 // Publishers say who may read each event (`audience`); a read returns what follows a cursor that the reader may see.
 // It runs over any `SqlStorage`-shaped database, so tests can use node:sqlite. Presence and typing are never logged.
-import { formatReference, parseReference, type DeliveryMode, type EventFilter, type PlatformEvent, type SubscriptionDTO } from '@flow/shared';
+import {
+  formatReference, MAX_EVENT_DEPTH, parseReference, type AgentJobDTO, type AgentJobEventData, type DeliveryMode, type EventFilter,
+  type JobState, type PlatformEvent, type Reference, type ScheduleDTO, type SubscriptionAction, type SubscriptionDTO,
+} from '@flow/shared';
+import { nextScheduleAt } from './schedule';
 
 export interface Sql {
   exec(query: string, ...bindings: unknown[]): { toArray(): Record<string, unknown>[] };
@@ -47,7 +51,28 @@ export const RETENTION_ROWS = 200_000;
 export const SCAN_MAX = 5_000;
 const SCAN_BATCH = 500;
 
-export interface NewSubscription { name: string; consumer: string; owner: string; filter: EventFilter; delivery?: DeliveryMode; createdBy: string }
+export interface NewSubscription {
+  name: string; consumer: string; owner: string; filter: EventFilter; delivery?: DeliveryMode; createdBy: string;
+  action?: SubscriptionAction;
+  /** A schedule's subscription: its filter becomes the schedule's own ticks. Needs `organizationId`. */
+  schedule?: { every: string; timezone: string };
+  organizationId?: string;
+}
+/** A job's lease: an acked job is the agent's for this long, extended by `extend`. */
+export const JOB_LEASE_MS = 10 * 60_000;
+/** Deliveries past the first before a job nobody takes is parked. */
+export const JOB_MAX_ATTEMPTS = 3;
+/** How much of an event's data a prompt's `{{data}}` carries. */
+const DATA_MAX = 8_000;
+/** What a queue message's check of a job says to do: nothing more (`ack`), deliver again and check after `delayS`
+ * (`redeliver`), check again after `delayS` (`later`, a lease still running), or tell the owner (`parked`). */
+export type JobCheck =
+  | { kind: 'ack' }
+  | { kind: 'redeliver'; job: AgentJobDTO; delayS: number }
+  | { kind: 'later'; delayS: number }
+  | { kind: 'parked'; job: AgentJobDTO };
+/** What a matched action subscription should do with one event (`act`): file a job, post, or nothing (and why). */
+export type ActionDecision = { kind: 'wake' | 'post' } | { kind: 'skip'; why: 'self' | 'depth' };
 /** A subscription's read: `gap` when events after its cursor aged out of the window before it read them. */
 export interface SubscriptionRead { events: PlatformEvent[]; next: number; gap?: { from: number; to: number } }
 
@@ -61,6 +86,17 @@ export const EVENTS_MIGRATIONS: string[] = [
   `CREATE TABLE subscriptions (id TEXT PRIMARY KEY, name TEXT NOT NULL, consumer TEXT NOT NULL, owner TEXT NOT NULL, filter TEXT NOT NULL,
     delivery TEXT NOT NULL DEFAULT 'pull', cursor INTEGER NOT NULL DEFAULT 0, created_by TEXT NOT NULL, created_at INTEGER NOT NULL, parked_at INTEGER);
   CREATE INDEX subscriptions_consumer ON subscriptions (consumer);`,
+  `ALTER TABLE subscriptions ADD COLUMN action TEXT;
+  ALTER TABLE subscriptions ADD COLUMN capped_at INTEGER;
+  CREATE INDEX subscriptions_owner ON subscriptions (owner);
+  CREATE TABLE agent_jobs (id TEXT PRIMARY KEY, subscription_id TEXT NOT NULL, agent TEXT NOT NULL, event_id TEXT NOT NULL, event_seq INTEGER NOT NULL,
+    prompt TEXT NOT NULL, channel_id TEXT, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, lease_until INTEGER, note TEXT,
+    depth INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+  CREATE INDEX agent_jobs_subscription ON agent_jobs (subscription_id, created_at);
+  CREATE TABLE schedules (id TEXT PRIMARY KEY, subscription_id TEXT NOT NULL, every TEXT NOT NULL, timezone TEXT NOT NULL, next_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL);
+  CREATE INDEX schedules_next ON schedules (next_at);
+  CREATE INDEX schedules_subscription ON schedules (subscription_id);`,
 ];
 
 const AUDIENCE = /^(org|channel:.+|account:.+)$/;
@@ -135,27 +171,56 @@ export class EventsCore {
 
   // ---- subscriptions: durable consumers with a cursor (§5.2) ----------------------------------------------------------
 
-  /** A new subscription starts at the log's head: it sees only what happens after it. */
-  createSubscription(s: NewSubscription): SubscriptionDTO {
+  /**
+   * A new subscription starts at the log's head: it sees only what happens after it. With `schedule`, a schedule row is
+   * made and the filter is forced to that schedule's ticks (`schedule.tick` on `<org>/events/schedule/<id>`).
+   */
+  createSubscription(s: NewSubscription, now = Date.now()): SubscriptionDTO {
     const id = crypto.randomUUID();
-    this.sql.exec(
-      'INSERT INTO subscriptions (id, name, consumer, owner, filter, delivery, cursor, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      id, s.name, s.consumer, s.owner, JSON.stringify(s.filter ?? {}), s.delivery ?? 'pull', this.head(), s.createdBy, Date.now(),
-    );
-    return this.getSubscription(id)!;
+    let filter = s.filter ?? {};
+    return this.transact(() => {
+      if (s.schedule) {
+        const org = s.organizationId ?? this.organizationId();
+        if (!org) throw new Error('a schedule needs its organization');
+        const next = nextScheduleAt(s.schedule.every, s.schedule.timezone, now);
+        if (next === null) throw new Error(`bad schedule: ${s.schedule.every} in ${s.schedule.timezone}`);
+        const scheduleId = crypto.randomUUID();
+        filter = { types: ['schedule.tick'], ref: scheduleRef(org, scheduleId) };
+        this.sql.exec('INSERT INTO schedules (id, subscription_id, every, timezone, next_at, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+          scheduleId, id, s.schedule.every.trim(), s.schedule.timezone, next, now);
+      }
+      if (s.organizationId && !this.organizationId()) this.sql.exec('INSERT OR IGNORE INTO events_meta (key, value) VALUES (?, ?)', 'organization_id', s.organizationId);
+      this.sql.exec(
+        'INSERT INTO subscriptions (id, name, consumer, owner, filter, delivery, cursor, created_by, created_at, action) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        id, s.name, s.consumer, s.owner, JSON.stringify(filter), s.delivery ?? 'pull', this.head(), s.createdBy, now, s.action ? JSON.stringify(s.action) : null,
+      );
+      return this.getSubscription(id)!;
+    });
   }
 
-  listSubscriptions(consumer: string): SubscriptionDTO[] {
-    return this.sql.exec('SELECT * FROM subscriptions WHERE consumer = ? ORDER BY created_at, id', consumer).toArray().map(toSubscription);
+  /** The subscriptions an account consumes or owns (a sponsor's automations for its agent). */
+  listSubscriptions(account: string): SubscriptionDTO[] {
+    return this.sql.exec('SELECT * FROM subscriptions WHERE consumer = ? OR owner = ? ORDER BY created_at, id', account, account).toArray().map((r) => this.withSchedule(r));
   }
 
   getSubscription(id: string): SubscriptionDTO | null {
     const row = this.sql.exec('SELECT * FROM subscriptions WHERE id = ?', id).toArray()[0];
-    return row ? toSubscription(row) : null;
+    return row ? this.withSchedule(row) : null;
   }
 
+  /** The subscription, its schedule and its jobs. */
   deleteSubscription(id: string): boolean {
-    return this.sql.exec('DELETE FROM subscriptions WHERE id = ? RETURNING id', id).toArray().length > 0;
+    return this.transact(() => {
+      this.sql.exec('DELETE FROM schedules WHERE subscription_id = ?', id);
+      this.sql.exec('DELETE FROM agent_jobs WHERE subscription_id = ?', id);
+      return this.sql.exec('DELETE FROM subscriptions WHERE id = ? RETURNING id', id).toArray().length > 0;
+    });
+  }
+
+  private withSchedule(row: Record<string, unknown>): SubscriptionDTO {
+    const sub = toSubscription(row);
+    const sch = this.sql.exec('SELECT * FROM schedules WHERE subscription_id = ?', sub.id).toArray()[0];
+    return sch ? { ...sub, schedule: toSchedule(sch) } : sub;
   }
 
   /** Moves the cursor forward to `cursor` (never back, never past the head); the stored cursor, or null for no such subscription. */
@@ -210,6 +275,187 @@ export class EventsCore {
     });
   }
 
+  // ---- actions: `wake` files a job, `post` posts (§5.2, "Delivery modes") ---------------------------------------------
+
+  /** The unparked subscriptions with an action: what a publish acts on. */
+  actionSubscriptions(): SubscriptionDTO[] {
+    return this.sql.exec("SELECT * FROM subscriptions WHERE delivery IN ('wake', 'post') AND action IS NOT NULL AND parked_at IS NULL").toArray().map(toSubscription);
+  }
+
+  /** The events in `(after, through]` that match the subscription's filter, read as `reader` (its owner) may see them. */
+  matchingEvents(sub: SubscriptionDTO, after: number, through: number, reader: Reader): PlatformEvent[] {
+    const out: PlatformEvent[] = [];
+    let since = after;
+    while (since < through) {
+      const page = this.read({ ...queryOf(sub.filter, sub.owner), since, limit: READ_LIMIT_MAX }, reader);
+      for (const e of page.events) if (e.seq <= through) out.push(e);
+      if (page.next <= since || !page.events.length || page.next >= through) break;
+      since = page.next;
+    }
+    return out;
+  }
+
+  /** Loop safety: an event the consumer caused is skipped unless the action opts in; one at the depth cap always is. */
+  decide(sub: SubscriptionDTO, e: PlatformEvent): ActionDecision {
+    if (!sub.action) return { kind: 'skip', why: 'self' };
+    if ((e.depth ?? 0) >= MAX_EVENT_DEPTH) return { kind: 'skip', why: 'depth' };
+    if (e.actor && e.actor === sub.consumer && !sub.action.includeSelf) return { kind: 'skip', why: 'self' };
+    return { kind: sub.action.kind };
+  }
+
+  /** True the first time the subscription hits the depth cap, so its owner is told once. */
+  markCapped(id: string, now = Date.now()): boolean {
+    return this.sql.exec('UPDATE subscriptions SET capped_at = ? WHERE id = ? AND capped_at IS NULL RETURNING id', now, id).toArray().length > 0;
+  }
+
+  /** Moves an action subscription's cursor to what it has acted on. */
+  advance(id: string, through: number): void {
+    this.sql.exec('UPDATE subscriptions SET cursor = MAX(cursor, ?) WHERE id = ?', Math.min(through, this.head()), id);
+  }
+
+  /**
+   * A `wake` match: a job for the consumer with the rendered prompt, and its `agent.job` event on the agent's own account
+   * (`causedBy` the job, one deeper than the event), in one transaction. The job is `delivered` once its event is out.
+   */
+  wake(sub: SubscriptionDTO, e: PlatformEvent, now = Date.now()): { job: AgentJobDTO; published: { seq: number; id: string } } {
+    if (sub.action?.kind !== 'wake') throw new Error('not a wake subscription');
+    const action = sub.action;
+    return this.transact(() => {
+      const id = crypto.randomUUID();
+      const depth = (e.depth ?? 0) + 1;
+      this.sql.exec(
+        `INSERT INTO agent_jobs (id, subscription_id, agent, event_id, event_seq, prompt, channel_id, state, attempts, depth, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?)`,
+        id, sub.id, sub.consumer, e.id, e.seq, renderTemplate(action.prompt, e), action.channelId ?? null, depth, now, now,
+      );
+      const published = this.publishJob(this.getJob(id)!, e, now);
+      return { job: this.getJob(id)!, published };
+    });
+  }
+
+  /** The job's `agent.job` event (a new one on each delivery), and the job `delivered`. */
+  private publishJob(job: AgentJobDTO, trigger: Pick<PlatformEvent, 'id' | 'seq' | 'type' | 'ref' | 'channelId'> | null, now: number): { seq: number; id: string } {
+    const org = this.organizationId() ?? '';
+    const t = trigger ?? this.jobTrigger(job);
+    const data: AgentJobEventData = {
+      jobId: job.id, subscriptionId: job.subscriptionId, prompt: job.prompt, ...(job.channelId ? { channelId: job.channelId } : {}),
+      event: { id: t.id, seq: t.seq, type: t.type, ...(t.ref ? { ref: formatReference(t.ref) } : {}), ...(t.channelId ? { channelId: t.channelId } : {}) },
+    };
+    const out = this.publish({
+      type: 'agent.job', organizationId: org, actor: null, audience: `account:${job.agent}`, ref: { organizationId: org, app: 'events', kind: 'job', id: job.id },
+      causedBy: job.id, depth: job.depth, ts: new Date(now).toISOString(), data,
+    });
+    this.sql.exec("UPDATE agent_jobs SET state = 'delivered', lease_until = NULL, updated_at = ? WHERE id = ?", now, job.id);
+    return out;
+  }
+
+  /** The event that woke a job, as its first `agent.job` named it (the trigger itself may have aged out). */
+  private jobTrigger(job: AgentJobDTO): Pick<PlatformEvent, 'id' | 'seq' | 'type' | 'ref' | 'channelId'> {
+    const row = this.sql.exec("SELECT data FROM events WHERE type = 'agent.job' AND caused_by = ? ORDER BY seq LIMIT 1", job.id).toArray()[0];
+    const ev = row ? (JSON.parse(row.data as string) as AgentJobEventData).event : null;
+    const ref = ev?.ref ? parseReference(ev.ref) : null;
+    return { id: job.eventId, seq: job.eventSeq, type: ev?.type ?? 'unknown', ...(ref ? { ref } : {}), ...(ev?.channelId ? { channelId: ev.channelId } : {}) };
+  }
+
+  getJob(id: string): AgentJobDTO | null {
+    const row = this.sql.exec('SELECT * FROM agent_jobs WHERE id = ?', id).toArray()[0];
+    return row ? toJob(row) : null;
+  }
+
+  /** A subscription's last 50 jobs, newest first. */
+  listJobs(subscriptionId: string): AgentJobDTO[] {
+    return this.sql.exec('SELECT * FROM agent_jobs WHERE subscription_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 50', subscriptionId).toArray().map(toJob);
+  }
+
+  /** The depth an event caused during the job's turn should carry, less one: the `agent.job` event's. Null for no such job of `agent`'s. */
+  jobDepth(id: string, agent: string): number | null {
+    const row = this.sql.exec('SELECT depth FROM agent_jobs WHERE id = ? AND agent = ?', id, agent).toArray()[0];
+    return row ? (row.depth as number) : null;
+  }
+
+  /**
+   * The agent's side of a job: `ack` (delivered → running, under a lease), `extend` (the lease again from now), `done`
+   * (→ done, or failed when not `ok`). The job, or null for no such job of `agent`'s; `{ conflict }` when its state
+   * does not allow it.
+   */
+  jobStep(id: string, agent: string, step: 'ack' | 'extend' | 'done', opts: { ok?: boolean; note?: string } = {}, now = Date.now()): AgentJobDTO | { conflict: JobState } | null {
+    const job = this.getJob(id);
+    if (!job || job.agent !== agent) return null;
+    const lease = now + JOB_LEASE_MS;
+    if (step === 'ack') {
+      if (job.state === 'running') return job;
+      if (job.state !== 'delivered' && job.state !== 'queued') return { conflict: job.state };
+      this.sql.exec("UPDATE agent_jobs SET state = 'running', lease_until = ?, updated_at = ? WHERE id = ?", lease, now, id);
+    } else if (step === 'extend') {
+      if (job.state !== 'running') return { conflict: job.state };
+      this.sql.exec('UPDATE agent_jobs SET lease_until = ?, updated_at = ? WHERE id = ?', lease, now, id);
+    } else {
+      if (job.state === 'done' || job.state === 'failed') return job;
+      if (job.state === 'parked') return { conflict: job.state };
+      this.sql.exec('UPDATE agent_jobs SET state = ?, lease_until = NULL, note = ?, updated_at = ? WHERE id = ?',
+        opts.ok ? 'done' : 'failed', opts.note?.slice(0, 500) ?? null, now, id);
+    }
+    return this.getJob(id);
+  }
+
+  /**
+   * A queue message's check of a job (§5.2: "a lapsed lease retries, three failures park it"). A job closed or gone
+   * needs nothing; one running under its lease is checked again when the lease ends; one delivered and not acked, or
+   * whose lease lapsed, is delivered again (a new `agent.job` event, the same job) and checked after 120 s × attempts,
+   * or parked after JOB_MAX_ATTEMPTS.
+   */
+  checkJob(id: string, now = Date.now()): JobCheck {
+    return this.transact(() => {
+      const job = this.getJob(id);
+      if (!job || job.state === 'done' || job.state === 'failed' || job.state === 'parked') return { kind: 'ack' } as const;
+      if (job.state === 'running' && (job.leaseUntil ? Date.parse(job.leaseUntil) : 0) > now) {
+        return { kind: 'later', delayS: Math.ceil((Date.parse(job.leaseUntil!) - now) / 1000) + 1 } as const;
+      }
+      const why = job.state === 'running' ? 'its lease lapsed' : 'it was not acknowledged';
+      if (job.attempts >= JOB_MAX_ATTEMPTS) {
+        this.sql.exec("UPDATE agent_jobs SET state = 'parked', lease_until = NULL, note = ?, updated_at = ? WHERE id = ?",
+          `parked after ${job.attempts + 1} deliveries: ${why}`, now, id);
+        return { kind: 'parked', job: this.getJob(id)! } as const;
+      }
+      const attempts = job.attempts + 1;
+      this.sql.exec('UPDATE agent_jobs SET attempts = ?, note = ?, updated_at = ? WHERE id = ?', attempts, `delivered again: ${why}`, now, id);
+      this.publishJob(this.getJob(id)!, null, now);
+      return { kind: 'redeliver', job: this.getJob(id)!, delayS: 120 * attempts } as const;
+    });
+  }
+
+  // ---- schedules: `schedule.tick` from the alarm (§5.2) ---------------------------------------------------------------
+
+  /** The soonest a schedule is due, or null for none. */
+  nextScheduleAt(): number | null {
+    return (this.sql.exec('SELECT MIN(next_at) AS n FROM schedules').toArray()[0]!.n as number | null) ?? null;
+  }
+
+  /**
+   * One `schedule.tick` per schedule due by `now`, on its owner's account, and each schedule's next instant from now (a
+   * schedule that missed several fires once). Returns what was published, in order.
+   */
+  tickSchedules(now = Date.now()): { seq: number; id: string }[] {
+    return this.transact(() => {
+      const org = this.organizationId() ?? '';
+      const due = this.sql.exec(
+        'SELECT s.*, u.owner FROM schedules s JOIN subscriptions u ON u.id = s.subscription_id WHERE s.next_at <= ? ORDER BY s.next_at, s.id', now,
+      ).toArray();
+      const out: { seq: number; id: string }[] = [];
+      for (const r of due) {
+        const at = r.next_at as number;
+        out.push(this.publish({
+          type: 'schedule.tick', organizationId: org, actor: null, audience: `account:${r.owner as string}`, ref: scheduleRef(org, r.id as string),
+          ts: new Date(now).toISOString(), data: { scheduleId: r.id, subscriptionId: r.subscription_id, every: r.every, timezone: r.timezone, at: new Date(at).toISOString() },
+        }));
+        const next = nextScheduleAt(r.every as string, r.timezone as string, Math.max(now, at));
+        if (next === null) this.sql.exec('DELETE FROM schedules WHERE id = ?', r.id);
+        else this.sql.exec('UPDATE schedules SET next_at = ? WHERE id = ?', next, r.id);
+      }
+      return out;
+    });
+  }
+
   stats(): EventStats {
     const r = this.sql.exec('SELECT COUNT(*) AS count, MIN(seq) AS first, MAX(seq) AS last, MIN(ts) AS oldest FROM events').toArray()[0]!;
     return { count: r.count as number, first: (r.first as number | null) ?? null, last: (r.last as number | null) ?? null, oldestTs: r.oldest == null ? null : new Date(r.oldest as number).toISOString() };
@@ -228,13 +474,34 @@ export class EventsCore {
     return { aged, capped };
   }
 
-  private organizationId(): string | null {
+  organizationId(): string | null {
     return this.meta('organization_id');
   }
 
-  private meta(key: string): string | null {
+  meta(key: string): string | null {
     return (this.sql.exec('SELECT value FROM events_meta WHERE key = ?', key).toArray()[0]?.value as string | undefined) ?? null;
   }
+
+  setMeta(key: string, value: string): void {
+    this.sql.exec('INSERT INTO events_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', key, value);
+  }
+}
+
+/** A schedule's reference, which its ticks carry and its subscription's filter names. */
+export function scheduleRef(organizationId: string, scheduleId: string): Reference {
+  return { organizationId, app: 'events', kind: 'schedule', id: scheduleId };
+}
+
+/** A prompt or a post's body with the event's `{{type}}`, `{{ref}}`, `{{channel}}`, `{{actor}}` and `{{data}}` (JSON). */
+export function renderTemplate(template: string, e: PlatformEvent): string {
+  return template.replace(/\{\{\s*(type|ref|channel|actor|data)\s*\}\}/g, (_m, k: string) => {
+    if (k === 'type') return e.type;
+    if (k === 'ref') return e.ref ? formatReference(e.ref) : '';
+    if (k === 'channel') return e.channelId ?? '';
+    if (k === 'actor') return e.actor ?? '';
+    const data = JSON.stringify(e.data ?? null);
+    return data.length > DATA_MAX ? `${data.slice(0, DATA_MAX)}…` : data;
+  });
 }
 
 /** A query's filters as SQL (` AND ...`, or empty) and its bindings. */
@@ -269,12 +536,28 @@ function toEvent(r: Record<string, unknown>, organizationId: string): PlatformEv
   };
 }
 
+function toSchedule(r: Record<string, unknown>): ScheduleDTO {
+  return { id: r.id as string, every: r.every as string, timezone: r.timezone as string, nextAt: new Date(r.next_at as number).toISOString() };
+}
+
+function toJob(r: Record<string, unknown>): AgentJobDTO {
+  return {
+    id: r.id as string, subscriptionId: r.subscription_id as string, agent: r.agent as string, eventId: r.event_id as string,
+    eventSeq: r.event_seq as number, prompt: r.prompt as string, ...(r.channel_id ? { channelId: r.channel_id as string } : {}),
+    state: r.state as JobState, attempts: r.attempts as number,
+    ...(r.lease_until != null ? { leaseUntil: new Date(r.lease_until as number).toISOString() } : {}),
+    ...(r.note ? { note: r.note as string } : {}), depth: r.depth as number,
+    createdAt: new Date(r.created_at as number).toISOString(), updatedAt: new Date(r.updated_at as number).toISOString(),
+  };
+}
+
 function toSubscription(r: Record<string, unknown>): SubscriptionDTO {
   return {
     id: r.id as string, name: r.name as string, consumer: r.consumer as string, owner: r.owner as string,
     filter: JSON.parse(r.filter as string) as EventFilter, delivery: r.delivery as DeliveryMode, cursor: r.cursor as number,
     createdBy: r.created_by as string, createdAt: new Date(r.created_at as number).toISOString(),
     ...(r.parked_at != null ? { parkedAt: new Date(r.parked_at as number).toISOString() } : {}),
+    ...(r.action ? { action: JSON.parse(r.action as string) as SubscriptionAction } : {}),
   };
 }
 
