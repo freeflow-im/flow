@@ -15,6 +15,11 @@ export const APP_MANIFESTS: AppManifest[] = [
     object: { className: 'Org', migrationTag: 'v1' },
     routes: 'org',
     kinds: [{ kind: 'channel', container: true }, { kind: 'message' }, { kind: 'artifact' }, { kind: 'file' }],
+    // Its tools, by name (their definitions: @flow/shared/tools, platform.md §5.4).
+    tools: [
+      'send_message', 'react', 'upload_file', 'search_history', 'list_channels', 'list_users', 'join_channel', 'set_channel_indicator', 'set_channel_emoji', 'leave_channel', 'create_channel', 'start_task',
+      'invite_to_channel', 'set_avatar', 'create_artifact', 'deliver_artifact', 'update_artifact', 'delete_artifact', 'list_artifacts', 'read_messages', 'download_file',
+    ],
     tab: { label: 'Chat', shortcut: '2', badge: 'chat-unread' },
     client: { dist: 'packages/web/dist', basePath: '/' },
     // Every other address (a channel, a thread, a settings tab): it routes in the browser. Registered last.
@@ -47,6 +52,16 @@ export const APP_MANIFESTS: AppManifest[] = [
     object: { className: 'Docs', migrationTag: 'v2' },
     routes: 'docs',
     kinds: [{ kind: 'folder', container: true }, { kind: 'sheet' }, { kind: 'file' }],
+    // Its tools, by name (their definitions: @flow/shared/tools, platform.md §5.4).
+    tools: [
+      'list_files', 'search_files', 'get_profile', 'create_doc', 'create_deck', 'create_sheet', 'import_file', 'open_file', 'view_image', 'create_folder', 'move_file', 'upload_file', 'read_file',
+      'edit_file', 'convert_pdf_to_markdown', 'export_pdf', 'transform_image', 'rename_file', 'delete_file', 'read_doc', 'get_doc_info', 'insert_content', 'replace_blocks', 'delete_blocks', 'replace_text',
+      'format_text', 'format_blocks', 'insert_image', 'set_doc_style', 'set_page_setup', 'read_deck', 'add_slides', 'update_slide', 'edit_elements', 'delete_slides', 'move_slide', 'set_deck_theme',
+      'get_sheet_overview', 'read_range', 'write_range', 'clear_range', 'format_range', 'insert_rows', 'delete_rows', 'insert_columns', 'delete_columns', 'move_columns', 'sort_range', 'set_cell_image',
+      'set_cell_link', 'set_filter', 'set_filter_criteria', 'set_column_width', 'set_row_height', 'freeze', 'add_chart', 'edit_chart', 'delete_chart', 'add_tab', 'rename_tab', 'delete_tab', 'select_range',
+      'open_sheet', 'open_deck', 'render_slide', 'export_deck', 'convert_pdf', 'edit_image', 'open_doc', 'request_app_change', 'request_research', 'list_sheets', 'read_other_sheet', 'list_decks',
+      'list_docs', 'read_other_doc', 'list_connections', 'fetch_connector_data', 'ingest_connector_data', 'web_search', 'image_search',
+    ],
     scopes: [
       {
         id: 'docs',
@@ -77,6 +92,11 @@ export const APP_MANIFESTS: AppManifest[] = [
     object: { className: 'Mail', migrationTag: 'v4' },
     routes: 'mail',
     kinds: [{ kind: 'message' }],
+    // Its tools, by name (their definitions: @flow/shared/tools, platform.md §5.4).
+    tools: [
+      'list_mail_accounts', 'list_mail_folders', 'search_mail', 'read_mail', 'save_mail_attachment_to_docs', 'mark_mail', 'move_mail', 'archive_mail', 'move_mail_to_tab', 'trash_mail', 'create_mail_draft',
+      'send_mail', 'open_mail_message', 'list_mail',
+    ],
     scopes: [
       {
         id: 'mail',
@@ -111,6 +131,11 @@ export const APP_MANIFESTS: AppManifest[] = [
     object: { className: 'Calendar', migrationTag: 'v5' },
     routes: 'calendar',
     kinds: [{ kind: 'calendar', container: true }, { kind: 'event' }],
+    // Its tools, by name (their definitions: @flow/shared/tools, platform.md §5.4).
+    tools: [
+      'list_calendars', 'list_shared_calendars', 'list_events', 'get_event', 'find_free_time', 'create_event', 'update_event', 'delete_event', 'respond_to_event', 'share_calendar', 'unshare_calendar',
+      'open_calendar_event', 'show_calendar_range', 'list_my_events',
+    ],
     scopes: [
       {
         id: 'calendar',
@@ -135,6 +160,10 @@ export const APP_MANIFESTS: AppManifest[] = [
     object: { className: 'Events', migrationTag: 'v6' },
     routes: 'events',
     kinds: [],
+    // Its tools, by name (their definitions: @flow/shared/tools, platform.md §5.4).
+    tools: [
+      'list_subscriptions', 'create_subscription', 'read_events', 'ack_events', 'list_jobs',
+    ],
     scopes: [
       {
         id: 'events',

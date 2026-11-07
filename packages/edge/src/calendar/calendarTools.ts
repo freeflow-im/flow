@@ -11,6 +11,7 @@
 // Which tools a token gets is its scopes' (`calendarToolsFor`): calendar:read lists, reads and finds free time;
 // calendar:write creates, changes, deletes, answers invitations and shares calendars. A tool the scopes do not allow is not listed.
 import { z } from 'zod4';
+import { register } from '../registry';
 import type { CalendarAccount, CalendarInfo } from './object';
 import type { EventOccurrence } from './store';
 import { nativeOwnerOf } from './rules';
@@ -585,4 +586,21 @@ export function assistantCalendarSchemas(): Record<string, z.ZodObject> {
 export async function runAssistantCalendarTool(name: string, input: Record<string, unknown>, ctx: CalendarToolContext): Promise<Record<string, unknown>> {
   if (!(ASSISTANT_CALENDAR_TOOLS as readonly string[]).includes(name) || name === 'delete_event') throw new CalendarToolError(`The assistant has no server tool ${name}.`);
   return CALENDAR_TOOLS.find((t) => t.name === name)!.run(ctx, input);
+}
+
+// The registry (platform.md §5.4): each Calendar tool, at /mcp and in the assistant (where delete_event is a browser tool
+// instead), on the Calendar object of the caller's account.
+for (const t of CALENDAR_TOOLS) {
+  register<{ calendar?: CalendarToolContext }>('calendar', t.name, {
+    run: (ctx, input) => {
+      if (!ctx.calendar) throw new CalendarToolError('Calendar is not available here.');
+      return t.run(ctx.calendar, input);
+    },
+    shape: t.shape,
+    title: t.title,
+    annotations: t.annotations,
+    refusal: (e) => e instanceof CalendarToolError,
+    failure: () => 'The calendar could not do that just now. Try again in a moment.',
+    needs: 'calendar',
+  }, (ASSISTANT_CALENDAR_TOOLS as readonly string[]).includes(t.name) && t.name !== 'delete_event' ? ['mcp', 'assistant'] : ['mcp']);
 }

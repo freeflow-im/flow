@@ -1,6 +1,6 @@
 // The assistant in Calendar, its pure parts: what each turn says the user is looking at (the `calendar` context), the
-// browser tools Calendar runs (open_calendar_event, show_calendar_range, and delete_event after the user confirms; Docs'
-// own are refused), and what the chat links to (an event the assistant made or changed). The panel is
+// browser tools Calendar runs (open_calendar_event, show_calendar_range, and delete_event after the user confirms; the
+// server offers no other app's), and what the chat links to (an event the assistant made or changed). The panel is
 // components/AssistantPanel.tsx, the turns hooks/assistant.ts.
 import type { CalendarAccount, CalendarInfo, EventOccurrence, Scope } from '../api';
 import { MAX_CALENDARS_SHOWN, type CalendarContext, type ChatItem, type ClientToolCall, type ClientToolResult } from './docsAgent';
@@ -105,7 +105,7 @@ export interface CalendarClientHandlers {
   summaryOf(id: string): string | null;
 }
 
-/** Runs the browser tools the assistant asked for, in Calendar; the tools of a file open in Docs cannot run here, and say so. */
+/** Runs the browser tools the assistant asked for, in Calendar: the server offers a turn from Calendar only Calendar's (the tool registry, platform.md §5.4). */
 export async function runCalendarClientCalls(calls: ClientToolCall[], h: CalendarClientHandlers): Promise<ClientToolResult[]> {
   const results: ClientToolResult[] = [];
   for (const call of calls) {
@@ -130,7 +130,7 @@ export async function runCalendarClientCalls(calls: ClientToolCall[], h: Calenda
           results.push({ id: call.id, content: JSON.stringify({ deleted: id, ...(scope ? { scope } : {}) }) });
         }
       } else {
-        results.push({ id: call.id, content: `${call.name} works on a file open in FreeFlow Docs, and the user is in Calendar. Use the Calendar tools, or the tools that read and make files by id (list_docs, read_other_doc, create_doc and the like), or give the user a link to open the file in Docs.`, isError: true });
+        results.push({ id: call.id, content: `Unknown tool ${call.name}.`, isError: true });
       }
     } catch (e) {
       results.push({ id: call.id, content: e instanceof Error ? e.message : String(e), isError: true });

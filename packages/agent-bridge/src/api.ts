@@ -137,6 +137,11 @@ export class FlowApi {
     return this.req('GET', '/v1/me');
   }
 
+  /** The suite's tool definitions for a door (the registry, platform.md §5.4); an older server answers 404. */
+  tools(door: 'bridge'): Promise<{ tools: { name: string; description: string; input: Record<string, unknown> }[] }> {
+    return this.req('GET', `/v1/tools?door=${door}`);
+  }
+
   // ---- the event bus's subscriptions (platform.md §5.2), as the agent's account in one organization ----
 
   async listSubscriptions(workspaceId: string): Promise<SubscriptionDTO[]> {

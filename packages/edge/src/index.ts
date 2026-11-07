@@ -17,6 +17,7 @@ import { mailRoutes } from './routes/mail';
 import { calendarRoutes } from './routes/calendar';
 import { mcpRoutes } from './routes/mcp';
 import { eventRoutes } from './routes/events';
+import { toolRoutes } from './routes/tools';
 
 export { Directory } from './directory/object';
 export { Org } from './org/object';
@@ -98,6 +99,7 @@ ported.route('/', helpRoutes as never);
 ported.route('/', mailRoutes as never);
 ported.route('/', calendarRoutes as never);
 ported.route('/', eventRoutes as never);
+ported.route('/', toolRoutes as never);
 ported.route('/', domainRoutes as never);
 ported.route('/', provisioningRoutes as never);
 ported.route('/', orgRoutes as never);

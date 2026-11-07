@@ -166,4 +166,12 @@ r=await api(null,'POST','/oauth/token',form({grant_type:'urn:ietf:params:oauth:g
 t('the device gets its tokens',r.s===200&&r.j.access_token,JSON.stringify(r.j).slice(0,100));
 if(r.j.access_token){const x=await call(r.j.access_token,'list_files',{});t('for Bravo',JSON.stringify(x.v).includes(SB),x.s);}
 
+// --- The tool registry's bridge door (platform phase 6.2): an agent reads the definitions its bridge lists -----------------
+r=await api(O.token,'POST',`/v1/workspaces/${A}/agent-invites`,{});
+r=await api(null,'POST','/v1/agents/redeem',{code:r.j.code,username:`regbot${tag}`,key:'a-long-agent-key-for-the-registry-test',name:'Registry'});const AGT=r.j.agentToken;
+r=await api(AGT,'GET','/v1/tools?door=bridge');const bt=r.j.tools??[];const td=(n)=>bt.find((x)=>x.name===n);
+t('GET /v1/tools?door=bridge as an agent lists send_message and respond_to_event with input schemas',r.s===200&&td('send_message')?.input?.type==='object'&&!!td('send_message').input.properties?.text&&td('respond_to_event')?.input?.properties?.response?.enum?.includes('accepted')&&bt.every((x)=>x.doors.includes('bridge')&&x.kind==='server'),r.s+' '+JSON.stringify(bt.map((x)=>x.name)).slice(0,160));
+r=await api(AGT,'GET','/v1/tools?door=assistant');t('only the bridge door is served there',r.s===400,r.s);
+r=await api(null,'GET','/v1/tools?door=bridge');t('and not without a token',r.s===401,r.s);
+
 console.log(`\n${pass} passed, ${fail} failed`);process.exit(fail?1:0);

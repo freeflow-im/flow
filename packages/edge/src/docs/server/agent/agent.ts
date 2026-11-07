@@ -3,7 +3,7 @@
 // the browser. Account tools run here; sheet tools run in the browser against the live spreadsheet,
 // so when Claude calls one the turn pauses: the browser runs it and posts the results to resume.
 import Anthropic from '@anthropic-ai/sdk';
-import { chatScope, CLIENT_TOOLS, HOME_CHAT, IMAGE_MEDIA_TYPES, isChatScope, MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE, type AgentEvent, type AgentImage, type AgentTurnRequest, type ChatItem, type ClientToolCall, SHOWN_RESULTS } from '../../shared/agent/protocol.ts';
+import { chatScope, HOME_CHAT, IMAGE_MEDIA_TYPES, isChatScope, MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE, type AgentEvent, type AgentImage, type AgentTurnRequest, type ChatItem, type ClientToolCall, SHOWN_RESULTS } from '../../shared/agent/protocol.ts';
 import { STORED_IMAGE_RE } from '../../shared/types.ts';
 import type { SheetStore } from '../sheets.ts';
 import { providerSearch, type ProviderSearch } from './llmSearch.ts';
@@ -15,7 +15,7 @@ import { AgentNotFoundError, type ClaudeAgentDriver } from './claudeAgent.ts';
 import type { FileStore } from '../files.ts';
 import type { ImageStore } from '../images.ts';
 import type { PdfMaker } from '../pdf.ts';
-import { runServerTool, TOOL_DEFS, TOOL_DEFS_WITHOUT_JOBS, ToolFailure, validateToolInput } from './tools.ts';
+import { assistantTools, isBrowserTool, runServerTool, ToolFailure, validateToolInput } from './tools.ts';
 import { scopeOf, type ScopeArg, type ViewerArg } from '../scope.ts';
 
 type Message = Anthropic.Beta.BetaMessage;
@@ -240,7 +240,7 @@ export class AgentService {
             fallbacks: 'default',
             output_config: { effort: EFFORT },
             system: [{ type: 'text', text: this.jobs ? SYSTEM_PROMPT : PROMPT_WITHOUT_JOBS }],
-            tools: this.jobs ? TOOL_DEFS : TOOL_DEFS_WITHOUT_JOBS,
+            tools: assistantTools(req.context, !!this.jobs),
             // Caches the whole prefix up to the latest message; each turn reads the previous one's cache.
             cache_control: { type: 'ephemeral' },
             messages: this.store.messages(conv.id),
@@ -274,10 +274,10 @@ export class AgentService {
           pending.results[tu.id] = errorResult(tu.id, 'Your response was cut off before this tool input was complete. Try again with less data per call.');
           continue;
         }
-        const v = validateToolInput(tu.name, tu.input);
+        const v = validateToolInput(tu.name, tu.input, req.context);
         if (!v.ok) {
           pending.results[tu.id] = errorResult(tu.id, v.error);
-        } else if (CLIENT_TOOLS.has(tu.name)) {
+        } else if (isBrowserTool(tu.name)) {
           clientCalls.push({ id: tu.id, name: tu.name, input: v.input });
           pending.clientIds.push(tu.id);
         } else {

@@ -5,6 +5,11 @@ Docs files people see in FreeFlow Docs at `/workspace`. Built 2026-11-03 on the 
 plugin's `/mcp` on `docs.freeflow.im` and `mcpdocs.freeflow.im` is a different server and stays on AWS
 (decision_log 2026-11-03).
 
+The tools each door lists come from the suite's tool registry (platform.md §5.4, phase 6.2): the definitions are
+`@flow/shared/tools` (`TOOL_DEFINITIONS`, written from the implementations by `packages/edge/src/registry/registry.test.ts`),
+and `toolsFor` in `packages/edge/src/registry` gives `/mcp` the server tools whose scopes the token has, the assistant every
+server tool plus the open app's browser tools, and the bridge its definitions over `GET /v1/tools?door=bridge`.
+
 ## OAuth, with the organization chosen on consent
 
 Authorization happens before an organization is known, so its state lives in the **directory object**, not in a Docs

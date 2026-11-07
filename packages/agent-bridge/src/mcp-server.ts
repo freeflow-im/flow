@@ -21,6 +21,7 @@ import { attachmentFilename, formatAttachments } from './attachments.js';
 import { deliverArtifact, deliveryId, inlineArtifactFile } from './artifact-delivery.js';
 import { CALENDAR_TOOLS, CALENDAR_TOOL_NAMES, calendarTool } from './calendar-tools.js';
 import { MAIL_TOOLS, MAIL_TOOL_NAMES, mailTool } from './mail-tools.js';
+import { loadToolList, type McpToolEntry } from './tool-list.js';
 
 interface JsonRpcRequest {
   jsonrpc: '2.0';
@@ -79,7 +80,8 @@ export function resolveMessageTarget(
   return { channelId: ambient.channelId, threadRootId: ambient.threadRootId };
 }
 
-const TOOLS = [
+/** The tools this bridge implements, as it lists them when the server has no tool registry (tool-list.ts). */
+export const BUILT_IN_TOOLS: McpToolEntry[] = [
   {
     name: 'send_message',
     description:
@@ -532,6 +534,8 @@ export async function runMcpServer(): Promise<void> {
     }
   };
   const api = new FlowApi(serverUrl, token, jobHeader);
+  // The list comes from the server's tool registry when it has one; tools/list waits for it.
+  const toolList = loadToolList(api, BUILT_IN_TOOLS, (line) => process.stderr.write(`${line}\n`));
 
   const write = (msg: unknown): void => {
     process.stdout.write(`${JSON.stringify(msg)}\n`);
@@ -912,7 +916,7 @@ export async function runMcpServer(): Promise<void> {
           case 'ping':
             return reply(id, {});
           case 'tools/list':
-            return reply(id, { tools: TOOLS });
+            return reply(id, { tools: await toolList });
           case 'tools/call': {
             const name = String(req.params?.name ?? '');
             const args = (req.params?.arguments ?? {}) as Record<string, unknown>;

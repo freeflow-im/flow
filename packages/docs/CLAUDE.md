@@ -91,6 +91,9 @@ touches these places:
    (server tools) that calls the tool and checks the workbook.
 6. **Prompt** — only if Claude needs guidance on when to use the tool, add a line to `SYSTEM_PROMPT` in
    `server/agent/prompt.ts`. Keep the prompt free of anything that changes between requests.
+7. **Hosted suite** — the Worker's copy (`packages/edge/src/docs`) lists the assistant's tools from the suite's tool
+   registry: after copying the change there, write the definitions again with
+   `UPDATE_TOOL_DEFINITIONS=1 pnpm --filter @flow/edge exec vitest run src/registry` and rebuild `@flow/shared`.
 
 Workbook model reminders (`shared/types.ts`): tabs hold sparse `cells` keyed by A1 address; `Tab.filter` is
 a `FilterState` with the filtered range and per-column criteria keyed by absolute column index (`hidden`

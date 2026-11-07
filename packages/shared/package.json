@@ -17,6 +17,10 @@
     "./manifests": {
       "types": "./dist/manifests.d.ts",
       "import": "./dist/manifests.js"
+    },
+    "./tools": {
+      "types": "./dist/tools.d.ts",
+      "import": "./dist/tools.js"
     }
   },
   "scripts": {

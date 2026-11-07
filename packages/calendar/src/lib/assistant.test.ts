@@ -56,12 +56,12 @@ describe('the browser tools in Calendar', () => {
     expect(done).toEqual(['open work:u1', 'show week 2026-11-09', 'ask Delete “Stakeholder Sync” from your calendar?', 'delete work:u1 this']);
   });
 
-  it('keeps the event when the user says no, and refuses what is not Calendar\'s', async () => {
+  it('keeps the event when the user says no, and answers what is not Calendar\'s as unknown', async () => {
     const { h, done } = handlers({ confirm: async () => false });
     const r = await runCalendarClientCalls([call('delete_event', { id: 'work:u1', scope: 'all' }), call('open_calendar_event', { id: 'elsewhere:x' }), call('write_range', {}), call('show_calendar_range', { from: 'soon' })], h);
     expect(r.map((x) => x.isError)).toEqual([true, true, true, true]);
     expect(r[0]!.content).toMatch(/chose not to delete/);
-    expect(r[2]!.content).toMatch(/user is in Calendar/);
+    expect(r[2]!.content).toBe('Unknown tool write_range.');
     expect(done).toEqual(['open elsewhere:x']);
     const failing = handlers({ remove: async () => { throw new Error('The event changed on the server'); } });
     expect((await runCalendarClientCalls([call('delete_event', { id: 'work:u1' })], failing.h))[0]).toMatchObject({ isError: true, content: 'The event changed on the server' });

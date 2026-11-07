@@ -292,6 +292,7 @@ export interface AppManifest {
   /** Its Hono module, `src/routes/<routes>.ts` in the Worker. */
   routes?: string;
   kinds: { kind: string; container?: boolean }[];
+  /** Its tools, by name: their definitions are @flow/shared/tools' TOOL_DEFINITIONS (§5.4). */
   tools?: string[];
   /** The consent page's groups for its scopes, in the order the page lists them. */
   scopes?: AppScopeGroup[];

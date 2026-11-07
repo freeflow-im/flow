@@ -9,9 +9,10 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { docsContext } from '../../runtime/context.ts';
 import { FileHub, importLimit, ToolError, type FileHubOptions } from './files.ts';
 import { createMcpServer, instructionsFor, MCP_VERSIONS, serverInfo, type McpVersion } from './mcp.ts';
-import { MAIL_INSTRUCTIONS, MailToolError, mailToolsFor, type MailFetch, type MailTool, type MailToolContext } from '../../../imap/mailTools.ts';
-import { CALENDAR_INSTRUCTIONS, CalendarToolError, calendarToolsFor, type CalendarFetch, type CalendarTool, type CalendarToolContext } from '../../../calendar/calendarTools.ts';
-import { EVENT_INSTRUCTIONS, EventToolError, eventToolsFor, type EventTool, type EventToolContext } from '../../../events/eventTools.ts';
+import { MAIL_INSTRUCTIONS, type MailFetch, type MailToolContext } from '../../../imap/mailTools.ts';
+import { CALENDAR_INSTRUCTIONS, type CalendarFetch, type CalendarToolContext } from '../../../calendar/calendarTools.ts';
+import { EVENT_INSTRUCTIONS, type EventToolContext } from '../../../events/eventTools.ts';
+import { toolsFor, type DoorTool } from '../../../registry';
 import type { SubscriptionOps } from '../../../events/subscriptions.ts';
 import { adaptTransport, discoverResult, isDiscover, SDK_VERSION, STATELESS_VERSION } from './stateless.ts';
 
@@ -83,11 +84,17 @@ export function suiteHub(opts: FileHubOptions, appUrl: string): FileHub {
   return hub;
 }
 
-/** What a token's scopes allow on /mcp: Docs' files (to read only, or to change too), the Mail, Calendar and event tools. */
-export function mcpAccess(scope: string, mailAvailable: boolean, calendarAvailable = false, eventsAvailable = false): { files: 'none' | 'read' | 'write'; mail: MailTool[]; calendar: CalendarTool[]; events: EventTool[] } {
+/**
+ * What a token's scopes allow on /mcp, from the registry (platform.md §5.4): Docs' tools (to read only, or to change too),
+ * and the Mail, Calendar and event tools the Worker can reach for this caller.
+ */
+export function mcpAccess(scope: string, mailAvailable: boolean, calendarAvailable = false, eventsAvailable = false): { files: 'none' | 'read' | 'write'; docs: Set<string>; mail: DoorTool[]; calendar: DoorTool[]; events: DoorTool[] } {
   const scopes = scope.split(' ').filter(Boolean);
   const files = scopes.includes('files:write') ? 'write' : scopes.includes('files:read') ? 'read' : 'none';
-  return { files, mail: mailAvailable ? mailToolsFor(scopes) : [], calendar: calendarAvailable ? calendarToolsFor(scopes) : [], events: eventsAvailable ? eventToolsFor(scopes) : [] };
+  const reach = { ...(mailAvailable ? { mail: true } : {}), ...(calendarAvailable ? { calendar: true } : {}), ...(eventsAvailable ? { events: true } : {}) };
+  const tools = toolsFor('mcp', { scopes, reach });
+  const of = (app: string) => tools.filter((t) => t.definition.app === app);
+  return { files, docs: new Set(of('docs').map((t) => t.definition.name)), mail: of('mail'), calendar: of('calendar'), events: of('events') };
 }
 
 /** The server's instructions for what the token can use: Docs' (when it has files), then Mail's, Calendar's and Events' (when it has them). */
@@ -97,46 +104,17 @@ export const suiteInstructions = (version: McpVersion, access: ReturnType<typeof
 const toolResult = (data: Record<string, unknown>) => ({ content: [{ type: 'text' as const, text: JSON.stringify(data) }], structuredContent: data });
 const toolError = (message: string) => ({ content: [{ type: 'text' as const, text: message }], isError: true });
 
-/** The Mail tools on an MCP server, each acting on the caller's own Mail object. */
-function registerMailTools(mcp: ReturnType<typeof createMcpServer>, tools: MailTool[], ctx: MailToolContext): void {
-  for (const tool of tools) {
-    mcp.registerTool(tool.name, { title: tool.title, description: tool.description, inputSchema: tool.shape as never, annotations: tool.annotations }, (async (args: Record<string, unknown>) => {
+/** The registry's tools that run in the Worker (Mail's, Calendar's, Events'), on an MCP server, each with the caller's own objects. */
+function registerTools(mcp: ReturnType<typeof createMcpServer>, tools: DoorTool[], ctx: { mail?: MailToolContext; calendar?: CalendarToolContext; events?: EventToolContext }): void {
+  for (const { definition, runner } of tools) {
+    if (!runner) continue;
+    mcp.registerTool(definition.name, { title: runner.title, description: definition.description, inputSchema: runner.shape as never, annotations: runner.annotations as never }, (async (args: Record<string, unknown>) => {
       try {
-        return toolResult(await tool.run(ctx, args ?? {}));
+        return toolResult((await runner.run(ctx as never, args ?? {})) as Record<string, unknown>);
       } catch (e) {
-        if (e instanceof MailToolError) return toolError(e.message);
-        console.error(`mcp ${tool.name}: ${(e as Error).message}`);
-        return toolError('The mail server could not do that just now. Try again in a moment.');
-      }
-    }) as never);
-  }
-}
-
-/** The Calendar tools on an MCP server, each acting on the caller's own Calendar object. */
-function registerCalendarTools(mcp: ReturnType<typeof createMcpServer>, tools: CalendarTool[], ctx: CalendarToolContext): void {
-  for (const tool of tools) {
-    mcp.registerTool(tool.name, { title: tool.title, description: tool.description, inputSchema: tool.shape as never, annotations: tool.annotations }, (async (args: Record<string, unknown>) => {
-      try {
-        return toolResult(await tool.run(ctx, args ?? {}));
-      } catch (e) {
-        if (e instanceof CalendarToolError) return toolError(e.message);
-        console.error(`mcp ${tool.name}: ${(e as Error).message}`);
-        return toolError('The calendar could not do that just now. Try again in a moment.');
-      }
-    }) as never);
-  }
-}
-
-/** The event tools on an MCP server, as the caller's account in the organization. */
-function registerEventTools(mcp: ReturnType<typeof createMcpServer>, tools: EventTool[], ctx: EventToolContext): void {
-  for (const tool of tools) {
-    mcp.registerTool(tool.name, { title: tool.title, description: tool.description, inputSchema: tool.shape as never, annotations: tool.annotations }, (async (args: Record<string, unknown>) => {
-      try {
-        return toolResult(await tool.run(ctx, args ?? {}));
-      } catch (e) {
-        if (e instanceof EventToolError) return toolError(e.message);
-        console.error(`mcp ${tool.name}: ${(e as Error).message}`);
-        return toolError((e as { status?: number }).status === 403 ? 'This account cannot read events in this organization.' : 'The event log could not do that just now. Try again in a moment.');
+        if (runner.refusal?.(e)) return toolError((e as Error).message);
+        console.error(`mcp ${definition.name}: ${(e as Error).message}`);
+        return toolError(runner.failure?.(e) ?? 'That could not be done just now. Try again in a moment.');
       }
     }) as never);
   }
@@ -177,23 +155,26 @@ export async function handleMcp(request: Request, hub: FileHub, caller: McpReque
     appUrl,
     instructions,
   });
-  // A token without files:write gets the Docs tools that only read; one without files:read either, none of them.
-  if (access.files !== 'write') {
-    const tools = (mcp as unknown as { _registeredTools: Record<string, { annotations?: { readOnlyHint?: boolean }; remove(): void }> })._registeredTools;
-    for (const tool of Object.values(tools)) if (access.files === 'none' || tool.annotations?.readOnlyHint !== true) tool.remove();
-  }
-  if (mail && access.mail.length) {
-    registerMailTools(mcp, access.mail, {
-      mail,
-      origin: caller.origin,
-      saveToDocs: async (bytes, filename) => {
-        const r = await service.importFile(bytes, filename, undefined);
-        return { file: r.file as unknown as Record<string, unknown>, warnings: r.warnings };
-      },
-    });
-  }
-  if (calendar && access.calendar.length) registerCalendarTools(mcp, access.calendar, { calendar, origin: caller.origin, ...(member ? { member } : {}) });
-  if (events && access.events.length) registerEventTools(mcp, access.events, { subscriptions: events });
+  // The plugin's server registers every Docs tool; the token keeps the ones the registry gives it (files:read: those that only read).
+  const registered = (mcp as unknown as { _registeredTools: Record<string, { remove(): void }> })._registeredTools;
+  for (const [name, tool] of Object.entries(registered)) if (!access.docs.has(name)) tool.remove();
+  const ctx = {
+    ...(mail
+      ? {
+          mail: {
+            mail,
+            origin: caller.origin,
+            saveToDocs: async (bytes: Buffer, filename: string) => {
+              const r = await service.importFile(bytes, filename, undefined);
+              return { file: r.file as unknown as Record<string, unknown>, warnings: r.warnings };
+            },
+          } satisfies MailToolContext,
+        }
+      : {}),
+    ...(calendar ? { calendar: { calendar, origin: caller.origin, ...(member ? { member } : {}) } } : {}),
+    ...(events ? { events: { subscriptions: events } } : {}),
+  };
+  registerTools(mcp, [...access.mail, ...access.calendar, ...access.events], ctx);
   const transport = adaptTransport(new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true }) as never, info, stateless) as unknown as WebStandardStreamableHTTPServerTransport;
   try {
     await mcp.connect(transport);
