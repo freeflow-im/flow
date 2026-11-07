@@ -25,9 +25,21 @@ export interface CalendarInfo {
   isDefault: boolean;
   /** Null until the calendar's first sync. */
   syncedAt: string | null;
+  /** Another account's native calendar shared with this person (`GET /v1/calendar/shared`, phase 4.4); `role` above is then
+   * `reader` for a viewer, `writer` for an editor or manager. */
+  shared?: { ownerAccountId: string; role: GrantRole; principal: string };
 }
+/** A role a calendar is shared with (platform.md §4.3). */
+export type GrantRole = 'viewer' | 'editor' | 'manager';
+/** One grant on a native calendar: `account:<id>`, `channel:<id>` or `org`. */
+export interface CalendarGrant { principal: string; role: GrantRole; grantedBy: string; grantedAt: string }
+/** A calendar's grants, and the caller's own role on it. */
+export interface CalendarSharing { grants: CalendarGrant[]; role: GrantRole | 'owner' | null }
+/** A native calendar of another account shared with this person, and the principal it is shared through. */
+export interface SharedCalendar { id: string; name: string; color: string; role: GrantRole; ownerAccountId: string; grantedBy: string; url: string; principal: string }
 export type Response = 'accepted' | 'declined' | 'tentative' | 'needs-action';
-export interface Attendee { name: string | null; email: string; role: 'required' | 'optional'; response: Response; self?: true }
+/** `accountId`: on a native event, the platform account the address resolved to (a member); none for someone outside. */
+export interface Attendee { name: string | null; email: string; role: 'required' | 'optional'; response: Response; self?: true; accountId?: string }
 /** What the views show: one per occurrence of a recurring event. */
 export interface EventOccurrence {
   /** `<calendarId>:<uid>` for an event, `<calendarId>:<uid>:<recurrenceId>` for one occurrence. */
@@ -159,6 +171,11 @@ export const calendarApi = {
   createEvent: async (body: EventInput) => (await request<{ event: EventOccurrence }>('POST', '/v1/calendar/events', body)).event,
   updateEvent: async (id: string, patch: EventPatch) => (await request<{ event: EventOccurrence }>('PATCH', `/v1/calendar/events/${enc(id)}`, patch)).event,
   deleteEvent: (id: string, scope?: Scope) => request<{ ok: true }>('DELETE', `/v1/calendar/events/${enc(id)}${query({ scope })}`),
+  /** Other accounts' native calendars shared with this person, the organization's included. */
+  shared: async () => (await request<{ calendars: SharedCalendar[] }>('GET', '/v1/calendar/shared')).calendars,
+  grants: (id: string) => request<CalendarSharing>('GET', `/v1/calendar/calendars/${enc(id)}/grants`),
+  setGrant: (id: string, principal: string, role: GrantRole) => request<CalendarSharing>('PUT', `/v1/calendar/calendars/${enc(id)}/grants`, { principal, role }),
+  removeGrant: (id: string, principal: string) => request<CalendarSharing>('DELETE', `/v1/calendar/calendars/${enc(id)}/grants/${enc(principal)}`),
   respond: async (id: string, response: Exclude<Response, 'needs-action'>) => (await request<{ event: EventOccurrence }>('POST', `/v1/calendar/events/${enc(id)}/respond`, { response })).event,
   /** People to invite, from the person's Mail accounts (written to and heard from); [] when Mail has none. */
   contacts: async (q: string): Promise<{ name: string; address: string }[]> => {

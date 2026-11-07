@@ -174,6 +174,10 @@ export function EventDialog({ initial, existing, calendars, accounts, onSave, on
   const [custom, setCustom] = useState<Rule>(() => (rrule && parseRule(rrule)) || defaultRule(start));
   const zones = useMemo(() => [...new Set([browserZone(), initial.timezone, ...allZones()])], [initial.timezone]);
   const writable = calendars.filter((c) => c.role !== 'reader');
+  // A calendar shared with the person (phase 4.4) takes new events; an event on one stays there (another owner's object
+  // holds it), and one of the person's own does not move to one.
+  const onShared = !!existing && !!calendars.find((c) => c.id === existing.calendarId)?.shared;
+  const sharedChoices = onShared ? writable.filter((c) => c.id === existing!.calendarId) : existing ? [] : writable.filter((c) => c.shared);
   const set = (patch: Partial<Draft>) => setD((x) => ({ ...x, ...patch }));
 
   // Moving the start keeps the length; an end before the start follows it.
@@ -244,12 +248,17 @@ export function EventDialog({ initial, existing, calendars, accounts, onSave, on
             {preset === 'custom' && <CustomRule rule={custom} start={start} onChange={(r) => { setCustom(r); set({ recurrence: withRule(d.recurrence, ruleLine(r)) }); }} />}
           </Row>
           <Row label="Calendar">
-            <select aria-label="Calendar" className={`${field} w-full`} value={d.calendarId} onChange={(e) => set({ calendarId: e.target.value })}>
-              {accounts.map((a) => (
+            <select aria-label="Calendar" className={`${field} w-full`} value={d.calendarId} disabled={onShared} onChange={(e) => set({ calendarId: e.target.value })}>
+              {!onShared && accounts.map((a) => (
                 <optgroup key={a.id} label={a.displayName || a.email}>
                   {writable.filter((c) => c.accountId === a.id).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </optgroup>
               ))}
+              {!!sharedChoices.length && (
+                <optgroup label="Shared with me">
+                  {sharedChoices.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </optgroup>
+              )}
             </select>
           </Row>
           <Row label="Location"><Input aria-label="Location" placeholder="Add a place or a link" value={d.location} onChange={(e) => set({ location: e.target.value })} /></Row>
