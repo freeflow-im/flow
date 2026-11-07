@@ -33,6 +33,8 @@ const sa=await sock(A.token),sb=await sock(Bo.token);t('sockets hello',sa.hello.
 await sleep(200);t('presence reaches Ann',sa.ev.some(e=>e.type==='presence'&&e.data.userId===Bo.user.id));
 r=await api(A.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'hello everyone'});t('send by channel id',r.s===201,JSON.stringify(r.j).slice(0,100));const M=r.j;
 await sleep(250);t('Bob gets it live',sb.ev.some(e=>e.type==='message.created'&&e.data?.id===M.id));
+// ---- the event log (platform.md §5.2): the same events, kept, read by cursor
+r=await api(Bo.token,'GET',`/v1/events?workspace=${W}&since=0&limit=500`);{const e=r.j.events?.find(x=>x.type==='chat.message.created'&&x.data?.id===M.id);t('the event log has the message for Bob',r.s===200&&e?.seq>0&&e.organizationId===W&&!!e.actor&&e.channelId===gen.id,JSON.stringify(e??r.j).slice(0,160));t('no presence in the log',!r.j.events?.some(x=>x.type==='chat.presence'));}
 const before=sa.ev.length;
 r=await api(Bo.token,'PUT',`/v1/messages/${M.id}/reactions/${encodeURIComponent('👍')}`);t('react by message id',r.s<300,r.s+' '+JSON.stringify(r.j).slice(0,100));
 r=await api(A.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'in a thread',threadRootId:M.id});t('thread reply',r.s===201);
@@ -43,6 +45,11 @@ sb.ev.length=0;
 r=await api(A.token,'POST',`/v1/channels/${P.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'for me only'});t('private send',r.s===201);
 await sleep(250);t('Bob does NOT get private message',!sb.ev.some(e=>e.channelId===P.id),sb.ev.map(e=>e.type).join(','));t('Ann does',sa.ev.some(e=>e.channelId===P.id&&e.type==='message.created'));
 r=await api(Bo.token,'GET',`/v1/channels/${P.id}/messages`);t('Bob refused private list',r.s>=400,r.s);
+r=await api(A.token,'GET',`/v1/events?workspace=${W}&since=0&limit=500&channel=${P.id}`);t('the private channel\'s events are in Ann\'s log',r.j.events?.some(e=>e.type==='chat.message.created'&&e.channelId===P.id),JSON.stringify(r.j).slice(0,120));
+r=await api(Bo.token,'GET',`/v1/events?workspace=${W}&since=0&limit=500`);t('and not in Bob\'s',r.s===200&&r.j.events.length>0&&!r.j.events.some(e=>e.channelId===P.id),r.j.events?.length);
+{const nx=r.j.next;r=await api(Bo.token,'GET',`/v1/events?workspace=${W}&since=${nx}&limit=500`);t('since=next: nothing new',r.s===200&&r.j.events.length===0&&r.j.next===nx,JSON.stringify(r.j).slice(0,120));}
+r=await api(A.token,'GET',`/v1/events?workspace=${W}&since=0&types=chat.reaction.*`);t('a type pattern',r.j.events?.length>=1&&r.j.events.every(e=>e.type.startsWith('chat.reaction.')),JSON.stringify(r.j.events?.map(e=>e.type)));
+{const C=await signup('dee@example.com','Dee');r=await api(C.token,'GET','/v1/events?since=0');t('no account: 403 no_account',r.s===403&&r.j.error?.code==='no_account',r.s+' '+JSON.stringify(r.j).slice(0,100));}
 const pong=await new Promise(res=>{sa.ws.addEventListener('message',e=>{if(JSON.parse(e.data).op==='pong')res(true)});sa.ws.send('{"op":"ping"}');setTimeout(()=>res(false),2000)});t('client ping answered',pong);
 sa.ws.send(JSON.stringify({op:'typing',channelId:gen.id}));await sleep(200);t('typing relayed',sb.ev.some(e=>e.type==='typing'));
 r=await api(null,'GET',`/v1/channels/${gen.id}/messages`);t('no session refused',r.s===401,r.s);

@@ -44,6 +44,8 @@ export interface MailEnv {
   MAIL_ALARM?: string;
   /** `1` lets an account use `security: 'none'`, any port and a local host: local dev against GreenMail only. */
   MAIL_ALLOW_INSECURE?: string;
+  /** The organizations' event logs (events/object.ts): new INBOX mail is published there as `mail.received`. */
+  EVENTS?: DurableObjectNamespace<import('../events/object').Events>;
 }
 
 interface AccountRow {
@@ -1515,10 +1517,32 @@ export class Mail extends DurableObject<MailEnv> {
     const fresh = ((await c.search({ uid: `${state.high + 1}:*` }, { uid: true })) || []).filter((u) => u > state.high).sort((a, b) => b - a);
     if (!fresh.length) return 0;
     const take = fresh.slice(0, cap);
-    await this.cacheFetch(r, c, folder, validity, take, now);
+    const { summaries } = await this.cacheFetch(r, c, folder, validity, take, now);
+    // Above a high-water mark that existed, so new mail and not the first fill's backlog: into the event log.
+    if (folder.toUpperCase() === INBOX) await this.publishReceived(r, folder, summaries);
     if (take.length < fresh.length) this.cache.setMarks(r.id, folder, { high: fresh[0], low: take[take.length - 1] });
     else this.cache.setMarks(r.id, folder, { high: fresh[0] });
     return take.length;
+  }
+
+  /**
+   * One `mail.received` per new INBOX message (platform.md §5.2), for the account's own eyes: its summary without the
+   * body. Skipped while the object's organization is unknown; a failure is logged, never the sync's.
+   */
+  private async publishReceived(r: AccountRow, folder: string, summaries: MessageSummary[]): Promise<void> {
+    const org = this.cache.state('owner_organization_id'), owner = this.cache.state('owner_account_id');
+    if (!this.env.EVENTS || !org || !owner || !summaries.length) return;
+    const events = [...summaries].sort((a, b) => a.uid - b.uid).map((m) => ({
+      type: 'mail.received', organizationId: org, actor: null, audience: `account:${owner}` as const,
+      ref: { organizationId: org, app: 'mail', kind: 'message', id: `${r.id}:${folder}:${m.uid}` },
+      ts: new Date().toISOString(),
+      data: { accountId: r.id, folder, uid: m.uid, from: m.from, subject: m.subject, date: m.date },
+    }));
+    try {
+      await this.env.EVENTS.get(this.env.EVENTS.idFromName(org)).publishMany(events);
+    } catch (err) {
+      console.error(`[mail] mail.received: ${(err as Error).message}`);
+    }
   }
 
   /** One backfill step: the cache of the open folder extended below `low` by up to `budget` messages (`uidsBelow`, `walkDown`). */

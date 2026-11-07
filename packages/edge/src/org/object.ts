@@ -17,14 +17,18 @@ import { registerRoutes } from './routes/index';
 import { deleteMyAccount } from './services/accountDeletion';
 import { drainDuePushes, nextPushDueAt } from './services/pushOutbox';
 import { runSchedulerTick } from './services/scheduledMessages';
-import { accountAddressForJoin, announceJoin, enrollInWorkspace, toWorkspaceDTO } from './services/workspaces';
+import { accountForJoin, announceJoin, enrollInWorkspace, toWorkspaceDTO } from './services/workspaces';
 import { socketControl } from './sockets';
 import { setStorageEnv, type StorageEnv } from './storage/index';
 import { insertRows, tableCounts } from '../importing';
+import type { Events } from '../events/object';
+import type { PublishInput } from '../events/core';
+import { logEntryFor } from './eventLog';
 import { eq, and } from 'drizzle-orm';
 
 /** IMAGES (Cloudflare Images) resizes preview images and thumbnails; without it they are kept as they came (lib/images.ts). */
-export type OrgEnv = StorageEnv & { FLOW_DATA_KEY?: string; DIRECTORY: DurableObjectNamespace<Directory>; IMAGES?: ImagesBinding };
+/** EVENTS is the organization's event log (events/object.ts), which every socket event but presence and typing also goes to. */
+export type OrgEnv = StorageEnv & { FLOW_DATA_KEY?: string; DIRECTORY: DurableObjectNamespace<Directory>; IMAGES?: ImagesBinding; EVENTS?: DurableObjectNamespace<Events> };
 
 /** What each id-only path needs (`routes/org.ts`), and who belongs here (`memberships`), reported to the directory by trigger. */
 const OUTBOX = [
@@ -60,6 +64,9 @@ const USER_SUBJECT = /(?:^|\.)user\.([0-9a-f-]{36})(?:\.|$)/;
 
 export class Org extends DurableObject<OrgEnv> {
   private readonly db: DB;
+  /** Socket events waiting to go into the event log, and the chain of sends, so they arrive in the order they happened. */
+  private logQueue: PublishInput[] = [];
+  private logging: Promise<void> = Promise.resolve();
 
   constructor(ctx: DurableObjectState, env: OrgEnv) {
     super(ctx, env);
@@ -78,13 +85,13 @@ export class Org extends DurableObject<OrgEnv> {
     sql.exec(HUDDLE_ROSTER_DDL);
     // Answered by the runtime, so a client's heartbeat does not wake the object.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('{"op":"ping"}', '{"op":"pong"}'));
-    if (sql.exec('SELECT 1 FROM workspace_members WHERE address IS NULL LIMIT 1').toArray().length) {
+    if (sql.exec('SELECT 1 FROM workspace_members WHERE address IS NULL OR account_id IS NULL LIMIT 1').toArray().length) {
       void ctx.blockConcurrencyWhile(() => this.backfillAddresses());
     }
   }
 
-  /** Members who joined before addresses (or whose address the join could not get): the directory's accounts fill
-   * them in, once. A failure leaves them for the next start. */
+  /** Members who joined before addresses and account ids (or whose join could not get them): the directory's accounts
+   * fill them in, once. A failure leaves them for the next start. */
   private async backfillAddresses(): Promise<void> {
     const sql = this.ctx.storage.sql;
     const org = sql.exec('SELECT id FROM workspaces LIMIT 1').toArray()[0]?.id as string | undefined;
@@ -93,7 +100,7 @@ export class Org extends DurableObject<OrgEnv> {
       const answer = await this.directory().call('accountsOfOrganization' as never, [org] as never) as DirectoryAnswer<AccountDTO[]>;
       if (!answer.ok) return console.error(`address backfill: ${answer.message}`);
       for (const a of answer.value) {
-        sql.exec('UPDATE workspace_members SET address = ? WHERE workspace_id = ? AND user_id = ? AND address IS NULL', a.address, org, a.principalId);
+        sql.exec('UPDATE workspace_members SET address = COALESCE(address, ?), account_id = COALESCE(account_id, ?) WHERE workspace_id = ? AND user_id = ? AND (address IS NULL OR account_id IS NULL)', a.address, a.id, org, a.principalId);
       }
     } catch (err) {
       console.error(`address backfill: ${(err as Error).message}`);
@@ -148,6 +155,45 @@ export class Org extends DurableObject<OrgEnv> {
       if (!userId || (onlyUser && userId !== onlyUser) || (allowed && !allowed.has(userId))) continue;
       try { ws.send(frame); } catch { /* the socket is closing */ }
     }
+    this.logEvent(subject, event, frame);
+  }
+
+  /** Into the organization's event log as well (platform.md §5.2), in order, batched per turn of the event loop. */
+  private logEvent(subject: string, event: Event, frame: string): void {
+    if (!this.env.EVENTS) return;
+    let entry: PublishInput | null;
+    try {
+      entry = logEntryFor(this.ctx.storage.sql, subject, event);
+    } catch (err) {
+      return console.error(`[events] ${event.type}: ${(err as Error).message}`);
+    }
+    if (!entry) return;
+    // The data as the sockets got it (dates as strings), which the log stores as JSON.
+    this.logQueue.push({ ...entry, data: (JSON.parse(frame) as { event: Event }).event.data });
+    if (this.logQueue.length === 1) this.logging = this.logging.then(() => this.flushLog());
+  }
+
+  private async flushLog(): Promise<void> {
+    const batch = this.logQueue.splice(0);
+    if (!batch.length || !this.env.EVENTS) return;
+    try {
+      const org = batch[0]!.organizationId;
+      await this.env.EVENTS.get(this.env.EVENTS.idFromName(org)).publishMany(batch);
+    } catch (err) {
+      console.error(`[events] publish of ${batch.length}: ${(err as Error).message}`);
+    }
+  }
+
+  /** The event log's half of GET /v1/events (routes/events.ts): the private channels this member is in. */
+  privateChannelIdsOf(userId: string): string[] {
+    return this.ctx.storage.sql.exec('SELECT c.id FROM channels c JOIN channel_members m ON m.channel_id = c.id WHERE c.is_private AND m.user_id = ?', userId)
+      .toArray().map((r) => r.id as string);
+  }
+
+  /** The account ids of this organization's agents, for an `actorKind` filter. */
+  agentAccountIds(): string[] {
+    return this.ctx.storage.sql.exec('SELECT m.account_id FROM workspace_members m JOIN users u ON u.id = m.user_id WHERE u.is_agent AND m.account_id IS NOT NULL')
+      .toArray().map((r) => r.account_id as string);
   }
 
   /** Runs with this object's database, event bus and socket controls in scope. */
@@ -177,7 +223,7 @@ export class Org extends DurableObject<OrgEnv> {
       if (caller.user) this.ensureUser(caller.user);
       return app.handle(request, caller);
     });
-    const res = await (newWorkspaceId ? presetWorkspaceId.run(newWorkspaceId, run) : run());
+    const res = await (newWorkspaceId ? presetWorkspaceId.run(newWorkspaceId, run) : run()).finally(() => this.logging);
     await this.flushOutbox(newWorkspaceId);
     await this.armAlarm();
     return res;
@@ -198,6 +244,7 @@ export class Org extends DurableObject<OrgEnv> {
       // After the scheduler, so a scheduled message's mentions push in the same alarm.
       await drainDuePushes(pushLog);
     });
+    await this.logging;
     await this.flushOutbox(null);
     await this.armAlarm();
   }
@@ -208,6 +255,7 @@ export class Org extends DurableObject<OrgEnv> {
       this.ensureUser(user);
       await deleteMyAccount(user.id);
     });
+    await this.logging;
     await this.flushOutbox(null);
   }
 
@@ -217,12 +265,13 @@ export class Org extends DurableObject<OrgEnv> {
       this.ensureUser(user);
       const workspace = this.db.select().from(schema.workspaces).get();
       if (!workspace) return null;
-      const address = await accountAddressForJoin(workspace.id, user.id);
-      const isNew = await this.db.transaction((tx) => enrollInWorkspace(tx, workspace.id, user.id, 'member', undefined, address));
+      const account = await accountForJoin(workspace.id, user.id);
+      const isNew = await this.db.transaction((tx) => enrollInWorkspace(tx, workspace.id, user.id, 'member', undefined, account));
       if (!isNew) return null;
       await announceJoin(workspace.id, user.id);
       return JSON.parse(JSON.stringify(toWorkspaceDTO(workspace, 'member')));
     });
+    await this.logging;
     await this.flushOutbox(null);
     return joined;
   }
@@ -234,6 +283,7 @@ export class Org extends DurableObject<OrgEnv> {
     if (!workspace) return;
     const redacted = user.privacyMode ? { ...user, email: '' } : user;
     this.broadcast(`ws.${workspace.id}.meta`, { type: 'user.updated', workspaceId: workspace.id, ts: new Date().toISOString(), data: redacted } as Event);
+    await this.logging;
   }
 
   /** The one-time import (routes/admin.ts). The triggers report ids and memberships as for any insert. */

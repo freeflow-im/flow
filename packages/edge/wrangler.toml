@@ -114,6 +114,17 @@ class_name = "Calendar"
 tag = "v5"
 new_sqlite_classes = ["Calendar"]
 
+# The event bus (src/events/object.ts, docs/specs/platform.md §5.2): one object per organization, named by its id, holding
+# its append-only event log. The Org object publishes Chat's events into it, the Mail object `mail.received`; GET
+# /v1/events reads it. Its alarm keeps the retention window (30 days, 200,000 rows).
+[[durable_objects.bindings]]
+name = "EVENTS"
+class_name = "Events"
+
+[[migrations]]
+tag = "v6"
+new_sqlite_classes = ["Events"]
+
 [[r2_buckets]]
 binding = "BLOBS"
 bucket_name = "flow-files"

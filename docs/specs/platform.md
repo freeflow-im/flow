@@ -376,7 +376,7 @@ the bus is where events are kept and read.
   `events (seq, id, type, actor, ref, channel_id, caused_by, depth, ts, data)` with `seq` monotonic within the
   organization. Retention is a window (30 days, or a row cap). Events are immutable; a correction is a new event.
   Presence and typing are not events: they stay on the sockets and are never replayed.
-- **The envelope** is `{id, seq, type: '<app>.<type>', organizationId, actor: accountId, ref?: reference,
+- **The envelope** is `{id, seq, type: '<app>.<type>', organizationId, actor: accountId | null, ref?: reference,
   channelId?, causedBy?: jobId, depth, ts, data}`. Each app declares its types in its manifest. Per-account objects
   (Mail, Calendar, the assistant) publish into their account's organization.
 - **Subscriptions are durable consumers with a cursor.** `subscriptions (id, name, consumer: accountId, owner:

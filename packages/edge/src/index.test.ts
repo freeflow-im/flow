@@ -13,6 +13,7 @@ function env(files: Record<string, string> = {}): Env {
     DOCS: {} as never,
     MAIL: {} as never,
     CALENDAR: {} as never,
+    EVENTS: {} as never,
     BLOBS: {} as never,
     ASSETS: {
       fetch: async (req: Request) => {

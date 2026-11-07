@@ -15,6 +15,13 @@
       "when": 1794011466627,
       "tag": "0001_lush_blue_shield",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1794021831360,
+      "tag": "0002_member_account_id",
+      "breakpoints": true
     }
   ]
 }

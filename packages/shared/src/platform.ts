@@ -1,9 +1,9 @@
 // The FreeFlow platform's shared types (docs/specs/platform.md, phase 0).
 //
-// Types only: principals and accounts (§2, §3), references and grants (§4), the
-// event bus envelope and subscriptions (§5.2), and the app manifest (§6.1).
-// Nothing imports this file yet; later phases build on these exact names and
-// shapes, so change them only together with the spec.
+// Principals and accounts (§2, §3), references and grants (§4), the event bus
+// envelope and subscriptions (§5.2), and the app manifest (§6.1): types, and the
+// two small reference helpers beside them. Later phases build on these exact
+// names and shapes, so change them only together with the spec.
 
 // ---- references (§4.1) ------------------------------------------------------
 
@@ -16,17 +16,30 @@ export interface Reference {
   id: string;
 }
 
+/** A reference as one string, `organization/app/kind/id`: how the event log stores it. */
+export function formatReference(r: Reference): string {
+  return `${r.organizationId}/${r.app}/${r.kind}/${r.id}`;
+}
+
+/** The inverse of `formatReference`, or null. The id is everything after the third `/`, so it may hold more (a mail
+ * folder such as `[Gmail]/Sent`); the other three parts are never empty. */
+export function parseReference(s: string): Reference | null {
+  const m = /^([^/]+)\/([^/]+)\/([^/]+)\/(.+)$/.exec(s);
+  return m ? { organizationId: m[1]!, app: m[2]!, kind: m[3]!, id: m[4]! } : null;
+}
+
 // ---- the event bus (§5.2) ---------------------------------------------------
 
 /** One event in an organization's append-only log (§5.2, "The envelope").
  * `type` is `'<app>.<type>'`; `seq` is monotonic within the organization;
- * `actor` is an account id; `causedBy` is the job id that caused it. */
+ * `actor` is the acting account's id, or null when no account acted (mail from
+ * outside, a system event); `causedBy` is the job id that caused it. */
 export interface PlatformEvent<T = unknown> {
   id: string;
   seq: number;
   type: string;
   organizationId: string;
-  actor: string;
+  actor: string | null;
   ref?: Reference;
   channelId?: string;
   causedBy?: string;

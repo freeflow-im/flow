@@ -4,8 +4,8 @@
 import type { CallerContext } from './org/routes/compat';
 import { insertRows, type ImportRow } from './importing';
 
-/** The state keys naming the object's account and its holder. Never copied from one object to another. */
-export const OWNER_KEYS = ['owner_account_id', 'owner_user_id'] as const;
+/** The state keys naming the object's account, its holder and its organization. Never copied from one object to another. */
+export const OWNER_KEYS = ['owner_account_id', 'owner_user_id', 'owner_organization_id'] as const;
 /** What the per-person objects kept about their person (Calendar's `user_id`): stale in an account's object, so not copied. */
 const DROPPED_KEYS = new Set<string>([...OWNER_KEYS, 'user_id']);
 
@@ -15,10 +15,13 @@ interface StateStore { state(key: string): string | null; setState(key: string, 
  * The guard against a mis-keyed call: the caller's account is the object's (recorded on its first request), or the request
  * is refused. Answers the message to refuse with, or null. A caller with no account never reaches an object.
  */
-export function ownerMismatch(store: StateStore, caller: Pick<CallerContext, 'account' | 'user'> | null | undefined, what: string): string | null {
+export function ownerMismatch(store: StateStore, caller: (Pick<CallerContext, 'account' | 'user'> & { organizationId?: string | null }) | null | undefined, what: string): string | null {
   const account = caller?.account;
   if (!account) return `${what} was called without an account in the caller context`;
   const stored = store.state('owner_account_id');
+  // The organization, for the event log (platform.md §5.2); objects made before it learn it on their next request.
+  const org = account.organizationId || caller?.organizationId;
+  if ((!stored || stored === account.id) && org && !store.state('owner_organization_id')) store.setState('owner_organization_id', org);
   if (!stored) {
     store.setState('owner_account_id', account.id);
     store.setState('owner_user_id', account.principalId || caller?.user?.id || '');
