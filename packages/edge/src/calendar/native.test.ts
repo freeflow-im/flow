@@ -24,7 +24,7 @@ function calendarObject() {
   const env = {
     CALENDAR_ALARM: 'off', WEB_URL_BASE: 'https://app.test',
     EVENTS: { idFromName: (n: string) => n, get: () => ({ publish: async (e: PublishInput) => { published.push(e); return { seq: published.length, id: 'e' }; } }) },
-    ORG: { idFromName: (n: string) => n, get: () => ({ recordShare: async (input: Record<string, unknown>) => void shares.push({ op: 'record', input }), revokeShare: async (input: Record<string, unknown>) => void shares.push({ op: 'revoke', input }) }) },
+    ORG: { idFromName: (n: string) => n, get: () => ({ isActiveAccount: async (id: string) => ['acct-ann', 'acct-bob'].includes(id), recordShare: async (input: Record<string, unknown>) => void shares.push({ op: 'record', input }), revokeShare: async (input: Record<string, unknown>) => void shares.push({ op: 'revoke', input }) }) },
   };
   const ctx = { storage: { sql: { exec, databaseSize: 0 }, getAlarm: async () => null, setAlarm: async () => {}, deleteAlarm: async () => {} }, id: {}, waitUntil: () => {} };
   return { cal: new Calendar(ctx as never, env as never), published, shares };
@@ -89,6 +89,9 @@ describe('native calendars on the Calendar object', () => {
     expect(r.j).toMatchObject({ role: 'owner', grants: [{ objectKind: 'calendar', objectId: id, principal: 'account:acct-bob', role: 'viewer', grantedBy: 'acct-ann' }] });
     expect(shares).toEqual([{ op: 'record', input: { ref: `org-1/calendar/calendar/${id}`, principal: 'account:acct-bob', role: 'viewer', grantedBy: 'acct-ann', title: 'Calendar', kind: 'calendar' } }]);
     expect((await ann('PUT', `/v1/calendar/calendars/${id}/grants`, { principal: 'link:abc', role: 'viewer' })).j.error.code).toBe('not_supported');
+    // An account that is not a member of the organization cannot be given a calendar (phase 4.4).
+    r = await ann('PUT', `/v1/calendar/calendars/${id}/grants`, { principal: 'account:acct-outsider', role: 'viewer' });
+    expect([r.s, r.j.error.code]).toEqual([400, 'not_a_member']);
 
     r = await bob('GET', W);
     expect(r.s).toBe(200);

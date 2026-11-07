@@ -2,6 +2,13 @@
 // past one that does not, and answers empty when the time runs out. Over node:sqlite, with a stand-in object state.
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
+import type { AccountDTO } from '@flow/shared';
+import { orgStorage } from '../../test/orgStorage';
+import { withPublisher } from '../org/bus';
+import { schema, withDb } from '../org/db/index';
+import { directoryLink } from '../org/directoryLink';
+import { recordShare, sharedRefsOf } from '../org/services/shares';
+import { accountForJoin, createWorkspace, enrollInWorkspace } from '../org/services/workspaces';
 import type { PublishInput } from './core';
 import { Events } from './object';
 
@@ -58,7 +65,7 @@ describe('Events.wait', () => {
 describe('Events reads and the share index (phase 3.3)', () => {
   const R = 'org-1/docs/sheet/s1';
   /** An Events object whose Org object answers `sharedRefsOf` from `shared`, counting the asks. */
-  function withOrg(shared: Record<string, string[]>) {
+  function withOrg(shared: Record<string, string[]> | ((r: { accountId: string; channelIds: string[] }) => Promise<string[]>)) {
     const db = new DatabaseSync(':memory:');
     const sql = {
       exec(query: string, ...args: unknown[]) {
@@ -68,7 +75,7 @@ describe('Events reads and the share index (phase 3.3)', () => {
       },
     };
     const asked: string[] = [];
-    const org = { sharedRefsOf: async (r: { accountId: string }) => { asked.push(r.accountId); return shared[r.accountId] ?? []; } };
+    const org = { sharedRefsOf: async (r: { accountId: string; channelIds: string[] }) => { asked.push(r.accountId); return typeof shared === 'function' ? shared(r) : shared[r.accountId] ?? []; } };
     const storage = { sql, transactionSync: <T>(fn: () => T) => fn(), getAlarm: async () => null, setAlarm: async () => undefined };
     return { o: new Events({ storage } as never, { ORG: { idFromName: (n: string) => n, get: () => org } } as never), asked };
   }
@@ -92,5 +99,25 @@ describe('Events reads and the share index (phase 3.3)', () => {
     const { o: after } = withOrg({});
     await after.publish(changed);
     expect((await after.read({ since: 0 }, BOB)).events).toEqual([]);
+  });
+
+  it('lets an event about an object shared with the whole organization through to its members (phase 4.4)', async () => {
+    // The real share index (the Org object's `shares`): Ann's calendar shared with the organization, Bob a member.
+    const { db } = orgStorage();
+    const ws = await directoryLink.run({
+      ensureAccount: async (organizationId, userId, role, displayName) => ({ id: `acct-${displayName.toLowerCase()}`, principalId: userId, organizationId, address: `${displayName.toLowerCase()}@acme.test`, displayName, role, kind: 'native', state: 'active', createdAt: '' }) satisfies AccountDTO,
+    }, () => withPublisher(() => {}, () => withDb(db, async () => {
+      for (const [id, name] of [['u-ann', 'Ann'], ['u-bob', 'Bob']]) db.insert(schema.users).values({ id: id!, email: `${name}@x.test`, passwordHash: '!', displayName: name! }).run();
+      const w = await createWorkspace('u-ann', 'Acme', 'acme');
+      const account = await accountForJoin(w.id, 'u-bob');
+      await db.transaction((tx) => enrollInWorkspace(tx, w.id, 'u-bob', 'member', undefined, account));
+      return w.id;
+    })));
+    const calRef = `${ws}/calendar/calendar/n.acct-ann.0123456789ab`;
+    await withPublisher(() => {}, () => withDb(db, () => recordShare({ ref: calRef, principal: 'org', role: 'viewer', grantedBy: 'acct-ann', title: 'Team', kind: 'calendar' }, 'https://app.test')));
+    const { o } = withOrg((r) => withDb(db, () => sharedRefsOf(r)));
+    await o.publish({ type: 'calendar.event.added', organizationId: ws, actor: 'acct-ann', audience: `ref:${calRef}`, ts: new Date().toISOString(), data: { ownerAccountId: 'acct-ann' } });
+    expect((await o.read({ since: 0 }, BOB)).events.map((e) => e.type)).toEqual(['calendar.event.added']);
+    expect((await o.read({ since: 0 }, { accountId: 'acct-outsider', channelIds: [] })).events).toEqual([]);
   });
 });

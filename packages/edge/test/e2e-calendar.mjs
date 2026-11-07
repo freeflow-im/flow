@@ -254,6 +254,20 @@ r=await api(A.token,'DELETE',`/v1/calendar/calendars/${NATIVE.id}/grants/${enc(`
 r=await api(Bob.token,'GET',NWIN);t('native: after the revoke Bob gets 404 again',r.s===404,r.s);
 r=await api(Bob.token,'GET','/v1/calendar/shared');t('native: and it is no longer shared with him',r.j.calendars?.length===0,JSON.stringify(r.j));
 r=await api(Bob.token,'GET','/v1/events?since=0&types=calendar.*');t('native: nor on his bus',!(r.j.events??[]).some(e=>e.data?.calendarId===NATIVE.id),JSON.stringify(r.j).slice(0,120));
+// Shared with the whole organization (phase 4.4): listed for Bob, marked org, and its events on his bus; an account outside
+// the organization cannot be given it.
+const boId=(await api(Bo.token,'GET','/v1/calendar/calendars')).j.calendars?.[0]?.id?.split('.')[1];
+r=await api(A.token,'PUT',`/v1/calendar/calendars/${NATIVE.id}/grants`,{principal:`account:${boId}`,role:'viewer'});t('org: a grant to an account outside the organization is 400 not_a_member',r.s===400&&r.j.error?.code==='not_a_member',r.s+' '+JSON.stringify(r.j));
+r=await api(A.token,'PUT',`/v1/calendar/calendars/${NATIVE.id}/grants`,{principal:'org',role:'viewer'});t('org: Ann shares it with the organization',r.s===200&&r.j.grants?.some(g=>g.principal==='org'),r.s+' '+JSON.stringify(r.j).slice(0,160));
+r=await api(Bob.token,'GET','/v1/calendar/shared');t('org: Bob\'s shared calendars list it, principal org',r.j.calendars?.length===1&&r.j.calendars[0].id===NATIVE.id&&r.j.calendars[0].principal==='org'&&r.j.calendars[0].role==='viewer',JSON.stringify(r.j).slice(0,200));
+r=await api(Bob.token,'GET',`/v1/workspaces/${ORGA}/shared-with-me`);t('org: the index\'s shared-with-me leaves it out',!(r.j.shares??[]).some(x=>x.kind==='calendar'),JSON.stringify(r.j).slice(0,160));
+r=await api(Bob.token,'GET',`/v1/workspaces/${ORGA}/shared-with-me?org=1`);t('org: and lists it with ?org=1',(r.j.shares??[]).some(x=>x.kind==='calendar'&&x.principal==='org'),JSON.stringify(r.j).slice(0,160));
+r=await api(A.token,'POST','/v1/calendar/events',{summary:`All hands ${tag}`,start:'2026-12-08T15:00:00Z',end:'2026-12-08T16:00:00Z'});const OEV=r.j.event;
+r=await api(Bob.token,'GET','/v1/events?since=0&types=calendar.event.added');t('org: Bob\'s one-shot read has calendar.event.added for it',(r.j.events??[]).some(e=>e.data?.eventId===OEV?.eventId),JSON.stringify(r.j).slice(0,160));
+r=await api(Bo.token,'GET','/v1/events?since=0&types=calendar.*');t('org: someone in another organization does not',r.s!==200||!(r.j.events??[]).some(e=>e.data?.eventId===OEV?.eventId),r.s);
+await api(A.token,'DELETE',`/v1/calendar/events/${enc(OEV?.id)}`);
+r=await api(A.token,'DELETE',`/v1/calendar/calendars/${NATIVE.id}/grants/org`);t('org: Ann stops sharing it',r.s===200&&!r.j.grants?.length,r.s);
+r=await api(Bob.token,'GET','/v1/calendar/shared');t('org: and it is gone from Bob\'s list',r.j.calendars?.length===0,JSON.stringify(r.j));
 
 // ---- scheduling between accounts (platform phase 4.2): Ann invites Bob, an agent and an outside guest by address; Bob
 // and the agent get the event by object call, answer, follow a move and a cancellation; the guest would get mail.

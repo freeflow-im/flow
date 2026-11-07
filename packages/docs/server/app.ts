@@ -209,6 +209,9 @@ export interface AppOptions {
      * §3.6), which grants are matched against (server/access.ts). Without it a user is matched by their user id alone.
      */
     readerOf?(req: FastifyRequest): { accountId?: string | null; channelIds?: readonly string[] } | null;
+    /** Whether an account is an active member of the organization: an `account:<id>` grant must name one (`not_a_member`,
+     * platform phase 4.4). Not checked when not told (the desktop app, a server with no organizations). */
+    isAccountOf?(accountId: string, workspaceId: string): Promise<boolean>;
     /** Whether the organization's policy allows links anyone can open (`linkSharing`, platform.md §3.1); allowed when not told. */
     linkSharing?(workspaceId: string): Promise<boolean>;
     /**
@@ -1503,6 +1506,9 @@ export async function buildApp(opts: AppOptions) {
         }
         // A manager gives no more than they have; the owner is a column, not a grant.
         if (ROLE_RANK[b.role as Role] > ROLE_RANK[t.role]) return reply.code(403).send({ error: refused('owner').message });
+        if (p.kind === 'account' && t.row.workspace_id && host?.isAccountOf && !(await host.isAccountOf(p.id!, t.row.workspace_id))) {
+          return reply.code(400).send({ error: 'That account is not a member of this organization.', code: 'not_a_member' });
+        }
         const id = p.kind === 'org' ? await setOrg(req, t.kind, t.id, t.row, true) : t.id;
         grant(db, t.kind, id, b.principal as `account:${string}`, b.role as Role, req.user!.id);
         reportGrant(req, t.kind, id, String(b.principal), b.role as Role);
@@ -1669,6 +1675,8 @@ export async function buildApp(opts: AppOptions) {
       if (!f || !root) return reply.code(404).send({ error: 'Folder not found' });
       return { folder: inside, folders: folders.children(root, f.path).map((p) => folderEntry(f.rootKey, p)), docs: sheets.listIn(root, f.path).map((m) => sheets.get(req.viewer, m.id) ?? m), files: storedFiles.listIn(root, f.path).map((m) => storedFiles.get(req.viewer, m.id)?.meta ?? m) };
     }
+    // `org` grants are left out (objectsSharedWithSql): Organization files lists those, though the share index's
+    // shared-with-me lists them with `?org=1` and Calendar's shared list always does (platform phase 4.4).
     const st = objectsSharedWithSql(readerOf(req.viewer));
     const out = { folder: '', folders: [] as ReturnType<typeof folderEntry>[], docs: [] as SheetMeta[], files: [] as StoredFile[] };
     for (const { object_kind: kind, object_id: id } of db.prepare(st.sql).all(...st.params) as { object_kind: string; object_id: string }[]) {

@@ -812,6 +812,13 @@ export class Calendar extends DurableObject<CalendarEnv> {
     return cal;
   }
 
+  /** Whether an account is an active member of the owner's organization (the Org object knows its members' accounts): an
+   * `account:` grant must name one. No Org binding, no member. */
+  private async isMemberAccount(accountId: string): Promise<boolean> {
+    const ns = this.env.ORG, org = this.store.state('owner_organization_id');
+    return !!ns && !!org && (await ns.get(ns.idFromName(org)).isActiveAccount(accountId));
+  }
+
   /** A grant given, changed or taken away, told to the organization's share index (Org.recordShare / revokeShare); logged on failure. */
   private async reportGrant(c: CalendarRow, principal: string, role: Role | null): Promise<void> {
     const ns = this.env.ORG, org = this.store.state('owner_organization_id');
@@ -1011,6 +1018,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
       try { kind = parsePrincipal(b.principal).kind; } catch { throw badRequest('principal: account:<id>, channel:<id> or org'); }
       if (kind === 'link') throw calendarError(400, 'not_supported', 'A calendar is not shared by link');
       if (b.principal === `account:${this.store.state('owner_account_id')}`) throw badRequest('principal: the owner has the calendar already');
+      if (kind === 'account' && !(await this.isMemberAccount(b.principal.slice('account:'.length)))) throw calendarError(400, 'not_a_member', 'That account is not a member of this organization');
       const actor = timing.getStore()?.actor ?? '';
       const g = grantSql({ objectKind: 'calendar', objectId: cal.id, principal: b.principal as GrantPrincipal, role: b.role, grantedBy: actor, grantedAt: new Date().toISOString() });
       this.sql.exec(g.sql, ...g.params);

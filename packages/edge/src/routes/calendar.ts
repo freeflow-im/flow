@@ -96,8 +96,8 @@ calendarRoutes.get('/v1/calendar/google/callback', async (c) => {
 export { sharedOwnerOf } from '../calendar/forward';
 
 /**
- * `GET /v1/calendar/shared` → `{ calendars: [{ id, name, color, role, ownerAccountId, grantedBy, url }] }`: the native
- * calendars shared with the caller (calendar/forward.ts `sharedWithCaller`).
+ * `GET /v1/calendar/shared` → `{ calendars: [{ id, name, color, role, ownerAccountId, grantedBy, url, principal }] }`: the
+ * native calendars shared with the caller, the organization's included (calendar/forward.ts `sharedWithCaller`).
  */
 calendarRoutes.get('/v1/calendar/shared', async (c) => {
   const start = Date.now();

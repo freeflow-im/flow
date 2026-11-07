@@ -40,6 +40,7 @@ beforeAll(async () => {
         return { accountId: `acct-${id}`, channelIds: channels[id] ?? [] };
       },
       linkSharing: async (workspaceId) => linkSharing[workspaceId] ?? true,
+      isAccountOf: async (accountId, workspaceId) => members[accountId.replace(/^acct-/, '')]?.includes(workspaceId) ?? false,
       onGrantChange: (c) => void changes.push(c),
       onFileChanged: (c) => void saves.push(c),
     },
@@ -85,6 +86,8 @@ describe('sharing on grants', () => {
     expect((await call('bob', 'GET', `/api/docs/${id}`)).status).toBe(404);
     expect((await call('ann', 'PUT', `/api/grants/sheet/${id}`, { principal: 'nobody', role: 'viewer' })).status).toBe(400);
     expect((await call('ann', 'PUT', `/api/grants/sheet/${id}`, { principal: 'account:acct-bob', role: 'owner' })).status).toBe(400);
+    // An account outside the organization is refused (platform phase 4.4).
+    expect((await call('ann', 'PUT', `/api/grants/sheet/${id}`, { principal: 'account:acct-dave', role: 'viewer' })).body).toMatchObject({ code: 'not_a_member' });
   });
 
   it('shares a folder with a channel, and what is in it by inheritance', async () => {

@@ -9,7 +9,7 @@ import { withDb, schema, type DB } from './db/index';
 import { directoryLink } from './directoryLink';
 import { createChannel } from './services/channels';
 import { listNotifications } from './services/notifications';
-import { recordShare, revokeShare, sharedRefsOf, sharedWith, urlOf } from './services/shares';
+import { isActiveAccount, recordShare, revokeShare, sharedRefsOf, sharedWith, urlOf } from './services/shares';
 import { accountForJoin, createWorkspace, enrollInWorkspace } from './services/workspaces';
 import { eq } from 'drizzle-orm';
 
@@ -98,6 +98,21 @@ describe('the share index', () => {
     expect(published.filter((p) => p.event.type === 'message.created')).toEqual([]);
     // Neither is "shared with me": the organization's is its root, a link's is a guest's.
     expect(await run(() => sharedWith({ accountId: 'acct-b', channelIds: [] }))).toEqual([]);
+  });
+
+  it('the organization\'s shares reach every active member, on the bus and when asked for (phase 4.4)', async () => {
+    const cal = `${workspaceId}/calendar/calendar/n.acct-a.0123456789ab`;
+    await run(() => recordShare({ ref: cal, principal: 'org', role: 'viewer', grantedBy: 'acct-a', title: 'Team', kind: 'calendar' }, WEB));
+    expect(await run(() => sharedWith({ accountId: 'acct-b', channelIds: [] }))).toEqual([]);
+    expect(await run(() => sharedWith({ accountId: 'acct-b', channelIds: [] }, { includeOrg: true }))).toMatchObject([{ ref: cal, kind: 'calendar', role: 'viewer', principal: 'org', url: '/calendar/?calendar=n.acct-a.0123456789ab' }]);
+    expect(await run(() => sharedRefsOf({ accountId: 'acct-b', channelIds: [] }))).toEqual([cal]);
+    // Someone who is not a member here sees none of it.
+    expect(await run(() => sharedRefsOf({ accountId: 'acct-x', channelIds: [] }))).toEqual([]);
+    expect(await run(() => sharedWith({ accountId: 'acct-x', channelIds: [] }, { includeOrg: true }))).toEqual([]);
+    expect(await run(() => Promise.all(['acct-b', 'acct-x'].map(isActiveAccount)))).toEqual([true, false]);
+    // A person's own share outranks the organization's, and names its principal.
+    await run(() => recordShare({ ref: cal, principal: 'account:acct-b', role: 'editor', grantedBy: 'acct-a', title: 'Team', kind: 'calendar' }, WEB));
+    expect(await run(() => sharedWith({ accountId: 'acct-b', channelIds: [] }, { includeOrg: true }))).toMatchObject([{ ref: cal, role: 'editor', principal: 'account:acct-b' }]);
   });
 
   it('a revoke takes the row away and is only the event', async () => {

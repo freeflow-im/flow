@@ -105,6 +105,7 @@ export class Docs extends DurableObject<DocsEnv> {
         organizationsOf: async (userId: string) => this.directory<string[]>('organizationsOf', userId),
         // Grants are matched against the caller context the Worker resolved (routes/docs.ts; docs/server/access.ts).
         readerOf: (req: DocsRequest) => ({ accountId: req.caller.accountId ?? null, channelIds: req.caller.channelIds ?? [] }),
+        isAccountOf: async (accountId: string, organizationId: string) => !!this.env.ORG && (await this.env.ORG.get(this.env.ORG.idFromName(organizationId)).isActiveAccount(accountId)),
         linkSharing: async (organizationId: string) => (await this.directory<{ policies?: { linkSharing?: boolean } } | null>('organization', organizationId))?.policies?.linkSharing !== false,
         onGrantChange: (change: GrantChange) => this.reportGrant(change),
         onFileChanged: (change: FileChange) => this.fileChanged(change),

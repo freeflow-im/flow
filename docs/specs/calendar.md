@@ -619,8 +619,8 @@ What `platform.md` §3.5 and phase 4 item 1 call the native kind, as built: cale
   alarm and activity are not touched by a reader.
 - **Shared with me**: `GET /v1/calendar/shared` → `{ calendars: [{ id, name, color, role, ownerAccountId, grantedBy, url }] }`:
   one call to the share index (`shared-with-me` rows of kind `calendar`), then one RPC per owner's object (`sharedCalendars`)
-  for the name, colour and the reader's current role. The index leaves out `org` grants (they are the organization's, not
-  shared with one reader), so a calendar shared only with the organization is not listed there; it is readable by id.
+  for the name, colour and the reader's current role. (Phase 4.4: `org` grants are listed too, marked `principal: 'org'`, and
+  reach every active member on the bus; an `account:` grant must name an active member, else 400 `not_a_member`.)
 - **Free/busy**: `POST /v1/calendar/freebusy` resolves each address that is not the person's own through the directory
   (`accountByAddress`); an account of the same organization answers from its own object (`busy(from, to)` RPC: start and end
   of every native event not transparent, cancelled or declined, merged; no details). The rest take the CalDAV path or are `unknown`.

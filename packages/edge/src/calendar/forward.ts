@@ -38,19 +38,21 @@ export async function sharedOwnerOf(req: Request, self: string): Promise<string 
 
 /**
  * The native calendars shared with the caller (`GET /v1/calendar/shared`): the organization's share index (one call), then
- * each owner's object for the calendars' names, colours and the caller's role there (which drops any since unshared).
+ * each owner's object for the calendars' names, colours and the caller's role there (which drops any since unshared). Each
+ * says the principal it is shared through (`account:<id>`, `channel:<id>` or `org`).
  */
 export async function sharedWithCaller(env: CalendarForwardEnv, who: AccountCaller, userId: string) {
   const org = who.account.organizationId;
   const orgObject = env.ORG.get(env.ORG.idFromName(org));
   const channelIds = await orgObject.channelIdsOf(userId);
-  const byOwner = new Map<string, Map<string, { grantedBy: string; url: string }>>();
-  for (const s of await orgObject.sharedWith({ accountId: who.account.id, channelIds })) {
+  const byOwner = new Map<string, Map<string, { grantedBy: string; url: string; principal: string }>>();
+  // A calendar shared with the whole organization is listed too (phase 4.4), marked `principal: 'org'`.
+  for (const s of await orgObject.sharedWith({ accountId: who.account.id, channelIds }, { includeOrg: true })) {
     const ref = s.kind === 'calendar' ? parseReference(s.ref) : null;
     const owner = ref?.app === 'calendar' && ref.kind === 'calendar' && ref.organizationId === org ? nativeOwnerOf(ref.id) : null;
     if (!ref || !owner || owner === who.account.id) continue;
     if (!byOwner.has(owner)) byOwner.set(owner, new Map());
-    byOwner.get(owner)!.set(ref.id, { grantedBy: s.grantedBy, url: s.url });
+    byOwner.get(owner)!.set(ref.id, { grantedBy: s.grantedBy, url: s.url, principal: s.principal });
   }
   return (await Promise.all([...byOwner].map(async ([owner, items]) => {
     const found = await env.CALENDAR.get(env.CALENDAR.idFromName(owner)).sharedCalendars(who, channelIds, [...items.keys()]).catch(() => []);
