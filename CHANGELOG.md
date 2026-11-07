@@ -12,6 +12,7 @@ This file keeps two things:
 
 ## Parity
 
+- **The Automations page is web-only (2026-11-06, platform phase 2.5).** Web lists a member's event-bus subscriptions and their wake jobs and creates wake, post and scheduled automations; macOS and iOS have no Automations page. Gap to close.
 - **Only web sends `since` on reconnect (2026-11-06, platform phase 2.3).** Web replays the event log's backlog after a drop; macOS and iOS still reconnect without a cursor and rely on their REST refetch. Gap to close.
 - **Account addresses and organization policies are shown on web only (2026-11-06, platform phase 1.3).** Web shows members' addresses and the Organization section of Manage users (policies, Transfer ownership); macOS and iOS ignore the new fields. Gap to close.
 - **The FreeFlow suite bar and the blue accent are web-only for now (2026-11-02, FreeFlow suite §2.5).** Web replaced the workspace rail and the sidebar's status footer with the bar, and re-pointed the violet to the suite's blue and navy; macOS, iOS and the desktop shell keep the rail and the violet until phase 6 brings the suite to them. Gap to close.

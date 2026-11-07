@@ -215,6 +215,7 @@ r=await api(BOT,'GET',`/v1/workspaces/${W}/channels`);t('his agent is in',r.s===
 {const SP=`/v1/events/subscriptions?workspace=${W}`,JB=(id,step)=>`/v1/events/jobs/${id}/${step}?workspace=${W}`;
  const acct=async(tok)=>(await api(tok,'GET','/v1/me')).j.accounts?.find(a=>a.organizationId===W)?.id;
  const botAcct=await acct(BOT),bobAcct=await acct(Bo.token),flowbotAcct=await acct(AGT2);
+ r=await api(Bo.token,'GET',`/v1/workspaces/${W}/members`);t('the members list carries the agent\'s accountId (the Automations page picks by it)',!!botAcct&&r.j.members?.find(m=>m.isAgent&&m.accountId===botAcct)?.displayName==='Bobbot',JSON.stringify(r.j.members?.filter(m=>m.isAgent).map(m=>({n:m.displayName,a:m.accountId}))).slice(0,160));
  r=await api(BOT,'POST',SP,{name:'my jobs',filter:{types:['agent.job'],self:true}});const JQ=r.j.subscription;t('the agent subscribes to its own jobs',r.s===201,r.s);
  const jobsAfter=async(pred,ms)=>{const end=Date.now()+ms;for(;;){const q=(await api(BOT,'GET',`/v1/events/subscriptions/${JQ.id}?workspace=${W}&wait=1`)).j;const hit=q.events?.filter(pred)??[];if(q.next)await api(BOT,'POST',`/v1/events/subscriptions/${JQ.id}/ack?workspace=${W}`,{cursor:q.next});if(hit.length)return hit;if(Date.now()>end)return [];}};
  r=await api(BOT,'POST',SP,{name:'not mine',delivery:'wake',consumer:flowbotAcct,filter:{},action:{kind:'wake',prompt:'p'}});t('an agent may not make a wake subscription for another\'s agent',r.s===403&&r.j.error?.code==='agent_forbidden',r.s+' '+JSON.stringify(r.j).slice(0,120));

@@ -437,6 +437,7 @@ export async function listMembers(workspaceId: string, userId: string): Promise<
     role: r.m.role,
     joinedAt: r.m.joinedAt.toISOString(),
     ...(r.m.address ? { address: r.m.address } : {}),
+    ...(r.m.accountId ? { accountId: r.m.accountId } : {}),
   }));
 }
 
@@ -472,6 +473,7 @@ export async function toMemberDTO(
     role: r.m.role,
     joinedAt: r.m.joinedAt.toISOString(),
     ...(r.m.address ? { address: r.m.address } : {}),
+    ...(r.m.accountId ? { accountId: r.m.accountId } : {}),
   };
 }
 
