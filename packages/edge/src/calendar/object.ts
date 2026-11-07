@@ -1172,15 +1172,15 @@ export class Calendar extends DurableObject<CalendarEnv> {
       const accounts = this.accountRows();
       const mine = new Set([...accounts.flatMap((a) => [...this.me(a)]), ...this.store.calendars().flatMap((x) => (x.owner_address ? [x.owner_address.toLowerCase()] : []))]);
       const emails = [...new Set(b.emails.map((e) => e.toLowerCase()))];
-      const busy: { email: string; intervals: Interval[] }[] = [];
+      const busy: { email: string; intervals: Interval[]; source: 'self' | 'member' | 'server' }[] = [];
       const unknown: string[] = [];
       const own = this.ownBusy(from, to);
-      for (const e of emails) if (mine.has(e)) busy.push({ email: e, intervals: own });
+      for (const e of emails) if (mine.has(e)) busy.push({ email: e, intervals: own, source: 'self' });
       let others = emails.filter((e) => !mine.has(e));
-      if (!emails.length) busy.push({ email: accounts[0]?.email.toLowerCase() ?? 'me', intervals: own });
+      if (!emails.length) busy.push({ email: accounts[0]?.email.toLowerCase() ?? 'me', intervals: own, source: 'self' });
       // Members of the organization answer from their own Calendar objects (their native calendars' busy time, no details).
       const members = await this.memberBusy(others, from, to);
-      for (const [e, intervals] of members) busy.push({ email: e, intervals });
+      for (const [e, intervals] of members) busy.push({ email: e, intervals, source: 'member' });
       others = others.filter((e) => !members.has(e));
       let answered = new Map<string, Interval[]>();
       const withOutbox = accounts.find((a) => a.status === 'ok' && this.serverOf(a).outbox);
@@ -1190,7 +1190,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
       }
       for (const e of others) {
         const got = answered.get(e);
-        if (got) busy.push({ email: e, intervals: got });
+        if (got) busy.push({ email: e, intervals: got, source: 'server' });
         else unknown.push(e);
       }
       return c.json({ busy, unknown });

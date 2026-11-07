@@ -18,6 +18,7 @@ import { importBytes, type ImportStores } from './server/importFile.ts';
 import type { MailToolContext } from '../imap/mailTools.ts';
 import { lazySubscriptions, subscriptionsAs, type SubscriptionOps } from '../events/subscriptions.ts';
 import { docsAddress } from './addresses.ts';
+import { calendarRequest, type AccountCaller } from '../calendar/forward';
 import type { FileChange, GrantChange } from './server/app.ts';
 
 export interface DocsEnv {
@@ -214,7 +215,7 @@ export class Docs extends DurableObject<DocsEnv> {
 
   /** A request to /mcp, authenticated by the Worker against the directory (routes/mcp.ts), as `caller` in this organization. */
   async mcp(request: Request, caller: McpRequestCaller): Promise<Response> {
-    return this.inOrganization(caller.orgId, () => handleMcp(request, this.hub!, caller, this.mailOf(caller.userId, caller.origin, caller.orgId), this.calendarOf(caller.userId, caller.origin, caller.orgId), this.eventsOf(caller.userId, caller.orgId)));
+    return this.inOrganization(caller.orgId, () => handleMcp(request, this.hub!, caller, this.mailOf(caller.userId, caller.origin, caller.orgId), this.calendarOf(caller.userId, caller.origin, caller.orgId), this.eventsOf(caller.userId, caller.orgId), this.memberOf(caller.orgId)));
   }
 
   /**
@@ -278,8 +279,24 @@ export class Docs extends DurableObject<DocsEnv> {
    * Calendar tools. Undefined where the Worker has no Calendar.
    */
   private calendarOf(userId: string, origin: string, organizationId: string): ((path: string, init?: RequestInit) => Promise<Response>) | undefined {
-    const ns = this.env.CALENDAR;
-    return ns ? this.accountFetch(ns as unknown as AccountObjects, 'Calendar', userId, origin, organizationId) : undefined;
+    const { CALENDAR: ns, ORG: org } = this.env;
+    if (!ns) return undefined;
+    if (!org) return this.accountFetch(ns as unknown as AccountObjects, 'Calendar', userId, origin, organizationId);
+    // As the routes do (calendar/forward.ts): a shared calendar's id reaches its owner's object, `/shared` the share index.
+    const caller = this.accountCaller(userId, organizationId);
+    return async (path: string, init?: RequestInit): Promise<Response> => {
+      const who = await caller();
+      if (!who?.account) return Response.json({ error: { code: 'no_account', message: 'join an organization to use Calendar' } }, { status: 403 });
+      return calendarRequest({ CALENDAR: ns, ORG: org }, new Request(`${origin}${path}`, init), who as AccountCaller, userId);
+    };
+  }
+
+  /** An address of an account in this organization (not suspended or removed), for share_calendar; null for anyone else. */
+  private memberOf(organizationId: string): (address: string) => Promise<{ accountId: string; name: string } | null> {
+    return async (address) => {
+      const a = await this.directory<AccountDTO | null>('accountByAddress', address).catch(() => null);
+      return a && a.organizationId === organizationId && a.state !== 'suspended' && a.state !== 'removed' ? { accountId: a.id, name: a.displayName ?? address } : null;
+    };
   }
 
   /** The organization's event subscriptions as the person's account here, for the event tools. Undefined where the Worker has no Events. */
@@ -297,7 +314,7 @@ export class Docs extends DurableObject<DocsEnv> {
   /** The assistant's Calendar tools (server/agent/tools.ts): the Calendar object of the person's account here. */
   private assistantCalendar(userId: string, origin: string, organizationId: string | undefined): import('../calendar/calendarTools').CalendarToolContext | undefined {
     const calendar = organizationId ? this.calendarOf(userId, origin, organizationId) : undefined;
-    return calendar ? { calendar, origin } : undefined;
+    return calendar && organizationId ? { calendar, origin, member: this.memberOf(organizationId) } : undefined;
   }
 
   /** An agent's upload to the address upload_file gave it; the ticket in it is the credential. */

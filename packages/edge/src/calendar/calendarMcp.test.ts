@@ -6,7 +6,7 @@ import type { FileHub } from '../docs/plugin/server/files.ts';
 
 const hub = { forUser: () => ({ hub: {} }) } as unknown as FileHub;
 const mail = async () => Response.json({ accounts: [] });
-const calendar = async (path: string) => (path.endsWith('/calendars') ? Response.json({ calendars: [] }) : Response.json({ accounts: [] }));
+const calendar = async (path: string) => (path.endsWith('/calendars') || path.endsWith('/shared') ? Response.json({ calendars: [] }) : Response.json({ accounts: [] }));
 
 async function rpc(scope: string, method: string, params: Record<string, unknown> = {}, withCalendar = true) {
   const req = new Request('https://app.test/mcp', {
@@ -17,13 +17,13 @@ async function rpc(scope: string, method: string, params: Record<string, unknown
   const res = await handleMcp(req, hub, { userId: 'u1', email: 'u1@test', orgId: 'o1', scope, endpoint: '/mcp', origin: 'https://app.test' }, mail, withCalendar ? calendar : undefined);
   return (await res.json()) as { result?: { tools?: { name: string; annotations?: { destructiveHint?: boolean } }[]; content?: { text: string }[]; isError?: boolean; instructions?: string } };
 }
-const CAL = ['list_calendars', 'list_events', 'get_event', 'find_free_time', 'create_event', 'update_event', 'delete_event', 'respond_to_event'];
+const CAL = ['list_calendars', 'list_shared_calendars', 'list_events', 'get_event', 'find_free_time', 'create_event', 'update_event', 'delete_event', 'respond_to_event', 'share_calendar', 'unshare_calendar'];
 const listed = async (scope: string, withCalendar = true) => ((await rpc(scope, 'tools/list', {}, withCalendar)).result?.tools ?? []).map((t) => t.name).filter((n) => CAL.includes(n));
 
 describe('/mcp Calendar tools by scope', () => {
   it('lists the reading tools for calendar:read, all of them for calendar:write, none without a scope or a Calendar', async () => {
     expect(await listed('files:read files:write mail:read')).toEqual([]);
-    expect(await listed('calendar:read')).toEqual(['list_calendars', 'list_events', 'get_event', 'find_free_time']);
+    expect(await listed('calendar:read')).toEqual(['list_calendars', 'list_shared_calendars', 'list_events', 'get_event', 'find_free_time']);
     expect(await listed('calendar:read calendar:write')).toEqual(CAL);
     expect(await listed('calendar:read calendar:write', false)).toEqual([]);
     const tools = (await rpc('calendar:write', 'tools/list')).result?.tools ?? [];

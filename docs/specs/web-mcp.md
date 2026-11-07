@@ -129,32 +129,42 @@ the scopes existed keep theirs: an agent reconnects to get the Calendar tools.
 
 | Tool | Scopes | What it does |
 | --- | --- | --- |
-| `list_calendars` | calendar:read | calendars: id, name, account, read_only, hidden, default, timezone; accounts needing attention |
-| `list_events` `{ from, to, calendars?, q?, limit? ≤ 200 }` | calendar:read | occurrences in a window of ≤ 93 days, oldest first: id, series_id, summary, start, end, all_day, timezone, calendar, location, video_call, repeats (in words), status, organizer, attendees with responses, my_response, link |
-| `get_event` `{ id }` | calendar:read | one event or occurrence in full (description, recurrence lines and in words, reminders), and its series |
-| `find_free_time` `{ duration_minutes, from, to, attendees?, working_hours?, timezone? }` | calendar:read | free slots in ≤ 31 days where the person (the shown calendars, less free and declined events) and the attendees (`POST …/freebusy`) are free, within working hours (09:00–17:00 Mon–Fri in `timezone` unless given; `null` for any time), longest first; `unknown` lists whose calendars cannot be seen |
-| `create_event` `{ summary, start, end, all_day?, timezone?, location?, description?, attendees?, optional_attendees?, recurrence?, reminders_minutes?, calendar_id? }` | calendar:write | creates on the default (or a named) calendar; the server invites the attendees where it schedules (Google, iCloud, Fastmail); returns the event and who was invited |
-| `update_event` `{ id, scope?, …the same fields }` | calendar:write | changes only what is given; `scope` this / following / all for an occurrence; `calendar_id` moves the whole event |
-| `delete_event` `{ id, scope? }` | calendar:write | deletes (destructive annotation); this / following / all for an occurrence |
-| `respond_to_event` `{ id, response, comment? }` | calendar:write | accepted / declined / tentative, for the series (its id) or an occurrence |
+| `list_calendars` | calendar:read | calendars: id, name, account, `native` (the FreeFlow calendar) or not, role (owner, manager, editor, viewer), read_only, hidden, default, timezone; then the native calendars shared with the person (`shared: true`, `owner_account`); accounts needing attention |
+| `list_shared_calendars` | calendar:read | only the shared ones (`GET /v1/calendar/shared`): id, name, role, owner_account |
+| `list_events` `{ from, to, calendars?, q?, limit? ≤ 200 }` | calendar:read | occurrences in a window of ≤ 93 days, oldest first (shared calendars when named, one request per owner, merged): id, series_id, summary, start, end, all_day, timezone, calendar, location, video_call, repeats (in words), status, organizer, attendees with responses, my_response, link |
+| `get_event` `{ id }` | calendar:read | one event or occurrence in full (description, recurrence lines and in words, reminders), and its series; a shared calendar's too |
+| `find_free_time` `{ duration_minutes, from, to, attendees?, working_hours?, timezone? }` | calendar:read | free slots in ≤ 31 days where the person (the shown calendars, less free and declined events) and the attendees (`POST …/freebusy`: members of the organization from their own objects, busy only; others by the CalDAV outbox) are free, within working hours (09:00–17:00 Mon–Fri in `timezone` unless given; `null` for any time), longest first; `members` lists who was read from their object, `unknown` whose calendars cannot be seen |
+| `create_event` `{ summary, start, end, all_day?, timezone?, location?, description?, attendees?, optional_attendees?, recurrence?, reminders_minutes?, calendar_id? }` | calendar:write | creates on the person's native calendar (the default when it is native, else their FreeFlow calendar) or `calendar_id` (a connected one, or a shared one as editor); attendees by address: members are scheduled by object call (`scheduled_to_members`), others emailed (`emailed`, or `not_emailed` with `invitations_note`); a connected server invites its own; returns the event (its calendar, `native`) and who was invited |
+| `update_event` `{ id, scope?, …the same fields }` | calendar:write | changes only what is given; `scope` this / following / all for an occurrence; `calendar_id` moves the whole event; a guest's change is the server's `not_organizer`, a viewer's `forbidden`, said in words; who was told as for create |
+| `delete_event` `{ id, scope? }` | calendar:write | deletes (destructive annotation); this / following / all for an occurrence; `cancelled_for_members`, `emailed` |
+| `respond_to_event` `{ id, response, comment? }` | calendar:write | accepted / declined / tentative, for the series (its id) or an occurrence; `organizer_told` (`server` for a member organizer) |
+| `share_calendar` `{ calendar_id, principal: { account? \| channel? \| org?: true }, role }` | calendar:write | grants viewer / editor / manager on a native calendar (`PUT …/grants`); `account` is an address, resolved through the directory to an account of the organization (anyone else refused); returns the grants |
+| `unshare_calendar` `{ calendar_id, principal }` | calendar:write | takes the grant away (`DELETE …/grants/:principal`) |
 
-- **Ids** are the API's `<calendarId>:<uid>[:<recurrenceId>]`, opaque (`checkEventId` checks the shape only). An id naming a
-  calendar the person's object does not have is "Not found".
+- **Ids** are the API's `<calendarId>:<uid>[:<recurrenceId>]`, opaque (`checkEventId` checks the shape only). Since phase 4.3
+  the tools' fetch takes the routes' path (`calendar/forward.ts` `calendarRequest`): a native id of another account goes to its
+  owner's object as a reader (`handleShared`, role checked there), `/shared` to the share index. An id the person has no role on
+  is "Not found".
 - Errors as tool errors (`CalendarToolError`): no calendar connected (with the link to Calendar), a refused login, a bad id,
   a window too long, a conflict (read the event again and repeat).
-- **The Docs assistant** (edge copy of `server/agent`) has all eight (`assistantCalendarSchemas`, `runAssistantCalendarTool`),
-  with prompt lines: it creates and changes events on the person's calendars and says what it did, checks free time before
-  proposing one, and never deletes without being asked. Its `delete_event` is a browser tool (`CLIENT_TOOLS`): Calendar asks in
+- **The Docs assistant** (edge copy of `server/agent`) has all eleven (`assistantCalendarSchemas`, `runAssistantCalendarTool`),
+  with prompt lines: it creates and changes events on the person's own calendars and says what it did, invites members by
+  address, checks free time before proposing one, says a viewer cannot change a shared calendar, shares only when asked, and
+  never deletes without being asked. Its `delete_event` is a browser tool (`CLIENT_TOOLS`): Calendar asks in
   its panel (Delete / Keep it) and Docs asks with `confirmationFor`, then each deletes through `/v1/calendar`; Mail refuses it
   as it refuses any tool it does not run. `packages/docs` (desktop, AWS) has no Calendar tools.
 - **The assistant in Calendar.** The suite bar's Assistant opens the same panel as Mail's (`packages/calendar`:
   `components/AssistantPanel.tsx`, `hooks/assistant.ts`, `lib/assistant.ts`), in the organization the bar has selected, in a
   chat of its own (`CALENDAR_CHAT`, `'calendar'`). Each turn sends a `page: 'calendar'` context (`CalendarContext`): the view,
-  the range shown, the browser's zone, the calendars shown and the open event (id, summary, when, calendar);
+  the range shown, the browser's zone, the calendars shown and the open event (id, summary, when, calendar, `native`, the
+  person's `role` on its calendar);
   `renderCalendarContext` quotes the event's text so it cannot close the block. Browser tools `open_calendar_event` and
   `show_calendar_range` run in Calendar (Docs refuses them). `create_event` and `update_event` are in `SHOWN_RESULTS`, so the
   chat shows **Open event**; a change by a Calendar tool refreshes the views.
-- Tests: `src/calendar/calendarTools.test.ts` (ids, scope gating, the tools against a fake Calendar object, free slots),
+- **The bridge's `flow` MCP** (0.37.7) has `find_free_time` and `create_event` beside 4.2's three, calling `/v1/calendar/*` as
+  the agent (`packages/agent-bridge/src/calendar-tools.ts`), so an agent proposes and books a meeting from a DM.
+- Tests: `src/calendar/calendarTools.test.ts` (ids, scope gating, the tools against a fake Calendar object, native and shared
+  calendars, sharing, free slots), `scheduling.test.ts` (`find_free_time` over three accounts' objects),
   `calendarMcp.test.ts` (`tools/list` per scope set), `assistantCalendar.test.ts`, Calendar's `lib/assistant.test.ts`, and
   `test/e2e-calendar-mcp.mjs` against Radicale (its header says how).
 

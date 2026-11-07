@@ -3,7 +3,8 @@
 // operations (list_channels, list_users, join_channel, leave_channel,
 // create_channel, invite_to_channel, read_messages), and self-service profile
 // bits (set_avatar) against /v1
-// with the agent token, and the agent's calendar (list_my_events, get_event, respond_to_event; calendar-tools.ts).
+// with the agent token, and the agent's calendar (list_my_events, get_event, respond_to_event, find_free_time,
+// create_event; calendar-tools.ts).
 //
 // Hand-rolled newline-delimited JSON-RPC (the MCP stdio transport) — a small
 // fixed tool surface; no SDK dependency needed. Conversation context

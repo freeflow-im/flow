@@ -1,12 +1,14 @@
 // Scheduling between accounts (phase 4.2): Ann's, Bob's and an agent's Calendar objects wired to each other by a stand-in
 // CALENDAR namespace, a stand-in directory resolving addresses, and one event log. An invitation by object call, the answer
 // back, an update keeping it, an attendee refused a change, a cancellation kept as cancelled, a failed delivery retried
-// once and the organizer's write standing.
+// once and the organizer's write standing. And the Calendar tools over them (phase 4.3): find_free_time over the members'
+// objects, create_event scheduling a member.
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { describe, expect, it, vi } from 'vitest';
 import type { PublishInput } from '../events/core';
 import type { CallerContext } from '../org/routes/compat';
 import { Calendar, type ItipDelivery } from './object';
+import { CALENDAR_TOOLS, type CalendarToolContext } from './calendarTools';
 
 const toBinding = (v: unknown): SQLInputValue => (v instanceof ArrayBuffer ? new Uint8Array(v) : (v as SQLInputValue));
 const ORG = 'org-1';
@@ -31,6 +33,7 @@ function world(opts: { failFirst?: Set<string>; down?: Set<string> } = {}) {
           if (opts.failFirst?.delete(id)) throw new Error('a transient failure');
           return objectFor(id).receiveItip(m);
         },
+        busy: async (from: number, to: number) => objectFor(id).busy(from, to),
       }),
     },
   };
@@ -57,7 +60,12 @@ function world(opts: { failFirst?: Set<string>; down?: Set<string> } = {}) {
     const res = await objectFor(`acct-${id}`).handle(new Request(`https://edge.test${path}`, { method, ...(body !== undefined ? { body: JSON.stringify(body), headers: { 'content-type': 'application/json' } } : {}) }), callerOf(id, name));
     return { s: res.status, j: (await res.json()) as Record<string, any> };
   };
-  return { published, calls, objects, ann: as('ann', 'Ann'), bob: as('bob', 'Bob') };
+  /** The Calendar tools as one account, on its own object (the forwarding is not needed for its own calendars). */
+  const tools = (id: string, name: string): CalendarToolContext => ({
+    origin: 'https://app.test',
+    calendar: (path, init) => objectFor(`acct-${id}`).handle(new Request(`https://edge.test${path}`, init), callerOf(id, name)),
+  });
+  return { published, calls, objects, ann: as('ann', 'Ann'), bob: as('bob', 'Bob'), bot: as('bot', 'Builder'), tools };
 }
 
 const W = '/v1/calendar/events?from=2026-12-01T00:00:00Z&to=2026-12-31T00:00:00Z';
@@ -151,5 +159,35 @@ describe('scheduling between accounts', () => {
     expect(lines).toHaveLength(3);
     expect(lines).toEqual(expect.arrayContaining(['[calendar] REQUEST delivery 1/2 failed: a transient failure', '[calendar] REQUEST delivery 2/2 failed: object unreachable']));
     warn.mockRestore();
+  });
+
+  it('find_free_time reads the members\' objects (busy only), names the unknown; create_event schedules a member', async () => {
+    const w = world();
+    const run = (name: string, input: Record<string, unknown>) => CALENDAR_TOOLS.find((t) => t.name === name)!.run(w.tools('ann', 'Ann'), input);
+    // Ann busy 09:00-10:00 UTC, Bob 10:30-12:00 (a private event of his), the agent 13:00-14:00; Thu Dec 3.
+    await w.ann('POST', '/v1/calendar/events', { summary: 'Ann alone', start: '2026-12-03T09:00:00Z', end: '2026-12-03T10:00:00Z' });
+    await w.bob('POST', '/v1/calendar/events', { summary: 'Bob private', start: '2026-12-03T10:30:00Z', end: '2026-12-03T12:00:00Z' });
+    await w.bot('POST', '/v1/calendar/events', { summary: 'Bot busy', start: '2026-12-03T13:00:00Z', end: '2026-12-03T14:00:00Z' });
+    const r = await run('find_free_time', { duration_minutes: 60, from: '2026-12-03T08:00:00Z', to: '2026-12-03T18:00:00Z', attendees: [ADDR('bob'), `Builder <${ADDR('bot')}>`, 'guest@example.com', 'carol@other.freeflow.im'], timezone: 'UTC' });
+    expect(r).toMatchObject({
+      timezone: 'UTC', working_hours: '09:00-17:00 mon,tue,wed,thu,fri',
+      // Longest first: 14:00-17:00, then 12:00-13:00; 10:00-10:30 is too short.
+      slots: [{ start: '2026-12-03T14:00:00.000Z', end: '2026-12-03T17:00:00.000Z', minutes: 180 }, { start: '2026-12-03T12:00:00.000Z', end: '2026-12-03T13:00:00.000Z', minutes: 60 }],
+      members: [ADDR('bob'), ADDR('bot')], unknown: ['guest@example.com', 'carol@other.freeflow.im'],
+    });
+    expect((r.checked as string[]).sort()).toEqual([ADDR('ann'), ADDR('bob'), ADDR('bot')].sort());
+    // No details of Bob's event reach Ann.
+    expect(JSON.stringify(r)).not.toMatch(/Bob private/);
+
+    // Ann books the first slot with Bob through the tool: on her FreeFlow calendar, Bob scheduled by object call.
+    w.calls.length = 0;
+    const made = await run('create_event', { summary: 'Plan', start: '2026-12-03T14:00:00Z', end: '2026-12-03T15:00:00Z', attendees: [`Bob <${ADDR('bob')}>`] });
+    expect(made).toMatchObject({ created: { summary: 'Plan', calendar: { native: true, name: 'Calendar' }, attendees: [{ email: ADDR('bob'), member: true }, { email: ADDR('ann'), you: true }] }, scheduled_to_members: [ADDR('bob')] });
+    expect(made).not.toHaveProperty('emailed');
+    expect(w.calls).toEqual([{ to: 'acct-bob', method: 'REQUEST' }]);
+    expect((await w.bob('GET', W)).j.events.map((e: { summary: string }) => e.summary)).toEqual(['Bob private', 'Plan']);
+    // Bob cannot change Ann's event: the tool passes the server's not_organizer on.
+    const bobCopy = (await w.bob('GET', W)).j.events.find((e: { summary: string }) => e.summary === 'Plan');
+    await expect(CALENDAR_TOOLS.find((t) => t.name === 'update_event')!.run(w.tools('bob', 'Bob'), { id: bobCopy.id, summary: 'Mine' })).rejects.toThrow(/Only the organizer.*respond_to_event/);
   });
 });

@@ -261,6 +261,29 @@ on by default), and in the Docs assistant with a `page: 'calendar'` context, the
 - **The labels** (`describe.ts`) read only the tool's input, as all labels do: "Created “Lunch” Thu, Nov 5, 12:00 PM, invited Bo".
 - The Calendar mock has no canned assistant (Mail's has none either): the panel opens and its chat answers with the mock's 404.
 
+### §6 for native calendars (platform phase 4.3, 2026-11-06)
+
+The tools of §6 over the native calendars of §15 and §16, as `docs/specs/web-mcp.md` "Calendar tools" has them in full:
+
+- **The same path as the routes.** `calendar/forward.ts` (`sharedOwnerOf`, `sharedWithCaller`, `calendarRequest`) is what
+  `routes/calendar.ts` and Docs' `calendarOf` both call, so a tool naming a shared calendar's id reaches the owner's object as
+  a reader and `/shared` answers from the share index.
+- **`list_calendars`** marks each calendar `native` and gives the person's `role` (owner, manager, editor, viewer; a connected
+  writer is editor, a reader viewer), then the calendars shared with them (`shared: true`); **`list_shared_calendars`** is only
+  those. `list_events` splits named calendars by owner (one request each, merged by start); `get_event` names a shared one.
+- **`create_event`** defaults to the person's native calendar (the default when it is native, else their FreeFlow calendar),
+  not a connected default; the results of create, update and delete say who was scheduled by object call
+  (`scheduled_to_members`, `cancelled_for_members`) and who was emailed (`emailed`, or `not_emailed` with the note). A guest's
+  change (`not_organizer`) and a role too low (`forbidden`) come back as the server's message with what to do instead.
+- **`find_free_time`** is unchanged in shape; `POST …/freebusy` now says each address's `source` (`self`, `member`, `server`),
+  so the result lists `members` beside `unknown`.
+- **`share_calendar` / `unshare_calendar`** (calendar:write) call §15's grants routes; an `account` principal is an address,
+  resolved by the tool context's `member` (the directory's `accountByAddress`, this organization only, not suspended or removed).
+- **The assistant** has the three new tools as server tools; `delete_event` stays the browser's. `CalendarContext.event` gains
+  `native` and `role` (Calendar fills them from its accounts and calendars), rendered as "a FreeFlow calendar" and, for a viewer,
+  "can view this calendar but not change it".
+- **The bridge** (0.37.7) adds `find_free_time` (its own busy and the attendees', in working hours and a zone) and `create_event`.
+
 ## 7. The PRs (each with its `changelog/` entry; batched so a PR is something a person can use, as ruled 2026-11-04)
 
 1. **Calendar, reading and writing** (server + web, branch `calendar/app`). The whole of §3, §4 (less `invites`) and §5:

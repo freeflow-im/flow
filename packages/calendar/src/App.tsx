@@ -144,8 +144,8 @@ export function App() {
   const assistantOpen = useAssistantOpen();
   const assistantOverlay = useMediaQuery('(max-width: 1099px)');
   const assistantPane = useResizableWidth('flow.calendar.assistantWidth', 380, 300, 720, 'left');
-  const viewNow = useRef({ view, range, cals, event: open?.event ?? null, search });
-  viewNow.current = { view, range, cals, event: open?.event ?? null, search };
+  const viewNow = useRef({ view, range, cals, event: open?.event ?? null, search, accounts: accounts.data });
+  viewNow.current = { view, range, cals, event: open?.event ?? null, search, accounts: accounts.data };
   /** An event by id (the assistant's open_calendar_event, Open event, a link in its chat): the view moves to it, its card opens. */
   const openById = useCallback(async (id: string, start?: string) => {
     if (start) navigate({ date: /^\d{4}-\d\d-\d\d$/.test(start) ? parseDate(start) : new Date(start) });
@@ -161,7 +161,7 @@ export function App() {
   }, [navigate]);
   const chat = useCalendarAssistant({
     org: org?.id ?? null,
-    context: () => { const v = viewNow.current; return calendarContext({ view: v.view, range: v.range, calendars: v.cals, event: v.event, search: v.search || undefined }); },
+    context: () => { const v = viewNow.current; return calendarContext({ view: v.view, range: v.range, calendars: v.cals, event: v.event, search: v.search || undefined, accounts: v.accounts }); },
     handlers: {
       open: openById,
       show: (date, v) => navigate({ date, view: v }),

@@ -2,7 +2,7 @@
 // browser tools Calendar runs (open_calendar_event, show_calendar_range, and delete_event after the user confirms; Docs'
 // own are refused), and what the chat links to (an event the assistant made or changed). The panel is
 // components/AssistantPanel.tsx, the turns hooks/assistant.ts.
-import type { CalendarInfo, EventOccurrence, Scope } from '../api';
+import type { CalendarAccount, CalendarInfo, EventOccurrence, Scope } from '../api';
 import { MAX_CALENDARS_SHOWN, type CalendarContext, type ChatItem, type ClientToolCall, type ClientToolResult } from './docsAgent';
 import { browserPref } from './prefs';
 import type { Range, View } from './ranges';
@@ -19,12 +19,19 @@ export interface CalendarView {
   /** The event whose card is open. */
   event: EventOccurrence | null;
   search?: string;
+  /** The accounts, to say whether the open event's calendar is the FreeFlow (native) one. */
+  accounts?: CalendarAccount[];
 }
+
+/** The user's role on a calendar, in the grants' words: a calendar a server shares into the account read-only is viewed only. */
+const roleOf = (c: CalendarInfo): 'owner' | 'editor' | 'viewer' => (c.role === 'reader' ? 'viewer' : c.role === 'writer' ? 'editor' : 'owner');
 
 /** What a turn sent from Calendar says the user is looking at (rendered for the model by the server's renderCalendarContext). */
 export function calendarContext(v: CalendarView, zone = Intl.DateTimeFormat().resolvedOptions().timeZone): CalendarContext {
   const shown = v.calendars.filter((c) => !c.hidden);
   const e = v.event;
+  const cal = e ? v.calendars.find((c) => c.id === e.calendarId) : undefined;
+  const kind = cal && v.accounts?.find((a) => a.id === cal.accountId)?.kind;
   return {
     page: 'calendar',
     view: v.view,
@@ -32,7 +39,7 @@ export function calendarContext(v: CalendarView, zone = Intl.DateTimeFormat().re
     to: v.range.end.toISOString(),
     timezone: zone || 'UTC',
     calendars: shown.slice(0, MAX_CALENDARS_SHOWN).map((c) => ({ id: c.id, name: c.name })),
-    ...(e ? { event: { id: e.id, summary: e.summary, start: e.start, end: e.end, allDay: e.allDay, calendar: v.calendars.find((c) => c.id === e.calendarId)?.name ?? '' } } : {}),
+    ...(e ? { event: { id: e.id, summary: e.summary, start: e.start, end: e.end, allDay: e.allDay, calendar: cal?.name ?? '', ...(kind ? { native: kind === 'native' } : {}), ...(cal ? { role: roleOf(cal) } : {}) } } : {}),
     ...(v.search ? { search: v.search } : {}),
   };
 }

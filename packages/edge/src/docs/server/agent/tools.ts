@@ -727,7 +727,7 @@ export const schemas = {
     .object({ id: z.string().min(5).max(1000).describe('The message to show: an id from search_mail, read_mail, create_mail_draft or the <app_context>.') })
     .describe('Shows a message in FreeFlow Mail\'s reading pane, when the user is in Mail (the <app_context> says so) and asks to see or open it. A draft opens in Drafts, with Edit draft to change and send it. Only works in Mail; elsewhere give the user the message\'s link.'),
   // The user's own calendars (FreeFlow Calendar), on the Worker only. delete_event runs in the browser, which asks first.
-  ...(assistantCalendarSchemas() as Record<'list_calendars' | 'list_events' | 'get_event' | 'find_free_time' | 'create_event' | 'update_event' | 'respond_to_event' | 'delete_event', z.ZodObject>),
+  ...(assistantCalendarSchemas() as Record<'list_calendars' | 'list_shared_calendars' | 'list_events' | 'get_event' | 'find_free_time' | 'create_event' | 'update_event' | 'respond_to_event' | 'share_calendar' | 'unshare_calendar' | 'delete_event', z.ZodObject>),
   // Browser tools in FreeFlow Calendar (packages/calendar, src/lib/assistant.ts): the event opens, the view moves.
   open_calendar_event: z
     .object({ id: z.string().min(3).max(1200).describe('The event to show: an id from list_events, get_event, create_event or the <app_context>.') })
@@ -964,12 +964,15 @@ export async function runServerTool(name: string, input: Record<string, unknown>
       }
     }
     case 'list_calendars':
+    case 'list_shared_calendars':
     case 'list_events':
     case 'get_event':
     case 'find_free_time':
     case 'create_event':
     case 'update_event':
-    case 'respond_to_event': {
+    case 'respond_to_event':
+    case 'share_calendar':
+    case 'unshare_calendar': {
       if (!env.calendar) throw new ToolFailure('Calendar is not available here.');
       try {
         return JSON.stringify(await runAssistantCalendarTool(name, input, env.calendar));

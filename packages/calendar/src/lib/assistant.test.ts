@@ -10,8 +10,13 @@ describe('the Calendar context', () => {
     const ctx = calendarContext({ view: 'week', range: { start: new Date('2026-11-01T04:00:00Z'), end: new Date('2026-11-08T05:00:00Z') }, calendars: [cal('work'), cal('home', { hidden: true })], event: ev, search: 'sync' }, 'America/New_York');
     expect(ctx).toEqual({
       page: 'calendar', view: 'week', from: '2026-11-01T04:00:00.000Z', to: '2026-11-08T05:00:00.000Z', timezone: 'America/New_York', calendars: [{ id: 'work', name: 'WORK' }],
-      event: { id: 'work:u1', summary: 'Stakeholder Sync', start: ev.start, end: ev.end, allDay: false, calendar: 'WORK' }, search: 'sync',
+      event: { id: 'work:u1', summary: 'Stakeholder Sync', start: ev.start, end: ev.end, allDay: false, calendar: 'WORK', role: 'owner' }, search: 'sync',
     });
+    // With the accounts: whether the open event's calendar is the FreeFlow one, and a read-only calendar is viewed only.
+    const accounts = [{ id: 'a', kind: 'native' as const, email: 'ann@acme.test', displayName: 'Ann', status: 'ok' as const }, { id: 'g', kind: 'google' as const, email: 'ann@gmail.com', displayName: 'Ann', status: 'ok' as const }];
+    const range = { start: new Date(0), end: new Date(86_400_000) };
+    expect(calendarContext({ view: 'day', range, calendars: [cal('work')], event: ev, accounts }, 'UTC').event).toMatchObject({ native: true, role: 'owner' });
+    expect(calendarContext({ view: 'day', range, calendars: [cal('work', { accountId: 'g', role: 'reader' })], event: ev, accounts }, 'UTC').event).toMatchObject({ native: false, role: 'viewer' });
     expect(calendarContext({ view: 'day', range: { start: new Date(0), end: new Date(86_400_000) }, calendars: [], event: null }, 'UTC')).not.toHaveProperty('event');
   });
 });
