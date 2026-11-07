@@ -354,11 +354,16 @@ for(const m of [pic,dpic])if(m)await api(A.token,'POST',`${P}/messages/delete`,{
  t('fresh: pages of a folder the alarm just synced do no IMAP',[a,b,c,d].every(x=>x.s===200&&imapMs(x)>=0&&imapMs(x)<40)&&a.j.messages.length>0&&b.j.messages.length>0&&c.j.threads.length>0&&d.j.threads.length>0,[a,b,c,d].map(x=>x.s+':'+imapMs(x)+'ms').join(' '));}
 // Bodies: a message opened before the alarm got to it is read from the server and kept; after an alarm pass the newest
 // are in the cache, and open from it with no round trip; an attachment is fetched by the plan the row was cached with.
-// More messages than one pass fetches (BODY_BATCH, 25) arrive, then one alarm pass lists them all and fetches the newest
-// 25: the oldest of them is out of its reach whatever the mailbox held before, and the next pass still has bodies to fetch.
-const FILL=40,fillSubject=(i)=>`Filler ${String(i).padStart(2,'0')} ${tag}`;
-for(let i=0;i<FILL;i++)await smtpDirect.sendMail({from:'"Filler" <filler@acme.test>',to:MAIL_USER,subject:fillSubject(i),text:`filler ${i}`});
-for(let i=0;i<40;i++){const n=await imapDirect(async(c)=>{const lock=await c.getMailboxLock('INBOX');try{return (await c.search({subject:`Filler`,body:tag},{uid:true})).length;}finally{lock.release();}});if(n>=FILL)break;await sleep(250);}
+// More messages than one pass fetches (BODY_BATCH, 25) arrive at once, then one alarm pass lists them all and fetches the
+// newest 25: the oldest of them is out of its reach whatever the mailbox held before, and the next pass still has bodies
+// to fetch. They are staged in a folder the cache does not keep and moved into INBOX in one command, after waiting out a
+// real alarm run (every 30 s) that is due soon: delivered one by one they took ~10 s, and a real run in that time fetched
+// the first arrivals, the oldest, before the test's pass.
+const FILL=40,fillSubject=(i)=>`Filler ${String(i).padStart(2,'0')} ${tag}`,STAGE=`Stage-${tag}`;
+await imapDirect(async(c)=>{await c.mailboxCreate(STAGE);for(let i=0;i<FILL;i++)await c.append(STAGE,Buffer.from([`From: "Filler" <filler@acme.test>`,`To: ${MAIL_USER}`,`Subject: ${fillSubject(i)}`,`Date: ${new Date().toUTCString()}`,`Message-ID: <filler-${i}-${tag}@acme.test>`,'MIME-Version: 1.0','Content-Type: text/plain; charset=utf-8','',`filler ${i}`,''].join('\r\n')));});
+{const due=(await api(A.token,'GET',`${P}/debug/cache`)).j.nextAlarmAt;
+ if(due&&due-Date.now()<10_000)for(let i=0;i<80;i++){const x=(await api(A.token,'GET',`${P}/debug/cache`)).j;if(Date.parse(x.log?.at(-1)?.at??0)>=due-1000&&x.nextAlarmAt>due)break;await sleep(250);}}
+await imapDirect(async(c)=>{const lock=await c.getMailboxLock(STAGE);try{await c.messageMove('1:*','INBOX',{uid:true});}finally{lock.release();}await c.mailboxDelete(STAGE);});
 await getRaw(`${P}/folders`,{'x-mail-test-alarm':'1'});
 const fillers=(await api(A.token,'GET',`${P}/messages?folder=INBOX&limit=${FILL}`)).j.messages?.filter(m=>m.subject.startsWith('Filler ')&&m.subject.endsWith(tag))??[];
 t('bodies: more messages arrive than one pass fetches',fillers.length===FILL,fillers.length);

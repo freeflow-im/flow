@@ -13,6 +13,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import { ImapFlow } from 'imapflow';
 import nodemailer from 'nodemailer';
+import { APP_MANIFESTS } from '@flow/shared/manifests';
 const log=process.argv[2]; const B=process.env.B??'http://localhost:18805';
 let pass=0,fail=0; const t=(n,ok,d='')=>{ok?pass++:fail++;console.log((ok?'ok  ':'FAIL')+' '+n+(d?': '+String(d).slice(0,200):''));};
 const api=async(tok,m,p,b,type,extra={})=>{const r=await fetch(B+p,{method:m,redirect:'manual',headers:{...extra,...(tok?{authorization:'Bearer '+tok}:{}),...(b!==undefined?{'content-type':type??'application/json'}:{})},body:b===undefined?undefined:(type?b:JSON.stringify(b))});const x=await r.text();let j;try{j=JSON.parse(x)}catch{j=x}return{s:r.status,j,h:r.headers}};
@@ -32,6 +33,9 @@ t('two people, each with an organization',ORG&&ORG_B,JSON.stringify([ORG,ORG_B])
 const server=(port)=>({host:'127.0.0.1',port,security:'none'});
 const PROJECTS=`Projects-${tag}`;
 await imapDirect(MAIL_USER,async(c)=>{for(const f of ['Trash','Archive',PROJECTS])await c.mailboxCreate(f).catch(()=>{});});
+// GreenMail (auth disabled) creates a user at its first login, and two first logins at once race to create the INBOX: the
+// loser's connection is dropped. Connecting logs in to IMAP and SMTP together, so each mailbox is created here first.
+await imapDirect(BO_MAIL,async()=>{});
 r=await api(A.token,'POST','/v1/mail/accounts',{email:MAIL_USER,displayName:'Ann',password:'x',imap:server(3143),smtp:server(3025)});const ACC=r.j.account?.id;
 t('Ann connects her GreenMail account',r.s===201&&ACC,r.s+' '+JSON.stringify(r.j).slice(0,120));
 r=await api(Bo.token,'POST','/v1/mail/accounts',{email:BO_MAIL,displayName:'Bo',password:'x',imap:server(3143),smtp:server(3025)});const ACC_B=r.j.account?.id;
@@ -49,6 +53,9 @@ r=await api(null,'POST','/oauth/register',{client_name:'Mail Agent',redirect_uri
 const cookie=(u)=>({cookie:`sid=${u.token}`});
 const pkce=()=>{const v=randomBytes(32).toString('base64url');return{v,c:createHash('sha256').update(v).digest('base64url')}};
 const authorizeUrl=(c,extra={})=>'/oauth/authorize?'+form({response_type:'code',client_id:CLIENT,redirect_uri:'http://localhost:51234/callback',code_challenge:c,code_challenge_method:'S256',state:'s',resource:`${B}/mcp`,...extra});
+// The consent groups, from the manifests (the apps so far and any added since), in order, and their defaults.
+const GROUPS=APP_MANIFESTS.flatMap((m)=>m.scopes??[]);
+const DEFAULT_SCOPES=GROUPS.filter((g)=>g.checkedByDefault).flatMap((g)=>g.scopes).join(' ');
 const consentOf=(html)=>({p:/name="p" value="([^"]+)"/.exec(html)?.[1],csrf:/name="csrf" value="([^"]+)"/.exec(html)?.[1],grants:[...html.matchAll(/name="grant_(\w+)" value="on"( checked)?/g)].map((m)=>({id:m[1],checked:!!m[2]}))});
 /** The whole flow, ticking `grants` (the page's defaults when not given). */
 async function connect(u,org,grants,extra={}){const {v,c}=pkce();let x=await api(null,'GET',authorizeUrl(c,extra),undefined,undefined,cookie(u));const page=await api(null,'GET',x.h.get('location'),undefined,undefined,cookie(u));const f=consentOf(page.j);
@@ -60,7 +67,7 @@ async function connect(u,org,grants,extra={}){const {v,c}=pkce();let x=await api
 
 {const {c}=pkce();const x=await api(null,'GET',authorizeUrl(c),undefined,undefined,cookie(A));const page=await api(null,'GET',x.h.get('location'),undefined,undefined,cookie(A));const f=consentOf(page.j);
  if(process.env.CONSENT_HTML)fs.writeFileSync(process.env.CONSENT_HTML,page.j);
- t('consent offers Docs, Mail, sending, Calendar and Events as checkboxes',JSON.stringify(f.grants)===JSON.stringify([{id:'docs',checked:true},{id:'mail',checked:true},{id:'send',checked:false},{id:'calendar',checked:true},{id:'events',checked:true}]),JSON.stringify(f.grants));
+ t('consent offers every app\'s groups as checkboxes, Docs, Mail and sending among them',JSON.stringify(f.grants)===JSON.stringify(GROUPS.map((g)=>({id:g.id,checked:!!g.checkedByDefault})))&&['docs','mail','send'].every((id)=>f.grants.some((g)=>g.id===id)),JSON.stringify(f.grants));
  t('with a warning on sending',page.j.includes('Send email as you')&&page.j.includes('without asking you first'),'');
  const none=await api(null,'POST','/oauth/decision',form({p:f.p,csrf:f.csrf,org:ORG,allow:'yes',scopes_form:'1'}),'application/x-www-form-urlencoded',{...cookie(A),origin:B});
  t('nothing ticked is refused, on the page again',none.s===403&&none.j.includes('Choose at least one'),none.s);}
@@ -78,7 +85,7 @@ t('Docs alone: files:read files:write',DOCS.scope==='files:read files:write',JSO
 let names=await list(DOCS.access_token);t('and no Mail tools listed',names.includes('write_range')&&!names.some((n)=>/mail/.test(n)),names.filter((n)=>/mail/.test(n)).join(','));
 r=await call(DOCS.access_token,'search_mail',{});t('nor callable',r.isError,r.text);
 const TOK=await connect(A,ORG);
-t('the defaults: Docs, Mail, Calendar and Events, not sending',TOK.scope==='files:read files:write mail:read mail:write calendar:read calendar:write events:read',TOK.scope);
+t('the defaults: the groups ticked by default, Docs and Mail among them, not sending',TOK.scope===DEFAULT_SCOPES&&/files:write/.test(TOK.scope)&&/mail:write/.test(TOK.scope)&&!/mail:send/.test(TOK.scope),TOK.scope);
 names=await list(TOK.access_token);
 t('one list: Docs and Mail tools',MAIL_TOOLS.every((n)=>names.includes(n))&&names.includes('read_range'),names.filter((n)=>/mail/.test(n)).join(','));
 t('send_mail is absent without mail:send',!names.includes('send_mail'));
