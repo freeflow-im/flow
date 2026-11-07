@@ -17,6 +17,10 @@ import type { ImageStore } from '../images.ts';
 import type { PdfMaker } from '../pdf.ts';
 import { assistantTools, isBrowserTool, runServerTool, ToolFailure, validateToolInput } from './tools.ts';
 import { scopeOf, type ScopeArg, type ViewerArg } from '../scope.ts';
+import { APP_MANIFESTS } from '@flow/shared/manifests';
+
+/** The pages a turn may come from (Edge only): every app's `assistant.pages`. */
+const ASSISTANT_PAGES: ReadonlySet<string> = new Set(APP_MANIFESTS.flatMap((m) => m.assistant?.pages ?? []));
 
 type Message = Anthropic.Beta.BetaMessage;
 type ToolUse = Anthropic.Beta.BetaToolUseBlock;
@@ -58,6 +62,8 @@ export interface AgentOptions {
   mail?: (userId: string, scope: ScopeArg) => import('../../../imap/mailTools.ts').MailToolContext | undefined;
   /** Edge only: the user's own calendars, for the Calendar tools (list_events, create_event and the rest). */
   calendar?: (userId: string) => import('../../../calendar/calendarTools.ts').CalendarToolContext | undefined;
+  /** Edge only: the organization's Docs over HTTP, for Docs' tools in the suite's Assistant object; given the chat's scope. */
+  docs?: (userId: string, scope: ScopeArg) => import('../../../assistant/docsTools.ts').DocsToolContext | undefined;
 }
 
 /** The model the live assistant runs on. Set AGENT_MODEL (e.g. claude-opus-5-5) to change it per deployment. */
@@ -90,6 +96,7 @@ export class AgentService {
   private claudeAgent: ClaudeAgentDriver | null;
   private mail: AgentOptions['mail'];
   private calendar: AgentOptions['calendar'];
+  private docs: AgentOptions['docs'];
   /** Users with a turn in progress (one at a time per user). */
   private busy = new Set<string>();
 
@@ -107,6 +114,7 @@ export class AgentService {
     this.claudeAgent = opts.claudeAgent ?? null;
     this.mail = opts.mail;
     this.calendar = opts.calendar;
+    this.docs = opts.docs;
     this.dailyLimit = opts.dailyRequestLimit ?? Number(process.env.AGENT_DAILY_REQUEST_LIMIT ?? 500);
   }
 
@@ -150,7 +158,8 @@ export class AgentService {
       if (!/^[A-Za-z0-9+/=]+$/.test(img.data) || (img.data.length * 3) / 4 > MAX_IMAGE_BYTES) throw new AgentError(400, 'An attached image is too large.');
       if (img.url !== undefined && !STORED_IMAGE_RE.test(img.url)) throw new AgentError(400, 'An attached image has an invalid address.');
     }
-    if (!req.context || !['home', 'sheet', 'deck', 'doc', 'markdown', 'file', 'mail', 'calendar'].includes(req.context.page)) throw new AgentError(400, 'Missing context.');
+    // Edge only: the pages the apps' manifests name (their `assistant.pages`).
+    if (!req.context || !ASSISTANT_PAGES.has(req.context.page)) throw new AgentError(400, 'Missing context.');
     if (req.scope !== undefined && !isChatScope(req.scope)) throw new AgentError(400, 'That is not a chat.');
     // The user's own agent: no key, no daily limit (their own plan pays), and no tools for the browser to run.
     if (this.driver(userId) === 'claude-agent') {
@@ -219,7 +228,8 @@ export class AgentService {
     const search = { braveKey: this.settings.braveKey(userId), provider: this.providerSearch(own) };
     const mail = this.mail?.(userId, access.scope);
     const calendar = this.calendar?.(userId);
-    const env = { userId, ...access, sheets: this.sheets, images: this.images, files: this.files, pdf: this.pdf, context: req.context, search, ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}) };
+    const docs = this.docs?.(userId, access.scope);
+    const env = { userId, ...access, sheets: this.sheets, images: this.images, files: this.files, pdf: this.pdf, context: req.context, search, ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}), ...(docs ? { docs } : {}) };
     const callModel = own ? this.ownModel(own) : this.getModel();
     let parseRetries = 0;
 

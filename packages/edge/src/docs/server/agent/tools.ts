@@ -22,6 +22,10 @@ import { ASSISTANT_MAIL_TOOLS, assistantMailSchemas, type MailToolContext } from
 import { ASSISTANT_CALENDAR_TOOLS, assistantCalendarSchemas, type CalendarToolContext } from '../../../calendar/calendarTools.ts';
 // Edge only: the tool registry (platform.md §5.4) lists the assistant's tools, by the open app, and runs its server tools.
 import { register, runnerOf, toolsFor } from '../../../registry/index.ts';
+// Edge only: which app a turn's page belongs to, from the apps' manifests (platform.md §6.1).
+import { APP_MANIFESTS } from '@flow/shared/manifests';
+// Edge only: the Docs tools over HTTP, in the suite's Assistant object (src/assistant/docsTools.ts).
+import type { DocsToolContext } from '../../../assistant/docsTools.ts';
 import { ConnectorError } from '../connectors/types.ts';
 import type { FileStore } from '../files.ts';
 import type { ImageStore } from '../images.ts';
@@ -749,8 +753,8 @@ export function isToolName(name: string): name is ToolName {
   return Object.hasOwn(schemas, name);
 }
 
-/** The app whose page a turn comes from: its browser tools are the ones the assistant has (Edge only). */
-export const openApp = (context: AgentContext | undefined): string => (context?.page === 'mail' ? 'mail' : context?.page === 'calendar' ? 'calendar' : 'docs');
+/** The app whose page a turn comes from, by the manifests' `assistant.pages`: its browser tools are the ones the assistant has (Edge only). */
+export const openApp = (context: AgentContext | undefined): string => APP_MANIFESTS.find((m) => !!context?.page && m.assistant?.pages.includes(context.page))?.name ?? 'docs';
 
 /** Whether the assistant has this tool in this context: every server tool, and the open app's browser tools (Edge only: the registry). */
 const offered = (name: string, context: AgentContext | undefined): boolean => toolsFor('assistant', { app: openApp(context) }).some((t) => t.definition.name === name);
@@ -810,6 +814,8 @@ export interface ServerToolEnv {
   mail?: MailToolContext;
   /** The user's own Calendar object, for the Calendar tools (the Worker's Docs object); without it they say Calendar is not here. */
   calendar?: CalendarToolContext;
+  /** The organization's Docs object over HTTP, as the person (the suite's Assistant object): Docs' tools then run there, not on `sheets`. */
+  docs?: DocsToolContext;
 }
 
 /** Run an account tool. Returns the result text for Claude; throws ToolFailure for errors Claude should see. */
@@ -827,7 +833,7 @@ export async function runServerTool(name: string, input: Record<string, unknown>
 }
 
 /** Docs' own server tools (Edge only: the registry runs them, as `runServerTool` does in packages/docs). */
-async function runDocsTool(name: string, input: Record<string, unknown>, env: ServerToolEnv): Promise<string> {
+export async function runDocsTool(name: string, input: Record<string, unknown>, env: ServerToolEnv): Promise<string> {
   switch (name) {
     case 'list_sheets': {
       const q = typeof input.query === 'string' ? input.query.trim().toLowerCase() : '';
@@ -1055,7 +1061,8 @@ export class ToolFailure extends Error {}
 const OTHER_APPS: ReadonlySet<string> = new Set([...ASSISTANT_MAIL_TOOLS, ...ASSISTANT_CALENDAR_TOOLS]);
 for (const name of Object.keys(schemas)) {
   if (CLIENT_TOOLS.has(name) || OTHER_APPS.has(name)) continue;
-  register<ServerToolEnv>('docs', name, { run: (env, input) => runDocsTool(name, input, env), refusal: (e) => e instanceof ToolFailure }, ['assistant']);
+  // In the Assistant object they reach the Docs object over HTTP (env.docs); elsewhere the stores in this process.
+  register<ServerToolEnv>('docs', name, { run: (env, input) => (env.docs ? env.docs.run(name, input, env) : runDocsTool(name, input, env)), refusal: (e) => e instanceof ToolFailure }, ['assistant']);
 }
 
 // The app's ConnectorService, keyed by its SheetStore (which every server tool env carries).
@@ -1087,7 +1094,7 @@ const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"'
 const searchCalls = new Map<string, number[]>();
 
 /** Per-user rate limit for the search tools (sliding window). */
-function checkSearchRate(userId: string): void {
+export function checkSearchRate(userId: string): void {
   const now = Date.now();
   const recent = (searchCalls.get(userId) ?? []).filter((t) => now - t < SEARCH_RATE.windowMs);
   if (recent.length >= SEARCH_RATE.max) {

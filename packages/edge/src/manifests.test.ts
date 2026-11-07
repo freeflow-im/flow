@@ -25,7 +25,7 @@ const migrations = [...wrangler.matchAll(/\[\[migrations\]\]\s*\ntag = "([^"]+)"
 describe('the manifests and the Worker', () => {
   it('exports each app object from index.ts, binds it, and adds it in the migration the manifest names', () => {
     const objects = APP_MANIFESTS.flatMap((m) => (m.object ? [m.object] : []));
-    expect(objects.map((o) => o.className)).toEqual(['Org', 'Docs', 'Mail', 'Calendar', 'Events']);
+    expect(objects.map((o) => o.className)).toEqual(['Org', 'Docs', 'Mail', 'Calendar', 'Events', 'Assistant']);
     for (const { className, migrationTag } of objects) {
       expect(index).toMatch(new RegExp(`^export \\{ ${className} \\} from '\\./[^']+';$`, 'm'));
       expect(wrangler).toMatch(new RegExp(`^class_name = "${className}"$`, 'm'));

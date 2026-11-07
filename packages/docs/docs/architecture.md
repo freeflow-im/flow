@@ -396,6 +396,18 @@ transcript. It runs in Claude Code's `auto` permission mode; a permission its cl
 AgentEvent `permission`, answered in the panel (`POST /api/agent/permission`). The desktop build ships the SDK's
 JavaScript but not its bundled binaries.
 
+In the FreeFlow suite (since platform phase 6.3) the assistant does not run in the Docs object. It is the account's
+`Assistant` Durable Object (`packages/edge/src/assistant/object.ts`, one per account), which runs this same loop and
+these stores (`AgentService`, `AgentStore`, `AssistantSettingsStore`) on its own SQLite, with the suite's tool registry:
+the open app's browser tools (by `context.page`, the apps' manifests' `assistant.pages`) and every server tool. The
+Worker serves `/api/agent`, its turn, reset and permission, and `/api/settings/assistant` from it (`routes/assistant.ts`),
+so Docs', Mail's and Calendar's panels share one assistant per account. Docs' server tools reach this app over HTTP as
+the person (`assistant/docsTools.ts`: the routes the client uses, plus `GET /api/places/:id` for a chat file's name and
+root, `POST /api/files/:id/pdf` for `export_pdf` and `POST /api/import/bytes` for `import_file` and saved mail
+attachments). The seam is `host.assistant`: with it this app makes no `AgentService` and serves none of those routes,
+and `edit_image` asks the host for the person's OpenAI key (`host.assistant.openaiKey`). Without a host (standalone,
+the desktop app) everything above runs here as before.
+
 Pictures among the stored files: `view_image` attaches one to the message after the tool results so the
 model can see it (as `render_slide` does), and `edit_image` asks the server (`POST /api/files/:id/edit-image`,
 `server/imageEdit.ts`) for an edited copy from OpenAI's image model, with the user's OpenAI key or the

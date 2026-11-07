@@ -75,6 +75,7 @@ export const APP_MANIFESTS: AppManifest[] = [
         checkedByDefault: true,
       },
     ],
+    assistant: { pages: ['home', 'sheet', 'deck', 'doc', 'markdown', 'file'] },
     tab: { label: 'Docs', shortcut: '1', badge: 'none' },
     client: { dist: 'packages/docs/dist/client', basePath: '/workspace/' },
     pages: [
@@ -116,6 +117,7 @@ export const APP_MANIFESTS: AppManifest[] = [
         checkedByDefault: false,
       },
     ],
+    assistant: { pages: ['mail'] },
     tab: { label: 'Mail', shortcut: '3', badge: 'mail-unread' },
     client: { dist: 'packages/mail/dist', basePath: '/mail/', optional: true },
     pages: [
@@ -146,6 +148,7 @@ export const APP_MANIFESTS: AppManifest[] = [
         checkedByDefault: true,
       },
     ],
+    assistant: { pages: ['calendar'] },
     tab: { label: 'Calendar', shortcut: '4', badge: 'none' },
     client: { dist: 'packages/calendar/dist', basePath: '/calendar/', optional: true },
     pages: [
@@ -173,6 +176,16 @@ export const APP_MANIFESTS: AppManifest[] = [
         checkedByDefault: true,
       },
     ],
+    events: [],
+  },
+  {
+    // The assistant (platform.md §5.5): one object per account holding its chats, settings and usage, which runs the model
+    // loop with the registry's tools; the apps above give it page context and browser tools (their `assistant`).
+    name: 'assistant',
+    scope: 'account',
+    object: { className: 'Assistant', migrationTag: 'v7' },
+    routes: 'assistant',
+    kinds: [],
     events: [],
   },
 ];

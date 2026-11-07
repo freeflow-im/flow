@@ -130,6 +130,18 @@ class_name = "Events"
 tag = "v6"
 new_sqlite_classes = ["Events"]
 
+# The assistant (src/assistant/object.ts, docs/specs/platform.md §5.5): one object per account, named by its id, holding the
+# account's chats, assistant settings and usage, and running the model loop with the tool registry's tools, against the apps'
+# objects as the person. routes/assistant.ts serves Docs' old paths (/api/agent*, /api/settings/assistant) from it. The chats
+# were in the organizations' Docs objects until 2026-11-07: POST /v1/admin/assistant/migrate copies them, once, after deploy.
+[[durable_objects.bindings]]
+name = "ASSISTANT"
+class_name = "Assistant"
+
+[[migrations]]
+tag = "v7"
+new_sqlite_classes = ["Assistant"]
+
 # Wake jobs (src/events/object.ts, platform.md §5.2): the Events object sends each job's check to flow-jobs, delayed by
 # JOBS_ACK_DELAY_SECONDS (default 60); the Worker's `queue` handler (src/index.ts) asks the Events object, which delivers
 # the job again (retry after 120 s × attempts) or parks it after three. A check that keeps throwing ends in flow-jobs-dlq,

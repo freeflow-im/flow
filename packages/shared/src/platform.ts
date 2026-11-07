@@ -296,6 +296,11 @@ export interface AppManifest {
   tools?: string[];
   /** The consent page's groups for its scopes, in the order the page lists them. */
   scopes?: AppScopeGroup[];
+  /**
+   * What it gives the assistant (§5.5): the `context.page` values its pages send with a turn. A turn from one of them is
+   * offered this app's browser tools (the registry's), beside every server tool.
+   */
+  assistant?: { pages: string[] };
   /** The suite-bar entry; `shortcut` is the digit after ⌘. */
   tab?: { label: string; shortcut: string; badge?: AppTabBadge };
   /** The Vite build folder (from the repository's root) and the path it is served under. `optional`: a deploy may lack it. */

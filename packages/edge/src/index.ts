@@ -18,6 +18,7 @@ import { calendarRoutes } from './routes/calendar';
 import { mcpRoutes } from './routes/mcp';
 import { eventRoutes } from './routes/events';
 import { toolRoutes } from './routes/tools';
+import { assistantRoutes } from './routes/assistant';
 
 export { Directory } from './directory/object';
 export { Org } from './org/object';
@@ -26,6 +27,7 @@ export { PdfOcr } from './pdfOcr';
 export { Mail } from './imap/object';
 export { Calendar } from './calendar/object';
 export { Events } from './events/object';
+export { Assistant } from './assistant/object';
 import type { Org as OrgObject } from './org/object';
 import type { JobMessage } from './events/object';
 import { handleJobBatch } from './events/queue';
@@ -52,6 +54,8 @@ export interface Env extends ProxyEnv, AuthEnv {
   CALENDAR_ALLOW_INSECURE?: string;
   /** The event bus: one object per organization (`idFromName(organizationId)`), its event log (src/events/object.ts). */
   EVENTS: DurableObjectNamespace<import('./events/object').Events>;
+  /** The assistant: one object per account (`idFromName(accountId)`), its chats, settings and usage (src/assistant/object.ts). */
+  ASSISTANT: DurableObjectNamespace<import('./assistant/object').Assistant>;
   /** The `flow-jobs` Queue (producer): each wake job's check, sent by the Events object and consumed by `queue` below. */
   JOBS?: Queue<JobMessage>;
   /** The `flow-provisioning` Queue (producer): the Directory object sends accounts' mailbox work there (provisioning/). */
@@ -93,6 +97,8 @@ ported.route('/', mcpRoutes as never);
 ported.route('/', handoffRoutes as never);
 // Mail's attachment previews, before Docs' /api/*: the Worker reads the bytes from Mail and hands them to Docs.
 ported.route('/', previewRoutes as never);
+// The assistant's paths under /api (/api/agent, its turn, reset and permission, /api/settings/assistant), before Docs' /api/*.
+ported.route('/', assistantRoutes as never);
 ported.route('/', docsRoutes as never);
 ported.route('/', authRoutes as never);
 ported.route('/', helpRoutes as never);

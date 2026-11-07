@@ -23,6 +23,12 @@ describe('APP_MANIFESTS', () => {
     for (const m of APP_MANIFESTS) if (m.tab) expect(m.path).toBeTruthy();
   });
 
+  it('names each assistant page once, so a turn’s page names one app', () => {
+    const pages = APP_MANIFESTS.flatMap((m) => m.assistant?.pages ?? []);
+    expect(unique(pages)).toBe(true);
+    expect(pages).toEqual(expect.arrayContaining(['home', 'mail', 'calendar']));
+  });
+
   it('names every event type <app>.<type>', () => {
     for (const m of APP_MANIFESTS) {
       expect(unique(m.events)).toBe(true);
