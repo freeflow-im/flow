@@ -6,12 +6,13 @@ import { sendMail, type MailEnv } from '../mail';
 import { DirectoryCore } from './core';
 import { listVar } from './authHandoff';
 import { dohResolver } from './dns';
+import { mailProviderFor, type MailProviderEnv } from '../mailprovider/index';
 import { insertRows, type ImportRow } from '../importing';
 import { McpOAuth, OAuthError, type OAuthAnswer } from './mcpOAuth';
 
 export type DirectoryAnswer<T> = { ok: true; value: T } | { ok: false; status: number; code: string; message: string };
 
-export interface DirectoryEnv extends MailEnv {
+export interface DirectoryEnv extends MailEnv, MailProviderEnv {
   WEB_URL_BASE: string;
   REGISTRATION_ENABLED?: string;
   FLOW_HANDOFF_RETURN_URLS?: string;
@@ -38,6 +39,7 @@ export class Directory extends DurableObject<DirectoryEnv> {
       handoffReturnUrls: listVar(env.FLOW_HANDOFF_RETURN_URLS),
       allowedWebOrigins: listVar(env.FLOW_ALLOWED_WEB_ORIGINS),
       resolve: dohResolver(env.DNS_RESOLVER_URL || 'https://cloudflare-dns.com/dns-query'),
+      mailProvider: mailProviderFor(env),
     });
     // After the core, which runs the migrations that make its tables.
     this.mcpOAuth = new McpOAuth(ctx.storage.sql as never);

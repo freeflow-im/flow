@@ -8,6 +8,7 @@
 //   node test/e2e.mjs /tmp/edge.log
 // The wake-job checks want the flow-jobs queue's first check soon: add --var JOBS_ACK_DELAY_SECONDS:2.
 // The domain checks serve a DNS-over-HTTPS stub on DOH_PORT (default 18897): add --var DNS_RESOLVER_URL:http://localhost:18897/dns-query.
+// The mail provider's records and DKIM want the fake provider: add --var MAIL_PROVIDER:fake.
 // It reads signup links and the dev push driver's lines from the Worker's log, because local mail and pushes go there.
 // Without the LIVEKIT_* vars the huddle checks expect huddles to be off instead.
 import fs from 'node:fs';
@@ -240,6 +241,11 @@ r=await api(Bo.token,'POST',`/v1/workspaces/${W}/owner`,{userId:A.user.id});t('B
  r=await api(A.token,'PATCH',`${D}/acme.test`,{primary:true});t('an unverified domain cannot be primary',r.s===409&&r.j.error?.code==='domain_unverified',r.s);
  r=await api(A.token,'POST',`${D}/acme.test/verify`);t('verify finds the token over DNS over HTTPS',r.s===200&&r.j.verified===true&&r.j.found?.includes(token),r.s+' '+JSON.stringify(r.j).slice(0,140));
  r=await api(A.token,'GET',D);const st=r.j.domains?.find(d=>d.domain==='acme.test')?.status;t('the checker finds the verification TXT and not the MX',st?.[0]?.record==='present'&&st?.[1]?.record==='missing',JSON.stringify(st));
+ // The mail provider's records and DKIM (phase 5.2, MAIL_PROVIDER=fake).
+ {const recs=r.j.domains?.find(d=>d.domain==='acme.test')?.records??[];t('the records are the fake provider\'s MX and SPF',recs.some(x=>x.purpose==='mx'&&x.value==='mx.fake-mail.test')&&recs.some(x=>x.purpose==='spf'&&x.value==='v=spf1 include:_spf.fake-mail.test ~all')&&!recs.some(x=>x.purpose==='dkim'),JSON.stringify(recs).slice(0,160));}
+ r=await api(A.token,'POST',`${D}/nope.test/dkim`);t('DKIM on a domain the organization does not have is refused',r.s===404,r.s);
+ r=await api(A.token,'POST',`${D}/acme.test/dkim`);const dk=r.j.record;t('Ann sets up DKIM and gets the TXT record',r.s===200&&dk?.type==='TXT'&&dk?.purpose==='dkim'&&dk?.name===`${r.j.selector}._domainkey.acme.test`&&/^v=DKIM1; k=rsa; p=[A-Za-z0-9+/=]{300,}$/.test(dk?.value),r.s+' '+JSON.stringify(r.j).slice(0,160));
+ r=await api(A.token,'GET',D);t('the list now has the DKIM record',r.j.domains?.find(d=>d.domain==='acme.test')?.records?.some(x=>x.purpose==='dkim'&&x.value===dk?.value),JSON.stringify(r.j.domains?.find(d=>d.domain==='acme.test')?.records?.map(x=>x.purpose)));
  r=await api(A.token,'PATCH',`${D}/acme.test`,{primary:true});t('Ann makes it primary',r.s===200&&r.j.primary===true,r.s+' '+JSON.stringify(r.j).slice(0,90));
  r=await api(A.token,'GET',D);t('the list says so',r.j.domains?.find(d=>d.domain==='acme.test')?.primary===true&&r.j.domains?.find(d=>d.kind==='platform')?.primary===false,JSON.stringify(r.j.domains?.map(d=>[d.domain,d.verified,d.primary])));
  const C=await signup('carol@example.com','Carol');r=await api(A.token,'POST',`/v1/workspaces/${W}/invites`,{email:'carol@example.com'});const ctok=(r.j.inviteUrl??'').split('/').pop();

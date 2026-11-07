@@ -1,12 +1,14 @@
 // Identity: accounts, sessions and sign-in. Ported from packages/server/src/services/auth.ts and oauthAccounts.ts, with
 // the same rules and the same mail. It runs over any `SqlStorage`-shaped database, so tests can use node:sqlite.
-import type { AccountDTO, AccountKind, AccountRole, AccountState, AuthResponse, DomainDTO, DomainKind, OAuthIdentityDTO, RegisterResponse, UserDTO } from '@flow/shared';
+import type { AccountDTO, AccountKind, AccountRole, AccountState, AuthResponse, DnsRecordDTO, DomainDTO, DomainKind, OAuthIdentityDTO, RegisterResponse, UserDTO } from '@flow/shared';
 import { ApiError, badRequest, conflict, notFound, unauthorized } from '../errors';
 import { hashPassword, verifyPassword } from './passwords';
 import { DIRECTORY_MIGRATIONS } from './schema';
 import { PLATFORM_DOMAIN, localPart, organizationDomain, uniqueAddress } from './addresses';
-import { checkDomain, checkRecords, dohResolver, normalizeDomain, recordsFor, type ProviderRecords, type Resolve } from './dns';
-import { noneProvider } from './providers/none';
+import { checkDomain, checkRecords, dohResolver, normalizeDomain, recordsFor, type Resolve } from './dns';
+import { DEFAULT_DOMAIN_LIMITS, ProviderError, noneMailProvider, type DkimRecord, type MailProvider } from '../mailprovider/index';
+import { generateDkimKey } from '../mailprovider/dkim';
+import { encryptBlob } from '../org/crypto/index';
 import { HandoffApprove, HandoffExchange, HandoffStart, parseBody, pkceChallenge, validateContext, type HandoffContext, type HandoffPolicy } from './authHandoff';
 
 export interface Sql {
@@ -24,8 +26,8 @@ export interface DirectoryDeps {
   allowedWebOrigins?: string[];
   /** DNS lookups for domain verification and the records checker (dns.ts). Cloudflare's DNS over HTTPS by default. */
   resolve?: Resolve;
-  /** The mail provider's records for a domain; the placeholder one until phase 5.2. */
-  provider?: ProviderRecords;
+  /** The hosted mail provider (mailprovider/index.ts `mailProviderFor`); `none`, with placeholder records, when unset. */
+  mailProvider?: MailProvider;
 }
 
 /** One of an organization's domains, as the directory keeps it. */
@@ -58,6 +60,15 @@ const HANDOFF_RATE_WINDOW = 10 * 60_000;
 const DOMAIN_STATUS_TTL = 60_000;
 /** "Check again" skips the cache, but not for a check younger than this. */
 const DOMAIN_STATUS_MIN_AGE = 5_000;
+/** An unverified domain older than this no longer holds its name against another organization (platform.md §3.2). */
+const DOMAIN_CLAIM_TTL = 7 * DAY;
+
+/** A provider's failure as the API's: its code under `mail_provider_`, its message (never a credential). */
+function providerFailure(err: unknown): never {
+  if (!(err instanceof ProviderError)) throw err;
+  const status = err.code === 'rate_limited' ? 429 : err.code === 'unavailable' ? 503 : err.code === 'conflict' ? 409 : 502;
+  throw new ApiError(status, `mail_provider_${err.code}`, err.message);
+}
 
 type Row = Record<string, unknown>;
 
@@ -612,7 +623,10 @@ export class DirectoryCore {
   releaseSlug(slug: string, organizationId: string): void {
     this.sql.exec('DELETE FROM organization_slugs WHERE slug = ? AND organization_id = ?', slug, organizationId);
     const gone = this.rows('DELETE FROM organizations WHERE id = ? AND slug = ? AND NOT EXISTS (SELECT 1 FROM accounts WHERE organization_id = ?) RETURNING id', organizationId, slug, organizationId);
-    if (gone.length) this.sql.exec('DELETE FROM domains WHERE organization_id = ?', organizationId);
+    if (gone.length) {
+      this.sql.exec('DELETE FROM domain_keys WHERE domain IN (SELECT domain FROM domains WHERE organization_id = ?)', organizationId);
+      this.sql.exec('DELETE FROM domains WHERE organization_id = ?', organizationId);
+    }
   }
 
   // ---- domains (platform.md §3.2) ----------------------------------------------
@@ -657,14 +671,18 @@ export class DirectoryCore {
   }
 
   /** Registers a domain for the organization to verify, with a fresh token. A domain belongs to one organization;
-   * adding one the organization already has gives it back as it is. */
+   * adding one the organization already has gives it back as it is. Another organization's claim lapses when it is still
+   * unverified after a week: the domain moves to this one with a new token, so nobody can squat a name by adding it. */
   addDomain(organizationId: string, raw: string): DomainRow {
     const domain = normalizeDomain(raw);
     if (!domain) throw badRequest('invalid_domain', 'that is not a domain name');
     if (domain === PLATFORM_DOMAIN || domain.endsWith(`.${PLATFORM_DOMAIN}`)) throw badRequest('domain_reserved', `${PLATFORM_DOMAIN} and its subdomains are the platform's`);
     const held = this.domainRow('domain = ?', domain)[0];
-    if (held && held.organizationId !== organizationId) throw conflict('domain_taken', 'another organization has registered that domain');
-    if (held) return held;
+    if (held && held.organizationId !== organizationId) {
+      const lapsed = held.kind === 'own' && !held.verified && Date.now() - Date.parse(held.createdAt) > DOMAIN_CLAIM_TTL;
+      if (!lapsed) throw conflict('domain_taken', 'another organization has registered that domain');
+      this.forgetDomain(domain);
+    } else if (held) return held;
     const token = `freeflow-verify=${Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString('hex')}`;
     this.sql.exec("INSERT INTO domains (domain, organization_id, kind, verify_token, created_at) VALUES (?, ?, 'own', ?, ?)", domain, organizationId, token, Date.now());
     return this.ownDomain(organizationId, domain);
@@ -697,16 +715,56 @@ export class DirectoryCore {
     if (this.rows('SELECT 1 FROM accounts WHERE address LIKE ? LIMIT 1', `%@${row.domain}`).length) {
       throw conflict('domain_in_use', 'accounts have addresses on this domain');
     }
-    this.sql.exec('DELETE FROM domains WHERE domain = ?', row.domain);
+    this.forgetDomain(row.domain);
+  }
+
+  private forgetDomain(domain: string): void {
+    this.sql.exec('DELETE FROM domain_keys WHERE domain = ?', domain);
+    this.sql.exec('DELETE FROM domains WHERE domain = ?', domain);
+    this.domainStatus.delete(domain);
+  }
+
+  /** The DKIM key in use on a domain, as its TXT record's selector and value. */
+  private dkimOf(domain: string): DkimRecord | null {
+    const k = this.rows('SELECT k.selector, k.public_txt FROM domain_keys k JOIN domains d ON d.domain = k.domain AND d.dkim_selector = k.selector WHERE k.domain = ?', domain)[0];
+    return k ? { selector: k.selector as string, value: k.public_txt as string } : null;
+  }
+
+  private mailProvider(): MailProvider {
+    return this.deps.mailProvider ?? noneMailProvider;
+  }
+
+  /**
+   * Makes a verified domain's DKIM key and gives it to the mail provider (making the domain there first, with the default
+   * limits until provisioning sets the plan's), then keeps the key sealed and returns the TXT record to publish. Run again,
+   * it replaces the key.
+   */
+  async setDomainDkim(organizationId: string, domain: string): Promise<{ domain: string; kind: DomainKind; selector: string; record: DnsRecordDTO }> {
+    const row = this.ownDomain(organizationId, domain);
+    if (!row.verified) throw conflict('domain_unverified', 'verify the domain before setting up DKIM');
+    const provider = this.mailProvider();
+    const key = await generateDkimKey();
+    try {
+      await provider.createDomain(row.domain, DEFAULT_DOMAIN_LIMITS);
+      await provider.setDkim(row.domain, key.selector, key.privateKeyPem);
+    } catch (err) {
+      providerFailure(err);
+    }
+    const sealed = encryptBlob(Buffer.from(key.privateKeyPem, 'utf8'));
+    this.sql.exec('INSERT OR REPLACE INTO domain_keys (domain, selector, public_txt, key_sealed, key_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      row.domain, key.selector, key.publicTxt, sealed.blob, sealed.encKeyId, Date.now());
+    this.sql.exec('UPDATE domains SET dkim_selector = ? WHERE domain = ?', key.selector, row.domain);
     this.domainStatus.delete(row.domain);
+    const record = recordsFor(row.domain, provider.records(row.domain, { selector: key.selector, value: key.publicTxt })).find((r) => r.purpose === 'dkim')!;
+    return { domain: row.domain, kind: row.kind, selector: key.selector, record };
   }
 
   /** The organization's domains with the records to publish and, for its own, whether DNS has them, each domain's check
    * reused for a minute. `fresh` ("Check again") looks again unless the last check is only seconds old. */
   async describeDomains(organizationId: string, fresh = false): Promise<DomainDTO[]> {
-    const provider = this.deps.provider ?? noneProvider;
+    const provider = this.mailProvider();
     return Promise.all(this.domainsOf(organizationId).map(async (d) => {
-      const records = recordsFor(d.domain, provider, d.kind === 'own' ? d.verifyToken : null);
+      const records = recordsFor(d.domain, provider.records(d.domain, this.dkimOf(d.domain)), d.kind === 'own' ? d.verifyToken : null);
       let status: DomainDTO['status'] = [];
       if (d.kind === 'own') {
         const cached = this.domainStatus.get(d.domain);

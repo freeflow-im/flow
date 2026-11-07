@@ -5,10 +5,14 @@ import type { ZodTypeAny, z } from 'zod';
 import { AddDomainBody, PatchDomainBody } from '@flow/shared';
 import { ApiError, badRequest, unauthorized } from '../errors';
 import { directory, resolveCaller, type AuthEnv } from './auth';
+import { platformDns, type PlatformDnsEnv } from '../directory/providers/cloudflareDns';
+import { recordsFor } from '../directory/dns';
+import { mailProviderFor, type MailProviderEnv } from '../mailprovider/index';
 
-type C = Context<{ Bindings: AuthEnv }>;
+type DomainEnv = AuthEnv & PlatformDnsEnv & MailProviderEnv;
+type C = Context<{ Bindings: DomainEnv }>;
 
-export const domainRoutes = new Hono<{ Bindings: AuthEnv }>();
+export const domainRoutes = new Hono<{ Bindings: DomainEnv }>();
 
 const ORG_ID = /^[0-9a-f-]{36}$/;
 
@@ -46,6 +50,18 @@ domainRoutes.post('/v1/workspaces/:id/domains', async (c) => {
 domainRoutes.post('/v1/workspaces/:id/domains/:domain/verify', async (c) => {
   const id = await adminOf(c);
   return c.json(await directory(c, 'verifyDomain', id, domainParam(c)));
+});
+
+// DKIM (phase 5.2): a new key for a verified domain, given to the mail provider, the private key kept sealed in the
+// directory. The answer is the TXT record to publish; the platform subdomain's is written to our zone here.
+domainRoutes.post('/v1/workspaces/:id/domains/:domain/dkim', async (c) => {
+  const id = await adminOf(c);
+  const out = await directory(c, 'setDomainDkim', id, domainParam(c));
+  if (out.kind === 'platform') {
+    const provider = mailProviderFor(c.env).records(out.domain, { selector: out.selector, value: out.record.value });
+    c.executionCtx.waitUntil(platformDns(c.env, provider).publish(recordsFor(out.domain, provider)).catch((err) => console.error(`platform dns ${out.domain}: ${(err as Error).message}`)));
+  }
+  return c.json(out);
 });
 
 domainRoutes.patch('/v1/workspaces/:id/domains/:domain', async (c) => {

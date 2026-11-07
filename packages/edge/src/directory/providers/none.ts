@@ -1,4 +1,4 @@
-// The mail provider before there is one (phase 5.2 replaces it with OpenSRS's): placeholder records, clearly not real,
+// The mail provider's records while none is configured (MAIL_PROVIDER unset, mailprovider/index.ts): placeholder records, clearly not real,
 // so the admin page has something to show and nothing is ever written to a live zone from them.
 import type { ProviderRecords } from '../dns';
 

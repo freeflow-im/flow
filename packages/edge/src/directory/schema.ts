@@ -239,4 +239,15 @@ export const DIRECTORY_MIGRATIONS: string[] = [
   CREATE INDEX domains_organization ON domains(organization_id);
   INSERT OR IGNORE INTO domains (domain, organization_id, kind, verified_at, is_primary, created_at)
     SELECT lower(slug) || '.freeflow.im', id, 'platform', created_at, 1, created_at FROM organizations;`,
+  // A domain's DKIM key (phase 5.2): the selector in use on the domain, and the key pair the platform made, the private key
+  // sealed with the data key as mailbox passwords are, since the provider cannot give it back. The public TXT is not secret.
+  `ALTER TABLE domains ADD COLUMN dkim_selector TEXT;
+  CREATE TABLE domain_keys (
+    domain TEXT PRIMARY KEY COLLATE NOCASE,
+    selector TEXT NOT NULL,
+    public_txt TEXT NOT NULL,
+    key_sealed BLOB NOT NULL,
+    key_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );`,
 ];
