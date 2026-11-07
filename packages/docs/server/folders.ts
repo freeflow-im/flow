@@ -1,9 +1,10 @@
 // The folders of a library (shared/folders.ts). On the server they are rows: a folder exists once it is created,
 // and files point at it by path, within its root (server/scope.ts). The desktop app's folders are directories instead
-// (LocalFolders in server/localStore.ts).
+// (LocalFolders in server/localStore.ts). A folder is an object grants can name (server/access.ts' folderObjectId).
 import { folderName, nameSearch, parentFolder } from '../shared/folders.ts';
 import type { DB } from './db.ts';
-import { scopeColumns, scopeKey, scopeWhere, type ScopeArg } from './scope.ts';
+import { folderObjectId, renameFolderObject, revokeMembers, syncOrgGrant } from './access.ts';
+import { scopeColumns, scopeKey, scopeOf, scopeWhere, type ScopeArg } from './scope.ts';
 
 export interface Folders {
   /** Paths of the folders directly inside `parent`, by name. */
@@ -71,6 +72,7 @@ export class FolderStore implements Folders {
     const c = scopeColumns(scope);
     for (let p = path; p && !this.exists(scope, p); p = parentFolder(p)) {
       this.db.prepare('INSERT INTO folders (owner_id, workspace_id, private, scope, path, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(c.owner_id, c.workspace_id, c.private, scopeKey(scope), p, now);
+      syncOrgGrant(this.db, 'folder', folderObjectId(scopeKey(scope), p), c, c.owner_id);
     }
     return true;
   }
@@ -84,13 +86,16 @@ export class FolderStore implements Folders {
       !!this.db.prepare(`SELECT 1 FROM stored_files WHERE ${where.sql} AND folder = ? LIMIT 1`).get(...where.params, path);
     if (used) return 'not-empty';
     this.db.prepare(`DELETE FROM folders WHERE ${where.sql} AND path = ?`).run(...where.params, path);
+    this.db.prepare("DELETE FROM grants WHERE object_kind = 'folder' AND object_id = ?").run(folderObjectId(scopeKey(scope), path));
     return 'ok';
   }
 
   /**
    * Move a folder with everything in it to another root, at the top there under its own name (merged with a folder
    * of that name there): its folders, documents and stored files. Returns the ids of the documents and files moved
-   * and the folder's path in the new root. The one who moves it into a private root keeps it.
+   * and the folder's path in the new root. The one who moves it into a private root keeps it. The grants go with
+   * each folder and file, but for the `org` grant, which says which root it is in, and, to another organization,
+   * those naming people and channels.
    */
   moveTo(from: ScopeArg, path: string, to: ScopeArg): { path: string; sheets: string[]; files: string[] } {
     const target = folderName(path);
@@ -99,9 +104,16 @@ export class FolderStore implements Folders {
     const under = underFolder('path', path);
     const moved = (this.db.prepare(`SELECT path FROM folders WHERE ${where.sql} AND ${under.sql}`).all(...where.params, ...under.params) as { path: string }[]).map((r) => r.path);
     this.db.prepare(`DELETE FROM folders WHERE ${where.sql} AND ${under.sql}`).run(...where.params, ...under.params);
-    for (const p of moved.sort()) this.create(to, rename(p));
-    this.create(to, target);
     const c = scopeColumns(to);
+    const otherOrg = scopeOf(from).workspaceId !== c.workspace_id;
+    for (const p of moved.sort()) {
+      this.create(to, rename(p));
+      const id = folderObjectId(scopeKey(to), rename(p));
+      renameFolderObject(this.db, folderObjectId(scopeKey(from), p), id);
+      syncOrgGrant(this.db, 'folder', id, c, c.owner_id);
+      if (otherOrg) revokeMembers(this.db, 'folder', id);
+    }
+    this.create(to, target);
     const ids = { path: target, sheets: [] as string[], files: [] as string[] };
     for (const table of ['sheets', 'stored_files'] as const) {
       const inside = underFolder('folder', path);
@@ -109,6 +121,9 @@ export class FolderStore implements Folders {
       const set = this.db.prepare(`UPDATE ${table} SET owner_id = ?, workspace_id = ?, private = ?, folder = ? WHERE id = ?`);
       for (const r of rows) {
         set.run(c.private ? c.owner_id : r.owner_id, c.workspace_id, c.private, rename(r.folder), r.id);
+        const kind = table === 'sheets' ? 'sheet' : 'file';
+        syncOrgGrant(this.db, kind, r.id, c, c.owner_id);
+        if (otherOrg) revokeMembers(this.db, kind, r.id);
         (table === 'sheets' ? ids.sheets : ids.files).push(r.id);
       }
     }

@@ -1,22 +1,15 @@
 // @ts-nocheck: copied from packages/docs, where it is typechecked under that package's settings (cloudflare-spikes.md).
 // Public links: a presentation or a video of the hosted app that anyone with the address can view, signed in or
-// not (docs/architecture.md). The address's token is the only thing a guest has, so what a guest gets is built here:
+// not (docs/architecture.md). A link is a `link:<token>` viewer grant on the file (server/access.ts, platform phase
+// 3.2). The address's token is the only thing a guest has, so what a guest gets is built here:
 // a copy of the deck without its speaker notes or its links to spreadsheets, whose pictures and videos are named
 // under the token, and only those can be fetched with it.
 import { randomBytes } from 'node:crypto';
 import type { Deck } from '../shared/deck.ts';
 import { PREVIEW_FILE_TYPES } from '../shared/types.ts';
 import { STORED_FILE_RE } from '../shared/video.ts';
-import type { DB } from './db.ts';
 
 export type SharedKind = 'deck' | 'file';
-
-export interface PublicLink {
-  token: string;
-  ownerId: string;
-  kind: SharedKind;
-  fileId: string;
-}
 
 export const TOKEN_RE = /^[A-Za-z0-9_-]{32}$/;
 const IMAGE_RE = /^\/api\/images\/([0-9a-f-]{36})$/;
@@ -24,47 +17,8 @@ const IMAGE_RE = /^\/api\/images\/([0-9a-f-]{36})$/;
 /** A stored file that can be shared on its own: a video a browser plays. */
 export const isSharableVideo = (type: string): boolean => type.startsWith('video/') && PREVIEW_FILE_TYPES.includes(type);
 
-export class PublicLinks {
-  private readonly db: DB;
-
-  constructor(db: DB) {
-    this.db = db;
-  }
-
-  // A file has at most one link, whoever made it: the caller checks that the user may access the file (an
-  // organization file's members all manage its link). `owner_id` is who made the link; it stops working when they
-  // can no longer access the file (checked by the public routes).
-
-  /** The token of a file's link, if it has one. */
-  tokenOf(kind: SharedKind, fileId: string): string | null {
-    const row = this.db.prepare('SELECT token FROM public_links WHERE kind = ? AND file_id = ? ORDER BY created_at LIMIT 1').get(kind, fileId) as { token: string } | undefined;
-    return row?.token ?? null;
-  }
-
-  /** The file's link, made if it has none. A link stopped and made again gets a new token: the old address stays dead. */
-  create(ownerId: string, workspaceId: string | null, kind: SharedKind, fileId: string): string {
-    const had = this.tokenOf(kind, fileId);
-    if (had) return had;
-    const token = randomBytes(24).toString('base64url');
-    this.db.prepare('INSERT OR IGNORE INTO public_links (token, owner_id, workspace_id, kind, file_id, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(token, ownerId, workspaceId, kind, fileId, new Date().toISOString());
-    return this.tokenOf(kind, fileId)!;
-  }
-
-  remove(kind: SharedKind, fileId: string): void {
-    this.db.prepare('DELETE FROM public_links WHERE kind = ? AND file_id = ?').run(kind, fileId);
-  }
-
-  /** A file moved to another organization takes its link with it (the organization is the link's partition). */
-  moved(kind: SharedKind, fileId: string, workspaceId: string | null): void {
-    this.db.prepare('UPDATE public_links SET workspace_id = ? WHERE kind = ? AND file_id = ?').run(workspaceId, kind, fileId);
-  }
-
-  resolve(token: string): PublicLink | null {
-    if (!TOKEN_RE.test(token)) return null;
-    const row = this.db.prepare('SELECT owner_id, kind, file_id FROM public_links WHERE token = ?').get(token) as { owner_id: string; kind: SharedKind; file_id: string } | undefined;
-    return row ? { token, ownerId: row.owner_id, kind: row.kind, fileId: row.file_id } : null;
-  }
-}
+/** A new link's token (a link grant's, `link:<token>`): stopped and made again, a link gets a new one. */
+export const newLinkToken = (): string => randomBytes(24).toString('base64url');
 
 /**
  * What a guest sees of a deck, and the stored pictures and files it may fetch: those its picture and video elements

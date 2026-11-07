@@ -205,6 +205,9 @@ importers:
       '@fastify/static':
         specifier: ^10.1.5
         version: 10.1.8
+      '@flow/shared':
+        specifier: workspace:*
+        version: link:../shared
       '@imgly/background-removal':
         specifier: ^1.7.0
         version: 1.7.0(onnxruntime-web@1.31.1)

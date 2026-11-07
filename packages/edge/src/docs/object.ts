@@ -94,6 +94,9 @@ export class Docs extends DurableObject<DocsEnv> {
         userForCookie: async () => null,
         isMember: async (userId: string, organizationId: string) => (await this.directory<string[]>('organizationsOf', userId)).includes(organizationId),
         organizationsOf: async (userId: string) => this.directory<string[]>('organizationsOf', userId),
+        // Grants are matched against the caller context the Worker resolved (routes/docs.ts; docs/server/access.ts).
+        readerOf: (req: DocsRequest) => ({ accountId: req.caller.accountId ?? null, channelIds: req.caller.channelIds ?? [] }),
+        linkSharing: async (organizationId: string) => (await this.directory<{ policies?: { linkSharing?: boolean } } | null>('organization', organizationId))?.policies?.linkSharing !== false,
         stores: (stores: Parameters<typeof suiteHub>[0]) => {
           this.hub = suiteHub(stores, `${base}/workspace`);
           if (stores.sheets && stores.images && stores.files) this.importStores = { sheets: stores.sheets, images: stores.images, files: stores.files };
@@ -102,13 +105,17 @@ export class Docs extends DurableObject<DocsEnv> {
     });
   }
 
-  /** New file ids, reported to the directory so that a request naming only a file finds this object (routes/docs.ts). */
+  /**
+   * New file ids, reported to the directory so that a request naming only a file finds this object (routes/docs.ts); so
+   * are the tokens of new links (`link:<token>` grants), so that a guest's request for a public link finds it too.
+   */
   private outbox(): void {
     const sql = this.ctx.storage.sql;
     sql.exec('CREATE TABLE IF NOT EXISTS _outbox (seq INTEGER PRIMARY KEY, kind TEXT NOT NULL, id TEXT NOT NULL, user_id TEXT, role TEXT, payload TEXT)');
     for (const table of ['sheets', 'stored_files', 'images']) {
       sql.exec(`CREATE TRIGGER IF NOT EXISTS _index_${table} AFTER INSERT ON ${table} BEGIN INSERT INTO _outbox (kind, id) VALUES ('index', NEW.id); END`);
     }
+    sql.exec("CREATE TRIGGER IF NOT EXISTS _index_links AFTER INSERT ON grants WHEN NEW.principal LIKE 'link:%' BEGIN INSERT INTO _outbox (kind, id) VALUES ('index', substr(NEW.principal, 6)); END");
   }
 
   private async flush(organizationId: string): Promise<void> {

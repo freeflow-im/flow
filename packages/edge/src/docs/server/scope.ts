@@ -1,5 +1,6 @@
 // @ts-nocheck: copied from packages/docs, where it is typechecked under that package's settings (cloudflare-spikes.md).
-// Whose files a request sees (docs/specs/freeflow-suite.md §2.4, ruled 2026-11-02). In the FreeFlow suite every
+// Whose files a request sees (docs/specs/freeflow-suite.md §2.4, ruled 2026-11-02; who may open which is
+// server/access.ts, on grants since platform phase 3.2). In the FreeFlow suite every
 // Docs row carries the organization it belongs to (`workspace_id`, Flow's name for it) and whether it is private:
 // Organization files are an organization's shared rows (`private = 0`), any member's to list, open and edit; My
 // files are one user's private rows in that organization, plus their rows from before organizations
@@ -64,26 +65,21 @@ export const scopeColumns = (arg: ScopeArg): { owner_id: string; workspace_id: s
 export interface Viewer {
   userId: string;
   workspaces: ReadonlySet<string>;
+  /** The user's account in the organization the request went to, and the channels they are in there (the host's
+   * caller context, platform.md §3.6): what grants are matched against (server/access.ts). */
+  accountId?: string;
+  channelIds?: readonly string[];
 }
 export type ViewerArg = Viewer | string;
 
 export const viewerOf = (v: ViewerArg): Viewer => (typeof v === 'string' ? { userId: v, workspaces: new Set() } : v);
 export const viewerId = (v: ViewerArg): string => (typeof v === 'string' ? v : v.userId);
 
-/**
- * The access check, the one place it is made: a private row, or one from before organizations, is its owner's
- * only; an organization's shared row is any member's. Every by-id read of the stores goes through it, and a row
- * the viewer cannot access is as if it did not exist (a 404).
- */
-export function canAccess(viewer: ViewerArg, row: Owned): boolean {
-  const v = viewerOf(viewer);
-  if (row.private || !row.workspace_id) return row.owner_id === v.userId;
-  return v.workspaces.has(row.workspace_id);
-}
-
-/** The scope a row is in, as the viewer who can access it sees it: where files made beside it go. */
+/** The scope a row is in, as the viewer who can access it sees it: where files made beside it go. Beside another's
+ * private file shared with the viewer (server/access.ts) is the viewer's own files in that organization. */
 export function scopeOfRow(row: Owned, viewer: ViewerArg): Scope {
   if (!row.private && row.workspace_id) return { ownerId: viewerId(viewer), workspaceId: row.workspace_id, private: false };
+  if (row.owner_id !== viewerId(viewer)) return { ownerId: viewerId(viewer), workspaceId: row.workspace_id, private: true };
   return { ownerId: row.owner_id, workspaceId: row.workspace_id, private: true };
 }
 

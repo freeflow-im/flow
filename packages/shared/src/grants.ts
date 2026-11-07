@@ -14,6 +14,8 @@
 // expiry compares as integers in SQL. `grantSql` and `grantFromRow` convert.
 import type { Grant, GrantPrincipal, Role } from './platform.js';
 
+export type { Grant, GrantPrincipal, Role };
+
 /** A parameterised statement: run it as `exec(sql, ...params)` or `prepare(sql).run(...params)`. */
 export interface SqlStatement {
   sql: string;

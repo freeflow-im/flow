@@ -249,6 +249,11 @@ export class Org extends DurableObject<OrgEnv> {
       .toArray().map((r) => r.id as string);
   }
 
+  /** Every channel this member is in, public and private: what Docs matches `channel:` grants against (routes/docs.ts). */
+  channelIdsOf(userId: string): string[] {
+    return this.ctx.storage.sql.exec('SELECT channel_id FROM channel_members WHERE user_id = ?', userId).toArray().map((r) => r.channel_id as string);
+  }
+
   /** Each account's private channels, for an action subscription's owner (events/object.ts reads as the owner). */
   privateChannelIdsOfAccounts(accountIds: string[]): Record<string, string[]> {
     const out: Record<string, string[]> = {};

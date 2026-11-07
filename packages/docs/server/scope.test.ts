@@ -8,7 +8,8 @@ import { openDb, type DB } from './db.ts';
 import { FileStore } from './files.ts';
 import { FolderStore } from './folders.ts';
 import { ImageStore } from './images.ts';
-import { canAccess, inScope, scopeKey, type Scope } from './scope.ts';
+import { roleOf } from './access.ts';
+import { inScope, scopeKey, type Scope, type ViewerArg } from './scope.ts';
 import { SheetStore } from './sheets.ts';
 
 const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
@@ -46,19 +47,22 @@ afterAll(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-describe('canAccess', () => {
-  const row = (owner_id: string, workspace_id: string | null, priv: number) => ({ owner_id, workspace_id, private: priv });
+describe('the access check (server/access.ts, with no grants)', () => {
+  const row = (owner_id: string, workspace_id: string | null, priv: number) => ({ id: 'none', owner_id, workspace_id, private: priv });
+  const canAccess = (who: ViewerArg, r: ReturnType<typeof row>) => roleOf(db, who, 'sheet', r) !== null;
   it('a private row is its owner’s only, in an organization or not', () => {
     expect(canAccess('alice', row('alice', null, 1))).toBe(true);
     expect(canAccess(bob, row('alice', null, 1))).toBe(false);
     expect(canAccess(alice, row('alice', harbor, 1))).toBe(true);
     expect(canAccess(bob, row('alice', harbor, 1))).toBe(false);
   });
-  it('a shared row is any member’s of its organization, and no one else’s', () => {
+  it('a shared row is any member’s of its organization (its `org` grant), and no one else’s', () => {
+    db.prepare("INSERT INTO grants VALUES ('sheet', 'none', 'org', 'editor', 'alice', 0, NULL)").run();
     expect(canAccess(bob, row('alice', harbor, 0))).toBe(true);
     expect(canAccess(dave, row('alice', harbor, 0))).toBe(false);
     // A plain user id is a user in no organization (the standalone app, the plugin).
     expect(canAccess('bob', row('alice', harbor, 0))).toBe(false);
+    db.prepare("DELETE FROM grants WHERE object_id = 'none'").run();
   });
   it('names each root apart', () => {
     expect(new Set([scopeKey(shared), scopeKey(aliceAtHarbor), scopeKey(aliceElsewhere), scopeKey('alice')]).size).toBe(4);
@@ -82,7 +86,7 @@ describe('the stores, by scope', () => {
     expect(titles(sheets.list('alice', 'doc'))).toEqual(['From before', 'Mine at Harbor', 'Mine at Other']);
     expect(team).toMatchObject({ workspaceId: harbor, shared: true });
     expect(mine.shared).toBeUndefined();
-    // By id: find plus canAccess.
+    // By id: find plus the access check.
     expect(sheets.get(bob, team.id)).not.toBeNull();
     expect(sheets.get(dave, team.id)).toBeNull();
     expect(sheets.get(bob, mine.id)).toBeNull();

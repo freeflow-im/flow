@@ -49,7 +49,9 @@ import { ImageStore } from './images.ts';
 import { deckPreview, docPreview, markdownPreview, sheetPreview, type FilePreview } from '../shared/preview.ts';
 import { cleanFolderName, cleanFolderPath, folderName, joinFolder, parentFolder } from '../shared/folders.ts';
 import { FolderStore, type Folders } from './folders.ts';
-import { canAccess, inScope, scopeOf, scopeOfRow, viewerOf, type ScopeArg, type Viewer, type ViewerArg } from './scope.ts';
+import { inScope, scopeKey, scopeOf, scopeOfRow, viewerOf, type Owned, type Scope, type ScopeArg, type Viewer, type ViewerArg } from './scope.ts';
+import { access, atLeast, folderObjectId, grant, grantsOn, isObjectKind, linkTokenOf, objectRow, parseFolderObjectId, readerOf, refused, resolveLink, revoke, revokeMembers, roleOf, type ObjectKind, type ObjectRow, type Role } from './access.ts';
+import { objectsSharedWithSql, parsePrincipal, ROLE_RANK } from '@flow/shared/grants';
 import { LISTED_EXTS, listedKind, LocalFileStore, LocalFolder, LocalFolders, LocalSheetStore, type FindByName } from './localStore.ts';
 import { Favorites, FOLDER_REF } from './favorites.ts';
 import { openedFiles, recentFiles, RecentOpens, recentsAvailable, whereOf, type Recents } from './recents.ts';
@@ -62,7 +64,7 @@ import { DirWatchers } from './folderWatch.ts';
 import { SheetStore, validateWorkbook } from './sheets.ts';
 import { listSheetCharts, loadLinkedChart, loadLinkedTable } from './linkedTable.ts';
 import { importPptx } from './pptxImport.ts';
-import { isSharableVideo, PublicLinks, publicDeck, type PublicLink, type SharedKind } from './publicLinks.ts';
+import { isSharableVideo, newLinkToken, publicDeck, TOKEN_RE, type SharedKind } from './publicLinks.ts';
 import { previewRoutes, Previews } from './previews.ts';
 import type { StoredFile } from '../shared/types.ts';
 import { ImportError, importExcel } from './xlsxImport.ts';
@@ -102,7 +104,7 @@ declare module 'fastify' {
      * files there; without one, the user's own files (the plain user id). Set by requireUser.
      */
     scope: ScopeArg;
-    /** Who asks for files by id (server/scope.ts' canAccess): the user, and in the suite their organizations. Set by requireUser. */
+    /** Who asks for files by id (server/access.ts): the user, and in the suite their organizations, account and channels. Set by requireUser. */
     viewer: ViewerArg;
   }
   interface FastifyInstance {
@@ -181,6 +183,13 @@ export interface AppOptions {
     isMember(userId: string, workspaceId: string): Promise<boolean>;
     /** The organizations the user is a member of: their shared files are theirs to open, and Move to organization… offers them. */
     organizationsOf(userId: string): Promise<Array<{ id: string; name: string }>>;
+    /**
+     * The caller's account in the organization the request went to and the channels they are in there (platform.md
+     * §3.6), which grants are matched against (server/access.ts). Without it a user is matched by their user id alone.
+     */
+    readerOf?(req: FastifyRequest): { accountId?: string | null; channelIds?: readonly string[] } | null;
+    /** Whether the organization's policy allows links anyone can open (`linkSharing`, platform.md §3.1); allowed when not told. */
+    linkSharing?(workspaceId: string): Promise<boolean>;
     /** Handed the app's stores once they are open: the suite's MCP endpoint uses them (docs/plugin/server/worker.ts). */
     stores?(stores: { db: DB; sheets: SheetStore; images: ImageStore; files: FileStore; folders: Folders; pdf?: PdfMaker }): void;
   };
@@ -366,7 +375,6 @@ export async function buildApp(opts: AppOptions) {
         },
       })
     : null;
-  const publicLinks = opts.local ? null : new PublicLinks(db);
   const agent = new AgentService(new AgentStore(db), sheets, assistantSettings, { jobs: !opts.local, ...opts.agent, images, files: storedFiles, pdf: pdfMaker ?? undefined, claudeAgent });
   // The suite's Worker serves Docs' MCP endpoint from these same stores (docs/plugin/server/worker.ts), so one queue writes.
   host?.stores?.({ db, sheets, images, files: storedFiles, folders, pdf: pdfMaker ?? undefined });
@@ -536,8 +544,20 @@ export async function buildApp(opts: AppOptions) {
     return s.private ? '' : `@${s.workspaceId}/`;
   };
 
-  /** Who a user is when asking for files by id (server/scope.ts): in the suite, with the organizations they are in. */
-  const viewerFor = async (userId: string): Promise<ViewerArg> => (host ? { userId, workspaces: new Set((await host.organizationsOf(userId)).map((o) => o.id)) } : userId);
+  /**
+   * Who a user is when asking for files by id (server/scope.ts, server/access.ts): in the suite, with the organizations
+   * they are in, and for a request, the account and channels its caller context names.
+   */
+  const viewerFor = async (userId: string, req?: FastifyRequest): Promise<ViewerArg> => {
+    if (!host) return userId;
+    const reader = req ? host.readerOf?.(req) : null;
+    return {
+      userId,
+      workspaces: new Set((await host.organizationsOf(userId)).map((o) => o.id)),
+      ...(reader?.accountId ? { accountId: reader.accountId } : {}),
+      ...(reader?.channelIds ? { channelIds: reader.channelIds } : {}),
+    };
+  };
 
   const requireUser = async (req: FastifyRequest, reply: FastifyReply) => {
     if (!req.user) return reply.code(401).send({ error: 'Not signed in' });
@@ -547,15 +567,15 @@ export async function buildApp(opts: AppOptions) {
     const scope = await scopeNamed(req.user.id, query.workspace ?? body.workspace, query.shared ?? body.shared);
     if (scope === null) return reply.code(403).send({ error: 'You are not a member of this organization.' });
     req.scope = scope;
-    req.viewer = await viewerFor(req.user.id);
+    req.viewer = await viewerFor(req.user.id, req);
     // The user's organizations are cached a minute by the host: one they joined (or made) since is asked about by
     // itself (isMember, per pair) when the request names it or a file of it, so it works at once.
     if (host && typeof req.viewer !== 'string') {
       // A file named in the path, or in the body (POST /api/recents).
       const id = (req.params as { id?: unknown } | undefined)?.id ?? (body as { id?: unknown }).id;
       const row = typeof id === 'string' && isFileId(id) ? (sheets.find(id) ?? storedFiles.find(id)) : undefined;
-      const more = [scopeOf(scope).workspaceId, row && !row.private ? row.workspace_id : null].filter((w): w is string => !!w && !(req.viewer as Viewer).workspaces.has(w));
-      for (const w of more) if (scopeOf(scope).workspaceId === w || (await host.isMember(req.user.id, w))) req.viewer = { userId: req.user.id, workspaces: new Set([...req.viewer.workspaces, w]) };
+      const more = [scopeOf(scope).workspaceId, row ? row.workspace_id : null].filter((w): w is string => !!w && !(req.viewer as Viewer).workspaces.has(w));
+      for (const w of more) if (scopeOf(scope).workspaceId === w || (await host.isMember(req.user.id, w))) req.viewer = { ...req.viewer, workspaces: new Set([...req.viewer.workspaces, w]) };
     }
     const named = query.folder ?? body.folder;
     if (named === undefined) return;
@@ -1290,51 +1310,196 @@ export async function buildApp(opts: AppOptions) {
       .send(createReadStream(file, { start, end }));
   };
 
-  // --- Public links: a presentation or video anyone with the address can view (server/publicLinks.ts) -------
-  // Files stored on the server only: a file in the desktop app's folder is on the person's own computer.
+  // --- Grants: who besides the owner may open a file or folder (server/access.ts, platform phase 3.2) ----------
+  // A person or a channel of the organization, the organization itself (Organization files: the `org` grant goes with
+  // the file's root), or anyone with a link (a `link:<token>` viewer grant: the public page, below).
+
+  /** A root of the library by its key (server/scope.ts' scopeKey), as the viewer sees it: where files made in it go. */
+  const scopeOfRootKey = (rootKey: string, viewer: ViewerArg): Scope | null => {
+    const mine = /^me:([^:]+):(.*)$/.exec(rootKey);
+    if (mine) return { ownerId: mine[1], workspaceId: mine[2] || null, private: true };
+    const org = /^org:(.+)$/.exec(rootKey);
+    return org ? { ownerId: viewerOf(viewer).userId, workspaceId: org[1], private: false } : null;
+  };
+  /** What a move from one root to another needs: to another organization, the owner; within one (Share with organization, Make private), a manager. */
+  const roleToMove = (from: string | null, to: string | null): Role => (from === to ? 'manager' : 'owner');
+  /**
+   * A document or stored file into another root, keeping its folder when the target has one of that path. Its pictures
+   * go with it; its grants too (setScope keeps its `org` grant in step), but for those naming people and channels when
+   * it goes to another organization.
+   */
+  const moveFileTo = async (viewer: ViewerArg, kind: 'sheet' | 'file', id: string, row: ObjectRow, target: Scope) => {
+    const folderThere = row.folder && folders.exists(target, row.folder) ? row.folder : '';
+    const otherOrg = row.workspace_id !== target.workspaceId;
+    if (kind === 'sheet') {
+      const pictures = await sheets.picturesIn(viewer, id);
+      const meta = sheets.setScope(viewer, id, target, folderThere);
+      images.retag(viewer, pictures, target.workspaceId);
+      if (otherOrg) revokeMembers(db, 'sheet', id);
+      return meta;
+    }
+    const file = storedFiles.setScope(viewer, id, target, folderThere);
+    if (otherOrg) revokeMembers(db, 'file', id);
+    return file;
+  };
+  /** A folder with everything in it into another root, at the top there under its own name (FolderStore.moveTo). */
+  const moveFolderTo = async (viewer: ViewerArg, source: Scope | ScopeArg, path: string, target: Scope) => {
+    const moved = (folders as FolderStore).moveTo(source, path, target);
+    for (const id of moved.sheets) images.retag(viewer, await sheets.picturesIn(viewer, id), target.workspaceId);
+    return moved;
+  };
+
   if (!opts.local) {
-    const links = publicLinks!;
-    const sharable = (ownerId: ViewerArg, kind: SharedKind, id: string) => {
-      if (kind === 'deck') return !!sheets.get(ownerId, id, 'deck');
-      const f = storedFiles.get(ownerId, id);
-      return !!f && isSharableVideo(f.meta.type);
+    const linkUrl = (req: FastifyRequest, token: string | null) => (token ? `${originOf(req)}/p/${token}` : null);
+    /** The object a request's path names (`:kind`, `:id`) and the caller's role on it; a 404 (none, or no role) or a 403 (too low) is sent otherwise. */
+    const named = (req: FastifyRequest, reply: FastifyReply, need: Role): { kind: ObjectKind; id: string; row: ObjectRow; role: Role } | null => {
+      const { kind, id } = req.params as { kind: string; id: string };
+      const row = isObjectKind(kind) ? objectRow(db, kind, id) : undefined;
+      const role = row ? roleOf(db, req.viewer, kind as ObjectKind, row) : null;
+      if (!row || !role) {
+        reply.code(404).send({ error: kind === 'folder' ? 'Folder not found' : 'File not found' });
+        return null;
+      }
+      if (!atLeast(role, need)) {
+        reply.code(403).send({ error: refused(need).message });
+        return null;
+      }
+      return { kind: kind as ObjectKind, id, row, role };
     };
-    const linkAddress = (req: FastifyRequest, token: string | null) => ({ url: token ? `${originOf(req)}/p/${token}` : null });
+    const sharingOf = (req: FastifyRequest, kind: ObjectKind, id: string, role: Role) => ({ grants: grantsOn(db, kind, id), role, link: linkUrl(req, linkTokenOf(db, kind, id)) });
+    /** Whether a guest can be shown the object: a presentation, or a video a browser plays (the public page's two kinds). */
+    const linkable = (kind: ObjectKind, id: string) => (kind === 'sheet' ? sheets.find(id)?.kind === 'deck' : kind === 'file' && isSharableVideo(storedFiles.find(id)?.type ?? ''));
+    /** The organization's `linkSharing` policy (phase 1.3), asked of the host. */
+    const linksAllowed = async (row: Owned) => !row.workspace_id || !host?.linkSharing || (await host.linkSharing(row.workspace_id));
+    const POLICY_FORBIDS = { error: 'This organization does not allow links anyone can open.', code: 'policy_forbids' };
+    /** The object's link, made if it has none (a new token: a link stopped and made again does not bring the old address back). */
+    const makeLink = (kind: ObjectKind, id: string, by: string): string => {
+      const had = linkTokenOf(db, kind, id);
+      if (had) return had;
+      const token = newLinkToken();
+      grant(db, kind, id, `link:${token}`, 'viewer', by);
+      return token;
+    };
+    const removeLinks = (kind: ObjectKind, id: string) => void db.prepare("DELETE FROM grants WHERE object_kind = ? AND object_id = ? AND principal LIKE 'link:%'").run(kind, id);
+    /**
+     * The `org` grant given or taken: the object goes to its organization's root (Share with organization) or to the
+     * caller's own files there (Make private), with what is in it. Returns its id after (a folder's changes with its root).
+     */
+    const setOrg = async (req: FastifyRequest, kind: ObjectKind, id: string, row: ObjectRow, shared: boolean): Promise<string> => {
+      if (!row.workspace_id) throw Object.assign(new Error('This file is in no organization.'), { statusCode: 400 });
+      if (!row.private === shared) return id;
+      const target: Scope = { ownerId: req.user!.id, workspaceId: row.workspace_id, private: !shared };
+      if (kind !== 'folder') return (await moveFileTo(req.viewer, kind, id, row, target), id);
+      const f = parseFolderObjectId(id)!;
+      const source = scopeOfRootKey(f.rootKey, req.viewer);
+      if (!source || !f.path || !(folders instanceof FolderStore)) throw Object.assign(new Error('This folder cannot be shared.'), { statusCode: 400 });
+      return folderObjectId(scopeKey(target), (await moveFolderTo(req.viewer, source, f.path, target)).path);
+    };
+    const GRANTABLE: Role[] = ['viewer', 'editor', 'manager'];
 
     app.register(async (r) => {
       r.addHook('preHandler', requireUser);
-      // The side of those who may open the file (its owner, or an organization file's members): whether it has a
-      // link, making one and stopping it.
-      r.addHook('preHandler', async (req, reply) => {
-        const { kind, id } = req.params as { kind: SharedKind; id: string };
-        if ((kind !== 'deck' && kind !== 'file') || !sharable(req.viewer, kind, id)) return reply.code(404).send({ error: 'This file cannot be shared.' });
+
+      r.get('/api/grants/:kind/:id', async (req, reply) => {
+        const t = named(req, reply, 'viewer');
+        return t ? sharingOf(req, t.kind, t.id, t.role) : reply;
       });
-      r.get('/api/sharing/:kind/:id', async (req) => {
-        const { kind, id } = req.params as { kind: SharedKind; id: string };
-        return linkAddress(req, links.tokenOf(kind, id));
+
+      r.put('/api/grants/:kind/:id', async (req, reply) => {
+        const t = named(req, reply, 'manager');
+        if (!t) return reply;
+        const b = (req.body ?? {}) as { principal?: unknown; role?: unknown };
+        if (!GRANTABLE.includes(b.role as Role)) return reply.code(400).send({ error: 'The role is viewer, editor or manager.' });
+        let p: ReturnType<typeof parsePrincipal>;
+        try {
+          p = parsePrincipal(String(b.principal ?? ''));
+        } catch {
+          return reply.code(400).send({ error: 'Share with account:<id>, channel:<id>, org or link:<token>.' });
+        }
+        if (p.kind === 'link') {
+          if (!(await linksAllowed(t.row))) return reply.code(403).send(POLICY_FORBIDS);
+          if (!linkable(t.kind, t.id)) return reply.code(400).send({ error: 'Only presentations and videos can be shared with a link.' });
+          if (!TOKEN_RE.test(p.id!)) return reply.code(400).send({ error: 'A link token is 32 letters, digits, - and _.' });
+          grant(db, t.kind, t.id, `link:${p.id}`, 'viewer', req.user!.id);
+          return sharingOf(req, t.kind, t.id, t.role);
+        }
+        // A manager gives no more than they have; the owner is a column, not a grant.
+        if (ROLE_RANK[b.role as Role] > ROLE_RANK[t.role]) return reply.code(403).send({ error: refused('owner').message });
+        const id = p.kind === 'org' ? await setOrg(req, t.kind, t.id, t.row, true) : t.id;
+        grant(db, t.kind, id, b.principal as `account:${string}`, b.role as Role, req.user!.id);
+        return { ...sharingOf(req, t.kind, id, t.role), ...(id !== t.id ? { id } : {}) };
       });
-      r.put('/api/sharing/:kind/:id', async (req) => {
-        const { kind, id } = req.params as { kind: SharedKind; id: string };
-        const row = kind === 'deck' ? sheets.find(id) : storedFiles.find(id);
-        return linkAddress(req, links.create(req.user!.id, row?.workspace_id ?? null, kind, id));
+
+      r.delete('/api/grants/:kind/:id/:principal', async (req, reply) => {
+        const t = named(req, reply, 'manager');
+        if (!t) return reply;
+        const { principal } = req.params as { principal: string };
+        if (principal === 'org') {
+          const id = await setOrg(req, t.kind, t.id, t.row, false);
+          return { ...sharingOf(req, t.kind, id, access(db, req.viewer, t.kind, id) ?? t.role), ...(id !== t.id ? { id } : {}) };
+        }
+        revoke(db, t.kind, t.id, principal);
+        return sharingOf(req, t.kind, t.id, t.role);
       });
-      r.delete('/api/sharing/:kind/:id', async (req) => {
+
+      // The link anyone can open (the public page): made if there is none, its address returned.
+      r.post('/api/grants/:kind/:id/link', async (req, reply) => {
+        const t = named(req, reply, 'manager');
+        if (!t) return reply;
+        if (!(await linksAllowed(t.row))) return reply.code(403).send(POLICY_FORBIDS);
+        if (!linkable(t.kind, t.id)) return reply.code(400).send({ error: 'Only presentations and videos can be shared with a link.' });
+        return { url: linkUrl(req, makeLink(t.kind, t.id, req.user!.id)) };
+      });
+
+      // The routes of before link grants, for older clients: a presentation's or video's link (`deck` is a document).
+      const legacy = (req: FastifyRequest, reply: FastifyReply, need: Role) => {
         const { kind, id } = req.params as { kind: SharedKind; id: string };
-        links.remove(kind, id);
-        return linkAddress(req, null);
+        const object: ObjectKind | null = kind === 'deck' ? 'sheet' : kind === 'file' ? 'file' : null;
+        const row = object && linkable(object, id) ? objectRow(db, object, id) : undefined;
+        const role = row ? roleOf(db, req.viewer, object!, row) : null;
+        if (!row || !role) return void reply.code(404).send({ error: 'This file cannot be shared.' });
+        if (!atLeast(role, need)) return void reply.code(403).send({ error: refused(need).message });
+        return { kind: object!, id, row };
+      };
+      r.get('/api/sharing/:kind/:id', async (req, reply) => {
+        const t = legacy(req, reply, 'viewer');
+        return t ? { url: linkUrl(req, linkTokenOf(db, t.kind, t.id)) } : reply;
+      });
+      r.put('/api/sharing/:kind/:id', async (req, reply) => {
+        const t = legacy(req, reply, 'manager');
+        if (!t) return reply;
+        if (!(await linksAllowed(t.row))) return reply.code(403).send(POLICY_FORBIDS);
+        return { url: linkUrl(req, makeLink(t.kind, t.id, req.user!.id)) };
+      });
+      r.delete('/api/sharing/:kind/:id', async (req, reply) => {
+        const t = legacy(req, reply, 'manager');
+        if (!t) return reply;
+        removeLinks(t.kind, t.id);
+        return { url: null };
       });
     });
+  }
+
+  // --- Public links: a presentation or video anyone with the address can view (server/publicLinks.ts) -------
+  // Files stored on the server only: a file in the desktop app's folder is on the person's own computer.
+  if (!opts.local) {
+    /** What a link's token opens, while its grant is there: the file, read as its owner (who may open it). */
+    type PublicLink = { token: string; kind: SharedKind; fileId: string; owner: string };
+    const linkOf = (token: string): PublicLink | null => {
+      if (!TOKEN_RE.test(token)) return null;
+      const g = resolveLink(db, token);
+      const row = g && g.kind !== 'folder' ? objectRow(db, g.kind, g.id) : undefined;
+      return g && row ? { token, kind: g.kind === 'sheet' ? 'deck' : 'file', fileId: g.id, owner: row.owner_id } : null;
+    };
 
     // What a shared deck shows, kept until the deck changes: each picture and each seek of a video asks.
     const shownByDeck = new Map<string, { rev: string; images: Set<string>; files: Set<string> }>();
-    // A link works while the one who made it may still open the file (an organization file made private since is not shown).
     const shownBy = async (link: PublicLink) => {
-      const maker = await viewerFor(link.ownerId);
-      const rev = sheets.get(maker, link.fileId, 'deck')?.updatedAt;
+      const rev = sheets.get(link.owner, link.fileId, 'deck')?.updatedAt;
       if (!rev) return null;
       const known = shownByDeck.get(link.fileId);
       if (known?.rev === rev) return known;
-      const res = await sheets.loadDeck(maker, link.fileId);
+      const res = await sheets.loadDeck(link.owner, link.fileId);
       if (!res) return null;
       const { images: shownImages, files } = publicDeck(res.deck, link.token);
       if (shownByDeck.size >= 500) shownByDeck.clear();
@@ -1352,31 +1517,30 @@ export async function buildApp(opts: AppOptions) {
 
     app.get('/api/public/:token', async (req, reply) => {
       forGuest(reply).header('Cache-Control', 'no-store');
-      const link = links.resolve((req.params as { token: string }).token);
+      const link = linkOf((req.params as { token: string }).token);
       if (!link) return noLink(reply);
-      const maker = await viewerFor(link.ownerId);
       if (link.kind === 'deck') {
-        const res = await sheets.loadDeck(maker, link.fileId);
+        const res = await sheets.loadDeck(link.owner, link.fileId);
         if (!res) return noLink(reply);
         return { kind: 'deck', title: res.meta.title, deck: publicDeck(res.deck, link.token).deck };
       }
-      const f = storedFiles.get(maker, link.fileId);
+      const f = storedFiles.get(link.owner, link.fileId);
       if (!f || !isSharableVideo(f.meta.type)) return noLink(reply);
       return { kind: 'video', title: f.meta.filename, url: `/api/public/${link.token}/video` };
     });
     app.get('/api/public/:token/video', async (req, reply) => {
       forGuest(reply);
-      const link = links.resolve((req.params as { token: string }).token);
-      const f = link?.kind === 'file' ? storedFiles.get(await viewerFor(link.ownerId), link.fileId) : null;
+      const link = linkOf((req.params as { token: string }).token);
+      const f = link?.kind === 'file' ? storedFiles.get(link.owner, link.fileId) : null;
       if (!f || !isSharableVideo(f.meta.type)) return noLink(reply);
       return sendGuestFile(req, reply, f);
     });
     app.get('/api/public/:token/images/:id', async (req, reply) => {
       forGuest(reply);
       const { token, id } = req.params as { token: string; id: string };
-      const link = links.resolve(token);
+      const link = linkOf(token);
       const shown = link?.kind === 'deck' ? await shownBy(link) : null;
-      const img = link && shown?.images.has(id) ? images.get(await viewerFor(link.ownerId), id) : null;
+      const img = link && shown?.images.has(id) ? images.get(link.owner, id) : null;
       if (!img) return noLink(reply);
       reply.header('Content-Type', img.type).header('Cache-Control', GUEST_CACHE);
       return reply.send(createReadStream(img.file));
@@ -1384,9 +1548,9 @@ export async function buildApp(opts: AppOptions) {
     app.get('/api/public/:token/files/:id', async (req, reply) => {
       forGuest(reply);
       const { token, id } = req.params as { token: string; id: string };
-      const link = links.resolve(token);
+      const link = linkOf(token);
       const shown = link?.kind === 'deck' ? await shownBy(link) : null;
-      const f = link && shown?.files.has(id) ? storedFiles.get(await viewerFor(link.ownerId), id) : null;
+      const f = link && shown?.files.has(id) ? storedFiles.get(link.owner, id) : null;
       if (!f || !PREVIEW_FILE_TYPES.includes(f.meta.type)) return noLink(reply);
       return sendGuestFile(req, reply, f);
     });
@@ -1407,6 +1571,42 @@ export async function buildApp(opts: AppOptions) {
   }
 
   // --- Cell images -------------------------------------------------------------
+  /**
+   * Shared with me (`/api/library?scope=shared`): what others shared with the user directly, by account or channel
+   * (Organization files are the `org` grant's), in the organization the request names; with `in`, a shared folder's
+   * own folders and files, which it shares too. A folder here is named by its object id (its `path` is that id).
+   */
+  const sharedWithMe = (req: FastifyRequest, reply: FastifyReply) => {
+    const v = viewerOf(req.viewer);
+    const workspace = scopeOf(req.scope).workspaceId;
+    const folderEntry = (rootKey: string, path: string) => ({ name: folderName(path), path: folderObjectId(rootKey, path), id: folderObjectId(rootKey, path) });
+    const inside = (req.query as { in?: unknown }).in;
+    if (typeof inside === 'string' && inside) {
+      const f = parseFolderObjectId(inside);
+      const root = f && access(db, req.viewer, 'folder', inside) ? scopeOfRootKey(f.rootKey, req.viewer) : null;
+      if (!f || !root) return reply.code(404).send({ error: 'Folder not found' });
+      return { folder: inside, folders: folders.children(root, f.path).map((p) => folderEntry(f.rootKey, p)), docs: sheets.listIn(root, f.path).map((m) => sheets.get(req.viewer, m.id) ?? m), files: storedFiles.listIn(root, f.path).map((m) => storedFiles.get(req.viewer, m.id)?.meta ?? m) };
+    }
+    const st = objectsSharedWithSql(readerOf(req.viewer));
+    const out = { folder: '', folders: [] as ReturnType<typeof folderEntry>[], docs: [] as SheetMeta[], files: [] as StoredFile[] };
+    for (const { object_kind: kind, object_id: id } of db.prepare(st.sql).all(...st.params) as { object_kind: string; object_id: string }[]) {
+      if (!isObjectKind(kind)) continue;
+      const row = objectRow(db, kind, id);
+      if (!row || row.owner_id === v.userId || (workspace && row.workspace_id !== workspace) || !roleOf(db, req.viewer, kind, row)) continue;
+      if (kind === 'folder') {
+        const f = parseFolderObjectId(id)!;
+        if (f.path) out.folders.push(folderEntry(f.rootKey, f.path));
+      } else if (kind === 'sheet') {
+        const m = sheets.get(req.viewer, id);
+        if (m) out.docs.push(m);
+      } else {
+        const m = storedFiles.get(req.viewer, id);
+        if (m) out.files.push(m.meta);
+      }
+    }
+    return out;
+  };
+
   app.register(async (r) => {
     r.addHook('preHandler', requireUser);
 
@@ -1693,12 +1893,14 @@ export async function buildApp(opts: AppOptions) {
     // --- The library, one folder at a time (shared/folders.ts) ------------------------------------
     // What is in a folder: its folders, then documents of every kind and stored files.
     r.get('/api/library', async (req, reply) => {
+      if ((req.query as { scope?: unknown }).scope === 'shared') return sharedWithMe(req, reply);
       const scope = req.scope;
       const problem = folders.problem?.(scope, req.folder);
       if (problem) return reply.code(403).send({ error: problem });
       return {
         folder: req.folder,
-        folders: folders.children(scope, req.folder).map((path) => ({ name: folderName(path), path })),
+        // In the suite a folder is also named by its object id, for the Share dialog (server/access.ts).
+        folders: folders.children(scope, req.folder).map((path) => ({ name: folderName(path), path, ...(host ? { id: folderObjectId(scopeKey(scope), path) } : {}) })),
         docs: sheets.listIn(scope, req.folder),
         files: storedFiles.listIn(scope, req.folder),
       };
@@ -2222,6 +2424,10 @@ export async function buildApp(opts: AppOptions) {
 
     // Delete the request's folder, which must be empty.
     r.delete('/api/folders', async (req, reply) => {
+      // An organization's folder is its maker's to delete (server/access.ts).
+      const role = folders instanceof FolderStore && req.folder ? access(db, req.viewer, 'folder', folderObjectId(scopeKey(req.scope), req.folder)) : 'owner';
+      if (!role) return reply.code(404).send({ error: 'Folder not found' });
+      if (!atLeast(role, 'owner')) return reply.code(403).send({ error: refused('owner').message });
       const res = folders.remove(req.scope, req.folder);
       if (res === 'missing') return reply.code(404).send({ error: 'Folder not found' });
       if (res === 'not-empty') return reply.code(409).send({ error: 'This folder is not empty. Move or delete what is in it first.' });
@@ -2241,7 +2447,7 @@ export async function buildApp(opts: AppOptions) {
       if (!isFileId(id)) return reply.code(404).send({ error: 'File not found' });
       // Within its root: a folder of the root the request names (server/scope.ts); another root is a scope move.
       const row = kind === 'file' ? storedFiles.find(id) : sheets.find(id);
-      if (row && canAccess(req.viewer, row) && !inScope(row, req.scope)) return reply.code(400).send({ error: 'That folder is in another part of the library. Use Share with organization or Make private.' });
+      if (row && roleOf(db, req.viewer, kind === 'file' ? 'file' : 'sheet', row) && !inScope(row, req.scope)) return reply.code(400).send({ error: 'That folder is in another part of the library. Use Share with organization or Make private.' });
       const moved = kind === 'file' ? storedFiles.move(req.viewer, id, req.folder) : sheets.move(req.viewer, id, req.folder);
       if (!moved) return reply.code(404).send({ error: 'File not found' });
       return { ok: true };
@@ -2250,25 +2456,21 @@ export async function buildApp(opts: AppOptions) {
     // --- Organizations (FreeFlow suite; server/scope.ts): moving files and folders between the roots -------------
     // The target is the request's scope: `workspace` (one of the user's organizations, checked by requireUser) and
     // `shared` (Organization files) or not (the user's files there). A file keeps its folder when the target has one
-    // of that path, else goes to the top. Its pictures and its public link go with it.
+    // of that path, else goes to the top. Its pictures and its grants go with it. These are grant changes
+    // (server/access.ts): Share with organization gives the `org` grant and Make private takes it away, which a
+    // manager may do; Move to organization… (another organization) is the owner's.
     r.post('/api/files/:id/scope', async (req, reply) => {
       const { id } = req.params as { id: string };
       const target = scopeOf(req.scope);
       if (!host || !target.workspaceId) return reply.code(400).send({ error: 'Name the organization (workspace) the file goes to.' });
       const doc = isFileId(id) ? sheets.find(id) : undefined;
       const row = doc ?? (isFileId(id) ? storedFiles.find(id) : undefined);
-      if (!row || !canAccess(req.viewer, row)) return reply.code(404).send({ error: 'File not found' });
-      const folderThere = row.folder && folders.exists(target, row.folder) ? row.folder : '';
-      if (doc) {
-        const pictures = await sheets.picturesIn(req.viewer, id);
-        const meta = sheets.setScope(req.viewer, id, target, folderThere);
-        images.retag(req.viewer, pictures, target.workspaceId);
-        publicLinks?.moved('deck', id, target.workspaceId);
-        return { file: meta };
-      }
-      const file = storedFiles.setScope(req.viewer, id, target, folderThere);
-      publicLinks?.moved('file', id, target.workspaceId);
-      return { file };
+      const kind = doc ? 'sheet' : 'file';
+      const role = row ? roleOf(db, req.viewer, kind, row) : null;
+      if (!row || !role) return reply.code(404).send({ error: 'File not found' });
+      const need = roleToMove(row.workspace_id, target.workspaceId);
+      if (!atLeast(role, need)) return reply.code(403).send({ error: refused(need).message });
+      return { file: await moveFileTo(req.viewer, kind, id, row, target) };
     });
 
     // A folder with everything in it: from the root `from` names (`{ workspace, shared }`, as a request names one) to
@@ -2280,13 +2482,11 @@ export async function buildApp(opts: AppOptions) {
       const source = await scopeNamed(req.user!.id, b.from?.workspace, b.from?.shared);
       if (source === null) return reply.code(403).send({ error: 'You are not a member of this organization.' });
       const path = cleanFolderPath(b.path);
-      if (!path || !folders.exists(source, path)) return reply.code(404).send({ error: 'Folder not found' });
-      const moved = folders.moveTo(source, path, target);
-      for (const id of moved.sheets) {
-        images.retag(req.viewer, await sheets.picturesIn(req.viewer, id), target.workspaceId);
-        publicLinks?.moved('deck', id, target.workspaceId);
-      }
-      for (const id of moved.files) publicLinks?.moved('file', id, target.workspaceId);
+      const role = path && folders.exists(source, path) ? access(db, req.viewer, 'folder', folderObjectId(scopeKey(source), path)) : null;
+      if (!path || !role) return reply.code(404).send({ error: 'Folder not found' });
+      const need = roleToMove(scopeOf(source).workspaceId, target.workspaceId);
+      if (!atLeast(role, need)) return reply.code(403).send({ error: refused(need).message });
+      const moved = await moveFolderTo(req.viewer, source, path, target);
       return { folder: { name: folderName(moved.path), path: moved.path }, moved: moved.sheets.length + moved.files.length };
     });
 
@@ -2473,8 +2673,9 @@ export async function buildApp(opts: AppOptions) {
       // The root the server tools work in (server/scope.ts): a file's chat, that file's (an organization file's chat
       // lists and makes Organization files); the home chat, the user's files in the organization the bar selected.
       const chat = body.scope ?? chatScope(body.context);
-      const chatFile = chat === HOME_CHAT || !isFileId(chat) ? undefined : (sheets.find(chat) ?? storedFiles.find(chat));
-      const toolScope = chatFile?.workspace_id && canAccess(req.viewer, chatFile) ? scopeOfRow(chatFile, req.viewer) : req.scope;
+      const chatDoc = chat === HOME_CHAT || !isFileId(chat) ? undefined : sheets.find(chat);
+      const chatFile = chatDoc ?? (chat === HOME_CHAT || !isFileId(chat) ? undefined : storedFiles.find(chat));
+      const toolScope = chatFile?.workspace_id && roleOf(db, req.viewer, chatDoc ? 'sheet' : 'file', chatFile) ? scopeOfRow(chatFile, req.viewer) : req.scope;
       try {
         await agent.runTurn(req.user!.id, body, emit, abort.signal, { scope: toolScope, viewer: req.viewer });
       } catch (e) {
