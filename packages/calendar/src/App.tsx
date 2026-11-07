@@ -16,6 +16,7 @@ import { SignedOut } from './components/SignedOut';
 import { NoOrganization } from './components/NoOrganization';
 import { EventDialog, draftOf, inputOf, newDraft, type Draft } from './components/EventDialog';
 import { EventPopover } from './components/EventPopover';
+import { alsoOnNote, mergeByUid } from './lib/merge';
 import { QuickCreate } from './components/QuickCreate';
 import { ScopeDialog } from './components/ScopeDialog';
 import { SearchResults } from './components/SearchResults';
@@ -78,6 +79,8 @@ export function App() {
   const ownerName = (accountId: string) => members.data?.find((x) => x.accountId === accountId)?.displayName ?? 'Someone';
   const [sharing, setSharing] = useState<CalendarInfo | null>(null);
   const events = useEvents(range, ahead, allCals);
+  // One copy per event: the person's own invitation over a shared calendar's (phase 4.5).
+  const occurrences = useMemo(() => mergeByUid(events.data ?? [], allCals ?? []), [events.data, allCals]);
   // A passing message at the bottom; one in progress ("Updating…") stays until the result replaces it.
   const [toast, setToast] = useState<string | { text: string; progress: true } | null>(null);
   const onError = useCallback((e: unknown) => setToast(errorText(e)), []);
@@ -315,7 +318,7 @@ export function App() {
                 <Toolbar title={titleOf(view, place.date, WEEK_STARTS_ON)} view={view} narrow={narrow} busy={events.isFetching && !events.data} onToday={today} onStep={go} onView={setView} onCalendars={() => setSidebarOpen(true)} />
                 <div className="min-h-0 flex-1">
                   <CalendarGrid
-                    view={view} date={place.date} occurrences={events.data ?? []} calendars={allCals ?? cals} weekStartsOn={WEEK_STARTS_ON} selecting={!!quick}
+                    view={view} date={place.date} occurrences={occurrences} calendars={allCals ?? cals} weekStartsOn={WEEK_STARTS_ON} selecting={!!quick}
                     onSelect={(start, end, allDay, at) => {
                       if (!defaultCalendar) return setToast('Connect a calendar you can write to first.');
                       setOpen(null);
@@ -344,7 +347,8 @@ export function App() {
         </div>
       )}
       {open && (
-        <EventPopover event={open.event} calendar={byId.get(open.event.calendarId)} anchor={open.anchor} onClose={closeEvent}
+        <EventPopover event={open.event} calendar={byId.get(open.event.calendarId)} members={members.data ?? []}
+          alsoOn={alsoOnNote(open.event, allCals ?? [], ownerName)} anchor={open.anchor} onClose={closeEvent}
           onEdit={() => edit(open.event)} onDelete={() => remove(open.event)} onRespond={(r) => respond(open.event, r)} />
       )}
       {quick && (

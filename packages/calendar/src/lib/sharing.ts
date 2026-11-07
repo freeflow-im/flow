@@ -33,10 +33,12 @@ export const canShare = (c: CalendarInfo | undefined) => !!c && isNativeId(c.id)
 /** What an event's card says on a calendar the person can only read because it was shared with them. */
 export const readOnlyNote = (c: CalendarInfo | undefined) => (c?.shared && c.role === 'reader' ? 'You can view this calendar' : null);
 
-/** Whether a guest on a native event is a member of the organization (the server resolved their address to an account),
+/** Whether a guest on a native event is a member of the organization (an agent among them marked so) (the server resolved their address to an account),
  * or someone outside; nothing for an event on a connected calendar. */
-export function guestMark(o: Pick<EventOccurrence, 'calendarId'>, g: { accountId?: string }): 'member' | 'outside' | null {
-  return isNativeId(o.calendarId) ? (g.accountId ? 'member' : 'outside') : null;
+export function guestMark(o: Pick<EventOccurrence, 'calendarId'>, g: { accountId?: string }, members: Pick<SuiteMember, 'accountId' | 'isAgent'>[] = []): 'member' | 'agent' | 'outside' | null {
+  if (!isNativeId(o.calendarId)) return null;
+  if (!g.accountId) return 'outside';
+  return members.some((m) => m.accountId === g.accountId && m.isAgent) ? 'agent' : 'member';
 }
 
 /** Who a grant names, in words. */

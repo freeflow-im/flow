@@ -9,6 +9,7 @@ import { calendarApi, type CalendarInfo, type EventOccurrence, type Response } f
 import { conferenceOf, linkify, shownDescription } from '../lib/conference';
 import { RESPONSE_LABEL, cardWhen, guestName, guestSummary, orderedGuests, reminderText } from '../lib/format';
 import { canChange, guestMark, readOnlyNote } from '../lib/sharing';
+import type { SuiteMember } from '../suite';
 import { parseDate } from '../lib/ranges';
 import { describeRecurrence } from '../lib/recurrence';
 import { pathOf } from '../lib/route';
@@ -57,7 +58,7 @@ function useCopy(): [string | null, (what: string, text: string) => void] {
   }];
 }
 
-export function EventPopover({ event, calendar, anchor, onClose, onEdit, onDelete, onRespond }: { event: EventOccurrence; calendar: CalendarInfo | undefined; anchor: Anchor; onClose(): void; onEdit(): void; onDelete(): void; onRespond(r: Exclude<Response, 'needs-action'>): void }) {
+export function EventPopover({ event, calendar, members = [], alsoOn, anchor, onClose, onEdit, onDelete, onRespond }: { event: EventOccurrence; calendar: CalendarInfo | undefined; members?: SuiteMember[]; alsoOn?: string | null; anchor: Anchor; onClose(): void; onEdit(): void; onDelete(): void; onRespond(r: Exclude<Response, 'needs-action'>): void }) {
   const writable = canChange(calendar);
   const viewOnly = readOnlyNote(calendar);
   const color = calendar?.color ?? '#1a73e8';
@@ -103,6 +104,7 @@ export function EventPopover({ event, calendar, anchor, onClose, onEdit, onDelet
             {event.timezone && event.timezone !== zone && !event.allDay && <p className="text-[13px] leading-5 text-muted">{event.timezone.replace(/_/g, ' ')}</p>}
             {repeat && <p className="text-[15px] leading-6 text-muted">{repeat}</p>}
             {viewOnly && <p className="mt-1 text-[13px] leading-5 text-muted">{viewOnly}</p>}
+            {alsoOn && <p className="mt-1 text-[13px] leading-5 text-muted">{alsoOn}</p>}
           </div>
         </div>
 
@@ -153,7 +155,7 @@ export function EventPopover({ event, calendar, anchor, onClose, onEdit, onDelet
               <ul className="mt-2 max-h-64 overflow-y-auto">
                 {guests.map((g) => {
                   const name = guestName(g);
-                  const mark = guestMark(event, g);
+                  const mark = guestMark(event, g, members);
                   return (
                     <li key={g.email} className="flex items-center gap-3 py-1" title={g.email}>
                       <span className="relative flex size-8 shrink-0 items-center justify-center rounded-full bg-track text-[13px] font-medium uppercase text-muted">
@@ -163,7 +165,7 @@ export function EventPopover({ event, calendar, anchor, onClose, onEdit, onDelet
                       <span className="min-w-0 flex-1">
                         <span className="flex min-w-0 items-center gap-1.5 text-[14px] leading-5">
                           <span className="truncate">{name ?? g.email}{g.self && <span className="text-muted"> (you)</span>}</span>
-                          {mark && <span className={cn('shrink-0 rounded px-1 text-[11px] leading-4', mark === 'member' ? 'bg-track text-muted' : 'bg-warn-bg text-ink')} title={mark === 'member' ? 'A member of your organization' : 'Outside your organization: invited by email'}>{mark}</span>}
+                          {mark && <span className={cn('shrink-0 rounded px-1 text-[11px] leading-4', mark === 'outside' ? 'bg-warn-bg text-ink' : 'bg-track text-muted')} title={mark === 'member' ? 'A member of your organization' : mark === 'agent' ? 'An agent in your organization' : 'Outside your organization: invited by email'}>{mark}</span>}
                         </span>
                         <span className="block truncate text-[12px] leading-4 text-muted">
                           {[g.organizer ? 'Organizer' : null, g.role === 'optional' ? 'Optional' : null, name ? g.email : null].filter(Boolean).join(' · ')}
