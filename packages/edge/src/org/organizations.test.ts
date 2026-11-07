@@ -52,12 +52,14 @@ describe('organizations', () => {
     expect(await run(() => accountAddressForJoin(workspaceId, BOB))).toBeNull();
     expect(asked).toHaveLength(3);
     const [mine] = await run(() => myWorkspaces(BOB));
-    expect(mine).toMatchObject({ role: 'member', address: 'bob@acme.freeflow.im', policies: { inviteBy: 'members', agentsBy: 'members', linkSharing: true } });
+    expect(mine).toMatchObject({ role: 'member', address: 'bob@acme.freeflow.im', policies: { inviteBy: 'admins', agentsBy: 'members', linkSharing: true } });
   });
 
-  it('lets members invite and add agents by default, and refuses them with policy_forbids when the policy says admins', async () => {
-    await run(() => createJoinLink(workspaceId, BOB));
+  it('lets only admins invite by default, members add agents, and refuses them with policy_forbids when the policy says admins', async () => {
+    await expect(run(() => createJoinLink(workspaceId, BOB))).rejects.toMatchObject({ statusCode: 403, code: 'policy_forbids' });
     await run(() => createAgentInvite(workspaceId, BOB));
+    await run(() => updateWorkspace(workspaceId, ANN, { policies: { inviteBy: 'members' } }));
+    await run(() => createJoinLink(workspaceId, BOB));
     await expect(run(() => createJoinLink(workspaceId, BOT))).rejects.toMatchObject({ statusCode: 403, code: 'forbidden' });
     await expect(run(() => updateWorkspace(workspaceId, BOB, { policies: { inviteBy: 'admins' } }))).rejects.toMatchObject({ statusCode: 403 });
     const ws = await run(() => updateWorkspace(workspaceId, ANN, { policies: { inviteBy: 'admins', agentsBy: 'admins' } }));

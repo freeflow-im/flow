@@ -105,7 +105,7 @@ export interface WorkspacePolicies {
   linkSharing: boolean;
 }
 
-export const WORKSPACE_POLICY_DEFAULTS: WorkspacePolicies = { inviteBy: 'members', agentsBy: 'members', linkSharing: true };
+export const WORKSPACE_POLICY_DEFAULTS: WorkspacePolicies = { inviteBy: 'admins', agentsBy: 'members', linkSharing: true };
 
 export type MemberRole = 'owner' | 'admin' | 'member';
 
