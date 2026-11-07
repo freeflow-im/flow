@@ -42,24 +42,24 @@ jobs:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: us-west-2
       - uses: aws-actions/amazon-ecr-login@v2
+      - name: Install
+        run: pnpm install --frozen-lockfile --filter @flow/edge...
+      - name: Build the shared types and schemas
+        run: pnpm --filter @flow/shared build
       - name: Copy the clients out of the server's image
         env:
           IMAGE: ${{ vars.AWS_FLOW_ECR_REPOSITORY }}:latest
         run: |
           docker pull "$IMAGE"
           id=$(docker create "$IMAGE")
-          mkdir -p packages/web packages/docs/dist packages/mail packages/calendar
-          docker cp "$id:/app/packages/web/dist" packages/web/dist
-          docker cp "$id:/app/packages/docs/dist/client" packages/docs/dist/client
-          # Mail is in images built since it was added; an older image has none, and assemble.mjs leaves /mail out.
-          docker cp "$id:/app/packages/mail/dist" packages/mail/dist || echo "no Mail client in this image"
-          # Calendar likewise: an image from before it has none, and assemble.mjs leaves /calendar out.
-          docker cp "$id:/app/packages/calendar/dist" packages/calendar/dist || echo "no Calendar client in this image"
+          # One per manifest client (scripts/clients.mjs). An optional one is missing from an image built before its
+          # app was added, and assemble.mjs then leaves its path out.
+          node packages/edge/scripts/clients.mjs dists | while read -r dist need; do
+            mkdir -p "$(dirname "$dist")"
+            if [ "$need" = required ]; then docker cp "$id:/app/$dist" "$dist"
+            else docker cp "$id:/app/$dist" "$dist" || echo "no $dist in this image"; fi
+          done
           docker rm "$id"
-      - name: Install
-        run: pnpm install --frozen-lockfile --filter @flow/edge...
-      - name: Build the shared types and schemas
-        run: pnpm --filter @flow/shared build
       - name: Assemble and deploy
         working-directory: packages/edge
         env:

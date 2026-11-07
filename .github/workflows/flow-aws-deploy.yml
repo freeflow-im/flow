@@ -12,12 +12,17 @@ on:
     branches: [main]
     paths:
       - 'packages/server/**'
-      - 'packages/web/**'
       - 'packages/shared/**'
-      - 'packages/docs/**'
       - 'packages/suite-bar/**'
+      - 'packages/edge/scripts/clients.mjs'
+      # The clients, from the manifests (a static filter cannot run a script; the edge tests check this block).
+      # clients:paths begin (node packages/edge/scripts/clients.mjs write)
+      - 'packages/web/**'
+      - 'packages/docs/**'
       - 'packages/mail/**'
       - 'packages/calendar/**'
+      - 'packages/contacts/**'
+      # clients:paths end
       - 'docs/help/**'
       - 'scripts/build-features.mjs'
       - '.claude/skills/flow-agent-member/**'

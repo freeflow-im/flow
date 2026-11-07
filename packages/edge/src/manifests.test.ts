@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { APP_MANIFESTS } from '@flow/shared/manifests';
+import { blocks, deployClients, fill } from '../scripts/clients.mjs';
 import { clientsFrom } from '../scripts/lib/clients.mjs';
 import { MCP_SCOPES, offeredGroups, SCOPE_GROUPS } from './directory/mcpOAuth';
 import { pageRoutes } from './routes/pages';
@@ -56,6 +57,17 @@ describe('the manifests and the Worker', () => {
     expect(clients.slice(4).every((c) => c.optional && c.page === `${c.name}.html`)).toBe(true);
     // Every client has a package.json beside its build folder's package.
     for (const m of APP_MANIFESTS) if (m.client) expect(existsSync(path.join(root, m.client.dist.split('/').slice(0, 2).join('/'), 'package.json'))).toBe(true);
+  });
+
+  it('names every client in the deploy files, as clients.mjs writes them', async () => {
+    // The Dockerfile's COPY lines and flow-aws-deploy.yml's paths filter cannot run the script; a new app's manifest
+    // fails here until `node packages/edge/scripts/clients.mjs write` is run.
+    const clients = await deployClients();
+    expect(clients.map((c) => c.pkg)).toEqual(expect.arrayContaining(['@flow/web', '@flow/docs', '@flow/contacts']));
+    for (const [file, fileBlocks] of Object.entries(blocks(clients))) {
+      const text = readFileSync(path.join(root, file), 'utf8');
+      expect(fill(text, file, fileBlocks), file).toBe(text);
+    }
   });
 
   it('keeps the consent groups and scopes as they were', () => {
