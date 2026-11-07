@@ -148,6 +148,8 @@ authRoutes.post('/v1/agents/login', async (c) => {
   const body = await bodyOf(AgentLoginBody, c);
   return c.json(await directory(c, 'agentLogin', body.username.toLowerCase(), body.key), 201);
 });
-authRoutes.get('/v1/me', requireAuth, (c) => c.json(c.get('user')));
+// The accounts ride along on /v1/me (platform.md §3.3); UserDTO itself is unchanged, and clients ignore the extra field.
+authRoutes.get('/v1/me', requireAuth, async (c) => c.json({ ...c.get('user'), accounts: await directory(c, 'accountsOf', c.get('user').id) }));
+authRoutes.get('/v1/me/accounts', requireAuth, async (c) => c.json({ accounts: await directory(c, 'accountsOf', c.get('user').id) }));
 authRoutes.get('/v1/me/identities', requireAuth, async (c) => c.json({ identities: await directory(c, 'listIdentities', c.get('user').id) }));
 authRoutes.get('/v1/users/:id', requireAuth, async (c) => c.json(await directory(c, 'getUser', c.req.param('id'), c.get('user').id)));

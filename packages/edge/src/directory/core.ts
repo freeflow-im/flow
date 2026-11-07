@@ -1,9 +1,10 @@
 // Identity: accounts, sessions and sign-in. Ported from packages/server/src/services/auth.ts and oauthAccounts.ts, with
 // the same rules and the same mail. It runs over any `SqlStorage`-shaped database, so tests can use node:sqlite.
-import type { AuthResponse, OAuthIdentityDTO, RegisterResponse, UserDTO } from '@flow/shared';
+import type { AccountDTO, AccountKind, AccountRole, AccountState, AuthResponse, OAuthIdentityDTO, RegisterResponse, UserDTO } from '@flow/shared';
 import { ApiError, conflict, notFound, unauthorized } from '../errors';
 import { hashPassword, verifyPassword } from './passwords';
 import { DIRECTORY_MIGRATIONS } from './schema';
+import { localPart, organizationDomain, uniqueAddress } from './addresses';
 import { HandoffApprove, HandoffExchange, HandoffStart, parseBody, pkceChallenge, validateContext, type HandoffContext, type HandoffPolicy } from './authHandoff';
 
 export interface Sql {
@@ -88,6 +89,88 @@ export class DirectoryCore {
       this.sql.exec(m);
       this.sql.exec('INSERT INTO _migrations (n) VALUES (?)', done + i);
     });
+    if (!this.rows('SELECT 1 FROM accounts LIMIT 1').length && this.rows('SELECT 1 FROM memberships LIMIT 1').length) this.backfillAccounts();
+  }
+
+  /** An account for every membership that has none, with its address. Safe to run twice; the constructor runs it the
+   * first time it sees the accounts migration; an import that adds memberships later may call it again. */
+  backfillAccounts(): void {
+    this.sql.exec(
+      `INSERT OR IGNORE INTO organizations (id, slug, owner_user_id, created_at)
+       SELECT s.organization_id, MIN(s.slug),
+         (SELECT MIN(m.user_id) FROM memberships m WHERE m.organization_id = s.organization_id AND m.role = 'owner'), ?
+       FROM organization_slugs s GROUP BY s.organization_id`, Date.now());
+    const missing = this.rows(
+      `SELECT m.user_id, m.organization_id, m.role FROM memberships m
+       LEFT JOIN accounts a ON a.user_id = m.user_id AND a.organization_id = m.organization_id
+       WHERE a.id IS NULL ORDER BY m.organization_id, m.user_id`);
+    for (const m of missing) this.createAccount(m.user_id as string, m.organization_id as string, m.role as string);
+  }
+
+  /** The domain label of an organization's addresses: its slug, or its id when it was made without one. */
+  private organizationSlug(organizationId: string): string {
+    return (this.rows('SELECT slug FROM organizations WHERE id = ?', organizationId)[0]?.slug as string | undefined)
+      ?? (this.rows('SELECT MIN(slug) AS slug FROM organization_slugs WHERE organization_id = ?', organizationId)[0]?.slug as string | null | undefined)
+      ?? organizationId;
+  }
+
+  private createAccount(userId: string, organizationId: string, role: string): void {
+    const user = this.userById(userId);
+    if (!user) return;
+    const local = localPart(user.is_agent && user.agent_username ? (user.agent_username as string) : (user.display_name as string));
+    const address = uniqueAddress(local, organizationDomain(this.organizationSlug(organizationId)), (a) => this.rows('SELECT 1 FROM addresses WHERE address = ?', a).length > 0);
+    const id = newId();
+    this.sql.exec('INSERT INTO accounts (id, user_id, organization_id, address, display_name, role, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      id, userId, organizationId, address, user.display_name, role, Date.now());
+    this.sql.exec('INSERT INTO addresses (address, account_id) VALUES (?, ?)', address, id);
+  }
+
+  private accountRow(where: string, ...args: unknown[]): AccountDTO[] {
+    return this.rows(`SELECT * FROM accounts WHERE ${where} ORDER BY created_at, id`, ...args).map((a) => ({
+      id: a.id as string,
+      principalId: a.user_id as string,
+      organizationId: a.organization_id as string,
+      address: a.address as string,
+      displayName: a.display_name as string,
+      role: a.role as AccountRole,
+      kind: a.kind as AccountKind,
+      state: a.state as AccountState,
+      createdAt: iso(a.created_at),
+    }));
+  }
+
+  /** Every account a principal holds, removed ones included: the state says which. */
+  accountsOf(userId: string): AccountDTO[] {
+    return this.accountRow('user_id = ?', userId);
+  }
+
+  accountFor(userId: string, organizationId: string): AccountDTO | null {
+    return this.accountRow('user_id = ? AND organization_id = ?', userId, organizationId)[0] ?? null;
+  }
+
+  accountByAddress(address: string): AccountDTO | null {
+    return this.accountRow('address = ?', address)[0] ?? null;
+  }
+
+  organization(id: string): { id: string; slug: string; ownerUserId: string | null; policies: Record<string, unknown> } | null {
+    const o = this.rows('SELECT * FROM organizations WHERE id = ?', id)[0];
+    return o ? { id: o.id as string, slug: o.slug as string, ownerUserId: (o.owner_user_id as string | null) ?? null, policies: JSON.parse(o.policies as string) } : null;
+  }
+
+  setOwner(organizationId: string, userId: string): void {
+    this.sql.exec('UPDATE organizations SET owner_user_id = ? WHERE id = ?', userId, organizationId);
+  }
+
+  setPolicies(organizationId: string, policies: Record<string, unknown>): void {
+    this.sql.exec('UPDATE organizations SET policies = ? WHERE id = ?', JSON.stringify(policies), organizationId);
+  }
+
+  /** A join's account: made when missing, reactivated with the new role when removed, its role updated otherwise. */
+  private joinAccount(userId: string, organizationId: string, role: string): void {
+    this.sql.exec('INSERT OR IGNORE INTO organizations (id, slug, created_at) VALUES (?, ?, ?)', organizationId, this.organizationSlug(organizationId), Date.now());
+    if (role === 'owner') this.sql.exec('UPDATE organizations SET owner_user_id = ? WHERE id = ? AND owner_user_id IS NULL', userId, organizationId);
+    if (this.accountFor(userId, organizationId)) this.sql.exec("UPDATE accounts SET role = ?, state = CASE WHEN state = 'removed' THEN 'active' ELSE state END WHERE user_id = ? AND organization_id = ?", role, userId, organizationId);
+    else this.createAccount(userId, organizationId, role);
   }
 
   private rows(query: string, ...args: unknown[]): Row[] {
@@ -420,8 +503,14 @@ export class DirectoryCore {
         else this.sql.exec('DELETE FROM organization_domains WHERE organization_id = ?', organizationId);
       } else if (c.kind === 'token') this.sql.exec('INSERT OR IGNORE INTO id_index (id, organization_id) VALUES (?, ?)', await hashToken(c.id), organizationId);
       else if (c.kind === 'index') this.sql.exec('INSERT OR IGNORE INTO id_index (id, organization_id) VALUES (?, ?)', c.id, organizationId);
-      else if (c.kind === 'join') this.sql.exec('INSERT OR REPLACE INTO memberships (user_id, organization_id, role) VALUES (?, ?, ?)', c.user_id, organizationId, c.role);
-      else if (c.kind === 'leave') this.sql.exec('DELETE FROM memberships WHERE user_id = ? AND organization_id = ?', c.user_id, organizationId);
+      else if (c.kind === 'join') {
+        this.sql.exec('INSERT OR REPLACE INTO memberships (user_id, organization_id, role) VALUES (?, ?, ?)', c.user_id, organizationId, c.role);
+        this.joinAccount(c.user_id!, organizationId, c.role!);
+      } else if (c.kind === 'leave') {
+        this.sql.exec('DELETE FROM memberships WHERE user_id = ? AND organization_id = ?', c.user_id, organizationId);
+        // The organization keeps the account and its address (§3.3).
+        this.sql.exec("UPDATE accounts SET state = 'removed' WHERE user_id = ? AND organization_id = ?", c.user_id, organizationId);
+      }
     }
   }
 
@@ -429,10 +518,12 @@ export class DirectoryCore {
   reserveSlug(slug: string, organizationId: string): void {
     const taken = this.rows('INSERT INTO organization_slugs (slug, organization_id) VALUES (?, ?) ON CONFLICT (slug) DO NOTHING RETURNING slug', slug, organizationId);
     if (!taken.length) throw conflict('slug_taken', 'that URL is already taken');
+    this.sql.exec('INSERT OR IGNORE INTO organizations (id, slug, created_at) VALUES (?, ?, ?)', organizationId, slug, Date.now());
   }
 
   releaseSlug(slug: string, organizationId: string): void {
     this.sql.exec('DELETE FROM organization_slugs WHERE slug = ? AND organization_id = ?', slug, organizationId);
+    this.sql.exec('DELETE FROM organizations WHERE id = ? AND slug = ? AND NOT EXISTS (SELECT 1 FROM accounts WHERE organization_id = ?)', organizationId, slug, organizationId);
   }
 
   /** The one place a person's profile is written. The Worker then copies it to their organizations. */
@@ -475,6 +566,7 @@ export class DirectoryCore {
     this.sql.exec('DELETE FROM sessions WHERE user_id = ?', userId);
     this.sql.exec('DELETE FROM oauth_identities WHERE user_id = ?', userId);
     this.sql.exec('DELETE FROM memberships WHERE user_id = ?', userId);
+    this.sql.exec("UPDATE accounts SET state = 'removed' WHERE user_id = ?", userId);
     this.sql.exec("UPDATE users SET deleted_at = ?, email = 'deleted-' || id || '@deleted.invalid', password_hash = '!deleted', display_name = 'Deleted user', avatar_url = NULL WHERE id = ?", Date.now(), userId);
   }
 
