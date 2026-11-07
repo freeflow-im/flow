@@ -212,6 +212,36 @@ export interface AccountDTO {
   createdAt: string;
 }
 
+// ---- domains (§3.2) ------------------------------------------------------------
+
+/** `platform` is the organization's `<slug>.freeflow.im`, made with it; `own` is one its admin registered. */
+export type DomainKind = 'own' | 'platform';
+
+/** A DNS record the organization's admin publishes for a domain: the verification TXT and the mail provider's lines. */
+export interface DnsRecordDTO {
+  type: 'TXT' | 'MX';
+  /** The fully qualified name, without a trailing dot. */
+  name: string;
+  /** TXT text, or an MX record's host. */
+  value: string;
+  /** MX only. */
+  priority?: number;
+  /** What the record is for. */
+  purpose: 'verification' | 'mx' | 'spf' | 'dmarc' | 'dkim';
+}
+
+/** One of an organization's domains, with the records it needs and whether DNS has them (GET /v1/workspaces/:id/domains). */
+export interface DomainDTO {
+  domain: string;
+  kind: DomainKind;
+  verified: boolean;
+  primary: boolean;
+  records: DnsRecordDTO[];
+  /** Per record, in the order of `records`: what a DNS lookup found. Empty for the platform domain, which we publish. */
+  status: { record: 'present' | 'missing' }[];
+  createdAt: string;
+}
+
 // ---- apps (§6.1) ------------------------------------------------------------
 
 /** One object per organization, or one per account (§6.1). */

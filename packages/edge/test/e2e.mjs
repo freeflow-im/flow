@@ -7,6 +7,7 @@
 // (FLOW_UNFURL_ALLOW_HOSTS lets the link preview check fetch the test page this script serves on localhost.)
 //   node test/e2e.mjs /tmp/edge.log
 // The wake-job checks want the flow-jobs queue's first check soon: add --var JOBS_ACK_DELAY_SECONDS:2.
+// The domain checks serve a DNS-over-HTTPS stub on DOH_PORT (default 18897): add --var DNS_RESOLVER_URL:http://localhost:18897/dns-query.
 // It reads signup links and the dev push driver's lines from the Worker's log, because local mail and pushes go there.
 // Without the LIVEKIT_* vars the huddle checks expect huddles to be off instead.
 import fs from 'node:fs';
@@ -226,6 +227,31 @@ r=await api(A.token,'POST',`/v1/workspaces/${W}/owner`,{userId:Bo.user.id});t('A
 r=await api(Bo.token,'GET','/v1/me/workspaces');const bw=r.j.workspaces?.find(w=>w.id===W);t('Bob\'s workspaces say owner, with his address',bw?.role==='owner'&&bw.address===bobAddr,JSON.stringify(bw).slice(0,160));
 r=await api(Bo.token,'GET','/v1/me');t('his account in the directory says owner',r.j.accounts?.find(a=>a.organizationId===W)?.role==='owner',JSON.stringify(r.j.accounts));
 r=await api(Bo.token,'POST',`/v1/workspaces/${W}/owner`,{userId:A.user.id});t('Bob hands it back',r.s===200&&r.j.role==='admin',r.s);
+// ---- domains: the platform subdomain, an own domain verified over DNS, new addresses on the primary (platform.md §3.2, phase 5.1)
+{let token='';const doh=http.createServer((q,s)=>{const u=new URL(q.url,'http://x');const name=u.searchParams.get('name'),type=u.searchParams.get('type');s.setHeader('content-type','application/dns-json');
+  s.end(JSON.stringify(name==='_freeflow.acme.test'&&type==='TXT'&&token?{Status:0,Answer:[{name,type:16,TTL:60,data:JSON.stringify(token)}]}:{Status:3}));});
+ await new Promise(res=>doh.listen(Number(process.env.DOH_PORT||18897),'127.0.0.1',res));
+ const D=`/v1/workspaces/${W}/domains`;
+ t('the platform subdomain\'s records went to the dev DNS driver',!!(await link(/platform dns \(dev\): MX locked-in\.freeflow\.im/g)));
+ r=await api(A.token,'GET',D);const pd=r.j.domains?.[0];t('the domains list has the platform domain, verified and primary',r.s===200&&r.j.domains?.length===1&&pd.domain==='locked-in.freeflow.im'&&pd.kind==='platform'&&pd.verified&&pd.primary,r.s+' '+JSON.stringify(r.j).slice(0,160));
+ r=await api(A.token,'POST',D,{domain:'Acme.Test'});const vt=r.j.records?.find(x=>x.purpose==='verification');token=vt?.value??'';
+ t('Ann adds acme.test and gets a token and records',r.s===201&&r.j.domain==='acme.test'&&!r.j.verified&&vt?.name==='_freeflow.acme.test'&&/^freeflow-verify=/.test(token)&&r.j.records.some(x=>x.type==='MX')&&r.j.records.some(x=>x.purpose==='spf')&&r.j.records.some(x=>x.purpose==='dmarc'),r.s+' '+JSON.stringify(r.j).slice(0,160));
+ r=await api(Bo.token,'POST',`/v1/workspaces/${W2}/domains`,{domain:'acme.test'});t('another organization cannot take it',r.s===409&&r.j.error?.code==='domain_taken',r.s+' '+JSON.stringify(r.j).slice(0,90));
+ r=await api(A.token,'PATCH',`${D}/acme.test`,{primary:true});t('an unverified domain cannot be primary',r.s===409&&r.j.error?.code==='domain_unverified',r.s);
+ r=await api(A.token,'POST',`${D}/acme.test/verify`);t('verify finds the token over DNS over HTTPS',r.s===200&&r.j.verified===true&&r.j.found?.includes(token),r.s+' '+JSON.stringify(r.j).slice(0,140));
+ r=await api(A.token,'GET',D);const st=r.j.domains?.find(d=>d.domain==='acme.test')?.status;t('the checker finds the verification TXT and not the MX',st?.[0]?.record==='present'&&st?.[1]?.record==='missing',JSON.stringify(st));
+ r=await api(A.token,'PATCH',`${D}/acme.test`,{primary:true});t('Ann makes it primary',r.s===200&&r.j.primary===true,r.s+' '+JSON.stringify(r.j).slice(0,90));
+ r=await api(A.token,'GET',D);t('the list says so',r.j.domains?.find(d=>d.domain==='acme.test')?.primary===true&&r.j.domains?.find(d=>d.kind==='platform')?.primary===false,JSON.stringify(r.j.domains?.map(d=>[d.domain,d.verified,d.primary])));
+ const C=await signup('carol@example.com','Carol');r=await api(A.token,'POST',`/v1/workspaces/${W}/invites`,{email:'carol@example.com'});const ctok=(r.j.inviteUrl??'').split('/').pop();
+ r=await api(C.token,'POST','/v1/invites/accept',{token:ctok});t('Ann invites Carol',r.s<300,r.s+' '+JSON.stringify(r.j).slice(0,90));
+ r=await api(C.token,'GET','/v1/me');t('Carol\'s address is on acme.test',r.j.accounts?.find(a=>a.organizationId===W)?.address==='carol@acme.test',JSON.stringify(r.j.accounts));
+ r=await api(Bo.token,'GET','/v1/me');t('Bob\'s address is unchanged',r.j.accounts?.find(a=>a.organizationId===W)?.address===bobAddr,JSON.stringify(r.j.accounts?.map(a=>a.address)));
+ r=await api(C.token,'GET',D);t('a member cannot see the domains',r.s===403,r.s);
+ await api(A.token,'PATCH',`${D}/locked-in.freeflow.im`,{primary:true});
+ r=await api(A.token,'DELETE',`${D}/acme.test`);t('acme.test cannot be removed while Carol\'s address is on it',r.s===409&&r.j.error?.code==='domain_in_use',r.s+' '+JSON.stringify(r.j).slice(0,90));
+ r=await api(A.token,'DELETE',`${D}/locked-in.freeflow.im`);t('nor can the platform domain',r.s===409&&r.j.error?.code==='domain_platform',r.s);
+ await api(A.token,'POST',D,{domain:'spare.test'});r=await api(A.token,'DELETE',`${D}/spare.test`);t('an unused domain can',r.s===200,r.s);
+ doh.close();}
 // ---- leaving
 const del=await signup('cy@example.com','Cy');r=await api(del.token,'POST','/v1/workspaces',{name:'Cy co',slug:'cy-co'});
 r=await api(del.token,'DELETE','/v1/me');t('delete account',r.s===200,r.s+' '+JSON.stringify(r.j).slice(0,90));r=await api(del.token,'GET','/v1/me');t('its session ended',r.s===401,r.s);

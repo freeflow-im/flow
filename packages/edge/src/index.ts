@@ -5,6 +5,7 @@ import { ApiError } from './errors';
 import { proxy, type ProxyEnv } from './proxy';
 import { authRoutes, type AuthEnv } from './routes/auth';
 import { orgRoutes } from './routes/org';
+import { domainRoutes } from './routes/domains';
 import { docsRoutes } from './routes/docs';
 import { previewRoutes } from './routes/previews';
 import { handoffRoutes } from './routes/handoff';
@@ -92,6 +93,7 @@ ported.route('/', helpRoutes as never);
 ported.route('/', mailRoutes as never);
 ported.route('/', calendarRoutes as never);
 ported.route('/', eventRoutes as never);
+ported.route('/', domainRoutes as never);
 ported.route('/', orgRoutes as never);
 ported.route('/', pageRoutes as never);
 app.use('*', async (c, next) => {

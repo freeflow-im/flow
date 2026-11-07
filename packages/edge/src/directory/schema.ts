@@ -224,4 +224,19 @@ export const DIRECTORY_MIGRATIONS: string[] = [
   `ALTER TABLE accounts ADD COLUMN sponsor_user_id TEXT;
   UPDATE accounts SET sponsor_user_id = (SELECT u.sponsor_user_id FROM users u WHERE u.id = accounts.user_id AND u.is_agent = 1);
   CREATE INDEX accounts_sponsor ON accounts(sponsor_user_id);`,
+  // An organization's domains (platform.md §3.2, phase 5.1): its own, verified by a TXT record, and its platform
+  // subdomain `<slug>.freeflow.im`, verified from the start. New addresses are made on the primary one. A domain belongs
+  // to one organization. `organization_domains` stays: it is the Google auto-join rule, a different thing.
+  `CREATE TABLE domains (
+    domain TEXT PRIMARY KEY COLLATE NOCASE,
+    organization_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    verify_token TEXT,
+    verified_at INTEGER,
+    is_primary INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX domains_organization ON domains(organization_id);
+  INSERT OR IGNORE INTO domains (domain, organization_id, kind, verified_at, is_primary, created_at)
+    SELECT lower(slug) || '.freeflow.im', id, 'platform', created_at, 1, created_at FROM organizations;`,
 ];

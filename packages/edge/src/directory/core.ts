@@ -1,10 +1,12 @@
 // Identity: accounts, sessions and sign-in. Ported from packages/server/src/services/auth.ts and oauthAccounts.ts, with
 // the same rules and the same mail. It runs over any `SqlStorage`-shaped database, so tests can use node:sqlite.
-import type { AccountDTO, AccountKind, AccountRole, AccountState, AuthResponse, OAuthIdentityDTO, RegisterResponse, UserDTO } from '@flow/shared';
-import { ApiError, conflict, notFound, unauthorized } from '../errors';
+import type { AccountDTO, AccountKind, AccountRole, AccountState, AuthResponse, DomainDTO, DomainKind, OAuthIdentityDTO, RegisterResponse, UserDTO } from '@flow/shared';
+import { ApiError, badRequest, conflict, notFound, unauthorized } from '../errors';
 import { hashPassword, verifyPassword } from './passwords';
 import { DIRECTORY_MIGRATIONS } from './schema';
-import { localPart, organizationDomain, uniqueAddress } from './addresses';
+import { PLATFORM_DOMAIN, localPart, organizationDomain, uniqueAddress } from './addresses';
+import { checkDomain, checkRecords, dohResolver, normalizeDomain, recordsFor, type ProviderRecords, type Resolve } from './dns';
+import { noneProvider } from './providers/none';
 import { HandoffApprove, HandoffExchange, HandoffStart, parseBody, pkceChallenge, validateContext, type HandoffContext, type HandoffPolicy } from './authHandoff';
 
 export interface Sql {
@@ -20,6 +22,21 @@ export interface DirectoryDeps {
   /** FLOW_HANDOFF_RETURN_URLS and FLOW_ALLOWED_WEB_ORIGINS, for the web-to-app handoff. Without return URLs it is off. */
   handoffReturnUrls?: string[];
   allowedWebOrigins?: string[];
+  /** DNS lookups for domain verification and the records checker (dns.ts). Cloudflare's DNS over HTTPS by default. */
+  resolve?: Resolve;
+  /** The mail provider's records for a domain; the placeholder one until phase 5.2. */
+  provider?: ProviderRecords;
+}
+
+/** One of an organization's domains, as the directory keeps it. */
+export interface DomainRow {
+  domain: string;
+  organizationId: string;
+  kind: DomainKind;
+  verifyToken: string | null;
+  verified: boolean;
+  primary: boolean;
+  createdAt: string;
 }
 
 export type AuthKind = 'session' | 'agent';
@@ -37,6 +54,10 @@ const AGENT_TOUCH = 60_000;
 const HANDOFF_TTL = 10 * 60_000;
 const HANDOFF_CODE_TTL = 60_000;
 const HANDOFF_RATE_WINDOW = 10 * 60_000;
+/** How long a domain's records check is reused: the admin page reloads, and every load would otherwise be lookups. */
+const DOMAIN_STATUS_TTL = 60_000;
+/** "Check again" skips the cache, but not for a check younger than this. */
+const DOMAIN_STATUS_MIN_AGE = 5_000;
 
 type Row = Record<string, unknown>;
 
@@ -92,6 +113,8 @@ export function accountGate(account: Pick<AccountDTO, 'state'> | null): ApiError
 }
 
 export class DirectoryCore {
+  private readonly domainStatus = new Map<string, { at: number; status: { record: 'present' | 'missing' }[] }>();
+
   constructor(private readonly sql: Sql, private readonly deps: DirectoryDeps) {
     this.sql.exec('CREATE TABLE IF NOT EXISTS _migrations (n INTEGER PRIMARY KEY)');
     const done = (this.sql.exec('SELECT COALESCE(MAX(n), -1) AS n FROM _migrations').toArray()[0]!.n as number) + 1;
@@ -110,6 +133,7 @@ export class DirectoryCore {
        SELECT s.organization_id, MIN(s.slug),
          (SELECT MIN(m.user_id) FROM memberships m WHERE m.organization_id = s.organization_id AND m.role = 'owner'), ?
        FROM organization_slugs s GROUP BY s.organization_id`, Date.now());
+    for (const o of this.rows('SELECT id FROM organizations')) this.ensurePlatformDomain(o.id as string);
     const missing = this.rows(
       `SELECT m.user_id, m.organization_id, m.role FROM memberships m
        LEFT JOIN accounts a ON a.user_id = m.user_id AND a.organization_id = m.organization_id
@@ -129,7 +153,8 @@ export class DirectoryCore {
     if (!user) return;
     const name = displayName || (user.display_name as string);
     const local = localPart(user.is_agent && user.agent_username ? (user.agent_username as string) : name);
-    const address = uniqueAddress(local, organizationDomain(this.organizationSlug(organizationId)), (a) => this.rows('SELECT 1 FROM addresses WHERE address = ?', a).length > 0);
+    // On the primary domain as it is now. Making another domain primary later does not move existing addresses.
+    const address = uniqueAddress(local, this.primaryDomainOf(organizationId), (a) => this.rows('SELECT 1 FROM addresses WHERE address = ?', a).length > 0);
     const id = newId();
     // An agent's sponsor here starts as its principal's; the member row's own sponsor follows on the join (applyOrgChanges).
     this.sql.exec('INSERT INTO accounts (id, user_id, organization_id, address, display_name, role, sponsor_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
@@ -202,6 +227,7 @@ export class DirectoryCore {
   /** A join's account: made when missing, reactivated with the new role when removed, its role updated otherwise. */
   private joinAccount(userId: string, organizationId: string, role: string, displayName?: string): void {
     this.sql.exec('INSERT OR IGNORE INTO organizations (id, slug, created_at) VALUES (?, ?, ?)', organizationId, this.organizationSlug(organizationId), Date.now());
+    this.ensurePlatformDomain(organizationId);
     if (role === 'owner') this.sql.exec('UPDATE organizations SET owner_user_id = ? WHERE id = ? AND owner_user_id IS NULL', userId, organizationId);
     if (this.accountFor(userId, organizationId)) this.sql.exec("UPDATE accounts SET role = ?, state = CASE WHEN state = 'removed' THEN 'active' ELSE state END WHERE user_id = ? AND organization_id = ?", role, userId, organizationId);
     else this.createAccount(userId, organizationId, role, displayName);
@@ -580,11 +606,123 @@ export class DirectoryCore {
     const taken = this.rows('INSERT INTO organization_slugs (slug, organization_id) VALUES (?, ?) ON CONFLICT (slug) DO NOTHING RETURNING slug', slug, organizationId);
     if (!taken.length) throw conflict('slug_taken', 'that URL is already taken');
     this.sql.exec('INSERT OR IGNORE INTO organizations (id, slug, created_at) VALUES (?, ?, ?)', organizationId, slug, Date.now());
+    this.ensurePlatformDomain(organizationId);
   }
 
   releaseSlug(slug: string, organizationId: string): void {
     this.sql.exec('DELETE FROM organization_slugs WHERE slug = ? AND organization_id = ?', slug, organizationId);
-    this.sql.exec('DELETE FROM organizations WHERE id = ? AND slug = ? AND NOT EXISTS (SELECT 1 FROM accounts WHERE organization_id = ?)', organizationId, slug, organizationId);
+    const gone = this.rows('DELETE FROM organizations WHERE id = ? AND slug = ? AND NOT EXISTS (SELECT 1 FROM accounts WHERE organization_id = ?) RETURNING id', organizationId, slug, organizationId);
+    if (gone.length) this.sql.exec('DELETE FROM domains WHERE organization_id = ?', organizationId);
+  }
+
+  // ---- domains (platform.md §3.2) ----------------------------------------------
+
+  /** The organization's `<slug>.freeflow.im`, verified from the start, primary when it has no other. Safe to run twice. */
+  private ensurePlatformDomain(organizationId: string): void {
+    const now = Date.now();
+    this.sql.exec(
+      `INSERT OR IGNORE INTO domains (domain, organization_id, kind, verified_at, is_primary, created_at)
+       SELECT ?, ?, 'platform', ?, NOT EXISTS (SELECT 1 FROM domains WHERE organization_id = ? AND is_primary = 1), ?
+       WHERE NOT EXISTS (SELECT 1 FROM domains WHERE organization_id = ? AND kind = 'platform')`,
+      organizationDomain(this.organizationSlug(organizationId)), organizationId, now, organizationId, now, organizationId);
+  }
+
+  private domainRow(where: string, ...args: unknown[]): DomainRow[] {
+    // The platform domain first, then the organization's own in the order they were added.
+    return this.rows(`SELECT * FROM domains WHERE ${where} ORDER BY kind = 'own', created_at, domain`, ...args).map((d) => ({
+      domain: d.domain as string,
+      organizationId: d.organization_id as string,
+      kind: d.kind as DomainKind,
+      verifyToken: (d.verify_token as string | null) ?? null,
+      verified: d.verified_at != null,
+      primary: !!d.is_primary,
+      createdAt: iso(d.created_at),
+    }));
+  }
+
+  domainsOf(organizationId: string): DomainRow[] {
+    return this.domainRow('organization_id = ?', organizationId);
+  }
+
+  private ownDomain(organizationId: string, domain: string): DomainRow {
+    const row = this.domainRow('domain = ? AND organization_id = ?', domain.trim().replace(/\.$/, ''), organizationId)[0];
+    if (!row) throw notFound('domain not found');
+    return row;
+  }
+
+  /** The domain new addresses are made on: the primary one, else the platform one, else what it would be. */
+  primaryDomainOf(organizationId: string): string {
+    return (this.rows('SELECT domain FROM domains WHERE organization_id = ? ORDER BY is_primary DESC, kind = \'own\' LIMIT 1', organizationId)[0]?.domain as string | undefined)
+      ?? organizationDomain(this.organizationSlug(organizationId));
+  }
+
+  /** Registers a domain for the organization to verify, with a fresh token. A domain belongs to one organization;
+   * adding one the organization already has gives it back as it is. */
+  addDomain(organizationId: string, raw: string): DomainRow {
+    const domain = normalizeDomain(raw);
+    if (!domain) throw badRequest('invalid_domain', 'that is not a domain name');
+    if (domain === PLATFORM_DOMAIN || domain.endsWith(`.${PLATFORM_DOMAIN}`)) throw badRequest('domain_reserved', `${PLATFORM_DOMAIN} and its subdomains are the platform's`);
+    const held = this.domainRow('domain = ?', domain)[0];
+    if (held && held.organizationId !== organizationId) throw conflict('domain_taken', 'another organization has registered that domain');
+    if (held) return held;
+    const token = `freeflow-verify=${Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString('hex')}`;
+    this.sql.exec("INSERT INTO domains (domain, organization_id, kind, verify_token, created_at) VALUES (?, ?, 'own', ?, ?)", domain, organizationId, token, Date.now());
+    return this.ownDomain(organizationId, domain);
+  }
+
+  /** Looks up the verification TXT and, when it carries the token, marks the domain verified. A verified domain stays so. */
+  async verifyDomain(organizationId: string, domain: string): Promise<{ verified: boolean; found: string[] }> {
+    const row = this.ownDomain(organizationId, domain);
+    if (row.kind === 'platform') return { verified: true, found: [] };
+    const check = await checkDomain(row.domain, row.verifyToken ?? '', this.resolver());
+    if (check.verified && !row.verified) this.sql.exec('UPDATE domains SET verified_at = ? WHERE domain = ?', Date.now(), row.domain);
+    this.domainStatus.delete(row.domain);
+    return { verified: check.verified || row.verified, found: check.found };
+  }
+
+  /** Makes a verified domain the one new addresses are made on. Existing addresses stay where they are. */
+  setPrimaryDomain(organizationId: string, domain: string): DomainRow {
+    const row = this.ownDomain(organizationId, domain);
+    if (!row.verified) throw conflict('domain_unverified', 'verify the domain before making it primary');
+    this.sql.exec('UPDATE domains SET is_primary = (domain = ?) WHERE organization_id = ?', row.domain, organizationId);
+    return this.ownDomain(organizationId, row.domain);
+  }
+
+  /** Removes one of the organization's own domains, unless it is primary or an account's address is on it. */
+  removeDomain(organizationId: string, domain: string): void {
+    const row = this.ownDomain(organizationId, domain);
+    if (row.kind === 'platform') throw conflict('domain_platform', 'the platform domain cannot be removed');
+    if (row.primary) throw conflict('domain_primary', 'make another domain primary first');
+    // Removed accounts count: the organization keeps their addresses (§3.3).
+    if (this.rows('SELECT 1 FROM accounts WHERE address LIKE ? LIMIT 1', `%@${row.domain}`).length) {
+      throw conflict('domain_in_use', 'accounts have addresses on this domain');
+    }
+    this.sql.exec('DELETE FROM domains WHERE domain = ?', row.domain);
+    this.domainStatus.delete(row.domain);
+  }
+
+  /** The organization's domains with the records to publish and, for its own, whether DNS has them, each domain's check
+   * reused for a minute. `fresh` ("Check again") looks again unless the last check is only seconds old. */
+  async describeDomains(organizationId: string, fresh = false): Promise<DomainDTO[]> {
+    const provider = this.deps.provider ?? noneProvider;
+    return Promise.all(this.domainsOf(organizationId).map(async (d) => {
+      const records = recordsFor(d.domain, provider, d.kind === 'own' ? d.verifyToken : null);
+      let status: DomainDTO['status'] = [];
+      if (d.kind === 'own') {
+        const cached = this.domainStatus.get(d.domain);
+        const age = cached ? Date.now() - cached.at : Infinity;
+        if (cached && age < (fresh ? DOMAIN_STATUS_MIN_AGE : DOMAIN_STATUS_TTL) && cached.status.length === records.length) status = cached.status;
+        else {
+          status = await checkRecords(records, this.resolver());
+          this.domainStatus.set(d.domain, { at: Date.now(), status });
+        }
+      }
+      return { domain: d.domain, kind: d.kind, verified: d.verified, primary: d.primary, records, status, createdAt: d.createdAt };
+    }));
+  }
+
+  private resolver(): Resolve {
+    return this.deps.resolve ?? dohResolver('https://cloudflare-dns.com/dns-query');
   }
 
   /** The one place a person's profile is written. The Worker then copies it to their organizations. */

@@ -368,6 +368,109 @@ describe('accounts', () => {
   });
 });
 
+describe('domains (platform.md §3.2)', () => {
+  let txt: string[];
+  let lookups: number;
+  const resolve = async (name: string, type: 'TXT' | 'MX') => {
+    lookups++;
+    return type === 'TXT' && name === '_freeflow.acme.test' ? txt : [];
+  };
+  beforeEach(() => {
+    txt = [];
+    lookups = 0;
+    core = new DirectoryCore(nodeSql(), { webUrlBase: 'https://app.test', registrationEnabled: true, send: async (m) => void sent.push(m), resolve });
+  });
+  const join = (org: string, userId: string, role = 'member') => core.applyOrgChanges(org, [{ kind: 'join', id: org, user_id: userId, role, payload: null }]);
+
+  it('gives a new organization its platform domain, verified and primary', () => {
+    const org = newId();
+    core.reserveSlug('Acme', org);
+    expect(core.domainsOf(org)).toEqual([expect.objectContaining({ domain: 'acme.freeflow.im', kind: 'platform', verified: true, primary: true, verifyToken: null })]);
+    expect(core.primaryDomainOf(org)).toBe('acme.freeflow.im');
+    core.releaseSlug('Acme', org);
+    expect(core.domainsOf(org)).toEqual([]);
+  });
+
+  it('backfills a platform domain for every organization', () => {
+    const sql = nodeSql();
+    const domainsAt = DIRECTORY_MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE domains'));
+    sql.exec('CREATE TABLE _migrations (n INTEGER PRIMARY KEY)');
+    DIRECTORY_MIGRATIONS.slice(0, domainsAt).forEach((m, i) => { sql.exec(m); sql.exec('INSERT INTO _migrations (n) VALUES (?)', i); });
+    sql.exec("INSERT INTO organizations (id, slug, created_at) VALUES ('o1', 'Acme', 1), ('o2', 'beta', 2)");
+    const c = new DirectoryCore(sql, { webUrlBase: 'https://app.test', registrationEnabled: true, send: async () => {} });
+    expect(c.domainsOf('o1')).toEqual([expect.objectContaining({ domain: 'acme.freeflow.im', kind: 'platform', verified: true, primary: true })]);
+    expect(c.primaryDomainOf('o2')).toBe('beta.freeflow.im');
+  });
+
+  it('adds a domain with a token, refuses another organization\'s and what is no domain or is ours', () => {
+    const org = newId(), other = newId();
+    core.reserveSlug('acme', org);
+    core.reserveSlug('other', other);
+    const added = core.addDomain(org, 'Acme.TEST');
+    expect(added).toMatchObject({ domain: 'acme.test', kind: 'own', verified: false, primary: false });
+    expect(added.verifyToken).toMatch(/^freeflow-verify=[0-9a-f]{32}$/);
+    expect(core.addDomain(org, 'acme.test').verifyToken).toBe(added.verifyToken);
+    expect(() => core.addDomain(other, 'ACME.test')).toThrow(expect.objectContaining({ statusCode: 409, code: 'domain_taken' }));
+    expect(() => core.addDomain(org, 'not a domain')).toThrow(expect.objectContaining({ code: 'invalid_domain' }));
+    expect(() => core.addDomain(org, 'other.freeflow.im')).toThrow(expect.objectContaining({ code: 'domain_reserved' }));
+    expect(core.domainsOf(org).map((d) => d.domain)).toEqual(['acme.freeflow.im', 'acme.test']);
+  });
+
+  it('verifies only when the TXT carries the token, and makes only a verified domain primary', async () => {
+    const org = newId();
+    core.reserveSlug('acme', org);
+    const { verifyToken } = core.addDomain(org, 'acme.test');
+    expect(() => core.setPrimaryDomain(org, 'acme.test')).toThrow(expect.objectContaining({ code: 'domain_unverified' }));
+    txt = ['freeflow-verify=wrong'];
+    expect(await core.verifyDomain(org, 'acme.test')).toEqual({ verified: false, found: ['freeflow-verify=wrong'] });
+    txt = [verifyToken!];
+    expect(await core.verifyDomain(org, 'acme.test')).toEqual({ verified: true, found: [verifyToken] });
+    await expect(core.verifyDomain(newId(), 'acme.test')).rejects.toThrow('domain not found');
+    expect(core.setPrimaryDomain(org, 'acme.test')).toMatchObject({ primary: true });
+    expect(core.domainsOf(org).map((d) => [d.domain, d.primary])).toEqual([['acme.freeflow.im', false], ['acme.test', true]]);
+    expect(core.primaryDomainOf(org)).toBe('acme.test');
+  });
+
+  it('makes new addresses on the primary domain and leaves existing ones; refuses to remove a domain in use', async () => {
+    const a = await signUp('a@example.com');
+    const org = newId();
+    core.reserveSlug('acme', org);
+    core.ensureAccount(a.user.id, org, 'owner', 'Ann');
+    const { verifyToken } = core.addDomain(org, 'acme.test');
+    txt = [verifyToken!];
+    await core.verifyDomain(org, 'acme.test');
+    expect(() => core.removeDomain(org, 'acme.freeflow.im')).toThrow(expect.objectContaining({ code: 'domain_platform' }));
+    core.setPrimaryDomain(org, 'acme.test');
+    expect(() => core.removeDomain(org, 'acme.test')).toThrow(expect.objectContaining({ code: 'domain_primary' }));
+    expect(core.accountFor(a.user.id, org)!.address).toBe('ann@acme.freeflow.im');
+    await core.register('c@example.com');
+    const carol = await core.completeSignup(lastLink('signup'), 'Carol', 'pw-pw-pw-pw', 'test');
+    await join(org, carol.user.id);
+    expect(core.accountFor(carol.user.id, org)!.address).toBe('carol@acme.test');
+    core.setPrimaryDomain(org, 'acme.freeflow.im');
+    expect(() => core.removeDomain(org, 'acme.test')).toThrow(expect.objectContaining({ code: 'domain_in_use' }));
+    core.addDomain(org, 'spare.test');
+    core.removeDomain(org, 'spare.test');
+    expect(core.domainsOf(org).map((d) => d.domain)).toEqual(['acme.freeflow.im', 'acme.test']);
+  });
+
+  it('describes each domain with its records and their status, reusing a check for a minute', async () => {
+    const org = newId();
+    core.reserveSlug('acme', org);
+    const { verifyToken } = core.addDomain(org, 'acme.test');
+    txt = [verifyToken!];
+    const [platform, own] = await core.describeDomains(org);
+    expect(platform).toMatchObject({ domain: 'acme.freeflow.im', kind: 'platform', verified: true, primary: true, status: [] });
+    expect(own!.records[0]).toEqual({ type: 'TXT', name: '_freeflow.acme.test', value: verifyToken, purpose: 'verification' });
+    expect(own!.records.find((r) => r.type === 'MX')!.value).toBe('mx.example.invalid');
+    expect(own!.status.map((s) => s.record)).toEqual(['present', 'missing', 'missing', 'missing']);
+    const before = lookups;
+    await core.describeDomains(org);
+    await core.describeDomains(org, true);
+    expect(lookups).toBe(before);
+  });
+});
+
 describe('agent accounts', () => {
   const agent = (id: string, sponsorId: string, username: string) => ({
     kind: 'agent_user', id, user_id: null, role: null,

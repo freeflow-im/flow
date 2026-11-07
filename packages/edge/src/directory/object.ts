@@ -5,6 +5,7 @@ import { ApiError } from '../errors';
 import { sendMail, type MailEnv } from '../mail';
 import { DirectoryCore } from './core';
 import { listVar } from './authHandoff';
+import { dohResolver } from './dns';
 import { insertRows, type ImportRow } from '../importing';
 import { McpOAuth, OAuthError, type OAuthAnswer } from './mcpOAuth';
 
@@ -15,6 +16,8 @@ export interface DirectoryEnv extends MailEnv {
   REGISTRATION_ENABLED?: string;
   FLOW_HANDOFF_RETURN_URLS?: string;
   FLOW_ALLOWED_WEB_ORIGINS?: string;
+  /** The DNS-over-HTTPS (JSON) resolver domain checks use; Cloudflare's when unset. The e2e points it at a stub. */
+  DNS_RESOLVER_URL?: string;
 }
 
 /** The core's methods, which are what a Worker may call. */
@@ -34,6 +37,7 @@ export class Directory extends DurableObject<DirectoryEnv> {
       send: (mail) => sendMail(env, mail),
       handoffReturnUrls: listVar(env.FLOW_HANDOFF_RETURN_URLS),
       allowedWebOrigins: listVar(env.FLOW_ALLOWED_WEB_ORIGINS),
+      resolve: dohResolver(env.DNS_RESOLVER_URL || 'https://cloudflare-dns.com/dns-query'),
     });
     // After the core, which runs the migrations that make its tables.
     this.mcpOAuth = new McpOAuth(ctx.storage.sql as never);

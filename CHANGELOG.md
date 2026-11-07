@@ -12,6 +12,7 @@ This file keeps two things:
 
 ## Parity
 
+- **The Domains tab is web-only (2026-11-07, platform phase 5.1).** Web's Manage users has Domains (add, verify, records, primary, remove); macOS and iOS have no domain management and show addresses as they come. Gap to close.
 - **Artifact grants are web and API only (2026-11-06, platform phase 3.4).** The grants routes are on the API (no share UI yet on any client) and web links the share notice's address; macOS and iOS show an artifact shared with the reader if opened by id, have no share UI, and render the notice's address as plain text. Gap to close.
 - **The Automations page is web-only (2026-11-06, platform phase 2.5).** Web lists a member's event-bus subscriptions and their wake jobs and creates wake, post and scheduled automations; macOS and iOS have no Automations page. Gap to close.
 - **Only web sends `since` on reconnect (2026-11-06, platform phase 2.3).** Web replays the event log's backlog after a drop; macOS and iOS still reconnect without a cursor and rely on their REST refetch. Gap to close.

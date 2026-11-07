@@ -6,8 +6,10 @@ import { accountGate, hashToken, newId } from '../directory/core';
 import { listVar } from '../directory/authHandoff';
 import { ApiError, badRequest, notFound, unauthorized } from '../errors';
 import { directory, resolveCaller, type AuthEnv } from './auth';
+import { publishPlatformDomain, type PlatformDnsEnv } from '../directory/providers/cloudflareDns';
+import { noneProvider } from '../directory/providers/none';
 
-export interface OrgRouteEnv extends AuthEnv {
+export interface OrgRouteEnv extends AuthEnv, PlatformDnsEnv {
   BLOBS: R2Bucket;
   GOOGLE_CLIENT_ID?: string;
   APPLE_AUDIENCE?: string;
@@ -64,6 +66,11 @@ orgRoutes.post('/v1/workspaces', async (c) => {
   if (typeof slug === 'string') await directory(c, 'reserveSlug', slug, id);
   const res = await orgStub(c, id).handle(c.req.raw, who, id);
   if (res.status >= 300 && typeof slug === 'string') await directory(c, 'releaseSlug', slug, id);
+  // The platform subdomain's MX, SPF and DMARC (directory/providers/cloudflareDns.ts). A failure is logged; provisioning
+  // (phase 5.3) writes them again.
+  else if (typeof slug === 'string') {
+    c.executionCtx.waitUntil(publishPlatformDomain(c.env, slug, noneProvider).catch((err) => console.error(`platform dns ${slug}: ${(err as Error).message}`)));
+  }
   return res;
 });
 
