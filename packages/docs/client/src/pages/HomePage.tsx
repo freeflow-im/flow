@@ -21,7 +21,7 @@ import { Modal, PromptModal } from '../components/Modal.tsx';
 import { MoveModal } from '../components/MoveModal.tsx';
 import { fileBrowserName } from '../desktopBridge.ts';
 import { useFavicon } from '../favicon.ts';
-import { FAVORITES_PARAM, RECENTS_PARAM, SHARED_WITH_ME_PARAM, rememberListing, rememberReturn, returnTo, useListingScroll } from '../listing.ts';
+import { FAVORITES_PARAM, RECENTS_PARAM, SHARED_WITH_ME_PARAM, newFileShared, rememberListing, rememberReturn, returnTo, useListingScroll } from '../listing.ts';
 import { LocalFolderMenu, LocalFolderParent, parentDir } from '../components/LocalFolderMenu.tsx';
 import { ScratchPadTile } from '../components/ScratchPadTile.tsx';
 import { openFromRecents } from './OpenLocalFile.tsx';
@@ -84,6 +84,9 @@ function FileList() {
   /** Where the list is: its folder, in the root shown. */
   const place: Place = sharedRoot ? { folder, shared: true } : folder;
   const placeAt = (path: string): Place => (sharedRoot ? { folder: path, shared: true } : path);
+  // Where a file made, imported or uploaded here goes: private, unless made in Organization files' own list (listing.ts);
+  // from a list shown over Organization files (Recents, Favorites), the top of My files, since the folder is not there.
+  const newPlace: Place = newFileShared(`/?${params.toString()}`, inOrg) ? { folder, shared: true } : sharedRoot ? '' : folder;
   const rootKey = `${org.active?.id ?? ''}:${sharedRoot ? 'org' : 'me'}`;
   // The bar selecting another organization while its Organization files are shown shows the new one's.
   useEffect(() => {
@@ -370,58 +373,58 @@ function FileList() {
     setImporting(file.name);
     try {
       if (isPowerPointFile(file)) {
-        const { deck, warnings } = await api.importPptx(file, titleFromFileName(file.name), place);
+        const { deck, warnings } = await api.importPptx(file, titleFromFileName(file.name), newPlace);
         navigate(`/d/${deck.id}`, { state: { importWarnings: warnings } });
         return;
       }
       if (isVideoFile(file)) {
         // Stored as the file it is and played in its own page.
-        const stored = await api.uploadFile(file.name, file, place);
+        const stored = await api.uploadFile(file.name, file, newPlace);
         navigate(`/f/${stored.id}`);
         return;
       }
       if (isImageFile(file)) {
         // Stored as the picture it is and shown in its own page.
-        const stored = await api.uploadFile(file.name, new Blob([file], { type: imageTypeOf(file.name)! }), place);
+        const stored = await api.uploadFile(file.name, new Blob([file], { type: imageTypeOf(file.name)! }), newPlace);
         navigate(`/f/${stored.id}`);
         return;
       }
       if (isHtmlFile(file)) {
         // Stored as the page it is and shown in a sandboxed frame. Sent as plain bytes: the server names its type.
-        const stored = await api.uploadFile(file.name, new Blob([file], { type: 'application/octet-stream' }), place);
+        const stored = await api.uploadFile(file.name, new Blob([file], { type: 'application/octet-stream' }), newPlace);
         navigate(`/f/${stored.id}`);
         return;
       }
       if (isPdfFile(file)) {
-        const { file: stored } = await api.importPdf(file, place);
+        const { file: stored } = await api.importPdf(file, newPlace);
         navigate(`/f/${stored.id}`);
         return;
       }
       if (isWordFile(file)) {
-        const { doc, warnings } = await api.importDocx(file, titleFromFileName(file.name), place);
+        const { doc, warnings } = await api.importDocx(file, titleFromFileName(file.name), newPlace);
         navigate(`/doc/${doc.id}`, { state: { importWarnings: warnings } });
         return;
       }
       if (isMarkdownFile(file)) {
         const text = await file.text();
-        const { doc } = await api.createMarkdown(markdownTitle(text, file.name), text, place);
+        const { doc } = await api.createMarkdown(markdownTitle(text, file.name), text, newPlace);
         navigate(`/md/${doc.id}`);
         return;
       }
       if (isCsvFile(file)) {
         // Stored as the CSV file it is, and opened in the spreadsheet editor.
-        const { sheet } = await api.importCsv(csvTitle(file.name), await file.text(), place);
+        const { sheet } = await api.importCsv(csvTitle(file.name), await file.text(), newPlace);
         navigate(`/s/${sheet.id}`);
         return;
       }
       if (!isKnownImport(file)) {
         // Any other file is kept as it is: it is listed here, to download, move or delete, but not opened.
-        await api.uploadFile(file.name, new Blob([file], { type: 'application/octet-stream' }), place);
+        await api.uploadFile(file.name, new Blob([file], { type: 'application/octet-stream' }), newPlace);
         setImporting(null);
         await load();
         return;
       }
-      const { sheet, warnings } = await api.importXlsx(file, titleFromFileName(file.name), place);
+      const { sheet, warnings } = await api.importXlsx(file, titleFromFileName(file.name), newPlace);
       navigate(`/s/${sheet.id}`, { state: { importWarnings: warnings } });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -735,11 +738,11 @@ function FileList() {
       items={recents ? (recentFiles?.items ?? null) : favoritesShown ? (favorites?.items ?? null) : sharedShown ? (sharedList?.items ?? null) : items}
       error={recents ? recentsError : error}
       onCreate={async (kind, title) => {
-        // In a folder of Organization files a new file is the organization's; anywhere else it is the user's own.
-        if (kind === 'sheet') navigate(`/s/${(await api.createSheet(title, place)).sheet.id}`);
-        else if (kind === 'deck') navigate(`/d/${(await api.createDeck(title, undefined, place)).deck.id}`);
-        else if (kind === 'markdown') navigate(`/md/${(await api.createMarkdown(title, '', place)).doc.id}`);
-        else navigate(`/doc/${(await api.createDoc(title, undefined, place)).doc.id}`);
+        // In Organization files (its top or a folder of it) a new file is the organization's; anywhere else it is the user's own.
+        if (kind === 'sheet') navigate(`/s/${(await api.createSheet(title, newPlace)).sheet.id}`);
+        else if (kind === 'deck') navigate(`/d/${(await api.createDeck(title, undefined, newPlace)).deck.id}`);
+        else if (kind === 'markdown') navigate(`/md/${(await api.createMarkdown(title, '', newPlace)).doc.id}`);
+        else navigate(`/doc/${(await api.createDoc(title, undefined, newPlace)).doc.id}`);
       }}
       // Any file can be added: the kinds the app knows open in it, the rest are kept to download, move or delete.
       importAccept=""

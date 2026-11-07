@@ -85,6 +85,27 @@ describe('organization files in the hosted app', () => {
     expect((await call('bob', 'GET', `/api/docs/${team}`)).status).toBe(200);
   });
 
+  it('a file made with no scope, or a false one, is private (freeflow-suite.md §2.4)', async () => {
+    const made = [
+      (await call('bob', 'POST', '/api/sheets', { title: 'No scope sheet', workspace: 'harbor' })).body.sheet,
+      (await call('bob', 'POST', '/api/sheets', { title: 'False scope sheet', workspace: 'harbor', shared: false })).body.sheet,
+      (await call('bob', 'POST', '/api/sheets?workspace=harbor&shared=0', { title: 'Zero scope sheet' })).body.sheet,
+      (await call('bob', 'POST', '/api/markdown', { title: 'No scope notes', workspace: 'harbor' })).body.doc,
+      (await call('bob', 'POST', '/api/decks', { title: 'No scope deck', workspace: 'harbor' })).body.deck,
+    ];
+    for (const m of made) expect(m).toMatchObject({ workspaceId: 'harbor' });
+    for (const m of made) expect(m.shared).toBeUndefined();
+    const titles = made.map((m) => m.title);
+    const org = (await call('bob', 'GET', '/api/library?workspace=harbor&shared=1')).body.docs.map((d: { title: string }) => d.title);
+    const mine = (await call('bob', 'GET', '/api/library?workspace=harbor')).body.docs.map((d: { title: string }) => d.title);
+    expect(org.filter((t: string) => titles.includes(t))).toEqual([]);
+    expect([...mine].sort()).toEqual([...titles].sort());
+    // Not anyone else's in the organization either.
+    expect((await call('alice', 'GET', `/api/sheets/${made[0].id}`)).status).toBe(404);
+    // Named by no organization at all: the user's own, too.
+    expect((await call('bob', 'POST', '/api/sheets', { title: 'Nowhere sheet' })).body.sheet.shared).toBeUndefined();
+  });
+
   it("the home chat's tools see the user's files in the organization the bar selected", async () => {
     expect(await listedByAssistant('alice', { message: 'What do I have?', context: { page: 'home' }, workspace: 'harbor' })).toEqual(['Private plan']);
     expect(await listedByAssistant('alice', { message: 'And here?', context: { page: 'home' }, workspace: 'juniper' })).toEqual(['Juniper notes']);

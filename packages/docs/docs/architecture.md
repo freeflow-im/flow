@@ -314,7 +314,8 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   `POST /api/files/:id/scope` and `POST /api/folders/scope` (the target is the request's scope; a folder goes to the target's top with its
   contents): the file keeps its folder when the target has it, the one who makes it private becomes its owner, and its pictures
   (`ImageStore.retag`: a picture is visible to the members of its `workspace_id`) and public link go with it. New files are private, in
-  the bar's organization, unless made in a folder of Organization files (the client passes `shared`); a file made beside another (a PDF,
+  the bar's organization, unless made in a folder of Organization files (the client passes `shared`, by `newFileShared` in `listing.ts`:
+  `?org=` with no list over it; a request naming no `shared` is private); a file made beside another (a PDF,
   a signed copy, a Markdown of a PDF, a branch) goes in that one's root. The assistant's server tools take the chat's root
   (`ServerToolEnv.scope`/`viewer`): an organization file's chat, its root; the home chat, My files of `AgentTurnRequest.workspace`. On
   the client the bar publishes its organization (`suite.ts`' organization state, `useOrganization`), `api.ts` names it on list and create
@@ -333,7 +334,8 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   `private = 0` rows), so `private` stays as the flag derived from it and `scopeWhere` lists as before. Share with organization and Make private
   give and take `org` (a manager's), Move to organization… is the owner's. `/api/grants/:kind/:id` (GET viewer+, PUT `{ principal, role }` and
   DELETE `/:principal` manager+; `org` there is the same move) backs the Share… dialog (`ShareWithDialog.tsx`), and `/api/library?scope=shared`
-  (`&in=<folder id>`) is Shared with me, a third list in `DocsNav` (`?withme=1`). Metadata carries `role` when the reader is not the owner; a
+  (`&in=<folder id>`) is Shared with me, a third list in `DocsNav` (`?withme=1`). Metadata carries `role` when the reader is not the owner (a file
+  with one that is not the organization's shows the crumbs `sharedFileCrumbs` makes: Shared with me, then only the shared folder down); a
   viewer's editors are read-only (`viewOnlyGuard` on the sheet, deck and doc stores, `readOnly` on the Markdown and text editors).
   Since phase 3.3 every grant change, once made, goes to `host.onGrantChange` (`reportGrant` in `app.ts`: the grants routes, the `org` toggle,
   Share with organization / Make private, links made and stopped; `role` null is a revoke), and each save or rename of a document to

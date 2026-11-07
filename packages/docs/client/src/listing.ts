@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef } from 'react';
+import { folderTrail } from '../../shared/folders.ts';
 
 // The file list a tab was last showing: its folder and any search, as the query of the home page's
 // address. An open file's links back to the list use it, so going back shows the same search results.
@@ -81,6 +82,40 @@ export function listingHref(folder?: string, org?: string): string {
   if (org) q.set('org', org);
   if (folder) q.set('folder', folder);
   return q.size ? `/?${q}` : '/';
+}
+
+/**
+ * Whether a file made from the home page at this address goes to Organization files (FreeFlow suite; freeflow-suite.md
+ * §2.4): new files are private, unless made inside Organization files' own list (`?org=<id>`, at its top or in a folder
+ * of it). Recents, Favorites and Shared with me keep `org` in the address when chosen from there (HomePage's showList),
+ * but a file made while one of them is shown is not made in a folder of Organization files, so it is private too. Only
+ * the query counts: `/workspace/` and `/workspace` are the same place.
+ */
+export function newFileShared(address: string, inOrg: boolean): boolean {
+  if (!inOrg) return false;
+  const q = new URLSearchParams(new URL(address, 'http://x').search);
+  if (!q.get('org')) return false;
+  return !(Object.keys(LISTS) as OtherListName[]).some((l) => q.get(l) === '1');
+}
+
+/**
+ * The crumbs of a file someone else shared with the user (FreeFlow suite): Shared with me, then, when it was opened
+ * from a shared folder (`listing` is the list last shown, `?withme=1&in=<folder id>`, see server/access.ts
+ * folderObjectId), that folder and the ones below it down to the file's. The owner's folders above what was shared,
+ * and the name of their root, are theirs: none of them is named.
+ */
+export function sharedFileCrumbs(folder: string, listing: string): { name: string; href: string }[] {
+  const out = [{ name: LISTS.withme, href: listHref(SHARED_WITH_ME_PARAM) }];
+  const q = new URLSearchParams(listing);
+  const inside = q.get(SHARED_WITH_ME_PARAM) === '1' ? (q.get('in') ?? '') : '';
+  const cut = inside.indexOf('/');
+  const rootKey = cut > 0 ? inside.slice(0, cut) : '';
+  const top = cut > 0 ? inside.slice(cut + 1) : '';
+  if (!top || !(folder === top || folder.startsWith(`${top}/`))) return out;
+  for (const f of folderTrail(folder)) {
+    if (f.path === top || f.path.startsWith(`${top}/`)) out.push({ name: f.name, href: `/?${new URLSearchParams({ [SHARED_WITH_ME_PARAM]: '1', in: `${rootKey}/${f.path}` })}` });
+  }
+  return out;
 }
 
 /** The element the pages scroll in (main.tsx, .app-main). */

@@ -46,6 +46,11 @@ r=await api(null,'GET','/api/sheets');t('no session refused',r.s===401,r.s);
 r=await api(A.token,'POST',`/v1/workspaces/${W}/invites`,{email:`eli-${tag}@example.com`});r=await api(Bo.token,'POST','/v1/invites/accept',{token:(r.j.inviteUrl??'').split('/').pop()});t('Eli joins the organization',r.s<300,r.s+' '+JSON.stringify(r.j).slice(0,100));
 r=await api(A.token,'GET',`/v1/workspaces/${W}/members`);const eliAcct=(r.j.members??[]).find(m=>m.userId===Bo.user.id)?.accountId;t('the members list carries Eli\'s account',!!eliAcct,JSON.stringify(r.j).slice(0,140));
 r=await api(Bo.token,'GET',`/v1/workspaces/${W}/channels`);const general=(r.j.channels??[]).find(c=>c.name==='general')??(r.j.channels??[])[0];if(general&&!general.isMember)await api(Bo.token,'POST',`/v1/channels/${general.id}/join`);
+// A new file is private wherever it is made (platform phase 3.5): one naming no scope, its organization only in the body as
+// the client sends it, is in My files and not Organization files; Eli's first organization is his own, so it also has to reach W's object.
+r=await api(Bo.token,'POST','/api/sheets',{title:'No scope sheet',workspace:W});const NS=r.j.sheet?.id;
+{const org=(await api(Bo.token,'GET',`/api/library?workspace=${W}&shared=1`)).j,me=(await api(Bo.token,'GET',`/api/library?workspace=${W}`)).j;
+ t('a sheet made with no scope is private: in My files, not Organization files',r.s===200&&!r.j.sheet?.shared&&r.j.sheet?.workspaceId===W&&(me.docs??[]).some(d=>d.id===NS)&&!(org.docs??[]).some(d=>d.id===NS),r.s+' '+JSON.stringify(r.j).slice(0,120));}
 r=await api(A.token,'POST',`/api/sheets?workspace=${W}`,{title:'Private budget'});const P=r.j.sheet?.id;t('Dana makes a private spreadsheet',r.s===200&&!r.j.sheet?.shared,r.s+' '+JSON.stringify(r.j).slice(0,100));
 r=await api(Bo.token,'GET',`/api/sheets/${P}`);t('Eli cannot open it',r.s===404||r.s===403,r.s);
 r=await api(A.token,'PUT',`/api/grants/sheet/${P}?workspace=${W}`,{principal:`account:${eliAcct}`,role:'viewer'});t('Dana shares it with Eli as a viewer',r.s===200&&r.j.grants?.[0]?.role==='viewer',r.s+' '+JSON.stringify(r.j).slice(0,140));
