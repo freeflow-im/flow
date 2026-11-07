@@ -20,10 +20,9 @@ import { blobStore } from '../storage/index.js';
 import { config } from '../config.js';
 import { requireMembership } from './workspaces.js';
 import { requireChannelAccess } from './channels.js';
+import { requireRole } from '../access.js';
 
-// `artifacts` is used for the phase-9 access grant below — the table only, not
-// the artifacts service, so there's no import cycle (that service imports us).
-const { files, messageFiles, messages, artifacts, users } = schema;
+const { files, messageFiles, messages, users } = schema;
 
 type FileRow = typeof files.$inferSelect;
 
@@ -224,56 +223,22 @@ async function requirePendingOwned(fileId: string, userId: string): Promise<File
 }
 
 /**
- * Access rule: the uploader can always fetch; anyone else must be a workspace
- * member AND either hold an artifact bookmark of the file (phase 9) or the
- * file must be attached to at least one message in a channel they can access
- * (public → workspace member; private → channel member). Otherwise unattached
- * files are visible to the uploader only.
+ * Access rule (org/access.ts, platform phase 3.4): viewer on the file. The
+ * uploader is its owner; anyone else must be a workspace member with a role
+ * through what makes the file visible: an artifact it backs (a member of that
+ * artifact's channel, or someone the artifact is shared with), or a message it
+ * is attached to (public channel → the organization; private → its members).
+ * Otherwise an unattached file is the uploader's alone. 404 either way.
  */
 export async function requireFileAccess(fileId: string, userId: string): Promise<FileRow> {
+  await requireRole(userId, 'file', fileId, 'viewer');
   const rows = await db
     .select()
     .from(files)
     .where(and(eq(files.id, fileId), isNull(files.deletedAt), eq(files.status, 'ready')))
     .limit(1);
-  const f = rows[0];
-  if (!f) throw notFound('file not found');
-  if (f.userId === userId) return f;
-  await requireMembership(f.workspaceId, userId); // 404s non-members without leaking
-
-  // A channel artifact backed by this file is itself the grant (phase 13):
-  // if the file backs an artifact in a channel this user can access, they can
-  // read it. Agent-generated artifact files are never attached to a message,
-  // so without this a channel member couldn't render the artifact.
-  const pinned = await db
-    .select({ channelId: artifacts.channelId })
-    .from(artifacts)
-    .where(eq(artifacts.fileId, fileId))
-    .groupBy(artifacts.channelId);
-  for (const p of pinned) {
-    try {
-      await requireChannelAccess(p.channelId, userId);
-      return f;
-    } catch {
-      /* try the next channel this file is pinned in */
-    }
-  }
-
-  const attached = await db
-    .select({ channelId: messages.channelId })
-    .from(messageFiles)
-    .innerJoin(messages, eq(messages.id, messageFiles.messageId))
-    .where(eq(messageFiles.fileId, fileId))
-    .groupBy(messages.channelId);
-  for (const a of attached) {
-    try {
-      await requireChannelAccess(a.channelId, userId);
-      return f;
-    } catch {
-      /* try the next channel this file is attached in */
-    }
-  }
-  throw notFound('file not found');
+  if (!rows[0]) throw notFound('file not found');
+  return rows[0];
 }
 
 export interface FileContent {

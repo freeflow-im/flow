@@ -94,4 +94,13 @@ es=await evs(Bo.token,since0,'sharing.revoked');t('sharing.revoked is in Eli\'s 
 r=await api(Bo.token,'GET',`/v1/workspaces/${W}/shared-with-me`);t('shared-with-me no longer lists it',r.s===200&&!(r.j.shares??[]).some(x=>x.ref===QREF),JSON.stringify(r.j).slice(0,140));
 r=await api(A.token,'GET',`/api/sheets/${Q}`);const qwb2=r.j.workbook;qwb2.tabs[0].cells={A1:{v:'8'}};await api(A.token,'PUT',`/api/sheets/${Q}`,{workbook:qwb2});await sleep(1000);
 es=await evs(Bo.token,since0,'docs.file.changed');t('docs.file.changed is no longer visible to Eli',!es.some(e=>e.data?.ref===QREF),JSON.stringify(es).slice(0,140));
+// A moved folder re-keys the share index (platform phase 3.4): its object id changes with its root, and Eli's
+// shared-with-me follows.
+const FOLD=`${W}/docs/folder/${FD?.id}`;
+r=await api(Bo.token,'GET',`/v1/workspaces/${W}/shared-with-me`);t('shared-with-me has the folder shared with #general',(r.j.shares??[]).some(x=>x.ref===FOLD),JSON.stringify(r.j).slice(0,160));
+r=await api(A.token,'POST','/api/folders/scope',{path:'Shared Q4',from:{workspace:W},workspace:W,shared:true});t('Dana moves the shared folder to the organization root',r.s===200,r.s+' '+JSON.stringify(r.j).slice(0,120));
+r=await api(A.token,'GET',`/api/library?workspace=${W}&shared=1`);const FNEW=(r.j.folders??[]).find(f=>f.name==='Shared Q4')?.id;const FREF=`${W}/docs/folder/${FNEW}`;
+await sleep(1500);
+r=await api(Bo.token,'GET',`/v1/workspaces/${W}/shared-with-me`);t('Eli\'s shared-with-me lists the new reference and not the old',!!FNEW&&FNEW!==FD?.id&&(r.j.shares??[]).some(x=>x.ref===FREF&&x.kind==='folder')&&!(r.j.shares??[]).some(x=>x.ref===FOLD),FNEW+' '+JSON.stringify(r.j).slice(0,200));
+r=await api(Bo.token,'GET',`/v1/channels/${general?.id}/messages`);t('the move posts no second card',(r.j.messages??[]).filter(m=>m.systemKind==='file_shared'&&/Shared Q4/.test(m.body)).length===1,JSON.stringify((r.j.messages??[]).filter(m=>m.systemKind==='file_shared').map(m=>m.body)).slice(0,170));
 console.log(`\n${pass} passed, ${fail} failed`);process.exit(fail?1:0);

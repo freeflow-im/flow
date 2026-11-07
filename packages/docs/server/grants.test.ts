@@ -177,6 +177,43 @@ describe('sharing on grants', () => {
     expect(seen().map(([k, i, p, , , t, f]) => [k, i, p, t, f])).toEqual([['folder', 'me:ann:harbor/Hooks', 'channel:general', 'Hooks', 'folder']]);
   });
 
+  it('a moved folder re-keys the share index: revokes under the old ids, quiet grants under the new', async () => {
+    await call('ann', 'POST', '/api/folders', { workspace: 'harbor', name: 'Moving' });
+    await call('ann', 'POST', '/api/folders', { workspace: 'harbor', folder: 'Moving', name: 'Inner' });
+    const doc = (await call('ann', 'POST', '/api/docs', { title: 'Moved notes', workspace: 'harbor', folder: 'Moving/Inner' })).body.doc.id;
+    await call('ann', 'PUT', `/api/grants/folder/${encodeURIComponent('me:ann:harbor/Moving')}?workspace=harbor`, { principal: 'account:acct-bob', role: 'viewer' });
+    await call('ann', 'PUT', `/api/grants/folder/${encodeURIComponent('me:ann:harbor/Moving/Inner')}?workspace=harbor`, { principal: 'channel:general', role: 'editor' });
+    await call('ann', 'PUT', `/api/grants/sheet/${doc}`, { principal: 'account:acct-cat', role: 'viewer' });
+    changes.length = 0;
+    const res = await call('ann', 'POST', '/api/folders/scope', { path: 'Moving', from: { workspace: 'harbor' }, workspace: 'harbor', shared: true });
+    expect(res.status).toBe(200);
+    const moved = (await call('ann', 'GET', '/api/library?workspace=harbor&shared=1')).body.folders.find((f: { name: string }) => f.name === 'Moving');
+    const newId = moved.id as string;
+    expect(newId).not.toBe('me:ann:harbor/Moving');
+    const seen = changes.splice(0).map((c) => [c.kind, c.id, c.principal, c.role, !!c.silent]);
+    expect(seen).toEqual(expect.arrayContaining([
+      ['folder', 'me:ann:harbor/Moving', 'account:acct-bob', null, false],
+      ['folder', 'me:ann:harbor/Moving/Inner', 'channel:general', null, false],
+      ['folder', newId, 'account:acct-bob', 'viewer', true],
+      ['folder', `${newId}/Inner`, 'channel:general', 'editor', true],
+      ['folder', newId, 'org', 'editor', true],
+    ]));
+    // The document kept its id and its organization: its grant is not reported again.
+    expect(seen.filter(([k]) => k === 'sheet').filter(([, , p]) => p !== 'org')).toEqual([]);
+
+    // To another organization, the people and channels are dropped: revoked, under the old organization's reference.
+    changes.length = 0;
+    expect((await call('ann', 'POST', '/api/folders/scope', { path: 'Moving', from: { workspace: 'harbor', shared: true }, workspace: 'juniper', shared: true })).status).toBe(200);
+    const away = changes.splice(0).map((c) => [c.kind, c.principal, c.role, c.workspaceId]);
+    expect(away).toEqual(expect.arrayContaining([
+      ['folder', 'account:acct-bob', null, 'harbor'],
+      ['folder', 'channel:general', null, 'harbor'],
+      ['sheet', 'account:acct-cat', null, 'harbor'],
+      ['folder', 'org', 'editor', 'juniper'],
+    ]));
+    expect(away.some(([, p, r, w]) => w === 'juniper' && r && p !== 'org')).toBe(false);
+  });
+
   it('tells the host of each save of a document in an organization', async () => {
     const id = (await call('ann', 'POST', '/api/docs', { title: 'Saved', workspace: 'harbor' })).body.doc.id;
     saves.length = 0;

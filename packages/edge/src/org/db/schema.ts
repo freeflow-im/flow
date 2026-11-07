@@ -705,3 +705,26 @@ export const shares = sqliteTable(
   },
   (t) => [primaryKey({ columns: [t.ref, t.principal] }), index('shares_principal_idx').on(t.principal)],
 );
+
+/**
+ * Explicit grants on Chat's objects (platform.md §4.3, phase 3.4): the grants library's table (`GRANTS_DDL` in
+ * `@flow/shared/grants`, which migration 0004 is), for `channel` containers, `artifact`s and `file`s. Channel
+ * membership is not stored here: org/access.ts synthesizes it as an implicit grant. Timestamps are epoch milliseconds.
+ */
+export const grants = sqliteTable(
+  'grants',
+  {
+    objectKind: text('object_kind').notNull(),
+    objectId: text('object_id').notNull(),
+    principal: text('principal').notNull(),
+    role: text('role').notNull(),
+    grantedBy: text('granted_by').notNull(),
+    grantedAt: integer('granted_at').notNull(),
+    expiresAt: integer('expires_at'),
+  },
+  (t) => [
+    primaryKey({ columns: [t.objectKind, t.objectId, t.principal] }),
+    index('grants_principal').on(t.principal),
+    index('grants_object').on(t.objectKind, t.objectId),
+  ],
+);

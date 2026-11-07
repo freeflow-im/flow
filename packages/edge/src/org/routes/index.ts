@@ -1,4 +1,5 @@
 import type { z, ZodTypeAny } from 'zod';
+import type { Role } from '@flow/shared/grants';
 import {
   AcceptInviteBody,
   DeclineInviteBody,
@@ -960,6 +961,26 @@ export function registerRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     await ar.deleteArtifact(id, req.user.id);
     return { ok: true };
+  });
+
+  // Explicit grants on an artifact (platform.md §4.3, phase 3.4): who outside
+  // its channel may open it by id. Reading them is viewer; changing them is
+  // manager (the creator, or a workspace admin in the channel).
+  app.get('/v1/artifacts/:id/grants', { preHandler: requireAuth }, async (req) => {
+    const { id } = req.params as { id: string };
+    return ar.listArtifactGrants(id, req.user.id);
+  });
+
+  app.put('/v1/artifacts/:id/grants', { preHandler: requireAuth }, async (req) => {
+    const { id } = req.params as { id: string };
+    const b = (req.body ?? {}) as { principal?: unknown; role?: unknown };
+    if (typeof b.principal !== 'string' || typeof b.role !== 'string') throw badRequest('validation', 'principal and role are required');
+    return ar.grantArtifact(id, req.user.id, b.principal, b.role as Role);
+  });
+
+  app.delete('/v1/artifacts/:id/grants/:principal', { preHandler: requireAuth }, async (req) => {
+    const { id, principal } = req.params as { id: string; principal: string };
+    return ar.revokeArtifactGrant(id, req.user.id, principal);
   });
 
   // ---- scheduled messages (#419) ----

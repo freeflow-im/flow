@@ -130,7 +130,7 @@ export class Docs extends DurableObject<DocsEnv> {
     const org = ns.get(ns.idFromName(c.workspaceId));
     const ref = Docs.refOf(c);
     const sent = c.role
-      ? org.recordShare({ ref, principal: c.principal, role: c.role, grantedBy: c.actor, title: c.title, kind: c.fileKind })
+      ? org.recordShare({ ref, principal: c.principal, role: c.role, grantedBy: c.actor, title: c.title, kind: c.fileKind, ...(c.silent ? { silent: true } : {}) })
       : org.revokeShare({ ref, principal: c.principal, revokedBy: c.actor });
     this.ctx.waitUntil(Promise.resolve(sent).catch((err: Error) => console.error(`[docs] share index, ${c.principal} on ${ref}: ${err.message}`)));
   }

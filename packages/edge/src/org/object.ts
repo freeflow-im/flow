@@ -25,7 +25,7 @@ import type { Events } from '../events/object';
 import type { PublishInput, SubscriptionRead } from '../events/core';
 import { logEntryFor } from './eventLog';
 import { config } from './config';
-import { recordShare, revokeShare, sharedRefsOf, sharedWith, type RecordShareInput, type RevokeShareInput, type SharedItem } from './services/shares';
+import { recordShare, revokeShare, shareEvents, sharedRefsOf, sharedWith, type RecordShareInput, type RevokeShareInput, type SharedItem } from './services/shares';
 import { eq, and } from 'drizzle-orm';
 
 /** IMAGES (Cloudflare Images) resizes preview images and thumbnails; without it they are kept as they came (lib/images.ts). */
@@ -369,7 +369,8 @@ export class Org extends DurableObject<OrgEnv> {
   private scoped<T>(fn: () => Promise<T>, stamp?: Stamp): Promise<T> {
     return socketControl.run({ disconnectUser: (id) => this.closeUser(id) }, () =>
       directoryLink.run({ ensureAccount: (...args) => this.ensureAccount(...args), accountFor: (...args) => this.accountFor(...args) }, () =>
-        withPublisher((subject, event) => this.broadcast(subject, event, stamp), () => withDb(this.db, fn))));
+        shareEvents.run((event) => this.publishShareEvent(event), () =>
+          withPublisher((subject, event) => this.broadcast(subject, event, stamp), () => withDb(this.db, fn)))));
   }
 
   /**

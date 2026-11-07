@@ -45,7 +45,7 @@ import { isFileId } from './ids.ts';
 import { ImageStore } from './images.ts';
 import { deckPreview, docPreview, markdownPreview, sheetPreview, type FilePreview } from '../shared/preview.ts';
 import { cleanFolderName, cleanFolderPath, folderName, joinFolder, parentFolder } from '../shared/folders.ts';
-import { FolderStore, type Folders } from './folders.ts';
+import { FolderStore, type Folders, type GrantUnder } from './folders.ts';
 import { inScope, scopeKey, scopeOf, scopeOfRow, viewerOf, type Owned, type Scope, type ScopeArg, type Viewer, type ViewerArg } from './scope.ts';
 import { access, atLeast, folderObjectId, grant, grantsOn, isObjectKind, linkTokenOf, objectRow, parseFolderObjectId, readerOf, refused, resolveLink, revoke, revokeMembers, roleOf, type ObjectKind, type ObjectRow, type Role } from './access.ts';
 import { objectsSharedWithSql, parsePrincipal, ROLE_RANK } from '@flow/shared/grants';
@@ -131,6 +131,8 @@ export interface GrantChange extends ObjectDescription {
   principal: string;
   role: Role | null;
   actor: string;
+  /** The grant only moved with its object (a folder moved to another root): the index follows, with no notice again. */
+  silent?: boolean;
 }
 
 /** A save or rename of a document (`host.onFileChanged`); `ownerId` is its owner's user id. */
@@ -1389,14 +1391,29 @@ export async function buildApp(opts: AppOptions) {
   };
   /** Tells the host of a grant change (platform.md §4.5), once it is made. */
   const reportGrant = (req: FastifyRequest, kind: ObjectKind, id: string, principal: string, role: Role | null) => {
-    if (!host?.onGrantChange) return;
     const d = describeObject(kind, id);
-    if (!d) return;
+    if (d) reportChange(req, d, principal, role);
+  };
+  const reportChange = (req: FastifyRequest, d: ObjectDescription, principal: string, role: Role | null, silent?: boolean) => {
+    if (!host?.onGrantChange) return;
     try {
-      host.onGrantChange({ ...d, principal, role, actor: readerOf(req.viewer).accountId });
+      host.onGrantChange({ ...d, principal, role, actor: readerOf(req.viewer).accountId, ...(silent ? { silent } : {}) });
     } catch (err) {
       console.error('grant change report failed', err);
     }
+  };
+  /**
+   * A folder moved: its object ids (and, to another organization, the references of what is in it) changed, so the
+   * share index follows. Each grant the old ids had is revoked, including those a move to another organization drops
+   * (people and channels), and each grant the new ids have is given, silently: it is not a new share.
+   */
+  const reportMove = (req: FastifyRequest, before: GrantUnder[], after: GrantUnder[]) => {
+    const key = (g: GrantUnder) => `${g.workspaceId}/${g.kind}/${g.id}\n${g.principal}`;
+    const was = new Map(before.map((g) => [key(g), g]));
+    const now = new Map(after.map((g) => [key(g), g]));
+    const describe = (g: GrantUnder): ObjectDescription => ({ kind: g.kind, id: g.id, fileKind: g.fileKind, title: g.title, workspaceId: g.workspaceId });
+    for (const [k, g] of was) if (!now.has(k)) reportChange(req, describe(g), g.principal, null);
+    for (const [k, g] of now) if (was.get(k)?.role !== g.role) reportChange(req, describe(g), g.principal, g.role as Role, true);
   };
   /** A folder with everything in it into another root, at the top there under its own name (FolderStore.moveTo). */
   const moveFolderTo = async (viewer: ViewerArg, source: Scope | ScopeArg, path: string, target: Scope) => {
@@ -2554,9 +2571,9 @@ export async function buildApp(opts: AppOptions) {
       if (!path || !role) return reply.code(404).send({ error: 'Folder not found' });
       const need = roleToMove(scopeOf(source).workspaceId, target.workspaceId);
       if (!atLeast(role, need)) return reply.code(403).send({ error: refused(need).message });
+      const before = folders.grantsUnder(source, path);
       const moved = await moveFolderTo(req.viewer, source, path, target);
-      const from = scopeOf(source);
-      if (from.workspaceId === target.workspaceId && !!from.private !== !!target.private) reportGrant(req, 'folder', folderObjectId(scopeKey(target), moved.path), 'org', target.private ? null : 'editor');
+      reportMove(req, before, folders.grantsUnder(target, moved.path));
       return { folder: { name: folderName(moved.path), path: moved.path }, moved: moved.sheets.length + moved.files.length };
     });
 

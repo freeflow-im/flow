@@ -5,6 +5,7 @@
 // An app object (Docs, docs/object.ts) reports each grant change by binding (Org.recordShare / Org.revokeShare). The
 // functions here run inside the Org object's scope (its database and its socket publisher): they write the index, post
 // the card or the notice, and hand back the `sharing.*` event, which the object publishes into the event log.
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { parseReference, type Reference } from '@flow/shared';
 import { ORG_PRINCIPAL, parsePrincipal, principalsOf, ROLE_RANK, type Role } from '@flow/shared/grants';
@@ -24,8 +25,10 @@ export interface RecordShareInput {
   /** The granter's account. */
   grantedBy: string;
   title?: string;
-  /** The kind of file: a document's kind (`sheet`, `deck`, `doc`, `markdown`), `file` or `folder`. */
+  /** The kind of file: a document's kind (`sheet`, `deck`, `doc`, `markdown`), `file` or `folder`; Chat's `artifact`. */
   kind?: string;
+  /** A grant that only moved (its object's reference changed, as a moved folder's does): indexed, with no notice again. */
+  silent?: boolean;
 }
 
 export interface RevokeShareInput { ref: string; principal: string; revokedBy: string }
@@ -36,8 +39,28 @@ export interface SharedItem { ref: string; kind: string; title: string; role: st
 /** Who reads the index: an account and the channels it is in. */
 export interface ShareReader { accountId: string; channelIds: string[] }
 
-/** The address of a shared object (a Docs one; another app's has none yet). */
-export const urlOf = (ref: Reference | null, fileKind: string): string | null => docsAddress(ref, fileKind);
+/** Where a Chat object opens in the web client: an artifact by id. */
+export function chatAddress(ref: Reference | null): string | null {
+  return ref?.app === 'chat' && ref.kind === 'artifact' ? `/?open=${encodeURIComponent(`artifact:${ref.id}`)}` : null;
+}
+
+/** The address of a shared object (a Docs one, a Chat artifact; another app's has none yet). */
+export const urlOf = (ref: Reference | null, fileKind: string): string | null => docsAddress(ref, fileKind) ?? chatAddress(ref);
+
+/** Where a request in the Org object sends a sharing event (the object binds it to the Events object; tests, nowhere). */
+export const shareEvents = new AsyncLocalStorage<(event: PublishInput) => Promise<void>>();
+
+/** A grant Chat made in this object (services/artifacts.ts): indexed, announced, and its event published. */
+export async function reportShare(input: RecordShareInput, webBase: string): Promise<void> {
+  const event = await recordShare(input, webBase);
+  if (event) await shareEvents.getStore()?.(event);
+}
+
+/** A grant Chat took away in this object: out of the index, and its event published. */
+export async function reportRevoke(input: RevokeShareInput): Promise<void> {
+  const event = await revokeShare(input);
+  if (event) await shareEvents.getStore()?.(event);
+}
 
 /**
  * The audience of a sharing event: the principal itself when it is an account or a private channel; a public channel's
@@ -87,7 +110,7 @@ export async function recordShare(input: RecordShareInput, webBase: string): Pro
     .onConflictDoUpdate({ target: [shares.ref, shares.principal], set: { role: input.role, grantedBy: input.grantedBy, title, kind, at } })
     .run();
   const url = urlOf(ref, kind) ?? '';
-  if (!before[0]) await announce(ref.organizationId, input.principal, input.grantedBy, title || 'a file', `${webBase.replace(/\/+$/, '')}${url}`);
+  if (!before[0] && !input.silent) await announce(ref.organizationId, input.principal, input.grantedBy, title || 'a file', `${webBase.replace(/\/+$/, '')}${url}`);
   return {
     type: 'sharing.granted',
     organizationId: ref.organizationId,

@@ -20,6 +20,17 @@ export interface Folders {
   remove(scope: ScopeArg, path: string): 'ok' | 'not-empty' | 'missing';
 }
 
+/** One grant on a folder or on something in it, with what the share index names its object by (host.onGrantChange). */
+export interface GrantUnder {
+  kind: 'folder' | 'sheet' | 'file';
+  id: string;
+  fileKind: string;
+  title: string;
+  workspaceId: string;
+  principal: string;
+  role: string;
+}
+
 /** Most results a search of the whole library returns, per kind of thing. */
 export const SEARCH_LIMIT = 200;
 
@@ -88,6 +99,32 @@ export class FolderStore implements Folders {
     this.db.prepare(`DELETE FROM folders WHERE ${where.sql} AND path = ?`).run(...where.params, path);
     this.db.prepare("DELETE FROM grants WHERE object_kind = 'folder' AND object_id = ?").run(folderObjectId(scopeKey(scope), path));
     return 'ok';
+  }
+
+  /**
+   * Every grant on the folder `path` and on what is in it (its folders, documents and stored files) in an organization:
+   * what a move compares before and after, so the share index follows it (server/app.ts' `/api/folders/scope`).
+   */
+  grantsUnder(scope: ScopeArg, path: string): GrantUnder[] {
+    const where = scopeWhere(scope);
+    const out: GrantUnder[] = [];
+    const grantsOf = this.db.prepare('SELECT principal, role FROM grants WHERE object_kind = ? AND object_id = ?');
+    const add = (o: Omit<GrantUnder, 'principal' | 'role'>) => {
+      if (!o.workspaceId) return;
+      for (const g of grantsOf.all(o.kind, o.id) as { principal: string; role: string }[]) out.push({ ...o, ...g });
+    };
+    const inPath = underFolder('path', path);
+    for (const f of this.db.prepare(`SELECT path, workspace_id FROM folders WHERE ${where.sql} AND ${inPath.sql}`).all(...where.params, ...inPath.params) as { path: string; workspace_id: string | null }[]) {
+      add({ kind: 'folder', id: folderObjectId(scopeKey(scope), f.path), fileKind: 'folder', title: folderName(f.path) || 'Folder', workspaceId: f.workspace_id ?? '' });
+    }
+    const inside = underFolder('folder', path);
+    for (const d of this.db.prepare(`SELECT id, kind, title, workspace_id FROM sheets WHERE ${where.sql} AND ${inside.sql}`).all(...where.params, ...inside.params) as { id: string; kind: string; title: string; workspace_id: string | null }[]) {
+      add({ kind: 'sheet', id: d.id, fileKind: d.kind, title: d.title, workspaceId: d.workspace_id ?? '' });
+    }
+    for (const f of this.db.prepare(`SELECT id, filename, workspace_id FROM stored_files WHERE ${where.sql} AND ${inside.sql}`).all(...where.params, ...inside.params) as { id: string; filename: string; workspace_id: string | null }[]) {
+      add({ kind: 'file', id: f.id, fileKind: 'file', title: f.filename, workspaceId: f.workspace_id ?? '' });
+    }
+    return out;
   }
 
   /**

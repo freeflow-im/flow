@@ -338,6 +338,9 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   Since phase 3.3 every grant change, once made, goes to `host.onGrantChange` (`reportGrant` in `app.ts`: the grants routes, the `org` toggle,
   Share with organization / Make private, links made and stopped; `role` null is a revoke), and each save or rename of a document to
   `host.onFileChanged`; the suite's Docs object sends them to the organization's share index and event log (`packages/edge/src/docs/object.ts`).
+  A folder moved to another root (`/api/folders/scope`) changes its object ids, and to another organization the references of what is in
+  it: `reportMove` compares `FolderStore.grantsUnder` before and after, revokes every grant under the old ids (with the people and channels a
+  move to another organization drops) and gives the new ones with `silent`, so the index follows without a second notice (phase 3.4).
 - Folders (`shared/folders.ts`): a folder is named by its path (`Reports/2026`, `''` for the top). Files
   carry it in the `folder` column (`SheetMeta.folder`, `StoredFile.folder`); the folders themselves are
   rows on the server (`FolderStore`, `server/folders.ts`) and directories in the desktop app

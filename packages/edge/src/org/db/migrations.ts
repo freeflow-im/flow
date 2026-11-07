@@ -4,4 +4,5 @@ export const ORG_MIGRATIONS: string[] = [
 "ALTER TABLE `workspace_members` ADD `address` text;--> statement-breakpoint\nALTER TABLE `workspaces` ADD `policies` text DEFAULT '{}' NOT NULL;",
 "ALTER TABLE `workspace_members` ADD `account_id` text;",
 "CREATE TABLE `shares` (\n\t`ref` text NOT NULL,\n\t`principal` text NOT NULL,\n\t`role` text NOT NULL,\n\t`granted_by` text NOT NULL,\n\t`title` text DEFAULT '' NOT NULL,\n\t`kind` text DEFAULT '' NOT NULL,\n\t`at` integer NOT NULL,\n\tPRIMARY KEY(`ref`, `principal`)\n);\n--> statement-breakpoint\nCREATE INDEX `shares_principal_idx` ON `shares` (`principal`);",
+"CREATE TABLE IF NOT EXISTS grants (\n  object_kind TEXT NOT NULL,\n  object_id TEXT NOT NULL,\n  principal TEXT NOT NULL,\n  role TEXT NOT NULL,\n  granted_by TEXT NOT NULL,\n  granted_at INTEGER NOT NULL,\n  expires_at INTEGER,\n  PRIMARY KEY (object_kind, object_id, principal)\n);\n--> statement-breakpoint\nCREATE INDEX IF NOT EXISTS grants_principal ON grants (principal);\n--> statement-breakpoint\nCREATE INDEX IF NOT EXISTS grants_object ON grants (object_kind, object_id);",
 ];
