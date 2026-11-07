@@ -258,6 +258,12 @@ r=await api(BOT,'GET',`/v1/workspaces/${W}/channels`);t('his agent is in',r.s===
  let posted=null;for(let i=0;i<15&&!posted;i++){await sleep(200);r=await api(A.token,'GET',`/v1/channels/${gen.id}/messages?limit=10`);posted=r.j.messages?.find(m=>m.body==='Someone reacted with chat.reaction.added')}
  t('a match posts into the channel as Bob',posted?.userId===Bo.user.id,JSON.stringify(posted??r.j.messages?.map(m=>m.body)).slice(0,140));
  await api(Bo.token,'DELETE',`/v1/events/subscriptions/${PS.id}?workspace=${W}`);
+ // With includeSelf, a post automation fires on its creator's own message too.
+ r=await api(Bo.token,'POST',SP,{name:'own echo',delivery:'post',filter:{types:['chat.message.created'],channelId:gen.id,text:'echo me'},action:{kind:'post',channelId:gen.id,body:'Echoed own post',includeSelf:true}});const PO=r.j.subscription;
+ await api(Bo.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'please echo me'});
+ posted=null;for(let i=0;i<15&&!posted;i++){await sleep(200);r=await api(Bo.token,'GET',`/v1/channels/${gen.id}/messages?limit=10`);posted=r.j.messages?.find(m=>m.body==='Echoed own post')}
+ t('an includeSelf post automation fires on its creator\'s own message',PO&&posted?.userId===Bo.user.id,JSON.stringify(posted??r.j.messages?.map(m=>m.body)).slice(0,140));
+ await api(Bo.token,'DELETE',`/v1/events/subscriptions/${PO?.id}?workspace=${W}`);
  // A schedule: the filter is forced to its own ticks, and its first is within the hour (the tick itself is unit-tested).
  r=await api(Bo.token,'POST',SP,{name:'hourly digest',delivery:'wake',consumer:botAcct,filter:{types:['chat.*']},action:{kind:'wake',prompt:'Digest'},schedule:{every:'hourly',timezone:'UTC'}});const SC=r.j.subscription;
  const left=SC?.schedule&&Date.parse(SC.schedule.nextAt)-Date.now();

@@ -38,6 +38,8 @@ export interface AutomationDraft {
   runIn: string;
   postChannel: string;
   body: string;
+  /** Also act on events the consumer itself caused. */
+  includeSelf: boolean;
   /** '' until edited: the default sentence stands in. */
   name: string;
 }
@@ -53,7 +55,7 @@ export const browserTimezone = () => {
 export const emptyDraft = (): AutomationDraft => ({
   trigger: 'event', type: 'chat.message.created', channelId: '', text: '',
   freq: 'daily', time: '09:00', day: 'MON', date: 1, timezone: browserTimezone(),
-  action: 'wake', agent: '', prompt: '', runIn: '', postChannel: '', body: '', name: '',
+  action: 'wake', agent: '', prompt: '', runIn: '', postChannel: '', body: '', includeSelf: false, name: '',
 });
 
 /** The schedule's `every` as the server accepts it: `hourly`, `daily@HH:MM`, `weekly@DAY HH:MM`, `monthly@D HH:MM`. */
@@ -93,15 +95,16 @@ export function buildSubscriptionBody(d: AutomationDraft, names: Names): CreateS
   const filter: CreateSubscriptionBody['filter'] = d.trigger === 'event'
     ? { types: [d.type.trim()], ...(d.channelId ? { channelId: d.channelId } : {}), ...(d.text.trim() ? { text: d.text.trim() } : {}) }
     : {};
+  const self = d.includeSelf ? { includeSelf: true } : {};
   const schedule = d.trigger === 'schedule' ? { schedule: { every: everyOf(d), timezone: d.timezone.trim() || 'UTC' } } : {};
   if (d.action === 'wake') {
     return {
       name, filter, delivery: 'wake', consumer: d.agent,
-      action: { kind: 'wake', prompt: d.prompt.trim(), ...(d.runIn ? { channelId: d.runIn } : {}) },
+      action: { kind: 'wake', prompt: d.prompt.trim(), ...(d.runIn ? { channelId: d.runIn } : {}), ...self },
       ...schedule,
     };
   }
-  return { name, filter, delivery: 'post', action: { kind: 'post', channelId: d.postChannel, body: d.body.trim() }, ...schedule };
+  return { name, filter, delivery: 'post', action: { kind: 'post', channelId: d.postChannel, body: d.body.trim(), ...self }, ...schedule };
 }
 
 /** One line on what a subscription listens for. */
@@ -119,6 +122,11 @@ export function filterSummary(sub: SubscriptionDTO, names: Names): string {
 
 /** One line on what a subscription does when it matches. */
 export function actionSummary(sub: SubscriptionDTO, names: Names): string {
+  const own = sub.action?.includeSelf ? ', including your own events' : '';
+  return actionLine(sub, names) + own;
+}
+
+function actionLine(sub: SubscriptionDTO, names: Names): string {
   const a = sub.action;
   if (sub.delivery === 'wake' && a?.kind === 'wake') {
     return `Wake ${names.member(sub.consumer)}${a.channelId ? ` in ${names.channel(a.channelId)}` : ''}: “${a.prompt}”`;
@@ -496,6 +504,16 @@ function AutomationForm({
           </label>
         </div>
       )}
+
+      <div className="mb-3 flex flex-col gap-1">
+        <label className="flex items-center gap-1.5">
+          <input data-testid="automation-include-self" type="checkbox" checked={d.includeSelf} onChange={(e) => set('includeSelf', e.target.checked)} />
+          Also fire on my own events
+        </label>
+        <span className="text-xs text-muted">
+          Automations skip events you cause yourself, so they cannot trigger each other in a loop. Tick this to include them.
+        </span>
+      </div>
 
       <label className="mb-3 flex flex-col gap-1">
         <span className="text-xs text-muted">Name</span>

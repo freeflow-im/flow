@@ -29,7 +29,7 @@ const channels = [channel('c-gen', 'general'), channel('c-ops', 'ops'), channel(
 const base = { consumer: 'acct-ann', owner: 'acct-ann', cursor: 0, createdBy: 'acct-ann', createdAt: '2026-11-05T10:00:00.000Z' };
 const subs: SubscriptionDTO[] = [
   { ...base, id: 's-wake', name: 'Summaries', consumer: 'acct-botty', filter: { types: ['chat.message.created'], channelId: 'c-gen' }, delivery: 'wake', cursor: 42, action: { kind: 'wake', prompt: 'Summarize {{data}}' } },
-  { ...base, id: 's-post', name: 'Echo', filter: { types: ['chat.reaction.added'] }, delivery: 'post', action: { kind: 'post', channelId: 'c-ops', body: 'Reacted' }, parkedAt: '2026-11-06T08:00:00.000Z' },
+  { ...base, id: 's-post', name: 'Echo', filter: { types: ['chat.reaction.added'] }, delivery: 'post', action: { kind: 'post', channelId: 'c-ops', body: 'Reacted', includeSelf: true }, parkedAt: '2026-11-06T08:00:00.000Z' },
   { ...base, id: 's-sched', name: 'Standup', consumer: 'acct-botty', filter: { types: ['schedule.tick'] }, delivery: 'wake', action: { kind: 'wake', prompt: 'Run standup' }, schedule: { id: 'sc1', every: 'weekly@MON 09:30', timezone: 'Europe/Paris', nextAt: '' } },
 ];
 
@@ -78,7 +78,7 @@ describe('the automations list', () => {
     expect($('automation-filter-s-wake')!.textContent).toBe('chat.message.created in #general');
     expect($('automation-action-s-wake')!.textContent).toBe('Wake Botty: “Summarize {{data}}”');
     expect($('automation-s-wake')!.textContent).toContain('cursor 42');
-    expect($('automation-action-s-post')!.textContent).toBe('Post in #ops: “Reacted”');
+    expect($('automation-action-s-post')!.textContent).toBe('Post in #ops: “Reacted”, including your own events');
     expect($('automation-parked-s-post')!.textContent).toContain('parked');
     expect($('automation-parked-s-wake')).toBeNull();
     expect($('automation-filter-s-sched')!.textContent).toBe('every Monday at 09:30 (Europe/Paris)');
@@ -143,12 +143,13 @@ describe('the new-automation form', () => {
     await click('automation-action-post');
     await change('automation-post-channel', 'c-ops');
     await change('automation-body', 'Invoices are due');
+    await click('automation-include-self');
     await change('automation-name', 'Invoice reminder');
     await click('automation-create');
     await flush();
     expect(posted()![2]).toEqual({
       name: 'Invoice reminder', filter: {}, delivery: 'post',
-      action: { kind: 'post', channelId: 'c-ops', body: 'Invoices are due' },
+      action: { kind: 'post', channelId: 'c-ops', body: 'Invoices are due', includeSelf: true },
       schedule: { every: 'monthly@15 08:15', timezone: 'America/New_York' },
     });
   });
