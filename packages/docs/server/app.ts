@@ -2724,7 +2724,7 @@ export async function buildApp(opts: AppOptions) {
     r.addHook('preHandler', requireUser);
 
     // For an assistant that runs outside this app (host.assistant, the suite's Assistant object), what its server tools did
-    // here in-process: a chat file's name and the root its tools work in (the turn below), a PDF of a file saved beside it
+    // here in-process: a chat file's name, kind and the caller's role on it, and the root its tools work in (the turn below), a PDF of a file saved beside it
     // (export_pdf), and bytes imported into the request's root (import_file, a mail attachment saved to Docs).
     r.get('/api/places/:id', async (req, reply) => {
       const { id } = req.params as { id: string };
@@ -2732,8 +2732,10 @@ export async function buildApp(opts: AppOptions) {
       const row = doc ?? (isFileId(id) ? storedFiles.find(id) : undefined);
       const title = sheets.get(req.viewer, id)?.title ?? (isFileId(id) ? storedFiles.get(req.viewer, id)?.meta.filename : undefined) ?? null;
       if (title === null || !row) return reply.code(404).send({ error: 'File not found' });
-      const root = row.workspace_id && roleOf(db, req.viewer, doc ? 'sheet' : 'file', row) ? scopeOfRow(row, req.viewer) : null;
-      return { title, ...(root?.workspaceId ? { place: { workspace: root.workspaceId, shared: !root.private } } : {}) };
+      const role = roleOf(db, req.viewer, doc ? 'sheet' : 'file', row);
+      const root = row.workspace_id && role ? scopeOfRow(row, req.viewer) : null;
+      // Its kind and the caller's role too: a reference's chip (the suite's GET /v1/references, platform.md §5.3).
+      return { title, kind: doc ? doc.kind : 'file', ...(role ? { role } : {}), ...(root?.workspaceId ? { place: { workspace: root.workspaceId, shared: !root.private } } : {}) };
     });
 
     r.post('/api/files/:id/pdf', async (req, reply) => {

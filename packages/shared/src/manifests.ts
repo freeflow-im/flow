@@ -14,7 +14,7 @@ export const APP_MANIFESTS: AppManifest[] = [
     scope: 'organization',
     object: { className: 'Org', migrationTag: 'v1' },
     routes: 'org',
-    kinds: [{ kind: 'channel', container: true }, { kind: 'message' }, { kind: 'artifact' }, { kind: 'file' }],
+    kinds: [{ kind: 'channel', container: true, resolve: 'org' }, { kind: 'message', resolve: 'org' }, { kind: 'artifact', resolve: 'org' }, { kind: 'file', resolve: 'org' }],
     // Its tools, by name (their definitions: @flow/shared/tools, platform.md §5.4).
     tools: [
       'send_message', 'react', 'upload_file', 'search_history', 'list_channels', 'list_users', 'join_channel', 'set_channel_indicator', 'set_channel_emoji', 'leave_channel', 'create_channel', 'start_task',
@@ -51,7 +51,7 @@ export const APP_MANIFESTS: AppManifest[] = [
     scope: 'organization',
     object: { className: 'Docs', migrationTag: 'v2' },
     routes: 'docs',
-    kinds: [{ kind: 'folder', container: true }, { kind: 'sheet' }, { kind: 'file' }],
+    kinds: [{ kind: 'folder', container: true, resolve: 'app' }, { kind: 'sheet', resolve: 'app' }, { kind: 'file', resolve: 'app' }],
     // Its tools, by name (their definitions: @flow/shared/tools, platform.md §5.4).
     tools: [
       'list_files', 'search_files', 'get_profile', 'create_doc', 'create_deck', 'create_sheet', 'import_file', 'open_file', 'view_image', 'create_folder', 'move_file', 'upload_file', 'read_file',
@@ -132,7 +132,7 @@ export const APP_MANIFESTS: AppManifest[] = [
     scope: 'account',
     object: { className: 'Calendar', migrationTag: 'v5' },
     routes: 'calendar',
-    kinds: [{ kind: 'calendar', container: true }, { kind: 'event' }],
+    kinds: [{ kind: 'calendar', container: true, resolve: 'app' }, { kind: 'event', resolve: 'app' }],
     // Its tools, by name (their definitions: @flow/shared/tools, platform.md §5.4).
     tools: [
       'list_calendars', 'list_shared_calendars', 'list_events', 'get_event', 'find_free_time', 'create_event', 'update_event', 'delete_event', 'respond_to_event', 'share_calendar', 'unshare_calendar',

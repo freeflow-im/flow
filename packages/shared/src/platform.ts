@@ -291,7 +291,12 @@ export interface AppManifest {
   object?: { className: string; migrationTag: string };
   /** Its Hono module, `src/routes/<routes>.ts` in the Worker. */
   routes?: string;
-  kinds: { kind: string; container?: boolean }[];
+  /**
+   * The object and container kinds it owns, each with its reference resolver (§5.3, GET /v1/references): `org`, the Org
+   * object answers (Chat's own kinds, and anything in the share index); `app`, this app's object is asked for what the
+   * share index does not hold. A kind without one is not resolved for anyone (Mail's: mail is not shareable).
+   */
+  kinds: { kind: string; container?: boolean; resolve?: 'org' | 'app' }[];
   /** Its tools, by name: their definitions are @flow/shared/tools' TOOL_DEFINITIONS (§5.4). */
   tools?: string[];
   /** The consent page's groups for its scopes, in the order the page lists them. */

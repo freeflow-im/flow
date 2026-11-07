@@ -10,7 +10,7 @@ import { and, desc, eq, inArray } from 'drizzle-orm';
 import { parseReference, type Reference } from '@flow/shared';
 import { ORG_PRINCIPAL, parsePrincipal, principalsOf, ROLE_RANK, type Role } from '@flow/shared/grants';
 import type { Audience, PublishInput } from '../../events/core';
-import { docsAddress } from '../../docs/addresses';
+import { addressOf } from '@flow/shared/addresses';
 import { db, schema } from '../db/index.js';
 import { createDm } from './channels.js';
 import { postHuddleSystemMessage } from './messages.js';
@@ -39,18 +39,8 @@ export interface SharedItem { ref: string; kind: string; title: string; role: st
 /** Who reads the index: an account and the channels it is in. */
 export interface ShareReader { accountId: string; channelIds: string[] }
 
-/** Where a Chat object opens in the web client: an artifact by id. */
-export function chatAddress(ref: Reference | null): string | null {
-  return ref?.app === 'chat' && ref.kind === 'artifact' ? `/?open=${encodeURIComponent(`artifact:${ref.id}`)}` : null;
-}
-
-/** Where a native calendar opens in the web client (phase 4.1). */
-export function calendarAddress(ref: Reference | null): string | null {
-  return ref?.app === 'calendar' && ref.kind === 'calendar' ? `/calendar/?calendar=${encodeURIComponent(ref.id)}` : null;
-}
-
-/** The address of a shared object (a Docs one, a Chat artifact, a calendar; another app's has none yet). */
-export const urlOf = (ref: Reference | null, fileKind: string): string | null => docsAddress(ref, fileKind) ?? chatAddress(ref) ?? calendarAddress(ref);
+/** The address of a shared object, by the kind of file it is (@flow/shared/addresses, the one table every client reads). */
+export const urlOf = (ref: Reference | null, fileKind: string): string | null => addressOf(ref, fileKind);
 
 /** Where a request in the Org object sends a sharing event (the object binds it to the Events object; tests, nowhere). */
 export const shareEvents = new AsyncLocalStorage<(event: PublishInput) => Promise<void>>();
@@ -200,6 +190,19 @@ export async function sharedWith(reader: ShareReader, opts: { includeOrg?: boole
     if (!had || ROLE_RANK[r.role as Role] > ROLE_RANK[had.role as Role]) best.set(r.ref, had ? { ...r, at: had.at } : r);
   }
   return [...best.values()].map((r) => ({ ref: r.ref, kind: r.kind, title: r.title, role: r.role, principal: r.principal, grantedBy: r.grantedBy, at: r.at, url: urlOf(parseReference(r.ref), r.kind) ?? '' }));
+}
+
+/** Of the references named, those shared with the reader (the organization's included), each with the highest role it is
+ * given and its row's title and kind: what GET /v1/references answers from the index (services/references.ts). */
+export async function sharesOf(reader: ShareReader, refs: string[]): Promise<Map<string, { role: Role; title: string; kind: string }>> {
+  const out = new Map<string, { role: Role; title: string; kind: string }>();
+  if (refs.length === 0) return out;
+  const rows = await db.select().from(shares).where(and(inArray(shares.ref, refs), inArray(shares.principal, await principalsFor(reader, true))));
+  for (const r of rows) {
+    const had = out.get(r.ref);
+    if (!had || ROLE_RANK[r.role as Role] > ROLE_RANK[had.role]) out.set(r.ref, { role: r.role as Role, title: r.title, kind: r.kind });
+  }
+  return out;
 }
 
 /** The references shared with the reader, the organization's included (every active member may see those): what the bus

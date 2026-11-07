@@ -129,6 +129,7 @@ describe('the share index', () => {
     const r = (kind: string, id: string) => ({ organizationId: 'o', app: 'docs', kind, id });
     expect(['sheet', 'deck', 'doc', 'markdown'].map((k) => urlOf(r('sheet', 'x'), k))).toEqual(['/workspace/s/x', '/workspace/d/x', '/workspace/doc/x', '/workspace/md/x']);
     expect(urlOf(r('file', 'y'), 'file')).toBe('/workspace/f/y');
-    expect(urlOf({ organizationId: 'o', app: 'calendar', kind: 'event', id: 'z' }, '')).toBeNull();
+    expect(urlOf({ organizationId: 'o', app: 'calendar', kind: 'event', id: 'z' }, '')).toBe('/calendar/?event=z');
+    expect(urlOf({ organizationId: 'o', app: 'mail', kind: 'message', id: 'z' }, '')).toBeNull();
   });
 });

@@ -15,7 +15,7 @@ import type { FileHub } from './plugin/server/files.ts';
 import { DatabaseSync } from './runtime/sqlite.ts';
 import { PREVIEW_TTL_MS, Previews } from './server/previews.ts';
 import { lazySubscriptions, subscriptionsAs, type SubscriptionOps } from '../events/subscriptions.ts';
-import { docsAddress } from './addresses.ts';
+import { addressOf } from '@flow/shared/addresses';
 import { calendarRequest, type AccountCaller } from '../calendar/forward';
 import type { FileChange, GrantChange } from './server/app.ts';
 
@@ -166,7 +166,7 @@ export class Docs extends DurableObject<DocsEnv> {
         ref: { organizationId: c.workspaceId, app: 'docs', kind: c.kind, id: c.id },
         audience: `ref:${ref}`,
         ts: new Date(now).toISOString(),
-        data: { ref, kind: c.fileKind, id: c.id, title: c.title, ownerAccountId, url: docsAddress({ organizationId: c.workspaceId, app: 'docs', kind: c.kind, id: c.id }, c.fileKind) },
+        data: { ref, kind: c.fileKind, id: c.id, title: c.title, ownerAccountId, url: addressOf({ organizationId: c.workspaceId, app: 'docs', kind: c.kind, id: c.id }, c.fileKind) },
       }),
     );
     this.ctx.waitUntil(sent.catch((err: Error) => console.error(`[docs] docs.file.changed for ${ref}: ${err.message}`)));

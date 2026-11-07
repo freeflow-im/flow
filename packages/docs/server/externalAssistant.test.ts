@@ -64,8 +64,8 @@ describe('an assistant the host runs', () => {
   it('gives a chat file’s name and root: the organization’s files for a shared one, only to whoever can open it', async () => {
     const shared = (await call('alice', 'POST', '/api/docs?workspace=harbor&shared=1', { title: 'Plan' })).body.doc;
     const mine = (await call('alice', 'POST', '/api/docs?workspace=harbor', { title: 'Diary' })).body.doc;
-    expect((await call('bob', 'GET', `/api/places/${shared.id}`)).body).toEqual({ title: 'Plan', place: { workspace: 'harbor', shared: true } });
-    expect((await call('alice', 'GET', `/api/places/${mine.id}`)).body).toEqual({ title: 'Diary', place: { workspace: 'harbor', shared: false } });
+    expect((await call('bob', 'GET', `/api/places/${shared.id}`)).body).toEqual({ title: 'Plan', kind: 'doc', role: 'editor', place: { workspace: 'harbor', shared: true } });
+    expect((await call('alice', 'GET', `/api/places/${mine.id}`)).body).toEqual({ title: 'Diary', kind: 'doc', role: 'owner', place: { workspace: 'harbor', shared: false } });
     expect((await call('bob', 'GET', `/api/places/${mine.id}`)).status).toBe(404);
   });
 
