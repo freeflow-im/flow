@@ -77,7 +77,7 @@ describe('MCP OAuth in the directory', () => {
     const { client, code } = await codeFor('u1', 'orgB');
     const t = oauth.token(ISSUER, { grant_type: 'authorization_code', code, code_verifier: verifier, client_id: client });
     // Nothing ticked on the page (a form without its checkboxes): Docs, Mail and Calendar, as the page starts; never sending.
-    expect(oauth.authenticate(ISSUER, `Bearer ${t.access_token}`)).toEqual({ ok: true, caller: { userId: 'u1', email: 'u1@example.com', orgId: 'orgB', scope: 'files:read files:write mail:read mail:write calendar:read calendar:write' } });
+    expect(oauth.authenticate(ISSUER, `Bearer ${t.access_token}`)).toEqual({ ok: true, caller: { userId: 'u1', email: 'u1@example.com', orgId: 'orgB', accountId: null, scope: 'files:read files:write mail:read mail:write calendar:read calendar:write' } });
     const r = oauth.token(ISSUER, { grant_type: 'refresh_token', refresh_token: t.refresh_token, client_id: client });
     expect(oauth.authenticate(ISSUER, `Bearer ${r.access_token}`)).toMatchObject({ ok: true, caller: { orgId: 'orgB' } });
     // A rotated refresh token used again ends the family.
@@ -118,6 +118,16 @@ describe('MCP OAuth in the directory', () => {
     sql.exec("DELETE FROM memberships WHERE user_id = 'u1' AND organization_id = 'orgA'");
     expect(oauth.authenticate(ISSUER, `Bearer ${t.access_token}`)).toMatchObject({ ok: false, reason: 'not_a_member' });
     expect(() => oauth.token(ISSUER, { grant_type: 'refresh_token', refresh_token: t.refresh_token })).toThrow(/no longer a member/);
+  });
+
+  it('carries the account, and refuses a suspended one with a 403', async () => {
+    const { client, code } = await codeFor('u1', 'orgA');
+    const t = oauth.token(ISSUER, { grant_type: 'authorization_code', code, code_verifier: verifier, client_id: client });
+    expect(oauth.authenticate(ISSUER, `Bearer ${t.access_token}`)).toMatchObject({ ok: true, caller: { accountId: null } });
+    sql.exec("INSERT INTO accounts (id, user_id, organization_id, address, display_name, role, created_at) VALUES ('acc1', 'u1', 'orgA', 'u1@a.freeflow.im', 'u1', 'owner', 0)");
+    expect(oauth.authenticate(ISSUER, `Bearer ${t.access_token}`)).toMatchObject({ ok: true, caller: { accountId: 'acc1' } });
+    sql.exec("UPDATE accounts SET state = 'suspended' WHERE id = 'acc1'");
+    expect(oauth.authenticate(ISSUER, `Bearer ${t.access_token}`)).toMatchObject({ ok: false, reason: 'account_inactive', status: 403 });
   });
 
   it('lists connections with their organization, and disconnects one', async () => {

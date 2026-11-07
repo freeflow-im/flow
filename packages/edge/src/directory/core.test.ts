@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { hashPassword, verifyPassword } from './passwords';
-import { DirectoryCore, hashToken, newId, type Mail, type Sql } from './core';
+import { DirectoryCore, accountGate, hashToken, newId, type Mail, type Sql } from './core';
 import { DIRECTORY_MIGRATIONS } from './schema';
 
 /** A real argon2 hash from the server's native library, of 'correct horse'. */
@@ -322,6 +322,28 @@ describe('accounts', () => {
     core.setOwner(org, b.user.id);
     core.setPolicies(org, { invite: 'admins' });
     expect(core.organization(org)).toMatchObject({ ownerUserId: b.user.id, policies: { invite: 'admins' } });
+  });
+});
+
+describe('the account gate', () => {
+  it('lets through no account, and every state but suspended and removed', () => {
+    expect(accountGate(null)).toBeNull();
+    for (const state of ['requested', 'mailbox_ready', 'calendars_ready', 'active'] as const) expect(accountGate({ state })).toBeNull();
+  });
+
+  it('refuses a suspended or a removed account with a 403 account_inactive that says which', () => {
+    expect(accountGate({ state: 'suspended' })).toMatchObject({ statusCode: 403, code: 'account_inactive', message: 'your account in this organization is suspended' });
+    expect(accountGate({ state: 'removed' })).toMatchObject({ statusCode: 403, code: 'account_inactive', message: 'your account in this organization was removed' });
+  });
+
+  it('resolves the principal and its account in one call', async () => {
+    const { user, token } = await signUp();
+    const org = newId();
+    core.reserveSlug('acme', org);
+    await core.applyOrgChanges(org, [{ kind: 'join', id: org, user_id: user.id, role: 'member', payload: null }]);
+    expect(await core.authenticateIn(token, null)).toMatchObject({ user: { id: user.id }, kind: 'session', account: null });
+    expect((await core.authenticateIn(token, org)).account).toMatchObject({ principalId: user.id, organizationId: org, state: 'active' });
+    expect((await core.authenticateIn(token, newId())).account).toBeNull();
   });
 });
 

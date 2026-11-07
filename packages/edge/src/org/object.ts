@@ -1,7 +1,7 @@
 // One organization: its database and its sockets. HTTP requests arrive from the Worker with the caller already known.
 import { DurableObject } from 'cloudflare:workers';
-import type { Event, UserDTO } from '@flow/shared';
-import type { DirectoryCore } from '../directory/core';
+import type { AccountDTO, Event, UserDTO } from '@flow/shared';
+import { accountGate, type DirectoryCore } from '../directory/core';
 import type { Directory } from '../directory/object';
 import { withPublisher } from './bus';
 import { HUDDLE_ROSTER_DDL } from './huddles';
@@ -47,7 +47,7 @@ const OUTBOX = [
 const app = new CompatApp();
 registerRoutes(app as never);
 
-interface Attachment { userId: string }
+interface Attachment { userId: string; accountId: string | null }
 const pushLog = { info: (o: unknown, msg?: string) => console.log(`[push] ${msg}`, JSON.stringify(o)), warn: (o: unknown, msg?: string) => console.warn(`[push] ${msg}`, JSON.stringify(o)) };
 const USER_SUBJECT = /(?:^|\.)user\.([0-9a-f-]{36})(?:\.|$)/;
 
@@ -235,15 +235,21 @@ export class Org extends DurableObject<OrgEnv> {
 
     if (frame.op === 'auth') {
       if (att) return;
-      const answer = await this.directory().call('authenticate' as never, [frame.token] as never);
-      const user = answer.ok ? ((answer as unknown as { value: { user: UserDTO } }).value.user) : null;
+      // The principal and its account here, in one call (platform.md §3.6): a suspended or removed account is refused.
+      const answer = workspace ? await this.directory().call('authenticateIn' as never, [frame.token, workspace.id] as never) : null;
+      const value = answer?.ok ? (answer as unknown as { value: { user: UserDTO; account: AccountDTO | null } }).value : null;
+      const user = value?.user ?? null;
+      if (user && accountGate(value!.account)) {
+        ws.send(JSON.stringify({ op: 'error', code: 'account_inactive', message: 'account inactive' }));
+        return ws.close(4003, 'account inactive');
+      }
       const member = user && workspace && this.db.select().from(schema.workspaceMembers).where(and(eq(schema.workspaceMembers.workspaceId, workspace.id), eq(schema.workspaceMembers.userId, user.id))).get();
       if (!user || !member) {
         ws.send(JSON.stringify({ op: 'error', code: 'unauthorized', message: 'invalid token' }));
         return ws.close(4003, 'unauthorized');
       }
       const alreadyOnline = this.sockets().some((s) => s.userId === user.id);
-      ws.serializeAttachment({ userId: user.id } satisfies Attachment);
+      ws.serializeAttachment({ userId: user.id, accountId: value!.account?.id ?? null } satisfies Attachment);
       ws.send(JSON.stringify({ op: 'hello', sessionId: crypto.randomUUID(), heartbeat: 'client' }));
       const online = new Set(this.sockets().map((s) => s.userId).filter((id): id is string => !!id && id !== user.id));
       for (const id of online) ws.send(JSON.stringify({ op: 'event', event: this.presence(workspace!.id, id, 'online') }));

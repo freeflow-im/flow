@@ -81,6 +81,16 @@ export function toUserDTO(u: Row, viewerId?: string): UserDTO {
   } as UserDTO;
 }
 
+/**
+ * Whether an account may act in its organization (platform.md §3.6): a refusal for a suspended or removed one, else null.
+ * No account is not refused here: the route decides whether a caller from outside the organization may go on.
+ */
+export function accountGate(account: Pick<AccountDTO, 'state'> | null): ApiError | null {
+  if (account?.state === 'suspended') return new ApiError(403, 'account_inactive', 'your account in this organization is suspended');
+  if (account?.state === 'removed') return new ApiError(403, 'account_inactive', 'your account in this organization was removed');
+  return null;
+}
+
 export class DirectoryCore {
   constructor(private readonly sql: Sql, private readonly deps: DirectoryDeps) {
     this.sql.exec('CREATE TABLE IF NOT EXISTS _migrations (n INTEGER PRIMARY KEY)');
@@ -303,6 +313,12 @@ export class DirectoryCore {
   }
 
   /** Sessions first, with a sliding expiry written at most daily; then agent tokens, which do not expire but can be revoked. */
+  /** A token's principal and, when an organization is named, its account there: the caller context in one call (§3.6). */
+  async authenticateIn(token: string, organizationId: string | null): Promise<{ user: UserDTO; kind: AuthKind; account: AccountDTO | null }> {
+    const { user, kind } = await this.authenticate(token);
+    return { user, kind, account: organizationId ? this.accountFor(user.id, organizationId) : null };
+  }
+
   async authenticate(token: string): Promise<{ user: UserDTO; kind: AuthKind }> {
     const hash = await hashToken(token);
     const now = Date.now();

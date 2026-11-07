@@ -131,4 +131,9 @@ r=await api(AGT,'GET','/v1/me');t('login ends the old token',r.s===401,r.s);r=aw
 // ---- leaving
 const del=await signup('cy@example.com','Cy');r=await api(del.token,'POST','/v1/workspaces',{name:'Cy co',slug:'cy-co'});
 r=await api(del.token,'DELETE','/v1/me');t('delete account',r.s===200,r.s+' '+JSON.stringify(r.j).slice(0,90));r=await api(del.token,'GET','/v1/me');t('its session ended',r.s===401,r.s);
+// ---- a removed member's account is refused (platform.md §3.6)
+r=await api(A.token,'DELETE',`/v1/workspaces/${W}/members/${Bo.user.id}`);t('Ann removes Bob',r.s===200,r.s+' '+JSON.stringify(r.j).slice(0,90));
+r=await api(Bo.token,'GET',`/v1/workspaces/${W}/channels`);t('a removed account is refused',r.s===403&&r.j.error?.code==='account_inactive',r.s+' '+JSON.stringify(r.j).slice(0,90));
+const closed=await new Promise((res)=>{const ws=new WebSocket(`${WS}/v1/ws?workspace=${W}`);ws.onopen=()=>ws.send(JSON.stringify({op:'auth',token:Bo.token}));ws.onclose=e=>res(e);setTimeout(()=>res(null),6000)});
+t('a removed account\'s socket is closed',closed?.code===4003&&closed.reason==='account inactive',closed&&closed.code+' '+closed.reason);
 console.log(`\n${pass} passed, ${fail} failed`);process.exit(fail ? 1 : 0);

@@ -32,6 +32,7 @@ import { CATEGORIES, CATEGORY_HEADERS, classifyHeaders, effective, effectiveSql,
 import { GMAIL_NONE, GMAIL_REASON, GmailSearchError, recheckRows, sortBatch, type GmailSearcher, type RecheckResult } from './gmailTabs';
 import { compileMime, outgoingMessage, type OutgoingFile } from './drafts';
 import { calendarMessage, checkCalendarMail, type CalendarMail } from '../calendar/imip';
+import type { CallerContext, ObjectBindings } from '../org/routes/compat';
 import { AccountPatch, CategoryBody, DeleteBody, DraftBody, FlagsBody, MAX_SEND_BYTES, MoveBody, NewAccount, SendBody, SendersCategoryBody, TIMING_HEADER, checkServer, mailError, notFound, parse, savesSentCopy, sendSize, badRequest, type ServerSettings } from './rules';
 
 export interface MailEnv {
@@ -231,7 +232,7 @@ type MailContext = Context<{ Variables: { account: AccountRow } }>;
 
 export class Mail extends DurableObject<MailEnv> {
   private readonly sql: SqlStorage;
-  private readonly app = new Hono<{ Variables: { account: AccountRow } }>();
+  private readonly app = new Hono<{ Bindings: ObjectBindings; Variables: { account: AccountRow } }>();
   /** The open connections, `<account>/<kind>`, as the promise of each, so two requests at once share one login. */
   private readonly conns = new Map<string, Promise<ImapFlow>>();
   private readonly users = new Map<string, number>();
@@ -270,12 +271,13 @@ export class Mail extends DurableObject<MailEnv> {
   }
 
   /**
-   * A request from routes/mail.ts, made by the person this object belongs to. Where its time went (waiting for a
+   * A request from routes/mail.ts, made by the person this object belongs to, with the caller context (`c.env.caller` to
+   * the routes). Where its time went (waiting for a
    * connection and a folder's lock, and talking IMAP) goes back in an `x-mail-timing` header, which routes/mail.ts logs
    * and takes off: a line logged here would reach `wrangler tail` late or not at all, as the object's open IMAP sockets
    * keep each request's tail event open (until the next request comes, or the socket closes).
    */
-  async handle(request: Request): Promise<Response> {
+  async handle(request: Request, caller?: CallerContext): Promise<Response> {
     const t: Timing = { wait: 0, imap: 0, test: NO_TEST };
     // Local dev only: a pause where sorting runs (holding the background lock), a smaller sorting budget, and the re-check now.
     if (this.allowInsecure) {
@@ -285,7 +287,7 @@ export class Mail extends DurableObject<MailEnv> {
     const res = await timing.run(t, async () => {
       // The test hook: one alarm run first, so the request that follows sees the cache as the alarm leaves it.
       if (t.test.alarm) await this.runCache(Date.now() + ALARM_BUDGET_MS).catch((err) => console.warn(`[mail] test alarm: ${(err as Error).message}`));
-      return this.app.fetch(request);
+      return this.app.fetch(request, { caller: caller ?? null } satisfies ObjectBindings);
     });
     this.touch();
     await this.armAlarm().catch((err) => console.warn(`[mail] alarm: ${(err as Error).message}`));

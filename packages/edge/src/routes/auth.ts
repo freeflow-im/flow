@@ -3,7 +3,8 @@ import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import type { ZodTypeAny, z } from 'zod';
 import { AgentLoginBody, AppLinkExchangeBody, AppleAuthBody, CompleteSignupBody, ConsumeSigninLinkBody, ForgotPasswordBody, GoogleAuthBody, LoginBody, RegisterBody, ResetPasswordBody, SigninLinkBody, emailDomain, type UserDTO } from '@flow/shared';
-import type { DirectoryCore } from '../directory/core';
+import { accountGate, type DirectoryCore } from '../directory/core';
+import type { CallerContext } from '../org/routes/compat';
 import type { Directory } from '../directory/object';
 import type { Org } from '../org/object';
 import { ApiError, badRequest, unauthorized } from '../errors';
@@ -44,10 +45,47 @@ function signedIn<T extends { token: string }>(c: C, res: T, status: 200 | 201 =
   return c.json(res, status);
 }
 
+/** The bearer token, or the `sid` cookie the web client and the Workspace app's pages carry. */
+export function tokenOf(c: Context): string | null {
+  const header = c.req.header('authorization');
+  return (header?.startsWith('Bearer ') ? header.slice(7).trim() : getCookie(c, SESSION_COOKIE)) || null;
+}
+
+/**
+ * The caller context (platform.md §3.6), resolved once per request: the principal from the token, and when the request
+ * names an organization, the account there, in one call to the directory. No token is no user (the route decides whether
+ * that is allowed); no account there is a null account; a suspended or removed account is refused here (`account_inactive`).
+ */
+export async function resolveCaller<E extends AuthEnv>(c: Context<{ Bindings: E }>, organizationId?: string | null): Promise<CallerContext> {
+  const token = tokenOf(c);
+  const ip = c.req.header('cf-connecting-ip') ?? '';
+  const org = organizationId ?? null;
+  if (!token) return { user: null, token: null, authKind: null, ip, organizationId: org, account: null };
+  const { user, kind, account } = await directory(c, 'authenticateIn', token, org);
+  const refused = accountGate(account);
+  if (refused) throw refused;
+  return { user, token, authKind: kind, ip, organizationId: org, account };
+}
+
+/**
+ * The caller context for a person's own app (Mail, Calendar), whose requests name an organization only by `?workspace=`
+ * (or `?org=`). Naming none is fine while the person has one usable account: that one is used. With several, the request
+ * has to say which; with none (in no organization yet), the context carries no account. A signed-in caller is required.
+ */
+export async function resolveAppCaller<E extends AuthEnv>(c: Context<{ Bindings: E }>): Promise<CallerContext & { user: UserDTO }> {
+  const named = c.req.query('workspace') || c.req.query('org') || null;
+  const who = await resolveCaller(c, named);
+  if (!who.user) throw unauthorized('missing bearer token');
+  if (named) return who as CallerContext & { user: UserDTO };
+  const usable = (await directory(c, 'accountsOf', who.user.id)).filter((a) => !accountGate(a));
+  if (usable.length > 1) throw badRequest('organization_required', 'name an organization: ?workspace=<id>');
+  const account = usable[0] ?? null;
+  return { ...who, user: who.user, organizationId: account?.organizationId ?? null, account };
+}
+
 /** A bearer header, or the cookie the Workspace app's pages carry. */
 export const requireAuth = async (c: C, next: () => Promise<void>) => {
-  const header = c.req.header('authorization');
-  const token = (header?.startsWith('Bearer ') ? header.slice(7).trim() : getCookie(c, SESSION_COOKIE)) || null;
+  const token = tokenOf(c);
   if (!token) throw unauthorized('missing bearer token');
   const { user, kind } = await directory(c, 'authenticate', token);
   c.set('user', user);

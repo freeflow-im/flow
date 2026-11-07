@@ -2,26 +2,17 @@
 // their own Mail object (src/imap/object.ts), which holds their mail accounts. Only the provider presets are answered here.
 // Each request logs one timing line here, not in the object: see `Mail.handle`.
 import { Hono } from 'hono';
-import { getCookie } from 'hono/cookie';
 import type { Mail } from '../imap/object';
 import { TIMING_HEADER, providerFor, timingLine } from '../imap/rules';
 import { ApiError, unauthorized } from '../errors';
-import { directory, type AuthEnv } from './auth';
+import { resolveAppCaller, resolveCaller, type AuthEnv } from './auth';
 
 export interface MailRouteEnv extends AuthEnv { MAIL: DurableObjectNamespace<Mail>; MAIL_ALLOW_INSECURE?: string }
 
 export const mailRoutes = new Hono<{ Bindings: MailRouteEnv }>();
 
-async function userId(c: { env: MailRouteEnv; req: { header(n: string): string | undefined } }, cookie: string | undefined): Promise<string> {
-  const header = c.req.header('authorization');
-  const token = (header?.startsWith('Bearer ') ? header.slice(7).trim() : cookie) || null;
-  if (!token) throw unauthorized('missing bearer token');
-  const { user } = await directory(c, 'authenticate', token);
-  return user.id;
-}
-
 mailRoutes.get('/v1/mail/providers', async (c) => {
-  await userId(c, getCookie(c, 'sid'));
+  if (!(await resolveCaller(c)).user) throw unauthorized('missing bearer token');
   c.header('Cache-Control', 'no-store');
   return c.json(providerFor(c.req.query('email') ?? ''));
 });
@@ -30,8 +21,9 @@ mailRoutes.all('/v1/mail/*', async (c) => {
   const start = Date.now();
   let status = 500, timing: string | null = null;
   try {
-    const id = await userId(c, getCookie(c, 'sid'));
-    const res = await c.env.MAIL.get(c.env.MAIL.idFromName(id)).handle(c.req.raw);
+    // Still keyed by the person; the context (with the account) rides along for the per-account objects (platform.md §3.6).
+    const who = await resolveAppCaller(c);
+    const res = await c.env.MAIL.get(c.env.MAIL.idFromName(who.user.id)).handle(c.req.raw, who);
     status = res.status;
     timing = res.headers.get(TIMING_HEADER);
     const out = new Response(res.body, res);

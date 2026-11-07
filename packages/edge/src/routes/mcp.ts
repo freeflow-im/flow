@@ -243,12 +243,16 @@ async function mcpEndpoint(c: C): Promise<Response> {
   const issuer = issuerOf(c);
   const authorization = c.req.header('authorization');
   const who = await oauth(c, 'authenticate', issuer, authorization, endpoint);
+  if (!who.ok && who.status === 403) {
+    console.log(`${c.req.method} ${endpoint} -> 403 ${who.reason}`);
+    return json({ error: who.reason, error_description: who.description }, 403, CORS);
+  }
   if (!who.ok) {
     console.log(`${c.req.method} ${endpoint} -> 401 ${who.reason} [${(c.req.header('user-agent') ?? '').slice(0, 24)}]`);
     return json({ error: 'unauthorized', reason: who.reason, error_description: who.description }, 401, { ...CORS, 'www-authenticate': wwwAuthenticate(issuer, endpoint, authorization ? 'invalid_token' : undefined, who.description) });
   }
-  const { userId, email, orgId, scope } = who.caller;
-  const res = await c.env.DOCS.get(c.env.DOCS.idFromName(orgId)).mcp(c.req.raw, { userId, email, orgId, scope, endpoint, origin: issuer });
+  const { userId, email, orgId, accountId, scope } = who.caller;
+  const res = await c.env.DOCS.get(c.env.DOCS.idFromName(orgId)).mcp(c.req.raw, { userId, email, orgId, accountId, scope, endpoint, origin: issuer });
   return withHeaders(res, CORS);
 }
 mcpRoutes.all('/mcp', mcpEndpoint);

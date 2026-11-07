@@ -1,13 +1,11 @@
 // Everything an organization owns goes to its object: the path names the organization, or an id the directory can look up.
 import { Hono, type Context } from 'hono';
 import { WebhookReceiver } from 'livekit-server-sdk';
-import { getCookie } from 'hono/cookie';
 import { PatchMeBody, type UserDTO } from '@flow/shared';
-import type { AuthKind } from '../directory/core';
-import { hashToken, newId } from '../directory/core';
+import { accountGate, hashToken, newId } from '../directory/core';
 import { listVar } from '../directory/authHandoff';
 import { ApiError, badRequest, notFound, unauthorized } from '../errors';
-import { directory, type AuthEnv } from './auth';
+import { directory, resolveCaller, type AuthEnv } from './auth';
 
 export interface OrgRouteEnv extends AuthEnv {
   BLOBS: R2Bucket;
@@ -35,15 +33,6 @@ const orgStub = (c: C, id: string) => c.env.ORG.get(c.env.ORG.idFromName(id));
 const IN_PATH = /^\/v1\/workspaces\/([0-9a-f-]{36})(?:\/|$)/;
 const BY_ID = /^\/v1\/(?:channels|messages|files|artifacts|scheduled-messages|huddle\/invites)\/([0-9a-f-]{36})(?:\/|$)/;
 
-async function caller(c: C): Promise<{ user: UserDTO | null; token: string | null; authKind: AuthKind | null; ip: string }> {
-  const header = c.req.header('authorization');
-  const token = (header?.startsWith('Bearer ') ? header.slice(7).trim() : getCookie(c, 'sid')) || null;
-  const ip = c.req.header('cf-connecting-ip') ?? '';
-  if (!token) return { user: null, token: null, authKind: null, ip };
-  const { user, kind } = await directory(c, 'authenticate', token);
-  return { user, token, authKind: kind, ip };
-}
-
 export const orgRoutes = new Hono<{ Bindings: OrgRouteEnv }>();
 
 /** One socket per organization: `/v1/ws?workspace=<id>` (docs/specs/cloudflare-spikes.md, spike A). */
@@ -57,7 +46,7 @@ orgRoutes.get('/v1/ws', async (c) => {
 
 /** The organizations a person belongs to, each answered by its own object. */
 orgRoutes.get('/v1/me/workspaces', async (c) => {
-  const who = await caller(c);
+  const who = await resolveCaller(c);
   if (!who.user) throw unauthorized('missing bearer token');
   const ids = await directory(c, 'organizationsOf', who.user.id);
   const answers = await Promise.all(ids.map((id) => orgStub(c, id).workspaceFor(who.user!) as Promise<unknown[]>));
@@ -65,9 +54,10 @@ orgRoutes.get('/v1/me/workspaces', async (c) => {
 });
 
 orgRoutes.post('/v1/workspaces', async (c) => {
-  const who = await caller(c);
-  if (!who.user) throw unauthorized('missing bearer token');
   const id = newId();
+  // The organization is new, so the caller has no account in it yet: the context names it with a null account.
+  const who = await resolveCaller(c, id);
+  if (!who.user) throw unauthorized('missing bearer token');
   const slug = ((await c.req.raw.clone().json().catch(() => ({}))) as { slug?: unknown }).slug;
   if (typeof slug === 'string') await directory(c, 'reserveSlug', slug, id);
   const res = await orgStub(c, id).handle(c.req.raw, who, id);
@@ -116,7 +106,7 @@ orgRoutes.post('/v1/livekit/webhook', async (c) => {
   const id = room && /^[0-9a-f-]{36}$/.test(room) ? await directory(c, 'organizationOfId', room) : null;
   if (!id) return c.json({ ok: true });
   const forward = new Request(c.req.url, { method: 'POST', headers: c.req.raw.headers, body });
-  return orgStub(c, id).handle(forward, { user: null, token: null, authKind: null, ip: c.req.header('cf-connecting-ip') ?? '' }, null);
+  return orgStub(c, id).handle(forward, { user: null, token: null, authKind: null, ip: c.req.header('cf-connecting-ip') ?? '', organizationId: id, account: null }, null);
 });
 
 /** A person's profile lives in the directory, with a copy in each of their organizations. */
@@ -126,7 +116,7 @@ async function afterProfileChange(c: C, user: UserDTO): Promise<void> {
 }
 
 orgRoutes.patch('/v1/me', async (c) => {
-  const who = await caller(c);
+  const who = await resolveCaller(c);
   if (!who.user) throw unauthorized('missing bearer token');
   const parsed = PatchMeBody.safeParse(await c.req.json().catch(() => undefined));
   if (!parsed.success) throw badRequest('validation', parsed.error.issues[0]?.message ?? 'invalid request');
@@ -136,7 +126,7 @@ orgRoutes.patch('/v1/me', async (c) => {
 });
 
 orgRoutes.delete('/v1/me', async (c) => {
-  const who = await caller(c);
+  const who = await resolveCaller(c);
   if (!who.user) throw unauthorized('missing bearer token');
   if (who.user.isAgent) throw new ApiError(403, 'forbidden', 'agent accounts are removed by their sponsor or a workspace admin');
   const ids = await directory(c, 'organizationsOf', who.user.id);
@@ -149,7 +139,7 @@ const AVATAR_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/web
 const AVATAR_KEY = /^[0-9a-f-]{36}-\d+\.[a-z]+$/;
 
 orgRoutes.post('/v1/me/avatar', async (c) => {
-  const who = await caller(c);
+  const who = await resolveCaller(c);
   if (!who.user) throw unauthorized('missing bearer token');
   const file = [...(await c.req.raw.formData()).values()].find((v): v is File => typeof v !== 'string');
   if (!file) throw badRequest('no_file', 'multipart file field required');
@@ -162,7 +152,7 @@ orgRoutes.post('/v1/me/avatar', async (c) => {
 });
 
 orgRoutes.get('/v1/avatars/:key', async (c) => {
-  if (!(await caller(c)).user) throw unauthorized('missing bearer token');
+  if (!(await resolveCaller(c)).user) throw unauthorized('missing bearer token');
   const key = c.req.param('key');
   // Avatars from before the move are stored under the same names, all webp.
   const object = /^[0-9a-f-]{36}-\d+(\.[a-z]+)?$/.test(key) || AVATAR_KEY.test(key) ? await c.env.BLOBS.get(`avatars/${key}`) : null;
@@ -172,7 +162,7 @@ orgRoutes.get('/v1/avatars/:key', async (c) => {
 
 /** The same request to each of a person's organizations, with the answers joined: lists concatenated, counts added. */
 async function acrossOrganizations(c: C, sortKey?: string, limit?: number): Promise<Response> {
-  const who = await caller(c);
+  const who = await resolveCaller(c);
   if (!who.user) throw unauthorized('missing bearer token');
   const ids = await directory(c, 'organizationsOf', who.user.id);
   const body = c.req.method === 'GET' ? null : await c.req.raw.clone().text();
@@ -229,20 +219,26 @@ async function organizationInRequest(c: C): Promise<string | null> {
 
 orgRoutes.all('/v1/*', async (c) => {
   const { pathname } = new URL(c.req.url);
-  const who = await caller(c);
   let id = IN_PATH.exec(pathname)?.[1] ?? null;
   const named = BY_ID.exec(pathname)?.[1];
   if (!id && named) {
     id = await directory(c, 'organizationOfId', named);
     if (!id) throw notFound();
   }
-  id ??= await organizationOfToken(c, pathname);
+  // An invitation or join link is how one comes (back) into an organization, so it is not refused for a removed account.
+  const viaToken = id ? null : await organizationOfToken(c, pathname);
+  if (viaToken) return orgStub(c, viaToken).handle(c.req.raw, { ...(await resolveCaller(c)), organizationId: viaToken }, null);
   id ??= await organizationInRequest(c);
+  let who = await resolveCaller(c, id);
   if (!id) {
     // Paths that name no organization (join links, a member's own notifications, avatars) go to the caller's first one for now.
     if (!who.user) throw unauthorized('missing bearer token');
     id = (await directory(c, 'organizationsOf', who.user.id))[0] ?? null;
     if (!id) throw notFound();
+    const account = await directory(c, 'accountFor', who.user.id, id);
+    const refused = accountGate(account);
+    if (refused) throw refused;
+    who = { ...who, organizationId: id, account };
   }
   return orgStub(c, id).handle(c.req.raw, who, null);
 });

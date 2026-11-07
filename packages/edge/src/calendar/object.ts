@@ -6,6 +6,7 @@
 // cache, and the calendar is synced right after. Passwords are sealed with FLOW_DATA_KEY (org/crypto, as Mail's are) and
 // never returned or logged; no address, summary or id goes in a log line.
 import { AsyncLocalStorage } from 'node:async_hooks';
+import type { CallerContext, ObjectBindings } from '../org/routes/compat';
 import { DurableObject } from 'cloudflare:workers';
 import { Hono, type Context } from 'hono';
 import { ApiError } from '../errors';
@@ -63,7 +64,7 @@ const json = async (c: Context) => c.req.json().catch(() => { throw badRequest('
 export class Calendar extends DurableObject<CalendarEnv> {
   private readonly sql: SqlStorage;
   private readonly store: CalendarStore;
-  private readonly app = new Hono();
+  private readonly app = new Hono<{ Bindings: ObjectBindings }>();
   /** One sync or write at a time per calendar, so a sync never writes back what a PUT just replaced. */
   private readonly locks = new Map<string, Promise<unknown>>();
   private syncing = false;
@@ -83,13 +84,14 @@ export class Calendar extends DurableObject<CalendarEnv> {
   }
 
   /**
-   * A request from routes/calendar.ts, made by the person this object belongs to (`userId`, kept: the Mail object is named
-   * by it too). Its server time goes back in `x-calendar-timing`, which the route logs (as Mail's).
+   * A request from routes/calendar.ts, made by the person this object belongs to, with the caller context (its user id is
+   * kept: the Mail object is named by it too; the context is `c.env.caller` to the routes). Its server time goes back in `x-calendar-timing`, which the route logs (as Mail's).
    */
-  async handle(request: Request, userId?: string): Promise<Response> {
+  async handle(request: Request, caller?: CallerContext): Promise<Response> {
+    const userId = caller?.user?.id;
     if (userId && userId !== this.userId) { this.userId = userId; this.store.setState('user_id', userId); }
     const t: Timing = { server: 0 };
-    const res = await timing.run(t, () => this.app.fetch(request));
+    const res = await timing.run(t, () => this.app.fetch(request, { caller: caller ?? null } satisfies ObjectBindings));
     this.touch();
     await this.armAlarm().catch((err) => console.warn(`[calendar] alarm: ${(err as Error).message}`));
     const out = new Response(res.body, res);

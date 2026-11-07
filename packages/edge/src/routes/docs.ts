@@ -50,6 +50,7 @@ docsRoutes.all('/api/*', async (c) => {
   const first = caller.userId ? (await directory(c, 'organizationsOf', caller.userId))[0] ?? null : null;
   // Someone in no organization yet, and anyone not signed in, share an object that can only say so.
   const id = named ?? first ?? 'none';
+  const accountId = caller.userId && id !== 'none' ? ((await directory(c, 'accountFor', caller.userId, id))?.id ?? null) : null;
   const stub = c.env.DOCS.get(c.env.DOCS.idFromName(id));
-  return stub.handle(c.req.raw, caller, id);
+  return stub.handle(c.req.raw, { ...caller, accountId }, id);
 });

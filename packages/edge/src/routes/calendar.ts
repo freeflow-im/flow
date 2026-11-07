@@ -2,14 +2,13 @@
 // request goes to their own Calendar object (src/calendar/object.ts). Answered here: the provider presets, and Google's
 // OAuth start and callback (the callback has no session: the sealed state names the person). Each
 // request logs one timing line here, not in the object (as Mail's: a line logged in an object reaches `wrangler tail` late).
-import { Hono } from 'hono';
-import { getCookie } from 'hono/cookie';
+import { Hono, type Context } from 'hono';
 import type { Calendar, GoogleGrant } from '../calendar/object';
 import { consentUrl, exchangeCode, openState, returnUrl, sealState, type GoogleClient, type Tokens } from '../calendar/google';
 import { TIMING_HEADER, providerFor, timingLine } from '../calendar/rules';
 import { googleProfile } from '../oauth';
 import { ApiError, unauthorized } from '../errors';
-import { directory, type AuthEnv } from './auth';
+import { resolveAppCaller, resolveCaller, type AuthEnv } from './auth';
 
 export interface CalendarRouteEnv extends AuthEnv {
   CALENDAR: DurableObjectNamespace<Calendar>;
@@ -22,16 +21,14 @@ export interface CalendarRouteEnv extends AuthEnv {
 
 export const calendarRoutes = new Hono<{ Bindings: CalendarRouteEnv }>();
 
-async function userId(c: { env: CalendarRouteEnv; req: { header(n: string): string | undefined } }, cookie: string | undefined): Promise<string> {
-  const header = c.req.header('authorization');
-  const token = (header?.startsWith('Bearer ') ? header.slice(7).trim() : cookie) || null;
-  if (!token) throw unauthorized('missing bearer token');
-  const { user } = await directory(c, 'authenticate', token);
-  return user.id;
+async function userId(c: Context<{ Bindings: CalendarRouteEnv }>): Promise<string> {
+  const who = await resolveCaller(c);
+  if (!who.user) throw unauthorized('missing bearer token');
+  return who.user.id;
 }
 
 calendarRoutes.get('/v1/calendar/providers', async (c) => {
-  await userId(c, getCookie(c, 'sid'));
+  await userId(c);
   c.header('Cache-Control', 'no-store');
   return c.json(providerFor(c.req.query('email') ?? ''));
 });
@@ -43,7 +40,7 @@ const withParam = (to: string, key: string, value: string) => { const u = new UR
 /** `GET /v1/calendar/google/start?return=<url>&email=` → `{ url }`: Google's consent page, with the sealed state. */
 calendarRoutes.get('/v1/calendar/google/start', async (c) => {
   const started = Date.now();
-  const id = await userId(c, getCookie(c, 'sid'));
+  const id = await userId(c);
   const client = googleClient(c.env);
   if (!client) throw new ApiError(503, 'google_disabled', 'Google Calendar is not configured on this server');
   const returnTo = returnUrl(c.req.query('return'), c.env.WEB_URL_BASE, new URL(c.req.url).origin, c.env.CALENDAR_ALLOW_INSECURE === '1');
@@ -98,8 +95,9 @@ calendarRoutes.all('/v1/calendar/*', async (c) => {
   const start = Date.now();
   let status = 500, timing: string | null = null;
   try {
-    const id = await userId(c, getCookie(c, 'sid'));
-    const res = await c.env.CALENDAR.get(c.env.CALENDAR.idFromName(id)).handle(c.req.raw, id);
+    // Still keyed by the person; the context (with the account) rides along for the per-account objects (platform.md §3.6).
+    const who = await resolveAppCaller(c);
+    const res = await c.env.CALENDAR.get(c.env.CALENDAR.idFromName(who.user.id)).handle(c.req.raw, who);
     status = res.status;
     timing = res.headers.get(TIMING_HEADER);
     const out = new Response(res.body, res);

@@ -7,7 +7,8 @@
 //
 // Only hashes of codes and tokens are stored. Times are milliseconds since the epoch, as in the rest of the directory.
 import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto';
-import type { Sql } from './core';
+import { accountGate, type Sql } from './core';
+import type { AccountState } from '@flow/shared';
 
 /** Docs' files (read, and change), the person's own mail (read, organise and draft, and send), and their calendars (read, and change). */
 export const MCP_SCOPES = ['files:read', 'files:write', 'mail:read', 'mail:write', 'mail:send', 'calendar:read', 'calendar:write'] as const;
@@ -104,8 +105,10 @@ export interface ConsentInfo {
   preselect: string | null;
 }
 
-export interface McpCaller { userId: string; email: string; orgId: string; scope: string }
-export type McpAuth = { ok: true; caller: McpCaller } | { ok: false; reason: string; description: string };
+/** `accountId`: the grant's account, the person's in `orgId` (platform.md §3.6); null for one made before accounts. */
+export interface McpCaller { userId: string; email: string; orgId: string; accountId: string | null; scope: string }
+/** A failure is a 401 unless it carries a status (403 for an inactive account). */
+export type McpAuth = { ok: true; caller: McpCaller } | { ok: false; reason: string; description: string; status?: number };
 
 export interface McpConnection {
   id: string;
@@ -533,7 +536,10 @@ export class McpOAuth {
     const email = this.emailOf(userId);
     if (email === null) return { ok: false, reason: 'no_account', description: 'The account this token was issued to no longer exists.' };
     if (!this.isMember(userId, orgId)) return { ok: false, reason: 'not_a_member', description: 'You are no longer a member of the organization this agent was allowed to use. Sign in again and choose an organization.' };
-    return { ok: true, caller: { userId, email, orgId, scope: row.scope as string } };
+    const account = this.one('SELECT id, state FROM accounts WHERE user_id = ? AND organization_id = ?', userId, orgId);
+    const refused = accountGate(account ? { state: account.state as AccountState } : null);
+    if (refused) return { ok: false, reason: refused.code, description: refused.message, status: refused.statusCode };
+    return { ok: true, caller: { userId, email, orgId, accountId: (account?.id as string | undefined) ?? null, scope: row.scope as string } };
   }
 
   // --- Connections (Docs' Settings) --------------------------------------------------------------
