@@ -1254,6 +1254,7 @@ export function UserCard({ userId, onClose }: { userId: string; onClose: () => v
   const memberMap = useMemberMap(sel.workspaceId);
   const [user, setUser] = useState<UserDTO | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   // Agents carry a human sponsor; the id lives on the workspace roster, not the
   // /v1/users payload, so resolve name + avatar from the member map (ui_nits).
@@ -1363,6 +1364,15 @@ export function UserCard({ userId, onClose }: { userId: string; onClose: () => v
               <button data-testid="user-card-message"
                 className="rounded bg-accent px-4 py-1.5 text-sm font-semibold text-white"
                 onClick={() => void message()}>Message</button>
+            )}
+            {/* Phase 5.4: an agent reads and answers mail at its address; copied rather than a mailto: link,
+                which would open the system's mail app instead of FreeFlow Mail. */}
+            {user.isAgent && memberMap[userId]?.address && (
+              <button data-testid="user-card-copy-address" title="Email this agent at its address"
+                className="rounded border border-hairline px-4 py-1.5 text-sm"
+                onClick={() => void navigator.clipboard.writeText(memberMap[userId]!.address!).then(() => setCopied(true), () => {})}>
+                {copied ? 'Copied' : 'Copy email address'}
+              </button>
             )}
             {/* Never on your own profile: you are already in your workspaces. */}
             {userId !== auth.user.id && (

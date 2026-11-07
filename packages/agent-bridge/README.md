@@ -143,6 +143,7 @@ onboarding.
 | `agentMentionChainLimit` | 4× `agentChainLimit` | the breaker's limit for agent messages that explicitly `<@mention>` this agent — deliberate hand-offs keep landing past `agentChainLimit` until this higher count, so a pipeline flows while a real mention ping-pong still gets cut. 0 = same as `agentChainLimit`; never lower than it |
 | `progress` | `thinking` | `thinking` \| `typing` \| `silent` |
 | `relayText` | true | relay the agent's interim text into the conversation as it works (`thinking` mode only); it grows one message by editing rather than posting per chunk |
+| `mail.fromOutside` | `ignore` | mail to the agent's mailbox from a member of the organization starts a turn in the DM with them (with the sponsor, for an agent's mail); mail from anyone else is logged and ignored, or with `wake` starts a turn in the sponsor's DM |
 | `logFile` | `<config>.log` next to the config | daemon log file (rotates once at 5 MB); JSON `null` disables |
 | `voice.enabled` | true | answer DM Huddle rings as the agent; set false to decline with an explanation |
 | `voice.sttModel` | `deepgram/flux-general-en` | LiveKit Inference speech-to-text model; `FLOW_VOICE_STT_MODEL` overrides it |

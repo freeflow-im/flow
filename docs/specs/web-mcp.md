@@ -113,6 +113,12 @@ object through the Worker's `MAIL` binding (`Docs.mailOf`), over its HTTP API (`
   `SHOWN_RESULTS` (`create_mail_draft`, `save_mail_attachment_to_docs`), so the chat shows **Open draft** (Compose with the
   draft) and **Open in Docs**; a draft made refreshes Mail's lists. The panel reuses Docs' protocol, stream reader
   (`client/src/agent/stream.ts`), tool labels and `ChatMarkdown` from Docs' sources (`src/lib/docsAgent.ts`).
+- **The bridge's `flow` MCP** (0.37.8, platform phase 5.4) has `list_mail` `{ folder?, limit?, unread_only? }` and these
+  arguments' `search_mail` `{ query, folder?, limit? }`, `read_mail`, `send_mail` `{ to?, cc?, subject?, body, reply_to_id? }`,
+  `move_mail` and `mark_mail`, calling `/v1/mail/*` as the agent with `?workspace=` on its hosted mailbox
+  (`packages/agent-bridge/src/mail-tools.ts`; no hosted account → "no mailbox yet", not an error). `mail.received` from a
+  member of the organization starts a turn in the DM with them (the sponsor's, for an agent's mail), naming the message id;
+  outside mail is ignored unless `agent.json` has `mail.fromOutside: "wake"`.
 - Tests: `src/imap/mailTools.test.ts` (ids, scope gating, the tools against a fake Mail object), `mailText.test.ts`
   (HTML to text, Markdown, reply and forward, a draft's MIME), `mailMcp.test.ts` (`tools/list` per scope set through
   `handleMcp`), `assistantMail.test.ts`, and `test/e2e-mail-mcp.mjs` against GreenMail (its header says how).

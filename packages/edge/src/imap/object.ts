@@ -1520,7 +1520,9 @@ export class Mail extends DurableObject<MailEnv> {
       const { uids, from } = top > 1 ? await this.uidsBelow(c, top, cap) : { uids: ((await c.search({ all: true }, { uid: true })) || []).sort((a, b) => b - a), from: 1 };
       const take = uids.slice(0, cap);
       if (!take.length) return 0;
-      await this.cacheFetch(r, c, folder, validity, take, now);
+      const { summaries } = await this.cacheFetch(r, c, folder, validity, take, now);
+      // A folder synced before while empty (a new mailbox, phase 5.4): what is in it now arrived since, so it is new mail.
+      if (state.syncedAt > 0 && folder.toUpperCase() === INBOX) await this.publishReceived(r, folder, summaries);
       this.cache.setMarks(r.id, folder, { high: take[0], low: take.length < uids.length ? take[take.length - 1] : from });
       return take.length;
     }

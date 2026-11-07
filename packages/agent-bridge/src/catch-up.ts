@@ -7,16 +7,17 @@
 // Wake jobs (phase 2.4) arrive as `agent.job` events on the agent's own account: the subscription catches up on them too,
 // and a second one, `bridge-jobs:<agent id>` with `socket` delivery, pokes the socket when one comes while connected.
 // Job ids taken are remembered in the same state file, so a job is run once. Invitations (phase 4.2) come the same way:
-// `calendar.invited` on the agent's own account, in both subscriptions, each event id answered once (state file too).
+// `calendar.invited` on the agent's own account, in both subscriptions, each event id answered once (state file too), and
+// so does mail (phase 5.4): `mail.received` on the agent's mailbox, each message id taken once.
 import fs from 'node:fs';
 import path from 'node:path';
 import type { DeliveryMode, Event, EventFilter, PlatformEvent, SubscriptionDTO } from '@flow/shared';
 import type { FlowApi } from './api.js';
 import { socketEventOf } from './gateway.js';
 
-export const CATCH_UP_TYPES = ['chat.message.created', 'chat.thread.reply', 'chat.reaction.added', 'agent.job', 'calendar.invited'];
+export const CATCH_UP_TYPES = ['chat.message.created', 'chat.thread.reply', 'chat.reaction.added', 'agent.job', 'calendar.invited', 'mail.received'];
 /** The events addressed to the agent's account alone that ask it for a turn: the job subscription's, and what `onAccount` gets. */
-export const ACCOUNT_TYPES = ['agent.job', 'calendar.invited'];
+export const ACCOUNT_TYPES = ['agent.job', 'calendar.invited', 'mail.received'];
 /** How many answered message ids are remembered. */
 export const HANDLED_MAX = 500;
 /** A bound on one catch-up's pages, so a server that never runs dry cannot hold the start-up forever. */
@@ -29,7 +30,7 @@ export const jobsSubscriptionName = (agentId: string): string => `bridge-jobs:${
 
 export interface SubscriptionSpec { name: string; filter: EventFilter; delivery: DeliveryMode }
 const mainSpec = (agentId: string): SubscriptionSpec => ({ name: subscriptionName(agentId), filter: { types: CATCH_UP_TYPES }, delivery: 'pull' });
-/** The live path for jobs and invitations: a poke on the socket when an `agent.job` or `calendar.invited` for this account comes. */
+/** The live path for jobs, invitations and mail: a poke on the socket when one of ACCOUNT_TYPES for this account comes. */
 export const jobsSpec = (agentId: string): SubscriptionSpec => ({ name: jobsSubscriptionName(agentId), filter: { types: ACCOUNT_TYPES, self: true }, delivery: 'socket' });
 
 /**

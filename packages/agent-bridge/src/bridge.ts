@@ -38,9 +38,15 @@ import { currentVersion, isOutdated, latestPublishedVersion } from './version.js
 import { HuddleVoiceManager } from './huddle-voice.js';
 import { CATCH_UP_TYPES, catchUp, ensureSubscription, HandledMessages, jobsSpec, subscriptionName } from './catch-up.js';
 import { invitationPrompt } from './calendar-tools.js';
+import { mailPrompt, type MailReceivedEventData } from './mail-tools.js';
 
 /** How often the socket's latest cursor is acked to the bridge's subscription. */
 const CURSOR_ACK_MS = 30_000;
+/**
+ * How often the bridge looks at its mailbox's accounts (phase 5.4). Any request keeps the Mail object syncing (every 5
+ * minutes within an hour of one, none after a day without), and only a sync publishes `mail.received`.
+ */
+const MAIL_TOUCH_MS = 30 * 60_000;
 /** A wake job's lease is renewed this often while its turn runs (the server's lease is 10 minutes). */
 export const JOB_EXTEND_MS = 5 * 60_000;
 /** A job whose turn never got to run (a `/reset` dropped it, say) is reported failed after this long. */
@@ -231,6 +237,10 @@ export class AgentBridge {
   /** Invitations answered (phase 4.2), by event id, across restarts: each `calendar.invited` starts one turn. */
   private handledInvitations: HandledMessages;
   private readonly takingInvitations = new Set<string>();
+  /** Mail taken (phase 5.4), by message id, across restarts: each `mail.received` starts at most one turn. */
+  private handledMail: HandledMessages;
+  private readonly takingMail = new Set<string>();
+  private mailTimer: NodeJS.Timeout | null = null;
   /** Jobs whose ack is in flight, so two copies of one `agent.job` arriving together are taken once. */
   private readonly takingJobs = new Set<string>();
   /** The `bridge-jobs:` socket subscription, whose poke means an `agent.job` came; one read at a time. */
@@ -248,6 +258,7 @@ export class AgentBridge {
     this.handled = new HandledMessages(cfg.stateFile ?? null, (m) => this.log(m));
     this.handledJobs = new HandledMessages(cfg.stateFile ?? null, (m) => this.log(m), undefined, 'handledJobIds');
     this.handledInvitations = new HandledMessages(cfg.stateFile ?? null, (m) => this.log(m), undefined, 'handledInvitationIds');
+    this.handledMail = new HandledMessages(cfg.stateFile ?? null, (m) => this.log(m), undefined, 'handledMailIds');
     this.sessions = new SessionManager({
       cfg: cfg.runtime,
       idleMs: cfg.runtime.sessionIdleSec * 1000,
@@ -345,6 +356,9 @@ export class AgentBridge {
       this.cursorTimer.unref();
     }
     this.startTaskIpc();
+    void this.touchMailbox(true);
+    this.mailTimer = setInterval(() => void this.touchMailbox(false), MAIL_TOUCH_MS);
+    this.mailTimer.unref();
     // Best-effort staleness check — never blocks startup or crashes on failure.
     void this.checkVersion();
     void this.reportRelaunch();
@@ -404,7 +418,7 @@ export class AgentBridge {
         const fresh = await this.api.createSubscription(this.workspace.id, spec);
         await this.api.deleteSubscription(this.workspace.id, sub.id).catch((err: Error) => this.log(`old job subscription not deleted: ${err.message}`));
         this.jobsSub = { id: fresh.id };
-        this.log('job subscription renewed with calendar.invited');
+        this.log('job subscription renewed with today\'s types');
       }
     } catch (err) {
       this.log(`no job subscription (${(err as Error).message}) — wake jobs arrive with the next catch-up or delivery`);
@@ -431,9 +445,10 @@ export class AgentBridge {
     }
   }
 
-  /** An event on the agent's own account (catch-up.ts ACCOUNT_TYPES): a wake job, or an invitation. */
+  /** An event on the agent's own account (catch-up.ts ACCOUNT_TYPES): a wake job, an invitation, or mail. */
   async handleAccountEvent(e: PlatformEvent): Promise<void> {
     if (e.type === 'calendar.invited') return this.handleInvitation(e);
+    if (e.type === 'mail.received') return this.handleMail(e);
     if (e.type === 'agent.job') return this.handleJob(e);
   }
 
@@ -474,6 +489,72 @@ export class AgentBridge {
       this.log(`invitation: not started (${(err as Error).message}) — not answered`);
     } finally {
       this.takingInvitations.delete(eventId);
+    }
+  }
+
+  /** The mailbox's accounts, asked for so the Mail object keeps syncing (MAIL_TOUCH_MS); at start, its address logged. */
+  private async touchMailbox(first: boolean): Promise<void> {
+    if (this.departed) return;
+    try {
+      const { accounts } = await this.api.mail<{ accounts: { email: string; kind?: string }[] }>('GET', 'accounts', this.workspace.id);
+      const box = accounts.find((a) => a.kind === 'hosted');
+      if (first) this.log(box ? `mailbox ${box.email}` : 'no mailbox in this organization (the mail tools say so)');
+    } catch (err) {
+      if (first) this.log(`mailbox not checked: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * A `mail.received` event (phase 5.4): new mail in the agent's mailbox. From a member of the organization (by address),
+   * a turn in the DM with them, or with the agent's sponsor when the sender is an agent, asking it to read the message
+   * (`read_mail`) and act on it. From anyone else, logged and left, unless `mail.fromOutside` is `wake` (then the sponsor's
+   * DM). Each message id once, across restarts (state.json); mail it sent itself, and another organization's, are passed over.
+   */
+  async handleMail(e: PlatformEvent): Promise<void> {
+    const d = e.data as MailReceivedEventData | null;
+    if (!d || !d.accountId || !d.uid || (e.organizationId && e.organizationId !== this.workspace.id)) return;
+    const id = e.ref?.id ?? `${d.accountId}:${d.folder}:${d.uid}`;
+    if (this.handledMail.has(id) || this.takingMail.has(id)) {
+      this.log('mail already taken — skipping the copy');
+      return;
+    }
+    this.takingMail.add(id);
+    try {
+      const from = d.from?.address?.toLowerCase() ?? '';
+      const mine = [addressIn(this.me, this.workspace.id), this.members.get(this.me.id)?.address].filter(Boolean).map((a) => a!.toLowerCase());
+      if (!from || mine.includes(from)) {
+        this.log(`mail ${id}: ${from ? 'from this agent itself' : 'with no sender'} — not answered`);
+        this.handledMail.add(id);
+        return;
+      }
+      const find = () => [...this.members.values()].find((m) => m.userId !== this.me.id && [m.address, m.email].some((a) => !!a && a.toLowerCase() === from));
+      let sender = find();
+      if (!sender) {
+        await this.refreshDirectory().catch((err: Error) => this.log(`directory refresh failed: ${err.message}`));
+        sender = find();
+      }
+      const sponsor = this.members.get(this.me.id)?.sponsorId ?? null;
+      if (!sender && this.cfg.mail?.fromOutside !== 'wake') {
+        this.log(`mail ${id} from ${from}, not a member — ignored (mail.fromOutside: "wake" in agent.json answers it)`);
+        this.handledMail.add(id);
+        return;
+      }
+      const who = sender && !sender.isAgent ? sender.userId : sponsor;
+      if (!who) {
+        this.log(`mail ${id}: no sponsor to ask in a DM — not answered`);
+        this.handledMail.add(id);
+        return;
+      }
+      const dm = await this.api.createDm(this.workspace.id, [who]);
+      this.channels.set(dm.id, { ...dm, isMember: true });
+      this.handledMail.add(id);
+      this.log(`mail ${id}: a turn in the DM with the ${who === sender?.userId ? 'sender' : 'sponsor'}`);
+      const name = sender?.displayName ?? (d.from?.name || null);
+      this.enqueue(this.taskMessage(`mail-${createHash('sha256').update(id).digest('hex').slice(0, 16)}`, dm.id, who, mailPrompt(d, id, name)));
+    } catch (err) {
+      this.log(`mail ${id}: not started (${(err as Error).message}) — not answered`);
+    } finally {
+      this.takingMail.delete(id);
     }
   }
 
@@ -765,6 +846,8 @@ export class AgentBridge {
     this.socket?.close();
     if (this.cursorTimer) clearInterval(this.cursorTimer);
     this.cursorTimer = null;
+    if (this.mailTimer) clearInterval(this.mailTimer);
+    this.mailTimer = null;
     const acked = this.ackCursor();
     this.ipcServer?.close();
     this.ipcServer = null;

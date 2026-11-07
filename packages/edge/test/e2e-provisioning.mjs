@@ -55,6 +55,30 @@ t('Bob sends a mail to Ann from his mailbox',r.s===200&&r.j.ok,r.s+' '+JSON.stri
 t0=Date.now();let got;while(!got&&Date.now()-t0<20000){r=await api(A.token,'GET',`/v1/mail/accounts/${annBox?.id}/messages?folder=INBOX&limit=20`);got=r.j.messages?.find(m=>m.subject===SUBJECT);if(!got)await sleep(500);}
 t('Ann\'s inbox lists it within 20 s',!!got&&got.from?.address===bob.a?.address,`${Date.now()-t0} ms ${JSON.stringify(got??r.j).slice(0,140)}`);
 
+// Agent mailboxes (phase 5.4): the agent reads its mailbox as the bridge does (?workspace=), is told of new mail on its
+// own account, and replies as send_mail does.
+r=await api(AGT,'GET',`/v1/mail/accounts?workspace=${W}`);const botBox=r.j.accounts?.find(a=>a.kind==='hosted');
+t('the agent lists its hosted account, as the bridge asks',r.s===200&&botBox?.email===bot.a?.address,r.s+' '+JSON.stringify(r.j).slice(0,140));
+const BP=`/v1/mail/accounts/${botBox?.id}`;
+r=await api(AGT,'POST',`/v1/events/subscriptions?workspace=${W}`,{name:`mail-${tag}`,filter:{types:['mail.received'],self:true},delivery:'pull'});const SUB=r.j.subscription?.id;
+t('the agent subscribes to mail.received on its own account',r.s===201&&!!SUB,r.s+' '+JSON.stringify(r.j).slice(0,120));
+// One sync of the empty mailbox (the alarm, which the bridge's look at its accounts keeps running): what comes after is new mail.
+r=await api(AGT,'GET',`${BP}/messages?folder=INBOX&limit=5&workspace=${W}`,undefined,{'x-mail-test-alarm':'1'});t('its inbox starts empty',r.s===200&&r.j.messages?.length===0,r.s+' '+JSON.stringify(r.j).slice(0,120));
+const ASK=`For the agent ${tag}`;
+r=await api(A.token,'POST',`/v1/mail/accounts/${annBox?.id}/send`,{to:[{name:'Provbot',address:bot.a?.address}],subject:ASK,text:'Can you send me the report?'});
+t('Ann mails the agent from her mailbox',r.s===200&&r.j.ok,r.s+' '+JSON.stringify(r.j).slice(0,140));
+t0=Date.now();let ev;while(!ev&&Date.now()-t0<20000){await api(AGT,'GET',`${BP}/messages?folder=INBOX&limit=5&workspace=${W}`,undefined,{'x-mail-test-alarm':'1'});r=await api(AGT,'GET',`/v1/events?workspace=${W}&since=0&limit=100&types=mail.received`);ev=r.j.events?.find(e=>e.data?.subject===ASK);if(!ev)await sleep(500);}
+t('within 20 s the agent\'s one-shot read shows mail.received, naming the message',!!ev&&ev.data.accountId===botBox?.id&&ev.ref?.id===`${botBox?.id}:INBOX:${ev.data.uid}`&&ev.data.from?.address===ann?.address,`${Date.now()-t0} ms ${JSON.stringify(ev??r.j).slice(0,140)}`);
+r=await api(AGT,'GET',`/v1/events/subscriptions/${SUB}?workspace=${W}&wait=0`);t('its account is the audience: the event is in its self subscription',r.s===200&&r.j.events?.some(e=>e.data?.subject===ASK),r.s+' '+JSON.stringify(r.j).slice(0,120));
+r=await api(A.token,'GET',`/v1/events?workspace=${W}&since=0&limit=100&types=mail.received`);t('and not in Ann\'s read',r.s===200&&!r.j.events?.some(e=>e.data?.subject===ASK),JSON.stringify(r.j).slice(0,120));
+r=await api(AGT,'GET',`${BP}/messages?folder=INBOX&limit=10&workspace=${W}`);const asked=r.j.messages?.find(m=>m.subject===ASK);
+t('the agent\'s inbox lists Ann\'s mail',!!asked&&asked.from?.address===ann?.address&&ev?.data.uid===asked.uid,JSON.stringify(r.j).slice(0,140));
+r=await api(AGT,'GET',`${BP}/messages/${asked?.uid}?folder=INBOX&workspace=${W}`);const askedId=r.j.message?.messageId;
+r=await api(AGT,'POST',`${BP}/send?workspace=${W}`,{to:[{name:'Ann',address:ann?.address}],subject:`Re: ${ASK}`,html:'<p>Here it is.</p>',text:'Here it is.',...(askedId?{inReplyTo:askedId,references:[askedId]}:{})});
+t('the agent replies from its mailbox',r.s===200&&r.j.ok&&!!askedId,r.s+' '+JSON.stringify(r.j).slice(0,140));
+t0=Date.now();got=null;while(!got&&Date.now()-t0<20000){r=await api(A.token,'GET',`/v1/mail/accounts/${annBox?.id}/messages?folder=INBOX&limit=20`);got=r.j.messages?.find(m=>m.subject===`Re: ${ASK}`);if(!got)await sleep(500);}
+t('Ann\'s inbox lists the agent\'s reply',!!got&&got.from?.address===bot.a?.address,`${Date.now()-t0} ms ${JSON.stringify(got??r.j).slice(0,140)}`);
+
 r=await api(Bo.token,'POST',`/v1/workspaces/${W}/provision`,{});t('a member cannot send everyone to be provisioned',r.s===403,r.s);
 r=await api(A.token,'POST',`/v1/workspaces/${W}/provision`,{});t('everyone has a mailbox: provision queues 0',r.s===200&&r.j.queued===0,r.s+' '+JSON.stringify(r.j));
 

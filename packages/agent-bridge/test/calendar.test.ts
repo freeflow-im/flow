@@ -166,7 +166,7 @@ describe('an invitation', () => {
 
   it('comes with the catch-up and the job subscription; an older job subscription is renewed with calendar.invited', async () => {
     expect(CATCH_UP_TYPES).toContain('calendar.invited');
-    expect(ACCOUNT_TYPES).toEqual(['agent.job', 'calendar.invited']);
+    expect(ACCOUNT_TYPES).toContain('calendar.invited');
     server.subs = [
       { id: 'sub-main', name: `bridge:${AGENT}`, consumer: 'acct', owner: 'acct', filter: { types: CATCH_UP_TYPES }, delivery: 'pull', cursor: 20 },
       { id: 'sub-jobs', name: `bridge-jobs:${AGENT}`, consumer: 'acct', owner: 'acct', filter: { types: ['agent.job'], self: true }, delivery: 'socket', cursor: 20 },
