@@ -1,0 +1,447 @@
+<title>FreeFlow Platform Layers</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* Layout: one reading column; two full-width figures with captions; a short note per layer under figure 1. */
+  :root {
+    --bg: #fbfbfd;
+    --fg: #1d2433;
+    --muted: #5b6577;
+    --line: #c9cfdb;
+    --band: #eef1f7;
+    --accent: #1a73e8;
+    --accent-soft: #dce8fb;
+    --font-body: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+    --font-mono: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141821; --fg: #e6e9f0; --muted: #9aa3b5; --line: #3a4252; --band: #1c2130;
+      --accent: #5b9cf6; --accent-soft: #1f3356; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #141821; --fg: #e6e9f0; --muted: #9aa3b5; --line: #3a4252; --band: #1c2130;
+    --accent: #5b9cf6; --accent-soft: #1f3356; color-scheme: dark;
+  }
+  body {
+    background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.5;
+    padding-block: 32px 64px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  main { max-width: 980px; margin: 0 auto; display: grid; gap: 28px; }
+  h1 { font-size: 26px; font-weight: 600; margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+  h2 { font-size: 18px; font-weight: 600; margin: 0; }
+  p { margin: 0; max-width: 68ch; }
+  .lede { color: var(--muted); }
+  .eyebrow { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+  figure { margin: 0; display: grid; gap: 10px; min-width: 0; }
+  .scroll { overflow-x: auto; }
+  svg { display: block; max-width: 100%; height: auto; min-width: 640px; font-family: var(--font-body); }
+  figcaption { font-size: 13px; color: var(--muted); max-width: 72ch; }
+  .layers { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px 28px; }
+  .layer { display: grid; gap: 4px; min-width: 0; }
+  .layer .n { font-family: var(--font-mono); font-size: 12px; color: var(--accent); }
+  .layer h3 { margin: 0; font-size: 15px; font-weight: 600; }
+  .layer p { font-size: 14px; color: var(--muted); }
+  .rule { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
+  code { font-family: var(--font-mono); font-size: 0.92em; }
+</style>
+
+<main>
+  <header style="display:grid;gap:8px">
+    <div class="eyebrow">docs/specs/platform.md · 2026-11-06</div>
+    <h1>FreeFlow platform layers</h1>
+    <p class="lede">Identity, accounts and the kernel serve at the bottom. Owned and shared objects sit on them, and the editors sit on top. Each layer serves the one above it and knows nothing about it.</p>
+  </header>
+
+  <figure>
+    <div class="scroll">
+    <svg viewBox="0 0 980 700" role="img" aria-label="Five layers from bottom to top: identity, tenancy, kernel services, objects, apps. Arrows between layers say what each hands upward.">
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+        </marker>
+        <marker id="arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#1a73e8"/>
+        </marker>
+      </defs>
+      <g fill="currentColor" font-size="12">
+
+        <!-- Band 5: Apps (y 16..116) -->
+        <rect x="160" y="16" width="800" height="100" rx="6" fill="currentColor" fill-opacity="0.04" stroke="currentColor" stroke-opacity="0.25"/>
+        <text x="150" y="36" text-anchor="end" font-weight="600" font-size="13">5 · Apps</text>
+        <text x="150" y="54" text-anchor="end" font-size="11" fill-opacity="0.7">the editors</text>
+        <g>
+          <rect x="166" y="38" width="118" height="60" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+          <text x="225" y="62" text-anchor="middle" font-weight="500">Chat</text>
+          <text x="225" y="80" text-anchor="middle" font-size="11" fill-opacity="0.7">channels</text>
+          <rect x="300" y="38" width="118" height="60" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+          <text x="359" y="62" text-anchor="middle" font-weight="500">Docs</text>
+          <text x="359" y="80" text-anchor="middle" font-size="11" fill-opacity="0.7">files</text>
+          <rect x="434" y="38" width="118" height="60" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+          <text x="493" y="62" text-anchor="middle" font-weight="500">Mail</text>
+          <text x="493" y="80" text-anchor="middle" font-size="11" fill-opacity="0.7">mailbox at a provider</text>
+          <rect x="568" y="38" width="118" height="60" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+          <text x="627" y="62" text-anchor="middle" font-weight="500">Calendar</text>
+          <text x="627" y="80" text-anchor="middle" font-size="11" fill-opacity="0.7">calendars, ours</text>
+          <rect x="702" y="38" width="118" height="60" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+          <text x="761" y="62" text-anchor="middle" font-weight="500">Mini apps</text>
+          <text x="761" y="80" text-anchor="middle" font-size="11" fill-opacity="0.7">external, by token</text>
+          <rect x="836" y="38" width="118" height="60" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+          <text x="895" y="62" text-anchor="middle" font-weight="500">Agent bridge</text>
+          <text x="895" y="80" text-anchor="middle" font-size="11" fill-opacity="0.7">agent runtime</text>
+        </g>
+
+        <!-- arrow Objects -> Apps (y 152 up to 116) -->
+        <line x1="560" y1="152" x2="560" y2="118" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow)"/>
+        <text x="572" y="138" font-size="11">each app owns its objects in its own Durable Object; the manifest wires it in</text>
+
+        <!-- Band 4: Objects (y 152..252) -->
+        <rect x="160" y="152" width="800" height="100" rx="6" fill="currentColor" fill-opacity="0.04" stroke="currentColor" stroke-opacity="0.25"/>
+        <text x="150" y="172" text-anchor="end" font-weight="600" font-size="13">4 · Objects</text>
+        <text x="150" y="190" text-anchor="end" font-size="11" fill-opacity="0.7">owned and shared</text>
+        <g>
+          <rect x="166" y="174" width="170" height="60" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+          <text x="251" y="196" text-anchor="middle" font-weight="500">Containers</text>
+          <text x="251" y="214" text-anchor="middle" font-size="11" fill-opacity="0.7">folder · calendar · channel</text>
+          <line x1="336" y1="204" x2="378" y2="204" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow)"/>
+          <text x="357" y="198" text-anchor="middle" font-size="10" fill-opacity="0.8">holds</text>
+          <rect x="380" y="174" width="170" height="60" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+          <text x="465" y="196" text-anchor="middle" font-weight="500">Objects</text>
+          <text x="465" y="214" text-anchor="middle" font-size="11" fill-opacity="0.7">file · event · artifact</text>
+          <rect x="594" y="174" width="200" height="60" rx="4" fill="#1a73e8" fill-opacity="0.08" stroke="#1a73e8" stroke-width="1.5"/>
+          <text x="694" y="196" text-anchor="middle" font-weight="500">Grants</text>
+          <text x="694" y="214" text-anchor="middle" font-size="11" fill-opacity="0.8">(account | channel | org | link) × role</text>
+          <rect x="818" y="174" width="136" height="60" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+          <text x="886" y="196" text-anchor="middle" font-weight="500">Roles</text>
+          <text x="886" y="214" text-anchor="middle" font-size="11" fill-opacity="0.7">viewer · editor · manager · owner</text>
+        </g>
+
+        <!-- arrow Kernel -> Objects (y 288 up to 254) -->
+        <line x1="560" y1="288" x2="560" y2="254" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow)"/>
+        <text x="572" y="274" font-size="11">grants are checked against the caller context, inside the app's object; changes go to the share index</text>
+
+        <!-- Band 3: Kernel (y 288..388) -->
+        <rect x="160" y="288" width="800" height="100" rx="6" fill="currentColor" fill-opacity="0.04" stroke="currentColor" stroke-opacity="0.25"/>
+        <text x="150" y="308" text-anchor="end" font-weight="600" font-size="13">3 · Kernel</text>
+        <text x="150" y="326" text-anchor="end" font-size="11" fill-opacity="0.7">used by all, owned by none</text>
+        <g>
+          <rect x="166" y="310" width="146" height="60" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+          <text x="239" y="332" text-anchor="middle" font-weight="500">Caller context</text>
+          <text x="239" y="350" text-anchor="middle" font-size="11" fill-opacity="0.7">account · role · channels</text>
+          <rect x="326" y="310" width="146" height="60" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+          <text x="399" y="332" text-anchor="middle" font-weight="500">Event bus</text>
+          <text x="399" y="350" text-anchor="middle" font-size="11" fill-opacity="0.7">a log per org · cursors · read any time</text>
+          <rect x="486" y="310" width="146" height="60" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+          <text x="559" y="332" text-anchor="middle" font-weight="500">Share index</text>
+          <text x="559" y="350" text-anchor="middle" font-size="11" fill-opacity="0.7">references · intents</text>
+          <rect x="646" y="310" width="146" height="60" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+          <text x="719" y="332" text-anchor="middle" font-weight="500">Tool registry</text>
+          <text x="719" y="350" text-anchor="middle" font-size="11" fill-opacity="0.7">/mcp · bridge · assistant</text>
+          <rect x="806" y="310" width="148" height="60" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+          <text x="880" y="332" text-anchor="middle" font-weight="500">Shell</text>
+          <text x="880" y="350" text-anchor="middle" font-size="11" fill-opacity="0.7">suite bar · pages</text>
+        </g>
+
+        <!-- arrow Tenancy -> Kernel (y 424 up to 390) -->
+        <line x1="560" y1="424" x2="560" y2="390" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow)"/>
+        <text x="572" y="410" font-size="11">the Worker resolves the caller once per request: account, role, channel ids</text>
+
+        <!-- Band 2: Tenancy (y 424..524) -->
+        <rect x="160" y="424" width="800" height="100" rx="6" fill="currentColor" fill-opacity="0.04" stroke="currentColor" stroke-opacity="0.25"/>
+        <text x="150" y="444" text-anchor="end" font-weight="600" font-size="13">2 · Tenancy</text>
+        <text x="150" y="462" text-anchor="end" font-size="11" fill-opacity="0.7">the organization owns these</text>
+        <g>
+          <rect x="166" y="446" width="330" height="60" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+          <text x="331" y="468" text-anchor="middle" font-weight="500">Organization</text>
+          <text x="331" y="486" text-anchor="middle" font-size="11" fill-opacity="0.7">owner · admins · members · policies · verified domains</text>
+          <line x1="496" y1="476" x2="558" y2="476" stroke="#1a73e8" stroke-width="1.5" marker-end="url(#arrow-accent)"/>
+          <text x="527" y="470" text-anchor="middle" font-size="10" fill="#1a73e8">issues</text>
+          <rect x="560" y="446" width="394" height="60" rx="4" fill="#1a73e8" fill-opacity="0.08" stroke="#1a73e8" stroke-width="1.5"/>
+          <text x="757" y="468" text-anchor="middle" font-weight="500">Account — one per principal per organization</text>
+          <text x="757" y="486" text-anchor="middle" font-size="11" fill-opacity="0.8">address@domain · role · provisioned mailbox · own calendars · state</text>
+        </g>
+
+        <!-- arrow Identity -> Tenancy (y 560 up to 526) -->
+        <line x1="560" y1="560" x2="560" y2="526" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow)"/>
+        <text x="572" y="546" font-size="11">a principal holds one account in each organization it belongs to; an agent only where its sponsor does</text>
+
+        <!-- Band 1: Identity (y 560..660) -->
+        <rect x="160" y="560" width="800" height="100" rx="6" fill="currentColor" fill-opacity="0.04" stroke="currentColor" stroke-opacity="0.25"/>
+        <text x="150" y="580" text-anchor="end" font-weight="600" font-size="13">1 · Identity</text>
+        <text x="150" y="598" text-anchor="end" font-size="11" fill-opacity="0.7">the Directory object</text>
+        <g>
+          <rect x="166" y="582" width="250" height="60" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+          <text x="291" y="604" text-anchor="middle" font-weight="500">Principal</text>
+          <text x="291" y="622" text-anchor="middle" font-size="11" fill-opacity="0.7">person · agent (sponsor: a person)</text>
+          <rect x="440" y="582" width="250" height="60" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+          <text x="565" y="604" text-anchor="middle" font-weight="500">Credentials</text>
+          <text x="565" y="622" text-anchor="middle" font-size="11" fill-opacity="0.7">password · Google SSO · agent token</text>
+          <rect x="714" y="582" width="240" height="60" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+          <text x="834" y="604" text-anchor="middle" font-weight="500">Sessions · MCP grants</text>
+          <text x="834" y="622" text-anchor="middle" font-size="11" fill-opacity="0.7">a grant acts as one account (delegation)</text>
+        </g>
+      </g>
+    </svg>
+    </div>
+    <figcaption>Figure 1. The five layers. The two blue boxes are the decisions this design turns on: the account, which separates a person's login from what an organization gives them, and grants, which give every app one sharing model.</figcaption>
+  </figure>
+
+  <section class="layers">
+    <div class="layer"><div class="n">1 · Identity</div><h3>Who is signing in</h3><p>A principal is a person or an agent and nothing more. A person signs in by password or Google. An agent signs in only by token and always has a person as sponsor. An MCP grant is a third way in: it acts as one of a person's accounts, limited by scopes.</p></div>
+    <div class="layer"><div class="n">2 · Tenancy</div><h3>What the organization gives a member</h3><p>Any person can create an organization and owns it. Each member, person or agent, gets one account: an address at the organization's domain, a hosted mailbox, calendars, a role. The organization keeps the account when the person leaves.</p></div>
+    <div class="layer"><div class="n">3 · Kernel</div><h3>Services every app uses</h3><p>The Worker resolves the caller once per request. The event bus is an append-only log per organization, apart from the sockets: every app publishes into it, and a subscription with a cursor reads what it missed at any time. The share index answers "shared with me". One tool registry serves <code>/mcp</code>, the bridge and the assistant. The shell reads app manifests.</p></div>
+    <div class="layer"><div class="n">4 · Objects</div><h3>Owned, then shared</h3><p>Every object has an owner and sits in a container. A grant names an account, a channel, the organization or a link, with one of four roles. Access inherits down the container chain. Grants are evaluated inside the app's own object, with no call out.</p></div>
+    <div class="layer"><div class="n">5 · Apps</div><h3>The editors</h3><p>Chat and Docs are one object per organization. Mail and Calendar are one object per account: Mail speaks IMAP and SMTP to a mailbox at the provider, Calendar is its own store and does its own scheduling. Each app is declared by a manifest. Mini apps and the agent bridge are apps too.</p></div>
+  </section>
+
+  <hr class="rule">
+
+  <figure>
+    <div class="eyebrow">One request, end to end</div>
+    <h2>Ann invites the team's agent to Thursday's review</h2>
+    <div class="scroll">
+    <svg viewBox="0 0 980 560" role="img" aria-label="Seven steps from Ann saving an event to the agent accepting it, each tagged with the layer it runs in.">
+      <defs>
+        <marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+        </marker>
+      </defs>
+      <g fill="currentColor" font-size="12">
+        <!-- step boxes: x=40 w=620 h=56, gap 18; tags at x=700 w=240 -->
+        <g>
+          <rect x="40" y="10" width="620" height="56" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+          <text x="56" y="32" font-weight="500">1 · Ann, in Calendar, adds builder@acme.com as an attendee and saves</text>
+          <text x="56" y="52" font-size="11" fill-opacity="0.7">an ordinary attendee line; nothing here knows it is an agent</text>
+          <rect x="700" y="10" width="240" height="56" rx="4" fill="currentColor" fill-opacity="0.05" stroke="none"/>
+          <text x="716" y="32" font-size="11" font-weight="500">5 · Apps</text>
+          <text x="716" y="52" font-size="11" fill-opacity="0.7">Calendar client</text>
+          <line x1="350" y1="66" x2="350" y2="82" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow2)"/>
+        </g>
+        <g>
+          <rect x="40" y="84" width="620" height="56" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+          <text x="56" y="106" font-weight="500">2 · The Worker resolves the caller</text>
+          <text x="56" y="126" font-size="11" fill-opacity="0.7">session → principal Ann → account ann@acme.com in Acme, role member, her channel ids</text>
+          <rect x="700" y="84" width="240" height="56" rx="4" fill="currentColor" fill-opacity="0.05" stroke="none"/>
+          <text x="716" y="106" font-size="11" font-weight="500">3 · Kernel</text>
+          <text x="716" y="126" font-size="11" fill-opacity="0.7">caller context, from the Directory</text>
+          <line x1="350" y1="140" x2="350" y2="156" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow2)"/>
+        </g>
+        <g>
+          <rect x="40" y="158" width="620" height="56" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+          <text x="56" y="180" font-weight="500">3 · Ann's Calendar object checks she owns the calendar and writes the event</text>
+          <text x="56" y="200" font-size="11" fill-opacity="0.7">CalDAV PUT with If-Match to the provider, then into its own SQLite</text>
+          <rect x="700" y="158" width="240" height="56" rx="4" fill="currentColor" fill-opacity="0.05" stroke="none"/>
+          <text x="716" y="180" font-size="11" font-weight="500">4 · Objects</text>
+          <text x="716" y="200" font-size="11" fill-opacity="0.7">Calendar object keyed by Ann's account</text>
+          <line x1="350" y1="214" x2="350" y2="230" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow2)"/>
+        </g>
+        <g>
+          <rect x="40" y="232" width="620" height="56" rx="4" fill="#1a73e8" fill-opacity="0.08" stroke="#1a73e8" stroke-width="1.5"/>
+          <text x="56" y="254" font-weight="500">4 · Ann's Calendar object delivers the invitation to Builder's Calendar object</text>
+          <text x="56" y="274" font-size="11" fill-opacity="0.8">the address resolves through the directory to Builder's account; both calendars are ours, so no mail is sent</text>
+          <rect x="700" y="232" width="240" height="56" rx="4" fill="currentColor" fill-opacity="0.05" stroke="none"/>
+          <text x="716" y="254" font-size="11" font-weight="500">4 · Objects + 1 · Identity</text>
+          <text x="716" y="274" font-size="11" fill-opacity="0.7">object-to-object iTIP; addresses table</text>
+          <line x1="350" y1="288" x2="350" y2="304" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow2)"/>
+        </g>
+        <g>
+          <rect x="40" y="306" width="620" height="56" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+          <text x="56" y="328" font-weight="500">5 · Builder's Calendar object stores the event as needs-action</text>
+          <text x="56" y="348" font-size="11" fill-opacity="0.7">then publishes calendar.invited into Acme's event log</text>
+          <rect x="700" y="306" width="240" height="56" rx="4" fill="currentColor" fill-opacity="0.05" stroke="none"/>
+          <text x="716" y="328" font-size="11" font-weight="500">3 · Kernel</text>
+          <text x="716" y="348" font-size="11" fill-opacity="0.7">event bus: appended to the log</text>
+          <line x1="350" y1="362" x2="350" y2="378" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow2)"/>
+        </g>
+        <g>
+          <rect x="40" y="380" width="620" height="56" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+          <text x="56" y="402" font-weight="500">6 · Builder's subscription matches; the bridge reads it, now or whenever it next connects</text>
+          <text x="56" y="422" font-size="11" fill-opacity="0.7">a durable cursor, read over HTTP and acked; for a person this step is a notification instead</text>
+          <rect x="700" y="380" width="240" height="56" rx="4" fill="currentColor" fill-opacity="0.05" stroke="none"/>
+          <text x="716" y="402" font-size="11" font-weight="500">3 · Kernel</text>
+          <text x="716" y="422" font-size="11" fill-opacity="0.7">event bus: subscription and cursor</text>
+          <line x1="350" y1="436" x2="350" y2="452" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow2)"/>
+        </g>
+        <g>
+          <rect x="40" y="454" width="620" height="56" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+          <text x="56" y="476" font-weight="500">7 · The agent reads the event with its own token and answers</text>
+          <text x="56" y="496" font-size="11" fill-opacity="0.7">get_event, then respond_to_event, as builder@acme.com; Ann's view shows "accepted"</text>
+          <rect x="700" y="454" width="240" height="56" rx="4" fill="currentColor" fill-opacity="0.05" stroke="none"/>
+          <text x="716" y="476" font-size="11" font-weight="500">1 · Identity</text>
+          <text x="716" y="496" font-size="11" fill-opacity="0.7">agent token → the agent's own account</text>
+        </g>
+        <text x="40" y="540" font-size="11" fill-opacity="0.7">Replace Builder with a person and only step 6 changes. Nothing in the path is agent-specific.</text>
+      </g>
+    </svg>
+    </div>
+    <figcaption>Figure 2. The step in blue is why calendars are the platform's own: scheduling between two accounts is a call between two of our objects, so an agent's calendar fills the same way a person's does. Mail stays with a hosted provider; only attendees outside the platform get an invitation by mail.</figcaption>
+  </figure>
+
+  <hr class="rule">
+
+  <figure>
+    <div class="eyebrow">Outside the platform</div>
+    <h2>Who talks to what beyond our objects</h2>
+    <div class="scroll">
+    <svg viewBox="0 0 980 380" role="img" aria-label="Our Org, Mail and Calendar objects on the left; the mail provider and Google on the right; labeled arrows for provisioning, IMAP and SMTP, connected or imported Google data, iMIP between Calendar and Mail, and iTIP between two Calendar objects.">
+      <defs>
+        <marker id="arrow3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+        </marker>
+      </defs>
+      <g fill="currentColor" font-size="12">
+        <text x="40" y="18" font-size="11" fill-opacity="0.7">Ours: Durable Objects on the Worker</text>
+        <text x="720" y="18" font-size="11" fill-opacity="0.7">Not ours</text>
+
+        <rect x="40" y="30" width="220" height="50" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+        <text x="150" y="50" text-anchor="middle" font-weight="500">Org object</text>
+        <text x="150" y="68" text-anchor="middle" font-size="11" fill-opacity="0.7">one per organization</text>
+
+        <rect x="40" y="120" width="220" height="50" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+        <text x="150" y="140" text-anchor="middle" font-weight="500">Mail object</text>
+        <text x="150" y="158" text-anchor="middle" font-size="11" fill-opacity="0.7">one per account; a cache, not a store</text>
+
+        <rect x="40" y="210" width="220" height="50" rx="4" fill="#1a73e8" fill-opacity="0.08" stroke="#1a73e8" stroke-width="1.5"/>
+        <text x="150" y="230" text-anchor="middle" font-weight="500">Calendar object</text>
+        <text x="150" y="248" text-anchor="middle" font-size="11" fill-opacity="0.8">one per account; the store; schedules itself</text>
+
+        <rect x="40" y="300" width="220" height="50" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+        <text x="150" y="320" text-anchor="middle" font-weight="500">Another account's Calendar object</text>
+        <text x="150" y="338" text-anchor="middle" font-size="11" fill-opacity="0.7">a person's or an agent's</text>
+
+        <rect x="720" y="30" width="220" height="140" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+        <text x="830" y="52" text-anchor="middle" font-weight="500">Mail provider (likely OpenSRS)</text>
+        <text x="830" y="72" text-anchor="middle" font-size="11" fill-opacity="0.7">one domain per organization</text>
+        <text x="830" y="90" text-anchor="middle" font-size="11" fill-opacity="0.7">one mailbox per account</text>
+        <text x="830" y="108" text-anchor="middle" font-size="11" fill-opacity="0.7">DKIM by API; MX, SPF, DMARC shown to the admin</text>
+        <text x="830" y="150" text-anchor="middle" font-size="11" fill-opacity="0.7">the road to attendees outside the platform</text>
+
+        <rect x="720" y="210" width="220" height="70" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+        <text x="830" y="235" text-anchor="middle" font-weight="500">Google</text>
+        <text x="830" y="255" text-anchor="middle" font-size="11" fill-opacity="0.7">Gmail · Google Calendar; needs a refresh token</text>
+
+        <line x1="260" y1="55" x2="718" y2="55" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow3)"/>
+        <text x="489" y="49" text-anchor="middle" font-size="11">provisions domains, mailboxes and DKIM (admin API)</text>
+
+        <line x1="260" y1="145" x2="718" y2="145" stroke="currentColor" stroke-width="1.5" marker-start="url(#arrow3)" marker-end="url(#arrow3)"/>
+        <text x="489" y="139" text-anchor="middle" font-size="11">IMAP and SMTP as the account; iMIP mail to and from outside attendees</text>
+
+        <line x1="260" y1="162" x2="718" y2="218" stroke="currentColor" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrow3)"/>
+        <text x="600" y="192" text-anchor="middle" font-size="11">Gmail: connected or imported</text>
+
+        <line x1="260" y1="245" x2="718" y2="245" stroke="currentColor" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrow3)"/>
+        <text x="489" y="262" text-anchor="middle" font-size="11">Google Calendar: connected (CalDAV + OAuth) or imported; a secondary path</text>
+
+        <line x1="150" y1="208" x2="150" y2="172" stroke="currentColor" stroke-width="1.5" marker-start="url(#arrow3)" marker-end="url(#arrow3)"/>
+        <text x="160" y="194" font-size="11">iMIP in and out, for outside attendees only</text>
+
+        <line x1="150" y1="262" x2="150" y2="298" stroke="#1a73e8" stroke-width="1.5" marker-start="url(#arrow3)" marker-end="url(#arrow3)"/>
+        <text x="160" y="284" font-size="11" fill="#1a73e8">iTIP by object call: no mail, no provider</text>
+
+        <text x="40" y="372" font-size="11" fill-opacity="0.7">Dashed arrows are the secondary path. The platform runs no mail server and depends on no calendar server.</text>
+      </g>
+    </svg>
+    </div>
+    <figcaption>Figure 3. The platform's edges. Mail is a cache over a mailbox at the provider, which the Org object provisions. Calendars are the platform's own: two accounts schedule by an object call, and only an attendee outside the platform gets an invitation by mail, through the Mail object and the provider.</figcaption>
+  </figure>
+
+  <hr class="rule">
+
+  <figure>
+    <div class="eyebrow">The event bus</div>
+    <h2>A log per organization, read by cursor</h2>
+    <div class="scroll">
+    <svg viewBox="0 0 980 470" role="img" aria-label="App objects on the left publish into one organization's event log in the middle; subscriptions below the log each hold a cursor; consumers on the right read by pull, socket poke, webhook or agent wake job.">
+      <defs>
+        <marker id="arrow4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+        </marker>
+      </defs>
+      <g fill="currentColor" font-size="12">
+        <text x="40" y="18" font-size="11" fill-opacity="0.7">Publishers: any app object, by binding</text>
+        <text x="330" y="18" font-size="11" fill-opacity="0.7">Events object, one per organization</text>
+        <text x="720" y="18" font-size="11" fill-opacity="0.7">Consumers, each with its own cursor</text>
+
+        <!-- publishers -->
+        <rect x="40" y="40" width="200" height="40" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+        <text x="140" y="64" text-anchor="middle" font-weight="500">Org object (Chat, Docs)</text>
+        <rect x="40" y="100" width="200" height="40" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+        <text x="140" y="124" text-anchor="middle" font-weight="500">Calendar objects</text>
+        <rect x="40" y="160" width="200" height="40" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+        <text x="140" y="184" text-anchor="middle" font-weight="500">Mail objects</text>
+        <rect x="40" y="220" width="200" height="40" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+        <text x="140" y="244" text-anchor="middle" font-weight="500">Schedule alarm</text>
+
+        <line x1="240" y1="60" x2="318" y2="60" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow4)"/>
+        <line x1="240" y1="120" x2="318" y2="120" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow4)"/>
+        <line x1="240" y1="180" x2="318" y2="180" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow4)"/>
+        <line x1="240" y1="240" x2="318" y2="240" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow4)"/>
+        <text x="279" y="150" text-anchor="middle" font-size="10" fill-opacity="0.8">publish</text>
+
+        <!-- events object -->
+        <rect x="320" y="30" width="340" height="400" rx="6" fill="currentColor" fill-opacity="0.04" stroke="currentColor" stroke-opacity="0.25"/>
+
+        <rect x="336" y="44" width="308" height="170" rx="4" fill="#1a73e8" fill-opacity="0.08" stroke="#1a73e8" stroke-width="1.5"/>
+        <text x="490" y="64" text-anchor="middle" font-weight="500">events log · append-only · seq ↑</text>
+        <g font-family="IBM Plex Mono, Menlo, monospace" font-size="10.5" fill-opacity="0.85">
+          <text x="348" y="88">1041  sharing.granted      docs/file/q4-plan → #design</text>
+          <text x="348" y="106">1042  chat.message.created  #design</text>
+          <text x="348" y="124">1043  calendar.event.added  builder@acme · Thu review</text>
+          <text x="348" y="142">1044  calendar.event.updated  ann@acme · Thu review</text>
+          <text x="348" y="160">1045  mail.received         ann@acme inbox</text>
+          <text x="348" y="178">1046  schedule.tick         weekly-digest</text>
+        </g>
+        <text x="490" y="204" text-anchor="middle" font-size="10.5" fill-opacity="0.7">kept 30 days · immutable · in order</text>
+
+        <rect x="336" y="232" width="308" height="184" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+        <text x="490" y="252" text-anchor="middle" font-weight="500">subscriptions · filter + cursor</text>
+        <g font-size="10.5">
+          <text x="348" y="278" font-weight="500">Builder's bridge</text>
+          <text x="348" y="292" fill-opacity="0.8">calendar.* self · cursor 1042 · pull</text>
+          <text x="348" y="318" font-weight="500">Ann's client socket</text>
+          <text x="348" y="332" fill-opacity="0.8">everything visible · cursor 1046 · socket</text>
+          <text x="348" y="358" font-weight="500">Automation: review files shared with #design</text>
+          <text x="348" y="372" fill-opacity="0.8">sharing.granted #design · cursor 1040 · wake Prism</text>
+          <text x="348" y="398" font-weight="500">Outside service</text>
+          <text x="348" y="412" fill-opacity="0.8">chat.message.created · cursor 1042 · webhook</text>
+        </g>
+        <line x1="490" y1="214" x2="490" y2="230" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow4)"/>
+
+        <!-- consumers -->
+        <rect x="720" y="262" width="220" height="44" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+        <text x="830" y="280" text-anchor="middle" font-weight="500">Agent bridge</text>
+        <text x="830" y="296" text-anchor="middle" font-size="10.5" fill-opacity="0.7">GET with wait=30, then ack; any time</text>
+        <line x1="644" y1="284" x2="718" y2="284" stroke="currentColor" stroke-width="1.5" marker-start="url(#arrow4)" marker-end="url(#arrow4)"/>
+
+        <rect x="720" y="302" width="220" height="44" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+        <text x="830" y="320" text-anchor="middle" font-weight="500">Web client</text>
+        <text x="830" y="336" text-anchor="middle" font-size="10.5" fill-opacity="0.7">socket: backlog since cursor, then live</text>
+        <line x1="644" y1="324" x2="718" y2="324" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrow4)"/>
+
+        <rect x="720" y="342" width="220" height="44" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+        <text x="830" y="360" text-anchor="middle" font-weight="500">Prism, woken</text>
+        <text x="830" y="376" text-anchor="middle" font-size="10.5" fill-opacity="0.7">agent.job via a Queue; lease, retry, park</text>
+        <line x1="644" y1="364" x2="718" y2="364" stroke="currentColor" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrow4)"/>
+
+        <rect x="720" y="382" width="220" height="44" rx="4" fill="none" stroke="currentColor" stroke-opacity="0.6"/>
+        <text x="830" y="400" text-anchor="middle" font-weight="500">Webhook URL</text>
+        <text x="830" y="416" text-anchor="middle" font-size="10.5" fill-opacity="0.7">POST via a Queue, HMAC signed, backoff</text>
+        <line x1="644" y1="404" x2="718" y2="404" stroke="currentColor" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrow4)"/>
+
+        <text x="720" y="60" font-size="11" fill-opacity="0.8">A read returns the events after the cursor</text>
+        <text x="720" y="76" font-size="11" fill-opacity="0.8">that match the filter and that the consumer</text>
+        <text x="720" y="92" font-size="11" fill-opacity="0.8">may see, checked now against the share index.</text>
+        <text x="720" y="116" font-size="11" fill-opacity="0.8">Ack moves the cursor. No ack, same events again.</text>
+        <text x="720" y="140" font-size="11" fill-opacity="0.8">Dashed: a Cloudflare Queue carries the retrying</text>
+        <text x="720" y="156" font-size="11" fill-opacity="0.8">deliveries; the log stays the source of truth.</text>
+
+        <text x="40" y="456" font-size="11" fill-opacity="0.7">Presence and typing never enter the log: they stay on the sockets and are not replayed.</text>
+      </g>
+    </svg>
+    </div>
+    <figcaption>Figure 4. The event bus. Every app object appends to one organization's log; a subscription is a filter and a cursor over that log, not a copy; a consumer reads whenever it connects and acknowledges what it handled. Builder's bridge at cursor 1042 will receive 1043 next, however long it was away.</figcaption>
+  </figure>
+</main>
