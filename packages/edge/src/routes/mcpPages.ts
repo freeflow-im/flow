@@ -1,5 +1,5 @@
 // The pages of the MCP endpoint's OAuth (routes/mcp.ts): consent with what the agent may use (Docs files, Mail, sending
-// email, Calendar) and the choice of organization, the device code, and the errors. The ChatGPT plugin's pages
+// email, Calendar, Events) and the choice of organization, the device code, and the errors. The ChatGPT plugin's pages
 // (docs/plugin/server/oauth.ts), in FreeFlow's colours: plain, centred, neutral.
 import { offeredGroups, type OfferedGroup } from '../directory/mcpOAuth';
 
@@ -25,6 +25,9 @@ function groupText(g: OfferedGroup): { title: string; detail: string; warning?: 
     return g.scopes.includes('calendar:write')
       ? { title: 'Calendar: see and change your events', detail: 'Your own calendars in FreeFlow Calendar: see your events and when you are free, create, move and delete events, invite people and answer invitations.' }
       : { title: 'Calendar: see your events', detail: 'Your own calendars in FreeFlow Calendar: see your events and when you are free.' };
+  }
+  if (g.id === 'events') {
+    return { title: 'Events: read the subscriptions you make', detail: 'Subscribe to what happens in the organization below (messages, mail, calendar changes) and read those subscriptions: only what you can see yourself.' };
   }
   return { title: 'Send email as you', detail: 'Send messages from your email accounts.', warning: 'It could send any email to anyone from your address, without asking you first. Only allow this for an agent you trust.' };
 }

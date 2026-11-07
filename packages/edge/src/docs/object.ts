@@ -16,6 +16,7 @@ import { DatabaseSync } from './runtime/sqlite.ts';
 import { PREVIEW_TTL_MS, Previews } from './server/previews.ts';
 import { importBytes, type ImportStores } from './server/importFile.ts';
 import type { MailToolContext } from '../imap/mailTools.ts';
+import { lazySubscriptions, subscriptionsAs, type SubscriptionOps } from '../events/subscriptions.ts';
 
 export interface DocsEnv {
   BLOBS: R2Bucket;
@@ -30,6 +31,9 @@ export interface DocsEnv {
   /** FreeFlow Mail's objects, one per account (src/imap/object.ts): the MCP endpoint's Mail tools act on the caller's account's here. */
   MAIL?: DurableObjectNamespace<import('../imap/object').Mail>;
   CALENDAR?: DurableObjectNamespace<import('../calendar/object').Calendar>;
+  /** The organizations' event logs and Chat objects: the MCP endpoint's event tools read subscriptions as the caller's account. */
+  EVENTS?: DurableObjectNamespace<import('../events/object').Events>;
+  ORG?: DurableObjectNamespace<import('../org/object').Org>;
 }
 const BASE = '/workspace';
 
@@ -134,7 +138,7 @@ export class Docs extends DurableObject<DocsEnv> {
 
   /** A request to /mcp, authenticated by the Worker against the directory (routes/mcp.ts), as `caller` in this organization. */
   async mcp(request: Request, caller: McpRequestCaller): Promise<Response> {
-    return this.inOrganization(caller.orgId, () => handleMcp(request, this.hub!, caller, this.mailOf(caller.userId, caller.origin, caller.orgId), this.calendarOf(caller.userId, caller.origin, caller.orgId)));
+    return this.inOrganization(caller.orgId, () => handleMcp(request, this.hub!, caller, this.mailOf(caller.userId, caller.origin, caller.orgId), this.calendarOf(caller.userId, caller.origin, caller.orgId), this.eventsOf(caller.userId, caller.orgId)));
   }
 
   /**
@@ -200,6 +204,18 @@ export class Docs extends DurableObject<DocsEnv> {
   private calendarOf(userId: string, origin: string, organizationId: string): ((path: string, init?: RequestInit) => Promise<Response>) | undefined {
     const ns = this.env.CALENDAR;
     return ns ? this.accountFetch(ns as unknown as AccountObjects, 'Calendar', userId, origin, organizationId) : undefined;
+  }
+
+  /** The organization's event subscriptions as the person's account here, for the event tools. Undefined where the Worker has no Events. */
+  private eventsOf(userId: string, organizationId: string): SubscriptionOps | undefined {
+    const { EVENTS: events, ORG: org } = this.env;
+    if (!events || !org) return undefined;
+    const caller = this.accountCaller(userId, organizationId);
+    return lazySubscriptions(async () => {
+      const who = await caller();
+      if (!who?.account) throw Object.assign(new Error('no account in this organization'), { status: 403 });
+      return subscriptionsAs(events.get(events.idFromName(organizationId)), org.get(org.idFromName(organizationId)), who.account.id, userId);
+    });
   }
 
   /** The assistant's Calendar tools (server/agent/tools.ts): the Calendar object of the person's account here. */

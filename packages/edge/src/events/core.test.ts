@@ -1,9 +1,9 @@
 // The event log (platform.md §5.2): publish and seq order, type patterns, the three audiences, limit and next, and the
-// retention window by age and by count.
+// retention window by age and by count; subscriptions: a cursor from the head, ack, the gap marker, `self`.
 import { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { formatReference, parseReference } from '@flow/shared';
-import { EventsCore, type PublishInput, type Sql } from './core';
+import { EventsCore, SCAN_MAX, type PublishInput, type Sql } from './core';
 
 function nodeSql(): { sql: Sql; db: DatabaseSync } {
   const db = new DatabaseSync(':memory:');
@@ -96,7 +96,7 @@ describe('the event log', () => {
     expect(core.read({ actorKind: 'any' }, reader).events).toHaveLength(3);
   });
 
-  it('caps limit at 500, and next is the last seq returned', () => {
+  it('caps limit at 500, and next is the last seq examined', () => {
     core.publishMany(Array.from({ length: 600 }, (_, i) => ev(`t.${i}`)));
     const page = core.read({ since: 0, limit: 10_000 }, BOB);
     expect(page.events).toHaveLength(500);
@@ -105,6 +105,26 @@ describe('the event log', () => {
     const small = core.read({ since: 10, limit: 3 }, BOB);
     expect([small.events.map((e) => e.seq), small.next]).toEqual([[11, 12, 13], 13]);
     expect(core.read({}, BOB).events).toHaveLength(100);
+  });
+
+  it('moves next past the rows a filter or visibility skipped', () => {
+    core.publishMany([ev('chat.message.created'), ev('mail.received'), ev('chat.x', { audience: 'channel:secret' }), ev('mail.received')]);
+    // The scan reached the end: next is the head, though the last match was seq 1.
+    expect(core.read({ types: ['chat.*'] }, BOB)).toMatchObject({ events: [{ seq: 1 }], next: 4 });
+    expect(core.read({ since: 1, types: ['chat.*'] }, BOB)).toEqual({ events: [], next: 4 });
+    // Nothing matches at all: still the head.
+    expect(core.read({ types: ['calendar.*'] }, BOB)).toEqual({ events: [], next: 4 });
+    // limit reached: the last row examined, which a hidden row before it does not hold back.
+    core.publishMany([ev('chat.y', { audience: 'channel:secret' }), ev('chat.z'), ev('chat.w')]);
+    expect(core.read({ since: 4, limit: 1 }, BOB)).toMatchObject({ events: [{ seq: 6 }], next: 6 });
+    expect(core.read({ since: 4, limit: 1 }, ANN)).toMatchObject({ events: [{ seq: 5 }], next: 5 });
+    expect(core.read({ since: 100 }, BOB)).toEqual({ events: [], next: 100 });
+  });
+
+  it('bounds a scan of rows the reader may not see', () => {
+    core.publishMany(Array.from({ length: SCAN_MAX + 10 }, () => ev('chat.hidden', { audience: 'channel:secret' })));
+    expect(core.read({}, BOB)).toEqual({ events: [], next: SCAN_MAX });
+    expect(core.read({ since: SCAN_MAX }, BOB)).toEqual({ events: [], next: SCAN_MAX + 10 });
   });
 
   it('keeps 30 days, then the newest rows up to the cap, and never reuses a seq', () => {
@@ -121,5 +141,74 @@ describe('the event log', () => {
     expect(stats.oldestTs).toBe(new Date(now - day).toISOString());
     expect(core.publish(ev('next')).seq).toBe(8);
     expect(core.retain(now, 30 * day, 3)).toEqual({ aged: 0, capped: 1 });
+  });
+});
+
+describe('subscriptions', () => {
+  const sub = (filter = {}, consumer = 'acct-bob') => core.createSubscription({ name: 'n', consumer, owner: consumer, filter, createdBy: consumer });
+
+  it('starts at the head, keeps its fields, lists by consumer, and deletes', () => {
+    core.publishMany([ev('chat.a'), ev('chat.b')]);
+    const s = sub({ types: ['chat.*'] });
+    expect(s).toMatchObject({ name: 'n', consumer: 'acct-bob', owner: 'acct-bob', filter: { types: ['chat.*'] }, delivery: 'pull', cursor: 2, createdBy: 'acct-bob' });
+    expect(Date.parse(s.createdAt)).toBeGreaterThan(0);
+    expect(s.parkedAt).toBeUndefined();
+    const w = core.createSubscription({ name: 'w', consumer: 'acct-bob', owner: 'acct-bob', filter: {}, delivery: 'webhook', createdBy: 'acct-bob' });
+    expect(w.delivery).toBe('webhook');
+    sub({}, 'acct-ann');
+    expect(core.listSubscriptions('acct-bob').map((x) => x.id).sort()).toEqual([s.id, w.id].sort());
+    expect(core.readSubscription(s.id, {}, BOB)).toEqual({ events: [], next: 2 });
+    expect(core.deleteSubscription(s.id)).toBe(true);
+    expect(core.deleteSubscription(s.id)).toBe(false);
+    expect(core.getSubscription(s.id)).toBeNull();
+    expect(core.readSubscription(s.id, {}, BOB)).toBeNull();
+  });
+
+  it('reads by cursor with its filter and the reader\'s visibility; ack moves the cursor forward only', () => {
+    const s = sub({ types: ['chat.*'] });
+    core.publishMany([ev('chat.a'), ev('mail.received'), ev('chat.b', { audience: 'channel:secret' }), ev('chat.c'), ev('mail.x')]);
+    const first = core.readSubscription(s.id, { limit: 1 }, BOB)!;
+    expect([first.events.map((e) => e.seq), first.next]).toEqual([[1], 1]);
+    // A read never acks.
+    expect(core.readSubscription(s.id, {}, BOB)).toMatchObject({ events: [{ seq: 1 }, { seq: 4 }], next: 5 });
+    expect(core.ack(s.id, 5)).toBe(5);
+    expect(core.ack(s.id, 3)).toBe(5);
+    expect(core.ack(s.id, 1000)).toBe(5);
+    expect(core.ack('nope', 1)).toBeNull();
+    expect(core.readSubscription(s.id, {}, BOB)).toEqual({ events: [], next: 5 });
+    core.publish(ev('chat.d'));
+    expect(core.readSubscription(s.id, {}, BOB)!.events.map((e) => e.type)).toEqual(['chat.d']);
+  });
+
+  it('self matches the events addressed to the consumer alone', () => {
+    const s = sub({ self: true });
+    core.publishMany([ev('mail.received', { audience: 'account:acct-bob' }), ev('mail.received', { audience: 'account:acct-ann' }), ev('chat.a')]);
+    expect(core.readSubscription(s.id, {}, BOB)).toMatchObject({ events: [{ seq: 1 }], next: 3 });
+  });
+
+  it('filters by ref, channel and text', () => {
+    const ref = { organizationId: ORG, app: 'mail', kind: 'message', id: 'a:INBOX:1' };
+    const byRef = sub({ ref }), byChannel = sub({ channelId: 'c1' }), byText = sub({ text: 'Lunch' });
+    core.publishMany([ev('mail.received', { ref, data: { subject: 'lunch?' } }), ev('chat.a', { channelId: 'c1' }), ev('chat.b')]);
+    const seqs = (id: string) => core.readSubscription(id, {}, BOB)!.events.map((e) => e.seq);
+    expect([seqs(byRef.id), seqs(byChannel.id), seqs(byText.id)]).toEqual([[1], [2], [1]]);
+  });
+
+  it('marks a gap when its cursor fell behind the window, and reads from the window\'s start', () => {
+    const now = Date.now(), day = 86_400_000;
+    const s = sub();
+    core.publishMany([ev('old', { ts: new Date(now - 40 * day).toISOString() }), ev('old', { ts: new Date(now - 40 * day).toISOString() }), ev('new'), ev('new')]);
+    core.retain(now);
+    expect(core.readSubscription(s.id, {}, BOB)).toMatchObject({ events: [{ seq: 3 }, { seq: 4 }], next: 4, gap: { from: 1, to: 2 } });
+    expect(core.ack(s.id, 4)).toBe(4);
+    expect(core.readSubscription(s.id, {}, BOB)).toEqual({ events: [], next: 4 });
+    // An emptied log keeps its head: a new subscription starts there, an old one behind it gets the gap.
+    const behind = core.createSubscription({ name: 'b', consumer: 'acct-bob', owner: 'acct-bob', filter: {}, createdBy: 'acct-bob' });
+    core.retain(now + 60 * day);
+    expect(core.stats().count).toBe(0);
+    expect(sub().cursor).toBe(4);
+    db.prepare('UPDATE subscriptions SET cursor = 1 WHERE id = ?').run(behind.id);
+    expect(core.readSubscription(behind.id, {}, BOB)).toEqual({ events: [], next: 4, gap: { from: 2, to: 4 } });
+    expect(core.publish(ev('next')).seq).toBe(5);
   });
 });

@@ -50,6 +50,30 @@ r=await api(Bo.token,'GET',`/v1/events?workspace=${W}&since=0&limit=500`);t('and
 {const nx=r.j.next;r=await api(Bo.token,'GET',`/v1/events?workspace=${W}&since=${nx}&limit=500`);t('since=next: nothing new',r.s===200&&r.j.events.length===0&&r.j.next===nx,JSON.stringify(r.j).slice(0,120));}
 r=await api(A.token,'GET',`/v1/events?workspace=${W}&since=0&types=chat.reaction.*`);t('a type pattern',r.j.events?.length>=1&&r.j.events.every(e=>e.type.startsWith('chat.reaction.')),JSON.stringify(r.j.events?.map(e=>e.type)));
 {const C=await signup('dee@example.com','Dee');r=await api(C.token,'GET','/v1/events?since=0');t('no account: 403 no_account',r.s===403&&r.j.error?.code==='no_account',r.s+' '+JSON.stringify(r.j).slice(0,100));}
+// ---- subscriptions: durable consumers with a cursor, read by HTTP, long-polled with wait
+{const head=(await api(Bo.token,'GET',`/v1/events?workspace=${W}&since=0&limit=500`)).j;let nx=head.next;while(true){const p=(await api(Bo.token,'GET',`/v1/events?workspace=${W}&since=${nx}&limit=500`)).j;if(!p.events.length){nx=p.next;break}nx=p.next}
+ const SP=`/v1/events/subscriptions?workspace=${W}`,sp=(id,q='')=>`/v1/events/subscriptions/${id}?workspace=${W}${q}`;
+ r=await api(Bo.token,'POST',SP,{name:'chat for Bob',filter:{types:['chat.*']}});const S=r.j.subscription;t('Bob subscribes to chat.*',r.s===201&&!!S?.id&&S.name==='chat for Bob',r.s+' '+JSON.stringify(r.j).slice(0,140));
+ t('a new subscription starts at the head',S?.cursor===nx&&S?.delivery==='pull',S?.cursor+' vs '+nx);
+ r=await api(Bo.token,'POST',SP,{name:'bad',filter:{kinds:['x']}});t('an unknown filter field is refused',r.s===400,r.s+' '+JSON.stringify(r.j).slice(0,100));
+ r=await api(Bo.token,'GET',sp(S.id));t('nothing new yet: next is the head',r.s===200&&r.j.events.length===0&&r.j.next===nx,JSON.stringify(r.j).slice(0,120));
+ const t0=Date.now();const waiting=api(Bo.token,'GET',sp(S.id,'&wait=5'));await sleep(400);
+ r=await api(A.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'for the subscription'});const M2=r.j;
+ r=await waiting;const got=r.j.events?.find(e=>e.type==='chat.message.created'&&e.data?.id===M2.id);t('a waiting read returns Ann\'s message within the wait',r.s===200&&!!got&&Date.now()-t0<4500,(Date.now()-t0)+'ms '+JSON.stringify(r.j).slice(0,140));
+ t('and next is past it',r.j.next>=got?.seq,r.j.next);
+ const next=r.j.next;r=await api(Bo.token,'POST',`/v1/events/subscriptions/${S.id}/ack?workspace=${W}`,{cursor:next});t('ack moves the cursor',r.s===200&&r.j.cursor===next,JSON.stringify(r.j));
+ r=await api(Bo.token,'POST',`/v1/events/subscriptions/${S.id}/ack?workspace=${W}`,{cursor:1});t('and never back',r.j.cursor===next,JSON.stringify(r.j));
+ r=await api(Bo.token,'GET',sp(S.id));t('after the ack a read is empty',r.s===200&&r.j.events.length===0,JSON.stringify(r.j).slice(0,120));
+ const t1=Date.now();r=await api(Bo.token,'GET',sp(S.id,'&wait=2'));const dt=Date.now()-t1;t('wait=2 with nothing new answers empty after about two seconds',r.s===200&&r.j.events.length===0&&dt>=1800&&dt<4000,dt+'ms');
+ r=await api(Bo.token,'GET',SP);t('Bob lists his subscriptions',r.j.subscriptions?.length===1&&r.j.subscriptions[0].id===S.id&&r.j.subscriptions[0].cursor===next,JSON.stringify(r.j).slice(0,140));
+ r=await api(A.token,'POST',SP,{name:'Ann\'s',filter:{}});const SA=r.j.subscription;
+ r=await api(Bo.token,'GET',sp(SA.id));t('Ann\'s subscription is 404 for Bob',r.s===404,r.s);
+ r=await api(Bo.token,'POST',`/v1/events/subscriptions/${SA.id}/ack?workspace=${W}`,{cursor:1});t('and so is acking it',r.s===404,r.s);
+ r=await api(Bo.token,'DELETE',sp(SA.id));t('and deleting it',r.s===404,r.s);
+ r=await api(A.token,'GET',SP);t('Ann lists only hers',r.j.subscriptions?.length===1&&r.j.subscriptions[0].id===SA.id,JSON.stringify(r.j).slice(0,100));
+ r=await api(A.token,'DELETE',sp(SA.id));t('Ann deletes hers',r.s===200&&r.j.ok===true,r.s);
+ r=await api(A.token,'GET',sp(SA.id));t('then it is gone',r.s===404,r.s);
+ const C=await signup('dee2@example.com','Dee');r=await api(C.token,'GET','/v1/events/subscriptions');t('subscriptions without an account: 403 no_account',r.s===403&&r.j.error?.code==='no_account',r.s);}
 const pong=await new Promise(res=>{sa.ws.addEventListener('message',e=>{if(JSON.parse(e.data).op==='pong')res(true)});sa.ws.send('{"op":"ping"}');setTimeout(()=>res(false),2000)});t('client ping answered',pong);
 sa.ws.send(JSON.stringify({op:'typing',channelId:gen.id}));await sleep(200);t('typing relayed',sb.ev.some(e=>e.type==='typing'));
 r=await api(null,'GET',`/v1/channels/${gen.id}/messages`);t('no session refused',r.s===401,r.s);

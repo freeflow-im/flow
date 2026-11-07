@@ -60,7 +60,7 @@ async function connect(u,org,grants,extra={}){const {v,c}=pkce();let x=await api
 
 {const {c}=pkce();const x=await api(null,'GET',authorizeUrl(c),undefined,undefined,cookie(A));const page=await api(null,'GET',x.h.get('location'),undefined,undefined,cookie(A));const f=consentOf(page.j);
  if(process.env.CONSENT_HTML)fs.writeFileSync(process.env.CONSENT_HTML,page.j);
- t('consent offers Docs, Mail, sending and Calendar as checkboxes',JSON.stringify(f.grants)===JSON.stringify([{id:'docs',checked:true},{id:'mail',checked:true},{id:'send',checked:false},{id:'calendar',checked:true}]),JSON.stringify(f.grants));
+ t('consent offers Docs, Mail, sending, Calendar and Events as checkboxes',JSON.stringify(f.grants)===JSON.stringify([{id:'docs',checked:true},{id:'mail',checked:true},{id:'send',checked:false},{id:'calendar',checked:true},{id:'events',checked:true}]),JSON.stringify(f.grants));
  t('with a warning on sending',page.j.includes('Send email as you')&&page.j.includes('without asking you first'),'');
  const none=await api(null,'POST','/oauth/decision',form({p:f.p,csrf:f.csrf,org:ORG,allow:'yes',scopes_form:'1'}),'application/x-www-form-urlencoded',{...cookie(A),origin:B});
  t('nothing ticked is refused, on the page again',none.s===403&&none.j.includes('Choose at least one'),none.s);}
@@ -78,7 +78,7 @@ t('Docs alone: files:read files:write',DOCS.scope==='files:read files:write',JSO
 let names=await list(DOCS.access_token);t('and no Mail tools listed',names.includes('write_range')&&!names.some((n)=>/mail/.test(n)),names.filter((n)=>/mail/.test(n)).join(','));
 r=await call(DOCS.access_token,'search_mail',{});t('nor callable',r.isError,r.text);
 const TOK=await connect(A,ORG);
-t('the defaults: Docs, Mail and Calendar, not sending',TOK.scope==='files:read files:write mail:read mail:write calendar:read calendar:write',TOK.scope);
+t('the defaults: Docs, Mail, Calendar and Events, not sending',TOK.scope==='files:read files:write mail:read mail:write calendar:read calendar:write events:read',TOK.scope);
 names=await list(TOK.access_token);
 t('one list: Docs and Mail tools',MAIL_TOOLS.every((n)=>names.includes(n))&&names.includes('read_range'),names.filter((n)=>/mail/.test(n)).join(','));
 t('send_mail is absent without mail:send',!names.includes('send_mail'));

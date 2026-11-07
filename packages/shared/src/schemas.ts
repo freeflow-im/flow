@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DELIVERY_MODES } from './platform.js';
 
 // ---- auth ------------------------------------------------------
 /** Email-first: registration takes only an email; name + password are set on
@@ -779,3 +780,32 @@ export const AdoptEmailImageBody = z.object({
   fileId: z.string().uuid(),
 });
 export type AdoptEmailImageBody = z.infer<typeof AdoptEmailImageBody>;
+
+// ---- the event bus: subscriptions (platform.md §5.2) ----------
+/** A subscription's filter (`EventFilter`): type patterns (`chat.message.created`, or a prefix and `*`), a reference, a
+ * channel, an actor kind, words in the data, and `self` for events addressed to the consumer's own account. */
+export const EventFilterSchema = z
+  .object({
+    types: z.array(z.string().trim().regex(/^(\*|[A-Za-z0-9_.-]+\*?)$/, 'a type, or a prefix ending in *').max(100)).max(20).optional(),
+    ref: z.object({ organizationId: z.string().min(1).max(200), app: z.string().min(1).max(50), kind: z.string().min(1).max(50), id: z.string().min(1).max(500) }).strict().optional(),
+    channelId: z.string().min(1).max(100).optional(),
+    actorKind: z.enum(['person', 'agent', 'any']).optional(),
+    text: z.string().trim().min(1).max(200).optional(),
+    self: z.boolean().optional(),
+  })
+  .strict();
+export type EventFilterSchema = z.infer<typeof EventFilterSchema>;
+
+/** POST /v1/events/subscriptions. Delivery modes other than `pull` are kept but do nothing yet. */
+export const CreateSubscriptionBody = z.object({
+  name: z.string().trim().min(1).max(100),
+  filter: EventFilterSchema,
+  delivery: z.enum(DELIVERY_MODES).optional(),
+});
+export type CreateSubscriptionBody = z.infer<typeof CreateSubscriptionBody>;
+
+/** POST /v1/events/subscriptions/:id/ack: the `next` of a read, or any seq up to it. */
+export const AckSubscriptionBody = z.object({
+  cursor: z.number().int().min(0),
+});
+export type AckSubscriptionBody = z.infer<typeof AckSubscriptionBody>;

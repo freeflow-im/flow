@@ -57,6 +57,7 @@ r=await api(null,'GET',signInNext);t('the consent page without a session sends t
 r=await api(null,'GET',consentPath,undefined,undefined,cookie(U));const C=consentOf(r.j);
 t('the consent page lists both of Uma’s organizations by name',r.s===200&&r.j.includes(`Acme ${tag}`)&&r.j.includes(`Bravo ${tag}`)&&C.orgs.length===2&&C.orgs.includes(A)&&C.orgs.includes(Bo),r.s+' '+JSON.stringify(C.orgs));
 t('it names the client and the scopes, and one organization is preselected',r.j.includes('E2E Agent')&&r.j.includes('Organization files')&&r.j.includes('My files')&&[A,Bo].includes(C.checked),C.checked);
+t('it offers the Events group, ticked',/name="grant_events" value="on" checked/.test(r.j)&&r.j.includes('Events: read the subscriptions you make'),/grant_events[^>]*/.exec(r.j)?.[0]);
 t('it cannot be framed',r.h.get('x-frame-options')==='DENY'&&/frame-ancestors 'none'/.test(r.h.get('content-security-policy')??''),r.h.get('x-frame-options'));
 if(process.env.CONSENT_HTML)fs.writeFileSync(process.env.CONSENT_HTML,r.j);
 const decide=(fields,extra)=>api(null,'POST','/oauth/decision',form(fields),'application/x-www-form-urlencoded',extra);
@@ -70,7 +71,7 @@ r=await decide({p:C.p,csrf:C.csrf,org:A,allow:'yes'},{...cookie(U),origin:B});co
 t('allowing Acme goes back to the client with a code',r.s===302&&back.origin==='http://localhost:51234'&&back.searchParams.get('code')&&back.searchParams.get('state')==='xyz'&&back.searchParams.get('iss')===B,r.s+' '+back.href.slice(0,120));
 r=await api(null,'POST','/oauth/token',form({grant_type:'authorization_code',code:back.searchParams.get('code'),code_verifier:'wrong-verifier-wrong-verifier-wrong-verifier',client_id:CLIENT}),'application/x-www-form-urlencoded');t('a wrong PKCE verifier is refused',r.s===400&&r.j.error==='invalid_grant',JSON.stringify(r.j));
 r=await api(null,'POST','/oauth/token',form({grant_type:'authorization_code',code:back.searchParams.get('code'),code_verifier:VER,client_id:CLIENT,redirect_uri:'http://localhost:51234/callback'}),'application/x-www-form-urlencoded');
-let TOK=r.j;t('the code exchanges for tokens',r.s===200&&TOK.access_token&&TOK.refresh_token&&TOK.scope==='files:read files:write mail:read mail:write calendar:read calendar:write',r.s+' '+TOK.scope);
+let TOK=r.j;t('the code exchanges for tokens',r.s===200&&TOK.access_token&&TOK.refresh_token&&TOK.scope==='files:read files:write mail:read mail:write calendar:read calendar:write events:read',r.s+' '+TOK.scope);
 
 // --- MCP, as Uma in Acme --------------------------------------------------------------------------------------------------
 let rpcId=0;
@@ -79,6 +80,18 @@ const call=async(tok,name,args)=>{const x=await mcp(tok,'tools/call',{name,argum
 r=await mcp(TOK.access_token,'initialize',{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'e2e',version:'1'}});t('initialize',r.s===200&&r.j.result?.serverInfo?.name==='universal-docs',r.s+' '+JSON.stringify(r.j).slice(0,160));
 r=await mcp(TOK.access_token,'tools/list');const names=(r.j.result?.tools??[]).map((x)=>x.name);
 t('tools/list has the file and spreadsheet tools, and no ChatGPT app tools',['list_files','search_files','read_range','write_range','create_sheet','upload_file'].every((n)=>names.includes(n))&&!names.includes('docs_app')&&!names.includes('app_state'),names.length+' '+names.slice(0,12).join(','));
+t('and the event tools, with events:read',['list_subscriptions','create_subscription','read_events','ack_events'].every((n)=>names.includes(n)),names.filter((n)=>/subscri|events/.test(n)).join(','));
+{r=await call(TOK.access_token,'create_subscription',{name:'acme chat',filter:{types:['chat.*']}});const SUB=r.v?.subscription;t('create_subscription as Uma’s account in Acme',!r.isError&&SUB?.id&&SUB.filter?.types?.[0]==='chat.*',JSON.stringify(r.v??r.j).slice(0,160));
+ r=await call(TOK.access_token,'create_subscription',{name:'bad',filter:{types:['a b']}});t('a bad filter is the agent’s error',r.isError===true,JSON.stringify(r.j).slice(0,140));
+ r=await call(TOK.access_token,'list_subscriptions',{});t('list_subscriptions has it',r.v?.subscriptions?.some((x)=>x.id===SUB?.id),JSON.stringify(r.v).slice(0,140));
+ r=await api(O.token,'GET',`/v1/workspaces/${A}/channels`);const ch=(r.j.channels??r.j)[0];
+ const waiting=call(TOK.access_token,'read_events',{subscription_id:SUB?.id,wait:5});await sleep(400);
+ r=await api(O.token,'POST',`/v1/channels/${ch.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'hello agents'});const MSG=r.j;
+ r=await waiting;const ev=r.v?.events?.find((e)=>e.type==='chat.message.created'&&e.data?.id===MSG.id);t('read_events waits for Olga’s message',!r.isError&&!!ev,JSON.stringify(r.v??r.j).slice(0,160));
+ r=await call(TOK.access_token,'ack_events',{subscription_id:SUB?.id,cursor:r.v?.next});t('ack_events moves the cursor',r.v?.cursor>0,JSON.stringify(r.v));
+ r=await call(TOK.access_token,'read_events',{subscription_id:SUB?.id});t('then nothing is left',r.v?.events?.length===0,JSON.stringify(r.v).slice(0,120));
+ r=await call(TOK.access_token,'read_events',{subscription_id:'nope'});t('an unknown subscription is the agent’s error',r.isError===true,JSON.stringify(r.j).slice(0,120));
+ r=await api(U.token,'GET',`/v1/events/subscriptions?workspace=${A}`);t('the same subscription over HTTP',r.j.subscriptions?.some((x)=>x.id===SUB?.id),JSON.stringify(r.j).slice(0,120));}
 r=await call(TOK.access_token,'list_files',{});const listed=JSON.stringify(r.v);
 t('list_files shows Acme’s spreadsheet and not Bravo’s',listed.includes(S)&&!listed.includes(SB),listed.slice(0,200));
 t('with where it is and its page in /workspace',r.v.files?.find((f)=>f.id===S)?.root==='Organization files'&&r.v.files?.find((f)=>f.id===S)?.url===`${B}/workspace/s/${S}`,JSON.stringify(r.v.files?.find((f)=>f.id===S)));

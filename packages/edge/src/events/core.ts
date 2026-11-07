@@ -1,7 +1,7 @@
 // The event bus's log (docs/specs/platform.md §5.2): one append-only table per organization, in the Events object.
 // Publishers say who may read each event (`audience`); a read returns what follows a cursor that the reader may see.
 // It runs over any `SqlStorage`-shaped database, so tests can use node:sqlite. Presence and typing are never logged.
-import { formatReference, parseReference, type PlatformEvent } from '@flow/shared';
+import { formatReference, parseReference, type DeliveryMode, type EventFilter, type PlatformEvent, type SubscriptionDTO } from '@flow/shared';
 
 export interface Sql {
   exec(query: string, ...bindings: unknown[]): { toArray(): Record<string, unknown>[] };
@@ -28,6 +28,10 @@ export interface ReadQuery {
   ref?: string;
   channelId?: string;
   actorKind?: 'person' | 'agent' | 'any';
+  /** Words the event's data contains, ignoring ASCII case. */
+  text?: string;
+  /** An account id: only the events whose audience is that account alone (a subscription's `self: true`). */
+  self?: string;
 }
 
 /** The reader's account, the private channels it is in, and (for `actorKind`) the organization's agents' account ids. */
@@ -39,6 +43,13 @@ export const READ_LIMIT_MAX = 500;
 export const READ_LIMIT_DEFAULT = 100;
 export const RETENTION_MS = 30 * 86_400_000;
 export const RETENTION_ROWS = 200_000;
+/** Rows one read examines at most, visible or not: a reader who may see few of them still gets a bounded scan. */
+export const SCAN_MAX = 5_000;
+const SCAN_BATCH = 500;
+
+export interface NewSubscription { name: string; consumer: string; owner: string; filter: EventFilter; delivery?: DeliveryMode; createdBy: string }
+/** A subscription's read: `gap` when events after its cursor aged out of the window before it read them. */
+export interface SubscriptionRead { events: PlatformEvent[]; next: number; gap?: { from: number; to: number } }
 
 export const EVENTS_MIGRATIONS: string[] = [
   `CREATE TABLE events (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, type TEXT NOT NULL, actor TEXT, ref TEXT,
@@ -47,6 +58,9 @@ export const EVENTS_MIGRATIONS: string[] = [
   CREATE INDEX events_channel ON events (channel_id, seq);
   CREATE INDEX events_ts ON events (ts);
   CREATE TABLE events_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`,
+  `CREATE TABLE subscriptions (id TEXT PRIMARY KEY, name TEXT NOT NULL, consumer TEXT NOT NULL, owner TEXT NOT NULL, filter TEXT NOT NULL,
+    delivery TEXT NOT NULL DEFAULT 'pull', cursor INTEGER NOT NULL DEFAULT 0, created_by TEXT NOT NULL, created_at INTEGER NOT NULL, parked_at INTEGER);
+  CREATE INDEX subscriptions_consumer ON subscriptions (consumer);`,
 ];
 
 const AUDIENCE = /^(org|channel:.+|account:.+)$/;
@@ -81,12 +95,17 @@ export class EventsCore {
     return this.transact(() => inputs.map((e) => this.publish(e)));
   }
 
-  /** The events after `since` that match the query and that the reader may see, oldest first. */
+  /**
+   * The events after `since` that match the query and that the reader may see, oldest first. The filters are in SQL and
+   * visibility is applied per row; `next` is the last seq the scan examined, seen or not: the log's head when the scan
+   * reached the end, else the last row examined when `limit` events were found (or SCAN_MAX rows examined). So a reader
+   * whose filter or visibility skips rows still moves past them.
+   */
   read(q: ReadQuery, reader: Reader): { events: PlatformEvent[]; next: number } {
     const since = Math.max(0, Math.floor(Number(q.since) || 0));
     const limit = Math.min(READ_LIMIT_MAX, Math.max(1, Math.floor(Number(q.limit) || READ_LIMIT_DEFAULT)));
-    const where = ['seq > ?', `(audience = 'org' OR audience = ? OR audience IN (SELECT 'channel:' || value FROM json_each(?)))`];
-    const args: unknown[] = [since, `account:${reader.accountId}`, JSON.stringify(reader.channelIds)];
+    const where: string[] = [];
+    const args: unknown[] = [];
     const types = (q.types ?? []).map((t) => t.trim()).filter(Boolean);
     if (types.length) {
       where.push(`(${types.map((t) => (t.endsWith('*') ? "type LIKE ? ESCAPE '\\'" : 'type = ?')).join(' OR ')})`);
@@ -94,24 +113,87 @@ export class EventsCore {
     }
     if (q.ref) { where.push('ref = ?'); args.push(q.ref); }
     if (q.channelId) { where.push('channel_id = ?'); args.push(q.channelId); }
+    if (q.self) { where.push('audience = ?'); args.push(`account:${q.self}`); }
+    if (q.text?.trim()) { where.push('instr(lower(data), lower(?)) > 0'); args.push(q.text.trim()); }
     if (q.actorKind === 'agent' || q.actorKind === 'person') {
       where.push(q.actorKind === 'agent'
         ? 'actor IN (SELECT value FROM json_each(?))'
         : 'actor IS NOT NULL AND actor NOT IN (SELECT value FROM json_each(?))');
       args.push(JSON.stringify(reader.agentAccountIds ?? []));
     }
-    const rows = this.sql.exec(`SELECT * FROM events WHERE ${where.join(' AND ')} ORDER BY seq LIMIT ?`, ...args, limit).toArray();
+    const filter = where.length ? ` AND ${where.join(' AND ')}` : '';
+    const channels = new Set(reader.channelIds);
+    const own = `account:${reader.accountId}`;
+    const visible = (audience: string) => audience === 'org' || audience === own || (audience.startsWith('channel:') && channels.has(audience.slice(8)));
     const organizationId = this.organizationId() ?? '';
-    const events = rows.map((r): PlatformEvent => {
-      const ref = r.ref ? parseReference(r.ref as string) : null;
-      return {
-        id: r.id as string, seq: r.seq as number, type: r.type as string, organizationId, actor: (r.actor as string | null) ?? null,
-        ...(ref ? { ref } : {}), ...(r.channel_id ? { channelId: r.channel_id as string } : {}),
-        ...(r.caused_by ? { causedBy: r.caused_by as string } : {}),
-        depth: r.depth as number, ts: new Date(r.ts as number).toISOString(), data: JSON.parse(r.data as string),
-      };
-    });
-    return { events, next: events.at(-1)?.seq ?? since };
+    const events: PlatformEvent[] = [];
+    let cursor = since;
+    let examined = 0;
+    for (;;) {
+      const rows = this.sql.exec(`SELECT * FROM events WHERE seq > ?${filter} ORDER BY seq LIMIT ?`, cursor, ...args, SCAN_BATCH).toArray();
+      for (const r of rows) {
+        cursor = r.seq as number;
+        if (visible(r.audience as string)) {
+          events.push(toEvent(r, organizationId));
+          if (events.length >= limit) return { events, next: cursor };
+        }
+        if (++examined >= SCAN_MAX) return { events, next: cursor };
+      }
+      if (rows.length < SCAN_BATCH) break;
+    }
+    return { events, next: Math.max(cursor, this.head()) };
+  }
+
+  /** The highest seq the log has given, kept or not (retention can empty the table; `seq` never goes back). */
+  head(): number {
+    const max = this.sql.exec('SELECT MAX(seq) AS n FROM events').toArray()[0]!.n as number | null;
+    return Math.max(max ?? 0, Number(this.meta('deleted_through') ?? 0));
+  }
+
+  // ---- subscriptions: durable consumers with a cursor (§5.2) ----------------------------------------------------------
+
+  /** A new subscription starts at the log's head: it sees only what happens after it. */
+  createSubscription(s: NewSubscription): SubscriptionDTO {
+    const id = crypto.randomUUID();
+    this.sql.exec(
+      'INSERT INTO subscriptions (id, name, consumer, owner, filter, delivery, cursor, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      id, s.name, s.consumer, s.owner, JSON.stringify(s.filter ?? {}), s.delivery ?? 'pull', this.head(), s.createdBy, Date.now(),
+    );
+    return this.getSubscription(id)!;
+  }
+
+  listSubscriptions(consumer: string): SubscriptionDTO[] {
+    return this.sql.exec('SELECT * FROM subscriptions WHERE consumer = ? ORDER BY created_at, id', consumer).toArray().map(toSubscription);
+  }
+
+  getSubscription(id: string): SubscriptionDTO | null {
+    const row = this.sql.exec('SELECT * FROM subscriptions WHERE id = ?', id).toArray()[0];
+    return row ? toSubscription(row) : null;
+  }
+
+  deleteSubscription(id: string): boolean {
+    return this.sql.exec('DELETE FROM subscriptions WHERE id = ? RETURNING id', id).toArray().length > 0;
+  }
+
+  /** Moves the cursor forward to `cursor` (never back, never past the head); the stored cursor, or null for no such subscription. */
+  ack(id: string, cursor: number): number | null {
+    const to = Math.min(Math.max(0, Math.floor(Number(cursor) || 0)), this.head());
+    const row = this.sql.exec('UPDATE subscriptions SET cursor = MAX(cursor, ?) WHERE id = ? RETURNING cursor', to, id).toArray()[0];
+    return row ? (row.cursor as number) : null;
+  }
+
+  /**
+   * What follows the subscription's cursor that matches its filter and the reader may see. A read never acks. A cursor
+   * below the oldest kept row (less one) missed events that aged out: the answer says `gap` and reads from the window's start.
+   */
+  readSubscription(id: string, opts: { limit?: number }, reader: Reader): SubscriptionRead | null {
+    const sub = this.getSubscription(id);
+    if (!sub) return null;
+    const first = this.sql.exec('SELECT MIN(seq) AS n FROM events').toArray()[0]!.n as number | null;
+    const oldest = first ?? this.head() + 1;
+    const gap = sub.cursor < oldest - 1 ? { from: sub.cursor + 1, to: oldest - 1 } : undefined;
+    const out = this.read({ ...queryOf(sub.filter, sub.consumer), since: gap ? oldest - 1 : sub.cursor, ...(opts.limit ? { limit: opts.limit } : {}) }, reader);
+    return gap ? { ...out, gap } : out;
   }
 
   stats(): EventStats {
@@ -121,16 +203,53 @@ export class EventsCore {
 
   /** The retention window: rows older than `maxAgeMs`, then the oldest beyond `maxRows`. `seq` never goes back. */
   retain(now: number, maxAgeMs = RETENTION_MS, maxRows = RETENTION_ROWS): { aged: number; capped: number } {
+    const head = this.head();
     const count = (where: string, arg: number) => this.sql.exec(`SELECT COUNT(*) AS n FROM events WHERE ${where}`, arg).toArray()[0]!.n as number;
     const aged = count('ts < ?', now - maxAgeMs);
     if (aged) this.sql.exec('DELETE FROM events WHERE ts < ?', now - maxAgeMs);
     const cut = this.sql.exec('SELECT seq FROM events ORDER BY seq DESC LIMIT 1 OFFSET ?', maxRows).toArray()[0]?.seq as number | undefined;
     const capped = cut === undefined ? 0 : count('seq <= ?', cut);
     if (capped) this.sql.exec('DELETE FROM events WHERE seq <= ?', cut);
+    if (aged || capped) this.sql.exec("INSERT INTO events_meta (key, value) VALUES ('deleted_through', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", String(head));
     return { aged, capped };
   }
 
   private organizationId(): string | null {
-    return (this.sql.exec("SELECT value FROM events_meta WHERE key = 'organization_id'").toArray()[0]?.value as string | undefined) ?? null;
+    return this.meta('organization_id');
   }
+
+  private meta(key: string): string | null {
+    return (this.sql.exec('SELECT value FROM events_meta WHERE key = ?', key).toArray()[0]?.value as string | undefined) ?? null;
+  }
+}
+
+function toEvent(r: Record<string, unknown>, organizationId: string): PlatformEvent {
+  const ref = r.ref ? parseReference(r.ref as string) : null;
+  return {
+    id: r.id as string, seq: r.seq as number, type: r.type as string, organizationId, actor: (r.actor as string | null) ?? null,
+    ...(ref ? { ref } : {}), ...(r.channel_id ? { channelId: r.channel_id as string } : {}),
+    ...(r.caused_by ? { causedBy: r.caused_by as string } : {}),
+    depth: r.depth as number, ts: new Date(r.ts as number).toISOString(), data: JSON.parse(r.data as string),
+  };
+}
+
+function toSubscription(r: Record<string, unknown>): SubscriptionDTO {
+  return {
+    id: r.id as string, name: r.name as string, consumer: r.consumer as string, owner: r.owner as string,
+    filter: JSON.parse(r.filter as string) as EventFilter, delivery: r.delivery as DeliveryMode, cursor: r.cursor as number,
+    createdBy: r.created_by as string, createdAt: new Date(r.created_at as number).toISOString(),
+    ...(r.parked_at != null ? { parkedAt: new Date(r.parked_at as number).toISOString() } : {}),
+  };
+}
+
+/** A subscription's filter as a read's query; `self` names the consumer's own account. */
+export function queryOf(f: EventFilter, consumer: string): ReadQuery {
+  return {
+    ...(f.types?.length ? { types: f.types } : {}),
+    ...(f.ref ? { ref: formatReference(f.ref) } : {}),
+    ...(f.channelId ? { channelId: f.channelId } : {}),
+    ...(f.actorKind ? { actorKind: f.actorKind } : {}),
+    ...(f.text ? { text: f.text } : {}),
+    ...(f.self ? { self: consumer } : {}),
+  };
 }
