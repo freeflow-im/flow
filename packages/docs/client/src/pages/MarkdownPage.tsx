@@ -82,6 +82,7 @@ export function MarkdownPage() {
           },
         });
         ctl = new MarkdownController(doc, sync.save);
+        ctl.readOnly = meta.role === 'viewer';
         stopSync = sync.attach(ctl);
         setState({ meta, ctl, sync });
       })

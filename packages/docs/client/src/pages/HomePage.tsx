@@ -6,6 +6,7 @@ import { AgentButton } from '../agent/AgentPanel.tsx';
 import { useAgent } from '../agent/AgentProvider.tsx';
 import { api, placeFields as placeFieldsOf, type FolderInfo, type Place, type RecentFile } from '../api.ts';
 import { OrganizationPicker, scopeActionLabels } from '../components/OrganizationActions.tsx';
+import { ShareWithDialog } from '../components/ShareWithDialog.tsx';
 import { useOrganization } from '../organization.ts';
 import { ORG_PARAM, RootSwitch } from '../components/RootSwitch.tsx';
 import { useAuth } from '../auth.tsx';
@@ -20,7 +21,7 @@ import { Modal, PromptModal } from '../components/Modal.tsx';
 import { MoveModal } from '../components/MoveModal.tsx';
 import { fileBrowserName } from '../desktopBridge.ts';
 import { useFavicon } from '../favicon.ts';
-import { FAVORITES_PARAM, RECENTS_PARAM, rememberListing, rememberReturn, returnTo, useListingScroll } from '../listing.ts';
+import { FAVORITES_PARAM, RECENTS_PARAM, SHARED_WITH_ME_PARAM, rememberListing, rememberReturn, returnTo, useListingScroll } from '../listing.ts';
 import { LocalFolderMenu, LocalFolderParent, parentDir } from '../components/LocalFolderMenu.tsx';
 import { ScratchPadTile } from '../components/ScratchPadTile.tsx';
 import { openFromRecents } from './OpenLocalFile.tsx';
@@ -40,7 +41,10 @@ const pathOf = (s: LibraryItem) => (s.kind === 'deck' ? `/d/${s.id}` : s.kind ==
 let lastFind: { text: string; result: Promise<{ folders: FolderInfo[]; items: LibraryItem[]; truncated: boolean }> } | null = null;
 
 /** A stored file as a row of the list. */
-const fileItem = (x: StoredFile): LibraryItem => ({ id: x.id, title: x.filename, kind: 'file', folder: x.folder, ...(x.workspaceId ? { workspaceId: x.workspaceId } : {}), ...(x.shared ? { shared: true } : {}), ...(x.text ? { text: true } : {}), createdAt: x.createdAt, updatedAt: x.createdAt });
+const fileItem = (x: StoredFile): LibraryItem => ({ id: x.id, title: x.filename, kind: 'file', folder: x.folder, ...(x.workspaceId ? { workspaceId: x.workspaceId } : {}), ...(x.shared ? { shared: true } : {}), ...(x.role ? { role: x.role } : {}), ...(x.text ? { text: true } : {}), createdAt: x.createdAt, updatedAt: x.createdAt });
+
+/** A stored file a guest can be shown with a link (server/publicLinks.ts' isSharableVideo), by its name. */
+const isLinkableVideo = (name: string) => /\.(mp4|m4v|webm|mov|ogv)$/i.test(name);
 
 /** The last part of a directory's path, to name the desktop app's mounted folder. */
 const dirName = (dir: string) => dir.split(/[\\/]/).filter(Boolean).pop() ?? dir;
@@ -125,14 +129,19 @@ function FileList() {
   // Favorites (&favorites=1), also in place of the folder's: the folders and files the user keeps at hand. In the
   // desktop app they are named by their paths, as Recents' are, and may be anywhere.
   const favoritesShown = !recents && params.get(FAVORITES_PARAM) === '1';
+  // Shared with me (&withme=1, FreeFlow suite): what others shared with the user (server/access.ts); &in= a shared folder's contents.
+  const sharedShown = !recents && !favoritesShown && inOrg && !local && params.get(SHARED_WITH_ME_PARAM) === '1';
+  const sharedIn = sharedShown ? (params.get('in') ?? '') : '';
   // A list other than the folder's is shown: its rows can only be opened, or what its menu offers.
-  const otherShown = recents || favoritesShown;
+  const otherShown = recents || favoritesShown || sharedShown;
   const elsewhere = otherShown && !!local;
-  const showList = (list: typeof RECENTS_PARAM | typeof FAVORITES_PARAM, on: boolean) =>
+  const showList = (list: typeof RECENTS_PARAM | typeof FAVORITES_PARAM | typeof SHARED_WITH_ME_PARAM, on: boolean) =>
     setParams((cur) => {
       const next = new URLSearchParams(cur);
       next.delete(RECENTS_PARAM);
       next.delete(FAVORITES_PARAM);
+      next.delete(SHARED_WITH_ME_PARAM);
+      next.delete('in');
       if (on) next.set(list, '1');
       return next;
     });
@@ -172,6 +181,22 @@ function FileList() {
     if (user && !orgPending) void loadFavorites();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, favoritesShown, rootKey, orgPending]);
+  const [sharedList, setSharedList] = useState<{ folders: FolderInfo[]; items: LibraryItem[] } | null>(null);
+  const [sharedError, setSharedError] = useState<string | null>(null);
+  const loadShared = () =>
+    api.sharedWithMe(sharedIn || undefined).then(
+      (r) => (setSharedList({ folders: r.folders, items: [...r.docs, ...r.files.map(fileItem)] }), setSharedError(null)),
+      (e: Error) => (setSharedList({ folders: [], items: [] }), setSharedError(e.message)),
+    );
+  useEffect(() => {
+    setSharedList(null);
+    if (sharedShown && !orgPending) void loadShared();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sharedShown, sharedIn, org.active?.id, orgPending]);
+  // Share… (ShareWithDialog): the file or folder whose grants are shown.
+  const [sharingWith, setSharingWith] = useState<{ kind: 'sheet' | 'file' | 'folder'; id: string; name: string; linkable: boolean } | null>(null);
+  const shareItem = (s: LibraryItem) => ({ label: 'Share…', onClick: () => setSharingWith({ kind: s.kind === 'file' ? 'file' : 'sheet', id: s.id, name: s.title, linkable: s.kind === 'deck' || (s.kind === 'file' && isLinkableVideo(s.title)) }) });
+  const shareFolder = (f: FolderInfo | undefined) => (f?.id ? [{ label: 'Share…', onClick: () => setSharingWith({ kind: 'folder', id: f.id!, name: f.name, linkable: false }) }] : []);
   const setFavorite = (what: Parameters<typeof api.setFavorite>[0], on: boolean) =>
     api.setFavorite(what, on).then(loadFavorites, (e: Error) => setError(e.message));
   const favoriteAction = (key: string, what: Parameters<typeof api.setFavorite>[0]) => {
@@ -296,12 +321,14 @@ function FileList() {
   // A file or folder being moved to another organization (FreeFlow suite): the picker is open for it.
   const [orgMoving, setOrgMoving] = useState<{ kind: 'file' | 'folder'; id: string; title: string; workspaceId?: string; shared: boolean } | null>(null);
   // Share with organization / Make private / Move to organization… (FreeFlow suite; OrganizationActions.tsx).
+  // Share… for everyone; the root changes for those who may make them (a manager; another organization, the owner).
   const fileScopeActions = (s: LibraryItem) => {
     if (!inOrg || local) return [];
     const labels = scopeActionLabels(s, org.organizations.length);
     return [
-      { label: labels.share, onClick: () => api.setFileScope(s.id, { shared: !s.shared, workspace: s.workspaceId ?? org.active!.id }).then(() => load(), (e: Error) => setError(e.message)) },
-      ...(labels.move ? [{ label: labels.move, onClick: () => setOrgMoving({ kind: 'file', id: s.id, title: s.title, workspaceId: s.workspaceId, shared: !!s.shared }) }] : []),
+      shareItem(s),
+      ...(!s.role || s.role === 'manager' ? [{ label: labels.share, onClick: () => api.setFileScope(s.id, { shared: !s.shared, workspace: s.workspaceId ?? org.active!.id }).then(() => load(), (e: Error) => setError(e.message)) }] : []),
+      ...(labels.move && !s.role ? [{ label: labels.move, onClick: () => setOrgMoving({ kind: 'file', id: s.id, title: s.title, workspaceId: s.workspaceId, shared: !!s.shared }) }] : []),
     ];
   };
   const folderScopeActions = (path: string) => {
@@ -309,6 +336,7 @@ function FileList() {
     const labels = scopeActionLabels(sharedRoot ? { shared: true } : {}, org.organizations.length);
     const name = path.slice(path.lastIndexOf('/') + 1);
     return [
+      ...shareFolder(folders.find((f) => f.path === path)),
       { label: labels.share, onClick: () => api.setFolderScope(path, place, { shared: !sharedRoot }).then(() => load(), (e: Error) => setError(e.message)) },
       ...(labels.move ? [{ label: labels.move, onClick: () => setOrgMoving({ kind: 'folder', id: path, title: name, workspaceId: org.active!.id, shared: sharedRoot }) }] : []),
     ];
@@ -534,8 +562,8 @@ function FileList() {
         )
       }
       folder={folderTrail(folder)}
-      folders={recents ? [] : favoritesShown ? (favorites?.folders ?? []) : folders}
-      onOpenFolder={favoritesShown ? (p) => void openFavoriteFolder(p) : openFolder}
+      folders={recents ? [] : favoritesShown ? (favorites?.folders ?? []) : sharedShown ? (sharedList?.folders ?? []) : folders}
+      onOpenFolder={favoritesShown ? (p) => void openFavoriteFolder(p) : sharedShown ? (p) => navigate(`/?${SHARED_WITH_ME_PARAM}=1&in=${encodeURIComponent(p)}`) : openFolder}
       up={
         otherShown
           ? undefined
@@ -591,7 +619,20 @@ function FileList() {
               notice: favoritesError ? <div className="form-error">{favoritesError}</div> : undefined,
               actions: (s) => [{ label: 'Remove from Favorites', onClick: () => setFavorite(local ? { path: s.id } : { kind: s.kind, id: s.id }, false) }],
               folderActions: (p) => [{ label: 'Remove from Favorites', onClick: () => setFavorite(local ? { path: p } : { folder: p }, false) }],
-            }]
+            },
+            ...(inOrg && !local
+              ? [{
+                  label: 'Shared with me',
+                  active: sharedShown,
+                  onSelect: (on: boolean) => showList(SHARED_WITH_ME_PARAM, on),
+                  where: (s: LibraryItem) => (s.role === 'viewer' ? 'Can view' : s.role === 'manager' ? 'Can share' : 'Can edit'),
+                  when: 'Modified',
+                  empty: sharedIn ? 'This folder is empty.' : 'Files and folders others share with you show here.',
+                  notice: sharedError ? <div className="form-error">{sharedError}</div> : undefined,
+                  actions: (s: LibraryItem) => [shareItem(s)],
+                  folderActions: (p: string) => shareFolder(sharedList?.folders.find((f) => f.path === p)),
+                }]
+              : [])]
           : undefined
       }
       // A file of the desktop app's Recents is somewhere else: no thumbnail, folder or row menu until its folder is open.
@@ -691,7 +732,7 @@ function FileList() {
           {!suite && <Account />}
         </>
       }
-      items={recents ? (recentFiles?.items ?? null) : favoritesShown ? (favorites?.items ?? null) : items}
+      items={recents ? (recentFiles?.items ?? null) : favoritesShown ? (favorites?.items ?? null) : sharedShown ? (sharedList?.items ?? null) : items}
       error={recents ? recentsError : error}
       onCreate={async (kind, title) => {
         // In a folder of Organization files a new file is the organization's; anywhere else it is the user's own.
@@ -764,6 +805,7 @@ function FileList() {
         await load();
       }}
     >
+      {sharingWith && <ShareWithDialog {...sharingWith} onClose={() => setSharingWith(null)} onMoved={() => void load()} />}
       {trash && (
         <Modal title="Trash" onClose={() => setTrash(null)}>
           {trash === 'loading' ? (

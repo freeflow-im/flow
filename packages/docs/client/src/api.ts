@@ -14,6 +14,25 @@ import { readAgentEvents } from './agent/stream.ts';
 /** What can have a public link: a presentation, or a stored file (a video). */
 export type SharedKind = 'deck' | 'file';
 
+/** What a grant can name (server/access.ts): a document of any kind, a stored file, or a folder (by its object id). */
+export type GrantKind = 'sheet' | 'file' | 'folder';
+export type GrantRole = 'viewer' | 'editor' | 'manager' | 'owner';
+/** One grant on a file or folder (platform.md §4.3): `account:<id>`, `channel:<id>`, `org` or `link:<token>`. */
+export interface GrantInfo {
+  principal: string;
+  role: GrantRole;
+  grantedBy: string;
+  grantedAt: string;
+  expiresAt?: string;
+}
+/** A file's or folder's own grants, the caller's role on it and its link's address; `id` when a change gave it a new one (a folder moved root). */
+export interface Sharing {
+  grants: GrantInfo[];
+  role: GrantRole;
+  link: string | null;
+  id?: string;
+}
+
 /** A file previewed read-only for an hour (server/previews.ts): Mail's attachments. */
 export interface PreviewInfo {
   id: string;
@@ -112,6 +131,8 @@ async function uploadFile(name: string, file: Blob, folder?: Place): Promise<Sto
 export interface FolderInfo {
   name: string;
   path: string;
+  /** In the FreeFlow suite: the folder as an object grants name (server/access.ts). */
+  id?: string;
 }
 
 /** A folder on the desktop app's machine its folder menu offers: its name and absolute path. */
@@ -151,6 +172,9 @@ const inFolder = (place: Place | undefined, first = false) => {
   const q = new URLSearchParams(placeFields(place)).toString();
   return q ? `${first ? '?' : '&'}${q}` : '';
 };
+
+/** A grants route of a file or folder, in the organization the bar selected. */
+const grantUrl = (kind: GrantKind, id: string, rest = '') => `/api/grants/${kind}/${encodeURIComponent(id)}${rest}${inFolder(undefined, true)}`;
 
 /** A file of Recents. */
 /** The window event after a file or folder was made a favorite or not (api.setFavorite). */
@@ -260,6 +284,14 @@ export const api = {
   zipOfficeView: (id: string, path: string) => request<{ view: ZipOfficeView }>('GET', `/api/files/${encodeURIComponent(id)}/zip/view?path=${encodeURIComponent(path)}`),
   deleteFile: (id: string) => request<{ ok: true }>('DELETE', `/api/files/${encodeURIComponent(id)}`),
 
+  /** Who a file or folder is shared with (server/access.ts), and changing it. */
+  grants: (kind: GrantKind, id: string) => request<Sharing>('GET', grantUrl(kind, id)),
+  setGrant: (kind: GrantKind, id: string, principal: string, role: GrantRole) => request<Sharing>('PUT', grantUrl(kind, id), { principal, role }),
+  removeGrant: (kind: GrantKind, id: string, principal: string) => request<Sharing>('DELETE', grantUrl(kind, id, `/${encodeURIComponent(principal)}`)),
+  makeLink: (kind: GrantKind, id: string) => request<{ url: string }>('POST', grantUrl(kind, id, '/link')),
+  /** Shared with me: what others shared with the user in the organization the bar selected; with `inside`, a shared folder's contents. */
+  sharedWithMe: (inside?: string) =>
+    request<{ folder: string; folders: FolderInfo[]; docs: SheetMeta[]; files: StoredFile[] }>('GET', `/api/library?scope=shared${inside ? `&in=${encodeURIComponent(inside)}` : ''}${inFolder(undefined)}`),
   sharing: (kind: SharedKind, id: string) => request<{ url: string | null }>('GET', `/api/sharing/${kind}/${encodeURIComponent(id)}`),
   startSharing: (kind: SharedKind, id: string) => request<{ url: string | null }>('PUT', `/api/sharing/${kind}/${encodeURIComponent(id)}`),
   stopSharing: (kind: SharedKind, id: string) => request<{ url: string | null }>('DELETE', `/api/sharing/${kind}/${encodeURIComponent(id)}`),

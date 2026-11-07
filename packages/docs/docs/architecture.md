@@ -275,9 +275,11 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   data, its FAQ section included) and as Markdown for agents at `/features/<slug>.md` (or with `Accept: text/markdown`),
   listed on `/features`, in `/sitemap.xml` and in `/llms.txt`. A new page is a new file there and a `page` on its
   box in `LandingPage`'s `FEATURES`.
-- Public links (`server/publicLinks.ts`, table `public_links`): the hosted app only, a presentation or a video (a stored file a browser plays)
-  can have an address, `/p/<token>`, that anyone can view without signing in (`PublicPage`). Whoever may open the file (its owner; in the suite, an organization file's members) turns it on and off in the Sharing menu
-  (`ShareDialog`, `/api/sharing/:kind/:id`), and a link stops working when the one who made it can no longer open the file; a link turned on again gets a new token, and deleting a file ends its link (triggers on `sheets` and
+- Public links (`server/publicLinks.ts`; a `link:<token>` viewer grant since platform phase 3.2, `public_links` kept one release, unread):
+  the hosted app only, a presentation or a video (a stored file a browser plays)
+  can have an address, `/p/<token>`, that anyone can view without signing in (`PublicPage`). A manager of the file turns it on and off (`POST /api/grants/:kind/:id/link`,
+  removing the grant; the Sharing menu's `ShareDialog` still uses the older `/api/sharing/:kind/:id`, now wrappers over the grant; the organization's `linkSharing` policy, `host.linkSharing`, can refuse it with `policy_forbids`);
+  a link works while its grant does (`resolveLink`); a link turned on again gets a new token, and deleting a file ends its link (triggers on `sheets` and
   `stored_files`, whichever path deleted it, so a restored file is not public again). Guests use `/api/public/:token...` only: `publicDeck` gives them
   a copy of the deck without speaker notes or links to spreadsheets, with its pictures and videos named under the token, and only what its elements
   show can be fetched with it (`shownBy`, checked per request, so what leaves the deck stops being available). Answers carry `no-referrer`,
@@ -322,6 +324,17 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   file's page selects the folder it was opened from (`listing.ts`' `last`); so the home page has no `RootSwitch` or Recents/Favorites
   tabs there (`FileLibrary`'s `listTabs={false}`, `RootSwitch` only outside the suite), the breadcrumbs name the root, and `OrganizationActions.tsx` has the menus' Share with organization / Make private /
   Move to organization… (a picker of the user's other organizations).
+  Since platform phase 3.2 access is on grants (`server/access.ts`, the `grants` table of `@flow/shared/grants`): objects are `sheet`, `file`
+  and `folder` (named `<scopeKey>/<path>`, `folderObjectId`; folders have no id), a file's chain is itself then each folder up to its root's
+  top, and `roleOf` is `owner` for the owner column, else (for a member of the row's organization) `effectiveRole` over the chain's grants,
+  matched against the caller's account and channels (`host.readerOf`; the Worker passes them in the caller context). `canAccess` is gone: the
+  stores' by-id methods take a needed role (read viewer, change editor, delete owner; a lower role is a 403). Organization files are the rows
+  with an `org` grant, which every row of an organization's root has (`syncOrgGrant` on create and move; the one-time migration gave it to the
+  `private = 0` rows), so `private` stays as the flag derived from it and `scopeWhere` lists as before. Share with organization and Make private
+  give and take `org` (a manager's), Move to organization… is the owner's. `/api/grants/:kind/:id` (GET viewer+, PUT `{ principal, role }` and
+  DELETE `/:principal` manager+; `org` there is the same move) backs the Share… dialog (`ShareWithDialog.tsx`), and `/api/library?scope=shared`
+  (`&in=<folder id>`) is Shared with me, a third list in `DocsNav` (`?withme=1`). Metadata carries `role` when the reader is not the owner; a
+  viewer's editors are read-only (`viewOnlyGuard` on the sheet, deck and doc stores, `readOnly` on the Markdown and text editors).
 - Folders (`shared/folders.ts`): a folder is named by its path (`Reports/2026`, `''` for the top). Files
   carry it in the `folder` column (`SheetMeta.folder`, `StoredFile.folder`); the folders themselves are
   rows on the server (`FolderStore`, `server/folders.ts`) and directories in the desktop app

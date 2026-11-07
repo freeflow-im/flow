@@ -3,7 +3,7 @@
 // read-only until the user allows editing it; a change the file cannot hold asks to keep it in the app's own
 // format instead. The page wires `onRefused` to its controller and sets the store's guard.
 import { useState, type ReactNode } from 'react';
-import { EDIT_NOT_ALLOWED } from '../state/store.ts';
+import { EDIT_NOT_ALLOWED, VIEW_ONLY } from '../state/store.ts';
 import type { SheetMeta } from '../../../shared/types.ts';
 import { ConfirmModal } from './Modal.tsx';
 import { appName } from '../brand.ts';
@@ -30,7 +30,8 @@ export function useOfficeFile(opts: {
   const program = opts.meta.format ? PROGRAM[opts.meta.format] : undefined;
   if (!program) return { locked: false, onRefused: () => {}, chip: null, dialogs: null };
 
-  const onRefused = (reason: string, retry: () => void) => setQuestion(reason === EDIT_NOT_ALLOWED ? { kind: 'allow', retry } : { kind: 'own', reason, retry });
+  // A viewer's refusal (VIEW_ONLY) asks nothing: the file is read-only for them, and says so.
+  const onRefused = (reason: string, retry: () => void) => (reason === VIEW_ONLY ? opts.notify(`${VIEW_ONLY}.`) : setQuestion(reason === EDIT_NOT_ALLOWED ? { kind: 'allow', retry } : { kind: 'own', reason, retry }));
   const chip = notKept ? (
     <button className="format-chip locked" title={`This ${program} file has things ${appName()} can't keep (${notKept.join('; ')}). Click to allow editing.`} onClick={() => setQuestion({ kind: 'allow' })}>
       {program} · Read-only

@@ -36,8 +36,28 @@ async function suiteApi<T>(method: string, path: string, body?: unknown): Promis
   return (await res.json()) as T;
 }
 
+/** A member of an organization, as `GET /v1/workspaces/:id/members` lists them (people and agents): whom a file can be shared with. */
+export interface SuiteMember {
+  userId: string;
+  displayName: string;
+  email: string;
+  isAgent: boolean;
+  accountId?: string;
+  address?: string;
+}
+
+/** A channel of an organization, as `GET /v1/workspaces/:id/channels` lists them; a direct message has no name. */
+export interface SuiteChannel {
+  id: string;
+  name: string | null;
+  isPrivate: boolean;
+  archivedAt: string | null;
+}
+
 export const suite = {
   me: () => suiteApi<SuiteUser>('GET', '/v1/me'),
+  members: async (organizationId: string) => (await suiteApi<{ members: SuiteMember[] }>('GET', `/v1/workspaces/${encodeURIComponent(organizationId)}/members`)).members,
+  channels: async (organizationId: string) => (await suiteApi<{ channels: SuiteChannel[] }>('GET', `/v1/workspaces/${encodeURIComponent(organizationId)}/channels`)).channels,
   organizations: async () => (await suiteApi<{ workspaces: SuiteOrganization[] }>('GET', '/v1/me/workspaces')).workspaces,
   setStatus: (patch: { statusEmoji: string; statusText: string; statusSuppressAlerts: boolean }) => suiteApi<SuiteUser>('PATCH', '/v1/me', patch),
 };

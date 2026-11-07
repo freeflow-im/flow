@@ -24,7 +24,7 @@ import { DeckIcon } from '../components/Logo.tsx';
 import { MenuList, type MenuItem } from '../components/Menu.tsx';
 import { ConfirmModal, PromptModal } from '../components/Modal.tsx';
 import { useOfficeFile } from '../components/OfficeFile.tsx';
-import { lockedGuard } from '../state/store.ts';
+import { lockedGuard, viewOnlyGuard } from '../state/store.ts';
 import { pptxGuard } from '../deck/store.ts';
 import { ResizeHandle, usePanelWidth } from '../components/ResizeHandle.tsx';
 import { DeckController, useDeckController } from '../deck/controller.ts';
@@ -144,6 +144,7 @@ export function DeckPage() {
 
 /** The guard of the file's format (desktop app): what a PowerPoint file cannot hold, or everything until editing is allowed. */
 function guardFor(meta: SheetMeta, notKept: string[] | undefined) {
+  if (meta.role === 'viewer') return viewOnlyGuard;
   if (meta.format !== 'pptx') return null;
   return notKept?.length ? lockedGuard : pptxGuard;
 }

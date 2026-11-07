@@ -21,11 +21,12 @@ export function last(): string {
   }
 }
 
-/** The lists the home page shows in place of the folder's: Recents and Favorites. */
+/** The lists the home page shows in place of the folder's: Recents, Favorites and (FreeFlow suite) Shared with me. */
 export const RECENTS_PARAM = 'recents';
 export const FAVORITES_PARAM = 'favorites';
-export type OtherListName = typeof RECENTS_PARAM | typeof FAVORITES_PARAM;
-const LISTS: Record<OtherListName, string> = { recents: 'Recents', favorites: 'Favorites' };
+export const SHARED_WITH_ME_PARAM = 'withme';
+export type OtherListName = typeof RECENTS_PARAM | typeof FAVORITES_PARAM | typeof SHARED_WITH_ME_PARAM;
+const LISTS: Record<OtherListName, string> = { recents: 'Recents', favorites: 'Favorites', withme: 'Shared with me' };
 export const listHref = (list: OtherListName): string => `/?${list}=1`;
 export const RECENTS_HREF = listHref(RECENTS_PARAM);
 export const rememberList = (list: OtherListName): void => rememberListing(`?${list}=1`);

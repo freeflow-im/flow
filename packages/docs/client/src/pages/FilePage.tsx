@@ -182,11 +182,13 @@ export function FilePage() {
   const html = file?.type === HTML_TYPE;
   const fileMenu = (f: StoredFile): MenuItem[] => {
     const office = editableKind(f.filename);
+    // A file shared with the user as a viewer (server/access.ts) is not edited.
+    const mayEdit = f.role !== 'viewer';
     const kindItems: MenuItem[] = [
-      ...(editableImage ? [{ label: 'Edit picture', checked: editing, action: () => setEditing(!editing) }] : []),
-      ...(pdf ? [{ label: 'Sign or add text', checked: editing, action: () => setEditing(!editing) }] : []),
-      ...(html ? [{ label: 'Edit page', checked: editing, action: () => setEditing(!editing) }] : []),
-      ...(json ? [{ label: 'Edit as text', checked: editing, action: () => setEditing(!editing) }] : []),
+      ...(editableImage && mayEdit ? [{ label: 'Edit picture', checked: editing, action: () => setEditing(!editing) }] : []),
+      ...(pdf && mayEdit ? [{ label: 'Sign or add text', checked: editing, action: () => setEditing(!editing) }] : []),
+      ...(html && mayEdit ? [{ label: 'Edit page', checked: editing, action: () => setEditing(!editing) }] : []),
+      ...(json && mayEdit ? [{ label: 'Edit as text', checked: editing, action: () => setEditing(!editing) }] : []),
       ...((editableImage || pdf) && canRevert && !editing ? [{ label: 'Undo save', action: () => void revert() }] : []),
       ...(pdf ? [{ label: 'Convert to Markdown', disabled: converting, action: () => void toMarkdown(f) }] : []),
       ...(office ? [{ label: `Open as ${office}`, disabled: converting, action: () => void convert(f) }] : []),
