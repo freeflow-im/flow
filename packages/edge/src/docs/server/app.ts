@@ -119,6 +119,28 @@ export interface LocalAgents {
   disconnect(id: string): Promise<boolean>;
 }
 
+/** What a file or folder is, as the share index and the event bus name it: its object kind and id (server/access.ts), the
+ * kind of file it is (a document's kind, `file` or `folder`), its title and its organization. */
+export interface ObjectDescription {
+  kind: ObjectKind;
+  id: string;
+  fileKind: string;
+  title: string;
+  workspaceId: string;
+}
+
+/** A grant change (`host.onGrantChange`): `role` null is a revoke; `actor` is the account (else the user) that made it. */
+export interface GrantChange extends ObjectDescription {
+  principal: string;
+  role: Role | null;
+  actor: string;
+}
+
+/** A save or rename of a document (`host.onFileChanged`); `ownerId` is its owner's user id. */
+export interface FileChange extends ObjectDescription {
+  ownerId: string;
+}
+
 export interface AppOptions {
   dataDir: string;
   staticDir?: string;
@@ -190,6 +212,13 @@ export interface AppOptions {
     readerOf?(req: FastifyRequest): { accountId?: string | null; channelIds?: readonly string[] } | null;
     /** Whether the organization's policy allows links anyone can open (`linkSharing`, platform.md §3.1); allowed when not told. */
     linkSharing?(workspaceId: string): Promise<boolean>;
+    /**
+     * A grant was given, changed (a role) or taken away (`role` null), after the change is made: the host reports it to the
+     * organization's share index (platform.md §4.5). It must not throw or wait; a failure is the host's to log.
+     */
+    onGrantChange?(change: GrantChange): void;
+    /** A document of an organization was saved or renamed: the host may tell the event bus (platform.md §5.2). */
+    onFileChanged?(change: FileChange): void;
     /** Handed the app's stores once they are open: the suite's MCP endpoint uses them (docs/plugin/server/worker.ts). */
     stores?(stores: { db: DB; sheets: SheetStore; images: ImageStore; files: FileStore; folders: Folders; pdf?: PdfMaker }): void;
   };
@@ -994,7 +1023,18 @@ export async function buildApp(opts: AppOptions) {
 
   // --- Revisions: an open editor hears when its file is saved elsewhere (revisionFeed.ts) ---
   const revisions = new RevisionFeed();
-  sheets.onRevision = (id, rev) => revisions.publish(id, rev);
+  sheets.onRevision = (id, rev) => {
+    revisions.publish(id, rev);
+    // The event bus hears of a save too (the host keeps it to one event per file now and then).
+    const d = host?.onFileChanged ? describeObject('sheet', id) : null;
+    if (d) {
+      try {
+        host!.onFileChanged!({ ...d, ownerId: sheets.find(id)!.owner_id });
+      } catch (err) {
+        console.error('file change report failed', err);
+      }
+    }
+  };
   const revisionStreams = new Set<ServerResponse>();
   // In the desktop app, the directories open editors and lists look at, for changes other programs make.
   const dirWatchers = folder ? new DirWatchers((dir) => folder.abs(dir)) : null;
@@ -1342,6 +1382,31 @@ export async function buildApp(opts: AppOptions) {
     if (otherOrg) revokeMembers(db, 'file', id);
     return file;
   };
+  /** A file or folder as the host's hooks name it; null for no such object, or one of no organization. */
+  const describeObject = (kind: ObjectKind, id: string): ObjectDescription | null => {
+    if (kind === 'sheet') {
+      const s = sheets.find(id);
+      return s?.workspace_id ? { kind, id, fileKind: s.kind, title: s.title, workspaceId: s.workspace_id } : null;
+    }
+    if (kind === 'file') {
+      const f = storedFiles.find(id);
+      return f?.workspace_id ? { kind, id, fileKind: 'file', title: f.filename, workspaceId: f.workspace_id } : null;
+    }
+    const f = parseFolderObjectId(id);
+    const row = f ? objectRow(db, 'folder', id) : undefined;
+    return f && row?.workspace_id ? { kind, id, fileKind: 'folder', title: folderName(f.path) || 'Folder', workspaceId: row.workspace_id } : null;
+  };
+  /** Tells the host of a grant change (platform.md §4.5), once it is made. */
+  const reportGrant = (req: FastifyRequest, kind: ObjectKind, id: string, principal: string, role: Role | null) => {
+    if (!host?.onGrantChange) return;
+    const d = describeObject(kind, id);
+    if (!d) return;
+    try {
+      host.onGrantChange({ ...d, principal, role, actor: readerOf(req.viewer).accountId });
+    } catch (err) {
+      console.error('grant change report failed', err);
+    }
+  };
   /** A folder with everything in it into another root, at the top there under its own name (FolderStore.moveTo). */
   const moveFolderTo = async (viewer: ViewerArg, source: Scope | ScopeArg, path: string, target: Scope) => {
     const moved = (folders as FolderStore).moveTo(source, path, target);
@@ -1373,14 +1438,18 @@ export async function buildApp(opts: AppOptions) {
     const linksAllowed = async (row: Owned) => !row.workspace_id || !host?.linkSharing || (await host.linkSharing(row.workspace_id));
     const POLICY_FORBIDS = { error: 'This organization does not allow links anyone can open.', code: 'policy_forbids' };
     /** The object's link, made if it has none (a new token: a link stopped and made again does not bring the old address back). */
-    const makeLink = (kind: ObjectKind, id: string, by: string): string => {
+    const makeLink = (req: FastifyRequest, kind: ObjectKind, id: string): string => {
       const had = linkTokenOf(db, kind, id);
       if (had) return had;
       const token = newLinkToken();
-      grant(db, kind, id, `link:${token}`, 'viewer', by);
+      grant(db, kind, id, `link:${token}`, 'viewer', req.user!.id);
+      reportGrant(req, kind, id, `link:${token}`, 'viewer');
       return token;
     };
-    const removeLinks = (kind: ObjectKind, id: string) => void db.prepare("DELETE FROM grants WHERE object_kind = ? AND object_id = ? AND principal LIKE 'link:%'").run(kind, id);
+    const removeLinks = (req: FastifyRequest, kind: ObjectKind, id: string) => {
+      const gone = db.prepare("DELETE FROM grants WHERE object_kind = ? AND object_id = ? AND principal LIKE 'link:%' RETURNING principal").all(kind, id) as { principal: string }[];
+      for (const g of gone) reportGrant(req, kind, id, g.principal, null);
+    };
     /**
      * The `org` grant given or taken: the object goes to its organization's root (Share with organization) or to the
      * caller's own files there (Make private), with what is in it. Returns its id after (a folder's changes with its root).
@@ -1421,12 +1490,14 @@ export async function buildApp(opts: AppOptions) {
           if (!linkable(t.kind, t.id)) return reply.code(400).send({ error: 'Only presentations and videos can be shared with a link.' });
           if (!TOKEN_RE.test(p.id!)) return reply.code(400).send({ error: 'A link token is 32 letters, digits, - and _.' });
           grant(db, t.kind, t.id, `link:${p.id}`, 'viewer', req.user!.id);
+          reportGrant(req, t.kind, t.id, `link:${p.id}`, 'viewer');
           return sharingOf(req, t.kind, t.id, t.role);
         }
         // A manager gives no more than they have; the owner is a column, not a grant.
         if (ROLE_RANK[b.role as Role] > ROLE_RANK[t.role]) return reply.code(403).send({ error: refused('owner').message });
         const id = p.kind === 'org' ? await setOrg(req, t.kind, t.id, t.row, true) : t.id;
         grant(db, t.kind, id, b.principal as `account:${string}`, b.role as Role, req.user!.id);
+        reportGrant(req, t.kind, id, String(b.principal), b.role as Role);
         return { ...sharingOf(req, t.kind, id, t.role), ...(id !== t.id ? { id } : {}) };
       });
 
@@ -1436,9 +1507,12 @@ export async function buildApp(opts: AppOptions) {
         const { principal } = req.params as { principal: string };
         if (principal === 'org') {
           const id = await setOrg(req, t.kind, t.id, t.row, false);
+          if (!t.row.private) reportGrant(req, t.kind, id, 'org', null);
           return { ...sharingOf(req, t.kind, id, access(db, req.viewer, t.kind, id) ?? t.role), ...(id !== t.id ? { id } : {}) };
         }
+        const had = grantsOn(db, t.kind, t.id).some((g) => g.principal === principal);
         revoke(db, t.kind, t.id, principal);
+        if (had) reportGrant(req, t.kind, t.id, principal, null);
         return sharingOf(req, t.kind, t.id, t.role);
       });
 
@@ -1448,7 +1522,7 @@ export async function buildApp(opts: AppOptions) {
         if (!t) return reply;
         if (!(await linksAllowed(t.row))) return reply.code(403).send(POLICY_FORBIDS);
         if (!linkable(t.kind, t.id)) return reply.code(400).send({ error: 'Only presentations and videos can be shared with a link.' });
-        return { url: linkUrl(req, makeLink(t.kind, t.id, req.user!.id)) };
+        return { url: linkUrl(req, makeLink(req, t.kind, t.id)) };
       });
 
       // The routes of before link grants, for older clients: a presentation's or video's link (`deck` is a document).
@@ -1469,12 +1543,12 @@ export async function buildApp(opts: AppOptions) {
         const t = legacy(req, reply, 'manager');
         if (!t) return reply;
         if (!(await linksAllowed(t.row))) return reply.code(403).send(POLICY_FORBIDS);
-        return { url: linkUrl(req, makeLink(t.kind, t.id, req.user!.id)) };
+        return { url: linkUrl(req, makeLink(req, t.kind, t.id)) };
       });
       r.delete('/api/sharing/:kind/:id', async (req, reply) => {
         const t = legacy(req, reply, 'manager');
         if (!t) return reply;
-        removeLinks(t.kind, t.id);
+        removeLinks(req, t.kind, t.id);
         return { url: null };
       });
     });
@@ -2470,7 +2544,10 @@ export async function buildApp(opts: AppOptions) {
       if (!row || !role) return reply.code(404).send({ error: 'File not found' });
       const need = roleToMove(row.workspace_id, target.workspaceId);
       if (!atLeast(role, need)) return reply.code(403).send({ error: refused(need).message });
-      return { file: await moveFileTo(req.viewer, kind, id, row, target) };
+      const file = await moveFileTo(req.viewer, kind, id, row, target);
+      // Share with organization or Make private: the `org` grant given or taken.
+      if (row.workspace_id === target.workspaceId && !!row.private !== !!target.private) reportGrant(req, kind, id, 'org', target.private ? null : 'editor');
+      return { file };
     });
 
     // A folder with everything in it: from the root `from` names (`{ workspace, shared }`, as a request names one) to
@@ -2487,6 +2564,8 @@ export async function buildApp(opts: AppOptions) {
       const need = roleToMove(scopeOf(source).workspaceId, target.workspaceId);
       if (!atLeast(role, need)) return reply.code(403).send({ error: refused(need).message });
       const moved = await moveFolderTo(req.viewer, source, path, target);
+      const from = scopeOf(source);
+      if (from.workspaceId === target.workspaceId && !!from.private !== !!target.private) reportGrant(req, 'folder', folderObjectId(scopeKey(target), moved.path), 'org', target.private ? null : 'editor');
       return { folder: { name: folderName(moved.path), path: moved.path }, moved: moved.sheets.length + moved.files.length };
     });
 

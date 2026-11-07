@@ -285,6 +285,7 @@ const SYSTEM_PREDICATE: Record<SystemMessageKind, string> = {
   huddle_missed: '',
   huddle_declined: '',
   huddle_ended: '',
+  file_shared: '',
 };
 
 /**
@@ -368,6 +369,8 @@ export async function postSystemMessage(
  *   gives every other member kind 1 (dm) and already drops anyone who muted
  *   the conversation, so muting a DM silences its call lines too, for free.
  *
+ * A share's line (`file_shared`, services/shares.ts) goes the same way: in a DM it notifies the person shared with.
+ *
  * Body is pre-rendered, like every system message, so scroll-back reads
  * correctly with no live lookup. Best-effort: a failed line must not fail the
  * call it describes.
@@ -375,7 +378,7 @@ export async function postSystemMessage(
 export async function postHuddleSystemMessage(
   chan: { id: string; workspaceId: string },
   authorId: string,
-  kind: (typeof HUDDLE_SYSTEM_KINDS)[number],
+  kind: (typeof HUDDLE_SYSTEM_KINDS)[number] | 'file_shared',
   body: string,
 ): Promise<MessageDTO | null> {
   try {

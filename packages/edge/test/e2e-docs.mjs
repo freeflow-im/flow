@@ -68,4 +68,30 @@ r=await api(null,'GET',`/api/public/${TOK}`);t('the link stops working',r.s===40
 r=await api(A.token,'PUT',`/api/grants/sheet/${P}?workspace=${W}`,{principal:'org',role:'editor'});t('the organization toggle on',r.s===200&&(r.j.grants??[]).some(g=>g.principal==='org'),r.s+' '+JSON.stringify(r.j).slice(0,120));
 r=await api(Bo.token,'GET',`/api/library?workspace=${W}&shared=1`);const inOrg=(r.j.docs??[]).some(d=>d.id===P);r=await api(A.token,'GET',`/api/library?workspace=${W}`);t('it moved to Organization files',inOrg&&!(r.j.docs??[]).some(d=>d.id===P),inOrg);
 r=await api(A.token,'DELETE',`/api/grants/sheet/${P}/org?workspace=${W}`);r=await api(A.token,'GET',`/api/library?workspace=${W}`);const back=(r.j.docs??[]).some(d=>d.id===P);r=await api(Bo.token,'GET',`/api/library?workspace=${W}&shared=1`);t('and back to My files',back&&!(r.j.docs??[]).some(d=>d.id===P),back);
+// The share index (platform phase 3.3): Docs reports each grant to the Org object, which keeps `shares`, publishes
+// sharing.granted / sharing.revoked, notifies the person or posts the card in the channel; a save is docs.file.changed
+// for whoever the file is shared with, read from the index. Fay is a member it is not shared with.
+const Fy=await signup(`fay-${tag}@example.com`,'Fay');r=await api(A.token,'POST',`/v1/workspaces/${W}/invites`,{email:`fay-${tag}@example.com`});await api(Fy.token,'POST','/v1/invites/accept',{token:(r.j.inviteUrl??'').split('/').pop()});
+const evs=async(tok,since,types)=>(await api(tok,'GET',`/v1/events?workspace=${W}&since=${since}&types=${types}`)).j.events??[];
+const since0=0;
+r=await api(A.token,'POST',`/api/sheets?workspace=${W}`,{title:'Q4 plan'});const Q=r.j.sheet?.id;const QREF=`${W}/docs/sheet/${Q}`;
+r=await api(A.token,'PUT',`/api/grants/sheet/${Q}?workspace=${W}`,{principal:`account:${eliAcct}`,role:'viewer'});t('Dana shares Q4 plan with Eli',r.s===200,r.s);
+await sleep(1500);
+r=await api(Bo.token,'GET',`/v1/me/notifications?workspace=${W}`);t('Eli has a notification naming the file',(r.j.notifications??[]).some(n=>/Dana shared Q4 plan with you/.test(n.message?.body??'')&&(n.message?.body??'').includes(`/workspace/s/${Q}`)),r.s+' '+JSON.stringify(r.j).slice(0,160));
+let es=await evs(Bo.token,since0,'sharing.granted');t('sharing.granted is in Eli\'s read, with the reference',es.some(e=>e.data?.ref===QREF&&e.ref?.id===Q&&e.data?.url===`/workspace/s/${Q}`),JSON.stringify(es).slice(0,160));
+es=await evs(Fy.token,since0,'sharing.granted');t('and not in Fay\'s',!es.some(e=>e.data?.ref===QREF),JSON.stringify(es).slice(0,120));
+r=await api(Bo.token,'GET',`/v1/workspaces/${W}/shared-with-me`);t('shared-with-me lists it for Eli',r.s===200&&(r.j.shares??[]).some(x=>x.ref===QREF&&x.title==='Q4 plan'&&x.role==='viewer'&&x.kind==='sheet'),r.s+' '+JSON.stringify(r.j).slice(0,160));
+r=await api(Fy.token,'GET',`/v1/workspaces/${W}/shared-with-me`);t('and not for Fay',r.s===200&&!(r.j.shares??[]).some(x=>x.ref===QREF),r.s+' '+JSON.stringify(r.j).slice(0,100));
+r=await api(Bo.token,'GET',`/v1/channels/${general?.id}/messages`);t('the folder shared with #general left a card with its address',(r.j.messages??[]).some(m=>m.systemKind==='file_shared'&&/Dana shared Shared Q4 with this channel\n\S*\/workspace\/\?withme=1&in=/.test(m.body)),JSON.stringify((r.j.messages??[]).slice(0,2)).slice(0,170));
+r=await api(A.token,'GET',`/api/sheets/${Q}`);const qwb=r.j.workbook;qwb.tabs[0].cells={A1:{v:'7'}};r=await api(A.token,'PUT',`/api/sheets/${Q}`,{workbook:qwb});t('Dana saves a change',r.s===200,r.s+' '+JSON.stringify(r.j).slice(0,100));
+await sleep(1500);
+es=await evs(Bo.token,since0,'docs.file.changed');t('Eli\'s read shows docs.file.changed',es.some(e=>e.data?.ref===QREF&&e.data?.kind==='sheet'&&e.data?.title==='Q4 plan'&&!!e.data?.ownerAccountId),JSON.stringify(es).slice(0,160));
+es=await evs(Fy.token,since0,'docs.file.changed');t('a non-grantee\'s does not',!es.some(e=>e.data?.ref===QREF),JSON.stringify(es).slice(0,120));
+es=await evs(A.token,since0,'docs.file.changed');t('its owner\'s does',es.some(e=>e.data?.ref===QREF),JSON.stringify(es).slice(0,120));
+r=await api(A.token,'DELETE',`/api/grants/sheet/${Q}/${encodeURIComponent('account:'+eliAcct)}?workspace=${W}`);t('Dana stops sharing it',r.s===200,r.s);
+await sleep(1500);
+es=await evs(Bo.token,since0,'sharing.revoked');t('sharing.revoked is in Eli\'s read',es.some(e=>e.data?.ref===QREF),JSON.stringify(es).slice(0,140));
+r=await api(Bo.token,'GET',`/v1/workspaces/${W}/shared-with-me`);t('shared-with-me no longer lists it',r.s===200&&!(r.j.shares??[]).some(x=>x.ref===QREF),JSON.stringify(r.j).slice(0,140));
+r=await api(A.token,'GET',`/api/sheets/${Q}`);const qwb2=r.j.workbook;qwb2.tabs[0].cells={A1:{v:'8'}};await api(A.token,'PUT',`/api/sheets/${Q}`,{workbook:qwb2});await sleep(1000);
+es=await evs(Bo.token,since0,'docs.file.changed');t('docs.file.changed is no longer visible to Eli',!es.some(e=>e.data?.ref===QREF),JSON.stringify(es).slice(0,140));
 console.log(`\n${pass} passed, ${fail} failed`);process.exit(fail?1:0);

@@ -685,3 +685,23 @@ export const workspaceEmailImages = sqliteTable(
   },
   (t) => [index('workspace_email_images_file_idx').on(t.fileId)],
 );
+
+/**
+ * The share index (platform.md §4.5, phase 3.3): one row per grant an app object reports, so "shared with me" and the
+ * bus's visibility are answered here without a fan-out over every app object. `ref` is the object's formatted reference
+ * (`<org>/docs/<kind>/<id>`), `principal` a grant principal, `granted_by` the granter's account, `kind` the kind of file
+ * (a document's kind, `file`, `folder`) and `at` epoch milliseconds.
+ */
+export const shares = sqliteTable(
+  'shares',
+  {
+    ref: text('ref').notNull(),
+    principal: text('principal').notNull(),
+    role: text('role').notNull(),
+    grantedBy: text('granted_by').notNull(),
+    title: text('title').notNull().default(''),
+    kind: text('kind').notNull().default(''),
+    at: integer('at').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.ref, t.principal] }), index('shares_principal_idx').on(t.principal)],
+);

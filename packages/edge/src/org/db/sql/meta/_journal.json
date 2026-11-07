@@ -22,6 +22,13 @@
       "when": 1794021831360,
       "tag": "0002_member_account_id",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1794029247898,
+      "tag": "0003_share_index",
+      "breakpoints": true
     }
   ]
 }

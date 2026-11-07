@@ -578,7 +578,10 @@ export type SystemMessageKind =
   | 'member_left'
   | 'huddle_missed'
   | 'huddle_declined'
-  | 'huddle_ended';
+  | 'huddle_ended'
+  // A file shared with a channel, or with one person in their DM (platform phase 3.3): "Ann shared Q4 plan with this
+  // channel", then the file's address on its own line.
+  | 'file_shared';
 
 /**
  * The huddle outcome kinds (#436). Split out because they are the system

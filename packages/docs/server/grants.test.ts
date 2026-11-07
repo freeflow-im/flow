@@ -5,13 +5,16 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { buildApp } from './app.ts';
+import { buildApp, type FileChange, type GrantChange } from './app.ts';
 
 const members: Record<string, string[]> = { ann: ['harbor', 'juniper'], bob: ['harbor', 'juniper'], cat: ['harbor'], dave: [] };
 const channels: Record<string, string[]> = { ann: ['general'], bob: [], cat: ['general'], dave: ['general'] };
 const linkSharing: Record<string, boolean> = { harbor: true, juniper: false };
 let dir: string;
 let host: ReturnType<typeof Fastify>;
+/** What the host's hooks were told: the share index's feed and the saves (platform phase 3.3). */
+const changes: GrantChange[] = [];
+const saves: FileChange[] = [];
 
 beforeAll(async () => {
   dir = mkdtempSync(path.join(tmpdir(), 'docs-grants-'));
@@ -37,6 +40,8 @@ beforeAll(async () => {
         return { accountId: `acct-${id}`, channelIds: channels[id] ?? [] };
       },
       linkSharing: async (workspaceId) => linkSharing[workspaceId] ?? true,
+      onGrantChange: (c) => void changes.push(c),
+      onFileChanged: (c) => void saves.push(c),
     },
   });
   await host.ready();
@@ -138,5 +143,44 @@ describe('sharing on grants', () => {
     // Share with organization, as the menus ask for it, is the same grant.
     await call('ann', 'POST', `/api/files/${id}/scope`, { workspace: 'harbor', shared: true });
     expect((await call('ann', 'GET', `/api/grants/sheet/${id}`)).body.grants).toMatchObject([{ principal: 'org', role: 'editor' }]);
+  });
+
+  it('tells the host of every grant change, for the share index', async () => {
+    changes.length = 0;
+    const id = (await call('ann', 'POST', '/api/docs', { title: 'Hooked', workspace: 'harbor' })).body.doc.id;
+    const seen = () => changes.splice(0).map((c) => [c.kind, c.id, c.principal, c.role, c.actor, c.title, c.fileKind, c.workspaceId]);
+    await call('ann', 'PUT', `/api/grants/sheet/${id}`, { principal: 'account:acct-bob', role: 'viewer' });
+    await call('ann', 'PUT', `/api/grants/sheet/${id}`, { principal: 'account:acct-bob', role: 'editor' });
+    await call('ann', 'DELETE', `/api/grants/sheet/${id}/account:acct-bob`);
+    // A grant that was not there is not reported as taken away.
+    await call('ann', 'DELETE', `/api/grants/sheet/${id}/account:acct-cat`);
+    expect(seen()).toEqual([
+      ['sheet', id, 'account:acct-bob', 'viewer', 'acct-ann', 'Hooked', 'doc', 'harbor'],
+      ['sheet', id, 'account:acct-bob', 'editor', 'acct-ann', 'Hooked', 'doc', 'harbor'],
+      ['sheet', id, 'account:acct-bob', null, 'acct-ann', 'Hooked', 'doc', 'harbor'],
+    ]);
+    // The organization, by the toggle and by Share with organization / Make private.
+    await call('ann', 'PUT', `/api/grants/sheet/${id}`, { principal: 'org', role: 'editor' });
+    await call('ann', 'DELETE', `/api/grants/sheet/${id}/org`);
+    await call('ann', 'POST', `/api/files/${id}/scope`, { workspace: 'harbor', shared: true });
+    await call('ann', 'POST', `/api/files/${id}/scope`, { workspace: 'harbor', shared: false });
+    expect(seen().map(([, , p, r]) => [p, r])).toEqual([['org', 'editor'], ['org', null], ['org', 'editor'], ['org', null]]);
+    // A link, made once (asking again is the same link) and stopped, by the new routes and the older ones.
+    const deck = (await call('ann', 'POST', '/api/decks', { title: 'Hooked talk', workspace: 'harbor' })).body.deck.id;
+    const token = (await call('ann', 'POST', `/api/grants/sheet/${deck}/link?workspace=harbor`)).body.url.split('/p/')[1];
+    await call('ann', 'POST', `/api/grants/sheet/${deck}/link?workspace=harbor`);
+    await call('ann', 'DELETE', `/api/sharing/deck/${deck}`);
+    expect(seen().map(([, , p, r, , t, k]) => [p, r, t, k])).toEqual([[`link:${token}`, 'viewer', 'Hooked talk', 'deck'], [`link:${token}`, null, 'Hooked talk', 'deck']]);
+    // A folder, named by its object id and its name.
+    await call('ann', 'POST', '/api/folders', { workspace: 'harbor', name: 'Hooks' });
+    await call('ann', 'PUT', `/api/grants/folder/${encodeURIComponent('me:ann:harbor/Hooks')}?workspace=harbor`, { principal: 'channel:general', role: 'viewer' });
+    expect(seen().map(([k, i, p, , , t, f]) => [k, i, p, t, f])).toEqual([['folder', 'me:ann:harbor/Hooks', 'channel:general', 'Hooks', 'folder']]);
+  });
+
+  it('tells the host of each save of a document in an organization', async () => {
+    const id = (await call('ann', 'POST', '/api/docs', { title: 'Saved', workspace: 'harbor' })).body.doc.id;
+    saves.length = 0;
+    await call('ann', 'PUT', `/api/docs/${id}`, { doc: DOC });
+    expect(saves).toMatchObject([{ kind: 'sheet', id, fileKind: 'doc', title: 'Saved', workspaceId: 'harbor', ownerId: 'ann' }]);
   });
 });

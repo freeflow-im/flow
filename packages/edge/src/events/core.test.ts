@@ -238,3 +238,32 @@ describe('a socket\'s backlog and the socket delivery mode', () => {
     expect(core.matching(subs, 2, 3).map((s) => s.id)).toEqual([ann.id]);
   });
 });
+
+describe('the ref: audience (phase 3.3)', () => {
+  const R = 'org-1/docs/sheet/s1';
+  const changed = (n: number) => ev('docs.file.changed', { audience: `ref:${R}`, data: { ref: R, n, ownerAccountId: 'acct-ann' } });
+
+  it('lets an event through to whoever the reference is shared with, and to its owner', () => {
+    expect(core.hasRefAudience(0)).toBe(false);
+    core.publish(ev('chat.message.created'));
+    core.publish(changed(1));
+    expect(core.hasRefAudience(0)).toBe(true);
+    expect(core.hasRefAudience(2)).toBe(false);
+    const types = (reader: Parameters<EventsCore['read']>[1]) => core.read({ since: 0 }, reader).events.map((e) => e.type);
+    expect(types({ ...BOB, sharedRefs: [R] })).toEqual(['chat.message.created', 'docs.file.changed']);
+    expect(types({ ...BOB, sharedRefs: ['org-1/docs/sheet/other'] })).toEqual(['chat.message.created']);
+    // Without the shares (no Org object), a ref: event is its owner's alone.
+    expect(types(BOB)).toEqual(['chat.message.created']);
+    expect(types({ accountId: 'acct-ann', channelIds: [] })).toEqual(['chat.message.created', 'docs.file.changed']);
+    expect(() => core.publish(ev('x.y', { audience: 'ref:' as never }))).toThrow(/bad audience/);
+  });
+
+  it('reads the same through a subscription and from a cursor, and a poke hints at it', () => {
+    const sub = core.createSubscription({ name: 'n', consumer: 'acct-bob', owner: 'acct-bob', filter: { types: ['docs.*'] }, createdBy: 'acct-bob' });
+    core.publish(changed(1));
+    expect(core.readSubscription(sub.id, {}, { ...BOB, sharedRefs: [R] })!.events).toHaveLength(1);
+    expect(core.readSubscription(sub.id, {}, BOB)!.events).toHaveLength(0);
+    expect(core.readFrom({ since: 0 }, { ...BOB, sharedRefs: [R] }).events).toHaveLength(1);
+    expect(core.matching([{ ...sub, delivery: 'socket' }], 0, 1).map((s) => s.id)).toEqual([sub.id]);
+  });
+});

@@ -335,6 +335,9 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   DELETE `/:principal` manager+; `org` there is the same move) backs the Share… dialog (`ShareWithDialog.tsx`), and `/api/library?scope=shared`
   (`&in=<folder id>`) is Shared with me, a third list in `DocsNav` (`?withme=1`). Metadata carries `role` when the reader is not the owner; a
   viewer's editors are read-only (`viewOnlyGuard` on the sheet, deck and doc stores, `readOnly` on the Markdown and text editors).
+  Since phase 3.3 every grant change, once made, goes to `host.onGrantChange` (`reportGrant` in `app.ts`: the grants routes, the `org` toggle,
+  Share with organization / Make private, links made and stopped; `role` null is a revoke), and each save or rename of a document to
+  `host.onFileChanged`; the suite's Docs object sends them to the organization's share index and event log (`packages/edge/src/docs/object.ts`).
 - Folders (`shared/folders.ts`): a folder is named by its path (`Reports/2026`, `''` for the top). Files
   carry it in the `folder` column (`SheetMeta.folder`, `StoredFile.folder`); the folders themselves are
   rows on the server (`FolderStore`, `server/folders.ts`) and directories in the desktop app

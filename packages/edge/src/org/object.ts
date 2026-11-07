@@ -24,6 +24,8 @@ import { insertRows, tableCounts } from '../importing';
 import type { Events } from '../events/object';
 import type { PublishInput, SubscriptionRead } from '../events/core';
 import { logEntryFor } from './eventLog';
+import { config } from './config';
+import { recordShare, revokeShare, sharedRefsOf, sharedWith, type RecordShareInput, type RevokeShareInput, type SharedItem } from './services/shares';
 import { eq, and } from 'drizzle-orm';
 
 /** IMAGES (Cloudflare Images) resizes preview images and thumbnails; without it they are kept as they came (lib/images.ts). */
@@ -315,6 +317,46 @@ export class Org extends DurableObject<OrgEnv> {
     }, { depth: MAX_EVENT_DEPTH });
     await this.logging;
     await this.armAlarm();
+  }
+
+  // ---- the share index (services/shares.ts, platform.md §4.5) ---------------------------------------------------------
+
+  /**
+   * An app object's grant, given or changed (Docs reports each one, docs/object.ts): into the index, the notice for a
+   * new share (a DM line to an account, a card in a channel), and `sharing.granted` into the event log.
+   */
+  async recordShare(input: RecordShareInput): Promise<void> {
+    const event = await this.scoped(() => recordShare(input, config.webUrlBase));
+    await this.publishShareEvent(event);
+    await this.logging;
+    await this.armAlarm();
+  }
+
+  /** An app object's grant taken away: out of the index, and `sharing.revoked` into the event log. */
+  async revokeShare(input: RevokeShareInput): Promise<void> {
+    await this.publishShareEvent(await this.scoped(() => revokeShare(input)));
+  }
+
+  private async publishShareEvent(event: PublishInput | null): Promise<void> {
+    if (!event || !this.env.EVENTS) return;
+    await this.env.EVENTS.get(this.env.EVENTS.idFromName(event.organizationId)).publish(event)
+      .catch((err: Error) => console.error(`[shares] ${event.type}: ${err.message}`));
+  }
+
+  /** The reader's channels as this object knows them (every one it is in, public too), with any it was given. */
+  private shareReader(reader: { accountId: string; channelIds?: string[] }): { accountId: string; channelIds: string[] } {
+    const user = this.userOfAccount(reader.accountId);
+    return { accountId: reader.accountId, channelIds: [...new Set([...(reader.channelIds ?? []), ...(user ? this.channelIdsOf(user) : [])])] };
+  }
+
+  /** What is shared with the reader (GET /v1/workspaces/:id/shared-with-me). */
+  async sharedWith(reader: { accountId: string; channelIds?: string[] }): Promise<SharedItem[]> {
+    return withDb(this.db, () => sharedWith(this.shareReader(reader)));
+  }
+
+  /** The references shared with the reader: the Events object's `ref:` audience (events/core.ts). */
+  async sharedRefsOf(reader: { accountId: string; channelIds?: string[] }): Promise<string[]> {
+    return withDb(this.db, () => sharedRefsOf(this.shareReader(reader)));
   }
 
   /** The account ids of this organization's agents, for an `actorKind` filter. */
