@@ -6,14 +6,21 @@ import type {
   AgentRedeemResponse,
   ArtifactDTO,
   ChannelDTO,
+  DeliveryMode,
+  EventFilter,
   FileDTO,
   HuddleJoinDTO,
   MessageDTO,
   MessagePage,
+  PlatformEvent,
+  SubscriptionDTO,
   UserDTO,
   WorkspaceDTO,
   WorkspaceMemberDTO,
 } from '@flow/shared';
+
+/** A subscription's read: its events oldest first, the cursor to ack, and `gap` when some aged out unread. */
+export interface SubscriptionPage { events: PlatformEvent[]; next: number; gap?: { from: number; to: number } }
 
 /** `GET /v1/me`: the principal, with its accounts, one per organization (platform.md §3.3). Older servers send none. */
 export type MeDTO = UserDTO & { accounts?: AccountDTO[] };
@@ -114,6 +121,29 @@ export class FlowApi {
 
   me(): Promise<MeDTO> {
     return this.req('GET', '/v1/me');
+  }
+
+  // ---- the event bus's subscriptions (platform.md §5.2), as the agent's account in one organization ----
+
+  async listSubscriptions(workspaceId: string): Promise<SubscriptionDTO[]> {
+    const r = await this.req<{ subscriptions: SubscriptionDTO[] }>('GET', `/v1/events/subscriptions?workspace=${encodeURIComponent(workspaceId)}`);
+    return r.subscriptions;
+  }
+
+  async createSubscription(workspaceId: string, body: { name: string; filter: EventFilter; delivery?: DeliveryMode }): Promise<SubscriptionDTO> {
+    const r = await this.req<{ subscription: SubscriptionDTO }>('POST', `/v1/events/subscriptions?workspace=${encodeURIComponent(workspaceId)}`, body);
+    return r.subscription;
+  }
+
+  /** What follows the subscription's cursor; never acks. `wait` long-polls, in seconds. */
+  readSubscription(workspaceId: string, id: string, opts: { limit?: number; wait?: number } = {}): Promise<SubscriptionPage> {
+    const q = `workspace=${encodeURIComponent(workspaceId)}${opts.limit ? `&limit=${opts.limit}` : ''}&wait=${opts.wait ?? 0}`;
+    return this.req('GET', `/v1/events/subscriptions/${encodeURIComponent(id)}?${q}`);
+  }
+
+  async ackSubscription(workspaceId: string, id: string, cursor: number): Promise<number> {
+    const r = await this.req<{ cursor: number }>('POST', `/v1/events/subscriptions/${encodeURIComponent(id)}/ack?workspace=${encodeURIComponent(workspaceId)}`, { cursor });
+    return r.cursor;
   }
 
   async myWorkspaces(): Promise<WorkspaceDTO[]> {

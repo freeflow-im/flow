@@ -212,3 +212,29 @@ describe('subscriptions', () => {
     expect(core.publish(ev('next')).seq).toBe(5);
   });
 });
+
+describe('a socket\'s backlog and the socket delivery mode', () => {
+  it('reads from a since, with a gap when it aged out', () => {
+    const now = Date.now(), day = 86_400_000;
+    core.publishMany([ev('chat.old', { ts: new Date(now - 40 * day).toISOString() }), ev('chat.new'), ev('mail.received'), ev('chat.newer')]);
+    expect(core.readFrom({ since: 2, types: ['chat.*'] }, BOB)).toMatchObject({ events: [{ seq: 4 }], next: 4 });
+    expect(core.readFrom({ since: 0, types: ['chat.*'] }, BOB).gap).toBeUndefined();
+    core.retain(now);
+    expect(core.readFrom({ since: 0, types: ['chat.*'] }, BOB)).toMatchObject({ events: [{ seq: 2 }, { seq: 4 }], next: 4, gap: { from: 1, to: 1 } });
+    expect(core.readFrom({ since: 4 }, BOB)).toEqual({ events: [], next: 4 });
+  });
+
+  it('matches socket subscriptions against a batch, keeping one account\'s events to that account', () => {
+    const mk = (consumer: string, filter: object, delivery: 'socket' | 'pull' = 'socket') =>
+      core.createSubscription({ name: 'n', consumer, owner: consumer, filter, delivery, createdBy: consumer });
+    const chat = mk('acct-bob', { types: ['chat.*'] }), mail = mk('acct-bob', { types: ['mail.*'] });
+    mk('acct-bob', {}, 'pull');
+    const ann = mk('acct-ann', { types: ['chat.notification.*'] });
+    const subs = core.socketSubscriptions();
+    expect(subs.map((s) => s.id).sort()).toEqual([chat.id, mail.id, ann.id].sort());
+    core.publishMany([ev('chat.message.created'), ev('chat.notification.created', { audience: 'account:acct-bob' })]);
+    expect(core.matching(subs, 0, 2).map((s) => s.id).sort()).toEqual([chat.id]);
+    core.publish(ev('chat.notification.created', { audience: 'account:acct-ann' }));
+    expect(core.matching(subs, 2, 3).map((s) => s.id)).toEqual([ann.id]);
+  });
+});

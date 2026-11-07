@@ -22,7 +22,7 @@ import { socketControl } from './sockets';
 import { setStorageEnv, type StorageEnv } from './storage/index';
 import { insertRows, tableCounts } from '../importing';
 import type { Events } from '../events/object';
-import type { PublishInput } from '../events/core';
+import type { PublishInput, SubscriptionRead } from '../events/core';
 import { logEntryFor } from './eventLog';
 import { eq, and } from 'drizzle-orm';
 
@@ -61,6 +61,9 @@ registerRoutes(app as never);
 interface Attachment { userId: string; accountId: string | null }
 const pushLog = { info: (o: unknown, msg?: string) => console.log(`[push] ${msg}`, JSON.stringify(o)), warn: (o: unknown, msg?: string) => console.warn(`[push] ${msg}`, JSON.stringify(o)) };
 const USER_SUBJECT = /(?:^|\.)user\.([0-9a-f-]{36})(?:\.|$)/;
+/** A reconnecting socket's backlog: read in pages of this many, and no more than the cap (the client refetches past it). */
+const BACKLOG_PAGE = 200;
+const BACKLOG_MAX = 2_000;
 
 export class Org extends DurableObject<OrgEnv> {
   private readonly db: DB;
@@ -176,11 +179,61 @@ export class Org extends DurableObject<OrgEnv> {
   private async flushLog(): Promise<void> {
     const batch = this.logQueue.splice(0);
     if (!batch.length || !this.env.EVENTS) return;
+    let head: number | undefined;
     try {
       const org = batch[0]!.organizationId;
-      await this.env.EVENTS.get(this.env.EVENTS.idFromName(org)).publishMany(batch);
+      head = (await this.env.EVENTS.get(this.env.EVENTS.idFromName(org)).publishMany(batch)).at(-1)?.seq;
     } catch (err) {
-      console.error(`[events] publish of ${batch.length}: ${(err as Error).message}`);
+      return console.error(`[events] publish of ${batch.length}: ${(err as Error).message}`);
+    }
+    // The socket is a consumer (§5.2): each socket learns how far the log has got, and sends it back as `since` on reconnect.
+    if (head === undefined) return;
+    const frame = JSON.stringify({ op: 'cursor', seq: head });
+    for (const { ws, userId } of this.sockets()) {
+      if (!userId) continue;
+      try { ws.send(frame); } catch { /* the socket is closing */ }
+    }
+  }
+
+  /** A `socket` subscription has new events (events/object.ts): its consumer's sockets here are told to read it. */
+  pokeSubscription(accountId: string, subscriptionId: string): number {
+    const frame = JSON.stringify({ op: 'subscription', id: subscriptionId });
+    let sent = 0;
+    for (const ws of this.ctx.getWebSockets()) {
+      if ((ws.deserializeAttachment() as Attachment | null)?.accountId !== accountId) continue;
+      try { ws.send(frame); sent++; } catch { /* the socket is closing */ }
+    }
+    return sent;
+  }
+
+  /**
+   * An `auth` with `since`: what the log kept after it that this reader may see, as socket events with their `seq`, in
+   * pages of 200 up to 2,000, then the cursor. Events of other apps (`mail.*`) are not socket events and are not read.
+   * A `since` older than the window sends `gap` first. The events still on their way to the log go in first.
+   */
+  private async sendBacklog(ws: WebSocket, workspaceId: string, userId: string, accountId: string, since: number): Promise<void> {
+    if (!this.env.EVENTS) return;
+    await this.logging;
+    const events = this.env.EVENTS.get(this.env.EVENTS.idFromName(workspaceId));
+    const reader = { accountId, channelIds: this.privateChannelIdsOf(userId) };
+    let cursor = Math.max(0, Math.floor(since));
+    let sent = 0;
+    try {
+      for (let page = 0; sent < BACKLOG_MAX; page++) {
+        const out = (await events.readFrom({ since: cursor, limit: Math.min(BACKLOG_PAGE, BACKLOG_MAX - sent), types: ['chat.*'] }, reader)) as SubscriptionRead;
+        if (page === 0 && out.gap) ws.send(JSON.stringify({ op: 'gap', from: out.gap.from, to: out.gap.to }));
+        for (const e of out.events) {
+          const event = { type: e.type.slice('chat.'.length), workspaceId, ...(e.channelId ? { channelId: e.channelId } : {}), ts: e.ts, data: e.data };
+          ws.send(JSON.stringify({ op: 'event', event, seq: e.seq }));
+        }
+        sent += out.events.length;
+        const moved = out.next > cursor;
+        cursor = Math.max(cursor, out.next);
+        if (!out.events.length || !moved) break;
+      }
+      ws.send(JSON.stringify({ op: 'cursor', seq: cursor }));
+    } catch (err) {
+      console.error(`[events] backlog from ${since}: ${(err as Error).message}`);
     }
   }
 
@@ -323,7 +376,7 @@ export class Org extends DurableObject<OrgEnv> {
   }
 
   override async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
-    let frame: { op?: string; token?: string; channelId?: string; threadRootId?: string };
+    let frame: { op?: string; token?: string; channelId?: string; threadRootId?: string; since?: unknown };
     try { frame = JSON.parse(String(raw)); } catch { return ws.send(JSON.stringify({ op: 'error', code: 'bad_frame', message: 'invalid JSON' })); }
     const att = ws.deserializeAttachment() as Attachment | null;
     const workspace = this.db.select().from(schema.workspaces).get();
@@ -346,6 +399,10 @@ export class Org extends DurableObject<OrgEnv> {
       const alreadyOnline = this.sockets().some((s) => s.userId === user.id);
       ws.serializeAttachment({ userId: user.id, accountId: value!.account?.id ?? null } satisfies Attachment);
       ws.send(JSON.stringify({ op: 'hello', sessionId: crypto.randomUUID(), heartbeat: 'client' }));
+      const accountId = value!.account?.id ?? null;
+      if (typeof frame.since === 'number' && Number.isFinite(frame.since) && frame.since >= 0 && accountId) {
+        await this.sendBacklog(ws, workspace!.id, user.id, accountId, frame.since);
+      }
       const online = new Set(this.sockets().map((s) => s.userId).filter((id): id is string => !!id && id !== user.id));
       for (const id of online) ws.send(JSON.stringify({ op: 'event', event: this.presence(workspace!.id, id, 'online') }));
       if (!alreadyOnline) this.broadcast(`ws.${workspace!.id}.presence`, this.presence(workspace!.id, user.id, 'online'));

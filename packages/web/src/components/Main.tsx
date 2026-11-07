@@ -68,6 +68,8 @@ export default function Main({ onActivityUnread }: { onActivityUnread?: (count: 
   );
   const [drawerOpen, setDrawerOpen] = useState(false);
   const socketRef = useRef<Pick<SocketClient, 'start' | 'stop' | 'sendTyping'> | null>(null);
+  /** Notification ids already counted, so a replayed `notification.created` is not counted twice. */
+  const seenNotifications = useRef(new Set<string>());
   // The huddle controller lives *inside* HuddleProvider, which this component
   // renders — so socket events reach it through a ref that HuddleWiring (below
   // the provider) fills in, rather than a hook this scope cannot call.
@@ -509,6 +511,11 @@ export default function Main({ onActivityUnread }: { onActivityUnread?: (count: 
       }
       case 'notification.created': {
         const n = event.data as NotificationDTO;
+        // A reconnect's backlog can replay a notification that already arrived:
+        // count and banner it once.
+        if (seenNotifications.current.has(n.id)) break;
+        if (seenNotifications.current.size > 2048) seenNotifications.current.clear();
+        seenNotifications.current.add(n.id);
         void qc.invalidateQueries({ queryKey: ['notifications'] });
         // the sidebar badge is this channel's unread-notification count
         void qc.invalidateQueries({ queryKey: ['channels', event.workspaceId] });

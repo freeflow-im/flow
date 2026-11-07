@@ -104,24 +104,7 @@ export class EventsCore {
   read(q: ReadQuery, reader: Reader): { events: PlatformEvent[]; next: number } {
     const since = Math.max(0, Math.floor(Number(q.since) || 0));
     const limit = Math.min(READ_LIMIT_MAX, Math.max(1, Math.floor(Number(q.limit) || READ_LIMIT_DEFAULT)));
-    const where: string[] = [];
-    const args: unknown[] = [];
-    const types = (q.types ?? []).map((t) => t.trim()).filter(Boolean);
-    if (types.length) {
-      where.push(`(${types.map((t) => (t.endsWith('*') ? "type LIKE ? ESCAPE '\\'" : 'type = ?')).join(' OR ')})`);
-      for (const t of types) args.push(t.endsWith('*') ? `${t.slice(0, -1).replace(/[\\%_]/g, (c) => `\\${c}`)}%` : t);
-    }
-    if (q.ref) { where.push('ref = ?'); args.push(q.ref); }
-    if (q.channelId) { where.push('channel_id = ?'); args.push(q.channelId); }
-    if (q.self) { where.push('audience = ?'); args.push(`account:${q.self}`); }
-    if (q.text?.trim()) { where.push('instr(lower(data), lower(?)) > 0'); args.push(q.text.trim()); }
-    if (q.actorKind === 'agent' || q.actorKind === 'person') {
-      where.push(q.actorKind === 'agent'
-        ? 'actor IN (SELECT value FROM json_each(?))'
-        : 'actor IS NOT NULL AND actor NOT IN (SELECT value FROM json_each(?))');
-      args.push(JSON.stringify(reader.agentAccountIds ?? []));
-    }
-    const filter = where.length ? ` AND ${where.join(' AND ')}` : '';
+    const { filter, args } = whereOf(q, reader.agentAccountIds ?? []);
     const channels = new Set(reader.channelIds);
     const own = `account:${reader.accountId}`;
     const visible = (audience: string) => audience === 'org' || audience === own || (audience.startsWith('channel:') && channels.has(audience.slice(8)));
@@ -189,11 +172,42 @@ export class EventsCore {
   readSubscription(id: string, opts: { limit?: number }, reader: Reader): SubscriptionRead | null {
     const sub = this.getSubscription(id);
     if (!sub) return null;
+    return this.readFrom({ ...queryOf(sub.filter, sub.consumer), since: sub.cursor, ...(opts.limit ? { limit: opts.limit } : {}) }, reader);
+  }
+
+  /**
+   * A read from a cursor that may have aged out: a `since` below the oldest kept row (less one) missed events, so the
+   * answer says `gap` and reads from the window's start. A subscription's read, and a socket's backlog (`auth` with `since`).
+   */
+  readFrom(q: ReadQuery, reader: Reader): SubscriptionRead {
+    const since = Math.max(0, Math.floor(Number(q.since) || 0));
     const first = this.sql.exec('SELECT MIN(seq) AS n FROM events').toArray()[0]!.n as number | null;
     const oldest = first ?? this.head() + 1;
-    const gap = sub.cursor < oldest - 1 ? { from: sub.cursor + 1, to: oldest - 1 } : undefined;
-    const out = this.read({ ...queryOf(sub.filter, sub.consumer), since: gap ? oldest - 1 : sub.cursor, ...(opts.limit ? { limit: opts.limit } : {}) }, reader);
+    const gap = since < oldest - 1 ? { from: since + 1, to: oldest - 1 } : undefined;
+    const out = this.read({ ...q, since: gap ? oldest - 1 : since }, reader);
     return gap ? { ...out, gap } : out;
+  }
+
+  /** The subscriptions whose delivery is `socket`, unparked: what a publish pokes. */
+  socketSubscriptions(): SubscriptionDTO[] {
+    return this.sql.exec("SELECT * FROM subscriptions WHERE delivery = 'socket' AND parked_at IS NULL").toArray().map(toSubscription);
+  }
+
+  /**
+   * Which of `subs` have an event in `(after, through]` matching their filter: a poke is a hint, so visibility is left to
+   * the read, except that an event for one account alone matches only that account's subscriptions. An `actorKind` filter
+   * is not applied here (it needs the organization's agents); the read applies it.
+   */
+  matching(subs: SubscriptionDTO[], after: number, through: number): SubscriptionDTO[] {
+    return subs.filter((sub) => {
+      const q = queryOf(sub.filter, sub.consumer);
+      delete q.actorKind;
+      const { filter, args } = whereOf(q, []);
+      return this.sql.exec(
+        `SELECT 1 FROM events WHERE seq > ? AND seq <= ? AND (audience NOT LIKE 'account:%' OR audience = ?)${filter} LIMIT 1`,
+        after, through, `account:${sub.consumer}`, ...args,
+      ).toArray().length > 0;
+    });
   }
 
   stats(): EventStats {
@@ -221,6 +235,28 @@ export class EventsCore {
   private meta(key: string): string | null {
     return (this.sql.exec('SELECT value FROM events_meta WHERE key = ?', key).toArray()[0]?.value as string | undefined) ?? null;
   }
+}
+
+/** A query's filters as SQL (` AND ...`, or empty) and its bindings. */
+function whereOf(q: ReadQuery, agentAccountIds: string[]): { filter: string; args: unknown[] } {
+  const where: string[] = [];
+  const args: unknown[] = [];
+  const types = (q.types ?? []).map((t) => t.trim()).filter(Boolean);
+  if (types.length) {
+    where.push(`(${types.map((t) => (t.endsWith('*') ? "type LIKE ? ESCAPE '\\'" : 'type = ?')).join(' OR ')})`);
+    for (const t of types) args.push(t.endsWith('*') ? `${t.slice(0, -1).replace(/[\\%_]/g, (c) => `\\${c}`)}%` : t);
+  }
+  if (q.ref) { where.push('ref = ?'); args.push(q.ref); }
+  if (q.channelId) { where.push('channel_id = ?'); args.push(q.channelId); }
+  if (q.self) { where.push('audience = ?'); args.push(`account:${q.self}`); }
+  if (q.text?.trim()) { where.push('instr(lower(data), lower(?)) > 0'); args.push(q.text.trim()); }
+  if (q.actorKind === 'agent' || q.actorKind === 'person') {
+    where.push(q.actorKind === 'agent'
+      ? 'actor IN (SELECT value FROM json_each(?))'
+      : 'actor IS NOT NULL AND actor NOT IN (SELECT value FROM json_each(?))');
+    args.push(JSON.stringify(agentAccountIds));
+  }
+  return { filter: where.length ? ` AND ${where.join(' AND ')}` : '', args };
 }
 
 function toEvent(r: Record<string, unknown>, organizationId: string): PlatformEvent {

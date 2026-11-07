@@ -74,6 +74,31 @@ r=await api(A.token,'GET',`/v1/events?workspace=${W}&since=0&types=chat.reaction
  r=await api(A.token,'DELETE',sp(SA.id));t('Ann deletes hers',r.s===200&&r.j.ok===true,r.s);
  r=await api(A.token,'GET',sp(SA.id));t('then it is gone',r.s===404,r.s);
  const C=await signup('dee2@example.com','Dee');r=await api(C.token,'GET','/v1/events/subscriptions');t('subscriptions without an account: 403 no_account',r.s===403&&r.j.error?.code==='no_account',r.s);}
+// ---- the socket is a consumer (§5.2, phase 2.3): `since` on auth replays the log, `cursor` frames mark it, `socket` subscriptions poke
+{const sock2=(tok,since)=>new Promise((res,rej)=>{const ws=new WebSocket(`${WS}/v1/ws?workspace=${W}`);const fr=[];ws.onopen=()=>ws.send(JSON.stringify({op:'auth',token:tok,...(since!==undefined?{since}:{})}));ws.onmessage=e=>{const f=JSON.parse(e.data);fr.push(f);if(f.op==='hello')res({ws,fr});if(f.op==='error')rej(new Error(f.message));};ws.onerror=()=>rej(new Error('ws'));setTimeout(()=>rej(new Error('ws timeout')),6000)});
+ const s0=await sock2(Bo.token,0);await sleep(600);
+ const i=s0.fr.findIndex(f=>f.op==='event'&&f.event.type==='message.created'&&f.event.data?.id===M.id),ci=s0.fr.findIndex(f=>f.op==='cursor');
+ t('since 0: the earlier message.created comes back with its seq',i>0&&s0.fr[i].seq>0&&s0.fr[i].event.channelId===gen.id&&s0.fr[i].event.workspaceId===W&&!!s0.fr[i].event.ts,JSON.stringify(s0.fr[i]??s0.fr.map(f=>f.op)).slice(0,160));
+ t('then a cursor frame at or past it',ci>i&&s0.fr[ci].seq>=s0.fr[i]?.seq,JSON.stringify(s0.fr[ci]));
+ const back=s0.fr.slice(0,ci).filter(f=>f.op==='event');
+ t('the backlog is in seq order and carries no private channel of Ann\'s',back.every((f,k)=>typeof f.seq==='number'&&(k===0||back[k-1].seq<f.seq))&&!back.some(f=>f.event.channelId===P.id),back.length);
+ t('no gap inside the window',!s0.fr.some(f=>f.op==='gap'));
+ const head=s0.fr[ci]?.seq;const sh=await sock2(Bo.token,head);await sleep(500);
+ t('since at the head: only the cursor frame',sh.fr.filter(f=>f.op==='event'&&f.seq!==undefined).length===0&&sh.fr.filter(f=>f.op==='cursor').length===1&&sh.fr.find(f=>f.op==='cursor').seq===head,JSON.stringify(sh.fr.map(f=>f.op+(f.seq??''))));
+ const c0=sh.fr.length;
+ r=await api(A.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'after the head'});const M3=r.j;await sleep(600);
+ const live=sh.fr.slice(c0);const li=live.findIndex(f=>f.op==='event'&&f.event.data?.id===M3.id),lc=live.findIndex(f=>f.op==='cursor');
+ t('a new message arrives live (no seq), then a cursor frame past the head',li>=0&&live[li].seq===undefined&&lc>li&&live[lc].seq>head,JSON.stringify(live.map(f=>f.op+(f.seq??''))));
+ r=await api(Bo.token,'POST',`/v1/events/subscriptions?workspace=${W}`,{name:'poke me',filter:{types:['chat.*']},delivery:'socket'});const SS=r.j.subscription;
+ t('Bob makes a socket subscription',r.s===201&&SS?.delivery==='socket',r.s+' '+JSON.stringify(r.j).slice(0,120));
+ const c1=sh.fr.length,a1=sa.ev.length;
+ r=await api(A.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'poke'});await sleep(800);
+ t('Bob\'s socket is poked with the subscription\'s id',sh.fr.slice(c1).some(f=>f.op==='subscription'&&f.id===SS.id),JSON.stringify(sh.fr.slice(c1).map(f=>f.op)));
+ r=await api(Bo.token,'GET',`/v1/events/subscriptions/${SS.id}?workspace=${W}`);t('and reading it returns the message',r.j.events?.some(e=>e.type==='chat.message.created'&&e.data?.body==='poke'),JSON.stringify(r.j).slice(0,120));
+ const pokedAnn=await new Promise(res=>{const ws=new WebSocket(`${WS}/v1/ws?workspace=${W}`);const fr=[];ws.onopen=()=>ws.send(JSON.stringify({op:'auth',token:A.token}));ws.onmessage=e=>fr.push(JSON.parse(e.data));setTimeout(async()=>{await api(A.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'poke again'});setTimeout(()=>{ws.close();res(fr.some(f=>f.op==='subscription'))},800)},400)});
+ t('Ann\'s socket is not poked for Bob\'s subscription',!pokedAnn);
+ r=await api(Bo.token,'DELETE',`/v1/events/subscriptions/${SS.id}?workspace=${W}`);t('the socket subscription goes',r.s===200,r.s);
+ s0.ws.close();sh.ws.close();void a1;}
 const pong=await new Promise(res=>{sa.ws.addEventListener('message',e=>{if(JSON.parse(e.data).op==='pong')res(true)});sa.ws.send('{"op":"ping"}');setTimeout(()=>res(false),2000)});t('client ping answered',pong);
 sa.ws.send(JSON.stringify({op:'typing',channelId:gen.id}));await sleep(200);t('typing relayed',sb.ev.some(e=>e.type==='typing'));
 r=await api(null,'GET',`/v1/channels/${gen.id}/messages`);t('no session refused',r.s===401,r.s);

@@ -152,6 +152,20 @@ export interface BridgeConfig {
   /** Live audio in the existing Flow Huddle. Optional for source-level
    * callers that construct BridgeConfig directly; loadConfig always fills it. */
   voice?: VoiceConfig | undefined;
+  /**
+   * What the bridge remembers across restarts: the ids of the last messages it
+   * answered, so a catch-up after a restart never answers one twice. Beside the
+   * config (agent.json → state.json, other.json → other.state.json); absent or
+   * null keeps it in memory only.
+   */
+  stateFile?: string | null;
+}
+
+/** The state file beside a config: `state.json` for `agent.json`, else `<name>.state.json`. */
+export function stateFileFor(configPath: string): string {
+  const abs = path.resolve(configPath);
+  const base = path.basename(abs).replace(/\.json$/i, '');
+  return path.join(path.dirname(abs), base === 'agent' ? 'state.json' : `${base}.state.json`);
 }
 
 interface RawConfig {
@@ -269,6 +283,7 @@ export function loadConfig(configPath: string): BridgeConfig {
     progress,
     relayText: raw.relayText ?? true,
     voice,
+    stateFile: stateFileFor(abs),
   };
 }
 

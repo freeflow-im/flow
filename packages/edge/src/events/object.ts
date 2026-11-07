@@ -5,26 +5,31 @@
 import { DurableObject } from 'cloudflare:workers';
 import type { PlatformEvent, SubscriptionDTO } from '@flow/shared';
 import { EventsCore, type EventStats, type NewSubscription, type PublishInput, type ReadQuery, type Reader, type SubscriptionRead } from './core';
+import type { Org } from '../org/object';
+
+/** ORG is how a `socket` subscription's poke reaches its consumer's sockets, which the Org object holds. */
+export interface EventsEnv { ORG?: DurableObjectNamespace<Org> }
 
 const DAY_MS = 86_400_000;
 /** The longest a read waits for an event to match. */
 export const WAIT_MAX_MS = 30_000;
 
-export class Events extends DurableObject {
+export class Events extends DurableObject<EventsEnv> {
   private readonly core: EventsCore;
   /** Whether an alarm is known to be set, so a publish need not ask the storage each time. */
   private armed = false;
   /** Reads waiting for a publish, by subscription id. In memory: lost on eviction, when the client simply polls again. */
   private readonly waiters = new Map<string, Set<() => void>>();
 
-  constructor(ctx: DurableObjectState, env: unknown) {
-    super(ctx, env as never);
+  constructor(ctx: DurableObjectState, env: EventsEnv) {
+    super(ctx, env);
     this.core = new EventsCore(ctx.storage.sql as never, (fn) => ctx.storage.transactionSync(fn));
   }
 
   async publish(input: PublishInput): Promise<{ seq: number; id: string }> {
     const out = this.core.publish(input);
     this.wake();
+    this.poke(input.organizationId, out.seq - 1, out.seq);
     await this.arm();
     return out;
   }
@@ -33,8 +38,14 @@ export class Events extends DurableObject {
     if (!inputs.length) return [];
     const out = this.core.publishMany(inputs);
     this.wake();
+    this.poke(inputs[0]!.organizationId, out[0]!.seq - 1, out.at(-1)!.seq);
     await this.arm();
     return out;
+  }
+
+  /** A socket's backlog (`auth` with `since`): what follows `since` that the reader may see, with `gap` when it aged out. */
+  readFrom(query: ReadQuery, reader: Reader): SubscriptionRead {
+    return this.core.readFrom(query, reader);
   }
 
   read(query: ReadQuery, reader: Reader): { events: PlatformEvent[]; next: number } {
@@ -92,6 +103,27 @@ export class Events extends DurableObject {
     if (aged || capped) console.log(`[events] retention: ${aged} aged out, ${capped} over the cap`);
     await this.ctx.storage.setAlarm(Date.now() + DAY_MS);
     this.armed = true;
+  }
+
+  /**
+   * The `socket` delivery mode (§5.2): each such subscription with a match among the events just appended (`after`,
+   * `through`] has its consumer's sockets told `{ op: 'subscription', id }`, by the Org object that holds them. The
+   * subscriptions are loaded once per batch; the poke is not awaited, so a publish does not wait on the sockets.
+   */
+  private poke(organizationId: string, after: number, through: number): void {
+    if (!this.env.ORG || !organizationId) return;
+    let hits: { id: string; consumer: string }[];
+    try {
+      const subs = this.core.socketSubscriptions();
+      hits = subs.length ? this.core.matching(subs, after, through) : [];
+    } catch (err) {
+      return console.error(`[events] socket match: ${(err as Error).message}`);
+    }
+    if (!hits.length) return;
+    const org = this.env.ORG.get(this.env.ORG.idFromName(organizationId));
+    const send = Promise.all(hits.map((s) => org.pokeSubscription(s.consumer, s.id)))
+      .catch((err: Error) => console.error(`[events] socket poke: ${err.message}`));
+    this.ctx.waitUntil?.(send);
   }
 
   /** Every waiting read (or one subscription's) reads again. */

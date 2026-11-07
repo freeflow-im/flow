@@ -1,7 +1,22 @@
 // Agent-token WS connection — real presence: the agent shows online while
 // the daemon runs. Auto-reconnects with backoff; answers heartbeat pings.
 import WebSocket from 'ws';
-import type { ClientFrame, Event, ServerFrame } from '@flow/shared';
+import type { ClientFrame, Event, PlatformEvent, ServerFrame } from '@flow/shared';
+
+/**
+ * A logged event (platform.md §5.2) as the socket event it was: Chat's `chat.<type>` back to `<type>`, with the row's
+ * channel, time and data. Events of other apps (`mail.*`) are not socket events: null.
+ */
+export function socketEventOf(e: PlatformEvent): Event | null {
+  if (!e.type.startsWith('chat.')) return null;
+  return {
+    type: e.type.slice('chat.'.length) as Event['type'],
+    workspaceId: e.organizationId,
+    ...(e.channelId ? { channelId: e.channelId } : {}),
+    ts: e.ts,
+    data: e.data,
+  };
+}
 
 export interface FlowSocketOpts {
   serverUrl: string;
@@ -16,6 +31,13 @@ export interface FlowSocketOpts {
   log(msg: string): void;
   /** On a server with one socket per organization, the one this socket serves. */
   organization?: string;
+  /**
+   * The event log's seq to replay from on the first connect (`auth` with `since`, platform.md §5.2); later reconnects
+   * send the latest `cursor` frame instead. Unset and no cursor yet: no replay.
+   */
+  since?: number;
+  /** The log reached `seq` and every event so far has been handed to `onEvent`. */
+  onCursor?(seq: number): void;
 }
 
 const BACKOFF_MS = [1000, 2000, 5000, 10_000, 30_000];
@@ -31,8 +53,12 @@ export class FlowSocket {
   private ws: WebSocket | null = null;
   private closed = false;
   private attempt = 0;
+  /** The last log seq this socket has handed on: sent as `since` on every connect, so a drop loses nothing. */
+  private cursor: number | null;
 
-  constructor(private readonly opts: FlowSocketOpts) {}
+  constructor(private readonly opts: FlowSocketOpts) {
+    this.cursor = opts.since ?? null;
+  }
 
   connect(): void {
     if (this.closed) return;
@@ -54,6 +80,7 @@ export class FlowSocket {
         op: 'auth',
         token: this.opts.token,
         ...(this.opts.workspaces ? { workspaces: this.opts.workspaces } : {}),
+        ...(this.cursor !== null ? { since: this.cursor } : {}),
       });
     });
     ws.on('message', (raw: WebSocket.RawData) => {
@@ -73,7 +100,18 @@ export class FlowSocket {
         this.opts.onOpen?.();
         return;
       }
-      if (frame.op === 'event') return this.opts.onEvent(frame.event);
+      if (frame.op === 'event') {
+        // A replayed event at or below the cursor already came through.
+        if (frame.seq !== undefined && this.cursor !== null && frame.seq <= this.cursor) return;
+        if (frame.seq !== undefined) this.cursor = frame.seq;
+        return this.opts.onEvent(frame.event);
+      }
+      if (frame.op === 'cursor') {
+        if (this.cursor === null || frame.seq > this.cursor) this.cursor = frame.seq;
+        this.opts.onCursor?.(this.cursor);
+        return;
+      }
+      if (frame.op === 'gap') return this.opts.log(`events ${frame.from}–${frame.to} aged out of the log before this socket read them`);
       if (frame.op === 'error') this.opts.log(`ws error: ${frame.code} ${frame.message}`);
     });
     ws.on('close', () => {
@@ -131,7 +169,11 @@ export function openFlowSocket(opts: FlowSocketOpts): Socket {
       organizations = workspaces.map((w) => w.id).filter((id) => !opts.workspaces || opts.workspaces.includes(id));
     }
     if (closed) return;
-    sockets = organizations.map((organization) => new FlowSocket({ ...opts, ...(organization ? { organization } : {}) }));
+    // A seq belongs to one organization's log: `since` only means something for a single socket.
+    const { since, ...rest } = opts;
+    sockets = organizations.map((organization) => new FlowSocket({
+      ...rest, ...(organization ? { organization } : {}), ...(since !== undefined && organizations.length === 1 ? { since } : {}),
+    }));
     for (const socket of sockets) socket.connect();
   };
   return {

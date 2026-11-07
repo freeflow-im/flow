@@ -33,6 +33,10 @@ import { SessionManager, type SessionOpts } from './session.js';
 import { EXIT_RESTART, EXIT_UPDATE } from './supervisor.js';
 import { currentVersion, isOutdated, latestPublishedVersion } from './version.js';
 import { HuddleVoiceManager } from './huddle-voice.js';
+import { catchUp, ensureSubscription, HandledMessages } from './catch-up.js';
+
+/** How often the socket's latest cursor is acked to the bridge's subscription. */
+const CURSOR_ACK_MS = 30_000;
 
 const THINKING_PREFIX = '🤖 *thinking…*';
 /** The loop breaker's visible notice (#583). Never counts toward a chain, never wakes anyone. */
@@ -204,9 +208,20 @@ export class AgentBridge {
 
   private logStream: fs.WriteStream | null = null;
 
+  /** The messages answered lately, across restarts (catch-up.ts), so a catch-up never answers one twice. */
+  private handled: HandledMessages;
+  /** Messages answered since start: the catch-up's "answered M". */
+  private answered = 0;
+  /** The bridge's subscription in this organization (catch-up.ts), and how far it is acked. */
+  private subscription: { id: string; acked: number } | null = null;
+  /** The latest `cursor` frame, to ack every 30 s and at shutdown. */
+  private latestCursor = 0;
+  private cursorTimer: NodeJS.Timeout | null = null;
+
   constructor(private readonly cfg: BridgeConfig) {
     this.api = new FlowApi(cfg.serverUrl, cfg.agentToken);
     this.sem = new Semaphore(cfg.concurrency);
+    this.handled = new HandledMessages(cfg.stateFile ?? null, (m) => this.log(m));
     this.sessions = new SessionManager({
       cfg: cfg.runtime,
       idleMs: cfg.runtime.sessionIdleSec * 1000,
@@ -282,21 +297,69 @@ export class AgentBridge {
         `voice=${voiceState} cwd=${this.cfg.runtime.cwd}`,
     );
     for (const line of accountLines(this.me, workspaces)) this.log(line);
+    const since = await this.catchUp();
     this.socket = openFlowSocket({
       serverUrl: this.cfg.serverUrl,
       token: this.cfg.agentToken,
       // one process, one workspace (#357) — so tell the server, or it lights
       // our presence dot in every workspace we belong to (#364)
       workspaces: [this.workspace.id],
-      onEvent: (ev) => this.handleEvent(ev),
+      onEvent: (ev) => void this.handleEvent(ev),
       onOpen: () => { void this.huddleVoice?.refreshContext(); },
       log: (m) => this.log(m),
+      // What happened between the catch-up's read and the socket's hello comes as the socket's backlog.
+      ...(since !== null ? { since } : {}),
+      onCursor: (seq) => { this.latestCursor = Math.max(this.latestCursor, seq); },
     });
     this.socket.connect();
+    if (this.subscription) {
+      this.cursorTimer = setInterval(() => void this.ackCursor(), CURSOR_ACK_MS);
+      this.cursorTimer.unref();
+    }
     this.startTaskIpc();
     // Best-effort staleness check — never blocks startup or crashes on failure.
     void this.checkVersion();
     void this.reportRelaunch();
+  }
+
+  /**
+   * Before the socket opens: what this organization's log holds for the bridge's subscription since it last ran, fed
+   * through the path live events take. Returns the cursor reached (the socket's `since`), or null when the server has
+   * no subscriptions (an older server), which leaves the bridge on live events alone.
+   */
+  async catchUp(): Promise<number | null> {
+    let sub;
+    try {
+      sub = await ensureSubscription(this.api, this.workspace.id, this.me.id);
+    } catch (err) {
+      this.log(`no event subscription (${(err as Error).message}) — live events only`);
+      return null;
+    }
+    this.subscription = { id: sub.id, acked: sub.cursor };
+    this.latestCursor = sub.cursor;
+    const before = this.answered;
+    try {
+      const out = await catchUp(this.api, this.workspace.id, sub, (ev) => this.handleEvent(ev), (m) => this.log(m));
+      this.subscription.acked = out.next;
+      this.latestCursor = Math.max(this.latestCursor, out.next);
+      this.log(`caught up: ${out.events} events, answered ${this.answered - before}`);
+      return out.next;
+    } catch (err) {
+      this.log(`catch-up failed (${(err as Error).message}) — continuing with live events`);
+      return this.subscription.acked;
+    }
+  }
+
+  /** The socket's latest cursor, acked to the subscription: the next start replays only what came after. */
+  private async ackCursor(): Promise<void> {
+    const sub = this.subscription;
+    if (!sub || this.latestCursor <= sub.acked) return;
+    const to = this.latestCursor;
+    try {
+      sub.acked = Math.max(sub.acked, await this.api.ackSubscription(this.workspace.id, sub.id, to));
+    } catch (err) {
+      this.log(`subscription ack failed: ${(err as Error).message}`);
+    }
   }
 
   /** After a `/update` / `/restart` relaunch, confirm we're back — in the
@@ -463,6 +526,9 @@ export class AgentBridge {
 
   async stop(): Promise<void> {
     this.socket?.close();
+    if (this.cursorTimer) clearInterval(this.cursorTimer);
+    this.cursorTimer = null;
+    const acked = this.ackCursor();
     this.ipcServer?.close();
     this.ipcServer = null;
     if (this.taskSock && process.platform !== 'win32') fs.rmSync(this.taskSock, { force: true });
@@ -478,6 +544,7 @@ export class AgentBridge {
     await Promise.all([...new Set([...this.conversations.values()].map((c) => c.channelId))].map((id) => this.clearIndicator(id)));
     await this.huddleVoice?.stop();
     this.huddleVoice = null;
+    await acked;
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     this.logStream?.end();
     this.logStream = null;
@@ -544,7 +611,8 @@ export class AgentBridge {
     );
   }
 
-  private handleEvent(ev: Event): void {
+  /** Live events and the catch-up's alike; a message's promise settles once it is queued or passed over. */
+  private handleEvent(ev: Event): Promise<void> | void {
     // One process, one workspace (#357). The socket carries every workspace the
     // agent belongs to, so anything from elsewhere belongs to a sibling process
     // — acting on it here would have this agent answering in a room it was
@@ -592,7 +660,7 @@ export class AgentBridge {
       return;
     }
     if (ev.type !== 'message.created' && ev.type !== 'thread.reply') return;
-    void this.handleMessage(ev.data as MessageDTO);
+    return this.handleMessage(ev.data as MessageDTO);
   }
 
   /**
@@ -653,6 +721,13 @@ export class AgentBridge {
       await this.refreshDirectory().catch((err: Error) => this.log(`directory refresh failed: ${err.message}`));
     }
     if (!(await this.inScope(msg))) return;
+    // Answered once, across restarts too: a catch-up, or a socket's backlog, can bring a message we already took.
+    // Marked before the commands, so a replayed `/restart` cannot restart us again.
+    if (!this.handled.add(msg.id)) {
+      this.log(`already answered ${msg.id} — skipping the replay`);
+      return;
+    }
+    this.answered++;
     // Bridge commands, not runtime turns. A leading mention of us is stripped
     // first, so "@Bot /update" works in a channel (where the mention is what
     // put the message in scope at all).
