@@ -1,0 +1,9 @@
+// The contacts app's tools (docs/specs/platform.md §5.4), written from their implementations by the Worker's registry test
+// (packages/edge/src/registry/registry.test.ts): run it with UPDATE_TOOL_DEFINITIONS=1 after changing a tool, not this file.
+import type { ToolDefinition } from '../tools.js';
+
+export const CONTACTS_TOOLS: ToolDefinition[] = [
+  {"name":"list_contacts","app":"contacts","kind":"server","doors":["mcp","assistant"],"scopes":["contacts:read"],"description":"The user's contacts in FreeFlow Contacts: their own (source own), the organization's members with their addresses (member), contacts other members shared with the organization (shared, with shared_by), and people the user wrote to by email (mail). At most 500.","input":{"type":"object","properties":{},"$schema":"http://json-schema.org/draft-07/schema#"}},
+  {"name":"find_contact","app":"contacts","kind":"server","doors":["mcp","assistant"],"scopes":["contacts:read"],"description":"Finds people in the user's contacts (their own, the organization's members, shared lists and people they emailed) whose name, address, organization or phone contains q. Use it to find someone's email address.","input":{"type":"object","properties":{"q":{"type":"string"}},"required":["q"],"$schema":"http://json-schema.org/draft-07/schema#"}},
+  {"name":"add_contact","app":"contacts","kind":"server","doors":["mcp","assistant"],"scopes":["contacts:write"],"description":"Adds a contact to the user's own contacts in FreeFlow Contacts: a name, and any of email addresses, a phone number, an organization and notes. Only when the user asks.","input":{"type":"object","properties":{"name":{"type":"string"},"emails":{"type":"array","items":{"type":"string"}},"phone":{"type":"string"},"organization":{"type":"string"},"notes":{"type":"string"}},"required":["name"],"$schema":"http://json-schema.org/draft-07/schema#"}},
+];

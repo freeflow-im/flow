@@ -20,6 +20,8 @@ import { eventRoutes } from './routes/events';
 import { toolRoutes } from './routes/tools';
 import { assistantRoutes } from './routes/assistant';
 import { referenceRoutes } from './routes/references';
+import { contactsRoutes } from './routes/contacts';
+import { APP_MANIFESTS } from '@flow/shared/manifests';
 
 export { Directory } from './directory/object';
 export { Org } from './org/object';
@@ -29,6 +31,7 @@ export { Mail } from './imap/object';
 export { Calendar } from './calendar/object';
 export { Events } from './events/object';
 export { Assistant } from './assistant/object';
+export { Contacts } from './contacts/object';
 import type { Org as OrgObject } from './org/object';
 import type { JobMessage } from './events/object';
 import { handleJobBatch } from './events/queue';
@@ -57,6 +60,8 @@ export interface Env extends ProxyEnv, AuthEnv {
   EVENTS: DurableObjectNamespace<import('./events/object').Events>;
   /** The assistant: one object per account (`idFromName(accountId)`), its chats, settings and usage (src/assistant/object.ts). */
   ASSISTANT: DurableObjectNamespace<import('./assistant/object').Assistant>;
+  /** FreeFlow Contacts: one object per account, its own contacts and their one grant (src/contacts/object.ts). */
+  CONTACTS?: DurableObjectNamespace<import('./contacts/object').Contacts>;
   /** The `flow-jobs` Queue (producer): each wake job's check, sent by the Events object and consumed by `queue` below. */
   JOBS?: Queue<JobMessage>;
   /** The `flow-provisioning` Queue (producer): the Directory object sends accounts' mailbox work there (provisioning/). */
@@ -73,8 +78,9 @@ export interface Env extends ProxyEnv, AuthEnv {
 
 /** Paths that are never files: they skip the look in the assets. */
 const NEVER_A_FILE = /^\/(v1|api|mcp|oauth|plugin|\.well-known)(\/|$)/;
-/** Vite's content-hashed output, under the web client's root, the Workspace client's, the Mail client's and the Calendar client's. */
-const HASHED_FILE = /^(\/workspace|\/mail|\/calendar)?\/assets\//;
+/** Vite's content-hashed output, under each client's base path in the manifests (the web client's root, /workspace, /mail, …). */
+const BASES = APP_MANIFESTS.flatMap((m) => (m.client && m.client.basePath !== '/' ? [m.client.basePath.replace(/^\/|\/$/g, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')] : []));
+const HASHED_FILE = new RegExp(`^(/(${BASES.join('|')}))?/assets/`);
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -105,6 +111,7 @@ ported.route('/', authRoutes as never);
 ported.route('/', helpRoutes as never);
 ported.route('/', mailRoutes as never);
 ported.route('/', calendarRoutes as never);
+ported.route('/', contactsRoutes as never);
 ported.route('/', eventRoutes as never);
 ported.route('/', referenceRoutes as never);
 ported.route('/', toolRoutes as never);

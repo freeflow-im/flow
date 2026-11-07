@@ -188,4 +188,38 @@ export const APP_MANIFESTS: AppManifest[] = [
     kinds: [],
     events: [],
   },
+  {
+    // Contacts (platform.md §11, phase 6.5): the fifth app, added by this manifest. One object per account: the person's own
+    // contacts, which they may share with the organization (an `org` viewer grant on their list); the routes merge in the
+    // organization's members and the people they wrote to from Mail.
+    name: 'contacts',
+    path: '/contacts',
+    scope: 'account',
+    object: { className: 'Contacts', migrationTag: 'v8' },
+    routes: 'contacts',
+    kinds: [
+      { kind: 'list', container: true, resolve: 'app', address: '/contacts/?list={id}', icon: '📇', label: 'Contacts' },
+      { kind: 'contact', resolve: 'app', address: '/contacts/?contact={id}', icon: '👤', label: 'Contact' },
+    ],
+    // Its tools, by name (their definitions: @flow/shared/tools, platform.md §5.4).
+    tools: ['list_contacts', 'find_contact', 'add_contact'],
+    scopes: [
+      {
+        id: 'contacts',
+        label: 'Contacts: see and add contacts',
+        detail: 'Your contacts in FreeFlow Contacts, the members of the organization below and the people you wrote to: list and search them, and add contacts.',
+        readOnly: { label: 'Contacts: see your contacts', detail: 'Your contacts in FreeFlow Contacts, the members of the organization below and the people you wrote to: list and search them.' },
+        scopes: ['contacts:read', 'contacts:write'],
+        checkedByDefault: true,
+      },
+    ],
+    assistant: { pages: ['contacts'] },
+    tab: { label: 'Contacts', shortcut: '5', badge: 'none' },
+    client: { dist: 'packages/contacts/dist', basePath: '/contacts/', optional: true },
+    pages: [
+      { path: '/contacts', html: 'contacts.html', signIn: true },
+      { path: '/contacts/*', html: 'contacts.html', signIn: true, passFiles: true },
+    ],
+    events: ['contacts.changed'],
+  },
 ];

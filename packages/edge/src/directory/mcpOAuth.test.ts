@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { APP_MANIFESTS } from '@flow/shared/manifests';
 import { DirectoryCore, type Sql } from './core';
 import { authorizationServerMetadata, cleanScope, grantedScope, isResource, McpOAuth, OAuthError, offeredGroups, protectedResourceMetadata, redirectMatches, wwwAuthenticate } from './mcpOAuth';
 
@@ -57,8 +58,11 @@ describe('MCP OAuth in the directory', () => {
     expect(wwwAuthenticate(ISSUER, '/mcp', 'invalid_token')).toBe(`Bearer resource_metadata="${ISSUER}/.well-known/oauth-protected-resource/mcp", error="invalid_token"`);
     expect(isResource(ISSUER, `${ISSUER}/mcp/v2`)).toBe(true);
     expect(isResource(ISSUER, 'https://docs.freeflow.im/mcp')).toBe(false);
-    expect(cleanScope(undefined)).toBe('files:read files:write mail:read mail:write mail:send calendar:read calendar:write events:read');
-    expect(protectedResourceMetadata(ISSUER).scopes_supported).toEqual(['files:read', 'files:write', 'mail:read', 'mail:write', 'mail:send', 'calendar:read', 'calendar:write', 'events:read']);
+    // Every scope the manifests' consent groups declare, in their order (the first eight the suite's first four apps').
+    const declared = APP_MANIFESTS.flatMap((m) => m.scopes ?? []).flatMap((g) => g.scopes);
+    expect(declared.slice(0, 8)).toEqual(['files:read', 'files:write', 'mail:read', 'mail:write', 'mail:send', 'calendar:read', 'calendar:write', 'events:read']);
+    expect(cleanScope(undefined)).toBe(declared.join(' '));
+    expect(protectedResourceMetadata(ISSUER).scopes_supported).toEqual(declared);
     expect(authorizationServerMetadata(ISSUER).scopes_supported).toContain('mail:send');
     expect(cleanScope('files:read nope')).toBeNull();
     expect(redirectMatches('http://localhost/cb', 'http://localhost:9999/cb')).toBe(true);
@@ -79,8 +83,10 @@ describe('MCP OAuth in the directory', () => {
   it('issues tokens for the chosen organization, which refreshes keep', async () => {
     const { client, code } = await codeFor('u1', 'orgB');
     const t = oauth.token(ISSUER, { grant_type: 'authorization_code', code, code_verifier: verifier, client_id: client });
-    // Nothing ticked on the page (a form without its checkboxes): Docs, Mail and Calendar, as the page starts; never sending.
-    expect(oauth.authenticate(ISSUER, `Bearer ${t.access_token}`)).toEqual({ ok: true, caller: { userId: 'u1', email: 'u1@example.com', orgId: 'orgB', accountId: 'acc-u1-orgB', scope: 'files:read files:write mail:read mail:write calendar:read calendar:write events:read' } });
+    // Nothing ticked on the page (a form without its checkboxes): every group that starts ticked; never sending.
+    const ticked = APP_MANIFESTS.flatMap((m) => m.scopes ?? []).filter((g) => g.checkedByDefault).flatMap((g) => g.scopes).join(' ');
+    expect(ticked.startsWith('files:read files:write mail:read mail:write calendar:read calendar:write events:read')).toBe(true);
+    expect(oauth.authenticate(ISSUER, `Bearer ${t.access_token}`)).toEqual({ ok: true, caller: { userId: 'u1', email: 'u1@example.com', orgId: 'orgB', accountId: 'acc-u1-orgB', scope: ticked } });
     const r = oauth.token(ISSUER, { grant_type: 'refresh_token', refresh_token: t.refresh_token, client_id: client });
     expect(oauth.authenticate(ISSUER, `Bearer ${r.access_token}`)).toMatchObject({ ok: true, caller: { orgId: 'orgB' } });
     // A rotated refresh token used again ends the family.

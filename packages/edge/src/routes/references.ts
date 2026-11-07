@@ -1,7 +1,8 @@
 // GET /v1/references?refs=<ref>,<ref>&workspace=<id> → { references: [{ ref, kind, app, title, url, icon, summary?, role? }
 // | { ref, denied: true }] } (docs/specs/platform.md §5.3, phase 6.4): each reference resolved for the caller, by the Org
-// object and the app objects the manifests name (src/references.ts). Chat's chips ask this, once per message list.
+// object and the app objects the manifests name (src/references.ts, src/apps.ts). Chat's chips ask this, once per message list.
 import { Hono } from 'hono';
+import { describeInApp } from '../apps';
 import type { Calendar } from '../calendar/object';
 import { nativeOwnerOf } from '../calendar/rules';
 import type { Docs } from '../docs/object';
@@ -47,6 +48,7 @@ referenceRoutes.get('/v1/references', async (c) => {
       const owner = nativeOwnerOf((ref.kind === 'event' ? ref.id.split(':')[0] : ref.id) ?? '') ?? account.id;
       return ns.get(ns.idFromName(owner)).describe({ ...who, account }, await channelIds(), ref.kind, ref.id);
     },
+    app: async (ref) => describeInApp(c.env, ref, { ...who, account }, await channelIds()),
   });
   c.header('Cache-Control', 'no-store');
   return c.json({ references });

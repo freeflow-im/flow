@@ -25,10 +25,11 @@ const migrations = [...wrangler.matchAll(/\[\[migrations\]\]\s*\ntag = "([^"]+)"
 describe('the manifests and the Worker', () => {
   it('exports each app object from index.ts, binds it, and adds it in the migration the manifest names', () => {
     const objects = APP_MANIFESTS.flatMap((m) => (m.object ? [m.object] : []));
-    expect(objects.map((o) => o.className)).toEqual(['Org', 'Docs', 'Mail', 'Calendar', 'Events', 'Assistant']);
+    expect(objects.slice(0, 6).map((o) => o.className)).toEqual(['Org', 'Docs', 'Mail', 'Calendar', 'Events', 'Assistant']);
     for (const { className, migrationTag } of objects) {
       expect(index).toMatch(new RegExp(`^export \\{ ${className} \\} from '\\./[^']+';$`, 'm'));
-      expect(wrangler).toMatch(new RegExp(`^class_name = "${className}"$`, 'm'));
+      // Bound under its class name in capitals, which is how the kernel finds it (apps.ts' bindingOf).
+      expect(wrangler).toMatch(new RegExp(`^name = "${className.toUpperCase()}"\\nclass_name = "${className}"$`, 'm'));
       expect(migrations.find((m) => m.tag === migrationTag)?.classes).toContain(className);
     }
   });
@@ -44,25 +45,29 @@ describe('the manifests and the Worker', () => {
 
   it('gives the assembler one client per manifest client, required ones first', () => {
     const out = path.join(edge, 'public');
-    expect(clientsFrom(APP_MANIFESTS, root, out)).toEqual([
+    const clients = clientsFrom(APP_MANIFESTS, root, out);
+    expect(clients.slice(0, 4)).toEqual([
       { name: 'chat', from: path.join(root, 'packages/web/dist'), to: path.join(out, '/'), page: 'index.html', optional: false },
       { name: 'docs', from: path.join(root, 'packages/docs/dist/client'), to: path.join(out, 'workspace/'), page: 'workspace.html', optional: false },
       { name: 'mail', from: path.join(root, 'packages/mail/dist'), to: path.join(out, 'mail/'), page: 'mail.html', optional: true },
       { name: 'calendar', from: path.join(root, 'packages/calendar/dist'), to: path.join(out, 'calendar/'), page: 'calendar.html', optional: true },
     ]);
+    // Any later app's client is optional: a deploy built before it has none.
+    expect(clients.slice(4).every((c) => c.optional && c.page === `${c.name}.html`)).toBe(true);
     // Every client has a package.json beside its build folder's package.
     for (const m of APP_MANIFESTS) if (m.client) expect(existsSync(path.join(root, m.client.dist.split('/').slice(0, 2).join('/'), 'package.json'))).toBe(true);
   });
 
   it('keeps the consent groups and scopes as they were', () => {
-    expect(SCOPE_GROUPS.map((g) => [g.id, g.scopes, g.checkedByDefault])).toEqual([
+    expect(SCOPE_GROUPS.slice(0, 5).map((g) => [g.id, g.scopes, g.checkedByDefault])).toEqual([
       ['docs', ['files:read', 'files:write'], true],
       ['mail', ['mail:read', 'mail:write'], true],
       ['send', ['mail:send'], false],
       ['calendar', ['calendar:read', 'calendar:write'], true],
       ['events', ['events:read'], true],
     ]);
-    expect(MCP_SCOPES).toEqual(['files:read', 'files:write', 'mail:read', 'mail:write', 'mail:send', 'calendar:read', 'calendar:write', 'events:read']);
+    expect(MCP_SCOPES.slice(0, 8)).toEqual(['files:read', 'files:write', 'mail:read', 'mail:write', 'mail:send', 'calendar:read', 'calendar:write', 'events:read']);
+    expect(MCP_SCOPES).toEqual(APP_MANIFESTS.flatMap((m) => m.scopes ?? []).flatMap((g) => g.scopes));
     expect(offeredGroups('mail:read mail:send').map((g) => g.id)).toEqual(['mail', 'send']);
   });
 });
@@ -88,8 +93,9 @@ describe('the pages, from the manifests', () => {
     expect(await (await get('/privacy')).text()).toBe('page /privacy.html');
   });
 
-  it('sends a stranger to sign in on Docs, Mail and Calendar', async () => {
-    for (const p of ['/workspace', '/mail', '/mail/inbox', '/calendar', '/calendar/week']) {
+  it('sends a stranger to sign in on Docs, Mail, Calendar and every app whose pages ask for it', async () => {
+    const declared = APP_MANIFESTS.flatMap((m) => (m.pages ?? []).filter((p) => p.signIn).map((p) => p.path.replace('/*', '/x')));
+    for (const p of new Set(['/workspace', '/mail', '/mail/inbox', '/calendar', '/calendar/week', ...declared])) {
       const res = await get(`${p}?x=1`);
       expect(res.status).toBe(302);
       expect(res.headers.get('location')).toBe(`/?next=${encodeURIComponent(`${p}?x=1`)}`);

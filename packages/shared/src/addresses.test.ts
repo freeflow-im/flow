@@ -33,8 +33,14 @@ describe('addresses', () => {
 
   it('covers every kind a manifest says has a page, and no other', () => {
     const covered = new Set(KINDS.map(([r]) => `${r.app}/${r.kind}`));
-    const declared = APP_MANIFESTS.flatMap((m) => m.kinds.filter((k) => k.resolve && !(m.name === 'chat' && k.kind === 'file')).map((k) => `${m.name}/${k.kind}`));
+    // A kind whose manifest declares its `address` is covered by it, with no entry in the table.
+    const declared = APP_MANIFESTS.flatMap((m) => m.kinds.filter((k) => k.resolve && !k.address && !(m.name === 'chat' && k.kind === 'file')).map((k) => `${m.name}/${k.kind}`));
     expect([...covered].sort()).toEqual([...new Set(declared)].sort());
+    for (const m of APP_MANIFESTS) for (const k of m.kinds) if (k.address) {
+      const r = ref(m.name, k.kind, 'acct:x y');
+      expect(addressOf(r)).toBe(k.address.replace('{id}', 'acct%3Ax%20y'));
+      expect(referenceOf(addressOf(r)!, ctx)).toEqual(r);
+    }
     expect(addressOf(ref('chat', 'file', 'f'))).toBeNull();
     expect(addressOf(ref('mail', 'message', 'm'))).toBeNull();
   });

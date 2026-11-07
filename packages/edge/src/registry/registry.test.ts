@@ -21,7 +21,20 @@ import { toolLabel } from '../../../docs/client/src/agent/describe.ts';
 import { BUILT_IN_TOOLS } from '../../../agent-bridge/src/mcp-server.ts';
 import { CALENDAR_TOOL_NAMES } from '../../../agent-bridge/src/calendar-tools.ts';
 import { MAIL_TOOL_NAMES } from '../../../agent-bridge/src/mail-tools.ts';
-import { registrations, runnerOf, toolsFor } from './index.ts';
+import { APP_MANIFESTS } from '@flow/shared/manifests';
+import { registered, registrations, runnerOf, toolsFor } from './index.ts';
+
+/** The apps whose tools this test reads from their own modules (above); every other app with tools was added by manifest
+ * and registers them from its object module, src/<app>/object.ts, with their descriptions and scopes (apps.ts). */
+const OWN_MODULES = new Set(['chat', 'docs', 'mail', 'calendar', 'events']);
+const BY_MANIFEST = APP_MANIFESTS.filter((m) => m.tools?.length && !OWN_MODULES.has(m.name)).map((m) => m.name);
+for (const app of BY_MANIFEST) await import(`../${app}/object.ts`);
+/** Their registrations, by tool: the app and the doors. */
+const manifestTools = () => {
+  const out = new Map<string, { app: string; doors: ToolDoor[] }>();
+  for (const r of registrations()) if (BY_MANIFEST.includes(r.app)) out.set(r.name, { app: r.app, doors: [...(out.get(r.name)?.doors ?? []), r.door] });
+  return out;
+};
 
 type Input = ToolDefinition['input'];
 
@@ -35,6 +48,10 @@ async function mcpTools(): Promise<{ name: string; description?: string; inputSc
   // A hub that can make PDFs, so export_pdf is listed (where the Worker cannot, the plugin's server leaves it out).
   const mcp = createMcpServer({ hub: { pdf: {} } } as never, { bundle: () => { throw new Error('no app'); }, publicUrl: null, level: 'tools', version: Math.max(...MCP_VERSIONS) as McpVersion, uploadUrl: 'https://app.test/mcp/import/o1', appUrl: 'https://app.test/workspace' });
   for (const t of [...MAIL_TOOLS, ...CALENDAR_TOOLS, ...EVENT_TOOLS]) mcp.registerTool(t.name, { title: t.title, description: t.description, inputSchema: t.shape as never, annotations: t.annotations }, (async () => ({ content: [] })) as never);
+  for (const [name, { app, doors }] of manifestTools()) {
+    const r = registered(doors[0]!, app, name)!;
+    mcp.registerTool(name, { title: r.title, description: r.description, inputSchema: r.shape as never, annotations: r.annotations }, (async () => ({ content: [] })) as never);
+  }
   const [a, b] = InMemoryTransport.createLinkedPair();
   await mcp.connect(a);
   const client = new Client({ name: 'registry-test', version: '1' });
@@ -49,7 +66,15 @@ async function fromImplementations(): Promise<ToolDefinition[]> {
   const mail = new Set(MAIL_TOOLS.map((t) => t.name)), calendar = new Set(CALENDAR_TOOLS.map((t) => t.name)), events = new Set(EVENT_TOOLS.map((t) => t.name));
   const scoped = new Map([...MAIL_TOOLS, ...CALENDAR_TOOLS, ...EVENT_TOOLS].map((t) => [t.name, t.scopes]));
   const rows: { door: ToolDoor; def: ToolDefinition }[] = [];
+  const byManifest = manifestTools();
   for (const t of await mcpTools()) {
+    const m = byManifest.get(t.name);
+    if (m) {
+      // An app added by manifest: one definition, at the doors it registered at, its input as /mcp lists it.
+      const r = registered(m.doors[0]!, m.app, t.name)!;
+      for (const door of m.doors) rows.push({ door, def: { name: t.name, app: m.app, kind: 'server', doors: [], scopes: r.scopes ?? [], ...(t.annotations?.destructiveHint === true ? { destructive: true } : {}), description: t.description ?? '', input: t.inputSchema } });
+      continue;
+    }
     const app = mail.has(t.name) ? 'mail' : calendar.has(t.name) ? 'calendar' : events.has(t.name) ? 'events' : 'docs';
     const scopes = app === 'docs' ? [t.annotations?.readOnlyHint === true ? 'files:read' : 'files:write'] : scoped.get(t.name)!;
     rows.push({ door: 'mcp', def: { name: t.name, app, kind: 'server', doors: [], scopes, ...(t.annotations?.destructiveHint === true ? { destructive: true } : {}), description: t.description ?? '', input: t.inputSchema } });
@@ -82,7 +107,8 @@ async function fromImplementations(): Promise<ToolDefinition[]> {
   return [...merged.values()].map(({ name, app, kind, doors, scopes, destructive, confirm, runsIn, description, input }) => ({ name, app, kind, doors, scopes, ...(destructive ? { destructive } : {}), ...(confirm ? { confirm } : {}), ...(runsIn ? { runsIn } : {}), description, input }));
 }
 
-const LISTS: Record<string, string> = { chat: 'CHAT_TOOLS', docs: 'DOCS_TOOLS', mail: 'MAIL_TOOLS', calendar: 'CALENDAR_TOOLS', events: 'EVENTS_TOOLS' };
+/** Each app's list of definitions, in the manifests' order: `<APP>_TOOLS` in @flow/shared's toolDefinitions/<app>.ts. */
+const LISTS: Record<string, string> = Object.fromEntries(APP_MANIFESTS.filter((m) => m.tools?.length).map((m) => [m.name, `${m.name.toUpperCase()}_TOOLS`]));
 
 function write(defs: ToolDefinition[]): void {
   for (const [app, list] of Object.entries(LISTS)) {

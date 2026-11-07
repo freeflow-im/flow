@@ -294,9 +294,14 @@ export interface AppManifest {
   /**
    * The object and container kinds it owns, each with its reference resolver (§5.3, GET /v1/references): `org`, the Org
    * object answers (Chat's own kinds, and anything in the share index); `app`, this app's object is asked for what the
-   * share index does not hold. A kind without one is not resolved for anyone (Mail's: mail is not shareable).
+   * share index does not hold. A kind without one is not resolved for anyone (Mail's: mail is not shareable). An
+   * account-scoped app's `app` kinds are asked of the object of the account their id begins with (`<accountId>:<rest>`),
+   * else of the reader's own; the object answers `describe(caller, channelIds, kind, id)`.
+   *
+   * `address` is where one opens, a path with `{id}` (`/contacts/?contact={id}`), `icon` its chip's glyph and `label` what
+   * a chip calls it: @flow/shared/addresses reads them for the kinds it has no entry of its own for.
    */
-  kinds: { kind: string; container?: boolean; resolve?: 'org' | 'app' }[];
+  kinds: { kind: string; container?: boolean; resolve?: 'org' | 'app'; address?: string; icon?: string; label?: string }[];
   /** Its tools, by name: their definitions are @flow/shared/tools' TOOL_DEFINITIONS (§5.4). */
   tools?: string[];
   /** The consent page's groups for its scopes, in the order the page lists them. */

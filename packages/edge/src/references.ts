@@ -1,7 +1,8 @@
 // References resolved for a reader (docs/specs/platform.md §5.3, phase 6.4): GET /v1/references (routes/references.ts).
 // The Org object answers first (Chat's kinds, and anything in the share index shared with the reader); a reference it
 // hands back as `ask` goes to the resolver its app's manifest declares for the kind (`resolve: 'app'`): Docs' object
-// (`GET /api/places/:id`), or the Calendar object that owns the calendar. A kind with no resolver (Mail's) is denied, as
+// (`GET /api/places/:id`), the Calendar object that owns the calendar, or for an app added by manifest its object's
+// `describe` (apps.ts). A kind with no resolver (Mail's) is denied, as
 // is anything an app says the reader may not see. Nothing is cached: every answer is the reader's own.
 import { parseReference, type Reference } from '@flow/shared';
 import { addressOf, iconOf, type ResolvedReference } from '@flow/shared/addresses';
@@ -21,9 +22,11 @@ export interface ReferenceSources {
   docs(ref: Reference): Promise<AppDescription | null>;
   /** The Calendar object owning the calendar: its name, or an event's title, and the reader's role. */
   calendar(ref: Reference): Promise<AppDescription | null>;
+  /** Any other app's object, by its manifest (apps.ts `describeInApp`): an app added by manifest resolves its kinds here. */
+  app?(ref: Reference): Promise<AppDescription | null>;
 }
 
-/** The app resolvers the manifests' `resolve: 'app'` kinds name, by app. */
+/** The app resolvers the manifests' `resolve: 'app'` kinds name, by app; any other app's are `app`'s. */
 const APP_RESOLVERS: Record<string, keyof Omit<ReferenceSources, 'org'>> = { docs: 'docs', calendar: 'calendar' };
 
 /** The resolver a manifest declares for a reference's kind, or none. */
@@ -40,9 +43,10 @@ export async function resolveReferences(refs: string[], sources: ReferenceSource
     if (!('ask' in a)) return a;
     const denied: ResolvedReference = { ref: a.ref, denied: true };
     const r = parseReference(a.ref);
-    const source = r && resolverOf(r) === 'app' ? APP_RESOLVERS[r.app] : undefined;
-    if (!r || !source) return denied;
-    const d = await sources[source](r).catch((err: Error) => {
+    const source = r && resolverOf(r) === 'app' ? (APP_RESOLVERS[r.app] ?? 'app') : undefined;
+    const resolve = source ? sources[source] : undefined;
+    if (!r || !resolve) return denied;
+    const d = await resolve.call(sources, r).catch((err: Error) => {
       console.error(`[references] ${r.app} for ${a.ref}: ${err.message}`);
       return null;
     });

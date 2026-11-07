@@ -1,6 +1,6 @@
 // The suite bar (docs/specs/freeflow-suite.md §2.5): one 56px bar above every signed-in page of Chat and Docs.
 // Left, where you are: the mark, "FreeFlow", the organization's name with its switcher. Centre, which app: Docs,
-// Chat, Mail, then Calendar (⌘1 to ⌘4). Right, tools then you: search (opens in place, ⌘K), the Assistant,
+// Chat, Mail, Calendar, then any app added since (⌘1 onwards, by the manifests). Right, tools then you: search (opens in place, ⌘K), the Assistant,
 // notifications, the account menu. Presentational: every app passes its data and callbacks, the bar fetches nothing.
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { SuiteMark } from './SuiteMark';
@@ -242,12 +242,12 @@ export function SuiteBar({ tabs, organization, search, assistant, notifications,
     return () => window.removeEventListener(SUITE_SEARCH_EVENT, onOpen);
   }, [!!search]);
 
-  // ⌘1 to ⌘4 switch apps, ⌘K opens the search. An app that already used the key (an editor's own ⌘K) wins.
+  // ⌘1 to ⌘9 switch apps (one per tab, in the manifests' shortcut order), ⌘K opens the search. An app that already used the key (an editor's own ⌘K) wins.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || !isMod(e)) return;
       const n = Number(e.key);
-      if (Number.isInteger(n) && n >= 1 && n <= 4) {
+      if (Number.isInteger(n) && n >= 1 && n <= 9) {
         const tab = tabsRef.current[n - 1];
         if (!tab || tab.disabled) return;
         e.preventDefault();
@@ -403,7 +403,7 @@ export function SuiteBar({ tabs, organization, search, assistant, notifications,
               className="sb-tab"
               href={tab.href}
               aria-current={tab.active ? 'page' : undefined}
-              title={i < 4 ? `${tab.title ?? tab.label} (⌘${i + 1})` : (tab.title ?? tab.label)}
+              title={i < 9 ? `${tab.title ?? tab.label} (⌘${i + 1})` : (tab.title ?? tab.label)}
               data-testid={`suite-tab-${tab.id}`}
               onClick={(e) => {
                 if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return; // a new tab or window: the browser's

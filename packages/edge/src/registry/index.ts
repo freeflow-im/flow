@@ -1,6 +1,7 @@
 // The tool registry on the Worker (docs/specs/platform.md §5.4). The definitions are @flow/shared's TOOL_DEFINITIONS; each
 // app's module registers how its server tools run when it is imported (Mail's mailTools.ts, Calendar's calendarTools.ts,
-// Events' eventTools.ts, the assistant's own in docs/server/agent/tools.ts), and each door asks `toolsFor` what it may use:
+// Events' eventTools.ts, the assistant's own in docs/server/agent/tools.ts; an app added by manifest, its object module,
+// src/<app>/object.ts, with `ctx.apps[<app>]`: apps.ts), and each door asks `toolsFor` what it may use:
 //
 //   - /mcp (docs/plugin/server/worker.ts): the server tools whose scopes the token has all been granted, of the apps the
 //     Worker can reach for this caller. Docs' are served by the plugin's MCP server (mcp.ts), which registers and runs
@@ -22,6 +23,12 @@ export interface ToolRunner<C = never> {
   failure?: (e: unknown) => string;
   /** The key of the door's context this tool needs: where the Worker cannot reach that app for the caller, /mcp leaves it out. */
   needs?: string;
+  /**
+   * An app added by manifest says what its tool is told and the scopes it needs here, beside how it runs: the registry's
+   * test writes its definitions (@flow/shared's toolDefinitions/<app>.ts) from these.
+   */
+  description?: string;
+  scopes?: string[];
 }
 
 /** A definition and, for a server tool that runs in the Worker, how. */
@@ -56,6 +63,9 @@ export const registrations = (): { door: ToolDoor; app: string; name: string }[]
     const [door, app, name] = k.split(':') as [ToolDoor, string, string];
     return { door, app, name };
   });
+
+/** A registration as it was made, whether or not a definition offers it yet (the registry's test). */
+export const registered = (door: ToolDoor, app: string, name: string): ToolRunner<never> | undefined => runners.get(key(door, app, name));
 
 /** How a door's tool runs, when it is a server tool that runs in the Worker. */
 export function runnerOf(door: ToolDoor, name: string): ToolRunner<never> | undefined {

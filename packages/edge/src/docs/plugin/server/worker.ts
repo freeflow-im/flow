@@ -13,6 +13,7 @@ import { MAIL_INSTRUCTIONS, type MailFetch, type MailToolContext } from '../../.
 import { CALENDAR_INSTRUCTIONS, type CalendarFetch, type CalendarToolContext } from '../../../calendar/calendarTools.ts';
 import { EVENT_INSTRUCTIONS, type EventToolContext } from '../../../events/eventTools.ts';
 import { toolsFor, type DoorTool } from '../../../registry';
+import type { AppToolContext } from '../../../apps';
 import type { SubscriptionOps } from '../../../events/subscriptions.ts';
 import { adaptTransport, discoverResult, isDiscover, SDK_VERSION, STATELESS_VERSION } from './stateless.ts';
 
@@ -88,13 +89,15 @@ export function suiteHub(opts: FileHubOptions, appUrl: string): FileHub {
  * What a token's scopes allow on /mcp, from the registry (platform.md §5.4): Docs' tools (to read only, or to change too),
  * and the Mail, Calendar and event tools the Worker can reach for this caller.
  */
-export function mcpAccess(scope: string, mailAvailable: boolean, calendarAvailable = false, eventsAvailable = false): { files: 'none' | 'read' | 'write'; docs: Set<string>; mail: DoorTool[]; calendar: DoorTool[]; events: DoorTool[] } {
+export function mcpAccess(scope: string, mailAvailable: boolean, calendarAvailable = false, eventsAvailable = false, apps: readonly string[] = []): { files: 'none' | 'read' | 'write'; docs: Set<string>; mail: DoorTool[]; calendar: DoorTool[]; events: DoorTool[]; others: DoorTool[] } {
   const scopes = scope.split(' ').filter(Boolean);
   const files = scopes.includes('files:write') ? 'write' : scopes.includes('files:read') ? 'read' : 'none';
-  const reach = { ...(mailAvailable ? { mail: true } : {}), ...(calendarAvailable ? { calendar: true } : {}), ...(eventsAvailable ? { events: true } : {}) };
+  const reach = { ...Object.fromEntries(apps.map((a) => [a, true])), ...(mailAvailable ? { mail: true } : {}), ...(calendarAvailable ? { calendar: true } : {}), ...(eventsAvailable ? { events: true } : {}) };
   const tools = toolsFor('mcp', { scopes, reach });
   const of = (app: string) => tools.filter((t) => t.definition.app === app);
-  return { files, docs: new Set(of('docs').map((t) => t.definition.name)), mail: of('mail'), calendar: of('calendar'), events: of('events') };
+  // The apps added by manifest (apps.ts): their tools run with `ctx.apps[<app>]`.
+  const others = tools.filter((t) => !['docs', 'mail', 'calendar', 'events'].includes(t.definition.app));
+  return { files, docs: new Set(of('docs').map((t) => t.definition.name)), mail: of('mail'), calendar: of('calendar'), events: of('events'), others };
 }
 
 /** The server's instructions for what the token can use: Docs' (when it has files), then Mail's, Calendar's and Events' (when it has them). */
@@ -104,8 +107,8 @@ export const suiteInstructions = (version: McpVersion, access: ReturnType<typeof
 const toolResult = (data: Record<string, unknown>) => ({ content: [{ type: 'text' as const, text: JSON.stringify(data) }], structuredContent: data });
 const toolError = (message: string) => ({ content: [{ type: 'text' as const, text: message }], isError: true });
 
-/** The registry's tools that run in the Worker (Mail's, Calendar's, Events'), on an MCP server, each with the caller's own objects. */
-function registerTools(mcp: ReturnType<typeof createMcpServer>, tools: DoorTool[], ctx: { mail?: MailToolContext; calendar?: CalendarToolContext; events?: EventToolContext }): void {
+/** The registry's tools that run in the Worker (Mail's, Calendar's, Events', the apps' added by manifest), on an MCP server, each with the caller's own objects. */
+function registerTools(mcp: ReturnType<typeof createMcpServer>, tools: DoorTool[], ctx: { mail?: MailToolContext; calendar?: CalendarToolContext; events?: EventToolContext; apps?: Record<string, AppToolContext> }): void {
   for (const { definition, runner } of tools) {
     if (!runner) continue;
     mcp.registerTool(definition.name, { title: runner.title, description: definition.description, inputSchema: runner.shape as never, annotations: runner.annotations as never }, (async (args: Record<string, unknown>) => {
@@ -123,15 +126,15 @@ function registerTools(mcp: ReturnType<typeof createMcpServer>, tools: DoorTool[
 /**
  * One MCP request, as `caller`. `mail` and `calendar` reach the caller's own Mail and Calendar objects, and `events` the
  * organization's event subscriptions as the caller's account, where the Worker has them; `member` finds an account of the
- * organization by address (share_calendar).
+ * organization by address (share_calendar); `apps` are the objects of the apps added by manifest (apps.ts), by name.
  */
-export async function handleMcp(request: Request, hub: FileHub, caller: McpRequestCaller, mail?: MailFetch, calendar?: CalendarFetch, events?: SubscriptionOps, member?: CalendarToolContext['member']): Promise<Response> {
+export async function handleMcp(request: Request, hub: FileHub, caller: McpRequestCaller, mail?: MailFetch, calendar?: CalendarFetch, events?: SubscriptionOps, member?: CalendarToolContext['member'], apps: Record<string, AppToolContext> = {}): Promise<Response> {
   const version = suiteMcpVersion(caller.endpoint);
   if (!version) return json(404, { error: 'Not found' });
   if (request.method !== 'POST') return json(405, { error: 'This endpoint takes POST (Streamable HTTP, JSON responses); it has no GET stream.' }, { allow: 'POST' });
   const body = await request.json().catch(() => undefined);
   const info = serverInfo(version);
-  const access = mcpAccess(caller.scope, !!mail, !!calendar, !!events);
+  const access = mcpAccess(caller.scope, !!mail, !!calendar, !!events, Object.keys(apps));
   const instructions = suiteInstructions(version, access);
   // ChatGPT and newer clients speak 2026-07-28 (no initialize: server/discover); the SDK speaks 2025-11-25.
   if (isDiscover(body)) return json(200, discoverResult(body, info, { tools: { listChanged: true } }, instructions));
@@ -173,8 +176,9 @@ export async function handleMcp(request: Request, hub: FileHub, caller: McpReque
       : {}),
     ...(calendar ? { calendar: { calendar, origin: caller.origin, ...(member ? { member } : {}) } } : {}),
     ...(events ? { events: { subscriptions: events } } : {}),
+    apps,
   };
-  registerTools(mcp, [...access.mail, ...access.calendar, ...access.events], ctx);
+  registerTools(mcp, [...access.mail, ...access.calendar, ...access.events, ...access.others], ctx);
   const transport = adaptTransport(new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true }) as never, info, stateless) as unknown as WebStandardStreamableHTTPServerTransport;
   try {
     await mcp.connect(transport);

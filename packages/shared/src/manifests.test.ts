@@ -13,12 +13,14 @@ describe('APP_MANIFESTS', () => {
     for (const m of APP_MANIFESTS) expect(APP_SCOPES).toContain(m.scope);
   });
 
-  it('gives each tab its own shortcut, ⌘1 to ⌘4 in the bar’s order', () => {
+  it('gives each tab its own shortcut, ⌘1 onwards with none skipped, the first four Docs, Chat, Mail and Calendar', () => {
     const tabs = APP_MANIFESTS.flatMap((m) => (m.tab ? [m.tab] : []));
     expect(unique(tabs.map((t) => t.shortcut))).toBe(true);
     expect(unique(tabs.map((t) => t.label))).toBe(true);
     for (const t of tabs) expect(t.shortcut).toMatch(/^[1-9]$/);
-    expect([...tabs].sort((a, b) => a.shortcut.localeCompare(b.shortcut)).map((t) => t.label)).toEqual(['Docs', 'Chat', 'Mail', 'Calendar']);
+    const ordered = [...tabs].sort((a, b) => a.shortcut.localeCompare(b.shortcut));
+    expect(ordered.map((t) => t.shortcut)).toEqual(ordered.map((_, i) => String(i + 1)));
+    expect(ordered.slice(0, 4).map((t) => t.label)).toEqual(['Docs', 'Chat', 'Mail', 'Calendar']);
     // A tab goes to a page, so an app with one has a path.
     for (const m of APP_MANIFESTS) if (m.tab) expect(m.path).toBeTruthy();
   });

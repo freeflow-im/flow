@@ -142,6 +142,16 @@ class_name = "Assistant"
 tag = "v7"
 new_sqlite_classes = ["Assistant"]
 
+# FreeFlow Contacts (platform.md §11, phase 6.5): one object per account (`idFromName(accountId)`), its own contacts and the
+# one grant that shares them with the organization (src/contacts/object.ts). The fifth app, declared by its manifest.
+[[durable_objects.bindings]]
+name = "CONTACTS"
+class_name = "Contacts"
+
+[[migrations]]
+tag = "v8"
+new_sqlite_classes = ["Contacts"]
+
 # Wake jobs (src/events/object.ts, platform.md §5.2): the Events object sends each job's check to flow-jobs, delayed by
 # JOBS_ACK_DELAY_SECONDS (default 60); the Worker's `queue` handler (src/index.ts) asks the Events object, which delivers
 # the job again (retry after 120 s × attempts) or parks it after three. A check that keeps throwing ends in flow-jobs-dlq,

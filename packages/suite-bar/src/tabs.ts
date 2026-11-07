@@ -1,5 +1,5 @@
 // The bar's app tabs from the apps' manifests (@flow/shared's APP_MANIFESTS; docs/specs/platform.md §5.6): each app with
-// a `tab`, in its shortcut's order (⌘1 to ⌘4). Each app's bar keeps its own badge numbers and its own navigation.
+// a `tab`, in its shortcut's order (⌘1 onwards). Each app's bar keeps its own badge numbers and its own navigation.
 import type { AppManifest, AppTabBadge } from '@flow/shared';
 import type { SuiteTab } from './SuiteBar';
 

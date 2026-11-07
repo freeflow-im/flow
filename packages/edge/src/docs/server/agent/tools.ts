@@ -761,8 +761,10 @@ const offered = (name: string, context: AgentContext | undefined): boolean => to
 
 /** Validate a tool input. Returns the parsed input or an error message for Claude. */
 export function validateToolInput(name: string, input: unknown, context?: AgentContext): { ok: true; input: Record<string, unknown> } | { ok: false; error: string } {
-  if (!isToolName(name) || (context && !offered(name, context))) return { ok: false, error: `Unknown tool "${name}".` };
-  const parsed = schemas[name].safeParse(input);
+  // An app added by manifest has no schema here: its registered runner's shape is its schema (Edge only: the registry).
+  const shape = isToolName(name) ? null : runnerOf('assistant', name)?.shape;
+  if ((!isToolName(name) && !shape) || (context && !offered(name, context))) return { ok: false, error: `Unknown tool "${name}".` };
+  const parsed = (shape ? z.object(shape as z.ZodRawShape) : schemas[name as ToolName]).safeParse(input);
   if (!parsed.success) return { ok: false, error: `Invalid input for ${name}: ${z.prettifyError(parsed.error)}` };
   return { ok: true, input: parsed.data as Record<string, unknown> };
 }
@@ -816,6 +818,8 @@ export interface ServerToolEnv {
   calendar?: CalendarToolContext;
   /** The organization's Docs object over HTTP, as the person (the suite's Assistant object): Docs' tools then run there, not on `sheets`. */
   docs?: DocsToolContext;
+  /** The objects of the apps added by manifest, by name (Edge only: apps.ts), for their tools. */
+  apps?: Record<string, import('../../../apps.ts').AppToolContext>;
 }
 
 /** Run an account tool. Returns the result text for Claude; throws ToolFailure for errors Claude should see. */

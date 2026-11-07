@@ -3,7 +3,8 @@
 // and the prompt, the same code the standalone and desktop Docs servers run in-process). Its tools come from the registry
 // (§5.4): the open app's browser tools by the turn's page (the manifests' `assistant.pages`), which the browser runs, and
 // every server tool, run here against the apps over HTTP as the person: Docs' against the organization's Docs object
-// (docsTools.ts), Mail's against the account's Mail object, Calendar's through calendarRequest as the routes do.
+// (docsTools.ts), Mail's against the account's Mail object, Calendar's through calendarRequest as the routes do, and an app
+// added by manifest's against its object (apps.ts).
 //
 // The Worker (routes/assistant.ts) serves Docs' old paths here (/api/agent, /api/agent/turn, /api/agent/reset,
 // /api/agent/permission, /api/settings/assistant), so the three clients' panels talk to it unchanged. The chats used to be
@@ -18,6 +19,7 @@ import { exportTables, importTable, ownerMismatch, ownerRefusal } from '../perAc
 import { calendarRequest, type AccountCaller } from '../calendar/forward';
 import type { CalendarToolContext } from '../calendar/calendarTools';
 import type { MailToolContext } from '../imap/mailTools';
+import { appToolContexts } from '../apps';
 import { withDocsContext, type DocsContext } from '../docs/runtime/context.ts';
 import type { Caller as DocsCaller } from '../docs/runtime/fastify.ts';
 import { DatabaseSync } from '../docs/runtime/sqlite.ts';
@@ -159,6 +161,8 @@ export class Assistant extends DurableObject<AssistantEnv> {
       },
       mail: (_userId: string, scope: ScopeArg) => this.mailContext(scope),
       calendar: (userId: string) => this.calendarContext(userId),
+      // The apps added by manifest (apps.ts): their objects, as the account this object belongs to.
+      apps: () => appToolContexts(this.env, async () => this.who?.caller ?? null, this.origin),
     });
     return (this.services = { agent, settings });
   }

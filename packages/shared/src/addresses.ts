@@ -2,7 +2,8 @@
 // opens in the suite's clients, relative to the suite's origin. The server's share index and sharing events (edge
 // org/services/shares.ts), Docs' `docs.file.changed`, the suite bar's intents (@flow/suite-bar lib/intents.ts) and Chat's
 // chips all read it, so a link one of them writes is a reference to every other.
-import { formatReference, type Reference, type Role } from './platform.js';
+import { APP_MANIFESTS } from './manifests.js';
+import { formatReference, type AppManifest, type Reference, type Role } from './platform.js';
 
 // The WHATWG URL classes every runtime the suite runs on has (browsers, Workers, Node); this package builds without the
 // DOM or Node typings, so the little it uses is declared here.
@@ -28,6 +29,17 @@ const CHAT_OPENS = ['artifact', 'channel', 'message'] as const;
 const DOCS_PATHS: Record<string, string> = { sheet: 's', deck: 'd', doc: 'doc', markdown: 'md', file: 'f' };
 const DOCS_KINDS: Record<string, string> = Object.fromEntries(Object.entries(DOCS_PATHS).map(([k, p]) => [p, k]));
 
+/** A kind as its app's manifest declares it (`address`, `icon`, `label`): what the tables below fall back to, so an app
+ * added by manifest has addresses and chips with no entry here. */
+const manifestKind = (app: string, kind: string): AppManifest['kinds'][number] | undefined => APP_MANIFESTS.find((m) => m.name === app)?.kinds.find((k) => k.kind === kind);
+
+/** Each manifest kind's address template split into the path and the query parameter that carries the id
+ * (`/contacts/?contact={id}`), for `referenceOf`. */
+const TEMPLATES = APP_MANIFESTS.flatMap((m) => m.kinds.flatMap((k) => {
+  const t = k.address ? /^([^?]+)\?([a-z][a-z0-9_-]*)=\{id\}$/i.exec(k.address) : null;
+  return t ? [{ app: m.name, kind: k.kind, path: t[1]!.replace(/\/$/, ''), param: t[2]! }] : [];
+}));
+
 /** Where each app's own page is, for an intent that opens it with a query (`?share=`). */
 const APP_PAGES: Record<string, string> = { chat: '/', docs: '/workspace/', calendar: '/calendar/' };
 
@@ -50,7 +62,8 @@ export function addressOf(ref: ReferenceTarget | null | undefined, fileKind?: st
     if (ref.kind === 'calendar') return `/calendar/?calendar=${id}`;
     if (ref.kind === 'event') return `/calendar/?event=${id}`;
   }
-  return null;
+  const declared = manifestKind(ref.app, ref.kind)?.address;
+  return declared ? declared.replace('{id}', id) : null;
 }
 
 /** Chat's page for another app's suite bar: `/?open=<page>`. */
@@ -92,6 +105,10 @@ export function referenceOf(url: string, ctx: { origin: string; organizationId: 
     const event = q.get('event'), calendar = q.get('calendar');
     if (event) return { organizationId: org, app: 'calendar', kind: 'event', id: event };
     if (calendar) return { organizationId: org, app: 'calendar', kind: 'calendar', id: calendar };
+  }
+  for (const t of TEMPLATES) {
+    const id = (path === t.path || path === `${t.path}/`) ? q.get(t.param) : null;
+    if (id) return { organizationId: org, app: t.app, kind: t.kind, id };
   }
   return null;
 }
@@ -142,13 +159,13 @@ export function iconOf(app: string, kind: string, fileKind?: string): string {
   if (app === 'chat') return ({ channel: '#', message: '💬', artifact: '📌', file: '📎' } as Record<string, string>)[kind] ?? '🔗';
   if (app === 'docs') return kind === 'folder' ? '📁' : (({ sheet: '📊', deck: '📽️', doc: '📄', markdown: '📝', file: '📎' } as Record<string, string>)[fileKind ?? ''] ?? '📄');
   if (app === 'calendar') return kind === 'event' ? '🗓️' : '📅';
-  return '🔗';
+  return manifestKind(app, kind)?.icon ?? '🔗';
 }
 
 /** What a kind of object is called, as a chip says it. */
 export function kindLabelOf(app: string, kind: string, fileKind?: string): string {
   if (app === 'docs' && kind !== 'folder') return ({ sheet: 'Spreadsheet', deck: 'Presentation', doc: 'Document', markdown: 'Markdown', file: 'File' } as Record<string, string>)[fileKind ?? ''] ?? 'File';
-  return ({ channel: 'Channel', message: 'Message', artifact: 'Artifact', file: 'File', folder: 'Folder', calendar: 'Calendar', event: 'Event' } as Record<string, string>)[kind] ?? kind;
+  return ({ channel: 'Channel', message: 'Message', artifact: 'Artifact', file: 'File', folder: 'Folder', calendar: 'Calendar', event: 'Event' } as Record<string, string>)[kind] ?? manifestKind(app, kind)?.label ?? kind;
 }
 
 /**

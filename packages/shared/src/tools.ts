@@ -4,16 +4,12 @@
 // scopes), the in-app assistant (the person, with the open app's browser tools) and the bridge's `flow` MCP (an agent
 // member, over GET /v1/tools?door=bridge).
 //
-// The per-app lists in ./toolDefinitions are written from the implementations by the Worker's registry test
+// The per-app lists in ./toolDefinitions (listed in its index.ts, in the manifests' order) are written from the implementations by the Worker's registry test
 // (UPDATE_TOOL_DEFINITIONS=1 pnpm --filter @flow/edge exec vitest run src/registry), which fails when they drift apart.
 // Not exported from the package's index: the clients that read the manifests do not need these schemas.
-import { CALENDAR_TOOLS } from './toolDefinitions/calendar.js';
-import { CHAT_TOOLS } from './toolDefinitions/chat.js';
-import { DOCS_TOOLS } from './toolDefinitions/docs.js';
-import { EVENTS_TOOLS } from './toolDefinitions/events.js';
-import { MAIL_TOOLS } from './toolDefinitions/mail.js';
+import { APP_TOOLS } from './toolDefinitions/index.js';
 
-export { CALENDAR_TOOLS, CHAT_TOOLS, DOCS_TOOLS, EVENTS_TOOLS, MAIL_TOOLS };
+export * from './toolDefinitions/index.js';
 
 /** Where a tool is offered: /mcp, the in-app assistant, or the bridge's `flow` MCP server. */
 export const TOOL_DOORS = ['mcp', 'assistant', 'bridge'] as const;
@@ -57,7 +53,7 @@ export interface ToolDefinition {
 }
 
 /** Every tool of the suite, app by app (Chat's first: the bridge lists them first, as it always has). */
-export const TOOL_DEFINITIONS: readonly ToolDefinition[] = [...CHAT_TOOLS, ...DOCS_TOOLS, ...MAIL_TOOLS, ...CALENDAR_TOOLS, ...EVENTS_TOOLS];
+export const TOOL_DEFINITIONS: readonly ToolDefinition[] = APP_TOOLS.flat();
 
 /** The tools offered at a door, in the list's order. */
 export const toolsAtDoor = (door: ToolDoor): ToolDefinition[] => TOOL_DEFINITIONS.filter((t) => t.doors.includes(door));

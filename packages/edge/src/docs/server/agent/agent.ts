@@ -64,6 +64,8 @@ export interface AgentOptions {
   calendar?: (userId: string) => import('../../../calendar/calendarTools.ts').CalendarToolContext | undefined;
   /** Edge only: the organization's Docs over HTTP, for Docs' tools in the suite's Assistant object; given the chat's scope. */
   docs?: (userId: string, scope: ScopeArg) => import('../../../assistant/docsTools.ts').DocsToolContext | undefined;
+  /** Edge only: the objects of the apps added by manifest (apps.ts), by name, for their tools. */
+  apps?: (userId: string) => Record<string, import('../../../apps.ts').AppToolContext> | undefined;
 }
 
 /** The model the live assistant runs on. Set AGENT_MODEL (e.g. claude-opus-5-5) to change it per deployment. */
@@ -97,6 +99,7 @@ export class AgentService {
   private mail: AgentOptions['mail'];
   private calendar: AgentOptions['calendar'];
   private docs: AgentOptions['docs'];
+  private apps: AgentOptions['apps'];
   /** Users with a turn in progress (one at a time per user). */
   private busy = new Set<string>();
 
@@ -115,6 +118,7 @@ export class AgentService {
     this.mail = opts.mail;
     this.calendar = opts.calendar;
     this.docs = opts.docs;
+    this.apps = opts.apps;
     this.dailyLimit = opts.dailyRequestLimit ?? Number(process.env.AGENT_DAILY_REQUEST_LIMIT ?? 500);
   }
 
@@ -229,7 +233,8 @@ export class AgentService {
     const mail = this.mail?.(userId, access.scope);
     const calendar = this.calendar?.(userId);
     const docs = this.docs?.(userId, access.scope);
-    const env = { userId, ...access, sheets: this.sheets, images: this.images, files: this.files, pdf: this.pdf, context: req.context, search, ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}), ...(docs ? { docs } : {}) };
+    const apps = this.apps?.(userId);
+    const env = { userId, ...access, sheets: this.sheets, images: this.images, files: this.files, pdf: this.pdf, context: req.context, search, ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}), ...(docs ? { docs } : {}), ...(apps ? { apps } : {}) };
     const callModel = own ? this.ownModel(own) : this.getModel();
     let parseRetries = 0;
 
