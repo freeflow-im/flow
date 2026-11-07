@@ -368,6 +368,35 @@ describe('accounts', () => {
   });
 });
 
+describe('agent accounts', () => {
+  const agent = (id: string, sponsorId: string, username: string) => ({
+    kind: 'agent_user', id, user_id: null, role: null,
+    payload: JSON.stringify({ username, keyHash: null, passwordHash: '!agent', email: `agent-${id}@agents.flow.local`, displayName: username, sponsorId, createdAt: 1 }),
+  });
+  const join = (org: string, userId: string, sponsor: string | null = null) => ({ kind: 'join', id: org, user_id: userId, role: 'member', payload: sponsor });
+
+  it('gives an agent an address per organization, and follows the sponsor there out (platform.md §3.3)', async () => {
+    const ann = await signUp('a@example.com');
+    const bob = await signUp('b@example.com');
+    const [o1, o2] = [newId(), newId()];
+    core.reserveSlug('acme', o1);
+    core.reserveSlug('beta', o2);
+    const bot = newId();
+    await core.applyOrgChanges(o1, [join(o1, ann.user.id), join(o1, bob.user.id), agent(bot, ann.user.id, 'builder'), join(o1, bot, ann.user.id)]);
+    // In o2 Bob brought it in, so Bob is its sponsor there.
+    await core.applyOrgChanges(o2, [join(o2, ann.user.id), join(o2, bob.user.id), join(o2, bot, bob.user.id)]);
+    expect(core.accountsOf(bot).map((a) => a.address).sort()).toEqual(['builder@acme.freeflow.im', 'builder@beta.freeflow.im']);
+    await core.applyOrgChanges(o2, [{ kind: 'leave', id: o2, user_id: ann.user.id, role: null, payload: null }]);
+    expect(core.organizationsOf(bot).sort()).toEqual([o1, o2].sort());
+    await core.applyOrgChanges(o1, [{ kind: 'leave', id: o1, user_id: ann.user.id, role: null, payload: null }]);
+    expect(core.accountFor(bot, o1)!.state).toBe('removed');
+    expect(core.organizationsOf(bot)).toEqual([o2]);
+    core.tombstoneUser(bob.user.id);
+    expect(core.organizationsOf(bot)).toEqual([]);
+    expect(core.organizationKnown(o2)).toBe(false);
+  });
+});
+
 describe('the account gate', () => {
   it('lets through no account, and every state but suspended and removed', () => {
     expect(accountGate(null)).toBeNull();

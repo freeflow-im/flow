@@ -25,8 +25,8 @@ import { hashToken, newToken } from '../lib/tokens.js';
 import { badRequest, conflict, forbidden, notFound, unauthorized } from '../lib/errors.js';
 import { publishEvent, subjectMeta } from '../bus.js';
 import { postSystemMessage } from './messages.js';
-import { accountAddressForJoin, announceJoin, enrollInWorkspace, requireAgentSponsorRights, requireMembership, toWorkspaceDTO } from './workspaces.js';
-import { ensureAccount } from '../directoryLink.js';
+import { accountAddressForJoin, agentForbidden, announceJoin, enrollInWorkspace, isAgentUser, requireAgentSponsorRights, requireMembership, toWorkspaceDTO } from './workspaces.js';
+import { accountFor, ensureAccount } from '../directoryLink.js';
 import { removeAgentFromWorkspace } from './memberRemoval.js';
 import { hashSecret, toUserDTO, verifySecret, visibleEmail } from './auth.js';
 import { setAvatar } from './users.js';
@@ -60,6 +60,7 @@ function pickRandomAvatarPreset(): string | null {
  */
 export async function createAgentInvite(workspaceId: string, sponsorId: string): Promise<AgentInviteDTO> {
   await requireAgentSponsorRights(workspaceId, sponsorId);
+  if (await isAgentUser(sponsorId)) throw agentForbidden('an agent cannot sponsor an agent');
   const code = newInviteCode();
   const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
   await db.insert(agentInvites).values({
@@ -70,6 +71,19 @@ export async function createAgentInvite(workspaceId: string, sponsorId: string):
     expiresAt,
   });
   return { code, command: `npx flow-agent-bridge ${code}`, expiresAt: expiresAt.toISOString() };
+}
+
+/**
+ * Rule 1 of agent accounts (platform.md §3.3): an agent may hold an account only in an organization where its sponsor
+ * holds an active one. The sponsor here is the member row's: whoever brings the agent into this organization (#357).
+ * Without a directory attached (unit tests) there is nothing to ask, and the membership checks stand alone.
+ */
+async function requireSponsorAccount(workspaceId: string, sponsorId: string): Promise<void> {
+  const account = await accountFor(workspaceId, sponsorId);
+  if (account === undefined) return;
+  if (!account || account.state === 'removed' || account.state === 'suspended') {
+    throw agentForbidden('an agent can only join an organization where its sponsor has an active account');
+  }
 }
 
 /**
@@ -135,6 +149,7 @@ export async function redeemAgentInvite(input: RedeemAgentInviteBody): Promise<A
   if (await usernameTakenIn(db, invite.workspaceId, username)) {
     throw badRequest('username_taken', 'that agent username is already taken in this workspace');
   }
+  await requireSponsorAccount(invite.workspaceId, invite.sponsorUserId);
   // #357: the (username, key) pair is the identity. A pair that already names
   // an agent redeems as "add me here too" — same account, new membership — so
   // one bridge identity can serve several workspaces. Anything else (unknown
@@ -263,6 +278,8 @@ export async function inviteAgentToWorkspace(
   inviterId: string,
 ): Promise<AgentWorkspaceInviteResponse> {
   await requireAgentSponsorRights(workspaceId, inviterId); // 404s for non-members
+  if (await isAgentUser(inviterId)) throw agentForbidden('an agent cannot sponsor an agent');
+  await requireSponsorAccount(workspaceId, inviterId);
   const agent = (await db.select().from(users).where(eq(users.id, agentUserId)).limit(1))[0];
   if (!agent?.isAgent || agent.deletedAt) throw notFound('agent not found');
   if (!(await sharesWorkspace(inviterId, agentUserId))) throw notFound('agent not found');

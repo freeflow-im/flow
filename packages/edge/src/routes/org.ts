@@ -58,6 +58,8 @@ orgRoutes.post('/v1/workspaces', async (c) => {
   // The organization is new, so the caller has no account in it yet: the context names it with a null account.
   const who = await resolveCaller(c, id);
   if (!who.user) throw unauthorized('missing bearer token');
+  // An agent cannot own an organization (platform.md §2.2).
+  if (who.user.isAgent) throw new ApiError(403, 'agent_forbidden', 'an agent cannot create an organization');
   const slug = ((await c.req.raw.clone().json().catch(() => ({}))) as { slug?: unknown }).slug;
   if (typeof slug === 'string') await directory(c, 'reserveSlug', slug, id);
   const res = await orgStub(c, id).handle(c.req.raw, who, id);

@@ -84,6 +84,14 @@ async function requirePolicy(workspaceId: string, userId: string, policy: 'invit
   return m;
 }
 
+/** The refusal for what an agent may not do (platform.md §2.2, §3.3): own an organization, be an admin, sponsor an agent. */
+export const agentForbidden = (message: string) => new ApiError(403, 'agent_forbidden', message);
+
+/** Whether a user (this organization's copy) is an agent. */
+export async function isAgentUser(userId: string): Promise<boolean> {
+  return !!(await db.select({ isAgent: users.isAgent }).from(users).where(eq(users.id, userId)).limit(1))[0]?.isAgent;
+}
+
 /** `agentsBy` (platform.md §3.1): who may sponsor an agent into this workspace. */
 export const requireAgentSponsorRights = (workspaceId: string, userId: string) =>
   requirePolicy(workspaceId, userId, 'agentsBy', 'add agents');
@@ -481,6 +489,7 @@ export async function setMemberRole(
   if (targetId === actorId) throw badRequest('self_role', 'you cannot change your own role');
   const target = await requireMembership(workspaceId, targetId);
   if (target.role === 'owner') throw forbidden('the workspace owner role cannot be changed');
+  if (role === 'admin' && (await isAgentUser(targetId))) throw agentForbidden('an agent cannot be an admin');
   await db
     .update(workspaceMembers)
     .set({ role })
@@ -695,7 +704,8 @@ export async function transferWorkspaceOwnership(workspaceId: string, actorId: s
       .limit(1)
   )[0];
   if (!target) throw notFound('member not found');
-  if (target.isAgent || target.isBot || target.deletedAt) throw badRequest('not_a_person', 'ownership can only go to a person');
+  if (target.isAgent) throw agentForbidden('an agent cannot own an organization');
+  if (target.isBot || target.deletedAt) throw badRequest('not_a_person', 'ownership can only go to a person');
   await db.transaction(async (tx) => {
     await tx.update(workspaceMembers).set({ role: 'owner' }).where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, targetId)));
     await tx.update(workspaceMembers).set({ role: 'admin' }).where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, actorId)));

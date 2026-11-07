@@ -42,7 +42,9 @@ const OUTBOX = [
   `CREATE TRIGGER IF NOT EXISTS _agent_revoke AFTER UPDATE OF revoked_at ON agent_tokens WHEN NEW.revoked_at IS NOT NULL BEGIN INSERT INTO _outbox (kind, id) VALUES ('agent_revoke', NEW.id); END`,
   `CREATE TRIGGER IF NOT EXISTS _domain_add AFTER INSERT ON workspaces WHEN NEW.google_self_register_domain IS NOT NULL BEGIN INSERT INTO _outbox (kind, id, payload) VALUES ('domain', NEW.id, NEW.google_self_register_domain); END`,
   `CREATE TRIGGER IF NOT EXISTS _domain_change AFTER UPDATE OF google_self_register_domain ON workspaces BEGIN INSERT INTO _outbox (kind, id, payload) VALUES ('domain', NEW.id, NEW.google_self_register_domain); END`,
-  `CREATE TRIGGER IF NOT EXISTS _member_add AFTER INSERT ON workspace_members BEGIN INSERT INTO _outbox (kind, id, user_id, role) VALUES ('join', NEW.workspace_id, NEW.user_id, NEW.role); END`,
+  // A join carries the member row's sponsor (an agent's, here), so the directory knows whom the agent's account follows (§3.3).
+  `DROP TRIGGER IF EXISTS _member_add`,
+  `CREATE TRIGGER IF NOT EXISTS _member_join AFTER INSERT ON workspace_members BEGIN INSERT INTO _outbox (kind, id, user_id, role, payload) VALUES ('join', NEW.workspace_id, NEW.user_id, NEW.role, NEW.sponsor_user_id); END`,
   `CREATE TRIGGER IF NOT EXISTS _member_del AFTER DELETE ON workspace_members BEGIN INSERT INTO _outbox (kind, id, user_id) VALUES ('leave', OLD.workspace_id, OLD.user_id); END`,
   // A role change is a join with the new role to the directory; a new owner also moves the organization's owner (§3.1).
   `CREATE TRIGGER IF NOT EXISTS _member_role AFTER UPDATE OF role ON workspace_members WHEN NEW.role <> OLD.role BEGIN INSERT INTO _outbox (kind, id, user_id, role) VALUES ('join', NEW.workspace_id, NEW.user_id, NEW.role); INSERT INTO _outbox (kind, id, user_id) SELECT 'owner', NEW.workspace_id, NEW.user_id WHERE NEW.role = 'owner'; END`,
@@ -107,6 +109,12 @@ export class Org extends DurableObject<OrgEnv> {
     return answer.value;
   }
 
+  private async accountFor(organizationId: string, userId: string): Promise<AccountDTO | null> {
+    const answer = await this.directory().call('accountFor' as never, [userId, organizationId] as never) as DirectoryAnswer<AccountDTO | null>;
+    if (!answer.ok) throw new ApiError(answer.status, answer.code, answer.message);
+    return answer.value;
+  }
+
   private directory() {
     return this.env.DIRECTORY.get(this.env.DIRECTORY.idFromName('directory'));
   }
@@ -145,7 +153,7 @@ export class Org extends DurableObject<OrgEnv> {
   /** Runs with this object's database, event bus and socket controls in scope. */
   private scoped<T>(fn: () => Promise<T>): Promise<T> {
     return socketControl.run({ disconnectUser: (id) => this.closeUser(id) }, () =>
-      directoryLink.run({ ensureAccount: (...args) => this.ensureAccount(...args) }, () =>
+      directoryLink.run({ ensureAccount: (...args) => this.ensureAccount(...args), accountFor: (...args) => this.accountFor(...args) }, () =>
         withPublisher((subject, event) => this.broadcast(subject, event), () => withDb(this.db, fn))));
   }
 

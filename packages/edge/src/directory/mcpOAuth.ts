@@ -208,8 +208,9 @@ export class McpOAuth {
   private one(query: string, ...args: unknown[]): Row | undefined {
     return this.rows(query, ...args)[0];
   }
+  /** An account there that was not removed (platform.md §3.3); a suspended one is refused by the account gate instead. */
   private isMember(userId: string, orgId: string): boolean {
-    return !!this.one('SELECT 1 AS x FROM memberships WHERE user_id = ? AND organization_id = ?', userId, orgId);
+    return !!this.one("SELECT 1 AS x FROM accounts WHERE user_id = ? AND organization_id = ? AND state <> 'removed'", userId, orgId);
   }
   private activeUser(userId: string): boolean {
     return !!this.one('SELECT 1 AS x FROM users WHERE id = ? AND deleted_at IS NULL', userId);
@@ -319,7 +320,7 @@ export class McpOAuth {
     const p = this.pending(pendingId);
     if (!p) throw new OAuthError('invalid_request', 'This sign-in link has expired. Start again from your agent.');
     this.sql.exec('UPDATE oauth_pending SET user_id = ? WHERE id = ?', userId, p.id);
-    const organizations = this.rows('SELECT organization_id FROM memberships WHERE user_id = ? ORDER BY organization_id', userId).map((r) => r.organization_id as string);
+    const organizations = this.rows("SELECT organization_id FROM accounts WHERE user_id = ? AND state <> 'removed' ORDER BY organization_id", userId).map((r) => r.organization_id as string);
     const last = this.rows('SELECT org_id FROM oauth_connections WHERE user_id = ? ORDER BY created_at DESC', userId).map((r) => r.org_id as string).find((o) => organizations.includes(o));
     return {
       clientName: p.clientName,

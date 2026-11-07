@@ -219,4 +219,9 @@ export const DIRECTORY_MIGRATIONS: string[] = [
     address TEXT PRIMARY KEY COLLATE NOCASE,
     account_id TEXT NOT NULL
   );`,
+  // Agent accounts (platform.md §3.3): who sponsors the agent in this organization, so the account follows that person's.
+  // Per organization because an agent invited into a second organization is sponsored there by whoever brought it in.
+  `ALTER TABLE accounts ADD COLUMN sponsor_user_id TEXT;
+  UPDATE accounts SET sponsor_user_id = (SELECT u.sponsor_user_id FROM users u WHERE u.id = accounts.user_id AND u.is_agent = 1);
+  CREATE INDEX accounts_sponsor ON accounts(sponsor_user_id);`,
 ];

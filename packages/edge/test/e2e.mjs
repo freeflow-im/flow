@@ -119,7 +119,7 @@ if(cfg.huddles){t('huddle join returns a LiveKit token',r.s===200&&typeof r.j.to
 else{t('huddles off without LiveKit settings',r.s===503,r.s);}
 // ---- agents
 r=await api(A.token,'POST',`/v1/workspaces/${W}/agent-invites`,{});t('agent invite',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,100));const code=r.j.code;
-r=await api(null,'POST','/v1/agents/redeem',{code,username:'flowbot',key:'a-long-agent-key-for-the-test',name:'Flowbot'});t('redeem',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,110));const AGT=r.j.agentToken;
+r=await api(null,'POST','/v1/agents/redeem',{code,username:'flowbot',key:'a-long-agent-key-for-the-test',name:'Flowbot'});t('redeem',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,110));const AGT=r.j.agentToken,AGT_ID=r.j.user?.id;
 r=await api(AGT,'GET','/v1/me');t('the agent token works, via the directory',r.j.isAgent===true&&r.j.displayName==='Flowbot',JSON.stringify(r.j).slice(0,90));
 r=await api(AGT,'GET','/v1/me/workspaces');t('the agent sees its organization',r.j.workspaces?.[0]?.id===W);
 const sag=await sock(AGT);t('the agent socket',!!sag.hello);
@@ -128,6 +128,12 @@ r=await api(AGT,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.ran
 r=await api(null,'POST','/v1/agents/login',{username:'flowbot',key:'wrong-key-wrong-key-wrong-key'});t('wrong key refused',r.s===401,r.s);
 r=await api(null,'POST','/v1/agents/login',{username:'flowbot',key:'a-long-agent-key-for-the-test'});t('login',r.s===201&&!!r.j.agentToken,r.s);const AGT2=r.j.agentToken;
 r=await api(AGT,'GET','/v1/me');t('login ends the old token',r.s===401,r.s);r=await api(AGT2,'GET','/v1/me');t('new token works',r.s===200);
+// ---- agents by account (platform.md §3.3)
+t('the agent has one account, with its address in the organization',r.j.accounts?.length===1&&r.j.accounts[0].address==='flowbot@locked-in.freeflow.im'&&r.j.accounts[0].organizationId===W,JSON.stringify(r.j.accounts));
+r=await api(AGT2,'POST','/v1/workspaces',{name:'Bots',slug:'bots-co'});t('an agent cannot create an organization',r.s===403&&r.j.error?.code==='agent_forbidden',r.s+' '+JSON.stringify(r.j).slice(0,90));
+r=await api(AGT2,'POST',`/v1/workspaces/${W}/agent-invites`,{});t('nor sponsor an agent',r.s===403&&r.j.error?.code==='agent_forbidden',r.s+' '+JSON.stringify(r.j).slice(0,90));
+r=await api(A.token,'PATCH',`/v1/workspaces/${W}/members/${AGT_ID}/role`,{role:'admin'});t('nor be made an admin',r.s===403&&r.j.error?.code==='agent_forbidden',r.s+' '+JSON.stringify(r.j).slice(0,90));
+r=await api(A.token,'POST',`/v1/workspaces/${W}/owner`,{userId:AGT_ID});t('nor own the organization',r.s===403&&r.j.error?.code==='agent_forbidden',r.s+' '+JSON.stringify(r.j).slice(0,90));
 // ---- organizations: the address on every member, the policies, handing the organization on (platform.md §3.1, §3.2)
 r=await api(Bo.token,'GET','/v1/me');const bobAddr=r.j.accounts?.find(a=>a.organizationId===W)?.address;
 r=await api(A.token,'GET',`/v1/workspaces/${W}/members`);const ms=r.j.members??r.j??[];t('the members list carries Bob\'s address',!!bobAddr&&ms.find(m=>m.userId===Bo.user.id)?.address===bobAddr,JSON.stringify(ms.map(m=>m.address)));
@@ -145,7 +151,15 @@ r=await api(Bo.token,'POST',`/v1/workspaces/${W}/owner`,{userId:A.user.id});t('B
 const del=await signup('cy@example.com','Cy');r=await api(del.token,'POST','/v1/workspaces',{name:'Cy co',slug:'cy-co'});
 r=await api(del.token,'DELETE','/v1/me');t('delete account',r.s===200,r.s+' '+JSON.stringify(r.j).slice(0,90));r=await api(del.token,'GET','/v1/me');t('its session ended',r.s===401,r.s);
 // ---- a removed member's account is refused (platform.md §3.6)
+r=await api(Bo.token,'POST',`/v1/workspaces/${W}/agent-invites`,{});t('Bob sponsors an agent',r.s===201,r.s);
+r=await api(null,'POST','/v1/agents/redeem',{code:r.j.code,username:'bobbot',key:'another-long-agent-key-for-the-test',name:'Bobbot'});const BOT=r.j.agentToken;
+r=await api(BOT,'GET',`/v1/workspaces/${W}/channels`);t('his agent is in',r.s===200,r.s);
+const sbot=await sock(BOT);const botClosed=new Promise((res)=>{sbot.ws.onclose=e=>res(e);setTimeout(()=>res(null),6000)});
 r=await api(A.token,'DELETE',`/v1/workspaces/${W}/members/${Bo.user.id}`);t('Ann removes Bob',r.s===200,r.s+' '+JSON.stringify(r.j).slice(0,90));
+const bc=await botClosed;t('his agent\'s socket closes with him',bc?.code===4003,bc&&bc.code+' '+bc.reason);
+// Bob's agent belonged to this organization only, so its credentials end with its account here.
+r=await api(BOT,'GET',`/v1/workspaces/${W}/channels`);t('his agent follows him out',r.s===401||(r.s===403&&r.j.error?.code==='account_inactive'),r.s+' '+JSON.stringify(r.j).slice(0,90));
+r=await api(A.token,'GET',`/v1/workspaces/${W}/members`);t('and is off the member list',!(r.j.members??[]).some(m=>m.displayName==='Bobbot'),JSON.stringify((r.j.members??[]).map(m=>m.displayName)));
 r=await api(Bo.token,'GET',`/v1/workspaces/${W}/channels`);t('a removed account is refused',r.s===403&&r.j.error?.code==='account_inactive',r.s+' '+JSON.stringify(r.j).slice(0,90));
 const closed=await new Promise((res)=>{const ws=new WebSocket(`${WS}/v1/ws?workspace=${W}`);ws.onopen=()=>ws.send(JSON.stringify({op:'auth',token:Bo.token}));ws.onclose=e=>res(e);setTimeout(()=>res(null),6000)});
 t('a removed account\'s socket is closed',closed?.code===4003&&closed.reason==='account inactive',closed&&closed.code+' '+closed.reason);

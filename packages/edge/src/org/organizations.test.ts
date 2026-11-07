@@ -6,9 +6,9 @@ import type { AccountDTO } from '@flow/shared';
 import { orgStorage } from '../../test/orgStorage';
 import { withDb, schema, type DB } from './db/index';
 import { directoryLink } from './directoryLink';
-import { createAgentInvite } from './services/agents';
+import { createAgentInvite, inviteAgentToWorkspace } from './services/agents';
 import {
-  accountAddressForJoin, createJoinLink, createWorkspace, enrollInWorkspace, listMembers, myWorkspaces, transferWorkspaceOwnership, updateWorkspace,
+  accountAddressForJoin, createJoinLink, createWorkspace, enrollInWorkspace, listMembers, myWorkspaces, setMemberRole, transferWorkspaceOwnership, updateWorkspace,
 } from './services/workspaces';
 
 const ANN = '00000000-0000-7000-8000-00000000000a';
@@ -20,6 +20,8 @@ beforeAll(() => { process.env.FLOW_DATA_KEY = randomBytes(32).toString('base64')
 let db: DB;
 let workspaceId: string;
 let asked: [string, string][];
+/** The state the directory reports for every account, for the sponsor rule (§3.3). */
+let accountState: AccountDTO['state'];
 
 /** The directory's half, as the object provides it: an address per joiner. */
 const run = <T>(fn: () => Promise<T>) => directoryLink.run({
@@ -27,11 +29,14 @@ const run = <T>(fn: () => Promise<T>) => directoryLink.run({
     asked.push([userId, role]);
     return { id: `acct-${userId}`, principalId: userId, organizationId, address: `${displayName.toLowerCase()}@acme.freeflow.im`, displayName, role, kind: 'native', state: 'active', createdAt: '' } satisfies AccountDTO;
   },
+  accountFor: async (organizationId, userId) =>
+    ({ id: `acct-${userId}`, principalId: userId, organizationId, address: 'x@acme.freeflow.im', displayName: 'x', role: 'member', kind: 'native', state: accountState, createdAt: '' }),
 }, () => withDb(db, fn));
 
 beforeEach(async () => {
   db = orgStorage().db;
   asked = [];
+  accountState = 'active';
   await run(async () => {
     for (const [id, name, isAgent] of [[ANN, 'Ann', false], [BOB, 'Bob', false], [BOT, 'Bot', true]] as const) {
       db.insert(schema.users).values({ id, email: `${name}@x.test`, passwordHash: '!', displayName: name, isAgent }).run();
@@ -72,12 +77,23 @@ describe('organizations', () => {
   });
 
   it('hands the organization to a person: one owner throughout, and only the owner may hand it on', async () => {
-    await expect(run(() => transferWorkspaceOwnership(workspaceId, ANN, BOT))).rejects.toMatchObject({ statusCode: 400, code: 'not_a_person' });
+    await expect(run(() => transferWorkspaceOwnership(workspaceId, ANN, BOT))).rejects.toMatchObject({ statusCode: 403, code: 'agent_forbidden' });
     await expect(run(() => transferWorkspaceOwnership(workspaceId, BOB, ANN))).rejects.toMatchObject({ statusCode: 403 });
     const ws = await run(() => transferWorkspaceOwnership(workspaceId, ANN, BOB));
     expect(ws.role).toBe('admin');
     const roles = Object.fromEntries((await run(() => listMembers(workspaceId, ANN))).map((m) => [m.userId, m.role]));
     expect(roles).toEqual({ [ANN]: 'admin', [BOB]: 'owner', [BOT]: 'member' });
     await expect(run(() => transferWorkspaceOwnership(workspaceId, ANN, BOB))).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it('keeps an agent from sponsoring, being an admin, or joining where its sponsor has no active account', async () => {
+    await expect(run(() => createAgentInvite(workspaceId, BOT))).rejects.toMatchObject({ statusCode: 403, code: 'agent_forbidden' });
+    await expect(run(() => setMemberRole(workspaceId, ANN, BOT, 'admin'))).rejects.toMatchObject({ statusCode: 403, code: 'agent_forbidden' });
+    await run(() => setMemberRole(workspaceId, ANN, BOB, 'admin'));
+    const other = (await run(() => createWorkspace(ANN, 'Beta', 'beta'))).id;
+    accountState = 'suspended';
+    await expect(run(() => inviteAgentToWorkspace(BOT, other, ANN))).rejects.toMatchObject({ statusCode: 403, code: 'agent_forbidden' });
+    accountState = 'active';
+    expect((await run(() => inviteAgentToWorkspace(BOT, other, ANN))).workspace.id).toBe(other);
   });
 });

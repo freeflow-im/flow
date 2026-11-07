@@ -20,12 +20,11 @@ import type {
   HuddleUpdatedData,
   MessageDTO,
   ReactionEventData,
-  UserDTO,
   WorkspaceDTO,
   WorkspaceMemberDTO,
 } from '@flow/shared';
 import { defaultVoiceConfig, mentionChainLimit, resolveWorkspace, type BridgeConfig } from './config.js';
-import { FlowApi } from './api.js';
+import { accountLines, addressIn, FlowApi, type MeDTO } from './api.js';
 import { attachmentFilename, formatAttachments } from './attachments.js';
 import { FlowSocket, openFlowSocket } from './gateway.js';
 import { ChannelIndicatorLeases, ProgressReporter } from './progress.js';
@@ -163,7 +162,7 @@ class Semaphore {
 export class AgentBridge {
   private readonly api: FlowApi;
   private socket!: ReturnType<typeof openFlowSocket>;
-  private me!: UserDTO;
+  private me!: MeDTO;
   private workspace!: WorkspaceDTO;
   private channels = new Map<string, ChannelDTO>();
   private members = new Map<string, WorkspaceMemberDTO>();
@@ -242,7 +241,8 @@ export class AgentBridge {
     this.me = await this.api.me();
     if (!this.me.isAgent) this.log('warning: token belongs to a non-agent user');
     // #357: an agent can belong to several workspaces; this process serves one.
-    this.workspace = resolveWorkspace(await this.api.myWorkspaces(), this.cfg.workspace);
+    const workspaces = await this.api.myWorkspaces();
+    this.workspace = resolveWorkspace(workspaces, this.cfg.workspace);
     await this.refreshDirectory();
     this.clearLeftoverIndicators();
     const voiceConfig = this.cfg.voice ?? defaultVoiceConfig();
@@ -275,11 +275,13 @@ export class AgentBridge {
     const voiceState = !voiceConfig.enabled
       ? 'off'
       : `ready via bridge runtime (${voiceConfig.sttModel} → ${voiceConfig.ttsModel}/${voiceConfig.ttsVoice})`;
+    const address = addressIn(this.me, this.workspace.id);
     this.log(
-      `${this.me.displayName} <@${this.me.id}> online in "${this.workspace.name}" — ` +
+      `${this.me.displayName} <@${this.me.id}>${address ? ` ${address}` : ''} online in "${this.workspace.name}" — ` +
         `scope=${this.cfg.eventScope}+DMs progress=${this.cfg.progress} runtime=${this.cfg.runtime.kind} ` +
         `voice=${voiceState} cwd=${this.cfg.runtime.cwd}`,
     );
+    for (const line of accountLines(this.me, workspaces)) this.log(line);
     this.socket = openFlowSocket({
       serverUrl: this.cfg.serverUrl,
       token: this.cfg.agentToken,

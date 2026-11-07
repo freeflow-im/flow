@@ -30,7 +30,10 @@ beforeEach(() => {
   sql = nodeSql();
   new DirectoryCore(sql, { webUrlBase: ISSUER, registrationEnabled: true, send: async () => {} });
   for (const id of ['u1', 'u2']) sql.exec("INSERT INTO users (id, email, password_hash, display_name, created_at) VALUES (?, ?, '', ?, 0)", id, `${id}@example.com`, id);
-  sql.exec("INSERT INTO memberships (user_id, organization_id, role) VALUES ('u1', 'orgA', 'owner'), ('u1', 'orgB', 'member'), ('u2', 'orgC', 'owner')");
+  // Who belongs where is read from the accounts (platform.md §3.3), not from `memberships`.
+  for (const [u, o, r] of [['u1', 'orgA', 'owner'], ['u1', 'orgB', 'member'], ['u2', 'orgC', 'owner']]) {
+    sql.exec('INSERT INTO accounts (id, user_id, organization_id, address, display_name, role, created_at) VALUES (?, ?, ?, ?, ?, ?, 0)', `acc-${u}-${o}`, u, o, `${u}@${o}.freeflow.im`, u, r);
+  }
   oauth = new McpOAuth(sql, (async () => new Response('{}', { status: 404 })) as typeof fetch);
 });
 
@@ -77,7 +80,7 @@ describe('MCP OAuth in the directory', () => {
     const { client, code } = await codeFor('u1', 'orgB');
     const t = oauth.token(ISSUER, { grant_type: 'authorization_code', code, code_verifier: verifier, client_id: client });
     // Nothing ticked on the page (a form without its checkboxes): Docs, Mail and Calendar, as the page starts; never sending.
-    expect(oauth.authenticate(ISSUER, `Bearer ${t.access_token}`)).toEqual({ ok: true, caller: { userId: 'u1', email: 'u1@example.com', orgId: 'orgB', accountId: null, scope: 'files:read files:write mail:read mail:write calendar:read calendar:write' } });
+    expect(oauth.authenticate(ISSUER, `Bearer ${t.access_token}`)).toEqual({ ok: true, caller: { userId: 'u1', email: 'u1@example.com', orgId: 'orgB', accountId: 'acc-u1-orgB', scope: 'files:read files:write mail:read mail:write calendar:read calendar:write' } });
     const r = oauth.token(ISSUER, { grant_type: 'refresh_token', refresh_token: t.refresh_token, client_id: client });
     expect(oauth.authenticate(ISSUER, `Bearer ${r.access_token}`)).toMatchObject({ ok: true, caller: { orgId: 'orgB' } });
     // A rotated refresh token used again ends the family.
@@ -115,7 +118,7 @@ describe('MCP OAuth in the directory', () => {
   it('stops a token when its person leaves the organization', async () => {
     const { client, code } = await codeFor('u1', 'orgA');
     const t = oauth.token(ISSUER, { grant_type: 'authorization_code', code, code_verifier: verifier, client_id: client });
-    sql.exec("DELETE FROM memberships WHERE user_id = 'u1' AND organization_id = 'orgA'");
+    sql.exec("UPDATE accounts SET state = 'removed' WHERE user_id = 'u1' AND organization_id = 'orgA'");
     expect(oauth.authenticate(ISSUER, `Bearer ${t.access_token}`)).toMatchObject({ ok: false, reason: 'not_a_member' });
     expect(() => oauth.token(ISSUER, { grant_type: 'refresh_token', refresh_token: t.refresh_token })).toThrow(/no longer a member/);
   });
@@ -123,10 +126,8 @@ describe('MCP OAuth in the directory', () => {
   it('carries the account, and refuses a suspended one with a 403', async () => {
     const { client, code } = await codeFor('u1', 'orgA');
     const t = oauth.token(ISSUER, { grant_type: 'authorization_code', code, code_verifier: verifier, client_id: client });
-    expect(oauth.authenticate(ISSUER, `Bearer ${t.access_token}`)).toMatchObject({ ok: true, caller: { accountId: null } });
-    sql.exec("INSERT INTO accounts (id, user_id, organization_id, address, display_name, role, created_at) VALUES ('acc1', 'u1', 'orgA', 'u1@a.freeflow.im', 'u1', 'owner', 0)");
-    expect(oauth.authenticate(ISSUER, `Bearer ${t.access_token}`)).toMatchObject({ ok: true, caller: { accountId: 'acc1' } });
-    sql.exec("UPDATE accounts SET state = 'suspended' WHERE id = 'acc1'");
+    expect(oauth.authenticate(ISSUER, `Bearer ${t.access_token}`)).toMatchObject({ ok: true, caller: { accountId: 'acc-u1-orgA' } });
+    sql.exec("UPDATE accounts SET state = 'suspended' WHERE id = 'acc-u1-orgA'");
     expect(oauth.authenticate(ISSUER, `Bearer ${t.access_token}`)).toMatchObject({ ok: false, reason: 'account_inactive', status: 403 });
   });
 
