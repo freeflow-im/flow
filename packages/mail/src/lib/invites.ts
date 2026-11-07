@@ -1,5 +1,6 @@
 // Invitations in a message (docs/specs/calendar.md §14): which part of a message is its invitation (a `text/calendar`
-// part, else an `.ics` file), the card's words, and "Create event" from a thread (Calendar's `?new=` address). Pure.
+// part, else an `.ics` file), the card's words, and "Create event" from a thread (the suite's create intent). Pure.
+import type { CreateFields } from '@flow/suite-bar/intents';
 import type { Address, Attachment, InviteAnswer, InviteEvent, InviteResponse, Replied } from '../api';
 
 /** A part that is iCalendar: `text/calendar` (with any parameters), `application/ics`, or a file named `.ics`. */
@@ -51,10 +52,8 @@ export function threadPeople(messages: readonly { from: Address | null; to: Addr
   return [...out.values()];
 }
 
-/** Calendar's address for a new event with a title and guests, prefilled (packages/calendar `lib/deeplink.ts`). */
-export function createEventUrl(subject: string, people: readonly Address[]): string {
-  const q = new URLSearchParams();
-  q.set('new', subject.trim());
-  if (people.length) q.set('guests', people.map((a) => (a.name ? `${a.name.replace(/[<>,]/g, ' ').trim()} <${a.address}>` : a.address)).join(','));
-  return `/calendar/?${q}`;
+/** "Create event" from a thread: the new event's title and guests, for the suite's `create` intent to Calendar
+ * (@flow/suite-bar intents, whose address packages/calendar `lib/deeplink.ts` reads). */
+export function eventFromThread(subject: string, people: readonly Address[]): CreateFields['calendar'] {
+  return { title: subject, attendees: people.map((a) => ({ email: a.address, name: a.name })) };
 }

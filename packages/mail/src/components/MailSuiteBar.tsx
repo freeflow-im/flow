@@ -3,12 +3,12 @@
 // What belongs to Chat (organizations, invitations, notifications, the profile) opens Chat at `/?open=…`.
 import { useCallback, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { APP_MANIFESTS, AWAY_STATUS, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type StatusOption } from '@flow/suite-bar';
+import { APP_MANIFESTS, AWAY_STATUS, intent, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type ChatPage, type StatusOption } from '@flow/suite-bar';
 import { chooseOrganization, useOrganizations } from '../hooks/organization';
 import { suite, type SuiteUser } from '../suite';
 
 const REFRESH_MS = 60_000;
-const toChat = (open?: string) => window.location.assign(open ? `/?open=${open}` : '/');
+const toChat = (page: ChatPage) => intent.open(page);
 
 export interface MailSuiteBarProps {
   /** The search: what is being searched for in the open folder, and how to change it. */

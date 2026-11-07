@@ -24,6 +24,8 @@ import { Modal, UserCard } from './modals';
 import { UnfurlCard } from './UnfurlCard';
 import { HoverTooltip } from './HoverTooltip';
 import { SystemLine } from './SystemLine';
+import { ReferenceChip } from './ReferenceChip';
+import { ReferencesContext, referencesIn, referencesOfMessages, useReferenceLookup, useResolvedReferences } from '../lib/references';
 
 /** Remembered scroll position per channel, so switching away and back lands
  * where you left off (ui_nits). Kept module-level (survives the per-channel
@@ -89,8 +91,11 @@ export default function MessageList({
   /** Archived channel (#588): history only — no hover menu, no reacting. */
   readOnly?: boolean;
 }) {
-  const { scopedStorageKey } = useBoundApi();
+  const { scopedStorageKey, api, serverOrigin } = useBoundApi();
   const scrollKey = unscopedScrollKey ? scopedStorageKey(`scroll:${unscopedScrollKey}`) : undefined;
+  // FreeFlow addresses in these messages, resolved for the reader in one call (lib/references.ts, platform phase 6.4).
+  const workspaceId = useSelection().workspaceId;
+  const references = useResolvedReferences(api, serverOrigin, workspaceId, referencesOfMessages(messages, serverOrigin, workspaceId));
   const scrollerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -216,6 +221,7 @@ export default function MessageList({
   }, []);
 
   return (
+    <ReferencesContext.Provider value={references}>
     <div className="relative flex min-h-0 flex-1 flex-col">
       <div ref={scrollerRef} className="mc-scroll min-h-0 flex-1 overflow-y-auto py-2" data-testid="message-list">
         <div ref={contentRef}>
@@ -266,7 +272,15 @@ export default function MessageList({
         </button>
       )}
     </div>
+    </ReferencesContext.Provider>
   );
+}
+
+/** The chips for the FreeFlow addresses in a message, resolved for the reader by the list (platform phase 6.4). */
+function MessageReferences({ body }: { body: string }) {
+  const lookup = useReferenceLookup();
+  if (!lookup?.organizationId) return null;
+  return referencesIn(body, lookup.origin, lookup.organizationId).map((f) => <ReferenceChip key={f.ref} found={f} resolved={lookup.get(f.ref)} />);
 }
 
 export function showsHeader(messages: MessageDTO[], index: number): boolean {
@@ -604,6 +618,7 @@ function MessageRow({
                 </button>
               </div>
             )}
+            {!message.deletedAt && <MessageReferences body={message.body} />}
             {/* Phase 11: link previews sit below the body/attachments and above
                 reactions. Only the author gets the remove affordance (§10). */}
             {message.unfurls.map((u) => (

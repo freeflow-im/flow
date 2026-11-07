@@ -284,6 +284,8 @@ export const api = {
   zipOfficeView: (id: string, path: string) => request<{ view: ZipOfficeView }>('GET', `/api/files/${encodeURIComponent(id)}/zip/view?path=${encodeURIComponent(path)}`),
   deleteFile: (id: string) => request<{ ok: true }>('DELETE', `/api/files/${encodeURIComponent(id)}`),
 
+  /** A file's title and kind, and the caller's role on it (server/app.ts' /api/places): what a share intent opens on. */
+  place: (id: string) => request<{ title: string; kind: string; role?: GrantRole }>('GET', `/api/places/${encodeURIComponent(id)}`),
   /** Who a file or folder is shared with (server/access.ts), and changing it. */
   grants: (kind: GrantKind, id: string) => request<Sharing>('GET', grantUrl(kind, id)),
   setGrant: (kind: GrantKind, id: string, principal: string, role: GrantRole) => request<Sharing>('PUT', grantUrl(kind, id), { principal, role }),

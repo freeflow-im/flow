@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Attachment } from '../api';
-import { answeredText, createEventUrl, guestCount, invitationPart, isCalendarFile, replyLine, responseWord, threadPeople } from './invites';
+import { createAddress } from '@flow/suite-bar/intents';
+import { answeredText, eventFromThread, guestCount, invitationPart, isCalendarFile, replyLine, responseWord, threadPeople } from './invites';
 
 const file = (index: number, filename: string, mimeType: string): Attachment => ({ index, filename, mimeType, size: 100, contentId: null, inline: false });
 
@@ -41,10 +42,10 @@ describe('Create event from a thread', () => {
       { from: { name: 'Ann', address: 'Ann@Example.com' }, to: [{ name: 'Bob', address: 'BOB@acme.test' }], cc: [] },
     ], 'ann@example.com');
     expect(people.map((p) => p.address)).toEqual(['bob@acme.test', 'chen@acme.test']);
-    const url = new URL(createEventUrl('Plan for Q3', people), 'https://app.freeflow.im');
+    const url = new URL(createAddress('calendar', eventFromThread('Plan for Q3', people)), 'https://app.freeflow.im');
     expect(url.pathname).toBe('/calendar/');
     expect(url.searchParams.get('new')).toBe('Plan for Q3');
     expect(url.searchParams.get('guests')).toBe('Bob Martin <bob@acme.test>,chen@acme.test');
-    expect(new URL(createEventUrl('Hi', [{ name: 'Lee, Ann', address: 'a@x.org' }]), 'https://x').searchParams.get('guests')).toBe('Lee  Ann <a@x.org>');
+    expect(new URL(createAddress('calendar', eventFromThread('Hi', [{ name: 'Lee, Ann', address: 'a@x.org' }])), 'https://x').searchParams.get('guests')).toBe('Lee  Ann <a@x.org>');
   });
 });

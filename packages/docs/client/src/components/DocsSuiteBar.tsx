@@ -1,10 +1,10 @@
 // The suite bar on the Docs app (packages/suite-bar; docs/specs/freeflow-suite.md §2.5), above every signed-in page
 // when the app is hosted in the FreeFlow suite (main.tsx). Its data comes from the suite's API (suite.ts); what
 // belongs to Chat (adding an organization, its settings, inviting people, notifications, the profile) opens Chat at
-// `/?open=…`, which Chat's App.tsx honours.
+// `/?open=…` (the suite bar's `intent.open`), which Chat's App.tsx honours.
 import { useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { APP_MANIFESTS, AWAY_STATUS, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type StatusOption } from '@flow/suite-bar';
+import { APP_MANIFESTS, AWAY_STATUS, intent, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type ChatPage, type StatusOption } from '@flow/suite-bar';
 import { useAgent } from '../agent/AgentProvider.tsx';
 import { useAuth } from '../auth.tsx';
 import { finishBeforeLeave, readActiveOrganization, setOrganizationState, suite, writeActiveOrganization, type SuiteOrganization, type SuiteUser } from '../suite.ts';
@@ -13,7 +13,7 @@ import { finishBeforeLeave, readActiveOrganization, setOrganizationState, suite,
 const REFRESH_MS = 60_000;
 
 /** A page of Chat (the suite's root, outside this app's base path). */
-const toChat = (open?: string) => window.location.assign(open ? `/?open=${open}` : '/');
+const toChat = (page: ChatPage) => intent.open(page);
 
 /** The address's search, as HomePage's setSearch writes it: the text, and whether it looks in every folder. */
 function withSearch(cur: URLSearchParams, text: string, find: boolean): URLSearchParams {

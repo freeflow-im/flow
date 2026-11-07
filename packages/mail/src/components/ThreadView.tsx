@@ -14,7 +14,8 @@ import type { Notice } from '../lib/notice';
 import { displayName, formatAddress } from '../lib/addresses';
 import { folderLabel, orderFolders } from '../lib/folders';
 import { fileSize, fullDate, listDate, relativeDate } from '../lib/format';
-import { createEventUrl, invitationPart, isCalendarFile, threadPeople } from '../lib/invites';
+import { intent } from '@flow/suite-bar/intents';
+import { eventFromThread, invitationPart, isCalendarFile, threadPeople } from '../lib/invites';
 import { TAB_INFO } from '../lib/tabs';
 import { conversationSubject, expandedByDefault, foldRuns, replyTarget } from '../lib/threads';
 import { cn } from '../lib/utils';
@@ -291,8 +292,8 @@ export function ThreadView(p: ThreadViewProps) {
               <DropdownMenuItem onSelect={p.onToggleFlag}>{anyFlagged ? 'Remove star' : 'Star'}</DropdownMenuItem>
               <DropdownMenuItem
                 onSelect={() => {
-                  const url = createEventUrl(threadSubject(messages), threadPeople(messages, p.me));
-                  (p.onOpenCalendar ?? ((u: string) => window.open(u, '_blank', 'noopener')))(url);
+                  // The suite's `create` intent to Calendar (@flow/suite-bar intents), in a new tab.
+                  intent.create('calendar', eventFromThread(threadSubject(messages), threadPeople(messages, p.me)), p.onOpenCalendar ? { navigate: p.onOpenCalendar } : { newTab: true });
                 }}
               >
                 <CalendarPlus /> Create event

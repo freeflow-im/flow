@@ -3,9 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "The FreeFlow suite bar: the 56px bar above Chat and Docs (docs/specs/freeflow-suite.md §2.5). Sources only; each client bundles it.",
+  "description": "The FreeFlow suite bar: the 56px bar above Chat and Docs (docs/specs/freeflow-suite.md \u00a72.5). Sources only; each client bundles it.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./intents": "./src/lib/intents.ts"
   },
   "sideEffects": [
     "*.css"

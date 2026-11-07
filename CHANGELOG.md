@@ -12,8 +12,9 @@ This file keeps two things:
 
 ## Parity
 
+- **Reference chips and intents are web-only (2026-11-07, platform phase 6.4).** Web draws FreeFlow addresses in messages as chips resolved through `/v1/references` and handles `?open=artifact|channel|message:` and `?share=`; macOS and iOS show those addresses as plain links and do not resolve them. Gap to close.
 - **The Domains tab is web-only (2026-11-07, platform phase 5.1).** Web's Manage users has Domains (add, verify, records, primary, remove); macOS and iOS have no domain management and show addresses as they come. Gap to close.
-- **Artifact grants are web and API only (2026-11-06, platform phase 3.4).** The grants routes are on the API (no share UI yet on any client) and web links the share notice's address; macOS and iOS show an artifact shared with the reader if opened by id, have no share UI, and render the notice's address as plain text. Gap to close.
+- **Artifact grants are web and API only (2026-11-06, platform phase 3.4).** Web has the artifact Share dialog (phase 6.4) and draws the share notice's address as a chip; macOS and iOS show an artifact shared with the reader if opened by id, have no share UI, and render the notice's address as plain text. Gap to close.
 - **The Automations page is web-only (2026-11-06, platform phase 2.5).** Web lists a member's event-bus subscriptions and their wake jobs and creates wake, post and scheduled automations; macOS and iOS have no Automations page. Gap to close.
 - **Only web sends `since` on reconnect (2026-11-06, platform phase 2.3).** Web replays the event log's backlog after a drop; macOS and iOS still reconnect without a cursor and rely on their REST refetch. Gap to close.
 - **Account addresses and organization policies are shown on web only (2026-11-06, platform phase 1.3).** Web shows members' addresses (with Copy email address on an agent's card since phase 5.4) and the Organization section of Manage users (policies, Transfer ownership); macOS and iOS ignore the new fields. Gap to close.
