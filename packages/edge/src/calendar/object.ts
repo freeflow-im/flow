@@ -5,7 +5,16 @@
 // the server first (PUT with If-Match, so a change made elsewhere meanwhile is a `conflict`, never lost), then into the
 // cache, and the calendar is synced right after. Passwords are sealed with FLOW_DATA_KEY (org/crypto, as Mail's are) and
 // never returned or logged; no address, summary or id goes in a log line.
+//
+// Each account also has a native calendar (platform.md §3.5, phase 4.1; calendar.md §15) whose store is this object: its
+// writes go to SQLite with etags of our own and are published into the organization's event log, and it can be shared by
+// grants, a reader's requests arriving through `handleShared`.
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { formatReference } from '@flow/shared';
+import {
+  atLeast, effectiveRole, grantFromRow, grantSql, grantsForChainSql, parsePrincipal, revokeSql,
+  type Grant, type GrantPrincipal, type GrantReader, type GrantRow, type Role,
+} from '@flow/shared/grants';
 import type { CallerContext, ObjectBindings } from '../org/routes/compat';
 import type { ImportRow } from '../importing';
 import { exportTables, importTable, ownerMismatch, ownerRefusal } from '../perAccount';
@@ -20,8 +29,8 @@ import type { CalendarMail } from './imip';
 import { Invites, type InviteMail, type Notified } from './invites';
 import { CALENDAR_TABLES, CalendarStore, type CalendarRow, type EventOccurrence } from './store';
 import {
-  AccountPatch, CalendarPatch, EventInput, EventPatch, FreeBusyBody, NewAccount, RELIST_MS, RespondBody, SYNC_BUDGET_MS, TIMING_HEADER, badRequest, calendarError,
-  cadenceMs, checkUrl, conflict, nextAlarmAt, normalizeUrl, notFound, parse, providerFor, splitId,
+  AccountPatch, CalendarPatch, EventInput, EventPatch, FreeBusyBody, GrantBody, NATIVE_HREF, NewAccount, RELIST_MS, RespondBody, SYNC_BUDGET_MS, TIMING_HEADER, badRequest, calendarError,
+  cadenceMs, checkUrl, conflict, eventIdOf, nextAlarmAt, normalizeUrl, notFound, parse, providerFor, splitId,
 } from './rules';
 
 export interface CalendarEnv {
@@ -35,7 +44,29 @@ export interface CalendarEnv {
   GOOGLE_CLIENT_SECRET?: string;
   /** The person's Mail object (the same user id names both): invitations' parts, and iMIP sent from their mail accounts. */
   MAIL?: DurableObjectNamespace<import('../imap/object').Mail>;
+  /** The organization's event log: native calendars' `calendar.event.*` (platform.md §5.2, phase 4.1). */
+  EVENTS?: DurableObjectNamespace<import('../events/object').Events>;
+  /** The organization's object: its share index, told of each grant on a native calendar (§4.5). */
+  ORG?: DurableObjectNamespace<import('../org/object').Org>;
+  /** The directory: an address resolved to a member's account, for free/busy. */
+  DIRECTORY?: DurableObjectNamespace<import('../directory/object').Directory>;
+  /** Other accounts' Calendar objects: a member's busy time. */
+  CALENDAR?: DurableObjectNamespace<Calendar>;
+  /** The web client's origin, for the links in events. */
+  WEB_URL_BASE?: string;
 }
+
+/** A request's bindings: the caller context, and for a reader's request about a shared native calendar, the reader. */
+type Bindings = ObjectBindings & { reader?: GrantReader };
+/** What a reader of a shared calendar may ask (handleShared); anything else is not_found. */
+const SHARED_ROUTES: [string, RegExp][] = [
+  ['GET', /^\/v1\/calendar\/events$/], ['POST', /^\/v1\/calendar\/events$/],
+  ['GET', /^\/v1\/calendar\/events\/[^/]+$/], ['PATCH', /^\/v1\/calendar\/events\/[^/]+$/], ['DELETE', /^\/v1\/calendar\/events\/[^/]+$/],
+  ['GET', /^\/v1\/calendar\/calendars\/[^/]+\/grants$/], ['PUT', /^\/v1\/calendar\/calendars\/[^/]+\/grants$/],
+  ['DELETE', /^\/v1\/calendar\/calendars\/[^/]+\/grants\/[^/]+$/],
+];
+/** A native calendar as a reader of it sees it (GET /v1/calendar/shared). */
+export interface SharedCalendarInfo { id: string; name: string; color: string; role: Role }
 
 /** A Google account as the callback hands it over (routes/calendar.ts): who, and the tokens the consent gave. */
 export interface GoogleGrant { email: string; displayName: string; refreshToken: string; accessToken: string; expiresAt: number }
@@ -45,11 +76,11 @@ interface AccountRow {
   status: string; status_message: string | null; created_at: number; calendars_at: number;
 }
 interface ServerState { url: string; username: string; principal: string; home: string; addresses: string[]; outbox: string | null }
-export interface CalendarAccount { id: string; kind: 'caldav' | 'google'; email: string; displayName: string; server?: { url: string; username: string }; status: 'ok' | 'auth_failed' | 'connect_failed'; statusMessage?: string }
+export interface CalendarAccount { id: string; kind: 'caldav' | 'google' | 'native'; email: string; displayName: string; server?: { url: string; username: string }; status: 'ok' | 'auth_failed' | 'connect_failed'; statusMessage?: string }
 export interface CalendarInfo { id: string; accountId: string; name: string; color: string; timezone: string | null; role: 'owner' | 'writer' | 'reader'; hidden: boolean; isDefault: boolean; syncedAt: string | null }
 
-/** Where a request's time went, for its log line: talking to calendar servers. */
-interface Timing { server: number }
+/** Where a request's time went, for its log line: talking to calendar servers; and whose request it is (an event's actor). */
+interface Timing { server: number; actor?: string | null }
 const timing = new AsyncLocalStorage<Timing | undefined>();
 
 const VERIFY_LIMIT = 10;
@@ -66,7 +97,7 @@ const json = async (c: Context) => c.req.json().catch(() => { throw badRequest('
 export class Calendar extends DurableObject<CalendarEnv> {
   private readonly sql: SqlStorage;
   private readonly store: CalendarStore;
-  private readonly app = new Hono<{ Bindings: ObjectBindings }>();
+  private readonly app = new Hono<{ Bindings: Bindings }>();
   /** One sync or write at a time per calendar, so a sync never writes back what a PUT just replaced. */
   private readonly locks = new Map<string, Promise<unknown>>();
   private syncing = false;
@@ -104,12 +135,56 @@ export class Calendar extends DurableObject<CalendarEnv> {
     const wrong = ownerMismatch(this.store, caller, 'the Calendar');
     if (wrong) { console.error(`[calendar] ${wrong}`); return ownerRefusal(wrong); }
     this.accountId = caller.account!.id;
-    const t: Timing = { server: 0 };
-    const res = await timing.run(t, () => this.app.fetch(request, { caller } satisfies ObjectBindings));
+    this.store.ensureNative({ accountId: caller.account!.id, email: caller.account!.address ?? '', displayName: caller.account!.displayName ?? '' });
+    const t: Timing = { server: 0, actor: caller.account!.id };
+    const res = await timing.run(t, () => this.app.fetch(request, { caller } satisfies Bindings));
     this.touch();
     await this.armAlarm().catch((err) => console.warn(`[calendar] alarm: ${(err as Error).message}`));
     const out = new Response(res.body, res);
     out.headers.set(TIMING_HEADER, `server=${Math.round(t.server)}`);
+    return out;
+  }
+
+  /**
+   * A reader's request about one of this account's native calendars (routes/calendar.ts forwards a request naming a native
+   * calendar id of another account here, platform.md §4.4): the owner guard lets it through as a reader, not as the owner;
+   * the routes then check the reader's role on the calendar (viewer reads, editor changes, manager shares) and answer
+   * not_found where it has none. Only a member of the same organization is a reader, and only the routes in SHARED_ROUTES
+   * exist for one. The owner's alarm and activity are not touched.
+   */
+  async handleShared(request: Request, caller: CallerContext, channelIds: string[]): Promise<Response> {
+    const owner = this.store.state('owner_account_id'), org = this.store.state('owner_organization_id');
+    const account = caller.account;
+    if (account && owner === account.id) return this.handle(request, caller);
+    if (!account || !owner || !org || (account.organizationId || caller.organizationId) !== org) return Response.json({ error: { code: 'not_found', message: 'no such calendar' } }, { status: 404 });
+    const t: Timing = { server: 0, actor: account.id };
+    const reader: GrantReader = { accountId: account.id, channelIds };
+    const res = await timing.run(t, () => this.app.fetch(request, { caller, reader } satisfies Bindings));
+    const out = new Response(res.body, res);
+    out.headers.set(TIMING_HEADER, `server=${Math.round(t.server)}`);
+    return out;
+  }
+
+  /**
+   * Busy time on this account's native calendars (an RPC for another member's free/busy, platform.md §3.5): the start and
+   * end of every event that is not transparent, cancelled or declined, merged; no details.
+   */
+  busy(from: number, to: number): Interval[] {
+    return this.busyIn(this.store.calendars().filter((c) => c.href.startsWith(NATIVE_HREF)).map((c) => c.id), from, to);
+  }
+
+  /** The native calendars named that the reader may see, with its role on each (GET /v1/calendar/shared, routes/calendar.ts). */
+  sharedCalendars(caller: CallerContext, channelIds: string[], ids: string[]): SharedCalendarInfo[] {
+    const org = this.store.state('owner_organization_id');
+    const account = caller.account;
+    if (!account || !org || (account.organizationId || caller.organizationId) !== org) return [];
+    const reader: GrantReader = { accountId: account.id, channelIds };
+    const out: SharedCalendarInfo[] = [];
+    for (const id of new Set(ids)) {
+      const c = this.store.calendar(id);
+      const role = c ? this.roleFor(reader, c) : null;
+      if (c && role) { const info = this.toCalendar(c); out.push({ id: c.id, name: info.name, color: info.color, role }); }
+    }
     return out;
   }
 
@@ -125,10 +200,13 @@ export class Calendar extends DurableObject<CalendarEnv> {
     if (!row) throw notFound('no such calendar account');
     return row;
   }
-  private serverOf(r: AccountRow): ServerState { return JSON.parse(r.server) as ServerState; }
+  /** An account's server state; a native account has none. */
+  private serverOf(r: AccountRow): ServerState {
+    return r.kind === 'native' || !r.server ? { url: '', username: '', principal: '', home: '', addresses: [], outbox: null } : JSON.parse(r.server) as ServerState;
+  }
   private toAccount(r: AccountRow): CalendarAccount {
     const s = this.serverOf(r);
-    return { id: r.id, kind: r.kind as CalendarAccount['kind'], email: r.email, displayName: r.display_name, server: { url: s.url, username: s.username }, status: r.status as CalendarAccount['status'], ...(r.status_message ? { statusMessage: r.status_message } : {}) };
+    return { id: r.id, kind: r.kind as CalendarAccount['kind'], email: r.email, displayName: r.display_name, ...(r.kind === 'native' ? {} : { server: { url: s.url, username: s.username } }), status: r.status as CalendarAccount['status'], ...(r.status_message ? { statusMessage: r.status_message } : {}) };
   }
   private password(r: AccountRow): string { return decryptBlob(Buffer.from(r.secret), r.key_id).toString('utf8'); }
   private setStatus(id: string, status: CalendarAccount['status'], message: string | null): void {
@@ -237,6 +315,8 @@ export class Calendar extends DurableObject<CalendarEnv> {
       const c = this.store.calendar(calendarId);
       if (!c) return;
       const acct = this.account(c.account_id);
+      // A native calendar is its own store: nothing to sync.
+      if (acct.kind === 'native') return;
       const d = this.driverOf(acct);
       const started = Date.now();
       let mode = 'delta', changed = 0, deleted = 0, error: string | null = null;
@@ -348,12 +428,12 @@ export class Calendar extends DurableObject<CalendarEnv> {
     const started = Date.now();
     try {
       const accounts = new Map(this.accountRows().map((a) => [a.id, a]));
-      for (const a of accounts.values()) if (a.status !== 'auth_failed' && (force || Date.now() - a.calendars_at > RELIST_MS)) await this.relist(a);
+      for (const a of accounts.values()) if (a.kind !== 'native' && a.status !== 'auth_failed' && (force || Date.now() - a.calendars_at > RELIST_MS)) await this.relist(a);
       const every = cadenceMs(this.lastActiveAt(), Date.now()) ?? RELIST_MS;
       for (const c of this.store.due(force ? Number.MAX_SAFE_INTEGER : Date.now() - every + 5_000)) {
         if (Date.now() > deadline) break;
         const a = accounts.get(c.account_id);
-        if (!a || this.account(a.id).status === 'auth_failed') continue;
+        if (!a || a.kind === 'native' || this.account(a.id).status === 'auth_failed') continue;
         try { await this.syncCalendar(c.id); synced++; } catch { errors++; }
       }
     } finally {
@@ -372,7 +452,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
   }
   private async armAlarm(now = Date.now()): Promise<void> {
     if (this.env.CALENDAR_ALARM === 'off') { if ((await this.ctx.storage.getAlarm()) !== null) await this.ctx.storage.deleteAlarm(); return; }
-    const has = this.accountRows().length > 0;
+    const has = this.accountRows().some((a) => a.kind !== 'native');
     const at = nextAlarmAt(this.lastActiveAt(), now, has);
     const current = await this.ctx.storage.getAlarm();
     if (at === null) { if (current !== null) await this.ctx.storage.deleteAlarm(); return; }
@@ -400,6 +480,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
     return a.kind === 'google' || !!this.serverOf(a).outbox;
   }
   private hrefIn(c: CalendarRow, uid: string): string {
+    if (c.href.startsWith(NATIVE_HREF)) return `${c.href}/${encodeURIComponent(uid)}.ics`;
     return new URL(`${encodeURIComponent(uid)}.ics`, c.href.endsWith('/') ? c.href : `${c.href}/`).href;
   }
   /** The account's Mail object, by the binding (never a route): an invitation's part, their mail accounts, and iMIP sent from one. */
@@ -433,13 +514,13 @@ export class Calendar extends DurableObject<CalendarEnv> {
       put: async (calendarId, href, raw, etag) => {
         const c = this.writable(this.calendar(calendarId));
         const acct = this.account(c.account_id);
-        await this.locked(c.id, () => this.putAndStore(this.driverOf(acct), acct, c, href, raw, etag)).catch((err) => this.conflicted(c, err));
+        await this.locked(c.id, () => this.putAndStore(acct, c, href, raw, etag)).catch((err) => this.conflicted(c, err));
         this.syncSoon(c.id);
       },
       remove: async (calendarId, href, etag) => {
         const c = this.writable(this.calendar(calendarId));
-        const d = this.driverOf(this.account(c.account_id));
-        await this.locked(c.id, async () => { await d.delete(href, etag); this.store.deleteObject(c.id, href); }).catch((err) => this.conflicted(c, err));
+        const acct = this.account(c.account_id);
+        await this.locked(c.id, () => this.removeAt(acct, c, href, etag)).catch((err) => this.conflicted(c, err));
         this.syncSoon(c.id);
       },
       hrefFor: (calendarId, uid) => this.hrefIn(this.calendar(calendarId), uid),
@@ -448,6 +529,8 @@ export class Calendar extends DurableObject<CalendarEnv> {
   }
   /** The guests of an event the person changed told by email, where the server does not (invites.ts `notify`); never fails the write. */
   private async notify(calendarId: string, uid: string, before: string | null, after: string | null, opts: { cancelRid?: number } = {}): Promise<Notified | null> {
+    // A native calendar's guests are scheduled between accounts (phase 4.2), not by email: nothing is sent yet.
+    if (this.store.calendar(calendarId)?.href.startsWith(NATIVE_HREF)) return null;
     try {
       return await this.invites().notify(calendarId, uid, before, after, opts);
     } catch (err) {
@@ -463,13 +546,104 @@ export class Calendar extends DurableObject<CalendarEnv> {
     return { me: [...this.meOn(acct, c)], organizer, displayName: acct.display_name, zone: zone || c.timezone || 'UTC', now: Date.now() };
   }
 
-  /** Writes an object to the server and then to the cache: the etag the PUT answered with, else the object as stored there. */
-  private async putAndStore(d: Driver, acct: AccountRow, c: CalendarRow, href: string, raw: string, etag: string | null): Promise<void> {
-    const put = await d.put(href, raw, etag);
+  /**
+   * Writes an object to the server and then to the cache: the etag the PUT answered with, else the object as stored there.
+   * A native calendar has no server: the store is written (If-Match against the stored etag) and the change is published.
+   */
+  private async putAndStore(acct: AccountRow, c: CalendarRow, href: string, raw: string, etag: string | null): Promise<void> {
     const opts = { me: this.meOn(acct, c), zone: c.timezone ?? 'UTC' };
+    if (acct.kind === 'native') {
+      const { uid } = this.store.putNative(c.id, href, raw, etag, opts);
+      if (uid) await this.publishChange(etag === null ? 'calendar.event.added' : 'calendar.event.updated', c, uid);
+      return;
+    }
+    const d = this.driverOf(acct);
+    const put = await d.put(href, raw, etag);
     if (put.etag) { this.store.putObject(c.id, href, put.etag, raw, opts); return; }
     const [stored] = await d.get(c.href, [href]);
     if (stored) this.store.putObject(c.id, stored.href, stored.etag, stored.data, opts);
+  }
+
+  /** Deletes an object on the server and then from the cache; a native one from the store, and its cancellation published. */
+  private async removeAt(acct: AccountRow, c: CalendarRow, href: string, etag: string | null): Promise<void> {
+    if (acct.kind === 'native') {
+      const gone = this.store.objectAt(c.id, href);
+      const before = gone ? this.store.find(c.id, gone.uid, null)?.event ?? null : null;
+      this.store.deleteNative(c.id, href, etag);
+      if (gone) await this.publishChange('calendar.event.cancelled', c, gone.uid, before);
+      return;
+    }
+    await this.driverOf(acct).delete(href, etag);
+    this.store.deleteObject(c.id, href);
+  }
+
+  /**
+   * A native calendar's change into the organization's event log (platform.md §5.2): `calendar.event.added`, `.updated` or
+   * `.cancelled`, about the event, for whoever the calendar is shared with (`ref:` the calendar, from the share index) and
+   * its owner (`data.ownerAccountId`). A failure is logged, never the write's.
+   */
+  private async publishChange(type: string, c: CalendarRow, uid: string, snapshot?: EventOccurrence | null): Promise<void> {
+    const ns = this.env.EVENTS, org = this.store.state('owner_organization_id'), owner = this.store.state('owner_account_id');
+    if (!ns || !org || !owner) return;
+    const ev = snapshot ?? this.store.find(c.id, uid, null)?.event;
+    if (!ev) return;
+    const eventId = eventIdOf(c.id, uid);
+    const base = (this.env.WEB_URL_BASE ?? '').replace(/\/+$/, '');
+    try {
+      await ns.get(ns.idFromName(org)).publish({
+        type, organizationId: org, actor: timing.getStore()?.actor ?? null,
+        ref: { organizationId: org, app: 'calendar', kind: 'event', id: eventId },
+        audience: `ref:${formatReference({ organizationId: org, app: 'calendar', kind: 'calendar', id: c.id })}`,
+        ts: new Date().toISOString(),
+        data: { calendarId: c.id, eventId, uid, summary: ev.summary, start: ev.start, end: ev.end, allDay: ev.allDay, ownerAccountId: owner, url: `${base}/calendar/week/${ev.start.slice(0, 10)}?event=${encodeURIComponent(eventId)}` },
+      });
+    } catch (err) {
+      console.error(`[calendar] ${type}: ${(err as Error).message.slice(0, 200)}`);
+    }
+  }
+
+  // ---- grants on native calendars (platform.md §4.3–§4.5) -----------------------------------------------------------
+
+  /** The stored grants on one object. */
+  private grantsOn(kind: string, id: string): Grant[] {
+    const q = grantsForChainSql([{ objectKind: kind, objectId: id }]);
+    return this.sql.exec<GrantRow & Record<string, SqlStorageValue>>(q.sql, ...q.params).toArray().map((r) => grantFromRow(r));
+  }
+
+  /**
+   * A reader's role on a calendar (or an event in it): the owner is the native account's owner (a column, the object's
+   * account); otherwise the grants on the event and the calendar it is in. Only native calendars are shared. With no
+   * reader the request is the owner's own: `owner` on every calendar.
+   */
+  private roleFor(reader: GrantReader | undefined, c: CalendarRow, eventId?: string): Role | null {
+    if (!reader) return 'owner';
+    if (!c.href.startsWith(NATIVE_HREF)) return null;
+    const chain = [...(eventId ? [{ objectKind: 'event', objectId: eventId, grants: this.grantsOn('event', eventId) }] : []), { objectKind: 'calendar', objectId: c.id, grants: this.grantsOn('calendar', c.id) }];
+    return effectiveRole({ reader, ownerAccountId: this.store.state('owner_account_id'), chain });
+  }
+
+  /** The calendar, when the request's caller has at least `role` on it: no role is not_found (it does not leak), too low is forbidden. */
+  private need(c: Context<{ Bindings: Bindings }>, calendarId: string, role: Role, eventId?: string): CalendarRow {
+    const cal = this.store.calendar(calendarId);
+    const has = cal ? this.roleFor(c.env.reader, cal, eventId) : null;
+    if (!cal || !has) throw notFound('no such calendar');
+    if (!atLeast(has, role)) throw calendarError(403, 'forbidden', `You need to be ${role === 'editor' ? 'an editor' : `a ${role}`} of this calendar`);
+    return cal;
+  }
+
+  /** A grant given, changed or taken away, told to the organization's share index (Org.recordShare / revokeShare); logged on failure. */
+  private async reportGrant(c: CalendarRow, principal: string, role: Role | null): Promise<void> {
+    const ns = this.env.ORG, org = this.store.state('owner_organization_id');
+    if (!ns || !org) return;
+    const ref = formatReference({ organizationId: org, app: 'calendar', kind: 'calendar', id: c.id });
+    const actor = timing.getStore()?.actor ?? this.store.state('owner_account_id') ?? '';
+    try {
+      const stub = ns.get(ns.idFromName(org));
+      if (role) await stub.recordShare({ ref, principal, role, grantedBy: actor, title: c.name, kind: 'calendar' });
+      else await stub.revokeShare({ ref, principal, revokedBy: actor });
+    } catch (err) {
+      console.error(`[calendar] share index: ${(err as Error).message.slice(0, 200)}`);
+    }
   }
 
   /** A conflict: the calendar synced now, so the next look shows the server's copy; then the error. */
@@ -507,8 +681,10 @@ export class Calendar extends DurableObject<CalendarEnv> {
 
   /** The person's own busy time in a window, from the cache: every opaque event not declined or cancelled, merged. */
   private ownBusy(from: number, to: number): Interval[] {
-    const shown = this.store.calendars().filter((c) => !c.hidden).map((c) => c.id);
-    const busy = this.store.list(shown, from, to).filter((o) => !o.transparent && o.status !== 'cancelled' && o.myResponse !== 'declined')
+    return this.busyIn(this.store.calendars().filter((c) => !c.hidden).map((c) => c.id), from, to);
+  }
+  private busyIn(calendarIds: string[], from: number, to: number): Interval[] {
+    const busy = this.store.list(calendarIds, from, to).filter((o) => !o.transparent && o.status !== 'cancelled' && o.myResponse !== 'declined')
       .map((o) => [Math.max(from, Date.parse(o.start)), Math.min(to, Date.parse(o.end))] as [number, number]).filter(([a, b]) => b > a).sort((a, b) => a[0] - b[0]);
     const merged: [number, number][] = [];
     for (const [a, b] of busy) {
@@ -517,6 +693,29 @@ export class Calendar extends DurableObject<CalendarEnv> {
       else merged.push([a, b]);
     }
     return merged.map(([a, b]) => [new Date(a).toISOString(), new Date(b).toISOString()]);
+  }
+
+  /**
+   * Busy time of the addresses that are accounts of this organization (the directory's addresses), from each account's
+   * Calendar object (`busy`), visible to any member (platform.md §3.5). Addresses that are not are left out of the answer.
+   */
+  private async memberBusy(emails: string[], from: number, to: number): Promise<Map<string, Interval[]>> {
+    const out = new Map<string, Interval[]>();
+    const { DIRECTORY: dir, CALENDAR: cals } = this.env;
+    const org = this.store.state('owner_organization_id'), self = this.store.state('owner_account_id');
+    if (!dir || !cals || !org || !emails.length) return out;
+    const stub = dir.get(dir.idFromName('directory'));
+    await Promise.all(emails.map(async (e) => {
+      try {
+        const answer = (await (stub.call as never as (m: string, a: unknown[]) => Promise<{ ok: boolean; value?: { id: string; organizationId: string } | null }>)('accountByAddress', [e]));
+        const acct = answer.ok ? answer.value : null;
+        if (!acct || acct.organizationId !== org || acct.id === self) return;
+        out.set(e, (await cals.get(cals.idFromName(acct.id)).busy(from, to)) as unknown as Interval[]);
+      } catch (err) {
+        console.warn(`[calendar] free/busy of a member: ${(err as Error).message.slice(0, 200)}`);
+      }
+    }));
+    return out;
   }
 
   // ---- routes -----------------------------------------------------------------------------------------------------
@@ -529,6 +728,11 @@ export class Calendar extends DurableObject<CalendarEnv> {
       return c.json({ error: { code: 'server_error', message: 'internal server error' } }, 500);
     });
     app.notFound((c) => c.json({ error: { code: 'not_found', message: 'not found' } }, 404));
+    // A reader of a shared calendar (handleShared) reaches only the routes a shared calendar has.
+    app.use('*', async (c, next) => {
+      if (c.env.reader && !SHARED_ROUTES.some(([m, re]) => m === c.req.method && re.test(new URL(c.req.url).pathname))) throw notFound('not found');
+      await next();
+    });
 
     app.get('/v1/calendar/accounts', (c) => c.json({ accounts: this.accountRows().map((r) => this.toAccount(r)) }));
 
@@ -553,6 +757,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
     app.patch('/v1/calendar/accounts/:id', async (c) => {
       const r = this.account(c.req.param('id'));
       const b = parse(AccountPatch, await json(c));
+      if (r.kind === 'native' && (b.password !== undefined || b.server)) throw badRequest('Your FreeFlow calendar has no server or password');
       if (r.kind === 'google' && (b.password !== undefined || b.server)) throw badRequest('A Google account has no password here: reconnect it with Google');
       if (b.password !== undefined || b.server) {
         const s = this.serverOf(r);
@@ -577,6 +782,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
     // and the new ones synced, as far as a few seconds go.
     app.post('/v1/calendar/accounts/:id/refresh', async (c) => {
       const r = this.account(c.req.param('id'));
+      if (r.kind === 'native') return c.json({ calendars: this.store.calendarsOf(r.id).map((x) => this.toCalendar(x)), added: 0, removed: 0 });
       const before = new Set(this.store.calendarsOf(r.id).map((x) => x.id));
       const s = this.serverOf(r);
       this.applyCalendars(r.id, await this.driverOf(r).calendars(s.home, s.principal));
@@ -588,6 +794,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
 
     app.delete('/v1/calendar/accounts/:id', (c) => {
       const r = this.account(c.req.param('id'));
+      if (r.kind === 'native') throw badRequest('Your FreeFlow calendar cannot be removed');
       for (const cal of this.store.calendarsOf(r.id)) this.store.forgetCalendar(cal.id);
       this.sql.exec('DELETE FROM accounts WHERE id = ?', r.id);
       this.store.ensureDefault();
@@ -608,11 +815,46 @@ export class Calendar extends DurableObject<CalendarEnv> {
       return c.json({ calendar: this.toCalendar(this.calendar(cal.id)) });
     });
 
+    // Grants on a native calendar (platform.md §4.3): who it is shared with, and the caller's role; a manager (or the owner)
+    // shares it with an account, a channel or the organization. Each change goes to the share index. Links are not offered.
+    const grantsAnswer = (c: Context<{ Bindings: Bindings }>, cal: CalendarRow) => c.json({ grants: this.grantsOn('calendar', cal.id), role: this.roleFor(c.env.reader, cal) });
+    const shareable = (cal: CalendarRow) => {
+      if (!cal.href.startsWith(NATIVE_HREF)) throw calendarError(400, 'not_supported', 'Only a FreeFlow calendar can be shared here; share a connected one on its own server');
+      return cal;
+    };
+    app.get('/v1/calendar/calendars/:id/grants', (c) => grantsAnswer(c, shareable(this.need(c, c.req.param('id'), 'viewer'))));
+    app.put('/v1/calendar/calendars/:id/grants', async (c) => {
+      const cal = shareable(this.need(c, c.req.param('id'), 'manager'));
+      const b = parse(GrantBody, await json(c));
+      let kind: string;
+      try { kind = parsePrincipal(b.principal).kind; } catch { throw badRequest('principal: account:<id>, channel:<id> or org'); }
+      if (kind === 'link') throw calendarError(400, 'not_supported', 'A calendar is not shared by link');
+      if (b.principal === `account:${this.store.state('owner_account_id')}`) throw badRequest('principal: the owner has the calendar already');
+      const actor = timing.getStore()?.actor ?? '';
+      const g = grantSql({ objectKind: 'calendar', objectId: cal.id, principal: b.principal as GrantPrincipal, role: b.role, grantedBy: actor, grantedAt: new Date().toISOString() });
+      this.sql.exec(g.sql, ...g.params);
+      await this.reportGrant(cal, b.principal, b.role);
+      return grantsAnswer(c, cal);
+    });
+    app.delete('/v1/calendar/calendars/:id/grants/:principal', async (c) => {
+      const cal = shareable(this.need(c, c.req.param('id'), 'manager'));
+      const principal = c.req.param('principal');
+      const q = revokeSql('calendar', cal.id, principal);
+      const had = this.grantsOn('calendar', cal.id).some((g) => g.principal === principal);
+      this.sql.exec(q.sql, ...q.params);
+      if (had) await this.reportGrant(cal, principal, null);
+      return grantsAnswer(c, cal);
+    });
+
     app.get('/v1/calendar/events', (c) => {
       const { from, to } = this.window(c);
       const asked = c.req.query('calendars')?.split(',').map((s) => s.trim()).filter(Boolean);
       const cals = this.store.calendars();
-      const ids = asked ? cals.filter((x) => asked.includes(x.id)).map((x) => x.id) : cals.filter((x) => !x.hidden).map((x) => x.id);
+      const reader = c.env.reader;
+      // A reader names the shared calendars it reads, and sees those it is at least a viewer of.
+      const ids = reader ? cals.filter((x) => asked?.includes(x.id) && this.roleFor(reader, x)).map((x) => x.id)
+        : asked ? cals.filter((x) => asked.includes(x.id)).map((x) => x.id) : cals.filter((x) => !x.hidden).map((x) => x.id);
+      if (reader && !ids.length) throw notFound('no such calendar');
       const limit = Math.min(2000, Math.max(1, Number(c.req.query('limit')) || 2000));
       return c.json({ events: this.store.list(ids, from, to, c.req.query('q'), limit) });
     });
@@ -621,6 +863,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
       const { calendarId, uid, rid } = splitId(c.req.param('id'));
       const ridMs = rid === null ? null : parseRid(rid);
       if (rid !== null && ridMs === null) throw badRequest('id: not an event id');
+      if (c.env.reader) this.need(c, calendarId, 'viewer', eventIdOf(calendarId, uid));
       const found = this.store.find(calendarId, uid, ridMs);
       const obj = this.store.objectByUid(calendarId, uid);
       if (!found || !obj) throw notFound('no such event');
@@ -629,39 +872,40 @@ export class Calendar extends DurableObject<CalendarEnv> {
 
     app.post('/v1/calendar/events', async (c) => {
       const b = parse(EventInput, await json(c));
+      if (c.env.reader && !b.calendarId) throw badRequest('calendarId: required');
+      if (c.env.reader) this.need(c, b.calendarId!, 'editor');
       const cal = this.writable(b.calendarId ? this.calendar(b.calendarId) : this.store.calendars().find((x) => x.is_default) ?? (() => { throw badRequest('connect a calendar first'); })());
       const acct = this.account(cal.account_id);
       const uid = crypto.randomUUID();
       const raw = newEvent(uid, b as Fields & { summary: string; start: string; end: string }, this.writeContext(acct, cal, b.timezone));
-      const href = new URL(`${encodeURIComponent(uid)}.ics`, cal.href.endsWith('/') ? cal.href : `${cal.href}/`).href;
-      const d = this.driverOf(acct);
-      await this.locked(cal.id, () => this.putAndStore(d, acct, cal, href, raw, null));
+      const href = this.hrefIn(cal, uid);
+      await this.locked(cal.id, () => this.putAndStore(acct, cal, href, raw, null));
       this.syncSoon(cal.id);
       const sent = await this.notify(cal.id, uid, null, this.store.objectByUid(cal.id, uid)?.raw ?? raw);
       return c.json({ event: this.view(cal.id, uid, 0), ...sent }, 201);
     });
 
     app.patch('/v1/calendar/events/:id', async (c) => {
+      if (c.env.reader) { const { calendarId, uid } = splitId(c.req.param('id')); this.need(c, calendarId, 'editor', eventIdOf(calendarId, uid)); }
       const t = this.target(c.req.param('id'));
       const b = parse(EventPatch, await json(c));
       const { scope: asked, etag, calendarId: moveTo, conference: _conference, ...fields } = b;
       const cal = this.writable(t.c);
+      if (c.env.reader && moveTo && moveTo !== cal.id) this.need(c, moveTo, 'editor');
       if (etag && etag !== t.obj.etag) throw conflict();
       const scope: Scope = asked ?? (t.rid ? 'this' : 'all');
       const ctx = this.writeContext(t.acct, cal, fields.timezone);
       // A change the guests see (anything but the person's own reminders) is sent to them where the server does not schedule.
       const guestsCare = Object.keys(fields).some((k) => k !== 'reminders');
-      const d = this.driverOf(t.acct);
       if (moveTo && moveTo !== cal.id) {
         // To another calendar: the whole event, written there first and then deleted here.
         if (t.rid && scope !== 'all') throw badRequest('calendarId: an occurrence moves with its whole series (scope all)');
         const dest = this.writable(this.calendar(moveTo));
         const destAcct = this.account(dest.account_id);
         const edited = editEvent(t.obj.raw, t.uid, t.rid, 'all', fields as Fields, ctx, () => crypto.randomUUID()).raw;
-        const href = new URL(`${encodeURIComponent(t.uid)}.ics`, dest.href.endsWith('/') ? dest.href : `${dest.href}/`).href;
-        const destDriver = dest.account_id === t.acct.id ? d : this.driverOf(destAcct);
-        await this.locked(dest.id, () => this.putAndStore(destDriver, destAcct, dest, href, edited, null));
-        await this.locked(cal.id, async () => { await d.delete(t.obj.href, t.obj.etag); this.store.deleteObject(cal.id, t.obj.href); }).catch((err) => this.conflicted(cal, err));
+        const href = this.hrefIn(dest, t.uid);
+        await this.locked(dest.id, () => this.putAndStore(destAcct, dest, href, edited, null));
+        await this.locked(cal.id, () => this.removeAt(t.acct, cal, t.obj.href, t.obj.etag)).catch((err) => this.conflicted(cal, err));
         this.syncSoon(dest.id);
         this.syncSoon(cal.id);
         const sent = guestsCare ? await this.notify(dest.id, t.uid, t.obj.raw, this.store.objectByUid(dest.id, t.uid)?.raw ?? edited) : null;
@@ -670,17 +914,17 @@ export class Calendar extends DurableObject<CalendarEnv> {
       const out = editEvent(t.obj.raw, t.uid, t.rid, scope, fields as Fields, ctx, () => crypto.randomUUID());
       await this.locked(cal.id, async () => {
         if (out.created) {
-          const href = new URL(`${encodeURIComponent(out.created.uid)}.ics`, cal.href.endsWith('/') ? cal.href : `${cal.href}/`).href;
-          await this.putAndStore(d, t.acct, cal, href, out.created.raw, null);
+          const href = this.hrefIn(cal, out.created.uid);
+          await this.putAndStore(t.acct, cal, href, out.created.raw, null);
           try {
-            await this.putAndStore(d, t.acct, cal, t.obj.href, out.raw, t.obj.etag);
+            await this.putAndStore(t.acct, cal, t.obj.href, out.raw, t.obj.etag);
           } catch (err) {
             // The old series could not be ended: take the new one back, so nothing shows twice.
-            await d.delete(href, null).catch(() => {});
+            await this.removeAt(t.acct, cal, href, null).catch(() => {});
             this.store.deleteObject(cal.id, href);
             throw err;
           }
-        } else await this.putAndStore(d, t.acct, cal, t.obj.href, out.raw, t.obj.etag);
+        } else await this.putAndStore(t.acct, cal, t.obj.href, out.raw, t.obj.etag);
       }).catch((err) => this.conflicted(cal, err));
       this.syncSoon(cal.id);
       let sent: Notified | null = null;
@@ -692,16 +936,16 @@ export class Calendar extends DurableObject<CalendarEnv> {
     });
 
     app.delete('/v1/calendar/events/:id', async (c) => {
+      if (c.env.reader) { const { calendarId, uid } = splitId(c.req.param('id')); this.need(c, calendarId, 'editor', eventIdOf(calendarId, uid)); }
       const t = this.target(c.req.param('id'));
       const cal = this.writable(t.c);
       const asked = c.req.query('scope');
       if (asked && !['this', 'following', 'all'].includes(asked)) throw badRequest('scope: this, following or all');
       const scope = (asked as Scope | undefined) ?? (t.rid ? 'this' : 'all');
       const raw = deleteFromEvent(t.obj.raw, t.uid, t.rid, scope, this.writeContext(t.acct, cal));
-      const d = this.driverOf(t.acct);
       await this.locked(cal.id, async () => {
-        if (raw === null) { await d.delete(t.obj.href, t.obj.etag); this.store.deleteObject(cal.id, t.obj.href); }
-        else await this.putAndStore(d, t.acct, cal, t.obj.href, raw, t.obj.etag);
+        if (raw === null) await this.removeAt(t.acct, cal, t.obj.href, t.obj.etag);
+        else await this.putAndStore(t.acct, cal, t.obj.href, raw, t.obj.etag);
       }).catch((err) => this.conflicted(cal, err));
       this.syncSoon(cal.id);
       const sent = await this.notify(cal.id, t.uid, t.obj.raw, raw === null ? null : (this.store.objectByUid(cal.id, t.uid)?.raw ?? raw), raw !== null && scope === 'this' ? { cancelRid: t.rid } : {});
@@ -712,8 +956,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
       const t = this.target(c.req.param('id'));
       const b = parse(RespondBody, await json(c));
       const raw = respondTo(t.obj.raw, t.uid, t.rid, b.response, b.comment, this.writeContext(t.acct, t.c));
-      const d = this.driverOf(t.acct);
-      await this.locked(t.c.id, () => this.putAndStore(d, t.acct, t.c, t.obj.href, raw, t.obj.etag)).catch((err) => this.conflicted(t.c, err));
+      await this.locked(t.c.id, () => this.putAndStore(t.acct, t.c, t.obj.href, raw, t.obj.etag)).catch((err) => this.conflicted(t.c, err));
       this.syncSoon(t.c.id);
       const replied = await this.invites().replied(t.c.id, raw, t.uid, t.rid, b.response);
       return c.json({ event: this.view(t.c.id, t.uid, t.rid), ...replied });
@@ -735,8 +978,12 @@ export class Calendar extends DurableObject<CalendarEnv> {
       const unknown: string[] = [];
       const own = this.ownBusy(from, to);
       for (const e of emails) if (mine.has(e)) busy.push({ email: e, intervals: own });
-      const others = emails.filter((e) => !mine.has(e));
+      let others = emails.filter((e) => !mine.has(e));
       if (!emails.length) busy.push({ email: accounts[0]?.email.toLowerCase() ?? 'me', intervals: own });
+      // Members of the organization answer from their own Calendar objects (their native calendars' busy time, no details).
+      const members = await this.memberBusy(others, from, to);
+      for (const [e, intervals] of members) busy.push({ email: e, intervals });
+      others = others.filter((e) => !members.has(e));
       let answered = new Map<string, Interval[]>();
       const withOutbox = accounts.find((a) => a.status === 'ok' && this.serverOf(a).outbox);
       if (others.length && withOutbox) {

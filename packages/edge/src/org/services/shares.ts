@@ -44,8 +44,13 @@ export function chatAddress(ref: Reference | null): string | null {
   return ref?.app === 'chat' && ref.kind === 'artifact' ? `/?open=${encodeURIComponent(`artifact:${ref.id}`)}` : null;
 }
 
-/** The address of a shared object (a Docs one, a Chat artifact; another app's has none yet). */
-export const urlOf = (ref: Reference | null, fileKind: string): string | null => docsAddress(ref, fileKind) ?? chatAddress(ref);
+/** Where a native calendar opens in the web client (phase 4.1). */
+export function calendarAddress(ref: Reference | null): string | null {
+  return ref?.app === 'calendar' && ref.kind === 'calendar' ? `/calendar/?calendar=${encodeURIComponent(ref.id)}` : null;
+}
+
+/** The address of a shared object (a Docs one, a Chat artifact, a calendar; another app's has none yet). */
+export const urlOf = (ref: Reference | null, fileKind: string): string | null => docsAddress(ref, fileKind) ?? chatAddress(ref) ?? calendarAddress(ref);
 
 /** Where a request in the Org object sends a sharing event (the object binds it to the Events object; tests, nowhere). */
 export const shareEvents = new AsyncLocalStorage<(event: PublishInput) => Promise<void>>();

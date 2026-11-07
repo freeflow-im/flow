@@ -72,6 +72,17 @@ export function splitId(id: string): { calendarId: string; uid: string; rid: str
   return { calendarId: parts[0], uid, rid: parts[2] ?? null };
 }
 
+/**
+ * Native calendars (platform.md §3.5, phase 4.1): the object itself is their store. An id is `n.<ownerAccountId>.<random>`,
+ * so routes/calendar.ts finds the owner's object from the id alone; the calendar's href is `native:<id>`.
+ */
+export const NATIVE_HREF = 'native:';
+export const nativeCalendarId = (ownerAccountId: string) => `n.${ownerAccountId}.${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
+/** The owner's account id of a native calendar id, or null for any other id. */
+export function nativeOwnerOf(calendarId: string): string | null {
+  return /^n\.([A-Za-z0-9-]+)\.[a-f0-9]{12}$/.exec(calendarId)?.[1] ?? null;
+}
+
 // ---- request bodies -----------------------------------------------------------------------------------------------
 
 const Server = z.object({ url: z.string().trim().min(1).max(2000), username: z.string().trim().max(320).optional() });
@@ -135,6 +146,8 @@ export function messageOf(b: z.output<typeof InviteBody>): { folder: string; uid
   if (b.messageId.slice(0, first) !== b.account) throw badRequest('messageId: a message of the account named');
   return { folder: b.messageId.slice(first + 1, last), uid };
 }
+/** A grant on a native calendar (`PUT …/calendars/:id/grants`): a principal of the organization and a role below owner. */
+export const GrantBody = z.object({ principal: z.string().trim().min(3).max(200), role: z.enum(['viewer', 'editor', 'manager']) });
 export const FreeBusyBody = z.object({ emails: z.array(z.string().trim().email()).max(50).default([]), from: Instant, to: Instant });
 
 /** Parses a body with a schema, or throws `bad_request` naming the first problem. */
@@ -152,7 +165,7 @@ export const TIMING_HEADER = 'x-calendar-timing';
 
 /** A request's route for its log line, ids taken out (no account, calendar or event ever appears). */
 export const routeOf = (method: string, url: string) =>
-  `${method} ${new URL(url).pathname.replace(/\/accounts\/[^/]+/, '/accounts/:id').replace(/\/calendars\/[^/]+/, '/calendars/:id').replace(/\/events\/(?!.*\/respond$)[^/]+/, '/events/:id').replace(/\/events\/[^/]+\/respond$/, '/events/:id/respond')}`;
+  `${method} ${new URL(url).pathname.replace(/\/accounts\/[^/]+/, '/accounts/:id').replace(/\/calendars\/[^/]+/, '/calendars/:id').replace(/\/grants\/[^/]+$/, '/grants/:principal').replace(/\/events\/(?!.*\/respond$)[^/]+/, '/events/:id').replace(/\/events\/[^/]+\/respond$/, '/events/:id/respond')}`;
 
 /** `[calendar] <METHOD> <route> <status> <ms>ms (server <ms>ms)`, from the total and the object's `x-calendar-timing` (`server=<ms>`). */
 export function timingLine(method: string, url: string, status: number, ms: number, header: string | null | undefined): string {

@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
-import { DAY_MS, LONG_MS, newEvent } from './ical';
+import { DAY_MS, LONG_MS, deleteFromEvent, editEvent, newEvent } from './ical';
 import { CalendarStore, deleteEventsSql, dueSql, eventsOfUidSql, etagsSql, exceptionsSql, objectByUidSql, objectsSql, seriesSql, singlesSql, type Sql } from './store';
 
 /** The object's SqlStorage, on node:sqlite (as cache.test.ts does for Mail). */
@@ -194,3 +194,76 @@ describe('CalendarStore', () => {
   });
 });
 
+describe('native calendars (phase 4.1): the store is the server', () => {
+  function native() {
+    const sql = memory();
+    const store = new CalendarStore(sql);
+    store.init();
+    const cal = store.ensureNative({ accountId: 'acct-ann', email: 'Ann@Acme.freeflow.im', displayName: 'Ann' })!;
+    return { sql, store, cal };
+  }
+  const href = (cal: { href: string }, uid: string) => `${cal.href}/${uid}.ics`;
+  const W = [at('2026-11-01T00:00:00Z'), at('2026-12-01T00:00:00Z')] as const;
+
+  it('makes one native account and its default calendar on first use, once', () => {
+    const { sql, store, cal } = native();
+    expect(cal).toMatchObject({ name: 'Calendar', href: `native:${cal.id}`, is_default: 1, supports_sync: 0, role: 'owner' });
+    expect(cal.id).toMatch(/^n\.acct-ann\.[a-f0-9]{12}$/);
+    expect(sql.exec("SELECT kind, email, display_name, server FROM accounts").toArray()).toEqual([{ kind: 'native', email: 'ann@acme.freeflow.im', display_name: 'Ann', server: '' }]);
+    expect(store.ensureNative({ accountId: 'acct-ann', email: 'x@y', displayName: 'X' })).toBeNull();
+    expect(store.calendars()).toHaveLength(1);
+    // Not the default when the person already has one.
+    const other = memory();
+    const s2 = new CalendarStore(other);
+    s2.init();
+    calendarRow(other, 'c1');
+    other.exec('UPDATE calendars SET is_default = 1');
+    expect(s2.ensureNative({ accountId: 'acct-bo', email: 'bo@x', displayName: '' })?.is_default).toBe(0);
+  });
+
+  it('creates, updates with an If-Match check, and deletes, indexing what it wrote', () => {
+    const { store, cal } = native();
+    const raw = newEvent('lunch', { summary: 'Lunch', start: '2026-11-04T12:00:00Z', end: '2026-11-04T13:00:00Z', timezone: 'UTC' }, ctx);
+    const made = store.putNative(cal.id, href(cal, 'lunch'), raw, null, opts);
+    expect(made).toEqual({ etag: expect.stringMatching(/^"1-[0-9a-f]{8}"$/), uid: 'lunch' });
+    expect(() => store.putNative(cal.id, href(cal, 'lunch'), raw, null, opts)).toThrow(/look again/);
+    expect(store.list([cal.id], ...W).map((o) => [o.summary, o.start, o.etag])).toEqual([['Lunch', '2026-11-04T12:00:00.000Z', made.etag]]);
+    const moved = editEvent(raw, 'lunch', 0, 'all', { start: '2026-11-04T13:00:00Z', end: '2026-11-04T14:00:00Z' }, ctx, () => 'x').raw;
+    expect(moved).toMatch(/SEQUENCE:1/);
+    expect(() => store.putNative(cal.id, href(cal, 'lunch'), moved, '"9-00000000"', opts)).toThrow(/changed since/);
+    const updated = store.putNative(cal.id, href(cal, 'lunch'), moved, made.etag, opts);
+    expect(updated.etag).toMatch(/^"2-/);
+    expect(store.find(cal.id, 'lunch', null)?.event).toMatchObject({ start: '2026-11-04T13:00:00.000Z', etag: updated.etag });
+    expect(() => store.deleteNative(cal.id, href(cal, 'lunch'), made.etag)).toThrow(/changed/);
+    expect(store.deleteNative(cal.id, href(cal, 'lunch'), updated.etag).uid).toBe('lunch');
+    expect(store.list([cal.id], ...W)).toEqual([]);
+    expect(() => store.deleteNative(cal.id, href(cal, 'lunch'), null)).toThrow(/no such event/);
+  });
+
+  it('applies the recurrence scopes to the stored text and expands what was written', () => {
+    const { store, cal } = native();
+    const raw = newEvent('r', { summary: 'Review', start: '2026-11-09T15:00:00Z', end: '2026-11-09T16:00:00Z', timezone: 'UTC', recurrence: ['RRULE:FREQ=DAILY;COUNT=10'] }, ctx);
+    let etag = store.putNative(cal.id, href(cal, 'r'), raw, null, opts).etag;
+    const list = () => store.list([cal.id], ...W).map((o) => o.start.slice(5, 16));
+    expect(list()).toHaveLength(10);
+    // this: an exception on the 11th
+    let stored = store.objectByUid(cal.id, 'r')!.raw;
+    etag = store.putNative(cal.id, href(cal, 'r'), editEvent(stored, 'r', at('2026-11-11T15:00:00Z'), 'this', { start: '2026-11-11T17:00:00Z', end: '2026-11-11T18:00:00Z' }, ctx, () => 'x').raw, etag, opts).etag;
+    expect(list()).toContain('11-11T17:00');
+    // following: a new series from the 14th, the old one ended with UNTIL
+    stored = store.objectByUid(cal.id, 'r')!.raw;
+    const split = editEvent(stored, 'r', at('2026-11-14T15:00:00Z'), 'following', { start: '2026-11-14T14:00:00Z', end: '2026-11-14T15:00:00Z' }, ctx, () => 'r2');
+    store.putNative(cal.id, href(cal, 'r2'), split.created!.raw, null, opts);
+    etag = store.putNative(cal.id, href(cal, 'r'), split.raw, etag, opts).etag;
+    expect(store.objectByUid(cal.id, 'r')!.raw).toMatch(/UNTIL=/);
+    expect(list().filter((d) => d >= '11-14')).toEqual(['11-14T14:00', '11-15T14:00', '11-16T14:00', '11-17T14:00', '11-18T14:00']);
+    // this, deleted: an EXDATE; all: the series gone
+    stored = store.objectByUid(cal.id, 'r')!.raw;
+    etag = store.putNative(cal.id, href(cal, 'r'), deleteFromEvent(stored, 'r', at('2026-11-10T15:00:00Z'), 'this', ctx)!, etag, opts).etag;
+    expect(list()).not.toContain('11-10T15:00');
+    expect(list().filter((d) => d < '11-14')).toEqual(['11-09T15:00', '11-11T17:00', '11-12T15:00', '11-13T15:00']);
+    expect(deleteFromEvent(store.objectByUid(cal.id, 'r')!.raw, 'r', 0, 'all', ctx)).toBeNull();
+    store.deleteNative(cal.id, href(cal, 'r'), etag);
+    expect(list()).toHaveLength(5);
+  });
+});

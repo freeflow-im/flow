@@ -4,10 +4,11 @@
 // read from here and a recurring master expanded here (ical.ts), never fetched. Every list and sync query is written so
 // `EXPLAIN QUERY PLAN` shows it on an index (store.test.ts, on a production-sized table): the 2026-11-04 Mail outage was a
 // GROUP BY over an unindexed join. Written against the small `Sql` interface so the tests run it on node:sqlite.
+import { GRANTS_DDL } from '@flow/shared/grants';
 import type { Sql } from '../imap/cache';
 import { LONG_MS, expand, isoOf, parseObject, ridText, type EventData, type ParsedEvent, type Rules } from './ical';
 import type { RemoteCalendar } from './drivers/caldav';
-import { eventIdOf, occurrenceIdOf } from './rules';
+import { NATIVE_HREF, conflict, eventIdOf, nativeCalendarId, notFound, occurrenceIdOf } from './rules';
 
 export type { Sql };
 
@@ -37,9 +38,11 @@ export const DDL = [
     changed INTEGER NOT NULL DEFAULT 0, deleted INTEGER NOT NULL DEFAULT 0, error TEXT)`,
   `CREATE TABLE IF NOT EXISTS rate_limit_windows (key TEXT PRIMARY KEY, window_start INTEGER NOT NULL, count INTEGER NOT NULL DEFAULT 1)`,
   `CREATE TABLE IF NOT EXISTS calendar_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+  // Grants on native calendars (platform.md §4.3, phase 4.1): kinds `calendar` (the container) and `event`.
+  ...GRANTS_DDL,
 ];
 /** Every table of the object, for the move between objects (the object's `exportRows`, `importRows`). */
-export const CALENDAR_TABLES = ['accounts', 'calendars', 'objects', 'events', 'sync_runs', 'rate_limit_windows', 'calendar_state'] as const;
+export const CALENDAR_TABLES = ['accounts', 'calendars', 'objects', 'events', 'sync_runs', 'rate_limit_windows', 'calendar_state', 'grants'] as const;
 const SYNC_RUNS_KEEP = 200;
 /**
  * Columns added after the first release, each added once (ALTER fails when it is already there), with what runs once after.
@@ -86,6 +89,14 @@ export const objectByUidSql = 'SELECT calendar_id, href, uid, etag, raw FROM obj
 export const eventsOfUidSql = `SELECT ${COLS} FROM events INDEXED BY events_uid WHERE calendar_id = ? AND uid = ?`;
 export const deleteEventsSql = 'DELETE FROM events INDEXED BY events_href WHERE calendar_id = ? AND href = ?';
 export const dueSql = 'SELECT * FROM calendars WHERE last_synced < ? ORDER BY supports_sync DESC, last_synced';
+
+/** A native object's etag: a counter that moves on with every write, and a hash of the text (FNV-1a). */
+function nativeEtag(previous: string | null, raw: string): string {
+  const n = (Number(/^"(\d+)-/.exec(previous ?? '')?.[1]) || 0) + 1;
+  let h = 0x811c9dc5;
+  for (let i = 0; i < raw.length; i++) h = Math.imul(h ^ raw.charCodeAt(i), 0x01000193) >>> 0;
+  return `"${n}-${h.toString(16).padStart(8, '0')}"`;
+}
 
 const likeOf = (q: string) => `%${q.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 const escapeLike = (sql: string) => sql.replaceAll('search LIKE ?', "search LIKE ? ESCAPE '\\'");
@@ -176,6 +187,22 @@ export class CalendarStore {
     }
   }
 
+  /**
+   * The account's own calendar (phase 4.1), made on first use: one `native` account (the owner's address and name, no
+   * server, no secret) and its calendar "Calendar", the default when no other calendar is. Null when it is there already.
+   */
+  ensureNative(owner: { accountId: string; email: string; displayName: string }): CalendarRow | null {
+    if (this.sql.exec("SELECT 1 FROM accounts WHERE kind = 'native'").toArray().length) return null;
+    const now = Date.now(), accountId = crypto.randomUUID(), id = nativeCalendarId(owner.accountId);
+    const email = owner.email.trim().toLowerCase();
+    this.sql.exec(`INSERT INTO accounts (id, kind, email, display_name, server, secret, key_id, status, created_at, calendars_at) VALUES (?, 'native', ?, ?, '', X'', '', 'ok', ?, ?)`,
+      accountId, email, owner.displayName.trim() || email.split('@')[0] || 'Calendar', now, now);
+    const cals = this.calendars();
+    this.sql.exec(`INSERT INTO calendars (id, account_id, href, name, role, is_default, supports_sync, last_synced, position, created_at, reparse) VALUES (?, ?, ?, 'Calendar', 'owner', ?, 0, ?, ?, ?, 0)`,
+      id, accountId, `${NATIVE_HREF}${id}`, cals.some((c) => c.is_default) ? 0 : 1, now, Math.max(0, ...cals.map((c) => c.position + 1)), now);
+    return this.calendar(id);
+  }
+
   // ---- objects ------------------------------------------------------------------------------------------------
 
   etags(calendarId: string): Map<string, string> {
@@ -213,6 +240,31 @@ export class CalendarStore {
     this.sql.exec('UPDATE calendars SET reparse = 0 WHERE id = ?', calendarId);
     return rows.length;
   }
+  objectAt(calendarId: string, href: string): ObjectRow | null {
+    return this.sql.exec<ObjectRow & Record<string, SqlStorageValue>>('SELECT calendar_id, href, uid, etag, raw FROM objects WHERE calendar_id = ? AND href = ?', calendarId, href).toArray()[0] ?? null;
+  }
+
+  /**
+   * A write to a native calendar, where this store is the server: `ifMatch` null creates (an object already at the href is
+   * a conflict), else it must be the stored etag (If-Match). The object is indexed as a synced one is. Answers the new
+   * etag and the event's UID.
+   */
+  putNative(calendarId: string, href: string, raw: string, ifMatch: string | null, opts: { me: Set<string>; zone: string }): { etag: string; uid: string | null } {
+    const have = this.objectAt(calendarId, href);
+    if (ifMatch === null ? have : have?.etag !== ifMatch) throw conflict(have ? 'The event changed since it was loaded; look again' : 'The event is no longer there; look again');
+    const etag = nativeEtag(have?.etag ?? null, raw);
+    const parsed = this.putObject(calendarId, href, etag, raw, opts);
+    return { etag, uid: parsed[0]?.uid ?? null };
+  }
+  /** A native object deleted (If-Match `ifMatch` when given); answers what was there. */
+  deleteNative(calendarId: string, href: string, ifMatch: string | null): ObjectRow {
+    const have = this.objectAt(calendarId, href);
+    if (!have) throw notFound('no such event');
+    if (ifMatch && have.etag !== ifMatch) throw conflict();
+    this.deleteObject(calendarId, href);
+    return have;
+  }
+
   deleteObject(calendarId: string, href: string): void {
     this.sql.exec(deleteEventsSql, calendarId, href);
     this.sql.exec('DELETE FROM objects WHERE calendar_id = ? AND href = ?', calendarId, href);

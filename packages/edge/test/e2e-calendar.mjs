@@ -30,7 +30,8 @@ const A=await signup(`cal-${tag}@example.com`,'Ann'),Bo=await signup(`cal-other-
 t('sign up',A.token&&Bo.token);
 // Calendars are an account's (platform.md §3.6): each person gets an organization, and someone in none is refused.
 const org=async(u,n)=>(await api(u.token,'POST','/v1/workspaces',{name:`${n} ${tag}`,slug:`${n.toLowerCase()}-${tag}`})).j?.id;
-t('each with an organization',!!(await org(A,'Calann'))&&!!(await org(Bo,'Calbo')));
+const ORGA=await org(A,'Calann');
+t('each with an organization',!!ORGA&&!!(await org(Bo,'Calbo')));
 {const Cy=await signup(`cal-none-${tag}@example.com`,'Cy');const x=await api(Cy.token,'GET','/v1/calendar/accounts');t('someone in no organization is refused, no_account',x.s===403&&x.j.error?.code==='no_account',x.s+' '+JSON.stringify(x.j));}
 
 let r=await api(null,'GET','/v1/calendar/accounts');t('no session refused',r.s===401,r.s);
@@ -42,8 +43,12 @@ r=await api(null,'GET','/v1/calendar/google/start');t('Google: the start needs a
 r=await api(A.token,'GET','/v1/calendar/google/start');t('Google: the start answers a consent URL, or google_disabled with no client secret',(r.s===200&&r.j.url?.startsWith('https://accounts.google.com/'))||(r.s===503&&r.j.error?.code==='google_disabled'),r.s+' '+String(r.j.url??JSON.stringify(r.j)).slice(0,60));
 let cb=await fetch(B+'/v1/calendar/google/callback?code=x&state=forged',{redirect:'manual'});t('Google: a forged state goes back with ?error=expired',cb.status===302&&/[?&]error=expired/.test(cb.headers.get('location')??''),cb.status+' '+cb.headers.get('location'));
 r=await api(A.token,'GET','/v1/calendar/providers?email=me@example.com');t('no preset for an unknown domain',r.s===200&&r.j===null,JSON.stringify(r.j));
-r=await api(A.token,'GET','/v1/calendar/accounts');t('no accounts yet',r.s===200&&r.j.accounts?.length===0,JSON.stringify(r.j));
-r=await api(A.token,'GET','/v1/calendar/calendars');t('no calendars yet',r.j.calendars?.length===0);
+// Everyone has a native calendar (phase 4.1): its account has no server; nothing is connected yet.
+const isNative=c=>/^n\./.test(c.id);
+r=await api(A.token,'GET','/v1/calendar/accounts');t('no connected accounts yet, one native one',r.s===200&&r.j.accounts?.length===1&&r.j.accounts[0].kind==='native'&&!r.j.accounts[0].server,JSON.stringify(r.j));
+const ANN_ADDR=r.j.accounts?.[0]?.email;
+r=await api(A.token,'GET','/v1/calendar/calendars');const NATIVE=r.j.calendars?.[0];
+t('a native default calendar, nothing else yet',r.j.calendars?.length===1&&isNative(NATIVE)&&NATIVE.isDefault&&NATIVE.name==='Calendar'&&NATIVE.role==='owner'&&!!NATIVE.syncedAt,JSON.stringify(r.j));
 
 // ---- Radicale, as another app left it: two calendars, a weekly series in New York time with an EXDATE and a moved
 // occurrence (Ann invited, not answered yet), and an all-day event.
@@ -76,8 +81,8 @@ const cals=r.j.calendars??[];const work=cals.find(c=>c.name==='Work'),home=cals.
 t('list calendars, with their names and colours',r.s===200&&work&&home&&work.color==='#ff9500'&&home.color==='#34c759'&&work.accountId===ACC&&work.role==='owner',JSON.stringify(cals).slice(0,200));
 t('one default calendar',cals.filter(c=>c.isDefault).length===1,JSON.stringify(cals.map(c=>[c.name,c.isDefault])));
 t('synced on connecting',cals.every(c=>c.syncedAt),JSON.stringify(cals.map(c=>c.syncedAt)));
-r=await api(A.token,'GET','/v1/calendar/accounts');t('list accounts',r.j.accounts?.length===1&&r.j.accounts[0].server?.url===DAV+'/'&&!JSON.stringify(r.j).includes('s3cret-pw'),JSON.stringify(r.j).slice(0,200));
-r=await api(Bo.token,'GET','/v1/calendar/calendars');t("someone else sees none of it",r.j.calendars?.length===0);
+r=await api(A.token,'GET','/v1/calendar/accounts');t('list accounts',r.j.accounts?.length===2&&r.j.accounts.find(a=>a.kind==='caldav')?.server?.url===DAV+'/'&&!JSON.stringify(r.j).includes('s3cret-pw'),JSON.stringify(r.j).slice(0,200));
+r=await api(Bo.token,'GET','/v1/calendar/calendars');t("someone else sees none of it (only their own native one)",r.j.calendars?.length===1&&isNative(r.j.calendars[0])&&r.j.calendars[0].id!==NATIVE.id);
 r=await api(Bo.token,'GET',`/v1/calendar/events/${enc(work.id+':'+SERIES)}`);t("nor opens an event",r.s===404,r.s);
 
 // ---- a calendar added elsewhere after connecting: Refresh calendars lists it (the alarm does every 15 minutes)
@@ -177,7 +182,7 @@ t('free/busy: my own from the cache, others unknown on Radicale',r.s===200&&mine
 
 // ---- the alarm: an event put straight into Radicale shows up by itself; one deleted there goes
 let dbg=await api(A.token,'GET','/v1/calendar/debug/sync');
-t('debug: the calendars sync by sync-collection, and the alarm is set',dbg.j.calendars?.every(c=>c.supportsSync&&c.hasToken)&&typeof dbg.j.nextAlarmAt==='number'&&dbg.j.runs?.length>0,JSON.stringify(dbg.j).slice(0,200));
+t('debug: the calendars sync by sync-collection, and the alarm is set',dbg.j.calendars?.filter(c=>!isNative(c)).every(c=>c.supportsSync&&c.hasToken)&&typeof dbg.j.nextAlarmAt==='number'&&dbg.j.runs?.length>0,JSON.stringify(dbg.j).slice(0,200));
 const OUTSIDE=`outside-${tag}`;
 res=await dav('PUT',`${WORK}${OUTSIDE}.ics`,ics('BEGIN:VEVENT',`UID:${OUTSIDE}`,'DTSTAMP:20261101T000000Z','DTSTART:20261106T090000Z','DTEND:20261106T100000Z','SUMMARY:Made elsewhere','END:VEVENT'),{'content-type':'text/calendar'});
 t('another app adds an event on the server',res.status===201,res.status);
@@ -197,6 +202,56 @@ t('a timing line per request, the route without ids',lines.some(l=>/\[calendar\]
 t('no address, summary or id in a log line',!lines.some(l=>l.includes(EMAIL)||l.includes(tag)||l.includes(work.id)||l.includes('Lunch')));
 r=await api(A.token,'GET',`/v1/calendar/events/${enc(LUNCH2.id)}`);const timingHeader=r.h.get('x-calendar-timing');t('the timing header (local dev only)',/^server=\d+$/.test(timingHeader??''),timingHeader);
 r=await api(A.token,'DELETE',`/v1/calendar/accounts/${ACC}`);t('forget the account',r.s===200&&r.j.ok);
-r=await api(A.token,'GET','/v1/calendar/calendars');t('its calendars go with it',r.j.calendars?.length===0);
+r=await api(A.token,'GET','/v1/calendar/calendars');t('its calendars go with it; the native one stays, the default again',r.j.calendars?.length===1&&r.j.calendars[0].id===NATIVE.id&&r.j.calendars[0].isDefault,JSON.stringify(r.j.calendars));
 r=await api(A.token,'GET',`/v1/calendar/events?${W}`);t('and its events',r.j.events?.length===0);
+r=await api(A.token,'DELETE',`/v1/calendar/accounts/${(await api(A.token,'GET','/v1/calendar/accounts')).j.accounts?.[0]?.id}`);t('the native account cannot be removed',r.s===400,r.s);
+
+// ---- native calendars (platform phase 4.1): the store is the object, events on the bus, grants, busy time for members
+const NW='from=2026-12-01T00:00:00Z&to=2026-12-31T00:00:00Z';
+r=await api(A.token,'POST','/v1/calendar/events',{summary:`Native ${tag}`,start:'2026-12-03T15:00:00Z',end:'2026-12-03T16:00:00Z'});
+t('native: an event with no calendarId lands on the native calendar',r.s===201&&r.j.event?.calendarId===NATIVE.id&&/^"1-/.test(r.j.event.etag),r.s+' '+JSON.stringify(r.j).slice(0,200));
+const NEV=r.j.event;
+r=await api(A.token,'GET',`/v1/calendar/events?${NW}`);t('native: the window lists it',r.j.events?.length===1&&r.j.events[0].id===NEV.id,JSON.stringify(r.j).slice(0,160));
+r=await api(A.token,'PATCH',`/v1/calendar/events/${enc(NEV.id)}`,{summary:'stale',etag:'"0-0"'});t('native: an old etag is a conflict',r.s===409&&r.j.error?.code==='conflict',r.s);
+r=await api(A.token,'PATCH',`/v1/calendar/events/${enc(NEV.id)}`,{start:'2026-12-03T16:00:00Z',end:'2026-12-03T17:00:00Z',etag:NEV.etag});
+t('native: patch it',r.s===200&&r.j.event?.start==='2026-12-03T16:00:00.000Z'&&r.j.event.etag!==NEV.etag,r.s+' '+JSON.stringify(r.j).slice(0,160));
+r=await api(A.token,'POST','/v1/calendar/events',{summary:'Scratch',start:'2026-12-04T10:00:00Z',end:'2026-12-04T11:00:00Z'});const SCRATCH=r.j.event;
+r=await api(A.token,'DELETE',`/v1/calendar/events/${enc(SCRATCH.id)}`);t('native: delete one',r.s===200&&r.j.ok,r.s);
+r=await api(A.token,'GET',`/v1/calendar/events?${NW}`);t('native: gone from the window',r.j.events?.length===1,r.j.events?.length);
+const refOf=e=>typeof e.ref==='string'?e.ref:e.ref&&`${e.ref.organizationId}/${e.ref.app}/${e.ref.kind}/${e.ref.id}`;
+r=await api(A.token,'GET','/v1/events?since=0&types=calendar.*');
+const added=(r.j.events??[]).find(e=>e.type==='calendar.event.added'&&e.data?.eventId===NEV.eventId);
+t('native: her read shows calendar.event.added with its ref',r.s===200&&added&&refOf(added)===`${ORGA}/calendar/event/${NEV.eventId}`&&added.data.calendarId===NEV.calendarId&&added.data.ownerAccountId&&/\/calendar\/week\/2026-12-03\?event=/.test(added.data.url),r.s+' '+JSON.stringify(r.j).slice(0,240));
+t('native: and updated, cancelled',(r.j.events??[]).some(e=>e.type==='calendar.event.updated'&&e.data?.eventId===NEV.eventId)&&(r.j.events??[]).some(e=>e.type==='calendar.event.cancelled'&&e.data?.summary==='Scratch'),JSON.stringify((r.j.events??[]).map(e=>e.type)));
+// Bob, in Ann's organization
+r=await api(A.token,'POST',`/v1/workspaces/${ORGA}/invites`,{email:`cal-bob-${tag}@example.com`});const invite=(r.j.inviteUrl??'').split('/').pop();
+const Bob=await signup(`cal-bob-${tag}@example.com`,'Bob');
+r=await api(Bob.token,'POST','/v1/invites/accept',{token:invite});t('native: Bob joins her organization',r.s<300&&!!Bob.token,r.s+' '+JSON.stringify(r.j).slice(0,100));
+const NWIN=`/v1/calendar/events?${NW}&calendars=${NATIVE.id}`;
+r=await api(Bob.token,'GET',NWIN);t('native: Bob cannot read her calendar (404)',r.s===404,r.s+' '+JSON.stringify(r.j));
+r=await api(Bob.token,'GET',`/v1/calendar/events/${enc(NEV.id)}`);t('native: nor one event',r.s===404,r.s);
+r=await api(Bob.token,'GET','/v1/events?since=0&types=calendar.*');t('native: nor its events on the bus',r.s===200&&!(r.j.events??[]).some(e=>e.data?.calendarId===NATIVE.id),JSON.stringify(r.j).slice(0,120));
+// Bob's account id, from his own native calendar's id (n.<accountId>.<random>).
+const bobId=(await api(Bob.token,'GET','/v1/calendar/calendars')).j.calendars?.[0]?.id?.split('.')[1];
+r=await api(A.token,'PUT',`/v1/calendar/calendars/${NATIVE.id}/grants`,{principal:`link:x`,role:'viewer'});t('native: a link is not_supported',r.s===400&&r.j.error?.code==='not_supported',r.s+' '+JSON.stringify(r.j));
+r=await api(A.token,'PUT',`/v1/calendar/calendars/${NATIVE.id}/grants`,{principal:`account:${bobId}`,role:'viewer'});
+t('native: Ann grants Bob viewer',r.s===200&&r.j.role==='owner'&&r.j.grants?.[0]?.principal===`account:${bobId}`&&r.j.grants[0].role==='viewer',r.s+' '+JSON.stringify(r.j).slice(0,200));
+r=await api(Bob.token,'GET','/v1/calendar/shared');
+t('native: Bob\'s shared calendars list it, with its name, colour and his role',r.s===200&&r.j.calendars?.length===1&&r.j.calendars[0].id===NATIVE.id&&r.j.calendars[0].name==='Calendar'&&r.j.calendars[0].role==='viewer'&&!!r.j.calendars[0].color,r.s+' '+JSON.stringify(r.j).slice(0,200));
+r=await api(Bob.token,'GET',NWIN);t('native: his window read returns her event',r.s===200&&r.j.events?.length===1&&r.j.events[0].id===NEV.id,r.s+' '+JSON.stringify(r.j).slice(0,160));
+r=await api(Bob.token,'GET','/v1/events?since=0&types=calendar.event.added');t('native: and the bus shows him its events now',(r.j.events??[]).some(e=>e.data?.eventId===NEV.eventId),JSON.stringify(r.j).slice(0,120));
+r=await api(Bob.token,'POST','/v1/calendar/events',{calendarId:NATIVE.id,summary:'By Bob',start:'2026-12-05T10:00:00Z',end:'2026-12-05T11:00:00Z'});t('native: a viewer cannot create (403)',r.s===403,r.s+' '+JSON.stringify(r.j));
+r=await api(Bob.token,'PUT',`/v1/calendar/calendars/${NATIVE.id}/grants`,{principal:'org',role:'viewer'});t('native: nor share',r.s===403,r.s);
+await api(A.token,'PUT',`/v1/calendar/calendars/${NATIVE.id}/grants`,{principal:`account:${bobId}`,role:'editor'});
+r=await api(Bob.token,'POST','/v1/calendar/events',{calendarId:NATIVE.id,summary:'By Bob',start:'2026-12-05T10:00:00Z',end:'2026-12-05T11:00:00Z'});t('native: an editor can',r.s===201&&r.j.event?.calendarId===NATIVE.id,r.s+' '+JSON.stringify(r.j).slice(0,160));
+r=await api(Bob.token,'PATCH',`/v1/calendar/events/${enc(r.j.event?.id)}`,{summary:'By Bob (moved)',start:'2026-12-05T12:00:00Z',end:'2026-12-05T13:00:00Z'});t('native: and change it',r.s===200&&r.j.event?.summary==='By Bob (moved)',r.s);
+r=await api(A.token,'GET',`/v1/calendar/events?${NW}`);t('native: Ann sees it on her calendar',r.j.events?.some(e=>e.summary==='By Bob (moved)'));
+r=await api(Bob.token,'POST','/v1/calendar/freebusy',{emails:[ANN_ADDR,'nobody@else.test'],from:'2026-12-01T00:00:00Z',to:'2026-12-10T00:00:00Z'});
+const annBusy=r.j.busy?.find(b=>b.email===ANN_ADDR);
+t('native: free/busy for Ann\'s address from Bob: her busy intervals',r.s===200&&JSON.stringify(annBusy?.intervals)===JSON.stringify([['2026-12-03T16:00:00.000Z','2026-12-03T17:00:00.000Z'],['2026-12-05T12:00:00.000Z','2026-12-05T13:00:00.000Z']])&&r.j.unknown?.includes('nobody@else.test'),JSON.stringify(r.j).slice(0,240));
+r=await api(Bo.token,'POST','/v1/calendar/freebusy',{emails:[ANN_ADDR],from:'2026-12-01T00:00:00Z',to:'2026-12-10T00:00:00Z'});t('native: not for someone of another organization',r.j.unknown?.includes(ANN_ADDR),JSON.stringify(r.j));
+r=await api(A.token,'DELETE',`/v1/calendar/calendars/${NATIVE.id}/grants/${enc(`account:${bobId}`)}`);t('native: Ann revokes',r.s===200&&r.j.grants?.length===0,r.s+' '+JSON.stringify(r.j));
+r=await api(Bob.token,'GET',NWIN);t('native: after the revoke Bob gets 404 again',r.s===404,r.s);
+r=await api(Bob.token,'GET','/v1/calendar/shared');t('native: and it is no longer shared with him',r.j.calendars?.length===0,JSON.stringify(r.j));
+r=await api(Bob.token,'GET','/v1/events?since=0&types=calendar.*');t('native: nor on his bus',!(r.j.events??[]).some(e=>e.data?.calendarId===NATIVE.id),JSON.stringify(r.j).slice(0,120));
 console.log(`\n${pass} passed, ${fail} failed`);process.exit(fail?1:0);

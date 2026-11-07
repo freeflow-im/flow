@@ -56,7 +56,9 @@ const mk=`<?xml version="1.0" encoding="utf-8"?><C:mkcalendar xmlns:D="DAV:" xml
 let res=await dav('MKCALENDAR',CAL,mk,{'content-type':'application/xml'});t('Radicale: make the calendar',res.status===201,res.status);
 r=await api(A.token,'POST','/v1/calendar/accounts',{email:ME,displayName:'Scott Persinger',password:'x',server:{url:DAV+'/',username:USER}});
 t('connect the calendar account (Radicale)',r.s===201&&r.j.account?.id,r.s+' '+JSON.stringify(r.j).slice(0,160));
-const work=r.j.calendars?.find(c=>c.name==='Work');t('its calendar, the default one',work?.isDefault,JSON.stringify(r.j.calendars));
+const work=r.j.calendars?.find(c=>c.name==='Work');
+// The person's own native calendar (phase 4.1) was the default; this run puts invitations on the Radicale one.
+r=await api(A.token,'PATCH',`/v1/calendar/calendars/${work?.id}`,{isDefault:true});t('its calendar, made the default one',r.j.calendar?.isDefault,JSON.stringify(r.j));
 
 // ---- an invitation arrives
 await send(`Invitation: Planning ${tag}`,'REQUEST',ics('METHOD:REQUEST',...event(0,'CONFIRMED')));
@@ -69,7 +71,7 @@ const inviteBody=(m,part,extra={})=>({account:MACC,messageId:`${MACC}:INBOX:${m.
 r=await api(A.token,'POST','/v1/calendar/invites',inviteBody(msg,cal.index));
 t('the card: an invitation, not on the calendar yet',r.s===200&&r.j.action==='request'&&r.j.onCalendar===null&&r.j.organizerIsMe===false,r.s+' '+JSON.stringify(r.j).slice(0,200));
 t('what, when, where, who',r.j.event?.summary===`Planning ${tag}`&&r.j.event.start==='2026-11-12T15:00:00.000Z'&&r.j.event.location==='Room 4'&&r.j.event.organizer?.email===ANN&&r.j.event.attendees?.find(a=>a.self)?.email===ME&&r.j.event.myResponse==='needs-action',JSON.stringify(r.j.event).slice(0,200));
-t('the calendars it can go on',r.j.calendars?.length===1&&r.j.calendars[0].id===work.id,JSON.stringify(r.j.calendars));
+t('the calendars it can go on: the Radicale one, the default, and the native one',r.j.calendars?.length===2&&r.j.calendars.find(c=>c.isDefault)?.id===work.id&&r.j.calendars.some(c=>/^n\./.test(c.id)),JSON.stringify(r.j.calendars));
 const ics2=msg.attachments.find(a=>a.filename==='invite.ics');
 r=await api(A.token,'POST','/v1/calendar/invites',inviteBody(msg,ics2.index));t('the .ics file reads the same',r.j.action==='request'&&r.j.event?.summary===`Planning ${tag}`,JSON.stringify(r.j).slice(0,120));
 r=await api(A.token,'POST','/v1/calendar/invites',{account:MACC,messageId:{folder:'INBOX',uid:msg.uid},part:cal.index});t('the message named by folder and UID',r.j.action==='request');

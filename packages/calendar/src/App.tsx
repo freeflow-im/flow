@@ -333,7 +333,7 @@ export function App() {
       )}
       {ask && <ScopeDialog action={ask.action} allowThis={ask.allowThis} onCancel={() => { ask.cancel(); setAsk(null); }} onChoose={(s) => { setAsk(null); ask.run(s); }} />}
       {dialog?.kind === 'add' && <AddAccountDialog kind={dialog.connect} onClose={() => setDialog(null)} onAdded={() => { setDialog(null); setToast('Connected. Your events are on their way.'); }} />}
-      {dialog?.kind === 'settings' && <AccountSettingsDialog accounts={accounts.data ?? []} initialId={dialog.accountId} focusPassword={dialog.focusPassword} onClose={() => setDialog(null)} onAdd={() => setDialog({ kind: 'add', connect: 'icloud' })} />}
+      {dialog?.kind === 'settings' && <AccountSettingsDialog accounts={(accounts.data ?? []).filter((a) => a.kind !== 'native')} initialId={dialog.accountId} focusPassword={dialog.focusPassword} onClose={() => setDialog(null)} onAdd={() => setDialog({ kind: 'add', connect: 'icloud' })} />}
       {toast && (
         <div role="status" className={cn('fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-lg bg-[#323232] px-4 py-3 text-[14px] text-white shadow-lg')}>
           {typeof toast !== 'string' && <Loader2 className="size-4 animate-spin" aria-hidden />}

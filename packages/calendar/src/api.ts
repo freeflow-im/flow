@@ -6,7 +6,8 @@ import { readActiveOrganization } from './suite';
 export type AccountStatus = 'ok' | 'auth_failed' | 'connect_failed';
 export interface CalendarAccount {
   id: string;
-  kind: 'caldav' | 'google';
+  /** `native`: the account's own FreeFlow calendar (no server, no account form). */
+  kind: 'caldav' | 'google' | 'native';
   email: string;
   displayName: string;
   server?: { url: string; username: string };

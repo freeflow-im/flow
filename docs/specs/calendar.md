@@ -556,3 +556,53 @@ one of its buttons presses that button, not Edit).
 - **Not in this PR**: a REPLY that arrives is shown, not applied to the organizer's copy on a non-scheduling server (the
   guest's answer shows there only when the server or another client records it); a COUNTER or REFRESH; a Sent copy of iMIP
   mail; an `.ics` without METHOD (PUBLISH) offered as "Add to calendar"; Calendar's popover saying when an emailed answer failed.
+
+## 15. Native calendars (platform phase 4.1, 2026-11-06)
+
+What `platform.md` §3.5 and phase 4 item 1 call the native kind, as built: calendars whose store is the Calendar object itself.
+
+- **The native account and its calendar**: on an account's first request its Calendar object makes one `accounts` row of kind
+  `native` (the account's address and name, `server` `''`, an empty `secret`, `status` `ok`) and one calendar, "Calendar",
+  `href` `native:<id>`, `supports_sync` 0, the default when no other calendar is (`store.ts` `ensureNative`). Its id is
+  `n.<ownerAccountId>.<12 hex>` (`rules.ts` `nativeCalendarId`, `nativeOwnerOf`), so a route finds the owner's object from the
+  id alone; event ids stay `<calendarId>:<uid>`. The native account cannot be removed and has no password or server
+  (`PATCH` refuses them; refresh lists its one calendar). The alarm, the relisting and the sync skip it. The client lists it
+  without the account menu.
+- **The write path**: `putAndStore` and `removeAt` branch on the account kind. For a native calendar the iCalendar is made
+  by `ical.ts` as for CalDAV (a new UID, DTSTAMP, SEQUENCE from 0; edits and the `this` / `following` / `all` scopes on the
+  stored text), and `store.ts` `putNative` / `deleteNative` write the `objects` row and index its `events` rows as a synced
+  object is, with an etag of their own (`"<n>-<fnv1a>"`, `n` moving on per write); `ifMatch` null creates (an object already
+  there is `conflict`), else it must equal the stored etag (409 otherwise). No driver call. Reads (the window, occurrences,
+  search) are unchanged. Guests on a native event are stored but not told: no iMIP is sent for a native calendar (scheduling
+  between accounts is phase 4.2). An invitation from Mail can still be answered onto it.
+- **Events on the bus**: each native write publishes into the organization's Events object (`EVENTS` binding)
+  `calendar.event.added`, `.updated` or `.cancelled`, with `ref` `<org>/calendar/event/<eventId>`, audience
+  `ref:<org>/calendar/calendar/<calendarId>`, the caller's account as `actor`, and `data { calendarId, eventId, uid, summary,
+  start, end, allDay, ownerAccountId, url }` (`url`: `/calendar/week/<date>?event=<id>` on `WEB_URL_BASE`). The owner sees
+  them by `data.ownerAccountId`, a grantee through the share index. Connected calendars publish nothing yet.
+- **Grants** (`@flow/shared` grants; `GRANTS_DDL` in the object's DDL, `grants` in `CALENDAR_TABLES`): kinds `calendar` (the
+  container) and `event`; the owner column is the object's account. `GET /v1/calendar/calendars/:id/grants` → `{ grants, role }`
+  (viewer+), `PUT …/grants` `{ principal, role: viewer | editor | manager }` and `DELETE …/grants/:principal` (manager+);
+  `account:`, `channel:` and `org`; `link:` is 400 `not_supported`, as is a connected calendar. Each change goes to the Org
+  object's share index by binding (`recordShare` / `revokeShare`, `kind: 'calendar'`, the calendar's name as title, the
+  address `/calendar/?calendar=<id>`, `shares.ts` `calendarAddress`), which also posts the DM line or channel card.
+- **Forwarding**: `routes/calendar.ts` `sharedOwnerOf` reads a native calendar id from the path (`/events/<id>…`,
+  `/calendars/<id>…`), the `calendars` query or a JSON body's `calendarId`; one of another account goes to
+  `CALENDAR.idFromName(ownerAccountId).handleShared(request, caller, channelIds)` (the reader's channels from the Org
+  object's `channelIdsOf`). `handle` keeps the owner guard (`wrong_account`) for the owner's own requests; `handleShared`
+  takes a member of the same organization as a reader, reaches only the window, single events (read, create, change,
+  delete) and the grants routes, and checks `effectiveRole` on the calendar: viewer reads, editor creates and changes,
+  manager shares; no role is 404, too low a role 403 `forbidden`. A reader's window must name the calendars. The owner's
+  alarm and activity are not touched by a reader.
+- **Shared with me**: `GET /v1/calendar/shared` → `{ calendars: [{ id, name, color, role, ownerAccountId, grantedBy, url }] }`:
+  one call to the share index (`shared-with-me` rows of kind `calendar`), then one RPC per owner's object (`sharedCalendars`)
+  for the name, colour and the reader's current role. The index leaves out `org` grants (they are the organization's, not
+  shared with one reader), so a calendar shared only with the organization is not listed there; it is readable by id.
+- **Free/busy**: `POST /v1/calendar/freebusy` resolves each address that is not the person's own through the directory
+  (`accountByAddress`); an account of the same organization answers from its own object (`busy(from, to)` RPC: start and end
+  of every native event not transparent, cancelled or declined, merged; no details). The rest take the CalDAV path or are `unknown`.
+- **Tests**: `store.test.ts` (the native account once, create / update with a conflict / delete, the scopes and their
+  expansion), `native.test.ts` (the events published, grants: none 404, viewer reads and cannot write, editor writes, a
+  manager by channel shares, another organization 404, a revoke 404; the forwarding's id finding), and the native section of
+  `test/e2e-calendar.mjs` (Ann's default calendar, create with no `calendarId`, window, patch, delete, her bus read, Bob in her
+  organization 404 → viewer → `shared` and the forwarded window → 403 on create → editor creates → free/busy → revoke → 404).

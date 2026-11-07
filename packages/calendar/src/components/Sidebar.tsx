@@ -41,7 +41,7 @@ export function Sidebar(p: SidebarProps) {
         return (
           <section key={a.id} className="mt-3 px-2">
             <h2 className="flex items-center justify-between px-2 py-1 text-[12px] font-medium uppercase tracking-[.06em] text-muted">
-              <button type="button" className="min-w-0 truncate text-left hover:text-ink" title={a.email} onClick={() => p.onAccount(a.id)}>{a.displayName || a.email}</button>
+              {a.kind === 'native' ? <span className="min-w-0 truncate" title={a.email}>{a.displayName || a.email}</span> : <button type="button" className="min-w-0 truncate text-left hover:text-ink" title={a.email} onClick={() => p.onAccount(a.id)}>{a.displayName || a.email}</button>}
               {a.status !== 'ok' && <span className="ml-2 shrink-0 rounded bg-warn-bg px-1.5 text-[11px] normal-case tracking-normal text-ink">{a.status === 'auth_failed' ? 'Password needed' : 'Not reachable'}</span>}
             </h2>
             <ul>
@@ -73,7 +73,7 @@ export function Sidebar(p: SidebarProps) {
                       <DropdownMenuItem onSelect={() => p.onColor(c, null)}>The server's colour</DropdownMenuItem>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem disabled={c.role === 'reader' || c.isDefault} onSelect={() => p.onDefault(c)}>{c.role === 'reader' ? 'Read-only calendar' : c.isDefault ? 'New events go here' : 'Put new events here'}</DropdownMenuItem>
-                      <DropdownMenuItem onSelect={() => p.onAccount(a.id)}>Account settings…</DropdownMenuItem>
+                      {a.kind !== 'native' && <DropdownMenuItem onSelect={() => p.onAccount(a.id)}>Account settings…</DropdownMenuItem>}
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </li>

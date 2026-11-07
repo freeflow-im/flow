@@ -6,7 +6,8 @@
 import { Hono, type Context } from 'hono';
 import type { Calendar, GoogleGrant } from '../calendar/object';
 import { consentUrl, exchangeCode, openState, returnUrl, sealState, type GoogleClient, type Tokens } from '../calendar/google';
-import { TIMING_HEADER, providerFor, timingLine } from '../calendar/rules';
+import { TIMING_HEADER, nativeOwnerOf, providerFor, timingLine } from '../calendar/rules';
+import { parseReference } from '@flow/shared';
 import { googleProfile } from '../oauth';
 import { ApiError, unauthorized } from '../errors';
 import { resolveAccountCaller, resolveCaller, type AuthEnv } from './auth';
@@ -92,12 +93,66 @@ calendarRoutes.get('/v1/calendar/google/callback', async (c) => {
   return c.redirect(to, 302);
 });
 
+/**
+ * The owner of a native calendar (`n.<ownerAccountId>.<random>`, phase 4.1) that a request names, when it is another
+ * account: in the path (`/events/<calendarId>:…`, `/calendars/<calendarId>…`), the `calendars` query, or a JSON body's
+ * `calendarId`. Null when the request is about the caller's own calendars.
+ */
+export async function sharedOwnerOf(req: Request, self: string): Promise<string | null> {
+  const url = new URL(req.url);
+  const ids: string[] = [];
+  const named = /^\/v1\/calendar\/(?:events|calendars)\/([^/]+)/.exec(url.pathname)?.[1];
+  if (named) { try { ids.push(decodeURIComponent(named).split(':')[0]!); } catch { /* not an id */ } }
+  ids.push(...(url.searchParams.get('calendars') ?? '').split(','));
+  if ((req.method === 'POST' || req.method === 'PATCH') && (req.headers.get('content-type') ?? '').includes('json')) {
+    const body = await req.clone().json().catch(() => null) as { calendarId?: unknown } | null;
+    if (typeof body?.calendarId === 'string') ids.push(body.calendarId);
+  }
+  for (const id of ids) {
+    const owner = nativeOwnerOf(id.trim());
+    if (owner && owner !== self) return owner;
+  }
+  return null;
+}
+
+/**
+ * `GET /v1/calendar/shared` → `{ calendars: [{ id, name, color, role, ownerAccountId, grantedBy, url }] }`: the native
+ * calendars shared with the caller, from the organization's share index (one call), then each owner's object for the
+ * calendars' names, colours and the caller's role there (which drops any the owner has since unshared).
+ */
+calendarRoutes.get('/v1/calendar/shared', async (c) => {
+  const start = Date.now();
+  const who = await resolveAccountCaller(c, 'Calendar');
+  const org = who.account.organizationId;
+  const orgObject = c.env.ORG.get(c.env.ORG.idFromName(org));
+  const channelIds = await orgObject.channelIdsOf(who.user.id);
+  const byOwner = new Map<string, Map<string, { grantedBy: string; url: string }>>();
+  for (const s of await orgObject.sharedWith({ accountId: who.account.id, channelIds })) {
+    const ref = s.kind === 'calendar' ? parseReference(s.ref) : null;
+    const owner = ref?.app === 'calendar' && ref.kind === 'calendar' && ref.organizationId === org ? nativeOwnerOf(ref.id) : null;
+    if (!ref || !owner || owner === who.account.id) continue;
+    if (!byOwner.has(owner)) byOwner.set(owner, new Map());
+    byOwner.get(owner)!.set(ref.id, { grantedBy: s.grantedBy, url: s.url });
+  }
+  const calendars = (await Promise.all([...byOwner].map(async ([owner, items]) => {
+    const found = await c.env.CALENDAR.get(c.env.CALENDAR.idFromName(owner)).sharedCalendars(who, channelIds, [...items.keys()]).catch(() => []);
+    return found.map((x) => ({ ...x, ownerAccountId: owner, ...items.get(x.id)! }));
+  }))).flat();
+  c.header('Cache-Control', 'no-store');
+  console.log(timingLine('GET', c.req.url, 200, Date.now() - start, null));
+  return c.json({ calendars });
+});
+
 calendarRoutes.all('/v1/calendar/*', async (c) => {
   const start = Date.now();
   let status = 500, timing: string | null = null;
   try {
     const who = await resolveAccountCaller(c, 'Calendar');
-    const res = await c.env.CALENDAR.get(c.env.CALENDAR.idFromName(who.account.id)).handle(c.req.raw, who);
+    // A request about another account's native calendar goes to that account's object, as this reader (platform.md §4.4).
+    const owner = await sharedOwnerOf(c.req.raw, who.account.id);
+    const res = owner
+      ? await c.env.CALENDAR.get(c.env.CALENDAR.idFromName(owner)).handleShared(c.req.raw, who, await c.env.ORG.get(c.env.ORG.idFromName(who.account.organizationId)).channelIdsOf(who.user.id))
+      : await c.env.CALENDAR.get(c.env.CALENDAR.idFromName(who.account.id)).handle(c.req.raw, who);
     status = res.status;
     timing = res.headers.get(TIMING_HEADER);
     const out = new Response(res.body, res);
