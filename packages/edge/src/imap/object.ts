@@ -33,6 +33,7 @@ import { CATEGORIES, CATEGORY_HEADERS, classifyHeaders, effective, effectiveSql,
 import { GMAIL_NONE, GMAIL_REASON, GmailSearchError, recheckRows, sortBatch, type GmailSearcher, type RecheckResult } from './gmailTabs';
 import { compileMime, outgoingMessage, type OutgoingFile } from './drafts';
 import { calendarMessage, checkCalendarMail, type CalendarMail } from '../calendar/imip';
+import type { AccountDTO } from '@flow/shared';
 import type { CallerContext, ObjectBindings } from '../org/routes/compat';
 import type { ImportRow } from '../importing';
 import { exportTables, importTable, ownerMismatch, ownerRefusal } from '../perAccount';
@@ -50,10 +51,17 @@ export interface MailEnv {
 
 interface AccountRow {
   id: string; email: string; display_name: string; imap: string; smtp: string;
-  secret: ArrayBuffer; key_id: string; status: string; status_message: string | null; created_at: number; tabs: string | null;
+  secret: ArrayBuffer; key_id: string; status: string; status_message: string | null; created_at: number; tabs: string | null; kind: string;
 }
+/** `connected`: one the person added, with their password; `hosted`: the organization's mailbox at the hosted provider,
+ * made by provisioning (platform.md §3.4) with a password the platform set, which the person neither sees nor changes. */
+export type MailAccountKind = 'connected' | 'hosted';
+/** The hosted mailbox as provisioning writes it (provisioning/consumer.ts). */
+export interface HostedMailbox { email: string; displayName: string; imap: ServerSettings; smtp: ServerSettings; password: string }
+/** What a person may not do to the hosted mailbox: remove it, or change its password or servers. */
+const hostedRefusal = () => mailError(403, 'hosted_account', 'this mailbox is your organization\'s; it cannot be removed or have its password changed');
 interface Account {
-  id: string; email: string; displayName: string; imap: ServerSettings; smtp: ServerSettings;
+  id: string; kind: MailAccountKind; email: string; displayName: string; imap: ServerSettings; smtp: ServerSettings;
   status: 'ok' | 'auth_failed' | 'connect_failed'; statusMessage?: string;
   tabs: TabCategory[];
 }
@@ -134,6 +142,8 @@ const DDL = [
  */
 const ADDED_COLUMNS: { add: string; then?: string }[] = [
   { add: `ALTER TABLE accounts ADD COLUMN tabs TEXT NOT NULL DEFAULT '[]'` },
+  // The hosted mailbox (phase 5.3) beside the accounts the person connected.
+  { add: `ALTER TABLE accounts ADD COLUMN kind TEXT NOT NULL DEFAULT 'connected'` },
   // The repair of Gmail rows wrongly cached as Primary (a re-check that read an incomplete or refused category search as
   // "no category"): every folder with such rows is re-checked on its next list, and its older such rows are asked about
   // again, a batch per re-check, from the top down (`repair_below`, 0 when there is nothing to repair).
@@ -326,7 +336,7 @@ export class Mail extends DurableObject<MailEnv> {
   }
 
   private toAccount(r: AccountRow): Account {
-    return { id: r.id, email: r.email, displayName: r.display_name, imap: JSON.parse(r.imap), smtp: JSON.parse(r.smtp), status: r.status as Account['status'], ...(r.status_message ? { statusMessage: r.status_message } : {}), tabs: this.tabsOf(r) };
+    return { id: r.id, kind: r.kind === 'hosted' ? 'hosted' : 'connected', email: r.email, displayName: r.display_name, imap: JSON.parse(r.imap), smtp: JSON.parse(r.smtp), status: r.status as Account['status'], ...(r.status_message ? { statusMessage: r.status_message } : {}), tabs: this.tabsOf(r) };
   }
 
   private tabsOf(r: AccountRow): TabCategory[] {
@@ -1891,6 +1901,57 @@ export class Mail extends DurableObject<MailEnv> {
     return this.send(r, body);
   }
 
+  /** A mail account and everything kept for it. */
+  private dropAccount(id: string): void {
+    this.forget(id);
+    this.sql.exec('DELETE FROM accounts WHERE id = ?', id);
+    this.sql.exec('DELETE FROM mail_categories WHERE account_id = ?', id);
+    this.sql.exec('DELETE FROM mail_category_overrides WHERE account_id = ?', id);
+    this.sql.exec('DELETE FROM mail_sync WHERE account_id = ?', id);
+    this.cache.forgetAccount(id);
+  }
+
+  // ---- for provisioning (by binding; provisioning/consumer.ts, platform.md §3.4) ----------------------------------------
+  // The platform's half of the hosted mailbox: written with the password it set, sealed as a connected one is, and never
+  // through a route. Each refuses a call for another account than the object's, as `handle` does.
+
+  private provisioningOwner(account: AccountDTO): void {
+    const wrong = ownerMismatch(this.cache, { account, user: null }, 'the Mail');
+    if (wrong) throw new Error(wrong);
+  }
+
+  /** The hosted mailbox's row, or null. */
+  async hostedAccount(account: AccountDTO): Promise<{ id: string; email: string } | null> {
+    this.provisioningOwner(account);
+    const r = this.sql.exec<{ id: string; email: string }>("SELECT id, email FROM accounts WHERE kind = 'hosted' LIMIT 1").toArray()[0];
+    return r ? { id: r.id, email: r.email } : null;
+  }
+
+  /** Writes the hosted mailbox: added, or its servers and password replaced (a run again after a partial one). */
+  async putHosted(account: AccountDTO, m: HostedMailbox): Promise<{ id: string }> {
+    this.provisioningOwner(account);
+    const sealed = encryptBlob(Buffer.from(m.password, 'utf8'));
+    const secret = new Uint8Array(sealed.blob).buffer;
+    const have = this.sql.exec<{ id: string }>("SELECT id FROM accounts WHERE kind = 'hosted' LIMIT 1").toArray()[0];
+    if (have) {
+      this.sql.exec("UPDATE accounts SET email = ?, imap = ?, smtp = ?, secret = ?, key_id = ?, status = 'ok', status_message = NULL WHERE id = ?",
+        m.email, JSON.stringify(m.imap), JSON.stringify(m.smtp), secret, sealed.encKeyId, have.id);
+      this.forget(have.id);
+      return have;
+    }
+    const id = crypto.randomUUID();
+    this.sql.exec("INSERT INTO accounts (id, kind, email, display_name, imap, smtp, secret, key_id, status, created_at) VALUES (?, 'hosted', ?, ?, ?, ?, ?, ?, 'ok', ?)",
+      id, m.email, m.displayName || m.email.split('@')[0], JSON.stringify(m.imap), JSON.stringify(m.smtp), secret, sealed.encKeyId, Date.now());
+    await this.armAlarm().catch((err) => console.warn(`[mail] alarm: ${(err as Error).message}`));
+    return { id };
+  }
+
+  /** The hosted mailbox is gone at the provider (deleted after the retention period): its row goes too. */
+  async clearHosted(account: AccountDTO): Promise<void> {
+    this.provisioningOwner(account);
+    for (const r of this.sql.exec<{ id: string }>("SELECT id FROM accounts WHERE kind = 'hosted'").toArray()) this.dropAccount(r.id);
+  }
+
   // ---- for the Calendar object (by binding; docs/specs/calendar.md §14) ------------------------------------------------
   // The person's Calendar object reads an invitation's part and sends iMIP through these, never through a route: a route
   // that sent prepared mail would be one anybody holding a session could use to send anything. Answers carry their error
@@ -1952,7 +2013,8 @@ export class Mail extends DurableObject<MailEnv> {
 
     app.use('/v1/mail/accounts/:id/*', async (c: MailContext, next) => { c.set('account', this.row(c.req.param('id')!)); await next(); });
 
-    app.get('/v1/mail/accounts', (c) => c.json({ accounts: this.sql.exec<AccountRow & Record<string, SqlStorageValue>>('SELECT * FROM accounts ORDER BY created_at').toArray().map((r) => this.toAccount(r)) }));
+    // The hosted mailbox first, then the connected accounts in the order they were added.
+    app.get('/v1/mail/accounts', (c) => c.json({ accounts: this.sql.exec<AccountRow & Record<string, SqlStorageValue>>("SELECT * FROM accounts ORDER BY kind = 'hosted' DESC, created_at").toArray().map((r) => this.toAccount(r)) }));
 
     app.post('/v1/mail/accounts', async (c) => {
       const b = parse(NewAccount, await json(c));
@@ -1968,6 +2030,7 @@ export class Mail extends DurableObject<MailEnv> {
     app.patch('/v1/mail/accounts/:id', async (c) => {
       const r = this.row(c.req.param('id'));
       const b = parse(AccountPatch, await json(c));
+      if (r.kind === 'hosted' && (b.password !== undefined || b.imap || b.smtp)) throw hostedRefusal();
       const current = this.toAccount(r);
       const imap = b.imap ?? current.imap, smtp = b.smtp ?? current.smtp;
       if (b.password !== undefined || b.imap || b.smtp) {
@@ -1984,12 +2047,8 @@ export class Mail extends DurableObject<MailEnv> {
 
     app.delete('/v1/mail/accounts/:id', (c) => {
       const r = this.row(c.req.param('id'));
-      this.forget(r.id);
-      this.sql.exec('DELETE FROM accounts WHERE id = ?', r.id);
-      this.sql.exec('DELETE FROM mail_categories WHERE account_id = ?', r.id);
-      this.sql.exec('DELETE FROM mail_category_overrides WHERE account_id = ?', r.id);
-      this.sql.exec('DELETE FROM mail_sync WHERE account_id = ?', r.id);
-      this.cache.forgetAccount(r.id);
+      if (r.kind === 'hosted') throw hostedRefusal();
+      this.dropAccount(r.id);
       return c.json({ ok: true });
     });
 

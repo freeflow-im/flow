@@ -1,5 +1,5 @@
 // The page for someone in no organization yet: Mail and Calendar are an organization's (platform.md §3.6), so there is nothing to show.
-import { Building2 } from 'lucide-react';
+import { Building2, Loader2 } from 'lucide-react';
 
 export function NoOrganization({ app }: { app: string }) {
   return (
@@ -12,6 +12,19 @@ export function NoOrganization({ app }: { app: string }) {
         <a href="/" className="text-sm font-semibold text-primary hover:underline">
           Go to Chat
         </a>
+      </div>
+    </div>
+  );
+}
+
+/** While the person's account is being provisioned (platform.md §3.4): its mailbox is not there yet. */
+export function MailboxSettingUp() {
+  return (
+    <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto bg-panel p-6">
+      <div className="w-full max-w-md rounded-2xl border border-hairline bg-white p-8 text-center shadow-sm" data-testid="mailbox-setting-up">
+        <Loader2 className="mx-auto mb-5 size-8 animate-spin text-primary" strokeWidth={1.5} />
+        <p className="text-sm font-semibold">Your mailbox is being set up</p>
+        <p className="mt-2 text-sm leading-relaxed text-muted">It takes a few moments. This page opens your inbox by itself when it is ready.</p>
       </div>
     </div>
   );

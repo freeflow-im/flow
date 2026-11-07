@@ -17,12 +17,12 @@ export const domainRoutes = new Hono<{ Bindings: DomainEnv }>();
 const ORG_ID = /^[0-9a-f-]{36}$/;
 
 /** The organization in the path, for an owner or admin of it. */
-async function adminOf(c: C): Promise<string> {
+export async function adminOf(c: Context<{ Bindings: AuthEnv }>, what = 'manage domains'): Promise<string> {
   const id = c.req.param('id') ?? '';
   if (!ORG_ID.test(id)) throw badRequest('validation', 'not an organization id');
   const who = await resolveCaller(c, id);
   if (!who.user) throw unauthorized('missing bearer token');
-  if (who.account?.role !== 'owner' && who.account?.role !== 'admin') throw new ApiError(403, 'forbidden', 'only owners and admins manage domains');
+  if (who.account?.role !== 'owner' && who.account?.role !== 'admin') throw new ApiError(403, 'forbidden', `only owners and admins ${what}`);
   return id;
 }
 
@@ -35,12 +35,12 @@ async function bodyOf<S extends ZodTypeAny>(c: C, schema: S): Promise<z.output<S
 const domainParam = (c: C) => decodeURIComponent(c.req.param('domain') ?? '').toLowerCase();
 
 domainRoutes.get('/v1/workspaces/:id/domains', async (c) => {
-  const id = await adminOf(c);
+  const id = await adminOf(c as never);
   return c.json({ domains: await directory(c, 'describeDomains', id, c.req.query('refresh') === '1') });
 });
 
 domainRoutes.post('/v1/workspaces/:id/domains', async (c) => {
-  const id = await adminOf(c);
+  const id = await adminOf(c as never);
   const body = await bodyOf(c, AddDomainBody);
   const row = await directory(c, 'addDomain', id, body.domain);
   const dto = (await directory(c, 'describeDomains', id)).find((d) => d.domain === row.domain);
@@ -48,14 +48,14 @@ domainRoutes.post('/v1/workspaces/:id/domains', async (c) => {
 });
 
 domainRoutes.post('/v1/workspaces/:id/domains/:domain/verify', async (c) => {
-  const id = await adminOf(c);
+  const id = await adminOf(c as never);
   return c.json(await directory(c, 'verifyDomain', id, domainParam(c)));
 });
 
 // DKIM (phase 5.2): a new key for a verified domain, given to the mail provider, the private key kept sealed in the
 // directory. The answer is the TXT record to publish; the platform subdomain's is written to our zone here.
 domainRoutes.post('/v1/workspaces/:id/domains/:domain/dkim', async (c) => {
-  const id = await adminOf(c);
+  const id = await adminOf(c as never);
   const out = await directory(c, 'setDomainDkim', id, domainParam(c));
   if (out.kind === 'platform') {
     const provider = mailProviderFor(c.env).records(out.domain, { selector: out.selector, value: out.record.value });
@@ -65,14 +65,14 @@ domainRoutes.post('/v1/workspaces/:id/domains/:domain/dkim', async (c) => {
 });
 
 domainRoutes.patch('/v1/workspaces/:id/domains/:domain', async (c) => {
-  const id = await adminOf(c);
+  const id = await adminOf(c as never);
   await bodyOf(c, PatchDomainBody);
   const row = await directory(c, 'setPrimaryDomain', id, domainParam(c));
   return c.json({ domain: row.domain, kind: row.kind, verified: row.verified, primary: row.primary });
 });
 
 domainRoutes.delete('/v1/workspaces/:id/domains/:domain', async (c) => {
-  const id = await adminOf(c);
+  const id = await adminOf(c as never);
   await directory(c, 'removeDomain', id, domainParam(c));
   return c.json({ ok: true });
 });

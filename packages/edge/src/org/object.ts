@@ -27,10 +27,19 @@ import { logEntryFor } from './eventLog';
 import { config } from './config';
 import { isActiveAccount, recordShare, revokeShare, shareEvents, sharedRefsOf, sharedWith, type RecordShareInput, type RevokeShareInput, type SharedItem } from './services/shares';
 import { eq, and } from 'drizzle-orm';
+import { hostedMailEnabled, type MailProviderEnv } from '../mailprovider/index';
 
 /** IMAGES (Cloudflare Images) resizes preview images and thumbnails; without it they are kept as they came (lib/images.ts). */
 /** EVENTS is the organization's event log (events/object.ts), which every socket event but presence and typing also goes to. */
-export type OrgEnv = StorageEnv & { FLOW_DATA_KEY?: string; DIRECTORY: DurableObjectNamespace<Directory>; IMAGES?: ImagesBinding; EVENTS?: DurableObjectNamespace<Events> };
+/** MAIL_PROVIDER with PROVISIONING turns on the daily sweep of removed accounts' mailboxes, kept MAIL_RETENTION_DAYS (30). */
+export type OrgEnv = StorageEnv & MailProviderEnv & {
+  FLOW_DATA_KEY?: string; DIRECTORY: DurableObjectNamespace<Directory>; IMAGES?: ImagesBinding; EVENTS?: DurableObjectNamespace<Events>;
+  PROVISIONING?: Queue<unknown>; MAIL_RETENTION_DAYS?: string;
+};
+
+const DAY_MS = 86_400_000;
+/** The storage key of the next mailbox retention sweep's time. */
+const SWEEP_KEY = 'mail_sweep_at';
 
 /** What each id-only path needs (`routes/org.ts`), and who belongs here (`memberships`), reported to the directory by trigger. */
 const OUTBOX = [
@@ -319,6 +328,46 @@ export class Org extends DurableObject<OrgEnv> {
     await this.armAlarm();
   }
 
+  /**
+   * Provisioning could not make an account's mailbox (provisioning/consumer.ts): each owner and admin hears it in their DM
+   * with that account's holder, as a DM notification, or in their own DM when the account is theirs.
+   */
+  async provisioningNotice(p: { accountId: string; text: string }): Promise<void> {
+    const workspace = this.db.select({ id: schema.workspaces.id }).from(schema.workspaces).get();
+    if (!workspace) return console.log(`[provisioning] ${p.text} (no one to tell)`);
+    const holder = this.userOfAccount(p.accountId);
+    const admins = this.ctx.storage.sql.exec("SELECT m.user_id FROM workspace_members m JOIN users u ON u.id = m.user_id WHERE m.role IN ('owner', 'admin') AND NOT u.is_agent").toArray().map((r) => r.user_id as string);
+    const [{ createDm }, { sendMessage }] = await Promise.all([import('./services/channels'), import('./services/messages')]);
+    await this.scoped(async () => {
+      const post = async (from: string, to: string) => {
+        const dm = await createDm(workspace.id, from, [to]);
+        await sendMessage(dm.id, from, crypto.randomUUID(), `⚠️ ${p.text}`);
+      };
+      for (const admin of admins) {
+        // A holder who is no member (any more) cannot write: the admin's own DM then.
+        if (holder && holder !== admin) await post(holder, admin).catch(() => post(admin, admin));
+        else await post(admin, admin);
+      }
+    });
+    await this.logging;
+    await this.armAlarm();
+  }
+
+  /** The daily sweep of removed accounts' hosted mailboxes, when it is due: the directory sends those past the retention
+   * period to be deleted (directory/core.ts `sweepRemoved`). */
+  private async sweepMailboxes(): Promise<void> {
+    if (!hostedMailEnabled(this.env)) return;
+    const due = await this.ctx.storage.get<number>(SWEEP_KEY);
+    if (due === undefined || due > Date.now()) return;
+    await this.ctx.storage.put(SWEEP_KEY, Date.now() + DAY_MS);
+    const workspace = this.db.select({ id: schema.workspaces.id }).from(schema.workspaces).get();
+    if (!workspace) return;
+    const days = Number(this.env.MAIL_RETENTION_DAYS) > 0 ? Number(this.env.MAIL_RETENTION_DAYS) : 30;
+    const answer = await this.directory().call('sweepRemoved' as never, [workspace.id, days] as never) as DirectoryAnswer<number>;
+    if (!answer.ok) console.error(`[provisioning] sweep: ${answer.message}`);
+    else if (answer.value) console.log(`[provisioning] sweep: ${answer.value} mailbox(es) past ${days} days sent to be deleted`);
+  }
+
   // ---- the share index (services/shares.ts, platform.md §4.5) ---------------------------------------------------------
 
   /**
@@ -428,7 +477,12 @@ export class Org extends DurableObject<OrgEnv> {
   private async armAlarm(): Promise<void> {
     const scheduled = this.ctx.storage.sql.exec('SELECT MIN(next_run_at) AS at FROM scheduled_messages WHERE enabled AND next_run_at IS NOT NULL').one().at as number | null;
     const push = withDb(this.db, nextPushDueAt);
-    const due = [scheduled, push].filter((n): n is number => n !== null);
+    let sweep: number | null = null;
+    if (hostedMailEnabled(this.env)) {
+      sweep = (await this.ctx.storage.get<number>(SWEEP_KEY)) ?? null;
+      if (sweep === null) await this.ctx.storage.put(SWEEP_KEY, (sweep = Date.now() + DAY_MS));
+    }
+    const due = [scheduled, push, sweep].filter((n): n is number => n !== null);
     if (!due.length) await this.ctx.storage.deleteAlarm();
     else await this.ctx.storage.setAlarm(Math.min(...due));
   }
@@ -441,6 +495,7 @@ export class Org extends DurableObject<OrgEnv> {
     });
     await this.logging;
     await this.flushOutbox(null);
+    await this.sweepMailboxes().catch((err) => console.error(`[provisioning] sweep: ${(err as Error).message}`));
     await this.armAlarm();
   }
 

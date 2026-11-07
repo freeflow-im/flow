@@ -12,7 +12,7 @@
 // (phase 4.2; itip.ts): the organizer's object calls each platform attendee's object (`receiveItip`) with REQUEST and
 // CANCEL, an attendee's REPLY comes back the same way, and attendees outside the platform get iMIP by mail.
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { formatReference } from '@flow/shared';
+import { formatReference, type AccountDTO } from '@flow/shared';
 import {
   atLeast, effectiveRole, grantFromRow, grantSql, grantsForChainSql, parsePrincipal, revokeSql,
   type Grant, type GrantPrincipal, type GrantReader, type GrantRow, type Role,
@@ -199,6 +199,16 @@ export class Calendar extends DurableObject<CalendarEnv> {
       if (c && role) { const info = this.toCalendar(c); out.push({ id: c.id, name: info.name, color: info.color, role }); }
     }
     return out;
+  }
+
+  /** Provisioning's calendars step (platform.md §3.4, provisioning/consumer.ts): the account's native calendar, made now
+   * rather than on first use. Safe to run again. A call for another account than the object's is refused. */
+  async provisionNative(account: AccountDTO): Promise<{ ok: true } | { ok: false; message: string }> {
+    const wrong = ownerMismatch(this.store, { account, user: null }, 'the Calendar');
+    if (wrong) { console.error(`[calendar] ${wrong}`); return { ok: false, message: wrong }; }
+    this.accountId = account.id;
+    this.store.ensureNative({ accountId: account.id, email: account.address, displayName: account.displayName });
+    return { ok: true };
   }
 
   /**

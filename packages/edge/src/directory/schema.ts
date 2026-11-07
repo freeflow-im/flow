@@ -250,4 +250,11 @@ export const DIRECTORY_MIGRATIONS: string[] = [
     key_id TEXT NOT NULL,
     created_at INTEGER NOT NULL
   );`,
+  // Provisioning (platform.md §3.4, phase 5.3): why it stopped (a provider's refusal), when the account's hosted mailbox
+  // was made (so "who has none" needs no call to each Mail object), when it was removed (the retention clock), and when
+  // a domain was made at the provider (with its platform DNS), so each account's run does not make it again.
+  `ALTER TABLE accounts ADD COLUMN status_message TEXT;
+  ALTER TABLE accounts ADD COLUMN hosted_at INTEGER;
+  ALTER TABLE accounts ADD COLUMN removed_at INTEGER;
+  ALTER TABLE domains ADD COLUMN provider_at INTEGER;`,
 ];

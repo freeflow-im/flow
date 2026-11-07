@@ -14,8 +14,11 @@ export type AccountStatus = 'ok' | 'auth_failed' | 'connect_failed';
 /** Gmail's inbox tabs. Primary is always there; the others are switched on per account. */
 export type Category = 'primary' | 'promotions' | 'social' | 'updates' | 'forums';
 export type TabCategory = Exclude<Category, 'primary'>;
+/** `hosted`: the organization's mailbox, made for the person (platform.md §3.4), which they cannot remove or re-password. */
+export type MailAccountKind = 'connected' | 'hosted';
 export interface MailAccount {
   id: string;
+  kind?: MailAccountKind;
   email: string;
   displayName: string;
   imap: ServerSettings;

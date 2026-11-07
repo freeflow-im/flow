@@ -40,4 +40,10 @@ describe('OrganizationSection', () => {
     expect(html).toMatch(/<option value="admins" selected/);
     expect(html).not.toContain('admin-transfer-select');
   });
+
+  it('offers to set up mailboxes for everyone only when a mail provider is configured', () => {
+    expect(renderToStaticMarkup(<OrganizationSection ws={ws()} roster={roster} meId="u-Ann" />)).not.toContain('admin-provision');
+    const html = renderToStaticMarkup(<OrganizationSection ws={ws()} roster={roster} meId="u-Ann" hostedMail />);
+    expect(html).toMatch(/admin-provision[^>]*>Set up mailboxes for everyone</);
+  });
 });

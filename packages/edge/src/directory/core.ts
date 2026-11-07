@@ -28,6 +28,24 @@ export interface DirectoryDeps {
   resolve?: Resolve;
   /** The hosted mail provider (mailprovider/index.ts `mailProviderFor`); `none`, with placeholder records, when unset. */
   mailProvider?: MailProvider;
+  /** A provider and the `flow-provisioning` Queue are there: new accounts start `requested` and get a mailbox (§3.4). */
+  provisioning?: boolean;
+}
+
+/** A message to the `flow-provisioning` Queue (provisioning/consumer.ts): make, suspend, resume or delete an account's
+ * hosted mailbox (and, for `provision`, its native calendars). */
+export type ProvisioningKind = 'provision' | 'suspend' | 'resume' | 'delete';
+export interface ProvisioningMessage { kind: ProvisioningKind; organizationId: string; accountId: string }
+
+/** What a provisioning run needs to know about an account: the account, its domain's row, and whether it has its mailbox. */
+export interface ProvisioningTarget {
+  account: AccountDTO;
+  domain: DomainRow | null;
+  /** Whether the domain was made at the provider already (with its platform DNS). */
+  domainAtProvider: boolean;
+  slug: string;
+  hosted: boolean;
+  removedAt: string | null;
 }
 
 /** One of an organization's domains, as the directory keeps it. */
@@ -125,6 +143,8 @@ export function accountGate(account: Pick<AccountDTO, 'state'> | null): ApiError
 
 export class DirectoryCore {
   private readonly domainStatus = new Map<string, { at: number; status: { record: 'present' | 'missing' }[] }>();
+  /** Provisioning messages made by the last call, which the object sends to the Queue after it (directory/object.ts). */
+  private provisioningOutbox: ProvisioningMessage[] = [];
 
   constructor(private readonly sql: Sql, private readonly deps: DirectoryDeps) {
     this.sql.exec('CREATE TABLE IF NOT EXISTS _migrations (n INTEGER PRIMARY KEY)');
@@ -149,7 +169,19 @@ export class DirectoryCore {
       `SELECT m.user_id, m.organization_id, m.role FROM memberships m
        LEFT JOIN accounts a ON a.user_id = m.user_id AND a.organization_id = m.organization_id
        WHERE a.id IS NULL ORDER BY m.organization_id, m.user_id`);
-    for (const m of missing) this.createAccount(m.user_id as string, m.organization_id as string, m.role as string);
+    // Existing members stay active; POST /v1/workspaces/:id/provision gives them their mailboxes.
+    for (const m of missing) this.createAccount(m.user_id as string, m.organization_id as string, m.role as string, undefined, false);
+  }
+
+  /** The provisioning messages the calls since the last take made, once. */
+  takeProvisioning(): ProvisioningMessage[] {
+    const out = this.provisioningOutbox;
+    this.provisioningOutbox = [];
+    return out;
+  }
+
+  private enqueue(kind: ProvisioningKind, organizationId: string, accountId: string): void {
+    if (this.deps.provisioning) this.provisioningOutbox.push({ kind, organizationId, accountId });
   }
 
   /** The domain label of an organization's addresses: its slug, or its id when it was made without one. */
@@ -159,7 +191,7 @@ export class DirectoryCore {
       ?? organizationId;
   }
 
-  private createAccount(userId: string, organizationId: string, role: string, displayName?: string): void {
+  private createAccount(userId: string, organizationId: string, role: string, displayName?: string, provision = true): void {
     const user = this.userById(userId);
     if (!user) return;
     const name = displayName || (user.display_name as string);
@@ -167,10 +199,19 @@ export class DirectoryCore {
     // On the primary domain as it is now. Making another domain primary later does not move existing addresses.
     const address = uniqueAddress(local, this.primaryDomainOf(organizationId), (a) => this.rows('SELECT 1 FROM addresses WHERE address = ?', a).length > 0);
     const id = newId();
+    // With a provider, the account starts at the head of the state machine (§3.4); Chat and Docs work from there.
+    const requested = provision && !!this.deps.provisioning;
     // An agent's sponsor here starts as its principal's; the member row's own sponsor follows on the join (applyOrgChanges).
-    this.sql.exec('INSERT INTO accounts (id, user_id, organization_id, address, display_name, role, sponsor_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      id, userId, organizationId, address, name, role, user.is_agent ? ((user.sponsor_user_id as string | null) ?? null) : null, Date.now());
+    this.sql.exec('INSERT INTO accounts (id, user_id, organization_id, address, display_name, role, sponsor_user_id, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      id, userId, organizationId, address, name, role, user.is_agent ? ((user.sponsor_user_id as string | null) ?? null) : null, requested ? 'requested' : 'active', Date.now());
     this.sql.exec('INSERT INTO addresses (address, account_id) VALUES (?, ?)', address, id);
+    if (requested) this.enqueue('provision', organizationId, id);
+  }
+
+  /** Marks accounts removed (those not already), starting their retention clock; each hosted mailbox is suspended. */
+  private removeAccounts(where: string, ...args: unknown[]): void {
+    const gone = this.rows(`UPDATE accounts SET state = 'removed', removed_at = ? WHERE ${where} AND state <> 'removed' RETURNING id, organization_id, hosted_at`, Date.now(), ...args);
+    for (const a of gone) if (a.hosted_at != null) this.enqueue('suspend', a.organization_id as string, a.id as string);
   }
 
   private accountRow(where: string, ...args: unknown[]): AccountDTO[] {
@@ -183,6 +224,7 @@ export class DirectoryCore {
       role: a.role as AccountRole,
       kind: a.kind as AccountKind,
       state: a.state as AccountState,
+      statusMessage: (a.status_message as string | null) ?? null,
       createdAt: iso(a.created_at),
     }));
   }
@@ -218,6 +260,59 @@ export class DirectoryCore {
     return this.accountFor(userId, organizationId)!;
   }
 
+  accountById(id: string): AccountDTO | null {
+    return this.accountRow('id = ?', id)[0] ?? null;
+  }
+
+  // ---- provisioning (platform.md §3.4, provisioning/consumer.ts) -----------------------------------------------
+
+  /** The account a provisioning message names, with its domain, or null when it is gone. */
+  provisioningTarget(accountId: string): ProvisioningTarget | null {
+    const row = this.rows('SELECT * FROM accounts WHERE id = ?', accountId)[0];
+    const account = this.accountById(accountId);
+    if (!row || !account) return null;
+    const domainName = account.address.slice(account.address.lastIndexOf('@') + 1);
+    const domain = this.domainRow('domain = ? AND organization_id = ?', domainName, account.organizationId)[0] ?? null;
+    const atProvider = domain ? this.rows('SELECT provider_at FROM domains WHERE domain = ?', domain.domain)[0]?.provider_at != null : false;
+    return {
+      account, domain, domainAtProvider: atProvider, slug: this.organizationSlug(account.organizationId),
+      hosted: row.hosted_at != null, removedAt: row.removed_at != null ? iso(row.removed_at) : null,
+    };
+  }
+
+  /** Moves an account along the state machine, with why it stopped (null clears it). A removed account stays removed. */
+  setAccountState(accountId: string, state: AccountState, statusMessage: string | null = null): void {
+    this.sql.exec("UPDATE accounts SET state = CASE WHEN state = 'removed' THEN state ELSE ? END, status_message = ? WHERE id = ?", state, statusMessage, accountId);
+  }
+
+  /** Whether the account's hosted mailbox exists (made, or deleted after the retention period). */
+  setHosted(accountId: string, hosted: boolean): void {
+    this.sql.exec('UPDATE accounts SET hosted_at = ? WHERE id = ?', hosted ? Date.now() : null, accountId);
+  }
+
+  /** The domain is made at the provider, with its platform DNS written. */
+  setDomainAtProvider(domain: string): void {
+    this.sql.exec('UPDATE domains SET provider_at = COALESCE(provider_at, ?) WHERE domain = ?', Date.now(), domain);
+  }
+
+  /** Every account of the organization with no hosted mailbox, neither removed nor suspended, sent to be provisioned
+   * (existing members, and any whose run stopped). Returns how many. */
+  provisionMissing(organizationId: string): number {
+    if (!this.deps.provisioning) throw conflict('hosted_mail_off', 'no mail provider is configured');
+    const missing = this.rows("SELECT id FROM accounts WHERE organization_id = ? AND hosted_at IS NULL AND state NOT IN ('removed', 'suspended') ORDER BY created_at, id", organizationId);
+    for (const a of missing) this.enqueue('provision', organizationId, a.id as string);
+    return missing.length;
+  }
+
+  /** The daily sweep (the Org object's alarm): removed accounts whose mailbox has outlived the retention period, sent to
+   * be deleted. Returns how many. */
+  sweepRemoved(organizationId: string, retentionDays: number): number {
+    const due = this.rows("SELECT id FROM accounts WHERE organization_id = ? AND state = 'removed' AND hosted_at IS NOT NULL AND removed_at IS NOT NULL AND removed_at < ?",
+      organizationId, Date.now() - retentionDays * DAY);
+    for (const a of due) this.enqueue('delete', organizationId, a.id as string);
+    return due.length;
+  }
+
   accountByAddress(address: string): AccountDTO | null {
     return this.accountRow('address = ?', address)[0] ?? null;
   }
@@ -240,8 +335,16 @@ export class DirectoryCore {
     this.sql.exec('INSERT OR IGNORE INTO organizations (id, slug, created_at) VALUES (?, ?, ?)', organizationId, this.organizationSlug(organizationId), Date.now());
     this.ensurePlatformDomain(organizationId);
     if (role === 'owner') this.sql.exec('UPDATE organizations SET owner_user_id = ? WHERE id = ? AND owner_user_id IS NULL', userId, organizationId);
-    if (this.accountFor(userId, organizationId)) this.sql.exec("UPDATE accounts SET role = ?, state = CASE WHEN state = 'removed' THEN 'active' ELSE state END WHERE user_id = ? AND organization_id = ?", role, userId, organizationId);
-    else this.createAccount(userId, organizationId, role, displayName);
+    const existing = this.rows('SELECT id, state, hosted_at FROM accounts WHERE user_id = ? AND organization_id = ?', userId, organizationId)[0];
+    if (!existing) return this.createAccount(userId, organizationId, role, displayName);
+    this.sql.exec('UPDATE accounts SET role = ? WHERE id = ?', role, existing.id);
+    if (existing.state !== 'removed') return;
+    // Back in (§3.4): a kept mailbox is resumed; one deleted after the retention period (or never made) is made again.
+    const id = existing.id as string;
+    const remake = !!this.deps.provisioning && existing.hosted_at == null;
+    this.sql.exec('UPDATE accounts SET state = ?, removed_at = NULL, status_message = NULL WHERE id = ?', remake ? 'requested' : 'active', id);
+    if (remake) this.enqueue('provision', organizationId, id);
+    else if (existing.hosted_at != null) this.enqueue('resume', organizationId, id);
   }
 
   private rows(query: string, ...args: unknown[]): Row[] {
@@ -592,8 +695,8 @@ export class DirectoryCore {
         this.setPolicies(organizationId, JSON.parse(c.payload ?? '{}') as Record<string, unknown>);
       } else if (c.kind === 'leave') {
         this.sql.exec('DELETE FROM memberships WHERE user_id = ? AND organization_id = ?', c.user_id, organizationId);
-        // The organization keeps the account and its address (§3.3).
-        this.sql.exec("UPDATE accounts SET state = 'removed' WHERE user_id = ? AND organization_id = ?", c.user_id, organizationId);
+        // The organization keeps the account and its address (§3.3), and its mailbox, suspended, for the retention period.
+        this.removeAccounts('user_id = ? AND organization_id = ?', c.user_id, organizationId);
         // The agents they sponsor here follow them out (§3.3, rule 2). The Org object removes their member rows first,
         // so this normally finds them gone already; it holds when it does not. Suspension would follow the same way,
         // but nothing suspends an account yet.
@@ -608,7 +711,7 @@ export class DirectoryCore {
     const args = organizationId ? [sponsorId, organizationId] : [sponsorId];
     for (const a of this.rows(`SELECT user_id, organization_id FROM accounts WHERE sponsor_user_id = ? ${where} AND state <> 'removed'`, ...args)) {
       this.sql.exec('DELETE FROM memberships WHERE user_id = ? AND organization_id = ?', a.user_id, a.organization_id);
-      this.sql.exec("UPDATE accounts SET state = 'removed' WHERE user_id = ? AND organization_id = ?", a.user_id, a.organization_id);
+      this.removeAccounts('user_id = ? AND organization_id = ?', a.user_id, a.organization_id);
     }
   }
 
@@ -823,7 +926,7 @@ export class DirectoryCore {
     this.sql.exec('DELETE FROM sessions WHERE user_id = ?', userId);
     this.sql.exec('DELETE FROM oauth_identities WHERE user_id = ?', userId);
     this.sql.exec('DELETE FROM memberships WHERE user_id = ?', userId);
-    this.sql.exec("UPDATE accounts SET state = 'removed' WHERE user_id = ?", userId);
+    this.removeAccounts('user_id = ?', userId);
     // The agents they sponsor follow them out of every organization (§3.3, rule 2).
     this.removeSponsored(userId, null);
     this.sql.exec("UPDATE users SET deleted_at = ?, email = 'deleted-' || id || '@deleted.invalid', password_hash = '!deleted', display_name = 'Deleted user', avatar_url = NULL WHERE id = ?", Date.now(), userId);

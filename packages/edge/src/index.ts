@@ -6,6 +6,7 @@ import { proxy, type ProxyEnv } from './proxy';
 import { authRoutes, type AuthEnv } from './routes/auth';
 import { orgRoutes } from './routes/org';
 import { domainRoutes } from './routes/domains';
+import { provisioningRoutes } from './routes/provisioning';
 import { docsRoutes } from './routes/docs';
 import { previewRoutes } from './routes/previews';
 import { handoffRoutes } from './routes/handoff';
@@ -27,6 +28,8 @@ export { Events } from './events/object';
 import type { Org as OrgObject } from './org/object';
 import type { JobMessage } from './events/object';
 import { handleJobBatch } from './events/queue';
+import type { ProvisioningMessage } from './directory/core';
+import { handleProvisioningBatch, handleProvisioningDeadLetters } from './provisioning/consumer';
 
 export interface Env extends ProxyEnv, AuthEnv {
   DOCS: DurableObjectNamespace<import('./docs/object').Docs>;
@@ -50,6 +53,8 @@ export interface Env extends ProxyEnv, AuthEnv {
   EVENTS: DurableObjectNamespace<import('./events/object').Events>;
   /** The `flow-jobs` Queue (producer): each wake job's check, sent by the Events object and consumed by `queue` below. */
   JOBS?: Queue<JobMessage>;
+  /** The `flow-provisioning` Queue (producer): the Directory object sends accounts' mailbox work there (provisioning/). */
+  PROVISIONING?: Queue<ProvisioningMessage>;
   /** How long after a job's delivery its first check comes, in seconds (default 60). */
   JOBS_ACK_DELAY_SECONDS?: string;
   /** Google Calendar's OAuth client secret (with GOOGLE_CLIENT_ID). A secret; unset turns Google Calendar off. */
@@ -94,6 +99,7 @@ ported.route('/', mailRoutes as never);
 ported.route('/', calendarRoutes as never);
 ported.route('/', eventRoutes as never);
 ported.route('/', domainRoutes as never);
+ported.route('/', provisioningRoutes as never);
 ported.route('/', orgRoutes as never);
 ported.route('/', pageRoutes as never);
 app.use('*', async (c, next) => {
@@ -118,7 +124,12 @@ app.all('*', async (c) => {
   return proxy(req, c.env);
 });
 
-// The `flow-jobs` consumer beside the routes (events/queue.ts).
+// The Queues' consumers beside the routes: `flow-jobs` (events/queue.ts), `flow-provisioning` and its dead letters
+// (provisioning/consumer.ts).
 export default Object.assign(app, {
-  queue: (batch: MessageBatch<JobMessage>, env: Env) => handleJobBatch(batch, env),
+  queue: (batch: MessageBatch<unknown>, env: Env) => {
+    if (batch.queue === 'flow-provisioning') return handleProvisioningBatch(batch as MessageBatch<ProvisioningMessage>, env as never);
+    if (batch.queue === 'flow-provisioning-dlq') return handleProvisioningDeadLetters(batch as MessageBatch<ProvisioningMessage>, env as never);
+    return handleJobBatch(batch as MessageBatch<JobMessage>, env);
+  },
 });

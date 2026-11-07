@@ -47,6 +47,16 @@ describe('the fake mail provider', () => {
     ]);
   });
 
+  it('takes GreenMail\'s "already exists" as made, and names a second GreenMail\'s ports', async () => {
+    const fetchFn = (async () => new Response('{"message":"Can not create user : ... already exists"}', { status: 400 })) as unknown as typeof fetch;
+    const p = new FakeMailProvider({ greenmailApiUrl: 'http://127.0.0.1:8081', imapPort: 3144, smtpPort: 3026, fetch: fetchFn });
+    await p.createDomain('acme.test', { quotaBytes: 1, maxUsers: 1 });
+    await p.createMailbox({ address: 'ann@acme.test', displayName: 'Ann', password: 'pw', quotaBytes: 1 });
+    expect(p.mailboxes.has('ann@acme.test')).toBe(true);
+    expect(p.mailSettings('ann@acme.test')).toMatchObject({ imap: { port: 3144 }, smtp: { port: 3026 } });
+    expect(mailProviderFor({ MAIL_PROVIDER: 'fake', GREENMAIL_IMAP_PORT: '3144' })).toBe(mailProviderFor({ MAIL_PROVIDER: 'fake', GREENMAIL_IMAP_PORT: '3144' }));
+  });
+
   it('gives its records, marked as not for a real zone', () => {
     const r = new FakeMailProvider().records('acme.test', { selector: 's', value: 'v=DKIM1; k=rsa; p=A' });
     expect(r).toMatchObject({ mx: [{ host: 'mx.fake-mail.test', priority: 10 }], spfInclude: '_spf.fake-mail.test', placeholder: true, dkim: { selector: 's' } });

@@ -8,7 +8,7 @@ import { ApiError, badRequest, notFound, unauthorized } from '../errors';
 import { directory, resolveCaller, type AuthEnv } from './auth';
 import { publishPlatformDomain, type PlatformDnsEnv } from '../directory/providers/cloudflareDns';
 import { organizationDomain } from '../directory/addresses';
-import { mailProviderFor, type MailProviderEnv } from '../mailprovider/index';
+import { hostedMailEnabled, mailProviderFor, type MailProviderEnv } from '../mailprovider/index';
 
 export interface OrgRouteEnv extends AuthEnv, PlatformDnsEnv, MailProviderEnv {
   BLOBS: R2Bucket;
@@ -26,6 +26,7 @@ export interface OrgRouteEnv extends AuthEnv, PlatformDnsEnv, MailProviderEnv {
   FLOW_APNS_KEY_ID?: string;
   FLOW_APNS_TEAM_ID?: string;
   FLOW_HANDOFF_RETURN_URLS?: string;
+  PROVISIONING?: Queue<unknown>;
 }
 
 const huddlesEnabled = (env: OrgRouteEnv) => !!(env.LIVEKIT_API_KEY && env.LIVEKIT_API_SECRET && env.LIVEKIT_URL);
@@ -94,6 +95,7 @@ orgRoutes.get('/v1/config', (c) => c.json({
   apple: !!c.env.APPLE_AUDIENCE,
   maxFileBytes: Number(c.env.FLOW_MAX_FILE_BYTES ?? 100 * 1024 * 1024),
   huddles: huddlesEnabled(c.env),
+  hostedMail: hostedMailEnabled(c.env),
 }));
 
 /**

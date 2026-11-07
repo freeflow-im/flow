@@ -145,6 +145,31 @@ max_batch_timeout = 1
 max_retries = 3
 dead_letter_queue = "flow-jobs-dlq"
 
+# Provisioning (src/provisioning, platform.md §3.4): with a mail provider (MAIL_PROVIDER), the Directory object sends
+# each new account here (`requested`), and each removal, rejoin and retention deletion; the consumer makes the mailbox
+# and the native calendar (`mailbox_ready`, `calendars_ready`, `active`). A busy provider is retried after 60 s × attempts,
+# a refusal stops with the account's status_message and a notice to the admins; past five retries a message goes to
+# flow-provisioning-dlq, whose consumer sends the same notice. MAIL_RETENTION_DAYS (a var, default 30) is how long a
+# removed account's suspended mailbox is kept before the Org object's daily sweep deletes it. Without MAIL_PROVIDER
+# accounts start `active` as before. Both queues are made once: `wrangler queues create flow-provisioning` and
+# `wrangler queues create flow-provisioning-dlq`. Local dev with the fake: GREENMAIL_API_URL, GREENMAIL_IMAP_PORT and
+# GREENMAIL_SMTP_PORT (vars) point it at a GreenMail with its REST API (test/e2e-provisioning.mjs).
+[[queues.producers]]
+binding = "PROVISIONING"
+queue = "flow-provisioning"
+
+[[queues.consumers]]
+queue = "flow-provisioning"
+max_batch_size = 10
+max_batch_timeout = 1
+max_retries = 5
+dead_letter_queue = "flow-provisioning-dlq"
+
+[[queues.consumers]]
+queue = "flow-provisioning-dlq"
+max_batch_size = 10
+max_batch_timeout = 5
+
 [[r2_buckets]]
 binding = "BLOBS"
 bucket_name = "flow-files"

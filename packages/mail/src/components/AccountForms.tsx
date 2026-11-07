@@ -360,6 +360,8 @@ function AccountEditor({ account, focusPassword, onSaved, onRemoved }: { account
   });
   const remove = useMutation({ mutationFn: () => mailApi.deleteAccount(account.id), onSuccess: onRemoved });
   const dirty = displayName.trim() !== account.displayName || !!password || serversChanged;
+  // The organization's mailbox (platform.md §3.4): its password and servers are the platform's, and it stays.
+  const hosted = account.kind === 'hosted';
 
   return (
     <form
@@ -370,7 +372,8 @@ function AccountEditor({ account, focusPassword, onSaved, onRemoved }: { account
         if (dirty) save.mutate();
       }}
     >
-      {account.status !== 'ok' && (
+      {hosted && <p className="text-[14px] text-muted">Your organization's mailbox, set up for you. It cannot be removed, and FreeFlow keeps its password.</p>}
+      {account.status !== 'ok' && !hosted && (
         <div className="rounded-lg border border-warn-border bg-warn-bg p-3 text-[14px]">
           <b>{account.status === 'auth_failed' ? 'The mail server stopped accepting the password.' : 'The mail server could not be reached.'}</b>
           {account.statusMessage && <div className="mt-0.5 text-muted">{account.statusMessage}</div>}
@@ -382,17 +385,21 @@ function AccountEditor({ account, focusPassword, onSaved, onRemoved }: { account
       <Field label="Your name" htmlFor="edit-name">
         <Input id="edit-name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
       </Field>
-      <Field label={account.status === 'auth_failed' ? 'Password (enter it again)' : 'New password'} htmlFor="edit-password" hint={<PasswordHint preset={null} />}>
-        <Input id="edit-password" type="password" autoComplete="off" autoFocus={focusPassword} placeholder={account.status === 'auth_failed' ? '' : 'Leave empty to keep the current one'} value={password} onChange={(e) => setPassword(e.target.value)} />
-      </Field>
-      <Advanced open={advanced} onToggle={() => setAdvanced(!advanced)}>
-        <ServerFields id="edit-imap" title="Incoming (IMAP)" value={servers.imap} onChange={(imap) => setServers((s) => ({ ...s, imap }))} email={account.email} />
-        <ServerFields id="edit-smtp" title="Outgoing (SMTP)" value={servers.smtp} onChange={(smtp) => setServers((s) => ({ ...s, smtp }))} email={account.email} />
-      </Advanced>
+      {!hosted && (
+        <>
+          <Field label={account.status === 'auth_failed' ? 'Password (enter it again)' : 'New password'} htmlFor="edit-password" hint={<PasswordHint preset={null} />}>
+            <Input id="edit-password" type="password" autoComplete="off" autoFocus={focusPassword} placeholder={account.status === 'auth_failed' ? '' : 'Leave empty to keep the current one'} value={password} onChange={(e) => setPassword(e.target.value)} />
+          </Field>
+          <Advanced open={advanced} onToggle={() => setAdvanced(!advanced)}>
+            <ServerFields id="edit-imap" title="Incoming (IMAP)" value={servers.imap} onChange={(imap) => setServers((s) => ({ ...s, imap }))} email={account.email} />
+            <ServerFields id="edit-smtp" title="Outgoing (SMTP)" value={servers.smtp} onChange={(smtp) => setServers((s) => ({ ...s, smtp }))} email={account.email} />
+          </Advanced>
+        </>
+      )}
       <ErrorBox error={save.error ?? remove.error} />
       {saved && !dirty && <div className="text-[14px] text-[#1e8e3e]">Saved.</div>}
       <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
-        {confirmRemove ? (
+        {hosted ? null : confirmRemove ? (
           <div className="flex flex-wrap items-center gap-2 text-[14px]">
             <span>Remove {account.email} from FreeFlow? Your mail stays on the server.</span>
             <Button type="button" size="sm" variant="destructive" onClick={() => remove.mutate()} disabled={remove.isPending}>

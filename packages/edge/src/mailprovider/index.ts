@@ -23,9 +23,25 @@ export const noneMailProvider: MailProvider = {
   getMailbox: unconfigured,
 };
 
+/** One fake per isolate and settings, so the Queue consumer, the routes and the dev log route see the same mailboxes. */
+const fakes = new Map<string, FakeMailProvider>();
+
+/** Whether accounts get hosted mailboxes: a provider is configured and the `flow-provisioning` Queue is bound. */
+export const hostedMailEnabled = (env: MailProviderEnv & { PROVISIONING?: unknown }) => !!env.PROVISIONING && mailProviderFor(env).name !== 'none';
+
 export function mailProviderFor(env: MailProviderEnv, fetchFn?: typeof fetch): MailProvider {
   const kind = (env.MAIL_PROVIDER ?? '').trim().toLowerCase();
-  if (kind === 'fake') return new FakeMailProvider({ greenmailApiUrl: env.GREENMAIL_API_URL || undefined, ...(fetchFn ? { fetch: fetchFn } : {}) });
+  if (kind === 'fake') {
+    const opts = {
+      greenmailApiUrl: env.GREENMAIL_API_URL || undefined,
+      imapPort: Number(env.GREENMAIL_IMAP_PORT) || undefined,
+      smtpPort: Number(env.GREENMAIL_SMTP_PORT) || undefined,
+    };
+    if (fetchFn) return new FakeMailProvider({ ...opts, fetch: fetchFn });
+    const key = JSON.stringify(opts);
+    if (!fakes.has(key)) fakes.set(key, new FakeMailProvider(opts));
+    return fakes.get(key)!;
+  }
   if (kind === 'opensrs') {
     if (!env.OPENSRS_API_URL || !env.OPENSRS_USER || !env.OPENSRS_PASSWORD) {
       console.error('MAIL_PROVIDER=opensrs needs OPENSRS_API_URL, OPENSRS_USER and OPENSRS_PASSWORD; using none');

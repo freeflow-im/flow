@@ -22,6 +22,7 @@ const link=async(re,tries=20)=>{for(let i=0;i<tries;i++){const m=[...fs.readFile
 async function signup(email,name){await api(null,'POST','/v1/auth/register',{email});await sleep(400);const m=[...fs.readFileSync(log,'utf8').matchAll(new RegExp('to='+email+'.*?signup=([A-Za-z0-9_-]+)','g'))].at(-1);return (await api(null,'POST','/v1/auth/register/complete',{token:m[1],displayName:name,password:'correct-horse-battery'})).j;}
 const A=await signup('ann@example.com','Ann'),Bo=await signup('bob@example.com','Bob');t('two sign-ups',A.token&&Bo.token);
 let r=await api(A.token,'POST','/v1/workspaces',{name:'Locked In',slug:'locked-in'});t('create organization',r.s===201,JSON.stringify(r.j).slice(0,110));const W=r.j.id;
+{const cfg=(await api(null,'GET','/v1/config')).j;const me=(await api(A.token,'GET','/v1/me/accounts')).j.accounts?.find(a=>a.organizationId===W);t(cfg.hostedMail?'with a mail provider, her account is provisioned (test/e2e-provisioning.mjs)':'without a mail provider, her account starts active',cfg.hostedMail?!!me:me?.state==='active',JSON.stringify(me).slice(0,140));}
 r=await api(A.token,'GET','/v1/me/workspaces');t('me/workspaces fans out',r.j.workspaces?.length===1&&r.j.workspaces[0].id===W,JSON.stringify(r.j).slice(0,110));
 r=await api(Bo.token,'GET','/v1/me/workspaces');t('stranger has none',r.j.workspaces?.length===0);
 r=await api(Bo.token,'GET',`/v1/workspaces/${W}/channels`);t('stranger refused channels',r.s===403||r.s===404,r.s);

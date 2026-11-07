@@ -60,4 +60,7 @@ export interface MailProviderEnv {
   OPENSRS_DKIM_KEY_FORMAT?: string;
   /** With the fake: GreenMail's REST API (`http://127.0.0.1:8080`), so a made mailbox is a real GreenMail user. A var. */
   GREENMAIL_API_URL?: string;
+  /** With the fake: the GreenMail ports its mailboxes' settings name (default 3143 and 3025), for a second GreenMail. Vars. */
+  GREENMAIL_IMAP_PORT?: string;
+  GREENMAIL_SMTP_PORT?: string;
 }

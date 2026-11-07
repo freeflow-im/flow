@@ -9,6 +9,7 @@ import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { WORKSPACE_POLICY_DEFAULTS, type MemberRole, type WorkspaceDTO, type WorkspaceMemberDTO, type WorkspacePolicies } from '@flow/shared';
 import { api } from '../lib/api';
+import { publicConfig } from '../lib/google';
 import { useAuth, useSelection } from '../state';
 import { useChannels, useMembers, useWorkspaces } from '../hooks';
 import { AutomationsSection } from './AutomationsSection';
@@ -33,6 +34,13 @@ export default function AdminView() {
   const members = useMembers(sel.workspaceId);
   const channels = useChannels(sel.workspaceId);
   const [tab, setTab] = useState<AdminTab>(() => requestedTab ?? 'organization');
+  // Whether accounts get hosted mailboxes here (platform.md §3.4): the Organization tab's "Set up mailboxes" then shows.
+  const [hostedMail, setHostedMail] = useState(false);
+  useEffect(() => {
+    let live = true;
+    publicConfig().then((c) => live && setHostedMail(!!c.hostedMail), () => {});
+    return () => { live = false; };
+  }, []);
 
   useEffect(() => {
     requestedTab = null;
@@ -108,7 +116,7 @@ export default function AdminView() {
           )
         ) : (
           <div className="mx-auto max-w-3xl">
-            {ws && <OrganizationSection ws={ws} roster={roster} meId={auth.user.id} />}
+            {ws && <OrganizationSection ws={ws} roster={roster} meId={auth.user.id} hostedMail={hostedMail} />}
             <p className="mb-4 text-sm text-muted">
               {roster.length} {roster.length === 1 ? 'member' : 'members'}. Owners and admins can change
               roles and remove people. The workspace owner can't be changed or removed.
@@ -273,10 +281,13 @@ export function OrganizationSection({
   ws,
   roster,
   meId,
+  hostedMail = false,
 }: {
   ws: WorkspaceDTO;
   roster: WorkspaceMemberDTO[];
   meId: string;
+  /** A mail provider is configured (GET /v1/config `hostedMail`): offer to set up mailboxes for everyone. */
+  hostedMail?: boolean;
 }) {
   const { api } = useBoundApi();
   const qc = useQueryClient();
@@ -284,6 +295,7 @@ export function OrganizationSection({
   const [error, setError] = useState<string | null>(null);
   const [heir, setHeir] = useState('');
   const [confirming, setConfirming] = useState(false);
+  const [queued, setQueued] = useState<number | null>(null);
 
   const owner = roster.find((m) => m.role === 'owner');
   const policies: WorkspacePolicies = { ...WORKSPACE_POLICY_DEFAULTS, ...ws.policies };
@@ -310,6 +322,13 @@ export function OrganizationSection({
 
   const setPolicy = <K extends keyof WorkspacePolicies>(key: K, value: WorkspacePolicies[K]) =>
     run(() => api('PATCH', `/v1/workspaces/${ws.id}`, { policies: { [key]: value } }));
+
+  // Every account without a hosted mailbox (members from before the provider, or one whose setup stopped) is sent to be set up.
+  const provisionAll = () =>
+    run(async () => {
+      const out = await api<{ queued: number }>('POST', `/v1/workspaces/${ws.id}/provision`, {});
+      setQueued(out.queued);
+    });
 
   const transfer = () =>
     run(async () => {
@@ -363,6 +382,24 @@ export function OrganizationSection({
           <span className="text-muted">Allow sharing by link</span>
         </label>
       </div>
+      {hostedMail && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 border-t border-hairline pt-3 text-sm">
+          <span className="text-muted">Mailboxes at the organization's address</span>
+          <button
+            data-testid="admin-provision"
+            className="rounded border border-hairline px-2.5 py-1 text-xs hover:bg-daypill disabled:opacity-50"
+            disabled={busy}
+            onClick={() => void provisionAll()}
+          >
+            Set up mailboxes for everyone
+          </button>
+          {queued !== null && (
+            <span data-testid="admin-provision-result" className="text-xs text-muted">
+              {queued === 0 ? 'Everyone has a mailbox.' : `Setting up ${queued} ${queued === 1 ? 'mailbox' : 'mailboxes'}.`}
+            </span>
+          )}
+        </div>
+      )}
       {isOwner && (
         <div className="flex flex-wrap items-center gap-2 border-t border-hairline pt-3 text-sm">
           <span className="text-muted">Transfer ownership to</span>

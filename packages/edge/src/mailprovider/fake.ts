@@ -19,7 +19,7 @@ export class FakeMailProvider implements MailProvider {
   readonly domains = new Map<string, { quotaBytes: number; maxUsers: number; dkim?: { selector: string; privateKeyPem: string } }>();
   readonly mailboxes = new Map<string, { displayName: string; password: string; quotaBytes: number; state: MailboxState }>();
 
-  constructor(private readonly opts: { greenmailApiUrl?: string | undefined; fetch?: typeof fetch } = {}) {}
+  constructor(private readonly opts: { greenmailApiUrl?: string | undefined; imapPort?: number | undefined; smtpPort?: number | undefined; fetch?: typeof fetch } = {}) {}
 
   private record(method: string, ...args: unknown[]) { this.calls.push({ method, args }); }
 
@@ -29,8 +29,8 @@ export class FakeMailProvider implements MailProvider {
 
   mailSettings(address: string) {
     return {
-      imap: { host: '127.0.0.1', port: 3143, security: 'none' as const, username: address },
-      smtp: { host: '127.0.0.1', port: 3025, security: 'none' as const, username: address },
+      imap: { host: '127.0.0.1', port: this.opts.imapPort ?? 3143, security: 'none' as const, username: address },
+      smtp: { host: '127.0.0.1', port: this.opts.smtpPort ?? 3025, security: 'none' as const, username: address },
     };
   }
 
@@ -57,7 +57,8 @@ export class FakeMailProvider implements MailProvider {
     const address = m.address.toLowerCase();
     if (!this.domains.has(domainOf(address))) throw new ProviderError('not_found', `no domain ${domainOf(address)}`);
     if (this.mailboxes.has(address)) return;
-    if (this.opts.greenmailApiUrl) await this.greenmail('POST', '/api/user', { email: address, login: address, password: m.password });
+    // GreenMail answers 400 "already exists" for a user it has (this isolate's memory is newer than GreenMail's).
+    if (this.opts.greenmailApiUrl) await this.greenmail('POST', '/api/user', { email: address, login: address, password: m.password }, /already exists/);
     this.mailboxes.set(address, { displayName: m.displayName, password: m.password, quotaBytes: m.quotaBytes, state: 'enabled' });
   }
 
@@ -90,12 +91,13 @@ export class FakeMailProvider implements MailProvider {
     return m;
   }
 
-  private async greenmail(method: string, path: string, body?: unknown) {
+  private async greenmail(method: string, path: string, body?: unknown, alreadyDone?: RegExp) {
     const res = await (this.opts.fetch ?? fetch)(`${this.opts.greenmailApiUrl!.replace(/\/$/, '')}${path}`, {
       method,
       headers: body ? { 'content-type': 'application/json' } : {},
       ...(body ? { body: JSON.stringify(body) } : {}),
     }).catch((err: Error) => { throw new ProviderError('unavailable', `greenmail ${method} ${path}: ${err.message}`); });
+    if (!res.ok && alreadyDone && res.status === 400 && alreadyDone.test(await res.text().catch(() => ''))) return;
     if (!res.ok) throw new ProviderError(res.status >= 500 ? 'unavailable' : 'bad_request', `greenmail ${method} ${path}: ${res.status}`);
   }
 }

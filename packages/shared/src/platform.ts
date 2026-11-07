@@ -209,6 +209,8 @@ export interface AccountDTO {
   role: AccountRole;
   kind: AccountKind;
   state: AccountState;
+  /** Why provisioning stopped (a provider's refusal), while the account waits in its state; null otherwise (§3.4). */
+  statusMessage?: string | null;
   createdAt: string;
 }
 
