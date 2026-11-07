@@ -111,6 +111,20 @@ export interface AgentJobEventData {
   event: { id: string; seq: number; type: string; ref?: string; channelId?: string };
 }
 
+/** The data of a `calendar.invited` event (phase 4.2), on the invited account alone: the event on its calendar, and who invited it. */
+export interface CalendarInvitedEventData {
+  calendarId: string;
+  eventId: string;
+  uid: string;
+  summary: string;
+  start: string;
+  end: string;
+  allDay: boolean;
+  ownerAccountId: string;
+  url: string;
+  organizer: { email: string; name: string | null; accountId: string };
+}
+
 /** A durable consumer with a cursor in the Events object (§5.2). `consumer` and
  * `owner` are account ids; `parkedAt` is set after repeated delivery failure. */
 export interface SubscriptionDTO {

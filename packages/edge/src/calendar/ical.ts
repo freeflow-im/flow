@@ -24,7 +24,8 @@ const ITERATION_CAP = 50_000;
 const COUNT_WALK_CAP = 5_000;
 
 export type Response = 'accepted' | 'declined' | 'tentative' | 'needs-action';
-export interface Attendee { name: string | null; email: string; role: 'required' | 'optional'; response: Response; self?: true }
+/** `accountId`: the platform account an organizer's native event resolved the address to (`X-FLOW-ACCOUNT`, itip.ts). */
+export interface Attendee { name: string | null; email: string; role: 'required' | 'optional'; response: Response; self?: true; accountId?: string }
 /** What the API shows of a VEVENT, kept as JSON on its row so a list never parses iCalendar for a plain event. */
 export interface EventData {
   summary: string; location: string | null; description: string | null; allDay: boolean; timezone: string | null;
@@ -162,7 +163,8 @@ function person(p: Property, me: Set<string>, organizer: boolean): Attendee | nu
   const response: Response = organizer ? 'accepted' : partstat === 'ACCEPTED' ? 'accepted' : partstat === 'DECLINED' ? 'declined' : partstat === 'TENTATIVE' ? 'tentative' : 'needs-action';
   const role = String(p.getFirstParameter('role') ?? '').toUpperCase() === 'OPT-PARTICIPANT' ? 'optional' : 'required';
   const cn = p.getFirstParameter('cn');
-  return { name: cn ? String(cn) : null, email, role, response, ...(me.has(email) ? { self: true as const } : {}) };
+  const accountId = p.getFirstParameter('x-flow-account');
+  return { name: cn ? String(cn) : null, email, role, response, ...(me.has(email) ? { self: true as const } : {}), ...(typeof accountId === 'string' && accountId ? { accountId } : {}) };
 }
 
 const CONFERENCE_HOSTS: [RegExp, string][] = [
@@ -947,6 +949,20 @@ export function guestsOf(raw: string, uid: string, me: string[]): { email: strin
     }
   }
   return [...out].map(([email, name]) => ({ email, name }));
+}
+
+/** Each VEVENT of a UID with its RECURRENCE-ID's instant (0 for a master or a plain event); a VEVENT needs no DTSTART here (a REPLY's has none). */
+export function recurrenceIdsOf(raw: string, uid: string): { rid: number; partstats: Map<string, string>; comment: string | null }[] {
+  const vcal = parseCalendar(raw);
+  const zones = new Zones(vcal, 'UTC');
+  return vevents(vcal, uid).map((ev) => {
+    const p = ev.getFirstProperty('recurrence-id');
+    return {
+      rid: p?.getFirstValue() ? zones.utcOf(p) : 0,
+      partstats: new Map(ev.getAllProperties('attendee').map((a) => [mailto(a.getFirstValue()), String(a.getFirstParameter('partstat') ?? 'NEEDS-ACTION').toUpperCase()] as const)),
+      comment: text(ev, 'comment'),
+    };
+  });
 }
 
 /** The organizer's address of an object's event, or null. */

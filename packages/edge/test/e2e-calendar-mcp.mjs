@@ -34,6 +34,8 @@ await dav('PUT',`${WORK}invite-${tag}.ics`,ics('BEGIN:VEVENT',`UID:invite-${tag}
 await dav('PUT',`${WORK}gym-${tag}.ics`,ics('BEGIN:VEVENT',`UID:gym-${tag}`,'DTSTAMP:20261101T000000Z','DTSTART:20261109T150000Z','DTEND:20261109T160000Z','RRULE:FREQ=DAILY;COUNT=5','SUMMARY:Gym','END:VEVENT'),{'content-type':'text/calendar'});
 r=await api(A.token,'POST','/v1/calendar/accounts',{email:EMAIL,displayName:'Ann',password:'x',server:{url:DAV+'/',username:USER}});
 t('Ann connects Radicale',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,120));
+// Her native calendar (phase 4.1) was the default; this run writes to the Radicale one.
+await api(A.token,'PATCH',`/v1/calendar/calendars/${r.j.calendars?.find((c)=>c.name==='Work')?.id}`,{isDefault:true});
 
 // --- OAuth: Calendar is a checkbox, on as the page starts ------------------------------------------------------------------
 r=await api(null,'POST','/oauth/register',{client_name:'Calendar Agent',redirect_uris:['http://localhost/callback']});const CLIENT=r.j.client_id;

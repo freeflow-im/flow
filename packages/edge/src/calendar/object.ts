@@ -8,7 +8,9 @@
 //
 // Each account also has a native calendar (platform.md §3.5, phase 4.1; calendar.md §15) whose store is this object: its
 // writes go to SQLite with etags of our own and are published into the organization's event log, and it can be shared by
-// grants, a reader's requests arriving through `handleShared`.
+// grants, a reader's requests arriving through `handleShared`. Its events with attendees are scheduled between accounts
+// (phase 4.2; itip.ts): the organizer's object calls each platform attendee's object (`receiveItip`) with REQUEST and
+// CANCEL, an attendee's REPLY comes back the same way, and attendees outside the platform get iMIP by mail.
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { formatReference } from '@flow/shared';
 import {
@@ -24,7 +26,8 @@ import { ApiError } from '../errors';
 import { decryptBlob, encryptBlob } from '../org/crypto/index';
 import { CalDav, type Credential, type Discovery, type Driver, type Interval, type RemoteCalendar } from './drivers/caldav';
 import { googlePrincipal, refreshAccess, type GoogleClient } from './google';
-import { DAY_MS, deleteFromEvent, editEvent, newEvent, parseInstant, parseRid, respondTo, type Fields, type Scope, type WriteContext } from './ical';
+import { DAY_MS, deleteFromEvent, editEvent, itipReply, itipRequest, newEvent, organizerOf, parseInstant, parseRid, respondTo, type Fields, type Scope, type WriteContext } from './ical';
+import { ITIP_METHODS, acceptCancel, acceptReply, acceptRequest, attendeeAddresses, decide, markAccounts, platformAttendees, summaryOf, type ItipMethodIn, type ResolvedAttendee } from './itip';
 import type { CalendarMail } from './imip';
 import { Invites, type InviteMail, type Notified } from './invites';
 import { CALENDAR_TABLES, CalendarStore, type CalendarRow, type EventOccurrence } from './store';
@@ -65,6 +68,16 @@ const SHARED_ROUTES: [string, RegExp][] = [
   ['GET', /^\/v1\/calendar\/calendars\/[^/]+\/grants$/], ['PUT', /^\/v1\/calendar\/calendars\/[^/]+\/grants$/],
   ['DELETE', /^\/v1\/calendar\/calendars\/[^/]+\/grants\/[^/]+$/],
 ];
+/** An iTIP message from another account's Calendar object (`receiveItip`, platform.md §3.5): `to` is the account it is for, when known. */
+export interface ItipDelivery {
+  method: ItipMethodIn; ics: string;
+  from: { accountId: string; email: string };
+  to?: { accountId: string; email: string; name: string; organizationId: string };
+}
+/** What `receiveItip` did; a refusal crosses the binding as `{ ok: false, … }` (an ApiError's code does not). */
+export type ItipAnswer = { ok: true; action: 'created' | 'updated' | 'cancelled' | 'replied' | 'added' | 'ignored'; eventId?: string; reason?: string } | { ok: false; status: number; code: string; message: string };
+/** A delivery is tried this many times (one retry) before it is logged as failed; the organizer's write stands either way. */
+const DELIVERY_TRIES = 2;
 /** A native calendar as a reader of it sees it (GET /v1/calendar/shared). */
 export interface SharedCalendarInfo { id: string; name: string; color: string; role: Role }
 
@@ -186,6 +199,70 @@ export class Calendar extends DurableObject<CalendarEnv> {
       if (c && role) { const info = this.toCalendar(c); out.push({ id: c.id, name: info.name, color: info.color, role }); }
     }
     return out;
+  }
+
+  /**
+   * An iTIP message from another account's Calendar object, by binding (platform.md §3.5, phase 4.2): a REQUEST, ADD or
+   * CANCEL from an event's organizer to this attendee, or a REPLY from an attendee to this organizer. The rules are
+   * itip.ts's (who may send what, SEQUENCE and DTSTAMP order). A new invitation goes on the account's native calendar
+   * with `needs-action` and publishes `calendar.invited` to the account; an update keeps the account's own answer and
+   * reminders; a cancellation keeps the event as cancelled; a reply changes the replier's answer on the organizer's copy.
+   * `to` names the account for an object that has not been used yet (an agent's), so its native calendar can be made.
+   */
+  async receiveItip(m: ItipDelivery): Promise<ItipAnswer> {
+    const refuse = (status: number, code: string, message: string): ItipAnswer => ({ ok: false, status, code, message });
+    if (!m || !ITIP_METHODS.includes(m.method) || typeof m.ics !== 'string' || m.ics.length > 512 * 1024 || !m.from?.accountId || !m.from.email) return refuse(400, 'bad_request', 'not an iTIP message');
+    if (m.to) {
+      const account = { id: m.to.accountId, principalId: '', organizationId: m.to.organizationId } as NonNullable<CallerContext['account']>;
+      const wrong = ownerMismatch(this.store, { account, user: null }, 'the Calendar');
+      if (wrong) { console.error(`[calendar] ${wrong}`); return refuse(500, 'wrong_account', wrong); }
+      if (m.to.organizationId !== this.store.state('owner_organization_id')) return refuse(403, 'forbidden', 'an invitation from another organization');
+      this.accountId = m.to.accountId;
+      this.store.ensureNative({ accountId: m.to.accountId, email: m.to.email, displayName: m.to.name });
+    }
+    if (!this.store.state('owner_account_id')) return refuse(404, 'not_found', 'no such calendar');
+    try {
+      return await timing.run({ server: 0, actor: m.from.accountId }, () => this.applyItip(m));
+    } catch (err) {
+      if (err instanceof ApiError) return refuse(err.statusCode, err.code, err.message);
+      console.error(`[calendar] ${m.method}: ${(err as Error).message.slice(0, 200)}`);
+      return refuse(500, 'server_error', 'internal server error');
+    }
+  }
+
+  /** `receiveItip`'s work, on the native calendar holding the event (else the default native one), under its lock. */
+  private async applyItip(m: ItipDelivery): Promise<ItipAnswer> {
+    const incoming = summaryOf(m.ics);
+    if (!incoming) throw badRequest('the message has no event');
+    const uid = incoming.uid;
+    const natives = this.store.calendars().filter((c) => c.href.startsWith(NATIVE_HREF));
+    const target = natives.find((c) => this.store.objectByUid(c.id, uid)) ?? natives.find((c) => c.is_default) ?? natives[0];
+    if (!target) throw notFound('no calendar here');
+    const acct = this.account(target.account_id);
+    const me = this.meOn(acct, target);
+    const eventId = eventIdOf(target.id, uid);
+    return this.locked(target.id, async (): Promise<ItipAnswer> => {
+      const obj = this.store.objectByUid(target.id, uid);
+      const d = decide(m.method, incoming, obj ? summaryOf(obj.raw, uid) : null, m.from, me);
+      if (d.action === 'refuse') throw calendarError(d.code === 'bad_request' ? 400 : 403, d.code, d.message);
+      if (d.action === 'ignore') return { ok: true, action: 'ignored', reason: d.reason, ...(obj ? { eventId } : {}) };
+      const now = Date.now();
+      if (d.action === 'reply') {
+        const r = acceptReply(obj!.raw, m.ics, uid, m.from.email, now);
+        await this.putAndStore(acct, target, obj!.href, r.raw, obj!.etag, { extra: { attendeeResponse: { email: m.from.email.toLowerCase(), response: r.response } } });
+        return { ok: true, action: 'replied', eventId };
+      }
+      if (d.action === 'cancel') {
+        const raw = acceptCancel(obj!.raw, m.ics, uid, now);
+        if (raw === null) await this.removeAt(acct, target, obj!.href, obj!.etag);
+        else await this.putAndStore(acct, target, obj!.href, raw, obj!.etag, { type: 'calendar.event.cancelled' });
+        return { ok: true, action: 'cancelled', eventId };
+      }
+      const raw = acceptRequest(obj?.raw ?? null, m.ics, uid, me, { add: d.action === 'add' });
+      await this.putAndStore(acct, target, obj?.href ?? this.hrefIn(target, uid), raw, obj?.etag ?? null);
+      if (d.action === 'create') await this.publish('calendar.invited', target, uid, { audience: `account:${this.store.state('owner_account_id')}`, organizer: m.from });
+      return { ok: true, action: d.action === 'create' ? 'created' : d.action === 'add' ? 'added' : 'updated', eventId };
+    });
   }
 
   private get allowInsecure() { return this.env.CALENDAR_ALLOW_INSECURE === '1'; }
@@ -525,17 +602,116 @@ export class Calendar extends DurableObject<CalendarEnv> {
       },
       hrefFor: (calendarId, uid) => this.hrefIn(this.calendar(calendarId), uid),
       now: () => Date.now(),
+      applyReply: async (ics, replier) => {
+        try {
+          const r = await this.applyItip({ method: 'REPLY', ics, from: { accountId: '', email: replier } });
+          return r.ok && r.action === 'replied';
+        } catch {
+          return false;
+        }
+      },
     }, this.mailPort());
   }
   /** The guests of an event the person changed told by email, where the server does not (invites.ts `notify`); never fails the write. */
   private async notify(calendarId: string, uid: string, before: string | null, after: string | null, opts: { cancelRid?: number } = {}): Promise<Notified | null> {
-    // A native calendar's guests are scheduled between accounts (phase 4.2), not by email: nothing is sent yet.
-    if (this.store.calendar(calendarId)?.href.startsWith(NATIVE_HREF)) return null;
+    // A native calendar's guests are scheduled between accounts, and only the ones outside the platform are emailed.
+    const native = this.store.calendar(calendarId);
+    if (native?.href.startsWith(NATIVE_HREF)) return this.schedule(native, uid, before, after, opts);
     try {
       return await this.invites().notify(calendarId, uid, before, after, opts);
     } catch (err) {
       return { invitationsSent: false, invitationsNote: `The guests could not be emailed: ${(err as Error).message.slice(0, 200)}` };
     }
+  }
+
+  // ---- scheduling between accounts (platform.md §3.5, phase 4.2; itip.ts) ---------------------------------------
+
+  /**
+   * Addresses resolved through the directory (`accountByAddress`): an account of this organization that is not removed
+   * or suspended is a platform attendee (its id, its name); anything else (another organization, no account, no
+   * directory here) is outside, null.
+   */
+  private async resolveAddresses(emails: string[]): Promise<Map<string, ResolvedAttendee | null>> {
+    const out = new Map<string, ResolvedAttendee | null>(emails.map((e) => [e, null]));
+    const dir = this.env.DIRECTORY, org = this.store.state('owner_organization_id');
+    if (!dir || !org || !emails.length) return out;
+    const stub = dir.get(dir.idFromName('directory'));
+    type Found = { id: string; organizationId: string; displayName?: string; state?: string } | null;
+    await Promise.all(emails.map(async (e) => {
+      try {
+        const answer = await (stub.call as never as (m: string, a: unknown[]) => Promise<{ ok: boolean; value?: Found }>)('accountByAddress', [e]);
+        const acct = answer.ok ? answer.value : null;
+        if (acct && acct.organizationId === org && acct.state !== 'removed' && acct.state !== 'suspended') out.set(e, { accountId: acct.id, name: acct.displayName || null });
+      } catch (err) {
+        console.warn(`[calendar] an attendee not resolved: ${(err as Error).message.slice(0, 200)}`);
+      }
+    }));
+    return out;
+  }
+
+  /**
+   * An event the account organizes on a native calendar, with its attendees marked before it is stored: the ones that are
+   * accounts of the organization get `X-FLOW-ACCOUNT` (itip.ts `markAccounts`), so later changes reach their objects.
+   */
+  private async markAttendees(c: CalendarRow, raw: string, uid: string): Promise<string> {
+    const self = this.store.state('owner_account_id');
+    if (!self || !c.href.startsWith(NATIVE_HREF)) return raw;
+    const me = this.account(c.account_id).email.toLowerCase();
+    if (organizerOf(raw, uid) !== me) return raw;
+    const emails = attendeeAddresses(raw, uid).filter((e) => e !== me);
+    if (!emails.length) return raw;
+    return markAccounts(raw, uid, await this.resolveAddresses(emails), { email: me, accountId: self });
+  }
+
+  /**
+   * After the organizer changed an event on a native calendar (`before` and `after`: its text either side of the write,
+   * null when it did not exist or is gone): every platform attendee's object gets the REQUEST (new or changed) or the
+   * CANCEL (deleted, taken off the guest list, or one occurrence, `cancelRid`) by binding, in parallel, before the request
+   * is answered; the attendees outside the platform are emailed (invites.ts `notify`, from the organizer's mailbox).
+   */
+  private async schedule(c: CalendarRow, uid: string, before: string | null, after: string | null, opts: { cancelRid?: number } = {}): Promise<Notified | null> {
+    const self = this.store.state('owner_account_id'), org = this.store.state('owner_organization_id');
+    const me = this.account(c.account_id).email.toLowerCase();
+    const ref = after ?? before;
+    if (!self || !org || !ref || organizerOf(ref, uid) !== me) return null;
+    const was = platformAttendees(before, uid, self), is = platformAttendees(after, uid, self);
+    const ctx = { now: Date.now(), zone: c.timezone ?? 'UTC' };
+    const sends: { to: [string, { accountId: string; name: string | null }]; method: 'REQUEST' | 'CANCEL'; ics: string }[] = [];
+    if (opts.cancelRid && before) {
+      if (was.size) { const ics = itipRequest(before, uid, 'CANCEL', ctx, opts.cancelRid); for (const to of was) sends.push({ to, method: 'CANCEL', ics }); }
+    } else if (after) {
+      if (is.size) { const ics = itipRequest(after, uid, 'REQUEST', ctx); for (const to of is) sends.push({ to, method: 'REQUEST', ics }); }
+      const gone = before ? [...was].filter(([e]) => !is.has(e)) : [];
+      if (gone.length) { const ics = itipRequest(before!, uid, 'CANCEL', ctx); for (const to of gone) sends.push({ to, method: 'CANCEL', ics }); }
+    } else if (was.size) {
+      const ics = itipRequest(before!, uid, 'CANCEL', ctx);
+      for (const to of was) sends.push({ to, method: 'CANCEL', ics });
+    }
+    await Promise.all(sends.map(({ to: [email, a], method, ics }) => this.deliver(a.accountId, {
+      method, ics, from: { accountId: self, email: me }, to: { accountId: a.accountId, email, name: a.name ?? email.split('@')[0]!, organizationId: org },
+    })));
+    const platform = new Set([...was.keys(), ...is.keys()]);
+    try {
+      return await this.invites().notify(c.id, uid, before, after, { ...opts, only: (email) => !platform.has(email) });
+    } catch (err) {
+      return { invitationsSent: false, invitationsNote: `The guests could not be emailed: ${(err as Error).message.slice(0, 200)}` };
+    }
+  }
+
+  /** One iTIP message to another account's Calendar object, tried twice; a failure is logged (never an address or an id) and answers null. */
+  private async deliver(accountId: string, msg: ItipDelivery): Promise<ItipAnswer | null> {
+    const ns = this.env.CALENDAR;
+    if (!ns) return null;
+    for (let i = 1; i <= DELIVERY_TRIES; i++) {
+      try {
+        const answer = (await ns.get(ns.idFromName(accountId)).receiveItip(msg)) as ItipAnswer;
+        if (!answer.ok) console.warn(`[calendar] ${msg.method} refused by the other calendar: ${answer.code}`);
+        return answer;
+      } catch (err) {
+        console.warn(`[calendar] ${msg.method} delivery ${i}/${DELIVERY_TRIES} failed: ${(err as Error).message.slice(0, 200)}`);
+      }
+    }
+    return null;
   }
 
   // ---- events ---------------------------------------------------------------------------------------------------
@@ -550,11 +726,11 @@ export class Calendar extends DurableObject<CalendarEnv> {
    * Writes an object to the server and then to the cache: the etag the PUT answered with, else the object as stored there.
    * A native calendar has no server: the store is written (If-Match against the stored etag) and the change is published.
    */
-  private async putAndStore(acct: AccountRow, c: CalendarRow, href: string, raw: string, etag: string | null): Promise<void> {
+  private async putAndStore(acct: AccountRow, c: CalendarRow, href: string, raw: string, etag: string | null, publish: { type?: string; extra?: Record<string, unknown> } = {}): Promise<void> {
     const opts = { me: this.meOn(acct, c), zone: c.timezone ?? 'UTC' };
     if (acct.kind === 'native') {
       const { uid } = this.store.putNative(c.id, href, raw, etag, opts);
-      if (uid) await this.publishChange(etag === null ? 'calendar.event.added' : 'calendar.event.updated', c, uid);
+      if (uid) await this.publish(publish.type ?? (etag === null ? 'calendar.event.added' : 'calendar.event.updated'), c, uid, { extra: publish.extra });
       return;
     }
     const d = this.driverOf(acct);
@@ -570,7 +746,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
       const gone = this.store.objectAt(c.id, href);
       const before = gone ? this.store.find(c.id, gone.uid, null)?.event ?? null : null;
       this.store.deleteNative(c.id, href, etag);
-      if (gone) await this.publishChange('calendar.event.cancelled', c, gone.uid, before);
+      if (gone) await this.publish('calendar.event.cancelled', c, gone.uid, { snapshot: before });
       return;
     }
     await this.driverOf(acct).delete(href, etag);
@@ -580,12 +756,13 @@ export class Calendar extends DurableObject<CalendarEnv> {
   /**
    * A native calendar's change into the organization's event log (platform.md §5.2): `calendar.event.added`, `.updated` or
    * `.cancelled`, about the event, for whoever the calendar is shared with (`ref:` the calendar, from the share index) and
-   * its owner (`data.ownerAccountId`). A failure is logged, never the write's.
+   * its owner (`data.ownerAccountId`), with `extra` data (a REPLY's `attendeeResponse`). `calendar.invited` (phase 4.2)
+   * goes to the invited account alone (`audience`), with the organizer. A failure is logged, never the write's.
    */
-  private async publishChange(type: string, c: CalendarRow, uid: string, snapshot?: EventOccurrence | null): Promise<void> {
+  private async publish(type: string, c: CalendarRow, uid: string, o: { snapshot?: EventOccurrence | null; extra?: Record<string, unknown>; audience?: `account:${string}`; organizer?: { accountId: string; email: string } } = {}): Promise<void> {
     const ns = this.env.EVENTS, org = this.store.state('owner_organization_id'), owner = this.store.state('owner_account_id');
     if (!ns || !org || !owner) return;
-    const ev = snapshot ?? this.store.find(c.id, uid, null)?.event;
+    const ev = o.snapshot ?? this.store.find(c.id, uid, null)?.event;
     if (!ev) return;
     const eventId = eventIdOf(c.id, uid);
     const base = (this.env.WEB_URL_BASE ?? '').replace(/\/+$/, '');
@@ -593,9 +770,13 @@ export class Calendar extends DurableObject<CalendarEnv> {
       await ns.get(ns.idFromName(org)).publish({
         type, organizationId: org, actor: timing.getStore()?.actor ?? null,
         ref: { organizationId: org, app: 'calendar', kind: 'event', id: eventId },
-        audience: `ref:${formatReference({ organizationId: org, app: 'calendar', kind: 'calendar', id: c.id })}`,
+        audience: o.audience ?? `ref:${formatReference({ organizationId: org, app: 'calendar', kind: 'calendar', id: c.id })}`,
         ts: new Date().toISOString(),
-        data: { calendarId: c.id, eventId, uid, summary: ev.summary, start: ev.start, end: ev.end, allDay: ev.allDay, ownerAccountId: owner, url: `${base}/calendar/week/${ev.start.slice(0, 10)}?event=${encodeURIComponent(eventId)}` },
+        data: {
+          calendarId: c.id, eventId, uid, summary: ev.summary, start: ev.start, end: ev.end, allDay: ev.allDay, ownerAccountId: owner, url: `${base}/calendar/week/${ev.start.slice(0, 10)}?event=${encodeURIComponent(eventId)}`,
+          ...(o.organizer ? { organizer: { email: ev.organizer?.email ?? o.organizer.email, name: ev.organizer?.name ?? null, accountId: o.organizer.accountId } } : {}),
+          ...o.extra,
+        },
       });
     } catch (err) {
       console.error(`[calendar] ${type}: ${(err as Error).message.slice(0, 200)}`);
@@ -877,7 +1058,8 @@ export class Calendar extends DurableObject<CalendarEnv> {
       const cal = this.writable(b.calendarId ? this.calendar(b.calendarId) : this.store.calendars().find((x) => x.is_default) ?? (() => { throw badRequest('connect a calendar first'); })());
       const acct = this.account(cal.account_id);
       const uid = crypto.randomUUID();
-      const raw = newEvent(uid, b as Fields & { summary: string; start: string; end: string }, this.writeContext(acct, cal, b.timezone));
+      // On a native calendar the attendees that are accounts of the organization are marked, to be scheduled by object call.
+      const raw = await this.markAttendees(cal, newEvent(uid, b as Fields & { summary: string; start: string; end: string }, this.writeContext(acct, cal, b.timezone)), uid);
       const href = this.hrefIn(cal, uid);
       await this.locked(cal.id, () => this.putAndStore(acct, cal, href, raw, null));
       this.syncSoon(cal.id);
@@ -897,12 +1079,18 @@ export class Calendar extends DurableObject<CalendarEnv> {
       const ctx = this.writeContext(t.acct, cal, fields.timezone);
       // A change the guests see (anything but the person's own reminders) is sent to them where the server does not schedule.
       const guestsCare = Object.keys(fields).some((k) => k !== 'reminders');
+      // On a native calendar only the organizer changes an event; an attendee answers it (respond) or sets its own reminders.
+      if (cal.href.startsWith(NATIVE_HREF) && (guestsCare || (moveTo && moveTo !== cal.id))) {
+        const organizer = organizerOf(t.obj.raw, t.uid);
+        if (organizer && !this.meOn(t.acct, cal).has(organizer)) throw calendarError(403, 'not_organizer', 'Only the organizer can change this event; answer the invitation instead');
+      }
+      const mark = (target: CalendarRow, raw: string, uid: string) => (fields.attendees !== undefined ? this.markAttendees(target, raw, uid) : Promise.resolve(raw));
       if (moveTo && moveTo !== cal.id) {
         // To another calendar: the whole event, written there first and then deleted here.
         if (t.rid && scope !== 'all') throw badRequest('calendarId: an occurrence moves with its whole series (scope all)');
         const dest = this.writable(this.calendar(moveTo));
         const destAcct = this.account(dest.account_id);
-        const edited = editEvent(t.obj.raw, t.uid, t.rid, 'all', fields as Fields, ctx, () => crypto.randomUUID()).raw;
+        const edited = await mark(dest, editEvent(t.obj.raw, t.uid, t.rid, 'all', fields as Fields, ctx, () => crypto.randomUUID()).raw, t.uid);
         const href = this.hrefIn(dest, t.uid);
         await this.locked(dest.id, () => this.putAndStore(destAcct, dest, href, edited, null));
         await this.locked(cal.id, () => this.removeAt(t.acct, cal, t.obj.href, t.obj.etag)).catch((err) => this.conflicted(cal, err));
@@ -912,6 +1100,8 @@ export class Calendar extends DurableObject<CalendarEnv> {
         return c.json({ event: this.view(dest.id, t.uid, 0), ...sent });
       }
       const out = editEvent(t.obj.raw, t.uid, t.rid, scope, fields as Fields, ctx, () => crypto.randomUUID());
+      out.raw = await mark(cal, out.raw, t.uid);
+      if (out.created) out.created.raw = await mark(cal, out.created.raw, out.created.uid);
       await this.locked(cal.id, async () => {
         if (out.created) {
           const href = this.hrefIn(cal, out.created.uid);
@@ -958,7 +1148,15 @@ export class Calendar extends DurableObject<CalendarEnv> {
       const raw = respondTo(t.obj.raw, t.uid, t.rid, b.response, b.comment, this.writeContext(t.acct, t.c));
       await this.locked(t.c.id, () => this.putAndStore(t.acct, t.c, t.obj.href, raw, t.obj.etag)).catch((err) => this.conflicted(t.c, err));
       this.syncSoon(t.c.id);
-      const replied = await this.invites().replied(t.c.id, raw, t.uid, t.rid, b.response);
+      // An organizer of the platform hears it from this object by binding, before this answers; one outside, by email.
+      const organizer = t.c.href.startsWith(NATIVE_HREF) ? summaryOf(raw, t.uid)?.organizer : null;
+      const self = this.store.state('owner_account_id');
+      let replied: Awaited<ReturnType<Invites['replied']>>;
+      if (organizer?.accountId && self && organizer.accountId !== self) {
+        const ics = itipReply(raw, t.uid, t.rid, { me: [...this.meOn(t.acct, t.c)], now: Date.now() });
+        const answer = await this.deliver(organizer.accountId, { method: 'REPLY', ics, from: { accountId: self, email: t.acct.email.toLowerCase() } });
+        replied = answer?.ok ? { replied: 'server' } : { replied: 'failed', replyError: answer && !answer.ok ? answer.message : 'The organizer\'s calendar could not be reached' };
+      } else replied = await this.invites().replied(t.c.id, raw, t.uid, t.rid, b.response);
       return c.json({ event: this.view(t.c.id, t.uid, t.rid), ...replied });
     });
 

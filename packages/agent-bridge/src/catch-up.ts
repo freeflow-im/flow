@@ -6,14 +6,17 @@
 // kept in a state file beside the config, makes sure no message is answered twice across a restart.
 // Wake jobs (phase 2.4) arrive as `agent.job` events on the agent's own account: the subscription catches up on them too,
 // and a second one, `bridge-jobs:<agent id>` with `socket` delivery, pokes the socket when one comes while connected.
-// Job ids taken are remembered in the same state file, so a job is run once.
+// Job ids taken are remembered in the same state file, so a job is run once. Invitations (phase 4.2) come the same way:
+// `calendar.invited` on the agent's own account, in both subscriptions, each event id answered once (state file too).
 import fs from 'node:fs';
 import path from 'node:path';
 import type { DeliveryMode, Event, EventFilter, PlatformEvent, SubscriptionDTO } from '@flow/shared';
 import type { FlowApi } from './api.js';
 import { socketEventOf } from './gateway.js';
 
-export const CATCH_UP_TYPES = ['chat.message.created', 'chat.thread.reply', 'chat.reaction.added', 'agent.job'];
+export const CATCH_UP_TYPES = ['chat.message.created', 'chat.thread.reply', 'chat.reaction.added', 'agent.job', 'calendar.invited'];
+/** The events addressed to the agent's account alone that ask it for a turn: the job subscription's, and what `onAccount` gets. */
+export const ACCOUNT_TYPES = ['agent.job', 'calendar.invited'];
 /** How many answered message ids are remembered. */
 export const HANDLED_MAX = 500;
 /** A bound on one catch-up's pages, so a server that never runs dry cannot hold the start-up forever. */
@@ -26,8 +29,8 @@ export const jobsSubscriptionName = (agentId: string): string => `bridge-jobs:${
 
 export interface SubscriptionSpec { name: string; filter: EventFilter; delivery: DeliveryMode }
 const mainSpec = (agentId: string): SubscriptionSpec => ({ name: subscriptionName(agentId), filter: { types: CATCH_UP_TYPES }, delivery: 'pull' });
-/** The live path for jobs: a poke on the socket when an `agent.job` for this account comes. */
-export const jobsSpec = (agentId: string): SubscriptionSpec => ({ name: jobsSubscriptionName(agentId), filter: { types: ['agent.job'], self: true }, delivery: 'socket' });
+/** The live path for jobs and invitations: a poke on the socket when an `agent.job` or `calendar.invited` for this account comes. */
+export const jobsSpec = (agentId: string): SubscriptionSpec => ({ name: jobsSubscriptionName(agentId), filter: { types: ACCOUNT_TYPES, self: true }, delivery: 'socket' });
 
 /**
  * The bridge's subscription in the organization: found by name, or made (starting at the log's head). `outdated` when
@@ -45,7 +48,8 @@ export async function ensureSubscription(api: SubscriptionApi, workspaceId: stri
 
 /**
  * Reads the subscription without waiting, page by page until it is empty, handing each Chat event to `feed` in order
- * and acking each page's `next` once its events are fed. Returns the events fed and the cursor reached.
+ * (and each of ACCOUNT_TYPES to `onJob`) and acking each page's `next` once its events are fed. Returns the events fed
+ * and the cursor reached.
  */
 export async function catchUp(
   api: SubscriptionApi,
@@ -62,7 +66,7 @@ export async function catchUp(
     if (out.gap) log(`catch-up: events ${out.gap.from}–${out.gap.to} aged out of the log before they were read`);
     for (const e of out.events) {
       const event = socketEventOf(e);
-      if (!event && !(e.type === 'agent.job' && onJob)) continue;
+      if (!event && !(ACCOUNT_TYPES.includes(e.type) && onJob)) continue;
       events++;
       try {
         if (event) await feed(event);

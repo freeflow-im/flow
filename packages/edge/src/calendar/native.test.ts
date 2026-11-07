@@ -54,7 +54,8 @@ describe('native calendars on the Calendar object', () => {
     expect(r.s).toBe(201);
     const ev = r.j.event;
     expect(ev).toMatchObject({ calendarId: mine.id, summary: 'Lunch' });
-    expect(r.j.invitationsSent).toBeUndefined();
+    // An attendee outside the platform is emailed (phase 4.2): with no mail account here, the answer says it was not.
+    expect(r.j).toMatchObject({ invitationsSent: false, invitationsNote: expect.stringMatching(/No mail account/) });
     expect(published).toHaveLength(1);
     expect(published[0]).toMatchObject({
       type: 'calendar.event.added', organizationId: 'org-1', actor: 'acct-ann',
@@ -68,7 +69,7 @@ describe('native calendars on the Calendar object', () => {
     expect(r.j.event).toMatchObject({ summary: 'Long lunch' });
     expect(r.j.event.etag).not.toBe(ev.etag);
     r = await ann('DELETE', `/v1/calendar/events/${encodeURIComponent(ev.id)}`);
-    expect(r.j).toEqual({ ok: true });
+    expect(r.j).toMatchObject({ ok: true, invitationsSent: false });
     expect(published.map((e) => [e.type, (e.data as { summary: string }).summary])).toEqual([['calendar.event.added', 'Lunch'], ['calendar.event.updated', 'Long lunch'], ['calendar.event.cancelled', 'Long lunch']]);
     expect(cal.busy(Date.parse('2026-11-01T00:00:00Z'), Date.parse('2026-11-30T00:00:00Z'))).toEqual([]);
   });

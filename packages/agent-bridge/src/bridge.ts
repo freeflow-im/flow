@@ -15,6 +15,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import type {
   AgentJobEventData,
+  CalendarInvitedEventData,
   ChannelDTO,
   Event,
   HuddleInviteData,
@@ -36,6 +37,7 @@ import { EXIT_RESTART, EXIT_UPDATE } from './supervisor.js';
 import { currentVersion, isOutdated, latestPublishedVersion } from './version.js';
 import { HuddleVoiceManager } from './huddle-voice.js';
 import { CATCH_UP_TYPES, catchUp, ensureSubscription, HandledMessages, jobsSpec, subscriptionName } from './catch-up.js';
+import { invitationPrompt } from './calendar-tools.js';
 
 /** How often the socket's latest cursor is acked to the bridge's subscription. */
 const CURSOR_ACK_MS = 30_000;
@@ -226,6 +228,9 @@ export class AgentBridge {
 
   /** Wake jobs taken (platform.md §5.2, phase 2.4), across restarts, so a job delivered again or replayed runs once. */
   private handledJobs: HandledMessages;
+  /** Invitations answered (phase 4.2), by event id, across restarts: each `calendar.invited` starts one turn. */
+  private handledInvitations: HandledMessages;
+  private readonly takingInvitations = new Set<string>();
   /** Jobs whose ack is in flight, so two copies of one `agent.job` arriving together are taken once. */
   private readonly takingJobs = new Set<string>();
   /** The `bridge-jobs:` socket subscription, whose poke means an `agent.job` came; one read at a time. */
@@ -242,6 +247,7 @@ export class AgentBridge {
     this.sem = new Semaphore(cfg.concurrency);
     this.handled = new HandledMessages(cfg.stateFile ?? null, (m) => this.log(m));
     this.handledJobs = new HandledMessages(cfg.stateFile ?? null, (m) => this.log(m), undefined, 'handledJobIds');
+    this.handledInvitations = new HandledMessages(cfg.stateFile ?? null, (m) => this.log(m), undefined, 'handledInvitationIds');
     this.sessions = new SessionManager({
       cfg: cfg.runtime,
       idleMs: cfg.runtime.sessionIdleSec * 1000,
@@ -361,7 +367,7 @@ export class AgentBridge {
     this.latestCursor = sub.cursor;
     const before = this.answered;
     try {
-      const out = await catchUp(this.api, this.workspace.id, sub, (ev) => this.handleEvent(ev), (m) => this.log(m), (e) => this.handleJob(e));
+      const out = await catchUp(this.api, this.workspace.id, sub, (ev) => this.handleEvent(ev), (m) => this.log(m), (e) => this.handleAccountEvent(e));
       this.subscription.acked = out.next;
       this.latestCursor = Math.max(this.latestCursor, out.next);
       this.log(`caught up: ${out.events} events, answered ${this.answered - before}`);
@@ -373,14 +379,14 @@ export class AgentBridge {
     }
   }
 
-  /** An older bridge's subscription, caught up: replaced by one with today's types (`agent.job`), starting at the head. */
+  /** An older bridge's subscription, caught up: replaced by one with today's types (`agent.job`, `calendar.invited`), starting at the head. */
   private async replaceSubscription(oldId: string): Promise<void> {
     try {
       const fresh = await this.api.createSubscription(this.workspace.id, { name: subscriptionName(this.me.id), filter: { types: CATCH_UP_TYPES }, delivery: 'pull' });
       await this.api.deleteSubscription(this.workspace.id, oldId).catch((err: Error) => this.log(`old subscription not deleted: ${err.message}`));
       this.subscription = { id: fresh.id, acked: fresh.cursor };
       this.latestCursor = Math.max(this.latestCursor, fresh.cursor);
-      this.log('event subscription renewed with agent.job');
+      this.log('event subscription renewed with today\'s types');
     } catch (err) {
       this.log(`event subscription not renewed: ${(err as Error).message}`);
     }
@@ -389,7 +395,17 @@ export class AgentBridge {
   /** The socket subscription that pokes when a wake job comes (catch-up.ts `jobsSpec`). Without it jobs still come, late. */
   private async ensureJobsSubscription(): Promise<void> {
     try {
-      this.jobsSub = { id: (await ensureSubscription(this.api, this.workspace.id, this.me.id, jobsSpec(this.me.id))).id };
+      const spec = jobsSpec(this.me.id);
+      const sub = await ensureSubscription(this.api, this.workspace.id, this.me.id, spec);
+      this.jobsSub = { id: sub.id };
+      if (sub.outdated) {
+        // An older bridge's (agent.job alone): what it holds is read now, then it is replaced by one with today's types.
+        await this.readJobs(sub.id);
+        const fresh = await this.api.createSubscription(this.workspace.id, spec);
+        await this.api.deleteSubscription(this.workspace.id, sub.id).catch((err: Error) => this.log(`old job subscription not deleted: ${err.message}`));
+        this.jobsSub = { id: fresh.id };
+        this.log('job subscription renewed with calendar.invited');
+      }
     } catch (err) {
       this.log(`no job subscription (${(err as Error).message}) — wake jobs arrive with the next catch-up or delivery`);
     }
@@ -406,12 +422,58 @@ export class AgentBridge {
     try {
       do {
         this.jobsAgain = false;
-        await catchUp(this.api, this.workspace.id, { id, cursor: 0 }, () => {}, (m) => this.log(m), (e) => this.handleJob(e));
+        await catchUp(this.api, this.workspace.id, { id, cursor: 0 }, () => {}, (m) => this.log(m), (e) => this.handleAccountEvent(e));
       } while (this.jobsAgain);
     } catch (err) {
       this.log(`job subscription read failed: ${(err as Error).message}`);
     } finally {
       this.jobsReading = false;
+    }
+  }
+
+  /** An event on the agent's own account (catch-up.ts ACCOUNT_TYPES): a wake job, or an invitation. */
+  async handleAccountEvent(e: PlatformEvent): Promise<void> {
+    if (e.type === 'calendar.invited') return this.handleInvitation(e);
+    if (e.type === 'agent.job') return this.handleJob(e);
+  }
+
+  /**
+   * A `calendar.invited` event (platform.md §7, phase 4.2): a turn in the DM with the organizer when they are a member of
+   * the organization, else with the agent's sponsor, asking the agent to answer with `respond_to_event` (or ask first).
+   * One turn per event id, across restarts (state.json); an invitation from another organization is a sibling process's.
+   */
+  async handleInvitation(e: PlatformEvent): Promise<void> {
+    const d = e.data as CalendarInvitedEventData | null;
+    const eventId = d?.eventId;
+    if (!eventId || (e.organizationId && e.organizationId !== this.workspace.id)) return;
+    if (this.handledInvitations.has(eventId) || this.takingInvitations.has(eventId)) {
+      this.log('invitation already answered — skipping the copy');
+      return;
+    }
+    this.takingInvitations.add(eventId);
+    try {
+      const find = () => [...this.members.values()].find((m) => m.userId !== this.me.id && !!d.organizer &&
+        ((!!d.organizer.accountId && m.accountId === d.organizer.accountId) || (!!d.organizer.email && [m.address, m.email].some((a) => a?.toLowerCase() === d.organizer.email.toLowerCase()))));
+      let organizer = find();
+      if (!organizer) {
+        await this.refreshDirectory().catch((err: Error) => this.log(`directory refresh failed: ${err.message}`));
+        organizer = find();
+      }
+      const who = organizer?.userId ?? this.members.get(this.me.id)?.sponsorId ?? null;
+      if (!who) {
+        this.log('invitation: neither the organizer nor a sponsor to ask in a DM — not answered');
+        this.handledInvitations.add(eventId);
+        return;
+      }
+      const dm = await this.api.createDm(this.workspace.id, [who]);
+      this.channels.set(dm.id, { ...dm, isMember: true });
+      this.handledInvitations.add(eventId);
+      this.log(`invitation: a turn in the DM with the ${organizer ? 'organizer' : 'sponsor'}`);
+      this.enqueue(this.taskMessage(`invite-${createHash('sha256').update(eventId).digest('hex').slice(0, 16)}`, dm.id, who, invitationPrompt(d)));
+    } catch (err) {
+      this.log(`invitation: not started (${(err as Error).message}) — not answered`);
+    } finally {
+      this.takingInvitations.delete(eventId);
     }
   }
 

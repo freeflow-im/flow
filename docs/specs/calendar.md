@@ -573,8 +573,8 @@ What `platform.md` §3.5 and phase 4 item 1 call the native kind, as built: cale
   stored text), and `store.ts` `putNative` / `deleteNative` write the `objects` row and index its `events` rows as a synced
   object is, with an etag of their own (`"<n>-<fnv1a>"`, `n` moving on per write); `ifMatch` null creates (an object already
   there is `conflict`), else it must equal the stored etag (409 otherwise). No driver call. Reads (the window, occurrences,
-  search) are unchanged. Guests on a native event are stored but not told: no iMIP is sent for a native calendar (scheduling
-  between accounts is phase 4.2). An invitation from Mail can still be answered onto it.
+  search) are unchanged. Guests on a native event are scheduled as §16 says (by object call, iMIP only
+  for those outside the platform). An invitation from Mail can still be answered onto it.
 - **Events on the bus**: each native write publishes into the organization's Events object (`EVENTS` binding)
   `calendar.event.added`, `.updated` or `.cancelled`, with `ref` `<org>/calendar/event/<eventId>`, audience
   `ref:<org>/calendar/calendar/<calendarId>`, the caller's account as `actor`, and `data { calendarId, eventId, uid, summary,
@@ -606,3 +606,40 @@ What `platform.md` §3.5 and phase 4 item 1 call the native kind, as built: cale
   manager by channel shares, another organization 404, a revoke 404; the forwarding's id finding), and the native section of
   `test/e2e-calendar.mjs` (Ann's default calendar, create with no `calendarId`, window, patch, delete, her bus read, Bob in her
   organization 404 → viewer → `shared` and the forwarded window → 403 on create → editor creates → free/busy → revoke → 404).
+
+## 16. Scheduling between accounts (platform phase 4.2, 2026-11-06)
+
+What `platform.md` §3.5 and phase 4 item 2 describe, as built: iTIP between Calendar objects, iMIP only for addresses outside the platform.
+
+- **Resolution**: a native event the account organizes has its attendee addresses resolved on create, and on a change to its
+  attendees, through the directory (`accountByAddress`); an account of the same organization that is not removed or suspended
+  gets `X-FLOW-ACCOUNT=<accountId>` on its ATTENDEE line (CN filled from the account), as does the organizer's ORGANIZER line;
+  anything else is outside. The API shows it as `accountId` on attendees.
+- **Delivery** (`object.ts` `schedule`, after the write): each platform attendee's object gets `receiveItip({ method, ics, from,
+  to })` by binding, in parallel, before the request answers; a REQUEST for a new or changed event, a CANCEL for a deleted one,
+  one taken off the list, or one occurrence deleted. A thrown call is retried once and logged; a refusal is logged; the
+  organizer's write stands. Outside attendees get iMIP from the organizer's mailbox (`invites.ts` `notify` with `only`), so a
+  native event's answer gains `invitationsSent` / `invitationsNote` as a CalDAV one does.
+- **The rules** (`itip.ts`, tested on RFC 5546 §4.2's examples): REQUEST, ADD and CANCEL only from the organizer on record (by
+  address and, where marked, account), never to the organizer's own copy; a higher SEQUENCE wins, then a later DTSTAMP, an older
+  or equal message is ignored (a CANCEL of the same version applies). REPLY only to the organizer's copy, from one of its
+  attendees about themself, ACCEPTED, DECLINED or TENTATIVE, not for an older SEQUENCE.
+- **At the attendee**: a new REQUEST goes on the account's native calendar (the one holding the UID, else the default native one;
+  an object never used, an agent's, makes its calendar from `to`) with `needs-action`, `calendar.event.added`, and
+  `calendar.invited` (`audience: account:<attendee>`, `data` the event's plus `organizer { email, name, accountId }`). An update
+  replaces the copy keeping the account's PARTSTAT and reminders per VEVENT. A CANCEL of the event keeps it with
+  STATUS:CANCELLED (`calendar.event.cancelled`); of one occurrence, EXDATEs it. On a native calendar only the organizer changes
+  an event: an attendee's PATCH of anything but reminders (or a move) is 403 `not_organizer`; DELETE removes their copy only.
+- **Answers**: `events/:id/respond` on a platform copy sends the REPLY to the organizer's object by binding (`replied: 'server'`,
+  or `failed`), applied there in the same request: the replier's PARTSTAT and `calendar.event.updated` with
+  `data.attendeeResponse { email, response }`. An organizer outside is emailed as before. A REPLY from outside, read by Mail's
+  card (`POST /v1/calendar/invites`), is applied to the organizer's native copy (`replyApplied: true`); the message's sender is
+  not checked beyond being an attendee, as with any iMIP. A REQUEST from outside is answered onto the default calendar as before.
+- **The bridge** (0.37.6): `calendar.invited` is in its catch-up subscription and its `bridge-jobs:` socket one (an older one
+  is renewed); each starts one turn (event id in `state.json`) in the DM with the organizer when a member, else the sponsor.
+  Tools `list_my_events`, `get_event`, `respond_to_event` call `/v1/calendar/*` as the agent with `?workspace=`.
+- **Tests**: `itip.test.ts`, `scheduling.test.ts` (three objects wired together), the bridge's `calendar.test.ts`, the scheduling
+  section of `test/e2e-calendar.mjs` (Ann, Bob and an agent) and the native section of `test/e2e-calendar-invites.mjs` (an outside
+  guest by mail, their REPLY applied, an outside REQUEST onto the native calendar).
+- **Not here**: COUNTER, REFRESH, DECLINECOUNTER and delegation; a REQUEST that resets answers when the time moves (answers are
+  kept); the organizer re-sending the attendee list after a REPLY.

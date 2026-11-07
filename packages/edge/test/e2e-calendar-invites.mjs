@@ -136,6 +136,35 @@ r=await api(A.token,'POST',`/v1/calendar/events/${enc(`${work.id}:${CU}`)}/respo
 t('decline in Calendar: the answer emailed',r.s===200&&r.j.event?.myResponse==='declined'&&r.j.replied==='email',r.s+' '+JSON.stringify(r.j).slice(0,160));
 const chenMail=await waitFor(async()=>(await mailbox(CHEN)).find(m=>m.subject?.startsWith('Declined: Sync')));t('Chen receives the REPLY',!!chenMail,chenMail?.subject);
 
+// ---- a native calendar (platform phase 4.2): an outside guest is emailed from the account's own address, the guest's
+// emailed answer goes on the event when Mail's card reads it, and an outside invitation lands on the default native calendar
+r=await api(A.token,'GET','/v1/calendar/accounts');const NADDR=r.j.accounts?.find(a=>a.kind==='native')?.email;
+const NCAL=(await api(A.token,'GET','/v1/calendar/calendars')).j.calendars?.find(c=>/^n\./.test(c.id));
+r=await api(A.token,'POST','/v1/mail/accounts',{email:NADDR,displayName:'Scott Persinger',password:'x',imap:server(3143),smtp:server(3025)});
+t('native: a mail account at the account\'s own address',r.s===201&&!!NCAL,r.s+' '+JSON.stringify(r.j).slice(0,120));
+const NACC=r.j.account?.id, NP=`/v1/mail/accounts/${NACC}`;
+const ninbox=async(subject)=>waitFor(async()=>{const x=await api(A.token,'GET',`${NP}/messages?folder=INBOX&limit=30`);return x.j.messages?.find(m=>m.subject===subject)});
+const GUEST=`guest-${tag}@example.com`;
+r=await api(A.token,'POST','/v1/calendar/events',{calendarId:NCAL.id,summary:`Native review ${tag}`,start:'2026-11-18T15:00:00Z',end:'2026-11-18T16:00:00Z',timezone:'UTC',attendees:[{email:GUEST,name:'Guest'}]});
+t('native: an outside guest of a native event is emailed',r.s===201&&r.j.invitationsSent===true,r.s+' '+JSON.stringify(r.j).slice(0,200));
+const NREV=r.j.event, NUID=decodeURIComponent(NREV.eventId.split(':')[1]);
+let gMail=await waitFor(async()=>(await mailbox(GUEST)).find(m=>m.subject?.startsWith(`Invitation: Native review ${tag}`)));
+let gIcs=gMail?unfold(new TextDecoder().decode(gMail.attachments.find(a=>a.mimeType==='text/calendar').content)):'';
+t('native: the guest gets the REQUEST from the account\'s address',gMail?.from?.address===NADDR&&/^METHOD:REQUEST/m.test(gIcs)&&gIcs.includes(`mailto:${GUEST}`),gMail?.subject+' '+gIcs.slice(0,120));
+await smtp.sendMail({from:{name:'Guest',address:GUEST},to:NADDR,subject:`Accepted: Native review ${tag}`,text:'Guest accepted\n',icalEvent:{method:'REPLY',content:ics('METHOD:REPLY','BEGIN:VEVENT',`UID:${NUID}`,'DTSTART:20261118T150000Z','DTEND:20261118T160000Z','DTSTAMP:20261106T120000Z',`ORGANIZER:mailto:${NADDR}`,`ATTENDEE;PARTSTAT=ACCEPTED;CN=Guest:mailto:${GUEST}`,'SEQUENCE:0',`SUMMARY:Native review ${tag}`,'END:VEVENT')}});
+msg=await ninbox(`Accepted: Native review ${tag}`);
+r=await api(A.token,'POST','/v1/calendar/invites',{account:NACC,messageId:`${NACC}:INBOX:${msg?.uid}`,part:msg?.attachments?.find(a=>a.mimeType==='text/calendar')?.index});
+t('native: the guest\'s emailed REPLY, read by the card, is applied',r.s===200&&r.j.action==='reply'&&r.j.replyApplied===true&&r.j.organizerIsMe===true,r.s+' '+JSON.stringify(r.j).slice(0,200));
+r=await api(A.token,'GET',`/v1/calendar/events/${enc(NREV.id)}`);t('native: the organizer\'s event shows the guest accepted',r.j.event?.attendees?.find(a=>a.email===GUEST)?.response==='accepted',JSON.stringify(r.j.event?.attendees));
+r=await api(A.token,'PATCH',`/v1/calendar/calendars/${NCAL.id}`,{isDefault:true});t('native: the native calendar the default again',r.j.calendar?.isDefault,JSON.stringify(r.j));
+const NUID2=`outside-${tag}@google.com`;
+await smtp.sendMail({from:{name:'Ann Lee',address:ANN},to:NADDR,subject:`Invitation: Outside ${tag}`,text:'Invitation\n',icalEvent:{method:'REQUEST',content:ics('METHOD:REQUEST','BEGIN:VEVENT','DTSTART:20261119T150000Z','DTEND:20261119T160000Z','DTSTAMP:20261106T120000Z',`ORGANIZER;CN=Ann Lee:mailto:${ANN}`,`UID:${NUID2}`,
+  `ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;CN=Ann Lee:mailto:${ANN}`,`ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${NADDR}`,'SEQUENCE:0','STATUS:CONFIRMED',`SUMMARY:Outside ${tag}`,'END:VEVENT')}});
+msg=await ninbox(`Invitation: Outside ${tag}`);
+r=await api(A.token,'POST','/v1/calendar/invites/respond',{account:NACC,messageId:`${NACC}:INBOX:${msg?.uid}`,part:msg?.attachments?.find(a=>a.mimeType==='text/calendar')?.index,response:'accepted'});
+t('native: an outside invitation, accepted, lands on the default native calendar and the answer is emailed',r.s===200&&r.j.onCalendar?.calendarId===NCAL.id&&r.j.onCalendar.myResponse==='accepted'&&r.j.replied==='email',r.s+' '+JSON.stringify(r.j).slice(0,200));
+annMail=await waitFor(async()=>(await mailbox(ANN)).find(m=>m.subject?.startsWith(`Accepted: Outside ${tag}`)));t('native: Ann receives that REPLY from the account\'s address',annMail?.from?.address===NADDR,annMail?.subject);
+
 // ---- the log: one line per request, no address, summary or id in them
 const lines=fs.readFileSync(log,'utf8').split('\n').filter(l=>/\[calendar\] POST \/v1\/calendar\/invites/.test(l));
 t('timing lines for the invite routes',lines.some(l=>/POST \/v1\/calendar\/invites 200/.test(l))&&lines.some(l=>/POST \/v1\/calendar\/invites\/respond 200/.test(l))&&lines.some(l=>/POST \/v1\/calendar\/invites\/cancel 200/.test(l)),lines.slice(-3).join(' | '));

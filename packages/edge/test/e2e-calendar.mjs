@@ -254,4 +254,38 @@ r=await api(A.token,'DELETE',`/v1/calendar/calendars/${NATIVE.id}/grants/${enc(`
 r=await api(Bob.token,'GET',NWIN);t('native: after the revoke Bob gets 404 again',r.s===404,r.s);
 r=await api(Bob.token,'GET','/v1/calendar/shared');t('native: and it is no longer shared with him',r.j.calendars?.length===0,JSON.stringify(r.j));
 r=await api(Bob.token,'GET','/v1/events?since=0&types=calendar.*');t('native: nor on his bus',!(r.j.events??[]).some(e=>e.data?.calendarId===NATIVE.id),JSON.stringify(r.j).slice(0,120));
+
+// ---- scheduling between accounts (platform phase 4.2): Ann invites Bob, an agent and an outside guest by address; Bob
+// and the agent get the event by object call, answer, follow a move and a cancellation; the guest would get mail.
+r=await api(A.token,'POST',`/v1/workspaces/${ORGA}/agent-invites`,{});
+r=await api(null,'POST','/v1/agents/redeem',{code:r.j.code,username:`calbot${tag}`,key:'a-long-agent-key-for-the-calendar-test',name:'Builder'});const AGT=r.j.agentToken;
+t('sched: an agent joins Ann\'s organization',r.s===201&&!!AGT,r.s+' '+JSON.stringify(r.j).slice(0,120));
+const BOB_ADDR=(await api(Bob.token,'GET','/v1/calendar/accounts')).j.accounts?.find(a=>a.kind==='native')?.email;
+const BOT_ADDR=(await api(AGT,'GET','/v1/me')).j.accounts?.[0]?.address;
+const GUEST=`guest-${tag}@example.com`, SW='from=2027-01-01T00:00:00Z&to=2027-01-31T00:00:00Z';
+t('sched: Bob\'s and the agent\'s addresses',!!BOB_ADDR&&!!BOT_ADDR&&BOB_ADDR!==BOT_ADDR,BOB_ADDR+' '+BOT_ADDR);
+r=await api(A.token,'POST','/v1/calendar/events',{summary:`Review ${tag}`,start:'2027-01-14T15:00:00Z',end:'2027-01-14T16:00:00Z',attendees:[{email:BOB_ADDR},{email:BOT_ADDR},{email:GUEST}]});
+const REV=r.j.event;const acctOf=(ev,e)=>ev?.attendees?.find(a=>a.email===e)?.accountId;const answerOf=(ev,e)=>ev?.attendees?.find(a=>a.email===e)?.response;
+t('sched: Ann creates it; Bob and the agent resolve to accounts, the guest is outside',r.s===201&&!!acctOf(REV,BOB_ADDR)&&!!acctOf(REV,BOT_ADDR)&&!acctOf(REV,GUEST),r.s+' '+JSON.stringify(REV?.attendees));
+t('sched: the guest is the only one emailed (Ann has no mail account here, so it says so)',r.j.invitationsSent===false&&/No mail account/.test(r.j.invitationsNote??''),JSON.stringify(r.j).slice(-160));
+r=await api(Bob.token,'GET',`/v1/calendar/events?${SW}`);const BCOPY=r.j.events?.find(e=>e.summary===`Review ${tag}`);
+const bobDefault=(await api(Bob.token,'GET','/v1/calendar/calendars')).j.calendars?.find(c=>c.isDefault);
+t('sched: Bob\'s default calendar holds it, needs-action',!!BCOPY&&BCOPY.calendarId===bobDefault?.id&&BCOPY.myResponse==='needs-action'&&BCOPY.organizer?.email===ANN_ADDR,JSON.stringify(BCOPY).slice(0,200));
+r=await api(AGT,'GET',`/v1/calendar/events?${SW}&workspace=${ORGA}`);const ACOPY=r.j.events?.find(e=>e.summary===`Review ${tag}`);
+t('sched: so does the agent\'s',r.s===200&&!!ACOPY&&ACOPY.myResponse==='needs-action'&&/^n\./.test(ACOPY.calendarId),r.s+' '+JSON.stringify(r.j).slice(0,200));
+const invitedIn=async(tok,copy)=>((await api(tok,'GET','/v1/events?since=0&types=calendar.invited')).j.events??[]).find(e=>e.data?.eventId===copy?.eventId);
+let ie=await invitedIn(Bob.token,BCOPY);t('sched: Bob\'s one-shot read has calendar.invited, with the organizer',!!ie&&ie.data.organizer?.email===ANN_ADDR&&ie.data.organizer.name==='Ann'&&!!ie.data.organizer.accountId&&ie.data.summary===`Review ${tag}`&&/\/calendar\/week\/2027-01-14\?event=/.test(ie.data.url),JSON.stringify(ie).slice(0,240));
+ie=await invitedIn(AGT,ACOPY);t('sched: and the agent\'s',!!ie&&ie.data.organizer?.email===ANN_ADDR,JSON.stringify(ie).slice(0,160));
+r=await api(A.token,'GET','/v1/events?since=0&types=calendar.invited');t('sched: an invitation is the invited account\'s alone',!(r.j.events??[]).some(e=>e.data?.summary===`Review ${tag}`),JSON.stringify(r.j).slice(0,120));
+r=await api(Bob.token,'POST',`/v1/calendar/events/${enc(BCOPY.id)}/respond`,{response:'accepted'});t('sched: Bob accepts; the organizer told by object call',r.s===200&&r.j.event?.myResponse==='accepted'&&r.j.replied==='server',r.s+' '+JSON.stringify(r.j).slice(0,160));
+r=await api(A.token,'GET',`/v1/calendar/events/${enc(REV.id)}`);t('sched: Ann\'s event shows Bob accepted',answerOf(r.j.event,BOB_ADDR)==='accepted'&&answerOf(r.j.event,BOT_ADDR)==='needs-action',JSON.stringify(r.j.event?.attendees));
+r=await api(A.token,'GET','/v1/events?since=0&types=calendar.event.updated');t('sched: and her bus says who answered',(r.j.events??[]).some(e=>e.data?.eventId===REV.eventId&&e.data.attendeeResponse?.email===BOB_ADDR&&e.data.attendeeResponse.response==='accepted'),JSON.stringify((r.j.events??[]).map(e=>e.data?.attendeeResponse)).slice(0,160));
+r=await api(A.token,'PATCH',`/v1/calendar/events/${enc(REV.id)}`,{start:'2027-01-14T16:00:00Z',end:'2027-01-14T17:00:00Z'});t('sched: Ann moves it an hour later',r.s===200,r.s);
+r=await api(Bob.token,'GET',`/v1/calendar/events/${enc(BCOPY.id)}`);t('sched: Bob\'s copy moves and keeps accepted',r.j.event?.start==='2027-01-14T16:00:00.000Z'&&r.j.event.myResponse==='accepted',JSON.stringify(r.j.event).slice(0,200));
+r=await api(AGT,'POST',`/v1/calendar/events/${enc(ACOPY.id)}/respond?workspace=${ORGA}`,{response:'declined'});t('sched: the agent declines through the API, as the agent',r.s===200&&r.j.event?.myResponse==='declined'&&r.j.replied==='server',r.s+' '+JSON.stringify(r.j).slice(0,160));
+r=await api(A.token,'GET',`/v1/calendar/events/${enc(REV.id)}`);t('sched: Ann sees it',answerOf(r.j.event,BOT_ADDR)==='declined'&&answerOf(r.j.event,BOB_ADDR)==='accepted',JSON.stringify(r.j.event?.attendees));
+r=await api(Bob.token,'PATCH',`/v1/calendar/events/${enc(BCOPY.id)}`,{summary:'Mine now'});t('sched: an attendee\'s PATCH of Ann\'s event is 403 not_organizer',r.s===403&&r.j.error?.code==='not_organizer',r.s+' '+JSON.stringify(r.j));
+r=await api(A.token,'DELETE',`/v1/calendar/events/${enc(REV.id)}`);t('sched: Ann cancels',r.s===200&&r.j.ok,r.s);
+r=await api(Bob.token,'GET',`/v1/calendar/events/${enc(BCOPY.id)}`);t('sched: Bob\'s copy is kept, cancelled',r.s===200&&r.j.event?.status==='cancelled',r.s+' '+JSON.stringify(r.j.event).slice(0,160));
+r=await api(AGT,'GET',`/v1/calendar/events/${enc(ACOPY.id)}`);t('sched: and the agent\'s',r.j.event?.status==='cancelled',JSON.stringify(r.j.event).slice(0,120));
 console.log(`\n${pass} passed, ${fail} failed`);process.exit(fail?1:0);

@@ -3,7 +3,7 @@
 // operations (list_channels, list_users, join_channel, leave_channel,
 // create_channel, invite_to_channel, read_messages), and self-service profile
 // bits (set_avatar) against /v1
-// with the agent token.
+// with the agent token, and the agent's calendar (list_my_events, get_event, respond_to_event; calendar-tools.ts).
 //
 // Hand-rolled newline-delimited JSON-RPC (the MCP stdio transport) — a small
 // fixed tool surface; no SDK dependency needed. Conversation context
@@ -17,6 +17,7 @@ import type { ArtifactDTO, WorkspaceMemberDTO } from '@flow/shared';
 import { FlowApi, FlowApiError } from './api.js';
 import { attachmentFilename, formatAttachments } from './attachments.js';
 import { deliverArtifact, deliveryId, inlineArtifactFile } from './artifact-delivery.js';
+import { CALENDAR_TOOLS, CALENDAR_TOOL_NAMES, calendarTool } from './calendar-tools.js';
 
 interface JsonRpcRequest {
   jsonrpc: '2.0';
@@ -380,6 +381,7 @@ const TOOLS = [
       required: ['fileId'],
     },
   },
+  ...CALENDAR_TOOLS,
 ];
 
 const MIME_BY_EXT: Record<string, string> = {
@@ -568,6 +570,10 @@ export async function runMcpServer(): Promise<void> {
   }
 
   async function callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+    if (CALENDAR_TOOL_NAMES.has(name)) {
+      const out = await calendarTool(api, workspaceId, name, args);
+      return toolText(out.text, out.isError);
+    }
     const { channelId, threadRootId } = resolveMessageTarget(args, {
       channelId: defaultChannelId,
       threadRootId: defaultThreadRootId,
