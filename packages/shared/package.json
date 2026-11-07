@@ -13,12 +13,13 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "echo 'no tests' "
+    "test": "vitest run"
   },
   "dependencies": {
     "zod": "^3.24.0"
   },
   "devDependencies": {
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   }
 }
