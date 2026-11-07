@@ -2,6 +2,7 @@
 import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import type { ZodTypeAny, z } from 'zod';
+import type { AccountDTO } from '@flow/shared';
 import { AgentLoginBody, AppLinkExchangeBody, AppleAuthBody, CompleteSignupBody, ConsumeSigninLinkBody, ForgotPasswordBody, GoogleAuthBody, LoginBody, RegisterBody, ResetPasswordBody, SigninLinkBody, emailDomain, type UserDTO } from '@flow/shared';
 import { accountGate, type DirectoryCore } from '../directory/core';
 import type { CallerContext } from '../org/routes/compat';
@@ -81,6 +82,17 @@ export async function resolveAppCaller<E extends AuthEnv>(c: Context<{ Bindings:
   if (usable.length > 1) throw badRequest('organization_required', 'name an organization: ?workspace=<id>');
   const account = usable[0] ?? null;
   return { ...who, user: who.user, organizationId: account?.organizationId ?? null, account };
+}
+
+/**
+ * The caller context for a per-account object (Mail, Calendar: `idFromName(account.id)`, platform.md §3.6): as
+ * `resolveAppCaller`, and a caller with no account in the organization (in none yet, or not in the one named) is a 403
+ * `no_account`. With several and none named, the 400 `organization_required` stands.
+ */
+export async function resolveAccountCaller<E extends AuthEnv>(c: Context<{ Bindings: E }>, app: string): Promise<CallerContext & { user: UserDTO; account: AccountDTO }> {
+  const who = await resolveAppCaller(c);
+  if (!who.account) throw new ApiError(403, 'no_account', `join an organization to use ${app}`);
+  return who as CallerContext & { user: UserDTO; account: AccountDTO };
 }
 
 /** A bearer header, or the cookie the Workspace app's pages carry. */

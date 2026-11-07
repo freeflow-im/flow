@@ -28,6 +28,10 @@ const enc=encodeURIComponent;
 
 const A=await signup(`cal-${tag}@example.com`,'Ann'),Bo=await signup(`cal-other-${tag}@example.com`,'Bo');
 t('sign up',A.token&&Bo.token);
+// Calendars are an account's (platform.md §3.6): each person gets an organization, and someone in none is refused.
+const org=async(u,n)=>(await api(u.token,'POST','/v1/workspaces',{name:`${n} ${tag}`,slug:`${n.toLowerCase()}-${tag}`})).j?.id;
+t('each with an organization',!!(await org(A,'Calann'))&&!!(await org(Bo,'Calbo')));
+{const Cy=await signup(`cal-none-${tag}@example.com`,'Cy');const x=await api(Cy.token,'GET','/v1/calendar/accounts');t('someone in no organization is refused, no_account',x.s===403&&x.j.error?.code==='no_account',x.s+' '+JSON.stringify(x.j));}
 
 let r=await api(null,'GET','/v1/calendar/accounts');t('no session refused',r.s===401,r.s);
 r=await api(A.token,'GET','/v1/calendar/providers?email=someone@icloud.com');t('an iCloud preset',r.s===200&&r.j?.name==='iCloud'&&r.j.url==='https://caldav.icloud.com/'&&r.j.username==='someone@icloud.com'&&!!r.j.appPasswordUrl,JSON.stringify(r.j));

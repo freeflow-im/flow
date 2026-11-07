@@ -2,7 +2,9 @@
 // inside it: both apps have `users`, `sessions` and `folders` tables, and a heavy save here should not hold up a message there.
 import { DurableObject } from 'cloudflare:workers';
 import type { Directory } from '../directory/object';
-import { withDocsContext, type DocsContext } from './runtime/context.ts';
+import type { AccountDTO } from '@flow/shared';
+import type { CallerContext } from '../org/routes/compat';
+import { currentOrganization, withDocsContext, type DocsContext } from './runtime/context.ts';
 import { DocsApp, type Caller, type DocsRequest } from './runtime/fastify.ts';
 import { buildApp } from './server/app.ts';
 import { insertRows, tableCounts } from '../importing';
@@ -25,11 +27,14 @@ export interface DocsEnv {
   BROWSER?: Fetcher;
   /** The PdfOcr container (src/pdfOcr.ts), for scanned PDFs. */
   PDF_OCR?: DurableObjectNamespace;
-  /** FreeFlow Mail's objects, one per person (src/imap/object.ts): the MCP endpoint's Mail tools act on the caller's. */
+  /** FreeFlow Mail's objects, one per account (src/imap/object.ts): the MCP endpoint's Mail tools act on the caller's account's here. */
   MAIL?: DurableObjectNamespace<import('../imap/object').Mail>;
   CALENDAR?: DurableObjectNamespace<import('../calendar/object').Calendar>;
 }
 const BASE = '/workspace';
+
+/** Mail's or Calendar's namespace, as the tools reach an account's object. */
+type AccountObjects = { idFromName(name: string): DurableObjectId; get(id: DurableObjectId): { handle(request: Request, caller: CallerContext): Promise<Response> } };
 
 export class Docs extends DurableObject<DocsEnv> {
   private readonly app = new DocsApp();
@@ -72,7 +77,7 @@ export class Docs extends DurableObject<DocsEnv> {
       dataDir: 'data',
       logger: false,
       appUrl: base,
-      agent: { jobs: false, mail: (userId: string, scope: unknown) => this.assistantMail(userId, scope, base), calendar: (userId: string) => this.assistantCalendar(userId, base) },
+      agent: { jobs: false, mail: (userId: string, scope: unknown) => this.assistantMail(userId, scope, base, currentOrganization()), calendar: (userId: string) => this.assistantCalendar(userId, base, currentOrganization()) },
       host: {
         app: this.app,
         basePath: BASE,
@@ -129,15 +134,15 @@ export class Docs extends DurableObject<DocsEnv> {
 
   /** A request to /mcp, authenticated by the Worker against the directory (routes/mcp.ts), as `caller` in this organization. */
   async mcp(request: Request, caller: McpRequestCaller): Promise<Response> {
-    return this.inOrganization(caller.orgId, () => handleMcp(request, this.hub!, caller, this.mailOf(caller.userId, caller.origin), this.calendarOf(caller.userId, caller.origin)));
+    return this.inOrganization(caller.orgId, () => handleMcp(request, this.hub!, caller, this.mailOf(caller.userId, caller.origin, caller.orgId), this.calendarOf(caller.userId, caller.origin, caller.orgId)));
   }
 
   /**
-   * The assistant's mail tools (server/agent/tools.ts): the person's own Mail object, and saving an attachment into the
+   * The assistant's mail tools (server/agent/tools.ts): the Mail object of the person's account here, and saving an attachment into the
    * chat's scope (their My files in this organization) with the importer the preview's Save to Docs uses.
    */
-  private assistantMail(userId: string, scope: unknown, origin: string): MailToolContext | undefined {
-    const mail = this.mailOf(userId, origin);
+  private assistantMail(userId: string, scope: unknown, origin: string, organizationId: string | undefined): MailToolContext | undefined {
+    const mail = organizationId ? this.mailOf(userId, origin, organizationId) : undefined;
     const stores = this.importStores;
     if (!mail) return undefined;
     return {
@@ -158,28 +163,48 @@ export class Docs extends DurableObject<DocsEnv> {
   }
 
   /**
-   * A person's own Mail object, as its HTTP API (docs/specs/mail-api.md), for the Mail tools: mail is a person's, so this
-   * is theirs whatever organization this object is. Undefined where the Worker has no Mail.
+   * The caller context for the Mail and Calendar objects of the person's account in this organization (platform.md §3.6),
+   * asked of the directory once per tool context. Null for no account here, or one suspended or removed.
    */
-  private mailOf(userId: string, origin: string): ((path: string, init?: RequestInit) => Promise<Response>) | undefined {
-    const ns = this.env.MAIL;
-    if (!ns) return undefined;
-    return (path, init) => ns.get(ns.idFromName(userId)).handle(new Request(`${origin}${path}`, init));
+  private accountCaller(userId: string, organizationId: string): () => Promise<CallerContext | null> {
+    let found: Promise<CallerContext | null> | null = null;
+    return () =>
+      (found ??= this.directory<AccountDTO | null>('accountFor', userId, organizationId).then((account) =>
+        account && account.state !== 'suspended' && account.state !== 'removed' ? { user: null, token: null, authKind: null, ip: '', organizationId, account } : null,
+      ));
+  }
+
+  /** A per-account object's HTTP API, as the tools call it: the account's object, or a 403 `no_account`. */
+  private accountFetch(ns: AccountObjects, app: string, userId: string, origin: string, organizationId: string) {
+    const caller = this.accountCaller(userId, organizationId);
+    return async (path: string, init?: RequestInit): Promise<Response> => {
+      const who = await caller();
+      if (!who?.account) return Response.json({ error: { code: 'no_account', message: `join an organization to use ${app}` } }, { status: 403 });
+      return ns.get(ns.idFromName(who.account.id)).handle(new Request(`${origin}${path}`, init), who);
+    };
   }
 
   /**
-   * A person's own Calendar object, as its HTTP API (docs/specs/calendar.md §4), for the Calendar tools: calendars are a
-   * person's, so this is theirs whatever organization this object is. Undefined where the Worker has no Calendar.
+   * The Mail object of the person's account in this organization, as its HTTP API (docs/specs/mail-api.md), for the Mail
+   * tools. Undefined where the Worker has no Mail.
    */
-  private calendarOf(userId: string, origin: string): ((path: string, init?: RequestInit) => Promise<Response>) | undefined {
-    const ns = this.env.CALENDAR;
-    if (!ns) return undefined;
-    return (path, init) => ns.get(ns.idFromName(userId)).handle(new Request(`${origin}${path}`, init));
+  private mailOf(userId: string, origin: string, organizationId: string): ((path: string, init?: RequestInit) => Promise<Response>) | undefined {
+    const ns = this.env.MAIL;
+    return ns ? this.accountFetch(ns as unknown as AccountObjects, 'Mail', userId, origin, organizationId) : undefined;
   }
 
-  /** The assistant's Calendar tools (server/agent/tools.ts): the person's own Calendar object. */
-  private assistantCalendar(userId: string, origin: string): import('../calendar/calendarTools').CalendarToolContext | undefined {
-    const calendar = this.calendarOf(userId, origin);
+  /**
+   * The Calendar object of the person's account in this organization, as its HTTP API (docs/specs/calendar.md §4), for the
+   * Calendar tools. Undefined where the Worker has no Calendar.
+   */
+  private calendarOf(userId: string, origin: string, organizationId: string): ((path: string, init?: RequestInit) => Promise<Response>) | undefined {
+    const ns = this.env.CALENDAR;
+    return ns ? this.accountFetch(ns as unknown as AccountObjects, 'Calendar', userId, origin, organizationId) : undefined;
+  }
+
+  /** The assistant's Calendar tools (server/agent/tools.ts): the Calendar object of the person's account here. */
+  private assistantCalendar(userId: string, origin: string, organizationId: string | undefined): import('../calendar/calendarTools').CalendarToolContext | undefined {
+    const calendar = organizationId ? this.calendarOf(userId, origin, organizationId) : undefined;
     return calendar ? { calendar, origin } : undefined;
   }
 

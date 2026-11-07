@@ -5,9 +5,10 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { openSuiteSearch } from '@flow/suite-bar';
-import { MailApiError, mailApi, type Category, type MailAccount, type MessageDetail, type ThreadSummary, type TabStatus } from './api';
+import { MailApiError, mailApi, setMailWorkspace, type Category, type MailAccount, type MessageDetail, type ThreadSummary, type TabStatus } from './api';
 import { AccountSettingsDialog, AddAccountDialog } from './components/AccountForms';
 import { ConnectMail } from './components/ConnectMail';
+import { NoOrganization } from './components/NoOrganization';
 import { InboxTabs } from './components/InboxTabs';
 import { MailSuiteBar } from './components/MailSuiteBar';
 import { MessageList, type ListTab } from './components/MessageList';
@@ -55,6 +56,17 @@ type Dialog = { kind: 'add' } | { kind: 'settings'; accountId: string | null; fo
 
 export function App() {
   const qc = useQueryClient();
+  // Mail is the account's in the organization selected in the suite bar (platform.md §3.6): every request names it, and
+  // choosing another one reads everything again.
+  const organizations = useOrganizations();
+  const org = organizations.active?.id ?? null;
+  setMailWorkspace(org);
+  const shownOrg = useRef(org);
+  useEffect(() => {
+    if (shownOrg.current === org) return;
+    shownOrg.current = org;
+    void qc.resetQueries({ queryKey: ['mail'] });
+  }, [org, qc]);
   const accounts = useAccounts();
   const narrow = useMediaQuery('(max-width: 899px)');
   // The open thread in place of the list (Gmail's way, or any narrow screen), or beside it.
@@ -67,7 +79,6 @@ export function App() {
   const assistantOpen = useAssistantOpen();
   const assistantOverlay = useMediaQuery('(max-width: 1099px)');
   const assistantPane = useResizableWidth('flow.mail.assistantWidth', 380, 300, 720, 'left');
-  const org = useOrganizations().active?.id ?? null;
 
   const [accountId, setAccountId] = useState<string | null>(storedAccount);
   const list = accounts.data ?? [];
@@ -630,6 +641,14 @@ export function App() {
     </>
   );
 
+  if ((organizations.ready && !org) || (accounts.error instanceof MailApiError && accounts.error.code === 'no_account')) {
+    return (
+      <div className="flex h-dvh flex-col">
+        {bar}
+        <NoOrganization app="Mail" />
+      </div>
+    );
+  }
   if (accounts.isPending) {
     return (
       <div className="flex h-dvh flex-col">

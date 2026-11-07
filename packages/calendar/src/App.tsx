@@ -7,12 +7,13 @@ import { useQueryClient } from '@tanstack/react-query';
 import { addHours, startOfHour } from 'date-fns';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { openSuiteSearch } from '@flow/suite-bar';
-import { CalendarApiError, calendarApi, connectGoogle, googleErrorText, type EventOccurrence, type Response, type Scope } from './api';
+import { CalendarApiError, calendarApi, connectGoogle, setCalendarWorkspace, googleErrorText, type EventOccurrence, type Response, type Scope } from './api';
 import { AccountSettingsDialog, AddAccountDialog } from './components/AccountForms';
 import { CalendarGrid } from './components/CalendarGrid';
 import { CalendarSuiteBar } from './components/CalendarSuiteBar';
 import { ConnectCalendar, type ConnectKind } from './components/ConnectCalendar';
 import { SignedOut } from './components/SignedOut';
+import { NoOrganization } from './components/NoOrganization';
 import { EventDialog, draftOf, inputOf, newDraft, type Draft } from './components/EventDialog';
 import { EventPopover } from './components/EventPopover';
 import { QuickCreate } from './components/QuickCreate';
@@ -50,6 +51,18 @@ export function App() {
   const view: View = narrow && (place.view === 'week' || place.view === 'month') ? 'agenda' : place.view;
   const range = useMemo(() => rangeOf(view, place.date, WEEK_STARTS_ON), [view, place.date]);
   const ahead = useMemo(() => neighbours(view, place.date, WEEK_STARTS_ON), [view, place.date]);
+  // The calendars are the account's in the organization selected in the suite bar (platform.md §3.6): every request names
+  // it, and choosing another one reads everything again.
+  const qc = useQueryClient();
+  const organizations = useOrganizations();
+  const org = organizations.active;
+  setCalendarWorkspace(org?.id ?? null);
+  const shownOrg = useRef(org?.id ?? null);
+  useEffect(() => {
+    if (shownOrg.current === (org?.id ?? null)) return;
+    shownOrg.current = org?.id ?? null;
+    void qc.resetQueries({ queryKey: ['calendar'] });
+  }, [org?.id, qc]);
   const accounts = useAccounts();
   const calendars = useCalendars();
   const cals = useMemo(() => calendars.data ?? [], [calendars.data]);
@@ -128,8 +141,6 @@ export function App() {
   }, [place.eventId, cals.length, open?.event.id, navigate]);
 
   // The assistant: beside the calendar, or over it below 1100px, in the organization the suite bar has selected.
-  const qc = useQueryClient();
-  const { active: org } = useOrganizations();
   const assistantOpen = useAssistantOpen();
   const assistantOverlay = useMediaQuery('(max-width: 1099px)');
   const assistantPane = useResizableWidth('flow.calendar.assistantWidth', 380, 300, 720, 'left');
@@ -226,6 +237,7 @@ export function App() {
   const broken = (accounts.data ?? []).filter((a) => a.status !== 'ok');
   const none = accounts.isSuccess && accounts.data.length === 0;
   const signedOut = accounts.isError && accounts.error instanceof CalendarApiError && accounts.error.code === 'unauthorized';
+  const noOrganization = (organizations.ready && !org) || (accounts.error instanceof CalendarApiError && accounts.error.code === 'no_account');
   const sidebar = (
     <Sidebar
       accounts={accounts.data ?? []} calendars={cals} date={place.date} range={range} weekStartsOn={WEEK_STARTS_ON}
@@ -248,7 +260,9 @@ export function App() {
         onSettings={() => setDialog({ kind: 'settings', accountId: null })}
         assistant={{ open: assistantOpen, onToggle: () => setAssistantOpen(!assistantOpen) }}
       />
-      {accounts.isPending ? (
+      {noOrganization ? (
+        <NoOrganization app="Calendar" />
+      ) : accounts.isPending ? (
         <div className="flex flex-1 items-center justify-center text-muted"><Loader2 className="size-5 animate-spin" /></div>
       ) : signedOut ? (
         <SignedOut />

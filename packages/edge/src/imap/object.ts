@@ -1,4 +1,5 @@
-// FreeFlow Mail: one object per person (`idFromName(userId)`), holding the mail accounts they connected and talking to
+// FreeFlow Mail: one object per account (`idFromName(accountId)`, platform.md §3.6), holding the mail accounts its holder
+// connected and talking to
 // those accounts' own servers over IMAP and SMTP. The contract is docs/specs/mail-api.md.
 //
 // The accounts are in the object's SQLite, each password sealed with FLOW_DATA_KEY (org/crypto, the same scheme as Chat's
@@ -33,6 +34,8 @@ import { GMAIL_NONE, GMAIL_REASON, GmailSearchError, recheckRows, sortBatch, typ
 import { compileMime, outgoingMessage, type OutgoingFile } from './drafts';
 import { calendarMessage, checkCalendarMail, type CalendarMail } from '../calendar/imip';
 import type { CallerContext, ObjectBindings } from '../org/routes/compat';
+import type { ImportRow } from '../importing';
+import { exportTables, importTable, ownerMismatch, ownerRefusal } from '../perAccount';
 import { AccountPatch, CategoryBody, DeleteBody, DraftBody, FlagsBody, MAX_SEND_BYTES, MoveBody, NewAccount, SendBody, SendersCategoryBody, TIMING_HEADER, checkServer, mailError, notFound, parse, savesSentCopy, sendSize, badRequest, type ServerSettings } from './rules';
 
 export interface MailEnv {
@@ -138,6 +141,8 @@ const ADDED_COLUMNS: { add: string; then?: string }[] = [
       AND c.folder = mail_sync.folder AND c.uid_validity = mail_sync.uid_validity AND c.reason = '${GMAIL_NONE}')`,
   },
 ];
+/** Every table of the object (DDL above, cache.ts's), for the move between objects (`exportRows`, `importRows`). */
+export const MAIL_TABLES = ['accounts', 'rate_limit_windows', 'mail_categories', 'mail_category_overrides', 'mail_sync', 'mail_messages', 'mail_cache_folders', 'mail_state', 'mail_refs', 'mail_thread_index', 'mail_contacts'] as const;
 /** New mail sorted into tabs by a list request at most (above the high-water mark); the rest is the sorter's. */
 const SYNC_CAP = 100;
 /** Older mail sorted per step of the background sorter, each step under the sorter's lock by itself. */
@@ -271,13 +276,15 @@ export class Mail extends DurableObject<MailEnv> {
   }
 
   /**
-   * A request from routes/mail.ts, made by the person this object belongs to, with the caller context (`c.env.caller` to
-   * the routes). Where its time went (waiting for a
+   * A request from routes/mail.ts (or Docs' tools, a preview), for the account this object belongs to, with the caller
+   * context (`c.env.caller` to the routes); a caller of another account is refused. Where its time went (waiting for a
    * connection and a folder's lock, and talking IMAP) goes back in an `x-mail-timing` header, which routes/mail.ts logs
    * and takes off: a line logged here would reach `wrangler tail` late or not at all, as the object's open IMAP sockets
    * keep each request's tail event open (until the next request comes, or the socket closes).
    */
-  async handle(request: Request, caller?: CallerContext): Promise<Response> {
+  async handle(request: Request, caller: CallerContext): Promise<Response> {
+    const wrong = ownerMismatch(this.cache, caller, 'the Mail');
+    if (wrong) { console.error(`[mail] ${wrong}`); return ownerRefusal(wrong); }
     const t: Timing = { wait: 0, imap: 0, test: NO_TEST };
     // Local dev only: a pause where sorting runs (holding the background lock), a smaller sorting budget, and the re-check now.
     if (this.allowInsecure) {
@@ -287,13 +294,23 @@ export class Mail extends DurableObject<MailEnv> {
     const res = await timing.run(t, async () => {
       // The test hook: one alarm run first, so the request that follows sees the cache as the alarm leaves it.
       if (t.test.alarm) await this.runCache(Date.now() + ALARM_BUDGET_MS).catch((err) => console.warn(`[mail] test alarm: ${(err as Error).message}`));
-      return this.app.fetch(request, { caller: caller ?? null } satisfies ObjectBindings);
+      return this.app.fetch(request, { caller } satisfies ObjectBindings);
     });
     this.touch();
     await this.armAlarm().catch((err) => console.warn(`[mail] alarm: ${(err as Error).message}`));
     const out = new Response(res.body, res);
     out.headers.set(TIMING_HEADER, `wait=${Math.round(t.wait)};imap=${Math.round(t.imap)}${t.cache ? `;cache=${t.cache}` : ''}`);
     return out;
+  }
+
+  /** A page of every table's rows (or the one named), for the move to the per-account objects (routes/admin.ts). */
+  exportRows(opts: { table?: string; offset?: number; limit?: number } = {}): { table: string; rows: ImportRow[] }[] {
+    return exportTables(this.sql, MAIL_TABLES, opts);
+  }
+
+  /** Rows from another Mail object, keeping any already here; never the owner keys (perAccount.ts). */
+  importRows(table: string, rows: ImportRow[]): { added: number } {
+    return importTable(this.sql, MAIL_TABLES, 'mail_state', table, rows);
   }
 
   // ---- accounts -------------------------------------------------------------------------------------------------

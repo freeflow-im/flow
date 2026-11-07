@@ -1,11 +1,12 @@
 // FreeFlow Mail's API, /v1/mail/* (docs/specs/mail-api.md): the caller is authenticated here, then the request goes to
-// their own Mail object (src/imap/object.ts), which holds their mail accounts. Only the provider presets are answered here.
+// the Mail object of their account in the organization named (src/imap/object.ts, platform.md §3.6), which holds the
+// mail accounts connected there. Only the provider presets are answered here.
 // Each request logs one timing line here, not in the object: see `Mail.handle`.
 import { Hono } from 'hono';
 import type { Mail } from '../imap/object';
 import { TIMING_HEADER, providerFor, timingLine } from '../imap/rules';
 import { ApiError, unauthorized } from '../errors';
-import { resolveAppCaller, resolveCaller, type AuthEnv } from './auth';
+import { resolveAccountCaller, resolveCaller, type AuthEnv } from './auth';
 
 export interface MailRouteEnv extends AuthEnv { MAIL: DurableObjectNamespace<Mail>; MAIL_ALLOW_INSECURE?: string }
 
@@ -21,9 +22,8 @@ mailRoutes.all('/v1/mail/*', async (c) => {
   const start = Date.now();
   let status = 500, timing: string | null = null;
   try {
-    // Still keyed by the person; the context (with the account) rides along for the per-account objects (platform.md §3.6).
-    const who = await resolveAppCaller(c);
-    const res = await c.env.MAIL.get(c.env.MAIL.idFromName(who.user.id)).handle(c.req.raw, who);
+    const who = await resolveAccountCaller(c, 'Mail');
+    const res = await c.env.MAIL.get(c.env.MAIL.idFromName(who.account.id)).handle(c.req.raw, who);
     status = res.status;
     timing = res.headers.get(TIMING_HEADER);
     const out = new Response(res.body, res);

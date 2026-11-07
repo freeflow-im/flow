@@ -21,6 +21,10 @@ async function signup(email,name){await api(null,'POST','/v1/auth/register',{ema
 const tag=Date.now().toString(36);
 const A=await signup(`mail-${tag}@example.com`,'Ann'),Bo=await signup(`other-${tag}@example.com`,'Bo');
 t('sign up',A.token&&Bo.token);
+// Mail is an account's (platform.md §3.6): each person gets an organization, and someone in none is refused.
+const org=async(u,n)=>(await api(u.token,'POST','/v1/workspaces',{name:`${n} ${tag}`,slug:`${n.toLowerCase()}-${tag}`})).j?.id;
+t('each with an organization',!!(await org(A,'Mailann'))&&!!(await org(Bo,'Mailbo')));
+{const Cy=await signup(`mail-none-${tag}@example.com`,'Cy');const x=await api(Cy.token,'GET','/v1/mail/accounts');t('someone in no organization is refused, no_account',x.s===403&&x.j.error?.code==='no_account',x.s+' '+JSON.stringify(x.j));}
 const server=(port)=>({host:'127.0.0.1',port,security:'none'});
 const imapDirect=async(fn)=>{const c=new ImapFlow({host:'127.0.0.1',port:3143,secure:false,doSTARTTLS:false,auth:{user:MAIL_USER,pass:'x'},logger:false});await c.connect();try{return await fn(c)}finally{await c.logout()}};
 
@@ -447,6 +451,7 @@ const bulkImap=async(fn)=>{const c=new ImapFlow({host:'127.0.0.1',port:3143,secu
 const raw=(i,forum)=>[`From: ${forum?'Sam Rivera <sam@rivera.dev>':'Dana Lee <dana@acme.test>'}`,`To: ${BULK}`,`Subject: ${forum?'[hikers] Trail report':'Notes'} ${i} ${tag}`,`Date: ${new Date(Date.UTC(2026,9,1)+i*60000).toUTCString()}`,`Message-ID: <bulk-${i}-${tag}@test.local>`,...(forum?['List-Id: <hikers.googlegroups.com>','List-Post: <mailto:hikers@googlegroups.com>','X-Google-Group-Id: 42']:[]),'Content-Type: text/plain; charset=utf-8','',`Message ${i}.`,''].join('\r\n');
 await bulkImap(async(c)=>{for(let i=0;i<320;i++)await c.append('INBOX',raw(i,i<20));});
 const Cy=await signup(`bulk-${tag}@example.com`,'Cy');
+await org(Cy,'Mailbulk');
 r=await api(Cy.token,'POST','/v1/mail/accounts',{email:BULK,displayName:'Bulk',password:'x',imap:server(3143),smtp:server(3025)});
 const P3=`/v1/mail/accounts/${r.j.account?.id}`;await api(Cy.token,'PATCH',P3,{tabs:['promotions','social','updates','forums']});
 const cold=await (async()=>{const t0=Date.now();const x=await fetch(`${B}${P3}/messages?folder=INBOX&category=forums&limit=25`,{headers:{authorization:'Bearer '+Cy.token,'x-mail-test-slow-ms':'1500'}});return{s:x.status,j:await x.json(),ms:Date.now()-t0};})();

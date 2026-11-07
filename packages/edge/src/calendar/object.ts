@@ -1,5 +1,5 @@
-// FreeFlow Calendar: one object per person (`idFromName(userId)`), holding the calendar accounts they connected and a
-// complete copy of their calendars, kept fresh by the alarm. The contract is docs/specs/calendar.md (§3, §4).
+// FreeFlow Calendar: one object per account (`idFromName(accountId)`, platform.md §3.6), holding the calendar accounts its
+// holder connected and a complete copy of their calendars, kept fresh by the alarm. The contract is docs/specs/calendar.md (§3, §4).
 //
 // Every read is from SQLite (store.ts); a recurring event is expanded here for the window asked for (ical.ts). Writes go to
 // the server first (PUT with If-Match, so a change made elsewhere meanwhile is a `conflict`, never lost), then into the
@@ -7,6 +7,8 @@
 // never returned or logged; no address, summary or id goes in a log line.
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { CallerContext, ObjectBindings } from '../org/routes/compat';
+import type { ImportRow } from '../importing';
+import { exportTables, importTable, ownerMismatch, ownerRefusal } from '../perAccount';
 import { DurableObject } from 'cloudflare:workers';
 import { Hono, type Context } from 'hono';
 import { ApiError } from '../errors';
@@ -16,7 +18,7 @@ import { googlePrincipal, refreshAccess, type GoogleClient } from './google';
 import { DAY_MS, deleteFromEvent, editEvent, newEvent, parseInstant, parseRid, respondTo, type Fields, type Scope, type WriteContext } from './ical';
 import type { CalendarMail } from './imip';
 import { Invites, type InviteMail, type Notified } from './invites';
-import { CalendarStore, type CalendarRow, type EventOccurrence } from './store';
+import { CALENDAR_TABLES, CalendarStore, type CalendarRow, type EventOccurrence } from './store';
 import {
   AccountPatch, CalendarPatch, EventInput, EventPatch, FreeBusyBody, NewAccount, RELIST_MS, RespondBody, SYNC_BUDGET_MS, TIMING_HEADER, badRequest, calendarError,
   cadenceMs, checkUrl, conflict, nextAlarmAt, normalizeUrl, notFound, parse, providerFor, splitId,
@@ -71,27 +73,39 @@ export class Calendar extends DurableObject<CalendarEnv> {
   private lastTouch = 0;
   /** Google accounts' access tokens, in memory only (an hour each; a woken object refreshes). Never logged or returned. */
   private readonly access = new Map<string, { token: string; exp: number }>();
-  /** Whose object this is (the name it was made by), for the Mail object of the same person. */
-  private userId: string | null = null;
+  /** Whose object this is (the account it is named by, kept for an alarm's wake), for the Mail object of the same account. */
+  private accountId: string | null = null;
 
   constructor(ctx: DurableObjectState, env: CalendarEnv) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
     this.store = new CalendarStore(this.sql);
     this.store.init();
-    this.userId = (ctx.id as { name?: string }).name ?? this.store.state('user_id');
+    this.accountId = (ctx.id as { name?: string }).name ?? this.store.state('owner_account_id');
     this.routes();
   }
 
+  /** A page of every table's rows (or the one named), for the move to the per-account objects (routes/admin.ts). */
+  exportRows(opts: { table?: string; offset?: number; limit?: number } = {}): { table: string; rows: ImportRow[] }[] {
+    return exportTables(this.sql, CALENDAR_TABLES, opts);
+  }
+
+  /** Rows from another Calendar object, keeping any already here; never the owner keys (perAccount.ts). */
+  importRows(table: string, rows: ImportRow[]): { added: number } {
+    return importTable(this.sql, CALENDAR_TABLES, 'calendar_state', table, rows);
+  }
+
   /**
-   * A request from routes/calendar.ts, made by the person this object belongs to, with the caller context (its user id is
-   * kept: the Mail object is named by it too; the context is `c.env.caller` to the routes). Its server time goes back in `x-calendar-timing`, which the route logs (as Mail's).
+   * A request from routes/calendar.ts (or Docs' tools), for the account this object belongs to, with the caller context
+   * (`c.env.caller` to the routes); a caller of another account is refused. The account id is kept: the Mail object is
+   * named by it too. Its server time goes back in `x-calendar-timing`, which the route logs (as Mail's).
    */
-  async handle(request: Request, caller?: CallerContext): Promise<Response> {
-    const userId = caller?.user?.id;
-    if (userId && userId !== this.userId) { this.userId = userId; this.store.setState('user_id', userId); }
+  async handle(request: Request, caller: CallerContext): Promise<Response> {
+    const wrong = ownerMismatch(this.store, caller, 'the Calendar');
+    if (wrong) { console.error(`[calendar] ${wrong}`); return ownerRefusal(wrong); }
+    this.accountId = caller.account!.id;
     const t: Timing = { server: 0 };
-    const res = await timing.run(t, () => this.app.fetch(request, { caller: caller ?? null } satisfies ObjectBindings));
+    const res = await timing.run(t, () => this.app.fetch(request, { caller } satisfies ObjectBindings));
     this.touch();
     await this.armAlarm().catch((err) => console.warn(`[calendar] alarm: ${(err as Error).message}`));
     const out = new Response(res.body, res);
@@ -283,7 +297,10 @@ export class Calendar extends DurableObject<CalendarEnv> {
    * or, for an address already connected, its refresh token replaced (a reconnect). The principal is Google's CalDAV one
    * for the address; discovery and the first sync run as for any account. Returns its id.
    */
-  async connectGoogle(g: GoogleGrant): Promise<{ id: string }> {
+  async connectGoogle(g: GoogleGrant, owner: { accountId: string; userId: string }): Promise<{ id: string }> {
+    const wrong = ownerMismatch(this.store, { account: { id: owner.accountId, principalId: owner.userId } as CallerContext['account'], user: null }, 'the Calendar');
+    if (wrong) throw calendarError(500, 'wrong_account', wrong);
+    this.accountId = owner.accountId;
     const email = g.email.toLowerCase();
     const url = googlePrincipal(email);
     const existing = this.accountRows().find((a) => a.kind === 'google' && a.email.toLowerCase() === email);
@@ -385,9 +402,9 @@ export class Calendar extends DurableObject<CalendarEnv> {
   private hrefIn(c: CalendarRow, uid: string): string {
     return new URL(`${encodeURIComponent(uid)}.ics`, c.href.endsWith('/') ? c.href : `${c.href}/`).href;
   }
-  /** The person's Mail object, by the binding (never a route): an invitation's part, their mail accounts, and iMIP sent from one. */
+  /** The account's Mail object, by the binding (never a route): an invitation's part, their mail accounts, and iMIP sent from one. */
   private mailPort(): InviteMail | null {
-    const ns = this.env.MAIL, user = this.userId;
+    const ns = this.env.MAIL, user = this.accountId;
     if (!ns || !user) return null;
     const stub = () => ns.get(ns.idFromName(user));
     type Answer = { ok: true } | { ok: false; status: number; code: string; message: string };

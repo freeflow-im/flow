@@ -42,6 +42,9 @@ const send=(subject,method,body)=>smtp.sendMail({from:{name:'Ann Lee',address:AN
 
 const A=await signup(`invites-${tag}@example.com`,'Scott'),Bo=await signup(`invites-other-${tag}@example.com`,'Bo');
 t('sign up',A.token&&Bo.token);
+// Mail and calendars are an account's (platform.md §3.6): each person gets an organization.
+const org=async(u,n)=>(await api(u.token,'POST','/v1/workspaces',{name:`${n} ${tag}`,slug:`${n.toLowerCase()}-${tag}`})).j?.id;
+t('each with an organization',!!(await org(A,'Invann'))&&!!(await org(Bo,'Invbo')));
 
 // ---- the person's mail account and calendar account, one address
 const server=(port)=>({host:'127.0.0.1',port,security:'none'});

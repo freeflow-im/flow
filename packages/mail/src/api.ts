@@ -1,5 +1,6 @@
 // The mail API on the edge Worker (packages/edge, /v1/mail/*), typed as its contract states it. Same origin, with the
 // suite's session cookie; a 401 means the session ended, and the suite's sign-in page brings the user back here.
+import { readActiveOrganization } from './suite';
 
 export type Security = 'tls' | 'starttls' | 'none';
 export interface ServerSettings {
@@ -204,8 +205,20 @@ export const setSignedOutHandler = (fn: () => void) => {
   onSignedOut = fn;
 };
 
+/** The organization every /v1/mail request names (`?workspace=`): its Mail is that account's (platform.md §3.6). Set
+ * from the suite bar's selection (App.tsx); until then, the one Chat selected. */
+let workspace: string | null = null;
+export const setMailWorkspace = (id: string | null) => {
+  workspace = id;
+};
+/** A /v1/mail (or /v1/calendar: invitations) path, naming the organization. */
+export function inWorkspace(path: string): string {
+  const id = workspace ?? readActiveOrganization();
+  return id && /^\/v1\/(mail|calendar)\//.test(path) ? `${path}${path.includes('?') ? '&' : '?'}workspace=${encodeURIComponent(id)}` : path;
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const res = await fetch(inWorkspace(path), {
     method,
     credentials: 'same-origin',
     headers: body === undefined ? { accept: 'application/json' } : { accept: 'application/json', 'content-type': 'application/json' },
@@ -233,7 +246,7 @@ const query = (params: Record<string, string | number | undefined | null>) => {
 
 /** Where an attachment's bytes are (`inline` for showing it in the page, as cid: images do, rather than downloading). */
 export function attachmentUrl(accountId: string, folder: string, uid: number, index: number, inline = false): string {
-  return `${base(accountId)}/messages/${uid}/attachments/${index}${query({ folder, inline: inline ? 1 : undefined })}`;
+  return inWorkspace(`${base(accountId)}/messages/${uid}/attachments/${index}${query({ folder, inline: inline ? 1 : undefined })}`);
 }
 
 export const mailApi = {

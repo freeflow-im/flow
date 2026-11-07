@@ -1,11 +1,11 @@
 // A mail attachment previewed in Docs (packages/docs/server/previews.ts): POST /api/previews/mail names the attachment, and
-// the Worker gets its bytes from the caller's own Mail object and hands them to the Docs object of the organization the
-// caller named (Mail's selected organization, else their first), each as the caller. The browser never uploads the file.
+// the Worker gets its bytes from the Mail object of the caller's account in the organization the caller named (Mail's
+// selected organization, else their first) and hands them to that organization's Docs object, each as the caller. The browser never uploads the file.
 // Opening the same attachment again finds the preview already made before any bytes are fetched.
 import { Hono } from 'hono';
 import type { Mail } from '../imap/object';
 import { filenameFromDisposition } from '../imap/convert';
-import { directory } from './auth';
+import { directory, resolveCaller } from './auth';
 import { who, type C, type DocsRouteEnv } from './docs';
 
 export interface PreviewRouteEnv extends DocsRouteEnv { MAIL: DurableObjectNamespace<Mail> }
@@ -43,8 +43,12 @@ previewRoutes.post('/api/previews/mail', async (c) => {
   const found = await read(await docsCall('/api/previews', { key }));
   if (!found.res.ok || found.body.preview) return answer(found);
 
-  const mail = await c.env.MAIL.get(c.env.MAIL.idFromName(caller.userId)).handle(
+  // Mail is the account's, in the same organization (platform.md §3.6).
+  const mailCaller = await resolveCaller(c, organization);
+  if (!mailCaller.account) return fail(403, 'Join an organization to use Mail.');
+  const mail = await c.env.MAIL.get(c.env.MAIL.idFromName(mailCaller.account.id)).handle(
     new Request(`${origin}/v1/mail/accounts/${encodeURIComponent(account)}/messages/${uid}/attachments/${index}?${new URLSearchParams({ folder })}`),
+    mailCaller,
   );
   if (!mail.ok) {
     const err = (await mail.json().catch(() => null)) as { error?: { message?: string } } | null;

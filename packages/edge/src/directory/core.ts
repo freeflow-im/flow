@@ -159,6 +159,14 @@ export class DirectoryCore {
     return this.accountRow('user_id = ? AND organization_id = ?', userId, organizationId)[0] ?? null;
   }
 
+  /** Every principal with its accounts, removed ones included (in order made): the move of Mail and Calendar to the
+   * per-account objects (routes/admin.ts) walks them. */
+  principalsWithAccounts(): { userId: string; accounts: AccountDTO[] }[] {
+    const byUser = new Map<string, AccountDTO[]>(this.rows('SELECT id FROM users ORDER BY id').map((u) => [u.id as string, []]));
+    for (const a of this.accountRow('1 = 1')) byUser.set(a.principalId, [...(byUser.get(a.principalId) ?? []), a]);
+    return [...byUser].map(([userId, accounts]) => ({ userId, accounts }));
+  }
+
   /** Every account in an organization, removed ones included. */
   accountsOfOrganization(organizationId: string): AccountDTO[] {
     return this.accountRow('organization_id = ?', organizationId);
