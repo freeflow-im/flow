@@ -159,6 +159,11 @@ export interface BridgeConfig {
    * null keeps it in memory only.
    */
   stateFile?: string | null;
+  /**
+   * Mail to the agent's mailbox (phase 5.4): mail from a member of the organization always starts a turn; mail from
+   * anyone else is logged and ignored (`ignore`, the default) or starts a turn in the DM with the sponsor (`wake`).
+   */
+  mail?: { fromOutside: 'ignore' | 'wake' } | undefined;
 }
 
 /** The state file beside a config: `state.json` for `agent.json`, else `<name>.state.json`. */
@@ -183,6 +188,7 @@ interface RawConfig {
   progress?: string;
   relayText?: boolean;
   voice?: Partial<VoiceConfig>;
+  mail?: { fromOutside?: string };
 }
 
 export function loadConfig(configPath: string): BridgeConfig {
@@ -267,6 +273,9 @@ export function loadConfig(configPath: string): BridgeConfig {
     throw new Error('config: voice.maxSessionMinutes must be a positive number');
   }
 
+  const fromOutside = raw.mail?.fromOutside ?? 'ignore';
+  if (fromOutside !== 'ignore' && fromOutside !== 'wake') throw new Error(`config: bad mail.fromOutside "${fromOutside}" (ignore or wake)`);
+
   const agentChainLimit = Math.max(0, raw.agentChainLimit ?? 6);
   return {
     serverUrl,
@@ -284,6 +293,7 @@ export function loadConfig(configPath: string): BridgeConfig {
     relayText: raw.relayText ?? true,
     voice,
     stateFile: stateFileFor(abs),
+    mail: { fromOutside },
   };
 }
 

@@ -38,6 +38,11 @@ not_found_handling = "none"
 # FLOW_APNS_TEAM_ID, the values in /flow/ on AWS; FLOW_APNS_ENV and FLOW_APNS_TOPIC are optional. Without them the dev
 # driver logs each push and Apple is never called. Huddles: LIVEKIT_API_KEY, LIVEKIT_API_SECRET and LIVEKIT_URL (/flow/
 # too); all three turn huddles on in /v1/config, and LiveKit's webhook comes to /v1/livekit/webhook.
+# Domains (src/directory/dns.ts, providers/cloudflareDns.ts): CLOUDFLARE_DNS_TOKEN (DNS edit on freeflow.im) and
+# CLOUDFLARE_DNS_ZONE_ID write each organization's <slug>.freeflow.im records; without them the dev driver logs them.
+# DNS_RESOLVER_URL (a var) is the DNS-over-HTTPS JSON resolver domain checks use, Cloudflare's when unset; the e2e sets it.
+# The mail provider (src/mailprovider): MAIL_PROVIDER (a var) `opensrs` with the secrets OPENSRS_API_URL, OPENSRS_USER and
+# OPENSRS_PASSWORD, or `fake` for local dev and the e2e; unset, the placeholder records and no provider changes.
 [vars]
 ORIGIN_URL = "https://origin.freeflow.im"
 # The hosts the built files are served on. The other hosts' paths are the origin's (the plugin, the 301s to the app).
@@ -139,6 +144,31 @@ max_batch_size = 10
 max_batch_timeout = 1
 max_retries = 3
 dead_letter_queue = "flow-jobs-dlq"
+
+# Provisioning (src/provisioning, platform.md §3.4): with a mail provider (MAIL_PROVIDER), the Directory object sends
+# each new account here (`requested`), and each removal, rejoin and retention deletion; the consumer makes the mailbox
+# and the native calendar (`mailbox_ready`, `calendars_ready`, `active`). A busy provider is retried after 60 s × attempts,
+# a refusal stops with the account's status_message and a notice to the admins; past five retries a message goes to
+# flow-provisioning-dlq, whose consumer sends the same notice. MAIL_RETENTION_DAYS (a var, default 30) is how long a
+# removed account's suspended mailbox is kept before the Org object's daily sweep deletes it. Without MAIL_PROVIDER
+# accounts start `active` as before. Both queues are made once: `wrangler queues create flow-provisioning` and
+# `wrangler queues create flow-provisioning-dlq`. Local dev with the fake: GREENMAIL_API_URL, GREENMAIL_IMAP_PORT and
+# GREENMAIL_SMTP_PORT (vars) point it at a GreenMail with its REST API (test/e2e-provisioning.mjs).
+[[queues.producers]]
+binding = "PROVISIONING"
+queue = "flow-provisioning"
+
+[[queues.consumers]]
+queue = "flow-provisioning"
+max_batch_size = 10
+max_batch_timeout = 1
+max_retries = 5
+dead_letter_queue = "flow-provisioning-dlq"
+
+[[queues.consumers]]
+queue = "flow-provisioning-dlq"
+max_batch_size = 10
+max_batch_timeout = 5
 
 [[r2_buckets]]
 binding = "BLOBS"

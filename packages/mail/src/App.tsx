@@ -8,7 +8,7 @@ import { openSuiteSearch } from '@flow/suite-bar';
 import { MailApiError, mailApi, setMailWorkspace, type Category, type MailAccount, type MessageDetail, type ThreadSummary, type TabStatus } from './api';
 import { AccountSettingsDialog, AddAccountDialog } from './components/AccountForms';
 import { ConnectMail } from './components/ConnectMail';
-import { NoOrganization } from './components/NoOrganization';
+import { MailboxSettingUp, NoOrganization } from './components/NoOrganization';
 import { InboxTabs } from './components/InboxTabs';
 import { MailSuiteBar } from './components/MailSuiteBar';
 import { MessageList, type ListTab } from './components/MessageList';
@@ -19,7 +19,7 @@ import { Sidebar } from './components/Sidebar';
 import { useMediaQuery, useResizableWidth } from './hooks/layout';
 import { fetchBody, keys, prefetchThread, useAccounts, useFolders, useMessageActions, useMessages, useThread, useThreads, useTabStatus } from './hooks/mail';
 import { useMailAssistant } from './hooks/assistant';
-import { useOrganizations } from './hooks/organization';
+import { SETTING_UP, useAccountState, useOrganizations } from './hooks/organization';
 import { mailContext, setAssistantOpen, useAssistantOpen, type MessageRef } from './lib/assistant';
 import { cidUrlOf, emptyDraft, fromDraft, prefill, type ComposeMode, type ComposeRequest, type Outgoing } from './lib/compose';
 import type { Notice } from './lib/notice';
@@ -68,6 +68,15 @@ export function App() {
     void qc.resetQueries({ queryKey: ['mail'] });
   }, [org, qc]);
   const accounts = useAccounts();
+  // A new account's mailbox is made after it joins (platform.md §3.4): until then, a notice in place of the accounts,
+  // and the accounts read again when it is ready.
+  const accountState = useAccountState(org);
+  const settingUp = !!accountState && SETTING_UP.includes(accountState);
+  const wasSettingUp = useRef(settingUp);
+  useEffect(() => {
+    if (wasSettingUp.current && !settingUp) void qc.invalidateQueries({ queryKey: keys.accounts });
+    wasSettingUp.current = settingUp;
+  }, [settingUp, qc]);
   const narrow = useMediaQuery('(max-width: 899px)');
   // The open thread in place of the list (Gmail's way, or any narrow screen), or beside it.
   const readingPane = useReadingPane();
@@ -649,6 +658,14 @@ export function App() {
       </div>
     );
   }
+  if (settingUp) {
+    return (
+      <div className="flex h-dvh flex-col">
+        {bar}
+        <MailboxSettingUp />
+      </div>
+    );
+  }
   if (accounts.isPending) {
     return (
       <div className="flex h-dvh flex-col">
@@ -826,14 +843,18 @@ export function App() {
         <div role="alert" className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-warn-border bg-warn-bg px-4 py-2 text-[14px]">
           <AlertTriangle className="size-4 shrink-0 text-[#b06000]" />
           <span className="min-w-0 flex-1">
-            {account.status === 'connect_failed' || folderError?.code === 'connect_failed'
-              ? `FreeFlow could not reach the mail server for ${account.email}.`
-              : `${account.email} stopped accepting its password. Enter it again to keep getting mail.`}
+            {account.kind === 'hosted'
+              ? `FreeFlow could not reach your mailbox ${account.email}. Your organization's admins can help.`
+              : account.status === 'connect_failed' || folderError?.code === 'connect_failed'
+                ? `FreeFlow could not reach the mail server for ${account.email}.`
+                : `${account.email} stopped accepting its password. Enter it again to keep getting mail.`}
             {(account.statusMessage ?? folderError?.message) && <span className="text-muted"> {account.statusMessage ?? folderError?.message}</span>}
           </span>
-          <button type="button" className="font-medium text-primary hover:underline" onClick={() => setDialog({ kind: 'settings', accountId: account.id, focusPassword: true })}>
-            {account.status === 'connect_failed' || folderError?.code === 'connect_failed' ? 'Check settings' : 'Re-enter password'}
-          </button>
+          {account.kind !== 'hosted' && (
+            <button type="button" className="font-medium text-primary hover:underline" onClick={() => setDialog({ kind: 'settings', accountId: account.id, focusPassword: true })}>
+              {account.status === 'connect_failed' || folderError?.code === 'connect_failed' ? 'Check settings' : 'Re-enter password'}
+            </button>
+          )}
         </div>
       )}
       <div className="relative flex min-h-0 flex-1">

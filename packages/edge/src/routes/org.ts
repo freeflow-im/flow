@@ -6,8 +6,11 @@ import { accountGate, hashToken, newId } from '../directory/core';
 import { listVar } from '../directory/authHandoff';
 import { ApiError, badRequest, notFound, unauthorized } from '../errors';
 import { directory, resolveCaller, type AuthEnv } from './auth';
+import { publishPlatformDomain, type PlatformDnsEnv } from '../directory/providers/cloudflareDns';
+import { organizationDomain } from '../directory/addresses';
+import { hostedMailEnabled, mailProviderFor, type MailProviderEnv } from '../mailprovider/index';
 
-export interface OrgRouteEnv extends AuthEnv {
+export interface OrgRouteEnv extends AuthEnv, PlatformDnsEnv, MailProviderEnv {
   BLOBS: R2Bucket;
   GOOGLE_CLIENT_ID?: string;
   APPLE_AUDIENCE?: string;
@@ -23,6 +26,7 @@ export interface OrgRouteEnv extends AuthEnv {
   FLOW_APNS_KEY_ID?: string;
   FLOW_APNS_TEAM_ID?: string;
   FLOW_HANDOFF_RETURN_URLS?: string;
+  PROVISIONING?: Queue<unknown>;
 }
 
 const huddlesEnabled = (env: OrgRouteEnv) => !!(env.LIVEKIT_API_KEY && env.LIVEKIT_API_SECRET && env.LIVEKIT_URL);
@@ -64,6 +68,11 @@ orgRoutes.post('/v1/workspaces', async (c) => {
   if (typeof slug === 'string') await directory(c, 'reserveSlug', slug, id);
   const res = await orgStub(c, id).handle(c.req.raw, who, id);
   if (res.status >= 300 && typeof slug === 'string') await directory(c, 'releaseSlug', slug, id);
+  // The platform subdomain's MX, SPF and DMARC (directory/providers/cloudflareDns.ts). A failure is logged; provisioning
+  // (phase 5.3) writes them again.
+  else if (typeof slug === 'string') {
+    c.executionCtx.waitUntil(publishPlatformDomain(c.env, slug, mailProviderFor(c.env).records(organizationDomain(slug))).catch((err) => console.error(`platform dns ${slug}: ${(err as Error).message}`)));
+  }
   return res;
 });
 
@@ -86,6 +95,7 @@ orgRoutes.get('/v1/config', (c) => c.json({
   apple: !!c.env.APPLE_AUDIENCE,
   maxFileBytes: Number(c.env.FLOW_MAX_FILE_BYTES ?? 100 * 1024 * 1024),
   huddles: huddlesEnabled(c.env),
+  hostedMail: hostedMailEnabled(c.env),
 }));
 
 /**

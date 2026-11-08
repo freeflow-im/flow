@@ -1,8 +1,11 @@
 import { DatabaseSync } from 'node:sqlite';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { randomBytes } from 'node:crypto';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { hashPassword, verifyPassword } from './passwords';
 import { DirectoryCore, accountGate, hashToken, newId, type Mail, type Sql } from './core';
 import { DIRECTORY_MIGRATIONS } from './schema';
+import { FakeMailProvider } from '../mailprovider/fake';
+import { decryptBlob } from '../org/crypto/index';
 
 /** A real argon2 hash from the server's native library, of 'correct horse'. */
 const NATIVE_ARGON2 = '$argon2id$v=19$m=19456,t=2,p=1$dOGITGpb+aQryD4cyJhifg$4AnUlxHn8Rap47Tc/l19RR185Wgh/k8LPlA6pJ8HXPo';
@@ -365,6 +368,192 @@ describe('accounts', () => {
     expect(core.organization(org)).toMatchObject({ ownerUserId: b.user.id, policies: { inviteBy: 'admins', agentsBy: 'members', linkSharing: true } });
     expect(core.accountFor(a.user.id, org)!.role).toBe('admin');
     expect(core.accountFor(b.user.id, org)!.role).toBe('owner');
+  });
+});
+
+describe('domains (platform.md §3.2)', () => {
+  let txt: string[];
+  let lookups: number;
+  const resolve = async (name: string, type: 'TXT' | 'MX') => {
+    lookups++;
+    return type === 'TXT' && name === '_freeflow.acme.test' ? txt : [];
+  };
+  beforeEach(() => {
+    txt = [];
+    lookups = 0;
+    core = new DirectoryCore(nodeSql(), { webUrlBase: 'https://app.test', registrationEnabled: true, send: async (m) => void sent.push(m), resolve });
+  });
+  const join = (org: string, userId: string, role = 'member') => core.applyOrgChanges(org, [{ kind: 'join', id: org, user_id: userId, role, payload: null }]);
+
+  it('gives a new organization its platform domain, verified and primary', () => {
+    const org = newId();
+    core.reserveSlug('Acme', org);
+    expect(core.domainsOf(org)).toEqual([expect.objectContaining({ domain: 'acme.freeflow.im', kind: 'platform', verified: true, primary: true, verifyToken: null })]);
+    expect(core.primaryDomainOf(org)).toBe('acme.freeflow.im');
+    core.releaseSlug('Acme', org);
+    expect(core.domainsOf(org)).toEqual([]);
+  });
+
+  it('backfills a platform domain for every organization', () => {
+    const sql = nodeSql();
+    const domainsAt = DIRECTORY_MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE domains'));
+    sql.exec('CREATE TABLE _migrations (n INTEGER PRIMARY KEY)');
+    DIRECTORY_MIGRATIONS.slice(0, domainsAt).forEach((m, i) => { sql.exec(m); sql.exec('INSERT INTO _migrations (n) VALUES (?)', i); });
+    sql.exec("INSERT INTO organizations (id, slug, created_at) VALUES ('o1', 'Acme', 1), ('o2', 'beta', 2)");
+    const c = new DirectoryCore(sql, { webUrlBase: 'https://app.test', registrationEnabled: true, send: async () => {} });
+    expect(c.domainsOf('o1')).toEqual([expect.objectContaining({ domain: 'acme.freeflow.im', kind: 'platform', verified: true, primary: true })]);
+    expect(c.primaryDomainOf('o2')).toBe('beta.freeflow.im');
+  });
+
+  it('adds a domain with a token, refuses another organization\'s and what is no domain or is ours', () => {
+    const org = newId(), other = newId();
+    core.reserveSlug('acme', org);
+    core.reserveSlug('other', other);
+    const added = core.addDomain(org, 'Acme.TEST');
+    expect(added).toMatchObject({ domain: 'acme.test', kind: 'own', verified: false, primary: false });
+    expect(added.verifyToken).toMatch(/^freeflow-verify=[0-9a-f]{32}$/);
+    expect(core.addDomain(org, 'acme.test').verifyToken).toBe(added.verifyToken);
+    expect(() => core.addDomain(other, 'ACME.test')).toThrow(expect.objectContaining({ statusCode: 409, code: 'domain_taken' }));
+    expect(() => core.addDomain(org, 'not a domain')).toThrow(expect.objectContaining({ code: 'invalid_domain' }));
+    expect(() => core.addDomain(org, 'other.freeflow.im')).toThrow(expect.objectContaining({ code: 'domain_reserved' }));
+    expect(core.domainsOf(org).map((d) => d.domain)).toEqual(['acme.freeflow.im', 'acme.test']);
+  });
+
+  it('verifies only when the TXT carries the token, and makes only a verified domain primary', async () => {
+    const org = newId();
+    core.reserveSlug('acme', org);
+    const { verifyToken } = core.addDomain(org, 'acme.test');
+    expect(() => core.setPrimaryDomain(org, 'acme.test')).toThrow(expect.objectContaining({ code: 'domain_unverified' }));
+    txt = ['freeflow-verify=wrong'];
+    expect(await core.verifyDomain(org, 'acme.test')).toEqual({ verified: false, found: ['freeflow-verify=wrong'] });
+    txt = [verifyToken!];
+    expect(await core.verifyDomain(org, 'acme.test')).toEqual({ verified: true, found: [verifyToken] });
+    await expect(core.verifyDomain(newId(), 'acme.test')).rejects.toThrow('domain not found');
+    expect(core.setPrimaryDomain(org, 'acme.test')).toMatchObject({ primary: true });
+    expect(core.domainsOf(org).map((d) => [d.domain, d.primary])).toEqual([['acme.freeflow.im', false], ['acme.test', true]]);
+    expect(core.primaryDomainOf(org)).toBe('acme.test');
+  });
+
+  it('makes new addresses on the primary domain and leaves existing ones; refuses to remove a domain in use', async () => {
+    const a = await signUp('a@example.com');
+    const org = newId();
+    core.reserveSlug('acme', org);
+    core.ensureAccount(a.user.id, org, 'owner', 'Ann');
+    const { verifyToken } = core.addDomain(org, 'acme.test');
+    txt = [verifyToken!];
+    await core.verifyDomain(org, 'acme.test');
+    expect(() => core.removeDomain(org, 'acme.freeflow.im')).toThrow(expect.objectContaining({ code: 'domain_platform' }));
+    core.setPrimaryDomain(org, 'acme.test');
+    expect(() => core.removeDomain(org, 'acme.test')).toThrow(expect.objectContaining({ code: 'domain_primary' }));
+    expect(core.accountFor(a.user.id, org)!.address).toBe('ann@acme.freeflow.im');
+    await core.register('c@example.com');
+    const carol = await core.completeSignup(lastLink('signup'), 'Carol', 'pw-pw-pw-pw', 'test');
+    await join(org, carol.user.id);
+    expect(core.accountFor(carol.user.id, org)!.address).toBe('carol@acme.test');
+    core.setPrimaryDomain(org, 'acme.freeflow.im');
+    expect(() => core.removeDomain(org, 'acme.test')).toThrow(expect.objectContaining({ code: 'domain_in_use' }));
+    core.addDomain(org, 'spare.test');
+    core.removeDomain(org, 'spare.test');
+    expect(core.domainsOf(org).map((d) => d.domain)).toEqual(['acme.freeflow.im', 'acme.test']);
+  });
+
+  it('describes each domain with its records and their status, reusing a check for a minute', async () => {
+    const org = newId();
+    core.reserveSlug('acme', org);
+    const { verifyToken } = core.addDomain(org, 'acme.test');
+    txt = [verifyToken!];
+    const [platform, own] = await core.describeDomains(org);
+    expect(platform).toMatchObject({ domain: 'acme.freeflow.im', kind: 'platform', verified: true, primary: true, status: [] });
+    expect(own!.records[0]).toEqual({ type: 'TXT', name: '_freeflow.acme.test', value: verifyToken, purpose: 'verification' });
+    expect(own!.records.find((r) => r.type === 'MX')!.value).toBe('mx.example.invalid');
+    expect(own!.status.map((s) => s.record)).toEqual(['present', 'missing', 'missing', 'missing']);
+    const before = lookups;
+    await core.describeDomains(org);
+    await core.describeDomains(org, true);
+    expect(lookups).toBe(before);
+  });
+});
+
+describe('domains with a mail provider (phase 5.2)', () => {
+  let provider: FakeMailProvider;
+  let txt: string[];
+  beforeAll(() => { process.env.FLOW_DATA_KEY ??= randomBytes(32).toString('base64'); });
+  beforeEach(() => {
+    provider = new FakeMailProvider();
+    txt = [];
+    const resolve = async (name: string, type: 'TXT' | 'MX') => (type === 'TXT' && name === '_freeflow.acme.test' ? txt : []);
+    core = new DirectoryCore(nodeSql(), { webUrlBase: 'https://app.test', registrationEnabled: true, send: async () => {}, resolve, mailProvider: provider });
+  });
+  const verified = async (org: string) => {
+    txt = [core.addDomain(org, 'acme.test').verifyToken!];
+    await core.verifyDomain(org, 'acme.test');
+  };
+
+  it('lists the provider\'s MX and SPF', async () => {
+    const org = newId();
+    core.reserveSlug('acme', org);
+    core.addDomain(org, 'acme.test');
+    const [platform, own] = await core.describeDomains(org);
+    expect(own!.records.find((r) => r.purpose === 'mx')).toEqual({ type: 'MX', name: 'acme.test', value: 'mx.fake-mail.test', priority: 10, purpose: 'mx' });
+    expect(own!.records.find((r) => r.purpose === 'spf')!.value).toBe('v=spf1 include:_spf.fake-mail.test ~all');
+    expect(platform!.records.find((r) => r.purpose === 'mx')!.value).toBe('mx.fake-mail.test');
+    expect(own!.records.some((r) => r.purpose === 'dkim')).toBe(false);
+  });
+
+  it('sets DKIM on a verified domain: the provider gets the key, the directory keeps it sealed, the list shows the TXT', async () => {
+    const org = newId();
+    core.reserveSlug('acme', org);
+    core.addDomain(org, 'acme.test');
+    await expect(core.setDomainDkim(org, 'acme.test')).rejects.toMatchObject({ code: 'domain_unverified' });
+    await verified(org);
+    const out = await core.setDomainDkim(org, 'acme.test');
+    expect(out).toMatchObject({ domain: 'acme.test', kind: 'own', selector: expect.stringMatching(/^ff\d{6}$/) });
+    expect(out.record).toMatchObject({ type: 'TXT', name: `${out.selector}._domainkey.acme.test`, purpose: 'dkim' });
+    expect(out.record.value).toMatch(/^v=DKIM1; k=rsa; p=[A-Za-z0-9+/=]+$/);
+    expect(provider.calls.map((c) => c.method)).toEqual(['createDomain', 'setDkim']);
+    const given = provider.domains.get('acme.test')!.dkim!;
+    expect(given.selector).toBe(out.selector);
+    const row = nodeSqlOf(core).exec('SELECT * FROM domain_keys WHERE domain = ?', 'acme.test').toArray()[0]!;
+    expect(decryptBlob(Buffer.from(row.key_sealed as Uint8Array), row.key_id as string).toString('utf8')).toBe(given.privateKeyPem);
+    expect(Buffer.from(row.key_sealed as Uint8Array).toString('utf8')).not.toContain('PRIVATE KEY');
+    const own = (await core.describeDomains(org)).find((d) => d.domain === 'acme.test')!;
+    expect(own.records.at(-1)).toEqual(out.record);
+    expect(own.status).toHaveLength(own.records.length);
+    // The platform domain is verified from the start.
+    expect((await core.setDomainDkim(org, 'acme.freeflow.im')).kind).toBe('platform');
+    core.addDomain(org, 'spare.test');
+    nodeSqlOf(core).exec("UPDATE domains SET verified_at = 1 WHERE domain = 'spare.test'");
+    await core.setDomainDkim(org, 'spare.test');
+    core.removeDomain(org, 'spare.test');
+    expect(nodeSqlOf(core).exec("SELECT 1 FROM domain_keys WHERE domain = 'spare.test'").toArray()).toEqual([]);
+  });
+
+  it('says so when the provider fails, without storing a key', async () => {
+    const org = newId();
+    core = new DirectoryCore(nodeSql(), { webUrlBase: 'https://app.test', registrationEnabled: true, send: async () => {}, resolve: async () => [] });
+    core.reserveSlug('acme', org);
+    await expect(core.setDomainDkim(org, 'acme.freeflow.im')).rejects.toMatchObject({ statusCode: 503, code: 'mail_provider_unavailable' });
+    expect(nodeSqlOf(core).exec('SELECT 1 FROM domain_keys').toArray()).toEqual([]);
+  });
+
+  it('lets another organization take a domain left unverified for more than a week', async () => {
+    const squatter = newId(), owner = newId();
+    core.reserveSlug('squat', squatter);
+    core.reserveSlug('owner', owner);
+    const first = core.addDomain(squatter, 'acme.test');
+    expect(() => core.addDomain(owner, 'acme.test')).toThrow(expect.objectContaining({ code: 'domain_taken' }));
+    nodeSqlOf(core).exec("UPDATE domains SET created_at = ? WHERE domain = 'acme.test'", Date.now() - 6 * 86_400_000);
+    expect(() => core.addDomain(owner, 'acme.test')).toThrow(expect.objectContaining({ code: 'domain_taken' }));
+    nodeSqlOf(core).exec("UPDATE domains SET created_at = ? WHERE domain = 'acme.test'", Date.now() - 8 * 86_400_000);
+    const taken = core.addDomain(owner, 'acme.test');
+    expect(taken).toMatchObject({ domain: 'acme.test', organizationId: owner, verified: false });
+    expect(taken.verifyToken).not.toBe(first.verifyToken);
+    expect(core.domainsOf(squatter).map((d) => d.domain)).toEqual(['squat.freeflow.im']);
+    // A verified domain is never taken, however old.
+    txt = [taken.verifyToken!];
+    await core.verifyDomain(owner, 'acme.test');
+    nodeSqlOf(core).exec("UPDATE domains SET created_at = 1 WHERE domain = 'acme.test'");
+    expect(() => core.addDomain(squatter, 'acme.test')).toThrow(expect.objectContaining({ code: 'domain_taken' }));
   });
 });
 

@@ -708,6 +708,8 @@ export interface PublicConfigDTO {
    * client can refuse an over-size file before the round trip and say what the
    * limit is — the iOS share extension does this for videos (issue #219). */
   maxFileBytes: number;
+  /** A hosted mail provider is configured: new accounts get a mailbox (platform.md §3.4). */
+  hostedMail?: boolean;
 }
 
 /** GET /v1/me/identities — external identities linked to the signed-in user.

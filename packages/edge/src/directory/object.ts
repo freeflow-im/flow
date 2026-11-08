@@ -3,18 +3,24 @@
 import { DurableObject } from 'cloudflare:workers';
 import { ApiError } from '../errors';
 import { sendMail, type MailEnv } from '../mail';
-import { DirectoryCore } from './core';
+import { DirectoryCore, type ProvisioningMessage } from './core';
 import { listVar } from './authHandoff';
+import { dohResolver } from './dns';
+import { hostedMailEnabled, mailProviderFor, type MailProviderEnv } from '../mailprovider/index';
 import { insertRows, type ImportRow } from '../importing';
 import { McpOAuth, OAuthError, type OAuthAnswer } from './mcpOAuth';
 
 export type DirectoryAnswer<T> = { ok: true; value: T } | { ok: false; status: number; code: string; message: string };
 
-export interface DirectoryEnv extends MailEnv {
+export interface DirectoryEnv extends MailEnv, MailProviderEnv {
   WEB_URL_BASE: string;
   REGISTRATION_ENABLED?: string;
   FLOW_HANDOFF_RETURN_URLS?: string;
   FLOW_ALLOWED_WEB_ORIGINS?: string;
+  /** The DNS-over-HTTPS (JSON) resolver domain checks use; Cloudflare's when unset. The e2e points it at a stub. */
+  DNS_RESOLVER_URL?: string;
+  /** The `flow-provisioning` Queue (producer): accounts' mailboxes made, suspended, resumed, deleted (provisioning/). */
+  PROVISIONING?: Queue<ProvisioningMessage>;
 }
 
 /** The core's methods, which are what a Worker may call. */
@@ -34,6 +40,9 @@ export class Directory extends DurableObject<DirectoryEnv> {
       send: (mail) => sendMail(env, mail),
       handoffReturnUrls: listVar(env.FLOW_HANDOFF_RETURN_URLS),
       allowedWebOrigins: listVar(env.FLOW_ALLOWED_WEB_ORIGINS),
+      resolve: dohResolver(env.DNS_RESOLVER_URL || 'https://cloudflare-dns.com/dns-query'),
+      mailProvider: mailProviderFor(env),
+      provisioning: hostedMailEnabled(env),
     });
     // After the core, which runs the migrations that make its tables.
     this.mcpOAuth = new McpOAuth(ctx.storage.sql as never);
@@ -63,6 +72,16 @@ export class Directory extends DurableObject<DirectoryEnv> {
       if (err instanceof ApiError) return { ok: false, status: err.statusCode, code: err.code, message: err.message };
       console.error(`directory ${method}: ${(err as Error).stack}`);
       return { ok: false, status: 500, code: 'internal', message: 'internal server error' };
+    } finally {
+      await this.sendProvisioning();
     }
+  }
+
+  /** The provisioning messages the call made, to the Queue before the caller has its answer. A failed send is logged:
+   * the account waits in its state, and POST /v1/workspaces/:id/provision sends it again. */
+  private async sendProvisioning(): Promise<void> {
+    const out = this.core.takeProvisioning();
+    if (!out.length || !this.env.PROVISIONING) return;
+    await this.env.PROVISIONING.sendBatch(out.map((body) => ({ body }))).catch((err) => console.error(`provisioning send: ${(err as Error).message}`));
   }
 }

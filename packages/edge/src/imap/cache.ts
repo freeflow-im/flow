@@ -251,7 +251,7 @@ export class MailCache {
   resetFolder(accountId: string, folder: string, validity: string): CachedFolder {
     this.rememberThreads(accountId, 'account_id = ? AND folder = ? AND uid_validity != ?', accountId, folder, validity);
     this.sql.exec('DELETE FROM mail_messages WHERE account_id = ? AND folder = ? AND uid_validity != ?', accountId, folder, validity);
-    this.sql.exec('UPDATE mail_cache_folders SET uid_validity = ?, high = 0, low = 0, modseq = NULL WHERE account_id = ? AND folder = ?', validity, accountId, folder);
+    this.sql.exec('UPDATE mail_cache_folders SET uid_validity = ?, high = 0, low = 0, modseq = NULL, synced_at = 0 WHERE account_id = ? AND folder = ?', validity, accountId, folder);
     return this.folder(accountId, folder)!;
   }
 

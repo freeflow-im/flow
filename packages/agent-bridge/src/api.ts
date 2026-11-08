@@ -195,6 +195,11 @@ export class FlowApi {
     return this.req(method, `/v1/calendar/${path}${path.includes('?') ? '&' : '?'}workspace=${encodeURIComponent(workspaceId)}`, body);
   }
 
+  /** Mail (`/v1/mail/<path>`), as the agent's account in one organization (`?workspace=`): its own mailbox (phase 5.4). */
+  mail<T>(method: 'GET' | 'POST' | 'PATCH', path: string, workspaceId: string, body?: unknown): Promise<T> {
+    return this.req(method, `/v1/mail/${path}${path.includes('?') ? '&' : '?'}workspace=${encodeURIComponent(workspaceId)}`, body);
+  }
+
   /** Post a message; mentions are parsed out of the body (server fans out notifications). */
   sendMessage(channelId: string, body: string, threadRootId?: string, fileIds?: string[], clientMsgId: string = randomUUID()): Promise<MessageDTO> {
     const mentions = [...new Set([...body.matchAll(USER_MENTION_RE)].map((m) => m[1]!))];

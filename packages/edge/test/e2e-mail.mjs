@@ -354,7 +354,15 @@ for(const m of [pic,dpic])if(m)await api(A.token,'POST',`${P}/messages/delete`,{
  t('fresh: pages of a folder the alarm just synced do no IMAP',[a,b,c,d].every(x=>x.s===200&&imapMs(x)>=0&&imapMs(x)<40)&&a.j.messages.length>0&&b.j.messages.length>0&&c.j.threads.length>0&&d.j.threads.length>0,[a,b,c,d].map(x=>x.s+':'+imapMs(x)+'ms').join(' '));}
 // Bodies: a message opened before the alarm got to it is read from the server and kept; after an alarm pass the newest
 // are in the cache, and open from it with no round trip; an attachment is fetched by the plan the row was cached with.
-const [bodyA,bodyB]=[pc.j.messages[0].uid,pc.j.messages[1].uid];
+// More messages than one pass fetches (BODY_BATCH, 25) arrive, then one alarm pass lists them all and fetches the newest
+// 25: the oldest of them is out of its reach whatever the mailbox held before, and the next pass still has bodies to fetch.
+const FILL=40,fillSubject=(i)=>`Filler ${String(i).padStart(2,'0')} ${tag}`;
+for(let i=0;i<FILL;i++)await smtpDirect.sendMail({from:'"Filler" <filler@acme.test>',to:MAIL_USER,subject:fillSubject(i),text:`filler ${i}`});
+for(let i=0;i<40;i++){const n=await imapDirect(async(c)=>{const lock=await c.getMailboxLock('INBOX');try{return (await c.search({subject:`Filler`,body:tag},{uid:true})).length;}finally{lock.release();}});if(n>=FILL)break;await sleep(250);}
+await getRaw(`${P}/folders`,{'x-mail-test-alarm':'1'});
+const fillers=(await api(A.token,'GET',`${P}/messages?folder=INBOX&limit=${FILL}`)).j.messages?.filter(m=>m.subject.startsWith('Filler ')&&m.subject.endsWith(tag))??[];
+t('bodies: more messages arrive than one pass fetches',fillers.length===FILL,fillers.length);
+const [bodyA,bodyB]=[fillers[0]?.uid,fillers.at(-1)?.uid];
 let op=await cacheOf(()=>getRaw(`${P}/messages/${bodyB}?folder=INBOX`));
 t('bodies: a message not prefetched yet opens from the server',op.s===200&&op.cache==='live'&&typeof op.j.message?.subject==='string',op.s+' '+op.cache);
 r=await api(A.token,'GET',`${P}/debug/cache`);
@@ -367,6 +375,7 @@ t('bodies: the newest message opens from the cache',op.s===200&&op.cache==='hit'
 {const live=await api(A.token,'GET',`${P}/messages/${UIDS.many}?folder=INBOX`);const m=live.j.message;
  const dl=await getRaw(`${P}/messages/${UIDS.many}/attachments/${m?.attachments?.find(a=>/Plan\.docx/.test(a.filename))?.index}?folder=INBOX`);
  t('bodies: an attachment of a cached message downloads by the stored plan',dl.s===200&&dl.buf.toString()==='PK plan',dl.s+' '+dl.buf?.toString().slice(0,30));}
+if(fillers.length)await api(A.token,'POST',`${P}/messages/delete`,{folder:'INBOX',uids:fillers.map(m=>m.uid)});
 const tabPage=await cacheOf(()=>getRaw(`${P}/messages?folder=INBOX&category=primary&limit=5`));
 t('cache: a tab\'s page takes its summaries from the cache',tabPage.s===200&&tabPage.j.messages?.length>0&&tabPage.cache==='hit'&&tabPage.j.messages.every(m=>m.category==='primary'&&typeof m.snippet==='string'),tabPage.s+' '+tabPage.cache);
 

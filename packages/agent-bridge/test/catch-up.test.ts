@@ -126,7 +126,7 @@ describe('the bridge catches up from its subscription', () => {
     const mention = message('m-1', `<@${AGENT}> are you there?`);
     server.pages = [
       { events: [logged('chat.message.created', mention), logged('chat.message.created', message('m-2', 'not for you'))], next: 12 },
-      { events: [logged('mail.received', { subject: 'x' }), logged('chat.reaction.added', { messageId: 'm-2', channelId: 'chan-1', emoji: '👍', userId: HUMAN })], next: 15 },
+      { events: [logged('docs.file.updated', { title: 'x' }), logged('chat.reaction.added', { messageId: 'm-2', channelId: 'chan-1', emoji: '👍', userId: HUMAN })], next: 15 },
     ];
     const b = bridge();
     expect(await b.catchUp()).toBe(15);

@@ -842,3 +842,15 @@ export const AckSubscriptionBody = z.object({
   cursor: z.number().int().min(0),
 });
 export type AckSubscriptionBody = z.infer<typeof AckSubscriptionBody>;
+
+/** POST /v1/workspaces/:id/domains: a domain the organization will verify (platform.md §3.2). The directory checks it is a hostname. */
+export const AddDomainBody = z.object({
+  domain: z.string().trim().min(3).max(253).toLowerCase(),
+});
+export type AddDomainBody = z.infer<typeof AddDomainBody>;
+
+/** PATCH /v1/workspaces/:id/domains/:domain: make a verified domain the one new addresses are made on. */
+export const PatchDomainBody = z.object({
+  primary: z.literal(true),
+});
+export type PatchDomainBody = z.infer<typeof PatchDomainBody>;

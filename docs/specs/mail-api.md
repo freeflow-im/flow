@@ -14,6 +14,7 @@ type Security = 'tls' | 'starttls' | 'none'; // 'none' only allowed when the Wor
 interface ServerSettings { host: string; port: number; security: Security; username?: string } // username defaults to email
 interface MailAccount {
   id: string; email: string; displayName: string;
+  kind: 'connected' | 'hosted';                // hosted: the organization's mailbox from provisioning (platform.md §3.4)
   imap: ServerSettings; smtp: ServerSettings;
   status: 'ok' | 'auth_failed' | 'connect_failed'; statusMessage?: string;
   tabs: TabCategory[];                         // inbox tabs that are on besides Primary; [] (the default) = tabs off
@@ -54,7 +55,8 @@ interface MessageDetail extends Omit<MessageSummary, 'attachments'> {
 
 - `GET  /v1/mail/providers?email=` → `{ imap: ServerSettings, smtp: ServerSettings, name: string, appPasswordUrl?: string } | null`
   Presets by domain (gmail.com/googlemail.com, icloud.com/me.com/mac.com, outlook.com/hotmail.com/live.com, office365 via MX not needed, yahoo.com, fastmail.com/fastmail.fm). Also try MX lookup for custom domains if cheap (optional).
-- `GET  /v1/mail/accounts` → `{ accounts: MailAccount[] }`
+- `GET  /v1/mail/accounts` → `{ accounts: MailAccount[] }` (the hosted mailbox first). A hosted account refuses a `password`,
+  `imap` or `smtp` PATCH and DELETE with `403 hosted_account`.
 - `POST /v1/mail/accounts` body `{ email, displayName, password, imap: ServerSettings, smtp: ServerSettings }`
   → verifies IMAP login AND SMTP login before saving; `201 { account: MailAccount }` or 4xx with `auth_failed`/`connect_failed`.
 - `PATCH /v1/mail/accounts/:id` body: any of `{ displayName, password, imap, smtp, tabs }` (re-verifies when credentials/servers change;

@@ -11,6 +11,14 @@ export interface SuiteUser {
   statusText: string;
 }
 
+/** One of the person's accounts (GET /v1/me/accounts): its organization and its provisioning state (platform.md §3.4). */
+export interface SuiteAccount {
+  id: string;
+  organizationId: string;
+  address: string;
+  state: 'requested' | 'mailbox_ready' | 'calendars_ready' | 'active' | 'suspended' | 'removed';
+}
+
 export interface SuiteOrganization {
   id: string;
   name: string;
@@ -36,6 +44,7 @@ async function suiteApi<T>(method: string, path: string, body?: unknown): Promis
 export const suite = {
   me: () => suiteApi<SuiteUser>('GET', '/v1/me'),
   organizations: async () => (await suiteApi<{ workspaces: SuiteOrganization[] }>('GET', '/v1/me/workspaces')).workspaces,
+  accounts: async () => (await suiteApi<{ accounts: SuiteAccount[] }>('GET', '/v1/me/accounts')).accounts,
   setStatus: (patch: { statusEmoji: string; statusText: string; statusSuppressAlerts: boolean }) => suiteApi<SuiteUser>('PATCH', '/v1/me', patch),
   logout: () => suiteApi<{ ok: true }>('POST', '/v1/auth/logout', {}),
 };
