@@ -1,5 +1,26 @@
 # Decision log
 
+## 2026-11-06 — The platform: principals, accounts, grants, the event bus, manifests (docs/specs/platform.md)
+
+- **Principals and accounts.** A principal (person or agent) is separate from an account (one per organization). Mail and
+  Calendar are keyed by account.
+- **Hosted mail, own calendars.** Every organization has mailboxes at a registered domain from a hosted provider (likely
+  OpenSRS), provisioned by the platform; calendars are the platform's own, in the Calendar object, with iMIP only for
+  attendees outside it. No mail server, no calendar server; external mailboxes and connected calendars stay secondary.
+- **Organizations.** The first person to create one owns it; roles are owner, admin, member; no groups.
+- **Agents.** A principal with a required person sponsor; holds accounts only where its sponsor does; otherwise a
+  first-class account with an address, a mailbox and calendars.
+- **Sharing is grants on objects**, inherited through containers, naming an account, a channel, the organization or a link,
+  with roles viewer, editor, manager, owner; evaluated in the owning app's object, indexed in the Org object; one
+  organization only in v1.
+- **Events are a logical stream apart from the sockets**: one append-only log per organization in its own object, every app
+  publishing into it, durable cursor subscriptions read over HTTP (at least once, in order), with socket poke, webhook and
+  agent wake as delivery options; `sharing.*` and `calendar.event.added` are the first events beyond Chat.
+- **Manifests.** Each app is declared by a manifest; the shell, the registry and the consent page read them.
+- **The assistant becomes a kernel service** with its own object per account.
+- **Calendar already shipped** (PRs #704 to #712), so phase 4 adds native calendars inside the existing Calendar object
+  rather than a new app.
+
 ## 2026-11-06 — The assistant's chat loads a picture only from the app or from an image search in that chat
 
 - **Why not every picture.** A reply's Markdown comes from the model, which reads untrusted email and web content; a
