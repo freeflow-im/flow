@@ -1,6 +1,9 @@
 // Thin WS client mirroring the macOS SocketClient (phase1.md §4): auth frame,
 // ping→pong, reconnect with backoff. Online-only client: every reconnect is
-// followed by query invalidation (the REST refetch IS the backfill).
+// followed by query invalidation (the REST refetch IS the backfill). Where the
+// server keeps an event log (platform.md §5.2) the socket is also a consumer:
+// it remembers the log's `cursor`, and a reconnect's `auth` carries it as
+// `since`, so the server replays what happened while the socket was down.
 import type { Event, ServerFrame } from '@flow/shared';
 
 export type SocketStatus = 'connecting' | 'connected' | 'reconnecting';
@@ -42,11 +45,69 @@ export function jittered(backoff: number, random: () => number = Math.random): n
   return Math.round(backoff * (0.75 + random() * 0.5));
 }
 
+/**
+ * The last log seq each socket applied, by socket URL (one connection's one
+ * organization). In memory, and in sessionStorage so it outlives the object;
+ * storage that throws (private mode, blocked site data) is only skipped.
+ */
+export class SocketCursors {
+  private readonly seqs = new Map<string, number>();
+
+  constructor(private readonly storage: () => Pick<Storage, 'getItem' | 'setItem'> | null = () => sessionStorage) {}
+
+  get(key: string): number | null {
+    const known = this.seqs.get(key);
+    if (known !== undefined) return known;
+    try {
+      const raw = this.storage()?.getItem(`flow.cursor:${key}`);
+      const n = raw == null ? NaN : Number(raw);
+      if (Number.isFinite(n) && n >= 0) {
+        this.seqs.set(key, n);
+        return n;
+      }
+    } catch {
+      /* no storage */
+    }
+    return null;
+  }
+
+  /** Moves the cursor forward (never back). */
+  set(key: string, seq: number): void {
+    if (!Number.isFinite(seq) || seq < 0 || seq <= (this.get(key) ?? -1)) return;
+    this.seqs.set(key, seq);
+    try {
+      this.storage()?.setItem(`flow.cursor:${key}`, String(seq));
+    } catch {
+      /* no storage */
+    }
+  }
+
+  /** A replayed event (it carries a `seq`) applies only past the cursor; one at
+   * or below it already arrived live before the drop. */
+  accept(key: string, seq: number | undefined): boolean {
+    if (seq === undefined) return true;
+    if (seq <= (this.get(key) ?? -1)) return false;
+    this.set(key, seq);
+    return true;
+  }
+}
+
+/** Every socket's cursors, shared so a recreated client keeps them. */
+export const socketCursors = new SocketCursors(() => {
+  try {
+    return typeof sessionStorage === 'undefined' ? null : sessionStorage;
+  } catch {
+    return null;
+  }
+});
+
 export class SocketClient {
   private ws: WebSocket | null = null;
   private stopped = false;
   private backoff = 500;
   private lastInboundAt = 0;
+  /** Whether this client has been connected: only a reconnect asks for a backlog. */
+  private connectedBefore = false;
   private watchdog: ReturnType<typeof setInterval> | null = null;
   private heartbeat: ReturnType<typeof setInterval> | null = null;
   private readonly onVisible = () => {
@@ -62,6 +123,7 @@ export class SocketClient {
     private readonly url: string = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/v1/ws`,
     /** Test seam for the reconnect jitter. */
     private readonly random: () => number = Math.random,
+    private readonly cursors: SocketCursors = socketCursors,
   ) {}
 
   start(): void {
@@ -96,7 +158,12 @@ export class SocketClient {
     this.lastInboundAt = Date.now();
     this.startWatchdog();
 
-    ws.onopen = () => ws.send(JSON.stringify({ op: 'auth', token: this.token }));
+    ws.onopen = () => {
+      // The first connect loads everything over REST; a reconnect also asks the
+      // server for what it missed since the last cursor it applied.
+      const since = this.connectedBefore ? this.cursors.get(this.url) : null;
+      ws.send(JSON.stringify({ op: 'auth', token: this.token, ...(since !== null ? { since } : {}) }));
+    };
     ws.onmessage = (msg) => {
       // Any frame is proof of life — pings included, and they are what keeps an
       // idle connection out of the watchdog's jaws.
@@ -112,10 +179,13 @@ export class SocketClient {
       } else if (frame.op === 'hello') {
         this.startHeartbeat(ws, frame.heartbeat);
         this.backoff = 500;
+        this.connectedBefore = true;
         this.handlers.onSession?.(frame.sessionId);
         this.handlers.onStatus('connected');
       } else if (frame.op === 'event') {
-        this.handlers.onEvent(frame.event);
+        if (this.cursors.accept(this.url, frame.seq)) this.handlers.onEvent(frame.event);
+      } else if (frame.op === 'cursor') {
+        this.cursors.set(this.url, frame.seq);
       }
     };
     ws.onclose = () => {

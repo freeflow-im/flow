@@ -473,28 +473,31 @@ export async function deleteArtifactTool(
   };
 }
 
-/** POST JSON to the bridge daemon over its local task socket (FLOW_BRIDGE_SOCK). */
-function bridgeIpcPost(
+/** POST JSON to the bridge daemon over its local task socket (FLOW_BRIDGE_SOCK): `/task` for start_task, `/job` for
+ * the wake job whose turn is running in this conversation. */
+function bridgeIpcPost<T = { ok: true; note: string } | { error: string }>(
   socketPath: string,
   payload: unknown,
-): Promise<{ ok: true; note: string } | { error: string }> {
+  route: '/task' | '/job' = '/task',
+  timeoutMs = 10_000,
+): Promise<T> {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify(payload);
     const req = http.request(
-      { socketPath, path: '/task', method: 'POST', headers: { 'content-type': 'application/json' } },
+      { socketPath, path: route, method: 'POST', headers: { 'content-type': 'application/json' } },
       (res) => {
         let data = '';
         res.on('data', (chunk: Buffer) => (data += chunk));
         res.on('end', () => {
           try {
-            resolve(JSON.parse(data) as { ok: true; note: string } | { error: string });
+            resolve(JSON.parse(data) as T);
           } catch {
             reject(new Error(`bad bridge response (status ${res.statusCode})`));
           }
         });
       },
     );
-    req.setTimeout(10_000, () => req.destroy(new Error('bridge did not answer within 10s')));
+    req.setTimeout(timeoutMs, () => req.destroy(new Error(`bridge did not answer within ${timeoutMs / 1000}s`)));
     req.on('error', reject);
     req.end(body);
   });
@@ -510,7 +513,19 @@ export async function runMcpServer(): Promise<void> {
     process.stderr.write('flow mcp: FLOW_SERVER_URL and FLOW_AGENT_TOKEN are required\n');
     process.exit(1);
   }
-  const api = new FlowApi(serverUrl, token);
+  // During a wake job's turn every request carries the job (x-flow-job), so the events it causes say so (platform.md
+  // §5.2, loop safety). The bridge knows which conversation's turn is a job's; this process asks it before each request.
+  const sock = process.env.FLOW_BRIDGE_SOCK || '';
+  const jobHeader = async (): Promise<Record<string, string>> => {
+    if (!sock) return {};
+    try {
+      const { jobId } = await bridgeIpcPost<{ jobId: string | null }>(sock, { channelId: defaultChannelId, threadRootId: defaultThreadRootId ?? '' }, '/job', 2_000);
+      return jobId ? { 'x-flow-job': jobId } : {};
+    } catch {
+      return {};
+    }
+  };
+  const api = new FlowApi(serverUrl, token, jobHeader);
 
   const write = (msg: unknown): void => {
     process.stdout.write(`${JSON.stringify(msg)}\n`);

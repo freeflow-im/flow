@@ -96,14 +96,18 @@ export async function isAgentUser(userId: string): Promise<boolean> {
 export const requireAgentSponsorRights = (workspaceId: string, userId: string) =>
   requirePolicy(workspaceId, userId, 'agentsBy', 'add agents');
 
+/** What a member row keeps of the joiner's account: its address (§3.2) and its id (the event log's `actor`, §5.2). */
+export interface JoinAccount { address: string | null; accountId: string | null }
+
 /**
- * The joiner's address (platform.md §3.2): the directory makes or reactivates their account before the member row is
- * written, so the row can carry it. Null for someone already a member, whose row and role stay as they are.
+ * The joiner's account (platform.md §3.2): the directory makes or reactivates it before the member row is written, so
+ * the row can carry its address and id. Null for someone already a member, whose row and role stay as they are.
  */
-export async function accountAddressForJoin(workspaceId: string, userId: string, role: MemberRole = 'member'): Promise<string | null> {
+export async function accountForJoin(workspaceId: string, userId: string, role: MemberRole = 'member'): Promise<JoinAccount | null> {
   if (await isWorkspaceMember(workspaceId, userId)) return null;
   const u = (await db.select({ displayName: users.displayName }).from(users).where(eq(users.id, userId)).limit(1))[0];
-  return (await ensureAccount(workspaceId, userId, role, u?.displayName ?? ''))?.address ?? null;
+  const account = await ensureAccount(workspaceId, userId, role, u?.displayName ?? '');
+  return { address: account?.address ?? null, accountId: account?.id ?? null };
 }
 
 /**
@@ -324,13 +328,13 @@ export async function createWorkspace(
   const wsId = presetWorkspaceId.getStore() ?? newId();
   const chanId = newId();
   // The creator is the organization's owner (platform.md §3.1), with an account and an address from the start.
-  const address = (await ensureAccount(wsId, userId, 'owner', creator[0]?.displayName ?? ''))?.address ?? null;
+  const account = await ensureAccount(wsId, userId, 'owner', creator[0]?.displayName ?? '');
   try {
     await db.transaction(async (tx) => {
       await tx
         .insert(workspaces)
         .values({ id: wsId, slug, name, createdBy: userId, googleSelfRegisterDomain: domain });
-      await tx.insert(workspaceMembers).values({ workspaceId: wsId, userId, role: 'owner', address });
+      await tx.insert(workspaceMembers).values({ workspaceId: wsId, userId, role: 'owner', address: account?.address ?? null, accountId: account?.id ?? null });
       await tx.insert(channels).values({
         id: chanId,
         workspaceId: wsId,
@@ -346,7 +350,7 @@ export async function createWorkspace(
   }
   const created = await db.select().from(workspaces).where(eq(workspaces.id, wsId)).limit(1);
   publishWorkspaceJoined(wsId, userId);
-  return toWorkspaceDTO(created[0]!, 'owner', undefined, address);
+  return toWorkspaceDTO(created[0]!, 'owner', undefined, account?.address ?? null);
 }
 
 export async function getWorkspace(workspaceId: string, userId: string): Promise<WorkspaceDTO> {
@@ -433,6 +437,7 @@ export async function listMembers(workspaceId: string, userId: string): Promise<
     role: r.m.role,
     joinedAt: r.m.joinedAt.toISOString(),
     ...(r.m.address ? { address: r.m.address } : {}),
+    ...(r.m.accountId ? { accountId: r.m.accountId } : {}),
   }));
 }
 
@@ -468,6 +473,7 @@ export async function toMemberDTO(
     role: r.m.role,
     joinedAt: r.m.joinedAt.toISOString(),
     ...(r.m.address ? { address: r.m.address } : {}),
+    ...(r.m.accountId ? { accountId: r.m.accountId } : {}),
   };
 }
 
@@ -886,10 +892,10 @@ export async function acceptInvite(
   if (inv.declinedAt) throw conflict('invite_declined', 'invite was declined');
   if (inv.expiresAt < new Date()) throw badRequest('invite_expired', 'invite has expired');
 
-  const address = await accountAddressForJoin(inv.workspaceId, userId);
+  const account = await accountForJoin(inv.workspaceId, userId);
   const joined = await db.transaction(async (tx) => {
     await tx.update(invites).set({ acceptedAt: new Date() }).where(eq(invites.id, inv.id));
-    return enrollInWorkspace(tx, inv.workspaceId, userId, 'member', undefined, address);
+    return enrollInWorkspace(tx, inv.workspaceId, userId, 'member', undefined, account);
   });
 
   if (joined) await announceJoin(inv.workspaceId, userId);
@@ -1034,8 +1040,8 @@ export async function redeemJoinLink(userId: string, token: string): Promise<Wor
   const ws = (await db.select().from(workspaces).where(eq(workspaces.id, row.workspaceId)).limit(1))[0];
   if (!ws) throw notFound('this join link is no longer valid');
 
-  const address = await accountAddressForJoin(ws.id, userId);
-  const joined = await db.transaction(async (tx) => enrollInWorkspace(tx, ws.id, userId, 'member', undefined, address));
+  const account = await accountForJoin(ws.id, userId);
+  const joined = await db.transaction(async (tx) => enrollInWorkspace(tx, ws.id, userId, 'member', undefined, account));
   if (joined) await announceJoin(ws.id, userId);
 
   const m = (
@@ -1061,12 +1067,12 @@ export async function enrollInWorkspace(
   role: MemberRole = 'member',
   /** Agents only (#357): who vouched for this agent in THIS workspace. */
   sponsorUserId?: string,
-  /** The account's address, from `accountAddressForJoin` before the transaction (platform.md §3.2). */
-  address?: string | null,
+  /** The account's address and id, from `accountForJoin` before the transaction (platform.md §3.2). */
+  account?: JoinAccount | null,
 ): Promise<boolean> {
   const inserted = await tx
     .insert(workspaceMembers)
-    .values({ workspaceId, userId, role, sponsorUserId: sponsorUserId ?? null, address: address ?? null })
+    .values({ workspaceId, userId, role, sponsorUserId: sponsorUserId ?? null, address: account?.address ?? null, accountId: account?.accountId ?? null })
     .onConflictDoNothing()
     .returning({ userId: workspaceMembers.userId });
   const general = await tx

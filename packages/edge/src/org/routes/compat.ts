@@ -9,6 +9,8 @@ import { ApiError, unauthorized } from '../../errors';
 export interface CallerContext {
   user: UserDTO | null; token: string | null; authKind: AuthKind | null; ip: string;
   organizationId: string | null; account: AccountDTO | null;
+  /** `x-flow-job`: the request is part of this wake job's turn (platform.md §5.2, loop safety). The Org object checks it is the caller's. */
+  jobId?: string | null;
 }
 
 /** A per-person object's Hono bindings (Mail, Calendar): the request's caller context, as `c.env.caller`. */

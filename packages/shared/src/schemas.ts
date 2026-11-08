@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DELIVERY_MODES, SCHEDULE_EVERY } from './platform.js';
 
 // ---- auth ------------------------------------------------------
 /** Email-first: registration takes only an email; name + password are set on
@@ -779,3 +780,65 @@ export const AdoptEmailImageBody = z.object({
   fileId: z.string().uuid(),
 });
 export type AdoptEmailImageBody = z.infer<typeof AdoptEmailImageBody>;
+
+// ---- the event bus: subscriptions (platform.md §5.2) ----------
+/** A subscription's filter (`EventFilter`): type patterns (`chat.message.created`, or a prefix and `*`), a reference, a
+ * channel, an actor kind, words in the data, and `self` for events addressed to the consumer's own account. */
+export const EventFilterSchema = z
+  .object({
+    types: z.array(z.string().trim().regex(/^(\*|[A-Za-z0-9_.-]+\*?)$/, 'a type, or a prefix ending in *').max(100)).max(20).optional(),
+    ref: z.object({ organizationId: z.string().min(1).max(200), app: z.string().min(1).max(50), kind: z.string().min(1).max(50), id: z.string().min(1).max(500) }).strict().optional(),
+    channelId: z.string().min(1).max(100).optional(),
+    actorKind: z.enum(['person', 'agent', 'any']).optional(),
+    text: z.string().trim().min(1).max(200).optional(),
+    self: z.boolean().optional(),
+  })
+  .strict();
+export type EventFilterSchema = z.infer<typeof EventFilterSchema>;
+
+const channelIdField = z.string().min(1).max(100);
+/** A `wake` or `post` subscription's action (`SubscriptionAction`). */
+export const SubscriptionActionSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('wake'), prompt: z.string().trim().min(1).max(4000), channelId: channelIdField.optional(), includeSelf: z.boolean().optional() }).strict(),
+  z.object({ kind: z.literal('post'), channelId: channelIdField, body: z.string().trim().min(1).max(4000), includeSelf: z.boolean().optional() }).strict(),
+]);
+
+/** A schedule: `every` (`hourly`, `daily@HH:MM`, `weekly@DAY HH:MM`, `monthly@D HH:MM`) in an IANA timezone. */
+export const ScheduleSpecSchema = z.object({
+  every: z.string().trim().regex(SCHEDULE_EVERY, 'hourly, daily@HH:MM, weekly@DAY HH:MM or monthly@D HH:MM'),
+  timezone: z.string().trim().min(1).max(100).default('UTC'),
+}).strict();
+
+/**
+ * POST /v1/events/subscriptions. `wake` takes `consumer` (an agent's account) and a wake action; `post` a post action;
+ * the other modes neither. With `schedule` the filter is the schedule's own ticks, whatever is given. `webhook` is kept
+ * but does nothing yet.
+ */
+export const CreateSubscriptionBody = z.object({
+  name: z.string().trim().min(1).max(100),
+  filter: EventFilterSchema.default({}),
+  delivery: z.enum(DELIVERY_MODES).optional(),
+  consumer: z.string().min(1).max(100).optional(),
+  action: SubscriptionActionSchema.optional(),
+  schedule: ScheduleSpecSchema.optional(),
+}).superRefine((b, ctx) => {
+  const say = (path: string, message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message });
+  if (b.consumer && b.delivery !== 'wake') say('consumer', 'only a wake subscription names its consumer');
+  if (b.delivery === 'wake' && !b.consumer) say('consumer', 'a wake subscription names the agent it wakes');
+  if ((b.delivery === 'wake' || b.delivery === 'post') && b.action?.kind !== b.delivery) say('action', `a ${b.delivery} subscription needs a ${b.delivery} action`);
+  if (b.action && b.delivery !== b.action.kind) say('action', `a ${b.action.kind} action needs delivery ${b.action.kind}`);
+});
+export type CreateSubscriptionBody = z.infer<typeof CreateSubscriptionBody>;
+
+/** POST /v1/events/jobs/:id/done: how the agent's turn ended, and a line about it. */
+export const JobDoneBody = z.object({
+  ok: z.boolean(),
+  note: z.string().max(500).optional(),
+});
+export type JobDoneBody = z.infer<typeof JobDoneBody>;
+
+/** POST /v1/events/subscriptions/:id/ack: the `next` of a read, or any seq up to it. */
+export const AckSubscriptionBody = z.object({
+  cursor: z.number().int().min(0),
+});
+export type AckSubscriptionBody = z.infer<typeof AckSubscriptionBody>;

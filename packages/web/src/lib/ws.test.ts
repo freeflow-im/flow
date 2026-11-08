@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { isSocketDead, SocketClient, SOCKET_DEADLINE_MS, SOCKET_WAKE_DEADLINE_MS } from './ws';
+import { isSocketDead, SocketClient, SocketCursors, SOCKET_DEADLINE_MS, SOCKET_WAKE_DEADLINE_MS } from './ws';
 
 // The dead-socket watchdog (#271). A machine that sleeps leaves the WebSocket
 // half-open: no close event, no error, nothing arriving. Silence is the only
@@ -150,5 +150,39 @@ describe('SocketClient watchdog', () => {
     client.stop();
     vi.advanceTimersByTime(SOCKET_DEADLINE_MS * 3);
     expect(FakeWebSocket.instances.length).toBe(1);
+  });
+
+  // The socket is a consumer of the event log (platform.md §5.2): it keeps the
+  // last cursor, sends it as `since` on a reconnect (not the first connect), and
+  // a replay of what already arrived live is harmless.
+  it('keeps the cursor, sends it on a reconnect, and skips a replay at or below it', () => {
+    const stored = new Map<string, string>();
+    const cursors = new SocketCursors(() => ({ getItem: (k) => stored.get(k) ?? null, setItem: (k, v) => void stored.set(k, v) }));
+    const applied: string[] = [];
+    const url = 'ws://localhost:8787/v1/ws?workspace=w1';
+    const client = new SocketClient('tok', { onEvent: (e) => applied.push(e.type), onStatus: () => {} }, url, () => 0.5, cursors);
+    client.start();
+    live().onopen?.();
+    expect(JSON.parse(live().sent[0]!)).toEqual({ op: 'auth', token: 'tok' });
+    live().deliver({ op: 'hello', sessionId: 's1' });
+    live().deliver({ op: 'event', event: { type: 'message.created' } });
+    live().deliver({ op: 'cursor', seq: 5 });
+    expect(cursors.get(url)).toBe(5);
+    expect(stored.get(`flow.cursor:${url}`)).toBe('5');
+    live().onclose?.();
+    vi.advanceTimersByTime(1_000);
+    live().onopen?.();
+    expect(JSON.parse(live().sent[0]!)).toEqual({ op: 'auth', token: 'tok', since: 5 });
+    live().deliver({ op: 'hello', sessionId: 's2' });
+    for (const seq of [4, 5, 6]) live().deliver({ op: 'event', event: { type: `seq.${seq}` }, seq });
+    live().deliver({ op: 'cursor', seq: 6 });
+    expect(applied).toEqual(['message.created', 'seq.6']);
+    // A new object for the same socket reads it back from storage.
+    expect(new SocketCursors(() => ({ getItem: (k) => stored.get(k) ?? null, setItem: () => {} })).get(url)).toBe(6);
+    // Storage that throws is only skipped.
+    const broken = new SocketCursors(() => { throw new Error('denied'); });
+    broken.set(url, 3);
+    expect(broken.get(url)).toBe(3);
+    client.stop();
   });
 });

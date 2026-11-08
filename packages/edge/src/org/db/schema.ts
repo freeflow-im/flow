@@ -176,6 +176,8 @@ export const workspaceMembers = sqliteTable(
     joinedAt: integer('joined_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
     // platform.md §3.2: the member's account address, from the directory at join (null until it is known).
     address: text('address'),
+    // platform.md §5.2: the member's account id, from the directory at join, for the event log's `actor` (null until known).
+    accountId: text('account_id'),
   },
   (t) => [primaryKey({ columns: [t.workspaceId, t.userId] }), index('ix_1').on(t.userId)],
 );

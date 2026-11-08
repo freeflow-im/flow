@@ -25,7 +25,7 @@ import { hashToken, newToken } from '../lib/tokens.js';
 import { badRequest, conflict, forbidden, notFound, unauthorized } from '../lib/errors.js';
 import { publishEvent, subjectMeta } from '../bus.js';
 import { postSystemMessage } from './messages.js';
-import { accountAddressForJoin, agentForbidden, announceJoin, enrollInWorkspace, isAgentUser, requireAgentSponsorRights, requireMembership, toWorkspaceDTO } from './workspaces.js';
+import { accountForJoin, agentForbidden, announceJoin, enrollInWorkspace, isAgentUser, requireAgentSponsorRights, requireMembership, toWorkspaceDTO } from './workspaces.js';
 import { accountFor, ensureAccount } from '../directoryLink.js';
 import { removeAgentFromWorkspace } from './memberRemoval.js';
 import { hashSecret, toUserDTO, verifySecret, visibleEmail } from './auth.js';
@@ -210,7 +210,7 @@ export async function redeemAgentInvite(input: RedeemAgentInviteBody): Promise<A
   try {
     const account = await ensureAccount(invite.workspaceId, userId, 'member', input.name.trim());
     if (account) {
-      await db.update(workspaceMembers).set({ address: account.address })
+      await db.update(workspaceMembers).set({ address: account.address, accountId: account.id })
         .where(and(eq(workspaceMembers.workspaceId, invite.workspaceId), eq(workspaceMembers.userId, userId)));
     }
   } catch (err) {
@@ -294,9 +294,9 @@ export async function inviteAgentToWorkspace(
     throw conflict('username_taken', `@${agent.agentUsername} is already taken in that workspace`);
   }
 
-  const address = await accountAddressForJoin(workspaceId, agentUserId);
+  const account = await accountForJoin(workspaceId, agentUserId);
   const joined = await db.transaction((tx) =>
-    enrollInWorkspace(tx, workspaceId, agentUserId, 'member', inviterId, address),
+    enrollInWorkspace(tx, workspaceId, agentUserId, 'member', inviterId, account),
   );
   if (joined) await announceJoin(workspaceId, agentUserId);
   const wsRow = (await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1))[0]!;

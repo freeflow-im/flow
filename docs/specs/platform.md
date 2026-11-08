@@ -376,7 +376,7 @@ the bus is where events are kept and read.
   `events (seq, id, type, actor, ref, channel_id, caused_by, depth, ts, data)` with `seq` monotonic within the
   organization. Retention is a window (30 days, or a row cap). Events are immutable; a correction is a new event.
   Presence and typing are not events: they stay on the sockets and are never replayed.
-- **The envelope** is `{id, seq, type: '<app>.<type>', organizationId, actor: accountId, ref?: reference,
+- **The envelope** is `{id, seq, type: '<app>.<type>', organizationId, actor: accountId | null, ref?: reference,
   channelId?, causedBy?: jobId, depth, ts, data}`. Each app declares its types in its manifest. Per-account objects
   (Mail, Calendar, the assistant) publish into their account's organization.
 - **Subscriptions are durable consumers with a cursor.** `subscriptions (id, name, consumer: accountId, owner:
@@ -643,8 +643,10 @@ every route takes a caller context; no code reads `users` or `memberships`; the 
    bridge creates its mention, DM and thread subscriptions at join and reads its queue on reconnect; `eventScope`
    becomes a subscription it writes.
 4. **Wake and schedule.** `agent_jobs`, the `wake` mode through a Cloudflare Queue with a dead-letter queue, the
-   `agent.job` event, ack and lease, the depth cap; `schedule.tick` from the Events object's alarm, with scheduled
-   messages re-based on it (same UI). A minimal **Automations** page listing an organization's subscriptions.
+   `agent.job` event, ack and lease, the depth cap; `schedule.tick` from the Events object's alarm. Re-basing the
+   existing scheduled messages on it is a follow-up, not this phase.
+5. **The Automations page**, minimal: an organization's subscriptions and jobs, and a form for a wake, a post or a
+   schedule. Deploying phase 2 needs `wrangler queues create flow-jobs` and `flow-jobs-dlq` first.
 
 What people see: an agent that was offline answers the mentions it missed; a scheduled message still posts. Exit:
 kill the bridge for an hour, mention it, restart it, and it answers once.
@@ -731,7 +733,8 @@ delivery hardening; native clients catching up (each a Parity line until then); 
   the old `users` view readable for one release.
 - **Phase 5 depends on OpenSRS.** Open the reseller account at the start of phase 1 so DNS and API access are
   real by the time phase 5 begins; the `MailProvider` fake keeps the rest unblocked.
-- **Dual-publishing in phase 2** means a Chat event is written twice until the socket reads from the log; keep it
-  until phase 2.3 lands and then remove the direct path.
+- **Dual-publishing in phase 2** is by design, not a transition: the Org object keeps sending live frames to its
+  sockets for latency and also appends every event to the log, which serves the backlog on reconnect and every
+  subscription. Neither path replaces the other.
 - **Grants migration in phase 3** must leave every existing private file private; the migration test counts rows
   before and after by scope.

@@ -6,6 +6,7 @@
 //     --var FLOW_UNFURL_ALLOW_HOSTS:localhost > /tmp/edge.log 2>&1 &
 // (FLOW_UNFURL_ALLOW_HOSTS lets the link preview check fetch the test page this script serves on localhost.)
 //   node test/e2e.mjs /tmp/edge.log
+// The wake-job checks want the flow-jobs queue's first check soon: add --var JOBS_ACK_DELAY_SECONDS:2.
 // It reads signup links and the dev push driver's lines from the Worker's log, because local mail and pushes go there.
 // Without the LIVEKIT_* vars the huddle checks expect huddles to be off instead.
 import fs from 'node:fs';
@@ -13,7 +14,7 @@ import http from 'node:http';
 import zlib from 'node:zlib';
 const log=process.argv[2]; const B='http://localhost:18796', WS='ws://localhost:18796';
 let pass=0,fail=0; const t=(n,ok,d='')=>{ok?pass++:fail++;console.log((ok?'ok  ':'FAIL')+' '+n+(d?': '+String(d).slice(0,170):''));};
-const api=async(tok,m,p,b)=>{const r=await fetch(B+p,{method:m,headers:{...(tok?{authorization:'Bearer '+tok}:{}),...(b?{'content-type':'application/json'}:{})},body:b?JSON.stringify(b):undefined});let j;const x=await r.text();try{j=JSON.parse(x)}catch{j=x}return{s:r.status,j}};
+const api=async(tok,m,p,b,h={})=>{const r=await fetch(B+p,{method:m,headers:{...h,...(tok?{authorization:'Bearer '+tok}:{}),...(b?{'content-type':'application/json'}:{})},body:b?JSON.stringify(b):undefined});let j;const x=await r.text();try{j=JSON.parse(x)}catch{j=x}return{s:r.status,j}};
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const link=async(re,tries=20)=>{for(let i=0;i<tries;i++){const m=[...fs.readFileSync(log,'utf8').matchAll(re)].at(-1);if(m)return m;await sleep(250)}};
 async function signup(email,name){await api(null,'POST','/v1/auth/register',{email});await sleep(400);const m=[...fs.readFileSync(log,'utf8').matchAll(new RegExp('to='+email+'.*?signup=([A-Za-z0-9_-]+)','g'))].at(-1);return (await api(null,'POST','/v1/auth/register/complete',{token:m[1],displayName:name,password:'correct-horse-battery'})).j;}
@@ -33,6 +34,8 @@ const sa=await sock(A.token),sb=await sock(Bo.token);t('sockets hello',sa.hello.
 await sleep(200);t('presence reaches Ann',sa.ev.some(e=>e.type==='presence'&&e.data.userId===Bo.user.id));
 r=await api(A.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'hello everyone'});t('send by channel id',r.s===201,JSON.stringify(r.j).slice(0,100));const M=r.j;
 await sleep(250);t('Bob gets it live',sb.ev.some(e=>e.type==='message.created'&&e.data?.id===M.id));
+// ---- the event log (platform.md §5.2): the same events, kept, read by cursor
+r=await api(Bo.token,'GET',`/v1/events?workspace=${W}&since=0&limit=500`);{const e=r.j.events?.find(x=>x.type==='chat.message.created'&&x.data?.id===M.id);t('the event log has the message for Bob',r.s===200&&e?.seq>0&&e.organizationId===W&&!!e.actor&&e.channelId===gen.id,JSON.stringify(e??r.j).slice(0,160));t('no presence in the log',!r.j.events?.some(x=>x.type==='chat.presence'));}
 const before=sa.ev.length;
 r=await api(Bo.token,'PUT',`/v1/messages/${M.id}/reactions/${encodeURIComponent('👍')}`);t('react by message id',r.s<300,r.s+' '+JSON.stringify(r.j).slice(0,100));
 r=await api(A.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'in a thread',threadRootId:M.id});t('thread reply',r.s===201);
@@ -43,6 +46,60 @@ sb.ev.length=0;
 r=await api(A.token,'POST',`/v1/channels/${P.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'for me only'});t('private send',r.s===201);
 await sleep(250);t('Bob does NOT get private message',!sb.ev.some(e=>e.channelId===P.id),sb.ev.map(e=>e.type).join(','));t('Ann does',sa.ev.some(e=>e.channelId===P.id&&e.type==='message.created'));
 r=await api(Bo.token,'GET',`/v1/channels/${P.id}/messages`);t('Bob refused private list',r.s>=400,r.s);
+r=await api(A.token,'GET',`/v1/events?workspace=${W}&since=0&limit=500&channel=${P.id}`);t('the private channel\'s events are in Ann\'s log',r.j.events?.some(e=>e.type==='chat.message.created'&&e.channelId===P.id),JSON.stringify(r.j).slice(0,120));
+r=await api(Bo.token,'GET',`/v1/events?workspace=${W}&since=0&limit=500`);t('and not in Bob\'s',r.s===200&&r.j.events.length>0&&!r.j.events.some(e=>e.channelId===P.id),r.j.events?.length);
+{const nx=r.j.next;r=await api(Bo.token,'GET',`/v1/events?workspace=${W}&since=${nx}&limit=500`);t('since=next: nothing new',r.s===200&&r.j.events.length===0&&r.j.next===nx,JSON.stringify(r.j).slice(0,120));}
+r=await api(A.token,'GET',`/v1/events?workspace=${W}&since=0&types=chat.reaction.*`);t('a type pattern',r.j.events?.length>=1&&r.j.events.every(e=>e.type.startsWith('chat.reaction.')),JSON.stringify(r.j.events?.map(e=>e.type)));
+{const C=await signup('dee@example.com','Dee');r=await api(C.token,'GET','/v1/events?since=0');t('no account: 403 no_account',r.s===403&&r.j.error?.code==='no_account',r.s+' '+JSON.stringify(r.j).slice(0,100));}
+// ---- subscriptions: durable consumers with a cursor, read by HTTP, long-polled with wait
+{const head=(await api(Bo.token,'GET',`/v1/events?workspace=${W}&since=0&limit=500`)).j;let nx=head.next;while(true){const p=(await api(Bo.token,'GET',`/v1/events?workspace=${W}&since=${nx}&limit=500`)).j;if(!p.events.length){nx=p.next;break}nx=p.next}
+ const SP=`/v1/events/subscriptions?workspace=${W}`,sp=(id,q='')=>`/v1/events/subscriptions/${id}?workspace=${W}${q}`;
+ r=await api(Bo.token,'POST',SP,{name:'chat for Bob',filter:{types:['chat.*']}});const S=r.j.subscription;t('Bob subscribes to chat.*',r.s===201&&!!S?.id&&S.name==='chat for Bob',r.s+' '+JSON.stringify(r.j).slice(0,140));
+ t('a new subscription starts at the head',S?.cursor===nx&&S?.delivery==='pull',S?.cursor+' vs '+nx);
+ r=await api(Bo.token,'POST',SP,{name:'bad',filter:{kinds:['x']}});t('an unknown filter field is refused',r.s===400,r.s+' '+JSON.stringify(r.j).slice(0,100));
+ r=await api(Bo.token,'GET',sp(S.id));t('nothing new yet: next is the head',r.s===200&&r.j.events.length===0&&r.j.next===nx,JSON.stringify(r.j).slice(0,120));
+ const t0=Date.now();const waiting=api(Bo.token,'GET',sp(S.id,'&wait=5'));await sleep(400);
+ r=await api(A.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'for the subscription'});const M2=r.j;
+ r=await waiting;const got=r.j.events?.find(e=>e.type==='chat.message.created'&&e.data?.id===M2.id);t('a waiting read returns Ann\'s message within the wait',r.s===200&&!!got&&Date.now()-t0<4500,(Date.now()-t0)+'ms '+JSON.stringify(r.j).slice(0,140));
+ t('and next is past it',r.j.next>=got?.seq,r.j.next);
+ const next=r.j.next;r=await api(Bo.token,'POST',`/v1/events/subscriptions/${S.id}/ack?workspace=${W}`,{cursor:next});t('ack moves the cursor',r.s===200&&r.j.cursor===next,JSON.stringify(r.j));
+ r=await api(Bo.token,'POST',`/v1/events/subscriptions/${S.id}/ack?workspace=${W}`,{cursor:1});t('and never back',r.j.cursor===next,JSON.stringify(r.j));
+ r=await api(Bo.token,'GET',sp(S.id));t('after the ack a read is empty',r.s===200&&r.j.events.length===0,JSON.stringify(r.j).slice(0,120));
+ const t1=Date.now();r=await api(Bo.token,'GET',sp(S.id,'&wait=2'));const dt=Date.now()-t1;t('wait=2 with nothing new answers empty after about two seconds',r.s===200&&r.j.events.length===0&&dt>=1800&&dt<4000,dt+'ms');
+ r=await api(Bo.token,'GET',SP);t('Bob lists his subscriptions',r.j.subscriptions?.length===1&&r.j.subscriptions[0].id===S.id&&r.j.subscriptions[0].cursor===next,JSON.stringify(r.j).slice(0,140));
+ r=await api(A.token,'POST',SP,{name:'Ann\'s',filter:{}});const SA=r.j.subscription;
+ r=await api(Bo.token,'GET',sp(SA.id));t('Ann\'s subscription is 404 for Bob',r.s===404,r.s);
+ r=await api(Bo.token,'POST',`/v1/events/subscriptions/${SA.id}/ack?workspace=${W}`,{cursor:1});t('and so is acking it',r.s===404,r.s);
+ r=await api(Bo.token,'DELETE',sp(SA.id));t('and deleting it',r.s===404,r.s);
+ r=await api(A.token,'GET',SP);t('Ann lists only hers',r.j.subscriptions?.length===1&&r.j.subscriptions[0].id===SA.id,JSON.stringify(r.j).slice(0,100));
+ r=await api(A.token,'DELETE',sp(SA.id));t('Ann deletes hers',r.s===200&&r.j.ok===true,r.s);
+ r=await api(A.token,'GET',sp(SA.id));t('then it is gone',r.s===404,r.s);
+ const C=await signup('dee2@example.com','Dee');r=await api(C.token,'GET','/v1/events/subscriptions');t('subscriptions without an account: 403 no_account',r.s===403&&r.j.error?.code==='no_account',r.s);}
+// ---- the socket is a consumer (§5.2, phase 2.3): `since` on auth replays the log, `cursor` frames mark it, `socket` subscriptions poke
+{const sock2=(tok,since)=>new Promise((res,rej)=>{const ws=new WebSocket(`${WS}/v1/ws?workspace=${W}`);const fr=[];ws.onopen=()=>ws.send(JSON.stringify({op:'auth',token:tok,...(since!==undefined?{since}:{})}));ws.onmessage=e=>{const f=JSON.parse(e.data);fr.push(f);if(f.op==='hello')res({ws,fr});if(f.op==='error')rej(new Error(f.message));};ws.onerror=()=>rej(new Error('ws'));setTimeout(()=>rej(new Error('ws timeout')),6000)});
+ const s0=await sock2(Bo.token,0);await sleep(600);
+ const i=s0.fr.findIndex(f=>f.op==='event'&&f.event.type==='message.created'&&f.event.data?.id===M.id),ci=s0.fr.findIndex(f=>f.op==='cursor');
+ t('since 0: the earlier message.created comes back with its seq',i>0&&s0.fr[i].seq>0&&s0.fr[i].event.channelId===gen.id&&s0.fr[i].event.workspaceId===W&&!!s0.fr[i].event.ts,JSON.stringify(s0.fr[i]??s0.fr.map(f=>f.op)).slice(0,160));
+ t('then a cursor frame at or past it',ci>i&&s0.fr[ci].seq>=s0.fr[i]?.seq,JSON.stringify(s0.fr[ci]));
+ const back=s0.fr.slice(0,ci).filter(f=>f.op==='event');
+ t('the backlog is in seq order and carries no private channel of Ann\'s',back.every((f,k)=>typeof f.seq==='number'&&(k===0||back[k-1].seq<f.seq))&&!back.some(f=>f.event.channelId===P.id),back.length);
+ t('no gap inside the window',!s0.fr.some(f=>f.op==='gap'));
+ const head=s0.fr[ci]?.seq;const sh=await sock2(Bo.token,head);await sleep(500);
+ t('since at the head: only the cursor frame',sh.fr.filter(f=>f.op==='event'&&f.seq!==undefined).length===0&&sh.fr.filter(f=>f.op==='cursor').length===1&&sh.fr.find(f=>f.op==='cursor').seq===head,JSON.stringify(sh.fr.map(f=>f.op+(f.seq??''))));
+ const c0=sh.fr.length;
+ r=await api(A.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'after the head'});const M3=r.j;await sleep(600);
+ const live=sh.fr.slice(c0);const li=live.findIndex(f=>f.op==='event'&&f.event.data?.id===M3.id),lc=live.findIndex(f=>f.op==='cursor');
+ t('a new message arrives live (no seq), then a cursor frame past the head',li>=0&&live[li].seq===undefined&&lc>li&&live[lc].seq>head,JSON.stringify(live.map(f=>f.op+(f.seq??''))));
+ r=await api(Bo.token,'POST',`/v1/events/subscriptions?workspace=${W}`,{name:'poke me',filter:{types:['chat.*']},delivery:'socket'});const SS=r.j.subscription;
+ t('Bob makes a socket subscription',r.s===201&&SS?.delivery==='socket',r.s+' '+JSON.stringify(r.j).slice(0,120));
+ const c1=sh.fr.length,a1=sa.ev.length;
+ r=await api(A.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'poke'});await sleep(800);
+ t('Bob\'s socket is poked with the subscription\'s id',sh.fr.slice(c1).some(f=>f.op==='subscription'&&f.id===SS.id),JSON.stringify(sh.fr.slice(c1).map(f=>f.op)));
+ r=await api(Bo.token,'GET',`/v1/events/subscriptions/${SS.id}?workspace=${W}`);t('and reading it returns the message',r.j.events?.some(e=>e.type==='chat.message.created'&&e.data?.body==='poke'),JSON.stringify(r.j).slice(0,120));
+ const pokedAnn=await new Promise(res=>{const ws=new WebSocket(`${WS}/v1/ws?workspace=${W}`);const fr=[];ws.onopen=()=>ws.send(JSON.stringify({op:'auth',token:A.token}));ws.onmessage=e=>fr.push(JSON.parse(e.data));setTimeout(async()=>{await api(A.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'poke again'});setTimeout(()=>{ws.close();res(fr.some(f=>f.op==='subscription'))},800)},400)});
+ t('Ann\'s socket is not poked for Bob\'s subscription',!pokedAnn);
+ r=await api(Bo.token,'DELETE',`/v1/events/subscriptions/${SS.id}?workspace=${W}`);t('the socket subscription goes',r.s===200,r.s);
+ s0.ws.close();sh.ws.close();void a1;}
 const pong=await new Promise(res=>{sa.ws.addEventListener('message',e=>{if(JSON.parse(e.data).op==='pong')res(true)});sa.ws.send('{"op":"ping"}');setTimeout(()=>res(false),2000)});t('client ping answered',pong);
 sa.ws.send(JSON.stringify({op:'typing',channelId:gen.id}));await sleep(200);t('typing relayed',sb.ev.some(e=>e.type==='typing'));
 r=await api(null,'GET',`/v1/channels/${gen.id}/messages`);t('no session refused',r.s===401,r.s);
@@ -154,6 +211,66 @@ r=await api(del.token,'DELETE','/v1/me');t('delete account',r.s===200,r.s+' '+JS
 r=await api(Bo.token,'POST',`/v1/workspaces/${W}/agent-invites`,{});t('Bob sponsors an agent',r.s===201,r.s);
 r=await api(null,'POST','/v1/agents/redeem',{code:r.j.code,username:'bobbot',key:'another-long-agent-key-for-the-test',name:'Bobbot'});const BOT=r.j.agentToken;
 r=await api(BOT,'GET',`/v1/workspaces/${W}/channels`);t('his agent is in',r.s===200,r.s);
+// ---- wake jobs through the flow-jobs Queue, post actions and schedules (platform.md §5.2, phase 2.4)
+{const SP=`/v1/events/subscriptions?workspace=${W}`,JB=(id,step)=>`/v1/events/jobs/${id}/${step}?workspace=${W}`;
+ const acct=async(tok)=>(await api(tok,'GET','/v1/me')).j.accounts?.find(a=>a.organizationId===W)?.id;
+ const botAcct=await acct(BOT),bobAcct=await acct(Bo.token),flowbotAcct=await acct(AGT2);
+ r=await api(Bo.token,'GET',`/v1/workspaces/${W}/members`);t('the members list carries the agent\'s accountId (the Automations page picks by it)',!!botAcct&&r.j.members?.find(m=>m.isAgent&&m.accountId===botAcct)?.displayName==='Bobbot',JSON.stringify(r.j.members?.filter(m=>m.isAgent).map(m=>({n:m.displayName,a:m.accountId}))).slice(0,160));
+ r=await api(BOT,'POST',SP,{name:'my jobs',filter:{types:['agent.job'],self:true}});const JQ=r.j.subscription;t('the agent subscribes to its own jobs',r.s===201,r.s);
+ const jobsAfter=async(pred,ms)=>{const end=Date.now()+ms;for(;;){const q=(await api(BOT,'GET',`/v1/events/subscriptions/${JQ.id}?workspace=${W}&wait=1`)).j;const hit=q.events?.filter(pred)??[];if(q.next)await api(BOT,'POST',`/v1/events/subscriptions/${JQ.id}/ack?workspace=${W}`,{cursor:q.next});if(hit.length)return hit;if(Date.now()>end)return [];}};
+ r=await api(BOT,'POST',SP,{name:'not mine',delivery:'wake',consumer:flowbotAcct,filter:{},action:{kind:'wake',prompt:'p'}});t('an agent may not make a wake subscription for another\'s agent',r.s===403&&r.j.error?.code==='agent_forbidden',r.s+' '+JSON.stringify(r.j).slice(0,120));
+ r=await api(Bo.token,'POST',SP,{name:'bad',filter:{},consumer:botAcct});t('consumer is for wake only',r.s===400,r.s+' '+JSON.stringify(r.j).slice(0,120));
+ r=await api(Bo.token,'POST',SP,{name:'summaries',delivery:'wake',consumer:botAcct,filter:{types:['chat.message.created'],channelId:gen.id},action:{kind:'wake',prompt:'Summarize: {{data}}'}});const WS1=r.j.subscription;
+ t('Bob makes a wake subscription for his agent',r.s===201&&WS1?.delivery==='wake'&&WS1.consumer===botAcct&&WS1.owner===bobAcct&&WS1.action?.prompt==='Summarize: {{data}}',r.s+' '+JSON.stringify(r.j).slice(0,160));
+ r=await api(Bo.token,'GET',SP);t('and lists it as its owner',r.j.subscriptions?.some(x=>x.id===WS1?.id),JSON.stringify(r.j).slice(0,100));
+ const t0=Date.now();r=await api(A.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'please summarize me'});const MW=r.j;
+ let jobs=await jobsAfter(e=>e.type==='agent.job'&&e.data?.subscriptionId===WS1?.id,3000);const J=jobs[0];const JID=J?.data?.jobId;
+ t('within 3 s the agent\'s queue has an agent.job',!!J&&Date.now()-t0<3500,(Date.now()-t0)+'ms '+JSON.stringify(J??null).slice(0,160));
+ t('with the rendered prompt, depth 1, caused by the job',J?.data?.prompt?.startsWith('Summarize: {')&&J.data.prompt.includes('please summarize me')&&J.depth===1&&J.causedBy===JID&&J.data.event?.channelId===gen.id,JSON.stringify(J?.data??null).slice(0,160));
+ r=await api(A.token,'POST',JB(JID,'ack'));t('Ann cannot ack the agent\'s job',r.s===404,r.s);
+ r=await api(BOT,'POST',JB(JID,'ack'));t('the agent acks: running, under a lease',r.s===200&&r.j.job?.state==='running'&&Date.parse(r.j.job.leaseUntil)>Date.now()+500_000,r.s+' '+JSON.stringify(r.j).slice(0,140));
+ r=await api(BOT,'POST',JB(JID,'extend'));t('and extends it',r.s===200&&r.j.job?.state==='running',r.s);
+ r=await api(BOT,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'Summary: Ann asked for one.'},{'x-flow-job':JID});const MJ=r.j;t('the agent posts during the job\'s turn',r.s===201,r.s);
+ await sleep(400);r=await api(Bo.token,'GET',`/v1/events?workspace=${W}&since=0&limit=500&types=chat.message.created&channel=${gen.id}`);let all=r.j.events??[];while(r.j.events?.length===500){r=await api(Bo.token,'GET',`/v1/events?workspace=${W}&since=${r.j.next}&limit=500&types=chat.message.created&channel=${gen.id}`);all=all.concat(r.j.events)}
+ const EJ=all.find(e=>e.data?.id===MJ.id),EA=all.find(e=>e.data?.id===MW.id);
+ t('its message\'s event carries causedBy the job and depth 2',EJ?.causedBy===JID&&EJ.depth===2,JSON.stringify(EJ&&{causedBy:EJ.causedBy,depth:EJ.depth}));
+ t('and Ann\'s, no cause and depth 0',EA&&!EA.causedBy&&EA.depth===0,JSON.stringify(EA&&{causedBy:EA.causedBy,depth:EA.depth}));
+ r=await api(BOT,'POST',JB(JID,'done'),{ok:true,note:'summarized'});t('the agent reports done',r.s===200&&r.j.job?.state==='done'&&r.j.job.note==='summarized',r.s+' '+JSON.stringify(r.j).slice(0,120));
+ r=await api(Bo.token,'GET',`/v1/events/jobs?subscription=${WS1.id}&workspace=${W}`);t('Bob\'s job list says done, and the agent\'s own post woke nothing',r.s===200&&r.j.jobs?.length===1&&r.j.jobs[0].state==='done'&&r.j.jobs[0].id===JID,r.s+' '+JSON.stringify(r.j).slice(0,160));
+ r=await api(BOT,'GET',`/v1/events/jobs?subscription=${WS1.id}&workspace=${W}`);t('so does the agent\'s',r.j.jobs?.[0]?.state==='done',r.s);
+ r=await api(A.token,'GET',`/v1/events/jobs?subscription=${WS1.id}&workspace=${W}`);t('Ann\'s is 404',r.s===404,r.s);
+ r=await api(BOT,'POST',JB(JID,'extend'));t('a done job cannot be extended',r.s===409&&r.j.error?.code==='job_state',r.s);
+ r=await api(Bo.token,'DELETE',`/v1/events/subscriptions/${WS1.id}?workspace=${W}`);t('the owner deletes the wake subscription',r.s===200,r.s);
+ // A job nobody acks is delivered again by the flow-jobs Queue's check (JOBS_ACK_DELAY_SECONDS=2 here).
+ r=await api(Bo.token,'POST',SP,{name:'unanswered',delivery:'wake',consumer:botAcct,filter:{types:['chat.message.created'],channelId:gen.id},action:{kind:'wake',prompt:'Again: {{type}}'}});const WS2=r.j.subscription;
+ r=await api(A.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'nobody answers this'});
+ jobs=await jobsAfter(e=>e.type==='agent.job'&&e.data?.subscriptionId===WS2?.id,3000);const J2=jobs[0],t2=Date.now();
+ t('a second wake subscription files a job',!!J2&&J2.data.prompt==='Again: chat.message.created',JSON.stringify(J2?.data??null).slice(0,120));
+ const again=await jobsAfter(e=>e.type==='agent.job'&&e.data?.jobId===J2?.data?.jobId&&e.id!==J2.id,8000);
+ t('not acked, it is delivered again: a second agent.job for the same job within ~5 s',again.length>=1&&Date.now()-t2<6500,(Date.now()-t2)+'ms '+again.length);
+ r=await api(Bo.token,'GET',`/v1/events/jobs?subscription=${WS2.id}&workspace=${W}`);t('the job says one more attempt',r.j.jobs?.[0]?.attempts===1&&r.j.jobs[0].state==='delivered',JSON.stringify(r.j.jobs?.[0]??r.j).slice(0,160));
+ r=await api(BOT,'POST',JB(J2.data.jobId,'ack'));t('and the agent can still take it',r.j.job?.state==='running',r.s);
+ await api(Bo.token,'DELETE',`/v1/events/subscriptions/${WS2.id}?workspace=${W}`);
+ // A post subscription posts as its owner when it matches.
+ r=await api(Bo.token,'POST',SP,{name:'reaction echo',delivery:'post',filter:{types:['chat.reaction.added'],channelId:gen.id},action:{kind:'post',channelId:gen.id,body:'Someone reacted with {{type}}'}});const PS=r.j.subscription;
+ t('Bob makes a post subscription',r.s===201&&PS?.delivery==='post',r.s+' '+JSON.stringify(r.j).slice(0,120));
+ r=await api(A.token,'PUT',`/v1/messages/${MW.id}/reactions/${encodeURIComponent('🎉')}`);
+ let posted=null;for(let i=0;i<15&&!posted;i++){await sleep(200);r=await api(A.token,'GET',`/v1/channels/${gen.id}/messages?limit=10`);posted=r.j.messages?.find(m=>m.body==='Someone reacted with chat.reaction.added')}
+ t('a match posts into the channel as Bob',posted?.userId===Bo.user.id,JSON.stringify(posted??r.j.messages?.map(m=>m.body)).slice(0,140));
+ await api(Bo.token,'DELETE',`/v1/events/subscriptions/${PS.id}?workspace=${W}`);
+ // With includeSelf, a post automation fires on its creator's own message too.
+ r=await api(Bo.token,'POST',SP,{name:'own echo',delivery:'post',filter:{types:['chat.message.created'],channelId:gen.id,text:'echo me'},action:{kind:'post',channelId:gen.id,body:'Echoed own post',includeSelf:true}});const PO=r.j.subscription;
+ await api(Bo.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'please echo me'});
+ posted=null;for(let i=0;i<15&&!posted;i++){await sleep(200);r=await api(Bo.token,'GET',`/v1/channels/${gen.id}/messages?limit=10`);posted=r.j.messages?.find(m=>m.body==='Echoed own post')}
+ t('an includeSelf post automation fires on its creator\'s own message',PO&&posted?.userId===Bo.user.id,JSON.stringify(posted??r.j.messages?.map(m=>m.body)).slice(0,140));
+ await api(Bo.token,'DELETE',`/v1/events/subscriptions/${PO?.id}?workspace=${W}`);
+ // A schedule: the filter is forced to its own ticks, and its first is within the hour (the tick itself is unit-tested).
+ r=await api(Bo.token,'POST',SP,{name:'hourly digest',delivery:'wake',consumer:botAcct,filter:{types:['chat.*']},action:{kind:'wake',prompt:'Digest'},schedule:{every:'hourly',timezone:'UTC'}});const SC=r.j.subscription;
+ const left=SC?.schedule&&Date.parse(SC.schedule.nextAt)-Date.now();
+ t('an hourly schedule forces the filter to its ticks',r.s===201&&SC.filter?.types?.[0]==='schedule.tick'&&SC.filter.types.length===1&&SC.filter.ref?.kind==='schedule'&&SC.filter.ref.id===SC.schedule.id&&SC.filter.ref.organizationId===W,r.s+' '+JSON.stringify(r.j).slice(0,180));
+ t('with next_at within the hour',left>0&&left<=3_600_000,left);
+ r=await api(Bo.token,'POST',SP,{name:'bad',filter:{},schedule:{every:'every 5 minutes'}});t('a bad schedule is refused',r.s===400,r.s);
+ await api(Bo.token,'DELETE',`/v1/events/subscriptions/${SC.id}?workspace=${W}`);}
 const sbot=await sock(BOT);const botClosed=new Promise((res)=>{sbot.ws.onclose=e=>res(e);setTimeout(()=>res(null),6000)});
 r=await api(A.token,'DELETE',`/v1/workspaces/${W}/members/${Bo.user.id}`);t('Ann removes Bob',r.s===200,r.s+' '+JSON.stringify(r.j).slice(0,90));
 const bc=await botClosed;t('his agent\'s socket closes with him',bc?.code===4003,bc&&bc.code+' '+bc.reason);

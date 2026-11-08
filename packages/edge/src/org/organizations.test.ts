@@ -8,7 +8,7 @@ import { withDb, schema, type DB } from './db/index';
 import { directoryLink } from './directoryLink';
 import { createAgentInvite, inviteAgentToWorkspace } from './services/agents';
 import {
-  accountAddressForJoin, createJoinLink, createWorkspace, enrollInWorkspace, listMembers, myWorkspaces, setMemberRole, transferWorkspaceOwnership, updateWorkspace,
+  accountForJoin, createJoinLink, createWorkspace, enrollInWorkspace, listMembers, myWorkspaces, setMemberRole, transferWorkspaceOwnership, updateWorkspace,
 } from './services/workspaces';
 
 const ANN = '00000000-0000-7000-8000-00000000000a';
@@ -43,8 +43,8 @@ beforeEach(async () => {
     }
     workspaceId = (await createWorkspace(ANN, 'Acme', 'acme')).id;
     for (const id of [BOB, BOT]) {
-      const address = await accountAddressForJoin(workspaceId, id);
-      await db.transaction((tx) => enrollInWorkspace(tx, workspaceId, id, 'member', undefined, address));
+      const account = await accountForJoin(workspaceId, id);
+      await db.transaction((tx) => enrollInWorkspace(tx, workspaceId, id, 'member', undefined, account));
     }
   });
 });
@@ -54,7 +54,7 @@ describe('organizations', () => {
     expect(asked).toEqual([[ANN, 'owner'], [BOB, 'member'], [BOT, 'member']]);
     const members = await run(() => listMembers(workspaceId, BOB));
     expect(Object.fromEntries(members.map((m) => [m.userId, m.address]))).toEqual({ [ANN]: 'ann@acme.freeflow.im', [BOB]: 'bob@acme.freeflow.im', [BOT]: 'bot@acme.freeflow.im' });
-    expect(await run(() => accountAddressForJoin(workspaceId, BOB))).toBeNull();
+    expect(await run(() => accountForJoin(workspaceId, BOB))).toBeNull();
     expect(asked).toHaveLength(3);
     const [mine] = await run(() => myWorkspaces(BOB));
     expect(mine).toMatchObject({ role: 'member', address: 'bob@acme.freeflow.im', policies: { inviteBy: 'admins', agentsBy: 'members', linkSharing: true } });

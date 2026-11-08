@@ -1,0 +1,1 @@
+ALTER TABLE `workspace_members` ADD `account_id` text;

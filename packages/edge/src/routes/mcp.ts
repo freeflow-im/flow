@@ -171,7 +171,7 @@ mcpRoutes.post('/oauth/decision', async (c) => {
   if (!user) return html(errorPage('You are signed out. Start again from your agent.'), 401);
   const form = await readForm(c);
   try {
-    // The page's checkboxes (grant_docs, grant_mail, grant_send); a form without them takes each group as the page starts it.
+    // The page's checkboxes (grant_docs, grant_mail, grant_send, grant_calendar, grant_events); a form without them takes each group as the page starts it.
     const ticked = form.scopes_form === '1' ? SCOPE_GROUPS.map((g) => g.id).filter((id) => form[`grant_${id}`]) : undefined;
     return redirect(await oauth(c, 'decide', issuerOf(c), form.p, user.id, form.csrf, form.allow === 'yes', form.org, ticked));
   } catch (e) {

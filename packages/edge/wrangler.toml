@@ -114,6 +114,32 @@ class_name = "Calendar"
 tag = "v5"
 new_sqlite_classes = ["Calendar"]
 
+# The event bus (src/events/object.ts, docs/specs/platform.md §5.2): one object per organization, named by its id, holding
+# its append-only event log. The Org object publishes Chat's events into it, the Mail object `mail.received`; GET
+# /v1/events reads it. Its alarm keeps the retention window (30 days, 200,000 rows).
+[[durable_objects.bindings]]
+name = "EVENTS"
+class_name = "Events"
+
+[[migrations]]
+tag = "v6"
+new_sqlite_classes = ["Events"]
+
+# Wake jobs (src/events/object.ts, platform.md §5.2): the Events object sends each job's check to flow-jobs, delayed by
+# JOBS_ACK_DELAY_SECONDS (default 60); the Worker's `queue` handler (src/index.ts) asks the Events object, which delivers
+# the job again (retry after 120 s × attempts) or parks it after three. A check that keeps throwing ends in flow-jobs-dlq,
+# which nothing consumes: look there with `wrangler queues`. Both queues are made once with `wrangler queues create`.
+[[queues.producers]]
+binding = "JOBS"
+queue = "flow-jobs"
+
+[[queues.consumers]]
+queue = "flow-jobs"
+max_batch_size = 10
+max_batch_timeout = 1
+max_retries = 3
+dead_letter_queue = "flow-jobs-dlq"
+
 [[r2_buckets]]
 binding = "BLOBS"
 bucket_name = "flow-files"

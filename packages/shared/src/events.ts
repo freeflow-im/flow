@@ -169,7 +169,12 @@ export type ClientFrame =
   // workspace and would otherwise show a green dot in every workspace its
   // agent belongs to. Omitted means "all of them", which is what the human
   // clients want: one window is reachable in every workspace it shows.
-  | { op: 'auth'; token: string; workspaces?: string[] }
+  //
+  // `since` (platform.md §5.2, "the UI socket is a consumer too"): the last
+  // `cursor` seq this client applied. After `hello` the server sends what the
+  // reader may see that was logged after it (each event with its `seq`), then a
+  // `cursor` frame, then presence and live events. Omitted: no backlog.
+  | { op: 'auth'; token: string; workspaces?: string[]; since?: number }
   // threadRootId scopes the indicator to a thread's composer; absent = the
   // channel's main composer. Older clients omit it and read as main-composer.
   | { op: 'typing'; channelId: string; threadRootId?: string }
@@ -177,6 +182,17 @@ export type ClientFrame =
 
 export type ServerFrame =
   | { op: 'hello'; sessionId: string; heartbeat?: 'client' }
-  | { op: 'event'; event: Event }
+  // `seq` is set on an event replayed from the log (an `auth` with `since`);
+  // live events carry none and are followed by a `cursor` frame instead.
+  | { op: 'event'; event: Event; seq?: number }
+  // The organization's event log reached `seq`: every event so far is applied.
+  // Clients keep the latest as their cursor and send it as `since` on reconnect.
+  | { op: 'cursor'; seq: number }
+  // The `since` asked for is older than the log keeps: events `from`..`to` are
+  // gone, and the backlog starts at the oldest kept. Refetch to be whole.
+  | { op: 'gap'; from: number; to: number }
+  // A `socket` subscription of this account has new events (a hint: read and
+  // ack it over HTTP, GET /v1/events/subscriptions/:id).
+  | { op: 'subscription'; id: string }
   | { op: 'ping' }
   | { op: 'error'; code: string; message: string };

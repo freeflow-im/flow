@@ -109,7 +109,7 @@ describe('active Huddle routing', () => {
     b.enqueue = vi.fn();
     await b.handleMessage(message({ channelId: 'dm', body: '', files: [{ id: 'pdf' }] as never }));
     expect(b.enqueue).not.toHaveBeenCalled();
-    await b.handleMessage(message({ channelId: 'other-dm' }));
+    await b.handleMessage(message({ id: 'msg-other', channelId: 'other-dm' }));
     expect(b.enqueue).toHaveBeenCalledTimes(1);
   });
 });

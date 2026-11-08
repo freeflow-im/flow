@@ -134,6 +134,8 @@ export interface WorkspaceMemberDTO {
   joinedAt: string;
   /** The member's account address in this organization (platform.md §3.2); absent until known. */
   address?: string;
+  /** The member's account id in this organization (a wake subscription's `consumer`, §5.2); absent until known. */
+  accountId?: string;
 }
 
 export interface InviteDTO {

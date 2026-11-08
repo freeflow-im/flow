@@ -1,6 +1,6 @@
 // One organization: its database and its sockets. HTTP requests arrive from the Worker with the caller already known.
 import { DurableObject } from 'cloudflare:workers';
-import type { AccountDTO, Event, MemberRole, UserDTO } from '@flow/shared';
+import { MAX_EVENT_DEPTH, type AccountDTO, type Event, type MemberRole, type UserDTO } from '@flow/shared';
 import { accountGate, type DirectoryCore } from '../directory/core';
 import { ApiError } from '../errors';
 import { directoryLink } from './directoryLink';
@@ -17,14 +17,18 @@ import { registerRoutes } from './routes/index';
 import { deleteMyAccount } from './services/accountDeletion';
 import { drainDuePushes, nextPushDueAt } from './services/pushOutbox';
 import { runSchedulerTick } from './services/scheduledMessages';
-import { accountAddressForJoin, announceJoin, enrollInWorkspace, toWorkspaceDTO } from './services/workspaces';
+import { accountForJoin, announceJoin, enrollInWorkspace, toWorkspaceDTO } from './services/workspaces';
 import { socketControl } from './sockets';
 import { setStorageEnv, type StorageEnv } from './storage/index';
 import { insertRows, tableCounts } from '../importing';
+import type { Events } from '../events/object';
+import type { PublishInput, SubscriptionRead } from '../events/core';
+import { logEntryFor } from './eventLog';
 import { eq, and } from 'drizzle-orm';
 
 /** IMAGES (Cloudflare Images) resizes preview images and thumbnails; without it they are kept as they came (lib/images.ts). */
-export type OrgEnv = StorageEnv & { FLOW_DATA_KEY?: string; DIRECTORY: DurableObjectNamespace<Directory>; IMAGES?: ImagesBinding };
+/** EVENTS is the organization's event log (events/object.ts), which every socket event but presence and typing also goes to. */
+export type OrgEnv = StorageEnv & { FLOW_DATA_KEY?: string; DIRECTORY: DurableObjectNamespace<Directory>; IMAGES?: ImagesBinding; EVENTS?: DurableObjectNamespace<Events> };
 
 /** What each id-only path needs (`routes/org.ts`), and who belongs here (`memberships`), reported to the directory by trigger. */
 const OUTBOX = [
@@ -57,9 +61,21 @@ registerRoutes(app as never);
 interface Attachment { userId: string; accountId: string | null }
 const pushLog = { info: (o: unknown, msg?: string) => console.log(`[push] ${msg}`, JSON.stringify(o)), warn: (o: unknown, msg?: string) => console.warn(`[push] ${msg}`, JSON.stringify(o)) };
 const USER_SUBJECT = /(?:^|\.)user\.([0-9a-f-]{36})(?:\.|$)/;
+/** A reconnecting socket's backlog: read in pages of this many, and no more than the cap (the client refetches past it). */
+const BACKLOG_PAGE = 200;
+const BACKLOG_MAX = 2_000;
+
+/** What the events a request publishes carry into the log (platform.md §5.2, loop safety): a job's turn stamps its id
+ * and one more than the job's depth; an automation's post, one more than its trigger's. */
+interface Stamp { causedBy?: string; depth: number }
 
 export class Org extends DurableObject<OrgEnv> {
   private readonly db: DB;
+  /** Socket events waiting to go into the event log, and the chain of sends, so they arrive in the order they happened. */
+  private logQueue: PublishInput[] = [];
+  private logging: Promise<void> = Promise.resolve();
+  /** Each job's depth, once asked of the Events object: it never changes. */
+  private readonly jobDepths = new Map<string, number>();
 
   constructor(ctx: DurableObjectState, env: OrgEnv) {
     super(ctx, env);
@@ -78,13 +94,13 @@ export class Org extends DurableObject<OrgEnv> {
     sql.exec(HUDDLE_ROSTER_DDL);
     // Answered by the runtime, so a client's heartbeat does not wake the object.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('{"op":"ping"}', '{"op":"pong"}'));
-    if (sql.exec('SELECT 1 FROM workspace_members WHERE address IS NULL LIMIT 1').toArray().length) {
+    if (sql.exec('SELECT 1 FROM workspace_members WHERE address IS NULL OR account_id IS NULL LIMIT 1').toArray().length) {
       void ctx.blockConcurrencyWhile(() => this.backfillAddresses());
     }
   }
 
-  /** Members who joined before addresses (or whose address the join could not get): the directory's accounts fill
-   * them in, once. A failure leaves them for the next start. */
+  /** Members who joined before addresses and account ids (or whose join could not get them): the directory's accounts
+   * fill them in, once. A failure leaves them for the next start. */
   private async backfillAddresses(): Promise<void> {
     const sql = this.ctx.storage.sql;
     const org = sql.exec('SELECT id FROM workspaces LIMIT 1').toArray()[0]?.id as string | undefined;
@@ -93,7 +109,7 @@ export class Org extends DurableObject<OrgEnv> {
       const answer = await this.directory().call('accountsOfOrganization' as never, [org] as never) as DirectoryAnswer<AccountDTO[]>;
       if (!answer.ok) return console.error(`address backfill: ${answer.message}`);
       for (const a of answer.value) {
-        sql.exec('UPDATE workspace_members SET address = ? WHERE workspace_id = ? AND user_id = ? AND address IS NULL', a.address, org, a.principalId);
+        sql.exec('UPDATE workspace_members SET address = COALESCE(address, ?), account_id = COALESCE(account_id, ?) WHERE workspace_id = ? AND user_id = ? AND (address IS NULL OR account_id IS NULL)', a.address, a.id, org, a.principalId);
       }
     } catch (err) {
       console.error(`address backfill: ${(err as Error).message}`);
@@ -131,7 +147,7 @@ export class Org extends DurableObject<OrgEnv> {
   }
 
   /** Who may see an event, as the gateway decided on Node: a user's own subject goes to that user, and a private channel to its members. */
-  private broadcast(subject: string, event: Event): void {
+  private broadcast(subject: string, event: Event, stamp?: Stamp): void {
     const onlyUser = USER_SUBJECT.exec(subject)?.[1];
     let allowed: Set<string> | null = null;
     if (!onlyUser && event.channelId) {
@@ -148,13 +164,183 @@ export class Org extends DurableObject<OrgEnv> {
       if (!userId || (onlyUser && userId !== onlyUser) || (allowed && !allowed.has(userId))) continue;
       try { ws.send(frame); } catch { /* the socket is closing */ }
     }
+    this.logEvent(subject, event, frame, stamp);
   }
 
-  /** Runs with this object's database, event bus and socket controls in scope. */
-  private scoped<T>(fn: () => Promise<T>): Promise<T> {
+  /** Into the organization's event log as well (platform.md §5.2), in order, batched per turn of the event loop. */
+  private logEvent(subject: string, event: Event, frame: string, stamp?: Stamp): void {
+    if (!this.env.EVENTS) return;
+    let entry: PublishInput | null;
+    try {
+      entry = logEntryFor(this.ctx.storage.sql, subject, event);
+    } catch (err) {
+      return console.error(`[events] ${event.type}: ${(err as Error).message}`);
+    }
+    if (!entry) return;
+    // The data as the sockets got it (dates as strings), which the log stores as JSON.
+    this.logQueue.push({ ...entry, ...(stamp ?? {}), data: (JSON.parse(frame) as { event: Event }).event.data });
+    if (this.logQueue.length === 1) this.logging = this.logging.then(() => this.flushLog());
+  }
+
+  private async flushLog(): Promise<void> {
+    const batch = this.logQueue.splice(0);
+    if (!batch.length || !this.env.EVENTS) return;
+    let head: number | undefined;
+    try {
+      const org = batch[0]!.organizationId;
+      head = (await this.env.EVENTS.get(this.env.EVENTS.idFromName(org)).publishMany(batch)).at(-1)?.seq;
+    } catch (err) {
+      return console.error(`[events] publish of ${batch.length}: ${(err as Error).message}`);
+    }
+    // The socket is a consumer (§5.2): each socket learns how far the log has got, and sends it back as `since` on reconnect.
+    if (head === undefined) return;
+    const frame = JSON.stringify({ op: 'cursor', seq: head });
+    for (const { ws, userId } of this.sockets()) {
+      if (!userId) continue;
+      try { ws.send(frame); } catch { /* the socket is closing */ }
+    }
+  }
+
+  /** A `socket` subscription has new events (events/object.ts): its consumer's sockets here are told to read it. */
+  pokeSubscription(accountId: string, subscriptionId: string): number {
+    const frame = JSON.stringify({ op: 'subscription', id: subscriptionId });
+    let sent = 0;
+    for (const ws of this.ctx.getWebSockets()) {
+      if ((ws.deserializeAttachment() as Attachment | null)?.accountId !== accountId) continue;
+      try { ws.send(frame); sent++; } catch { /* the socket is closing */ }
+    }
+    return sent;
+  }
+
+  /**
+   * An `auth` with `since`: what the log kept after it that this reader may see, as socket events with their `seq`, in
+   * pages of 200 up to 2,000, then the cursor. Events of other apps (`mail.*`) are not socket events and are not read.
+   * A `since` older than the window sends `gap` first. The events still on their way to the log go in first.
+   */
+  private async sendBacklog(ws: WebSocket, workspaceId: string, userId: string, accountId: string, since: number): Promise<void> {
+    if (!this.env.EVENTS) return;
+    await this.logging;
+    const events = this.env.EVENTS.get(this.env.EVENTS.idFromName(workspaceId));
+    const reader = { accountId, channelIds: this.privateChannelIdsOf(userId) };
+    let cursor = Math.max(0, Math.floor(since));
+    let sent = 0;
+    try {
+      for (let page = 0; sent < BACKLOG_MAX; page++) {
+        const out = (await events.readFrom({ since: cursor, limit: Math.min(BACKLOG_PAGE, BACKLOG_MAX - sent), types: ['chat.*'] }, reader)) as SubscriptionRead;
+        if (page === 0 && out.gap) ws.send(JSON.stringify({ op: 'gap', from: out.gap.from, to: out.gap.to }));
+        for (const e of out.events) {
+          const event = { type: e.type.slice('chat.'.length), workspaceId, ...(e.channelId ? { channelId: e.channelId } : {}), ts: e.ts, data: e.data };
+          ws.send(JSON.stringify({ op: 'event', event, seq: e.seq }));
+        }
+        sent += out.events.length;
+        const moved = out.next > cursor;
+        cursor = Math.max(cursor, out.next);
+        if (!out.events.length || !moved) break;
+      }
+      ws.send(JSON.stringify({ op: 'cursor', seq: cursor }));
+    } catch (err) {
+      console.error(`[events] backlog from ${since}: ${(err as Error).message}`);
+    }
+  }
+
+  /** The event log's half of GET /v1/events (routes/events.ts): the private channels this member is in. */
+  privateChannelIdsOf(userId: string): string[] {
+    return this.ctx.storage.sql.exec('SELECT c.id FROM channels c JOIN channel_members m ON m.channel_id = c.id WHERE c.is_private AND m.user_id = ?', userId)
+      .toArray().map((r) => r.id as string);
+  }
+
+  /** Each account's private channels, for an action subscription's owner (events/object.ts reads as the owner). */
+  privateChannelIdsOfAccounts(accountIds: string[]): Record<string, string[]> {
+    const out: Record<string, string[]> = {};
+    for (const id of accountIds) {
+      const user = this.userOfAccount(id);
+      out[id] = user ? this.privateChannelIdsOf(user) : [];
+    }
+    return out;
+  }
+
+  private userOfAccount(accountId: string): string | null {
+    return (this.ctx.storage.sql.exec('SELECT user_id FROM workspace_members WHERE account_id = ?', accountId).toArray()[0]?.user_id as string | undefined) ?? null;
+  }
+
+  /**
+   * Who may make a `wake` subscription for the agent whose account this is (routes/events.ts): its sponsor, or an
+   * owner or admin of the organization. Null when the account is no agent of this organization.
+   */
+  agentSponsorOf(agentAccountId: string): { userId: string; sponsorUserId: string | null } | null {
+    const row = this.ctx.storage.sql.exec(
+      'SELECT m.user_id, COALESCE(m.sponsor_user_id, u.sponsor_user_id) AS sponsor FROM workspace_members m JOIN users u ON u.id = m.user_id WHERE m.account_id = ? AND u.is_agent',
+      agentAccountId,
+    ).toArray()[0];
+    return row ? { userId: row.user_id as string, sponsorUserId: (row.sponsor as string | null) ?? null } : null;
+  }
+
+  /**
+   * A `post` subscription's action: the message posted into the channel as the owner, through the message service, with
+   * the trigger's depth plus one on its event. `clientMsgId` names the subscription and the event, so it posts once.
+   */
+  async postAutomation(p: { ownerAccountId: string; channelId: string; body: string; clientMsgId: string; depth: number }): Promise<string | null> {
+    const user = this.userOfAccount(p.ownerAccountId);
+    if (!user) return null;
+    const { sendMessage } = await import('./services/messages');
+    const msg = await this.scoped(() => sendMessage(p.channelId, user, p.clientMsgId, p.body, undefined, undefined, undefined, { expandMentions: true }), { depth: p.depth });
+    await this.logging;
+    await this.armAlarm();
+    return msg.id;
+  }
+
+  /**
+   * Tells an automation's owner it stopped: "Automation X could not wake Y" (a job parked) or reached the depth cap.
+   * The agent says so in its DM with the owner, so it arrives as a DM notification; its event is at the depth cap, so it
+   * wakes nothing. With no agent (a post automation) it is a log line.
+   */
+  async automationNotice(p: { ownerAccountId: string; agentAccountId: string | null; name: string; why: 'parked' | 'capped' }): Promise<void> {
+    const owner = this.userOfAccount(p.ownerAccountId);
+    const agent = p.agentAccountId ? this.userOfAccount(p.agentAccountId) : null;
+    const workspace = this.db.select({ id: schema.workspaces.id }).from(schema.workspaces).get();
+    if (!owner || !agent || !workspace) return console.log(`[events] automation "${p.name}": ${p.why} (no one to tell)`);
+    const agentName = (this.ctx.storage.sql.exec('SELECT display_name FROM users WHERE id = ?', agent).toArray()[0]?.display_name as string | undefined) ?? 'its agent';
+    const text = p.why === 'parked'
+      ? `⚠️ Automation “${p.name}” could not wake ${agentName}: the job was delivered several times and never finished, so it is parked.`
+      : `⚠️ Automation “${p.name}” stopped waking ${agentName}: a chain of events it set off reached the depth limit (${MAX_EVENT_DEPTH}).`;
+    const [{ createDm }, { sendMessage }] = await Promise.all([import('./services/channels'), import('./services/messages')]);
+    await this.scoped(async () => {
+      const dm = await createDm(workspace.id, agent, [owner]);
+      await sendMessage(dm.id, agent, crypto.randomUUID(), text);
+    }, { depth: MAX_EVENT_DEPTH });
+    await this.logging;
+    await this.armAlarm();
+  }
+
+  /** The account ids of this organization's agents, for an `actorKind` filter. */
+  agentAccountIds(): string[] {
+    return this.ctx.storage.sql.exec('SELECT m.account_id FROM workspace_members m JOIN users u ON u.id = m.user_id WHERE u.is_agent AND m.account_id IS NOT NULL')
+      .toArray().map((r) => r.account_id as string);
+  }
+
+  /** Runs with this object's database, event bus and socket controls in scope; `stamp` marks the events it publishes. */
+  private scoped<T>(fn: () => Promise<T>, stamp?: Stamp): Promise<T> {
     return socketControl.run({ disconnectUser: (id) => this.closeUser(id) }, () =>
       directoryLink.run({ ensureAccount: (...args) => this.ensureAccount(...args), accountFor: (...args) => this.accountFor(...args) }, () =>
-        withPublisher((subject, event) => this.broadcast(subject, event), () => withDb(this.db, fn))));
+        withPublisher((subject, event) => this.broadcast(subject, event, stamp), () => withDb(this.db, fn))));
+  }
+
+  /**
+   * A request made during a job's turn (`x-flow-job`, on the caller context): its events carry the job's id and one
+   * more than the job's depth. A job that is not the caller's, or unknown, stamps nothing.
+   */
+  private async stampOf(caller: CallerContext): Promise<Stamp | undefined> {
+    const jobId = caller.jobId;
+    if (!jobId || !caller.account || !caller.organizationId || !this.env.EVENTS) return undefined;
+    const key = `${caller.account.id}|${jobId}`;
+    let depth = this.jobDepths.get(key);
+    if (depth === undefined) {
+      const found = await this.env.EVENTS.get(this.env.EVENTS.idFromName(caller.organizationId)).jobDepth(jobId, caller.account.id).catch(() => null);
+      if (found === null) return undefined;
+      depth = found;
+      this.jobDepths.set(key, depth);
+    }
+    return { causedBy: jobId, depth: depth + 1 };
   }
 
   private closeUser(userId: string): void {
@@ -173,11 +359,12 @@ export class Org extends DurableObject<OrgEnv> {
   }
 
   async handle(request: Request, caller: CallerContext, newWorkspaceId: string | null): Promise<Response> {
+    const stamp = await this.stampOf(caller);
     const run = () => this.scoped(async () => {
       if (caller.user) this.ensureUser(caller.user);
       return app.handle(request, caller);
-    });
-    const res = await (newWorkspaceId ? presetWorkspaceId.run(newWorkspaceId, run) : run());
+    }, stamp);
+    const res = await (newWorkspaceId ? presetWorkspaceId.run(newWorkspaceId, run) : run()).finally(() => this.logging);
     await this.flushOutbox(newWorkspaceId);
     await this.armAlarm();
     return res;
@@ -198,6 +385,7 @@ export class Org extends DurableObject<OrgEnv> {
       // After the scheduler, so a scheduled message's mentions push in the same alarm.
       await drainDuePushes(pushLog);
     });
+    await this.logging;
     await this.flushOutbox(null);
     await this.armAlarm();
   }
@@ -208,6 +396,7 @@ export class Org extends DurableObject<OrgEnv> {
       this.ensureUser(user);
       await deleteMyAccount(user.id);
     });
+    await this.logging;
     await this.flushOutbox(null);
   }
 
@@ -217,12 +406,13 @@ export class Org extends DurableObject<OrgEnv> {
       this.ensureUser(user);
       const workspace = this.db.select().from(schema.workspaces).get();
       if (!workspace) return null;
-      const address = await accountAddressForJoin(workspace.id, user.id);
-      const isNew = await this.db.transaction((tx) => enrollInWorkspace(tx, workspace.id, user.id, 'member', undefined, address));
+      const account = await accountForJoin(workspace.id, user.id);
+      const isNew = await this.db.transaction((tx) => enrollInWorkspace(tx, workspace.id, user.id, 'member', undefined, account));
       if (!isNew) return null;
       await announceJoin(workspace.id, user.id);
       return JSON.parse(JSON.stringify(toWorkspaceDTO(workspace, 'member')));
     });
+    await this.logging;
     await this.flushOutbox(null);
     return joined;
   }
@@ -234,6 +424,7 @@ export class Org extends DurableObject<OrgEnv> {
     if (!workspace) return;
     const redacted = user.privacyMode ? { ...user, email: '' } : user;
     this.broadcast(`ws.${workspace.id}.meta`, { type: 'user.updated', workspaceId: workspace.id, ts: new Date().toISOString(), data: redacted } as Event);
+    await this.logging;
   }
 
   /** The one-time import (routes/admin.ts). The triggers report ids and memberships as for any insert. */
@@ -273,7 +464,7 @@ export class Org extends DurableObject<OrgEnv> {
   }
 
   override async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
-    let frame: { op?: string; token?: string; channelId?: string; threadRootId?: string };
+    let frame: { op?: string; token?: string; channelId?: string; threadRootId?: string; since?: unknown };
     try { frame = JSON.parse(String(raw)); } catch { return ws.send(JSON.stringify({ op: 'error', code: 'bad_frame', message: 'invalid JSON' })); }
     const att = ws.deserializeAttachment() as Attachment | null;
     const workspace = this.db.select().from(schema.workspaces).get();
@@ -296,6 +487,10 @@ export class Org extends DurableObject<OrgEnv> {
       const alreadyOnline = this.sockets().some((s) => s.userId === user.id);
       ws.serializeAttachment({ userId: user.id, accountId: value!.account?.id ?? null } satisfies Attachment);
       ws.send(JSON.stringify({ op: 'hello', sessionId: crypto.randomUUID(), heartbeat: 'client' }));
+      const accountId = value!.account?.id ?? null;
+      if (typeof frame.since === 'number' && Number.isFinite(frame.since) && frame.since >= 0 && accountId) {
+        await this.sendBacklog(ws, workspace!.id, user.id, accountId, frame.since);
+      }
       const online = new Set(this.sockets().map((s) => s.userId).filter((id): id is string => !!id && id !== user.id));
       for (const id of online) ws.send(JSON.stringify({ op: 'event', event: this.presence(workspace!.id, id, 'online') }));
       if (!alreadyOnline) this.broadcast(`ws.${workspace!.id}.presence`, this.presence(workspace!.id, user.id, 'online'));

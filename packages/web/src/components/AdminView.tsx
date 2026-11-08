@@ -3,23 +3,50 @@ import { useBoundApi } from '../lib/useBoundApi';
 // A virtual content-pane view (not a real channel) reached from the workspace
 // menu's "Manage Users…" and pinned into the sidebar as the "Manage users" row.
 // Lists workspace members and lets owners/admins change roles and remove people.
-import { useState } from 'react';
+// Its Automations tab (platform.md §5.2) is open to every member: the workspace
+// menu's "Automations…" opens the panel on it.
+import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { WORKSPACE_POLICY_DEFAULTS, type MemberRole, type WorkspaceDTO, type WorkspaceMemberDTO, type WorkspacePolicies } from '@flow/shared';
 import { api } from '../lib/api';
 import { useAuth, useSelection } from '../state';
-import { useMembers, useWorkspaces } from '../hooks';
+import { useChannels, useMembers, useWorkspaces } from '../hooks';
+import { AutomationsSection } from './AutomationsSection';
 import { Avatar } from './Avatar';
 import { MobileMenuButton } from './MobileMenuButton';
+
+export type AdminTab = 'organization' | 'automations';
+const ADMIN_TAB_EVENT = 'flow:admin-tab';
+let requestedTab: AdminTab | null = null;
+
+/** Ask the admin panel to show a tab: on its next mount, or now if it is open. */
+export function requestAdminTab(tab: AdminTab) {
+  requestedTab = tab;
+  window.dispatchEvent(new CustomEvent(ADMIN_TAB_EVENT, { detail: tab }));
+}
 
 export default function AdminView() {
   const auth = useAuth();
   const sel = useSelection();
   const workspaces = useWorkspaces();
   const members = useMembers(sel.workspaceId);
+  const channels = useChannels(sel.workspaceId);
+  const [tab, setTab] = useState<AdminTab>(() => requestedTab ?? 'organization');
+
+  useEffect(() => {
+    requestedTab = null;
+    const on = (e: Event) => {
+      setTab((e as CustomEvent<AdminTab>).detail);
+      requestedTab = null;
+    };
+    window.addEventListener(ADMIN_TAB_EVENT, on);
+    return () => window.removeEventListener(ADMIN_TAB_EVENT, on);
+  }, []);
 
   const ws = (workspaces.data ?? []).find((w) => w.id === sel.workspaceId);
   const isAdmin = ws?.role === 'owner' || ws?.role === 'admin';
+  // Members who are not admins see only Automations.
+  const shown: AdminTab = isAdmin ? tab : 'automations';
   const roster = (members.data ?? []).slice().sort((a, b) => {
     // Owner first, then admins, then members; alphabetical within a rank.
     const rank = (r: MemberRole) => (r === 'owner' ? 0 : r === 'admin' ? 1 : 2);
@@ -32,9 +59,11 @@ export default function AdminView() {
         <MobileMenuButton />
         <div className="min-w-0 flex-1">
           <h2 data-testid="admin-header" className="truncate text-[15px] font-bold">
-            🛡️ Manage users
+            {shown === 'automations' ? '⚡ Automations' : '🛡️ Manage users'}
           </h2>
-          <p className="truncate text-xs text-muted">{ws?.name ?? 'Workspace'} members &amp; roles</p>
+          <p className="truncate text-xs text-muted">
+            {ws?.name ?? 'Workspace'} {shown === 'automations' ? 'automations' : <>members &amp; roles</>}
+          </p>
         </div>
         <div className="flex items-center gap-3">
           <button
@@ -48,10 +77,28 @@ export default function AdminView() {
       </header>
 
       <div className="mc-scroll min-h-0 flex-1 overflow-y-auto px-[22px] py-5">
-        {!isAdmin ? (
-          <p data-testid="admin-no-access" className="text-sm text-muted">
-            You no longer have admin access to this workspace.
-          </p>
+        {isAdmin && (
+          <div role="tablist" className="mx-auto mb-4 flex max-w-3xl gap-1 border-b border-hairline text-sm">
+            {(['organization', 'automations'] as const).map((t) => (
+              <button
+                key={t}
+                role="tab"
+                aria-selected={shown === t}
+                data-testid={`admin-tab-${t}`}
+                className={`-mb-px border-b-2 px-3 py-1.5 ${shown === t ? 'border-accent font-semibold text-ink' : 'border-transparent text-muted hover:text-ink'}`}
+                onClick={() => setTab(t)}
+              >
+                {t === 'organization' ? 'Organization' : 'Automations'}
+              </button>
+            ))}
+          </div>
+        )}
+        {shown === 'automations' ? (
+          sel.workspaceId && (
+            <div className="mx-auto max-w-3xl">
+              <AutomationsSection workspaceId={sel.workspaceId} members={members.data ?? []} channels={channels.data ?? []} />
+            </div>
+          )
         ) : (
           <div className="mx-auto max-w-3xl">
             {ws && <OrganizationSection ws={ws} roster={roster} meId={auth.user.id} />}

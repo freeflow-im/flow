@@ -32,6 +32,7 @@ import {
   WorkspaceColorModal,
 } from './modals';
 import { AgentsModal } from './AgentsModal';
+import { requestAdminTab } from './AdminView';
 import { EmojiModal } from './EmojiModal';
 import { InviteAgentModal } from './InviteAgentModal';
 import { openServerConnections } from './ServerConnections';
@@ -457,6 +458,9 @@ export default function Sidebar() {
             {caps.agents.state !== 'unavailable' && <MenuItem testid="menu-agents" onClick={() => { setWsMenuOpen(false); setShowAgents(true); }}>
               Agents…
             </MenuItem>}
+            {caps.admin.state !== 'unavailable' && <MenuItem testid="menu-automations" onClick={() => { setWsMenuOpen(false); requestAdminTab('automations'); sel.openAdminPanel(); }}>
+              Automations…
+            </MenuItem>}
             {isAdmin && caps.admin.state !== 'unavailable' && (
               <>
                 <MenuItem testid="menu-workspace-color" onClick={() => { setWsMenuOpen(false); setShowColor(true); }}>
@@ -465,7 +469,7 @@ export default function Sidebar() {
                 <MenuItem testid="menu-emoji" onClick={() => { setWsMenuOpen(false); setShowEmoji(true); }}>
                   Custom Emoji…
                 </MenuItem>
-                <MenuItem testid="menu-admin" onClick={() => { setWsMenuOpen(false); sel.openAdminPanel(); }}>
+                <MenuItem testid="menu-admin" onClick={() => { setWsMenuOpen(false); requestAdminTab('organization'); sel.openAdminPanel(); }}>
                   Manage Users…
                 </MenuItem>
               </>
@@ -534,8 +538,9 @@ export default function Sidebar() {
         data-sidebar-scroll
         className="mc-scroll mc-scroll-dark min-h-0 flex-1 overflow-y-auto px-3.5 pb-2 text-sm"
       >
-        {isAdmin && sel.adminPanelOpen && caps.admin.state !== 'unavailable' && (
+        {sel.adminPanelOpen && caps.admin.state !== 'unavailable' && (
           <AdminRow
+            label={isAdmin ? 'Manage users' : 'Automations'}
             active={sel.channelId === ADMIN_VIEW_ID}
             onOpen={() => sel.selectChannel(ADMIN_VIEW_ID)}
             onClose={() => sel.closeAdminPanel()}
@@ -942,10 +947,12 @@ function DirectoryRow({ active, onOpen }: { active: boolean; onOpen: () => void 
 }
 
 function AdminRow({
+  label,
   active,
   onOpen,
   onClose,
 }: {
+  label: string;
   active: boolean;
   onOpen: () => void;
   onClose: () => void;
@@ -962,7 +969,7 @@ function AdminRow({
         onClick={onOpen}
       >
         <span className={active ? 'opacity-70' : 'text-white/60'}>🛡️</span>
-        <span className={`truncate ${active ? 'font-[650]' : 'text-white/82'}`}>Manage users</span>
+        <span className={`truncate ${active ? 'font-[650]' : 'text-white/82'}`}>{label}</span>
       </button>
       <button
         data-testid="sidebar-admin-close"

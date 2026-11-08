@@ -14,6 +14,7 @@ import { helpRoutes } from './routes/help';
 import { mailRoutes } from './routes/mail';
 import { calendarRoutes } from './routes/calendar';
 import { mcpRoutes } from './routes/mcp';
+import { eventRoutes } from './routes/events';
 
 export { Directory } from './directory/object';
 export { Org } from './org/object';
@@ -21,7 +22,10 @@ export { Docs } from './docs/object';
 export { PdfOcr } from './pdfOcr';
 export { Mail } from './imap/object';
 export { Calendar } from './calendar/object';
+export { Events } from './events/object';
 import type { Org as OrgObject } from './org/object';
+import type { JobMessage } from './events/object';
+import { handleJobBatch } from './events/queue';
 
 export interface Env extends ProxyEnv, AuthEnv {
   DOCS: DurableObjectNamespace<import('./docs/object').Docs>;
@@ -41,6 +45,12 @@ export interface Env extends ProxyEnv, AuthEnv {
   CALENDAR: DurableObjectNamespace<import('./calendar/object').Calendar>;
   /** `1` in local dev only: calendar accounts may then use http and local hosts (Radicale). Never set in production. */
   CALENDAR_ALLOW_INSECURE?: string;
+  /** The event bus: one object per organization (`idFromName(organizationId)`), its event log (src/events/object.ts). */
+  EVENTS: DurableObjectNamespace<import('./events/object').Events>;
+  /** The `flow-jobs` Queue (producer): each wake job's check, sent by the Events object and consumed by `queue` below. */
+  JOBS?: Queue<JobMessage>;
+  /** How long after a job's delivery its first check comes, in seconds (default 60). */
+  JOBS_ACK_DELAY_SECONDS?: string;
   /** Google Calendar's OAuth client secret (with GOOGLE_CLIENT_ID). A secret; unset turns Google Calendar off. */
   GOOGLE_CLIENT_SECRET?: string;
   /** The OAuth callback's address when it is not the Worker's own origin (local dev). */
@@ -81,6 +91,7 @@ ported.route('/', authRoutes as never);
 ported.route('/', helpRoutes as never);
 ported.route('/', mailRoutes as never);
 ported.route('/', calendarRoutes as never);
+ported.route('/', eventRoutes as never);
 ported.route('/', orgRoutes as never);
 ported.route('/', pageRoutes as never);
 app.use('*', async (c, next) => {
@@ -105,5 +116,7 @@ app.all('*', async (c) => {
   return proxy(req, c.env);
 });
 
-export default app;
-
+// The `flow-jobs` consumer beside the routes (events/queue.ts).
+export default Object.assign(app, {
+  queue: (batch: MessageBatch<JobMessage>, env: Env) => handleJobBatch(batch, env),
+});

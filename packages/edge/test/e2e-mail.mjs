@@ -435,6 +435,12 @@ t('cache: a flag set by another mail app shows too',pc.j.messages?.find(m=>m.uid
 await deliver('Dana Lee <dana@acme.test>','Fresh from the cache',{});
 let freshRow;for(let i=0;i<20&&!freshRow;i++){pc=await cacheOf(()=>getRaw(`${P}/messages?folder=INBOX&limit=5`,{'x-mail-test-alarm':'1'}));freshRow=pc.j.messages?.find(m=>m.subject===`Fresh from the cache ${tag}`);if(!freshRow)await sleep(300);}
 t('cache: new mail is in the next page read, first',!!freshRow&&pc.j.messages[0].uid===freshRow.uid&&pc.cache==='hit',JSON.stringify(freshRow).slice(0,120)+' '+pc.cache);
+// The event log (platform.md §5.2): new INBOX mail after the first sync is `mail.received`, for the account alone; the
+// first fill's backlog (earlier runs' mail, other tags) is not.
+{const x=await api(A.token,'GET','/v1/events?since=0&limit=500&types=mail.received');const e=x.j.events?.find(m=>m.data?.uid===freshRow?.uid&&m.data?.folder==='INBOX');
+t('events: the new message is mail.received, with its reference',x.s===200&&e?.data.subject===`Fresh from the cache ${tag}`&&e.data.accountId===ACC&&e.ref?.app==='mail'&&e.ref.id===`${ACC}:INBOX:${freshRow.uid}`&&e.seq>0&&!('body' in e.data),JSON.stringify(e??x.j).slice(0,170));
+t('events: no backlog from the first fill',x.j.events?.length>0&&x.j.events.every(m=>m.data.subject.endsWith(tag)),x.j.events?.map(m=>m.data.subject).filter(s=>!s.endsWith(tag)).slice(0,3).join(' | '));
+const y=await api(Bo.token,'GET','/v1/events?since=0&limit=500&types=mail.received');t('events: nobody else sees it',y.s===200&&y.j.events.length===0,JSON.stringify(y.j).slice(0,120));}
 // Mail that left through another app is dropped by the page's flag check.
 await imapDirect(async(c)=>{const lock=await c.getMailboxLock('INBOX');try{await c.messageMove(String(freshRow.uid),MOVED2,{uid:true});}finally{lock.release();}});
 pc=await cacheOf(()=>getRaw(`${P}/messages?folder=INBOX&limit=5`,{'x-mail-test-alarm':'1'}));

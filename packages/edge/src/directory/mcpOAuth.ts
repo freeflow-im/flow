@@ -10,8 +10,11 @@ import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto';
 import { accountGate, type Sql } from './core';
 import type { AccountState } from '@flow/shared';
 
-/** Docs' files (read, and change), the person's own mail (read, organise and draft, and send), and their calendars (read, and change). */
-export const MCP_SCOPES = ['files:read', 'files:write', 'mail:read', 'mail:write', 'mail:send', 'calendar:read', 'calendar:write'] as const;
+/**
+ * Docs' files (read, and change), the person's own mail (read, organise and draft, and send), their calendars (read, and
+ * change), and the organization's events through subscriptions the agent makes (platform.md §5.2).
+ */
+export const MCP_SCOPES = ['files:read', 'files:write', 'mail:read', 'mail:write', 'mail:send', 'calendar:read', 'calendar:write', 'events:read'] as const;
 
 /**
  * The consent page's checkboxes: each one a group of scopes, on or off until the person changes it. Sending email as the
@@ -22,6 +25,7 @@ export const SCOPE_GROUPS = [
   { id: 'mail', scopes: ['mail:read', 'mail:write'], checked: true },
   { id: 'send', scopes: ['mail:send'], checked: false },
   { id: 'calendar', scopes: ['calendar:read', 'calendar:write'], checked: true },
+  { id: 'events', scopes: ['events:read'], checked: true },
 ] as const;
 export type ScopeGroupId = (typeof SCOPE_GROUPS)[number]['id'];
 export interface OfferedGroup { id: ScopeGroupId; scopes: string[]; checked: boolean }
