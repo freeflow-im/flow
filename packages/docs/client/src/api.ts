@@ -463,8 +463,10 @@ export const api = {
   testConnection: (id: string) => request<{ connection: ConnectionInfo }>('POST', `/api/connections/${encodeURIComponent(id)}/test`, {}),
   fetchConnectorData: (id: string, body: { dataset: string; params: Record<string, unknown>; handle?: string }) =>
     request<FetchResult>('POST', `/api/connections/${encodeURIComponent(id)}/fetch`, body),
-  assistantSettings: () => request<{ settings: AssistantSettings }>('GET', '/api/settings/assistant'),
-  saveAssistantSettings: (body: AssistantSettingsUpdate) => request<{ settings: AssistantSettings }>('PUT', '/api/settings/assistant', body),
+  /** The assistant's settings belong to the caller's account in the organization the bar selected (the Assistant object is
+   * one per account), so both name it; with none named the Worker falls back to the caller's first organization. */
+  assistantSettings: () => request<{ settings: AssistantSettings }>('GET', `/api/settings/assistant${inFolder(undefined, true)}`),
+  saveAssistantSettings: (body: AssistantSettingsUpdate) => request<{ settings: AssistantSettings }>('PUT', `/api/settings/assistant${inFolder(undefined, true)}`, body),
   /** Store a copy of a picture on the web; resolves to its /api/images/... address. */
   keepWebImage: async (url: string) => (await request<{ url: string }>('POST', '/api/images/fetch', { url })).url,
   connectedAgents: () => request<{ enabled: boolean; agents: ConnectedAgent[]; mcpUrl?: string; local?: true; running?: boolean; everySignIn?: true }>('GET', '/api/settings/agents'),
