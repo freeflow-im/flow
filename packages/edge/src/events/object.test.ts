@@ -54,3 +54,43 @@ describe('Events.wait', () => {
     expect(await waiting).toBeNull();
   });
 });
+
+describe('Events reads and the share index (phase 3.3)', () => {
+  const R = 'org-1/docs/sheet/s1';
+  /** An Events object whose Org object answers `sharedRefsOf` from `shared`, counting the asks. */
+  function withOrg(shared: Record<string, string[]>) {
+    const db = new DatabaseSync(':memory:');
+    const sql = {
+      exec(query: string, ...args: unknown[]) {
+        const stmt = db.prepare(query);
+        const rows = stmt.columns().length ? stmt.all(...(args as never[])) : (stmt.run(...(args as never[])), []);
+        return { toArray: () => rows };
+      },
+    };
+    const asked: string[] = [];
+    const org = { sharedRefsOf: async (r: { accountId: string }) => { asked.push(r.accountId); return shared[r.accountId] ?? []; } };
+    const storage = { sql, transactionSync: <T>(fn: () => T) => fn(), getAlarm: async () => null, setAlarm: async () => undefined };
+    return { o: new Events({ storage } as never, { ORG: { idFromName: (n: string) => n, get: () => org } } as never), asked };
+  }
+  const changed: PublishInput = { type: 'docs.file.changed', organizationId: 'org-1', actor: null, audience: `ref:${R}`, ts: new Date().toISOString(), data: { ref: R, ownerAccountId: 'acct-ann' } };
+
+  it('asks the Org object once per read, only when a ref: event follows the cursor, on every read path', async () => {
+    const { o, asked } = withOrg({ 'acct-bob': [R] });
+    await o.publish(ev('chat.a'));
+    expect((await o.read({ since: 0 }, BOB)).events).toHaveLength(1);
+    expect(asked).toEqual([]);
+    await o.publish(changed);
+    expect((await o.read({ since: 0 }, BOB)).events.map((e) => e.type)).toEqual(['chat.a', 'docs.file.changed']);
+    expect((await o.read({ since: 0 }, { accountId: 'acct-cat', channelIds: [] })).events.map((e) => e.type)).toEqual(['chat.a']);
+    expect(asked).toEqual(['acct-bob', 'acct-cat']);
+    expect((await o.readFrom({ since: 0 }, BOB)).events).toHaveLength(2);
+    const s = await o.createSubscription({ name: 'n', consumer: 'acct-bob', owner: 'acct-bob', filter: { types: ['docs.*'] }, createdBy: 'acct-bob' });
+    const waiting = o.wait(s.id, BOB, undefined, 5_000);
+    setTimeout(() => void o.publish(changed), 20);
+    expect(await waiting).toMatchObject({ events: [{ type: 'docs.file.changed' }] });
+    // Revoked: the next read no longer lets it through.
+    const { o: after } = withOrg({});
+    await after.publish(changed);
+    expect((await after.read({ since: 0 }, BOB)).events).toEqual([]);
+  });
+});

@@ -23,6 +23,7 @@ import EmojiPicker from './EmojiPicker';
 import { Modal, UserCard } from './modals';
 import { UnfurlCard } from './UnfurlCard';
 import { HoverTooltip } from './HoverTooltip';
+import { SystemLine } from './SystemLine';
 
 /** Remembered scroll position per channel, so switching away and back lands
  * where you left off (ui_nits). Kept module-level (survives the per-channel
@@ -305,16 +306,6 @@ function DayDivider({ iso }: { iso: string }) {
   return (
     <div className="my-2 text-center">
       <span className="rounded-[20px] bg-daypill px-3 py-[3px] text-[11px] text-faint">{label}</span>
-    </div>
-  );
-}
-
-/** A channel event line (join/leave) — centered, muted, no avatar/header.
- * The body is the pre-rendered sentence ("Alice joined the channel"). */
-function SystemLine({ message }: { message: MessageDTO }) {
-  return (
-    <div data-testid={`system-message-${message.id}`} className="py-1 text-center">
-      <span className="text-[11px] text-faint">{message.body}</span>
     </div>
   );
 }

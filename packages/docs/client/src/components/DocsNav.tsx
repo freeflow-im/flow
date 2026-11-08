@@ -1,5 +1,5 @@
-// The Docs app's left panel in the FreeFlow suite (main.tsx): Recents, Favorites and the folder tree of the
-// organization selected in the suite bar (Organization files, then My files). Choosing a folder shows its files on
+// The Docs app's left panel in the FreeFlow suite (main.tsx): Recents, Favorites, Shared with me and the folder tree of
+// the organization selected in the suite bar (Organization files, then My files). Choosing a folder shows its files on
 // the home page beside it; a file opened from there takes that place, and the panel stays, with the file's folder
 // still selected. The tree reads each folder's subfolders when it is opened (api.library), and again when the home
 // page says the folders changed (FOLDERS_CHANGED).
@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, type FolderInfo, type Place } from '../api.ts';
 import { cleanFolderPath } from '../../../shared/folders.ts';
-import { FAVORITES_PARAM, last as lastListing, RECENTS_PARAM } from '../listing.ts';
+import { FAVORITES_PARAM, last as lastListing, RECENTS_PARAM, SHARED_WITH_ME_PARAM } from '../listing.ts';
 import { useOrganization } from '../organization.ts';
 import { FOLDER_PANEL } from '../panelSize.ts';
 import { ResizeHandle, usePanelWidth } from './ResizeHandle.tsx';
@@ -52,12 +52,17 @@ function writeExpanded(set: Set<string>) {
   }
 }
 
+/** One of the lists beside the folders. */
+type List = 'recents' | 'favorites' | 'withme';
+const LIST_PARAM: Record<List, string> = { recents: RECENTS_PARAM, favorites: FAVORITES_PARAM, withme: SHARED_WITH_ME_PARAM };
+
 /** What the panel shows as selected: one of the lists, or a folder. */
-type Selected = { list: 'recents' | 'favorites' } | { root: Root; path: string } | null;
+type Selected = { list: List } | { root: Root; path: string } | null;
 
 function selectedOf(params: URLSearchParams, hasOrg: boolean): Selected {
   if (params.get(RECENTS_PARAM) === '1') return { list: 'recents' };
   if (params.get(FAVORITES_PARAM) === '1') return { list: 'favorites' };
+  if (hasOrg && params.get(SHARED_WITH_ME_PARAM) === '1') return { list: 'withme' };
   const path = cleanFolderPath(params.get('folder') ?? '') ?? '';
   return { root: hasOrg && params.has(ORG_PARAM) ? 'org' : 'me', path };
 }
@@ -205,10 +210,10 @@ export function DocsNav() {
     );
   };
 
-  const listRow = (list: 'recents' | 'favorites', label: string, icon: ReactNode) => {
+  const listRow = (list: List, label: string, icon: ReactNode) => {
     const active = !!selected && 'list' in selected && selected.list === list;
     return (
-      <button className={`dn-row dn-item${active ? ' active' : ''}`} aria-current={active ? 'page' : undefined} onClick={() => navigate(`/?${list === 'recents' ? RECENTS_PARAM : FAVORITES_PARAM}=1`)}>
+      <button className={`dn-row dn-item${active ? ' active' : ''}`} aria-current={active ? 'page' : undefined} onClick={() => navigate(`/?${LIST_PARAM[list]}=1`)}>
         {icon}
         <span>{label}</span>
       </button>
@@ -221,7 +226,7 @@ export function DocsNav() {
         {icon}
       </button>
     );
-    const isList = (l: 'recents' | 'favorites') => !!selected && 'list' in selected && selected.list === l;
+    const isList = (l: List) => !!selected && 'list' in selected && selected.list === l;
     const inRoot = (root: Root) => !!selected && 'root' in selected && selected.root === root;
     return (
       <nav className="docs-nav docs-nav-collapsed" aria-label="Folders">
@@ -231,6 +236,7 @@ export function DocsNav() {
         <div className="dn-rail-sep" />
         {rail('recents', 'Recents', <ClockGlyph />, isList('recents'), () => navigate(`/?${RECENTS_PARAM}=1`))}
         {rail('favorites', 'Favorites', <StarGlyph />, isList('favorites'), () => navigate(`/?${FAVORITES_PARAM}=1`))}
+        {orgId && rail('withme', 'Shared with me', <SharedGlyph />, isList('withme'), () => navigate(`/?${SHARED_WITH_ME_PARAM}=1`))}
         {orgId && rail('org', 'Organization files', <PeopleGlyph />, inRoot('org'), () => openFolder('org', ''))}
         {rail('me', 'My files', <LockGlyph />, inRoot('me'), () => openFolder('me', ''))}
       </nav>
@@ -245,6 +251,7 @@ export function DocsNav() {
       <div className="dn-scroll">
         {listRow('recents', 'Recents', <ClockGlyph />)}
         {listRow('favorites', 'Favorites', <StarGlyph />)}
+        {orgId && listRow('withme', 'Shared with me', <SharedGlyph />)}
         <div className="dn-section">Folders</div>
         <ul className="dn-tree" role="tree" aria-label="Folders">
           {orgId && renderFolder('org', '', 'Organization files', 0, <PeopleGlyph />)}
@@ -267,4 +274,5 @@ const StarGlyph = () => glyph('M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 
 const PeopleGlyph = () => glyph('M16 19v-1a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v1M9 10a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7M22 19v-1a4 4 0 0 0-3-3.9M16 3.1a3.5 3.5 0 0 1 0 6.8');
 /** A panel beside a page, with the arrow that folds it away (or, `open`, brings it back). */
 const PanelGlyph = ({ open = false }: { open?: boolean }) => glyph(open ? 'M4 5h16v14H4zM9 5v14M13 10l2 2-2 2' : 'M4 5h16v14H4zM9 5v14M16 10l-2 2 2 2');
+const SharedGlyph = () => glyph('M15 8a3 3 0 1 0 0-.01M6 15a3 3 0 1 0 0-.01M18 21a3 3 0 1 0 0-.01M8.6 13.5l6.8-4M8.6 16.5l6.8 3.5');
 const LockGlyph = () => glyph('M7 11V8a5 5 0 0 1 10 0v3M5 11h14v10H5z');

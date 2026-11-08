@@ -66,13 +66,13 @@ describe('wake subscriptions', () => {
     const jobs = h.o.listJobs(sub.id);
     expect(jobs).toHaveLength(1);
     expect(jobs[0]).toMatchObject({ agent: BOT, state: 'delivered', attempts: 0, depth: 1, eventSeq: 1, prompt: 'Summarize: {"body":"hi"} (chat.message.created in general by acct-ann)' });
-    const read = h.o.read({ since: 0, types: ['agent.job'] }, { accountId: BOT, channelIds: [] });
+    const read = await h.o.read({ since: 0, types: ['agent.job'] }, { accountId: BOT, channelIds: [] });
     expect(read.events).toHaveLength(1);
     const job = read.events[0]!;
     expect(job).toMatchObject({ causedBy: jobs[0]!.id, depth: 1, actor: null, ref: { app: 'events', kind: 'job', id: jobs[0]!.id } });
     expect((job.data as AgentJobEventData)).toMatchObject({ jobId: jobs[0]!.id, subscriptionId: sub.id, event: { seq: 1, type: 'chat.message.created', channelId: 'general' } });
     // Only the agent sees it.
-    expect(h.o.read({ since: 0, types: ['agent.job'] }, { accountId: BOB, channelIds: [] }).events).toHaveLength(0);
+    expect((await h.o.read({ since: 0, types: ['agent.job'] }, { accountId: BOB, channelIds: [] })).events).toHaveLength(0);
     expect(h.sent).toEqual([{ body: { organizationId: ORG, jobId: jobs[0]!.id, check: 'ack' }, delaySeconds: 2 }]);
     expect(h.o.getSubscription(sub.id)!.cursor).toBeGreaterThanOrEqual(2);
   });
@@ -140,7 +140,7 @@ describe('a job', () => {
     const answers = [];
     for (let i = 0; i < 4; i++) answers.push(await h.o.checkJob(job!.id));
     expect(answers).toEqual([{ retryAfter: 120 }, { retryAfter: 240 }, { retryAfter: 360 }, { ack: true }]);
-    const deliveries = h.o.read({ since: 0, types: ['agent.job'] }, { accountId: BOT, channelIds: [] }).events;
+    const deliveries = (await h.o.read({ since: 0, types: ['agent.job'] }, { accountId: BOT, channelIds: [] })).events;
     expect(deliveries.map((e) => (e.data as AgentJobEventData).jobId)).toEqual(Array(4).fill(job!.id));
     expect(new Set(deliveries.map((e) => e.id)).size).toBe(4);
     expect(h.o.getJob(job!.id)).toMatchObject({ state: 'parked', attempts: 3 });
@@ -179,7 +179,7 @@ describe('schedules', () => {
     vi.spyOn(Date, 'now').mockReturnValue(next + 5);
     await h.o.alarm();
     await h.o.settled();
-    const ticks = h.o.read({ since: 0, types: ['schedule.tick'] }, { accountId: BOB, channelIds: [] }).events;
+    const ticks = (await h.o.read({ since: 0, types: ['schedule.tick'] }, { accountId: BOB, channelIds: [] })).events;
     expect(ticks).toHaveLength(1);
     expect(ticks[0]).toMatchObject({ actor: null, ref: { kind: 'schedule', id: sub.schedule!.id }, data: { subscriptionId: sub.id, at: new Date(next).toISOString() } });
     expect(h.o.listJobs(sub.id)).toMatchObject([{ state: 'delivered', prompt: expect.stringContaining('"every":"hourly"') }]);

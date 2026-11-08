@@ -4874,6 +4874,47 @@ button.agent-tool-label:hover {
   margin: 0 0 10px;
 }
 
+/* Share… (ShareWithDialog.tsx): the grants as rows, adding a person or a channel, the organization and the link. */
+.modal.share-with {
+  width: min(520px, calc(100vw - 32px));
+}
+.share-rows {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+}
+.share-row,
+.share-add {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+.share-who {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.share-add select:first-child,
+.share-add input {
+  flex: 1;
+  min-width: 0;
+}
+.share-org {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+}
+.share-link {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.view-only-chip {
+  margin-left: 8px;
+}
+
 /* Folders in the file library: breadcrumbs over the list, and the folder rows. */
 .list-heading {
   display: flex;

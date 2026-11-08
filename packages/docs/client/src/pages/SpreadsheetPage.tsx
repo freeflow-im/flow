@@ -42,7 +42,7 @@ import { csvTitle, csvToWorkbook } from '../../../shared/csv.ts';
 import { checkCsvFile, checkExcelFile, pickCsvFile, pickExcelFile } from '../importFile.ts';
 import { uniqueTabName } from '../state/ops.ts';
 import { SheetController } from '../state/controller.ts';
-import { csvGuard, lockedGuard, EDIT_NOT_ALLOWED, xlsxGuard } from '../state/store.ts';
+import { csvGuard, lockedGuard, EDIT_NOT_ALLOWED, VIEW_ONLY, viewOnlyGuard, xlsxGuard } from '../state/store.ts';
 import { useController } from '../state/useController.ts';
 import { appName } from '../brand.ts';
 import { useOpenInTab } from '../components/OpenInTab.tsx';
@@ -77,6 +77,7 @@ function toCSV(ctl: SheetController): string {
  * Excel file holding things the app cannot keep (`notKept`) none until the user allows editing it.
  */
 function guardFor(meta: SheetMeta, notKept: string[] | undefined) {
+  if (meta.role === 'viewer') return viewOnlyGuard;
   if (meta.format === 'csv') return csvGuard;
   if (meta.format === 'xlsx') return notKept?.length ? lockedGuard : xlsxGuard;
   return null;
@@ -194,7 +195,7 @@ function Workbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta: Sh
   // A CSV or Excel file: when a change needs something the file cannot store, offer to convert it and then
   // make the change. An Excel file not yet allowed editing asks for that first.
   useEffect(() => {
-    ctl.onRefused = (reason, retry) => setDialog(reason === EDIT_NOT_ALLOWED ? { kind: 'editExcel', retry } : { kind: 'convert', reason, retry });
+    ctl.onRefused = (reason, retry) => (reason === VIEW_ONLY ? notify(`${VIEW_ONLY}.`) : setDialog(reason === EDIT_NOT_ALLOWED ? { kind: 'editExcel', retry } : { kind: 'convert', reason, retry }));
     return () => {
       ctl.onRefused = null;
     };

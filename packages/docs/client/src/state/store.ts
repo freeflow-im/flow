@@ -49,6 +49,11 @@ export const EDIT_NOT_ALLOWED = 'Editing this file';
 /** Refuses every change: an Office file whose saving would remove things (charts, say) waits for the user's yes. */
 export const lockedGuard = (): string => EDIT_NOT_ALLOWED;
 
+/** What the guard of a file the user may only view answers (a viewer's role, server/access.ts). */
+export const VIEW_ONLY = 'You can view this file but not change it';
+/** Refuses every change to a file shared with the user as a viewer: the editor shows it read-only. */
+export const viewOnlyGuard = (): string => VIEW_ONLY;
+
 const STRUCTURAL_PROPS = new Set<keyof Tab>(['name', 'rows', 'cols']);
 const MAX_UNDO = 200;
 

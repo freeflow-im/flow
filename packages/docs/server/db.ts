@@ -1,4 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
+import { GRANTS_DDL } from '@flow/shared/grants';
+import { migrateToGrants } from './access.ts';
 
 export type DB = DatabaseSync;
 
@@ -145,7 +147,7 @@ export function openDb(file: string): DB {
       updated_at TEXT NOT NULL
     );
 
-    -- Public links (server/publicLinks.ts). A file deleted by any path loses its link, also if it is restored later.
+    -- Public links, until platform phase 3.2 made them link grants (server/access.ts); kept for one release, unread.
     CREATE TABLE IF NOT EXISTS public_links (
       token TEXT PRIMARY KEY,
       owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -263,4 +265,22 @@ function migrate(db: DB): void {
     ['sheet_id', 'TEXT'],
   ];
   for (const [name, type] of jobAdds) if (!jobCols.has(name)) db.exec(`ALTER TABLE agent_jobs ADD COLUMN ${name} ${type}`);
+
+  // Grants (server/access.ts, platform phase 3.2): who besides the owner may open a file or folder. A file deleted
+  // by any path loses its grants. Once, the rows of before: an organization's shared rows get its `org` grant, and
+  // each public link becomes a `link:` grant (public_links is kept for one release, no longer read).
+  for (const ddl of GRANTS_DDL) db.exec(ddl);
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS grants_sheet_deleted AFTER DELETE ON sheets BEGIN
+      DELETE FROM grants WHERE object_kind = 'sheet' AND object_id = OLD.id;
+    END;
+    CREATE TRIGGER IF NOT EXISTS grants_file_deleted AFTER DELETE ON stored_files BEGIN
+      DELETE FROM grants WHERE object_kind = 'file' AND object_id = OLD.id;
+    END;
+    CREATE TABLE IF NOT EXISTS docs_migrations (name TEXT PRIMARY KEY, at TEXT NOT NULL);
+  `);
+  if (!db.prepare("SELECT 1 FROM docs_migrations WHERE name = 'grants'").get()) {
+    migrateToGrants(db);
+    db.prepare("INSERT INTO docs_migrations (name, at) VALUES ('grants', ?)").run(new Date().toISOString());
+  }
 }

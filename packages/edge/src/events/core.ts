@@ -13,10 +13,11 @@ export interface Sql {
 
 /**
  * Who may read an event, decided by its publisher: every active account of the organization (`org`, which public
- * channels' events are), the members of a private channel, or one account (the per-account objects' events).
- * Phase 3 adds a reference's audience, read from the share index (§4.5).
+ * channels' events are), the members of a private channel, one account (the per-account objects' events), or whoever
+ * an object is shared with (`ref:<reference>`, read from the share index, §4.5, and the object's owner, named by the
+ * event's `data.ownerAccountId`).
  */
-export type Audience = 'org' | `channel:${string}` | `account:${string}`;
+export type Audience = 'org' | `channel:${string}` | `account:${string}` | `ref:${string}`;
 
 /** What a publisher hands over: the envelope less its `seq` (and its `id`, made here when absent), and the audience. */
 export type PublishInput = Omit<PlatformEvent, 'seq' | 'id' | 'actor' | 'depth'> & {
@@ -38,8 +39,12 @@ export interface ReadQuery {
   self?: string;
 }
 
-/** The reader's account, the private channels it is in, and (for `actorKind`) the organization's agents' account ids. */
-export interface Reader { accountId: string; channelIds: string[]; agentAccountIds?: string[] }
+/**
+ * The reader's account, the private channels it is in, (for `actorKind`) the organization's agents' account ids, and
+ * (for a `ref:` audience) the references shared with it, from the Org object's share index. Without `sharedRefs`, a
+ * `ref:` event is its owner's alone.
+ */
+export interface Reader { accountId: string; channelIds: string[]; agentAccountIds?: string[]; sharedRefs?: string[] }
 
 export interface EventStats { count: number; first: number | null; last: number | null; oldestTs: string | null }
 
@@ -97,9 +102,11 @@ export const EVENTS_MIGRATIONS: string[] = [
     created_at INTEGER NOT NULL);
   CREATE INDEX schedules_next ON schedules (next_at);
   CREATE INDEX schedules_subscription ON schedules (subscription_id);`,
+  // The events shared by reference (phase 3.3): a read asks whether any follow its cursor before it fetches the reader's shares.
+  `CREATE INDEX events_ref_audience ON events (seq) WHERE audience LIKE 'ref:%';`,
 ];
 
-const AUDIENCE = /^(org|channel:.+|account:.+)$/;
+const AUDIENCE = /^(org|channel:.+|account:.+|ref:.+)$/;
 
 export class EventsCore {
   constructor(private readonly sql: Sql, private readonly transact: <T>(fn: () => T) => T = (fn) => fn()) {
@@ -142,8 +149,18 @@ export class EventsCore {
     const limit = Math.min(READ_LIMIT_MAX, Math.max(1, Math.floor(Number(q.limit) || READ_LIMIT_DEFAULT)));
     const { filter, args } = whereOf(q, reader.agentAccountIds ?? []);
     const channels = new Set(reader.channelIds);
+    const refs = new Set(reader.sharedRefs ?? []);
     const own = `account:${reader.accountId}`;
-    const visible = (audience: string) => audience === 'org' || audience === own || (audience.startsWith('channel:') && channels.has(audience.slice(8)));
+    const owns = (r: Record<string, unknown>) => {
+      try { return (JSON.parse(r.data as string) as { ownerAccountId?: unknown } | null)?.ownerAccountId === reader.accountId; } catch { return false; }
+    };
+    const visible = (r: Record<string, unknown>) => {
+      const audience = r.audience as string;
+      if (audience === 'org' || audience === own) return true;
+      if (audience.startsWith('channel:')) return channels.has(audience.slice(8));
+      if (audience.startsWith('ref:')) return refs.has(audience.slice(4)) || owns(r);
+      return false;
+    };
     const organizationId = this.organizationId() ?? '';
     const events: PlatformEvent[] = [];
     let cursor = since;
@@ -152,7 +169,7 @@ export class EventsCore {
       const rows = this.sql.exec(`SELECT * FROM events WHERE seq > ?${filter} ORDER BY seq LIMIT ?`, cursor, ...args, SCAN_BATCH).toArray();
       for (const r of rows) {
         cursor = r.seq as number;
-        if (visible(r.audience as string)) {
+        if (visible(r)) {
           events.push(toEvent(r, organizationId));
           if (events.length >= limit) return { events, next: cursor };
         }
@@ -161,6 +178,11 @@ export class EventsCore {
       if (rows.length < SCAN_BATCH) break;
     }
     return { events, next: Math.max(cursor, this.head()) };
+  }
+
+  /** Whether any event after `since` has a `ref:` audience: a read then needs the reader's shared references. */
+  hasRefAudience(since: number): boolean {
+    return this.sql.exec("SELECT 1 FROM events WHERE seq > ? AND audience LIKE 'ref:%' LIMIT 1", Math.max(0, Math.floor(Number(since) || 0))).toArray().length > 0;
   }
 
   /** The highest seq the log has given, kept or not (retention can empty the table; `seq` never goes back). */

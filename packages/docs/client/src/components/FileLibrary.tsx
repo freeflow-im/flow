@@ -28,6 +28,8 @@ export interface LibraryItem {
   /** In the FreeFlow suite: the file's organization, and whether it is shared there (Organization files). */
   workspaceId?: string;
   shared?: true;
+  /** In the FreeFlow suite: the user's role on someone else's file (server/access.ts); none for their own. */
+  role?: SheetMeta['role'];
   updatedAt: string;
   createdAt: string;
   branch?: SheetMeta['branch'];

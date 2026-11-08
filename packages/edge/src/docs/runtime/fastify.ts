@@ -3,8 +3,8 @@
 import { docsContext } from './context.ts';
 import { FileStream } from './fs.ts';
 
-/** `accountId`: the caller's account in the organization the request went to (platform.md §3.6), when it has one. */
-export type Caller = { userId: string | null; email: string | null; token: string | null; ip: string; accountId?: string | null };
+/** `accountId`: the caller's account in the organization the request went to (platform.md §3.6), when it has one; `channelIds`: the channels it is in there. */
+export type Caller = { userId: string | null; email: string | null; token: string | null; ip: string; accountId?: string | null; channelIds?: string[] };
 type Hook = (req: DocsRequest, reply: DocsReply, done?: (err?: Error) => void) => unknown;
 type Handler = (req: DocsRequest, reply: DocsReply) => unknown;
 type Opts = { preHandler?: Hook | Hook[]; onRequest?: Hook | Hook[]; [key: string]: unknown };

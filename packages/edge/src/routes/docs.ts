@@ -1,5 +1,7 @@
-// Docs' API: /api/*. A request names its organization (`?workspace=`, from the client's current organization) or a file the
-// directory can place; one naming neither goes to the caller's first organization. Docs' object checks membership itself.
+// Docs' API: /api/*. A request names its organization (`?workspace=`, from the client's current organization, or a new
+// file's `workspace` in its JSON body) or a file the directory can place; one naming neither goes to the caller's first
+// organization. Docs' object checks membership itself.
+// The caller context carries the account and the channels the caller is in there, which grants name (docs/server/access.ts).
 import { Hono, type Context } from 'hono';
 import { getCookie } from 'hono/cookie';
 import type { Docs } from '../docs/object';
@@ -38,6 +40,25 @@ async function placeOfOpened(c: C): Promise<string | null> {
   return typeof id === 'string' ? directory(c, 'organizationOfId', id) : null;
 }
 
+/** The routes that make a file or folder, naming where in their JSON body (docs client api.ts placeFields). */
+const MAKES = /^\/api\/(?:sheets|docs|decks|markdown|folders)$/;
+
+/**
+ * A new file or folder's organization, named in the body (`{ workspace }`): without this one made in any organization
+ * but the caller's first went to the first one's object, and was missing from the organization it was made in.
+ */
+async function placeOfBody(c: C): Promise<string | null> {
+  if (c.req.method !== 'POST' || !MAKES.test(new URL(c.req.url).pathname)) return null;
+  const workspace = ((await c.req.raw.clone().json().catch(() => null)) as { workspace?: unknown } | null)?.workspace;
+  return typeof workspace === 'string' && workspace ? workspace : null;
+}
+
+/** A public link's data (/api/public/<token>/...), asked for by anyone: the directory knows which organization's object made its token. */
+async function placeOfLink(c: C): Promise<string | null> {
+  const token = /^\/api\/public\/([A-Za-z0-9_-]{32})(?:\/|$)/.exec(new URL(c.req.url).pathname)?.[1];
+  return token ? directory(c, 'organizationOfId', token) : null;
+}
+
 /** The headless browser making a PDF: its print ticket names the organization whose object made it (docs/server/pdf.ts). */
 function placeOfPrint(c: C): string | null {
   const ticket = getCookie(c, 'print');
@@ -46,11 +67,12 @@ function placeOfPrint(c: C): string | null {
 
 docsRoutes.all('/api/*', async (c) => {
   const caller = await who(c);
-  const named = (caller.userId ? null : placeOfPrint(c)) ?? (await placeOfOpened(c)) ?? c.req.query('workspace') ?? c.req.query('org') ?? (await placeOfFile(c));
+  const named = (await placeOfLink(c)) ?? (caller.userId ? null : placeOfPrint(c)) ?? (await placeOfOpened(c)) ?? c.req.query('workspace') ?? c.req.query('org') ?? (await placeOfFile(c)) ?? (await placeOfBody(c));
   const first = caller.userId ? (await directory(c, 'organizationsOf', caller.userId))[0] ?? null : null;
   // Someone in no organization yet, and anyone not signed in, share an object that can only say so.
   const id = named ?? first ?? 'none';
   const accountId = caller.userId && id !== 'none' ? ((await directory(c, 'accountFor', caller.userId, id))?.id ?? null) : null;
+  const channelIds = accountId ? await c.env.ORG.get(c.env.ORG.idFromName(id)).channelIdsOf(caller.userId!) : [];
   const stub = c.env.DOCS.get(c.env.DOCS.idFromName(id));
-  return stub.handle(c.req.raw, { ...caller, accountId }, id);
+  return stub.handle(c.req.raw, { ...caller, accountId, channelIds }, id);
 });

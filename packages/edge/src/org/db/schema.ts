@@ -685,3 +685,46 @@ export const workspaceEmailImages = sqliteTable(
   },
   (t) => [index('workspace_email_images_file_idx').on(t.fileId)],
 );
+
+/**
+ * The share index (platform.md §4.5, phase 3.3): one row per grant an app object reports, so "shared with me" and the
+ * bus's visibility are answered here without a fan-out over every app object. `ref` is the object's formatted reference
+ * (`<org>/docs/<kind>/<id>`), `principal` a grant principal, `granted_by` the granter's account, `kind` the kind of file
+ * (a document's kind, `file`, `folder`) and `at` epoch milliseconds.
+ */
+export const shares = sqliteTable(
+  'shares',
+  {
+    ref: text('ref').notNull(),
+    principal: text('principal').notNull(),
+    role: text('role').notNull(),
+    grantedBy: text('granted_by').notNull(),
+    title: text('title').notNull().default(''),
+    kind: text('kind').notNull().default(''),
+    at: integer('at').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.ref, t.principal] }), index('shares_principal_idx').on(t.principal)],
+);
+
+/**
+ * Explicit grants on Chat's objects (platform.md §4.3, phase 3.4): the grants library's table (`GRANTS_DDL` in
+ * `@flow/shared/grants`, which migration 0004 is), for `channel` containers, `artifact`s and `file`s. Channel
+ * membership is not stored here: org/access.ts synthesizes it as an implicit grant. Timestamps are epoch milliseconds.
+ */
+export const grants = sqliteTable(
+  'grants',
+  {
+    objectKind: text('object_kind').notNull(),
+    objectId: text('object_id').notNull(),
+    principal: text('principal').notNull(),
+    role: text('role').notNull(),
+    grantedBy: text('granted_by').notNull(),
+    grantedAt: integer('granted_at').notNull(),
+    expiresAt: integer('expires_at'),
+  },
+  (t) => [
+    primaryKey({ columns: [t.objectKind, t.objectId, t.principal] }),
+    index('grants_principal').on(t.principal),
+    index('grants_object').on(t.objectKind, t.objectId),
+  ],
+);

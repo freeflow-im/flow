@@ -275,9 +275,11 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   data, its FAQ section included) and as Markdown for agents at `/features/<slug>.md` (or with `Accept: text/markdown`),
   listed on `/features`, in `/sitemap.xml` and in `/llms.txt`. A new page is a new file there and a `page` on its
   box in `LandingPage`'s `FEATURES`.
-- Public links (`server/publicLinks.ts`, table `public_links`): the hosted app only, a presentation or a video (a stored file a browser plays)
-  can have an address, `/p/<token>`, that anyone can view without signing in (`PublicPage`). Whoever may open the file (its owner; in the suite, an organization file's members) turns it on and off in the Sharing menu
-  (`ShareDialog`, `/api/sharing/:kind/:id`), and a link stops working when the one who made it can no longer open the file; a link turned on again gets a new token, and deleting a file ends its link (triggers on `sheets` and
+- Public links (`server/publicLinks.ts`; a `link:<token>` viewer grant since platform phase 3.2, `public_links` kept one release, unread):
+  the hosted app only, a presentation or a video (a stored file a browser plays)
+  can have an address, `/p/<token>`, that anyone can view without signing in (`PublicPage`). A manager of the file turns it on and off (`POST /api/grants/:kind/:id/link`,
+  removing the grant; the Sharing menu's `ShareDialog` still uses the older `/api/sharing/:kind/:id`, now wrappers over the grant; the organization's `linkSharing` policy, `host.linkSharing`, can refuse it with `policy_forbids`);
+  a link works while its grant does (`resolveLink`); a link turned on again gets a new token, and deleting a file ends its link (triggers on `sheets` and
   `stored_files`, whichever path deleted it, so a restored file is not public again). Guests use `/api/public/:token...` only: `publicDeck` gives them
   a copy of the deck without speaker notes or links to spreadsheets, with its pictures and videos named under the token, and only what its elements
   show can be fetched with it (`shownBy`, checked per request, so what leaves the deck stops being available). Answers carry `no-referrer`,
@@ -312,7 +314,8 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   `POST /api/files/:id/scope` and `POST /api/folders/scope` (the target is the request's scope; a folder goes to the target's top with its
   contents): the file keeps its folder when the target has it, the one who makes it private becomes its owner, and its pictures
   (`ImageStore.retag`: a picture is visible to the members of its `workspace_id`) and public link go with it. New files are private, in
-  the bar's organization, unless made in a folder of Organization files (the client passes `shared`); a file made beside another (a PDF,
+  the bar's organization, unless made in a folder of Organization files (the client passes `shared`, by `newFileShared` in `listing.ts`:
+  `?org=` with no list over it; a request naming no `shared` is private); a file made beside another (a PDF,
   a signed copy, a Markdown of a PDF, a branch) goes in that one's root. The assistant's server tools take the chat's root
   (`ServerToolEnv.scope`/`viewer`): an organization file's chat, its root; the home chat, My files of `AgentTurnRequest.workspace`. On
   the client the bar publishes its organization (`suite.ts`' organization state, `useOrganization`), `api.ts` names it on list and create
@@ -322,6 +325,24 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   file's page selects the folder it was opened from (`listing.ts`' `last`); so the home page has no `RootSwitch` or Recents/Favorites
   tabs there (`FileLibrary`'s `listTabs={false}`, `RootSwitch` only outside the suite), the breadcrumbs name the root, and `OrganizationActions.tsx` has the menus' Share with organization / Make private /
   Move to organization… (a picker of the user's other organizations).
+  Since platform phase 3.2 access is on grants (`server/access.ts`, the `grants` table of `@flow/shared/grants`): objects are `sheet`, `file`
+  and `folder` (named `<scopeKey>/<path>`, `folderObjectId`; folders have no id), a file's chain is itself then each folder up to its root's
+  top, and `roleOf` is `owner` for the owner column, else (for a member of the row's organization) `effectiveRole` over the chain's grants,
+  matched against the caller's account and channels (`host.readerOf`; the Worker passes them in the caller context). `canAccess` is gone: the
+  stores' by-id methods take a needed role (read viewer, change editor, delete owner; a lower role is a 403). Organization files are the rows
+  with an `org` grant, which every row of an organization's root has (`syncOrgGrant` on create and move; the one-time migration gave it to the
+  `private = 0` rows), so `private` stays as the flag derived from it and `scopeWhere` lists as before. Share with organization and Make private
+  give and take `org` (a manager's), Move to organization… is the owner's. `/api/grants/:kind/:id` (GET viewer+, PUT `{ principal, role }` and
+  DELETE `/:principal` manager+; `org` there is the same move) backs the Share… dialog (`ShareWithDialog.tsx`), and `/api/library?scope=shared`
+  (`&in=<folder id>`) is Shared with me, a third list in `DocsNav` (`?withme=1`). Metadata carries `role` when the reader is not the owner (a file
+  with one that is not the organization's shows the crumbs `sharedFileCrumbs` makes: Shared with me, then only the shared folder down); a
+  viewer's editors are read-only (`viewOnlyGuard` on the sheet, deck and doc stores, `readOnly` on the Markdown and text editors).
+  Since phase 3.3 every grant change, once made, goes to `host.onGrantChange` (`reportGrant` in `app.ts`: the grants routes, the `org` toggle,
+  Share with organization / Make private, links made and stopped; `role` null is a revoke), and each save or rename of a document to
+  `host.onFileChanged`; the suite's Docs object sends them to the organization's share index and event log (`packages/edge/src/docs/object.ts`).
+  A folder moved to another root (`/api/folders/scope`) changes its object ids, and to another organization the references of what is in
+  it: `reportMove` compares `FolderStore.grantsUnder` before and after, revokes every grant under the old ids (with the people and channels a
+  move to another organization drops) and gives the new ones with `silent`, so the index follows without a second notice (phase 3.4).
 - Folders (`shared/folders.ts`): a folder is named by its path (`Reports/2026`, `''` for the top). Files
   carry it in the `folder` column (`SheetMeta.folder`, `StoredFile.folder`); the folders themselves are
   rows on the server (`FolderStore`, `server/folders.ts`) and directories in the desktop app

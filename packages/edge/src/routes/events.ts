@@ -10,7 +10,8 @@ import type { Events } from '../events/object';
 import type { ReadQuery } from '../events/core';
 import { subscriptionsAs } from '../events/subscriptions';
 import { badRequest, notFound } from '../errors';
-import { resolveAccountCaller, type AuthEnv } from './auth';
+import { ApiError } from '../errors';
+import { resolveAccountCaller, resolveCaller, type AuthEnv } from './auth';
 
 export interface EventRouteEnv extends AuthEnv { EVENTS: DurableObjectNamespace<Events> }
 
@@ -37,6 +38,18 @@ eventRoutes.get('/v1/events', async (c) => {
   const answer = await c.env.EVENTS.get(c.env.EVENTS.idFromName(org)).read(query, { accountId: who.account.id, channelIds, ...(agentAccountIds ? { agentAccountIds } : {}) });
   c.header('Cache-Control', 'no-store');
   return c.json(answer);
+});
+
+// What is shared with the caller in the organization, from its share index (platform.md §4.5): for Chat and the suite bar.
+// Docs' own Shared with me (`/api/library?scope=shared`) stays authoritative for Docs.
+eventRoutes.get('/v1/workspaces/:id/shared-with-me', async (c) => {
+  const org = c.req.param('id');
+  const who = await resolveCaller(c, org);
+  if (!who.user) throw new ApiError(401, 'unauthorized', 'missing bearer token');
+  if (!who.account) throw new ApiError(403, 'no_account', 'not a member of this organization');
+  const shares = await c.env.ORG.get(c.env.ORG.idFromName(org)).sharedWith({ accountId: who.account.id });
+  c.header('Cache-Control', 'no-store');
+  return c.json({ shares: shares.map(({ ref, kind, title, role, grantedBy, at, url }) => ({ ref, kind, title, role, grantedBy, at, url })) });
 });
 
 // ---- subscriptions -------------------------------------------------------------------------------------------------

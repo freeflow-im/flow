@@ -9,16 +9,21 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./grants": {
+      "types": "./dist/grants.d.ts",
+      "import": "./dist/grants.js"
     }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "echo 'no tests' "
+    "test": "vitest run"
   },
   "dependencies": {
     "zod": "^3.24.0"
   },
   "devDependencies": {
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   }
 }

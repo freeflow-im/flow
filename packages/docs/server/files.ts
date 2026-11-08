@@ -1,12 +1,13 @@
 // Stored files (generated PDFs, uploads). The bytes live next to the sheets as files named by id; the table
-// holds the metadata. Files are only readable by their owner.
+// holds the metadata. Who may read or change a file is server/access.ts.
 import { newFileId } from './ids.ts';
 import { closeSync, existsSync, openSync, readSync } from 'node:fs';
 import { copyFile, mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { MAX_TEXT_EDIT_BYTES, type StoredFile } from '../shared/types.ts';
 import type { DB } from './db.ts';
-import { canAccess, scopeColumns, scopeMeta, scopeWhere, type Owned, type ScopeArg, type ViewerArg } from './scope.ts';
+import { allowed, roleMeta, syncOrgGrant, type Role } from './access.ts';
+import { scopeColumns, scopeMeta, scopeWhere, type Owned, type ScopeArg, type ViewerArg } from './scope.ts';
 
 export interface StoredFileRow extends Partial<Owned> {
   id: string;
@@ -139,6 +140,7 @@ export class FileStore {
     this.db
       .prepare('INSERT INTO stored_files (id, owner_id, workspace_id, private, filename, folder, type, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run(id, c.owner_id, c.workspace_id, c.private, filename, folder, type, data.length, row.created_at);
+    syncOrgGrant(this.db, 'file', id, c, c.owner_id);
     return this.meta(row);
   }
 
@@ -168,7 +170,7 @@ export class FileStore {
 
   /** Put a file in another folder. */
   move(who: ViewerArg, id: string, folder: string): StoredFile | null {
-    const f = this.get(who, id);
+    const f = this.get(who, id, 'editor');
     if (!f) return null;
     this.db.prepare('UPDATE stored_files SET folder = ? WHERE id = ?').run(folder, id);
     return { ...f.meta, folder: folder || undefined };
@@ -179,7 +181,7 @@ export class FileStore {
    * name may be given with or without it. Null when there is no such file.
    */
   rename(who: ViewerArg, id: string, name: string): StoredFile | null {
-    const f = this.get(who, id);
+    const f = this.get(who, id, 'editor');
     if (!f) return null;
     const filename = renamed(f.meta.filename, name);
     if (filename === f.meta.filename) return f.meta;
@@ -187,24 +189,26 @@ export class FileStore {
     return { ...f.meta, filename };
   }
 
-  /** A file's row whoever may access it: for the caller to check (canAccess) or to learn its scope. */
+  /** A file's row whoever may access it: for the caller to check (server/access.ts) or to learn its scope. */
   find(id: string): (StoredFileRow & Owned) | undefined {
     return this.db.prepare(`SELECT ${FILE_COLUMNS} FROM stored_files WHERE id = ?`).get(id) as unknown as (StoredFileRow & Owned) | undefined;
   }
 
-  /** A file the viewer may access (server/scope.ts' canAccess). */
-  get(who: ViewerArg, id: string): { meta: StoredFile; file: string } | null {
+  /** A file the viewer's role on lets them do what `need` allows (server/access.ts). */
+  get(who: ViewerArg, id: string, need: Role = 'viewer'): { meta: StoredFile; file: string } | null {
     const r = this.find(id);
-    return r && canAccess(who, r) ? { meta: this.meta(r), file: this.pathOf(r) } : null;
+    const role = r ? allowed(this.db, who, 'file', r, need) : null;
+    return r && role ? { meta: { ...this.meta(r), ...roleMeta(role) }, file: this.pathOf(r) } : null;
   }
 
   /** Put a file in another root (see SheetStore.setScope). */
   setScope(who: ViewerArg, id: string, scope: ScopeArg, folder: string): StoredFile | null {
     const r = this.find(id);
-    if (!r || !canAccess(who, r)) return null;
+    if (!r || !allowed(this.db, who, 'file', r, 'viewer')) return null;
     const c = scopeColumns(scope);
     const owner = c.private ? c.owner_id : r.owner_id;
     this.db.prepare('UPDATE stored_files SET owner_id = ?, workspace_id = ?, private = ?, folder = ? WHERE id = ?').run(owner, c.workspace_id, c.private, folder, id);
+    syncOrgGrant(this.db, 'file', id, c, typeof who === 'string' ? who : who.userId);
     return this.meta({ ...r, owner_id: owner, workspace_id: c.workspace_id, private: c.private, folder });
   }
 
@@ -215,7 +219,7 @@ export class FileStore {
 
   /** Replace a file's bytes (a text file the assistant edited, a picture from the image editor). The version it replaces is kept, for one step of undo. */
   async update(who: ViewerArg, id: string, data: Buffer): Promise<StoredFile | null> {
-    const f = this.get(who, id);
+    const f = this.get(who, id, 'editor');
     if (!f) return null;
     const prev = this.previousPath(f.file);
     if (prev) await copyFile(f.file, prev);
@@ -227,7 +231,7 @@ export class FileStore {
 
   /** Swap a file with the version before its last rewrite. Null when there is no file, or no earlier version of it. */
   async revert(who: ViewerArg, id: string): Promise<StoredFile | null> {
-    const f = this.get(who, id);
+    const f = this.get(who, id, 'editor');
     const prev = f && this.previousPath(f.file);
     if (!f || !prev || !existsSync(prev)) return null;
     await rename(f.file, `${f.file}.tmp`);
@@ -239,7 +243,7 @@ export class FileStore {
   }
 
   async delete(who: ViewerArg, id: string): Promise<boolean> {
-    if (!this.get(who, id)) return false;
+    if (!this.get(who, id, 'owner')) return false;
     const r = this.db.prepare('DELETE FROM stored_files WHERE id = ?').run(id);
     if (!r.changes) return false;
     await rm(path.join(this.dir, id), { force: true });

@@ -129,6 +129,9 @@ export interface Workbook {
  */
 export type DocKind = 'sheet' | 'deck' | 'doc' | 'markdown';
 
+/** A role on a file or folder someone else owns (platform.md §4.3; the owner's is not told). */
+export type SharedRole = 'viewer' | 'editor' | 'manager';
+
 export interface SheetMeta {
   id: string;
   kind: DocKind;
@@ -145,6 +148,8 @@ export interface SheetMeta {
   workspaceId?: string;
   /** In the FreeFlow suite: one of the organization's shared files (Organization files), rather than one of the user's (My files). */
   shared?: true;
+  /** The reader's role on the file when they are not its owner (server/access.ts): a viewer opens it read-only. */
+  role?: SharedRole;
   createdAt: string;
   updatedAt: string;
   /** Set when this sheet is a branch of another sheet. */
@@ -224,6 +229,7 @@ export interface StoredFile {
   /** In the FreeFlow suite: the organization the file is in, and whether it is shared there (see SheetMeta). */
   workspaceId?: string;
   shared?: true;
+  role?: SharedRole;
   /** MIME type. */
   type: string;
   size: number;

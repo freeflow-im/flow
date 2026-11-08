@@ -57,6 +57,8 @@ jobs:
           fi
 
       - run: pnpm install --frozen-lockfile
+      # Docs' server imports @flow/shared/grants (server/access.ts), which is built.
+      - run: pnpm --filter @flow/shared build
       - run: pnpm --filter @flow/docs typecheck
       - run: pnpm --filter @flow/docs test
 

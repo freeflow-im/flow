@@ -70,12 +70,31 @@ export class Events extends DurableObject<EventsEnv> {
   }
 
   /** A socket's backlog (`auth` with `since`): what follows `since` that the reader may see, with `gap` when it aged out. */
-  readFrom(query: ReadQuery, reader: Reader): SubscriptionRead {
-    return this.core.readFrom(query, reader);
+  async readFrom(query: ReadQuery, reader: Reader): Promise<SubscriptionRead> {
+    return this.core.readFrom(query, await this.withShares(reader, query.since));
   }
 
-  read(query: ReadQuery, reader: Reader): { events: PlatformEvent[]; next: number } {
-    return this.core.read(query, reader);
+  async read(query: ReadQuery, reader: Reader): Promise<{ events: PlatformEvent[]; next: number }> {
+    return this.core.read(query, await this.withShares(reader, query.since));
+  }
+
+  /**
+   * The reader with the references shared with it (the Org object's share index, platform.md §4.5), asked once per read
+   * and only when an event after `since` has a `ref:` audience, so a revoked grant stops delivery on the next read. Every
+   * read goes through here: the one-shot route, a subscription's (and its long-poll), a socket's backlog, and an action's.
+   * Without the Org object (or when it fails) a `ref:` event is its owner's alone.
+   */
+  private async withShares(reader: Reader, since: unknown): Promise<Reader> {
+    if (reader.sharedRefs || !this.env.ORG || !this.core.hasRefAudience(Number(since) || 0)) return reader;
+    const org = this.core.organizationId();
+    if (!org) return reader;
+    try {
+      const sharedRefs = await this.env.ORG.get(this.env.ORG.idFromName(org)).sharedRefsOf({ accountId: reader.accountId, channelIds: reader.channelIds });
+      return { ...reader, sharedRefs };
+    } catch (err) {
+      console.error(`[events] shares of ${reader.accountId}: ${(err as Error).message}`);
+      return reader;
+    }
   }
 
   stats(): EventStats {
@@ -112,7 +131,8 @@ export class Events extends DurableObject<EventsEnv> {
   async wait(id: string, reader: Reader, limit?: number, waitMs = 0): Promise<SubscriptionRead | null> {
     const deadline = Date.now() + Math.min(WAIT_MAX_MS, Math.max(0, Number(waitMs) || 0));
     for (;;) {
-      const out = this.core.readSubscription(id, limit ? { limit } : {}, reader);
+      const sub = this.core.getSubscription(id);
+      const out = sub ? this.core.readSubscription(id, limit ? { limit } : {}, await this.withShares(reader, sub.cursor)) : null;
       const left = deadline - Date.now();
       if (!out || out.events.length || out.gap || left <= 0) return out;
       await new Promise<void>((resolve) => {
@@ -242,7 +262,7 @@ export class Events extends DurableObject<EventsEnv> {
       kinds && org ? (org.agentAccountIds() as Promise<string[]>) : Promise.resolve(undefined),
     ]);
     for (const sub of subs) {
-      const reader: Reader = { accountId: sub.owner, channelIds: channels[sub.owner] ?? [], ...(agents ? { agentAccountIds: agents } : {}) };
+      const reader = await this.withShares({ accountId: sub.owner, channelIds: channels[sub.owner] ?? [], ...(agents ? { agentAccountIds: agents } : {}) }, after);
       const events = this.core.matchingEvents(sub, after, through, reader);
       for (const e of events) {
         const d = this.core.decide(sub, e);

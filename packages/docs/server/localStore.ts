@@ -20,6 +20,7 @@ import { docxProblem } from '../shared/docxFormat.ts';
 import { pptxGaps } from '../shared/pptxFormat.ts';
 import { fileTypeOf, VIDEO_TYPES, type DocKind, type SheetMeta, type StoredFile, type Workbook } from '../shared/types.ts';
 import { xlsxProblem } from '../shared/xlsxFormat.ts';
+import type { Role } from './access.ts';
 import type { DB } from './db.ts';
 import { scopeOf, viewerId, type ScopeArg, type ViewerArg } from './scope.ts';
 import { docDocx } from './docxExport.ts';
@@ -588,8 +589,8 @@ export class LocalSheetStore extends SheetStore {
   }
 
   /** A row is only as good as its file: one that was removed is gone, one that was edited has a new time. */
-  protected override row(ownerId: ViewerArg, id: string, kind?: DocKind): SheetRow | undefined {
-    const r = super.row(ownerId, id, kind);
+  protected override row(ownerId: ViewerArg, id: string, kind?: DocKind, need?: Role): SheetRow | undefined {
+    const r = super.row(ownerId, id, kind, need);
     if (!r) return undefined;
     const mtime = this.folder.mtime(r.file);
     if (mtime === null) {
@@ -821,8 +822,8 @@ export class LocalFileStore extends FileStore {
     return this.listIn(ownerId, folder).find((f) => f.filename === path.posix.basename(rel))?.id ?? null;
   }
 
-  override get(ownerId: ViewerArg, id: string): { meta: StoredFile; file: string } | null {
-    const f = super.get(ownerId, id);
+  override get(ownerId: ViewerArg, id: string, need?: Role): { meta: StoredFile; file: string } | null {
+    const f = super.get(ownerId, id, need);
     if (!f) return null;
     const file = this.folder.abs(joinFolder(f.meta.folder ?? '', f.meta.filename));
     if (!existsSync(file)) {

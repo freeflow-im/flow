@@ -42,6 +42,8 @@ class TextSource implements SaveSource<string> {
 }
 
 export function TextFileEditor({ file, onSaved, canTail = false }: { file: StoredFile; onSaved(file: StoredFile): void; canTail?: boolean }) {
+  // A file shared with the user as a viewer (server/access.ts) is shown, not edited.
+  const viewOnly = file.role === 'viewer';
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   // How the file was written, so a save keeps it: Windows line ends, a byte order mark.
@@ -229,7 +231,7 @@ export function TextFileEditor({ file, onSaved, canTail = false }: { file: Store
             ref={area}
             className="md-editor text-file-editor"
             value={text}
-            readOnly={tail}
+            readOnly={tail || viewOnly}
             onChange={(e) => edit(e.target.value)}
             spellCheck={false}
             autoFocus

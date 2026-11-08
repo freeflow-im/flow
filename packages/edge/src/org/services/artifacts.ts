@@ -15,20 +15,32 @@
 // were personal bookmarks fanned out per recipient; they are now shared per
 // channel. Events ride a per-channel subject; the gateway's visible() filter
 // gates them by channel membership, so private channels stay private.
+//
+// Who may do what is one function (org/access.ts, platform phase 3.4): the
+// reader's role on the artifact, over its chain (the artifact, then its
+// channel, where membership is an implicit `editor` grant). Reading needs
+// viewer; pinning, renaming, re-pointing, deleting and minting an app token
+// need editor (a member, as before); sharing and rotating need manager (the
+// creator, who is owner, or a workspace admin in the channel). An explicit
+// grant (`account:`, `channel:`, `org`) lets someone outside the channel open
+// the artifact by id; listing stays per channel.
 import { randomBytes } from 'node:crypto';
 import { and, asc, desc, eq, inArray, isNull, isNotNull, or } from 'drizzle-orm';
-import type { AppArtifactSecretDTO, AppTokenDTO, ArtifactDTO } from '@flow/shared';
+import { formatReference, type AppArtifactSecretDTO, type AppTokenDTO, type ArtifactDTO } from '@flow/shared';
+import { parsePrincipal, type Grant, type Role } from '@flow/shared/grants';
 import { db, schema } from '../db/index.js';
 import { newId } from '../lib/ids.js';
 import { badRequest, conflict, forbidden, notFound } from '../lib/errors.js';
 import { decryptBody, encryptBody } from '../crypto/index.js';
 import { mintAppToken } from '../lib/appToken.js';
 import { reapFileIfUnreferenced, requireFileAccess, toFileDTO } from './files.js';
-import { requireChannelAccess } from './channels.js';
 import { requireMembership } from './workspaces.js';
+import { reportRevoke, reportShare } from './shares.js';
 import { publishEvent, subjectArtifact } from '../bus.js';
+import { requireRole, grantsOn, type ChatReader } from '../access.js';
+import { config } from '../config.js';
 
-const { artifacts, channels, files, channelMembers, users, workspaceMembers } = schema;
+const { artifacts, channels, files, channelMembers, users, workspaceMembers, grants } = schema;
 
 type ArtifactRow = typeof artifacts.$inferSelect;
 type FileRow = typeof files.$inferSelect;
@@ -63,12 +75,11 @@ function publishArtifactEvent(type: 'artifact.created' | 'artifact.updated' | 'a
   });
 }
 
-/** Require the caller to be a member of the channel (not just able to see it).
- * Managing shared artifacts is a member action. */
-async function requireChannelMember(channelId: string, userId: string) {
-  const { chan, isMember } = await requireChannelAccess(channelId, userId);
-  if (!isMember) throw forbidden('join the channel to manage its artifacts');
-  return chan;
+/** Require the caller to be able to pin into the channel: editor on it, which a
+ * member is (an implicit grant, org/access.ts). */
+async function requireChannelEditor(channelId: string, userId: string) {
+  const { chain } = await requireRole(userId, 'channel', channelId, 'editor');
+  return { workspaceId: chain.workspaceId };
 }
 
 // ---- mini apps (docs/design/MINI_APPS.md) --------------------------
@@ -134,11 +145,11 @@ export async function createArtifact(
   },
 ): Promise<ArtifactDTO | AppArtifactSecretDTO> {
   if (opts.app && opts.url === undefined) throw badRequest('bad_request', 'app is only valid with url');
-  const chan = await requireChannelMember(channelId, userId);
+  const chan = await requireChannelEditor(channelId, userId);
   if (opts.requesterUserId) {
     const [actor] = await db.select({ isAgent: users.isAgent }).from(users).where(eq(users.id, userId)).limit(1);
     if (!actor?.isAgent) throw forbidden('only an agent can set a report requester');
-    await requireChannelMember(channelId, opts.requesterUserId);
+    await requireChannelEditor(channelId, opts.requesterUserId);
   }
   if (opts.sourceThreadRootId) {
     const [root] = await db.select().from(schema.messages).where(and(
@@ -320,7 +331,9 @@ export async function listAppArtifacts(workspaceId: string, userId: string): Pro
     );
 }
 
-async function requireArtifactMember(artifactId: string, userId: string): Promise<{ a: ArtifactRow; f: FileRow | null }> {
+/** The artifact (and its file) when the caller's role on it is at least `needed`. */
+async function requireArtifactRole(artifactId: string, userId: string, needed: Role): Promise<{ a: ArtifactRow; f: FileRow | null; role: Role; reader: ChatReader }> {
+  const { role, reader } = await requireRole(userId, 'artifact', artifactId, needed);
   const rows = await db
     .select({ a: artifacts, f: files })
     .from(artifacts)
@@ -329,8 +342,7 @@ async function requireArtifactMember(artifactId: string, userId: string): Promis
     .limit(1);
   const row = rows[0];
   if (!row) throw notFound('artifact not found');
-  await requireChannelMember(row.a.channelId, userId);
-  return row;
+  return { ...row, role, reader };
 }
 
 /**
@@ -341,7 +353,7 @@ async function requireArtifactMember(artifactId: string, userId: string): Promis
  * once unreferenced. Any channel member may update.
  */
 export async function getArtifact(artifactId: string, userId: string): Promise<ArtifactDTO> {
-  const { a, f } = await requireArtifactMember(artifactId, userId);
+  const { a, f } = await requireArtifactRole(artifactId, userId, 'viewer');
   if (a.kind === 'file' && (!f || f.deletedAt)) throw notFound('artifact file unavailable');
   return toArtifactDTO(a, f);
 }
@@ -351,7 +363,7 @@ export async function updateArtifact(
   userId: string,
   patch: { name?: string | undefined; fileId?: string | undefined; url?: string | undefined; ownsFile?: boolean | undefined },
 ): Promise<ArtifactDTO> {
-  const { a } = await requireArtifactMember(artifactId, userId);
+  const { a } = await requireArtifactRole(artifactId, userId, 'editor');
   const set: Partial<ArtifactRow> = { updatedAt: new Date() };
   if (patch.name !== undefined) set.name = patch.name;
 
@@ -426,24 +438,28 @@ export async function deleteArtifact(artifactId: string, userId: string): Promis
   const rows = await db.select().from(artifacts).where(eq(artifacts.id, artifactId)).limit(1);
   const a = rows[0];
   if (!a) return; // idempotent
-  await requireChannelMember(a.channelId, userId);
+  const { reader } = await requireRole(userId, 'artifact', artifactId, 'editor');
   const fRows = a.fileId ? await db.select().from(files).where(eq(files.id, a.fileId)).limit(1) : [];
+  const shared = await grantsOn('artifact', artifactId);
   await db.delete(artifacts).where(eq(artifacts.id, artifactId));
+  // Its grants go with it, and the share index hears so.
+  await db.delete(grants).where(and(eq(grants.objectKind, 'artifact'), eq(grants.objectId, artifactId)));
+  for (const g of shared) await reportRevoke({ ref: artifactRef(a), principal: g.principal, revokedBy: reader.accountId });
   if (a.ownsFile && a.fileId) await reapFileIfUnreferenced(a.fileId);
   publishArtifactEvent('artifact.deleted', toArtifactDTO(a, fRows[0] ?? null));
 }
 
 /**
  * Mint a short-lived identity token for the caller against an app artifact
- * (MINI_APPS.md §"The token"). The gate is the same one every artifact
- * operation uses — membership of the artifact's channel — which is the whole
- * point: membership stays enforced where it already lives, and a removed member
- * simply fails their next mint. Verification is offline, so nothing here is
+ * (MINI_APPS.md §"The token"). The gate is editor on the artifact — what a
+ * member of its channel is — so membership stays enforced where it already
+ * lives, and a removed member simply fails their next mint. Someone the app is
+ * shared with as a viewer sees it but gets no token: the token says "a member". Verification is offline, so nothing here is
  * recorded; the token's 5-minute life and single-use `jti` bound the damage if
  * it leaks.
  */
 export async function mintArtifactAppToken(artifactId: string, userId: string): Promise<AppTokenDTO> {
-  const { a } = await requireArtifactMember(artifactId, userId);
+  const { a } = await requireArtifactRole(artifactId, userId, 'editor');
   const secret = readAppSecret(a);
   if (!secret) throw badRequest('not_an_app', 'artifact is not an app');
   const who = (await db.select().from(users).where(eq(users.id, userId)).limit(1))[0];
@@ -462,24 +478,13 @@ export async function mintArtifactAppToken(artifactId: string, userId: string): 
 /**
  * Rotate an app's secret — the revocation lever beyond kicking members: every
  * token minted under the old secret stops verifying the moment this returns.
- * Creator or workspace owner/admin, because it is destructive to everyone
- * currently inside the app, not just to the caller.
+ * Manager: the creator (owner) or a workspace owner/admin in the channel,
+ * because it is destructive to everyone currently inside the app.
  */
 export async function rotateArtifactAppSecret(artifactId: string, userId: string): Promise<AppArtifactSecretDTO> {
-  const { a } = await requireArtifactMember(artifactId, userId);
+  const { a, role } = await requireArtifactRole(artifactId, userId, 'viewer');
   if (!a.appSecret) throw badRequest('not_an_app', 'artifact is not an app');
-  if (a.createdBy !== userId) {
-    const m = (
-      await db
-        .select({ role: workspaceMembers.role })
-        .from(workspaceMembers)
-        .where(and(eq(workspaceMembers.workspaceId, a.workspaceId), eq(workspaceMembers.userId, userId)))
-        .limit(1)
-    )[0];
-    if (!m || (m.role !== 'owner' && m.role !== 'admin')) {
-      throw forbidden('only the app’s creator or a workspace admin can rotate its secret');
-    }
-  }
+  if (role !== 'manager' && role !== 'owner') throw forbidden('only the app’s creator or a workspace admin can rotate its secret');
   const { secret, cols } = newAppSecretColumns();
   const updated = await db
     .update(artifacts)
@@ -489,4 +494,63 @@ export async function rotateArtifactAppSecret(artifactId: string, userId: string
   const dto = toArtifactDTO(updated[0]!, null);
   publishArtifactEvent('artifact.updated', dto);
   return { ...dto, appSecret: secret.toString('base64url') };
+}
+
+
+// ---- explicit grants (platform.md §4.3, phase 3.4) ----------------------------
+
+/** An artifact's reference (platform.md §4.1): what the share index and the bus name it by. */
+const artifactRef = (a: Pick<ArtifactRow, 'workspaceId' | 'id'>) => formatReference({ organizationId: a.workspaceId, app: 'chat', kind: 'artifact', id: a.id });
+
+/** What the grants routes answer: the artifact's explicit grants and the caller's role on it. */
+export interface ArtifactGrantsDTO { grants: Grant[]; role: Role | null }
+
+const GRANTABLE: readonly Role[] = ['viewer', 'editor', 'manager'];
+
+/** GET /v1/artifacts/:id/grants — viewer and up. */
+export async function listArtifactGrants(artifactId: string, userId: string): Promise<ArtifactGrantsDTO> {
+  const { role } = await requireArtifactRole(artifactId, userId, 'viewer');
+  return { grants: await grantsOn('artifact', artifactId), role };
+}
+
+/** The principal, checked: an account or a channel of this workspace, or `org`. A link is not offered yet. */
+async function checkPrincipal(workspaceId: string, principal: string): Promise<void> {
+  let p: ReturnType<typeof parsePrincipal>;
+  try {
+    p = parsePrincipal(principal);
+  } catch {
+    throw badRequest('bad_principal', 'principal must be account:<id>, channel:<id> or org');
+  }
+  if (p.kind === 'link') throw badRequest('not_supported', 'link sharing is not offered for artifacts yet');
+  if (p.kind === 'account') {
+    const m = await db.select({ u: workspaceMembers.userId }).from(workspaceMembers).where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.accountId, p.id!))).limit(1);
+    if (!m[0]) throw badRequest('bad_principal', 'no such account in this workspace');
+  } else if (p.kind === 'channel') {
+    const c = await db.select({ id: channels.id }).from(channels).where(and(eq(channels.id, p.id!), eq(channels.workspaceId, workspaceId))).limit(1);
+    if (!c[0]) throw badRequest('bad_principal', 'no such channel in this workspace');
+  }
+}
+
+/** PUT /v1/artifacts/:id/grants — manager and up: give (or change) one principal's role, and tell the share index. */
+export async function grantArtifact(artifactId: string, userId: string, principal: string, role: Role): Promise<ArtifactGrantsDTO> {
+  const { a, role: mine, reader } = await requireArtifactRole(artifactId, userId, 'manager');
+  if (!GRANTABLE.includes(role)) throw badRequest('bad_role', 'role must be viewer, editor or manager');
+  await checkPrincipal(a.workspaceId, principal);
+  const at = Date.now();
+  await db
+    .insert(grants)
+    .values({ objectKind: 'artifact', objectId: artifactId, principal, role, grantedBy: reader.accountId, grantedAt: at, expiresAt: null })
+    .onConflictDoUpdate({ target: [grants.objectKind, grants.objectId, grants.principal], set: { role, grantedBy: reader.accountId, grantedAt: at, expiresAt: null } });
+  await reportShare({ ref: artifactRef(a), principal, role, grantedBy: reader.accountId, title: a.name, kind: 'artifact' }, config.webUrlBase);
+  return { grants: await grantsOn('artifact', artifactId), role: mine };
+}
+
+/** DELETE /v1/artifacts/:id/grants/:principal — manager and up. Idempotent. */
+export async function revokeArtifactGrant(artifactId: string, userId: string, principal: string): Promise<ArtifactGrantsDTO> {
+  const { a, reader } = await requireArtifactRole(artifactId, userId, 'manager');
+  const gone = await db.delete(grants).where(and(eq(grants.objectKind, 'artifact'), eq(grants.objectId, artifactId), eq(grants.principal, principal))).returning();
+  if (gone[0]) await reportRevoke({ ref: artifactRef(a), principal, revokedBy: reader.accountId });
+  // The caller's role may have come from the grant just taken away (a manager revoking their own): null then.
+  const role = await requireRole(userId, 'artifact', artifactId, 'viewer').then((r) => r.role, () => null);
+  return { grants: await grantsOn('artifact', artifactId), role };
 }

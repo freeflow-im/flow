@@ -2,7 +2,7 @@
 // inside it: both apps have `users`, `sessions` and `folders` tables, and a heavy save here should not hold up a message there.
 import { DurableObject } from 'cloudflare:workers';
 import type { Directory } from '../directory/object';
-import type { AccountDTO } from '@flow/shared';
+import { formatReference, type AccountDTO } from '@flow/shared';
 import type { CallerContext } from '../org/routes/compat';
 import { currentOrganization, withDocsContext, type DocsContext } from './runtime/context.ts';
 import { DocsApp, type Caller, type DocsRequest } from './runtime/fastify.ts';
@@ -17,6 +17,8 @@ import { PREVIEW_TTL_MS, Previews } from './server/previews.ts';
 import { importBytes, type ImportStores } from './server/importFile.ts';
 import type { MailToolContext } from '../imap/mailTools.ts';
 import { lazySubscriptions, subscriptionsAs, type SubscriptionOps } from '../events/subscriptions.ts';
+import { docsAddress } from './addresses.ts';
+import type { FileChange, GrantChange } from './server/app.ts';
 
 export interface DocsEnv {
   BLOBS: R2Bucket;
@@ -36,6 +38,8 @@ export interface DocsEnv {
   ORG?: DurableObjectNamespace<import('../org/object').Org>;
 }
 const BASE = '/workspace';
+/** A file's saves publish `docs.file.changed` at most this often, so a typing session does not flood the log. */
+export const FILE_CHANGED_EVERY_MS = 30_000;
 
 /** Mail's or Calendar's namespace, as the tools reach an account's object. */
 type AccountObjects = { idFromName(name: string): DurableObjectId; get(id: DurableObjectId): { handle(request: Request, caller: CallerContext): Promise<Response> } };
@@ -48,6 +52,10 @@ export class Docs extends DurableObject<DocsEnv> {
   private hub: FileHub | null = null;
   /** Where the assistant's save_mail_attachment_to_docs imports to: the app's own stores, once it has opened them. */
   private importStores: ImportStores | null = null;
+  /** When each file last published `docs.file.changed` (in memory: an evicted object may publish one more). */
+  private readonly changedAt = new Map<string, number>();
+  /** Owners' accounts in an organization, asked of the directory once each. */
+  private readonly ownerAccounts = new Map<string, Promise<string | null>>();
 
   constructor(ctx: DurableObjectState, env: DocsEnv) {
     super(ctx, env);
@@ -94,6 +102,11 @@ export class Docs extends DurableObject<DocsEnv> {
         userForCookie: async () => null,
         isMember: async (userId: string, organizationId: string) => (await this.directory<string[]>('organizationsOf', userId)).includes(organizationId),
         organizationsOf: async (userId: string) => this.directory<string[]>('organizationsOf', userId),
+        // Grants are matched against the caller context the Worker resolved (routes/docs.ts; docs/server/access.ts).
+        readerOf: (req: DocsRequest) => ({ accountId: req.caller.accountId ?? null, channelIds: req.caller.channelIds ?? [] }),
+        linkSharing: async (organizationId: string) => (await this.directory<{ policies?: { linkSharing?: boolean } } | null>('organization', organizationId))?.policies?.linkSharing !== false,
+        onGrantChange: (change: GrantChange) => this.reportGrant(change),
+        onFileChanged: (change: FileChange) => this.fileChanged(change),
         stores: (stores: Parameters<typeof suiteHub>[0]) => {
           this.hub = suiteHub(stores, `${base}/workspace`);
           if (stores.sheets && stores.images && stores.files) this.importStores = { sheets: stores.sheets, images: stores.images, files: stores.files };
@@ -102,12 +115,75 @@ export class Docs extends DurableObject<DocsEnv> {
     });
   }
 
-  /** New file ids, reported to the directory so that a request naming only a file finds this object (routes/docs.ts). */
+  /** A Docs object's reference (platform.md §4.1): what the share index and the bus name it by. */
+  private static refOf(c: { workspaceId: string; kind: string; id: string }): string {
+    return formatReference({ organizationId: c.workspaceId, app: 'docs', kind: c.kind, id: c.id });
+  }
+
+  /**
+   * A grant change, reported to the organization's share index (platform.md §4.5) by binding. Fire-and-forget: the
+   * request does not wait for the index, and a failure is logged.
+   */
+  private reportGrant(c: GrantChange): void {
+    const ns = this.env.ORG;
+    if (!ns) return;
+    const org = ns.get(ns.idFromName(c.workspaceId));
+    const ref = Docs.refOf(c);
+    const sent = c.role
+      ? org.recordShare({ ref, principal: c.principal, role: c.role, grantedBy: c.actor, title: c.title, kind: c.fileKind, ...(c.silent ? { silent: true } : {}) })
+      : org.revokeShare({ ref, principal: c.principal, revokedBy: c.actor });
+    this.ctx.waitUntil(Promise.resolve(sent).catch((err: Error) => console.error(`[docs] share index, ${c.principal} on ${ref}: ${err.message}`)));
+  }
+
+  /**
+   * A document saved (or renamed): `docs.file.changed` into the organization's event log, for whoever it is shared with
+   * (the `ref:` audience, read from the share index) and its owner, at most once per FILE_CHANGED_EVERY_MS per file.
+   */
+  private fileChanged(c: FileChange): void {
+    const ns = this.env.EVENTS;
+    if (!ns) return;
+    const now = Date.now();
+    if (now - (this.changedAt.get(c.id) ?? -Infinity) < FILE_CHANGED_EVERY_MS) return;
+    this.changedAt.set(c.id, now);
+    if (this.changedAt.size > 5_000) this.changedAt.clear();
+    const ref = Docs.refOf(c);
+    const key = `${c.workspaceId}|${c.ownerId}`;
+    let owner = this.ownerAccounts.get(key);
+    if (!owner) {
+      owner = this.directory<AccountDTO | null>('accountFor', c.ownerId, c.workspaceId).then((a) => a?.id ?? null, () => null);
+      this.ownerAccounts.set(key, owner);
+    }
+    const sent = owner.then((ownerAccountId) =>
+      ns.get(ns.idFromName(c.workspaceId)).publish({
+        type: 'docs.file.changed',
+        organizationId: c.workspaceId,
+        actor: null,
+        ref: { organizationId: c.workspaceId, app: 'docs', kind: c.kind, id: c.id },
+        audience: `ref:${ref}`,
+        ts: new Date(now).toISOString(),
+        data: { ref, kind: c.fileKind, id: c.id, title: c.title, ownerAccountId, url: docsAddress({ organizationId: c.workspaceId, app: 'docs', kind: c.kind, id: c.id }, c.fileKind) },
+      }),
+    );
+    this.ctx.waitUntil(sent.catch((err: Error) => console.error(`[docs] docs.file.changed for ${ref}: ${err.message}`)));
+  }
+
+  /**
+   * New file ids, reported to the directory so that a request naming only a file finds this object (routes/docs.ts); so
+   * are the tokens of new links (`link:<token>` grants), so that a guest's request for a public link finds it too.
+   */
   private outbox(): void {
     const sql = this.ctx.storage.sql;
     sql.exec('CREATE TABLE IF NOT EXISTS _outbox (seq INTEGER PRIMARY KEY, kind TEXT NOT NULL, id TEXT NOT NULL, user_id TEXT, role TEXT, payload TEXT)');
     for (const table of ['sheets', 'stored_files', 'images']) {
       sql.exec(`CREATE TRIGGER IF NOT EXISTS _index_${table} AFTER INSERT ON ${table} BEGIN INSERT INTO _outbox (kind, id) VALUES ('index', NEW.id); END`);
+    }
+    sql.exec("CREATE TRIGGER IF NOT EXISTS _index_links AFTER INSERT ON grants WHEN NEW.principal LIKE 'link:%' BEGIN INSERT INTO _outbox (kind, id) VALUES ('index', substr(NEW.principal, 6)); END");
+    // Once: the tokens the move to grants made from the old public links (server/access.ts' migrateToGrants) predate the
+    // trigger, so a guest's request for one found no organization; they go to the directory as new ones do.
+    sql.exec('CREATE TABLE IF NOT EXISTS _once (name TEXT PRIMARY KEY)');
+    if (!sql.exec("SELECT 1 FROM _once WHERE name = 'link_tokens'").toArray().length) {
+      sql.exec("INSERT INTO _outbox (kind, id) SELECT 'index', substr(principal, 6) FROM grants WHERE principal LIKE 'link:%'");
+      sql.exec("INSERT INTO _once (name) VALUES ('link_tokens')");
     }
   }
 

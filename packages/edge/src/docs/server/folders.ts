@@ -1,10 +1,11 @@
 // @ts-nocheck: copied from packages/docs, where it is typechecked under that package's settings (cloudflare-spikes.md).
 // The folders of a library (shared/folders.ts). On the server they are rows: a folder exists once it is created,
 // and files point at it by path, within its root (server/scope.ts). The desktop app's folders are directories instead
-// (LocalFolders in server/localStore.ts).
+// (LocalFolders in server/localStore.ts). A folder is an object grants can name (server/access.ts' folderObjectId).
 import { folderName, nameSearch, parentFolder } from '../shared/folders.ts';
 import type { DB } from './db.ts';
-import { scopeColumns, scopeKey, scopeWhere, type ScopeArg } from './scope.ts';
+import { folderObjectId, renameFolderObject, revokeMembers, syncOrgGrant } from './access.ts';
+import { scopeColumns, scopeKey, scopeOf, scopeWhere, type ScopeArg } from './scope.ts';
 
 export interface Folders {
   /** Paths of the folders directly inside `parent`, by name. */
@@ -18,6 +19,17 @@ export interface Folders {
   search(scope: ScopeArg, text: string): Promise<string[]>;
   /** Remove an empty folder. */
   remove(scope: ScopeArg, path: string): 'ok' | 'not-empty' | 'missing';
+}
+
+/** One grant on a folder or on something in it, with what the share index names its object by (host.onGrantChange). */
+export interface GrantUnder {
+  kind: 'folder' | 'sheet' | 'file';
+  id: string;
+  fileKind: string;
+  title: string;
+  workspaceId: string;
+  principal: string;
+  role: string;
 }
 
 /** Most results a search of the whole library returns, per kind of thing. */
@@ -72,6 +84,7 @@ export class FolderStore implements Folders {
     const c = scopeColumns(scope);
     for (let p = path; p && !this.exists(scope, p); p = parentFolder(p)) {
       this.db.prepare('INSERT INTO folders (owner_id, workspace_id, private, scope, path, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(c.owner_id, c.workspace_id, c.private, scopeKey(scope), p, now);
+      syncOrgGrant(this.db, 'folder', folderObjectId(scopeKey(scope), p), c, c.owner_id);
     }
     return true;
   }
@@ -85,13 +98,42 @@ export class FolderStore implements Folders {
       !!this.db.prepare(`SELECT 1 FROM stored_files WHERE ${where.sql} AND folder = ? LIMIT 1`).get(...where.params, path);
     if (used) return 'not-empty';
     this.db.prepare(`DELETE FROM folders WHERE ${where.sql} AND path = ?`).run(...where.params, path);
+    this.db.prepare("DELETE FROM grants WHERE object_kind = 'folder' AND object_id = ?").run(folderObjectId(scopeKey(scope), path));
     return 'ok';
+  }
+
+  /**
+   * Every grant on the folder `path` and on what is in it (its folders, documents and stored files) in an organization:
+   * what a move compares before and after, so the share index follows it (server/app.ts' `/api/folders/scope`).
+   */
+  grantsUnder(scope: ScopeArg, path: string): GrantUnder[] {
+    const where = scopeWhere(scope);
+    const out: GrantUnder[] = [];
+    const grantsOf = this.db.prepare('SELECT principal, role FROM grants WHERE object_kind = ? AND object_id = ?');
+    const add = (o: Omit<GrantUnder, 'principal' | 'role'>) => {
+      if (!o.workspaceId) return;
+      for (const g of grantsOf.all(o.kind, o.id) as { principal: string; role: string }[]) out.push({ ...o, ...g });
+    };
+    const inPath = underFolder('path', path);
+    for (const f of this.db.prepare(`SELECT path, workspace_id FROM folders WHERE ${where.sql} AND ${inPath.sql}`).all(...where.params, ...inPath.params) as { path: string; workspace_id: string | null }[]) {
+      add({ kind: 'folder', id: folderObjectId(scopeKey(scope), f.path), fileKind: 'folder', title: folderName(f.path) || 'Folder', workspaceId: f.workspace_id ?? '' });
+    }
+    const inside = underFolder('folder', path);
+    for (const d of this.db.prepare(`SELECT id, kind, title, workspace_id FROM sheets WHERE ${where.sql} AND ${inside.sql}`).all(...where.params, ...inside.params) as { id: string; kind: string; title: string; workspace_id: string | null }[]) {
+      add({ kind: 'sheet', id: d.id, fileKind: d.kind, title: d.title, workspaceId: d.workspace_id ?? '' });
+    }
+    for (const f of this.db.prepare(`SELECT id, filename, workspace_id FROM stored_files WHERE ${where.sql} AND ${inside.sql}`).all(...where.params, ...inside.params) as { id: string; filename: string; workspace_id: string | null }[]) {
+      add({ kind: 'file', id: f.id, fileKind: 'file', title: f.filename, workspaceId: f.workspace_id ?? '' });
+    }
+    return out;
   }
 
   /**
    * Move a folder with everything in it to another root, at the top there under its own name (merged with a folder
    * of that name there): its folders, documents and stored files. Returns the ids of the documents and files moved
-   * and the folder's path in the new root. The one who moves it into a private root keeps it.
+   * and the folder's path in the new root. The one who moves it into a private root keeps it. The grants go with
+   * each folder and file, but for the `org` grant, which says which root it is in, and, to another organization,
+   * those naming people and channels.
    */
   moveTo(from: ScopeArg, path: string, to: ScopeArg): { path: string; sheets: string[]; files: string[] } {
     const target = folderName(path);
@@ -100,9 +142,16 @@ export class FolderStore implements Folders {
     const under = underFolder('path', path);
     const moved = (this.db.prepare(`SELECT path FROM folders WHERE ${where.sql} AND ${under.sql}`).all(...where.params, ...under.params) as { path: string }[]).map((r) => r.path);
     this.db.prepare(`DELETE FROM folders WHERE ${where.sql} AND ${under.sql}`).run(...where.params, ...under.params);
-    for (const p of moved.sort()) this.create(to, rename(p));
-    this.create(to, target);
     const c = scopeColumns(to);
+    const otherOrg = scopeOf(from).workspaceId !== c.workspace_id;
+    for (const p of moved.sort()) {
+      this.create(to, rename(p));
+      const id = folderObjectId(scopeKey(to), rename(p));
+      renameFolderObject(this.db, folderObjectId(scopeKey(from), p), id);
+      syncOrgGrant(this.db, 'folder', id, c, c.owner_id);
+      if (otherOrg) revokeMembers(this.db, 'folder', id);
+    }
+    this.create(to, target);
     const ids = { path: target, sheets: [] as string[], files: [] as string[] };
     for (const table of ['sheets', 'stored_files'] as const) {
       const inside = underFolder('folder', path);
@@ -110,6 +159,9 @@ export class FolderStore implements Folders {
       const set = this.db.prepare(`UPDATE ${table} SET owner_id = ?, workspace_id = ?, private = ?, folder = ? WHERE id = ?`);
       for (const r of rows) {
         set.run(c.private ? c.owner_id : r.owner_id, c.workspace_id, c.private, rename(r.folder), r.id);
+        const kind = table === 'sheets' ? 'sheet' : 'file';
+        syncOrgGrant(this.db, kind, r.id, c, c.owner_id);
+        if (otherOrg) revokeMembers(this.db, kind, r.id);
         (table === 'sheets' ? ids.sheets : ids.files).push(r.id);
       }
     }

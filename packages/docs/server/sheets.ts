@@ -12,7 +12,8 @@ import { xlsxProblem } from '../shared/xlsxFormat.ts';
 import { validateCharts } from '../shared/chart.ts';
 import type { Backup } from './backup.ts';
 import type { DB } from './db.ts';
-import { canAccess, scopeColumns, scopeMeta, scopeOfRow, scopeWhere, type Owned, type ScopeArg, type ViewerArg } from './scope.ts';
+import { allowed, roleMeta, syncOrgGrant, type Role } from './access.ts';
+import { scopeColumns, scopeMeta, scopeOfRow, scopeWhere, type Owned, type ScopeArg, type ViewerArg } from './scope.ts';
 
 export interface SheetRow extends Owned {
   id: string;
@@ -31,6 +32,8 @@ export interface SheetRow extends Owned {
   branched_at: string | null;
   /** Joined: the parent's current title (null if the parent no longer exists). */
   live_parent_title: string | null;
+  /** Not a column: the role of the viewer the row was read for (`row`), told in its metadata. */
+  role?: Role;
 }
 
 // Every metadata read joins the parent so branch info (current title, detached) is always fresh: the parent is
@@ -46,6 +49,7 @@ const toMeta = (r: SheetRow): SheetMeta => ({
   title: r.title,
   ...(r.folder ? { folder: r.folder } : {}),
   ...scopeMeta(r),
+  ...roleMeta(r.role),
   createdAt: r.created_at,
   updatedAt: r.updated_at,
   ...(r.parent_id
@@ -188,15 +192,17 @@ export class SheetStore {
     return rows.map(toMeta);
   }
 
-  /** A document's row whoever may access it: for the caller to check (canAccess) or to learn its scope. */
+  /** A document's row whoever may access it: for the caller to check (server/access.ts) or to learn its scope. */
   find(id: string): SheetRow | undefined {
     return this.db.prepare(`${SELECT_SHEETS} WHERE s.id = ?`).get(id) as SheetRow | undefined;
   }
 
-  /** A document the viewer may access (server/scope.ts' canAccess), of the kind when one is given. */
-  protected row(who: ViewerArg, id: string, kind?: DocKind): SheetRow | undefined {
+  /** A document the viewer's role on lets them do what `need` allows (server/access.ts), of the kind when one is given. */
+  protected row(who: ViewerArg, id: string, kind?: DocKind, need: Role = 'viewer'): SheetRow | undefined {
     const r = this.find(id);
-    return r && canAccess(who, r) && (!kind || r.kind === kind) ? r : undefined;
+    if (!r || (kind && r.kind !== kind)) return undefined;
+    const role = allowed(this.db, who, 'sheet', r, need);
+    return role ? Object.assign(r, { role }) : undefined;
   }
 
   /** Metadata of a document of any kind. */
@@ -223,6 +229,7 @@ export class SheetStore {
     const c = scopeColumns(scope);
     const owner = c.private ? c.owner_id : r.owner_id;
     this.db.prepare('UPDATE sheets SET owner_id = ?, workspace_id = ?, private = ?, folder = ? WHERE id = ?').run(owner, c.workspace_id, c.private, folder, id);
+    syncOrgGrant(this.db, 'sheet', id, c, typeof who === 'string' ? who : who.userId);
     return toMeta({ ...r, owner_id: owner, workspace_id: c.workspace_id, private: c.private, folder });
   }
 
@@ -240,6 +247,7 @@ export class SheetStore {
     this.db
       .prepare('INSERT INTO sheets (id, owner_id, workspace_id, private, kind, format, title, folder, file, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run(id, c.owner_id, c.workspace_id, c.private, kind, format, title, folder, file, now, now);
+    syncOrgGrant(this.db, 'sheet', id, c, c.owner_id);
     this.backup?.putFile(c.owner_id, kind, id, now, json);
     return { id, kind, ...(format ? { format } : {}), title, ...(folder ? { folder } : {}), ...scopeMeta(c), createdAt: now, updatedAt: now };
   }
@@ -263,7 +271,7 @@ export class SheetStore {
 
   /** Put a document in another folder. */
   move(who: ViewerArg, id: string, folder: string): SheetMeta | null {
-    const r = this.row(who, id);
+    const r = this.row(who, id, undefined, 'editor');
     if (!r) return null;
     this.db.prepare('UPDATE sheets SET folder = ? WHERE id = ?').run(folder, id);
     return toMeta({ ...r, folder });
@@ -287,8 +295,8 @@ export class SheetStore {
     // A branch starts in its original's root (server/scope.ts), next to it.
     const c = scopeColumns(scopeOfRow(this.find(sourceId)!, who));
     const id = this.newId();
-    // A branch starts next to its original.
-    const folder = src.meta.folder ?? '';
+    // A branch starts next to its original (at the top of the viewer's own files, for one shared with them).
+    const folder = c.owner_id === this.find(sourceId)!.owner_id || !c.private ? (src.meta.folder ?? '') : '';
     const format = this.richFormat('sheet', src.workbook);
     const { file, title } = this.newFile(id, 'sheet', format, wanted, folder);
     const json = await this.writeDoc(file, src.workbook);
@@ -300,6 +308,7 @@ export class SheetStore {
          VALUES (?, ?, ?, ?, 'sheet', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(id, c.owner_id, c.workspace_id, c.private, format, title, folder, file, now, now, sourceId, src.meta.title, now);
+    syncOrgGrant(this.db, 'sheet', id, c, c.owner_id);
     this.backup?.putFile(c.owner_id, 'sheet', id, now, json);
     this.backup?.putBase(c.owner_id, id, json);
     return this.get(who, id);
@@ -350,7 +359,7 @@ export class SheetStore {
   }
 
   async save(who: ViewerArg, id: string, workbook: Workbook): Promise<SheetMeta | null> {
-    const r = this.row(who, id, 'sheet');
+    const r = this.row(who, id, 'sheet', 'editor');
     if (!r) return null;
     // An Excel file stays one while the workbook fits; otherwise it is kept in the app's own format rather
     // than lose what was added (the editor asks first; this is for changes made elsewhere).
@@ -371,6 +380,7 @@ export class SheetStore {
    * which holds everything; same id and content. No-op for one in the app's own format already.
    */
   async convertToNative(who: ViewerArg, id: string): Promise<SheetMeta | null> {
+    if (!this.row(who, id, 'sheet', 'editor')) return null;
     const res = await this.load(who, id);
     if (!res) return null;
     if (!res.meta.format) return res.meta;
@@ -381,7 +391,7 @@ export class SheetStore {
 
   /** Keep a presentation or document stored as an Office file in the app's own format instead, which holds everything. */
   async convertToOwnFormat(who: ViewerArg, id: string, kind: 'deck' | 'doc'): Promise<SheetMeta | null> {
-    const r = this.row(who, id, kind);
+    const r = this.row(who, id, kind, 'editor');
     if (!r) return null;
     if (!r.format) return toMeta(r);
     const doc = await this.read<Deck | Doc>(r);
@@ -411,7 +421,7 @@ export class SheetStore {
   }
 
   async saveDeck(who: ViewerArg, id: string, deck: Deck): Promise<SheetMeta | null> {
-    const r = this.row(who, id, 'deck');
+    const r = this.row(who, id, 'deck', 'editor');
     return r ? this.write(r, deck) : null;
   }
 
@@ -430,7 +440,7 @@ export class SheetStore {
   }
 
   async saveDoc(who: ViewerArg, id: string, doc: Doc): Promise<SheetMeta | null> {
-    const r = this.row(who, id, 'doc');
+    const r = this.row(who, id, 'doc', 'editor');
     return r ? this.write(r, doc) : null;
   }
 
@@ -447,14 +457,14 @@ export class SheetStore {
   }
 
   async saveMarkdown(who: ViewerArg, id: string, doc: MarkdownDoc): Promise<SheetMeta | null> {
-    const r = this.row(who, id, 'markdown');
+    const r = this.row(who, id, 'markdown', 'editor');
     return r ? this.write(r, doc) : null;
   }
 
   // --- Any kind ------------------------------------------------------------------
 
   rename(who: ViewerArg, id: string, title: string, kind?: DocKind): SheetMeta | null {
-    const r = this.row(who, id, kind);
+    const r = this.row(who, id, kind, 'editor');
     if (!r) return null;
     const now = new Date().toISOString();
     this.db.prepare('UPDATE sheets SET title = ?, updated_at = ? WHERE id = ?').run(title, now, id);
@@ -463,7 +473,7 @@ export class SheetStore {
   }
 
   async delete(who: ViewerArg, id: string, kind?: DocKind): Promise<boolean> {
-    const r = this.row(who, id, kind);
+    const r = this.row(who, id, kind, 'owner');
     if (!r) return false;
     this.db.prepare('DELETE FROM sheets WHERE id = ?').run(id);
     await this.writeChains.get(id);

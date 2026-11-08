@@ -51,6 +51,28 @@ r=await api(Bo.token,'GET',`/v1/events?workspace=${W}&since=0&limit=500`);t('and
 {const nx=r.j.next;r=await api(Bo.token,'GET',`/v1/events?workspace=${W}&since=${nx}&limit=500`);t('since=next: nothing new',r.s===200&&r.j.events.length===0&&r.j.next===nx,JSON.stringify(r.j).slice(0,120));}
 r=await api(A.token,'GET',`/v1/events?workspace=${W}&since=0&types=chat.reaction.*`);t('a type pattern',r.j.events?.length>=1&&r.j.events.every(e=>e.type.startsWith('chat.reaction.')),JSON.stringify(r.j.events?.map(e=>e.type)));
 {const C=await signup('dee@example.com','Dee');r=await api(C.token,'GET','/v1/events?since=0');t('no account: 403 no_account',r.s===403&&r.j.error?.code==='no_account',r.s+' '+JSON.stringify(r.j).slice(0,100));}
+// ---- artifacts on grants (platform phase 3.4): Ann's app in #secret is nobody else's until she shares it; a viewer opens it by id
+{r=await api(A.token,'GET',`/v1/workspaces/${W}/members`);const bobAcct=(r.j.members??[]).find(m=>m.userId===Bo.user.id)?.accountId;
+ r=await api(A.token,'POST','/v1/artifacts',{channelId:P.id,url:'https://secret-app.example/',name:'Secret plan',app:true});const SA=r.j;t('Ann pins an app in #secret',r.s===201&&!!SA.id&&!!SA.appSecret,r.s+' '+JSON.stringify(r.j).slice(0,100));
+ const AREF=`${W}/chat/artifact/${SA.id}`;
+ r=await api(Bo.token,'GET',`/v1/artifacts/${SA.id}`);t('the artifact is 404 for Bob by id',r.s===404,r.s);
+ r=await api(Bo.token,'POST',`/v1/artifacts/${SA.id}/app-token`);t('the app-token mint refuses a non-member',r.s===404,r.s);
+ r=await api(Bo.token,'PUT',`/v1/artifacts/${SA.id}/grants`,{principal:`account:${bobAcct}`,role:'viewer'});t('Bob cannot share it with himself',r.s===404,r.s);
+ r=await api(A.token,'PUT',`/v1/artifacts/${SA.id}/grants`,{principal:`link:${'x'.repeat(32)}`,role:'viewer'});t('a link grant is not offered yet',r.s===400&&r.j.error?.code==='not_supported',r.s+' '+JSON.stringify(r.j).slice(0,100));
+ r=await api(A.token,'PUT',`/v1/artifacts/${SA.id}/grants`,{principal:`account:${bobAcct}`,role:'viewer'});t('Ann grants Bob viewer',r.s===200&&r.j.role==='owner'&&(r.j.grants??[]).some(g=>g.principal===`account:${bobAcct}`&&g.role==='viewer'),r.s+' '+JSON.stringify(r.j).slice(0,140));
+ r=await api(Bo.token,'GET',`/v1/artifacts/${SA.id}`);t('Bob opens it by id',r.s===200&&r.j.id===SA.id&&!r.j.appSecret,r.s+' '+JSON.stringify(r.j).slice(0,100));
+ r=await api(Bo.token,'GET',`/v1/artifacts/${SA.id}/grants`);t('and reads its grants, as a viewer',r.s===200&&r.j.role==='viewer',r.s+' '+JSON.stringify(r.j).slice(0,100));
+ r=await api(Bo.token,'GET',`/v1/workspaces/${W}/artifacts`);t('the listing stays per channel',r.s===200&&!(r.j.artifacts??[]).some(a=>a.id===SA.id),r.s);
+ let dmLine=null;for(let i=0;i<15&&!dmLine;i++){await sleep(200);r=await api(Bo.token,'GET',`/v1/me/notifications?workspace=${W}`);dmLine=(r.j.notifications??[]).find(n=>(n.message?.body??'').includes(`/?open=artifact%3A${SA.id}`))}
+ t('Bob has the file_shared DM line, with the artifact\'s link',/^Ann shared Secret plan with you\n\S+\/\?open=artifact%3A/.test(dmLine?.message?.body??'')&&dmLine?.message?.systemKind==='file_shared',JSON.stringify(dmLine??r.j).slice(0,160));
+ r=await api(Bo.token,'GET',`/v1/events?workspace=${W}&since=0&types=sharing.granted`);t('and the sharing.granted event',(r.j.events??[]).some(e=>e.data?.ref===AREF&&e.data?.kind==='artifact'&&e.data?.url===`/?open=artifact%3A${SA.id}`),JSON.stringify(r.j).slice(0,160));
+ r=await api(Bo.token,'GET',`/v1/workspaces/${W}/shared-with-me`);t('shared-with-me lists the artifact',(r.j.shares??[]).some(x=>x.ref===AREF&&x.title==='Secret plan'),JSON.stringify(r.j).slice(0,140));
+ r=await api(Bo.token,'DELETE',`/v1/artifacts/${SA.id}`);t('Bob cannot delete it',r.s===403,r.s);
+ r=await api(Bo.token,'POST',`/v1/artifacts/${SA.id}/app-token`);t('nor mint an app token as a viewer',r.s===403,r.s);
+ r=await api(A.token,'DELETE',`/v1/artifacts/${SA.id}/grants/${encodeURIComponent('account:'+bobAcct)}`);t('Ann revokes',r.s===200&&(r.j.grants??[]).length===0,r.s+' '+JSON.stringify(r.j).slice(0,100));
+ r=await api(Bo.token,'GET',`/v1/artifacts/${SA.id}`);t('Bob gets 404 again',r.s===404,r.s);
+ await sleep(500);r=await api(Bo.token,'GET',`/v1/events?workspace=${W}&since=0&types=sharing.revoked`);t('and the sharing.revoked event',(r.j.events??[]).some(e=>e.data?.ref===AREF),JSON.stringify(r.j).slice(0,140));
+ r=await api(A.token,'POST',`/v1/artifacts/${SA.id}/app-token`);t('Ann, a member, still mints',r.s===200&&!!r.j.token,r.s);}
 // ---- subscriptions: durable consumers with a cursor, read by HTTP, long-polled with wait
 {const head=(await api(Bo.token,'GET',`/v1/events?workspace=${W}&since=0&limit=500`)).j;let nx=head.next;while(true){const p=(await api(Bo.token,'GET',`/v1/events?workspace=${W}&since=${nx}&limit=500`)).j;if(!p.events.length){nx=p.next;break}nx=p.next}
  const SP=`/v1/events/subscriptions?workspace=${W}`,sp=(id,q='')=>`/v1/events/subscriptions/${id}?workspace=${W}${q}`;

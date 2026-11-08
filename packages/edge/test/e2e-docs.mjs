@@ -42,4 +42,70 @@ if(process.env.OCR){const md=r.s===200?(await api(A.token,'GET',`/api/markdown/$
 else t('a scan says it needs OCR',r.s===400&&/OCR/.test(r.j.error),r.s+' '+JSON.stringify(r.j).slice(0,160));
 r=await api(Bo.token,'GET',`/api/sheets?workspace=${W2}&shared=1`);t('the other organization is separate',!JSON.stringify(r.j).includes(S),JSON.stringify(r.j).slice(0,100));
 r=await api(null,'GET','/api/sheets');t('no session refused',r.s===401,r.s);
+// Sharing on grants (platform phase 3.2, docs/server/access.ts): Eli joins Dana's organization, which gives him nothing of hers until she shares it.
+r=await api(A.token,'POST',`/v1/workspaces/${W}/invites`,{email:`eli-${tag}@example.com`});r=await api(Bo.token,'POST','/v1/invites/accept',{token:(r.j.inviteUrl??'').split('/').pop()});t('Eli joins the organization',r.s<300,r.s+' '+JSON.stringify(r.j).slice(0,100));
+r=await api(A.token,'GET',`/v1/workspaces/${W}/members`);const eliAcct=(r.j.members??[]).find(m=>m.userId===Bo.user.id)?.accountId;t('the members list carries Eli\'s account',!!eliAcct,JSON.stringify(r.j).slice(0,140));
+r=await api(Bo.token,'GET',`/v1/workspaces/${W}/channels`);const general=(r.j.channels??[]).find(c=>c.name==='general')??(r.j.channels??[])[0];if(general&&!general.isMember)await api(Bo.token,'POST',`/v1/channels/${general.id}/join`);
+// A new file is private wherever it is made (platform phase 3.5): one naming no scope, its organization only in the body as
+// the client sends it, is in My files and not Organization files; Eli's first organization is his own, so it also has to reach W's object.
+r=await api(Bo.token,'POST','/api/sheets',{title:'No scope sheet',workspace:W});const NS=r.j.sheet?.id;
+{const org=(await api(Bo.token,'GET',`/api/library?workspace=${W}&shared=1`)).j,me=(await api(Bo.token,'GET',`/api/library?workspace=${W}`)).j;
+ t('a sheet made with no scope is private: in My files, not Organization files',r.s===200&&!r.j.sheet?.shared&&r.j.sheet?.workspaceId===W&&(me.docs??[]).some(d=>d.id===NS)&&!(org.docs??[]).some(d=>d.id===NS),r.s+' '+JSON.stringify(r.j).slice(0,120));}
+r=await api(A.token,'POST',`/api/sheets?workspace=${W}`,{title:'Private budget'});const P=r.j.sheet?.id;t('Dana makes a private spreadsheet',r.s===200&&!r.j.sheet?.shared,r.s+' '+JSON.stringify(r.j).slice(0,100));
+r=await api(Bo.token,'GET',`/api/sheets/${P}`);t('Eli cannot open it',r.s===404||r.s===403,r.s);
+r=await api(A.token,'PUT',`/api/grants/sheet/${P}?workspace=${W}`,{principal:`account:${eliAcct}`,role:'viewer'});t('Dana shares it with Eli as a viewer',r.s===200&&r.j.grants?.[0]?.role==='viewer',r.s+' '+JSON.stringify(r.j).slice(0,140));
+r=await api(Bo.token,'GET',`/api/sheets/${P}`);const pwb=r.j.workbook;t('Eli opens it, as a viewer',r.s===200&&r.j.sheet?.role==='viewer',r.s+' '+JSON.stringify(r.j).slice(0,120));
+r=await api(Bo.token,'GET',`/api/library?workspace=${W}&scope=shared`);t('it is under Shared with me',(r.j.docs??[]).some(d=>d.id===P),r.s+' '+JSON.stringify(r.j).slice(0,140));
+r=await api(Bo.token,'PUT',`/api/sheets/${P}`,{workbook:pwb});t('Eli cannot change it',r.s===403,r.s+' '+JSON.stringify(r.j).slice(0,100));
+r=await api(A.token,'PUT',`/api/grants/sheet/${P}?workspace=${W}`,{principal:`account:${eliAcct}`,role:'editor'});t('Dana makes Eli an editor',r.s===200,r.s);
+r=await api(Bo.token,'PUT',`/api/sheets/${P}`,{workbook:pwb});t('Eli changes it',r.s===200,r.s+' '+JSON.stringify(r.j).slice(0,100));
+r=await api(A.token,'POST','/api/folders',{workspace:W,name:'Shared Q4'});r=await api(A.token,'GET',`/api/library?workspace=${W}`);const FD=(r.j.folders??[]).find(f=>f.name==='Shared Q4');t('a folder has an object id',!!FD?.id,JSON.stringify(r.j.folders));
+r=await api(A.token,'POST',`/api/docs?workspace=${W}&folder=${encodeURIComponent('Shared Q4')}`,{title:'Inside notes'});const IN=r.j.doc?.id;
+r=await api(Bo.token,'GET',`/api/docs/${IN}`);t('a file in a private folder is not Eli\'s',r.s===404||r.s===403,r.s);
+r=await api(A.token,'PUT',`/api/grants/folder/${encodeURIComponent(FD?.id??'')}?workspace=${W}`,{principal:`channel:${general?.id}`,role:'viewer'});t('Dana shares the folder with #general',r.s===200,r.s+' '+JSON.stringify(r.j).slice(0,120));
+r=await api(Bo.token,'GET',`/api/docs/${IN}`);t('Eli opens the file inside, by inheritance',r.s===200&&r.j.meta?.role==='viewer',r.s+' '+JSON.stringify(r.j).slice(0,100));
+r=await api(A.token,'POST',`/api/decks?workspace=${W}`,{title:'Pitch'});const DK=r.j.deck?.id;
+r=await api(A.token,'POST',`/api/grants/sheet/${DK}/link?workspace=${W}`);const LINK=r.j.url??'';const TOK=LINK.split('/p/')[1];t('Dana makes a link',r.s===200&&!!TOK,r.s+' '+JSON.stringify(r.j).slice(0,120));
+r=await api(null,'GET',`/api/public/${TOK}`);t('anyone opens it, not signed in',r.s===200&&r.j.kind==='deck'&&r.j.title==='Pitch',r.s+' '+JSON.stringify(r.j).slice(0,120));
+{const pg=await fetch(B+new URL(LINK).pathname,{redirect:'manual'});t('its /p/ address answers',pg.status===200||pg.status===301,pg.status);}
+r=await api(A.token,'DELETE',`/api/grants/sheet/${DK}/${encodeURIComponent('link:'+TOK)}?workspace=${W}`);t('Dana removes the link',r.s===200&&!r.j.link,r.s+' '+JSON.stringify(r.j).slice(0,100));
+r=await api(null,'GET',`/api/public/${TOK}`);t('the link stops working',r.s===404,r.s);
+r=await api(A.token,'PUT',`/api/grants/sheet/${P}?workspace=${W}`,{principal:'org',role:'editor'});t('the organization toggle on',r.s===200&&(r.j.grants??[]).some(g=>g.principal==='org'),r.s+' '+JSON.stringify(r.j).slice(0,120));
+r=await api(Bo.token,'GET',`/api/library?workspace=${W}&shared=1`);const inOrg=(r.j.docs??[]).some(d=>d.id===P);r=await api(A.token,'GET',`/api/library?workspace=${W}`);t('it moved to Organization files',inOrg&&!(r.j.docs??[]).some(d=>d.id===P),inOrg);
+r=await api(A.token,'DELETE',`/api/grants/sheet/${P}/org?workspace=${W}`);r=await api(A.token,'GET',`/api/library?workspace=${W}`);const back=(r.j.docs??[]).some(d=>d.id===P);r=await api(Bo.token,'GET',`/api/library?workspace=${W}&shared=1`);t('and back to My files',back&&!(r.j.docs??[]).some(d=>d.id===P),back);
+// The share index (platform phase 3.3): Docs reports each grant to the Org object, which keeps `shares`, publishes
+// sharing.granted / sharing.revoked, notifies the person or posts the card in the channel; a save is docs.file.changed
+// for whoever the file is shared with, read from the index. Fay is a member it is not shared with.
+const Fy=await signup(`fay-${tag}@example.com`,'Fay');r=await api(A.token,'POST',`/v1/workspaces/${W}/invites`,{email:`fay-${tag}@example.com`});await api(Fy.token,'POST','/v1/invites/accept',{token:(r.j.inviteUrl??'').split('/').pop()});
+const evs=async(tok,since,types)=>(await api(tok,'GET',`/v1/events?workspace=${W}&since=${since}&types=${types}`)).j.events??[];
+const since0=0;
+r=await api(A.token,'POST',`/api/sheets?workspace=${W}`,{title:'Q4 plan'});const Q=r.j.sheet?.id;const QREF=`${W}/docs/sheet/${Q}`;
+r=await api(A.token,'PUT',`/api/grants/sheet/${Q}?workspace=${W}`,{principal:`account:${eliAcct}`,role:'viewer'});t('Dana shares Q4 plan with Eli',r.s===200,r.s);
+await sleep(1500);
+r=await api(Bo.token,'GET',`/v1/me/notifications?workspace=${W}`);t('Eli has a notification naming the file',(r.j.notifications??[]).some(n=>/Dana shared Q4 plan with you/.test(n.message?.body??'')&&(n.message?.body??'').includes(`/workspace/s/${Q}`)),r.s+' '+JSON.stringify(r.j).slice(0,160));
+let es=await evs(Bo.token,since0,'sharing.granted');t('sharing.granted is in Eli\'s read, with the reference',es.some(e=>e.data?.ref===QREF&&e.ref?.id===Q&&e.data?.url===`/workspace/s/${Q}`),JSON.stringify(es).slice(0,160));
+es=await evs(Fy.token,since0,'sharing.granted');t('and not in Fay\'s',!es.some(e=>e.data?.ref===QREF),JSON.stringify(es).slice(0,120));
+r=await api(Bo.token,'GET',`/v1/workspaces/${W}/shared-with-me`);t('shared-with-me lists it for Eli',r.s===200&&(r.j.shares??[]).some(x=>x.ref===QREF&&x.title==='Q4 plan'&&x.role==='viewer'&&x.kind==='sheet'),r.s+' '+JSON.stringify(r.j).slice(0,160));
+r=await api(Fy.token,'GET',`/v1/workspaces/${W}/shared-with-me`);t('and not for Fay',r.s===200&&!(r.j.shares??[]).some(x=>x.ref===QREF),r.s+' '+JSON.stringify(r.j).slice(0,100));
+r=await api(Bo.token,'GET',`/v1/channels/${general?.id}/messages`);t('the folder shared with #general left a card with its address',(r.j.messages??[]).some(m=>m.systemKind==='file_shared'&&/Dana shared Shared Q4 with this channel\n\S*\/workspace\/\?withme=1&in=/.test(m.body)),JSON.stringify((r.j.messages??[]).slice(0,2)).slice(0,170));
+r=await api(A.token,'GET',`/api/sheets/${Q}`);const qwb=r.j.workbook;qwb.tabs[0].cells={A1:{v:'7'}};r=await api(A.token,'PUT',`/api/sheets/${Q}`,{workbook:qwb});t('Dana saves a change',r.s===200,r.s+' '+JSON.stringify(r.j).slice(0,100));
+await sleep(1500);
+es=await evs(Bo.token,since0,'docs.file.changed');t('Eli\'s read shows docs.file.changed',es.some(e=>e.data?.ref===QREF&&e.data?.kind==='sheet'&&e.data?.title==='Q4 plan'&&!!e.data?.ownerAccountId),JSON.stringify(es).slice(0,160));
+es=await evs(Fy.token,since0,'docs.file.changed');t('a non-grantee\'s does not',!es.some(e=>e.data?.ref===QREF),JSON.stringify(es).slice(0,120));
+es=await evs(A.token,since0,'docs.file.changed');t('its owner\'s does',es.some(e=>e.data?.ref===QREF),JSON.stringify(es).slice(0,120));
+r=await api(A.token,'DELETE',`/api/grants/sheet/${Q}/${encodeURIComponent('account:'+eliAcct)}?workspace=${W}`);t('Dana stops sharing it',r.s===200,r.s);
+await sleep(1500);
+es=await evs(Bo.token,since0,'sharing.revoked');t('sharing.revoked is in Eli\'s read',es.some(e=>e.data?.ref===QREF),JSON.stringify(es).slice(0,140));
+r=await api(Bo.token,'GET',`/v1/workspaces/${W}/shared-with-me`);t('shared-with-me no longer lists it',r.s===200&&!(r.j.shares??[]).some(x=>x.ref===QREF),JSON.stringify(r.j).slice(0,140));
+r=await api(A.token,'GET',`/api/sheets/${Q}`);const qwb2=r.j.workbook;qwb2.tabs[0].cells={A1:{v:'8'}};await api(A.token,'PUT',`/api/sheets/${Q}`,{workbook:qwb2});await sleep(1000);
+es=await evs(Bo.token,since0,'docs.file.changed');t('docs.file.changed is no longer visible to Eli',!es.some(e=>e.data?.ref===QREF),JSON.stringify(es).slice(0,140));
+// A moved folder re-keys the share index (platform phase 3.4): its object id changes with its root, and Eli's
+// shared-with-me follows.
+const FOLD=`${W}/docs/folder/${FD?.id}`;
+r=await api(Bo.token,'GET',`/v1/workspaces/${W}/shared-with-me`);t('shared-with-me has the folder shared with #general',(r.j.shares??[]).some(x=>x.ref===FOLD),JSON.stringify(r.j).slice(0,160));
+r=await api(A.token,'POST','/api/folders/scope',{path:'Shared Q4',from:{workspace:W},workspace:W,shared:true});t('Dana moves the shared folder to the organization root',r.s===200,r.s+' '+JSON.stringify(r.j).slice(0,120));
+r=await api(A.token,'GET',`/api/library?workspace=${W}&shared=1`);const FNEW=(r.j.folders??[]).find(f=>f.name==='Shared Q4')?.id;const FREF=`${W}/docs/folder/${FNEW}`;
+await sleep(1500);
+r=await api(Bo.token,'GET',`/v1/workspaces/${W}/shared-with-me`);t('Eli\'s shared-with-me lists the new reference and not the old',!!FNEW&&FNEW!==FD?.id&&(r.j.shares??[]).some(x=>x.ref===FREF&&x.kind==='folder')&&!(r.j.shares??[]).some(x=>x.ref===FOLD),FNEW+' '+JSON.stringify(r.j).slice(0,200));
+r=await api(Bo.token,'GET',`/v1/channels/${general?.id}/messages`);t('the move posts no second card',(r.j.messages??[]).filter(m=>m.systemKind==='file_shared'&&/Shared Q4/.test(m.body)).length===1,JSON.stringify((r.j.messages??[]).filter(m=>m.systemKind==='file_shared').map(m=>m.body)).slice(0,170));
 console.log(`\n${pass} passed, ${fail} failed`);process.exit(fail?1:0);

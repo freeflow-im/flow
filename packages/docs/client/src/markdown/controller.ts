@@ -51,9 +51,12 @@ export class MarkdownController {
     for (const l of this.listeners) l();
   }
 
+  /** A file shared with the user as a viewer (server/access.ts): its text is shown, not changed. */
+  readOnly = false;
+
   /** The user typed: take the textarea's text. */
   setText(text: string): void {
-    if (text === this.text) return;
+    if (this.readOnly || text === this.text) return;
     this.text = text;
     this.emit();
   }

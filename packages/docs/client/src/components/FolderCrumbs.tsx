@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { folderTrail } from '../../../shared/folders.ts';
 import { useAuth } from '../auth.tsx';
-import { fromList, listingHref, returnTo } from '../listing.ts';
+import { fromList, last, listingHref, returnTo, sharedFileCrumbs } from '../listing.ts';
 
 export { lastListingHref } from '../listing.ts';
 
@@ -9,8 +9,24 @@ export { lastListingHref } from '../listing.ts';
  * Breadcrumbs for an open file: the top of the library and each folder down to the one the file is in,
  * each a link back to the file list there. The file's own name follows them in the page header.
  */
-export function FolderCrumbs({ folder, onLeave, file }: { folder?: string; onLeave?: () => void; /** The FreeFlow suite: the file's root (SheetMeta's workspaceId and shared), which the first crumb names. */ file?: { workspaceId?: string; shared?: true } }) {
+export function FolderCrumbs({ folder, onLeave, file }: { folder?: string; onLeave?: () => void; /** The FreeFlow suite: the file's root (SheetMeta's workspaceId and shared), which the first crumb names. */ file?: { workspaceId?: string; shared?: true; role?: string } }) {
   const { local, suite } = useAuth();
+  // A file another member shared with the user (it has a role, and is not the organization's): its crumbs start at
+  // Shared with me and name none of the owner's folders above the one shared (listing.ts sharedFileCrumbs).
+  if (suite && !local && file?.role && !file.shared) {
+    return (
+      <nav className="folder-crumbs" aria-label="Folder">
+        {sharedFileCrumbs(folder ?? '', last()).map((c) => (
+          <span key={c.href}>
+            <Link to={c.href} onClick={onLeave} title={`Back to ${c.name}`}>
+              {c.name}
+            </Link>
+            <span className="crumb-sep">/</span>
+          </span>
+        ))}
+      </nav>
+    );
+  }
   // A scratch pad leads back to the folder it was opened from: these lists move the window there (HomePage).
   const back = local ? returnTo() : null;
   if (back) folder = back.folder;

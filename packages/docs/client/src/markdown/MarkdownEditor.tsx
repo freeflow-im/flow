@@ -92,6 +92,7 @@ export const MarkdownEditor = memo(function MarkdownEditor({ ctl, editorRef, pre
     <textarea
       ref={editorRef}
       className="md-editor"
+      readOnly={ctl.readOnly}
       spellCheck
       aria-label="Markdown text"
       placeholder="# Start writing Markdown…"
