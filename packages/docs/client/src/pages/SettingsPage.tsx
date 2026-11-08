@@ -9,6 +9,7 @@
 // model provider's own web search.
 import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { activeOrganizationId } from '../suite.ts';
 import { ANTHROPIC_MODELS, OPENAI_MODELS, OPENROUTER_MODELS, type AssistantProvider, type AssistantSettings, type AssistantSettingsUpdate, type KeyProvider } from '../../../shared/agent/protocol.ts';
 import type { ConnectedAgent, NewFilesSettings, NewFilesUpdate } from '../../../shared/types.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
@@ -130,6 +131,7 @@ export function SettingsPage() {
                 : saved.builtIn
                   ? 'The assistant runs on the built-in model unless you choose Anthropic, OpenAI or OpenRouter here, billed to your own API key. Keys are stored encrypted and never shown again.'
                   : 'The assistant runs on your own Anthropic, OpenAI or OpenRouter API key, billed to that account. Keys are stored encrypted and never shown again.'}
+              {activeOrganizationId() && ' These settings are for the organization selected in the bar; each organization keeps its own.'}
             </p>
           )}
           {saved && saved.provider === 'default' && !saved.builtIn && (
