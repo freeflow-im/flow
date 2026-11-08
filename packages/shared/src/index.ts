@@ -7,3 +7,5 @@ export * from './backend.js';
 export * from './desktop.js';
 export * from './platform.js';
 export * from './grants.js';
+export * from './manifests.js';
+export * from './addresses.js';

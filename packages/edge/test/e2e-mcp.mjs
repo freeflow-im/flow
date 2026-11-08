@@ -9,6 +9,7 @@
 // origin (http://localhost:18799), which is the OAuth issuer and resource.
 import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
+import { APP_MANIFESTS } from '@flow/shared/manifests';
 const log=process.argv[2]; const B=process.env.B??'http://localhost:18799';
 let pass=0,fail=0; const t=(n,ok,d='')=>{ok?pass++:fail++;console.log((ok?'ok  ':'FAIL')+' '+n+(d?': '+String(d).slice(0,170):''));};
 const api=async(tok,m,p,b,type,extra={})=>{const r=await fetch(B+p,{method:m,redirect:'manual',headers:{...extra,...(tok?{authorization:'Bearer '+tok}:{}),...(b!==undefined?{'content-type':type??'application/json'}:{})},body:b===undefined?undefined:(type?b:JSON.stringify(b))});const x=await r.text();let j;try{j=JSON.parse(x)}catch{j=x}return{s:r.status,j,h:r.headers}};
@@ -71,7 +72,9 @@ r=await decide({p:C.p,csrf:C.csrf,org:A,allow:'yes'},{...cookie(U),origin:B});co
 t('allowing Acme goes back to the client with a code',r.s===302&&back.origin==='http://localhost:51234'&&back.searchParams.get('code')&&back.searchParams.get('state')==='xyz'&&back.searchParams.get('iss')===B,r.s+' '+back.href.slice(0,120));
 r=await api(null,'POST','/oauth/token',form({grant_type:'authorization_code',code:back.searchParams.get('code'),code_verifier:'wrong-verifier-wrong-verifier-wrong-verifier',client_id:CLIENT}),'application/x-www-form-urlencoded');t('a wrong PKCE verifier is refused',r.s===400&&r.j.error==='invalid_grant',JSON.stringify(r.j));
 r=await api(null,'POST','/oauth/token',form({grant_type:'authorization_code',code:back.searchParams.get('code'),code_verifier:VER,client_id:CLIENT,redirect_uri:'http://localhost:51234/callback'}),'application/x-www-form-urlencoded');
-let TOK=r.j;t('the code exchanges for tokens',r.s===200&&TOK.access_token&&TOK.refresh_token&&TOK.scope==='files:read files:write mail:read mail:write calendar:read calendar:write events:read',r.s+' '+TOK.scope);
+// Every consent group that starts ticked, from the manifests (the first four apps' and any added since); never sending.
+const TICKED=APP_MANIFESTS.flatMap((m)=>m.scopes??[]).filter((g)=>g.checkedByDefault).flatMap((g)=>g.scopes).join(' ');
+let TOK=r.j;t('the code exchanges for tokens',r.s===200&&TOK.access_token&&TOK.refresh_token&&TOK.scope===TICKED,r.s+' '+TOK.scope);
 
 // --- MCP, as Uma in Acme --------------------------------------------------------------------------------------------------
 let rpcId=0;
@@ -165,5 +168,13 @@ await sleep(5200);
 r=await api(null,'POST','/oauth/token',form({grant_type:'urn:ietf:params:oauth:grant-type:device_code',device_code:dev.device_code,client_id:CLIENT}),'application/x-www-form-urlencoded');
 t('the device gets its tokens',r.s===200&&r.j.access_token,JSON.stringify(r.j).slice(0,100));
 if(r.j.access_token){const x=await call(r.j.access_token,'list_files',{});t('for Bravo',JSON.stringify(x.v).includes(SB),x.s);}
+
+// --- The tool registry's bridge door (platform phase 6.2): an agent reads the definitions its bridge lists -----------------
+r=await api(O.token,'POST',`/v1/workspaces/${A}/agent-invites`,{});
+r=await api(null,'POST','/v1/agents/redeem',{code:r.j.code,username:`regbot${tag}`,key:'a-long-agent-key-for-the-registry-test',name:'Registry'});const AGT=r.j.agentToken;
+r=await api(AGT,'GET','/v1/tools?door=bridge');const bt=r.j.tools??[];const td=(n)=>bt.find((x)=>x.name===n);
+t('GET /v1/tools?door=bridge as an agent lists send_message and respond_to_event with input schemas',r.s===200&&td('send_message')?.input?.type==='object'&&!!td('send_message').input.properties?.text&&td('respond_to_event')?.input?.properties?.response?.enum?.includes('accepted')&&bt.every((x)=>x.doors.includes('bridge')&&x.kind==='server'),r.s+' '+JSON.stringify(bt.map((x)=>x.name)).slice(0,160));
+r=await api(AGT,'GET','/v1/tools?door=assistant');t('only the bridge door is served there',r.s===400,r.s);
+r=await api(null,'GET','/v1/tools?door=bridge');t('and not without a token',r.s===401,r.s);
 
 console.log(`\n${pass} passed, ${fail} failed`);process.exit(fail?1:0);

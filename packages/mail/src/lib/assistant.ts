@@ -1,5 +1,5 @@
 // The assistant in Mail, its pure parts: what each turn says the user is looking at (the `mail` context), the ids the
-// mail tools use, the browser tools Mail runs (open_mail_message; Docs' own are refused), and what the chat links to
+// mail tools use, the browser tools Mail runs (open_mail_message), and what the chat links to
 // (a draft the assistant made, a file it saved to Docs). The panel is components/AssistantPanel.tsx, the turns
 // hooks/assistant.ts.
 import type { MessageDetail, MessageSummary } from '../api';
@@ -126,8 +126,8 @@ export function savedFileOf(item: ToolItem): { href: string; name: string } | nu
 export const CHANGES_MAIL = new Set(['create_mail_draft']);
 
 /**
- * Runs the browser tools the assistant asked for, in Mail: open_mail_message shows the message; the tools of a file open
- * in Docs cannot run here, and say so (the model then uses its other tools).
+ * Runs the browser tools the assistant asked for, in Mail: open_mail_message shows the message. The server offers a turn
+ * from Mail only Mail's browser tools (the tool registry, platform.md §5.4); anything else is answered as unknown.
  */
 export async function runMailClientCalls(calls: ClientToolCall[], show: (ref: MessageRef) => boolean | Promise<boolean>): Promise<ClientToolResult[]> {
   const results: ClientToolResult[] = [];
@@ -139,11 +139,7 @@ export async function runMailClientCalls(calls: ClientToolCall[], show: (ref: Me
       else results.push({ id: call.id, content: JSON.stringify({ opened: messageId(ref) }) });
       continue;
     }
-    results.push({
-      id: call.id,
-      content: `${call.name} works on a file open in FreeFlow Docs, and the user is in Mail. Use the mail tools, or the tools that read and make files by id (list_docs, read_other_doc, read_other_sheet, create_doc and the like), or give the user a link to open the file in Docs.`,
-      isError: true,
-    });
+    results.push({ id: call.id, content: `Unknown tool ${call.name}.`, isError: true });
   }
   return results;
 }

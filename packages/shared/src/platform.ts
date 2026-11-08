@@ -250,17 +250,71 @@ export interface DomainDTO {
 export const APP_SCOPES = ['organization', 'account'] as const;
 export type AppScope = (typeof APP_SCOPES)[number];
 
+/** A suite-bar tab's badge: Chat's unread count, Mail's (drawn only on Mail's own bar), or none (§6.1). Each bar keeps its own source for the number. */
+export type AppTabBadge = 'chat-unread' | 'mail-unread' | 'none';
+
+/**
+ * One checkbox of the MCP consent page (§6.1): a group of the app's scopes, its title and what it lets an agent do,
+ * on or off until the person changes it. `readOnly` is the text when the client asked for none of the group's
+ * `:write` scopes.
+ */
+export interface AppScopeGroup {
+  id: string;
+  label: string;
+  detail: string;
+  scopes: string[];
+  checkedByDefault: boolean;
+  warning?: string;
+  readOnly?: { label: string; detail: string };
+}
+
+/**
+ * A page the Worker serves for one of the app's paths (a Hono pattern), from `_pages/<html>`. `signIn`: a stranger is
+ * sent to sign in. `headers`: added to the page. `passFiles`: a name with an extension under it is a built file, not
+ * the page, and falls through.
+ */
+export interface AppPage {
+  path: string;
+  html: string;
+  signIn?: boolean;
+  headers?: Record<string, string>;
+  passFiles?: boolean;
+}
+
 /** One declaration per app, read by the shell, the registry and the consent
  * page (§6.1). `events` lists the types it publishes into the organization's log. */
 export interface AppManifest {
   name: string;
-  path: string;
+  /** Where its client lives; none for an app without a page (Events). */
+  path?: string;
   scope: AppScope;
   object?: { className: string; migrationTag: string };
-  kinds: { kind: string; container?: boolean }[];
+  /** Its Hono module, `src/routes/<routes>.ts` in the Worker. */
+  routes?: string;
+  /**
+   * The object and container kinds it owns, each with its reference resolver (§5.3, GET /v1/references): `org`, the Org
+   * object answers (Chat's own kinds, and anything in the share index); `app`, this app's object is asked for what the
+   * share index does not hold. A kind without one is not resolved for anyone (Mail's: mail is not shareable). An
+   * account-scoped app's `app` kinds are asked of the object of the account their id begins with (`<accountId>:<rest>`),
+   * else of the reader's own; the object answers `describe(caller, channelIds, kind, id)`.
+   *
+   * `address` is where one opens, a path with `{id}` (`/contacts/?contact={id}`), `icon` its chip's glyph and `label` what
+   * a chip calls it: @flow/shared/addresses reads them for the kinds it has no entry of its own for.
+   */
+  kinds: { kind: string; container?: boolean; resolve?: 'org' | 'app'; address?: string; icon?: string; label?: string }[];
+  /** Its tools, by name: their definitions are @flow/shared/tools' TOOL_DEFINITIONS (§5.4). */
   tools?: string[];
-  scopes?: string[];
-  tab?: { label: string; shortcut?: string };
-  client?: { dist: string; basePath: string };
+  /** The consent page's groups for its scopes, in the order the page lists them. */
+  scopes?: AppScopeGroup[];
+  /**
+   * What it gives the assistant (§5.5): the `context.page` values its pages send with a turn. A turn from one of them is
+   * offered this app's browser tools (the registry's), beside every server tool.
+   */
+  assistant?: { pages: string[] };
+  /** The suite-bar entry; `shortcut` is the digit after ⌘. */
+  tab?: { label: string; shortcut: string; badge?: AppTabBadge };
+  /** The Vite build folder (from the repository's root) and the path it is served under. `optional`: a deploy may lack it. */
+  client?: { dist: string; basePath: string; optional?: boolean };
+  pages?: AppPage[];
   events: string[];
 }

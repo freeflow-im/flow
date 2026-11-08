@@ -9,6 +9,7 @@
 // Which tools a token gets is its scopes' (`mailToolsFor`): mail:read lists, searches and reads; mail:write organises and
 // drafts; mail:send sends; saving an attachment to Docs needs files:write too. A tool the scopes do not allow is not listed.
 import { z } from 'zod4';
+import { register } from '../registry';
 import type { Address, MailFolder, MessageDetail, MessageSummary } from './convert';
 import { bodyText, formatAddress, markdownToHtml, parseAddress, prefill, truncateText } from './mailText';
 
@@ -548,3 +549,20 @@ export function validateMailInput(tool: MailTool, input: unknown): Record<string
 /** What an agent is told about the Mail tools, for the server's instructions. */
 export const MAIL_INSTRUCTIONS =
   "Mail: the user's own email accounts in FreeFlow Mail (the same whichever organization was chosen). search_mail finds messages (Gmail search syntax on Gmail accounts) and returns ids; read_mail reads them (without marking them read). Message ids are opaque: copy them exactly. To answer or write an email, make a draft with create_mail_draft for the user to review and send, unless the user explicitly asked you to send it and send_mail is available. save_mail_attachment_to_docs puts an attachment in Docs, where the Docs tools read it.";
+
+// The registry (platform.md §5.4): each Mail tool, at /mcp and (the assistant's four) in the assistant, on the caller's own
+// Mail object. The assistant lists its tools whether or not this Worker has Mail for the person, and says so when not.
+for (const t of MAIL_TOOLS) {
+  register<{ mail?: MailToolContext }>('mail', t.name, {
+    run: (ctx, input) => {
+      if (!ctx.mail) throw new MailToolError('Mail is not available here.');
+      return t.run(ctx.mail, input);
+    },
+    shape: t.shape,
+    title: t.title,
+    annotations: t.annotations,
+    refusal: (e) => e instanceof MailToolError,
+    failure: () => 'The mail server could not do that just now. Try again in a moment.',
+    needs: 'mail',
+  }, (ASSISTANT_MAIL_TOOLS as readonly string[]).includes(t.name) ? ['mcp', 'assistant'] : ['mcp']);
+}

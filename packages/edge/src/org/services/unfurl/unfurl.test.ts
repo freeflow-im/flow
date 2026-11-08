@@ -6,6 +6,15 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { FetchError, guardedFetch } from './fetcher.js';
 import { assertPublicUrl, SsrfError } from './ssrf.js';
 import { UnfurlQueue } from './queue.js';
+import { isOwnAddress } from './index.js';
+
+describe('own addresses (platform phase 6.4)', () => {
+  it('are references, not pages to fetch: a FreeFlow address on the suite’s origin is skipped, anything else is not', () => {
+    const own = (u: string) => isOwnAddress(u, 'org1', 'https://app.freeflow.im');
+    expect(['https://app.freeflow.im/workspace/s/abc', 'https://app.freeflow.im/?open=artifact%3Aa1', 'https://app.freeflow.im/calendar/?event=e1'].map(own)).toEqual([true, true, true]);
+    expect(['https://example.com/workspace/s/abc', 'https://app.freeflow.im/pricing', 'https://app.freeflow.im/?open=admin'].map(own)).toEqual([false, false, false]);
+  });
+});
 
 describe('assertPublicUrl', () => {
   const refused = (u: string) => expect(() => assertPublicUrl(new URL(u))).toThrow(SsrfError);

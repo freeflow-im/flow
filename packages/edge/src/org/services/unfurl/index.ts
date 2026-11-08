@@ -5,6 +5,7 @@
 // republishes it as `message.updated` so connected clients patch in place.
 import { and, eq, gt, isNull, inArray } from 'drizzle-orm';
 import type { MessageDTO, UnfurlDTO } from '@flow/shared';
+import { referenceOf } from '@flow/shared/addresses';
 import { config } from '../../config.js';
 import { db } from '../../db/index.js';
 import {
@@ -263,6 +264,15 @@ async function republish(messageId: string): Promise<void> {
 }
 
 /**
+ * A FreeFlow address on the suite's own origin (platform.md §5.3, phase 6.4): it is not fetched. The address is the
+ * reference, kept in the body; each reader's client resolves it into a chip through GET /v1/references, so what a
+ * private object is called is never fetched for one person and shown to another.
+ */
+export function isOwnAddress(url: string, workspaceId: string, origin = config.webUrlBase): boolean {
+  return referenceOf(url, { origin, organizationId: workspaceId }) !== null;
+}
+
+/**
  * §1: extract candidate links and queue them. Never throws — a failure here
  * must not affect the message that triggered it.
  */
@@ -275,6 +285,7 @@ export async function scheduleForMessage(msg: MessageDTO): Promise<void> {
 
     let position = 0;
     for (const url of urls) {
+      if (isOwnAddress(url, gate.workspaceId)) continue;
       const hash = urlHash(url);
       const host = new URL(url).hostname;
       if (isDenied(host, gate.denylist)) continue;

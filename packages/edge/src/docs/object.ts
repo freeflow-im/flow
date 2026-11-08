@@ -4,7 +4,7 @@ import { DurableObject } from 'cloudflare:workers';
 import type { Directory } from '../directory/object';
 import { formatReference, type AccountDTO } from '@flow/shared';
 import type { CallerContext } from '../org/routes/compat';
-import { currentOrganization, withDocsContext, type DocsContext } from './runtime/context.ts';
+import { withDocsContext, type DocsContext } from './runtime/context.ts';
 import { DocsApp, type Caller, type DocsRequest } from './runtime/fastify.ts';
 import { buildApp } from './server/app.ts';
 import { insertRows, tableCounts } from '../importing';
@@ -14,11 +14,10 @@ import { handleMcp, handleMcpImport, suiteHub, type McpRequestCaller } from './p
 import type { FileHub } from './plugin/server/files.ts';
 import { DatabaseSync } from './runtime/sqlite.ts';
 import { PREVIEW_TTL_MS, Previews } from './server/previews.ts';
-import { importBytes, type ImportStores } from './server/importFile.ts';
-import type { MailToolContext } from '../imap/mailTools.ts';
 import { lazySubscriptions, subscriptionsAs, type SubscriptionOps } from '../events/subscriptions.ts';
-import { docsAddress } from './addresses.ts';
+import { addressOf } from '@flow/shared/addresses';
 import { calendarRequest, type AccountCaller } from '../calendar/forward';
+import { appToolContexts } from '../apps';
 import type { FileChange, GrantChange } from './server/app.ts';
 
 export interface DocsEnv {
@@ -37,6 +36,8 @@ export interface DocsEnv {
   /** The organizations' event logs and Chat objects: the MCP endpoint's event tools read subscriptions as the caller's account. */
   EVENTS?: DurableObjectNamespace<import('../events/object').Events>;
   ORG?: DurableObjectNamespace<import('../org/object').Org>;
+  /** The assistant's objects, one per account (src/assistant/object.ts): the person's own OpenAI key, for edit_image. */
+  ASSISTANT?: DurableObjectNamespace<import('../assistant/object').Assistant>;
 }
 const BASE = '/workspace';
 /** A file's saves publish `docs.file.changed` at most this often, so a typing session does not flood the log. */
@@ -51,8 +52,6 @@ export class Docs extends DurableObject<DocsEnv> {
   private readonly ready: Promise<unknown>;
   /** The MCP endpoint's view of this object's stores (plugin/server/worker.ts), made once the app has opened them. */
   private hub: FileHub | null = null;
-  /** Where the assistant's save_mail_attachment_to_docs imports to: the app's own stores, once it has opened them. */
-  private importStores: ImportStores | null = null;
   /** When each file last published `docs.file.changed` (in memory: an evicted object may publish one more). */
   private readonly changedAt = new Map<string, number>();
   /** Owners' accounts in an organization, asked of the directory once each. */
@@ -90,7 +89,6 @@ export class Docs extends DurableObject<DocsEnv> {
       dataDir: 'data',
       logger: false,
       appUrl: base,
-      agent: { jobs: false, mail: (userId: string, scope: unknown) => this.assistantMail(userId, scope, base, currentOrganization()), calendar: (userId: string) => this.assistantCalendar(userId, base, currentOrganization()) },
       host: {
         app: this.app,
         basePath: BASE,
@@ -111,7 +109,13 @@ export class Docs extends DurableObject<DocsEnv> {
         onFileChanged: (change: FileChange) => this.fileChanged(change),
         stores: (stores: Parameters<typeof suiteHub>[0]) => {
           this.hub = suiteHub(stores, `${base}/workspace`);
-          if (stores.sheets && stores.images && stores.files) this.importStores = { sheets: stores.sheets, images: stores.images, files: stores.files };
+        },
+        // The assistant is the account's Assistant object (src/assistant/object.ts): no chats, settings or usage here.
+        assistant: {
+          openaiKey: async (req: DocsRequest) => {
+            const ns = this.env.ASSISTANT, accountId = req.caller.accountId, userId = req.caller.userId;
+            return ns && accountId && userId ? ns.get(ns.idFromName(accountId)).openaiKey(userId) : null;
+          },
         },
       },
     });
@@ -163,7 +167,7 @@ export class Docs extends DurableObject<DocsEnv> {
         ref: { organizationId: c.workspaceId, app: 'docs', kind: c.kind, id: c.id },
         audience: `ref:${ref}`,
         ts: new Date(now).toISOString(),
-        data: { ref, kind: c.fileKind, id: c.id, title: c.title, ownerAccountId, url: docsAddress({ organizationId: c.workspaceId, app: 'docs', kind: c.kind, id: c.id }, c.fileKind) },
+        data: { ref, kind: c.fileKind, id: c.id, title: c.title, ownerAccountId, url: addressOf({ organizationId: c.workspaceId, app: 'docs', kind: c.kind, id: c.id }, c.fileKind) },
       }),
     );
     this.ctx.waitUntil(sent.catch((err: Error) => console.error(`[docs] docs.file.changed for ${ref}: ${err.message}`)));
@@ -209,6 +213,27 @@ export class Docs extends DurableObject<DocsEnv> {
     return { added };
   }
 
+  /**
+   * A page of the assistant's rows as they were kept here before the Assistant object (agent_conversations,
+   * assistant_settings, agent_usage), for the one-time move (routes/admin.ts, POST /v1/admin/assistant/migrate). Left in
+   * place: they are the rollback.
+   */
+  async assistantRows(table: 'agent_conversations' | 'assistant_settings' | 'agent_usage', offset = 0, limit = 200): Promise<Record<string, unknown>[]> {
+    if (!['agent_conversations', 'assistant_settings', 'agent_usage'].includes(table)) throw new Error(`not an assistant table: ${table}`);
+    return withDocsContext(this.context, async () => {
+      await this.ready;
+      return this.ctx.storage.sql.exec(`SELECT * FROM ${table} ORDER BY rowid LIMIT ? OFFSET ?`, Math.max(1, Math.min(limit, 1000)), Math.max(0, offset)).toArray();
+    });
+  }
+
+  /** A page of one conversation's messages, in their order, for the same move. */
+  async assistantMessages(conversationId: string, offset = 0, limit = 200): Promise<Record<string, unknown>[]> {
+    return withDocsContext(this.context, async () => {
+      await this.ready;
+      return this.ctx.storage.sql.exec('SELECT * FROM agent_messages WHERE conversation_id = ? ORDER BY id LIMIT ? OFFSET ?', conversationId, Math.max(1, Math.min(limit, 1000)), Math.max(0, offset)).toArray();
+    });
+  }
+
   /** Row counts per table, to compare an import with its source. */
   async counts(): Promise<Record<string, number>> {
     return withDocsContext(this.context, async () => { await this.ready; return tableCounts(this.ctx.storage.sql); });
@@ -216,32 +241,7 @@ export class Docs extends DurableObject<DocsEnv> {
 
   /** A request to /mcp, authenticated by the Worker against the directory (routes/mcp.ts), as `caller` in this organization. */
   async mcp(request: Request, caller: McpRequestCaller): Promise<Response> {
-    return this.inOrganization(caller.orgId, () => handleMcp(request, this.hub!, caller, this.mailOf(caller.userId, caller.origin, caller.orgId), this.calendarOf(caller.userId, caller.origin, caller.orgId), this.eventsOf(caller.userId, caller.orgId), this.memberOf(caller.orgId)));
-  }
-
-  /**
-   * The assistant's mail tools (server/agent/tools.ts): the Mail object of the person's account here, and saving an attachment into the
-   * chat's scope (their My files in this organization) with the importer the preview's Save to Docs uses.
-   */
-  private assistantMail(userId: string, scope: unknown, origin: string, organizationId: string | undefined): MailToolContext | undefined {
-    const mail = organizationId ? this.mailOf(userId, origin, organizationId) : undefined;
-    const stores = this.importStores;
-    if (!mail) return undefined;
-    return {
-      mail,
-      origin,
-      ...(stores
-        ? {
-            saveToDocs: async (bytes: Buffer, filename: string) => {
-              const made = await importBytes(stores, scope as never, bytes, filename, undefined);
-              const file = made.sheet
-                ? { id: made.sheet.id, kind: made.sheet.kind, title: made.sheet.title, [made.sheet.kind === 'deck' ? 'deck_id' : made.sheet.kind === 'sheet' ? 'sheet_id' : 'doc_id']: made.sheet.id }
-                : { id: made.file!.id, kind: 'file', file_id: made.file!.id, filename: made.file!.filename, type: made.file!.type };
-              return { file, warnings: made.warnings ?? [] };
-            },
-          }
-        : {}),
-    };
+    return this.inOrganization(caller.orgId, () => handleMcp(request, this.hub!, caller, this.mailOf(caller.userId, caller.origin, caller.orgId), this.calendarOf(caller.userId, caller.origin, caller.orgId), this.eventsOf(caller.userId, caller.orgId), this.memberOf(caller.orgId), appToolContexts(this.env, this.accountCaller(caller.userId, caller.orgId), caller.origin)));
   }
 
   /**
@@ -310,12 +310,6 @@ export class Docs extends DurableObject<DocsEnv> {
       if (!who?.account) throw Object.assign(new Error('no account in this organization'), { status: 403 });
       return subscriptionsAs(events.get(events.idFromName(organizationId)), org.get(org.idFromName(organizationId)), who.account.id, userId, who.account.role, organizationId);
     });
-  }
-
-  /** The assistant's Calendar tools (server/agent/tools.ts): the Calendar object of the person's account here. */
-  private assistantCalendar(userId: string, origin: string, organizationId: string | undefined): import('../calendar/calendarTools').CalendarToolContext | undefined {
-    const calendar = organizationId ? this.calendarOf(userId, origin, organizationId) : undefined;
-    return calendar && organizationId ? { calendar, origin, member: this.memberOf(organizationId) } : undefined;
   }
 
   /** An agent's upload to the address upload_file gave it; the ticket in it is the credential. */

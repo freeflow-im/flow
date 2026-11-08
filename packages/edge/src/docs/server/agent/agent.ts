@@ -3,7 +3,7 @@
 // the browser. Account tools run here; sheet tools run in the browser against the live spreadsheet,
 // so when Claude calls one the turn pauses: the browser runs it and posts the results to resume.
 import Anthropic from '@anthropic-ai/sdk';
-import { chatScope, CLIENT_TOOLS, HOME_CHAT, IMAGE_MEDIA_TYPES, isChatScope, MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE, type AgentEvent, type AgentImage, type AgentTurnRequest, type ChatItem, type ClientToolCall, SHOWN_RESULTS } from '../../shared/agent/protocol.ts';
+import { chatScope, HOME_CHAT, IMAGE_MEDIA_TYPES, isChatScope, MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE, type AgentEvent, type AgentImage, type AgentTurnRequest, type ChatItem, type ClientToolCall, SHOWN_RESULTS } from '../../shared/agent/protocol.ts';
 import { STORED_IMAGE_RE } from '../../shared/types.ts';
 import type { SheetStore } from '../sheets.ts';
 import { providerSearch, type ProviderSearch } from './llmSearch.ts';
@@ -15,8 +15,12 @@ import { AgentNotFoundError, type ClaudeAgentDriver } from './claudeAgent.ts';
 import type { FileStore } from '../files.ts';
 import type { ImageStore } from '../images.ts';
 import type { PdfMaker } from '../pdf.ts';
-import { runServerTool, TOOL_DEFS, TOOL_DEFS_WITHOUT_JOBS, ToolFailure, validateToolInput } from './tools.ts';
+import { assistantTools, isBrowserTool, runServerTool, ToolFailure, validateToolInput } from './tools.ts';
 import { scopeOf, type ScopeArg, type ViewerArg } from '../scope.ts';
+import { APP_MANIFESTS } from '@flow/shared/manifests';
+
+/** The pages a turn may come from (Edge only): every app's `assistant.pages`. */
+const ASSISTANT_PAGES: ReadonlySet<string> = new Set(APP_MANIFESTS.flatMap((m) => m.assistant?.pages ?? []));
 
 type Message = Anthropic.Beta.BetaMessage;
 type ToolUse = Anthropic.Beta.BetaToolUseBlock;
@@ -58,6 +62,10 @@ export interface AgentOptions {
   mail?: (userId: string, scope: ScopeArg) => import('../../../imap/mailTools.ts').MailToolContext | undefined;
   /** Edge only: the user's own calendars, for the Calendar tools (list_events, create_event and the rest). */
   calendar?: (userId: string) => import('../../../calendar/calendarTools.ts').CalendarToolContext | undefined;
+  /** Edge only: the organization's Docs over HTTP, for Docs' tools in the suite's Assistant object; given the chat's scope. */
+  docs?: (userId: string, scope: ScopeArg) => import('../../../assistant/docsTools.ts').DocsToolContext | undefined;
+  /** Edge only: the objects of the apps added by manifest (apps.ts), by name, for their tools. */
+  apps?: (userId: string) => Record<string, import('../../../apps.ts').AppToolContext> | undefined;
 }
 
 /** The model the live assistant runs on. Set AGENT_MODEL (e.g. claude-opus-5-5) to change it per deployment. */
@@ -90,6 +98,8 @@ export class AgentService {
   private claudeAgent: ClaudeAgentDriver | null;
   private mail: AgentOptions['mail'];
   private calendar: AgentOptions['calendar'];
+  private docs: AgentOptions['docs'];
+  private apps: AgentOptions['apps'];
   /** Users with a turn in progress (one at a time per user). */
   private busy = new Set<string>();
 
@@ -107,6 +117,8 @@ export class AgentService {
     this.claudeAgent = opts.claudeAgent ?? null;
     this.mail = opts.mail;
     this.calendar = opts.calendar;
+    this.docs = opts.docs;
+    this.apps = opts.apps;
     this.dailyLimit = opts.dailyRequestLimit ?? Number(process.env.AGENT_DAILY_REQUEST_LIMIT ?? 500);
   }
 
@@ -150,7 +162,8 @@ export class AgentService {
       if (!/^[A-Za-z0-9+/=]+$/.test(img.data) || (img.data.length * 3) / 4 > MAX_IMAGE_BYTES) throw new AgentError(400, 'An attached image is too large.');
       if (img.url !== undefined && !STORED_IMAGE_RE.test(img.url)) throw new AgentError(400, 'An attached image has an invalid address.');
     }
-    if (!req.context || !['home', 'sheet', 'deck', 'doc', 'markdown', 'file', 'mail', 'calendar'].includes(req.context.page)) throw new AgentError(400, 'Missing context.');
+    // Edge only: the pages the apps' manifests name (their `assistant.pages`).
+    if (!req.context || !ASSISTANT_PAGES.has(req.context.page)) throw new AgentError(400, 'Missing context.');
     if (req.scope !== undefined && !isChatScope(req.scope)) throw new AgentError(400, 'That is not a chat.');
     // The user's own agent: no key, no daily limit (their own plan pays), and no tools for the browser to run.
     if (this.driver(userId) === 'claude-agent') {
@@ -219,7 +232,9 @@ export class AgentService {
     const search = { braveKey: this.settings.braveKey(userId), provider: this.providerSearch(own) };
     const mail = this.mail?.(userId, access.scope);
     const calendar = this.calendar?.(userId);
-    const env = { userId, ...access, sheets: this.sheets, images: this.images, files: this.files, pdf: this.pdf, context: req.context, search, ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}) };
+    const docs = this.docs?.(userId, access.scope);
+    const apps = this.apps?.(userId);
+    const env = { userId, ...access, sheets: this.sheets, images: this.images, files: this.files, pdf: this.pdf, context: req.context, search, ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}), ...(docs ? { docs } : {}), ...(apps ? { apps } : {}) };
     const callModel = own ? this.ownModel(own) : this.getModel();
     let parseRetries = 0;
 
@@ -240,7 +255,7 @@ export class AgentService {
             fallbacks: 'default',
             output_config: { effort: EFFORT },
             system: [{ type: 'text', text: this.jobs ? SYSTEM_PROMPT : PROMPT_WITHOUT_JOBS }],
-            tools: this.jobs ? TOOL_DEFS : TOOL_DEFS_WITHOUT_JOBS,
+            tools: assistantTools(req.context, !!this.jobs),
             // Caches the whole prefix up to the latest message; each turn reads the previous one's cache.
             cache_control: { type: 'ephemeral' },
             messages: this.store.messages(conv.id),
@@ -274,10 +289,10 @@ export class AgentService {
           pending.results[tu.id] = errorResult(tu.id, 'Your response was cut off before this tool input was complete. Try again with less data per call.');
           continue;
         }
-        const v = validateToolInput(tu.name, tu.input);
+        const v = validateToolInput(tu.name, tu.input, req.context);
         if (!v.ok) {
           pending.results[tu.id] = errorResult(tu.id, v.error);
-        } else if (CLIENT_TOOLS.has(tu.name)) {
+        } else if (isBrowserTool(tu.name)) {
           clientCalls.push({ id: tu.id, name: tu.name, input: v.input });
           pending.clientIds.push(tu.id);
         } else {

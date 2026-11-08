@@ -438,6 +438,15 @@ export async function getMessageById(messageId: string): Promise<MessageDTO | nu
   return (await hydrate([rows[0]]))[0] ?? null;
 }
 
+/** GET /v1/messages/:id: one message, for a reader of its channel (a `?open=message:<id>` link, platform phase 6.4:
+ * the client then opens its channel, and its thread for a reply). A deleted one is gone. */
+export async function getMessageFor(messageId: string, userId: string): Promise<MessageDTO> {
+  const row = (await db.select().from(messages).where(eq(messages.id, messageId)).limit(1))[0];
+  if (!row || row.deletedAt) throw notFound('message not found');
+  await requireChannelAccess(row.channelId, userId);
+  return (await hydrate([row]))[0]!;
+}
+
 /** Channel history: top-level messages, newest first, cursor on id (spec §2 index). */
 export async function listMessages(
   channelId: string,

@@ -201,6 +201,32 @@ export class Calendar extends DurableObject<CalendarEnv> {
     return out;
   }
 
+  /**
+   * A calendar or an event of this account's, described for a reference's chip (GET /v1/references, platform.md §5.3):
+   * its name (an event's title, and its calendar's name as the summary) and the caller's role. The account's own caller
+   * is the owner of every calendar; a member of the organization reads only the native calendars shared with it. Null
+   * for none, or nothing to see.
+   */
+  describe(caller: CallerContext, channelIds: string[], kind: 'calendar' | 'event', id: string): { title: string; summary?: string; role: Role } | null {
+    const owner = this.store.state('owner_account_id'), org = this.store.state('owner_organization_id');
+    const account = caller.account;
+    if (!account || !owner) return null;
+    const own = owner === account.id;
+    if (!own && (!org || (account.organizationId || caller.organizationId) !== org)) return null;
+    const reader: GrantReader | undefined = own ? undefined : { accountId: account.id, channelIds };
+    if (kind === 'calendar') {
+      const c = this.store.calendar(id);
+      const role = c ? this.roleFor(reader, c) : null;
+      return c && role ? { title: this.toCalendar(c).name, role } : null;
+    }
+    let parts: ReturnType<typeof splitId>;
+    try { parts = splitId(id); } catch { return null; }
+    const c = this.store.calendar(parts.calendarId);
+    const role = c ? this.roleFor(reader, c, eventIdOf(parts.calendarId, parts.uid)) : null;
+    const found = c && role ? this.store.find(parts.calendarId, parts.uid, null) : null;
+    return found && role ? { title: found.event.summary || '(No title)', summary: this.toCalendar(c!).name, role } : null;
+  }
+
   /** Provisioning's calendars step (platform.md §3.4, provisioning/consumer.ts): the account's native calendar, made now
    * rather than on first use. Safe to run again. A call for another account than the object's is refused. */
   async provisionNative(account: AccountDTO): Promise<{ ok: true } | { ok: false; message: string }> {

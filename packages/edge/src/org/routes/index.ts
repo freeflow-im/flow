@@ -752,6 +752,11 @@ export function registerRoutes(app: FastifyInstance): void {
     return reply.status(201).send(dto);
   });
 
+  app.get('/v1/messages/:id', { preHandler: requireAuth }, async (req) => {
+    const { id } = req.params as { id: string };
+    return msg.getMessageFor(id, req.user.id);
+  });
+
   app.patch('/v1/messages/:id', { preHandler: requireAuth }, async (req) => {
     const { id } = req.params as { id: string };
     const body = parse(EditMessageBody, req.body);

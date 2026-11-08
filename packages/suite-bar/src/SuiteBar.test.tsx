@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { openSuiteSearch, SuiteBar, type SuiteBarProps } from './SuiteBar';
 import { StatusDialog } from './StatusDialog';
 import { AWAY_STATUS, isAway, statusPatch, STATUS_OPTIONS } from './status';
+import { APP_MANIFESTS } from '@flow/shared/manifests';
+import { suiteTabsFrom } from './tabs';
 
 afterEach(cleanup);
 
@@ -321,5 +323,74 @@ describe('status', () => {
     expect(statusPatch(null)).toEqual({ statusEmoji: '', statusText: '', statusSuppressAlerts: false });
     expect(isAway(AWAY_STATUS)).toBe(true);
     expect(isAway({ emoji: '🎧', text: 'Focusing' })).toBe(false);
+  });
+});
+
+// The tabs each app's bar drew by hand before the manifests (phase 6.1): the same, from APP_MANIFESTS.
+describe('suiteTabsFrom', () => {
+  const home = () => {};
+
+  it("draws Chat's bar as it was, and its tabs off for an organization on another server", () => {
+    expect(suiteTabsFrom(APP_MANIFESTS, 'chat', { 'chat-unread': 5 }).slice(0, 4)).toEqual([
+      { id: 'docs', label: 'Docs', href: '/workspace' },
+      { id: 'chat', label: 'Chat', href: '/', active: true, badge: 5 },
+      { id: 'mail', label: 'Mail', href: '/mail' },
+      { id: 'calendar', label: 'Calendar', href: '/calendar' },
+    ]);
+    const away = suiteTabsFrom(APP_MANIFESTS, 'chat', { 'chat-unread': 0 }, { unavailable: (t) => `${t.label} is not available for an organization on another server yet` });
+    expect(away.slice(0, 4).map((t) => [t.id, !!t.disabled, t.title])).toEqual([
+      ['docs', true, 'Docs is not available for an organization on another server yet'],
+      ['chat', false, undefined],
+      ['mail', true, 'Mail is not available for an organization on another server yet'],
+      ['calendar', true, 'Calendar is not available for an organization on another server yet'],
+    ]);
+  });
+
+  it("draws Docs', Mail's and Calendar's bars as they were", () => {
+    expect(suiteTabsFrom(APP_MANIFESTS, 'docs', { 'chat-unread': 2 }, { activeHref: '/workspace/', onSelect: home }).slice(0, 4)).toEqual([
+      { id: 'docs', label: 'Docs', href: '/workspace/', active: true, onSelect: home },
+      { id: 'chat', label: 'Chat', href: '/', badge: 2 },
+      { id: 'mail', label: 'Mail', href: '/mail' },
+      { id: 'calendar', label: 'Calendar', href: '/calendar' },
+    ]);
+    expect(suiteTabsFrom(APP_MANIFESTS, 'mail', { 'chat-unread': 2, 'mail-unread': 7 }, { activeHref: '/mail/', onSelect: home }).slice(0, 4)).toEqual([
+      { id: 'docs', label: 'Docs', href: '/workspace' },
+      { id: 'chat', label: 'Chat', href: '/', badge: 2 },
+      { id: 'mail', label: 'Mail', href: '/mail/', active: true, badge: 7, onSelect: home },
+      { id: 'calendar', label: 'Calendar', href: '/calendar' },
+    ]);
+    expect(suiteTabsFrom(APP_MANIFESTS, 'calendar', { 'chat-unread': 0 }, { activeHref: '/calendar/', onSelect: home }).slice(0, 4)).toEqual([
+      { id: 'docs', label: 'Docs', href: '/workspace' },
+      { id: 'chat', label: 'Chat', href: '/', badge: 0 },
+      { id: 'mail', label: 'Mail', href: '/mail' },
+      { id: 'calendar', label: 'Calendar', href: '/calendar/', active: true, onSelect: home },
+    ]);
+  });
+
+  it('orders the tabs by shortcut, whatever the manifests\' order, and leaves out an app without a tab', () => {
+    const tabs = suiteTabsFrom([...APP_MANIFESTS].reverse(), 'docs');
+    const withTabs = APP_MANIFESTS.filter((m) => m.tab).sort((a, b) => a.tab!.shortcut.localeCompare(b.tab!.shortcut));
+    expect(tabs.map((t) => t.id)).toEqual(withTabs.map((m) => m.name));
+    expect(tabs.slice(0, 4).map((t) => t.id)).toEqual(['docs', 'chat', 'mail', 'calendar']);
+    render(<SuiteBar {...setupProps({ tabs })} />);
+    const links = screen.getAllByRole('link').filter((a) => a.classList.contains('sb-tab'));
+    expect(links.slice(0, 4).map((a) => [a.textContent, a.getAttribute('title')])).toEqual([
+      ['Docs', 'Docs (⌘1)'],
+      ['Chat', 'Chat (⌘2)'],
+      ['Mail', 'Mail (⌘3)'],
+      ['Calendar', 'Calendar (⌘4)'],
+    ]);
+    expect(links.map((a) => a.getAttribute('title'))).toEqual(withTabs.map((m) => `${m.tab!.label} (⌘${m.tab!.shortcut})`));
+  });
+
+  it('gives every bar every app’s tab, an app added by manifest included', () => {
+    const withTabs = APP_MANIFESTS.filter((m) => m.tab);
+    expect(withTabs.map((m) => m.name)).toContain('contacts');
+    for (const bar of withTabs) {
+      const tabs = suiteTabsFrom(APP_MANIFESTS, bar.name);
+      expect(tabs.map((t) => t.id).sort()).toEqual(withTabs.map((m) => m.name).sort());
+      expect(tabs.filter((t) => t.active).map((t) => t.id)).toEqual([bar.name]);
+      expect(tabs.find((t) => t.id === 'contacts')?.href).toBe('/contacts');
+    }
   });
 });

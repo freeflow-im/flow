@@ -239,9 +239,12 @@ export function toolLabel(name: string, i: Input): string {
     case 'show_calendar_range':
       return `Showed ${when(i.from) ?? 'the calendar'}`;
     default:
-      return agentToolLabel(name, i) ?? name;
+      // A tool of an app added by manifest (platform.md §6.1) has no label here: its name, as a sentence ("Find contact").
+      return agentToolLabel(name, i) ?? sentenceOf(name);
   }
 }
+
+const sentenceOf = (name: string): string => (/^[a-z][a-z0-9_]*$/.test(name) ? name.charAt(0).toUpperCase() + name.slice(1).replace(/_/g, ' ') : name);
 
 /** Who share_calendar or unshare_calendar names: a member by address, a channel, or the organization. */
 const sharee = (p: unknown): string => {

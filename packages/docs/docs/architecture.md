@@ -333,7 +333,8 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   with an `org` grant, which every row of an organization's root has (`syncOrgGrant` on create and move; the one-time migration gave it to the
   `private = 0` rows), so `private` stays as the flag derived from it and `scopeWhere` lists as before. Share with organization and Make private
   give and take `org` (a manager's), Move to organization… is the owner's. `/api/grants/:kind/:id` (GET viewer+, PUT `{ principal, role }` and
-  DELETE `/:principal` manager+; `org` there is the same move) backs the Share… dialog (`ShareWithDialog.tsx`), and `/api/library?scope=shared`
+  DELETE `/:principal` manager+; `org` there is the same move) backs the Share… dialog (`ShareWithDialog.tsx`; the home page also opens it for
+  the suite's share intent, `/workspace/?share=<org>/docs/<kind>/<id>`, platform phase 6.4), and `/api/library?scope=shared`
   (`&in=<folder id>`) is Shared with me, a third list in `DocsNav` (`?withme=1`). Metadata carries `role` when the reader is not the owner (a file
   with one that is not the organization's shows the crumbs `sharedFileCrumbs` makes: Shared with me, then only the shared folder down); a
   viewer's editors are read-only (`viewOnlyGuard` on the sheet, deck and doc stores, `readOnly` on the Markdown and text editors).
@@ -395,6 +396,18 @@ as the loop's do (labels for Claude Code's tools in `describe.ts`'s `agentToolLa
 transcript. It runs in Claude Code's `auto` permission mode; a permission its classifier cannot decide is an
 AgentEvent `permission`, answered in the panel (`POST /api/agent/permission`). The desktop build ships the SDK's
 JavaScript but not its bundled binaries.
+
+In the FreeFlow suite (since platform phase 6.3) the assistant does not run in the Docs object. It is the account's
+`Assistant` Durable Object (`packages/edge/src/assistant/object.ts`, one per account), which runs this same loop and
+these stores (`AgentService`, `AgentStore`, `AssistantSettingsStore`) on its own SQLite, with the suite's tool registry:
+the open app's browser tools (by `context.page`, the apps' manifests' `assistant.pages`) and every server tool. The
+Worker serves `/api/agent`, its turn, reset and permission, and `/api/settings/assistant` from it (`routes/assistant.ts`),
+so Docs', Mail's and Calendar's panels share one assistant per account. Docs' server tools reach this app over HTTP as
+the person (`assistant/docsTools.ts`: the routes the client uses, plus `GET /api/places/:id` for a chat file's name and
+root (it also answers the file's kind and the caller's role, which the suite's `GET /v1/references` reads for a chip), `POST /api/files/:id/pdf` for `export_pdf` and `POST /api/import/bytes` for `import_file` and saved mail
+attachments). The seam is `host.assistant`: with it this app makes no `AgentService` and serves none of those routes,
+and `edit_image` asks the host for the person's OpenAI key (`host.assistant.openaiKey`). Without a host (standalone,
+the desktop app) everything above runs here as before.
 
 Pictures among the stored files: `view_image` attaches one to the message after the tool results so the
 model can see it (as `render_slide` does), and `edit_image` asks the server (`POST /api/files/:id/edit-image`,

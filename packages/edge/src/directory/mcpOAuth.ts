@@ -8,32 +8,27 @@
 // Only hashes of codes and tokens are stored. Times are milliseconds since the epoch, as in the rest of the directory.
 import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto';
 import { accountGate, type Sql } from './core';
-import type { AccountState } from '@flow/shared';
+import type { AccountState, AppScopeGroup } from '@flow/shared';
+import { APP_MANIFESTS } from '@flow/shared/manifests';
 
 /**
- * Docs' files (read, and change), the person's own mail (read, organise and draft, and send), their calendars (read, and
- * change), and the organization's events through subscriptions the agent makes (platform.md §5.2).
+ * The consent page's checkboxes, from the apps' manifests (@flow/shared's APP_MANIFESTS, `scopes`): each one a group of
+ * scopes, on or off until the person changes it. Docs' files (read, and change), the person's own mail (read, organise and
+ * draft; sending is off unless they tick it: an agent drafts, and the person sends), their calendars (read, and change),
+ * and the organization's events through subscriptions the agent makes (platform.md §5.2).
  */
-export const MCP_SCOPES = ['files:read', 'files:write', 'mail:read', 'mail:write', 'mail:send', 'calendar:read', 'calendar:write', 'events:read'] as const;
+export const SCOPE_GROUPS: readonly AppScopeGroup[] = APP_MANIFESTS.flatMap((m) => m.scopes ?? []);
 
-/**
- * The consent page's checkboxes: each one a group of scopes, on or off until the person changes it. Sending email as the
- * person is off unless they tick it: an agent drafts, and the person sends.
- */
-export const SCOPE_GROUPS = [
-  { id: 'docs', scopes: ['files:read', 'files:write'], checked: true },
-  { id: 'mail', scopes: ['mail:read', 'mail:write'], checked: true },
-  { id: 'send', scopes: ['mail:send'], checked: false },
-  { id: 'calendar', scopes: ['calendar:read', 'calendar:write'], checked: true },
-  { id: 'events', scopes: ['events:read'], checked: true },
-] as const;
-export type ScopeGroupId = (typeof SCOPE_GROUPS)[number]['id'];
+/** Every scope a token can carry, in the groups' order. */
+export const MCP_SCOPES: readonly string[] = SCOPE_GROUPS.flatMap((g) => g.scopes);
+
+export type ScopeGroupId = string;
 export interface OfferedGroup { id: ScopeGroupId; scopes: string[]; checked: boolean }
 
 /** The groups the page offers for a request's scopes: those it asked for any of, each with only the scopes it asked for. */
 export function offeredGroups(scope: string): OfferedGroup[] {
   const asked = new Set(scope.split(' ').filter(Boolean));
-  return SCOPE_GROUPS.map((g) => ({ id: g.id, scopes: g.scopes.filter((s) => asked.has(s)), checked: g.checked })).filter((g) => g.scopes.length > 0);
+  return SCOPE_GROUPS.map((g) => ({ id: g.id, scopes: g.scopes.filter((s) => asked.has(s)), checked: g.checkedByDefault })).filter((g) => g.scopes.length > 0);
 }
 
 /**
@@ -159,7 +154,7 @@ export function redirectMatches(registered: string, requested: string): boolean 
 export function cleanScope(requested: string | undefined): string | null {
   if (!requested?.trim()) return MCP_SCOPES.join(' ');
   const parts = [...new Set(requested.trim().split(/\s+/))];
-  return parts.every((s) => (MCP_SCOPES as readonly string[]).includes(s)) ? parts.join(' ') : null;
+  return parts.every((s) => MCP_SCOPES.includes(s)) ? parts.join(' ') : null;
 }
 
 /** The resource for an MCP path on an issuer: /mcp, or a version of it (/mcp/v2). */

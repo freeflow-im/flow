@@ -90,6 +90,11 @@ The operator does the cut-over by hand with
   pushes the image and runs `deploy.sh flow <sha>` on the instance on a push to
   `main` touching the server, web or shared packages (once the repository
   variable `AWS_FLOW_ECR_REPOSITORY` is set). Logs: CloudWatch `/flow/app`.
+- **The clients come from the manifests** (`APP_MANIFESTS` in `packages/shared/src/manifests.ts`):
+  the image's build loop, `deploy-edge.yml`'s copy-out and the assembler all read them through
+  `packages/edge/scripts/clients.mjs`. Adding an app is a manifest entry plus
+  `node packages/edge/scripts/clients.mjs write`, which regenerates the Dockerfile's COPY lines and
+  `flow-aws-deploy.yml`'s static `paths:` filter; the edge tests fail until it is run.
 - **Railway** (until the cut-over, then retired): connected to
   `freeflow-community/flow`, so pushing to `main` builds and ships. The contract is
   in [`railway.json`](railway.json): Railpack, build `pnpm -r build`, start

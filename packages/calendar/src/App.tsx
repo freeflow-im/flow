@@ -33,7 +33,7 @@ import { useAccounts, useCalendarPrefs, useCalendars, useEventMutations, useEven
 import { RESPONDED_TEXT, withMyResponse } from './lib/format';
 import { movePatch } from './lib/occurrences';
 import { neighbours, parseDate, rangeOf, step, titleOf, type View } from './lib/ranges';
-import { parseCalendarLink, parseNewEvent, withoutCalendarLink, withoutNewEvent } from './lib/deeplink';
+import { parseCalendarLink, parseNewEvent, parseShareLink, withoutCalendarLink, withoutNewEvent, withoutShareLink } from './lib/deeplink';
 import { sharedPrefs } from './lib/prefs';
 import { asCalendar, errorText } from './lib/sharing';
 import { parsePlace, pathOf, type Place } from './lib/route';
@@ -123,7 +123,7 @@ export function App() {
     setAskedDone(true);
     history.replaceState(null, '', `${window.location.pathname}${withoutNewEvent(window.location.search)}`);
     if (!defaultCalendar) return setToast('Connect a calendar you can write to first.');
-    const at = startOfHour(addHours(new Date(), 1));
+    const at = asked.start ?? startOfHour(addHours(new Date(), 1));
     setEditing({ draft: { ...newDraft(at, addHours(at, 1), false, defaultCalendar.id, asked.summary), attendees: asked.attendees } });
   }, [asked, askedDone, calendars.isSuccess, defaultCalendar]);
   // A share's link (`?calendar=<id>`, the notice's address): that calendar ticked and scrolled into view once the lists are
@@ -139,6 +139,16 @@ export function App() {
     else if (!own) return setToast('That calendar is not shared with you.');
     requestAnimationFrame(() => document.querySelector(`[data-calendar-id="${CSS.escape(linked)}"]`)?.scrollIntoView({ block: 'nearest' }));
   }, [linked, calendars.isSuccess, shared.isPending, shared.data, cals, prefs]);
+  // The suite's share intent (`?share=<ref>`, lib/deeplink.ts): that calendar's Share dialog, once the lists are here.
+  const [shareAsked, setShareAsked] = useState(() => parseShareLink(window.location.search));
+  useEffect(() => {
+    if (!shareAsked || !calendars.isSuccess || shared.isPending) return;
+    setShareAsked(null);
+    history.replaceState(null, '', `${window.location.pathname}${withoutShareLink(window.location.search)}`);
+    const c = (allCals ?? []).find((x) => x.id === shareAsked);
+    if (c) setSharing(c);
+    else setToast('That calendar is not shared with you.');
+  }, [shareAsked, calendars.isSuccess, shared.isPending, allCals]);
   const startGoogle = (email?: string) => void connectGoogle(email).catch((e: unknown) => setToast(errorText(e)));
 
   // The address follows the view; back and forward move it.

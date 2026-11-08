@@ -10,6 +10,7 @@ function env(files: Record<string, string> = {}): Env {
     WEB_URL_BASE: 'https://app.example',
     DIRECTORY: {} as never,
     ORG: {} as never,
+    ASSISTANT: {} as never,
     DOCS: {} as never,
     MAIL: {} as never,
     CALENDAR: {} as never,

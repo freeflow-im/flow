@@ -2,19 +2,25 @@
 // and changes events and answers invitations on the server; delete_event and Calendar's view tools run in the browser
 // (delete_event after the user confirms). The Calendar page's context is rendered quoted, so an event's title cannot close it.
 import { describe, expect, it } from 'vitest';
-import { runServerTool, TOOL_DEFS_WITHOUT_JOBS, ToolFailure, validateToolInput } from '../docs/server/agent/tools.ts';
+import { assistantTools, runServerTool, ToolFailure, validateToolInput } from '../docs/server/agent/tools.ts';
 import { PROMPT_WITHOUT_JOBS, renderContext } from '../docs/server/agent/prompt.ts';
 import { CALENDAR_CHAT, chatScope, CLIENT_TOOLS, SHOWN_RESULTS, type CalendarContext } from '../docs/shared/agent/protocol.ts';
 import type { CalendarToolContext } from './calendarTools';
 
 describe('the assistant’s Calendar tools', () => {
   it('lists them all, delete_event and the view tools as browser tools, and the prompt says when to use them', () => {
-    const names = TOOL_DEFS_WITHOUT_JOBS.map((t) => t.name);
+    const inCalendar = assistantTools({ page: 'calendar', view: 'week', from: '2026-11-02T00:00:00Z', to: '2026-11-09T00:00:00Z', timezone: 'UTC', calendars: [] }, false);
+    const names = inCalendar.map((t) => t.name);
     for (const n of ['list_calendars', 'list_shared_calendars', 'list_events', 'get_event', 'find_free_time', 'create_event', 'update_event', 'respond_to_event', 'share_calendar', 'unshare_calendar', 'delete_event', 'open_calendar_event', 'show_calendar_range']) expect(names).toContain(n);
+    // In Docs the server tools and delete_event (Docs' page asks first too), not Calendar's view tools; no Docs browser tools in Calendar.
+    const inDocs = assistantTools({ page: 'home' }, false).map((t) => t.name);
+    expect(inDocs).toEqual(expect.arrayContaining(['list_events', 'create_event', 'delete_event']));
+    expect(inDocs).not.toContain('open_calendar_event');
+    expect(names).not.toContain('read_range');
     for (const n of ['delete_event', 'open_calendar_event', 'show_calendar_range']) expect(CLIENT_TOOLS.has(n)).toBe(true);
     for (const n of ['create_event', 'list_events', 'share_calendar', 'unshare_calendar']) expect(CLIENT_TOOLS.has(n)).toBe(false);
     expect(SHOWN_RESULTS.has('create_event') && SHOWN_RESULTS.has('update_event')).toBe(true);
-    expect(TOOL_DEFS_WITHOUT_JOBS.find((t) => t.name === 'delete_event')!.description).toMatch(/confirm/);
+    expect(inCalendar.find((t) => t.name === 'delete_event')!.description).toMatch(/confirm/);
     expect(PROMPT_WITHOUT_JOBS).toMatch(/find_free_time/);
     expect(PROMPT_WITHOUT_JOBS).toMatch(/never delete without being asked/);
     expect(PROMPT_WITHOUT_JOBS).toMatch(/invite members of the organization and others by email address/);

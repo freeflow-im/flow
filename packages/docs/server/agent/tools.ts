@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import type Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { readRange, resolveRange, sheetOverview } from '../../shared/agent/sheetRead.ts';
-import type { AgentContext } from '../../shared/agent/protocol.ts';
+import { CLIENT_TOOLS, type AgentContext } from '../../shared/agent/protocol.ts';
 import { CHART_TYPES, LEGEND_POSITIONS, MAX_SERIES } from '../../shared/chart.ts';
 import { ARROW_STYLE_IDS, buildSlide, LAYOUT_IDS, MAX_TABLE_COLS, MAX_TABLE_ROWS, newId, THEME_IDS, type Deck } from '../../shared/deck.ts';
 import { ALIGNMENTS, BLOCK_TYPES, docNode, MAX_FONT_SIZE, MAX_HEADER_CHARS, MAX_LINE_HEIGHT, MAX_MARGIN, MAX_PARAGRAPH_SPACE, MIN_FONT_SIZE, MIN_LINE_HEIGHT, MIN_MARGIN, PAGE_NUMBER_POSITIONS, PAGE_SIZE_IDS } from '../../shared/doc.ts';
@@ -724,7 +724,7 @@ export function isToolName(name: string): name is ToolName {
 }
 
 /** Validate a tool input. Returns the parsed input or an error message for Claude. */
-export function validateToolInput(name: string, input: unknown): { ok: true; input: Record<string, unknown> } | { ok: false; error: string } {
+export function validateToolInput(name: string, input: unknown, _context?: AgentContext): { ok: true; input: Record<string, unknown> } | { ok: false; error: string } {
   if (!isToolName(name)) return { ok: false, error: `Unknown tool "${name}".` };
   const parsed = schemas[name].safeParse(input);
   if (!parsed.success) return { ok: false, error: `Invalid input for ${name}: ${z.prettifyError(parsed.error)}` };
@@ -746,6 +746,14 @@ export const TOOL_DEFS: Anthropic.Beta.BetaTool[] = Object.entries(schemas).map(
 /** The tools that file a background job (server/agent/jobs.ts), which the desktop app does not run. */
 export const JOB_TOOLS = new Set(['request_app_change', 'request_research']);
 export const TOOL_DEFS_WITHOUT_JOBS = TOOL_DEFS.filter((t) => !JOB_TOOLS.has(t.name));
+
+/** The tools the assistant offers in a turn: all of them here (the hosted suite's copy offers the open app's browser tools, from its registry). */
+export function assistantTools(_context: AgentContext | undefined, jobs: boolean): Anthropic.Beta.BetaTool[] {
+  return jobs ? TOOL_DEFS : TOOL_DEFS_WITHOUT_JOBS;
+}
+
+/** Whether a tool runs in the browser (it pauses the turn). */
+export const isBrowserTool = (name: string): boolean => CLIENT_TOOLS.has(name);
 
 // ---------------------------------------------------------------------------
 // Server-side tools

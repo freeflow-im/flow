@@ -4,7 +4,7 @@ import { LEGAL_PATHS, legalPage } from './legal.ts';
 import { llmsTxt } from './llms.ts';
 import { featureHtml, featureMarkdown, featuresIndexHtml, robotsTxt, sitemapXml } from './marketing.ts';
 import { scratchPadName } from '../shared/docNames.ts';
-import { sniffImageType } from './importFile.ts';
+import { importBytes, ImportFileError, sniffImageType } from './importFile.ts';
 import { fetchPublicFile, WebFetchError } from './webFetch.ts';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import Anthropic from '@anthropic-ai/sdk';
@@ -221,6 +221,12 @@ export interface AppOptions {
     onGrantChange?(change: GrantChange): void;
     /** A document of an organization was saved or renamed: the host may tell the event bus (platform.md §5.2). */
     onFileChanged?(change: FileChange): void;
+    /**
+     * The host runs the assistant itself (the FreeFlow suite's Assistant object, one per account, platform.md §5.5): this app
+     * then keeps no chats, settings or usage and serves none of /api/agent but its jobs; its tools reach this app's routes
+     * (/api/places, /api/files/:id/pdf, /api/import/bytes). `openaiKey` is the person's own OpenAI key there, for edit_image.
+     */
+    assistant?: { openaiKey(req: FastifyRequest): Promise<string | null> };
   };
   /**
    * The desktop app (desktop/): the library is the files of this folder (server/localStore.ts) and there
@@ -388,7 +394,8 @@ export async function buildApp(opts: AppOptions) {
         })
       : undefined;
   const signatures = new SignatureStore(settingsDb);
-  const assistantSettings = new AssistantSettingsStore(settingsDb, path.join(settingsDir, 'connector.key'), { builtIn: !opts.local, agents: !!claudeAgent });
+  // Hosted with an assistant of the host's own (host.assistant): none here.
+  const assistantSettings = host?.assistant ? null : new AssistantSettingsStore(settingsDb, path.join(settingsDir, 'connector.key'), { builtIn: !opts.local, agents: !!claudeAgent });
   // PDFs of files (server/pdf.ts): Download as PDF, and export_pdf for the assistant and the MCP. The headless
   // browser loads the app's pages from this server when it serves them, else (development) from Vite.
   const pdfRenderer = opts.pdf === undefined ? new PlaywrightRenderer() : opts.pdf;
@@ -404,7 +411,7 @@ export async function buildApp(opts: AppOptions) {
         },
       })
     : null;
-  const agent = new AgentService(new AgentStore(db), sheets, assistantSettings, { jobs: !opts.local, ...opts.agent, images, files: storedFiles, pdf: pdfMaker ?? undefined, claudeAgent });
+  const agent = assistantSettings && new AgentService(new AgentStore(db), sheets, assistantSettings, { jobs: !opts.local, ...opts.agent, images, files: storedFiles, pdf: pdfMaker ?? undefined, claudeAgent });
   const jobs = new JobStore(db);
   const jobRunner = new JobRunner(jobs, opts.launchJob ?? workerLauncher(opts.dataDir));
   // A previous server process may have died (or been restarted by the job itself) with a job in flight.
@@ -461,7 +468,7 @@ export async function buildApp(opts: AppOptions) {
   if (localUser) db.prepare("INSERT OR IGNORE INTO users (id, email, password_hash, created_at) VALUES (?, ?, '', ?)").run(localUser.id, localUser.email, new Date().toISOString());
   // The first run: a key already set in the user's environment runs the assistant without a visit to Settings.
   if (localUser && opts.local?.env) {
-    const used = assistantSettings.adoptFromEnvironment(localUser.id, opts.local.env);
+    const used = assistantSettings?.adoptFromEnvironment(localUser.id, opts.local.env);
     if (used) app.log.info({ provider: used }, 'assistant key found in the environment');
   }
   // The pictures of the folder's PowerPoint and Word files, read each time one is opened, are stored once.
@@ -1953,7 +1960,7 @@ export async function buildApp(opts: AppOptions) {
       if (!prompt || prompt.length > MAX_EDIT_PROMPT_CHARS) return reply.code(400).send({ error: 'Say what to change in the picture.' });
       if (!EDITABLE_IMAGE_TYPES.includes(f.meta.type)) return reply.code(400).send({ error: 'Only PNG, JPEG and WebP pictures can be edited.' });
       if (f.meta.size > MAX_EDIT_IMAGE_BYTES) return reply.code(400).send({ error: 'This picture is too large to edit (20 MB maximum).' });
-      const apiKey = assistantSettings.openaiKey(req.user!.id) ?? process.env.OPENAI_API_KEY;
+      const apiKey = (host?.assistant ? await host.assistant.openaiKey(req) : assistantSettings?.openaiKey(req.user!.id)) ?? process.env.OPENAI_API_KEY;
       if (!apiKey) return reply.code(400).send({ error: 'Image editing needs an OpenAI API key. The user can add theirs on the Settings page; nothing was changed.' });
       try {
         checkImageEditRate(req.user!.id);
@@ -2716,87 +2723,131 @@ export async function buildApp(opts: AppOptions) {
   app.register(async (r) => {
     r.addHook('preHandler', requireUser);
 
-    // A chat: a file's (scope = its id) or the home page's, with the file's name for the panel to show.
-    r.get('/api/agent', async (req, reply) => {
-      const scope = (req.query as { scope?: unknown }).scope ?? HOME_CHAT;
-      if (!isChatScope(scope)) return reply.code(400).send({ error: 'That is not a chat.' });
-      const userId = req.user!.id;
-      const title = scope === HOME_CHAT ? null : (sheets.get(req.viewer, scope)?.title ?? (isFileId(scope) ? storedFiles.get(req.viewer, scope)?.meta.filename : undefined) ?? null);
-      return { items: agent.transcript(userId, scope), title };
+    // For an assistant that runs outside this app (host.assistant, the suite's Assistant object), what its server tools did
+    // here in-process: a chat file's name, kind and the caller's role on it, and the root its tools work in (the turn below), a PDF of a file saved beside it
+    // (export_pdf), and bytes imported into the request's root (import_file, a mail attachment saved to Docs).
+    r.get('/api/places/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const doc = isFileId(id) ? sheets.find(id) : undefined;
+      const row = doc ?? (isFileId(id) ? storedFiles.find(id) : undefined);
+      const title = sheets.get(req.viewer, id)?.title ?? (isFileId(id) ? storedFiles.get(req.viewer, id)?.meta.filename : undefined) ?? null;
+      if (title === null || !row) return reply.code(404).send({ error: 'File not found' });
+      const role = roleOf(db, req.viewer, doc ? 'sheet' : 'file', row);
+      const root = row.workspace_id && role ? scopeOfRow(row, req.viewer) : null;
+      // Its kind and the caller's role too: a reference's chip (the suite's GET /v1/references, platform.md §5.3).
+      return { title, kind: doc ? doc.kind : 'file', ...(role ? { role } : {}), ...(root?.workspaceId ? { place: { workspace: root.workspaceId, shared: !root.private } } : {}) };
     });
 
-    // The user's answer to a permission their own agent asked for in the panel (AgentEvent 'permission').
-    r.post('/api/agent/permission', async (req, reply) => {
-      const { id, allow } = (req.body ?? {}) as { id?: unknown; allow?: unknown };
-      if (typeof id !== 'string' || typeof allow !== 'boolean') return reply.code(400).send({ error: 'Give the question’s id and allow.' });
-      if (!agent.answerPermission(id, allow)) return reply.code(404).send({ error: 'That question is no longer open.' });
-      return { ok: true };
-    });
-
-    r.post('/api/agent/reset', async (req, reply) => {
-      const scope = (req.body as { scope?: unknown } | undefined)?.scope ?? HOME_CHAT;
-      if (!isChatScope(scope)) return reply.code(400).send({ error: 'That is not a chat.' });
+    r.post('/api/files/:id/pdf', async (req, reply) => {
+      if (!pdfMaker) return reply.code(400).send({ error: 'PDFs cannot be made here.' });
+      const paper = (req.body as { paper?: unknown } | null)?.paper === 'a4' ? 'a4' : 'letter';
       try {
-        agent.reset(req.user!.id, scope);
+        const file = await pdfMaker.save(req.viewer, (req.params as { id: string }).id, paper);
+        return file ? { file } : reply.code(404).send({ error: 'File not found' });
       } catch (e) {
-        if (e instanceof AgentError) return reply.code(e.status).send({ error: e.message });
+        if (e instanceof PrintError) return reply.code(400).send({ error: e.message });
         throw e;
       }
-      return { ok: true };
     });
 
-    // Runs or resumes a turn, streaming AgentEvents as server-sent events.
-    r.post('/api/agent/turn', async (req, reply) => {
-      const body = (req.body ?? {}) as AgentTurnRequest;
+    r.post('/api/import/bytes', async (req, reply) => {
+      const body = req.body;
+      if (!Buffer.isBuffer(body) || body.length === 0) return reply.code(400).send({ error: 'Send the file as the request body.' });
+      const { filename, title } = req.query as { filename?: string; title?: string };
       try {
-        agent.checkTurn(req.user!.id, body);
+        const made = await importBytes({ sheets, images, files: storedFiles }, req.scope, body, filename || undefined, title || undefined);
+        return made.sheet ? { sheet: made.sheet, warnings: made.warnings } : { file: made.file, warnings: made.warnings };
       } catch (e) {
-        if (e instanceof AgentError) return reply.code(e.status).send({ error: e.message });
+        if (e instanceof ImportFileError) return reply.code(400).send({ error: e.message });
         throw e;
       }
-      reply.hijack();
-      const res = reply.raw;
-      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
-      const abort = new AbortController();
-      // The browser stopped the request (Stop button, navigation): abort the model call too.
-      res.on('close', () => {
-        if (!res.writableEnded) abort.abort();
+    });
+
+    // The assistant's own routes, when it runs here (not host.assistant).
+    if (agent && assistantSettings) {
+
+      // A chat: a file's (scope = its id) or the home page's, with the file's name for the panel to show.
+      r.get('/api/agent', async (req, reply) => {
+        const scope = (req.query as { scope?: unknown }).scope ?? HOME_CHAT;
+        if (!isChatScope(scope)) return reply.code(400).send({ error: 'That is not a chat.' });
+        const userId = req.user!.id;
+        const title = scope === HOME_CHAT ? null : (sheets.get(req.viewer, scope)?.title ?? (isFileId(scope) ? storedFiles.get(req.viewer, scope)?.meta.filename : undefined) ?? null);
+        return { items: agent.transcript(userId, scope), title };
       });
-      const emit = (e: AgentEvent) => {
-        if (!res.writableEnded) res.write(`data: ${JSON.stringify(e)}\n\n`);
-      };
-      // The root the server tools work in (server/scope.ts): a file's chat, that file's (an organization file's chat
-      // lists and makes Organization files); the home chat, the user's files in the organization the bar selected.
-      const chat = body.scope ?? chatScope(body.context);
-      const chatDoc = chat === HOME_CHAT || !isFileId(chat) ? undefined : sheets.find(chat);
-      const chatFile = chatDoc ?? (chat === HOME_CHAT || !isFileId(chat) ? undefined : storedFiles.find(chat));
-      const toolScope = chatFile?.workspace_id && roleOf(db, req.viewer, chatDoc ? 'sheet' : 'file', chatFile) ? scopeOfRow(chatFile, req.viewer) : req.scope;
-      try {
-        await agent.runTurn(req.user!.id, body, emit, abort.signal, { scope: toolScope, viewer: req.viewer });
-      } catch (e) {
-        if (!abort.signal.aborted) {
-          req.log.error({ err: e }, 'agent turn failed');
-          emit({ type: 'error', message: agentErrorMessage(e) });
+
+      // The user's answer to a permission their own agent asked for in the panel (AgentEvent 'permission').
+      r.post('/api/agent/permission', async (req, reply) => {
+        const { id, allow } = (req.body ?? {}) as { id?: unknown; allow?: unknown };
+        if (typeof id !== 'string' || typeof allow !== 'boolean') return reply.code(400).send({ error: 'Give the question’s id and allow.' });
+        if (!agent.answerPermission(id, allow)) return reply.code(404).send({ error: 'That question is no longer open.' });
+        return { ok: true };
+      });
+
+      r.post('/api/agent/reset', async (req, reply) => {
+        const scope = (req.body as { scope?: unknown } | undefined)?.scope ?? HOME_CHAT;
+        if (!isChatScope(scope)) return reply.code(400).send({ error: 'That is not a chat.' });
+        try {
+          agent.reset(req.user!.id, scope);
+        } catch (e) {
+          if (e instanceof AgentError) return reply.code(e.status).send({ error: e.message });
+          throw e;
         }
-      } finally {
-        res.end();
-        // Jobs queued during the turn start only now: the worker's edits restart the dev server, which would
-        // cut off a reply still streaming.
-        jobRunner.startQueued();
-      }
-    });
+        return { ok: true };
+      });
 
-    // --- Assistant settings: the server's model, or an OpenAI model on the user's own key ---
-    r.get('/api/settings/assistant', async (req) => ({ settings: assistantSettings.get(req.user!.id) }));
+      // Runs or resumes a turn, streaming AgentEvents as server-sent events.
+      r.post('/api/agent/turn', async (req, reply) => {
+        const body = (req.body ?? {}) as AgentTurnRequest;
+        try {
+          agent.checkTurn(req.user!.id, body);
+        } catch (e) {
+          if (e instanceof AgentError) return reply.code(e.status).send({ error: e.message });
+          throw e;
+        }
+        reply.hijack();
+        const res = reply.raw;
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+        const abort = new AbortController();
+        // The browser stopped the request (Stop button, navigation): abort the model call too.
+        res.on('close', () => {
+          if (!res.writableEnded) abort.abort();
+        });
+        const emit = (e: AgentEvent) => {
+          if (!res.writableEnded) res.write(`data: ${JSON.stringify(e)}\n\n`);
+        };
+        // The root the server tools work in (server/scope.ts): a file's chat, that file's (an organization file's chat
+        // lists and makes Organization files); the home chat, the user's files in the organization the bar selected.
+        const chat = body.scope ?? chatScope(body.context);
+        const chatDoc = chat === HOME_CHAT || !isFileId(chat) ? undefined : sheets.find(chat);
+        const chatFile = chatDoc ?? (chat === HOME_CHAT || !isFileId(chat) ? undefined : storedFiles.find(chat));
+        const toolScope = chatFile?.workspace_id && roleOf(db, req.viewer, chatDoc ? 'sheet' : 'file', chatFile) ? scopeOfRow(chatFile, req.viewer) : req.scope;
+        try {
+          await agent.runTurn(req.user!.id, body, emit, abort.signal, { scope: toolScope, viewer: req.viewer });
+        } catch (e) {
+          if (!abort.signal.aborted) {
+            req.log.error({ err: e }, 'agent turn failed');
+            emit({ type: 'error', message: agentErrorMessage(e) });
+          }
+        } finally {
+          res.end();
+          // Jobs queued during the turn start only now: the worker's edits restart the dev server, which would
+          // cut off a reply still streaming.
+          jobRunner.startQueued();
+        }
+      });
 
-    r.put('/api/settings/assistant', async (req, reply) => {
-      try {
-        return { settings: await assistantSettings.update(req.user!.id, (req.body ?? {}) as Partial<AssistantSettingsUpdate>, opts.checkAssistantKey ?? checkAssistantKey, opts.checkSearchKey ?? checkBraveKey) };
-      } catch (e) {
-        if (e instanceof SettingsError) return reply.code(400).send({ error: e.message });
-        throw e;
-      }
-    });
+      // --- Assistant settings: the server's model, or an OpenAI model on the user's own key ---
+      r.get('/api/settings/assistant', async (req) => ({ settings: assistantSettings.get(req.user!.id) }));
+
+      r.put('/api/settings/assistant', async (req, reply) => {
+        try {
+          return { settings: await assistantSettings.update(req.user!.id, (req.body ?? {}) as Partial<AssistantSettingsUpdate>, opts.checkAssistantKey ?? checkAssistantKey, opts.checkSearchKey ?? checkBraveKey) };
+        } catch (e) {
+          if (e instanceof SettingsError) return reply.code(400).send({ error: e.message });
+          throw e;
+        }
+      });
+    }
 
     // --- The user's saved signatures, for signing PDFs (server/signatures.ts) ---
     r.get('/api/settings/signatures', async (req) => ({ signatures: signatures.list(req.user!.id) }));

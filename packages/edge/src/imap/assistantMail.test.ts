@@ -2,21 +2,25 @@
 // saves attachments, and never sends. Its tool list is fixed (the prompt stays cacheable); without a Mail object the tools
 // say mail is not here.
 import { describe, expect, it } from 'vitest';
-import { runServerTool, TOOL_DEFS_WITHOUT_JOBS, ToolFailure, validateToolInput } from '../docs/server/agent/tools.ts';
+import { assistantTools, runServerTool, ToolFailure, validateToolInput } from '../docs/server/agent/tools.ts';
 import { PROMPT_WITHOUT_JOBS, renderContext, stripContext } from '../docs/server/agent/prompt.ts';
 import { toChatItems } from '../docs/server/agent/agent.ts';
 import { chatScope, CLIENT_TOOLS, MAIL_CHAT, SHOWN_RESULTS, type MailContext } from '../docs/shared/agent/protocol.ts';
 import type { MailToolContext } from './mailTools';
 
 const ACC = '0b6f1c2e-1111-4222-8333-444455556666';
+// The tools of a turn in Mail, and of one in Docs (each app's browser tools are its own: the registry, platform.md §5.4).
+const IN_MAIL = assistantTools({ page: 'mail', accountId: ACC, account: 'ann@test.local', folder: 'INBOX' }, false);
+const IN_DOCS = assistantTools({ page: 'home' }, false);
 
 describe('the assistant’s mail tools', () => {
   it('lists search, read, draft and save, never send', () => {
-    const names = TOOL_DEFS_WITHOUT_JOBS.map((t) => t.name);
+    const names = IN_MAIL.map((t) => t.name);
+    expect(IN_DOCS.map((t) => t.name)).toEqual(expect.arrayContaining(['search_mail', 'read_mail', 'create_mail_draft', 'save_mail_attachment_to_docs']));
     for (const n of ['search_mail', 'read_mail', 'create_mail_draft', 'save_mail_attachment_to_docs']) expect(names).toContain(n);
     expect(names).not.toContain('send_mail');
     expect(names).not.toContain('trash_mail');
-    expect(TOOL_DEFS_WITHOUT_JOBS.find((t) => t.name === 'create_mail_draft')!.description).toMatch(/cannot send/);
+    expect(IN_MAIL.find((t) => t.name === 'create_mail_draft')!.description).toMatch(/cannot send/);
     expect(PROMPT_WITHOUT_JOBS).toMatch(/create_mail_draft/);
   });
 
@@ -66,7 +70,12 @@ describe('the assistant in FreeFlow Mail', () => {
   it('opens messages in Mail with a browser tool, and is told about the mail page', () => {
     expect(CLIENT_TOOLS.has('open_mail_message')).toBe(true);
     expect(validateToolInput('open_mail_message', { id: `${ACC}:INBOX:3` }).ok).toBe(true);
-    expect(TOOL_DEFS_WITHOUT_JOBS.map((t) => t.name)).toContain('open_mail_message');
+    expect(IN_MAIL.map((t) => t.name)).toContain('open_mail_message');
+    // Only in Mail: elsewhere it is not offered, and a call to it is refused (as Docs' browser tools are in Mail).
+    expect(IN_DOCS.map((t) => t.name)).not.toContain('open_mail_message');
+    expect(IN_MAIL.map((t) => t.name)).not.toContain('write_range');
+    expect(validateToolInput('open_mail_message', { id: `${ACC}:INBOX:3` }, { page: 'home' }).ok).toBe(false);
+    expect(validateToolInput('write_range', { range: 'A1', values: [[1]] }, { page: 'mail', accountId: ACC, account: 'ann@test.local', folder: 'INBOX' })).toMatchObject({ ok: false, error: 'Unknown tool "write_range".' });
     expect(PROMPT_WITHOUT_JOBS).toMatch(/In FreeFlow Mail the <app_context>/);
   });
 

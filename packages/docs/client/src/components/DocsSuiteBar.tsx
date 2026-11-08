@@ -1,10 +1,10 @@
 // The suite bar on the Docs app (packages/suite-bar; docs/specs/freeflow-suite.md §2.5), above every signed-in page
 // when the app is hosted in the FreeFlow suite (main.tsx). Its data comes from the suite's API (suite.ts); what
 // belongs to Chat (adding an organization, its settings, inviting people, notifications, the profile) opens Chat at
-// `/?open=…`, which Chat's App.tsx honours.
+// `/?open=…` (the suite bar's `intent.open`), which Chat's App.tsx honours.
 import { useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { AWAY_STATUS, isAway, StatusDialog, statusPatch, SuiteBar, type StatusOption } from '@flow/suite-bar';
+import { APP_MANIFESTS, AWAY_STATUS, intent, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type ChatPage, type StatusOption } from '@flow/suite-bar';
 import { useAgent } from '../agent/AgentProvider.tsx';
 import { useAuth } from '../auth.tsx';
 import { finishBeforeLeave, readActiveOrganization, setOrganizationState, suite, writeActiveOrganization, type SuiteOrganization, type SuiteUser } from '../suite.ts';
@@ -13,7 +13,7 @@ import { finishBeforeLeave, readActiveOrganization, setOrganizationState, suite,
 const REFRESH_MS = 60_000;
 
 /** A page of Chat (the suite's root, outside this app's base path). */
-const toChat = (open?: string) => window.location.assign(open ? `/?open=${open}` : '/');
+const toChat = (page: ChatPage) => intent.open(page);
 
 /** The address's search, as HomePage's setSearch writes it: the text, and whether it looks in every folder. */
 function withSearch(cur: URLSearchParams, text: string, find: boolean): URLSearchParams {
@@ -88,13 +88,8 @@ export function DocsSuiteBar() {
       <SuiteBar
         // The logo: the top of the file list, whatever page is open.
         home={{ href: `${import.meta.env.BASE_URL}`, onSelect: () => navigate('/') }}
-        tabs={[
-          { id: 'docs', label: 'Docs', href: `${import.meta.env.BASE_URL}`, active: true, onSelect: () => navigate('/') },
-          // Chat's count: the selected organization's unread notifications, as Chat's own tab shows them.
-          { id: 'chat', label: 'Chat', href: '/', badge: active?.unreadCount ?? 0 },
-          { id: 'mail', label: 'Mail', href: '/mail' },
-          { id: 'calendar', label: 'Calendar', href: '/calendar' },
-        ]}
+        // Chat's count: the selected organization's unread notifications, as Chat's own tab shows them.
+        tabs={suiteTabsFrom(APP_MANIFESTS, 'docs', { 'chat-unread': active?.unreadCount ?? 0 }, { activeHref: `${import.meta.env.BASE_URL}`, onSelect: () => navigate('/') })}
         organization={{
           name: active?.name ?? '',
           entries: orgs.map((o) => ({ id: o.id, name: o.name, unread: o.unreadCount ?? 0, active: o.id === active?.id, avatarUrl: o.avatarUrl })),

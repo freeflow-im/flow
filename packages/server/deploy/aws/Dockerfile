@@ -7,7 +7,8 @@
 # DATABASE_URL, NATS_URL, FLOW_DATA_KEY and FLOW_WEB_URL (DEPLOYMENT.md §4); the Workspace app's own settings are
 # listed in docs/ops/DEPLOYMENT.md. Node from packages/docs/.node-version. Chromium is for the Workspace app's PDFs.
 
-# --- Build: shared, web, server, the Workspace app, Mail and Calendar with their dev dependencies (and the suite bar the clients bundle) ------------------------------------
+# --- Build: shared, the server and every app's client (APP_MANIFESTS) with their dev dependencies (and the suite bar the clients bundle) ---
+# The client lists below are generated from the manifests (packages/edge/scripts/clients.mjs write; CI checks them).
 FROM node:24.22.1-bookworm-slim AS build
 
 # The workspace's pnpm, pinned by the root package.json's packageManager field.
@@ -20,15 +21,20 @@ ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY packages/shared/package.json packages/shared/
 COPY packages/server/package.json packages/server/
-COPY packages/web/package.json packages/web/
 COPY packages/agent-bridge/package.json packages/agent-bridge/
-COPY packages/docs/package.json packages/docs/
 COPY packages/docs/vendor packages/docs/vendor
 COPY packages/suite-bar/package.json packages/suite-bar/
+COPY apps/desktop/package.json apps/desktop/
+# clients:manifests begin (node packages/edge/scripts/clients.mjs write)
+COPY packages/web/package.json packages/web/
+COPY packages/docs/package.json packages/docs/
 COPY packages/mail/package.json packages/mail/
 COPY packages/calendar/package.json packages/calendar/
-COPY apps/desktop/package.json apps/desktop/
-RUN pnpm install --frozen-lockfile --filter @flow/server... --filter @flow/web... --filter @flow/docs... --filter @flow/mail... --filter @flow/calendar...
+COPY packages/contacts/package.json packages/contacts/
+# clients:manifests end
+# clients:install begin (node packages/edge/scripts/clients.mjs write)
+RUN pnpm install --frozen-lockfile --filter @flow/server... --filter @flow/web... --filter @flow/docs... --filter @flow/mail... --filter @flow/calendar... --filter @flow/contacts...
+# clients:install end
 
 # The web build reads the changelog (FEATURES.md, through scripts/build-features.mjs) and the agent skill from the
 # repository root.
@@ -36,26 +42,31 @@ COPY scripts/build-features.mjs scripts/build-features.d.mts scripts/
 COPY changelog changelog
 COPY .claude/skills/flow-agent-member .claude/skills/flow-agent-member
 COPY packages/shared packages/shared
+COPY packages/edge/scripts/clients.mjs packages/edge/scripts/
 COPY packages/server packages/server
-COPY packages/web packages/web
-COPY packages/docs packages/docs
 # The suite bar's sources, bundled into both clients (nothing of it is needed at run time).
 COPY packages/suite-bar packages/suite-bar
-# FreeFlow Mail's client. The server does not serve it: the edge Worker does, from this image's copy
-# (deploy-edge.yml copies packages/mail/dist out, as it does the other clients').
+# Every client's sources. The server serves the web client and the Workspace app's; the others only the edge Worker
+# does, from this image's copy (deploy-edge.yml copies the dists out).
+# clients:sources begin (node packages/edge/scripts/clients.mjs write)
+COPY packages/web packages/web
+COPY packages/docs packages/docs
 COPY packages/mail packages/mail
-# FreeFlow Calendar's client, the same way (deploy-edge.yml copies packages/calendar/dist out).
 COPY packages/calendar packages/calendar
+COPY packages/contacts packages/contacts
+# clients:sources end
 
 # The build tag the web client shows (vite.config.ts reads BUILD_SHA first; there is no .git in the build context).
-# The Workspace app's client is built for /workspace (BASE_PATH), where the suite serves it.
+# Each client is built for its manifest's basePath (BASE_PATH; the Workspace app's is /workspace/), the list read from
+# the manifests by packages/edge/scripts/clients.mjs once shared is built.
 ARG GIT_COMMIT_SHA
-RUN pnpm --filter @flow/shared build \
-  && BUILD_SHA=$(printf '%.7s' "${GIT_COMMIT_SHA:-dev}") pnpm --filter @flow/web build \
+RUN set -e \
+  && pnpm --filter @flow/shared build \
   && pnpm --filter @flow/server build \
-  && BASE_PATH=/workspace/ pnpm --filter @flow/docs build \
-  && pnpm --filter @flow/mail build \
-  && pnpm --filter @flow/calendar build
+  && node packages/edge/scripts/clients.mjs build > /tmp/clients \
+  && while read -r pkg base; do \
+       BUILD_SHA=$(printf '%.7s' "${GIT_COMMIT_SHA:-dev}") BASE_PATH="$base" pnpm --filter "$pkg" build; \
+     done < /tmp/clients
 
 # --- Run: the production dependencies and the built output, in the repository's layout ------------------------------
 FROM node:24.22.1-bookworm-slim
@@ -87,8 +98,11 @@ COPY --from=build /app/packages/shared/dist packages/shared/dist
 COPY --from=build /app/packages/server/dist packages/server/dist
 COPY --from=build /app/packages/web/dist packages/web/dist
 # Not served from here: kept in the image for the edge Worker's deploy to copy out (deploy-edge.yml).
+# clients:dists begin (node packages/edge/scripts/clients.mjs write)
 COPY --from=build /app/packages/mail/dist packages/mail/dist
 COPY --from=build /app/packages/calendar/dist packages/calendar/dist
+COPY --from=build /app/packages/contacts/dist packages/contacts/dist
+# clients:dists end
 COPY --from=build /app/FEATURES.md ./
 COPY packages/server/assets packages/server/assets
 COPY packages/server/scripts packages/server/scripts

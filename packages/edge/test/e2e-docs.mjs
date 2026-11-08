@@ -1,8 +1,11 @@
 // Against the rehearsal host instead: B=https://edge.freeflow.im, with LOG unused (sign-up mail is real there).
 // End-to-end check of Docs through the Worker and an organization's Docs object, against a local `wrangler dev` started as
 // test/e2e.mjs says (same port and log). It reads signup links from the Worker's log, because local mail goes there.
+// B=http://localhost:<port> points it at another port. With FAKE_MODEL_PORT=<port> it checks the assistant (the Assistant
+// object, platform.md §5.5) against a scripted Anthropic API this script serves there: start the Worker with
+// --var ANTHROPIC_BASE_URL:http://127.0.0.1:<port> --var ANTHROPIC_API_KEY:fake.
 import fs from 'node:fs';
-const log=process.argv[2]; const B='http://localhost:18796';
+const log=process.argv[2]; const B=process.env.B??'http://localhost:18796';
 let pass=0,fail=0; const t=(n,ok,d='')=>{ok?pass++:fail++;console.log((ok?'ok  ':'FAIL')+' '+n+(d?': '+String(d).slice(0,170):''));};
 const api=async(tok,m,p,b,type,extra={})=>{const r=await fetch(B+p,{method:m,headers:{...extra,...(tok?{authorization:'Bearer '+tok}:{}),...(b!==undefined?{'content-type':type??'application/json'}:{})},body:b===undefined?undefined:(type?b:JSON.stringify(b))});const x=await r.text();let j;try{j=JSON.parse(x)}catch{j=x}return{s:r.status,j,h:r.headers}};
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -108,4 +111,44 @@ r=await api(A.token,'GET',`/api/library?workspace=${W}&shared=1`);const FNEW=(r.
 await sleep(1500);
 r=await api(Bo.token,'GET',`/v1/workspaces/${W}/shared-with-me`);t('Eli\'s shared-with-me lists the new reference and not the old',!!FNEW&&FNEW!==FD?.id&&(r.j.shares??[]).some(x=>x.ref===FREF&&x.kind==='folder')&&!(r.j.shares??[]).some(x=>x.ref===FOLD),FNEW+' '+JSON.stringify(r.j).slice(0,200));
 r=await api(Bo.token,'GET',`/v1/channels/${general?.id}/messages`);t('the move posts no second card',(r.j.messages??[]).filter(m=>m.systemKind==='file_shared'&&/Shared Q4/.test(m.body)).length===1,JSON.stringify((r.j.messages??[]).filter(m=>m.systemKind==='file_shared').map(m=>m.body)).slice(0,170));
+
+// The assistant, one object per account (platform phase 6.3), on a scripted model: this script answers the Worker's
+// Anthropic calls. A turn from Docs (its workspace in the body, as Docs' client sends it) lists Dana's documents through the
+// Docs object; its chat is listed afterwards, from Docs and from Mail's panel (?workspace=); a Mail chat sits beside it;
+// a browser tool pauses the turn and its result resumes it; Eli's assistant is his own.
+if(process.env.FAKE_MODEL_PORT){
+  const http=await import('node:http');
+  const sse=(res,events)=>{res.writeHead(200,{'content-type':'text/event-stream'});for(const e of events)res.write(`event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`);res.end();};
+  const reply=(blocks,stop)=>[{type:'message_start',message:{id:'msg_e2e',type:'message',role:'assistant',model:'scripted',content:[],stop_reason:null,stop_sequence:null,usage:{input_tokens:1,output_tokens:0}}},
+    ...blocks.flatMap((b,i)=>b.type==='text'?[{type:'content_block_start',index:i,content_block:{type:'text',text:''}},{type:'content_block_delta',index:i,delta:{type:'text_delta',text:b.text}},{type:'content_block_stop',index:i}]
+      :[{type:'content_block_start',index:i,content_block:{type:'tool_use',id:b.id,name:b.name,input:{}}},{type:'content_block_delta',index:i,delta:{type:'input_json_delta',partial_json:JSON.stringify(b.input)}},{type:'content_block_stop',index:i}]),
+    {type:'message_delta',delta:{stop_reason:stop,stop_sequence:null},usage:{output_tokens:5}},{type:'message_stop'}];
+  const asked=[];
+  const fakeModel=http.createServer(async(req,res)=>{let b='';for await(const c of req)b+=c;const p=JSON.parse(b);asked.push({tools:(p.tools??[]).map(t=>t.name)});
+    const last=p.messages.at(-1)?.content??[];const result=Array.isArray(last)&&last.find(x=>x.type==='tool_result');
+    if(result)return sse(res,reply([{type:'text',text:`Found: ${typeof result.content==='string'?result.content:JSON.stringify(result.content)}`}],'end_turn'));
+    const said=Array.isArray(last)?last.filter(x=>x.type==='text').map(x=>x.text).join(' '):String(last);
+    const tool=/my docs/.test(said)?'list_docs':/my files/.test(said)?'list_files':null;
+    sse(res,tool?reply([{type:'tool_use',id:'tu_'+tool+'_'+asked.length,name:tool,input:{}}],'tool_use'):reply([{type:'text',text:'Hello.'}],'end_turn'));});
+  await new Promise(r=>fakeModel.listen(Number(process.env.FAKE_MODEL_PORT),'127.0.0.1',r));
+  const turn=async(tok,body,q='')=>{const res=await fetch(B+'/api/agent/turn'+q,{method:'POST',headers:{authorization:'Bearer '+tok,'content-type':'application/json'},body:JSON.stringify(body)});const x=await res.text();return{s:res.status,ev:x.split('\n\n').filter(c=>c.startsWith('data: ')).map(c=>JSON.parse(c.slice(6))),x};};
+  const AN=`Assistant notes ${tag}`;await api(A.token,'POST',`/api/docs?workspace=${W}`,{title:AN});
+  let tr=await turn(A.token,{message:'What are my docs?',context:{page:'home'},workspace:W});
+  t('a turn from Docs runs list_docs on the Docs object and reads the result back',tr.s===200&&tr.ev.some(e=>e.type==='tool_start'&&e.name==='list_docs')&&tr.ev.some(e=>e.type==='tool_end'&&e.ok)&&tr.ev.some(e=>e.type==='text'&&e.text.includes(AN))&&tr.ev.at(-1)?.type==='done',tr.s+' '+tr.x.slice(0,200));
+  t('the model was offered Docs\' browser tools and every server tool, not Mail\'s',asked[0]?.tools.includes('list_files')&&asked[0].tools.includes('search_mail')&&!asked[0].tools.includes('open_mail_message'),JSON.stringify(asked[0]?.tools?.length));
+  r=await api(A.token,'GET','/api/agent?scope=home');const items=r.j.items??[];
+  t('the chat is listed afterwards under GET /api/agent?scope=',r.s===200&&items.some(i=>i.kind==='tool'&&i.name==='list_docs'&&i.status==='ok')&&items.some(i=>i.kind==='assistant'&&i.text.includes(AN)),r.s+' '+JSON.stringify(r.j).slice(0,160));
+  r=await api(A.token,'GET',`/api/agent?scope=home&workspace=${W}`);t('the same chat from Mail\'s panel, with ?workspace= (one assistant per account)',r.s===200&&JSON.stringify(r.j.items)===JSON.stringify(items),r.s+' '+JSON.stringify(r.j).slice(0,120));
+  tr=await turn(A.token,{message:'Hi from Mail',context:{page:'mail',accountId:'none',account:'dana@example.com',folder:'INBOX'},scope:'mail',workspace:W},`?workspace=${W}`);
+  t('a Mail turn offers Mail\'s browser tools',tr.ev.at(-1)?.type==='done'&&asked.at(-1)?.tools.includes('open_mail_message')&&!asked.at(-1).tools.includes('list_files'),tr.x.slice(0,160));
+  r=await api(A.token,'GET','/api/agent?scope=mail');t('Mail\'s chat is in the same assistant, beside Docs\'',(r.j.items??[])[0]?.text==='Hi from Mail',JSON.stringify(r.j).slice(0,140));
+  tr=await turn(A.token,{message:'List my files',context:{page:'home'},workspace:W});const call=tr.ev.find(e=>e.type==='client_tools')?.calls?.[0];
+  t('a browser tool pauses the turn',call?.name==='list_files'&&!tr.ev.some(e=>e.type==='done'),tr.x.slice(0,160));
+  tr=await turn(A.token,{context:{page:'home'},workspace:W,toolResults:[{id:call?.id,content:'[{"filename":"hello.txt"}]'}]});
+  t('and its result resumes it',tr.ev.some(e=>e.type==='text'&&e.text.includes('hello.txt'))&&tr.ev.at(-1)?.type==='done',tr.x.slice(0,160));
+  r=await api(A.token,'GET','/api/settings/assistant');t('the assistant settings are the Assistant object\'s',r.s===200&&r.j.settings?.provider==='default',r.s+' '+JSON.stringify(r.j).slice(0,100));
+  r=await api(Bo.token,'GET',`/api/agent?scope=home&workspace=${W}`);t('Eli\'s assistant in the organization is his own',r.s===200&&(r.j.items??[]).length===0,r.s+' '+JSON.stringify(r.j).slice(0,100));
+  r=await api(A.token,'POST','/api/agent/jobs',{});t('the rest of /api/agent (the retired jobs) still goes to Docs, not the Assistant object',r.s!==404||r.j.error!=='Not found',r.s+' '+JSON.stringify(r.j).slice(0,100));
+  fakeModel.close();
+}
 console.log(`\n${pass} passed, ${fail} failed`);process.exit(fail?1:0);

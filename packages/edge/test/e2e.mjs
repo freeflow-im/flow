@@ -76,6 +76,25 @@ r=await api(A.token,'GET',`/v1/events?workspace=${W}&since=0&types=chat.reaction
  r=await api(Bo.token,'GET',`/v1/artifacts/${SA.id}`);t('Bob gets 404 again',r.s===404,r.s);
  await sleep(500);r=await api(Bo.token,'GET',`/v1/events?workspace=${W}&since=0&types=sharing.revoked`);t('and the sharing.revoked event',(r.j.events??[]).some(e=>e.data?.ref===AREF),JSON.stringify(r.j).slice(0,140));
  r=await api(A.token,'POST',`/v1/artifacts/${SA.id}/app-token`);t('Ann, a member, still mints',r.s===200&&!!r.j.token,r.s);}
+// ---- references (platform phase 6.4): FreeFlow addresses in a message resolve per reader through /v1/references
+{r=await api(A.token,'GET',`/v1/workspaces/${W}/members`);const bobAcct=(r.j.members??[]).find(m=>m.userId===Bo.user.id)?.accountId;
+ r=await api(A.token,'POST',`/api/sheets?workspace=${W}`,{title:'Shared budget'});const SH=r.j.sheet?.id;
+ r=await api(A.token,'POST',`/api/sheets?workspace=${W}`,{title:'Private budget'});const PV=r.j.sheet?.id;
+ t('Ann makes two spreadsheets',!!SH&&!!PV,JSON.stringify(r.j).slice(0,100));
+ r=await api(A.token,'PUT',`/api/grants/sheet/${SH}?workspace=${W}`,{principal:`account:${bobAcct}`,role:'viewer'});t('and shares one with Bob',r.s===200,r.s+' '+JSON.stringify(r.j).slice(0,100));
+ const SREF=`${W}/docs/sheet/${SH}`,PREF=`${W}/docs/sheet/${PV}`;
+ r=await api(A.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:`the numbers: ${B}/workspace/s/${SH} and ${B}/workspace/s/${PV}`});t('Ann posts both addresses in #general',r.s===201);
+ const refs=[SREF,PREF,`${W}/chat/channel/${gen.id}`,`${W}/mail/message/x`].map(encodeURIComponent).join(',');
+ r=await api(Bo.token,'GET',`/v1/references?workspace=${W}&refs=${refs}`);const bobRefs=r.j.references??[];
+ t('Bob resolves the shared file with its title',bobRefs[0]?.ref===SREF&&bobRefs[0]?.title==='Shared budget'&&bobRefs[0]?.role==='viewer'&&bobRefs[0]?.url===`/workspace/s/${SH}`,JSON.stringify(bobRefs[0]??r.j).slice(0,160));
+ t('and the one she did not share as denied, with no title',bobRefs[1]?.ref===PREF&&bobRefs[1]?.denied===true&&!('title' in bobRefs[1]),JSON.stringify(bobRefs[1]).slice(0,120));
+ t('a channel resolves from the Org object, mail is denied',bobRefs[2]?.title==='#'+gen.name&&bobRefs[3]?.denied===true,JSON.stringify(bobRefs.slice(2)).slice(0,160));
+ r=await api(A.token,'GET',`/v1/references?workspace=${W}&refs=${encodeURIComponent(PREF)}`);t('Ann resolves her private file (asked of Docs)',r.j.references?.[0]?.title==='Private budget'&&r.j.references[0].role==='owner',JSON.stringify(r.j).slice(0,140));
+ r=await api(null,'GET',`/v1/references?workspace=${W}&refs=${encodeURIComponent(SREF)}`);t('no caller, no answer',r.s===401,r.s);
+ let line=null;for(let i=0;i<15&&!line;i++){await sleep(200);r=await api(Bo.token,'GET',`/v1/me/notifications?workspace=${W}`);line=(r.j.notifications??[]).find(n=>(n.message?.body??'').includes(`/workspace/s/${SH}`))}
+ const addr=/https?:\/\/\S+/.exec(line?.message?.body??'')?.[0];const lm=addr?/^\/workspace\/s\/([^/]+)$/.exec(new URL(addr).pathname):null;const lineRef=lm?`${W}/docs/sheet/${lm[1]}`:null;
+ t('the share line in Bob\'s DM names the file by its address',line?.message?.systemKind==='file_shared'&&lineRef===SREF,JSON.stringify(line?.message?.body??r.j).slice(0,160));
+ r=await api(Bo.token,'GET',`/v1/references?workspace=${W}&refs=${encodeURIComponent(lineRef??'')}`);t('which resolves to the chip\'s reference',r.j.references?.[0]?.title==='Shared budget',JSON.stringify(r.j).slice(0,140));}
 // ---- subscriptions: durable consumers with a cursor, read by HTTP, long-polled with wait
 {const head=(await api(Bo.token,'GET',`/v1/events?workspace=${W}&since=0&limit=500`)).j;let nx=head.next;while(true){const p=(await api(Bo.token,'GET',`/v1/events?workspace=${W}&since=${nx}&limit=500`)).j;if(!p.events.length){nx=p.next;break}nx=p.next}
  const SP=`/v1/events/subscriptions?workspace=${W}`,sp=(id,q='')=>`/v1/events/subscriptions/${id}?workspace=${W}${q}`;

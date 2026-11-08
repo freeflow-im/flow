@@ -35,7 +35,9 @@ import JoinScreen from './components/JoinScreen';
 import NativeSignIn from './components/NativeSignIn';
 import WorkspaceChooser from './components/WorkspaceChooser';
 import Main from './components/Main';
-import ChatSuiteBar, { type SuiteIntent } from './components/ChatSuiteBar';
+import ChatSuiteBar from './components/ChatSuiteBar';
+import ChatIntents from './components/ChatIntents';
+import { readChatIntent, withoutChatIntent, type ChatIntent } from './lib/chatIntents';
 
 // Names, not keys. Every one of these is per connection+identity: the runtime
 // turns a name into the storage key its session owns, and the connection the
@@ -97,17 +99,15 @@ function consumeEmailLinkParams(runtime: ConnectionRuntime): {
   return { signupToken, resetToken, signinToken, nativeHandoff, register };
 }
 
-const SUITE_INTENTS: SuiteIntent[] = ['chooser', 'admin', 'invite', 'activity', 'profile'];
-
-/** Pull ?open= off the URL: what the Docs app's suite bar sends someone to Chat for (the organization menu's Add,
- * Organization settings and Invite people, the notifications, My profile). */
-function consumeSuiteIntent(): SuiteIntent | null {
+/** Pull ?open= / ?share= off the URL (lib/chatIntents.ts): what another page of the suite asks Chat for — the suite
+ * bars' pages (the organization menu's Add, Organization settings and Invite people, the notifications, My profile),
+ * an object's address, or its Share dialog. Read once; applied once signed in. */
+function consumeChatIntent(): ChatIntent | null {
   const params = new URLSearchParams(location.search);
-  const open = params.get('open');
-  if (open === null) return null;
-  params.delete('open');
-  history.replaceState(null, '', `${location.pathname}${params.size ? `?${params}` : ''}${location.hash}`);
-  return SUITE_INTENTS.includes(open as SuiteIntent) ? (open as SuiteIntent) : null;
+  if (!['open', 'share', 'text'].some((k) => params.has(k))) return null;
+  const intent = readChatIntent(location.search);
+  history.replaceState(null, '', `${location.pathname}${withoutChatIntent(location.search)}${location.hash}`);
+  return intent;
 }
 
 export default function App() {
@@ -249,7 +249,8 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
   const [{ signupToken, resetToken, signinToken, nativeHandoff, register }] = useState(() =>
     consumeEmailLinkParams(runtime),
   );
-  const [intent] = useState(consumeSuiteIntent);
+  const [intent] = useState(consumeChatIntent);
+  const page = intent?.kind === 'page' ? intent.page : null;
   // The Activity count Main keeps live, for the suite bar's Chat tab (null while Main is not mounted).
   const [activityUnread, setActivityUnread] = useState<number | null>(null);
   // Active workspace survives reloads/restarts (phase 3.5 fixes), per session.
@@ -468,23 +469,23 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
     });
   }, [runtime, user, workspaceId, channelId, threadRootId, artifactId]);
 
-  // ?open= from the Docs app (consumeSuiteIntent): the views it names, once signed in. The bar opens its own
-  // dialogs (invite, profile).
+  // ?open=<page> from another app's suite bar (consumeChatIntent): the views it names, once signed in. The bar opens its
+  // own dialogs (invite, profile); an object's address is ChatIntents'.
   const intentApplied = useRef(false);
   useEffect(() => {
-    if (!user || !intent || intentApplied.current) return;
+    if (!user || !page || intentApplied.current) return;
     intentApplied.current = true;
-    if (intent === 'chooser') {
+    if (page === 'chooser') {
       setWorkspaceId(null);
       runtime.write(ACTIVE_WS, null);
-    } else if (intent === 'activity' && workspaceId) {
+    } else if (page === 'activity' && workspaceId) {
       setChannelId(ACTIVITY_VIEW_ID);
-    } else if (intent === 'admin' && workspaceId) {
+    } else if (page === 'admin' && workspaceId) {
       setAdminPanelOpen(true);
       runtime.write(ADMIN_PANEL, '1');
       setChannelId(ADMIN_VIEW_ID);
     }
-  }, [user, intent, workspaceId, runtime]);
+  }, [user, page, workspaceId, runtime]);
 
   useEffect(() => {
     if (!notice) return;
@@ -735,7 +736,8 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
         )}
         {/* The suite bar above whichever is showing (packages/suite-bar); Main scrolls under it. */}
         <div className="flex h-full flex-col">
-          <ChatSuiteBar activityUnread={workspaceId ? activityUnread : null} intent={intent} />
+          <ChatSuiteBar activityUnread={workspaceId ? activityUnread : null} intent={page} />
+          {workspaceId && <ChatIntents intent={intent?.kind === 'page' ? null : intent} onNotice={setNotice} />}
           <div className="relative min-h-0 flex-1">
             {workspaceId ? <Main onActivityUnread={setActivityUnread} /> : <WorkspaceChooser />}
           </div>

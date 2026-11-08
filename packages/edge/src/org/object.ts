@@ -27,6 +27,7 @@ import { logEntryFor } from './eventLog';
 import { config } from './config';
 import { isActiveAccount, recordShare, revokeShare, shareEvents, sharedRefsOf, sharedWith, type RecordShareInput, type RevokeShareInput, type SharedItem } from './services/shares';
 import { eq, and } from 'drizzle-orm';
+import { resolveInOrg, type OrgReferenceAnswer } from './services/references';
 import { hostedMailEnabled, type MailProviderEnv } from '../mailprovider/index';
 
 /** IMAGES (Cloudflare Images) resizes preview images and thumbnails; without it they are kept as they came (lib/images.ts). */
@@ -412,6 +413,12 @@ export class Org extends DurableObject<OrgEnv> {
   /** The references shared with the reader: the Events object's `ref:` audience (events/core.ts). */
   async sharedRefsOf(reader: { accountId: string; channelIds?: string[] }): Promise<string[]> {
     return withDb(this.db, () => sharedRefsOf(this.shareReader(reader)));
+  }
+
+  /** References resolved for a member (GET /v1/references, routes/references.ts): Chat's kinds here, and anything in the
+   * share index shared with them; another app's object not in it comes back as `ask`. */
+  async resolveReferences(userId: string, workspaceId: string, refs: string[]): Promise<OrgReferenceAnswer[]> {
+    return this.scoped(() => resolveInOrg(userId, workspaceId, refs));
   }
 
   /** The account ids of this organization's agents, for an `actorKind` filter. */

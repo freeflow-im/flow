@@ -73,7 +73,7 @@ describe('what the chat links to', () => {
 });
 
 describe('browser tools in Mail', () => {
-  it('opens a message for open_mail_message and refuses Docs’ own tools', async () => {
+  it('opens a message for open_mail_message, and answers any other tool as unknown (the server offers Mail only its own)', async () => {
     const shown: unknown[] = [];
     const results = await runMailClientCalls(
       [
@@ -97,6 +97,6 @@ describe('browser tools in Mail', () => {
       ['c', true],
       ['d', true],
     ]);
-    expect(results[3]?.content).toMatch(/user is in Mail/);
+    expect(results[3]?.content).toBe('Unknown tool read_doc.');
   });
 });
