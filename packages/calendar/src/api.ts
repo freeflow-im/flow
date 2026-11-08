@@ -1,6 +1,7 @@
 // The calendar API on the edge Worker (packages/edge, /v1/calendar/*), typed as its contract states it
 // (docs/specs/calendar.md §4). Same origin, with the suite's session cookie; a 401 means the session ended, and the
 // suite's sign-in page brings the person back here.
+import { readActiveOrganization } from './suite';
 
 export type AccountStatus = 'ok' | 'auth_failed' | 'connect_failed';
 export interface CalendarAccount {
@@ -101,8 +102,20 @@ export async function signIn(email: string, password: string): Promise<void> {
   throw new CalendarApiError('auth_failed', err?.error?.message ?? (res.status === 401 ? 'That email or password is not right.' : `${res.status} ${res.statusText}`), res.status);
 }
 
+/** The organization every /v1/calendar request names (`?workspace=`): its Calendar is that account's (platform.md §3.6).
+ * Set from the suite bar's selection (App.tsx); until then, the one Chat selected. */
+let workspace: string | null = null;
+export const setCalendarWorkspace = (id: string | null) => {
+  workspace = id;
+};
+/** A /v1/calendar (or /v1/mail: contacts) path, naming the organization. */
+export function inWorkspace(path: string): string {
+  const id = workspace ?? readActiveOrganization();
+  return id && /^\/v1\/(mail|calendar)\//.test(path) ? `${path}${path.includes('?') ? '&' : '?'}workspace=${encodeURIComponent(id)}` : path;
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const res = await fetch(inWorkspace(path), {
     method,
     credentials: 'same-origin',
     headers: body === undefined ? { accept: 'application/json' } : { accept: 'application/json', 'content-type': 'application/json' },

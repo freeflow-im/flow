@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { and, eq, isNull, ne, sql } from 'drizzle-orm';
 import {
   SIDEBAR_COLOR_IDS,
+  WORKSPACE_POLICY_DEFAULTS,
   emailDomain,
   isSelfRegisterableDomain,
   type InviteDTO,
@@ -12,11 +13,12 @@ import {
   type MemberRole,
   type WorkspaceDTO,
   type WorkspaceMemberDTO,
+  type WorkspacePolicies,
 } from '@flow/shared';
 import { db, schema, type Tx } from '../db/index.js';
 import { newId, presetWorkspaceId } from '../lib/ids.js';
 import { hashToken, newLinkToken, newToken } from '../lib/tokens.js';
-import { badRequest, conflict, forbidden, notFound } from '../lib/errors.js';
+import { ApiError, badRequest, conflict, forbidden, notFound } from '../lib/errors.js';
 import { config } from '../config.js';
 import { blobStore } from '../storage/index.js';
 import { publishEvent, subjectMeta, subjectUserMeta, subjectUserNotify } from '../bus.js';
@@ -24,6 +26,7 @@ import { emailSender } from '../email/index.js';
 import { visibleEmail } from './auth.js';
 import { killAgentCredentials, removeMemberDeep, removeSponsoredAgents, tombstoneUser } from './memberRemoval.js';
 import { postSystemMessage } from './messages.js';
+import { ensureAccount } from '../directoryLink.js';
 
 const {
   workspaces,
@@ -42,6 +45,8 @@ export function toWorkspaceDTO(
   w: typeof workspaces.$inferSelect,
   role?: MemberRole,
   unreadCount?: number,
+  /** The caller's own address here, on "my workspaces". */
+  address?: string | null,
 ): WorkspaceDTO {
   const dto: WorkspaceDTO = {
     id: w.id,
@@ -52,10 +57,53 @@ export function toWorkspaceDTO(
     googleSelfRegisterDomain: w.googleSelfRegisterDomain,
     createdBy: w.createdBy,
     createdAt: w.createdAt.toISOString(),
+    policies: workspacePolicies(w),
   };
   if (role) dto.role = role;
   if (unreadCount !== undefined) dto.unreadCount = unreadCount;
+  if (address) dto.address = address;
   return dto;
+}
+
+/** The organization's policies (platform.md §3.1), the defaults filling what was never set. */
+export function workspacePolicies(w: Pick<typeof workspaces.$inferSelect, 'policies'>): WorkspacePolicies {
+  return { ...WORKSPACE_POLICY_DEFAULTS, ...(w.policies ?? {}) };
+}
+
+/**
+ * The gate on what a policy governs (platform.md §3.1): owners and admins always pass; a member passes unless the
+ * policy says `admins`, which is a 403 `policy_forbids`.
+ */
+async function requirePolicy(workspaceId: string, userId: string, policy: 'inviteBy' | 'agentsBy', what: string) {
+  const m = await requireMembership(workspaceId, userId);
+  if (m.role === 'owner' || m.role === 'admin') return m;
+  const w = (await db.select({ policies: workspaces.policies }).from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1))[0];
+  if (!w || workspacePolicies(w)[policy] === 'admins') {
+    throw new ApiError(403, 'policy_forbids', `only owners and admins can ${what} in this workspace`);
+  }
+  return m;
+}
+
+/** The refusal for what an agent may not do (platform.md §2.2, §3.3): own an organization, be an admin, sponsor an agent. */
+export const agentForbidden = (message: string) => new ApiError(403, 'agent_forbidden', message);
+
+/** Whether a user (this organization's copy) is an agent. */
+export async function isAgentUser(userId: string): Promise<boolean> {
+  return !!(await db.select({ isAgent: users.isAgent }).from(users).where(eq(users.id, userId)).limit(1))[0]?.isAgent;
+}
+
+/** `agentsBy` (platform.md §3.1): who may sponsor an agent into this workspace. */
+export const requireAgentSponsorRights = (workspaceId: string, userId: string) =>
+  requirePolicy(workspaceId, userId, 'agentsBy', 'add agents');
+
+/**
+ * The joiner's address (platform.md §3.2): the directory makes or reactivates their account before the member row is
+ * written, so the row can carry it. Null for someone already a member, whose row and role stay as they are.
+ */
+export async function accountAddressForJoin(workspaceId: string, userId: string, role: MemberRole = 'member'): Promise<string | null> {
+  if (await isWorkspaceMember(workspaceId, userId)) return null;
+  const u = (await db.select({ displayName: users.displayName }).from(users).where(eq(users.id, userId)).limit(1))[0];
+  return (await ensureAccount(workspaceId, userId, role, u?.displayName ?? ''))?.address ?? null;
 }
 
 /**
@@ -99,6 +147,8 @@ export async function updateWorkspace(
     unfurlDomainAllowlist?: string[] | null | undefined;
     // phase 16 §5a — null turns domain self-registration off
     googleSelfRegisterDomain?: string | null | undefined;
+    // platform.md §3.1 — any subset; the rest keep their values
+    policies?: Partial<{ [K in keyof WorkspacePolicies]: WorkspacePolicies[K] | undefined }> | undefined;
   },
 ): Promise<WorkspaceDTO> {
   const m = await requireWorkspaceAdmin(workspaceId, actorId);
@@ -107,7 +157,15 @@ export async function updateWorkspace(
     unfurlEnabled: boolean;
     unfurlDomainAllowlist: string[] | null;
     googleSelfRegisterDomain: string | null;
+    policies: WorkspacePolicies;
   }> = {};
+  if (patch.policies !== undefined) {
+    const current = (await db.select({ policies: workspaces.policies }).from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1))[0];
+    if (!current) throw notFound('workspace not found');
+    const given = Object.fromEntries(Object.entries(patch.policies).filter(([, v]) => v !== undefined));
+    // Stored whole, so the directory's copy (sent by the outbox) is whole too.
+    set.policies = { ...workspacePolicies(current), ...given };
+  }
   if (patch.sidebarColor !== undefined) {
     if (!SIDEBAR_COLOR_IDS.includes(patch.sidebarColor)) {
       throw badRequest('bad_color', `sidebarColor must be one of: ${SIDEBAR_COLOR_IDS.join(', ')}`);
@@ -265,12 +323,14 @@ export async function createWorkspace(
   if (domain) await assertMaySelfRegisterDomain(userId, domain);
   const wsId = presetWorkspaceId.getStore() ?? newId();
   const chanId = newId();
+  // The creator is the organization's owner (platform.md §3.1), with an account and an address from the start.
+  const address = (await ensureAccount(wsId, userId, 'owner', creator[0]?.displayName ?? ''))?.address ?? null;
   try {
     await db.transaction(async (tx) => {
       await tx
         .insert(workspaces)
         .values({ id: wsId, slug, name, createdBy: userId, googleSelfRegisterDomain: domain });
-      await tx.insert(workspaceMembers).values({ workspaceId: wsId, userId, role: 'owner' });
+      await tx.insert(workspaceMembers).values({ workspaceId: wsId, userId, role: 'owner', address });
       await tx.insert(channels).values({
         id: chanId,
         workspaceId: wsId,
@@ -286,7 +346,7 @@ export async function createWorkspace(
   }
   const created = await db.select().from(workspaces).where(eq(workspaces.id, wsId)).limit(1);
   publishWorkspaceJoined(wsId, userId);
-  return toWorkspaceDTO(created[0]!, 'owner');
+  return toWorkspaceDTO(created[0]!, 'owner', undefined, address);
 }
 
 export async function getWorkspace(workspaceId: string, userId: string): Promise<WorkspaceDTO> {
@@ -336,13 +396,13 @@ export async function workspaceNamesOf(userId: string): Promise<Array<{ id: stri
 
 export async function myWorkspaces(userId: string): Promise<WorkspaceDTO[]> {
   const rows = await db
-    .select({ w: workspaces, role: workspaceMembers.role })
+    .select({ w: workspaces, role: workspaceMembers.role, address: workspaceMembers.address })
     .from(workspaceMembers)
     .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
     .where(eq(workspaceMembers.userId, userId))
     .orderBy(workspaceMembers.joinedAt);
   const unread = await unreadByWorkspace(userId);
-  return rows.map((r) => toWorkspaceDTO(r.w, r.role, unread.get(r.w.id) ?? 0));
+  return rows.map((r) => toWorkspaceDTO(r.w, r.role, unread.get(r.w.id) ?? 0, r.address));
 }
 
 export async function listMembers(workspaceId: string, userId: string): Promise<WorkspaceMemberDTO[]> {
@@ -372,6 +432,7 @@ export async function listMembers(workspaceId: string, userId: string): Promise<
     sponsorId: r.u.isAgent ? r.m.sponsorUserId ?? r.u.sponsorUserId : null,
     role: r.m.role,
     joinedAt: r.m.joinedAt.toISOString(),
+    ...(r.m.address ? { address: r.m.address } : {}),
   }));
 }
 
@@ -406,6 +467,7 @@ export async function toMemberDTO(
     sponsorId: r.u.isAgent ? r.m.sponsorUserId ?? r.u.sponsorUserId : null,
     role: r.m.role,
     joinedAt: r.m.joinedAt.toISOString(),
+    ...(r.m.address ? { address: r.m.address } : {}),
   };
 }
 
@@ -427,6 +489,7 @@ export async function setMemberRole(
   if (targetId === actorId) throw badRequest('self_role', 'you cannot change your own role');
   const target = await requireMembership(workspaceId, targetId);
   if (target.role === 'owner') throw forbidden('the workspace owner role cannot be changed');
+  if (role === 'admin' && (await isAgentUser(targetId))) throw agentForbidden('an agent cannot be an admin');
   await db
     .update(workspaceMembers)
     .set({ role })
@@ -623,6 +686,41 @@ export async function leaveWorkspace(workspaceId: string, userId: string): Promi
   await removeMemberDeep(workspaceId, userId);
 }
 
+/**
+ * The owner hands the organization to another person (platform.md §3.1): the target becomes `owner` and the caller
+ * `admin`, in one transaction, so there is exactly one owner at every moment. Owner only; the target must be a person
+ * who is a member. The directory's owner follows through the outbox (`owner`), and both roles through `join`.
+ */
+export async function transferWorkspaceOwnership(workspaceId: string, actorId: string, targetId: string): Promise<WorkspaceDTO> {
+  const actor = await requireMembership(workspaceId, actorId);
+  if (actor.role !== 'owner') throw forbidden('only the workspace owner can transfer ownership');
+  if (targetId === actorId) throw badRequest('self_transfer', 'you already own this workspace');
+  const target = (
+    await db
+      .select({ isAgent: users.isAgent, isBot: users.isBot, deletedAt: users.deletedAt })
+      .from(workspaceMembers)
+      .innerJoin(users, eq(users.id, workspaceMembers.userId))
+      .where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, targetId)))
+      .limit(1)
+  )[0];
+  if (!target) throw notFound('member not found');
+  if (target.isAgent) throw agentForbidden('an agent cannot own an organization');
+  if (target.isBot || target.deletedAt) throw badRequest('not_a_person', 'ownership can only go to a person');
+  await db.transaction(async (tx) => {
+    await tx.update(workspaceMembers).set({ role: 'owner' }).where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, targetId)));
+    await tx.update(workspaceMembers).set({ role: 'admin' }).where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, actorId)));
+  });
+  for (const id of [targetId, actorId]) {
+    publishEvent(subjectMeta(workspaceId), {
+      type: 'member.updated',
+      workspaceId,
+      ts: new Date().toISOString(),
+      data: await toMemberDTO(workspaceId, id),
+    });
+  }
+  return getWorkspace(workspaceId, actorId);
+}
+
 // ---- Invites (issue #577: one call, many addresses) ----------------------
 //
 // A batch must not be all-or-nothing: a typo in the fourth address cannot cost
@@ -716,10 +814,14 @@ async function inviteOne(workspaceId: string, inviterId: string, rawEmail: strin
   };
 }
 
-/** Owner/admin gate on inviting (spec permission rules), checked once per call. */
+/** The gate on inviting, checked once per call: owners and admins, and members too unless the organization's
+ * `inviteBy` policy says `admins` (platform.md §3.1). An agent or bot is never let in by the policy. */
 async function requireInviteRole(workspaceId: string, inviterId: string): Promise<void> {
   const m = await requireMembership(workspaceId, inviterId);
-  if (m.role !== 'owner' && m.role !== 'admin') throw forbidden('only owners and admins can invite');
+  if (m.role === 'owner' || m.role === 'admin') return;
+  const u = (await db.select({ isAgent: users.isAgent, isBot: users.isBot }).from(users).where(eq(users.id, inviterId)).limit(1))[0];
+  if (!u || u.isAgent || u.isBot) throw forbidden('only owners and admins can invite');
+  await requirePolicy(workspaceId, inviterId, 'inviteBy', 'invite');
 }
 
 /**
@@ -784,9 +886,10 @@ export async function acceptInvite(
   if (inv.declinedAt) throw conflict('invite_declined', 'invite was declined');
   if (inv.expiresAt < new Date()) throw badRequest('invite_expired', 'invite has expired');
 
+  const address = await accountAddressForJoin(inv.workspaceId, userId);
   const joined = await db.transaction(async (tx) => {
     await tx.update(invites).set({ acceptedAt: new Date() }).where(eq(invites.id, inv.id));
-    return enrollInWorkspace(tx, inv.workspaceId, userId);
+    return enrollInWorkspace(tx, inv.workspaceId, userId, 'member', undefined, address);
   });
 
   if (joined) await announceJoin(inv.workspaceId, userId);
@@ -840,10 +943,9 @@ function publishInviteEnded(userId: string, workspaceId: string, inviteId: strin
 // chat and leaves there. Exactly one is live per workspace — generating a new
 // one revokes the old — and unlike invites it never expires on its own.
 
-/** Owner/admin gate, shared by every join-link operation (same rule as invites). */
+/** The gate shared by every join-link operation: the same rule as invites. */
 async function requireInviteRights(workspaceId: string, userId: string): Promise<void> {
-  const m = await requireMembership(workspaceId, userId);
-  if (m.role !== 'owner' && m.role !== 'admin') throw forbidden('only owners and admins can invite');
+  await requireInviteRole(workspaceId, userId);
 }
 
 /** The shareable URL: the slug is in there so the link reads as the workspace
@@ -932,7 +1034,8 @@ export async function redeemJoinLink(userId: string, token: string): Promise<Wor
   const ws = (await db.select().from(workspaces).where(eq(workspaces.id, row.workspaceId)).limit(1))[0];
   if (!ws) throw notFound('this join link is no longer valid');
 
-  const joined = await db.transaction(async (tx) => enrollInWorkspace(tx, ws.id, userId));
+  const address = await accountAddressForJoin(ws.id, userId);
+  const joined = await db.transaction(async (tx) => enrollInWorkspace(tx, ws.id, userId, 'member', undefined, address));
   if (joined) await announceJoin(ws.id, userId);
 
   const m = (
@@ -958,10 +1061,12 @@ export async function enrollInWorkspace(
   role: MemberRole = 'member',
   /** Agents only (#357): who vouched for this agent in THIS workspace. */
   sponsorUserId?: string,
+  /** The account's address, from `accountAddressForJoin` before the transaction (platform.md §3.2). */
+  address?: string | null,
 ): Promise<boolean> {
   const inserted = await tx
     .insert(workspaceMembers)
-    .values({ workspaceId, userId, role, sponsorUserId: sponsorUserId ?? null })
+    .values({ workspaceId, userId, role, sponsorUserId: sponsorUserId ?? null, address: address ?? null })
     .onConflictDoNothing()
     .returning({ userId: workspaceMembers.userId });
   const general = await tx

@@ -16,7 +16,8 @@ export const GOOGLE_SCOPE = 'openid email https://www.googleapis.com/auth/calend
 export const STATE_TTL_MS = 10 * 60_000;
 
 export interface GoogleClient { clientId: string; clientSecret: string }
-export interface OAuthState { userId: string; nonce: string; returnTo: string; exp: number }
+/** `accountId`: the account whose Calendar object the connection goes to (platform.md §3.6); `userId`, its holder. */
+export interface OAuthState { accountId: string; userId: string; nonce: string; returnTo: string; exp: number }
 
 const b64url = (b: Buffer) => b.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const fromB64url = (s: string) => Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
@@ -34,7 +35,7 @@ export function openState(token: string, now = Date.now()): OAuthState | null {
   if (!kid || !blob) return null;
   try {
     const s = JSON.parse(decryptBlob(fromB64url(blob), fromB64url(kid).toString('utf8')).toString('utf8')) as OAuthState;
-    if (typeof s.userId !== 'string' || typeof s.returnTo !== 'string' || typeof s.exp !== 'number' || s.exp < now) return null;
+    if (typeof s.accountId !== 'string' || typeof s.userId !== 'string' || typeof s.returnTo !== 'string' || typeof s.exp !== 'number' || s.exp < now) return null;
     return s;
   } catch {
     return null;

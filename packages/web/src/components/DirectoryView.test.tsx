@@ -130,6 +130,13 @@ describe('DirectoryGrid render', () => {
     expect(render([row('Ada', { title: '' })])).not.toContain('directory-card-title');
   });
 
+  it('shows the member\u2019s address under the name when the server sent one', () => {
+    const html = render([row('Ada', { address: 'ada@acme.freeflow.im' })]);
+    expect(html).toContain('directory-card-address');
+    expect(html).toContain('ada@acme.freeflow.im');
+    expect(render([row('Ada')])).not.toContain('directory-card-address');
+  });
+
   it('keeps an agent\u2019s Sponsored by line when the agent also has a title', () => {
     const html = render([row('CypressBot', { isAgent: true, sponsorName: 'Ada', title: 'Release bot' })]);
     expect(html).toContain('Release bot');

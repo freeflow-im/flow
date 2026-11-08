@@ -27,10 +27,10 @@ export function chooseOrganization(id: string): void {
   for (const l of listeners) l();
 }
 
-/** The user's organizations, and the one selected (else the first). */
-export function useOrganizations(): { list: SuiteOrganization[]; active: SuiteOrganization | undefined } {
+/** The user's organizations, the one selected (else the first), and whether the list has come (`ready`). */
+export function useOrganizations(): { list: SuiteOrganization[]; active: SuiteOrganization | undefined; ready: boolean } {
   const orgs = useQuery({ queryKey: ['suite', 'organizations'], queryFn: suite.organizations, refetchInterval: REFRESH_MS });
   const activeId = useSyncExternalStore(subscribe, () => current, () => null);
   const list = orgs.data ?? [];
-  return { list, active: list.find((o) => o.id === activeId) ?? list[0] };
+  return { list, active: list.find((o) => o.id === activeId) ?? list[0], ready: orgs.isSuccess };
 }

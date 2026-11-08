@@ -1,5 +1,5 @@
-// POST /api/previews/mail (routes/previews.ts): the Worker reads the attachment from the caller's Mail object and hands it to
-// the Docs object of their organization, both as the caller; a preview made already is reused without reading it again.
+// POST /api/previews/mail (routes/previews.ts): the Worker reads the attachment from the Mail object of the caller's account
+// in the organization and hands it to that organization's Docs object, both as the caller; a preview made already is reused without reading it again.
 import { describe, expect, it } from 'vitest';
 import app, { type Env } from '../index';
 import { contentDisposition } from '../imap/convert';
@@ -26,6 +26,11 @@ function env(opts: { existing?: boolean; attachment?: { status?: number; bytes?:
             const user = users[args[0] as string];
             return user ? { ok: true, value: { user, kind: 'session' } } : { ok: false, status: 401, code: 'unauthorized', message: 'no' };
           }
+          if (method === 'authenticateIn') {
+            const user = users[args[0] as string];
+            const org = args[1] as string;
+            return user ? { ok: true, value: { user, kind: 'session', account: { id: `acct-${user.id}-${org}`, principalId: user.id, organizationId: org, state: 'active' } } } : { ok: false, status: 401, code: 'unauthorized', message: 'no' };
+          }
           if (method === 'organizationsOf') return { ok: true, value: args[0] === 'ann' ? ['harbor', 'juniper'] : [] };
           return { ok: true, value: null };
         },
@@ -34,7 +39,8 @@ function env(opts: { existing?: boolean; attachment?: { status?: number; bytes?:
     MAIL: {
       idFromName: (n: string) => n,
       get: (id: string) => ({
-        handle: async (req: Request) => {
+        handle: async (req: Request, caller: { account: { id: string } }) => {
+          if (caller.account.id !== id) throw new Error('mis-keyed');
           calls.push({ object: `mail:${id}`, method: req.method, url: new URL(req.url) });
           const a = opts.attachment ?? {};
           if (a.status && a.status !== 200) return Response.json({ error: { code: 'not_found', message: 'no such attachment' } }, { status: a.status });
@@ -62,12 +68,12 @@ const post = (e: Env, body: unknown, token: string | null = 'tok-ann') =>
 const ATTACHMENT = { account: 'acc1', folder: 'INBOX', uid: 7, index: 1 };
 
 describe('previewing a mail attachment', () => {
-  it('reads the bytes from the caller’s Mail object and gives them to Docs in the organization named, as the caller', async () => {
+  it('reads the bytes from the Mail object of the caller’s account there and gives them to Docs in the organization named, as the caller', async () => {
     const { env: e, calls } = env();
     const res = await post(e, { ...ATTACHMENT, workspace: 'juniper' });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ preview: { id: 'new', kind: 'sheet' }, workspace: 'juniper' });
-    expect(calls.map((c) => `${c.object} ${c.method} ${c.url.pathname}`)).toEqual(['docs:juniper GET /api/previews', 'mail:ann GET /v1/mail/accounts/acc1/messages/7/attachments/1', 'docs:juniper POST /api/previews']);
+    expect(calls.map((c) => `${c.object} ${c.method} ${c.url.pathname}`)).toEqual(['docs:juniper GET /api/previews', 'mail:acct-ann-juniper GET /v1/mail/accounts/acc1/messages/7/attachments/1', 'docs:juniper POST /api/previews']);
     expect(calls[1].url.searchParams.get('folder')).toBe('INBOX');
     const made = calls[2];
     expect(made.caller?.userId).toBe('ann');

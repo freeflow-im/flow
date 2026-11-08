@@ -27,6 +27,7 @@ r=await api(A.token,'POST',`/v1/workspaces/${W}/invites`,{email:'bob@example.com
 const tokm=[null,(inv.inviteUrl??'').split('/').pop()];t('invite carries link',!!tokm[1],inv.inviteUrl);
 r=await api(Bo.token,'POST','/v1/invites/accept',{token:tokm[1]});t('accept by token',r.s<300,r.s+' '+JSON.stringify(r.j).slice(0,120));
 r=await api(Bo.token,'GET','/v1/me/workspaces');t('membership reached directory',r.j.workspaces?.length===1);
+r=await api(Bo.token,'GET','/v1/me');t('the membership made an account with an address',r.j.accounts?.length===1&&r.j.accounts[0].address.endsWith('@locked-in.freeflow.im'),JSON.stringify(r.j.accounts));
 const sock=(tok)=>new Promise((res,rej)=>{const ws=new WebSocket(`${WS}/v1/ws?workspace=${W}`);const ev=[];ws.onopen=()=>ws.send(JSON.stringify({op:'auth',token:tok}));ws.onmessage=e=>{const f=JSON.parse(e.data);if(f.op==='hello')res({ws,ev,hello:f});if(f.op==='event')ev.push(f.event);if(f.op==='error')rej(new Error(f.message));};ws.onerror=()=>rej(new Error('ws'));setTimeout(()=>rej(new Error('ws timeout')),6000)});
 const sa=await sock(A.token),sb=await sock(Bo.token);t('sockets hello',sa.hello.heartbeat==='client');
 await sleep(200);t('presence reaches Ann',sa.ev.some(e=>e.type==='presence'&&e.data.userId===Bo.user.id));
@@ -118,7 +119,7 @@ if(cfg.huddles){t('huddle join returns a LiveKit token',r.s===200&&typeof r.j.to
 else{t('huddles off without LiveKit settings',r.s===503,r.s);}
 // ---- agents
 r=await api(A.token,'POST',`/v1/workspaces/${W}/agent-invites`,{});t('agent invite',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,100));const code=r.j.code;
-r=await api(null,'POST','/v1/agents/redeem',{code,username:'flowbot',key:'a-long-agent-key-for-the-test',name:'Flowbot'});t('redeem',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,110));const AGT=r.j.agentToken;
+r=await api(null,'POST','/v1/agents/redeem',{code,username:'flowbot',key:'a-long-agent-key-for-the-test',name:'Flowbot'});t('redeem',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,110));const AGT=r.j.agentToken,AGT_ID=r.j.user?.id;
 r=await api(AGT,'GET','/v1/me');t('the agent token works, via the directory',r.j.isAgent===true&&r.j.displayName==='Flowbot',JSON.stringify(r.j).slice(0,90));
 r=await api(AGT,'GET','/v1/me/workspaces');t('the agent sees its organization',r.j.workspaces?.[0]?.id===W);
 const sag=await sock(AGT);t('the agent socket',!!sag.hello);
@@ -127,7 +128,39 @@ r=await api(AGT,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.ran
 r=await api(null,'POST','/v1/agents/login',{username:'flowbot',key:'wrong-key-wrong-key-wrong-key'});t('wrong key refused',r.s===401,r.s);
 r=await api(null,'POST','/v1/agents/login',{username:'flowbot',key:'a-long-agent-key-for-the-test'});t('login',r.s===201&&!!r.j.agentToken,r.s);const AGT2=r.j.agentToken;
 r=await api(AGT,'GET','/v1/me');t('login ends the old token',r.s===401,r.s);r=await api(AGT2,'GET','/v1/me');t('new token works',r.s===200);
+// ---- agents by account (platform.md §3.3)
+t('the agent has one account, with its address in the organization',r.j.accounts?.length===1&&r.j.accounts[0].address==='flowbot@locked-in.freeflow.im'&&r.j.accounts[0].organizationId===W,JSON.stringify(r.j.accounts));
+r=await api(AGT2,'POST','/v1/workspaces',{name:'Bots',slug:'bots-co'});t('an agent cannot create an organization',r.s===403&&r.j.error?.code==='agent_forbidden',r.s+' '+JSON.stringify(r.j).slice(0,90));
+r=await api(AGT2,'POST',`/v1/workspaces/${W}/agent-invites`,{});t('nor sponsor an agent',r.s===403&&r.j.error?.code==='agent_forbidden',r.s+' '+JSON.stringify(r.j).slice(0,90));
+r=await api(A.token,'PATCH',`/v1/workspaces/${W}/members/${AGT_ID}/role`,{role:'admin'});t('nor be made an admin',r.s===403&&r.j.error?.code==='agent_forbidden',r.s+' '+JSON.stringify(r.j).slice(0,90));
+r=await api(A.token,'POST',`/v1/workspaces/${W}/owner`,{userId:AGT_ID});t('nor own the organization',r.s===403&&r.j.error?.code==='agent_forbidden',r.s+' '+JSON.stringify(r.j).slice(0,90));
+// ---- organizations: the address on every member, the policies, handing the organization on (platform.md §3.1, §3.2)
+r=await api(Bo.token,'GET','/v1/me');const bobAddr=r.j.accounts?.find(a=>a.organizationId===W)?.address;
+r=await api(A.token,'GET',`/v1/workspaces/${W}/members`);const ms=r.j.members??r.j??[];t('the members list carries Bob\'s address',!!bobAddr&&ms.find(m=>m.userId===Bo.user.id)?.address===bobAddr,JSON.stringify(ms.map(m=>m.address)));
+t('and the agent\'s, made after its redeem',!!ms.find(m=>m.isAgent)?.address?.startsWith('flowbot@'),JSON.stringify(ms.map(m=>m.address)));
+r=await api(Bo.token,'PATCH',`/v1/workspaces/${W}`,{policies:{inviteBy:'admins'}});t('a member cannot set policies',r.s===403,r.s);
+r=await api(A.token,'PATCH',`/v1/workspaces/${W}`,{policies:{inviteBy:'admins'}});t('Ann sets who may invite',r.s===200&&r.j.policies?.inviteBy==='admins'&&r.j.policies?.agentsBy==='members'&&r.j.policies?.linkSharing===true,r.s+' '+JSON.stringify(r.j.policies));
+r=await api(Bo.token,'POST',`/v1/workspaces/${W}/invites`,{email:'dee@example.com'});t('an invite by Bob is refused by the policy',r.s===403&&r.j.error?.code==='policy_forbids',r.s+' '+JSON.stringify(r.j).slice(0,90));
+r=await api(Bo.token,'POST',`/v1/workspaces/${W}/join-link`);t('and so is a join link',r.s===403&&r.j.error?.code==='policy_forbids',r.s+' '+JSON.stringify(r.j).slice(0,90));
+r=await api(A.token,'POST',`/v1/workspaces/${W}/owner`,{userId:Bo.user.id});t('Ann hands the organization to Bob',r.s===200&&r.j.role==='admin',r.s+' '+JSON.stringify(r.j).slice(0,90));
+r=await api(A.token,'POST',`/v1/workspaces/${W}/owner`,{userId:Bo.user.id});t('Ann cannot hand it on again',r.s===403,r.s);
+r=await api(Bo.token,'GET','/v1/me/workspaces');const bw=r.j.workspaces?.find(w=>w.id===W);t('Bob\'s workspaces say owner, with his address',bw?.role==='owner'&&bw.address===bobAddr,JSON.stringify(bw).slice(0,160));
+r=await api(Bo.token,'GET','/v1/me');t('his account in the directory says owner',r.j.accounts?.find(a=>a.organizationId===W)?.role==='owner',JSON.stringify(r.j.accounts));
+r=await api(Bo.token,'POST',`/v1/workspaces/${W}/owner`,{userId:A.user.id});t('Bob hands it back',r.s===200&&r.j.role==='admin',r.s);
 // ---- leaving
 const del=await signup('cy@example.com','Cy');r=await api(del.token,'POST','/v1/workspaces',{name:'Cy co',slug:'cy-co'});
 r=await api(del.token,'DELETE','/v1/me');t('delete account',r.s===200,r.s+' '+JSON.stringify(r.j).slice(0,90));r=await api(del.token,'GET','/v1/me');t('its session ended',r.s===401,r.s);
+// ---- a removed member's account is refused (platform.md §3.6)
+r=await api(Bo.token,'POST',`/v1/workspaces/${W}/agent-invites`,{});t('Bob sponsors an agent',r.s===201,r.s);
+r=await api(null,'POST','/v1/agents/redeem',{code:r.j.code,username:'bobbot',key:'another-long-agent-key-for-the-test',name:'Bobbot'});const BOT=r.j.agentToken;
+r=await api(BOT,'GET',`/v1/workspaces/${W}/channels`);t('his agent is in',r.s===200,r.s);
+const sbot=await sock(BOT);const botClosed=new Promise((res)=>{sbot.ws.onclose=e=>res(e);setTimeout(()=>res(null),6000)});
+r=await api(A.token,'DELETE',`/v1/workspaces/${W}/members/${Bo.user.id}`);t('Ann removes Bob',r.s===200,r.s+' '+JSON.stringify(r.j).slice(0,90));
+const bc=await botClosed;t('his agent\'s socket closes with him',bc?.code===4003,bc&&bc.code+' '+bc.reason);
+// Bob's agent belonged to this organization only, so its credentials end with its account here.
+r=await api(BOT,'GET',`/v1/workspaces/${W}/channels`);t('his agent follows him out',r.s===401||(r.s===403&&r.j.error?.code==='account_inactive'),r.s+' '+JSON.stringify(r.j).slice(0,90));
+r=await api(A.token,'GET',`/v1/workspaces/${W}/members`);t('and is off the member list',!(r.j.members??[]).some(m=>m.displayName==='Bobbot'),JSON.stringify((r.j.members??[]).map(m=>m.displayName)));
+r=await api(Bo.token,'GET',`/v1/workspaces/${W}/channels`);t('a removed account is refused',r.s===403&&r.j.error?.code==='account_inactive',r.s+' '+JSON.stringify(r.j).slice(0,90));
+const closed=await new Promise((res)=>{const ws=new WebSocket(`${WS}/v1/ws?workspace=${W}`);ws.onopen=()=>ws.send(JSON.stringify({op:'auth',token:Bo.token}));ws.onclose=e=>res(e);setTimeout(()=>res(null),6000)});
+t('a removed account\'s socket is closed',closed?.code===4003&&closed.reason==='account inactive',closed&&closed.code+' '+closed.reason);
 console.log(`\n${pass} passed, ${fail} failed`);process.exit(fail ? 1 : 0);

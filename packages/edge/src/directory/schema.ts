@@ -187,4 +187,41 @@ export const DIRECTORY_MIGRATIONS: string[] = [
     last_poll_at INTEGER,
     expires_at INTEGER NOT NULL
   );`,
+  // The account layer (docs/specs/platform.md §3.1 to §3.3). `users` stays the principals table and `memberships` stays
+  // in step with `accounts` until later phase 1 PRs rename the one and retire the other. The accounts themselves are
+  // backfilled from `memberships` by DirectoryCore.backfillAccounts, because SQL cannot derive an address's local part.
+  `CREATE TABLE organizations (
+    id TEXT PRIMARY KEY,
+    slug TEXT NOT NULL COLLATE NOCASE,
+    owner_user_id TEXT,
+    policies TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL
+  );
+  INSERT INTO organizations (id, slug, owner_user_id, created_at)
+    SELECT s.organization_id, MIN(s.slug),
+      (SELECT MIN(m.user_id) FROM memberships m WHERE m.organization_id = s.organization_id AND m.role = 'owner'),
+      CAST(strftime('%s', 'now') AS INTEGER) * 1000
+    FROM organization_slugs s GROUP BY s.organization_id;
+  CREATE TABLE accounts (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    organization_id TEXT NOT NULL,
+    address TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    display_name TEXT NOT NULL,
+    role TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'native',
+    state TEXT NOT NULL DEFAULT 'active',
+    created_at INTEGER NOT NULL,
+    UNIQUE (user_id, organization_id)
+  );
+  CREATE INDEX accounts_organization ON accounts(organization_id);
+  CREATE TABLE addresses (
+    address TEXT PRIMARY KEY COLLATE NOCASE,
+    account_id TEXT NOT NULL
+  );`,
+  // Agent accounts (platform.md §3.3): who sponsors the agent in this organization, so the account follows that person's.
+  // Per organization because an agent invited into a second organization is sponsored there by whoever brought it in.
+  `ALTER TABLE accounts ADD COLUMN sponsor_user_id TEXT;
+  UPDATE accounts SET sponsor_user_id = (SELECT u.sponsor_user_id FROM users u WHERE u.id = accounts.user_id AND u.is_agent = 1);
+  CREATE INDEX accounts_sponsor ON accounts(sponsor_user_id);`,
 ];

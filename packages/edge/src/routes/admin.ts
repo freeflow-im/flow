@@ -1,13 +1,20 @@
 // The one-time import's way in (packages/server/scripts/export-to-edge.ts). Only the origin can call it: it holds the same
 // secret the Worker sends to Caddy. Rows go to the directory, an organization's Chat object or its Docs object; Docs' file
-// bodies go to R2 under that object's prefix.
+// bodies go to R2 under that object's prefix. Beside it, behind the same secret, the one-time move of Mail and Calendar
+// from the per-person objects to the per-account ones (POST /v1/admin/accounts/rekey, platform.md §3.6).
 import { timingSafeEqual } from 'node:crypto';
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { AwsClient } from 'aws4fetch';
 import type { Docs } from '../docs/object';
 import type { Directory } from '../directory/object';
 import type { Org } from '../org/object';
+import type { AccountDTO } from '@flow/shared';
+import type { Calendar } from '../calendar/object';
+import { CALENDAR_TABLES } from '../calendar/store';
+import { MAIL_TABLES, type Mail } from '../imap/object';
 import type { ImportRow } from '../importing';
+import { EXPORT_PAGE } from '../perAccount';
+import { directory } from './auth';
 
 export interface AdminEnv {
   EDGE_ORIGIN_SECRET: string;
@@ -18,18 +25,22 @@ export interface AdminEnv {
   DIRECTORY: DurableObjectNamespace<Directory>;
   ORG: DurableObjectNamespace<Org>;
   DOCS: DurableObjectNamespace<Docs>;
+  MAIL: DurableObjectNamespace<Mail>;
+  CALENDAR: DurableObjectNamespace<Calendar>;
   BLOBS: R2Bucket;
 }
 
 export const adminRoutes = new Hono<{ Bindings: AdminEnv }>();
 
-adminRoutes.use('/edge/admin/*', async (c, next) => {
+const requireSecret = async (c: Context<{ Bindings: AdminEnv }>, next: () => Promise<void>) => {
   const given = c.req.header('x-edge-secret') ?? '';
   const want = c.env.EDGE_ORIGIN_SECRET ?? '';
   const a = Buffer.from(given), b = Buffer.from(want);
   if (!want || a.length !== b.length || !timingSafeEqual(a, b)) return c.json({ error: 'forbidden' }, 403);
   await next();
-});
+};
+adminRoutes.use('/edge/admin/*', requireSecret);
+adminRoutes.use('/v1/admin/*', requireSecret);
 
 const docsStub = (env: AdminEnv, org: string) => env.DOCS.get(env.DOCS.idFromName(org));
 
@@ -73,4 +84,49 @@ adminRoutes.put('/edge/admin/docs/:id/file/*', async (c) => {
   const prefix = `docs/${c.env.DOCS.idFromName(c.req.param('id')).toString()}/data/`;
   await c.env.BLOBS.put(prefix + decodeURIComponent(rel), c.req.raw.body);
   return c.json({ ok: true });
+});
+
+/** One object's rows into another of its kind, a page at a time: how many rows each table had. */
+async function copyRows(
+  from: { exportRows(o: { table?: string; offset?: number; limit?: number }): Promise<{ table: string; rows: ImportRow[] }[]> },
+  to: { importRows(table: string, rows: ImportRow[]): Promise<{ added: number }> },
+  tables: readonly string[], prefix: string, counts: Record<string, number>,
+): Promise<void> {
+  for (const table of tables) {
+    let offset = 0;
+    for (;;) {
+      const rows = (await from.exportRows({ table, offset, limit: EXPORT_PAGE }))[0]?.rows ?? [];
+      if (rows.length) await to.importRows(table, rows);
+      offset += rows.length;
+      if (rows.length < EXPORT_PAGE) break;
+    }
+    if (offset) counts[`${prefix}.${table}`] = offset;
+  }
+}
+
+/**
+ * The one-time move (platform.md §11, phase 1 item 4): each person's Mail and Calendar rows, from the objects named by
+ * their user id to the ones named by their account's id, `INSERT OR IGNORE`, so it can run again; the old objects are left
+ * as they were (the rollback). The account is the person's only one, else the earliest made that is not removed: `others`
+ * lists the rest, for the operator to move by hand. `{ users: [...] }` limits a run to those people (a Worker request
+ * may make only so many calls).
+ */
+adminRoutes.post('/v1/admin/accounts/rekey', async (c) => {
+  const only = ((await c.req.json().catch(() => ({}))) as { users?: unknown }).users;
+  const wanted = Array.isArray(only) ? new Set(only.filter((u): u is string => typeof u === 'string')) : null;
+  const people = (await directory(c as never, 'principalsWithAccounts')) as { userId: string; accounts: AccountDTO[] }[];
+  const moved: { userId: string; accountId: string; tables: Record<string, number>; others?: string[] }[] = [];
+  const skipped: { userId: string; reason: string }[] = [];
+  for (const { userId, accounts } of people) {
+    if (wanted && !wanted.has(userId)) continue;
+    if (!accounts.length) { skipped.push({ userId, reason: 'no account' }); continue; }
+    const target = accounts.find((a) => a.state !== 'removed') ?? accounts[0]!;
+    const tables: Record<string, number> = {};
+    await copyRows(c.env.MAIL.get(c.env.MAIL.idFromName(userId)), c.env.MAIL.get(c.env.MAIL.idFromName(target.id)), MAIL_TABLES, 'mail', tables);
+    await copyRows(c.env.CALENDAR.get(c.env.CALENDAR.idFromName(userId)), c.env.CALENDAR.get(c.env.CALENDAR.idFromName(target.id)), CALENDAR_TABLES, 'calendar', tables);
+    const others = accounts.filter((a) => a.id !== target.id).map((a) => a.id);
+    if (!Object.keys(tables).length) { skipped.push({ userId, reason: 'nothing to move' }); continue; }
+    moved.push({ userId, accountId: target.id, tables, ...(others.length ? { others } : {}) });
+  }
+  return c.json({ moved, skipped });
 });

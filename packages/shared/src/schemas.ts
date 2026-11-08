@@ -159,16 +159,32 @@ export const UpdateWorkspaceBody = z
     // phase 16 §5a: open the workspace to everyone on an email domain who signs
     // in with Google. null turns it off.
     googleSelfRegisterDomain: SelfRegisterDomain.nullable().optional(),
+    // platform.md §3.1: any subset of the organization's policies; the rest keep their values.
+    policies: z
+      .object({
+        inviteBy: z.enum(['admins', 'members']).optional(),
+        agentsBy: z.enum(['admins', 'members']).optional(),
+        linkSharing: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .refine(
     (b) =>
       b.sidebarColor !== undefined ||
       b.unfurlEnabled !== undefined ||
       b.unfurlDomainAllowlist !== undefined ||
-      b.googleSelfRegisterDomain !== undefined,
+      b.googleSelfRegisterDomain !== undefined ||
+      b.policies !== undefined,
     'nothing to update',
   );
 export type UpdateWorkspaceBody = z.infer<typeof UpdateWorkspaceBody>;
+
+/** POST /v1/workspaces/:id/owner — the owner hands the organization to another person (platform.md §3.1). */
+export const TransferOwnershipBody = z.object({
+  userId: z.string().uuid(),
+});
+export type TransferOwnershipBody = z.infer<typeof TransferOwnershipBody>;
 
 /**
  * POST /v1/invites/accept — the emailed link carries `token`; an in-app

@@ -38,6 +38,8 @@ export const DDL = [
   `CREATE TABLE IF NOT EXISTS rate_limit_windows (key TEXT PRIMARY KEY, window_start INTEGER NOT NULL, count INTEGER NOT NULL DEFAULT 1)`,
   `CREATE TABLE IF NOT EXISTS calendar_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
 ];
+/** Every table of the object, for the move between objects (the object's `exportRows`, `importRows`). */
+export const CALENDAR_TABLES = ['accounts', 'calendars', 'objects', 'events', 'sync_runs', 'rate_limit_windows', 'calendar_state'] as const;
 const SYNC_RUNS_KEEP = 200;
 /**
  * Columns added after the first release, each added once (ALTER fails when it is already there), with what runs once after.

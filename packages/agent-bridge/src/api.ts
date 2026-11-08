@@ -1,6 +1,7 @@
 // Minimal /v1 REST client speaking the agent bearer token.
 import { randomBytes, randomUUID } from 'node:crypto';
 import type {
+  AccountDTO,
   AgentLoginResponse,
   AgentRedeemResponse,
   ArtifactDTO,
@@ -13,6 +14,21 @@ import type {
   WorkspaceDTO,
   WorkspaceMemberDTO,
 } from '@flow/shared';
+
+/** `GET /v1/me`: the principal, with its accounts, one per organization (platform.md §3.3). Older servers send none. */
+export type MeDTO = UserDTO & { accounts?: AccountDTO[] };
+
+/** The start-up log's account lines: each account's address and organization (by name where the agent can see it). */
+export function accountLines(me: MeDTO, workspaces: Pick<WorkspaceDTO, 'id' | 'name'>[]): string[] {
+  const names = new Map(workspaces.map((w) => [w.id, w.name]));
+  return (me.accounts ?? []).map((a) =>
+    `account ${a.address} in "${names.get(a.organizationId) ?? a.organizationId}"${a.state === 'active' ? '' : ` (${a.state})`}`);
+}
+
+/** The agent's address in one organization, or null when the server gave none. */
+export function addressIn(me: MeDTO, organizationId: string): string | null {
+  return me.accounts?.find((a) => a.organizationId === organizationId)?.address ?? null;
+}
 
 const USER_MENTION_RE = /<@([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})>/g;
 
@@ -96,7 +112,7 @@ export class FlowApi {
     return (await res.json()) as T;
   }
 
-  me(): Promise<UserDTO> {
+  me(): Promise<MeDTO> {
     return this.req('GET', '/v1/me');
   }
 

@@ -560,7 +560,11 @@ of a bridge socket.
 - **Guests.** What a `guest` account is: a person with no mailbox who holds grants. Reserved, not designed.
 - **One data key or one per organization.** The per-object layout makes a key per organization natural; decide with
   the provisioning work.
-- **Agents in several organizations.** One bridge process, several accounts, or one process per account.
+- **Agents in several organizations.** One bridge process, several accounts, or one process per account. Found in
+  phase 1.5: on the edge an agent cannot yet be invited into a second organization, because `inviteAgentToWorkspace`
+  checks the sponsor only in the target organization's own database, where the agent's row does not exist. The check
+  must go through the directory (`accountFor` for both sponsor and agent) before the rule "an agent holds an account
+  wherever its sponsor does" is true in practice. A follow-up PR, not phase 1.
 - **Login email equal to an address.** With SSO on a verified domain the two coincide; whether that should
   auto-create the account's address from the login email.
 - **Search across accounts.** Mail and Calendar search are per account; "search everything" fans out over the

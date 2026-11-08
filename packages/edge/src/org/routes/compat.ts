@@ -1,10 +1,18 @@
 // The small part of Fastify that the route file uses, so that file can stay as it was on Node.
 import { Hono } from 'hono';
-import type { UserDTO } from '@flow/shared';
+import type { AccountDTO, UserDTO } from '@flow/shared';
 import type { AuthKind } from '../../directory/core';
 import { ApiError, unauthorized } from '../../errors';
 
-export interface CallerContext { user: UserDTO | null; token: string | null; authKind: AuthKind | null; ip: string }
+/** Who is calling, resolved once by the Worker (routes/auth.ts `resolveCaller`, platform.md §3.6): the principal, and its
+ * account in the organization the request names (null when none is named, or the caller has none there). */
+export interface CallerContext {
+  user: UserDTO | null; token: string | null; authKind: AuthKind | null; ip: string;
+  organizationId: string | null; account: AccountDTO | null;
+}
+
+/** A per-person object's Hono bindings (Mail, Calendar): the request's caller context, as `c.env.caller`. */
+export interface ObjectBindings { caller: CallerContext | null }
 
 export interface CompatRequest {
   params: unknown; query: unknown; body: unknown; headers: Record<string, string | undefined>; url: string; ip: string; method: string;

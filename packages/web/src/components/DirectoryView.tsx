@@ -158,6 +158,12 @@ function DirectoryCard({ member: m, onSelect }: { member: DirectoryRow; onSelect
           {m.isSelf && <span className="ml-1 font-normal text-faint">(you)</span>}
           {m.isAgent && <span title="AI agent"> 🤖</span>}
         </p>
+        {/* platform.md §3.2: the member's address in this organization, when the server knows it. */}
+        {m.address && (
+          <p data-testid="directory-card-address" className="truncate text-xs text-muted" title={m.address}>
+            {m.address}
+          </p>
+        )}
         {/* #434: the member's own one-line title, above the role. Omitted
             entirely when unset — no placeholder, no reserved blank line. */}
         {m.title && (

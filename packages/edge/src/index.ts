@@ -33,11 +33,11 @@ export interface Env extends ProxyEnv, AuthEnv {
   ORG: DurableObjectNamespace<OrgObject>;
   /** Scanned PDFs' OCR; only the Docs object calls it. */
   PDF_OCR?: DurableObjectNamespace<import('./pdfOcr').PdfOcr>;
-  /** FreeFlow Mail: one object per person, holding the mail accounts they connected (src/imap/object.ts). */
+  /** FreeFlow Mail: one object per account (`idFromName(accountId)`), holding the mail accounts connected there (src/imap/object.ts). */
   MAIL: DurableObjectNamespace<import('./imap/object').Mail>;
   /** `1` in local dev only: mail accounts may then use unencrypted connections, any port and local hosts. Never set in production. */
   MAIL_ALLOW_INSECURE?: string;
-  /** FreeFlow Calendar: one object per person, holding the calendar accounts they connected and their calendars (src/calendar/object.ts). */
+  /** FreeFlow Calendar: one object per account, holding the calendar accounts connected there and their calendars (src/calendar/object.ts). */
   CALENDAR: DurableObjectNamespace<import('./calendar/object').Calendar>;
   /** `1` in local dev only: calendar accounts may then use http and local hosts (Radicale). Never set in production. */
   CALENDAR_ALLOW_INSECURE?: string;

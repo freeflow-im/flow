@@ -17,6 +17,8 @@ export interface McpRequestCaller {
   userId: string;
   email: string;
   orgId: string;
+  /** The person's account in `orgId` (platform.md §3.6), when the directory has one. */
+  accountId?: string | null;
   scope: string;
   /** The MCP path asked for: /mcp, or a version of it (/mcp/v2). */
   endpoint: string;

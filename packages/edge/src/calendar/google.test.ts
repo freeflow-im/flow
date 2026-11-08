@@ -26,17 +26,17 @@ describe('the OAuth state', () => {
     const now = Date.now();
     // The user id is long enough that the sealed base64 cannot hold it by chance (two characters once did, in CI).
     const userId = 'user-0123456789abcdef';
-    const s = sealState({ userId, returnTo: 'https://app.freeflow.im/calendar/' }, now);
+    const s = sealState({ accountId: 'a1', userId, returnTo: 'https://app.freeflow.im/calendar/' }, now);
     expect(s).not.toContain(userId);
     expect(s).not.toContain('freeflow');
-    expect(openState(s, now + 1000)).toMatchObject({ userId, returnTo: 'https://app.freeflow.im/calendar/' });
+    expect(openState(s, now + 1000)).toMatchObject({ accountId: 'a1', userId, returnTo: 'https://app.freeflow.im/calendar/' });
     expect(openState(s, now + STATE_TTL_MS + 1)).toBeNull();
     const [kid, blob] = s.split('.');
     const flipped = `${kid}.${blob!.slice(0, 20)}${blob![20] === 'A' ? 'B' : 'A'}${blob!.slice(21)}`;
     expect(openState(flipped, now)).toBeNull();
     expect(openState('nope', now)).toBeNull();
     expect(openState(`${kid}.`, now)).toBeNull();
-    expect(sealState({ userId: 'u1', returnTo: 'x' }, now)).not.toBe(s);
+    expect(sealState({ accountId: 'a1', userId: 'u1', returnTo: 'x' }, now)).not.toBe(s);
   });
 
   it('asks Google for offline access with consent, the calendar scope and the address', () => {
@@ -78,13 +78,13 @@ describe('the callback', () => {
     connect: async () => ({ id: 'acct-1' }),
   };
   const url = 'https://app.freeflow.im/v1/calendar/google/callback';
-  const state = () => sealState({ userId: 'u1', returnTo: 'https://app.freeflow.im/calendar/' });
+  const state = () => sealState({ accountId: 'a1', userId: 'u1', returnTo: 'https://app.freeflow.im/calendar/' });
 
-  it('makes the account in the person\'s object and goes back with ?connected', async () => {
+  it('makes the account in the account\'s object and goes back with ?connected', async () => {
     let got: unknown;
-    const to = await googleCallback({ code: 'c', state: state() }, env, url, { ...ok, connect: async (user, grant) => { got = { user, grant }; return { id: 'acct-1' }; } });
+    const to = await googleCallback({ code: 'c', state: state() }, env, url, { ...ok, connect: async (owner, grant) => { got = { owner, grant }; return { id: 'acct-1' }; } });
     expect(to).toBe('https://app.freeflow.im/calendar/?connected=acct-1');
-    expect(got).toEqual({ user: 'u1', grant: { email: 'ann@gmail.com', displayName: 'Ann', refreshToken: 'rt', accessToken: 'at', expiresAt: 1 } });
+    expect(got).toEqual({ owner: { accountId: 'a1', userId: 'u1' }, grant: { email: 'ann@gmail.com', displayName: 'Ann', refreshToken: 'rt', accessToken: 'at', expiresAt: 1 } });
   });
 
   it('goes back with ?error for a refusal, an expired state, a missing scope, and a failure', async () => {

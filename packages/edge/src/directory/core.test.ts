@@ -1,7 +1,8 @@
 import { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { hashPassword, verifyPassword } from './passwords';
-import { DirectoryCore, hashToken, newId, type Mail, type Sql } from './core';
+import { DirectoryCore, accountGate, hashToken, newId, type Mail, type Sql } from './core';
+import { DIRECTORY_MIGRATIONS } from './schema';
 
 /** A real argon2 hash from the server's native library, of 'correct horse'. */
 const NATIVE_ARGON2 = '$argon2id$v=19$m=19456,t=2,p=1$dOGITGpb+aQryD4cyJhifg$4AnUlxHn8Rap47Tc/l19RR185Wgh/k8LPlA6pJ8HXPo';
@@ -246,6 +247,175 @@ describe('organizations', () => {
     await core.applyOrgChanges(org, [{ kind: 'join', id: org, user_id: a.user.id, role: 'owner', payload: null }]);
     expect(core.organizationKnown(org)).toBe(true);
     expect(core.organizationKnown(newId())).toBe(false);
+  });
+});
+
+describe('accounts', () => {
+  const join = (org: string, userId: string, role = 'member') => core.applyOrgChanges(org, [{ kind: 'join', id: org, user_id: userId, role, payload: null }]);
+  const leave = (org: string, userId: string) => core.applyOrgChanges(org, [{ kind: 'leave', id: org, user_id: userId, role: null, payload: null }]);
+
+  it('backfills an account and an address for every membership, the first time it sees the migration', () => {
+    const sql = nodeSql();
+    const accountsAt = DIRECTORY_MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE accounts'));
+    sql.exec('CREATE TABLE _migrations (n INTEGER PRIMARY KEY)');
+    DIRECTORY_MIGRATIONS.slice(0, accountsAt).forEach((m, i) => { sql.exec(m); sql.exec('INSERT INTO _migrations (n) VALUES (?)', i); });
+    const user = (id: string, name: string, agent?: string) => sql.exec(
+      'INSERT INTO users (id, email, password_hash, display_name, is_agent, agent_username, created_at) VALUES (?, ?, ?, ?, ?, ?, 1)',
+      id, `${id}@example.com`, 'x', name, agent ? 1 : 0, agent ?? null);
+    user('u1', 'Ann Smith'); user('u2', 'Ann  Smith'); user('u3', 'José'); user('u4', 'Builder Bot', 'builder_bot');
+    sql.exec("INSERT INTO organization_slugs (slug, organization_id) VALUES ('acme', 'o1'), ('beta', 'o2')");
+    for (const [u, o, r] of [['u1', 'o1', 'owner'], ['u2', 'o1', 'member'], ['u3', 'o1', 'admin'], ['u4', 'o1', 'member'], ['u1', 'o2', 'member']]) {
+      sql.exec('INSERT INTO memberships (user_id, organization_id, role) VALUES (?, ?, ?)', u, o, r);
+    }
+    const c = new DirectoryCore(sql, { webUrlBase: 'https://app.test', registrationEnabled: true, send: async () => {} });
+    const addresses = (u: string) => c.accountsOf(u).map((a) => a.address).sort();
+    expect(addresses('u1')).toEqual(['ann.smith@acme.freeflow.im', 'ann.smith@beta.freeflow.im']);
+    expect(addresses('u2')).toEqual(['ann.smith2@acme.freeflow.im']);
+    expect(addresses('u3')).toEqual(['jose@acme.freeflow.im']);
+    expect(addresses('u4')).toEqual(['builder.bot@acme.freeflow.im']);
+    expect(c.accountFor('u3', 'o1')).toMatchObject({ principalId: 'u3', organizationId: 'o1', displayName: 'José', role: 'admin', kind: 'native', state: 'active' });
+    expect(sql.exec('SELECT COUNT(*) AS n FROM addresses').toArray()[0]!.n).toBe(5);
+    expect(c.organization('o1')).toEqual({ id: 'o1', slug: 'acme', ownerUserId: 'u1', policies: {} });
+    expect(c.organization('o2')!.ownerUserId).toBeNull();
+    c.backfillAccounts();
+    new DirectoryCore(sql, { webUrlBase: 'https://app.test', registrationEnabled: true, send: async () => {} });
+    expect(sql.exec('SELECT COUNT(*) AS n FROM accounts').toArray()[0]!.n).toBe(5);
+  });
+
+  it('makes an account on join, marks it removed on leave keeping the address, and reactivates it on rejoin', async () => {
+    const { user } = await signUp();
+    const org = newId();
+    core.reserveSlug('Acme', org);
+    await join(org, user.id, 'member');
+    const made = core.accountFor(user.id, org)!;
+    expect(made).toMatchObject({ address: 'ann@acme.freeflow.im', role: 'member', state: 'active' });
+    await join(org, user.id, 'admin');
+    expect(core.accountFor(user.id, org)).toMatchObject({ id: made.id, role: 'admin', state: 'active' });
+    await leave(org, user.id);
+    expect(core.organizationsOf(user.id)).toEqual([]);
+    expect(core.accountFor(user.id, org)).toMatchObject({ id: made.id, state: 'removed', address: made.address });
+    expect(core.accountByAddress(made.address)!.id).toBe(made.id);
+    await join(org, user.id, 'member');
+    expect(core.accountFor(user.id, org)).toMatchObject({ id: made.id, role: 'member', state: 'active', address: made.address });
+    expect(core.accountsOf(user.id)).toHaveLength(1);
+  });
+
+  it('finds an account by address whatever the case', async () => {
+    const { user } = await signUp();
+    const org = newId();
+    core.reserveSlug('acme', org);
+    await join(org, user.id);
+    expect(core.accountByAddress('ANN@Acme.FreeFlow.im')!.principalId).toBe(user.id);
+    expect(core.accountByAddress('nobody@acme.freeflow.im')).toBeNull();
+  });
+
+  it('takes the owner from the owner\'s join and keeps it through a later admin\'s join', async () => {
+    const a = await signUp('a@example.com');
+    const b = await signUp('b@example.com');
+    const org = newId();
+    core.reserveSlug('acme', org);
+    expect(core.organization(org)).toMatchObject({ slug: 'acme', ownerUserId: null });
+    await join(org, a.user.id, 'owner');
+    await join(org, b.user.id, 'admin');
+    expect(core.organization(org)!.ownerUserId).toBe(a.user.id);
+    expect(core.accountFor(b.user.id, org)!.address).toBe('ann2@acme.freeflow.im');
+    core.setOwner(org, b.user.id);
+    core.setPolicies(org, { invite: 'admins' });
+    expect(core.organization(org)).toMatchObject({ ownerUserId: b.user.id, policies: { invite: 'admins' } });
+  });
+
+  it('ensures an account before the member row: creates it, then the outbox join changes nothing', async () => {
+    const { user } = await signUp();
+    const org = newId();
+    core.reserveSlug('acme', org);
+    const made = core.ensureAccount(user.id, org, 'owner', 'Ann Lee');
+    expect(made).toMatchObject({ principalId: user.id, organizationId: org, address: 'ann.lee@acme.freeflow.im', displayName: 'Ann Lee', role: 'owner', state: 'active' });
+    expect(core.organization(org)!.ownerUserId).toBe(user.id);
+    await join(org, user.id, 'owner');
+    expect(core.accountsOf(user.id)).toEqual([made]);
+    expect(nodeSqlOf(core).exec('SELECT COUNT(*) AS n FROM addresses').toArray()[0]!.n).toBe(1);
+  });
+
+  it('ensures an account: reactivates a removed one and sets the role, keeping the address', async () => {
+    const { user } = await signUp();
+    const org = newId();
+    core.reserveSlug('acme', org);
+    const made = core.ensureAccount(user.id, org, 'admin');
+    expect(made).toMatchObject({ address: 'ann@acme.freeflow.im', role: 'admin' });
+    await leave(org, user.id);
+    expect(core.ensureAccount(user.id, org, 'member')).toMatchObject({ id: made.id, address: made.address, role: 'member', state: 'active' });
+    expect(() => core.ensureAccount(newId(), org, 'member')).toThrow('user not found');
+  });
+
+  it('lists an organization\'s accounts, and follows the owner and policies the Org object reports', async () => {
+    const a = await signUp('a@example.com');
+    const b = await signUp('b@example.com');
+    const org = newId();
+    core.reserveSlug('acme', org);
+    await join(org, a.user.id, 'owner');
+    await join(org, b.user.id, 'member');
+    await core.applyOrgChanges(newId(), [{ kind: 'join', id: 'x', user_id: a.user.id, role: 'member', payload: null }]);
+    expect(core.accountsOfOrganization(org).map((x) => x.address).sort()).toEqual(['ann2@acme.freeflow.im', 'ann@acme.freeflow.im']);
+    await core.applyOrgChanges(org, [
+      { kind: 'join', id: org, user_id: b.user.id, role: 'owner', payload: null },
+      { kind: 'owner', id: org, user_id: b.user.id, role: null, payload: null },
+      { kind: 'join', id: org, user_id: a.user.id, role: 'admin', payload: null },
+      { kind: 'policies', id: org, user_id: null, role: null, payload: '{"inviteBy":"admins","agentsBy":"members","linkSharing":true}' },
+    ]);
+    expect(core.organization(org)).toMatchObject({ ownerUserId: b.user.id, policies: { inviteBy: 'admins', agentsBy: 'members', linkSharing: true } });
+    expect(core.accountFor(a.user.id, org)!.role).toBe('admin');
+    expect(core.accountFor(b.user.id, org)!.role).toBe('owner');
+  });
+});
+
+describe('agent accounts', () => {
+  const agent = (id: string, sponsorId: string, username: string) => ({
+    kind: 'agent_user', id, user_id: null, role: null,
+    payload: JSON.stringify({ username, keyHash: null, passwordHash: '!agent', email: `agent-${id}@agents.flow.local`, displayName: username, sponsorId, createdAt: 1 }),
+  });
+  const join = (org: string, userId: string, sponsor: string | null = null) => ({ kind: 'join', id: org, user_id: userId, role: 'member', payload: sponsor });
+
+  it('gives an agent an address per organization, and follows the sponsor there out (platform.md §3.3)', async () => {
+    const ann = await signUp('a@example.com');
+    const bob = await signUp('b@example.com');
+    const [o1, o2] = [newId(), newId()];
+    core.reserveSlug('acme', o1);
+    core.reserveSlug('beta', o2);
+    const bot = newId();
+    await core.applyOrgChanges(o1, [join(o1, ann.user.id), join(o1, bob.user.id), agent(bot, ann.user.id, 'builder'), join(o1, bot, ann.user.id)]);
+    // In o2 Bob brought it in, so Bob is its sponsor there.
+    await core.applyOrgChanges(o2, [join(o2, ann.user.id), join(o2, bob.user.id), join(o2, bot, bob.user.id)]);
+    expect(core.accountsOf(bot).map((a) => a.address).sort()).toEqual(['builder@acme.freeflow.im', 'builder@beta.freeflow.im']);
+    await core.applyOrgChanges(o2, [{ kind: 'leave', id: o2, user_id: ann.user.id, role: null, payload: null }]);
+    expect(core.organizationsOf(bot).sort()).toEqual([o1, o2].sort());
+    await core.applyOrgChanges(o1, [{ kind: 'leave', id: o1, user_id: ann.user.id, role: null, payload: null }]);
+    expect(core.accountFor(bot, o1)!.state).toBe('removed');
+    expect(core.organizationsOf(bot)).toEqual([o2]);
+    core.tombstoneUser(bob.user.id);
+    expect(core.organizationsOf(bot)).toEqual([]);
+    expect(core.organizationKnown(o2)).toBe(false);
+  });
+});
+
+describe('the account gate', () => {
+  it('lets through no account, and every state but suspended and removed', () => {
+    expect(accountGate(null)).toBeNull();
+    for (const state of ['requested', 'mailbox_ready', 'calendars_ready', 'active'] as const) expect(accountGate({ state })).toBeNull();
+  });
+
+  it('refuses a suspended or a removed account with a 403 account_inactive that says which', () => {
+    expect(accountGate({ state: 'suspended' })).toMatchObject({ statusCode: 403, code: 'account_inactive', message: 'your account in this organization is suspended' });
+    expect(accountGate({ state: 'removed' })).toMatchObject({ statusCode: 403, code: 'account_inactive', message: 'your account in this organization was removed' });
+  });
+
+  it('resolves the principal and its account in one call', async () => {
+    const { user, token } = await signUp();
+    const org = newId();
+    core.reserveSlug('acme', org);
+    await core.applyOrgChanges(org, [{ kind: 'join', id: org, user_id: user.id, role: 'member', payload: null }]);
+    expect(await core.authenticateIn(token, null)).toMatchObject({ user: { id: user.id }, kind: 'session', account: null });
+    expect((await core.authenticateIn(token, org)).account).toMatchObject({ principalId: user.id, organizationId: org, state: 'active' });
+    expect((await core.authenticateIn(token, newId())).account).toBeNull();
   });
 });
 

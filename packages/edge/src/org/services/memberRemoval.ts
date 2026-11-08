@@ -10,6 +10,7 @@
 import { and, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { publishEvent, subjectMeta } from '../bus.js';
+import { disconnectUser } from '../sockets.js';
 
 const {
   channels,
@@ -196,7 +197,10 @@ export async function removeSponsoredAgents(workspaceId: string, sponsorId: stri
         sql`coalesce(${workspaceMembers.sponsorUserId}, ${users.sponsorUserId}) = ${sponsorId}`,
       ),
     );
+  // Their accounts here go too (platform.md §3.3, rule 2): the member rows' `leave` tells the directory, and their
+  // sockets close as a removed member's do. Suspending the sponsor would cascade the same way; no suspend path exists yet.
   for (const a of sponsored) {
     await removeAgentFromWorkspace(workspaceId, a.userId);
+    disconnectUser(a.userId);
   }
 }
