@@ -24,6 +24,8 @@ describe('Calendar tools in Docs', () => {
   it('labels the Calendar tools', () => {
     expect(toolLabel('create_event', { summary: 'Lunch', start: '2026-11-05T12:00:00', attendees: ['Bo <bo@x.test>', 'cy@x.test'] })).toBe('Created “Lunch” Thu, Nov 5, 12:00 PM, invited Bo and cy');
     expect(toolLabel('find_free_time', { attendees: ['a@x.test', 'b@x.test', 'c@x.test'] })).toBe('Found free time with a, b and 1 more');
+    expect(toolLabel('share_calendar', { calendar_id: 'n.a.b', principal: { account: 'Bob <bob@x.test>' }, role: 'viewer' })).toMatch(/^Shared a calendar with .+ as viewer$/);
+    expect(toolLabel('unshare_calendar', { calendar_id: 'n.a.b', principal: { org: true } })).toBe('Stopped sharing a calendar with everyone');
     expect(toolLabel('respond_to_event', { response: 'declined' })).toBe('Declined an invitation');
     expect(toolLabel('delete_event', { scope: 'all' })).toBe('Deleted a repeating event');
   });

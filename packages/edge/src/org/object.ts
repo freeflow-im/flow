@@ -25,7 +25,7 @@ import type { Events } from '../events/object';
 import type { PublishInput, SubscriptionRead } from '../events/core';
 import { logEntryFor } from './eventLog';
 import { config } from './config';
-import { recordShare, revokeShare, shareEvents, sharedRefsOf, sharedWith, type RecordShareInput, type RevokeShareInput, type SharedItem } from './services/shares';
+import { isActiveAccount, recordShare, revokeShare, shareEvents, sharedRefsOf, sharedWith, type RecordShareInput, type RevokeShareInput, type SharedItem } from './services/shares';
 import { eq, and } from 'drizzle-orm';
 
 /** IMAGES (Cloudflare Images) resizes preview images and thumbnails; without it they are kept as they came (lib/images.ts). */
@@ -349,9 +349,15 @@ export class Org extends DurableObject<OrgEnv> {
     return { accountId: reader.accountId, channelIds: [...new Set([...(reader.channelIds ?? []), ...(user ? this.channelIdsOf(user) : [])])] };
   }
 
-  /** What is shared with the reader (GET /v1/workspaces/:id/shared-with-me). */
-  async sharedWith(reader: { accountId: string; channelIds?: string[] }): Promise<SharedItem[]> {
-    return withDb(this.db, () => sharedWith(this.shareReader(reader)));
+  /** What is shared with the reader (GET /v1/workspaces/:id/shared-with-me, GET /v1/calendar/shared); `includeOrg` adds
+   * what is shared with the whole organization. */
+  async sharedWith(reader: { accountId: string; channelIds?: string[] }, opts?: { includeOrg?: boolean }): Promise<SharedItem[]> {
+    return withDb(this.db, () => sharedWith(this.shareReader(reader), opts));
+  }
+
+  /** Whether the account is an active member here: an app object checks an `account:` grant's principal with this. */
+  async isActiveAccount(accountId: string): Promise<boolean> {
+    return typeof accountId === 'string' && !!accountId && withDb(this.db, () => isActiveAccount(accountId));
   }
 
   /** The references shared with the reader: the Events object's `ref:` audience (events/core.ts). */

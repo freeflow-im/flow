@@ -35,6 +35,11 @@ export interface InviteCalendars {
   remove(calendarId: string, href: string, etag: string | null): Promise<void>;
   hrefFor(calendarId: string, uid: string): string;
   now(): number;
+  /**
+   * A REPLY to an event the person organizes on a native calendar, applied there (the replier's PARTSTAT, itip.ts): true
+   * when it changed the copy. Absent where nothing applies replies (the copy is the server's, which records them itself).
+   */
+  applyReply?(ics: string, replier: string): Promise<boolean>;
 }
 
 /** The event an invitation is about, as Mail's card shows it (EventOccurrence's fields that make sense before it is on a calendar). */
@@ -52,6 +57,8 @@ export interface InviteAnswer {
   reply?: { name: string | null; email: string; response: Response };
   /** The person organized it (a REPLY to them, or their own invitation). */
   organizerIsMe: boolean;
+  /** A REPLY to an event on one of the person's native calendars: the answer is now on it. */
+  replyApplied?: true;
   /** The calendars an invitation can go on. */
   calendars: { id: string; name: string; color: string; isDefault: boolean }[];
 }
@@ -139,7 +146,11 @@ export class Invites {
 
   /** `POST /v1/calendar/invites`: what the invitation is, and where it stands on the person's calendars. */
   async read(body: unknown): Promise<InviteAnswer> {
-    return this.answer(await this.load(parse(InviteBody, body)));
+    const loaded = await this.load(parse(InviteBody, body));
+    // A REPLY from outside the platform to an event the person organizes on a native calendar: the answer goes on it.
+    const { inv, text } = loaded;
+    const applied = inv.method === 'REPLY' && inv.replier && this.cal.applyReply ? await this.cal.applyReply(text, inv.replier.email).catch(() => false) : false;
+    return { ...this.answer(loaded), ...(applied ? { replyApplied: true as const } : {}) };
   }
 
   /**
@@ -232,9 +243,10 @@ export class Invites {
    * After the person changed an event they organize, with guests, on a calendar whose server does not schedule: the guests
    * told by email. `before` and `after` are the object's text either side of the write (null: it did not exist, or is gone).
    * A new or changed event is a REQUEST to its guests (and a CANCEL to any taken off it); a deleted one a CANCEL; one
-   * occurrence deleted (`cancelRid`) a CANCEL of that occurrence. Null when there was nobody to tell.
+   * occurrence deleted (`cancelRid`) a CANCEL of that occurrence. Null when there was nobody to tell. `only` keeps the
+   * guests to email (a native calendar's: those outside the platform, the rest being scheduled by object call).
    */
-  async notify(calendarId: string, uid: string, before: string | null, after: string | null, opts: { cancelRid?: number } = {}): Promise<Notified | null> {
+  async notify(calendarId: string, uid: string, before: string | null, after: string | null, opts: { cancelRid?: number; only?: (email: string) => boolean } = {}): Promise<Notified | null> {
     if (this.cal.schedules(calendarId)) return null;
     const ref = after ?? before;
     if (!ref) return null;
@@ -244,8 +256,9 @@ export class Invites {
     if (!organizer || !me.has(organizer)) return null;
     const now = this.cal.now();
     const ctx = { now, zone: 'UTC' };
-    const was = before ? guestsOf(before, uid, meList) : [];
-    const is = after ? guestsOf(after, uid, meList) : [];
+    const keep = (g: { email: string }) => !opts.only || opts.only(g.email);
+    const was = before ? guestsOf(before, uid, meList).filter(keep) : [];
+    const is = after ? guestsOf(after, uid, meList).filter(keep) : [];
     const gone = after && !opts.cancelRid ? was.filter((g) => !is.some((x) => x.email === g.email)) : [];
     const anyone = opts.cancelRid || !after ? was.length > 0 : is.length > 0 || gone.length > 0;
     if (!anyone) return null;

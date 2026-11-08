@@ -1,6 +1,7 @@
 // End-to-end check of the Calendar tools on the suite's MCP endpoint (/mcp, src/calendar/calendarTools.ts,
 // docs/specs/web-mcp.md "Calendar tools"): OAuth consent with Calendar as a checkbox, then list, create (with an
-// attendee), find free time, answer an invitation, change and delete with a scope, against Radicale in Docker
+// attendee), find free time, answer an invitation, change and delete with a scope, against Radicale in Docker; then native
+// calendars (phase 4.3) with a second member, Bob: book with him, find free time over both, share, unshare, delete
 // (`flow-radicale`, 127.0.0.1:5232, any password logs in; test/e2e-calendar.mjs says how to start it) and the same local
 // `wrangler dev` as test/e2e-calendar.mjs, plus --local-upstream so OAuth's issuer is the local origin (as e2e-mail-mcp.mjs):
 //   npx wrangler dev --port 18799 --local --enable-containers=false --local-upstream localhost:18799 \
@@ -34,6 +35,8 @@ await dav('PUT',`${WORK}invite-${tag}.ics`,ics('BEGIN:VEVENT',`UID:invite-${tag}
 await dav('PUT',`${WORK}gym-${tag}.ics`,ics('BEGIN:VEVENT',`UID:gym-${tag}`,'DTSTAMP:20261101T000000Z','DTSTART:20261109T150000Z','DTEND:20261109T160000Z','RRULE:FREQ=DAILY;COUNT=5','SUMMARY:Gym','END:VEVENT'),{'content-type':'text/calendar'});
 r=await api(A.token,'POST','/v1/calendar/accounts',{email:EMAIL,displayName:'Ann',password:'x',server:{url:DAV+'/',username:USER}});
 t('Ann connects Radicale',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,120));
+// Her native calendar (phase 4.1) was the default; this run writes to the Radicale one.
+await api(A.token,'PATCH',`/v1/calendar/calendars/${r.j.calendars?.find((c)=>c.name==='Work')?.id}`,{isDefault:true});
 
 // --- OAuth: Calendar is a checkbox, on as the page starts ------------------------------------------------------------------
 r=await api(null,'POST','/oauth/register',{client_name:'Calendar Agent',redirect_uris:['http://localhost/callback']});const CLIENT=r.j.client_id;
@@ -57,9 +60,9 @@ let rpcId=0;
 const mcp=(tok,method,params={})=>api(tok,'POST','/mcp',{jsonrpc:'2.0',id:++rpcId,method,params},undefined,{accept:'application/json, text/event-stream'});
 const list=async(tok)=>((await mcp(tok,'tools/list')).j.result?.tools??[]).map((x)=>x.name);
 const call=async(tok,name,args)=>{const x=await mcp(tok,'tools/call',{name,arguments:args});const text=x.j?.result?.content?.[0]?.text;let v;try{v=JSON.parse(text)}catch{v=text}return{...x,v,isError:!!x.j?.result?.isError||!!x.j?.error,text:text??x.j?.error?.message}};
-const CAL=['list_calendars','list_events','get_event','find_free_time','create_event','update_event','delete_event','respond_to_event'];
+const CAL=['list_calendars','list_shared_calendars','list_events','get_event','find_free_time','create_event','update_event','delete_event','respond_to_event','share_calendar','unshare_calendar'];
 let names=await list(TOK.access_token);t('tools/list: the Calendar tools, beside Docs\'',CAL.every((n)=>names.includes(n))&&names.includes('read_range'),names.filter((n)=>CAL.includes(n)).join(','));
-names=await list(READ.access_token);t('calendar:read lists only the reading ones',JSON.stringify(names)===JSON.stringify(['list_calendars','list_events','get_event','find_free_time']),names.join(','));
+names=await list(READ.access_token);t('calendar:read lists only the reading ones',JSON.stringify(names)===JSON.stringify(['list_calendars','list_shared_calendars','list_events','get_event','find_free_time']),names.join(','));
 r=await call(READ.access_token,'create_event',{summary:'x',start:'2026-11-12',end:'2026-11-13'});t('and cannot create',r.isError,r.text);
 r=await mcp(TOK.access_token,'initialize',{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'e2e',version:'1'}});
 t('the instructions speak of Calendar',/Calendar:/.test(r.j.result?.instructions??''),'');
@@ -81,7 +84,7 @@ r=await call(T,'find_free_time',{duration_minutes:60,from:'2026-11-10T13:00:00Z'
 const slots=r.v.slots??[];
 t('find_free_time: around the gym and the review, Bo unknown',slots.length>=2&&!slots.some((s)=>s.start<'2026-11-10T18:00:00.000Z'&&s.end>'2026-11-10T17:00:00.000Z')&&!slots.some((s)=>s.start<'2026-11-10T16:00:00.000Z'&&s.end>'2026-11-10T15:00:00.000Z')&&JSON.stringify(r.v.unknown)==='["bo@test.local"]',JSON.stringify(r.v).slice(0,220));
 const slot=slots.find((s)=>s.minutes>=60);
-r=await call(T,'create_event',{summary:`Planning ${tag}`,start:slot.start,end:new Date(Date.parse(slot.start)+3600000).toISOString(),attendees:['Bo <bo@test.local>'],location:'Room 4'});
+r=await call(T,'create_event',{summary:`Planning ${tag}`,start:slot.start,end:new Date(Date.parse(slot.start)+3600000).toISOString(),attendees:['Bo <bo@test.local>'],location:'Room 4',calendar_id:work.id});
 const made=r.v.created;t('create_event, inviting Bo',made?.summary===`Planning ${tag}`&&JSON.stringify(r.v.invited)==='["bo@test.local"]'&&made.calendar?.name==='Work',JSON.stringify(r.v).slice(0,220));
 const uid=decodeURIComponent(made?.id?.split(':')[1]??'');
 let raw=await (await dav('GET',`${WORK}${encodeURIComponent(uid)}.ics`)).text();t('it is on the server with Bo as an attendee',raw.includes(`Planning ${tag}`)&&/bo@test\.local/.test(raw.replace(/\r\n /g,'')),raw.slice(0,80));
@@ -96,4 +99,47 @@ r=await call(T,'list_events',{from:'2026-11-09T00:00:00Z',to:'2026-11-16T00:00:0
 r=await call(T,'delete_event',{id:made.id});t('delete_event: the event',!r.isError,r.text);
 t('gone from the server',(await dav('GET',`${WORK}${encodeURIComponent(uid)}.ics`)).status===404);
 r=await call(T,'get_event',{id:made.id});t('and not found after',r.isError&&/Not found/.test(r.text),r.text);
+
+// --- Native calendars (phase 4.3): Bob joins Ann's organization ------------------------------------------------------------
+r=await api(A.token,'POST',`/v1/workspaces/${ORG}/invites`,{email:`calmcp-bob-${tag}@example.com`});const invTok=(r.j.inviteUrl??'').split('/').pop();
+const Bob=await signup(`calmcp-bob-${tag}@example.com`,'Bob');
+r=await api(Bob.token,'POST','/v1/invites/accept',{token:invTok});t('native: Bob joins Ann\'s organization',r.s<300,r.s+' '+JSON.stringify(r.j).slice(0,100));
+const BT=(await connect(Bob,ORG)).access_token;t('native: Bob connects an agent too',!!BT);
+const ANN_ADDR=(await api(A.token,'GET','/v1/calendar/accounts')).j.accounts?.find((a)=>a.kind==='native')?.email;
+const BOB_ADDR=(await api(Bob.token,'GET','/v1/calendar/accounts')).j.accounts?.find((a)=>a.kind==='native')?.email;
+r=await call(T,'list_calendars',{});const annNative=r.v.calendars?.find((c)=>c.native===true);
+t('native: list_calendars marks her FreeFlow calendar native, the Radicale ones not',annNative?.role==='owner'&&annNative.account===ANN_ADDR&&r.v.calendars.find((c)=>c.name==='Work')?.native===false,JSON.stringify(r.v.calendars).slice(0,220));
+r=await call(BT,'list_calendars',{});const bobNative=r.v.calendars?.[0];
+t('native: Bob\'s one calendar is his native default',r.v.calendars?.length===1&&bobNative.native===true&&bobNative.default===true&&bobNative.role==='owner',JSON.stringify(r.v).slice(0,200));
+
+// Ann books with Bob: on her FreeFlow calendar (not the Radicale default), Bob scheduled by object call.
+r=await call(T,'create_event',{summary:`Sync ${tag}`,start:'2026-12-03T15:00:00Z',end:'2026-12-03T16:00:00Z',attendees:[`Bob <${BOB_ADDR}>`]});
+const sync=r.v.created;
+t('native: create_event defaults to her FreeFlow calendar and schedules Bob',sync?.calendar?.id===annNative?.id&&sync.calendar.native===true&&JSON.stringify(r.v.scheduled_to_members)===JSON.stringify([BOB_ADDR])&&!r.v.emailed,JSON.stringify(r.v).slice(0,240));
+r=await call(BT,'list_events',{from:'2026-12-01T00:00:00Z',to:'2026-12-08T00:00:00Z'});const bobCopy=(r.v.events??[]).find((e)=>e.summary===`Sync ${tag}`);
+t('native: Bob\'s calendar has it, needs-action',bobCopy?.my_response==='needs-action'&&bobCopy.calendar?.id===bobNative?.id,JSON.stringify(r.v).slice(0,200));
+r=await call(BT,'update_event',{id:bobCopy?.id,summary:'Mine now'});t('native: Bob cannot change Ann\'s event (not_organizer, in words)',r.isError&&/Only the organizer/.test(r.text)&&/respond_to_event/.test(r.text),r.text);
+r=await call(BT,'respond_to_event',{id:bobCopy?.id,response:'accepted'});t('native: Bob accepts; Ann hears it by object call',r.v.organizer_told==='server',JSON.stringify(r.v).slice(0,160));
+
+// Free time for Ann and Bob, around the event just made.
+r=await call(T,'find_free_time',{duration_minutes:60,from:'2026-12-03T13:00:00Z',to:'2026-12-03T19:00:00Z',attendees:[BOB_ADDR],working_hours:null});
+const fs2=r.v.slots??[];
+t('native: find_free_time for Ann and Bob avoids it, Bob read from his object',fs2.length>=1&&!fs2.some((x)=>x.start<'2026-12-03T16:00:00.000Z'&&x.end>'2026-12-03T15:00:00.000Z')&&JSON.stringify(r.v.members)===JSON.stringify([BOB_ADDR])&&r.v.unknown?.length===0,JSON.stringify(r.v).slice(0,240));
+
+// Ann shares her FreeFlow calendar with Bob as viewer, then stops.
+r=await call(T,'share_calendar',{calendar_id:annNative?.id,principal:{account:BOB_ADDR},role:'viewer'});
+t('native: share_calendar with Bob by address, viewer',r.v.shared?.role==='viewer'&&/^account:/.test(r.v.shared.principal)&&r.v.grants?.length===1,JSON.stringify(r.v).slice(0,200));
+r=await call(T,'share_calendar',{calendar_id:annNative?.id,principal:{account:'nobody@else.test'},role:'viewer'});t('native: an address outside the organization is refused',r.isError&&/not a member/.test(r.text),r.text);
+r=await call(BT,'list_calendars',{});const seen=r.v.calendars?.find((c)=>c.id===annNative?.id);
+t('native: Bob\'s list_calendars shows it, role viewer',seen?.shared===true&&seen.role==='viewer'&&seen.read_only===true,JSON.stringify(r.v.calendars).slice(0,220));
+r=await call(BT,'list_shared_calendars',{});t('native: and list_shared_calendars',r.v.calendars?.length===1&&r.v.calendars[0].id===annNative?.id,JSON.stringify(r.v).slice(0,160));
+r=await call(BT,'list_events',{from:'2026-12-01T00:00:00Z',to:'2026-12-08T00:00:00Z',calendars:[bobNative?.id,annNative?.id]});
+t('native: Bob reads hers beside his own (forwarded)',(r.v.events??[]).filter((e)=>e.summary===`Sync ${tag}`).map((e)=>e.calendar?.id).sort().join()===[annNative?.id,bobNative?.id].sort().join(),JSON.stringify((r.v.events??[]).map((e)=>e.calendar)).slice(0,200));
+r=await call(BT,'create_event',{summary:'By Bob',start:'2026-12-04T15:00:00Z',end:'2026-12-04T16:00:00Z',calendar_id:annNative?.id});t('native: a viewer cannot create on it (forbidden, in words)',r.isError&&/role/.test(r.text),r.text);
+r=await call(T,'unshare_calendar',{calendar_id:annNative?.id,principal:{account:BOB_ADDR}});t('native: unshare_calendar',r.v.grants?.length===0,JSON.stringify(r.v).slice(0,160));
+r=await call(BT,'list_calendars',{});t('native: Bob no longer sees it',!r.v.calendars?.some((c)=>c.id===annNative?.id),JSON.stringify(r.v.calendars).slice(0,160));
+
+// delete_event on /mcp runs (its destructive annotation is the client's to heed); Bob's copy is cancelled.
+r=await call(T,'delete_event',{id:sync?.id});t('native: delete_event on /mcp, Bob\'s copy cancelled',!r.isError&&JSON.stringify(r.v.cancelled_for_members)===JSON.stringify([BOB_ADDR]),JSON.stringify(r.v).slice(0,200));
+r=await call(BT,'get_event',{id:bobCopy?.id});t('native: Bob\'s copy shows cancelled',r.v.event?.status==='cancelled',JSON.stringify(r.v).slice(0,160));
 console.log(`\n${pass} passed, ${fail} failed`);process.exit(fail?1:0);

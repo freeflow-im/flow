@@ -9,7 +9,7 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AgentJobEventData, ChannelDTO, PlatformEvent } from '@flow/shared';
 import { AgentBridge } from '../src/bridge.js';
-import { CATCH_UP_TYPES } from '../src/catch-up.js';
+import { ACCOUNT_TYPES, CATCH_UP_TYPES } from '../src/catch-up.js';
 import { DEMO_REPLY } from '../src/runtime.js';
 import type { BridgeConfig } from '../src/config.js';
 
@@ -192,7 +192,7 @@ describe('a wake job', () => {
   it('comes with the catch-up, and live with a poke for the job subscription', async () => {
     server.subs = [
       { id: 'sub-main', name: `bridge:${AGENT}`, consumer: 'acct', owner: 'acct', filter: { types: CATCH_UP_TYPES }, delivery: 'pull', cursor: 20 },
-      { id: 'sub-jobs', name: `bridge-jobs:${AGENT}`, consumer: 'acct', owner: 'acct', filter: { types: ['agent.job'], self: true }, delivery: 'socket', cursor: 20 },
+      { id: 'sub-jobs', name: `bridge-jobs:${AGENT}`, consumer: 'acct', owner: 'acct', filter: { types: ACCOUNT_TYPES, self: true }, delivery: 'socket', cursor: 20 },
     ];
     server.pages = [{ events: [jobEvent('job-5', 'chan-1')], next: 21 }];
     const b = bridge();

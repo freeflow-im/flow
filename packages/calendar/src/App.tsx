@@ -7,7 +7,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { addHours, startOfHour } from 'date-fns';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { openSuiteSearch } from '@flow/suite-bar';
-import { CalendarApiError, calendarApi, connectGoogle, setCalendarWorkspace, googleErrorText, type EventOccurrence, type Response, type Scope } from './api';
+import { CalendarApiError, calendarApi, connectGoogle, setCalendarWorkspace, googleErrorText, type CalendarInfo, type EventOccurrence, type Response, type Scope } from './api';
 import { AccountSettingsDialog, AddAccountDialog } from './components/AccountForms';
 import { CalendarGrid } from './components/CalendarGrid';
 import { CalendarSuiteBar } from './components/CalendarSuiteBar';
@@ -16,9 +16,11 @@ import { SignedOut } from './components/SignedOut';
 import { NoOrganization } from './components/NoOrganization';
 import { EventDialog, draftOf, inputOf, newDraft, type Draft } from './components/EventDialog';
 import { EventPopover } from './components/EventPopover';
+import { alsoOnNote, mergeByUid } from './lib/merge';
 import { QuickCreate } from './components/QuickCreate';
 import { ScopeDialog } from './components/ScopeDialog';
 import { SearchResults } from './components/SearchResults';
+import { ShareCalendarDialog } from './components/ShareCalendarDialog';
 import { Sidebar } from './components/Sidebar';
 import { Toolbar } from './components/Toolbar';
 import type { Anchor } from './components/ui/popover';
@@ -27,11 +29,13 @@ import { useCalendarAssistant } from './hooks/assistant';
 import { useOrganizations } from './hooks/organization';
 import { calendarContext, setAssistantOpen, useAssistantOpen } from './lib/assistant';
 import { ResizeHandle } from './components/ResizeHandle';
-import { useAccounts, useCalendarPrefs, useCalendars, useEventMutations, useEvents, useSearch } from './hooks/calendar';
+import { useAccounts, useCalendarPrefs, useCalendars, useEventMutations, useEvents, useMembers, useSearch, useSharedCalendars } from './hooks/calendar';
 import { RESPONDED_TEXT, withMyResponse } from './lib/format';
 import { movePatch } from './lib/occurrences';
 import { neighbours, parseDate, rangeOf, step, titleOf, type View } from './lib/ranges';
-import { parseNewEvent, withoutNewEvent } from './lib/deeplink';
+import { parseCalendarLink, parseNewEvent, withoutCalendarLink, withoutNewEvent } from './lib/deeplink';
+import { sharedPrefs } from './lib/prefs';
+import { asCalendar, errorText } from './lib/sharing';
 import { parsePlace, pathOf, type Place } from './lib/route';
 import { cn } from './lib/utils';
 
@@ -42,7 +46,6 @@ const BASE = import.meta.env.BASE_URL;
 const WEEK_STARTS_ON = 0 as const;
 type Dialog = { kind: 'add'; connect: ConnectKind } | { kind: 'settings'; accountId: string | null; focusPassword?: boolean } | null;
 type Ask = { action: 'edit' | 'delete'; allowThis: boolean; run(s: Scope): void; cancel(): void } | null;
-const errorText = (e: unknown) => (e instanceof CalendarApiError && e.code === 'conflict' ? 'This event changed elsewhere. Showing the latest.' : e instanceof Error ? e.message : String(e));
 const typing = (t: EventTarget | null) => t instanceof HTMLElement && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName));
 
 export function App() {
@@ -66,7 +69,18 @@ export function App() {
   const accounts = useAccounts();
   const calendars = useCalendars();
   const cals = useMemo(() => calendars.data ?? [], [calendars.data]);
-  const events = useEvents(range, ahead, calendars.data);
+  // Other accounts' calendars shared with the person (phase 4.4): ticked and coloured in this browser, drawn beside the
+  // person's own with the role they are shared with.
+  const shared = useSharedCalendars();
+  const sharedPref = sharedPrefs.use();
+  const sharedCals = useMemo(() => (shared.data ?? []).map((x) => asCalendar(x, sharedPref[x.id])), [shared.data, sharedPref]);
+  const allCals = useMemo(() => (calendars.data ? [...calendars.data, ...sharedCals] : undefined), [calendars.data, sharedCals]);
+  const members = useMembers(org?.id ?? null);
+  const ownerName = (accountId: string) => members.data?.find((x) => x.accountId === accountId)?.displayName ?? 'Someone';
+  const [sharing, setSharing] = useState<CalendarInfo | null>(null);
+  const events = useEvents(range, ahead, allCals);
+  // One copy per event: the person's own invitation over a shared calendar's (phase 4.5).
+  const occurrences = useMemo(() => mergeByUid(events.data ?? [], allCals ?? []), [events.data, allCals]);
   // A passing message at the bottom; one in progress ("Updating…") stays until the result replaces it.
   const [toast, setToast] = useState<string | { text: string; progress: true } | null>(null);
   const onError = useCallback((e: unknown) => setToast(errorText(e)), []);
@@ -82,7 +96,7 @@ export function App() {
   const results = useSearch(search);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const defaultCalendar = cals.find((c) => c.isDefault) ?? cals.find((c) => c.role !== 'reader');
-  const byId = useMemo(() => new Map(cals.map((c) => [c.id, c])), [cals]);
+  const byId = useMemo(() => new Map((allCals ?? []).map((c) => [c.id, c])), [allCals]);
 
   useEffect(() => {
     if (!toast) return;
@@ -112,6 +126,19 @@ export function App() {
     const at = startOfHour(addHours(new Date(), 1));
     setEditing({ draft: { ...newDraft(at, addHours(at, 1), false, defaultCalendar.id, asked.summary), attendees: asked.attendees } });
   }, [asked, askedDone, calendars.isSuccess, defaultCalendar]);
+  // A share's link (`?calendar=<id>`, the notice's address): that calendar ticked and scrolled into view once the lists are
+  // here, then taken off the address.
+  const [linked, setLinked] = useState(() => parseCalendarLink(window.location.search));
+  useEffect(() => {
+    if (!linked || !calendars.isSuccess || shared.isPending) return;
+    setLinked(null);
+    history.replaceState(null, '', `${window.location.pathname}${withoutCalendarLink(window.location.search)}`);
+    const own = cals.find((c) => c.id === linked);
+    if (own?.hidden) prefs.mutate({ id: own.id, patch: { hidden: false } });
+    else if (!own && (shared.data ?? []).some((x) => x.id === linked)) sharedPrefs.set(linked, { shown: true });
+    else if (!own) return setToast('That calendar is not shared with you.');
+    requestAnimationFrame(() => document.querySelector(`[data-calendar-id="${CSS.escape(linked)}"]`)?.scrollIntoView({ block: 'nearest' }));
+  }, [linked, calendars.isSuccess, shared.isPending, shared.data, cals, prefs]);
   const startGoogle = (email?: string) => void connectGoogle(email).catch((e: unknown) => setToast(errorText(e)));
 
   // The address follows the view; back and forward move it.
@@ -144,8 +171,8 @@ export function App() {
   const assistantOpen = useAssistantOpen();
   const assistantOverlay = useMediaQuery('(max-width: 1099px)');
   const assistantPane = useResizableWidth('flow.calendar.assistantWidth', 380, 300, 720, 'left');
-  const viewNow = useRef({ view, range, cals, event: open?.event ?? null, search });
-  viewNow.current = { view, range, cals, event: open?.event ?? null, search };
+  const viewNow = useRef({ view, range, cals, event: open?.event ?? null, search, accounts: accounts.data });
+  viewNow.current = { view, range, cals, event: open?.event ?? null, search, accounts: accounts.data };
   /** An event by id (the assistant's open_calendar_event, Open event, a link in its chat): the view moves to it, its card opens. */
   const openById = useCallback(async (id: string, start?: string) => {
     if (start) navigate({ date: /^\d{4}-\d\d-\d\d$/.test(start) ? parseDate(start) : new Date(start) });
@@ -161,7 +188,7 @@ export function App() {
   }, [navigate]);
   const chat = useCalendarAssistant({
     org: org?.id ?? null,
-    context: () => { const v = viewNow.current; return calendarContext({ view: v.view, range: v.range, calendars: v.cals, event: v.event, search: v.search || undefined }); },
+    context: () => { const v = viewNow.current; return calendarContext({ view: v.view, range: v.range, calendars: v.cals, event: v.event, search: v.search || undefined, accounts: v.accounts }); },
     handlers: {
       open: openById,
       show: (date, v) => navigate({ date, view: v }),
@@ -244,11 +271,12 @@ export function App() {
       onCreate={() => { setSidebarOpen(false); createNew(); }}
       onPick={(d) => { setSidebarOpen(false); navigate({ date: d }); }}
       onPickRange={(d, n) => { setSidebarOpen(false); navigate({ date: d, view: narrow ? 'agenda' : n <= 7 ? 'week' : 'month' }); }}
-      onToggle={(c) => prefs.mutate({ id: c.id, patch: { hidden: !c.hidden } })}
-      onColor={(c, color) => prefs.mutate({ id: c.id, patch: { color } })}
+      onToggle={(c) => (c.shared ? sharedPrefs.set(c.id, { shown: c.hidden }) : prefs.mutate({ id: c.id, patch: { hidden: !c.hidden } }))}
+      onColor={(c, color) => (c.shared ? sharedPrefs.set(c.id, { color: color ?? undefined }) : prefs.mutate({ id: c.id, patch: { color } }))}
       onDefault={(c) => prefs.mutate({ id: c.id, patch: { isDefault: true } })}
       onAccount={(id) => setDialog({ kind: 'settings', accountId: id })}
       onAdd={() => setDialog({ kind: 'add', connect: 'icloud' })}
+      shared={sharedCals} ownerName={ownerName} onShare={(c) => { setSidebarOpen(false); setSharing(c); }}
     />
   );
 
@@ -290,7 +318,7 @@ export function App() {
                 <Toolbar title={titleOf(view, place.date, WEEK_STARTS_ON)} view={view} narrow={narrow} busy={events.isFetching && !events.data} onToday={today} onStep={go} onView={setView} onCalendars={() => setSidebarOpen(true)} />
                 <div className="min-h-0 flex-1">
                   <CalendarGrid
-                    view={view} date={place.date} occurrences={events.data ?? []} calendars={cals} weekStartsOn={WEEK_STARTS_ON} selecting={!!quick}
+                    view={view} date={place.date} occurrences={occurrences} calendars={allCals ?? cals} weekStartsOn={WEEK_STARTS_ON} selecting={!!quick}
                     onSelect={(start, end, allDay, at) => {
                       if (!defaultCalendar) return setToast('Connect a calendar you can write to first.');
                       setOpen(null);
@@ -319,7 +347,8 @@ export function App() {
         </div>
       )}
       {open && (
-        <EventPopover event={open.event} calendar={byId.get(open.event.calendarId)} anchor={open.anchor} onClose={closeEvent}
+        <EventPopover event={open.event} calendar={byId.get(open.event.calendarId)} members={members.data ?? []}
+          alsoOn={alsoOnNote(open.event, allCals ?? [], ownerName)} anchor={open.anchor} onClose={closeEvent}
           onEdit={() => edit(open.event)} onDelete={() => remove(open.event)} onRespond={(r) => respond(open.event, r)} />
       )}
       {quick && (
@@ -327,13 +356,14 @@ export function App() {
           onSave={(d) => m.create(inputOf(d))} onMore={(d) => { setQuick(null); setEditing({ draft: d }); }} />
       )}
       {editing && (
-        <EventDialog initial={editing.draft} existing={editing.existing} calendars={cals} accounts={accounts.data ?? []} onClose={() => setEditing(null)}
+        <EventDialog initial={editing.draft} existing={editing.existing} calendars={allCals ?? cals} accounts={accounts.data ?? []} onClose={() => setEditing(null)}
           onSave={(input, scope) => (editing.existing ? m.update(editing.existing, input, scope ?? 'all') : m.create(input as Parameters<typeof m.create>[0]))}
           onDelete={editing.existing ? () => { const o = editing.existing!; setEditing(null); remove(o); } : undefined} />
       )}
+      {sharing && <ShareCalendarDialog calendar={sharing} org={org ? { id: org.id, name: org.name } : null} onClose={() => setSharing(null)} />}
       {ask && <ScopeDialog action={ask.action} allowThis={ask.allowThis} onCancel={() => { ask.cancel(); setAsk(null); }} onChoose={(s) => { setAsk(null); ask.run(s); }} />}
       {dialog?.kind === 'add' && <AddAccountDialog kind={dialog.connect} onClose={() => setDialog(null)} onAdded={() => { setDialog(null); setToast('Connected. Your events are on their way.'); }} />}
-      {dialog?.kind === 'settings' && <AccountSettingsDialog accounts={accounts.data ?? []} initialId={dialog.accountId} focusPassword={dialog.focusPassword} onClose={() => setDialog(null)} onAdd={() => setDialog({ kind: 'add', connect: 'icloud' })} />}
+      {dialog?.kind === 'settings' && <AccountSettingsDialog accounts={(accounts.data ?? []).filter((a) => a.kind !== 'native')} initialId={dialog.accountId} focusPassword={dialog.focusPassword} onClose={() => setDialog(null)} onAdd={() => setDialog({ kind: 'add', connect: 'icloud' })} />}
       {toast && (
         <div role="status" className={cn('fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-lg bg-[#323232] px-4 py-3 text-[14px] text-white shadow-lg')}>
           {typeof toast !== 'string' && <Loader2 className="size-4 animate-spin" aria-hidden />}

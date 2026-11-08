@@ -35,12 +35,12 @@ import { decryptBody, encryptBody } from '../crypto/index.js';
 import { mintAppToken } from '../lib/appToken.js';
 import { reapFileIfUnreferenced, requireFileAccess, toFileDTO } from './files.js';
 import { requireMembership } from './workspaces.js';
-import { reportRevoke, reportShare } from './shares.js';
+import { isActiveAccount, reportRevoke, reportShare } from './shares.js';
 import { publishEvent, subjectArtifact } from '../bus.js';
 import { requireRole, grantsOn, type ChatReader } from '../access.js';
 import { config } from '../config.js';
 
-const { artifacts, channels, files, channelMembers, users, workspaceMembers, grants } = schema;
+const { artifacts, channels, files, channelMembers, users, grants } = schema;
 
 type ArtifactRow = typeof artifacts.$inferSelect;
 type FileRow = typeof files.$inferSelect;
@@ -523,8 +523,8 @@ async function checkPrincipal(workspaceId: string, principal: string): Promise<v
   }
   if (p.kind === 'link') throw badRequest('not_supported', 'link sharing is not offered for artifacts yet');
   if (p.kind === 'account') {
-    const m = await db.select({ u: workspaceMembers.userId }).from(workspaceMembers).where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.accountId, p.id!))).limit(1);
-    if (!m[0]) throw badRequest('bad_principal', 'no such account in this workspace');
+    // An active account of this organization only (phase 4.4: the same `not_a_member` as Calendar's and Docs' grants).
+    if (!(await isActiveAccount(p.id!))) throw badRequest('not_a_member', 'That account is not a member of this organization');
   } else if (p.kind === 'channel') {
     const c = await db.select({ id: channels.id }).from(channels).where(and(eq(channels.id, p.id!), eq(channels.workspaceId, workspaceId))).limit(1);
     if (!c[0]) throw badRequest('bad_principal', 'no such channel in this workspace');

@@ -144,9 +144,10 @@ function registerEventTools(mcp: ReturnType<typeof createMcpServer>, tools: Even
 
 /**
  * One MCP request, as `caller`. `mail` and `calendar` reach the caller's own Mail and Calendar objects, and `events` the
- * organization's event subscriptions as the caller's account, where the Worker has them.
+ * organization's event subscriptions as the caller's account, where the Worker has them; `member` finds an account of the
+ * organization by address (share_calendar).
  */
-export async function handleMcp(request: Request, hub: FileHub, caller: McpRequestCaller, mail?: MailFetch, calendar?: CalendarFetch, events?: SubscriptionOps): Promise<Response> {
+export async function handleMcp(request: Request, hub: FileHub, caller: McpRequestCaller, mail?: MailFetch, calendar?: CalendarFetch, events?: SubscriptionOps, member?: CalendarToolContext['member']): Promise<Response> {
   const version = suiteMcpVersion(caller.endpoint);
   if (!version) return json(404, { error: 'Not found' });
   if (request.method !== 'POST') return json(405, { error: 'This endpoint takes POST (Streamable HTTP, JSON responses); it has no GET stream.' }, { allow: 'POST' });
@@ -191,7 +192,7 @@ export async function handleMcp(request: Request, hub: FileHub, caller: McpReque
       },
     });
   }
-  if (calendar && access.calendar.length) registerCalendarTools(mcp, access.calendar, { calendar, origin: caller.origin });
+  if (calendar && access.calendar.length) registerCalendarTools(mcp, access.calendar, { calendar, origin: caller.origin, ...(member ? { member } : {}) });
   if (events && access.events.length) registerEventTools(mcp, access.events, { subscriptions: events });
   const transport = adaptTransport(new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true }) as never, info, stateless) as unknown as WebStandardStreamableHTTPServerTransport;
   try {

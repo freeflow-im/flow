@@ -7,6 +7,7 @@ import { Hono, type Context } from 'hono';
 import type { Calendar, GoogleGrant } from '../calendar/object';
 import { consentUrl, exchangeCode, openState, returnUrl, sealState, type GoogleClient, type Tokens } from '../calendar/google';
 import { TIMING_HEADER, providerFor, timingLine } from '../calendar/rules';
+import { calendarRequest, sharedWithCaller } from '../calendar/forward';
 import { googleProfile } from '../oauth';
 import { ApiError, unauthorized } from '../errors';
 import { resolveAccountCaller, resolveCaller, type AuthEnv } from './auth';
@@ -92,12 +93,28 @@ calendarRoutes.get('/v1/calendar/google/callback', async (c) => {
   return c.redirect(to, 302);
 });
 
+export { sharedOwnerOf } from '../calendar/forward';
+
+/**
+ * `GET /v1/calendar/shared` → `{ calendars: [{ id, name, color, role, ownerAccountId, grantedBy, url, principal }] }`: the
+ * native calendars shared with the caller, the organization's included (calendar/forward.ts `sharedWithCaller`).
+ */
+calendarRoutes.get('/v1/calendar/shared', async (c) => {
+  const start = Date.now();
+  const who = await resolveAccountCaller(c, 'Calendar');
+  const calendars = await sharedWithCaller(c.env, who, who.user.id);
+  c.header('Cache-Control', 'no-store');
+  console.log(timingLine('GET', c.req.url, 200, Date.now() - start, null));
+  return c.json({ calendars });
+});
+
 calendarRoutes.all('/v1/calendar/*', async (c) => {
   const start = Date.now();
   let status = 500, timing: string | null = null;
   try {
     const who = await resolveAccountCaller(c, 'Calendar');
-    const res = await c.env.CALENDAR.get(c.env.CALENDAR.idFromName(who.account.id)).handle(c.req.raw, who);
+    // A request about another account's native calendar goes to that account's object, as this reader (platform.md §4.4).
+    const res = await calendarRequest(c.env, c.req.raw, who, who.user.id);
     status = res.status;
     timing = res.headers.get(TIMING_HEADER);
     const out = new Response(res.body, res);

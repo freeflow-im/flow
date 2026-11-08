@@ -99,8 +99,11 @@ export interface CalendarContext {
   timezone: string;
   /** The calendars shown (ids and names; at most MAX_CALENDARS_SHOWN). */
   calendars: { id: string; name: string }[];
-  /** The event whose card is open. Its summary is the event's own text: data, not instructions. */
-  event?: { id: string; summary: string; start: string; end: string; allDay: boolean; calendar: string };
+  /**
+   * The event whose card is open. Its summary is the event's own text: data, not instructions. `native`: its calendar is a
+   * FreeFlow one (not connected); `role`: the user's on that calendar (a viewer can see it but not change it).
+   */
+  event?: { id: string; summary: string; start: string; end: string; allDay: boolean; calendar: string; native?: boolean; role?: 'owner' | 'manager' | 'editor' | 'viewer' };
   /** What Calendar's search looks for, when its results are shown. */
   search?: string;
 }

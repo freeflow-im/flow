@@ -214,6 +214,12 @@ export function toolLabel(name: string, i: Input): string {
     // The user's calendars, in the hosted app (FreeFlow Calendar).
     case 'list_calendars':
       return 'Looked at your calendars';
+    case 'list_shared_calendars':
+      return 'Looked at the calendars shared with you';
+    case 'share_calendar':
+      return `Shared a calendar with ${sharee(i.principal)}${typeof i.role === 'string' ? ` as ${i.role}` : ''}`;
+    case 'unshare_calendar':
+      return `Stopped sharing a calendar with ${sharee(i.principal)}`;
     case 'list_events':
       return i.q ? `Searched your calendar for “${i.q}”` : `Looked at your calendar${when(i.from) ? ` from ${when(i.from)}` : ''}`;
     case 'get_event':
@@ -236,6 +242,12 @@ export function toolLabel(name: string, i: Input): string {
       return agentToolLabel(name, i) ?? name;
   }
 }
+
+/** Who share_calendar or unshare_calendar names: a member by address, a channel, or the organization. */
+const sharee = (p: unknown): string => {
+  const x = (p && typeof p === 'object' ? p : {}) as { account?: unknown; channel?: unknown; org?: unknown };
+  return x.org ? 'everyone' : typeof x.account === 'string' ? people([x.account]) : x.channel ? 'a channel' : 'someone';
+};
 
 /** The file a tool of Claude Code's names, by its name alone. */
 const fileName = (p: unknown) => (typeof p === 'string' ? (p.split('/').pop() ?? p) : 'a file');

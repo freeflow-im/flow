@@ -6,6 +6,7 @@ import { useEffect, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { calendarApi, type CalendarAccount, type CalendarInfo, type EventInput, type EventOccurrence, type EventPatch, type NewAccount, type Response, type Scope } from '../api';
 import { applyDelete, applyPatch } from '../lib/occurrences';
+import { suite } from '../suite';
 import { overlaps, rangeKey, type Range } from '../lib/ranges';
 
 const REFRESH_MS = 60_000;
@@ -18,6 +19,10 @@ export const keys = {
   events: ['calendar', 'events'] as const,
   range: (r: Range) => ['calendar', 'events', rangeKey(r).from, rangeKey(r).to] as const,
   search: (q: string) => ['calendar', 'search', q] as const,
+  shared: ['calendar', 'shared'] as const,
+  grants: (id: string) => ['calendar', 'grants', id] as const,
+  members: (org: string) => ['calendar', 'members', org] as const,
+  channels: (org: string) => ['calendar', 'channels', org] as const,
 };
 
 export function useAccounts() {
@@ -33,10 +38,33 @@ export function useCalendars() {
   return q;
 }
 
-/** Every calendar's occurrences in a range: hidden ones too, so a checkbox shows or hides them with no round trip. */
+/** Other accounts' native calendars shared with the person (phase 4.4), the organization's included. */
+export function useSharedCalendars() {
+  return useQuery({ queryKey: keys.shared, queryFn: calendarApi.shared, refetchInterval: REFRESH_MS });
+}
+
+/** The organization's members and channels, whom a calendar can be shared with (and whose name a shared one shows). */
+export function useMembers(org: string | null) {
+  return useQuery({ queryKey: keys.members(org ?? ''), queryFn: () => suite.members(org!), enabled: !!org, staleTime: 5 * 60_000 });
+}
+export function useChannels(org: string | null) {
+  return useQuery({ queryKey: keys.channels(org ?? ''), queryFn: () => suite.channels(org!), enabled: !!org, staleTime: 5 * 60_000 });
+}
+
+/**
+ * Every calendar's occurrences in a range: hidden ones too, so a checkbox shows or hides them with no round trip. The
+ * person's own calendars in one request; a shared calendar's go to its owner's object (the Worker forwards a request
+ * naming them), so one request per owner, and one that fails (a share just taken away) leaves the rest.
+ */
 function fetchRange(r: Range, calendars: CalendarInfo[]) {
   const { from, to } = rangeKey(r);
-  return calendarApi.events(from, to, calendars.map((c) => c.id));
+  const own = calendars.filter((c) => !c.shared).map((c) => c.id);
+  const byOwner = new Map<string, string[]>();
+  for (const c of calendars) if (c.shared) byOwner.set(c.shared.ownerAccountId, [...(byOwner.get(c.shared.ownerAccountId) ?? []), c.id]);
+  return Promise.all([
+    own.length ? calendarApi.events(from, to, own) : Promise.resolve([]),
+    ...[...byOwner.values()].map((ids) => calendarApi.events(from, to, ids).catch(() => [] as EventOccurrence[])),
+  ]).then((lists) => lists.flat());
 }
 
 export function useEvents(range: Range, ahead: Range[], calendars: CalendarInfo[] | undefined) {

@@ -261,6 +261,29 @@ on by default), and in the Docs assistant with a `page: 'calendar'` context, the
 - **The labels** (`describe.ts`) read only the tool's input, as all labels do: "Created “Lunch” Thu, Nov 5, 12:00 PM, invited Bo".
 - The Calendar mock has no canned assistant (Mail's has none either): the panel opens and its chat answers with the mock's 404.
 
+### §6 for native calendars (platform phase 4.3, 2026-11-06)
+
+The tools of §6 over the native calendars of §15 and §16, as `docs/specs/web-mcp.md` "Calendar tools" has them in full:
+
+- **The same path as the routes.** `calendar/forward.ts` (`sharedOwnerOf`, `sharedWithCaller`, `calendarRequest`) is what
+  `routes/calendar.ts` and Docs' `calendarOf` both call, so a tool naming a shared calendar's id reaches the owner's object as
+  a reader and `/shared` answers from the share index.
+- **`list_calendars`** marks each calendar `native` and gives the person's `role` (owner, manager, editor, viewer; a connected
+  writer is editor, a reader viewer), then the calendars shared with them (`shared: true`); **`list_shared_calendars`** is only
+  those. `list_events` splits named calendars by owner (one request each, merged by start); `get_event` names a shared one.
+- **`create_event`** defaults to the person's native calendar (the default when it is native, else their FreeFlow calendar),
+  not a connected default; the results of create, update and delete say who was scheduled by object call
+  (`scheduled_to_members`, `cancelled_for_members`) and who was emailed (`emailed`, or `not_emailed` with the note). A guest's
+  change (`not_organizer`) and a role too low (`forbidden`) come back as the server's message with what to do instead.
+- **`find_free_time`** is unchanged in shape; `POST …/freebusy` now says each address's `source` (`self`, `member`, `server`),
+  so the result lists `members` beside `unknown`.
+- **`share_calendar` / `unshare_calendar`** (calendar:write) call §15's grants routes; an `account` principal is an address,
+  resolved by the tool context's `member` (the directory's `accountByAddress`, this organization only, not suspended or removed).
+- **The assistant** has the three new tools as server tools; `delete_event` stays the browser's. `CalendarContext.event` gains
+  `native` and `role` (Calendar fills them from its accounts and calendars), rendered as "a FreeFlow calendar" and, for a viewer,
+  "can view this calendar but not change it".
+- **The bridge** (0.37.7) adds `find_free_time` (its own busy and the attendees', in working hours and a zone) and `create_event`.
+
 ## 7. The PRs (each with its `changelog/` entry; batched so a PR is something a person can use, as ruled 2026-11-04)
 
 1. **Calendar, reading and writing** (server + web, branch `calendar/app`). The whole of §3, §4 (less `invites`) and §5:
@@ -556,3 +579,90 @@ one of its buttons presses that button, not Edit).
 - **Not in this PR**: a REPLY that arrives is shown, not applied to the organizer's copy on a non-scheduling server (the
   guest's answer shows there only when the server or another client records it); a COUNTER or REFRESH; a Sent copy of iMIP
   mail; an `.ics` without METHOD (PUBLISH) offered as "Add to calendar"; Calendar's popover saying when an emailed answer failed.
+
+## 15. Native calendars (platform phase 4.1, 2026-11-06)
+
+What `platform.md` §3.5 and phase 4 item 1 call the native kind, as built: calendars whose store is the Calendar object itself.
+
+- **The native account and its calendar**: on an account's first request its Calendar object makes one `accounts` row of kind
+  `native` (the account's address and name, `server` `''`, an empty `secret`, `status` `ok`) and one calendar, "Calendar",
+  `href` `native:<id>`, `supports_sync` 0, the default when no other calendar is (`store.ts` `ensureNative`). Its id is
+  `n.<ownerAccountId>.<12 hex>` (`rules.ts` `nativeCalendarId`, `nativeOwnerOf`), so a route finds the owner's object from the
+  id alone; event ids stay `<calendarId>:<uid>`. The native account cannot be removed and has no password or server
+  (`PATCH` refuses them; refresh lists its one calendar). The alarm, the relisting and the sync skip it. The client lists it
+  without the account menu.
+- **The write path**: `putAndStore` and `removeAt` branch on the account kind. For a native calendar the iCalendar is made
+  by `ical.ts` as for CalDAV (a new UID, DTSTAMP, SEQUENCE from 0; edits and the `this` / `following` / `all` scopes on the
+  stored text), and `store.ts` `putNative` / `deleteNative` write the `objects` row and index its `events` rows as a synced
+  object is, with an etag of their own (`"<n>-<fnv1a>"`, `n` moving on per write); `ifMatch` null creates (an object already
+  there is `conflict`), else it must equal the stored etag (409 otherwise). No driver call. Reads (the window, occurrences,
+  search) are unchanged. Guests on a native event are scheduled as §16 says (by object call, iMIP only
+  for those outside the platform). An invitation from Mail can still be answered onto it.
+- **Events on the bus**: each native write publishes into the organization's Events object (`EVENTS` binding)
+  `calendar.event.added`, `.updated` or `.cancelled`, with `ref` `<org>/calendar/event/<eventId>`, audience
+  `ref:<org>/calendar/calendar/<calendarId>`, the caller's account as `actor`, and `data { calendarId, eventId, uid, summary,
+  start, end, allDay, ownerAccountId, url }` (`url`: `/calendar/week/<date>?event=<id>` on `WEB_URL_BASE`). The owner sees
+  them by `data.ownerAccountId`, a grantee through the share index. Connected calendars publish nothing yet.
+- **Grants** (`@flow/shared` grants; `GRANTS_DDL` in the object's DDL, `grants` in `CALENDAR_TABLES`): kinds `calendar` (the
+  container) and `event`; the owner column is the object's account. `GET /v1/calendar/calendars/:id/grants` → `{ grants, role }`
+  (viewer+), `PUT …/grants` `{ principal, role: viewer | editor | manager }` and `DELETE …/grants/:principal` (manager+);
+  `account:`, `channel:` and `org`; `link:` is 400 `not_supported`, as is a connected calendar. Each change goes to the Org
+  object's share index by binding (`recordShare` / `revokeShare`, `kind: 'calendar'`, the calendar's name as title, the
+  address `/calendar/?calendar=<id>`, `shares.ts` `calendarAddress`), which also posts the DM line or channel card.
+- **Forwarding**: `routes/calendar.ts` `sharedOwnerOf` reads a native calendar id from the path (`/events/<id>…`,
+  `/calendars/<id>…`), the `calendars` query or a JSON body's `calendarId`; one of another account goes to
+  `CALENDAR.idFromName(ownerAccountId).handleShared(request, caller, channelIds)` (the reader's channels from the Org
+  object's `channelIdsOf`). `handle` keeps the owner guard (`wrong_account`) for the owner's own requests; `handleShared`
+  takes a member of the same organization as a reader, reaches only the window, single events (read, create, change,
+  delete) and the grants routes, and checks `effectiveRole` on the calendar: viewer reads, editor creates and changes,
+  manager shares; no role is 404, too low a role 403 `forbidden`. A reader's window must name the calendars. The owner's
+  alarm and activity are not touched by a reader.
+- **Shared with me**: `GET /v1/calendar/shared` → `{ calendars: [{ id, name, color, role, ownerAccountId, grantedBy, url }] }`:
+  one call to the share index (`shared-with-me` rows of kind `calendar`), then one RPC per owner's object (`sharedCalendars`)
+  for the name, colour and the reader's current role. (Phase 4.4: `org` grants are listed too, marked `principal: 'org'`, and
+  reach every active member on the bus; an `account:` grant must name an active member, else 400 `not_a_member`.)
+- **Free/busy**: `POST /v1/calendar/freebusy` resolves each address that is not the person's own through the directory
+  (`accountByAddress`); an account of the same organization answers from its own object (`busy(from, to)` RPC: start and end
+  of every native event not transparent, cancelled or declined, merged; no details). The rest take the CalDAV path or are `unknown`.
+- **Tests**: `store.test.ts` (the native account once, create / update with a conflict / delete, the scopes and their
+  expansion), `native.test.ts` (the events published, grants: none 404, viewer reads and cannot write, editor writes, a
+  manager by channel shares, another organization 404, a revoke 404; the forwarding's id finding), and the native section of
+  `test/e2e-calendar.mjs` (Ann's default calendar, create with no `calendarId`, window, patch, delete, her bus read, Bob in her
+  organization 404 → viewer → `shared` and the forwarded window → 403 on create → editor creates → free/busy → revoke → 404).
+
+## 16. Scheduling between accounts (platform phase 4.2, 2026-11-06)
+
+What `platform.md` §3.5 and phase 4 item 2 describe, as built: iTIP between Calendar objects, iMIP only for addresses outside the platform.
+
+- **Resolution**: a native event the account organizes has its attendee addresses resolved on create, and on a change to its
+  attendees, through the directory (`accountByAddress`); an account of the same organization that is not removed or suspended
+  gets `X-FLOW-ACCOUNT=<accountId>` on its ATTENDEE line (CN filled from the account), as does the organizer's ORGANIZER line;
+  anything else is outside. The API shows it as `accountId` on attendees.
+- **Delivery** (`object.ts` `schedule`, after the write): each platform attendee's object gets `receiveItip({ method, ics, from,
+  to })` by binding, in parallel, before the request answers; a REQUEST for a new or changed event, a CANCEL for a deleted one,
+  one taken off the list, or one occurrence deleted. A thrown call is retried once and logged; a refusal is logged; the
+  organizer's write stands. Outside attendees get iMIP from the organizer's mailbox (`invites.ts` `notify` with `only`), so a
+  native event's answer gains `invitationsSent` / `invitationsNote` as a CalDAV one does.
+- **The rules** (`itip.ts`, tested on RFC 5546 §4.2's examples): REQUEST, ADD and CANCEL only from the organizer on record (by
+  address and, where marked, account), never to the organizer's own copy; a higher SEQUENCE wins, then a later DTSTAMP, an older
+  or equal message is ignored (a CANCEL of the same version applies). REPLY only to the organizer's copy, from one of its
+  attendees about themself, ACCEPTED, DECLINED or TENTATIVE, not for an older SEQUENCE.
+- **At the attendee**: a new REQUEST goes on the account's native calendar (the one holding the UID, else the default native one;
+  an object never used, an agent's, makes its calendar from `to`) with `needs-action`, `calendar.event.added`, and
+  `calendar.invited` (`audience: account:<attendee>`, `data` the event's plus `organizer { email, name, accountId }`). An update
+  replaces the copy keeping the account's PARTSTAT and reminders per VEVENT. A CANCEL of the event keeps it with
+  STATUS:CANCELLED (`calendar.event.cancelled`); of one occurrence, EXDATEs it. On a native calendar only the organizer changes
+  an event: an attendee's PATCH of anything but reminders (or a move) is 403 `not_organizer`; DELETE removes their copy only.
+- **Answers**: `events/:id/respond` on a platform copy sends the REPLY to the organizer's object by binding (`replied: 'server'`,
+  or `failed`), applied there in the same request: the replier's PARTSTAT and `calendar.event.updated` with
+  `data.attendeeResponse { email, response }`. An organizer outside is emailed as before. A REPLY from outside, read by Mail's
+  card (`POST /v1/calendar/invites`), is applied to the organizer's native copy (`replyApplied: true`); the message's sender is
+  not checked beyond being an attendee, as with any iMIP. A REQUEST from outside is answered onto the default calendar as before.
+- **The bridge** (0.37.6): `calendar.invited` is in its catch-up subscription and its `bridge-jobs:` socket one (an older one
+  is renewed); each starts one turn (event id in `state.json`) in the DM with the organizer when a member, else the sponsor.
+  Tools `list_my_events`, `get_event`, `respond_to_event` call `/v1/calendar/*` as the agent with `?workspace=`.
+- **Tests**: `itip.test.ts`, `scheduling.test.ts` (three objects wired together), the bridge's `calendar.test.ts`, the scheduling
+  section of `test/e2e-calendar.mjs` (Ann, Bob and an agent) and the native section of `test/e2e-calendar-invites.mjs` (an outside
+  guest by mail, their REPLY applied, an outside REQUEST onto the native calendar).
+- **Not here**: COUNTER, REFRESH, DECLINECOUNTER and delegation; a REQUEST that resets answers when the time moves (answers are
+  kept); the organizer re-sending the attendee list after a REPLY.

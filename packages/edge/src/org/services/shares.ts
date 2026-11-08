@@ -34,7 +34,7 @@ export interface RecordShareInput {
 export interface RevokeShareInput { ref: string; principal: string; revokedBy: string }
 
 /** One row of "shared with me" (GET /v1/workspaces/:id/shared-with-me). */
-export interface SharedItem { ref: string; kind: string; title: string; role: string; grantedBy: string; at: number; url: string }
+export interface SharedItem { ref: string; kind: string; title: string; role: string; principal: string; grantedBy: string; at: number; url: string }
 
 /** Who reads the index: an account and the channels it is in. */
 export interface ShareReader { accountId: string; channelIds: string[] }
@@ -44,8 +44,13 @@ export function chatAddress(ref: Reference | null): string | null {
   return ref?.app === 'chat' && ref.kind === 'artifact' ? `/?open=${encodeURIComponent(`artifact:${ref.id}`)}` : null;
 }
 
-/** The address of a shared object (a Docs one, a Chat artifact; another app's has none yet). */
-export const urlOf = (ref: Reference | null, fileKind: string): string | null => docsAddress(ref, fileKind) ?? chatAddress(ref);
+/** Where a native calendar opens in the web client (phase 4.1). */
+export function calendarAddress(ref: Reference | null): string | null {
+  return ref?.app === 'calendar' && ref.kind === 'calendar' ? `/calendar/?calendar=${encodeURIComponent(ref.id)}` : null;
+}
+
+/** The address of a shared object (a Docs one, a Chat artifact, a calendar; another app's has none yet). */
+export const urlOf = (ref: Reference | null, fileKind: string): string | null => docsAddress(ref, fileKind) ?? chatAddress(ref) ?? calendarAddress(ref);
 
 /** Where a request in the Org object sends a sharing event (the object binds it to the Events object; tests, nowhere). */
 export const shareEvents = new AsyncLocalStorage<(event: PublishInput) => Promise<void>>();
@@ -163,23 +168,43 @@ export async function revokeShare(input: RevokeShareInput): Promise<PublishInput
   };
 }
 
-/** The principals a reader's shares are under: its account and its channels (not `org`, which is the organization's
- * root rather than something shared with this reader, as the grants library's "shared with me" has it). */
-const principalsFor = (reader: ShareReader) => principalsOf(reader).filter((p) => p !== ORG_PRINCIPAL);
+/** Whether the account is an active member of this organization (a membership row, its person not deleted): who may
+ * see what is shared with the whole organization, and whom an account grant may name (`not_a_member`). */
+export async function isActiveAccount(accountId: string): Promise<boolean> {
+  const row = await db
+    .select({ deletedAt: users.deletedAt })
+    .from(workspaceMembers)
+    .innerJoin(users, eq(users.id, workspaceMembers.userId))
+    .where(eq(workspaceMembers.accountId, accountId))
+    .limit(1);
+  return !!row[0] && !row[0].deletedAt;
+}
 
-/** What is shared with the reader, newest first, one row per object with the highest role it is given. */
-export async function sharedWith(reader: ShareReader): Promise<SharedItem[]> {
-  const rows = await db.select().from(shares).where(inArray(shares.principal, principalsFor(reader))).orderBy(desc(shares.at));
+/** The principals a reader's shares are under: its account and its channels, and `org` (phase 4.4) when asked for and the
+ * reader is an active member. */
+async function principalsFor(reader: ShareReader, includeOrg: boolean): Promise<string[]> {
+  const all = principalsOf(reader);
+  return includeOrg && (await isActiveAccount(reader.accountId)) ? all : all.filter((p) => p !== ORG_PRINCIPAL);
+}
+
+/**
+ * What is shared with the reader, newest first, one row per object with the highest role it is given and the principal
+ * that gives it. `includeOrg` adds what is shared with the whole organization (a calendar's `org` grant; Docs'
+ * Organization files): "shared with me" in Chat leaves them out, Calendar's shared list wants them.
+ */
+export async function sharedWith(reader: ShareReader, opts: { includeOrg?: boolean } = {}): Promise<SharedItem[]> {
+  const rows = await db.select().from(shares).where(inArray(shares.principal, await principalsFor(reader, !!opts.includeOrg))).orderBy(desc(shares.at));
   const best = new Map<string, (typeof rows)[number]>();
   for (const r of rows) {
     const had = best.get(r.ref);
     if (!had || ROLE_RANK[r.role as Role] > ROLE_RANK[had.role as Role]) best.set(r.ref, had ? { ...r, at: had.at } : r);
   }
-  return [...best.values()].map((r) => ({ ref: r.ref, kind: r.kind, title: r.title, role: r.role, grantedBy: r.grantedBy, at: r.at, url: urlOf(parseReference(r.ref), r.kind) ?? '' }));
+  return [...best.values()].map((r) => ({ ref: r.ref, kind: r.kind, title: r.title, role: r.role, principal: r.principal, grantedBy: r.grantedBy, at: r.at, url: urlOf(parseReference(r.ref), r.kind) ?? '' }));
 }
 
-/** The references shared with the reader: what the bus lets through for a `ref:` audience. */
+/** The references shared with the reader, the organization's included (every active member may see those): what the bus
+ * lets through for a `ref:` audience. */
 export async function sharedRefsOf(reader: ShareReader): Promise<string[]> {
-  const rows = await db.selectDistinct({ ref: shares.ref }).from(shares).where(inArray(shares.principal, principalsFor(reader)));
+  const rows = await db.selectDistinct({ ref: shares.ref }).from(shares).where(inArray(shares.principal, await principalsFor(reader, true)));
   return rows.map((r) => r.ref);
 }
