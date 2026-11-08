@@ -19,6 +19,7 @@ import { addressOf } from '@flow/shared/addresses';
 import { calendarRequest, type AccountCaller } from '../calendar/forward';
 import { appToolContexts } from '../apps';
 import type { FileChange, GrantChange } from './server/app.ts';
+import { MOVED_TABLES, OWNED_TABLES, parseKey, type MovedTable, type OwnedTable, type PruneSelection, type Row } from './move';
 
 export interface DocsEnv {
   BLOBS: R2Bucket;
@@ -231,6 +232,76 @@ export class Docs extends DurableObject<DocsEnv> {
     return withDocsContext(this.context, async () => {
       await this.ready;
       return this.ctx.storage.sql.exec('SELECT * FROM agent_messages WHERE conversation_id = ? ORDER BY id LIMIT ? OFFSET ?', conversationId, Math.max(1, Math.min(limit, 1000)), Math.max(0, offset)).toArray();
+    });
+  }
+
+  // ---- one person's files to another organization's object (move.ts; routes/admin.ts, POST /v1/admin/accounts/move) ----
+
+  /** A page of the rows of one table that are the person's: their user row, what they own, their favorites and recent opens. */
+  async ownedRows(userId: string, table: OwnedTable, offset = 0, limit = 200): Promise<Row[]> {
+    if (!(OWNED_TABLES as readonly string[]).includes(table)) throw new Error(`not a table the move reads: ${table}`);
+    const who = table === 'users' ? 'id' : table === 'favorites' || table === 'recent_opens' ? 'user_id' : 'owner_id';
+    return withDocsContext(this.context, async () => {
+      await this.ready;
+      return this.ctx.storage.sql.exec(`SELECT * FROM ${table} WHERE ${who} = ? ORDER BY rowid LIMIT ? OFFSET ?`, userId, Math.max(1, Math.min(limit, 1000)), Math.max(0, offset)).toArray();
+    });
+  }
+
+  /** The grants on these objects (`sheet`, `file` or `folder` and its id), not those they inherit. */
+  async grantsOn(objects: { kind: string; id: string }[]): Promise<Row[]> {
+    return withDocsContext(this.context, async () => {
+      await this.ready;
+      return objects.flatMap((o) => this.ctx.storage.sql.exec('SELECT * FROM grants WHERE object_kind = ? AND object_id = ?', o.kind, o.id).toArray());
+    });
+  }
+
+  /** Which of these objects (move.ts keys: `sheet:<id>`, `file:<id>`, `image:<id>`, `folder:<root>/<path>`) are here. */
+  async presentKeys(keys: string[]): Promise<string[]> {
+    return withDocsContext(this.context, async () => {
+      await this.ready;
+      const sql = this.ctx.storage.sql;
+      return keys.filter((key) => {
+        const k = parseKey(key);
+        if (!k) return false;
+        return k.table === 'folders' ? sql.exec('SELECT 1 FROM folders WHERE scope = ? AND path = ?', k.scope, k.path).toArray().length > 0 : sql.exec(`SELECT 1 FROM ${k.table} WHERE id = ?`, k.id).toArray().length > 0;
+      });
+    });
+  }
+
+  /**
+   * Moved rows into one table, keeping any already here (`INSERT OR IGNORE`: the move can run again); which were new. As
+   * importRows, new file ids and link tokens go to the directory's index (only where it has none yet: the prune moves those).
+   */
+  async importMoved(table: MovedTable, rows: Row[], organizationId: string): Promise<{ added: boolean[] }> {
+    if (!(MOVED_TABLES as readonly string[]).includes(table)) throw new Error(`not a table the move writes: ${table}`);
+    const added = await withDocsContext(this.context, async () => {
+      await this.ready;
+      this.outbox();
+      return rows.map((row) => insertRows(this.ctx.storage.sql, table, [row]) > 0);
+    });
+    await this.flush(organizationId);
+    return { added };
+  }
+
+  /** The person's moved rows taken away (bodies are the caller's), with every grant on the objects: how many of each. */
+  async pruneOwned(userId: string, sel: Omit<PruneSelection, 'bodies' | 'indexIds' | 'grants'>): Promise<Record<string, number>> {
+    return withDocsContext(this.context, async () => {
+      await this.ready;
+      const sql = this.ctx.storage.sql;
+      const gone = (q: string, ...args: (string | number)[]) => sql.exec(`${q} RETURNING 1`, ...args).toArray().length;
+      return this.ctx.storage.transactionSync(() => {
+        const n: Record<string, number> = { grants: 0, sheets: 0, stored_files: 0, images: 0, folders: 0, favorites: 0, recent_opens: 0, public_links: 0 };
+        const grantsOf = (kind: string, id: string) => (n.grants! += gone('DELETE FROM grants WHERE object_kind = ? AND object_id = ?', kind, id));
+        // The old public links first: deleting a sheet or file would take them by trigger, uncounted.
+        for (const token of sel.public_links) n.public_links! += gone('DELETE FROM public_links WHERE token = ? AND owner_id = ?', token, userId);
+        for (const id of sel.sheets) { grantsOf('sheet', id); n.sheets! += gone('DELETE FROM sheets WHERE id = ? AND owner_id = ?', id, userId); }
+        for (const id of sel.stored_files) { grantsOf('file', id); n.stored_files! += gone('DELETE FROM stored_files WHERE id = ? AND owner_id = ?', id, userId); }
+        for (const id of sel.images) n.images! += gone('DELETE FROM images WHERE id = ? AND owner_id = ?', id, userId);
+        for (const f of sel.folders) { grantsOf('folder', `${f.scope}/${f.path}`); n.folders! += gone('DELETE FROM folders WHERE scope = ? AND path = ? AND owner_id = ?', f.scope, f.path, userId); }
+        for (const ref of sel.favorites) n.favorites! += gone('DELETE FROM favorites WHERE user_id = ? AND ref = ?', userId, ref);
+        for (const ref of sel.recent_opens) n.recent_opens! += gone('DELETE FROM recent_opens WHERE user_id = ? AND ref = ?', userId, ref);
+        return n;
+      });
     });
   }
 

@@ -942,6 +942,15 @@ export class DirectoryCore {
     return this.rows("SELECT 1 FROM accounts WHERE organization_id = ? AND state <> 'removed' LIMIT 1", organizationId).length > 0;
   }
 
+  /**
+   * Ids (Docs file ids, link tokens) now kept by another organization's object: a person's files moved there
+   * (POST /v1/admin/accounts/move). Unlike the `index` change, which keeps the first organization an id was made in.
+   */
+  reindexIds(ids: string[], organizationId: string): number {
+    for (const id of ids) this.sql.exec('INSERT OR REPLACE INTO id_index (id, organization_id) VALUES (?, ?)', id, organizationId);
+    return ids.length;
+  }
+
   organizationOfId(id: string): string | null {
     return (this.rows('SELECT organization_id FROM id_index WHERE id = ?', id)[0]?.organization_id as string | undefined) ?? null;
   }

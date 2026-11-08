@@ -78,6 +78,9 @@ export const ASSISTANT_TABLES = ['agent_conversations', 'agent_messages', 'agent
 /** The tables importRows takes whole; a conversation comes with its messages (importChat). */
 const IMPORTED = ['agent_usage', 'assistant_settings'] as const;
 
+/** The rows of a move between accounts (pruneMoved, presentRows): conversations by id, usage by (user, day), settings by user. */
+export interface MovedChats { conversations: string[]; usage: { user_id: string; day: string }[]; settings: string[] }
+
 /** Who is asking, per request: the caller context (the account) and the same person as the Docs object's caller. */
 interface Who { caller: AccountCaller; docs: DocsCaller }
 type Bindings = { who: Who };
@@ -365,6 +368,38 @@ export class Assistant extends DurableObject<AssistantEnv> {
   importRows(table: string, rows: ImportRow[]): { added: number } {
     if (!(IMPORTED as readonly string[]).includes(table)) throw new Error(`not imported whole: ${table}`);
     return importTable(this.sql, ASSISTANT_TABLES, 'assistant_state', table, rows);
+  }
+
+  // ---- a person's chats to their account in another organization (routes/admin.ts, POST /v1/admin/accounts/move) ----
+
+  /** A page of one conversation's messages, in their order. */
+  conversationMessages(conversationId: string, offset = 0, limit = 200): ImportRow[] {
+    return this.sql.exec('SELECT * FROM agent_messages WHERE conversation_id = ? ORDER BY id LIMIT ? OFFSET ?', conversationId, Math.max(1, Math.min(limit, 1000)), Math.max(0, offset)).toArray() as ImportRow[];
+  }
+
+  /** Which of these rows are here: conversations by id, usage by (user, day), settings by user. */
+  presentRows(want: MovedChats): MovedChats {
+    const has = (q: string, ...a: string[]) => this.sql.exec(q, ...a).toArray().length > 0;
+    return {
+      conversations: want.conversations.filter((id) => has('SELECT 1 FROM agent_conversations WHERE id = ?', id)),
+      usage: want.usage.filter((u) => has('SELECT 1 FROM agent_usage WHERE user_id = ? AND day = ?', u.user_id, u.day)),
+      settings: want.settings.filter((userId) => has('SELECT 1 FROM assistant_settings WHERE user_id = ?', userId)),
+    };
+  }
+
+  /** The moved rows taken away (a conversation with its messages): how many of each. */
+  pruneMoved(rows: MovedChats): Record<string, number> {
+    const gone = (q: string, ...a: string[]) => this.sql.exec(`${q} RETURNING 1`, ...a).toArray().length;
+    return this.ctx.storage.transactionSync(() => {
+      const n = { conversations: 0, messages: 0, agent_usage: 0, assistant_settings: 0 };
+      for (const id of rows.conversations) {
+        n.messages += gone('DELETE FROM agent_messages WHERE conversation_id = ?', id);
+        n.conversations += gone('DELETE FROM agent_conversations WHERE id = ?', id);
+      }
+      for (const u of rows.usage) n.agent_usage += gone('DELETE FROM agent_usage WHERE user_id = ? AND day = ?', u.user_id, u.day);
+      for (const userId of rows.settings) n.assistant_settings += gone('DELETE FROM assistant_settings WHERE user_id = ?', userId);
+      return n;
+    });
   }
 
   /**
