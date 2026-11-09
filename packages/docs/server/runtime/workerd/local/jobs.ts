@@ -1,5 +1,4 @@
-// @ts-nocheck: copied from packages/docs, where it is typechecked under that package's settings (cloudflare-spikes.md).
-import { Inert } from '../../runtime/inert.ts';
+import { Inert } from '../inert.ts';
 // The assistant's app-change jobs are retired in the suite.
 export class JobRunner extends Inert {}
 export class JobStore extends Inert {}

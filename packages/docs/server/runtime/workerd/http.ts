@@ -252,3 +252,13 @@ export class DocsApp {
     return bytes;
   }
 }
+
+// What the routes import by Fastify's names (runtime/node/http.ts): here the Worker's own app and no-op plugins.
+export const Fastify = (_opts?: unknown): DocsApp => new DocsApp();
+export type FastifyInstance = DocsApp;
+export type FastifyReply = DocsReply;
+export type FastifyRequest = DocsRequest;
+/** @fastify/cookie: the Worker's router reads cookies itself. */
+export const cookie = async (): Promise<void> => {};
+/** @fastify/static: the Worker's assets are served by the Worker, not by the Docs routes. */
+export const fastifyStatic = async (): Promise<void> => {};

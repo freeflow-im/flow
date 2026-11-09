@@ -19,6 +19,7 @@ import { SheetController } from '../../client/src/state/controller.ts';
 import { openDb, type DB } from '../../server/db.ts';
 import { FolderStore, type Folders } from '../../server/folders.ts';
 import { cleanFolderPath } from '../../shared/folders.ts';
+import type { ScopeArg, ViewerArg } from '../../server/scope.ts';
 import { ImageStore } from '../../server/images.ts';
 import { SheetStore, validateWorkbook } from '../../server/sheets.ts';
 import { buildSlide, newId, validateDeck, type Deck, type LayoutId, type SlideContent, type ThemeId } from '../../shared/deck.ts';
@@ -28,13 +29,13 @@ import { newMarkdownDoc, validateMarkdownDoc, type MarkdownDoc } from '../../sha
 import { CELL_IMAGE_TYPES, EDITABLE_IMAGE_TYPES, isTextFileType, MAX_CELL_IMAGE_BYTES, MAX_TEXT_EDIT_BYTES, PREVIEW_FILE_TYPES, type SheetMeta, type StoredFile, type Workbook } from '../../shared/types.ts';
 import { FileStore, isImageOfType } from '../../server/files.ts';
 import { imageSize } from '../../server/imageSize.ts';
-import { open } from 'node:fs/promises';
+import { open } from '#runtime/fsp';
 import { importBytes, ImportFileError } from '../../server/importFile.ts';
 import { NoTextError, storedFileText, textOutline } from '../../server/storedText.ts';
 import { PdfError, pdfToMarkdownFile } from '../../server/pdfMarkdown.ts';
 import { PrintError, type Paper, type PdfMaker } from '../../server/pdf.ts';
 import { applyTextEdits, TextEditError, type TextEdit } from '../../shared/textEdits.ts';
-import { readFile } from 'node:fs/promises';
+import { readFile } from '#runtime/fsp';
 
 export { ToolError };
 
@@ -133,6 +134,10 @@ export interface FileSummary {
   size?: number;
   /** The path of the folder the file is in ('' at the top), where the listing asks for it. */
   folder?: string;
+  /** In the suite: "Organization files" or "My files". */
+  root?: string;
+  /** In the suite: the file's page in the app. */
+  url?: string;
 }
 
 /** Where the user is in the open file, as reported by the app's editor. */
@@ -272,12 +277,14 @@ export class FileHub {
   onShow: ((userId: string, file: { kind: LibraryKind; id: string }) => void) | null = null;
   /** Told when the model rewrote a stored file (edit_file), for a host showing it to load it again. */
   onFileChanged: ((userId: string, id: string) => void) | null = null;
+  /** Where the app shows a file, as `<appUrl>/s/<id>` and the like (the suite's /workspace): listed files carry a link there. */
+  appUrl: string | null = null;
   /** The host's open editors, where the edit tools run on a file open in one (the desktop app); null here otherwise. */
   live: LiveEditor | null = null;
   /** Links to stored files' bytes: the app's iframe has no credentials, so the address carries a token. */
   private readonly fileLinks = new Map<string, { userId: string; id: string; expires: number }>();
   /** One-time tickets letting the app upload a file for import without a bearer token (it has none). */
-  private readonly tickets = new Map<string, { userId: string; expires: number; folder?: string }>();
+  private readonly tickets = new Map<string, { userId: string; expires: number; folder?: string; orgId?: string }>();
 
   constructor(opts: FileHubOptions) {
     this.db = opts.db;
@@ -303,11 +310,12 @@ export class FileHub {
   }
 
   /** The files of one account; the same instance (with its open-file state) for every request of that user. */
-  forUser(userId: string): FileService {
-    let svc = this.byUser.get(userId);
+  forUser(userId: string, orgId: string | null = null): FileService {
+    const key = orgId ? `${userId}@${orgId}` : userId;
+    let svc = this.byUser.get(key);
     if (!svc) {
-      svc = new FileService(this, userId);
-      this.byUser.set(userId, svc);
+      svc = new FileService(this, userId, orgId);
+      this.byUser.set(key, svc);
     }
     return svc;
   }
@@ -328,20 +336,20 @@ export class FileHub {
    * asks for one (upload_ticket), and so does an agent uploading a file of its own (upload_file), which may
    * name the folder the file goes in.
    */
-  issueTicket(userId: string, folder?: string): string {
+  issueTicket(userId: string, folder?: string, orgId?: string | null): string {
     const now = Date.now();
     for (const [k, v] of this.tickets) if (v.expires < now) this.tickets.delete(k);
     const ticket = randomBytes(24).toString('base64url');
-    this.tickets.set(ticket, { userId, expires: now + UPLOAD_TICKET_MS, ...(folder ? { folder } : {}) });
+    this.tickets.set(ticket, { userId, expires: now + UPLOAD_TICKET_MS, ...(folder ? { folder } : {}), ...(orgId ? { orgId } : {}) });
     return ticket;
   }
 
   /** The account a ticket was issued to (and the folder it named), consuming it; null when unknown or expired. */
-  redeemTicket(ticket: string | null | undefined): { userId: string; folder?: string } | null {
+  redeemTicket(ticket: string | null | undefined): { userId: string; folder?: string; orgId?: string } | null {
     if (!ticket) return null;
     const t = this.tickets.get(ticket);
     this.tickets.delete(ticket);
-    return t && t.expires >= Date.now() ? { userId: t.userId, folder: t.folder } : null;
+    return t && t.expires >= Date.now() ? { userId: t.userId, folder: t.folder, orgId: t.orgId } : null;
   }
 
   /** A token for reading one stored file's bytes for a few hours; the same one while it has plenty of time left. */
@@ -380,17 +388,38 @@ export class FileService {
   readonly sheets: SheetStore;
   readonly images: ImageStore;
   readonly userId: string;
+  /**
+   * In the suite, the organization the agent was allowed for: it works on that organization's Organization files and the
+   * user's My files there (server/scope.ts), and makes new files in My files. Null elsewhere: the user's own files.
+   */
+  readonly orgId: string | null;
   readonly publicUrl: string | null;
   /** The file shown in the app, which the model's tools act on by default. */
   open: { kind: LibraryKind; id: string } | null = null;
   cursor: Cursor = {};
 
-  constructor(hub: FileHub, userId: string) {
+  constructor(hub: FileHub, userId: string, orgId: string | null = null) {
     this.hub = hub;
     this.sheets = hub.sheets;
     this.images = hub.images;
     this.userId = userId;
+    this.orgId = orgId;
     this.publicUrl = hub.publicUrl;
+  }
+
+  /** Who asks for a file by its id: the user, with the organization's shared files theirs to open too. */
+  get who(): ViewerArg {
+    return this.orgId ? { userId: this.userId, workspaces: new Set([this.orgId]) } : this.userId;
+  }
+
+  /** Where new files and folders go: the user's own files (My files, in the suite). */
+  get home(): ScopeArg {
+    return this.orgId ? { ownerId: this.userId, workspaceId: this.orgId, private: true } : this.userId;
+  }
+
+  /** What is listed and searched: in the suite the organization's Organization files and the user's My files there. */
+  get roots(): ScopeArg[] {
+    return this.orgId ? [{ ownerId: this.userId, workspaceId: this.orgId, private: false }, this.home] : [this.userId];
   }
 
   profile(): { id: string; email: string } {
@@ -403,7 +432,7 @@ export class FileService {
     const q = query?.trim().toLowerCase();
     const kinds = kind ? [kind] : LIBRARY_KINDS;
     return kinds
-      .flatMap((k) => (k === 'file' ? this.hub.files.list(this.userId).map(fileSummary) : this.sheets.list(this.userId, k).map(summary)))
+      .flatMap((k) => this.roots.flatMap((r) => (k === 'file' ? this.hub.files.list(r).map(fileSummary) : this.sheets.list(r, k).map(summary))))
       .filter((m) => !q || m.title.toLowerCase().includes(q))
       .sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
   }
@@ -415,11 +444,11 @@ export class FileService {
     // One folder is read on its own: in the desktop app a whole-library list walks every folder on disk.
     const all =
       folder === undefined
-        ? kinds.flatMap((k) => (k === 'file' ? this.hub.files.list(this.userId).map((f) => this.fileRow(f)) : this.sheets.list(this.userId, k).map((m) => this.docRow(m))))
+        ? kinds.flatMap((k) => this.roots.flatMap((r) => (k === 'file' ? this.hub.files.list(r).map((f) => this.fileRow(f)) : this.sheets.list(r, k).map((m) => this.docRow(m)))))
         : [
-            ...(kinds.includes('file') ? this.hub.files.listIn(this.userId, folder).map((f) => this.fileRow(f)) : []),
-            ...this.sheets
-              .listIn(this.userId, folder)
+            ...(kinds.includes('file') ? this.roots.flatMap((r) => this.hub.files.listIn(r, folder)).map((f) => this.fileRow(f)) : []),
+            ...this.roots
+              .flatMap((r) => this.sheets.listIn(r, folder))
               .filter((m) => kinds.includes(m.kind as LibraryKind))
               .map((m) => this.docRow(m)),
           ];
@@ -427,11 +456,22 @@ export class FileService {
   }
 
   private fileRow(f: StoredFile): FileSummary {
-    return { ...fileSummary(f), folder: f.folder ?? '' };
+    return this.placed({ ...fileSummary(f), folder: f.folder ?? '' }, f);
   }
 
   private docRow(m: SheetMeta): FileSummary {
-    return { ...summary(m), folder: m.folder ?? '' };
+    return this.placed({ ...summary(m), folder: m.folder ?? '' }, m);
+  }
+
+  /** In the suite: which root a file is in, and its page in the app. */
+  placed<T extends FileSummary>(f: T, meta?: { shared?: boolean }): T {
+    if (!this.orgId && !this.hub.appUrl) return f;
+    const page = { sheet: 's', doc: 'doc', deck: 'd', markdown: 'md', file: 'f' }[f.kind] ?? 'f';
+    return {
+      ...f,
+      ...(this.orgId && meta ? { root: meta.shared ? 'Organization files' : 'My files' } : {}),
+      ...(this.hub.appUrl ? { url: `${this.hub.appUrl}/${page}/${encodeURIComponent(f.id)}` } : {}),
+    };
   }
 
   /**
@@ -440,7 +480,10 @@ export class FileService {
    */
   async search(text: string, kind?: LibraryKind, within?: string): Promise<{ files: FileSummary[]; folders: string[] }> {
     const inside = (path: string) => within === undefined || within === '' || path === within || path.startsWith(`${within}/`);
-    const [docs, files, folders] = await Promise.all([this.sheets.search(this.userId, text), this.hub.files.search(this.userId, text), this.hub.folders.search(this.userId, text)]);
+    const perRoot = await Promise.all(this.roots.map((r) => Promise.all([this.sheets.search(r, text), this.hub.files.search(r, text), this.hub.folders.search(r, text)])));
+    const docs = perRoot.flatMap((f) => f[0]);
+    const files = perRoot.flatMap((f) => f[1]);
+    const folders = [...new Set(perRoot.flatMap((f) => f[2]))];
     const found = [...(!kind || kind === 'file' ? files.map((f) => this.fileRow(f)) : []), ...docs.filter((m) => !kind || m.kind === kind).map((m) => this.docRow(m))];
     return {
       files: found.filter((f) => inside(f.folder ?? '')).sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1)),
@@ -452,12 +495,12 @@ export class FileService {
 
   /** The folders directly in one ('' for the top), as paths. */
   subfolders(parent: string): string[] {
-    return this.hub.folders.children(this.userId, parent);
+    return [...new Set(this.roots.flatMap((r) => this.hub.folders.children(r, parent)))];
   }
 
   /** Every folder of the account, as paths. */
   folders(): string[] {
-    const under = (parent: string): string[] => this.hub.folders.children(this.userId, parent).flatMap((p) => [p, ...under(p)]);
+    const under = (parent: string): string[] => this.subfolders(parent).flatMap((p) => [p, ...under(p)]);
     return under('');
   }
 
@@ -465,7 +508,7 @@ export class FileService {
   folderPath(input: string): string {
     const clean = cleanFolderPath(input);
     if (clean === null) throw new ToolError('That is not a folder path. Use names separated by "/", such as "Reports/2026"; a name cannot start with a dot or contain \\ : * ? " < > |.');
-    if (!this.hub.folders.exists(this.userId, clean)) throw new ToolError(`There is no folder "${clean}". Create it with create_folder, or see list_files for the folders there are.`);
+    if (!this.roots.some((r) => this.hub.folders.exists(r, clean))) throw new ToolError(`There is no folder "${clean}". Create it with create_folder, or see list_files for the folders there are.`);
     return clean;
   }
 
@@ -473,27 +516,27 @@ export class FileService {
   createFolder(input: string): { path: string; created: boolean } {
     const clean = cleanFolderPath(input);
     if (!clean) throw new ToolError('Give the folder a path: names separated by "/", such as "Reports/2026". A name cannot start with a dot or contain \\ : * ? " < > |.');
-    return { path: clean, created: this.hub.folders.create(this.userId, clean) };
+    return { path: clean, created: this.hub.folders.create(this.home, clean) };
   }
 
   /** Put a file in a folder ('' for the top). */
   move(kind: LibraryKind, id: string, folder: string): FileSummary {
-    const moved = kind === 'file' ? this.hub.files.move(this.userId, id, folder) : this.sheets.move(this.userId, id, folder);
+    const moved = kind === 'file' ? this.hub.files.move(this.who, id, folder) : this.sheets.move(this.who, id, folder);
     if (!moved) throw new ToolError(`There is no ${noun(kind)} ${id}.`);
     return { ...(kind === 'file' ? fileSummary(moved as StoredFile) : summary(moved as SheetMeta)), folder };
   }
 
   /** A text document built from the Markdown, or (kind markdown) a Markdown file holding it as it is. */
   async createDoc(title: string, markdown?: string, kind: 'doc' | 'markdown' = 'doc'): Promise<FileSummary> {
-    if (kind === 'markdown') return summary(await this.sheets.createMarkdown(this.userId, title.trim() || 'Untitled Markdown', newMarkdownDoc(markdown ?? '')));
+    if (kind === 'markdown') return this.placed(summary(await this.sheets.createMarkdown(this.home, title.trim() || 'Untitled Markdown', newMarkdownDoc(markdown ?? ''))), {});
     const doc = markdown ? markdownToDoc(markdown) : newDoc();
     const problem = validateDoc(doc);
     if (problem) throw new ToolError(problem);
-    return summary(await this.sheets.createDoc(this.userId, title.trim() || 'Untitled document', doc));
+    return this.placed(summary(await this.sheets.createDoc(this.home, title.trim() || 'Untitled document', doc)), {});
   }
 
   async createSheet(title: string): Promise<FileSummary> {
-    return summary(await this.sheets.create(this.userId, title.trim() || 'Untitled spreadsheet'));
+    return this.placed(summary(await this.sheets.create(this.home, title.trim() || 'Untitled spreadsheet')), {});
   }
 
   async createDeck(title: string, theme?: ThemeId, slides: SlideSpec[] = []): Promise<FileSummary> {
@@ -504,7 +547,7 @@ export class FileService {
     };
     const problem = validateDeck(deck);
     if (problem) throw new ToolError(problem);
-    return summary(await this.sheets.createDeck(this.userId, title.trim() || 'Untitled presentation', deck));
+    return this.placed(summary(await this.sheets.createDeck(this.home, title.trim() || 'Untitled presentation', deck)), {});
   }
 
   /** The user's copy of the Getting started guide; the first call makes it. */
@@ -518,8 +561,8 @@ export class FileService {
    */
   async importFile(bytes: Buffer, name: string | undefined, title: string | undefined, folder?: string): Promise<{ file: FileSummary; warnings: string[] }> {
     try {
-      const made = await importBytes({ sheets: this.sheets, images: this.images, files: this.hub.files }, this.userId, bytes, name, title);
-      const file = made.sheet ? summary(made.sheet) : fileSummary(made.file);
+      const made = await importBytes({ sheets: this.sheets, images: this.images, files: this.hub.files }, this.home, bytes, name, title);
+      const file = this.placed(made.sheet ? summary(made.sheet) : fileSummary(made.file), {});
       return { file: folder ? this.move(file.kind, file.id, folder) : file, warnings: made.warnings };
     } catch (e) {
       if (e instanceof ImportFileError) throw new ToolError(e.message);
@@ -530,23 +573,23 @@ export class FileService {
   rename(kind: LibraryKind, id: string, title: string): FileSummary {
     // A stored file is renamed by its file name, and keeps its extension.
     if (kind === 'file') {
-      const file = this.hub.files.rename(this.userId, id, title);
+      const file = this.hub.files.rename(this.who, id, title);
       if (!file) throw new ToolError(`There is no ${noun(kind)} ${id}.`);
       return fileSummary(file);
     }
-    const meta = this.sheets.rename(this.userId, id, title.trim(), kind);
+    const meta = this.sheets.rename(this.who, id, title.trim(), kind);
     if (!meta) throw new ToolError(`There is no ${noun(kind)} ${id}.`);
     return summary(meta);
   }
 
   async delete(kind: LibraryKind, id: string): Promise<void> {
-    if (!(kind === 'file' ? await this.hub.files.delete(this.userId, id) : await this.sheets.delete(this.userId, id, kind))) throw new ToolError(`There is no ${noun(kind)} ${id}.`);
+    if (!(kind === 'file' ? await this.hub.files.delete(this.who, id) : await this.sheets.delete(this.who, id, kind))) throw new ToolError(`There is no ${noun(kind)} ${id}.`);
     if (this.open?.id === id) this.setOpen(null);
   }
 
   /** A stored file (a PDF or a video) of this account. */
   storedFile(id: string): FileSummary {
-    const f = this.hub.files.get(this.userId, id);
+    const f = this.hub.files.get(this.who, id);
     if (!f) throw new ToolError(`There is no file ${id}.`);
     return fileSummary(f.meta);
   }
@@ -556,7 +599,7 @@ export class FileService {
    * is not a stored file (a document, or nothing).
    */
   storedTarget(id: string | undefined): string | null {
-    if (id) return this.hub.files.get(this.userId, id) ? id : null;
+    if (id) return this.hub.files.get(this.who, id) ? id : null;
     return this.open?.kind === 'file' ? this.open.id : null;
   }
 
@@ -565,7 +608,7 @@ export class FileService {
    * With canEdit (a version of the tools that has edit_file), a text file is said to be editable.
    */
   async readStored(id: string, from?: number, to?: number, canEdit = false): Promise<Record<string, unknown>> {
-    const f = this.hub.files.get(this.userId, id);
+    const f = this.hub.files.get(this.who, id);
     if (!f) throw new ToolError(`There is no file ${id}.`);
     try {
       const data = await readFile(f.file);
@@ -581,7 +624,7 @@ export class FileService {
   /** A Markdown file of a stored PDF's text, made beside the PDF (server/pdfMarkdown.ts). */
   async convertPdf(id: string): Promise<{ file: FileSummary; pdf: FileSummary; pages: number; ocr_pages: number[]; warnings: string[] }> {
     try {
-      const made = await pdfToMarkdownFile({ sheets: this.sheets, files: this.hub.files }, this.userId, id);
+      const made = await pdfToMarkdownFile({ sheets: this.sheets, files: this.hub.files }, this.who, id);
       if (!made) throw new ToolError(`There is no file ${id}. Use list_files or search_files to find ids.`);
       return { file: { ...summary(made.sheet), folder: made.sheet.folder ?? '' }, pdf: fileSummary(made.pdf), pages: made.pageCount, ocr_pages: made.ocrPages, warnings: made.warnings };
     } catch (e) {
@@ -594,7 +637,7 @@ export class FileService {
   async exportPdf(id: string, paper: Paper): Promise<FileSummary & { folder: string }> {
     if (!this.hub.pdf) throw new ToolError('PDFs cannot be made here.');
     try {
-      const file = await this.hub.pdf.save(this.userId, id, paper);
+      const file = await this.hub.pdf.save(this.who, id, paper);
       if (!file) throw new ToolError(`There is no file ${id}. Use list_files or search_files to find ids.`);
       return { ...fileSummary(file), folder: file.folder ?? '' };
     } catch (e) {
@@ -608,12 +651,12 @@ export class FileService {
    * the store keeps the version before). Saved as the app's text editor saves it.
    */
   async editStored(id: string, change: { edits?: TextEdit[]; content?: string; undo?: boolean }): Promise<Record<string, unknown>> {
-    const f = this.hub.files.get(this.userId, id);
+    const f = this.hub.files.get(this.who, id);
     if (!f) throw new ToolError(`There is no file ${id}. Use list_files or search_files to find ids.`);
     const modes = Number(!!change.edits?.length) + Number(typeof change.content === 'string') + Number(change.undo === true);
     if (modes !== 1) throw new ToolError('Give exactly one of edits, content or undo.');
     if (change.undo) {
-      const back = await this.hub.files.revert(this.userId, id);
+      const back = await this.hub.files.revert(this.who, id);
       if (!back) throw new ToolError(`${f.meta.filename} has no earlier version to put back. Make the change back with edits instead.`);
       this.hub.onFileChanged?.(this.userId, id);
       return { undone: true, file_id: id, filename: back.filename, size: back.size };
@@ -629,7 +672,7 @@ export class FileService {
       if (e instanceof TextEditError) throw new ToolError(e.message.replace('Read that part', 'Read that part with read_doc'));
       throw e;
     }
-    const saved = await this.hub.files.update(this.userId, id, Buffer.from(text, 'utf8'));
+    const saved = await this.hub.files.update(this.who, id, Buffer.from(text, 'utf8'));
     if (!saved) throw new ToolError(`There is no file ${id}.`);
     this.hub.onFileChanged?.(this.userId, id);
     return { edited: true, file_id: id, filename: saved.filename, ...(change.edits?.length ? { replacements } : {}), total_chars: text.length };
@@ -643,7 +686,7 @@ export class FileService {
 
   /** A stored picture the image editor can change, with its bytes' place and its size in pixels. */
   async editableImage(id: string): Promise<{ meta: StoredFile; file: string; pixels: { width: number; height: number } | null }> {
-    const f = this.hub.files.get(this.userId, id);
+    const f = this.hub.files.get(this.who, id);
     if (!f) throw new ToolError(`There is no file ${id}. Use list_files to find ids.`);
     if (!f.meta.type.startsWith('image/')) throw new ToolError(`${f.meta.filename} is not a picture.`);
     // The size is in the first part of the file, wherever a camera's notes put the frame header.
@@ -708,11 +751,11 @@ export class FileService {
 
   /** Save an edited picture over a stored one, as the type it is; the version before is kept for one revert. */
   async saveImage(id: string, bytes: Buffer): Promise<FileSummary> {
-    const f = this.hub.files.get(this.userId, id);
+    const f = this.hub.files.get(this.who, id);
     if (!f) throw new ToolError(`There is no file ${id}.`);
     if (!EDITABLE_IMAGE_TYPES.includes(f.meta.type)) throw new ToolError('Only PNG, JPEG and WebP pictures can be saved over.');
     if (!isImageOfType(bytes, f.meta.type)) throw new ToolError(`The edited picture must be saved as ${f.meta.type}, the type of ${f.meta.filename}.`);
-    const saved = await this.hub.files.update(this.userId, id, bytes);
+    const saved = await this.hub.files.update(this.who, id, bytes);
     return fileSummary(saved!);
   }
 
@@ -729,7 +772,7 @@ export class FileService {
   }
 
   setOpen(file: { kind: LibraryKind; id: string } | null, cursor: Cursor = {}): void {
-    if (file && !(file.kind === 'file' ? this.hub.files.get(this.userId, file.id) : this.sheets.get(this.userId, file.id, file.kind))) throw new ToolError(`There is no ${noun(file.kind)} ${file.id}.`);
+    if (file && !(file.kind === 'file' ? this.hub.files.get(this.who, file.id) : this.sheets.get(this.who, file.id, file.kind))) throw new ToolError(`There is no ${noun(file.kind)} ${file.id}.`);
     this.open = file;
     this.cursor = file ? cursor : {};
   }
@@ -742,17 +785,17 @@ export class FileService {
 
   /** The same for the document tools, which also work on Markdown documents: the file and which of the two it is. */
   docTarget(id: string | undefined): { kind: 'doc' | 'markdown'; id: string } | null {
-    if (id) return { kind: this.sheets.get(this.userId, id, 'markdown') ? 'markdown' : 'doc', id };
+    if (id) return { kind: this.sheets.get(this.who, id, 'markdown') ? 'markdown' : 'doc', id };
     return this.open && (this.open.kind === 'doc' || this.open.kind === 'markdown') ? { kind: this.open.kind, id: this.open.id } : null;
   }
 
   state(): AppState {
     if (this.open?.kind === 'file') {
-      const f = this.hub.files.get(this.userId, this.open.id)?.meta;
+      const f = this.hub.files.get(this.who, this.open.id)?.meta;
       if (!f) this.open = null;
       return { open: f ? { kind: 'file', id: f.id, title: f.filename, rev: f.createdAt } : null };
     }
-    const meta = this.open ? this.sheets.get(this.userId, this.open.id, this.open.kind) : null;
+    const meta = this.open ? this.sheets.get(this.who, this.open.id, this.open.kind) : null;
     if (this.open && !meta) this.open = null;
     return { open: meta ? { kind: this.open!.kind, id: meta.id, title: meta.title, rev: meta.updatedAt } : null };
   }
@@ -776,18 +819,18 @@ export class FileService {
   /** The stored file of a kind, or null. */
   private async load(kind: FileKind, id: string): Promise<{ meta: SheetMeta; data: FileData } | null> {
     if (kind === 'doc') {
-      const r = await this.sheets.loadDoc(this.userId, id);
+      const r = await this.sheets.loadDoc(this.who, id);
       return r && { meta: r.meta, data: r.doc };
     }
     if (kind === 'deck') {
-      const r = await this.sheets.loadDeck(this.userId, id);
+      const r = await this.sheets.loadDeck(this.who, id);
       return r && { meta: r.meta, data: r.deck };
     }
     if (kind === 'markdown') {
-      const r = await this.sheets.loadMarkdown(this.userId, id);
+      const r = await this.sheets.loadMarkdown(this.who, id);
       return r && { meta: r.meta, data: r.doc };
     }
-    const r = await this.sheets.load(this.userId, id);
+    const r = await this.sheets.load(this.who, id);
     return r && r.meta.kind === 'sheet' ? { meta: r.meta, data: r.workbook } : null;
   }
 
@@ -803,17 +846,17 @@ export class FileService {
     const stored = this.toStored(kind, data);
     const problem = kind === 'doc' ? validateDoc(stored) : kind === 'deck' ? validateDeck(stored) : kind === 'markdown' ? validateMarkdownDoc(stored) : validateWorkbook(stored);
     if (problem) throw new ToolError(problem);
-    const meta = this.sheets.get(this.userId, id, kind);
+    const meta = this.sheets.get(this.who, id, kind);
     if (!meta) throw new ToolError(`There is no ${noun(kind)} ${id}.`);
     if (ifRev && meta.updatedAt !== ifRev) throw new ConflictError(meta.updatedAt);
     const saved =
       kind === 'doc'
-        ? await this.sheets.saveDoc(this.userId, id, stored as Doc)
+        ? await this.sheets.saveDoc(this.who, id, stored as Doc)
         : kind === 'deck'
-          ? await this.sheets.saveDeck(this.userId, id, stored as Deck)
+          ? await this.sheets.saveDeck(this.who, id, stored as Deck)
           : kind === 'markdown'
-            ? await this.sheets.saveMarkdown(this.userId, id, stored as MarkdownDoc)
-            : await this.sheets.save(this.userId, id, stored as Workbook);
+            ? await this.sheets.saveMarkdown(this.who, id, stored as MarkdownDoc)
+            : await this.sheets.save(this.who, id, stored as Workbook);
     if (!saved) throw new ToolError(`There is no ${noun(kind)} ${id}.`);
     return { rev: saved.updatedAt };
   }
@@ -837,7 +880,7 @@ export class FileService {
     }
     // The assistant's tools say where their picture is in its own conversation; here it comes with the result.
     if (r.images?.length && typeof parsed.image === 'string') parsed.image = 'The picture comes with this result. Look at it before reporting back.';
-    return { [idKey]: id, title: this.sheets.get(this.userId, id)?.title ?? '', ...parsed, ...(r.images?.length ? { [RESULT_IMAGES]: r.images } : {}) };
+    return { [idKey]: id, title: this.sheets.get(this.who, id)?.title ?? '', ...parsed, ...(r.images?.length ? { [RESULT_IMAGES]: r.images } : {}) };
   }
 
   /**
@@ -869,7 +912,7 @@ export class FileService {
   async editDoc(id: string, tool: DocEditTool, input: Record<string, unknown>): Promise<Record<string, unknown>> {
     const live = await this.runLive('doc', id, 'doc_id', tool, input);
     if (live) return live;
-    const loaded = await this.sheets.loadDoc(this.userId, id);
+    const loaded = await this.sheets.loadDoc(this.who, id);
     if (!loaded) throw new ToolError(`There is no document ${id}.`);
     const before = JSON.stringify(loaded.doc);
     const ctl = new DocController(loaded.doc, async () => {});
@@ -899,7 +942,7 @@ export class FileService {
     if (problem) throw new ToolError(problem.replace('The open file', 'This file'));
     const live = await this.runLive('markdown', id, 'doc_id', tool, input);
     if (live) return live;
-    const loaded = await this.sheets.loadMarkdown(this.userId, id);
+    const loaded = await this.sheets.loadMarkdown(this.who, id);
     if (!loaded) throw new ToolError(`There is no Markdown document ${id}.`);
     const ctl = new MarkdownController(loaded.doc, async () => {});
     try {
@@ -924,19 +967,19 @@ export class FileService {
   async editDeck(id: string, tool: DeckEditTool, given: Record<string, unknown>): Promise<Record<string, unknown>> {
     // A spreadsheet range a table is linked to is read here, so the tool has it in the window or headless.
     const { input } = await linkDeckTables({ id: 'mcp', name: tool, input: given }, async (sheetId, ref) => {
-      const t = await loadLinkedTable(this.sheets, this.userId, sheetId, ref);
+      const t = await loadLinkedTable(this.sheets, this.who, sheetId, ref);
       if (!t) throw new Error(`There is no spreadsheet ${sheetId}.`);
       if (typeof t === 'string') throw new Error(t);
       return t;
     }, async (sheetId, chartId) => {
-      const c = await loadLinkedChart(this.sheets, this.userId, sheetId, chartId);
+      const c = await loadLinkedChart(this.sheets, this.who, sheetId, chartId);
       if (!c) throw new Error(`There is no spreadsheet ${sheetId}.`);
       if (typeof c === 'string') throw new Error(c);
       return c;
     });
     const live = await this.runLive('deck', id, 'deck_id', tool, input);
     if (live) return live;
-    const loaded = await this.sheets.loadDeck(this.userId, id);
+    const loaded = await this.sheets.loadDeck(this.who, id);
     if (!loaded) throw new ToolError(`There is no presentation ${id}.`);
     const before = JSON.stringify(loaded.deck);
     const ctl = new DeckController(loaded.deck, async () => {});
@@ -960,7 +1003,7 @@ export class FileService {
   async editSheet(id: string, tool: SheetEditTool, input: Record<string, unknown>): Promise<Record<string, unknown>> {
     const live = await this.runLive('sheet', id, 'sheet_id', tool, input);
     if (live) return live;
-    const loaded = await this.sheets.load(this.userId, id);
+    const loaded = await this.sheets.load(this.who, id);
     if (!loaded || loaded.meta.kind !== 'sheet') throw new ToolError(`There is no spreadsheet ${id}.`);
     const before = JSON.stringify(loaded.workbook);
     const ctl = new SheetController(loaded.workbook, async () => {});
@@ -1007,7 +1050,7 @@ export class FileService {
   async storeImage(type: string, data: Buffer): Promise<string> {
     if (!CELL_IMAGE_TYPES.includes(type)) throw new ToolError('Please choose a PNG, JPEG, GIF or WebP image.');
     if (data.length > MAX_CELL_IMAGE_BYTES) throw new ToolError(`Images must be under ${Math.round(MAX_CELL_IMAGE_BYTES / 1e6)} MB.`);
-    return this.publicSrc(await this.images.create(this.userId, type, data));
+    return this.publicSrc(await this.images.create(this.home, type, data));
   }
 
   /** True for an image address this server stores (either form). */
@@ -1016,7 +1059,7 @@ export class FileService {
   }
 
   imageFile(id: string): { file: string; type: string } | null {
-    return this.images.get(this.userId, id);
+    return this.images.get(this.who, id);
   }
 
   /** Stored "/api/images/<id>" addresses become "<publicUrl>/plugin/img/<id>" for the iframe. */

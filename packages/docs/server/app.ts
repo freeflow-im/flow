@@ -1,15 +1,13 @@
-import cookie from '@fastify/cookie';
-import fastifyStatic from '@fastify/static';
+import { cookie, Fastify, fastifyStatic, type FastifyInstance, type FastifyReply, type FastifyRequest } from '#runtime/http';
 import { LEGAL_PATHS, legalPage } from './legal.ts';
 import { llmsTxt } from './llms.ts';
 import { featureHtml, featureMarkdown, featuresIndexHtml, robotsTxt, sitemapXml } from './marketing.ts';
 import { scratchPadName } from '../shared/docNames.ts';
 import { importBytes, ImportFileError, sniffImageType } from './importFile.ts';
 import { fetchPublicFile, WebFetchError } from './webFetch.ts';
-import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import Anthropic from '@anthropic-ai/sdk';
-import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { createReadStream, existsSync, readFileSync, statSync } from '#runtime/fs';
+import { mkdir, readdir, readFile, stat, writeFile } from '#runtime/fsp';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import type { ServerResponse } from 'node:http';
@@ -24,7 +22,7 @@ import { FileStore, isImageOfType, isTextFile } from './files.ts';
 import { checkImageEditRate, editedImageName, EDITABLE_IMAGE_TYPES, ImageEditError, MAX_EDIT_IMAGE_BYTES, MAX_EDIT_PROMPT_CHARS, openaiImageEditor, type ImageEditor } from './imageEdit.ts';
 import { CELL_IMAGE_TYPES, fileTypeOf, HTML_TYPE, isHtmlName, isTextFileType, MAX_CELL_IMAGE_BYTES, MAX_VIDEO_BYTES, PREVIEW_FILE_TYPES, videoTypeOf, VIDEO_TYPES, type ConnectedAgent, type DocKind, type NewFilesSettings, type NewFilesUpdate, type SheetMeta, type Workbook } from '../shared/types.ts';
 import { AgentError, AgentService, type AgentOptions } from './agent/agent.ts';
-import { JobRunner, JobStore, publicJob, workerLauncher, type Launcher } from './agent/jobs.ts';
+import { JobRunner, JobStore, publicJob, workerLauncher, type Launcher } from '#runtime/local/jobs';
 import { openaiErrorMessage } from './agent/openai.ts';
 import { OpenRouterError } from './agent/openrouter.ts';
 import { checkAssistantKey, OwnKeyError } from './agent/providers.ts';
@@ -35,9 +33,9 @@ import { checkBraveKey, registerConnectorService } from './agent/tools.ts';
 import { ConnectorService, type ConnectorServiceOptions } from './connectors/service.ts';
 import { ConnectorError } from './connectors/types.ts';
 import { AuthService, RESET_TTL_MS, SESSION_TTL_MS, VERIFY_TTL_MS, validateCredentials, type User } from './auth.ts';
-import { Backup } from './backup.ts';
-import { r2FromEnv, S3ObjectStore, type ObjectStore } from './blob.ts';
-import { openDb } from './db.ts';
+import { Backup } from '#runtime/local/backup';
+import { r2FromEnv, S3ObjectStore, type ObjectStore } from '#runtime/local/blob';
+import { openDb, type DB } from './db.ts';
 import { EXPORT_FORMATS, ExportError, exportAll, exportFile, exportFolder, imageSource, loadFile, type ExportFormat } from './export.ts';
 import { appName, ORIGIN_MARK } from '../shared/brand.ts';
 import { openGettingStarted } from './gettingStarted.ts';
@@ -49,15 +47,16 @@ import { FolderStore, type Folders, type GrantUnder } from './folders.ts';
 import { inScope, scopeKey, scopeOf, scopeOfRow, viewerOf, type Owned, type Scope, type ScopeArg, type Viewer, type ViewerArg } from './scope.ts';
 import { access, atLeast, folderObjectId, grant, grantsOn, isObjectKind, linkTokenOf, objectRow, parseFolderObjectId, readerOf, refused, resolveLink, revoke, revokeMembers, roleOf, type ObjectKind, type ObjectRow, type Role } from './access.ts';
 import { objectsSharedWithSql, parsePrincipal, ROLE_RANK } from '@flow/shared/grants';
-import { LISTED_EXTS, listedKind, LocalFileStore, LocalFolder, LocalFolders, LocalSheetStore, type FindByName } from './localStore.ts';
+import { LISTED_EXTS, listedKind, LocalFileStore, LocalFolder, LocalFolders, LocalSheetStore, type FindByName } from '#runtime/local/localStore';
 import { Favorites, FOLDER_REF } from './favorites.ts';
-import { openedFiles, recentFiles, RecentOpens, recentsAvailable, whereOf, type Recents } from './recents.ts';
+import { RecentOpens, type Recents } from './recents.ts';
+import { openedFiles, recentFiles, recentsAvailable, whereOf } from '#runtime/local/systemRecents';
 import { googleFromEnv, GoogleLogin, GoogleLoginError, GOOGLE_STATE_TTL_MS, type GoogleOptions } from './googleAuth.ts';
 import { mountPlugin } from '../plugin/server/mount.ts';
 import { ToolError } from '../plugin/server/files.ts';
 import { mailerFromEnv, type Mailer } from './mail.ts';
 import { RevisionFeed } from './revisionFeed.ts';
-import { DirWatchers } from './folderWatch.ts';
+import { DirWatchers } from '#runtime/local/folderWatch';
 import { SheetStore, validateWorkbook } from './sheets.ts';
 import { listSheetCharts, loadLinkedChart, loadLinkedTable } from './linkedTable.ts';
 import { importPptx } from './pptxImport.ts';
@@ -65,9 +64,9 @@ import { isSharableVideo, newLinkToken, publicDeck, TOKEN_RE, type SharedKind } 
 import { previewRoutes, Previews } from './previews.ts';
 import type { StoredFile } from '../shared/types.ts';
 import { ImportError, importExcel } from './xlsxImport.ts';
-import { WindowTools, type WindowToolAnswer, type WindowToolCall } from './windowTools.ts';
-import { ClaudeAgentDriver, type ClaudeAgentOptions } from './agent/claudeAgent.ts';
-import { mountLocalMcp } from './localMcp.ts';
+import { WindowTools, type WindowToolAnswer, type WindowToolCall } from '#runtime/local/windowTools';
+import { ClaudeAgentDriver, type ClaudeAgentOptions } from '#runtime/local/claudeAgent';
+import { mountLocalMcp } from '#runtime/local/localMcp';
 import { MAX_OFFICE_ENTRY_BYTES, openZip, ZipError, zipEntries, zipEntryBytes, zipOfficeView } from './zipView.ts';
 import { isZipName } from '../shared/zip.ts';
 import { downloadFromWeb, uploadToWeb, webFolders, WebCopyError, webPreview, webStatus, type DownloadFormat, type LibraryKind, type Web } from './webCopy.ts';
@@ -221,6 +220,8 @@ export interface AppOptions {
     onGrantChange?(change: GrantChange): void;
     /** A document of an organization was saved or renamed: the host may tell the event bus (platform.md §5.2). */
     onFileChanged?(change: FileChange): void;
+    /** Handed the app's stores once they are open: the suite's MCP endpoint serves them (packages/edge, src/docs/mcp.ts), so one queue writes. */
+    stores?(stores: { db: DB; sheets: SheetStore; images: ImageStore; files: FileStore; folders: Folders; pdf?: PdfMaker }): void;
     /**
      * The host runs the assistant itself (the FreeFlow suite's Assistant object, one per account, platform.md §5.5): this app
      * then keeps no chats, settings or usage and serves none of /api/agent but its jobs; its tools reach this app's routes
@@ -416,6 +417,7 @@ export async function buildApp(opts: AppOptions) {
   const jobRunner = new JobRunner(jobs, opts.launchJob ?? workerLauncher(opts.dataDir));
   // A previous server process may have died (or been restarted by the job itself) with a job in flight.
   jobRunner.reconcile();
+  host?.stores?.({ db, sheets, images, files: storedFiles, folders, pdf: pdfMaker ?? undefined });
 
   if (host) {
     let child!: FastifyInstance;
@@ -1340,7 +1342,9 @@ export async function buildApp(opts: AppOptions) {
   });
 
   // A file, or the part of it a Range header asks for: "a-b", "a-" (to the end) or "-n" (the last n bytes).
-  const sendRange = (req: FastifyRequest, reply: FastifyReply, file: string, size: number) => {
+  // The size comes from the store when the caller does not know it.
+  const sendRange = async (req: FastifyRequest, reply: FastifyReply, file: string, known?: number) => {
+    const size = known ?? (await stat(file)).size;
     const range = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range ?? ''));
     if (!range || (!range[1] && !range[2])) return reply.header('Content-Length', size).send(createReadStream(file));
     const start = range[1] ? Number(range[1]) : Math.max(0, size - Number(range[2]));
@@ -1607,7 +1611,7 @@ export async function buildApp(opts: AppOptions) {
     // Browsers keep a file a short while, so a link that is stopped soon stops working everywhere.
     const GUEST_CACHE = 'private, max-age=300';
     const sendGuestFile = (req: FastifyRequest, reply: FastifyReply, f: { meta: StoredFile; file: string }) =>
-      sendRange(req, reply.header('Content-Type', f.meta.type === 'video/quicktime' ? 'video/mp4' : f.meta.type).header('Content-Disposition', 'inline').header('Cache-Control', GUEST_CACHE).header('Accept-Ranges', 'bytes'), f.file, statSync(f.file).size);
+      sendRange(req, reply.header('Content-Type', f.meta.type === 'video/quicktime' ? 'video/mp4' : f.meta.type).header('Content-Disposition', 'inline').header('Cache-Control', GUEST_CACHE).header('Accept-Ranges', 'bytes'), f.file);
     const noLink = (reply: FastifyReply) => reply.code(404).send({ error: 'This link does not work. It may have been turned off, or the file was deleted.' });
 
     app.get('/api/public/:token', async (req, reply) => {
@@ -1759,7 +1763,7 @@ export async function buildApp(opts: AppOptions) {
       const paper = paperFor(locale ?? String(req.headers['accept-language'] ?? '').split(',')[0]);
       try {
         // In development the app's pages are where the request came from (Vite), not on this server.
-        const made = await pdfMaker.make(req.viewer, id, { paper, origin: opts.staticDir ? undefined : `${req.protocol}://${req.headers.host}` });
+        const made = await pdfMaker.make(req.viewer, id, { paper, origin: opts.staticDir ? undefined : `${req.protocol}://${req.headers.host}${basePath}` });
         if (!made) return reply.code(404).send({ error: 'File not found' });
         if (made.revision) reply.header('X-Revision', made.revision);
         return attachment(reply, made.name, 'application/pdf').send(made.pdf);
@@ -1829,14 +1833,14 @@ export async function buildApp(opts: AppOptions) {
       const f = storedFile(req);
       if (!f) return reply.code(404).send({ error: 'File not found' });
       // Any other file is a download; a part of one is what the text editor's Tail reads as a log grows.
-      if (!PREVIEW_FILE_TYPES.includes(f.meta.type)) return sendRange(req, attachment(reply, f.meta.filename, 'application/octet-stream').header('Accept-Ranges', 'bytes'), f.file, statSync(f.file).size);
+      if (!PREVIEW_FILE_TYPES.includes(f.meta.type)) return sendRange(req, attachment(reply, f.meta.filename, 'application/octet-stream').header('Accept-Ranges', 'bytes'), f.file);
       // A stored file never changes, except a picture the image editor saved over (asked for again each time,
       // and sent only if it changed); one in a mounted folder can.
       // Browsers that play QuickTime files (H.264) only do so when they are served as MP4.
       const type = f.meta.type === 'video/quicktime' ? 'video/mp4' : f.meta.type;
       const rewritable = EDITABLE_IMAGE_TYPES.includes(f.meta.type);
       reply.header('Content-Type', type).header('Content-Disposition', 'inline').header('Cache-Control', opts.local ? 'no-cache' : rewritable ? 'private, no-cache' : 'private, max-age=31536000, immutable').header('X-Content-Type-Options', 'nosniff').header('Accept-Ranges', 'bytes');
-      const { size, mtimeMs } = statSync(f.file);
+      const { size, mtimeMs } = await stat(f.file);
       if (rewritable) {
         const etag = `"${Math.round(mtimeMs).toString(36)}-${size.toString(36)}"`;
         reply.header('ETag', etag);

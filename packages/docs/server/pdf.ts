@@ -4,7 +4,9 @@
 // its requests the user's, for reading only. A stored web page is someone else's HTML, so it is printed from
 // its text with every request it makes checked as an import's are (webFetch.ts).
 import { randomBytes } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile } from '#runtime/fsp';
+import { currentOrganization } from '#runtime/context';
+import { launchBrowser, type Browser, type BrowserContext, type Page } from '#runtime/browser';
 import { HTML_TYPE, type StoredFile } from '../shared/types.ts';
 import { titleBase } from '../shared/docNames.ts';
 import type { FileStore } from './files.ts';
@@ -46,7 +48,10 @@ export class PrintTickets<U> {
   create(user: U): string {
     const now = Date.now();
     for (const [t, v] of this.tickets) if (v.expires <= now) this.tickets.delete(t);
-    const token = randomBytes(32).toString('base64url');
+    // Prefixed with the organization where there is one: the headless browser has no session, so its requests that name no
+    // file (the page asks who it is) can be sent to the object that knows the ticket (packages/edge routes/docs.ts).
+    const org = currentOrganization();
+    const token = `${org ? `${org}~` : ''}${randomBytes(32).toString('base64url')}`;
     this.tickets.set(token, { user, expires: now + TICKET_TTL_MS });
     return token;
   }
@@ -151,8 +156,6 @@ const MAX_RESOURCE_BYTES = 20 * 1024 * 1024;
 /** Renders at once; the rest wait their turn. */
 const MAX_RENDERS = 2;
 
-type Browser = import('playwright-core').Browser;
-type BrowserContext = import('playwright-core').BrowserContext;
 
 /**
  * Chromium driven by Playwright: the hosted app's and `npm run dev`'s renderer. One browser is started on the
@@ -165,20 +168,7 @@ export class PlaywrightRenderer implements PdfRenderer {
   private waiting: (() => void)[] = [];
 
   private launch(): Promise<Browser> {
-    this.browser ??= (async () => {
-      const { chromium } = await import('playwright-core');
-      const path = process.env.CHROMIUM_PATH;
-      if (path) return chromium.launch({ executablePath: path });
-      try {
-        return await chromium.launch();
-      } catch {
-        try {
-          return await chromium.launch({ channel: 'chrome' });
-        } catch {
-          throw new PrintError('PDFs cannot be made here: no Chromium or Chrome was found (set CHROMIUM_PATH).');
-        }
-      }
-    })();
+    this.browser ??= launchBrowser((message) => new PrintError(message));
     this.browser.then(
       (b) => b.on('disconnected', () => (this.browser = null)),
       () => (this.browser = null),
@@ -197,7 +187,7 @@ export class PlaywrightRenderer implements PdfRenderer {
     }
   }
 
-  private async print(context: BrowserContext, load: (page: import('playwright-core').Page) => Promise<void>, opts: PdfOptions): Promise<Buffer> {
+  private async print(context: BrowserContext, load: (page: Page) => Promise<void>, opts: PdfOptions): Promise<Buffer> {
     const page = await context.newPage();
     page.setDefaultTimeout(opts.timeoutMs);
     page.on('dialog', (d) => void d.dismiss().catch(() => {}));

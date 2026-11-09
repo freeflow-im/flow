@@ -5,9 +5,9 @@
 // or search, and is gone an hour after it was last asked for (swept on each use, and by the Docs object's alarm on the
 // Worker). Save to Docs imports its bytes as a real file in the user's My files, at the top.
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from '#runtime/fsp';
 import path from 'node:path';
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from '#runtime/http';
 import { CsvError, csvToWorkbook, MAX_CSV_CHARS } from '../shared/csv.ts';
 import type { Deck } from '../shared/deck.ts';
 import type { Doc } from '../shared/doc.ts';

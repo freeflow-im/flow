@@ -3,7 +3,7 @@
 // starts it; tests start it on a free port.
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createHash } from 'node:crypto';
-import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, readFileSync, statSync } from '#runtime/fs';
 import http from 'node:http';
 import path from 'node:path';
 import { PREVIEW_FILE_TYPES } from '../../shared/types.ts';

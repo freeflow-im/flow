@@ -7,14 +7,14 @@ import { STORED_IMAGE_RE } from '../../shared/types.ts';
 import type { SheetStore } from '../sheets.ts';
 import { providerSearch, type ProviderSearch } from './llmSearch.ts';
 import { ownModel } from './providers.ts';
-import { PROMPT_WITHOUT_JOBS, renderContext, stripContext, SYSTEM_PROMPT } from './prompt.ts';
+import { renderContext, stripContext, systemPrompt } from './prompt.ts';
 import type { AssistantSettingsStore, ModelChoice } from './settings.ts';
 import { AgentStore, type Driver, type MessageParam, type Pending } from './store.ts';
-import { AgentNotFoundError, type ClaudeAgentDriver } from './claudeAgent.ts';
+import { AgentNotFoundError, type ClaudeAgentDriver } from '#runtime/local/claudeAgent';
 import type { FileStore } from '../files.ts';
 import type { ImageStore } from '../images.ts';
 import type { PdfMaker } from '../pdf.ts';
-import { assistantTools, isBrowserTool, runServerTool, ToolFailure, validateToolInput } from './tools.ts';
+import { assistantTools, isBrowserTool, runServerTool, ToolFailure, validateToolInput, type ServerToolEnvExtensions } from './tools.ts';
 import { scopeOf, type ScopeArg, type ViewerArg } from '../scope.ts';
 
 type Message = Anthropic.Beta.BetaMessage;
@@ -50,7 +50,19 @@ export interface AgentOptions {
   jobs?: boolean;
   /** Runs the turns of a user who chose their own Claude Code (the desktop app; claudeAgent.ts). */
   claudeAgent?: ClaudeAgentDriver;
+  /** The pages a turn may come from, when not this app's own (the suite: every app's `assistant.pages`). */
+  pages?: ReadonlySet<string>;
+  /**
+   * What a host adds to the server tools' environment for a user's turn (tools.ts `ServerToolEnvExtensions`: the suite's
+   * Mail and Calendar objects, the apps' objects, Docs over HTTP), given the user and the chat's scope.
+   */
+  extend?: (userId: string, scope: ScopeArg) => Partial<ServerToolEnvExtensions>;
+  /** Lines a host adds to the system prompt about its own tools (prompt.ts `systemPrompt`). */
+  guidance?: readonly string[];
 }
+
+/** The pages of this app a turn may come from. */
+const OWN_PAGES: ReadonlySet<string> = new Set(['home', 'sheet', 'deck', 'doc', 'markdown', 'file', 'mail', 'calendar']);
 
 /** The model the live assistant runs on. Set AGENT_MODEL (e.g. claude-opus-5-5) to change it per deployment. */
 const MODEL = process.env.AGENT_MODEL?.trim() || 'claude-sonnet-5-5';
@@ -80,6 +92,9 @@ export class AgentService {
   private pdf: PdfMaker | undefined;
   private jobs: boolean;
   private claudeAgent: ClaudeAgentDriver | null;
+  private pages: ReadonlySet<string>;
+  private extend: AgentOptions['extend'];
+  private guidance: readonly string[];
   /** Users with a turn in progress (one at a time per user). */
   private busy = new Set<string>();
 
@@ -95,6 +110,9 @@ export class AgentService {
     this.pdf = opts.pdf;
     this.jobs = opts.jobs ?? true;
     this.claudeAgent = opts.claudeAgent ?? null;
+    this.pages = opts.pages ?? OWN_PAGES;
+    this.extend = opts.extend;
+    this.guidance = opts.guidance ?? [];
     this.dailyLimit = opts.dailyRequestLimit ?? Number(process.env.AGENT_DAILY_REQUEST_LIMIT ?? 500);
   }
 
@@ -138,7 +156,7 @@ export class AgentService {
       if (!/^[A-Za-z0-9+/=]+$/.test(img.data) || (img.data.length * 3) / 4 > MAX_IMAGE_BYTES) throw new AgentError(400, 'An attached image is too large.');
       if (img.url !== undefined && !STORED_IMAGE_RE.test(img.url)) throw new AgentError(400, 'An attached image has an invalid address.');
     }
-    if (!req.context || !['home', 'sheet', 'deck', 'doc', 'markdown', 'file', 'mail', 'calendar'].includes(req.context.page)) throw new AgentError(400, 'Missing context.');
+    if (!req.context || !this.pages.has(req.context.page)) throw new AgentError(400, 'Missing context.');
     if (req.scope !== undefined && !isChatScope(req.scope)) throw new AgentError(400, 'That is not a chat.');
     // The user's own agent: no key, no daily limit (their own plan pays), and no tools for the browser to run.
     if (this.driver(userId) === 'claude-agent') {
@@ -205,7 +223,7 @@ export class AgentService {
     if (!own && !this.settings.builtIn) throw new AgentError(400, 'Choose what the assistant runs on in Settings: add your Anthropic, OpenAI or OpenRouter API key.');
     // Search with the user's Brave key, else the server's, else the provider's own search.
     const search = { braveKey: this.settings.braveKey(userId), provider: this.providerSearch(own) };
-    const env = { userId, ...access, sheets: this.sheets, images: this.images, files: this.files, pdf: this.pdf, context: req.context, search };
+    const env = { userId, ...access, sheets: this.sheets, images: this.images, files: this.files, pdf: this.pdf, context: req.context, search, ...(this.extend?.(userId, access.scope) ?? {}) };
     const callModel = own ? this.ownModel(own) : this.getModel();
     let parseRetries = 0;
 
@@ -225,7 +243,7 @@ export class AgentService {
             betas: ['server-side-fallback-2026-07-01'],
             fallbacks: 'default',
             output_config: { effort: EFFORT },
-            system: [{ type: 'text', text: this.jobs ? SYSTEM_PROMPT : PROMPT_WITHOUT_JOBS }],
+            system: [{ type: 'text', text: systemPrompt(this.jobs, this.guidance) }],
             tools: assistantTools(req.context, !!this.jobs),
             // Caches the whole prefix up to the latest message; each turn reads the previous one's cache.
             cache_control: { type: 'ephemeral' },

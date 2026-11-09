@@ -9,7 +9,7 @@
 //
 // State lives in a small SQLite file of its own (plugin.db); only hashes of codes and tokens are stored.
 import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto';
-import type { DatabaseSync } from 'node:sqlite';
+import type { DatabaseSync } from '#runtime/sqlite';
 import { validateCredentials, type AuthService, type User } from '../../server/auth.ts';
 import type { Mailer } from '../../server/mail.ts';
 import type { ConnectedAgent } from '../../shared/types.ts';

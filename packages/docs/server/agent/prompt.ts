@@ -74,6 +74,21 @@ ${RESEARCH}Replying:
 /** The prompt without the background jobs, which the desktop app does not have (`JOB_TOOLS`). */
 export const PROMPT_WITHOUT_JOBS = SYSTEM_PROMPT.replace(IMPROVING, '').replace(RESEARCH, '');
 
+/** Where a host's guidance goes: at the end of "Working with data", before the presentations. */
+const GUIDANCE_AT = '\n\nPresentations (slide decks):';
+
+/**
+ * The system prompt for a turn: with or without the job tools, and with the lines a host adds about its own tools (the
+ * suite: Mail's and Calendar's). Stable per deployment, so it stays in the prompt cache.
+ */
+export function systemPrompt(jobs: boolean, guidance: readonly string[] = []): string {
+  const base = jobs ? SYSTEM_PROMPT : PROMPT_WITHOUT_JOBS;
+  if (!guidance.length) return base;
+  const at = base.indexOf(GUIDANCE_AT);
+  const lines = guidance.map((g) => `\n${g}`).join('');
+  return at < 0 ? `${base}${lines}` : `${base.slice(0, at)}${lines}${base.slice(at)}`;
+}
+
 /** The box the user dragged on the open picture, as a line of context; null when there is none (or it is not sane). */
 function renderRegion(r: ImageRegion | undefined): string | null {
   const n = r && [r.x, r.y, r.width, r.height, r.imageWidth, r.imageHeight];

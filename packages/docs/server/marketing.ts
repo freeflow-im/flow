@@ -3,11 +3,11 @@
 // (/features/<slug>.md), for agents, which /llms.txt points to. /sitemap.xml and /robots.txt list them. The pages are
 // plain HTML from the server, as the legal pages are, styled by client/public/marketing/site.css.
 // `{{origin}}` in a page's text is the app's address.
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { existsSync, readdirSync, readFileSync } from '#runtime/fs';
+import { contentDir } from '#runtime/paths';
 import { marked, type Token, type Tokens } from 'marked';
 
-const DIR = fileURLToPath(new URL('../content/features/', import.meta.url));
+const DIR = contentDir('features');
 const GITHUB = 'https://github.com/freeflow-im/mcp-docs';
 const NPX = 'npx @freeflow-im/mcp-docs';
 

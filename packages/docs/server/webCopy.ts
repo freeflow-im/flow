@@ -7,7 +7,7 @@
 // way. Locally they are then written in the format asked for: an Office file, the app's own, or a PDF the hosted
 // app makes. Markdown, CSV and stored files (PDFs, pictures, web pages, videos) are copied as they are.
 import { randomBytes } from 'node:crypto';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from '#runtime/fsp';
 import type { Deck } from '../shared/deck.ts';
 import type { Doc } from '../shared/doc.ts';
 import { docxProblem } from '../shared/docxFormat.ts';
