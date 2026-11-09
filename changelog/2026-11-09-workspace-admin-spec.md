@@ -1,0 +1,3 @@
+# Workspace admin: the spec
+
+- `[web]` `docs/specs/workspace-admin.md`: administration becomes an app of the suite, Admin at `/admin`, with its own manifest and client, reached from every app's suite bar as Organization settings; sections General, Members, Domains & mail, Agents & apps, Automations replace Chat's admin panel and menu modals; the domain card's five steps to working mail, with "Turn on mail" for an organization's own domain; the Members section's mail state, per-account retry and guest invitations; the small API additions; five phases; open questions and rulings. `decision_log.md` records the rulings of 2026-11-09. Spec only, no code.

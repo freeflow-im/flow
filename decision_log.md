@@ -1,5 +1,38 @@
 # Decision log
 
+## 2026-11-09 — Workspace admin: retention, domain removal, ownership transfer (operator rulings)
+
+- **Mail retention stays global** (`MAIL_RETENTION_DAYS`, 30 days) until a customer needs a longer period; the Admin app
+  shows the number and does not set it.
+- **Removing a domain cleans it up at the mail provider first.** The provider's refusal (mailboxes exist) or
+  unavailability fails the Remove with its message and the directory row stays, so the directory and the provider never
+  disagree about a domain.
+- **The heir of a workspace must be a member and a person.** An outsider is invited first. Agents and apps never own a
+  workspace.
+
+## 2026-11-09 — Administration is an app of the suite, not a view inside Chat (operator ruling)
+
+- **Admin is its own app**, `/admin`, with a manifest in `APP_MANIFESTS` and a client in `packages/admin`, built the way
+  Contacts is. It has no Durable Object and no routes of its own: it works through the directory's and the Org object's
+  existing routes. It has no suite tab; the way in is the suite bar's organization menu, **Organization settings** (owner,
+  admin) and **Automations** (everyone), the same in every app.
+- **Nothing of administration stays anchored in another app.** Chat's admin panel, its Domains and Automations tabs and
+  the appearance, emoji and agents modals move out as the sections land; Chat's workspace menu keeps the two links.
+  Spec: `docs/specs/workspace-admin.md` §2.1.
+
+## 2026-11-09 — Invitations make native members; a guest invitation is a separate action (operator ruling)
+
+- **Whoever joins a workspace is a native member**, with an address and a mailbox: by invitation, by join link or by
+  Google self-registration. There is no "new members join as" setting; the `defaultAccountKind` policy from the guest
+  accounts ruling below is retired (read as `native`, removed from the type when guest invitations land).
+- **Inviting a guest is its own action** ("Invite a chat guest" in the Admin app, Members), so nobody makes a
+  colleague a guest by mistake. The invitation carries the kind; accepting it makes a guest account.
+- **A guest uses Chat only.** No address, no mailbox, no Mail, Calendar or Docs. Sharing a document with a guest is
+  left out for now (the Share dialog does not offer guests; Docs refuses them) and is to be added later
+  (`docs/specs/workspace-admin.md` §10, ruling 8).
+- **Google self-registration on any verified domain is later.** For now the domain offered stays the admin's own Google
+  login domain (phase 16 §5a).
+
 ## 2026-11-09 — Guest accounts: members with no mailbox and no address (operator ruling)
 
 - **A guest has no address**, not an address without a mailbox: an address that bounces is a trap for whoever writes to
