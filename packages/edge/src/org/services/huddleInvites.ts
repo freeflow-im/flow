@@ -34,6 +34,7 @@ import { publishEvent, subjectUserNotify } from '../bus.js';
 import { hasAnyConnection } from '../presence.js';
 import * as store from '../huddles.js';
 import { postHuddleSystemMessage } from './messages.js';
+import { inList } from '../sqlList.js';
 
 const { huddleInvites, huddleInviteTargets, channelMembers, channels, users } = schema;
 
@@ -137,7 +138,7 @@ async function reachability(
   if (userIds.length === 0) return out;
 
   const dnd = new Map(
-    (await db.select({ id: users.id, suppress: users.statusSuppressAlerts }).from(users).where(inArray(users.id, userIds)))
+    (await db.select({ id: users.id, suppress: users.statusSuppressAlerts }).from(users).where(inList(users.id, userIds)))
       .map((r) => [r.id, r.suppress]),
   );
   const levels = new Map(
@@ -145,7 +146,7 @@ async function reachability(
       await db
         .select({ userId: channelMembers.userId, notifyLevel: channelMembers.notifyLevel })
         .from(channelMembers)
-        .where(and(eq(channelMembers.channelId, chan.id), inArray(channelMembers.userId, userIds)))
+        .where(and(eq(channelMembers.channelId, chan.id), inList(channelMembers.userId, userIds)))
     ).map((r) => [r.userId, r.notifyLevel]),
   );
   // One query for every DM the busy check might name, rather than one per callee.
@@ -164,7 +165,7 @@ async function reachability(
           await db
             .select({ id: channels.id, kind: channels.kind })
             .from(channels)
-            .where(inArray(channels.id, [...busyChannelIds]))
+            .where(inList(channels.id, [...busyChannelIds]))
         )
           .filter((c) => c.kind !== 'standard')
           .map((c) => c.id)
@@ -186,7 +187,7 @@ async function displayNames(userIds: string[]): Promise<Map<string, string>> {
   const rows = await db
     .select({ id: users.id, displayName: users.displayName })
     .from(users)
-    .where(inArray(users.id, userIds));
+    .where(inList(users.id, userIds));
   return new Map(rows.map((r) => [r.id, r.displayName]));
 }
 

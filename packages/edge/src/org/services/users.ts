@@ -5,7 +5,7 @@
 // content and §6 requires cacheability), referenced by users.avatar_url. The
 // URL embeds a fresh key per upload, so clients may cache immutably.
 import sharp from '../lib/sharp';
-import { and, eq, inArray, sql, type SQL } from 'drizzle-orm';
+import { and, eq, sql, type SQL } from 'drizzle-orm';
 import type { NotificationPrefs, UserDTO } from '@flow/shared';
 import { db, schema } from '../db/index.js';
 import { badRequest, notFound } from '../lib/errors.js';
@@ -13,6 +13,7 @@ import { blobStore } from '../storage/index.js';
 import { config } from '../config.js';
 import { publishEvent, subjectMeta } from '../bus.js';
 import { toUserDTO } from './auth.js';
+import { inList } from '../sqlList.js';
 
 const { users, workspaceMembers } = schema;
 
@@ -150,7 +151,7 @@ export async function getUser(targetId: string, requesterId: string): Promise<Us
         ? await db
             .select({ workspaceId: workspaceMembers.workspaceId })
             .from(workspaceMembers)
-            .where(and(eq(workspaceMembers.userId, targetId), inArray(workspaceMembers.workspaceId, wsIds)))
+            .where(and(eq(workspaceMembers.userId, targetId), inList(workspaceMembers.workspaceId, wsIds)))
             .limit(1)
         : [];
     if (shared.length === 0) throw notFound('user not found'); // don't leak existence

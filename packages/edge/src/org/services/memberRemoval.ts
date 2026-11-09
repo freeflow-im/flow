@@ -7,10 +7,11 @@
 // authorship keeps its name, and publishes the same member.left events
 // deleteApp always has. Channels and DMs in the member's other workspaces are
 // untouched.
-import { and, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
+import { and, eq, isNull, ne, sql } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { publishEvent, subjectMeta } from '../bus.js';
 import { disconnectUser } from '../sockets.js';
+import { inList } from '../sqlList.js';
 
 const {
   channels,
@@ -51,15 +52,15 @@ export async function removeMemberDeep(
     ? await db
         .select({ channelId: channelMembers.channelId, userId: channelMembers.userId })
         .from(channelMembers)
-        .where(and(inArray(channelMembers.channelId, dmIds), ne(channelMembers.userId, userId)))
+        .where(and(inList(channelMembers.channelId, dmIds), ne(channelMembers.userId, userId)))
     : [];
   const channelIds = memberChannels.map((c) => c.id);
   await db.transaction(async (tx) => {
-    if (dmIds.length) await tx.delete(channels).where(inArray(channels.id, dmIds));
+    if (dmIds.length) await tx.delete(channels).where(inList(channels.id, dmIds));
     if (channelIds.length) {
       await tx
         .delete(channelMembers)
-        .where(and(eq(channelMembers.userId, userId), inArray(channelMembers.channelId, channelIds)));
+        .where(and(eq(channelMembers.userId, userId), inList(channelMembers.channelId, channelIds)));
     }
     await tx
       .delete(workspaceMembers)
@@ -75,7 +76,7 @@ export async function removeMemberDeep(
           and(
             eq(notifications.userId, userId),
             isNull(notifications.readAt),
-            inArray(notifications.channelId, channelIds),
+            inList(notifications.channelId, channelIds),
           ),
         );
     }

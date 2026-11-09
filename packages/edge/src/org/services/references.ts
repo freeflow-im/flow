@@ -2,7 +2,7 @@
 // tables and the one access function (org/access.ts), and any other app's object from the share index when it is shared
 // with the reader. What the index does not hold is handed back as `ask`, for the route to ask the owning app
 // (routes/references.ts). What the reader may not see is `denied`, never a title.
-import { eq, inArray } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { parseReference } from '@flow/shared';
 import { addressOf, iconOf, type ResolvedReference } from '@flow/shared/addresses';
 import { maxRole, type Role } from '@flow/shared/grants';
@@ -10,6 +10,7 @@ import { accessOf, readerFor, type ChatReader } from '../access.js';
 import { db, schema } from '../db/index.js';
 import { getMessageById } from './messages.js';
 import { sharesOf } from './shares.js';
+import { inList } from '../sqlList.js';
 
 const { artifacts, channels, files, users } = schema;
 
@@ -56,7 +57,7 @@ async function chatReference(reader: ChatReader, ref: string, kind: string, id: 
     if (!msg || !chan || !role) return denied(ref);
     // Mentions are stored as <@userId>: shown by name, as the clients draw them.
     const mentioned = [...msg.body.matchAll(/<@([^>]+)>/g)].map((m) => m[1]!);
-    const names = new Map((mentioned.length ? await db.select({ id: users.id, name: users.displayName }).from(users).where(inArray(users.id, mentioned)) : []).map((u) => [u.id, u.name]));
+    const names = new Map((mentioned.length ? await db.select({ id: users.id, name: users.displayName }).from(users).where(inList(users.id, mentioned)) : []).map((u) => [u.id, u.name]));
     const author = (await db.select({ name: users.displayName }).from(users).where(eq(users.id, msg.userId)).limit(1))[0]?.name ?? 'someone';
     const text = msg.body.replace(/<@([^>]+)>/g, (_, u: string) => `@${names.get(u) ?? 'someone'}`).replace(/<!(channel|here|everyone)>/g, '@$1').replace(/\s+/g, ' ').trim();
     return { ...base, title: `Message from ${author} in ${channelTitle(chan)}`, role, ...(text ? { summary: text.length > SUMMARY_CHARS ? `${text.slice(0, SUMMARY_CHARS - 1)}…` : text } : {}) };

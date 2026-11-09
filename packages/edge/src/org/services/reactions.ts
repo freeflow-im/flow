@@ -1,7 +1,7 @@
 // Emoji reactions (phase2.md §2). Unicode emoji, plus workspace custom emoji as
 // `:shortcode:` (#175); idempotent add/remove; events on the channel's msg
 // subject; aggregates computed per message page.
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import { customEmojiCode, type ReactionAggDTO } from '@flow/shared';
 import { resolveShortcodes } from './workspaceEmoji.js';
 import { db, schema } from '../db/index.js';
@@ -10,6 +10,7 @@ import { requireChannelAccess } from './channels.js';
 import { notifyReaction } from './notifications.js';
 import { toMessageDTO } from './messages.js';
 import { publishEvent, subjectMsg } from '../bus.js';
+import { inList } from '../sqlList.js';
 
 const { reactions, messages } = schema;
 
@@ -80,7 +81,7 @@ export async function reactionsForMessages(messageIds: string[]): Promise<Map<st
   const rows = await db
     .select()
     .from(reactions)
-    .where(inArray(reactions.messageId, messageIds))
+    .where(inList(reactions.messageId, messageIds))
     .orderBy(asc(reactions.createdAt));
   for (const r of rows) {
     const list = out.get(r.messageId) ?? [];

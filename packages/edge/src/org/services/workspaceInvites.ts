@@ -12,7 +12,7 @@
 // exists: a DM from the inviter (which produces the normal DM notification,
 // badge and push on every client), and `GET /v1/me/workspace-invites`, which is
 // what draws the Accept / Decline card.
-import { and, eq, gt, inArray, isNull } from 'drizzle-orm';
+import { and, eq, gt, isNull } from 'drizzle-orm';
 import type { PendingWorkspaceInviteDTO, UserWorkspaceInviteResponse, WorkspaceInviteTargetsDTO } from '@flow/shared';
 import { db, schema } from '../db/index.js';
 import { config } from '../config.js';
@@ -23,6 +23,7 @@ import { publishEvent, subjectUserNotify } from '../bus.js';
 import { requireMembership, toWorkspaceDTO } from './workspaces.js';
 import { createDm } from './channels.js';
 import { sendMessage } from './messages.js';
+import { inList } from '../sqlList.js';
 
 const { invites, users, workspaceMembers, workspaces } = schema;
 
@@ -59,7 +60,7 @@ export async function workspaceInviteTargets(subjectUserId: string, viewerId: st
     .select({ w: workspaces, role: workspaceMembers.role })
     .from(workspaceMembers)
     .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
-    .where(and(eq(workspaceMembers.userId, viewerId), inArray(workspaceMembers.workspaceId, candidates)))
+    .where(and(eq(workspaceMembers.userId, viewerId), inList(workspaceMembers.workspaceId, candidates)))
     .orderBy(workspaceMembers.joinedAt);
   return { workspaces: rows.map((r) => toWorkspaceDTO(r.w, r.role)) };
 }

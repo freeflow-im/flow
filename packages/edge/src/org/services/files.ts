@@ -9,7 +9,7 @@
 // swept at boot + daily in-process (decision log ruling 5).
 import path from 'node:path';
 import sharp from '../lib/sharp';
-import { and, asc, desc, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, lt, sql } from 'drizzle-orm';
 import type { ChannelFilePage, FileDTO, PresignedUploadDTO } from '@flow/shared';
 import { db, schema } from '../db/index.js';
 import { newId } from '../lib/ids.js';
@@ -21,6 +21,7 @@ import { config } from '../config.js';
 import { requireMembership } from './workspaces.js';
 import { requireChannelAccess } from './channels.js';
 import { requireRole } from '../access.js';
+import { inList } from '../sqlList.js';
 
 const { files, messageFiles, messages, users } = schema;
 
@@ -337,7 +338,7 @@ export async function validateAttachments(
   const rows = await db
     .select()
     .from(files)
-    .where(and(inArray(files.id, fileIds), isNull(files.deletedAt), eq(files.status, 'ready')));
+    .where(and(inList(files.id, fileIds), isNull(files.deletedAt), eq(files.status, 'ready')));
   const byId = new Map(rows.map((r) => [r.id, r]));
   for (const fid of fileIds) {
     const f = byId.get(fid);
@@ -356,7 +357,7 @@ export async function filesForMessages(messageIds: string[]): Promise<Map<string
     .select({ messageId: messageFiles.messageId, f: files })
     .from(messageFiles)
     .innerJoin(files, eq(files.id, messageFiles.fileId))
-    .where(inArray(messageFiles.messageId, messageIds))
+    .where(inList(messageFiles.messageId, messageIds))
     .orderBy(files.id);
   for (const r of rows) {
     const list = out.get(r.messageId) ?? [];

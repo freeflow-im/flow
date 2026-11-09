@@ -22,7 +22,7 @@
 // markChannelNotificationsRead / markThreadNotificationsRead. Every read path
 // publishes `notification.read` with the fresh unread total so the native
 // badges converge without polling.
-import { and, desc, eq, inArray, isNull, lte, sql } from 'drizzle-orm';
+import { and, desc, eq, isNull, lte, sql } from 'drizzle-orm';
 import {
   GROUP_MENTION_RE,
   type NotificationDTO,
@@ -39,6 +39,7 @@ import { isOnline } from '../presence.js';
 import { toMessageDTO, type HydratedMessageRow } from './messages.js';
 import { queueBadgeSync } from './badgeSync.js';
 import { enqueuePendingPush } from './pushOutbox.js';
+import { inList } from '../sqlList.js';
 
 const { notifications, channelMembers, workspaceMembers, messages, channels, users } = schema;
 
@@ -149,7 +150,7 @@ export async function computeRecipients(
     const wsRows = await db
       .select({ userId: workspaceMembers.userId })
       .from(workspaceMembers)
-      .where(and(eq(workspaceMembers.workspaceId, chan.workspaceId), inArray(workspaceMembers.userId, uniqueMentions)));
+      .where(and(eq(workspaceMembers.workspaceId, chan.workspaceId), inList(workspaceMembers.userId, uniqueMentions)));
     const wsSet = new Set(wsRows.map((r) => r.userId));
     for (const uid of uniqueMentions) {
       if (!wsSet.has(uid)) throw badRequest('bad_mention', `mentioned user ${uid} is not a workspace member`);
@@ -218,7 +219,7 @@ async function finish(out: Map<string, RecipientPlan>): Promise<{
     ? await db
         .select({ id: users.id, prefs: users.notificationPrefs, suppress: users.statusSuppressAlerts })
         .from(users)
-        .where(inArray(users.id, ids))
+        .where(inList(users.id, ids))
     : [];
   const alertContext = new Map<string, AlertContext>(
     rows.map((r) => [r.id, { prefs: r.prefs, statusSuppressAlerts: r.suppress }]),

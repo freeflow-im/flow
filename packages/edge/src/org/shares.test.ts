@@ -115,6 +115,14 @@ describe('the share index', () => {
     expect(await run(() => sharedWith({ accountId: 'acct-b', channelIds: [] }, { includeOrg: true }))).toMatchObject([{ ref: cal, role: 'editor', principal: 'account:acct-b' }]);
   });
 
+  it('reads the shares of someone in 150 channels: one bound list, under Durable Object SQLite\'s 100-variable limit', async () => {
+    const cal = `${workspaceId}/calendar/calendar/n.acct-a.0123456789ab`;
+    await run(() => recordShare({ ref: cal, principal: `channel:${general}`, role: 'viewer', grantedBy: 'acct-a', title: 'Team', kind: 'calendar' }, WEB));
+    const channelIds = [...Array.from({ length: 149 }, (_, i) => `ch-${String(i).padStart(3, '0')}`), general];
+    expect(await run(() => sharedWith({ accountId: 'acct-b', channelIds }, { includeOrg: true }))).toMatchObject([{ ref: cal, role: 'viewer', principal: `channel:${general}` }]);
+    expect(await run(() => sharedRefsOf({ accountId: 'acct-b', channelIds }))).toEqual([cal]);
+  });
+
   it('a revoke takes the row away and is only the event', async () => {
     await run(() => recordShare({ ref: ref('s1'), principal: 'account:acct-b', role: 'viewer', grantedBy: 'acct-a', title: 'Q4 plan', kind: 'sheet' }, WEB));
     published = [];

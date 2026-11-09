@@ -3,7 +3,7 @@
 // The send path calls `scheduleForMessage` and returns immediately (§1: send
 // never blocks). The queue does the work and, when a message gains cards,
 // republishes it as `message.updated` so connected clients patch in place.
-import { and, eq, gt, isNull, inArray } from 'drizzle-orm';
+import { and, eq, gt, isNull } from 'drizzle-orm';
 import type { MessageDTO, UnfurlDTO } from '@flow/shared';
 import { referenceOf } from '@flow/shared/addresses';
 import { config } from '../../config.js';
@@ -34,6 +34,7 @@ import { SsrfError } from './ssrf.js';
 import { isAllowedByAllowlist, isDenied, UnfurlQueue } from './queue.js';
 import { CHANNEL_SUPPRESSION_MS, extractUrls, urlHash } from './urls.js';
 import { parseVideoEmbed } from './video.js';
+import { inList } from '../../sqlList.js';
 
 const queue = new UnfurlQueue();
 
@@ -348,7 +349,7 @@ export async function unfurlsForMessages(messageIds: string[]): Promise<Map<stri
       position: messageUnfurls.position,
     })
     .from(messageUnfurls)
-    .where(and(inArray(messageUnfurls.messageId, messageIds), isNull(messageUnfurls.deletedAt)))
+    .where(and(inList(messageUnfurls.messageId, messageIds), isNull(messageUnfurls.deletedAt)))
     .orderBy(messageUnfurls.position);
   if (rows.length === 0) return out;
 

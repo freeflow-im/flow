@@ -6,7 +6,7 @@
 //   - a reaction stores the `:shortcode:` string in the same `reactions.emoji`
 //     column unicode reactions use, so aggregation, the notification path
 //     (migration 0024) and the wire events are untouched.
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import {
   CUSTOM_EMOJI_CODE_RE,
   EMOJI_SHORTCODES,
@@ -17,6 +17,7 @@ import { newId } from '../lib/ids.js';
 import { badRequest, forbidden, notFound } from '../lib/errors.js';
 import { requireMembership, toWorkspaceDTO } from './workspaces.js';
 import { publishEvent, subjectMeta } from '../bus.js';
+import { inList } from '../sqlList.js';
 
 const { workspaceEmoji, files, workspaces } = schema;
 
@@ -132,7 +133,7 @@ export async function resolveShortcodes(workspaceId: string, codes: string[]): P
   const rows = await db
     .select({ shortcode: workspaceEmoji.shortcode })
     .from(workspaceEmoji)
-    .where(and(eq(workspaceEmoji.workspaceId, workspaceId), inArray(workspaceEmoji.shortcode, codes)));
+    .where(and(eq(workspaceEmoji.workspaceId, workspaceId), inList(workspaceEmoji.shortcode, codes)));
   return new Set(rows.map((r) => r.shortcode));
 }
 
