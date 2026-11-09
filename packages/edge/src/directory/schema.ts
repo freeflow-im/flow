@@ -257,4 +257,32 @@ export const DIRECTORY_MIGRATIONS: string[] = [
   ALTER TABLE accounts ADD COLUMN hosted_at INTEGER;
   ALTER TABLE accounts ADD COLUMN removed_at INTEGER;
   ALTER TABLE domains ADD COLUMN provider_at INTEGER;`,
+  // Guest accounts (platform.md §3.3): a guest has no address, so `address` may be NULL (SQLite cannot drop a NOT NULL,
+  // hence the rebuild; UNIQUE allows any number of NULLs). `kind_changed_at` starts the retention clock of a mailbox
+  // kept when its account became a guest, and `mailbox_address` is that mailbox's address, which provisioning still
+  // suspends and deletes by, and which no new account is given until the mailbox is gone.
+  `CREATE TABLE accounts_new (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    organization_id TEXT NOT NULL,
+    address TEXT UNIQUE COLLATE NOCASE,
+    display_name TEXT NOT NULL,
+    role TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'native',
+    state TEXT NOT NULL DEFAULT 'active',
+    created_at INTEGER NOT NULL,
+    sponsor_user_id TEXT,
+    status_message TEXT,
+    hosted_at INTEGER,
+    removed_at INTEGER,
+    kind_changed_at INTEGER,
+    mailbox_address TEXT COLLATE NOCASE,
+    UNIQUE (user_id, organization_id)
+  );
+  INSERT INTO accounts_new (id, user_id, organization_id, address, display_name, role, kind, state, created_at, sponsor_user_id, status_message, hosted_at, removed_at)
+    SELECT id, user_id, organization_id, address, display_name, role, kind, state, created_at, sponsor_user_id, status_message, hosted_at, removed_at FROM accounts;
+  DROP TABLE accounts;
+  ALTER TABLE accounts_new RENAME TO accounts;
+  CREATE INDEX accounts_organization ON accounts(organization_id);
+  CREATE INDEX accounts_sponsor ON accounts(sponsor_user_id);`,
 ];

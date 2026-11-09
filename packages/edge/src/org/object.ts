@@ -5,7 +5,7 @@ import { accountGate, type DirectoryCore } from '../directory/core';
 import { ApiError } from '../errors';
 import { directoryLink } from './directoryLink';
 import type { Directory, DirectoryAnswer } from '../directory/object';
-import { withPublisher } from './bus';
+import { publishEvent, subjectMeta, withPublisher } from './bus';
 import { HUDDLE_ROSTER_DDL } from './huddles';
 import { openDb, withDb, type DB, schema } from './db/index';
 import { ORG_MIGRATIONS } from './db/migrations';
@@ -17,7 +17,7 @@ import { registerRoutes } from './routes/index';
 import { deleteMyAccount } from './services/accountDeletion';
 import { drainDuePushes, nextPushDueAt } from './services/pushOutbox';
 import { runSchedulerTick } from './services/scheduledMessages';
-import { accountForJoin, announceJoin, enrollInWorkspace, toWorkspaceDTO } from './services/workspaces';
+import { accountForJoin, announceJoin, enrollInWorkspace, toMemberDTO, toWorkspaceDTO } from './services/workspaces';
 import { socketControl } from './sockets';
 import { setStorageEnv, type StorageEnv } from './storage/index';
 import { insertRows, tableCounts } from '../importing';
@@ -106,7 +106,8 @@ export class Org extends DurableObject<OrgEnv> {
     sql.exec(HUDDLE_ROSTER_DDL);
     // Answered by the runtime, so a client's heartbeat does not wake the object.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('{"op":"ping"}', '{"op":"pong"}'));
-    if (sql.exec('SELECT 1 FROM workspace_members WHERE address IS NULL OR account_id IS NULL LIMIT 1').toArray().length) {
+    // A guest's row has no address for good (platform.md §3.3), so a missing account id is what says "not filled in yet".
+    if (sql.exec('SELECT 1 FROM workspace_members WHERE account_id IS NULL LIMIT 1').toArray().length) {
       void ctx.blockConcurrencyWhile(() => this.backfillAddresses());
     }
   }
@@ -504,6 +505,23 @@ export class Org extends DurableObject<OrgEnv> {
     await this.flushOutbox(null);
     await this.sweepMailboxes().catch((err) => console.error(`[provisioning] sweep: ${(err as Error).message}`));
     await this.armAlarm();
+  }
+
+  /**
+   * Accounts made guests or native (routes/accounts.ts, platform.md §3.3): each member row's address follows the
+   * directory's (null for a guest), and the organization's sockets hear `member.updated`.
+   */
+  async accountAddresses(changes: { userId: string; address: string | null }[]): Promise<void> {
+    const workspace = this.db.select({ id: schema.workspaces.id }).from(schema.workspaces).get();
+    if (!workspace || !changes.length) return;
+    await this.scoped(async () => {
+      for (const c of changes) {
+        const updated = this.ctx.storage.sql.exec('UPDATE workspace_members SET address = ? WHERE workspace_id = ? AND user_id = ? RETURNING user_id', c.address, workspace.id, c.userId).toArray();
+        if (!updated.length) continue;
+        publishEvent(subjectMeta(workspace.id), { type: 'member.updated', workspaceId: workspace.id, ts: new Date().toISOString(), data: await toMemberDTO(workspace.id, c.userId) } as Event);
+      }
+    });
+    await this.logging;
   }
 
   /** A person's whole account is going: leave this organization as the Node server's deletion did. */

@@ -1,5 +1,15 @@
 # Decision log
 
+## 2026-11-09 — Guest accounts: members with no mailbox and no address (operator ruling)
+
+- **A guest has no address**, not an address without a mailbox: an address that bounces is a trap for whoever writes to
+  it. `accounts.address` is NULL for a guest and its `addresses` row is deleted. A mailbox kept after an account becomes
+  a guest still holds its old address (`mailbox_address`) until the retention sweep deletes it, so no new member is
+  handed someone else's mail.
+- **Owners and admins pick the kind**, per account or every `member` at once; the owner is always native.
+- **The default kind for new joiners is an organization policy** (`defaultAccountKind`), `native` for every existing
+  organization, so nothing changes until an admin flips it.
+
 ## 2026-11-08 — MXRoute is the hosted mail provider, not OpenSRS (operator ruling)
 
 - **MXRoute** (https://api.mxroute.com/docs) instead of OpenSRS Hosted Email: an account exists, the API is a plain REST

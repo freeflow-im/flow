@@ -148,7 +148,8 @@ export class Calendar extends DurableObject<CalendarEnv> {
     const wrong = ownerMismatch(this.store, caller, 'the Calendar');
     if (wrong) { console.error(`[calendar] ${wrong}`); return ownerRefusal(wrong); }
     this.accountId = caller.account!.id;
-    this.store.ensureNative({ accountId: caller.account!.id, email: caller.account!.address ?? '', displayName: caller.account!.displayName ?? '' });
+    // A guest has no address and no native calendar (platform.md §3.3).
+    if (caller.account!.address) this.store.ensureNative({ accountId: caller.account!.id, email: caller.account!.address, displayName: caller.account!.displayName ?? '' });
     const t: Timing = { server: 0, actor: caller.account!.id };
     const res = await timing.run(t, () => this.app.fetch(request, { caller } satisfies Bindings));
     this.touch();
@@ -233,7 +234,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
     const wrong = ownerMismatch(this.store, { account, user: null }, 'the Calendar');
     if (wrong) { console.error(`[calendar] ${wrong}`); return { ok: false, message: wrong }; }
     this.accountId = account.id;
-    this.store.ensureNative({ accountId: account.id, email: account.address, displayName: account.displayName });
+    if (account.address) this.store.ensureNative({ accountId: account.id, email: account.address, displayName: account.displayName });
     return { ok: true };
   }
 

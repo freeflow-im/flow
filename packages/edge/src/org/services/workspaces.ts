@@ -26,7 +26,7 @@ import { emailSender } from '../email/index.js';
 import { visibleEmail } from './auth.js';
 import { killAgentCredentials, removeMemberDeep, removeSponsoredAgents, tombstoneUser } from './memberRemoval.js';
 import { postSystemMessage } from './messages.js';
-import { ensureAccount } from '../directoryLink.js';
+import { accountFor, ensureAccount } from '../directoryLink.js';
 
 const {
   workspaces,
@@ -712,6 +712,8 @@ export async function transferWorkspaceOwnership(workspaceId: string, actorId: s
   if (!target) throw notFound('member not found');
   if (target.isAgent) throw agentForbidden('an agent cannot own an organization');
   if (target.isBot || target.deletedAt) throw badRequest('not_a_person', 'ownership can only go to a person');
+  // An owner is never a guest (platform.md §3.3): an admin makes the account native first.
+  if ((await accountFor(workspaceId, targetId))?.kind === 'guest') throw conflict('owner_not_guest', 'a guest cannot own an organization — make their account native first');
   await db.transaction(async (tx) => {
     await tx.update(workspaceMembers).set({ role: 'owner' }).where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, targetId)));
     await tx.update(workspaceMembers).set({ role: 'admin' }).where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, actorId)));

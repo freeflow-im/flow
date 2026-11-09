@@ -51,7 +51,9 @@ export function classify(err: unknown): 'retry' | 'stop' | 'throw' {
 /** The account's mailbox at the provider and its row in the Mail object; the domain made first. */
 async function mailboxStep(t: ProvisioningTarget, deps: ProvisioningDeps): Promise<void> {
   const { account, domain } = t;
-  if (!domain) throw new ProviderError('bad_request', `the domain of ${account.address} is not one of the organization's`);
+  const address = account.address;
+  if (!address) throw new ProviderError('bad_request', `${account.displayName} has no address`);
+  if (!domain) throw new ProviderError('bad_request', `the domain of ${address} is not one of the organization's`);
   if (!domain.verified) throw new ProviderError('bad_request', `the domain ${domain.domain} is not verified yet`);
   if (!t.domainAtProvider) {
     // Our zone first: a provider that wants its own ownership TXT (MXRoute) finds it there when the domain is made.
@@ -65,14 +67,14 @@ async function mailboxStep(t: ProvisioningTarget, deps: ProvisioningDeps): Promi
     }
     await deps.directory.setDomainAtProvider(domain.domain);
   }
-  const [row, box] = await Promise.all([deps.mail.hosted(account), deps.provider.getMailbox(account.address)]);
+  const [row, box] = await Promise.all([deps.mail.hosted(account), deps.provider.getMailbox(address)]);
   if (!row || !box.exists) {
     // The password lives only sealed in the Mail object: a mailbox made by a run that stopped before writing it gets a new one.
     const password = (deps.password ?? mailboxPassword)();
-    if (box.exists) await deps.provider.setPassword(account.address, password);
-    else await deps.provider.createMailbox({ address: account.address, displayName: account.displayName, password, quotaBytes: DEFAULT_DOMAIN_LIMITS.quotaBytes });
-    const settings = deps.provider.mailSettings(account.address);
-    await deps.mail.put(account, { email: account.address, displayName: account.displayName, imap: settings.imap, smtp: settings.smtp, password });
+    if (box.exists) await deps.provider.setPassword(address, password);
+    else await deps.provider.createMailbox({ address, displayName: account.displayName, password, quotaBytes: DEFAULT_DOMAIN_LIMITS.quotaBytes });
+    const settings = deps.provider.mailSettings(address);
+    await deps.mail.put(account, { email: address, displayName: account.displayName, imap: settings.imap, smtp: settings.smtp, password });
   }
   await deps.directory.setHosted(account.id, true);
 }
@@ -81,34 +83,39 @@ async function mailboxStep(t: ProvisioningTarget, deps: ProvisioningDeps): Promi
  * One message's work. `provision` runs the account from the state it is in to `active` (requested → mailbox_ready →
  * calendars_ready → active), each state written as its step ends; an active account without a mailbox (one from before
  * provisioning) gets its mailbox and calendar and stays active. `suspend`, `resume` and `delete` change the mailbox at
- * the provider; a mailbox the provider does not have counts as done. Provider errors are thrown for the consumer.
+ * the provider, by the address it was made with (a guest's is the one it had); a mailbox the provider does not have
+ * counts as done. A guest is never provisioned or resumed (§3.3). Provider errors are thrown for the consumer.
  */
 export async function runMessage(msg: ProvisioningMessage, deps: ProvisioningDeps): Promise<void> {
   const t = await deps.directory.target(msg.accountId);
   if (!t) return;
   const { account } = t;
+  const mailbox = t.mailboxAddress;
   const missing = (err: unknown) => { if (!(err instanceof ProviderError && err.code === 'not_found')) throw err; };
-  if (msg.kind === 'suspend') return deps.provider.setMailboxState(account.address, 'suspended').catch(missing);
+  if (msg.kind === 'suspend') return mailbox ? deps.provider.setMailboxState(mailbox, 'suspended').catch(missing) : undefined;
   if (msg.kind === 'resume') {
+    if (!mailbox || account.kind === 'guest') return;
     try {
-      await deps.provider.setMailboxState(account.address, 'enabled');
+      await deps.provider.setMailboxState(mailbox, 'enabled');
     } catch (err) { missing(err); return; }
     // A provider that suspends by taking the password away: the mailbox gets a fresh one, written where the Mail object reads it.
     if (deps.provider.suspendsByPassword && (await deps.mail.hosted(account))) {
       const password = (deps.password ?? mailboxPassword)();
-      await deps.provider.setPassword(account.address, password);
-      const settings = deps.provider.mailSettings(account.address);
-      await deps.mail.put(account, { email: account.address, displayName: account.displayName, imap: settings.imap, smtp: settings.smtp, password });
+      await deps.provider.setPassword(mailbox, password);
+      const settings = deps.provider.mailSettings(mailbox);
+      await deps.mail.put(account, { email: mailbox, displayName: account.displayName, imap: settings.imap, smtp: settings.smtp, password });
     }
     return;
   }
   if (msg.kind === 'delete') {
-    if (account.state !== 'removed') return;
-    await deps.provider.deleteMailbox(account.address).catch(missing);
+    // A removed account's mailbox, or a guest's kept one, past the retention period.
+    if (account.state !== 'removed' && account.kind !== 'guest') return;
+    if (mailbox) await deps.provider.deleteMailbox(mailbox).catch(missing);
     await deps.mail.clear(account);
     await deps.directory.setHosted(account.id, false);
     return;
   }
+  if (account.kind === 'guest') return;
   if (account.state === 'removed' || account.state === 'suspended') return;
   if (account.state === 'active' && t.hosted) return;
   if (account.state === 'requested' || !t.hosted) {
@@ -123,4 +130,4 @@ export async function runMessage(msg: ProvisioningMessage, deps: ProvisioningDep
 }
 
 /** The admins' notice when a mailbox could not be made. */
-export const failureNotice = (address: string, message: string) => `Could not set up a mailbox for ${address}: ${message}`;
+export const failureNotice = (address: string | null, message: string) => `Could not set up a mailbox for ${address ?? 'an account with no address'}: ${message}`;

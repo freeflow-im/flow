@@ -12,6 +12,7 @@ This file keeps two things:
 
 ## Parity
 
+- **Account kinds are managed on web only (2026-11-09, guest accounts).** Web's Manage users has the Kind column, "Make every member a guest" and the new-members policy; macOS and iOS have no admin panel (web-only by ruling) and simply show no address for a guest. Deliberate, like the rest of Manage users.
 - **FreeFlow Contacts (`/contacts`) is web-only (2026-11-07, platform phase 6.5).** The suite bar's Contacts tab opens it in the browser (and the desktop shell); macOS and iOS have no Contacts tab or page. Gap to close, as Mail's and Calendar's.
 - **Reference chips and intents are web-only (2026-11-07, platform phase 6.4).** Web draws FreeFlow addresses in messages as chips resolved through `/v1/references` and handles `?open=artifact|channel|message:` and `?share=`; macOS and iOS show those addresses as plain links and do not resolve them. Gap to close.
 - **The Domains tab is web-only (2026-11-07, platform phase 5.1).** Web's Manage users has Domains (add, verify, records, primary, remove); macOS and iOS have no domain management and show addresses as they come. Gap to close.

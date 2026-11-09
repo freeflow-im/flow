@@ -22,6 +22,8 @@ let workspaceId: string;
 let asked: [string, string][];
 /** The state the directory reports for every account, for the sponsor rule (§3.3). */
 let accountState: AccountDTO['state'];
+/** The kind the directory reports for every account (§3.3). */
+let accountKind: AccountDTO['kind'];
 
 /** The directory's half, as the object provides it: an address per joiner. */
 const run = <T>(fn: () => Promise<T>) => directoryLink.run({
@@ -30,13 +32,14 @@ const run = <T>(fn: () => Promise<T>) => directoryLink.run({
     return { id: `acct-${userId}`, principalId: userId, organizationId, address: `${displayName.toLowerCase()}@acme.freeflow.im`, displayName, role, kind: 'native', state: 'active', createdAt: '' } satisfies AccountDTO;
   },
   accountFor: async (organizationId, userId) =>
-    ({ id: `acct-${userId}`, principalId: userId, organizationId, address: 'x@acme.freeflow.im', displayName: 'x', role: 'member', kind: 'native', state: accountState, createdAt: '' }),
+    ({ id: `acct-${userId}`, principalId: userId, organizationId, address: accountKind === 'guest' ? null : 'x@acme.freeflow.im', displayName: 'x', role: 'member', kind: accountKind, state: accountState, createdAt: '' }),
 }, () => withDb(db, fn));
 
 beforeEach(async () => {
   db = orgStorage().db;
   asked = [];
   accountState = 'active';
+  accountKind = 'native';
   await run(async () => {
     for (const [id, name, isAgent] of [[ANN, 'Ann', false], [BOB, 'Bob', false], [BOT, 'Bot', true]] as const) {
       db.insert(schema.users).values({ id, email: `${name}@x.test`, passwordHash: '!', displayName: name, isAgent }).run();
@@ -57,7 +60,7 @@ describe('organizations', () => {
     expect(await run(() => accountForJoin(workspaceId, BOB))).toBeNull();
     expect(asked).toHaveLength(3);
     const [mine] = await run(() => myWorkspaces(BOB));
-    expect(mine).toMatchObject({ role: 'member', address: 'bob@acme.freeflow.im', policies: { inviteBy: 'admins', agentsBy: 'members', linkSharing: true } });
+    expect(mine).toMatchObject({ role: 'member', address: 'bob@acme.freeflow.im', policies: { inviteBy: 'admins', agentsBy: 'members', linkSharing: true, defaultAccountKind: 'native' } });
   });
 
   it('lets only admins invite by default, members add agents, and refuses them with policy_forbids when the policy says admins', async () => {
@@ -68,15 +71,20 @@ describe('organizations', () => {
     await expect(run(() => createJoinLink(workspaceId, BOT))).rejects.toMatchObject({ statusCode: 403, code: 'forbidden' });
     await expect(run(() => updateWorkspace(workspaceId, BOB, { policies: { inviteBy: 'admins' } }))).rejects.toMatchObject({ statusCode: 403 });
     const ws = await run(() => updateWorkspace(workspaceId, ANN, { policies: { inviteBy: 'admins', agentsBy: 'admins' } }));
-    expect(ws.policies).toEqual({ inviteBy: 'admins', agentsBy: 'admins', linkSharing: true });
+    expect(ws.policies).toEqual({ inviteBy: 'admins', agentsBy: 'admins', linkSharing: true, defaultAccountKind: 'native' });
     await expect(run(() => createJoinLink(workspaceId, BOB))).rejects.toMatchObject({ statusCode: 403, code: 'policy_forbids' });
     await expect(run(() => createAgentInvite(workspaceId, BOB))).rejects.toMatchObject({ statusCode: 403, code: 'policy_forbids' });
     await run(() => createJoinLink(workspaceId, ANN));
     const kept = await run(() => updateWorkspace(workspaceId, ANN, { policies: { linkSharing: false } }));
-    expect(kept.policies).toEqual({ inviteBy: 'admins', agentsBy: 'admins', linkSharing: false });
+    expect(kept.policies).toEqual({ inviteBy: 'admins', agentsBy: 'admins', linkSharing: false, defaultAccountKind: 'native' });
+    const guests = await run(() => updateWorkspace(workspaceId, ANN, { policies: { defaultAccountKind: 'guest' } }));
+    expect(guests.policies).toEqual({ inviteBy: 'admins', agentsBy: 'admins', linkSharing: false, defaultAccountKind: 'guest' });
   });
 
   it('hands the organization to a person: one owner throughout, and only the owner may hand it on', async () => {
+    accountKind = 'guest';
+    await expect(run(() => transferWorkspaceOwnership(workspaceId, ANN, BOB))).rejects.toMatchObject({ statusCode: 409, code: 'owner_not_guest' });
+    accountKind = 'native';
     await expect(run(() => transferWorkspaceOwnership(workspaceId, ANN, BOT))).rejects.toMatchObject({ statusCode: 403, code: 'agent_forbidden' });
     await expect(run(() => transferWorkspaceOwnership(workspaceId, BOB, ANN))).rejects.toMatchObject({ statusCode: 403 });
     const ws = await run(() => transferWorkspaceOwnership(workspaceId, ANN, BOB));

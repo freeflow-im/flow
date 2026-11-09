@@ -298,7 +298,7 @@ describe('accounts', () => {
     await leave(org, user.id);
     expect(core.organizationsOf(user.id)).toEqual([]);
     expect(core.accountFor(user.id, org)).toMatchObject({ id: made.id, state: 'removed', address: made.address });
-    expect(core.accountByAddress(made.address)!.id).toBe(made.id);
+    expect(core.accountByAddress(made.address!)!.id).toBe(made.id);
     await join(org, user.id, 'member');
     expect(core.accountFor(user.id, org)).toMatchObject({ id: made.id, role: 'member', state: 'active', address: made.address });
     expect(core.accountsOf(user.id)).toHaveLength(1);
@@ -369,6 +369,89 @@ describe('accounts', () => {
     expect(core.organization(org)).toMatchObject({ ownerUserId: b.user.id, policies: { inviteBy: 'admins', agentsBy: 'members', linkSharing: true } });
     expect(core.accountFor(a.user.id, org)!.role).toBe('admin');
     expect(core.accountFor(b.user.id, org)!.role).toBe('owner');
+  });
+});
+
+describe('guest accounts (platform.md §3.3)', () => {
+  const join = (org: string, userId: string, role = 'member') => core.applyOrgChanges(org, [{ kind: 'join', id: org, user_id: userId, role, payload: null }]);
+  const leave = (org: string, userId: string) => core.applyOrgChanges(org, [{ kind: 'leave', id: org, user_id: userId, role: null, payload: null }]);
+  const policies = (org: string, p: Record<string, unknown>) => core.applyOrgChanges(org, [{ kind: 'policies', id: org, user_id: null, role: null, payload: JSON.stringify(p) }]);
+  const addressRows = () => nodeSqlOf(core).exec('SELECT address FROM addresses ORDER BY address').toArray().map((r) => r.address);
+
+  it('joins as native by default, and as a guest (no address, active) once the policy says so; an owner is always native', async () => {
+    const [a, b, c] = [await signUp('a@example.com'), await signUp('b@example.com'), await signUp('c@example.com')];
+    const org = newId();
+    core.reserveSlug('acme', org);
+    await join(org, a.user.id, 'owner');
+    await join(org, b.user.id);
+    expect(core.accountFor(b.user.id, org)).toMatchObject({ kind: 'native', address: 'ann2@acme.freeflow.im', state: 'active' });
+    await policies(org, { inviteBy: 'admins', agentsBy: 'members', linkSharing: true, defaultAccountKind: 'guest' });
+    const guest = core.ensureAccount(c.user.id, org, 'member');
+    expect(guest).toMatchObject({ kind: 'guest', address: null, state: 'active' });
+    expect(addressRows()).toEqual(['ann2@acme.freeflow.im', 'ann@acme.freeflow.im']);
+    const other = newId();
+    core.reserveSlug('beta', other);
+    await policies(other, { defaultAccountKind: 'guest' });
+    await join(other, c.user.id, 'owner');
+    expect(core.accountFor(c.user.id, other)).toMatchObject({ kind: 'native', address: 'ann@beta.freeflow.im' });
+    // A removed guest comes back a guest, active.
+    await leave(org, c.user.id);
+    expect(core.ensureAccount(c.user.id, org, 'member')).toMatchObject({ id: guest.id, kind: 'guest', address: null, state: 'active' });
+  });
+
+  it('changes kind both ways: the address freed, then a new one made; an owner cannot be a guest', async () => {
+    const [a, b] = [await signUp('a@example.com'), await signUp('b@example.com')];
+    const org = newId();
+    core.reserveSlug('acme', org);
+    await join(org, a.user.id, 'owner');
+    await join(org, b.user.id);
+    const bob = core.accountFor(b.user.id, org)!;
+    expect(core.setAccountKind(org, bob.id, 'guest')).toMatchObject({ id: bob.id, kind: 'guest', address: null, state: 'active' });
+    expect(addressRows()).toEqual(['ann@acme.freeflow.im']);
+    expect(core.accountByAddress('ann2@acme.freeflow.im')).toBeNull();
+    expect(core.setAccountKind(org, bob.id, 'guest').kind).toBe('guest');
+    expect(core.setAccountKind(org, bob.id, 'native')).toMatchObject({ kind: 'native', address: 'ann2@acme.freeflow.im' });
+    expect(addressRows()).toEqual(['ann2@acme.freeflow.im', 'ann@acme.freeflow.im']);
+    const owner = core.accountFor(a.user.id, org)!;
+    expect(() => core.setAccountKind(org, owner.id, 'guest')).toThrow(/owner cannot be a guest/);
+    expect(core.accountById(owner.id)).toMatchObject({ kind: 'native', address: 'ann@acme.freeflow.im' });
+    expect(() => core.setAccountKind(newId(), bob.id, 'guest')).toThrow('account not found');
+    // Made owner while a guest (outside the transfer route, which refuses): native again, with an address.
+    core.setAccountKind(org, bob.id, 'guest');
+    await join(org, b.user.id, 'owner');
+    expect(core.accountFor(b.user.id, org)).toMatchObject({ role: 'owner', kind: 'native', address: 'ann2@acme.freeflow.im' });
+  });
+
+  it('makes every member a guest at once, leaving owners, admins and removed accounts', async () => {
+    const people = await Promise.all(['a', 'b', 'c', 'd', 'e'].map((x) => signUp(`${x}@example.com`)));
+    const org = newId();
+    core.reserveSlug('acme', org);
+    await join(org, people[0]!.user.id, 'owner');
+    await join(org, people[1]!.user.id, 'admin');
+    for (const p of people.slice(2)) await join(org, p.user.id);
+    core.setAccountKind(org, core.accountFor(people[2]!.user.id, org)!.id, 'guest');
+    await leave(org, people[4]!.user.id);
+    const out = core.makeMembersGuests(org);
+    expect(out.unchanged).toBe(1);
+    expect(out.changed.map((x) => x.principalId)).toEqual([people[3]!.user.id]);
+    expect(people.map((p) => core.accountFor(p.user.id, org)!).map((x) => [x.role, x.kind, x.state])).toEqual([
+      ['owner', 'native', 'active'], ['admin', 'native', 'active'], ['member', 'guest', 'active'], ['member', 'guest', 'active'], ['member', 'native', 'removed'],
+    ]);
+    expect(core.makeMembersGuests(org)).toEqual({ changed: [], unchanged: 2 });
+  });
+
+  it('migrates existing accounts unchanged, and lets the address be NULL', () => {
+    const sql = nodeSql();
+    const before = DIRECTORY_MIGRATIONS.length - 1;
+    sql.exec('CREATE TABLE _migrations (n INTEGER PRIMARY KEY)');
+    DIRECTORY_MIGRATIONS.slice(0, before).forEach((m, i) => { sql.exec(m); sql.exec('INSERT INTO _migrations (n) VALUES (?)', i); });
+    sql.exec("INSERT INTO users (id, email, password_hash, display_name, created_at) VALUES ('u1', 'u1@example.com', 'x', 'Ann', 1)");
+    sql.exec("INSERT INTO accounts (id, user_id, organization_id, address, display_name, role, state, created_at, hosted_at, sponsor_user_id) VALUES ('a1', 'u1', 'o1', 'ann@acme.freeflow.im', 'Ann', 'owner', 'active', 5, 7, NULL)");
+    const c = new DirectoryCore(sql, { webUrlBase: 'https://app.test', registrationEnabled: true, send: async () => {} });
+    expect(c.accountById('a1')).toMatchObject({ address: 'ann@acme.freeflow.im', kind: 'native', role: 'owner', state: 'active' });
+    expect(c.provisioningTarget('a1')).toMatchObject({ hosted: true, mailboxAddress: 'ann@acme.freeflow.im' });
+    sql.exec("INSERT INTO accounts (id, user_id, organization_id, address, display_name, role, kind, created_at) VALUES ('a2', 'u1', 'o2', NULL, 'Ann', 'member', 'guest', 6)");
+    expect(c.accountById('a2')!.address).toBeNull();
   });
 });
 

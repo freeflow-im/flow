@@ -167,10 +167,10 @@ The new thing. One per principal per organization; today's `memberships` row wit
 | `id` | the account id; **Mail and Calendar objects are keyed by it** |
 | `principal_id` | who holds it |
 | `organization_id` | where |
-| `address` | `local@domain`, the account's name inside the organization, unique |
+| `address` | `local@domain`, the account's name inside the organization, unique; none for a guest |
 | `display_name` | what members see; defaults from the principal |
 | `role` | `owner`, `admin`, `member` |
-| `kind` | `native` (has a mailbox) in v1; `guest` reserved for later |
+| `kind` | `native` (an address, a mailbox, a native calendar) or `guest` (none of them) |
 | `state` | the provisioning state (§3.4), then `active`, `suspended`, `removed` |
 
 Everything the organization gives a member hangs off the account: the mailbox, the calendars, the role, the profile.
@@ -181,6 +181,15 @@ keeps their login. That split is the reason for the layer.
 holds one. (2) When the sponsor's account is suspended or removed, the agent's accounts there follow. (3) The agent's
 account is otherwise a full account: `builder@acme.com`, a mailbox, calendars. Inviting it to a meeting is an
 ordinary attendee line; mailing it is ordinary mail. Every surface that shows the agent shows "sponsored by".
+
+**Guests** are members with no address, no mailbox and no native calendar: the same roles, channels, DMs, mentions and
+Docs. A guest has no address at all, because an address with no mailbox behind it bounces. An owner or admin picks each
+account's kind (`PATCH /v1/workspaces/:id/accounts/:accountId/kind`, or every `member` at once with
+`POST /v1/workspaces/:id/accounts/kind`); the owner is always native. New joiners take the organization's
+`defaultAccountKind` policy, `native` unless an admin changes it. A guest is never provisioned and starts `active`.
+Made a guest, an account's address is let go and a hosted mailbox is suspended, kept for the retention period and then
+deleted by the daily sweep; its address goes to nobody else meanwhile, and comes back (the mailbox resumed) if the
+account is made native again in time. Made native otherwise, it gets a new address and is provisioned.
 
 ### 3.4 Provisioning
 
@@ -557,7 +566,6 @@ of a bridge socket.
   domain, a mailbox, set DKIM, suspend), and the SPF include value.
 - **CalDAV for outside clients.** Whether the suite ever serves CalDAV, or stays its own client plus tools.
 - **Address collisions.** Two Ann Lees in one organization: propose `ann.lee2`, or ask at join.
-- **Guests.** What a `guest` account is: a person with no mailbox who holds grants. Reserved, not designed.
 - **One data key or one per organization.** The per-object layout makes a key per organization natural; decide with
   the provisioning work.
 - **Agents in several organizations.** One bridge process, several accounts, or one process per account. Found in
@@ -724,7 +732,7 @@ Exit: adding an app touches its own folder and one manifest.
 ### Phase 7: later, in no order
 
 Connected Google (the refresh-token flow, Gmail and Google Calendar connected or imported); CalDAV for outside
-clients; guest accounts; groups as a grant principal; mini apps with tools, events and a scoped token; webhook
+clients; groups as a grant principal; mini apps with tools, events and a scoped token; webhook
 delivery hardening; native clients catching up (each a Parity line until then); a key per organization.
 
 ### Risks to watch

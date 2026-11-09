@@ -7,6 +7,7 @@ import { authRoutes, type AuthEnv } from './routes/auth';
 import { orgRoutes } from './routes/org';
 import { domainRoutes } from './routes/domains';
 import { provisioningRoutes } from './routes/provisioning';
+import { accountRoutes } from './routes/accounts';
 import { docsRoutes } from './routes/docs';
 import { previewRoutes } from './routes/previews';
 import { handoffRoutes } from './routes/handoff';
@@ -117,6 +118,7 @@ ported.route('/', referenceRoutes as never);
 ported.route('/', toolRoutes as never);
 ported.route('/', domainRoutes as never);
 ported.route('/', provisioningRoutes as never);
+ported.route('/', accountRoutes as never);
 ported.route('/', orgRoutes as never);
 ported.route('/', pageRoutes as never);
 app.use('*', async (c, next) => {
