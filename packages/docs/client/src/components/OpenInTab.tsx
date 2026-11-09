@@ -8,7 +8,8 @@ import { appUrl } from '../basePath.ts';
 import { useLocation } from 'react-router-dom';
 import { api, FAVORITES_CHANGED, type RecentFile } from '../api.ts';
 import { useAuth } from '../auth.tsx';
-import { fileAt, fileBrowserName } from '../desktopBridge.ts';
+import { fileAt } from '../desktopBridge.ts';
+import { useHost } from '../host.tsx';
 import { FolderIcon, kindIcon } from './FileLibrary.tsx';
 import type { MenuItem } from './Menu.tsx';
 import { PromptModal } from './Modal.tsx';
@@ -65,6 +66,7 @@ function useLists(user: boolean, local: boolean) {
 /** The File menu's first items, and the dialog Open file by path… asks in. */
 export function useOpenInTab(): { items: MenuItem[]; dialog: ReactNode } {
   const { local, user } = useAuth();
+  const { desktop } = useHost();
   const [asking, setAsking] = useState(false);
   const shown = fileAt(useLocation().pathname);
   const lists = useLists(!!user, !!local);
@@ -93,7 +95,7 @@ export function useOpenInTab(): { items: MenuItem[]; dialog: ReactNode } {
   ];
   return {
     items: user
-      ? [{ label: 'Open', submenu: openMenu }, ...(local && shown ? [{ label: `Open in ${fileBrowserName()}`, action: () => void api.revealLocal(shown).catch(() => {}) }] : []), 'sep']
+      ? [{ label: 'Open', submenu: openMenu }, ...(desktop && shown ? [{ label: `Open in ${desktop.fileBrowser}`, action: () => void api.revealLocal(shown).catch(() => {}) }] : []), 'sep']
       : [],
     dialog: local && asking && (
       <PromptModal

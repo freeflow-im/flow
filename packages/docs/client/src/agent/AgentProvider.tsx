@@ -10,7 +10,8 @@ import { api, placeOf, ApiError } from '../api.ts';
 import { activeImageEditor } from '../image/activeEditor.ts';
 import { editedCopyName } from '../image/limits.ts';
 import { prepareImage } from './images.ts';
-import { fileAt, WINDOW_ID } from '../desktopBridge.ts';
+import { fileAt } from '../desktopBridge.ts';
+import { useHost } from '../host.tsx';
 import { useAuth } from '../auth.tsx';
 import { isMac } from '../commands.ts';
 import type { DeckController } from '../deck/controller.ts';
@@ -126,7 +127,8 @@ function readOpen(): boolean {
 }
 
 export function AgentProvider({ children }: { children: ReactNode }) {
-  const { user, local, suite } = useAuth();
+  const { user, suite } = useAuth();
+  const { desktop } = useHost();
   const navigate = useNavigate();
   const [open, setOpenState] = useState(readOpen);
   const [items, setItems] = useState<ChatItem[]>([]);
@@ -667,8 +669,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   windowCallRef.current = runWindowCall;
 
   useEffect(() => {
-    if (!user || !local || typeof EventSource === 'undefined') return;
-    const events = new EventSource(`/api/local/tool-calls?window=${encodeURIComponent(WINDOW_ID)}`);
+    if (!user || !desktop || typeof EventSource === 'undefined') return;
+    const events = new EventSource(`/api/local/tool-calls?window=${encodeURIComponent(desktop.windowId)}`);
     // One at a time, in the order the agent made them.
     let queue = Promise.resolve();
     events.onmessage = (e) => {
@@ -681,7 +683,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
       queue = queue.then(() => windowCallRef.current(call)).catch((err: unknown) => console.error(err));
     };
     return () => events.close();
-  }, [user, local]);
+  }, [user, desktop]);
 
   const send = (text: string, images: AgentImage[] = [], opts: { inline?: boolean } = {}) => {
     const message = text.trim();

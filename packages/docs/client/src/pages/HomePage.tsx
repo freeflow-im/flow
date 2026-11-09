@@ -19,7 +19,7 @@ import { foldersChanged } from '../components/DocsNav.tsx';
 import { HomeIcon } from '../components/Logo.tsx';
 import { Modal, PromptModal } from '../components/Modal.tsx';
 import { MoveModal } from '../components/MoveModal.tsx';
-import { fileBrowserName } from '../desktopBridge.ts';
+import { useHost } from '../host.tsx';
 import { useFavicon } from '../favicon.ts';
 import { FAVORITES_PARAM, RECENTS_PARAM, SHARED_WITH_ME_PARAM, newFileShared, rememberListing, rememberReturn, returnTo, useListingScroll } from '../listing.ts';
 import { LocalFolderMenu, LocalFolderParent, parentDir } from '../components/LocalFolderMenu.tsx';
@@ -68,6 +68,7 @@ export function HomePage() {
 
 function FileList() {
   const { local, user, suite } = useAuth();
+  const { desktop } = useHost();
   const navigate = useNavigate();
   useFavicon('home');
   // The folder being shown is part of the address (/?folder=reports/2026), so Back and links work.
@@ -695,7 +696,7 @@ function FileList() {
       folderActions={(path) => [
         ...(user ? [favoriteAction(`folder:${path}`, { folder: path, root: place })] : []),
         ...folderScopeActions(path),
-        ...(local ? [{ label: `Open in ${fileBrowserName()}`, onClick: () => void api.revealLocal({ folder: path }).catch((e: Error) => setError(e.message)) }] : []),
+        ...(desktop ? [{ label: `Open in ${desktop.fileBrowser}`, onClick: () => void api.revealLocal({ folder: path }).catch((e: Error) => setError(e.message)) }] : []),
       ]}
       headerActions={
         <>
@@ -809,7 +810,7 @@ function FileList() {
           : []),
         { label: 'Move to…', onClick: () => setMoving(s) },
         ...fileScopeActions(s),
-        ...(local ? [{ label: `Open in ${fileBrowserName()}`, onClick: () => void api.revealLocal({ kind: s.kind, id: s.id }).catch((e: Error) => setError(e.message)) }] : []),
+        ...(desktop ? [{ label: `Open in ${desktop.fileBrowser}`, onClick: () => void api.revealLocal({ kind: s.kind, id: s.id }).catch((e: Error) => setError(e.message)) }] : []),
         // Copies between the folder and the web (desktop app): from a folder here, from the web to a folder.
         ...(local
           ? [{ label: 'Upload to Web…', onClick: () => setUploading(s) }]
