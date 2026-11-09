@@ -190,6 +190,18 @@ describe('provisioning (platform.md §3.4)', () => {
     expect(classify(own)).toBe('stop');
   });
 
+  it('publishes the platform zone again after the domain is made when the provider makes the DKIM key itself', async () => {
+    (provider as { managesDkim?: boolean }).managesDkim = true;
+    const org = newId();
+    core.reserveSlug('acme', org);
+    join(org, user('Ann'));
+    await drain();
+    expect(dns).toEqual(['acme', 'acme']);
+    join(org, user('Bob'));
+    await drain();
+    expect(dns).toEqual(['acme', 'acme']);
+  });
+
   it('gives a mailbox a fresh password on resume when the provider suspends by password', async () => {
     (provider as { suspendsByPassword?: boolean }).suspendsByPassword = true;
     const org = newId();
