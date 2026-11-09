@@ -1,6 +1,6 @@
 // The suite's API on the edge Worker, same origin with the session cookie: the Org object's routes (the workspace, its
 // members, invitations, emoji, join link) and the directory's (domains, accounts). A 401 sends the browser to sign in.
-import type { AccountDTO, AccountKind, DnsRecordDTO, DomainDTO, DomainKind, FileDTO, InviteResultDTO, JoinLinkDTO, MemberRole, OAuthIdentityDTO, PresignedUploadDTO, PublicConfigDTO, UpdateWorkspaceBody, WorkspaceDTO, WorkspaceEmojiDTO, WorkspaceInviteDTO, WorkspaceMemberDTO } from '@flow/shared';
+import type { AccountDTO, AccountKind, AgentInviteDTO, ChannelDTO, DnsRecordDTO, DomainDTO, DomainKind, FileDTO, InviteResultDTO, JoinLinkDTO, MemberRole, OAuthIdentityDTO, PresignedUploadDTO, PublicConfigDTO, UpdateWorkspaceBody, WorkspaceDTO, WorkspaceEmojiDTO, WorkspaceInviteDTO, WorkspaceMemberDTO } from '@flow/shared';
 
 export class AdminApiError extends Error {
   constructor(public readonly code: string, message: string, public readonly status: number) {
@@ -98,4 +98,8 @@ export const adminApi = {
   invites: async (id: string) => (await request<{ invites: WorkspaceInviteDTO[] }>('GET', `${ws(id)}/invites`)).invites,
   revokeInvite: (id: string, inviteId: string) => request<unknown>('DELETE', `${ws(id)}/invites/${encodeURIComponent(inviteId)}`),
   invite: async (id: string, emails: string[], kind: AccountKind) => (await request<{ results: InviteResultDTO[] }>('POST', `${ws(id)}/invites`, { emails, kind })).results,
+  // Channels (the Automations form's choices) and agents (§3.4).
+  channels: async (id: string) => (await request<{ channels: ChannelDTO[] }>('GET', `${ws(id)}/channels`)).channels,
+  removeAgent: (id: string, userId: string) => request<unknown>('DELETE', `${ws(id)}/agents/${encodeURIComponent(userId)}`),
+  agentInvite: (id: string) => request<AgentInviteDTO>('POST', `${ws(id)}/agent-invites`),
 };

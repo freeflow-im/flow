@@ -1,5 +1,5 @@
 // What another page of the suite asks Chat for, read in one place (docs/specs/platform.md §5.3, phase 6.4): the suite
-// bars' pages (`?open=chooser|admin|invite|activity|profile`), an object's address (`?open=artifact:<id>`,
+// bars' pages (`?open=chooser|invite|activity|profile`), an object's address (`?open=artifact:<id>`,
 // `?open=channel:<id>` with an optional `&text=` for the `chat-message` create intent, `?open=message:<id>`) and the share
 // intent (`?share=<ref>`, an artifact's Share dialog). App.tsx reads the address once and applies it once signed in.
 import { parseReference, type ArtifactDTO, type MessageDTO, type Reference } from '@flow/shared';

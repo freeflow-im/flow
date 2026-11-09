@@ -94,7 +94,14 @@ export async function resolveAppCaller<E extends AuthEnv>(c: Context<{ Bindings:
 export async function resolveAccountCaller<E extends AuthEnv>(c: Context<{ Bindings: E }>, app: string): Promise<CallerContext & { user: UserDTO; account: AccountDTO }> {
   const who = await resolveAppCaller(c);
   if (!who.account) throw new ApiError(403, 'no_account', `join an organization to use ${app}`);
+  const refused = guestRefusal(who.account, app);
+  if (refused) throw refused;
   return who as CallerContext & { user: UserDTO; account: AccountDTO };
+}
+
+/** A guest uses Chat only (docs/specs/workspace-admin.md §6.5, decision_log 2026-11-09): the other apps refuse one with 403 `guest`. */
+export function guestRefusal(account: Pick<AccountDTO, 'kind'> | null | undefined, app: string): ApiError | null {
+  return account?.kind === 'guest' ? new ApiError(403, 'guest', `guests use Chat only; ${app} is for the organization's members`) : null;
 }
 
 /** A bearer header, or the cookie the Workspace app's pages carry. */

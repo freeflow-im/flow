@@ -67,11 +67,15 @@ function placeOfPrint(c: C): string | null {
 
 docsRoutes.all('/api/*', async (c) => {
   const caller = await who(c);
-  const named = (await placeOfLink(c)) ?? (caller.userId ? null : placeOfPrint(c)) ?? (await placeOfOpened(c)) ?? c.req.query('workspace') ?? c.req.query('org') ?? (await placeOfFile(c)) ?? (await placeOfBody(c));
+  const link = await placeOfLink(c);
+  const named = link ?? (caller.userId ? null : placeOfPrint(c)) ?? (await placeOfOpened(c)) ?? c.req.query('workspace') ?? c.req.query('org') ?? (await placeOfFile(c)) ?? (await placeOfBody(c));
   const first = caller.userId ? (await directory(c, 'organizationsOf', caller.userId))[0] ?? null : null;
   // Someone in no organization yet, and anyone not signed in, share an object that can only say so.
   const id = named ?? first ?? 'none';
-  const accountId = caller.userId && id !== 'none' ? ((await directory(c, 'accountFor', caller.userId, id))?.id ?? null) : null;
+  const account = caller.userId && id !== 'none' ? await directory(c, 'accountFor', caller.userId, id) : null;
+  // A guest uses Chat only (docs/specs/workspace-admin.md §6.5); a public link is anyone's, a guest's too.
+  if (account?.kind === 'guest' && !link) return c.json({ error: "Guests use Chat only. Docs is for the organization's members." }, 403);
+  const accountId = account?.id ?? null;
   const channelIds = accountId ? await c.env.ORG.get(c.env.ORG.idFromName(id)).channelIdsOf(caller.userId!) : [];
   const stub = c.env.DOCS.get(c.env.DOCS.idFromName(id));
   return stub.handle(c.req.raw, { ...caller, accountId, channelIds }, id);

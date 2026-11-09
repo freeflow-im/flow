@@ -42,6 +42,8 @@ export interface SuiteOrganization {
   addBadge?: number;
   /** "Organization settings", for someone who may change them. */
   onSettings?: () => void;
+  /** "Automations" (the Admin app's section every member may open, docs/specs/workspace-admin.md §2). */
+  onAutomations?: () => void;
   /** "Invite people". */
   onInvite?: () => void;
 }
@@ -377,6 +379,11 @@ export function SuiteBar({ tabs, organization, search, assistant, notifications,
                   {organization.onSettings && (
                     <button type="button" role="menuitem" className="sb-menu-item" data-testid="suite-org-settings" onClick={pick(organization.onSettings)}>
                       Organization settings
+                    </button>
+                  )}
+                  {organization.onAutomations && (
+                    <button type="button" role="menuitem" className="sb-menu-item" data-testid="suite-org-automations" onClick={pick(organization.onAutomations)}>
+                      Automations
                     </button>
                   )}
                   {organization.onInvite && (

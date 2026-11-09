@@ -4,10 +4,10 @@
 // `/?open=…` (the suite bar's `intent.open`), which Chat's App.tsx honours.
 import { useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { APP_MANIFESTS, AWAY_STATUS, intent, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type ChatPage, type StatusOption } from '@flow/suite-bar';
+import { APP_MANIFESTS, AWAY_STATUS, guestTabs, intent, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type ChatPage, type StatusOption } from '@flow/suite-bar';
 import { useAgent } from '../agent/AgentProvider.tsx';
 import { useAuth } from '../auth.tsx';
-import { finishBeforeLeave, readActiveOrganization, setOrganizationState, suite, writeActiveOrganization, type SuiteOrganization, type SuiteUser } from '../suite.ts';
+import { finishBeforeLeave, readActiveOrganization, setOrganizationState, suite, writeActiveOrganization, type SuiteAccount, type SuiteOrganization, type SuiteUser } from '../suite.ts';
 
 /** How often the organizations' unread counts are asked again. */
 const REFRESH_MS = 60_000;
@@ -33,15 +33,17 @@ export function DocsSuiteBar() {
   const [params, setParams] = useSearchParams();
   const [me, setMe] = useState<SuiteUser | null>(null);
   const [orgs, setOrgs] = useState<SuiteOrganization[]>([]);
+  const [accounts, setAccounts] = useState<SuiteAccount[]>([]);
   const [activeId, setActiveId] = useState(readActiveOrganization);
   const [statusOpen, setStatusOpen] = useState(false);
   const [statusBusy, setStatusBusy] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const [u, o] = await Promise.allSettled([suite.me(), suite.organizations()]);
+    const [u, o, a] = await Promise.allSettled([suite.me(), suite.organizations(), suite.accounts()]);
     if (u.status === 'fulfilled') setMe(u.value);
     if (o.status === 'fulfilled') setOrgs(o.value);
+    if (a.status === 'fulfilled') setAccounts(a.value);
     setLoaded(true);
   }, []);
   useEffect(() => {
@@ -58,6 +60,8 @@ export function DocsSuiteBar() {
 
   const [loaded, setLoaded] = useState(false);
   const active = orgs.find((o) => o.id === activeId) ?? orgs[0];
+  // A guest uses Chat only (docs/specs/workspace-admin.md §6.5): the other tabs say so.
+  const guest = !!active && accounts.find((a) => a.organizationId === active.id)?.kind === 'guest';
   // The rest of the app lists and makes files in the organization shown here (suite.ts): Chat's last choice until the
   // list arrives, then the one the bar shows.
   useEffect(() => {
@@ -89,7 +93,7 @@ export function DocsSuiteBar() {
         // The logo: the top of the file list, whatever page is open.
         home={{ href: `${import.meta.env.BASE_URL}`, onSelect: () => navigate('/') }}
         // Chat's count: the selected organization's unread notifications, as Chat's own tab shows them.
-        tabs={suiteTabsFrom(APP_MANIFESTS, 'docs', { 'chat-unread': active?.unreadCount ?? 0 }, { activeHref: `${import.meta.env.BASE_URL}`, onSelect: () => navigate('/') })}
+        tabs={suiteTabsFrom(APP_MANIFESTS, 'docs', { 'chat-unread': active?.unreadCount ?? 0 }, { activeHref: `${import.meta.env.BASE_URL}`, onSelect: () => navigate('/'), unavailable: guestTabs(guest) })}
         organization={{
           name: active?.name ?? '',
           entries: orgs.map((o) => ({ id: o.id, name: o.name, unread: o.unreadCount ?? 0, active: o.id === active?.id, avatarUrl: o.avatarUrl })),
@@ -99,6 +103,7 @@ export function DocsSuiteBar() {
           },
           onAdd: () => toChat('chooser'),
           ...(active?.role === 'owner' || active?.role === 'admin' ? { onSettings: () => intent.admin() } : {}),
+          ...(active ? { onAutomations: () => intent.admin('automations') } : {}),
           ...(active ? { onInvite: () => toChat('invite') } : {}),
         }}
         search={
