@@ -23,6 +23,8 @@ describe('pdfToMarkdown', () => {
 
   it('reads a scanned page with OCR, and says so', async () => {
     const made = await pdfToMarkdown(fixture('scan.pdf'));
+    // Fails first with the reason when Tesseract's model is missing (CI fetches it into $TESSDATA_PREFIX).
+    expect(made.warnings.join(' ')).not.toMatch(/could not be read/);
     expect(made.ocrPages).toEqual([1]);
     expect(made.markdown).toMatch(/Scanned Receipt/);
     expect(made.markdown).toMatch(/Coffee beans and filters/);

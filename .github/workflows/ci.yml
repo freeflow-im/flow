@@ -98,5 +98,44 @@ jobs:
       - name: Typecheck packages/docs
         run: pnpm --filter @flow/docs typecheck
 
+      # The OCR test in packages/docs (server/pdfMarkdown.test.ts) needs
+      # Tesseract's English model. @llamaindex/liteparse does not ship it: on
+      # first OCR it downloads eng.traineddata (15 MB, from
+      # github.com/tesseract-ocr/tessdata_best) into $TESSDATA_PREFIX, or
+      # ~/.tesseract-rs/tessdata when that is unset, inside the test's own
+      # worker — so a slow or dropped download (504s, "Network connection
+      # lost") failed the test in 4 of 5 runs. Fetch it here instead, with
+      # retries, cached across runs, and point liteparse at it.
+      - name: OCR model cache key
+        id: ocr
+        run: echo "liteparse=$(grep -m1 -oE "^  '@llamaindex/liteparse@[0-9][^':]*" pnpm-lock.yaml | sed -E 's/.*@//')" >> "$GITHUB_OUTPUT"
+
+      - name: Restore OCR model
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/tessdata
+          key: tessdata-best-eng-liteparse-${{ steps.ocr.outputs.liteparse }}
+
+      - name: Download OCR model
+        run: |
+          mkdir -p "$RUNNER_TEMP/tessdata"
+          f="$RUNNER_TEMP/tessdata/eng.traineddata"
+          # The same file (tessdata_best, main) from three places: github.com's /raw/ redirect answered 504 for a whole
+          # evening on 2026-11-09 while raw.githubusercontent.com and jsDelivr served it at once.
+          if [ ! -s "$f" ]; then
+            for url in \
+              https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/main/eng.traineddata \
+              https://cdn.jsdelivr.net/gh/tesseract-ocr/tessdata_best@main/eng.traineddata \
+              https://github.com/tesseract-ocr/tessdata_best/raw/main/eng.traineddata; do
+              if curl -fsSL --retry 2 --retry-all-errors --retry-delay 3 --max-time 180 -o "$f.tmp" "$url"; then break; fi
+              echo "::warning::could not fetch the OCR model from $url"
+              rm -f "$f.tmp"
+            done
+            [ -s "$f.tmp" ] || { echo "::error::the OCR model could not be fetched from any source"; exit 1; }
+            mv "$f.tmp" "$f"
+          fi
+          ls -l "$f"
+          echo "TESSDATA_PREFIX=$RUNNER_TEMP/tessdata" >> "$GITHUB_ENV"
+
       - name: Test
         run: pnpm test
