@@ -35,9 +35,10 @@ describe('the manifests and the Worker', () => {
     }
   });
 
-  it('has a route file for every app, and mounts it in index.ts', () => {
+  it('has a route file for every app that has routes, and mounts it in index.ts', () => {
     for (const m of APP_MANIFESTS) {
-      if (m.path) expect(m.routes).toBeTruthy();
+      // An app with a page has routes, unless it works through the others' (Admin, docs/specs/workspace-admin.md §2.1).
+      if (m.path && m.name !== 'admin') expect(m.routes).toBeTruthy();
       if (!m.routes) continue;
       expect(existsSync(path.join(src, 'routes', `${m.routes}.ts`))).toBe(true);
       expect(index).toContain(`from './routes/${m.routes}';`);

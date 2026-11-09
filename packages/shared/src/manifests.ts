@@ -222,4 +222,19 @@ export const APP_MANIFESTS: AppManifest[] = [
     ],
     events: ['contacts.changed'],
   },
+  {
+    // Admin (docs/specs/workspace-admin.md §2.1): the organization's settings, an app of its own rather than a view in
+    // Chat. No object and no routes: it reads and writes through the directory's routes (domains, accounts) and the Org
+    // object's (the workspace, members, invitations, emoji, agents). No tab: the suite bar's organization menu opens it.
+    name: 'admin',
+    path: '/admin',
+    scope: 'organization',
+    kinds: [],
+    client: { dist: 'packages/admin/dist', basePath: '/admin/', optional: true },
+    pages: [
+      { path: '/admin', html: 'admin.html', signIn: true },
+      { path: '/admin/*', html: 'admin.html', signIn: true, passFiles: true },
+    ],
+    events: [],
+  },
 ];

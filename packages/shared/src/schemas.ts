@@ -152,6 +152,8 @@ export type CreateInviteBody = z.infer<typeof CreateInviteBody>;
 /** PATCH /v1/workspaces/:id — owner/admin only (phase 3.5: workspace branding). */
 export const UpdateWorkspaceBody = z
   .object({
+    // The organization's name (docs/specs/workspace-admin.md §6.1); the slug never changes.
+    name: z.string().trim().min(1).max(80).optional(),
     sidebarColor: z.string().min(1).max(32).optional(),
     // phase 11 §10: workspace-wide unfurl switch, and optional allowlist mode
     // (null clears it back to "allow all domains").
@@ -173,6 +175,7 @@ export const UpdateWorkspaceBody = z
   })
   .refine(
     (b) =>
+      b.name !== undefined ||
       b.sidebarColor !== undefined ||
       b.unfurlEnabled !== undefined ||
       b.unfurlDomainAllowlist !== undefined ||

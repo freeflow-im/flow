@@ -58,7 +58,7 @@ export function MailSuiteBar({ search, unread, onSettings, onHome, assistant }: 
           entries: list.map((o) => ({ id: o.id, name: o.name, unread: o.unreadCount ?? 0, active: o.id === active?.id, avatarUrl: o.avatarUrl })),
           onSelect: chooseOrganization,
           onAdd: () => toChat('chooser'),
-          ...(active?.role === 'owner' || active?.role === 'admin' ? { onSettings: () => toChat('admin') } : {}),
+          ...(active?.role === 'owner' || active?.role === 'admin' ? { onSettings: () => intent.admin() } : {}),
           ...(active ? { onInvite: () => toChat('invite') } : {}),
         }}
         search={search}

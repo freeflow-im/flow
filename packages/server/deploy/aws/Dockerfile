@@ -31,9 +31,10 @@ COPY packages/docs/package.json packages/docs/
 COPY packages/mail/package.json packages/mail/
 COPY packages/calendar/package.json packages/calendar/
 COPY packages/contacts/package.json packages/contacts/
+COPY packages/admin/package.json packages/admin/
 # clients:manifests end
 # clients:install begin (node packages/edge/scripts/clients.mjs write)
-RUN pnpm install --frozen-lockfile --filter @flow/server... --filter @flow/web... --filter @flow/docs... --filter @flow/mail... --filter @flow/calendar... --filter @flow/contacts...
+RUN pnpm install --frozen-lockfile --filter @flow/server... --filter @flow/web... --filter @flow/docs... --filter @flow/mail... --filter @flow/calendar... --filter @flow/contacts... --filter @flow/admin...
 # clients:install end
 
 # The web build reads the changelog (FEATURES.md, through scripts/build-features.mjs) and the agent skill from the
@@ -54,6 +55,7 @@ COPY packages/docs packages/docs
 COPY packages/mail packages/mail
 COPY packages/calendar packages/calendar
 COPY packages/contacts packages/contacts
+COPY packages/admin packages/admin
 # clients:sources end
 
 # The build tag the web client shows (vite.config.ts reads BUILD_SHA first; there is no .git in the build context).
@@ -102,6 +104,7 @@ COPY --from=build /app/packages/web/dist packages/web/dist
 COPY --from=build /app/packages/mail/dist packages/mail/dist
 COPY --from=build /app/packages/calendar/dist packages/calendar/dist
 COPY --from=build /app/packages/contacts/dist packages/contacts/dist
+COPY --from=build /app/packages/admin/dist packages/admin/dist
 # clients:dists end
 COPY --from=build /app/FEATURES.md ./
 COPY packages/server/assets packages/server/assets

@@ -98,7 +98,7 @@ export function DocsSuiteBar() {
             setActiveId(id);
           },
           onAdd: () => toChat('chooser'),
-          ...(active?.role === 'owner' || active?.role === 'admin' ? { onSettings: () => toChat('admin') } : {}),
+          ...(active?.role === 'owner' || active?.role === 'admin' ? { onSettings: () => intent.admin() } : {}),
           ...(active ? { onInvite: () => toChat('invite') } : {}),
         }}
         search={

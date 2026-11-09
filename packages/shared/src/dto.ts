@@ -84,6 +84,10 @@ export interface WorkspaceDTO {
   /** Phase 16 §5a: when set, any Google user with a *verified* email on this
    * domain self-enrols on sign-in — no invite. null = off (the default). */
   googleSelfRegisterDomain: string | null;
+  /** Link previews (phase 11 §10): on or off for the workspace, and the domains previewed when the list is set
+   * (null: any). Absent from older servers. */
+  unfurlEnabled?: boolean;
+  unfurlDomainAllowlist?: string[] | null;
   role?: MemberRole; // present on "my workspaces"
   /** #345: unread notifications across this workspace's channels — the number
    * the sidebar rail badge shows. The same rows the Activity total counts, so

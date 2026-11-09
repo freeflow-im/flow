@@ -55,6 +55,8 @@ export function toWorkspaceDTO(
     sidebarColor: w.sidebarColor,
     avatarUrl: w.avatarUrl,
     googleSelfRegisterDomain: w.googleSelfRegisterDomain,
+    unfurlEnabled: w.unfurlEnabled,
+    unfurlDomainAllowlist: w.unfurlDomainAllowlist ?? null,
     createdBy: w.createdBy,
     createdAt: w.createdAt.toISOString(),
     policies: workspacePolicies(w),
@@ -145,6 +147,8 @@ export async function updateWorkspace(
   workspaceId: string,
   actorId: string,
   patch: {
+    // docs/specs/workspace-admin.md §6.1 — the name may change; the slug never does (it is in addresses)
+    name?: string | undefined;
     sidebarColor?: string | undefined;
     // phase 11 §10 — null allowlist clears it back to "all domains allowed"
     unfurlEnabled?: boolean | undefined;
@@ -157,6 +161,7 @@ export async function updateWorkspace(
 ): Promise<WorkspaceDTO> {
   const m = await requireWorkspaceAdmin(workspaceId, actorId);
   const set: Partial<{
+    name: string;
     sidebarColor: string;
     unfurlEnabled: boolean;
     unfurlDomainAllowlist: string[] | null;
@@ -169,6 +174,11 @@ export async function updateWorkspace(
     const given = Object.fromEntries(Object.entries(patch.policies).filter(([, v]) => v !== undefined));
     // Stored whole, so the directory's copy (sent by the outbox) is whole too.
     set.policies = { ...workspacePolicies(current), ...given };
+  }
+  if (patch.name !== undefined) {
+    const name = patch.name.trim();
+    if (!name || name.length > 80) throw badRequest('bad_name', 'a name is 1 to 80 characters');
+    set.name = name;
   }
   if (patch.sidebarColor !== undefined) {
     if (!SIDEBAR_COLOR_IDS.includes(patch.sidebarColor)) {

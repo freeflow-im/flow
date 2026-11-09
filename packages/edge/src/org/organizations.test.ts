@@ -81,6 +81,15 @@ describe('organizations', () => {
     expect(guests.policies).toEqual({ inviteBy: 'admins', agentsBy: 'admins', linkSharing: false, defaultAccountKind: 'guest' });
   });
 
+  it('renames the organization for an owner or admin, within 1 to 80 characters; the slug stays', async () => {
+    const before = (await run(() => myWorkspaces(ANN)))[0]!;
+    const renamed = await run(() => updateWorkspace(workspaceId, ANN, { name: '  Acme Rockets  ' }));
+    expect(renamed.name).toBe('Acme Rockets');
+    expect(renamed.slug).toBe(before.slug);
+    await expect(run(() => updateWorkspace(workspaceId, ANN, { name: '   ' }))).rejects.toMatchObject({ statusCode: 400, code: 'bad_name' });
+    await expect(run(() => updateWorkspace(workspaceId, BOB, { name: 'Bob Co' }))).rejects.toMatchObject({ statusCode: 403 });
+  });
+
   it('hands the organization to a person: one owner throughout, and only the owner may hand it on', async () => {
     accountKind = 'guest';
     await expect(run(() => transferWorkspaceOwnership(workspaceId, ANN, BOB))).rejects.toMatchObject({ statusCode: 409, code: 'owner_not_guest' });
