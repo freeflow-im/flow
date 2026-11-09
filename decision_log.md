@@ -1,5 +1,16 @@
 # Decision log
 
+## 2026-11-09 — Build in large batches; no stacked PRs (operator ruling)
+
+- **Ruling (Scott):** one build thread merges this repository, so a multi-phase build is one branch and one PR against
+  `main`, phases as commits. Small PRs and stacked chains add merge and verification overhead with no gain.
+- **Why now:** the admin screen shipped as five stacked PRs (#735 → #739), each based on the previous branch. A stacked
+  PR lands on `main` only if its base is retargeted before the merge. All five were merged within ninety seconds; #738
+  and #739 merged into branches that had already gone to `main` and their commits were stranded, re-landed as #740.
+  CI's full build also runs only for PRs targeting `main`, so four of the five shipped on local test runs.
+- **Rule:** recorded in `CLAUDE.md`. If something must land before the next step can start, merge it and branch the
+  next from `main`.
+
 ## 2026-11-09 — Workspace admin: the spec's proposed rulings stand (confirmed at the start of the build)
 
 - **One way in, the same in every app:** Organization settings and Automations in the suite bar's organization menu;
