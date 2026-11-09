@@ -2,7 +2,8 @@
 
 Status: design, rulings confirmed · 2026-11-09 (§6, `decision_log.md`): the standalone MCP Docs desktop app stays a
 product; it and the suite's hosted Docs app stay in this one repository; what they share becomes an explicit package;
-MCP Docs' MCP server and Flow's MCP are separate. Nothing in the repository changes by this document; the work is §5.
+MCP Docs' MCP server and Flow's MCP are separate. Phase 1 and the code of phase 4 are PR #744 (2026-11-09); phases 2
+and 3 remain. Two deviations are noted in §2.3, §4 and §4.1.
 
 Related: `docs/specs/freeflow-suite.md` (the merge of 2026-11-01; §7 is the desktop plan this replaces in part),
 `docs/specs/cloudflare-spikes.md` (how the Docs code was first run on Workers), `packages/docs/CLAUDE.md` and
@@ -85,7 +86,8 @@ Calendar, the registry) leave `agent/tools.ts` and become a registration the hos
 `server/localStore.ts` (the folder of real files), `server/backup.ts` and `server/blob.ts`'s S3 client (the
 off-box copy), `server/folderWatch.ts`, `server/localMcp.ts`, `server/supervise.ts`, `server/agent/worker.ts` and
 `server/agent/git.ts` (the local coding agent), `server/index.ts`, `server/testing.ts`, `server/scripts/r2.ts`;
-`plugin/server` (MCP Docs' own MCP server, the one agents on the machine connect to; ruling 5); all of `desktop/`;
+`plugin/server/index.ts`, `http.ts`, `oauth.ts` and `localMcp.ts` (MCP Docs' own MCP server's process, pages and OAuth; ruling 5);
+all of `desktop/`;
 `installer/`; `claude-plugin/`; `client/src/desktopBridge.ts` and the Local tab's pieces (`LocalFolderMenu`,
 `OpenInTab`'s file-at-path, the recent-opens hooks in `main.tsx`).
 
@@ -138,6 +140,9 @@ apps/mcp-docs/             @freeflow-im/mcp-docs-app   the standalone app: Elect
 
 - `@flow/docs-core` is a workspace package, never published: both apps build from the same commit. It is typechecked
   once, under its own settings, and the `@ts-nocheck` headers go with the copies.
+- **Deviation (phase 1, PR #744):** `plugin/server/mcp.ts`, `files.ts`, `mount.ts` and `stateless.ts` (the Docs tools as
+  MCP tools, over the stores) stay in the core for now, because Flow's door runs Docs' tools through them; the products
+  are separate (ruling 5) but the implementation is one until Docs' tools have registry runners of their own.
 - Its `exports` map names the doors: `./shared/*`, `./server/*`, `./client`, `./plugin/server`, `./runtime` (the
   interface). The Worker imports by name; the relative paths into a copy go.
 - `@flow/docs` keeps the name the manifests and deploys know (`client.dist: packages/docs/dist`), so the suite's
@@ -156,6 +161,10 @@ apps/mcp-docs/             @freeflow-im/mcp-docs-app   the standalone app: Elect
   made read-only.
 - `BUILD.md` gets the recipe: bump the standalone's version in its PR, tag `desktop-v<version>` on `main`, the
   workflow does the rest. No subtree push, ever again.
+- **Deviation (PR #744):** the Claude Code and Codex plugin marketplaces (`.claude-plugin/marketplace.json`,
+  `.agents/plugins/marketplace.json`) must sit at a repository's root, which in this repository they do not
+  (`packages/docs`). They stay in the old repository, read-only, which the installer names for them alone; moving them
+  means a root-level marketplace here, later.
 
 ### 4.2 The hosted app's additions
 
@@ -174,7 +183,7 @@ alone, for agents on the same machine.
 Each phase is one branch and one PR against `main`, phases as commits inside it (CLAUDE.md). Phase 1 lands alone
 because it deletes 17,800 lines and the Worker's deploy must be verified before anything moves.
 
-1. **The runtime seam, and the copies deleted.** In `packages/docs/server`, the 30 patched files import `runtime`
+1. **The runtime seam, and the copies deleted.** *Done: PR #744.* In `packages/docs/server`, the 30 patched files import `runtime`
    instead of Node and Fastify; `runtime/node` is the pass-through; the Worker's runtime is moved into shape and the
    Worker imports `packages/docs` directly. The suite's additions to the tools become registrations (§4.2).
    Flow's `/mcp` door moves to `packages/edge/src/routes/mcp.ts` and runs Docs' tools from the registry (§4.2), so
@@ -185,7 +194,8 @@ because it deletes 17,800 lines and the Worker's deploy must be verified before 
    desktop's, from one build; the 34 files reviewed. Done when both apps run from the same `dist`.
 3. **The package split.** `packages/docs-core`, `packages/docs` as the thin hosted entry, `apps/mcp-docs`; exports
    map; tsconfigs; CI runs the core's tests once; `scripts/clients.mjs` and the manifests still find `packages/docs/dist`.
-4. **Releases from here.** §4.1. Done when an installed 0.2.38 updates to a release published from this repository.
+4. **Releases from here.** §4.1. *The code is in PR #744; the hand-over release is the operation that remains.* Done when an
+   installed 0.2.38 updates to a release published from this repository.
 
 Phases 1 and 4 are the ones that remove risk; 2 and 3 are the ones that make the boundary hold. If time is short,
 1 then 4.
