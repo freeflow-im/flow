@@ -224,6 +224,23 @@ describe('provisioning (platform.md §3.4)', () => {
     expect(core.provisionMissing(org)).toBe(0);
   });
 
+  it('sends one account on its own, and not one that has a mailbox or is gone', async () => {
+    const org = newId();
+    core.reserveSlug('acme', org);
+    const ann = join(org, user('Ann'));
+    const bob = join(org, user('Bob'));
+    core.takeProvisioning();
+    core.setAccountState(ann.id, 'active');
+    core.setAccountState(bob.id, 'active');
+    expect(core.provisionAccount(ann.id)).toBe(true);
+    expect(core.provisionAccount(newId())).toBe(false);
+    expect((await drain()).map((m) => m.accountId)).toEqual([ann.id]);
+    expect(mail.has(ann.id)).toBe(true);
+    expect(mail.has(bob.id)).toBe(false);
+    expect(core.provisionAccount(ann.id)).toBe(false);
+    expect(core.provisionMissing(org)).toBe(1);
+  });
+
   it('starts accounts active without a provider, and sends nothing', () => {
     const plain = new DirectoryCore(nodeSql(), { webUrlBase: 'https://app.test', registrationEnabled: true, send: async () => {} });
     core = plain;

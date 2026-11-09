@@ -304,6 +304,16 @@ export class DirectoryCore {
     return missing.length;
   }
 
+  /** One account sent to be provisioned (the operator's route): it must have no mailbox yet and not be removed or
+   * suspended. Returns whether it was sent. */
+  provisionAccount(accountId: string): boolean {
+    if (!this.deps.provisioning) throw conflict('hosted_mail_off', 'no mail provider is configured');
+    const a = this.rows("SELECT id, organization_id FROM accounts WHERE id = ? AND hosted_at IS NULL AND state NOT IN ('removed', 'suspended')", accountId)[0];
+    if (!a) return false;
+    this.enqueue('provision', a.organization_id as string, a.id as string);
+    return true;
+  }
+
   /** The daily sweep (the Org object's alarm): removed accounts whose mailbox has outlived the retention period, sent to
    * be deleted. Returns how many. */
   sweepRemoved(organizationId: string, retentionDays: number): number {
