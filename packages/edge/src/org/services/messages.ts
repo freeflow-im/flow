@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNull, lt, or, sql } from 'drizzle-orm';
 import { HUDDLE_SYSTEM_KINDS } from '@flow/shared';
 import type { FileDTO, MessageDTO, MessagePage, ReactionAggDTO, SystemMessageKind, UnfurlDTO } from '@flow/shared';
 import { db, schema } from '../db/index.js';
@@ -18,6 +18,7 @@ import { publishEvent, subjectMsg } from '../bus.js';
 import { scheduleForMessage, unfurlsForMessages } from './unfurl/index.js';
 import { requireMembership } from './workspaces.js';
 import { expandMentions as expandMentionText } from '../lib/mentionExpansion.js';
+import { inList } from '../sqlList.js';
 
 const { messages, channelMembers, messageFiles, notifications, users, workspaceMembers } = schema;
 
@@ -87,7 +88,7 @@ async function replyParticipantsForRoots(rows: MessageRow[]): Promise<Map<string
   const grouped = await db
     .select({ rootId: messages.threadRootId, userId: messages.userId, firstId: sql<string>`min(${messages.id})` })
     .from(messages)
-    .where(inArray(messages.threadRootId, rootIds))
+    .where(inList(messages.threadRootId, rootIds))
     .groupBy(messages.threadRootId, messages.userId);
   grouped.sort((a, b) => (a.firstId < b.firstId ? -1 : 1));
   for (const r of grouped) {
@@ -129,7 +130,7 @@ async function pinsForMessages(
   const rows = await db
     .select()
     .from(schema.messagePins)
-    .where(inArray(schema.messagePins.messageId, messageIds));
+    .where(inList(schema.messagePins.messageId, messageIds));
   for (const row of rows) {
     out.set(row.messageId, { pinnedAt: row.pinnedAt, pinnedBy: row.pinnedBy });
   }
@@ -482,7 +483,7 @@ export async function listPinnedMessages(channelId: string, userId: string): Pro
     .select()
     .from(messages)
     .where(and(
-      inArray(messages.id, pins.map((p) => p.messageId)),
+      inList(messages.id, pins.map((p) => p.messageId)),
       eq(messages.channelId, channelId),
       isNull(messages.deletedAt),
     ));
@@ -670,11 +671,11 @@ export async function deleteMessage(
       const fileRows = await tx
         .select({ fileId: messageFiles.fileId })
         .from(messageFiles)
-        .where(inArray(messageFiles.messageId, targetIds));
+        .where(inList(messageFiles.messageId, targetIds));
       const retired = await tx
         .select({ id: notifications.id, userId: notifications.userId })
         .from(notifications)
-        .where(inArray(notifications.messageId, targetIds));
+        .where(inList(notifications.messageId, targetIds));
 
       // ON DELETE CASCADE removes a root's replies and all message-owned child
       // rows atomically. A reply delete only touches that reply.

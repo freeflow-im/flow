@@ -6,7 +6,7 @@
 // functions here run inside the Org object's scope (its database and its socket publisher): they write the index, post
 // the card or the notice, and hand back the `sharing.*` event, which the object publishes into the event log.
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { parseReference, type Reference } from '@flow/shared';
 import { ORG_PRINCIPAL, parsePrincipal, principalsOf, ROLE_RANK, type Role } from '@flow/shared/grants';
 import type { Audience, PublishInput } from '../../events/core';
@@ -14,6 +14,7 @@ import { addressOf } from '@flow/shared/addresses';
 import { db, schema } from '../db/index.js';
 import { createDm } from './channels.js';
 import { postHuddleSystemMessage } from './messages.js';
+import { inList } from '../sqlList.js';
 
 const { shares, workspaceMembers, users, channels } = schema;
 
@@ -183,7 +184,7 @@ async function principalsFor(reader: ShareReader, includeOrg: boolean): Promise<
  * Organization files): "shared with me" in Chat leaves them out, Calendar's shared list wants them.
  */
 export async function sharedWith(reader: ShareReader, opts: { includeOrg?: boolean } = {}): Promise<SharedItem[]> {
-  const rows = await db.select().from(shares).where(inArray(shares.principal, await principalsFor(reader, !!opts.includeOrg))).orderBy(desc(shares.at));
+  const rows = await db.select().from(shares).where(inList(shares.principal, await principalsFor(reader, !!opts.includeOrg))).orderBy(desc(shares.at));
   const best = new Map<string, (typeof rows)[number]>();
   for (const r of rows) {
     const had = best.get(r.ref);
@@ -197,7 +198,7 @@ export async function sharedWith(reader: ShareReader, opts: { includeOrg?: boole
 export async function sharesOf(reader: ShareReader, refs: string[]): Promise<Map<string, { role: Role; title: string; kind: string }>> {
   const out = new Map<string, { role: Role; title: string; kind: string }>();
   if (refs.length === 0) return out;
-  const rows = await db.select().from(shares).where(and(inArray(shares.ref, refs), inArray(shares.principal, await principalsFor(reader, true))));
+  const rows = await db.select().from(shares).where(and(inList(shares.ref, refs), inList(shares.principal, await principalsFor(reader, true))));
   for (const r of rows) {
     const had = out.get(r.ref);
     if (!had || ROLE_RANK[r.role as Role] > ROLE_RANK[had.role]) out.set(r.ref, { role: r.role as Role, title: r.title, kind: r.kind });
@@ -208,6 +209,6 @@ export async function sharesOf(reader: ShareReader, refs: string[]): Promise<Map
 /** The references shared with the reader, the organization's included (every active member may see those): what the bus
  * lets through for a `ref:` audience. */
 export async function sharedRefsOf(reader: ShareReader): Promise<string[]> {
-  const rows = await db.selectDistinct({ ref: shares.ref }).from(shares).where(inArray(shares.principal, await principalsFor(reader, true)));
+  const rows = await db.selectDistinct({ ref: shares.ref }).from(shares).where(inList(shares.principal, await principalsFor(reader, true)));
   return rows.map((r) => r.ref);
 }

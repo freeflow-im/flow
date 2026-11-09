@@ -25,7 +25,9 @@ function cursor(statement: StatementSync, bindings: SQLInputValue[]) {
 }
 
 export function orgStorage(): { db: DB; sqlite: DatabaseSync } {
-  const sqlite = new DatabaseSync(':memory:');
+  // Durable Object SQLite binds at most 100 variables per statement; hold the tests to the same (Node 24+ honours the
+  // option, older Nodes ignore it).
+  const sqlite = new DatabaseSync(':memory:', { limits: { variableNumber: 100 } } as ConstructorParameters<typeof DatabaseSync>[1]);
   sqlite.exec('PRAGMA foreign_keys = ON');
   const exec = (query: string, ...bindings: unknown[]) => {
     const statement = sqlite.prepare(query);

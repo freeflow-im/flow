@@ -16,6 +16,7 @@ import {
 import { publishEvent, subjectMeta } from '../bus.js';
 import { channelIndicators } from '../indicators.js';
 import { huddleParticipantsMany, toParticipantDTOs } from '../huddles.js';
+import { inList } from '../sqlList.js';
 
 const { channels, channelMembers, messages, notifications, workspaceMembers } = schema;
 
@@ -78,7 +79,7 @@ async function standardMemberCounts(channelIds: string[]): Promise<Map<string, n
   const rows = await db
     .select({ channelId: channelMembers.channelId, n: sql<number>`count(*)` })
     .from(channelMembers)
-    .where(inArray(channelMembers.channelId, channelIds))
+    .where(inList(channelMembers.channelId, channelIds))
     .groupBy(channelMembers.channelId);
   return new Map(channelIds.map((id) => [id, rows.find((r) => r.channelId === id)?.n ?? 0]));
 }
@@ -117,7 +118,7 @@ async function unreadMessageCounts(
     )
     .where(
       and(
-        inArray(messages.channelId, channelIds),
+        inList(messages.channelId, channelIds),
         isNull(messages.threadRootId),
         isNull(messages.deletedAt),
         or(isNull(messages.systemKind), inArray(messages.systemKind, [...HUDDLE_SYSTEM_KINDS])),
@@ -135,7 +136,7 @@ async function dmMemberIds(channelIds: string[]): Promise<Map<string, string[]>>
   const rows = await db
     .select({ channelId: channelMembers.channelId, userId: channelMembers.userId })
     .from(channelMembers)
-    .where(inArray(channelMembers.channelId, channelIds))
+    .where(inList(channelMembers.channelId, channelIds))
     .orderBy(asc(channelMembers.userId));
   for (const r of rows) {
     const list = out.get(r.channelId) ?? [];
@@ -258,7 +259,7 @@ export async function createDm(workspaceId: string, callerId: string, otherUserI
   const memRows = await db
     .select({ userId: workspaceMembers.userId })
     .from(workspaceMembers)
-    .where(and(eq(workspaceMembers.workspaceId, workspaceId), inArray(workspaceMembers.userId, memberIds)));
+    .where(and(eq(workspaceMembers.workspaceId, workspaceId), inList(workspaceMembers.userId, memberIds)));
   if (memRows.length !== memberIds.length) {
     throw badRequest('bad_user', 'all DM recipients must be members of this workspace');
   }

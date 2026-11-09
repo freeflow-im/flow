@@ -15,7 +15,7 @@
 // ONE ROW PER NOTIFICATION, not per device. The fan-out to a user's devices
 // happens here, at send time: devices change between commit and delivery, and
 // the badge count is computed once per notification instead of once per phone.
-import { and, desc, eq, inArray, isNull, lte } from 'drizzle-orm';
+import { and, desc, eq, isNull, lte } from 'drizzle-orm';
 import { USER_MENTION_RE, type NotificationKind, type NotificationSubkind } from '@flow/shared';
 import { db, schema, type Tx } from '../db/index.js';
 import { decryptBody } from '../crypto/index.js';
@@ -30,6 +30,7 @@ import {
 } from '../push/payload.js';
 import { noteAlertPush } from './badgeSync.js';
 import { suppressAlertFor, unreadCount, type AlertContext } from './notifications.js';
+import { inList } from '../sqlList.js';
 
 const { channelMembers, channels, deviceTokens, messages, notifications, pendingPush, users } = schema;
 
@@ -68,7 +69,7 @@ export async function enqueuePendingPush(tx: Tx, intents: PushIntent[]): Promise
   const live = await tx
     .selectDistinct({ userId: deviceTokens.userId })
     .from(deviceTokens)
-    .where(and(inArray(deviceTokens.userId, userIds), isNull(deviceTokens.disabledAt)));
+    .where(and(inList(deviceTokens.userId, userIds), isNull(deviceTokens.disabledAt)));
   const hasDevice = new Set(live.map((r) => r.userId));
   const rows = intents.filter((i) => hasDevice.has(i.userId));
   if (rows.length === 0) return;
@@ -125,7 +126,7 @@ export async function hydratePushContexts(rows: CtxRow[]): Promise<Map<string, P
     ? await db
         .select({ channelId: channelMembers.channelId, userId: channelMembers.userId })
         .from(channelMembers)
-        .where(inArray(channelMembers.channelId, dmChannelIds))
+        .where(inList(channelMembers.channelId, dmChannelIds))
     : [];
   const membersByChannel = new Map<string, string[]>();
   for (const m of dmMembers) membersByChannel.set(m.channelId, [...(membersByChannel.get(m.channelId) ?? []), m.userId]);
@@ -140,7 +141,7 @@ export async function hydratePushContexts(rows: CtxRow[]): Promise<Map<string, P
     ? await db
         .select({ id: users.id, displayName: users.displayName })
         .from(users)
-        .where(inArray(users.id, [...ids]))
+        .where(inList(users.id, [...ids]))
     : [];
   const names = Object.fromEntries(found.map((u) => [u.id, u.displayName]));
   return new Map(
@@ -258,7 +259,7 @@ export async function drainPendingPush(log: Logger): Promise<number> {
         .update(pendingPush)
         .set({ nextAttemptAt: new Date(Date.now() + CLAIM_LEASE_MS) })
         .where(
-          inArray(
+          inList(
             pendingPush.id,
             rows.map((r) => r.id),
           ),
@@ -303,7 +304,7 @@ export async function drainPendingPush(log: Logger): Promise<number> {
     .innerJoin(messages, eq(messages.id, notifications.messageId))
     .innerJoin(channels, eq(channels.id, notifications.channelId))
     .innerJoin(users, eq(users.id, notifications.userId))
-    .where(inArray(notifications.id, [...new Set(claimed.map((r) => r.notificationId))]));
+    .where(inList(notifications.id, [...new Set(claimed.map((r) => r.notificationId))]));
   const ctxById = await hydratePushContexts(ctxRows);
   /** notificationId → does this one ring, and does it make a sound (#251). */
   const gateById = new Map(
@@ -321,7 +322,7 @@ export async function drainPendingPush(log: Logger): Promise<number> {
     .from(deviceTokens)
     .where(
       and(
-        inArray(deviceTokens.userId, [...new Set(claimed.map((r) => r.userId))]),
+        inList(deviceTokens.userId, [...new Set(claimed.map((r) => r.userId))]),
         isNull(deviceTokens.disabledAt),
       ),
     );
