@@ -1,5 +1,15 @@
 # Decision log
 
+## 2026-11-09 — Workspace admin: retention, domain removal, ownership transfer (operator rulings)
+
+- **Mail retention stays global** (`MAIL_RETENTION_DAYS`, 30 days) until a customer needs a longer period; the Admin app
+  shows the number and does not set it.
+- **Removing a domain cleans it up at the mail provider first.** The provider's refusal (mailboxes exist) or
+  unavailability fails the Remove with its message and the directory row stays, so the directory and the provider never
+  disagree about a domain.
+- **The heir of a workspace must be a member and a person.** An outsider is invited first. Agents and apps never own a
+  workspace.
+
 ## 2026-11-09 — Administration is an app of the suite, not a view inside Chat (operator ruling)
 
 - **Admin is its own app**, `/admin`, with a manifest in `APP_MANIFESTS` and a client in `packages/admin`, built the way

@@ -175,7 +175,7 @@ The Mail card, when hosted mail is on:
 - "Mailboxes are provided by FreeFlow at `<primary domain>`" and the provider's IMAP/SMTP host (from
   `mailSettings`, so a person can set up a mail client), or "Hosted mail is off on this server" when it is not.
 - Counts: native accounts, mailboxes ready, being set up, stopped (the same numbers the Members filters give).
-- "A removed member's mailbox is kept for 30 days, then deleted" (`MAIL_RETENTION_DAYS`, shown, not set).
+- "A removed member's mailbox is kept for 30 days, then deleted" (`MAIL_RETENTION_DAYS`, shown, not set; ruling 10).
 - **Add a domain**: the input and button from today's Domains tab.
 
 ### 3.4 Agents & apps
@@ -272,8 +272,9 @@ member to join. **Make primary** is offered when it is not primary; **Remove** n
 
 Offered on an own domain that is not primary. The server refuses when accounts have addresses on it
 (`domain_in_use`: removed members' kept addresses count, so a domain in use stays until the retention period has
-passed); the card says "Accounts have addresses on this domain" and lists nothing more. A verified domain that was
-`atProvider` is left at the provider; cleaning it up there is a later job (§9).
+passed); the card says "Accounts have addresses on this domain" and lists nothing more. A domain that is `atProvider` is
+deleted at the provider first (`deleteDomain`); the provider's refusal (mailboxes still exist) or unavailability fails
+the Remove with its message, and our row stays (ruling 11). `removeDomain` becomes async for this; nothing else changes.
 
 ### 4.6 What primary means, and does not
 
@@ -399,15 +400,10 @@ native client and nothing an agent observes changes.
 
 ## 9. Open questions
 
-1. **Per-organization retention.** `MAIL_RETENTION_DAYS` is global. A policy field `mailRetentionDays` with the
-   global as default is small; is it wanted before anyone asks?
-2. **Removing a domain at the provider.** `removeDomain` leaves the domain on MXRoute. The provider call exists
-   (`deleteDomain`, refused while mailboxes exist); should Remove call it once no addresses remain?
-3. **Transfer ownership to a non-member.** Today the heir must be a member and a person. Keep.
-
-Answered 2026-11-09 (Scott; in `decision_log.md`): new joiners are native members, not a policy choice; a guest
-invitation is a separate action limited to Chat; Google self-registration on any verified domain is later; document
-sharing with guests is left out for now.
+None open. Answered 2026-11-09 (Scott; in `decision_log.md`): new joiners are native members, not a policy choice; a
+guest invitation is a separate action limited to Chat; Google self-registration on any verified domain is later;
+document sharing with guests is left out for now; mail retention stays global for now; Remove cleans the domain up at
+the provider first; the heir of a workspace must be a member and a person.
 
 ## 10. Rulings
 
@@ -431,3 +427,10 @@ Ruled by Scott on 2026-11-09 (recorded in `decision_log.md`):
    sharing with guests is a later addition, noted here so it is not forgotten.
 9. Administration is an app of the suite, **Admin** at `/admin`, with its own manifest and client. It is not a view
    inside Chat or any other app.
+10. Mail retention stays one number for the whole server (`MAIL_RETENTION_DAYS`, 30 days) for now. The Mail card shows
+    it; a per-organization policy comes when a customer needs a longer period.
+11. Removing a domain cleans it up at the mail provider first. If the provider refuses because mailboxes exist, or is
+    unavailable, Remove fails with the provider's message and our row stays; only a domain the provider no longer has
+    leaves the directory. The two sides never disagree.
+12. The heir of a workspace must be a member and a person. An owner who wants to hand the workspace to an outsider
+    invites them first.
