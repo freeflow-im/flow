@@ -327,9 +327,16 @@ The former MCP Docs repository, added as a git subtree for the FreeFlow suite
   for the ChatGPT plugin on AWS, and the Worker (`deploy-edge.yml`) for app.freeflow.im. The
   former `docs-aws-deploy.yml` was removed on 2026-11-03.
 - `docs-desktop-release.yml` builds the macOS and Windows apps, makes the GitHub
-  release and publishes the installer to npm when a `desktop-v<version>` tag is
-  pushed; the tag is made by `pnpm --filter @flow/docs release -- <version>`. Both
-  workflows install with pnpm at the repository root.
+  release **in this repository** and publishes the installer to npm when a
+  `desktop-v<version>` tag is pushed; the tag is made by
+  `pnpm --filter @flow/docs release -- <version>`. Installed apps check this
+  repository's releases for updates (`desktop/updater.js`), as does
+  `npx @freeflow-im/mcp-docs`. Both workflows install with pnpm at the repository root.
+  **Hand-over from the old repository** (`docs/specs/docs-core.md` §4.1, once): the
+  first release made here (0.2.39) must also be published as a release of
+  `freeflow-im/mcp-docs` with the same files, so apps on 0.2.38 take one more update
+  from there and look here from then on; then that repository is made read-only with a
+  README pointing here. Never push code to it again.
 
 ## Open gaps
 

@@ -13,7 +13,11 @@ import { createInterface } from 'node:readline/promises';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
-const REPO = 'freeflow-im/mcp-docs';
+// The suite's repository publishes the desktop releases (docs-desktop-release.yml, tags desktop-v*).
+const REPO = 'freeflow-im/flow';
+// The plugin marketplaces (Claude Code's .claude-plugin, Codex's .agents) must sit at a repository's root, which in the
+// suite's repository they do not (packages/docs), so the old repository still serves them, read-only.
+const MARKETPLACE_REPO = 'freeflow-im/mcp-docs';
 const APP_NAME = 'MCP Docs';
 /** Windows (x64, which Windows on Arm runs too) or a Mac with Apple silicon. */
 const WIN = process.platform === 'win32';
@@ -268,7 +272,7 @@ function installClaudePlugin() {
     if (!up.ok) say(`  Could not refresh the ${MARKETPLACE} marketplace: ${up.out}`);
   } else {
     // Only the plugin's folders are checked out, not the whole app.
-    const add = claude(['plugin', 'marketplace', 'add', REPO, '--sparse', '.claude-plugin', 'claude-plugin']);
+    const add = claude(['plugin', 'marketplace', 'add', MARKETPLACE_REPO, '--sparse', '.claude-plugin', 'claude-plugin']);
     if (!add.ok && !/already/i.test(add.out)) fail(`Could not add the ${MARKETPLACE} marketplace to Claude Code:\n${add.out}`);
   }
 
@@ -304,7 +308,7 @@ function installCodexPlugin() {
     if (!up.ok) say(`  Could not refresh the ${MARKETPLACE} marketplace: ${up.out}`);
   } else {
     // Only the plugin's folders are checked out, not the whole app.
-    const add = codex(['plugin', 'marketplace', 'add', REPO, '--sparse', '.agents', '--sparse', 'claude-plugin']);
+    const add = codex(['plugin', 'marketplace', 'add', MARKETPLACE_REPO, '--sparse', '.agents', '--sparse', 'claude-plugin']);
     if (!add.ok && !/already/i.test(add.out)) fail(`Could not add the ${MARKETPLACE} marketplace to Codex:\n${add.out}`);
   }
   let installed = false;
