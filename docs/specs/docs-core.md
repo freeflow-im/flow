@@ -1,8 +1,8 @@
 # Docs core: one engine under the hosted Docs app and the standalone MCP Docs
 
-Status: design proposal · 2026-11-09. Ruling (Scott, 2026-11-09, `decision_log.md`): the standalone MCP Docs desktop
-app stays a product; it and the suite's hosted Docs app stay in this one repository; what they share becomes an
-explicit package. Nothing in the repository changes by this document.
+Status: design, rulings confirmed · 2026-11-09 (§6, `decision_log.md`): the standalone MCP Docs desktop app stays a
+product; it and the suite's hosted Docs app stay in this one repository; what they share becomes an explicit package;
+MCP Docs' MCP server and Flow's MCP are separate. Nothing in the repository changes by this document; the work is §5.
 
 Related: `docs/specs/freeflow-suite.md` (the merge of 2026-11-01; §7 is the desktop plan this replaces in part),
 `docs/specs/cloudflare-spikes.md` (how the Docs code was first run on Workers), `packages/docs/CLAUDE.md` and
@@ -190,7 +190,7 @@ because it deletes 17,800 lines and the Worker's deploy must be verified before 
 Phases 1 and 4 are the ones that remove risk; 2 and 3 are the ones that make the boundary hold. If time is short,
 1 then 4.
 
-## 6. Proposed rulings
+## 6. Rulings (Scott, 2026-11-09; `decision_log.md`)
 
 1. **The standalone app keeps the name MCP Docs** and its `mcpdocs://` scheme; the suite's own desktop app
    (`apps/desktop`, Electron, Chat and the rest) stays separate. `freeflow-suite.md` §7's "one Electron app" is
@@ -201,7 +201,7 @@ Phases 1 and 4 are the ones that remove risk; 2 and 3 are the ones that make the
    now with an extra step.
 4. **The runtime table in §3.1 is the whole contract.** A core file that needs more goes to its app, or the table
    grows in the same PR, with both implementations.
-5. **Ruled (Scott, 2026-11-09): MCP Docs' MCP server and Flow's MCP are separate things.** The local server in
+5. **MCP Docs' MCP server and Flow's MCP are separate things.** The local server in
    `plugin/server` and `localMcp.ts` belongs to the standalone app, for agents on the same machine. The suite's `/mcp`
    is Flow's door over the tool registry; Docs' tools reach it as runners, like every other app's.
 

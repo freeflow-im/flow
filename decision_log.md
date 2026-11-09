@@ -12,6 +12,11 @@
 - **Also ruled:** MCP Docs' MCP server (the local one agents on the machine connect to) and Flow's MCP (`/mcp` on the
   Worker, over the tool registry) are separate things. The local server belongs to the standalone app; Docs' tools
   reach Flow's door as registry runners, like Mail's and Calendar's.
+- **The spec's other rulings confirmed:** the standalone keeps the name MCP Docs and stays separate from the suite's
+  own desktop app (`freeflow-suite.md` §7's one Electron app is withdrawn for it); its releases come from this
+  repository by tag, the updater reading them, and the old repository becomes read-only after a hand-over release;
+  the core is a workspace package, never published; the runtime table (spec §3.1) is the whole contract between the
+  core and the machine it runs on.
 - **Where:** `docs/specs/docs-core.md`, with the boundary file by file, the runtime seam, the packages and the phases.
 
 ## 2026-11-09 — Build in large batches; no stacked PRs (operator ruling)
