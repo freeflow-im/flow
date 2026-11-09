@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { UserDTO } from '@flow/shared';
-import { APP_MANIFESTS, AWAY_STATUS, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type StatusOption } from '@flow/suite-bar';
+import { adminAddress, APP_MANIFESTS, AWAY_STATUS, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type StatusOption } from '@flow/suite-bar';
 import { useSwitcherEntries, useWorkspaceInvites, useWorkspaces } from '../hooks';
 import { useCapabilities } from '../lib/backend';
 import { connectionManager, type ConnectionRuntime } from '../lib/connectionRuntime';
@@ -160,7 +160,8 @@ export default function ChatSuiteBar({ activityUnread, intent }: { activityUnrea
           },
           onAdd: () => sel.selectWorkspace(null),
           addBadge: invites,
-          ...(canAdmin ? { onSettings: () => sel.openAdminPanel() } : {}),
+          // The Admin app (docs/specs/workspace-admin.md), on this workspace's own server.
+          ...(canAdmin ? { onSettings: () => window.location.assign(new URL(adminAddress(), runtime.origin).toString()) } : {}),
           ...(canInvite ? { onInvite: () => setModal('invite') } : {}),
         }}
         search={{

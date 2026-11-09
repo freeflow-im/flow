@@ -4,5 +4,5 @@ export { StatusDialog, type StatusDialogProps } from './StatusDialog';
 export { STATUS_OPTIONS, AWAY_STATUS, isAway, statusPatch, type StatusOption } from './status';
 export { suiteTabsFrom, type SuiteTabOptions } from './tabs';
 export { APP_MANIFESTS } from '@flow/shared/manifests';
-export { intent, addressOf, chatPageAddress, createAddress, iconOf, kindLabelOf, referenceOf, shareAddressOf, CHAT_PAGES, type IntentOptions } from './lib/intents';
-export type { AddressedReference, Attendee, ChatPage, CreateFields, ReferenceTarget, ResolvedReference } from './lib/intents';
+export { intent, addressOf, adminAddress, chatPageAddress, createAddress, iconOf, kindLabelOf, referenceOf, shareAddressOf, ADMIN_SECTIONS, CHAT_PAGES, type IntentOptions } from './lib/intents';
+export type { AddressedReference, AdminSection, Attendee, ChatPage, CreateFields, ReferenceTarget, ResolvedReference } from './lib/intents';

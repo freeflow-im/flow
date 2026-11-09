@@ -3,10 +3,10 @@
 // the server reads too), followed in this tab, or in a new one. The receiving app reads the address in one place
 // (Chat's App.tsx, Docs' HomePage, Calendar's App.tsx).
 import type { Reference } from '@flow/shared';
-import { addressOf, CHAT_PAGES, chatPageAddress, createAddress, shareAddressOf, type ChatPage, type CreateFields, type ReferenceTarget } from '@flow/shared/addresses';
+import { addressOf, adminAddress, CHAT_PAGES, chatPageAddress, createAddress, shareAddressOf, type AdminSection, type ChatPage, type CreateFields, type ReferenceTarget } from '@flow/shared/addresses';
 
-export { addressOf, chatPageAddress, createAddress, iconOf, kindLabelOf, referenceOf, shareAddressOf, CHAT_PAGES } from '@flow/shared/addresses';
-export type { AddressedReference, Attendee, ChatPage, CreateFields, ReferenceTarget, ResolvedReference } from '@flow/shared/addresses';
+export { addressOf, adminAddress, chatPageAddress, createAddress, iconOf, kindLabelOf, referenceOf, shareAddressOf, ADMIN_SECTIONS, CHAT_PAGES } from '@flow/shared/addresses';
+export type { AddressedReference, AdminSection, Attendee, ChatPage, CreateFields, ReferenceTarget, ResolvedReference } from '@flow/shared/addresses';
 
 /** How an intent is followed: in this tab (the default), a new one, or by the caller (an app's own router, a test). */
 export interface IntentOptions { newTab?: boolean; navigate?: (url: string) => void }
@@ -25,6 +25,10 @@ export const intent = {
     const url = isChatPage(target) ? chatPageAddress(target) : addressOf(target);
     if (url) go(url, opts);
     return !!url;
+  },
+  /** Opens the Admin app (docs/specs/workspace-admin.md §2), at a section or at its first one. */
+  admin(section?: AdminSection, opts?: IntentOptions): void {
+    go(adminAddress(section), opts);
   },
   /** Asks an app to make something, filled in: a Calendar event (`calendar`), a Chat message (`chat-message`). */
   create<K extends keyof CreateFields>(what: K, fields: CreateFields[K], opts?: IntentOptions): void {

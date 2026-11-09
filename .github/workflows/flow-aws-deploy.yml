@@ -22,6 +22,7 @@ on:
       - 'packages/mail/**'
       - 'packages/calendar/**'
       - 'packages/contacts/**'
+      - 'packages/admin/**'
       # clients:paths end
       - 'docs/help/**'
       - 'scripts/build-features.mjs'

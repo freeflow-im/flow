@@ -7,7 +7,7 @@ import { api } from '../lib/api';
 import { artifactGlyph } from '../lib/fileKind';
 import { dmTitle, isSelfDm as isSelfDmChannel } from '../lib/channelTitle';
 import { workspaceExit } from '../lib/workspaceExit';
-import { ACTIVITY_VIEW_ID, ADMIN_VIEW_ID, CHANNEL_BROWSER_VIEW_ID, DIRECTORY_VIEW_ID, SCHEDULED_VIEW_ID, useAuth, useLive, useMobileNav, useSelection } from '../state';
+import { ACTIVITY_VIEW_ID, ADMIN_VIEW_ID, CHANNEL_BROWSER_VIEW_ID, DIRECTORY_VIEW_ID, SCHEDULED_VIEW_ID, useAuth, useLive, useMobileNav, useRuntime, useSelection } from '../state';
 import type { Selection } from '../state';
 import { useCapabilities } from '../lib/backend';
 import {
@@ -29,11 +29,10 @@ import {
   InviteModal,
   LeaveWorkspaceModal,
   NewDmModal,
-  WorkspaceColorModal,
 } from './modals';
 import { AgentsModal } from './AgentsModal';
 import { requestAdminTab } from './AdminView';
-import { EmojiModal } from './EmojiModal';
+import { adminAddress } from '@flow/suite-bar';
 import { InviteAgentModal } from './InviteAgentModal';
 import { openServerConnections } from './ServerConnections';
 import { openWorkspace, showsSource } from '../lib/workspaceSwitcher';
@@ -233,6 +232,7 @@ export default function Sidebar() {
   const { api } = useBoundApi();
   const auth = useAuth();
   const sel = useSelection();
+  const runtime = useRuntime();
   const live = useLive();
   const qc = useQueryClient();
   const workspaces = useWorkspaces();
@@ -249,10 +249,8 @@ export default function Sidebar() {
   const [showCreateChannel, setShowCreateChannel] = useState(false);
   const [showInvite, setShowInvite] = useState(false);
   const [showNewDm, setShowNewDm] = useState(false);
-  const [showColor, setShowColor] = useState(false);
   const [showLeave, setShowLeave] = useState(false);
   const [showDeleteWs, setShowDeleteWs] = useState(false);
-  const [showEmoji, setShowEmoji] = useState(false);
   const [showAgents, setShowAgents] = useState(false);
   const [showInviteAgent, setShowInviteAgent] = useState(false);
   const [showFeatures, setShowFeatures] = useState(false);
@@ -463,11 +461,10 @@ export default function Sidebar() {
             </MenuItem>}
             {isAdmin && caps.admin.state !== 'unavailable' && (
               <>
-                <MenuItem testid="menu-workspace-color" onClick={() => { setWsMenuOpen(false); setShowColor(true); }}>
-                  Workspace appearance…
-                </MenuItem>
-                <MenuItem testid="menu-emoji" onClick={() => { setWsMenuOpen(false); setShowEmoji(true); }}>
-                  Custom Emoji…
+                {/* The Admin app (docs/specs/workspace-admin.md): the organization's name, look, emoji and policies. On
+                    this workspace's own server, which is the page's origin unless it is a foreign connection. */}
+                <MenuItem testid="menu-org-settings" onClick={() => { setWsMenuOpen(false); window.location.assign(new URL(adminAddress(), runtime.origin).toString()); }}>
+                  Organization settings…
                 </MenuItem>
                 <MenuItem testid="menu-admin" onClick={() => { setWsMenuOpen(false); requestAdminTab('organization'); sel.openAdminPanel(); }}>
                   Manage Users…
@@ -748,14 +745,12 @@ export default function Sidebar() {
       )}
       {showInvite && sel.workspaceId && <InviteModal workspaceId={sel.workspaceId} onClose={() => setShowInvite(false)} />}
       {showNewDm && sel.workspaceId && <NewDmModal workspaceId={sel.workspaceId} onClose={() => setShowNewDm(false)} />}
-      {showColor && sel.workspaceId && <WorkspaceColorModal workspaceId={sel.workspaceId} onClose={() => setShowColor(false)} />}
       {showLeave && sel.workspaceId && (
         <LeaveWorkspaceModal workspaceId={sel.workspaceId} onClose={() => setShowLeave(false)} />
       )}
       {showDeleteWs && sel.workspaceId && (
         <DeleteWorkspaceModal workspaceId={sel.workspaceId} onClose={() => setShowDeleteWs(false)} />
       )}
-      {showEmoji && sel.workspaceId && <EmojiModal workspaceId={sel.workspaceId} onClose={() => setShowEmoji(false)} />}
       {showAgents && sel.workspaceId && <AgentsModal workspaceId={sel.workspaceId} onClose={() => setShowAgents(false)} />}
       {showInviteAgent && sel.workspaceId && (
         <InviteAgentModal workspaceId={sel.workspaceId} onClose={() => setShowInviteAgent(false)} />

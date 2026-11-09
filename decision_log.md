@@ -1,5 +1,16 @@
 # Decision log
 
+## 2026-11-09 — Workspace admin: the spec's proposed rulings stand (confirmed at the start of the build)
+
+- **One way in, the same in every app:** Organization settings and Automations in the suite bar's organization menu;
+  Chat's workspace menu keeps those two and loses the rest as the sections move into the Admin app.
+- **The slug never changes; the name may** (`PATCH /v1/workspaces/:id { name }`). Addresses and the platform subdomain
+  depend on the slug.
+- **Turning mail on for an organization's own domain is an explicit admin step**, after the mail records are in DNS; the
+  platform subdomain needs no step.
+- **Changing the primary domain never moves an existing address.**
+- **Members who are not admins see Automations and nothing else of the app.**
+
 ## 2026-11-09 — Workspace admin: retention, domain removal, ownership transfer (operator rulings)
 
 - **Mail retention stays global** (`MAIL_RETENTION_DAYS`, 30 days) until a customer needs a longer period; the Admin app
