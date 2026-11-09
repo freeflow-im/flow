@@ -590,6 +590,7 @@ describe('domains with a mail provider (phase 5.2)', () => {
     expect(own!.records.find((r) => r.purpose === 'spf')!.value).toBe('v=spf1 include:_spf.fake-mail.test ~all');
     expect(platform!.records.find((r) => r.purpose === 'mx')!.value).toBe('mx.fake-mail.test');
     expect(own!.records.some((r) => r.purpose === 'dkim')).toBe(false);
+    expect(own!.atProvider).toBe(false);
   });
 
   it('sets DKIM on a verified domain: the provider gets the key, the directory keeps it sealed, the list shows the TXT', async () => {
@@ -611,6 +612,8 @@ describe('domains with a mail provider (phase 5.2)', () => {
     const own = (await core.describeDomains(org)).find((d) => d.domain === 'acme.test')!;
     expect(own.records.at(-1)).toEqual(out.record);
     expect(own.status).toHaveLength(own.records.length);
+    // Step 4 of the admin's setup (workspace-admin.md §4.1): the domain is at the provider now.
+    expect(own.atProvider).toBe(true);
     // The platform domain is verified from the start.
     expect((await core.setDomainDkim(org, 'acme.freeflow.im')).kind).toBe('platform');
     core.addDomain(org, 'spare.test');

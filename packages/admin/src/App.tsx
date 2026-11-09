@@ -6,6 +6,7 @@ import { AdminSuiteBar } from './components/AdminSuiteBar';
 import { NoOrganization, NotAllowed } from './components/Empty';
 import { useOrganizations } from './hooks/organization';
 import { SECTION_LABELS, SECTIONS, sectionOf, sectionPath } from './lib/route';
+import { Domains } from './sections/Domains';
 import { General } from './sections/General';
 
 function useSection(): [AdminSection, (s: AdminSection) => void] {
@@ -64,6 +65,7 @@ export function App() {
                 <h1 className="text-xl font-semibold">{SECTION_LABELS[section]}</h1>
               </header>
               {section === 'general' && <General org={org} />}
+              {section === 'domains' && <Domains org={org} />}
             </div>
           </main>
         </div>

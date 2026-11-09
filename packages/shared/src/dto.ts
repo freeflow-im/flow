@@ -716,6 +716,8 @@ export interface PublicConfigDTO {
   maxFileBytes: number;
   /** A hosted mail provider is configured: new accounts get a mailbox (platform.md §3.4). */
   hostedMail?: boolean;
+  /** With hosted mail: the provider's IMAP and SMTP hosts, for a person setting up a mail client (the Admin app shows them). */
+  mail?: { imapHost: string; smtpHost: string };
 }
 
 /** GET /v1/me/identities — external identities linked to the signed-in user.

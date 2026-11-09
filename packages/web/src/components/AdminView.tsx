@@ -12,11 +12,10 @@ import { publicConfig } from '../lib/google';
 import { useAuth, useSelection } from '../state';
 import { useChannels, useMembers, useWorkspaces } from '../hooks';
 import { AutomationsSection } from './AutomationsSection';
-import { DomainsSection } from './DomainsSection';
 import { Avatar } from './Avatar';
 import { MobileMenuButton } from './MobileMenuButton';
 
-export type AdminTab = 'organization' | 'domains' | 'automations';
+export type AdminTab = 'organization' | 'automations';
 const ADMIN_TAB_EVENT = 'flow:admin-tab';
 let requestedTab: AdminTab | null = null;
 
@@ -76,10 +75,10 @@ export default function AdminView() {
         <MobileMenuButton />
         <div className="min-w-0 flex-1">
           <h2 data-testid="admin-header" className="truncate text-[15px] font-bold">
-            {shown === 'automations' ? '⚡ Automations' : shown === 'domains' ? '🌐 Domains' : '🛡️ Manage users'}
+            {shown === 'automations' ? '⚡ Automations' : '🛡️ Manage users'}
           </h2>
           <p className="truncate text-xs text-muted">
-            {ws?.name ?? 'Workspace'} {shown === 'automations' ? 'automations' : shown === 'domains' ? 'domains and addresses' : <>members &amp; roles</>}
+            {ws?.name ?? 'Workspace'} {shown === 'automations' ? 'automations' : <>members &amp; roles</>}
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -96,7 +95,7 @@ export default function AdminView() {
       <div className="mc-scroll min-h-0 flex-1 overflow-y-auto px-[22px] py-5">
         {isAdmin && (
           <div role="tablist" className="mx-auto mb-4 flex max-w-3xl gap-1 border-b border-hairline text-sm">
-            {(['organization', 'domains', 'automations'] as const).map((t) => (
+            {(['organization', 'automations'] as const).map((t) => (
               <button
                 key={t}
                 role="tab"
@@ -105,18 +104,12 @@ export default function AdminView() {
                 className={`-mb-px border-b-2 px-3 py-1.5 ${shown === t ? 'border-accent font-semibold text-ink' : 'border-transparent text-muted hover:text-ink'}`}
                 onClick={() => setTab(t)}
               >
-                {t === 'organization' ? 'Organization' : t === 'domains' ? 'Domains' : 'Automations'}
+                {t === 'organization' ? 'Organization' : 'Automations'}
               </button>
             ))}
           </div>
         )}
-        {shown === 'domains' ? (
-          sel.workspaceId && (
-            <div className="mx-auto max-w-3xl">
-              <DomainsSection workspaceId={sel.workspaceId} />
-            </div>
-          )
-        ) : shown === 'automations' ? (
+        {shown === 'automations' ? (
           sel.workspaceId && (
             <div className="mx-auto max-w-3xl">
               <AutomationsSection workspaceId={sel.workspaceId} members={members.data ?? []} channels={channels.data ?? []} />

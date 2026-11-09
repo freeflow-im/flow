@@ -213,6 +213,8 @@ export interface AccountDTO {
   state: AccountState;
   /** Why provisioning stopped (a provider's refusal), while the account waits in its state; null otherwise (§3.4). */
   statusMessage?: string | null;
+  /** The account's hosted mailbox exists (provisioning's mailbox step is done). Absent where the directory did not say. */
+  hosted?: boolean;
   createdAt: string;
 }
 
@@ -249,6 +251,9 @@ export interface DomainDTO {
   records: DnsRecordDTO[];
   /** Per record, in the order of `records`: what a DNS lookup found. Empty for the platform domain, which we publish. */
   status: { record: 'present' | 'missing' }[];
+  /** The domain exists at the mail provider: step 4 of the setup (docs/specs/workspace-admin.md §4.1), done by
+   * "Turn on mail" or by the first mailbox's provisioning. */
+  atProvider: boolean;
   createdAt: string;
 }
 
