@@ -146,7 +146,7 @@ const when = (iso: string) => {
   return Number.isNaN(t.getTime()) ? iso : t.toLocaleString();
 };
 
-const inputCls = 'rounded border border-hairline bg-base px-2 py-1 text-sm disabled:opacity-50';
+const inputCls = 'rounded border border-hairline bg-white px-2 py-1 text-sm disabled:opacity-50';
 const errorText = (err: unknown) => (err instanceof Error ? err.message : 'failed');
 
 export function AutomationsSection({
