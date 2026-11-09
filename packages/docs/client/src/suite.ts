@@ -54,8 +54,16 @@ export interface SuiteChannel {
   archivedAt: string | null;
 }
 
+/** One of the person's accounts (GET /v1/me/accounts): its organization and kind (platform.md §3.3). */
+export interface SuiteAccount {
+  id: string;
+  organizationId: string;
+  kind: 'native' | 'guest';
+}
+
 export const suite = {
   me: () => suiteApi<SuiteUser>('GET', '/v1/me'),
+  accounts: async () => (await suiteApi<{ accounts: SuiteAccount[] }>('GET', '/v1/me/accounts')).accounts,
   members: async (organizationId: string) => (await suiteApi<{ members: SuiteMember[] }>('GET', `/v1/workspaces/${encodeURIComponent(organizationId)}/members`)).members,
   channels: async (organizationId: string) => (await suiteApi<{ channels: SuiteChannel[] }>('GET', `/v1/workspaces/${encodeURIComponent(organizationId)}/channels`)).channels,
   organizations: async () => (await suiteApi<{ workspaces: SuiteOrganization[] }>('GET', '/v1/me/workspaces')).workspaces,

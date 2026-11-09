@@ -12,6 +12,10 @@ export interface SuiteTabOptions {
   unavailable?: (tab: { id: string; label: string }) => string | null;
 }
 
+/** A guest uses Chat only (docs/specs/workspace-admin.md §6.5): every other app's tab says so and cannot be followed. */
+export const GUEST_TABS_NOTE = 'Guests use Chat only';
+export const guestTabs = (isGuest: boolean): SuiteTabOptions['unavailable'] => (t) => (isGuest && t.id !== 'chat' ? GUEST_TABS_NOTE : null);
+
 /** The tabs for the app `active`, with the numbers each badge source has on this bar (a source left out draws none). */
 export function suiteTabsFrom(
   manifests: readonly AppManifest[],

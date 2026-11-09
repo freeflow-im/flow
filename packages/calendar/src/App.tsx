@@ -13,7 +13,7 @@ import { CalendarGrid } from './components/CalendarGrid';
 import { CalendarSuiteBar } from './components/CalendarSuiteBar';
 import { ConnectCalendar, type ConnectKind } from './components/ConnectCalendar';
 import { SignedOut } from './components/SignedOut';
-import { NoOrganization } from './components/NoOrganization';
+import { GuestsChatOnly, NoOrganization } from './components/NoOrganization';
 import { EventDialog, draftOf, inputOf, newDraft, type Draft } from './components/EventDialog';
 import { EventPopover } from './components/EventPopover';
 import { alsoOnNote, mergeByUid } from './lib/merge';
@@ -275,6 +275,8 @@ export function App() {
   const none = accounts.isSuccess && accounts.data.length === 0;
   const signedOut = accounts.isError && accounts.error instanceof CalendarApiError && accounts.error.code === 'unauthorized';
   const noOrganization = (organizations.ready && !org) || (accounts.error instanceof CalendarApiError && accounts.error.code === 'no_account');
+  // A guest's request is refused (403 guest): guests use Chat only (docs/specs/workspace-admin.md §6.5).
+  const guest = accounts.error instanceof CalendarApiError && accounts.error.code === 'guest';
   const sidebar = (
     <Sidebar
       accounts={accounts.data ?? []} calendars={cals} date={place.date} range={range} weekStartsOn={WEEK_STARTS_ON}
@@ -297,8 +299,11 @@ export function App() {
         onHome={() => { setSearch(''); setSearchText(''); today(); }}
         onSettings={() => setDialog({ kind: 'settings', accountId: null })}
         assistant={{ open: assistantOpen, onToggle: () => setAssistantOpen(!assistantOpen) }}
+        guest={guest}
       />
-      {noOrganization ? (
+      {guest ? (
+        <GuestsChatOnly app="Calendar" />
+      ) : noOrganization ? (
         <NoOrganization app="Calendar" />
       ) : accounts.isPending ? (
         <div className="flex flex-1 items-center justify-center text-muted"><Loader2 className="size-5 animate-spin" /></div>

@@ -4,7 +4,7 @@
 // What belongs to Chat (organizations, invitations, notifications, the profile) opens Chat at `/?open=…`.
 import { useCallback, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { APP_MANIFESTS, AWAY_STATUS, intent, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type ChatPage, type StatusOption } from '@flow/suite-bar';
+import { APP_MANIFESTS, AWAY_STATUS, guestTabs, intent, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type ChatPage, type StatusOption } from '@flow/suite-bar';
 import { chooseOrganization, useOrganizations } from '../hooks/organization';
 import { suite, type SuiteUser } from '../suite';
 
@@ -19,9 +19,11 @@ export interface CalendarSuiteBarProps {
   onSettings(): void;
   /** The Assistant button: opens and closes Calendar's assistant panel. */
   assistant: { open: boolean; onToggle(): void };
+  /** The caller is a guest in the organization shown: the other apps' tabs cannot be followed (docs/specs/workspace-admin.md §6.5). */
+  guest?: boolean;
 }
 
-export function CalendarSuiteBar({ search, onSettings, onHome, assistant }: CalendarSuiteBarProps) {
+export function CalendarSuiteBar({ search, onSettings, onHome, assistant, guest = false }: CalendarSuiteBarProps) {
   const me = useQuery({ queryKey: ['suite', 'me'], queryFn: suite.me, refetchInterval: REFRESH_MS });
   const { list, active } = useOrganizations();
   const [user, setUser] = useState<SuiteUser | null>(null);
@@ -52,7 +54,7 @@ export function CalendarSuiteBar({ search, onSettings, onHome, assistant }: Cale
     <>
       <SuiteBar
         home={{ href: import.meta.env.BASE_URL, onSelect: () => onHome?.() }}
-        tabs={suiteTabsFrom(APP_MANIFESTS, 'calendar', { 'chat-unread': active?.unreadCount ?? 0 }, { activeHref: import.meta.env.BASE_URL, onSelect: () => onHome?.() })}
+        tabs={suiteTabsFrom(APP_MANIFESTS, 'calendar', { 'chat-unread': active?.unreadCount ?? 0 }, { activeHref: import.meta.env.BASE_URL, onSelect: () => onHome?.(), unavailable: guestTabs(guest) })}
         organization={{
           name: active?.name ?? '',
           entries: list.map((o) => ({ id: o.id, name: o.name, unread: o.unreadCount ?? 0, active: o.id === active?.id, avatarUrl: o.avatarUrl })),
