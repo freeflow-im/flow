@@ -18,13 +18,22 @@ export function NoOrganization({ app }: { app: string }) {
 }
 
 /** While the person's account is being provisioned (platform.md §3.4): its mailbox is not there yet. */
-export function MailboxSettingUp() {
+export function MailboxSettingUp({ admin = false }: { admin?: boolean }) {
   return (
     <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto bg-panel p-6">
       <div className="w-full max-w-md rounded-2xl border border-hairline bg-white p-8 text-center shadow-sm" data-testid="mailbox-setting-up">
         <Loader2 className="mx-auto mb-5 size-8 animate-spin text-primary" strokeWidth={1.5} />
         <p className="text-sm font-semibold">Your mailbox is being set up</p>
         <p className="mt-2 text-sm leading-relaxed text-muted">It takes a few moments. This page opens your inbox by itself when it is ready.</p>
+        {admin && (
+          <p className="mt-4 text-sm leading-relaxed text-muted">
+            Taking long? The organization's domain and mail setup are in{' '}
+            <a href="/admin/domains" className="font-semibold text-primary hover:underline" data-testid="mailbox-setting-up-admin">
+              Admin › Domains &amp; mail
+            </a>
+            .
+          </p>
+        )}
       </div>
     </div>
   );

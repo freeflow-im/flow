@@ -89,14 +89,20 @@ orgRoutes.get('/v1/client-info', (c) => {
     capabilities: { browserConnections: true, authHandoff: listVar(c.env.FLOW_HANDOFF_RETURN_URLS).length > 0, push: pushEnabled(c.env), pushRouting: true, desktop: true, socketPerOrganization: true },
   });
 });
-orgRoutes.get('/v1/config', (c) => c.json({
-  google: !!c.env.GOOGLE_CLIENT_ID,
-  googleClientId: c.env.GOOGLE_CLIENT_ID ?? null,
-  apple: !!c.env.APPLE_AUDIENCE,
-  maxFileBytes: Number(c.env.FLOW_MAX_FILE_BYTES ?? 100 * 1024 * 1024),
-  huddles: huddlesEnabled(c.env),
-  hostedMail: hostedMailEnabled(c.env),
-}));
+orgRoutes.get('/v1/config', (c) => {
+  const hostedMail = hostedMailEnabled(c.env);
+  // The provider's hosts, for a person setting up a mail client (the Admin app's Mail card); the address is only a shape.
+  const settings = hostedMail ? mailProviderFor(c.env).mailSettings('someone@example.invalid') : null;
+  return c.json({
+    google: !!c.env.GOOGLE_CLIENT_ID,
+    googleClientId: c.env.GOOGLE_CLIENT_ID ?? null,
+    apple: !!c.env.APPLE_AUDIENCE,
+    maxFileBytes: Number(c.env.FLOW_MAX_FILE_BYTES ?? 100 * 1024 * 1024),
+    huddles: huddlesEnabled(c.env),
+    hostedMail,
+    ...(settings ? { mail: { imapHost: settings.imap.host, smtpHost: settings.smtp.host } } : {}),
+  });
+});
 
 /**
  * LiveKit's webhook names no organization, only a room, whose name is the channel's id. The signature is checked here

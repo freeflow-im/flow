@@ -662,7 +662,7 @@ export function App() {
     return (
       <div className="flex h-dvh flex-col">
         {bar}
-        <MailboxSettingUp />
+        <MailboxSettingUp admin={organizations.active?.role === 'owner' || organizations.active?.role === 'admin'} />
       </div>
     );
   }

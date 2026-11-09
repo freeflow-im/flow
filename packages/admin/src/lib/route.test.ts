@@ -12,7 +12,7 @@ describe('the Admin app’s address', () => {
   });
 
   it('falls back to the first section this build has', () => {
-    expect(sectionOf('/admin/domains', ['general'])).toBe('general');
+    expect(sectionOf('/admin/members', ['general'])).toBe('general');
     expect(sectionOf('/admin/general', ['general'])).toBe('general');
   });
 

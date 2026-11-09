@@ -59,6 +59,8 @@ export interface DomainRow {
   verifyToken: string | null;
   verified: boolean;
   primary: boolean;
+  /** When the domain was made at the mail provider (`setDomainAtProvider`), or null. */
+  providerAt: string | null;
   createdAt: string;
 }
 
@@ -250,6 +252,7 @@ export class DirectoryCore {
       kind: a.kind as AccountKind,
       state: a.state as AccountState,
       statusMessage: (a.status_message as string | null) ?? null,
+      hosted: a.hosted_at != null,
       createdAt: iso(a.created_at),
     }));
   }
@@ -862,6 +865,7 @@ export class DirectoryCore {
       verifyToken: (d.verify_token as string | null) ?? null,
       verified: d.verified_at != null,
       primary: !!d.is_primary,
+      providerAt: d.provider_at != null ? iso(d.provider_at) : null,
       createdAt: iso(d.created_at),
     }));
   }
@@ -960,6 +964,7 @@ export class DirectoryCore {
       let records: DnsRecordDTO[];
       try {
         await provider.createDomain(row.domain, DEFAULT_DOMAIN_LIMITS);
+        this.setDomainAtProvider(row.domain);
         records = recordsFor(row.domain, await provider.records(row.domain));
       } catch (err) {
         providerFailure(err);
@@ -972,6 +977,7 @@ export class DirectoryCore {
     const key = await generateDkimKey();
     try {
       await provider.createDomain(row.domain, DEFAULT_DOMAIN_LIMITS);
+      this.setDomainAtProvider(row.domain);
       await provider.setDkim(row.domain, key.selector, key.privateKeyPem);
     } catch (err) {
       providerFailure(err);
@@ -1001,7 +1007,7 @@ export class DirectoryCore {
           this.domainStatus.set(d.domain, { at: Date.now(), status });
         }
       }
-      return { domain: d.domain, kind: d.kind, verified: d.verified, primary: d.primary, records, status, createdAt: d.createdAt };
+      return { domain: d.domain, kind: d.kind, verified: d.verified, primary: d.primary, records, status, atProvider: d.providerAt != null, createdAt: d.createdAt };
     }));
   }
 

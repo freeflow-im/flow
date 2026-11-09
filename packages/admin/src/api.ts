@@ -1,6 +1,6 @@
 // The suite's API on the edge Worker, same origin with the session cookie: the Org object's routes (the workspace, its
 // members, invitations, emoji, join link) and the directory's (domains, accounts). A 401 sends the browser to sign in.
-import type { FileDTO, JoinLinkDTO, OAuthIdentityDTO, PresignedUploadDTO, UpdateWorkspaceBody, WorkspaceDTO, WorkspaceEmojiDTO, WorkspaceMemberDTO } from '@flow/shared';
+import type { AccountDTO, DnsRecordDTO, DomainDTO, DomainKind, FileDTO, JoinLinkDTO, OAuthIdentityDTO, PresignedUploadDTO, PublicConfigDTO, UpdateWorkspaceBody, WorkspaceDTO, WorkspaceEmojiDTO, WorkspaceMemberDTO } from '@flow/shared';
 
 export class AdminApiError extends Error {
   constructor(public readonly code: string, message: string, public readonly status: number) {
@@ -76,4 +76,15 @@ export const adminApi = {
   newJoinLink: (id: string) => request<JoinLinkDTO>('POST', `${ws(id)}/join-link`),
   revokeJoinLink: (id: string) => request<JoinLinkDTO>('DELETE', `${ws(id)}/join-link`),
   identities: async () => (await request<{ identities: OAuthIdentityDTO[] }>('GET', '/v1/me/identities')).identities,
+  config: () => request<PublicConfigDTO>('GET', '/v1/config'),
+  // Domains (routes/domains.ts): the list with each record's DNS check, reused for a minute unless `refresh`.
+  domains: async (id: string, refresh = false) => (await request<{ domains: DomainDTO[] }>('GET', `${ws(id)}/domains${refresh ? '?refresh=1' : ''}`)).domains,
+  addDomain: (id: string, domain: string) => request<DomainDTO>('POST', `${ws(id)}/domains`, { domain }),
+  verifyDomain: (id: string, domain: string) => request<{ verified: boolean; found: string[] }>('POST', `${ws(id)}/domains/${encodeURIComponent(domain)}/verify`),
+  /** "Turn on mail" (docs/specs/workspace-admin.md §4.3): the domain made at the provider, its DKIM record back. */
+  turnOnMail: (id: string, domain: string) => request<{ domain: string; kind: DomainKind; selector: string; record: DnsRecordDTO }>('POST', `${ws(id)}/domains/${encodeURIComponent(domain)}/dkim`),
+  makePrimary: (id: string, domain: string) => request<unknown>('PATCH', `${ws(id)}/domains/${encodeURIComponent(domain)}`, { primary: true }),
+  removeDomain: (id: string, domain: string) => request<unknown>('DELETE', `${ws(id)}/domains/${encodeURIComponent(domain)}`),
+  // Accounts (routes/accounts.ts), owner or admin: the organization's, removed ones left out.
+  accounts: async (id: string) => (await request<{ accounts: AccountDTO[] }>('GET', `${ws(id)}/accounts`)).accounts,
 };
