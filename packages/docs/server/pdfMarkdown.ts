@@ -60,8 +60,8 @@ async function parse(parser: LiteParse, bytes: Buffer): Promise<{ pages: ParsedP
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     if (/password/i.test(message)) throw new PdfError('This PDF is password-protected, so it cannot be read.');
-    if (e instanceof Error && e.name === 'ParseTimeoutError') throw new PdfError('This PDF took too long to read.');
-    throw new PdfError('This PDF could not be read. It may be damaged.');
+    if (e instanceof Error && e.name === 'ParseTimeoutError') throw new PdfError('This PDF took too long to read.', { cause: e });
+    throw new PdfError('This PDF could not be read. It may be damaged.', { cause: e });
   }
 }
 
@@ -99,7 +99,11 @@ async function convert(bytes: Buffer): Promise<PdfMarkdown> {
       }
     } catch (e) {
       if (!(e instanceof PdfError)) throw e;
-      warnings.push('The scanned pages could not be read with OCR.');
+      // Tesseract's language model is fetched on first use (into $TESSDATA_PREFIX, or a per-user cache);
+      // without it no scan can be read, which is worth saying plainly rather than as a damaged file.
+      const cause = e.cause instanceof Error ? e.cause.message : '';
+      if (/tessdata|traineddata/i.test(cause)) warnings.push(`${reading.length === 1 ? 'Page' : 'Pages'} ${reading.join(', ')} ${reading.length === 1 ? 'is a scan and' : 'are scans and'} could not be read: the OCR model is unavailable.`);
+      else warnings.push('The scanned pages could not be read with OCR.');
     } finally {
       ocr.close();
     }
