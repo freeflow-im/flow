@@ -41,8 +41,11 @@ not_found_handling = "none"
 # Domains (src/directory/dns.ts, providers/cloudflareDns.ts): CLOUDFLARE_DNS_TOKEN (DNS edit on freeflow.im) and
 # CLOUDFLARE_DNS_ZONE_ID write each organization's <slug>.freeflow.im records; without them the dev driver logs them.
 # DNS_RESOLVER_URL (a var) is the DNS-over-HTTPS JSON resolver domain checks use, Cloudflare's when unset; the e2e sets it.
-# The mail provider (src/mailprovider): MAIL_PROVIDER (a var) `opensrs` with the secrets OPENSRS_API_URL, OPENSRS_USER and
-# OPENSRS_PASSWORD, or `fake` for local dev and the e2e; unset, the placeholder records and no provider changes.
+# The mail provider (src/mailprovider): MAIL_PROVIDER (a var) `mxroute` with MXROUTE_SERVER (a var, e.g. sunfire.mxrouting.net)
+# and the secrets MXROUTE_USERNAME and MXROUTE_API_KEY (decision_log 2026-11-08); `opensrs` with the secrets OPENSRS_API_URL,
+# OPENSRS_USER and OPENSRS_PASSWORD; or `fake` for local dev and the e2e; unset, the placeholder records and no provider changes.
+# MXRoute takes a domain only once `_da-verify-<key>.<domain>` TXT = domain-verified is in DNS: the platform zone gets it
+# through CLOUDFLARE_DNS_TOKEN before the domain is made, an organization's own domain shows it in its Domains list.
 [vars]
 ORIGIN_URL = "https://origin.freeflow.im"
 # The hosts the built files are served on. The other hosts' paths are the origin's (the plugin, the 301s to the app).

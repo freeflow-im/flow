@@ -23,7 +23,7 @@ export class FakeMailProvider implements MailProvider {
 
   private record(method: string, ...args: unknown[]) { this.calls.push({ method, args }); }
 
-  records(_domain: string, dkim?: DkimRecord | null): ProviderRecords {
+  async records(_domain: string, dkim?: DkimRecord | null): Promise<ProviderRecords> {
     return { mx: [{ host: MX, priority: 10 }], spfInclude: SPF, dmarcPolicy: 'v=DMARC1; p=none', placeholder: true, ...(dkim ? { dkim } : {}) };
   }
 

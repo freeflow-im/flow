@@ -61,7 +61,7 @@ export class OpenSrsMailProvider implements MailProvider {
    * `include:_spf.hostedemail.com`, both clusters. DMARC: OpenSRS names no policy, so `p=none`. DKIM at
    * `<selector>._domainkey.<domain>` (the DKIM article, articles/201000063124).
    */
-  records(domain: string, dkim?: DkimRecord | null): ProviderRecords {
+  async records(domain: string, dkim?: DkimRecord | null): Promise<ProviderRecords> {
     const part = this.cluster === 'a' ? '' : `${this.cluster}.`;
     return {
       mx: [{ host: `mx.${domain}.cust.${part}hostedemail.com`, priority: 0 }],

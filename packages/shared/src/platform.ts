@@ -228,8 +228,8 @@ export interface DnsRecordDTO {
   value: string;
   /** MX only. */
   priority?: number;
-  /** What the record is for. */
-  purpose: 'verification' | 'mx' | 'spf' | 'dmarc' | 'dkim';
+  /** What the record is for: `verification` is ours (`_freeflow.<domain>`), `provider` the mail provider's own proof of ownership. */
+  purpose: 'verification' | 'provider' | 'mx' | 'spf' | 'dmarc' | 'dkim';
 }
 
 /** One of an organization's domains, with the records it needs and whether DNS has them (GET /v1/workspaces/:id/domains). */

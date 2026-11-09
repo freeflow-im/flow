@@ -1,5 +1,21 @@
 # Decision log
 
+## 2026-11-08 — MXRoute is the hosted mail provider, not OpenSRS (operator ruling)
+
+- **MXRoute** (https://api.mxroute.com/docs) instead of OpenSRS Hosted Email: an account exists, the API is a plain REST
+  one with an OpenAPI document, and the price fits. The platform spec's §3.5 named OpenSRS as "likely"; the OpenSRS client
+  stays in the tree (`MAIL_PROVIDER=opensrs`) but no account was opened.
+- **Three provider differences become interface facts** (`packages/edge/src/mailprovider/provider.ts`), not MXRoute
+  special cases: a provider may want its own ownership TXT before taking a domain (`records().verification`, the `pending`
+  error the consumer retries); a provider may make and keep DKIM keys itself (`managesDkim`: "Set up DKIM" returns its
+  record, the directory keeps no key); a provider may have no suspend switch (`suspendsByPassword`: suspend takes the
+  password, resume gives a fresh one).
+- **The platform zone publishes the provider's TXT itself** before the domain is made at the provider, so a new
+  organization's `<slug>.freeflow.im` needs nobody's hand; an organization's own domain shows the TXT in its Domains list
+  beside `_freeflow`, and provisioning stops with the record's name until it is there.
+- **Secrets**: `MXROUTE_SERVER` (a var), `MXROUTE_USERNAME` and `MXROUTE_API_KEY` (Worker secrets); hosted mail turns on
+  with `MAIL_PROVIDER=mxroute` once the Cloudflare DNS token is set too.
+
 ## 2026-11-06 — The platform: principals, accounts, grants, the event bus, manifests (docs/specs/platform.md)
 
 - **Principals and accounts.** A principal (person or agent) is separate from an account (one per organization). Mail and

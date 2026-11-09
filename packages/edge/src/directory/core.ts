@@ -84,7 +84,7 @@ const DOMAIN_CLAIM_TTL = 7 * DAY;
 /** A provider's failure as the API's: its code under `mail_provider_`, its message (never a credential). */
 function providerFailure(err: unknown): never {
   if (!(err instanceof ProviderError)) throw err;
-  const status = err.code === 'rate_limited' ? 429 : err.code === 'unavailable' ? 503 : err.code === 'conflict' ? 409 : 502;
+  const status = err.code === 'rate_limited' ? 429 : err.code === 'unavailable' ? 503 : err.code === 'conflict' || err.code === 'pending' ? 409 : 502;
   throw new ApiError(status, `mail_provider_${err.code}`, err.message);
 }
 
@@ -840,12 +840,26 @@ export class DirectoryCore {
   /**
    * Makes a verified domain's DKIM key and gives it to the mail provider (making the domain there first, with the default
    * limits until provisioning sets the plan's), then keeps the key sealed and returns the TXT record to publish. Run again,
-   * it replaces the key.
+   * it replaces the key. With a provider that manages DKIM itself (MXRoute), the domain is made there and the provider's
+   * own record is returned; nothing is kept here, since `records` carries it from then on.
    */
   async setDomainDkim(organizationId: string, domain: string): Promise<{ domain: string; kind: DomainKind; selector: string; record: DnsRecordDTO }> {
     const row = this.ownDomain(organizationId, domain);
     if (!row.verified) throw conflict('domain_unverified', 'verify the domain before setting up DKIM');
     const provider = this.mailProvider();
+    if (provider.managesDkim) {
+      let records: DnsRecordDTO[];
+      try {
+        await provider.createDomain(row.domain, DEFAULT_DOMAIN_LIMITS);
+        records = recordsFor(row.domain, await provider.records(row.domain));
+      } catch (err) {
+        providerFailure(err);
+      }
+      this.domainStatus.delete(row.domain);
+      const record = records.find((r) => r.purpose === 'dkim');
+      if (!record) throw conflict('dkim_pending', 'the mail provider has not made the domain\'s DKIM key yet; try again in a minute');
+      return { domain: row.domain, kind: row.kind, selector: record.name.split('.')[0]!, record };
+    }
     const key = await generateDkimKey();
     try {
       await provider.createDomain(row.domain, DEFAULT_DOMAIN_LIMITS);
@@ -858,7 +872,7 @@ export class DirectoryCore {
       row.domain, key.selector, key.publicTxt, sealed.blob, sealed.encKeyId, Date.now());
     this.sql.exec('UPDATE domains SET dkim_selector = ? WHERE domain = ?', key.selector, row.domain);
     this.domainStatus.delete(row.domain);
-    const record = recordsFor(row.domain, provider.records(row.domain, { selector: key.selector, value: key.publicTxt })).find((r) => r.purpose === 'dkim')!;
+    const record = recordsFor(row.domain, await provider.records(row.domain, { selector: key.selector, value: key.publicTxt })).find((r) => r.purpose === 'dkim')!;
     return { domain: row.domain, kind: row.kind, selector: key.selector, record };
   }
 
@@ -867,7 +881,7 @@ export class DirectoryCore {
   async describeDomains(organizationId: string, fresh = false): Promise<DomainDTO[]> {
     const provider = this.mailProvider();
     return Promise.all(this.domainsOf(organizationId).map(async (d) => {
-      const records = recordsFor(d.domain, provider.records(d.domain, this.dkimOf(d.domain)), d.kind === 'own' ? d.verifyToken : null);
+      const records = recordsFor(d.domain, await provider.records(d.domain, this.dkimOf(d.domain)).catch(providerFailure), d.kind === 'own' ? d.verifyToken : null);
       let status: DomainDTO['status'] = [];
       if (d.kind === 'own') {
         const cached = this.domainStatus.get(d.domain);

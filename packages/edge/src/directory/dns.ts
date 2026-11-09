@@ -11,6 +11,9 @@ export interface ProviderRecords {
   dmarcPolicy?: string;
   /** The DKIM public key's TXT, once a key is set (phase 5.2): at `<selector>._domainkey.<domain>`. */
   dkim?: { selector: string; value: string };
+  /** The provider's own proof of ownership, when it asks for one before it takes the domain (MXRoute's
+   * `_da-verify-<key>.<domain>` = `domain-verified`); published beside ours. */
+  verification?: { name: string; value: string };
   /** Placeholder values (providers/none.ts, the fake): shown, never written to a real zone. */
   placeholder?: boolean;
 }
@@ -23,10 +26,12 @@ export const verificationName = (domain: string) => `_freeflow.${domain}`;
 
 const DEFAULT_DMARC = 'v=DMARC1; p=none';
 
-/** The records to publish for `domain`: the verification TXT when a token is given, then MX, SPF, DMARC and DKIM. */
+/** The records to publish for `domain`: the verification TXT when a token is given, the provider's own when it has one,
+ * then MX, SPF, DMARC and DKIM. */
 export function recordsFor(domain: string, provider: ProviderRecords, verifyToken?: string | null): DnsRecordDTO[] {
   return [
     ...(verifyToken ? [{ type: 'TXT' as const, name: verificationName(domain), value: verifyToken, purpose: 'verification' as const }] : []),
+    ...(provider.verification ? [{ type: 'TXT' as const, name: provider.verification.name, value: provider.verification.value, purpose: 'provider' as const }] : []),
     ...provider.mx.map((m) => ({ type: 'MX' as const, name: domain, value: m.host, priority: m.priority, purpose: 'mx' as const })),
     { type: 'TXT', name: domain, value: `v=spf1 include:${provider.spfInclude} ~all`, purpose: 'spf' },
     { type: 'TXT', name: `_dmarc.${domain}`, value: provider.dmarcPolicy ?? DEFAULT_DMARC, purpose: 'dmarc' },
