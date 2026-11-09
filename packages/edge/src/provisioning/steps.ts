@@ -65,6 +65,9 @@ async function mailboxStep(t: ProvisioningTarget, deps: ProvisioningDeps): Promi
       if (err instanceof ProviderError && err.code === 'pending' && domain.kind === 'own') throw new ProviderError('bad_request', err.message);
       throw err;
     }
+    // And again once the provider has the domain: a provider that makes the DKIM key itself (MXRoute) has it only now,
+    // and its record goes in our zone with the rest.
+    if (domain.kind === 'platform' && deps.provider.managesDkim) await deps.publishPlatformDns(t.slug);
     await deps.directory.setDomainAtProvider(domain.domain);
   }
   const [row, box] = await Promise.all([deps.mail.hosted(account), deps.provider.getMailbox(address)]);
