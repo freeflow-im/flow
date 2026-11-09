@@ -1,6 +1,6 @@
 import sharp from '../lib/sharp';
 import { z } from 'zod';
-import { and, eq, isNull, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, ne, sql } from 'drizzle-orm';
 import {
   SIDEBAR_COLOR_IDS,
   WORKSPACE_POLICY_DEFAULTS,
@@ -14,6 +14,8 @@ import {
   type WorkspaceDTO,
   type WorkspaceMemberDTO,
   type WorkspacePolicies,
+  type AccountKind,
+  type WorkspaceInviteDTO,
 } from '@flow/shared';
 import { db, schema, type Tx } from '../db/index.js';
 import { newId, presetWorkspaceId } from '../lib/ids.js';
@@ -105,10 +107,10 @@ export interface JoinAccount { address: string | null; accountId: string | null 
  * The joiner's account (platform.md §3.2): the directory makes or reactivates it before the member row is written, so
  * the row can carry its address and id. Null for someone already a member, whose row and role stay as they are.
  */
-export async function accountForJoin(workspaceId: string, userId: string, role: MemberRole = 'member'): Promise<JoinAccount | null> {
+export async function accountForJoin(workspaceId: string, userId: string, role: MemberRole = 'member', kind: AccountKind = 'native'): Promise<JoinAccount | null> {
   if (await isWorkspaceMember(workspaceId, userId)) return null;
   const u = (await db.select({ displayName: users.displayName }).from(users).where(eq(users.id, userId)).limit(1))[0];
-  const account = await ensureAccount(workspaceId, userId, role, u?.displayName ?? '');
+  const account = await ensureAccount(workspaceId, userId, role, u?.displayName ?? '', kind);
   return { address: account?.address ?? null, accountId: account?.id ?? null };
 }
 
@@ -779,7 +781,7 @@ async function sendInviteEmail(workspaceId: string, inviterId: string, email: st
  * register-then-accept — while `inviteUrl` keeps the configured base (a deep
  * link on default local config).
  */
-async function inviteOne(workspaceId: string, inviterId: string, rawEmail: string): Promise<InviteResultDTO> {
+async function inviteOne(workspaceId: string, inviterId: string, rawEmail: string, kind: AccountKind = 'native'): Promise<InviteResultDTO> {
   const email = rawEmail.trim();
   if (!isEmailAddress(email)) return { email: rawEmail, status: 'invalid_email' };
 
@@ -801,7 +803,7 @@ async function inviteOne(workspaceId: string, inviterId: string, rawEmail: strin
     .delete(invites)
     .where(and(eq(invites.workspaceId, workspaceId), eq(invites.email, email), isNull(invites.acceptedAt)))
     .returning({ id: invites.id });
-  const values = { id, workspaceId, email, tokenHash: hashToken(token), invitedBy: inviterId, expiresAt };
+  const values = { id, workspaceId, email, tokenHash: hashToken(token), invitedBy: inviterId, expiresAt, kind };
   try {
     await db.insert(invites).values(values);
   } catch (err: unknown) {
@@ -826,6 +828,7 @@ async function inviteOne(workspaceId: string, inviterId: string, rawEmail: strin
   return {
     email,
     status: emailSent ? (replaced.length > 0 ? 'resent' : 'sent') : 'email_failed',
+    kind,
     id,
     inviteUrl: `${config.inviteUrlBase}${token}`,
     expiresAt: expiresAt.toISOString(),
@@ -848,7 +851,7 @@ async function requireInviteRole(workspaceId: string, inviterId: string): Promis
  * Addresses are de-duplicated case-insensitively (emails are citext), so the
  * same person pasted twice gets one invite and one result.
  */
-export async function createInvites(workspaceId: string, inviterId: string, emails: string[]): Promise<InviteResultDTO[]> {
+export async function createInvites(workspaceId: string, inviterId: string, emails: string[], kind: AccountKind = 'native'): Promise<InviteResultDTO[]> {
   await requireInviteRole(workspaceId, inviterId);
   const seen = new Set<string>();
   const results: InviteResultDTO[] = [];
@@ -856,9 +859,40 @@ export async function createInvites(workspaceId: string, inviterId: string, emai
     const key = raw.trim().toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    results.push(await inviteOne(workspaceId, inviterId, raw));
+    results.push(await inviteOne(workspaceId, inviterId, raw, kind));
   }
   return results;
+}
+
+/** The workspace's pending invitations (docs/specs/workspace-admin.md §6.3), for its owner or admins: not accepted, not
+ * declined, not expired; newest first. */
+export async function listPendingInvites(workspaceId: string, actorId: string): Promise<WorkspaceInviteDTO[]> {
+  await requireWorkspaceAdmin(workspaceId, actorId);
+  const rows = await db
+    .select({ i: invites, by: users.displayName })
+    .from(invites)
+    .innerJoin(users, eq(users.id, invites.invitedBy))
+    .where(and(eq(invites.workspaceId, workspaceId), isNull(invites.acceptedAt), isNull(invites.declinedAt), gt(invites.expiresAt, new Date())))
+    .orderBy(desc(invites.createdAt), desc(invites.id));
+  return rows.map(({ i, by }) => ({
+    id: i.id,
+    email: i.email,
+    kind: i.kind === 'guest' ? 'guest' : 'native',
+    invitedBy: { id: i.invitedBy, displayName: by },
+    createdAt: i.createdAt.toISOString(),
+    expiresAt: i.expiresAt.toISOString(),
+  }));
+}
+
+/** Revokes a pending invitation: its link stops working. One already accepted or declined is history, and a 409. */
+export async function revokeInvite(workspaceId: string, actorId: string, inviteId: string): Promise<void> {
+  await requireWorkspaceAdmin(workspaceId, actorId);
+  const inv = (await db.select().from(invites).where(and(eq(invites.id, inviteId), eq(invites.workspaceId, workspaceId))).limit(1))[0];
+  if (!inv) throw notFound('invite not found');
+  if (inv.acceptedAt) throw conflict('invite_used', 'invite already accepted');
+  if (inv.declinedAt) throw conflict('invite_declined', 'invite was declined');
+  await db.delete(invites).where(eq(invites.id, inv.id));
+  if (inv.invitedUserId) publishInviteEnded(inv.invitedUserId, workspaceId, inv.id);
 }
 
 /**
@@ -904,7 +938,7 @@ export async function acceptInvite(
   if (inv.declinedAt) throw conflict('invite_declined', 'invite was declined');
   if (inv.expiresAt < new Date()) throw badRequest('invite_expired', 'invite has expired');
 
-  const account = await accountForJoin(inv.workspaceId, userId);
+  const account = await accountForJoin(inv.workspaceId, userId, 'member', inv.kind === 'guest' ? 'guest' : 'native');
   const joined = await db.transaction(async (tx) => {
     await tx.update(invites).set({ acceptedAt: new Date() }).where(eq(invites.id, inv.id));
     return enrollInWorkspace(tx, inv.workspaceId, userId, 'member', undefined, account);

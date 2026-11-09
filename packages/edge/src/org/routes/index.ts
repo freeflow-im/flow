@@ -428,11 +428,22 @@ export function registerRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const body = parse(CreateInviteBody, req.body);
     if (body.emails) {
-      const results = await ws.createInvites(id, req.user.id, body.emails);
+      const results = await ws.createInvites(id, req.user.id, body.emails, body.kind ?? 'native');
       return reply.status(201).send({ results });
     }
     const dto = await ws.createInvite(id, req.user.id, body.email!);
     return reply.status(201).send(dto);
+  });
+
+  // The workspace's pending invitations, for its owner and admins (docs/specs/workspace-admin.md §6.3), and revoking one.
+  app.get('/v1/workspaces/:id/invites', { preHandler: requireAuth }, async (req) => {
+    const { id } = req.params as { id: string };
+    return { invites: await ws.listPendingInvites(id, req.user.id) };
+  });
+  app.delete('/v1/workspaces/:id/invites/:inviteId', { preHandler: requireAuth }, async (req) => {
+    const { id, inviteId } = req.params as { id: string; inviteId: string };
+    await ws.revokeInvite(id, req.user.id, inviteId);
+    return { ok: true };
   });
 
   app.post('/v1/invites/accept', { preHandler: requireAuth }, async (req) => {

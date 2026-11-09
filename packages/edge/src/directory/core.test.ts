@@ -378,21 +378,20 @@ describe('guest accounts (platform.md §3.3)', () => {
   const policies = (org: string, p: Record<string, unknown>) => core.applyOrgChanges(org, [{ kind: 'policies', id: org, user_id: null, role: null, payload: JSON.stringify(p) }]);
   const addressRows = () => nodeSqlOf(core).exec('SELECT address FROM addresses ORDER BY address').toArray().map((r) => r.address);
 
-  it('joins as native by default, and as a guest (no address, active) once the policy says so; an owner is always native', async () => {
+  it('joins as native unless the join asks for a guest (no address, active); an owner is always native', async () => {
     const [a, b, c] = [await signUp('a@example.com'), await signUp('b@example.com'), await signUp('c@example.com')];
     const org = newId();
     core.reserveSlug('acme', org);
     await join(org, a.user.id, 'owner');
     await join(org, b.user.id);
     expect(core.accountFor(b.user.id, org)).toMatchObject({ kind: 'native', address: 'ann2@acme.freeflow.im', state: 'active' });
-    await policies(org, { inviteBy: 'admins', agentsBy: 'members', linkSharing: true, defaultAccountKind: 'guest' });
-    const guest = core.ensureAccount(c.user.id, org, 'member');
+    // A guest invitation's join (docs/specs/workspace-admin.md §6.5).
+    const guest = core.ensureAccount(c.user.id, org, 'member', undefined, 'guest');
     expect(guest).toMatchObject({ kind: 'guest', address: null, state: 'active' });
     expect(addressRows()).toEqual(['ann2@acme.freeflow.im', 'ann@acme.freeflow.im']);
     const other = newId();
     core.reserveSlug('beta', other);
-    await policies(other, { defaultAccountKind: 'guest' });
-    await join(other, c.user.id, 'owner');
+    core.ensureAccount(c.user.id, other, 'owner', undefined, 'guest');
     expect(core.accountFor(c.user.id, other)).toMatchObject({ kind: 'native', address: 'ann@beta.freeflow.im' });
     // A removed guest comes back a guest, active.
     await leave(org, c.user.id);
@@ -429,13 +428,11 @@ describe('guest accounts (platform.md §3.3)', () => {
     await join(org, people[0]!.user.id, 'owner');
     await join(org, people[1]!.user.id, 'admin');
     for (const p of people.slice(2)) await join(org, p.user.id);
-    // An agent is always native: the bulk action and a `guest` default both leave it alone.
+    // An agent is always native: the bulk action and a join that asks for a guest both leave it alone.
     const bot = newId();
     nodeSqlOf(core).exec("INSERT INTO users (id, email, password_hash, display_name, is_agent, agent_username, sponsor_user_id, created_at) VALUES (?, ?, 'x', 'Builder', 1, 'builder', ?, 1)", bot, `${bot}@agents.flow.local`, people[0]!.user.id);
-    await policies(org, { defaultAccountKind: 'guest' });
-    await join(org, bot);
+    core.ensureAccount(bot, org, 'member', undefined, 'guest');
     expect(core.accountFor(bot, org)).toMatchObject({ kind: 'native', address: 'builder@acme.freeflow.im' });
-    await policies(org, { defaultAccountKind: 'native' });
     core.setAccountKind(org, core.accountFor(people[2]!.user.id, org)!.id, 'guest');
     await leave(org, people[4]!.user.id);
     const out = core.makeMembersGuests(org);

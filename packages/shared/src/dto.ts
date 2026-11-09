@@ -107,11 +107,9 @@ export interface WorkspacePolicies {
   agentsBy: 'admins' | 'members';
   /** Stored only until phase 3 enforces it. */
   linkSharing: boolean;
-  /** What a new joiner's account is (platform.md §3.3): `native` (an address and a mailbox) or `guest` (neither). */
-  defaultAccountKind: 'native' | 'guest';
 }
 
-export const WORKSPACE_POLICY_DEFAULTS: WorkspacePolicies = { inviteBy: 'admins', agentsBy: 'members', linkSharing: true, defaultAccountKind: 'native' };
+export const WORKSPACE_POLICY_DEFAULTS: WorkspacePolicies = { inviteBy: 'admins', agentsBy: 'members', linkSharing: true };
 
 export type MemberRole = 'owner' | 'admin' | 'member';
 
@@ -152,6 +150,18 @@ export interface InviteDTO {
   expiresAt: string;
   /** true when the invite email was sent to `email` (send failures leave the invite valid). */
   emailSent?: boolean;
+  /** What the joiner becomes (docs/specs/workspace-admin.md §6.5): a native member, or a chat guest. */
+  kind?: 'native' | 'guest';
+}
+
+/** One of a workspace's pending invitations, for its admins (GET /v1/workspaces/:id/invites). No token: it was shown once. */
+export interface WorkspaceInviteDTO {
+  id: string;
+  email: string;
+  kind: 'native' | 'guest';
+  invitedBy: { id: string; displayName: string };
+  createdAt: string;
+  expiresAt: string;
 }
 
 /** Per-address outcome of a batch invite (issue #577). */
@@ -170,6 +180,8 @@ export type InviteStatus =
 export interface InviteResultDTO {
   email: string;
   status: InviteStatus;
+  /** What the joiner becomes; absent when nothing was created. */
+  kind?: 'native' | 'guest';
   /** invite id — absent for `already_member` / `invalid_email` */
   id?: string;
   /** <INVITE_URL_BASE><token>, raw token returned once — absent when nothing was created */

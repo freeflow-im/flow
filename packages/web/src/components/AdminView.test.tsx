@@ -39,20 +39,18 @@ describe('OrganizationSection', () => {
 
   it('reflects stored policies, and shows an admin no transfer', () => {
     const html = renderToStaticMarkup(
-      <OrganizationSection ws={ws({ role: 'admin', policies: { inviteBy: 'admins', agentsBy: 'members', linkSharing: false, defaultAccountKind: 'guest' } })} roster={roster} meId="u-Bob" />,
+      <OrganizationSection ws={ws({ role: 'admin', policies: { inviteBy: 'admins', agentsBy: 'members', linkSharing: false } })} roster={roster} meId="u-Bob" />,
     );
     expect(html).not.toMatch(/admin-policy-links[^>]*checked/);
     expect(html).toMatch(/<option value="admins" selected/);
     expect(html).not.toContain('admin-transfer-select');
-    expect(html).toMatch(/<option value="guest" selected/);
   });
 
-  it('defaults new members to native when the server sends no kind policy, and offers to make every member a guest', () => {
+  it('has no "new members join as" setting (joiners are native, decision_log 2026-11-09), and offers to make every member a guest', () => {
     const html = renderToStaticMarkup(
-      <OrganizationSection ws={ws({ policies: { inviteBy: 'admins', agentsBy: 'members', linkSharing: true } as never })} roster={roster} meId="u-Ann" />,
+      <OrganizationSection ws={ws({ policies: { inviteBy: 'admins', agentsBy: 'members', linkSharing: true } })} roster={roster} meId="u-Ann" />,
     );
-    expect(html).toContain('admin-policy-kind');
-    expect(html).toMatch(/<option value="native" selected/);
+    expect(html).not.toContain('admin-policy-kind');
     expect(html).toMatch(/admin-guests[^>]*>Make every member a guest</);
     expect(html).not.toContain('admin-guests-confirm');
   });

@@ -8,7 +8,7 @@ import { withDb, schema, type DB } from './db/index';
 import { directoryLink } from './directoryLink';
 import { createAgentInvite, inviteAgentToWorkspace } from './services/agents';
 import {
-  accountForJoin, createJoinLink, createWorkspace, enrollInWorkspace, listMembers, myWorkspaces, setMemberRole, transferWorkspaceOwnership, updateWorkspace,
+  acceptInvite, accountForJoin, createInvites, createJoinLink, createWorkspace, enrollInWorkspace, listMembers, listPendingInvites, myWorkspaces, revokeInvite, setMemberRole, transferWorkspaceOwnership, updateWorkspace,
 } from './services/workspaces';
 
 const ANN = '00000000-0000-7000-8000-00000000000a';
@@ -20,6 +20,7 @@ beforeAll(() => { process.env.FLOW_DATA_KEY = randomBytes(32).toString('base64')
 let db: DB;
 let workspaceId: string;
 let asked: [string, string][];
+let askedKinds: [string, string][];
 /** The state the directory reports for every account, for the sponsor rule (§3.3). */
 let accountState: AccountDTO['state'];
 /** The kind the directory reports for every account (§3.3). */
@@ -27,9 +28,10 @@ let accountKind: AccountDTO['kind'];
 
 /** The directory's half, as the object provides it: an address per joiner. */
 const run = <T>(fn: () => Promise<T>) => directoryLink.run({
-  ensureAccount: async (organizationId, userId, role, displayName) => {
+  ensureAccount: async (organizationId, userId, role, displayName, kind = 'native') => {
     asked.push([userId, role]);
-    return { id: `acct-${userId}`, principalId: userId, organizationId, address: `${displayName.toLowerCase()}@acme.freeflow.im`, displayName, role, kind: 'native', state: 'active', createdAt: '' } satisfies AccountDTO;
+    askedKinds.push([userId, kind]);
+    return { id: `acct-${userId}`, principalId: userId, organizationId, address: kind === 'guest' ? null : `${displayName.toLowerCase()}@acme.freeflow.im`, displayName, role, kind, state: 'active', createdAt: '' } satisfies AccountDTO;
   },
   accountFor: async (organizationId, userId) =>
     ({ id: `acct-${userId}`, principalId: userId, organizationId, address: accountKind === 'guest' ? null : 'x@acme.freeflow.im', displayName: 'x', role: 'member', kind: accountKind, state: accountState, createdAt: '' }),
@@ -38,6 +40,7 @@ const run = <T>(fn: () => Promise<T>) => directoryLink.run({
 beforeEach(async () => {
   db = orgStorage().db;
   asked = [];
+  askedKinds = [];
   accountState = 'active';
   accountKind = 'native';
   await run(async () => {
@@ -60,7 +63,7 @@ describe('organizations', () => {
     expect(await run(() => accountForJoin(workspaceId, BOB))).toBeNull();
     expect(asked).toHaveLength(3);
     const [mine] = await run(() => myWorkspaces(BOB));
-    expect(mine).toMatchObject({ role: 'member', address: 'bob@acme.freeflow.im', policies: { inviteBy: 'admins', agentsBy: 'members', linkSharing: true, defaultAccountKind: 'native' } });
+    expect(mine).toMatchObject({ role: 'member', address: 'bob@acme.freeflow.im', policies: { inviteBy: 'admins', agentsBy: 'members', linkSharing: true } });
   });
 
   it('lets only admins invite by default, members add agents, and refuses them with policy_forbids when the policy says admins', async () => {
@@ -71,14 +74,12 @@ describe('organizations', () => {
     await expect(run(() => createJoinLink(workspaceId, BOT))).rejects.toMatchObject({ statusCode: 403, code: 'forbidden' });
     await expect(run(() => updateWorkspace(workspaceId, BOB, { policies: { inviteBy: 'admins' } }))).rejects.toMatchObject({ statusCode: 403 });
     const ws = await run(() => updateWorkspace(workspaceId, ANN, { policies: { inviteBy: 'admins', agentsBy: 'admins' } }));
-    expect(ws.policies).toEqual({ inviteBy: 'admins', agentsBy: 'admins', linkSharing: true, defaultAccountKind: 'native' });
+    expect(ws.policies).toEqual({ inviteBy: 'admins', agentsBy: 'admins', linkSharing: true });
     await expect(run(() => createJoinLink(workspaceId, BOB))).rejects.toMatchObject({ statusCode: 403, code: 'policy_forbids' });
     await expect(run(() => createAgentInvite(workspaceId, BOB))).rejects.toMatchObject({ statusCode: 403, code: 'policy_forbids' });
     await run(() => createJoinLink(workspaceId, ANN));
     const kept = await run(() => updateWorkspace(workspaceId, ANN, { policies: { linkSharing: false } }));
-    expect(kept.policies).toEqual({ inviteBy: 'admins', agentsBy: 'admins', linkSharing: false, defaultAccountKind: 'native' });
-    const guests = await run(() => updateWorkspace(workspaceId, ANN, { policies: { defaultAccountKind: 'guest' } }));
-    expect(guests.policies).toEqual({ inviteBy: 'admins', agentsBy: 'admins', linkSharing: false, defaultAccountKind: 'guest' });
+    expect(kept.policies).toEqual({ inviteBy: 'admins', agentsBy: 'admins', linkSharing: false });
   });
 
   it('renames the organization for an owner or admin, within 1 to 80 characters; the slug stays', async () => {
@@ -88,6 +89,28 @@ describe('organizations', () => {
     expect(renamed.slug).toBe(before.slug);
     await expect(run(() => updateWorkspace(workspaceId, ANN, { name: '   ' }))).rejects.toMatchObject({ statusCode: 400, code: 'bad_name' });
     await expect(run(() => updateWorkspace(workspaceId, BOB, { name: 'Bob Co' }))).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it('invites people as members or as chat guests; the pending list shows them, a revoke ends one, an accepted guest joins as a guest', async () => {
+    const results = await run(() => createInvites(workspaceId, ANN, ['eve@example.com', 'fay@example.com'], 'guest'));
+    expect(results.map((r) => [r.email, r.kind, r.status !== 'invalid_email' && r.status !== 'already_member'])).toEqual([['eve@example.com', 'guest', true], ['fay@example.com', 'guest', true]]);
+    await run(() => createInvites(workspaceId, ANN, ['gil@example.com']));
+    const pending = await run(() => listPendingInvites(workspaceId, ANN));
+    expect(pending.map((i) => [i.email, i.kind, i.invitedBy.id]).sort()).toEqual([['eve@example.com', 'guest', ANN], ['fay@example.com', 'guest', ANN], ['gil@example.com', 'native', ANN]]);
+    await expect(run(() => listPendingInvites(workspaceId, BOB))).rejects.toMatchObject({ statusCode: 403 });
+    await run(() => revokeInvite(workspaceId, ANN, pending.find((i) => i.email === 'fay@example.com')!.id));
+    expect((await run(() => listPendingInvites(workspaceId, ANN))).map((i) => i.email).sort()).toEqual(['eve@example.com', 'gil@example.com']);
+    // Eve signs up and accepts: the directory is asked for a guest account.
+    const EVE = '00000000-0000-7000-8000-00000000000e';
+    db.insert(schema.users).values({ id: EVE, email: 'eve@example.com', passwordHash: '!', displayName: 'Eve' }).run();
+    const eveInvite = results[0]!.inviteUrl!.split('/').pop()!;
+    await run(() => acceptInvite(EVE, { token: eveInvite }));
+    expect(askedKinds).toContainEqual([EVE, 'guest']);
+    // A guest's member row carries no address (the DTO leaves the field out).
+    const eve = (await run(() => listMembers(workspaceId, ANN))).find((m) => m.userId === EVE);
+    expect(eve).toBeTruthy();
+    expect(eve!.address ?? null).toBeNull();
+    expect((await run(() => listPendingInvites(workspaceId, ANN))).map((i) => i.email)).toEqual(['gil@example.com']);
   });
 
   it('hands the organization to a person: one owner throughout, and only the owner may hand it on', async () => {

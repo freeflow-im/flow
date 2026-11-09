@@ -18,7 +18,7 @@ const org: WorkspaceDTO = {
   unfurlEnabled: true,
   unfurlDomainAllowlist: null,
   role: 'owner',
-  policies: { inviteBy: 'admins', agentsBy: 'members', linkSharing: true, defaultAccountKind: 'native' },
+  policies: { inviteBy: 'admins', agentsBy: 'members', linkSharing: true },
 };
 
 let calls: { method: string; path: string; body: unknown }[];

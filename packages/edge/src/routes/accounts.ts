@@ -4,7 +4,7 @@
 import { Hono, type Context } from 'hono';
 import type { ZodTypeAny, z } from 'zod';
 import { BulkAccountKindBody, SetAccountKindBody, type AccountDTO, type AccountKindResult, type BulkAccountKindResult } from '@flow/shared';
-import { badRequest } from '../errors';
+import { ApiError, badRequest } from '../errors';
 import { directory, type AuthEnv } from './auth';
 import { adminOf } from './domains';
 
@@ -29,6 +29,17 @@ accountRoutes.get('/v1/workspaces/:id/accounts', async (c) => {
   const id = await adminOf(c as never, 'see accounts');
   const accounts = (await directory(c, 'accountsOfOrganization', id)).filter((a) => a.state !== 'removed');
   return c.json({ accounts });
+});
+
+/** One account sent to be set up (docs/specs/workspace-admin.md §6.4): the Members section's Retry. A guest gets no
+ * mailbox (409); an account with one already, or removed, is left alone (`queued: false`). */
+accountRoutes.post('/v1/workspaces/:id/accounts/:accountId/provision', async (c) => {
+  const id = await adminOf(c as never, 'set up mailboxes');
+  const account = await directory(c, 'accountById', c.req.param('accountId'));
+  if (!account || account.organizationId !== id) throw new ApiError(404, 'not_found', 'account not found');
+  if (account.kind === 'guest') throw new ApiError(409, 'guest', 'a guest has no mailbox');
+  const queued = await directory(c, 'provisionAccount', account.id);
+  return c.json({ queued });
 });
 
 accountRoutes.patch('/v1/workspaces/:id/accounts/:accountId/kind', async (c) => {
