@@ -1,5 +1,17 @@
 # Decision log
 
+## 2026-11-09 — Invitations make native members; a guest invitation is a separate action (operator ruling)
+
+- **Whoever joins a workspace is a native member**, with an address and a mailbox: by invitation, by join link or by
+  Google self-registration. There is no "new members join as" setting; the `defaultAccountKind` policy from the guest
+  accounts ruling below is retired (read as `native`, removed from the type when guest invitations land).
+- **Inviting a guest is its own action** ("Invite a chat guest" in Workspace settings › Members), so nobody makes a
+  colleague a guest by mistake. The invitation carries the kind; accepting it makes a guest account.
+- **A guest uses Chat only.** No address, no mailbox, no Mail or Calendar; whether a document shared with a guest opens
+  for them is open (`docs/specs/workspace-admin.md` §9).
+- **Google self-registration on any verified domain is later.** For now the domain offered stays the admin's own Google
+  login domain (phase 16 §5a).
+
 ## 2026-11-09 — Guest accounts: members with no mailbox and no address (operator ruling)
 
 - **A guest has no address**, not an address without a mailbox: an address that bounces is a trap for whoever writes to

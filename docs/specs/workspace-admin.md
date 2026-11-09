@@ -88,21 +88,30 @@ Owner-only actions sit at the end of General, under a rule: **Transfer ownership
 | Who can invite people: every member / owners and admins | `policies.inviteBy` | Organization tab |
 | Join link: on/off, the link with Copy, Reset | `GET/POST/DELETE …/join-link` | inside Invite People |
 | Google self-registration: "Anyone with a Google account at `<domain>` may join" | `googleSelfRegisterDomain` | a toggle inside Invite People, shown only to an admin signed in with Google on a non-consumer domain |
-| New members join as: native (an address and a mailbox) / guest (neither) | `policies.defaultAccountKind` | Organization tab |
 | Who can add agents: every member / owners and admins | `policies.agentsBy` | Organization tab |
 | Allow sharing by link | `policies.linkSharing` | Organization tab |
 | Link previews: on/off, and the domain allowlist (one per line, empty = any) | `unfurlEnabled`, `unfurlDomainAllowlist` | the fields exist on the row; no admin UI |
 
-The Google self-registration control keeps today's rule for v1: the domain offered is the one the signed-in admin's
-Google account is on (`useSelfRegisterDomain`), and the server re-checks it. Offering any verified domain of the
-organization is an open question (§9).
+The Google self-registration control keeps today's rule: the domain offered is the one the signed-in admin's Google
+account is on (`useSelfRegisterDomain`), and the server re-checks it. Offering any verified domain of the organization
+comes later (ruling 7, §10).
+
+There is no "new members join as" setting. Whoever joins, by invitation, join link or Google self-registration, is a
+native member with an address and a mailbox (ruling 6). A guest is made by a separate action in Members (§3.2) or by
+changing an existing member's kind.
 
 ### 3.2 Members
 
 The roster table from the Organization tab, with these changes:
 
 - **Invite people** button at the top (opens today's Invite People dialog, minus the join link and the Google toggle,
-  which moved to General). Under it, **Pending invitations**: email, who invited, when, with **Revoke** (new
+  which moved to General). Everyone invited this way becomes a native member.
+- **Invite a chat guest**, a second, smaller button beside it. A guest invitation makes a guest account when it is
+  accepted (§6.5): no address, no mailbox, and the suite bar shows Chat alone. The dialog says so in one line
+  ("Guests use Chat only. They get no address and no mailbox here.") so nobody invites a colleague as a guest by
+  mistake. Guests are for people from outside the organization who are in its conversations: a client, a contractor,
+  the other side of a project.
+- Under both, **Pending invitations**: email, kind (member or guest), who invited, when, with **Revoke** (new
   endpoints, §6.3). Today an invitation, once sent, is invisible to admins.
 - Filter chips: **All · People · Agents · Guests · Needs attention**. "Needs attention" is every account whose state
   is not `active` or that carries a `statusMessage`.
@@ -292,7 +301,19 @@ routes go beside them. `InviteDTO` exists in `@flow/shared` and is returned by `
 the organization's and not `removed`. It calls the directory's `provisionAccount` (added 2026-11-09 for the
 edge-secret admin route, which stays for operators). A guest answers 409 `guest`: guests get no mailbox.
 
-### 6.5 Nothing else
+### 6.5 Guest invitations
+
+`POST /v1/workspaces/:id/invites` takes `kind?: 'native' | 'guest'` (default `native`); `InviteDTO` carries `kind`.
+`acceptInvite` passes the invitation's kind to `accountForJoin`, which today reads the organization's
+`defaultAccountKind` policy; the join link and Google self-registration always pass `native`. The owner and agents
+stay native whatever is asked (the existing rule). The policy field `defaultAccountKind` is retired: the client stops
+showing it, the server reads it as `native`, and it leaves `WorkspacePolicies` in the same PR.
+
+Guests see Chat only: the suite bar (`platform.md` §6.1 manifests) lists Chat for an account whose kind is `guest`,
+and Mail's and Calendar's routes answer 403 `guest` for it. Whether a guest may open a document shared with them is
+an open question (§9).
+
+### 6.6 Nothing else
 
 Domains, DKIM, verify, primary, remove, kinds, policies, join link, emoji, avatar, agents and the bulk actions all
 have their endpoints. The screen is mostly a client change.
@@ -317,8 +338,10 @@ native client and nothing an agent observes changes.
    What people see: one "Workspace settings…" entry; the workspace can be renamed.
 2. **Domains & mail.** The step cards (§4), **Turn on mail**, the platform card, the Mail summary; `atProvider`.
    What people see: an admin takes `example.com` to "mail ready" without leaving the screen.
-3. **Members and provisioning.** The Mail column and filters, **Retry setup**, pending invitations with revoke;
-   `hosted`, §6.3, §6.4. What people see: why a member has no mailbox, and a button that fixes it.
+3. **Members and provisioning.** The Mail column and filters, **Retry setup**, pending invitations with revoke,
+   **Invite a chat guest** and the Chat-only suite bar for guests, the `defaultAccountKind` policy retired; `hosted`,
+   §6.3, §6.4, §6.5. What people see: why a member has no mailbox, a button that fixes it, and a way to bring an
+   outsider into Chat without giving them a mailbox.
 4. **Agents & apps.** The section; the menu's Agents entry goes.
 5. **e2e.** With the fake provider and a faked resolver (`deps.resolve`): add → verify → records present → turn on
    mail → DKIM present → primary → a new member's address lands on the domain. One run through the Members
@@ -326,18 +349,20 @@ native client and nothing an agent observes changes.
 
 ## 9. Open questions
 
-1. **New joiners' default kind.** The setting is `policies.defaultAccountKind`, on General. Locked In's is `native`
-   today; its 54 existing members were made guests by hand. Should Locked In's default be `guest`?
-2. **Google self-registration on any verified domain.** Today the domain is the admin's own Google login domain
-   (phase 16 §5a). With verified domains in the directory the natural rule is "any verified domain of the
-   organization"; the server would check the joiner's verified Google email against the domains table instead.
-3. **Per-organization retention.** `MAIL_RETENTION_DAYS` is global. A policy field `mailRetentionDays` with the
+1. **What a guest sees beyond Chat.** Ruling 6 limits guests to Chat. Does a document shared with a guest open for
+   them in Docs (the share is explicit, so probably yes), and does a guest get the assistant?
+2. **Per-organization retention.** `MAIL_RETENTION_DAYS` is global. A policy field `mailRetentionDays` with the
    global as default is small; is it wanted before anyone asks?
-4. **Removing a domain at the provider.** `removeDomain` leaves the domain on MXRoute. The provider call exists
+3. **Removing a domain at the provider.** `removeDomain` leaves the domain on MXRoute. The provider call exists
    (`deleteDomain`, refused while mailboxes exist); should Remove call it once no addresses remain?
-5. **Transfer ownership to a non-member.** Today the heir must be a member and a person. Keep.
+4. **Transfer ownership to a non-member.** Today the heir must be a member and a person. Keep.
 
-## 10. Proposed rulings (for `decision_log.md` once confirmed)
+Answered 2026-11-09 (Scott; in `decision_log.md`): new joiners are native members, not a policy choice; a guest
+invitation is a separate action limited to Chat; Google self-registration on any verified domain is later.
+
+## 10. Rulings
+
+Proposed, for `decision_log.md` once confirmed:
 
 1. Workspace administration is one web screen, **Workspace settings…**, with sections; the workspace menu keeps
    that entry and **Automations** and loses the rest.
@@ -346,3 +371,10 @@ native client and nothing an agent observes changes.
    the platform subdomain needs no step.
 4. Changing the primary domain never moves an existing address.
 5. Members who are not admins see Automations and nothing else of the screen.
+
+Ruled by Scott on 2026-11-09 (recorded in `decision_log.md`):
+
+6. Whoever joins a workspace, by invitation, join link or Google self-registration, is a native member. Inviting a
+   guest is a separate action, and a guest uses Chat only. The `defaultAccountKind` policy is retired.
+7. Google self-registration on any verified domain of the organization is later; for now the domain stays the
+   admin's own Google login domain.
