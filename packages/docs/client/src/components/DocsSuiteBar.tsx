@@ -103,6 +103,7 @@ export function DocsSuiteBar() {
           },
           onAdd: () => toChat('chooser'),
           ...(active?.role === 'owner' || active?.role === 'admin' ? { onSettings: () => intent.admin() } : {}),
+          ...(active ? { onAutomations: () => intent.admin('automations') } : {}),
           ...(active ? { onInvite: () => toChat('invite') } : {}),
         }}
         search={

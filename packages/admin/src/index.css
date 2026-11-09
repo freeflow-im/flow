@@ -26,6 +26,12 @@
   --color-warn: #b06000;
   --color-warn-bg: #fef7e0;
   --color-warn-border: #f9e1a0;
+  /* Chat's names for the same colours, for the Automations section moved from Chat (sections/automations). */
+  --color-base: #ffffff;
+  --color-accent: #1a73e8;
+  --color-accent-deep: #1558b0;
+  --color-ink-soft: #3c4043;
+  --color-daypill: #f1f3f4;
 }
 
 html,

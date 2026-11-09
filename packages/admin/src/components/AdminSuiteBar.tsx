@@ -45,6 +45,7 @@ export function AdminSuiteBar() {
           entries: list.map((o) => ({ id: o.id, name: o.name, unread: o.unreadCount ?? 0, active: o.id === active?.id, avatarUrl: o.avatarUrl })),
           onSelect: chooseOrganization,
           onAdd: () => toChat('chooser'),
+          ...(active ? { onAutomations: () => intent.admin('automations') } : {}),
           ...(active ? { onInvite: () => toChat('invite') } : {}),
         }}
         notifications={{ onOpen: () => toChat('activity') }}

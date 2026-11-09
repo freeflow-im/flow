@@ -46,6 +46,7 @@ export function ContactsSuiteBar({ search, guest = false }: { search: { value: s
           onSelect: chooseOrganization,
           onAdd: () => toChat('chooser'),
           ...(active?.role === 'owner' || active?.role === 'admin' ? { onSettings: () => intent.admin() } : {}),
+          ...(active ? { onAutomations: () => intent.admin('automations') } : {}),
           ...(active ? { onInvite: () => toChat('invite') } : {}),
         }}
         search={search}

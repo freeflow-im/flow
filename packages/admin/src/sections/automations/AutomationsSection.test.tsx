@@ -1,14 +1,13 @@
-// @vitest-environment happy-dom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChannelDTO, SubscriptionDTO, WorkspaceMemberDTO } from '@flow/shared';
-import { ApiError } from '../lib/connectionRuntime';
+import { AdminApiError } from '../../api';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const api = vi.fn();
-vi.mock('../lib/useBoundApi', () => ({ useBoundApi: () => ({ api }) }));
+vi.mock('../../api', () => ({ request: (...args: unknown[]) => api(...args), AdminApiError: class AdminApiError extends Error { constructor(public readonly code: string, message: string, public readonly status: number) { super(message); } } }));
 
 import { AutomationsSection, buildSubscriptionBody, emptyDraft } from './AutomationsSection';
 
@@ -157,7 +156,7 @@ describe('the new-automation form', () => {
   it('builds a scheduled wake, and shows the server\'s agent_forbidden message', async () => {
     await mount([]);
     api.mockImplementation(async (method: string) => {
-      if (method === 'POST') throw new ApiError(403, 'agent_forbidden', "only the agent's sponsor may make it a wake subscription");
+      if (method === 'POST') throw new AdminApiError('agent_forbidden', "only the agent's sponsor may make it a wake subscription", 403);
       return { subscriptions: [] };
     });
     await click('automation-trigger-schedule');

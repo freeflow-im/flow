@@ -1,9 +1,13 @@
-// The Automations page (platform.md §5.2, phase 2.5): the event-bus subscriptions the caller consumes or owns, their wake
-// jobs, and a form for a new one — wake an agent or post a message, when an event happens or on a schedule. Every member
-// sees it; the server decides what each may create (a wake needs the agent's sponsor, or an owner or admin).
+// The Automations section (platform.md §5.2, phase 2.5; docs/specs/workspace-admin.md §3.5), moved here from Chat's
+// admin panel: the event-bus subscriptions the caller consumes or owns, their wake jobs, and a form for a new one — wake
+// an agent or post a message, when an event happens or on a schedule. Every member sees it; the server decides what each
+// may create (a wake needs the agent's sponsor, or an owner or admin).
 import { useCallback, useEffect, useState } from 'react';
 import type { AgentJobDTO, ChannelDTO, CreateSubscriptionBody, SubscriptionDTO, WorkspaceMemberDTO } from '@flow/shared';
-import { useBoundApi } from '../lib/useBoundApi';
+import { request } from '../../api';
+
+/** The suite's API with the session cookie, in the shape Chat's bound api had. */
+const useBoundApi = () => ({ api: request });
 
 export const EVENT_TYPE_SUGGESTIONS = [
   'chat.message.created',

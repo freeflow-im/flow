@@ -8,7 +8,7 @@ const search = (url: string) => new URL(url, 'https://app.freeflow.im').search;
 
 describe('readChatIntent', () => {
   it('reads the suite bars’ pages, an object’s address, the create and share intents', () => {
-    expect(readChatIntent('?open=admin')).toEqual({ kind: 'page', page: 'admin' });
+    expect(readChatIntent('?open=invite')).toEqual({ kind: 'page', page: 'invite' });
     expect(readChatIntent('?open=artifact%3Aa1')).toEqual({ kind: 'artifact', id: 'a1' });
     expect(readChatIntent('?open=message:m1')).toEqual({ kind: 'message', id: 'm1' });
     expect(readChatIntent(search(createAddress('chat-message', { channel: 'c1', text: 'Hello there' })))).toEqual({ kind: 'channel', id: 'c1', text: 'Hello there' });
