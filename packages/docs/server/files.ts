@@ -1,8 +1,8 @@
 // Stored files (generated PDFs, uploads). The bytes live next to the sheets as files named by id; the table
 // holds the metadata. Who may read or change a file is server/access.ts.
 import { newFileId } from './ids.ts';
-import { closeSync, existsSync, openSync, readSync } from 'node:fs';
-import { copyFile, mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { closeSync, openSync, readSync } from '#runtime/fs';
+import { copyFile, mkdir, rename, rm, stat, writeFile } from '#runtime/fsp';
 import path from 'node:path';
 import { MAX_TEXT_EDIT_BYTES, type StoredFile } from '../shared/types.ts';
 import type { DB } from './db.ts';
@@ -233,7 +233,7 @@ export class FileStore {
   async revert(who: ViewerArg, id: string): Promise<StoredFile | null> {
     const f = this.get(who, id, 'editor');
     const prev = f && this.previousPath(f.file);
-    if (!f || !prev || !existsSync(prev)) return null;
+    if (!f || !prev || !(await stat(prev).then(() => true, () => false))) return null;
     await rename(f.file, `${f.file}.tmp`);
     await rename(prev, f.file);
     await rename(`${f.file}.tmp`, prev);

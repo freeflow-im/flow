@@ -1,6 +1,6 @@
 // Tool definitions for the agent. Input schemas are Zod objects: the server validates every tool input
 // against them before running a tool or forwarding it to the browser, and sends their JSON Schema to Claude.
-import { readFile } from 'node:fs/promises';
+import { readFile } from '#runtime/fsp';
 import type Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { readRange, resolveRange, sheetOverview } from '../../shared/agent/sheetRead.ts';
@@ -723,8 +723,28 @@ export function isToolName(name: string): name is ToolName {
   return Object.hasOwn(schemas, name);
 }
 
+export type Validated = { ok: true; input: Record<string, unknown> } | { ok: false; error: string };
+
+/**
+ * What a host adds to the assistant's tools (the suite: the tool registry's tools for the open app, with Mail's and
+ * Calendar's runners). Each method answers for the tools it knows and `undefined` for the rest, which are this module's.
+ */
+export interface AssistantToolSource {
+  /** The tools offered in a turn. */
+  tools?(context: AgentContext | undefined, jobs: boolean): Anthropic.Beta.BetaTool[] | undefined;
+  /** A tool's input checked, or refused (a tool the open app does not have). */
+  validate?(name: string, input: unknown, context: AgentContext | undefined): Validated | undefined;
+  /** A server tool run. */
+  run?(name: string, input: Record<string, unknown>, env: ServerToolEnv): Promise<string> | undefined;
+}
+let source: AssistantToolSource | null = null;
+/** Set once by the host at start; null is this app's own tools alone. */
+export const setAssistantToolSource = (s: AssistantToolSource | null): void => { source = s; };
+
 /** Validate a tool input. Returns the parsed input or an error message for Claude. */
-export function validateToolInput(name: string, input: unknown, _context?: AgentContext): { ok: true; input: Record<string, unknown> } | { ok: false; error: string } {
+export function validateToolInput(name: string, input: unknown, context?: AgentContext): Validated {
+  const byHost = source?.validate?.(name, input, context);
+  if (byHost) return byHost;
   if (!isToolName(name)) return { ok: false, error: `Unknown tool "${name}".` };
   const parsed = schemas[name].safeParse(input);
   if (!parsed.success) return { ok: false, error: `Invalid input for ${name}: ${z.prettifyError(parsed.error)}` };
@@ -747,9 +767,9 @@ export const TOOL_DEFS: Anthropic.Beta.BetaTool[] = Object.entries(schemas).map(
 export const JOB_TOOLS = new Set(['request_app_change', 'request_research']);
 export const TOOL_DEFS_WITHOUT_JOBS = TOOL_DEFS.filter((t) => !JOB_TOOLS.has(t.name));
 
-/** The tools the assistant offers in a turn: all of them here (the hosted suite's copy offers the open app's browser tools, from its registry). */
-export function assistantTools(_context: AgentContext | undefined, jobs: boolean): Anthropic.Beta.BetaTool[] {
-  return jobs ? TOOL_DEFS : TOOL_DEFS_WITHOUT_JOBS;
+/** The tools the assistant offers in a turn: the host's choice (the suite: the open app's, from its registry), else all of them here. */
+export function assistantTools(context: AgentContext | undefined, jobs: boolean): Anthropic.Beta.BetaTool[] {
+  return source?.tools?.(context, jobs) ?? (jobs ? TOOL_DEFS : TOOL_DEFS_WITHOUT_JOBS);
 }
 
 /** Whether a tool runs in the browser (it pauses the turn). */
@@ -758,7 +778,11 @@ export const isBrowserTool = (name: string): boolean => CLIENT_TOOLS.has(name);
 // ---------------------------------------------------------------------------
 // Server-side tools
 
-export interface ServerToolEnv {
+/** What a host adds to every server tool's environment (agent.ts `AgentOptions.extend`); the host declares the fields by augmenting this interface. */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface ServerToolEnvExtensions {}
+
+export interface ServerToolEnv extends ServerToolEnvExtensions {
   userId: string;
   /** The root the tools list and make files in (server/scope.ts): the chat's. The user's own files when not given. */
   scope?: ScopeArg;
@@ -779,7 +803,12 @@ export interface ServerToolEnv {
 }
 
 /** Run an account tool. Returns the result text for Claude; throws ToolFailure for errors Claude should see. */
-export async function runServerTool(name: string, input: Record<string, unknown>, env: ServerToolEnv): Promise<string> {
+export function runServerTool(name: string, input: Record<string, unknown>, env: ServerToolEnv): Promise<string> {
+  return source?.run?.(name, input, env) ?? runDocsTool(name, input, env);
+}
+
+/** This app's own server tools. */
+export async function runDocsTool(name: string, input: Record<string, unknown>, env: ServerToolEnv): Promise<string> {
   switch (name) {
     case 'list_sheets': {
       const q = typeof input.query === 'string' ? input.query.trim().toLowerCase() : '';
@@ -1032,7 +1061,7 @@ const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"'
 const searchCalls = new Map<string, number[]>();
 
 /** Per-user rate limit for the search tools (sliding window). */
-function checkSearchRate(userId: string): void {
+export function checkSearchRate(userId: string): void {
   const now = Date.now();
   const recent = (searchCalls.get(userId) ?? []).filter((t) => now - t < SEARCH_RATE.windowMs);
   if (recent.length >= SEARCH_RATE.max) {

@@ -2,10 +2,15 @@
 // and changes events and answers invitations on the server; delete_event and Calendar's view tools run in the browser
 // (delete_event after the user confirms). The Calendar page's context is rendered quoted, so an event's title cannot close it.
 import { describe, expect, it } from 'vitest';
-import { assistantTools, runServerTool, ToolFailure, validateToolInput } from '../docs/server/agent/tools.ts';
-import { PROMPT_WITHOUT_JOBS, renderContext } from '../docs/server/agent/prompt.ts';
-import { CALENDAR_CHAT, chatScope, CLIENT_TOOLS, SHOWN_RESULTS, type CalendarContext } from '../docs/shared/agent/protocol.ts';
+import { assistantTools, runServerTool, ToolFailure, validateToolInput } from '@flow/docs/server/agent/tools.ts';
+import { renderContext, systemPrompt } from '@flow/docs/server/agent/prompt.ts';
+// The suite's tools and prompt lines (registered by importing it).
+import { SUITE_GUIDANCE } from '../docs/assistantTools.ts';
+import { CALENDAR_CHAT, chatScope, CLIENT_TOOLS, SHOWN_RESULTS, type CalendarContext } from '@flow/docs/shared/agent/protocol.ts';
 import type { CalendarToolContext } from './calendarTools';
+
+/** The system prompt as the suite's Assistant object makes it (agent.ts), without the job tools. */
+const PROMPT_WITHOUT_JOBS = systemPrompt(false, SUITE_GUIDANCE);
 
 describe('the assistant’s Calendar tools', () => {
   it('lists them all, delete_event and the view tools as browser tools, and the prompt says when to use them', () => {

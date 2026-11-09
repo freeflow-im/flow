@@ -2,8 +2,8 @@
 
 ![PowerPoint](https://img.icons8.com/color/48/microsoft-powerpoint-2019--v1.png) ![Word](https://img.icons8.com/color/48/microsoft-word-2019--v1.png) ![Excel](https://img.icons8.com/color/48/microsoft-excel-2019--v1.png) ![PDF](https://img.icons8.com/color/48/pdf.png) ![Images](https://img.icons8.com/color/48/image.png)
 
-[![Download MCP Docs for macOS](https://img.shields.io/badge/Download-macOS%20%28Apple%20silicon%29-2ea44f?logo=apple)](https://github.com/freeflow-im/mcp-docs/releases/latest)
-[![Download MCP Docs for Windows](https://img.shields.io/badge/Download-Windows%20%28x64%29-0078d4?logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0wIDBoNy41djcuNUgwek04LjUgMEgxNnY3LjVIOC41ek0wIDguNWg3LjVWMTZIMHpNOC41IDguNUgxNlYxNkg4LjV6Ii8%2BPC9zdmc%2B)](https://github.com/freeflow-im/mcp-docs/releases/latest)
+[![Download MCP Docs for macOS](https://img.shields.io/badge/Download-macOS%20%28Apple%20silicon%29-2ea44f?logo=apple)](https://github.com/freeflow-im/flow/releases/latest)
+[![Download MCP Docs for Windows](https://img.shields.io/badge/Download-Windows%20%28x64%29-0078d4?logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0wIDBoNy41djcuNUgwek04LjUgMEgxNnY3LjVIOC41ek0wIDguNWg3LjVWMTZIMHpNOC41IDguNUgxNlYxNkg4LjV6Ii8%2BPC9zdmc%2B)](https://github.com/freeflow-im/flow/releases/latest)
 [![npm](https://img.shields.io/npm/v/@freeflow-im/mcp-docs?label=npx%20%40freeflow-im%2Fmcp-docs)](https://www.npmjs.com/package/@freeflow-im/mcp-docs)
 
 
@@ -73,7 +73,7 @@ you), offers to install the **mcp-docs** plugin (the app's MCP
 server and a skill on using it) into Claude Code and Codex, whichever you have, starts the app, and prints the app's
 MCP address for any other client. Run it again to update everything. `--claude` or `--codex` picks the agents without
 asking, `--yes` takes every one found. You can also download the app
-from the [latest release](https://github.com/freeflow-im/mcp-docs/releases/latest) (`MCP-Docs-<version>-mac-arm64.zip`
+from the [latest release](https://github.com/freeflow-im/flow/releases/latest) (`MCP-Docs-<version>-mac-arm64.zip`
 for a Mac, `MCP-Docs-<version>-win-x64-setup.exe` for Windows); its notes say how to install it by hand. It
 needs a Mac with Apple silicon or Windows (x64).
 

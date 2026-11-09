@@ -15,7 +15,7 @@
 // Every failure path returns null: §6 says an image problem must degrade the
 // card to text-only, never fail the whole unfurl.
 import { createHash } from 'node:crypto';
-import { imageSize } from '../../../docs/server/imageSize.ts';
+import { imageSize } from '@flow/docs/server/imageSize.ts';
 import { imageInfo, toWebp } from '../../lib/images.js';
 import { blobStore } from '../../storage/index.js';
 import { guardedFetch } from './fetcher.js';

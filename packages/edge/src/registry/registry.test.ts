@@ -10,19 +10,21 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod4';
 import { TOOL_DEFINITIONS, TOOL_DOORS, toolsAtDoor, type ToolDefinition, type ToolDoor } from '@flow/shared/tools';
-import { createMcpServer, MCP_VERSIONS, type McpVersion } from '../docs/plugin/server/mcp.ts';
-import { schemas } from '../docs/server/agent/tools.ts';
-import { CLIENT_TOOLS } from '../docs/shared/agent/protocol.ts';
+import { createMcpServer, MCP_VERSIONS, type McpVersion } from '@flow/docs/plugin/server/mcp.ts';
+import { TOOL_DEFS } from '@flow/docs/server/agent/tools.ts';
+import { CLIENT_TOOLS } from '@flow/docs/shared/agent/protocol.ts';
 import { ASSISTANT_MAIL_TOOLS, MAIL_TOOLS } from '../imap/mailTools.ts';
 import { ASSISTANT_CALENDAR_TOOLS, CALENDAR_TOOLS } from '../calendar/calendarTools.ts';
 import { EVENT_TOOLS } from '../events/eventTools.ts';
 import { SCOPE_GROUPS } from '../directory/mcpOAuth.ts';
-import { toolLabel } from '../../../docs/client/src/agent/describe.ts';
+import { toolLabel } from '@flow/docs/client/src/agent/describe.ts';
 import { BUILT_IN_TOOLS } from '../../../agent-bridge/src/mcp-server.ts';
 import { CALENDAR_TOOL_NAMES } from '../../../agent-bridge/src/calendar-tools.ts';
 import { MAIL_TOOL_NAMES } from '../../../agent-bridge/src/mail-tools.ts';
 import { APP_MANIFESTS } from '@flow/shared/manifests';
 import { registered, registrations, runnerOf, toolsFor } from './index.ts';
+// Docs' own tools are registered by the suite's glue, as the Assistant object imports it; the suite's schemas sit beside Docs'.
+import { SUITE_SCHEMAS } from '../docs/assistantTools.ts';
 
 /** The apps whose tools this test reads from their own modules (above); every other app with tools was added by manifest
  * and registers them from its object module, src/<app>/object.ts, with their descriptions and scopes (apps.ts). */
@@ -80,11 +82,19 @@ async function fromImplementations(): Promise<ToolDefinition[]> {
     rows.push({ door: 'mcp', def: { name: t.name, app, kind: 'server', doors: [], scopes, ...(t.annotations?.destructiveHint === true ? { destructive: true } : {}), description: t.description ?? '', input: t.inputSchema } });
   }
   const assistantMail = new Set<string>([...ASSISTANT_MAIL_TOOLS, 'open_mail_message']), assistantCalendar = new Set<string>([...ASSISTANT_CALENDAR_TOOLS, 'open_calendar_event', 'show_calendar_range']);
-  for (const [name, schema] of Object.entries(schemas)) {
-    const { $schema: _ignored, description, ...input } = z.toJSONSchema(schema as z.ZodType) as Record<string, unknown>;
+  // The assistant's: Docs' own as its assistant sends them (JSON Schema from Docs' zod; this package's zod is another
+  // instance, which would drop their descriptions), and the suite's converted here.
+  const assistantTools = [
+    ...TOOL_DEFS.map((d) => ({ name: d.name, description: String(d.description ?? ''), input: d.input_schema as unknown as Input })),
+    ...Object.entries(SUITE_SCHEMAS).map(([name, schema]) => {
+      const { $schema: _ignored, description, ...input } = z.toJSONSchema(schema) as Record<string, unknown>;
+      return { name, description: String(description ?? ''), input: input as Input };
+    }),
+  ];
+  for (const { name, description, input } of assistantTools) {
     const kind = CLIENT_TOOLS.has(name) ? 'browser' : 'server';
     const app = assistantMail.has(name) ? 'mail' : assistantCalendar.has(name) ? 'calendar' : 'docs';
-    rows.push({ door: 'assistant', def: { name, app, kind, doors: [], scopes: [], ...(CONFIRMED.has(name) ? { confirm: true } : {}), ...(RUNS_IN[name] ? { runsIn: RUNS_IN[name] } : {}), description: String(description ?? ''), input: input as Input } });
+    rows.push({ door: 'assistant', def: { name, app, kind, doors: [], scopes: [], ...(CONFIRMED.has(name) ? { confirm: true } : {}), ...(RUNS_IN[name] ? { runsIn: RUNS_IN[name] } : {}), description, input } });
   }
   for (const t of BUILT_IN_TOOLS) {
     const app = CALENDAR_TOOL_NAMES.has(t.name) ? 'calendar' : MAIL_TOOL_NAMES.has(t.name) ? 'mail' : 'chat';

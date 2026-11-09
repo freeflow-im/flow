@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { newFileId } from './ids.ts';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from '#runtime/fsp';
 import path from 'node:path';
 import type { Deck } from '../shared/deck.ts';
 import type { Doc } from '../shared/doc.ts';

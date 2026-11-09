@@ -1,4 +1,4 @@
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync } from '#runtime/sqlite';
 import { GRANTS_DDL } from '@flow/shared/grants';
 import { migrateToGrants } from './access.ts';
 

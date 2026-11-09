@@ -1,7 +1,7 @@
 // A stored zip file's contents, for its file page: what is in it, one file's bytes, and a Word, Excel or
 // PowerPoint file inside it converted to be shown read-only. Nothing is unpacked to disk or stored.
 import JSZip from 'jszip';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, stat } from '#runtime/fsp';
 import type { ZipEntry, ZipOfficeView } from '../shared/zip.ts';
 import { importDocx } from './docxImport.ts';
 import { importPptx } from './pptxImport.ts';

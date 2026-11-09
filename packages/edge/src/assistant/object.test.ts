@@ -5,8 +5,8 @@
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import type { AccountDTO } from '@flow/shared';
-import type { ModelCall } from '../docs/server/agent/agent.ts';
-import type { AgentEvent } from '../docs/shared/agent/protocol.ts';
+import type { ModelCall } from '@flow/docs/server/agent/agent.ts';
+import type { AgentEvent } from '@flow/docs/shared/agent/protocol.ts';
 import { moveAssistantRows } from '../routes/admin';
 import { Assistant, type AssistantEnv, type DocsCaller } from './object';
 

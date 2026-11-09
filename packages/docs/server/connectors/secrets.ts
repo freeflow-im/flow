@@ -1,13 +1,19 @@
 // Encryption at rest for connection credentials: AES-256-GCM with a server key. The key comes from
-// CONNECTOR_ENCRYPTION_KEY, or else a random key generated once and kept in the data directory.
+// CONNECTOR_ENCRYPTION_KEY, else CONNECTOR_KEY_BASE64 (a key file's contents, where there is no data directory to keep
+// one in: the Worker), else a random key generated once and kept in the data directory.
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from '#runtime/fs';
 
 export function loadKey(keyFile: string, envKey = process.env.CONNECTOR_ENCRYPTION_KEY): Buffer {
   if (envKey) return createHash('sha256').update(envKey).digest();
+  if (process.env.CONNECTOR_KEY_BASE64) return Buffer.from(process.env.CONNECTOR_KEY_BASE64, 'base64');
   if (existsSync(keyFile)) return Buffer.from(readFileSync(keyFile, 'utf8').trim(), 'base64');
   const key = randomBytes(32);
-  writeFileSync(keyFile, key.toString('base64'), { mode: 0o600 });
+  try {
+    writeFileSync(keyFile, key.toString('base64'), { mode: 0o600 });
+  } catch {
+    console.warn('connectors: no CONNECTOR_ENCRYPTION_KEY or CONNECTOR_KEY_BASE64, and no data directory to keep a key in; saved credentials will not survive a restart');
+  }
   return key;
 }
 

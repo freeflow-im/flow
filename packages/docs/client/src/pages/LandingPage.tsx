@@ -7,7 +7,7 @@ import { Link } from 'react-router-dom';
 import { HomeIcon } from '../components/Logo.tsx';
 import { appName } from '../brand.ts';
 
-const GITHUB = 'https://github.com/freeflow-im/mcp-docs';
+const GITHUB = 'https://github.com/freeflow-im/flow';
 const RELEASES = `${GITHUB}/releases/latest`;
 
 // The latest release's file for each system, named as desktop/updater.js finds them; until GitHub answers (or if it
@@ -19,7 +19,7 @@ function useDownloads(): Record<Platform, string> {
   const [links, setLinks] = useState<Record<Platform, string>>({ mac: RELEASES, win: RELEASES });
   useEffect(() => {
     let live = true;
-    fetch('https://api.github.com/repos/freeflow-im/mcp-docs/releases/latest')
+    fetch('https://api.github.com/repos/freeflow-im/flow/releases/latest')
       .then((r) => (r.ok ? r.json() : null))
       .then((release: { assets?: { name: string; browser_download_url: string }[] } | null) => {
         const url = (p: Platform) => release?.assets?.find((a) => ASSETS[p].test(a.name))?.browser_download_url ?? RELEASES;

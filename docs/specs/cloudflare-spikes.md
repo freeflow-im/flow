@@ -151,3 +151,6 @@ own pages and file links (`plugin/server/http.ts` writes to Node's raw response)
 (it reads the file synchronously, so every file counts as not text), the assistant (it should run, but has not been tried without
 a model key), Office imports (should run per Spike B; not tried here), and the Docs pages themselves, which the origin still serves.
 The copied files carry `// @ts-nocheck`, because they are typechecked in `packages/docs` under that package's settings.
+
+*2026-11-09: the copy is gone. The Worker imports `@flow/docs` itself, and the Docs server reaches its machine through
+`#runtime/*` with a Node side and a Workers side (`docs/specs/docs-core.md` §3.1, `packages/docs/server/runtime/`).*

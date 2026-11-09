@@ -3,15 +3,24 @@
   "compilerOptions": {
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2024",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "jsx": "react-jsx",
     "allowImportingTsExtensions": true,
     "noUncheckedIndexedAccess": false,
     "exactOptionalPropertyTypes": false,
-    "types": ["@cloudflare/workers-types", "node"],
+    "types": [
+      "@cloudflare/workers-types",
+      "node"
+    ],
     "declaration": false,
     "sourceMap": false,
     "noEmit": true
   },
-  "include": ["src"]
+  "include": [
+    "src"
+  ]
 }

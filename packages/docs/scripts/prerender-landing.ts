@@ -24,7 +24,7 @@ try {
         applicationCategory: 'BusinessApplication',
         operatingSystem: 'macOS, Windows, Web',
         offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
-        downloadUrl: 'https://github.com/freeflow-im/mcp-docs/releases/latest',
+        downloadUrl: 'https://github.com/freeflow-im/flow/releases/latest',
         image: `${O}/marketing/og-image.jpg`,
       },
       { '@type': 'WebSite', name: 'MCP Docs', url: `${O}/` },

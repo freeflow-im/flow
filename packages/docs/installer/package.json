@@ -30,10 +30,10 @@
   "license": "UNLICENSED",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/freeflow-im/mcp-docs.git",
+    "url": "git+https://github.com/freeflow-im/flow.git",
     "directory": "installer"
   },
-  "homepage": "https://github.com/freeflow-im/mcp-docs#readme",
+  "homepage": "https://github.com/freeflow-im/flow#readme",
   "publishConfig": {
     "access": "public"
   }

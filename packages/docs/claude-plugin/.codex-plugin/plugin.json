@@ -5,8 +5,8 @@
   "author": {
     "name": "Scott Persinger"
   },
-  "homepage": "https://github.com/freeflow-im/mcp-docs",
-  "repository": "https://github.com/freeflow-im/mcp-docs",
+  "homepage": "https://github.com/freeflow-im/flow",
+  "repository": "https://github.com/freeflow-im/flow",
   "license": "UNLICENSED",
   "keywords": ["documents", "spreadsheets", "presentations", "office", "markdown", "pdf", "mcp"],
   "skills": "./skills/",
@@ -18,7 +18,7 @@
     "developerName": "Scott Persinger",
     "category": "Productivity",
     "capabilities": ["Interactive", "Read", "Write"],
-    "websiteURL": "https://github.com/freeflow-im/mcp-docs",
+    "websiteURL": "https://github.com/freeflow-im/flow",
     "defaultPrompt": ["Show me the files in the folder open in MCP Docs", "Summarize the presentation open in MCP Docs"]
   }
 }

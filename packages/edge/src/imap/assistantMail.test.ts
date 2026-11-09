@@ -2,11 +2,16 @@
 // saves attachments, and never sends. Its tool list is fixed (the prompt stays cacheable); without a Mail object the tools
 // say mail is not here.
 import { describe, expect, it } from 'vitest';
-import { assistantTools, runServerTool, ToolFailure, validateToolInput } from '../docs/server/agent/tools.ts';
-import { PROMPT_WITHOUT_JOBS, renderContext, stripContext } from '../docs/server/agent/prompt.ts';
-import { toChatItems } from '../docs/server/agent/agent.ts';
-import { chatScope, CLIENT_TOOLS, MAIL_CHAT, SHOWN_RESULTS, type MailContext } from '../docs/shared/agent/protocol.ts';
+import { assistantTools, runServerTool, ToolFailure, validateToolInput } from '@flow/docs/server/agent/tools.ts';
+import { renderContext, stripContext, systemPrompt } from '@flow/docs/server/agent/prompt.ts';
+// The suite's tools and prompt lines (registered by importing it).
+import { SUITE_GUIDANCE } from '../docs/assistantTools.ts';
+import { toChatItems } from '@flow/docs/server/agent/agent.ts';
+import { chatScope, CLIENT_TOOLS, MAIL_CHAT, SHOWN_RESULTS, type MailContext } from '@flow/docs/shared/agent/protocol.ts';
 import type { MailToolContext } from './mailTools';
+
+/** The system prompt as the suite's Assistant object makes it (agent.ts), without the job tools. */
+const PROMPT_WITHOUT_JOBS = systemPrompt(false, SUITE_GUIDANCE);
 
 const ACC = '0b6f1c2e-1111-4222-8333-444455556666';
 // The tools of a turn in Mail, and of one in Docs (each app's browser tools are its own: the registry, platform.md §5.4).

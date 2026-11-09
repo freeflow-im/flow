@@ -108,5 +108,8 @@
   `packages/docs/CLAUDE.md` and `packages/docs/docs/architecture.md`; read those
   before changing it. It is in the pnpm workspace (`pnpm --filter @flow/docs
     release workflow. The hosted app ships with the suite (`flow-aws-deploy.yml`,
-  `deploy-edge.yml`); `docs-desktop-release.yml` builds the `desktop-v*` tags, though
-  installed apps still update from freeflow-im/mcp-docs's releases.
+  `deploy-edge.yml`); `docs-desktop-release.yml` builds the `desktop-v*` tags into this
+  repository's releases, which the installed apps update from (`docs/specs/docs-core.md` §4.1).
+  The Worker imports `@flow/docs` directly; the Docs server reaches its machine only through
+  `#runtime/*` (`packages/docs/server/runtime/`), so never import `node:fs`, `node:sqlite` or
+  Fastify from a core server file: add to the seam instead, on both sides.

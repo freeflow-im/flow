@@ -3,7 +3,7 @@
 // workbook JSON. Images are readable by the user who uploaded them and, in the FreeFlow suite, by the members of
 // the organization they were uploaded in (or whose files they were moved into with a file: `retag`).
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, rename, writeFile } from 'node:fs/promises';
+import { mkdir, rename, writeFile } from '#runtime/fsp';
 import path from 'node:path';
 import { CELL_IMAGE_TYPES } from '../shared/types.ts';
 import type { Backup } from './backup.ts';

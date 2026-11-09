@@ -9,7 +9,8 @@ import path from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
-const REPO = 'freeflow-im/mcp-docs';
+// The suite's repository publishes the desktop releases (docs-desktop-release.yml, tags desktop-v*; docs/specs/docs-core.md §4.1).
+const REPO = 'freeflow-im/flow';
 const APP_NAME = 'MCP Docs';
 
 /** The release file for a platform: the Mac zip (Apple silicon) or the Windows setup program. */

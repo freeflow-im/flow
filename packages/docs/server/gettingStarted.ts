@@ -2,7 +2,7 @@
 // presentation in their files; after that they get that copy back (found by its title). The guide itself is
 // a presentation someone keeps in their own account and edits in the app: GETTING_STARTED_DECK_ID names it.
 // Without that setting (the desktop app, local development) the copy is made from the built-in one.
-import { readFile } from 'node:fs/promises';
+import { readFile } from '#runtime/fsp';
 import type { Deck } from '../shared/deck.ts';
 import { findGettingStarted, GETTING_STARTED_TITLE, gettingStartedDeck } from '../shared/gettingStarted.ts';
 import type { SheetMeta } from '../shared/types.ts';

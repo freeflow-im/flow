@@ -1,9 +1,9 @@
 // Runs the plugin inside the app's own Fastify server, so one server with one volume serves both.
 // The plugin owns a few paths (/mcp, /oauth/*, /plugin/*, the OAuth well-known documents); a hook at the
 // start of the request answers those with the plugin's handler and leaves everything else to the app.
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance } from '#runtime/http';
 import path from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync } from '#runtime/sqlite';
 import type { AuthService } from '../../server/auth.ts';
 import type { DB } from '../../server/db.ts';
 import type { GoogleLogin } from '../../server/googleAuth.ts';

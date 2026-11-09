@@ -5,8 +5,8 @@
   "author": {
     "name": "Scott Persinger"
   },
-  "homepage": "https://github.com/freeflow-im/mcp-docs",
-  "repository": "https://github.com/freeflow-im/mcp-docs",
+  "homepage": "https://github.com/freeflow-im/flow",
+  "repository": "https://github.com/freeflow-im/flow",
   "license": "UNLICENSED",
   "keywords": ["documents", "spreadsheets", "presentations", "office", "markdown", "pdf"]
 }

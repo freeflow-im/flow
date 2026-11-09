@@ -6,9 +6,10 @@
 // the sign-in page, with <PLUGIN_PUBLIC_URL>/oauth/google/callback as the redirect URI). PLUGIN_USER_EMAIL
 // switches OAuth off and makes every request act as that account (development only).
 import '../../server/env.ts';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync } from '#runtime/fs';
 import path from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync } from '#runtime/sqlite';
+import { packageRoot } from '#runtime/paths';
 import { AuthService } from '../../server/auth.ts';
 import { googleFromEnv, GoogleLogin } from '../../server/googleAuth.ts';
 import { mailerFromEnv } from '../../server/mail.ts';
@@ -17,7 +18,7 @@ import { createPluginServer } from './http.ts';
 import type { McpOptions } from './mcp.ts';
 import { OAuthServer } from './oauth.ts';
 
-const root = path.resolve(import.meta.dirname, '..', '..');
+const root = packageRoot();
 const dataDir = path.resolve(process.env.DATA_DIR ?? path.join(root, 'data'));
 const port = Number(process.env.PLUGIN_PORT ?? 3012);
 const publicUrl = process.env.PLUGIN_PUBLIC_URL?.replace(/\/$/, '') || null;

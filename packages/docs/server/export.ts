@@ -5,7 +5,7 @@
 import { addChartsToXlsx } from './xlsxCharts.ts';
 import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
-import { readFile } from 'node:fs/promises';
+import { readFile } from '#runtime/fsp';
 import { workbookToCsv } from '../shared/csv.ts';
 import type { Node as PMNode } from 'prosemirror-model';
 import type { Deck } from '../shared/deck.ts';

@@ -3,6 +3,12 @@
   "version": "0.2.37",
   "private": true,
   "type": "module",
+  "imports": {
+    "#runtime/*": {
+      "workerd": "./server/runtime/workerd/*.ts",
+      "default": "./server/runtime/node/*.ts"
+    }
+  },
   "bin": {
     "mcp-docs-dev": "desktop/cli.js"
   },
@@ -79,6 +85,7 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261102.1",
     "@flow/suite-bar": "workspace:*",
     "@types/node": "catalog:",
     "@types/react": "^19.3.0",
@@ -97,7 +104,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/freeflow-im/mcp-docs.git"
+    "url": "https://github.com/freeflow-im/flow.git"
   },
   "engines": {
     "node": ">=24"

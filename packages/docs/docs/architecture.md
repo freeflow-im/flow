@@ -7,6 +7,16 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
 - `client/src` — React app. Spreadsheet state lives in `client/src/state` (`WorkbookStore` + `Tx` transactions,
   `SheetController` for selection/editing, `ops.ts` for workbook operations such as insert/delete/sort/filter).
 - `server` — Fastify API (`app.ts`), auth, sheet storage (`sheets.ts`), and the assistant (`server/agent`).
+- **The runtime seam** (`server/runtime/`, design in `../../docs/specs/docs-core.md` §3.1): the server reaches the machine it
+  runs on only through `#runtime/*` imports, which `package.json`'s `imports` map resolves to `runtime/node/` by default
+  (Node's own `fs`, `fs/promises`, `sqlite`, Fastify, Playwright, LiteParse) and to `runtime/workerd/` under the `workerd`
+  condition, which the suite's Worker sets in its bundler, tests and typecheck (files are R2 objects, the database is the
+  Docs object's SQLite, HTTP is `DocsApp`, PDFs are read by pdf.js and the OCR container). `#runtime/local/*` is the
+  standalone app's own (the folder-backed stores, backup, folder watching, the local MCP server, window tools, jobs,
+  the Claude Code driver, Spotlight recents): real on Node, inert on Workers. A core server file never imports `node:fs`,
+  `node:sqlite` or `fastify` directly; what it needs of the machine is added to the seam, on both sides, in one change.
+  A host (the suite) extends the assistant through `AgentOptions.pages/extend/guidance` and `setAssistantToolSource`
+  (`server/agent/agent.ts`, `tools.ts`) rather than by editing it.
 - In the FreeFlow suite (design in `../../docs/specs/freeflow-suite.md`) this app is the Workspace app inside Flow's server
   (`packages/server/src/workspace.ts`): `buildApp({ host })` wires its routes into the host's Fastify instance as an encapsulated
   plugin (`wire()` in `app.ts`) instead of making a server, and the host says who is signed in (`host.authenticate`: Flow's

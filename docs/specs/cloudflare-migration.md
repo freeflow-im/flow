@@ -67,7 +67,7 @@ move. It comes after phase 4 (Docs respecting the current organization) and befo
 | APNs pushes (`pushOutbox`) | A Worker fetching APNs over HTTP/2 from a Queue consumer. |
 | Cloudflare Email (already) | Unchanged. Inbound community email (`communityEmail`) becomes an Email Worker. |
 | Nightly dumps, orphan sweeps | Cron Triggers; each Org DO exports itself to R2 on an alarm. |
-| LiteParse / Tesseract (PDF to Markdown, OCR) | PDF to Markdown runs in the Worker with pdf.js (`packages/edge/src/docs/runtime/pdfText.ts`): headings, lists and links, no tables. The pages where it finds no text (scans) go to the PdfOcr Cloudflare Container (`packages/edge/containers/pdf-ocr`, LiteParse and Tesseract; `src/pdfOcr.ts`, `src/docs/runtime/pdfOcr.ts`). |
+| LiteParse / Tesseract (PDF to Markdown, OCR) | PDF to Markdown runs in the Worker with pdf.js (`packages/docs/server/runtime/workerd/pdfText.ts`): headings, lists and links, no tables. The pages where it finds no text (scans) go to the PdfOcr Cloudflare Container (`packages/edge/containers/pdf-ocr`, LiteParse and Tesseract; `src/pdfOcr.ts`, `src/docs/runtime/pdfOcr.ts`). |
 
 ## 3. The order: one context at a time, both stacks live
 

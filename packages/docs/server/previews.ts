@@ -5,9 +5,10 @@
 // or search, and is gone an hour after it was last asked for (swept on each use, and by the Docs object's alarm on the
 // Worker). Save to Docs imports its bytes as a real file in the user's My files, at the top.
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from '#runtime/fsp';
+import { rawBody } from './rawBody.ts';
 import path from 'node:path';
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from '#runtime/http';
 import { CsvError, csvToWorkbook, MAX_CSV_CHARS } from '../shared/csv.ts';
 import type { Deck } from '../shared/deck.ts';
 import type { Doc } from '../shared/doc.ts';
@@ -276,7 +277,7 @@ export function previewRoutes(r: FastifyInstance, opts: { previews: Previews; st
   const str = (v: unknown, max = 500) => (typeof v === 'string' ? v.slice(0, max) : '');
   const withPage = (s: SavedPreview) => ({ ...s, url: `${opts.basePath}${s.path}` });
   const shown = (p: PreviewInfo) => ({ ...p, ...(p.saved ? { saved: withPage(p.saved) } : {}) });
-  // Set before the handler: the Worker's runtime has no onSend hook (packages/edge/src/docs/runtime/fastify.ts).
+  // Set before the handler: the Worker's runtime has no onSend hook (packages/docs/server/runtime/workerd/http.ts).
   r.addHook('preHandler', async (_req, reply) => {
     reply.header('Cache-Control', 'no-store').header('X-Robots-Tag', 'noindex');
   });
@@ -289,9 +290,10 @@ export function previewRoutes(r: FastifyInstance, opts: { previews: Previews; st
   });
 
   r.post('/api/previews', async (req, reply) => {
-    if (!Buffer.isBuffer(req.body) || !req.body.length) return reply.code(400).send({ error: 'Send the file’s bytes as the body.' });
+    const body = rawBody(req);
+    if (!body || !body.length) return reply.code(400).send({ error: 'Send the file’s bytes as the body.' });
     try {
-      const p = await previews.create(owner(req), workspaceOf(req), { filename: str(q(req).filename, 300), type: str(q(req).type, 200), bytes: req.body, sourceKey: str(q(req).key) || null });
+      const p = await previews.create(owner(req), workspaceOf(req), { filename: str(q(req).filename, 300), type: str(q(req).type, 200), bytes: body, sourceKey: str(q(req).key) || null });
       return { preview: shown(p) };
     } catch (e) {
       return failed(reply, e);
