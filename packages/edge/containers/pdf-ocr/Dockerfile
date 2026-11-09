@@ -11,7 +11,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --os=linux --cpu=x64 --libc=glibc --no-audit --no-fund
 # Tesseract is inside LiteParse's native module; its English model (the one LiteParse would otherwise download, from
 # tessdata_best) is part of the image, so the container needs no internet.
-ADD --checksum=sha256:8280aed0782fe27257a68ea10fe7ef324ca0f8d85bd2fd145d1c2b560bcb66ba https://github.com/tesseract-ocr/tessdata_best/raw/4.1.0/eng.traineddata /tessdata/eng.traineddata
+ADD --checksum=sha256:8280aed0782fe27257a68ea10fe7ef324ca0f8d85bd2fd145d1c2b560bcb66ba https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/4.1.0/eng.traineddata /tessdata/eng.traineddata
 RUN chmod -R a+rX /tessdata
 
 FROM node:24.22.1-bookworm-slim
