@@ -1,5 +1,16 @@
 # Decision log
 
+## 2026-11-09 — Docs: one repository, an explicit shared core, the standalone MCP Docs stays (operator ruling)
+
+- **Ruling (Scott):** the standalone MCP Docs desktop app has a place as a product of its own. It and the suite's
+  hosted Docs app stay in this one repository; what they share becomes an explicit workspace package rather than
+  separate repositories pulling a published core.
+- **Why:** the Worker's Docs object runs a hand-made copy of the Docs server and shared code (103 files, 30 patched,
+  no refresh script, two already behind their originals), and desktop releases still come from the old
+  `freeflow-im/mcp-docs` repository, which installed apps check for updates. Both are packaging problems; separate
+  repositories would make them permanent.
+- **Where:** `docs/specs/docs-core.md`, with the boundary file by file, the runtime seam, the packages and the phases.
+
 ## 2026-11-09 — Build in large batches; no stacked PRs (operator ruling)
 
 - **Ruling (Scott):** one build thread merges this repository, so a multi-phase build is one branch and one PR against
