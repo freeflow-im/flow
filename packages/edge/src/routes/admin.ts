@@ -224,6 +224,15 @@ export async function moveAssistantRows(objects: AssistantMoveObjects, people: {
   return { moved, skipped: [...skipped.values()] };
 }
 
+/** POST /v1/admin/accounts/provision `{ accountId }`: sends one account to be provisioned (a mailbox and a native calendar),
+ * where the owner's "Set up mailboxes for everyone" would send every member. `queued` is false when the account already
+ * has a mailbox, or is removed or suspended. */
+adminRoutes.post('/v1/admin/accounts/provision', async (c) => {
+  const body = z.object({ accountId: z.string().min(1) }).safeParse(await c.req.json().catch(() => undefined));
+  if (!body.success) return c.json({ error: 'accountId required' }, 400);
+  return c.json({ accountId: body.data.accountId, queued: await directory(c as never, 'provisionAccount', body.data.accountId) });
+});
+
 /**
  * POST /v1/admin/assistant/migrate: `moveAssistantRows` for every organization with members, or the ones named
  * (`{ organizations: [...] }`; a Worker request may make only so many calls, so a large deployment runs it in parts).
