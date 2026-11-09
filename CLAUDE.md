@@ -28,6 +28,17 @@
   omit the section. Mention a platform only when the feature is specific to
   it. `scripts/build-features.mjs` builds FEATURES.md (gitignored) from those
   sections on every web predev/prebuild and in `make-app.sh`.
+- **Build in large batches; never stack PRs.** One build thread merges here, so
+  small PRs add merge and verification overhead and give back nothing. A
+  multi-phase piece of work is **one branch and one PR** against `main`, with
+  each phase as its own commit (the history keeps the phases readable; the PR
+  description lists them). If a piece must land before the next can start,
+  merge it and branch the next **from `main`**, never from the open branch.
+  Never open a PR whose base is another PR's branch: a stacked PR only reaches
+  `main` if its base is retargeted before it is merged, and on 2026-11-09 two
+  of five stacked admin PRs were merged into branches that had already landed
+  and had to be re-landed (#740). Full CI also only runs for PRs targeting
+  `main`, so a stacked PR ships on local test runs alone.
 - **Every PR description carries a client-impact checklist.** List all five
   surfaces and tick the ones where someone should see a difference:
 
