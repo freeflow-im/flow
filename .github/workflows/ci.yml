@@ -120,9 +120,18 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/tessdata"
           f="$RUNNER_TEMP/tessdata/eng.traineddata"
+          # The same file (tessdata_best, main) from three places: github.com's /raw/ redirect answered 504 for a whole
+          # evening on 2026-11-09 while raw.githubusercontent.com and jsDelivr served it at once.
           if [ ! -s "$f" ]; then
-            curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 --max-time 300 \
-              -o "$f.tmp" https://github.com/tesseract-ocr/tessdata_best/raw/main/eng.traineddata
+            for url in \
+              https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/main/eng.traineddata \
+              https://cdn.jsdelivr.net/gh/tesseract-ocr/tessdata_best@main/eng.traineddata \
+              https://github.com/tesseract-ocr/tessdata_best/raw/main/eng.traineddata; do
+              if curl -fsSL --retry 2 --retry-all-errors --retry-delay 3 --max-time 180 -o "$f.tmp" "$url"; then break; fi
+              echo "::warning::could not fetch the OCR model from $url"
+              rm -f "$f.tmp"
+            done
+            [ -s "$f.tmp" ] || { echo "::error::the OCR model could not be fetched from any source"; exit 1; }
             mv "$f.tmp" "$f"
           fi
           ls -l "$f"
