@@ -41,11 +41,11 @@ export function mailboxPassword(length = 32): string {
   }
 }
 
-/** What the consumer does with a step's failure: `retry` later (the provider is busy or down), `stop` (it refused: the
- * account waits with the message, and the admins are told), or `throw` (anything else: the Queue's own retries). */
+/** What the consumer does with a step's failure: `retry` later (the provider is busy or down, or waiting on DNS), `stop`
+ * (it refused: the account waits with the message, and the admins are told), or `throw` (anything else: the Queue's own retries). */
 export function classify(err: unknown): 'retry' | 'stop' | 'throw' {
   if (!(err instanceof ProviderError)) return 'throw';
-  return err.code === 'rate_limited' || err.code === 'unavailable' ? 'retry' : 'stop';
+  return err.code === 'rate_limited' || err.code === 'unavailable' || err.code === 'pending' ? 'retry' : 'stop';
 }
 
 /** The account's mailbox at the provider and its row in the Mail object; the domain made first. */
@@ -54,8 +54,15 @@ async function mailboxStep(t: ProvisioningTarget, deps: ProvisioningDeps): Promi
   if (!domain) throw new ProviderError('bad_request', `the domain of ${account.address} is not one of the organization's`);
   if (!domain.verified) throw new ProviderError('bad_request', `the domain ${domain.domain} is not verified yet`);
   if (!t.domainAtProvider) {
-    await deps.provider.createDomain(domain.domain, DEFAULT_DOMAIN_LIMITS);
+    // Our zone first: a provider that wants its own ownership TXT (MXRoute) finds it there when the domain is made.
     if (domain.kind === 'platform') await deps.publishPlatformDns(t.slug);
+    try {
+      await deps.provider.createDomain(domain.domain, DEFAULT_DOMAIN_LIMITS);
+    } catch (err) {
+      // On the organization's own domain the admin must publish the record: a stop with the message, not a retry.
+      if (err instanceof ProviderError && err.code === 'pending' && domain.kind === 'own') throw new ProviderError('bad_request', err.message);
+      throw err;
+    }
     await deps.directory.setDomainAtProvider(domain.domain);
   }
   const [row, box] = await Promise.all([deps.mail.hosted(account), deps.provider.getMailbox(account.address)]);
@@ -82,7 +89,19 @@ export async function runMessage(msg: ProvisioningMessage, deps: ProvisioningDep
   const { account } = t;
   const missing = (err: unknown) => { if (!(err instanceof ProviderError && err.code === 'not_found')) throw err; };
   if (msg.kind === 'suspend') return deps.provider.setMailboxState(account.address, 'suspended').catch(missing);
-  if (msg.kind === 'resume') return deps.provider.setMailboxState(account.address, 'enabled').catch(missing);
+  if (msg.kind === 'resume') {
+    try {
+      await deps.provider.setMailboxState(account.address, 'enabled');
+    } catch (err) { missing(err); return; }
+    // A provider that suspends by taking the password away: the mailbox gets a fresh one, written where the Mail object reads it.
+    if (deps.provider.suspendsByPassword && (await deps.mail.hosted(account))) {
+      const password = (deps.password ?? mailboxPassword)();
+      await deps.provider.setPassword(account.address, password);
+      const settings = deps.provider.mailSettings(account.address);
+      await deps.mail.put(account, { email: account.address, displayName: account.displayName, imap: settings.imap, smtp: settings.smtp, password });
+    }
+    return;
+  }
   if (msg.kind === 'delete') {
     if (account.state !== 'removed') return;
     await deps.provider.deleteMailbox(account.address).catch(missing);

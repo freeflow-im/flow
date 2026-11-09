@@ -164,6 +164,51 @@ describe('provisioning (platform.md §3.4)', () => {
     expect(provider.mailboxes.get('bob@acme.freeflow.im')!.state).toBe('enabled');
   });
 
+  it('publishes the platform zone before the domain is made, retries a pending platform domain, and stops on a pending own one', async () => {
+    const order: string[] = [];
+    let pending = true;
+    const createDomain = provider.createDomain.bind(provider);
+    provider.createDomain = async (d, o) => { order.push('createDomain'); if (pending) throw new ProviderError('pending', 'TXT missing'); return createDomain(d, o); };
+    deps.publishPlatformDns = async (slug) => { order.push('dns'); dns.push(slug); };
+    const org = newId();
+    core.reserveSlug('acme', org);
+    const ann = join(org, user('Ann'));
+    const [msg] = core.takeProvisioning();
+    const err = await runMessage(msg!, deps).catch((e: unknown) => e);
+    expect(classify(err)).toBe('retry');
+    expect(order).toEqual(['dns', 'createDomain']);
+    pending = false;
+    await runMessage(msg!, deps);
+    expect(core.accountById(ann.id)!.state).toBe('active');
+    // The organization's own domain: the admin has to publish the provider's record, so it is a stop with the message.
+    pending = true;
+    const bob = join(org, user('Bob'));
+    (core as unknown as { sql: Sql }).sql.exec("INSERT INTO domains (domain, organization_id, kind, verified_at, created_at) VALUES ('acme.test', ?, 'own', 1, 1)", org);
+    (core as unknown as { sql: Sql }).sql.exec("UPDATE accounts SET address = 'bob@acme.test' WHERE id = ?", bob.id);
+    const own = await runMessage(core.takeProvisioning()[0]!, deps).catch((e: unknown) => e);
+    expect(own).toMatchObject({ code: 'bad_request', message: 'TXT missing' });
+    expect(classify(own)).toBe('stop');
+  });
+
+  it('gives a mailbox a fresh password on resume when the provider suspends by password', async () => {
+    (provider as { suspendsByPassword?: boolean }).suspendsByPassword = true;
+    const org = newId();
+    core.reserveSlug('acme', org);
+    const bobId = user('Bob');
+    const bob = join(org, bobId);
+    await drain();
+    const before = mail.get(bob.id)!.password;
+    await leave(org, bobId);
+    await drain();
+    join(org, bobId);
+    expect((await drain()).map((m) => m.kind)).toEqual(['resume']);
+    const after = mail.get(bob.id)!.password;
+    expect(after).not.toBe(before);
+    expect(after).toMatch(/^[A-Za-z0-9]{32}$/);
+    expect(provider.mailboxes.get('bob@acme.freeflow.im')!.password).toBe(after);
+    expect(provider.calls.filter((c) => c.method === 'setPassword')).toHaveLength(1);
+  });
+
   it('sends existing members without a mailbox, and counts them', async () => {
     const plain = new DirectoryCore(nodeSql(), { webUrlBase: 'https://app.test', registrationEnabled: true, send: async () => {} });
     expect(() => plain.provisionMissing(newId())).toThrow(/no mail provider/);
@@ -191,6 +236,7 @@ describe('provisioning (platform.md §3.4)', () => {
   it('retries a busy provider, stops on a refusal, and makes passwords within the rules', () => {
     expect(classify(new ProviderError('rate_limited', 'slow down'))).toBe('retry');
     expect(classify(new ProviderError('unavailable', 'down'))).toBe('retry');
+    expect(classify(new ProviderError('pending', 'the TXT is not in DNS yet'))).toBe('retry');
     expect(classify(new ProviderError('auth', 'bad credential'))).toBe('stop');
     expect(classify(new ProviderError('bad_request', 'no'))).toBe('stop');
     expect(classify(new Error('boom'))).toBe('throw');

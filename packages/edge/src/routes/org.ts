@@ -71,7 +71,7 @@ orgRoutes.post('/v1/workspaces', async (c) => {
   // The platform subdomain's MX, SPF and DMARC (directory/providers/cloudflareDns.ts). A failure is logged; provisioning
   // (phase 5.3) writes them again.
   else if (typeof slug === 'string') {
-    c.executionCtx.waitUntil(publishPlatformDomain(c.env, slug, mailProviderFor(c.env).records(organizationDomain(slug))).catch((err) => console.error(`platform dns ${slug}: ${(err as Error).message}`)));
+    c.executionCtx.waitUntil(mailProviderFor(c.env).records(organizationDomain(slug)).then((r) => publishPlatformDomain(c.env, slug, r)).catch((err) => console.error(`platform dns ${slug}: ${(err as Error).message}`)));
   }
   return res;
 });

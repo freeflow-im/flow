@@ -58,7 +58,7 @@ domainRoutes.post('/v1/workspaces/:id/domains/:domain/dkim', async (c) => {
   const id = await adminOf(c as never);
   const out = await directory(c, 'setDomainDkim', id, domainParam(c));
   if (out.kind === 'platform') {
-    const provider = mailProviderFor(c.env).records(out.domain, { selector: out.selector, value: out.record.value });
+    const provider = await mailProviderFor(c.env).records(out.domain, { selector: out.selector, value: out.record.value });
     c.executionCtx.waitUntil(platformDns(c.env, provider).publish(recordsFor(out.domain, provider)).catch((err) => console.error(`platform dns ${out.domain}: ${(err as Error).message}`)));
   }
   return c.json(out);

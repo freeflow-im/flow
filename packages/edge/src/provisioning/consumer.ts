@@ -51,7 +51,7 @@ export function deps(env: ProvisioningEnv): ProvisioningDeps {
         if (!out.ok) throw new Error(out.message);
       },
     },
-    publishPlatformDns: (slug) => publishPlatformDomain(env, slug, provider.records(organizationDomain(slug))),
+    publishPlatformDns: async (slug) => publishPlatformDomain(env, slug, await provider.records(organizationDomain(slug))),
   };
 }
 

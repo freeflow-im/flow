@@ -5,6 +5,7 @@ import { hashPassword, verifyPassword } from './passwords';
 import { DirectoryCore, accountGate, hashToken, newId, type Mail, type Sql } from './core';
 import { DIRECTORY_MIGRATIONS } from './schema';
 import { FakeMailProvider } from '../mailprovider/fake';
+import { ProviderError } from '../mailprovider/provider';
 import { decryptBlob } from '../org/crypto/index';
 
 /** A real argon2 hash from the server's native library, of 'correct horse'. */
@@ -526,6 +527,31 @@ describe('domains with a mail provider (phase 5.2)', () => {
     await core.setDomainDkim(org, 'spare.test');
     core.removeDomain(org, 'spare.test');
     expect(nodeSqlOf(core).exec("SELECT 1 FROM domain_keys WHERE domain = 'spare.test'").toArray()).toEqual([]);
+  });
+
+  it('with a provider that manages DKIM (MXRoute): makes the domain there, returns its record, keeps no key', async () => {
+    const managed = new FakeMailProvider() as FakeMailProvider & { managesDkim: boolean };
+    managed.managesDkim = true;
+    const base = managed.records.bind(managed);
+    managed.records = async (domain, dkim) => ({ ...(await base(domain, dkim)), verification: { name: `_da-verify-abc.${domain}`, value: 'domain-verified' }, ...(managed.domains.has(domain) ? { dkim: { selector: 'x', value: 'v=DKIM1; p=THEIRS' } } : {}) });
+    core = new DirectoryCore(nodeSql(), { webUrlBase: 'https://app.test', registrationEnabled: true, send: async () => {}, resolve: async (name, type) => (type === 'TXT' && name === '_freeflow.acme.test' ? txt : []), mailProvider: managed });
+    const org = newId();
+    core.reserveSlug('acme', org);
+    await verified(org);
+    const before = (await core.describeDomains(org)).find((d) => d.domain === 'acme.test')!;
+    expect(before.records.map((r) => r.purpose)).toEqual(['verification', 'provider', 'mx', 'spf', 'dmarc']);
+    expect(before.records[1]).toMatchObject({ name: '_da-verify-abc.acme.test', value: 'domain-verified' });
+    const out = await core.setDomainDkim(org, 'acme.test');
+    expect(managed.calls.map((c) => c.method)).toEqual(['createDomain']);
+    expect(out).toEqual({ domain: 'acme.test', kind: 'own', selector: 'x', record: { type: 'TXT', name: 'x._domainkey.acme.test', value: 'v=DKIM1; p=THEIRS', purpose: 'dkim' } });
+    expect(nodeSqlOf(core).exec('SELECT 1 FROM domain_keys').toArray()).toEqual([]);
+    const after = (await core.describeDomains(org)).find((d) => d.domain === 'acme.test')!;
+    expect(after.records.at(-1)).toEqual(out.record);
+    // Pending at the provider (its TXT not in DNS yet): a 409 the admin can act on.
+    managed.createDomain = async () => { throw new ProviderError('pending', 'TXT missing'); };
+    core.addDomain(org, 'spare.test');
+    nodeSqlOf(core).exec("UPDATE domains SET verified_at = 1 WHERE domain = 'spare.test'");
+    await expect(core.setDomainDkim(org, 'spare.test')).rejects.toMatchObject({ statusCode: 409, code: 'mail_provider_pending' });
   });
 
   it('says so when the provider fails, without storing a key', async () => {

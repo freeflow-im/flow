@@ -175,13 +175,13 @@ describe('OpenSRS records and servers', () => {
     expect(clusterOf('https://admin.test.hostedemail.com/api')).toBe('test');
   });
 
-  it('gives the documented MX, SPF include, DMARC default, and the DKIM TXT once set', () => {
+  it('gives the documented MX, SPF include, DMARC default, and the DKIM TXT once set', async () => {
     const a = new OpenSrsMailProvider({ apiUrl: 'https://admin.a.hostedemail.com/api', ...CREDS });
-    expect(a.records('example.org')).toEqual({ mx: [{ host: 'mx.example.org.cust.hostedemail.com', priority: 0 }], spfInclude: '_spf.hostedemail.com', dmarcPolicy: 'v=DMARC1; p=none' });
+    expect(await a.records('example.org')).toEqual({ mx: [{ host: 'mx.example.org.cust.hostedemail.com', priority: 0 }], spfInclude: '_spf.hostedemail.com', dmarcPolicy: 'v=DMARC1; p=none' });
     const b = new OpenSrsMailProvider({ apiUrl: 'https://admin.b.hostedemail.com/api', ...CREDS });
-    expect(b.records('example.org').mx[0]!.host).toBe('mx.example.org.cust.b.hostedemail.com');
-    expect(make(fakeFetch().fn).records('example.org').mx[0]!.host).toBe('mx.example.org.cust.test.hostedemail.com');
-    const records = recordsFor('example.org', a.records('example.org', { selector: 'ff202611', value: 'v=DKIM1; k=rsa; p=AAAA' }));
+    expect((await b.records('example.org')).mx[0]!.host).toBe('mx.example.org.cust.b.hostedemail.com');
+    expect((await make(fakeFetch().fn).records('example.org')).mx[0]!.host).toBe('mx.example.org.cust.test.hostedemail.com');
+    const records = recordsFor('example.org', await a.records('example.org', { selector: 'ff202611', value: 'v=DKIM1; k=rsa; p=AAAA' }));
     expect(records).toEqual([
       { type: 'MX', name: 'example.org', value: 'mx.example.org.cust.hostedemail.com', priority: 0, purpose: 'mx' },
       { type: 'TXT', name: 'example.org', value: 'v=spf1 include:_spf.hostedemail.com ~all', purpose: 'spf' },

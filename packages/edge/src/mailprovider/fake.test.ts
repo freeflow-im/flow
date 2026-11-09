@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { FakeMailProvider } from './fake';
 import { mailProviderFor, noneMailProvider } from './index';
+import { MxRouteMailProvider } from './mxroute';
 import { OpenSrsMailProvider } from './opensrs';
 
 describe('the fake mail provider', () => {
@@ -57,8 +58,8 @@ describe('the fake mail provider', () => {
     expect(mailProviderFor({ MAIL_PROVIDER: 'fake', GREENMAIL_IMAP_PORT: '3144' })).toBe(mailProviderFor({ MAIL_PROVIDER: 'fake', GREENMAIL_IMAP_PORT: '3144' }));
   });
 
-  it('gives its records, marked as not for a real zone', () => {
-    const r = new FakeMailProvider().records('acme.test', { selector: 's', value: 'v=DKIM1; k=rsa; p=A' });
+  it('gives its records, marked as not for a real zone', async () => {
+    const r = await new FakeMailProvider().records('acme.test', { selector: 's', value: 'v=DKIM1; k=rsa; p=A' });
     expect(r).toMatchObject({ mx: [{ host: 'mx.fake-mail.test', priority: 10 }], spfInclude: '_spf.fake-mail.test', placeholder: true, dkim: { selector: 's' } });
   });
 });
@@ -69,10 +70,12 @@ describe('mailProviderFor', () => {
     expect(mailProviderFor({ MAIL_PROVIDER: 'fake' })).toBeInstanceOf(FakeMailProvider);
     expect(mailProviderFor({ MAIL_PROVIDER: 'opensrs', OPENSRS_API_URL: 'https://admin.a.hostedemail.com/api', OPENSRS_USER: 'u', OPENSRS_PASSWORD: 'p' })).toBeInstanceOf(OpenSrsMailProvider);
     expect(mailProviderFor({ MAIL_PROVIDER: 'opensrs' })).toBe(noneMailProvider);
+    expect(mailProviderFor({ MAIL_PROVIDER: 'mxroute', MXROUTE_SERVER: 'sunfire.mxrouting.net', MXROUTE_USERNAME: 'u', MXROUTE_API_KEY: 'k' })).toBeInstanceOf(MxRouteMailProvider);
+    expect(mailProviderFor({ MAIL_PROVIDER: 'mxroute', MXROUTE_SERVER: 'sunfire.mxrouting.net' })).toBe(noneMailProvider);
   });
 
   it('none has the placeholder records and refuses every change', async () => {
-    expect(noneMailProvider.records('acme.test')).toMatchObject({ placeholder: true, mx: [{ host: 'mx.example.invalid' }] });
+    expect(await noneMailProvider.records('acme.test')).toMatchObject({ placeholder: true, mx: [{ host: 'mx.example.invalid' }] });
     await expect(noneMailProvider.createDomain('acme.test', { quotaBytes: 1, maxUsers: 1 })).rejects.toMatchObject({ code: 'unavailable' });
   });
 });
