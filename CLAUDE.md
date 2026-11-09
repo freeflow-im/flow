@@ -102,9 +102,11 @@
   `apps/macos/tools/make-app.sh` → `dist/Flow.app`.
 - UI automation requires an idle desktop or explicit operator authorization
   (see the QA manual in `.claude/agents/quality-assurance.md`).
-- **`packages/docs` is the Workspace app of the FreeFlow suite** (the former
-  `freeflow-im/mcp-docs` repository, added as a git subtree on 2026-11-01; design in
-  `docs/specs/freeflow-suite.md`). It has its own conventions in
+- **`packages/docs` is the Docs engine and the Workspace app of the FreeFlow suite** (the
+  former `freeflow-im/mcp-docs` repository, added as a git subtree on 2026-11-01; design in
+  `docs/specs/freeflow-suite.md` and `docs/specs/docs-core.md`). The standalone MCP Docs
+  desktop app is `apps/mcp-docs` (Electron, the installer, the plugins), which runs the
+  same editors over a folder; its version and releases are its own. It has its own conventions in
   `packages/docs/CLAUDE.md` and `packages/docs/docs/architecture.md`; read those
   before changing it. It is in the pnpm workspace (`pnpm --filter @flow/docs
     release workflow. The hosted app ships with the suite (`flow-aws-deploy.yml`,

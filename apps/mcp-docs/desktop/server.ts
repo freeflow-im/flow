@@ -2,18 +2,24 @@
 // this machine as its library (AppOptions.local). Started by desktop/main.js as a child process, which
 // tells it the folder (LOCAL_DIR), where to keep its own data (DATA_DIR) and the token its window sends
 // (LOCAL_TOKEN), and is told the port once the server is listening.
-import '../server/env.ts';
 import { mkdirSync } from 'node:fs';
-import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { buildApp, type LocalAgents } from '../server/app.ts';
-import { spotlightFind } from '../server/localStore.ts';
-import { onOwnWrite } from '../server/sheets.ts';
-import { ElectronRenderer, type PdfAnswer } from '../server/pdf.ts';
-import { WebBridge, type WebAnswer } from '../server/webCopy.ts';
-import type { NewFilesSettings, NewFilesUpdate } from '../shared/types.ts';
+import { pathToFileURL } from 'node:url';
+import type { LocalAgents } from '@flow/docs/server/app.ts';
+import type { PdfAnswer } from '@flow/docs/server/pdf.ts';
+import type { WebAnswer } from '@flow/docs/server/webCopy.ts';
+import type { NewFilesSettings, NewFilesUpdate } from '@flow/docs/shared/types.ts';
+import { docsFile } from './docsRoot.js';
 
-const root = path.resolve(import.meta.dirname, '..');
+// The Docs code (packages/docs) is loaded from where it is (docsRoot.js): the workspace link in a clone, `docs/` in the
+// packaged app. The types are the package's; the modules are the same files.
+const docsModule = <T>(...parts: string[]): Promise<T> => import(pathToFileURL(docsFile(...parts)).href) as Promise<T>;
+await docsModule('server', 'env.ts');
+const { buildApp } = await docsModule<typeof import('@flow/docs/server/app.ts')>('server', 'app.ts');
+const { spotlightFind } = await docsModule<typeof import('@flow/docs/server/localStore.ts')>('server', 'localStore.ts');
+const { onOwnWrite } = await docsModule<typeof import('@flow/docs/server/sheets.ts')>('server', 'sheets.ts');
+const { ElectronRenderer } = await docsModule<typeof import('@flow/docs/server/pdf.ts')>('server', 'pdf.ts');
+const { WebBridge } = await docsModule<typeof import('@flow/docs/server/webCopy.ts')>('server', 'webCopy.ts');
 const dir = process.env.LOCAL_DIR;
 const dataDir = process.env.DATA_DIR;
 if (!dir || !dataDir) throw new Error('LOCAL_DIR and DATA_DIR are required');
@@ -49,7 +55,7 @@ const newFiles = send ? { get: () => askMain<NewFilesSettings>({ newFiles: true 
 if (send) onOwnWrite((file) => send({ wrote: file }));
 const app = await buildApp({
   dataDir,
-  staticDir: path.join(root, 'dist', 'client'),
+  staticDir: docsFile('dist', 'client'),
   // A file outside the folder (one of Recents) is opened by the app, which serves its folder instead.
   local: {
     dir,

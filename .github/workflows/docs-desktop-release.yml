@@ -1,5 +1,5 @@
-# Publishes a desktop release of the Workspace app (packages/docs, the former MCP Docs repository) when its tag
-# (desktop-v<version>, made by `pnpm release -- <version>` in packages/docs) is pushed: checks and builds the
+# Publishes a desktop release of MCP Docs (apps/mcp-docs, the standalone app over packages/docs; docs/specs/docs-core.md) when
+# its tag (desktop-v<version>, made by `pnpm release -- <version>` in apps/mcp-docs) is pushed: checks and builds the
 # macOS and Windows apps, makes the GitHub release with both and publishes the installer to npm.
 # Run it by hand (Actions › Docs desktop release › Run workflow) to check that both build, without publishing
 # anything; the builds are kept as the run's artifacts for a few days.
@@ -24,12 +24,12 @@ jobs:
         include:
           - os: macos-15 # Apple silicon, as the Mac app is built for
             script: desktop:mac
-            files: packages/docs/release/MCP-Docs-*-mac-arm64.zip
+            files: apps/mcp-docs/release/MCP-Docs-*-mac-arm64.zip
           - os: windows-latest
             # The app's icon and details on the .exe (it is not signed); the publish job below makes the release, not
             # electron-builder, which would on a CI machine.
             script: desktop:win -- -c.win.signAndEditExecutable=true --publish never
-            files: packages/docs/release/MCP-Docs-*-win-x64-setup.exe
+            files: apps/mcp-docs/release/MCP-Docs-*-win-x64-setup.exe
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -39,11 +39,11 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version-file: packages/docs/.node-version
+          node-version-file: apps/mcp-docs/.node-version
           cache: pnpm
 
       - name: Check the versions
-        working-directory: packages/docs
+        working-directory: apps/mcp-docs
         run: |
           v=$(node -p "require('./package.json').version")
           for f in installer/package.json claude-plugin/.claude-plugin/plugin.json claude-plugin/.codex-plugin/plugin.json; do
@@ -61,9 +61,11 @@ jobs:
       - run: pnpm --filter @flow/shared build
       - run: pnpm --filter @flow/docs typecheck
       - run: pnpm --filter @flow/docs test
+      - run: pnpm --filter @freeflow-im/mcp-docs-app typecheck
+      - run: pnpm --filter @freeflow-im/mcp-docs-app test
 
       - name: Build the app
-        run: pnpm --filter @flow/docs ${{ matrix.script }}
+        run: pnpm --filter @freeflow-im/mcp-docs-app ${{ matrix.script }}
 
       - uses: actions/upload-artifact@v4
         with:
@@ -82,18 +84,18 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: packages/docs
+        working-directory: apps/mcp-docs
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version-file: packages/docs/.node-version
+          node-version-file: apps/mcp-docs/.node-version
           registry-url: https://registry.npmjs.org
 
       - uses: actions/download-artifact@v4
         with:
-          path: packages/docs/release
+          path: apps/mcp-docs/release
           merge-multiple: true
 
       - name: Write the release notes
@@ -123,7 +125,7 @@ jobs:
 
       # The installer is its own small npm package; npm publishes it (trusted publishing), pnpm is not involved.
       - name: Publish the installer to npm
-        working-directory: packages/docs/installer
+        working-directory: apps/mcp-docs/installer
         run: |
           npm install -g npm@^11.5.1 # trusted publishing
           npm publish --provenance

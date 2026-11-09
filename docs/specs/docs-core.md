@@ -3,7 +3,7 @@
 Status: design, rulings confirmed · 2026-11-09 (§6, `decision_log.md`): the standalone MCP Docs desktop app stays a
 product; it and the suite's hosted Docs app stay in this one repository; what they share becomes an explicit package;
 MCP Docs' MCP server and Flow's MCP are separate. Phase 1 and the code of phase 4 are PR #744 (2026-11-09); phases 2
-and 3 remain. Two deviations are noted in §2.3, §4 and §4.1.
+and 3 are the PR after it, in the shape §4.3 describes. Deviations are noted in §2.3, §4, §4.1 and §4.3.
 
 Related: `docs/specs/freeflow-suite.md` (the merge of 2026-11-01; §7 is the desktop plan this replaces in part),
 `docs/specs/cloudflare-spikes.md` (how the Docs code was first run on Workers), `packages/docs/CLAUDE.md` and
@@ -151,6 +151,24 @@ apps/mcp-docs/             @freeflow-im/mcp-docs-app   the standalone app: Elect
   own release workflow. It knows nothing of organizations or the suite's Directory. Its Web tab keeps opening
   `app.freeflow.im/workspace` as today.
 
+### 4.3 As built (phases 2 and 3, 2026-11-09)
+
+- **The core keeps its name and place: `packages/docs`, `@flow/docs`.** The manifests, the deploys and the Worker already
+  name it; a `docs-core` rename would have moved 80,000 lines for a label. There is no thin `packages/docs` hosted entry
+  either: the hosted build is the same Vite build with `BASE_PATH=/workspace/`.
+- **The standalone app is `apps/mcp-docs`** (`@freeflow-im/mcp-docs-app`, its own version): `desktop/`, `installer/`,
+  `claude-plugin/`, `.claude-plugin/`, `release-notes/`, `scripts/release.mjs`, the electron-builder configuration. It
+  depends on `@flow/docs` and loads the Docs code from `desktop/docsRoot.js`: the workspace link in a clone, `docs/` in
+  the packaged app, where electron-builder copies it beside `node_modules` because Node strips types from no file under
+  `node_modules` and the Docs server runs from its TypeScript sources.
+- **The standalone's server-side features stay in the core, behind `#runtime/local/*`** (the folder stores, backup,
+  folder watching, the local MCP server, window tools, jobs, the Claude Code driver, Spotlight recents): real on Node,
+  inert on Workers. Moving them to the app would make the core import the app; cutting `app.ts`'s local-mode routes
+  loose from them is a later refactor, not a file move.
+- **The client host (§3.2) is `client/src/host.tsx`:** `HostProvider` with `{ desktop, suite }`, given by `main.tsx` from
+  who is signed in where; the components that named the file browser or the window read `useHost()`. The suite's own
+  components (the suite bar, organizations) keep importing the suite's API, since they are the suite's.
+
 ### 4.1 Releases of the standalone app
 
 - `docs-desktop-release.yml` publishes to this repository's GitHub releases (both repositories are public, so the
@@ -190,9 +208,9 @@ because it deletes 17,800 lines and the Worker's deploy must be verified before 
    the copy of `plugin/server` goes too. `packages/edge/src/docs/{server,shared,plugin}` are deleted. Done when: the
    Docs tests, the Worker's tests, `test/e2e-docs.mjs` and the MCP e2e pass, and the hosted Docs is verified live.
    Also carries the two lagging fixes.
-2. **The client host.** `desktopBridge` and the suite's pieces behind one `host`; two entries, `/workspace` and the
+2. **The client host.** *Done, as §4.3 says.* `desktopBridge` and the suite's pieces behind one `host`; two entries, `/workspace` and the
    desktop's, from one build; the 34 files reviewed. Done when both apps run from the same `dist`.
-3. **The package split.** `packages/docs-core`, `packages/docs` as the thin hosted entry, `apps/mcp-docs`; exports
+3. **The package split.** *Done, as §4.3 says.* `packages/docs-core`, `packages/docs` as the thin hosted entry, `apps/mcp-docs`; exports
    map; tsconfigs; CI runs the core's tests once; `scripts/clients.mjs` and the manifests still find `packages/docs/dist`.
 4. **Releases from here.** §4.1. *The code is in PR #744; the hand-over release is the operation that remains.* Done when an
    installed 0.2.38 updates to a release published from this repository.

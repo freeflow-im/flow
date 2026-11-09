@@ -1,6 +1,7 @@
 packages:
   - packages/*
   - apps/desktop
+  - apps/mcp-docs
 
 # One toolchain for every package (FreeFlow suite, docs/specs/freeflow-suite.md §2.5 "Build"):
 # the versions packages/docs arrived with. A package pins these as "catalog:".
