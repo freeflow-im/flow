@@ -317,11 +317,12 @@ gh run list --workflow publish-bridge.yml   # check a release
 
 ---
 
-## Workspace app (packages/docs)
+## Workspace app (packages/docs) and MCP Docs (apps/mcp-docs)
 
 The former MCP Docs repository, added as a git subtree for the FreeFlow suite
-(`docs/specs/freeflow-suite.md`). It keeps its own release map in
-`packages/docs/CLAUDE.md` ("Working on it"). Two root workflows carry its deploys:
+(`docs/specs/freeflow-suite.md`), split by `docs/specs/docs-core.md`: `packages/docs` is
+the engine and the hosted app, `apps/mcp-docs` the standalone desktop app (Electron, the
+installer, the plugins) with its own version. Two root workflows carry the deploys:
 
 - The hosted Workspace app ships inside the suite: the server's image (`flow-aws-deploy.yml`)
   for the ChatGPT plugin on AWS, and the Worker (`deploy-edge.yml`) for app.freeflow.im. The
@@ -329,7 +330,8 @@ The former MCP Docs repository, added as a git subtree for the FreeFlow suite
 - `docs-desktop-release.yml` builds the macOS and Windows apps, makes the GitHub
   release **in this repository** and publishes the installer to npm when a
   `desktop-v<version>` tag is pushed; the tag is made by
-  `pnpm --filter @flow/docs release -- <version>`. Installed apps check this
+  `pnpm --filter @freeflow-im/mcp-docs-app release -- <version>` in `apps/mcp-docs`, after
+  writing `release-notes/<version>.md` there. Installed apps check this
   repository's releases for updates (`desktop/updater.js`), as does
   `npx @freeflow-im/mcp-docs`. Both workflows install with pnpm at the repository root.
   **Hand-over from the old repository** (`docs/specs/docs-core.md` §4.1, once): the

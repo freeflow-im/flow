@@ -33,22 +33,24 @@ for). Read the part you are changing before you change it, and keep it up to dat
   (`localMcp.ts`, `windowTools.ts`) and the assistant (`server/agent`).
 - `shared` — code used by both: the formats (`types.ts` workbooks, `deck.ts`, `doc.ts`, `markdown.ts`, `chart.ts`,
   `csv.ts`), the formula engine, `folders.ts`, and the assistant protocol (`shared/agent`).
-- `desktop/` — Electron (`main.js`, which starts `desktop/server.ts` per folder; `mcpAuth.js`, `updater.js`).
+- `server/runtime/` — the runtime seam (`#runtime/*`, `docs/architecture.md`): Node's side and the Worker's.
 - `plugin/` — the ChatGPT plugin's server (`plugin/server`, its MCP tools, also served by the desktop app) and web view.
-- `claude-plugin/`, `installer/` — the Claude Code / Codex plugin and the `npx @freeflow-im/mcp-docs` installer.
+- `../../apps/mcp-docs` — the standalone desktop app: Electron (`desktop/main.js`, which starts `desktop/server.ts` per
+  folder over this package's code; `mcpAuth.js`, `updater.js`), the Claude Code / Codex plugin (`claude-plugin/`) and the
+  `npx @freeflow-im/mcp-docs` installer (`installer/`), with its own version and release notes.
 
 ## Working on it
 
 - Checks: `pnpm typecheck` and `pnpm test` (vitest). Both must pass before a change is finished.
-- Run the desktop app: `pnpm desktop -- <folder>` (builds the client first). `node desktop/server.ts` with
-  `LOCAL_DIR`, `DATA_DIR` and `PORT` serves one folder to a browser, without Electron. Rebuilding the client
-  (`npx vite build`) needs that server restarted.
+- Run the desktop app: `pnpm desktop -- <folder>` in `apps/mcp-docs` (builds this client first). `node desktop/server.ts`
+  there with `LOCAL_DIR`, `DATA_DIR` and `PORT` serves one folder to a browser, without Electron. Rebuilding the client
+  (`npx vite build` here) needs that server restarted.
 - Formatting: long lines (up to ~230) and single quotes. Do not run Prettier with its defaults over a file; it rewraps all of it.
 - Pushing to main deploys the hosted app (`.github/workflows/aws-deploy.yml`).
-- A desktop release: write `release-notes/<version>.md`, run `pnpm release -- <version>` (sets every version,
-  commits and tags `desktop-v<version>`), then `git push origin main desktop-v<version>`. The tag runs
-  `.github/workflows/desktop-release.yml`: the Mac and Windows builds (their tests run on Windows too), the GitHub
-  release and the installer on npm.
+- A desktop release, in `apps/mcp-docs`: write `release-notes/<version>.md`, run `pnpm release -- <version>` (sets every
+  version, commits and tags `desktop-v<version>`), then `git push origin main desktop-v<version>`. The tag runs
+  `.github/workflows/docs-desktop-release.yml` at the repository root: the Mac and Windows builds (their tests run on
+  Windows too), the GitHub release and the installer on npm.
 
 ## How the assistant works
 

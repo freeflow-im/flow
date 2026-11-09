@@ -98,6 +98,9 @@ jobs:
       - name: Typecheck packages/docs
         run: pnpm --filter @flow/docs typecheck
 
+      - name: Typecheck apps/mcp-docs
+        run: pnpm --filter @freeflow-im/mcp-docs-app typecheck
+
       # The OCR test in packages/docs (server/pdfMarkdown.test.ts) needs
       # Tesseract's English model. @llamaindex/liteparse does not ship it: on
       # first OCR it downloads eng.traineddata (15 MB, from

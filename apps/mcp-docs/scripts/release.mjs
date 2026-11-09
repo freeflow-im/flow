@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Starts a desktop release: `pnpm release -- 0.3.0` (in packages/docs; `pnpm --filter @flow/docs release -- 0.3.0` at the root).
+// Starts a desktop release: `pnpm release -- 0.3.0` (in apps/mcp-docs; `pnpm --filter @freeflow-im/mcp-docs-app release -- 0.3.0` at the root).
 // Sets the version of the app, the Claude Code and Codex plugin, its Claude marketplace entry and the installer, commits that with
 // the release notes (release-notes/<version>.md, which you write first) and tags it desktop-v<version>. Pushing the
 // tag runs .github/workflows/docs-desktop-release.yml (at the repository root), which builds the app, makes the GitHub release and publishes the

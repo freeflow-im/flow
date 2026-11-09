@@ -28,7 +28,6 @@
     "client/src",
     "vite.config.ts",
     "plugin",
-    "desktop",
     "test"
   ],
   "exclude": [

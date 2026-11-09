@@ -1,0 +1,236 @@
+{
+  "name": "@freeflow-im/mcp-docs-app",
+  "version": "0.2.37",
+  "private": true,
+  "type": "module",
+  "description": "MCP Docs, the desktop app: the Docs editors (@flow/docs) over a folder of real files, with an MCP server for agents on this machine.",
+  "main": "desktop/main.js",
+  "bin": {
+    "mcp-docs-dev": "desktop/cli.js"
+  },
+  "scripts": {
+    "client:build": "pnpm --filter @flow/docs exec vite build",
+    "desktop": "pnpm client:build && node desktop/cli.js",
+    "desktop:start": "node desktop/cli.js",
+    "desktop:pack": "pnpm client:build && electron-builder --dir",
+    "desktop:win": "pnpm client:build && electron-builder --win --x64",
+    "desktop:mac": "pnpm client:build && electron-builder --mac --dir && codesign --force --deep --sign - \"release/mac-arm64/MCP Docs.app\" && cd release && rm -f MCP-Docs-$npm_package_version-mac-arm64.zip && ditto -c -k --sequesterRsrc --keepParent \"mac-arm64/MCP Docs.app\" MCP-Docs-$npm_package_version-mac-arm64.zip",
+    "release": "node scripts/release.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@flow/docs": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "electron": "catalog:",
+    "electron-builder": "^26.15.3",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "build": {
+    "appId": "im.freeflow.docs",
+    "productName": "MCP Docs",
+    "protocols": [
+      {
+        "name": "MCP Docs",
+        "schemes": [
+          "mcpdocs"
+        ]
+      }
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "asar": false,
+    "files": [
+      "package.json",
+      "desktop/**",
+      "!**/*.test.ts",
+      {
+        "from": "../../packages/docs",
+        "to": "docs",
+        "filter": [
+          "package.json",
+          "server/**",
+          "shared/**",
+          "client/src/**",
+          "plugin/server/**",
+          "dist/client/**",
+          "!**/*.test.ts",
+          "!**/*.test.tsx",
+          "!dist/client/marketing/**",
+          "!server/fixtures/**",
+          "!server/scripts/**"
+        ]
+      },
+      "!node_modules/@flow/docs/**",
+      "!node_modules/@anthropic-ai/claude-agent-sdk-*/**",
+      "!node_modules/pdfjs-dist/**",
+      "!node_modules/@napi-rs/**",
+      "!node_modules/@llamaindex/liteparse/*.node",
+      "!node_modules/@llamaindex/liteparse/*.so"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "artifactName": "MCP-Docs-${version}-win-x64-setup.${ext}",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": "dir",
+      "identity": null,
+      "extendInfo": {
+        "CFBundleDocumentTypes": [
+          {
+            "CFBundleTypeName": "MCP Docs Spreadsheet",
+            "CFBundleTypeRole": "Editor",
+            "LSHandlerRank": "Owner",
+            "LSItemContentTypes": [
+              "im.freeflow.docs.sheet"
+            ]
+          },
+          {
+            "CFBundleTypeName": "MCP Docs Presentation",
+            "CFBundleTypeRole": "Editor",
+            "LSHandlerRank": "Owner",
+            "LSItemContentTypes": [
+              "im.freeflow.docs.slides"
+            ]
+          },
+          {
+            "CFBundleTypeName": "MCP Docs Document",
+            "CFBundleTypeRole": "Editor",
+            "LSHandlerRank": "Owner",
+            "LSItemContentTypes": [
+              "im.freeflow.docs.doc"
+            ]
+          },
+          {
+            "CFBundleTypeName": "Markdown Document",
+            "CFBundleTypeRole": "Editor",
+            "LSHandlerRank": "Default",
+            "LSItemContentTypes": [
+              "net.daringfireball.markdown"
+            ]
+          },
+          {
+            "CFBundleTypeName": "CSV File",
+            "CFBundleTypeRole": "Editor",
+            "LSHandlerRank": "Default",
+            "LSItemContentTypes": [
+              "public.comma-separated-values-text"
+            ]
+          },
+          {
+            "CFBundleTypeName": "Office Document",
+            "CFBundleTypeRole": "Editor",
+            "LSHandlerRank": "Default",
+            "LSItemContentTypes": [
+              "org.openxmlformats.wordprocessingml.document",
+              "org.openxmlformats.spreadsheetml.sheet",
+              "org.openxmlformats.presentationml.presentation",
+              "com.microsoft.excel.xls"
+            ]
+          },
+          {
+            "CFBundleTypeName": "PDF Document",
+            "CFBundleTypeRole": "Editor",
+            "LSHandlerRank": "Default",
+            "LSItemContentTypes": [
+              "com.adobe.pdf"
+            ]
+          },
+          {
+            "CFBundleTypeName": "Picture",
+            "CFBundleTypeRole": "Editor",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": [
+              "public.png",
+              "public.jpeg",
+              "org.webmproject.webp"
+            ]
+          },
+          {
+            "CFBundleTypeName": "GIF Picture",
+            "CFBundleTypeRole": "Viewer",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": [
+              "com.compuserve.gif"
+            ]
+          }
+        ],
+        "UTExportedTypeDeclarations": [
+          {
+            "UTTypeIdentifier": "im.freeflow.docs.sheet",
+            "UTTypeDescription": "MCP Docs Spreadsheet",
+            "UTTypeConformsTo": [
+              "public.data",
+              "public.content"
+            ],
+            "UTTypeTagSpecification": {
+              "public.filename-extension": [
+                "ffsheet"
+              ]
+            }
+          },
+          {
+            "UTTypeIdentifier": "im.freeflow.docs.slides",
+            "UTTypeDescription": "MCP Docs Presentation",
+            "UTTypeConformsTo": [
+              "public.data",
+              "public.content"
+            ],
+            "UTTypeTagSpecification": {
+              "public.filename-extension": [
+                "ffslides"
+              ]
+            }
+          },
+          {
+            "UTTypeIdentifier": "im.freeflow.docs.doc",
+            "UTTypeDescription": "MCP Docs Document",
+            "UTTypeConformsTo": [
+              "public.data",
+              "public.content"
+            ],
+            "UTTypeTagSpecification": {
+              "public.filename-extension": [
+                "ffdoc"
+              ]
+            }
+          }
+        ],
+        "UTImportedTypeDeclarations": [
+          {
+            "UTTypeIdentifier": "net.daringfireball.markdown",
+            "UTTypeDescription": "Markdown Document",
+            "UTTypeConformsTo": [
+              "public.plain-text"
+            ],
+            "UTTypeTagSpecification": {
+              "public.filename-extension": [
+                "md",
+                "markdown"
+              ],
+              "public.mime-type": [
+                "text/markdown"
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}

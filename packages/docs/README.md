@@ -143,6 +143,7 @@ The app's own data for a folder (the assistant's chats, pasted images, branch sn
 
 ```sh
 npm install
+cd ../../apps/mcp-docs       # the desktop app is its own package
 pnpm desktop                 # build the client, then open the current directory in the desktop app
 pnpm desktop -- ~/Documents  # or a folder you name
 npm link                        # once, to get the `mcp-docs-dev` command:

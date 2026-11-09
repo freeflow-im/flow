@@ -4,7 +4,7 @@
 // the crumb before its name.
 import { useEffect, useRef, useState } from 'react';
 import { api, type LocalPlace } from '../api.ts';
-import { fileBrowserName } from '../desktopBridge.ts';
+import { useHost } from '../host.tsx';
 import { PromptModal } from './Modal.tsx';
 
 export function LocalFolderMenu({ folder, onFile, onFolder }: {
@@ -19,6 +19,7 @@ export function LocalFolderMenu({ folder, onFile, onFolder }: {
   const [asking, setAsking] = useState(false);
   const [places, setPlaces] = useState<LocalPlace[]>([]);
   const ref = useRef<HTMLSpanElement>(null);
+  const fileBrowser = useHost().desktop?.fileBrowser ?? 'Files';
 
   // Asked each time the menu opens: the usual folders can come and go.
   useEffect(() => {
@@ -97,7 +98,7 @@ export function LocalFolderMenu({ folder, onFile, onFolder }: {
               void api.revealLocal({ folder }).catch(() => {});
             }}
           >
-            Open in {fileBrowserName()}
+            Open in {fileBrowser}
           </button>
         </div>
       )}

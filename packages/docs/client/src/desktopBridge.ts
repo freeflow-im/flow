@@ -4,6 +4,7 @@
 import { useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api } from './api.ts';
+import type { DesktopHost } from './host.tsx';
 
 const KINDS = { doc: 'doc', d: 'deck', s: 'sheet', md: 'markdown', f: 'file' } as const;
 
@@ -48,6 +49,9 @@ export function useDesktopBridge(on: boolean): void {
     return () => window.removeEventListener('universal-show', show);
   }, [on, navigate]);
 }
+
+/** The desktop app's window, for the host context (host.tsx): what the components need of it. */
+export const desktopHost = (): DesktopHost => ({ fileBrowser: fileBrowserName(), windowId: WINDOW_ID });
 
 /** The system's file browser, as the desktop app's "Open in …" items name it. */
 export function fileBrowserName(): string {

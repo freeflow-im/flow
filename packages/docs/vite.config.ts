@@ -17,7 +17,7 @@ export default defineConfig({
   build: { outDir: '../dist/client', emptyOutDir: true },
   test: {
     root: '.',
-    include: ['shared/**/*.test.ts', 'server/**/*.test.ts', 'client/src/**/*.test.ts', 'plugin/**/*.test.ts', 'desktop/**/*.test.ts'],
+    include: ['shared/**/*.test.ts', 'server/**/*.test.ts', 'client/src/**/*.test.ts', 'plugin/**/*.test.ts'],
     setupFiles: ['test/windowsTemp.ts'],
     // Windows machines (the release's build) are slower to start a server and touch files.
     testTimeout: process.platform === 'win32' ? 20_000 : 5_000,

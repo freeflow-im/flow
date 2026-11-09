@@ -13,6 +13,7 @@ import { contextMenuTemplate } from './contextMenu.js';
 import { LocalOAuth } from './mcpAuth.js';
 import { DEFAULT_KINDS, KINDS, watchNewFiles } from './newFiles.js';
 import { createUpdater } from './updater.js';
+import { docsFile } from './docsRoot.js';
 
 const root = path.resolve(import.meta.dirname, '..');
 // Also names the app's data directory, which would otherwise be the generic "Electron" one.
@@ -960,8 +961,8 @@ app.whenReady().then(async () => {
   if (app.isPackaged || process.env.MCPDOCS_SCHEME === '1') app.setAsDefaultProtocolClient('mcpdocs');
   buildMenu();
   startMcpProxy();
-  if (!existsSync(path.join(root, 'dist', 'client', 'index.html'))) {
-    dialog.showErrorBox('MCP Docs', 'The app has not been built yet. Run "npm run build" in the project, then start it again.');
+  if (!existsSync(docsFile('dist', 'client', 'index.html'))) {
+    dialog.showErrorBox('MCP Docs', 'The app has not been built yet. Run "pnpm client:build" in apps/mcp-docs, then start it again.');
     return app.quit();
   }
   if (!existsSync(keysCheckedFile())) {
