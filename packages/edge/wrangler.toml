@@ -48,6 +48,11 @@ not_found_handling = "none"
 # through CLOUDFLARE_DNS_TOKEN before the domain is made, an organization's own domain shows it in its Domains list.
 [vars]
 ORIGIN_URL = "https://origin.freeflow.im"
+# Hosted mail is on (decision_log 2026-11-08): MXRoute on this server, with the MXROUTE_USERNAME and MXROUTE_API_KEY secrets.
+# From here a new account waits for its mailbox before it is active (platform.md §3.4); existing members get theirs when an
+# owner presses "set up mailboxes".
+MAIL_PROVIDER = "mxroute"
+MXROUTE_SERVER = "sunfire.mxrouting.net"
 # The hosts the built files are served on. The other hosts' paths are the origin's (the plugin, the 301s to the app).
 ASSET_HOSTS = "app.freeflow.im,edge.freeflow.im"
 # The hosts the ported API answers on: app.freeflow.im since the cut-over (2026-11-02).
