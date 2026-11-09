@@ -186,8 +186,9 @@ ordinary attendee line; mailing it is ordinary mail. Every surface that shows th
 Docs. A guest has no address at all, because an address with no mailbox behind it bounces. An owner or admin picks each
 account's kind (`PATCH /v1/workspaces/:id/accounts/:accountId/kind`, or every `member` at once with
 `POST /v1/workspaces/:id/accounts/kind`); the owner is always native, and so is an agent, which is brought in to work
-and needs its address and mailbox for it. New joiners who are people take the organization's `defaultAccountKind`
-policy, `native` unless an admin changes it. A guest is never provisioned and starts `active`.
+and needs its address and mailbox for it. A new joiner is native unless the invitation that brought them in was a guest
+invitation (`POST /v1/workspaces/:id/invites { kind: 'guest' }`, docs/specs/workspace-admin.md §6.5); there is no
+default-kind policy (operator ruling, decision_log 2026-11-09). A guest is never provisioned and starts `active`.
 Made a guest, an account's address is let go and a hosted mailbox is suspended, kept for the retention period and then
 deleted by the daily sweep; its address goes to nobody else meanwhile, and comes back (the mailbox resumed) if the
 account is made native again in time. Made native otherwise, it gets a new address and is provisioned.

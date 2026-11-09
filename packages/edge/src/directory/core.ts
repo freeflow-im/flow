@@ -209,19 +209,19 @@ export class DirectoryCore {
     return uniqueAddress(local, this.primaryDomainOf(organizationId), (a) => this.addressTaken(a));
   }
 
-  /** What a new joiner's account is: the organization's `defaultAccountKind` policy, `native` unless an admin chose
-   * `guest`. An owner is always native (§3.3), and so is an agent: an agent is brought in to work, and its mailbox and
-   * calendar are part of that (operator ruling, decision_log 2026-11-09). */
-  private defaultKind(organizationId: string, role: string, isAgent: boolean): AccountKind {
+  /** What a new account is (platform.md §3.3): what the join asked for (an invitation's kind, docs/specs/workspace-admin.md
+   * §6.5), else `native`. An owner is always native, and so is an agent: an agent is brought in to work, and its mailbox and
+   * calendar are part of that (operator rulings, decision_log 2026-11-09). */
+  private defaultKind(_organizationId: string, role: string, isAgent: boolean, asked?: AccountKind): AccountKind {
     if (role === 'owner' || isAgent) return 'native';
-    return this.organization(organizationId)?.policies.defaultAccountKind === 'guest' ? 'guest' : 'native';
+    return asked ?? 'native';
   }
 
   private createAccount(userId: string, organizationId: string, role: string, displayName?: string, provision = true, kind?: AccountKind): void {
     const user = this.userById(userId);
     if (!user) return;
     const name = displayName || (user.display_name as string);
-    const accountKind = kind ?? this.defaultKind(organizationId, role, !!user.is_agent);
+    const accountKind = this.defaultKind(organizationId, role, !!user.is_agent, kind);
     // A guest has no address (§3.3): an address with no mailbox behind it bounces.
     const address = accountKind === 'guest' ? null : this.newAddress(user, name, organizationId);
     const id = newId();
@@ -282,9 +282,9 @@ export class DirectoryCore {
   /** A joiner's account, asked for by the Org object before it writes the member row so the row can carry the address:
    * made when missing, reactivated when removed, its role set otherwise. The outbox's `join` repeats this later and
    * changes nothing. A principal the directory does not know is a 404. */
-  ensureAccount(userId: string, organizationId: string, role: string, displayName?: string): AccountDTO {
+  ensureAccount(userId: string, organizationId: string, role: string, displayName?: string, kind?: AccountKind): AccountDTO {
     if (!this.userById(userId)) throw notFound('user not found');
-    this.joinAccount(userId, organizationId, role, displayName);
+    this.joinAccount(userId, organizationId, role, displayName, kind);
     return this.accountFor(userId, organizationId)!;
   }
 
@@ -436,12 +436,12 @@ export class DirectoryCore {
   }
 
   /** A join's account: made when missing, reactivated with the new role when removed, its role updated otherwise. */
-  private joinAccount(userId: string, organizationId: string, role: string, displayName?: string): void {
+  private joinAccount(userId: string, organizationId: string, role: string, displayName?: string, kind?: AccountKind): void {
     this.sql.exec('INSERT OR IGNORE INTO organizations (id, slug, created_at) VALUES (?, ?, ?)', organizationId, this.organizationSlug(organizationId), Date.now());
     this.ensurePlatformDomain(organizationId);
     if (role === 'owner') this.sql.exec('UPDATE organizations SET owner_user_id = ? WHERE id = ? AND owner_user_id IS NULL', userId, organizationId);
     const existing = this.rows('SELECT * FROM accounts WHERE user_id = ? AND organization_id = ?', userId, organizationId)[0];
-    if (!existing) return this.createAccount(userId, organizationId, role, displayName);
+    if (!existing) return this.createAccount(userId, organizationId, role, displayName, true, kind);
     this.sql.exec('UPDATE accounts SET role = ? WHERE id = ?', role, existing.id);
     // An owner is never a guest (§3.3): a guest made owner (not by the transfer route, which refuses) becomes native.
     if (role === 'owner' && existing.kind === 'guest') this.makeNative({ ...existing, role });

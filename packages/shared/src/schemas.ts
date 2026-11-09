@@ -143,6 +143,8 @@ export const CreateInviteBody = z
   .object({
     email: z.string().email().max(320).optional(),
     emails: z.array(z.string().min(1).max(320)).min(1).max(100).optional(),
+    // docs/specs/workspace-admin.md §6.5: a native member (the default), or a chat guest.
+    kind: z.enum(['native', 'guest']).optional(),
   })
   .refine((b) => b.email !== undefined || b.emails !== undefined, {
     message: 'email or emails is required',
@@ -168,7 +170,6 @@ export const UpdateWorkspaceBody = z
         inviteBy: z.enum(['admins', 'members']).optional(),
         agentsBy: z.enum(['admins', 'members']).optional(),
         linkSharing: z.boolean().optional(),
-        defaultAccountKind: z.enum(['native', 'guest']).optional(),
       })
       .strict()
       .optional(),

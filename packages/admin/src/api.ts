@@ -1,6 +1,6 @@
 // The suite's API on the edge Worker, same origin with the session cookie: the Org object's routes (the workspace, its
 // members, invitations, emoji, join link) and the directory's (domains, accounts). A 401 sends the browser to sign in.
-import type { AccountDTO, DnsRecordDTO, DomainDTO, DomainKind, FileDTO, JoinLinkDTO, OAuthIdentityDTO, PresignedUploadDTO, PublicConfigDTO, UpdateWorkspaceBody, WorkspaceDTO, WorkspaceEmojiDTO, WorkspaceMemberDTO } from '@flow/shared';
+import type { AccountDTO, AccountKind, DnsRecordDTO, DomainDTO, DomainKind, FileDTO, InviteResultDTO, JoinLinkDTO, MemberRole, OAuthIdentityDTO, PresignedUploadDTO, PublicConfigDTO, UpdateWorkspaceBody, WorkspaceDTO, WorkspaceEmojiDTO, WorkspaceInviteDTO, WorkspaceMemberDTO } from '@flow/shared';
 
 export class AdminApiError extends Error {
   constructor(public readonly code: string, message: string, public readonly status: number) {
@@ -87,4 +87,15 @@ export const adminApi = {
   removeDomain: (id: string, domain: string) => request<unknown>('DELETE', `${ws(id)}/domains/${encodeURIComponent(domain)}`),
   // Accounts (routes/accounts.ts), owner or admin: the organization's, removed ones left out.
   accounts: async (id: string) => (await request<{ accounts: AccountDTO[] }>('GET', `${ws(id)}/accounts`)).accounts,
+  // Members (docs/specs/workspace-admin.md §3.2, §5): roles, kinds, removal, mailboxes.
+  setRole: (id: string, userId: string, role: Exclude<MemberRole, 'owner'>) => request<unknown>('PATCH', `${ws(id)}/members/${encodeURIComponent(userId)}/role`, { role }),
+  removeMember: (id: string, userId: string) => request<unknown>('DELETE', `${ws(id)}/members/${encodeURIComponent(userId)}`),
+  setKind: (id: string, accountId: string, kind: AccountKind) => request<{ account: AccountDTO }>('PATCH', `${ws(id)}/accounts/${encodeURIComponent(accountId)}/kind`, { kind }),
+  makeMembersGuests: (id: string) => request<{ changed: number; unchanged: number }>('POST', `${ws(id)}/accounts/kind`, { kind: 'guest', all: true }),
+  provisionAll: (id: string) => request<{ queued: number }>('POST', `${ws(id)}/provision`, {}),
+  provisionOne: (id: string, accountId: string) => request<{ queued: boolean }>('POST', `${ws(id)}/accounts/${encodeURIComponent(accountId)}/provision`, {}),
+  // Invitations (§6.3, §6.5): pending ones, revoking one, and inviting people or chat guests.
+  invites: async (id: string) => (await request<{ invites: WorkspaceInviteDTO[] }>('GET', `${ws(id)}/invites`)).invites,
+  revokeInvite: (id: string, inviteId: string) => request<unknown>('DELETE', `${ws(id)}/invites/${encodeURIComponent(inviteId)}`),
+  invite: async (id: string, emails: string[], kind: AccountKind) => (await request<{ results: InviteResultDTO[] }>('POST', `${ws(id)}/invites`, { emails, kind })).results,
 };

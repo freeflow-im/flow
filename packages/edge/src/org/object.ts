@@ -1,6 +1,6 @@
 // One organization: its database and its sockets. HTTP requests arrive from the Worker with the caller already known.
 import { DurableObject } from 'cloudflare:workers';
-import { MAX_EVENT_DEPTH, type AccountDTO, type Event, type MemberRole, type UserDTO } from '@flow/shared';
+import { MAX_EVENT_DEPTH, type AccountDTO, type AccountKind, type Event, type MemberRole, type UserDTO } from '@flow/shared';
 import { accountGate, type DirectoryCore } from '../directory/core';
 import { ApiError } from '../errors';
 import { directoryLink } from './directoryLink';
@@ -131,9 +131,9 @@ export class Org extends DurableObject<OrgEnv> {
 
   /** The directory's half of a join, asked for before the member row is written (directoryLink.ts). A new agent's
    * principal reaches the directory through the outbox, so a pending one is sent first. */
-  private async ensureAccount(organizationId: string, userId: string, role: MemberRole, displayName: string): Promise<AccountDTO> {
+  private async ensureAccount(organizationId: string, userId: string, role: MemberRole, displayName: string, kind: AccountKind = 'native'): Promise<AccountDTO> {
     if (this.ctx.storage.sql.exec("SELECT 1 FROM _outbox WHERE kind = 'agent_user' LIMIT 1").toArray().length) await this.flushOutbox(organizationId);
-    const answer = await this.directory().call('ensureAccount' as never, [userId, organizationId, role, displayName] as never) as DirectoryAnswer<AccountDTO>;
+    const answer = await this.directory().call('ensureAccount' as never, [userId, organizationId, role, displayName, kind] as never) as DirectoryAnswer<AccountDTO>;
     if (!answer.ok) throw new ApiError(answer.status, answer.code, answer.message);
     return answer.value;
   }

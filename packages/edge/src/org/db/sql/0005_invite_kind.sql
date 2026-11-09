@@ -1,0 +1,1 @@
+ALTER TABLE `invites` ADD `kind` text DEFAULT 'native' NOT NULL;

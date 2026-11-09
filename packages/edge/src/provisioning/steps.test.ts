@@ -33,7 +33,7 @@ function user(name: string, agentUsername?: string): string {
     id, `${id}@example.com`, 'x', name, agentUsername ? 1 : 0, agentUsername ?? null);
   return id;
 }
-const join = (org: string, userId: string, role = 'member') => core.ensureAccount(userId, org, role);
+const join = (org: string, userId: string, role = 'member', kind?: 'native' | 'guest') => core.ensureAccount(userId, org, role, undefined, kind);
 const leave = (org: string, userId: string) => core.applyOrgChanges(org, [{ kind: 'leave', id: org, user_id: userId, role: null, payload: null }]);
 /** Runs every message the directory has sent, as the Queue would, until none is left. */
 async function drain(): Promise<ProvisioningMessage[]> {
@@ -266,8 +266,7 @@ describe('provisioning (platform.md §3.4)', () => {
     const org = newId();
     core.reserveSlug('acme', org);
     join(org, user('Ann'), 'owner');
-    core.setPolicies(org, { defaultAccountKind: 'guest' });
-    const gus = join(org, user('Gus'));
+    const gus = join(org, user('Gus'), 'member', 'guest');
     expect(gus).toMatchObject({ kind: 'guest', address: null, state: 'active' });
     expect((await drain()).map((m) => m.accountId)).not.toContain(gus.id);
     expect(core.provisionMissing(org)).toBe(0);
@@ -282,8 +281,7 @@ describe('provisioning (platform.md §3.4)', () => {
   it('makes a guest native: a new address, a mailbox and a calendar, staying active', async () => {
     const org = newId();
     core.reserveSlug('acme', org);
-    core.setPolicies(org, { defaultAccountKind: 'guest' });
-    const gus = join(org, user('Gus'));
+    const gus = join(org, user('Gus'), 'member', 'guest');
     await drain();
     const made = core.setAccountKind(org, gus.id, 'native');
     expect(made).toMatchObject({ kind: 'native', address: 'gus@acme.freeflow.im', state: 'active' });

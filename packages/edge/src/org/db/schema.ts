@@ -199,6 +199,8 @@ export const invites = sqliteTable(
     invitedUserId: text('invited_user_id').references(() => users.id, { onDelete: 'cascade' }),
     // #359: "no thanks" — terminal like acceptedAt, and it frees the pending slot.
     declinedAt: integer('declined_at', { mode: 'timestamp_ms' }),
+    // docs/specs/workspace-admin.md §6.5: what the joiner becomes, a native member or a chat guest.
+    kind: text('kind').notNull().default('native'),
   },
   // one PENDING invite per email; accepted/declined invites are history, not locks
   (t) => [

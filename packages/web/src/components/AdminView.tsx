@@ -444,19 +444,6 @@ export function OrganizationSection({
           />
           <span className="text-muted">Allow sharing by link</span>
         </label>
-        <label className="flex items-center justify-between gap-2">
-          <span className="text-muted" title="Native accounts get an address and a mailbox; guests get neither">New members join as</span>
-          <select
-            data-testid="admin-policy-kind"
-            className="rounded border border-hairline bg-base px-2 py-1 text-sm disabled:opacity-50"
-            value={policies.defaultAccountKind}
-            disabled={busy}
-            onChange={(e) => void setPolicy('defaultAccountKind', e.target.value as WorkspacePolicies['defaultAccountKind'])}
-          >
-            <option value="native">Native (with a mailbox)</option>
-            <option value="guest">Guests (no mailbox)</option>
-          </select>
-        </label>
       </div>
       <div className="mb-3 flex flex-wrap items-center gap-2 border-t border-hairline pt-3 text-sm">
         <span className="text-muted">Guests have no address and no mailbox</span>

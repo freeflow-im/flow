@@ -3,7 +3,7 @@
 import { ADMIN_SECTIONS, adminAddress, type AdminSection } from '@flow/suite-bar';
 
 /** The sections this build of the app has, in the order the list shows them. */
-export const SECTIONS: readonly AdminSection[] = ['general', 'domains'];
+export const SECTIONS: readonly AdminSection[] = ['general', 'members', 'domains'];
 
 export const SECTION_LABELS: Record<AdminSection, string> = {
   general: 'General',
