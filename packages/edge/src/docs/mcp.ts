@@ -6,16 +6,16 @@
 // Streamable HTTP POST with JSON answers, stateless, plus the 2026-07-28 protocol (stateless.ts). No GET stream: a server
 // without one answers 405, which the protocol allows.
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
-import { docsContext } from '../../runtime/context.ts';
-import { FileHub, importLimit, ToolError, type FileHubOptions } from './files.ts';
-import { createMcpServer, instructionsFor, MCP_VERSIONS, serverInfo, type McpVersion } from './mcp.ts';
-import { MAIL_INSTRUCTIONS, type MailFetch, type MailToolContext } from '../../../imap/mailTools.ts';
-import { CALENDAR_INSTRUCTIONS, type CalendarFetch, type CalendarToolContext } from '../../../calendar/calendarTools.ts';
-import { EVENT_INSTRUCTIONS, type EventToolContext } from '../../../events/eventTools.ts';
-import { toolsFor, type DoorTool } from '../../../registry';
-import type { AppToolContext } from '../../../apps';
-import type { SubscriptionOps } from '../../../events/subscriptions.ts';
-import { adaptTransport, discoverResult, isDiscover, SDK_VERSION, STATELESS_VERSION } from './stateless.ts';
+import { docsContext } from '@flow/docs/server/runtime/workerd/context.ts';
+import { FileHub, importLimit, ToolError, type FileHubOptions } from '@flow/docs/plugin/server/files.ts';
+import { createMcpServer, instructionsFor, MCP_VERSIONS, serverInfo, type McpVersion } from '@flow/docs/plugin/server/mcp.ts';
+import { MAIL_INSTRUCTIONS, type MailFetch, type MailToolContext } from '../imap/mailTools.ts';
+import { CALENDAR_INSTRUCTIONS, type CalendarFetch, type CalendarToolContext } from '../calendar/calendarTools.ts';
+import { EVENT_INSTRUCTIONS, type EventToolContext } from '../events/eventTools.ts';
+import { toolsFor, type DoorTool } from '../registry';
+import type { AppToolContext } from '../apps';
+import type { SubscriptionOps } from '../events/subscriptions.ts';
+import { adaptTransport, discoverResult, isDiscover, SDK_VERSION, STATELESS_VERSION } from '@flow/docs/plugin/server/stateless.ts';
 
 export interface McpRequestCaller {
   userId: string;

@@ -1,7 +1,7 @@
 // The Cloudflare Container that reads scanned PDFs: LiteParse with Tesseract (containers/pdf-ocr), which cannot run in
 // workerd (cloudflare-spikes.md). Each instance is this Durable Object with a Linux container behind it, started on its
 // first request and put to sleep when idle; wrangler.toml's [[containers]] names the image and the instance type. The
-// Docs object calls it through src/docs/runtime/pdfOcr.ts. The container's code is not in the Worker's bundle.
+// Docs object calls it through packages/docs server/runtime/workerd/pdfOcr.ts. The container's code is not in the Worker's bundle.
 import { Container } from '@cloudflare/containers';
 
 export class PdfOcr extends Container {

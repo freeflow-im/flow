@@ -2,7 +2,7 @@
 // route the Docs client would, in the chat's root, and answers what the in-process tool answered; a refusal Docs explains
 // (4xx) is the model's to read, anything else fails the turn.
 import { describe, expect, it } from 'vitest';
-import { ToolFailure, type ServerToolEnv } from '../docs/server/agent/tools.ts';
+import { ToolFailure, type ServerToolEnv } from '@flow/docs/server/agent/tools.ts';
 import { docsToolContext, type DocsFetch, type DocsPlace } from './docsTools';
 
 type Route = (req: Request, body: unknown) => Response | Promise<Response>;

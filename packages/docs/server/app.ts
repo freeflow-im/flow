@@ -5,6 +5,7 @@ import { featureHtml, featureMarkdown, featuresIndexHtml, robotsTxt, sitemapXml 
 import { scratchPadName } from '../shared/docNames.ts';
 import { importBytes, ImportFileError, sniffImageType } from './importFile.ts';
 import { fetchPublicFile, WebFetchError } from './webFetch.ts';
+import { rawBody } from './rawBody.ts';
 import Anthropic from '@anthropic-ai/sdk';
 import { createReadStream, existsSync, readFileSync, statSync } from '#runtime/fs';
 import { mkdir, readdir, readFile, stat, writeFile } from '#runtime/fsp';
@@ -881,8 +882,8 @@ export async function buildApp(opts: AppOptions) {
 
     /** Parse an uploaded .xlsx body; sends a 400 and returns null on failure. */
     const convertUpload = async (req: FastifyRequest, reply: FastifyReply) => {
-      const body = req.body;
-      if (!Buffer.isBuffer(body) || body.length === 0) {
+      const body = rawBody(req);
+      if (!body || body.length === 0) {
         reply.code(400).send({ error: 'Upload an Excel file (.xlsx or .xls) as the request body.' });
         return null;
       }
@@ -1151,8 +1152,8 @@ export async function buildApp(opts: AppOptions) {
 
     /** Convert an uploaded .docx body; sends a 400 and returns null on failure. Pictures are stored for the user. */
     const convertDocx = async (req: FastifyRequest, reply: FastifyReply) => {
-      const body = req.body;
-      if (!Buffer.isBuffer(body) || body.length === 0) {
+      const body = rawBody(req);
+      if (!body || body.length === 0) {
         reply.code(400).send({ error: 'Upload a Word document (.docx) as the request body.' });
         return null;
       }
@@ -1176,10 +1177,11 @@ export async function buildApp(opts: AppOptions) {
 
     // Convert only (nothing is stored but the pictures); the client adds the blocks to an open document.
     r.post('/api/import/pdf', async (req, reply) => {
-      if (!Buffer.isBuffer(req.body) || !isPdf(req.body)) return reply.code(400).send({ error: 'This file is not a valid PDF.' });
+      const body = rawBody(req);
+      if (!body || !isPdf(body)) return reply.code(400).send({ error: 'This file is not a valid PDF.' });
       const raw = String((req.query as { filename?: unknown }).filename ?? '');
       const name = raw.replace(/[\\/\u0000-\u001f]/g, '_').trim().slice(0, 200) || 'document.pdf';
-      return { file: await storedFiles.create(req.scope, /\.pdf$/i.test(name) ? name : `${name}.pdf`, 'application/pdf', req.body, req.folder) };
+      return { file: await storedFiles.create(req.scope, /\.pdf$/i.test(name) ? name : `${name}.pdf`, 'application/pdf', body, req.folder) };
     });
 
     r.post('/api/import/docx', async (req, reply) => {
@@ -1310,8 +1312,8 @@ export async function buildApp(opts: AppOptions) {
 
     /** Convert an uploaded .pptx body; sends a 400 and returns null on failure. Pictures are stored for the user. */
     const convertPptx = async (req: FastifyRequest, reply: FastifyReply) => {
-      const body = req.body;
-      if (!Buffer.isBuffer(body) || body.length === 0) {
+      const body = rawBody(req);
+      if (!body || body.length === 0) {
         reply.code(400).send({ error: 'Upload a PowerPoint file (.pptx) as the request body.' });
         return null;
       }
@@ -1714,8 +1716,8 @@ export async function buildApp(opts: AppOptions) {
     // Upload an image (the raw file as the body, with its image/* content type); returns its URL for a cell.
     r.post('/api/images', async (req, reply) => {
       const type = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
-      const body = req.body;
-      if (!CELL_IMAGE_TYPES.includes(type) || !Buffer.isBuffer(body) || body.length === 0) {
+      const body = rawBody(req);
+      if (!CELL_IMAGE_TYPES.includes(type) || !body || body.length === 0) {
         return reply.code(400).send({ error: 'Upload a PNG, JPEG, GIF or WebP image as the request body.' });
       }
       return { url: await images.create(req.scope, type, body) };
@@ -1793,8 +1795,8 @@ export async function buildApp(opts: AppOptions) {
     // Upload: the raw bytes as the body with their content type; the name in the x-filename header (URL-encoded).
     r.post('/api/files', async (req, reply) => {
       const type = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
-      const body = req.body;
-      if (!Buffer.isBuffer(body) || body.length === 0) return reply.code(400).send({ error: 'Send the file as the request body.' });
+      const body = rawBody(req);
+      if (!body || body.length === 0) return reply.code(400).send({ error: 'Send the file as the request body.' });
       let name = '';
       try {
         name = decodeURIComponent(String(req.headers['x-filename'] ?? ''));
@@ -1932,20 +1934,21 @@ export async function buildApp(opts: AppOptions) {
     r.put('/api/files/:id', async (req, reply) => {
       const f = storedFile(req);
       if (!f) return reply.code(404).send({ error: 'File not found' });
+      const body = rawBody(req);
       if (f.meta.type === 'application/pdf') {
         const type = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
-        if (type !== 'application/pdf' || !Buffer.isBuffer(req.body) || !req.body.subarray(0, 1024).includes('%PDF-')) return reply.code(400).send({ error: 'Send the PDF as the request body, as application/pdf.' });
-        return { file: await storedFiles.update(req.viewer, f.meta.id, req.body) };
+        if (type !== 'application/pdf' || !body || !body.subarray(0, 1024).includes('%PDF-')) return reply.code(400).send({ error: 'Send the PDF as the request body, as application/pdf.' });
+        return { file: await storedFiles.update(req.viewer, f.meta.id, body) };
       }
       if (EDITABLE_IMAGE_TYPES.includes(f.meta.type)) {
         // A picture stays the type it is: its name and everything that shows it depend on that.
         const type = String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase();
-        if (type !== f.meta.type || !Buffer.isBuffer(req.body) || !isImageOfType(req.body, type)) return reply.code(400).send({ error: `Send the edited picture as the request body, as ${f.meta.type}.` });
-        return { file: await storedFiles.update(req.viewer, f.meta.id, req.body) };
+        if (type !== f.meta.type || !body || !isImageOfType(body, type)) return reply.code(400).send({ error: `Send the edited picture as the request body, as ${f.meta.type}.` });
+        return { file: await storedFiles.update(req.viewer, f.meta.id, body) };
       }
       if (!isTextFileType(f.meta.type) || PREVIEW_FILE_TYPES.includes(f.meta.type)) return reply.code(400).send({ error: 'Only text files can be edited.' });
-      if (!Buffer.isBuffer(req.body) || req.body.includes(0)) return reply.code(400).send({ error: 'Send the new text as the request body.' });
-      return { file: await storedFiles.update(req.viewer, f.meta.id, req.body) };
+      if (!body || body.includes(0)) return reply.code(400).send({ error: 'Send the new text as the request body.' });
+      return { file: await storedFiles.update(req.viewer, f.meta.id, body) };
     });
 
     // Put back the version before the last rewrite (the two swap, so reverting twice redoes it).
@@ -2755,8 +2758,8 @@ export async function buildApp(opts: AppOptions) {
     });
 
     r.post('/api/import/bytes', async (req, reply) => {
-      const body = req.body;
-      if (!Buffer.isBuffer(body) || body.length === 0) return reply.code(400).send({ error: 'Send the file as the request body.' });
+      const body = rawBody(req);
+      if (!body || body.length === 0) return reply.code(400).send({ error: 'Send the file as the request body.' });
       const { filename, title } = req.query as { filename?: string; title?: string };
       try {
         const made = await importBytes({ sheets, images, files: storedFiles }, req.scope, body, filename || undefined, title || undefined);

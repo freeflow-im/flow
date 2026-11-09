@@ -1,8 +1,8 @@
 // The suite's /mcp lists the Calendar tools by calendar:read and calendar:write, beside Docs' and Mail's, and nothing a
 // scope does not allow; where the Worker has no Calendar, none. Listing tools needs no files, so the hub is a stand-in.
 import { describe, expect, it } from 'vitest';
-import { handleMcp, mcpAccess } from '../docs/plugin/server/worker.ts';
-import type { FileHub } from '../docs/plugin/server/files.ts';
+import { handleMcp, mcpAccess } from '../docs/mcp.ts';
+import type { FileHub } from '@flow/docs/plugin/server/files.ts';
 
 const hub = { forUser: () => ({ hub: {} }) } as unknown as FileHub;
 const mail = async () => Response.json({ accounts: [] });

@@ -25,8 +25,8 @@ export async function openHiddenEngine(source: Blob, opts: { /** Makes remove_ba
   holder.style.cssText = `position:fixed;left:-20000px;top:0;width:${width}px;height:${height}px;visibility:hidden;pointer-events:none`;
   holder.setAttribute('aria-hidden', 'true');
   const canvas = document.createElement('canvas');
-  holder.append(canvas);
-  document.body.append(holder);
+  holder.appendChild(canvas);
+  document.body.appendChild(holder);
   let engine;
   try {
     engine = await EditorEngine.create(canvas, {

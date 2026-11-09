@@ -20,19 +20,20 @@ import { calendarRequest, type AccountCaller } from '../calendar/forward';
 import type { CalendarToolContext } from '../calendar/calendarTools';
 import type { MailToolContext } from '../imap/mailTools';
 import { appToolContexts } from '../apps';
-import { withDocsContext, type DocsContext } from '../docs/runtime/context.ts';
-import type { Caller as DocsCaller } from '../docs/runtime/fastify.ts';
-import { DatabaseSync } from '../docs/runtime/sqlite.ts';
-import { AgentError, AgentService, type ModelCall } from '../docs/server/agent/agent.ts';
-import { openaiErrorMessage } from '../docs/server/agent/openai.ts';
-import { OpenRouterError } from '../docs/server/agent/openrouter.ts';
-import { checkAssistantKey, OwnKeyError } from '../docs/server/agent/providers.ts';
-import { AssistantSettingsStore, SettingsError, type KeyCheck, type SearchKeyCheck } from '../docs/server/agent/settings.ts';
-import { AgentStore } from '../docs/server/agent/store.ts';
-import { checkBraveKey } from '../docs/server/agent/tools.ts';
-import { isFileId } from '../docs/server/ids.ts';
-import { scopeOf, type ScopeArg } from '../docs/server/scope.ts';
-import { chatScope, HOME_CHAT, isChatScope, type AgentEvent, type AgentTurnRequest, type AssistantSettingsUpdate } from '../docs/shared/agent/protocol.ts';
+import { withDocsContext, type DocsContext } from '@flow/docs/server/runtime/workerd/context.ts';
+import type { Caller as DocsCaller } from '@flow/docs/server/runtime/workerd/http.ts';
+import { DatabaseSync } from '@flow/docs/server/runtime/workerd/sqlite.ts';
+import { AgentError, AgentService, type ModelCall } from '@flow/docs/server/agent/agent.ts';
+import { openaiErrorMessage } from '@flow/docs/server/agent/openai.ts';
+import { OpenRouterError } from '@flow/docs/server/agent/openrouter.ts';
+import { checkAssistantKey, OwnKeyError } from '@flow/docs/server/agent/providers.ts';
+import { AssistantSettingsStore, SettingsError, type KeyCheck, type SearchKeyCheck } from '@flow/docs/server/agent/settings.ts';
+import { AgentStore } from '@flow/docs/server/agent/store.ts';
+import { checkBraveKey } from '@flow/docs/server/agent/tools.ts';
+import { ASSISTANT_PAGES, SUITE_GUIDANCE } from '../docs/assistantTools.ts';
+import { isFileId } from '@flow/docs/server/ids.ts';
+import { scopeOf, type ScopeArg } from '@flow/docs/server/scope.ts';
+import { chatScope, HOME_CHAT, isChatScope, type AgentEvent, type AgentTurnRequest, type AssistantSettingsUpdate } from '@flow/docs/shared/agent/protocol.ts';
 import { docsToolContext, importToDocs, type DocsFetch, type DocsPlace } from './docsTools.ts';
 
 export type { DocsCaller };
@@ -158,14 +159,18 @@ export class Assistant extends DurableObject<AssistantEnv> {
     const agent = new AgentService(new AgentStore(db as never), null as never, settings, {
       jobs: false,
       ...(model ? { model } : {}),
-      docs: (_userId: string, scope: ScopeArg) => {
+      // The suite's assistant (docs/assistantTools.ts): the pages of every app, its tools' environment, its prompt lines.
+      pages: ASSISTANT_PAGES,
+      guidance: SUITE_GUIDANCE,
+      extend: (userId: string, scope: ScopeArg) => {
         const place = placeOf(scope);
-        return place && this.docsFetch(place.workspace) ? docsToolContext(this.docsFetch(place.workspace)!, place) : undefined;
+        const docs = place && this.docsFetch(place.workspace) ? docsToolContext(this.docsFetch(place.workspace)!, place) : undefined;
+        const mail = this.mailContext(scope);
+        const calendar = this.calendarContext(userId);
+        // The apps added by manifest (apps.ts): their objects, as the account this object belongs to.
+        const apps = appToolContexts(this.env, async () => this.who?.caller ?? null, this.origin);
+        return { ...(docs ? { docs } : {}), ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}), ...(apps ? { apps } : {}) };
       },
-      mail: (_userId: string, scope: ScopeArg) => this.mailContext(scope),
-      calendar: (userId: string) => this.calendarContext(userId),
-      // The apps added by manifest (apps.ts): their objects, as the account this object belongs to.
-      apps: () => appToolContexts(this.env, async () => this.who?.caller ?? null, this.origin),
     });
     return (this.services = { agent, settings });
   }

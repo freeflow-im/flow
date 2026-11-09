@@ -8,7 +8,7 @@ import { contentDir } from '#runtime/paths';
 import { marked, type Token, type Tokens } from 'marked';
 
 const DIR = contentDir('features');
-const GITHUB = 'https://github.com/freeflow-im/mcp-docs';
+const GITHUB = 'https://github.com/freeflow-im/flow';
 const NPX = 'npx @freeflow-im/mcp-docs';
 
 export interface FeaturePage {

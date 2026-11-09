@@ -59,7 +59,8 @@ export async function renderSlideImage(slide: Slide, theme: ThemeId, scale: numb
     const wrap = document.createElement('div');
     const style = document.createElement('style');
     style.textContent = `${pageCss()}\n${await fontFaceCss(usedFamilies(host), host.textContent ?? '')}`;
-    wrap.append(style, clone);
+    wrap.appendChild(style);
+    wrap.appendChild(clone);
     const svg =
       `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">` +
       `<foreignObject x="0" y="0" width="${width}" height="${height}">${new XMLSerializer().serializeToString(wrap)}</foreignObject></svg>`;

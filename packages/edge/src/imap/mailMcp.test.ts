@@ -2,8 +2,8 @@
 // files:write, the Mail tools by mail:read, mail:write and mail:send, and nothing a scope does not allow. Listing tools
 // needs no files, so the hub here is a stand-in.
 import { describe, expect, it } from 'vitest';
-import { handleMcp, mcpAccess } from '../docs/plugin/server/worker.ts';
-import type { FileHub } from '../docs/plugin/server/files.ts';
+import { handleMcp, mcpAccess } from '../docs/mcp.ts';
+import type { FileHub } from '@flow/docs/plugin/server/files.ts';
 
 const hub = { forUser: () => ({ hub: {} }) } as unknown as FileHub;
 const mail = async () => Response.json({ accounts: [] });

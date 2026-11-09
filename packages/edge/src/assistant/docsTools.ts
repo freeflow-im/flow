@@ -1,17 +1,17 @@
 // Docs' server tools as the Assistant object runs them (platform.md §5.5): against the organization's Docs object over its
 // HTTP API, as the person, where docs/server/agent/tools.ts' runDocsTool calls the stores in its own process. Each one
 // answers what runDocsTool answers; what touches no store (web_search, image_search) runs there as it is.
-import { docOutline } from '../docs/shared/agent/docRead.ts';
-import { markdownBlocks, markdownOutline } from '../docs/shared/agent/markdownBlocks.ts';
-import { readRange, resolveRange, sheetOverview } from '../docs/shared/agent/sheetRead.ts';
-import { buildSlide, newId, type Deck } from '../docs/shared/deck.ts';
-import { docNode } from '../docs/shared/doc.ts';
-import { markdownToDoc } from '../docs/shared/docMarkdown.ts';
-import { Engine } from '../docs/shared/formula/engine.ts';
-import { STORED_IMAGE_RE } from '../docs/shared/types.ts';
-import { checkSearchRate, runDocsTool, ToolFailure, type ServerToolEnv } from '../docs/server/agent/tools.ts';
-import { importLimit, webImportName } from '../docs/server/importFile.ts';
-import { fetchPublicFile, WebFetchError } from '../docs/server/webFetch.ts';
+import { docOutline } from '@flow/docs/shared/agent/docRead.ts';
+import { markdownBlocks, markdownOutline } from '@flow/docs/shared/agent/markdownBlocks.ts';
+import { readRange, resolveRange, sheetOverview } from '@flow/docs/shared/agent/sheetRead.ts';
+import { buildSlide, newId, type Deck } from '@flow/docs/shared/deck.ts';
+import { docNode } from '@flow/docs/shared/doc.ts';
+import { markdownToDoc } from '@flow/docs/shared/docMarkdown.ts';
+import { Engine } from '@flow/docs/shared/formula/engine.ts';
+import { STORED_IMAGE_RE } from '@flow/docs/shared/types.ts';
+import { checkSearchRate, runDocsTool, ToolFailure, type ServerToolEnv } from '@flow/docs/server/agent/tools.ts';
+import { importLimit, webImportName } from '@flow/docs/server/importFile.ts';
+import { fetchPublicFile, WebFetchError } from '@flow/docs/server/webFetch.ts';
 
 /** A Docs object's HTTP API (/api/*), as one person in one organization: the paths are the Docs client's. */
 export type DocsFetch = (path: string, init?: RequestInit) => Promise<Response>;

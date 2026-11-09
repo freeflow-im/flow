@@ -6,6 +6,7 @@
 // Worker). Save to Docs imports its bytes as a real file in the user's My files, at the top.
 import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, rm, writeFile } from '#runtime/fsp';
+import { rawBody } from './rawBody.ts';
 import path from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from '#runtime/http';
 import { CsvError, csvToWorkbook, MAX_CSV_CHARS } from '../shared/csv.ts';
@@ -289,9 +290,10 @@ export function previewRoutes(r: FastifyInstance, opts: { previews: Previews; st
   });
 
   r.post('/api/previews', async (req, reply) => {
-    if (!Buffer.isBuffer(req.body) || !req.body.length) return reply.code(400).send({ error: 'Send the file’s bytes as the body.' });
+    const body = rawBody(req);
+    if (!body || !body.length) return reply.code(400).send({ error: 'Send the file’s bytes as the body.' });
     try {
-      const p = await previews.create(owner(req), workspaceOf(req), { filename: str(q(req).filename, 300), type: str(q(req).type, 200), bytes: req.body, sourceKey: str(q(req).key) || null });
+      const p = await previews.create(owner(req), workspaceOf(req), { filename: str(q(req).filename, 300), type: str(q(req).type, 200), bytes: body, sourceKey: str(q(req).key) || null });
       return { preview: shown(p) };
     } catch (e) {
       return failed(reply, e);

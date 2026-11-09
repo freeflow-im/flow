@@ -4,21 +4,21 @@ import { DurableObject } from 'cloudflare:workers';
 import type { Directory } from '../directory/object';
 import { formatReference, type AccountDTO } from '@flow/shared';
 import type { CallerContext } from '../org/routes/compat';
-import { withDocsContext, type DocsContext } from './runtime/context.ts';
-import { DocsApp, type Caller, type DocsRequest } from './runtime/fastify.ts';
-import { buildApp } from './server/app.ts';
+import { withDocsContext, type DocsContext } from '@flow/docs/server/runtime/workerd/context.ts';
+import { DocsApp, type Caller, type DocsRequest } from '@flow/docs/server/runtime/workerd/http.ts';
+import { buildApp } from '@flow/docs/server/app.ts';
 import { insertRows, tableCounts } from '../importing';
-import { setBrowserBinding } from './server/pdf.ts';
-import { setOcrBinding } from './runtime/pdfOcr.ts';
-import { handleMcp, handleMcpImport, suiteHub, type McpRequestCaller } from './plugin/server/worker.ts';
-import type { FileHub } from './plugin/server/files.ts';
-import { DatabaseSync } from './runtime/sqlite.ts';
-import { PREVIEW_TTL_MS, Previews } from './server/previews.ts';
+import { setBrowserLauncher } from '@flow/docs/server/runtime/workerd/browser.ts';
+import { setOcrBinding } from '@flow/docs/server/runtime/workerd/pdfOcr.ts';
+import { handleMcp, handleMcpImport, suiteHub, type McpRequestCaller } from './mcp.ts';
+import type { FileHub } from '@flow/docs/plugin/server/files.ts';
+import { DatabaseSync } from '@flow/docs/server/runtime/workerd/sqlite.ts';
+import { PREVIEW_TTL_MS, Previews } from '@flow/docs/server/previews.ts';
 import { lazySubscriptions, subscriptionsAs, type SubscriptionOps } from '../events/subscriptions.ts';
 import { addressOf } from '@flow/shared/addresses';
 import { calendarRequest, type AccountCaller } from '../calendar/forward';
 import { appToolContexts } from '../apps';
-import type { FileChange, GrantChange } from './server/app.ts';
+import type { FileChange, GrantChange } from '@flow/docs/server/app.ts';
 import { MOVED_TABLES, OWNED_TABLES, parseKey, type MovedTable, type OwnedTable, type PruneSelection, type Row } from './move';
 
 export interface DocsEnv {
@@ -60,7 +60,8 @@ export class Docs extends DurableObject<DocsEnv> {
 
   constructor(ctx: DurableObjectState, env: DocsEnv) {
     super(ctx, env);
-    setBrowserBinding(env.BROWSER ?? null);
+    // On Workers the browser is Cloudflare's Browser Rendering, driven by its build of Playwright.
+    setBrowserLauncher(env.BROWSER ? async () => (await import('@cloudflare/playwright')).launch(env.BROWSER as never) : null);
     setOcrBinding(env.PDF_OCR ?? null);
     // The headless browser loads Docs' print pages from the public address, through the Worker like any visitor.
     process.env.PRINT_ORIGIN = (env.FLOW_WEB_URL ?? 'https://app.freeflow.im').replace(/\/+$/, '');

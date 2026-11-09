@@ -9,8 +9,8 @@
 import { Hono, type Context } from 'hono';
 import type { Assistant } from '../assistant/object';
 import { ApiError } from '../errors';
-import { isFileId } from '../docs/server/ids.ts';
-import { chatScope } from '../docs/shared/agent/protocol.ts';
+import { isFileId } from '@flow/docs/server/ids.ts';
+import { chatScope } from '@flow/docs/shared/agent/protocol.ts';
 import { directory, resolveCaller, tokenOf, type AuthEnv } from './auth';
 
 export interface AssistantRouteEnv extends AuthEnv { ASSISTANT: DurableObjectNamespace<Assistant> }
