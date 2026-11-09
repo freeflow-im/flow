@@ -3,22 +3,27 @@
 Status: Draft for Scott's review · Platforms: web (the admin surface is web-only: decision_log, "App-management UI is
 web-only" and "Invite an Agent is web-only admin surface")
 
-One screen where a workspace's owner and admins set the workspace up and keep it running: its name and look, who may
-join and how, the members and their accounts, the domains and the mail on them, the agents, the automations. Today
-these jobs are spread over the admin panel's three tabs (`AdminView.tsx`: Organization, Domains, Automations) and
-five modals reached from the workspace menu (Invite People with the Google self-registration toggle, Agents,
-Workspace appearance, Custom emoji) plus the Directory's broadcast email. Domain setup stops half way: an admin can
-add and verify a domain, but nothing in the UI makes the domain at the mail provider or shows its DKIM record, so
-mail on an organization's own domain cannot be turned on without an API call. This spec collects the settings into
-one place and finishes the domain flow. It builds on `platform.md` §3.1 (policies), §3.2 (domains), §3.3 (accounts)
-and §3.4 (provisioning); the server pieces mostly exist, and the list of API changes (§6) is short.
+One app, **Admin**, where a workspace's owner and admins set the workspace up and keep it running: its name and
+look, who may join and how, the members and their accounts, the domains and the mail on them, the agents, the
+automations. Today these jobs live inside the Chat client: the admin panel's three tabs (`AdminView.tsx`:
+Organization, Domains, Automations) and five modals reached from Chat's workspace menu (Invite People with the Google
+self-registration toggle, Agents, Workspace appearance, Custom emoji), plus the Directory's broadcast email. Mail,
+Calendar and Contacts reach them only by opening Chat (`/?open=admin`); Docs does not reach them at all. Domain
+setup stops half way: an admin can add and verify a domain, but nothing in the UI makes the domain at the mail
+provider or shows its DKIM record, so mail on an organization's own domain cannot be turned on without an API call.
+
+This spec makes administration an app of the suite with its own manifest and client (§2.1), collects the settings
+into it, and finishes the domain flow. It builds on `platform.md` §3.1 (policies), §3.2 (domains), §3.3 (accounts),
+§3.4 (provisioning) and §6.1 (manifests); the server pieces mostly exist, and the list of API changes (§6) is short.
 
 ## 1. Goals and non-goals
 
 Goals:
 
-- One entry in the workspace menu, **Workspace settings…**, opens one screen with sections. The scattered modals
-  and tabs become sections of it; the menu loses "Manage users", "Workspace appearance…" and "Custom emoji…".
+- Administration is its own app, at `/admin`, not a view inside Chat or any other app. Every app's suite bar opens
+  it the same way, **Organization settings** in the organization menu. The scattered modals and tabs become its
+  sections; Chat's workspace menu loses "Manage users", "Workspace appearance…", "Custom emoji…" and "Agents", and
+  Chat's bundle loses the code.
 - An admin can take a domain from "typed in" to "mail works on it" from the screen alone, with each step telling
   them what to publish in DNS, whether it is there yet, and what is left.
 - An admin can see every account's mail state (ready, being set up, stopped and why, none for a guest) and retry one
@@ -26,12 +31,12 @@ Goals:
 - Every setting the server already has a field for is on the screen: the four policies, Google self-registration,
   link previews, the join link, the sidebar color and icon, custom emoji.
 - Deep links: another surface (Mail's "your organization has no mailboxes yet", an admin notice in Chat) can open
-  the screen at a section.
+  the app at a section, `/admin/<section>`.
 
 Non-goals (v1):
 
 - Native clients. The macOS and iOS apps keep their member list and stay out of admin; `CHANGELOG.md` Parity keeps
-  the line. A "Workspace settings (opens the web app)" menu item is a later nicety.
+  the line. An "Organization settings (opens the web app)" menu item is a later nicety.
 - Billing, plans and quotas. Nothing is metered yet.
 - Moving existing addresses to a new primary domain (§4.6 says why).
 - Per-organization mail retention. The sweep reads `MAIL_RETENTION_DAYS` for every organization; the screen shows it,
@@ -47,21 +52,58 @@ Non-goals (v1):
 | member (including guests) | **Automations** only, as today |
 | agent, app | nothing; the menu entry is not drawn |
 
-The screen takes the content pane, as the admin panel does today (`Main.tsx` renders `<AdminView>` in place of the
-message stream; `sel.openAdminPanel()`). It is reached from:
+The app is reached from:
 
-- the workspace menu: **Workspace settings…** (owner, admin) and **Automations** (everyone), two entries where there
-  were five;
-- a hash deep link `#/admin/<section>` (`general`, `members`, `domains`, `agents`, `automations`), which generalizes
-  today's `requestAdminTab(tab)`; an unknown or disallowed section falls back to the first one the caller may see;
-- notices: a provisioning failure notice ("Could not set up a mailbox for …") links to `#/admin/members`; Mail's
-  empty state for a hosted-mail organization with no domain ready links to `#/admin/domains`.
+- every app's suite bar, in the organization menu: **Organization settings** (owner, admin; the entry the shared bar
+  already draws for Mail, Calendar and Contacts, which today opens Chat) and **Automations** (everyone). Docs gets
+  the same two entries. Chat's own workspace menu keeps the same two and loses the rest;
+- the address `/admin/<section>` (`general`, `members`, `domains`, `agents`, `automations`); `/admin` alone is the
+  first section the caller may see, and an unknown or disallowed section falls back to it. The other apps' bars
+  stop sending `/?open=admin` (`CHAT_PAGES` loses `admin`) and link to `/admin` directly;
+- notices: a provisioning failure notice ("Could not set up a mailbox for …") links to `/admin/members`; Mail's
+  empty state for a hosted-mail organization with no domain ready links to `/admin/domains`.
+
+The app works on the organization the suite has active, the one Chat's connection registry keeps in localStorage
+and every other app's bar reads (`suite.ts` in Contacts and Docs); the bar's organization switcher changes it, as it
+does in Mail.
+
+### 2.1 An app of its own
+
+Admin is the next entry in `APP_MANIFESTS` (`platform.md` §6.1), and the proof phase 6.5 asked for: an app added by
+manifest alone, with nothing else changed.
+
+```ts
+{
+  name: 'admin',
+  path: '/admin',
+  scope: 'organization',
+  // No Durable Object and no routes of its own: it reads and writes through the directory's routes
+  // (domains, accounts) and the Org object's (workspace, members, invites, emoji, agents, subscriptions).
+  kinds: [],
+  // No tab: the bar's organization menu is the way in (suiteTabsFrom skips a manifest without one).
+  client: { dist: 'packages/admin/dist', basePath: '/admin/', optional: true },
+  pages: [{ path: '/admin', html: 'admin.html', signIn: true }, { path: '/admin/*', html: 'admin.html', signIn: true }],
+  events: [],
+}
+```
+
+`packages/admin` is a Vite client built the way Contacts is (`packages/contacts`: `main.tsx`, `App.tsx`, `suite.ts`,
+`api.ts`, `@flow/suite-bar` for the bar): the session is the suite's cookie on the same origin, the organization the
+active one, the API calls the ones the Chat client makes today from `AdminView.tsx` and the modals. The assembler,
+`routes/pages.ts`, the consent page and `deploy-edge` read the manifest and copy the dist as they do for the others;
+`optional: true` until the first deploy carries it, as Contacts was.
+
+Why an app and not a view: an admin in Mail who must publish a DNS record should not have Chat load to do it; the
+sections are the organization's, not Chat's; and Chat's bundle carries code most members never run. The events the
+app reacts to (a member joined, an account's state changed) arrive as the bus frames every app can subscribe to
+(`platform.md` §5.2), the way Chat's panel refetches today.
 
 ## 3. Layout
 
-The header keeps today's shape: title, the workspace name under it, **Close** at the right. Under it a section list
-on the left (a row of tabs on a narrow screen, as the three tabs are today) and the section's page on the right, one
-scrolling column of cards, 48rem wide at most, the width the admin panel uses now.
+The suite bar is on top, as in Mail and Calendar. Under it a section list on the left (a row of tabs on a narrow
+screen, as the admin panel's three tabs are today) and the section's page on the right, one scrolling column of
+cards, 48rem wide at most, the width the admin panel uses now. The page's heading is the organization's name and
+the section's.
 
 Every control saves when it changes, the pattern `OrganizationSection` has: a `busy` flag disables the card, an
 error line appears under the control that failed, the lists refetch. Destructive actions confirm inline ("Remove
@@ -145,7 +187,8 @@ modal component stays for the sidebar's invite flow.
 
 ### 3.5 Automations
 
-As today. The only change is the route: `#/admin/automations`.
+`AutomationsSection.tsx` moves into the app as it is; its route is `/admin/automations`. A member who is not an admin
+opens the app and sees this section alone, as today's panel shows them only this tab.
 
 ## 4. The domain card
 
@@ -323,27 +366,33 @@ have their endpoints. The screen is mostly a client change.
 
 | Area | Files |
 | --- | --- |
-| web | `components/AdminView.tsx` becomes the shell (sections, hash routing); new `admin/General.tsx`, `admin/Members.tsx`, `admin/Domains.tsx` (from `DomainsSection.tsx`), `admin/Agents.tsx`; `Sidebar.tsx` menu; `modals.tsx` loses the appearance modal and the Invite dialog's two extras; `lib/api.ts` the new calls |
-| shared | `dto.ts` (`name` in the patch body, `InviteDTO` list), `platform.ts` (`atProvider`, `hosted`) |
-| edge | `routes/domains.ts` (nothing), `routes/accounts.ts` (provision one), `org/routes/index.ts` and `org/services/workspaces.ts` (name, invites list and revoke), `directory/core.ts` (`atProvider` in `describeDomains`, `hosted` in `listAccounts`) |
-| docs | this file; `platform.md` §3.2 gets a pointer; `CHANGELOG.md` Parity line for native clients |
+| admin (new) | `packages/admin`: the Vite client on the Contacts pattern; `App.tsx` (sections, routing), `General.tsx`, `Members.tsx`, `Domains.tsx` (from Chat's `DomainsSection.tsx`), `Agents.tsx`, `Automations.tsx` (from Chat's `AutomationsSection.tsx`), `suite.ts`, `api.ts` |
+| web (Chat) | loses `AdminView.tsx`, `DomainsSection.tsx`, `AutomationsSection.tsx`, `EmojiModal.tsx`, `WorkspaceColorModal` and the Invite dialog's two extras; `Sidebar.tsx`'s workspace menu keeps Invite People, Directory, Organization settings and Automations (the last two are links to `/admin`); the Agents modal stays only for the sidebar's invite flow |
+| suite bar | `SuiteBar.tsx`'s organization menu gains **Automations**; the apps' bars (`MailSuiteBar`, `CalendarSuiteBar`, `ContactsSuiteBar`, Docs' `suite.ts`) link both entries to `/admin` |
+| shared | `manifests.ts` (the manifest), `addresses.ts` (`CHAT_PAGES` without `admin`), `dto.ts` (`name` in the patch body, `InviteDTO` list and `kind`), `platform.ts` (`atProvider`, `hosted`) |
+| edge | nothing for the app itself (assembler, pages and consent read the manifest); `routes/accounts.ts` (provision one), `org/routes/index.ts` and `org/services/workspaces.ts` (name, invites list and revoke, invitation kind), `directory/core.ts` (`atProvider` in `describeDomains`, `hosted` in `listAccounts`) |
+| build | `pnpm -r build` and the server image include the new dist; `deploy-edge` copies it (BUILD.md gains the line) |
+| docs | this file; `platform.md` §3.2 and §6.2 get a pointer; `CHANGELOG.md` Parity line for native clients |
 
 ## 8. Phases
 
 Each phase is one PR with its changelog entry; each ticks `web client` on the checklist and nothing else, since no
 native client and nothing an agent observes changes.
 
-1. **The shell and General.** Sections, hash deep links, the menu collapsed to two entries; General with everything
-   in §3.1 (appearance, emoji, join link and Google self-registration moved in; `name` editable, the one API
-   change). The Organization tab's member table moves to Members as it is; Domains and Automations move as they are.
-   What people see: one "Workspace settings…" entry; the workspace can be renamed.
+1. **The app and General.** `packages/admin`, its manifest, the bars' entries in every app pointing at `/admin`,
+   the section list and routing; General with everything in §3.1 (appearance, emoji, join link and Google
+   self-registration moved in; `name` editable, the one API change). Chat's panel stays as it is until phase 4, so
+   nothing is lost while the app fills in. What people see: **Organization settings** in every app opens the Admin
+   app; the workspace can be renamed.
 2. **Domains & mail.** The step cards (§4), **Turn on mail**, the platform card, the Mail summary; `atProvider`.
-   What people see: an admin takes `example.com` to "mail ready" without leaving the screen.
+   Chat's Domains tab goes. What people see: an admin takes `example.com` to "mail ready" without leaving the app.
 3. **Members and provisioning.** The Mail column and filters, **Retry setup**, pending invitations with revoke,
    **Invite a chat guest** and the Chat-only suite bar for guests, the `defaultAccountKind` policy retired; `hosted`,
    §6.3, §6.4, §6.5. What people see: why a member has no mailbox, a button that fixes it, and a way to bring an
    outsider into Chat without giving them a mailbox.
-4. **Agents & apps.** The section; the menu's Agents entry goes.
+4. **Agents & apps, Automations, and Chat lets go.** The two sections move in; Chat's `AdminView`, its tabs and the
+   admin modals are deleted, and its workspace menu keeps the two links. What people see: the same things in one
+   app, and nothing of them in Chat.
 5. **e2e.** With the fake provider and a faked resolver (`deps.resolve`): add → verify → records present → turn on
    mail → DKIM present → primary → a new member's address lands on the domain. One run through the Members
    section: a stopped account, Retry, ready.
@@ -364,8 +413,8 @@ sharing with guests is left out for now.
 
 Proposed, for `decision_log.md` once confirmed:
 
-1. Workspace administration is one web screen, **Workspace settings…**, with sections; the workspace menu keeps
-   that entry and **Automations** and loses the rest.
+1. The way in is the same in every app: **Organization settings** and **Automations** in the suite bar's
+   organization menu; Chat's workspace menu keeps those two and loses the rest.
 2. The slug never changes; the name may.
 3. Turning mail on for an organization's own domain is an explicit admin step after the mail records are in DNS;
    the platform subdomain needs no step.
@@ -380,3 +429,5 @@ Ruled by Scott on 2026-11-09 (recorded in `decision_log.md`):
    admin's own Google login domain.
 8. Guests cannot be given documents for now: the Share dialog does not offer them and Docs refuses them. Document
    sharing with guests is a later addition, noted here so it is not forgotten.
+9. Administration is an app of the suite, **Admin** at `/admin`, with its own manifest and client. It is not a view
+   inside Chat or any other app.
