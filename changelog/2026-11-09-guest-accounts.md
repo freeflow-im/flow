@@ -7,4 +7,4 @@
 
 ## Feature
 
-- **Guest members.** Owners and admins can make anyone a guest: a full member of chat, DMs and Docs, but with no organization email address or mailbox. Change one person at a time, make every member a guest at once, or have new members join as guests. Making a guest native again gives them an address and a mailbox.
+- **Guest members.** Owners and admins can make anyone a guest: a full member of chat, DMs and Docs, but with no organization email address or mailbox. Change one person at a time, make every member a guest at once, or have new members join as guests. Agents always keep an address and a mailbox. Making a guest native again gives them an address and a mailbox.

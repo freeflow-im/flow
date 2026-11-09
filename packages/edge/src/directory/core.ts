@@ -208,9 +208,10 @@ export class DirectoryCore {
   }
 
   /** What a new joiner's account is: the organization's `defaultAccountKind` policy, `native` unless an admin chose
-   * `guest`. An owner is always native (§3.3). */
-  private defaultKind(organizationId: string, role: string): AccountKind {
-    if (role === 'owner') return 'native';
+   * `guest`. An owner is always native (§3.3), and so is an agent: an agent is brought in to work, and its mailbox and
+   * calendar are part of that (operator ruling, decision_log 2026-11-09). */
+  private defaultKind(organizationId: string, role: string, isAgent: boolean): AccountKind {
+    if (role === 'owner' || isAgent) return 'native';
     return this.organization(organizationId)?.policies.defaultAccountKind === 'guest' ? 'guest' : 'native';
   }
 
@@ -218,7 +219,7 @@ export class DirectoryCore {
     const user = this.userById(userId);
     if (!user) return;
     const name = displayName || (user.display_name as string);
-    const accountKind = kind ?? this.defaultKind(organizationId, role);
+    const accountKind = kind ?? this.defaultKind(organizationId, role, !!user.is_agent);
     // A guest has no address (§3.3): an address with no mailbox behind it bounces.
     const address = accountKind === 'guest' ? null : this.newAddress(user, name, organizationId);
     const id = newId();
@@ -388,10 +389,10 @@ export class DirectoryCore {
     return this.accountById(accountId)!;
   }
 
-  /** Every account whose role is `member` made a guest; owners and admins keep their kind. Removed accounts are left.
-   * Returns the accounts that changed, and how many were guests already. */
+  /** Every person whose role is `member` made a guest; owners, admins and agents keep their kind. Removed accounts are
+   * left. Returns the accounts that changed, and how many were guests already. */
   makeMembersGuests(organizationId: string): { changed: AccountDTO[]; unchanged: number } {
-    const members = this.rows("SELECT * FROM accounts WHERE organization_id = ? AND role = 'member' AND state <> 'removed' ORDER BY created_at, id", organizationId);
+    const members = this.rows("SELECT a.* FROM accounts a JOIN users u ON u.id = a.user_id WHERE a.organization_id = ? AND a.role = 'member' AND a.state <> 'removed' AND u.is_agent = 0 ORDER BY a.created_at, a.id", organizationId);
     const changed: AccountDTO[] = [];
     for (const row of members) {
       if (row.kind === 'guest') continue;

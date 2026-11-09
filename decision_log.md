@@ -6,7 +6,9 @@
   it. `accounts.address` is NULL for a guest and its `addresses` row is deleted. A mailbox kept after an account becomes
   a guest still holds its old address (`mailbox_address`) until the retention sweep deletes it, so no new member is
   handed someone else's mail.
-- **Owners and admins pick the kind**, per account or every `member` at once; the owner is always native.
+- **Owners and admins pick the kind**, per account or every `member` at once; the owner is always native, and so are
+  agents: an agent is brought in to work and its mailbox is part of that, so the bulk action and the default both leave
+  agents alone.
 - **The default kind for new joiners is an organization policy** (`defaultAccountKind`), `native` for every existing
   organization, so nothing changes until an admin flips it.
 

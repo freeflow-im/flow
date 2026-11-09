@@ -422,13 +422,20 @@ describe('guest accounts (platform.md §3.3)', () => {
     expect(core.accountFor(b.user.id, org)).toMatchObject({ role: 'owner', kind: 'native', address: 'ann2@acme.freeflow.im' });
   });
 
-  it('makes every member a guest at once, leaving owners, admins and removed accounts', async () => {
+  it('makes every member a guest at once, leaving owners, admins, agents and removed accounts', async () => {
     const people = await Promise.all(['a', 'b', 'c', 'd', 'e'].map((x) => signUp(`${x}@example.com`)));
     const org = newId();
     core.reserveSlug('acme', org);
     await join(org, people[0]!.user.id, 'owner');
     await join(org, people[1]!.user.id, 'admin');
     for (const p of people.slice(2)) await join(org, p.user.id);
+    // An agent is always native: the bulk action and a `guest` default both leave it alone.
+    const bot = newId();
+    nodeSqlOf(core).exec("INSERT INTO users (id, email, password_hash, display_name, is_agent, agent_username, sponsor_user_id, created_at) VALUES (?, ?, 'x', 'Builder', 1, 'builder', ?, 1)", bot, `${bot}@agents.flow.local`, people[0]!.user.id);
+    await policies(org, { defaultAccountKind: 'guest' });
+    await join(org, bot);
+    expect(core.accountFor(bot, org)).toMatchObject({ kind: 'native', address: 'builder@acme.freeflow.im' });
+    await policies(org, { defaultAccountKind: 'native' });
     core.setAccountKind(org, core.accountFor(people[2]!.user.id, org)!.id, 'guest');
     await leave(org, people[4]!.user.id);
     const out = core.makeMembersGuests(org);
@@ -438,6 +445,7 @@ describe('guest accounts (platform.md §3.3)', () => {
       ['owner', 'native', 'active'], ['admin', 'native', 'active'], ['member', 'guest', 'active'], ['member', 'guest', 'active'], ['member', 'native', 'removed'],
     ]);
     expect(core.makeMembersGuests(org)).toEqual({ changed: [], unchanged: 2 });
+    expect(core.accountFor(bot, org)).toMatchObject({ kind: 'native', address: 'builder@acme.freeflow.im' });
   });
 
   it('migrates existing accounts unchanged, and lets the address be NULL', () => {

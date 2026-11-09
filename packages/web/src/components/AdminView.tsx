@@ -392,7 +392,7 @@ export function OrganizationSection({
   const natives = live.filter((a) => a.kind === 'native').length;
   const nativeMembers = live.filter((a) => a.kind === 'native' && a.role === 'member').length;
 
-  // Every account whose role is member becomes a guest; owners and admins keep theirs.
+  // Every person whose role is member becomes a guest; owners, admins and agents keep theirs.
   const makeEveryoneGuests = () =>
     run(async () => {
       const out = await api<BulkAccountKindResult>('POST', `/v1/workspaces/${ws.id}/accounts/kind`, { kind: 'guest', all: true });
