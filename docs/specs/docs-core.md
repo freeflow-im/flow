@@ -25,7 +25,7 @@ boundary between what is shared and what belongs to each app, names the packages
 | `client/src`, the editors and the home page | 36,400 | both apps, one Vite build (`BASE_PATH` differs) |
 | `server`, the Fastify routes, stores, imports, exports, the assistant | 27,250 | the desktop app as is; the Worker as a copy |
 | `shared`, the document models, formats, formula engine | 10,970 | both, and the Worker as a copy (42 files, none patched) |
-| `plugin`, the MCP server and the ChatGPT plugin's web view | 8,850 | MCP server in both; web view hosted only |
+| `plugin`, MCP Docs' MCP server and the ChatGPT plugin's web view | 8,850 | the standalone's local MCP; the suite's `/mcp` door rides on a copy of it today; web view hosted only |
 | `desktop`, the Electron shell | 2,200 | desktop only |
 | `installer`, `npx @freeflow-im/mcp-docs` | 480 | desktop only |
 
@@ -65,8 +65,6 @@ Four groups. A file's group is decided by one question: does it need to know whe
   model clients and settings (`agent/openai`, `agent/openrouter`, `agent/llmSearch`, `agent/providers`,
   `agent/settings`, `agent/store`), `access`, `scope`, `auth`, `folders`, `favorites`, `storedText`, `signatures`,
   `publicLinks`, `revisionFeed`, `linkedTable`, `webFetch`, `googleAuth`, `mail`, `legal`, `llms`, `ids`, `env`.
-- `plugin/server` except `worker.ts`: the MCP server both apps expose (the desktop's local MCP for agents on the
-  machine, the suite's `/mcp`).
 - The client's editors: `client/src` except the files in §2.4.
 
 ### 2.2 Core, behind a runtime seam (shared, but patched today)
@@ -87,13 +85,16 @@ Calendar, the registry) leave `agent/tools.ts` and become a registration the hos
 `server/localStore.ts` (the folder of real files), `server/backup.ts` and `server/blob.ts`'s S3 client (the
 off-box copy), `server/folderWatch.ts`, `server/localMcp.ts`, `server/supervise.ts`, `server/agent/worker.ts` and
 `server/agent/git.ts` (the local coding agent), `server/index.ts`, `server/testing.ts`, `server/scripts/r2.ts`;
-all of `desktop/`; `installer/`; `claude-plugin/`; `client/src/desktopBridge.ts` and the Local tab's pieces
-(`LocalFolderMenu`, `OpenInTab`'s file-at-path, the recent-opens hooks in `main.tsx`).
+`plugin/server` (MCP Docs' own MCP server, the one agents on the machine connect to; ruling 5); all of `desktop/`;
+`installer/`; `claude-plugin/`; `client/src/desktopBridge.ts` and the Local tab's pieces (`LocalFolderMenu`,
+`OpenInTab`'s file-at-path, the recent-opens hooks in `main.tsx`).
 
 ### 2.4 The hosted app only
 
-`packages/edge/src/docs/object.ts`, `move.ts`, `runtime/*` (the Worker's runtime for the seam), `plugin/server/worker.ts`,
-`plugin/web/*` (the ChatGPT plugin's view), the suite's tool registrations (Mail, Calendar, the registry), the
+`packages/edge/src/docs/object.ts`, `move.ts`, `runtime/*` (the Worker's runtime for the seam), `plugin/web/*` (the
+ChatGPT plugin's view), the suite's tool registrations (Mail, Calendar, the registry), **Flow's own MCP door**
+(`packages/edge/src/routes/mcp.ts`, today `docs/plugin/server/worker.ts` in the copy: it reads the tool registry,
+`platform.md` §5.4, and is not MCP Docs' MCP server; ruling 5), the
 `/workspace` client entry with `@flow/suite-bar` and the organization switcher, the sign-in and session pieces the
 suite's Directory provides. The 34 client files that mention organizations or sign-in are reviewed in phase 2; the
 expectation is that most are the home page and file library reading a `host` (§3.2), not hosted-only code.
@@ -126,11 +127,13 @@ are read from modules and globals in five places; they become one object given a
 ## 4. The packages after
 
 ```
-packages/docs-core/        @flow/docs-core   shared/, server/ (core + seamed), client/src (editors), plugin/server
+packages/docs-core/        @flow/docs-core   shared/, server/ (core + seamed), client/src (editors)
 packages/docs/             @flow/docs        the hosted Docs app: the /workspace client entry; manifest; nothing else
 packages/edge/src/docs/    the Worker's Docs object and its runtime, importing @flow/docs-core; the copies deleted
+packages/edge/src/routes/mcp.ts   Flow's MCP door, over the tool registry; Docs' tools run through runners from the core
 apps/mcp-docs/             @freeflow-im/mcp-docs-app   the standalone app: Electron shell, Node runtime, local store,
-                           backup, folder watch, local MCP, the coding agent, installer/, claude-plugin/
+                           backup, folder watch, MCP Docs' MCP server (plugin/server, localMcp), the coding agent,
+                           installer/, claude-plugin/
 ```
 
 - `@flow/docs-core` is a workspace package, never published: both apps build from the same commit. It is typechecked
@@ -160,6 +163,12 @@ The suite adds tools to the assistant (Mail, Calendar, the registry) and pages t
 become registrations the hosted app makes against the core (`registerTools`, `registerRoutes`) at the object's
 start, so `agent/tools.ts` and `app.ts` carry no `// Edge only` blocks.
 
+**Flow's MCP door is Flow's.** Today `/mcp` on the Worker is a copy of MCP Docs' `plugin/server/worker.ts`, and Docs'
+tools on it are run by the plugin's own MCP server (`mcp.ts`), which the registry only filters. After: the door
+lives in `packages/edge` (`routes/mcp.ts`), Docs' tools are registered with runners from the core exactly as Mail's
+and Calendar's are, and the door runs them from the registry. MCP Docs' MCP server is then the standalone app's
+alone, for agents on the same machine.
+
 ## 5. Phases
 
 Each phase is one branch and one PR against `main`, phases as commits inside it (CLAUDE.md). Phase 1 lands alone
@@ -168,8 +177,10 @@ because it deletes 17,800 lines and the Worker's deploy must be verified before 
 1. **The runtime seam, and the copies deleted.** In `packages/docs/server`, the 30 patched files import `runtime`
    instead of Node and Fastify; `runtime/node` is the pass-through; the Worker's runtime is moved into shape and the
    Worker imports `packages/docs` directly. The suite's additions to the tools become registrations (§4.2).
-   `packages/edge/src/docs/{server,shared,plugin}` are deleted. Done when: the Docs tests, the Worker's tests and
-   `test/e2e-docs.mjs` pass, and the hosted Docs is verified live. Also carries the two lagging fixes.
+   Flow's `/mcp` door moves to `packages/edge/src/routes/mcp.ts` and runs Docs' tools from the registry (§4.2), so
+   the copy of `plugin/server` goes too. `packages/edge/src/docs/{server,shared,plugin}` are deleted. Done when: the
+   Docs tests, the Worker's tests, `test/e2e-docs.mjs` and the MCP e2e pass, and the hosted Docs is verified live.
+   Also carries the two lagging fixes.
 2. **The client host.** `desktopBridge` and the suite's pieces behind one `host`; two entries, `/workspace` and the
    desktop's, from one build; the 34 files reviewed. Done when both apps run from the same `dist`.
 3. **The package split.** `packages/docs-core`, `packages/docs` as the thin hosted entry, `apps/mcp-docs`; exports
@@ -190,9 +201,10 @@ Phases 1 and 4 are the ones that remove risk; 2 and 3 are the ones that make the
    now with an extra step.
 4. **The runtime table in §3.1 is the whole contract.** A core file that needs more goes to its app, or the table
    grows in the same PR, with both implementations.
+5. **Ruled (Scott, 2026-11-09): MCP Docs' MCP server and Flow's MCP are separate things.** The local server in
+   `plugin/server` and `localMcp.ts` belongs to the standalone app, for agents on the same machine. The suite's `/mcp`
+   is Flow's door over the tool registry; Docs' tools reach it as runners, like every other app's.
 
 ## 7. Open questions
 
-- Whether the standalone app's local MCP server and the suite's `/mcp` stay one implementation (`plugin/server`) once
-  the suite's tool registry (`platform.md` §5.4) is the way tools are listed. Today they are the same files.
 - Whether the ChatGPT plugin (`plugin/web`) is still wanted; it is hosted-only and 8,850 lines. Not decided here.

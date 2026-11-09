@@ -9,6 +9,9 @@
   no refresh script, two already behind their originals), and desktop releases still come from the old
   `freeflow-im/mcp-docs` repository, which installed apps check for updates. Both are packaging problems; separate
   repositories would make them permanent.
+- **Also ruled:** MCP Docs' MCP server (the local one agents on the machine connect to) and Flow's MCP (`/mcp` on the
+  Worker, over the tool registry) are separate things. The local server belongs to the standalone app; Docs' tools
+  reach Flow's door as registry runners, like Mail's and Calendar's.
 - **Where:** `docs/specs/docs-core.md`, with the boundary file by file, the runtime seam, the packages and the phases.
 
 ## 2026-11-09 — Build in large batches; no stacked PRs (operator ruling)
