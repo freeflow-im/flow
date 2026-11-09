@@ -1,4 +1,4 @@
-// The Worker's OCR for scanned PDFs (packages/edge/src/pdfOcr.ts starts it; src/docs/runtime/pdfOcr.ts calls it). It runs
+// The Worker's OCR for scanned PDFs (packages/edge/src/pdfOcr.ts starts it; packages/docs server/runtime/workerd/pdfOcr.ts calls it). It runs
 // the conversion of packages/docs/server/pdfMarkdown.ts: LiteParse, with Tesseract for pages that are pictures of text.
 //
 //   GET  /ping                 200 once it listens (the Container class's start check).
@@ -12,7 +12,7 @@ import http from 'node:http';
 import { LiteParse } from '@llamaindex/liteparse';
 
 const PORT = Number(process.env.PORT ?? 8080);
-/** The Worker's own limit (src/docs/server/pdfMarkdown.ts). */
+/** The Worker's own limit (packages/docs server/pdfMarkdownTypes.ts). */
 const MAX_PDF_BYTES = 50 * 1024 * 1024;
 const MAX_PAGES = 1000;
 /** Pages read with OCR from one PDF (each takes a second or two on a full vCPU). */

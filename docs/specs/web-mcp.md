@@ -13,7 +13,7 @@ server tool plus the open app's browser tools, and the bridge its definitions ov
 ## OAuth, with the organization chosen on consent
 
 Authorization happens before an organization is known, so its state lives in the **directory object**, not in a Docs
-object: `src/directory/mcpOAuth.ts` (`McpOAuth`), the plugin's `OAuthServer` (`src/docs/plugin/server/oauth.ts`) moved to
+object: `src/directory/mcpOAuth.ts` (`McpOAuth`), the plugin's `OAuthServer` (`packages/docs/plugin/server/oauth.ts`) moved to
 the directory's SQLite (migration 5 of `src/directory/schema.ts`: `oauth_clients`, `oauth_pending`, `oauth_codes`,
 `oauth_tokens`, `oauth_connections`, `oauth_device`). The Worker calls it through `Directory.oauth(method, args)`, which
 returns OAuth errors as data (`OAuthAnswer`).
@@ -57,7 +57,7 @@ the person is still a member of the token's organization and still has an accoun
 the refresh token stops working too. A request with no token gets the same challenge without the error.
 
 The request then goes to that organization's Docs object (`Docs.mcp`), which runs the plugin's tools
-(`src/docs/plugin/server/mcp.ts`) on its own stores (`src/docs/plugin/server/worker.ts`) as that person, with the
+(`packages/docs/plugin/server/mcp.ts`) on its own stores (`src/docs/mcp.ts`) as that person, with the
 organization as the current one (`withDocsContext`):
 
 - **Files**: the tools list and search the organization's Organization files and the person's My files there; a file by
@@ -81,7 +81,7 @@ Mail is a person's, not an organization's: the Mail tools act on the token's per
 (`idFromName(userId)`, `src/imap/object.ts`), whatever organization was chosen. They are defined once in
 `src/imap/mailTools.ts` (`MAIL_TOOLS`: a Zod shape, a description written for the model, the scopes each needs, MCP
 annotations, and `run`) and registered on the same MCP server as the Docs tools, inside the organization's Docs object
-(`registerMailTools` in `src/docs/plugin/server/worker.ts`), so `tools/list` is one list. The Docs object reaches the Mail
+(`registerMailTools` in `src/docs/mcp.ts`), so `tools/list` is one list. The Docs object reaches the Mail
 object through the Worker's `MAIL` binding (`Docs.mailOf`), over its HTTP API (`docs/specs/mail-api.md`).
 
 | Tool | Scopes | What it does |

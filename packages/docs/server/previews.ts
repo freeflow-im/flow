@@ -277,7 +277,7 @@ export function previewRoutes(r: FastifyInstance, opts: { previews: Previews; st
   const str = (v: unknown, max = 500) => (typeof v === 'string' ? v.slice(0, max) : '');
   const withPage = (s: SavedPreview) => ({ ...s, url: `${opts.basePath}${s.path}` });
   const shown = (p: PreviewInfo) => ({ ...p, ...(p.saved ? { saved: withPage(p.saved) } : {}) });
-  // Set before the handler: the Worker's runtime has no onSend hook (packages/edge/src/docs/runtime/fastify.ts).
+  // Set before the handler: the Worker's runtime has no onSend hook (packages/docs/server/runtime/workerd/http.ts).
   r.addHook('preHandler', async (_req, reply) => {
     reply.header('Cache-Control', 'no-store').header('X-Robots-Tag', 'noindex');
   });

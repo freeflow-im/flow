@@ -85,7 +85,7 @@ adminRoutes.get('/edge/admin/docs/:id/upload-url', async (c) => {
   return c.json({ url: signed.url });
 });
 
-/** A Docs file body, at the key the object's file system will look for it (docs/runtime/fsp.ts). */
+/** A Docs file body, at the key the object's file system will look for it (packages/docs server/runtime/workerd/fsp.ts). */
 adminRoutes.put('/edge/admin/docs/:id/file/*', async (c) => {
   const rel = new URL(c.req.url).pathname.split('/file/')[1]!;
   if (!/^(sheets|files|images)\/[^/]+$/.test(decodeURIComponent(rel))) return c.json({ error: 'bad path' }, 400);
