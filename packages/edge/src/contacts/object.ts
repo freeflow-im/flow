@@ -251,7 +251,8 @@ export class Contacts extends DurableObject<ContactsEnv> {
     const answer = await (stub.call as never as (m: string, a: unknown[]) => Promise<{ ok: boolean; value?: AccountDTO[]; message?: string }>)('accountsOfOrganization', [org]);
     if (!answer.ok) throw new Error(answer.message ?? 'the directory refused');
     return (answer.value ?? [])
-      .filter((a) => a.id !== caller.account?.id && a.state !== 'removed' && a.state !== 'suspended' && a.address)
+      // A guest has no address (§3.3), so it is no one to write to.
+      .filter((a): a is AccountDTO & { address: string } => a.id !== caller.account?.id && a.state !== 'removed' && a.state !== 'suspended' && !!a.address)
       .map((a) => ({ id: `member:${a.id}`, source: 'member', name: a.displayName || a.address, emails: [a.address.toLowerCase()], accountId: a.id, userId: a.principalId }));
   }
 

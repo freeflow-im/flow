@@ -191,7 +191,8 @@ export interface PrincipalDTO {
 export const ACCOUNT_ROLES = ['owner', 'admin', 'member'] as const;
 export type AccountRole = (typeof ACCOUNT_ROLES)[number];
 
-/** `native` has a mailbox; `guest` is reserved (§3.3, §9). */
+/** `native` has an address, a mailbox and a native calendar; `guest` is a member with none of them (§3.3): the same
+ * roles, channels, DMs, mentions and Docs, and no address, since an address that bounces is a trap. */
 export const ACCOUNT_KINDS = ['native', 'guest'] as const;
 export type AccountKind = (typeof ACCOUNT_KINDS)[number];
 
@@ -204,7 +205,8 @@ export interface AccountDTO {
   id: string;
   principalId: string;
   organizationId: string;
-  address: string;
+  /** The account's email address; null for a guest, which has none (§3.3). */
+  address: string | null;
   displayName: string;
   role: AccountRole;
   kind: AccountKind;
@@ -213,6 +215,12 @@ export interface AccountDTO {
   statusMessage?: string | null;
   createdAt: string;
 }
+
+/** PATCH /v1/workspaces/:id/accounts/:accountId/kind: the account, as it is now. */
+export interface AccountKindResult { account: AccountDTO }
+
+/** POST /v1/workspaces/:id/accounts/kind: how many accounts changed kind, and how many were that kind already. */
+export interface BulkAccountKindResult { changed: number; unchanged: number }
 
 // ---- domains (§3.2) ------------------------------------------------------------
 

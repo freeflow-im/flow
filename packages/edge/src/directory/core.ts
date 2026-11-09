@@ -46,6 +46,9 @@ export interface ProvisioningTarget {
   slug: string;
   hosted: boolean;
   removedAt: string | null;
+  /** The hosted mailbox's address: the account's own, or, for a guest, the one it had when it became a guest (null once
+   * the mailbox is deleted). Suspend, resume and delete go by it. */
+  mailboxAddress: string | null;
 }
 
 /** One of an organization's domains, as the directory keeps it. */
@@ -169,8 +172,8 @@ export class DirectoryCore {
       `SELECT m.user_id, m.organization_id, m.role FROM memberships m
        LEFT JOIN accounts a ON a.user_id = m.user_id AND a.organization_id = m.organization_id
        WHERE a.id IS NULL ORDER BY m.organization_id, m.user_id`);
-    // Existing members stay active; POST /v1/workspaces/:id/provision gives them their mailboxes.
-    for (const m of missing) this.createAccount(m.user_id as string, m.organization_id as string, m.role as string, undefined, false);
+    // Existing members stay active and native; POST /v1/workspaces/:id/provision gives them their mailboxes.
+    for (const m of missing) this.createAccount(m.user_id as string, m.organization_id as string, m.role as string, undefined, false, 'native');
   }
 
   /** The provisioning messages the calls since the last take made, once. */
@@ -191,20 +194,42 @@ export class DirectoryCore {
       ?? organizationId;
   }
 
-  private createAccount(userId: string, organizationId: string, role: string, displayName?: string, provision = true): void {
+  /** Whether an address is held: by an account, or by a mailbox kept after its account became a guest (whose mail must
+   * not go to whoever got the address next). */
+  private addressTaken(address: string): boolean {
+    return this.rows('SELECT 1 FROM addresses WHERE address = ? UNION ALL SELECT 1 FROM accounts WHERE mailbox_address = ? LIMIT 1', address, address).length > 0;
+  }
+
+  /** A new address for a principal in an organization, on the primary domain as it is now. Making another domain
+   * primary later does not move existing addresses. */
+  private newAddress(user: Row, name: string, organizationId: string): string {
+    const local = localPart(user.is_agent && user.agent_username ? (user.agent_username as string) : name);
+    return uniqueAddress(local, this.primaryDomainOf(organizationId), (a) => this.addressTaken(a));
+  }
+
+  /** What a new joiner's account is: the organization's `defaultAccountKind` policy, `native` unless an admin chose
+   * `guest`. An owner is always native (§3.3), and so is an agent: an agent is brought in to work, and its mailbox and
+   * calendar are part of that (operator ruling, decision_log 2026-11-09). */
+  private defaultKind(organizationId: string, role: string, isAgent: boolean): AccountKind {
+    if (role === 'owner' || isAgent) return 'native';
+    return this.organization(organizationId)?.policies.defaultAccountKind === 'guest' ? 'guest' : 'native';
+  }
+
+  private createAccount(userId: string, organizationId: string, role: string, displayName?: string, provision = true, kind?: AccountKind): void {
     const user = this.userById(userId);
     if (!user) return;
     const name = displayName || (user.display_name as string);
-    const local = localPart(user.is_agent && user.agent_username ? (user.agent_username as string) : name);
-    // On the primary domain as it is now. Making another domain primary later does not move existing addresses.
-    const address = uniqueAddress(local, this.primaryDomainOf(organizationId), (a) => this.rows('SELECT 1 FROM addresses WHERE address = ?', a).length > 0);
+    const accountKind = kind ?? this.defaultKind(organizationId, role, !!user.is_agent);
+    // A guest has no address (§3.3): an address with no mailbox behind it bounces.
+    const address = accountKind === 'guest' ? null : this.newAddress(user, name, organizationId);
     const id = newId();
-    // With a provider, the account starts at the head of the state machine (§3.4); Chat and Docs work from there.
-    const requested = provision && !!this.deps.provisioning;
+    // With a provider, a native account starts at the head of the state machine (§3.4); Chat and Docs work from there.
+    // A guest has nothing to provision and starts active.
+    const requested = provision && !!this.deps.provisioning && accountKind === 'native';
     // An agent's sponsor here starts as its principal's; the member row's own sponsor follows on the join (applyOrgChanges).
-    this.sql.exec('INSERT INTO accounts (id, user_id, organization_id, address, display_name, role, sponsor_user_id, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      id, userId, organizationId, address, name, role, user.is_agent ? ((user.sponsor_user_id as string | null) ?? null) : null, requested ? 'requested' : 'active', Date.now());
-    this.sql.exec('INSERT INTO addresses (address, account_id) VALUES (?, ?)', address, id);
+    this.sql.exec('INSERT INTO accounts (id, user_id, organization_id, address, display_name, role, kind, sponsor_user_id, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      id, userId, organizationId, address, name, role, accountKind, user.is_agent ? ((user.sponsor_user_id as string | null) ?? null) : null, requested ? 'requested' : 'active', Date.now());
+    if (address) this.sql.exec('INSERT INTO addresses (address, account_id) VALUES (?, ?)', address, id);
     if (requested) this.enqueue('provision', organizationId, id);
   }
 
@@ -219,7 +244,7 @@ export class DirectoryCore {
       id: a.id as string,
       principalId: a.user_id as string,
       organizationId: a.organization_id as string,
-      address: a.address as string,
+      address: (a.address as string | null) ?? null,
       displayName: a.display_name as string,
       role: a.role as AccountRole,
       kind: a.kind as AccountKind,
@@ -271,12 +296,13 @@ export class DirectoryCore {
     const row = this.rows('SELECT * FROM accounts WHERE id = ?', accountId)[0];
     const account = this.accountById(accountId);
     if (!row || !account) return null;
-    const domainName = account.address.slice(account.address.lastIndexOf('@') + 1);
-    const domain = this.domainRow('domain = ? AND organization_id = ?', domainName, account.organizationId)[0] ?? null;
+    const mailboxAddress = account.address ?? (row.mailbox_address as string | null) ?? null;
+    const domainName = mailboxAddress ? mailboxAddress.slice(mailboxAddress.lastIndexOf('@') + 1) : null;
+    const domain = domainName ? this.domainRow('domain = ? AND organization_id = ?', domainName, account.organizationId)[0] ?? null : null;
     const atProvider = domain ? this.rows('SELECT provider_at FROM domains WHERE domain = ?', domain.domain)[0]?.provider_at != null : false;
     return {
       account, domain, domainAtProvider: atProvider, slug: this.organizationSlug(account.organizationId),
-      hosted: row.hosted_at != null, removedAt: row.removed_at != null ? iso(row.removed_at) : null,
+      hosted: row.hosted_at != null, removedAt: row.removed_at != null ? iso(row.removed_at) : null, mailboxAddress,
     };
   }
 
@@ -285,9 +311,11 @@ export class DirectoryCore {
     this.sql.exec("UPDATE accounts SET state = CASE WHEN state = 'removed' THEN state ELSE ? END, status_message = ? WHERE id = ?", state, statusMessage, accountId);
   }
 
-  /** Whether the account's hosted mailbox exists (made, or deleted after the retention period). */
+  /** Whether the account's hosted mailbox exists (made, or deleted after the retention period). A guest's deleted
+   * mailbox lets go of its address. */
   setHosted(accountId: string, hosted: boolean): void {
-    this.sql.exec('UPDATE accounts SET hosted_at = ? WHERE id = ?', hosted ? Date.now() : null, accountId);
+    if (hosted) this.sql.exec('UPDATE accounts SET hosted_at = ? WHERE id = ?', Date.now(), accountId);
+    else this.sql.exec('UPDATE accounts SET hosted_at = NULL, mailbox_address = NULL WHERE id = ?', accountId);
   }
 
   /** The domain is made at the provider, with its platform DNS written. */
@@ -295,30 +323,34 @@ export class DirectoryCore {
     this.sql.exec('UPDATE domains SET provider_at = COALESCE(provider_at, ?) WHERE domain = ?', Date.now(), domain);
   }
 
-  /** Every account of the organization with no hosted mailbox, neither removed nor suspended, sent to be provisioned
-   * (existing members, and any whose run stopped). Returns how many. */
+  /** Every native account of the organization with no hosted mailbox, neither removed nor suspended, sent to be
+   * provisioned (existing members, and any whose run stopped). Guests have no mailbox to make. Returns how many. */
   provisionMissing(organizationId: string): number {
     if (!this.deps.provisioning) throw conflict('hosted_mail_off', 'no mail provider is configured');
-    const missing = this.rows("SELECT id FROM accounts WHERE organization_id = ? AND hosted_at IS NULL AND state NOT IN ('removed', 'suspended') ORDER BY created_at, id", organizationId);
+    const missing = this.rows("SELECT id FROM accounts WHERE organization_id = ? AND kind = 'native' AND hosted_at IS NULL AND state NOT IN ('removed', 'suspended') ORDER BY created_at, id", organizationId);
     for (const a of missing) this.enqueue('provision', organizationId, a.id as string);
     return missing.length;
   }
 
-  /** One account sent to be provisioned (the operator's route): it must have no mailbox yet and not be removed or
-   * suspended. Returns whether it was sent. */
+  /** One account sent to be provisioned (the operator's route): it must be native, have no mailbox yet and not be
+   * removed or suspended. Returns whether it was sent. */
   provisionAccount(accountId: string): boolean {
     if (!this.deps.provisioning) throw conflict('hosted_mail_off', 'no mail provider is configured');
-    const a = this.rows("SELECT id, organization_id FROM accounts WHERE id = ? AND hosted_at IS NULL AND state NOT IN ('removed', 'suspended')", accountId)[0];
+    const a = this.rows("SELECT id, organization_id FROM accounts WHERE id = ? AND kind = 'native' AND hosted_at IS NULL AND state NOT IN ('removed', 'suspended')", accountId)[0];
     if (!a) return false;
     this.enqueue('provision', a.organization_id as string, a.id as string);
     return true;
   }
 
-  /** The daily sweep (the Org object's alarm): removed accounts whose mailbox has outlived the retention period, sent to
-   * be deleted. Returns how many. */
+  /** The daily sweep (the Org object's alarm): mailboxes that have outlived the retention period, sent to be deleted —
+   * a removed account's since its removal, a guest's since it became a guest. Returns how many. */
   sweepRemoved(organizationId: string, retentionDays: number): number {
-    const due = this.rows("SELECT id FROM accounts WHERE organization_id = ? AND state = 'removed' AND hosted_at IS NOT NULL AND removed_at IS NOT NULL AND removed_at < ?",
-      organizationId, Date.now() - retentionDays * DAY);
+    const before = Date.now() - retentionDays * DAY;
+    const due = this.rows(
+      `SELECT id FROM accounts WHERE organization_id = ? AND hosted_at IS NOT NULL AND (
+         (state = 'removed' AND removed_at IS NOT NULL AND removed_at < ?)
+         OR (state <> 'removed' AND kind = 'guest' AND kind_changed_at IS NOT NULL AND kind_changed_at < ?))`,
+      organizationId, before, before);
     for (const a of due) this.enqueue('delete', organizationId, a.id as string);
     return due.length;
   }
@@ -340,15 +372,82 @@ export class DirectoryCore {
     this.sql.exec('UPDATE organizations SET policies = ? WHERE id = ?', JSON.stringify(policies), organizationId);
   }
 
+  /**
+   * Makes an account native or a guest (platform.md §3.3), for its organization's owner or admin (routes/accounts.ts).
+   * To a guest: its address is let go and it has none; a hosted mailbox is suspended now and deleted by the daily sweep
+   * after the retention period, its address held until then. To native: the address it had comes back while its mailbox
+   * is kept (and the mailbox is resumed), else it gets a new one on the primary domain and is sent to be provisioned.
+   * An owner cannot be a guest. Returns the account as it is now.
+   */
+  setAccountKind(organizationId: string, accountId: string, kind: AccountKind): AccountDTO {
+    const row = this.rows('SELECT * FROM accounts WHERE id = ? AND organization_id = ?', accountId, organizationId)[0];
+    if (!row) throw notFound('account not found');
+    if (row.kind !== kind) {
+      if (kind === 'guest') this.makeGuest(row);
+      else this.makeNative(row);
+    }
+    return this.accountById(accountId)!;
+  }
+
+  /** Every person whose role is `member` made a guest; owners, admins and agents keep their kind. Removed accounts are
+   * left. Returns the accounts that changed, and how many were guests already. */
+  makeMembersGuests(organizationId: string): { changed: AccountDTO[]; unchanged: number } {
+    const members = this.rows("SELECT a.* FROM accounts a JOIN users u ON u.id = a.user_id WHERE a.organization_id = ? AND a.role = 'member' AND a.state <> 'removed' AND u.is_agent = 0 ORDER BY a.created_at, a.id", organizationId);
+    const changed: AccountDTO[] = [];
+    for (const row of members) {
+      if (row.kind === 'guest') continue;
+      this.makeGuest(row);
+      changed.push(this.accountById(row.id as string)!);
+    }
+    return { changed, unchanged: members.length - changed.length };
+  }
+
+  private makeGuest(row: Row): void {
+    if (row.role === 'owner') throw conflict('owner_not_guest', 'the owner cannot be a guest');
+    const hosted = row.hosted_at != null;
+    // A run part way through the provisioning states has nothing left to do for a guest: it is active.
+    this.sql.exec(
+      `UPDATE accounts SET kind = 'guest', address = NULL, mailbox_address = ?, kind_changed_at = ?, status_message = NULL,
+         state = CASE WHEN state IN ('requested', 'mailbox_ready', 'calendars_ready') THEN 'active' ELSE state END
+       WHERE id = ?`,
+      hosted ? row.address : null, Date.now(), row.id);
+    this.sql.exec('DELETE FROM addresses WHERE account_id = ?', row.id);
+    // A removed account's mailbox is suspended already.
+    if (hosted && row.state !== 'removed') this.enqueue('suspend', row.organization_id as string, row.id as string);
+  }
+
+  private makeNative(row: Row): void {
+    const id = row.id as string, organizationId = row.organization_id as string;
+    const kept = row.hosted_at != null && row.mailbox_address ? (row.mailbox_address as string) : null;
+    let address = kept;
+    if (!address) {
+      const user = this.userById(row.user_id as string);
+      if (!user) throw notFound('user not found');
+      address = this.newAddress(user, row.display_name as string, organizationId);
+    }
+    this.sql.exec("UPDATE accounts SET kind = 'native', address = ?, mailbox_address = NULL, kind_changed_at = ? WHERE id = ?", address, Date.now(), id);
+    this.sql.exec('INSERT OR REPLACE INTO addresses (address, account_id) VALUES (?, ?)', address, id);
+    if (row.state === 'removed' || row.state === 'suspended') return;
+    // An active account with no mailbox is given one and its calendar, and stays active (provisioning/steps.ts).
+    this.enqueue(kept ? 'resume' : 'provision', organizationId, id);
+  }
+
   /** A join's account: made when missing, reactivated with the new role when removed, its role updated otherwise. */
   private joinAccount(userId: string, organizationId: string, role: string, displayName?: string): void {
     this.sql.exec('INSERT OR IGNORE INTO organizations (id, slug, created_at) VALUES (?, ?, ?)', organizationId, this.organizationSlug(organizationId), Date.now());
     this.ensurePlatformDomain(organizationId);
     if (role === 'owner') this.sql.exec('UPDATE organizations SET owner_user_id = ? WHERE id = ? AND owner_user_id IS NULL', userId, organizationId);
-    const existing = this.rows('SELECT id, state, hosted_at FROM accounts WHERE user_id = ? AND organization_id = ?', userId, organizationId)[0];
+    const existing = this.rows('SELECT * FROM accounts WHERE user_id = ? AND organization_id = ?', userId, organizationId)[0];
     if (!existing) return this.createAccount(userId, organizationId, role, displayName);
     this.sql.exec('UPDATE accounts SET role = ? WHERE id = ?', role, existing.id);
+    // An owner is never a guest (§3.3): a guest made owner (not by the transfer route, which refuses) becomes native.
+    if (role === 'owner' && existing.kind === 'guest') this.makeNative({ ...existing, role });
     if (existing.state !== 'removed') return;
+    if (existing.kind === 'guest' && role !== 'owner') {
+      // A guest back in has no mailbox to make or resume.
+      this.sql.exec("UPDATE accounts SET state = 'active', removed_at = NULL, status_message = NULL WHERE id = ?", existing.id);
+      return;
+    }
     // Back in (§3.4): a kept mailbox is resumed; one deleted after the retention period (or never made) is made again.
     const id = existing.id as string;
     const remake = !!this.deps.provisioning && existing.hosted_at == null;
@@ -824,8 +923,8 @@ export class DirectoryCore {
     const row = this.ownDomain(organizationId, domain);
     if (row.kind === 'platform') throw conflict('domain_platform', 'the platform domain cannot be removed');
     if (row.primary) throw conflict('domain_primary', 'make another domain primary first');
-    // Removed accounts count: the organization keeps their addresses (§3.3).
-    if (this.rows('SELECT 1 FROM accounts WHERE address LIKE ? LIMIT 1', `%@${row.domain}`).length) {
+    // Removed accounts count: the organization keeps their addresses (§3.3); so do guests' kept mailboxes.
+    if (this.rows('SELECT 1 FROM accounts WHERE address LIKE ? OR mailbox_address LIKE ? LIMIT 1', `%@${row.domain}`, `%@${row.domain}`).length) {
       throw conflict('domain_in_use', 'accounts have addresses on this domain');
     }
     this.forgetDomain(row.domain);

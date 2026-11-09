@@ -103,9 +103,11 @@ export interface WorkspacePolicies {
   agentsBy: 'admins' | 'members';
   /** Stored only until phase 3 enforces it. */
   linkSharing: boolean;
+  /** What a new joiner's account is (platform.md §3.3): `native` (an address and a mailbox) or `guest` (neither). */
+  defaultAccountKind: 'native' | 'guest';
 }
 
-export const WORKSPACE_POLICY_DEFAULTS: WorkspacePolicies = { inviteBy: 'admins', agentsBy: 'members', linkSharing: true };
+export const WORKSPACE_POLICY_DEFAULTS: WorkspacePolicies = { inviteBy: 'admins', agentsBy: 'members', linkSharing: true, defaultAccountKind: 'native' };
 
 export type MemberRole = 'owner' | 'admin' | 'member';
 

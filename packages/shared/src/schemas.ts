@@ -166,6 +166,7 @@ export const UpdateWorkspaceBody = z
         inviteBy: z.enum(['admins', 'members']).optional(),
         agentsBy: z.enum(['admins', 'members']).optional(),
         linkSharing: z.boolean().optional(),
+        defaultAccountKind: z.enum(['native', 'guest']).optional(),
       })
       .strict()
       .optional(),
@@ -854,3 +855,16 @@ export const PatchDomainBody = z.object({
   primary: z.literal(true),
 });
 export type PatchDomainBody = z.infer<typeof PatchDomainBody>;
+
+/** PATCH /v1/workspaces/:id/accounts/:accountId/kind: a native account (address, mailbox, calendar) or a guest (none). */
+export const SetAccountKindBody = z.object({
+  kind: z.enum(['native', 'guest']),
+});
+export type SetAccountKindBody = z.infer<typeof SetAccountKindBody>;
+
+/** POST /v1/workspaces/:id/accounts/kind: every account whose role is `member` made a guest; owners and admins keep theirs. */
+export const BulkAccountKindBody = z.object({
+  kind: z.literal('guest'),
+  all: z.literal(true),
+});
+export type BulkAccountKindBody = z.infer<typeof BulkAccountKindBody>;

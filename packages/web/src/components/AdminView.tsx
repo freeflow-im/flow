@@ -6,9 +6,8 @@ import { useBoundApi } from '../lib/useBoundApi';
 // Its Automations tab (platform.md §5.2) is open to every member: the workspace
 // menu's "Automations…" opens the panel on it.
 import { useEffect, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
-import { WORKSPACE_POLICY_DEFAULTS, type MemberRole, type WorkspaceDTO, type WorkspaceMemberDTO, type WorkspacePolicies } from '@flow/shared';
-import { api } from '../lib/api';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { WORKSPACE_POLICY_DEFAULTS, type AccountDTO, type AccountKind, type BulkAccountKindResult, type MemberRole, type WorkspaceDTO, type WorkspaceMemberDTO, type WorkspacePolicies } from '@flow/shared';
 import { publicConfig } from '../lib/google';
 import { useAuth, useSelection } from '../state';
 import { useChannels, useMembers, useWorkspaces } from '../hooks';
@@ -33,6 +32,7 @@ export default function AdminView() {
   const workspaces = useWorkspaces();
   const members = useMembers(sel.workspaceId);
   const channels = useChannels(sel.workspaceId);
+  const { api } = useBoundApi();
   const [tab, setTab] = useState<AdminTab>(() => requestedTab ?? 'organization');
   // Whether accounts get hosted mailboxes here (platform.md §3.4): the Organization tab's "Set up mailboxes" then shows.
   const [hostedMail, setHostedMail] = useState(false);
@@ -54,6 +54,14 @@ export default function AdminView() {
 
   const ws = (workspaces.data ?? []).find((w) => w.id === sel.workspaceId);
   const isAdmin = ws?.role === 'owner' || ws?.role === 'admin';
+  // Each member's account (platform.md §3.3): its kind, native or guest, and its address. Owners and admins only.
+  const accounts = useQuery({
+    queryKey: ['accounts', sel.workspaceId],
+    queryFn: () => api<{ accounts: AccountDTO[] }>('GET', `/v1/workspaces/${sel.workspaceId}/accounts`),
+    select: (d) => d.accounts,
+    enabled: isAdmin && sel.workspaceId !== null,
+  });
+  const accountOf = (m: WorkspaceMemberDTO) => (accounts.data ?? []).find((a) => a.principalId === m.userId);
   // Members who are not admins see only Automations.
   const shown: AdminTab = isAdmin ? tab : 'automations';
   const roster = (members.data ?? []).slice().sort((a, b) => {
@@ -116,7 +124,7 @@ export default function AdminView() {
           )
         ) : (
           <div className="mx-auto max-w-3xl">
-            {ws && <OrganizationSection ws={ws} roster={roster} meId={auth.user.id} hostedMail={hostedMail} />}
+            {ws && <OrganizationSection ws={ws} roster={roster} meId={auth.user.id} hostedMail={hostedMail} accounts={accounts.data} />}
             <p className="mb-4 text-sm text-muted">
               {roster.length} {roster.length === 1 ? 'member' : 'members'}. Owners and admins can change
               roles and remove people. The workspace owner can't be changed or removed.
@@ -127,12 +135,13 @@ export default function AdminView() {
                   <tr className="border-b border-hairline bg-daypill/40 text-left text-xs text-faint uppercase">
                     <th className="px-3 py-2 font-semibold">Member</th>
                     <th className="px-3 py-2 font-semibold">Role</th>
+                    <th className="px-3 py-2 font-semibold" title="Native accounts have an address and a mailbox; guests have neither">Kind</th>
                     <th className="px-3 py-2 text-right font-semibold">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {roster.map((m) => (
-                    <MemberRow key={m.userId} member={m} meId={auth.user.id} workspaceId={sel.workspaceId!} />
+                    <MemberRow key={m.userId} member={m} meId={auth.user.id} workspaceId={sel.workspaceId!} account={accountOf(m)} />
                   ))}
                 </tbody>
               </table>
@@ -144,14 +153,17 @@ export default function AdminView() {
   );
 }
 
-function MemberRow({
+export function MemberRow({
   member,
   meId,
   workspaceId,
+  account,
 }: {
   member: WorkspaceMemberDTO;
   meId: string;
   workspaceId: string;
+  /** The member's account here (GET /v1/workspaces/:id/accounts), once loaded. */
+  account?: AccountDTO | undefined;
 }) {
   const { api } = useBoundApi();
   const qc = useQueryClient();
@@ -168,7 +180,23 @@ function MemberRow({
     Promise.all([
       qc.invalidateQueries({ queryKey: ['members', workspaceId] }),
       qc.invalidateQueries({ queryKey: ['workspaces'] }),
+      qc.invalidateQueries({ queryKey: ['accounts', workspaceId] }),
     ]);
+
+  // A guest has no address and no mailbox (platform.md §3.3). An owner is always native.
+  const setKind = async (kind: AccountKind) => {
+    if (!account || kind === account.kind) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api('PATCH', `/v1/workspaces/${workspaceId}/accounts/${account.id}/kind`, { kind });
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'failed');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const setRole = async (role: Exclude<MemberRole, 'owner'>) => {
     if (role === member.role) return;
@@ -210,6 +238,11 @@ function MemberRow({
               {isSelf && <span className="text-faint"> (you)</span>}
             </div>
             <div className="truncate text-xs text-muted">{member.email}</div>
+            {account && (
+              <div data-testid={`admin-address-${member.email}`} className="truncate text-xs text-faint">
+                {account.kind === 'guest' ? 'guest' : account.address}
+              </div>
+            )}
           </div>
         </div>
       </td>
@@ -232,6 +265,24 @@ function MemberRow({
           >
             <option value="admin">Admin</option>
             <option value="member">Member</option>
+          </select>
+        )}
+      </td>
+      <td className="px-3 py-2.5">
+        {!account ? (
+          <span className="text-xs text-faint">—</span>
+        ) : isOwner ? (
+          <span data-testid={`admin-kind-${member.email}`} className="text-xs text-ink-soft">Native</span>
+        ) : (
+          <select
+            data-testid={`admin-kind-${member.email}`}
+            className="rounded border border-hairline bg-base px-2 py-1 text-sm disabled:opacity-50"
+            value={account.kind}
+            disabled={busy}
+            onChange={(e) => void setKind(e.target.value as AccountKind)}
+          >
+            <option value="native">Native</option>
+            <option value="guest">Guest</option>
           </select>
         )}
       </td>
@@ -282,12 +333,15 @@ export function OrganizationSection({
   roster,
   meId,
   hostedMail = false,
+  accounts,
 }: {
   ws: WorkspaceDTO;
   roster: WorkspaceMemberDTO[];
   meId: string;
   /** A mail provider is configured (GET /v1/config `hostedMail`): offer to set up mailboxes for everyone. */
   hostedMail?: boolean;
+  /** The organization's accounts (GET /v1/workspaces/:id/accounts), once loaded: who is native and who a guest. */
+  accounts?: AccountDTO[] | undefined;
 }) {
   const { api } = useBoundApi();
   const qc = useQueryClient();
@@ -296,6 +350,8 @@ export function OrganizationSection({
   const [heir, setHeir] = useState('');
   const [confirming, setConfirming] = useState(false);
   const [queued, setQueued] = useState<number | null>(null);
+  const [confirmGuests, setConfirmGuests] = useState(false);
+  const [guested, setGuested] = useState<number | null>(null);
 
   const owner = roster.find((m) => m.role === 'owner');
   const policies: WorkspacePolicies = { ...WORKSPACE_POLICY_DEFAULTS, ...ws.policies };
@@ -312,6 +368,7 @@ export function OrganizationSection({
       await Promise.all([
         qc.invalidateQueries({ queryKey: ['workspaces'] }),
         qc.invalidateQueries({ queryKey: ['members', ws.id] }),
+        qc.invalidateQueries({ queryKey: ['accounts', ws.id] }),
       ]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'failed');
@@ -328,6 +385,19 @@ export function OrganizationSection({
     run(async () => {
       const out = await api<{ queued: number }>('POST', `/v1/workspaces/${ws.id}/provision`, {});
       setQueued(out.queued);
+    });
+
+  // Native accounts are the ones with mailboxes; "set up mailboxes for everyone" covers them and no guest.
+  const live = (accounts ?? []).filter((a) => a.state !== 'removed' && a.state !== 'suspended');
+  const natives = live.filter((a) => a.kind === 'native').length;
+  const nativeMembers = live.filter((a) => a.kind === 'native' && a.role === 'member').length;
+
+  // Every person whose role is member becomes a guest; owners, admins and agents keep theirs.
+  const makeEveryoneGuests = () =>
+    run(async () => {
+      const out = await api<BulkAccountKindResult>('POST', `/v1/workspaces/${ws.id}/accounts/kind`, { kind: 'guest', all: true });
+      setGuested(out.changed);
+      setConfirmGuests(false);
     });
 
   const transfer = () =>
@@ -381,6 +451,54 @@ export function OrganizationSection({
           />
           <span className="text-muted">Allow sharing by link</span>
         </label>
+        <label className="flex items-center justify-between gap-2">
+          <span className="text-muted" title="Native accounts get an address and a mailbox; guests get neither">New members join as</span>
+          <select
+            data-testid="admin-policy-kind"
+            className="rounded border border-hairline bg-base px-2 py-1 text-sm disabled:opacity-50"
+            value={policies.defaultAccountKind}
+            disabled={busy}
+            onChange={(e) => void setPolicy('defaultAccountKind', e.target.value as WorkspacePolicies['defaultAccountKind'])}
+          >
+            <option value="native">Native (with a mailbox)</option>
+            <option value="guest">Guests (no mailbox)</option>
+          </select>
+        </label>
+      </div>
+      <div className="mb-3 flex flex-wrap items-center gap-2 border-t border-hairline pt-3 text-sm">
+        <span className="text-muted">Guests have no address and no mailbox</span>
+        {confirmGuests ? (
+          <span className="inline-flex items-center gap-2">
+            <span className="text-xs text-muted">
+              Make {nativeMembers} {nativeMembers === 1 ? 'member' : 'members'} guests? Their mailboxes are suspended. Owners and admins keep theirs.
+            </span>
+            <button
+              data-testid="admin-guests-confirm"
+              className="rounded bg-red-600 px-2 py-1 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+              disabled={busy}
+              onClick={() => void makeEveryoneGuests()}
+            >
+              Yes
+            </button>
+            <button className="text-xs text-muted hover:underline" disabled={busy} onClick={() => setConfirmGuests(false)}>
+              No
+            </button>
+          </span>
+        ) : (
+          <button
+            data-testid="admin-guests"
+            className="rounded border border-hairline px-2.5 py-1 text-xs hover:bg-daypill disabled:opacity-50"
+            disabled={busy}
+            onClick={() => { setGuested(null); setConfirmGuests(true); }}
+          >
+            Make every member a guest
+          </button>
+        )}
+        {guested !== null && (
+          <span data-testid="admin-guests-result" className="text-xs text-muted">
+            {guested === 0 ? 'Every member was a guest already.' : `${guested} ${guested === 1 ? 'member is' : 'members are'} now ${guested === 1 ? 'a guest' : 'guests'}.`}
+          </span>
+        )}
       </div>
       {hostedMail && (
         <div className="mb-3 flex flex-wrap items-center gap-2 border-t border-hairline pt-3 text-sm">
@@ -393,6 +511,11 @@ export function OrganizationSection({
           >
             Set up mailboxes for everyone
           </button>
+          {accounts && (
+            <span data-testid="admin-provision-count" className="text-xs text-muted">
+              {natives} native {natives === 1 ? 'account' : 'accounts'}; guests get none
+            </span>
+          )}
           {queued !== null && (
             <span data-testid="admin-provision-result" className="text-xs text-muted">
               {queued === 0 ? 'Everyone has a mailbox.' : `Setting up ${queued} ${queued === 1 ? 'mailbox' : 'mailboxes'}.`}

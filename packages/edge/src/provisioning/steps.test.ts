@@ -250,6 +250,75 @@ describe('provisioning (platform.md §3.4)', () => {
     expect(plain.takeProvisioning()).toEqual([]);
   });
 
+  it('never provisions a guest: no address, active from the start, nothing sent, not counted by "everyone"', async () => {
+    const org = newId();
+    core.reserveSlug('acme', org);
+    join(org, user('Ann'), 'owner');
+    core.setPolicies(org, { defaultAccountKind: 'guest' });
+    const gus = join(org, user('Gus'));
+    expect(gus).toMatchObject({ kind: 'guest', address: null, state: 'active' });
+    expect((await drain()).map((m) => m.accountId)).not.toContain(gus.id);
+    expect(core.provisionMissing(org)).toBe(0);
+    expect(core.provisionAccount(gus.id)).toBe(false);
+    // A stray message for a guest changes nothing.
+    await runMessage({ kind: 'provision', organizationId: org, accountId: gus.id }, deps);
+    await runMessage({ kind: 'resume', organizationId: org, accountId: gus.id }, deps);
+    expect(mail.has(gus.id) || calendars.has(gus.id)).toBe(false);
+    expect(core.provisioningTarget(gus.id)).toMatchObject({ mailboxAddress: null, domain: null, hosted: false });
+  });
+
+  it('makes a guest native: a new address, a mailbox and a calendar, staying active', async () => {
+    const org = newId();
+    core.reserveSlug('acme', org);
+    core.setPolicies(org, { defaultAccountKind: 'guest' });
+    const gus = join(org, user('Gus'));
+    await drain();
+    const made = core.setAccountKind(org, gus.id, 'native');
+    expect(made).toMatchObject({ kind: 'native', address: 'gus@acme.freeflow.im', state: 'active' });
+    expect((await drain()).map((m) => m.kind)).toEqual(['provision']);
+    expect(provider.mailboxes.get('gus@acme.freeflow.im')!.state).toBe('enabled');
+    expect(mail.get(gus.id)?.email).toBe('gus@acme.freeflow.im');
+    expect(calendars.has(gus.id)).toBe(true);
+    expect(core.accountById(gus.id)!.state).toBe('active');
+  });
+
+  it('makes a native account a guest: the mailbox suspended now, its address held, deleted after the retention period', async () => {
+    const org = newId();
+    core.reserveSlug('acme', org);
+    const bob = join(org, user('Bob'));
+    await drain();
+    const guest = core.setAccountKind(org, bob.id, 'guest');
+    expect(guest).toMatchObject({ kind: 'guest', address: null, state: 'active' });
+    expect(core.accountByAddress('bob@acme.freeflow.im')).toBeNull();
+    expect((await drain()).map((m) => m.kind)).toEqual(['suspend']);
+    expect(provider.mailboxes.get('bob@acme.freeflow.im')!.state).toBe('suspended');
+    // The kept mailbox's address goes to nobody else while the mailbox is there.
+    expect(join(org, user('Bob')).address).toBe('bob2@acme.freeflow.im');
+    await drain();
+    expect(core.sweepRemoved(org, 30)).toBe(0);
+    (core as unknown as { sql: Sql }).sql.exec('UPDATE accounts SET kind_changed_at = ? WHERE id = ?', Date.now() - 31 * 86_400_000, bob.id);
+    expect(core.sweepRemoved(org, 30)).toBe(1);
+    expect((await drain()).map((m) => m.kind)).toEqual(['delete']);
+    expect(provider.mailboxes.has('bob@acme.freeflow.im')).toBe(false);
+    expect(mail.has(bob.id)).toBe(false);
+    expect(core.provisioningTarget(bob.id)).toMatchObject({ hosted: false, mailboxAddress: null });
+    expect(core.sweepRemoved(org, 30)).toBe(0);
+    expect(join(org, user('Bob')).address).toBe('bob@acme.freeflow.im');
+  });
+
+  it('gives a guest back the address of its kept mailbox, resumed, when it is made native again', async () => {
+    const org = newId();
+    core.reserveSlug('acme', org);
+    const bob = join(org, user('Bob'));
+    await drain();
+    core.setAccountKind(org, bob.id, 'guest');
+    await drain();
+    expect(core.setAccountKind(org, bob.id, 'native')).toMatchObject({ kind: 'native', address: 'bob@acme.freeflow.im' });
+    expect((await drain()).map((m) => m.kind)).toEqual(['resume']);
+    expect(provider.mailboxes.get('bob@acme.freeflow.im')!.state).toBe('enabled');
+    expect(core.provisioningTarget(bob.id)).toMatchObject({ hosted: true, mailboxAddress: 'bob@acme.freeflow.im' });
+  });
+
   it('retries a busy provider, stops on a refusal, and makes passwords within the rules', () => {
     expect(classify(new ProviderError('rate_limited', 'slow down'))).toBe('retry');
     expect(classify(new ProviderError('unavailable', 'down'))).toBe('retry');
