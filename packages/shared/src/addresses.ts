@@ -18,9 +18,9 @@ export type AddressedReference = Reference & { fileKind?: string };
 /** What `addressOf` takes: a reference, or its app, kind and id (a Docs folder's address names its organization). */
 export type ReferenceTarget = Pick<Reference, 'app' | 'kind' | 'id'> & { organizationId?: string; fileKind?: string };
 
-/** Chat's pages the other apps' suite bars open (`/?open=<page>`, Chat's App.tsx). `admin` is Chat's own admin panel,
- * kept while its sections move to the Admin app (docs/specs/workspace-admin.md §8). */
-export const CHAT_PAGES = ['chooser', 'admin', 'invite', 'activity', 'profile'] as const;
+/** Chat's pages the other apps' suite bars open (`/?open=<page>`, Chat's App.tsx). Administration is the Admin app
+ * (`adminAddress`, docs/specs/workspace-admin.md). */
+export const CHAT_PAGES = ['chooser', 'invite', 'activity', 'profile'] as const;
 export type ChatPage = (typeof CHAT_PAGES)[number];
 
 /** The Admin app's sections (docs/specs/workspace-admin.md §3), each at `/admin/<section>`. */

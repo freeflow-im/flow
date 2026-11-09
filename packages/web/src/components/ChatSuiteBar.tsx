@@ -171,6 +171,7 @@ export default function ChatSuiteBar({ activityUnread, intent }: { activityUnrea
           addBadge: invites,
           // The Admin app (docs/specs/workspace-admin.md), on this workspace's own server.
           ...(canAdmin ? { onSettings: () => window.location.assign(new URL(adminAddress(), runtime.origin).toString()) } : {}),
+          ...(sel.workspaceId && docsHere ? { onAutomations: () => window.location.assign(new URL(adminAddress('automations'), runtime.origin).toString()) } : {}),
           ...(canInvite ? { onInvite: () => setModal('invite') } : {}),
         }}
         search={{

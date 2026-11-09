@@ -7,7 +7,7 @@ import { api } from '../lib/api';
 import { artifactGlyph } from '../lib/fileKind';
 import { dmTitle, isSelfDm as isSelfDmChannel } from '../lib/channelTitle';
 import { workspaceExit } from '../lib/workspaceExit';
-import { ACTIVITY_VIEW_ID, ADMIN_VIEW_ID, CHANNEL_BROWSER_VIEW_ID, DIRECTORY_VIEW_ID, SCHEDULED_VIEW_ID, useAuth, useLive, useMobileNav, useRuntime, useSelection } from '../state';
+import { ACTIVITY_VIEW_ID, CHANNEL_BROWSER_VIEW_ID, DIRECTORY_VIEW_ID, SCHEDULED_VIEW_ID, useAuth, useLive, useMobileNav, useRuntime, useSelection } from '../state';
 import type { Selection } from '../state';
 import { useCapabilities } from '../lib/backend';
 import {
@@ -30,8 +30,6 @@ import {
   LeaveWorkspaceModal,
   NewDmModal,
 } from './modals';
-import { AgentsModal } from './AgentsModal';
-import { requestAdminTab } from './AdminView';
 import { adminAddress } from '@flow/suite-bar';
 import { InviteAgentModal } from './InviteAgentModal';
 import { openServerConnections } from './ServerConnections';
@@ -251,7 +249,6 @@ export default function Sidebar() {
   const [showNewDm, setShowNewDm] = useState(false);
   const [showLeave, setShowLeave] = useState(false);
   const [showDeleteWs, setShowDeleteWs] = useState(false);
-  const [showAgents, setShowAgents] = useState(false);
   const [showInviteAgent, setShowInviteAgent] = useState(false);
   const [showFeatures, setShowFeatures] = useState(false);
   const [menuChannel, setMenuChannel] = useState<ChannelDTO | null>(null);
@@ -451,25 +448,15 @@ export default function Sidebar() {
             <MenuItem testid="menu-directory" onClick={() => { setWsMenuOpen(false); sel.selectChannel(DIRECTORY_VIEW_ID); }}>
               Directory
             </MenuItem>
-            {/* any member can sponsor agents (AGENT_MEMBERS.md) — the modal
-                explains registration and lets sponsors remove their own */}
-            {caps.agents.state !== 'unavailable' && <MenuItem testid="menu-agents" onClick={() => { setWsMenuOpen(false); setShowAgents(true); }}>
-              Agents…
-            </MenuItem>}
-            {caps.admin.state !== 'unavailable' && <MenuItem testid="menu-automations" onClick={() => { setWsMenuOpen(false); requestAdminTab('automations'); sel.openAdminPanel(); }}>
+            {/* The Admin app (docs/specs/workspace-admin.md), on this workspace's own server (the page's origin unless
+                it is a foreign connection): Automations for every member, the organization's settings for its admins. */}
+            {caps.admin.state !== 'unavailable' && <MenuItem testid="menu-automations" onClick={() => { setWsMenuOpen(false); window.location.assign(new URL(adminAddress('automations'), runtime.origin).toString()); }}>
               Automations…
             </MenuItem>}
             {isAdmin && caps.admin.state !== 'unavailable' && (
-              <>
-                {/* The Admin app (docs/specs/workspace-admin.md): the organization's name, look, emoji and policies. On
-                    this workspace's own server, which is the page's origin unless it is a foreign connection. */}
-                <MenuItem testid="menu-org-settings" onClick={() => { setWsMenuOpen(false); window.location.assign(new URL(adminAddress(), runtime.origin).toString()); }}>
-                  Organization settings…
-                </MenuItem>
-                <MenuItem testid="menu-admin" onClick={() => { setWsMenuOpen(false); requestAdminTab('organization'); sel.openAdminPanel(); }}>
-                  Manage Users…
-                </MenuItem>
-              </>
+              <MenuItem testid="menu-org-settings" onClick={() => { setWsMenuOpen(false); window.location.assign(new URL(adminAddress(), runtime.origin).toString()); }}>
+                Organization settings…
+              </MenuItem>
             )}
             <MenuItem onClick={() => { setWsMenuOpen(false); sel.selectWorkspace(null); }}>
               All Workspaces
@@ -535,15 +522,6 @@ export default function Sidebar() {
         data-sidebar-scroll
         className="mc-scroll mc-scroll-dark min-h-0 flex-1 overflow-y-auto px-3.5 pb-2 text-sm"
       >
-        {sel.adminPanelOpen && caps.admin.state !== 'unavailable' && (
-          <AdminRow
-            label={isAdmin ? 'Manage users' : 'Automations'}
-            active={sel.channelId === ADMIN_VIEW_ID}
-            onOpen={() => sel.selectChannel(ADMIN_VIEW_ID)}
-            onClose={() => sel.closeAdminPanel()}
-          />
-        )}
-
         <SectionHeader
           label="Channels"
           action={canManage ? {
@@ -751,7 +729,6 @@ export default function Sidebar() {
       {showDeleteWs && sel.workspaceId && (
         <DeleteWorkspaceModal workspaceId={sel.workspaceId} onClose={() => setShowDeleteWs(false)} />
       )}
-      {showAgents && sel.workspaceId && <AgentsModal workspaceId={sel.workspaceId} onClose={() => setShowAgents(false)} />}
       {showInviteAgent && sel.workspaceId && (
         <InviteAgentModal workspaceId={sel.workspaceId} onClose={() => setShowInviteAgent(false)} />
       )}
@@ -941,47 +918,6 @@ function DirectoryRow({ active, onOpen }: { active: boolean; onOpen: () => void 
   );
 }
 
-function AdminRow({
-  label,
-  active,
-  onOpen,
-  onClose,
-}: {
-  label: string;
-  active: boolean;
-  onOpen: () => void;
-  onClose: () => void;
-}) {
-  return (
-    <div
-      className={`group mt-1 flex items-center gap-[9px] rounded-lg px-2 py-[7px] ${
-        active ? 'bg-white text-accent-deep' : 'hover:bg-white/10'
-      }`}
-    >
-      <button
-        data-testid="sidebar-admin"
-        className="flex min-w-0 flex-1 items-center gap-[9px] text-left"
-        onClick={onOpen}
-      >
-        <span className={active ? 'opacity-70' : 'text-white/60'}>🛡️</span>
-        <span className={`truncate ${active ? 'font-[650]' : 'text-white/82'}`}>{label}</span>
-      </button>
-      <button
-        data-testid="sidebar-admin-close"
-        title="Close"
-        className={`hidden rounded px-1 text-xs group-hover:block ${
-          active ? 'text-accent-deep/60 hover:text-accent-deep' : 'text-white/55 hover:text-white'
-        }`}
-        onClick={(e) => {
-          e.stopPropagation();
-          onClose();
-        }}
-      >
-        ✕
-      </button>
-    </div>
-  );
-}
 
 /**
  * The Docs group under a channel (#574): the channel's artifacts, foldable and

@@ -29,7 +29,7 @@ import {
   stepNav,
   type NavHistory,
 } from './lib/navHistory';
-import { ACTIVITY_VIEW_ID, ADMIN_VIEW_ID, AuthContext, ConnectionContext, SelectionContext } from './state';
+import { ACTIVITY_VIEW_ID, AuthContext, ConnectionContext, SelectionContext } from './state';
 import AuthScreen from './components/AuthScreen';
 import JoinScreen from './components/JoinScreen';
 import NativeSignIn from './components/NativeSignIn';
@@ -44,7 +44,6 @@ import { readChatIntent, withoutChatIntent, type ChatIntent } from './lib/chatIn
 // pre-multi-server browser was already using resolves them to exactly the
 // `flow.*` keys it already has (see lib/connections.ts).
 const ACTIVE_WS = 'activeWorkspace';
-const ADMIN_PANEL = 'adminPanelOpen';
 export const PENDING_INVITE = 'pendingInvite';
 /** sessionStorage: the path to go to once signed in (?next=, consumed in SessionApp). */
 export const NEXT_AFTER_SIGN_IN = 'flow.nextAfterSignIn';
@@ -289,10 +288,6 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
   // Browser-style visit history over the main pane (issue #386) — what the
   // header's back/forward buttons walk. Per-session and per-workspace.
   const [nav, setNav] = useState<NavHistory>(emptyNavHistory);
-  // Admin panel pinned into the sidebar (per-device, admins only at render).
-  const [adminPanelOpen, setAdminPanelOpen] = useState<boolean>(
-    () => runtime.read(ADMIN_PANEL) === '1',
-  );
 
   // A 401 on a *current-generation* request means this connection's session is
   // gone server-side. Recorded against the connection rather than acted on: the
@@ -405,7 +400,6 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
       setFilesOpen(false);
       setEditingMessageId(null);
       setFocusMessageId(null);
-      setAdminPanelOpen(false);
       setNav(emptyNavHistory);
       threadMemory.clear();
     }
@@ -480,10 +474,6 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
       runtime.write(ACTIVE_WS, null);
     } else if (page === 'activity' && workspaceId) {
       setChannelId(ACTIVITY_VIEW_ID);
-    } else if (page === 'admin' && workspaceId) {
-      setAdminPanelOpen(true);
-      runtime.write(ADMIN_PANEL, '1');
-      setChannelId(ADMIN_VIEW_ID);
     }
   }, [user, page, workspaceId, runtime]);
 
@@ -600,7 +590,6 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
           threadRootId,
           editingMessageId,
           focusMessageId,
-          adminPanelOpen,
           canGoBack: canGoBack(nav),
           canGoForward: canGoForward(nav),
           goBack: () => step(-1),
@@ -706,23 +695,6 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
             setNav((h) => pushNav(h, toChannelId));
           },
           clearFocusMessage: () => setFocusMessageId(null),
-          openAdminPanel: () => {
-            setAdminPanelOpen(true);
-            runtime.write(ADMIN_PANEL, '1');
-            threadMemory.remember(channelId, threadRootId);
-            setChannelId(ADMIN_VIEW_ID);
-            setThreadRootId(null);
-            setEditingMessageId(null);
-            setNav((h) => pushNav(h, ADMIN_VIEW_ID));
-          },
-          closeAdminPanel: () => {
-            setAdminPanelOpen(false);
-            runtime.write(ADMIN_PANEL, null);
-            // If it's the active view, fall back to a channel (effect picks #general).
-            setChannelId((cur) => (cur === ADMIN_VIEW_ID ? null : cur));
-            // Unpinned: back must not walk into a panel that is no longer there.
-            setNav((h) => forgetNav(h, ADMIN_VIEW_ID));
-          },
         }}
       >
         {notice && (
