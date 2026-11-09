@@ -3,9 +3,9 @@
 // is the rail's switcher (every connection's workspaces with their unread counts, "+" for the chooser and its
 // invitations), and the account menu has presence, status, the profile, settings, Help and sign out.
 import { useEffect, useMemo, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
-import type { UserDTO } from '@flow/shared';
-import { adminAddress, APP_MANIFESTS, AWAY_STATUS, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type StatusOption } from '@flow/suite-bar';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import type { AccountDTO, UserDTO } from '@flow/shared';
+import { adminAddress, APP_MANIFESTS, AWAY_STATUS, GUEST_TABS_NOTE, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type StatusOption } from '@flow/suite-bar';
 import { useSwitcherEntries, useWorkspaceInvites, useWorkspaces } from '../hooks';
 import { useCapabilities } from '../lib/backend';
 import { connectionManager, type ConnectionRuntime } from '../lib/connectionRuntime';
@@ -75,6 +75,15 @@ export default function ChatSuiteBar({ activityUnread, intent }: { activityUnrea
   const canAdmin = isAdmin && caps.admin.state !== 'unavailable';
   const docsHere = onThisServer(runtime);
   const me = auth.user;
+  // The caller's accounts (platform.md §3.3): a guest uses Chat only (docs/specs/workspace-admin.md §6.5).
+  const accounts = useQuery({
+    queryKey: ['accounts', 'mine', runtime.origin],
+    queryFn: () => runtime.api<{ accounts: AccountDTO[] }>('GET', '/v1/me/accounts'),
+    select: (d) => d.accounts,
+    staleTime: 60_000,
+    enabled: docsHere,
+  });
+  const guest = !!sel.workspaceId && (accounts.data ?? []).find((a) => a.organizationId === sel.workspaceId)?.kind === 'guest';
 
   // Opened from another page of the suite (Docs' menus).
   useEffect(() => {
@@ -147,7 +156,7 @@ export default function ChatSuiteBar({ activityUnread, intent }: { activityUnrea
         home={{ href: '/', onSelect: () => sel.selectChannel(null) }}
         // The other apps live on this page's own server: an organization on another server has none of them yet.
         tabs={suiteTabsFrom(APP_MANIFESTS, 'chat', { 'chat-unread': chatBadge }, {
-          unavailable: (t) => (docsHere ? null : `${t.label} is not available for an organization on another server yet`),
+          unavailable: (t) => (!docsHere ? `${t.label} is not available for an organization on another server yet` : guest && t.id !== 'chat' ? GUEST_TABS_NOTE : null),
         })}
         organization={{
           name: ws?.name ?? '',
@@ -162,6 +171,7 @@ export default function ChatSuiteBar({ activityUnread, intent }: { activityUnrea
           addBadge: invites,
           // The Admin app (docs/specs/workspace-admin.md), on this workspace's own server.
           ...(canAdmin ? { onSettings: () => window.location.assign(new URL(adminAddress(), runtime.origin).toString()) } : {}),
+          ...(sel.workspaceId && docsHere ? { onAutomations: () => window.location.assign(new URL(adminAddress('automations'), runtime.origin).toString()) } : {}),
           ...(canInvite ? { onInvite: () => setModal('invite') } : {}),
         }}
         search={{

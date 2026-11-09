@@ -1,5 +1,5 @@
 // The page for someone in no organization yet: Mail and Calendar are an organization's (platform.md §3.6), so there is nothing to show.
-import { Building2, Loader2 } from 'lucide-react';
+import { Building2, Loader2, MessageSquare } from 'lucide-react';
 
 export function NoOrganization({ app }: { app: string }) {
   return (
@@ -34,6 +34,23 @@ export function MailboxSettingUp({ admin = false }: { admin?: boolean }) {
             .
           </p>
         )}
+      </div>
+    </div>
+  );
+}
+
+/** A guest's page (docs/specs/workspace-admin.md §6.5): guests use Chat only. */
+export function GuestsChatOnly({ app }: { app: string }) {
+  return (
+    <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto bg-panel p-6">
+      <div className="w-full max-w-md rounded-2xl border border-hairline bg-white p-8 text-center shadow-sm" data-testid="guests-chat-only">
+        <div className="mx-auto mb-5 flex size-16 items-center justify-center rounded-2xl bg-primary-tint text-primary">
+          <MessageSquare className="size-8" strokeWidth={1.5} />
+        </div>
+        <p className="mb-6 text-sm leading-relaxed text-muted">You are a guest in this organization, and guests use Chat only. {app} is for its members.</p>
+        <a href="/" className="text-sm font-semibold text-primary hover:underline">
+          Go to Chat
+        </a>
       </div>
     </div>
   );

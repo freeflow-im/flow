@@ -3,14 +3,14 @@
 // belongs to Chat (organizations, invitations, notifications, the profile) opens Chat at `/?open=…`.
 import { useCallback, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { APP_MANIFESTS, AWAY_STATUS, intent, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type ChatPage, type StatusOption } from '@flow/suite-bar';
+import { APP_MANIFESTS, AWAY_STATUS, guestTabs, intent, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type ChatPage, type StatusOption } from '@flow/suite-bar';
 import { chooseOrganization, useOrganizations } from '../hooks/organization';
 import { suite, type SuiteUser } from '../suite';
 
 const REFRESH_MS = 60_000;
 const toChat = (page: ChatPage) => intent.open(page);
 
-export function ContactsSuiteBar({ search }: { search: { value: string; onChange(q: string): void; onSubmit(q: string): void; placeholder: string } }) {
+export function ContactsSuiteBar({ search, guest = false }: { search: { value: string; onChange(q: string): void; onSubmit(q: string): void; placeholder: string }; guest?: boolean }) {
   const me = useQuery({ queryKey: ['suite', 'me'], queryFn: suite.me, refetchInterval: REFRESH_MS });
   const { list, active } = useOrganizations();
   const [user, setUser] = useState<SuiteUser | null>(null);
@@ -39,13 +39,14 @@ export function ContactsSuiteBar({ search }: { search: { value: string; onChange
     <>
       <SuiteBar
         home={{ href: import.meta.env.BASE_URL }}
-        tabs={suiteTabsFrom(APP_MANIFESTS, 'contacts', { 'chat-unread': active?.unreadCount ?? 0 }, { activeHref: import.meta.env.BASE_URL })}
+        tabs={suiteTabsFrom(APP_MANIFESTS, 'contacts', { 'chat-unread': active?.unreadCount ?? 0 }, { activeHref: import.meta.env.BASE_URL, unavailable: guestTabs(guest) })}
         organization={{
           name: active?.name ?? '',
           entries: list.map((o) => ({ id: o.id, name: o.name, unread: o.unreadCount ?? 0, active: o.id === active?.id, avatarUrl: o.avatarUrl })),
           onSelect: chooseOrganization,
           onAdd: () => toChat('chooser'),
           ...(active?.role === 'owner' || active?.role === 'admin' ? { onSettings: () => intent.admin() } : {}),
+          ...(active ? { onAutomations: () => intent.admin('automations') } : {}),
           ...(active ? { onInvite: () => toChat('invite') } : {}),
         }}
         search={search}

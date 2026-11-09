@@ -8,7 +8,7 @@ import { openSuiteSearch } from '@flow/suite-bar';
 import { MailApiError, mailApi, setMailWorkspace, type Category, type MailAccount, type MessageDetail, type ThreadSummary, type TabStatus } from './api';
 import { AccountSettingsDialog, AddAccountDialog } from './components/AccountForms';
 import { ConnectMail } from './components/ConnectMail';
-import { MailboxSettingUp, NoOrganization } from './components/NoOrganization';
+import { GuestsChatOnly, MailboxSettingUp, NoOrganization } from './components/NoOrganization';
 import { InboxTabs } from './components/InboxTabs';
 import { MailSuiteBar } from './components/MailSuiteBar';
 import { MessageList, type ListTab } from './components/MessageList';
@@ -573,8 +573,11 @@ export function App() {
   }, []);
 
   const inboxUnread = findSpecial(folders.data, 'inbox')?.unread ?? 0;
+  // A guest's accounts request is refused (403 guest): guests use Chat only (docs/specs/workspace-admin.md §6.5).
+  const guest = accounts.error instanceof MailApiError && accounts.error.code === 'guest';
   const bar = (
     <MailSuiteBar
+      guest={guest}
       // The logo and the Mail tab: the inbox list, as Gmail's logo does (Primary, no search, nothing open).
       onHome={() => {
         chooseFolder(findSpecial(folders.data, 'inbox')?.path ?? 'INBOX');
@@ -650,6 +653,14 @@ export function App() {
     </>
   );
 
+  if (guest) {
+    return (
+      <div className="flex h-dvh flex-col">
+        {bar}
+        <GuestsChatOnly app="Mail" />
+      </div>
+    );
+  }
   if ((organizations.ready && !org) || (accounts.error instanceof MailApiError && accounts.error.code === 'no_account')) {
     return (
       <div className="flex h-dvh flex-col">

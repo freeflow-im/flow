@@ -11,12 +11,6 @@ export interface AuthState {
   signOut(): void;
 }
 
-/**
- * Sentinel channel id for the admin panel — a virtual, client-only sidebar
- * entry (no real channel/membership). When it's the active selection, the
- * content pane renders <AdminView> instead of a message stream.
- */
-export const ADMIN_VIEW_ID = '__admin__';
 
 /**
  * Sentinel channel id for the Activity feed (phase 12) — an always-present,
@@ -70,8 +64,6 @@ export interface Selection {
    * jump-to-message). The channel/thread view pages history until it's loaded,
    * scrolls to it, then clears this. */
   focusMessageId: string | null;
-  /** Admin panel pinned into the channel list (admins only; per-device). */
-  adminPanelOpen: boolean;
   /** Is there a previous / next view in this session's visit history (#386)?
    * Drives the enabled state of the workspace header's back and forward
    * buttons. */
@@ -110,10 +102,6 @@ export interface Selection {
   jumpToMessage(channelId: string, messageId: string, threadRootId?: string | null): void;
   /** Clear the scroll-to target once it's been reached (or given up on). */
   clearFocusMessage(): void;
-  /** Pin the admin row into the sidebar and open it (from the workspace menu). */
-  openAdminPanel(): void;
-  /** Unpin/close the admin row (its "close like any other channel" affordance). */
-  closeAdminPanel(): void;
 }
 
 export interface LiveState {

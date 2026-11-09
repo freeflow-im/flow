@@ -5,18 +5,22 @@ import type { AdminSection } from '@flow/suite-bar';
 import { AdminSuiteBar } from './components/AdminSuiteBar';
 import { NoOrganization, NotAllowed } from './components/Empty';
 import { useOrganizations } from './hooks/organization';
-import { SECTION_LABELS, SECTIONS, sectionOf, sectionPath } from './lib/route';
+import { MEMBER_SECTIONS, SECTION_LABELS, SECTIONS, sectionOf, sectionPath } from './lib/route';
 import { Domains } from './sections/Domains';
+import { Agents } from './sections/Agents';
+import { Automations } from './sections/Automations';
 import { General } from './sections/General';
 import { Members } from './sections/Members';
 
-function useSection(): [AdminSection, (s: AdminSection) => void] {
-  const [section, setSection] = useState<AdminSection>(() => sectionOf(window.location.pathname));
+function useSection(sections: readonly AdminSection[]): [AdminSection, (s: AdminSection) => void] {
+  const [wanted, setWanted] = useState(() => window.location.pathname);
   useEffect(() => {
-    const onPop = () => setSection(sectionOf(window.location.pathname));
+    const onPop = () => setWanted(window.location.pathname);
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);
+  const section = sectionOf(wanted, sections);
+  const setSection = (s: AdminSection) => setWanted(sectionPath(s));
   const go = (s: AdminSection) => {
     if (s === section) return;
     window.history.pushState(null, '', sectionPath(s));
@@ -28,8 +32,11 @@ function useSection(): [AdminSection, (s: AdminSection) => void] {
 export function App() {
   const organizations = useOrganizations();
   const org = organizations.active;
-  const [section, go] = useSection();
-  const allowed = org?.role === 'owner' || org?.role === 'admin';
+  const admin = org?.role === 'owner' || org?.role === 'admin';
+  // An owner or admin has every section; a member has Automations (§2); an agent or app nothing.
+  const sections = admin ? SECTIONS : MEMBER_SECTIONS;
+  const [section, go] = useSection(sections);
+  const allowed = !!org && !!org.role;
 
   return (
     <div className="flex h-full flex-col">
@@ -43,7 +50,7 @@ export function App() {
       ) : (
         <div className="flex min-h-0 flex-1 flex-col bg-panel sm:flex-row">
           <nav className="flex shrink-0 gap-1 overflow-x-auto border-b border-hairline bg-white px-3 py-2 sm:w-56 sm:flex-col sm:border-r sm:border-b-0 sm:px-3 sm:py-4" aria-label="Sections">
-            {SECTIONS.map((s) => (
+            {sections.map((s) => (
               <a
                 key={s}
                 href={sectionPath(s)}
@@ -65,9 +72,11 @@ export function App() {
                 <p className="text-xs font-semibold tracking-wide text-muted uppercase">{org.name}</p>
                 <h1 className="text-xl font-semibold">{SECTION_LABELS[section]}</h1>
               </header>
-              {section === 'general' && <General org={org} />}
-              {section === 'members' && <Members org={org} />}
-              {section === 'domains' && <Domains org={org} />}
+              {section === 'general' && admin && <General org={org} />}
+              {section === 'members' && admin && <Members org={org} />}
+              {section === 'domains' && admin && <Domains org={org} />}
+              {section === 'agents' && admin && <Agents org={org} />}
+              {section === 'automations' && <Automations org={org} />}
             </div>
           </main>
         </div>

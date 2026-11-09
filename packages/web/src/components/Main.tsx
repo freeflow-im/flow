@@ -23,7 +23,7 @@ import { backendFor } from '../lib/backend';
 import { SocketClient, type SocketStatus, type SocketHandlers } from '../lib/ws';
 import { OrganizationSockets } from '../lib/organizationSockets';
 import { plainBody } from '../lib/format';
-import { ACTIVITY_VIEW_ID, ADMIN_VIEW_ID, CHANNEL_BROWSER_VIEW_ID, DIRECTORY_VIEW_ID, SCHEDULED_VIEW_ID, LiveContext, MobileNavContext, typingKey, useAuth, useRuntime, useSelection } from '../state';
+import { ACTIVITY_VIEW_ID, CHANNEL_BROWSER_VIEW_ID, DIRECTORY_VIEW_ID, SCHEDULED_VIEW_ID, LiveContext, MobileNavContext, typingKey, useAuth, useRuntime, useSelection } from '../state';
 import { HuddleProvider, useHuddle, type HuddleState } from '../huddle';
 import { useNameMap, useWorkspaces } from '../hooks';
 import { getHost, isLookingAtApp, onLookingChange } from '../lib/host';
@@ -31,7 +31,6 @@ import { useConnectionSync } from '../lib/backgroundSync';
 import type { NotificationRouting } from '@flow/shared';
 import Sidebar from './Sidebar';
 import ChannelView from './ChannelView';
-import AdminView from './AdminView';
 import ActivityView from './ActivityView';
 import DirectoryView from './DirectoryView';
 import ChannelBrowserView from './ChannelBrowserView';
@@ -672,9 +671,7 @@ export default function Main({ onActivityUnread }: { onActivityUnread?: (count: 
             />
           )}
           <div className="flex min-h-0 min-w-0 flex-1">
-            {sel.channelId === ADMIN_VIEW_ID ? (
-              <AdminView />
-            ) : sel.channelId === ACTIVITY_VIEW_ID ? (
+            {sel.channelId === ACTIVITY_VIEW_ID ? (
               <ActivityView />
             ) : sel.channelId === SCHEDULED_VIEW_ID ? (
               <ScheduledView />

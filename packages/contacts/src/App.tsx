@@ -5,9 +5,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Copy, MessageSquare, Plus, Trash2, UserRound } from 'lucide-react';
 import { intent } from '@flow/suite-bar';
-import { contactsApi, setContactsWorkspace, type ContactFields } from './api';
+import { contactsApi, ContactsApiError, setContactsWorkspace, type ContactFields } from './api';
 import { ContactsSuiteBar } from './components/ContactsSuiteBar';
-import { NoOrganization } from './components/NoOrganization';
+import { GuestsChatOnly, NoOrganization } from './components/NoOrganization';
 import { useOrganizations } from './hooks/organization';
 import { chipAction, groupContacts, type Contact } from './lib/contacts';
 
@@ -61,10 +61,14 @@ export function App() {
   }
 
   const search = { value: q, onChange: setQ, onSubmit: setQ, placeholder: 'Search contacts' };
+  // A guest's request is refused (403 guest): guests use Chat only (docs/specs/workspace-admin.md §6.5).
+  const guest = list.error instanceof ContactsApiError && list.error.code === 'guest';
   return (
     <div className="flex h-full flex-col">
-      <ContactsSuiteBar search={search} />
-      {organizations.ready && !org ? (
+      <ContactsSuiteBar search={search} guest={guest} />
+      {guest ? (
+        <GuestsChatOnly />
+      ) : organizations.ready && !org ? (
         <NoOrganization />
       ) : (
         <div className="flex min-h-0 flex-1">
