@@ -7,8 +7,9 @@
   accounts ruling below is retired (read as `native`, removed from the type when guest invitations land).
 - **Inviting a guest is its own action** ("Invite a chat guest" in Workspace settings › Members), so nobody makes a
   colleague a guest by mistake. The invitation carries the kind; accepting it makes a guest account.
-- **A guest uses Chat only.** No address, no mailbox, no Mail or Calendar; whether a document shared with a guest opens
-  for them is open (`docs/specs/workspace-admin.md` §9).
+- **A guest uses Chat only.** No address, no mailbox, no Mail, Calendar or Docs. Sharing a document with a guest is
+  left out for now (the Share dialog does not offer guests; Docs refuses them) and is to be added later
+  (`docs/specs/workspace-admin.md` §10, ruling 8).
 - **Google self-registration on any verified domain is later.** For now the domain offered stays the admin's own Google
   login domain (phase 16 §5a).
 

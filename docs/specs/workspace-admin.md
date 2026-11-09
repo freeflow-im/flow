@@ -310,8 +310,9 @@ stay native whatever is asked (the existing rule). The policy field `defaultAcco
 showing it, the server reads it as `native`, and it leaves `WorkspacePolicies` in the same PR.
 
 Guests see Chat only: the suite bar (`platform.md` §6.1 manifests) lists Chat for an account whose kind is `guest`,
-and Mail's and Calendar's routes answer 403 `guest` for it. Whether a guest may open a document shared with them is
-an open question (§9).
+and Mail's, Calendar's and Docs' routes answer 403 `guest` for it. Sharing a document with a guest is left out for
+now: the Share dialog does not offer guests, and a grant that names one is refused. It comes later (ruling 8), when
+Docs has a read-only view a guest can be given without the rest of the app.
 
 ### 6.6 Nothing else
 
@@ -349,16 +350,15 @@ native client and nothing an agent observes changes.
 
 ## 9. Open questions
 
-1. **What a guest sees beyond Chat.** Ruling 6 limits guests to Chat. Does a document shared with a guest open for
-   them in Docs (the share is explicit, so probably yes), and does a guest get the assistant?
-2. **Per-organization retention.** `MAIL_RETENTION_DAYS` is global. A policy field `mailRetentionDays` with the
+1. **Per-organization retention.** `MAIL_RETENTION_DAYS` is global. A policy field `mailRetentionDays` with the
    global as default is small; is it wanted before anyone asks?
-3. **Removing a domain at the provider.** `removeDomain` leaves the domain on MXRoute. The provider call exists
+2. **Removing a domain at the provider.** `removeDomain` leaves the domain on MXRoute. The provider call exists
    (`deleteDomain`, refused while mailboxes exist); should Remove call it once no addresses remain?
-4. **Transfer ownership to a non-member.** Today the heir must be a member and a person. Keep.
+3. **Transfer ownership to a non-member.** Today the heir must be a member and a person. Keep.
 
 Answered 2026-11-09 (Scott; in `decision_log.md`): new joiners are native members, not a policy choice; a guest
-invitation is a separate action limited to Chat; Google self-registration on any verified domain is later.
+invitation is a separate action limited to Chat; Google self-registration on any verified domain is later; document
+sharing with guests is left out for now.
 
 ## 10. Rulings
 
@@ -378,3 +378,5 @@ Ruled by Scott on 2026-11-09 (recorded in `decision_log.md`):
    guest is a separate action, and a guest uses Chat only. The `defaultAccountKind` policy is retired.
 7. Google self-registration on any verified domain of the organization is later; for now the domain stays the
    admin's own Google login domain.
+8. Guests cannot be given documents for now: the Share dialog does not offer them and Docs refuses them. Document
+   sharing with guests is a later addition, noted here so it is not forgotten.
