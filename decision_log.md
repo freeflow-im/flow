@@ -1,5 +1,18 @@
 # Decision log
 
+## 2026-11-10 — Chat at /chat, Docs at /docs (operator ruling)
+
+- **Ruling (Scott):** Chat's page is `/chat`, not the root, and Docs' is `/docs`, not `/workspace`. The suite spec
+  (`freeflow-suite.md` §2.5) had `/chat` from the start, but Chat was built at the root; `/workspace` was the tab's
+  name before it was called Docs.
+- **How:** each app's path is its manifest's (`@flow/shared` `APP_MANIFESTS`), the one table the Worker's pages, the
+  suite bars, the addresses and the build read. Chat's client stays built at the root: its files are the suite's root
+  files (the tab icons, `/privacy`). The root sends to `/chat` with its query kept (emailed sign-in links, `?next=`,
+  handoffs); `/workspace` and `/workspace/*` go to `/docs` with a 301; the address parser reads links written either
+  way, so references in messages and events written before the move still resolve.
+- **Not changed:** the Docs core's own routes (`/api/*`), the ChatGPT plugin's paths, `/p/*` (already a 301), the
+  one-shot paths `/invite/*` and `/join/*`, and the native apps (none builds a suite page URL).
+
 ## 2026-11-09 — Docs: one repository, an explicit shared core, the standalone MCP Docs stays (operator ruling)
 
 - **Ruling (Scott):** the standalone MCP Docs desktop app has a place as a product of its own. It and the suite's
