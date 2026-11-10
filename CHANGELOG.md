@@ -12,6 +12,7 @@ This file keeps two things:
 
 ## Parity
 
+- **The assistant's web tools are web-only, in Chromium browsers with the prototype extension (2026-11-10).** The Workspace, Mail and Calendar panels pass `browser_*` calls to `packages/browser-extension`; macOS, iOS and the desktop shell have no extension and are never offered the tools (the desktop shell could use Electron's own debugger later). Gap to close if the prototype is kept.
 - **Organization settings are the Admin app, web-only (2026-11-09, docs/specs/workspace-admin.md).** `/admin` is reached from every web app's suite bar; macOS and iOS have no admin surface (web-only by ruling) and keep their member list. Deliberate, like Manage users before it.
 - **Account kinds are managed on web only (2026-11-09, guest accounts).** Web's Manage users has the Kind column, "Make every member a guest" and the new-members policy; macOS and iOS have no admin panel (web-only by ruling) and simply show no address for a guest. Deliberate, like the rest of Manage users.
 - **FreeFlow Contacts (`/contacts`) is web-only (2026-11-07, platform phase 6.5).** The suite bar's Contacts tab opens it in the browser (and the desktop shell); macOS and iOS have no Contacts tab or page. Gap to close, as Mail's and Calendar's.

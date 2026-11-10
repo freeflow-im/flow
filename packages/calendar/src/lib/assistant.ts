@@ -3,7 +3,7 @@
 // server offers no other app's), and what the chat links to (an event the assistant made or changed). The panel is
 // components/AssistantPanel.tsx, the turns hooks/assistant.ts.
 import type { CalendarAccount, CalendarInfo, EventOccurrence, Scope } from '../api';
-import { MAX_CALENDARS_SHOWN, type CalendarContext, type ChatItem, type ClientToolCall, type ClientToolResult } from './docsAgent';
+import { isWebTool, MAX_CALENDARS_SHOWN, runWebTool, type CalendarContext, type ChatItem, type ClientToolCall, type ClientToolResult } from './docsAgent';
 import { browserPref } from './prefs';
 import type { Range, View } from './ranges';
 
@@ -129,6 +129,9 @@ export async function runCalendarClientCalls(calls: ClientToolCall[], h: Calenda
           await h.remove(id, scope);
           results.push({ id: call.id, content: JSON.stringify({ deleted: id, ...(scope ? { scope } : {}) }) });
         }
+      } else if (isWebTool(call.name)) {
+        // The web tools (prototype): the browser extension runs them; a failure is said by the catch below.
+        results.push({ id: call.id, content: await runWebTool(call) });
       } else {
         results.push({ id: call.id, content: `Unknown tool ${call.name}.`, isError: true });
       }

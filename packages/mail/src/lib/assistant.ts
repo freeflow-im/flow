@@ -4,7 +4,7 @@
 // hooks/assistant.ts.
 import type { MessageDetail, MessageSummary } from '../api';
 import { formatAddress } from './addresses';
-import { MAX_MAIL_SELECTED, type ChatItem, type ClientToolCall, type ClientToolResult, type MailContext } from './docsAgent';
+import { isWebTool, MAX_MAIL_SELECTED, runWebTool, type ChatItem, type ClientToolCall, type ClientToolResult, type MailContext } from './docsAgent';
 import { browserPref } from './prefs';
 
 /** Whether the panel is open, remembered in this browser. */
@@ -137,6 +137,15 @@ export async function runMailClientCalls(calls: ClientToolCall[], show: (ref: Me
       if (!ref) results.push({ id: call.id, content: `"${String(call.input.id)}" is not a message id. Use an id from search_mail or the <app_context>.`, isError: true });
       else if (!(await show(ref))) results.push({ id: call.id, content: 'That message is in a mail account the user does not have here.', isError: true });
       else results.push({ id: call.id, content: JSON.stringify({ opened: messageId(ref) }) });
+      continue;
+    }
+    // The web tools (prototype): the browser extension runs them, offered when the context said it is there.
+    if (isWebTool(call.name)) {
+      try {
+        results.push({ id: call.id, content: await runWebTool(call) });
+      } catch (e) {
+        results.push({ id: call.id, content: e instanceof Error ? e.message : String(e), isError: true });
+      }
       continue;
     }
     results.push({ id: call.id, content: `Unknown tool ${call.name}.`, isError: true });

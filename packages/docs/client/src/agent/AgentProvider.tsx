@@ -23,6 +23,7 @@ import { deckToPdf } from '../deck/pdf.ts';
 import { renderSlideImage } from '../deck/renderSlide.ts';
 import type { SheetController } from '../state/controller.ts';
 import { confirmationFor, runClientTool, ToolError, type OpenedDoc } from './clientTools.ts';
+import { browserExtensionPresent, checkBrowserExtension, isWebTool, runWebTool, WebToolError } from './browserBridge.ts';
 import { keepDeckPictures, linkDeckTables } from './deckTools.ts';
 
 export interface OpenSheet {
@@ -338,7 +339,10 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const context = (inline = false): AgentContext => {
+  /** What is open, and whether the FreeFlow browser extension can run the web tools here (prototype). */
+  const context = (inline = false): AgentContext => ({ ...pageContext(inline), ...(browserExtensionPresent() ? { browser: true } : {}) });
+
+  const pageContext = (inline = false): AgentContext => {
     const m = markdownRef.current;
     if (m) {
       const blocks = markdownBlocks(m.ctl.text);
@@ -513,7 +517,12 @@ export function AgentProvider({ children }: { children: ReactNode }) {
 
   /** Run one tool on what is open, as the assistant's step `group`; `rendered` collects pictures it returns (render_slide). */
   const runTool = async (call: ClientToolCall, group: string, rendered: AgentImage[]): Promise<string> =>
-    // A picture from the web that is going on a slide is stored with the presentation first, and a spreadsheet
+    // The web tools go to the browser extension (prototype).
+    isWebTool(call.name)
+      ? runWebTool(call).catch((e: unknown) => {
+          throw e instanceof WebToolError ? new ToolError(e.message) : e;
+        })
+      : // A picture from the web that is going on a slide is stored with the presentation first, and a spreadsheet
     // range a table is linked to is read.
     runClientTool(await keepDeckPictures(await linkDeckTables(call, api.sheetTable, api.sheetChart), api.keepWebImage), {
       ctl: sheetRef.current?.ctl ?? null,
@@ -709,6 +718,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
           }
         }),
       );
+      // Whether the browser extension is there now (it may have been added or turned off since the page loaded).
+      await checkBrowserExtension(true);
       let req: AgentTurnRequest = { message, context: context(opts.inline), scope: turnScope, ...(stored.length ? { images: stored } : {}) };
       try {
         for (;;) {

@@ -5,3 +5,5 @@ export { CLIENT_TOOLS, MAIL_CHAT, MAX_MAIL_SELECTED, type AgentEvent, type Agent
 export { readAgentEvents } from '../../../docs/client/src/agent/stream';
 export { toolLabel } from '../../../docs/client/src/agent/describe';
 export { ChatMarkdown, picturesOf } from '../../../docs/client/src/agent/ChatMarkdown';
+// The web tools (prototype): the FreeFlow browser extension in this browser runs them.
+export { browserExtensionPresent, checkBrowserExtension, isWebTool, runWebTool } from '../../../docs/client/src/agent/browserBridge';
