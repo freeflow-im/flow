@@ -16,7 +16,7 @@ describe('message ids', () => {
     expect(refOfLink(`${origin}/mail/?account=${ACC}&folder=Drafts&uid=9`, origin)).toEqual({ account: ACC, folder: 'Drafts', uid: 9 });
     expect(refOfLink(`/mail/?account=${ACC}&folder=INBOX&uid=3`, origin)).toEqual({ account: ACC, folder: 'INBOX', uid: 3 });
     expect(refOfLink(`https://evil.test/mail/?account=${ACC}&folder=INBOX&uid=3`, origin)).toBeNull();
-    expect(refOfLink(`${origin}/workspace/s/abc`, origin)).toBeNull();
+    expect(refOfLink(`${origin}/docs/s/abc`, origin)).toBeNull();
     expect(refOfLink(`${origin}/mail/?account=${ACC}&folder=Drafts`, origin)).toBeNull();
   });
 });
@@ -66,8 +66,8 @@ describe('what the chat links to', () => {
   });
 
   it('a file saved to Docs, on its Docs page', () => {
-    expect(savedFileOf(tool('save_mail_attachment_to_docs', { saved: true, filename: 'q3.xlsx', file: { id: 's1', kind: 'sheet', title: 'q3' } }))).toEqual({ href: '/workspace/s/s1', name: 'q3' });
-    expect(savedFileOf(tool('save_mail_attachment_to_docs', { saved: true, filename: 'a.pdf', file: { id: 'f1', kind: 'file', filename: 'a.pdf' } }))).toEqual({ href: '/workspace/f/f1', name: 'a.pdf' });
+    expect(savedFileOf(tool('save_mail_attachment_to_docs', { saved: true, filename: 'q3.xlsx', file: { id: 's1', kind: 'sheet', title: 'q3' } }))).toEqual({ href: '/docs/s/s1', name: 'q3' });
+    expect(savedFileOf(tool('save_mail_attachment_to_docs', { saved: true, filename: 'a.pdf', file: { id: 'f1', kind: 'file', filename: 'a.pdf' } }))).toEqual({ href: '/docs/f/f1', name: 'a.pdf' });
     expect(savedFileOf(tool('save_mail_attachment_to_docs', { saved: true }))).toBeNull();
   });
 });

@@ -1,6 +1,6 @@
 // The suite bar on Admin (packages/suite-bar), as Contacts' draws it: the organization switcher, the apps (Admin has no
 // tab of its own, so none is active), notifications and the account menu. What belongs to Chat (adding an organization,
-// invitations, notifications, the profile) opens Chat at `/?open=…`. "Organization settings" is left out: this is it.
+// invitations, notifications, the profile) opens Chat at `/chat/?open=…`. "Organization settings" is left out: this is it.
 import { useCallback, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { APP_MANIFESTS, AWAY_STATUS, intent, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type ChatPage, type StatusOption } from '@flow/suite-bar';

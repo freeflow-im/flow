@@ -15,7 +15,7 @@ export default defineConfig({
   server: {
     port: Number(process.env.PORT ?? 5186),
     strictPort: true,
-    // /v1 is the Calendar API; /api and /workspace are the Docs assistant (the panel talks to the organization's Docs), as Mail's dev server proxies them.
-    ...(process.env.CALENDAR_MOCK ? {} : { proxy: { '/v1': { target: process.env.CALENDAR_API ?? 'http://127.0.0.1:8787', ws: true }, '/api': process.env.CALENDAR_API ?? 'http://127.0.0.1:8787', '/workspace': process.env.CALENDAR_API ?? 'http://127.0.0.1:8787' } }),
+    // /v1 is the Calendar API; /api and /docs are the Docs assistant (the panel talks to the organization's Docs), as Mail's dev server proxies them.
+    ...(process.env.CALENDAR_MOCK ? {} : { proxy: { '/v1': { target: process.env.CALENDAR_API ?? 'http://127.0.0.1:8787', ws: true }, '/api': process.env.CALENDAR_API ?? 'http://127.0.0.1:8787', '/docs': process.env.CALENDAR_API ?? 'http://127.0.0.1:8787' } }),
   },
 });

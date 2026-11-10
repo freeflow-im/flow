@@ -59,7 +59,7 @@ COPY packages/admin packages/admin
 # clients:sources end
 
 # The build tag the web client shows (vite.config.ts reads BUILD_SHA first; there is no .git in the build context).
-# Each client is built for its manifest's basePath (BASE_PATH; the Workspace app's is /workspace/), the list read from
+# Each client is built for its manifest's basePath (BASE_PATH; the Docs app's is /docs/), the list read from
 # the manifests by packages/edge/scripts/clients.mjs once shared is built.
 ARG GIT_COMMIT_SHA
 RUN set -e \

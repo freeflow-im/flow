@@ -1,7 +1,7 @@
 // The Workspace app (packages/docs, the former MCP Docs) inside this server: FreeFlow suite phase 2
 // (docs/specs/freeflow-suite.md §2.1–2.3, §3.1). Its routes (/api/*) join this Fastify instance as an
 // encapsulated plugin; who is signed in is this server's session, carried as a bearer or the `sid` cookie
-// (lib/sessionCookie.ts); its client is served under /workspace. It keeps its own SQLite database and files
+// (lib/sessionCookie.ts); its client is served under /docs. It keeps its own SQLite database and files
 // under WORKSPACE_DATA_DIR, with this server's users mirrored into it as they are seen.
 //
 // The package runs as TypeScript (Node strips the types), so it is imported by path at run time rather than
@@ -15,7 +15,9 @@ import * as auth from './services/auth.js';
 import { isWorkspaceMember, workspaceNamesOf } from './services/workspaces.js';
 import { clearSessionCookie, sessionTokenInCookieHeader, sessionTokenOf } from './lib/sessionCookie.js';
 
-export const WORKSPACE_BASE = '/workspace';
+export const WORKSPACE_BASE = '/docs';
+/** Where the client lived until 2026-11-10; its addresses are sent to WORKSPACE_BASE. */
+const OLD_BASE = '/workspace';
 
 /** The paths the ChatGPT plugin answers on any host (packages/docs/plugin/server/http.ts, PLUGIN_PATH). */
 const PLUGIN_PATH = /^(\/mcp(\/|$)|\/oauth\/|\/plugin\/|\/\.well-known\/)/;
@@ -72,7 +74,7 @@ export async function mountWorkspace(app: FastifyInstance): Promise<boolean> {
   const file = workspaceAppFile();
   const mod = (await import(pathToFileURL(file).href)) as WorkspaceModule;
   const staticDir = config.workspaceStaticDir;
-  // The app's old host names: a page asked for there is the same page under /workspace here (a 301, so links and
+  // The app's old host names: a page asked for there is the same page under /docs here (a 301, so links and
   // bookmarks learn), the plugin's paths are served as they are, and anything else (the old app's API, with the
   // old app's cookies) is left to 404 or 401 as it does on this host.
   const legacy = new Set(config.workspaceLegacyHosts);
@@ -85,6 +87,10 @@ export async function mountWorkspace(app: FastifyInstance): Promise<boolean> {
       return reply.code(301).redirect(`${base}${WORKSPACE_BASE}${req.url === '/' ? '' : req.url}`);
     });
   }
+  // The app's old base path on this host (/workspace, until 2026-11-10): the same page under /docs, a 301 for the same reason.
+  const moved = async (req: FastifyRequest, reply: FastifyReply) => reply.code(301).redirect(`${WORKSPACE_BASE}${req.url.slice(OLD_BASE.length)}`);
+  app.get(OLD_BASE, moved);
+  app.get(`${OLD_BASE}/*`, moved);
   // Organizations are this server's workspaces (docs/specs/freeflow-suite.md §2.4): membership per pair, and a user's list.
   const member = cached((key) => {
     const [userId, workspaceId] = key.split('\u0000') as [string, string];

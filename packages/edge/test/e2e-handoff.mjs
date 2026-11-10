@@ -23,7 +23,7 @@ r=await fetch(B+'/api/auth/handoff/claim',{method:'POST',headers:{cookie:both}})
 t('confirming approves it',r.status===200&&(await r.text()).includes('signed in'),r.status);
 r=await fetch(B+`/api/auth/handoff/status?key=${key}`);t('ready after',(await r.json()).ready===true);
 r=await fetch(B+`/api/auth/handoff?key=${key}`,{redirect:'manual'});const sid=(r.headers.get('set-cookie')??'').match(/sid=([^;]+)/)?.[1];
-t('the app trades it for a session and goes to /workspace',r.status===302&&r.headers.get('location')==='/workspace'&&!!sid,r.status+' '+r.headers.get('location'));
+t('the app trades it for a session and goes to /docs',r.status===302&&r.headers.get('location')==='/docs'&&!!sid,r.status+' '+r.headers.get('location'));
 r=await fetch(B+'/v1/me',{headers:{cookie:`sid=${sid}`}});const me=await r.text();t('the session is the person',r.status===200&&me.includes(email),r.status+' '+me.slice(0,80));
 r=await fetch(B+`/api/auth/handoff?key=${key}`,{redirect:'manual'});t('the key works once',!(r.headers.get('set-cookie')??'').includes('sid='),r.headers.get('set-cookie'));
 r=await fetch(B+'/api/auth/handoff/claim',{method:'POST',headers:{cookie:`sid=${token}`}});t('no key, no approval',r.status===400,r.status);

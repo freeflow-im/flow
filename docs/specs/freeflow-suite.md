@@ -110,17 +110,22 @@ Naming (ruled, §0): Flow calls the organization a "workspace" (`workspaces`, `w
 `packages/web` becomes the suite. It gets react-router (the Workspace app already uses v7; Chat ignores the URL today and keeps doing so under its own route):
 
 ```
-/                      → redirect to the last-used app (localStorage), default /chat
+/                      → /chat, the query kept (a sign-in link from an email, ?next=, a handoff)
 /chat                  → Flow's SessionApp/Main, unchanged inside; its own state navigation
-/workspace             → Docs home (FileLibrary) for the selected organization (the tab is "Docs"; the path stays /workspace)
-/workspace/s/:id  /workspace/d/:id  /workspace/doc/:id  /workspace/md/:id  /workspace/f/:id
-/workspace/settings    /workspace/connectors
+/docs                  → Docs home (FileLibrary) for the selected organization
+/docs/s/:id  /docs/d/:id  /docs/doc/:id  /docs/md/:id  /docs/f/:id
+/docs/settings    /docs/connectors
 /p/:token              → public page (no sign-in)             — unchanged
 /invite/*  /join/*     → Flow's one-shot paths                 — unchanged
 /settings, /account    → Flow's account/profile; Workspace's Assistant/Agents tabs move in here
 ```
 
-Old docs URLs (`/s/:id`, `/d/:id`, …) 301 to `/workspace/...`. `mcpdocs.freeflow.im` redirects to `app.freeflow.im` with the path kept (Flow's `FLOW_REDIRECT_FROM_HOSTS`, which exempts `/v1` and `/api`). `docs.freeflow.im` is different: it stays the ChatGPT plugin's address and is served by the suite itself (§6). File ids are UUIDs, globally unique, so a file URL needs no organization in it: opening `/workspace/doc/:id` selects the file's organization in the switcher.
+*As built (2026-11-10, decision_log.md):* each app's path is its manifest's (`@flow/shared` `APP_MANIFESTS`), which the
+Worker's pages, the suite bars and the build read; Chat's client is still built at the root, since its files are the
+suite's root files. Until 2026-11-10 Chat was the root itself and Docs was `/workspace` (the tab's first name); the Worker
+sends `/workspace/...` to `/docs/...` with a 301, and the address parser reads links written either way.
+
+Old docs URLs (`/s/:id`, `/d/:id`, …) 301 to `/docs/...`. `mcpdocs.freeflow.im` redirects to `app.freeflow.im` with the path kept (Flow's `FLOW_REDIRECT_FROM_HOSTS`, which exempts `/v1` and `/api`). `docs.freeflow.im` is different: it stays the ChatGPT plugin's address and is served by the suite itself (§6). File ids are UUIDs, globally unique, so a file URL needs no organization in it: opening `/docs/doc/:id` selects the file's organization in the switcher.
 
 **The suite bar** (designed 2026-11-01 on the canvas "FreeFlow Suite Bar", https://claude.ai/artifact/1LCEMk8dwyP6gEPaMBs2Av, which is the reference for phase 3): one 56px bar on every signed-in page, above both apps' own chrome.
 
@@ -263,7 +268,7 @@ Other things that must keep working through the cut-over:
 ## 7. Desktop and native, after the web merge
 
 - **One Electron app.** MCP Docs' `desktop/main.js` is the richer shell (per-folder local servers, the local MCP server with OAuth for agents, the updater, new-file watching, Office file associations, Local | Web tabs). Flow's `apps/desktop` adds what Chat needs (`window.flowDesktop`: keychain secrets, notifications, badge, tray, `flow://` links). The merged app is MCP Docs' shell with Flow's preload bridge: its Web tab loads the suite (Chat and Workspace, signed in through the keychain and the PKCE handoff), its Local tabs are the local Workspace as today. The native macOS Swift app stays the promoted macOS Chat client; the Electron app is the one that has Workspace.
-- **macOS and iOS (Swift)**: already on Flow's auth, so they are on the single user list the day of the merge. They get a Workspace tab later that opens `/workspace/...` in a web view with the session handed off (the handoff endpoints exist), and "Open in Workspace" on attachments. Parity gaps go in Flow's `CHANGELOG.md` Parity ledger as its conventions require.
+- **macOS and iOS (Swift)**: already on Flow's auth, so they are on the single user list the day of the merge. They get a Workspace tab later that opens `/docs/...` in a web view with the session handed off (the handoff endpoints exist), and "Open in Workspace" on attachments. Parity gaps go in Flow's `CHANGELOG.md` Parity ledger as its conventions require.
 - **Agent bridge**: no change for the merge; §5.3 adds the Workspace MCP.
 
 ## 8. Phases
@@ -274,8 +279,8 @@ Each phase ships on its own and leaves both products working.
 0.5 **Slack out of Flow** (§2.0): the Slack-compatible API and apps, then the Slack connector on web, macOS and iOS, each with a release. Flow only; MCP Docs untouched. The `slack-connector` Railway service is deleted here.
 1. **Monorepo.** `git subtree add` mcp-docs into `packages/docs`; pnpm workspace; one toolchain (TS 7, Vite 8, Vitest 5); the app-change jobs removed; CI runs both test suites. Both deploys unchanged. No user-visible change.
 1.5 **Flow to AWS** (§3.4): Postgres and NATS on the stack, Flow's image built by the AWS workflow, data moved from Railway, `app.freeflow.im` re-pointed, Railway project deleted. Chat only; a rehearsed cut-over on its own, before the identity merge, so that phase 2 changes one thing.
-2. **One identity.** Cookie transport in Flow's auth; `registerDocs` plugin; docs' auth code removed; the plugin's OAuth over the suite's sign-in; user and OAuth-grant migration script; one image on the AWS stack (Flow plus the Workspace server, Chromium, LiteParse/Tesseract, `DATA_DIR` on the data volume); `mcpdocs.freeflow.im` redirects, `docs.freeflow.im` serves the plugin from the suite. Users sign in once with Flow's screen and land on their files. The two apps are still separate pages (`/` Chat, `/workspace` Docs) with no bar yet.
-   *Code done (PR "One identity", 2026-11-01):* the cookie transport (`packages/server/src/lib/sessionCookie.ts`), the Workspace app mounted by `packages/server/src/workspace.ts` through docs' `buildApp({ host })` (its own sign-in routes, mailer and Google sign-in are off when hosted; its `users` table mirrors Flow's), the client under `/workspace`, the plugin's OAuth pages over the suite sign-in (`/oauth/resume`), `/?next=` in the web client, scrypt hashes accepted and rehashed at sign-in, and `packages/server/scripts/import-workspace-users.ts`. The suite's image holds the Workspace app (`packages/server/deploy/aws/Dockerfile`), and the stack's `workspace-to-suite.sh` moves it over: `docs/ops/WORKSPACE_TO_SUITE.md` is the cut-over, the operator's to run on its own day.
+2. **One identity.** Cookie transport in Flow's auth; `registerDocs` plugin; docs' auth code removed; the plugin's OAuth over the suite's sign-in; user and OAuth-grant migration script; one image on the AWS stack (Flow plus the Workspace server, Chromium, LiteParse/Tesseract, `DATA_DIR` on the data volume); `mcpdocs.freeflow.im` redirects, `docs.freeflow.im` serves the plugin from the suite. Users sign in once with Flow's screen and land on their files. The two apps are still separate pages (`/` Chat, `/docs` Docs) with no bar yet.
+   *Code done (PR "One identity", 2026-11-01):* the cookie transport (`packages/server/src/lib/sessionCookie.ts`), the Workspace app mounted by `packages/server/src/workspace.ts` through docs' `buildApp({ host })` (its own sign-in routes, mailer and Google sign-in are off when hosted; its `users` table mirrors Flow's), the client under `/docs` (`/workspace` until 2026-11-10), the plugin's OAuth pages over the suite sign-in (`/oauth/resume`), `/?next=` in the web client, scrypt hashes accepted and rehashed at sign-in, and `packages/server/scripts/import-workspace-users.ts`. The suite's image holds the Workspace app (`packages/server/deploy/aws/Dockerfile`), and the stack's `workspace-to-suite.sh` moves it over: `docs/ops/WORKSPACE_TO_SUITE.md` is the cut-over, the operator's to run on its own day.
 3. **The suite bar.** Router, shell, bar, organization switcher replacing the rail, `useAuth` adapter, CSS scoping, Chat runtime hoisted into the shell, Chat badge. This is the phase the image shows.
 4. **Organization files.** `workspace_id` on every Docs row (the tenant partition key of §3.2), Organization files / My files, access checks, MCP and assistant tools organization-aware. Docs' metadata stays SQLite; it is not moved to Postgres (§3.2's ruling).
 5. **Cloudflare, Chat first** (§3.2's end state; ruled 2026-11-02 to come right after phase 4, and before any new app). Cloudflare in front of `app.freeflow.im`, routing by path, so a Worker takes one bounded context at a time while the AWS box serves the rest: the directory (users, sessions, memberships) first, then one Durable Object per organization with its SQLite and its sockets serving channels and messages. Postgres and NATS retire with the last context.
@@ -294,6 +299,6 @@ Ruled by the operator on 2026-11-01 (§0): FreeFlow as the suite name; MCP Docs'
 Still open, none blocking the first phases:
 
 1. **Customers tab.** The image has a third tab. Nothing here depends on it, but the bar's segmented control is a list, not two hard-coded entries, so a third app can be added without touching the bar.
-2. **Email in Workspace.** Named as the next module under the Workspace tab; no design yet. It only constrains this document in that the Workspace home is a hub and `/workspace/mail` is reserved.
+2. **Email in Workspace.** Named as the next module under the Workspace tab; no design yet. It only constrains this document in that the Workspace home is a hub and `/docs/mail` is reserved.
 3. **Renaming `workspaces` in code** to organizations: a mechanical follow-up with a migration and DTO rename across web, macOS, iOS and the agent bridge, after the merge.
 4. **RDS or Postgres on the box** (§3.4): the design starts on the box; the switch is a parameter change when wanted.

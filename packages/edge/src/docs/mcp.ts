@@ -26,7 +26,7 @@ export interface McpRequestCaller {
   scope: string;
   /** The MCP path asked for: /mcp, or a version of it (/mcp/v2). */
   endpoint: string;
-  /** The public origin: links in what the tools return point at its /workspace pages. */
+  /** The public origin: links in what the tools return point at its /docs pages. */
   origin: string;
 }
 
@@ -146,7 +146,7 @@ export async function handleMcp(request: Request, hub: FileHub, caller: McpReque
 
   mirrorUser(caller.userId, caller.email);
   const service = hub.forUser(caller.userId, caller.orgId);
-  const appUrl = `${caller.origin}/workspace`;
+  const appUrl = `${caller.origin}/docs`;
   const mcp = createMcpServer(service, {
     bundle: () => {
       throw new Error('The ChatGPT app is not served here.');

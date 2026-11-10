@@ -1,5 +1,5 @@
-// The Workspace app (packages/docs) hosted in this server (src/workspace.ts; docs/specs/freeflow-suite.md §2):
-// one session for both, as a bearer or the `sid` cookie; its routes under /api, its client under /workspace.
+// The Workspace app (packages/docs) hosted in this server (src/docs.ts; docs/specs/freeflow-suite.md §2):
+// one session for both, as a bearer or the `sid` cookie; its routes under /api, its client under /docs.
 // DB-backed — runs against a scratch database on the dev postgres (docker compose in packages/infra, host
 // port 5442), with the Workspace app's own SQLite in a temporary directory.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -107,7 +107,7 @@ describe('the Workspace app', () => {
     for (const headers of [cookie(aliceToken), bearer(aliceToken)]) {
       const res = await app.inject({ method: 'GET', url: '/api/auth/me', headers });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toMatchObject({ user: { id: aliceId, email: 'alice@example.test' }, googleLogin: false, suite: { basePath: '/workspace' } });
+      expect(res.json()).toMatchObject({ user: { id: aliceId, email: 'alice@example.test' }, googleLogin: false, suite: { basePath: '/docs' } });
     }
     const anon = await app.inject({ method: 'GET', url: '/api/auth/me' });
     expect(anon.json().user).toBeNull();
@@ -140,30 +140,35 @@ describe('the Workspace app', () => {
     expect(after.statusCode).toBe(401);
   });
 
-  it('serves its client under /workspace, sending a visitor to the suite sign-in first', async () => {
-    const visitor = await app.inject({ method: 'GET', url: '/workspace' });
+  it('serves its client under /docs, sending a visitor to the suite sign-in first', async () => {
+    const visitor = await app.inject({ method: 'GET', url: '/docs' });
     expect(visitor.statusCode).toBe(302);
-    expect(visitor.headers.location).toBe('/?next=%2Fworkspace');
-    const home = await app.inject({ method: 'GET', url: '/workspace', headers: cookie(aliceToken) });
+    expect(visitor.headers.location).toBe('/?next=%2Fdocs');
+    const home = await app.inject({ method: 'GET', url: '/docs', headers: cookie(aliceToken) });
     expect(home.statusCode).toBe(200);
     expect(home.body).toContain('<title>Workspace</title>');
-    const deep = await app.inject({ method: 'GET', url: '/workspace/sheet/abc' });
+    const deep = await app.inject({ method: 'GET', url: '/docs/sheet/abc' });
     expect(deep.statusCode).toBe(200);
     expect(deep.headers['content-type']).toMatch(/text\/html/);
-    const shared = await app.inject({ method: 'GET', url: '/workspace/p/secret' });
+    const shared = await app.inject({ method: 'GET', url: '/docs/p/secret' });
     expect(shared.headers['x-robots-tag']).toBe('noindex');
     const old = await app.inject({ method: 'GET', url: '/p/secret' });
     expect(old.statusCode).toBe(301);
-    expect(old.headers.location).toBe('/workspace/p/secret');
+    expect(old.headers.location).toBe('/docs/p/secret');
+    // Its base path until 2026-11-10.
+    const moved = await app.inject({ method: 'GET', url: '/workspace/s/abc?x=1' });
+    expect(moved.statusCode).toBe(301);
+    expect(moved.headers.location).toBe('/docs/s/abc?x=1');
+    expect((await app.inject({ method: 'GET', url: '/workspace' })).headers.location).toBe('/docs');
   });
 
-  it("sends pages asked for on the app's old host names to /workspace on the suite's host", async () => {
+  it("sends pages asked for on the app's old host names to /docs on the suite's host", async () => {
     const home = await app.inject({ method: 'GET', url: '/', headers: { host: 'mcpdocs.example.test' } });
     expect(home.statusCode).toBe(301);
-    expect(home.headers.location).toMatch(/\/workspace$/);
+    expect(home.headers.location).toMatch(/\/docs$/);
     const file = await app.inject({ method: 'GET', url: '/s/abc?x=1', headers: { host: 'docs.example.test:443' } });
     expect(file.statusCode).toBe(301);
-    expect(file.headers.location).toMatch(/\/workspace\/s\/abc\?x=1$/);
+    expect(file.headers.location).toMatch(/\/docs\/s\/abc\?x=1$/);
     // The plugin's paths and the API are not redirected (served or answered on that host as they are).
     const mcp = await app.inject({ method: 'GET', url: '/mcp', headers: { host: 'docs.example.test' } });
     expect(mcp.statusCode).not.toBe(301);

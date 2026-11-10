@@ -54,10 +54,10 @@ describe('the share index', () => {
     expect(event).toMatchObject({
       type: 'sharing.granted', organizationId: workspaceId, actor: 'acct-a', audience: 'account:acct-b',
       ref: { organizationId: workspaceId, app: 'docs', kind: 'sheet', id: 's1' },
-      data: { ref: ref('s1'), principal: 'account:acct-b', role: 'viewer', title: 'Q4 plan', kind: 'sheet', url: '/workspace/s/s1' },
+      data: { ref: ref('s1'), principal: 'account:acct-b', role: 'viewer', title: 'Q4 plan', kind: 'sheet', url: '/docs/s/s1' },
     });
     const line = published.find((p) => p.event.type === 'message.created')!.event.data as MessageDTO;
-    expect(line).toMatchObject({ userId: ANN, systemKind: 'file_shared', body: `Ann shared Q4 plan with you\n${WEB}/workspace/s/s1` });
+    expect(line).toMatchObject({ userId: ANN, systemKind: 'file_shared', body: `Ann shared Q4 plan with you\n${WEB}/docs/s/s1` });
     const notified = published.find((p) => p.event.type === 'notification.created')!;
     expect(notified.subject).toContain(BOB);
     const { notifications } = await run(() => listNotifications(BOB, undefined, 10));
@@ -69,7 +69,7 @@ describe('the share index', () => {
     expect(again).toMatchObject({ type: 'sharing.granted', data: { role: 'editor' } });
     expect(published.filter((p) => p.event.type === 'message.created')).toEqual([]);
 
-    expect(await run(() => sharedWith({ accountId: 'acct-b', channelIds: [] }))).toMatchObject([{ ref: ref('s1'), kind: 'sheet', title: 'Q4 plan', role: 'editor', grantedBy: 'acct-a', url: '/workspace/s/s1' }]);
+    expect(await run(() => sharedWith({ accountId: 'acct-b', channelIds: [] }))).toMatchObject([{ ref: ref('s1'), kind: 'sheet', title: 'Q4 plan', role: 'editor', grantedBy: 'acct-a', url: '/docs/s/s1' }]);
     expect(await run(() => sharedRefsOf({ accountId: 'acct-b', channelIds: [] }))).toEqual([ref('s1')]);
     expect(await run(() => sharedRefsOf({ accountId: 'acct-c', channelIds: [] }))).toEqual([]);
   });
@@ -77,7 +77,7 @@ describe('the share index', () => {
   it('records a share with a channel: a card in it, the event for the organization when the channel is public', async () => {
     const folder = 'me:ann:w/Q4';
     const event = await run(() => recordShare({ ref: ref(folder, 'folder'), principal: `channel:${general}`, role: 'viewer', grantedBy: 'acct-a', title: 'Q4', kind: 'folder' }, WEB));
-    const url = `/workspace/?withme=1&in=${encodeURIComponent(folder)}&org=${encodeURIComponent(workspaceId)}`;
+    const url = `/docs/?withme=1&in=${encodeURIComponent(folder)}&org=${encodeURIComponent(workspaceId)}`;
     expect(event).toMatchObject({ audience: 'org', data: { principal: `channel:${general}`, kind: 'folder', url } });
     const card = messagesIn(general).find((m) => m.systemKind === 'file_shared');
     expect(card?.userId).toBe(ANN);
@@ -87,12 +87,12 @@ describe('the share index', () => {
 
     const secret = await run(() => createChannel(workspaceId, ANN, 'secret', undefined, true));
     const hidden = await run(() => recordShare({ ref: ref('s2'), principal: `channel:${secret.id}`, role: 'viewer', grantedBy: 'acct-a', title: 'Plan', kind: 'doc' }, WEB));
-    expect(hidden).toMatchObject({ audience: `channel:${secret.id}`, data: { url: '/workspace/doc/s2' } });
+    expect(hidden).toMatchObject({ audience: `channel:${secret.id}`, data: { url: '/docs/doc/s2' } });
   });
 
   it('the organization and links post nothing; a link\'s token stays out of its event', async () => {
     const org = await run(() => recordShare({ ref: ref('s3'), principal: 'org', role: 'editor', grantedBy: 'acct-a', title: 'All hands', kind: 'deck' }, WEB));
-    expect(org).toMatchObject({ audience: 'org', data: { principal: 'org', url: '/workspace/d/s3' } });
+    expect(org).toMatchObject({ audience: 'org', data: { principal: 'org', url: '/docs/d/s3' } });
     const link = await run(() => recordShare({ ref: ref('s3'), principal: `link:${'x'.repeat(32)}`, role: 'viewer', grantedBy: 'acct-a', title: 'All hands', kind: 'deck' }, WEB));
     expect(link).toMatchObject({ audience: 'account:acct-a', data: { principal: 'link' } });
     expect(published.filter((p) => p.event.type === 'message.created')).toEqual([]);
@@ -127,7 +127,7 @@ describe('the share index', () => {
     await run(() => recordShare({ ref: ref('s1'), principal: 'account:acct-b', role: 'viewer', grantedBy: 'acct-a', title: 'Q4 plan', kind: 'sheet' }, WEB));
     published = [];
     const event = await run(() => revokeShare({ ref: ref('s1'), principal: 'account:acct-b', revokedBy: 'acct-a' }));
-    expect(event).toMatchObject({ type: 'sharing.revoked', actor: 'acct-a', audience: 'account:acct-b', data: { ref: ref('s1'), role: null, title: 'Q4 plan', url: '/workspace/s/s1' } });
+    expect(event).toMatchObject({ type: 'sharing.revoked', actor: 'acct-a', audience: 'account:acct-b', data: { ref: ref('s1'), role: null, title: 'Q4 plan', url: '/docs/s/s1' } });
     expect(published).toEqual([]);
     expect(await run(() => sharedWith({ accountId: 'acct-b', channelIds: [] }))).toEqual([]);
     expect(await run(() => recordShare({ ref: 'not a reference', principal: 'org', role: 'viewer', grantedBy: 'acct-a' }, WEB))).toBeNull();
@@ -135,8 +135,8 @@ describe('the share index', () => {
 
   it('names a Docs object\'s address by the kind of file it is', () => {
     const r = (kind: string, id: string) => ({ organizationId: 'o', app: 'docs', kind, id });
-    expect(['sheet', 'deck', 'doc', 'markdown'].map((k) => urlOf(r('sheet', 'x'), k))).toEqual(['/workspace/s/x', '/workspace/d/x', '/workspace/doc/x', '/workspace/md/x']);
-    expect(urlOf(r('file', 'y'), 'file')).toBe('/workspace/f/y');
+    expect(['sheet', 'deck', 'doc', 'markdown'].map((k) => urlOf(r('sheet', 'x'), k))).toEqual(['/docs/s/x', '/docs/d/x', '/docs/doc/x', '/docs/md/x']);
+    expect(urlOf(r('file', 'y'), 'file')).toBe('/docs/f/y');
     expect(urlOf({ organizationId: 'o', app: 'calendar', kind: 'event', id: 'z' }, '')).toBe('/calendar/?event=z');
     expect(urlOf({ organizationId: 'o', app: 'mail', kind: 'message', id: 'z' }, '')).toBeNull();
   });

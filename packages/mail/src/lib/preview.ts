@@ -1,6 +1,6 @@
 // How an attachment is previewed in the overlay (components/AttachmentPreview.tsx): pictures, video and audio by the
 // browser itself; PDFs, Word, Excel, PowerPoint, CSV and Markdown in Docs' read-only views (a preview Docs makes from
-// the bytes, /workspace/preview/<id>); text and code as text; an HTML file as its source, or in a frame that runs
+// the bytes, /docs/preview/<id>); text and code as text; an HTML file as its source, or in a frame that runs
 // nothing; anything else not at all. The name's extension decides first, as mail often sends files as
 // application/octet-stream; the stated type is used when the name has none we know.
 

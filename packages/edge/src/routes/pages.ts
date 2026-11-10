@@ -1,5 +1,5 @@
 // The clients' pages, on the hosts the ported API answers on. Until the move the origin served them, because it decided per
-// request; now the Worker does, from each app's manifest (@flow/shared's APP_MANIFESTS, `pages`): Docs at /workspace, Mail
+// request; now the Worker does, from each app's manifest (@flow/shared's APP_MANIFESTS, `pages`): Docs at /docs, Mail
 // at /mail and Calendar at /calendar send a stranger to sign in, a public link's page is kept out of search engines and
 // referrers, and every other address of the web client gets its page. scripts/assemble.mjs files them under /_pages.
 import { Hono, type Context } from 'hono';
@@ -42,7 +42,16 @@ export const pageRoutes = new Hono<{ Bindings: PagesEnv }>();
 // In the manifests' order, except the web client's catch-all, which goes last: the first route that answers wins.
 const pages = APP_MANIFESTS.flatMap((m) => m.pages ?? []);
 for (const p of pages.filter((p) => p.path !== '*')) pageRoutes.get(p.path, servePage(p));
-// Public links from before Docs moved under /workspace.
-pageRoutes.get('/p/*', (c) => c.redirect(`/workspace${new URL(c.req.url).pathname}${new URL(c.req.url).search}`, 301));
+// Docs' old addresses, so links and bookmarks learn: its public links from before it had a base path, and its pages under
+// /workspace, its base until 2026-11-10 (decision_log.md).
+const moved = (to: (pathname: string) => string) => (c: C) => {
+  const url = new URL(c.req.url);
+  return c.redirect(`${to(url.pathname)}${url.search}`, 301);
+};
+// The root is Chat's page, at /chat since 2026-11-10 (its query kept: a sign-in link from an email, `?next=`, a handoff).
+pageRoutes.get('/', (c) => c.redirect(`/chat${new URL(c.req.url).search}`));
+pageRoutes.get('/p/*', moved((p) => `/docs${p}`));
+pageRoutes.get('/workspace', moved(() => '/docs'));
+pageRoutes.get('/workspace/*', moved((p) => `/docs${p.slice('/workspace'.length)}`));
 pageRoutes.get('/privacy', (c) => c.env.ASSETS.fetch(new URL('/privacy.html', c.req.url)));
 for (const p of pages.filter((p) => p.path === '*')) pageRoutes.get(p.path, servePage(p));

@@ -85,7 +85,7 @@ export interface McpOptions {
   openPath?: (path: string) => { kind: LibraryKind; id: string } | { elsewhere: string };
   /** Where upload_file sends the bytes, when not `<publicUrl>/plugin/import` (the suite's /mcp/import). */
   uploadUrl?: string;
-  /** Where the app shows files (`<appUrl>/f/<id>`), when not publicUrl (the suite's /workspace). */
+  /** Where the app shows files (`<appUrl>/f/<id>`), when not publicUrl (the suite's /docs). */
   appUrl?: string;
   /** The server's instructions, when not instructionsFor(version) (the suite's /mcp, which adds Mail's and may leave out Docs'). */
   instructions?: string;

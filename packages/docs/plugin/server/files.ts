@@ -277,7 +277,7 @@ export class FileHub {
   onShow: ((userId: string, file: { kind: LibraryKind; id: string }) => void) | null = null;
   /** Told when the model rewrote a stored file (edit_file), for a host showing it to load it again. */
   onFileChanged: ((userId: string, id: string) => void) | null = null;
-  /** Where the app shows a file, as `<appUrl>/s/<id>` and the like (the suite's /workspace): listed files carry a link there. */
+  /** Where the app shows a file, as `<appUrl>/s/<id>` and the like (the suite's /docs): listed files carry a link there. */
   appUrl: string | null = null;
   /** The host's open editors, where the edit tools run on a file open in one (the desktop app); null here otherwise. */
   live: LiveEditor | null = null;

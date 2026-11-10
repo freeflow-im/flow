@@ -1,6 +1,6 @@
 // The suite bar on Mail (packages/suite-bar), as Docs' DocsSuiteBar and Chat's ChatSuiteBar draw it: the organization
 // switcher, the apps with Mail active, the search (which searches the open folder), notifications and the account menu.
-// What belongs to Chat (organizations, invitations, notifications, the profile) opens Chat at `/?open=…`.
+// What belongs to Chat (organizations, invitations, notifications, the profile) opens Chat at `/chat/?open=…`.
 import { useCallback, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { APP_MANIFESTS, AWAY_STATUS, guestTabs, intent, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type ChatPage, type StatusOption } from '@flow/suite-bar';

@@ -97,7 +97,7 @@ all of `desktop/`;
 ChatGPT plugin's view), the suite's tool registrations (Mail, Calendar, the registry), **Flow's own MCP door**
 (`packages/edge/src/routes/mcp.ts`, today `docs/plugin/server/worker.ts` in the copy: it reads the tool registry,
 `platform.md` §5.4, and is not MCP Docs' MCP server; ruling 5), the
-`/workspace` client entry with `@flow/suite-bar` and the organization switcher, the sign-in and session pieces the
+`/docs` client entry with `@flow/suite-bar` and the organization switcher, the sign-in and session pieces the
 suite's Directory provides. The 34 client files that mention organizations or sign-in are reviewed in phase 2; the
 expectation is that most are the home page and file library reading a `host` (§3.2), not hosted-only code.
 
@@ -130,7 +130,7 @@ are read from modules and globals in five places; they become one object given a
 
 ```
 packages/docs-core/        @flow/docs-core   shared/, server/ (core + seamed), client/src (editors)
-packages/docs/             @flow/docs        the hosted Docs app: the /workspace client entry; manifest; nothing else
+packages/docs/             @flow/docs        the hosted Docs app: the /docs client entry; manifest; nothing else
 packages/edge/src/docs/    the Worker's Docs object and its runtime, importing @flow/docs-core; the copies deleted
 packages/edge/src/routes/mcp.ts   Flow's MCP door, over the tool registry; Docs' tools run through runners from the core
 apps/mcp-docs/             @freeflow-im/mcp-docs-app   the standalone app: Electron shell, Node runtime, local store,
@@ -149,13 +149,13 @@ apps/mcp-docs/             @freeflow-im/mcp-docs-app   the standalone app: Elect
   assembler and deploys do not change.
 - The standalone app has its own `version`, its own changelog (`packages/docs/CHANGELOG.md` moves with it) and its
   own release workflow. It knows nothing of organizations or the suite's Directory. Its Web tab keeps opening
-  `app.freeflow.im/workspace` as today.
+  `app.freeflow.im/docs` as today.
 
 ### 4.3 As built (phases 2 and 3, 2026-11-09)
 
 - **The core keeps its name and place: `packages/docs`, `@flow/docs`.** The manifests, the deploys and the Worker already
   name it; a `docs-core` rename would have moved 80,000 lines for a label. There is no thin `packages/docs` hosted entry
-  either: the hosted build is the same Vite build with `BASE_PATH=/workspace/`.
+  either: the hosted build is the same Vite build with `BASE_PATH=/docs/`.
 - **The standalone app is `apps/mcp-docs`** (`@freeflow-im/mcp-docs-app`, its own version): `desktop/`, `installer/`,
   `claude-plugin/`, `.claude-plugin/`, `release-notes/`, `scripts/release.mjs`, the electron-builder configuration. It
   depends on `@flow/docs` and loads the Docs code from `desktop/docsRoot.js`: the workspace link in a clone, `docs/` in
@@ -208,7 +208,7 @@ because it deletes 17,800 lines and the Worker's deploy must be verified before 
    the copy of `plugin/server` goes too. `packages/edge/src/docs/{server,shared,plugin}` are deleted. Done when: the
    Docs tests, the Worker's tests, `test/e2e-docs.mjs` and the MCP e2e pass, and the hosted Docs is verified live.
    Also carries the two lagging fixes.
-2. **The client host.** *Done, as §4.3 says.* `desktopBridge` and the suite's pieces behind one `host`; two entries, `/workspace` and the
+2. **The client host.** *Done, as §4.3 says.* `desktopBridge` and the suite's pieces behind one `host`; two entries, `/docs` and the
    desktop's, from one build; the 34 files reviewed. Done when both apps run from the same `dist`.
 3. **The package split.** *Done, as §4.3 says.* `packages/docs-core`, `packages/docs` as the thin hosted entry, `apps/mcp-docs`; exports
    map; tsconfigs; CI runs the core's tests once; `scripts/clients.mjs` and the manifests still find `packages/docs/dist`.

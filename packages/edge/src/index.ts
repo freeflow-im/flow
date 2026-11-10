@@ -79,7 +79,7 @@ export interface Env extends ProxyEnv, AuthEnv {
 
 /** Paths that are never files: they skip the look in the assets. */
 const NEVER_A_FILE = /^\/(v1|api|mcp|oauth|plugin|\.well-known)(\/|$)/;
-/** Vite's content-hashed output, under each client's base path in the manifests (the web client's root, /workspace, /mail, …). */
+/** Vite's content-hashed output, under each client's base path in the manifests (the web client's root, /docs, /mail, …). */
 const BASES = APP_MANIFESTS.flatMap((m) => (m.client && m.client.basePath !== '/' ? [m.client.basePath.replace(/^\/|\/$/g, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')] : []));
 const HASHED_FILE = new RegExp(`^(/(${BASES.join('|')}))?/assets/`);
 

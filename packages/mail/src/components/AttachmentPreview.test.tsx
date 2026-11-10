@@ -9,7 +9,7 @@ vi.mock('../api', async (orig) => {
     ...real,
     previewApi: {
       create: vi.fn(async () => ({ preview: { id: 'p1', kind: 'doc', filename: 'Plan.docx', size: 10, expiresAt: 0 }, workspace: 'harbor' })),
-      save: vi.fn(async () => ({ saved: { kind: 'doc', id: 'd1', title: 'Plan', url: '/workspace/doc/d1' } })),
+      save: vi.fn(async () => ({ saved: { kind: 'doc', id: 'd1', title: 'Plan', url: '/docs/doc/d1' } })),
     },
   };
 });
@@ -75,12 +75,12 @@ describe('the attachment preview', () => {
     await render();
     await act(async () => {});
     expect(previewApi.create).toHaveBeenCalledWith('acc', 'INBOX', 8, 1, null);
-    expect(dialog().querySelector('iframe')?.getAttribute('src')).toBe('/workspace/preview/p1?workspace=harbor');
+    expect(dialog().querySelector('iframe')?.getAttribute('src')).toBe('/docs/preview/p1?workspace=harbor');
     const save = [...dialog().querySelectorAll('button')].find((b) => b.textContent?.includes('Save to Docs'))!;
     await act(async () => save.click());
     expect(previewApi.save).toHaveBeenCalledWith('p1', 'harbor');
     const open = dialog().querySelector('a[title^="Open"]');
-    expect(open?.getAttribute('href')).toBe('/workspace/doc/d1');
+    expect(open?.getAttribute('href')).toBe('/docs/doc/d1');
     expect(open?.textContent).toContain('Open in Docs');
     // The same attachment again is not asked of the server again.
     expect(previewApi.create).toHaveBeenCalledTimes(1);

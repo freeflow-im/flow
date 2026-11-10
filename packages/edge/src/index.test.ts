@@ -43,7 +43,7 @@ describe('the front door', () => {
   });
 
   it('does the same for the Workspace client', async () => {
-    const res = await app.request('https://app.example/workspace/assets/w-1.css', {}, env({ '/workspace/assets/w-1.css': 'css' }));
+    const res = await app.request('https://app.example/docs/assets/w-1.css', {}, env({ '/docs/assets/w-1.css': 'css' }));
     expect(res.headers.get('Cache-Control')).toContain('immutable');
   });
 
@@ -59,7 +59,7 @@ describe('the front door', () => {
 
   it('sends pages to the origin: they are not in the assets', async () => {
     const f = origin('shell');
-    for (const path of ['/', '/workspace', '/workspace/s/abc', '/c/general']) {
+    for (const path of ['/', '/docs', '/docs/s/abc', '/c/general']) {
       expect(await (await app.request(`https://app.example${path}`, {}, env())).text()).toBe('shell');
     }
     expect(f).toHaveBeenCalledTimes(4);

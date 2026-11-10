@@ -50,10 +50,10 @@ describe('resolveInOrg', () => {
     const asks = () => [ref('chat', 'channel', pub), ref('chat', 'channel', secret), ref('chat', 'artifact', app), ref('chat', 'message', msg), ref('chat', 'message', secretMsg)];
     const ann = await run(() => resolveInOrg(ANN, ws, asks()));
     expect(ann).toMatchObject([
-      { app: 'chat', kind: 'channel', title: '#pub', url: `/?open=channel%3A${pub}`, role: 'manager' },
+      { app: 'chat', kind: 'channel', title: '#pub', url: `/chat/?open=channel%3A${pub}`, role: 'manager' },
       { title: '#secret', role: 'manager' },
-      { kind: 'artifact', title: 'Secret plan', summary: 'in #secret', role: 'owner', url: `/?open=artifact%3A${app}` },
-      { kind: 'message', title: 'Message from Ann in #pub', summary: 'hello @Bob, see the plan', url: `/?open=message%3A${msg}` },
+      { kind: 'artifact', title: 'Secret plan', summary: 'in #secret', role: 'owner', url: `/chat/?open=artifact%3A${app}` },
+      { kind: 'message', title: 'Message from Ann in #pub', summary: 'hello @Bob, see the plan', url: `/chat/?open=message%3A${msg}` },
       { title: 'Message from Ann in #secret', summary: 'between us' },
     ]);
     const bob = await run(() => resolveInOrg(BOB, ws, asks()));
@@ -73,7 +73,7 @@ describe('resolveInOrg', () => {
     db.insert(schema.shares).values({ ref: other, principal: `account:${acct(ANN)}`, role: 'editor', grantedBy: acct(ANN), title: 'Hers', kind: 'doc', at: Date.now() }).run();
     const out = await run(() => resolveInOrg(BOB, ws, [shared, other, `elsewhere/docs/sheet/S1`, 'garbage']));
     expect(out).toEqual([
-      { ref: shared, app: 'docs', kind: 'sheet', title: 'Q4 plan', role: 'viewer', icon: '📽️', url: '/workspace/d/S1', fileKind: 'deck' },
+      { ref: shared, app: 'docs', kind: 'sheet', title: 'Q4 plan', role: 'viewer', icon: '📽️', url: '/docs/d/S1', fileKind: 'deck' },
       { ref: other, ask: true },
       { ref: 'elsewhere/docs/sheet/S1', denied: true },
       { ref: 'garbage', denied: true },

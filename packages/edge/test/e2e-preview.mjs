@@ -1,7 +1,7 @@
 // End-to-end check of Mail's attachment previews in Docs (routes/previews.ts, docs/server/previews.ts) through the Worker,
 // a person's Mail object and their organization's Docs object, against the GreenMail server in Docker (`flow-greenmail`:
 // SMTP 127.0.0.1:3025, IMAP 127.0.0.1:3143, any password logs in) and a local `wrangler dev` with the clients assembled
-// (scripts/assemble.mjs, after building packages/web, packages/docs with BASE_PATH=/workspace/ and packages/mail):
+// (scripts/assemble.mjs, after building packages/web, packages/docs with BASE_PATH=/docs/ and packages/mail):
 //   npx wrangler dev --port 18804 --local --enable-containers=false --var PORTED_HOSTS:edge.freeflow.im,localhost \
 //     --var ASSET_HOSTS:localhost --var ORIGIN_URL:http://localhost:9 --var WEB_URL_BASE:http://localhost:18804 \
 //     --var FLOW_WEB_URL:http://localhost:18804 --var MAIL_ALLOW_INSECURE:1 > /tmp/edge-preview.log 2>&1 &
@@ -99,7 +99,7 @@ r=await view('scores.csv');t('the CSV as a sheet',r.j.view?.kind==='sheet'&&r.j.
 r=await view('Quarterly report.pdf');t('the PDF, for pdf.js',r.j.view?.kind==='pdf'&&r.j.view.url===`/api/previews/${made['Quarterly report.pdf']}/file`,JSON.stringify(r.j).slice(0,140));
 let res=await fetch(`${B}${r.j.view?.url}?workspace=${W}`,{headers:{authorization:'Bearer '+A.token}});let bytes=Buffer.from(await res.arrayBuffer());
 t('its bytes, as a download that runs nothing',res.status===200&&bytes.equals(pdf)&&res.headers.get('content-type')==='application/pdf'&&res.headers.get('content-security-policy')?.includes('sandbox')&&res.headers.get('x-content-type-options')==='nosniff',res.status+' '+res.headers.get('content-type'));
-res=await fetch(`${B}/workspace/preview/${made['Harbor plan.docx']}?workspace=${W}`,{headers:{authorization:'Bearer '+A.token}});const page=await res.text();
+res=await fetch(`${B}/docs/preview/${made['Harbor plan.docx']}?workspace=${W}`,{headers:{authorization:'Bearer '+A.token}});const page=await res.text();
 t('the preview page is Docs’ page, framed only by the suite',res.status===200&&page.includes('<div id="root">')&&res.headers.get('x-frame-options')==='SAMEORIGIN'&&res.headers.get('content-security-policy')==="frame-ancestors 'self'",res.status+' '+res.headers.get('x-frame-options'));
 
 // ---- Owner only -----------------------------------------------------------------------------------------------------
@@ -115,7 +115,7 @@ r=await api(A.token,'GET',`/api/recents?workspace=${W}`);t('nor in Recents',r.s=
 
 // ---- Save to Docs ---------------------------------------------------------------------------------------------------
 r=await api(A.token,'POST',`/api/previews/${made['Q3 sales.xlsx']}/save?workspace=${W}`);const saved=r.j.saved;
-t('save the workbook to Docs',r.s===200&&saved?.kind==='sheet'&&saved.url===`/workspace/s/${saved.id}`&&saved.title==='Q3 sales',r.s+' '+JSON.stringify(r.j).slice(0,160));
+t('save the workbook to Docs',r.s===200&&saved?.kind==='sheet'&&saved.url===`/docs/s/${saved.id}`&&saved.title==='Q3 sales',r.s+' '+JSON.stringify(r.j).slice(0,160));
 r=await api(A.token,'GET',`/api/library?workspace=${W}`);const sheet=r.j.docs?.find(s=>s.id===saved?.id);
 t('it is at the top of My files',!!sheet&&!sheet.folder&&!sheet.shared,JSON.stringify(r.j.docs?.map(s=>[s.title,s.folder??'',s.shared??false])));
 r=await api(A.token,'GET',`/api/sheets/${saved?.id}`);t('and opens as a spreadsheet',r.s===200&&r.j.workbook?.tabs?.[0]?.name==='Q3 Sales',r.s+' '+JSON.stringify(r.j).slice(0,120));
@@ -125,7 +125,7 @@ r=await api(Bo.token,'GET',`/api/sheets/${saved?.id}`);t('the saved file is priv
 
 // ---- Refusals ------------------------------------------------------------------------------------------------------
 r=await preview(A.token,'banner.png');t('a picture makes a preview only to be saved',r.s===200&&r.j.preview?.kind==='file',JSON.stringify(r.j).slice(0,120));
-r=await api(A.token,'POST',`/api/previews/${r.j.preview?.id}/save?workspace=${W}`);t('and saves as a stored file',r.s===200&&r.j.saved?.kind==='file'&&r.j.saved.url.startsWith('/workspace/f/'),JSON.stringify(r.j).slice(0,140));
+r=await api(A.token,'POST',`/api/previews/${r.j.preview?.id}/save?workspace=${W}`);t('and saves as a stored file',r.s===200&&r.j.saved?.kind==='file'&&r.j.saved.url.startsWith('/docs/f/'),JSON.stringify(r.j).slice(0,140));
 r=await api(A.token,'POST','/api/previews/mail',{account:ACC,folder:'INBOX',uid:UID,index:42,workspace:W});t('a missing attachment is a 404 with a reason',r.s===404&&typeof r.j.error==='string',r.s+' '+JSON.stringify(r.j));
 r=await api(A.token,'POST','/api/previews/mail',{account:ACC,folder:'INBOX',uid:UID,index:0,workspace:'not-mine'});t('an organization one is not in is refused',r.s===403,r.s+' '+JSON.stringify(r.j));
 

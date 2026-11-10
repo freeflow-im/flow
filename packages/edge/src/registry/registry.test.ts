@@ -48,7 +48,7 @@ const RUNS_IN: Record<string, string[]> = { delete_event: ['docs'] };
 /** /mcp's tools, as the newest version lists them with every scope. */
 async function mcpTools(): Promise<{ name: string; description?: string; inputSchema: Input; annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean } }[]> {
   // A hub that can make PDFs, so export_pdf is listed (where the Worker cannot, the plugin's server leaves it out).
-  const mcp = createMcpServer({ hub: { pdf: {} } } as never, { bundle: () => { throw new Error('no app'); }, publicUrl: null, level: 'tools', version: Math.max(...MCP_VERSIONS) as McpVersion, uploadUrl: 'https://app.test/mcp/import/o1', appUrl: 'https://app.test/workspace' });
+  const mcp = createMcpServer({ hub: { pdf: {} } } as never, { bundle: () => { throw new Error('no app'); }, publicUrl: null, level: 'tools', version: Math.max(...MCP_VERSIONS) as McpVersion, uploadUrl: 'https://app.test/mcp/import/o1', appUrl: 'https://app.test/docs' });
   for (const t of [...MAIL_TOOLS, ...CALENDAR_TOOLS, ...EVENT_TOOLS]) mcp.registerTool(t.name, { title: t.title, description: t.description, inputSchema: t.shape as never, annotations: t.annotations }, (async () => ({ content: [] })) as never);
   for (const [name, { app, doors }] of manifestTools()) {
     const r = registered(doors[0]!, app, name)!;
