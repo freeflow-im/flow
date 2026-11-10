@@ -100,6 +100,19 @@ body {
 .cal-grid .fc-timegrid-event-short .cal-title-first .fc-event-title-container {
   flex-basis: 100%;
 }
+/* A short event's title sits on one tight line; a quarter-hour one (about 14px tall) gets smaller text still, so the
+   title is readable rather than cut off at the waist. */
+.cal-grid .fc-timegrid-event-short .cal-title-first .fc-event-title {
+  line-height: 1.2;
+}
+.cal-grid .fc-timegrid-event.cal-quarter .fc-event-main {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.cal-grid .fc-timegrid-event.cal-quarter .cal-title-first .fc-event-title {
+  font-size: 10px;
+  line-height: 13px;
+}
 .cal-grid .fc-timegrid-event .fc-event-main {
   padding: 1px 4px;
 }
