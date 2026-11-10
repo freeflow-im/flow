@@ -1,8 +1,9 @@
-// The assistant in Mail: a panel on the right, as Docs' is (beside the list and the message; over them on narrow
-// screens). The chat's replies and tool labels are Docs' own (lib/docsAgent.ts); a draft the assistant made has
+// The assistant in Mail: in the suite's dock (packages/suite-bar, AssistantDock.tsx), floating over the mail or,
+// anchored, a panel on the right as Docs' is (beside the list and the message; over them on narrow screens). The chat's replies and tool labels are Docs' own (lib/docsAgent.ts); a draft the assistant made has
 // "Open draft", which opens it in Compose, and links to messages in Mail open them here rather than in a new tab.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Check, ExternalLink, Loader2, Pencil, Sparkles, X } from 'lucide-react';
+import { AlertCircle, Check, ExternalLink, Loader2, Pencil, Sparkles } from 'lucide-react';
+import { AssistantDockControls, useAssistantDock, useIdleMinimize } from '@flow/suite-bar/assistant-dock';
 import { draftOf, refOfLink, savedFileOf, type MessageRef } from '../lib/assistant';
 import { ChatMarkdown, picturesOf, toolLabel, type ChatItem } from '../lib/docsAgent';
 import { cn } from '../lib/utils';
@@ -30,6 +31,9 @@ export function AssistantPanel({ chat, onMessage, overlay, width, onClose, onSho
   const [draft, setDraft] = useState('');
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const docked = useAssistantDock().placement === 'docked';
+  // Floating and idle (no new text from either side), the panel minimizes to the pill; not while a turn runs.
+  useIdleMinimize([chat.items, draft], chat.running);
 
   useEffect(() => inputRef.current?.focus(), []);
   // The newest message stays in view while the reply streams in.
@@ -58,8 +62,8 @@ export function AssistantPanel({ chat, onMessage, overlay, width, onClose, onSho
     <aside
       aria-label="Assistant"
       data-testid="mail-assistant"
-      style={overlay ? undefined : { width }}
-      className={cn('flex min-h-0 flex-col bg-white', overlay ? 'absolute inset-0 z-30 shadow-xl' : 'relative shrink-0 border-l border-hairline')}
+      style={docked && !overlay ? { width } : undefined}
+      className={cn('flex min-h-0 flex-col bg-white', !docked ? 'relative' : overlay ? 'absolute inset-0 z-30 shadow-xl' : 'relative shrink-0 border-l border-hairline')}
     >
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-hairline px-4">
         <Sparkles className="size-4 text-primary" />
@@ -68,9 +72,7 @@ export function AssistantPanel({ chat, onMessage, overlay, width, onClose, onSho
         <Button variant="link" size="sm" className="h-7 px-1.5" onClick={() => void chat.reset()} disabled={chat.running || !chat.items.length} title="Start a new conversation">
           New chat
         </Button>
-        <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Close assistant" title="Close">
-          <X />
-        </Button>
+        <AssistantDockControls />
       </div>
 
       <div

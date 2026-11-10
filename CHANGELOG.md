@@ -12,7 +12,6 @@ This file keeps two things:
 
 ## Parity
 
-- **Docs' assistant floats over the page; Mail's and Calendar's still sit beside it (2026-11-10).** Docs (web, desktop app) shows the "Ask Assistant" pill and the floating panel with its anchor button; Mail and Calendar keep the fixed side panel. Gap to close: the same launcher and anchor in the suite's other panels.
 - **`email_members` is at `/mcp` and the hosted assistant only (2026-11-10).** The bridge door does not offer it (bridge agents send from their own mailbox with `send_mail`), and the MCP Docs desktop app and the AWS-hosted plugin have no Contacts. Deliberate, while Contacts lives on the Worker.
 - **The assistant's web tools are web-only, in Chromium browsers with the prototype extension (2026-11-10).** The Workspace, Mail and Calendar panels pass `browser_*` calls to `packages/browser-extension`; macOS, iOS and the desktop shell have no extension and are never offered the tools (the desktop shell could use Electron's own debugger later). Gap to close if the prototype is kept.
 - **Organization settings are the Admin app, web-only (2026-11-09, docs/specs/workspace-admin.md).** `/admin` is reached from every web app's suite bar; macOS and iOS have no admin surface (web-only by ruling) and keep their member list. Deliberate, like Manage users before it.

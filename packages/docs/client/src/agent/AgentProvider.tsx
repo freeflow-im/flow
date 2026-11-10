@@ -1,5 +1,6 @@
 // Agent chat state for the whole app. Lives above the routes, so the conversation (and a turn in
 // progress) survives navigation such as the agent opening another spreadsheet.
+import { useAssistantDockState, useNewChatOnClose, type AssistantPlacement } from '@flow/suite-bar/assistant-dock';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { rangeToString } from '../../../shared/cellref.ts';
@@ -49,7 +50,7 @@ export interface OpenMarkdown {
 type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
 
 /** Where the panel sits: floating over the page bottom-right (the default), or docked as a side panel beside it. */
-export type AgentPlacement = 'floating' | 'docked';
+export type AgentPlacement = AssistantPlacement;
 
 interface AgentState {
   open: boolean;
@@ -108,8 +109,6 @@ interface AgentState {
 const AgentCtx = createContext<AgentState | null>(null);
 
 const OPEN_KEY = 'agent-panel-open';
-const PLACEMENT_KEY = 'agent-panel-placement';
-const EXPANDED_KEY = 'agent-panel-expanded';
 const OPEN_TIMEOUT_MS = 20_000;
 const JOB_POLL_MS = 2000;
 
@@ -137,22 +136,6 @@ function readOpen(): boolean {
   }
 }
 
-function readPlacement(): AgentPlacement {
-  try {
-    return localStorage.getItem(PLACEMENT_KEY) === 'docked' ? 'docked' : 'floating';
-  } catch {
-    return 'floating';
-  }
-}
-
-function readExpanded(): boolean {
-  try {
-    return localStorage.getItem(EXPANDED_KEY) === '1';
-  } catch {
-    return false;
-  }
-}
-
 function remember(key: string, value: string) {
   try {
     localStorage.setItem(key, value);
@@ -166,8 +149,6 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   const { desktop } = useHost();
   const navigate = useNavigate();
   const [open, setOpenState] = useState(readOpen);
-  const [placement, setPlacementState] = useState<AgentPlacement>(readPlacement);
-  const [expanded, setExpandedState] = useState(readExpanded);
   const [items, setItems] = useState<ChatItem[]>([]);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -207,14 +188,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     setOpenState(o);
     remember(OPEN_KEY, o ? '1' : '0');
   }, []);
-  const setPlacement = useCallback((p: AgentPlacement) => {
-    setPlacementState(p);
-    remember(PLACEMENT_KEY, p);
-  }, []);
-  const setExpanded = useCallback((e: boolean) => {
-    setExpandedState(e);
-    remember(EXPANDED_KEY, e ? '1' : '0');
-  }, []);
+  // Where the panel sits and its floating size, remembered as agent-panel-placement / agent-panel-expanded.
+  const { placement, setPlacement, expanded, setExpanded } = useAssistantDockState('agent-panel', open, setOpen);
 
   // The chat shown: loaded when it changes, and when someone signs in (cleared when they sign out).
   useEffect(() => {
@@ -822,6 +797,10 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     setItems([]);
     setError(null);
   };
+  // Closed (by hand, or the floating panel's idle timer), the chat is over: the next open starts a new one.
+  useNewChatOnClose(open, running, () => {
+    if (items.length) void reset();
+  });
 
   const value: AgentState = {
     open,

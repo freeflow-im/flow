@@ -7,6 +7,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { addHours, startOfHour } from 'date-fns';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { openSuiteSearch } from '@flow/suite-bar';
+import { AssistantDock, useAssistantDockState, useNewChatOnClose } from '@flow/suite-bar/assistant-dock';
 import { CalendarApiError, calendarApi, connectGoogle, setCalendarWorkspace, googleErrorText, type CalendarInfo, type EventOccurrence, type Response, type Scope } from './api';
 import { AccountSettingsDialog, AddAccountDialog } from './components/AccountForms';
 import { CalendarGrid } from './components/CalendarGrid';
@@ -177,8 +178,11 @@ export function App() {
     return () => { gone = true; };
   }, [place.eventId, cals.length, open?.event.id, navigate]);
 
-  // The assistant: beside the calendar, or over it below 1100px, in the organization the suite bar has selected.
+  // The assistant: the suite's dock (a pill, then a floating panel), or anchored beside the calendar (over it below
+  // 1100px), in the organization the suite bar has selected.
   const assistantOpen = useAssistantOpen();
+  const assistantDock = useAssistantDockState('flow.calendar.assistant', assistantOpen, setAssistantOpen);
+  const assistantDocked = assistantDock.placement === 'docked';
   const assistantOverlay = useMediaQuery('(max-width: 1099px)');
   const assistantPane = useResizableWidth('flow.calendar.assistantWidth', 380, 300, 720, 'left');
   const viewNow = useRef({ view, range, cals, event: open?.event ?? null, search, accounts: accounts.data });
@@ -206,6 +210,10 @@ export function App() {
       summaryOf: (id) => (viewNow.current.event?.id === id ? viewNow.current.event.summary : (events.data ?? []).find((o) => o.id === id || o.eventId === id)?.summary ?? null),
     },
     onCalendarChanged: () => void qc.invalidateQueries({ queryKey: ['calendar'] }),
+  });
+  // Closed (by hand, or the floating panel's idle timer), the chat is over: the next open starts a new one.
+  useNewChatOnClose(assistantOpen, chat.running, () => {
+    if (chat.items.length) void chat.reset();
   });
 
   const openEvent = (event: EventOccurrence, anchor: Anchor) => { setQuick(null); setOpen({ event, anchor }); navigate({ eventId: event.id }, true); };
@@ -347,12 +355,12 @@ export function App() {
               </>
             )}
           </main>
-          {assistantOpen && !assistantOverlay && <ResizeHandle label="Resize the assistant" {...assistantPane.handleProps} />}
-          {assistantOpen && (
+          <AssistantDock state={assistantDock}>
+            {assistantDocked && !assistantOverlay && <ResizeHandle label="Resize the assistant" {...assistantPane.handleProps} />}
             <Suspense fallback={null}>
               <AssistantPanel chat={chat} onEvent={!!open} overlay={assistantOverlay} width={assistantPane.width} onClose={() => setAssistantOpen(false)} onOpenEvent={(id, start) => void openById(id, start)} />
             </Suspense>
-          )}
+          </AssistantDock>
         </div>
       )}
       {narrow && sidebarOpen && (

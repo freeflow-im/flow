@@ -1,0 +1,143 @@
+/* The assistant dock (AssistantDock.tsx): one box that morphs between the launcher pill and the floating panel, over
+   the bottom-right corner of the page area it is in (a `position: relative` element). Anchored, it is only a wrapper
+   (`display: contents`) and the app's panel is a child of the app's own layout. The colours fall back to the suite's;
+   an app can set the --assistant-dock-* properties. */
+.assistant-dock {
+  position: absolute;
+  right: 24px;
+  bottom: 24px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid var(--assistant-dock-border, #dadce0);
+  box-shadow:
+    0 1px 2px rgba(16, 24, 40, 0.06),
+    0 18px 48px -8px rgba(16, 24, 40, 0.28);
+  transition:
+    width 0.32s cubic-bezier(0.2, 0.8, 0.2, 1),
+    height 0.32s cubic-bezier(0.2, 0.8, 0.2, 1),
+    border-radius 0.32s cubic-bezier(0.2, 0.8, 0.2, 1),
+    background-color 0.2s;
+}
+.assistant-dock.closed {
+  width: 204px;
+  height: 52px;
+  border-radius: 26px;
+  background: var(--assistant-dock-accent, #1a73e8);
+  border-color: var(--assistant-dock-accent, #1a73e8);
+}
+.assistant-dock.open {
+  width: 420px;
+  height: 640px;
+  max-width: calc(100% - 48px);
+  max-height: calc(100% - 48px);
+  border-radius: 18px;
+}
+.assistant-dock.expanded {
+  width: 640px;
+  max-width: calc(100% - 48px);
+  height: calc(100% - 48px);
+  border-radius: 18px;
+}
+.assistant-dock.docked {
+  display: contents;
+}
+/* Floating, the app's panel fills the box, whatever its side-panel width and border. */
+.assistant-dock.open > *,
+.assistant-dock.expanded > * {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  border-left: 0;
+  animation: assistant-dock-fadein 0.28s 0.1s both;
+}
+@keyframes assistant-dock-fadein {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.assistant-dock-launcher {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px 0 18px;
+  border: 0;
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.assistant-dock-launcher svg {
+  flex-shrink: 0;
+}
+.assistant-dock-launcher-label {
+  flex: 1;
+  text-align: left;
+}
+.assistant-dock-launcher-key {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  background: rgba(255, 255, 255, 0.18);
+  padding: 3px 7px;
+  border-radius: 6px;
+}
+/* The header buttons (AssistantDockControls). */
+.assistant-dock-btn {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  padding: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--assistant-dock-muted, #5f6368);
+}
+.assistant-dock-btn:hover {
+  background: var(--assistant-dock-hover, #f1f3f4);
+  color: var(--assistant-dock-ink, #1f1f1f);
+}
+.assistant-dock-close {
+  font-size: 22px;
+  line-height: 1;
+}
+/* On a phone the open floating panel fills the page area; the pill sits closer to the corner. */
+@media (max-width: 760px) {
+  .assistant-dock.open,
+  .assistant-dock.expanded {
+    inset: 0;
+    width: auto;
+    max-width: none;
+    height: auto;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .assistant-dock.closed {
+    right: 16px;
+    bottom: 16px;
+  }
+}
+@media print {
+  .assistant-dock {
+    display: none !important;
+  }
+}
