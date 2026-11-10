@@ -325,7 +325,8 @@ export async function buildApp(opts: AppOptions) {
   // they are; the host's server is the one whose log and address this app uses. Standalone: a server of its own.
   const host = opts.host ?? null;
   const basePath = host ? host.basePath.replace(/\/$/, '') : '';
-  const app: FastifyInstance = host ? host.app : Fastify({ logger: opts.logger ?? false, bodyLimit: 100 * 1024 * 1024, trustProxy: true });
+  // Closing ends every connection, the event streams too: a server told to stop must not linger with its port closed (desktop/server.ts).
+  const app: FastifyInstance = host ? host.app : Fastify({ logger: opts.logger ?? false, bodyLimit: 100 * 1024 * 1024, trustProxy: true, forceCloseConnections: true });
   if (!host) await app.register(cookie);
   // Hosted, the suite signs people in and up and sends the mail: no mailer or Google sign-in of this app's own
   // (the host's environment names its own mail and Google settings).
