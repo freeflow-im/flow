@@ -32,6 +32,8 @@ export const keys = {
   allThreads: (accountId: string) => ['mail', 'threads', accountId] as const,
   message: (accountId: string, folder: string, uid: number) => ['mail', 'message', accountId, folder, uid] as const,
   thread: (accountId: string, threadId: string) => ['mail', 'thread', accountId, threadId] as const,
+  /** Every open conversation of the account: what a sent message joins. */
+  threadDetails: (accountId: string) => ['mail', 'thread', accountId] as const,
 };
 
 export function useAccounts() {

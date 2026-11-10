@@ -441,6 +441,8 @@ export function App() {
           if (sentDraft) setOpenId((cur) => (cur === sentDraft ? null : cur));
           void qc.invalidateQueries({ queryKey: keys.allMessages(out.accountId) });
           void qc.invalidateQueries({ queryKey: keys.allThreads(out.accountId) });
+          // The open conversation too: a reply joins it at the bottom (its copy in Sent) without reopening it.
+          void qc.invalidateQueries({ queryKey: keys.threadDetails(out.accountId) });
           void qc.invalidateQueries({ queryKey: keys.folders(out.accountId) });
         },
       }),
