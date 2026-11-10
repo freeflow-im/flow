@@ -82,10 +82,10 @@ handoffRoutes.get('/api/auth/handoff', async (c) => {
       const token = await directory(c, 'exchangeDesktopHandoff', key, 'MCP Docs desktop');
       setCookie(c, 'sid', token, { path: '/', httpOnly: true, sameSite: 'Lax', secure: secure(c), maxAge: SESSION_TTL });
     } catch {
-      // Expired or used: /workspace sends the app to sign in again.
+      // Expired or used: /docs sends the app to sign in again.
     }
   }
-  return c.redirect('/workspace');
+  return c.redirect('/docs');
 });
 
 // Docs' Sign out (the Workspace app's /api/auth/logout, ahead of Docs' own routes): the session ends in the directory,

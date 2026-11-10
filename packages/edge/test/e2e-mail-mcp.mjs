@@ -165,7 +165,7 @@ t('and Bo got the draft',boGot2.includes(subj('Budget')),JSON.stringify(boGot2))
 
 // --- Saving an attachment to Docs ----------------------------------------------------------------------------------------------
 r=await call(TOK.access_token,'save_mail_attachment_to_docs',{id:id('Quarterly numbers'),index:0});const saved=r.v.file;
-t('save_mail_attachment_to_docs makes a spreadsheet in My files',saved?.kind==='sheet'&&saved.root==='My files'&&saved.url===`${B}/workspace/s/${saved.id}`,JSON.stringify(r.v).slice(0,200));
+t('save_mail_attachment_to_docs makes a spreadsheet in My files',saved?.kind==='sheet'&&saved.root==='My files'&&saved.url===`${B}/docs/s/${saved.id}`,JSON.stringify(r.v).slice(0,200));
 r=await call(TOK.access_token,'read_range',{sheet_id:saved?.id,range:'A1:B3'});t('read_range reads it',JSON.stringify(r.v).includes('revenue')&&JSON.stringify(r.v).includes('1200'),JSON.stringify(r.v).slice(0,160));
 r=await api(A.token,'GET',`/api/sheets?workspace=${ORG}`);t('Docs lists it in Ann’s files',JSON.stringify(r.j).includes(saved?.id),r.s);
 r=await call(TOK.access_token,'save_mail_attachment_to_docs',{id:id('Quarterly numbers'),index:5});t('a wrong index is refused',r.isError,r.text);

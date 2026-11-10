@@ -1,7 +1,7 @@
 # Docs' MCP endpoint on the suite's host: app.freeflow.im/mcp
 
 Agents (Claude Code, Codex, Cursor, claude.ai's connectors) connect to `https://app.freeflow.im/mcp` and work on the same
-Docs files people see in FreeFlow Docs at `/workspace`. Built 2026-11-03 on the Worker (`packages/edge`). The ChatGPT
+Docs files people see in FreeFlow Docs at `/docs`. Built 2026-11-03 on the Worker (`packages/edge`). The ChatGPT
 plugin's `/mcp` on `docs.freeflow.im` and `mcpdocs.freeflow.im` is a different server and stays on AWS
 (decision_log 2026-11-03).
 
@@ -28,7 +28,7 @@ returns OAuth errors as data (`OAuthAnswer`).
 - **The issuer and resource are the request's origin**: `https://app.freeflow.im` and `https://app.freeflow.im/mcp` (on the
   rehearsal host, `edge.freeflow.im`'s).
 - **Sign-in is FreeFlow's session** (the `sid` cookie only; a bearer token cannot approve an agent). Without one,
-  `/oauth/authorize`, `/oauth/consent` and `/oauth/device` send the browser to `/?next=<the consent page>`, as `/workspace`
+  `/oauth/authorize`, `/oauth/consent` and `/oauth/device` send the browser to `/?next=<the consent page>`, as `/docs`
   does. There are no sign-in, sign-up or Google pages on this host.
 - **Consent chooses what the agent may use**, as checkboxes (`SCOPE_GROUPS`, `offeredGroups`, `grantedScope` in
   `mcpOAuth.ts`), each offered only when the client asked for one of its scopes (no `scope` asked = all of them):
@@ -62,7 +62,7 @@ organization as the current one (`withDocsContext`):
 
 - **Files**: the tools list and search the organization's Organization files and the person's My files there; a file by
   id is any of those (`FileService.who`, `roots`, `home` over `server/scope.ts`). New files and folders go in **My files**.
-  Listed and created files say which (`root`) and carry their page, `https://app.freeflow.im/workspace/s/<id>` and the like.
+  Listed and created files say which (`root`) and carry their page, `https://app.freeflow.im/docs/s/<id>` and the like.
 - **Version**: `/mcp` serves the newest tools (version 2: folders, `search_files`, `read_file`, `upload_file`); `/mcp/v2`
   the same. The ChatGPT app is left out (`level: 'tools'`: no UI resource, no app-only tools).
 - **Scopes**: a token without `files:write` gets only the Docs tools annotated read-only, and one with neither `files:read`

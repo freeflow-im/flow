@@ -201,7 +201,7 @@ function FileList() {
   const [sharingWith, setSharingWith] = useState<{ kind: 'sheet' | 'file' | 'folder'; id: string; name: string; linkable: boolean } | null>(null);
   const shareItem = (s: LibraryItem) => ({ label: 'Share…', onClick: () => setSharingWith({ kind: s.kind === 'file' ? 'file' : 'sheet', id: s.id, name: s.title, linkable: s.kind === 'deck' || (s.kind === 'file' && isLinkableVideo(s.title)) }) });
   const shareFolder = (f: FolderInfo | undefined) => (f?.id ? [{ label: 'Share…', onClick: () => setSharingWith({ kind: 'folder', id: f.id!, name: f.name, linkable: false }) }] : []);
-  // The suite's share intent (`/workspace/?share=<org>/docs/<kind>/<id>`, @flow/suite-bar intents, platform phase 6.4):
+  // The suite's share intent (`/docs/?share=<org>/docs/<kind>/<id>`, @flow/suite-bar intents, platform phase 6.4):
   // Share… on that file or folder, then taken off the address.
   const shareAsked = params.get('share');
   useEffect(() => {

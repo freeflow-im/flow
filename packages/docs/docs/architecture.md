@@ -18,9 +18,9 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   A host (the suite) extends the assistant through `AgentOptions.pages/extend/guidance` and `setAssistantToolSource`
   (`server/agent/agent.ts`, `tools.ts`) rather than by editing it.
 - In the FreeFlow suite (design in `../../docs/specs/freeflow-suite.md`) this app is the Workspace app inside Flow's server
-  (`packages/server/src/workspace.ts`): `buildApp({ host })` wires its routes into the host's Fastify instance as an encapsulated
+  (`packages/server/src/docs.ts`): `buildApp({ host })` wires its routes into the host's Fastify instance as an encapsulated
   plugin (`wire()` in `app.ts`) instead of making a server, and the host says who is signed in (`host.authenticate`: Flow's
-  session, as a bearer or the `sid` cookie), signs out (`host.signOut`) and names the client's base path (`/workspace`, which
+  session, as a bearer or the `sid` cookie), signs out (`host.signOut`) and names the client's base path (`/docs`, which
   the client is built with: `BASE_PATH`, read as Vite's `BASE_URL` in `client/src/basePath.ts` and the router's basename). Hosted,
   the app's own sign-in, sign-up, password and Google routes, its mailer and its legal pages are off; a visitor at the base is sent
   to the suite's sign-in (`/?next=`), as are the ChatGPT plugin's OAuth pages (`suiteSignIn`, resumed at `/oauth/resume`); and the
@@ -344,7 +344,7 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   `private = 0` rows), so `private` stays as the flag derived from it and `scopeWhere` lists as before. Share with organization and Make private
   give and take `org` (a manager's), Move to organization… is the owner's. `/api/grants/:kind/:id` (GET viewer+, PUT `{ principal, role }` and
   DELETE `/:principal` manager+; `org` there is the same move) backs the Share… dialog (`ShareWithDialog.tsx`; the home page also opens it for
-  the suite's share intent, `/workspace/?share=<org>/docs/<kind>/<id>`, platform phase 6.4), and `/api/library?scope=shared`
+  the suite's share intent, `/docs/?share=<org>/docs/<kind>/<id>`, platform phase 6.4), and `/api/library?scope=shared`
   (`&in=<folder id>`) is Shared with me, a third list in `DocsNav` (`?withme=1`). Metadata carries `role` when the reader is not the owner (a file
   with one that is not the organization's shows the crumbs `sharedFileCrumbs` makes: Shared with me, then only the shared folder down); a
   viewer's editors are read-only (`viewOnlyGuard` on the sheet, deck and doc stores, `readOnly` on the Markdown and text editors).

@@ -1,7 +1,7 @@
 // An attachment opened full-window over the app, as Gmail does: the name, size and type, Download, Save to Docs (then
 // Open in Docs) and Close at the top, ← / → between the message's attachments (the buttons and the keys), Esc to close.
 // What is shown depends on the file (lib/preview.ts): the browser shows pictures, video and audio; Docs shows PDFs and
-// Office, CSV and Markdown files read-only, from a preview it makes of the bytes (/workspace/preview/<id>, framed here);
+// Office, CSV and Markdown files read-only, from a preview it makes of the bytes (/docs/preview/<id>, framed here);
 // text and HTML are shown as text, an HTML page also in a frame where nothing runs.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';

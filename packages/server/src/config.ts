@@ -36,10 +36,10 @@ export const config = {
   get trustProxy(): boolean { return process.env.FLOW_TRUST_PROXY === '1'; },
   /** The session cookie's Secure flag (lib/sessionCookie.ts): on when the public address is https. */
   get secureCookies(): boolean { return config.webUrlBase.startsWith('https://'); },
-  // ---- the Workspace app (packages/docs) hosted in this server (src/workspace.ts) ----
+  // ---- the Workspace app (packages/docs) hosted in this server (src/docs.ts) ----
   /** Its data directory (SQLite and files). Unset: the Workspace app is not served. */
   get workspaceDataDir(): string | undefined { return process.env.WORKSPACE_DATA_DIR || undefined; },
-  /** Its built client (built with BASE_PATH=/workspace/). */
+  /** Its built client (built with BASE_PATH=/docs/). */
   get workspaceStaticDir(): string {
     return process.env.WORKSPACE_STATIC_DIR ?? path.resolve(pkgRoot, '..', 'docs', 'dist', 'client');
   },
@@ -47,7 +47,7 @@ export const config = {
   get workspacePluginUrl(): string | undefined { return process.env.WORKSPACE_PLUGIN_URL || undefined; },
   /**
    * The Workspace app’s host names from before the suite (mcpdocs.freeflow.im, docs.freeflow.im), comma-separated:
-   * a page asked for on one of them is sent to the same page under /workspace on the suite’s own host; the
+   * a page asked for on one of them is sent to the same page under /docs on the suite’s own host; the
    * ChatGPT plugin’s paths (/mcp, /oauth/*, /plugin/*) are answered on them as before.
    */
   get workspaceLegacyHosts(): string[] {

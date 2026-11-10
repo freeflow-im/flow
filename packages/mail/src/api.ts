@@ -338,7 +338,7 @@ export interface SavedToDocs {
   kind: string;
   id: string;
   title: string;
-  /** The file's page in Docs (/workspace/doc/<id>, ...). */
+  /** The file's page in Docs (/docs/doc/<id>, ...). */
   url: string;
 }
 export interface DocsPreview {
@@ -371,7 +371,7 @@ async function docsRequest<T>(method: string, path: string, body?: unknown): Pro
 }
 
 /** Where a preview is drawn: Docs' read-only page for it, in the organization it was made in. */
-export const previewPageUrl = (id: string, workspace: string) => `/workspace/preview/${enc(id)}?workspace=${enc(workspace)}`;
+export const previewPageUrl = (id: string, workspace: string) => `/docs/preview/${enc(id)}?workspace=${enc(workspace)}`;
 
 export const previewApi = {
   /** Make (or find, if made this hour) Docs' preview of an attachment; `workspace` is the organization (default: the first). */

@@ -1,6 +1,6 @@
 // The suite bar on Contacts (packages/suite-bar), as Mail's MailSuiteBar draws it: the organization switcher, the apps with
 // Contacts active (from the manifests), the search (which filters the list), notifications and the account menu. What
-// belongs to Chat (organizations, invitations, notifications, the profile) opens Chat at `/?open=…`.
+// belongs to Chat (organizations, invitations, notifications, the profile) opens Chat at `/chat/?open=…`.
 import { useCallback, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { APP_MANIFESTS, AWAY_STATUS, guestTabs, intent, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type ChatPage, type StatusOption } from '@flow/suite-bar';

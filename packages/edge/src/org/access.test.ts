@@ -187,7 +187,7 @@ describe('one access function for Chat', () => {
     expect(await run(() => outcome(renameArtifact(secretDoc, DAN, 'mine now')))).toBe(403);
     // The share index: a row, the DM line with the artifact's address, and sharing.granted for Dan's account.
     const ref = `${ws}/chat/artifact/${secretDoc}`;
-    expect(await run(() => sharedWith({ accountId: acct(DAN), channelIds: [] }))).toMatchObject([{ ref, kind: 'artifact', role: 'viewer', url: `/?open=${encodeURIComponent(`artifact:${secretDoc}`)}` }]);
+    expect(await run(() => sharedWith({ accountId: acct(DAN), channelIds: [] }))).toMatchObject([{ ref, kind: 'artifact', role: 'viewer', url: `/chat/?open=${encodeURIComponent(`artifact:${secretDoc}`)}` }]);
     const line = published.find((p) => p.event.type === 'message.created')!.event.data as MessageDTO;
     expect(line).toMatchObject({ systemKind: 'file_shared', userId: ANN });
     expect(line.body).toMatch(new RegExp(`^Ann shared ${FILES.secretPinned}\\.txt with you\\n\\S*/\\?open=artifact%3A${secretDoc}$`));

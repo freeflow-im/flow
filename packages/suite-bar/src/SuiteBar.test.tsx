@@ -37,8 +37,8 @@ function build(overrides: Partial<SuiteBarProps>) {
   };
   const props: SuiteBarProps = {
     tabs: [
-      { id: 'docs', label: 'Docs', href: '/workspace', onSelect: calls.docs },
-      { id: 'chat', label: 'Chat', href: '/', active: true, badge: 3, onSelect: calls.chat },
+      { id: 'docs', label: 'Docs', href: '/docs', onSelect: calls.docs },
+      { id: 'chat', label: 'Chat', href: '/chat', active: true, badge: 3, onSelect: calls.chat },
       { id: 'mail', label: 'Mail', href: '', disabled: true },
       { id: 'calendar', label: 'Calendar', href: '', disabled: true },
     ],
@@ -93,9 +93,9 @@ describe('SuiteBar', () => {
 
   it("the logo goes to the app's home", () => {
     const home = vi.fn();
-    setup({ home: { href: '/workspace/', onSelect: home } });
+    setup({ home: { href: '/docs/', onSelect: home } });
     const link = screen.getByTestId('suite-home');
-    expect(link.getAttribute('href')).toBe('/workspace/');
+    expect(link.getAttribute('href')).toBe('/docs/');
     fireEvent.click(link);
     expect(home).toHaveBeenCalledTimes(1);
     // A click for a new tab is the browser's.
@@ -105,11 +105,11 @@ describe('SuiteBar', () => {
 
   it("without a home, the logo is the active tab's link", () => {
     setup();
-    expect(screen.getByTestId('suite-home').getAttribute('href')).toBe('/');
+    expect(screen.getByTestId('suite-home').getAttribute('href')).toBe('/chat');
   });
 
   it('draws no badge for nothing unread', () => {
-    setup({ tabs: [{ id: 'chat', label: 'Chat', href: '/', active: true, badge: 0 }] });
+    setup({ tabs: [{ id: 'chat', label: 'Chat', href: '/chat', active: true, badge: 0 }] });
     expect(screen.getByTestId('suite-tab-chat').textContent).toBe('Chat');
   });
 
@@ -332,8 +332,8 @@ describe('suiteTabsFrom', () => {
 
   it("draws Chat's bar as it was, and its tabs off for an organization on another server", () => {
     expect(suiteTabsFrom(APP_MANIFESTS, 'chat', { 'chat-unread': 5 }).slice(0, 4)).toEqual([
-      { id: 'docs', label: 'Docs', href: '/workspace' },
-      { id: 'chat', label: 'Chat', href: '/', active: true, badge: 5 },
+      { id: 'docs', label: 'Docs', href: '/docs' },
+      { id: 'chat', label: 'Chat', href: '/chat', active: true, badge: 5 },
       { id: 'mail', label: 'Mail', href: '/mail' },
       { id: 'calendar', label: 'Calendar', href: '/calendar' },
     ]);
@@ -347,21 +347,21 @@ describe('suiteTabsFrom', () => {
   });
 
   it("draws Docs', Mail's and Calendar's bars as they were", () => {
-    expect(suiteTabsFrom(APP_MANIFESTS, 'docs', { 'chat-unread': 2 }, { activeHref: '/workspace/', onSelect: home }).slice(0, 4)).toEqual([
-      { id: 'docs', label: 'Docs', href: '/workspace/', active: true, onSelect: home },
-      { id: 'chat', label: 'Chat', href: '/', badge: 2 },
+    expect(suiteTabsFrom(APP_MANIFESTS, 'docs', { 'chat-unread': 2 }, { activeHref: '/docs/', onSelect: home }).slice(0, 4)).toEqual([
+      { id: 'docs', label: 'Docs', href: '/docs/', active: true, onSelect: home },
+      { id: 'chat', label: 'Chat', href: '/chat', badge: 2 },
       { id: 'mail', label: 'Mail', href: '/mail' },
       { id: 'calendar', label: 'Calendar', href: '/calendar' },
     ]);
     expect(suiteTabsFrom(APP_MANIFESTS, 'mail', { 'chat-unread': 2, 'mail-unread': 7 }, { activeHref: '/mail/', onSelect: home }).slice(0, 4)).toEqual([
-      { id: 'docs', label: 'Docs', href: '/workspace' },
-      { id: 'chat', label: 'Chat', href: '/', badge: 2 },
+      { id: 'docs', label: 'Docs', href: '/docs' },
+      { id: 'chat', label: 'Chat', href: '/chat', badge: 2 },
       { id: 'mail', label: 'Mail', href: '/mail/', active: true, badge: 7, onSelect: home },
       { id: 'calendar', label: 'Calendar', href: '/calendar' },
     ]);
     expect(suiteTabsFrom(APP_MANIFESTS, 'calendar', { 'chat-unread': 0 }, { activeHref: '/calendar/', onSelect: home }).slice(0, 4)).toEqual([
-      { id: 'docs', label: 'Docs', href: '/workspace' },
-      { id: 'chat', label: 'Chat', href: '/', badge: 0 },
+      { id: 'docs', label: 'Docs', href: '/docs' },
+      { id: 'chat', label: 'Chat', href: '/chat', badge: 0 },
       { id: 'mail', label: 'Mail', href: '/mail' },
       { id: 'calendar', label: 'Calendar', href: '/calendar/', active: true, onSelect: home },
     ]);

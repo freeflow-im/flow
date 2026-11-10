@@ -156,7 +156,7 @@ describe('the tools against a Mail object', () => {
   it('save_mail_attachment_to_docs hands the bytes and the file name to Docs', async () => {
     const { ctx } = fakeMail();
     let got: { bytes: Buffer; filename: string } | null = null;
-    ctx.saveToDocs = async (bytes, filename) => ((got = { bytes, filename }), { file: { id: 's1', kind: 'sheet', url: 'https://app.test/workspace/s/s1' }, warnings: [] });
+    ctx.saveToDocs = async (bytes, filename) => ((got = { bytes, filename }), { file: { id: 's1', kind: 'sheet', url: 'https://app.test/docs/s/s1' }, warnings: [] });
     const r = await tool('save_mail_attachment_to_docs').run(ctx, { id: `${ACC}:INBOX:7`, index: 0 });
     expect(got!.filename).toBe('plan v2.csv');
     expect(got!.bytes.toString()).toBe('a,b\n1,2\n');

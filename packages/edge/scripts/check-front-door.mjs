@@ -37,7 +37,7 @@ check('the plugin\'s OAuth metadata answers', metadata.status === 200, String(me
 
 if (legacy) {
   const page = await get('/some/page');
-  check('a page redirects to the suite', page.status === 301 && (page.headers.get('location') ?? '').includes('/workspace/some/page'), `${page.status} ${page.headers.get('location')}`);
+  check('a page redirects to the suite', page.status === 301 && (page.headers.get('location') ?? '').includes('/docs/some/page'), `${page.status} ${page.headers.get('location')}`);
 } else {
   const root = await get('/');
   const html = await root.text();
@@ -50,8 +50,8 @@ if (legacy) {
   }
   const deep = await get('/some/deep/link');
   check('a deep link gets the app\'s page', deep.status === 200 && (await deep.text()).includes('<div id="root"'), String(deep.status));
-  const workspace = await get('/workspace');
-  check('/workspace sends a stranger to sign in', workspace.status === 302 && (workspace.headers.get('location') ?? '').includes('next='), `${workspace.status} ${workspace.headers.get('location')}`);
+  const workspace = await get('/docs');
+  check('/docs sends a stranger to sign in', workspace.status === 302 && (workspace.headers.get('location') ?? '').includes('next='), `${workspace.status} ${workspace.headers.get('location')}`);
   const me = await get('/v1/me');
   check('the API refuses without a session', me.status === 401 && (me.headers.get('content-type') ?? '').includes('json'), String(me.status));
   const docsMe = await get('/api/auth/me');

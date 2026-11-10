@@ -1,7 +1,7 @@
 // Fills public/ for the Worker from the clients' builds, one per app manifest with a client (@flow/shared's
-// APP_MANIFESTS; scripts/lib/clients.mjs): the web client at the root, the Workspace client under /workspace, the Mail
+// APP_MANIFESTS; scripts/lib/clients.mjs): the web client at the root, the Workspace client under /docs, the Mail
 // client under /mail, the Calendar client under /calendar. Pages stay out: the origin answers them, because it decides per request (the sign-in redirect on
-// /workspace, the headers of /p/*), except on the hosts the Worker answers for, where src/routes/pages.ts serves them from /_pages. So do files over the 25 MiB Workers takes (the assistant's ONNX runtimes): the
+// /docs, the headers of /p/*), except on the hosts the Worker answers for, where src/routes/pages.ts serves them from /_pages. So do files over the 25 MiB Workers takes (the assistant's ONNX runtimes): the
 // Worker misses and the origin answers. Production copies the builds out of the server's image (deploy-edge.yml), so the names match the server's pages.
 // Reads the shared package's build, so `pnpm --filter @flow/shared build` comes first (deploy-edge.yml does).
 import { cpSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
