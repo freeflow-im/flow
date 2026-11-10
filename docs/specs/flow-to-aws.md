@@ -101,9 +101,8 @@ move, DNS) is done by the operator following the runbook, not by this PR.**
 - Work in a separate git worktree, not in `~/flow` (two servers run from there): for example
   `git worktree add ~/flow-aws suite/flow-aws` from `~/flow`, then `pnpm install` there. Commit on
   `suite/flow-aws`, push it, and open the PR against `main` on `freeflow-im/flow` with
-  `gh pr create --repo freeflow-im/flow --head suite/flow-aws` (the remote URL still names
-  `freeflow-community`; do not change it). End the commit message and the PR description with the
-  attribution lines this session uses (see `git log -3` on main for the form).
+  `gh pr create --repo freeflow-im/flow --head suite/flow-aws`. End the commit message and the PR
+  description with the attribution lines this session uses (see `git log -3` on main for the form).
 
 ## Out of scope
 

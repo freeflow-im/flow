@@ -12,7 +12,7 @@
 # Override the target with BOARD_OWNER / BOARD_NUMBER.
 set -euo pipefail
 
-OWNER=${BOARD_OWNER:-freeflow-community}
+OWNER=${BOARD_OWNER:-freeflow-im}
 NUM=${BOARD_NUMBER:-1}
 
 gh api graphql -F owner="$OWNER" -F number="$NUM" -f query='

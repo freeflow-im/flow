@@ -35,11 +35,11 @@ and the only place you write it is the ticket.
 ## Getting the ticket
 
 You are given an issue number, a project item id, or a title. Resolve it against
-the project board — org `freeflow-community`, project `1`, repo
-`freeflow-community/flow`:
+the project board — org `freeflow-im`, project `1`, repo
+`freeflow-im/flow`:
 
 ```sh
-gh project item-list 1 --owner freeflow-community --format json --limit 100
+gh project item-list 1 --owner freeflow-im --format json --limit 100
 ```
 
 That gives you every item's project item id, plus `content.type` (`Issue` or
@@ -144,9 +144,9 @@ stacking a second copy.
 For an **issue** — read the body, build the new one in a file, PATCH it:
 
 ```sh
-gh issue view <n> --repo freeflow-community/flow --json body -q .body > /tmp/t.md
+gh issue view <n> --repo freeflow-im/flow --json body -q .body > /tmp/t.md
 # truncate at the first '## Product spec', append the new spec, then:
-gh issue edit <n> --repo freeflow-community/flow --body-file /tmp/t.md
+gh issue edit <n> --repo freeflow-im/flow --body-file /tmp/t.md
 ```
 
 For a **draft**, the text lives on the project, not in the repo, so it takes its
@@ -155,7 +155,7 @@ one back unchanged. Get the draft's content id (`DI_…`, which is not the proje
 item id):
 
 ```sh
-gh api graphql -F owner=freeflow-community -F number=1 -f query='
+gh api graphql -F owner=freeflow-im -F number=1 -f query='
 query($owner:String!,$number:Int!){organization(login:$owner){projectV2(number:$number){
 items(first:100){nodes{id content{__typename ... on DraftIssue{id title body}}}}}}}'
 ```

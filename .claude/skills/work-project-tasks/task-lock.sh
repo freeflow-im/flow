@@ -26,7 +26,7 @@
 # dead lock is indistinguishable from a live one and `sweep` has nothing to read.
 set -uo pipefail
 
-REPO=${FLOW_LOCK_REPO:-freeflow-community/flow}
+REPO=${FLOW_LOCK_REPO:-freeflow-im/flow}
 NS=flow-locks
 
 fail() { echo "task-lock: $*" >&2; exit 2; }

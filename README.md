@@ -272,7 +272,7 @@ automation service like _Kernel.sh_ to test the app.
 
 The native apps are trickier. Today we rely on running an agent on a Mac Mini so it can test the native apps locally.
 
-We have started to build [skills](https://github.com/freeflow-community/flow-skills) that make it very easy to provision and run a new cloud agent and connect it to Flow.
+We have started to build [skills](https://github.com/biztrip-ai/cloud-agents) that make it very easy to provision and run a new cloud agent and connect it to Flow.
 
 
 

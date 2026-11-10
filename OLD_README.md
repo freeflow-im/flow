@@ -86,8 +86,8 @@ Come join the Flow Team workspace: https://app.freeflow.im/join/flow-home/wUKq5m
 - Work on our native apps for iOS, Android and Windows.
 - Improve integration with AI Agents
 
-Generally our active work queue is on [Issues](https://github.com/freeflow-community/flow/issues). Discussions of larger
-features can be found in [Discussions](https://github.com/freeflow-community/flow/discussions).
+Generally our active work queue is on [Issues](https://github.com/freeflow-im/flow/issues). Discussions of larger
+features can be found in [Discussions](https://github.com/freeflow-im/flow/discussions).
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for how contributions are licensed and
 the `changelog/` entry conventions every PR has to satisfy.

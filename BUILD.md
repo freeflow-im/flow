@@ -160,7 +160,7 @@ The operator does the cut-over by hand with
   `node packages/edge/scripts/clients.mjs write`, which regenerates the Dockerfile's COPY lines and
   `flow-aws-deploy.yml`'s static `paths:` filter; the edge tests fail until it is run.
 - **Railway** (until the cut-over, then retired): connected to
-  `freeflow-community/flow`, so pushing to `main` builds and ships. The contract is
+  `freeflow-im/flow`, so pushing to `main` builds and ships. The contract is
   in [`railway.json`](railway.json): Railpack, build `pnpm -r build`, start
   `node packages/server/dist/index.js`, gated on `/healthz`. The runbook's last
   step removes it.

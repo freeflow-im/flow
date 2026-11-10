@@ -211,7 +211,7 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   (`WindowTools.runInFront`, `FileService.editImageInWindow`), with the built-in assistant's image tool; the
   hosted plugin's goes to its app's job queue (`runImageJob`) and cannot remove a background.
 - The image editor (`client/src/image`, design in `docs/image-editor.md`) is our fork of react-image-editor
-  (github.com/freeflow-community/react-image-editor, on Fabric.js), installed from the tarball in `vendor/`.
+  (github.com/freeflow-im/react-image-editor, on Fabric.js), installed from the tarball in `vendor/`.
   `ImageEditorHost` is the editor itself, loaded on demand and unaware of where a picture comes from;
   `ImageFileEditor` is a stored picture being edited on `FilePage` (Save rewrites the file through
   `PUT /api/files/:id`, which keeps the version before for one revert; Save a copy makes a new file).

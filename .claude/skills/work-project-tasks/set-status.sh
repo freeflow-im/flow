@@ -8,7 +8,7 @@
 # project is rebuilt or the Status options are renumbered.
 set -euo pipefail
 
-OWNER=${BOARD_OWNER:-freeflow-community}
+OWNER=${BOARD_OWNER:-freeflow-im}
 NUM=${BOARD_NUMBER:-1}
 
 if [ $# -lt 2 ]; then

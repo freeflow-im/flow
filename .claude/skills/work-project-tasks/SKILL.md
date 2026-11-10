@@ -13,8 +13,8 @@ description: >
 # Working tasks from the Project queue
 
 Work is queued on the GitHub Project **"Flow work queue"**
-(`freeflow-community` project **#1**), not in the issue list. The board at
-`github.com/orgs/freeflow-community/projects/1` is the source of truth for
+(`freeflow-im` project **#1**), not in the issue list. The board at
+`github.com/orgs/freeflow-im/projects/1` is the source of truth for
 *what to do next*; issues are the source of truth for *what the task is*.
 
 Invoking this skill means: **take the next batch off the queue and see it
@@ -413,7 +413,7 @@ and a status with no reason just hands a human the same puzzle you had.
 bash .claude/skills/work-project-tasks/set-status.sh Blocked <itemId> [<itemId> ...]
 bash .claude/skills/work-project-tasks/task-lock.sh release <lowest issue number>
 
-gh issue comment <n> --repo freeflow-community/flow --body "$(cat <<'EOF'
+gh issue comment <n> --repo freeflow-im/flow --body "$(cat <<'EOF'
 **Blocked:** <the one-line reason>
 
 <what you tried, and what you need — a decision, a credential, a spec answer.>

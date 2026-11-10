@@ -51,7 +51,7 @@ the server refuses to boot without it.
 Start the two dependencies. The repo ships a compose file that runs both:
 
 ```sh
-git clone https://github.com/freeflow-community/flow.git
+git clone https://github.com/freeflow-im/flow.git
 cd flow
 cd packages/infra && docker compose up -d && cd ../..
 ```
@@ -330,5 +330,5 @@ Three things, and you need all three to restore:
 - [CONTRIBUTING.md](CONTRIBUTING.md) — running Flow for development rather than
   for real use.
 
-Stuck? Open an [issue](https://github.com/freeflow-community/flow/issues) or ask in
-[Discussions](https://github.com/freeflow-community/flow/discussions).
+Stuck? Open an [issue](https://github.com/freeflow-im/flow/issues) or ask in
+[Discussions](https://github.com/freeflow-im/flow/discussions).
