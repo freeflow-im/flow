@@ -85,6 +85,14 @@ body {
   border-radius: 5px;
   cursor: pointer;
 }
+/* A short event shows its title, and the time only when there is a second line of room. */
+.cal-grid .fc-timegrid-event .cal-title-first .fc-event-title {
+  font-weight: 500;
+}
+.cal-grid .fc-timegrid-event .cal-title-first .fc-event-time {
+  font-size: 11px;
+  opacity: 0.9;
+}
 .cal-grid .fc-timegrid-event .fc-event-main {
   padding: 1px 4px;
 }
