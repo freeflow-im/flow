@@ -90,13 +90,18 @@ const port = typeof address === 'object' && address ? address.port : 0;
 if (process.send) process.send({ port });
 else console.log(`Serving ${dir} at http://127.0.0.1:${port}`);
 
-const close = () => {
+const close = (why: string) => {
+  console.error(`stopping (${why})`);
+  // Fastify's close waits for the open connections to end: a window's event streams and idle keep-alive connections never
+  // would, and the process stayed with its port closed, so tabs sent to it came up blank. Whatever is still open, the
+  // process ends soon after.
+  setTimeout(() => process.exit(0), 3000).unref();
   app.close().then(
     () => process.exit(0),
     () => process.exit(1),
   );
 };
-process.once('SIGTERM', close);
-process.once('SIGINT', close);
+process.once('SIGTERM', () => close('SIGTERM'));
+process.once('SIGINT', () => close('SIGINT'));
 // The window is gone: finish in-flight saves and stop.
-process.once('disconnect', close);
+process.once('disconnect', () => close('the app disconnected'));

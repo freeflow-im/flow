@@ -5,7 +5,7 @@
 import { app, BrowserWindow, clipboard, dialog, Menu, session, shell } from 'electron';
 import { execFile, fork } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -16,6 +16,19 @@ import { createUpdater } from './updater.js';
 import { docsFile } from './docsRoot.js';
 
 const root = path.resolve(import.meta.dirname, '..');
+
+// A log of what the shell and the folder servers do (~/Library/Logs/MCP Docs/mcp-docs.log on a Mac): a tab that comes up
+// blank or a server that stops has its reason here. Kept small: at 5 MB the file is set aside as mcp-docs.1.log.
+let logFile = null;
+function log(...parts) {
+  if (!logFile) return;
+  try {
+    if (existsSync(logFile) && statSync(logFile).size > 5 * 1024 * 1024) renameSync(logFile, logFile.replace(/\.log$/, '.1.log'));
+    appendFileSync(logFile, `${new Date().toISOString()} ${parts.map((p) => (p instanceof Error ? (p.stack ?? p.message) : String(p))).join(' ')}\n`);
+  } catch {
+    // Logging never stops the app.
+  }
+}
 // Also names the app's data directory, which would otherwise be the generic "Electron" one.
 // The name the app's data folder is kept under (last folder, each folder's database): changing it would lose them.
 app.setName('MCP Docs');
@@ -125,6 +138,7 @@ function detach(id, win) {
 
 function release(server) {
   if (server.windows.size) return;
+  log(`server for ${server.dir} released: no window shows it`);
   servers.delete(server.dir);
   server.child.removeAllListeners('exit');
   server.child.kill('SIGTERM');
@@ -410,14 +424,48 @@ function readShellKeys() {
 }
 
 /** The server for a folder: the one running, or a new one once it is listening. */
-function serverFor(dir) {
+async function serverFor(dir) {
   const running = servers.get(dir);
-  if (running) return Promise.resolve(running);
+  if (running && (await answers(running))) return running;
   if (!starting.has(dir)) {
-    const start = startServer(dir).finally(() => starting.delete(dir));
+    const start = startServer(dir)
+      .then((server) => {
+        if (running) replaceServer(running, server);
+        return server;
+      })
+      .finally(() => starting.delete(dir));
     starting.set(dir, start);
   }
   return starting.get(dir);
+}
+
+/**
+ * Whether a folder server still answers. One can stop listening and yet not exit (its close waits for a window's open
+ * connections), and a tab pointed at it would come up blank: so a server is asked before a tab is sent to it.
+ */
+async function answers(server) {
+  try {
+    await fetch(`${server.origin}/`, { method: 'HEAD', signal: AbortSignal.timeout(1500) });
+    return true;
+  } catch (e) {
+    log(`server for ${server.dir} on ${server.port} does not answer (${e.message ?? e}); starting another`);
+    return false;
+  }
+}
+
+/** The windows of a server that stopped answering move to its replacement, and show their pages again from it. */
+function replaceServer(dead, server) {
+  servers.set(server.dir, server);
+  for (const win of [...dead.windows]) {
+    dead.windows.delete(win);
+    windowServers.set(win.id, server);
+    server.windows.add(win);
+    const url = win.webContents.getURL();
+    if (url.startsWith(dead.origin)) void win.loadURL(`${server.origin}${url.slice(dead.origin.length)}`);
+  }
+  dead.child.removeAllListeners('exit');
+  dead.child.kill('SIGKILL');
+  void session.defaultSession.cookies.remove(dead.origin, dead.cookie).catch(() => {});
 }
 
 /** `target` is the folder `dir` or inside it: a server only ever names its own folder's files. */
@@ -454,12 +502,22 @@ async function startServer(dir) {
   const child = fork(path.join(root, 'desktop', 'server.ts'), [], {
     cwd: root,
     env: { ...process.env, ...shellKeys, LOCAL_DIR: dir, DATA_DIR: dataDir, APP_DATA_DIR: app.getPath('userData'), LOCAL_TOKEN: token, LOCAL_COOKIE: cookie, PORT: '0', MCP_TOKEN: MCP_SECRET, MCP_URL },
+    silent: true,
   });
+  log(`server starting for ${dir} (pid ${child.pid})`);
+  for (const stream of [child.stdout, child.stderr]) stream?.on('data', (chunk) => log(`[server ${path.basename(dir)}]`, String(chunk).trimEnd()));
+  // The server says its port once it listens; what it may say before that (a file it wrote) is not the port.
   const server = await new Promise((resolve, reject) => {
-    child.once('message', (msg) => resolve({ child, dir, token, cookie, port: msg.port, origin: `http://127.0.0.1:${msg.port}`, windows: new Set() }));
+    const onMessage = (msg) => {
+      if (!msg || typeof msg.port !== 'number') return;
+      child.off('message', onMessage);
+      resolve({ child, dir, token, cookie, port: msg.port, origin: `http://127.0.0.1:${msg.port}`, windows: new Set() });
+    };
+    child.on('message', onMessage);
     child.once('error', reject);
     child.once('exit', (code) => reject(new Error(`The server stopped while starting (exit code ${code}).`)));
   });
+  log(`server for ${dir} listening on ${server.port}`);
   child.removeAllListeners('error');
   child.removeAllListeners('exit');
   child.on('error', () => {}); // It stopping is what counts, below.
@@ -480,7 +538,8 @@ async function startServer(dir) {
     if (msg && typeof msg.pdf === 'string') void printPdf(msg).then((answer) => child.connected && child.send(answer));
     if (msg && typeof msg.web === 'string') void webRequest(msg).then((answer) => child.connected && child.send(answer));
   });
-  child.once('exit', () => {
+  child.once('exit', (code, signal) => {
+    log(`server for ${dir} stopped unexpectedly (code ${code}, signal ${signal})`);
     servers.delete(dir);
     dialog.showErrorBox('MCP Docs', `The local server for “${dir}” stopped unexpectedly. Its windows will close.`);
     for (const win of [...server.windows]) win.destroy();
@@ -513,6 +572,7 @@ function track(win, server) {
   const id = win.id;
   attach(win, server);
   titled(win, 'Local');
+  watchLoads(win);
   win.on('focus', () => {
     inFront(win);
     const s = serverOf(win);
@@ -520,6 +580,36 @@ function track(win, server) {
   });
   win.once('closed', () => detach(id, win));
 }
+
+/**
+ * A page that fails to load is tried once more after a moment (a server still coming up), then shown as an error with
+ * the address and the reason, instead of a blank tab; a renderer that dies is reloaded. Both are logged.
+ */
+const loadFailures = new Map();
+function watchLoads(win) {
+  const contents = win.webContents;
+  contents.on('did-fail-load', (_e, code, description, url, isMainFrame) => {
+    if (!isMainFrame || code === -3) return; // -3: aborted, by a newer navigation
+    const tries = (loadFailures.get(win.id) ?? 0) + 1;
+    loadFailures.set(win.id, tries);
+    log(`load failed (${code} ${description}) ${url}, try ${tries}`);
+    if (tries === 1) return void setTimeout(() => !win.isDestroyed() && void win.loadURL(url), 700);
+    loadFailures.delete(win.id);
+    void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(loadErrorPage(url, description))}`);
+  });
+  contents.on('did-finish-load', () => loadFailures.delete(win.id));
+  contents.on('render-process-gone', (_e, details) => {
+    log(`renderer gone (${details.reason}, exit code ${details.exitCode}) ${contents.getURL()}`);
+    if (details.reason !== 'clean-exit' && !win.isDestroyed()) contents.reload();
+  });
+  win.once('closed', () => loadFailures.delete(win.id));
+}
+
+const loadErrorPage = (url, description) => `<!doctype html><meta charset="utf-8"><title>MCP Docs</title>
+<style>body{font:15px/1.5 -apple-system,system-ui,sans-serif;color:#222;margin:0;display:grid;place-items:center;height:100vh}main{max-width:36em;padding:2em}code{word-break:break-all;color:#555}a{color:#1a73e8}</style>
+<main><h2>This page could not be shown</h2><p>${escapeHtml(description)}</p><p><code>${escapeHtml(url)}</code></p>
+<p><a href="${escapeHtml(url)}">Try again</a>, or close this tab and open the file again. The log is in the app's Logs folder.</p></main>`;
+const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 /** Keep track of a Web tab. */
 function trackWeb(win) {
@@ -763,9 +853,11 @@ async function showFile(file, inNewTab = false) {
   const rel = current ? path.relative(current.dir, file) : '';
   const parts = rel.split(path.sep);
   if (rel && !path.isAbsolute(rel) && !parts.some((p) => p === '..')) {
+    // The folder's server, asked whether it still answers (serverFor): a tab is never sent to one that does not.
+    const server = await serverFor(current.dir);
     const page = `/open?file=${encodeURIComponent(parts.join('/'))}`;
-    if (inNewTab) createWindow(current, `${current.origin}${page}`, front).focus();
-    else showPage(page, current);
+    if (inNewTab) createWindow(server, `${server.origin}${page}`, front).focus();
+    else showPage(page, server);
   } else await openFile(file, false);
 }
 
@@ -776,8 +868,9 @@ async function showFile(file, inNewTab = false) {
 async function newTab() {
   const win = BrowserWindow.getFocusedWindow() ?? front;
   if (isWeb(win)) return void createWebWindow(WEB_HOME, win).focus();
-  const server = serverOf(win) ?? frontServer();
-  if (!server) return openFolder(lastFolder() ?? app.getPath('home'));
+  const known = serverOf(win) ?? frontServer();
+  if (!known) return openFolder(lastFolder() ?? app.getPath('home'));
+  const server = await serverFor(known.dir);
   let listing = '/';
   try {
     listing = await win.webContents.executeJavaScript(`(() => {
@@ -954,6 +1047,13 @@ function buildMenu() {
 }
 
 app.whenReady().then(async () => {
+  try {
+    mkdirSync(app.getPath('logs'), { recursive: true });
+    logFile = path.join(app.getPath('logs'), 'mcp-docs.log');
+  } catch {
+    // No log, then.
+  }
+  log(`MCP Docs ${app.getVersion()} starting${app.isPackaged ? '' : ' (from a clone)'}`);
   webSession = session.fromPartition('persist:web');
   for (const ses of [session.defaultSession, webSession]) ses.setUserAgent(`${ses.getUserAgent()} ${UA_MARK}`);
   // The installed app handles mcpdocs:// (declared in package.json too); a copy run from a clone only when asked,
@@ -986,6 +1086,7 @@ app.whenReady().then(async () => {
     }
     const dir = path.resolve(arg ?? process.cwd());
     if (isDir(dir)) await openFolder(dir);
+    else if (arg && existsSync(dir)) await openFile(dir, false);
     else {
       dialog.showErrorBox('MCP Docs', `"${dir}" is not a folder. Choose a folder to open.`);
       if (!(await chooseFolder())) app.quit();
