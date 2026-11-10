@@ -120,9 +120,12 @@ export function contentPolicy(allowRemote: boolean, origin: string): string {
 
 const escapeAttr = (s: string) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 
-/** The iframe's whole document (`srcdoc`) for a sanitized body. */
-export function buildSrcdoc(body: string, allowRemote: boolean, origin: string): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${escapeAttr(contentPolicy(allowRemote, origin))}"><base target="_blank"><style>html,body{margin:0;padding:0;background:#fff;color:#1f1f1f;font:14px/1.5 Inter,system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;overflow-wrap:anywhere}body{padding:4px 2px 16px}img{max-width:100%;height:auto}img:not([src]){display:inline-block;min-width:16px;min-height:16px;background:#f1f3f4}a{color:#1a73e8}blockquote{margin:0 0 0 8px;padding-left:12px;border-left:3px solid #dadce0;color:#5f6368}pre{white-space:pre-wrap}table{max-width:100%}</style></head><body>${body}</body></html>`;
+/** The class on the frame's body while the quoted earlier messages (marked `data-quoted`, lib/quote.ts) are folded away. */
+export const QUOTE_HIDDEN_CLASS = 'quote-hidden';
+
+/** The iframe's whole document (`srcdoc`) for a sanitized body, its quote folded away when `quoteHidden`. */
+export function buildSrcdoc(body: string, allowRemote: boolean, origin: string, quoteHidden = false): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${escapeAttr(contentPolicy(allowRemote, origin))}"><base target="_blank"><style>html,body{margin:0;padding:0;background:#fff;color:#1f1f1f;font:14px/1.5 Inter,system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif;overflow-wrap:anywhere}body{padding:4px 2px 16px}img{max-width:100%;height:auto}img:not([src]){display:inline-block;min-width:16px;min-height:16px;background:#f1f3f4}a{color:#1a73e8}blockquote{margin:0 0 0 8px;padding-left:12px;border-left:3px solid #dadce0;color:#5f6368}pre{white-space:pre-wrap}table{max-width:100%}body.${QUOTE_HIDDEN_CLASS}{padding-bottom:4px}body.${QUOTE_HIDDEN_CLASS} [data-quoted]{display:none}</style></head><body${quoteHidden ? ` class="${QUOTE_HIDDEN_CLASS}"` : ''}>${body}</body></html>`;
 }
 
 export type TextSegment = { kind: 'text'; text: string } | { kind: 'link'; text: string; href: string };

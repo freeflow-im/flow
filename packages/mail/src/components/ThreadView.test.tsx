@@ -160,7 +160,9 @@ describe('ThreadView', () => {
       // Right after the last message's article.
       expect(article(5).nextElementSibling).toBe(c);
       expect(c.textContent).toContain('Bob Martin (bob@acme.test)');
-      expect(c.querySelector('[aria-label="Message"]')?.innerHTML).toContain('wrote:');
+      // The quote waits behind ⋯ (Compose.test.tsx), so the editor starts empty and Send stays close.
+      expect(c.querySelector('[aria-label="Message"]')?.innerHTML).not.toContain('wrote:');
+      expect(c.querySelector('button[aria-label="Show quoted text"]')).toBeTruthy();
       expect(button('Forward')).toBeUndefined();
       // Clicking the line opens the fields to edit.
       await act(() => button('Edit recipients')!.click());

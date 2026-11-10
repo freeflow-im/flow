@@ -3,12 +3,15 @@
 // Content Security Policy in the document itself. A click in the frame puts the keyboard focus in its document, so the
 // frame relays its key presses to this window (relayKey) and the app's shortcuts keep working. Remote images wait for
 // "Show images" until the user has chosen it once (lib/imagePref.ts); after that they load. Plain text is rendered by
-// React (so escaped), with its links made links.
+// React (so escaped), with its links made links. The earlier messages quoted at the end (lib/quote.ts) are folded away
+// behind "⋯" until clicked, as Gmail does, so a reply reads as what was written.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ImageOff } from 'lucide-react';
 import { attachmentUrl, type MessageDetail } from '../api';
 import { setImagePref, useImagePref } from '../lib/imagePref';
-import { buildSrcdoc, linkify, sanitizeEmailHtml } from '../lib/sanitize';
+import { markQuote, splitQuotedText } from '../lib/quote';
+import { QUOTE_HIDDEN_CLASS, buildSrcdoc, linkify, sanitizeEmailHtml, type TextSegment } from '../lib/sanitize';
+import { QuoteToggle } from './QuoteToggle';
 
 export const IFRAME_SANDBOX = 'allow-popups allow-popups-to-escape-sandbox allow-same-origin';
 
@@ -16,30 +19,29 @@ export function MessageBody({ accountId, message }: { accountId: string; message
   const pref = useImagePref();
   const showImages = pref === 'always';
 
+  const [showQuote, setShowQuote] = useState(false);
+
   const clean = useMemo(() => {
     if (!message.html) return null;
     const byCid = new Map(message.attachments.filter((a) => a.contentId).map((a) => [a.contentId!.replace(/^<|>$/g, ''), a.index]));
-    return sanitizeEmailHtml(message.html, {
+    const out = sanitizeEmailHtml(message.html, {
       allowRemote: showImages,
       cidUrl: (cid) => {
         const index = byCid.get(cid);
         return index === undefined ? null : attachmentUrl(accountId, message.folder, message.uid, index, true);
       },
     });
+    return { ...out, ...markQuote(out.html) };
   }, [message, accountId, showImages]);
 
   if (!clean) {
+    const text = message.text ?? '';
+    const split = splitQuotedText(text);
     return (
-      <div className="whitespace-pre-wrap break-words px-1 pb-4 text-sm leading-relaxed text-ink">
-        {linkify(message.text ?? '').map((s, i) =>
-          s.kind === 'text' ? (
-            s.text
-          ) : (
-            <a key={i} href={s.href} target="_blank" rel="noopener noreferrer" className="text-primary underline">
-              {s.text}
-            </a>
-          ),
-        )}
+      <div className="px-1 pb-4 text-sm leading-relaxed text-ink">
+        <div className="whitespace-pre-wrap break-words">{renderText(split ? split.head : text)}</div>
+        {split && <QuoteToggle open={showQuote} onClick={() => setShowQuote((v) => !v)} className="my-2" />}
+        {split && showQuote && <div className="whitespace-pre-wrap break-words border-l-[3px] border-border pl-3 text-muted">{renderText(split.quote)}</div>}
       </div>
     );
   }
@@ -54,8 +56,21 @@ export function MessageBody({ accountId, message }: { accountId: string; message
           </button>
         </div>
       )}
-      <HtmlFrame html={clean.html} allowRemote={showImages} title={message.subject || 'Message'} />
+      <HtmlFrame html={clean.html} allowRemote={showImages} quoteHidden={clean.quoted && !showQuote} title={message.subject || 'Message'} />
+      {clean.quoted && <QuoteToggle open={showQuote} onClick={() => setShowQuote((v) => !v)} className="mb-3 ml-0.5" />}
     </>
+  );
+}
+
+function renderText(text: string) {
+  return linkify(text).map((s: TextSegment, i) =>
+    s.kind === 'text' ? (
+      s.text
+    ) : (
+      <a key={i} href={s.href} target="_blank" rel="noopener noreferrer" className="text-primary underline">
+        {s.text}
+      </a>
+    ),
   );
 }
 
@@ -70,11 +85,18 @@ export function relayKey(e: KeyboardEvent): void {
   if (!window.dispatchEvent(copy)) e.preventDefault();
 }
 
-function HtmlFrame({ html, allowRemote, title }: { html: string; allowRemote: boolean; title: string }) {
+function HtmlFrame({ html, allowRemote, quoteHidden, title }: { html: string; allowRemote: boolean; quoteHidden: boolean; title: string }) {
   const ref = useRef<HTMLIFrameElement>(null);
   const observer = useRef<ResizeObserver | null>(null);
   const [height, setHeight] = useState(120);
-  const srcDoc = useMemo(() => buildSrcdoc(html, allowRemote, window.location.origin), [html, allowRemote]);
+  // The quote's state is read when the document is built and applied to it live after (allow-same-origin lets this
+  // page reach its body), so a toggle does not reload the frame.
+  const quote = useRef(quoteHidden);
+  quote.current = quoteHidden;
+  const srcDoc = useMemo(() => buildSrcdoc(html, allowRemote, window.location.origin, quote.current), [html, allowRemote]);
+  const applyQuote = useCallback(() => {
+    ref.current?.contentDocument?.body?.classList.toggle(QUOTE_HIDDEN_CLASS, quote.current);
+  }, []);
 
   // Sizes the frame to its document, and keeps it sized as the document's body and pictures change: on the iframe's
   // `load` (a prop, so it is there before the document can load), and before that every 250 ms while the document is
@@ -86,6 +108,7 @@ function HtmlFrame({ html, allowRemote, title }: { html: string; allowRemote: bo
     setHeight(Math.max(doc.documentElement.scrollHeight, doc.body?.scrollHeight ?? 0) + 2);
   }, []);
   const watch = useCallback(() => {
+    applyQuote();
     measure();
     observer.current?.disconnect();
     const doc = ref.current?.contentDocument;
@@ -96,8 +119,12 @@ function HtmlFrame({ html, allowRemote, title }: { html: string; allowRemote: bo
     doc?.addEventListener('keydown', relayKey);
     // Images arriving late change the height without resizing the body's box in every browser.
     doc?.querySelectorAll('img').forEach((img) => img.addEventListener('load', measure));
-  }, [measure]);
+  }, [measure, applyQuote]);
   const onLoad = useCallback(() => watch(), [watch]);
+  useEffect(() => {
+    applyQuote();
+    measure();
+  }, [quoteHidden, applyQuote, measure]);
 
   useEffect(() => {
     let watched = false;

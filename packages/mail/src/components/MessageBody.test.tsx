@@ -32,6 +32,31 @@ const press = (target: EventTarget, key: string, init: KeyboardEventInit = {}) =
 };
 
 describe('MessageBody', () => {
+  it('folds the quoted earlier messages of an HTML message behind ⋯, and shows them on a click without reloading the frame', async () => {
+    const quoted = { ...message, html: '<p>Yes.</p><p>On Nov 10, Bob wrote:</p><blockquote><p>Plan?</p></blockquote>' };
+    await act(() => root.render(createElement(MessageBody, { accountId: 'acc', message: quoted })));
+    const frame = host.querySelector('iframe')!;
+    expect(frame.srcdoc).toContain('<body class="quote-hidden">');
+    expect(frame.srcdoc).toContain('<p data-quoted="">On Nov 10, Bob wrote:</p><blockquote data-quoted="">');
+    const doc = frame.contentDocument!;
+    doc.body.innerHTML = '<p>Yes.</p>';
+    await act(() => vi.advanceTimersByTime(250));
+    expect(doc.body.classList.contains('quote-hidden')).toBe(true);
+    const toggle = host.querySelector<HTMLButtonElement>('button[aria-label="Show quoted text"]')!;
+    await act(() => toggle.click());
+    expect(doc.body.classList.contains('quote-hidden')).toBe(false);
+    expect(host.querySelector('iframe')).toBe(frame);
+    expect(host.querySelector('button[aria-label="Hide quoted text"]')).toBeTruthy();
+  });
+  it('folds the quote of a plain-text message too', async () => {
+    const text = { ...message, html: null, text: 'Yes.\n\nOn Nov 10, Bob wrote:\n> Plan?' };
+    await act(() => root.render(createElement(MessageBody, { accountId: 'acc', message: text })));
+    expect(host.textContent).toContain('Yes.');
+    expect(host.textContent).not.toContain('Plan?');
+    await act(() => host.querySelector<HTMLButtonElement>('button[aria-label="Show quoted text"]')!.click());
+    expect(host.textContent).toContain('> Plan?');
+  });
+
   it("relays keys pressed in the message's frame to the window, so the shortcuts work after a click in the message", async () => {
     await act(() => root.render(createElement(MessageBody, { accountId: 'acc', message })));
     const doc = host.querySelector('iframe')!.contentDocument!;
