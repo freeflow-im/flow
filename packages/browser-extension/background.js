@@ -171,7 +171,10 @@ function readPage(offset, max) {
         continue;
       }
       if (child.nodeType !== Node.ELEMENT_NODE || SKIP.has(child.tagName)) continue;
-      if (child.checkVisibility && !child.checkVisibility({ checkVisibilityCSS: true })) continue;
+      // An element with `display: contents` draws no box of its own (its children are drawn in its place), so
+      // checkVisibility calls it hidden; LinkedIn wraps its whole profile in one. Read through it.
+      const display = getComputedStyle(child).display;
+      if (display !== 'contents' && child.checkVisibility && !child.checkVisibility({ checkVisibilityCSS: true })) continue;
       if (child.matches(INTERACTIVE)) {
         flush();
         lines.push(`[${ref(child)}] ${describe(child)}`);
@@ -184,7 +187,7 @@ function readPage(offset, max) {
         lines.push(`${'#'.repeat(Number(heading[1]))} ${clean(child.innerText)}`);
         continue;
       }
-      const inline = getComputedStyle(child).display.startsWith('inline');
+      const inline = display.startsWith('inline') || display === 'contents';
       if (!inline) flush();
       walk(child);
       if (!inline) flush();
