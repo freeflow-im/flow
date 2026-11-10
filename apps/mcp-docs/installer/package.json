@@ -1,6 +1,6 @@
 {
   "name": "@freeflow-im/mcp-docs",
-  "version": "0.2.37",
+  "version": "0.2.39",
   "description": "Install the MCP Docs desktop app and its plugin for Claude Code and Codex: office files on your Mac or Windows PC, edited by your coding agent or any MCP client.",
   "type": "module",
   "bin": {
