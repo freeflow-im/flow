@@ -30,9 +30,11 @@ describe('groupByThread', () => {
 });
 
 describe('participantsLabel', () => {
-  it('first names in order, "me" for the account, each once, the ends of a long list', () => {
+  it('one writer in full; several by first name in order, "me" for the account, each once, the ends of a long list', () => {
     expect(participantsLabel([bob, ann, chen], 'ann@example.com')).toBe('Bob, me, Chen');
-    expect(participantsLabel([bob, { name: '', address: 'bob@acme.test' }], 'ann@example.com')).toBe('Bob');
+    expect(participantsLabel([bob, { name: '', address: 'bob@acme.test' }], 'ann@example.com')).toBe('Bob Martin');
+    expect(participantsLabel([{ name: 'The New York Times', address: 'nytdirect@nytimes.com' }], 'ann@example.com')).toBe('The New York Times');
+    expect(participantsLabel([{ name: 'The New York Times', address: 'nytdirect@nytimes.com' }, ann], 'ann@example.com')).toBe('The, me');
     expect(participantsLabel([{ name: '', address: 'x@y.z' }], 'ann@example.com')).toBe('x');
     expect(participantsLabel([], 'ann@example.com')).toBe('(no sender)');
     expect(participantsLabel([bob, chen, ann, { name: 'Dana Ortiz', address: 'd@x' }, { name: 'Eli Novak', address: 'e@x' }], 'ann@example.com')).toBe('Bob, …, Dana, Eli');
