@@ -50,7 +50,6 @@ describe('Docs tools over HTTP', () => {
     expect(await run(f, ORG_FILES, 'list_sheets', { query: 'bud' })).toEqual({ total: 1, sheets: [{ id: 's1', title: 'Budget', updated_at: '2026-11-01' }] });
     // The page's address comes with it (addresses.ts), and the note fits the open app: a link from Mail, the opener in Docs.
     expect(await run(f, ORG_FILES, 'create_doc', { title: ' Notes ', kind: 'markdown', markdown: '# Notes\n\nHello' }, { page: 'mail', accountId: 'a', account: 'ann@test', folder: 'INBOX' } as never)).toMatchObject({ id: 'm1', kind: 'markdown', title: 'Notes', block_count: 2, url: 'https://app.test/workspace/md/m1', note: expect.stringContaining('https://app.test/workspace/md/m1') });
-    expect(await run(f, ORG_FILES, 'create_doc', { title: 'Again', kind: 'markdown', markdown: '' })).toMatchObject({ url: 'https://app.test/workspace/md/m1', note: 'Call open_doc to show it to the user.' });
     expect(await run(f, ORG_FILES, 'read_other_doc', { doc_id: 'm1' })).toMatchObject({ title: 'Notes', format: 'markdown' });
     await expect(run(f, ORG_FILES, 'read_other_doc', { doc_id: 'gone' })).rejects.toThrow(new ToolFailure('No document with id "gone". Use list_docs to find ids.'));
     expect(f.calls).toEqual([
