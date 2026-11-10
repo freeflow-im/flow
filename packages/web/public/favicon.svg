@@ -1,5 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32"><defs><linearGradient id="gV" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8B5BE8"/><stop offset="1" stop-color="#4E229C"/></linearGradient></defs><rect x="1" y="1" width="30" height="30" rx="8" fill="url(#gV)"/>
-<path d="M12.5 13.5H23A2.5 2.5 0 0 1 25.5 16V21A2.5 2.5 0 0 1 23 23.5V26L19.8 23.5H12.5A2.5 2.5 0 0 1 10 21V16A2.5 2.5 0 0 1 12.5 13.5Z" fill="#fff" fill-opacity="0.55"/>
-<path d="M9 6.5H19.5A2.5 2.5 0 0 1 22 9V14.5A2.5 2.5 0 0 1 19.5 17H12.2L9 19.6V17A2.5 2.5 0 0 1 6.5 14.5V9A2.5 2.5 0 0 1 9 6.5Z" fill="#fff"/>
-<circle cx="10.6" cy="11.8" r="1.4" fill="#6A3BC8"/><circle cx="14.25" cy="11.8" r="1.4" fill="#6A3BC8"/><circle cx="17.9" cy="11.8" r="1.4" fill="#6A3BC8"/>
+<path d="M9.5 6.5H22.5A3 3 0 0 1 25.5 9.5V19A3 3 0 0 1 22.5 22H14.5L10 25.5V22H9.5A3 3 0 0 1 6.5 19V9.5A3 3 0 0 1 9.5 6.5Z" fill="#fff"/>
+<rect x="10.25" y="8.5" width="5" height="5" rx="1.1" fill="#1F9A55"/>
+<rect x="16.75" y="8.5" width="5" height="5" rx="1.1" fill="#E2710F"/>
+<rect x="10.25" y="15" width="5" height="5" rx="1.1" fill="#2E6CE0"/>
+<rect x="16.75" y="15" width="5" height="5" rx="1.1" fill="#6A3BC8"/>
 </svg>
