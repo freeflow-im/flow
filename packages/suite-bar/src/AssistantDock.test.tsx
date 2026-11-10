@@ -35,6 +35,7 @@ describe('AssistantDock', () => {
   it('is the pill until opened, then the floating panel, and the pill again when minimized', () => {
     render(<App shortcut="⌘K" />);
     expect(dock().className).toBe('assistant-dock closed');
+    expect(screen.getByRole('button', { name: 'Open Assistant (⌘K)' }).textContent).toBe('AI Help');
     expect(screen.queryByTestId('panel')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Open Assistant (⌘K)' }));
     expect(dock().className).toBe('assistant-dock open');

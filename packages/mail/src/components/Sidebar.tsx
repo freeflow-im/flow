@@ -1,9 +1,11 @@
 // The left panel, after shadcn/ui's Mail example's nav (MIT, see LICENSE-shadcn.md) and coloured like Docs' folder
-// panel: Compose, the account switcher (with more than one account), the special folders with their icons, the other
-// folders as a tree, and at the foot Add account and the accounts' settings. Messages dragged from the list drop on a
+// panel: Compose, the account switcher (with more than one account), the special folders with their icons, Contacts
+// (the Contacts app, which has no tab in the suite bar), the other folders as a tree, and at the foot Add account and
+// the accounts' settings. Messages dragged from the list drop on a
 // folder to move them there (lib/dnd.ts).
 import { useState, type ComponentType } from 'react';
-import { Archive, ChevronDown, ChevronRight, File, Folder, Inbox, Mail, OctagonAlert, Pencil, Plus, Send, Settings, Star, Trash2, type LucideProps } from 'lucide-react';
+import { Archive, BookUser, ChevronDown, ChevronRight, File, Folder, Inbox, Mail, OctagonAlert, Pencil, Plus, Send, Settings, Star, Trash2, type LucideProps } from 'lucide-react';
+import { APP_MANIFESTS } from '@flow/suite-bar';
 import type { MailAccount, MailFolder, SpecialUse } from '../api';
 import { useDropTarget } from '../lib/dnd';
 import { folderLabel, orderFolders, type FolderNode } from '../lib/folders';
@@ -34,6 +36,9 @@ export interface SidebarProps {
   /** Messages dropped on a folder (dragged from the list). */
   onDropMessages?: ((path: string, uids: number[]) => void) | undefined;
 }
+
+/** The Contacts app, from its manifest: under the special folders, where the suite bar's tabs do not list it. */
+const CONTACTS_HREF = APP_MANIFESTS.find((m) => m.name === 'contacts')?.path ?? '/contacts';
 
 /** Highlighted while dragged messages are over it. */
 const dropOver = 'bg-primary-tint ring-2 ring-primary ring-inset hover:bg-primary-tint';
@@ -155,6 +160,12 @@ export function Sidebar(p: SidebarProps) {
         {special.map((f) => (
           <SpecialRow key={f.path} f={f} current={p.folder === f.path} onFolder={p.onFolder} onDrop={p.onDropMessages} />
         ))}
+        {p.folders && (
+          <a href={CONTACTS_HREF} className={cn(row, 'mt-1')} title="Open Contacts">
+            <BookUser className="size-4" strokeWidth={1.75} />
+            Contacts
+          </a>
+        )}
         {tree.length > 0 && (
           <>
             <div className="px-3 pt-4 pb-1 text-[12px] font-medium uppercase tracking-[.06em] text-muted">Folders</div>

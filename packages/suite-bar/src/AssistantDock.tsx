@@ -69,7 +69,7 @@ export interface AssistantDockProps {
   state: AssistantDockState;
   /** The pill's text. */
   label?: string;
-  /** The shortcut that opens and closes the panel, shown on the pill and in its label (`⌘K`). */
+  /** The shortcut that opens and closes the panel (`⌘K`), named in the pill's accessible label and the Minimize button's tooltip. */
   shortcut?: string;
   /** The app's panel, drawn when the dock is open. */
   children: ReactNode;
@@ -80,7 +80,7 @@ export interface AssistantDockProps {
  * once anchored, when the panel is a child of the app's own layout (beside the page, with the app's resize handle).
  * Goes inside a `position: relative` element: the page area the pill floats over.
  */
-export function AssistantDock({ state, label = 'Ask Assistant', shortcut, children }: AssistantDockProps) {
+export function AssistantDock({ state, label = 'AI Help', shortcut, children }: AssistantDockProps) {
   const { open, placement, expanded, setOpen } = state;
   const launcherRef = useRef<HTMLButtonElement>(null);
   const wasOpen = useRef(open);
@@ -97,9 +97,8 @@ export function AssistantDock({ state, label = 'Ask Assistant', shortcut, childr
           children
         ) : (
           <button ref={launcherRef} type="button" className="assistant-dock-launcher" onClick={() => setOpen(true)} aria-label={shortcut ? `Open Assistant (${shortcut})` : 'Open Assistant'}>
-            <SparkIcon size={20} />
+            <SparkIcon />
             <span className="assistant-dock-launcher-label">{label}</span>
-            {shortcut && <kbd className="assistant-dock-launcher-key">{shortcut}</kbd>}
           </button>
         )}
       </section>

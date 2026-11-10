@@ -18,7 +18,7 @@ Worker holds the credentials and speaks IMAP and SMTP.
   not fetched yet (`bodyPending`), a few times. Flag, move and delete update the cached lists, thread rows and the open
   thread at once and roll back on failure.
 - `src/App.tsx` — the layout: the suite bar (`MailSuiteBar.tsx`, with `@flow/suite-bar`), the resizable folder panel
-  (`Sidebar.tsx`), the list of conversations (`MessageList.tsx`, a row per thread) and the reading pane (`ThreadView.tsx`,
+  (`Sidebar.tsx`, with a Contacts link under the special folders: the Contacts app has no suite bar tab), the list of conversations (`MessageList.tsx`, a row per thread) and the reading pane (`ThreadView.tsx`,
   the thread's messages stacked oldest first, the unread and last ones open, runs of read ones folded; `MessageBody.tsx`
   mounted only for an open message), side by
   side from 900px, one at a time below, with the folders behind a button under 760px. It also owns the keyboard
@@ -40,7 +40,7 @@ Worker holds the credentials and speaks IMAP and SMTP.
   with a mouse a row (or the checked rows) drags onto a tab or a folder (`src/lib/dnd.ts`); it moves the sender's mail,
   with Undo.
 - `src/components/AssistantPanel.tsx` — the suite bar's Assistant, in the suite's dock (`@flow/suite-bar/assistant-dock`:
-  the "Ask Assistant" pill, the floating panel, its anchor button) or anchored as a resizable panel on the right (over the
+  the "AI Help" pill, the floating panel, its anchor button) or anchored as a resizable panel on the right (over the
   mail under 1100px), open, placement and size per browser. It is Docs' assistant (`hooks/assistant.ts` talks to `/api/agent*` in the selected
   organization's Docs, chat `mail`), told what is open (`lib/assistant.ts` `mailContext`), and it drafts but never sends:
   a draft it made has **Open draft** (Compose). Docs' protocol, stream reader, tool labels and reply Markdown come from

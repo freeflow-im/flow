@@ -379,7 +379,7 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
 
 The panel floats over the page, in the suite's assistant dock (`AssistantDock` in `packages/suite-bar/src/AssistantDock.tsx`,
 shared with Mail and Calendar; `AgentDock` in `client/src/agent/AgentPanel.tsx` mounts it once from `main.tsx` inside
-`.app-shell`): closed, it is the "Ask Assistant" pill in the bottom-right corner; open, a 420×640 panel there, or the
+`.app-shell`): closed, it is the "AI Help" pill in the bottom-right corner; open, a 420×640 panel there, or the
 larger expanded one. The header's `AssistantDockControls` are the anchor button, which docks it as the side panel beside
 the page (the resizable `.agent-panel` of before, which narrows the page), the expand/shrink toggle, the docked panel's
 float button, and close, which shows the pill again. `AgentProvider` keeps `open` in localStorage (`agent-panel-open`)
