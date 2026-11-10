@@ -3,7 +3,7 @@
 // is offered the tools only when they can run. The extension answers only FreeFlow's own pages (its
 // `externally_connectable`); its id is fixed by the `key` in its manifest. Mail's and Calendar's panels use it too
 // (their lib/docsAgent.ts), so it imports nothing of the Docs editor.
-import { BROWSER_TOOLS, type ClientToolCall } from '../../../shared/agent/protocol.ts';
+import { BROWSER_TOOLS, type AgentImage, type ClientToolCall } from '../../../shared/agent/protocol.ts';
 
 /** A web tool's failure, said to the assistant as it is (a closed tab, a missing element, no extension). */
 export class WebToolError extends Error {}
@@ -14,9 +14,18 @@ export const BROWSER_EXTENSION_ID = 'gnmcgiakoiplophhcoekeeaghfiipglo';
 interface ExtensionAnswer {
   ok: boolean;
   content?: string;
+  /** A picture the tool took (browser_screenshot). */
+  image?: { mediaType: 'image/jpeg' | 'image/png'; data: string };
   error?: string;
   version?: string;
 }
+
+/**
+ * What the next request says beside the pictures the web tools took, which the panel attaches to it (the API takes only
+ * text in tool results, so the pictures follow them in the same message, as render_slide's do in Docs).
+ */
+export const webPicturesNote = (count: number): string =>
+  `[browser_screenshot: ${count === 1 ? 'the picture is' : 'the pictures are'} attached above, in call order. Added by the app, not written by the user.]`;
 
 interface ChromeRuntime {
   sendMessage(id: string, message: unknown, callback: (answer: ExtensionAnswer | undefined) => void): void;
@@ -58,8 +67,11 @@ export const browserExtensionPresent = (): boolean => present;
 
 export const isWebTool = (name: string): boolean => BROWSER_TOOLS.has(name);
 
-/** Run one browser_* call in the extension; its text, or a WebToolError the assistant is told. */
-export async function runWebTool(call: ClientToolCall): Promise<string> {
+/**
+ * Run one browser_* call in the extension; its text, or a WebToolError the assistant is told. A picture it took goes to
+ * `attach`, which answers false when this step already carries as many pictures as a request may.
+ */
+export async function runWebTool(call: ClientToolCall, attach?: (image: AgentImage) => boolean): Promise<string> {
   // A page load can take a while (the extension waits up to 20 s), and a click then reads the page.
   const answer = await send({ type: 'call', name: call.name, input: call.input }, 60_000);
   if (!answer) {
@@ -67,5 +79,8 @@ export async function runWebTool(call: ClientToolCall): Promise<string> {
     throw new WebToolError('The FreeFlow browser extension did not answer: it may have been removed or turned off. Tell the user.');
   }
   if (!answer.ok) throw new WebToolError(answer.error ?? 'The browser tool failed.');
-  return answer.content ?? '';
+  const content = answer.content ?? '';
+  if (!answer.image) return content;
+  if (attach?.({ mediaType: answer.image.mediaType, data: answer.image.data })) return content;
+  throw new WebToolError('The screenshot was taken but could not be attached: this step already has as many pictures as it may. Take it again in your next step.');
 }

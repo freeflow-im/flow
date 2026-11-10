@@ -8,7 +8,8 @@
 // the numbers are kept on the elements (data-flow-ref) so a click or a typed value names what a read showed.
 //
 // Ideas from anomalyco/browse (MIT): agent tabs in a collapsed group, the take-back toolbar button, handing a tab to the
-// person. The actions are this file's own (chrome.scripting, no debugger), so nothing runs agent code.
+// person. The actions are this file's own (chrome.scripting), so nothing runs agent code. Only browser_screenshot attaches
+// the debugger, for the one capture, so a tab in the background can be drawn and captured.
 
 const VERSION = chrome.runtime.getManifest().version;
 const GROUP_TITLE = 'FreeFlow agent';
@@ -16,7 +17,9 @@ const LOAD_TIMEOUT_MS = 20_000;
 const SETTLE_MS = 600;
 const MAX_READ = 20_000;
 
-const TOOLS = ['browser_open', 'browser_tabs', 'browser_read', 'browser_click', 'browser_type', 'browser_scroll', 'browser_navigate', 'browser_close', 'browser_handoff'];
+const TOOLS = ['browser_open', 'browser_tabs', 'browser_read', 'browser_click', 'browser_type', 'browser_scroll', 'browser_navigate', 'browser_close', 'browser_handoff', 'browser_screenshot'];
+const SHOT_MAX_WIDTH = 1280;
+const SHOT_TIMEOUT_MS = 8000;
 
 /** FreeFlow's own pages: production, and a local dev server on any port. */
 const allowedOrigin = (origin) => origin === 'https://app.freeflow.im' || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin ?? '');
@@ -284,6 +287,73 @@ function showHandoffCard(reason) {
   return { ok: true };
 }
 
+// --- Screenshots ---
+
+const withTimeout = (promise, ms, what) =>
+  Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(`${what} took too long`)), ms))]);
+
+/**
+ * A picture of a tab that may be in the background: through the debugger, with focus emulation so the page draws as if
+ * it were in front. Chrome shows its "started debugging" bar only while attached, which is just this capture.
+ */
+async function captureWithDebugger(tabId) {
+  const target = { tabId };
+  await chrome.debugger.attach(target, '1.3');
+  try {
+    await chrome.debugger.sendCommand(target, 'Emulation.setFocusEmulationEnabled', { enabled: true });
+    const shot = await withTimeout(chrome.debugger.sendCommand(target, 'Page.captureScreenshot', { format: 'jpeg', quality: 80 }), SHOT_TIMEOUT_MS, 'The capture');
+    return shot.data;
+  } finally {
+    await chrome.debugger.detach(target).catch(() => {});
+  }
+}
+
+/** The fallback (another debugger is attached, or the capture hung): show the tab a moment, capture it, and go back. */
+async function captureByShowing(tab) {
+  const [front] = await chrome.tabs.query({ active: true, windowId: tab.windowId });
+  await chrome.tabs.update(tab.id, { active: true });
+  await sleep(400);
+  try {
+    const url = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 80 });
+    return url.slice(url.indexOf(',') + 1);
+  } finally {
+    if (front && front.id !== tab.id) await chrome.tabs.update(front.id, { active: true }).catch(() => {});
+    if (tab.groupId > -1) await chrome.tabGroups.update(tab.groupId, { collapsed: true }).catch(() => {});
+  }
+}
+
+/** A capture made smaller (at most SHOT_MAX_WIDTH wide) and sent as JPEG, so it stays well inside the model's limits. */
+async function shrink(base64) {
+  const bitmap = await createImageBitmap(await (await fetch(`data:image/jpeg;base64,${base64}`)).blob());
+  const scale = Math.min(1, SHOT_MAX_WIDTH / bitmap.width);
+  const width = Math.round(bitmap.width * scale);
+  const height = Math.round(bitmap.height * scale);
+  const canvas = new OffscreenCanvas(width, height);
+  canvas.getContext('2d').drawImage(bitmap, 0, 0, width, height);
+  const bytes = new Uint8Array(await (await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.72 })).arrayBuffer());
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return { data: btoa(binary), width, height };
+}
+
+async function screenshot(tab) {
+  let raw;
+  let how = 'debugger';
+  try {
+    raw = await captureWithDebugger(tab.id);
+  } catch {
+    how = 'shown';
+    raw = await captureByShowing(tab).catch((e) => {
+      throw new ToolError(`The tab could not be captured (${e.message}).`);
+    });
+  }
+  const shot = await shrink(raw);
+  return {
+    content: `A screenshot of tab ${tab.id} (${tab.title}), ${shot.width}×${shot.height}, is attached${how === 'shown' ? ' (the tab was shown to the user for a moment to take it)' : ''}. It shows only the part of the page in view: browser_scroll moves it.`,
+    image: { mediaType: 'image/jpeg', data: shot.data },
+  };
+}
+
 // --- The tools ---
 
 async function readTab(tabId, offset = 0) {
@@ -349,6 +419,10 @@ async function run(name, input, sender) {
       await chrome.windows.update(tab.windowId, { focused: true });
       return `Tab ${tab.id} is now in front of the user with your note. Tell the user what to do there and end your turn; when they say they are done, continue with browser_read.`;
     }
+    case 'browser_screenshot': {
+      const tab = await agentTab(input.tab);
+      return screenshot(tab);
+    }
     default:
       throw new ToolError(`Unknown tool ${name}.`);
   }
@@ -365,7 +439,8 @@ chrome.runtime.onMessageExternal.addListener((msg, sender, sendResponse) => {
   }
   if (msg?.type === 'call' && TOOLS.includes(msg.name)) {
     run(msg.name, msg.input ?? {}, sender).then(
-      (content) => sendResponse({ ok: true, content }),
+      // A tool answers with text, or with text and a picture ({ content, image }).
+      (out) => sendResponse(typeof out === 'string' ? { ok: true, content: out } : { ok: true, ...out }),
       (e) => sendResponse({ ok: false, error: e instanceof ToolError ? e.message : `The browser tool failed: ${e?.message ?? e}` }),
     );
     return true; // answered later

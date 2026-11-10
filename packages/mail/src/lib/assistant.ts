@@ -4,7 +4,7 @@
 // hooks/assistant.ts.
 import type { MessageDetail, MessageSummary } from '../api';
 import { formatAddress } from './addresses';
-import { isWebTool, MAX_MAIL_SELECTED, runWebTool, type ChatItem, type ClientToolCall, type ClientToolResult, type MailContext } from './docsAgent';
+import { isWebTool, MAX_MAIL_SELECTED, runWebTool, type AgentImage, type ChatItem, type ClientToolCall, type ClientToolResult, type MailContext } from './docsAgent';
 import { browserPref } from './prefs';
 
 /** Whether the panel is open, remembered in this browser. */
@@ -129,7 +129,12 @@ export const CHANGES_MAIL = new Set(['create_mail_draft']);
  * Runs the browser tools the assistant asked for, in Mail: open_mail_message shows the message. The server offers a turn
  * from Mail only Mail's browser tools (the tool registry, platform.md §5.4); anything else is answered as unknown.
  */
-export async function runMailClientCalls(calls: ClientToolCall[], show: (ref: MessageRef) => boolean | Promise<boolean>): Promise<ClientToolResult[]> {
+export async function runMailClientCalls(
+  calls: ClientToolCall[],
+  show: (ref: MessageRef) => boolean | Promise<boolean>,
+  /** Takes a picture a web tool took (browser_screenshot), to send with the results; false when the request is full. */
+  attach?: (image: AgentImage) => boolean,
+): Promise<ClientToolResult[]> {
   const results: ClientToolResult[] = [];
   for (const call of calls) {
     if (call.name === 'open_mail_message') {
@@ -142,7 +147,7 @@ export async function runMailClientCalls(calls: ClientToolCall[], show: (ref: Me
     // The web tools (prototype): the browser extension runs them, offered when the context said it is there.
     if (isWebTool(call.name)) {
       try {
-        results.push({ id: call.id, content: await runWebTool(call) });
+        results.push({ id: call.id, content: await runWebTool(call, attach) });
       } catch (e) {
         results.push({ id: call.id, content: e instanceof Error ? e.message : String(e), isError: true });
       }

@@ -519,7 +519,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   const runTool = async (call: ClientToolCall, group: string, rendered: AgentImage[]): Promise<string> =>
     // The web tools go to the browser extension (prototype).
     isWebTool(call.name)
-      ? runWebTool(call).catch((e: unknown) => {
+      ? runWebTool(call, (img) => rendered.length < MAX_IMAGES_PER_MESSAGE && rendered.push(img) > 0).catch((e: unknown) => {
           throw e instanceof WebToolError ? new ToolError(e.message) : e;
         })
       : // A picture from the web that is going on a slide is stored with the presentation first, and a spreadsheet
@@ -752,7 +752,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
             toolResults,
             // The API only takes text in tool results here, so the tools' pictures follow them in the same message.
             ...(rendered.length
-              ? { images: rendered, message: `[render_slide, view_image, edit_image: ${rendered.length === 1 ? 'the picture is' : 'the pictures are'} attached above, in call order. Added by the app, not written by the user.]` }
+              ? { images: rendered, message: `[render_slide, view_image, edit_image, browser_screenshot: ${rendered.length === 1 ? 'the picture is' : 'the pictures are'} attached above, in call order. Added by the app, not written by the user.]` }
               : {}),
           };
         }

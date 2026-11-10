@@ -4,7 +4,7 @@
 // (lib/assistant.ts). It never sends email: the assistant has no tool that does.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CHANGES_MAIL, runMailClientCalls, type MessageRef } from '../lib/assistant';
-import { browserExtensionPresent, checkBrowserExtension, MAIL_CHAT, readAgentEvents, type AgentEvent, type AgentTurnRequest, type ChatItem, type ClientToolCall, type MailContext } from '../lib/docsAgent';
+import { browserExtensionPresent, checkBrowserExtension, MAIL_CHAT, MAX_IMAGES_PER_MESSAGE, readAgentEvents, webPicturesNote, type AgentEvent, type AgentImage, type AgentTurnRequest, type ChatItem, type ClientToolCall, type MailContext } from '../lib/docsAgent';
 
 /** The context, saying whether the FreeFlow browser extension can run the web tools here (prototype). */
 const withBrowser = (context: MailContext): AgentTurnRequest['context'] => (browserExtensionPresent() ? { ...context, browser: true } : context);
@@ -125,10 +125,13 @@ export function useMailAssistant({ org, context, show, onMailChanged }: MailAssi
             if (!calls.value || abort.signal.aborted) break;
             const pending = calls.value;
             setItems((prev) => [...prev, ...pending.map((c): ChatItem => ({ kind: 'tool', id: c.id, name: c.name, input: c.input, status: 'running' }))]);
-            const toolResults = await runMailClientCalls(pending, (ref) => latest.current.show(ref));
+            const pictures: AgentImage[] = [];
+            const attach = (img: AgentImage) => pictures.length < MAX_IMAGES_PER_MESSAGE && pictures.push(img) > 0;
+            const toolResults = await runMailClientCalls(pending, (ref) => latest.current.show(ref), attach);
             for (const r of toolResults) updateTool(r.id, { status: r.isError ? 'error' : 'ok', ...(r.isError ? { error: r.content } : {}) });
             if (abort.signal.aborted) break;
-            req = { context: withBrowser(latest.current.context()), scope: MAIL_CHAT, toolResults };
+            // Screenshots follow the results in the same message (the API takes only text in tool results).
+            req = { context: withBrowser(latest.current.context()), scope: MAIL_CHAT, toolResults, ...(pictures.length ? { images: pictures, message: webPicturesNote(pictures.length) } : {}) };
           }
         } catch (e) {
           if (!abort.signal.aborted) setError(e instanceof Error ? e.message : String(e));
