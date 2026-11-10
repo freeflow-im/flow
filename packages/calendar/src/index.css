@@ -85,13 +85,20 @@ body {
   border-radius: 5px;
   cursor: pointer;
 }
-/* A short event shows its title, and the time only when there is a second line of room. */
+/* A short event shows its title and nothing else: FullCalendar lays a short event's time and title out in one row, which
+   left the title a word. A taller event has the title on the first line and the time, smaller, under it. */
 .cal-grid .fc-timegrid-event .cal-title-first .fc-event-title {
   font-weight: 500;
 }
 .cal-grid .fc-timegrid-event .cal-title-first .fc-event-time {
   font-size: 11px;
   opacity: 0.9;
+}
+.cal-grid .fc-timegrid-event-short .cal-title-first .fc-event-time {
+  display: none;
+}
+.cal-grid .fc-timegrid-event-short .cal-title-first .fc-event-title-container {
+  flex-basis: 100%;
 }
 .cal-grid .fc-timegrid-event .fc-event-main {
   padding: 1px 4px;
