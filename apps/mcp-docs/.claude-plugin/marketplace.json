@@ -9,7 +9,7 @@
       "name": "mcp-docs",
       "source": "./claude-plugin",
       "description": "Work on the documents, presentations, spreadsheets, Markdown files, PDFs and pictures in a folder on this Mac, through the MCP Docs desktop app.",
-      "version": "0.2.39",
+      "version": "0.2.40",
       "category": "productivity"
     }
   ]

@@ -1,6 +1,6 @@
 {
   "name": "mcp-docs",
-  "version": "0.2.39",
+  "version": "0.2.40",
   "description": "Work on the documents, presentations, spreadsheets, Markdown files, PDFs and pictures in a folder on this Mac, through the MCP Docs desktop app, which shows each file as you change it.",
   "author": {
     "name": "Scott Persinger"
