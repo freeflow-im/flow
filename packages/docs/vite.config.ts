@@ -10,9 +10,11 @@ export default defineConfig({
   // One React: the suite bar (packages/suite-bar) is bundled from its sources, and its own dev copy must not load.
   resolve: { dedupe: ['react', 'react-dom'] },
   server: {
-    port: 5173,
+    port: Number(process.env.PORT ?? 5173),
     // Keep the browser's Host header so OAuth redirect URIs built by the server point at this dev server.
-    proxy: Object.fromEntries(['/api', '/privacy', '/terms', '/support', '/llms.txt', '/features', '/sitemap.xml', '/robots.txt'].map((p) => [p, { target: 'http://localhost:3001', changeOrigin: false }])),
+    // The API is the standalone app's own server (pnpm dev); DOCS_API points at the suite's Worker instead (BUILD.md, "Local
+    // development"), which also answers /v1 (the suite bar, sign-in) and the WebSocket.
+    proxy: Object.fromEntries(['/api', '/v1', '/privacy', '/terms', '/support', '/llms.txt', '/features', '/sitemap.xml', '/robots.txt'].map((p) => [p, { target: process.env.DOCS_API ?? 'http://localhost:3001', changeOrigin: false, ws: true }])),
   },
   build: { outDir: '../dist/client', emptyOutDir: true },
   test: {
