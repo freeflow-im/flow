@@ -26,7 +26,7 @@ import { MenuList, type MenuItem } from '../components/Menu.tsx';
 import { ConfirmModal, PromptModal } from '../components/Modal.tsx';
 import { useOpenInTab } from '../components/OpenInTab.tsx';
 import { useOrganizationMenu, withScope } from '../components/OrganizationActions.tsx';
-import { useFavicon } from '../favicon.ts';
+import { faviconForFile, useFavicon } from '../favicon.ts';
 import { isPowerPointFile, isWordFile, titleFromFileName } from '../importFile.ts';
 import { downloadPdf } from '../print.ts';
 
@@ -58,8 +58,8 @@ export function FilePage() {
   // In the FreeFlow suite the suite bar replaces the logo, the Assistant button and Sign out (components/DocsSuiteBar.tsx).
   const inSuite = !!useAuth().suite;
   const { id = '' } = useParams();
-  useFavicon('home');
   const [file, setFile] = useState<StoredFile | null>(null);
+  useFavicon(faviconForFile(file?.type));
   const [error, setError] = useState<string | null>(null);
   const [converting, setConverting] = useState(false);
   const [makingPdf, setMakingPdf] = useState(false);
