@@ -13,6 +13,8 @@ import { isDraftEmpty, type AnswerMode, type ComposeDraft, type ComposeMode, typ
 import { fileSize } from '../lib/format';
 import { cn } from '../lib/utils';
 import { EditorArea, EditorToolbar, useMailEditor } from './Editor';
+import { QuoteToggle } from './QuoteToggle';
+import { quoteText, splitQuote } from '../lib/quote';
 import { AddressField } from './AddressField';
 import { Button } from './ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
@@ -33,6 +35,8 @@ const MODE_ICONS: Record<AnswerMode, typeof Reply> = { reply: Reply, replyAll: R
 
 let nextFileId = 1;
 const trimTrailing = (html: string) => html.replace(/(<p><\/p>)+$/, '');
+/** A reply's quote, kept out of the editor behind "⋯" until asked for, as Gmail does; a forward shows what it forwards. */
+const fold = (mode: ComposeMode, html: string) => (mode === 'forward' ? null : splitQuote(html));
 
 /** What the shells ask of the composer: Escape and the close button ask before dropping what was written. */
 export interface ComposerHandle {
@@ -81,8 +85,11 @@ export function ComposeForm({ account, request, variant, handle, onClose, onSend
   const pending = useRef({ to: '', cc: '', bcc: '' });
   const fileInput = useRef<HTMLInputElement>(null);
   const root = useRef<HTMLDivElement>(null);
+  // The quote of a reply (or a draft) stays out of the editor, and goes back on the end of what is sent, until "⋯" puts it in.
+  const [start] = useState(() => fold(request.mode, request.draft.html));
+  const [hiddenQuote, setHiddenQuote] = useState<string | null>(start?.quote ?? null);
   // A forward's To comes first; anything else starts in the body, above the quote.
-  const editor = useMailEditor(request.draft.html, request.draft.to.length > 0);
+  const editor = useMailEditor(start?.head ?? request.draft.html, request.draft.to.length > 0);
   const baseline = useRef<string | null>(null);
   useEffect(() => {
     // StrictMode and TipTap may hand over an editor that is already destroyed; the next one sets it.
@@ -125,6 +132,18 @@ export function ComposeForm({ account, request, variant, handle, onClose, onSend
 
   // The editor adds an empty paragraph after a closing quote on its first change (TipTap's trailing node): not a change.
   const bodyChanged = () => baseline.current !== null && !!live && trimTrailing(live.getHTML()) !== trimTrailing(baseline.current);
+  /** The whole body: the editor's, with the folded quote after it. */
+  const fullHtml = () => (live ? live.getHTML() + (hiddenQuote ?? '') : request.draft.html);
+  /** "⋯" clicked: the quote goes into the editor, under what was written, where it can be trimmed or quoted in. */
+  const showQuote = () => {
+    if (!live || !hiddenQuote) return;
+    const written = bodyChanged();
+    const { from, to } = live.state.selection;
+    live.commands.insertContentAt(live.state.doc.content.size, hiddenQuote);
+    live.commands.setTextSelection({ from, to });
+    if (!written) baseline.current = live.getHTML();
+    setHiddenQuote(null);
+  };
   const empty = () =>
     !request.restored &&
     isDraftEmpty(
@@ -154,7 +173,7 @@ export function ComposeForm({ account, request, variant, handle, onClose, onSend
   const snapshot = (r = recipients(false)): ComposeRequest => ({
     ...request,
     mode,
-    draft: { ...initial, ...r, subject, html: live?.getHTML() ?? request.draft.html, forwardAttachments: undefined },
+    draft: { ...initial, ...r, subject, html: fullHtml(), forwardAttachments: undefined },
     files: files.filter((f) => f.status === 'ready' && f.file).map((f) => ({ name: f.name, type: f.type, size: f.size, file: f.file!, forwarded: f.forwarded })),
     restored: true,
   });
@@ -175,8 +194,8 @@ export function ComposeForm({ account, request, variant, handle, onClose, onSend
           ...(r.cc.length ? { cc: r.cc } : {}),
           ...(r.bcc.length ? { bcc: r.bcc } : {}),
           subject,
-          html: live?.getHTML() ?? '',
-          text: live?.getText({ blockSeparator: '\n\n' }) ?? '',
+          html: live ? fullHtml() : '',
+          text: (live?.getText({ blockSeparator: '\n\n' }) ?? '') + (hiddenQuote ? `\n\n${quoteText(hiddenQuote)}` : ''),
           ...(initial.inReplyTo ? { inReplyTo: initial.inReplyTo } : {}),
           ...(initial.references?.length ? { references: initial.references } : {}),
           ...(mode === 'draft' && request.source ? { replacesDraft: request.source } : {}),
@@ -207,7 +226,9 @@ export function ComposeForm({ account, request, variant, handle, onClose, onSend
     setFiles((f) => f.filter((x) => !x.forwarded));
     if (d.forwardAttachments) loadForwarded(d.forwardAttachments);
     if (live && !written) {
-      live.commands.setContent(d.html);
+      const s = fold(next, d.html);
+      live.commands.setContent(s?.head ?? d.html);
+      setHiddenQuote(s?.quote ?? null);
       baseline.current = live.getHTML();
     }
     if (d.to.length) live?.commands.focus('start');
@@ -324,6 +345,7 @@ export function ComposeForm({ account, request, variant, handle, onClose, onSend
         )}
         <div className={cn('py-2', inline ? 'max-h-[60vh] min-h-[120px] overflow-y-auto' : 'min-h-0 flex-1')}>
           <EditorArea editor={editor} />
+          {hiddenQuote && <QuoteToggle open={false} onClick={showQuote} className="mx-1 mb-1" />}
         </div>
         {files.length > 0 && (
           <div className="flex flex-wrap gap-2 pb-3">

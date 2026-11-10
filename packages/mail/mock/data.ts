@@ -178,6 +178,7 @@ export function sampleMailbox(): Mailbox {
   t3.html = `<div style="font-family:Arial,sans-serif;font-size:14px">
 <p>Done — updated timeline attached, and the client has <b>signed</b>. Signed copy attached too.</p>
 <p>Bob</p>
+<p>On Mon, Nov 9, 2026 at 4:10 PM Ann Lee &lt;ann@acme.test&gt; wrote:</p>
 <blockquote style="border-left:3px solid #ccc;margin:0;padding-left:12px;color:#666">Looks great. One small change: the timeline on page 4 should say six weeks, not eight.</blockquote>
 <a href="https://evil.test/track" onclick="alert(1)">tracking link</a>
 <script>alert('xss')</script>
