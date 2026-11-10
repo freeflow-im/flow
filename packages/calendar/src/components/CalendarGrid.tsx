@@ -80,6 +80,18 @@ export function CalendarGrid({ view, date, occurrences, calendars, weekStartsOn,
         allDayText="All day"
         noEventsText="Nothing on the calendar this week"
         eventTimeFormat={{ hour: 'numeric', minute: '2-digit', meridiem: 'short' }}
+        // In the time grid the title comes first and the time under it, so a short event (one line of room) shows what it
+        // is rather than when, as Google Calendar does; the month grid and the list keep FullCalendar's own content.
+        eventContent={(arg) =>
+          arg.view.type.startsWith('timeGrid') && !arg.event.allDay ? (
+            <div className="fc-event-main-frame cal-title-first">
+              <div className="fc-event-title-container">
+                <div className="fc-event-title fc-sticky">{arg.event.title || '(No title)'}</div>
+              </div>
+              {arg.timeText && <div className="fc-event-time">{arg.timeText}</div>}
+            </div>
+          ) : undefined
+        }
         slotLabelFormat={{ hour: 'numeric', meridiem: 'short' }}
         dayHeaderFormat={view === 'month' ? { weekday: 'short' } : { weekday: 'short', day: 'numeric' }}
         select={(info: DateSelectArg) => {
