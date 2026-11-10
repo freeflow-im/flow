@@ -1,10 +1,10 @@
-// The browser-tab icon follows what is open: the home page's generic mark, or the spreadsheet, presentation
-// document or Markdown icon (client/public/favicon-*.svg, the same marks as the logos in components/Logo.tsx).
+// The browser-tab icon follows what is open: the files mark on the home page, or the kind of document open (spreadsheet,
+// presentation, document, Markdown, picture, PDF): client/public/favicon-*.svg, the suite's icon set.
 import { useEffect } from 'react';
 import type { DocKind } from '../../shared/types.ts';
 import { appUrl } from './basePath.ts';
 
-export type FaviconKind = DocKind | 'home';
+export type FaviconKind = DocKind | 'home' | 'image' | 'pdf';
 
 export const FAVICONS: Record<FaviconKind, string> = {
   home: appUrl('/favicon-home.svg'),
@@ -12,7 +12,12 @@ export const FAVICONS: Record<FaviconKind, string> = {
   deck: appUrl('/favicon-deck.svg'),
   doc: appUrl('/favicon-doc.svg'),
   markdown: appUrl('/favicon-markdown.svg'),
+  image: appUrl('/favicon-image.svg'),
+  pdf: appUrl('/favicon-pdf.svg'),
 };
+
+/** A stored file's icon: a picture's, a PDF's, else the files mark. */
+export const faviconForFile = (type: string | undefined): FaviconKind => (type === 'application/pdf' ? 'pdf' : type?.startsWith('image/') ? 'image' : 'home');
 
 export function setFavicon(kind: FaviconKind): void {
   let link = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
