@@ -18,9 +18,11 @@ import { GRANTS_DDL, grantSql, grantsForChainSql, principalsOf, revokeSql, type 
 import type { CallerContext, ObjectBindings } from '../org/routes/compat';
 import { ownerMismatch, ownerRefusal } from '../perAccount';
 import { ApiError } from '../errors';
+import { sendMail, type MailEnv } from '../mail';
+import { EmailBody, compose, loadAttachments, membersOf, resolveRecipients, withinHourly, type FileReach } from './email';
 import './tools';
 
-export interface ContactsEnv {
+export interface ContactsEnv extends MailEnv {
   /** The organization's event log: `contacts.changed`. */
   EVENTS?: DurableObjectNamespace<import('../events/object').Events>;
   /** The organization's share index: the `org` grant on the list, and the lists shared with this account. */
@@ -31,6 +33,8 @@ export interface ContactsEnv {
   MAIL?: DurableObjectNamespace<import('../imap/object').Mail>;
   /** Other accounts' Contacts objects: the lists they shared. */
   CONTACTS?: DurableObjectNamespace<Contacts>;
+  /** The organization's Docs object: a Docs file attached to an email to members (email.ts). */
+  DOCS?: DurableObjectNamespace<import('../docs/object').Docs>;
 }
 
 export type ContactSource = 'own' | 'member' | 'shared' | 'mail';
@@ -213,6 +217,8 @@ export class Contacts extends DurableObject<ContactsEnv> {
       await this.publish('updated', contact, c.env.caller!);
       return c.json({ contact });
     });
+    // Email to members of the organization (email.ts): every recipient checked against the directory, then one message each.
+    app.post('/v1/contacts/email', async (c) => c.json(await this.emailMembers(c.env.caller!, parse(EmailBody, await json(c)))));
     app.delete('/v1/contacts/:id', async (c) => {
       const had = this.row(c.req.param('id'));
       if (!had) throw notFound();
@@ -220,6 +226,61 @@ export class Contacts extends DurableObject<ContactsEnv> {
       await this.publish('deleted', toContact(had), c.env.caller!);
       return c.json({ ok: true });
     });
+  }
+
+  // ---- email to members ----------------------------------------------------------------------------------------------
+
+  private async emailMembers(caller: CallerContext, input: import('./email').EmailInput): Promise<{ sent: { name: string; address: string }[]; failed?: { name: string; address: string; error: string }[]; attachments: { filename: string; type: string; bytes: number }[] }> {
+    const account = caller.account;
+    if (!account || account.kind === 'guest') throw new ApiError(403, 'forbidden', "Email to members is for the organization's members.");
+    const org = account.organizationId || caller.organizationId!;
+    const to = resolveRecipients(input.to, membersOf(await this.accounts(org)), caller);
+    const log = withinHourly(JSON.parse(this.state('email_sent') ?? '[]') as number[], to.length);
+    if (!log.ok) throw new ApiError(429, 'rate_limited', 'Too many emails in the last hour (at most 50 recipients an hour). Try again later.');
+    const attachments = await loadAttachments(input.attachments ?? [], this.fileReach(caller, org));
+    const sender = { name: account.displayName || account.address || caller.user?.email || 'A member', address: account.address ?? caller.user?.email ?? null };
+    const sent: { name: string; address: string }[] = [], failed: { name: string; address: string; error: string }[] = [];
+    for (const m of to) {
+      try {
+        await sendMail(this.env, compose(input, m, sender, attachments));
+        sent.push({ name: m.name, address: m.address });
+      } catch (err) {
+        console.error(`[contacts] email to ${m.accountId}: ${(err as Error).message.slice(0, 200)}`);
+        failed.push({ name: m.name, address: m.address, error: 'the mail service did not take it' });
+      }
+      log.kept.push(Date.now());
+      this.setState('email_sent', JSON.stringify(log.kept));
+    }
+    console.log(`[contacts] email from ${account.id}: ${sent.length} sent, ${failed.length} failed, ${attachments.length} attachment(s)`);
+    if (!sent.length) throw new ApiError(502, 'send_failed', 'The email could not be sent just now. Try again in a moment.');
+    return { sent, ...(failed.length ? { failed } : {}), attachments: attachments.map((a) => ({ filename: a.filename, type: a.type, bytes: Math.floor((a.content.length * 3) / 4) - (a.content.endsWith('==') ? 2 : a.content.endsWith('=') ? 1 : 0) })) };
+  }
+
+  /** The organization's accounts, from the directory. */
+  private async accounts(org: string): Promise<AccountDTO[]> {
+    const ns = this.env.DIRECTORY;
+    if (!ns) throw new ApiError(503, 'unavailable', 'the directory is not reachable');
+    const stub = ns.get(ns.idFromName('directory'));
+    const answer = await (stub.call as never as (m: string, a: unknown[]) => Promise<{ ok: boolean; value?: AccountDTO[]; message?: string }>)('accountsOfOrganization', [org]);
+    if (!answer.ok) throw new Error(answer.message ?? 'the directory refused');
+    return answer.value ?? [];
+  }
+
+  /** The caller's Docs and Chat, as the caller (routes/docs.ts and the Org object's own access checks decide what they may open). */
+  private fileReach(caller: CallerContext, org: string): FileReach {
+    const origin = 'https://contacts.internal';
+    const { DOCS, ORG } = this.env;
+    const userId = caller.user?.id ?? null;
+    return {
+      ...(DOCS && ORG && userId ? {
+        docs: async (path: string) => {
+          const channelIds = await ORG.get(ORG.idFromName(org)).channelIdsOf(userId);
+          const who = { userId, email: caller.user?.email ?? null, token: caller.token, ip: caller.ip, accountId: caller.account?.id ?? null, channelIds };
+          return DOCS.get(DOCS.idFromName(org)).handle(new Request(`${origin}${path}`), who, org);
+        },
+      } : {}),
+      ...(ORG ? { chat: (path: string) => ORG.get(ORG.idFromName(org)).handle(new Request(`${origin}${path}`), caller, null) } : {}),
+    };
   }
 
   // ---- the merge ------------------------------------------------------------------------------------------------------

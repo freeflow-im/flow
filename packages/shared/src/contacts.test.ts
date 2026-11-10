@@ -18,10 +18,10 @@ describe('the Contacts manifest', () => {
     expect(contacts.kinds.find((k) => k.kind === 'contact')?.resolve).toBe('app');
   });
 
-  it('has its three tools, defined for /mcp and the assistant under its consent group’s scopes', () => {
+  it('has its tools, defined for /mcp and the assistant under its consent group’s scopes', () => {
     expect(CONTACTS_TOOLS.map((t) => t.name)).toEqual(contacts.tools);
     const scopes = contacts.scopes!.flatMap((g) => g.scopes);
-    expect(scopes).toEqual(['contacts:read', 'contacts:write']);
+    expect(scopes).toEqual(['contacts:read', 'contacts:write', 'contacts:email']);
     for (const t of CONTACTS_TOOLS) {
       expect(t).toMatchObject({ app: 'contacts', kind: 'server' });
       expect(t.doors.sort()).toEqual(['assistant', 'mcp']);

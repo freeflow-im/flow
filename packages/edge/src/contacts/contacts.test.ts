@@ -3,7 +3,7 @@
 // registry with the kernel's app contexts (apps.ts), and a reference resolved by the manifest alone. Over node:sqlite with
 // stand-in Org, Events, Directory and Mail objects; Ann and Bob are members of org-1, Cy of org-2.
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import app, { type Env } from '../index';
 import { appToolContexts, describeInApp } from '../apps';
 import type { PublishInput } from '../events/core';
@@ -32,6 +32,7 @@ const ANN = callerOf('ann'), BOB = callerOf('bob'), CY = callerOf('cy', 'org-2')
 /** A world: every account's Contacts object, the stand-ins they call, and what they published and indexed. */
 function world() {
   const published: PublishInput[] = [];
+  const docsSeen: string[] = [];
   const shares = new Map<string, { principal: string; title?: string }>();
   const objects = new Map<string, Contacts>();
   const env: Record<string, unknown> = {
@@ -42,6 +43,13 @@ function world() {
         recordShare: async (i: { ref: string; principal: string; title?: string }) => void shares.set(i.ref, i),
         revokeShare: async (i: { ref: string }) => void shares.delete(i.ref),
         sharedWith: async () => [...shares.entries()].map(([ref, s]) => ({ ref, kind: 'list', title: s.title ?? '', role: 'viewer', principal: s.principal, grantedBy: '', at: 0, url: '' })),
+        channelIdsOf: (userId: string) => (userId === 'u-ann' ? ['ch-1'] : []),
+        // Chat's files: Ann may open f-chat (served by storage, a redirect); nobody may open f-secret.
+        handle: async (req: Request, caller: CallerContext) => {
+          const path = new URL(req.url).pathname;
+          if (path === '/v1/files/f-chat' && caller.user?.id === 'u-ann') return new Response(null, { status: 302, headers: { location: 'https://r2.test/f-chat' } });
+          return Response.json({ error: { message: 'file not found' } }, { status: 404 });
+        },
       }),
     },
     DIRECTORY: {
@@ -61,6 +69,21 @@ function world() {
         },
       }),
     },
+    // Docs: s1 is a sheet (exported), p1 a stored PDF (as it is); Ann's channels come with each request.
+    DOCS: {
+      idFromName: (n: string) => n,
+      get: () => ({
+        handle: async (req: Request, who: { userId: string; channelIds: string[] }) => {
+          const url = new URL(req.url);
+          docsSeen.push(`${who.userId}:${who.channelIds.join(',')}:${url.pathname}${url.search}`);
+          if (url.pathname === '/api/files/p1/meta') return Response.json({ file: { id: 'p1' } });
+          if (url.pathname === '/api/files/p1/download') return new Response('%PDF-1.4', { headers: { 'content-type': 'application/pdf', 'content-disposition': 'attachment; filename="report.pdf"' } });
+          if (url.pathname === '/api/files/s1/export') return new Response('a,b\n1,2', { headers: { 'content-type': 'text/csv', 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent('Q3 numbers.csv')}` } });
+          return Response.json({ error: 'File not found' }, { status: 404 });
+        },
+      }),
+    },
+    EMAIL_API_TOKEN: 'tok', CLOUDFLARE_ACCOUNT_ID: 'cf', EMAIL_FROM: 'noreply@freeflow.test',
     // Ann wrote to dee@outside.test and to bob (a member already); she only heard from spam@outside.test.
     MAIL: {
       idFromName: (n: string) => n,
@@ -87,7 +110,7 @@ function world() {
     const res = await of(who.account!.id).handle(new Request(`https://edge.test${path}`, { method, ...(body !== undefined ? { body: JSON.stringify(body), headers: { 'content-type': 'application/json' } } : {}) }), who);
     return { s: res.status, j: (await res.json()) as Record<string, any> };
   };
-  return { env, of, call, published, shares };
+  return { env, of, call, published, shares, docsSeen };
 }
 
 const bySource = (list: ContactDTO[]) => list.map((c) => `${c.source}:${c.name}`);
@@ -208,5 +231,112 @@ describe('Contacts through the kernel', () => {
     expect(await asked(BOB)).toEqual([{ ref, denied: true }]);
     await w.call(ANN, 'PUT', '/v1/contacts/share', { org: true });
     expect((await asked(BOB))[0]).toMatchObject({ title: 'Zed Quill', role: 'viewer' });
+  });
+});
+
+describe('email to members', () => {
+  /** What Cloudflare was asked to send, each message's JSON; storage's bytes for the Chat file. */
+  function mailbox(fail: string[] = []) {
+    const sent: Record<string, any>[] = [];
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      if (url === 'https://r2.test/f-chat') return new Response('chat bytes', { headers: { 'content-type': 'text/plain', 'content-disposition': "attachment; filename*=UTF-8''notes.txt" } });
+      const body = JSON.parse(String(init!.body));
+      if (fail.includes(body.to)) return Response.json({ success: false, errors: [{ code: 1, message: 'no' }] }, { status: 500 });
+      sent.push(body);
+      return Response.json({ success: true });
+    });
+    return sent;
+  }
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('sends to "me" and to members, from FreeFlow named for the sender, with Reply-To the sender', async () => {
+    const sent = mailbox();
+    const { call } = world();
+    const r = await call(ANN, 'POST', '/v1/contacts/email', { to: ['me', 'Bob <BOB@acme.freeflow.im>', 'member:acct-bob'], subject: 'Hi', body: 'Some **news**.' });
+    expect(r.s).toBe(200);
+    expect(r.j.sent).toEqual([{ name: 'Ann', address: 'ann@acme.freeflow.im' }, { name: 'Bob', address: 'bob@acme.freeflow.im' }]);
+    expect(sent.map((m) => m.to)).toEqual(['ann@acme.freeflow.im', 'bob@acme.freeflow.im']);
+    expect(sent[0]).toMatchObject({ from: { address: 'noreply@freeflow.test', name: 'Ann via FreeFlow' }, reply_to: 'ann@acme.freeflow.im', subject: 'Hi' });
+    expect(sent[0]!.html).toContain('<strong>news</strong>');
+    expect(sent[0]!.text).toMatch(/Some \*\*news\*\*\.\n\n--\nSent through FreeFlow by Ann \(ann@acme\.freeflow\.im\)/);
+    expect(sent[0]!.attachments).toBeUndefined();
+  });
+
+  it('refuses anyone outside the organization, and removed members, sending nothing', async () => {
+    const sent = mailbox();
+    const { call } = world();
+    for (const to of [['dee@outside.test'], ['cy@acme.freeflow.im'], ['gone@acme.freeflow.im'], ['me', 'member:acct-cy']]) {
+      const r = await call(ANN, 'POST', '/v1/contacts/email', { to, subject: 'Hi', body: 'x' });
+      expect(r.s).toBe(400);
+      expect(r.j.error.message).toMatch(/not a member of this organization/);
+    }
+    expect((await call(CY, 'POST', '/v1/contacts/email', { to: ['ann@acme.freeflow.im'], subject: 'Hi', body: 'x' })).s).toBe(400);
+    expect(sent).toEqual([]);
+  });
+
+  it('attaches inline content, Docs files (stored as is, others exported) and Chat files, each as the sender', async () => {
+    const sent = mailbox();
+    const { call, docsSeen } = world();
+    const r = await call(ANN, 'POST', '/v1/contacts/email', {
+      to: ['me'], subject: 'Files', body: 'Attached.',
+      attachments: [
+        { filename: 'hello.txt', content: 'hello' },
+        { filename: 'dot.png', content: Buffer.from([137, 80, 78, 71]).toString('base64'), encoding: 'base64' },
+        { docs_file_id: 'p1' },
+        { docs_file_id: 's1', format: 'csv' },
+        { chat_file_id: 'f-chat' },
+      ],
+    });
+    expect(r.s).toBe(200);
+    expect(r.j.attachments).toEqual([
+      { filename: 'hello.txt', type: 'text/plain', bytes: 5 }, { filename: 'dot.png', type: 'image/png', bytes: 4 },
+      { filename: 'report.pdf', type: 'application/pdf', bytes: 8 }, { filename: 'Q3 numbers.csv', type: 'text/csv', bytes: 7 },
+      { filename: 'notes.txt', type: 'text/plain', bytes: 10 },
+    ]);
+    const a = sent[0]!.attachments as { filename: string; content: string; disposition: string }[];
+    expect(a.map((x) => Buffer.from(x.content, 'base64').toString('latin1'))).toEqual(['hello', '\x89PNG', '%PDF-1.4', 'a,b\n1,2', 'chat bytes']);
+    expect(a.every((x) => x.disposition === 'attachment')).toBe(true);
+    expect(docsSeen).toEqual(['u-ann:ch-1:/api/files/p1/meta', 'u-ann:ch-1:/api/files/p1/download', 'u-ann:ch-1:/api/files/s1/meta', 'u-ann:ch-1:/api/files/s1/export?format=csv']);
+  });
+
+  it('refuses a file the sender cannot open, or an attachment that is not one thing, sending nothing', async () => {
+    const sent = mailbox();
+    const { call } = world();
+    let r = await call(ANN, 'POST', '/v1/contacts/email', { to: ['me'], subject: 'x', body: 'x', attachments: [{ chat_file_id: 'f-secret' }] });
+    expect(r.s).toBe(400);
+    expect(r.j.error.message).toMatch(/Chat file f-secret: no such file, or you cannot open it/);
+    r = await call(BOB, 'POST', '/v1/contacts/email', { to: ['me'], subject: 'x', body: 'x', attachments: [{ chat_file_id: 'f-chat' }] });
+    expect(r.s).toBe(400);
+    r = await call(ANN, 'POST', '/v1/contacts/email', { to: ['me'], subject: 'x', body: 'x', attachments: [{ docs_file_id: 'nope' }] });
+    expect(r.j.error.message).toMatch(/Docs file nope/);
+    r = await call(ANN, 'POST', '/v1/contacts/email', { to: ['me'], subject: 'x', body: 'x', attachments: [{ filename: 'a.txt', content: 'a', docs_file_id: 'p1' }] });
+    expect(r.j.error.message).toMatch(/exactly one of content, docs_file_id or chat_file_id/);
+    r = await call(ANN, 'POST', '/v1/contacts/email', { to: ['me'], subject: 'x', body: 'x', attachments: [{ content: 'a' }] });
+    expect(r.j.error.message).toMatch(/inline content needs a filename/);
+    expect(sent).toEqual([]);
+  });
+
+  it('holds an account to 50 recipients an hour, and says which recipients the mail service refused', async () => {
+    mailbox(['bob@acme.freeflow.im']);
+    const { call } = world();
+    const r = await call(ANN, 'POST', '/v1/contacts/email', { to: ['me', 'bob@acme.freeflow.im'], subject: 'x', body: 'x' });
+    expect(r.j).toMatchObject({ sent: [{ address: 'ann@acme.freeflow.im' }], failed: [{ address: 'bob@acme.freeflow.im' }] });
+    for (let i = 0; i < 48; i++) expect((await call(ANN, 'POST', '/v1/contacts/email', { to: ['me'], subject: 'x', body: 'x' })).s).toBe(200);
+    const over = await call(ANN, 'POST', '/v1/contacts/email', { to: ['me'], subject: 'x', body: 'x' });
+    expect(over.s).toBe(429);
+    // Each account has its own hour: Bob can still write.
+    expect((await call(BOB, 'POST', '/v1/contacts/email', { to: ['ann@acme.freeflow.im'], subject: 'x', body: 'x' })).s).toBe(200);
+  });
+
+  it('is the email_members tool at /mcp under contacts:email, and in the assistant', async () => {
+    const sent = mailbox();
+    const w = world();
+    const apps = appToolContexts(w.env, async () => ANN, 'https://app.example');
+    expect(toolsFor('mcp', { scopes: ['contacts:read', 'contacts:write'], reach: apps }).map((t) => t.definition.name)).not.toContain('email_members');
+    expect(toolsFor('mcp', { scopes: ['contacts:email'], reach: apps }).map((t) => t.definition.name)).toEqual(['email_members']);
+    const out = (await runnerOf('assistant', 'email_members')!.run({ apps } as never, { to: ['me'], subject: 'Report', body: 'Here.', attachments: [{ docs_file_id: 'p1' }] })) as { sent: unknown[] };
+    expect(out.sent).toEqual([{ name: 'Ann', address: 'ann@acme.freeflow.im' }]);
+    expect(sent[0]!.attachments[0].filename).toBe('report.pdf');
+    await expect(runnerOf('mcp', 'email_members')!.run({ apps } as never, { to: ['dee@outside.test'], subject: 'x', body: 'x' })).rejects.toThrow(/not a member/);
   });
 });

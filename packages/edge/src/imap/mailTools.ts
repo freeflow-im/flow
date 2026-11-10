@@ -513,7 +513,7 @@ export const ASSISTANT_MAIL_TOOLS = ['search_mail', 'read_mail', 'create_mail_dr
 const ASSISTANT_DESCRIPTIONS: Partial<Record<(typeof ASSISTANT_MAIL_TOOLS)[number], string>> = {
   save_mail_attachment_to_docs: `Saves one attachment of a message (its index from read_mail) as a file in the user's files: a Word file becomes a document, PowerPoint a presentation, Excel or CSV a spreadsheet, Markdown a Markdown document, and a PDF, picture or other file a stored file. Returns the new file's id and kind; read it with your file tools (read_other_sheet, read_doc, read_deck and so on) or open it for the user. Files up to ${MAX_SAVE_BYTES / 1024 / 1024} MB.`,
   create_mail_draft:
-    "Writes an email and saves it in the account's Drafts folder, unsent: the user reviews and sends it from FreeFlow Mail (give them the link). You cannot send email. The body is Markdown. For a reply give reply_to_id (and reply_all for everyone); for a forward give forward_id and to: the original is quoted below your body and the message threaded. Returns the draft's id and link.",
+    "Writes an email and saves it in the account's Drafts folder, unsent: the user reviews and sends it from FreeFlow Mail (give them the link). You cannot send email from the user's accounts (email_members sends a note to members of the organization, or to the user, from FreeFlow). The body is Markdown. For a reply give reply_to_id (and reply_all for everyone); for a forward give forward_id and to: the original is quoted below your body and the message threaded. Returns the draft's id and link.",
 };
 
 /** The assistant's Mail tools as Zod objects (described), for its tool list: never send_mail. */

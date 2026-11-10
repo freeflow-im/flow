@@ -1,7 +1,7 @@
 // The Contacts tools (platform.md §5.4), at /mcp and in the assistant: registered here, which the object module imports, and
 // run on the caller's own Contacts object through `ctx.apps.contacts` (apps.ts), the same HTTP API the routes forward to.
 // contacts:read lists and searches the merged list (the person's own contacts, the organization's members, the lists
-// shared with it, the people written to); contacts:write adds a contact.
+// shared with it, the people written to); contacts:write adds a contact; contacts:email sends email to members (email.ts).
 import { z } from 'zod4';
 import type { AppToolContext } from '../apps';
 import { register } from '../registry';
@@ -78,6 +78,30 @@ export const CONTACTS_TOOLS: ContactsTool[] = [
         ...(input.organization ? { orgName: input.organization } : {}), ...(input.notes ? { notes: input.notes } : {}),
       });
       return { added: out(contact), url: `${ctx.origin}/contacts/?contact=${encodeURIComponent(contact.id)}` };
+    },
+  },
+  {
+    name: 'email_members',
+    title: 'Email members of the organization',
+    description: "Sends an email to members of the user's organization, or to the user themself (\"me\"), now: from FreeFlow's address, named \"<user> via FreeFlow\", with Reply-To the user's address. Only members can receive it: any other address is refused and nothing is sent (use find_contact to look someone up). The body is Markdown. Attach files inline (content with a filename; base64 for binary files) or by reference to a file the user can open: docs_file_id (a Docs document, sheet or presentation is exported, as format or its usual format; a stored file goes as it is) or chat_file_id (a file attached in Chat). At most 10 recipients and 10 attachments, 18 MB in all, and 50 recipients an hour. Only send what the user asked to be sent.",
+    shape: {
+      to: z.array(z.string().trim().min(1).max(320)).min(1).max(10).describe('Who to send it to: "me" for the user, a member\'s email address, or a member\'s contact id (member:<accountId>, from list_contacts).'),
+      subject: z.string().trim().min(1).max(200).describe('The subject line.'),
+      body: z.string().max(50_000).describe('The message, in Markdown.'),
+      attachments: z.array(z.object({
+        filename: z.string().trim().min(1).max(200).optional().describe('The file name the recipient sees. Required with content; for a referenced file it defaults to the file\'s own name.'),
+        content: z.string().optional().describe('The file\'s content, inline: text as it is, or base64 with encoding "base64".'),
+        encoding: z.enum(['utf8', 'base64']).optional().describe('How content is written: utf8 (the default) or base64.'),
+        type: z.string().max(200).optional().describe('Its MIME type; guessed from the file name when left out.'),
+        docs_file_id: z.string().trim().min(1).max(200).optional().describe('A Docs file id: a document, sheet or presentation is exported; a stored file (PDF, picture, upload) is sent as it is.'),
+        format: z.enum(['pdf', 'docx', 'xlsx', 'csv', 'pptx', 'md']).optional().describe('For a Docs document, sheet or presentation: the format to export it as. Defaults to docx, xlsx or pptx.'),
+        chat_file_id: z.string().trim().min(1).max(200).optional().describe('The id of a file attached to a Chat message.'),
+      })).max(10).optional().describe('Files to attach: each one gives exactly one of content, docs_file_id or chat_file_id.'),
+    },
+    scopes: ['contacts:email'],
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    async run(ctx, input) {
+      return call<Record<string, unknown>>(ctx, 'POST', '/email', input);
     },
   },
 ];

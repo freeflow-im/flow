@@ -208,7 +208,7 @@ export const APP_MANIFESTS: AppManifest[] = [
       { kind: 'contact', resolve: 'app', address: '/contacts/?contact={id}', icon: '👤', label: 'Contact' },
     ],
     // Its tools, by name (their definitions: @flow/shared/tools, platform.md §5.4).
-    tools: ['list_contacts', 'find_contact', 'add_contact'],
+    tools: ['list_contacts', 'find_contact', 'add_contact', 'email_members'],
     scopes: [
       {
         id: 'contacts',
@@ -216,6 +216,14 @@ export const APP_MANIFESTS: AppManifest[] = [
         detail: 'Your contacts in FreeFlow Contacts, the members of the organization below and the people you wrote to: list and search them, and add contacts.',
         readOnly: { label: 'Contacts: see your contacts', detail: 'Your contacts in FreeFlow Contacts, the members of the organization below and the people you wrote to: list and search them.' },
         scopes: ['contacts:read', 'contacts:write'],
+        checkedByDefault: true,
+      },
+      {
+        // Members only, from FreeFlow's address with Reply-To the person: no address outside the organization (email.ts).
+        id: 'email',
+        label: 'Email members of your organization',
+        detail: 'Send email, with attachments, to you and the other members of the organization below, from FreeFlow on your behalf. It cannot email anyone outside the organization.',
+        scopes: ['contacts:email'],
         checkedByDefault: true,
       },
     ],
