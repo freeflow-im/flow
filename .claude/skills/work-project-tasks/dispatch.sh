@@ -91,7 +91,7 @@ fi
 
 # Concurrency. Count what the board says is already being worked, not local
 # processes: the other runs may be on another machine.
-ACTIVE=$(gh project item-list 1 --owner freeflow-community --format json --limit 100 2>/dev/null \
+ACTIVE=$(gh project item-list 1 --owner freeflow-im --format json --limit 100 2>/dev/null \
   | python3 -c "
 import json,sys
 try: d=json.load(sys.stdin)

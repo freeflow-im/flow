@@ -11,7 +11,7 @@ with the same engine the user does.
 ## Decisions made
 
 - **Editor**: a fork of `@ascentsparksoftware/react-image-editor` (MIT, Fabric.js v7, React 19), at
-  `freeflow-community/react-image-editor`. Its
+  `freeflow-im/react-image-editor`. Its
   `EditorEngine` class does the editing; `<ImageEditor>` is the UI around it.
 - **Why a fork**: npm only has 1.0.0, which exports cropped pictures at screen resolution. The fix (1.1.0) is
   in git only, so we build from git either way. The fork also adds what the assistant needs (below).
@@ -22,7 +22,7 @@ with the same engine the user does.
 
 ## The fork
 
-`freeflow-community/react-image-editor`, branch `freeflow/agent-api`, forked from upstream 1.1.0. The
+`freeflow-im/react-image-editor`, branch `freeflow/agent-api`, forked from upstream 1.1.0. The
 changes are additive (new options default to upstream's behaviour) so rebasing stays cheap.
 
 1. **A handle on the mounted editor.** `<ImageEditor onReady={(handle) => ...}>` gives `{ engine,

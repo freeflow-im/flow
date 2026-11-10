@@ -1,4 +1,4 @@
-// The image editor itself: our fork of react-image-editor (github.com/freeflow-community/react-image-editor), on
+// The image editor itself: our fork of react-image-editor (github.com/freeflow-im/react-image-editor), on
 // Fabric.js. It is in a module of its own, loaded only when a picture is edited, so the editor, its stylesheet
 // and Fabric stay out of the app's first load. It knows nothing about where the picture came from or where it
 // is saved: the surface that opens it (an image file, later a picture in a document) supplies both.

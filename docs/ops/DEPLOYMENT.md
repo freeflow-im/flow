@@ -84,7 +84,7 @@ Everything below assumes the Railway CLI is logged in and the repo directory
 is linked (`railway link --project flow`).
 
 Deploys are automatic: the `app` service is connected to
-`freeflow-community/flow`, so **pushing to `main` builds and ships** (Railpack →
+`freeflow-im/flow`, so **pushing to `main` builds and ships** (Railpack →
 `/healthz` gate). Watch it with `railway deployment list`. Use `railway up`
 only to deploy an unpushed working tree (hotfix/experiment) — it snapshots the
 local directory and bypasses git.
@@ -253,7 +253,7 @@ bootstraps their own workspace.
 ## Known gaps / next steps
 
 - ~~No GitHub auto-deploy~~ — done: the `app` service is connected to
-  `freeflow-community/flow` and ships on push to `main`. `railway up` remains the
+  `freeflow-im/flow` and ships on push to `main`. `railway up` remains the
   manual working-tree override (see Operations).
 - ~~macOS app targets localhost~~ — done: packaged apps default to
   `https://app.freeflow.im` (`FlowServerURL` in Info.plist via make-app.sh;
