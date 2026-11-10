@@ -15,6 +15,9 @@ import { MAX_IMAGES_PER_MESSAGE } from '../../../shared/agent/protocol.ts';
 
 type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
 
+/** The floating panel minimizes to the pill after this long with no new text from either side. */
+export const IDLE_CLOSE_MS = 2 * 60_000;
+
 const SHEET_SUGGESTIONS = ['Summarize what’s in this spreadsheet', 'Add a totals row under the data', 'Make the header row bold and freeze it', 'Turn this data into a short presentation'];
 const DECK_SUGGESTIONS = ['Summarize this presentation', 'Add a closing slide with next steps', 'Tighten the bullets on every slide'];
 const HOME_SUGGESTIONS = ['Which spreadsheets did I edit most recently?', 'Create a spreadsheet to track monthly expenses', 'Create a 5-slide presentation about our quarterly goals'];
@@ -29,11 +32,44 @@ export function AgentButton() {
   );
 }
 
+/**
+ * The assistant's surface on every signed-in page: a launcher pill floating over the page's bottom-right corner,
+ * which opens into the floating panel (or its larger, expanded size), or, once anchored, the side panel beside the
+ * page. Closing the side panel brings the pill back. One wrapper for every state, so the panel keeps its draft
+ * when it is anchored or set afloat.
+ */
+export function AgentDock() {
+  const { open, placement, expanded, setOpen } = useAgent();
+  const { suite } = useAuth();
+  const launcherRef = useRef<HTMLButtonElement>(null);
+  const wasOpen = useRef(open);
+  // Minimized: the launcher takes the focus the panel had. Not on the first draw, which would take it from the editor.
+  useEffect(() => {
+    if (wasOpen.current && !open) launcherRef.current?.focus();
+    wasOpen.current = open;
+  }, [open]);
+  const mode = !open ? 'closed' : placement === 'docked' ? 'docked' : expanded ? 'expanded' : 'open';
+  return (
+    <section className={`agent-float ${mode}`} aria-label="Assistant">
+      {open ? (
+        <AgentPanel />
+      ) : (
+        <button ref={launcherRef} type="button" className="agent-launcher" onClick={() => setOpen(true)} aria-label={suite ? 'Open Assistant' : `Open Assistant (${MOD}K)`}>
+          <SparkIcon size={20} />
+          <span className="agent-launcher-label">Ask Assistant</span>
+          {!suite && <kbd className="agent-launcher-key">{MOD}K</kbd>}
+        </button>
+      )}
+    </section>
+  );
+}
+
 export function AgentPanel() {
   const agent = useAgent();
   // In the suite ⌘K is the suite bar's search, not this panel's.
   const { suite } = useAuth();
-  // The panel and the page beside it share the window; the panel takes at most half of it.
+  const docked = agent.placement === 'docked';
+  // Docked, the panel and the page beside it share the window; the panel takes at most half of it.
   const panel = usePanelWidth(ASSISTANT_PANEL, () => ({ available: window.innerWidth, viewport: window.innerWidth, maxFraction: 0.5 }));
   const [draft, setDraft] = useState('');
   const listRef = useRef<HTMLDivElement>(null);
@@ -60,6 +96,16 @@ export function AgentPanel() {
 
   const [attachments, setAttachments] = useState<PreparedImage[]>([]);
   const [attachError, setAttachError] = useState<string | null>(null);
+
+  // Floating and idle, the panel gets out of the way: with no new text for IDLE_CLOSE_MS (typing, a sent message,
+  // the assistant's reply or tool calls) it minimizes to the pill. Not while a turn runs or a question waits, and
+  // never when docked.
+  const { running, confirm, items, setOpen } = agent;
+  useEffect(() => {
+    if (docked || running || confirm) return;
+    const t = setTimeout(() => setOpen(false), IDLE_CLOSE_MS);
+    return () => clearTimeout(t);
+  }, [docked, running, confirm, items, draft, attachments, setOpen]);
 
   const submit = (text: string) => {
     if ((!text.trim() && !attachments.length) || agent.running) return;
@@ -89,8 +135,8 @@ export function AgentPanel() {
   const thinking = agent.running && !agent.confirm && last?.kind !== 'assistant';
 
   return (
-    <aside className="agent-panel" aria-label="Assistant" style={{ width: panel.width }}>
-      <ResizeHandle panel={panel} side="right" label="Resize assistant panel" className="agent-panel-resize" />
+    <aside className="agent-panel" aria-label="Assistant" style={docked ? { width: panel.width } : undefined}>
+      {docked && <ResizeHandle panel={panel} side="right" label="Resize assistant panel" className="agent-panel-resize" />}
       <div className="agent-head">
         <SparkIcon />
         <span className="agent-title">Assistant</span>
@@ -100,8 +146,22 @@ export function AgentPanel() {
         <button className="link agent-new" onClick={() => void agent.reset()} disabled={agent.running || !agent.items.length} title="Start a new conversation">
           New chat
         </button>
-        <button className="agent-close" onClick={() => agent.setOpen(false)} aria-label="Close assistant" title={suite ? 'Close' : `Close (${MOD}K)`}>
-          ×
+        {docked ? (
+          <button className="agent-iconbtn" onClick={() => agent.setPlacement('floating')} aria-label="Float the panel" title="Float over the page">
+            <FloatIcon />
+          </button>
+        ) : (
+          <>
+            <button className="agent-iconbtn" onClick={() => agent.setPlacement('docked')} aria-label="Anchor the panel beside the page" title="Anchor beside the page">
+              <AnchorIcon />
+            </button>
+            <button className="agent-iconbtn" onClick={() => agent.setExpanded(!agent.expanded)} aria-label={agent.expanded ? 'Shrink the panel' : 'Expand the panel'} title={agent.expanded ? 'Shrink' : 'Expand'}>
+              {agent.expanded ? <ShrinkIcon /> : <ExpandIcon />}
+            </button>
+          </>
+        )}
+        <button className="agent-iconbtn agent-close" onClick={() => agent.setOpen(false)} aria-label={docked ? 'Close assistant' : 'Minimize to the launcher'} title={suite ? (docked ? 'Close' : 'Minimize') : `${docked ? 'Close' : 'Minimize'} (${MOD}K)`}>
+          {docked ? '×' : <MinimizeIcon />}
         </button>
       </div>
       {/* Each file has its own chat, and the home page one: which this is, and the way back to the open page's. */}
@@ -379,9 +439,53 @@ function PaperclipIcon() {
   );
 }
 
-export function SparkIcon() {
+/** Two overlapping windows: the panel set afloat over the page. */
+function FloatIcon() {
   return (
-    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="7" width="14" height="14" rx="2" />
+      <path d="M7 7V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-2" />
+    </svg>
+  );
+}
+
+/** A window with a column on its right: the panel anchored beside the page. */
+function AnchorIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M15 4v16" />
+    </svg>
+  );
+}
+
+function ExpandIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+    </svg>
+  );
+}
+
+function ShrinkIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" />
+    </svg>
+  );
+}
+
+function MinimizeIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+      <path d="M5 12h14" />
+    </svg>
+  );
+}
+
+export function SparkIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden="true">
       <path d="M8 1.5l1.6 4.2 4.4 1.6-4.4 1.6L8 13.1 6.4 8.9 2 7.3l4.4-1.6z" fill="currentColor" />
       <path d="M13 11l.6 1.4 1.4.6-1.4.6L13 15l-.6-1.4L11 13l1.4-.6z" fill="currentColor" opacity=".7" />
     </svg>

@@ -1651,6 +1651,7 @@ textarea {
 
 /* ------------------------------------------------------------------ Assistant panel */
 .app-shell {
+  position: relative;
   display: flex;
   height: 100%;
 }
@@ -1779,19 +1780,118 @@ textarea {
   color: var(--muted);
   cursor: default;
 }
-.agent-close {
-  border: none;
-  background: none;
-  font-size: 22px;
-  line-height: 1;
+.agent-iconbtn {
   width: 30px;
   height: 30px;
-  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  padding: 0;
+  border-radius: 8px;
   cursor: pointer;
   color: var(--muted);
 }
-.agent-close:hover {
+.agent-iconbtn:hover {
   background: #f1f3f4;
+  color: var(--text);
+}
+.agent-close {
+  font-size: 22px;
+  line-height: 1;
+}
+
+/* The assistant's floating surface (agent/AgentPanel.tsx, AgentDock): one box that morphs between the launcher pill
+   and the panel, over the page's bottom-right corner. Anchored, it is only a wrapper and the panel is the side panel. */
+.agent-float {
+  position: absolute;
+  right: 24px;
+  bottom: 24px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid var(--border);
+  box-shadow:
+    0 1px 2px rgba(16, 24, 40, 0.06),
+    0 18px 48px -8px rgba(16, 24, 40, 0.28);
+  transition:
+    width 0.32s cubic-bezier(0.2, 0.8, 0.2, 1),
+    height 0.32s cubic-bezier(0.2, 0.8, 0.2, 1),
+    border-radius 0.32s cubic-bezier(0.2, 0.8, 0.2, 1),
+    background-color 0.2s;
+}
+.agent-float.closed {
+  width: 204px;
+  height: 52px;
+  border-radius: 26px;
+  background: var(--blue);
+  border-color: var(--blue);
+}
+.agent-float.open {
+  width: 420px;
+  height: 640px;
+  max-width: calc(100% - 48px);
+  max-height: calc(100% - 48px);
+  border-radius: 18px;
+}
+.agent-float.expanded {
+  width: 640px;
+  max-width: calc(100% - 48px);
+  height: calc(100% - 48px);
+  border-radius: 18px;
+}
+.agent-float.docked {
+  display: contents;
+}
+.agent-float:not(.docked) .agent-panel {
+  width: 100%;
+  height: 100%;
+  border-left: none;
+  animation: agent-fadein 0.28s 0.1s both;
+}
+@keyframes agent-fadein {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.agent-launcher {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px 0 18px;
+  border: 0;
+  background: transparent;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.agent-launcher svg {
+  flex-shrink: 0;
+}
+.agent-launcher-label {
+  flex: 1;
+  text-align: left;
+}
+.agent-launcher-key {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  background: rgba(255, 255, 255, 0.18);
+  padding: 3px 7px;
+  border-radius: 6px;
 }
 .agent-list {
   flex: 1;
@@ -2462,8 +2562,27 @@ button.agent-tool-label:hover {
   .agent-panel-resize {
     display: none;
   }
+  /* Open, the floating panel fills the screen too; its box is then the panel's. */
+  .agent-float.open,
+  .agent-float.expanded {
+    position: fixed;
+    inset: 0;
+    width: auto;
+    max-width: none;
+    height: auto;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .agent-float.closed {
+    right: 16px;
+    bottom: 16px;
+  }
   /* Under the suite bar, which stays: its Assistant button closes the panel again. */
-  .suite-frame .agent-panel {
+  .suite-frame .agent-panel,
+  .suite-frame .agent-float.open,
+  .suite-frame .agent-float.expanded {
     top: 56px;
     height: auto;
   }
@@ -3045,6 +3164,7 @@ button.agent-tool-label:hover {
     background: #fff;
   }
   .agent-panel,
+  .agent-float,
   .toast {
     display: none !important;
   }

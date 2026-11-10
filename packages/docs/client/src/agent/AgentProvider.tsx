@@ -48,9 +48,17 @@ export interface OpenMarkdown {
 
 type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
 
+/** Where the panel sits: floating over the page bottom-right (the default), or docked as a side panel beside it. */
+export type AgentPlacement = 'floating' | 'docked';
+
 interface AgentState {
   open: boolean;
   setOpen(open: boolean): void;
+  placement: AgentPlacement;
+  setPlacement(placement: AgentPlacement): void;
+  /** Floating only: the larger panel size. */
+  expanded: boolean;
+  setExpanded(expanded: boolean): void;
   items: ChatItem[];
   running: boolean;
   error: string | null;
@@ -100,6 +108,8 @@ interface AgentState {
 const AgentCtx = createContext<AgentState | null>(null);
 
 const OPEN_KEY = 'agent-panel-open';
+const PLACEMENT_KEY = 'agent-panel-placement';
+const EXPANDED_KEY = 'agent-panel-expanded';
 const OPEN_TIMEOUT_MS = 20_000;
 const JOB_POLL_MS = 2000;
 
@@ -127,11 +137,37 @@ function readOpen(): boolean {
   }
 }
 
+function readPlacement(): AgentPlacement {
+  try {
+    return localStorage.getItem(PLACEMENT_KEY) === 'docked' ? 'docked' : 'floating';
+  } catch {
+    return 'floating';
+  }
+}
+
+function readExpanded(): boolean {
+  try {
+    return localStorage.getItem(EXPANDED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function remember(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Storage unavailable; the panel just won't remember its state.
+  }
+}
+
 export function AgentProvider({ children }: { children: ReactNode }) {
   const { user, suite } = useAuth();
   const { desktop } = useHost();
   const navigate = useNavigate();
   const [open, setOpenState] = useState(readOpen);
+  const [placement, setPlacementState] = useState<AgentPlacement>(readPlacement);
+  const [expanded, setExpandedState] = useState(readExpanded);
   const [items, setItems] = useState<ChatItem[]>([]);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -169,11 +205,15 @@ export function AgentProvider({ children }: { children: ReactNode }) {
 
   const setOpen = useCallback((o: boolean) => {
     setOpenState(o);
-    try {
-      localStorage.setItem(OPEN_KEY, o ? '1' : '0');
-    } catch {
-      // Storage unavailable; the panel just won't remember its state.
-    }
+    remember(OPEN_KEY, o ? '1' : '0');
+  }, []);
+  const setPlacement = useCallback((p: AgentPlacement) => {
+    setPlacementState(p);
+    remember(PLACEMENT_KEY, p);
+  }, []);
+  const setExpanded = useCallback((e: boolean) => {
+    setExpandedState(e);
+    remember(EXPANDED_KEY, e ? '1' : '0');
   }, []);
 
   // The chat shown: loaded when it changes, and when someone signs in (cleared when they sign out).
@@ -786,6 +826,10 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   const value: AgentState = {
     open,
     setOpen,
+    placement,
+    setPlacement,
+    expanded,
+    setExpanded,
     items,
     running,
     error,
