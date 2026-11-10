@@ -55,7 +55,7 @@ async function sessionUser(c: C): Promise<UserDTO | null> {
   }
 }
 
-/** FreeFlow's sign-in, coming back to `back` (a path on this host), as /workspace does (routes/pages.ts). */
+/** FreeFlow's sign-in, coming back to `back` (a path on this host), as /docs does (routes/pages.ts). */
 const signIn = (back: string) => redirect(`/?next=${encodeURIComponent(back)}`);
 
 /** A form body, or a JSON one, as flat strings. */

@@ -15,25 +15,25 @@ const created = (address: string, folder = '') => {
 describe('a new file is private wherever it is made', () => {
   it('at the top of My files, with the trailing slash or without', () => {
     setOrganizationState({ active: { id: 'org-1', name: 'Harbor' }, organizations: [{ id: 'org-1', name: 'Harbor' }], ready: true });
-    expect(newFileShared('/workspace/', true)).toBe(false);
-    expect(newFileShared('/workspace', true)).toBe(false);
+    expect(newFileShared('/docs/', true)).toBe(false);
+    expect(newFileShared('/docs', true)).toBe(false);
     expect(newFileShared('/', true)).toBe(false);
-    expect(created('/workspace/')).toEqual({ workspace: 'org-1' });
-    expect(created('/workspace')).toEqual({ workspace: 'org-1' });
-    expect(created('/workspace/?folder=Plans', 'Plans')).toEqual({ folder: 'Plans', workspace: 'org-1' });
+    expect(created('/docs/')).toEqual({ workspace: 'org-1' });
+    expect(created('/docs')).toEqual({ workspace: 'org-1' });
+    expect(created('/docs/?folder=Plans', 'Plans')).toEqual({ folder: 'Plans', workspace: 'org-1' });
   });
 
   it('in Organization files, at its top or in a folder of it, it is the organization’s', () => {
     setOrganizationState({ active: { id: 'org-1', name: 'Harbor' }, organizations: [{ id: 'org-1', name: 'Harbor' }], ready: true });
-    expect(newFileShared('/workspace/?org=org-1', true)).toBe(true);
-    expect(created('/workspace/?org=org-1&folder=Q4', 'Q4')).toEqual({ folder: 'Q4', workspace: 'org-1', shared: '1' });
-    expect(created('/workspace?org=org-1&folder=Q4', 'Q4')).toEqual({ folder: 'Q4', workspace: 'org-1', shared: '1' });
+    expect(newFileShared('/docs/?org=org-1', true)).toBe(true);
+    expect(created('/docs/?org=org-1&folder=Q4', 'Q4')).toEqual({ folder: 'Q4', workspace: 'org-1', shared: '1' });
+    expect(created('/docs?org=org-1&folder=Q4', 'Q4')).toEqual({ folder: 'Q4', workspace: 'org-1', shared: '1' });
   });
 
   it('a list shown over Organization files is not a folder of it, and outside an organization nothing is shared', () => {
-    for (const list of ['recents', 'favorites', 'withme']) expect(newFileShared(`/workspace/?org=org-1&${list}=1`, true)).toBe(false);
-    expect(newFileShared('/workspace/?org=', true)).toBe(false);
-    expect(newFileShared('/workspace/?org=org-1', false)).toBe(false);
+    for (const list of ['recents', 'favorites', 'withme']) expect(newFileShared(`/docs/?org=org-1&${list}=1`, true)).toBe(false);
+    expect(newFileShared('/docs/?org=', true)).toBe(false);
+    expect(newFileShared('/docs/?org=org-1', false)).toBe(false);
   });
 });
 

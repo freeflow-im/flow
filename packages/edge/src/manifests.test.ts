@@ -50,7 +50,7 @@ describe('the manifests and the Worker', () => {
     const clients = clientsFrom(APP_MANIFESTS, root, out);
     expect(clients.slice(0, 4)).toEqual([
       { name: 'chat', from: path.join(root, 'packages/web/dist'), to: path.join(out, '/'), page: 'index.html', optional: false },
-      { name: 'docs', from: path.join(root, 'packages/docs/dist/client'), to: path.join(out, 'workspace/'), page: 'workspace.html', optional: false },
+      { name: 'docs', from: path.join(root, 'packages/docs/dist/client'), to: path.join(out, 'docs/'), page: 'docs.html', optional: false },
       { name: 'mail', from: path.join(root, 'packages/mail/dist'), to: path.join(out, 'mail/'), page: 'mail.html', optional: true },
       { name: 'calendar', from: path.join(root, 'packages/calendar/dist'), to: path.join(out, 'calendar/'), page: 'calendar.html', optional: true },
     ]);
@@ -98,8 +98,8 @@ describe('the pages, from the manifests', () => {
   const get = (p: string) => pageRoutes.request(`https://app.example${p}`, {}, env as never);
 
   it('serves each app its page, a file under it falls through, and Chat has the rest', async () => {
-    expect(await (await get('/workspace/f/abc')).text()).toBe('page /_pages/workspace.html');
-    expect((await get('/workspace/assets/x.js')).status).toBe(404);
+    expect(await (await get('/docs/f/abc')).text()).toBe('page /_pages/docs.html');
+    expect((await get('/docs/assets/x.js')).status).toBe(404);
     expect(await (await get('/general/thread')).text()).toBe('page /_pages/index.html');
     expect((await get('/v1/channels')).status).toBe(404);
     expect((await get('/assets/x.js')).status).toBe(404);
@@ -108,7 +108,7 @@ describe('the pages, from the manifests', () => {
 
   it('sends a stranger to sign in on Docs, Mail, Calendar and every app whose pages ask for it', async () => {
     const declared = APP_MANIFESTS.flatMap((m) => (m.pages ?? []).filter((p) => p.signIn).map((p) => p.path.replace('/*', '/x')));
-    for (const p of new Set(['/workspace', '/mail', '/mail/inbox', '/calendar', '/calendar/week', ...declared])) {
+    for (const p of new Set(['/docs', '/mail', '/mail/inbox', '/calendar', '/calendar/week', ...declared])) {
       const res = await get(`${p}?x=1`);
       expect(res.status).toBe(302);
       expect(res.headers.get('location')).toBe(`/?next=${encodeURIComponent(`${p}?x=1`)}`);
@@ -117,15 +117,23 @@ describe('the pages, from the manifests', () => {
   });
 
   it('keeps a public link and a preview out of search engines', async () => {
-    const pub = await get('/workspace/p/tok');
-    expect(await pub.text()).toBe('page /_pages/workspace.html');
+    const pub = await get('/docs/p/tok');
+    expect(await pub.text()).toBe('page /_pages/docs.html');
     expect(pub.headers.get('referrer-policy')).toBe('no-referrer');
     expect(pub.headers.get('x-robots-tag')).toBe('noindex');
-    const preview = await get('/workspace/preview/id');
+    const preview = await get('/docs/preview/id');
     expect(preview.headers.get('x-frame-options')).toBe('SAMEORIGIN');
     expect(preview.headers.get('content-security-policy')).toBe("frame-ancestors 'self'");
     const old = await get('/p/tok?a=b');
     expect(old.status).toBe(301);
-    expect(old.headers.get('location')).toBe('/workspace/p/tok?a=b');
+    expect(old.headers.get('location')).toBe('/docs/p/tok?a=b');
+  });
+
+  it('sends Docs’ addresses under /workspace, its base until 2026-11-10, to the same page under /docs', async () => {
+    for (const [from, to] of [['/workspace', '/docs'], ['/workspace/', '/docs/'], ['/workspace/s/abc?x=1', '/docs/s/abc?x=1'], ['/workspace/?withme=1&in=f', '/docs/?withme=1&in=f']]) {
+      const res = await get(from!);
+      expect(res.status, from).toBe(301);
+      expect(res.headers.get('location'), from).toBe(to);
+    }
   });
 });

@@ -40,7 +40,7 @@ export interface DocsEnv {
   /** The assistant's objects, one per account (src/assistant/object.ts): the person's own OpenAI key, for edit_image. */
   ASSISTANT?: DurableObjectNamespace<import('../assistant/object').Assistant>;
 }
-const BASE = '/workspace';
+const BASE = '/docs';
 /** A file's saves publish `docs.file.changed` at most this often, so a typing session does not flood the log. */
 export const FILE_CHANGED_EVERY_MS = 30_000;
 
@@ -110,7 +110,7 @@ export class Docs extends DurableObject<DocsEnv> {
         onGrantChange: (change: GrantChange) => this.reportGrant(change),
         onFileChanged: (change: FileChange) => this.fileChanged(change),
         stores: (stores: Parameters<typeof suiteHub>[0]) => {
-          this.hub = suiteHub(stores, `${base}/workspace`);
+          this.hub = suiteHub(stores, `${base}/docs`);
         },
         // The assistant is the account's Assistant object (src/assistant/object.ts): no chats, settings or usage here.
         assistant: {

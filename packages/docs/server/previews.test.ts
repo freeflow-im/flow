@@ -126,7 +126,7 @@ describe('the preview routes in the hosted app', () => {
       agent: { jobs: false },
       host: {
         app: host,
-        basePath: '/workspace',
+        basePath: '/docs',
         authenticate: async (req) => {
           const id = req.headers['x-user'];
           return typeof id === 'string' && id in members ? { id, email: `${id}@x.test` } : null;
@@ -170,7 +170,7 @@ describe('the preview routes in the hosted app', () => {
     res = await host.inject({ method: 'POST', url: `/api/previews/${preview.id}/save?workspace=harbor`, headers: { 'x-user': 'alice' } });
     expect(res.statusCode).toBe(200);
     const { saved } = res.json() as { saved: { kind: string; id: string; title: string; url: string } };
-    expect(saved).toMatchObject({ kind: 'doc', title: 'Plan', url: `/workspace/doc/${saved.id}` });
+    expect(saved).toMatchObject({ kind: 'doc', title: 'Plan', url: `/docs/doc/${saved.id}` });
     const library = (await get('alice', '/api/library?workspace=harbor')).json();
     expect(library.docs.map((d: { id: string; folder?: string }) => [d.id, d.folder ?? ''])).toEqual([[saved.id, '']]);
     // Saving again gives the same file.

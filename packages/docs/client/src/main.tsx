@@ -127,7 +127,7 @@ function AppShell() {
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <AuthProvider>
-      {/* The base path without its trailing slash: the router matches "/workspace" itself only then. */}
+      {/* The base path without its trailing slash: the router matches "/docs" itself only then. */}
       <BrowserRouter basename={BASE || '/'}>
         <Hosted>
           <AgentProvider>

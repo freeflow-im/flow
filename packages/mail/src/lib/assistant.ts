@@ -119,7 +119,7 @@ export function savedFileOf(item: ToolItem): { href: string; name: string } | nu
   const page = typeof file?.kind === 'string' ? DOCS_PAGES[file.kind] : undefined;
   if (!file || typeof file.id !== 'string' || !page) return null;
   const name = typeof file.title === 'string' ? file.title : typeof file.filename === 'string' ? file.filename : typeof r?.filename === 'string' ? r.filename : 'the file';
-  return { href: `/workspace/${page}/${encodeURIComponent(file.id)}`, name };
+  return { href: `/docs/${page}/${encodeURIComponent(file.id)}`, name };
 }
 
 /** Mail tools after which the lists may have changed (a new draft in Drafts). */

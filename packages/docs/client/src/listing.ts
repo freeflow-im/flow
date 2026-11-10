@@ -89,7 +89,7 @@ export function listingHref(folder?: string, org?: string): string {
  * §2.4): new files are private, unless made inside Organization files' own list (`?org=<id>`, at its top or in a folder
  * of it). Recents, Favorites and Shared with me keep `org` in the address when chosen from there (HomePage's showList),
  * but a file made while one of them is shown is not made in a folder of Organization files, so it is private too. Only
- * the query counts: `/workspace/` and `/workspace` are the same place.
+ * the query counts: `/docs/` and `/docs` are the same place.
  */
 export function newFileShared(address: string, inOrg: boolean): boolean {
   if (!inOrg) return false;

@@ -73,7 +73,7 @@ describe('resolveInOrg', () => {
     db.insert(schema.shares).values({ ref: other, principal: `account:${acct(ANN)}`, role: 'editor', grantedBy: acct(ANN), title: 'Hers', kind: 'doc', at: Date.now() }).run();
     const out = await run(() => resolveInOrg(BOB, ws, [shared, other, `elsewhere/docs/sheet/S1`, 'garbage']));
     expect(out).toEqual([
-      { ref: shared, app: 'docs', kind: 'sheet', title: 'Q4 plan', role: 'viewer', icon: '📽️', url: '/workspace/d/S1', fileKind: 'deck' },
+      { ref: shared, app: 'docs', kind: 'sheet', title: 'Q4 plan', role: 'viewer', icon: '📽️', url: '/docs/d/S1', fileKind: 'deck' },
       { ref: other, ask: true },
       { ref: 'elsewhere/docs/sheet/S1', denied: true },
       { ref: 'garbage', denied: true },

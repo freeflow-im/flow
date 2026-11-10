@@ -49,11 +49,11 @@ const TEMPLATES = APP_MANIFESTS.flatMap((m) => m.kinds.flatMap((k) => {
 }));
 
 /** Where each app's own page is, for an intent that opens it with a query (`?share=`). */
-const APP_PAGES: Record<string, string> = { chat: '/', docs: '/workspace/', calendar: '/calendar/' };
+const APP_PAGES: Record<string, string> = { chat: '/', docs: '/docs/', calendar: '/calendar/' };
 
 /**
  * The address of an object (its canonical URL, relative to the suite's origin), or null for a kind with no page: Chat
- * `/?open=artifact:<id>` (also `channel:` and `message:`), Docs `/workspace/<s|d|doc|md|f>/<id>` by the kind of file (a
+ * `/?open=artifact:<id>` (also `channel:` and `message:`), Docs `/docs/<s|d|doc|md|f>/<id>` by the kind of file (a
  * folder opens in Shared with me), Calendar `/calendar/?calendar=<id>` and `/calendar/?event=<id>`.
  */
 export function addressOf(ref: ReferenceTarget | null | undefined, fileKind?: string): string | null {
@@ -61,10 +61,10 @@ export function addressOf(ref: ReferenceTarget | null | undefined, fileKind?: st
   const id = encodeURIComponent(ref.id);
   if (ref.app === 'chat') return (CHAT_OPENS as readonly string[]).includes(ref.kind) ? `/?open=${encodeURIComponent(`${ref.kind}:${ref.id}`)}` : null;
   if (ref.app === 'docs') {
-    if (ref.kind === 'folder') return `/workspace/?withme=1&in=${id}${ref.organizationId ? `&org=${encodeURIComponent(ref.organizationId)}` : ''}`;
+    if (ref.kind === 'folder') return `/docs/?withme=1&in=${id}${ref.organizationId ? `&org=${encodeURIComponent(ref.organizationId)}` : ''}`;
     if (ref.kind !== 'sheet' && ref.kind !== 'file') return null;
     const path = DOCS_PATHS[fileKind ?? ref.fileKind ?? ''] ?? (ref.kind === 'file' ? 'f' : 's');
-    return `/workspace/${path}/${id}`;
+    return `/docs/${path}/${id}`;
   }
   if (ref.app === 'calendar') {
     if (ref.kind === 'calendar') return `/calendar/?calendar=${id}`;
@@ -98,11 +98,12 @@ export function referenceOf(url: string, ctx: { origin: string; organizationId: 
     const m = /^([a-z]+):(.+)$/.exec(q.get('open') ?? '');
     return m && (CHAT_OPENS as readonly string[]).includes(m[1]!) ? { organizationId: org, app: 'chat', kind: m[1]!, id: m[2]! } : null;
   }
-  if (path === '/workspace' || path === '/workspace/') {
+  // Docs' pages, and the same under /workspace, its base until 2026-11-10: a link written before then still names its file.
+  if (/^\/(docs|workspace)\/?$/.test(path)) {
     const folder = q.get('in');
     return q.get('withme') === '1' && folder ? { organizationId: q.get('org') || org, app: 'docs', kind: 'folder', id: folder } : null;
   }
-  const doc = /^\/workspace\/(s|d|doc|md|f)\/([^/]+)\/?$/.exec(path);
+  const doc = /^\/(?:docs|workspace)\/(s|d|doc|md|f)\/([^/]+)\/?$/.exec(path);
   if (doc) {
     const fileKind = DOCS_KINDS[doc[1]!]!;
     let id: string;

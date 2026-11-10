@@ -100,7 +100,7 @@ t('and the event tools, with events:read',['list_subscriptions','create_subscrip
  r=await api(U.token,'GET',`/v1/events/subscriptions?workspace=${A}`);t('the same subscription over HTTP',r.j.subscriptions?.some((x)=>x.id===SUB?.id),JSON.stringify(r.j).slice(0,120));}
 r=await call(TOK.access_token,'list_files',{});const listed=JSON.stringify(r.v);
 t('list_files shows Acme’s spreadsheet and not Bravo’s',listed.includes(S)&&!listed.includes(SB),listed.slice(0,200));
-t('with where it is and its page in /workspace',r.v.files?.find((f)=>f.id===S)?.root==='Organization files'&&r.v.files?.find((f)=>f.id===S)?.url===`${B}/workspace/s/${S}`,JSON.stringify(r.v.files?.find((f)=>f.id===S)));
+t('with where it is and its page in /docs',r.v.files?.find((f)=>f.id===S)?.root==='Organization files'&&r.v.files?.find((f)=>f.id===S)?.url===`${B}/docs/s/${S}`,JSON.stringify(r.v.files?.find((f)=>f.id===S)));
 r=await call(TOK.access_token,'search_files',{query:'Budget'});t('search_files finds it',JSON.stringify(r.v).includes(S),JSON.stringify(r.v).slice(0,150));
 r=await call(TOK.access_token,'search_files',{query:'Bravo'});t('and not the other organization’s',!JSON.stringify(r.v).includes(SB),JSON.stringify(r.v).slice(0,150));
 r=await call(TOK.access_token,'read_range',{sheet_id:S,range:'A1:B1'});t('read_range reads it',JSON.stringify(r.v).includes('Revenue')&&JSON.stringify(r.v).includes('1200'),JSON.stringify(r.v).slice(0,160));
@@ -108,7 +108,7 @@ r=await call(TOK.access_token,'write_range',{sheet_id:S,start:'A2',rows:[['Costs
 r=await api(O.token,'GET',`/api/sheets/${S}`);const cells=(r.j.sheet?.workbook??r.j.workbook)?.tabs?.[0]?.cells??{};
 t('Olga sees the agent’s cells through /api: the same data',cells.A2?.v==='Costs'&&cells.B2?.v==='=B1/2',JSON.stringify(cells).slice(0,160));
 r=await call(TOK.access_token,'read_range',{sheet_id:SB,range:'A1'});t('a file of the other organization is not there',r.isError,JSON.stringify(r.j).slice(0,140));
-r=await call(TOK.access_token,'create_sheet',{title:`Agent sheet ${tag}`});const made=r.v?.file;t('a new file goes in Uma’s My files in Acme',made?.root==='My files'&&made?.url===`${B}/workspace/s/${made?.id}`,JSON.stringify(made??r.j));
+r=await call(TOK.access_token,'create_sheet',{title:`Agent sheet ${tag}`});const made=r.v?.file;t('a new file goes in Uma’s My files in Acme',made?.root==='My files'&&made?.url===`${B}/docs/s/${made?.id}`,JSON.stringify(made??r.j));
 r=await api(U.token,'GET',`/api/sheets?workspace=${A}`);t('and Docs lists it there',JSON.stringify(r.j).includes(made?.id),JSON.stringify(r.j).slice(0,120));
 r=await api(U.token,'GET',`/api/sheets/${made?.id}`);t('and opens it by its id alone',r.s===200,r.s);
 r=await call(TOK.access_token,'upload_file',{file_name:'notes.md'});const up=r.v?.upload_url;t('upload_file gives an address on this host',up?.startsWith(`${B}/mcp/import/${A}?`),up);

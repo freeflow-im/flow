@@ -77,7 +77,7 @@ function consumeEmailLinkParams(runtime: ConnectionRuntime): {
     history.replaceState(null, '', '/');
   }
   const params = new URLSearchParams(location.search);
-  // ?next=<path>: where to go once signed in — the Workspace app (/workspace/...) and the ChatGPT plugin's
+  // ?next=<path>: where to go once signed in — the Workspace app (/docs/...) and the ChatGPT plugin's
   // OAuth pages (/oauth/resume) send a visitor to this sign-in and back. Only a path on this origin is kept.
   const next = params.get('next');
   if (next && /^\/(?!\/)/.test(next)) {

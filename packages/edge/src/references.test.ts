@@ -14,7 +14,7 @@ function sources(over: Partial<ReferenceSources> = {}): ReferenceSources & { ask
     // A fake Org object: Chat's channel c1 visible, an artifact a2 not; a Docs file shared through the index; the rest asked of the app.
     org: async (refs) => refs.map((ref) => {
       if (ref === r('chat', 'channel', 'c1')) return { ref, app: 'chat', kind: 'channel', title: '#general', url: '/?open=channel%3Ac1', icon: '#', role: 'editor' as const };
-      if (ref === r('docs', 'sheet', 'shared')) return { ref, app: 'docs', kind: 'sheet', title: 'Q4 plan', url: '/workspace/s/shared', icon: '📊', role: 'viewer' as const, fileKind: 'sheet' };
+      if (ref === r('docs', 'sheet', 'shared')) return { ref, app: 'docs', kind: 'sheet', title: 'Q4 plan', url: '/docs/s/shared', icon: '📊', role: 'viewer' as const, fileKind: 'sheet' };
       if (ref.includes('/chat/')) return { ref, denied: true as const };
       return { ref, ask: true as const };
     }),
@@ -30,14 +30,14 @@ describe('resolveReferences', () => {
     const out = await resolveReferences([r('chat', 'channel', 'c1'), r('docs', 'sheet', 'shared')], s);
     expect(out).toEqual([
       { ref: r('chat', 'channel', 'c1'), app: 'chat', kind: 'channel', title: '#general', url: '/?open=channel%3Ac1', icon: '#', role: 'editor' },
-      expect.objectContaining({ ref: r('docs', 'sheet', 'shared'), title: 'Q4 plan', role: 'viewer', url: '/workspace/s/shared' }),
+      expect.objectContaining({ ref: r('docs', 'sheet', 'shared'), title: 'Q4 plan', role: 'viewer', url: '/docs/s/shared' }),
     ]);
     expect(s.asked).toEqual([]); // the index answered: Docs was not asked
   });
 
   it('asks Docs for a file the index does not hold (the owner’s own), with its kind for the address and icon', async () => {
     const [mine] = await resolveReferences([r('docs', 'sheet', 'mine')], sources());
-    expect(mine).toEqual({ ref: r('docs', 'sheet', 'mine'), app: 'docs', kind: 'sheet', title: 'Diary', url: '/workspace/doc/mine', icon: '📄', role: 'owner', fileKind: 'doc' });
+    expect(mine).toEqual({ ref: r('docs', 'sheet', 'mine'), app: 'docs', kind: 'sheet', title: 'Diary', url: '/docs/doc/mine', icon: '📄', role: 'owner', fileKind: 'doc' });
   });
 
   it('denies, with no title, what the reader may not see, what has no resolver, and what does not parse', async () => {

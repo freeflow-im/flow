@@ -12,12 +12,12 @@ const KINDS: [AddressedReference, string][] = [
   [ref('chat', 'artifact', 'a1'), '/?open=artifact%3Aa1'],
   [ref('chat', 'channel', 'c1'), '/?open=channel%3Ac1'],
   [ref('chat', 'message', 'm1'), '/?open=message%3Am1'],
-  [ref('docs', 'sheet', 's1', 'sheet'), '/workspace/s/s1'],
-  [ref('docs', 'sheet', 'd1', 'deck'), '/workspace/d/d1'],
-  [ref('docs', 'sheet', 'x1', 'doc'), '/workspace/doc/x1'],
-  [ref('docs', 'sheet', 'k1', 'markdown'), '/workspace/md/k1'],
-  [ref('docs', 'file', 'f1', 'file'), '/workspace/f/f1'],
-  [ref('docs', 'folder', 'org1:shared/Q4 plans'), '/workspace/?withme=1&in=org1%3Ashared%2FQ4%20plans&org=org1'],
+  [ref('docs', 'sheet', 's1', 'sheet'), '/docs/s/s1'],
+  [ref('docs', 'sheet', 'd1', 'deck'), '/docs/d/d1'],
+  [ref('docs', 'sheet', 'x1', 'doc'), '/docs/doc/x1'],
+  [ref('docs', 'sheet', 'k1', 'markdown'), '/docs/md/k1'],
+  [ref('docs', 'file', 'f1', 'file'), '/docs/f/f1'],
+  [ref('docs', 'folder', 'org1:shared/Q4 plans'), '/docs/?withme=1&in=org1%3Ashared%2FQ4%20plans&org=org1'],
   [ref('calendar', 'calendar', 'n.acct.r1'), '/calendar/?calendar=n.acct.r1'],
   [ref('calendar', 'event', 'n.acct.r1:uid%40x.org'), '/calendar/?event=n.acct.r1%3Auid%2540x.org'],
 ];
@@ -46,25 +46,25 @@ describe('addresses', () => {
   });
 
   it('a Docs file without its kind opens as a spreadsheet or a stored file, as the share index did', () => {
-    expect(addressOf(ref('docs', 'sheet', 'x'))).toBe('/workspace/s/x');
-    expect(addressOf(ref('docs', 'file', 'y'))).toBe('/workspace/f/y');
-    expect(addressOf(ref('docs', 'sheet', 'x'), 'deck')).toBe('/workspace/d/x');
+    expect(addressOf(ref('docs', 'sheet', 'x'))).toBe('/docs/s/x');
+    expect(addressOf(ref('docs', 'file', 'y'))).toBe('/docs/f/y');
+    expect(addressOf(ref('docs', 'sheet', 'x'), 'deck')).toBe('/docs/d/x');
   });
 
   it('is null for another origin and for pages that name no object', () => {
-    for (const url of ['https://evil.example/workspace/s/x', 'http://app.freeflow.im/workspace/s/x', '/', '/?open=admin', '/workspace/', '/workspace/settings', '/calendar/week/2026-11-09', '/mail/', 'not a url at all ::', '/workspace/s/a/b'])
+    for (const url of ['https://evil.example/docs/s/x', 'http://app.freeflow.im/docs/s/x', '/', '/?open=admin', '/docs/', '/docs/settings', '/calendar/week/2026-11-09', '/mail/', 'not a url at all ::', '/docs/s/a/b'])
       expect([url, referenceOf(url, ctx)]).toEqual([url, null]);
     expect(referenceOf('/calendar/week/2026-11-09?event=e1', ctx)).toEqual(ref('calendar', 'event', 'e1'));
   });
 
   it('a Docs folder names its own organization', () => {
-    expect(referenceOf('/workspace/?withme=1&in=r%2Fp&org=other', ctx)).toEqual({ organizationId: 'other', app: 'docs', kind: 'folder', id: 'r/p' });
+    expect(referenceOf('/docs/?withme=1&in=r%2Fp&org=other', ctx)).toEqual({ organizationId: 'other', app: 'docs', kind: 'folder', id: 'r/p' });
   });
 
   it('shares on the owning app’s page, and creates with the queries the apps read', () => {
     const r = ref('docs', 'sheet', 's1');
     const share = shareAddressOf(r)!;
-    expect(share).toBe(`/workspace/?share=${encodeURIComponent('org1/docs/sheet/s1')}`);
+    expect(share).toBe(`/docs/?share=${encodeURIComponent('org1/docs/sheet/s1')}`);
     expect(parseReference(new URL(share, ORIGIN).searchParams.get('share')!)).toEqual({ organizationId: 'org1', app: 'docs', kind: 'sheet', id: 's1' });
     expect(shareAddressOf(ref('chat', 'artifact', 'a'))).toBe('/?share=org1%2Fchat%2Fartifact%2Fa');
     expect(shareAddressOf(ref('calendar', 'calendar', 'c'))).toBe('/calendar/?share=org1%2Fcalendar%2Fcalendar%2Fc');

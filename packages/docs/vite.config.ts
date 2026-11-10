@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   root: 'client',
-  // The suite serves the client under /workspace (BASE_PATH=/workspace/ when building for it); standalone, the root.
+  // The suite serves the client under /docs (BASE_PATH=/docs/ when building for it); standalone, the root.
   base: process.env.BASE_PATH ?? '/',
   plugins: [react()],
   // One React: the suite bar (packages/suite-bar) is bundled from its sources, and its own dev copy must not load.

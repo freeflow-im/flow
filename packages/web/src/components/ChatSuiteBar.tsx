@@ -178,7 +178,7 @@ export default function ChatSuiteBar({ activityUnread, intent }: { activityUnrea
           placeholder: 'Find in this conversation',
           onSubmit: (q) => window.dispatchEvent(new CustomEvent(FIND_EVENT, { detail: q })),
         }}
-        {...(docsHere ? { assistant: { onOpen: () => window.location.assign('/workspace?assistant') } } : {})}
+        {...(docsHere ? { assistant: { onOpen: () => window.location.assign('/docs?assistant') } } : {})}
         {...(sel.workspaceId && caps.notifications.state !== 'unavailable'
           ? { notifications: { onOpen: () => sel.selectChannel(ACTIVITY_VIEW_ID) } }
           : {})}

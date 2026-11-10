@@ -196,7 +196,7 @@ export interface AppOptions {
     signOut(req: FastifyRequest, reply: FastifyReply): Promise<void>;
     /** The user id behind a raw Cookie header, for the plugin's OAuth pages, which answer outside Fastify. */
     userForCookie(cookieHeader: string | undefined): Promise<string | null>;
-    /** Where the client lives, e.g. "/workspace". */
+    /** Where the client lives, e.g. "/docs". */
     basePath: string;
     /** The suite's sign-in page, for the plugin's OAuth pages (absolute, as they may be reached on another host); default "/". */
     signInUrl?: string;

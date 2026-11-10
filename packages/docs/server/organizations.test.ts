@@ -34,7 +34,7 @@ beforeAll(async () => {
     agent: { model: fakeModel, jobs: false },
     host: {
       app: host,
-      basePath: '/workspace',
+      basePath: '/docs',
       authenticate: async (req) => {
         const id = req.headers['x-user'];
         return typeof id === 'string' && id in members ? { id, email: `${id}@x.test` } : null;
