@@ -12,6 +12,7 @@ import { STORED_IMAGE_RE } from '@flow/docs/shared/types.ts';
 import { checkSearchRate, runDocsTool, ToolFailure, type ServerToolEnv } from '@flow/docs/server/agent/tools.ts';
 import { importLimit, webImportName } from '@flow/docs/server/importFile.ts';
 import { fetchPublicFile, WebFetchError } from '@flow/docs/server/webFetch.ts';
+import { addressOf } from '@flow/shared/addresses';
 
 /** A Docs object's HTTP API (/api/*), as one person in one organization: the paths are the Docs client's. */
 export type DocsFetch = (path: string, init?: RequestInit) => Promise<Response>;
@@ -23,12 +24,23 @@ export interface DocsPlace { workspace: string; shared: boolean }
 export interface DocsToolContext {
   fetch: DocsFetch;
   place: DocsPlace;
+  /** The suite's origin (https://app.freeflow.im), for the links the results carry; '' makes them relative. */
+  origin: string;
   run(name: string, input: Record<string, unknown>, env: ServerToolEnv): Promise<string>;
 }
 
-export function docsToolContext(fetch: DocsFetch, place: DocsPlace): DocsToolContext {
-  return { fetch, place, run: (name, input, env) => runDocsToolByHttp(name, input, env, fetch, place) };
+export function docsToolContext(fetch: DocsFetch, place: DocsPlace, origin = ''): DocsToolContext {
+  return { fetch, place, origin, run: (name, input, env) => runDocsToolByHttp(name, input, env, fetch, place, origin) };
 }
+
+/** A Docs object's page in the suite (@flow/shared addresses.ts), for the model to give the user: absolute when the origin is known. */
+export const docsPageUrl = (origin: string, place: DocsPlace, kind: 'sheet' | 'file', id: string, fileKind?: string): string =>
+  `${origin}${addressOf({ organizationId: place.workspace, app: 'docs', kind, id }, fileKind) ?? ''}`;
+
+/** The pages of Docs itself: there a file just made is opened with a browser tool; in Mail or Calendar the user gets its link. */
+const DOCS_PAGES: ReadonlySet<string> = new Set(['home', 'sheet', 'deck', 'doc', 'markdown', 'file']);
+const madeNote = (env: ServerToolEnv, opener: string, url: string): string =>
+  DOCS_PAGES.has(env.context.page) ? `Call ${opener} to show it to the user.` : `Give the user this link to it in your answer, exactly as it is: ${url}`;
 
 /** `?workspace=<id>[&shared=1]`, the root as Docs' routes read it (requireUser's scopeNamed). */
 export const placeQuery = (p: DocsPlace): string => `workspace=${encodeURIComponent(p.workspace)}${p.shared ? '&shared=1' : ''}`;
@@ -71,7 +83,7 @@ async function list(docs: DocsFetch, place: DocsPlace, kind: 'sheets' | 'decks' 
   return (a.data[kind === 'markdown' ? 'docs' : kind] ?? []) as Meta[];
 }
 
-export async function runDocsToolByHttp(name: string, input: Record<string, unknown>, env: ServerToolEnv, docs: DocsFetch, place: DocsPlace): Promise<string> {
+export async function runDocsToolByHttp(name: string, input: Record<string, unknown>, env: ServerToolEnv, docs: DocsFetch, place: DocsPlace, origin = ''): Promise<string> {
   switch (name) {
     case 'list_sheets': {
       const q = typeof input.query === 'string' ? input.query.trim().toLowerCase() : '';
@@ -106,7 +118,8 @@ export async function runDocsToolByHttp(name: string, input: Record<string, unkn
     case 'create_sheet': {
       const a = await call(docs, 'POST', `/api/sheets?${placeQuery(place)}`, { title: String(input.title).trim() });
       if (a.status !== 200) throw refused(a);
-      return JSON.stringify({ id: a.data.sheet.id, title: a.data.sheet.title });
+      const url = docsPageUrl(origin, place, 'sheet', a.data.sheet.id, 'sheet');
+      return JSON.stringify({ id: a.data.sheet.id, title: a.data.sheet.title, url, note: madeNote(env, 'open_sheet', url) });
     }
     case 'list_decks': {
       const q = typeof input.query === 'string' ? input.query.trim().toLowerCase() : '';
@@ -130,7 +143,8 @@ export async function runDocsToolByHttp(name: string, input: Record<string, unkn
       } as Deck;
       const a = await call(docs, 'POST', `/api/decks?${placeQuery(place)}`, { title: String(input.title).trim(), deck });
       if (a.status !== 200) throw refused(a);
-      return JSON.stringify({ id: a.data.deck.id, title: a.data.deck.title, slide_count: deck.slides.length, note: 'Call open_deck to show it to the user.' });
+      const url = docsPageUrl(origin, place, 'sheet', a.data.deck.id, 'deck');
+      return JSON.stringify({ id: a.data.deck.id, title: a.data.deck.title, slide_count: deck.slides.length, url, note: madeNote(env, 'open_deck', url) });
     }
     case 'list_docs': {
       const q = typeof input.query === 'string' ? input.query.trim().toLowerCase() : '';
@@ -149,12 +163,14 @@ export async function runDocsToolByHttp(name: string, input: Record<string, unkn
       if (input.kind === 'markdown') {
         const a = await call(docs, 'POST', `/api/markdown?${placeQuery(place)}`, { title, text: markdown });
         if (a.status !== 200) throw refused(a);
-        return JSON.stringify({ id: a.data.doc.id, kind: 'markdown', title: a.data.doc.title, block_count: markdownBlocks(markdown).length, note: 'Call open_doc to show it to the user.' });
+        const url = docsPageUrl(origin, place, 'sheet', a.data.doc.id, 'markdown');
+        return JSON.stringify({ id: a.data.doc.id, kind: 'markdown', title: a.data.doc.title, block_count: markdownBlocks(markdown).length, url, note: madeNote(env, 'open_doc', url) });
       }
       const doc = markdownToDoc(markdown);
       const a = await call(docs, 'POST', `/api/docs?${placeQuery(place)}`, { title, doc });
       if (a.status !== 200) throw refused(a);
-      return JSON.stringify({ id: a.data.doc.id, kind: 'doc', title: a.data.doc.title, block_count: doc.content.content?.length ?? 0, note: 'Call open_doc to show it to the user.' });
+      const url = docsPageUrl(origin, place, 'sheet', a.data.doc.id, 'doc');
+      return JSON.stringify({ id: a.data.doc.id, kind: 'doc', title: a.data.doc.title, block_count: doc.content.content?.length ?? 0, url, note: madeNote(env, 'open_doc', url) });
     }
     case 'read_other_doc': {
       const id = input.doc_id as string;
@@ -244,13 +260,13 @@ export async function runDocsToolByHttp(name: string, input: Record<string, unkn
         const made = await importToDocs(docs, place, fetched.bytes, webImportName(fetched.name, title), title);
         if (made.file) {
           const picture = String(made.file.type).startsWith('image/');
-          return JSON.stringify({ imported: true, kind: 'file', file_id: made.file.id, filename: made.file.filename, type: made.file.type, size: made.file.size, note: `Saved in the user's files. open_file shows it to the user${picture ? '; view_image shows it to you' : ''}.` });
+          return JSON.stringify({ imported: true, kind: 'file', file_id: made.file.id, filename: made.file.filename, type: made.file.type, size: made.file.size, url: docsPageUrl(origin, place, 'file', made.file.id), note: `Saved in the user's files. open_file shows it to the user${picture ? '; view_image shows it to you' : ''}.` });
         }
         const k = made.sheet.kind;
         const kind = k === 'deck' ? 'presentation' : k === 'doc' ? 'document' : k === 'markdown' ? 'Markdown document' : 'spreadsheet';
         const idField = k === 'deck' ? 'deck_id' : k === 'doc' || k === 'markdown' ? 'doc_id' : 'sheet_id';
         const opener = k === 'deck' ? 'open_deck' : k === 'doc' || k === 'markdown' ? 'open_doc' : 'open_sheet';
-        return JSON.stringify({ imported: true, kind, [idField]: made.sheet.id, title: made.sheet.title, ...(made.warnings.length ? { warnings: made.warnings.slice(0, 20) } : {}), note: `A new ${kind} in the user's files. ${opener} opens it.` });
+        return JSON.stringify({ imported: true, kind, [idField]: made.sheet.id, title: made.sheet.title, url: docsPageUrl(origin, place, 'sheet', made.sheet.id, k), ...(made.warnings.length ? { warnings: made.warnings.slice(0, 20) } : {}), note: `A new ${kind} in the user's files. ${opener} opens it.` });
       } catch (e) {
         if (e instanceof WebFetchError) throw new ToolFailure(e.message);
         throw e;

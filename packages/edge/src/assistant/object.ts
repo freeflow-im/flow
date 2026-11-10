@@ -34,7 +34,7 @@ import { ASSISTANT_PAGES, SUITE_GUIDANCE } from '../docs/assistantTools.ts';
 import { isFileId } from '@flow/docs/server/ids.ts';
 import { scopeOf, type ScopeArg } from '@flow/docs/server/scope.ts';
 import { chatScope, HOME_CHAT, isChatScope, type AgentEvent, type AgentTurnRequest, type AssistantSettingsUpdate } from '@flow/docs/shared/agent/protocol.ts';
-import { docsToolContext, importToDocs, type DocsFetch, type DocsPlace } from './docsTools.ts';
+import { docsPageUrl, docsToolContext, importToDocs, type DocsFetch, type DocsPlace } from './docsTools.ts';
 
 export type { DocsCaller };
 
@@ -164,7 +164,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
       guidance: SUITE_GUIDANCE,
       extend: (userId: string, scope: ScopeArg) => {
         const place = placeOf(scope);
-        const docs = place && this.docsFetch(place.workspace) ? docsToolContext(this.docsFetch(place.workspace)!, place) : undefined;
+        const docs = place && this.docsFetch(place.workspace) ? docsToolContext(this.docsFetch(place.workspace)!, place, this.origin) : undefined;
         const mail = this.mailContext(scope);
         const calendar = this.calendarContext(userId);
         // The apps added by manifest (apps.ts): their objects, as the account this object belongs to.
@@ -198,9 +198,10 @@ export class Assistant extends DurableObject<AssistantEnv> {
             saveToDocs: async (bytes: Buffer, filename: string) => {
               const made = await importToDocs(docs, place, bytes, filename);
               const s = made.sheet;
+              // With its page in the suite: the user in Mail gets a link, not a guess (docsTools.ts docsPageUrl).
               const file = s
-                ? { id: s.id, kind: s.kind, title: s.title, [s.kind === 'deck' ? 'deck_id' : s.kind === 'sheet' ? 'sheet_id' : 'doc_id']: s.id }
-                : { id: made.file.id, kind: 'file', file_id: made.file.id, filename: made.file.filename, type: made.file.type };
+                ? { id: s.id, kind: s.kind, title: s.title, [s.kind === 'deck' ? 'deck_id' : s.kind === 'sheet' ? 'sheet_id' : 'doc_id']: s.id, url: docsPageUrl(this.origin, place, 'sheet', s.id, s.kind) }
+                : { id: made.file.id, kind: 'file', file_id: made.file.id, filename: made.file.filename, type: made.file.type, url: docsPageUrl(this.origin, place, 'file', made.file.id) };
               return { file, warnings: made.warnings };
             },
           }

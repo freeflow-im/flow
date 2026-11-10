@@ -26,7 +26,7 @@ const ORG_FILES: DocsPlace = { workspace: 'org-1', shared: true };
 const env = (context: ServerToolEnv['context'] = { page: 'home' }) => ({ userId: 'user-1', context, sheets: undefined as never }) as ServerToolEnv;
 const run = (f: ReturnType<typeof fake>, place: DocsPlace, name: string, input: Record<string, unknown>, context?: ServerToolEnv['context']) => {
   const e = env(context);
-  e.docs = docsToolContext(f.fetch, place);
+  e.docs = docsToolContext(f.fetch, place, 'https://app.test');
   return e.docs.run(name, input, e).then((s) => JSON.parse(s) as Record<string, any>);
 };
 
@@ -48,7 +48,9 @@ describe('Docs tools over HTTP', () => {
       'GET /api/markdown/m1': () => Response.json({ meta: { title: 'Notes' }, doc: { text: '# Notes\n\nHello' } }),
     });
     expect(await run(f, ORG_FILES, 'list_sheets', { query: 'bud' })).toEqual({ total: 1, sheets: [{ id: 's1', title: 'Budget', updated_at: '2026-11-01' }] });
-    expect(await run(f, ORG_FILES, 'create_doc', { title: ' Notes ', kind: 'markdown', markdown: '# Notes\n\nHello' })).toMatchObject({ id: 'm1', kind: 'markdown', title: 'Notes', block_count: 2 });
+    // The page's address comes with it (addresses.ts), and the note fits the open app: a link from Mail, the opener in Docs.
+    expect(await run(f, ORG_FILES, 'create_doc', { title: ' Notes ', kind: 'markdown', markdown: '# Notes\n\nHello' }, { page: 'mail', accountId: 'a', account: 'ann@test', folder: 'INBOX' } as never)).toMatchObject({ id: 'm1', kind: 'markdown', title: 'Notes', block_count: 2, url: 'https://app.test/workspace/md/m1', note: expect.stringContaining('https://app.test/workspace/md/m1') });
+    expect(await run(f, ORG_FILES, 'create_doc', { title: 'Again', kind: 'markdown', markdown: '' })).toMatchObject({ url: 'https://app.test/workspace/md/m1', note: 'Call open_doc to show it to the user.' });
     expect(await run(f, ORG_FILES, 'read_other_doc', { doc_id: 'm1' })).toMatchObject({ title: 'Notes', format: 'markdown' });
     await expect(run(f, ORG_FILES, 'read_other_doc', { doc_id: 'gone' })).rejects.toThrow(new ToolFailure('No document with id "gone". Use list_docs to find ids.'));
     expect(f.calls).toEqual([
