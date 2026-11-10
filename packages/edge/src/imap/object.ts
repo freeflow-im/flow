@@ -1826,6 +1826,10 @@ export class Mail extends DurableObject<MailEnv> {
           sent = (await this.folderList(r, c, true)).find((f) => specialUseOf(f) === 'sent')?.path ?? 'Sent';
         }
         await c.append(sent, await compileMime(message, true), ['\\Seen']);
+        // The conversation is read from the cache (threadRead): the copy joins it now rather than at the next sync, so a
+        // client's refetch right after the send shows the reply under its message.
+        const f = this.cache.touchFolder(r.id, sent, 'sent', Date.now(), false);
+        await this.locked(c, sent, () => this.syncFolder(r, c, f, Date.now() + 5_000));
       }).catch((err) => console.warn(`[mail] sent copy: ${(err as Error).message}`));
     }
     if (body.replacesDraft) await this.deleteDraft(r, body.replacesDraft.folder, body.replacesDraft.uid).catch((err) => console.warn(`[mail] sent draft: ${(err as Error).message}`));
