@@ -51,16 +51,23 @@ export function groupByThread(messages: readonly MessageSummary[]): ThreadSummar
 /** The row's names, as Gmail writes them: first names in order, "me" for the account's own address, each once. */
 export function participantsLabel(participants: readonly Address[], me: string, max = 3): string {
   const mine = me.toLowerCase();
-  const names: string[] = [];
+  const full: string[] = [];
   const seen = new Set<string>();
   for (const a of participants) {
     const address = a.address.toLowerCase();
     if (seen.has(address)) continue;
     seen.add(address);
-    const name = address === mine ? 'me' : displayName(a).split(/\s+/)[0] || a.address;
-    if (!names.includes(name)) names.push(name);
+    const name = address === mine ? 'me' : displayName(a);
+    if (!full.includes(name)) full.push(name);
   }
-  if (!names.length) return '(no sender)';
+  if (!full.length) return '(no sender)';
+  // One writer is named in full ("The New York Times"); several by their first names, as Gmail does ("Bob, me, Chen").
+  if (full.length === 1) return full[0]!;
+  const names: string[] = [];
+  for (const name of full) {
+    const first = name.split(/\s+/)[0] || name;
+    if (!names.includes(first)) names.push(first);
+  }
   if (names.length <= max) return names.join(', ');
   // The first and the last ones, as Gmail keeps the newest writers in view.
   return [names[0], '…', ...names.slice(-(max - 1))].join(', ');
