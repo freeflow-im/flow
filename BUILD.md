@@ -33,28 +33,90 @@ thing to get wrong.
 
 ## Local development
 
-Prerequisites: Node 22+, pnpm 10, Docker, and — for the native clients —
-macOS 14+ with Xcode 26.
+Prerequisites: Node 22+, pnpm 10, and — for the native clients — macOS 14+
+with Xcode 26. Docker is only needed for the [origin stack](#the-origin-stack).
+
+**The backend is one process.** Every app of the suite — Chat, Docs, Mail,
+Calendar, Contacts, Admin, and the directory, assistant and event bus behind
+them — lives in the Cloudflare Worker in `packages/edge`, each as a Durable
+Object. `wrangler dev` runs all of them locally in one process, with local
+SQLite storage under `packages/edge/.wrangler/`. No Postgres, no NATS, no Node
+server.
+
+### The whole suite on one URL
+
+```sh
+pnpm install
+pnpm dev:suite --build        # first time: builds every client, then starts
+pnpm dev:suite                # after that: starts from the existing builds
+```
+
+That is http://localhost:8787 — Chat at `/chat`, Docs at `/docs`, Mail at
+`/mail`, Calendar at `/calendar`, Contacts at `/contacts`, Admin at `/admin`,
+the same shape as production. `scripts/dev-suite.mjs` builds each client for
+its manifest's base path (`BASE_PATH`, as the server image does), fills
+`packages/edge/public/` with `scripts/assemble.mjs`, writes
+`packages/edge/.dev.vars` with a fresh `FLOW_DATA_KEY` the first time, and
+starts the Worker with production's hostname vars set to `localhost`.
+
+Things to know:
+
+- **Sign-up and sign-in links are printed to the terminal**, not emailed.
+  Register at `/chat`, then copy the link from the Worker's log.
+- **A client's build is a snapshot.** After editing a client, rebuild it:
+  `pnpm dev:suite --build=mail` (the package name's last part), or `--build`
+  for all of them. For hot reload, see the next section.
+- **Editing the Worker** (`packages/edge/src`) reloads it. If a change seems
+  not to take, restart: its hot reload has served a stale bundle before.
+- **Keep `.dev.vars`.** The Worker's local data is sealed with its
+  `FLOW_DATA_KEY`; a new key makes the old mail and calendar accounts
+  unreadable.
+- **PDF OCR is off** (`--enable-containers=false`: it needs Docker). PDFs with
+  a text layer still import.
+- `--port=<n>` for another port, `--var=KEY:value` for extra Worker vars
+  (`wrangler.toml` documents them). A client without a build is left out and
+  its path answers "not built into this deploy".
+
+### Hot reload on one client
+
+Run the Worker as above, then that client's Vite dev server beside it; each
+proxies `/v1` (and Docs' `/api`) to the Worker on 8787:
+
+| Client | Command | Dev URL |
+|---|---|---|
+| Chat | `cd packages/web && pnpm dev` | http://localhost:5173 |
+| Mail | `cd packages/mail && pnpm dev` | http://localhost:5185/mail/ |
+| Calendar | `cd packages/calendar && pnpm dev` | http://localhost:5186/calendar/ |
+| Contacts | `cd packages/contacts && pnpm dev` | http://localhost:5187/contacts/ |
+| Admin | `cd packages/admin && pnpm dev` | http://localhost:5188/admin/ |
+| Docs | `cd packages/docs && DOCS_API=http://127.0.0.1:8787 BASE_PATH=/docs/ pnpm dev:client` | http://localhost:5173/docs/ |
+
+Sign in on the Worker's URL first: the session cookie is per host, so a Vite
+dev server on another port sees it only through its proxy. Mail and Calendar
+also run with **no backend at all** from a sample mailbox or calendar:
+`MAIL_MOCK=1 pnpm dev`, `CALENDAR_MOCK=1 pnpm dev`.
+
+Docs' plain `pnpm dev` is the **standalone** MCP Docs app (its own Fastify
+server on 3001 over a folder), not the suite; `DOCS_API` points its client at
+the Worker instead. Docs and Chat both default to port 5173, so run one of
+them on `PORT=5174`.
+
+### The origin stack
+
+The Node server (`packages/server`) and its Postgres and NATS are the AWS
+origin: the Worker proxies to it only the paths it has not ported, and
+`cloudflare-migration.md` step 7 retires it. You need it locally only to work
+on the server itself:
 
 ```sh
 cd packages/infra && docker compose up -d   # Postgres on host port 5442, NATS
-pnpm install
 pnpm build                                  # = pnpm -r build across every package
-
-cd packages/server
-pnpm migrate
-pnpm dev                                    # http://127.0.0.1:8787
+cd packages/server && pnpm migrate && pnpm dev   # http://127.0.0.1:8787, API + Chat client
 ```
 
-The server serves the API, the WebSocket gateway, **and** the built web client
-from `packages/web/dist`. It reads that directory at boot, so after rebuilding
-the web client you must restart the server to pick it up.
-
-Working on the web client alone is faster with Vite's dev server:
-
-```sh
-cd packages/web && pnpm dev
-```
+It serves Chat's built client from `packages/web/dist` and reads that
+directory at boot, so after rebuilding the web client restart it. The Worker
+and the server both default to port 8787; run one of them elsewhere.
 
 The pnpm workspace is `packages/*` plus `apps/desktop` (the Electron shell,
 see [apps/desktop/README.md](apps/desktop/README.md)) — `apps/macos` and
@@ -62,9 +124,11 @@ see [apps/desktop/README.md](apps/desktop/README.md)) — `apps/macos` and
 
 | Package | Build output |
 |---|---|
-| `@flow/shared` | `dist/` — types and Zod schemas both the server and web import. **Build this first;** a stale `dist` here surfaces as `SyntaxError: does not provide an export named …` when the server boots. |
+| `@flow/shared` | `dist/` — types, Zod schemas and the app manifests the Worker, the server, the web clients and the build scripts import. **Build this first;** a stale `dist` here surfaces as `SyntaxError: does not provide an export named …` when the server boots. |
+| `@flow/edge` | no output — `wrangler deploy` bundles it; `public/` is assembled from the clients' builds |
 | `@flow/server` | `dist/` — TypeScript plus a copy of `src/db/migrations/*.sql` |
-| `@flow/web` | `dist/` — typechecked (`tsc --noEmit`) then bundled by Vite |
+| `@flow/web`, `@flow/mail`, `@flow/calendar`, `@flow/contacts`, `@flow/admin` | `dist/` — typechecked (`tsc --noEmit`) then bundled by Vite, each for its base path |
+| `@flow/docs` | `dist/client/` — the Workspace client; `dist/plugin/` the ChatGPT plugin |
 | `flow-agent-bridge` | `dist/` — the published npm package |
 
 ---
