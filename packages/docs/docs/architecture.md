@@ -377,6 +377,21 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
 
 ## The assistant in more detail
 
+The panel floats over the page, in the suite's assistant dock (`AssistantDock` in `packages/suite-bar/src/AssistantDock.tsx`,
+shared with Mail and Calendar; `AgentDock` in `client/src/agent/AgentPanel.tsx` mounts it once from `main.tsx` inside
+`.app-shell`): closed, it is the "Ask Assistant" pill in the bottom-right corner; open, a 420×640 panel there, or the
+larger expanded one. The header's `AssistantDockControls` are the anchor button, which docks it as the side panel beside
+the page (the resizable `.agent-panel` of before, which narrows the page), the expand/shrink toggle, the docked panel's
+float button, and close, which shows the pill again. `AgentProvider` keeps `open` in localStorage (`agent-panel-open`)
+and `placement` (floating by default) and `expanded` through the dock's `useAssistantDockState` (`agent-panel-placement`,
+`agent-panel-expanded`). One wrapper draws every state (docked, it is `display: contents`), so the panel is not
+remounted, and keeps its draft, when it is anchored or set afloat. The header `AgentButton`, the suite bar's Assistant
+button and ⌘K (standalone) still toggle `open`. Floating and idle, the panel minimizes itself to the pill
+(`useIdleMinimize`, `IDLE_CLOSE_MS` = two minutes) with no new text from either side (typing, a sent message, the reply
+or its tool calls); a running turn or a waiting question holds it open, and the docked panel stays. Closed, by hand or
+by that timer, the chat is over: `useNewChatOnClose` in `AgentProvider` resets it (New chat), once a turn still running
+has finished, so the next open starts a new one.
+
 Each file has its own chat, and the home page one (`chatScope`, `HOME_CHAT` in `shared/agent/protocol.ts`;
 `agent_conversations.scope`, null for home): `GET /api/agent?scope=` is a chat with the file's title, and reset
 and turns name the chat (`AgentTurnRequest.scope`). The panel shows the open page's chat (`AgentProvider`'s

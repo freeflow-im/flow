@@ -1651,6 +1651,7 @@ textarea {
 
 /* ------------------------------------------------------------------ Assistant panel */
 .app-shell {
+  position: relative;
   display: flex;
   height: 100%;
 }
@@ -1778,20 +1779,6 @@ textarea {
 .agent-new:disabled {
   color: var(--muted);
   cursor: default;
-}
-.agent-close {
-  border: none;
-  background: none;
-  font-size: 22px;
-  line-height: 1;
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  cursor: pointer;
-  color: var(--muted);
-}
-.agent-close:hover {
-  background: #f1f3f4;
 }
 .agent-list {
   flex: 1;

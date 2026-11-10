@@ -1,8 +1,9 @@
-// The assistant in Calendar: a panel on the right, as Mail's is (beside the calendar; over it on narrow screens). The
-// chat's replies and tool labels are Docs' own (lib/docsAgent.ts); an event the assistant made or changed has "Open event",
+// The assistant in Calendar: in the suite's dock (packages/suite-bar, AssistantDock.tsx), floating over the calendar or,
+// anchored, a panel on the right as Mail's is (beside the calendar; over it on narrow screens). The chat's replies and tool labels are Docs' own (lib/docsAgent.ts); an event the assistant made or changed has "Open event",
 // links to events in Calendar open their card here, and a delete the assistant asks for waits for Delete or Keep.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { AlertCircle, CalendarDays, Check, Loader2, Sparkles, X } from 'lucide-react';
+import { AlertCircle, CalendarDays, Check, Loader2, Sparkles } from 'lucide-react';
+import { AssistantDockControls, useAssistantDock, useIdleMinimize } from '@flow/suite-bar/assistant-dock';
 import { eventOfLink, madeEventOf } from '../lib/assistant';
 import { ChatMarkdown, toolLabel, type ChatItem } from '../lib/docsAgent';
 import { cn } from '../lib/utils';
@@ -29,6 +30,9 @@ export function AssistantPanel({ chat, onEvent, overlay, width, onClose, onOpenE
   const [draft, setDraft] = useState('');
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const docked = useAssistantDock().placement === 'docked';
+  // Floating and idle (no new text from either side), the panel minimizes to the pill; not while a turn runs or a question waits.
+  useIdleMinimize([chat.items, draft], chat.running || !!chat.question);
 
   useEffect(() => inputRef.current?.focus(), []);
   useLayoutEffect(() => {
@@ -51,14 +55,14 @@ export function AssistantPanel({ chat, onEvent, overlay, width, onClose, onOpenE
   const thinking = chat.running && last?.kind !== 'assistant' && !chat.question;
 
   return (
-    <aside aria-label="Assistant" data-testid="calendar-assistant" style={overlay ? undefined : { width }}
-      className={cn('flex min-h-0 flex-col bg-white', overlay ? 'absolute inset-0 z-30 shadow-xl' : 'relative shrink-0 border-l border-hairline')}>
+    <aside aria-label="Assistant" data-testid="calendar-assistant" style={docked && !overlay ? { width } : undefined}
+      className={cn('flex min-h-0 flex-col bg-white', !docked ? 'relative' : overlay ? 'absolute inset-0 z-30 shadow-xl' : 'relative shrink-0 border-l border-hairline')}>
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-hairline px-4">
         <Sparkles className="size-4 text-primary" />
         <span className="text-[16px] font-semibold">Assistant</span>
         <span className="flex-1" />
         <Button variant="link" size="sm" className="h-7 px-1.5" onClick={() => void chat.reset()} disabled={chat.running || !chat.items.length} title="Start a new conversation">New chat</Button>
-        <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Close assistant" title="Close"><X /></Button>
+        <AssistantDockControls />
       </div>
 
       <div ref={listRef} className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-4 text-sm"

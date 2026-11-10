@@ -5,6 +5,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { openSuiteSearch } from '@flow/suite-bar';
+import { AssistantDock, useAssistantDockState, useNewChatOnClose } from '@flow/suite-bar/assistant-dock';
 import { MailApiError, mailApi, setMailWorkspace, type Category, type MailAccount, type MessageDetail, type ThreadSummary, type TabStatus } from './api';
 import { AccountSettingsDialog, AddAccountDialog } from './components/AccountForms';
 import { ConnectMail } from './components/ConnectMail';
@@ -84,8 +85,10 @@ export function App() {
   const tiny = useMediaQuery('(max-width: 759px)');
   const sidebar = useResizableWidth('flow.mail.sidebarWidth', 248, 180, 480);
   const listPane = useResizableWidth('flow.mail.listWidth', 420, 300, 720);
-  // The assistant: beside the mail, or over it below 1100px.
+  // The assistant: the suite's dock (a pill, then a floating panel), or anchored beside the mail (over it below 1100px).
   const assistantOpen = useAssistantOpen();
+  const assistantDock = useAssistantDockState('flow.mail.assistant', assistantOpen, setAssistantOpen);
+  const assistantDocked = assistantDock.placement === 'docked';
   const assistantOverlay = useMediaQuery('(max-width: 1099px)');
   const assistantPane = useResizableWidth('flow.mail.assistantWidth', 380, 300, 720, 'left');
 
@@ -470,6 +473,10 @@ export function App() {
       void qc.invalidateQueries({ queryKey: ['mail', 'threads'] });
       void qc.invalidateQueries({ queryKey: ['mail', 'folders'] });
     },
+  });
+  // Closed (by hand, or the floating panel's idle timer), the chat is over: the next open starts a new one.
+  useNewChatOnClose(assistantOpen, chat.running, () => {
+    if (chat.items.length) void chat.reset();
   });
 
   const onCheck = (id: string, on: boolean, range: boolean) => {
@@ -904,8 +911,8 @@ export function App() {
             </>
           )}
         </div>
-        {assistantOpen && !assistantOverlay && <ResizeHandle label="Resize the assistant" {...assistantPane.handleProps} />}
-        {assistantOpen && (
+        <AssistantDock state={assistantDock}>
+          {assistantDocked && !assistantOverlay && <ResizeHandle label="Resize the assistant" {...assistantPane.handleProps} />}
           <Suspense fallback={null}>
             <AssistantPanel
               chat={chat}
@@ -919,7 +926,7 @@ export function App() {
               onOpenDraft={openDraft}
             />
           </Suspense>
-        )}
+        </AssistantDock>
       </div>
       {compose && (
         <Suspense fallback={null}>

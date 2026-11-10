@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { AssistantDock, AssistantDockControls, SparkIcon, useIdleMinimize } from '@flow/suite-bar/assistant-dock';
 import { HOME_CHAT, JOB_ACTIVE_STATUSES, type AgentJob, type ChatItem } from '../../../shared/agent/protocol.ts';
 import { MOD } from '../commands.ts';
 import { FileChip, fileOfResult } from '../components/FileChip.tsx';
@@ -15,6 +16,8 @@ import { MAX_IMAGES_PER_MESSAGE } from '../../../shared/agent/protocol.ts';
 
 type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
 
+export { SparkIcon };
+
 const SHEET_SUGGESTIONS = ['Summarize what’s in this spreadsheet', 'Add a totals row under the data', 'Make the header row bold and freeze it', 'Turn this data into a short presentation'];
 const DECK_SUGGESTIONS = ['Summarize this presentation', 'Add a closing slide with next steps', 'Tighten the bullets on every slide'];
 const HOME_SUGGESTIONS = ['Which spreadsheets did I edit most recently?', 'Create a spreadsheet to track monthly expenses', 'Create a 5-slide presentation about our quarterly goals'];
@@ -29,11 +32,27 @@ export function AgentButton() {
   );
 }
 
+/**
+ * The assistant's surface on every signed-in page: the suite's dock (packages/suite-bar, AssistantDock.tsx), a launcher
+ * pill floating over the page's bottom-right corner which opens into the floating panel, or, once anchored, the side
+ * panel beside the page. Closing the side panel brings the pill back; the panel keeps its draft either way.
+ */
+export function AgentDock() {
+  const { open, setOpen, placement, setPlacement, expanded, setExpanded } = useAgent();
+  const { suite } = useAuth();
+  return (
+    <AssistantDock state={{ open, setOpen, placement, setPlacement, expanded, setExpanded }} shortcut={suite ? undefined : `${MOD}K`}>
+      <AgentPanel />
+    </AssistantDock>
+  );
+}
+
 export function AgentPanel() {
   const agent = useAgent();
   // In the suite ⌘K is the suite bar's search, not this panel's.
   const { suite } = useAuth();
-  // The panel and the page beside it share the window; the panel takes at most half of it.
+  const docked = agent.placement === 'docked';
+  // Docked, the panel and the page beside it share the window; the panel takes at most half of it.
   const panel = usePanelWidth(ASSISTANT_PANEL, () => ({ available: window.innerWidth, viewport: window.innerWidth, maxFraction: 0.5 }));
   const [draft, setDraft] = useState('');
   const listRef = useRef<HTMLDivElement>(null);
@@ -60,6 +79,10 @@ export function AgentPanel() {
 
   const [attachments, setAttachments] = useState<PreparedImage[]>([]);
   const [attachError, setAttachError] = useState<string | null>(null);
+
+  // Floating and idle (no new text: typing, a sent message, the assistant's reply or tool calls), the panel minimizes
+  // to the pill; not while a turn runs or a question waits, and never when docked.
+  useIdleMinimize([agent.items, draft, attachments], agent.running || !!agent.confirm);
 
   const submit = (text: string) => {
     if ((!text.trim() && !attachments.length) || agent.running) return;
@@ -89,8 +112,8 @@ export function AgentPanel() {
   const thinking = agent.running && !agent.confirm && last?.kind !== 'assistant';
 
   return (
-    <aside className="agent-panel" aria-label="Assistant" style={{ width: panel.width }}>
-      <ResizeHandle panel={panel} side="right" label="Resize assistant panel" className="agent-panel-resize" />
+    <aside className="agent-panel" aria-label="Assistant" style={docked ? { width: panel.width } : undefined}>
+      {docked && <ResizeHandle panel={panel} side="right" label="Resize assistant panel" className="agent-panel-resize" />}
       <div className="agent-head">
         <SparkIcon />
         <span className="agent-title">Assistant</span>
@@ -100,9 +123,7 @@ export function AgentPanel() {
         <button className="link agent-new" onClick={() => void agent.reset()} disabled={agent.running || !agent.items.length} title="Start a new conversation">
           New chat
         </button>
-        <button className="agent-close" onClick={() => agent.setOpen(false)} aria-label="Close assistant" title={suite ? 'Close' : `Close (${MOD}K)`}>
-          ×
-        </button>
+        <AssistantDockControls shortcut={suite ? undefined : `${MOD}K`} />
       </div>
       {/* Each file has its own chat, and the home page one: which this is, and the way back to the open page's. */}
       <div className="agent-chat">
@@ -379,11 +400,3 @@ function PaperclipIcon() {
   );
 }
 
-export function SparkIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-      <path d="M8 1.5l1.6 4.2 4.4 1.6-4.4 1.6L8 13.1 6.4 8.9 2 7.3l4.4-1.6z" fill="currentColor" />
-      <path d="M13 11l.6 1.4 1.4.6-1.4.6L13 15l-.6-1.4L11 13l1.4-.6z" fill="currentColor" opacity=".7" />
-    </svg>
-  );
-}

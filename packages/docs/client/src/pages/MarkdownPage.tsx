@@ -143,7 +143,7 @@ function MarkdownWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta;
     setImportWarnings([]);
     if (location.state) navigate(location.pathname, { replace: true, state: null });
   };
-  const { open: agentOpen } = useAgent();
+  const { open: agentOpen, placement: agentPlacement } = useAgent();
   const [meta, setMeta] = useState(initialMeta);
   useRegisterMarkdown(ctl, meta);
   const [dialog, setDialog] = useState<Dialog>(null);
@@ -220,11 +220,11 @@ function MarkdownWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta;
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [ctl]);
 
-  // The assistant panel opening or closing changes the room for the preview.
+  // The assistant panel opening, closing or anchoring beside the page changes the room for the preview.
   useEffect(() => {
     preview.set(preview.width, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentOpen]);
+  }, [agentOpen, agentPlacement]);
 
   const notify = useCallback((msg: string) => {
     setToast(msg);

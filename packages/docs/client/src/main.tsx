@@ -2,8 +2,8 @@ import { StrictMode, type ReactElement, useMemo, type ReactNode } from 'react';
 import { BASE } from './basePath.ts';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, matchPath, Navigate, Route, Routes, useLocation } from 'react-router-dom';
-import { AgentPanel } from './agent/AgentPanel.tsx';
-import { AgentProvider, useAgent } from './agent/AgentProvider.tsx';
+import { AgentDock } from './agent/AgentPanel.tsx';
+import { AgentProvider } from './agent/AgentProvider.tsx';
 import { AuthProvider, useAuth } from './auth.tsx';
 import { DocsNav } from './components/DocsNav.tsx';
 import { DocsSuiteBar } from './components/DocsSuiteBar.tsx';
@@ -73,10 +73,9 @@ function Hosted({ children }: { children: ReactNode }) {
   return <HostProvider host={host}>{children}</HostProvider>;
 }
 
-/** The pages, with the assistant panel docked on the right when it is open. */
+/** The pages, with the assistant floating over them, or docked on the right once anchored (agent/AgentPanel.tsx). */
 function AppShell() {
   const { user, local, suite } = useAuth();
-  const { open } = useAgent();
   const { pathname } = useLocation();
   useHistoryKeys(!!local && !PREVIEW);
   useDesktopBridge(!!local && !!user && !PREVIEW);
@@ -112,7 +111,7 @@ function AppShell() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>
-      {user && open && !PREVIEW && !framed && <AgentPanel />}
+      {user && !PREVIEW && !framed && <AgentDock />}
     </div>
   );
   if (!bar) return shell;
