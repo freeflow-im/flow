@@ -1,1 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="#3c4043"/><rect x="6" y="6" width="9" height="9" rx="2" fill="#0f9d58"/><rect x="17" y="6" width="9" height="9" rx="2" fill="#f4b400"/><rect x="6" y="17" width="9" height="9" rx="2" fill="#4285f4"/><rect x="17" y="17" width="9" height="9" rx="2" fill="#fff" fill-opacity="0.85"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32"><defs><linearGradient id="gV" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8B5BE8"/><stop offset="1" stop-color="#4E229C"/></linearGradient></defs><rect x="1" y="1" width="30" height="30" rx="8" fill="url(#gV)"/>
+<path d="M14 5.5H20L24.5 10V20.5A1.5 1.5 0 0 1 23 22H14A1.5 1.5 0 0 1 12.5 20.5V7A1.5 1.5 0 0 1 14 5.5Z" fill="#fff" fill-opacity="0.55"/>
+<path d="M9 10H15L19.5 14.5V25A1.5 1.5 0 0 1 18 26.5H9A1.5 1.5 0 0 1 7.5 25V11.5A1.5 1.5 0 0 1 9 10Z" fill="#fff"/>
+<path d="M15 10V13A1.5 1.5 0 0 0 16.5 14.5H19.5Z" fill="#C9B6F2"/>
+</svg>
