@@ -48,18 +48,21 @@ const TEMPLATES = APP_MANIFESTS.flatMap((m) => m.kinds.flatMap((k) => {
   return t ? [{ app: m.name, kind: k.kind, path: t[1]!.replace(/\/$/, ''), param: t[2]! }] : [];
 }));
 
+/** Chat's page, its manifest's path: `/chat` (the root until 2026-11-10, which the readers below still accept). */
+export const CHAT_PATH = APP_MANIFESTS.find((m) => m.name === 'chat')?.path ?? '/chat';
+
 /** Where each app's own page is, for an intent that opens it with a query (`?share=`). */
-const APP_PAGES: Record<string, string> = { chat: '/', docs: '/docs/', calendar: '/calendar/' };
+const APP_PAGES: Record<string, string> = { chat: `${CHAT_PATH}/`, docs: '/docs/', calendar: '/calendar/' };
 
 /**
  * The address of an object (its canonical URL, relative to the suite's origin), or null for a kind with no page: Chat
- * `/?open=artifact:<id>` (also `channel:` and `message:`), Docs `/docs/<s|d|doc|md|f>/<id>` by the kind of file (a
+ * `/chat/?open=artifact:<id>` (also `channel:` and `message:`), Docs `/docs/<s|d|doc|md|f>/<id>` by the kind of file (a
  * folder opens in Shared with me), Calendar `/calendar/?calendar=<id>` and `/calendar/?event=<id>`.
  */
 export function addressOf(ref: ReferenceTarget | null | undefined, fileKind?: string): string | null {
   if (!ref) return null;
   const id = encodeURIComponent(ref.id);
-  if (ref.app === 'chat') return (CHAT_OPENS as readonly string[]).includes(ref.kind) ? `/?open=${encodeURIComponent(`${ref.kind}:${ref.id}`)}` : null;
+  if (ref.app === 'chat') return (CHAT_OPENS as readonly string[]).includes(ref.kind) ? `${APP_PAGES.chat}?open=${encodeURIComponent(`${ref.kind}:${ref.id}`)}` : null;
   if (ref.app === 'docs') {
     if (ref.kind === 'folder') return `/docs/?withme=1&in=${id}${ref.organizationId ? `&org=${encodeURIComponent(ref.organizationId)}` : ''}`;
     if (ref.kind !== 'sheet' && ref.kind !== 'file') return null;
@@ -74,8 +77,8 @@ export function addressOf(ref: ReferenceTarget | null | undefined, fileKind?: st
   return declared ? declared.replace('{id}', id) : null;
 }
 
-/** Chat's page for another app's suite bar: `/?open=<page>`. */
-export const chatPageAddress = (page: ChatPage): string => `/?open=${page}`;
+/** Chat's page for another app's suite bar: `/chat/?open=<page>`. */
+export const chatPageAddress = (page: ChatPage): string => `${APP_PAGES.chat}?open=${page}`;
 
 /**
  * The reference an address names (the inverse of `addressOf`), or null for anything else: another origin, a page that
@@ -94,7 +97,8 @@ export function referenceOf(url: string, ctx: { origin: string; organizationId: 
   const q = u.searchParams;
   const org = ctx.organizationId;
   const path = u.pathname;
-  if (path === '/') {
+  // Chat's page, and the root, Chat's page until 2026-11-10 (the root still sends there, its query kept).
+  if (path === '/' || path === CHAT_PATH || path === `${CHAT_PATH}/`) {
     const m = /^([a-z]+):(.+)$/.exec(q.get('open') ?? '');
     return m && (CHAT_OPENS as readonly string[]).includes(m[1]!) ? { organizationId: org, app: 'chat', kind: m[1]!, id: m[2]! } : null;
   }
@@ -141,7 +145,7 @@ export interface CreateFields {
 
 /**
  * The address that asks an app to create something: Calendar's `/calendar/?new=<title>&guests=Name <a@x>,b@y&start=`
- * (packages/calendar lib/deeplink.ts reads it), Chat's `/?open=channel:<id>&text=<text>`.
+ * (packages/calendar lib/deeplink.ts reads it), Chat's `/chat/?open=channel:<id>&text=<text>`.
  */
 export function createAddress<K extends keyof CreateFields>(what: K, fields: CreateFields[K]): string {
   const q = new URLSearchParams();
@@ -149,7 +153,7 @@ export function createAddress<K extends keyof CreateFields>(what: K, fields: Cre
     const f = fields as CreateFields['chat-message'];
     q.set('open', `channel:${f.channel}`);
     if (f.text) q.set('text', f.text);
-    return `/?${q}`;
+    return `${APP_PAGES.chat}?${q}`;
   }
   const f = fields as CreateFields['calendar'];
   q.set('new', (f.title ?? '').trim());

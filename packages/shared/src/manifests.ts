@@ -10,7 +10,7 @@ const PUBLIC = { 'referrer-policy': 'no-referrer', 'x-robots-tag': 'noindex' };
 export const APP_MANIFESTS: AppManifest[] = [
   {
     name: 'chat',
-    path: '/',
+    path: '/chat',
     scope: 'organization',
     object: { className: 'Org', migrationTag: 'v1' },
     routes: 'org',
@@ -21,9 +21,15 @@ export const APP_MANIFESTS: AppManifest[] = [
       'invite_to_channel', 'set_avatar', 'create_artifact', 'deliver_artifact', 'update_artifact', 'delete_artifact', 'list_artifacts', 'read_messages', 'download_file',
     ],
     tab: { label: 'Chat', shortcut: '2', badge: 'chat-unread' },
+    // Its files stay at the root, whatever its path: they are the suite's root files too (the tab icons, /privacy).
     client: { dist: 'packages/web/dist', basePath: '/' },
-    // Every other address (a channel, a thread, a settings tab): it routes in the browser. Registered last.
-    pages: [{ path: '*', html: 'index.html', passFiles: true }],
+    // Its page is /chat (the root sends there: edge routes/pages.ts), and every other address (an invite link, a join
+    // link, a sign-in link from an email) is its too: it routes in the browser. The catch-all is registered last.
+    pages: [
+      { path: '/chat', html: 'index.html' },
+      { path: '/chat/*', html: 'index.html', passFiles: true },
+      { path: '*', html: 'index.html', passFiles: true },
+    ],
     events: [
       'chat.message.created',
       'chat.message.updated',

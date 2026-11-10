@@ -1,7 +1,7 @@
 // The suite bar on the Docs app (packages/suite-bar; docs/specs/freeflow-suite.md §2.5), above every signed-in page
 // when the app is hosted in the FreeFlow suite (main.tsx). Its data comes from the suite's API (suite.ts); what
 // belongs to Chat (adding an organization, its settings, inviting people, notifications, the profile) opens Chat at
-// `/?open=…` (the suite bar's `intent.open`), which Chat's App.tsx honours.
+// `/chat/?open=…` (the suite bar's `intent.open`), which Chat's App.tsx honours.
 import { useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { APP_MANIFESTS, AWAY_STATUS, guestTabs, intent, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type ChatPage, type StatusOption } from '@flow/suite-bar';

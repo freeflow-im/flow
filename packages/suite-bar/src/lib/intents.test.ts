@@ -7,7 +7,7 @@ describe('intents', () => {
 
   it('open follows the reference’s address, or a Chat page’s; nothing for a kind with no page', () => {
     expect(followed((navigate) => intent.open(ref, { navigate }))).toEqual(['/docs/s/s1']);
-    expect(followed((navigate) => intent.open({ app: 'chat', kind: 'artifact', id: 'a1' }, { navigate }))).toEqual(['/?open=artifact%3Aa1']);
+    expect(followed((navigate) => intent.open({ app: 'chat', kind: 'artifact', id: 'a1' }, { navigate }))).toEqual(['/chat/?open=artifact%3Aa1']);
     expect(followed((navigate) => intent.admin(undefined, { navigate }))).toEqual(['/admin']);
     expect(followed((navigate) => intent.admin('domains', { navigate }))).toEqual(['/admin/domains']);
     expect(followed((navigate) => expect(intent.open({ app: 'mail', kind: 'message', id: 'm' }, { navigate })).toBe(false))).toEqual([]);

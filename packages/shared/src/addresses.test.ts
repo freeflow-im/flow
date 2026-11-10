@@ -9,9 +9,9 @@ const ref = (app: string, kind: string, id: string, fileKind?: string): Addresse
 
 // Every kind with a page, with ids that need escaping where an app's ids can (a calendar event's uid, a folder's path).
 const KINDS: [AddressedReference, string][] = [
-  [ref('chat', 'artifact', 'a1'), '/?open=artifact%3Aa1'],
-  [ref('chat', 'channel', 'c1'), '/?open=channel%3Ac1'],
-  [ref('chat', 'message', 'm1'), '/?open=message%3Am1'],
+  [ref('chat', 'artifact', 'a1'), '/chat/?open=artifact%3Aa1'],
+  [ref('chat', 'channel', 'c1'), '/chat/?open=channel%3Ac1'],
+  [ref('chat', 'message', 'm1'), '/chat/?open=message%3Am1'],
   [ref('docs', 'sheet', 's1', 'sheet'), '/docs/s/s1'],
   [ref('docs', 'sheet', 'd1', 'deck'), '/docs/d/d1'],
   [ref('docs', 'sheet', 'x1', 'doc'), '/docs/doc/x1'],
@@ -45,6 +45,13 @@ describe('addresses', () => {
     expect(addressOf(ref('mail', 'message', 'm'))).toBeNull();
   });
 
+  it('reads the addresses written before 2026-11-10: Chat at the root, Docs under /workspace', () => {
+    expect(referenceOf('/?open=artifact%3Aa1', ctx)).toEqual(ref('chat', 'artifact', 'a1'));
+    expect(referenceOf(`${ORIGIN}/workspace/d/d1`, ctx)).toEqual(ref('docs', 'sheet', 'd1', 'deck'));
+    expect(referenceOf('/workspace/?withme=1&in=r%2Fp&org=other', ctx)).toEqual({ organizationId: 'other', app: 'docs', kind: 'folder', id: 'r/p' });
+    expect(referenceOf('/workspace', ctx)).toBeNull();
+  });
+
   it('a Docs file without its kind opens as a spreadsheet or a stored file, as the share index did', () => {
     expect(addressOf(ref('docs', 'sheet', 'x'))).toBe('/docs/s/x');
     expect(addressOf(ref('docs', 'file', 'y'))).toBe('/docs/f/y');
@@ -52,7 +59,7 @@ describe('addresses', () => {
   });
 
   it('is null for another origin and for pages that name no object', () => {
-    for (const url of ['https://evil.example/docs/s/x', 'http://app.freeflow.im/docs/s/x', '/', '/?open=admin', '/docs/', '/docs/settings', '/calendar/week/2026-11-09', '/mail/', 'not a url at all ::', '/docs/s/a/b'])
+    for (const url of ['https://evil.example/docs/s/x', 'http://app.freeflow.im/docs/s/x', '/', '/chat/?open=admin', '/docs/', '/docs/settings', '/calendar/week/2026-11-09', '/mail/', 'not a url at all ::', '/docs/s/a/b'])
       expect([url, referenceOf(url, ctx)]).toEqual([url, null]);
     expect(referenceOf('/calendar/week/2026-11-09?event=e1', ctx)).toEqual(ref('calendar', 'event', 'e1'));
   });
@@ -66,13 +73,13 @@ describe('addresses', () => {
     const share = shareAddressOf(r)!;
     expect(share).toBe(`/docs/?share=${encodeURIComponent('org1/docs/sheet/s1')}`);
     expect(parseReference(new URL(share, ORIGIN).searchParams.get('share')!)).toEqual({ organizationId: 'org1', app: 'docs', kind: 'sheet', id: 's1' });
-    expect(shareAddressOf(ref('chat', 'artifact', 'a'))).toBe('/?share=org1%2Fchat%2Fartifact%2Fa');
+    expect(shareAddressOf(ref('chat', 'artifact', 'a'))).toBe('/chat/?share=org1%2Fchat%2Fartifact%2Fa');
     expect(shareAddressOf(ref('calendar', 'calendar', 'c'))).toBe('/calendar/?share=org1%2Fcalendar%2Fcalendar%2Fc');
     expect(shareAddressOf(ref('mail', 'message', 'm'))).toBeNull();
     const made = new URL(createAddress('calendar', { title: ' Plan ', attendees: [{ name: 'Lee, Ann', email: 'a@x.org' }, 'b@y.org'], start: '2026-11-09T10:00' }), ORIGIN);
     expect([made.pathname, made.searchParams.get('new'), made.searchParams.get('guests'), made.searchParams.get('start')]).toEqual(['/calendar/', 'Plan', 'Lee  Ann <a@x.org>,b@y.org', '2026-11-09T10:00']);
     const msg = new URL(createAddress('chat-message', { channel: 'c1', text: 'hi there' }), ORIGIN);
-    expect([msg.pathname, msg.searchParams.get('open'), msg.searchParams.get('text')]).toEqual(['/', 'channel:c1', 'hi there']);
-    expect(chatPageAddress('admin')).toBe('/?open=admin');
+    expect([msg.pathname, msg.searchParams.get('open'), msg.searchParams.get('text')]).toEqual(['/chat/', 'channel:c1', 'hi there']);
+    expect(chatPageAddress('admin')).toBe('/chat/?open=admin');
   });
 });

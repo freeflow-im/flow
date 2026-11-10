@@ -13,7 +13,7 @@ function sources(over: Partial<ReferenceSources> = {}): ReferenceSources & { ask
     asked,
     // A fake Org object: Chat's channel c1 visible, an artifact a2 not; a Docs file shared through the index; the rest asked of the app.
     org: async (refs) => refs.map((ref) => {
-      if (ref === r('chat', 'channel', 'c1')) return { ref, app: 'chat', kind: 'channel', title: '#general', url: '/?open=channel%3Ac1', icon: '#', role: 'editor' as const };
+      if (ref === r('chat', 'channel', 'c1')) return { ref, app: 'chat', kind: 'channel', title: '#general', url: '/chat/?open=channel%3Ac1', icon: '#', role: 'editor' as const };
       if (ref === r('docs', 'sheet', 'shared')) return { ref, app: 'docs', kind: 'sheet', title: 'Q4 plan', url: '/docs/s/shared', icon: '📊', role: 'viewer' as const, fileKind: 'sheet' };
       if (ref.includes('/chat/')) return { ref, denied: true as const };
       return { ref, ask: true as const };
@@ -29,7 +29,7 @@ describe('resolveReferences', () => {
     const s = sources();
     const out = await resolveReferences([r('chat', 'channel', 'c1'), r('docs', 'sheet', 'shared')], s);
     expect(out).toEqual([
-      { ref: r('chat', 'channel', 'c1'), app: 'chat', kind: 'channel', title: '#general', url: '/?open=channel%3Ac1', icon: '#', role: 'editor' },
+      { ref: r('chat', 'channel', 'c1'), app: 'chat', kind: 'channel', title: '#general', url: '/chat/?open=channel%3Ac1', icon: '#', role: 'editor' },
       expect.objectContaining({ ref: r('docs', 'sheet', 'shared'), title: 'Q4 plan', role: 'viewer', url: '/docs/s/shared' }),
     ]);
     expect(s.asked).toEqual([]); // the index answered: Docs was not asked

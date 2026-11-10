@@ -4,7 +4,7 @@
 // invitations), and the account menu has presence, status, the profile, settings, Help and sign out.
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { AccountDTO, UserDTO } from '@flow/shared';
+import { CHAT_PATH, type AccountDTO, type UserDTO } from '@flow/shared';
 import { adminAddress, APP_MANIFESTS, AWAY_STATUS, GUEST_TABS_NOTE, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type StatusOption } from '@flow/suite-bar';
 import { useSwitcherEntries, useWorkspaceInvites, useWorkspaces } from '../hooks';
 import { useCapabilities } from '../lib/backend';
@@ -15,7 +15,7 @@ import { FIND_EVENT } from './FindBar';
 import { HelpModal } from './HelpModal';
 import { InviteModal, ProfileModal } from './modals';
 
-/** What another page of the suite asks Chat to open (`/?open=…`, read once in App.tsx). The bar opens the ones it owns. */
+/** What another page of the suite asks Chat to open (`/chat/?open=…`, read once in App.tsx). The bar opens the ones it owns. */
 export type SuiteIntent = 'chooser' | 'admin' | 'invite' | 'activity' | 'profile';
 
 /** An authenticated image path (`/v1/avatars/…`) as an object URL, fetched with its connection's bearer. */
@@ -153,7 +153,7 @@ export default function ChatSuiteBar({ activityUnread, intent }: { activityUnrea
     <>
       <SuiteBar
         // The logo: Chat's home, #general (no channel selected falls back to it).
-        home={{ href: '/', onSelect: () => sel.selectChannel(null) }}
+        home={{ href: CHAT_PATH, onSelect: () => sel.selectChannel(null) }}
         // The other apps live on this page's own server: an organization on another server has none of them yet.
         tabs={suiteTabsFrom(APP_MANIFESTS, 'chat', { 'chat-unread': chatBadge }, {
           unavailable: (t) => (!docsHere ? `${t.label} is not available for an organization on another server yet` : guest && t.id !== 'chat' ? GUEST_TABS_NOTE : null),

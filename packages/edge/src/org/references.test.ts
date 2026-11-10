@@ -50,10 +50,10 @@ describe('resolveInOrg', () => {
     const asks = () => [ref('chat', 'channel', pub), ref('chat', 'channel', secret), ref('chat', 'artifact', app), ref('chat', 'message', msg), ref('chat', 'message', secretMsg)];
     const ann = await run(() => resolveInOrg(ANN, ws, asks()));
     expect(ann).toMatchObject([
-      { app: 'chat', kind: 'channel', title: '#pub', url: `/?open=channel%3A${pub}`, role: 'manager' },
+      { app: 'chat', kind: 'channel', title: '#pub', url: `/chat/?open=channel%3A${pub}`, role: 'manager' },
       { title: '#secret', role: 'manager' },
-      { kind: 'artifact', title: 'Secret plan', summary: 'in #secret', role: 'owner', url: `/?open=artifact%3A${app}` },
-      { kind: 'message', title: 'Message from Ann in #pub', summary: 'hello @Bob, see the plan', url: `/?open=message%3A${msg}` },
+      { kind: 'artifact', title: 'Secret plan', summary: 'in #secret', role: 'owner', url: `/chat/?open=artifact%3A${app}` },
+      { kind: 'message', title: 'Message from Ann in #pub', summary: 'hello @Bob, see the plan', url: `/chat/?open=message%3A${msg}` },
       { title: 'Message from Ann in #secret', summary: 'between us' },
     ]);
     const bob = await run(() => resolveInOrg(BOB, ws, asks()));

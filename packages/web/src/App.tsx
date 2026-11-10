@@ -7,7 +7,7 @@ import { consumeHandoffCallback, pendingHandoff } from './lib/authHandoff';
 import { installDeepLinks, type DeepLink } from './lib/deepLinks';
 import { getHost } from './lib/host';
 import { originLabel } from './lib/serverOrigin';
-import { BackendError, type ArtifactDTO, type UserDTO, type AuthResponse, type WorkspaceDTO } from '@flow/shared';
+import { BackendError, CHAT_PATH, type ArtifactDTO, type UserDTO, type AuthResponse, type WorkspaceDTO } from '@flow/shared';
 import { backgroundSync } from './lib/backgroundSync';
 import { backendFor } from './lib/backend';
 import {
@@ -64,7 +64,7 @@ function consumeEmailLinkParams(runtime: ConnectionRuntime): {
   const invite = location.pathname.match(/^\/invite\/([A-Za-z0-9_-]+)$/);
   if (invite) {
     runtime.write(PENDING_INVITE, invite[1]!);
-    history.replaceState(null, '', '/');
+    history.replaceState(null, '', CHAT_PATH);
   }
   // /join/<workspace-slug>/<token> (issue #85): the persistent join link. Same
   // stash trick as the emailed invite — it has to survive the sign-in round
@@ -74,7 +74,7 @@ function consumeEmailLinkParams(runtime: ConnectionRuntime): {
   const joinToken = parseJoinPath(location.pathname);
   if (joinToken) {
     stashJoinToken(joinToken, Date.now(), runtime.key('pendingJoinLink'));
-    history.replaceState(null, '', '/');
+    history.replaceState(null, '', CHAT_PATH);
   }
   const params = new URLSearchParams(location.search);
   // ?next=<path>: where to go once signed in — the Workspace app (/docs/...) and the ChatGPT plugin's

@@ -48,6 +48,8 @@ const moved = (to: (pathname: string) => string) => (c: C) => {
   const url = new URL(c.req.url);
   return c.redirect(`${to(url.pathname)}${url.search}`, 301);
 };
+// The root is Chat's page, at /chat since 2026-11-10 (its query kept: a sign-in link from an email, `?next=`, a handoff).
+pageRoutes.get('/', (c) => c.redirect(`/chat${new URL(c.req.url).search}`));
 pageRoutes.get('/p/*', moved((p) => `/docs${p}`));
 pageRoutes.get('/workspace', moved(() => '/docs'));
 pageRoutes.get('/workspace/*', moved((p) => `/docs${p.slice('/workspace'.length)}`));

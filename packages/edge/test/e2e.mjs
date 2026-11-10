@@ -66,9 +66,9 @@ r=await api(A.token,'GET',`/v1/events?workspace=${W}&since=0&types=chat.reaction
  r=await api(Bo.token,'GET',`/v1/artifacts/${SA.id}`);t('Bob opens it by id',r.s===200&&r.j.id===SA.id&&!r.j.appSecret,r.s+' '+JSON.stringify(r.j).slice(0,100));
  r=await api(Bo.token,'GET',`/v1/artifacts/${SA.id}/grants`);t('and reads its grants, as a viewer',r.s===200&&r.j.role==='viewer',r.s+' '+JSON.stringify(r.j).slice(0,100));
  r=await api(Bo.token,'GET',`/v1/workspaces/${W}/artifacts`);t('the listing stays per channel',r.s===200&&!(r.j.artifacts??[]).some(a=>a.id===SA.id),r.s);
- let dmLine=null;for(let i=0;i<15&&!dmLine;i++){await sleep(200);r=await api(Bo.token,'GET',`/v1/me/notifications?workspace=${W}`);dmLine=(r.j.notifications??[]).find(n=>(n.message?.body??'').includes(`/?open=artifact%3A${SA.id}`))}
- t('Bob has the file_shared DM line, with the artifact\'s link',/^Ann shared Secret plan with you\n\S+\/\?open=artifact%3A/.test(dmLine?.message?.body??'')&&dmLine?.message?.systemKind==='file_shared',JSON.stringify(dmLine??r.j).slice(0,160));
- r=await api(Bo.token,'GET',`/v1/events?workspace=${W}&since=0&types=sharing.granted`);t('and the sharing.granted event',(r.j.events??[]).some(e=>e.data?.ref===AREF&&e.data?.kind==='artifact'&&e.data?.url===`/?open=artifact%3A${SA.id}`),JSON.stringify(r.j).slice(0,160));
+ let dmLine=null;for(let i=0;i<15&&!dmLine;i++){await sleep(200);r=await api(Bo.token,'GET',`/v1/me/notifications?workspace=${W}`);dmLine=(r.j.notifications??[]).find(n=>(n.message?.body??'').includes(`/chat/?open=artifact%3A${SA.id}`))}
+ t('Bob has the file_shared DM line, with the artifact\'s link',/^Ann shared Secret plan with you\n\S+\/chat\/\?open=artifact%3A/.test(dmLine?.message?.body??'')&&dmLine?.message?.systemKind==='file_shared',JSON.stringify(dmLine??r.j).slice(0,160));
+ r=await api(Bo.token,'GET',`/v1/events?workspace=${W}&since=0&types=sharing.granted`);t('and the sharing.granted event',(r.j.events??[]).some(e=>e.data?.ref===AREF&&e.data?.kind==='artifact'&&e.data?.url===`/chat/?open=artifact%3A${SA.id}`),JSON.stringify(r.j).slice(0,160));
  r=await api(Bo.token,'GET',`/v1/workspaces/${W}/shared-with-me`);t('shared-with-me lists the artifact',(r.j.shares??[]).some(x=>x.ref===AREF&&x.title==='Secret plan'),JSON.stringify(r.j).slice(0,140));
  r=await api(Bo.token,'DELETE',`/v1/artifacts/${SA.id}`);t('Bob cannot delete it',r.s===403,r.s);
  r=await api(Bo.token,'POST',`/v1/artifacts/${SA.id}/app-token`);t('nor mint an app token as a viewer',r.s===403,r.s);

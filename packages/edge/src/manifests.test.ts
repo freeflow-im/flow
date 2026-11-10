@@ -100,6 +100,9 @@ describe('the pages, from the manifests', () => {
   it('serves each app its page, a file under it falls through, and Chat has the rest', async () => {
     expect(await (await get('/docs/f/abc')).text()).toBe('page /_pages/docs.html');
     expect((await get('/docs/assets/x.js')).status).toBe(404);
+    expect(await (await get('/chat')).text()).toBe('page /_pages/index.html');
+    expect(await (await get('/chat/settings')).text()).toBe('page /_pages/index.html');
+    expect((await get('/chat/assets/x.js')).status).toBe(404);
     expect(await (await get('/general/thread')).text()).toBe('page /_pages/index.html');
     expect((await get('/v1/channels')).status).toBe(404);
     expect((await get('/assets/x.js')).status).toBe(404);
@@ -127,6 +130,14 @@ describe('the pages, from the manifests', () => {
     const old = await get('/p/tok?a=b');
     expect(old.status).toBe(301);
     expect(old.headers.get('location')).toBe('/docs/p/tok?a=b');
+  });
+
+  it('sends the root to Chat at /chat, with its query (a sign-in link, ?next=, a handoff)', async () => {
+    for (const [from, to] of [['/', '/chat'], ['/?next=%2Fdocs', '/chat?next=%2Fdocs'], ['/?signin=tok&x=1', '/chat?signin=tok&x=1']]) {
+      const res = await get(from!);
+      expect(res.status, from).toBe(302);
+      expect(res.headers.get('location'), from).toBe(to);
+    }
   });
 
   it('sends Docs’ addresses under /workspace, its base until 2026-11-10, to the same page under /docs', async () => {

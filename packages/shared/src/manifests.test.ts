@@ -44,8 +44,8 @@ describe('APP_MANIFESTS', () => {
       expect(m.client).toBeDefined();
       expect(new Set(m.pages.map((p) => p.html)).size).toBe(1);
       for (const p of m.pages) {
-        if (m.path === '/') expect(p.path).toBe('*');
-        else expect(p.path === m.path || p.path.startsWith(`${m.path}/`)).toBe(true);
+        // Chat's catch-all (its client is built at the root) is the one page outside its app's path.
+        expect(p.path === '*' ? m.name === 'chat' : p.path === m.path || p.path.startsWith(`${m.path}/`)).toBe(true);
       }
     }
     expect(unique(APP_MANIFESTS.flatMap((m) => m.pages ?? []).map((p) => p.path))).toBe(true);
