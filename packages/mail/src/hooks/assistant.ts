@@ -4,7 +4,10 @@
 // (lib/assistant.ts). It never sends email: the assistant has no tool that does.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CHANGES_MAIL, runMailClientCalls, type MessageRef } from '../lib/assistant';
-import { MAIL_CHAT, readAgentEvents, type AgentEvent, type AgentTurnRequest, type ChatItem, type ClientToolCall, type MailContext } from '../lib/docsAgent';
+import { browserExtensionPresent, checkBrowserExtension, MAIL_CHAT, readAgentEvents, type AgentEvent, type AgentTurnRequest, type ChatItem, type ClientToolCall, type MailContext } from '../lib/docsAgent';
+
+/** The context, saying whether the FreeFlow browser extension can run the web tools here (prototype). */
+const withBrowser = (context: MailContext): AgentTurnRequest['context'] => (browserExtensionPresent() ? { ...context, browser: true } : context);
 
 class TurnError extends Error {
   constructor(
@@ -104,7 +107,9 @@ export function useMailAssistant({ org, context, show, onMailChanged }: MailAssi
       };
 
       void (async () => {
-        let req: AgentTurnRequest = { message, context: latest.current.context(), scope: MAIL_CHAT };
+        // Whether the browser extension is there now (it may have been added or turned off since the page loaded).
+        await checkBrowserExtension(true);
+        let req: AgentTurnRequest = { message, context: withBrowser(latest.current.context()), scope: MAIL_CHAT };
         try {
           for (;;) {
             const calls: { value: ClientToolCall[] | null } = { value: null };
@@ -123,7 +128,7 @@ export function useMailAssistant({ org, context, show, onMailChanged }: MailAssi
             const toolResults = await runMailClientCalls(pending, (ref) => latest.current.show(ref));
             for (const r of toolResults) updateTool(r.id, { status: r.isError ? 'error' : 'ok', ...(r.isError ? { error: r.content } : {}) });
             if (abort.signal.aborted) break;
-            req = { context: latest.current.context(), scope: MAIL_CHAT, toolResults };
+            req = { context: withBrowser(latest.current.context()), scope: MAIL_CHAT, toolResults };
           }
         } catch (e) {
           if (!abort.signal.aborted) setError(e instanceof Error ? e.message : String(e));

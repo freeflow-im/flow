@@ -1,7 +1,7 @@
 // Types shared by the agent's server loop and the browser panel.
 
-/** What the user is looking at, sent with every agent request. */
-export type AgentContext =
+/** What the user is looking at, sent with every agent request; and whether this browser can run the web tools. */
+export type AgentContext = (
   | { page: 'home' }
   | {
       page: 'sheet';
@@ -63,7 +63,29 @@ export type AgentContext =
       selectedRegion?: ImageRegion;
     }
   | MailContext
-  | CalendarContext;
+  | CalendarContext
+) & BrowserReach;
+
+/**
+ * The FreeFlow browser extension (prototype, packages/browser-extension) is in this browser: the assistant then has the
+ * browser_* tools (BROWSER_TOOLS), which the page passes to the extension. Sent by the panels that can do that.
+ */
+export interface BrowserReach {
+  browser?: boolean;
+}
+
+/** The web tools the FreeFlow browser extension runs, in the agent's own tabs (prototype). */
+export const BROWSER_TOOLS: ReadonlySet<string> = new Set([
+  'browser_open',
+  'browser_tabs',
+  'browser_read',
+  'browser_click',
+  'browser_type',
+  'browser_scroll',
+  'browser_navigate',
+  'browser_close',
+  'browser_handoff',
+]);
 
 /**
  * FreeFlow Mail (the hosted suite only): the account and folder shown, and the open message or the messages checked in the
@@ -402,6 +424,8 @@ export const CLIENT_TOOLS = new Set([
   'open_calendar_event',
   'show_calendar_range',
   'delete_event',
+  // The FreeFlow browser extension (prototype): the page passes them on to it.
+  ...BROWSER_TOOLS,
 ]);
 
 /** Server tools whose result the chat is given (tool_end, the transcript): it links to the draft, file or event they made. */

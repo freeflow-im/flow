@@ -4,7 +4,10 @@
 // Calendar runs open_calendar_event, show_calendar_range and delete_event (after asking) and refuses Docs' own.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CHANGES_CALENDAR, runCalendarClientCalls, type CalendarClientHandlers } from '../lib/assistant';
-import { CALENDAR_CHAT, readAgentEvents, type AgentEvent, type AgentTurnRequest, type CalendarContext, type ChatItem, type ClientToolCall } from '../lib/docsAgent';
+import { browserExtensionPresent, CALENDAR_CHAT, checkBrowserExtension, readAgentEvents, type AgentEvent, type AgentTurnRequest, type CalendarContext, type ChatItem, type ClientToolCall } from '../lib/docsAgent';
+
+/** The context, saying whether the FreeFlow browser extension can run the web tools here (prototype). */
+const withBrowser = (context: CalendarContext): AgentTurnRequest['context'] => (browserExtensionPresent() ? { ...context, browser: true } : context);
 
 class TurnError extends Error {
   constructor(
@@ -107,7 +110,9 @@ export function useCalendarAssistant({ org, context, handlers, onCalendarChanged
       };
 
       void (async () => {
-        let req: AgentTurnRequest = { message, context: latest.current.context(), scope: CALENDAR_CHAT };
+        // Whether the browser extension is there now (it may have been added or turned off since the page loaded).
+        await checkBrowserExtension(true);
+        let req: AgentTurnRequest = { message, context: withBrowser(latest.current.context()), scope: CALENDAR_CHAT };
         try {
           for (;;) {
             const calls: { value: ClientToolCall[] | null } = { value: null };
@@ -127,7 +132,7 @@ export function useCalendarAssistant({ org, context, handlers, onCalendarChanged
             for (const r of toolResults) updateTool(r.id, { status: r.isError ? 'error' : 'ok', ...(r.isError ? { error: r.content } : {}) });
             if (toolResults.some((r, n) => !r.isError && CHANGES_CALENDAR.has(pending[n]?.name ?? ''))) latest.current.onCalendarChanged();
             if (abort.signal.aborted) break;
-            req = { context: latest.current.context(), scope: CALENDAR_CHAT, toolResults };
+            req = { context: withBrowser(latest.current.context()), scope: CALENDAR_CHAT, toolResults };
           }
         } catch (e) {
           if (!abort.signal.aborted) setError(e instanceof Error ? e.message : String(e));
