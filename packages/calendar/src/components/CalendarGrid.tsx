@@ -63,7 +63,15 @@ export function CalendarGrid({ view, date, occurrences, calendars, weekStartsOn,
         height="100%"
         firstDay={weekStartsOn}
         events={events}
-        eventClassNames={(a) => ((a.event.end ?? a.event.start) ?? new Date()) < new Date() ? ['cal-past'] : []}
+        eventClassNames={(a) => {
+          const start = a.event.start ?? new Date();
+          const end = a.event.end ?? start;
+          const names: string[] = [];
+          if (end < new Date()) names.push('cal-past');
+          // A quarter-hour event is as tall as one line of small text, so its title is set smaller (index.css).
+          if (!a.event.allDay && +end - +start <= 15 * 60_000) names.push('cal-quarter');
+          return names;
+        }}
         nowIndicator
         navLinks
         navLinkDayClick={(d) => onDay(d)}
