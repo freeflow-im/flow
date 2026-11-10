@@ -221,7 +221,7 @@ export const api = {
   /** What is in a folder ('' is the top): its folders, documents of every kind and stored files. */
   library: (folder: Place = '') => request<{ folder: string; folders: FolderInfo[]; docs: SheetMeta[]; files: StoredFile[] }>('GET', `/api/library${inFolder(folder, true)}`),
   /** A small picture of a document, for the thumbnail view. */
-  preview: (id: string) => request<{ preview: FilePreview }>('GET', `/api/library/preview/${encodeURIComponent(id)}`),
+  preview: (id: string, signal?: AbortSignal) => request<{ preview: FilePreview }>('GET', `/api/library/preview/${encodeURIComponent(id)}`, undefined, signal ? { signal } : undefined),
   /** Folders, documents and stored files whose name contains the text, in every folder. */
   searchLibrary: (q: string, root: Place = '') => request<{ folders: FolderInfo[]; docs: SheetMeta[]; files: StoredFile[]; truncated: boolean }>('GET', `/api/library/search?q=${encodeURIComponent(q)}${inFolder(typeof root === 'string' ? '' : { ...root, folder: '' })}`),
   /** The desktop app: files by name anywhere in the home folder outside the open one, by their paths. */
