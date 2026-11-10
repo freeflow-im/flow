@@ -3,7 +3,7 @@
 // server offers no other app's), and what the chat links to (an event the assistant made or changed). The panel is
 // components/AssistantPanel.tsx, the turns hooks/assistant.ts.
 import type { CalendarAccount, CalendarInfo, EventOccurrence, Scope } from '../api';
-import { isWebTool, MAX_CALENDARS_SHOWN, runWebTool, type CalendarContext, type ChatItem, type ClientToolCall, type ClientToolResult } from './docsAgent';
+import { isWebTool, MAX_CALENDARS_SHOWN, runWebTool, type AgentImage, type CalendarContext, type ChatItem, type ClientToolCall, type ClientToolResult } from './docsAgent';
 import { browserPref } from './prefs';
 import type { Range, View } from './ranges';
 
@@ -106,7 +106,12 @@ export interface CalendarClientHandlers {
 }
 
 /** Runs the browser tools the assistant asked for, in Calendar: the server offers a turn from Calendar only Calendar's (the tool registry, platform.md §5.4). */
-export async function runCalendarClientCalls(calls: ClientToolCall[], h: CalendarClientHandlers): Promise<ClientToolResult[]> {
+export async function runCalendarClientCalls(
+  calls: ClientToolCall[],
+  h: CalendarClientHandlers,
+  /** Takes a picture a web tool took (browser_screenshot), to send with the results; false when the request is full. */
+  attach?: (image: AgentImage) => boolean,
+): Promise<ClientToolResult[]> {
   const results: ClientToolResult[] = [];
   for (const call of calls) {
     const i = call.input;
@@ -131,7 +136,7 @@ export async function runCalendarClientCalls(calls: ClientToolCall[], h: Calenda
         }
       } else if (isWebTool(call.name)) {
         // The web tools (prototype): the browser extension runs them; a failure is said by the catch below.
-        results.push({ id: call.id, content: await runWebTool(call) });
+        results.push({ id: call.id, content: await runWebTool(call, attach) });
       } else {
         results.push({ id: call.id, content: `Unknown tool ${call.name}.`, isError: true });
       }

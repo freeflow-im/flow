@@ -2,12 +2,12 @@
   "manifest_version": 3,
   "name": "FreeFlow Browser (prototype)",
   "description": "Lets your FreeFlow assistant open and use web pages in this browser, in its own tab group.",
-  "version": "0.0.1",
+  "version": "0.0.3",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAh1+W7NP+fc743B7HoDW/c/sKuCln6uTuBZ/sXOjj0iOfsBhRvgs3b6x2zNa3mKBra35vX5KMTCDMx4dcJdomHf2vBWMGk31P5nMESwm4DrxXgONzV/0YgRJ3I3h/ERP6Bgm9xyMAJyTKfEek0IAhaCKFtiL1PmR4HxGRLy+eCUgnSLSAyzf1pXbzA9ABKPeKkUisjo1B1eVpYGdEUjpZFhsAoLn86or0hzJbm/VmT94nJVO9J0dNy6ZhCNwhGnAjfLWjQZsrLrwQSIOnfCiUlcPljf1XAUk09re414Dx46xaGAqerZ/R0MGBGKzRcV2lM8UebhHzr0MfSkTCCH9irQIDAQAB",
   "minimum_chrome_version": "116",
   "background": { "service_worker": "background.js", "type": "module" },
   "action": { "default_title": "FreeFlow agent: click to stop it and close its tabs" },
-  "permissions": ["tabs", "tabGroups", "scripting", "storage"],
+  "permissions": ["tabs", "tabGroups", "scripting", "storage", "debugger"],
   "host_permissions": ["<all_urls>"],
   "externally_connectable": {
     "matches": ["http://localhost/*", "http://127.0.0.1/*", "https://app.freeflow.im/*"]

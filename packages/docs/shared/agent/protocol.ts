@@ -85,6 +85,7 @@ export const BROWSER_TOOLS: ReadonlySet<string> = new Set([
   'browser_navigate',
   'browser_close',
   'browser_handoff',
+  'browser_screenshot',
 ]);
 
 /**

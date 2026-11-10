@@ -4,7 +4,7 @@
 // Calendar runs open_calendar_event, show_calendar_range and delete_event (after asking) and refuses Docs' own.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CHANGES_CALENDAR, runCalendarClientCalls, type CalendarClientHandlers } from '../lib/assistant';
-import { browserExtensionPresent, CALENDAR_CHAT, checkBrowserExtension, readAgentEvents, type AgentEvent, type AgentTurnRequest, type CalendarContext, type ChatItem, type ClientToolCall } from '../lib/docsAgent';
+import { browserExtensionPresent, CALENDAR_CHAT, checkBrowserExtension, MAX_IMAGES_PER_MESSAGE, readAgentEvents, webPicturesNote, type AgentEvent, type AgentImage, type AgentTurnRequest, type CalendarContext, type ChatItem, type ClientToolCall } from '../lib/docsAgent';
 
 /** The context, saying whether the FreeFlow browser extension can run the web tools here (prototype). */
 const withBrowser = (context: CalendarContext): AgentTurnRequest['context'] => (browserExtensionPresent() ? { ...context, browser: true } : context);
@@ -128,11 +128,14 @@ export function useCalendarAssistant({ org, context, handlers, onCalendarChanged
             if (!calls.value || abort.signal.aborted) break;
             const pending = calls.value;
             setItems((prev) => [...prev, ...pending.map((c): ChatItem => ({ kind: 'tool', id: c.id, name: c.name, input: c.input, status: 'running' }))]);
-            const toolResults = await runCalendarClientCalls(pending, { ...latest.current.handlers, confirm });
+            const pictures: AgentImage[] = [];
+            const attach = (img: AgentImage) => pictures.length < MAX_IMAGES_PER_MESSAGE && pictures.push(img) > 0;
+            const toolResults = await runCalendarClientCalls(pending, { ...latest.current.handlers, confirm }, attach);
             for (const r of toolResults) updateTool(r.id, { status: r.isError ? 'error' : 'ok', ...(r.isError ? { error: r.content } : {}) });
             if (toolResults.some((r, n) => !r.isError && CHANGES_CALENDAR.has(pending[n]?.name ?? ''))) latest.current.onCalendarChanged();
             if (abort.signal.aborted) break;
-            req = { context: withBrowser(latest.current.context()), scope: CALENDAR_CHAT, toolResults };
+            // Screenshots follow the results in the same message (the API takes only text in tool results).
+            req = { context: withBrowser(latest.current.context()), scope: CALENDAR_CHAT, toolResults, ...(pictures.length ? { images: pictures, message: webPicturesNote(pictures.length) } : {}) };
           }
         } catch (e) {
           if (!abort.signal.aborted) setError(e instanceof Error ? e.message : String(e));
