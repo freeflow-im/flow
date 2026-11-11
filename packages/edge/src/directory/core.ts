@@ -198,13 +198,13 @@ export class DirectoryCore {
    */
   hostedRuntimeOf(accountId: string): HostedRuntimeDTO | null {
     const account = this.accountById(accountId);
-    if (!account || account.state === 'removed') return null;
+    if (!account || account.state === 'removed' || account.state === 'suspended') return null;
     const u = this.userById(account.principalId);
     if (!u?.is_agent || u.runtime !== 'hosted' || u.deleted_at) return null;
     const mode = u.mode as AgentMode;
     const sponsorId = (u.sponsor_user_id as string | null) ?? null;
     const sponsorAccount = sponsorId ? this.accountFor(sponsorId, account.organizationId) : null;
-    if (mode === 'personal' && (!sponsorAccount || sponsorAccount.state === 'removed')) return null;
+    if (mode === 'personal' && (!sponsorAccount || sponsorAccount.state === 'removed' || sponsorAccount.state === 'suspended')) return null;
     return {
       runtimeKey: mode === 'personal' ? sponsorAccount!.id : account.id,
       agentId: u.id as string,
@@ -214,6 +214,16 @@ export class DirectoryCore {
       sponsorId,
       sponsorAccountId: sponsorAccount?.id ?? null,
     };
+  }
+
+  /** A hosted agent's name, as its definition sets it (agents.md §6): on the principal and its accounts, where rosters and the panel read it. */
+  renameAgent(agentId: string, name: string): void {
+    const u = this.userById(agentId);
+    if (!u?.is_agent) throw notFound('agent not found');
+    const clean = name.trim().slice(0, 80);
+    if (!clean) throw badRequest('validation', 'name: not empty');
+    this.sql.exec('UPDATE users SET display_name = ? WHERE id = ?', clean, agentId);
+    this.sql.exec('UPDATE accounts SET display_name = ? WHERE user_id = ?', clean, agentId);
   }
 
   /** Where an agent's loop runs (agents.md §6); a hosted shared agent is marked so by the Admin app after the Org object makes it. */

@@ -1,5 +1,6 @@
 // Agent chat state for the whole app. Lives above the routes, so the conversation (and a turn in
 // progress) survives navigation such as the agent opening another spreadsheet.
+import { useOrganization } from '../organization.ts';
 import { useAssistantDockState, useNewChatOnClose, type AssistantPlacement } from '@flow/suite-bar/assistant-dock';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -187,12 +188,16 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   const [agents, setAgents] = useState<UsableAgent[]>([]);
   const [agentId, setAgentId] = useState<string | null>(null);
   // The suite's agents (agents.md §6): the person's assistant, an agent with a name of its own, and the hosted shared ones.
+  // Asked again when the organization selected in the bar changes: each has its own assistant and shared agents.
+  const organization = useOrganization();
+  const orgId = organization.active?.id ?? null;
   useEffect(() => {
-    if (!user || !suite) { setAgents([]); setAgentId(null); return; }
+    setAgentId(null);
+    if (!user || !suite) { setAgents([]); return; }
     let current = true;
     api.usableAgents().then((r) => current && setAgents(r.agents), () => current && setAgents([]));
     return () => { current = false; };
-  }, [user, suite]);
+  }, [user, suite, orgId]);
   const self = agents.find((a) => a.self) ?? null;
   const assistantName = self?.displayName ?? null;
   /** The agent a request names: a hosted shared agent's id, or nothing for the person's own assistant. */

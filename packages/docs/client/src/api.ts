@@ -441,12 +441,12 @@ export const api = {
   restoreFromTrash: (id: string) => request<{ file: SheetMeta }>('POST', `/api/trash/${encodeURIComponent(id)}/restore`),
 
   /** A chat: a file's (scope = its id) or the home page's, with the file's name. */
-  agentTranscript: (scope: string, agent?: string | null) => request<{ items: ChatItem[]; title: string | null }>('GET', `/api/agent?scope=${encodeURIComponent(scope)}${agent ? `&agent=${encodeURIComponent(agent)}` : ''}`),
+  agentTranscript: (scope: string, agent?: string | null) => request<{ items: ChatItem[]; title: string | null }>('GET', `/api/agent?scope=${encodeURIComponent(scope)}${agent ? `&agent=${encodeURIComponent(agent)}` : ''}${inFolder(undefined)}`),
   // The hosted suite (docs/specs/agents.md §6): the agents the person may talk to, and their own assistant's definition.
   usableAgents: () => request<{ agents: UsableAgent[] }>('GET', `/api/agent/agents${inFolder(undefined, true)}`),
   agentDefinition: () => request<{ definition: AgentDefinition }>('GET', `/api/agent/definition${inFolder(undefined, true)}`),
   saveAgentDefinition: (body: { name?: string; instructions?: string }) => request<{ definition: AgentDefinition }>('PUT', `/api/agent/definition${inFolder(undefined, true)}`, body),
-  agentReset: (scope: string, agent?: string | null) => request<{ ok: true }>('POST', '/api/agent/reset', agent ? { scope, agent } : { scope }),
+  agentReset: (scope: string, agent?: string | null) => request<{ ok: true }>('POST', `/api/agent/reset${inFolder(undefined, true)}`, agent ? { scope, agent } : { scope }),
   /** Answer a permission the user's own agent asked for (AgentEvent 'permission'). */
   answerAgentPermission: (id: string, allow: boolean) => request<{ ok: true }>('POST', '/api/agent/permission', { id, allow }),
   agentTurn: streamAgentTurn,

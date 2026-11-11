@@ -7,7 +7,7 @@ import { z } from 'zod';
 import type { AccountDTO, UsableAgentDTO } from '@flow/shared';
 import type { Assistant } from '../assistant/object';
 import { ApiError, badRequest, forbidden, notFound, unauthorized } from '../errors';
-import { directory, resolveCaller, type AuthEnv } from './auth';
+import { directory, guestRefusal, resolveCaller, type AuthEnv } from './auth';
 
 export interface AgentRouteEnv extends AuthEnv { ASSISTANT: DurableObjectNamespace<Assistant> }
 type C = Context<{ Bindings: AgentRouteEnv }>;
@@ -24,6 +24,8 @@ async function memberOf(c: C): Promise<{ organizationId: string; userId: string;
   const who = await resolveCaller(c, organizationId);
   if (!who.user) throw unauthorized('missing bearer token');
   if (!who.account) throw new ApiError(403, 'no_account', 'not a member of this organization');
+  const guest = guestRefusal(who.account, 'agents');
+  if (guest) throw guest;
   if (who.user.isAgent) throw forbidden('an agent cannot make or change agents');
   return { organizationId, userId: who.user.id, account: who.account };
 }
@@ -50,6 +52,7 @@ agentRoutes.post('/v1/workspaces/:id/agents/hosted', async (c) => {
   if (!account) throw new ApiError(500, 'internal', 'the agent has no account');
   const definition = await runtimeOf(c, account.id).adopt(account, r.data.name);
   const final = r.data.instructions ? await runtimeOf(c, account.id).updateDefinition({ instructions: r.data.instructions }) : definition;
+  void definition;
   const agent: UsableAgentDTO = { id: made.userId, accountId: account.id, displayName: account.displayName, mode: 'shared', self: false };
   void me;
   return c.json({ agent, definition: final }, 201);
@@ -67,5 +70,7 @@ agentRoutes.put('/v1/workspaces/:id/agents/:userId/definition', async (c) => {
   if (!mayEdit) throw forbidden("only the agent's sponsor, an owner or an admin changes its definition");
   const r = DefinitionBody.safeParse(await c.req.json().catch(() => undefined));
   if (!r.success) throw badRequest('validation', r.error.issues[0]?.message ?? 'invalid request');
+  // The name is the directory's, where the panel and the rosters read it.
+  if (r.data.name) await directory(c, 'renameAgent', account.principalId, r.data.name);
   return c.json({ definition: await runtimeOf(c, account.id).updateDefinition(r.data), mayEdit });
 });

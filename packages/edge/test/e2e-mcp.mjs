@@ -209,6 +209,16 @@ r=await api(O.token,'GET',`/v1/workspaces/${A}/agents/${OMNIH?.id}/definition`);
 r=await api(O.token,'PUT',`/v1/workspaces/${A}/agents/${OMNIH?.id}/definition`,{instructions:'Help the team briefly.'});t('and is changed',r.s===200&&r.j.definition?.instructions==='Help the team briefly.',r.s);
 r=await api(O.token,'GET',`/api/agent?scope=home&agent=${OMNIH?.id}&workspace=${A}`);t('Olga’s conversation with Omni starts empty, in Omni’s runtime',r.s===200&&Array.isArray(r.j.items)&&r.j.items.length===0,r.s+' '+JSON.stringify(r.j).slice(0,100));
 r=await api(O.token,'GET',`/api/agent?scope=home&agent=00000000-0000-7000-8000-000000000bad&workspace=${A}`);t('an agent that is not hers to use is refused',r.s===404&&r.j.code==='no_agent',r.s);
+// Review fixes: the definition is the Admin app's; guests are refused; the open page is gated; the name is real.
+r=await api(O.token,'PUT',`/api/agent/definition?workspace=${A}&agent=${OMNIH?.id}`,{instructions:'pwned'});t('the panel route cannot set a shared agent’s definition',r.s===403&&r.j.code==='not_yours',r.s+' '+JSON.stringify(r.j).slice(0,100));
+r=await api(O.token,'GET',`/v1/workspaces/${A}/agents/${OMNIH?.id}/definition`);t('so it is unchanged',r.j.definition?.instructions==='Help the team briefly.',JSON.stringify(r.j).slice(0,120));
+r=await api(O.token,'POST',`/api/sheets?workspace=${A}`,{title:`Olga private ${tag}`});const PRIV=r.j.sheet?.id;
+r=await api(O.token,'POST','/api/agent/turn',{message:'read this',context:{page:'sheet',sheetId:PRIV,title:'x'},scope:'home',agent:OMNIH?.id,workspace:A});t('a turn whose page is a file Omni cannot see is refused, whatever the chat',r.s===403&&r.j.code==='agent_cannot_see',r.s+' '+JSON.stringify(r.j).slice(0,120));
+r=await api(O.token,'PUT',`/v1/workspaces/${A}/agents/${OMNIH?.id}/definition`,{name:`Omni Prime ${tag}`});r=await api(O.token,'GET',`/api/agent/agents?workspace=${A}`);t('renaming it renames it in the panel',(r.j.agents??[]).some(a=>a.id===OMNIH?.id&&a.displayName===`Omni Prime ${tag}`),JSON.stringify(r.j).slice(0,160));
+r=await api(O.token,'POST',`/v1/workspaces/${A}/invites`,{emails:[`gail-${tag}@example.com`],kind:'guest'});
+{const G=await signup(`gail-${tag}@example.com`,'Gail');const tok=(r.j.results?.[0]?.inviteUrl??'').split('/').pop();await api(G.token,'POST','/v1/invites/accept',{token:tok});
+ r=await api(G.token,'GET',`/api/agent/agents?workspace=${A}`);const ga=r;r=await api(G.token,'GET',`/api/agent?scope=home&agent=${OMNIH?.id}&workspace=${A}`);t('a guest cannot talk to Omni',r.s===403&&r.j.code==='guest',r.s+' '+JSON.stringify(r.j).slice(0,100));
+ r=await api(G.token,'POST',`/v1/workspaces/${A}/agents/hosted`,{name:'Sneaky'});t('nor make a hosted agent',r.s===403,r.s);void ga;}
 r=await api(O.token,'GET',`/v1/workspaces/${A}/agents/${REG??'x'}/definition`);t('an external agent has no definition here',r.s===404,r.s);
 // --- A wake job for a hosted agent goes straight to its runtime (agents.md §6, phase C) ---------------------------------------
 {const SP=`/v1/events/subscriptions?workspace=${A}`;

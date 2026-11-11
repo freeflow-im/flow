@@ -27,6 +27,8 @@ export interface EventsEnv {
 export type CheckAnswer = { ack: true } | { retryAfter: number } | { requeueAfter: number };
 
 const DAY_MS = 86_400_000;
+/** How long the directory's answer about a consumer's hosted runtime is kept. */
+const HOSTED_TTL_MS = 5 * 60_000;
 /** The longest a read waits for an event to match. */
 export const WAIT_MAX_MS = 30_000;
 
@@ -301,8 +303,8 @@ export class Events extends DurableObject<EventsEnv> {
       .catch((err: Error) => console.error(`[events] job ${job.id}: queue send failed: ${err.message}`));
   }
 
-  /** Which consumers are hosted, and where (agents.md §6), asked of the directory once each and kept for this object's life. */
-  private readonly hosted = new Map<string, Promise<HostedRuntimeDTO | null>>();
+  /** Which consumers are hosted, and where (agents.md §6), asked of the directory and kept a while: an agent made hosted or removed later is seen again soon. */
+  private readonly hosted = new Map<string, { at: number; answer: Promise<HostedRuntimeDTO | null> }>();
 
   /**
    * A job for a hosted agent is handed to its runtime at once (agents.md §6): the bridge polls, the platform's own runtime is
@@ -314,10 +316,11 @@ export class Events extends DurableObject<EventsEnv> {
     const lookup = (): Promise<HostedRuntimeDTO | null> =>
       (DIRECTORY.get(DIRECTORY.idFromName('directory')).call('hostedRuntimeOf' as never, [job.agent] as never) as unknown as Promise<{ ok: boolean; value: unknown }>)
         .then((a) => (a.ok ? (a.value as HostedRuntimeDTO | null) : null), () => null);
-    const found = this.hosted.get(job.agent) ?? lookup();
-    if (!this.hosted.has(job.agent)) {
+    const cached = this.hosted.get(job.agent);
+    const found = cached && Date.now() - cached.at < HOSTED_TTL_MS ? cached.answer : lookup();
+    if (found !== cached?.answer) {
       if (this.hosted.size > 1_000) this.hosted.clear();
-      this.hosted.set(job.agent, found);
+      this.hosted.set(job.agent, { at: Date.now(), answer: found });
     }
     const sent = found.then((runtime) => (runtime ? ASSISTANT.get(ASSISTANT.idFromName(runtime.runtimeKey)).wake({ organizationId, job, runtime }) : undefined))
       .catch((err: Error) => console.error(`[events] job ${job.id}: the hosted runtime did not take it: ${err.message}`));

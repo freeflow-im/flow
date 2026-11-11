@@ -248,6 +248,31 @@ describe('a hosted agent’s runtime takes a wake job (agents.md §6)', () => {
   });
 });
 
+describe('the runtime under concurrent use (agents.md §6)', () => {
+  it('keeps a running turn’s guard across a definition change: a second turn in the same conversation is still refused', async () => {
+    const a = assistant('acct-1');
+    let release!: () => void;
+    const parked = new Promise<void>((r) => { release = r; });
+    let systems: string[] = [];
+    a.script = async (params, { onText }) => {
+      systems.push(JSON.stringify(params.system));
+      if (systems.length === 1) await parked;
+      onText('ok');
+      return message([{ type: 'text', text: 'ok' }], 'end_turn') as never;
+    };
+    const first = a.handle(req('POST', '/api/agent/turn', { message: 'one', context: { page: 'home' }, workspace: 'org-1' }), CALLER, DOCS_CALLER);
+    await new Promise((r) => setTimeout(r, 10));
+    expect((await a.handle(req('PUT', '/api/agent/definition', { instructions: 'Be terse.' }), CALLER, DOCS_CALLER)).status).toBe(200);
+    expect((await a.handle(req('POST', '/api/agent/turn', { message: 'two', context: { page: 'home' }, workspace: 'org-1' }), CALLER, DOCS_CALLER)).status).toBe(409);
+    release();
+    await events(await first);
+    // The next turn carries the new instructions.
+    systems = [];
+    await events(await a.handle(req('POST', '/api/agent/turn', { message: 'three', context: { page: 'home' }, workspace: 'org-1' }), CALLER, DOCS_CALLER));
+    expect(systems[0]).toContain('Be terse.');
+  });
+});
+
 describe('the move from the Docs objects (moveAssistantRows)', () => {
   /** A Docs object's assistant rows as they were kept there. */
   function docsRows(rows: Record<string, Record<string, unknown>[]>) {

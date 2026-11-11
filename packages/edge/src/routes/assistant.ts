@@ -11,7 +11,7 @@ import type { Assistant } from '../assistant/object';
 import { ApiError } from '../errors';
 import { isFileId } from '@flow/docs/server/ids.ts';
 import { chatScope } from '@flow/docs/shared/agent/protocol.ts';
-import { directory, resolveCaller, tokenOf, type AuthEnv } from './auth';
+import { directory, guestRefusal, resolveCaller, tokenOf, type AuthEnv } from './auth';
 
 export interface AssistantRouteEnv extends AuthEnv { ASSISTANT: DurableObjectNamespace<Assistant>; DOCS: DurableObjectNamespace<import('../docs/object').Docs> }
 type C = Context<{ Bindings: AssistantRouteEnv }>;
@@ -45,12 +45,21 @@ async function agentOf(c: C): Promise<string | null> {
   return typeof body?.agent === 'string' && body.agent ? body.agent : null;
 }
 
-/** The chat a POST is about (a file's id or the home chat), to check a shared agent may see the page (agents.md §6). */
-async function scopeOf(c: C): Promise<string | null> {
-  if (c.req.method === 'GET') return c.req.query('scope') ?? null;
+/** The files a request is about, to check a shared agent may see them (agents.md §6): the chat's, and the open page's. */
+async function filesOf(c: C): Promise<string[]> {
+  const ids = new Set<string>();
+  if (c.req.method === 'GET') {
+    const scope = c.req.query('scope');
+    if (scope && isFileId(scope)) ids.add(scope);
+    return [...ids];
+  }
   const body = (await c.req.raw.clone().json().catch(() => null)) as { scope?: unknown; context?: unknown } | null;
-  if (typeof body?.scope === 'string') return body.scope;
-  return body?.context && typeof body.context === 'object' ? chatScope(body.context as never) : null;
+  if (typeof body?.scope === 'string' && isFileId(body.scope)) ids.add(body.scope);
+  if (body?.context && typeof body.context === 'object') {
+    const page = chatScope(body.context as never);
+    if (isFileId(page)) ids.add(page);
+  }
+  return [...ids];
 }
 
 async function forward(c: C): Promise<Response> {
@@ -62,6 +71,9 @@ async function forward(c: C): Promise<Response> {
     const who = organizationId ? await resolveCaller(c, organizationId) : signedIn;
     if (!who.user) return c.json({ error: 'Not signed in' }, 401);
     if (!who.account) return c.json({ error: organizationId ? 'You are not a member of this organization.' : 'Join an organization to use the assistant.', code: 'no_account' }, 403);
+    // A guest uses Chat alone (decision_log 2026-11-09): no assistant, their own or a shared one.
+    const guest = guestRefusal(who.account, 'the assistant');
+    if (guest) return c.json({ error: guest.message, code: guest.code }, 403);
     const org = c.env.ORG.get(c.env.ORG.idFromName(who.account.organizationId));
     const [agents, wanted] = await Promise.all([directory(c, 'usableAgents', who.user.id, who.account.organizationId), agentOf(c)]);
     const self = agents.find((a) => a.self);
@@ -69,13 +81,15 @@ async function forward(c: C): Promise<Response> {
     if (wanted && wanted !== self?.id && !chosen) return c.json({ error: 'That agent is not one you can use here.', code: 'no_agent' }, 404);
     if (chosen) {
       // A hosted shared agent (agents.md §6): the turn runs as the agent, in its own runtime, asked by the person; the
-      // conversation is the person's with it. On a file the agent has no grant on, the page is not its to see.
+      // conversation is the person's with it. Its definition and settings are the Admin app's (routes/agents.ts), not any
+      // asker's. On a file the agent has no grant on, the page is not its to see: the chat's file and the page's both.
+      const path = new URL(c.req.url).pathname;
+      if (path === '/api/agent/definition' || path === '/api/settings/assistant') return c.json({ error: "A shared agent's definition is set in Organization settings, by its sponsor or an admin.", code: 'not_yours' }, 403);
       const identity = await directory(c, 'agentIdentity', chosen.id, who.account.organizationId);
       if (!identity) return c.json({ error: 'That agent is not one you can use here.', code: 'no_agent' }, 404);
       const agentDocs = { userId: identity.user.id, email: identity.user.email, token: '', ip: who.ip, accountId: identity.account.id, channelIds: await org.channelIdsOf(identity.user.id) };
-      const scope = await scopeOf(c);
-      if (scope && isFileId(scope)) {
-        const seen = await c.env.DOCS.get(c.env.DOCS.idFromName(who.account.organizationId)).handle(new Request(`${c.env.WEB_URL_BASE.replace(/\/+$/, '')}/api/places/${encodeURIComponent(scope)}`), agentDocs, who.account.organizationId);
+      for (const file of await filesOf(c)) {
+        const seen = await c.env.DOCS.get(c.env.DOCS.idFromName(who.account.organizationId)).handle(new Request(`${c.env.WEB_URL_BASE.replace(/\/+$/, '')}/api/places/${encodeURIComponent(file)}`), agentDocs, who.account.organizationId);
         const place = seen.ok ? ((await seen.json()) as { role?: string }) : null;
         if (!place?.role) return c.json({ error: `${chosen.displayName} can't see this page. Share it with ${chosen.displayName} first, or ask your own assistant.`, code: 'agent_cannot_see', agent: chosen.displayName }, 403);
       }
