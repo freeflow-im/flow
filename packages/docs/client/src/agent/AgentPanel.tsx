@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { api } from '../api';
 import { Link } from 'react-router-dom';
 import { AssistantDock, AssistantDockControls, SparkIcon, useIdleMinimize } from '@flow/suite-bar/assistant-dock';
 import { HOME_CHAT, JOB_ACTIVE_STATUSES, type AgentJob, type ChatItem } from '../../../shared/agent/protocol.ts';
@@ -136,6 +137,7 @@ export function AgentPanel() {
         </button>
         <AssistantDockControls shortcut={suite ? undefined : `${MOD}K`} />
       </div>
+      {suite && agent.assistantName && !agent.agentId && agent.assistantName.endsWith('’s assistant') && <NameYourAssistant onNamed={agent.renamed} />}
       {/* Each file has its own chat, and the home page one: which this is, and the way back to the open page's. */}
       <div className="agent-chat">
         <span className="agent-chat-name" title={agent.chatTitle ?? undefined}>
@@ -411,3 +413,36 @@ function PaperclipIcon() {
   );
 }
 
+
+/**
+ * The first time in the suite (agents.md §1.1): the person names their assistant ("Ada"). The name gives it its address,
+ * name@domain, with its own mailbox and calendar; it can be changed later in Settings.
+ */
+function NameYourAssistant({ onNamed }: { onNamed(): void }) {
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const save = async () => {
+    if (!name.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.saveAgentDefinition({ name: name.trim() });
+      onNamed();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form className="agent-name-prompt" onSubmit={(e) => { e.preventDefault(); void save(); }} data-testid="name-assistant">
+      <div>Give your assistant a name. It gets its own email address and calendar, and you can message it in Chat. It answers only you.</div>
+      <div className="agent-name-row">
+        <input value={name} maxLength={40} placeholder="Ada" onChange={(e) => setName(e.target.value)} disabled={busy} aria-label="Assistant name" data-testid="name-assistant-input" />
+        <button type="submit" className="btn primary" disabled={busy || !name.trim()} data-testid="name-assistant-save">{busy ? 'Saving…' : 'Name it'}</button>
+      </div>
+      {error && <div className="form-error">{error}</div>}
+    </form>
+  );
+}

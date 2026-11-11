@@ -296,7 +296,7 @@ turns; hosted shared agents made from the Admin app with a definition, the panel
 runs the turn and answers in the channel as the agent (a personal agent as its sponsor, `via`). Not yet: the model key
 per definition (hosted agents run on the platform's key with the daily limit per asker), headless runners for the Docs
 editing tools in async turns (an async turn has the server tools), the confirm card for a personal agent's writes
-others can see, and object threads. **Not built: a personal agent on the bridge.** A bridge token that acted as its sponsor would be
+others can see, and object threads. Phase E (branch `agents/assistant-member`, 2026-11-11): the Org object's one member list with kinds and personal agents, the assistant in Chat answering only its sponsor, its mailbox and calendar on first naming with the sender allowlist (refused mail moved to a Refused folder; the mailbox checked every minute), and naming in Docs' panel. Not yet: the confirm card before the assistant posts private data where others read (its prompt says so instead), and the native clients' naming. **Not built: a personal agent on the bridge.** A bridge token that acted as its sponsor would be
 an unscoped delegation of the whole account (the sponsor's role, sessions, mail, invitations) with no confirm card, which
 the review of phase B showed; §1's "the bridge's self-registration asks the same question" waits for a delegation that
 carries scopes and a confirm step, which the hosted runtime (phase C) can give. Until then a personal agent is an `/mcp`

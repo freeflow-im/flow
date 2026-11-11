@@ -47,7 +47,19 @@ export interface MailEnv {
   MAIL_ALLOW_INSECURE?: string;
   /** The organizations' event logs (events/object.ts): new INBOX mail is published there as `mail.received`. */
   EVENTS?: DurableObjectNamespace<import('../events/object').Events>;
+  /** For a person's assistant's mailbox (agents.md §1.1): who its sponsor is, their mailboxes, the allowlist, the turn. */
+  DIRECTORY?: DurableObjectNamespace<import('../directory/object').Directory>;
+  MAIL?: DurableObjectNamespace<Mail>;
+  ASSISTANT?: DurableObjectNamespace<import('../assistant/object').Assistant>;
 }
+
+/** Who may mail a person's assistant, and where its turn runs: read from the directory and kept a while. */
+interface AssistantPolicy { allowed: Set<string>; agentId: string; sponsorAccountId: string; organizationId: string; at: number }
+const POLICY_TTL_MS = 2 * 60_000;
+/** Where refused mail goes: out of the inbox, never shown to the assistant, kept for the sponsor to look at. */
+const REFUSED_FOLDER = 'Refused';
+/** How often an assistant's mailbox is checked for new mail. */
+const ASSISTANT_MAIL_EVERY_MS = 60_000;
 
 interface AccountRow {
   id: string; email: string; display_name: string; imap: string; smtp: string;
@@ -1346,7 +1358,9 @@ export class Mail extends DurableObject<MailEnv> {
   private async armAlarm(now = Date.now()): Promise<void> {
     if (this.env.MAIL_ALARM === 'off') { if ((await this.ctx.storage.getAlarm()) !== null) await this.ctx.storage.deleteAlarm(); return; }
     const has = (this.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM accounts').toArray()[0]?.n ?? 0) > 0;
-    const at = nextAlarmAt(this.cache.lastActiveAt(), now, has);
+    // A person's assistant's mailbox has nobody opening it, so it is checked on a steady beat (agents.md §1.1).
+    const assistant = has && (await this.assistantPolicy().catch(() => null)) !== null;
+    const at = assistant ? now + ASSISTANT_MAIL_EVERY_MS : nextAlarmAt(this.cache.lastActiveAt(), now, has);
     const current = await this.ctx.storage.getAlarm();
     if (at === null) { if (current !== null) await this.ctx.storage.deleteAlarm(); return; }
     if (current === null || current > at || current < now) await this.ctx.storage.setAlarm(at);
@@ -1522,7 +1536,8 @@ export class Mail extends DurableObject<MailEnv> {
       if (!take.length) return 0;
       const { summaries } = await this.cacheFetch(r, c, folder, validity, take, now);
       // A folder synced before while empty (a new mailbox, phase 5.4): what is in it now arrived since, so it is new mail.
-      if (state.syncedAt > 0 && folder.toUpperCase() === INBOX) await this.publishReceived(r, folder, summaries);
+      // An assistant's mailbox screens what is there at its first look too: nobody else has read it (agents.md §1.1).
+      if (folder.toUpperCase() === INBOX && (state.syncedAt > 0 || (r.kind === 'hosted' && (await this.assistantPolicy().catch(() => null))))) await this.publishReceived(r, folder, summaries, c);
       this.cache.setMarks(r.id, folder, { high: take[0], low: take.length < uids.length ? take[take.length - 1] : from });
       return take.length;
     }
@@ -1531,7 +1546,7 @@ export class Mail extends DurableObject<MailEnv> {
     const take = fresh.slice(0, cap);
     const { summaries } = await this.cacheFetch(r, c, folder, validity, take, now);
     // Above a high-water mark that existed, so new mail and not the first fill's backlog: into the event log.
-    if (folder.toUpperCase() === INBOX) await this.publishReceived(r, folder, summaries);
+    if (folder.toUpperCase() === INBOX) await this.publishReceived(r, folder, summaries, c);
     if (take.length < fresh.length) this.cache.setMarks(r.id, folder, { high: fresh[0], low: take[take.length - 1] });
     else this.cache.setMarks(r.id, folder, { high: fresh[0] });
     return take.length;
@@ -1541,9 +1556,15 @@ export class Mail extends DurableObject<MailEnv> {
    * One `mail.received` per new INBOX message (platform.md §5.2), for the account's own eyes: its summary without the
    * body. Skipped while the object's organization is unknown; a failure is logged, never the sync's.
    */
-  private async publishReceived(r: AccountRow, folder: string, summaries: MessageSummary[]): Promise<void> {
+  private async publishReceived(r: AccountRow, folder: string, summaries: MessageSummary[], c?: ImapFlow): Promise<void> {
     const org = this.cache.state('owner_organization_id'), owner = this.cache.state('owner_account_id');
-    if (!this.env.EVENTS || !org || !owner || !summaries.length) return;
+    if (!org || !owner || !summaries.length) return;
+    // A person's assistant's mailbox takes only its sponsor's allowlist (agents.md §1.1): the rest leaves the inbox first.
+    if (r.kind === 'hosted' && c) summaries = await this.screenForAssistant(r, c, folder, summaries).catch((err) => {
+      console.error(`[mail] assistant screen: ${(err as Error).message}`);
+      return [];
+    });
+    if (!this.env.EVENTS || !summaries.length) return;
     const events = [...summaries].sort((a, b) => a.uid - b.uid).map((m) => ({
       type: 'mail.received', organizationId: org, actor: null, audience: `account:${owner}` as const,
       ref: { organizationId: org, app: 'mail', kind: 'message', id: `${r.id}:${folder}:${m.uid}` },
@@ -1554,6 +1575,89 @@ export class Mail extends DurableObject<MailEnv> {
       await this.env.EVENTS.get(this.env.EVENTS.idFromName(org)).publishMany(events);
     } catch (err) {
       console.error(`[mail] mail.received: ${(err as Error).message}`);
+    }
+  }
+
+  /** The sponsor's allowlist, when this object's owner is a person's assistant; null for anyone else. */
+  private policy: AssistantPolicy | null | undefined;
+  private async assistantPolicy(): Promise<AssistantPolicy | null> {
+    if (this.policy !== undefined && (this.policy === null || Date.now() - this.policy.at < POLICY_TTL_MS)) return this.policy;
+    const owner = this.cache.state('owner_account_id');
+    const { DIRECTORY, MAIL, ASSISTANT } = this.env;
+    if (!owner || !DIRECTORY || !MAIL || !ASSISTANT) return (this.policy = null);
+    const dir = DIRECTORY.get(DIRECTORY.idFromName('directory'));
+    const ask = async <T,>(method: string, ...args: unknown[]) => {
+      const a = (await dir.call(method as never, args as never)) as { ok: boolean; value?: T };
+      return a.ok ? (a.value as T) : null;
+    };
+    const me = await ask<AccountDTO | null>('accountById', owner);
+    if (!me || me.kind !== 'personal_agent' || me.agentRuntime !== 'hosted' || !me.sponsorId) return (this.policy = null);
+    const sponsor = await ask<AccountDTO | null>('accountFor', me.sponsorId, me.organizationId);
+    if (!sponsor) return (this.policy = null);
+    const [boxes, extra] = await Promise.all([
+      MAIL.get(MAIL.idFromName(sponsor.id)).calendarIdentities().catch(() => [] as { email: string }[]),
+      ASSISTANT.get(ASSISTANT.idFromName(sponsor.id)).mailAllowlist().catch(() => [] as string[]),
+    ]);
+    const allowed = new Set([sponsor.address, ...boxes.map((b) => b.email), ...extra].filter((x): x is string => !!x).map((x) => x.toLowerCase()));
+    return (this.policy = { allowed, agentId: me.principalId, sponsorAccountId: sponsor.id, organizationId: me.organizationId, at: Date.now() });
+  }
+
+  /**
+   * New inbox mail of a person's assistant, screened (agents.md §1.1): a message from an allowlisted, authenticated sender
+   * stays and goes to the assistant as a request; any other is moved to the Refused folder, which the assistant never
+   * reads. Returns the messages that stay. Not an assistant's mailbox: all of them, untouched.
+   */
+  private async screenForAssistant(r: AccountRow, c: ImapFlow, folder: string, summaries: MessageSummary[]): Promise<MessageSummary[]> {
+    const policy = await this.assistantPolicy();
+    if (!policy) return summaries;
+    const { senderAllowed } = await import('./allowlist');
+    const trustFrom = this.env.MAIL_ALLOW_INSECURE === '1';
+    const keep: MessageSummary[] = [], refuse: number[] = [];
+    for (const m of summaries) {
+      const head = await c.fetchOne(String(m.uid), { uid: true, headers: ['authentication-results', 'from'] }, { uid: true });
+      const raw = head && head.headers ? head.headers.toString('utf8') : '';
+      const auth = [...raw.matchAll(/^authentication-results:([\s\S]*?)(?=^\S|$(?![\s\S]))/gim)].map((x) => x[1]!.replace(/\r?\n\s+/g, ' '));
+      const from = m.from?.address ?? null;
+      if (senderAllowed(from, auth, policy.allowed, trustFrom)) keep.push(m);
+      else refuse.push(m.uid);
+    }
+    if (refuse.length) {
+      await c.mailboxCreate(REFUSED_FOLDER).catch(() => undefined);
+      if (!(await c.messageMove(refuse.join(','), REFUSED_FOLDER, { uid: true }))) throw new Error(`the mail server did not move ${refuse.length} refused message(s)`);
+      this.left(r.id, folder, refuse);
+      console.log(`[mail] assistant ${policy.agentId}: ${refuse.length} message(s) from senders not on the allowlist, moved to ${REFUSED_FOLDER}`);
+    }
+    for (const m of keep) this.ctx.waitUntil(this.toAssistant(r, c, folder, m, policy).catch((err) => console.error(`[mail] to assistant: ${(err as Error).message}`)));
+    return keep;
+  }
+
+  /** An accepted message, as a request to the assistant: its text, and where to answer. */
+  private async toAssistant(r: AccountRow, c: ImapFlow, folder: string, m: MessageSummary, policy: AssistantPolicy): Promise<void> {
+    const src = await c.fetchOne(String(m.uid), { uid: true, source: true }, { uid: true });
+    if (!src || !src.source) return;
+    const email = await PostalMime.parse(src.source);
+    const from = email.from?.address ?? '';
+    const text = (email.text ?? (email.html ?? '').replace(/<[^>]+>/g, ' ')).slice(0, 20_000);
+    const answer = (await this.env.DIRECTORY!.get(this.env.DIRECTORY!.idFromName('directory')).call('hostedRuntimeOf' as never, [this.cache.state('owner_account_id')] as never)) as { ok: boolean; value?: import('@flow/shared').HostedRuntimeDTO | null };
+    if (!answer.ok || !answer.value) return;
+    await this.env.ASSISTANT!.get(this.env.ASSISTANT!.idFromName(policy.sponsorAccountId)).mailTurn({
+      organizationId: policy.organizationId, runtime: answer.value, mailboxAccountId: this.cache.state('owner_account_id')!,
+      from, subject: email.subject ?? '', text, messageId: email.messageId ?? `${r.id}:${folder}:${m.uid}`,
+    });
+  }
+
+  /** The assistant's answer by mail (Assistant.mailTurn), from its hosted mailbox, to the sender it is answering: only an
+   * allowlisted one. A binding, never a route, as sendCalendarMail is. */
+  async sendAsAssistant(p: { to: string; subject: string; text: string; inReplyTo?: string }): Promise<{ ok: boolean; message?: string }> {
+    try {
+      const policy = await this.assistantPolicy();
+      if (!policy || !policy.allowed.has(p.to.toLowerCase())) return { ok: false, message: 'not a sender this assistant answers' };
+      const r = this.sql.exec<AccountRow & Record<string, SqlStorageValue>>("SELECT * FROM accounts WHERE kind = 'hosted' LIMIT 1").toArray()[0];
+      if (!r) return { ok: false, message: 'no mailbox' };
+      await this.send(r, SendBody.parse({ to: [{ address: p.to }], subject: p.subject, html: '', text: p.text, ...(p.inReplyTo ? { inReplyTo: p.inReplyTo, references: [p.inReplyTo] } : {}) }));
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, message: (err as Error).message };
     }
   }
 

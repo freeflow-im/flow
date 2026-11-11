@@ -101,6 +101,8 @@ interface AgentState {
   assistantName: string | null;
   /** In the hosted suite, the agents the person may talk to (their assistant first), and the one the panel talks to (null: their assistant). */
   agents: UsableAgent[];
+  /** The person named their assistant (agents.md §1.1): the panel's list is asked again so the new name shows. */
+  renamed(): void;
   agentId: string | null;
   setAgent(id: string | null): void;
   /** The chat of the page that is open, which the panel shows unless a turn moved it elsewhere. */
@@ -191,13 +193,15 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   // Asked again when the organization selected in the bar changes: each has its own assistant and shared agents.
   const organization = useOrganization();
   const orgId = organization.active?.id ?? null;
+  const [agentsAsked, setAgentsAsked] = useState(0);
   useEffect(() => {
     setAgentId(null);
     if (!user || !suite) { setAgents([]); return; }
     let current = true;
     api.usableAgents().then((r) => current && setAgents(r.agents), () => current && setAgents([]));
     return () => { current = false; };
-  }, [user, suite, orgId]);
+  }, [user, suite, orgId, agentsAsked]);
+  const renamed = useCallback(() => setAgentsAsked((n) => n + 1), []);
   const self = agents.find((a) => a.self) ?? null;
   const assistantName = self?.displayName ?? null;
   /** The agent a request names: a hosted shared agent's id, or nothing for the person's own assistant. */
@@ -855,6 +859,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     chatTitle,
     assistantName,
     agents,
+    renamed,
     agentId: agentId ?? self?.id ?? null,
     setAgent: (id) => !running && setAgentId(id),
     pageScope,

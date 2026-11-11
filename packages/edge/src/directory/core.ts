@@ -51,6 +51,8 @@ export interface ProvisioningTarget {
   /** The hosted mailbox's address: the account's own, or, for a guest, the one it had when it became a guest (null once
    * the mailbox is deleted). Suspend, resume and delete go by it. */
   mailboxAddress: string | null;
+  /** The name mail from the mailbox carries: the account's, or for a person's assistant "Ada 🤖 Scott" (agents.md §1.1). */
+  fromName?: string;
 }
 
 /** One of an organization's domains, as the directory keeps it. */
@@ -215,6 +217,29 @@ export class DirectoryCore {
   }
 
   /** A hosted agent's name, as its definition sets it (agents.md §6): on the principal and its accounts, where rosters and the panel read it. */
+  /**
+   * A person names their assistant (agents.md §1.1, at onboarding or in their settings): the principal and account take
+   * the name, and the first naming gives it its address, `name@domain` made as a person's is, and sends it to be
+   * provisioned (its mailbox and calendar). Later names keep the address. Returns the account as it is now.
+   */
+  nameAssistant(agentId: string, organizationId: string, name: string): AccountDTO {
+    const u = this.userById(agentId);
+    if (!u?.is_agent || u.mode !== 'personal' || u.runtime !== 'hosted' || u.organization_id !== organizationId) throw notFound('assistant not found');
+    const clean = name.trim().slice(0, 80);
+    if (!clean) throw badRequest('validation', 'name: not empty');
+    this.renameAgent(agentId, clean);
+    const row = this.rows('SELECT * FROM accounts WHERE user_id = ? AND organization_id = ?', agentId, organizationId)[0];
+    if (!row) throw notFound('assistant not found');
+    if (!row.address && row.state !== 'removed') {
+      const address = this.newAddress({ ...u, agent_username: null }, clean, organizationId);
+      const requested = !!this.deps.provisioning && row.hosted_at == null;
+      this.sql.exec('UPDATE accounts SET address = ?, state = CASE WHEN ? THEN ? ELSE state END WHERE id = ?', address, requested ? 1 : 0, 'requested', row.id);
+      this.sql.exec('INSERT OR REPLACE INTO addresses (address, account_id) VALUES (?, ?)', address, row.id);
+      if (requested) this.enqueue('provision', organizationId, row.id as string);
+    }
+    return this.accountById(row.id as string)!;
+  }
+
   renameAgent(agentId: string, name: string): void {
     const u = this.userById(agentId);
     if (!u?.is_agent) throw notFound('agent not found');
@@ -406,9 +431,11 @@ export class DirectoryCore {
     const domainName = mailboxAddress ? mailboxAddress.slice(mailboxAddress.lastIndexOf('@') + 1) : null;
     const domain = domainName ? this.domainRow('domain = ? AND organization_id = ?', domainName, account.organizationId)[0] ?? null : null;
     const atProvider = domain ? this.rows('SELECT provider_at FROM domains WHERE domain = ?', domain.domain)[0]?.provider_at != null : false;
+    const sponsor = account.kind === 'personal_agent' && account.sponsorId ? this.accountFor(account.sponsorId, account.organizationId) : null;
+    const fromName = sponsor ? `${account.displayName} 🤖 ${sponsor.displayName.trim().split(/\s+/)[0]}` : account.displayName;
     return {
       account, domain, domainAtProvider: atProvider, slug: this.organizationSlug(account.organizationId),
-      hosted: row.hosted_at != null, removedAt: row.removed_at != null ? iso(row.removed_at) : null, mailboxAddress,
+      hosted: row.hosted_at != null, removedAt: row.removed_at != null ? iso(row.removed_at) : null, mailboxAddress, fromName,
     };
   }
 

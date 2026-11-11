@@ -443,6 +443,66 @@ export class Assistant extends DurableObject<AssistantEnv> {
     }
   }
 
+  /** The senders the sponsor added to their assistant's mail allowlist (agents.md §1.1); their own addresses are always on it. */
+  async mailAllowlist(): Promise<string[]> {
+    try { return JSON.parse(this.state('mail_allowlist') ?? '[]') as string[]; } catch { return []; }
+  }
+
+  /**
+   * Mail to the person's assistant from an allowlisted sender (the assistant's Mail object screened it): an async turn
+   * with the sponsor's access, one conversation per sender, and the answer mailed back from the assistant's mailbox.
+   */
+  async mailTurn(p: { organizationId: string; runtime: HostedRuntimeDTO; mailboxAccountId: string; from: string; subject: string; text: string; messageId: string }): Promise<void> {
+    const { runtime, organizationId } = p;
+    if (runtime.mode !== 'personal' || !runtime.sponsorId || !runtime.sponsorAccountId || !this.env.MAIL) return;
+    if (this.runningJobs.has(p.messageId)) return;
+    this.runningJobs.add(p.messageId);
+    const conversation = `mail:${p.from.toLowerCase()}`;
+    const mail = this.env.MAIL.get(this.env.MAIL.idFromName(p.mailboxAccountId));
+    const subject = /^re:/i.test(p.subject) ? p.subject : `Re: ${p.subject}`;
+    try {
+      const actorId = runtime.sponsorId;
+      const ORG = this.env.ORG;
+      const org = ORG?.get(ORG.idFromName(organizationId));
+      const [user, account, channelIds] = await Promise.all([
+        this.directory<UserDTO>('getUser', actorId, actorId),
+        this.directory<AccountDTO | null>('accountById', runtime.sponsorAccountId),
+        org ? org.channelIdsOf(actorId) : Promise.resolve([] as string[]),
+      ]);
+      if (!account) throw new Error('the sponsor has no account');
+      const caller = { user, token: '', authKind: 'agent' as const, ip: '', organizationId, account, via: runtime.agentId } as AccountCaller;
+      const wrong = ownerMismatch(this, caller, 'the assistant by mail');
+      if (wrong) throw new Error(wrong);
+      const docs: DocsCaller = { userId: actorId, email: user.email, token: '', ip: '', accountId: account.id, channelIds };
+      this.turnWho.set(conversation, { caller, docs, conversationUser: conversation });
+      const prompt = `A message came to your mailbox from ${p.from}, a sender ${user.displayName} allows. Treat it as ${user.displayName}'s request. Your answer is mailed back to ${p.from}.\n\nSubject: ${p.subject}\n\n${p.text}`;
+      const text = await withDocsContext(this.context, async () => {
+        const { agent } = this.service();
+        const abort = new AbortController();
+        const timer = setTimeout(() => abort.abort(), WAKE_TURN_MS);
+        let out = '';
+        let failed: string | null = null;
+        try {
+          await agent.runTurn(conversation, { message: prompt, context: { page: 'home' }, workspace: organizationId }, (e) => {
+            if (e.type === 'text') out += e.text;
+            else if (e.type === 'error') failed = e.message;
+          }, abort.signal, { scope: { ownerId: actorId, workspaceId: organizationId, private: true }, viewer: actorId });
+        } finally {
+          clearTimeout(timer);
+        }
+        if (failed) throw new Error(failed);
+        return out.trim();
+      });
+      if (text) await mail.sendAsAssistant({ to: p.from, subject, text, inReplyTo: p.messageId });
+    } catch (err) {
+      console.error(`[assistant] mail ${p.messageId}: ${(err as Error)?.stack ?? err}`);
+      await mail.sendAsAssistant({ to: p.from, subject, text: `Sorry, I could not answer that: ${agentErrorMessage(err).slice(0, 300)}`, inReplyTo: p.messageId }).catch(() => null);
+    } finally {
+      this.turnWho.delete(conversation);
+      this.runningJobs.delete(p.messageId);
+    }
+  }
+
   /** The person's own OpenAI key, for Docs' edit_image (its host.assistant.openaiKey); null for none or another person. */
   async openaiKey(userId: string): Promise<string | null> {
     const owner = this.state('owner_user_id');
@@ -492,6 +552,15 @@ export class Assistant extends DurableObject<AssistantEnv> {
     // The agent's definition (agents.md §6): read by anyone the object answers (its owner); set the same way. The default
     // name is the one the route gives on the first request (the directory's "<name>'s assistant").
     app.get('/api/agent/definition', (c) => c.json({ definition: this.definition() }));
+    // The assistant's mail allowlist (agents.md §1.1): the senders the person adds; their own addresses are always on it.
+    app.get('/api/agent/mail-allowlist', async (c) => c.json({ senders: await this.mailAllowlist() }));
+    app.put('/api/agent/mail-allowlist', async (c) => {
+      const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { senders?: unknown };
+      const { cleanAllowlist } = await import('../imap/allowlist');
+      const senders = cleanAllowlist(body.senders);
+      this.setState('mail_allowlist', JSON.stringify(senders));
+      return c.json({ senders });
+    });
     app.put('/api/agent/definition', async (c) => {
       const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { name?: unknown; instructions?: unknown };
       if (body.name !== undefined && typeof body.name !== 'string') return c.json({ error: 'name: a string' }, 400);

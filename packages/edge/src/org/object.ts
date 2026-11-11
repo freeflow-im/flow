@@ -720,6 +720,21 @@ export class Org extends DurableObject<OrgEnv> {
     return answer.value;
   }
 
+  /** A person named their assistant (routes/assistant.ts): its member row takes the name and address, and the
+   * organization's sockets hear `member.updated`. */
+  async renameAssistant(agentId: string, name: string, address: string | null): Promise<void> {
+    const sql = this.ctx.storage.sql;
+    const org = sql.exec('SELECT id FROM workspaces LIMIT 1').toArray()[0]?.id as string | undefined;
+    if (!org || !sql.exec("SELECT 1 FROM workspace_members WHERE user_id = ? AND kind = 'personal_agent' AND runtime = 'hosted'", agentId).toArray().length) return;
+    sql.exec('UPDATE users SET display_name = ? WHERE id = ?', name, agentId);
+    sql.exec('UPDATE workspace_members SET address = ? WHERE workspace_id = ? AND user_id = ?', address, org, agentId);
+    await this.scoped(async () => {
+      publishEvent(subjectMeta(org), { type: 'member.updated', workspaceId: org, ts: new Date().toISOString(), data: await toMemberDTO(org, agentId) } as Event);
+    });
+    await this.logging;
+    await this.flushOutbox(org);
+  }
+
   /** An external personal agent an admin removed (routes/accounts.ts): its row leaves this list too. */
   async dropPersonalAgent(userId: string): Promise<void> {
     const org = this.ctx.storage.sql.exec('SELECT id FROM workspaces LIMIT 1').toArray()[0]?.id as string | undefined;

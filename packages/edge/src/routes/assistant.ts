@@ -84,7 +84,7 @@ async function forward(c: C): Promise<Response> {
       // conversation is the person's with it. Its definition and settings are the Admin app's (routes/agents.ts), not any
       // asker's. On a file the agent has no grant on, the page is not its to see: the chat's file and the page's both.
       const path = new URL(c.req.url).pathname;
-      if (path === '/api/agent/definition' || path === '/api/settings/assistant') return c.json({ error: "A shared agent's definition is set in Organization settings, by its sponsor or an admin.", code: 'not_yours' }, 403);
+      if (path === '/api/agent/definition' || path === '/api/agent/mail-allowlist' || path === '/api/settings/assistant') return c.json({ error: "A shared agent's definition is set in Organization settings, by its sponsor or an admin.", code: 'not_yours' }, 403);
       const identity = await directory(c, 'agentIdentity', chosen.id, who.account.organizationId);
       if (!identity) return c.json({ error: 'That agent is not one you can use here.', code: 'no_agent' }, 404);
       const agentDocs = { userId: identity.user.id, email: identity.user.email, token: '', ip: who.ip, accountId: identity.account.id, channelIds: await org.channelIdsOf(identity.user.id) };
@@ -100,14 +100,23 @@ async function forward(c: C): Promise<Response> {
     // turns are the person's, marked `via` the agent, so the events it causes say "Ann (via assistant)".
     const channelIds = await org.channelIdsOf(who.user.id);
     const docs = { userId: who.user.id, email: who.user.email, token: who.token, ip: who.ip, accountId: who.account.id, channelIds };
-    return await c.env.ASSISTANT.get(c.env.ASSISTANT.idFromName(who.account.id)).handle(c.req.raw, { ...who, ...(self ? { via: self.id } : {}) }, docs, self?.displayName);
+    // Naming the assistant (agents.md §1.1) names it everywhere: its member row and account too, and the first name gives
+    // it its address, mailbox and calendar.
+    const naming = c.req.method === 'PUT' && new URL(c.req.url).pathname === '/api/agent/definition' && self
+      ? ((await c.req.raw.clone().json().catch(() => null)) as { name?: unknown } | null)?.name : undefined;
+    const res = await c.env.ASSISTANT.get(c.env.ASSISTANT.idFromName(who.account.id)).handle(c.req.raw, { ...who, ...(self ? { via: self.id } : {}) }, docs, self?.displayName);
+    if (res.ok && self && typeof naming === 'string' && naming.trim() && naming.trim() !== self.displayName) {
+      const account = await directory(c, 'nameAssistant', self.id, who.account.organizationId, naming);
+      await org.renameAssistant(self.id, account.displayName, account.address);
+    }
+    return res;
   } catch (err) {
     if (err instanceof ApiError) return c.json({ error: err.message, code: err.code }, err.statusCode as 400);
     throw err;
   }
 }
 
-for (const path of ['/api/agent', '/api/agent/turn', '/api/agent/reset', '/api/agent/permission', '/api/agent/definition', '/api/settings/assistant']) assistantRoutes.all(path, forward);
+for (const path of ['/api/agent', '/api/agent/turn', '/api/agent/reset', '/api/agent/permission', '/api/agent/definition', '/api/agent/mail-allowlist', '/api/settings/assistant']) assistantRoutes.all(path, forward);
 
 /** The agents the person may talk to from the panel in the organization (agents.md §6): their assistant, hosted shared agents. */
 assistantRoutes.get('/api/agent/agents', async (c) => {
