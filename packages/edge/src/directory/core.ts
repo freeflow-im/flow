@@ -160,23 +160,22 @@ export class DirectoryCore {
   }
 
   /**
-   * Agents made before they had kinds (docs/specs/agents.md phase A), placed once. A bridge agent becomes a shared agent in
-   * the organization of its earliest account that was not removed (else its earliest account); its accounts elsewhere
-   * are removed, since an agent belongs to one organization: to work there it is connected again, with a new name and
-   * key, which makes a second agent. An agent with no account yet is placed by its first join. Every /mcp connection
-   * gets its personal agent, one per sponsor, client and organization. Safe to run twice.
+   * Agents made before they had kinds (docs/specs/agents.md phase A), retired once: every account removed (a hosted
+   * mailbox suspended, then deleted after retention), every token revoked, the principal marked deleted. The operator's
+   * ruling (decision_log 2026-11-11) was to start over rather than place them: an agent in several organizations has no
+   * one home to pick, and each is connected again with an invite code, which makes a new principal of a known kind. The
+   * Org objects drop them from their rosters at their next start (Org.retireRemovedAgents). Every /mcp connection gets its
+   * personal agent, one per sponsor, client and organization. Safe to run twice.
    */
   backfillAgents(): void {
-    for (const u of this.rows('SELECT id FROM users WHERE is_agent = 1 AND mode IS NULL AND deleted_at IS NULL')) {
-      const home = this.rows("SELECT organization_id FROM accounts WHERE user_id = ? ORDER BY (state = 'removed'), created_at, id LIMIT 1", u.id)[0]?.organization_id as string | undefined;
-      this.sql.exec("UPDATE users SET mode = 'shared', organization_id = ? WHERE id = ?", home ?? null, u.id);
-      if (!home) continue;
-      const elsewhere = this.rows("SELECT id, organization_id FROM accounts WHERE user_id = ? AND organization_id <> ? AND state <> 'removed'", u.id, home);
-      for (const a of elsewhere) {
-        console.log(`[agents] ${u.id as string} belongs to ${home}; its account in ${a.organization_id as string} is removed (reconnect it there to make a second agent)`);
-        this.removeAccounts('id = ?', a.id);
-        this.sql.exec("UPDATE accounts SET status_message = 'this agent belongs to another organization; connect it here again to make a second agent' WHERE id = ?", a.id);
-      }
+    const now = Date.now();
+    for (const u of this.rows('SELECT id, display_name FROM users WHERE is_agent = 1 AND mode IS NULL AND deleted_at IS NULL')) {
+      const orgs = this.rows("SELECT organization_id FROM accounts WHERE user_id = ? AND state <> 'removed'", u.id).map((a) => a.organization_id as string);
+      console.log(`[agents] ${u.display_name as string} (${u.id as string}) made before agents had kinds is retired from ${orgs.length ? orgs.join(', ') : 'no organization'}; connect it again with an invite code`);
+      this.sql.exec('UPDATE agent_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL', now, u.id);
+      this.removeAccounts('user_id = ?', u.id);
+      this.sql.exec("UPDATE accounts SET status_message = 'retired when agents gained kinds; connect the agent again with an invite code' WHERE user_id = ?", u.id);
+      this.sql.exec("UPDATE users SET mode = 'shared', deleted_at = ? WHERE id = ?", now, u.id);
     }
     const connections = this.rows(
       "SELECT DISTINCT c.user_id, c.org_id, c.client_name FROM oauth_connections c WHERE c.agent_id IS NULL AND EXISTS (SELECT 1 FROM accounts a WHERE a.user_id = c.user_id AND a.organization_id = c.org_id AND a.state <> 'removed')");

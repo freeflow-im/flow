@@ -804,7 +804,7 @@ describe('agent accounts', () => {
     expect(sql.exec('SELECT revoked_at FROM oauth_tokens WHERE family = ?', `fam-${b1}`).toArray()[0]!.revoked_at).not.toBeNull();
   });
 
-  it('places agents made before kinds, once: shared in their earliest organization, accounts elsewhere removed, a personal agent per connection (phase A)', async () => {
+  it('retires agents made before kinds, once: accounts removed, tokens revoked, principal deleted; a personal agent per connection (phase A)', async () => {
     const ann = await signUp('a@example.com');
     const bob = await signUp('b@example.com');
     const [o1, o2] = [newId(), newId()];
@@ -813,20 +813,24 @@ describe('agent accounts', () => {
     await core.applyOrgChanges(o1, [join(o1, ann.user.id), join(o1, bob.user.id)]);
     await core.applyOrgChanges(o2, [join(o2, ann.user.id), join(o2, bob.user.id)]);
     const sql = nodeSqlOf(core);
-    // A bridge agent as the cut-over imported it: no mode, no organization, accounts in two organizations (o2 first).
+    // A bridge agent as the cut-over imported it: no mode, no organization, accounts in two organizations, a live token.
     const bot = newId();
     sql.exec("INSERT INTO users (id, email, password_hash, display_name, is_agent, agent_username, sponsor_user_id, created_at) VALUES (?, ?, 'x', 'Builder', 1, 'builder', ?, 1)", bot, `agent-${bot}@agents.flow.local`, ann.user.id);
     sql.exec("INSERT INTO accounts (id, user_id, organization_id, address, display_name, role, kind, state, created_at, sponsor_user_id, hosted_at) VALUES (?, ?, ?, 'builder@beta.freeflow.im', 'Builder', 'member', 'native', 'active', 10, ?, 5)", newId(), bot, o2, bob.user.id);
     sql.exec("INSERT INTO accounts (id, user_id, organization_id, address, display_name, role, kind, state, created_at, sponsor_user_id) VALUES (?, ?, ?, 'builder@acme.freeflow.im', 'Builder', 'member', 'native', 'active', 20, ?)", newId(), bot, o1, ann.user.id);
+    const token = 'flow-agent-token-legacy';
+    sql.exec('INSERT INTO agent_tokens (id, token_hash, user_id, created_at) VALUES (?, ?, ?, 1)', newId(), await hashToken(token), bot);
     // Two connections of one client and one of another, and a dead one whose person left its organization.
     for (const [fam, client, org] of [['f1', 'Claude Desktop', o1], ['f2', 'Claude Desktop', o1], ['f3', 'Cursor', o2], ['f4', 'Claude Desktop', newId()]]) {
       sql.exec("INSERT INTO oauth_connections (id, family, user_id, org_id, client_name, origin, resource, created_at) VALUES (?, ?, ?, ?, ?, 'o', 'r', 1)", `c-${fam}`, fam, ann.user.id, org, client);
     }
     const again = new DirectoryCore(sql, { webUrlBase: 'https://app.test', registrationEnabled: true, send: async () => {} });
-    expect(again.getUser(bot, ann.user.id)).toMatchObject({ agentMode: 'shared' });
-    expect(sql.exec('SELECT organization_id FROM users WHERE id = ?', bot).toArray()[0]!.organization_id).toBe(o2);
-    expect(again.accountFor(bot, o2)!.state).toBe('active');
-    expect(again.accountFor(bot, o1)).toMatchObject({ state: 'removed', statusMessage: expect.stringContaining('belongs to another organization') });
+    expect(again.accountFor(bot, o1)).toMatchObject({ state: 'removed', agentMode: 'shared', statusMessage: expect.stringContaining('connect the agent again') });
+    expect(again.accountFor(bot, o2)).toMatchObject({ state: 'removed' });
+    expect(again.organizationsOf(bot)).toEqual([]);
+    await expect(again.authenticate(token)).rejects.toThrow();
+    expect(sql.exec('SELECT deleted_at, mode FROM users WHERE id = ?', bot).toArray()[0]).toMatchObject({ mode: 'shared' });
+    expect(sql.exec('SELECT deleted_at FROM users WHERE id = ?', bot).toArray()[0]!.deleted_at).not.toBeNull();
     const agents = (id: string) => sql.exec('SELECT agent_id FROM oauth_connections WHERE id = ?', id).toArray()[0]!.agent_id as string | null;
     expect(agents('c-f1')).toBeTruthy();
     expect(agents('c-f1')).toBe(agents('c-f2'));
@@ -839,7 +843,6 @@ describe('agent accounts', () => {
     const before = sql.exec('SELECT COUNT(*) AS n FROM users').toArray()[0]!.n;
     again.backfillAgents();
     expect(sql.exec('SELECT COUNT(*) AS n FROM users').toArray()[0]!.n).toBe(before);
-    // A removed one's hosted mailbox is suspended (the provisioning outbox), as any removal is.
     expect(again.takeProvisioning()).toEqual([]);
   });
 });

@@ -41,6 +41,8 @@ export type OrgEnv = StorageEnv & MailProviderEnv & {
 const DAY_MS = 86_400_000;
 /** The storage key of the next mailbox retention sweep's time. */
 const SWEEP_KEY = 'mail_sweep_at';
+/** Set once the agents the directory retired when agents gained kinds (agents.md phase A) have left this roster. */
+const AGENTS_RETIRED_KEY = 'agents_retired_v1';
 
 /** What each id-only path needs (`routes/org.ts`), and who belongs here (`memberships`), reported to the directory by trigger. */
 const OUTBOX = [
@@ -109,6 +111,38 @@ export class Org extends DurableObject<OrgEnv> {
     // A guest's row has no address for good (platform.md §3.3), so a missing account id is what says "not filled in yet".
     if (sql.exec('SELECT 1 FROM workspace_members WHERE account_id IS NULL LIMIT 1').toArray().length) {
       void ctx.blockConcurrencyWhile(() => this.backfillAddresses());
+    }
+    if (sql.exec("SELECT 1 FROM workspace_members m JOIN users u ON u.id = m.user_id WHERE u.is_agent LIMIT 1").toArray().length) {
+      void ctx.blockConcurrencyWhile(() => this.retireRemovedAgents());
+    }
+  }
+
+  /**
+   * Agents the directory retired when agents gained kinds (DirectoryCore.backfillAgents: their accounts removed, tokens
+   * revoked) still sit on this roster until this runs, once: each leaves as a removed agent does (channels, DMs, the join
+   * line's counterpart), its user row kept for authorship. A failure leaves it for the next start.
+   */
+  private async retireRemovedAgents(): Promise<void> {
+    if (await this.ctx.storage.get<boolean>(AGENTS_RETIRED_KEY)) return;
+    const sql = this.ctx.storage.sql;
+    const org = sql.exec('SELECT id FROM workspaces LIMIT 1').toArray()[0]?.id as string | undefined;
+    if (!org) return;
+    try {
+      const answer = await this.directory().call('accountsOfOrganization' as never, [org] as never) as DirectoryAnswer<AccountDTO[]>;
+      if (!answer.ok) return console.error(`agent retirement: ${answer.message}`);
+      const gone = new Set(answer.value.filter((a) => a.state === 'removed' && a.agentMode).map((a) => a.principalId));
+      const members = sql.exec('SELECT m.user_id FROM workspace_members m JOIN users u ON u.id = m.user_id WHERE u.is_agent').toArray().map((r) => r.user_id as string);
+      for (const userId of members.filter((id) => gone.has(id))) {
+        await this.scoped(async () => {
+          const { removeAgentFromWorkspace } = await import('./services/memberRemoval');
+          await removeAgentFromWorkspace(org, userId);
+        });
+        console.log(`[agents] ${userId} retired from ${org}`);
+      }
+      await this.flushOutbox(org);
+      await this.ctx.storage.put(AGENTS_RETIRED_KEY, true);
+    } catch (err) {
+      console.error(`agent retirement: ${(err as Error).message}`);
     }
   }
 
