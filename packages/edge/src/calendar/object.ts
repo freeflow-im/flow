@@ -93,7 +93,7 @@ export interface CalendarAccount { id: string; kind: 'caldav' | 'google' | 'nati
 export interface CalendarInfo { id: string; accountId: string; name: string; color: string; timezone: string | null; role: 'owner' | 'writer' | 'reader'; hidden: boolean; isDefault: boolean; syncedAt: string | null }
 
 /** Where a request's time went, for its log line: talking to calendar servers; and whose request it is (an event's actor). */
-interface Timing { server: number; actor?: string | null }
+interface Timing { server: number; actor?: string | null; via?: string | null; invokedBy?: string | null }
 const timing = new AsyncLocalStorage<Timing | undefined>();
 
 const VERIFY_LIMIT = 10;
@@ -150,7 +150,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
     this.accountId = caller.account!.id;
     // A guest has no address and no native calendar (platform.md §3.3).
     if (caller.account!.address) this.store.ensureNative({ accountId: caller.account!.id, email: caller.account!.address, displayName: caller.account!.displayName ?? '' });
-    const t: Timing = { server: 0, actor: caller.account!.id };
+    const t: Timing = { server: 0, actor: caller.account!.id, via: caller.via ?? null, invokedBy: caller.invokedBy ?? null };
     const res = await timing.run(t, () => this.app.fetch(request, { caller } satisfies Bindings));
     this.touch();
     await this.armAlarm().catch((err) => console.warn(`[calendar] alarm: ${(err as Error).message}`));
@@ -806,6 +806,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
     try {
       await ns.get(ns.idFromName(org)).publish({
         type, organizationId: org, actor: timing.getStore()?.actor ?? null,
+        ...(timing.getStore()?.via ? { via: timing.getStore()!.via! } : {}), ...(timing.getStore()?.invokedBy ? { invokedBy: timing.getStore()!.invokedBy! } : {}),
         ref: { organizationId: org, app: 'calendar', kind: 'event', id: eventId },
         audience: o.audience ?? `ref:${formatReference({ organizationId: org, app: 'calendar', kind: 'calendar', id: c.id })}`,
         ts: new Date().toISOString(),

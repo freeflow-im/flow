@@ -27,7 +27,7 @@ import type {
   WorkspaceMemberDTO,
 } from '@flow/shared';
 import { defaultVoiceConfig, mentionChainLimit, resolveWorkspace, type BridgeConfig } from './config.js';
-import { accountLines, addressIn, FlowApi, FlowApiError, type MeDTO } from './api.js';
+import { accountLines, addressIn, FlowApi, FlowApiError, type MeDTO, withInvoker } from './api.js';
 import { attachmentFilename, formatAttachments } from './attachments.js';
 import { FlowSocket, openFlowSocket } from './gateway.js';
 import { ChannelIndicatorLeases, ProgressReporter } from './progress.js';
@@ -251,6 +251,8 @@ export class AgentBridge {
   private readonly jobTurns = new Map<string, { jobId: string; api: FlowApi; settle: (r: { ok: boolean; note: string }) => void }>();
   /** convKey → the job whose turn is running there, which the MCP server asks for (`/job` on the task IPC). */
   private readonly activeJobs = new Map<string, string>();
+  /** The account that asked for the turn running in each conversation (agents.md §3), for the MCP server's `x-flow-invoked-by`. */
+  private readonly activeInvokers = new Map<string, string>();
 
   constructor(private readonly cfg: BridgeConfig) {
     this.api = new FlowApi(cfg.serverUrl, cfg.agentToken);
@@ -292,9 +294,10 @@ export class AgentBridge {
   async start(): Promise<void> {
     this.me = await this.api.me();
     if (!this.me.isAgent) this.log('warning: token belongs to a non-agent user');
-    // #357: an agent can belong to several workspaces; this process serves one.
+    // An agent belongs to one organization (agents.md §1); this process serves it.
     const workspaces = await this.api.myWorkspaces();
     this.workspace = resolveWorkspace(workspaces, this.cfg.workspace);
+    if (this.me.isAgent) this.log(`running as ${this.me.displayName}, a ${this.me.agentMode ?? 'shared'} agent in "${this.workspace.name}"`);
     await this.refreshDirectory();
     this.clearLeftoverIndicators();
     const voiceConfig = this.cfg.voice ?? defaultVoiceConfig();
@@ -721,14 +724,17 @@ export class AgentBridge {
         req.on('end', () => {
           void (async () => {
             if (req.url === '/job') {
-              // The MCP server's question before each request: is a wake job's turn running in this conversation?
+              // The MCP server's question before each request: is a wake job's turn running in this conversation, and who asked?
               let jobId: string | null = null;
+              let invokedBy: string | null = null;
               try {
                 const q = JSON.parse(body) as { channelId?: string; threadRootId?: string };
-                jobId = this.activeJobs.get(`${q.channelId ?? ''}|${q.threadRootId ?? ''}`) ?? null;
+                const key = `${q.channelId ?? ''}|${q.threadRootId ?? ''}`;
+                jobId = this.activeJobs.get(key) ?? null;
+                invokedBy = this.activeInvokers.get(key) ?? null;
               } catch { /* no job */ }
               res.writeHead(200, { 'content-type': 'application/json' });
-              res.end(JSON.stringify({ jobId }));
+              res.end(JSON.stringify({ jobId, invokedBy }));
               return;
             }
             let out: { ok: true; note: string } | { error: string };
@@ -1351,7 +1357,13 @@ export class AgentBridge {
     }
   }
 
-  private async processMessage(conv: Conversation, msg: MessageDTO, key: string): Promise<void> {
+  /** Who asked (agents.md §3): the sender's account, on every request of the turn, so its events read "asked by Scott". */
+  private processMessage(conv: Conversation, msg: MessageDTO, key: string): Promise<void> {
+    const asker = this.members.get(msg.userId)?.accountId ?? null;
+    return withInvoker(asker, () => this.runMessageTurn(conv, msg, key, asker));
+  }
+
+  private async runMessageTurn(conv: Conversation, msg: MessageDTO, key: string, asker: string | null): Promise<void> {
     // Everything about this turn — status line, MCP context, the reply itself
     // — targets the same thread (a new one when we're answering a top-level
     // channel message).
@@ -1360,6 +1372,7 @@ export class AgentBridge {
     const job = this.jobTurns.get(msg.id);
     const api = job?.api ?? this.api;
     if (job) this.activeJobs.set(key, job.jobId);
+    if (asker) this.activeInvokers.set(key, asker);
     const progress = new ProgressReporter(
       api,
       this.socket,
@@ -1466,6 +1479,7 @@ export class AgentBridge {
       throw err;
     } finally {
       if (job && this.activeJobs.get(key) === job.jobId) this.activeJobs.delete(key);
+      if (asker && this.activeInvokers.get(key) === asker) this.activeInvokers.delete(key);
       if (this.liveRuns.get(key) === live) this.liveRuns.delete(key);
       await progress.finish().catch(() => {});
       if (mcpConfigPath) fs.rmSync(mcpConfigPath, { force: true });

@@ -9,7 +9,7 @@ import type { PublishInput } from '../events/core';
 import { withPublisher } from './bus';
 import { withDb, schema, type DB } from './db/index';
 import { directoryLink } from './directoryLink';
-import { logEntryFor } from './eventLog';
+import { agentStampFor, logEntryFor } from './eventLog';
 import { createChannel } from './services/channels';
 import { sendMessage } from './services/messages';
 import { addReaction } from './services/reactions';
@@ -78,5 +78,17 @@ describe('the event log from the Org object', () => {
     expect(logEntryFor(sql, `user.${BOB}.notify`, { type: 'notification.read', workspaceId, ts: at, data: { ids: [] } })).toMatchObject({ type: 'chat.notification.read', audience: 'account:acct-b', actor: null });
     sqlite.prepare('UPDATE workspace_members SET account_id = NULL WHERE user_id = ?').run(BOB);
     expect(logEntryFor(sql, `user.${BOB}.notify`, { type: 'notification.read', workspaceId, ts: at, data: { ids: [] } })).toBeNull();
+  });
+
+  it('stamps an agent\'s turn with who asked, only when the agent names a member other than itself; carries via as resolved (agents.md §3)', () => {
+    const omni = { user: { isAgent: true }, account: { id: 'acct-omni' } };
+    expect(agentStampFor(sql, workspaceId, { ...omni, invokedBy: 'acct-a' })).toEqual({ invokedBy: 'acct-a' });
+    // Not a member here, itself, a person claiming it, or no claim: nothing.
+    expect(agentStampFor(sql, workspaceId, { ...omni, invokedBy: 'acct-stranger' })).toEqual({});
+    expect(agentStampFor(sql, workspaceId, { ...omni, invokedBy: 'acct-omni' })).toEqual({});
+    expect(agentStampFor(sql, workspaceId, { user: { isAgent: false }, account: { id: 'acct-a' }, invokedBy: 'acct-b' })).toEqual({});
+    expect(agentStampFor(sql, workspaceId, omni)).toEqual({});
+    // A personal agent acting as Ann: the Worker resolved it from the delegation, so it is taken as given.
+    expect(agentStampFor(sql, workspaceId, { user: { isAgent: false }, account: { id: 'acct-a' }, via: 'agent-1' })).toEqual({ via: 'agent-1' });
   });
 });

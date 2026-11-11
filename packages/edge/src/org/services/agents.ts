@@ -156,6 +156,9 @@ export async function redeemAgentInvite(input: RedeemAgentInviteBody): Promise<A
   // handle, or a handle held elsewhere under a different key) creates a fresh
   // account, which is what every redeem did before.
   const existing = await findAgentByCredentials(username, input.key);
+  // A known principal belongs to one organization (agents.md §1): the directory refuses one that belongs elsewhere here,
+  // before any member row or token is written (a refusal reported later through the outbox would be skipped, not applied).
+  if (existing) await ensureAccount(invite.workspaceId, existing.id, 'member', input.name.trim());
   const userId = existing?.id ?? newId();
   // argon2 — do the heavy work before the transaction
   const keyHash = existing?.agentKeyHash ?? (await hashSecret(input.key));

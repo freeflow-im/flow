@@ -10,6 +10,7 @@ import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto';
 import { accountGate, type Sql } from './core';
 import type { AccountState, AppScopeGroup } from '@flow/shared';
 import { APP_MANIFESTS } from '@flow/shared/manifests';
+import { agentModeOf, agentOfFamily, personalAgentFor, retireIdlePersonalAgent } from './agents';
 
 /**
  * The consent page's checkboxes, from the apps' manifests (@flow/shared's APP_MANIFESTS, `scopes`): each one a group of
@@ -104,8 +105,10 @@ export interface ConsentInfo {
   preselect: string | null;
 }
 
-/** `accountId`: the grant's account, the person's in `orgId` (platform.md §3.6); null for one made before accounts. */
-export interface McpCaller { userId: string; email: string; orgId: string; accountId: string | null; scope: string }
+/** `accountId`: the grant's account, the person's in `orgId` (platform.md §3.6); null for one made before accounts.
+ * `agentId`: the personal agent the client acts through (agents.md §1), the caller context's `via`; null for a connection
+ * made before agents had kinds and not yet placed. */
+export interface McpCaller { userId: string; email: string; orgId: string; accountId: string | null; scope: string; agentId: string | null }
 /** A failure is a 401 unless it carries a status (403 for an inactive account). */
 export type McpAuth = { ok: true; caller: McpCaller } | { ok: false; reason: string; description: string; status?: number };
 
@@ -115,6 +118,8 @@ export interface McpConnection {
   origin: string;
   endpoint: string;
   organizationId: string;
+  /** The personal agent it acts through (agents.md §1); absent for a connection not yet placed. */
+  agentId?: string;
   connectedAt: string;
   lastActiveAt?: string;
 }
@@ -318,6 +323,8 @@ export class McpOAuth {
   consent(pendingId: string, userId: string): ConsentInfo {
     const p = this.pending(pendingId);
     if (!p) throw new OAuthError('invalid_request', 'This sign-in link has expired. Start again from your agent.');
+    // An agent holds a delegation or grants, never both (agents.md §1): only a person delegates.
+    if (agentModeOf(this.sql, userId) !== null) throw new OAuthError('access_denied', 'An agent cannot connect an agent; sign in as a person.');
     this.sql.exec('UPDATE oauth_pending SET user_id = ? WHERE id = ?', userId, p.id);
     const organizations = this.rows("SELECT organization_id FROM accounts WHERE user_id = ? AND state <> 'removed' ORDER BY organization_id", userId).map((r) => r.organization_id as string);
     const last = this.rows('SELECT org_id FROM oauth_connections WHERE user_id = ? ORDER BY created_at DESC', userId).map((r) => r.org_id as string).find((o) => organizations.includes(o));
@@ -466,8 +473,15 @@ export class McpOAuth {
     return this.issue(row.client_id as string, row.user_id as string, row.org_id as string, row.scope as string, row.hash as string);
   }
 
+  /** The connection, acting through the person's personal agent for this client in this organization (agents.md §1): found or made. */
   private connect(family: string, userId: string, orgId: string, clientName: string, origin: string, resource: string): void {
-    this.sql.exec('INSERT OR IGNORE INTO oauth_connections (id, family, user_id, org_id, client_name, origin, resource, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', randomUUID(), family, userId, orgId, clientName, origin.slice(0, 200), resource, Date.now());
+    let agentId: string | null = null;
+    try {
+      agentId = personalAgentFor(this.sql, userId, orgId, clientName);
+    } catch (err) {
+      throw new OAuthError('access_denied', (err as Error).message);
+    }
+    this.sql.exec('INSERT OR IGNORE INTO oauth_connections (id, family, user_id, org_id, client_name, origin, resource, created_at, agent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', randomUUID(), family, userId, orgId, clientName, origin.slice(0, 200), resource, Date.now(), agentId);
   }
 
   private refresh(form: Record<string, string>) {
@@ -539,7 +553,14 @@ export class McpOAuth {
     const account = this.one('SELECT id, state FROM accounts WHERE user_id = ? AND organization_id = ?', userId, orgId);
     const refused = accountGate(account ? { state: account.state as AccountState } : null);
     if (refused) return { ok: false, reason: refused.code, description: refused.message, status: refused.statusCode };
-    return { ok: true, caller: { userId, email, orgId, accountId: (account?.id as string | undefined) ?? null, scope: row.scope as string } };
+    // The personal agent this acts through (agents.md §1). Every removal revokes the tokens first, so `revoked` above is what
+    // a removed agent's client normally hears; this is the safety net for an account removed by any other path.
+    const agentId = agentOfFamily(this.sql, row.family as string);
+    if (agentId) {
+      const agentAccount = this.one("SELECT state FROM accounts WHERE user_id = ? AND organization_id = ?", agentId, orgId);
+      if (!agentAccount || agentAccount.state === 'removed') return { ok: false, reason: 'agent_removed', description: 'This agent was removed from the organization. Sign in again to connect it anew.', status: 403 };
+    }
+    return { ok: true, caller: { userId, email, orgId, accountId: (account?.id as string | undefined) ?? null, scope: row.scope as string, agentId } };
   }
 
   // --- Connections (Docs' Settings) --------------------------------------------------------------
@@ -547,7 +568,7 @@ export class McpOAuth {
   /** The agents connected to this account that can still get tokens, newest first. */
   connections(userId: string): McpConnection[] {
     return this.rows(
-      `SELECT c.id, c.client_name, c.origin, c.resource, c.org_id, c.created_at, MAX(t.created_at) AS last_active FROM oauth_connections c
+      `SELECT c.id, c.client_name, c.origin, c.resource, c.org_id, c.agent_id, c.created_at, MAX(t.created_at) AS last_active FROM oauth_connections c
        JOIN oauth_tokens t ON t.family = c.family AND t.kind = 'refresh' AND t.revoked_at IS NULL AND t.expires_at >= ?
        WHERE c.user_id = ? GROUP BY c.id ORDER BY c.created_at DESC`,
       Date.now(), userId,
@@ -557,6 +578,7 @@ export class McpOAuth {
       origin: r.origin as string,
       endpoint: r.resource as string,
       organizationId: r.org_id as string,
+      ...(r.agent_id ? { agentId: r.agent_id as string } : {}),
       connectedAt: iso(r.created_at as number),
       ...(r.last_active ? { lastActiveAt: iso(r.last_active as number) } : {}),
     }));
@@ -564,10 +586,12 @@ export class McpOAuth {
 
   /** Signs an agent out: every token it holds stops working at once. False when the account has no such agent. */
   disconnect(userId: string, id: string): boolean {
-    const row = this.one('SELECT family FROM oauth_connections WHERE id = ? AND user_id = ?', id, userId);
+    const row = this.one('SELECT family, agent_id FROM oauth_connections WHERE id = ? AND user_id = ?', id, userId);
     if (!row) return false;
     this.revokeFamily(row.family as string);
     this.sql.exec('DELETE FROM oauth_connections WHERE id = ?', id);
+    // The last connection of a personal agent gone: the agent retires with it (agents.md §2).
+    if (row.agent_id) retireIdlePersonalAgent(this.sql, row.agent_id as string);
     return true;
   }
 
@@ -576,7 +600,10 @@ export class McpOAuth {
     this.sql.exec('DELETE FROM oauth_pending WHERE expires_at < ?', now);
     this.sql.exec('DELETE FROM oauth_codes WHERE expires_at < ?', now);
     this.sql.exec('DELETE FROM oauth_tokens WHERE expires_at < ?', now);
+    const orphaned = this.rows('SELECT DISTINCT agent_id FROM oauth_connections WHERE agent_id IS NOT NULL AND family NOT IN (SELECT family FROM oauth_tokens)').map((r) => r.agent_id as string);
     this.sql.exec('DELETE FROM oauth_connections WHERE family NOT IN (SELECT family FROM oauth_tokens)');
+    // A personal agent whose every connection aged out retires with them (agents.md §2).
+    for (const agentId of orphaned) retireIdlePersonalAgent(this.sql, agentId, now);
     // Kept a while past expiry, so a late poll hears expired_token rather than an unknown code.
     this.sql.exec('DELETE FROM oauth_device WHERE expires_at < ?', now - DEVICE_TTL);
     this.sql.exec("DELETE FROM rate_limit_windows WHERE key LIKE 'mcp-device:%' AND window_start < ?", now - DEVICE_TTL);

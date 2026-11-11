@@ -1,8 +1,9 @@
-// Agents (docs/specs/workspace-admin.md §3.4): the organization's shared agents with their sponsors, removing one, and
-// the one-time code that brings a new agent in (as Chat's "Invite your Agent"). Chat's Agents modal moved here.
+// Agents (docs/specs/workspace-admin.md §3.4, docs/specs/agents.md §2): the organization's shared agents with their sponsors,
+// its members' personal agents (Claude Desktop on /mcp, say), removing either, and the one-time code that brings a new
+// shared agent in (as Chat's "Invite your Agent"). Chat's Agents modal moved here.
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { WorkspaceDTO, WorkspaceMemberDTO } from '@flow/shared';
+import type { AccountDTO, WorkspaceDTO, WorkspaceMemberDTO } from '@flow/shared';
 import { adminApi } from '../api';
 import { Button, Card, Confirm, ErrorLine } from '../components/ui';
 
@@ -30,7 +31,7 @@ export function Agents({ org }: { org: WorkspaceDTO }) {
   return (
     <>
       <InviteAgent org={org} />
-      <Card title="Agents in this organization" intro="Agents are members with a 🤖 mark, each sponsored by the person who invited them. An agent is always native: its mailbox and calendars are part of its work." testid="card-agents">
+      <Card title="Shared agents" intro="Shared agents are members with a 🤖 mark, each sponsored by the person who invited them; anyone in the organization can ask them, and they keep no secrets from it. A shared agent is always native: its mailbox and calendars are part of its work." testid="card-agents">
         {members.isError && <ErrorLine error={errorText(members.error)} />}
         {members.isSuccess && agents.length === 0 && <p className="text-sm text-muted" data-testid="agents-empty">No agents yet.</p>}
         {agents.length > 0 && (
@@ -54,7 +55,54 @@ export function Agents({ org }: { org: WorkspaceDTO }) {
         )}
         <ErrorLine error={error} />
       </Card>
+      <PersonalAgents org={org} nameOf={nameOf} />
     </>
+  );
+}
+
+/**
+ * The members' personal agents (agents.md §2): each acts as its sponsor and only the sponsor can use it, so there is
+ * nothing to open here; an admin sees that it exists, whose it is, and may remove it, which ends its delegations.
+ */
+function PersonalAgents({ org, nameOf }: { org: WorkspaceDTO; nameOf: (userId: string | null) => string }) {
+  const qc = useQueryClient();
+  const accounts = useQuery({ queryKey: ['accounts', org.id], queryFn: () => adminApi.accounts(org.id) });
+  const agents = (accounts.data ?? []).filter((a) => a.kind === 'personal_agent' && a.state !== 'removed');
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const remove = useMutation({
+    mutationFn: (accountId: string) => adminApi.removePersonalAgent(org.id, accountId),
+    onMutate: () => setError(null),
+    onSuccess: () => {
+      setConfirming(null);
+      void qc.invalidateQueries({ queryKey: ['accounts', org.id] });
+    },
+    onError: (e) => setError(errorText(e)),
+  });
+  return (
+    <Card title="Personal agents" intro="A personal agent acts as one person, with that person's access, and only they can use it: Claude Desktop or Claude Code connected through FreeFlow's MCP endpoint, for example. It has no address or mailbox. Removing one ends its connection; the person can connect it again." testid="card-personal-agents">
+      {accounts.isError && <ErrorLine error={errorText(accounts.error)} />}
+      {accounts.isSuccess && agents.length === 0 && <p className="text-sm text-muted" data-testid="personal-agents-empty">No personal agents yet.</p>}
+      {agents.length > 0 && (
+        <ul className="divide-y divide-hairline rounded-lg border border-hairline">
+          {agents.map((a: AccountDTO) => (
+            <li key={a.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-sm" data-testid={`personal-agent-${a.id}`}>
+              <span className="font-medium">{a.displayName} 🤖</span>
+              <span className="text-xs text-muted">personal agent of {nameOf(a.sponsorId ?? null)}</span>
+              <span className="flex-1" />
+              {confirming === a.id ? (
+                <Confirm question={`Remove ${a.displayName}? Its connection stops working; ${nameOf(a.sponsorId ?? null)} can connect it again.`} busy={remove.isPending} onYes={() => remove.mutate(a.id)} onNo={() => setConfirming(null)} testid={`personal-agent-remove-confirm-${a.id}`} />
+              ) : (
+                <Button kind="link" disabled={remove.isPending} onClick={() => setConfirming(a.id)} testid={`personal-agent-remove-${a.id}`}>
+                  Remove
+                </Button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <ErrorLine error={error} />
+    </Card>
   );
 }
 

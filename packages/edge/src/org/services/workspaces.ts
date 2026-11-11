@@ -14,7 +14,7 @@ import {
   type WorkspaceDTO,
   type WorkspaceMemberDTO,
   type WorkspacePolicies,
-  type AccountKind,
+  type MemberKind,
   type WorkspaceInviteDTO,
 } from '@flow/shared';
 import { db, schema, type Tx } from '../db/index.js';
@@ -107,7 +107,7 @@ export interface JoinAccount { address: string | null; accountId: string | null 
  * The joiner's account (platform.md §3.2): the directory makes or reactivates it before the member row is written, so
  * the row can carry its address and id. Null for someone already a member, whose row and role stay as they are.
  */
-export async function accountForJoin(workspaceId: string, userId: string, role: MemberRole = 'member', kind: AccountKind = 'native'): Promise<JoinAccount | null> {
+export async function accountForJoin(workspaceId: string, userId: string, role: MemberRole = 'member', kind: MemberKind = 'native'): Promise<JoinAccount | null> {
   if (await isWorkspaceMember(workspaceId, userId)) return null;
   const u = (await db.select({ displayName: users.displayName }).from(users).where(eq(users.id, userId)).limit(1))[0];
   const account = await ensureAccount(workspaceId, userId, role, u?.displayName ?? '', kind);
@@ -781,7 +781,7 @@ async function sendInviteEmail(workspaceId: string, inviterId: string, email: st
  * register-then-accept — while `inviteUrl` keeps the configured base (a deep
  * link on default local config).
  */
-async function inviteOne(workspaceId: string, inviterId: string, rawEmail: string, kind: AccountKind = 'native'): Promise<InviteResultDTO> {
+async function inviteOne(workspaceId: string, inviterId: string, rawEmail: string, kind: MemberKind = 'native'): Promise<InviteResultDTO> {
   const email = rawEmail.trim();
   if (!isEmailAddress(email)) return { email: rawEmail, status: 'invalid_email' };
 
@@ -851,7 +851,7 @@ async function requireInviteRole(workspaceId: string, inviterId: string): Promis
  * Addresses are de-duplicated case-insensitively (emails are citext), so the
  * same person pasted twice gets one invite and one result.
  */
-export async function createInvites(workspaceId: string, inviterId: string, emails: string[], kind: AccountKind = 'native'): Promise<InviteResultDTO[]> {
+export async function createInvites(workspaceId: string, inviterId: string, emails: string[], kind: MemberKind = 'native'): Promise<InviteResultDTO[]> {
   await requireInviteRole(workspaceId, inviterId);
   const seen = new Set<string>();
   const results: InviteResultDTO[] = [];

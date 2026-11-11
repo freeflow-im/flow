@@ -148,10 +148,21 @@ r=await mcp(T3.access_token,'tools/list');t('revoking the refresh token ends its
 // --- Leaving the organization -------------------------------------------------------------------------------------------
 const T4=await connect(U,A);r=await mcp(T4.access_token,'tools/list');t('connected to Acme again',r.s===200,r.s);
 const TB=await connect(U,Bo);r=await call(TB.access_token,'list_files',{});t('a connection to Bravo sees Bravo’s file, not Acme’s',JSON.stringify(r.v).includes(SB)&&!JSON.stringify(r.v).includes(S),JSON.stringify(r.v).slice(0,120));
+// --- Agents as kinds (docs/specs/agents.md phase A): a connection acts through a personal agent the admin sees ---------------
+r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);let PA=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.sponsorId===U.user.id);
+t('Olga sees one personal agent of Uma’s in Acme: the MCP client, no address, mode personal',r.s===200&&PA.length===1&&PA[0].address===null&&PA[0].agentMode==='personal'&&PA[0].displayName==='E2E Agent'&&PA[0].state==='active',JSON.stringify(PA).slice(0,220));
+r=await api(O.token,'PATCH',`/v1/workspaces/${A}/accounts/${PA[0]?.id}/kind`,{kind:'guest'});t('a personal agent’s kind never changes',r.s===409,r.s+' '+JSON.stringify(r.j).slice(0,100));
+r=await api(U.token,'DELETE',`/v1/workspaces/${A}/accounts/${PA[0]?.id}`);t('a member cannot remove it',r.s===403,r.s);
+r=await api(O.token,'DELETE',`/v1/workspaces/${A}/accounts/${PA[0]?.id}`);t('Olga removes the personal agent',r.s===200&&r.j.account?.state==='removed',r.s+' '+JSON.stringify(r.j).slice(0,100));
+r=await mcp(T4.access_token,'tools/list');t('Uma’s Acme tokens stop working: revoked',r.s===401&&r.j.reason==='revoked',r.s+' '+JSON.stringify(r.j).slice(0,120));
+r=await api(U.token,'GET','/api/settings/agents');t('and Docs’ Settings no longer lists them',!(r.j.agents??[]).some(a=>a.organizationId===A),JSON.stringify(r.j.agents).slice(0,160));
+r=await mcp(TB.access_token,'tools/list');t('her Bravo token, another agent, still works',r.s===200,r.s);
+const T5=await connect(U,A);r=await mcp(T5.access_token,'tools/list');t('connecting again makes a new personal agent, and works',r.s===200,r.s);
+r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);{const now=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.sponsorId===U.user.id&&a.state!=='removed');t('one active personal agent of Uma’s again: the same one, back',now.length===1&&now[0].id===PA[0]?.id,JSON.stringify(now.map(a=>a.id)));}
 r=await api(O.token,'DELETE',`/v1/workspaces/${A}/members/${U.user.id}`);t('Olga removes Uma from Acme',r.s<300,r.s+' '+JSON.stringify(r.j).slice(0,100));
 await sleep(300);
-r=await mcp(T4.access_token,'tools/list');t('Uma’s Acme token stops working',r.s===401&&/invalid_token/.test(r.h.get('www-authenticate'))&&r.j.reason==='not_a_member',r.s+' '+JSON.stringify(r.j).slice(0,120));
-r=await api(null,'POST','/oauth/token',form({grant_type:'refresh_token',refresh_token:T4.refresh_token,client_id:CLIENT}),'application/x-www-form-urlencoded');t('and cannot be refreshed',r.s===400,JSON.stringify(r.j));
+r=await mcp(T5.access_token,'tools/list');t('Uma’s Acme token stops working: her personal agent there went with her, its delegations revoked',r.s===401&&/invalid_token/.test(r.h.get('www-authenticate'))&&r.j.reason==='revoked',r.s+' '+JSON.stringify(r.j).slice(0,120));
+r=await api(null,'POST','/oauth/token',form({grant_type:'refresh_token',refresh_token:T5.refresh_token,client_id:CLIENT}),'application/x-www-form-urlencoded');t('and cannot be refreshed',r.s===400,JSON.stringify(r.j));
 r=await mcp(TB.access_token,'tools/list');t('her Bravo token still works',r.s===200,r.s);
 {const {c}=pkce();const x=await api(null,'GET',authorizeUrl(c),undefined,undefined,cookie(U));const pg=await api(null,'GET',x.h.get('location'),undefined,undefined,cookie(U));const f=consentOf(pg.j);
  t('consent now offers Bravo alone, preselected',f.orgs.length===1&&f.orgs[0]===Bo&&f.checked===Bo,JSON.stringify(f.orgs));
@@ -175,6 +186,23 @@ r=await api(null,'POST','/v1/agents/redeem',{code:r.j.code,username:`regbot${tag
 r=await api(AGT,'GET','/v1/tools?door=bridge');const bt=r.j.tools??[];const td=(n)=>bt.find((x)=>x.name===n);
 t('GET /v1/tools?door=bridge as an agent lists send_message and respond_to_event with input schemas',r.s===200&&td('send_message')?.input?.type==='object'&&!!td('send_message').input.properties?.text&&td('respond_to_event')?.input?.properties?.response?.enum?.includes('accepted')&&bt.every((x)=>x.doors.includes('bridge')&&x.kind==='server'),r.s+' '+JSON.stringify(bt.map((x)=>x.name)).slice(0,160));
 r=await api(AGT,'GET','/v1/tools?door=assistant');t('only the bridge door is served there',r.s===400,r.s);
+// --- A bridge agent is a shared agent in the one organization it joined, and its turns say who asked (agents.md §1, §3) -------
+r=await api(AGT,'GET','/v1/me');t('the agent is a shared agent',r.s===200&&r.j.isAgent===true&&r.j.agentMode==='shared',r.s+' '+JSON.stringify(r.j).slice(0,120));const REG=r.j.id;
+r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);{const a=(r.j.accounts??[]).find(x=>x.principalId===REG);t('its account is native, sponsored by Olga, mode shared',a?.kind==='native'&&a?.sponsorId===O.user.id&&a?.agentMode==='shared'&&!!a?.address,JSON.stringify(a).slice(0,200));}
+r=await api(U.token,'POST',`/v1/workspaces/${Bo}/agent-invites`,{});r=await api(null,'POST','/v1/agents/redeem',{code:r.j.code,username:`regbot${tag}`,key:'a-long-agent-key-for-the-registry-test',name:'Registry'});
+t('the same name and key redeemed in Bravo makes a second agent, its own principal: an agent belongs to one organization',r.s===201&&r.j.user?.id&&r.j.user.id!==REG,r.s+' '+JSON.stringify(r.j).slice(0,160));
+r=await api(r.j.agentToken,'GET','/v1/me/accounts');t('which holds an account in Bravo alone',r.s===200&&r.j.accounts?.length===1&&r.j.accounts[0].organizationId===Bo,JSON.stringify(r.j).slice(0,160));
+r=await api(AGT,'GET','/v1/me/accounts');t('while the first keeps Acme alone',r.s===200&&r.j.accounts?.length===1&&r.j.accounts[0].organizationId===A,JSON.stringify(r.j).slice(0,160));
+r=await api(O.token,'GET',`/v1/workspaces/${A}/channels`);const GEN=(r.j.channels??r.j)[0];
+r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);const OACC=(r.j.accounts??[]).find(x=>x.principalId===O.user.id)?.id;
+r=await api(AGT,'POST',`/v1/channels/${GEN.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'asked by Olga'},undefined,{'x-flow-invoked-by':OACC});t('the agent posts, saying Olga asked',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,100));const ASKED=r.j.id;
+r=await api(AGT,'POST',`/v1/channels/${GEN.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'asked by nobody known'},undefined,{'x-flow-invoked-by':'00000000-0000-7000-8000-000000000bad'});const UNKNOWN=r.j.id;
+r=await api(O.token,'POST',`/v1/channels/${GEN.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'a person claiming'},undefined,{'x-flow-invoked-by':OACC});const CLAIM=r.j.id;
+await sleep(500);
+r=await api(O.token,'GET',`/v1/events?workspace=${A}&since=0&limit=500`);{const ev=(id)=>r.j.events?.find(x=>x.type==='chat.message.created'&&x.data?.id===id);
+ t('the event carries invokedBy: Olga’s account',ev(ASKED)?.invokedBy===OACC&&!!ev(ASKED)?.actor,JSON.stringify(ev(ASKED)).slice(0,200));
+ t('an account that is no member is not carried',ev(UNKNOWN)&&ev(UNKNOWN).invokedBy===undefined,JSON.stringify(ev(UNKNOWN)).slice(0,160));
+ t('a person’s claim is not carried',ev(CLAIM)&&ev(CLAIM).invokedBy===undefined,JSON.stringify(ev(CLAIM)).slice(0,160));}
 r=await api(null,'GET','/v1/tools?door=bridge');t('and not without a token',r.s===401,r.s);
 
 console.log(`\n${pass} passed, ${fail} failed`);process.exit(fail?1:0);

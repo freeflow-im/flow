@@ -1,9 +1,11 @@
 // Identity: accounts, sessions and sign-in. Ported from packages/server/src/services/auth.ts and oauthAccounts.ts, with
 // the same rules and the same mail. It runs over any `SqlStorage`-shaped database, so tests can use node:sqlite.
-import type { AccountDTO, AccountKind, AccountRole, AccountState, AuthResponse, DnsRecordDTO, DomainDTO, DomainKind, OAuthIdentityDTO, RegisterResponse, UserDTO } from '@flow/shared';
-import { ApiError, badRequest, conflict, notFound, unauthorized } from '../errors';
+import type { AccountDTO, AccountKind, AgentMode, AccountRole, AccountState, AuthResponse, DnsRecordDTO, DomainDTO, DomainKind, OAuthIdentityDTO, RegisterResponse, UserDTO } from '@flow/shared';
+import { ApiError, badRequest, conflict, forbidden, notFound, unauthorized } from '../errors';
 import { hashPassword, verifyPassword } from './passwords';
 import { DIRECTORY_MIGRATIONS } from './schema';
+import { newId } from './ids';
+import { personalAgentFor, revokePersonalAgent } from './agents';
 import { PLATFORM_DOMAIN, localPart, organizationDomain, uniqueAddress } from './addresses';
 import { checkDomain, checkRecords, dohResolver, normalizeDomain, recordsFor, type Resolve } from './dns';
 import { DEFAULT_DOMAIN_LIMITS, ProviderError, noneMailProvider, type DkimRecord, type MailProvider } from '../mailprovider/index';
@@ -103,16 +105,7 @@ export async function hashToken(token: string): Promise<string> {
 }
 export const newToken = () => Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url');
 
-/** A UUIDv7, the id format the server already uses. */
-export function newId(): string {
-  const b = crypto.getRandomValues(new Uint8Array(16));
-  const now = Date.now();
-  for (let i = 0; i < 6; i++) b[i] = Math.floor(now / 2 ** (8 * (5 - i))) & 0xff;
-  b[6] = (b[6]! & 0x0f) | 0x70;
-  b[8] = (b[8]! & 0x3f) | 0x80;
-  const h = Buffer.from(b).toString('hex');
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
-}
+export { newId } from './ids';
 
 const iso = (ms: unknown) => new Date(ms as number).toISOString();
 
@@ -132,6 +125,7 @@ export function toUserDTO(u: Row, viewerId?: string): UserDTO {
     title: u.title as string,
     isAgent: !!u.is_agent,
     sponsorId: u.is_agent ? ((u.sponsor_user_id as string | null) ?? null) : null,
+    agentMode: u.is_agent ? ((u.mode as AgentMode | null) ?? null) : null,
     notificationPrefs: JSON.parse(u.notification_prefs as string),
     statusSuppressAlerts: !!u.status_suppress_alerts,
     createdAt: iso(u.created_at),
@@ -161,6 +155,38 @@ export class DirectoryCore {
       this.sql.exec('INSERT INTO _migrations (n) VALUES (?)', done + i);
     });
     if (!this.rows('SELECT 1 FROM accounts LIMIT 1').length && this.rows('SELECT 1 FROM memberships LIMIT 1').length) this.backfillAccounts();
+    if (this.rows('SELECT 1 FROM users WHERE is_agent = 1 AND mode IS NULL AND deleted_at IS NULL LIMIT 1').length
+      || this.rows("SELECT 1 FROM oauth_connections c WHERE c.agent_id IS NULL AND EXISTS (SELECT 1 FROM accounts a WHERE a.user_id = c.user_id AND a.organization_id = c.org_id AND a.state <> 'removed') LIMIT 1").length) this.backfillAgents();
+  }
+
+  /**
+   * Agents made before they had kinds (docs/specs/agents.md phase A), retired once: every account removed (a hosted
+   * mailbox suspended, then deleted after retention), every token revoked, the principal marked deleted. The operator's
+   * ruling (decision_log 2026-11-11) was to start over rather than place them: an agent in several organizations has no
+   * one home to pick, and each is connected again with an invite code, which makes a new principal of a known kind. The
+   * Org objects drop them from their rosters at their next start (Org.retireRemovedAgents). Every /mcp connection gets its
+   * personal agent, one per sponsor, client and organization. Safe to run twice.
+   */
+  backfillAgents(): void {
+    const now = Date.now();
+    for (const u of this.rows('SELECT id, display_name FROM users WHERE is_agent = 1 AND mode IS NULL AND deleted_at IS NULL')) {
+      const orgs = this.rows("SELECT organization_id FROM accounts WHERE user_id = ? AND state <> 'removed'", u.id).map((a) => a.organization_id as string);
+      console.log(`[agents] ${u.display_name as string} (${u.id as string}) made before agents had kinds is retired from ${orgs.length ? orgs.join(', ') : 'no organization'}; connect it again with an invite code`);
+      this.sql.exec('UPDATE agent_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL', now, u.id);
+      this.removeAccounts('user_id = ?', u.id);
+      this.sql.exec("UPDATE accounts SET status_message = 'retired when agents gained kinds; connect the agent again with an invite code' WHERE user_id = ?", u.id);
+      this.sql.exec("UPDATE users SET mode = 'shared', deleted_at = ? WHERE id = ?", now, u.id);
+    }
+    const connections = this.rows(
+      "SELECT DISTINCT c.user_id, c.org_id, c.client_name FROM oauth_connections c WHERE c.agent_id IS NULL AND EXISTS (SELECT 1 FROM accounts a WHERE a.user_id = c.user_id AND a.organization_id = c.org_id AND a.state <> 'removed')");
+    for (const c of connections) {
+      try {
+        const agentId = personalAgentFor(this.sql, c.user_id as string, c.org_id as string, c.client_name as string);
+        this.sql.exec('UPDATE oauth_connections SET agent_id = ? WHERE user_id = ? AND org_id = ? AND client_name = ? AND agent_id IS NULL', agentId, c.user_id, c.org_id, c.client_name);
+      } catch (err) {
+        console.error(`[agents] no personal agent for ${c.client_name as string} of ${c.user_id as string} in ${c.org_id as string}: ${(err as Error).message}`);
+      }
+    }
   }
 
   /** An account for every membership that has none, with its address. Safe to run twice; the constructor runs it the
@@ -214,18 +240,20 @@ export class DirectoryCore {
   /** What a new account is (platform.md §3.3): what the join asked for (an invitation's kind, docs/specs/workspace-admin.md
    * §6.5), else `native`. An owner is always native, and so is an agent: an agent is brought in to work, and its mailbox and
    * calendar are part of that (operator rulings, decision_log 2026-11-09). */
-  private defaultKind(_organizationId: string, role: string, isAgent: boolean, asked?: AccountKind): AccountKind {
-    if (role === 'owner' || isAgent) return 'native';
-    return asked ?? 'native';
+  private defaultKind(_organizationId: string, role: string, user: Row, asked?: AccountKind): AccountKind {
+    // A personal agent's account holds nothing (agents.md §2, rule 4); a shared agent is always native.
+    if (user.is_agent) return user.mode === 'personal' ? 'personal_agent' : 'native';
+    if (role === 'owner') return 'native';
+    return asked === 'personal_agent' ? 'native' : (asked ?? 'native');
   }
 
   private createAccount(userId: string, organizationId: string, role: string, displayName?: string, provision = true, kind?: AccountKind): void {
     const user = this.userById(userId);
     if (!user) return;
     const name = displayName || (user.display_name as string);
-    const accountKind = this.defaultKind(organizationId, role, !!user.is_agent, kind);
-    // A guest has no address (§3.3): an address with no mailbox behind it bounces.
-    const address = accountKind === 'guest' ? null : this.newAddress(user, name, organizationId);
+    const accountKind = this.defaultKind(organizationId, role, user, kind);
+    // A guest has no address (§3.3): an address with no mailbox behind it bounces. Nor has a personal agent (agents.md §2).
+    const address = accountKind === 'guest' || accountKind === 'personal_agent' ? null : this.newAddress(user, name, organizationId);
     const id = newId();
     // With a provider, a native account starts at the head of the state machine (§3.4); Chat and Docs work from there.
     // A guest has nothing to provision and starts active.
@@ -244,7 +272,8 @@ export class DirectoryCore {
   }
 
   private accountRow(where: string, ...args: unknown[]): AccountDTO[] {
-    return this.rows(`SELECT * FROM accounts WHERE ${where} ORDER BY created_at, id`, ...args).map((a) => ({
+    // An agent's mode rides along (agents.md §2) by subquery: a join would make `organization_id` ambiguous in `where`.
+    return this.rows(`SELECT *, (SELECT u.mode FROM users u WHERE u.id = accounts.user_id AND u.is_agent = 1) AS agent_mode FROM accounts WHERE ${where} ORDER BY created_at, id`, ...args).map((a) => ({
       id: a.id as string,
       principalId: a.user_id as string,
       organizationId: a.organization_id as string,
@@ -255,6 +284,7 @@ export class DirectoryCore {
       state: a.state as AccountState,
       statusMessage: (a.status_message as string | null) ?? null,
       hosted: a.hosted_at != null,
+      ...(a.sponsor_user_id || a.agent_mode ? { sponsorId: (a.sponsor_user_id as string | null) ?? null, agentMode: (a.agent_mode as AgentMode | null) ?? null } : {}),
       createdAt: iso(a.created_at),
     }));
   }
@@ -387,6 +417,7 @@ export class DirectoryCore {
   setAccountKind(organizationId: string, accountId: string, kind: AccountKind): AccountDTO {
     const row = this.rows('SELECT * FROM accounts WHERE id = ? AND organization_id = ?', accountId, organizationId)[0];
     if (!row) throw notFound('account not found');
+    if (row.kind === 'personal_agent' || kind === 'personal_agent') throw conflict('personal_agent', "a personal agent's account never changes kind");
     if (row.kind !== kind) {
       if (kind === 'guest') this.makeGuest(row);
       else this.makeNative(row);
@@ -439,6 +470,7 @@ export class DirectoryCore {
 
   /** A join's account: made when missing, reactivated with the new role when removed, its role updated otherwise. */
   private joinAccount(userId: string, organizationId: string, role: string, displayName?: string, kind?: AccountKind): void {
+    this.placeAgent(userId, organizationId);
     this.sql.exec('INSERT OR IGNORE INTO organizations (id, slug, created_at) VALUES (?, ?, ?)', organizationId, this.organizationSlug(organizationId), Date.now());
     this.ensurePlatformDomain(organizationId);
     if (role === 'owner') this.sql.exec('UPDATE organizations SET owner_user_id = ? WHERE id = ? AND owner_user_id IS NULL', userId, organizationId);
@@ -459,6 +491,21 @@ export class DirectoryCore {
     this.sql.exec('UPDATE accounts SET state = ?, removed_at = NULL, status_message = NULL WHERE id = ?', remake ? 'requested' : 'active', id);
     if (remake) this.enqueue('provision', organizationId, id);
     else if (existing.hosted_at != null) this.enqueue('resume', organizationId, id);
+  }
+
+  /**
+   * An agent belongs to one organization (agents.md §1): the first it joins places it (a bridge agent, as `shared`), and a
+   * join anywhere else is refused, so the agent never quietly gains access. A person is not placed. The Org object gets
+   * the refusal at redeem, before any member row is written.
+   */
+  private placeAgent(userId: string, organizationId: string): void {
+    const u = this.userById(userId);
+    if (!u?.is_agent) return;
+    if (!u.organization_id) {
+      this.sql.exec("UPDATE users SET organization_id = ?, mode = COALESCE(mode, 'shared') WHERE id = ?", organizationId, userId);
+      return;
+    }
+    if (u.organization_id !== organizationId) throw forbidden('this agent belongs to another organization; connect it here with a new name and key');
   }
 
   private rows(query: string, ...args: unknown[]): Row[] {
@@ -591,10 +638,20 @@ export class DirectoryCore {
   }
 
   /** Sessions first, with a sliding expiry written at most daily; then agent tokens, which do not expire but can be revoked. */
-  /** A token's principal and, when an organization is named, its account there: the caller context in one call (§3.6). */
-  async authenticateIn(token: string, organizationId: string | null): Promise<{ user: UserDTO; kind: AuthKind; account: AccountDTO | null }> {
+  /**
+   * A token's principal and, when an organization is named, its account there: the caller context in one call (§3.6).
+   * `invokedBy` is an agent's claim of who asked for its turn (agents.md §3): it comes back only when the caller is an agent
+   * and the account named is another account of the organization that was not removed, so every object may carry it.
+   */
+  async authenticateIn(token: string, organizationId: string | null, invokedBy: string | null = null): Promise<{ user: UserDTO; kind: AuthKind; account: AccountDTO | null; invokedBy: string | null }> {
     const { user, kind } = await this.authenticate(token);
-    return { user, kind, account: organizationId ? this.accountFor(user.id, organizationId) : null };
+    const account = organizationId ? this.accountFor(user.id, organizationId) : null;
+    let asker: string | null = null;
+    if (invokedBy && kind === 'agent' && organizationId && account && invokedBy !== account.id) {
+      const who = this.rows("SELECT 1 AS x FROM accounts WHERE id = ? AND organization_id = ? AND state <> 'removed'", invokedBy, organizationId);
+      if (who.length) asker = invokedBy;
+    }
+    return { user, kind, account, invokedBy: asker };
   }
 
   async authenticate(token: string): Promise<{ user: UserDTO; kind: AuthKind }> {
@@ -803,12 +860,20 @@ export class DirectoryCore {
     for (const c of changes) {
       if (c.kind === 'agent_user') {
         const a = JSON.parse(c.payload!) as { username: string | null; keyHash: string | null; passwordHash: string; email: string; displayName: string; sponsorId: string | null; createdAt: number };
+        // Born in an organization's object, so this is its organization, as a shared agent (agents.md §1). A second
+        // organization's object reporting the same id is a join elsewhere: skipped, never refused, since this is a report
+        // of what that object already wrote, and a refusal would hold up every change behind it in its outbox.
+        const known = this.userById(c.id);
+        if (known?.is_agent && known.organization_id && known.organization_id !== organizationId) { console.error(`[agents] ${c.id} belongs to ${known.organization_id as string}; its principal reported by ${organizationId} is skipped`); continue; }
         this.sql.exec(
-          `INSERT INTO users (id, email, password_hash, display_name, is_agent, sponsor_user_id, agent_username, agent_key_hash, email_verified_at, created_at)
-           VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
-           ON CONFLICT (id) DO UPDATE SET display_name = excluded.display_name, agent_username = excluded.agent_username, agent_key_hash = excluded.agent_key_hash`,
-          c.id, a.email, a.passwordHash, a.displayName, a.sponsorId, a.username, a.keyHash, a.createdAt, a.createdAt);
+          `INSERT INTO users (id, email, password_hash, display_name, is_agent, sponsor_user_id, agent_username, agent_key_hash, organization_id, mode, email_verified_at, created_at)
+           VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, 'shared', ?, ?)
+           ON CONFLICT (id) DO UPDATE SET display_name = excluded.display_name, agent_username = excluded.agent_username, agent_key_hash = excluded.agent_key_hash,
+             organization_id = COALESCE(users.organization_id, excluded.organization_id), mode = COALESCE(users.mode, excluded.mode)`,
+          c.id, a.email, a.passwordHash, a.displayName, a.sponsorId, a.username, a.keyHash, organizationId, a.createdAt, a.createdAt);
       } else if (c.kind === 'agent_token') {
+        // An agent holds a delegation or a token, never both (agents.md §1): a personal agent gets no token.
+        if (this.userById(c.user_id!)?.mode === 'personal') { console.error(`[agents] token for personal agent ${c.user_id!} refused`); continue; }
         this.sql.exec('INSERT OR IGNORE INTO agent_tokens (id, token_hash, user_id, created_at) VALUES (?, ?, ?, ?)', c.id, c.payload, c.user_id, Date.now());
       } else if (c.kind === 'agent_revoke') {
         this.sql.exec('UPDATE agent_tokens SET revoked_at = ? WHERE id = ?', Date.now(), c.id);
@@ -820,7 +885,15 @@ export class DirectoryCore {
       else if (c.kind === 'join') {
         // `memberships` is written for one more release and read by nothing; it is retired in phase 7.
         this.sql.exec('INSERT OR REPLACE INTO memberships (user_id, organization_id, role) VALUES (?, ?, ?)', c.user_id, organizationId, c.role);
-        this.joinAccount(c.user_id!, organizationId, c.role!);
+        // An agent that belongs elsewhere gets no account here (agents.md §1); the join is skipped, not refused, for the
+        // same reason as above. The sync path (ensureAccount, which redeem asks first) is where the refusal reaches the agent.
+        try {
+          this.joinAccount(c.user_id!, organizationId, c.role!);
+        } catch (err) {
+          if (!(err instanceof ApiError && err.code === 'forbidden')) throw err;
+          console.error(`[agents] join of ${c.user_id!} in ${organizationId} skipped: ${err.message}`);
+          continue;
+        }
         // A member row's sponsor (an agent's, in this organization) rides on its join.
         if (c.payload) this.sql.exec('UPDATE accounts SET sponsor_user_id = ? WHERE user_id = ? AND organization_id = ?', c.payload, c.user_id, organizationId);
       } else if (c.kind === 'owner') {
@@ -839,12 +912,26 @@ export class DirectoryCore {
     }
   }
 
+  /**
+   * An admin removes a personal agent (agents.md §2): its account is marked removed, every delegation it acted through is
+   * revoked, and its principal tombstoned. The sponsor's own account is untouched. Only a `personal_agent` account here.
+   */
+  removePersonalAgent(organizationId: string, accountId: string): AccountDTO {
+    const a = this.rows("SELECT * FROM accounts WHERE id = ? AND organization_id = ? AND kind = 'personal_agent'", accountId, organizationId)[0];
+    if (!a) throw notFound('personal agent not found');
+    revokePersonalAgent(this.sql, a.user_id as string);
+    this.removeAccounts('id = ?', accountId);
+    return this.accountById(accountId)!;
+  }
+
   /** The accounts of the agents a person sponsors, in one organization or (null) in all of them, marked removed. */
   private removeSponsored(sponsorId: string, organizationId: string | null): void {
     const where = organizationId ? 'AND organization_id = ?' : '';
     const args = organizationId ? [sponsorId, organizationId] : [sponsorId];
-    for (const a of this.rows(`SELECT user_id, organization_id FROM accounts WHERE sponsor_user_id = ? ${where} AND state <> 'removed'`, ...args)) {
+    for (const a of this.rows(`SELECT user_id, organization_id, kind FROM accounts WHERE sponsor_user_id = ? ${where} AND state <> 'removed'`, ...args)) {
       this.sql.exec('DELETE FROM memberships WHERE user_id = ? AND organization_id = ?', a.user_id, a.organization_id);
+      // A personal agent acted as the sponsor who is gone: nothing may act through its delegations now (agents.md §2).
+      if (a.kind === 'personal_agent') revokePersonalAgent(this.sql, a.user_id as string);
       this.removeAccounts('user_id = ? AND organization_id = ?', a.user_id, a.organization_id);
     }
   }
@@ -1080,6 +1167,7 @@ export class DirectoryCore {
     this.removeAccounts('user_id = ?', userId);
     // The agents they sponsor follow them out of every organization (§3.3, rule 2).
     this.removeSponsored(userId, null);
+    revokePersonalAgent(this.sql, userId);
     this.sql.exec("UPDATE users SET deleted_at = ?, email = 'deleted-' || id || '@deleted.invalid', password_hash = '!deleted', display_name = 'Deleted user', avatar_url = NULL WHERE id = ?", Date.now(), userId);
   }
 
