@@ -7,6 +7,11 @@ main = "src/index.ts"
 compatibility_date = "2026-10-01"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = false
+# A cold start costs time in proportion to the script's size (scripts/perf/README.md: about 0.45 s at 5 MB, 1.2-2.1 s at
+# 22 MB, and loading a library late does not help), so the script is minified: 21.8 MB becomes 12.0 MB. Names are kept
+# (wrangler's default), and the source map goes up with it so the logs' stack traces still name our files.
+minify = true
+upload_source_maps = true
 
 routes = [
   { pattern = "edge.freeflow.im", custom_domain = true },
