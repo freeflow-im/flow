@@ -383,14 +383,15 @@ describe('suiteTabsFrom', () => {
     expect(links.map((a) => a.getAttribute('title'))).toEqual(withTabs.map((m) => `${m.tab!.label} (⌘${m.tab!.shortcut})`));
   });
 
-  it('gives every bar every app’s tab, an app added by manifest included', () => {
+  it('gives every bar every app’s tab, and an app without one (Contacts, reached from Mail) no tab anywhere', () => {
     const withTabs = APP_MANIFESTS.filter((m) => m.tab);
-    expect(withTabs.map((m) => m.name)).toContain('contacts');
+    expect(withTabs.map((m) => m.name)).toEqual(['chat', 'docs', 'mail', 'calendar']);
     for (const bar of withTabs) {
       const tabs = suiteTabsFrom(APP_MANIFESTS, bar.name);
       expect(tabs.map((t) => t.id).sort()).toEqual(withTabs.map((m) => m.name).sort());
       expect(tabs.filter((t) => t.active).map((t) => t.id)).toEqual([bar.name]);
-      expect(tabs.find((t) => t.id === 'contacts')?.href).toBe('/contacts');
     }
+    // The bar of an app without a tab shows the others, none active.
+    expect(suiteTabsFrom(APP_MANIFESTS, 'contacts').filter((t) => t.active)).toEqual([]);
   });
 });
