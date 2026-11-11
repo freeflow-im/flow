@@ -1,6 +1,6 @@
 {
   "name": "@freeflow-im/mcp-docs-app",
-  "version": "0.2.41",
+  "version": "0.2.42",
   "private": true,
   "type": "module",
   "description": "MCP Docs, the desktop app: the Docs editors (@flow/docs) over a folder of real files, with an MCP server for agents on this machine.",
