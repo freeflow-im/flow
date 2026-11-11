@@ -1,7 +1,7 @@
 // Personal agents in the directory (docs/specs/agents.md §1, §2): the agent principal a /mcp delegation acts through, one
 // per sponsor, client and organization, with its `personal_agent` account. Shared by the core (the backfill, removal) and
 // the MCP authorization server (a new connection), which run over the same SQLite.
-import type { AgentMode } from '@flow/shared';
+import type { AgentMode, SponsoredAgentDTO } from '@flow/shared';
 import { forbidden } from '../errors';
 import { newId } from './ids';
 
@@ -61,6 +61,7 @@ export function agentOfFamily(sql: AgentSql, family: string): string | null {
  */
 export function retireIdlePersonalAgent(sql: AgentSql, agentId: string, now = Date.now()): boolean {
   if (rows(sql, 'SELECT 1 AS x FROM oauth_connections WHERE agent_id = ? LIMIT 1', agentId).length) return false;
+  if (rows(sql, 'SELECT 1 AS x FROM agent_tokens WHERE user_id = ? AND revoked_at IS NULL LIMIT 1', agentId).length) return false;
   if (!rows(sql, "SELECT 1 AS x FROM users WHERE id = ? AND is_agent = 1 AND mode = 'personal'", agentId).length) return false;
   sql.exec("UPDATE accounts SET state = 'removed', removed_at = ? WHERE user_id = ? AND state <> 'removed'", now, agentId);
   sql.exec("UPDATE users SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL", now, agentId);
@@ -72,4 +73,14 @@ export function revokePersonalAgent(sql: AgentSql, agentId: string, now = Date.n
   sql.exec('UPDATE oauth_tokens SET revoked_at = ? WHERE revoked_at IS NULL AND family IN (SELECT family FROM oauth_connections WHERE agent_id = ?)', now, agentId);
   sql.exec('DELETE FROM oauth_connections WHERE agent_id = ?', agentId);
   retireIdlePersonalAgent(sql, agentId, now);
+}
+
+/** The agents a person sponsors that are not deleted, with their kind and organization: the consent page's "reconnect an existing agent". */
+export function sponsoredAgentsOf(sql: AgentSql, sponsorId: string): SponsoredAgentDTO[] {
+  return rows(sql,
+    `SELECT u.id, u.display_name, u.mode, u.organization_id, (SELECT a.address FROM accounts a WHERE a.user_id = u.id AND a.organization_id = u.organization_id) AS address
+     FROM users u WHERE u.sponsor_user_id = ? AND u.is_agent = 1 AND u.deleted_at IS NULL AND u.mode IS NOT NULL AND u.organization_id IS NOT NULL
+       AND EXISTS (SELECT 1 FROM accounts a WHERE a.user_id = u.id AND a.organization_id = u.organization_id AND a.state <> 'removed')
+     ORDER BY u.display_name, u.created_at`, sponsorId,
+  ).map((r) => ({ id: r.id as string, displayName: r.display_name as string, mode: r.mode as AgentMode, organizationId: r.organization_id as string, address: (r.address as string | null) ?? null }));
 }

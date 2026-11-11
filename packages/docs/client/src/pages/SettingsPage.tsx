@@ -513,6 +513,7 @@ function ConnectedAgents() {
             <tr>
               <th>Agent</th>
               {everySignIn && <th>Organization</th>}
+              {everySignIn && <th>Connected as</th>}
               {!local && <th>Signed in from</th>}
               <th>Connected</th>
               {!local && <th>Last active</th>}
@@ -527,6 +528,7 @@ function ConnectedAgents() {
                   <div className="agents-endpoint">{a.endpoint}</div>
                 </td>
                 {everySignIn && <td>{a.organization ?? ''}</td>}
+                {everySignIn && <td>{a.mode === 'shared' ? `Shared agent ${a.agentName ?? ''}`.trim() : a.mode === 'personal' ? 'Your personal agent' : ''}</td>}
                 {!local && <td>{a.origin}</td>}
                 <td>{when(a.connectedAt)}</td>
                 {!local && <td>{a.lastActiveAt ? when(a.lastActiveAt) : ''}</td>}

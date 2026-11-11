@@ -260,6 +260,70 @@ export async function redeemAgentInvite(input: RedeemAgentInviteBody): Promise<A
   };
 }
 
+/** A handle from a name, unique in the workspace: "Omni" -> omni, omni2, … */
+async function freeUsername(workspaceId: string, name: string): Promise<string> {
+  const base = (name.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[-._]+|[-._]+$/g, '').slice(0, 28) || 'agent').padEnd(3, '0');
+  for (let n = 0; n < 100; n++) {
+    const candidate = n === 0 ? base : `${base}${n + 1}`;
+    if (!(await usernameTakenIn(db, workspaceId, candidate))) return candidate;
+  }
+  throw conflict('username_taken', 'no free handle for that name');
+}
+
+/**
+ * A shared agent made from the OAuth consent page (agents.md §1, phase B): a member sponsored by the person, in #general,
+ * with a handle from its name and no key, since the directory's OAuth tokens are its credential. The sponsoring policy
+ * applies as it does to an invite. Returns the agent's principal id.
+ */
+export async function createSharedAgent(sponsorId: string, rawName: string): Promise<{ userId: string; username: string }> {
+  const workspaceId = (await db.select({ id: workspaces.id }).from(workspaces).limit(1))[0]?.id;
+  if (!workspaceId) throw notFound('workspace not found');
+  const name = rawName.trim().slice(0, 80);
+  if (!name) throw badRequest('validation', 'the agent needs a name');
+  await requireAgentSponsorRights(workspaceId, sponsorId);
+  if (await isAgentUser(sponsorId)) throw agentForbidden('an agent cannot sponsor an agent');
+  await requireSponsorAccount(workspaceId, sponsorId);
+  const username = await freeUsername(workspaceId, name);
+  const userId = newId();
+  let generalChannel: { id: string; workspaceId: string; kind: string } | null = null;
+  await db.transaction(async (tx) => {
+    await tx.insert(users).values({
+      id: userId,
+      email: `agent-${userId}@agents.flow.local`,
+      passwordHash: `!agent:${randomBytes(24).toString('hex')}`,
+      displayName: name,
+      isAgent: true,
+      emailVerifiedAt: new Date(),
+      sponsorUserId: sponsorId,
+      agentUsername: username,
+      agentKeyHash: null,
+    });
+    await tx.insert(workspaceMembers).values({ workspaceId, userId, role: 'member', sponsorUserId: sponsorId }).onConflictDoNothing();
+    const general = await tx.select().from(channels).where(and(eq(channels.workspaceId, workspaceId), eq(channels.name, 'general'))).limit(1);
+    if (general[0]) {
+      await tx.insert(channelMembers).values({ channelId: general[0].id, userId }).onConflictDoNothing();
+      generalChannel = { id: general[0].id, workspaceId, kind: general[0].kind };
+    }
+  });
+  try {
+    const account = await ensureAccount(workspaceId, userId, 'member', name);
+    if (account) await db.update(workspaceMembers).set({ address: account.address, accountId: account.id }).where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, userId)));
+  } catch (err) {
+    console.error(`agent account for ${userId}: ${(err as Error).message}`);
+  }
+  const preset = pickRandomAvatarPreset();
+  if (preset) {
+    try {
+      await setAvatar(userId, readAgentAvatarPreset(preset), 'image/png');
+    } catch (err) {
+      console.error(`agent avatar assignment failed for ${userId}: ${(err as Error).message}`);
+    }
+  }
+  await announceJoin(workspaceId, userId);
+  if (generalChannel) await postSystemMessage(generalChannel, userId, 'member_joined');
+  return { userId, username };
+}
+
 /**
  * Add an agent that already exists to another of the caller's workspaces (#357)
  * — the profile popup's "Invite to workspace" for agents.

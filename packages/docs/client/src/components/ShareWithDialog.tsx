@@ -88,6 +88,11 @@ export function ShareWithDialog(props: {
   const orgShared = shown.some((g) => g.principal === 'org');
   const taken = new Set(shown.map((g) => g.principal));
   const people = members.filter((m) => m.userId !== user?.id && !taken.has(principalOf(m)));
+  // Sharing with a shared agent shares with the whole organization (docs/specs/agents.md §4): the person judges once, here.
+  const peopleCount = members.filter((m) => !m.isAgent).length;
+  const orgName = org.active?.name ?? 'the organization';
+  const agentChosen = people.find((m) => m.isAgent && principalOf(m) === adding);
+  const agentOf = (g: GrantInfo) => members.find((m) => m.isAgent && principalOf(m) === g.principal);
   const rooms = channels.filter((c) => !taken.has(`channel:${c.id}`));
   const copy = async () => {
     if (!sharing?.link) return;
@@ -124,6 +129,11 @@ export function ShareWithDialog(props: {
                   </>
                 ) : (
                   <span className="muted">{ROLES.find((r) => r.role === g.role)?.label}</span>
+                )}
+                {agentOf(g) && (
+                  <span className="muted small share-agent-note" data-testid={`share-agent-note-${g.principal}`}>
+                    Everyone in {orgName} can ask {agentOf(g)!.displayName} about this.
+                  </span>
                 )}
               </li>
             ))}
@@ -165,6 +175,11 @@ export function ShareWithDialog(props: {
                   Add
                 </button>
               </div>
+              {agentChosen && (
+                <p className="share-who" data-testid="share-agent-warning">
+                  Everyone in {orgName} ({peopleCount} {peopleCount === 1 ? 'person' : 'people'}) will be able to ask {agentChosen.displayName} about this: a shared agent keeps no secrets from the organization.
+                </p>
+              )}
               <label className="share-org">
                 <input type="checkbox" checked={orgShared} disabled={busy} onChange={(e) => void run(() => (e.target.checked ? api.setGrant(props.kind, id, 'org', 'editor') : api.removeGrant(props.kind, id, 'org')), e.target.checked)} />
                 Everyone in {org.active?.name ?? 'the organization'} can edit it (Organization files)

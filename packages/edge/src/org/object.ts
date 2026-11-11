@@ -172,6 +172,17 @@ export class Org extends DurableObject<OrgEnv> {
     return answer.value;
   }
 
+  /**
+   * A shared agent made from the OAuth consent page (agents.md §1, phase B): a member of this organization with the person
+   * as sponsor, as an invite's redeem makes one, but with no key (its credential is the OAuth token the directory issues
+   * for it). The directory learns it before the answer, so the grant can name it.
+   */
+  async createSharedAgent(p: { sponsorId: string; name: string }): Promise<{ userId: string; username: string }> {
+    const out = await this.scoped(async () => (await import('./services/agents')).createSharedAgent(p.sponsorId, p.name));
+    await this.flushOutbox(null);
+    return out;
+  }
+
   private async accountFor(organizationId: string, userId: string): Promise<AccountDTO | null> {
     const answer = await this.directory().call('accountFor' as never, [userId, organizationId] as never) as DirectoryAnswer<AccountDTO | null>;
     if (!answer.ok) throw new ApiError(answer.status, answer.code, answer.message);

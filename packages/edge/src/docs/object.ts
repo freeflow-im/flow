@@ -41,6 +41,9 @@ export interface DocsEnv {
   ASSISTANT?: DurableObjectNamespace<import('../assistant/object').Assistant>;
 }
 const BASE = '/docs';
+/** The agent fields of a caller context (agents.md §3), as the /mcp door resolves them. */
+interface AgentFields { via?: string | null; invokedBy?: string | null }
+
 /** A file's saves publish `docs.file.changed` at most this often, so a typing session does not flood the log. */
 export const FILE_CHANGED_EVERY_MS = 30_000;
 
@@ -313,25 +316,27 @@ export class Docs extends DurableObject<DocsEnv> {
 
   /** A request to /mcp, authenticated by the Worker against the directory (routes/mcp.ts), as `caller` in this organization. */
   async mcp(request: Request, caller: McpRequestCaller): Promise<Response> {
-    return this.inOrganization(caller.orgId, () => handleMcp(request, this.hub!, caller, this.mailOf(caller.userId, caller.origin, caller.orgId, caller.via), this.calendarOf(caller.userId, caller.origin, caller.orgId, caller.via), this.eventsOf(caller.userId, caller.orgId), this.memberOf(caller.orgId), appToolContexts(this.env, this.accountCaller(caller.userId, caller.orgId, caller.via), caller.origin)));
+    const agent = { via: caller.via ?? null, invokedBy: caller.invokedBy ?? null };
+    return this.inOrganization(caller.orgId, () => handleMcp(request, this.hub!, caller, this.mailOf(caller.userId, caller.origin, caller.orgId, agent), this.calendarOf(caller.userId, caller.origin, caller.orgId, agent), this.eventsOf(caller.userId, caller.orgId), this.memberOf(caller.orgId), appToolContexts(this.env, this.accountCaller(caller.userId, caller.orgId, agent), caller.origin)));
   }
 
   /**
    * The caller context for the Mail and Calendar objects of the person's account in this organization (platform.md §3.6),
    * asked of the directory once per tool context. Null for no account here, or one suspended or removed.
    */
-  private accountCaller(userId: string, organizationId: string, via: string | null = null): () => Promise<CallerContext | null> {
+  private accountCaller(userId: string, organizationId: string, agent: AgentFields = {}): () => Promise<CallerContext | null> {
     let found: Promise<CallerContext | null> | null = null;
     return () =>
       (found ??= this.directory<AccountDTO | null>('accountFor', userId, organizationId).then((account) =>
-        // `via`: the personal agent the /mcp client acts through (agents.md §3), so the objects' events say so.
-        account && account.state !== 'suspended' && account.state !== 'removed' ? { user: null, token: null, authKind: null, ip: '', organizationId, account, ...(via ? { via } : {}) } : null,
+        // `via`, the personal agent the /mcp client acts through, or `invokedBy`, who asked a shared one (agents.md §3), so
+        // the objects' events say so.
+        account && account.state !== 'suspended' && account.state !== 'removed' ? { user: null, token: null, authKind: null, ip: '', organizationId, account, ...(agent.via ? { via: agent.via } : {}), ...(agent.invokedBy ? { invokedBy: agent.invokedBy } : {}) } : null,
       ));
   }
 
   /** A per-account object's HTTP API, as the tools call it: the account's object, or a 403 `no_account`. */
-  private accountFetch(ns: AccountObjects, app: string, userId: string, origin: string, organizationId: string, via: string | null = null) {
-    const caller = this.accountCaller(userId, organizationId, via);
+  private accountFetch(ns: AccountObjects, app: string, userId: string, origin: string, organizationId: string, agent: AgentFields = {}) {
+    const caller = this.accountCaller(userId, organizationId, agent);
     return async (path: string, init?: RequestInit): Promise<Response> => {
       const who = await caller();
       if (!who?.account) return Response.json({ error: { code: 'no_account', message: `join an organization to use ${app}` } }, { status: 403 });
@@ -343,21 +348,21 @@ export class Docs extends DurableObject<DocsEnv> {
    * The Mail object of the person's account in this organization, as its HTTP API (docs/specs/mail-api.md), for the Mail
    * tools. Undefined where the Worker has no Mail.
    */
-  private mailOf(userId: string, origin: string, organizationId: string, via: string | null = null): ((path: string, init?: RequestInit) => Promise<Response>) | undefined {
+  private mailOf(userId: string, origin: string, organizationId: string, agent: AgentFields = {}): ((path: string, init?: RequestInit) => Promise<Response>) | undefined {
     const ns = this.env.MAIL;
-    return ns ? this.accountFetch(ns as unknown as AccountObjects, 'Mail', userId, origin, organizationId, via) : undefined;
+    return ns ? this.accountFetch(ns as unknown as AccountObjects, 'Mail', userId, origin, organizationId, agent) : undefined;
   }
 
   /**
    * The Calendar object of the person's account in this organization, as its HTTP API (docs/specs/calendar.md §4), for the
    * Calendar tools. Undefined where the Worker has no Calendar.
    */
-  private calendarOf(userId: string, origin: string, organizationId: string, via: string | null = null): ((path: string, init?: RequestInit) => Promise<Response>) | undefined {
+  private calendarOf(userId: string, origin: string, organizationId: string, agent: AgentFields = {}): ((path: string, init?: RequestInit) => Promise<Response>) | undefined {
     const { CALENDAR: ns, ORG: org } = this.env;
     if (!ns) return undefined;
-    if (!org) return this.accountFetch(ns as unknown as AccountObjects, 'Calendar', userId, origin, organizationId, via);
+    if (!org) return this.accountFetch(ns as unknown as AccountObjects, 'Calendar', userId, origin, organizationId, agent);
     // As the routes do (calendar/forward.ts): a shared calendar's id reaches its owner's object, `/shared` the share index.
-    const caller = this.accountCaller(userId, organizationId, via);
+    const caller = this.accountCaller(userId, organizationId, agent);
     return async (path: string, init?: RequestInit): Promise<Response> => {
       const who = await caller();
       if (!who?.account) return Response.json({ error: { code: 'no_account', message: 'join an organization to use Calendar' } }, { status: 403 });

@@ -1,11 +1,11 @@
 // Identity: accounts, sessions and sign-in. Ported from packages/server/src/services/auth.ts and oauthAccounts.ts, with
 // the same rules and the same mail. It runs over any `SqlStorage`-shaped database, so tests can use node:sqlite.
-import type { AccountDTO, AccountKind, AgentMode, AccountRole, AccountState, AuthResponse, DnsRecordDTO, DomainDTO, DomainKind, OAuthIdentityDTO, RegisterResponse, UserDTO } from '@flow/shared';
+import type { AccountDTO, AccountKind, AgentMode, SponsoredAgentDTO, AccountRole, AccountState, AuthResponse, DnsRecordDTO, DomainDTO, DomainKind, OAuthIdentityDTO, RegisterResponse, UserDTO } from '@flow/shared';
 import { ApiError, badRequest, conflict, forbidden, notFound, unauthorized } from '../errors';
 import { hashPassword, verifyPassword } from './passwords';
 import { DIRECTORY_MIGRATIONS } from './schema';
 import { newId } from './ids';
-import { personalAgentFor, revokePersonalAgent } from './agents';
+import { personalAgentFor, revokePersonalAgent, sponsoredAgentsOf } from './agents';
 import { PLATFORM_DOMAIN, localPart, organizationDomain, uniqueAddress } from './addresses';
 import { checkDomain, checkRecords, dohResolver, normalizeDomain, recordsFor, type Resolve } from './dns';
 import { DEFAULT_DOMAIN_LIMITS, ProviderError, noneMailProvider, type DkimRecord, type MailProvider } from '../mailprovider/index';
@@ -654,6 +654,13 @@ export class DirectoryCore {
     return { user, kind, account, invokedBy: asker };
   }
 
+  /** The agents a person sponsors, for the consent page's "reconnect an existing agent" (agents.md §1). */
+  sponsoredAgents(userId: string): SponsoredAgentDTO[] {
+    return sponsoredAgentsOf(this.sql, userId);
+  }
+
+  /** The principal a token names. An agent token names an agent principal, never a person: a personal agent holds no token
+   * (agents.md §1; its delegation is an OAuth grant at /mcp), so nothing here resolves a token to a sponsor. */
   async authenticate(token: string): Promise<{ user: UserDTO; kind: AuthKind }> {
     const hash = await hashToken(token);
     const now = Date.now();
@@ -668,7 +675,7 @@ export class DirectoryCore {
     }
     const agent = this.rows('SELECT user_id, last_used_at FROM agent_tokens WHERE token_hash = ? AND revoked_at IS NULL', hash)[0];
     const user = agent && this.userById(agent.user_id as string);
-    if (!agent || !user) throw unauthorized();
+    if (!agent || !user || user.deleted_at || user.mode === 'personal') throw unauthorized();
     if (!agent.last_used_at || now - (agent.last_used_at as number) > AGENT_TOUCH) {
       this.sql.exec('UPDATE agent_tokens SET last_used_at = ? WHERE token_hash = ?', now, hash);
     }

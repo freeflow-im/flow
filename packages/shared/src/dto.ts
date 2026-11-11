@@ -145,6 +145,15 @@ export interface WorkspaceMemberDTO {
   accountId?: string;
 }
 
+/** An agent a person sponsors (docs/specs/agents.md §1), as the OAuth consent page offers it for reconnecting. */
+export interface SponsoredAgentDTO {
+  id: string;
+  displayName: string;
+  mode: 'personal' | 'shared';
+  organizationId: string;
+  address?: string | null;
+}
+
 export interface InviteDTO {
   id: string;
   workspaceId: string;

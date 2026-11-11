@@ -40,6 +40,10 @@ export interface DoorTool {
 export interface DoorContext {
   /** The token's scopes (/mcp). */
   scopes?: readonly string[];
+  /** The agent's kind (agents.md §1), where the door knows it: a personal agent gets what its delegation allows and acts as
+   * its sponsor; a shared agent gets what its own account can use. No tool differs by kind yet; the browser tools never
+   * reach an external agent of either kind. */
+  agentMode?: 'personal' | 'shared' | null;
   /** The open app (the assistant): its browser tools are offered. */
   app?: string;
   /** What the Worker can reach for this caller (/mcp): a tool whose runner `needs` a key not here is left out. */
@@ -81,5 +85,6 @@ export function toolsFor(door: ToolDoor, ctx: DoorContext = {}): DoorTool[] {
     return all.filter((t) => t.definition.kind === 'server' && allowedBy(t.definition, granted) && (!t.runner?.needs || ctx.reach?.[t.runner.needs] !== undefined));
   }
   if (door === 'assistant') return all.filter((t) => t.definition.kind === 'server' || (!!ctx.app && runsInApp(t.definition, ctx.app)));
-  return all;
+  // The bridge: an external agent of either kind, with no page open (agents.md §5): server tools alone.
+  return all.filter((t) => t.definition.kind === 'server');
 }

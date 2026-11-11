@@ -86,7 +86,7 @@ describe('MCP OAuth in the directory', () => {
     // Nothing ticked on the page (a form without its checkboxes): every group that starts ticked; never sending.
     const ticked = APP_MANIFESTS.flatMap((m) => m.scopes ?? []).filter((g) => g.checkedByDefault).flatMap((g) => g.scopes).join(' ');
     expect(ticked.startsWith('files:read files:write mail:read mail:write calendar:read calendar:write events:read')).toBe(true);
-    expect(oauth.authenticate(ISSUER, `Bearer ${t.access_token}`)).toEqual({ ok: true, caller: { userId: 'u1', email: 'u1@example.com', orgId: 'orgB', accountId: 'acc-u1-orgB', scope: ticked, agentId: expect.any(String) } });
+    expect(oauth.authenticate(ISSUER, `Bearer ${t.access_token}`)).toEqual({ ok: true, caller: { userId: 'u1', email: 'u1@example.com', orgId: 'orgB', accountId: 'acc-u1-orgB', scope: ticked, agentId: expect.any(String), agentMode: 'personal', sponsorAccountId: null } });
     const r = oauth.token(ISSUER, { grant_type: 'refresh_token', refresh_token: t.refresh_token, client_id: client });
     expect(oauth.authenticate(ISSUER, `Bearer ${r.access_token}`)).toMatchObject({ ok: true, caller: { orgId: 'orgB' } });
     // A rotated refresh token used again ends the family.
@@ -179,6 +179,50 @@ describe('MCP OAuth in the directory', () => {
     expect(oauth.disconnect('u1', c2!.id)).toBe(true);
     expect(sql.exec('SELECT state FROM accounts WHERE user_id = ?', agentId).toArray()[0]!.state).toBe('removed');
     expect(sql.exec('SELECT deleted_at FROM users WHERE id = ?', agentId).toArray()[0]!.deleted_at).not.toBeNull();
+  });
+
+  it('connects a client as one of the person’s own agents, or as a shared agent whose tokens are the agent’s (agents.md §1, phase B)', async () => {
+    const authorize = async () => {
+      const o = await oauth.authorize(ISSUER, { response_type: 'code', client_id: client, redirect_uri: 'http://localhost:4567/callback', code_challenge: challenge, code_challenge_method: 'S256', state: 'st' });
+      if (o.kind !== 'consent') throw new Error(o.url);
+      return { p: o.pendingId, info: oauth.consent(o.pendingId, 'u1') };
+    };
+    const exchange = (to: URL) => oauth.token(ISSUER, { grant_type: 'authorization_code', code: to.searchParams.get('code')!, code_verifier: verifier, client_id: client, redirect_uri: 'http://localhost:4567/callback' });
+    // The first connection makes the client's personal agent; the page then offers it to reconnect, and reconnecting reuses it.
+    const first = await codeFor('u1', 'orgA');
+    const client = first.client;
+    exchange(first.to);
+    const mine = await authorize();
+    expect(mine.info.agents).toEqual([expect.objectContaining({ displayName: 'Test agent', mode: 'personal', organizationId: 'orgA' })]);
+    const personalId = mine.info.agents[0]!.id;
+    const t2 = exchange(new URL(oauth.decide(ISSUER, mine.p, 'u1', mine.info.csrf, true, 'orgA', undefined, { as: 'existing', agentId: personalId })));
+    expect(oauth.authenticate(ISSUER, `Bearer ${t2.access_token}`)).toMatchObject({ ok: true, caller: { userId: 'u1', agentId: personalId, agentMode: 'personal', sponsorAccountId: null } });
+    expect(sql.exec("SELECT COUNT(*) AS n FROM users WHERE is_agent = 1 AND sponsor_user_id = 'u1'").toArray()[0]!.n).toBe(1);
+    // An agent of another organization, or someone else's, is refused.
+    const third = await authorize();
+    expect(() => oauth.decide(ISSUER, third.p, 'u1', third.info.csrf, true, 'orgB', undefined, { as: 'existing', agentId: personalId })).toThrow('belongs to another organization');
+    expect(() => oauth.decide(ISSUER, third.p, 'u1', third.info.csrf, true, 'orgA', undefined, { as: 'existing', agentId: 'nope' })).toThrow('Choose one of your own agents');
+    // A shared agent made by the organization's object (here as its outbox would report it), chosen on the page: the tokens
+    // are the agent's own; the caller is the agent, asked by the person whose client it is.
+    sql.exec("INSERT INTO users (id, email, password_hash, display_name, is_agent, sponsor_user_id, organization_id, mode, created_at) VALUES ('omni', 'omni@agents.flow.local', '!agent', 'Omni', 1, 'u1', 'orgA', 'shared', 0)");
+    sql.exec("INSERT INTO accounts (id, user_id, organization_id, address, display_name, role, created_at, sponsor_user_id) VALUES ('acc-omni', 'omni', 'orgA', 'omni@orga.freeflow.im', 'Omni', 'member', 0, 'u1')");
+    const t3 = exchange(new URL(oauth.decide(ISSUER, third.p, 'u1', third.info.csrf, true, 'orgA', undefined, { as: 'existing', agentId: 'omni' })));
+    expect(oauth.authenticate(ISSUER, `Bearer ${t3.access_token}`)).toMatchObject({ ok: true, caller: { userId: 'omni', orgId: 'orgA', accountId: 'acc-omni', agentId: 'omni', agentMode: 'shared', sponsorAccountId: 'acc-u1-orgA' } });
+    expect(oauth.connections('u1').find((c) => c.agentId === 'omni')).toMatchObject({ mode: 'shared', agentName: 'Omni' });
+    // Disconnecting ends the tokens, not the agent: it is a member.
+    expect(oauth.disconnect('u1', oauth.connections('u1').find((c) => c.agentId === 'omni')!.id)).toBe(true);
+    expect(oauth.authenticate(ISSUER, `Bearer ${t3.access_token}`)).toMatchObject({ ok: false, reason: 'revoked' });
+    expect(sql.exec("SELECT deleted_at, (SELECT state FROM accounts WHERE user_id = 'omni') AS state FROM users WHERE id = 'omni'").toArray()[0]).toMatchObject({ deleted_at: null, state: 'active' });
+    // The device grant carries the choice too.
+    const reg = oauth.register({ client_name: 'CLI', grant_types: ['urn:ietf:params:oauth:grant-type:device_code'] });
+    const d = await oauth.deviceAuthorization(ISSUER, { client_id: reg.client_id }, '198.51.100.1');
+    const started = oauth.startDevice(d.user_code, 'ip');
+    if (!('pendingId' in started)) throw new Error(started.error);
+    const di = oauth.consent(started.pendingId, 'u1');
+    oauth.decide(ISSUER, started.pendingId, 'u1', di.csrf, true, 'orgA', undefined, { as: 'existing', agentId: 'omni' });
+    sql.exec('UPDATE oauth_device SET last_poll_at = 0');
+    const dt = oauth.token(ISSUER, { grant_type: 'urn:ietf:params:oauth:grant-type:device_code', device_code: d.device_code });
+    expect(oauth.authenticate(ISSUER, `Bearer ${dt.access_token}`, '/mcp')).toMatchObject({ ok: true, caller: { userId: 'omni', agentMode: 'shared' } });
   });
 
   it('lets no agent connect an agent', async () => {

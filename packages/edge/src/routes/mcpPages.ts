@@ -55,6 +55,8 @@ export interface ConsentView {
   device: { origin: string } | null;
   organizations: { id: string; name: string }[];
   preselect: string | null;
+  /** The agents the person sponsors, to reconnect one (agents.md §1), with the name of each one's organization. */
+  agents: { id: string; displayName: string; mode: 'personal' | 'shared'; organizationId: string; organizationName: string }[];
   error?: string;
 }
 
@@ -78,6 +80,16 @@ export function consentPage(v: ConsentView): string {
   const orgs = v.organizations
     .map((o) => `<label class="org"><input type="radio" name="org" value="${escapeHtml(o.id)}"${o.id === v.preselect ? ' checked' : ''} required> <span>${escapeHtml(o.name || 'Unnamed organization')}</span></label>`)
     .join('');
+  // Connect as (agents.md §1): a personal agent (the default), a new shared agent with a name, or one of the person's own.
+  const existing = v.agents
+    .map((a) => `<label class="org pick"><input type="radio" name="as" value="existing:${escapeHtml(a.id)}"> <span><strong>${escapeHtml(a.displayName)}</strong><span class="muted small">${a.mode === 'personal' ? 'Your personal agent' : 'Shared agent'} in ${escapeHtml(a.organizationName || 'an organization')}; reconnect it rather than make another.</span></span></label>`)
+    .join('');
+  const connectAs = `<fieldset>
+    <legend>Connect ${name} as</legend>
+    <label class="org pick"><input type="radio" name="as" value="personal" checked> <span><strong>My personal agent</strong><span class="muted small">It acts as you and sees what you see; only you can use it.</span></span></label>
+    <label class="org pick"><input type="radio" name="as" value="shared"> <span><strong>A shared agent</strong><span class="muted small">A member with its own address; it sees only what is shared with it; everyone in the organization can use it and it keeps no secrets from them.</span><input type="text" name="agent_name" maxlength="80" placeholder="Its name, e.g. Omni" aria-label="The shared agent’s name" style="margin-top:6px;display:block;width:100%;box-sizing:border-box"></span></label>
+    ${existing}
+  </fieldset>`;
   return page(
     `Allow ${v.clientName}?`,
     `<h1>Allow ${name} to use your ${docs && mail ? 'Docs and Mail' : mail ? 'Mail' : 'Docs'}?</h1>
@@ -97,12 +109,13 @@ ${v.error ? `<p class="error">${escapeHtml(v.error)}</p>` : ''}
     ${orgs}
     ${mail ? '<p class="muted small">Mail is your own, whichever organization you choose.</p>' : ''}
   </fieldset>
+  ${connectAs}
   <div class="row">
     <button class="btn" type="submit" name="allow" value="no" formnovalidate>Deny</button>
     <button class="btn primary" type="submit" name="allow" value="yes">Allow</button>
   </div>
 </form>
-<p class="muted small">It acts as you, and sees this account's email address. You can disconnect it in Docs, under Settings, Connect your agent.</p>
+<p class="muted small">A personal agent acts as you and sees this account's email address. You can disconnect it in Docs, under Settings, Connect your agent.</p>
 ${POLICY_LINKS}`,
   );
 }

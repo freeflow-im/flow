@@ -7,7 +7,7 @@ import { getCookie } from 'hono/cookie';
 import type { UserDTO } from '@flow/shared';
 import type { Docs } from '../docs/object';
 import type { OAuthMethod } from '../directory/object';
-import { authorizationServerMetadata, OAuthError, protectedResourceMetadata, SCOPE_GROUPS, wwwAuthenticate, type McpOAuth, type OAuthAnswer } from '../directory/mcpOAuth';
+import { authorizationServerMetadata, OAuthError, protectedResourceMetadata, SCOPE_GROUPS, wwwAuthenticate, type AgentChoice, type McpOAuth, type OAuthAnswer } from '../directory/mcpOAuth';
 import { directory, type AuthEnv } from './auth';
 import { consentPage, deviceDonePage, devicePage, errorPage } from './mcpPages';
 
@@ -145,9 +145,10 @@ async function renderConsent(c: C, user: UserDTO, pendingId: string, error?: str
     if (e instanceof OAuthError) return html(errorPage(e.message), e.status);
     throw e;
   }
-  const names = await organizationNames(c, user, info.organizations);
+  const names = await organizationNames(c, user, [...info.organizations, ...info.agents.map((a) => a.organizationId)]);
   const organizations = info.organizations.map((id) => ({ id, name: names.get(id) ?? '' })).sort((a, b) => a.name.localeCompare(b.name));
-  return html(consentPage({ pendingId, csrf: info.csrf, clientName: info.clientName, scopes: info.scopes, email: user.email, device: info.device, organizations, preselect: info.preselect, ...(error ? { error } : {}) }), status);
+  const agents = info.agents.map((a) => ({ id: a.id, displayName: a.displayName, mode: a.mode, organizationId: a.organizationId, organizationName: names.get(a.organizationId) ?? '' }));
+  return html(consentPage({ pendingId, csrf: info.csrf, clientName: info.clientName, scopes: info.scopes, email: user.email, device: info.device, organizations, preselect: info.preselect, agents, ...(error ? { error } : {}) }), status);
 }
 
 mcpRoutes.get('/oauth/consent', async (c) => {
@@ -173,7 +174,26 @@ mcpRoutes.post('/oauth/decision', async (c) => {
   try {
     // The page's checkboxes (grant_docs, grant_mail, grant_send, grant_calendar, grant_events); a form without them takes each group as the page starts it.
     const ticked = form.scopes_form === '1' ? SCOPE_GROUPS.map((g) => g.id).filter((id) => form[`grant_${id}`]) : undefined;
-    return redirect(await oauth(c, 'decide', issuerOf(c), form.p, user.id, form.csrf, form.allow === 'yes', form.org, ticked));
+    // Connect as (agents.md §1): a personal agent (the default), one of the person's own, or a new shared agent, which the
+    // organization's object makes first (a member sponsored by the person, under its sponsoring policy), then the grant names.
+    let choice: AgentChoice = { as: 'personal' };
+    const as = form.as ?? 'personal';
+    if (form.allow === 'yes' && as.startsWith('existing:')) choice = { as: 'existing', agentId: as.slice('existing:'.length) };
+    else if (form.allow === 'yes' && as === 'shared') {
+      // Everything the decision would refuse is checked first, so a stale page or an empty scope makes no orphan member.
+      await oauth(c, 'checkDecision', form.p, user.id, form.csrf, true, form.org, ticked);
+      const name = (form.agent_name ?? '').trim();
+      if (!name) throw new OAuthError('access_denied', 'Give the shared agent a name.', 403);
+      const org = c.env.ORG.get(c.env.ORG.idFromName(form.org)) as unknown as { createSharedAgent(p: { sponsorId: string; name: string }): Promise<{ userId: string }> };
+      let made: { userId: string };
+      try {
+        made = await org.createSharedAgent({ sponsorId: user.id, name });
+      } catch (err) {
+        throw new OAuthError('access_denied', (err as Error).message, 403);
+      }
+      choice = { as: 'existing', agentId: made.userId };
+    }
+    return redirect(await oauth(c, 'decide', issuerOf(c), form.p, user.id, form.csrf, form.allow === 'yes', form.org, ticked, choice));
   } catch (e) {
     if (!(e instanceof OAuthError)) throw e;
     // The wrong organization: the page again, still pending, saying so.
@@ -251,8 +271,9 @@ async function mcpEndpoint(c: C): Promise<Response> {
     console.log(`${c.req.method} ${endpoint} -> 401 ${who.reason} [${(c.req.header('user-agent') ?? '').slice(0, 24)}]`);
     return json({ error: 'unauthorized', reason: who.reason, error_description: who.description }, 401, { ...CORS, 'www-authenticate': wwwAuthenticate(issuer, endpoint, authorization ? 'invalid_token' : undefined, who.description) });
   }
-  const { userId, email, orgId, accountId, scope, agentId } = who.caller;
-  const res = await c.env.DOCS.get(c.env.DOCS.idFromName(orgId)).mcp(c.req.raw, { userId, email, orgId, accountId, via: agentId, scope, endpoint, origin: issuer });
+  const { userId, email, orgId, accountId, scope, agentId, agentMode, sponsorAccountId } = who.caller;
+  // A personal agent acts as its sponsor, marked `via`; a shared agent acts as itself, asked by the person whose client it is.
+  const res = await c.env.DOCS.get(c.env.DOCS.idFromName(orgId)).mcp(c.req.raw, { userId, email, orgId, accountId, via: agentMode === 'shared' ? null : agentId, invokedBy: agentMode === 'shared' ? sponsorAccountId : null, scope, endpoint, origin: issuer });
   return withHeaders(res, CORS);
 }
 mcpRoutes.all('/mcp', mcpEndpoint);
