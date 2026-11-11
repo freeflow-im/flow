@@ -1,5 +1,30 @@
 # Decision log
 
+## 2026-11-11 — Agents: start over; every agent made before kinds is retired (operator ruling)
+
+- **Ruling (Scott):** the agents that exist before phase A of `docs/specs/agents.md` ships are all removed, not
+  migrated: accounts removed, tokens revoked, principals deleted, rosters cleared. Each is connected again with an
+  invite code afterwards.
+- **Why:** an agent imported from the Node era could hold accounts in several organizations, and placing it means
+  choosing one home and silently dropping the others, with a ghost member left in each losing organization. Starting
+  over is clean, and there are few agents.
+- **Where:** `docs/specs/agents.md` §8, §11 phase A.2; `DirectoryCore.backfillAgents`, `Org.retireRemovedAgents` (PR #771).
+
+## 2026-11-10 — Agents: hosted or external; the assistant is a hosted agent (operator ruling)
+
+- **Ruling (Scott):** an agent's kind (personal or shared, which decides access) and its runtime (hosted by the
+  platform or external on its own machine) are two independent axes; every combination exists.
+- **Ruling (Scott):** there is no single Assistant. The in-app assistant is the person's hosted personal agent; a
+  hosted shared agent (Omni) runs the same way. A hosted agent has a definition: name, instructions, model and key,
+  allowed tools, subscriptions, memory.
+- **Ruling (Scott):** sync and async are properties of the turn, not the agent. A hosted agent runs sync turns from
+  the panel, streaming, with the open page and its browser tools, and async turns from triggers as `wake` jobs, with
+  the same editing tools run headless. Subscribing to events is a property of an agent, not a third runtime.
+- **Why:** one runtime object and one definition serve both kinds; the assistant stops being a special case; and
+  the Docs editing tools already run live in the tab and headless on the server, so an agent woken by a trigger can
+  edit what is shared with it.
+- **Where:** `docs/specs/agents.md` §0, §5, §6, §10, §11 phase C; `platform.md` §5.5.
+
 ## 2026-11-10 — Agents: one organization each; personal agents are principals admins see; shared agents for the whole organization (operator ruling)
 
 - **Ruling (Scott):** every agent, personal or shared, is a principal with exactly one account in one organization.
@@ -10,7 +35,8 @@
   member of its organization. Group agents, shared with an explicit set of accounts in one organization, come later.
 - **Why:** one organization per agent keeps one organization's data out of an agent's memory in another, and a
   shared agent for the whole organization needs no "who may use it" list until group agents exist.
-- **Where:** `docs/specs/platform.md` §2.3, §3.3, §4.3, §5.5, §10 ruling 4, §11 phase 1.5.
+- **Where:** `docs/specs/platform.md` §2.3, §3.3, §4.3, §5.5, §10 ruling 4, §11 phase 1.5; since 2026-11-10 the
+  agent text lives in `docs/specs/agents.md` (§1, §2, §4, §6, §10, §11), and `platform.md` keeps a summary.
 
 ## 2026-11-10 — Chat at /chat, Docs at /docs (operator ruling)
 
