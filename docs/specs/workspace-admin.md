@@ -190,6 +190,15 @@ modal component stays for the sidebar's invite flow.
 `AutomationsSection.tsx` moves into the app as it is; its route is `/admin/automations`. A member who is not an admin
 opens the app and sees this section alone, as today's panel shows them only this tab.
 
+### 3.6 Event log
+
+`EventLog.tsx`, at `/admin/events`, owners and admins only: the organization's event log (platform.md §5.2) as the
+admin's account may read it (the organization's events, their private channels, what is shared with them), newest
+first, fifty at a time with Older. Filters: a type pattern (`chat.*`), actor kind, a channel, words in the event. Each
+row names who acted, through which agent (`via`) and who asked (`invokedBy`) (docs/specs/agents.md §3); a click shows
+the envelope and the data. Read-only: nothing here changes the log. `GET /v1/events` gains `before` (newest first from
+the head, or below a seq; `next` is then the oldest seq on the page) for it.
+
 ## 4. The domain card
 
 Each of the organization's domains is one card. The card's job is to say **where the domain is on the way to

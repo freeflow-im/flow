@@ -9,6 +9,7 @@ import { MEMBER_SECTIONS, SECTION_LABELS, SECTIONS, sectionOf, sectionPath } fro
 import { Domains } from './sections/Domains';
 import { Agents } from './sections/Agents';
 import { Automations } from './sections/Automations';
+import { EventLog } from './sections/EventLog';
 import { General } from './sections/General';
 import { Members } from './sections/Members';
 
@@ -77,6 +78,7 @@ export function App() {
               {section === 'domains' && admin && <Domains org={org} />}
               {section === 'agents' && admin && <Agents org={org} />}
               {section === 'automations' && <Automations org={org} />}
+              {section === 'events' && admin && <EventLog org={org} />}
             </div>
           </main>
         </div>

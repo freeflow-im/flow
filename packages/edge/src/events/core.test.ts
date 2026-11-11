@@ -102,6 +102,17 @@ describe('the event log', () => {
     expect(core.read({ actorKind: 'any' }, reader).events).toHaveLength(3);
   });
 
+  it('reads a page newest first from the head or from below a seq, for the Admin app’s log', () => {
+    core.publishMany([ev('a'), ev('b', { audience: 'channel:secret' }), ev('c'), ev('d'), ev('e')]);
+    const page = core.read({ before: 0, limit: 2 }, BOB);
+    expect([page.events.map((e) => e.type), page.next]).toEqual([['e', 'd'], 4]);
+    // Bob is not in the private channel: b is skipped, and the page reaches a.
+    const older = core.read({ before: page.next, limit: 2 }, BOB);
+    expect([older.events.map((e) => e.type), older.next]).toEqual([['c', 'a'], 1]);
+    expect(core.read({ before: older.next, limit: 2 }, BOB).events).toEqual([]);
+    expect(core.read({ before: 0, types: ['b'] }, ANN).events.map((e) => e.type)).toEqual(['b']);
+  });
+
   it('caps limit at 500, and next is the last seq examined', () => {
     core.publishMany(Array.from({ length: 600 }, (_, i) => ev(`t.${i}`)));
     const page = core.read({ since: 0, limit: 10_000 }, BOB);

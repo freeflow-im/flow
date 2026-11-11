@@ -24,7 +24,10 @@ eventRoutes.get('/v1/events', async (c) => {
   const actor = q('actor');
   const query: ReadQuery = {
     since: Number(q('since') ?? 0) || 0,
+    // `before`: newest first, from the head (0) or below a seq; the Admin app's Event log pages this way.
+    ...(q('before') !== undefined ? { before: Number(q('before')) || 0 } : {}),
     ...(q('limit') ? { limit: Number(q('limit')) } : {}),
+    ...(q('text') ? { text: q('text')! } : {}),
     ...(q('types') ? { types: q('types')!.split(',') } : {}),
     ...(q('ref') ? { ref: q('ref')! } : {}),
     ...(q('channel') ? { channelId: q('channel')! } : {}),
