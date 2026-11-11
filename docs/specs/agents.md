@@ -177,6 +177,17 @@ tools (charts, tabs, freeze, column widths); phase C gives every editing tool on
   Builder on the bridge. An external agent is woken only if it **subscribes** to events (the bridge does; a bare
   `/mcp` client does not); subscribing is a property of the agent, not a third runtime. The desktop app's "use my own
   Claude Code" is an external personal agent on the bridge.
+- **Sandboxed** (operator ruling, decision_log 2026-11-11; built after phase C). A hosted agent that needs a filesystem,
+  a shell and its own credentials, a coding agent, runs in a container the platform starts for it, one per agent, with
+  the bridge inside, connected with the agent's token. From the person's side it is hosted: the platform makes it,
+  keeps its definition, shows it in the Admin app. Underneath it is an external agent, so the bridge, the event bus and
+  the registry serve it unchanged. It never runs on the shared servers: it runs arbitrary code and holds secrets that
+  are the agent's. Because the platform controls the container, it can scope the token and show the sponsor a
+  confirm card, which is what a **personal** agent on the bridge needs (§8) and an external bridge cannot give.
+
+**The hosted runtime runs no code of its own.** It calls the model and every effect goes through the registry's tools as
+the agent's account; the tools and the grants are its sandbox. That is why it can run on the shared Workers. Anything
+that executes code is the sandboxed runtime above.
 
 **A hosted agent has a definition.** Today the assistant has one fixed prompt, one tool set and one conversation per
 account. A hosted agent instead carries: a name and avatar; instructions (its system prompt); the model and the key
@@ -390,6 +401,20 @@ Admin app with instructions and tools, and Omni answers in the panel, edits a sh
 editor, undoable, and later answers a mention in the document's thread on its own. Exit: the §6 example runs end to
 end in a sync turn; the same edit made by a mention runs as an async turn through the headless runner and lands as a
 new revision; Omni's turn fails with "can't see this page" on a document not shared with it.
+
+### Phase C′: sandboxed agents (after C; operator ruling 2026-11-11)
+
+1. **The container**, one per agent, started by the platform with the bridge inside and the agent's token; the
+   candidates are Cloudflare Containers (the repo runs PDF OCR in one; they sleep when idle) and Railway (the devbox
+   agent runs there). A ruling picks one.
+2. **Made in the app**: a hosted agent whose definition says `sandboxed`, with a working directory and the secrets it
+   holds (repository access), edited where the definition is.
+3. **Personal agents on the bridge**, which phase B withdrew: a sandboxed personal agent's token is scoped by the
+   platform, and writes others can see get the confirm card, since the platform runs the container.
+
+What people see: a coding agent made from the Admin app or their settings, with no machine of their own to run it on.
+Exit: Builder runs in a container the platform started, answers a mention, and a second agent's container cannot read
+its files.
 
 ### Phase D: later, in no order
 

@@ -1,6 +1,6 @@
 // The suite's API on the edge Worker, same origin with the session cookie: the Org object's routes (the workspace, its
 // members, invitations, emoji, join link) and the directory's (domains, accounts). A 401 sends the browser to sign in.
-import type { AccountDTO, AccountKind, AgentDefinitionDTO, UsableAgentDTO, AgentInviteDTO, ChannelDTO, DnsRecordDTO, DomainDTO, DomainKind, FileDTO, InviteResultDTO, JoinLinkDTO, MemberRole, OAuthIdentityDTO, PresignedUploadDTO, PublicConfigDTO, UpdateWorkspaceBody, WorkspaceDTO, WorkspaceEmojiDTO, WorkspaceInviteDTO, WorkspaceMemberDTO } from '@flow/shared';
+import type { AccountDTO, AccountKind, AgentDefinitionDTO, PlatformEvent, UsableAgentDTO, AgentInviteDTO, ChannelDTO, DnsRecordDTO, DomainDTO, DomainKind, FileDTO, InviteResultDTO, JoinLinkDTO, MemberRole, OAuthIdentityDTO, PresignedUploadDTO, PublicConfigDTO, UpdateWorkspaceBody, WorkspaceDTO, WorkspaceEmojiDTO, WorkspaceInviteDTO, WorkspaceMemberDTO } from '@flow/shared';
 
 export class AdminApiError extends Error {
   constructor(public readonly code: string, message: string, public readonly status: number) {
@@ -100,6 +100,15 @@ export const adminApi = {
   invite: async (id: string, emails: string[], kind: AccountKind) => (await request<{ results: InviteResultDTO[] }>('POST', `${ws(id)}/invites`, { emails, kind })).results,
   // Channels (the Automations form's choices) and agents (§3.4).
   channels: async (id: string) => (await request<{ channels: ChannelDTO[] }>('GET', `${ws(id)}/channels`)).channels,
+  /** The organization's event log (platform.md §5.2), newest first from the head or below a seq: the Event log section. */
+  events: (id: string, q: { before?: number; limit?: number; types?: string; channel?: string; actor?: 'person' | 'agent'; text?: string }) => {
+    const params = new URLSearchParams({ workspace: id, before: String(q.before ?? 0), limit: String(q.limit ?? 50) });
+    if (q.types) params.set('types', q.types);
+    if (q.channel) params.set('channel', q.channel);
+    if (q.actor) params.set('actor', q.actor);
+    if (q.text) params.set('text', q.text);
+    return request<{ events: PlatformEvent[]; next: number }>('GET', `/v1/events?${params.toString()}`);
+  },
   removeAgent: (id: string, userId: string) => request<unknown>('DELETE', `${ws(id)}/agents/${encodeURIComponent(userId)}`),
   /** A personal agent's account removed, with its delegations (docs/specs/agents.md §2). */
   removePersonalAgent: (id: string, accountId: string) => request<{ account: AccountDTO }>('DELETE', `${ws(id)}/accounts/${encodeURIComponent(accountId)}`),
