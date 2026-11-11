@@ -12,6 +12,7 @@ This file keeps two things:
 
 ## Parity
 
+- **A DM with a shared agent says it is not private on web only (2026-11-11, docs/specs/agents.md §1).** Chat's web header shows "Not private: anyone in <org> can ask <agent>" under a DM with an agent; macOS and iOS show the DM as before (gap to close). The Share dialog's warning and the consent page are web-only surfaces already.
 - **Home (`/home`) is web-only (2026-11-11, docs/specs/home.md).** The suite bar's Home tab opens it in the browser and the desktop shell; macOS and iOS have no Home screen (gap to close once the web version settles).
 - **Start-up reads are trimmed on web only (2026-11-10, tab switching).** Web's Chat shares an identical GET that is under way, and Mail, Calendar and Docs read their data once at the start; macOS and iOS were not measured and are unchanged (gap to close after the web numbers are in).
 - **`email_members` is at `/mcp` and the hosted assistant only (2026-11-10).** The bridge door does not offer it (bridge agents send from their own mailbox with `send_mail`), and the MCP Docs desktop app and the AWS-hosted plugin have no Contacts. Deliberate, while Contacts lives on the Worker.

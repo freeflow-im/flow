@@ -1,7 +1,7 @@
 // Personal agents in the directory (docs/specs/agents.md §1, §2): the agent principal a /mcp delegation acts through, one
 // per sponsor, client and organization, with its `personal_agent` account. Shared by the core (the backfill, removal) and
 // the MCP authorization server (a new connection), which run over the same SQLite.
-import type { AgentMode } from '@flow/shared';
+import type { AgentMode, SponsoredAgentDTO } from '@flow/shared';
 import { forbidden } from '../errors';
 import { newId } from './ids';
 
@@ -72,4 +72,36 @@ export function revokePersonalAgent(sql: AgentSql, agentId: string, now = Date.n
   sql.exec('UPDATE oauth_tokens SET revoked_at = ? WHERE revoked_at IS NULL AND family IN (SELECT family FROM oauth_connections WHERE agent_id = ?)', now, agentId);
   sql.exec('DELETE FROM oauth_connections WHERE agent_id = ?', agentId);
   retireIdlePersonalAgent(sql, agentId, now);
+}
+
+/**
+ * A personal agent made at the bridge's self-registration (agents.md §1): its principal carries the handle and key hash the
+ * bridge logs in with, and its account is `personal_agent`. The token the caller makes for it is the delegation: a request
+ * made with it acts as the sponsor, marked `via` (DirectoryCore.authenticate). Returns the agent's principal id.
+ */
+export function createPersonalAgent(sql: AgentSql, p: { sponsorId: string; organizationId: string; name: string; username: string; keyHash: string; description?: string }, now = Date.now()): string {
+  const sponsor = rows(sql, 'SELECT is_agent, deleted_at FROM users WHERE id = ?', p.sponsorId)[0];
+  if (!sponsor || sponsor.deleted_at || sponsor.is_agent) throw forbidden('an agent cannot sponsor an agent');
+  if (!rows(sql, "SELECT 1 AS x FROM accounts WHERE user_id = ? AND organization_id = ? AND state <> 'removed'", p.sponsorId, p.organizationId).length) {
+    throw forbidden('an agent can only join an organization where its sponsor has an active account');
+  }
+  const id = newId();
+  sql.exec(
+    `INSERT INTO users (id, email, password_hash, display_name, status_text, is_agent, sponsor_user_id, agent_username, agent_key_hash, organization_id, mode, email_verified_at, created_at)
+     VALUES (?, ?, '!agent', ?, ?, 1, ?, ?, ?, ?, 'personal', ?, ?)`,
+    id, `agent-${id}@agents.flow.local`, p.name.trim().slice(0, 80), (p.description ?? '').slice(0, 80), p.sponsorId, p.username, p.keyHash, p.organizationId, now, now);
+  sql.exec(
+    "INSERT INTO accounts (id, user_id, organization_id, address, display_name, role, kind, state, created_at, sponsor_user_id) VALUES (?, ?, ?, NULL, ?, 'member', 'personal_agent', 'active', ?, ?)",
+    newId(), id, p.organizationId, p.name.trim().slice(0, 80), now, p.sponsorId);
+  return id;
+}
+
+/** The agents a person sponsors that are not deleted, with their kind and organization: the consent page's "reconnect an existing agent". */
+export function sponsoredAgentsOf(sql: AgentSql, sponsorId: string): SponsoredAgentDTO[] {
+  return rows(sql,
+    `SELECT u.id, u.display_name, u.mode, u.organization_id, (SELECT a.address FROM accounts a WHERE a.user_id = u.id AND a.organization_id = u.organization_id) AS address
+     FROM users u WHERE u.sponsor_user_id = ? AND u.is_agent = 1 AND u.deleted_at IS NULL AND u.mode IS NOT NULL AND u.organization_id IS NOT NULL
+       AND EXISTS (SELECT 1 FROM accounts a WHERE a.user_id = u.id AND a.organization_id = u.organization_id AND a.state <> 'removed')
+     ORDER BY u.display_name, u.created_at`, sponsorId,
+  ).map((r) => ({ id: r.id as string, displayName: r.display_name as string, mode: r.mode as AgentMode, organizationId: r.organization_id as string, address: (r.address as string | null) ?? null }));
 }

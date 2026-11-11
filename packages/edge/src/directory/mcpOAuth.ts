@@ -10,7 +10,8 @@ import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto';
 import { accountGate, type Sql } from './core';
 import type { AccountState, AppScopeGroup } from '@flow/shared';
 import { APP_MANIFESTS } from '@flow/shared/manifests';
-import { agentModeOf, agentOfFamily, personalAgentFor, retireIdlePersonalAgent } from './agents';
+import { agentModeOf, agentOfFamily, personalAgentFor, retireIdlePersonalAgent, sponsoredAgentsOf } from './agents';
+import type { AgentMode, SponsoredAgentDTO } from '@flow/shared';
 
 /**
  * The consent page's checkboxes, from the apps' manifests (@flow/shared's APP_MANIFESTS, `scopes`): each one a group of
@@ -103,12 +104,19 @@ export interface ConsentInfo {
   organizations: string[];
   /** The organization to preselect: the one this person last connected an agent to, else their first. */
   preselect: string | null;
+  /** The agents this person sponsors, to reconnect one instead of making another (agents.md §1). */
+  agents: SponsoredAgentDTO[];
 }
 
-/** `accountId`: the grant's account, the person's in `orgId` (platform.md §3.6); null for one made before accounts.
- * `agentId`: the personal agent the client acts through (agents.md §1), the caller context's `via`; null for a connection
- * made before agents had kinds and not yet placed. */
-export interface McpCaller { userId: string; email: string; orgId: string; accountId: string | null; scope: string; agentId: string | null }
+/** What the person chose on the consent page (agents.md §1): a personal agent for this client (the default), or an
+ * existing agent of theirs by id, personal or shared. A shared agent is made by the route first, then named here. */
+export interface AgentChoice { as: 'personal' | 'existing'; agentId?: string }
+
+/** `accountId`: the grant's account in `orgId` (platform.md §3.6); null for one made before accounts. `agentId`: the agent
+ * the client acts through (agents.md §1); null for a connection made before agents had kinds and not yet placed.
+ * For a personal agent `userId` is the sponsor and `agentId` the caller context's `via`; for a shared agent `userId` is
+ * the agent itself and `sponsorAccountId` the account of the person whose client it is, the turn's `invokedBy`. */
+export interface McpCaller { userId: string; email: string; orgId: string; accountId: string | null; scope: string; agentId: string | null; agentMode: AgentMode | null; sponsorAccountId: string | null }
 /** A failure is a 401 unless it carries a status (403 for an inactive account). */
 export type McpAuth = { ok: true; caller: McpCaller } | { ok: false; reason: string; description: string; status?: number };
 
@@ -118,8 +126,10 @@ export interface McpConnection {
   origin: string;
   endpoint: string;
   organizationId: string;
-  /** The personal agent it acts through (agents.md §1); absent for a connection not yet placed. */
+  /** The agent it acts through (agents.md §1), its kind and name; absent for a connection not yet placed. */
   agentId?: string;
+  mode?: AgentMode;
+  agentName?: string;
   connectedAt: string;
   lastActiveAt?: string;
 }
@@ -335,6 +345,7 @@ export class McpOAuth {
       device: p.params.device ? { origin: p.params.origin ?? 'an unknown address' } : null,
       organizations,
       preselect: last ?? organizations[0] ?? null,
+      agents: sponsoredAgentsOf(this.sql, userId),
     };
   }
 
@@ -342,7 +353,7 @@ export class McpOAuth {
    * The person allowed or denied, for one of their organizations: where to send the browser (back to the client, or for a
    * device to the done page). The organization must be one of theirs; a refusal leaves the authorization pending.
    */
-  decide(issuer: string, pendingId: string | undefined, userId: string, csrf: string | undefined, allow: boolean, orgId: string | undefined, ticked?: string[]): string {
+  decide(issuer: string, pendingId: string | undefined, userId: string, csrf: string | undefined, allow: boolean, orgId: string | undefined, ticked?: string[], choice: AgentChoice = { as: 'personal' }): string {
     const p = this.pending(pendingId);
     if (!p) throw new OAuthError('invalid_request', 'This sign-in link has expired. Start again from your agent.');
     if (p.userId !== userId || !csrf || csrf !== p.csrf) throw new OAuthError('invalid_request', 'This page is out of date or was opened in another account. Start again from your agent.', 403);
@@ -350,19 +361,30 @@ export class McpOAuth {
     // What the person ticked on the page, within what the client asked for.
     const scope = grantedScope(p.params.scope, ticked);
     if (allow && !scope) throw new OAuthError('access_denied', 'Choose at least one thing the agent may use.', 403);
+    // The agent the tokens are for (agents.md §1): one of the person's own, in the organization chosen, or none yet (a
+    // personal agent for this client, found or made when the tokens are issued).
+    let agentId: string | null = null;
+    let agentMode: AgentMode | null = null;
+    if (allow && choice.as === 'existing') {
+      const agent = this.one("SELECT id, mode, organization_id FROM users WHERE id = ? AND is_agent = 1 AND sponsor_user_id = ? AND deleted_at IS NULL", choice.agentId ?? '', userId);
+      if (!agent) throw new OAuthError('access_denied', 'Choose one of your own agents.', 403);
+      if (agent.organization_id !== orgId) throw new OAuthError('access_denied', 'That agent belongs to another organization; choose it, or connect a new agent here.', 403);
+      agentId = agent.id as string;
+      agentMode = agent.mode as AgentMode;
+    }
     this.sql.exec('DELETE FROM oauth_pending WHERE id = ?', p.id);
     if (p.params.device) {
       const changed = this.rows(
-        "UPDATE oauth_device SET status = ?, user_id = ?, org_id = ?, scope = ? WHERE hash = ? AND status = 'pending' AND expires_at >= ? RETURNING hash",
-        allow ? 'approved' : 'denied', allow ? userId : null, allow ? orgId! : null, allow ? scope! : p.params.scope, p.params.device, Date.now());
+        "UPDATE oauth_device SET status = ?, user_id = ?, org_id = ?, scope = ?, agent_id = ?, agent_mode = ? WHERE hash = ? AND status = 'pending' AND expires_at >= ? RETURNING hash",
+        allow ? 'approved' : 'denied', allow ? userId : null, allow ? orgId! : null, allow ? scope! : p.params.scope, agentId, agentMode, p.params.device, Date.now());
       if (!changed.length) throw new OAuthError('invalid_request', 'This code has expired or was already used. Start again from your agent.');
       return `/oauth/device/done${allow ? '?ok=1' : ''}`;
     }
     if (!allow) return this.redirect(issuer, p.params.redirect_uri, { error: 'access_denied', error_description: 'The user declined.', state: p.params.state });
     const code = newToken();
     this.sql.exec(
-      'INSERT INTO oauth_codes (hash, client_id, client_name, user_id, org_id, redirect_uri, code_challenge, scope, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      sha(code), p.params.client_id, p.clientName, userId, orgId!, p.params.redirect_uri, p.params.code_challenge, scope!, Date.now() + CODE_TTL);
+      'INSERT INTO oauth_codes (hash, client_id, client_name, user_id, org_id, redirect_uri, code_challenge, scope, expires_at, agent_id, agent_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      sha(code), p.params.client_id, p.clientName, userId, orgId!, p.params.redirect_uri, p.params.code_challenge, scope!, Date.now() + CODE_TTL, agentId, agentMode);
     return this.redirect(issuer, p.params.redirect_uri, { code, state: p.params.state });
   }
 
@@ -435,8 +457,8 @@ export class McpOAuth {
     if (row.status === 'pending') throw new OAuthError('authorization_pending', 'Waiting for the user to enter the code and allow access.');
     this.sql.exec('DELETE FROM oauth_device WHERE hash = ?', row.hash);
     if (row.status !== 'approved' || !row.user_id || !row.org_id || !this.isMember(row.user_id as string, row.org_id as string)) throw new OAuthError('access_denied', 'The user declined.');
-    this.connect(row.hash as string, row.user_id as string, row.org_id as string, row.client_name as string, row.origin as string, row.resource as string);
-    return this.issue(row.client_id as string, row.user_id as string, row.org_id as string, row.scope as string, row.hash as string, row.resource as string);
+    const agent = this.connect(row.hash as string, row.user_id as string, row.org_id as string, row.client_name as string, row.origin as string, row.resource as string, row.agent_id as string | null, row.agent_mode as AgentMode | null);
+    return this.issue(row.client_id as string, agent.tokenUser, row.org_id as string, row.scope as string, row.hash as string, row.resource as string);
   }
 
   // --- Tokens ----------------------------------------------------------------------------
@@ -467,21 +489,30 @@ export class McpOAuth {
     if (sha(code_verifier) !== row.code_challenge) throw new OAuthError('invalid_grant', 'code_verifier does not match the code challenge.');
     if (resource && !isResource(issuer, resource)) throw new OAuthError('invalid_target', `Unknown resource; this server issues tokens for ${issuer}/mcp.`);
     if (!this.isMember(row.user_id as string, row.org_id as string)) throw new OAuthError('invalid_grant', 'You are no longer a member of the organization this was allowed for.');
+    // Listed in Docs' Settings, where the person can disconnect it. Before the code is spent, so a refusal leaves it usable.
+    const agent = this.connect(row.hash as string, row.user_id as string, row.org_id as string, row.client_name as string, origin, resourceAt(issuer, '/mcp'), row.agent_id as string | null, row.agent_mode as AgentMode | null);
     this.sql.exec('UPDATE oauth_codes SET used_at = ? WHERE hash = ?', Date.now(), row.hash);
-    // Listed in Docs' Settings, where the person can disconnect it.
-    this.connect(row.hash as string, row.user_id as string, row.org_id as string, row.client_name as string, origin, resourceAt(issuer, '/mcp'));
-    return this.issue(row.client_id as string, row.user_id as string, row.org_id as string, row.scope as string, row.hash as string);
+    return this.issue(row.client_id as string, agent.tokenUser, row.org_id as string, row.scope as string, row.hash as string);
   }
 
-  /** The connection, acting through the person's personal agent for this client in this organization (agents.md §1): found or made. */
-  private connect(family: string, userId: string, orgId: string, clientName: string, origin: string, resource: string): void {
-    let agentId: string | null = null;
-    try {
-      agentId = personalAgentFor(this.sql, userId, orgId, clientName);
-    } catch (err) {
-      throw new OAuthError('access_denied', (err as Error).message);
+  /**
+   * The connection, acting through an agent of the person's (agents.md §1): the one chosen on the consent page, else the
+   * person's personal agent for this client in this organization, found or made. The connection is the person's (they
+   * disconnect it in Docs' Settings); the tokens are the agent's own for a shared agent, the person's for a personal one.
+   */
+  private connect(family: string, userId: string, orgId: string, clientName: string, origin: string, resource: string, chosen: string | null = null, chosenMode: AgentMode | null = null): { agentId: string; tokenUser: string } {
+    let agentId = chosen;
+    if (!agentId) {
+      try {
+        agentId = personalAgentFor(this.sql, userId, orgId, clientName);
+      } catch (err) {
+        throw new OAuthError('access_denied', (err as Error).message);
+      }
+    } else if (!this.one("SELECT 1 AS x FROM accounts WHERE user_id = ? AND organization_id = ? AND state <> 'removed'", agentId, orgId)) {
+      throw new OAuthError('access_denied', 'That agent was removed from the organization. Sign in again and choose another.');
     }
     this.sql.exec('INSERT OR IGNORE INTO oauth_connections (id, family, user_id, org_id, client_name, origin, resource, created_at, agent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', randomUUID(), family, userId, orgId, clientName, origin.slice(0, 200), resource, Date.now(), agentId);
+    return { agentId, tokenUser: chosenMode === 'shared' ? agentId : userId };
   }
 
   private refresh(form: Record<string, string>) {
@@ -553,14 +584,22 @@ export class McpOAuth {
     const account = this.one('SELECT id, state FROM accounts WHERE user_id = ? AND organization_id = ?', userId, orgId);
     const refused = accountGate(account ? { state: account.state as AccountState } : null);
     if (refused) return { ok: false, reason: refused.code, description: refused.message, status: refused.statusCode };
-    // The personal agent this acts through (agents.md §1). Every removal revokes the tokens first, so `revoked` above is what
-    // a removed agent's client normally hears; this is the safety net for an account removed by any other path.
+    // The agent this acts through (agents.md §1). Every removal revokes the tokens first, so `revoked` above is what a
+    // removed agent's client normally hears; this is the safety net for an account removed by any other path. For a shared
+    // agent the token's user is the agent itself; the connection names the person whose client it is.
     const agentId = agentOfFamily(this.sql, row.family as string);
+    let agentMode: AgentMode | null = null;
+    let sponsorAccountId: string | null = null;
     if (agentId) {
       const agentAccount = this.one("SELECT state FROM accounts WHERE user_id = ? AND organization_id = ?", agentId, orgId);
       if (!agentAccount || agentAccount.state === 'removed') return { ok: false, reason: 'agent_removed', description: 'This agent was removed from the organization. Sign in again to connect it anew.', status: 403 };
+      agentMode = agentModeOf(this.sql, agentId);
+      if (agentMode === 'shared') {
+        const sponsor = this.one('SELECT user_id FROM oauth_connections WHERE family = ?', row.family as string)?.user_id as string | undefined;
+        sponsorAccountId = (sponsor && (this.one("SELECT id FROM accounts WHERE user_id = ? AND organization_id = ? AND state <> 'removed'", sponsor, orgId)?.id as string | undefined)) ?? null;
+      }
     }
-    return { ok: true, caller: { userId, email, orgId, accountId: (account?.id as string | undefined) ?? null, scope: row.scope as string, agentId } };
+    return { ok: true, caller: { userId, email, orgId, accountId: (account?.id as string | undefined) ?? null, scope: row.scope as string, agentId, agentMode, sponsorAccountId } };
   }
 
   // --- Connections (Docs' Settings) --------------------------------------------------------------
@@ -568,7 +607,8 @@ export class McpOAuth {
   /** The agents connected to this account that can still get tokens, newest first. */
   connections(userId: string): McpConnection[] {
     return this.rows(
-      `SELECT c.id, c.client_name, c.origin, c.resource, c.org_id, c.agent_id, c.created_at, MAX(t.created_at) AS last_active FROM oauth_connections c
+      `SELECT c.id, c.client_name, c.origin, c.resource, c.org_id, c.agent_id, c.created_at, MAX(t.created_at) AS last_active,
+         (SELECT u.mode FROM users u WHERE u.id = c.agent_id) AS agent_mode, (SELECT u.display_name FROM users u WHERE u.id = c.agent_id) AS agent_name FROM oauth_connections c
        JOIN oauth_tokens t ON t.family = c.family AND t.kind = 'refresh' AND t.revoked_at IS NULL AND t.expires_at >= ?
        WHERE c.user_id = ? GROUP BY c.id ORDER BY c.created_at DESC`,
       Date.now(), userId,
@@ -578,7 +618,7 @@ export class McpOAuth {
       origin: r.origin as string,
       endpoint: r.resource as string,
       organizationId: r.org_id as string,
-      ...(r.agent_id ? { agentId: r.agent_id as string } : {}),
+      ...(r.agent_id ? { agentId: r.agent_id as string, mode: (r.agent_mode as AgentMode | null) ?? undefined, agentName: (r.agent_name as string | null) ?? undefined } : {}),
       connectedAt: iso(r.created_at as number),
       ...(r.last_active ? { lastActiveAt: iso(r.last_active as number) } : {}),
     }));
@@ -590,7 +630,8 @@ export class McpOAuth {
     if (!row) return false;
     this.revokeFamily(row.family as string);
     this.sql.exec('DELETE FROM oauth_connections WHERE id = ?', id);
-    // The last connection of a personal agent gone: the agent retires with it (agents.md §2).
+    // The last connection of a personal agent gone: the agent retires with it (agents.md §2). A shared agent is a member
+    // and stays (retireIdlePersonalAgent touches personal ones alone).
     if (row.agent_id) retireIdlePersonalAgent(this.sql, row.agent_id as string);
     return true;
   }

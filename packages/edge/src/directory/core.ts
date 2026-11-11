@@ -1,11 +1,11 @@
 // Identity: accounts, sessions and sign-in. Ported from packages/server/src/services/auth.ts and oauthAccounts.ts, with
 // the same rules and the same mail. It runs over any `SqlStorage`-shaped database, so tests can use node:sqlite.
-import type { AccountDTO, AccountKind, AgentMode, AccountRole, AccountState, AuthResponse, DnsRecordDTO, DomainDTO, DomainKind, OAuthIdentityDTO, RegisterResponse, UserDTO } from '@flow/shared';
+import type { AccountDTO, AccountKind, AgentMode, SponsoredAgentDTO, ViaDTO, AccountRole, AccountState, AuthResponse, DnsRecordDTO, DomainDTO, DomainKind, OAuthIdentityDTO, RegisterResponse, UserDTO } from '@flow/shared';
 import { ApiError, badRequest, conflict, forbidden, notFound, unauthorized } from '../errors';
 import { hashPassword, verifyPassword } from './passwords';
 import { DIRECTORY_MIGRATIONS } from './schema';
 import { newId } from './ids';
-import { personalAgentFor, revokePersonalAgent } from './agents';
+import { createPersonalAgent, personalAgentFor, revokePersonalAgent, sponsoredAgentsOf } from './agents';
 import { PLATFORM_DOMAIN, localPart, organizationDomain, uniqueAddress } from './addresses';
 import { checkDomain, checkRecords, dohResolver, normalizeDomain, recordsFor, type Resolve } from './dns';
 import { DEFAULT_DOMAIN_LIMITS, ProviderError, noneMailProvider, type DkimRecord, type MailProvider } from '../mailprovider/index';
@@ -643,18 +643,44 @@ export class DirectoryCore {
    * `invokedBy` is an agent's claim of who asked for its turn (agents.md §3): it comes back only when the caller is an agent
    * and the account named is another account of the organization that was not removed, so every object may carry it.
    */
-  async authenticateIn(token: string, organizationId: string | null, invokedBy: string | null = null): Promise<{ user: UserDTO; kind: AuthKind; account: AccountDTO | null; invokedBy: string | null }> {
-    const { user, kind } = await this.authenticate(token);
-    const account = organizationId ? this.accountFor(user.id, organizationId) : null;
+  async authenticateIn(token: string, organizationId: string | null, invokedBy: string | null = null): Promise<{ user: UserDTO; kind: AuthKind; account: AccountDTO | null; invokedBy: string | null; via: ViaDTO | null }> {
+    const { user, kind, via } = await this.authenticate(token);
+    // A personal agent acts in its one organization alone (agents.md §1): elsewhere its sponsor's account is not its to use.
+    const account = organizationId && (!via || this.userById(via.id)?.organization_id === organizationId) ? this.accountFor(user.id, organizationId) : null;
     let asker: string | null = null;
-    if (invokedBy && kind === 'agent' && organizationId && account && invokedBy !== account.id) {
+    if (invokedBy && kind === 'agent' && !via && organizationId && account && invokedBy !== account.id) {
       const who = this.rows("SELECT 1 AS x FROM accounts WHERE id = ? AND organization_id = ? AND state <> 'removed'", invokedBy, organizationId);
       if (who.length) asker = invokedBy;
     }
-    return { user, kind, account, invokedBy: asker };
+    return { user, kind, account, invokedBy: asker, via: via ?? null };
   }
 
-  async authenticate(token: string): Promise<{ user: UserDTO; kind: AuthKind }> {
+  /**
+   * The bridge's self-registration as a personal agent (agents.md §1, phase B): the principal with the handle and key the
+   * bridge logs in with, its `personal_agent` account, and a token, which is the delegation: requests made with it act as
+   * the sponsor, marked `via`. Asked by the Org object that holds the invite (directoryLink).
+   */
+  async createPersonalAgent(organizationId: string, sponsorId: string, p: { name: string; username: string; keyHash: string; description?: string }): Promise<{ agentToken: string; user: UserDTO; sponsor: UserDTO }> {
+    if (this.rows('SELECT 1 AS x FROM users WHERE agent_username = ? AND is_agent = 1 AND organization_id = ? AND deleted_at IS NULL', p.username, organizationId).length) {
+      throw conflict('username_taken', 'that agent username is already taken in this organization');
+    }
+    const id = createPersonalAgent(this.sql, { sponsorId, organizationId, ...p });
+    const agentToken = `flow-agent-token-${newToken()}`;
+    this.sql.exec('INSERT INTO agent_tokens (id, token_hash, user_id, created_at) VALUES (?, ?, ?, ?)', newId(), await hashToken(agentToken), id, Date.now());
+    const sponsor = this.userById(sponsorId)!;
+    return { agentToken, user: toUserDTO(this.userById(id)!, id), sponsor: toUserDTO(sponsor, sponsorId) };
+  }
+
+  /** The agents a person sponsors, for the consent page's "reconnect an existing agent" (agents.md §1). */
+  sponsoredAgents(userId: string): SponsoredAgentDTO[] {
+    return sponsoredAgentsOf(this.sql, userId);
+  }
+
+  /**
+   * The principal a token names. A personal agent's token is its delegation (agents.md §1): the caller is the sponsor, with
+   * `via` naming the agent, so everything the request does is the sponsor's, marked. A deleted sponsor ends it.
+   */
+  async authenticate(token: string): Promise<{ user: UserDTO; kind: AuthKind; via?: ViaDTO }> {
     const hash = await hashToken(token);
     const now = Date.now();
     const session = this.rows('SELECT user_id, expires_at FROM sessions WHERE token_hash = ? AND expires_at > ?', hash, now)[0];
@@ -668,9 +694,14 @@ export class DirectoryCore {
     }
     const agent = this.rows('SELECT user_id, last_used_at FROM agent_tokens WHERE token_hash = ? AND revoked_at IS NULL', hash)[0];
     const user = agent && this.userById(agent.user_id as string);
-    if (!agent || !user) throw unauthorized();
+    if (!agent || !user || user.deleted_at) throw unauthorized();
     if (!agent.last_used_at || now - (agent.last_used_at as number) > AGENT_TOUCH) {
       this.sql.exec('UPDATE agent_tokens SET last_used_at = ? WHERE token_hash = ?', now, hash);
+    }
+    if (user.mode === 'personal') {
+      const sponsor = user.sponsor_user_id ? this.userById(user.sponsor_user_id as string) : undefined;
+      if (!sponsor || sponsor.deleted_at) throw unauthorized();
+      return { user: toUserDTO(sponsor, sponsor.id as string), kind: 'agent', via: { id: user.id as string, displayName: user.display_name as string, mode: 'personal' } };
     }
     return { user: toUserDTO(user, user.id as string), kind: 'agent' };
   }

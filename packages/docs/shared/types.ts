@@ -210,6 +210,10 @@ export interface ConnectedAgent {
   id: string;
   /** The name the agent gave itself when it registered. */
   name: string;
+  /** The agent it acts through in the hosted suite (docs/specs/agents.md §1): a personal agent (acts as you) or a
+   * shared agent, by name. Absent in the desktop app. */
+  mode?: 'personal' | 'shared';
+  agentName?: string;
   /** Where the sign-in was started from: address and user agent. */
   origin: string;
   /** The MCP endpoint its tokens are for. */

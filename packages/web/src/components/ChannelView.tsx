@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { MessageDTO } from '@flow/shared';
 import { typingKey, useAuth, useLive, useSelection } from '../state';
 import { useHuddle } from '../huddle';
-import { useArtifacts, useChannel, useChannelMembers, useDisplayNameMap, useMarkRead, useMemberMap, useMessages, useNameMap, usePinnedMessages, useTogglePin, flattenMessages } from '../hooks';
+import { useArtifacts, useChannel, useChannelMembers, useDisplayNameMap, useMarkRead, useMemberMap, useMessages, useNameMap, usePinnedMessages, useTogglePin, useWorkspaces, flattenMessages } from '../hooks';
 import { dmTitle } from './Sidebar';
 import { Avatar } from './Avatar';
 import ChannelMembersPopover, { type MemberRow } from './ChannelMembersPopover';
@@ -106,6 +106,11 @@ export default function ChannelView({ channelId }: { channelId: string }) {
       ? channel.name ?? ''
       : dmTitle(channel, displayNames, auth.user.id)
     : '';
+  // A DM with a shared agent is not private (docs/specs/agents.md §1): anyone in the organization can ask it, and it keeps
+  // no secrets from them. Every agent on a roster is a shared one; personal agents are never members.
+  const workspaces = useWorkspaces();
+  const dmAgent = channel?.kind === 'dm' && dmOtherId && dmOtherId !== auth.user.id && memberMap[dmOtherId]?.isAgent ? memberMap[dmOtherId] : null;
+  const workspaceName = workspaces.data?.find((w) => w.id === sel.workspaceId)?.name ?? 'this organization';
 
   // Header avatar stack: this channel's membership for every kind (issue #70 —
   // standard channels used to show the whole workspace roster, which said
@@ -176,6 +181,11 @@ export default function ChannelView({ channelId }: { channelId: string }) {
           >
             {channel?.kind === 'standard' ? <><span className="text-muted"># </span>{title}</> : title}
           </h2>
+          {dmAgent && (
+            <p data-testid="dm-agent-note" className="truncate text-xs text-muted">
+              Not private: anyone in {workspaceName} can ask {dmAgent.displayName}.
+            </p>
+          )}
           {/* #194: the topic runs through the same inline renderer as a message
               body, so a URL in it is a real link (new tab) instead of grey text. */}
           {channel?.topic && (

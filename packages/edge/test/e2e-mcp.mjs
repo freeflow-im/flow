@@ -46,8 +46,8 @@ const pkce=()=>{const v=randomBytes(32).toString('base64url');return{v,c:createH
 const authorizeUrl=(c,extra={})=>'/oauth/authorize?'+form({response_type:'code',client_id:CLIENT,redirect_uri:'http://localhost:51234/callback',code_challenge:c,code_challenge_method:'S256',state:'xyz',resource:`${B}/mcp`,...extra});
 const consentOf=(html)=>({p:/name="p" value="([^"]+)"/.exec(html)?.[1],csrf:/name="csrf" value="([^"]+)"/.exec(html)?.[1],orgs:[...html.matchAll(/name="org" value="([^"]+)"/g)].map((m)=>m[1]),checked:/name="org" value="([^"]+)" checked/.exec(html)?.[1]});
 /** The whole flow for a person and an organization, returning the token response. */
-async function connect(u,org,extra={}){const {v,c}=pkce();let x=await api(null,'GET',authorizeUrl(c,extra),undefined,undefined,cookie(u));const page=await api(null,'GET',x.h.get('location'),undefined,undefined,cookie(u));const f=consentOf(page.j);
-  x=await api(null,'POST','/oauth/decision',form({p:f.p,csrf:f.csrf,org,allow:'yes'}),'application/x-www-form-urlencoded',{...cookie(u),origin:B});const code=new URL(x.h.get('location')).searchParams.get('code');
+async function connect(u,org,extra={},fields={}){const {v,c}=pkce();let x=await api(null,'GET',authorizeUrl(c,extra),undefined,undefined,cookie(u));const page=await api(null,'GET',x.h.get('location'),undefined,undefined,cookie(u));const f=consentOf(page.j);connect.lastPage=page.j;
+  x=await api(null,'POST','/oauth/decision',form({p:f.p,csrf:f.csrf,org,allow:'yes',...fields}),'application/x-www-form-urlencoded',{...cookie(u),origin:B});if(x.s!==302)return{error:x.s,body:x.j};const code=new URL(x.h.get('location')).searchParams.get('code');
   return (await api(null,'POST','/oauth/token',form({grant_type:'authorization_code',code,code_verifier:v,client_id:CLIENT,redirect_uri:'http://localhost:51234/callback'}),'application/x-www-form-urlencoded')).j;}
 
 const {v:VER,c:CHAL}=pkce();
@@ -194,6 +194,34 @@ t('the same name and key redeemed in Bravo makes a second agent, its own princip
 r=await api(r.j.agentToken,'GET','/v1/me/accounts');t('which holds an account in Bravo alone',r.s===200&&r.j.accounts?.length===1&&r.j.accounts[0].organizationId===Bo,JSON.stringify(r.j).slice(0,160));
 r=await api(AGT,'GET','/v1/me/accounts');t('while the first keeps Acme alone',r.s===200&&r.j.accounts?.length===1&&r.j.accounts[0].organizationId===A,JSON.stringify(r.j).slice(0,160));
 r=await api(O.token,'GET',`/v1/workspaces/${A}/channels`);const GEN=(r.j.channels??r.j)[0];
+// --- Connecting an agent (agents.md §1, phase B): the consent page's choice ------------------------------------------------
+r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);const beforePersonal=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.sponsorId===O.user.id&&a.state!=='removed').length;
+const OP=await connect(O,A);t('Olga connects as her personal agent (the default)',!!OP.access_token,JSON.stringify(OP).slice(0,120));
+t('the consent page offers her agents to reconnect, and the shared choice',/name="as" value="existing:/.test(connect.lastPage)&&/name="as" value="shared"/.test(connect.lastPage)&&/name="agent_name"/.test(connect.lastPage),'');
+r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);{const now=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.sponsorId===O.user.id&&a.state!=='removed');t('one personal agent of Olga’s in Acme',now.length===1,JSON.stringify(now.map(a=>a.displayName)));var OPA=now[0];}
+const OP2=await connect(O,A,{},{as:`existing:${OPA?.principalId}`});t('reconnecting it makes no duplicate',!!OP2.access_token,JSON.stringify(OP2).slice(0,120));
+r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);t('still one',(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.sponsorId===O.user.id&&a.state!=='removed').length===1);
+const SH=await connect(O,A,{},{as:'shared',agent_name:`Omni ${tag}`});t('Olga connects a shared agent named Omni',!!SH.access_token,JSON.stringify(SH).slice(0,160));
+r=await api(O.token,'GET',`/v1/workspaces/${A}/members`);const OMNI=(r.j.members??[]).find(m=>m.displayName===`Omni ${tag}`);t('Omni is a member of Acme, an agent sponsored by Olga',OMNI?.isAgent===true&&OMNI?.sponsorId===O.user.id,JSON.stringify(OMNI).slice(0,160));
+r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);{const a=(r.j.accounts??[]).find(x=>x.principalId===OMNI?.userId);t('with a native account, mode shared, and an address',a?.kind==='native'&&a?.agentMode==='shared'&&!!a?.address,JSON.stringify(a).slice(0,160));}
+r=await mcp(SH.access_token,'tools/list');t('Omni’s token works on /mcp',r.s===200,r.s);
+r=await api(O.token,'GET','/api/settings/agents');{const c=(r.j.agents??[]).find(a=>a.agentName===`Omni ${tag}`);t('Docs’ Settings lists the connection as the shared agent Omni',c?.mode==='shared',JSON.stringify(r.j.agents).slice(0,200));}
+r=await connect(U,A,{},{as:`existing:${OMNI?.userId}`});t('someone else cannot reconnect Olga’s Omni',r.error===403,JSON.stringify(r).slice(0,120));
+r=await connect(O,A,{},{as:'shared',agent_name:''});t('a shared agent needs a name',r.error===403,JSON.stringify(r).slice(0,120));
+// --- A personal agent on the bridge: redeemed as personal, its token acts as the sponsor, marked via --------------------------
+r=await api(O.token,'POST',`/v1/workspaces/${A}/agent-invites`,{});
+r=await api(null,'POST','/v1/agents/redeem',{code:r.j.code,username:`olgacc${tag}`,key:'a-long-agent-key-for-the-personal-test',name:'Olga’s Claude Code',mode:'personal'});const PT=r.j.agentToken;
+t('redeemed as a personal agent: the agent principal, the sponsor Olga',r.s===201&&r.j.mode==='personal'&&r.j.user?.isAgent===true&&r.j.user?.agentMode==='personal'&&r.j.sponsor?.id===O.user.id,r.s+' '+JSON.stringify(r.j).slice(0,200));const PAID=r.j.user?.id;
+r=await api(PT,'GET','/v1/me');t('/v1/me with its token is Olga, via the agent',r.s===200&&r.j.id===O.user.id&&r.j.via?.id===PAID&&r.j.via?.mode==='personal',r.s+' '+JSON.stringify(r.j.via));
+r=await api(O.token,'GET',`/v1/workspaces/${A}/members`);t('it is no member of Acme',!(r.j.members??[]).some(m=>m.userId===PAID));
+r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);t('but the admin sees its personal_agent account, sponsored by Olga',(r.j.accounts??[]).some(a=>a.principalId===PAID&&a.kind==='personal_agent'&&a.sponsorId===O.user.id));
+r=await api(PT,'POST',`/v1/channels/${GEN.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'posted via my agent'});t('it posts as Olga',r.s===201&&r.j.userId===O.user.id,r.s+' '+JSON.stringify(r.j).slice(0,100));const VIAMSG=r.j.id;
+r=await api(PT,'GET','/v1/tools?door=bridge');t('the bridge door serves it server tools',r.s===200&&(r.j.tools??[]).length>0&&(r.j.tools??[]).every(x=>x.kind==='server'),r.s);
+r=await api(PT,'GET',`/v1/workspaces/${Bo}/channels`);t('and nothing in Bravo, where its sponsor is but it is not',r.s===403||r.s===404,r.s);
+{let e;for(let i=0;i<12&&!e;i++){await sleep(250);r=await api(O.token,'GET',`/v1/events?workspace=${A}&since=0&limit=500`);e=r.j.events?.find(x=>x.type==='chat.message.created'&&x.data?.id===VIAMSG);}t('the event carries actor Olga and via the agent',!!e&&e.via===PAID&&!!e.actor,JSON.stringify(e??r.j).slice(0,200));}
+r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);{const a=(r.j.accounts??[]).find(x=>x.principalId===PAID);r=await api(O.token,'DELETE',`/v1/workspaces/${A}/accounts/${a?.id}`);t('Olga removes her bridge agent',r.s===200,r.s);}
+r=await api(PT,'GET','/v1/me');t('its token is over',r.s===401,r.s);
+
 r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);const OACC=(r.j.accounts??[]).find(x=>x.principalId===O.user.id)?.id;
 r=await api(AGT,'POST',`/v1/channels/${GEN.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'asked by Olga'},undefined,{'x-flow-invoked-by':OACC});t('the agent posts, saying Olga asked',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,100));const ASKED=r.j.id;
 r=await api(AGT,'POST',`/v1/channels/${GEN.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'asked by nobody known'},undefined,{'x-flow-invoked-by':'00000000-0000-7000-8000-000000000bad'});const UNKNOWN=r.j.id;

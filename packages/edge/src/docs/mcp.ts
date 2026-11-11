@@ -23,8 +23,10 @@ export interface McpRequestCaller {
   orgId: string;
   /** The person's account in `orgId` (platform.md §3.6), when the directory has one. */
   accountId?: string | null;
-  /** The personal agent the client acts through (agents.md §3): the caller context's `via`. */
+  /** The personal agent the client acts through (agents.md §3): the caller context's `via`. Null for a shared agent. */
   via?: string | null;
+  /** A shared agent's client (agents.md §3): the account of the person whose client it is, the caller context's `invokedBy`. */
+  invokedBy?: string | null;
   scope: string;
   /** The MCP path asked for: /mcp, or a version of it (/mcp/v2). */
   endpoint: string;

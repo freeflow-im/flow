@@ -19,13 +19,15 @@ import type {
   UserDTO,
   WorkspaceDTO,
   WorkspaceMemberDTO,
+  ViaDTO,
 } from '@flow/shared';
 
 /** A subscription's read: its events oldest first, the cursor to ack, and `gap` when some aged out unread. */
 export interface SubscriptionPage { events: PlatformEvent[]; next: number; gap?: { from: number; to: number } }
 
 /** `GET /v1/me`: the principal, with its accounts, one per organization (platform.md §3.3). Older servers send none. */
-export type MeDTO = UserDTO & { accounts?: AccountDTO[] };
+/** For a personal agent's token, `/v1/me` answers with the sponsor and `via` naming the agent (agents.md §3). */
+export type MeDTO = UserDTO & { accounts?: AccountDTO[]; via?: ViaDTO };
 
 /** The start-up log's account lines: each account's address and organization (by name where the agent can see it). */
 export function accountLines(me: MeDTO, workspaces: Pick<WorkspaceDTO, 'id' | 'name'>[]): string[] {
@@ -463,6 +465,8 @@ export interface RedeemInput {
   key: string;
   name: string;
   description?: string;
+  /** The agent's kind (docs/specs/agents.md §1): `shared` (the default) or `personal`, which acts as the sponsor. */
+  mode?: 'personal' | 'shared';
 }
 
 /**

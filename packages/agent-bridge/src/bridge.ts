@@ -251,6 +251,12 @@ export class AgentBridge {
   private readonly jobTurns = new Map<string, { jobId: string; api: FlowApi; settle: (r: { ok: boolean; note: string }) => void }>();
   /** convKey → the job whose turn is running there, which the MCP server asks for (`/job` on the task IPC). */
   private readonly activeJobs = new Map<string, string>();
+  /** A personal agent (agents.md §1): the token acts as the sponsor; messages are not its to answer. */
+  private personal = false;
+  /** The agent's own id for names that must be its own (its subscription), the sponsor's otherwise in personal mode. */
+  private agentId(): string {
+    return this.me.via?.id ?? this.me.id;
+  }
   /** The account that asked for the turn running in each conversation (agents.md §3), for the MCP server's `x-flow-invoked-by`. */
   private readonly activeInvokers = new Map<string, string>();
 
@@ -293,11 +299,15 @@ export class AgentBridge {
 
   async start(): Promise<void> {
     this.me = await this.api.me();
-    if (!this.me.isAgent) this.log('warning: token belongs to a non-agent user');
+    // A personal agent's token answers as its sponsor, with `via` naming the agent (agents.md §3): this process acts as
+    // the sponsor, woken by the sponsor's subscriptions, and answers no mention or DM.
+    this.personal = !!this.me.via;
+    if (!this.me.isAgent && !this.personal) this.log('warning: token belongs to a non-agent user');
     // An agent belongs to one organization (agents.md §1); this process serves it.
     const workspaces = await this.api.myWorkspaces();
     this.workspace = resolveWorkspace(workspaces, this.cfg.workspace);
-    if (this.me.isAgent) this.log(`running as ${this.me.displayName}, a ${this.me.agentMode ?? 'shared'} agent in "${this.workspace.name}"`);
+    if (this.personal) this.log(`running as ${this.me.via!.displayName}, a personal agent of ${this.me.displayName}, in "${this.workspace.name}": wake jobs only, no mentions or DMs`);
+    else if (this.me.isAgent) this.log(`running as ${this.me.displayName}, a ${this.me.agentMode ?? 'shared'} agent in "${this.workspace.name}"`);
     await this.refreshDirectory();
     this.clearLeftoverIndicators();
     const voiceConfig = this.cfg.voice ?? defaultVoiceConfig();
@@ -375,7 +385,7 @@ export class AgentBridge {
   async catchUp(): Promise<number | null> {
     let sub;
     try {
-      sub = await ensureSubscription(this.api, this.workspace.id, this.me.id);
+      sub = await ensureSubscription(this.api, this.workspace.id, this.agentId());
     } catch (err) {
       this.log(`no event subscription (${(err as Error).message}) — live events only`);
       return null;
@@ -399,7 +409,7 @@ export class AgentBridge {
   /** An older bridge's subscription, caught up: replaced by one with today's types (`agent.job`, `calendar.invited`), starting at the head. */
   private async replaceSubscription(oldId: string): Promise<void> {
     try {
-      const fresh = await this.api.createSubscription(this.workspace.id, { name: subscriptionName(this.me.id), filter: { types: CATCH_UP_TYPES }, delivery: 'pull' });
+      const fresh = await this.api.createSubscription(this.workspace.id, { name: subscriptionName(this.agentId()), filter: { types: CATCH_UP_TYPES }, delivery: 'pull' });
       await this.api.deleteSubscription(this.workspace.id, oldId).catch((err: Error) => this.log(`old subscription not deleted: ${err.message}`));
       this.subscription = { id: fresh.id, acked: fresh.cursor };
       this.latestCursor = Math.max(this.latestCursor, fresh.cursor);
@@ -413,7 +423,7 @@ export class AgentBridge {
   private async ensureJobsSubscription(): Promise<void> {
     try {
       const spec = jobsSpec(this.me.id);
-      const sub = await ensureSubscription(this.api, this.workspace.id, this.me.id, spec);
+      const sub = await ensureSubscription(this.api, this.workspace.id, this.agentId(), spec);
       this.jobsSub = { id: sub.id };
       if (sub.outdated) {
         // An older bridge's (agent.job alone): what it holds is read now, then it is replaced by one with today's types.
@@ -960,7 +970,7 @@ export class AgentBridge {
       return;
     }
     if (ev.type === 'reaction.added') {
-      void this.handleReaction(ev.data as ReactionEventData);
+      if (!this.personal) void this.handleReaction(ev.data as ReactionEventData);
       return;
     }
     if (ev.type === 'huddle.invite') {
@@ -986,6 +996,9 @@ export class AgentBridge {
       return;
     }
     if (ev.type !== 'message.created' && ev.type !== 'thread.reply') return;
+    // A personal agent acts as its sponsor and is woken by the sponsor's subscriptions alone (agents.md §6): a message
+    // addressed to the sponsor is the sponsor's to answer, not this process's.
+    if (this.personal) return;
     return this.handleMessage(ev.data as MessageDTO);
   }
 

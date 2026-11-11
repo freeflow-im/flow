@@ -591,6 +591,9 @@ export const RedeemAgentInviteBody = z.object({
   key: z.string().min(16).max(128),
   name: z.string().min(1).max(80),
   description: z.string().max(200).optional(),
+  /** The agent's kind (docs/specs/agents.md §1): `shared` (a member with its own address, the default) or `personal` (it
+   * acts as the sponsor who made the invite; only they can use it). Set once; never changes. */
+  mode: z.enum(['personal', 'shared']).optional(),
 });
 export type RedeemAgentInviteBody = z.infer<typeof RedeemAgentInviteBody>;
 

@@ -294,4 +294,11 @@ export const DIRECTORY_MIGRATIONS: string[] = [
   CREATE INDEX users_agent_organization ON users(organization_id) WHERE is_agent = 1;
   ALTER TABLE oauth_connections ADD COLUMN agent_id TEXT;
   CREATE INDEX oauth_connections_agent ON oauth_connections(agent_id);`,
+  // Connecting an agent (agents.md §1, phase B): the consent page's choice, personal or an existing agent of the person's,
+  // rides on the code or device grant until the tokens are issued; `agent_mode` says whose the tokens are (a shared
+  // agent's own, a personal agent's as a delegation of its sponsor).
+  `ALTER TABLE oauth_codes ADD COLUMN agent_id TEXT;
+  ALTER TABLE oauth_codes ADD COLUMN agent_mode TEXT;
+  ALTER TABLE oauth_device ADD COLUMN agent_id TEXT;
+  ALTER TABLE oauth_device ADD COLUMN agent_mode TEXT;`,
 ];

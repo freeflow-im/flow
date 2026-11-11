@@ -246,6 +246,17 @@ self-registration asks the same "personal or shared" question as the consent pag
 
 ## 8. What the code does today
 
+**Built since this section was first written.** Phase A (PR #771, 2026-11-11): `mode` and `organization_id` on agent
+principals, the `personal_agent` account kind, personal agents for MCP connections, `via` and `invokedBy` on the caller
+context and the event envelope, the Admin app's personal agents list; every agent made before kinds was retired. Phase B
+(PR #773, 2026-11-11): the consent page's "connect as" choice (personal, a new shared agent, or an existing agent of the
+person's), shared agents on `/mcp` acting as themselves with `invokedBy` the person whose client it is, the bridge's
+self-registration as a personal agent whose token is a delegation (`via`; it is woken by the sponsor's subscriptions
+alone and answers no mention or DM), the bridge door filtered to server tools with the caller's kind, the Share dialog's
+and the DM header's warnings for shared agents. No tool differs by kind yet. The text below describes the code before
+phase A, kept for the record.
+
+
 The platform phases 0 to 6 (`platform.md` §11) merged on 2026-11-08 (PRs #718 to #724). This spec's model was
 written after them, on 2026-11-08 to 2026-11-10, so the agent steps of those phases describe the intent, not the
 code. As of 2026-11-10:
