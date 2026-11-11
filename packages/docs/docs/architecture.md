@@ -361,6 +361,13 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   names a `folder` (query or body) has it checked and put on `req.folder` by `requireUser`.
   `GET /api/folders/download?folder=` is a folder as a zip (`exportFolder` in `server/export.ts`), and a file
   dragged onto a folder in the list or the breadcrumbs is moved there (`FileLibrary`'s `onMove`).
+- The thumbnail view (`FileLibrary`'s `view`, `FileThumb.tsx`): pictures show themselves, videos a frame, PDFs their first
+  page (pdf.js, with Range requests for only the parts that page needs), and documents, spreadsheets and presentations a
+  small rendering of their start (`GET /api/library/preview/:id`, `shared/preview.ts`). A card loads nothing until it
+  scrolls near the view, and then through `thumbQueue.ts`: at most three loads at once, the newest first, a card that
+  goes away dropped. The queue is what keeps the cards from staying blank in the desktop app, where each window holds
+  one or two of the browser's six connections to the folder's server open for its event streams (`folder-changes`,
+  `tool-calls`), so forty loads at once left the small preview requests waiting behind PDFs and videos.
 - Recents, a tab beside the folder's name on the home page (`/?recents=1`, `FileLibrary`'s `otherList`): the last
   20 files the user opened, in any folder. Each page that shows a file reports it (`useRecentOpens`,
   `POST /api/recents`) to `RecentOpens` (`server/recents.ts`), which names it by kind and id on the web and by
