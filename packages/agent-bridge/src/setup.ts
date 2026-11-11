@@ -21,7 +21,6 @@ export interface SetupOptions {
   name?: string | undefined; // --name
   username?: string | undefined; // --username / --handle
   harness?: string | undefined; // --harness / --runtime
-  mode?: string | undefined; // --mode: shared (default) or personal (docs/specs/agents.md §1)
   description?: string | undefined; // --description
   cwd?: string | undefined; // --cwd
 }
@@ -110,7 +109,6 @@ export async function runSetup(configPath: string, opts: SetupOptions = {}): Pro
     let agentUsername: string | undefined;
     let agentKey: string | undefined;
     let kind: string;
-    let modeChosen: 'shared' | 'personal' | undefined;
     // #357: the slug of the workspace this config serves, written into agent.json.
     let workspaceSlug: string | undefined;
 
@@ -156,16 +154,6 @@ export async function runSetup(configPath: string, opts: SetupOptions = {}): Pro
         validate: (s) => HARNESSES.includes(s),
       });
       const description = opts.description ?? t('description') ?? '';
-      // The agent's kind (docs/specs/agents.md §1): a shared agent is a member everyone can ask; a personal agent acts
-      // as the person who made the invite, and only they can use it.
-      const seededMode = opts.mode ?? t('mode');
-      const mode = (seededMode !== undefined || rl
-        ? await required(seededMode, 'Connect as — shared (a member with its own address; anyone in the organization can ask it) or personal (acts as you; only you can use it)', {
-            def: 'shared',
-            normalize: (s) => s.toLowerCase(),
-            validate: (s) => s === 'shared' || s === 'personal',
-          })
-        : 'shared') as 'shared' | 'personal';
 
       const key = newAgentKey();
       console.log('\nJoining the workspace…');
@@ -174,12 +162,9 @@ export async function runSetup(configPath: string, opts: SetupOptions = {}): Pro
         username,
         key,
         name,
-        mode,
         ...(description ? { description } : {}),
       });
-      if (res.mode === 'personal') console.log(`\nconnected as ${res.user.displayName}, a personal agent of ${res.sponsor?.displayName ?? 'its sponsor'}, in "${res.workspace.name}"\n`);
-      else console.log(`\njoined as ${res.user.displayName} <@${res.user.id}> in workspace "${res.workspace.name}"\n`);
-      modeChosen = res.mode ?? 'shared';
+      console.log(`\njoined as ${res.user.displayName} <@${res.user.id}> in workspace "${res.workspace.name}"\n`);
       agentToken = res.agentToken;
       agentUsername = username;
       agentKey = key;
@@ -200,7 +185,6 @@ export async function runSetup(configPath: string, opts: SetupOptions = {}): Pro
       // is in one, and the thing that stops startup failing the day someone
       // invites it into a second from its profile popup.
       ...(workspaceSlug ? { workspace: workspaceSlug } : {}),
-      ...(modeChosen ? { mode: modeChosen } : {}),
       runtime: { ...tRuntime, kind } as Record<string, unknown>,
     };
     // Prompt-seed keys, not config keys.

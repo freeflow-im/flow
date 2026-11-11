@@ -784,19 +784,8 @@ export interface AgentInviteDTO {
 export interface AgentRedeemResponse {
   /** Non-expiring bearer token (`flow-agent-token-<token>`) — shown once, only the hash is stored. */
   agentToken: string;
-  /** The agent's principal. For a personal agent (docs/specs/agents.md §1) it is not a member: requests made with the
-   * token act as `sponsor`, and `/v1/me` answers with the sponsor and a `via` naming this agent. */
   user: UserDTO;
   workspace: WorkspaceDTO;
-  mode?: 'personal' | 'shared';
-  sponsor?: UserDTO;
-}
-
-/** On `/v1/me` for a personal agent's token (docs/specs/agents.md §3): the agent the caller acts through. */
-export interface ViaDTO {
-  id: string;
-  displayName: string;
-  mode: 'personal';
 }
 
 /**

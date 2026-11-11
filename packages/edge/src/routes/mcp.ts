@@ -180,7 +180,8 @@ mcpRoutes.post('/oauth/decision', async (c) => {
     const as = form.as ?? 'personal';
     if (form.allow === 'yes' && as.startsWith('existing:')) choice = { as: 'existing', agentId: as.slice('existing:'.length) };
     else if (form.allow === 'yes' && as === 'shared') {
-      if (!form.org) throw new OAuthError('access_denied', 'Choose one of your organizations.', 403);
+      // Everything the decision would refuse is checked first, so a stale page or an empty scope makes no orphan member.
+      await oauth(c, 'checkDecision', form.p, user.id, form.csrf, true, form.org, ticked);
       const name = (form.agent_name ?? '').trim();
       if (!name) throw new OAuthError('access_denied', 'Give the shared agent a name.', 403);
       const org = c.env.ORG.get(c.env.ORG.idFromName(form.org)) as unknown as { createSharedAgent(p: { sponsorId: string; name: string }): Promise<{ userId: string }> };

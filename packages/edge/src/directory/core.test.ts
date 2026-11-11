@@ -804,37 +804,6 @@ describe('agent accounts', () => {
     expect(sql.exec('SELECT revoked_at FROM oauth_tokens WHERE family = ?', `fam-${b1}`).toArray()[0]!.revoked_at).not.toBeNull();
   });
 
-  it('makes a personal agent for the bridge whose token acts as its sponsor, marked via, in its organization alone (agents.md §1, §3, phase B)', async () => {
-    const ann = await signUp('a@example.com');
-    const bob = await signUp('b@example.com');
-    const [o1, o2] = [newId(), newId()];
-    core.reserveSlug('acme', o1);
-    core.reserveSlug('beta', o2);
-    await core.applyOrgChanges(o1, [join(o1, ann.user.id), join(o1, bob.user.id)]);
-    await core.applyOrgChanges(o2, [join(o2, ann.user.id)]);
-    const made = await core.createPersonalAgent(o1, ann.user.id, { name: 'Ann’s Claude Code', username: 'ann-cc', keyHash: NATIVE_ARGON2 });
-    expect(made.user).toMatchObject({ isAgent: true, agentMode: 'personal', sponsorId: ann.user.id });
-    expect(made.sponsor.id).toBe(ann.user.id);
-    expect(core.accountFor(made.user.id, o1)).toMatchObject({ kind: 'personal_agent', address: null, sponsorId: ann.user.id });
-    // The token is a delegation: the caller is Ann, via the agent, in o1; in o2 the agent has no business.
-    const who = await core.authenticateIn(made.agentToken, o1);
-    expect(who).toMatchObject({ user: { id: ann.user.id }, kind: 'agent', via: { id: made.user.id, displayName: 'Ann’s Claude Code', mode: 'personal' } });
-    expect(who.account).toMatchObject({ principalId: ann.user.id, organizationId: o1 });
-    expect((await core.authenticateIn(made.agentToken, o2)).account).toBeNull();
-    // Its claim of who asked is dropped: it acts as Ann herself.
-    expect((await core.authenticateIn(made.agentToken, o1, core.accountFor(bob.user.id, o1)!.id)).invokedBy).toBeNull();
-    // The sponsor's list offers it to reconnect; the handle is taken here; it can log in by handle and key.
-    expect(core.sponsoredAgents(ann.user.id)).toEqual([expect.objectContaining({ id: made.user.id, mode: 'personal', organizationId: o1, address: null })]);
-    await expect(core.createPersonalAgent(o1, ann.user.id, { name: 'Again', username: 'ann-cc', keyHash: NATIVE_ARGON2 })).rejects.toThrow('already taken');
-    const fresh = await core.agentLogin('ann-cc', 'correct horse');
-    expect(fresh.user.id).toBe(made.user.id);
-    await expect(core.authenticate(made.agentToken)).rejects.toThrow();
-    expect((await core.authenticate(fresh.agentToken)).via?.id).toBe(made.user.id);
-    // An admin removes it: the token is over.
-    core.removePersonalAgent(o1, core.accountFor(made.user.id, o1)!.id);
-    await expect(core.authenticate(fresh.agentToken)).rejects.toThrow();
-  });
-
   it('retires agents made before kinds, once: accounts removed, tokens revoked, principal deleted; a personal agent per connection (phase A)', async () => {
     const ann = await signUp('a@example.com');
     const bob = await signUp('b@example.com');

@@ -38,7 +38,7 @@ function usage(): never {
     'usage:\n' +
       '  flow-agent-bridge <invite-code>      redeem an invite (from Flow) + run — default ./agent.json\n' +
       '  flow-agent-bridge [config.json]      setup (if missing) + run — default ./agent.json\n' +
-      '      setup flags (skip a prompt): --invite --name --handle --harness --mode shared|personal\n' +
+      '      setup flags (skip a prompt): --invite --name --handle --harness\n' +
       '                                   --server --token --description --cwd\n' +
       '  flow-agent-bridge run <config.json>\n' +
       '  flow-agent-bridge login --server <url> --username <handle> --key <secret>\n' +
@@ -74,7 +74,6 @@ function parseSetupOptions(args: string[], invite?: string): SetupOptions {
     name: flag(args, 'name'),
     username: flag(args, 'username') ?? flag(args, 'handle'),
     harness: flag(args, 'harness') ?? flag(args, 'runtime'),
-    mode: flag(args, 'mode'),
     description: flag(args, 'description'),
     cwd: flag(args, 'cwd'),
   };

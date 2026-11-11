@@ -61,6 +61,7 @@ export function agentOfFamily(sql: AgentSql, family: string): string | null {
  */
 export function retireIdlePersonalAgent(sql: AgentSql, agentId: string, now = Date.now()): boolean {
   if (rows(sql, 'SELECT 1 AS x FROM oauth_connections WHERE agent_id = ? LIMIT 1', agentId).length) return false;
+  if (rows(sql, 'SELECT 1 AS x FROM agent_tokens WHERE user_id = ? AND revoked_at IS NULL LIMIT 1', agentId).length) return false;
   if (!rows(sql, "SELECT 1 AS x FROM users WHERE id = ? AND is_agent = 1 AND mode = 'personal'", agentId).length) return false;
   sql.exec("UPDATE accounts SET state = 'removed', removed_at = ? WHERE user_id = ? AND state <> 'removed'", now, agentId);
   sql.exec("UPDATE users SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL", now, agentId);
@@ -72,28 +73,6 @@ export function revokePersonalAgent(sql: AgentSql, agentId: string, now = Date.n
   sql.exec('UPDATE oauth_tokens SET revoked_at = ? WHERE revoked_at IS NULL AND family IN (SELECT family FROM oauth_connections WHERE agent_id = ?)', now, agentId);
   sql.exec('DELETE FROM oauth_connections WHERE agent_id = ?', agentId);
   retireIdlePersonalAgent(sql, agentId, now);
-}
-
-/**
- * A personal agent made at the bridge's self-registration (agents.md §1): its principal carries the handle and key hash the
- * bridge logs in with, and its account is `personal_agent`. The token the caller makes for it is the delegation: a request
- * made with it acts as the sponsor, marked `via` (DirectoryCore.authenticate). Returns the agent's principal id.
- */
-export function createPersonalAgent(sql: AgentSql, p: { sponsorId: string; organizationId: string; name: string; username: string; keyHash: string; description?: string }, now = Date.now()): string {
-  const sponsor = rows(sql, 'SELECT is_agent, deleted_at FROM users WHERE id = ?', p.sponsorId)[0];
-  if (!sponsor || sponsor.deleted_at || sponsor.is_agent) throw forbidden('an agent cannot sponsor an agent');
-  if (!rows(sql, "SELECT 1 AS x FROM accounts WHERE user_id = ? AND organization_id = ? AND state <> 'removed'", p.sponsorId, p.organizationId).length) {
-    throw forbidden('an agent can only join an organization where its sponsor has an active account');
-  }
-  const id = newId();
-  sql.exec(
-    `INSERT INTO users (id, email, password_hash, display_name, status_text, is_agent, sponsor_user_id, agent_username, agent_key_hash, organization_id, mode, email_verified_at, created_at)
-     VALUES (?, ?, '!agent', ?, ?, 1, ?, ?, ?, ?, 'personal', ?, ?)`,
-    id, `agent-${id}@agents.flow.local`, p.name.trim().slice(0, 80), (p.description ?? '').slice(0, 80), p.sponsorId, p.username, p.keyHash, p.organizationId, now, now);
-  sql.exec(
-    "INSERT INTO accounts (id, user_id, organization_id, address, display_name, role, kind, state, created_at, sponsor_user_id) VALUES (?, ?, ?, NULL, ?, 'member', 'personal_agent', 'active', ?, ?)",
-    newId(), id, p.organizationId, p.name.trim().slice(0, 80), now, p.sponsorId);
-  return id;
 }
 
 /** The agents a person sponsors that are not deleted, with their kind and organization: the consent page's "reconnect an existing agent". */

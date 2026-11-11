@@ -353,7 +353,11 @@ export class McpOAuth {
    * The person allowed or denied, for one of their organizations: where to send the browser (back to the client, or for a
    * device to the done page). The organization must be one of theirs; a refusal leaves the authorization pending.
    */
-  decide(issuer: string, pendingId: string | undefined, userId: string, csrf: string | undefined, allow: boolean, orgId: string | undefined, ticked?: string[], choice: AgentChoice = { as: 'personal' }): string {
+  /**
+   * Everything `decide` would refuse, checked without changing anything: the route asks this before it makes a shared
+   * agent for the decision (agents.md §1), so a stale page, a forged token or an empty scope leaves no orphan member.
+   */
+  checkDecision(pendingId: string | undefined, userId: string, csrf: string | undefined, allow: boolean, orgId: string | undefined, ticked?: string[]): { p: NonNullable<ReturnType<McpOAuth['pending']>>; scope: string | null } {
     const p = this.pending(pendingId);
     if (!p) throw new OAuthError('invalid_request', 'This sign-in link has expired. Start again from your agent.');
     if (p.userId !== userId || !csrf || csrf !== p.csrf) throw new OAuthError('invalid_request', 'This page is out of date or was opened in another account. Start again from your agent.', 403);
@@ -361,6 +365,14 @@ export class McpOAuth {
     // What the person ticked on the page, within what the client asked for.
     const scope = grantedScope(p.params.scope, ticked);
     if (allow && !scope) throw new OAuthError('access_denied', 'Choose at least one thing the agent may use.', 403);
+    if (p.params.device && allow && !this.one("SELECT 1 AS x FROM oauth_device WHERE hash = ? AND status = 'pending' AND expires_at >= ?", p.params.device, Date.now())) {
+      throw new OAuthError('invalid_request', 'This code has expired or was already used. Start again from your agent.');
+    }
+    return { p, scope };
+  }
+
+  decide(issuer: string, pendingId: string | undefined, userId: string, csrf: string | undefined, allow: boolean, orgId: string | undefined, ticked?: string[], choice: AgentChoice = { as: 'personal' }): string {
+    const { p, scope } = this.checkDecision(pendingId, userId, csrf, allow, orgId, ticked);
     // The agent the tokens are for (agents.md §1): one of the person's own, in the organization chosen, or none yet (a
     // personal agent for this client, found or made when the tokens are issued).
     let agentId: string | null = null;

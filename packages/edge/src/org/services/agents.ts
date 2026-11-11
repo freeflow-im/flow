@@ -26,7 +26,7 @@ import { badRequest, conflict, forbidden, notFound, unauthorized } from '../lib/
 import { publishEvent, subjectMeta } from '../bus.js';
 import { postSystemMessage } from './messages.js';
 import { accountForJoin, agentForbidden, announceJoin, enrollInWorkspace, isAgentUser, requireAgentSponsorRights, requireMembership, toWorkspaceDTO } from './workspaces.js';
-import { accountFor, createPersonalAgent, ensureAccount } from '../directoryLink.js';
+import { accountFor, ensureAccount } from '../directoryLink.js';
 import { removeAgentFromWorkspace } from './memberRemoval.js';
 import { hashSecret, toUserDTO, verifySecret, visibleEmail } from './auth.js';
 import { setAvatar } from './users.js';
@@ -146,7 +146,6 @@ export async function redeemAgentInvite(input: RedeemAgentInviteBody): Promise<A
   if (invite.expiresAt < new Date()) {
     throw badRequest('invite_expired', 'this invite code has expired — generate a new one in Flow');
   }
-  if (input.mode === 'personal') return redeemAsPersonalAgent(input, invite, username);
   if (await usernameTakenIn(db, invite.workspaceId, username)) {
     throw badRequest('username_taken', 'that agent username is already taken in this workspace');
   }
@@ -259,27 +258,6 @@ export async function redeemAgentInvite(input: RedeemAgentInviteBody): Promise<A
     user: toUserDTO(userRow, userRow.id),
     workspace: toWorkspaceDTO(wsRow),
   };
-}
-
-/**
- * The invite redeemed as a personal agent (agents.md §1, phase B): the agent is the sponsor's own, so it is no member here
- * and gets no row of its own; the directory makes its principal (with the handle and key the bridge logs in with), its
- * `personal_agent` account and its token, which acts as the sponsor. The invite is spent as any other.
- */
-async function redeemAsPersonalAgent(input: RedeemAgentInviteBody, invite: typeof agentInvites.$inferSelect, username: string): Promise<AgentRedeemResponse> {
-  await requireSponsorAccount(invite.workspaceId, invite.sponsorUserId);
-  const claimed = await db
-    .update(agentInvites)
-    .set({ redeemedAt: new Date() })
-    .where(and(eq(agentInvites.id, invite.id), isNull(agentInvites.redeemedAt)))
-    .returning();
-  if (!claimed[0]) throw badRequest('invite_used', 'this invite code has already been used');
-  const keyHash = await hashSecret(input.key);
-  const made = await createPersonalAgent(invite.workspaceId, invite.sponsorUserId, { name: input.name.trim(), username, keyHash, ...(input.description ? { description: input.description } : {}) });
-  if (!made) throw conflict('no_directory', 'a personal agent needs the directory');
-  // The invite stays without `agentUserId`: that column names a user of this object, and a personal agent is none.
-  const wsRow = (await db.select().from(workspaces).where(eq(workspaces.id, invite.workspaceId)).limit(1))[0]!;
-  return { agentToken: made.agentToken, user: made.user, workspace: toWorkspaceDTO(wsRow), mode: 'personal', sponsor: made.sponsor };
 }
 
 /** A handle from a name, unique in the workspace: "Omni" -> omni, omni2, … */

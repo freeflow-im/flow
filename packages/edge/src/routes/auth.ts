@@ -2,7 +2,7 @@
 import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import type { ZodTypeAny, z } from 'zod';
-import type { AccountDTO, ViaDTO } from '@flow/shared';
+import type { AccountDTO } from '@flow/shared';
 import { AgentLoginBody, AppLinkExchangeBody, AppleAuthBody, CompleteSignupBody, ConsumeSigninLinkBody, ForgotPasswordBody, GoogleAuthBody, LoginBody, RegisterBody, ResetPasswordBody, SigninLinkBody, emailDomain, type UserDTO } from '@flow/shared';
 import { accountGate, type DirectoryCore } from '../directory/core';
 import type { CallerContext } from '../org/routes/compat';
@@ -21,7 +21,7 @@ export interface AuthEnv {
   GOOGLE_CLIENT_ID?: string;
   APPLE_AUDIENCE?: string;
 }
-type Vars = { user: UserDTO; token: string; authKind: 'session' | 'agent'; via: ViaDTO | null };
+type Vars = { user: UserDTO; token: string; authKind: 'session' | 'agent' };
 type C = Context<{ Bindings: AuthEnv; Variables: Vars }>;
 
 /** Calls the directory object, turning its answer back into a value or an `ApiError`. */
@@ -67,7 +67,7 @@ export async function resolveCaller<E extends AuthEnv>(c: Context<{ Bindings: E 
   // Who asked a shared agent for this turn (agents.md §3): an agent's claim, which the directory checks names another
   // member of the organization before any object carries it (the Org object checks membership again against its roster).
   const claimed = c.req.header('x-flow-invoked-by')?.trim();
-  const { user, kind, account, invokedBy, via } = await directory(c, 'authenticateIn', token, org, claimed && UUID.test(claimed) ? claimed : null);
+  const { user, kind, account, invokedBy } = await directory(c, 'authenticateIn', token, org, claimed && UUID.test(claimed) ? claimed : null);
   const refused = accountGate(account);
   if (refused) throw refused;
   // A wake job's turn (platform.md §5.2): the Org object stamps the request's events with it, once it has checked it.
@@ -76,8 +76,6 @@ export async function resolveCaller<E extends AuthEnv>(c: Context<{ Bindings: E 
     user, token, authKind: kind, ip, organizationId: org, account,
     ...(job && UUID.test(job) ? { jobId: job } : {}),
     ...(invokedBy ? { invokedBy } : {}),
-    // A personal agent's token (agents.md §3): the caller is its sponsor, and every event says which agent acted.
-    ...(via ? { via: via.id } : {}),
   };
 }
 
@@ -119,11 +117,10 @@ export function guestRefusal(account: Pick<AccountDTO, 'kind'> | null | undefine
 export const requireAuth = async (c: C, next: () => Promise<void>) => {
   const token = tokenOf(c);
   if (!token) throw unauthorized('missing bearer token');
-  const { user, kind, via } = await directory(c, 'authenticate', token);
+  const { user, kind } = await directory(c, 'authenticate', token);
   c.set('user', user);
   c.set('token', token);
   c.set('authKind', kind);
-  c.set('via', via ?? null);
   await next();
 };
 
@@ -220,8 +217,7 @@ authRoutes.post('/v1/agents/login', async (c) => {
   return c.json(await directory(c, 'agentLogin', body.username.toLowerCase(), body.key), 201);
 });
 // The accounts ride along on /v1/me (platform.md §3.3); UserDTO itself is unchanged, and clients ignore the extra field.
-// A personal agent's token answers with its sponsor and `via` naming the agent (agents.md §3): the bridge reads its kind there.
-authRoutes.get('/v1/me', requireAuth, async (c) => c.json({ ...c.get('user'), accounts: await directory(c, 'accountsOf', c.get('user').id), ...(c.get('via') ? { via: c.get('via') } : {}) }));
+authRoutes.get('/v1/me', requireAuth, async (c) => c.json({ ...c.get('user'), accounts: await directory(c, 'accountsOf', c.get('user').id) }));
 authRoutes.get('/v1/me/accounts', requireAuth, async (c) => c.json({ accounts: await directory(c, 'accountsOf', c.get('user').id) }));
 authRoutes.get('/v1/me/identities', requireAuth, async (c) => c.json({ identities: await directory(c, 'listIdentities', c.get('user').id) }));
 authRoutes.get('/v1/users/:id', requireAuth, async (c) => c.json(await directory(c, 'getUser', c.req.param('id'), c.get('user').id)));

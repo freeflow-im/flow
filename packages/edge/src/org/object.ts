@@ -172,12 +172,6 @@ export class Org extends DurableObject<OrgEnv> {
     return answer.value;
   }
 
-  private async createPersonalAgent(organizationId: string, sponsorId: string, p: { name: string; username: string; keyHash: string; description?: string }): Promise<{ agentToken: string; user: UserDTO; sponsor: UserDTO }> {
-    const answer = await this.directory().call('createPersonalAgent' as never, [organizationId, sponsorId, p] as never) as DirectoryAnswer<{ agentToken: string; user: UserDTO; sponsor: UserDTO }>;
-    if (!answer.ok) throw new ApiError(answer.status, answer.code, answer.message);
-    return answer.value;
-  }
-
   /**
    * A shared agent made from the OAuth consent page (agents.md §1, phase B): a member of this organization with the person
    * as sponsor, as an invite's redeem makes one, but with no key (its credential is the OAuth token the directory issues
@@ -482,7 +476,7 @@ export class Org extends DurableObject<OrgEnv> {
   /** Runs with this object's database, event bus and socket controls in scope; `stamp` marks the events it publishes. */
   private scoped<T>(fn: () => Promise<T>, stamp?: Stamp): Promise<T> {
     return socketControl.run({ disconnectUser: (id) => this.closeUser(id) }, () =>
-      directoryLink.run({ ensureAccount: (...args) => this.ensureAccount(...args), accountFor: (...args) => this.accountFor(...args), createPersonalAgent: (...args) => this.createPersonalAgent(...args) }, () =>
+      directoryLink.run({ ensureAccount: (...args) => this.ensureAccount(...args), accountFor: (...args) => this.accountFor(...args) }, () =>
         shareEvents.run((event) => this.publishShareEvent(event), () =>
           withPublisher((subject, event) => this.broadcast(subject, event, stamp), () => withDb(this.db, fn)))));
   }

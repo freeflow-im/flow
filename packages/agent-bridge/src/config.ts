@@ -116,11 +116,6 @@ export interface BridgeConfig {
   runtime: RuntimeConfig;
   /** Default 'mentions': @-mentions + DMs only. 'all' adds full traffic of channels the agent is in. */
   eventScope: EventScope;
-  /**
-   * The agent's kind as it was connected (docs/specs/agents.md §1), kept for the log; the server knows it from the token.
-   * A personal agent acts as its sponsor and is woken by the sponsor's subscriptions alone: it answers no mention or DM.
-   */
-  mode: 'shared' | 'personal';
   /** Never respond to other agents (loop safety). Default false. */
   respondToAgents: boolean;
   /**
@@ -185,7 +180,6 @@ interface RawConfig {
   logFile?: string | null;
   runtime?: Partial<RuntimeConfig> & { kind?: string };
   eventScope?: string;
-  mode?: string;
   respondToAgents?: boolean;
   agentMentionsOnly?: boolean;
   agentChainLimit?: number;
@@ -255,8 +249,6 @@ export function loadConfig(configPath: string): BridgeConfig {
 
   const eventScope = (raw.eventScope ?? 'mentions') as EventScope;
   if (eventScope !== 'mentions' && eventScope !== 'all') throw new Error(`config: bad eventScope "${eventScope}"`);
-  const mode = (raw.mode ?? 'shared') as 'shared' | 'personal';
-  if (mode !== 'shared' && mode !== 'personal') throw new Error(`config: bad mode "${mode}"`);
   const progress = (raw.progress ?? 'thinking') as ProgressMode;
   if (!['thinking', 'typing', 'silent'].includes(progress)) throw new Error(`config: bad progress "${progress}"`);
 
@@ -292,7 +284,6 @@ export function loadConfig(configPath: string): BridgeConfig {
     logFile,
     runtime,
     eventScope,
-    mode,
     respondToAgents: raw.respondToAgents ?? false,
     agentMentionsOnly: raw.agentMentionsOnly ?? false,
     agentChainLimit,

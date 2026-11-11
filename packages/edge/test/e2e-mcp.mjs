@@ -208,20 +208,6 @@ r=await mcp(SH.access_token,'tools/list');t('Omni’s token works on /mcp',r.s==
 r=await api(O.token,'GET','/api/settings/agents');{const c=(r.j.agents??[]).find(a=>a.agentName===`Omni ${tag}`);t('Docs’ Settings lists the connection as the shared agent Omni',c?.mode==='shared',JSON.stringify(r.j.agents).slice(0,200));}
 r=await connect(U,A,{},{as:`existing:${OMNI?.userId}`});t('someone else cannot reconnect Olga’s Omni',r.error===403,JSON.stringify(r).slice(0,120));
 r=await connect(O,A,{},{as:'shared',agent_name:''});t('a shared agent needs a name',r.error===403,JSON.stringify(r).slice(0,120));
-// --- A personal agent on the bridge: redeemed as personal, its token acts as the sponsor, marked via --------------------------
-r=await api(O.token,'POST',`/v1/workspaces/${A}/agent-invites`,{});
-r=await api(null,'POST','/v1/agents/redeem',{code:r.j.code,username:`olgacc${tag}`,key:'a-long-agent-key-for-the-personal-test',name:'Olga’s Claude Code',mode:'personal'});const PT=r.j.agentToken;
-t('redeemed as a personal agent: the agent principal, the sponsor Olga',r.s===201&&r.j.mode==='personal'&&r.j.user?.isAgent===true&&r.j.user?.agentMode==='personal'&&r.j.sponsor?.id===O.user.id,r.s+' '+JSON.stringify(r.j).slice(0,200));const PAID=r.j.user?.id;
-r=await api(PT,'GET','/v1/me');t('/v1/me with its token is Olga, via the agent',r.s===200&&r.j.id===O.user.id&&r.j.via?.id===PAID&&r.j.via?.mode==='personal',r.s+' '+JSON.stringify(r.j.via));
-r=await api(O.token,'GET',`/v1/workspaces/${A}/members`);t('it is no member of Acme',!(r.j.members??[]).some(m=>m.userId===PAID));
-r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);t('but the admin sees its personal_agent account, sponsored by Olga',(r.j.accounts??[]).some(a=>a.principalId===PAID&&a.kind==='personal_agent'&&a.sponsorId===O.user.id));
-r=await api(PT,'POST',`/v1/channels/${GEN.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'posted via my agent'});t('it posts as Olga',r.s===201&&r.j.userId===O.user.id,r.s+' '+JSON.stringify(r.j).slice(0,100));const VIAMSG=r.j.id;
-r=await api(PT,'GET','/v1/tools?door=bridge');t('the bridge door serves it server tools',r.s===200&&(r.j.tools??[]).length>0&&(r.j.tools??[]).every(x=>x.kind==='server'),r.s);
-r=await api(PT,'GET',`/v1/workspaces/${Bo}/channels`);t('and nothing in Bravo, where its sponsor is but it is not',r.s===403||r.s===404,r.s);
-{let e;for(let i=0;i<12&&!e;i++){await sleep(250);r=await api(O.token,'GET',`/v1/events?workspace=${A}&since=0&limit=500`);e=r.j.events?.find(x=>x.type==='chat.message.created'&&x.data?.id===VIAMSG);}t('the event carries actor Olga and via the agent',!!e&&e.via===PAID&&!!e.actor,JSON.stringify(e??r.j).slice(0,200));}
-r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);{const a=(r.j.accounts??[]).find(x=>x.principalId===PAID);r=await api(O.token,'DELETE',`/v1/workspaces/${A}/accounts/${a?.id}`);t('Olga removes her bridge agent',r.s===200,r.s);}
-r=await api(PT,'GET','/v1/me');t('its token is over',r.s===401,r.s);
-
 r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);const OACC=(r.j.accounts??[]).find(x=>x.principalId===O.user.id)?.id;
 r=await api(AGT,'POST',`/v1/channels/${GEN.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'asked by Olga'},undefined,{'x-flow-invoked-by':OACC});t('the agent posts, saying Olga asked',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,100));const ASKED=r.j.id;
 r=await api(AGT,'POST',`/v1/channels/${GEN.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'asked by nobody known'},undefined,{'x-flow-invoked-by':'00000000-0000-7000-8000-000000000bad'});const UNKNOWN=r.j.id;

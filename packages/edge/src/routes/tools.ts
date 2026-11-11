@@ -12,8 +12,8 @@ toolRoutes.get('/v1/tools', requireAuth as never, (c) => {
   const door = c.req.query('door');
   if (door !== 'bridge') throw badRequest('bad_door', 'door: only bridge is served here (/mcp lists its own tools, and the assistant has its own)');
   c.header('Cache-Control', 'no-store');
-  // The caller's kind (agents.md §1): a personal agent's token answers as its sponsor with `via`; a shared agent is itself.
+  // The caller's kind (agents.md §1): an agent token names a shared agent; a person's session is no agent.
   const user = c.get('user' as never) as { isAgent?: boolean; agentMode?: 'personal' | 'shared' | null };
-  const agentMode = c.get('via' as never) ? 'personal' : user.isAgent ? (user.agentMode ?? 'shared') : null;
+  const agentMode = user.isAgent ? (user.agentMode ?? 'shared') : null;
   return c.json({ tools: toolsFor('bridge', { agentMode }).map((t) => t.definition) });
 });
