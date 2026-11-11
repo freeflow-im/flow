@@ -29,7 +29,7 @@ function answers(method: string, path: string): unknown {
   if (path === '/v1/me/identities') return { identities: [] };
   if (path.endsWith('/emoji')) return { emoji: [] };
   if (path.endsWith('/join-link')) return { workspaceId: 'o1', joinUrl: method === 'DELETE' ? null : 'https://flow.test/join/acme/tok' };
-  if (path.endsWith('/members')) return { members: [{ userId: 'u1', displayName: 'Ann', email: '', avatarUrl: null, statusEmoji: '', statusText: '', title: '', isAgent: false, isBot: false, sponsorId: null, privacyMode: false, role: 'owner' }] };
+  if ((path.split('?')[0] ?? '').endsWith('/members')) return { members: [{ userId: 'u1', displayName: 'Ann', email: '', avatarUrl: null, statusEmoji: '', statusText: '', title: '', isAgent: false, isBot: false, sponsorId: null, privacyMode: false, role: 'owner' }] };
   return { ...org, name: 'Acme Rockets' };
 }
 

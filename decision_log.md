@@ -1,5 +1,25 @@
 # Decision log
 
+## 2026-11-11 — The assistant is a member, with a name, a mailbox and a calendar, answering only its sponsor (operator ruling)
+
+- **Ruling (Scott):** a person's assistant (their hosted personal agent) is named by them at onboarding ("Ada") and is
+  a member of the organization: on the Org object's one member list (`kind: personal_agent`), in channels, posting as
+  itself. The sponsor DMs it, keeps private channels with it, or mentions it in any channel they are in; it replies in
+  the thread, visible to everyone there.
+- **Ruling (Scott):** it answers **only its sponsor**. A mention, DM, thread reply or automation from anyone else never
+  starts its turn; owners and admins cannot point automations at it (they may still see, suspend and remove it).
+  Others' messages in its thread reach it as quoted content, never as requests.
+- **Ruling (Scott):** it has its own mailbox and calendar. Its address is `name@domain` as a person's is
+  (`ada@locked-in.freeflow.im`); mail it sends shows "Ada 🤖 Scott". It accepts mail only from a **sender allowlist**:
+  by default the sponsor's own addresses (their account's and their connected mailboxes), plus senders the sponsor
+  adds; everything else is refused. Calendar invitations follow the same list.
+- **Why:** a person brings their assistant into a conversation the way they would a human assistant, and keeps sole
+  control of it: the assistant holds the sponsor's access, so nobody else may steer it. The allowlist closes the same
+  door for mail.
+- **Not changed:** an external personal agent (Claude Desktop on `/mcp`) stays without address, mailbox or channels;
+  guests have no assistant. Sender matching requires SPF, DKIM or DMARC to pass for the From domain.
+- **Where:** `docs/specs/agents.md` §1, §1.1, §2, §6.
+
 ## 2026-11-11 — The Org object owns an organization's member list; the directory stays thin (operator ruling)
 
 - **Ruling (Scott):** the true member list of an organization is kept inside its Org object: who is a member, their

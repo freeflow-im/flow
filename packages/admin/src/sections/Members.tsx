@@ -50,13 +50,13 @@ export function Members({ org }: { org: WorkspaceDTO }) {
     const a = accountOf(m);
     if (filter === 'people') return !m.isAgent && !m.isBot;
     if (filter === 'agents') return m.isAgent;
-    if (filter === 'guests') return a?.kind === 'guest';
+    if (filter === 'guests') return (m.kind ?? a?.kind) === 'guest';
     if (filter === 'attention') return needsAttention(a);
     return true;
   });
   const counts = {
     attention: roster.filter((m) => needsAttention(accountOf(m))).length,
-    guests: roster.filter((m) => accountOf(m)?.kind === 'guest').length,
+    guests: roster.filter((m) => (m.kind ?? accountOf(m)?.kind) === 'guest').length,
   };
 
   return (
@@ -94,7 +94,7 @@ export function Members({ org }: { org: WorkspaceDTO }) {
             </thead>
             <tbody>
               {shown.map((m) => (
-                <MemberRow key={m.userId} org={org} member={m} account={accountOf(m)} meId={me.data?.id} hostedMail={hostedMail} onChanged={refresh} />
+                <MemberRow key={m.userId} org={org} member={m} account={accountOf(m)} sponsorName={roster.find((x) => x.userId === m.sponsorId)?.displayName} meId={me.data?.id} hostedMail={hostedMail} onChanged={refresh} />
               ))}
               {members.isSuccess && shown.length === 0 && (
                 <tr>
@@ -112,13 +112,16 @@ export function Members({ org }: { org: WorkspaceDTO }) {
   );
 }
 
-function MemberRow({ org, member: m, account: a, meId, hostedMail, onChanged }: { org: WorkspaceDTO; member: WorkspaceMemberDTO; account: AccountDTO | undefined; meId: string | undefined; hostedMail: boolean; onChanged(): Promise<unknown> }) {
+function MemberRow({ org, member: m, account: a, sponsorName, meId, hostedMail, onChanged }: { org: WorkspaceDTO; member: WorkspaceMemberDTO; account: AccountDTO | undefined; sponsorName: string | undefined; meId: string | undefined; hostedMail: boolean; onChanged(): Promise<unknown> }) {
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const isOwner = m.role === 'owner';
   const isSelf = m.userId === meId;
-  // The owner is immutable; nobody acts on themselves (no self-lockout).
-  const locked = isOwner || isSelf;
+  const personal = m.kind === 'personal_agent';
+  const assistant = personal && m.agentRuntime === 'hosted';
+  // The owner is immutable; nobody acts on themselves (no self-lockout). A person's assistant comes and goes with them
+  // (agents.md §6); an external personal agent is removed through its own route.
+  const locked = isOwner || isSelf || assistant;
   const act = <V,>(fn: (v: V) => Promise<unknown>) =>
     useMutation({
       mutationFn: fn,
@@ -131,7 +134,7 @@ function MemberRow({ org, member: m, account: a, meId, hostedMail, onChanged }: 
     });
   const setRole = act((role: Exclude<MemberRole, 'owner'>) => adminApi.setRole(org.id, m.userId, role));
   const setKind = act((kind: AccountKind) => adminApi.setKind(org.id, a!.id, kind));
-  const remove = act(() => adminApi.removeMember(org.id, m.userId));
+  const remove = act(() => (personal ? adminApi.removePersonalAgent(org.id, m.accountId ?? a!.id) : adminApi.removeMember(org.id, m.userId)));
   const retry = act(() => adminApi.provisionOne(org.id, a!.id));
   const busy = setRole.isPending || setKind.isPending || remove.isPending || retry.isPending;
   const mail = mailState(a, hostedMail);
@@ -162,7 +165,7 @@ function MemberRow({ org, member: m, account: a, meId, hostedMail, onChanged }: 
         </div>
       </td>
       <td className="px-3 py-2.5">
-        {locked ? (
+        {locked || personal ? (
           <span className={`rounded-full px-2 py-0.5 text-xs font-semibold capitalize ${isOwner ? 'bg-primary-tint text-primary-deep' : 'bg-panel text-muted'}`}>{m.role}</span>
         ) : (
           <Select
@@ -178,7 +181,12 @@ function MemberRow({ org, member: m, account: a, meId, hostedMail, onChanged }: 
         )}
       </td>
       <td className="px-3 py-2.5">
-        {!a ? (
+        {personal ? (
+          <span className="text-xs text-muted" data-testid={`kind-${key}`}>
+            {assistant ? 'Assistant' : 'Personal agent'}
+            {sponsorName && <span className="text-faint"> · of {sponsorName}</span>}
+          </span>
+        ) : !a ? (
           <span className="text-xs text-faint">—</span>
         ) : isOwner || m.isAgent ? (
           <span className="text-xs text-muted" data-testid={`kind-${key}`}>
@@ -186,7 +194,7 @@ function MemberRow({ org, member: m, account: a, meId, hostedMail, onChanged }: 
           </span>
         ) : (
           <Select
-            value={a.kind}
+            value={(m.kind ?? a.kind) as AccountKind}
             disabled={busy}
             options={[
               { value: 'native', label: 'Native' },

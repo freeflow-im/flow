@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import sharp from '../lib/sharp';
 import { z } from 'zod';
 import { and, desc, eq, gt, isNull, ne, sql } from 'drizzle-orm';
@@ -101,7 +102,7 @@ export const requireAgentSponsorRights = (workspaceId: string, userId: string) =
   requirePolicy(workspaceId, userId, 'agentsBy', 'add agents');
 
 /** What a member row keeps of the joiner's account: its address (§3.2) and its id (the event log's `actor`, §5.2). */
-export interface JoinAccount { address: string | null; accountId: string | null }
+export interface JoinAccount { address: string | null; accountId: string | null; kind?: MemberKind }
 
 /**
  * The joiner's account (platform.md §3.2): the directory makes or reactivates it before the member row is written, so
@@ -111,7 +112,7 @@ export async function accountForJoin(workspaceId: string, userId: string, role: 
   if (await isWorkspaceMember(workspaceId, userId)) return null;
   const u = (await db.select({ displayName: users.displayName }).from(users).where(eq(users.id, userId)).limit(1))[0];
   const account = await ensureAccount(workspaceId, userId, role, u?.displayName ?? '', kind);
-  return { address: account?.address ?? null, accountId: account?.id ?? null };
+  return { address: account?.address ?? null, accountId: account?.id ?? null, kind: account?.kind === 'guest' ? 'guest' : 'native' };
 }
 
 /**
@@ -318,6 +319,9 @@ export async function requireMembership(workspaceId: string, userId: string) {
     .limit(1);
   const m = rows[0];
   if (!m) throw notFound('workspace not found'); // don't leak existence
+  // A personal agent never acts here as itself (agents.md §1): it acts through its sponsor, marked `via`. The one
+  // exception is a person's assistant posting its answer to its sponsor (Org.postAsAssistant, agents.md §1.1).
+  if (m.kind === 'personal_agent' && !(m.runtime === 'hosted' && assistantPosting.getStore() === m.userId)) throw forbidden('a personal agent acts only through its sponsor');
   return m;
 }
 
@@ -391,11 +395,18 @@ async function unreadByWorkspace(userId: string): Promise<Map<string, number>> {
 }
 
 /** Whether the user is a member of the workspace (the Workspace app's organization files, packages/docs/server/scope.ts). */
+/** Set (to the assistant's id) while Org.postAsAssistant posts an assistant's answer: the one path an assistant writes by. */
+export const assistantPosting = new AsyncLocalStorage<string>();
+
+/** Leaves out external personal agents (Claude Desktop on /mcp, agents.md §1.1): on the member list for admins only, never in
+ * Chat's roster, pickers or mentions. A person's assistant stays in. */
+export const notExternalAgent = () => sql`NOT (${workspaceMembers.kind} = 'personal_agent' AND ${workspaceMembers.runtime} IS NULL)`;
+
 export async function isWorkspaceMember(workspaceId: string, userId: string): Promise<boolean> {
   const rows = await db
     .select({ userId: workspaceMembers.userId })
     .from(workspaceMembers)
-    .where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, userId)))
+    .where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, userId), ne(workspaceMembers.kind, 'personal_agent')))
     .limit(1);
   return rows.length > 0;
 }
@@ -406,7 +417,7 @@ export async function workspaceNamesOf(userId: string): Promise<Array<{ id: stri
     .select({ id: workspaces.id, name: workspaces.name })
     .from(workspaceMembers)
     .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
-    .where(eq(workspaceMembers.userId, userId))
+    .where(and(eq(workspaceMembers.userId, userId), ne(workspaceMembers.kind, 'personal_agent')))
     .orderBy(workspaceMembers.joinedAt);
 }
 
@@ -421,13 +432,16 @@ export async function myWorkspaces(userId: string): Promise<WorkspaceDTO[]> {
   return rows.map((r) => toWorkspaceDTO(r.w, r.role, unread.get(r.w.id) ?? 0, r.address));
 }
 
-export async function listMembers(workspaceId: string, userId: string): Promise<WorkspaceMemberDTO[]> {
-  await requireMembership(workspaceId, userId);
+/** The roster. `all` (owners and admins: the Admin app's Members section) adds external personal agents, which Chat
+ * never lists (agents.md §1.1). */
+export async function listMembers(workspaceId: string, userId: string, all = false): Promise<WorkspaceMemberDTO[]> {
+  const me = await requireMembership(workspaceId, userId);
+  const everyone = all && (me.role === 'owner' || me.role === 'admin');
   const rows = await db
     .select({ m: workspaceMembers, u: users })
     .from(workspaceMembers)
     .innerJoin(users, eq(users.id, workspaceMembers.userId))
-    .where(eq(workspaceMembers.workspaceId, workspaceId))
+    .where(everyone ? eq(workspaceMembers.workspaceId, workspaceId) : and(eq(workspaceMembers.workspaceId, workspaceId), notExternalAgent()))
     .orderBy(workspaceMembers.joinedAt);
   return rows.map((r) => ({
     userId: r.u.id,
@@ -450,6 +464,8 @@ export async function listMembers(workspaceId: string, userId: string): Promise<
     joinedAt: r.m.joinedAt.toISOString(),
     ...(r.m.address ? { address: r.m.address } : {}),
     ...(r.m.accountId ? { accountId: r.m.accountId } : {}),
+    kind: r.m.kind,
+    ...(r.m.runtime ? { agentRuntime: r.m.runtime } : {}),
   }));
 }
 
@@ -486,6 +502,8 @@ export async function toMemberDTO(
     joinedAt: r.m.joinedAt.toISOString(),
     ...(r.m.address ? { address: r.m.address } : {}),
     ...(r.m.accountId ? { accountId: r.m.accountId } : {}),
+    kind: r.m.kind,
+    ...(r.m.runtime ? { agentRuntime: r.m.runtime } : {}),
   };
 }
 
@@ -1118,7 +1136,7 @@ export async function enrollInWorkspace(
 ): Promise<boolean> {
   const inserted = await tx
     .insert(workspaceMembers)
-    .values({ workspaceId, userId, role, sponsorUserId: sponsorUserId ?? null, address: account?.address ?? null, accountId: account?.accountId ?? null })
+    .values({ workspaceId, userId, role, sponsorUserId: sponsorUserId ?? null, address: account?.address ?? null, accountId: account?.accountId ?? null, kind: account?.kind ?? 'native' })
     .onConflictDoNothing()
     .returning({ userId: workspaceMembers.userId });
   const general = await tx

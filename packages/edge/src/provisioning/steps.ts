@@ -75,9 +75,9 @@ async function mailboxStep(t: ProvisioningTarget, deps: ProvisioningDeps): Promi
     // The password lives only sealed in the Mail object: a mailbox made by a run that stopped before writing it gets a new one.
     const password = (deps.password ?? mailboxPassword)();
     if (box.exists) await deps.provider.setPassword(address, password);
-    else await deps.provider.createMailbox({ address, displayName: account.displayName, password, quotaBytes: DEFAULT_DOMAIN_LIMITS.quotaBytes });
+    else await deps.provider.createMailbox({ address, displayName: t.fromName ?? account.displayName, password, quotaBytes: DEFAULT_DOMAIN_LIMITS.quotaBytes });
     const settings = deps.provider.mailSettings(address);
-    await deps.mail.put(account, { email: address, displayName: account.displayName, imap: settings.imap, smtp: settings.smtp, password });
+    await deps.mail.put(account, { email: address, displayName: t.fromName ?? account.displayName, imap: settings.imap, smtp: settings.smtp, password });
   }
   await deps.directory.setHosted(account.id, true);
 }

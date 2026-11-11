@@ -7279,3 +7279,23 @@ a.landing-card {
     padding: 8px 4px 40px;
   }
 }
+
+/* The first time in the suite: name your assistant (agents.md §1.1). */
+.agent-name-prompt {
+  margin: 8px 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.agent-name-row {
+  display: flex;
+  gap: 8px;
+}
+.agent-name-row input {
+  flex: 1;
+  min-width: 0;
+}

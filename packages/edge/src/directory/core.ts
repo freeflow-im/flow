@@ -5,7 +5,7 @@ import { ApiError, badRequest, conflict, forbidden, notFound, unauthorized } fro
 import { hashPassword, verifyPassword } from './passwords';
 import { DIRECTORY_MIGRATIONS } from './schema';
 import { newId } from './ids';
-import { assistantOf, ensureAssistant, setAsideAssistant, personalAgentFor, revokePersonalAgent, setAgentRuntime, sponsoredAgentsOf, usableAgentsOf } from './agents';
+import { assistantOf, ensureAssistant, personalAgentFor, revokePersonalAgent, setAgentRuntime, sponsoredAgentsOf, usableAgentsOf } from './agents';
 import { PLATFORM_DOMAIN, localPart, organizationDomain, uniqueAddress } from './addresses';
 import { checkDomain, checkRecords, dohResolver, normalizeDomain, recordsFor, type Resolve } from './dns';
 import { DEFAULT_DOMAIN_LIMITS, ProviderError, noneMailProvider, type DkimRecord, type MailProvider } from '../mailprovider/index';
@@ -51,6 +51,8 @@ export interface ProvisioningTarget {
   /** The hosted mailbox's address: the account's own, or, for a guest, the one it had when it became a guest (null once
    * the mailbox is deleted). Suspend, resume and delete go by it. */
   mailboxAddress: string | null;
+  /** The name mail from the mailbox carries: the account's, or for a person's assistant "Ada 🤖 Scott" (agents.md §1.1). */
+  fromName?: string;
 }
 
 /** One of an organization's domains, as the directory keeps it. */
@@ -155,30 +157,17 @@ export class DirectoryCore {
       this.sql.exec('INSERT INTO _migrations (n) VALUES (?)', done + i);
     });
     if (!this.rows('SELECT 1 FROM accounts LIMIT 1').length && this.rows('SELECT 1 FROM memberships LIMIT 1').length) this.backfillAccounts();
-    if (this.rows(`SELECT 1 FROM accounts a JOIN users u ON u.id = a.user_id WHERE u.is_agent = 0 AND u.deleted_at IS NULL AND a.state <> 'removed' AND a.kind <> 'guest'
-      AND NOT EXISTS (SELECT 1 FROM users h WHERE h.is_agent = 1 AND h.runtime = 'hosted' AND h.mode = 'personal' AND h.sponsor_user_id = a.user_id AND h.organization_id = a.organization_id) LIMIT 1`).length) this.backfillAssistants();
-    if (this.rows(`SELECT 1 FROM accounts g JOIN users h ON h.sponsor_user_id = g.user_id AND h.organization_id = g.organization_id AND h.is_agent = 1 AND h.mode = 'personal' AND h.runtime = 'hosted'
-      JOIN accounts ha ON ha.user_id = h.id AND ha.organization_id = g.organization_id AND ha.state <> 'removed' WHERE g.kind = 'guest' LIMIT 1`).length) this.setAsideGuestAssistants();
     if (this.rows('SELECT 1 FROM users WHERE is_agent = 1 AND mode IS NULL AND deleted_at IS NULL LIMIT 1').length
       || this.rows("SELECT 1 FROM oauth_connections c WHERE c.agent_id IS NULL AND EXISTS (SELECT 1 FROM accounts a WHERE a.user_id = c.user_id AND a.organization_id = c.org_id AND a.state <> 'removed') LIMIT 1").length) this.backfillAgents();
   }
 
-  /** Every person's assistant (agents.md §6), for the accounts made before assistants were agents. Safe to run twice. */
-  backfillAssistants(): void {
-    const missing = this.rows(`SELECT a.user_id, a.organization_id, u.display_name FROM accounts a JOIN users u ON u.id = a.user_id
-      WHERE u.is_agent = 0 AND u.deleted_at IS NULL AND a.state <> 'removed' AND a.kind <> 'guest'
-        AND NOT EXISTS (SELECT 1 FROM users h WHERE h.is_agent = 1 AND h.runtime = 'hosted' AND h.mode = 'personal' AND h.sponsor_user_id = a.user_id AND h.organization_id = a.organization_id)`);
-    for (const m of missing) ensureAssistant(this.sql, m.user_id as string, m.organization_id as string, m.display_name as string);
-    if (missing.length) console.log(`[agents] ${missing.length} assistants made for accounts that had none`);
-  }
-
-  /** Guests' assistants made before guests were left out (2026-11-11), set aside once. Safe to run twice. */
-  setAsideGuestAssistants(): void {
-    let n = 0;
-    for (const g of this.rows("SELECT user_id, organization_id FROM accounts WHERE kind = 'guest'")) {
-      if (setAsideAssistant(this.sql, g.user_id as string, g.organization_id as string)) n++;
-    }
-    if (n) console.log(`[agents] ${n} guests' assistants set aside`);
+  /**
+   * The person's assistant in an organization, made or brought back (agents.md §6): its principal and its account. The
+   * organization's object decides when (decision_log 2026-11-11: its member list is the truth); this only records it.
+   */
+  ensureAssistantFor(sponsorId: string, organizationId: string, sponsorName: string): AccountDTO {
+    const id = ensureAssistant(this.sql, sponsorId, organizationId, sponsorName);
+    return this.accountFor(id, organizationId)!;
   }
 
   /** The person's assistant in an organization (agents.md §6): its principal id, or null. */
@@ -228,6 +217,29 @@ export class DirectoryCore {
   }
 
   /** A hosted agent's name, as its definition sets it (agents.md §6): on the principal and its accounts, where rosters and the panel read it. */
+  /**
+   * A person names their assistant (agents.md §1.1, at onboarding or in their settings): the principal and account take
+   * the name, and the first naming gives it its address, `name@domain` made as a person's is, and sends it to be
+   * provisioned (its mailbox and calendar). Later names keep the address. Returns the account as it is now.
+   */
+  nameAssistant(agentId: string, organizationId: string, name: string): AccountDTO {
+    const u = this.userById(agentId);
+    if (!u?.is_agent || u.mode !== 'personal' || u.runtime !== 'hosted' || u.organization_id !== organizationId) throw notFound('assistant not found');
+    const clean = name.trim().slice(0, 80);
+    if (!clean) throw badRequest('validation', 'name: not empty');
+    this.renameAgent(agentId, clean);
+    const row = this.rows('SELECT * FROM accounts WHERE user_id = ? AND organization_id = ?', agentId, organizationId)[0];
+    if (!row) throw notFound('assistant not found');
+    if (!row.address && row.state !== 'removed') {
+      const address = this.newAddress({ ...u, agent_username: null }, clean, organizationId);
+      const requested = !!this.deps.provisioning && row.hosted_at == null;
+      this.sql.exec('UPDATE accounts SET address = ?, state = CASE WHEN ? THEN ? ELSE state END WHERE id = ?', address, requested ? 1 : 0, 'requested', row.id);
+      this.sql.exec('INSERT OR REPLACE INTO addresses (address, account_id) VALUES (?, ?)', address, row.id);
+      if (requested) this.enqueue('provision', organizationId, row.id as string);
+    }
+    return this.accountById(row.id as string)!;
+  }
+
   renameAgent(agentId: string, name: string): void {
     const u = this.userById(agentId);
     if (!u?.is_agent) throw notFound('agent not found');
@@ -347,9 +359,6 @@ export class DirectoryCore {
       id, userId, organizationId, address, name, role, accountKind, user.is_agent ? ((user.sponsor_user_id as string | null) ?? null) : null, requested ? 'requested' : 'active', Date.now());
     if (address) this.sql.exec('INSERT INTO addresses (address, account_id) VALUES (?, ?)', address, id);
     if (requested) this.enqueue('provision', organizationId, id);
-    // Every member gets their assistant with their account (agents.md §6): a hosted personal agent of theirs here. A guest
-    // uses Chat alone, so has none.
-    if (!user.is_agent && accountKind !== 'guest') ensureAssistant(this.sql, userId, organizationId, name);
   }
 
   /** Marks accounts removed (those not already), starting their retention clock; each hosted mailbox is suspended. */
@@ -422,9 +431,11 @@ export class DirectoryCore {
     const domainName = mailboxAddress ? mailboxAddress.slice(mailboxAddress.lastIndexOf('@') + 1) : null;
     const domain = domainName ? this.domainRow('domain = ? AND organization_id = ?', domainName, account.organizationId)[0] ?? null : null;
     const atProvider = domain ? this.rows('SELECT provider_at FROM domains WHERE domain = ?', domain.domain)[0]?.provider_at != null : false;
+    const sponsor = account.kind === 'personal_agent' && account.sponsorId ? this.accountFor(account.sponsorId, account.organizationId) : null;
+    const fromName = sponsor ? `${account.displayName} 🤖 ${sponsor.displayName.trim().split(/\s+/)[0]}` : account.displayName;
     return {
       account, domain, domainAtProvider: atProvider, slug: this.organizationSlug(account.organizationId),
-      hosted: row.hosted_at != null, removedAt: row.removed_at != null ? iso(row.removed_at) : null, mailboxAddress,
+      hosted: row.hosted_at != null, removedAt: row.removed_at != null ? iso(row.removed_at) : null, mailboxAddress, fromName,
     };
   }
 
@@ -512,19 +523,6 @@ export class DirectoryCore {
     return this.accountById(accountId)!;
   }
 
-  /** Every person whose role is `member` made a guest; owners, admins and agents keep their kind. Removed accounts are
-   * left. Returns the accounts that changed, and how many were guests already. */
-  makeMembersGuests(organizationId: string): { changed: AccountDTO[]; unchanged: number } {
-    const members = this.rows("SELECT a.* FROM accounts a JOIN users u ON u.id = a.user_id WHERE a.organization_id = ? AND a.role = 'member' AND a.state <> 'removed' AND u.is_agent = 0 ORDER BY a.created_at, a.id", organizationId);
-    const changed: AccountDTO[] = [];
-    for (const row of members) {
-      if (row.kind === 'guest') continue;
-      this.makeGuest(row);
-      changed.push(this.accountById(row.id as string)!);
-    }
-    return { changed, unchanged: members.length - changed.length };
-  }
-
   private makeGuest(row: Row): void {
     if (row.role === 'owner') throw conflict('owner_not_guest', 'the owner cannot be a guest');
     const hosted = row.hosted_at != null;
@@ -537,8 +535,6 @@ export class DirectoryCore {
     this.sql.exec('DELETE FROM addresses WHERE account_id = ?', row.id);
     // A removed account's mailbox is suspended already.
     if (hosted && row.state !== 'removed') this.enqueue('suspend', row.organization_id as string, row.id as string);
-    // A guest has no assistant: set aside, to come back if the account is made a member again (agents.md §6).
-    setAsideAssistant(this.sql, row.user_id as string, row.organization_id as string);
   }
 
   private makeNative(row: Row): void {
@@ -552,8 +548,6 @@ export class DirectoryCore {
     }
     this.sql.exec("UPDATE accounts SET kind = 'native', address = ?, mailbox_address = NULL, kind_changed_at = ? WHERE id = ?", address, Date.now(), id);
     this.sql.exec('INSERT OR REPLACE INTO addresses (address, account_id) VALUES (?, ?)', address, id);
-    // A member again: their assistant back (the same one, if they had one before).
-    if (row.state !== 'removed') ensureAssistant(this.sql, row.user_id as string, organizationId, row.display_name as string);
     if (row.state === 'removed' || row.state === 'suspended') return;
     // An active account with no mailbox is given one and its calendar, and stays active (provisioning/steps.ts).
     this.enqueue(kept ? 'resume' : 'provision', organizationId, id);
@@ -570,11 +564,10 @@ export class DirectoryCore {
     this.sql.exec('UPDATE accounts SET role = ? WHERE id = ?', role, existing.id);
     // An owner is never a guest (§3.3): a guest made owner (not by the transfer route, which refuses) becomes native.
     if (role === 'owner' && existing.kind === 'guest') this.makeNative({ ...existing, role });
-    // Back in (or still in), as a member: the person's assistant with them (agents.md §6). A guest has none.
-    const kindNow = this.rows('SELECT kind FROM accounts WHERE id = ?', existing.id)[0]?.kind;
-    if (!this.userById(userId)?.is_agent && kindNow !== 'guest') ensureAssistant(this.sql, userId, organizationId, displayName || (existing.display_name as string));
     if (existing.state !== 'removed') return;
-    if (existing.kind === 'guest' && role !== 'owner') {
+    // A guest, or a personal agent (the person's assistant brought back by the organization's object), has no mailbox to
+    // make or resume.
+    if ((existing.kind === 'guest' && role !== 'owner') || existing.kind === 'personal_agent') {
       // A guest back in has no mailbox to make or resume.
       this.sql.exec("UPDATE accounts SET state = 'active', removed_at = NULL, status_message = NULL WHERE id = ?", existing.id);
       return;

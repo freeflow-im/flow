@@ -462,7 +462,7 @@ function AssistantDefinition() {
   return (
     <div className="settings-block" data-testid="assistant-definition">
       <h2>Your assistant</h2>
-      <p className="changes-intro">Your assistant is your personal agent in this organization: it acts as you and sees what you see, and only you can use it. Give it a name and standing instructions; they go into every conversation with it here.</p>
+      <p className="changes-intro">Your assistant is your personal agent in this organization: it acts as you and sees what you see, and it answers only you. Message it in Chat (a DM, or mention it in any channel), or mail it. Its first name gives it its own address, mailbox and calendar; standing instructions go into every conversation with it.</p>
       <label className="settings-field">
         <span>Name</span>
         <input value={name} maxLength={80} onChange={(e) => setName(e.target.value)} disabled={busy} data-testid="assistant-name" />
@@ -476,6 +476,46 @@ function AssistantDefinition() {
           {busy ? 'Saving…' : 'Save'}
         </button>
         {notice && <span className="muted">{notice}</span>}
+      </div>
+      {error && <div className="form-error">{error}</div>}
+      <MailAllowlist />
+    </div>
+  );
+}
+
+/** Who may mail the assistant (agents.md §1.1): one address per line; mail from anyone else goes to its Refused folder. */
+function MailAllowlist() {
+  const [text, setText] = useState('');
+  const [saved, setSaved] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    api.mailAllowlist().then((r) => { const t = r.senders.join('\n'); setText(t); setSaved(t); }, (e) => setError(e instanceof Error ? e.message : String(e)));
+  }, []);
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.saveMailAllowlist(text.split(/[\s,;]+/).filter(Boolean));
+      const t = r.senders.join('\n');
+      setText(t);
+      setSaved(t);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (saved === null && !error) return null;
+  return (
+    <div className="settings-subblock" data-testid="assistant-allowlist">
+      <label className="settings-field">
+        <span>Who may mail it</span>
+        <textarea value={text} rows={3} placeholder="name@example.com" onChange={(e) => setText(e.target.value)} disabled={busy} data-testid="assistant-allowlist-input" />
+      </label>
+      <p className="muted">Your own addresses are always allowed. Add other senders one per line; mail from anyone else goes to its Refused folder, unread.</p>
+      <div className="settings-actions">
+        <button type="button" className="btn" disabled={busy || text === saved} onClick={() => void save()} data-testid="assistant-allowlist-save">{busy ? 'Saving…' : 'Save senders'}</button>
       </div>
       {error && <div className="form-error">{error}</div>}
     </div>

@@ -132,6 +132,10 @@ export interface WorkspaceMemberDTO {
   /** App/integration bot user. Like `isAgent`, it means "not a person" — which
    * is what the sole-human check behind Delete workspace turns on. */
   isBot: boolean;
+  /** The member's kind (decision_log 2026-11-11): `personal_agent` is a person's assistant (`agentRuntime: 'hosted'`) or,
+   * on the Admin app's full list only, an external personal agent. Absent from older servers. */
+  kind?: 'native' | 'guest' | 'personal_agent';
+  agentRuntime?: 'hosted';
   /** Agents only: the human member who sponsored (approved) the agent and is responsible for it. */
   sponsorId: string | null;
   /** #489: leave this member out of the Directory and its search. They stay on

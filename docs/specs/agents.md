@@ -40,8 +40,8 @@ subscribes (§6). There is no single "Assistant": the assistant a person sees is
 | --- | --- | --- |
 | Access | its sponsor's in the same organization, limited by scopes | only its own grants; **never inherits from its sponsor** |
 | Who may start a turn | the sponsor only | every member of its organization |
-| Its account | `personal_agent`: no address, mailbox, calendars or channels; it acts **as** the sponsor, marked `via` | `native`: its own address, mailbox, calendars (P§3.3) |
-| Channels, mentions, DMs from others | no | yes, like any member |
+| Its account | `personal_agent`; the assistant has its own address, mailbox, calendars and channels (§1.1), an external one none; it acts with the sponsor's access, marked `via` | `native`: its own address, mailbox, calendars (P§3.3) |
+| Channels, mentions, DMs | the assistant: the sponsor's alone start turns; others see its replies but are never answered (§1.1) | yes, from anyone, like any member |
 | Things shared with it | not possible; it already sees what the sponsor sees | by grants, like any member |
 | The sponsor's part | owner and source of access | answers for it; gives it no access |
 | What an admin may do | see it, suspend it, remove it; never use it (§2) | everything they may do with a member |
@@ -67,6 +67,31 @@ start its turns; any write someone other than the sponsor can see (posting, send
 shared object, answering an invitation) shows the sponsor a confirm card first. Its conversation and memory are
 private to the sponsor, as a mailbox is: an admin sees the agent but cannot start its turns, read its conversation or
 memory, or change its scopes.
+
+### 1.1 The assistant: a personal agent with a name, a mailbox and a calendar
+
+(Operator ruling, decision_log 2026-11-11, "The assistant is a member".) A person's assistant is the hosted personal
+agent of §6, and it works the way a human assistant does:
+
+- **A name.** The person names it during onboarding ("Ada") and may rename it in their settings. Assistants made
+  before this keep "<name>'s assistant" until renamed.
+- **A member.** It is on the organization's member list (`kind: personal_agent`, its sponsor beside it), in channels
+  it is brought into, and posts as itself, "Ada 🤖 Scott". It acts with its sponsor's access (`via`), so it sees and does
+  only what the sponsor may.
+- **Only its sponsor is answered.** Scott DMs Ada, keeps a private channel of the two of them for tasks, or mentions
+  her in any channel he is in, where she replies in the thread for everyone in it to see. Only Scott's messages start
+  her turns: a mention, a DM, a reply in her thread or an automation from anyone else never does, and an owner or admin
+  cannot point an automation at her. In a thread she reads others' messages as quoted content, never as requests: she
+  holds Scott's access, so their words must not steer it. Before she posts anything from Scott's private sources
+  (mail, calendars, files others cannot open) where others can read it, Scott sees a confirm card (§1).
+- **Her own mailbox and calendar.** Her address is made as a person's is, from her name on the primary domain
+  (`ada@locked-in.freeflow.im`, numbered if taken), and mail she sends shows "Ada 🤖 Scott". She accepts mail only from
+  a **sender allowlist**: by default the sponsor's addresses (their account's and the mailboxes they connected), plus
+  whatever senders the sponsor adds. Mail from anyone else is refused, and a sender is matched only on a message that
+  passes SPF, DKIM or DMARC for its From domain. Invitations to her calendar follow the same list. She works in the
+  sponsor's mailbox and calendars too, through the sponsor's access.
+- **Guests have none** (§6), and an external personal agent (Claude Desktop on `/mcp`) stays as it was: on the member
+  list, with no address, mailbox or channels.
 
 **A shared agent is a member of the whole organization.** It sees only what is shared with its account. Every member
 of its organization may start its turns, in the panel, by mention, by DM or by a subscription. Each turn carries
@@ -113,8 +138,8 @@ hold the admin role.
    meeting is an ordinary attendee line; mailing it is ordinary mail. Every surface that shows the agent shows the 🤖
    mark and "sponsored by" (P§3.2); the address itself is plain. A shared agent is always `native`: it is brought in
    to work and needs its address and mailbox for it.
-4. A personal agent's account has kind `personal_agent`: no address, no mailbox, no calendars, no channels, no
-   grants. Its kind never changes.
+4. A personal agent's account has kind `personal_agent` and holds no grants; its kind never changes. The assistant's has
+   an address, a mailbox and calendars (§1.1); an external personal agent's has none of them, and no channels.
 
 **Admins see every principal.** The member list shows people, guests, shared agents and personal agents, each with
 its kind and sponsor ("Tom's assistant · personal agent of Tom"). An admin may suspend or remove any agent, as they
@@ -207,9 +232,10 @@ never change (§1).
 | Writes | through the editor, undoable; or server tools, marked as such | server tools only |
 | Where the answer goes | the panel | the conversation the trigger belongs to (a channel, a thread, the person's assistant conversation) |
 
-**The in-app assistant is the person's hosted personal agent.** Every person gets one in each organization, when
-their account there becomes `active`, named "<name>'s assistant", with the person as sponsor and a default
-definition. Its conversation with the person is one private conversation, shown in the panel of every app and in
+**The in-app assistant is the person's hosted personal agent.** Every member (not a guest) gets one in each
+organization, when their account there becomes `active`, named by them at onboarding (§1.1; "<name>'s assistant"
+until they do), with the person as sponsor and a default definition. The organization's object decides when one is
+made or set aside, from its member list (decision_log 2026-11-11, "The Org object owns an organization's member list"). Its conversation with the person is one private conversation, shown in the panel of every app and in
 that organization's Chat. Within an organization it is the same agent, with the same memory, whether the person
 reaches it from the panel, from Chat or through a subscription; switching organizations in the bar switches to that
 organization's assistant.
@@ -270,7 +296,7 @@ turns; hosted shared agents made from the Admin app with a definition, the panel
 runs the turn and answers in the channel as the agent (a personal agent as its sponsor, `via`). Not yet: the model key
 per definition (hosted agents run on the platform's key with the daily limit per asker), headless runners for the Docs
 editing tools in async turns (an async turn has the server tools), the confirm card for a personal agent's writes
-others can see, and object threads. **Not built: a personal agent on the bridge.** A bridge token that acted as its sponsor would be
+others can see, and object threads. Phase E (branch `agents/assistant-member`, 2026-11-11): the Org object's one member list with kinds and personal agents, the assistant in Chat answering only its sponsor, its mailbox and calendar on first naming with the sender allowlist (refused mail moved to a Refused folder; the mailbox checked every minute), and naming in Docs' panel. Not yet: the confirm card before the assistant posts private data where others read (its prompt says so instead), and the native clients' naming. **Not built: a personal agent on the bridge.** A bridge token that acted as its sponsor would be
 an unscoped delegation of the whole account (the sponsor's role, sessions, mail, invitations) with no confirm card, which
 the review of phase B showed; §1's "the bridge's self-registration asks the same question" waits for a delegation that
 carries scopes and a confirm step, which the hosted runtime (phase C) can give. Until then a personal agent is an `/mcp`
@@ -415,6 +441,23 @@ new revision; Omni's turn fails with "can't see this page" on a document not sha
 What people see: a coding agent made from the Admin app or their settings, with no machine of their own to run it on.
 Exit: Builder runs in a container the platform started, answers a mention, and a second agent's container cannot read
 its files.
+
+### Phase E: the assistant as a member (operator rulings 2026-11-11)
+
+1. **One member list.** The Org object's `workspace_members` holds every member with its `kind` (native, guest,
+   personal agent); the Org object decides when an assistant is made or set aside, and the directory only records
+   its principal and account. Every Chat query over members is checked for personal agents; the Admin app's Members
+   section reads this list. An automation may wake a personal agent only if its sponsor made it.
+2. **The assistant in Chat** (§1.1): DMs, private channels and mentions from the sponsor start its turns, it replies
+   as itself in the thread, and nobody else's message starts one; others' messages are quoted content.
+3. **Its mailbox and calendar** (§1.1): `name@domain`, provisioned as a person's; "Ada 🤖 Scott" on what it sends; the
+   sender allowlist (the sponsor's addresses by default, then what the sponsor adds), checked against SPF, DKIM or
+   DMARC; invitations through the same list.
+4. **Naming at onboarding**, and renaming in the person's settings, which renames the member and keeps the address
+   unless the person asks for a new one.
+
+What people see: Scott names his assistant Ada, DMs her, mentions her in #sales where she answers him in the thread,
+and mails her from his own address; a colleague's mention or mail gets nothing from her.
 
 ### Phase D: later, in no order
 

@@ -257,12 +257,14 @@ export async function createDm(workspaceId: string, callerId: string, otherUserI
   const memberIds = [...new Set([callerId, ...otherUserIds])].sort();
   // every target must be a workspace member
   const memRows = await db
-    .select({ userId: workspaceMembers.userId })
+    .select({ userId: workspaceMembers.userId, kind: workspaceMembers.kind, runtime: workspaceMembers.runtime, sponsorUserId: workspaceMembers.sponsorUserId })
     .from(workspaceMembers)
     .where(and(eq(workspaceMembers.workspaceId, workspaceId), inList(workspaceMembers.userId, memberIds)));
   if (memRows.length !== memberIds.length) {
     throw badRequest('bad_user', 'all DM recipients must be members of this workspace');
   }
+  // A person's assistant is DMed by its sponsor alone; an external personal agent has no channels (agents.md §1.1).
+  for (const r of memRows) if (r.kind === 'personal_agent' && (r.runtime !== 'hosted' || r.sponsorUserId !== callerId)) throw forbidden('only its sponsor may message a personal agent');
   const dmKey = memberIds.join(':');
   const kind: ChannelKind = memberIds.length <= 2 ? 'dm' : 'group_dm';
 
@@ -532,11 +534,15 @@ export async function addMember(channelId: string, actorId: string, targetUserId
   if (chan.archivedAt) throw badRequest('channel_archived', 'channel is archived');
   if (chan.isPrivate && !isMember) throw forbidden('only channel members can invite to a private channel');
   const target = await db
-    .select({ userId: workspaceMembers.userId })
+    .select({ userId: workspaceMembers.userId, kind: workspaceMembers.kind, runtime: workspaceMembers.runtime, sponsorUserId: workspaceMembers.sponsorUserId })
     .from(workspaceMembers)
     .where(and(eq(workspaceMembers.workspaceId, chan.workspaceId), eq(workspaceMembers.userId, targetUserId)))
     .limit(1);
   if (!target[0]) throw badRequest('bad_user', 'user is not a member of this workspace');
+  // A person's assistant joins only channels its sponsor brings it into, and only ones the sponsor is in (agents.md §1.1).
+  if (target[0].kind === 'personal_agent' && (target[0].runtime !== 'hosted' || target[0].sponsorUserId !== actorId || !isMember)) {
+    throw forbidden("only its sponsor may bring a personal agent into a channel they are in");
+  }
   const inserted = await db
     .insert(channelMembers)
     .values({ channelId, userId: targetUserId })
