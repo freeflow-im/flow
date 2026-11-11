@@ -60,13 +60,14 @@ export function App() {
   const qc = useQueryClient();
   const organizations = useOrganizations();
   const org = organizations.active;
-  setCalendarWorkspace(org?.id ?? null);
-  const shownOrg = useRef(org?.id ?? null);
+  const orgId = organizations.activeId;
+  setCalendarWorkspace(orgId);
+  const shownOrg = useRef(orgId);
   useEffect(() => {
-    if (shownOrg.current === (org?.id ?? null)) return;
-    shownOrg.current = org?.id ?? null;
+    if (shownOrg.current === orgId) return;
+    shownOrg.current = orgId;
     void qc.resetQueries({ queryKey: ['calendar'] });
-  }, [org?.id, qc]);
+  }, [orgId, qc]);
   const accounts = useAccounts();
   const calendars = useCalendars();
   const cals = useMemo(() => calendars.data ?? [], [calendars.data]);
@@ -76,7 +77,7 @@ export function App() {
   const sharedPref = sharedPrefs.use();
   const sharedCals = useMemo(() => (shared.data ?? []).map((x) => asCalendar(x, sharedPref[x.id])), [shared.data, sharedPref]);
   const allCals = useMemo(() => (calendars.data ? [...calendars.data, ...sharedCals] : undefined), [calendars.data, sharedCals]);
-  const members = useMembers(org?.id ?? null);
+  const members = useMembers(orgId);
   const ownerName = (accountId: string) => members.data?.find((x) => x.accountId === accountId)?.displayName ?? 'Someone';
   const [sharing, setSharing] = useState<CalendarInfo | null>(null);
   const events = useEvents(range, ahead, allCals);
@@ -201,7 +202,7 @@ export function App() {
     }
   }, [navigate]);
   const chat = useCalendarAssistant({
-    org: org?.id ?? null,
+    org: orgId,
     context: () => { const v = viewNow.current; return calendarContext({ view: v.view, range: v.range, calendars: v.cals, event: v.event, search: v.search || undefined, accounts: v.accounts }); },
     handlers: {
       open: openById,

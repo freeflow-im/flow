@@ -60,7 +60,7 @@ export function App() {
   // Mail is the account's in the organization selected in the suite bar (platform.md §3.6): every request names it, and
   // choosing another one reads everything again.
   const organizations = useOrganizations();
-  const org = organizations.active?.id ?? null;
+  const org = organizations.activeId;
   setMailWorkspace(org);
   const shownOrg = useRef(org);
   useEffect(() => {

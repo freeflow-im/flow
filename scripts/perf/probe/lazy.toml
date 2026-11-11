@@ -1,0 +1,6 @@
+name = "freeflow-perf-lazy"
+main = "lazy.js"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+routes = [{ pattern = "app.freeflow.im/__perf-lazy*", zone_name = "freeflow.im" }]

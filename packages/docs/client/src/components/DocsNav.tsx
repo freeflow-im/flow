@@ -111,11 +111,12 @@ export function DocsNav() {
     [placeOf],
   );
 
-  // Another organization: another tree.
+  // Another organization: another tree. Not when the organizations' list arrives and names the same one (`org.ready`):
+  // the folders read so far are that organization's, and reading them all again made the page's start slower.
   useEffect(() => {
     asked.current = new Set();
     setChildren(new Map());
-  }, [orgId, org.ready]);
+  }, [orgId]);
 
   const roots: Root[] = orgId ? ['org', 'me'] : ['me'];
   // Every open folder whose subfolders are not read yet is read. A folder chosen (here or in the list) is opened, with

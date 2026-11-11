@@ -27,10 +27,15 @@ export function chooseOrganization(id: string): void {
   for (const l of listeners) l();
 }
 
-/** The user's organizations, the one selected (else the first), and whether the list has come (`ready`). */
-export function useOrganizations(): { list: SuiteOrganization[]; active: SuiteOrganization | undefined; ready: boolean } {
+/**
+ * The user's organizations, the one selected (else the first), and whether the list has come (`ready`). `activeId` is
+ * the selected one's id, and before the list has come, the id kept from the last visit: the requests already name that
+ * one (api.ts), so the page's data is not read a second time when the list arrives and agrees.
+ */
+export function useOrganizations(): { list: SuiteOrganization[]; active: SuiteOrganization | undefined; activeId: string | null; ready: boolean } {
   const orgs = useQuery({ queryKey: ['suite', 'organizations'], queryFn: suite.organizations, refetchInterval: REFRESH_MS });
   const activeId = useSyncExternalStore(subscribe, () => current, () => null);
   const list = orgs.data ?? [];
-  return { list, active: list.find((o) => o.id === activeId) ?? list[0], ready: orgs.isSuccess };
+  const active = list.find((o) => o.id === activeId) ?? list[0];
+  return { list, active, activeId: orgs.isSuccess ? (active?.id ?? null) : activeId, ready: orgs.isSuccess };
 }

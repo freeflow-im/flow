@@ -518,9 +518,10 @@ function FileList() {
     );
   }, [askedForAssistant, setAgentOpen, setParams]);
   useEffect(() => {
-    // Arriving at the list is not a change to it; the assistant finishing may be.
+    // Arriving at the list is not a change to it; the assistant finishing may be. While the organization is not known
+    // yet nothing is listed, so that is not an arrival: the list's first read must not make the folder tree read again.
     if (!agentRunning) void load(arrived.current);
-    arrived.current = true;
+    if (!orgPending) arrived.current = true;
   }, [agentRunning, folder, rootKey, orgPending]);
   useEffect(() => setItems(null), [folder, rootKey]);
   // In the desktop app, other programs add, remove and change files in the folder too: the list follows them.

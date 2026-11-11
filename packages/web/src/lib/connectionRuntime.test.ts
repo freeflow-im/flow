@@ -107,6 +107,55 @@ describe('request targeting', () => {
   });
 });
 
+describe('identical reads under way', () => {
+  /** A fetch that answers when told to, so reads can overlap. */
+  function held() {
+    const release: Array<() => void> = [];
+    fetchMock.mockImplementation(() => new Promise((resolve) => release.push(() => resolve(okJson({ n: release.length })))));
+    return { releaseAll: () => release.splice(0).forEach((r) => r()) };
+  }
+
+  it('sends one request for two GETs of the same path and gives both its answer', async () => {
+    const { a } = twoConnections();
+    const gate = held();
+    const first = a.api('GET', '/v1/me/workspaces');
+    const second = a.api('GET', '/v1/me/workspaces');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    gate.releaseAll();
+    expect(await first).toBe(await second);
+  });
+
+  it('asks again once the first has answered', async () => {
+    const { a } = twoConnections();
+    await a.api('GET', '/v1/me/workspaces');
+    await a.api('GET', '/v1/me/workspaces');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not share a read that began before a write', async () => {
+    const { a } = twoConnections();
+    const gate = held();
+    const before = a.api('GET', '/v1/me/workspaces');
+    const write = a.api('POST', '/v1/workspaces', { name: 'New' });
+    const after = a.api('GET', '/v1/me/workspaces');
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    gate.releaseAll();
+    await Promise.all([before, write, after]);
+  });
+
+  it('keeps another path, another connection and a new sign-in apart', async () => {
+    const { a, b } = twoConnections();
+    const gate = held();
+    const all = [a.api('GET', '/v1/me/workspaces'), a.api('GET', '/v1/me'), b.api('GET', '/v1/me/workspaces')];
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    a.setToken('another');
+    all.push(a.api('GET', '/v1/me/workspaces').catch(() => null));
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    gate.releaseAll();
+    await Promise.allSettled(all);
+  });
+});
+
 describe('auth generation', () => {
   it('ignores a 401 from a request issued before the token was replaced', async () => {
     const { a } = twoConnections();

@@ -1,0 +1,5 @@
+name = "freeflow-perf-probe"
+main = "index.js"
+compatibility_date = "2026-10-01"
+workers_dev = false
+routes = [{ pattern = "app.freeflow.im/__perf-probe*", zone_name = "freeflow.im" }]
