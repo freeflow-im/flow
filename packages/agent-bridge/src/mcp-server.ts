@@ -527,8 +527,9 @@ export async function runMcpServer(): Promise<void> {
   const jobHeader = async (): Promise<Record<string, string>> => {
     if (!sock) return {};
     try {
-      const { jobId } = await bridgeIpcPost<{ jobId: string | null }>(sock, { channelId: defaultChannelId, threadRootId: defaultThreadRootId ?? '' }, '/job', 2_000);
-      return jobId ? { 'x-flow-job': jobId } : {};
+      const { jobId, invokedBy } = await bridgeIpcPost<{ jobId: string | null; invokedBy?: string | null }>(sock, { channelId: defaultChannelId, threadRootId: defaultThreadRootId ?? '' }, '/job', 2_000);
+      // The job the turn is part of, and who asked for the turn (agents.md §3), on every request the tools make.
+      return { ...(jobId ? { 'x-flow-job': jobId } : {}), ...(invokedBy ? { 'x-flow-invoked-by': invokedBy } : {}) };
     } catch {
       return {};
     }

@@ -86,7 +86,7 @@ describe('MCP OAuth in the directory', () => {
     // Nothing ticked on the page (a form without its checkboxes): every group that starts ticked; never sending.
     const ticked = APP_MANIFESTS.flatMap((m) => m.scopes ?? []).filter((g) => g.checkedByDefault).flatMap((g) => g.scopes).join(' ');
     expect(ticked.startsWith('files:read files:write mail:read mail:write calendar:read calendar:write events:read')).toBe(true);
-    expect(oauth.authenticate(ISSUER, `Bearer ${t.access_token}`)).toEqual({ ok: true, caller: { userId: 'u1', email: 'u1@example.com', orgId: 'orgB', accountId: 'acc-u1-orgB', scope: ticked } });
+    expect(oauth.authenticate(ISSUER, `Bearer ${t.access_token}`)).toEqual({ ok: true, caller: { userId: 'u1', email: 'u1@example.com', orgId: 'orgB', accountId: 'acc-u1-orgB', scope: ticked, agentId: expect.any(String) } });
     const r = oauth.token(ISSUER, { grant_type: 'refresh_token', refresh_token: t.refresh_token, client_id: client });
     expect(oauth.authenticate(ISSUER, `Bearer ${r.access_token}`)).toMatchObject({ ok: true, caller: { orgId: 'orgB' } });
     // A rotated refresh token used again ends the family.
@@ -146,6 +146,48 @@ describe('MCP OAuth in the directory', () => {
     expect(oauth.disconnect('u1', c!.id)).toBe(true);
     expect(oauth.authenticate(ISSUER, `Bearer ${t.access_token}`)).toMatchObject({ ok: false, reason: 'revoked' });
     expect(oauth.connections('u1')).toEqual([]);
+  });
+
+  it('acts through a personal agent, one per person, client and organization (agents.md §1), which retires with its last connection', async () => {
+    const { code, client } = await codeFor('u1', 'orgA');
+    const t = oauth.token(ISSUER, { grant_type: 'authorization_code', code, code_verifier: verifier, client_id: client, redirect_uri: 'http://localhost:4567/callback' });
+    const who = oauth.authenticate(ISSUER, `Bearer ${t.access_token}`);
+    expect(who.ok).toBe(true);
+    const agentId = (who as { caller: { agentId: string } }).caller.agentId;
+    expect(agentId).toBeTruthy();
+    const agent = sql.exec('SELECT * FROM users WHERE id = ?', agentId).toArray()[0]!;
+    expect(agent).toMatchObject({ is_agent: 1, mode: 'personal', sponsor_user_id: 'u1', organization_id: 'orgA', display_name: 'Test agent' });
+    const account = sql.exec('SELECT * FROM accounts WHERE user_id = ?', agentId).toArray();
+    expect(account).toHaveLength(1);
+    expect(account[0]).toMatchObject({ organization_id: 'orgA', kind: 'personal_agent', address: null, state: 'active', sponsor_user_id: 'u1' });
+    expect(oauth.connections('u1')[0]).toMatchObject({ agentId });
+    // The same client, connected again: the same agent. Another organization: another agent.
+    const second = await codeFor('u1', 'orgA');
+    oauth.token(ISSUER, { grant_type: 'authorization_code', code: second.code, code_verifier: verifier, client_id: second.client, redirect_uri: 'http://localhost:4567/callback' });
+    expect(new Set(oauth.connections('u1').map((c) => c.agentId))).toEqual(new Set([agentId]));
+    const other = await codeFor('u1', 'orgB');
+    const t2 = oauth.token(ISSUER, { grant_type: 'authorization_code', code: other.code, code_verifier: verifier, client_id: other.client, redirect_uri: 'http://localhost:4567/callback' });
+    const agentB = (oauth.authenticate(ISSUER, `Bearer ${t2.access_token}`) as { caller: { agentId: string } }).caller.agentId;
+    expect(agentB).not.toBe(agentId);
+    // An admin removes the agent's account: the delegation is over.
+    sql.exec("UPDATE accounts SET state = 'removed' WHERE user_id = ?", agentB);
+    expect(oauth.authenticate(ISSUER, `Bearer ${t2.access_token}`)).toMatchObject({ ok: false, reason: 'agent_removed', status: 403 });
+    // Disconnecting the first of two connections keeps the agent; the last retires it.
+    const [c1, c2] = oauth.connections('u1').filter((c) => c.agentId === agentId);
+    expect(oauth.disconnect('u1', c1!.id)).toBe(true);
+    expect(sql.exec('SELECT state FROM accounts WHERE user_id = ?', agentId).toArray()[0]!.state).toBe('active');
+    expect(oauth.disconnect('u1', c2!.id)).toBe(true);
+    expect(sql.exec('SELECT state FROM accounts WHERE user_id = ?', agentId).toArray()[0]!.state).toBe('removed');
+    expect(sql.exec('SELECT deleted_at FROM users WHERE id = ?', agentId).toArray()[0]!.deleted_at).not.toBeNull();
+  });
+
+  it('lets no agent connect an agent', async () => {
+    sql.exec("INSERT INTO users (id, email, password_hash, display_name, is_agent, mode, organization_id, created_at) VALUES ('bot', 'bot@agents.flow.local', '', 'Bot', 1, 'shared', 'orgA', 0)");
+    sql.exec("INSERT INTO accounts (id, user_id, organization_id, address, display_name, role, created_at) VALUES ('acc-bot', 'bot', 'orgA', 'bot@orga.freeflow.im', 'Bot', 'member', 0)");
+    const client = registerClient();
+    const out = await oauth.authorize(ISSUER, { response_type: 'code', client_id: client, redirect_uri: 'http://localhost:4567/callback', code_challenge: challenge, code_challenge_method: 'S256', state: 'st' });
+    if (out.kind !== 'consent') throw new Error(out.url);
+    expect(() => oauth.consent(out.pendingId, 'bot')).toThrow('An agent cannot connect an agent');
   });
 
   it('revokes a refresh token’s whole family', async () => {

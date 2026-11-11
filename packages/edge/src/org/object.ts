@@ -23,7 +23,7 @@ import { setStorageEnv, type StorageEnv } from './storage/index';
 import { insertRows, tableCounts } from '../importing';
 import type { Events } from '../events/object';
 import type { PublishInput, SubscriptionRead } from '../events/core';
-import { logEntryFor } from './eventLog';
+import { agentStampFor, logEntryFor, type AgentStamp } from './eventLog';
 import { config } from './config';
 import { isActiveAccount, recordShare, revokeShare, shareEvents, sharedRefsOf, sharedWith, type RecordShareInput, type RevokeShareInput, type SharedItem } from './services/shares';
 import { eq, and } from 'drizzle-orm';
@@ -79,7 +79,7 @@ const BACKLOG_MAX = 2_000;
 
 /** What the events a request publishes carry into the log (platform.md §5.2, loop safety): a job's turn stamps its id
  * and one more than the job's depth; an automation's post, one more than its trigger's. */
-interface Stamp { causedBy?: string; depth: number }
+interface Stamp extends AgentStamp { causedBy?: string; depth?: number }
 
 export class Org extends DurableObject<OrgEnv> {
   private readonly db: DB;
@@ -441,17 +441,20 @@ export class Org extends DurableObject<OrgEnv> {
    * more than the job's depth. A job that is not the caller's, or unknown, stamps nothing.
    */
   private async stampOf(caller: CallerContext): Promise<Stamp | undefined> {
+    if (!caller.account || !caller.organizationId || !this.env.EVENTS) return undefined;
+    // The agent fields (agents.md §3): a personal agent acting as the caller, or who asked a shared agent for this turn.
+    const agent: Stamp = agentStampFor(this.ctx.storage.sql, caller.organizationId, caller);
     const jobId = caller.jobId;
-    if (!jobId || !caller.account || !caller.organizationId || !this.env.EVENTS) return undefined;
+    if (!jobId) return Object.keys(agent).length ? agent : undefined;
     const key = `${caller.account.id}|${jobId}`;
     let depth = this.jobDepths.get(key);
     if (depth === undefined) {
       const found = await this.env.EVENTS.get(this.env.EVENTS.idFromName(caller.organizationId)).jobDepth(jobId, caller.account.id).catch(() => null);
-      if (found === null) return undefined;
+      if (found === null) return Object.keys(agent).length ? agent : undefined;
       depth = found;
       this.jobDepths.set(key, depth);
     }
-    return { causedBy: jobId, depth: depth + 1 };
+    return { ...agent, causedBy: jobId, depth: depth + 1 };
   }
 
   private closeUser(userId: string): void {

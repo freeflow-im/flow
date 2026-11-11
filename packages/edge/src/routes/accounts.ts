@@ -51,6 +51,14 @@ accountRoutes.patch('/v1/workspaces/:id/accounts/:accountId/kind', async (c) => 
   return c.json({ account } satisfies AccountKindResult);
 });
 
+/** An admin removes a personal agent (docs/specs/agents.md §2): its account, and every delegation it acted through. Only a
+ * `personal_agent` account; a member's account goes through DELETE /members/:userId, a shared agent's through /agents. */
+accountRoutes.delete('/v1/workspaces/:id/accounts/:accountId', async (c) => {
+  const id = await adminOf(c as never, 'remove agents');
+  const account = await directory(c, 'removePersonalAgent', id, c.req.param('accountId'));
+  return c.json({ account });
+});
+
 accountRoutes.post('/v1/workspaces/:id/accounts/kind', async (c) => {
   const id = await adminOf(c as never, 'change account kinds');
   await bodyOf(c, BulkAccountKindBody);

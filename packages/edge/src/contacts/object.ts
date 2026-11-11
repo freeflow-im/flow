@@ -399,6 +399,7 @@ export class Contacts extends DurableObject<ContactsEnv> {
     try {
       await ns.get(ns.idFromName(org)).publish({
         type: 'contacts.changed', organizationId: org, actor: caller.account?.id ?? null,
+        ...(caller.via ? { via: caller.via } : {}), ...(caller.invokedBy ? { invokedBy: caller.invokedBy } : {}),
         ref: { organizationId: org, app: 'contacts', kind: 'contact', id: contact.id },
         audience: `account:${owner}`,
         ts: new Date().toISOString(),

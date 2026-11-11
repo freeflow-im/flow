@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { hashPassword, verifyPassword } from './passwords';
 import { DirectoryCore, accountGate, hashToken, newId, type Mail, type Sql } from './core';
 import { DIRECTORY_MIGRATIONS } from './schema';
+import { personalAgentFor } from './agents';
 import { FakeMailProvider } from '../mailprovider/fake';
 import { ProviderError } from '../mailprovider/provider';
 import { decryptBlob } from '../org/crypto/index';
@@ -681,7 +682,7 @@ describe('agent accounts', () => {
   });
   const join = (org: string, userId: string, sponsor: string | null = null) => ({ kind: 'join', id: org, user_id: userId, role: 'member', payload: sponsor });
 
-  it('gives an agent an address per organization, and follows the sponsor there out (platform.md §3.3)', async () => {
+  it('places a bridge agent in the organization it joins, as a shared agent, and refuses it anywhere else (agents.md §1)', async () => {
     const ann = await signUp('a@example.com');
     const bob = await signUp('b@example.com');
     const [o1, o2] = [newId(), newId()];
@@ -689,17 +690,107 @@ describe('agent accounts', () => {
     core.reserveSlug('beta', o2);
     const bot = newId();
     await core.applyOrgChanges(o1, [join(o1, ann.user.id), join(o1, bob.user.id), agent(bot, ann.user.id, 'builder'), join(o1, bot, ann.user.id)]);
-    // In o2 Bob brought it in, so Bob is its sponsor there.
-    await core.applyOrgChanges(o2, [join(o2, ann.user.id), join(o2, bob.user.id), join(o2, bot, bob.user.id)]);
-    expect(core.accountsOf(bot).map((a) => a.address).sort()).toEqual(['builder@acme.freeflow.im', 'builder@beta.freeflow.im']);
-    await core.applyOrgChanges(o2, [{ kind: 'leave', id: o2, user_id: ann.user.id, role: null, payload: null }]);
-    expect(core.organizationsOf(bot).sort()).toEqual([o1, o2].sort());
+    expect(core.accountsOf(bot).map((a) => a.address)).toEqual(['builder@acme.freeflow.im']);
+    expect(core.accountFor(bot, o1)).toMatchObject({ kind: 'native', sponsorId: ann.user.id, agentMode: 'shared' });
+    expect(core.getUser(bot, ann.user.id)).toMatchObject({ isAgent: true, agentMode: 'shared' });
+    // Bob brings it into o2: an agent belongs to one organization, so the join is refused before any member row.
+    await core.applyOrgChanges(o2, [join(o2, ann.user.id), join(o2, bob.user.id)]);
+    await expect(core.applyOrgChanges(o2, [join(o2, bot, bob.user.id)])).rejects.toThrow('this agent belongs to another organization');
+    expect(() => core.ensureAccount(bot, o2, 'member', 'Builder')).toThrow('belongs to another organization');
+    // So does o2's object reporting the same principal as born there (a redeem with the same name and key).
+    await expect(core.applyOrgChanges(o2, [agent(bot, bob.user.id, 'builder')])).rejects.toThrow('belongs to another organization');
+    expect(core.organizationsOf(bot)).toEqual([o1]);
+    // The sponsor leaves, and the agent follows (platform.md §3.3, rule 2).
     await core.applyOrgChanges(o1, [{ kind: 'leave', id: o1, user_id: ann.user.id, role: null, payload: null }]);
     expect(core.accountFor(bot, o1)!.state).toBe('removed');
-    expect(core.organizationsOf(bot)).toEqual([o2]);
-    core.tombstoneUser(bob.user.id);
     expect(core.organizationsOf(bot)).toEqual([]);
-    expect(core.organizationKnown(o2)).toBe(false);
+  });
+
+  it('refuses a token for a personal agent, and never changes a personal agent’s kind (agents.md §1, §2)', async () => {
+    const ann = await signUp('a@example.com');
+    const org = newId();
+    core.reserveSlug('acme', org);
+    await core.applyOrgChanges(org, [join(org, ann.user.id)]);
+    const agentId = personalAgentFor(nodeSqlOf(core), ann.user.id, org, 'Claude Desktop');
+    const account = core.accountFor(agentId, org)!;
+    expect(account).toMatchObject({ kind: 'personal_agent', address: null, state: 'active', sponsorId: ann.user.id, agentMode: 'personal', displayName: 'Claude Desktop' });
+    await core.applyOrgChanges(org, [{ kind: 'agent_token', id: newId(), user_id: agentId, role: null, payload: 'deadbeef' }]);
+    expect(nodeSqlOf(core).exec('SELECT 1 AS x FROM agent_tokens WHERE user_id = ?', agentId).toArray()).toEqual([]);
+    expect(() => core.setAccountKind(org, account.id, 'guest')).toThrow("a personal agent's account never changes kind");
+    expect(() => core.setAccountKind(org, core.accountFor(ann.user.id, org)!.id, 'personal_agent')).toThrow("a personal agent's account never changes kind");
+    // The same client again is the same agent; another client is another agent.
+    expect(personalAgentFor(nodeSqlOf(core), ann.user.id, org, 'Claude Desktop')).toBe(agentId);
+    expect(personalAgentFor(nodeSqlOf(core), ann.user.id, org, 'Cursor')).not.toBe(agentId);
+    expect(core.accountsOfOrganization(org).filter((a) => a.kind === 'personal_agent')).toHaveLength(2);
+    // An agent cannot sponsor one; nor can a person in an organization they are not in.
+    expect(() => personalAgentFor(nodeSqlOf(core), agentId, org, 'X')).toThrow('an agent cannot sponsor an agent');
+    expect(() => personalAgentFor(nodeSqlOf(core), ann.user.id, newId(), 'X')).toThrow('where its sponsor has an active account');
+  });
+
+  it('removes a personal agent: its delegations revoked, its principal tombstoned; a removed sponsor takes its agents along', async () => {
+    const ann = await signUp('a@example.com');
+    const bob = await signUp('b@example.com');
+    const org = newId();
+    core.reserveSlug('acme', org);
+    await core.applyOrgChanges(org, [join(org, ann.user.id), join(org, bob.user.id)]);
+    const sql = nodeSqlOf(core);
+    const mk = (sponsor: string, client: string) => {
+      const id = personalAgentFor(sql, sponsor, org, client);
+      sql.exec("INSERT INTO oauth_tokens (hash, kind, client_id, user_id, org_id, scope, family, expires_at, created_at) VALUES (?, 'refresh', 'c', ?, ?, 'files:read', ?, ?, 1)", `h-${id}`, sponsor, org, `fam-${id}`, Date.now() + 1e6);
+      sql.exec("INSERT INTO oauth_connections (id, family, user_id, org_id, client_name, origin, resource, created_at, agent_id) VALUES (?, ?, ?, ?, ?, 'o', 'r', 1, ?)", `c-${id}`, `fam-${id}`, sponsor, org, client, id);
+      return id;
+    };
+    const a1 = mk(ann.user.id, 'Claude Desktop');
+    const b1 = mk(bob.user.id, 'Claude Desktop');
+    const removed = core.removePersonalAgent(org, core.accountFor(a1, org)!.id);
+    expect(removed.state).toBe('removed');
+    expect(sql.exec('SELECT revoked_at FROM oauth_tokens WHERE family = ?', `fam-${a1}`).toArray()[0]!.revoked_at).not.toBeNull();
+    expect(sql.exec('SELECT 1 AS x FROM oauth_connections WHERE agent_id = ?', a1).toArray()).toEqual([]);
+    expect(sql.exec('SELECT deleted_at FROM users WHERE id = ?', a1).toArray()[0]!.deleted_at).not.toBeNull();
+    expect(() => core.removePersonalAgent(org, core.accountFor(bob.user.id, org)!.id)).toThrow('personal agent not found');
+    // Bob leaves: his agent's account follows, and its delegation is over.
+    await core.applyOrgChanges(org, [{ kind: 'leave', id: org, user_id: bob.user.id, role: null, payload: null }]);
+    expect(core.accountFor(b1, org)!.state).toBe('removed');
+    expect(sql.exec('SELECT revoked_at FROM oauth_tokens WHERE family = ?', `fam-${b1}`).toArray()[0]!.revoked_at).not.toBeNull();
+  });
+
+  it('places agents made before kinds, once: shared in their earliest organization, accounts elsewhere removed, a personal agent per connection (phase A)', async () => {
+    const ann = await signUp('a@example.com');
+    const bob = await signUp('b@example.com');
+    const [o1, o2] = [newId(), newId()];
+    core.reserveSlug('acme', o1);
+    core.reserveSlug('beta', o2);
+    await core.applyOrgChanges(o1, [join(o1, ann.user.id), join(o1, bob.user.id)]);
+    await core.applyOrgChanges(o2, [join(o2, ann.user.id), join(o2, bob.user.id)]);
+    const sql = nodeSqlOf(core);
+    // A bridge agent as the cut-over imported it: no mode, no organization, accounts in two organizations (o2 first).
+    const bot = newId();
+    sql.exec("INSERT INTO users (id, email, password_hash, display_name, is_agent, agent_username, sponsor_user_id, created_at) VALUES (?, ?, 'x', 'Builder', 1, 'builder', ?, 1)", bot, `agent-${bot}@agents.flow.local`, ann.user.id);
+    sql.exec("INSERT INTO accounts (id, user_id, organization_id, address, display_name, role, kind, state, created_at, sponsor_user_id, hosted_at) VALUES (?, ?, ?, 'builder@beta.freeflow.im', 'Builder', 'member', 'native', 'active', 10, ?, 5)", newId(), bot, o2, bob.user.id);
+    sql.exec("INSERT INTO accounts (id, user_id, organization_id, address, display_name, role, kind, state, created_at, sponsor_user_id) VALUES (?, ?, ?, 'builder@acme.freeflow.im', 'Builder', 'member', 'native', 'active', 20, ?)", newId(), bot, o1, ann.user.id);
+    // Two connections of one client and one of another, and a dead one whose person left its organization.
+    for (const [fam, client, org] of [['f1', 'Claude Desktop', o1], ['f2', 'Claude Desktop', o1], ['f3', 'Cursor', o2], ['f4', 'Claude Desktop', newId()]]) {
+      sql.exec("INSERT INTO oauth_connections (id, family, user_id, org_id, client_name, origin, resource, created_at) VALUES (?, ?, ?, ?, ?, 'o', 'r', 1)", `c-${fam}`, fam, ann.user.id, org, client);
+    }
+    const again = new DirectoryCore(sql, { webUrlBase: 'https://app.test', registrationEnabled: true, send: async () => {} });
+    expect(again.getUser(bot, ann.user.id)).toMatchObject({ agentMode: 'shared' });
+    expect(sql.exec('SELECT organization_id FROM users WHERE id = ?', bot).toArray()[0]!.organization_id).toBe(o2);
+    expect(again.accountFor(bot, o2)!.state).toBe('active');
+    expect(again.accountFor(bot, o1)).toMatchObject({ state: 'removed', statusMessage: expect.stringContaining('belongs to another organization') });
+    const agents = (id: string) => sql.exec('SELECT agent_id FROM oauth_connections WHERE id = ?', id).toArray()[0]!.agent_id as string | null;
+    expect(agents('c-f1')).toBeTruthy();
+    expect(agents('c-f1')).toBe(agents('c-f2'));
+    expect(agents('c-f3')).toBeTruthy();
+    expect(agents('c-f3')).not.toBe(agents('c-f1'));
+    expect(agents('c-f4')).toBeNull();
+    expect(again.accountFor(agents('c-f1')!, o1)).toMatchObject({ kind: 'personal_agent', address: null, sponsorId: ann.user.id, agentMode: 'personal' });
+    expect(again.accountFor(agents('c-f3')!, o2)).toMatchObject({ kind: 'personal_agent', agentMode: 'personal' });
+    // Run again: nothing moves.
+    const before = sql.exec('SELECT COUNT(*) AS n FROM users').toArray()[0]!.n;
+    again.backfillAgents();
+    expect(sql.exec('SELECT COUNT(*) AS n FROM users').toArray()[0]!.n).toBe(before);
+    // A removed one's hosted mailbox is suspended (the provisioning outbox), as any removal is.
+    expect(again.takeProvisioning()).toEqual([]);
   });
 });
 

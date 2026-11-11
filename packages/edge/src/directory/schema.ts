@@ -285,4 +285,13 @@ export const DIRECTORY_MIGRATIONS: string[] = [
   ALTER TABLE accounts_new RENAME TO accounts;
   CREATE INDEX accounts_organization ON accounts(organization_id);
   CREATE INDEX accounts_sponsor ON accounts(sponsor_user_id);`,
+  // Agents as kinds (docs/specs/agents.md §1, §2, phase A): the one organization an agent belongs to and its mode,
+  // `personal` or `shared`, on the principal; the personal agent a /mcp delegation acts through, on its connection. The
+  // rows are filled by DirectoryCore.backfillAgents, because an existing agent's organization is a choice (its earliest
+  // account) and a connection's personal agent is a new principal with a UUIDv7, neither of which SQL can make.
+  `ALTER TABLE users ADD COLUMN organization_id TEXT;
+  ALTER TABLE users ADD COLUMN mode TEXT;
+  CREATE INDEX users_agent_organization ON users(organization_id) WHERE is_agent = 1;
+  ALTER TABLE oauth_connections ADD COLUMN agent_id TEXT;
+  CREATE INDEX oauth_connections_agent ON oauth_connections(agent_id);`,
 ];

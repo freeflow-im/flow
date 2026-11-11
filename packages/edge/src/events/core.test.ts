@@ -55,6 +55,12 @@ describe('the event log', () => {
     expect(events[2]!.actor).toBeNull();
     expect(next).toBe(3);
     expect(core.read({ since: 3 }, BOB)).toEqual({ events: [], next: 3 });
+    // Agents as kinds (agents.md §3): `via` and `invokedBy` ride along when given, and are absent otherwise.
+    core.publish(ev('chat.message.created', { id: 'e4', via: 'agent-1' }));
+    core.publish(ev('docs.file.changed', { id: 'e5', actor: 'acct-omni', invokedBy: 'acct-ann' }));
+    const later = core.read({ since: 3 }, BOB).events;
+    expect(later.map((e) => [e.id, e.via, e.invokedBy])).toEqual([['e4', 'agent-1', undefined], ['e5', undefined, 'acct-ann']]);
+    expect('via' in events[0]!).toBe(false);
     expect(() => core.publish(ev('chat.x', { id: 'e1' }))).toThrow();
     expect(() => core.publish(ev('chat.typing'))).toThrow();
     expect(() => core.publish(ev('chat.x', { audience: 'everyone' as never }))).toThrow();

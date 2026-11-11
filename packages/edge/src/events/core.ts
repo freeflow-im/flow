@@ -104,6 +104,10 @@ export const EVENTS_MIGRATIONS: string[] = [
   CREATE INDEX schedules_subscription ON schedules (subscription_id);`,
   // The events shared by reference (phase 3.3): a read asks whether any follow its cursor before it fetches the reader's shares.
   `CREATE INDEX events_ref_audience ON events (seq) WHERE audience LIKE 'ref:%';`,
+  // Agents as kinds (docs/specs/agents.md §3): the personal agent acting as the actor, and the account that asked a shared
+  // agent for the turn the event came from.
+  `ALTER TABLE events ADD COLUMN via TEXT;
+  ALTER TABLE events ADD COLUMN invoked_by TEXT;`,
 ];
 
 const AUDIENCE = /^(org|channel:.+|account:.+|ref:.+)$/;
@@ -126,9 +130,9 @@ export class EventsCore {
     const id = input.id || crypto.randomUUID();
     const ts = Date.parse(input.ts);
     const row = this.sql.exec(
-      `INSERT INTO events (id, type, actor, ref, channel_id, audience, caused_by, depth, ts, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
+      `INSERT INTO events (id, type, actor, ref, channel_id, audience, caused_by, depth, ts, data, via, invoked_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
       id, input.type, input.actor ?? null, input.ref ? formatReference(input.ref) : null, input.channelId ?? null, input.audience,
-      input.causedBy ?? null, input.depth ?? 0, Number.isFinite(ts) ? ts : Date.now(), JSON.stringify(input.data ?? null),
+      input.causedBy ?? null, input.depth ?? 0, Number.isFinite(ts) ? ts : Date.now(), JSON.stringify(input.data ?? null), input.via ?? null, input.invokedBy ?? null,
     ).toArray()[0]!;
     return { seq: row.seq as number, id };
   }
@@ -554,6 +558,7 @@ function toEvent(r: Record<string, unknown>, organizationId: string): PlatformEv
     id: r.id as string, seq: r.seq as number, type: r.type as string, organizationId, actor: (r.actor as string | null) ?? null,
     ...(ref ? { ref } : {}), ...(r.channel_id ? { channelId: r.channel_id as string } : {}),
     ...(r.caused_by ? { causedBy: r.caused_by as string } : {}),
+    ...(r.via ? { via: r.via as string } : {}), ...(r.invoked_by ? { invokedBy: r.invoked_by as string } : {}),
     depth: r.depth as number, ts: new Date(r.ts as number).toISOString(), data: JSON.parse(r.data as string),
   };
 }

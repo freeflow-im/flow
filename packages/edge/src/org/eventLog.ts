@@ -18,6 +18,23 @@ function actingUser(data: unknown): string | null {
   return id || null;
 }
 
+/** A caller's agent fields for the events its request publishes (agents.md §3), as far as this object can vouch for them. */
+export interface AgentStamp { via?: string; invokedBy?: string }
+
+/**
+ * `via` is taken as the Worker resolved it from a delegation. `invokedBy` is an agent's own claim of who asked for its turn,
+ * so it is kept only when the caller is an agent and the account named is a member of the organization other than the agent.
+ */
+export function agentStampFor(sql: Sql, workspaceId: string, caller: { user: { isAgent?: boolean } | null; account: { id: string } | null; via?: string | null; invokedBy?: string | null }): AgentStamp {
+  const out: AgentStamp = {};
+  if (caller.via) out.via = caller.via;
+  if (caller.invokedBy && caller.user?.isAgent && caller.account && caller.invokedBy !== caller.account.id) {
+    const known = sql.exec('SELECT 1 AS x FROM workspace_members WHERE workspace_id = ? AND account_id = ?', workspaceId, caller.invokedBy).toArray().length > 0;
+    if (known) out.invokedBy = caller.invokedBy;
+  }
+  return out;
+}
+
 /**
  * The log entry for one socket event, or null when it is not logged: `chat.<type>`, the acting user's account as
  * `actor`, and the audience: a user's own subject goes to that user's account (none known: not logged), a private

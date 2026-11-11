@@ -33,7 +33,9 @@ export function parseReference(s: string): Reference | null {
 /** One event in an organization's append-only log (§5.2, "The envelope").
  * `type` is `'<app>.<type>'`; `seq` is monotonic within the organization;
  * `actor` is the acting account's id, or null when no account acted (mail from
- * outside, a system event); `causedBy` is the job id that caused it. */
+ * outside, a system event); `causedBy` is the job id that caused it. `via` is the personal agent acting as the actor
+ * ("Ann, via her assistant"); `invokedBy` is the account that asked a shared agent for the turn the event came from
+ * ("Omni, asked by Scott") (agents.md §3). */
 export interface PlatformEvent<T = unknown> {
   id: string;
   seq: number;
@@ -43,6 +45,8 @@ export interface PlatformEvent<T = unknown> {
   ref?: Reference;
   channelId?: string;
   causedBy?: string;
+  via?: string;
+  invokedBy?: string;
   depth: number;
   ts: string;
   data: T;
@@ -174,14 +178,23 @@ export type PrincipalKind = (typeof PRINCIPAL_KINDS)[number];
 export const PRINCIPAL_STATUSES = ['active', 'suspended', 'deleted'] as const;
 export type PrincipalStatus = (typeof PRINCIPAL_STATUSES)[number];
 
+/** An agent's kind (docs/specs/agents.md §1), set when it is made and never changed: a `personal` agent acts as its
+ * sponsor through a delegation and only the sponsor may use it; a `shared` agent holds only its own grants and every
+ * member of its organization may use it. `group` comes later. */
+export const AGENT_MODES = ['personal', 'shared'] as const;
+export type AgentMode = (typeof AGENT_MODES)[number];
+
 /** A person or an agent: how someone signs in and nothing more (§2.1).
- * `sponsorId` is required for an agent and names a person principal. */
+ * `sponsorId` is required for an agent and names a person principal; so are `organizationId` (the one organization
+ * the agent belongs to, agents.md §1) and `mode`. */
 export interface PrincipalDTO {
   id: string;
   kind: PrincipalKind;
   loginEmail: string;
   displayName: string;
   sponsorId?: string;
+  organizationId?: string;
+  mode?: AgentMode;
   status: PrincipalStatus;
   createdAt: string;
 }
@@ -192,9 +205,13 @@ export const ACCOUNT_ROLES = ['owner', 'admin', 'member'] as const;
 export type AccountRole = (typeof ACCOUNT_ROLES)[number];
 
 /** `native` has an address, a mailbox and a native calendar; `guest` is a member with none of them (§3.3): the same
- * roles, channels, DMs, mentions and Docs, and no address, since an address that bounces is a trap. */
-export const ACCOUNT_KINDS = ['native', 'guest'] as const;
+ * roles, channels, DMs, mentions and Docs, and no address, since an address that bounces is a trap. `personal_agent`
+ * is a personal agent's account (agents.md §2): no address, mailbox, calendars, channels or grants; it exists so the
+ * organization can see, suspend and remove the agent, and never changes kind. */
+export const ACCOUNT_KINDS = ['native', 'guest', 'personal_agent'] as const;
 export type AccountKind = (typeof ACCOUNT_KINDS)[number];
+/** The kinds a member (a person) can be: what an invitation or the Kind column may ask for. */
+export type MemberKind = Exclude<AccountKind, 'personal_agent'>;
 
 /** The provisioning states (§3.4), then active, suspended, removed. */
 export const ACCOUNT_STATES = ['requested', 'mailbox_ready', 'calendars_ready', 'active', 'suspended', 'removed'] as const;
@@ -215,6 +232,9 @@ export interface AccountDTO {
   statusMessage?: string | null;
   /** The account's hosted mailbox exists (provisioning's mailbox step is done). Absent where the directory did not say. */
   hosted?: boolean;
+  /** An agent's account only (agents.md §2): the person responsible for it here, and its kind. Absent for a person. */
+  sponsorId?: string | null;
+  agentMode?: AgentMode | null;
   createdAt: string;
 }
 

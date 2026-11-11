@@ -251,8 +251,8 @@ async function mcpEndpoint(c: C): Promise<Response> {
     console.log(`${c.req.method} ${endpoint} -> 401 ${who.reason} [${(c.req.header('user-agent') ?? '').slice(0, 24)}]`);
     return json({ error: 'unauthorized', reason: who.reason, error_description: who.description }, 401, { ...CORS, 'www-authenticate': wwwAuthenticate(issuer, endpoint, authorization ? 'invalid_token' : undefined, who.description) });
   }
-  const { userId, email, orgId, accountId, scope } = who.caller;
-  const res = await c.env.DOCS.get(c.env.DOCS.idFromName(orgId)).mcp(c.req.raw, { userId, email, orgId, accountId, scope, endpoint, origin: issuer });
+  const { userId, email, orgId, accountId, scope, agentId } = who.caller;
+  const res = await c.env.DOCS.get(c.env.DOCS.idFromName(orgId)).mcp(c.req.raw, { userId, email, orgId, accountId, via: agentId, scope, endpoint, origin: issuer });
   return withHeaders(res, CORS);
 }
 mcpRoutes.all('/mcp', mcpEndpoint);

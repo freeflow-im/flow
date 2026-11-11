@@ -11,6 +11,11 @@ export interface CallerContext {
   organizationId: string | null; account: AccountDTO | null;
   /** `x-flow-job`: the request is part of this wake job's turn (platform.md §5.2, loop safety). The Org object checks it is the caller's. */
   jobId?: string | null;
+  /** A personal agent acting as this account (agents.md §3): its principal id. The /mcp door sets it from the delegation. */
+  via?: string | null;
+  /** `x-flow-invoked-by`: a shared agent's turn, asked for by this account (agents.md §3). Sent by the bridge; the Org object
+   * checks it names a member of the organization other than the agent before an event carries it. */
+  invokedBy?: string | null;
 }
 
 /** A per-person object's Hono bindings (Mail, Calendar): the request's caller context, as `c.env.caller`. */

@@ -1,4 +1,5 @@
 // Minimal /v1 REST client speaking the agent bearer token.
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes, randomUUID } from 'node:crypto';
 import type {
   AccountDTO,
@@ -90,8 +91,14 @@ async function parseError(res: Response): Promise<never> {
   throw new FlowApiError(res.status, code, message);
 }
 
-/** Headers every request of one client carries besides its token: a wake job's `x-flow-job`, during its turn. */
+/** Headers every request of one client carries besides its token: a wake job's `x-flow-job` during its turn, and
+ * `x-flow-invoked-by`, the account that asked for the turn (agents.md §3). */
 export type ExtraHeaders = () => Record<string, string> | Promise<Record<string, string>>;
+
+/** The account that asked for the turn running in this async context (agents.md §3): every request made during it says so,
+ * "Omni, asked by Scott". Set by the bridge around a message's turn (`withInvoker`). */
+const invoker = new AsyncLocalStorage<string>();
+export const withInvoker = <T>(accountId: string | null | undefined, fn: () => T): T => (accountId ? invoker.run(accountId, fn) : fn());
 
 export class FlowApi {
   constructor(
@@ -102,11 +109,17 @@ export class FlowApi {
 
   /** This client, with every request marked as part of the wake job's turn (platform.md §5.2: its events carry the job). */
   withJob(jobId: string): FlowApi {
-    return new FlowApi(this.serverUrl, this.token, () => ({ 'x-flow-job': jobId }));
+    return this.withHeaders({ 'x-flow-job': jobId });
+  }
+
+  private withHeaders(more: Record<string, string>): FlowApi {
+    const prev = this.extraHeaders;
+    return new FlowApi(this.serverUrl, this.token, async () => ({ ...(await prev()), ...more }));
   }
 
   private async auth(): Promise<Record<string, string>> {
-    return { ...(await this.extraHeaders()), authorization: `Bearer ${this.token}` };
+    const asker = invoker.getStore();
+    return { ...(await this.extraHeaders()), ...(asker ? { 'x-flow-invoked-by': asker } : {}), authorization: `Bearer ${this.token}` };
   }
 
   private async req<T>(method: string, path: string, body?: unknown): Promise<T> {

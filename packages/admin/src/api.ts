@@ -101,5 +101,7 @@ export const adminApi = {
   // Channels (the Automations form's choices) and agents (§3.4).
   channels: async (id: string) => (await request<{ channels: ChannelDTO[] }>('GET', `${ws(id)}/channels`)).channels,
   removeAgent: (id: string, userId: string) => request<unknown>('DELETE', `${ws(id)}/agents/${encodeURIComponent(userId)}`),
+  /** A personal agent's account removed, with its delegations (docs/specs/agents.md §2). */
+  removePersonalAgent: (id: string, accountId: string) => request<{ account: AccountDTO }>('DELETE', `${ws(id)}/accounts/${encodeURIComponent(accountId)}`),
   agentInvite: (id: string) => request<AgentInviteDTO>('POST', `${ws(id)}/agent-invites`),
 };

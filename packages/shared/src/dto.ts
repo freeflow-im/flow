@@ -30,6 +30,9 @@ export interface UserDTO {
    * humans and unsponsored agents. Mirrors WorkspaceMemberDTO.sponsorId so a
    * profile card fetched via /v1/users/:id can show the sponsor without the roster. */
   sponsorId: string | null;
+  /** Agents only (docs/specs/agents.md §1): `personal` or `shared`. Absent or null for a person, and for an agent the
+   * directory has not placed yet. */
+  agentMode?: 'personal' | 'shared' | null;
   /** Per-user notification prefs (phase 10). Missing key = on. */
   notificationPrefs: NotificationPrefs;
   /** While true, all notification alerts are suppressed (status-driven DND). */
