@@ -58,7 +58,7 @@ export function appToolContexts(env: object, who: () => Promise<CallerContext | 
       origin,
       fetch: async (path, init) => {
         const caller = await who();
-        if (!caller?.account) return Response.json({ error: { code: 'no_account', message: `join an organization to use ${m.tab?.label ?? m.name}` } }, { status: 403 });
+        if (!caller?.account) return Response.json({ error: { code: 'no_account', message: `join an organization to use ${m.tab?.label ?? m.name.charAt(0).toUpperCase() + m.name.slice(1)}` } }, { status: 403 });
         return ns.get(ns.idFromName(caller.account.id)).handle(new Request(`${origin}${path}`, init), caller);
       },
     };

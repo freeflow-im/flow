@@ -10,7 +10,8 @@ const contacts = APP_MANIFESTS.find((m) => m.name === 'contacts')!;
 
 describe('the Contacts manifest', () => {
   it('declares an account-scoped app with its object, routes, tab, pages, client and events', () => {
-    expect(contacts).toMatchObject({ path: '/contacts', scope: 'account', object: { className: 'Contacts' }, routes: 'contacts', tab: { label: 'Contacts', shortcut: '5' } });
+    expect(contacts).toMatchObject({ path: '/contacts', scope: 'account', object: { className: 'Contacts' }, routes: 'contacts' });
+    expect(contacts.tab).toBeUndefined(); // reached from Mail's folder list, not the suite bar
     expect(contacts.client).toEqual({ dist: 'packages/contacts/dist', basePath: '/contacts/', optional: true });
     expect(contacts.pages?.every((p) => p.signIn)).toBe(true);
     expect(contacts.events).toEqual(['contacts.changed']);

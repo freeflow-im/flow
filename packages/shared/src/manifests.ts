@@ -197,7 +197,8 @@ export const APP_MANIFESTS: AppManifest[] = [
   {
     // Contacts (platform.md §11, phase 6.5): the fifth app, added by this manifest. One object per account: the person's own
     // contacts, which they may share with the organization (an `org` viewer grant on their list); the routes merge in the
-    // organization's members and the people they wrote to from Mail.
+    // organization's members and the people they wrote to from Mail. No tab of its own: Mail's folder list links to it
+    // (packages/mail, Sidebar.tsx), as it is where contacts are used.
     name: 'contacts',
     path: '/contacts',
     scope: 'account',
@@ -228,7 +229,6 @@ export const APP_MANIFESTS: AppManifest[] = [
       },
     ],
     assistant: { pages: ['contacts'] },
-    tab: { label: 'Contacts', shortcut: '5', badge: 'none' },
     client: { dist: 'packages/contacts/dist', basePath: '/contacts/', optional: true },
     pages: [
       { path: '/contacts', html: 'contacts.html', signIn: true },
