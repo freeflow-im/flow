@@ -54,6 +54,7 @@ import { RecentOpens, type Recents } from './recents.ts';
 import { openedFiles, recentFiles, recentsAvailable, whereOf } from '#runtime/local/systemRecents';
 import { googleFromEnv, GoogleLogin, GoogleLoginError, GOOGLE_STATE_TTL_MS, type GoogleOptions } from './googleAuth.ts';
 import { mountPlugin } from '../plugin/server/mount.ts';
+import type { PluginHandoff } from '../plugin/server/http.ts';
 import { ToolError } from '../plugin/server/files.ts';
 import { mailerFromEnv, type Mailer } from './mail.ts';
 import { RevisionFeed } from './revisionFeed.ts';
@@ -200,6 +201,8 @@ export interface AppOptions {
     basePath: string;
     /** The suite's sign-in page, for the plugin's OAuth pages (absolute, as they may be reached on another host); default "/". */
     signInUrl?: string;
+    /** The plugin on a host of its own, whose sign-in is the suite's on another host: handed across (plugin/server/http.ts, PluginHandoff). */
+    handoff?: PluginHandoff;
     /** Whether the user is a member of the organization (the host's workspace), whose files they may then list and make (server/scope.ts). */
     isMember(userId: string, workspaceId: string): Promise<boolean>;
     /** The organizations the user is a member of: their shared files are theirs to open, and Move to organization… offers them. */
@@ -438,7 +441,7 @@ export async function buildApp(opts: AppOptions) {
   // The plugin answers its paths (/mcp, /oauth/*, ...) in a hook before routing: on the host's server when
   // hosted, as the hook of an encapsulated plugin runs only for that plugin's routes.
   const pluginOAuth = opts.plugin
-    ? await mountPlugin(host?.app ?? app, { db, dataDir: opts.dataDir, sheets, images, files: storedFiles, auth: host ? null : auth, google: host ? null : google, sendMail, mailAllowed: (email) => !tooManyMails('verify', email), pdf: pdfMaker ?? undefined, publicUrl: opts.plugin.publicUrl, webDir: opts.plugin.webDir, sessionCookie: SESSION_COOKIE, sessionUser: host ? (cookieHeader) => host.userForCookie(cookieHeader) : undefined, suiteSignIn: host ? (host.signInUrl ?? '/') : undefined, production: !!opts.staticDir })
+    ? await mountPlugin(host?.app ?? app, { db, dataDir: opts.dataDir, sheets, images, files: storedFiles, auth: host ? null : auth, google: host ? null : google, sendMail, mailAllowed: (email) => !tooManyMails('verify', email), pdf: pdfMaker ?? undefined, publicUrl: opts.plugin.publicUrl, webDir: opts.plugin.webDir, sessionCookie: SESSION_COOKIE, sessionUser: host ? (cookieHeader) => host.userForCookie(cookieHeader) : undefined, suiteSignIn: host ? (host.signInUrl ?? '/') : undefined, handoff: host?.handoff, production: !!opts.staticDir })
     : null;
   // Raw file uploads (xlsx import).
   app.addContentTypeParser([XLSX_MIME, PPTX_MIME, DOCX_MIME, 'application/vnd.ms-excel', 'application/octet-stream'], { parseAs: 'buffer', bodyLimit: MAX_IMPORT_BYTES }, (_req, body, done) =>

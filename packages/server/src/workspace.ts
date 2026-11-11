@@ -13,7 +13,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { config } from './config.js';
 import * as auth from './services/auth.js';
 import { isWorkspaceMember, workspaceNamesOf } from './services/workspaces.js';
-import { clearSessionCookie, sessionTokenInCookieHeader, sessionTokenOf } from './lib/sessionCookie.js';
+import { clearSessionCookie, sessionCookieHeader, sessionTokenInCookieHeader, sessionTokenOf } from './lib/sessionCookie.js';
+import { mirrorUser } from './services/mirrorUser.js';
 
 export const WORKSPACE_BASE = '/docs';
 /** Where the client lived until 2026-11-10; its addresses are sent to WORKSPACE_BASE. */
@@ -97,6 +98,7 @@ export async function mountWorkspace(app: FastifyInstance): Promise<boolean> {
     return isWorkspaceMember(workspaceId, userId);
   });
   const organizationsOf = cached((userId) => workspaceNamesOf(userId));
+  const webBase = config.webUrlBase.replace(/\/+$/, '');
   await mod.buildApp({
     dataDir,
     staticDir: fs.existsSync(path.join(staticDir, 'index.html')) ? staticDir : undefined,
@@ -108,8 +110,23 @@ export async function mountWorkspace(app: FastifyInstance): Promise<boolean> {
     host: {
       app,
       basePath: WORKSPACE_BASE,
-      // The suite's sign-in, as an absolute address: the plugin's OAuth pages are reached on the old host names too.
-      signInUrl: `${config.webUrlBase.replace(/\/+$/, '')}/`,
+      // The plugin's OAuth pages are reached on the old host names, and a session cookie is per host, so the suite's
+      // sign-in (on its own host, the Worker's) is handed across: the plugin's /oauth/sign-in sends the browser to
+      // the Worker's /api/auth/cross-host, which comes back to /oauth/handoff with a one-time key; this server trades
+      // it for the user (mirrored into `users` when new here) and signs them in on this host (routes/crossHost.ts).
+      signInUrl: '/oauth/sign-in',
+      handoff: {
+        signIn: (host: string, next: string) => `${webBase}/api/auth/cross-host?host=${encodeURIComponent(host)}&next=${encodeURIComponent(next)}`,
+        redeem: async (key: string) => {
+          const secret = config.edgeOriginSecret;
+          if (!secret) return null;
+          const res = await fetch(`${webBase}/api/auth/cross-host/exchange`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-edge-secret': secret }, body: JSON.stringify({ key }) }).catch(() => null);
+          if (!res?.ok) return null;
+          const { user } = (await res.json()) as { user: { id: string; email: string; displayName: string; avatarUrl: string | null } };
+          return mirrorUser(user);
+        },
+        sessionCookie: async (userId: string) => sessionCookieHeader(await auth.issueSession(userId, 'ChatGPT plugin sign-in')),
+      },
       authenticate: (req: FastifyRequest) => userOf(sessionTokenOf(req)),
       signOut: async (req: FastifyRequest, reply: FastifyReply) => {
         const token = sessionTokenOf(req);

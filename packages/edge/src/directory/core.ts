@@ -75,6 +75,8 @@ const RESET_TTL_MINUTES = 60;
 const SIGNIN_TTL_MINUTES = 15;
 const APP_LINK_TTL = 2 * 60_000;
 const DESKTOP_HANDOFF_TTL = 10 * 60_000;
+/** How long the ChatGPT plugin's server has to trade a cross-host sign-in key (routes/crossHost.ts): one redirect's worth. */
+const CROSS_HOST_HANDOFF_TTL = 2 * 60_000;
 const AGENT_TOUCH = 60_000;
 const HANDOFF_TTL = 10 * 60_000;
 const HANDOFF_CODE_TTL = 60_000;
@@ -650,6 +652,26 @@ export class DirectoryCore {
     const user = used && this.userById(used.user_id as string);
     if (!user || user.deleted_at) throw unauthorized('invalid or expired sign-in key');
     return this.issueSession(user.id as string, clientInfo);
+  }
+
+  /**
+   * The ChatGPT plugin's sign-in on its own hosts (routes/crossHost.ts): a key for the person signed in here, which the
+   * plugin's server trades once, server to server, for who they are, and signs them in on its host. The desktop
+   * handoff's table, with a shorter life.
+   */
+  async createCrossHostHandoff(userId: string): Promise<string> {
+    const key = newToken();
+    const now = Date.now();
+    this.sql.exec('DELETE FROM desktop_handoffs WHERE expires_at < ?', now);
+    this.sql.exec('INSERT INTO desktop_handoffs (key_hash, user_id, expires_at) VALUES (?, ?, ?)', await hashToken(key), userId, now + CROSS_HOST_HANDOFF_TTL);
+    return key;
+  }
+
+  async redeemCrossHostHandoff(key: string): Promise<UserDTO> {
+    const used = this.rows('DELETE FROM desktop_handoffs WHERE key_hash = ? AND expires_at > ? RETURNING user_id', await hashToken(key), Date.now())[0];
+    const user = used && this.userById(used.user_id as string);
+    if (!user || user.deleted_at) throw unauthorized('invalid or expired sign-in key');
+    return toUserDTO(user, user.id as string);
   }
 
   /** The server's `rateAllowDb`: a fixed window per key. True when the call is allowed. */

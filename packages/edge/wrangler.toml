@@ -57,6 +57,8 @@ MXROUTE_SERVER = "sunfire.mxrouting.net"
 ASSET_HOSTS = "app.freeflow.im,edge.freeflow.im"
 # The hosts the ported API answers on: app.freeflow.im since the cut-over (2026-11-02).
 PORTED_HOSTS = "edge.freeflow.im,app.freeflow.im"
+# The ChatGPT plugin's hosts, on the origin (docs/ops/CUTOVER_TO_CLOUDFLARE.md): their sign-in is this host's, handed across (routes/crossHost.ts).
+PLUGIN_HOSTS = "docs.freeflow.im,mcpdocs.freeflow.im"
 WEB_URL_BASE = "https://app.freeflow.im"
 # The web-to-app sign-in handoff's return destinations, exact (the server's FLOW_HANDOFF_RETURN_URLS): the Mac, iOS and
 # desktop apps' flow://signin, and the web client's own page. None turns the handoff off, and /v1/client-info says so.

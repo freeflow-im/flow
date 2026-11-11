@@ -56,7 +56,7 @@ Then:
   is the one from before, and a file opens and saves.
 - `curl -s https://docs.freeflow.im/mcp` answers the plugin as before (a 401 or an MCP error, not a redirect), and
   in ChatGPT the Universal Docs plugin lists files after a sign-in through the suite (its OAuth page sends to
-  `app.freeflow.im`).
+  `app.freeflow.im`'s cross-host sign-in and comes back with a key, since 2026-11-10: sessions are per host).
 - A Workspace user who had no suite account signs in to the suite with their Workspace password (the scrypt hash
   is accepted and replaced); one who had both signs in as before and sees their Workspace files.
 - Download as PDF works (Chromium is in the image).
