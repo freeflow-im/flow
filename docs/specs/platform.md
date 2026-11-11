@@ -273,8 +273,9 @@ runs and when it last ran, and nothing else; no admin tool starts its turns or r
 **Guests** are members with no address, no mailbox and no native calendar: the same roles, channels, DMs, mentions and
 Docs. A guest has no address at all, because an address with no mailbox behind it bounces. An owner or admin picks each
 account's kind (`PATCH /v1/workspaces/:id/accounts/:accountId/kind`, or every `member` at once with
-`POST /v1/workspaces/:id/accounts/kind`); the owner is always native, and so is an agent, which is brought in to work
-and needs its address and mailbox for it. A new joiner is native unless the invitation that brought them in was a guest
+`POST /v1/workspaces/:id/accounts/kind`); the owner is always native, and so is a shared agent, which is brought in to work
+and needs its address and mailbox for it; a personal agent's account is always `personal_agent`, and its kind
+never changes. A new joiner is native unless the invitation that brought them in was a guest
 invitation (`POST /v1/workspaces/:id/invites { kind: 'guest' }`, docs/specs/workspace-admin.md §6.5); there is no
 default-kind policy (operator ruling, decision_log 2026-11-09). A guest is never provisioned and starts `active`.
 Made a guest, an account's address is let go and a hosted mailbox is suspended, kept for the retention period and then
@@ -540,8 +541,8 @@ the bus is where events are kept and read.
 - **Loop safety on the server.** An event caused by a job carries `causedBy` and `depth + 1`. A subscription ignores
   events its own consumer caused unless it opts in, and the organization has a depth cap (default 4) past which no
   wake fires and the owner is told. This replaces the bridge's `agentChainLimit`.
-- **Guarantees.** At least once. In order within one organization. An agent in three organizations has three
-  subscriptions. Reads are bounded (`limit` ≤ 500) and cheap: one indexed range scan on `(seq)` with the filter in
+- **Guarantees.** At least once. In order within one organization. An agent belongs to one organization (§2.3),
+  so its subscriptions all read one log. Reads are bounded (`limit` ≤ 500) and cheap: one indexed range scan on `(seq)` with the filter in
   SQL and visibility applied per row.
 
 The mechanism is Figure 4 of `platform-layers.html`: publishers on the left, the log and its subscriptions in the
@@ -752,7 +753,7 @@ of a bridge socket.
 - **Live co-editing in Docs.** Several people and a shared agent editing one document at once needs live co-editing
   (a CRDT such as Yjs, or merging on the server) with presence, and suggestions with accept and reject. Until then an
   agent proposes a change in the document's thread and whoever accepts it applies it.
-- **Shared agents' mailboxes.** An agent is always native (§3.3), so every shared agent gets a mailbox, and each one
+- **Shared agents' mailboxes.** A shared agent is always native (§3.3), so every shared agent gets a mailbox, and each one
   costs money at the provider and uses the domain's daily send limit. Whether that holds when an organization has
   many small group agents (one per document, from "Add an assistant"), or such agents may be guests.
 - **Guests and shared agents.** Guests are members, so a shared agent answers them too. Whether an organization with
