@@ -1,0 +1,35 @@
+{
+  "name": "@flow/home",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "FreeFlow Home: the suite's home page at /home (docs/specs/home.md): a sidebar of the apps, channels and agents, and cards of what is new in each app.",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@flow/shared": "workspace:*",
+    "@flow/suite-bar": "workspace:*",
+    "@tanstack/react-query": "^5.62.0",
+    "lucide-react": "^1.67.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "catalog:",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "catalog:",
+    "jsdom": "^30.1.3",
+    "tailwindcss": "^4.3.3",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}

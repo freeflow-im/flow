@@ -89,6 +89,7 @@ proxies `/v1` (and Docs' `/api`) to the Worker on 8787:
 | Calendar | `cd packages/calendar && pnpm dev` | http://localhost:5186/calendar/ |
 | Contacts | `cd packages/contacts && pnpm dev` | http://localhost:5187/contacts/ |
 | Admin | `cd packages/admin && pnpm dev` | http://localhost:5188/admin/ |
+| Home | `cd packages/home && pnpm dev` | http://localhost:5189/home/ |
 | Docs | `cd packages/docs && DOCS_API=http://127.0.0.1:8787 BASE_PATH=/docs/ pnpm dev:client` | http://localhost:5173/docs/ |
 
 Sign in on the Worker's URL first: the session cookie is per host, so a Vite
@@ -127,7 +128,7 @@ see [apps/desktop/README.md](apps/desktop/README.md)) — `apps/macos` and
 | `@flow/shared` | `dist/` — types, Zod schemas and the app manifests the Worker, the server, the web clients and the build scripts import. **Build this first;** a stale `dist` here surfaces as `SyntaxError: does not provide an export named …` when the server boots. |
 | `@flow/edge` | no output — `wrangler deploy` bundles it; `public/` is assembled from the clients' builds |
 | `@flow/server` | `dist/` — TypeScript plus a copy of `src/db/migrations/*.sql` |
-| `@flow/web`, `@flow/mail`, `@flow/calendar`, `@flow/contacts`, `@flow/admin` | `dist/` — typechecked (`tsc --noEmit`) then bundled by Vite, each for its base path |
+| `@flow/web`, `@flow/mail`, `@flow/calendar`, `@flow/contacts`, `@flow/admin`, `@flow/home` | `dist/` — typechecked (`tsc --noEmit`) then bundled by Vite, each for its base path |
 | `@flow/docs` | `dist/client/` — the Workspace client; `dist/plugin/` the ChatGPT plugin |
 | `flow-agent-bridge` | `dist/` — the published npm package |
 

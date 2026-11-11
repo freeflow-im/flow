@@ -21,6 +21,7 @@ on:
       - 'packages/docs/**'
       - 'packages/mail/**'
       - 'packages/calendar/**'
+      - 'packages/home/**'
       - 'packages/contacts/**'
       - 'packages/admin/**'
       # clients:paths end
