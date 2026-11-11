@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import sharp from '../lib/sharp';
 import { z } from 'zod';
 import { and, desc, eq, gt, isNull, ne, sql } from 'drizzle-orm';
@@ -318,8 +319,9 @@ export async function requireMembership(workspaceId: string, userId: string) {
     .limit(1);
   const m = rows[0];
   if (!m) throw notFound('workspace not found'); // don't leak existence
-  // A personal agent never acts here as itself (agents.md §1): it acts through its sponsor, marked `via`.
-  if (m.kind === 'personal_agent') throw forbidden('a personal agent acts only through its sponsor');
+  // A personal agent never acts here as itself (agents.md §1): it acts through its sponsor, marked `via`. The one
+  // exception is a person's assistant posting its answer to its sponsor (Org.postAsAssistant, agents.md §1.1).
+  if (m.kind === 'personal_agent' && !(m.runtime === 'hosted' && assistantPosting.getStore() === m.userId)) throw forbidden('a personal agent acts only through its sponsor');
   return m;
 }
 
@@ -393,6 +395,9 @@ async function unreadByWorkspace(userId: string): Promise<Map<string, number>> {
 }
 
 /** Whether the user is a member of the workspace (the Workspace app's organization files, packages/docs/server/scope.ts). */
+/** Set (to the assistant's id) while Org.postAsAssistant posts an assistant's answer: the one path an assistant writes by. */
+export const assistantPosting = new AsyncLocalStorage<string>();
+
 /** Leaves out external personal agents (Claude Desktop on /mcp, agents.md §1.1): on the member list for admins only, never in
  * Chat's roster, pickers or mentions. A person's assistant stays in. */
 export const notExternalAgent = () => sql`NOT (${workspaceMembers.kind} = 'personal_agent' AND ${workspaceMembers.runtime} IS NULL)`;

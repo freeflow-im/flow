@@ -390,6 +390,59 @@ export class Assistant extends DurableObject<AssistantEnv> {
     await step('done', { ok, note });
   }
 
+  /**
+   * A request to a person's assistant in Chat (agents.md §1.1), handed over by the organization's object: run as an async
+   * turn with the sponsor's access (marked `via` the assistant), in one conversation per thread or DM so its memory of
+   * one exchange stays with it, and the answer posted in Chat as the assistant itself.
+   */
+  async chatTurn(p: { organizationId: string; runtime: HostedRuntimeDTO; channelId: string; threadRootId: string | null; messageId: string; prompt: string }): Promise<void> {
+    const { runtime, organizationId } = p;
+    if (runtime.mode !== 'personal' || !runtime.sponsorId || !runtime.sponsorAccountId) return;
+    if (this.runningJobs.has(p.messageId)) return;
+    this.runningJobs.add(p.messageId);
+    const ORG = this.env.ORG;
+    const org = ORG?.get(ORG.idFromName(organizationId));
+    const conversation = `chat:${p.channelId}:${p.threadRootId ?? 'main'}`;
+    try {
+      const actorId = runtime.sponsorId;
+      const [user, account, channelIds] = await Promise.all([
+        this.directory<UserDTO>('getUser', actorId, actorId),
+        this.directory<AccountDTO | null>('accountById', runtime.sponsorAccountId),
+        org ? org.channelIdsOf(actorId) : Promise.resolve([] as string[]),
+      ]);
+      if (!account) throw new Error('the sponsor has no account');
+      const caller = { user, token: '', authKind: 'agent' as const, ip: '', organizationId, account, via: runtime.agentId } as AccountCaller;
+      const wrong = ownerMismatch(this, caller, 'the assistant in Chat');
+      if (wrong) throw new Error(wrong);
+      const docs: DocsCaller = { userId: actorId, email: user.email, token: '', ip: '', accountId: account.id, channelIds };
+      this.turnWho.set(conversation, { caller, docs, conversationUser: conversation });
+      const text = await withDocsContext(this.context, async () => {
+        const { agent } = this.service();
+        const abort = new AbortController();
+        const timer = setTimeout(() => abort.abort(), WAKE_TURN_MS);
+        let out = '';
+        let failed: string | null = null;
+        try {
+          await agent.runTurn(conversation, { message: p.prompt, context: { page: 'home' }, workspace: organizationId }, (e) => {
+            if (e.type === 'text') out += e.text;
+            else if (e.type === 'error') failed = e.message;
+          }, abort.signal, { scope: { ownerId: actorId, workspaceId: organizationId, private: true }, viewer: actorId });
+        } finally {
+          clearTimeout(timer);
+        }
+        if (failed) throw new Error(failed);
+        return out.trim();
+      });
+      if (text && org) await org.postAsAssistant({ agentUserId: runtime.agentId, channelId: p.channelId, threadRootId: p.threadRootId, body: text, clientMsgId: `assistant:${p.messageId}` });
+    } catch (err) {
+      console.error(`[assistant] chat ${p.messageId}: ${(err as Error)?.stack ?? err}`);
+      if (org) await org.postAsAssistant({ agentUserId: runtime.agentId, channelId: p.channelId, threadRootId: p.threadRootId, body: `Sorry, I could not answer that: ${agentErrorMessage(err).slice(0, 300)}`, clientMsgId: `assistant:${p.messageId}` }).catch(() => null);
+    } finally {
+      this.turnWho.delete(conversation);
+      this.runningJobs.delete(p.messageId);
+    }
+  }
+
   /** The person's own OpenAI key, for Docs' edit_image (its host.assistant.openaiKey); null for none or another person. */
   async openaiKey(userId: string): Promise<string | null> {
     const owner = this.state('owner_user_id');
