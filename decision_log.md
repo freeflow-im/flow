@@ -1,5 +1,19 @@
 # Decision log
 
+## 2026-11-11 — Hosted agents run on the shared Workers; coding agents run in a sandbox each (operator ruling)
+
+- **Ruling (Scott):** a hosted agent, the model loop with tools, runs in the platform's `AgentRuntime` object on the
+  shared Workers. It runs no code of its own: every effect goes through the registry's tools as the agent's account,
+  so the tools and the grants are its sandbox.
+- **Ruling (Scott):** an agent that needs a filesystem, a shell or its own credentials (a coding agent) runs in a
+  container the platform starts for it, one per agent, with the bridge inside, connected with the agent's token. Never
+  on the shared servers. This is a third runtime, "sandboxed", built after phase C; the container platform is a later
+  ruling (Cloudflare Containers or Railway).
+- **Why:** arbitrary code and per-agent secrets need isolation per agent; a model loop does not. Running the bridge
+  inside the container reuses the event bus and the registry unchanged, and lets the platform scope a personal agent's
+  token and show the confirm card, which an external bridge cannot.
+- **Where:** `docs/specs/agents.md` §6 (runtimes), §11 phase C′.
+
 ## 2026-11-11 — Agents: start over; every agent made before kinds is retired (operator ruling)
 
 - **Ruling (Scott):** the agents that exist before phase A of `docs/specs/agents.md` ships are all removed, not
