@@ -14,6 +14,8 @@ export function Agents({ org }: { org: WorkspaceDTO }) {
   const members = useQuery({ queryKey: ['members', org.id], queryFn: () => adminApi.members(org.id) });
   const all = members.data ?? [];
   const agents = all.filter((m) => m.isAgent);
+  const accounts = useQuery({ queryKey: ['accounts', org.id], queryFn: () => adminApi.accounts(org.id) });
+  const hostedOf = (userId: string) => (accounts.data ?? []).find((a) => a.principalId === userId)?.agentRuntime === 'hosted';
   const nameOf = (userId: string | null) => all.find((m) => m.userId === userId)?.displayName ?? 'unknown';
   const [confirming, setConfirming] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -30,6 +32,7 @@ export function Agents({ org }: { org: WorkspaceDTO }) {
 
   return (
     <>
+      <MakeHostedAgent org={org} onMade={() => { void qc.invalidateQueries({ queryKey: ['members', org.id] }); void qc.invalidateQueries({ queryKey: ['accounts', org.id] }); }} />
       <InviteAgent org={org} />
       <Card title="Shared agents" intro="Shared agents are members with a 🤖 mark, each sponsored by the person who invited them; anyone in the organization can ask them, and they keep no secrets from it. A shared agent is always native: its mailbox and calendars are part of its work." testid="card-agents">
         {members.isError && <ErrorLine error={errorText(members.error)} />}
@@ -39,9 +42,10 @@ export function Agents({ org }: { org: WorkspaceDTO }) {
             {agents.map((a: WorkspaceMemberDTO) => (
               <li key={a.userId} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-sm" data-testid={`agent-${a.displayName}`}>
                 <span className="font-medium">{a.displayName} 🤖</span>
-                <span className="text-xs text-muted">sponsored by {nameOf(a.sponsorId)}</span>
+                <span className="text-xs text-muted">sponsored by {nameOf(a.sponsorId)}{hostedOf(a.userId) ? ' · hosted here' : ''}</span>
                 {a.statusText && <span className="truncate text-xs text-muted">{a.statusText}</span>}
                 <span className="flex-1" />
+                {hostedOf(a.userId) && <HostedDefinition org={org} userId={a.userId} name={a.displayName} />}
                 {confirming === a.userId ? (
                   <Confirm question={`Remove ${a.displayName}? Its credentials are revoked; history stays.`} busy={remove.isPending} onYes={() => remove.mutate(a.userId)} onNo={() => setConfirming(null)} testid={`agent-remove-confirm-${a.displayName}`} />
                 ) : (
@@ -103,6 +107,66 @@ function PersonalAgents({ org, nameOf }: { org: WorkspaceDTO; nameOf: (userId: s
       )}
       <ErrorLine error={error} />
     </Card>
+  );
+}
+
+/**
+ * A hosted shared agent (docs/specs/agents.md §6): a member the platform runs, made here with a name and standing
+ * instructions; everyone in the organization can ask it from the panel, and it keeps no secrets from them.
+ */
+function MakeHostedAgent({ org, onMade }: { org: WorkspaceDTO; onMade(): void }) {
+  const [name, setName] = useState('');
+  const [instructions, setInstructions] = useState('');
+  const make = useMutation({
+    mutationFn: () => adminApi.makeHostedAgent(org.id, { name: name.trim(), ...(instructions.trim() ? { instructions: instructions.trim() } : {}) }),
+    onSuccess: () => {
+      setName('');
+      setInstructions('');
+      onMade();
+    },
+  });
+  return (
+    <Card title="Make a hosted agent" intro="A shared agent the platform runs for the organization: no machine of your own. Give it a name and standing instructions; anyone here can then talk to it from the assistant panel, share files with it, and mention it. It sees only what is shared with it, and keeps no secrets from the organization." testid="card-hosted-agent">
+      <div className="flex flex-col gap-2">
+        <input className="rounded-md border border-hairline px-2 py-1 text-sm text-ink" placeholder="Its name, e.g. Omni" maxLength={80} value={name} onChange={(e) => setName(e.target.value)} data-testid="hosted-agent-name" />
+        <textarea className="rounded-md border border-hairline px-2 py-1 text-sm text-ink" rows={3} placeholder="Instructions: what it is for, how it should answer, what to avoid." maxLength={8000} value={instructions} onChange={(e) => setInstructions(e.target.value)} data-testid="hosted-agent-instructions" />
+        <div>
+          <Button kind="primary" disabled={make.isPending || !name.trim()} onClick={() => make.mutate()} testid="hosted-agent-make">
+            {make.isPending ? 'Making…' : 'Make the agent'}
+          </Button>
+        </div>
+      </div>
+      {make.data && <p className="text-xs text-muted" data-testid="hosted-agent-made">{make.data.agent.displayName} is here. Everyone in {org.name} can ask it from the panel.</p>}
+      <ErrorLine error={make.isError ? errorText(make.error) : null} />
+    </Card>
+  );
+}
+
+/** A hosted shared agent's instructions, read and set in place (its sponsor, an owner or an admin). */
+function HostedDefinition({ org, userId, name }: { org: WorkspaceDTO; userId: string; name: string }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState<string | null>(null);
+  const def = useQuery({ queryKey: ['agent-definition', org.id, userId], queryFn: () => adminApi.agentDefinition(org.id, userId), enabled: open });
+  const save = useMutation({ mutationFn: (instructions: string) => adminApi.saveAgentDefinition(org.id, userId, { instructions }), onSuccess: () => { setOpen(false); setText(null); } });
+  const current = text ?? def.data?.definition.instructions ?? '';
+  if (!open) {
+    return (
+      <Button kind="link" onClick={() => setOpen(true)} testid={`agent-instructions-${name}`}>
+        Instructions
+      </Button>
+    );
+  }
+  return (
+    <div className="flex w-full flex-col gap-2 pt-1" data-testid={`agent-instructions-editor-${name}`}>
+      <textarea className="rounded-md border border-hairline px-2 py-1 text-sm text-ink" rows={3} maxLength={8000} value={current} disabled={def.isLoading || !def.data?.mayEdit} onChange={(e) => setText(e.target.value)} data-testid={`agent-instructions-text-${name}`} />
+      <div className="flex gap-2">
+        <Button kind="primary" disabled={save.isPending || !def.data?.mayEdit || text === null} onClick={() => save.mutate(current)} testid={`agent-instructions-save-${name}`}>
+          Save
+        </Button>
+        <Button kind="link" onClick={() => { setOpen(false); setText(null); }}>Close</Button>
+      </div>
+      <ErrorLine error={def.isError ? errorText(def.error) : save.isError ? errorText(save.error) : null} />
+    </div>
   );
 }
 

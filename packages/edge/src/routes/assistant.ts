@@ -13,7 +13,7 @@ import { isFileId } from '@flow/docs/server/ids.ts';
 import { chatScope } from '@flow/docs/shared/agent/protocol.ts';
 import { directory, resolveCaller, tokenOf, type AuthEnv } from './auth';
 
-export interface AssistantRouteEnv extends AuthEnv { ASSISTANT: DurableObjectNamespace<Assistant> }
+export interface AssistantRouteEnv extends AuthEnv { ASSISTANT: DurableObjectNamespace<Assistant>; DOCS: DurableObjectNamespace<import('../docs/object').Docs> }
 type C = Context<{ Bindings: AssistantRouteEnv }>;
 
 export const assistantRoutes = new Hono<{ Bindings: AssistantRouteEnv }>();
@@ -36,6 +36,23 @@ async function organizationOf(c: C, userId: string): Promise<string | null> {
   return (await directory(c, 'organizationsOf', userId))[0] ?? null;
 }
 
+/** The agent a request names (`?agent=`, or a turn's `agent`), or null for the person's own assistant. */
+async function agentOf(c: C): Promise<string | null> {
+  const q = c.req.query('agent');
+  if (q) return q;
+  if (c.req.method !== 'POST') return null;
+  const body = (await c.req.raw.clone().json().catch(() => null)) as { agent?: unknown; scope?: unknown; context?: unknown } | null;
+  return typeof body?.agent === 'string' && body.agent ? body.agent : null;
+}
+
+/** The chat a POST is about (a file's id or the home chat), to check a shared agent may see the page (agents.md §6). */
+async function scopeOf(c: C): Promise<string | null> {
+  if (c.req.method === 'GET') return c.req.query('scope') ?? null;
+  const body = (await c.req.raw.clone().json().catch(() => null)) as { scope?: unknown; context?: unknown } | null;
+  if (typeof body?.scope === 'string') return body.scope;
+  return body?.context && typeof body.context === 'object' ? chatScope(body.context as never) : null;
+}
+
 async function forward(c: C): Promise<Response> {
   try {
     if (!tokenOf(c)) return c.json({ error: 'Not signed in' }, 401);
@@ -46,10 +63,28 @@ async function forward(c: C): Promise<Response> {
     if (!who.user) return c.json({ error: 'Not signed in' }, 401);
     if (!who.account) return c.json({ error: organizationId ? 'You are not a member of this organization.' : 'Join an organization to use the assistant.', code: 'no_account' }, 403);
     const org = c.env.ORG.get(c.env.ORG.idFromName(who.account.organizationId));
+    const [agents, wanted] = await Promise.all([directory(c, 'usableAgents', who.user.id, who.account.organizationId), agentOf(c)]);
+    const self = agents.find((a) => a.self);
+    const chosen = wanted && wanted !== self?.id ? agents.find((a) => a.id === wanted) : null;
+    if (wanted && wanted !== self?.id && !chosen) return c.json({ error: 'That agent is not one you can use here.', code: 'no_agent' }, 404);
+    if (chosen) {
+      // A hosted shared agent (agents.md §6): the turn runs as the agent, in its own runtime, asked by the person; the
+      // conversation is the person's with it. On a file the agent has no grant on, the page is not its to see.
+      const identity = await directory(c, 'agentIdentity', chosen.id, who.account.organizationId);
+      if (!identity) return c.json({ error: 'That agent is not one you can use here.', code: 'no_agent' }, 404);
+      const agentDocs = { userId: identity.user.id, email: identity.user.email, token: '', ip: who.ip, accountId: identity.account.id, channelIds: await org.channelIdsOf(identity.user.id) };
+      const scope = await scopeOf(c);
+      if (scope && isFileId(scope)) {
+        const seen = await c.env.DOCS.get(c.env.DOCS.idFromName(who.account.organizationId)).handle(new Request(`${c.env.WEB_URL_BASE.replace(/\/+$/, '')}/api/places/${encodeURIComponent(scope)}`), agentDocs, who.account.organizationId);
+        const place = seen.ok ? ((await seen.json()) as { role?: string }) : null;
+        if (!place?.role) return c.json({ error: `${chosen.displayName} can't see this page. Share it with ${chosen.displayName} first, or ask your own assistant.`, code: 'agent_cannot_see', agent: chosen.displayName }, 403);
+      }
+      const asAgent = { user: identity.user, token: who.token, authKind: 'agent' as const, ip: who.ip, organizationId: who.account.organizationId, account: identity.account, invokedBy: who.account.id };
+      return await c.env.ASSISTANT.get(c.env.ASSISTANT.idFromName(identity.account.id)).handle(c.req.raw, asAgent, agentDocs, chosen.displayName, { conversationUser: who.user.id });
+    }
     // The person's assistant (agents.md §6): their hosted personal agent, whose runtime is their account's object. Its
     // turns are the person's, marked `via` the agent, so the events it causes say "Ann (via assistant)".
-    const [channelIds, agents] = await Promise.all([org.channelIdsOf(who.user.id), directory(c, 'usableAgents', who.user.id, who.account.organizationId)]);
-    const self = agents.find((a) => a.self);
+    const channelIds = await org.channelIdsOf(who.user.id);
     const docs = { userId: who.user.id, email: who.user.email, token: who.token, ip: who.ip, accountId: who.account.id, channelIds };
     return await c.env.ASSISTANT.get(c.env.ASSISTANT.idFromName(who.account.id)).handle(c.req.raw, { ...who, ...(self ? { via: self.id } : {}) }, docs, self?.displayName);
   } catch (err) {

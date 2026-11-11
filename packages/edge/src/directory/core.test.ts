@@ -826,6 +826,14 @@ describe('agent accounts', () => {
     core.setAgentRuntime(bot, 'hosted');
     expect(core.usableAgents(bob.user.id, org).map((a) => [a.mode, a.self])).toEqual([[ 'personal', true ], ['shared', false]]);
     expect(core.accountFor(bot, org)!.agentRuntime).toBe('hosted');
+    // The Worker acts as a hosted agent through its identity: the hosted one here, never an external agent or a person.
+    expect(core.agentIdentity(bot, org)).toMatchObject({ user: { id: bot, isAgent: true }, account: { principalId: bot, organizationId: org } });
+    expect(core.agentIdentity(id!, org)).toMatchObject({ user: { id }, account: { kind: 'personal_agent' } });
+    expect(core.agentIdentity(bot, newId())).toBeNull();
+    expect(core.agentIdentity(ann.user.id, org)).toBeNull();
+    core.setAgentRuntime(bot, 'external');
+    expect(core.agentIdentity(bot, org)).toBeNull();
+    core.setAgentRuntime(bot, 'hosted');
     // Ann leaves: her assistant goes with her; back in, the same assistant returns.
     await core.applyOrgChanges(org, [{ kind: 'leave', id: org, user_id: ann.user.id, role: null, payload: null }]);
     expect(core.accountFor(id!, org)!.state).toBe('removed');

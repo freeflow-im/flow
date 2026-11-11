@@ -4,7 +4,7 @@ import { useAssistantDockState, useNewChatOnClose, type AssistantPlacement } fro
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { rangeToString } from '../../../shared/cellref.ts';
-import { HOME_CHAT, isJobLive, JOB_ACTIVE_STATUSES, MAX_IMAGES_PER_MESSAGE, MAX_INLINE_SELECTED_TEXT, type AgentContext, type ImageRegion, type AgentImage, type AgentJob, type AgentTurnRequest, type ChatItem, type ClientToolCall, type ClientToolResult, type WindowToolCall } from '../../../shared/agent/protocol.ts';
+import { HOME_CHAT, isJobLive, JOB_ACTIVE_STATUSES, MAX_IMAGES_PER_MESSAGE, MAX_INLINE_SELECTED_TEXT, type AgentContext, type ImageRegion, type AgentImage, type AgentJob, type AgentTurnRequest, type ChatItem, type ClientToolCall, type ClientToolResult, type WindowToolCall, type UsableAgent } from '../../../shared/agent/protocol.ts';
 import type { SheetMeta, StoredFile } from '../../../shared/types.ts';
 import { shortenHtml } from '../htmlEdit.ts';
 import { api, placeOf, ApiError } from '../api.ts';
@@ -98,6 +98,10 @@ interface AgentState {
   chatTitle: string | null;
   /** In the hosted suite, the person's assistant's name (docs/specs/agents.md §6: their hosted personal agent); null elsewhere. */
   assistantName: string | null;
+  /** In the hosted suite, the agents the person may talk to (their assistant first), and the one the panel talks to (null: their assistant). */
+  agents: UsableAgent[];
+  agentId: string | null;
+  setAgent(id: string | null): void;
   /** The chat of the page that is open, which the panel shows unless a turn moved it elsewhere. */
   pageScope: string;
   /** Show the open page's chat. */
@@ -180,14 +184,19 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   const pageScope = fileAt(pathname)?.id ?? HOME_CHAT;
   const [scope, setScope] = useState(pageScope);
   const [chatTitle, setChatTitle] = useState<string | null>(null);
-  const [assistantName, setAssistantName] = useState<string | null>(null);
-  // The suite's assistant is an agent with a name of its own (agents.md §6): asked once, and again when the person changes.
+  const [agents, setAgents] = useState<UsableAgent[]>([]);
+  const [agentId, setAgentId] = useState<string | null>(null);
+  // The suite's agents (agents.md §6): the person's assistant, an agent with a name of its own, and the hosted shared ones.
   useEffect(() => {
-    if (!user || !suite) { setAssistantName(null); return; }
+    if (!user || !suite) { setAgents([]); setAgentId(null); return; }
     let current = true;
-    api.usableAgents().then((r) => current && setAssistantName(r.agents.find((a) => a.self)?.displayName ?? null), () => current && setAssistantName(null));
+    api.usableAgents().then((r) => current && setAgents(r.agents), () => current && setAgents([]));
     return () => { current = false; };
   }, [user, suite]);
+  const self = agents.find((a) => a.self) ?? null;
+  const assistantName = self?.displayName ?? null;
+  /** The agent a request names: a hosted shared agent's id, or nothing for the person's own assistant. */
+  const agentParam = agentId && agentId !== self?.id ? agentId : null;
   const runningRef = useRef(false);
   runningRef.current = running;
   useEffect(() => {
@@ -210,7 +219,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     void (async () => {
       try {
-        const r = await api.agentTranscript(scope);
+        const r = await api.agentTranscript(scope, agentParam);
         if (cancelled) return;
         // A message sent before the saved transcript arrived goes after it.
         setItems((prev) => (prev.length ? [...r.items, ...prev] : r.items));
@@ -222,7 +231,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [user, scope]);
+  }, [user, scope, agentParam]);
 
   // When someone signs in, pick up the latest app change: if one finished while we were away (the app
   // restarts when it lands), tell the assistant.
@@ -745,7 +754,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
       );
       // Whether the browser extension is there now (it may have been added or turned off since the page loaded).
       await checkBrowserExtension(true);
-      let req: AgentTurnRequest = { message, context: context(opts.inline), scope: turnScope, ...(stored.length ? { images: stored } : {}) };
+      let req: AgentTurnRequest = { message, context: context(opts.inline), scope: turnScope, ...(stored.length ? { images: stored } : {}), ...(agentParam ? { agent: agentParam } : {}) };
       try {
         for (;;) {
           let calls: ClientToolCall[] | null = null;
@@ -803,7 +812,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
 
   const reset = async () => {
     if (running) return;
-    await api.agentReset(scope);
+    await api.agentReset(scope, agentParam);
     setItems([]);
     setError(null);
   };
@@ -840,6 +849,9 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     chatScope: scope,
     chatTitle,
     assistantName,
+    agents,
+    agentId: agentId ?? self?.id ?? null,
+    setAgent: (id) => !running && setAgentId(id),
     pageScope,
     showPageChat: () => !running && setScope(pageScope),
     job,

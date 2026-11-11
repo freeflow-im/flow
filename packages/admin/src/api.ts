@@ -1,6 +1,6 @@
 // The suite's API on the edge Worker, same origin with the session cookie: the Org object's routes (the workspace, its
 // members, invitations, emoji, join link) and the directory's (domains, accounts). A 401 sends the browser to sign in.
-import type { AccountDTO, AccountKind, AgentInviteDTO, ChannelDTO, DnsRecordDTO, DomainDTO, DomainKind, FileDTO, InviteResultDTO, JoinLinkDTO, MemberRole, OAuthIdentityDTO, PresignedUploadDTO, PublicConfigDTO, UpdateWorkspaceBody, WorkspaceDTO, WorkspaceEmojiDTO, WorkspaceInviteDTO, WorkspaceMemberDTO } from '@flow/shared';
+import type { AccountDTO, AccountKind, AgentDefinitionDTO, UsableAgentDTO, AgentInviteDTO, ChannelDTO, DnsRecordDTO, DomainDTO, DomainKind, FileDTO, InviteResultDTO, JoinLinkDTO, MemberRole, OAuthIdentityDTO, PresignedUploadDTO, PublicConfigDTO, UpdateWorkspaceBody, WorkspaceDTO, WorkspaceEmojiDTO, WorkspaceInviteDTO, WorkspaceMemberDTO } from '@flow/shared';
 
 export class AdminApiError extends Error {
   constructor(public readonly code: string, message: string, public readonly status: number) {
@@ -104,4 +104,8 @@ export const adminApi = {
   /** A personal agent's account removed, with its delegations (docs/specs/agents.md §2). */
   removePersonalAgent: (id: string, accountId: string) => request<{ account: AccountDTO }>('DELETE', `${ws(id)}/accounts/${encodeURIComponent(accountId)}`),
   agentInvite: (id: string) => request<AgentInviteDTO>('POST', `${ws(id)}/agent-invites`),
+  // Hosted shared agents (docs/specs/agents.md §6): made here, with a definition kept by the agent's runtime.
+  makeHostedAgent: (id: string, body: { name: string; instructions?: string }) => request<{ agent: UsableAgentDTO; definition: AgentDefinitionDTO }>('POST', `${ws(id)}/agents/hosted`, body),
+  agentDefinition: (id: string, userId: string) => request<{ definition: AgentDefinitionDTO; mayEdit: boolean }>('GET', `${ws(id)}/agents/${encodeURIComponent(userId)}/definition`),
+  saveAgentDefinition: (id: string, userId: string, body: { name?: string; instructions?: string }) => request<{ definition: AgentDefinitionDTO; mayEdit: boolean }>('PUT', `${ws(id)}/agents/${encodeURIComponent(userId)}/definition`, body),
 };

@@ -180,6 +180,18 @@ export class DirectoryCore {
     return usableAgentsOf(this.sql, userId, organizationId);
   }
 
+  /**
+   * A hosted agent in an organization, as the Worker acts as it (agents.md §6): its principal and its account there; null
+   * for anything else (an external agent, a person, a removed account). The caller must be one who may use it (usableAgents).
+   */
+  agentIdentity(agentId: string, organizationId: string): { user: UserDTO; account: AccountDTO } | null {
+    const u = this.userById(agentId);
+    if (!u?.is_agent || u.runtime !== 'hosted' || u.deleted_at || u.organization_id !== organizationId) return null;
+    const account = this.accountFor(agentId, organizationId);
+    if (!account || account.state === 'removed' || account.state === 'suspended') return null;
+    return { user: toUserDTO(u, agentId), account };
+  }
+
   /** Where an agent's loop runs (agents.md §6); a hosted shared agent is marked so by the Admin app after the Org object makes it. */
   setAgentRuntime(agentId: string, runtime: AgentRuntime): void {
     if (!this.userById(agentId)?.is_agent) throw notFound('agent not found');

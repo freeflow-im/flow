@@ -249,6 +249,8 @@ export interface AgentTurnRequest {
    * the user's files there (My files); a file's chat takes the file's own organization and root instead.
    */
   workspace?: string;
+  /** In the FreeFlow suite, the agent the turn is for (docs/specs/agents.md §6): a hosted shared agent's id; absent, the person's own assistant. */
+  agent?: string;
 }
 
 /** The home page's chat (every folder of the library shares it). */
