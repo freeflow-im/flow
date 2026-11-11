@@ -218,6 +218,22 @@ export const MAX_IMAGES_PER_MESSAGE = 4;
 /** Per image, decoded bytes (the API allows 5 MB). */
 export const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 
+/** A hosted agent's definition (docs/specs/agents.md §6): its name and the lines added to its system prompt. */
+export interface AgentDefinition {
+  name: string;
+  instructions: string;
+  updatedAt: string | null;
+}
+
+/** An agent the person may talk to from the panel (agents.md §6): their own assistant (`self`) or a hosted shared agent. */
+export interface UsableAgent {
+  id: string;
+  accountId: string;
+  displayName: string;
+  mode: 'personal' | 'shared';
+  self: boolean;
+}
+
 export interface AgentTurnRequest {
   message?: string;
   context: AgentContext;

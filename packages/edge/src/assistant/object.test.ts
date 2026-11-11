@@ -154,6 +154,34 @@ describe('the Assistant object', () => {
     expect(String(stored.openai_key)).not.toContain('sk-test');
   });
 
+  it('keeps the agent’s definition, names it as the directory does by default, and puts its instructions in the prompt (agents.md §6)', async () => {
+    const a = assistant('acct-1');
+    let systems: string[] = [];
+    a.script = async (params, { onText }) => {
+      systems.push(JSON.stringify(params.system));
+      onText('Hi.');
+      return message([{ type: 'text', text: 'Hi.' }], 'end_turn') as never;
+    };
+    // The default: the name the route gives (the directory's "<name>'s assistant"), no instructions.
+    let r = (await (await a.handle(req('GET', '/api/agent/definition'), CALLER, DOCS_CALLER, 'Ann’s assistant')).json()) as { definition: { name: string; instructions: string; updatedAt: string | null } };
+    expect(r.definition).toEqual({ name: 'Ann’s assistant', instructions: '', updatedAt: null });
+    await events(await a.handle(req('POST', '/api/agent/turn', { message: 'hello', context: { page: 'home' }, workspace: 'org-1' }), CALLER, DOCS_CALLER));
+    expect(systems[0]).not.toContain('Instructions from the person');
+    // Set: the next turn's prompt carries the instructions.
+    r = (await (await a.handle(req('PUT', '/api/agent/definition', { name: 'Pip', instructions: 'Answer in haiku.' }), CALLER, DOCS_CALLER)).json()) as typeof r;
+    expect(r.definition).toMatchObject({ name: 'Pip', instructions: 'Answer in haiku.' });
+    expect(r.definition.updatedAt).toBeTruthy();
+    systems = [];
+    await events(await a.handle(req('POST', '/api/agent/turn', { message: 'hello again', context: { page: 'home' }, workspace: 'org-1' }), CALLER, DOCS_CALLER));
+    expect(systems[0]).toContain('Answer in haiku.');
+    expect(systems[0]).toContain('Instructions from the person');
+    // The name the directory gives later does not undo the one set.
+    r = (await (await a.handle(req('GET', '/api/agent/definition'), CALLER, DOCS_CALLER, 'Ann’s assistant')).json()) as typeof r;
+    expect(r.definition.name).toBe('Pip');
+    // Bad input is refused.
+    expect((await a.handle(req('PUT', '/api/agent/definition', { instructions: 7 }), CALLER, DOCS_CALLER)).status).toBe(400);
+  });
+
   it('refuses a caller of another account', async () => {
     const a = assistant();
     await a.handle(req('GET', '/api/agent'), CALLER, DOCS_CALLER);

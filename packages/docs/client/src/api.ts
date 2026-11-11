@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentJob, AgentTurnRequest, AssistantSettings, AssistantSettingsUpdate, ChatItem } from '../../shared/agent/protocol.ts';
+import type { AgentDefinition, AgentEvent, AgentJob, AgentTurnRequest, AssistantSettings, AssistantSettingsUpdate, ChatItem, UsableAgent } from '../../shared/agent/protocol.ts';
 import type { ConnectionInfo, ConnectorInfo, FetchResult } from '../../shared/connectors.ts';
 import type { Deck } from '../../shared/deck.ts';
 import type { LinkedTable, SheetTableRef } from '../../shared/sheetTable.ts';
@@ -442,6 +442,10 @@ export const api = {
 
   /** A chat: a file's (scope = its id) or the home page's, with the file's name. */
   agentTranscript: (scope: string) => request<{ items: ChatItem[]; title: string | null }>('GET', `/api/agent?scope=${encodeURIComponent(scope)}`),
+  // The hosted suite (docs/specs/agents.md §6): the agents the person may talk to, and their own assistant's definition.
+  usableAgents: () => request<{ agents: UsableAgent[] }>('GET', `/api/agent/agents${inFolder(undefined, true)}`),
+  agentDefinition: () => request<{ definition: AgentDefinition }>('GET', `/api/agent/definition${inFolder(undefined, true)}`),
+  saveAgentDefinition: (body: { name?: string; instructions?: string }) => request<{ definition: AgentDefinition }>('PUT', `/api/agent/definition${inFolder(undefined, true)}`, body),
   agentReset: (scope: string) => request<{ ok: true }>('POST', '/api/agent/reset', { scope }),
   /** Answer a permission the user's own agent asked for (AgentEvent 'permission'). */
   answerAgentPermission: (id: string, allow: boolean) => request<{ ok: true }>('POST', '/api/agent/permission', { id, allow }),

@@ -12,6 +12,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { activeOrganizationId } from '../suite.ts';
 import { ANTHROPIC_MODELS, OPENAI_MODELS, OPENROUTER_MODELS, type AssistantProvider, type AssistantSettings, type AssistantSettingsUpdate, type KeyProvider } from '../../../shared/agent/protocol.ts';
 import type { ConnectedAgent, NewFilesSettings, NewFilesUpdate } from '../../../shared/types.ts';
+import type { AgentDefinition } from '../../../shared/agent/protocol.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { useAgent } from '../agent/AgentProvider.tsx';
 import { api } from '../api.ts';
@@ -124,6 +125,7 @@ export function SettingsPage() {
         <NewFiles />
       ) : (
         <section className="home-inner changes">
+          {suite && <AssistantDefinition />}
           {saved && (
             <p className="changes-intro">
               {saved.agents
@@ -418,6 +420,68 @@ function NewFiles() {
  * Agents signed in with a device code (mcp-remote --device-code, say), or in the desktop app those allowed to use
  * its MCP server. Disconnecting one revokes its tokens at once.
  */
+/**
+ * The person's own assistant's definition (docs/specs/agents.md §6), in the hosted suite: its name and the instructions
+ * added to its prompt, for the organization selected in the bar. The model and key settings below are the same agent's.
+ */
+function AssistantDefinition() {
+  const [name, setName] = useState('');
+  const [instructions, setInstructions] = useState('');
+  const [saved, setSaved] = useState<AgentDefinition | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    api
+      .agentDefinition()
+      .then((r) => {
+        setSaved(r.definition);
+        setName(r.definition.name);
+        setInstructions(r.definition.instructions);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  }, []);
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const r = await api.saveAgentDefinition({ name, instructions });
+      setSaved(r.definition);
+      setName(r.definition.name);
+      setInstructions(r.definition.instructions);
+      setNotice('Saved.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (!saved && !error) return null;
+  const dirty = !!saved && (name !== saved.name || instructions !== saved.instructions);
+  return (
+    <div className="settings-block" data-testid="assistant-definition">
+      <h2>Your assistant</h2>
+      <p className="changes-intro">Your assistant is your personal agent in this organization: it acts as you and sees what you see, and only you can use it. Give it a name and standing instructions; they go into every conversation with it here.</p>
+      <label className="settings-field">
+        <span>Name</span>
+        <input value={name} maxLength={80} onChange={(e) => setName(e.target.value)} disabled={busy} data-testid="assistant-name" />
+      </label>
+      <label className="settings-field">
+        <span>Instructions</span>
+        <textarea value={instructions} rows={5} maxLength={8000} placeholder="How it should work for you: what to focus on, how to write, what to avoid." onChange={(e) => setInstructions(e.target.value)} disabled={busy} data-testid="assistant-instructions" />
+      </label>
+      <div className="settings-actions">
+        <button type="button" className="btn primary" disabled={busy || !dirty} onClick={() => void save()} data-testid="assistant-definition-save">
+          {busy ? 'Saving…' : 'Save'}
+        </button>
+        {notice && <span className="muted">{notice}</span>}
+      </div>
+      {error && <div className="form-error">{error}</div>}
+    </div>
+  );
+}
+
 function ConnectedAgents() {
   const [agents, setAgents] = useState<ConnectedAgent[] | null>(null);
   const [enabled, setEnabled] = useState(false);

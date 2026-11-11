@@ -284,7 +284,9 @@ describe('accounts', () => {
     expect(c.organization('o2')!.ownerUserId).toBeNull();
     c.backfillAccounts();
     new DirectoryCore(sql, { webUrlBase: 'https://app.test', registrationEnabled: true, send: async () => {} });
-    expect(sql.exec('SELECT COUNT(*) AS n FROM accounts').toArray()[0]!.n).toBe(5);
+    expect(sql.exec("SELECT COUNT(*) AS n FROM accounts WHERE kind <> 'personal_agent'").toArray()[0]!.n).toBe(5);
+    // Every person's account brings their assistant, a hosted personal agent (agents.md §6).
+    expect(sql.exec("SELECT COUNT(*) AS n FROM accounts WHERE kind = 'personal_agent'").toArray()[0]!.n).toBe(4);
   });
 
   it('makes an account on join, marks it removed on leave keeping the address, and reactivates it on rejoin', async () => {
@@ -360,7 +362,7 @@ describe('accounts', () => {
     await join(org, a.user.id, 'owner');
     await join(org, b.user.id, 'member');
     await core.applyOrgChanges(newId(), [{ kind: 'join', id: 'x', user_id: a.user.id, role: 'member', payload: null }]);
-    expect(core.accountsOfOrganization(org).map((x) => x.address).sort()).toEqual(['ann2@acme.freeflow.im', 'ann@acme.freeflow.im']);
+    expect(core.accountsOfOrganization(org).filter((x) => x.kind !== 'personal_agent').map((x) => x.address).sort()).toEqual(['ann2@acme.freeflow.im', 'ann@acme.freeflow.im']);
     await core.applyOrgChanges(org, [
       { kind: 'join', id: org, user_id: b.user.id, role: 'owner', payload: null },
       { kind: 'owner', id: org, user_id: b.user.id, role: null, payload: null },
@@ -771,7 +773,7 @@ describe('agent accounts', () => {
     expect(core.accountFor(agentId, org)).toMatchObject({ id: account.id, state: 'active' });
     expect(nodeSqlOf(core).exec('SELECT deleted_at FROM users WHERE id = ?', agentId).toArray()[0]!.deleted_at).toBeNull();
     expect(personalAgentFor(nodeSqlOf(core), ann.user.id, org, 'Cursor')).not.toBe(agentId);
-    expect(core.accountsOfOrganization(org).filter((a) => a.kind === 'personal_agent')).toHaveLength(2);
+    expect(core.accountsOfOrganization(org).filter((a) => a.kind === 'personal_agent' && a.agentRuntime === 'external')).toHaveLength(2);
     // An agent cannot sponsor one; nor can a person in an organization they are not in.
     expect(() => personalAgentFor(nodeSqlOf(core), agentId, org, 'X')).toThrow('an agent cannot sponsor an agent');
     expect(() => personalAgentFor(nodeSqlOf(core), ann.user.id, newId(), 'X')).toThrow('where its sponsor has an active account');
@@ -802,6 +804,42 @@ describe('agent accounts', () => {
     await core.applyOrgChanges(org, [{ kind: 'leave', id: org, user_id: bob.user.id, role: null, payload: null }]);
     expect(core.accountFor(b1, org)!.state).toBe('removed');
     expect(sql.exec('SELECT revoked_at FROM oauth_tokens WHERE family = ?', `fam-${b1}`).toArray()[0]!.revoked_at).not.toBeNull();
+  });
+
+  it('gives every person an assistant with their account: a hosted personal agent, listed as usable, back when they rejoin (agents.md §6)', async () => {
+    const ann = await signUp('a@example.com');
+    const bob = await signUp('b@example.com');
+    const org = newId();
+    core.reserveSlug('acme', org);
+    await core.applyOrgChanges(org, [join(org, ann.user.id), join(org, bob.user.id)]);
+    const id = core.assistantOf(ann.user.id, org);
+    expect(id).toBeTruthy();
+    expect(core.accountFor(id!, org)).toMatchObject({ kind: 'personal_agent', address: null, sponsorId: ann.user.id, agentMode: 'personal', agentRuntime: 'hosted', displayName: expect.stringContaining('’s assistant') });
+    expect(core.getUser(id!, ann.user.id)).toMatchObject({ isAgent: true, agentMode: 'personal' });
+    // Usable from the panel: Ann's own assistant alone (no hosted shared agent yet), and Bob's for Bob.
+    expect(core.usableAgents(ann.user.id, org)).toEqual([expect.objectContaining({ id, mode: 'personal', self: true })]);
+    expect(core.usableAgents(bob.user.id, org).map((a) => a.self)).toEqual([true]);
+    expect(core.usableAgents(bob.user.id, org)[0]!.id).not.toBe(id);
+    // A hosted shared agent is usable by both.
+    const bot = newId();
+    await core.applyOrgChanges(org, [agent(bot, ann.user.id, 'omni'), join(org, bot, ann.user.id)]);
+    core.setAgentRuntime(bot, 'hosted');
+    expect(core.usableAgents(bob.user.id, org).map((a) => [a.mode, a.self])).toEqual([[ 'personal', true ], ['shared', false]]);
+    expect(core.accountFor(bot, org)!.agentRuntime).toBe('hosted');
+    // Ann leaves: her assistant goes with her; back in, the same assistant returns.
+    await core.applyOrgChanges(org, [{ kind: 'leave', id: org, user_id: ann.user.id, role: null, payload: null }]);
+    expect(core.accountFor(id!, org)!.state).toBe('removed');
+    expect(core.assistantOf(ann.user.id, org)).toBeNull();
+    await core.applyOrgChanges(org, [join(org, ann.user.id)]);
+    expect(core.assistantOf(ann.user.id, org)).toBe(id);
+    expect(core.accountFor(id!, org)!.state).toBe('active');
+    // Accounts made before assistants existed get one at the next start.
+    const sql = nodeSqlOf(core);
+    sql.exec("DELETE FROM users WHERE id = ?", id);
+    sql.exec('DELETE FROM accounts WHERE user_id = ?', id);
+    const again = new DirectoryCore(sql, { webUrlBase: 'https://app.test', registrationEnabled: true, send: async () => {} });
+    expect(again.assistantOf(ann.user.id, org)).toBeTruthy();
+    expect(again.assistantOf(ann.user.id, org)).not.toBe(id);
   });
 
   it('retires agents made before kinds, once: accounts removed, tokens revoked, principal deleted; a personal agent per connection (phase A)', async () => {

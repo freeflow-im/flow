@@ -96,6 +96,8 @@ interface AgentState {
   /** The chat shown: a file's (its id) or the home page's (HOME_CHAT), and the file's name (null for home). */
   chatScope: string;
   chatTitle: string | null;
+  /** In the hosted suite, the person's assistant's name (docs/specs/agents.md §6: their hosted personal agent); null elsewhere. */
+  assistantName: string | null;
   /** The chat of the page that is open, which the panel shows unless a turn moved it elsewhere. */
   pageScope: string;
   /** Show the open page's chat. */
@@ -178,6 +180,14 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   const pageScope = fileAt(pathname)?.id ?? HOME_CHAT;
   const [scope, setScope] = useState(pageScope);
   const [chatTitle, setChatTitle] = useState<string | null>(null);
+  const [assistantName, setAssistantName] = useState<string | null>(null);
+  // The suite's assistant is an agent with a name of its own (agents.md §6): asked once, and again when the person changes.
+  useEffect(() => {
+    if (!user || !suite) { setAssistantName(null); return; }
+    let current = true;
+    api.usableAgents().then((r) => current && setAssistantName(r.agents.find((a) => a.self)?.displayName ?? null), () => current && setAssistantName(null));
+    return () => { current = false; };
+  }, [user, suite]);
   const runningRef = useRef(false);
   runningRef.current = running;
   useEffect(() => {
@@ -829,6 +839,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     setOpenFile,
     chatScope: scope,
     chatTitle,
+    assistantName,
     pageScope,
     showPageChat: () => !running && setScope(pageScope),
     job,

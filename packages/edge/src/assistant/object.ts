@@ -33,7 +33,7 @@ import { checkBraveKey } from '@flow/docs/server/agent/tools.ts';
 import { ASSISTANT_PAGES, SUITE_GUIDANCE } from '../docs/assistantTools.ts';
 import { isFileId } from '@flow/docs/server/ids.ts';
 import { scopeOf, type ScopeArg } from '@flow/docs/server/scope.ts';
-import { chatScope, HOME_CHAT, isChatScope, type AgentEvent, type AgentTurnRequest, type AssistantSettingsUpdate } from '@flow/docs/shared/agent/protocol.ts';
+import { chatScope, HOME_CHAT, isChatScope, type AgentDefinition, type AgentEvent, type AgentTurnRequest, type AssistantSettingsUpdate } from '@flow/docs/shared/agent/protocol.ts';
 import { docsPageUrl, docsToolContext, importToDocs, type DocsFetch, type DocsPlace } from './docsTools.ts';
 
 export type { DocsCaller };
@@ -99,6 +99,15 @@ function agentErrorMessage(e: unknown): string {
   return 'Something went wrong while the assistant was working. Try again.';
 }
 
+/** The most a definition's instructions may run to. */
+const MAX_INSTRUCTIONS = 8_000;
+
+/** The definition's instructions as prompt lines (prompt.ts `systemPrompt`'s guidance): one block, marked as the owner's. */
+export function definitionGuidance(d: AgentDefinition): string[] {
+  const text = d.instructions.trim();
+  return text ? [`- Instructions from the person or organization this agent belongs to, which you follow within the rules above:\n${text}`] : [];
+}
+
 export class Assistant extends DurableObject<AssistantEnv> {
   private readonly sql: SqlStorage;
   private readonly context: DocsContext;
@@ -132,6 +141,28 @@ export class Assistant extends DurableObject<AssistantEnv> {
     return (this.sql.exec('SELECT value FROM assistant_state WHERE key = ?', key).toArray()[0]?.value as string | undefined) ?? null;
   }
 
+  /** The hosted agent's definition (agents.md §6), as set, or the default: a name and no instructions. */
+  definition(): AgentDefinition {
+    const raw = this.state('definition');
+    if (raw) {
+      try { return JSON.parse(raw) as AgentDefinition; } catch { /* a bad row reads as the default */ }
+    }
+    return { name: this.state('definition_default_name') ?? 'Assistant', instructions: '', updatedAt: null };
+  }
+
+  /** Sets the definition; the loop is remade so the next turn's prompt carries the new instructions. */
+  setDefinition(d: { name?: string; instructions?: string }): AgentDefinition {
+    const now = this.definition();
+    const next: AgentDefinition = {
+      name: (d.name ?? now.name).trim().slice(0, 80) || now.name,
+      instructions: (d.instructions ?? now.instructions).trim().slice(0, MAX_INSTRUCTIONS),
+      updatedAt: new Date().toISOString(),
+    };
+    this.setState('definition', JSON.stringify(next));
+    this.services = null;
+    return next;
+  }
+
   setState(key: string, value: string): void {
     this.sql.exec('INSERT INTO assistant_state (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value', key, value);
   }
@@ -161,7 +192,8 @@ export class Assistant extends DurableObject<AssistantEnv> {
       ...(model ? { model } : {}),
       // The suite's assistant (docs/assistantTools.ts): the pages of every app, its tools' environment, its prompt lines.
       pages: ASSISTANT_PAGES,
-      guidance: SUITE_GUIDANCE,
+      // The definition's instructions (agents.md §6) ride with the suite's guidance; a change remakes the service.
+      guidance: [...SUITE_GUIDANCE, ...definitionGuidance(this.definition())],
       extend: (userId: string, scope: ScopeArg) => {
         const place = placeOf(scope);
         const docs = place && this.docsFetch(place.workspace) ? docsToolContext(this.docsFetch(place.workspace)!, place, this.origin) : undefined;
@@ -236,9 +268,11 @@ export class Assistant extends DurableObject<AssistantEnv> {
    * A request for the account this object belongs to (routes/assistant.ts), with its caller context and the same person
    * as the Docs object knows them; a caller of another account is refused.
    */
-  async handle(request: Request, caller: CallerContext, docs: DocsCaller): Promise<Response> {
+  async handle(request: Request, caller: CallerContext, docs: DocsCaller, agentName?: string): Promise<Response> {
     const wrong = ownerMismatch(this, caller, 'the Assistant');
     if (wrong) { console.error(`[assistant] ${wrong}`); return ownerRefusal(wrong); }
+    // The agent's name as the directory knows it (agents.md §6), the definition's default until the person sets one.
+    if (agentName && this.state('definition_default_name') !== agentName) this.setState('definition_default_name', agentName);
     const who: Who = { caller: caller as AccountCaller, docs };
     this.who = who;
     return withDocsContext(this.context, () => this.app.fetch(request, { who } satisfies Bindings));
@@ -289,6 +323,17 @@ export class Assistant extends DurableObject<AssistantEnv> {
     app.post('/api/agent/turn', async (c) => this.turn(c));
 
     app.get('/api/settings/assistant', (c) => c.json({ settings: this.service().settings.get(userOf(c)) }));
+
+    // The agent's definition (agents.md §6): read by anyone the object answers (its owner); set the same way. The default
+    // name is the one the route gives on the first request (the directory's "<name>'s assistant").
+    app.get('/api/agent/definition', (c) => c.json({ definition: this.definition() }));
+    app.put('/api/agent/definition', async (c) => {
+      const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { name?: unknown; instructions?: unknown };
+      if (body.name !== undefined && typeof body.name !== 'string') return c.json({ error: 'name: a string' }, 400);
+      if (body.instructions !== undefined && typeof body.instructions !== 'string') return c.json({ error: 'instructions: a string' }, 400);
+      if (typeof body.instructions === 'string' && body.instructions.length > MAX_INSTRUCTIONS) return c.json({ error: `instructions: at most ${MAX_INSTRUCTIONS} characters` }, 400);
+      return c.json({ definition: this.setDefinition(body as { name?: string; instructions?: string }) });
+    });
 
     app.put('/api/settings/assistant', async (c) => {
       const body = ((await c.req.json().catch(() => ({}))) ?? {}) as Partial<AssistantSettingsUpdate>;

@@ -116,7 +116,7 @@ export function AgentPanel() {
       {docked && <ResizeHandle panel={panel} side="right" label="Resize assistant panel" className="agent-panel-resize" />}
       <div className="agent-head">
         <SparkIcon />
-        <span className="agent-title">Assistant</span>
+        <span className="agent-title" title={agent.assistantName ?? undefined}>{agent.assistantName ?? 'Assistant'}</span>
         <Link className="link agent-changes" to="/changes" title="Changes the assistant made to the app">
           Changes
         </Link>

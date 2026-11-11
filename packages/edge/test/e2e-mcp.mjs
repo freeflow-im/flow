@@ -149,7 +149,7 @@ r=await mcp(T3.access_token,'tools/list');t('revoking the refresh token ends its
 const T4=await connect(U,A);r=await mcp(T4.access_token,'tools/list');t('connected to Acme again',r.s===200,r.s);
 const TB=await connect(U,Bo);r=await call(TB.access_token,'list_files',{});t('a connection to Bravo sees Bravo’s file, not Acme’s',JSON.stringify(r.v).includes(SB)&&!JSON.stringify(r.v).includes(S),JSON.stringify(r.v).slice(0,120));
 // --- Agents as kinds (docs/specs/agents.md phase A): a connection acts through a personal agent the admin sees ---------------
-r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);let PA=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.sponsorId===U.user.id);
+r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);let PA=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.sponsorId===U.user.id&&a.agentRuntime==='external');
 t('Olga sees one personal agent of Uma’s in Acme: the MCP client, no address, mode personal',r.s===200&&PA.length===1&&PA[0].address===null&&PA[0].agentMode==='personal'&&PA[0].displayName==='E2E Agent'&&PA[0].state==='active',JSON.stringify(PA).slice(0,220));
 r=await api(O.token,'PATCH',`/v1/workspaces/${A}/accounts/${PA[0]?.id}/kind`,{kind:'guest'});t('a personal agent’s kind never changes',r.s===409,r.s+' '+JSON.stringify(r.j).slice(0,100));
 r=await api(U.token,'DELETE',`/v1/workspaces/${A}/accounts/${PA[0]?.id}`);t('a member cannot remove it',r.s===403,r.s);
@@ -158,7 +158,7 @@ r=await mcp(T4.access_token,'tools/list');t('Uma’s Acme tokens stop working: r
 r=await api(U.token,'GET','/api/settings/agents');t('and Docs’ Settings no longer lists them',!(r.j.agents??[]).some(a=>a.organizationId===A),JSON.stringify(r.j.agents).slice(0,160));
 r=await mcp(TB.access_token,'tools/list');t('her Bravo token, another agent, still works',r.s===200,r.s);
 const T5=await connect(U,A);r=await mcp(T5.access_token,'tools/list');t('connecting again makes a new personal agent, and works',r.s===200,r.s);
-r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);{const now=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.sponsorId===U.user.id&&a.state!=='removed');t('one active personal agent of Uma’s again: the same one, back',now.length===1&&now[0].id===PA[0]?.id,JSON.stringify(now.map(a=>a.id)));}
+r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);{const now=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.sponsorId===U.user.id&&a.agentRuntime==='external'&&a.state!=='removed');t('one active personal agent of Uma’s again: the same one, back',now.length===1&&now[0].id===PA[0]?.id,JSON.stringify(now.map(a=>a.id)));}
 r=await api(O.token,'DELETE',`/v1/workspaces/${A}/members/${U.user.id}`);t('Olga removes Uma from Acme',r.s<300,r.s+' '+JSON.stringify(r.j).slice(0,100));
 await sleep(300);
 r=await mcp(T5.access_token,'tools/list');t('Uma’s Acme token stops working: her personal agent there went with her, its delegations revoked',r.s===401&&/invalid_token/.test(r.h.get('www-authenticate'))&&r.j.reason==='revoked',r.s+' '+JSON.stringify(r.j).slice(0,120));
@@ -195,12 +195,18 @@ r=await api(r.j.agentToken,'GET','/v1/me/accounts');t('which holds an account in
 r=await api(AGT,'GET','/v1/me/accounts');t('while the first keeps Acme alone',r.s===200&&r.j.accounts?.length===1&&r.j.accounts[0].organizationId===A,JSON.stringify(r.j).slice(0,160));
 r=await api(O.token,'GET',`/v1/workspaces/${A}/channels`);const GEN=(r.j.channels??r.j)[0];
 // --- Connecting an agent (agents.md §1, phase B): the consent page's choice ------------------------------------------------
-r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);const beforePersonal=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.sponsorId===O.user.id&&a.state!=='removed').length;
+// --- Every person has an assistant: a hosted personal agent made with the account (agents.md §6, phase C) ---------------------
+r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);{const mine=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.agentRuntime==='hosted');t('Olga has an assistant in Acme, a hosted personal agent (Uma’s went with her when she was removed)',mine.length===1&&/’s assistant$/.test(mine[0].displayName)&&mine[0].sponsorId===O.user.id,JSON.stringify(mine.map(a=>[a.displayName,a.sponsorId])).slice(0,200));}
+r=await api(O.token,'GET',`/api/agent/agents?workspace=${A}`);const SELF=(r.j.agents??[]).find(a=>a.self);t('the panel’s agents: Olga’s own assistant, hers alone for now',r.s===200&&r.j.agents.length===1&&SELF?.mode==='personal'&&/Olga’s assistant/.test(SELF?.displayName??''),JSON.stringify(r.j).slice(0,160));
+r=await api(O.token,'GET',`/api/agent/definition?workspace=${A}`);t('its definition starts with its name and no instructions',r.s===200&&r.j.definition?.name===SELF?.displayName&&r.j.definition?.instructions==='',JSON.stringify(r.j).slice(0,160));
+r=await api(O.token,'PUT',`/api/agent/definition?workspace=${A}`,{name:'Pip',instructions:'Answer briefly.'});t('Olga names it and gives it instructions',r.s===200&&r.j.definition?.name==='Pip'&&r.j.definition?.instructions==='Answer briefly.',JSON.stringify(r.j).slice(0,160));
+r=await api(U.token,'GET',`/api/agent/definition?workspace=${Bo}`);t('Uma’s assistant in Bravo is her own, untouched',r.s===200&&r.j.definition?.name!=='Pip'&&/Uma’s assistant/.test(r.j.definition?.name??''),JSON.stringify(r.j).slice(0,120));
+r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);const beforePersonal=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.agentRuntime==='external'&&a.sponsorId===O.user.id&&a.state!=='removed').length;
 const OP=await connect(O,A);t('Olga connects as her personal agent (the default)',!!OP.access_token,JSON.stringify(OP).slice(0,120));
 t('the consent page offers her agents to reconnect, and the shared choice',/name="as" value="existing:/.test(connect.lastPage)&&/name="as" value="shared"/.test(connect.lastPage)&&/name="agent_name"/.test(connect.lastPage),'');
-r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);{const now=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.sponsorId===O.user.id&&a.state!=='removed');t('one personal agent of Olga’s in Acme',now.length===1,JSON.stringify(now.map(a=>a.displayName)));var OPA=now[0];}
+r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);{const now=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.agentRuntime==='external'&&a.sponsorId===O.user.id&&a.state!=='removed');t('one personal agent of Olga’s in Acme',now.length===1,JSON.stringify(now.map(a=>a.displayName)));var OPA=now[0];}
 const OP2=await connect(O,A,{},{as:`existing:${OPA?.principalId}`});t('reconnecting it makes no duplicate',!!OP2.access_token,JSON.stringify(OP2).slice(0,120));
-r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);t('still one',(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.sponsorId===O.user.id&&a.state!=='removed').length===1);
+r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);t('still one',(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.agentRuntime==='external'&&a.sponsorId===O.user.id&&a.state!=='removed').length===1);
 const SH=await connect(O,A,{},{as:'shared',agent_name:`Omni ${tag}`});t('Olga connects a shared agent named Omni',!!SH.access_token,JSON.stringify(SH).slice(0,160));
 r=await api(O.token,'GET',`/v1/workspaces/${A}/members`);const OMNI=(r.j.members??[]).find(m=>m.displayName===`Omni ${tag}`);t('Omni is a member of Acme, an agent sponsored by Olga',OMNI?.isAgent===true&&OMNI?.sponsorId===O.user.id,JSON.stringify(OMNI).slice(0,160));
 r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);{const a=(r.j.accounts??[]).find(x=>x.principalId===OMNI?.userId);t('with a native account, mode shared, and an address',a?.kind==='native'&&a?.agentMode==='shared'&&!!a?.address,JSON.stringify(a).slice(0,160));}

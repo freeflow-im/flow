@@ -88,7 +88,7 @@ function PersonalAgents({ org, nameOf }: { org: WorkspaceDTO; nameOf: (userId: s
           {agents.map((a: AccountDTO) => (
             <li key={a.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-sm" data-testid={`personal-agent-${a.id}`}>
               <span className="font-medium">{a.displayName} 🤖</span>
-              <span className="text-xs text-muted">personal agent of {nameOf(a.sponsorId ?? null)}</span>
+              <span className="text-xs text-muted">personal agent of {nameOf(a.sponsorId ?? null)}{a.agentRuntime === 'hosted' ? ' · hosted here' : ''}</span>
               <span className="flex-1" />
               {confirming === a.id ? (
                 <Confirm question={`Remove ${a.displayName}? Its connection stops working; ${nameOf(a.sponsorId ?? null)} can connect it again.`} busy={remove.isPending} onYes={() => remove.mutate(a.id)} onNo={() => setConfirming(null)} testid={`personal-agent-remove-confirm-${a.id}`} />
