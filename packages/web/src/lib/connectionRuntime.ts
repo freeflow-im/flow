@@ -215,7 +215,33 @@ export class ConnectionRuntime {
 
   // -- REST ----------------------------------------------------------------
 
-  async api<T>(method: string, path: string, body?: unknown): Promise<T> {
+  /** The GETs under way, by URL, each with the sign-in and the count of writes it went out under. */
+  private readonly reads = new Map<string, { generation: number; writes: number; answer: Promise<unknown> }>();
+  /** Goes up when a write starts and again when it ends, so a read from before or during one is never shared after it. */
+  private writes = 0;
+
+  /**
+   * A GET that asks what another GET under way is already asking shares its answer. Several parts of the client read
+   * the same thing as the page starts (the organization list is read by four), and a browser holds a second identical
+   * GET until the first has answered anyway, so the second one only ever cost time. A read is shared only with one
+   * that began under the same sign-in and with no write begun or ended since, so nobody is handed an answer older than
+   * their own change.
+   */
+  api<T>(method: string, path: string, body?: unknown): Promise<T> {
+    if (method !== 'GET' || body !== undefined) {
+      this.writes += 1;
+      return this.send<T>(method, path, body).finally(() => { this.writes += 1; });
+    }
+    const under = this.reads.get(path);
+    if (under && under.generation === this.generation && under.writes === this.writes && !this.disposed) return under.answer as Promise<T>;
+    const entry = { generation: this.generation, writes: this.writes, answer: this.send<T>(method, path, body) as Promise<unknown> };
+    this.reads.set(path, entry);
+    const done = () => { if (this.reads.get(path) === entry) this.reads.delete(path); };
+    entry.answer.then(done, done);
+    return entry.answer as Promise<T>;
+  }
+
+  private async send<T>(method: string, path: string, body?: unknown): Promise<T> {
     if (this.disposed) throw new ApiError(0, 'disposed', 'connection closed');
     const url = this.url(path);
     const generation = this.generation;
