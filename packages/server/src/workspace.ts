@@ -116,8 +116,8 @@ export async function mountWorkspace(app: FastifyInstance): Promise<boolean> {
       // it for the user (mirrored into `users` when new here) and signs them in on this host (routes/crossHost.ts).
       signInUrl: '/oauth/sign-in',
       handoff: {
-        signIn: (host, next) => `${webBase}/api/auth/cross-host?host=${encodeURIComponent(host)}&next=${encodeURIComponent(next)}`,
-        redeem: async (key) => {
+        signIn: (host: string, next: string) => `${webBase}/api/auth/cross-host?host=${encodeURIComponent(host)}&next=${encodeURIComponent(next)}`,
+        redeem: async (key: string) => {
           const secret = config.edgeOriginSecret;
           if (!secret) return null;
           const res = await fetch(`${webBase}/api/auth/cross-host/exchange`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-edge-secret': secret }, body: JSON.stringify({ key }) }).catch(() => null);
@@ -125,7 +125,7 @@ export async function mountWorkspace(app: FastifyInstance): Promise<boolean> {
           const { user } = (await res.json()) as { user: { id: string; email: string; displayName: string; avatarUrl: string | null } };
           return mirrorUser(user);
         },
-        sessionCookie: async (userId) => sessionCookieHeader(await auth.issueSession(userId, 'ChatGPT plugin sign-in')),
+        sessionCookie: async (userId: string) => sessionCookieHeader(await auth.issueSession(userId, 'ChatGPT plugin sign-in')),
       },
       authenticate: (req: FastifyRequest) => userOf(sessionTokenOf(req)),
       signOut: async (req: FastifyRequest, reply: FastifyReply) => {
