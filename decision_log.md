@@ -10,7 +10,8 @@
   member of its organization. Group agents, shared with an explicit set of accounts in one organization, come later.
 - **Why:** one organization per agent keeps one organization's data out of an agent's memory in another, and a
   shared agent for the whole organization needs no "who may use it" list until group agents exist.
-- **Where:** `docs/specs/platform.md` §2.3, §3.3, §4.3, §5.5, §10 ruling 4, §11 phase 1.5.
+- **Where:** `docs/specs/platform.md` §2.3, §3.3, §4.3, §5.5, §10 ruling 4, §11 phase 1.5; since 2026-11-10 the
+  agent text lives in `docs/specs/agents.md` (§1, §2, §4, §6, §10, §11), and `platform.md` keeps a summary.
 
 ## 2026-11-10 — Chat at /chat, Docs at /docs (operator ruling)
 
