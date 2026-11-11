@@ -1,5 +1,17 @@
 # Decision log
 
+## 2026-11-10 — Agents: one organization each; personal agents are principals admins see; shared agents for the whole organization (operator ruling)
+
+- **Ruling (Scott):** every agent, personal or shared, is a principal with exactly one account in one organization.
+  A person with accounts in several organizations has a separate personal agent in each, with separate memory.
+- **Ruling (Scott):** admins see every principal, personal agents included, and may suspend or remove them. A
+  personal agent is private like a mailbox: no admin can start its turns or read its conversation or memory.
+- **Ruling (Scott):** the first version has personal agents and shared agents; a shared agent is usable by every
+  member of its organization. Group agents, shared with an explicit set of accounts in one organization, come later.
+- **Why:** one organization per agent keeps one organization's data out of an agent's memory in another, and a
+  shared agent for the whole organization needs no "who may use it" list until group agents exist.
+- **Where:** `docs/specs/platform.md` §2.3, §3.3, §4.3, §5.5, §10 ruling 4, §11 phase 1.5.
+
 ## 2026-11-10 — Chat at /chat, Docs at /docs (operator ruling)
 
 - **Ruling (Scott):** Chat's page is `/chat`, not the root, and Docs' is `/docs`, not `/workspace`. The suite spec
