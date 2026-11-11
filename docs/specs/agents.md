@@ -1,6 +1,7 @@
 # FreeFlow agents: personal and shared
 
-Status: design spec · split out of `platform.md` on 2026-11-10, where it was §2.3, §3.3 (agent accounts), §5.5 and
+Status: design spec · split out of `platform.md` on 2026-11-10 and revised the same day (two axes: kind and runtime;
+hosted agents with a definition; sync and async turns; operator ruling in `decision_log.md`), where it was §2.3, §3.3 (agent accounts), §5.5 and
 the agent steps of §11. The rulings are in `decision_log.md` (2026-11-10, "Agents: one organization each") and
 `platform.md` §10 ruling 4. This document is the newer text; `platform.md` keeps a summary in each place and points
 here. Nothing in the repository changes by this document; §8 says what the code does today, and §11 is the build plan.
@@ -21,8 +22,17 @@ platform enforces, not by the model's behaviour.
 - A **shared agent** is a member of the organization in its own right, sees only what is shared with it, and anyone
   in the organization can use it. Builder and Omni are shared agents.
 
-Where an agent runs (a client calling `/mcp`, the bridge, or hosted by the platform) is a separate choice from its
-kind (§6).
+An agent has two independent properties, and every combination exists:
+
+| | Hosted (the platform runs its loop) | External (its own machine runs its loop) |
+| --- | --- | --- |
+| Personal | the in-app assistant, made for every person by default | Claude Desktop on `/mcp`; a person's own Claude Code on the bridge |
+| Shared | Omni, run by the platform for the organization | Builder on the bridge |
+
+**Kind** (personal or shared) decides access. **Runtime** (hosted or external) decides where the loop runs and so what
+the agent can do: a hosted agent can run a turn at once in the panel, with the open page and its browser tools, and
+can also be woken later by a trigger; an external agent is called by its own client, and takes wake-ups only if it
+subscribes (§6). There is no single "Assistant": the assistant a person sees is their hosted personal agent.
 
 ## 1. The two kinds
 
@@ -78,8 +88,10 @@ organization:
 > shared agent** (a member with its own address; it sees only what is shared with it; everyone in Acme can use it)
 > · or reconnect an existing agent: *Scott's assistant · Omni*
 
-Personal creates an agent principal with `mode: personal` in the chosen organization, its `personal_agent` account,
-and a delegation with the scopes the person picks. Shared creates an agent principal with `mode: shared`, a `native`
+Both answers make an **external** agent: the client asking the question runs the loop. A **hosted** agent is made
+in the app instead (the person's assistant by default; a shared one from the Admin app's Agents section, §6), and
+needs no credential, since the platform runs it. Personal creates an agent principal with `mode: personal` in the
+chosen organization, its `personal_agent` account, and a delegation with the scopes the person picks. Shared creates an agent principal with `mode: shared`, a `native`
 account with the address the person picks, and an agent token. The organization's policies on sponsoring agents
 apply (P§3.1). Reconnecting names an existing agent in the chosen organization, so a new machine does not make a
 duplicate. The kind and the organization never change; to switch, make a new agent, so an agent never quietly gains
@@ -136,40 +148,66 @@ The registry (P§5.4) serves one list, filtered by the agent's kind, not by how 
 what the delegation's scopes allow; a shared agent gets what its account can see. `/mcp`, the bridge's MCP and the
 hosted runtime (§6) all read the same list.
 
-Tools are of two kinds, and the registry marks each. **Server tools** run in the app's object. **Browser tools** run
-in the open editor against what is on screen (insert into this document, open this message) so the change is
-undoable. Browser tools carry an agent's edits; they give no access. They are offered only in a turn started from a
-page a person has open (§6), and each call is checked against the agent's own access: the sponsor's for a personal
-agent, its own grants for a shared one.
+A tool runs in one of two places. **Server tools** run in the app's object. **Browser tools** run in the open editor
+against what is on screen (insert into this document, open this message) so the change is undoable. Browser tools
+carry an agent's edits; they give no access. They are offered only in a sync turn started from a page a person has
+open (§6), and each call is checked against the agent's own access: the sponsor's for a personal agent, its own
+grants for a shared one.
+
+**Where a tool runs is a property of the turn, not of the tool.** The Docs editing tools (`insert_content`,
+`write_range`, `add_slides` and the rest of `CLIENT_TOOLS` in `packages/docs/shared/agent/protocol.ts`) are one
+definition with three runners today: the live editor in the tab when the assistant calls them, a **headless**
+controller on the server when the MCP server calls them (`plugin/server/files.ts` runs the same client code and saves
+a revision), and the desktop app's window when the file is open there. A sync turn from an open page gets the live
+editor; every other turn (async, external, or on a page the person does not have open) gets the headless runner. So
+an agent woken by a trigger can edit a shared document with the same tools, through its own grants, and the registry
+marks each tool by the runners it has rather than by door. Today the MCP server lacks headless runners for some sheet
+tools (charts, tabs, freeze, column widths); phase C gives every editing tool one.
 
 ## 6. Agents at work: runtimes, the panel, browser tools
 
-**Three runtimes, one agent model.** Where an agent's loop runs is separate from its kind:
+**Two runtimes, one agent model.** Where an agent's loop runs is separate from its kind (§0).
 
-| | Personal | Shared |
+- **Hosted.** The platform runs the loop in an `AgentRuntime` object, one per agent. It holds the model's working
+  state (paused turns, tool results), takes `wake` jobs from `agent_jobs`, and calls the model with the platform's key
+  (limited per organization) or a key the sponsor supplies. Subscriptions, jobs, leases, `causedBy` and the depth cap
+  (P§5.2) are the same whoever runs the loop. A hosted agent is a personal one (the assistant) or a shared one (Omni,
+  run for the organization).
+- **External.** The agent's own client runs the loop and calls the platform: Claude Desktop on `/mcp`, Claude Code or
+  Builder on the bridge. An external agent is woken only if it **subscribes** to events (the bridge does; a bare
+  `/mcp` client does not); subscribing is a property of the agent, not a third runtime. The desktop app's "use my own
+  Claude Code" is an external personal agent on the bridge.
+
+**A hosted agent has a definition.** Today the assistant has one fixed prompt, one tool set and one conversation per
+account. A hosted agent instead carries: a name and avatar; instructions (its system prompt); the model and the key
+that pays for it; the tools it may use, a subset of what the registry offers its kind; what it subscribes to; and its
+memory. A person edits their own assistant's definition in their settings (the model-key settings move there); an
+organization's admins and the sponsor edit a hosted shared agent's in the Admin app's Agents section
+(`workspace-admin.md` §3.4), which is also where one is made. Kind and organization are not in the definition: they
+never change (§1).
+
+**Two kinds of turn.** A hosted agent runs turns in two ways, and the way is a property of the turn, not of the agent.
+
+| | Sync turn | Async turn |
 | --- | --- | --- |
-| `/mcp` only (the client calls when it wants) | Claude Desktop acting as Scott; exists today | an agent that reads and acts when its client calls; no wake-ups |
-| Bridge (events, `wake` jobs) | Scott's own Claude Code, woken by Scott's subscriptions | Builder, Omni; exists today |
-| Hosted (the platform runs it) | **the in-app assistant**, by default for every person | a shared agent the platform runs for the organization |
-
-A hosted agent has an `AgentRuntime` object, one per agent and so one per organization: it holds the model's
-working state (paused turns, tool results), takes `wake` jobs from `agent_jobs` as the bridge does, and calls the
-model with the platform's key (limited per organization) or the sponsor's own key. Subscriptions, jobs, leases,
-`causedBy` and the depth cap (P§5.2) are the same whoever runs the loop. The desktop app's "use my own Claude Code"
-becomes a personal agent on the bridge.
+| Started by | a person in the panel, on an open page | a trigger: a subscription (a mention, a DM, `docs.changed`), a schedule, or a `wake` job another agent queued |
+| Delivery | the panel calls the runtime directly and streams the answer | a `wake` job from `agent_jobs`, as the bridge takes them |
+| Page context and browser tools | yes (below) | no tab, so no; the same editing tools run headless (§5) |
+| Writes | through the editor, undoable; or server tools, marked as such | server tools only |
+| Where the answer goes | the panel | the conversation the trigger belongs to (a channel, a thread, the person's assistant conversation) |
 
 **The in-app assistant is the person's hosted personal agent.** Every person gets one in each organization, when
-their account there becomes `active`, named "<name>'s assistant", with the person as sponsor. Its conversation with
-the person is one private conversation, shown in the panel of every app and in that organization's Chat. Within an
-organization it is the same agent, with the same memory, whether the person reaches it from the panel, from Chat or
-through a subscription; switching organizations in the bar switches to that organization's assistant. The settings
-for a person's own model key move to it.
+their account there becomes `active`, named "<name>'s assistant", with the person as sponsor and a default
+definition. Its conversation with the person is one private conversation, shown in the panel of every app and in
+that organization's Chat. Within an organization it is the same agent, with the same memory, whether the person
+reaches it from the panel, from Chat or through a subscription; switching organizations in the bar switches to that
+organization's assistant.
 
 **The panel can talk to any agent the person may use.** It picks the person's assistant by default; the person may
 pick a shared agent of the same organization instead (Omni). The panel shows a shared agent's audience under its name
 ("Omni · everyone in Acme").
 
-**A turn started from an open page** differs from other turns in three ways:
+**A sync turn started from an open page** differs from an async turn in three ways:
 
 1. **It streams.** The panel calls the runtime directly and streams the answer; a `wake` job is too slow for this.
 2. **It gets page context**, as the app's manifest describes it (P§6.1 `assistant`): a reference to the open object
@@ -222,7 +260,10 @@ code. As of 2026-11-10:
 - **The assistant is an object per account** (phase 6, `packages/edge/src/assistant`), reading the tool registry and
   holding the chats moved out of the Docs objects. It is not an `AgentRuntime`: it takes no `wake` jobs, is not a
   principal of its own, and the panel cannot pick a shared agent. Its browser tools run as the person, which is the
-  right behaviour for a personal agent and is noted as such in `browserTools.ts`.
+  right behaviour for a personal agent and is noted as such in `browserTools.ts`. It has one fixed prompt and tool
+  set; there is no agent definition and no hosted shared agent.
+- **The Docs editing tools** already run in two ways: live in the tab for the assistant, headless for the MCP server
+  (§5). Some sheet tools have no headless runner.
 - **The tool registry** serves the three doors (`GET /v1/tools?door=…`) but filters by door, not by agent kind. The
   consent page builds its scope groups from the manifests but does not ask "personal or shared" or offer "reconnect
   an existing agent".
@@ -255,6 +296,12 @@ organization; personal agents act through a delegation and only the sponsor may 
 their own grants, are full accounts, and every member may use them; group agents come later; admins see every
 principal but cannot use a personal agent or read its conversation or memory.
 
+A second ruling the same day (`decision_log.md` 2026-11-10, "Agents: hosted or external; the assistant is a hosted
+agent"): kind and runtime are two independent axes; the runtimes are hosted and external, and subscribing is a
+property of the agent; there is no single Assistant, the assistant is the person's hosted personal agent, and a
+hosted shared agent runs the same way; a hosted agent has a definition; sync and async are properties of the turn,
+and browser tools exist only in a sync turn from an open page.
+
 ## 11. Implementation phases
 
 Three phases, one branch and one PR each (the batching rule in `CLAUDE.md`), each leaving something a person or an
@@ -262,8 +309,8 @@ agent can use. They replace steps 1.5, 6.2 and 6.3 of `platform.md` §11, which 
 and were not built as written (§8). Phase A comes first; B and C both need it and are independent of each other.
 
 ```
-A agents by account ─┬─ B connecting an agent (consent, registry by kind)
-                     └─ C the agent runtime (hosted assistant, the panel)   ─ D later
+A agents by account ─┬─ B connecting an external agent (consent, registry by kind)
+                     └─ C hosted agents (runtime, definition, the assistant, the panel)   ─ D later
 ```
 
 ### Phase A: agents by account
@@ -285,7 +332,7 @@ history reads "Ann (via assistant)" and "Omni, asked by Scott". Exit: no agent r
 creates one agent of each kind and the constraint refuses a shared agent with a delegation and a personal agent with
 a grant.
 
-### Phase B: connecting an agent
+### Phase B: connecting an external agent
 
 1. **The consent page** asks "personal or shared", or "reconnect an existing agent", beside the organization; the
    bridge's self-registration asks the same question. The organization's sponsoring policies apply.
@@ -297,22 +344,30 @@ a grant.
 What people see: the kind chosen at connect time, the warning at share time. Exit: connecting the same bridge twice
 with "reconnect" makes no duplicate; a shared agent's tool list contains nothing its account cannot see.
 
-### Phase C: the agent runtime
+### Phase C: hosted agents
 
-1. **`AgentRuntime`** runs hosted agents and takes `wake` jobs from `agent_jobs`, with the platform's key limited per
-   organization or the sponsor's own key.
-2. **The hosted personal agent.** Every person's assistant becomes an agent principal with `mode: personal` and a
-   `personal_agent` account, made when the account turns `active`; the assistant object's conversation becomes that
-   agent's; the model-key settings move to it; the confirm card for writes others can see.
-3. **The panel** talks to any agent the person may use, their assistant by default or a shared agent of the same
-   organization, showing a shared agent's audience; page context and browser tools by manifest, each browser-tool
-   call checked against the agent's own access; "Omni can't see this page" with **Share with Omni**.
-4. **Object threads**: one conversation on an object that everyone with access sees; a mention of a shared agent in
-   it wakes the agent through a subscription.
+1. **`AgentRuntime`**, one object per hosted agent of either kind: the loop, paused turns, `wake` jobs from
+   `agent_jobs`, the platform's key limited per organization or a key from the definition.
+2. **The definition**: name, instructions, model and key, allowed tools, subscriptions, memory; edited in the person's
+   settings for their assistant and in the Admin app's Agents section for a hosted shared agent, which is also where
+   one is made (an agent principal with `mode: shared`, a `native` account, no token).
+3. **The hosted personal agent.** Every person's assistant becomes an agent principal with `mode: personal` and a
+   `personal_agent` account, made with a default definition when the account turns `active`; the assistant object's
+   conversation becomes that agent's; the model-key settings move into its definition; the confirm card for writes
+   others can see.
+4. **Headless runners** for every Docs editing tool, so an async turn edits with the same tools a sync turn does,
+   through the agent's own grants; the registry marks each tool by its runners.
+5. **The panel** talks to any agent the person may use, their assistant by default or a shared agent of the same
+   organization, showing a shared agent's audience; page context and browser tools by manifest in sync turns, each
+   browser-tool call checked against the agent's own access; "Omni can't see this page" with **Share with Omni**.
+6. **Object threads**: one conversation on an object that everyone with access sees; a mention of a shared agent in
+   it wakes the agent in an async turn through a subscription.
 
-What people see: the same assistant from the panel, from Chat and through a subscription; Omni in the panel, editing
-a shared document through the person's editor, undoable. Exit: the §6 example runs end to end, and Omni's turn fails
-with "can't see this page" on a document not shared with it.
+What people see: the same assistant from the panel, from Chat and through a subscription; an admin makes Omni in the
+Admin app with instructions and tools, and Omni answers in the panel, edits a shared document through the person's
+editor, undoable, and later answers a mention in the document's thread on its own. Exit: the §6 example runs end to
+end in a sync turn; the same edit made by a mention runs as an async turn through the headless runner and lands as a
+new revision; Omni's turn fails with "can't see this page" on a document not shared with it.
 
 ### Phase D: later, in no order
 

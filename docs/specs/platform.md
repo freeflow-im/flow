@@ -531,13 +531,13 @@ and the bridge's MCP has Chat's.
 
 ### 5.5 Agents at work: runtimes, the panel, browser tools
 
-`agents.md` §6 is the full text. In short: where an agent's loop runs is separate from its kind. Three runtimes:
-`/mcp` only (the client calls when it wants), the bridge (events and `wake` jobs), and hosted (an `AgentRuntime`
-object the platform runs, taking `wake` jobs as the bridge does). The in-app assistant is the person's hosted
-personal agent, one per organization, the same agent from the panel, from Chat and through a subscription. The panel
-can talk to any agent the person may use. A turn started from an open page streams, gets the page context the app's
-manifest describes (§6.1), and gets browser tools, each call checked against the agent's own access (§5.4). External
-agents get no browser tools in the first version.
+`agents.md` §0 and §6 are the full text. In short: kind (personal or shared) and runtime (hosted or external) are two
+independent axes. A hosted agent's loop runs in an `AgentRuntime` object the platform owns, with a definition (name,
+instructions, model and key, allowed tools, subscriptions, memory); an external agent runs on its own machine and is
+woken only if it subscribes. There is no single Assistant: the in-app assistant is the person's hosted personal
+agent, one per organization. A hosted agent runs sync turns from the panel, which stream and get the open page's
+context and browser tools (§6.1, §5.4), and async turns from triggers as `wake` jobs, which use the same editing tools
+headless. External agents get no browser tools in the first version.
 
 ### 5.6 The shell
 
