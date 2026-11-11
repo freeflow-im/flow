@@ -44,6 +44,8 @@ const DAY_MS = 86_400_000;
 const SWEEP_KEY = 'mail_sweep_at';
 /** Set once the agents the directory retired when agents gained kinds (agents.md phase A) have left this roster. */
 const AGENTS_RETIRED_KEY = 'agents_retired_v1';
+/** Set once this member list holds kinds and the organization's personal agents (agents.md phase E). */
+const MEMBERS_KEY = 'members_v2';
 
 /** What each id-only path needs (`routes/org.ts`), and who belongs here (`memberships`), reported to the directory by trigger. */
 const OUTBOX = [
@@ -116,6 +118,10 @@ export class Org extends DurableObject<OrgEnv> {
     if (sql.exec("SELECT 1 FROM workspace_members m JOIN users u ON u.id = m.user_id WHERE u.is_agent LIMIT 1").toArray().length) {
       void ctx.blockConcurrencyWhile(() => this.retireRemovedAgents());
     }
+    void ctx.blockConcurrencyWhile(async () => {
+      if (!(await ctx.storage.get<boolean>(MEMBERS_KEY))) await this.adoptAccounts().catch((err) => console.error(`member adoption: ${(err as Error).message}`));
+      await this.syncAssistants().catch((err) => console.error(`assistants: ${(err as Error).message}`));
+    });
   }
 
   /**
@@ -331,18 +337,18 @@ export class Org extends DurableObject<OrgEnv> {
    * Who may make a `wake` subscription for the agent whose account this is (routes/events.ts): its sponsor, or an
    * owner or admin of the organization. Null when the account is no agent of this organization.
    */
-  async agentSponsorOf(agentAccountId: string): Promise<{ userId: string; sponsorUserId: string | null } | null> {
+  async agentSponsorOf(agentAccountId: string): Promise<{ userId: string; sponsorUserId: string | null; personal: boolean } | null> {
     const row = this.ctx.storage.sql.exec(
-      'SELECT m.user_id, COALESCE(m.sponsor_user_id, u.sponsor_user_id) AS sponsor FROM workspace_members m JOIN users u ON u.id = m.user_id WHERE m.account_id = ? AND u.is_agent',
+      'SELECT m.user_id, m.kind, COALESCE(m.sponsor_user_id, u.sponsor_user_id) AS sponsor FROM workspace_members m JOIN users u ON u.id = m.user_id WHERE m.account_id = ? AND u.is_agent',
       agentAccountId,
     ).toArray()[0];
-    if (row) return { userId: row.user_id as string, sponsorUserId: (row.sponsor as string | null) ?? null };
+    if (row) return { userId: row.user_id as string, sponsorUserId: (row.sponsor as string | null) ?? null, personal: row.kind === 'personal_agent' };
     // A personal agent is no member here (agents.md §2): the person's hosted assistant is one the directory knows.
     const answer = await this.directory().call('accountById' as never, [agentAccountId] as never).catch(() => null) as DirectoryAnswer<AccountDTO | null> | null;
     const a = answer?.ok ? answer.value : null;
     const org = this.ctx.storage.sql.exec('SELECT id FROM workspaces LIMIT 1').toArray()[0]?.id as string | undefined;
     if (!a || a.state === 'removed' || !a.agentMode || a.organizationId !== org) return null;
-    return { userId: a.principalId, sponsorUserId: a.sponsorId ?? null };
+    return { userId: a.principalId, sponsorUserId: a.sponsorId ?? null, personal: a.agentMode === 'personal' };
   }
 
   /**
@@ -543,14 +549,142 @@ export class Org extends DurableObject<OrgEnv> {
     return { removed: answer.value, applied: apply };
   }
 
+  /**
+   * Once (MEMBERS_KEY): this list takes the kinds and personal agents the directory held before it became the truth
+   * (decision_log 2026-11-11). Each guest's row gets `guest`; each personal agent whose sponsor is a member here gets a
+   * row of its own. Also run for the Admin app's full list, so a personal agent an MCP client made since is on it.
+   */
+  private async adoptAccounts(kinds = true): Promise<void> {
+    const sql = this.ctx.storage.sql;
+    const org = sql.exec('SELECT id FROM workspaces LIMIT 1').toArray()[0]?.id as string | undefined;
+    if (!org) return;
+    const answer = await this.directory().call('accountsOfOrganization' as never, [org] as never) as DirectoryAnswer<AccountDTO[]>;
+    if (!answer.ok) throw new Error(answer.message);
+    for (const a of answer.value) {
+      if (a.state === 'removed') continue;
+      if (a.kind === 'guest' && kinds) sql.exec("UPDATE workspace_members SET kind = 'guest' WHERE workspace_id = ? AND user_id = ? AND kind = 'native'", org, a.principalId);
+      else if (a.kind === 'personal_agent' && a.sponsorId && this.isPersonMember(org, a.sponsorId)) this.addPersonalAgent(org, a);
+    }
+    await this.flushOutbox(org);
+    if (kinds) await this.ctx.storage.put(MEMBERS_KEY, true);
+  }
+
+  private isPersonMember(org: string, userId: string): boolean {
+    return this.ctx.storage.sql.exec('SELECT 1 FROM workspace_members m JOIN users u ON u.id = m.user_id WHERE m.workspace_id = ? AND m.user_id = ? AND NOT u.is_agent', org, userId).toArray().length > 0;
+  }
+
+  /** A personal agent's member row (agents.md §1.1), from its account in the directory. No channel: the assistant is
+   * brought into the ones its sponsor chooses. */
+  private addPersonalAgent(org: string, a: AccountDTO): void {
+    const sql = this.ctx.storage.sql;
+    const now = Date.now();
+    sql.exec(`INSERT INTO users (id, email, password_hash, display_name, is_agent, sponsor_user_id, email_verified_at, created_at)
+      VALUES (?, ?, '!directory', ?, 1, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET display_name = excluded.display_name`,
+      a.principalId, `agent-${a.principalId}@agents.flow.local`, a.displayName, a.sponsorId ?? null, now, now);
+    sql.exec(`INSERT INTO workspace_members (workspace_id, user_id, role, sponsor_user_id, joined_at, address, account_id, kind, runtime)
+      VALUES (?, ?, 'member', ?, ?, ?, ?, 'personal_agent', ?) ON CONFLICT DO NOTHING`,
+      org, a.principalId, a.sponsorId ?? null, now, a.address, a.id, a.agentRuntime === 'hosted' ? 'hosted' : null);
+  }
+
+  /**
+   * Every native person here has their assistant on this list, and nobody else has one (agents.md §6): a member gets
+   * theirs (the directory records its principal and account, or brings the same one back); a guest's, or a departed
+   * person's, leaves the list, so the directory removes its account and keeps the principal for a return. A local
+   * check; it asks the directory only when something is to change.
+   */
+  private async syncAssistants(): Promise<void> {
+    const sql = this.ctx.storage.sql;
+    const org = sql.exec('SELECT id FROM workspaces LIMIT 1').toArray()[0]?.id as string | undefined;
+    if (!org) return;
+    const missing = sql.exec(`SELECT m.user_id, u.display_name FROM workspace_members m JOIN users u ON u.id = m.user_id
+      WHERE m.workspace_id = ? AND NOT u.is_agent AND m.kind = 'native'
+        AND NOT EXISTS (SELECT 1 FROM workspace_members h WHERE h.workspace_id = m.workspace_id AND h.kind = 'personal_agent' AND h.runtime = 'hosted' AND h.sponsor_user_id = m.user_id)`, org).toArray();
+    // A hosted assistant needs a native sponsor here; an external personal agent, a sponsor who is still a member.
+    const stale = sql.exec(`SELECT h.user_id FROM workspace_members h WHERE h.workspace_id = ? AND h.kind = 'personal_agent'
+      AND NOT EXISTS (SELECT 1 FROM workspace_members m JOIN users u ON u.id = m.user_id WHERE m.workspace_id = h.workspace_id AND m.user_id = h.sponsor_user_id
+        AND NOT u.is_agent AND (h.runtime IS NULL OR m.kind = 'native'))`, org).toArray();
+    if (!missing.length && !stale.length) return;
+    if (stale.length) {
+      await this.scoped(async () => {
+        const { removeAgentFromWorkspace } = await import('./services/memberRemoval');
+        for (const r of stale) await removeAgentFromWorkspace(org, r.user_id as string);
+      });
+    }
+    for (const m of missing) {
+      const answer = await this.directory().call('ensureAssistantFor' as never, [m.user_id, org, m.display_name] as never) as DirectoryAnswer<AccountDTO>;
+      if (!answer.ok) { console.error(`assistant for ${m.user_id as string}: ${answer.message}`); continue; }
+      this.addPersonalAgent(org, answer.value);
+    }
+    await this.flushOutbox(org);
+  }
+
+  /**
+   * A member made a guest or native (routes/accounts.ts, platform.md §3.3): this row's kind changes, the directory's
+   * account follows (its address and mailbox), the person's assistant comes or goes with it, and the organization's
+   * sockets hear `member.updated`. Returns the account as it is now.
+   */
+  async setMemberKind(accountId: string, kind: 'native' | 'guest'): Promise<DirectoryAnswer<AccountDTO>> {
+    // A refusal crosses the object boundary as an answer: a thrown ApiError reaches the Worker as a plain Error.
+    try {
+      return { ok: true, value: await this.changeKind(accountId, kind) };
+    } catch (err) {
+      if (err instanceof ApiError) return { ok: false, status: err.statusCode, code: err.code, message: err.message };
+      throw err;
+    }
+  }
+
+  private async changeKind(accountId: string, kind: 'native' | 'guest'): Promise<AccountDTO> {
+    const sql = this.ctx.storage.sql;
+    const org = sql.exec('SELECT id FROM workspaces LIMIT 1').toArray()[0]?.id as string | undefined;
+    const row = sql.exec('SELECT user_id, kind FROM workspace_members WHERE account_id = ?', accountId).toArray()[0];
+    if (!org || !row) throw new ApiError(404, 'not_found', 'account not found');
+    if (row.kind === 'personal_agent') throw new ApiError(409, 'personal_agent', "a personal agent's account never changes kind");
+    const answer = await this.directory().call('setAccountKind' as never, [org, accountId, kind] as never) as DirectoryAnswer<AccountDTO>;
+    if (!answer.ok) throw new ApiError(answer.status, answer.code, answer.message);
+    sql.exec('UPDATE workspace_members SET kind = ?, address = ? WHERE workspace_id = ? AND account_id = ?', answer.value.kind, answer.value.address, org, accountId);
+    await this.scoped(async () => {
+      publishEvent(subjectMeta(org), { type: 'member.updated', workspaceId: org, ts: new Date().toISOString(), data: await toMemberDTO(org, row.user_id as string) } as Event);
+    });
+    await this.logging;
+    await this.syncAssistants();
+    return answer.value;
+  }
+
+  /** An external personal agent an admin removed (routes/accounts.ts): its row leaves this list too. */
+  async dropPersonalAgent(userId: string): Promise<void> {
+    const org = this.ctx.storage.sql.exec('SELECT id FROM workspaces LIMIT 1').toArray()[0]?.id as string | undefined;
+    if (!org) return;
+    if (!this.ctx.storage.sql.exec("SELECT 1 FROM workspace_members WHERE user_id = ? AND kind = 'personal_agent'", userId).toArray().length) return;
+    await this.scoped(async () => {
+      const { removeAgentFromWorkspace } = await import('./services/memberRemoval');
+      await removeAgentFromWorkspace(org, userId);
+    });
+    await this.flushOutbox(org);
+  }
+
+  /** "Make every member a guest": each person whose role is `member` and who is native here. Owners, admins and agents
+   * keep their kind. Returns the accounts that changed, and how many were guests already. */
+  async makeMembersGuests(): Promise<{ changed: AccountDTO[]; unchanged: number }> {
+    const rows = this.ctx.storage.sql.exec("SELECT m.account_id, m.kind FROM workspace_members m JOIN users u ON u.id = m.user_id WHERE m.role = 'member' AND NOT u.is_agent AND m.account_id IS NOT NULL").toArray();
+    const changed: AccountDTO[] = [];
+    for (const r of rows) if (r.kind === 'native') changed.push(await this.changeKind(r.account_id as string, 'guest'));
+    return { changed, unchanged: rows.length - changed.length };
+  }
+
   async handle(request: Request, caller: CallerContext, newWorkspaceId: string | null): Promise<Response> {
     const stamp = await this.stampOf(caller);
+    // The Admin app's full list (`?all=1`): personal agents an MCP client made since this object last looked come first.
+    const url = new URL(request.url);
+    if (request.method === 'GET' && url.searchParams.get('all') === '1' && url.pathname.endsWith('/members')) {
+      await this.adoptAccounts(false).catch((err) => console.error(`personal agents: ${(err as Error).message}`));
+    }
     const run = () => this.scoped(async () => {
       if (caller.user) this.ensureUser(caller.user);
       return app.handle(request, caller);
     }, stamp);
     const res = await (newWorkspaceId ? presetWorkspaceId.run(newWorkspaceId, run) : run()).finally(() => this.logging);
     await this.flushOutbox(newWorkspaceId);
+    await this.syncAssistants().catch((err) => console.error(`assistants: ${(err as Error).message}`));
     await this.armAlarm();
     return res;
   }
@@ -579,23 +713,6 @@ export class Org extends DurableObject<OrgEnv> {
     await this.flushOutbox(null);
     await this.sweepMailboxes().catch((err) => console.error(`[provisioning] sweep: ${(err as Error).message}`));
     await this.armAlarm();
-  }
-
-  /**
-   * Accounts made guests or native (routes/accounts.ts, platform.md §3.3): each member row's address follows the
-   * directory's (null for a guest), and the organization's sockets hear `member.updated`.
-   */
-  async accountAddresses(changes: { userId: string; address: string | null }[]): Promise<void> {
-    const workspace = this.db.select({ id: schema.workspaces.id }).from(schema.workspaces).get();
-    if (!workspace || !changes.length) return;
-    await this.scoped(async () => {
-      for (const c of changes) {
-        const updated = this.ctx.storage.sql.exec('UPDATE workspace_members SET address = ? WHERE workspace_id = ? AND user_id = ? RETURNING user_id', c.address, workspace.id, c.userId).toArray();
-        if (!updated.length) continue;
-        publishEvent(subjectMeta(workspace.id), { type: 'member.updated', workspaceId: workspace.id, ts: new Date().toISOString(), data: await toMemberDTO(workspace.id, c.userId) } as Event);
-      }
-    });
-    await this.logging;
   }
 
   /** A person's whole account is going: leave this organization as the Node server's deletion did. */

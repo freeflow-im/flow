@@ -107,11 +107,20 @@ r=await api(Bo.token,'POST',`/v1/workspaces/${W}/accounts/${bobAcct?.id}/provisi
 r=await api(A.token,'PATCH',`/v1/workspaces/${W}/accounts/${gusAcct?.id}/kind`,{kind:'native'});t('Gus made native gets an address on the primary domain and is sent to be set up',r.s===200&&r.j.account?.kind==='native'&&r.j.account.address===`gus@${DOM}`,r.s+' '+JSON.stringify(r.j).slice(0,140));
 const gusNative=await accountUntil(G.token,W,(a)=>a.hosted===true||a.state==='active',15000);
 r=await api(G.token,'GET',`/v1/mail/accounts?workspace=${W}`);t('and Mail lets him in now',r.s===200,r.s+' '+JSON.stringify(gusNative).slice(0,100));
+// The member list is the Org's (decision_log 2026-11-11): each native person's assistant is on it, as a personal agent.
+r=await api(A.token,'GET',`/v1/workspaces/${W}/members?all=1`);{const ms=r.j.members??[];const asst=(id)=>ms.find(m=>m.kind==='personal_agent'&&m.agentRuntime==='hosted'&&m.sponsorId===id);
+t('the full list holds each member’s assistant, as a personal agent with its sponsor',r.s===200&&!!asst(A.user.id)&&!!asst(Bo.user.id)&&!!asst(G.user.id),JSON.stringify(ms.map(m=>[m.displayName,m.kind,m.agentRuntime??''])));
+globalThis.annAsst=asst(A.user.id);globalThis.bobAsst=asst(Bo.user.id);}
+r=await api(Bo.token,'POST',`/v1/workspaces/${W}/dms`,{userIds:[annAsst?.userId]});t('Bob cannot DM Ann’s assistant',r.s===403,r.s+' '+JSON.stringify(r.j).slice(0,120));
+r=await api(A.token,'POST',`/v1/workspaces/${W}/dms`,{userIds:[annAsst?.userId]});t('Ann can DM her own',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,120));
+r=await api(A.token,'POST',`/v1/events/subscriptions?workspace=${W}`,{name:'poke',delivery:'wake',consumer:bobAsst?.accountId,filter:{},action:{kind:'wake',prompt:'hello'}});t('an owner cannot point an automation at Bob’s assistant',r.s===403,r.s+' '+JSON.stringify(r.j).slice(0,140));
 r=await api(A.token,'POST',`/v1/workspaces/${W}/accounts/kind`,{kind:'guest',all:true});t('Make every member a guest: Bob and Gus',r.s===200&&r.j.changed===2,r.s+' '+JSON.stringify(r.j));
 r=await api(Bo.token,'GET',`/v1/mail/accounts?workspace=${W}`);t('Bob, a guest now, is refused by Mail',r.s===403&&r.j.error?.code==='guest',r.s);
 // A guest has no assistant (agents.md §6): Bob's and Gus's are set aside; Ann's stays.
 r=await api(A.token,'GET',`/v1/workspaces/${W}/accounts`);{const live=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.agentRuntime==='hosted');t('the guests’ assistants are set aside, the owner’s stays',live.length===1&&live[0].sponsorId===A.user.id,JSON.stringify(live.map(a=>a.sponsorId)));}
 r=await api(Bo.token,'GET',`/api/agent/agents?workspace=${W}`);t('and Bob, a guest, is refused the assistant',r.s===403,r.s);
+r=await api(A.token,'GET',`/v1/workspaces/${W}/members?all=1`);{const ms=r.j.members??[];t('guests on the Org’s list, with no assistant there',ms.filter(m=>m.kind==='guest').length===2&&!ms.some(m=>m.kind==='personal_agent'&&(m.sponsorId===Bo.user.id||m.sponsorId===G.user.id)),JSON.stringify(ms.map(m=>[m.displayName,m.kind])));}
+r=await api(Bo.token,'GET',`/v1/workspaces/${W}/members`);t('Chat’s own list still answers a guest',r.s===200,r.s);
 // Removing members: the directory's accounts follow the Org's list, and reconcile finds nothing left behind (outbox.ts).
 r=await api(A.token,'DELETE',`/v1/workspaces/${W}/members/${Bo.user.id}`);t('Ann removes Bob',r.s===200,r.s);
 r=await api(A.token,'GET',`/v1/workspaces/${W}/accounts`);t('and his account and assistant leave the directory with him',!(r.j.accounts??[]).some(a=>a.principalId===Bo.user.id||a.sponsorId===Bo.user.id),JSON.stringify((r.j.accounts??[]).map(a=>a.displayName)));

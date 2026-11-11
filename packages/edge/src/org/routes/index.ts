@@ -531,7 +531,8 @@ export function registerRoutes(app: FastifyInstance): void {
 
   app.get('/v1/workspaces/:id/members', { preHandler: requireAuth }, async (req) => {
     const { id } = req.params as { id: string };
-    return { members: await ws.listMembers(id, req.user.id) };
+    const { all } = req.query as { all?: string };
+    return { members: await ws.listMembers(id, req.user.id, all === '1') };
   });
 
   // The sole owner's only way out (#340 follow-up): they cannot leave a

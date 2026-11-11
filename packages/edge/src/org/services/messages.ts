@@ -16,7 +16,7 @@ import {
 } from './notifications.js';
 import { publishEvent, subjectMsg } from '../bus.js';
 import { scheduleForMessage, unfurlsForMessages } from './unfurl/index.js';
-import { requireMembership } from './workspaces.js';
+import { requireMembership, notExternalAgent } from './workspaces.js';
 import { expandMentions as expandMentionText } from '../lib/mentionExpansion.js';
 import { inList } from '../sqlList.js';
 
@@ -143,7 +143,7 @@ async function workspaceMentionCandidates(workspaceId: string): Promise<{ id: st
     .select({ id: users.id, displayName: users.displayName })
     .from(workspaceMembers)
     .innerJoin(users, eq(users.id, workspaceMembers.userId))
-    .where(and(eq(workspaceMembers.workspaceId, workspaceId), isNull(users.deletedAt)));
+    .where(and(eq(workspaceMembers.workspaceId, workspaceId), isNull(users.deletedAt), notExternalAgent()));
 }
 
 /**

@@ -34,7 +34,7 @@ beforeEach(() => {
     const method = init?.method ?? 'GET';
     calls.push({ method, path, body: init?.body && typeof init.body === 'string' ? JSON.parse(init.body) : undefined });
     const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { 'content-type': 'application/json' } });
-    if (path.endsWith('/members')) return json({ members: [member('Ann', { role: 'owner' }), member('Bob'), member('Omni', { isAgent: true, sponsorId: 'u-ann', statusText: 'the team helper' })] });
+    if (path.split('?')[0].endsWith('/members')) return json({ members: [member('Ann', { role: 'owner' }), member('Bob'), member('Omni', { isAgent: true, sponsorId: 'u-ann', statusText: 'the team helper' })] });
     if (path.endsWith('/accounts')) return json({ accounts });
     if (method === 'POST' && path.endsWith('/agents/hosted')) return json({ agent: { id: 'u-pip', accountId: 'a-pip', displayName: 'Pip', mode: 'shared', self: false }, definition: { name: 'Pip', instructions: 'Be brief.', updatedAt: '2026-11-11T00:00:00.000Z' } }, 201);
     if (path.endsWith('/agents/u-omni/definition')) return json({ definition: { name: 'Omni', instructions: method === 'PUT' ? 'Updated.' : 'Help the team.', updatedAt: null }, mayEdit: true });

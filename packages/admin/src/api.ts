@@ -63,7 +63,8 @@ export const adminApi = {
   update: (id: string, patch: UpdateWorkspaceBody) => request<WorkspaceDTO>('PATCH', ws(id), patch),
   setIcon: (id: string, file: File) => uploadMultipart<WorkspaceDTO>(`${ws(id)}/avatar`, file),
   clearIcon: (id: string) => request<WorkspaceDTO>('DELETE', `${ws(id)}/avatar`),
-  members: async (id: string) => (await request<{ members: WorkspaceMemberDTO[] }>('GET', `${ws(id)}/members`)).members,
+  // The full list (decision_log 2026-11-11): people, guests, shared agents and personal agents, from the Org object.
+  members: async (id: string) => (await request<{ members: WorkspaceMemberDTO[] }>('GET', `${ws(id)}/members?all=1`)).members,
   transferOwnership: (id: string, userId: string) => request<WorkspaceDTO>('POST', `${ws(id)}/owner`, { userId }),
   deleteWorkspace: (id: string) => request<unknown>('DELETE', ws(id)),
   emoji: async (id: string) => (await request<{ emoji: WorkspaceEmojiDTO[] }>('GET', `${ws(id)}/emoji`)).emoji,

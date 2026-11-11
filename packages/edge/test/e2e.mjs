@@ -238,7 +238,7 @@ r=await api(A.token,'POST',`/v1/workspaces/${W}/owner`,{userId:AGT_ID});t('nor o
 // ---- organizations: the address on every member, the policies, handing the organization on (platform.md §3.1, §3.2)
 r=await api(Bo.token,'GET','/v1/me');const bobAddr=r.j.accounts?.find(a=>a.organizationId===W)?.address;
 r=await api(A.token,'GET',`/v1/workspaces/${W}/members`);const ms=r.j.members??r.j??[];t('the members list carries Bob\'s address',!!bobAddr&&ms.find(m=>m.userId===Bo.user.id)?.address===bobAddr,JSON.stringify(ms.map(m=>m.address)));
-t('and the agent\'s, made after its redeem',!!ms.find(m=>m.isAgent)?.address?.startsWith('flowbot@'),JSON.stringify(ms.map(m=>m.address)));
+t('and the agent\'s, made after its redeem',!!ms.find(m=>m.isAgent&&m.kind!=='personal_agent')?.address?.startsWith('flowbot@'),JSON.stringify(ms.map(m=>m.address)));
 r=await api(Bo.token,'PATCH',`/v1/workspaces/${W}`,{policies:{inviteBy:'admins'}});t('a member cannot set policies',r.s===403,r.s);
 r=await api(A.token,'PATCH',`/v1/workspaces/${W}`,{policies:{inviteBy:'admins'}});t('Ann sets who may invite',r.s===200&&r.j.policies?.inviteBy==='admins'&&r.j.policies?.agentsBy==='members'&&r.j.policies?.linkSharing===true,r.s+' '+JSON.stringify(r.j.policies));
 r=await api(Bo.token,'POST',`/v1/workspaces/${W}/invites`,{email:'dee@example.com'});t('an invite by Bob is refused by the policy',r.s===403&&r.j.error?.code==='policy_forbids',r.s+' '+JSON.stringify(r.j).slice(0,90));

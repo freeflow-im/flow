@@ -350,6 +350,9 @@ export async function inviteAgentToWorkspace(
   const agent = (await db.select().from(users).where(eq(users.id, agentUserId)).limit(1))[0];
   if (!agent?.isAgent || agent.deletedAt) throw notFound('agent not found');
   if (!(await sharesWorkspace(inviterId, agentUserId))) throw notFound('agent not found');
+  // A personal agent belongs to its sponsor in its one organization (agents.md §1): nobody sponsors it anywhere else.
+  const personal = await db.select({ one: sql`1` }).from(workspaceMembers).where(and(eq(workspaceMembers.userId, agentUserId), eq(workspaceMembers.kind, 'personal_agent'))).limit(1);
+  if (personal.length) throw agentForbidden('a personal agent cannot be invited to another workspace');
 
   const already = await db
     .select({ one: sql`1` })

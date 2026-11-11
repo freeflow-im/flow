@@ -29,7 +29,7 @@ export function agentStampFor(sql: Sql, workspaceId: string, caller: { user: { i
   const out: AgentStamp = {};
   if (caller.via) out.via = caller.via;
   if (caller.invokedBy && caller.user?.isAgent && caller.account && caller.invokedBy !== caller.account.id) {
-    const known = sql.exec('SELECT 1 AS x FROM workspace_members WHERE workspace_id = ? AND account_id = ?', workspaceId, caller.invokedBy).toArray().length > 0;
+    const known = sql.exec("SELECT 1 AS x FROM workspace_members WHERE workspace_id = ? AND account_id = ? AND kind <> 'personal_agent'", workspaceId, caller.invokedBy).toArray().length > 0;
     if (known) out.invokedBy = caller.invokedBy;
   }
   return out;

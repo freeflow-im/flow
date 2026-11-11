@@ -6,7 +6,7 @@
 // functions here run inside the Org object's scope (its database and its socket publisher): they write the index, post
 // the card or the notice, and hand back the `sharing.*` event, which the object publishes into the event log.
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, ne } from 'drizzle-orm';
 import { parseReference, type Reference } from '@flow/shared';
 import { ORG_PRINCIPAL, parsePrincipal, principalsOf, ROLE_RANK, type Role } from '@flow/shared/grants';
 import type { Audience, PublishInput } from '../../events/core';
@@ -82,7 +82,7 @@ async function userOfAccount(accountId: string): Promise<{ id: string; displayNa
     .select({ id: users.id, displayName: users.displayName })
     .from(workspaceMembers)
     .innerJoin(users, eq(users.id, workspaceMembers.userId))
-    .where(eq(workspaceMembers.accountId, accountId))
+    .where(and(eq(workspaceMembers.accountId, accountId), ne(workspaceMembers.kind, 'personal_agent')))
     .limit(1);
   return row[0] ?? null;
 }
@@ -163,12 +163,13 @@ export async function revokeShare(input: RevokeShareInput): Promise<PublishInput
  * see what is shared with the whole organization, and whom an account grant may name (`not_a_member`). */
 export async function isActiveAccount(accountId: string): Promise<boolean> {
   const row = await db
-    .select({ deletedAt: users.deletedAt })
+    .select({ deletedAt: users.deletedAt, kind: workspaceMembers.kind })
     .from(workspaceMembers)
     .innerJoin(users, eq(users.id, workspaceMembers.userId))
     .where(eq(workspaceMembers.accountId, accountId))
     .limit(1);
-  return !!row[0] && !row[0].deletedAt;
+  // A personal agent sees what its sponsor sees and nothing of its own: never a grant's target (agents.md §1).
+  return !!row[0] && !row[0].deletedAt && row[0].kind !== 'personal_agent';
 }
 
 /** The principals a reader's shares are under: its account and its channels, and `org` (phase 4.4) when asked for and the

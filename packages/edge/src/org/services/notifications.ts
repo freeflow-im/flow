@@ -23,6 +23,7 @@
 // publishes `notification.read` with the fresh unread total so the native
 // badges converge without polling.
 import { and, desc, eq, isNull, lte, sql } from 'drizzle-orm';
+import { notExternalAgent } from './workspaces.js';
 import {
   GROUP_MENTION_RE,
   type NotificationDTO,
@@ -150,7 +151,7 @@ export async function computeRecipients(
     const wsRows = await db
       .select({ userId: workspaceMembers.userId })
       .from(workspaceMembers)
-      .where(and(eq(workspaceMembers.workspaceId, chan.workspaceId), inList(workspaceMembers.userId, uniqueMentions)));
+      .where(and(eq(workspaceMembers.workspaceId, chan.workspaceId), inList(workspaceMembers.userId, uniqueMentions), notExternalAgent()));
     const wsSet = new Set(wsRows.map((r) => r.userId));
     for (const uid of uniqueMentions) {
       if (!wsSet.has(uid)) throw badRequest('bad_mention', `mentioned user ${uid} is not a workspace member`);

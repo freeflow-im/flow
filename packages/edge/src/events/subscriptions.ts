@@ -47,8 +47,10 @@ export function subscriptionsAs(
       let consumer = accountId;
       if (body.delivery === 'wake') {
         consumer = body.consumer!;
-        const agent = (await org.agentSponsorOf(consumer)) as { userId: string; sponsorUserId: string | null } | null;
+        const agent = (await org.agentSponsorOf(consumer)) as { userId: string; sponsorUserId: string | null; personal: boolean } | null;
         if (!agent) throw badRequest('not_an_agent', 'consumer is not an agent of this organization');
+        // A personal agent answers only its sponsor (agents.md §1.1): an owner or admin may not wake it either.
+        if (agent.personal && agent.sponsorUserId !== userId) throw new ApiError(403, 'agent_forbidden', 'only its sponsor may wake a personal agent');
         if (agent.sponsorUserId !== userId && role !== 'owner' && role !== 'admin') throw agentForbidden();
       }
       try {

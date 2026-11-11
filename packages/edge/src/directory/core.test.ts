@@ -285,8 +285,8 @@ describe('accounts', () => {
     c.backfillAccounts();
     new DirectoryCore(sql, { webUrlBase: 'https://app.test', registrationEnabled: true, send: async () => {} });
     expect(sql.exec("SELECT COUNT(*) AS n FROM accounts WHERE kind <> 'personal_agent'").toArray()[0]!.n).toBe(5);
-    // Every person's account brings their assistant, a hosted personal agent (agents.md §6).
-    expect(sql.exec("SELECT COUNT(*) AS n FROM accounts WHERE kind = 'personal_agent'").toArray()[0]!.n).toBe(4);
+    // Assistants are the Org object's to ask for (decision_log 2026-11-11): the backfill makes none.
+    expect(sql.exec("SELECT COUNT(*) AS n FROM accounts WHERE kind = 'personal_agent'").toArray()[0]!.n).toBe(0);
   });
 
   it('makes an account on join, marks it removed on leave keeping the address, and reactivates it on rejoin', async () => {
@@ -422,30 +422,6 @@ describe('guest accounts (platform.md §3.3)', () => {
     core.setAccountKind(org, bob.id, 'guest');
     await join(org, b.user.id, 'owner');
     expect(core.accountFor(b.user.id, org)).toMatchObject({ role: 'owner', kind: 'native', address: 'ann2@acme.freeflow.im' });
-  });
-
-  it('makes every member a guest at once, leaving owners, admins, agents and removed accounts', async () => {
-    const people = await Promise.all(['a', 'b', 'c', 'd', 'e'].map((x) => signUp(`${x}@example.com`)));
-    const org = newId();
-    core.reserveSlug('acme', org);
-    await join(org, people[0]!.user.id, 'owner');
-    await join(org, people[1]!.user.id, 'admin');
-    for (const p of people.slice(2)) await join(org, p.user.id);
-    // An agent is always native: the bulk action and a join that asks for a guest both leave it alone.
-    const bot = newId();
-    nodeSqlOf(core).exec("INSERT INTO users (id, email, password_hash, display_name, is_agent, agent_username, sponsor_user_id, created_at) VALUES (?, ?, 'x', 'Builder', 1, 'builder', ?, 1)", bot, `${bot}@agents.flow.local`, people[0]!.user.id);
-    core.ensureAccount(bot, org, 'member', undefined, 'guest');
-    expect(core.accountFor(bot, org)).toMatchObject({ kind: 'native', address: 'builder@acme.freeflow.im' });
-    core.setAccountKind(org, core.accountFor(people[2]!.user.id, org)!.id, 'guest');
-    await leave(org, people[4]!.user.id);
-    const out = core.makeMembersGuests(org);
-    expect(out.unchanged).toBe(1);
-    expect(out.changed.map((x) => x.principalId)).toEqual([people[3]!.user.id]);
-    expect(people.map((p) => core.accountFor(p.user.id, org)!).map((x) => [x.role, x.kind, x.state])).toEqual([
-      ['owner', 'native', 'active'], ['admin', 'native', 'active'], ['member', 'guest', 'active'], ['member', 'guest', 'active'], ['member', 'native', 'removed'],
-    ]);
-    expect(core.makeMembersGuests(org)).toEqual({ changed: [], unchanged: 2 });
-    expect(core.accountFor(bot, org)).toMatchObject({ kind: 'native', address: 'builder@acme.freeflow.im' });
   });
 
   it('migrates existing accounts unchanged, and lets the address be NULL', () => {
@@ -812,6 +788,9 @@ describe('agent accounts', () => {
     const org = newId();
     core.reserveSlug('acme', org);
     await core.applyOrgChanges(org, [join(org, ann.user.id), join(org, bob.user.id)]);
+    // The Org object asks for each member's assistant (decision_log 2026-11-11).
+    core.ensureAssistantFor(ann.user.id, org, 'Ann');
+    core.ensureAssistantFor(bob.user.id, org, 'Bob');
     const id = core.assistantOf(ann.user.id, org);
     expect(id).toBeTruthy();
     expect(core.accountFor(id!, org)).toMatchObject({ kind: 'personal_agent', address: null, sponsorId: ann.user.id, agentMode: 'personal', agentRuntime: 'hosted', displayName: expect.stringContaining('’s assistant') });
@@ -839,15 +818,10 @@ describe('agent accounts', () => {
     expect(core.accountFor(id!, org)!.state).toBe('removed');
     expect(core.assistantOf(ann.user.id, org)).toBeNull();
     await core.applyOrgChanges(org, [join(org, ann.user.id)]);
+    expect(core.assistantOf(ann.user.id, org)).toBeNull();
+    core.ensureAssistantFor(ann.user.id, org, 'Ann');
     expect(core.assistantOf(ann.user.id, org)).toBe(id);
     expect(core.accountFor(id!, org)!.state).toBe('active');
-    // Accounts made before assistants existed get one at the next start.
-    const sql = nodeSqlOf(core);
-    sql.exec("DELETE FROM users WHERE id = ?", id);
-    sql.exec('DELETE FROM accounts WHERE user_id = ?', id);
-    const again = new DirectoryCore(sql, { webUrlBase: 'https://app.test', registrationEnabled: true, send: async () => {} });
-    expect(again.assistantOf(ann.user.id, org)).toBeTruthy();
-    expect(again.assistantOf(ann.user.id, org)).not.toBe(id);
   });
 
   it("reconciles an organization's accounts with its member list: a lost leave's account goes, with its assistant", async () => {
@@ -858,7 +832,8 @@ describe('agent accounts', () => {
     core.reserveSlug('recon', org);
     await core.applyOrgChanges(org, [{ kind: 'join', id: org, user_id: own.user.id, role: 'owner', payload: null }, join(org, ann.user.id)]);
     core.ensureAccount(gus.user.id, org, 'member', 'Gus', 'guest');
-    const annAssistant = core.assistantOf(ann.user.id, org)!;
+    const annAssistant = core.ensureAssistantFor(ann.user.id, org, 'Ann').principalId;
+    core.ensureAssistantFor(own.user.id, org, 'Olive');
     // The member list says only the owner is left: Ann's and Gus's leaves were lost.
     const listed = core.reconcileOrganization(org, [own.user.id], false);
     expect(listed.map((a) => a.principalId).sort()).toEqual([ann.user.id, gus.user.id, annAssistant].sort());
@@ -872,36 +847,25 @@ describe('agent accounts', () => {
     expect(core.reconcileOrganization(org, [own.user.id])).toEqual([]);
   });
 
-  it('gives a guest no assistant; sets it aside when a member is made a guest, and brings the same one back (agents.md §6)', async () => {
+  it("records an assistant only when the organization's object asks for one, and brings the same one back (agents.md §6)", async () => {
     const own = await signUp('o@example.com');
-    const ann = await signUp('a@example.com');
     const gus = await signUp('g@example.com');
     const org = newId();
     core.reserveSlug('acme', org);
-    await core.applyOrgChanges(org, [{ kind: 'join', id: org, user_id: own.user.id, role: 'owner', payload: null }, join(org, ann.user.id)]);
-    // A guest joining has none.
+    await core.applyOrgChanges(org, [{ kind: 'join', id: org, user_id: own.user.id, role: 'owner', payload: null }]);
     core.ensureAccount(gus.user.id, org, 'member', 'Gus', 'guest');
+    // Joining makes no assistant: the Org object decides (decision_log 2026-11-11).
+    expect(core.assistantOf(own.user.id, org)).toBeNull();
+    const made = core.ensureAssistantFor(own.user.id, org, 'Olive');
+    expect(made).toMatchObject({ kind: 'personal_agent', sponsorId: own.user.id, agentRuntime: 'hosted', displayName: 'Olive’s assistant', state: 'active' });
+    expect(core.assistantOf(own.user.id, org)).toBe(made.principalId);
+    // Its member row leaving (set aside) removes the account and keeps the principal; asked again, the same one is back.
+    await core.applyOrgChanges(org, [{ kind: 'leave', id: org, user_id: made.principalId, role: null, payload: null }]);
+    expect(core.assistantOf(own.user.id, org)).toBeNull();
+    expect(core.ensureAssistantFor(own.user.id, org, 'Olive').principalId).toBe(made.principalId);
+    // A guest's kind change no longer touches assistants here.
+    core.setAccountKind(org, core.accountFor(gus.user.id, org)!.id, 'native');
     expect(core.assistantOf(gus.user.id, org)).toBeNull();
-    expect(core.usableAgents(gus.user.id, org)).toEqual([]);
-    // Joined again, still a guest: still none.
-    core.ensureAccount(gus.user.id, org, 'member', 'Gus');
-    expect(core.assistantOf(gus.user.id, org)).toBeNull();
-    // A member made a guest: set aside; made a member again: the same one, active.
-    const id = core.assistantOf(ann.user.id, org)!;
-    const annAccount = core.accountFor(ann.user.id, org)!;
-    core.setAccountKind(org, annAccount.id, 'guest');
-    expect(core.assistantOf(ann.user.id, org)).toBeNull();
-    expect(core.accountFor(id, org)).toMatchObject({ state: 'removed', statusMessage: 'a guest has no assistant' });
-    core.setAccountKind(org, annAccount.id, 'native');
-    expect(core.assistantOf(ann.user.id, org)).toBe(id);
-    // A guest's assistant made before this change is set aside at the next start; members' are untouched.
-    const sql = nodeSqlOf(core);
-    const stray = ensureAssistant(sql, gus.user.id, org, 'Gus');
-    expect(core.accountFor(stray, org)!.state).toBe('active');
-    const again = new DirectoryCore(sql, { webUrlBase: 'https://app.test', registrationEnabled: true, send: async () => {} });
-    expect(again.accountFor(stray, org)!.state).toBe('removed');
-    expect(again.assistantOf(ann.user.id, org)).toBe(id);
-    expect(again.assistantOf(own.user.id, org)).toBeTruthy();
   });
 
   it('retires agents made before kinds, once: accounts removed, tokens revoked, principal deleted; a personal agent per connection (phase A)', async () => {
