@@ -138,3 +138,16 @@ export function usableAgentsOf(sql: AgentSql, userId: string, organizationId: st
 export function setAgentRuntime(sql: AgentSql, agentId: string, runtime: AgentRuntime): void {
   sql.exec('UPDATE users SET runtime = ? WHERE id = ? AND is_agent = 1', runtime === 'external' ? null : runtime, agentId);
 }
+
+/**
+ * A guest has no assistant (agents.md §6: guests use Chat alone). The person's assistant in the organization, if any, is
+ * set aside: its account removed, its principal kept, so the same assistant (name, definition, conversations) comes back
+ * through ensureAssistant if the account is made a member again. Returns whether one was set aside.
+ */
+export function setAsideAssistant(sql: AgentSql, sponsorId: string, organizationId: string, now = Date.now()): boolean {
+  const gone = rows(sql,
+    `UPDATE accounts SET state = 'removed', removed_at = ?, status_message = 'a guest has no assistant' WHERE state <> 'removed' AND organization_id = ? AND user_id IN
+       (SELECT id FROM users WHERE is_agent = 1 AND mode = 'personal' AND runtime = 'hosted' AND sponsor_user_id = ? AND organization_id = ?) RETURNING id`,
+    now, organizationId, sponsorId, organizationId);
+  return gone.length > 0;
+}
