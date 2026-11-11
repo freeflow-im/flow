@@ -330,23 +330,30 @@ export class Org extends DurableObject<OrgEnv> {
    * Who may make a `wake` subscription for the agent whose account this is (routes/events.ts): its sponsor, or an
    * owner or admin of the organization. Null when the account is no agent of this organization.
    */
-  agentSponsorOf(agentAccountId: string): { userId: string; sponsorUserId: string | null } | null {
+  async agentSponsorOf(agentAccountId: string): Promise<{ userId: string; sponsorUserId: string | null } | null> {
     const row = this.ctx.storage.sql.exec(
       'SELECT m.user_id, COALESCE(m.sponsor_user_id, u.sponsor_user_id) AS sponsor FROM workspace_members m JOIN users u ON u.id = m.user_id WHERE m.account_id = ? AND u.is_agent',
       agentAccountId,
     ).toArray()[0];
-    return row ? { userId: row.user_id as string, sponsorUserId: (row.sponsor as string | null) ?? null } : null;
+    if (row) return { userId: row.user_id as string, sponsorUserId: (row.sponsor as string | null) ?? null };
+    // A personal agent is no member here (agents.md §2): the person's hosted assistant is one the directory knows.
+    const answer = await this.directory().call('accountById' as never, [agentAccountId] as never).catch(() => null) as DirectoryAnswer<AccountDTO | null> | null;
+    const a = answer?.ok ? answer.value : null;
+    const org = this.ctx.storage.sql.exec('SELECT id FROM workspaces LIMIT 1').toArray()[0]?.id as string | undefined;
+    if (!a || a.state === 'removed' || !a.agentMode || a.organizationId !== org) return null;
+    return { userId: a.principalId, sponsorUserId: a.sponsorId ?? null };
   }
 
   /**
    * A `post` subscription's action: the message posted into the channel as the owner, through the message service, with
    * the trigger's depth plus one on its event. `clientMsgId` names the subscription and the event, so it posts once.
    */
-  async postAutomation(p: { ownerAccountId: string; channelId: string; body: string; clientMsgId: string; depth: number }): Promise<string | null> {
+  async postAutomation(p: { ownerAccountId: string; channelId: string; body: string; clientMsgId: string; depth: number; causedBy?: string; via?: string; invokedBy?: string }): Promise<string | null> {
     const user = this.userOfAccount(p.ownerAccountId);
     if (!user) return null;
     const { sendMessage } = await import('./services/messages');
-    const msg = await this.scoped(() => sendMessage(p.channelId, user, p.clientMsgId, p.body, undefined, undefined, undefined, { expandMentions: true }), { depth: p.depth });
+    const stamp: Stamp = { depth: p.depth, ...(p.causedBy ? { causedBy: p.causedBy } : {}), ...(p.via ? { via: p.via } : {}), ...(p.invokedBy ? { invokedBy: p.invokedBy } : {}) };
+    const msg = await this.scoped(() => sendMessage(p.channelId, user, p.clientMsgId, p.body, undefined, undefined, undefined, { expandMentions: true }), stamp);
     await this.logging;
     await this.armAlarm();
     return msg.id;

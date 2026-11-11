@@ -12,6 +12,7 @@ This file keeps two things:
 
 ## Parity
 
+- **The assistant panel's agent picker and the assistant's definition are web-only (2026-11-11, docs/specs/agents.md §6).** Docs', Mail's and Calendar's web panels pick the agent and Docs' Settings names the assistant and sets its instructions; macOS and iOS have no assistant panel (gap to close when they gain one).
 - **The Event log is in the Admin app, web-only (2026-11-11, docs/specs/workspace-admin.md §3.6).** macOS and iOS have no admin surface by ruling; the log is readable there only through the API. Deliberate, like the other admin sections.
 - **A DM with a shared agent says it is not private on web only (2026-11-11, docs/specs/agents.md §1).** Chat's web header shows "Not private: anyone in <org> can ask <agent>" under a DM with an agent; macOS and iOS show the DM as before (gap to close). The Share dialog's warning and the consent page are web-only surfaces already.
 - **Home (`/home`) is web-only (2026-11-11, docs/specs/home.md).** The suite bar's Home tab opens it in the browser and the desktop shell; macOS and iOS have no Home screen (gap to close once the web version settles).

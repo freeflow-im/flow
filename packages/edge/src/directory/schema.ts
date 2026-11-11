@@ -301,4 +301,7 @@ export const DIRECTORY_MIGRATIONS: string[] = [
   ALTER TABLE oauth_codes ADD COLUMN agent_mode TEXT;
   ALTER TABLE oauth_device ADD COLUMN agent_id TEXT;
   ALTER TABLE oauth_device ADD COLUMN agent_mode TEXT;`,
+  // Hosted agents (agents.md §6, phase C): where an agent's loop runs. NULL is external (the bridge, a client on /mcp);
+  // `hosted` is the platform's runtime object: every person's assistant, made with their account, and hosted shared agents.
+  `ALTER TABLE users ADD COLUMN runtime TEXT;`,
 ];

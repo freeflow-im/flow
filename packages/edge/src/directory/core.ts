@@ -1,11 +1,11 @@
 // Identity: accounts, sessions and sign-in. Ported from packages/server/src/services/auth.ts and oauthAccounts.ts, with
 // the same rules and the same mail. It runs over any `SqlStorage`-shaped database, so tests can use node:sqlite.
-import type { AccountDTO, AccountKind, AgentMode, SponsoredAgentDTO, AccountRole, AccountState, AuthResponse, DnsRecordDTO, DomainDTO, DomainKind, OAuthIdentityDTO, RegisterResponse, UserDTO } from '@flow/shared';
+import type { AccountDTO, AccountKind, AgentMode, AgentRuntime, HostedRuntimeDTO, SponsoredAgentDTO, UsableAgentDTO, AccountRole, AccountState, AuthResponse, DnsRecordDTO, DomainDTO, DomainKind, OAuthIdentityDTO, RegisterResponse, UserDTO } from '@flow/shared';
 import { ApiError, badRequest, conflict, forbidden, notFound, unauthorized } from '../errors';
 import { hashPassword, verifyPassword } from './passwords';
 import { DIRECTORY_MIGRATIONS } from './schema';
 import { newId } from './ids';
-import { personalAgentFor, revokePersonalAgent, sponsoredAgentsOf } from './agents';
+import { assistantOf, ensureAssistant, personalAgentFor, revokePersonalAgent, setAgentRuntime, sponsoredAgentsOf, usableAgentsOf } from './agents';
 import { PLATFORM_DOMAIN, localPart, organizationDomain, uniqueAddress } from './addresses';
 import { checkDomain, checkRecords, dohResolver, normalizeDomain, recordsFor, type Resolve } from './dns';
 import { DEFAULT_DOMAIN_LIMITS, ProviderError, noneMailProvider, type DkimRecord, type MailProvider } from '../mailprovider/index';
@@ -155,8 +155,81 @@ export class DirectoryCore {
       this.sql.exec('INSERT INTO _migrations (n) VALUES (?)', done + i);
     });
     if (!this.rows('SELECT 1 FROM accounts LIMIT 1').length && this.rows('SELECT 1 FROM memberships LIMIT 1').length) this.backfillAccounts();
+    if (this.rows(`SELECT 1 FROM accounts a JOIN users u ON u.id = a.user_id WHERE u.is_agent = 0 AND u.deleted_at IS NULL AND a.state <> 'removed'
+      AND NOT EXISTS (SELECT 1 FROM users h WHERE h.is_agent = 1 AND h.runtime = 'hosted' AND h.mode = 'personal' AND h.sponsor_user_id = a.user_id AND h.organization_id = a.organization_id) LIMIT 1`).length) this.backfillAssistants();
     if (this.rows('SELECT 1 FROM users WHERE is_agent = 1 AND mode IS NULL AND deleted_at IS NULL LIMIT 1').length
       || this.rows("SELECT 1 FROM oauth_connections c WHERE c.agent_id IS NULL AND EXISTS (SELECT 1 FROM accounts a WHERE a.user_id = c.user_id AND a.organization_id = c.org_id AND a.state <> 'removed') LIMIT 1").length) this.backfillAgents();
+  }
+
+  /** Every person's assistant (agents.md §6), for the accounts made before assistants were agents. Safe to run twice. */
+  backfillAssistants(): void {
+    const missing = this.rows(`SELECT a.user_id, a.organization_id, u.display_name FROM accounts a JOIN users u ON u.id = a.user_id
+      WHERE u.is_agent = 0 AND u.deleted_at IS NULL AND a.state <> 'removed'
+        AND NOT EXISTS (SELECT 1 FROM users h WHERE h.is_agent = 1 AND h.runtime = 'hosted' AND h.mode = 'personal' AND h.sponsor_user_id = a.user_id AND h.organization_id = a.organization_id)`);
+    for (const m of missing) ensureAssistant(this.sql, m.user_id as string, m.organization_id as string, m.display_name as string);
+    if (missing.length) console.log(`[agents] ${missing.length} assistants made for accounts that had none`);
+  }
+
+  /** The person's assistant in an organization (agents.md §6): its principal id, or null. */
+  assistantOf(userId: string, organizationId: string): string | null {
+    return assistantOf(this.sql, userId, organizationId);
+  }
+
+  /** The hosted agents a person may talk to in an organization: their assistant and the shared ones (agents.md §6). */
+  usableAgents(userId: string, organizationId: string): UsableAgentDTO[] {
+    return usableAgentsOf(this.sql, userId, organizationId);
+  }
+
+  /**
+   * A hosted agent in an organization, as the Worker acts as it (agents.md §6): its principal and its account there; null
+   * for anything else (an external agent, a person, a removed account). The caller must be one who may use it (usableAgents).
+   */
+  agentIdentity(agentId: string, organizationId: string): { user: UserDTO; account: AccountDTO } | null {
+    const u = this.userById(agentId);
+    if (!u?.is_agent || u.runtime !== 'hosted' || u.deleted_at || u.organization_id !== organizationId) return null;
+    const account = this.accountFor(agentId, organizationId);
+    if (!account || account.state === 'removed' || account.state === 'suspended') return null;
+    return { user: toUserDTO(u, agentId), account };
+  }
+
+  /**
+   * The hosted runtime behind an account (agents.md §6), for the Events object to wake it: null for a person, an external
+   * agent, or a removed account. A personal agent's runtime is its sponsor's account's object; a shared agent's its own.
+   */
+  hostedRuntimeOf(accountId: string): HostedRuntimeDTO | null {
+    const account = this.accountById(accountId);
+    if (!account || account.state === 'removed' || account.state === 'suspended') return null;
+    const u = this.userById(account.principalId);
+    if (!u?.is_agent || u.runtime !== 'hosted' || u.deleted_at) return null;
+    const mode = u.mode as AgentMode;
+    const sponsorId = (u.sponsor_user_id as string | null) ?? null;
+    const sponsorAccount = sponsorId ? this.accountFor(sponsorId, account.organizationId) : null;
+    if (mode === 'personal' && (!sponsorAccount || sponsorAccount.state === 'removed' || sponsorAccount.state === 'suspended')) return null;
+    return {
+      runtimeKey: mode === 'personal' ? sponsorAccount!.id : account.id,
+      agentId: u.id as string,
+      agentAccountId: account.id,
+      mode,
+      organizationId: account.organizationId,
+      sponsorId,
+      sponsorAccountId: sponsorAccount?.id ?? null,
+    };
+  }
+
+  /** A hosted agent's name, as its definition sets it (agents.md §6): on the principal and its accounts, where rosters and the panel read it. */
+  renameAgent(agentId: string, name: string): void {
+    const u = this.userById(agentId);
+    if (!u?.is_agent) throw notFound('agent not found');
+    const clean = name.trim().slice(0, 80);
+    if (!clean) throw badRequest('validation', 'name: not empty');
+    this.sql.exec('UPDATE users SET display_name = ? WHERE id = ?', clean, agentId);
+    this.sql.exec('UPDATE accounts SET display_name = ? WHERE user_id = ?', clean, agentId);
+  }
+
+  /** Where an agent's loop runs (agents.md §6); a hosted shared agent is marked so by the Admin app after the Org object makes it. */
+  setAgentRuntime(agentId: string, runtime: AgentRuntime): void {
+    if (!this.userById(agentId)?.is_agent) throw notFound('agent not found');
+    setAgentRuntime(this.sql, agentId, runtime);
   }
 
   /**
@@ -263,6 +336,8 @@ export class DirectoryCore {
       id, userId, organizationId, address, name, role, accountKind, user.is_agent ? ((user.sponsor_user_id as string | null) ?? null) : null, requested ? 'requested' : 'active', Date.now());
     if (address) this.sql.exec('INSERT INTO addresses (address, account_id) VALUES (?, ?)', address, id);
     if (requested) this.enqueue('provision', organizationId, id);
+    // Every person gets their assistant with their account (agents.md §6): a hosted personal agent of theirs here.
+    if (!user.is_agent) ensureAssistant(this.sql, userId, organizationId, name);
   }
 
   /** Marks accounts removed (those not already), starting their retention clock; each hosted mailbox is suspended. */
@@ -273,7 +348,7 @@ export class DirectoryCore {
 
   private accountRow(where: string, ...args: unknown[]): AccountDTO[] {
     // An agent's mode rides along (agents.md §2) by subquery: a join would make `organization_id` ambiguous in `where`.
-    return this.rows(`SELECT *, (SELECT u.mode FROM users u WHERE u.id = accounts.user_id AND u.is_agent = 1) AS agent_mode FROM accounts WHERE ${where} ORDER BY created_at, id`, ...args).map((a) => ({
+    return this.rows(`SELECT *, (SELECT u.mode FROM users u WHERE u.id = accounts.user_id AND u.is_agent = 1) AS agent_mode, (SELECT u.runtime FROM users u WHERE u.id = accounts.user_id AND u.is_agent = 1) AS agent_runtime FROM accounts WHERE ${where} ORDER BY created_at, id`, ...args).map((a) => ({
       id: a.id as string,
       principalId: a.user_id as string,
       organizationId: a.organization_id as string,
@@ -284,7 +359,7 @@ export class DirectoryCore {
       state: a.state as AccountState,
       statusMessage: (a.status_message as string | null) ?? null,
       hosted: a.hosted_at != null,
-      ...(a.sponsor_user_id || a.agent_mode ? { sponsorId: (a.sponsor_user_id as string | null) ?? null, agentMode: (a.agent_mode as AgentMode | null) ?? null } : {}),
+      ...(a.sponsor_user_id || a.agent_mode ? { sponsorId: (a.sponsor_user_id as string | null) ?? null, agentMode: (a.agent_mode as AgentMode | null) ?? null, agentRuntime: a.agent_mode ? ((a.agent_runtime as AgentRuntime | null) ?? 'external') : null } : {}),
       createdAt: iso(a.created_at),
     }));
   }
@@ -477,6 +552,8 @@ export class DirectoryCore {
     const existing = this.rows('SELECT * FROM accounts WHERE user_id = ? AND organization_id = ?', userId, organizationId)[0];
     if (!existing) return this.createAccount(userId, organizationId, role, displayName, true, kind);
     this.sql.exec('UPDATE accounts SET role = ? WHERE id = ?', role, existing.id);
+    // Back in (or still in): the person's assistant with them (agents.md §6).
+    if (!this.userById(userId)?.is_agent) ensureAssistant(this.sql, userId, organizationId, displayName || (existing.display_name as string));
     // An owner is never a guest (§3.3): a guest made owner (not by the transfer route, which refuses) becomes native.
     if (role === 'owner' && existing.kind === 'guest') this.makeNative({ ...existing, role });
     if (existing.state !== 'removed') return;

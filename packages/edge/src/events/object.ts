@@ -4,7 +4,7 @@
 // sets off (`wake` jobs, through the `flow-jobs` Queue, and `post`s), and the alarm that keeps the retention window and
 // fires the schedules.
 import { DurableObject } from 'cloudflare:workers';
-import type { AgentJobDTO, JobState, PlatformEvent, SubscriptionDTO } from '@flow/shared';
+import type { AgentJobDTO, JobState, PlatformEvent, SubscriptionDTO, HostedRuntimeDTO } from '@flow/shared';
 import { EventsCore, renderTemplate, type EventStats, type JobCheck, type NewSubscription, type PublishInput, type ReadQuery, type Reader, type SubscriptionRead } from './core';
 import type { Org } from '../org/object';
 
@@ -16,12 +16,19 @@ export interface JobMessage { organizationId: string; jobId: string; check: 'ack
  * tells the owner something; JOBS is the `flow-jobs` Queue that re-checks each wake job after JOBS_ACK_DELAY_SECONDS
  * (default 60).
  */
-export interface EventsEnv { ORG?: DurableObjectNamespace<Org>; JOBS?: Queue<JobMessage>; JOBS_ACK_DELAY_SECONDS?: string }
+export interface EventsEnv {
+  ORG?: DurableObjectNamespace<Org>; JOBS?: Queue<JobMessage>; JOBS_ACK_DELAY_SECONDS?: string;
+  /** Hosted agents (agents.md §6): the directory says which consumers are hosted and where; the runtime takes the job. */
+  DIRECTORY?: DurableObjectNamespace<import('../directory/object').Directory>;
+  ASSISTANT?: DurableObjectNamespace<import('../assistant/object').Assistant>;
+}
 
 /** What the queue consumer does with a message after a check: ack it, retry it after a delay, or ack it and send a new one. */
 export type CheckAnswer = { ack: true } | { retryAfter: number } | { requeueAfter: number };
 
 const DAY_MS = 86_400_000;
+/** How long the directory's answer about a consumer's hosted runtime is kept. */
+const HOSTED_TTL_MS = 5 * 60_000;
 /** The longest a read waits for an event to match. */
 export const WAIT_MAX_MS = 30_000;
 
@@ -173,6 +180,7 @@ export class Events extends DurableObject<EventsEnv> {
     if (out.kind === 'redeliver') {
       const seq = this.core.head();
       this.published(org, seq - 1, seq);
+      this.wakeHosted(org, out.job);
       console.log(`[events] job ${jobId}: delivered again (attempt ${out.job.attempts})`);
       return { retryAfter: out.delayS };
     }
@@ -288,10 +296,35 @@ export class Events extends DurableObject<EventsEnv> {
   private async fileJob(organizationId: string, sub: SubscriptionDTO, e: PlatformEvent): Promise<void> {
     const { job, published } = this.core.wake(sub, e);
     this.published(organizationId, published.seq - 1, published.seq);
+    this.wakeHosted(organizationId, job);
     const delaySeconds = Math.max(0, Number(this.env.JOBS_ACK_DELAY_SECONDS ?? 60) || 0) || 60;
     if (!this.env.JOBS) return console.warn(`[events] job ${job.id}: no flow-jobs queue bound, so it is never re-checked`);
     await this.env.JOBS.send({ organizationId, jobId: job.id, check: 'ack' }, { delaySeconds })
       .catch((err: Error) => console.error(`[events] job ${job.id}: queue send failed: ${err.message}`));
+  }
+
+  /** Which consumers are hosted, and where (agents.md §6), asked of the directory and kept a while: an agent made hosted or removed later is seen again soon. */
+  private readonly hosted = new Map<string, { at: number; answer: Promise<HostedRuntimeDTO | null> }>();
+
+  /**
+   * A job for a hosted agent is handed to its runtime at once (agents.md §6): the bridge polls, the platform's own runtime is
+   * called. The queue's check still runs, so a runtime that fails to ack sees the job delivered again, and parked in the end.
+   */
+  private wakeHosted(organizationId: string, job: AgentJobDTO): void {
+    const { DIRECTORY, ASSISTANT } = this.env;
+    if (!DIRECTORY || !ASSISTANT) return;
+    const lookup = (): Promise<HostedRuntimeDTO | null> =>
+      (DIRECTORY.get(DIRECTORY.idFromName('directory')).call('hostedRuntimeOf' as never, [job.agent] as never) as unknown as Promise<{ ok: boolean; value: unknown }>)
+        .then((a) => (a.ok ? (a.value as HostedRuntimeDTO | null) : null), () => null);
+    const cached = this.hosted.get(job.agent);
+    const found = cached && Date.now() - cached.at < HOSTED_TTL_MS ? cached.answer : lookup();
+    if (found !== cached?.answer) {
+      if (this.hosted.size > 1_000) this.hosted.clear();
+      this.hosted.set(job.agent, { at: Date.now(), answer: found });
+    }
+    const sent = found.then((runtime) => (runtime ? ASSISTANT.get(ASSISTANT.idFromName(runtime.runtimeKey)).wake({ organizationId, job, runtime }) : undefined))
+      .catch((err: Error) => console.error(`[events] job ${job.id}: the hosted runtime did not take it: ${err.message}`));
+    this.ctx.waitUntil(sent);
   }
 
   /** "Automation X could not wake Y" (a parked job), or "… reached the depth cap", to the subscription's owner. */

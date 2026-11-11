@@ -116,7 +116,18 @@ export function AgentPanel() {
       {docked && <ResizeHandle panel={panel} side="right" label="Resize assistant panel" className="agent-panel-resize" />}
       <div className="agent-head">
         <SparkIcon />
-        <span className="agent-title">Assistant</span>
+        {agent.agents.length > 1 ? (
+          // The agent the panel talks to (docs/specs/agents.md §6): the person's assistant, or a hosted shared agent of the organization.
+          <select className="agent-title agent-pick" aria-label="Agent" value={agent.agentId ?? ''} disabled={agent.running} onChange={(e) => agent.setAgent(e.target.value || null)} data-testid="agent-pick">
+            {agent.agents.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.displayName}{a.self ? '' : ' · everyone in the organization'}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <span className="agent-title" title={agent.assistantName ?? undefined}>{agent.assistantName ?? 'Assistant'}</span>
+        )}
         <Link className="link agent-changes" to="/changes" title="Changes the assistant made to the app">
           Changes
         </Link>

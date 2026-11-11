@@ -263,7 +263,14 @@ context and the event envelope, the Admin app's personal agents list; every agen
 (PR #773, 2026-11-11): the consent page's "connect as" choice (personal, a new shared agent, or an existing agent of the
 person's), shared agents on `/mcp` acting as themselves with `invokedBy` the person whose client it is, the bridge door
 filtered to server tools with the caller's kind, the Share dialog's and the DM header's warnings for shared agents. No
-tool differs by kind yet. **Not built: a personal agent on the bridge.** A bridge token that acted as its sponsor would be
+tool differs by kind yet. Phase C, parts 1 to 3 (PR #776, 2026-11-11): every person's assistant is a hosted personal
+agent principal made with their account, with a definition (name, instructions) its runtime keeps and `via` on its
+turns; hosted shared agents made from the Admin app with a definition, the panel's agent picker, turns as the agent with
+"<name> can't see this page" on files it has no grant on; wake jobs for hosted agents handed to their runtime, which
+runs the turn and answers in the channel as the agent (a personal agent as its sponsor, `via`). Not yet: the model key
+per definition (hosted agents run on the platform's key with the daily limit per asker), headless runners for the Docs
+editing tools in async turns (an async turn has the server tools), the confirm card for a personal agent's writes
+others can see, and object threads. **Not built: a personal agent on the bridge.** A bridge token that acted as its sponsor would be
 an unscoped delegation of the whole account (the sponsor's role, sessions, mail, invitations) with no confirm card, which
 the review of phase B showed; §1's "the bridge's self-registration asks the same question" waits for a delegation that
 carries scopes and a confirm step, which the hosted runtime (phase C) can give. Until then a personal agent is an `/mcp`

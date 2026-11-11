@@ -149,7 +149,7 @@ r=await mcp(T3.access_token,'tools/list');t('revoking the refresh token ends its
 const T4=await connect(U,A);r=await mcp(T4.access_token,'tools/list');t('connected to Acme again',r.s===200,r.s);
 const TB=await connect(U,Bo);r=await call(TB.access_token,'list_files',{});t('a connection to Bravo sees Bravo’s file, not Acme’s',JSON.stringify(r.v).includes(SB)&&!JSON.stringify(r.v).includes(S),JSON.stringify(r.v).slice(0,120));
 // --- Agents as kinds (docs/specs/agents.md phase A): a connection acts through a personal agent the admin sees ---------------
-r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);let PA=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.sponsorId===U.user.id);
+r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);let PA=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.sponsorId===U.user.id&&a.agentRuntime==='external');
 t('Olga sees one personal agent of Uma’s in Acme: the MCP client, no address, mode personal',r.s===200&&PA.length===1&&PA[0].address===null&&PA[0].agentMode==='personal'&&PA[0].displayName==='E2E Agent'&&PA[0].state==='active',JSON.stringify(PA).slice(0,220));
 r=await api(O.token,'PATCH',`/v1/workspaces/${A}/accounts/${PA[0]?.id}/kind`,{kind:'guest'});t('a personal agent’s kind never changes',r.s===409,r.s+' '+JSON.stringify(r.j).slice(0,100));
 r=await api(U.token,'DELETE',`/v1/workspaces/${A}/accounts/${PA[0]?.id}`);t('a member cannot remove it',r.s===403,r.s);
@@ -158,7 +158,7 @@ r=await mcp(T4.access_token,'tools/list');t('Uma’s Acme tokens stop working: r
 r=await api(U.token,'GET','/api/settings/agents');t('and Docs’ Settings no longer lists them',!(r.j.agents??[]).some(a=>a.organizationId===A),JSON.stringify(r.j.agents).slice(0,160));
 r=await mcp(TB.access_token,'tools/list');t('her Bravo token, another agent, still works',r.s===200,r.s);
 const T5=await connect(U,A);r=await mcp(T5.access_token,'tools/list');t('connecting again makes a new personal agent, and works',r.s===200,r.s);
-r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);{const now=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.sponsorId===U.user.id&&a.state!=='removed');t('one active personal agent of Uma’s again: the same one, back',now.length===1&&now[0].id===PA[0]?.id,JSON.stringify(now.map(a=>a.id)));}
+r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);{const now=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.sponsorId===U.user.id&&a.agentRuntime==='external'&&a.state!=='removed');t('one active personal agent of Uma’s again: the same one, back',now.length===1&&now[0].id===PA[0]?.id,JSON.stringify(now.map(a=>a.id)));}
 r=await api(O.token,'DELETE',`/v1/workspaces/${A}/members/${U.user.id}`);t('Olga removes Uma from Acme',r.s<300,r.s+' '+JSON.stringify(r.j).slice(0,100));
 await sleep(300);
 r=await mcp(T5.access_token,'tools/list');t('Uma’s Acme token stops working: her personal agent there went with her, its delegations revoked',r.s===401&&/invalid_token/.test(r.h.get('www-authenticate'))&&r.j.reason==='revoked',r.s+' '+JSON.stringify(r.j).slice(0,120));
@@ -195,12 +195,50 @@ r=await api(r.j.agentToken,'GET','/v1/me/accounts');t('which holds an account in
 r=await api(AGT,'GET','/v1/me/accounts');t('while the first keeps Acme alone',r.s===200&&r.j.accounts?.length===1&&r.j.accounts[0].organizationId===A,JSON.stringify(r.j).slice(0,160));
 r=await api(O.token,'GET',`/v1/workspaces/${A}/channels`);const GEN=(r.j.channels??r.j)[0];
 // --- Connecting an agent (agents.md §1, phase B): the consent page's choice ------------------------------------------------
-r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);const beforePersonal=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.sponsorId===O.user.id&&a.state!=='removed').length;
+// --- Every person has an assistant: a hosted personal agent made with the account (agents.md §6, phase C) ---------------------
+r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);{const mine=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.agentRuntime==='hosted');t('Olga has an assistant in Acme, a hosted personal agent (Uma’s went with her when she was removed)',mine.length===1&&/’s assistant$/.test(mine[0].displayName)&&mine[0].sponsorId===O.user.id,JSON.stringify(mine.map(a=>[a.displayName,a.sponsorId])).slice(0,200));}
+r=await api(O.token,'GET',`/api/agent/agents?workspace=${A}`);const SELF=(r.j.agents??[]).find(a=>a.self);t('the panel’s agents: Olga’s own assistant, hers alone for now',r.s===200&&r.j.agents.length===1&&SELF?.mode==='personal'&&/Olga’s assistant/.test(SELF?.displayName??''),JSON.stringify(r.j).slice(0,160));
+r=await api(O.token,'GET',`/api/agent/definition?workspace=${A}`);t('its definition starts with its name and no instructions',r.s===200&&r.j.definition?.name===SELF?.displayName&&r.j.definition?.instructions==='',JSON.stringify(r.j).slice(0,160));
+r=await api(O.token,'PUT',`/api/agent/definition?workspace=${A}`,{name:'Pip',instructions:'Answer briefly.'});t('Olga names it and gives it instructions',r.s===200&&r.j.definition?.name==='Pip'&&r.j.definition?.instructions==='Answer briefly.',JSON.stringify(r.j).slice(0,160));
+// --- A hosted shared agent, made from the Admin app (agents.md §6, phase C): everyone may talk to it from the panel ----------
+r=await api(O.token,'POST',`/v1/workspaces/${A}/agents/hosted`,{name:`Omni ${tag}`,instructions:'Help the team.'});const OMNIH=r.j.agent;t('Olga makes a hosted shared agent, Omni, with instructions',r.s===201&&OMNIH?.mode==='shared'&&r.j.definition?.instructions==='Help the team.',r.s+' '+JSON.stringify(r.j).slice(0,160));
+r=await api(O.token,'GET',`/v1/workspaces/${A}/members`);t('Omni is a member, an agent sponsored by Olga',(r.j.members??[]).some(m=>m.userId===OMNIH?.id&&m.isAgent&&m.sponsorId===O.user.id));
+r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);t('with a native account that is hosted',(r.j.accounts??[]).some(a=>a.principalId===OMNIH?.id&&a.kind==='native'&&a.agentRuntime==='hosted'));
+r=await api(O.token,'GET',`/api/agent/agents?workspace=${A}`);t('the panel’s agents: Olga’s assistant and Omni',r.s===200&&r.j.agents.length===2&&r.j.agents.some(a=>a.id===OMNIH?.id&&!a.self),JSON.stringify(r.j).slice(0,160));
+r=await api(O.token,'GET',`/v1/workspaces/${A}/agents/${OMNIH?.id}/definition`);t('its definition reads back, editable by its sponsor',r.s===200&&r.j.definition?.name===`Omni ${tag}`&&r.j.definition?.instructions==='Help the team.'&&r.j.mayEdit===true,JSON.stringify(r.j).slice(0,160));
+r=await api(O.token,'PUT',`/v1/workspaces/${A}/agents/${OMNIH?.id}/definition`,{instructions:'Help the team briefly.'});t('and is changed',r.s===200&&r.j.definition?.instructions==='Help the team briefly.',r.s);
+r=await api(O.token,'GET',`/api/agent?scope=home&agent=${OMNIH?.id}&workspace=${A}`);t('Olga’s conversation with Omni starts empty, in Omni’s runtime',r.s===200&&Array.isArray(r.j.items)&&r.j.items.length===0,r.s+' '+JSON.stringify(r.j).slice(0,100));
+r=await api(O.token,'GET',`/api/agent?scope=home&agent=00000000-0000-7000-8000-000000000bad&workspace=${A}`);t('an agent that is not hers to use is refused',r.s===404&&r.j.code==='no_agent',r.s);
+// Review fixes: the definition is the Admin app's; guests are refused; the open page is gated; the name is real.
+r=await api(O.token,'PUT',`/api/agent/definition?workspace=${A}&agent=${OMNIH?.id}`,{instructions:'pwned'});t('the panel route cannot set a shared agent’s definition',r.s===403&&r.j.code==='not_yours',r.s+' '+JSON.stringify(r.j).slice(0,100));
+r=await api(O.token,'GET',`/v1/workspaces/${A}/agents/${OMNIH?.id}/definition`);t('so it is unchanged',r.j.definition?.instructions==='Help the team briefly.',JSON.stringify(r.j).slice(0,120));
+r=await api(O.token,'POST',`/api/sheets?workspace=${A}`,{title:`Olga private ${tag}`});const PRIV=r.j.sheet?.id;
+r=await api(O.token,'POST','/api/agent/turn',{message:'read this',context:{page:'sheet',sheetId:PRIV,title:'x'},scope:'home',agent:OMNIH?.id,workspace:A});t('a turn whose page is a file Omni cannot see is refused, whatever the chat',r.s===403&&r.j.code==='agent_cannot_see',r.s+' '+JSON.stringify(r.j).slice(0,120));
+r=await api(O.token,'PUT',`/v1/workspaces/${A}/agents/${OMNIH?.id}/definition`,{name:`Omni Prime ${tag}`});r=await api(O.token,'GET',`/api/agent/agents?workspace=${A}`);t('renaming it renames it in the panel',(r.j.agents??[]).some(a=>a.id===OMNIH?.id&&a.displayName===`Omni Prime ${tag}`),JSON.stringify(r.j).slice(0,160));
+r=await api(O.token,'POST',`/v1/workspaces/${A}/invites`,{emails:[`gail-${tag}@example.com`],kind:'guest'});
+{const G=await signup(`gail-${tag}@example.com`,'Gail');const tok=(r.j.results?.[0]?.inviteUrl??'').split('/').pop();await api(G.token,'POST','/v1/invites/accept',{token:tok});
+ r=await api(G.token,'GET',`/api/agent/agents?workspace=${A}`);const ga=r;r=await api(G.token,'GET',`/api/agent?scope=home&agent=${OMNIH?.id}&workspace=${A}`);t('a guest cannot talk to Omni',r.s===403&&r.j.code==='guest',r.s+' '+JSON.stringify(r.j).slice(0,100));
+ r=await api(G.token,'POST',`/v1/workspaces/${A}/agents/hosted`,{name:'Sneaky'});t('nor make a hosted agent',r.s===403,r.s);void ga;}
+r=await api(O.token,'GET',`/v1/workspaces/${A}/agents/${REG??'x'}/definition`);t('an external agent has no definition here',r.s===404,r.s);
+// --- A wake job for a hosted agent goes straight to its runtime (agents.md §6, phase C) ---------------------------------------
+{const SP=`/v1/events/subscriptions?workspace=${A}`;
+ r=await api(O.token,'GET',`/v1/workspaces/${A}/channels`);const GENC=(r.j.channels??r.j)[0];
+ r=await api(O.token,'POST',SP,{name:'omni summaries',delivery:'wake',consumer:OMNIH?.accountId,filter:{types:['chat.message.created'],channelId:GENC.id},action:{kind:'wake',prompt:'Summarize: {{data}}'}});const WOM=r.j.subscription;t('Olga makes a wake subscription for the hosted Omni',r.s===201&&WOM?.consumer===OMNIH?.accountId,r.s+' '+JSON.stringify(r.j).slice(0,140));
+ r=await api(O.token,'POST',SP,{name:'my assistant',delivery:'wake',consumer:SELF?.accountId,filter:{types:['chat.message.created'],channelId:GENC.id},action:{kind:'wake',prompt:'Note: {{data}}'}});const WAS=r.j.subscription;t('and one for her own assistant, which is no member but hers',r.s===201&&WAS?.consumer===SELF?.accountId,r.s+' '+JSON.stringify(r.j).slice(0,140));
+ r=await api(O.token,'POST',`/v1/channels/${GENC.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'a message for the hosted agents'});
+ const jobsOf=async(sub)=>{for(let i=0;i<40;i++){const q=(await api(O.token,'GET',`/v1/events/jobs?subscription=${sub}&workspace=${A}`)).j.jobs??[];if(q.length&&q.every(j=>j.state==='done'||j.state==='failed'))return q;await sleep(250);}return (await api(O.token,'GET',`/v1/events/jobs?subscription=${sub}&workspace=${A}`)).j.jobs??[];};
+ const jo=await jobsOf(WOM.id),ja=await jobsOf(WAS.id);
+ // No model key on this Worker: the runtime takes the job, the turn fails, and the job says so (a failure, not a parked job).
+ t('Omni’s runtime took the job and finished it (failed here: no model key), with the reason',jo.length===1&&(jo[0].state==='failed'||jo[0].state==='done')&&!!jo[0].note,JSON.stringify(jo).slice(0,200));
+ t('so did Olga’s assistant’s runtime',ja.length===1&&(ja[0].state==='failed'||ja[0].state==='done')&&!!ja[0].note,JSON.stringify(ja).slice(0,200));
+ await api(O.token,'DELETE',`/v1/events/subscriptions/${WOM.id}?workspace=${A}`);await api(O.token,'DELETE',`/v1/events/subscriptions/${WAS.id}?workspace=${A}`);}
+r=await api(U.token,'GET',`/api/agent/definition?workspace=${Bo}`);t('Uma’s assistant in Bravo is her own, untouched',r.s===200&&r.j.definition?.name!=='Pip'&&/Uma’s assistant/.test(r.j.definition?.name??''),JSON.stringify(r.j).slice(0,120));
+r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);const beforePersonal=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.agentRuntime==='external'&&a.sponsorId===O.user.id&&a.state!=='removed').length;
 const OP=await connect(O,A);t('Olga connects as her personal agent (the default)',!!OP.access_token,JSON.stringify(OP).slice(0,120));
 t('the consent page offers her agents to reconnect, and the shared choice',/name="as" value="existing:/.test(connect.lastPage)&&/name="as" value="shared"/.test(connect.lastPage)&&/name="agent_name"/.test(connect.lastPage),'');
-r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);{const now=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.sponsorId===O.user.id&&a.state!=='removed');t('one personal agent of Olga’s in Acme',now.length===1,JSON.stringify(now.map(a=>a.displayName)));var OPA=now[0];}
+r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);{const now=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.agentRuntime==='external'&&a.sponsorId===O.user.id&&a.state!=='removed');t('one personal agent of Olga’s in Acme',now.length===1,JSON.stringify(now.map(a=>a.displayName)));var OPA=now[0];}
 const OP2=await connect(O,A,{},{as:`existing:${OPA?.principalId}`});t('reconnecting it makes no duplicate',!!OP2.access_token,JSON.stringify(OP2).slice(0,120));
-r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);t('still one',(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.sponsorId===O.user.id&&a.state!=='removed').length===1);
+r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);t('still one',(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.agentRuntime==='external'&&a.sponsorId===O.user.id&&a.state!=='removed').length===1);
 const SH=await connect(O,A,{},{as:'shared',agent_name:`Omni ${tag}`});t('Olga connects a shared agent named Omni',!!SH.access_token,JSON.stringify(SH).slice(0,160));
 r=await api(O.token,'GET',`/v1/workspaces/${A}/members`);const OMNI=(r.j.members??[]).find(m=>m.displayName===`Omni ${tag}`);t('Omni is a member of Acme, an agent sponsored by Olga',OMNI?.isAgent===true&&OMNI?.sponsorId===O.user.id,JSON.stringify(OMNI).slice(0,160));
 r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);{const a=(r.j.accounts??[]).find(x=>x.principalId===OMNI?.userId);t('with a native account, mode shared, and an address',a?.kind==='native'&&a?.agentMode==='shared'&&!!a?.address,JSON.stringify(a).slice(0,160));}

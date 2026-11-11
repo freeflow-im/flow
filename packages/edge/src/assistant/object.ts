@@ -12,7 +12,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { DurableObject } from 'cloudflare:workers';
 import { Hono, type Context } from 'hono';
-import type { AccountDTO } from '@flow/shared';
+import type { AccountDTO, AgentJobDTO, HostedRuntimeDTO, UserDTO } from '@flow/shared';
 import type { CallerContext } from '../org/routes/compat';
 import type { ImportRow } from '../importing';
 import { exportTables, importTable, ownerMismatch, ownerRefusal } from '../perAccount';
@@ -33,7 +33,7 @@ import { checkBraveKey } from '@flow/docs/server/agent/tools.ts';
 import { ASSISTANT_PAGES, SUITE_GUIDANCE } from '../docs/assistantTools.ts';
 import { isFileId } from '@flow/docs/server/ids.ts';
 import { scopeOf, type ScopeArg } from '@flow/docs/server/scope.ts';
-import { chatScope, HOME_CHAT, isChatScope, type AgentEvent, type AgentTurnRequest, type AssistantSettingsUpdate } from '@flow/docs/shared/agent/protocol.ts';
+import { chatScope, HOME_CHAT, isChatScope, type AgentDefinition, type AgentEvent, type AgentTurnRequest, type AssistantSettingsUpdate } from '@flow/docs/shared/agent/protocol.ts';
 import { docsPageUrl, docsToolContext, importToDocs, type DocsFetch, type DocsPlace } from './docsTools.ts';
 
 export type { DocsCaller };
@@ -51,7 +51,12 @@ export interface AssistantEnv {
   /** Calendar's objects and the organization's share index: Calendar's tools, as routes/calendar.ts reaches them. */
   CALENDAR?: DurableObjectNamespace<import('../calendar/object').Calendar>;
   ORG?: DurableObjectNamespace<import('../org/object').Org>;
+  /** The organizations' event logs: a wake job's steps (ack, done), when this runtime takes one (agents.md §6). */
+  EVENTS?: DurableObjectNamespace<import('../events/object').Events>;
 }
+
+/** How long an async turn may run before it is given up. */
+const WAKE_TURN_MS = 8 * 60_000;
 
 /**
  * The tables, Docs' own DDL for them (docs/server/db.ts, with its later columns) without the `users` references: this
@@ -83,7 +88,8 @@ const IMPORTED = ['agent_usage', 'assistant_settings'] as const;
 export interface MovedChats { conversations: string[]; usage: { user_id: string; day: string }[]; settings: string[] }
 
 /** Who is asking, per request: the caller context (the account) and the same person as the Docs object's caller. */
-interface Who { caller: AccountCaller; docs: DocsCaller }
+/** `conversationUser`: whose conversation a request is in; the agent's own identity when it is not the caller's (a shared agent asked by a person). */
+interface Who { caller: AccountCaller; docs: DocsCaller; conversationUser?: string }
 type Bindings = { who: Who };
 type C = Context<{ Bindings: Bindings }>;
 
@@ -99,6 +105,18 @@ function agentErrorMessage(e: unknown): string {
   return 'Something went wrong while the assistant was working. Try again.';
 }
 
+/** The most a definition's instructions may run to. */
+const MAX_INSTRUCTIONS = 8_000;
+
+/** The definition's instructions as prompt lines (prompt.ts `systemPrompt`'s guidance): one block, marked as the owner's. */
+export function definitionGuidance(d: AgentDefinition): string[] {
+  const text = d.instructions.trim();
+  return text ? [`- Instructions from the person or organization this agent belongs to, which you follow within the rules above:\n${text}`] : [];
+}
+
+/** Whose conversation a request is in: the caller's, or, for a shared agent asked by a person, that person's (one thread per asker). */
+const conversationUserOf = (c: { env: { who: Who } }) => c.env.who.conversationUser ?? c.env.who.docs.userId!;
+
 export class Assistant extends DurableObject<AssistantEnv> {
   private readonly sql: SqlStorage;
   private readonly context: DocsContext;
@@ -106,6 +124,13 @@ export class Assistant extends DurableObject<AssistantEnv> {
   private services: { agent: AgentService; settings: AssistantSettingsStore } | null = null;
   /** The latest request's caller: the account is always this object's, but its channels and session may change. */
   private who: Who | null = null;
+  /** The caller of each turn that is running, by its conversation user: tools read theirs, never a later request's. */
+  private readonly turnWho = new Map<string, Who>();
+  /** Wake jobs this runtime is running now. */
+  private readonly runningJobs = new Set<string>();
+  /** The prompt lines the loop reads on every model call; a definition change rewrites them in place (no new loop, so
+   * the loop's guard against two turns in one conversation stays). */
+  private readonly guidanceLines: string[] = [];
 
   constructor(ctx: DurableObjectState, env: AssistantEnv) {
     super(ctx, env);
@@ -130,6 +155,34 @@ export class Assistant extends DurableObject<AssistantEnv> {
 
   state(key: string): string | null {
     return (this.sql.exec('SELECT value FROM assistant_state WHERE key = ?', key).toArray()[0]?.value as string | undefined) ?? null;
+  }
+
+  /** The suite's prompt lines and the definition's instructions, written into the array the loop reads. */
+  private refreshGuidance(): string[] {
+    this.guidanceLines.splice(0, this.guidanceLines.length, ...SUITE_GUIDANCE, ...definitionGuidance(this.definition()));
+    return this.guidanceLines;
+  }
+
+  /** The hosted agent's definition (agents.md §6), as set, or the default: a name and no instructions. */
+  definition(): AgentDefinition {
+    const raw = this.state('definition');
+    if (raw) {
+      try { return JSON.parse(raw) as AgentDefinition; } catch { /* a bad row reads as the default */ }
+    }
+    return { name: this.state('definition_default_name') ?? 'Assistant', instructions: '', updatedAt: null };
+  }
+
+  /** Sets the definition; the loop is remade so the next turn's prompt carries the new instructions. */
+  setDefinition(d: { name?: string; instructions?: string }): AgentDefinition {
+    const now = this.definition();
+    const next: AgentDefinition = {
+      name: (d.name ?? now.name).trim().slice(0, 80) || now.name,
+      instructions: (d.instructions ?? now.instructions).trim().slice(0, MAX_INSTRUCTIONS),
+      updatedAt: new Date().toISOString(),
+    };
+    this.setState('definition', JSON.stringify(next));
+    this.refreshGuidance();
+    return next;
   }
 
   setState(key: string, value: string): void {
@@ -161,14 +214,19 @@ export class Assistant extends DurableObject<AssistantEnv> {
       ...(model ? { model } : {}),
       // The suite's assistant (docs/assistantTools.ts): the pages of every app, its tools' environment, its prompt lines.
       pages: ASSISTANT_PAGES,
-      guidance: SUITE_GUIDANCE,
+      // The definition's instructions (agents.md §6) ride with the suite's guidance; a change remakes the service.
+      guidance: this.refreshGuidance(),
       extend: (userId: string, scope: ScopeArg) => {
+        // The turn's own caller (a concurrent request or wake job may have come in since it started).
+        const who = this.turnWho.get(userId) ?? this.who;
         const place = placeOf(scope);
-        const docs = place && this.docsFetch(place.workspace) ? docsToolContext(this.docsFetch(place.workspace)!, place, this.origin) : undefined;
-        const mail = this.mailContext(scope);
-        const calendar = this.calendarContext(userId);
+        const docsFetch = place ? this.docsFetch(place.workspace, who) : undefined;
+        const docs = place && docsFetch ? docsToolContext(docsFetch, place, this.origin) : undefined;
+        const mail = this.mailContext(scope, who);
+        // Calendar's shared calendars go by the channels of whom the turn runs as: the agent's own, not its asker's.
+        const calendar = this.calendarContext(who?.docs.userId ?? userId, who);
         // The apps added by manifest (apps.ts): their objects, as the account this object belongs to.
-        const apps = appToolContexts(this.env, async () => this.who?.caller ?? null, this.origin);
+        const apps = appToolContexts(this.env, async () => who?.caller ?? null, this.origin);
         return { ...(docs ? { docs } : {}), ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}), ...(apps ? { apps } : {}) };
       },
     });
@@ -176,19 +234,19 @@ export class Assistant extends DurableObject<AssistantEnv> {
   }
 
   /** The organization's Docs object's /api/*, as the person (routes/docs.ts' caller): undefined without Docs or a caller. */
-  private docsFetch(organizationId: string): DocsFetch | undefined {
-    const ns = this.env.DOCS, docs = this.who?.docs;
+  private docsFetch(organizationId: string, who: Who | null = this.who): DocsFetch | undefined {
+    const ns = this.env.DOCS, docs = who?.docs;
     if (!ns || !docs) return undefined;
     const stub = ns.get(ns.idFromName(organizationId));
     return (path, init) => stub.handle(new Request(`${this.origin}${path}`, init), docs, organizationId);
   }
 
   /** Mail's tools: the account's Mail object, and saving an attachment into the chat's root in Docs. */
-  private mailContext(scope: ScopeArg): MailToolContext | undefined {
-    const ns = this.env.MAIL, caller = this.who?.caller;
+  private mailContext(scope: ScopeArg, who: Who | null = this.who): MailToolContext | undefined {
+    const ns = this.env.MAIL, caller = who?.caller;
     if (!ns || !caller) return undefined;
     const place = placeOf(scope);
-    const docs = place ? this.docsFetch(place.workspace) : undefined;
+    const docs = place ? this.docsFetch(place.workspace, who) : undefined;
     const stub = ns.get(ns.idFromName(caller.account.id));
     return {
       mail: (path, init) => stub.handle(new Request(`${this.origin}${path}`, init), caller),
@@ -210,9 +268,9 @@ export class Assistant extends DurableObject<AssistantEnv> {
   }
 
   /** Calendar's tools: the account's Calendar object (or a shared calendar's owner's), as routes/calendar.ts reaches them. */
-  private calendarContext(userId: string): CalendarToolContext | undefined {
+  private calendarContext(userId: string, who: Who | null = this.who): CalendarToolContext | undefined {
     const { CALENDAR, ORG } = this.env;
-    const caller = this.who?.caller;
+    const caller = who?.caller;
     if (!CALENDAR || !ORG || !caller) return undefined;
     const organizationId = caller.account.organizationId || caller.organizationId;
     return {
@@ -236,12 +294,100 @@ export class Assistant extends DurableObject<AssistantEnv> {
    * A request for the account this object belongs to (routes/assistant.ts), with its caller context and the same person
    * as the Docs object knows them; a caller of another account is refused.
    */
-  async handle(request: Request, caller: CallerContext, docs: DocsCaller): Promise<Response> {
+  async handle(request: Request, caller: CallerContext, docs: DocsCaller, agentName?: string, opts: { conversationUser?: string } = {}): Promise<Response> {
     const wrong = ownerMismatch(this, caller, 'the Assistant');
     if (wrong) { console.error(`[assistant] ${wrong}`); return ownerRefusal(wrong); }
-    const who: Who = { caller: caller as AccountCaller, docs };
+    // The agent's name as the directory knows it (agents.md §6), the definition's default until the person sets one.
+    if (agentName && this.state('definition_default_name') !== agentName) this.setState('definition_default_name', agentName);
+    const who: Who = { caller: caller as AccountCaller, docs, ...(opts.conversationUser ? { conversationUser: opts.conversationUser } : {}) };
     this.who = who;
     return withDocsContext(this.context, () => this.app.fetch(request, { who } satisfies Bindings));
+  }
+
+  /**
+   * A hosted shared agent's runtime, claimed for the agent's account when the Admin app makes the agent (agents.md §6): the
+   * owner keys the first request would set, and the definition's name. Idempotent.
+   */
+  async adopt(account: AccountDTO, name: string): Promise<AgentDefinition> {
+    const wrong = ownerMismatch(this, { user: null, account, organizationId: account.organizationId }, 'the agent runtime');
+    if (wrong) throw new Error(wrong);
+    if (this.state('definition_default_name') !== name) this.setState('definition_default_name', name);
+    return this.definition();
+  }
+
+  /** A hosted agent's definition, set from the Admin app (agents.md §6): the runtime remakes its loop for the next turn. */
+  async updateDefinition(d: { name?: string; instructions?: string }): Promise<AgentDefinition> {
+    return this.setDefinition(d);
+  }
+
+  async currentDefinition(): Promise<AgentDefinition> {
+    return this.definition();
+  }
+
+  /**
+   * A wake job for the hosted agent this object runs (agents.md §6), handed over by the organization's Events object: the
+   * job is acked, the prompt run as an async turn (no page, so no browser tools; the server tools as the agent), the answer
+   * posted in the job's channel as the agent (a personal agent: as its sponsor, marked `via`), and the job stepped to done.
+   * One conversation per subscription keeps an automation's memory apart from the person's chats.
+   */
+  async wake(p: { organizationId: string; job: AgentJobDTO; runtime: HostedRuntimeDTO }): Promise<void> {
+    const { job, runtime, organizationId } = p;
+    const events = this.env.EVENTS?.get(this.env.EVENTS.idFromName(organizationId));
+    const step = (s: 'ack' | 'done', opts: { ok?: boolean; note?: string } = {}) => events?.jobStep(job.id, job.agent, s, opts).catch((err: Error) => console.error(`[assistant] job ${job.id} ${s}: ${err.message}`));
+    // A job delivered again while this runtime still runs it (a lease that lapsed): leave it to the run in progress.
+    if (this.runningJobs.has(job.id)) return console.log(`[assistant] job ${job.id}: already running here`);
+    const acked = await step('ack');
+    if (acked && 'conflict' in acked) return console.log(`[assistant] job ${job.id}: not taken, it is ${acked.conflict}`);
+    this.runningJobs.add(job.id);
+    const ORG = this.env.ORG;
+    const org = ORG?.get(ORG.idFromName(organizationId));
+    let note = '';
+    let ok = false;
+    try {
+      // Whom the turn runs as: the shared agent itself, or the personal agent's sponsor (marked via).
+      const actorId = runtime.mode === 'personal' ? runtime.sponsorId! : runtime.agentId;
+      const actorAccountId = runtime.mode === 'personal' ? runtime.sponsorAccountId! : runtime.agentAccountId;
+      const [user, account, channelIds] = await Promise.all([
+        this.directory<UserDTO>('getUser', actorId, actorId),
+        this.directory<AccountDTO | null>('accountById', actorAccountId),
+        org ? org.channelIdsOf(actorId) : Promise.resolve([] as string[]),
+      ]);
+      if (!account) throw new Error('the agent has no account');
+      const caller = { user, token: '', authKind: 'agent' as const, ip: '', organizationId, account, ...(runtime.mode === 'personal' ? { via: runtime.agentId } : {}) } as AccountCaller;
+      const wrong = ownerMismatch(this, caller, 'the agent runtime');
+      if (wrong) throw new Error(wrong);
+      const docs: DocsCaller = { userId: actorId, email: user.email, token: '', ip: '', accountId: account.id, channelIds };
+      const who: Who = { caller, docs, conversationUser: `auto:${job.subscriptionId}` };
+      this.turnWho.set(`auto:${job.subscriptionId}`, who);
+      const text = await withDocsContext(this.context, async () => {
+        const { agent } = this.service();
+        const abort = new AbortController();
+        const timer = setTimeout(() => abort.abort(), WAKE_TURN_MS);
+        let out = '';
+        let failed: string | null = null;
+        try {
+          await agent.runTurn(`auto:${job.subscriptionId}`, { message: job.prompt, context: { page: 'home' }, workspace: organizationId }, (e) => {
+            if (e.type === 'text') out += e.text;
+            else if (e.type === 'error') failed = e.message;
+          }, abort.signal, { scope: { ownerId: actorId, workspaceId: organizationId, private: true }, viewer: actorId });
+        } finally {
+          clearTimeout(timer);
+        }
+        if (failed) throw new Error(failed);
+        return out.trim();
+      });
+      if (job.channelId && text && org) {
+        await org.postAutomation({ ownerAccountId: actorAccountId, channelId: job.channelId, body: text, clientMsgId: job.id, depth: job.depth + 1, causedBy: job.id, ...(runtime.mode === 'personal' ? { via: runtime.agentId } : {}) });
+      }
+      ok = true;
+      note = text ? text.slice(0, 200) : 'nothing to say';
+    } catch (err) {
+      note = agentErrorMessage(err).slice(0, 500);
+      console.error(`[assistant] job ${job.id}: ${(err as Error)?.stack ?? err}`);
+    }
+    this.turnWho.delete(`auto:${job.subscriptionId}`);
+    this.runningJobs.delete(job.id);
+    await step('done', { ok, note });
   }
 
   /** The person's own OpenAI key, for Docs' edit_image (its host.assistant.openaiKey); null for none or another person. */
@@ -253,7 +399,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
 
   private routes(): void {
     const app = this.app;
-    const userOf = (c: C) => c.env.who.docs.userId!;
+    const userOf = conversationUserOf;
     const fail = (c: C, e: unknown) => {
       if (e instanceof AgentError) return c.json({ error: e.message }, e.status as 400);
       throw e;
@@ -290,6 +436,17 @@ export class Assistant extends DurableObject<AssistantEnv> {
 
     app.get('/api/settings/assistant', (c) => c.json({ settings: this.service().settings.get(userOf(c)) }));
 
+    // The agent's definition (agents.md §6): read by anyone the object answers (its owner); set the same way. The default
+    // name is the one the route gives on the first request (the directory's "<name>'s assistant").
+    app.get('/api/agent/definition', (c) => c.json({ definition: this.definition() }));
+    app.put('/api/agent/definition', async (c) => {
+      const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { name?: unknown; instructions?: unknown };
+      if (body.name !== undefined && typeof body.name !== 'string') return c.json({ error: 'name: a string' }, 400);
+      if (body.instructions !== undefined && typeof body.instructions !== 'string') return c.json({ error: 'instructions: a string' }, 400);
+      if (typeof body.instructions === 'string' && body.instructions.length > MAX_INSTRUCTIONS) return c.json({ error: `instructions: at most ${MAX_INSTRUCTIONS} characters` }, 400);
+      return c.json({ definition: this.setDefinition(body as { name?: string; instructions?: string }) });
+    });
+
     app.put('/api/settings/assistant', async (c) => {
       const body = ((await c.req.json().catch(() => ({}))) ?? {}) as Partial<AssistantSettingsUpdate>;
       const checks = this.keyChecks();
@@ -311,7 +468,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
   /** A file chat's name and root, from the Docs object of the account's organization (its /api/places). */
   private async placeOfFile(scope: string, who: Who): Promise<{ title: string; place?: DocsPlace } | null> {
     if (!isFileId(scope)) return null;
-    const docs = this.docsFetch(who.caller.account.organizationId || who.caller.organizationId!);
+    const docs = this.docsFetch(who.caller.account.organizationId || who.caller.organizationId!, who);
     if (!docs) return null;
     const res = await docs(`/api/places/${encodeURIComponent(scope)}`);
     return res.ok ? ((await res.json()) as { title: string; place?: DocsPlace }) : null;
@@ -320,7 +477,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
   /** Runs or resumes a turn, streaming AgentEvents as server-sent events (as the Docs server's /api/agent/turn did). */
   private async turn(c: C): Promise<Response> {
     const body = ((await c.req.json().catch(() => ({}))) ?? {}) as AgentTurnRequest;
-    const userId = c.env.who.docs.userId!;
+    const userId = conversationUserOf(c);
     const { agent } = this.service();
     try {
       agent.checkTurn(userId, body);
@@ -333,7 +490,8 @@ export class Assistant extends DurableObject<AssistantEnv> {
     const organizationId = c.env.who.caller.account.organizationId || c.env.who.caller.organizationId!;
     const chat = body.scope ?? chatScope(body.context);
     const place = (chat !== HOME_CHAT ? (await this.placeOfFile(chat, c.env.who))?.place : undefined) ?? { workspace: organizationId, shared: false };
-    const scope = { ownerId: userId, workspaceId: place.workspace, private: !place.shared };
+    // The files the turn works in are its actor's: the person, or the shared agent itself (never its asker's).
+    const scope = { ownerId: c.env.who.docs.userId!, workspaceId: place.workspace, private: !place.shared };
 
     const abort = new AbortController();
     const encoder = new TextEncoder();
@@ -347,14 +505,17 @@ export class Assistant extends DurableObject<AssistantEnv> {
     const emit = (e: AgentEvent) => {
       if (open) out.enqueue(encoder.encode(`data: ${JSON.stringify(e)}\n\n`));
     };
+    const who = c.env.who;
+    this.turnWho.set(userId, who);
     const done = agent
-      .runTurn(userId, body, emit, abort.signal, { scope, viewer: userId })
+      .runTurn(userId, body, emit, abort.signal, { scope, viewer: who.docs.userId! })
       .catch((e) => {
         if (abort.signal.aborted) return;
         console.error(`[assistant] turn failed: ${(e as Error)?.stack ?? e}`);
         emit({ type: 'error', message: agentErrorMessage(e) });
       })
       .finally(() => {
+        if (this.turnWho.get(userId) === who) this.turnWho.delete(userId);
         if (!open) return;
         open = false;
         out.close();

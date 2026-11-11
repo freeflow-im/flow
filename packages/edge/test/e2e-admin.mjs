@@ -43,6 +43,7 @@ r=await api(A.token,'POST','/v1/workspaces',{name:`Adm ${tag}`,slug:`adm-${tag}`
 r=await api(null,'GET','/admin',undefined,{cookie:`sid=${A.token}`});t('/admin does not send a signed-in person to sign in',r.s!==302&&r.s!==401,r.s+' '+String(r.j).slice(0,60));
 let ann=await accountUntil(A.token,W,(a)=>a.state==='active',15000);t('Ann\'s account reaches active with a hosted mailbox (the fake provider)',ann?.state==='active'&&ann.kind==='native',JSON.stringify(ann).slice(0,160));
 r=await api(A.token,'GET',`/v1/workspaces/${W}/accounts`);const annAcct=r.j.accounts?.find(a=>a.principalId===A.user.id);
+t('Ann’s assistant came with her account: a hosted personal agent, hers',(r.j.accounts??[]).some(a=>a.kind==='personal_agent'&&a.agentRuntime==='hosted'&&a.sponsorId===A.user.id&&a.address===null),JSON.stringify((r.j.accounts??[]).map(a=>[a.kind,a.agentRuntime])).slice(0,160));
 t('the accounts list carries hosted for the Mail column',r.s===200&&annAcct?.hosted===true&&annAcct.state==='active',JSON.stringify(r.j).slice(0,160));
 r=await api(A.token,'PATCH',`/v1/workspaces/${W}`,{name:`Adm ${tag} Rockets`});t('the name can be changed; the slug stays',r.s===200&&r.j.name===`Adm ${tag} Rockets`&&r.j.slug===`adm-${tag}`,r.s+' '+JSON.stringify(r.j).slice(0,120));
 r=await api(A.token,'PATCH',`/v1/workspaces/${W}`,{policies:{defaultAccountKind:'guest'}});t('the retired default-kind policy is refused',r.s===400,r.s+' '+JSON.stringify(r.j).slice(0,100));

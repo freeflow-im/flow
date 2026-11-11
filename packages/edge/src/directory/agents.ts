@@ -1,7 +1,7 @@
 // Personal agents in the directory (docs/specs/agents.md §1, §2): the agent principal a /mcp delegation acts through, one
 // per sponsor, client and organization, with its `personal_agent` account. Shared by the core (the backfill, removal) and
 // the MCP authorization server (a new connection), which run over the same SQLite.
-import type { AgentMode, SponsoredAgentDTO } from '@flow/shared';
+import type { AgentMode, AgentRuntime, SponsoredAgentDTO, UsableAgentDTO } from '@flow/shared';
 import { forbidden } from '../errors';
 import { newId } from './ids';
 
@@ -83,4 +83,58 @@ export function sponsoredAgentsOf(sql: AgentSql, sponsorId: string): SponsoredAg
        AND EXISTS (SELECT 1 FROM accounts a WHERE a.user_id = u.id AND a.organization_id = u.organization_id AND a.state <> 'removed')
      ORDER BY u.display_name, u.created_at`, sponsorId,
   ).map((r) => ({ id: r.id as string, displayName: r.display_name as string, mode: r.mode as AgentMode, organizationId: r.organization_id as string, address: (r.address as string | null) ?? null }));
+}
+
+/**
+ * The person's assistant in an organization (agents.md §6): their hosted personal agent, made once with their account
+ * there and named "<name>'s assistant", brought back if it was removed (the person left and came back). Returns its
+ * principal id. Its runtime object is keyed by the sponsor's account, where the assistant's conversations already live.
+ */
+export function ensureAssistant(sql: AgentSql, sponsorId: string, organizationId: string, sponsorName: string, now = Date.now()): string {
+  const found = rows(sql,
+    "SELECT id, deleted_at FROM users WHERE is_agent = 1 AND mode = 'personal' AND runtime = 'hosted' AND sponsor_user_id = ? AND organization_id = ? ORDER BY (deleted_at IS NOT NULL), created_at LIMIT 1",
+    sponsorId, organizationId)[0];
+  const name = `${(sponsorName || 'Your').trim().slice(0, 60)}’s assistant`;
+  const id = (found?.id as string | undefined) ?? newId();
+  if (!found) {
+    sql.exec(
+      `INSERT INTO users (id, email, password_hash, display_name, is_agent, sponsor_user_id, organization_id, mode, runtime, email_verified_at, created_at)
+       VALUES (?, ?, '!agent', ?, 1, ?, ?, 'personal', 'hosted', ?, ?)`,
+      id, `agent-${id}@agents.flow.local`, name, sponsorId, organizationId, now, now);
+  } else if (found.deleted_at) {
+    sql.exec('UPDATE users SET deleted_at = NULL WHERE id = ?', id);
+  }
+  const account = rows(sql, 'SELECT id, state FROM accounts WHERE user_id = ? AND organization_id = ?', id, organizationId)[0];
+  if (!account) {
+    sql.exec(
+      "INSERT INTO accounts (id, user_id, organization_id, address, display_name, role, kind, state, created_at, sponsor_user_id) VALUES (?, ?, ?, NULL, ?, 'member', 'personal_agent', 'active', ?, ?)",
+      newId(), id, organizationId, name, now, sponsorId);
+  } else if (account.state === 'removed') {
+    sql.exec("UPDATE accounts SET state = 'active', removed_at = NULL, status_message = NULL WHERE id = ?", account.id);
+  }
+  return id;
+}
+
+/** The person's assistant's principal id in an organization, or null (none made, or removed). */
+export function assistantOf(sql: AgentSql, sponsorId: string, organizationId: string): string | null {
+  const r = rows(sql,
+    `SELECT u.id FROM users u JOIN accounts a ON a.user_id = u.id AND a.organization_id = u.organization_id
+     WHERE u.is_agent = 1 AND u.mode = 'personal' AND u.runtime = 'hosted' AND u.sponsor_user_id = ? AND u.organization_id = ? AND u.deleted_at IS NULL AND a.state <> 'removed' LIMIT 1`,
+    sponsorId, organizationId)[0];
+  return (r?.id as string | undefined) ?? null;
+}
+
+/** The hosted agents a person may use in an organization (agents.md §6): their own assistant, and the shared ones. */
+export function usableAgentsOf(sql: AgentSql, userId: string, organizationId: string): UsableAgentDTO[] {
+  return rows(sql,
+    `SELECT u.id, u.display_name, u.mode, u.sponsor_user_id, a.id AS account_id FROM users u JOIN accounts a ON a.user_id = u.id AND a.organization_id = u.organization_id
+     WHERE u.is_agent = 1 AND u.runtime = 'hosted' AND u.organization_id = ? AND u.deleted_at IS NULL AND a.state <> 'removed'
+       AND (u.mode = 'shared' OR u.sponsor_user_id = ?)
+     ORDER BY (u.mode = 'personal') DESC, u.display_name`, organizationId, userId,
+  ).map((r) => ({ id: r.id as string, accountId: r.account_id as string, displayName: r.display_name as string, mode: r.mode as AgentMode, self: r.mode === 'personal' && r.sponsor_user_id === userId }));
+}
+
+/** Marks where an agent's loop runs (agents.md §6). */
+export function setAgentRuntime(sql: AgentSql, agentId: string, runtime: AgentRuntime): void {
+  sql.exec('UPDATE users SET runtime = ? WHERE id = ? AND is_agent = 1', runtime === 'external' ? null : runtime, agentId);
 }

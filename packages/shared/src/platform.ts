@@ -184,6 +184,43 @@ export type PrincipalStatus = (typeof PRINCIPAL_STATUSES)[number];
 export const AGENT_MODES = ['personal', 'shared'] as const;
 export type AgentMode = (typeof AGENT_MODES)[number];
 
+/** Where an agent's loop runs (agents.md §6): on its own machine (`external`: the bridge, a client on /mcp) or in the
+ * platform's runtime object (`hosted`: the person's assistant, a hosted shared agent). `sandboxed` comes later. */
+export const AGENT_RUNTIMES = ['external', 'hosted'] as const;
+export type AgentRuntime = (typeof AGENT_RUNTIMES)[number];
+
+/** An agent a person may talk to from the panel (agents.md §6): their own hosted assistant (`self`), or a hosted shared
+ * agent of the organization. */
+export interface UsableAgentDTO {
+  id: string;
+  accountId: string;
+  displayName: string;
+  mode: AgentMode;
+  self: boolean;
+}
+
+/** A hosted agent's runtime, as the directory places it (agents.md §6): the object its loop runs in (`runtimeKey`: the agent's
+ * own account for a shared agent, the sponsor's account for a personal one, where the assistant's conversations live), and
+ * the identity its turns run as. */
+export interface HostedRuntimeDTO {
+  runtimeKey: string;
+  agentId: string;
+  agentAccountId: string;
+  mode: AgentMode;
+  organizationId: string;
+  /** A personal agent's sponsor: the person whose account the agent acts as, marked `via`. */
+  sponsorId: string | null;
+  sponsorAccountId: string | null;
+}
+
+/** A hosted agent's definition (agents.md §6), kept by its runtime object: what the person or the admins set. */
+export interface AgentDefinitionDTO {
+  name: string;
+  /** Lines added to the system prompt. */
+  instructions: string;
+  updatedAt: string | null;
+}
+
 /** A person or an agent: how someone signs in and nothing more (§2.1).
  * `sponsorId` is required for an agent and names a person principal; so are `organizationId` (the one organization
  * the agent belongs to, agents.md §1) and `mode`. */
@@ -232,9 +269,10 @@ export interface AccountDTO {
   statusMessage?: string | null;
   /** The account's hosted mailbox exists (provisioning's mailbox step is done). Absent where the directory did not say. */
   hosted?: boolean;
-  /** An agent's account only (agents.md §2): the person responsible for it here, and its kind. Absent for a person. */
+  /** An agent's account only (agents.md §2): the person responsible for it here, its kind, and where it runs. Absent for a person. */
   sponsorId?: string | null;
   agentMode?: AgentMode | null;
+  agentRuntime?: AgentRuntime | null;
   createdAt: string;
 }
 
