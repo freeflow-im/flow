@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { openSuiteSearch, SuiteBar, type SuiteBarProps } from './SuiteBar';
+import { openSuiteSearch, SuiteBar, type SuiteBarProps, type SuiteTab } from './SuiteBar';
 import { StatusDialog } from './StatusDialog';
 import { AWAY_STATUS, isAway, statusPatch, STATUS_OPTIONS } from './status';
 import { APP_MANIFESTS } from '@flow/shared/manifests';
@@ -330,15 +330,27 @@ describe('status', () => {
 describe('suiteTabsFrom', () => {
   const home = () => {};
 
+  /** The four apps' tabs as they were before Home's came first, without the ⌘ digit each now carries. */
+  const fourApps = (tabs: SuiteTab[]) => tabs.filter((t) => t.id !== 'home').slice(0, 4).map(({ shortcut: _, ...t }) => t);
+
+  it('puts Home first, with no ⌘ digit, and keeps ⌘1–⌘4 on Docs, Chat, Mail and Calendar', () => {
+    const tabs = suiteTabsFrom(APP_MANIFESTS, 'home', {}, { activeHref: '/home/' });
+    expect(tabs[0]).toMatchObject({ id: 'home', label: 'Home', href: '/home/', active: true });
+    render(<SuiteBar {...setupProps({ tabs })} />);
+    expect(screen.getByTestId('suite-tab-home').getAttribute('title')).toBe('Home');
+    expect(screen.getByTestId('suite-tab-docs').getAttribute('title')).toBe('Docs (⌘1)');
+    expect(screen.getByTestId('suite-tab-calendar').getAttribute('title')).toBe('Calendar (⌘4)');
+  });
+
   it("draws Chat's bar as it was, and its tabs off for an organization on another server", () => {
-    expect(suiteTabsFrom(APP_MANIFESTS, 'chat', { 'chat-unread': 5 }).slice(0, 4)).toEqual([
+    expect(fourApps(suiteTabsFrom(APP_MANIFESTS, 'chat', { 'chat-unread': 5 }))).toEqual([
       { id: 'docs', label: 'Docs', href: '/docs' },
       { id: 'chat', label: 'Chat', href: '/chat', active: true, badge: 5 },
       { id: 'mail', label: 'Mail', href: '/mail' },
       { id: 'calendar', label: 'Calendar', href: '/calendar' },
     ]);
     const away = suiteTabsFrom(APP_MANIFESTS, 'chat', { 'chat-unread': 0 }, { unavailable: (t) => `${t.label} is not available for an organization on another server yet` });
-    expect(away.slice(0, 4).map((t) => [t.id, !!t.disabled, t.title])).toEqual([
+    expect(fourApps(away).map((t) => [t.id, !!t.disabled, t.title])).toEqual([
       ['docs', true, 'Docs is not available for an organization on another server yet'],
       ['chat', false, undefined],
       ['mail', true, 'Mail is not available for an organization on another server yet'],
@@ -347,19 +359,19 @@ describe('suiteTabsFrom', () => {
   });
 
   it("draws Docs', Mail's and Calendar's bars as they were", () => {
-    expect(suiteTabsFrom(APP_MANIFESTS, 'docs', { 'chat-unread': 2 }, { activeHref: '/docs/', onSelect: home }).slice(0, 4)).toEqual([
+    expect(fourApps(suiteTabsFrom(APP_MANIFESTS, 'docs', { 'chat-unread': 2 }, { activeHref: '/docs/', onSelect: home }))).toEqual([
       { id: 'docs', label: 'Docs', href: '/docs/', active: true, onSelect: home },
       { id: 'chat', label: 'Chat', href: '/chat', badge: 2 },
       { id: 'mail', label: 'Mail', href: '/mail' },
       { id: 'calendar', label: 'Calendar', href: '/calendar' },
     ]);
-    expect(suiteTabsFrom(APP_MANIFESTS, 'mail', { 'chat-unread': 2, 'mail-unread': 7 }, { activeHref: '/mail/', onSelect: home }).slice(0, 4)).toEqual([
+    expect(fourApps(suiteTabsFrom(APP_MANIFESTS, 'mail', { 'chat-unread': 2, 'mail-unread': 7 }, { activeHref: '/mail/', onSelect: home }))).toEqual([
       { id: 'docs', label: 'Docs', href: '/docs' },
       { id: 'chat', label: 'Chat', href: '/chat', badge: 2 },
       { id: 'mail', label: 'Mail', href: '/mail/', active: true, badge: 7, onSelect: home },
       { id: 'calendar', label: 'Calendar', href: '/calendar' },
     ]);
-    expect(suiteTabsFrom(APP_MANIFESTS, 'calendar', { 'chat-unread': 0 }, { activeHref: '/calendar/', onSelect: home }).slice(0, 4)).toEqual([
+    expect(fourApps(suiteTabsFrom(APP_MANIFESTS, 'calendar', { 'chat-unread': 0 }, { activeHref: '/calendar/', onSelect: home }))).toEqual([
       { id: 'docs', label: 'Docs', href: '/docs' },
       { id: 'chat', label: 'Chat', href: '/chat', badge: 0 },
       { id: 'mail', label: 'Mail', href: '/mail' },
@@ -371,21 +383,22 @@ describe('suiteTabsFrom', () => {
     const tabs = suiteTabsFrom([...APP_MANIFESTS].reverse(), 'docs');
     const withTabs = APP_MANIFESTS.filter((m) => m.tab).sort((a, b) => a.tab!.shortcut.localeCompare(b.tab!.shortcut));
     expect(tabs.map((t) => t.id)).toEqual(withTabs.map((m) => m.name));
-    expect(tabs.slice(0, 4).map((t) => t.id)).toEqual(['docs', 'chat', 'mail', 'calendar']);
+    expect(tabs.slice(0, 5).map((t) => t.id)).toEqual(['home', 'docs', 'chat', 'mail', 'calendar']);
     render(<SuiteBar {...setupProps({ tabs })} />);
     const links = screen.getAllByRole('link').filter((a) => a.classList.contains('sb-tab'));
-    expect(links.slice(0, 4).map((a) => [a.textContent, a.getAttribute('title')])).toEqual([
+    expect(links.slice(0, 5).map((a) => [a.textContent, a.getAttribute('title')])).toEqual([
+      ['Home', 'Home'],
       ['Docs', 'Docs (⌘1)'],
       ['Chat', 'Chat (⌘2)'],
       ['Mail', 'Mail (⌘3)'],
       ['Calendar', 'Calendar (⌘4)'],
     ]);
-    expect(links.map((a) => a.getAttribute('title'))).toEqual(withTabs.map((m) => `${m.tab!.label} (⌘${m.tab!.shortcut})`));
+    expect(links.map((a) => a.getAttribute('title'))).toEqual(withTabs.map((m) => (/^[1-9]$/.test(m.tab!.shortcut) ? `${m.tab!.label} (⌘${m.tab!.shortcut})` : m.tab!.label)));
   });
 
   it('gives every bar every app’s tab, and an app without one (Contacts, reached from Mail) no tab anywhere', () => {
     const withTabs = APP_MANIFESTS.filter((m) => m.tab);
-    expect(withTabs.map((m) => m.name)).toEqual(['chat', 'docs', 'mail', 'calendar']);
+    expect(withTabs.map((m) => m.name)).toEqual(['chat', 'docs', 'mail', 'calendar', 'home']);
     for (const bar of withTabs) {
       const tabs = suiteTabsFrom(APP_MANIFESTS, bar.name);
       expect(tabs.map((t) => t.id).sort()).toEqual(withTabs.map((m) => m.name).sort());

@@ -17,8 +17,11 @@ describe('APP_MANIFESTS', () => {
     const tabs = APP_MANIFESTS.flatMap((m) => (m.tab ? [m.tab] : []));
     expect(unique(tabs.map((t) => t.shortcut))).toBe(true);
     expect(unique(tabs.map((t) => t.label))).toBe(true);
-    for (const t of tabs) expect(t.shortcut).toMatch(/^[1-9]$/);
-    const ordered = [...tabs].sort((a, b) => a.shortcut.localeCompare(b.shortcut));
+    // Home's tab comes first with 0, which no ⌘ key opens (docs/specs/home.md); the others are ⌘1 onwards.
+    expect(tabs.filter((t) => t.shortcut === '0').map((t) => t.label)).toEqual(['Home']);
+    const keyed = tabs.filter((t) => t.shortcut !== '0');
+    for (const t of keyed) expect(t.shortcut).toMatch(/^[1-9]$/);
+    const ordered = [...keyed].sort((a, b) => a.shortcut.localeCompare(b.shortcut));
     expect(ordered.map((t) => t.shortcut)).toEqual(ordered.map((_, i) => String(i + 1)));
     expect(ordered.slice(0, 4).map((t) => t.label)).toEqual(['Docs', 'Chat', 'Mail', 'Calendar']);
     // A tab goes to a page, so an app with one has a path.

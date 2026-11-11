@@ -38,6 +38,7 @@ export function suiteTabsFrom(
         ...(badge !== undefined ? { badge } : {}),
         ...(why ? { disabled: true, title: why } : {}),
         ...(isActive && options.onSelect ? { onSelect: options.onSelect } : {}),
+        shortcut: tab.shortcut,
       };
     });
 }

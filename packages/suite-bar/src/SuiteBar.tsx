@@ -19,6 +19,14 @@ export interface SuiteTab {
   title?: string;
   /** Instead of following `href` (an app's own router, or nothing for the tab you are on). */
   onSelect?: () => void;
+  /** The digit after ⌘ that opens it (its manifest's), when 1–9. Tabs given none are numbered by their place. */
+  shortcut?: string;
+}
+
+/** Each tab's ⌘ digit: its own `shortcut` when the tabs carry them (a tab outside 1–9, Home's 0, has none), else its place. */
+export function tabKeys(tabs: readonly SuiteTab[]): (string | null)[] {
+  const own = tabs.some((t) => t.shortcut !== undefined);
+  return tabs.map((t, i) => (own ? (t.shortcut && /^[1-9]$/.test(t.shortcut) ? t.shortcut : null) : i < 9 ? String(i + 1) : null));
 }
 
 export interface SuiteOrganizationEntry {
@@ -221,6 +229,7 @@ export function SuiteBar({ tabs, organization, search, assistant, notifications,
   const inputRef = useRef<HTMLInputElement>(null);
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
+  const keys = tabKeys(tabs);
 
   const closeSearch = () => {
     setSearching(false);
@@ -248,9 +257,9 @@ export function SuiteBar({ tabs, organization, search, assistant, notifications,
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || !isMod(e)) return;
-      const n = Number(e.key);
-      if (Number.isInteger(n) && n >= 1 && n <= 9) {
-        const tab = tabsRef.current[n - 1];
+      if (/^[1-9]$/.test(e.key)) {
+        const keys = tabKeys(tabsRef.current);
+        const tab = tabsRef.current[keys.indexOf(e.key)];
         if (!tab || tab.disabled) return;
         e.preventDefault();
         followTab(tab);
@@ -410,7 +419,7 @@ export function SuiteBar({ tabs, organization, search, assistant, notifications,
               className="sb-tab"
               href={tab.href}
               aria-current={tab.active ? 'page' : undefined}
-              title={i < 9 ? `${tab.title ?? tab.label} (⌘${i + 1})` : (tab.title ?? tab.label)}
+              title={keys[i] ? `${tab.title ?? tab.label} (⌘${keys[i]})` : (tab.title ?? tab.label)}
               data-testid={`suite-tab-${tab.id}`}
               onClick={(e) => {
                 if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return; // a new tab or window: the browser's
