@@ -185,6 +185,22 @@ export const APP_MANIFESTS: AppManifest[] = [
     events: [],
   },
   {
+    // Home: one page that brings the suite together (docs/specs/home.md). A sidebar of the apps, the person's channels and
+    // the organization's agents, each opening that app's own page, and cards of what is new in each app. No object and no
+    // routes: it reads the other apps' APIs. Its tab is first, with no ⌘ digit (0), so ⌘1–⌘4 stay Docs, Chat, Mail, Calendar.
+    name: 'home',
+    path: '/home',
+    scope: 'organization',
+    kinds: [],
+    tab: { label: 'Home', shortcut: '0', badge: 'none' },
+    client: { dist: 'packages/home/dist', basePath: '/home/', optional: true },
+    pages: [
+      { path: '/home', html: 'home.html', signIn: true },
+      { path: '/home/*', html: 'home.html', signIn: true, passFiles: true },
+    ],
+    events: [],
+  },
+  {
     // The assistant (platform.md §5.5): one object per account holding its chats, settings and usage, which runs the model
     // loop with the registry's tools; the apps above give it page context and browser tools (their `assistant`).
     name: 'assistant',

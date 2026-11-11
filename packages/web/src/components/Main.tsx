@@ -1,4 +1,5 @@
 import { useBoundApi } from '../lib/useBoundApi';
+import { isInHome } from '@flow/suite-bar';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type {
@@ -44,6 +45,7 @@ import { MobileMenuButton } from './MobileMenuButton';
 
 /** `onActivityUnread`: the Activity count as it changes, for the suite bar's Chat tab (App.tsx), and null once gone. */
 export default function Main({ onActivityUnread }: { onActivityUnread?: (count: number | null) => void } = {}) {
+  const [inHome] = useState(isInHome);
   const { api } = useBoundApi();
   const auth = useAuth();
   const sel = useSelection();
@@ -645,11 +647,14 @@ export default function Main({ onActivityUnread }: { onActivityUnread?: (count: 
       <HuddleProvider>
       <HuddleWiring bridge={huddleBridge} />
       <div className="flex h-full flex-col bg-base text-ink">
-        <OpenInAppBanner />
+        {!inHome && <OpenInAppBanner />}
         <HuddleMiniBar />
         <HuddleGrid />
         <IncomingHuddle />
         <div className="relative flex min-h-0 flex-1">
+          {/* Inside Home (docs/specs/home.md), Home's own sidebar lists the channels and agents: Chat draws none. */}
+          {!inHome && (
+            <>
           {/* The sidebar (the workspace rail went into the suite bar's
               organization menu). Desktop: an inline column. Mobile (<md): a
               fixed slide-in drawer under the suite bar, toggled by the header
@@ -662,6 +667,8 @@ export default function Main({ onActivityUnread }: { onActivityUnread?: (count: 
           >
             <Sidebar />
           </div>
+            </>
+          )}
           {isMobile && drawerOpen && (
             <button
               data-testid="nav-drawer-backdrop"

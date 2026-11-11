@@ -12,6 +12,7 @@ This file keeps two things:
 
 ## Parity
 
+- **Home (`/home`) is web-only (2026-11-11, docs/specs/home.md).** The suite bar's Home tab opens it in the browser and the desktop shell; macOS and iOS have no Home screen (gap to close once the web version settles).
 - **Start-up reads are trimmed on web only (2026-11-10, tab switching).** Web's Chat shares an identical GET that is under way, and Mail, Calendar and Docs read their data once at the start; macOS and iOS were not measured and are unchanged (gap to close after the web numbers are in).
 - **`email_members` is at `/mcp` and the hosted assistant only (2026-11-10).** The bridge door does not offer it (bridge agents send from their own mailbox with `send_mail`), and the MCP Docs desktop app and the AWS-hosted plugin have no Contacts. Deliberate, while Contacts lives on the Worker.
 - **The assistant's web tools are web-only, in Chromium browsers with the prototype extension (2026-11-10).** The Workspace, Mail and Calendar panels pass `browser_*` calls to `packages/browser-extension`; macOS, iOS and the desktop shell have no extension and are never offered the tools (the desktop shell could use Electron's own debugger later). Gap to close if the prototype is kept.

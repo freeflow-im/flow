@@ -97,7 +97,7 @@ const vars = {
 const flags = Object.entries(vars).flatMap(([k, v]) => ['--var', `${k}:${v}`]);
 for (const v of values('var')) flags.push('--var', v);
 
-console.log(`\ndev:suite: the suite is at ${origin}  (Chat ${origin}/chat, Docs ${origin}/docs, Mail ${origin}/mail, Calendar ${origin}/calendar, Contacts ${origin}/contacts, Admin ${origin}/admin)`);
+console.log(`\ndev:suite: the suite is at ${origin}  (Chat ${origin}/chat, Docs ${origin}/docs, Mail ${origin}/mail, Calendar ${origin}/calendar, Contacts ${origin}/contacts, Admin ${origin}/admin, Home ${origin}/home)`);
 console.log('dev:suite: sign-up and sign-in links are printed below, not emailed\n');
 const wrangler = spawn('pnpm', ['exec', 'wrangler', 'dev', '--port', String(port), '--local', '--enable-containers=false', '--local-upstream', `localhost:${port}`, ...flags], {
   cwd: edge,
