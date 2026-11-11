@@ -26,10 +26,12 @@ export function personalAgentFor(sql: AgentSql, sponsorId: string, organizationI
   const sponsorAccount = rows(sql, "SELECT id FROM accounts WHERE user_id = ? AND organization_id = ? AND state <> 'removed'", sponsorId, organizationId)[0];
   if (!sponsorAccount) throw forbidden('an agent can only join an organization where its sponsor has an active account');
   const name = clientName.trim().slice(0, 80) || 'Agent';
+  // A retired one (its last connection gone, or removed by an admin) comes back rather than a new principal each time.
   const found = rows(sql,
-    "SELECT id FROM users WHERE is_agent = 1 AND mode = 'personal' AND sponsor_user_id = ? AND organization_id = ? AND display_name = ? AND deleted_at IS NULL ORDER BY created_at LIMIT 1",
+    "SELECT id, deleted_at FROM users WHERE is_agent = 1 AND mode = 'personal' AND sponsor_user_id = ? AND organization_id = ? AND display_name = ? ORDER BY (deleted_at IS NOT NULL), created_at LIMIT 1",
     sponsorId, organizationId, name)[0];
   const id = (found?.id as string | undefined) ?? newId();
+  if (found?.deleted_at) sql.exec('UPDATE users SET deleted_at = NULL WHERE id = ?', id);
   if (!found) {
     // The same recipe as a bridge agent's principal: a synthetic unique email and a password hash nothing matches.
     sql.exec(

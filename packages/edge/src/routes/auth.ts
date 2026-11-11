@@ -64,17 +64,18 @@ export async function resolveCaller<E extends AuthEnv>(c: Context<{ Bindings: E 
   const ip = c.req.header('cf-connecting-ip') ?? '';
   const org = organizationId ?? null;
   if (!token) return { user: null, token: null, authKind: null, ip, organizationId: org, account: null };
-  const { user, kind, account } = await directory(c, 'authenticateIn', token, org);
+  // Who asked a shared agent for this turn (agents.md §3): an agent's claim, which the directory checks names another
+  // member of the organization before any object carries it (the Org object checks membership again against its roster).
+  const claimed = c.req.header('x-flow-invoked-by')?.trim();
+  const { user, kind, account, invokedBy } = await directory(c, 'authenticateIn', token, org, claimed && UUID.test(claimed) ? claimed : null);
   const refused = accountGate(account);
   if (refused) throw refused;
   // A wake job's turn (platform.md §5.2): the Org object stamps the request's events with it, once it has checked it.
   const job = c.req.header('x-flow-job')?.trim();
-  // Who asked a shared agent for this turn (agents.md §3): an agent's claim, checked by the Org object the same way.
-  const invokedBy = kind === 'agent' ? c.req.header('x-flow-invoked-by')?.trim() : undefined;
   return {
     user, token, authKind: kind, ip, organizationId: org, account,
     ...(job && UUID.test(job) ? { jobId: job } : {}),
-    ...(invokedBy && UUID.test(invokedBy) ? { invokedBy } : {}),
+    ...(invokedBy ? { invokedBy } : {}),
   };
 }
 

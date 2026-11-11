@@ -693,17 +693,63 @@ describe('agent accounts', () => {
     expect(core.accountsOf(bot).map((a) => a.address)).toEqual(['builder@acme.freeflow.im']);
     expect(core.accountFor(bot, o1)).toMatchObject({ kind: 'native', sponsorId: ann.user.id, agentMode: 'shared' });
     expect(core.getUser(bot, ann.user.id)).toMatchObject({ isAgent: true, agentMode: 'shared' });
-    // Bob brings it into o2: an agent belongs to one organization, so the join is refused before any member row.
+    // Bob brings it into o2: an agent belongs to one organization, so the sync path refuses it before any member row, and
+    // a join or principal an object reports anyway is skipped (never applied, never a refusal that holds up the outbox).
     await core.applyOrgChanges(o2, [join(o2, ann.user.id), join(o2, bob.user.id)]);
-    await expect(core.applyOrgChanges(o2, [join(o2, bot, bob.user.id)])).rejects.toThrow('this agent belongs to another organization');
     expect(() => core.ensureAccount(bot, o2, 'member', 'Builder')).toThrow('belongs to another organization');
-    // So does o2's object reporting the same principal as born there (a redeem with the same name and key).
-    await expect(core.applyOrgChanges(o2, [agent(bot, bob.user.id, 'builder')])).rejects.toThrow('belongs to another organization');
+    await core.applyOrgChanges(o2, [join(o2, bot, bob.user.id), agent(bot, bob.user.id, 'builder')]);
+    expect(core.accountFor(bot, o2)).toBeNull();
     expect(core.organizationsOf(bot)).toEqual([o1]);
     // The sponsor leaves, and the agent follows (platform.md §3.3, rule 2).
     await core.applyOrgChanges(o1, [{ kind: 'leave', id: o1, user_id: ann.user.id, role: null, payload: null }]);
     expect(core.accountFor(bot, o1)!.state).toBe('removed');
     expect(core.organizationsOf(bot)).toEqual([]);
+    // A tombstoned sponsor takes their agents out of every organization.
+    const bot2 = newId();
+    await core.applyOrgChanges(o2, [agent(bot2, bob.user.id, 'helper'), join(o2, bot2, bob.user.id)]);
+    expect(core.organizationsOf(bot2)).toEqual([o2]);
+    core.tombstoneUser(bob.user.id);
+    expect(core.organizationsOf(bot2)).toEqual([]);
+    expect(core.accountFor(bot2, o2)!.state).toBe('removed');
+  });
+
+  it('skips a join or principal an Org object reports for an agent that belongs elsewhere, and applies the rest of the batch', async () => {
+    const ann = await signUp('a@example.com');
+    const carol = await signUp('c@example.com');
+    const [o1, o2] = [newId(), newId()];
+    core.reserveSlug('acme', o1);
+    core.reserveSlug('beta', o2);
+    const bot = newId();
+    await core.applyOrgChanges(o1, [join(o1, ann.user.id), agent(bot, ann.user.id, 'builder'), join(o1, bot, ann.user.id)]);
+    await core.applyOrgChanges(o2, [join(o2, ann.user.id)]);
+    // An imported principal present in two objects: o2 reports it and a join; both are skipped, Carol's join and the index land.
+    await core.applyOrgChanges(o2, [agent(bot, ann.user.id, 'builder'), join(o2, bot, ann.user.id), join(o2, carol.user.id), { kind: 'index', id: 'idx-1', user_id: null, role: null, payload: null }]);
+    expect(core.accountFor(bot, o2)).toBeNull();
+    expect(core.accountFor(carol.user.id, o2)).toMatchObject({ state: 'active' });
+    expect(core.organizationOfId('idx-1')).toBe(o2);
+    expect(core.organizationsOf(bot)).toEqual([o1]);
+  });
+
+  it('hands back an agent’s claim of who asked only when it names another member of the organization (agents.md §3)', async () => {
+    const ann = await signUp('a@example.com');
+    const bob = await signUp('b@example.com');
+    const org = newId();
+    core.reserveSlug('acme', org);
+    const bot = newId();
+    await core.applyOrgChanges(org, [join(org, ann.user.id), join(org, bob.user.id), agent(bot, ann.user.id, 'builder'), join(org, bot, ann.user.id)]);
+    const token = 'flow-agent-token-test';
+    await core.applyOrgChanges(org, [{ kind: 'agent_token', id: newId(), user_id: bot, role: null, payload: await hashToken(token) }]);
+    const botAccount = core.accountFor(bot, org)!.id;
+    const bobAccount = core.accountFor(bob.user.id, org)!.id;
+    expect((await core.authenticateIn(token, org, bobAccount)).invokedBy).toBe(bobAccount);
+    expect((await core.authenticateIn(token, org, botAccount)).invokedBy).toBeNull();
+    expect((await core.authenticateIn(token, org, newId())).invokedBy).toBeNull();
+    expect((await core.authenticateIn(token, null, bobAccount)).invokedBy).toBeNull();
+    // A person's claim is dropped.
+    expect((await core.authenticateIn(ann.token, org, bobAccount)).invokedBy).toBeNull();
+    // A removed member is no asker.
+    await core.applyOrgChanges(org, [{ kind: 'leave', id: org, user_id: bob.user.id, role: null, payload: null }]);
+    expect((await core.authenticateIn(token, org, bobAccount)).invokedBy).toBeNull();
   });
 
   it('refuses a token for a personal agent, and never changes a personal agent’s kind (agents.md §1, §2)', async () => {
@@ -718,8 +764,12 @@ describe('agent accounts', () => {
     expect(nodeSqlOf(core).exec('SELECT 1 AS x FROM agent_tokens WHERE user_id = ?', agentId).toArray()).toEqual([]);
     expect(() => core.setAccountKind(org, account.id, 'guest')).toThrow("a personal agent's account never changes kind");
     expect(() => core.setAccountKind(org, core.accountFor(ann.user.id, org)!.id, 'personal_agent')).toThrow("a personal agent's account never changes kind");
-    // The same client again is the same agent; another client is another agent.
+    // The same client again is the same agent, a retired one included; another client is another agent.
     expect(personalAgentFor(nodeSqlOf(core), ann.user.id, org, 'Claude Desktop')).toBe(agentId);
+    core.removePersonalAgent(org, account.id);
+    expect(personalAgentFor(nodeSqlOf(core), ann.user.id, org, 'Claude Desktop')).toBe(agentId);
+    expect(core.accountFor(agentId, org)).toMatchObject({ id: account.id, state: 'active' });
+    expect(nodeSqlOf(core).exec('SELECT deleted_at FROM users WHERE id = ?', agentId).toArray()[0]!.deleted_at).toBeNull();
     expect(personalAgentFor(nodeSqlOf(core), ann.user.id, org, 'Cursor')).not.toBe(agentId);
     expect(core.accountsOfOrganization(org).filter((a) => a.kind === 'personal_agent')).toHaveLength(2);
     // An agent cannot sponsor one; nor can a person in an organization they are not in.

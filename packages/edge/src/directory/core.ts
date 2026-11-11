@@ -639,10 +639,20 @@ export class DirectoryCore {
   }
 
   /** Sessions first, with a sliding expiry written at most daily; then agent tokens, which do not expire but can be revoked. */
-  /** A token's principal and, when an organization is named, its account there: the caller context in one call (§3.6). */
-  async authenticateIn(token: string, organizationId: string | null): Promise<{ user: UserDTO; kind: AuthKind; account: AccountDTO | null }> {
+  /**
+   * A token's principal and, when an organization is named, its account there: the caller context in one call (§3.6).
+   * `invokedBy` is an agent's claim of who asked for its turn (agents.md §3): it comes back only when the caller is an agent
+   * and the account named is another account of the organization that was not removed, so every object may carry it.
+   */
+  async authenticateIn(token: string, organizationId: string | null, invokedBy: string | null = null): Promise<{ user: UserDTO; kind: AuthKind; account: AccountDTO | null; invokedBy: string | null }> {
     const { user, kind } = await this.authenticate(token);
-    return { user, kind, account: organizationId ? this.accountFor(user.id, organizationId) : null };
+    const account = organizationId ? this.accountFor(user.id, organizationId) : null;
+    let asker: string | null = null;
+    if (invokedBy && kind === 'agent' && organizationId && account && invokedBy !== account.id) {
+      const who = this.rows("SELECT 1 AS x FROM accounts WHERE id = ? AND organization_id = ? AND state <> 'removed'", invokedBy, organizationId);
+      if (who.length) asker = invokedBy;
+    }
+    return { user, kind, account, invokedBy: asker };
   }
 
   async authenticate(token: string): Promise<{ user: UserDTO; kind: AuthKind }> {
@@ -851,10 +861,11 @@ export class DirectoryCore {
     for (const c of changes) {
       if (c.kind === 'agent_user') {
         const a = JSON.parse(c.payload!) as { username: string | null; keyHash: string | null; passwordHash: string; email: string; displayName: string; sponsorId: string | null; createdAt: number };
-        // Born in an organization's object, so this is its organization, as a shared agent (agents.md §1); a second
-        // organization's object reporting the same id is a join elsewhere, which placeAgent refuses.
+        // Born in an organization's object, so this is its organization, as a shared agent (agents.md §1). A second
+        // organization's object reporting the same id is a join elsewhere: skipped, never refused, since this is a report
+        // of what that object already wrote, and a refusal would hold up every change behind it in its outbox.
         const known = this.userById(c.id);
-        if (known?.is_agent && known.organization_id && known.organization_id !== organizationId) throw forbidden('this agent belongs to another organization; connect it here with a new name and key');
+        if (known?.is_agent && known.organization_id && known.organization_id !== organizationId) { console.error(`[agents] ${c.id} belongs to ${known.organization_id as string}; its principal reported by ${organizationId} is skipped`); continue; }
         this.sql.exec(
           `INSERT INTO users (id, email, password_hash, display_name, is_agent, sponsor_user_id, agent_username, agent_key_hash, organization_id, mode, email_verified_at, created_at)
            VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, 'shared', ?, ?)
@@ -875,7 +886,15 @@ export class DirectoryCore {
       else if (c.kind === 'join') {
         // `memberships` is written for one more release and read by nothing; it is retired in phase 7.
         this.sql.exec('INSERT OR REPLACE INTO memberships (user_id, organization_id, role) VALUES (?, ?, ?)', c.user_id, organizationId, c.role);
-        this.joinAccount(c.user_id!, organizationId, c.role!);
+        // An agent that belongs elsewhere gets no account here (agents.md §1); the join is skipped, not refused, for the
+        // same reason as above. The sync path (ensureAccount, which redeem asks first) is where the refusal reaches the agent.
+        try {
+          this.joinAccount(c.user_id!, organizationId, c.role!);
+        } catch (err) {
+          if (!(err instanceof ApiError && err.code === 'forbidden')) throw err;
+          console.error(`[agents] join of ${c.user_id!} in ${organizationId} skipped: ${err.message}`);
+          continue;
+        }
         // A member row's sponsor (an agent's, in this organization) rides on its join.
         if (c.payload) this.sql.exec('UPDATE accounts SET sponsor_user_id = ? WHERE user_id = ? AND organization_id = ?', c.payload, c.user_id, organizationId);
       } else if (c.kind === 'owner') {

@@ -158,7 +158,7 @@ r=await mcp(T4.access_token,'tools/list');t('Uma’s Acme tokens stop working: r
 r=await api(U.token,'GET','/api/settings/agents');t('and Docs’ Settings no longer lists them',!(r.j.agents??[]).some(a=>a.organizationId===A),JSON.stringify(r.j.agents).slice(0,160));
 r=await mcp(TB.access_token,'tools/list');t('her Bravo token, another agent, still works',r.s===200,r.s);
 const T5=await connect(U,A);r=await mcp(T5.access_token,'tools/list');t('connecting again makes a new personal agent, and works',r.s===200,r.s);
-r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);{const now=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.sponsorId===U.user.id&&a.state!=='removed');t('one active personal agent of Uma’s again, a new one',now.length===1&&now[0].id!==PA[0]?.id,JSON.stringify(now.map(a=>a.id)));}
+r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);{const now=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.sponsorId===U.user.id&&a.state!=='removed');t('one active personal agent of Uma’s again: the same one, back',now.length===1&&now[0].id===PA[0]?.id,JSON.stringify(now.map(a=>a.id)));}
 r=await api(O.token,'DELETE',`/v1/workspaces/${A}/members/${U.user.id}`);t('Olga removes Uma from Acme',r.s<300,r.s+' '+JSON.stringify(r.j).slice(0,100));
 await sleep(300);
 r=await mcp(T5.access_token,'tools/list');t('Uma’s Acme token stops working: her personal agent there went with her, its delegations revoked',r.s===401&&/invalid_token/.test(r.h.get('www-authenticate'))&&r.j.reason==='revoked',r.s+' '+JSON.stringify(r.j).slice(0,120));

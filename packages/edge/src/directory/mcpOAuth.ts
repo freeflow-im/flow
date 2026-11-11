@@ -553,7 +553,8 @@ export class McpOAuth {
     const account = this.one('SELECT id, state FROM accounts WHERE user_id = ? AND organization_id = ?', userId, orgId);
     const refused = accountGate(account ? { state: account.state as AccountState } : null);
     if (refused) return { ok: false, reason: refused.code, description: refused.message, status: refused.statusCode };
-    // The personal agent this acts through (agents.md §1): removed by an admin, and the delegation is over.
+    // The personal agent this acts through (agents.md §1). Every removal revokes the tokens first, so `revoked` above is what
+    // a removed agent's client normally hears; this is the safety net for an account removed by any other path.
     const agentId = agentOfFamily(this.sql, row.family as string);
     if (agentId) {
       const agentAccount = this.one("SELECT state FROM accounts WHERE user_id = ? AND organization_id = ?", agentId, orgId);
