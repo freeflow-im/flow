@@ -1,6 +1,6 @@
 // Identity: accounts, sessions and sign-in. Ported from packages/server/src/services/auth.ts and oauthAccounts.ts, with
 // the same rules and the same mail. It runs over any `SqlStorage`-shaped database, so tests can use node:sqlite.
-import type { AccountDTO, AccountKind, AgentMode, AgentRuntime, SponsoredAgentDTO, UsableAgentDTO, AccountRole, AccountState, AuthResponse, DnsRecordDTO, DomainDTO, DomainKind, OAuthIdentityDTO, RegisterResponse, UserDTO } from '@flow/shared';
+import type { AccountDTO, AccountKind, AgentMode, AgentRuntime, HostedRuntimeDTO, SponsoredAgentDTO, UsableAgentDTO, AccountRole, AccountState, AuthResponse, DnsRecordDTO, DomainDTO, DomainKind, OAuthIdentityDTO, RegisterResponse, UserDTO } from '@flow/shared';
 import { ApiError, badRequest, conflict, forbidden, notFound, unauthorized } from '../errors';
 import { hashPassword, verifyPassword } from './passwords';
 import { DIRECTORY_MIGRATIONS } from './schema';
@@ -190,6 +190,30 @@ export class DirectoryCore {
     const account = this.accountFor(agentId, organizationId);
     if (!account || account.state === 'removed' || account.state === 'suspended') return null;
     return { user: toUserDTO(u, agentId), account };
+  }
+
+  /**
+   * The hosted runtime behind an account (agents.md §6), for the Events object to wake it: null for a person, an external
+   * agent, or a removed account. A personal agent's runtime is its sponsor's account's object; a shared agent's its own.
+   */
+  hostedRuntimeOf(accountId: string): HostedRuntimeDTO | null {
+    const account = this.accountById(accountId);
+    if (!account || account.state === 'removed') return null;
+    const u = this.userById(account.principalId);
+    if (!u?.is_agent || u.runtime !== 'hosted' || u.deleted_at) return null;
+    const mode = u.mode as AgentMode;
+    const sponsorId = (u.sponsor_user_id as string | null) ?? null;
+    const sponsorAccount = sponsorId ? this.accountFor(sponsorId, account.organizationId) : null;
+    if (mode === 'personal' && (!sponsorAccount || sponsorAccount.state === 'removed')) return null;
+    return {
+      runtimeKey: mode === 'personal' ? sponsorAccount!.id : account.id,
+      agentId: u.id as string,
+      agentAccountId: account.id,
+      mode,
+      organizationId: account.organizationId,
+      sponsorId,
+      sponsorAccountId: sponsorAccount?.id ?? null,
+    };
   }
 
   /** Where an agent's loop runs (agents.md §6); a hosted shared agent is marked so by the Admin app after the Org object makes it. */

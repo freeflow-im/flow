@@ -12,7 +12,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { DurableObject } from 'cloudflare:workers';
 import { Hono, type Context } from 'hono';
-import type { AccountDTO } from '@flow/shared';
+import type { AccountDTO, AgentJobDTO, HostedRuntimeDTO, UserDTO } from '@flow/shared';
 import type { CallerContext } from '../org/routes/compat';
 import type { ImportRow } from '../importing';
 import { exportTables, importTable, ownerMismatch, ownerRefusal } from '../perAccount';
@@ -51,7 +51,12 @@ export interface AssistantEnv {
   /** Calendar's objects and the organization's share index: Calendar's tools, as routes/calendar.ts reaches them. */
   CALENDAR?: DurableObjectNamespace<import('../calendar/object').Calendar>;
   ORG?: DurableObjectNamespace<import('../org/object').Org>;
+  /** The organizations' event logs: a wake job's steps (ack, done), when this runtime takes one (agents.md §6). */
+  EVENTS?: DurableObjectNamespace<import('../events/object').Events>;
 }
+
+/** How long an async turn may run before it is given up. */
+const WAKE_TURN_MS = 8 * 60_000;
 
 /**
  * The tables, Docs' own DDL for them (docs/server/db.ts, with its later columns) without the `users` references: this
@@ -300,6 +305,66 @@ export class Assistant extends DurableObject<AssistantEnv> {
 
   async currentDefinition(): Promise<AgentDefinition> {
     return this.definition();
+  }
+
+  /**
+   * A wake job for the hosted agent this object runs (agents.md §6), handed over by the organization's Events object: the
+   * job is acked, the prompt run as an async turn (no page, so no browser tools; the server tools as the agent), the answer
+   * posted in the job's channel as the agent (a personal agent: as its sponsor, marked `via`), and the job stepped to done.
+   * One conversation per subscription keeps an automation's memory apart from the person's chats.
+   */
+  async wake(p: { organizationId: string; job: AgentJobDTO; runtime: HostedRuntimeDTO }): Promise<void> {
+    const { job, runtime, organizationId } = p;
+    const events = this.env.EVENTS?.get(this.env.EVENTS.idFromName(organizationId));
+    const step = (s: 'ack' | 'done', opts: { ok?: boolean; note?: string } = {}) => events?.jobStep(job.id, job.agent, s, opts).catch((err: Error) => console.error(`[assistant] job ${job.id} ${s}: ${err.message}`));
+    const acked = await step('ack');
+    if (acked && 'conflict' in acked) return console.log(`[assistant] job ${job.id}: not taken, it is ${acked.conflict}`);
+    const ORG = this.env.ORG;
+    const org = ORG?.get(ORG.idFromName(organizationId));
+    let note = '';
+    let ok = false;
+    try {
+      // Whom the turn runs as: the shared agent itself, or the personal agent's sponsor (marked via).
+      const actorId = runtime.mode === 'personal' ? runtime.sponsorId! : runtime.agentId;
+      const actorAccountId = runtime.mode === 'personal' ? runtime.sponsorAccountId! : runtime.agentAccountId;
+      const [user, account, channelIds] = await Promise.all([
+        this.directory<UserDTO>('getUser', actorId, actorId),
+        this.directory<AccountDTO | null>('accountById', actorAccountId),
+        org ? org.channelIdsOf(actorId) : Promise.resolve([] as string[]),
+      ]);
+      if (!account) throw new Error('the agent has no account');
+      const caller = { user, token: '', authKind: 'agent' as const, ip: '', organizationId, account, ...(runtime.mode === 'personal' ? { via: runtime.agentId } : {}) } as AccountCaller;
+      const wrong = ownerMismatch(this, caller, 'the agent runtime');
+      if (wrong) throw new Error(wrong);
+      const docs: DocsCaller = { userId: actorId, email: user.email, token: '', ip: '', accountId: account.id, channelIds };
+      this.who = { caller, docs, conversationUser: `auto:${job.subscriptionId}` };
+      const text = await withDocsContext(this.context, async () => {
+        const { agent } = this.service();
+        const abort = new AbortController();
+        const timer = setTimeout(() => abort.abort(), WAKE_TURN_MS);
+        let out = '';
+        let failed: string | null = null;
+        try {
+          await agent.runTurn(`auto:${job.subscriptionId}`, { message: job.prompt, context: { page: 'home' }, workspace: organizationId }, (e) => {
+            if (e.type === 'text') out += e.text;
+            else if (e.type === 'error') failed = e.message;
+          }, abort.signal, { scope: { ownerId: actorId, workspaceId: organizationId, private: true }, viewer: actorId });
+        } finally {
+          clearTimeout(timer);
+        }
+        if (failed) throw new Error(failed);
+        return out.trim();
+      });
+      if (job.channelId && text && org) {
+        await org.postAutomation({ ownerAccountId: actorAccountId, channelId: job.channelId, body: text, clientMsgId: job.id, depth: job.depth + 1, causedBy: job.id, ...(runtime.mode === 'personal' ? { via: runtime.agentId } : {}) });
+      }
+      ok = true;
+      note = text ? text.slice(0, 200) : 'nothing to say';
+    } catch (err) {
+      note = agentErrorMessage(err).slice(0, 500);
+      console.error(`[assistant] job ${job.id}: ${(err as Error)?.stack ?? err}`);
+    }
+    await step('done', { ok, note });
   }
 
   /** The person's own OpenAI key, for Docs' edit_image (its host.assistant.openaiKey); null for none or another person. */

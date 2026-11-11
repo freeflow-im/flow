@@ -201,4 +201,26 @@ describe('the flow-jobs consumer', () => {
     expect(did).toEqual(['a:retry120', 'b:ack', 'c:ack', 'd:retry']);
     expect(sent).toEqual([[{ organizationId: ORG, jobId: 'b', check: 'ack' }, { delaySeconds: 30 }]]);
   });
+
+  it('hands a hosted agent’s job to its runtime at once, and never an external agent’s (agents.md §6)', async () => {
+    const woken: { key: string; job: string; runtime: string }[] = [];
+    const asked: string[] = [];
+    const runtimeOf: Record<string, unknown> = { 'acct-omni': { runtimeKey: 'acct-omni', agentId: 'omni', agentAccountId: 'acct-omni', mode: 'shared', organizationId: ORG, sponsorId: 'ann', sponsorAccountId: 'acct-ann' }, [BOT]: null };
+    const env = {
+      DIRECTORY: { idFromName: (n: string) => n, get: () => ({ call: async (_m: string, args: unknown[]) => { asked.push(args[0] as string); return { ok: true, value: runtimeOf[args[0] as string] ?? null }; } }) },
+      ASSISTANT: { idFromName: (n: string) => n, get: (key: string) => ({ wake: async (p: { job: { id: string }; runtime: { agentId: string } }) => { woken.push({ key, job: p.job.id, runtime: p.runtime.agentId }); } }) },
+    };
+    const storage = { sql: sqlite(), transactionSync: <T>(fn: () => T) => fn(), getAlarm: async () => null, setAlarm: async () => undefined };
+    const o = new Events({ storage, waitUntil: () => undefined } as never, { ...env, ORG: { idFromName: (n: string) => n, get: () => ({ privateChannelIdsOfAccounts: async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, []])), agentAccountIds: async () => [BOT, 'acct-omni'], pokeSubscription: async () => 0 }) } } as never);
+    await o.createSubscription({ name: 'omni', consumer: 'acct-omni', owner: 'acct-ann', filter: { types: ['chat.*'] }, delivery: 'wake', createdBy: 'acct-ann', action: { kind: 'wake', prompt: 'p' } });
+    await o.createSubscription({ name: 'bot', consumer: BOT, owner: BOB, filter: { types: ['chat.*'] }, delivery: 'wake', createdBy: BOB, action: { kind: 'wake', prompt: 'p' } });
+    await o.publish(ev('chat.message.created'));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(woken).toEqual([{ key: 'acct-omni', job: expect.any(String), runtime: 'omni' }]);
+    // The directory is asked once per consumer.
+    await o.publish(ev('chat.message.created'));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(woken).toHaveLength(2);
+    expect(asked.sort()).toEqual(['acct-omni', BOT].sort());
+  });
 });

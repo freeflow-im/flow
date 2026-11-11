@@ -64,7 +64,7 @@ function scripted(seen: string[][]): ModelCall {
 
 class TestAssistant extends Assistant {
   script: ModelCall = async () => { throw new Error('no script'); };
-  protected override model() { return this.script; }
+  protected override model(): ModelCall { return (params, opts) => this.script(params, opts); }
   protected override keyChecks() { return { key: async () => {}, search: async () => null }; }
 }
 
@@ -189,6 +189,62 @@ describe('the Assistant object', () => {
     const res = await a.handle(req('GET', '/api/agent'), other, DOCS_CALLER);
     expect(res.status).toBe(500);
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('wrong_account');
+  });
+});
+
+describe('a hosted agent’s runtime takes a wake job (agents.md §6)', () => {
+  const OMNI_ACCOUNT = { id: 'acct-omni', principalId: 'omni', organizationId: 'org-1', state: 'active', role: 'member', address: 'omni@acme.test', displayName: 'Omni', kind: 'native', agentMode: 'shared', sponsorId: 'user-1' } as unknown as AccountDTO;
+  const users: Record<string, unknown> = { omni: { id: 'omni', email: 'omni@agents.flow.local', displayName: 'Omni', isAgent: true, agentMode: 'shared' }, 'user-1': { id: 'user-1', email: 'ann@acme.test', displayName: 'Ann', isAgent: false } };
+  const accounts: Record<string, unknown> = { 'acct-omni': OMNI_ACCOUNT, 'acct-1': ACCOUNT };
+  const job = (id: string, extra: Record<string, unknown> = {}) => ({ id, subscriptionId: 'sub-1', agent: 'acct-omni', eventId: 'e1', eventSeq: 1, prompt: 'Summarize: hello', channelId: 'ch-1', state: 'queued', attempts: 0, depth: 1, createdAt: '', updatedAt: '', ...extra }) as never;
+  function env() {
+    const posted: Record<string, unknown>[] = [];
+    const steps: { job: string; step: string; opts?: unknown }[] = [];
+    return {
+      posted, steps,
+      env: {
+        DIRECTORY: { idFromName: (n: string) => n, get: () => ({ call: async (m: string, args: unknown[]) => ({ ok: true, value: m === 'getUser' ? users[args[0] as string] : m === 'accountById' ? accounts[args[0] as string] : null }) }) },
+        ORG: { idFromName: (n: string) => n, get: () => ({ channelIdsOf: async () => ['ch-1'], postAutomation: async (p: Record<string, unknown>) => { posted.push(p); return 'm1'; } }) },
+        EVENTS: { idFromName: (n: string) => n, get: () => ({ jobStep: async (job: string, _agent: string, step: string, opts?: unknown) => { steps.push({ job, step, opts }); return { id: job, state: step === 'ack' ? 'running' : 'done' }; } }) },
+      } as unknown as AssistantEnv,
+    };
+  }
+
+  it('acks the job, runs the prompt as the shared agent, posts the answer in the channel as the agent, caused by the job, and steps it done', async () => {
+    const e = env();
+    const a = assistant('acct-omni', e.env);
+    const systems: string[] = [];
+    a.script = async (params, { onText }) => {
+      systems.push(JSON.stringify(params.system));
+      onText('Hello was said.');
+      return message([{ type: 'text', text: 'Hello was said.' }], 'end_turn') as never;
+    };
+    await a.setDefinition({ name: 'Omni', instructions: 'Keep it short.' });
+    await a.wake({ organizationId: 'org-1', job: job('job-1'), runtime: { runtimeKey: 'acct-omni', agentId: 'omni', agentAccountId: 'acct-omni', mode: 'shared', organizationId: 'org-1', sponsorId: 'user-1', sponsorAccountId: 'acct-1' } });
+    expect(e.steps.map((s) => s.step)).toEqual(['ack', 'done']);
+    expect(e.steps[1]!.opts).toMatchObject({ ok: true, note: 'Hello was said.' });
+    expect(e.posted).toEqual([{ ownerAccountId: 'acct-omni', channelId: 'ch-1', body: 'Hello was said.', clientMsgId: 'job-1', depth: 2, causedBy: 'job-1' }]);
+    expect(systems[0]).toContain('Keep it short.');
+    // The runtime is the agent's now: a person's request for it is refused as another account's.
+    expect((await a.handle(req('GET', '/api/agent?scope=home'), CALLER, DOCS_CALLER)).status).toBe(500);
+  });
+
+  it('runs a personal agent’s job as its sponsor, marked via, and reports a failed turn as a failed job', async () => {
+    const e = env();
+    const a = assistant('acct-1', e.env);
+    a.script = async (_p, { onText }) => { onText('Done, Ann.'); return message([{ type: 'text', text: 'Done, Ann.' }], 'end_turn') as never; };
+    const runtime = { runtimeKey: 'acct-1', agentId: 'asst', agentAccountId: 'acct-asst', mode: 'personal' as const, organizationId: 'org-1', sponsorId: 'user-1', sponsorAccountId: 'acct-1' };
+    await a.wake({ organizationId: 'org-1', job: job('job-2', { agent: 'acct-asst' }), runtime });
+    expect(e.posted).toEqual([expect.objectContaining({ ownerAccountId: 'acct-1', body: 'Done, Ann.', causedBy: 'job-2', via: 'asst' })]);
+    expect(e.steps.at(-1)).toMatchObject({ step: 'done', opts: { ok: true } });
+    // A turn that fails: the job fails with the reason, and nothing is posted.
+    a.script = async () => { throw new Error('model down'); };
+    await a.wake({ organizationId: 'org-1', job: job('job-3', { agent: 'acct-asst' }), runtime });
+    expect(e.posted).toHaveLength(1);
+    expect(e.steps.at(-1)).toMatchObject({ step: 'done', opts: { ok: false } });
+    // The same person's panel chat is untouched: the job ran in its own conversation.
+    const t = (await (await a.handle(req('GET', '/api/agent?scope=home'), CALLER, DOCS_CALLER)).json()) as { items: unknown[] };
+    expect(t.items).toEqual([]);
   });
 });
 

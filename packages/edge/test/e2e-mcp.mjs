@@ -210,6 +210,18 @@ r=await api(O.token,'PUT',`/v1/workspaces/${A}/agents/${OMNIH?.id}/definition`,{
 r=await api(O.token,'GET',`/api/agent?scope=home&agent=${OMNIH?.id}&workspace=${A}`);t('Olga’s conversation with Omni starts empty, in Omni’s runtime',r.s===200&&Array.isArray(r.j.items)&&r.j.items.length===0,r.s+' '+JSON.stringify(r.j).slice(0,100));
 r=await api(O.token,'GET',`/api/agent?scope=home&agent=00000000-0000-7000-8000-000000000bad&workspace=${A}`);t('an agent that is not hers to use is refused',r.s===404&&r.j.code==='no_agent',r.s);
 r=await api(O.token,'GET',`/v1/workspaces/${A}/agents/${REG??'x'}/definition`);t('an external agent has no definition here',r.s===404,r.s);
+// --- A wake job for a hosted agent goes straight to its runtime (agents.md §6, phase C) ---------------------------------------
+{const SP=`/v1/events/subscriptions?workspace=${A}`;
+ r=await api(O.token,'GET',`/v1/workspaces/${A}/channels`);const GENC=(r.j.channels??r.j)[0];
+ r=await api(O.token,'POST',SP,{name:'omni summaries',delivery:'wake',consumer:OMNIH?.accountId,filter:{types:['chat.message.created'],channelId:GENC.id},action:{kind:'wake',prompt:'Summarize: {{data}}'}});const WOM=r.j.subscription;t('Olga makes a wake subscription for the hosted Omni',r.s===201&&WOM?.consumer===OMNIH?.accountId,r.s+' '+JSON.stringify(r.j).slice(0,140));
+ r=await api(O.token,'POST',SP,{name:'my assistant',delivery:'wake',consumer:SELF?.accountId,filter:{types:['chat.message.created'],channelId:GENC.id},action:{kind:'wake',prompt:'Note: {{data}}'}});const WAS=r.j.subscription;t('and one for her own assistant, which is no member but hers',r.s===201&&WAS?.consumer===SELF?.accountId,r.s+' '+JSON.stringify(r.j).slice(0,140));
+ r=await api(O.token,'POST',`/v1/channels/${GENC.id}/messages`,{clientMsgId:crypto.randomUUID(),body:'a message for the hosted agents'});
+ const jobsOf=async(sub)=>{for(let i=0;i<40;i++){const q=(await api(O.token,'GET',`/v1/events/jobs?subscription=${sub}&workspace=${A}`)).j.jobs??[];if(q.length&&q.every(j=>j.state==='done'||j.state==='failed'))return q;await sleep(250);}return (await api(O.token,'GET',`/v1/events/jobs?subscription=${sub}&workspace=${A}`)).j.jobs??[];};
+ const jo=await jobsOf(WOM.id),ja=await jobsOf(WAS.id);
+ // No model key on this Worker: the runtime takes the job, the turn fails, and the job says so (a failure, not a parked job).
+ t('Omni’s runtime took the job and finished it (failed here: no model key), with the reason',jo.length===1&&(jo[0].state==='failed'||jo[0].state==='done')&&!!jo[0].note,JSON.stringify(jo).slice(0,200));
+ t('so did Olga’s assistant’s runtime',ja.length===1&&(ja[0].state==='failed'||ja[0].state==='done')&&!!ja[0].note,JSON.stringify(ja).slice(0,200));
+ await api(O.token,'DELETE',`/v1/events/subscriptions/${WOM.id}?workspace=${A}`);await api(O.token,'DELETE',`/v1/events/subscriptions/${WAS.id}?workspace=${A}`);}
 r=await api(U.token,'GET',`/api/agent/definition?workspace=${Bo}`);t('Uma’s assistant in Bravo is her own, untouched',r.s===200&&r.j.definition?.name!=='Pip'&&/Uma’s assistant/.test(r.j.definition?.name??''),JSON.stringify(r.j).slice(0,120));
 r=await api(O.token,'GET',`/v1/workspaces/${A}/accounts`);const beforePersonal=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.agentRuntime==='external'&&a.sponsorId===O.user.id&&a.state!=='removed').length;
 const OP=await connect(O,A);t('Olga connects as her personal agent (the default)',!!OP.access_token,JSON.stringify(OP).slice(0,120));
