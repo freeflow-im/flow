@@ -14,6 +14,9 @@ let dir: string;
 let host: ReturnType<typeof Fastify>;
 
 beforeAll(async () => {
+  // The app logs from background work (start-up, store tidying) that can outlive the last test; a log arriving while
+  // vitest tears the worker down fails the whole run ("Closing rpc while onUserConsoleLog was pending"). Kept local.
+  for (const level of ['log', 'info', 'warn', 'error'] as const) vi.spyOn(console, level).mockImplementation(() => {});
   dir = mkdtempSync(path.join(tmpdir(), 'docs-handoff-'));
   host = Fastify();
   await buildApp({
@@ -43,6 +46,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await host.close();
+  // Let work started by the last request settle before the worker goes.
+  await new Promise((r) => setTimeout(r, 50));
   rmSync(dir, { recursive: true, force: true });
 });
 
