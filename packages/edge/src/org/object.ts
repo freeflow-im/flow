@@ -3,6 +3,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { MAX_EVENT_DEPTH, type AccountDTO, type AccountKind, type Event, type MemberRole, type UserDTO } from '@flow/shared';
 import { accountGate, type DirectoryCore } from '../directory/core';
 import { ApiError } from '../errors';
+import { OutboxFlusher } from './outbox';
 import { directoryLink } from './directoryLink';
 import type { Directory, DirectoryAnswer } from '../directory/object';
 import { publishEvent, subjectMeta, withPublisher } from './bus';
@@ -514,14 +515,32 @@ export class Org extends DurableObject<OrgEnv> {
   }
 
   /** Tells the directory about new ids and changed memberships before the caller gets its answer, so a following request can be routed. */
-  private async flushOutbox(organizationId: string | null): Promise<void> {
-    const sql = this.ctx.storage.sql;
-    const rows = sql.exec('SELECT * FROM _outbox ORDER BY seq').toArray();
-    if (!rows.length) return;
-    const org = organizationId ?? (this.db.select({ id: schema.workspaces.id }).from(schema.workspaces).get()?.id as string);
+  /** One flush at a time (outbox.ts says why); the organization is the caller's, or this object's own. */
+  private outboxOrg: string | null = null;
+  private outbox = new OutboxFlusher(this.ctx.storage.sql as never, async (rows) => {
+    const org = this.outboxOrg ?? (this.db.select({ id: schema.workspaces.id }).from(schema.workspaces).get()?.id as string);
     const answer = await this.directory().call('applyOrgChanges' as keyof DirectoryCore as never, [org, rows]);
-    if (answer.ok) sql.exec('DELETE FROM _outbox WHERE seq <= ?', rows.at(-1)!.seq as number);
-    else console.error(`directory refused org changes: ${answer.message}`);
+    return answer.ok ? { ok: true } : { ok: false, message: answer.message };
+  });
+  private flushOutbox(organizationId: string | null): Promise<void> {
+    if (organizationId) this.outboxOrg = organizationId;
+    return this.outbox.flush();
+  }
+
+  /**
+   * The directory's accounts brought back in line with this organization's member list, which is the truth
+   * (decision_log 2026-11-11): an account whose principal is no longer a member here, or a personal agent whose sponsor
+   * is not, is removed as a leave would have removed it. Mends changes an outbox lost; safe to run any time.
+   */
+  async reconcileAccounts(apply: boolean): Promise<{ removed: AccountDTO[]; applied: boolean }> {
+    await this.flushOutbox(null);
+    const sql = this.ctx.storage.sql;
+    const org = sql.exec('SELECT id FROM workspaces LIMIT 1').toArray()[0]?.id as string | undefined;
+    if (!org) return { removed: [], applied: apply };
+    const members = sql.exec('SELECT user_id FROM workspace_members WHERE workspace_id = ?', org).toArray().map((r) => r.user_id as string);
+    const answer = await this.directory().call('reconcileOrganization' as never, [org, members, apply] as never) as DirectoryAnswer<AccountDTO[]>;
+    if (!answer.ok) throw new ApiError(answer.status, answer.code, answer.message);
+    return { removed: answer.value, applied: apply };
   }
 
   async handle(request: Request, caller: CallerContext, newWorkspaceId: string | null): Promise<Response> {

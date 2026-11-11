@@ -850,6 +850,28 @@ describe('agent accounts', () => {
     expect(again.assistantOf(ann.user.id, org)).not.toBe(id);
   });
 
+  it("reconciles an organization's accounts with its member list: a lost leave's account goes, with its assistant", async () => {
+    const own = await signUp('ro@example.com');
+    const ann = await signUp('ra@example.com');
+    const gus = await signUp('rg@example.com');
+    const org = newId();
+    core.reserveSlug('recon', org);
+    await core.applyOrgChanges(org, [{ kind: 'join', id: org, user_id: own.user.id, role: 'owner', payload: null }, join(org, ann.user.id)]);
+    core.ensureAccount(gus.user.id, org, 'member', 'Gus', 'guest');
+    const annAssistant = core.assistantOf(ann.user.id, org)!;
+    // The member list says only the owner is left: Ann's and Gus's leaves were lost.
+    const listed = core.reconcileOrganization(org, [own.user.id], false);
+    expect(listed.map((a) => a.principalId).sort()).toEqual([ann.user.id, gus.user.id, annAssistant].sort());
+    expect(core.accountFor(ann.user.id, org)!.state).toBe('active');
+    const removed = core.reconcileOrganization(org, [own.user.id]);
+    expect(removed).toHaveLength(3);
+    for (const id of [ann.user.id, gus.user.id, annAssistant]) expect(core.accountFor(id, org)!.state).toBe('removed');
+    expect(core.accountFor(own.user.id, org)!.state).toBe('active');
+    expect(core.assistantOf(own.user.id, org)).toBeTruthy();
+    // Run again, nothing is left to do.
+    expect(core.reconcileOrganization(org, [own.user.id])).toEqual([]);
+  });
+
   it('gives a guest no assistant; sets it aside when a member is made a guest, and brings the same one back (agents.md §6)', async () => {
     const own = await signUp('o@example.com');
     const ann = await signUp('a@example.com');

@@ -112,5 +112,10 @@ r=await api(Bo.token,'GET',`/v1/mail/accounts?workspace=${W}`);t('Bob, a guest n
 // A guest has no assistant (agents.md §6): Bob's and Gus's are set aside; Ann's stays.
 r=await api(A.token,'GET',`/v1/workspaces/${W}/accounts`);{const live=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.agentRuntime==='hosted');t('the guests’ assistants are set aside, the owner’s stays',live.length===1&&live[0].sponsorId===A.user.id,JSON.stringify(live.map(a=>a.sponsorId)));}
 r=await api(Bo.token,'GET',`/api/agent/agents?workspace=${W}`);t('and Bob, a guest, is refused the assistant',r.s===403,r.s);
+// Removing members: the directory's accounts follow the Org's list, and reconcile finds nothing left behind (outbox.ts).
+r=await api(A.token,'DELETE',`/v1/workspaces/${W}/members/${Bo.user.id}`);t('Ann removes Bob',r.s===200,r.s);
+r=await api(A.token,'GET',`/v1/workspaces/${W}/accounts`);t('and his account and assistant leave the directory with him',!(r.j.accounts??[]).some(a=>a.principalId===Bo.user.id||a.sponsorId===Bo.user.id),JSON.stringify((r.j.accounts??[]).map(a=>a.displayName)));
+r=await api(A.token,'POST',`/v1/workspaces/${W}/accounts/reconcile`,{});t('reconcile (a dry run) finds nothing the outbox lost',r.s===200&&r.j.applied===false&&Array.isArray(r.j.removed)&&r.j.removed.length===0,r.s+' '+JSON.stringify(r.j).slice(0,160));
+r=await api(G.token,'POST',`/v1/workspaces/${W}/accounts/reconcile?apply=1`,{});t('a guest cannot reconcile',r.s===403,r.s);
 } finally { doh.close(); }
 console.log(`\n${pass} passed, ${fail} failed`);process.exit(fail?1:0);
