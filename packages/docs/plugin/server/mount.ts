@@ -12,7 +12,7 @@ import type { FileStore } from '../../server/files.ts';
 import type { ImageStore } from '../../server/images.ts';
 import type { SheetStore } from '../../server/sheets.ts';
 import { FileHub } from './files.ts';
-import { createPluginHandler } from './http.ts';
+import { createPluginHandler , type PluginHandoff } from './http.ts';
 import { OAuthServer } from './oauth.ts';
 import type { PdfMaker } from '../../server/pdf.ts';
 
@@ -35,6 +35,8 @@ export interface MountOptions {
   sessionUser?: (cookieHeader: string | undefined) => Promise<string | null>;
   /** Hosted in the suite: where its sign-in page is (a path on this origin); the plugin's pages send a visitor there. */
   suiteSignIn?: string;
+  /** Hosted in the suite on a host of its own: its sign-in handed across from the suite's host (http.ts, PluginHandoff). */
+  handoff?: PluginHandoff;
   /**
    * Public origin of the app (the OAuth issuer and where images come from), e.g. https://docs.example.com. Several,
    * comma-separated, when the app is reached on more than one host: each is the issuer and resource of requests to
@@ -79,6 +81,7 @@ export async function mountPlugin(app: FastifyInstance, opts: MountOptions): Pro
             const cookie = parseCookie(req.headers.cookie)[opts.sessionCookie];
             return opts.auth?.userForSession(cookie)?.id ?? null;
           },
+      handoff: opts.handoff,
     });
     return { host: new URL(url).host, oauth, handler };
   });

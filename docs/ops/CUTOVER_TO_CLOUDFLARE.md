@@ -22,6 +22,11 @@ Plan an afternoon: an hour to rehearse, an hour for the switch, and time to use 
   OAuth on the same host (`/oauth/*`, `/.well-known/oauth-*`). Its sign-in is FreeFlow's session and its consent page
   chooses the organization; state in the directory object (`docs/specs/web-mcp.md`). Only the ported hosts serve it: the
   plugin's hosts above still reach AWS for those paths.
+- The plugin's sign-in is the suite's, handed across hosts (2026-11-10): its `/oauth/sign-in` goes to
+  `app.freeflow.im/api/auth/cross-host`, which returns a signed-in person to the plugin's `/oauth/handoff` with a one-time key
+  that the AWS server redeems at `/api/auth/cross-host/exchange` with `EDGE_ORIGIN_SECRET` (the Worker's `PLUGIN_HOSTS` names
+  the hosts allowed). Check after a deploy: in ChatGPT, connect Universal Docs as a new account; the sign-in lands on
+  `app.freeflow.im`, comes back to `docs.freeflow.im`, and the consent page shows.
 
 ## What does not work on Cloudflare yet
 

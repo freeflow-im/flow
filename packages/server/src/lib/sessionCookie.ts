@@ -38,6 +38,11 @@ export function setSessionCookie(reply: FastifyReply, token: string): void {
   });
 }
 
+/** The same cookie as `setSessionCookie`, as a Set-Cookie header value, for a response made outside Fastify (the ChatGPT plugin's pages). */
+export function sessionCookieHeader(token: string): string {
+  return `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; Max-Age=${config.sessionTtlDays * 86400}; HttpOnly; SameSite=Lax${config.secureCookies ? '; Secure' : ''}`;
+}
+
 export function clearSessionCookie(reply: FastifyReply): void {
   reply.clearCookie(SESSION_COOKIE, { path: '/' });
 }

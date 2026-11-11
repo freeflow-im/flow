@@ -215,6 +215,17 @@ session, and consent chooses one organization, which the grant carries. Chosen d
 (version 2), without the ChatGPT app; an agent's new files go in the person's My files in that organization (private,
 not Organization files); a token stops at once when its person leaves the organization.
 
+## 2026-11-10 — The ChatGPT plugin's sign-in is handed across from the suite's host
+
+Since the cut-over no new ChatGPT connection had completed: the plugin's OAuth pages (on `docs.freeflow.im`, AWS) sent
+people to sign in at `app.freeflow.im` (Cloudflare), whose session cookie never reaches the plugin's host, so
+`/oauth/resume` saw no one signed in (17 users connected before Nov 2; the authorize page was hit daily after, with no
+session or user made on the server). Fixed without moving the plugin (the 2026-11-03 ruling stands): the plugin's
+`/oauth/sign-in` forwards to the Worker's `/api/auth/cross-host`, which gives a signed-in person a one-time key back
+to the plugin's host, where the server trades it with the Worker (`/api/auth/cross-host/exchange`, under the edge
+secret) for the user and signs them in there. A person new to the AWS server is mirrored into its `users` under the
+directory's id (`services/mirrorUser.ts`), so the plugin's data stays AWS's and existing tokens stay valid.
+
 ## 2026-11-03 — The ChatGPT plugin stays on AWS; app.freeflow.im is on Cloudflare (docs/ops/CUTOVER_TO_CLOUDFLARE.md)
 
 Ruled by the operator after the cut-over (#659, 2026-11-02): the ChatGPT plugin (Universal Docs: `docs.freeflow.im`,

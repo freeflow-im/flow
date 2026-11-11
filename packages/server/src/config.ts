@@ -53,6 +53,10 @@ export const config = {
   get workspaceLegacyHosts(): string[] {
     return (process.env.WORKSPACE_LEGACY_HOSTS ?? '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
   },
+  /** The secret the edge Worker sends the origin (Caddy checks it); here it signs this server's calls back to the Worker. */
+  get edgeOriginSecret(): string | null {
+    return process.env.EDGE_ORIGIN_SECRET?.trim() || null;
+  },
   get workspacePluginWebDir(): string {
     return process.env.WORKSPACE_PLUGIN_WEB_DIR ?? path.resolve(pkgRoot, '..', 'docs', 'plugin', 'dist', 'web');
   },

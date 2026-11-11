@@ -738,3 +738,24 @@ it('makes UUIDv7 ids and hex token hashes', async () => {
   expect(newId()).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   expect(await hashToken('x')).toMatch(/^[0-9a-f]{64}$/);
 });
+
+describe('cross-host handoff (the ChatGPT plugin\'s sign-in on its own hosts)', () => {
+  it('trades a key once for the person it was made for, and never a used, unknown or expired one', async () => {
+    const { user } = await signUp('p@example.com');
+    const key = await core.createCrossHostHandoff(user.id);
+    expect(key).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    const redeemed = await core.redeemCrossHostHandoff(key);
+    expect(redeemed.id).toBe(user.id);
+    expect(redeemed.email).toBe('p@example.com');
+    await expect(core.redeemCrossHostHandoff(key)).rejects.toThrow('invalid or expired sign-in key');
+    await expect(core.redeemCrossHostHandoff('x'.repeat(43))).rejects.toThrow('invalid or expired sign-in key');
+    const late = await core.createCrossHostHandoff(user.id);
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.now() + 3 * 60_000);
+      await expect(core.redeemCrossHostHandoff(late)).rejects.toThrow('invalid or expired sign-in key');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

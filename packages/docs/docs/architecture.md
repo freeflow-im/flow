@@ -23,7 +23,13 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   session, as a bearer or the `sid` cookie), signs out (`host.signOut`) and names the client's base path (`/docs`, which
   the client is built with: `BASE_PATH`, read as Vite's `BASE_URL` in `client/src/basePath.ts` and the router's basename). Hosted,
   the app's own sign-in, sign-up, password and Google routes, its mailer and its legal pages are off; a visitor at the base is sent
-  to the suite's sign-in (`/?next=`), as are the ChatGPT plugin's OAuth pages (`suiteSignIn`, resumed at `/oauth/resume`); and the
+  to the suite's sign-in (`/?next=`), as are the ChatGPT plugin's OAuth pages (`suiteSignIn`, resumed at `/oauth/resume`). The plugin
+  is reached on hosts of its own (`docs.freeflow.im`, `mcpdocs.freeflow.im`, still the AWS server), and a session cookie is per
+  host, so its sign-in is handed across (`host.handoff`, `plugin/server/http.ts` `PluginHandoff`): the sign-in page's link is
+  `/oauth/sign-in?next=/oauth/resume?p=…` on the plugin's host, which forwards to the suite's `/api/auth/cross-host` on the Worker's
+  host (`packages/edge/src/routes/crossHost.ts`); signed in there, the browser comes back to `/oauth/handoff?key=…&next=…` with a
+  one-time key, which the host's server trades server to server (`/api/auth/cross-host/exchange`, under the edge secret) for the
+  user, mirrored into its `users` when new (`packages/server/src/services/mirrorUser.ts`), and signs them in on that host; and the
   `users` table is a mirror of the host's users, upserted as each request comes in, so the owner columns keep their foreign keys.
   Flow's `scripts/import-workspace-users.ts` moves the hosted app's accounts over once. Standalone (`pnpm start`, the desktop app)
   nothing changes.

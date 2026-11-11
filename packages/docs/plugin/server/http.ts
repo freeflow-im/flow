@@ -26,8 +26,27 @@ export interface PluginServerOptions {
   logBodies?: boolean;
   /** When hosted inside the app: the account already signed in to the app in this browser, from its cookie. */
   sessionUser?: (req: http.IncomingMessage) => Promise<string | null> | string | null;
+  /**
+   * Hosted in the suite on a host of its own, whose sign-in lives on another host (sessions are per host): the
+   * sign-in page sends the person to /oauth/sign-in here, which forwards them to `signIn`, the suite's cross-host
+   * sign-in; they come back to /oauth/handoff with a one-time key, which `redeem` trades (server to server) for the
+   * user's id, and `sessionCookie` makes the Set-Cookie that signs them in on this host.
+   */
+  handoff?: PluginHandoff;
   mcp?: Partial<McpOptions>;
 }
+
+export interface PluginHandoff {
+  /** Where to send the browser to sign in: `host` is this request's, `next` the page to come back to here. */
+  signIn(host: string, next: string): string;
+  /** The user id behind a key the suite made, or null for one that is unknown, used or expired. */
+  redeem(key: string): Promise<string | null>;
+  /** The Set-Cookie header value of a new session for the user on this host. */
+  sessionCookie(userId: string): Promise<string>;
+}
+
+/** Where the plugin's sign-in pages may send a browser back to: one of the plugin's own OAuth pages. */
+export const NEXT_PATH = /^\/oauth\/[a-z-]+(\?[^#]*)?$/;
 
 /** The plugin's request handler: which paths it owns, and how to serve them. */
 export interface PluginHandler {
@@ -137,6 +156,23 @@ export function createPluginHandler(opts: PluginServerOptions): PluginHandler {
             if (e instanceof OAuthError) return html(res, e.status, oauth.errorPage(e.message));
             throw e;
           }
+        }
+        // Hosted in the suite on a host of its own (opts.handoff): to its sign-in on the other host, and back with a key.
+        if (p === '/oauth/sign-in' && req.method === 'GET' && opts.handoff) {
+          const next = url.searchParams.get('next') ?? '';
+          if (!NEXT_PATH.test(next)) return html(res, 400, oauth.errorPage('This sign-in link is not valid. Start again from ChatGPT.'));
+          res.setHeader('cache-control', 'no-store');
+          return redirect(res, opts.handoff.signIn(req.headers.host ?? '', next));
+        }
+        if (p === '/oauth/handoff' && req.method === 'GET' && opts.handoff) {
+          const next = url.searchParams.get('next') ?? '';
+          const key = url.searchParams.get('key') ?? '';
+          res.setHeader('cache-control', 'no-store');
+          if (!NEXT_PATH.test(next)) return html(res, 400, oauth.errorPage('This sign-in link is not valid. Start again from ChatGPT.'));
+          const userId = /^[A-Za-z0-9_-]{43}$/.test(key) ? await opts.handoff.redeem(key) : null;
+          if (!userId) return html(res, 400, oauth.errorPage('This sign-in has expired. Start again from ChatGPT.'));
+          res.setHeader('set-cookie', await opts.handoff.sessionCookie(userId));
+          return redirect(res, next);
         }
         // Hosted in the suite: back from its sign-in page, the browser now has the suite's session.
         if (p === '/oauth/resume' && req.method === 'GET') {

@@ -11,6 +11,7 @@ import { accountRoutes } from './routes/accounts';
 import { docsRoutes } from './routes/docs';
 import { previewRoutes } from './routes/previews';
 import { handoffRoutes } from './routes/handoff';
+import { crossHostRoutes } from './routes/crossHost';
 import { pageRoutes } from './routes/pages';
 import { adminRoutes } from './routes/admin';
 import { helpRoutes } from './routes/help';
@@ -46,6 +47,8 @@ export interface Env extends ProxyEnv, AuthEnv {
   ASSET_HOSTS: string;
   /** The hosts the ported API answers on: the rehearsal host until the cut-over, then the app's too. */
   PORTED_HOSTS: string;
+  /** The ChatGPT plugin's hosts, still on the origin: their sign-in comes through here (routes/crossHost.ts). */
+  PLUGIN_HOSTS?: string;
   ORG: DurableObjectNamespace<OrgObject>;
   /** Scanned PDFs' OCR; only the Docs object calls it. */
   PDF_OCR?: DurableObjectNamespace<import('./pdfOcr').PdfOcr>;
@@ -103,6 +106,7 @@ ported.onError(onError);
 ported.route('/', mcpRoutes as never);
 // Before Docs' /api/*: the desktop app's sign-in lives under /api/auth on the Workspace app's old paths.
 ported.route('/', handoffRoutes as never);
+ported.route('/', crossHostRoutes as never);
 // Mail's attachment previews, before Docs' /api/*: the Worker reads the bytes from Mail and hands them to Docs.
 ported.route('/', previewRoutes as never);
 // The assistant's paths under /api (/api/agent, its turn, reset and permission, /api/settings/assistant), before Docs' /api/*.
