@@ -119,6 +119,8 @@ assistantRoutes.get('/api/agent/agents', async (c) => {
     if (!organizationId) return c.json({ agents: [] });
     const who = await resolveCaller(c, organizationId);
     if (!who.account) return c.json({ agents: [] });
+    const guest = guestRefusal(who.account, 'the assistant');
+    if (guest) return c.json({ error: guest.message, code: guest.code }, 403);
     return c.json({ agents: await directory(c, 'usableAgents', who.user!.id, organizationId) });
   } catch (err) {
     if (err instanceof ApiError) return c.json({ error: err.message, code: err.code }, err.statusCode as 400);

@@ -4,7 +4,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { hashPassword, verifyPassword } from './passwords';
 import { DirectoryCore, accountGate, hashToken, newId, type Mail, type Sql } from './core';
 import { DIRECTORY_MIGRATIONS } from './schema';
-import { personalAgentFor } from './agents';
+import { ensureAssistant, personalAgentFor } from './agents';
 import { FakeMailProvider } from '../mailprovider/fake';
 import { ProviderError } from '../mailprovider/provider';
 import { decryptBlob } from '../org/crypto/index';
@@ -848,6 +848,38 @@ describe('agent accounts', () => {
     const again = new DirectoryCore(sql, { webUrlBase: 'https://app.test', registrationEnabled: true, send: async () => {} });
     expect(again.assistantOf(ann.user.id, org)).toBeTruthy();
     expect(again.assistantOf(ann.user.id, org)).not.toBe(id);
+  });
+
+  it('gives a guest no assistant; sets it aside when a member is made a guest, and brings the same one back (agents.md §6)', async () => {
+    const own = await signUp('o@example.com');
+    const ann = await signUp('a@example.com');
+    const gus = await signUp('g@example.com');
+    const org = newId();
+    core.reserveSlug('acme', org);
+    await core.applyOrgChanges(org, [{ kind: 'join', id: org, user_id: own.user.id, role: 'owner', payload: null }, join(org, ann.user.id)]);
+    // A guest joining has none.
+    core.ensureAccount(gus.user.id, org, 'member', 'Gus', 'guest');
+    expect(core.assistantOf(gus.user.id, org)).toBeNull();
+    expect(core.usableAgents(gus.user.id, org)).toEqual([]);
+    // Joined again, still a guest: still none.
+    core.ensureAccount(gus.user.id, org, 'member', 'Gus');
+    expect(core.assistantOf(gus.user.id, org)).toBeNull();
+    // A member made a guest: set aside; made a member again: the same one, active.
+    const id = core.assistantOf(ann.user.id, org)!;
+    const annAccount = core.accountFor(ann.user.id, org)!;
+    core.setAccountKind(org, annAccount.id, 'guest');
+    expect(core.assistantOf(ann.user.id, org)).toBeNull();
+    expect(core.accountFor(id, org)).toMatchObject({ state: 'removed', statusMessage: 'a guest has no assistant' });
+    core.setAccountKind(org, annAccount.id, 'native');
+    expect(core.assistantOf(ann.user.id, org)).toBe(id);
+    // A guest's assistant made before this change is set aside at the next start; members' are untouched.
+    const sql = nodeSqlOf(core);
+    const stray = ensureAssistant(sql, gus.user.id, org, 'Gus');
+    expect(core.accountFor(stray, org)!.state).toBe('active');
+    const again = new DirectoryCore(sql, { webUrlBase: 'https://app.test', registrationEnabled: true, send: async () => {} });
+    expect(again.accountFor(stray, org)!.state).toBe('removed');
+    expect(again.assistantOf(ann.user.id, org)).toBe(id);
+    expect(again.assistantOf(own.user.id, org)).toBeTruthy();
   });
 
   it('retires agents made before kinds, once: accounts removed, tokens revoked, principal deleted; a personal agent per connection (phase A)', async () => {

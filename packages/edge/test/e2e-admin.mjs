@@ -109,5 +109,8 @@ const gusNative=await accountUntil(G.token,W,(a)=>a.hosted===true||a.state==='ac
 r=await api(G.token,'GET',`/v1/mail/accounts?workspace=${W}`);t('and Mail lets him in now',r.s===200,r.s+' '+JSON.stringify(gusNative).slice(0,100));
 r=await api(A.token,'POST',`/v1/workspaces/${W}/accounts/kind`,{kind:'guest',all:true});t('Make every member a guest: Bob and Gus',r.s===200&&r.j.changed===2,r.s+' '+JSON.stringify(r.j));
 r=await api(Bo.token,'GET',`/v1/mail/accounts?workspace=${W}`);t('Bob, a guest now, is refused by Mail',r.s===403&&r.j.error?.code==='guest',r.s);
+// A guest has no assistant (agents.md §6): Bob's and Gus's are set aside; Ann's stays.
+r=await api(A.token,'GET',`/v1/workspaces/${W}/accounts`);{const live=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.agentRuntime==='hosted');t('the guests’ assistants are set aside, the owner’s stays',live.length===1&&live[0].sponsorId===A.user.id,JSON.stringify(live.map(a=>a.sponsorId)));}
+r=await api(Bo.token,'GET',`/api/agent/agents?workspace=${W}`);t('and Bob, a guest, is refused the assistant',r.s===403,r.s);
 } finally { doh.close(); }
 console.log(`\n${pass} passed, ${fail} failed`);process.exit(fail?1:0);
