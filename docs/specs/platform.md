@@ -1,6 +1,7 @@
 # FreeFlow platform: identity, accounts, objects, and the apps on top
 
-Status: design proposal · 2026-11-06, revised 2026-11-08 (personal and shared agents: §2.3, §5.5). Nothing in the repository changes by this document. The rulings in §10 go to
+Status: design proposal · 2026-11-06, revised 2026-11-09 (personal and shared agents: §2.3, §5.5) and 2026-11-10 (every agent is a principal with an
+account in one organization; shared agents are for the whole organization; group agents later). Nothing in the repository changes by this document. The rulings in §10 go to
 `decision_log.md` when Scott confirms them. The diagrams are `platform-layers.html` beside this file (open it in
 a browser: the layer stack, one request end to end, and the platform's edges); the Mermaid figures in §0 are the
 same pictures.
@@ -113,7 +114,8 @@ A principal is a person or an agent. It is how someone signs in and nothing more
 | `login_email` | a person's sign-in email, unique; may be a personal Gmail; **never an address anyone writes to** |
 | `display_name` | the default name, which each account may override |
 | `sponsor_id` | required for an agent: the person principal responsible for it; null for a person |
-| `mode` | for an agent: `personal` or `shared` (§2.3); set at creation and never changed; null for a person |
+| `organization_id` | required for an agent: the one organization it belongs to (§2.3); null for a person |
+| `mode` | for an agent: `personal` or `shared`, later `group` (§2.3); set at creation and never changed; null for a person |
 | `status` | `active`, `suspended`, `deleted` |
 
 An agent's `login_email` is a synthetic unique value; agents never sign in by email.
@@ -139,28 +141,47 @@ platform enforces, not by the model's behaviour.
 
 | | Personal agent | Shared agent |
 | --- | --- | --- |
-| Access | its sponsor's, limited by scopes | only its own grants; **never inherits from its sponsor** |
-| Who may start a turn | the sponsor only | the accounts on its "who may use it" list |
-| A member? | no; it acts **as** the sponsor, marked `via` | yes: its own account, address, mailbox, calendars (§3.3) |
+| Access | its sponsor's in the same organization, limited by scopes | only its own grants; **never inherits from its sponsor** |
+| Who may start a turn | the sponsor only | every member of its organization |
+| Its account | `personal_agent`: no address, mailbox, calendars or channels; it acts **as** the sponsor, marked `via` | `native`: its own address, mailbox, calendars (§3.3) |
 | Channels, mentions, DMs from others | no | yes, like any member |
 | Things shared with it | not possible; it already sees what the sponsor sees | by grants, like any member |
 | The sponsor's part | owner and source of access | answers for it; gives it no access |
-| Examples | the in-app assistant (§5.5); Claude Desktop on `/mcp` | Builder; an HR bot; Omni, a team's helper |
+| What an admin may do | see it, suspend it, remove it; never use it (§3.3) | everything they may do with a member |
+| Examples | the in-app assistant (§5.5); Claude Desktop on `/mcp` | Builder; an HR bot; Omni, the team's helper |
+
+**Every agent is a principal in one organization.** An agent has a principal row like any other and exactly one
+account, in the organization it was made in (`organization_id` on the principal). A person with accounts in Acme and
+Initech has two personal agents, one in each, with separate memory: nothing an agent learns in one organization
+reaches another, and when a person leaves an organization their agent there goes with the account. To work in two
+organizations, a person connects two agents.
 
 **The rule: an agent holds a delegation or holds grants, never both.** A personal agent holds only a delegation; a
 shared agent holds only grants. `mode` is a column on the principal, so a constraint enforces it.
 
 **A personal agent is a delegation with a runtime.** The delegation is the MCP OAuth grant already in the directory
-(`oauth_tokens` and its neighbours), carrying the sponsor's `account_id`, the scopes and the agent's principal id. The
-agent has no account of its own. Its caller context is the sponsor's account with `via: <agent id>` (§3.6); grants are
-checked against the sponsor. It may act in shared places for the sponsor ("post this summary to #sales" posts as Ann,
-via her agent), since nobody else can start its turns; writes outside the sponsor's private space (posting, sending,
-sharing, deleting) show the sponsor a confirm card first. Its memory is the sponsor's and private.
+(`oauth_tokens` and its neighbours), carrying the sponsor's `account_id` in the agent's organization, the scopes and
+the agent's principal id. The agent's own account exists so the organization can see, suspend and remove it, and so
+its runtime, subscriptions and events have an owner; it holds no grants and nothing can be shared with it. Its caller
+context is the sponsor's account with `via: <agent id>` (§3.6); grants are checked against the sponsor. It may act in
+shared places for the sponsor ("post this summary to #sales" posts as Ann, via her agent), since nobody else can
+start its turns; any write someone other than the sponsor can see (posting, sending, sharing, deleting, editing a
+shared object, answering an invitation) shows the sponsor a confirm card first. Its conversation and memory are
+private to the sponsor, as a mailbox is: an admin sees the agent but cannot start its turns, read its conversation or
+memory, or change its scopes.
 
-**A shared agent is a member.** It sees only what is shared with its account. Each turn it runs carries
+**A shared agent is a member of the whole organization.** It sees only what is shared with its account. Every member
+of its organization may start its turns, in the panel, by mention, by DM or by a subscription. Each turn carries
 `invokedBy: <account>` so it knows who asked, and its writes are its own ("Omni, asked by Scott"). **A shared agent
-keeps no secrets from its users:** it has one memory per account, across all its conversations, and anything told to
-it may reach anyone on its "who may use it" list. Adding someone to that list is a sharing act, like sharing a file.
+keeps no secrets from the organization:** anything shared with it or told to it may reach any member. The platform
+cannot enforce how an agent outside it keeps memory, so the rule is stated to people instead: the Share dialog (§4.3),
+a DM with a shared agent ("Not private: anyone in Acme can ask Omni") and the panel say so.
+
+**Group agents, later.** A `group` agent is a shared agent whose users are an explicit set of accounts in its
+organization instead of all of them. The set is the agent's **"who may use it" list**; its sponsor and the
+organization's admins edit it, and adding someone is a sharing act: they can then ask about everything already shared
+with the agent, so the change shows what the agent can see and tells the people who shared it. Until group agents
+exist, an agent whose knowledge only some members should reach is not built as a shared agent.
 
 **Where an agent runs is a separate choice from its kind** (§5.5): outside on `/mcp` only, outside on the bridge, or
 hosted by the platform. Any kind runs in any of the three.
@@ -169,15 +190,15 @@ hosted by the platform. Any kind runs in any of the three.
 organization:
 
 > Connect this agent as: **my personal agent** (it acts as you and sees what you see; only you can use it) · **a
-> shared agent** (a member with its own address; it sees only what is shared with it; others can use it) · or
-> reconnect an existing agent: *Scott's assistant · Omni*
+> shared agent** (a member with its own address; it sees only what is shared with it; everyone in Acme can use it)
+> · or reconnect an existing agent: *Scott's assistant · Omni*
 
-Personal creates an agent principal with `mode: personal` and a delegation with the scopes the person picks. Shared
-creates an agent principal with `mode: shared`, an account in the organization with the address the person picks,
-and an agent token; its "who may use it" list starts as the sponsor alone; the organization's policy on sponsoring
-agents applies. Reconnecting names an existing agent, so a new machine does not make a duplicate. The kind never
-changes; to switch, make a new agent, so an agent never quietly gains or loses access. One client may hold both, a
-token for each.
+Personal creates an agent principal with `mode: personal` in the chosen organization, its `personal_agent` account,
+and a delegation with the scopes the person picks. Shared creates an agent principal with `mode: shared`, a `native`
+account with the address the person picks, and an agent token. The organization's policies on sponsoring agents
+apply (§3.1). Reconnecting names an existing agent in the chosen organization, so a new machine does not make a
+duplicate. The kind and the organization never change; to switch, make a new agent, so an agent never quietly gains
+or loses access. One client may hold several, a token for each.
 
 ## 3. Layer 2: organizations and accounts
 
@@ -187,7 +208,8 @@ Any signed-in person may create an organization and becomes its **owner**. Roles
 The owner may transfer ownership and promote admins. Admins invite, remove, suspend, manage domains and policies.
 
 Policies, all in one JSON column, and few: who may invite (admins or every member); whether SSO on a verified domain
-joins automatically (today's `organization_domains` rule); whether members may sponsor agents; whether link sharing
+joins automatically (today's `organization_domains` rule); whether members may connect personal agents beyond the
+in-app assistant (§5.5), and whether they may make shared agents, as two policies; whether link sharing
 is allowed; whether shared agents' addresses go on an agent subdomain (§3.2).
 
 The directory holds the organization row, its slugs and domains. The Org object holds everything else about it.
@@ -204,8 +226,8 @@ The directory holds the organization row, its slugs and domains. The Org object 
 - **Addresses are plain ASCII, for people and agents alike.** No emoji or other marker in the local part: addresses
   with non-ASCII characters before the `@` need SMTPUTF8 (RFC 6531), which many servers, spam filters and forms still
   reject, and which people cannot easily type. A shared agent's address is an ordinary one (`omni@example.com`). A
-  personal agent has no address (§2.3): it acts as its sponsor, and anyone who wants it to do something writes to
-  the sponsor.
+  personal agent's account has no address (§2.3): it acts as its sponsor, and anyone who wants it to do something
+  writes to the sponsor.
 - **Agents are marked where an address is shown, not in the address.** The directory knows each address's kind, so
   every surface that shows one (the completer, the Share dialog, the member list, attendee lists, Chat) shows a
   shared agent as **Omni 🤖** with "agent, sponsored by Tom", and a personal agent's acts as **Tom (via
@@ -229,28 +251,31 @@ The new thing. One per principal per organization; today's `memberships` row wit
 | `address` | `local@domain`, the account's name inside the organization, unique; none for a guest |
 | `display_name` | what members see; defaults from the principal |
 | `role` | `owner`, `admin`, `member` |
-| `kind` | `native` (an address, a mailbox, a native calendar) or `guest` (none of them) |
+| `kind` | `native` (an address, a mailbox, a native calendar), `guest` (none of them) or `personal_agent` (none of them, no channels, no grants; §2.3) |
 | `state` | the provisioning state (§3.4), then `active`, `suspended`, `removed` |
 
 Everything the organization gives a member hangs off the account: the mailbox, the calendars, the role, the profile.
 When a person leaves, the organization keeps the account's mailbox and calendars under its own policy and the person
 keeps their login. That split is the reason for the layer.
 
-**Agent accounts** belong to shared agents only; a personal agent has none (§2.3). They follow four rules. (1) An
-agent may hold an account only in an organization where its sponsor holds one. (2) When the sponsor's account is suspended or removed, the agent's accounts there follow. (3) The agent's
-account is otherwise a full account: `builder@acme.com`, a mailbox, calendars. Inviting it to a meeting is an
-ordinary attendee line; mailing it is ordinary mail. Every surface that shows the agent shows the 🤖 mark and
-"sponsored by" (§3.2); the address itself is plain.
-(4) The account has a **"who may use it" list**: who may start its turns, in the panel, by mention, by DM or by a
-subscription. An entry is an account, a channel's members, the organization, or "people with access to this object"
-(for an agent made to work on one document: share the document with Carol and she may use it; revoke Bob and he may
-not). The panel shows the list's size under the agent's name ("Omni · shared with 2 people").
+**Agent accounts** follow four rules. (1) An agent has exactly one account, in its own organization, where its
+sponsor must hold one. (2) When the sponsor's account is suspended or removed, the agent's account follows. (3) A
+shared agent's account is otherwise a full account: `builder@acme.com`, a mailbox, calendars. Inviting it to a
+meeting is an ordinary attendee line; mailing it is ordinary mail. Every surface that shows the agent shows the 🤖
+mark and "sponsored by" (§3.2); the address itself is plain. (4) A personal agent's account has kind
+`personal_agent`: no address, no mailbox, no calendars, no channels, no grants.
+
+**Admins see every principal.** The member list shows people, guests, shared agents and personal agents, each with
+its kind and sponsor ("Tom's assistant · personal agent of Tom"). An admin may suspend or remove any agent, as they
+may a person. A personal agent is private as a mailbox is: the admin view shows that it exists, its scopes, where it
+runs and when it last ran, and nothing else; no admin tool starts its turns or reads its conversation or memory.
 
 **Guests** are members with no address, no mailbox and no native calendar: the same roles, channels, DMs, mentions and
 Docs. A guest has no address at all, because an address with no mailbox behind it bounces. An owner or admin picks each
 account's kind (`PATCH /v1/workspaces/:id/accounts/:accountId/kind`, or every `member` at once with
-`POST /v1/workspaces/:id/accounts/kind`); the owner is always native, and so is an agent, which is brought in to work
-and needs its address and mailbox for it. A new joiner is native unless the invitation that brought them in was a guest
+`POST /v1/workspaces/:id/accounts/kind`); the owner is always native, and so is a shared agent, which is brought in to work
+and needs its address and mailbox for it; a personal agent's account is always `personal_agent`, and its kind
+never changes. A new joiner is native unless the invitation that brought them in was a guest
 invitation (`POST /v1/workspaces/:id/invites { kind: 'guest' }`, docs/specs/workspace-admin.md §6.5); there is no
 default-kind policy (operator ruling, decision_log 2026-11-09). A guest is never provisioned and starts `active`.
 Made a guest, an account's address is let go and a hosted mailbox is suspended, kept for the retention period and then
@@ -388,7 +413,7 @@ Principals a grant may name, all within one organization:
 
 | Principal | Meaning |
 | --- | --- |
-| `account:<id>` | one member, person or shared agent; never a personal agent, which has no account |
+| `account:<id>` | one member, person or shared agent; never a personal agent's account, which holds no grants |
 | `channel:<id>` | the channel's members, as a set; the channel gets a card saying what was shared |
 | `org` | every member of the organization |
 | `link:<token>` | anyone with the link, with an optional expiry; replaces Docs' public links |
@@ -407,10 +432,11 @@ Roles are the same everywhere; each app maps them to its own actions:
 A private object has no grants. Today's "Organization files" is one grant, `org` as editor, on the root folder, so the
 migration from Docs' `private` flag is mechanical.
 
-Sharing with a shared agent shares with everyone who may use it, so the Share dialog says so: "Everyone who can use
-HR bot (12 people) will be able to ask about this." The person makes the judgement once, when they grant; the agent
-never has to. The Share dialog also offers **Add an assistant**: a new shared agent with the person as sponsor, a
-grant on this object only, and "people with access to this object" as its "who may use it" list (§3.3).
+Sharing with a shared agent shares with the whole organization, so the Share dialog says so: "Everyone in Acme (66
+people) will be able to ask Omni about this." The person makes the judgement once, when they grant; the agent never
+has to. With group agents (§2.3) the dialog names the agent's list instead, and later offers **Add an assistant**: a
+new group agent with the person as sponsor, a grant on this object only, and "people with access to this object" as
+its list.
 
 An object may carry a **thread**: one conversation attached to it that everyone with access sees. It is where
 several people talk to the same shared agent about the object (§5.5).
@@ -499,9 +525,9 @@ the bus is where events are kept and read.
   | `webhook` | the object POSTs the event to a URL with an HMAC signature, retries with backoff, parks the subscription after repeated failure and notifies the owner |
   | `wake` | a job row is created for the agent (`agent_jobs (id, subscription_id, agent, event_id, prompt, state, attempts, lease_until)`), delivered as an `agent.job` event on the agent's own subscription; whoever runs the agent (the bridge, or the platform's runtime for a hosted agent, §5.5) acks it, runs the turn where the subscription says, and reports done or failed; a lapsed lease retries, three failures park it |
 
-  A personal agent has no account, so its subscriptions are its sponsor's, with the agent as consumer: `consumer`
-  is the sponsor's account and the job carries `via`. Their output goes only to places only the sponsor sees (the
-  sponsor's DM with the agent, a notification), unless the sponsor confirms. A shared agent's subscriptions are its
+  A personal agent's subscriptions are its own account's, but what it may see is checked against its sponsor's
+  account, and its jobs carry `via`. Their output goes only to places only the sponsor sees (the sponsor's
+  conversation with the agent, a notification), unless the sponsor confirms. A shared agent's subscriptions are its
   own account's; a turn they start has no `invokedBy` unless a person's act caused the event.
 
   A trigger is a subscription with an action. People create them in an **Automations** page and from any object's
@@ -515,8 +541,8 @@ the bus is where events are kept and read.
 - **Loop safety on the server.** An event caused by a job carries `causedBy` and `depth + 1`. A subscription ignores
   events its own consumer caused unless it opts in, and the organization has a depth cap (default 4) past which no
   wake fires and the owner is told. This replaces the bridge's `agentChainLimit`.
-- **Guarantees.** At least once. In order within one organization. An agent in three organizations has three
-  subscriptions. Reads are bounded (`limit` ≤ 500) and cheap: one indexed range scan on `(seq)` with the filter in
+- **Guarantees.** At least once. In order within one organization. An agent belongs to one organization (§2.3),
+  so its subscriptions all read one log. Reads are bounded (`limit` ≤ 500) and cheap: one indexed range scan on `(seq)` with the filter in
   SQL and visibility applied per row.
 
 The mechanism is Figure 4 of `platform-layers.html`: publishers on the left, the log and its subscriptions in the
@@ -568,21 +594,22 @@ and the bridge's MCP has Chat's.
 | Bridge (events, `wake` jobs) | Scott's own Claude Code, woken by Scott's subscriptions | Builder, Omni; exists today |
 | Hosted (the platform runs it) | **the in-app assistant**, by default for every person | a shared agent the platform runs for the organization |
 
-A hosted agent has an `AgentRuntime` object, one per agent (per account for a shared agent): it holds the model's
+A hosted agent has an `AgentRuntime` object, one per agent and so one per organization: it holds the model's
 working state (paused turns, tool results), takes `wake` jobs from `agent_jobs` as the bridge does, and calls the
 model with the platform's key (limited per organization) or the sponsor's own key. Subscriptions, jobs, leases,
 `causedBy` and the depth cap are the same whoever runs the loop. The desktop app's "use my own Claude Code" becomes a
 personal agent on the bridge.
 
-**The in-app assistant is the person's hosted personal agent.** Every person gets one when their first account
-becomes `active`, named "<name>'s assistant", with the person as sponsor. Its conversation with the person is one
-private conversation, shown in the panel of every app and in Chat. It is the same agent, with the same memory,
-whether the person reaches it from the panel, from Chat or through a subscription. The settings for a person's own
-model key move to it.
+**The in-app assistant is the person's hosted personal agent.** Every person gets one in each organization, when
+their account there becomes `active`, named "<name>'s assistant", with the person as sponsor. Its conversation with
+the person is one private conversation, shown in the panel of every app and in that organization's Chat. Within an
+organization it is the same agent, with the same memory, whether the person reaches it from the panel, from Chat or
+through a subscription; switching organizations in the bar switches to that organization's assistant. The settings
+for a person's own model key move to it.
 
 **The panel can talk to any agent the person may use.** It picks the person's assistant by default; the person may
-pick a shared agent instead (Omni). The panel shows a shared agent's audience under its name ("Omni · shared with 2
-people").
+pick a shared agent of the same organization instead (Omni). The panel shows a shared agent's audience under its name
+("Omni · everyone in Acme").
 
 **A turn started from an open page** differs from other turns in three ways:
 
@@ -653,8 +680,9 @@ The manifest is also the spec a factory agent follows to add an app.
 ### 6.3 Clients
 
 The platform is web first. The native apps know Chat only; each new tab is a web view or a Parity entry. The agent
-bridge is an app too: it holds a shared agent's token or a personal agent's delegation, learns the agent's accounts
-(or its sponsor's), subscribes to events by namespace and uses the registry's tools. Its self-registration asks the
+bridge is an app too: it holds a shared agent's token or a personal agent's delegation, learns the agent's account
+and organization (and, for a personal agent, its sponsor's account there), subscribes to events by namespace and uses
+the registry's tools. A bridge that works in two organizations runs two agents. Its self-registration asks the
 same "personal or shared" question as the consent page (§2.3).
 
 ## 7. One request, end to end
@@ -682,8 +710,9 @@ of a bridge socket.
 
 - `packages/edge/src/directory`: `users` → `principals` + `credentials`; `memberships` → `accounts` with address and
   state; `addresses`; `organizations` gains owner and policies; MCP grants carry `account_id` and the agent's principal id; principals gain
-  `mode`, with the constraint that a personal agent holds no account and a shared agent no delegation; the "who may
-  use it" list on shared agents' accounts.
+  `organization_id` and `mode`; an agent has one account, in that organization; the `personal_agent` account kind,
+  which holds no grants, and the rule that a shared agent holds no delegation (a check in the directory's write path,
+  since the two live in different tables); the admin member list shows every principal.
 - `packages/edge/src/org`: member profiles become account profiles; the `shares` index; the provisioning alarm; the
   socket fan-out reads its backlog from the Events object.
 - A new `Events` object per organization (`packages/edge/src/events/`): the log, subscriptions, long-poll reads,
@@ -694,7 +723,8 @@ of a bridge socket.
 - `packages/shared`: `grants` library, `references`, the events namespace, the manifest type.
 - `packages/suite-bar`, `scripts/assemble.mjs`, `routes/pages.ts`, `mcpOAuth.ts`: read manifests.
 - The assistant moves out of `docs/server/agent` into an `AgentRuntime` object that runs hosted agents, personal
-  and shared; each person gets a hosted personal agent; the panel talks to any agent the person may use.
+  and shared; each person gets a hosted personal agent in each organization; the panel talks to any agent the
+  person may use.
 - `mcpOAuth.ts` consent page and the bridge's registration: the "personal or shared" choice and "reconnect an
   existing agent".
 - A provisioning client for the mail provider's admin API, with the organization's provider ids sealed in its row;
@@ -713,11 +743,9 @@ of a bridge socket.
 - **Address collisions.** Two Ann Lees in one organization: propose `ann.lee2`, or ask at join.
 - **One data key or one per organization.** The per-object layout makes a key per organization natural; decide with
   the provisioning work.
-- **Agents in several organizations.** One bridge process, several accounts, or one process per account. Found in
-  phase 1.5: on the edge an agent cannot yet be invited into a second organization, because `inviteAgentToWorkspace`
-  checks the sponsor only in the target organization's own database, where the agent's row does not exist. The check
-  must go through the directory (`accountFor` for both sponsor and agent) before the rule "an agent holds an account
-  wherever its sponsor does" is true in practice. A follow-up PR, not phase 1.
+- **Agents in several organizations: settled.** An agent belongs to one organization (§2.3), so
+  `inviteAgentToWorkspace` into a second organization is refused rather than fixed; the bridge runs one agent per
+  organization. The sponsor check still moves to the directory (`accountFor`) in phase 1.5.
 - **Login email equal to an address.** With SSO on a verified domain the two coincide; whether that should
   auto-create the account's address from the login email.
 - **Search across accounts.** Mail and Calendar search are per account; "search everything" fans out over the
@@ -725,9 +753,11 @@ of a bridge socket.
 - **Live co-editing in Docs.** Several people and a shared agent editing one document at once needs live co-editing
   (a CRDT such as Yjs, or merging on the server) with presence, and suggestions with accept and reject. Until then an
   agent proposes a change in the document's thread and whoever accepts it applies it.
-- **Shared agents' mailboxes.** An agent is always native (§3.3), so every shared agent gets a mailbox, and each one
+- **Shared agents' mailboxes.** A shared agent is always native (§3.3), so every shared agent gets a mailbox, and each one
   costs money at the provider and uses the domain's daily send limit. Whether that holds when an organization has
-  many small shared agents (one per document, from "Add an assistant"), or such agents may be guests.
+  many small group agents (one per document, from "Add an assistant"), or such agents may be guests.
+- **Guests and shared agents.** Guests are members, so a shared agent answers them too. Whether an organization with
+  many guests needs a policy to keep shared agents to native members, before group agents exist.
 - **Hosted shared agents' model costs.** Which key a hosted shared agent uses, and who pays when many people use it.
 - **Browser tools for external agents.** A relay to the open tab, so an external personal agent can use them too.
 
@@ -740,11 +770,15 @@ of a bridge socket.
    for attendees outside the platform. The platform runs no mail server and depends on no calendar server. External
    mailboxes and connected calendars stay as a secondary path.
 3. The first person to create an organization owns it; roles are owner, admin, member; no groups.
-4. An agent is a principal with a required person sponsor and a kind set at creation. A **personal** agent acts as
-   its sponsor through a delegation, has no account, and only its sponsor may start its turns. A **shared** agent
-   has only its own grants and never inherits from its sponsor; it holds accounts only where its sponsor does, is
-   otherwise a first-class account with an address, a mailbox and calendars, and keeps no secrets from the people
-   who may use it. An agent holds a delegation or grants, never both. The person connecting an agent picks its kind.
+4. An agent is a principal with a required person sponsor, a kind set at creation, and exactly one account in one
+   organization; a person in two organizations has a separate personal agent in each. A **personal** agent acts as
+   its sponsor through a delegation; its account has no address, mailbox, channels or grants, and only its sponsor
+   may start its turns. A **shared** agent has only its own grants and never inherits from its sponsor; it is a
+   first-class account with an address, a mailbox and calendars; every member of its organization may use it, and it
+   keeps no secrets from them. **Group** agents, used by an explicit set of accounts, come later. An agent holds a
+   delegation or grants, never both. The person connecting an agent picks its kind. Admins see every principal,
+   personal agents included, and may suspend or remove them, but cannot use a personal agent or read its
+   conversation or memory.
 5. Sharing is grants on objects, inherited through containers, naming an account, a channel, the organization or a
    link, with the roles viewer, editor, manager, owner, evaluated inside the owning app's object and indexed in the
    Org object. Sharing stays inside one organization in the first version.
@@ -789,15 +823,16 @@ Exit: the types compile and are imported nowhere yet.
 2. **The caller context.** The Worker resolves principal, account, role and channel ids once per request and passes
    them to the object (`routes/*.ts`, the Org object's `CallerContext`). MCP grants carry `account_id`.
 3. **Organizations.** Create an organization → owner; the roles owner, admin, member in the admin view; the policies
-   column with the five policies; the account's address shown on profiles and in the member list, with the 🤖
-   mark and "sponsored by" for shared agents.
+   column with the six policies; the account's address shown on profiles and in the member list, with the 🤖
+   mark and "sponsored by" for shared agents; personal agents listed with their sponsor, and nothing to open.
 4. **Mail by account.** The Mail object is keyed by account id; a script moves each person's connected accounts into
    the account of the organization they were connected in (ask, if a person is in more than one).
-5. **Agents by account.** An agent principal with a required sponsor and a `mode`; existing bridge agents become
-   shared agents and existing `/mcp` grants personal ones; a shared agent's account per organization where the
-   sponsor has one, with its address and its "who may use it" list (the sponsor alone at first, or the organization
-   for agents members already use); suspension follows the sponsor; the bridge reads its accounts at start; `via` and
-   `invokedBy` in the caller context.
+5. **Agents by account.** An agent principal with a required sponsor, an `organization_id` and a `mode`; existing
+   bridge agents become shared agents, one per organization they are in (an agent in two splits into two, the second
+   with a new token); existing `/mcp` grants become personal agents, one per sponsor, client and organization; each
+   agent gets its one account; suspension follows the sponsor; the bridge reads its account at start; `via` and
+   `invokedBy` in the caller context. Old DMs with a bridge agent stay as history but are not fed into its memory:
+   they were written when the agent looked private.
 
 What people see: their address on their profile, the organization's owner and admins, nothing else moved. Exit:
 every route takes a caller context; no code reads `users` or `memberships`; the e2e passes against the import.
@@ -886,7 +921,7 @@ provisioning window; delete the account and the mailbox is suspended at the prov
 3. **The agent runtime.** `AgentRuntime` runs hosted agents and takes `wake` jobs; every person's hosted personal
    agent, with the assistant's chats moved out of the Docs object into its conversation; the panel in every app
    talks to any agent the person may use; page context and browser tools by manifest, each browser-tool call checked
-   against the agent's own access; "Add an assistant" in the Share dialog.
+   against the agent's own access; the Share dialog's "everyone in Acme" warning for shared agents.
 4. **References and intents.** Resolvers in the manifests, chips and unfurls from the share index, `open`,
    `create` and `share` intents replacing `?open=`, `/calendar?new=` and the pairwise bindings.
 5. **A fifth app as the proof**: whatever is next (Contacts, Tasks), added by manifest alone, with the PR showing
@@ -900,7 +935,8 @@ Connected Google (the refresh-token flow, Gmail and Google Calendar connected or
 clients; groups as a grant principal; mini apps with tools, events and a scoped token; webhook
 delivery hardening; native clients catching up (each a Parity line until then); a key per organization; live
 co-editing and suggestions in Docs, with object threads where several people work with one shared agent; browser
-tools for external agents.
+tools for external agents; group agents with their "who may use it" list and "Add an assistant" in the Share dialog
+(§2.3, §4.3).
 
 ### Risks to watch
 
