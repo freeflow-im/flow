@@ -3,7 +3,8 @@
 // (SHARE_ARTIFACT_EVENT).
 import { useEffect, useRef, useState } from 'react';
 import { useChannels } from '../hooks';
-import { applyChatIntent, type ChatIntent } from '../lib/chatIntents';
+import { onOpenFromHome } from '@flow/suite-bar';
+import { applyChatIntent, readChatIntent, type ChatIntent } from '../lib/chatIntents';
 import { useBoundApi } from '../lib/useBoundApi';
 import { useSelection } from '../state';
 import { ArtifactShareDialog } from './ArtifactShareDialog';
@@ -18,11 +19,28 @@ export default function ChatIntents({ intent, onNotice }: { intent: ChatIntent |
   const [sharing, setSharing] = useState<string | null>(null);
   const applied = useRef(false);
 
+  // Inside Home, Home asks for a channel, a message or an artifact by its address, without reloading Chat.
+  const [fromHome, setFromHome] = useState<ChatIntent | null>(null);
+  useEffect(() => onOpenFromHome((href) => {
+    const url = new URL(href, window.location.origin);
+    const next = readChatIntent(url.search);
+    if (next && next.kind !== 'page') setFromHome(next);
+  }), []);
+  useEffect(() => {
+    if (!fromHome || !channels.isSuccess) return;
+    setFromHome(null);
+    apply(fromHome);
+  }, [fromHome, channels.isSuccess]);
+
   useEffect(() => {
     if (!intent || applied.current || !channels.isSuccess) return;
     applied.current = true;
+    apply(intent);
+  }, [intent, channels.isSuccess, channels.data, api, sel, scopedStorageKey, onNotice]);
+
+  function apply(what: ChatIntent) {
     const ids = (channels.data ?? []).map((c) => c.id);
-    void applyChatIntent(intent, {
+    void applyChatIntent(what, {
       api: (method, path) => api(method, path),
       channelIds: () => ids,
       openArtifactIn: sel.openArtifactIn,
@@ -33,7 +51,7 @@ export default function ChatIntents({ intent, onNotice }: { intent: ChatIntent |
       shareArtifact: setSharing,
       notice: onNotice,
     });
-  }, [intent, channels.isSuccess, channels.data, api, sel, scopedStorageKey, onNotice]);
+  }
 
   useEffect(() => {
     const onShare = (e: Event) => setSharing((e as CustomEvent<string>).detail);

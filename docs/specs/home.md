@@ -18,6 +18,13 @@ admins). A new account's mailbox and calendars are made after it joins; the card
 
 ## 2. How it is built
 
+**Home stays on screen.** A row in the sidebar or a card opens its app beside the sidebar, in Home's main area, not in
+place of Home. Each app is loaded in a frame the first time it is opened and kept, hidden, while another view shows, so
+going back to it is instant and it is where it was left (hooks/frames.ts). Home's address names what it shows
+(`/home/?open=/mail/`), so reload and Back work. Inside Home an app draws no suite bar, and Chat draws no channel list
+(Home's sidebar has them); a link in an app to another app opens in Home (`@flow/suite-bar` lib/embed.ts). Chat switches
+channel in place when Home asks (a `flow:open` message); the other apps load the address asked for.
+
 - `packages/home`, a Vite client on the Admin pattern (`packages/admin`): no Durable Object and no routes of its own.
   It reads the other apps' APIs on the same origin with the session cookie: `/v1/mail/*`, `/v1/calendar/events`,
   `/api/recents`, `/v1/workspaces/:id/channels|members`, `/v1/me/notifications`, `/v1/me/accounts`.
@@ -35,6 +42,9 @@ admins). A new account's mailbox and calendars are made after it joins; the card
 - **The assistant panel** on the right of the mockup.
 - **Favorite channels**: there is no star for channels yet, so the sidebar lists the channels the person is in, the
   ones that need them first, eight at most.
-- **Agent status dots**: the row shows the agent's status text or title, not whether it is running.
+- **Agent status dots**: the row shows the agent's status text or title, not whether it is running. The agent whose
+  DM is open is not marked in the sidebar yet (Chat is).
+- **Mail, Docs and Calendar switch in place** only for their front page: a conversation, a file or an event opened from
+  a card loads that app's frame again (about a second). Chat already switches in place.
 - **`/` landing on Home**: `/` still opens Chat. Changing it touches the sign-in redirects.
 - **macOS and iOS**: web (and the desktop shell) only; see the Parity section of CHANGELOG.md.

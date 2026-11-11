@@ -1,7 +1,8 @@
-// FreeFlow Home (docs/specs/home.md): the suite bar, a sidebar of the apps, channels and agents, and a page of cards with
-// what is new in each app, for the organization the bar has active. Every row opens that app's own page. A guest uses
-// Chat only (workspace-admin.md §6.5), so a guest is sent there.
-import { useEffect, useState } from 'react';
+// FreeFlow Home (docs/specs/home.md): the suite bar, a sidebar of the apps, channels and agents, and beside it either
+// Home's cards (what is new in each app) or the app opened from them, in a frame Home keeps (hooks/frames.ts). Home stays
+// on screen: a row in the sidebar or a card opens its app beside it. A guest uses Chat only (workspace-admin.md §6.5),
+// so a guest is sent there.
+import { useEffect, useState, type MouseEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { WorkspaceMemberDTO } from '@flow/shared';
 import { adminAddress, chatPageAddress } from '@flow/shared/addresses';
@@ -9,9 +10,11 @@ import { homeApi } from './api';
 import { FilesCard, InboxCard, MentionsCard, TodayCard } from './components/Cards';
 import { HomeSuiteBar } from './components/HomeSuiteBar';
 import { appLinks, Sidebar } from './components/Sidebar';
+import { useFrames } from './hooks/frames';
 import { useAccountSetup, useChat, useInbox, useRecentFiles, useToday } from './hooks/home';
 import { useOrganizations } from './hooks/organization';
 import { channelAddress, chatUnread, dmWith, greeting, sidebarChannels, summaryLine } from './lib/home';
+import { FRAMED_APPS, channelOf } from './lib/views';
 import { readActiveOrganization, suite, writeActiveOrganization } from './suite';
 
 /** The clock the page reads, moved on every minute so the greeting and "today" follow the day. */
@@ -36,6 +39,7 @@ export function App() {
   const mail = useInbox(orgId, setup.settingUp);
   const today = useToday(orgId, setup.settingUp, now);
   const files = useRecentFiles(orgId);
+  const frames = useFrames();
 
   useEffect(() => {
     if (setup.guest) window.location.replace('/chat/');
@@ -53,22 +57,34 @@ export function App() {
   const openAgent = async (agent: WorkspaceMemberDTO) => {
     if (!orgId || !me.data || opening) return;
     const existing = channels && dmWith(channels, me.data.id, agent.userId);
-    if (existing) return window.location.assign(channelAddress(existing.id));
+    if (existing) return void frames.open(channelAddress(existing.id));
     setOpening(agent.userId);
     try {
       const dm = await homeApi.openDm(orgId, [agent.userId]);
-      window.location.assign(channelAddress(dm.id));
+      frames.open(channelAddress(dm.id));
+      void chat.channels.refetch();
     } catch {
       // Chat, where the agent's profile can start the DM instead.
-      window.location.assign('/chat/');
+      frames.open('/chat/');
     } finally {
       setOpening(null);
     }
   };
 
+  // A link in the sidebar or a card opens in Home (an app's page in its frame) instead of leaving it. A click with a
+  // modifier (a new tab or window) is the browser's.
+  const onLinkClick = (e: MouseEvent) => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const a = (e.target as Element).closest('a[href]') as HTMLAnchorElement | null;
+    if (!a || (a.target && a.target !== '_self')) return;
+    if (frames.open(a.getAttribute('href')!)) e.preventDefault();
+  };
+  const chatHref = frames.last.chat;
+  const activeChannel = chatHref ? channelOf(chatHref, window.location.origin) : null;
+
   return (
     <div className="flex h-full flex-col">
-      <HomeSuiteBar chatUnread={chatCount} mailUnread={mail.unread} />
+      <HomeSuiteBar chatUnread={chatCount} mailUnread={mail.unread} onHome={() => frames.open('/home/')} />
       {!organizations.ready ? (
         <div className="flex flex-1 items-center justify-center text-sm text-muted">Loading…</div>
       ) : !org ? (
@@ -80,15 +96,31 @@ export function App() {
           </a>
         </div>
       ) : (
-        <div className="flex min-h-0 flex-1 bg-panel">
+        <div className="flex min-h-0 flex-1 bg-panel" onClick={onLinkClick}>
           <Sidebar
+            active={frames.view}
+            activeChannel={activeChannel}
             apps={appLinks({ mailUnread: mail.unread, chatUnread: chatCount, admin })}
             channels={channels ? sidebarChannels(channels) : null}
             agents={chat.members.data ? chat.agents : null}
             onOpenAgent={(a) => void openAgent(a)}
             addAgentHref={admin ? adminAddress('agents') : null}
           />
-          <main className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-8" data-testid="home-main">
+          {/* The apps opened so far, each in its own frame, kept loaded while hidden. */}
+          {FRAMED_APPS.map((app) => {
+            const f = frames.frames[app];
+            return f ? (
+              <iframe
+                key={`${app}:${f.load}`}
+                ref={(el) => void (frames.refs.current[app] = el)}
+                src={f.src}
+                title={app}
+                data-testid={`home-frame-${app}`}
+                className={`min-w-0 flex-1 border-0 bg-white ${frames.view === app ? '' : 'hidden'}`}
+              />
+            ) : null;
+          })}
+          <main className={`min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-8 ${frames.view === 'home' ? '' : 'hidden'}`} data-testid="home-main">
             <div className="mx-auto flex max-w-5xl flex-col gap-5">
               <header>
                 <h1 className="text-2xl font-semibold" data-testid="home-greeting">

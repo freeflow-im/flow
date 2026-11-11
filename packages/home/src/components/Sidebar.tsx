@@ -28,6 +28,9 @@ const row = 'flex items-center gap-2 rounded-md px-3 py-1.5 text-sm text-ink hov
 
 export function Sidebar(props: {
   apps: AppLink[];
+  /** What the main area shows: Home's cards or an app, and the chat channel open in Chat. */
+  active: string;
+  activeChannel: string | null;
   channels: ChannelDTO[] | null;
   agents: WorkspaceMemberDTO[] | null;
   onOpenAgent: (agent: WorkspaceMemberDTO) => void;
@@ -39,7 +42,7 @@ export function Sidebar(props: {
   return (
     <nav aria-label="Home" className="hidden w-60 shrink-0 flex-col gap-1 overflow-y-auto border-r border-hairline bg-white px-3 py-4 md:flex" data-testid="home-sidebar">
       {props.apps.map((a) => (
-        <a key={a.id} href={a.href} aria-current={a.id === 'home' ? 'page' : undefined} data-testid={`home-app-${a.id}`} className={`${row} justify-between ${a.id === 'home' ? 'bg-row-selected font-semibold' : ''}`}>
+        <a key={a.id} href={a.href} aria-current={a.id === props.active ? 'page' : undefined} data-testid={`home-app-${a.id}`} className={`${row} justify-between ${a.id === props.active ? 'bg-row-selected font-semibold' : ''}`}>
           <span>{a.label}</span>
           {!!a.count && (a.pill ? <span className="min-w-5 rounded-full bg-ink px-1.5 text-center text-xs font-semibold text-white">{a.count}</span> : <span className="text-xs text-muted">{a.count}</span>)}
         </a>
@@ -53,7 +56,7 @@ export function Sidebar(props: {
       ) : (
         <>
           {shown.map((c) => (
-            <a key={c.id} href={channelAddress(c.id)} data-testid={`home-channel-${c.id}`} className={`${row} justify-between ${c.unreadCount > 0 || c.unreadNotifications > 0 ? 'font-semibold' : ''}`}>
+            <a key={c.id} href={channelAddress(c.id)} data-testid={`home-channel-${c.id}`} aria-current={props.active === 'chat' && props.activeChannel === c.id ? 'page' : undefined} className={`${row} justify-between ${props.active === 'chat' && props.activeChannel === c.id ? 'bg-row-selected' : ''} ${c.unreadCount > 0 || c.unreadNotifications > 0 ? 'font-semibold' : ''}`}>
               <span className="truncate"># {c.name}</span>
               {c.unreadNotifications > 0 && <span className="min-w-5 rounded-full bg-ink px-1.5 text-center text-xs font-semibold text-white">{c.unreadNotifications}</span>}
             </a>

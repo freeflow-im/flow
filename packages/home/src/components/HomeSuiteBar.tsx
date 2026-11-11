@@ -10,7 +10,7 @@ import { suite, type SuiteUser } from '../suite';
 const REFRESH_MS = 60_000;
 const toChat = (page: ChatPage) => intent.open(page);
 
-export function HomeSuiteBar({ chatUnread, mailUnread }: { chatUnread: number; mailUnread: number }) {
+export function HomeSuiteBar({ chatUnread, mailUnread, onHome }: { chatUnread: number; mailUnread: number; onHome: () => void }) {
   const me = useQuery({ queryKey: ['suite', 'me'], queryFn: suite.me, refetchInterval: REFRESH_MS });
   const { list, active } = useOrganizations();
   const [user, setUser] = useState<SuiteUser | null>(null);
@@ -39,7 +39,7 @@ export function HomeSuiteBar({ chatUnread, mailUnread }: { chatUnread: number; m
     <>
       <SuiteBar
         home={{ href: import.meta.env.BASE_URL }}
-        tabs={suiteTabsFrom(APP_MANIFESTS, 'home', { 'chat-unread': chatUnread, 'mail-unread': mailUnread }, { activeHref: import.meta.env.BASE_URL })}
+        tabs={suiteTabsFrom(APP_MANIFESTS, 'home', { 'chat-unread': chatUnread, 'mail-unread': mailUnread }, { activeHref: import.meta.env.BASE_URL, onSelect: onHome })}
         organization={{
           name: active?.name ?? '',
           entries: list.map((o) => ({ id: o.id, name: o.name, unread: o.unreadCount ?? 0, active: o.id === active?.id, avatarUrl: o.avatarUrl })),

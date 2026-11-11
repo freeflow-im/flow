@@ -3,6 +3,7 @@
 // Chat, Mail, Calendar, then any app added since (⌘1 onwards, by the manifests). Right, tools then you: search (opens in place, ⌘K), the Assistant,
 // notifications, the account menu. Presentational: every app passes its data and callbacks, the bar fetches nothing.
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { isInHome, routeLinksToHome } from './lib/embed';
 import { SuiteMark } from './SuiteMark';
 import './suite-bar.css';
 
@@ -214,7 +215,18 @@ function followTab(tab: SuiteTab): void {
   else if (!tab.active) window.location.assign(tab.href);
 }
 
-export function SuiteBar({ tabs, organization, search, assistant, notifications, account, home }: SuiteBarProps) {
+/**
+ * The bar, or nothing inside Home (lib/embed.ts): Home's own bar is above the frame, and there a link to another app
+ * opens in Home instead of in the frame.
+ */
+export function SuiteBar(props: SuiteBarProps) {
+  const [inHome] = useState(isInHome);
+  const ownApp = props.tabs.find((t) => t.active)?.id ?? '';
+  useEffect(() => (inHome ? routeLinksToHome(ownApp) : undefined), [inHome, ownApp]);
+  return inHome ? null : <TheSuiteBar {...props} />;
+}
+
+function TheSuiteBar({ tabs, organization, search, assistant, notifications, account, home }: SuiteBarProps) {
   const [menu, setMenu] = useState<Menu>(null);
   const [searching, setSearching] = useState(false);
   const [ownQuery, setOwnQuery] = useState('');
