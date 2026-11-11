@@ -44,7 +44,7 @@ beforeEach(() => {
     const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { 'content-type': 'application/json' } });
     if (path === '/v1/config') return json({ google: false, googleClientId: null, apple: false, maxFileBytes: 1, hostedMail });
     if (path === '/v1/me') return json({ id: 'u-ann', email: 'ann@example.com', displayName: 'Ann', avatarUrl: null, statusEmoji: '', statusText: '' });
-    if (path.split('?')[0].endsWith('/members')) return json({ members });
+    if ((path.split('?')[0] ?? '').endsWith('/members')) return json({ members });
     if (path.endsWith('/accounts')) return json({ accounts });
     if (path.endsWith('/invites') && method === 'GET') return json({ invites });
     if (path.endsWith('/invites') && method === 'POST') return json({ results: (body as { emails: string[]; kind: string }).emails.map((email) => ({ email, status: email.includes('@') ? 'sent' : 'invalid_email', kind: (body as { kind: string }).kind })) }, 201);
