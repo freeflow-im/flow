@@ -27,6 +27,9 @@ export type PublishInput = Omit<PlatformEvent, 'seq' | 'id' | 'actor' | 'depth'>
 export interface ReadQuery {
   since?: number;
   limit?: number;
+  /** Newest first, from below this seq (the head when 0 or absent): the Admin app's Event log. `next` is then the oldest
+   * seq returned, to read the page before it. `since` is ignored with it. */
+  before?: number;
   /** Type patterns: `chat.message.created`, or a prefix with a trailing `*` (`chat.*`). */
   types?: string[];
   /** A formatted reference (`formatReference`). */
@@ -151,6 +154,7 @@ export class EventsCore {
   read(q: ReadQuery, reader: Reader): { events: PlatformEvent[]; next: number } {
     const since = Math.max(0, Math.floor(Number(q.since) || 0));
     const limit = Math.min(READ_LIMIT_MAX, Math.max(1, Math.floor(Number(q.limit) || READ_LIMIT_DEFAULT)));
+    const backwards = q.before !== undefined;
     const { filter, args } = whereOf(q, reader.agentAccountIds ?? []);
     const channels = new Set(reader.channelIds);
     const refs = new Set(reader.sharedRefs ?? []);
@@ -167,10 +171,12 @@ export class EventsCore {
     };
     const organizationId = this.organizationId() ?? '';
     const events: PlatformEvent[] = [];
-    let cursor = since;
+    let cursor = backwards ? (Math.floor(Number(q.before)) > 0 ? Math.floor(Number(q.before)) : this.head() + 1) : since;
     let examined = 0;
     for (;;) {
-      const rows = this.sql.exec(`SELECT * FROM events WHERE seq > ?${filter} ORDER BY seq LIMIT ?`, cursor, ...args, SCAN_BATCH).toArray();
+      const rows = backwards
+        ? this.sql.exec(`SELECT * FROM events WHERE seq < ?${filter} ORDER BY seq DESC LIMIT ?`, cursor, ...args, SCAN_BATCH).toArray()
+        : this.sql.exec(`SELECT * FROM events WHERE seq > ?${filter} ORDER BY seq LIMIT ?`, cursor, ...args, SCAN_BATCH).toArray();
       for (const r of rows) {
         cursor = r.seq as number;
         if (visible(r)) {
@@ -181,7 +187,7 @@ export class EventsCore {
       }
       if (rows.length < SCAN_BATCH) break;
     }
-    return { events, next: Math.max(cursor, this.head()) };
+    return { events, next: backwards ? Math.min(cursor, ...(events.length ? [events.at(-1)!.seq] : [])) : Math.max(cursor, this.head()) };
   }
 
   /** Whether any event after `since` has a `ref:` audience: a read then needs the reader's shared references. */
