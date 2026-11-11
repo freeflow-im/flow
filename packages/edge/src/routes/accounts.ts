@@ -59,6 +59,15 @@ accountRoutes.delete('/v1/workspaces/:id/accounts/:accountId', async (c) => {
   return c.json({ account });
 });
 
+/** Accounts the directory still holds for people who are no longer members (POST …/accounts/reconcile): the organization's
+ * member list is the truth, and an outbox that lost a leave left the account behind. `?apply=1` removes them; without it
+ * the answer only lists them. */
+accountRoutes.post('/v1/workspaces/:id/accounts/reconcile', async (c) => {
+  const id = await adminOf(c as never, 'reconcile accounts');
+  const apply = c.req.query('apply') === '1';
+  return c.json(await c.env.ORG.get(c.env.ORG.idFromName(id)).reconcileAccounts(apply));
+});
+
 accountRoutes.post('/v1/workspaces/:id/accounts/kind', async (c) => {
   const id = await adminOf(c as never, 'change account kinds');
   await bodyOf(c, BulkAccountKindBody);

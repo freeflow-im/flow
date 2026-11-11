@@ -1026,6 +1026,30 @@ export class DirectoryCore {
   }
 
   /** The accounts of the agents a person sponsors, in one organization or (null) in all of them, marked removed. */
+  /**
+   * The organization's object's member list against this directory's accounts there (Org.reconcileAccounts): every
+   * account not removed whose principal is not on the list leaves as `applyOrgChanges` does a leave, and a personal agent
+   * goes with a sponsor who is not on it. Returns those accounts as they were; with `apply` false, removes nothing.
+   */
+  reconcileOrganization(organizationId: string, memberIds: string[], apply = true): AccountDTO[] {
+    const members = new Set(memberIds);
+    const live = this.accountRow("organization_id = ? AND state <> 'removed'", organizationId);
+    const gone = live.filter((a) => (a.kind === 'personal_agent' ? !a.sponsorId || !members.has(a.sponsorId) : !members.has(a.principalId)));
+    if (!apply) return gone;
+    for (const a of gone) {
+      if (a.kind === 'personal_agent') {
+        revokePersonalAgent(this.sql, a.principalId);
+        this.removeAccounts('id = ?', a.id);
+        continue;
+      }
+      this.sql.exec('DELETE FROM memberships WHERE user_id = ? AND organization_id = ?', a.principalId, organizationId);
+      this.removeAccounts('user_id = ? AND organization_id = ?', a.principalId, organizationId);
+      this.removeSponsored(a.principalId, organizationId);
+    }
+    if (gone.length) console.log(`[reconcile] ${organizationId}: removed ${gone.map((a) => a.id).join(', ')}`);
+    return gone;
+  }
+
   private removeSponsored(sponsorId: string, organizationId: string | null): void {
     const where = organizationId ? 'AND organization_id = ?' : '';
     const args = organizationId ? [sponsorId, organizationId] : [sponsorId];

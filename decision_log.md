@@ -1,5 +1,18 @@
 # Decision log
 
+## 2026-11-11 — The Org object owns an organization's member list; the directory stays thin (operator ruling)
+
+- **Ruling (Scott):** the true member list of an organization is kept inside its Org object: who is a member, their
+  role, kind and state, sponsors, and (to come) personal agents. The directory is as thin as it can be: principals,
+  credentials and sessions, addresses (unique across organizations), the id-to-organization index, domains and mailbox
+  provisioning. It follows the Org object's outbox and decides nothing about membership. Admin's Members section reads
+  the Org's list and applies to the whole suite, not to Chat alone.
+- **Why:** one owner per fact. The directory exists for what no single organization can hold; anything an organization
+  can hold, its object holds.
+- **Follow-ups:** personal agents (each person's assistant included) and kind changes (guest, native) move from the
+  directory into the Org object, with Chat's own lists leaving personal agents out. A drift between the two is mended
+  by `POST /v1/workspaces/:id/accounts/reconcile`, which takes the Org's list as the truth (PR for the outbox race).
+
 ## 2026-11-11 — Hosted agents run on the shared Workers; coding agents run in a sandbox each (operator ruling)
 
 - **Ruling (Scott):** a hosted agent, the model loop with tools, runs in the platform's `AgentRuntime` object on the
