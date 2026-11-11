@@ -252,7 +252,8 @@ code. As of 2026-11-10:
 
 - **Agents exist** as principals with `is_agent`, a sponsor and an account per organization (phase 1), and every
   bridge agent is in effect a shared agent: it holds a token, its own account and address, and is a member others
-  can mention and DM. An agent in two organizations is refused on the edge (decision_log 2026-11-10).
+  can mention and DM. An agent in two organizations is refused on the edge (decision_log 2026-11-10). Phase A (PR
+  #771) retires all of them on deploy and they are connected again; see §11.
 - **There is no `mode`**, no `personal_agent` account kind, and no `via` or `invokedBy` in the caller context or the
   event envelope. The directory does not yet enforce "delegation or grants, never both".
 - **`/mcp` grants are not agents.** Claude Desktop on `/mcp` acts as the person through the OAuth grant, as a personal
@@ -318,10 +319,11 @@ A agents by account ─┬─ B connecting an external agent (consent, registry 
 1. **The directory.** `mode` and `organization_id` on agent principals; the `personal_agent` account kind; the rule
    that an agent holds a delegation or grants, never both, checked in the directory's write path; suspension and
    removal following the sponsor's account.
-2. **Migration.** Existing bridge agents become shared agents, one per organization they are in (an agent in two
-   splits into two, the second with a new token). Existing `/mcp` grants become personal agents, one per sponsor,
-   client and organization, each with its `personal_agent` account. Old DMs with a bridge agent stay as history but
-   are not fed into its memory: they were written when the agent looked private.
+2. **Migration.** Every agent made before kinds is retired (operator ruling, decision_log 2026-11-11): its accounts
+   removed, its tokens revoked, its principal deleted, and each Org object drops it from its roster at its next start.
+   Nothing is split or placed: each agent is connected again with an invite code, which makes a new principal of a
+   known kind. Existing `/mcp` grants become personal agents, one per sponsor, client and organization, each with its
+   `personal_agent` account. Old DMs with a retired agent stay as history.
 3. **The caller context.** `via` and `invokedBy` resolved by the Worker and carried in the event envelope; the
    bridge reads its account, organization and (for a personal agent) its sponsor's account at start.
 4. **Admin.** The member list and the Admin app's Agents section show personal agents with their sponsor and

@@ -1,5 +1,15 @@
 # Decision log
 
+## 2026-11-11 — Agents: start over; every agent made before kinds is retired (operator ruling)
+
+- **Ruling (Scott):** the agents that exist before phase A of `docs/specs/agents.md` ships are all removed, not
+  migrated: accounts removed, tokens revoked, principals deleted, rosters cleared. Each is connected again with an
+  invite code afterwards.
+- **Why:** an agent imported from the Node era could hold accounts in several organizations, and placing it means
+  choosing one home and silently dropping the others, with a ghost member left in each losing organization. Starting
+  over is clean, and there are few agents.
+- **Where:** `docs/specs/agents.md` §8, §11 phase A.2; `DirectoryCore.backfillAgents`, `Org.retireRemovedAgents` (PR #771).
+
 ## 2026-11-10 — Agents: hosted or external; the assistant is a hosted agent (operator ruling)
 
 - **Ruling (Scott):** an agent's kind (personal or shared, which decides access) and its runtime (hosted by the
