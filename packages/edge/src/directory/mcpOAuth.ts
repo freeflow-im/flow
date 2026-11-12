@@ -262,10 +262,13 @@ export class McpOAuth {
     if (cached && cached.expires > Date.now()) return cached.doc;
     let res: Response;
     try {
-      res = await this.fetchFn(url, { headers: { accept: 'application/json' }, redirect: 'error', signal: AbortSignal.timeout(10_000) });
+      // `manual`, and a redirect refused below: Workers do not implement `redirect: 'error'` (it throws), and the document
+      // must be served at the address it names as its client_id.
+      res = await this.fetchFn(url, { headers: { accept: 'application/json' }, redirect: 'manual', signal: AbortSignal.timeout(10_000) });
     } catch (e) {
       throw new OAuthError('invalid_client', `Could not fetch the client metadata document: ${(e as Error).message}`, 401);
     }
+    if ((res.status >= 300 && res.status < 400) || res.type === 'opaqueredirect') throw new OAuthError('invalid_client', 'The client metadata document redirects; it must be served at its own address.', 401);
     if (!res.ok) throw new OAuthError('invalid_client', `The client metadata document returned ${res.status}.`, 401);
     const doc = (await res.json().catch(() => ({}))) as Partial<ClientDoc>;
     if (doc.client_id !== url) throw new OAuthError('invalid_client', 'The client metadata document does not name itself as client_id.', 401);
