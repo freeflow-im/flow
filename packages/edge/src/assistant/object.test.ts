@@ -74,7 +74,7 @@ const DOCS_CALLER: DocsCaller = { userId: 'user-1', email: 'ann@acme.test', toke
 
 function assistant(name = 'acct-1', env: AssistantEnv = {}) {
   const ctx = { storage: storage(), id: { toString: () => name, name }, waitUntil: () => {} };
-  return new TestAssistant(ctx as never, { FLOW_DATA_KEY: 'test-data-key', FLOW_WEB_URL: 'https://app.test', ...env });
+  return new TestAssistant(ctx as never, { FLOW_DATA_KEY: 'test-data-key', FLOW_WEB_URL: 'https://app.test', ANTHROPIC_API_KEY: 'test-platform-key', ...env });
 }
 
 async function events(res: Response): Promise<AgentEvent[]> {

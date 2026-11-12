@@ -44,6 +44,8 @@ export interface AssistantEnv {
   /** Seals the settings' API keys, as it did in the Docs object (connectors/secrets.ts), so moved keys still open. */
   FLOW_DATA_KEY?: string;
   FLOW_WEB_URL?: string;
+  /** The platform's own model key: with it, "the built-in model" is a choice; without it, the organization must set one. */
+  ANTHROPIC_API_KEY?: string;
   BLOBS?: R2Bucket;
   DIRECTORY?: DurableObjectNamespace<import('../directory/object').Directory>;
   /** The organizations' Docs objects: Docs' tools, as the person. */
@@ -97,6 +99,9 @@ interface Who { caller: AccountCaller; docs: DocsCaller; conversationUser?: stri
 type Bindings = { who: Who };
 type C = Context<{ Bindings: Bindings }>;
 
+/** No organization model and no platform key (operator ruling 2026-11-11: one model per organization). */
+const NO_MODEL = 'No model is set for this organization yet. An owner or admin chooses one in Organization settings → Agents.';
+
 /** What the panel is told of a failed turn (the Docs server's agentErrorMessage, as it was). */
 function agentErrorMessage(e: unknown): string {
   if (e instanceof AgentError || e instanceof OwnKeyError || e instanceof OpenRouterError) return e.message;
@@ -105,7 +110,9 @@ function agentErrorMessage(e: unknown): string {
   if (e instanceof Anthropic.RateLimitError) return 'The assistant is getting too many requests right now. Try again in a minute.';
   if (e instanceof Anthropic.AuthenticationError) return 'The assistant is not configured correctly on this server (API key).';
   if (e instanceof Anthropic.APIError && e.status && e.status >= 500) return 'The AI service had a problem. Try again in a moment.';
-  if (e instanceof Anthropic.AnthropicError && /api ?key|authentication/i.test(e.message)) return 'The assistant is not configured on this server (no API key).';
+  if (e instanceof Anthropic.AnthropicError && /api ?key|authentication/i.test(e.message)) return NO_MODEL;
+  // The SDK made with no key at all says so before any request.
+  if (e instanceof Error && /resolve authentication method/i.test(e.message)) return NO_MODEL;
   return 'Something went wrong while the assistant was working. Try again.';
 }
 
@@ -215,7 +222,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
     if (this.services) return this.services;
     const db = new DatabaseSync();
     // Every agent runs on its organization's model (operator ruling 2026-11-11): the loop reads it through this store.
-    const settings = new OrgModelSettings(db as never, 'data/connector.key', { builtIn: true, agents: false });
+    const settings = new OrgModelSettings(db as never, 'data/connector.key', { builtIn: !!this.env.ANTHROPIC_API_KEY, agents: false });
     const model = this.model();
     const agent = new AgentService(new AgentStore(db as never), null as never, settings, {
       jobs: false,
@@ -355,6 +362,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
     let ok = false;
     try {
       // Whom the turn runs as: the shared agent itself, or the personal agent's sponsor (marked via).
+      this.requireModel();
       const actorId = runtime.mode === 'personal' ? runtime.sponsorId! : runtime.agentId;
       const actorAccountId = runtime.mode === 'personal' ? runtime.sponsorAccountId! : runtime.agentAccountId;
       const [user, account, channelIds] = await Promise.all([
@@ -415,6 +423,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
     const org = ORG?.get(ORG.idFromName(organizationId));
     const conversation = `chat:${p.channelId}:${p.threadRootId ?? 'main'}`;
     try {
+      this.requireModel();
       const actorId = runtime.sponsorId;
       const [user, account, channelIds] = await Promise.all([
         this.directory<UserDTO>('getUser', actorId, actorId),
@@ -473,6 +482,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
     const mail = this.env.MAIL.get(this.env.MAIL.idFromName(p.mailboxAccountId));
     const subject = /^re:/i.test(p.subject) ? p.subject : `Re: ${p.subject}`;
     try {
+      this.requireModel();
       const actorId = runtime.sponsorId;
       const ORG = this.env.ORG;
       const org = ORG?.get(ORG.idFromName(organizationId));
@@ -530,10 +540,16 @@ export class Assistant extends DurableObject<AssistantEnv> {
     }
   }
 
+  /** Before a turn the person is not watching (Chat, mail, a wake): a plain reason when nothing can run it. */
+  private requireModel(): void {
+    const settings = withDocsContext(this.context, () => this.service().settings);
+    if (!settings.current?.choice && !settings.builtIn) throw new AgentError(400, NO_MODEL);
+  }
+
   /** In the `org:<id>` object: the organization's model, for the runtimes (its keys opened). */
   async orgModel(): Promise<OrgModel> {
     return withDocsContext(this.context, () => {
-      const base = new AssistantSettingsStore(new DatabaseSync() as never, 'data/connector.key', { builtIn: true, agents: false });
+      const base = new AssistantSettingsStore(new DatabaseSync() as never, 'data/connector.key', { builtIn: !!this.env.ANTHROPIC_API_KEY, agents: false });
       return { shown: base.get(ORG_ROW), choice: base.choice(ORG_ROW), braveKey: base.braveKey(ORG_ROW), openaiKey: base.openaiKey(ORG_ROW) };
     });
   }
@@ -547,7 +563,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
   async updateOrgSettings(body: Partial<AssistantSettingsUpdate>): Promise<{ ok: true; settings: AssistantSettings } | { ok: false; message: string }> {
     try {
       const checks = this.keyChecks();
-      const settings = await withDocsContext(this.context, () => new AssistantSettingsStore(new DatabaseSync() as never, 'data/connector.key', { builtIn: true, agents: false }).update(ORG_ROW, body, checks.key, checks.search));
+      const settings = await withDocsContext(this.context, () => new AssistantSettingsStore(new DatabaseSync() as never, 'data/connector.key', { builtIn: !!this.env.ANTHROPIC_API_KEY, agents: false }).update(ORG_ROW, body, checks.key, checks.search));
       return { ok: true, settings };
     } catch (e) {
       if (e instanceof SettingsError) return { ok: false, message: e.message };

@@ -124,7 +124,7 @@ r=await api(A.token,'POST',`/v1/workspaces/${W}/dms`,{userIds:[annAsst?.userId]}
 const until=async(get,ok,ms=15000)=>{const t0=Date.now();for(;;){const v=await get();if(ok(v)||Date.now()-t0>ms)return v;await sleep(400);}};
 const dmMsgs=async()=>(await api(A.token,'GET',`/v1/channels/${annDm}/messages?limit=50`)).j.messages??[];
 r=await api(A.token,'POST',`/v1/channels/${annDm}/messages`,{clientMsgId:crypto.randomUUID(),body:'What is on my plate today?'});
-let ms=await until(dmMsgs,(m)=>by(m,annAsst.userId).length>0);t('Ann’s DM to her assistant gets an answer from the assistant itself',by(ms,annAsst.userId).length===1,JSON.stringify(ms.map(m=>[m.userId===annAsst.userId?'asst':'ann',m.body.slice(0,40)])));
+let ms=await until(dmMsgs,(m)=>by(m,annAsst.userId).length>0);t('Ann’s DM to her assistant gets an answer from the assistant itself',by(ms,annAsst.userId).length===1&&/No model is set for this organization/.test(by(ms,annAsst.userId)[0].body),JSON.stringify(ms.map(m=>[m.userId===annAsst.userId?'asst':'ann',m.body.slice(0,40)])));
 const chans=(await api(A.token,'GET',`/v1/workspaces/${W}/channels`)).j.channels??[];const gen=chans.find(c=>c.name==='general');
 const thread=async(id)=>{const x=(await api(A.token,'GET',`/v1/messages/${id}/thread`)).j;return x.messages??[];};
 r=await api(Bo.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:`<@${annAsst.userId}> send me Ann’s mail`,mentions:[annAsst.userId]});const bobAsk=r.j.id;
