@@ -15,7 +15,7 @@ export const BROWSER_EXTENSION_STORE_ID = '';
 export const BROWSER_EXTENSION_DEV_ID = 'gnmcgiakoiplophhcoekeeaghfiipglo';
 const EXTENSION_IDS = [BROWSER_EXTENSION_STORE_ID, BROWSER_EXTENSION_DEV_ID].filter(Boolean);
 /** The id that last answered a ping; calls go there. */
-let extensionId = EXTENSION_IDS[0];
+let extensionId: string = EXTENSION_IDS[0] ?? BROWSER_EXTENSION_DEV_ID;
 
 interface ExtensionAnswer {
   ok: boolean;
