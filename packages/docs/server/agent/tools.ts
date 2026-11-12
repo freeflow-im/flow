@@ -20,9 +20,9 @@ import type { FileStore } from '../files.ts';
 import type { ImageStore } from '../images.ts';
 import type { ImageCandidate, ProviderSearch } from './llmSearch.ts';
 import { importBytes, ImportFileError, importLimit, webImportName } from '../importFile.ts';
-import { PdfError, pdfToMarkdownFile } from '../pdfMarkdown.ts';
+import { PdfError, pdfText, pdfToMarkdownFile } from '../pdfMarkdown.ts';
 import { PrintError, type PdfMaker } from '../pdf.ts';
-import { STORED_IMAGE_RE } from '../../shared/types.ts';
+import { isTextFileType, STORED_IMAGE_RE } from '../../shared/types.ts';
 import type { SheetStore } from '../sheets.ts';
 import { fetchPublicFile, WebFetchError } from '../webFetch.ts';
 import type { ScopeArg, ViewerArg } from '../scope.ts';
@@ -645,6 +645,18 @@ export const schemas = {
       slides: z.array(slideSpec).max(50).optional().describe('Initial slides, each built from a layout and plain content. Without them the deck has one title slide.'),
     })
     .describe('Create a new presentation, optionally with its slides. Open it with open_deck so the user sees it.'),
+  // Stored files from anywhere (Mail, Calendar, Home, Admin): the server's own, unlike list_files and read_file, which run
+  // on Docs' open page.
+  search_files: z
+    .object({ query: z.string().optional().describe('Only files whose name contains this text (case-insensitive).') })
+    .describe("List the user's stored files (PDFs, uploads, saved attachments and generated files), most recent first (at most 50): id, filename, type, size, folder, created_at. Works in every app; in Docs list_files does the same. Read one with read_stored_file."),
+  read_stored_file: z
+    .object({
+      file_id: z.string(),
+      offset: z.number().int().min(0).optional().describe('Character to start from, for reading a long file in parts. Defaults to 0.'),
+      max_chars: z.number().int().min(1).max(60_000).optional().describe('How many characters to return. Defaults to 30000.'),
+    })
+    .describe("Read the text of a stored file without opening or changing it: a PDF's text (as Markdown), or a text file (.txt, .csv, .json, .html, .md and the like). Returns the text from offset, total_chars and whether more follows (read on with offset). Not for pictures or videos. Find ids with search_files. Works in every app."),
   list_docs: z
     .object({ query: z.string().optional().describe('Only documents whose title contains this text (case-insensitive).') })
     .describe("List the user's text documents and Markdown documents (kind \"doc\" or \"markdown\"), most recently edited first (at most 50)."),
@@ -935,6 +947,43 @@ export async function runDocsTool(name: string, input: Record<string, unknown>, 
         if (e instanceof ConnectorError) throw new ToolFailure(e.message);
         throw e;
       }
+    }
+    case 'search_files': {
+      if (!env.files) throw new ToolFailure('Stored files cannot be listed here.');
+      const q = typeof input.query === 'string' ? input.query.trim().toLowerCase() : '';
+      const all = env.files.list(env.scope ?? env.userId).filter((f) => !q || f.filename.toLowerCase().includes(q))
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+      return JSON.stringify({
+        total: all.length,
+        files: all.slice(0, 50).map((f) => ({ id: f.id, filename: f.filename, type: f.type, size: f.size, ...(f.folder ? { folder: f.folder } : {}), created_at: f.createdAt })),
+      });
+    }
+    case 'read_stored_file': {
+      if (!env.files) throw new ToolFailure('Stored files cannot be read here.');
+      const id = typeof input.file_id === 'string' ? input.file_id : '';
+      const offset = typeof input.offset === 'number' ? input.offset : 0;
+      const max = typeof input.max_chars === 'number' ? input.max_chars : 30_000;
+      const f = env.files.get(env.viewer ?? env.userId, id);
+      if (!f) throw new ToolFailure(`There is no file ${id}. Find ids with search_files.`);
+      let text: string;
+      let extra: Record<string, unknown> = {};
+      if (f.meta.type === 'application/pdf') {
+        try {
+          const pdf = await pdfText(env.files, env.viewer ?? env.userId, id);
+          if (!pdf) throw new ToolFailure(`There is no file ${id}. Find ids with search_files.`);
+          text = pdf.markdown;
+          extra = { pages: pdf.pageCount, ...(pdf.warnings.length ? { warnings: pdf.warnings } : {}) };
+        } catch (e) {
+          if (e instanceof PdfError) throw new ToolFailure(e.message);
+          throw e;
+        }
+      } else if (isTextFileType(f.meta.type)) {
+        text = (await readFile(f.file)).toString('utf8');
+      } else {
+        throw new ToolFailure(`${f.meta.filename} is a ${f.meta.type} file, not text: it cannot be read as text.`);
+      }
+      const part = text.slice(offset, offset + max);
+      return JSON.stringify({ file_id: id, filename: f.meta.filename, type: f.meta.type, ...extra, offset, total_chars: text.length, more: offset + part.length < text.length, text: part });
     }
     case 'convert_pdf': {
       if (!env.files) throw new ToolFailure('Files cannot be converted here.');

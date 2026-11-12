@@ -33,6 +33,22 @@ export function pdfToMarkdown(bytes: Buffer): Promise<PdfMarkdown> {
 }
 
 /**
+ * A stored PDF's text as Markdown, read without making anything (read_stored_file): null when the user has no such file;
+ * PdfError when it is not a PDF or has no text that can be read.
+ */
+export async function pdfText(files: FileStore, userId: ViewerArg, fileId: string): Promise<{ pdf: StoredFile; markdown: string; pageCount: number; warnings: string[] } | null> {
+  const f = files.get(userId, fileId);
+  if (!f) return null;
+  if (f.meta.type !== 'application/pdf') throw new PdfError(`${f.meta.filename} is not a PDF.`);
+  const made = await pdfToMarkdown(await readFile(f.file));
+  if (!made.markdown.trim()) {
+    const why = !made.ocrUnavailable ? '' : made.ocrUnavailable === 'none' ? ' If it is a scan, it needs OCR, which is not available here.' : ` If it is a scan, the OCR service could not read it just now: ${made.ocrUnavailable}. Try again in a minute.`;
+    throw new PdfError(`No text could be read from ${f.meta.filename}.${why}`);
+  }
+  return { pdf: f.meta, markdown: made.markdown, pageCount: made.pageCount, warnings: made.warnings };
+}
+
+/**
  * A Markdown file of a stored PDF's text, made beside it: in the same folder, named after it. Null when the
  * user has no such file; PdfError when it is not a PDF or has no text that can be read.
  */
