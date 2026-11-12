@@ -123,6 +123,22 @@ apply (P§3.1). Reconnecting names an existing agent in the chosen organization,
 duplicate. The kind and the organization never change; to switch, make a new agent, so an agent never quietly gains
 or loses access. One client may hold several, a token for each.
 
+### 1.2 Suggested prompts
+
+Before the first message, the assistant's panel offers a few prompts to start from; a click sends one. They depend on
+the page the panel is open on: Home, Admin, Mail inbox, Mail message, Chat, Calendar, Docs list and Open doc
+(`PROMPT_PAGES` in `@flow/shared/assistant`).
+
+- **Who sets them:** the organization's owners and admins, in Admin → Prompts. They are the same for every member.
+- **Storage:** the Org object keeps only the pages the organization changed (`GET`/`PUT
+  /v1/workspaces/:id/assistant-prompts`; any member reads, an owner or admin sets). A page left as it is offers the
+  defaults (`DEFAULT_PROMPTS`), so a change to the defaults reaches it. An emptied page offers none.
+- **Limits:** 8 prompts a page, 200 characters each; blank and repeated ones are dropped.
+- **Panels:** each reads them with `useSuggestedPrompts(organization, page, fallback)` from `@flow/suite-bar`, one read
+  per organization and page load. Until a page is changed, an app may offer finer defaults: Docs for a spreadsheet or a
+  presentation, Calendar for an open event.
+- **Chat** has no assistant panel yet, so its prompts are kept but not shown.
+
 ## 2. Principals and accounts
 
 **The principal** (P§2.1) carries what identifies an agent: `kind: agent`, a required `sponsor_id` (a person

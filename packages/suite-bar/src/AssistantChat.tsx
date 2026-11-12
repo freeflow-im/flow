@@ -5,22 +5,24 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AssistantDock, AssistantDockControls, SparkIcon, useAssistantDockState, useMyAssistant } from './AssistantDock';
 import { useSuiteAssistant } from './suiteChat';
+import { useSuggestedPrompts, type PromptPage } from './lib/prompts';
 import './assistant-chat.css';
 
 /** The pill and, opened, the panel: the person's assistant in the organization the bar selected. */
-export function SuiteAssistant({ organizationId }: { organizationId: string | null }) {
+export function SuiteAssistant({ organizationId, page }: { organizationId: string | null; /** Whose suggested prompts it offers (Admin → Prompts). */ page: PromptPage }) {
   const [open, setOpen] = useState(false);
   const dock = useAssistantDockState('suite-assistant', open, setOpen);
   const mine = useMyAssistant(organizationId);
   return (
     <AssistantDock state={dock} label={mine?.displayName} avatarUrl={mine?.avatarUrl ?? null}>
-      <SuiteAssistantPanel organizationId={organizationId} name={mine?.displayName ?? 'Assistant'} avatarUrl={mine?.avatarUrl ?? null} />
+      <SuiteAssistantPanel organizationId={organizationId} page={page} name={mine?.displayName ?? 'Assistant'} avatarUrl={mine?.avatarUrl ?? null} />
     </AssistantDock>
   );
 }
 
-function SuiteAssistantPanel({ organizationId, name, avatarUrl }: { organizationId: string | null; name: string; avatarUrl: string | null }) {
+function SuiteAssistantPanel({ organizationId, page, name, avatarUrl }: { organizationId: string | null; page: PromptPage; name: string; avatarUrl: string | null }) {
   const chat = useSuiteAssistant(organizationId);
+  const suggestions = useSuggestedPrompts(organizationId, page);
   const [draft, setDraft] = useState('');
   const list = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -42,6 +44,12 @@ function SuiteAssistantPanel({ organizationId, name, avatarUrl }: { organization
       </div>
       <div className="suite-chat-list" ref={list}>
         {!chat.items.length && <p className="suite-chat-empty">Ask {name} anything: your mail, calendar, chats and files.</p>}
+        {!chat.items.length &&
+          suggestions.map((s) => (
+            <button key={s} type="button" className="suite-chat-suggestion" disabled={chat.running} onClick={() => chat.send(s)}>
+              {s}
+            </button>
+          ))}
         {chat.items.map((item, i) =>
           item.kind === 'user' ? (
             <div key={i} className="suite-chat-user">{item.text}</div>

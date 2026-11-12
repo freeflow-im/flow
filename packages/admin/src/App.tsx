@@ -8,6 +8,7 @@ import { useOrganizations } from './hooks/organization';
 import { MEMBER_SECTIONS, SECTION_LABELS, SECTIONS, sectionOf, sectionPath } from './lib/route';
 import { Domains } from './sections/Domains';
 import { Agents } from './sections/Agents';
+import { Prompts } from './sections/Prompts';
 import { Assistant } from './sections/Assistant';
 import { Connect } from './sections/Connect';
 import { SuiteAssistant } from '@flow/suite-bar/assistant-chat';
@@ -33,7 +34,7 @@ function useSection(sections: readonly AdminSection[]): [AdminSection, (s: Admin
   return [section, go];
 }
 
-const SECTION_ICONS: Record<AdminSection, SuiteMenuIcon> = { general: 'settings', members: 'people', domains: 'mail', agents: 'user', assistant: 'star', connect: 'share', automations: 'clock', events: 'draft' };
+const SECTION_ICONS: Record<AdminSection, SuiteMenuIcon> = { general: 'settings', members: 'people', domains: 'mail', agents: 'user', prompts: 'pen', assistant: 'star', connect: 'share', automations: 'clock', events: 'draft' };
 
 export function App() {
   const organizations = useOrganizations();
@@ -87,6 +88,7 @@ export function App() {
               {section === 'members' && admin && <Members org={org} />}
               {section === 'domains' && admin && <Domains org={org} />}
               {section === 'agents' && admin && <Agents org={org} />}
+              {section === 'prompts' && admin && <Prompts org={org} />}
               {section === 'assistant' && <Assistant org={org} />}
               {section === 'connect' && <Connect />}
               {section === 'automations' && <Automations org={org} />}
@@ -94,7 +96,7 @@ export function App() {
             </div>
           </main>
           {/* The person's assistant, as in every app (agents.md §1.1). */}
-          <SuiteAssistant organizationId={org.id} />
+          <SuiteAssistant organizationId={org.id} page="admin" />
         </div>
       )}
     </div>

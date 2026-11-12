@@ -4,6 +4,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AlertCircle, CalendarDays, Check, Loader2, Sparkles } from 'lucide-react';
 import { AssistantDockControls, useAssistantDock, useIdleMinimize } from '@flow/suite-bar/assistant-dock';
+import { useSuggestedPrompts } from '@flow/suite-bar';
 import { eventOfLink, madeEventOf } from '../lib/assistant';
 import { ChatMarkdown, toolLabel, ToolPictures, type ChatItem } from '../lib/docsAgent';
 import { cn } from '../lib/utils';
@@ -12,11 +13,13 @@ import type { useCalendarAssistant } from '../hooks/assistant';
 
 type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
 
+/** Calendar's own default for an open event, offered while the organization has not changed Calendar's prompts. */
 const EVENT_SUGGESTIONS = ['Who is coming to this?', 'Move this to tomorrow at the same time', 'Find a time next week for a follow-up'];
-const VIEW_SUGGESTIONS = ['What does my week look like?', 'Find 30 minutes for a call on Thursday', 'Which invitations have I not answered?'];
 
 export interface AssistantPanelProps {
   chat: ReturnType<typeof useCalendarAssistant>;
+  /** The organization whose suggested prompts it offers (Admin → Prompts). */
+  organizationId: string | null;
   /** Whether an event's card is open (the suggestions are about it). */
   onEvent: boolean;
   /** Over the calendar, the whole width of a narrow screen, rather than beside it. */
@@ -26,7 +29,8 @@ export interface AssistantPanelProps {
   onOpenEvent(id: string, start?: string): void;
 }
 
-export function AssistantPanel({ chat, onEvent, overlay, width, onClose, onOpenEvent }: AssistantPanelProps) {
+export function AssistantPanel({ chat, organizationId, onEvent, overlay, width, onClose, onOpenEvent }: AssistantPanelProps) {
+  const suggestions = useSuggestedPrompts(organizationId, 'calendar', onEvent ? EVENT_SUGGESTIONS : undefined);
   const [draft, setDraft] = useState('');
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -77,7 +81,7 @@ export function AssistantPanel({ chat, onEvent, overlay, width, onClose, onOpenE
         {chat.items.length === 0 && (
           <div className="flex flex-col gap-2 text-muted">
             <p className="mb-1">Ask me about your calendar: what is coming up, when people are free, or to add, move or answer events. I say what I changed, and I ask before deleting anything.</p>
-            {(onEvent ? EVENT_SUGGESTIONS : VIEW_SUGGESTIONS).map((s) => (
+            {suggestions.map((s) => (
               <button key={s} type="button" className="rounded-lg border border-border px-3 py-2 text-left text-ink hover:bg-hover" onClick={() => submit(s)}>{s}</button>
             ))}
           </div>
