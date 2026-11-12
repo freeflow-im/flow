@@ -160,6 +160,11 @@ The operator does the cut-over by hand with
   `packages/edge/scripts/clients.mjs`. Adding an app is a manifest entry plus
   `node packages/edge/scripts/clients.mjs write`, which regenerates the Dockerfile's COPY lines and
   `flow-aws-deploy.yml`'s static `paths:` filter; the edge tests fail until it is run.
+- **The clients are built once per commit** ([`build-clients.yml`](.github/workflows/build-clients.yml), called by
+  `flow-aws-deploy.yml`), as an artifact both deploys take: the edge Worker deploys as soon as they are built (a few
+  minutes after the merge, not after the image and the instance), and the image takes the same files
+  (`--build-context prebuilt=…`; without it the Dockerfile builds them itself). A push that touches only
+  `packages/edge` deploys the Worker alone, with the clients copied out of the latest image.
 - **Railway** (until the cut-over, then retired): connected to
   `freeflow-im/flow`, so pushing to `main` builds and ships. The contract is
   in [`railway.json`](railway.json): Railpack, build `pnpm -r build`, start

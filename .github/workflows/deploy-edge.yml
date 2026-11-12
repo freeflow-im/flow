@@ -20,12 +20,38 @@ on:
       - '.github/workflows/deploy-edge.yml'
   workflow_dispatch:
   workflow_call:
+    inputs:
+      clients_artifact:
+        description: The clients built for this commit (build-clients.yml); without it they are copied out of the server's latest image.
+        type: string
+        default: ''
 
 concurrency: deploy-edge
 
 jobs:
+  # A push that flow-aws-deploy.yml deploys too (it touches a client, the server or what they share) is left to that run,
+  # which deploys this Worker with the clients built for the commit: this run would copy the clients out of the server's
+  # image, which may not be rebuilt yet, and put back the old ones. Called or run by hand, it always goes.
+  gate:
+    runs-on: ubuntu-24.04-arm
+    outputs:
+      go: ${{ steps.check.outputs.go }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: check
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ "${{ github.event_name }}" != push ] || [ -z "$BEFORE" ] || [ "$BEFORE" = 0000000000000000000000000000000000000000 ]; then echo go=true >> "$GITHUB_OUTPUT"; exit 0; fi
+          if git diff --name-only "$BEFORE" "$GITHUB_SHA" | grep -qE '^(packages/(server|shared|suite-bar|web|docs|mail|calendar|home|contacts|admin)/|packages/edge/scripts/clients\.mjs$|docs/help/|scripts/build-features\.mjs$|\.claude/skills/flow-agent-member/|package\.json$|tsconfig\.base\.json$|pnpm-(lock|workspace)\.yaml$|\.github/workflows/(flow-aws-deploy|build-clients)\.yml$)'; then
+            echo "flow-aws-deploy.yml deploys this commit, with its own clients"; echo go=false >> "$GITHUB_OUTPUT"
+          else echo go=true >> "$GITHUB_OUTPUT"; fi
+
   deploy:
-    if: vars.EDGE_DEPLOY == 'true' && vars.AWS_DEPLOY_ROLE_ARN != ''
+    needs: gate
+    if: needs.gate.outputs.go == 'true' && vars.EDGE_DEPLOY == 'true' && vars.AWS_DEPLOY_ROLE_ARN != ''
     runs-on: ubuntu-24.04-arm # the image is Arm
     permissions:
       contents: read
@@ -46,7 +72,14 @@ jobs:
         run: pnpm install --frozen-lockfile --filter @flow/edge...
       - name: Build the shared types and schemas
         run: pnpm --filter @flow/shared build
+      - name: Take the clients built for this commit
+        if: inputs.clients_artifact != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.clients_artifact }}
+          path: .
       - name: Copy the clients out of the server's image
+        if: inputs.clients_artifact == ''
         env:
           IMAGE: ${{ vars.AWS_FLOW_ECR_REPOSITORY }}:latest
         run: |

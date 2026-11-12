@@ -7,6 +7,12 @@
 # DATABASE_URL, NATS_URL, FLOW_DATA_KEY and FLOW_WEB_URL (DEPLOYMENT.md §4); the Workspace app's own settings are
 # listed in docs/ops/DEPLOYMENT.md. Node from packages/docs/.node-version. Chromium is for the Workspace app's PDFs.
 
+# --- The clients, built already (optional) -------------------------------------------------------------------------------
+# flow-aws-deploy.yml builds every client once (build-clients.yml) and passes the output in with
+# `--build-context prebuilt=<dir>`, so the edge Worker and this image serve the same files. Without it this stage is empty
+# and the build stage builds the clients itself, as a local `docker build` does.
+FROM scratch AS prebuilt
+
 # --- Build: shared, the server and every app's client (APP_MANIFESTS) with their dev dependencies (and the suite bar the clients bundle) ---
 # The client lists below are generated from the manifests (packages/edge/scripts/clients.mjs write; CI checks them).
 FROM node:24.22.1-bookworm-slim AS build
@@ -64,13 +70,19 @@ COPY packages/admin packages/admin
 # Each client is built for its manifest's basePath (BASE_PATH; the Docs app's is /docs/), the list read from
 # the manifests by packages/edge/scripts/clients.mjs once shared is built.
 ARG GIT_COMMIT_SHA
+COPY --from=prebuilt / /prebuilt/
 RUN set -e \
   && pnpm --filter @flow/shared build \
   && pnpm --filter @flow/server build \
-  && node packages/edge/scripts/clients.mjs build > /tmp/clients \
-  && while read -r pkg base; do \
-       BUILD_SHA=$(printf '%.7s' "${GIT_COMMIT_SHA:-dev}") BASE_PATH="$base" pnpm --filter "$pkg" build; \
-     done < /tmp/clients
+  && if [ -f /prebuilt/FEATURES.md ]; then \
+       echo "clients: the ones built once for this commit (build-clients.yml)"; \
+       cp /prebuilt/FEATURES.md ./ && cp -a /prebuilt/packages/. packages/; \
+     else \
+       node packages/edge/scripts/clients.mjs build > /tmp/clients \
+       && while read -r pkg base; do \
+            BUILD_SHA=$(printf '%.7s' "${GIT_COMMIT_SHA:-dev}") BASE_PATH="$base" pnpm --filter "$pkg" build; \
+          done < /tmp/clients; \
+     fi
 
 # --- Run: the production dependencies and the built output, in the repository's layout ------------------------------
 FROM node:24.22.1-bookworm-slim
