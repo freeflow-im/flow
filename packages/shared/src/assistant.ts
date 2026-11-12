@@ -129,10 +129,10 @@ export type AssistantPrompts = Partial<Record<PromptPage, string[]>>;
  * presentation, Calendar for an open event); these are what Admin shows and what "Reset" puts back.
  */
 export const DEFAULT_PROMPTS: Record<PromptPage, string[]> = {
-  home: ['What needs my attention today?', 'Summarize my unread mail', 'What is on my calendar this week?'],
+  home: ["What's on my task list today?", 'Summarize my unread mail', 'What is on my calendar this week?'],
   admin: ['Who are the members of this organization?', 'Which agents work here, and what are they for?', 'How do I set up mail for our domain?'],
-  'mail-inbox': ['What needs an answer from me today?', 'What did I get last week about invoices?', 'Draft an email to the team about Friday'],
-  'mail-message': ['Summarize this email', 'Draft a reply to this', 'Save the attachments to Docs'],
+  'mail-inbox': ['What needs an answer from me today?', "Any messages I didn't respond to last week?"],
+  'mail-message': ['Summarize this email', 'Draft a reply to this', 'Save the attachments to Docs', 'Research the sender of this email'],
   chat: ['Summarize this channel', 'What did I miss today?', 'Draft a reply to the last message'],
   calendar: ['What does my week look like?', 'Find 30 minutes for a call on Thursday', 'Which invitations have I not answered?'],
   'docs-list': ['Which spreadsheets did I edit most recently?', 'Create a spreadsheet to track monthly expenses', 'Create a 5-slide presentation about our quarterly goals'],
