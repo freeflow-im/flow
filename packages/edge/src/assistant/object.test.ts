@@ -74,7 +74,7 @@ const DOCS_CALLER: DocsCaller = { userId: 'user-1', email: 'ann@acme.test', toke
 
 function assistant(name = 'acct-1', env: AssistantEnv = {}) {
   const ctx = { storage: storage(), id: { toString: () => name, name }, waitUntil: () => {} };
-  return new TestAssistant(ctx as never, { FLOW_DATA_KEY: 'test-data-key', FLOW_WEB_URL: 'https://app.test', ...env });
+  return new TestAssistant(ctx as never, { FLOW_DATA_KEY: 'test-data-key', FLOW_WEB_URL: 'https://app.test', ANTHROPIC_API_KEY: 'test-platform-key', ...env });
 }
 
 async function events(res: Response): Promise<AgentEvent[]> {
@@ -141,17 +141,20 @@ describe('the Assistant object', () => {
     expect(await items('mail')).toEqual([]);
   });
 
-  it('keeps the settings, sealed with the deployment’s key, and gives Docs the OpenAI key for its owner only', async () => {
-    const a = assistant();
-    const get = async () => ((await (await a.handle(req('GET', '/api/settings/assistant'), CALLER, DOCS_CALLER)).json()) as { settings: Record<string, unknown> }).settings;
-    expect((await get()).provider).toBe('default');
-    const put = await a.handle(req('PUT', '/api/settings/assistant', { provider: 'openai', openaiKey: 'sk-test-0123456789abcdef', openaiModel: 'gpt-6.1-sol' }), CALLER, DOCS_CALLER);
-    expect(put.status).toBe(200);
-    expect(await get()).toMatchObject({ provider: 'openai', openaiKey: expect.stringMatching(/cdef$/) });
-    expect(await a.openaiKey('user-1')).toBe('sk-test-0123456789abcdef');
-    expect(await a.openaiKey('user-2')).toBeNull();
-    const stored = a.exportRows({ table: 'assistant_settings' })[0]!.rows[0]!;
+  it('keeps the organization’s model in its `org:` object, sealed, and opens it for the runtimes (operator ruling 2026-11-11)', async () => {
+    const keeper = assistant();
+    expect((await keeper.orgSettings()).provider).toBe('default');
+    const saved = await keeper.updateOrgSettings({ provider: 'openai', openaiKey: 'sk-test-0123456789abcdef', openaiModel: 'gpt-6.1-sol' });
+    expect(saved).toMatchObject({ ok: true, settings: { provider: 'openai', openaiKey: expect.stringMatching(/cdef$/) } });
+    const model = await keeper.orgModel();
+    expect(model.choice).toEqual({ provider: 'openai', apiKey: 'sk-test-0123456789abcdef', model: 'gpt-6.1-sol' });
+    expect(model.openaiKey).toBe('sk-test-0123456789abcdef');
+    expect(model.shown.openaiKey).toMatch(/cdef$/);
+    const stored = keeper.exportRows({ table: 'assistant_settings' })[0]!.rows[0]!;
+    expect(stored.user_id).toBe('org');
     expect(String(stored.openai_key)).not.toContain('sk-test');
+    // A bad choice comes back as an answer, not a thrown error (it crosses the object boundary).
+    expect(await keeper.updateOrgSettings({ provider: 'claude-agent' })).toMatchObject({ ok: false });
   });
 
   it('keeps the agent’s definition, names it as the directory does by default, and puts its instructions in the prompt (agents.md §6)', async () => {

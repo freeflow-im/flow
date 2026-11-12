@@ -37,7 +37,7 @@ export function App() {
   const now = useNow();
   const me = useQuery({ queryKey: ['suite', 'me'], queryFn: suite.me, refetchInterval: 60_000 });
   const setup = useAccountSetup(orgId);
-  const chat = useChat(orgId);
+  const chat = useChat(orgId, me.data?.id ?? null);
   const mail = useInbox(orgId, setup.settingUp);
   const today = useToday(orgId, setup.settingUp, now);
   const files = useRecentFiles(orgId);
@@ -111,7 +111,9 @@ export function App() {
           <Sidebar
             active={frames.view}
             activeChannel={activeChannel}
-            apps={appLinks({ mailUnread: mail.unread, chatUnread: chatCount, admin })}
+            // Chat is the Channels section below, so it is no row of its own here (the narrow screen's app row keeps it: the
+            // sidebar, with its channels, is hidden there).
+            apps={appLinks({ mailUnread: mail.unread, chatUnread: chatCount, admin }).filter((a) => a.id !== 'chat')}
             channels={channels ? sidebarChannels(channels) : null}
             agents={chat.members.data ? chat.agents : null}
             onOpenAgent={(a) => void openAgent(a)}

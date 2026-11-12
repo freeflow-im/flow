@@ -12,6 +12,7 @@ import { ApiError } from '../errors';
 import { isFileId } from '@flow/docs/server/ids.ts';
 import { chatScope } from '@flow/docs/shared/agent/protocol.ts';
 import { directory, guestRefusal, resolveCaller, tokenOf, type AuthEnv } from './auth';
+import { orgModelKey } from '../assistant/orgModel';
 
 export interface AssistantRouteEnv extends AuthEnv { ASSISTANT: DurableObjectNamespace<Assistant>; DOCS: DurableObjectNamespace<import('../docs/object').Docs>; MAIL: DurableObjectNamespace<import('../imap/object').Mail> }
 type C = Context<{ Bindings: AssistantRouteEnv }>;
@@ -74,6 +75,16 @@ async function forward(c: C, req: Request = c.req.raw): Promise<Response> {
     // A guest uses Chat alone (decision_log 2026-11-09): no assistant, their own or a shared one.
     const guest = guestRefusal(who.account, 'the assistant');
     if (guest) return c.json({ error: guest.message, code: guest.code }, 403);
+    // The model every agent runs on is the organization's (operator ruling 2026-11-11, assistant/orgModel.ts): anyone may
+    // see it, an owner or admin sets it.
+    if (new URL(req.url).pathname === '/api/settings/assistant') {
+      const keeper = c.env.ASSISTANT.get(c.env.ASSISTANT.idFromName(orgModelKey(who.account.organizationId)));
+      if (req.method === 'GET') return c.json({ settings: await keeper.orgSettings() });
+      if (req.method !== 'PUT') return c.json({ error: 'Not found' }, 404);
+      if (who.account.role !== 'owner' && who.account.role !== 'admin') return c.json({ error: "Only the organization's owners and admins choose the model its agents run on.", code: 'not_admin' }, 403);
+      const answer = await keeper.updateOrgSettings(((await req.json().catch(() => ({}))) ?? {}) as never);
+      return answer.ok ? c.json({ settings: answer.settings }) : c.json({ error: answer.message, code: 'invalid' }, 400);
+    }
     const org = c.env.ORG.get(c.env.ORG.idFromName(who.account.organizationId));
     const [agents, wanted] = await Promise.all([directory(c, 'usableAgents', who.user.id, who.account.organizationId), agentOf(req)]);
     const self = agents.find((a) => a.self);

@@ -64,7 +64,7 @@ export function Sidebar(props: {
         </Fragment>
       ))}
 
-      <Heading label="Channels" />
+      <Heading label="Channels" action={{ label: 'Open Chat', href: '/chat/' }} />
       {props.channels === null ? (
         <Placeholder />
       ) : shown.length === 0 ? (

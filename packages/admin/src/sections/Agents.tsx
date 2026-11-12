@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AccountDTO, WorkspaceDTO, WorkspaceMemberDTO } from '@flow/shared';
 import { adminApi } from '../api';
 import { suite } from '../suite';
+import { Model } from './Assistant';
 import { Button, Card, Confirm, ErrorLine } from '../components/ui';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -34,6 +35,7 @@ export function Agents({ org }: { org: WorkspaceDTO }) {
 
   return (
     <>
+      <Model org={org} />
       <MakeHostedAgent org={org} onMade={() => { void qc.invalidateQueries({ queryKey: ['members', org.id] }); void qc.invalidateQueries({ queryKey: ['accounts', org.id] }); }} />
       <InviteAgent org={org} />
       <Card title="Shared agents" intro="Shared agents are members with a 🤖 mark, each sponsored by the person who invited them; anyone in the organization can ask them, and they keep no secrets from it. A shared agent is always native: its mailbox and calendars are part of its work." testid="card-agents">

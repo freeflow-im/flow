@@ -27,6 +27,24 @@ export function appOfPath(pathname: string): string | null {
   return ['mail', 'calendar', 'docs', 'chat', 'admin', 'contacts', 'home'].includes(first) ? first : null;
 }
 
+/**
+ * A framed app tells Home that something Home shows has changed (the member list: a rename, a kind, a removal), so Home
+ * reads it again at once rather than at its next minute's refresh.
+ */
+export interface SuiteChangedMessage {
+  type: 'flow:changed';
+  what: 'members';
+}
+
+export function isChangedMessage(data: unknown): data is SuiteChangedMessage {
+  return !!data && typeof data === 'object' && (data as SuiteChangedMessage).type === 'flow:changed' && (data as SuiteChangedMessage).what === 'members';
+}
+
+/** Tells Home (when this page is inside it) that `what` changed. Nothing outside Home. */
+export function tellHome(what: SuiteChangedMessage['what']): void {
+  if (isInHome()) window.top?.postMessage({ type: 'flow:changed', what } satisfies SuiteChangedMessage, window.location.origin);
+}
+
 export function isOpenMessage(data: unknown): data is SuiteOpenMessage {
   return !!data && typeof data === 'object' && (data as SuiteOpenMessage).type === 'flow:open' && typeof (data as SuiteOpenMessage).href === 'string';
 }

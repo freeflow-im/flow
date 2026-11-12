@@ -7,6 +7,7 @@ import type { WorkspaceDTO } from '@flow/shared';
 import { ANTHROPIC_MODELS, OPENAI_MODELS, OPENROUTER_MODELS, type AssistantProvider, type AssistantSettings, type AssistantSettingsUpdate } from '@flow/shared/assistant';
 import { adminApi, assistantApi } from '../api';
 import { suite } from '../suite';
+import { tellHome } from '@flow/suite-bar';
 import { Button, Card, ErrorLine, Row } from '../components/ui';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -24,7 +25,7 @@ export function Assistant({ org }: { org: WorkspaceDTO }) {
     <>
       <NameAndInstructions org={org} />
       <WhoMayMail org={org} />
-      <Model org={org} />
+      <RunsOn org={org} />
     </>
   );
 }
@@ -50,6 +51,8 @@ function NameAndInstructions({ org }: { org: WorkspaceDTO }) {
     onMutate: () => setNotice(null),
     onSuccess: async () => {
       setNotice('Saved.');
+      // Its name shows in Home's sidebar and Chat's lists.
+      tellHome('members');
       await qc.invalidateQueries({ queryKey: ['assistant', org.id] });
       await qc.invalidateQueries({ queryKey: ['members-chat', org.id] });
     },
@@ -123,7 +126,21 @@ function WhoMayMail({ org }: { org: WorkspaceDTO }) {
   );
 }
 
-function Model({ org }: { org: WorkspaceDTO }) {
+/** What it runs on: the organization's model, which its admins choose in Agents (operator ruling 2026-11-11). */
+function RunsOn({ org }: { org: WorkspaceDTO }) {
+  const settings = useQuery({ queryKey: ['assistant', org.id, 'settings'], queryFn: () => assistantApi.settings(org.id) });
+  const s = settings.data;
+  const label = !s ? null : s.provider === 'anthropic' ? `Anthropic · ${ANTHROPIC_MODELS.find((m) => m.id === s.anthropicModel)?.name ?? s.anthropicModel}` : s.provider === 'openai' ? `OpenAI · ${OPENAI_MODELS.find((m) => m.id === s.openaiModel)?.name ?? s.openaiModel}` : s.provider === 'openrouter' ? `OpenRouter · ${s.openrouterModel}` : 'The built-in model';
+  return (
+    <Card title="Model" intro="Every agent in this organization runs on the model its owners and admins choose, under Agents." testid="card-assistant-runs-on">
+      {settings.isError && <ErrorLine error={errorText(settings.error)} />}
+      {label && <p className="text-sm" data-testid="assistant-runs-on">{label}</p>}
+    </Card>
+  );
+}
+
+/** The organization's model (Agents section, owners and admins): what every agent runs on, people's assistants included. */
+export function Model({ org }: { org: WorkspaceDTO }) {
   const qc = useQueryClient();
   const settings = useQuery({ queryKey: ['assistant', org.id, 'settings'], queryFn: () => assistantApi.settings(org.id) });
   const s = settings.data;
@@ -158,7 +175,7 @@ function Model({ org }: { org: WorkspaceDTO }) {
     },
   });
   return (
-    <Card title="Model" intro="What your assistant runs on: the organization's built-in model, or Anthropic, OpenAI or OpenRouter billed to your own API key. Keys are stored encrypted and never shown again." testid="card-assistant-model">
+    <Card title="Model for every agent" intro="What every agent in this organization runs on, each person's assistant included: the built-in model, or Anthropic, OpenAI or OpenRouter billed to the organization's API key. Keys are stored encrypted and never shown again." testid="card-assistant-model">
       {settings.isError && <ErrorLine error={errorText(settings.error)} />}
       {s && (
         <form

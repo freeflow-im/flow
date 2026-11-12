@@ -86,6 +86,9 @@ describe('the sidebar', () => {
 
   it('lists the agents by name and finds the DM with one', () => {
     expect(agentsOf([member(OTHER, 'Zed', false), member(AGENT, 'Wren', true), member('a', 'Juno', true)]).map((m) => m.displayName)).toEqual(['Juno', 'Wren']);
+    // A person's assistant is theirs alone (agents.md §1.1): mine is listed, another person's is not.
+    const assistant = (userId: string, name: string, sponsorId: string) => ({ ...member(userId, name, true), kind: 'personal_agent', agentRuntime: 'hosted', sponsorId }) as WorkspaceMemberDTO;
+    expect(agentsOf([member(AGENT, 'Wren', true), assistant('ada', 'Ada', ME), assistant('max', 'Max', OTHER)], ME).map((m) => m.displayName)).toEqual(['Ada', 'Wren']);
     const dm = channel({ id: 'dm', kind: 'dm', name: null, memberIds: [ME, AGENT] });
     const group = channel({ id: 'g', kind: 'dm', name: null, memberIds: [ME, AGENT, OTHER] });
     expect(dmWith([group, dm], ME, AGENT)?.id).toBe('dm');

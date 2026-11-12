@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AccountDTO, AccountKind, InviteResultDTO, MemberRole, WorkspaceDTO, WorkspaceInviteDTO, WorkspaceMemberDTO } from '@flow/shared';
 import { adminApi } from '../api';
 import { suite } from '../suite';
+import { tellHome } from '@flow/suite-bar';
 import { Button, Card, Confirm, ErrorLine, Select } from '../components/ui';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -38,7 +39,10 @@ export function Members({ org }: { org: WorkspaceDTO }) {
   const me = useQuery({ queryKey: ['suite', 'me'], queryFn: suite.me });
   const members = useQuery({ queryKey: ['members', org.id], queryFn: () => adminApi.members(org.id) });
   const accounts = useQuery({ queryKey: ['accounts', org.id], queryFn: () => adminApi.accounts(org.id) });
-  const refresh = () => Promise.all([qc.invalidateQueries({ queryKey: ['members', org.id] }), qc.invalidateQueries({ queryKey: ['accounts', org.id] })]);
+  const refresh = () => {
+    tellHome('members');
+    return Promise.all([qc.invalidateQueries({ queryKey: ['members', org.id] }), qc.invalidateQueries({ queryKey: ['accounts', org.id] })]);
+  };
 
   const accountOf = (m: WorkspaceMemberDTO) => (accounts.data ?? []).find((a) => a.principalId === m.userId);
   const [filter, setFilter] = useState<Filter>('all');

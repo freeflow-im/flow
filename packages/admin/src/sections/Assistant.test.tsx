@@ -54,11 +54,9 @@ describe('Your assistant', () => {
     await waitFor(() => expect(calls.some((c) => c.method === 'PUT' && c.path === '/v1/workspaces/o1/assistant/senders' && JSON.stringify((c.body as { senders: string[] }).senders) === '["ann@acme.test","pat@partner.example"]')).toBe(true));
   });
 
-  it('shows the model it runs on, the built-in one first', async () => {
+  it('says what it runs on: the organization’s model, set in Agents', async () => {
     mount();
-    const pick = (await screen.findByTestId('assistant-provider')) as HTMLSelectElement;
-    expect(pick.value).toBe('default');
-    fireEvent.change(pick, { target: { value: 'anthropic' } });
-    expect(await screen.findByTestId('assistant-key')).toBeTruthy();
+    expect((await screen.findByTestId('assistant-runs-on')).textContent).toBe('The built-in model');
+    expect(screen.queryByTestId('assistant-provider')).toBeNull();
   });
 });

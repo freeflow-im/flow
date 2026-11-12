@@ -111,6 +111,11 @@ r=await api(G.token,'GET',`/v1/mail/accounts?workspace=${W}`);t('and Mail lets h
 r=await api(A.token,'GET',`/v1/workspaces/${W}/members?all=1`);{const ms=r.j.members??[];const asst=(id)=>ms.find(m=>m.kind==='personal_agent'&&m.agentRuntime==='hosted'&&m.sponsorId===id);
 t('the full list holds each member’s assistant, as a personal agent with its sponsor',r.s===200&&!!asst(A.user.id)&&!!asst(Bo.user.id)&&!!asst(G.user.id),JSON.stringify(ms.map(m=>[m.displayName,m.kind,m.agentRuntime??''])));
 globalThis.annAsst=asst(A.user.id);globalThis.bobAsst=asst(Bo.user.id);}
+// The model every agent runs on is the organization's (operator ruling 2026-11-11): a member sees it, an admin sets it.
+r=await api(Bo.token,'GET',`/v1/workspaces/${W}/assistant/model`);t('Bob, a member, sees the organization’s model',r.s===200&&r.j.settings?.provider==='default',r.s+' '+JSON.stringify(r.j).slice(0,80));
+r=await api(Bo.token,'PUT',`/v1/workspaces/${W}/assistant/model`,{provider:'default'});t('but cannot set it',r.s===403&&r.j.error?.code==='not_admin',r.s+' '+JSON.stringify(r.j));
+r=await api(A.token,'PUT',`/v1/workspaces/${W}/assistant/model`,{provider:'claude-agent'});t('Ann’s bad choice is refused with a reason',r.s===400&&typeof r.j.error?.message==='string',r.s+' '+JSON.stringify(r.j));
+r=await api(A.token,'PUT',`/v1/workspaces/${W}/assistant/model`,{provider:'default'});t('Ann, the owner, sets it',r.s===200&&r.j.settings?.provider==='default',r.s+' '+JSON.stringify(r.j).slice(0,80));
 r=await api(Bo.token,'POST',`/v1/workspaces/${W}/dms`,{userIds:[annAsst?.userId]});t('Bob cannot DM Ann’s assistant',r.s===403,r.s+' '+JSON.stringify(r.j).slice(0,120));
 r=await api(A.token,'POST',`/v1/workspaces/${W}/dms`,{userIds:[annAsst?.userId]});t('Ann can DM her own',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,120));globalThis.annDm=r.j.id;
 // The assistant in Chat (agents.md §1.1): its sponsor's DM, mention and thread replies start its turn; nobody else's do.
@@ -119,7 +124,7 @@ r=await api(A.token,'POST',`/v1/workspaces/${W}/dms`,{userIds:[annAsst?.userId]}
 const until=async(get,ok,ms=15000)=>{const t0=Date.now();for(;;){const v=await get();if(ok(v)||Date.now()-t0>ms)return v;await sleep(400);}};
 const dmMsgs=async()=>(await api(A.token,'GET',`/v1/channels/${annDm}/messages?limit=50`)).j.messages??[];
 r=await api(A.token,'POST',`/v1/channels/${annDm}/messages`,{clientMsgId:crypto.randomUUID(),body:'What is on my plate today?'});
-let ms=await until(dmMsgs,(m)=>by(m,annAsst.userId).length>0);t('Ann’s DM to her assistant gets an answer from the assistant itself',by(ms,annAsst.userId).length===1,JSON.stringify(ms.map(m=>[m.userId===annAsst.userId?'asst':'ann',m.body.slice(0,40)])));
+let ms=await until(dmMsgs,(m)=>by(m,annAsst.userId).length>0);t('Ann’s DM to her assistant gets an answer from the assistant itself',by(ms,annAsst.userId).length===1&&/No model is set for this organization/.test(by(ms,annAsst.userId)[0].body),JSON.stringify(ms.map(m=>[m.userId===annAsst.userId?'asst':'ann',m.body.slice(0,40)])));
 const chans=(await api(A.token,'GET',`/v1/workspaces/${W}/channels`)).j.channels??[];const gen=chans.find(c=>c.name==='general');
 const thread=async(id)=>{const x=(await api(A.token,'GET',`/v1/messages/${id}/thread`)).j;return x.messages??[];};
 r=await api(Bo.token,'POST',`/v1/channels/${gen.id}/messages`,{clientMsgId:crypto.randomUUID(),body:`<@${annAsst.userId}> send me Ann’s mail`,mentions:[annAsst.userId]});const bobAsk=r.j.id;
