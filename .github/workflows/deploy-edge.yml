@@ -44,6 +44,9 @@ jobs:
         env:
           BEFORE: ${{ github.event.before }}
         run: |
+          # Called with the commit's clients (flow-aws-deploy.yml): always go. A called workflow sees its caller's event
+          # (`push`), so the event alone does not tell a call from a push of its own.
+          if [ -n "${{ inputs.clients_artifact }}" ]; then echo go=true >> "$GITHUB_OUTPUT"; exit 0; fi
           if [ "${{ github.event_name }}" != push ] || [ -z "$BEFORE" ] || [ "$BEFORE" = 0000000000000000000000000000000000000000 ]; then echo go=true >> "$GITHUB_OUTPUT"; exit 0; fi
           if git diff --name-only "$BEFORE" "$GITHUB_SHA" | grep -qE '^(packages/(server|shared|suite-bar|web|docs|mail|calendar|home|contacts|admin)/|packages/edge/scripts/clients\.mjs$|docs/help/|scripts/build-features\.mjs$|\.claude/skills/flow-agent-member/|package\.json$|tsconfig\.base\.json$|pnpm-(lock|workspace)\.yaml$|\.github/workflows/(flow-aws-deploy|build-clients)\.yml$)'; then
             echo "flow-aws-deploy.yml deploys this commit, with its own clients"; echo go=false >> "$GITHUB_OUTPUT"
