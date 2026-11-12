@@ -384,7 +384,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
         let out = '';
         let failed: string | null = null;
         try {
-          await agent.runTurn(`auto:${job.subscriptionId}`, { message: job.prompt, context: { page: 'home' }, workspace: organizationId }, (e) => {
+          await agent.runTurn(`auto:${job.subscriptionId}`, { message: job.prompt, context: { page: 'home' }, workspace: organizationId, timezone: user.timezone }, (e) => {
             if (e.type === 'text') out += e.text;
             else if (e.type === 'error') failed = e.message;
           }, abort.signal, { scope: { ownerId: actorId, workspaceId: organizationId, private: true }, viewer: actorId });
@@ -443,7 +443,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
         let out = '';
         let failed: string | null = null;
         try {
-          await agent.runTurn(conversation, { message: p.prompt, context: { page: 'home' }, workspace: organizationId }, (e) => {
+          await agent.runTurn(conversation, { message: p.prompt, context: { page: 'home' }, workspace: organizationId, timezone: user.timezone }, (e) => {
             if (e.type === 'text') out += e.text;
             else if (e.type === 'error') failed = e.message;
           }, abort.signal, { scope: { ownerId: actorId, workspaceId: organizationId, private: true }, viewer: actorId });
@@ -505,7 +505,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
         let out = '';
         let failed: string | null = null;
         try {
-          await agent.runTurn(conversation, { message: prompt, context: { page: 'home' }, workspace: organizationId }, (e) => {
+          await agent.runTurn(conversation, { message: prompt, context: { page: 'home' }, workspace: organizationId, timezone: user.timezone }, (e) => {
             if (e.type === 'text') out += e.text;
             else if (e.type === 'error') failed = e.message;
           }, abort.signal, { scope: { ownerId: actorId, workspaceId: organizationId, private: true }, viewer: actorId });
@@ -667,6 +667,8 @@ export class Assistant extends DurableObject<AssistantEnv> {
   /** Runs or resumes a turn, streaming AgentEvents as server-sent events (as the Docs server's /api/agent/turn did). */
   private async turn(c: C): Promise<Response> {
     const body = ((await c.req.json().catch(() => ({}))) ?? {}) as AgentTurnRequest;
+    // Where the asker is: their browser's zone (the panels send it), else their profile's.
+    body.timezone = c.req.header('x-timezone') || body.timezone || c.env.who.caller.user?.timezone || undefined;
     const userId = conversationUserOf(c);
     const { agent } = this.service();
     try {

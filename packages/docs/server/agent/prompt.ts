@@ -182,6 +182,24 @@ export function renderCalendarContext(ctx: CalendarContext): string {
 }
 
 /** The per-message context block, rendered as text in front of the user's message. */
+/**
+ * The current date and time where the asker is (their IANA time zone; an unknown one is UTC), told to the model with each
+ * message rather than in the system prompt, which stays the same between requests.
+ */
+export function renderNow(timezone?: string, now: Date = new Date()): string {
+  let zone = 'UTC';
+  if (timezone) {
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: timezone });
+      zone = timezone;
+    } catch {
+      zone = 'UTC';
+    }
+  }
+  const when = new Intl.DateTimeFormat('en-US', { timeZone: zone, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(now);
+  return `<current_time>\nIt is now ${when} (time zone ${zone}, the asker's). Use this for "today", "now", "this week" and the like.\n</current_time>`;
+}
+
 export function renderContext(ctx: AgentContext): string {
   if (ctx.page === 'home') {
     return '<app_context>\nThe user is on the home page (their list of spreadsheets, presentations and documents). Nothing is open.\n</app_context>';
@@ -240,6 +258,6 @@ export function renderContext(ctx: AgentContext): string {
 
 /** Strip the context block from a stored user message, for showing the transcript. */
 export function stripContext(text: string): string | null {
-  if (!text.startsWith('<app_context>') && !text.startsWith('<attached_images>')) return text;
+  if (!text.startsWith('<app_context>') && !text.startsWith('<attached_images>') && !text.startsWith('<current_time>')) return text;
   return null;
 }

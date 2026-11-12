@@ -490,7 +490,8 @@ async function streamAgentTurn(body: AgentTurnRequest, signal: AbortSignal, onEv
   const res = await fetch('/api/agent/turn', {
     method: 'POST',
     credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json' },
+    // The asker's time zone: the turn is told the date and time there (AgentTurnRequest.timezone).
+    headers: { 'Content-Type': 'application/json', 'X-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone },
     body: JSON.stringify(workspace ? { ...body, workspace } : body),
     signal,
   });

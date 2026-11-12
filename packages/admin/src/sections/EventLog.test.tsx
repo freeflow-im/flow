@@ -23,6 +23,12 @@ const event = (seq: number, type: string, extra: Partial<PlatformEvent> = {}): P
 let calls: string[];
 beforeEach(() => {
   calls = [];
+  // jsdom has no IntersectionObserver: this one says the list's end is in sight as soon as it is watched.
+  vi.stubGlobal('IntersectionObserver', class {
+    constructor(private cb: (entries: { isIntersecting: boolean }[]) => void) {}
+    observe() { setTimeout(() => this.cb([{ isIntersecting: true }]), 0); }
+    disconnect() {}
+  });
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const path = typeof input === 'string' ? input : input instanceof URL ? input.pathname + input.search : input.url;
     calls.push(path);
@@ -62,11 +68,12 @@ describe('the Event log section', () => {
     expect(screen.getByTestId('event-detail-e56').textContent).toContain('invoked by account');
   });
 
-  it('pages older, and a filter starts over with the query', async () => {
+  it('reads older events as the list is scrolled to its end, and a filter starts over with the query', async () => {
     mount();
     await screen.findByTestId('event-e56');
-    fireEvent.click(screen.getByTestId('events-older'));
+    // No click: the end of the list comes into sight and the next page is read.
     await screen.findByTestId('event-e6');
+    expect(screen.queryByTestId('events-older')).toBeNull();
     expect(screen.getByTestId('events-count').textContent).toBe('51 events');
     expect(calls.some((c) => c.includes('before=7'))).toBe(true);
     fireEvent.change(screen.getByTestId('events-types'), { target: { value: 'calendar.*' } });
