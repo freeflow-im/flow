@@ -93,7 +93,8 @@ describe('the guest scheduler', () => {
     let r = await w.guest('GET', `/v1/book/${token.toUpperCase().replace(/-/g, '')}`);
     expect(r.s).toBe(200);
     expect(r.h.get('cache-control')).toBe('no-store');
-    expect(r.j.page).toMatchObject({ ownerName: 'Ann Lee', title: '30 Minute Meet', durations: [30, 60], defaultDuration: 30, location: { kind: 'text', label: 'https://meet.example/ann' }, ownerTimezone: LA });
+    expect(r.j.page).toMatchObject({ ownerName: 'Ann Lee', title: '30 Minute Meet', durations: [30, 60], defaultDuration: 30, location: { kind: 'link', label: null }, ownerTimezone: LA });
+    expect(JSON.stringify(r.j)).not.toContain('meet.example');
     expect(JSON.stringify(r.j)).not.toMatch(/ann@|acct-|org-1/);
     r = await w.guest('GET', `/v1/book/${token}/days?month=2026-11&duration=30&tz=${encodeURIComponent(LA)}`);
     // From today (Thursday 12th, 08:00 + 4 hours' notice) on weekdays.

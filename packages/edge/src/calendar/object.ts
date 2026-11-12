@@ -1060,7 +1060,8 @@ export class Calendar extends DurableObject<CalendarEnv> {
   private pageInfo(cfg: SchedulerConfig) {
     return {
       ownerName: this.schedulerOwner().name, title: cfg.title, description: cfg.description, durations: cfg.durations, defaultDuration: cfg.defaultDuration,
-      location: cfg.location.kind === 'text' ? { kind: 'text' as const, label: cfg.location.value } : { kind: 'none' as const, label: null },
+      // A link (a video call) is given only to those who book: the page says it comes with the confirmation.
+      location: cfg.location.kind !== 'text' ? { kind: 'none' as const, label: null } : /^https?:\/\//i.test(cfg.location.value.trim()) ? { kind: 'link' as const, label: null } : { kind: 'text' as const, label: cfg.location.value },
       ownerTimezone: cfg.timezone, horizonEnd: new Date(horizonEnd(cfg, Date.now())).toISOString(),
     };
   }
