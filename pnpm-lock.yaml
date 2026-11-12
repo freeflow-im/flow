@@ -913,6 +913,12 @@ importers:
       '@flow/shared':
         specifier: workspace:*
         version: link:../shared
+      react-markdown:
+        specifier: ^10.1.0
+        version: 10.1.0(@types/react@19.3.0)(react@19.3.1)
+      remark-gfm:
+        specifier: ^4.0.1
+        version: 4.0.1
     devDependencies:
       '@testing-library/dom':
         specifier: ^10.4.2

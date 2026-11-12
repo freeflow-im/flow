@@ -672,6 +672,9 @@ export class Assistant extends DurableObject<AssistantEnv> {
     const userId = conversationUserOf(c);
     const { agent } = this.service();
     try {
+      // No organization model and no platform key: the plain reason, as Chat's turns give it (before Docs' own check,
+      // which would point at Docs' Settings).
+      this.requireModel();
       agent.checkTurn(userId, body);
     } catch (e) {
       if (e instanceof AgentError) return c.json({ error: e.message }, e.status as 400);

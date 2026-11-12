@@ -14,8 +14,20 @@ export interface MyAssistant { displayName: string; avatarUrl: string | null }
  * Reads the person's assistant in the organization (`GET /api/agent/agents`, its `self` row), again when the organization
  * changes. Null until it is known, and for a guest (who has none): the pill then says "AI Help".
  */
+/** The window event that says the person's assistant changed here (a name, a picture): the pill reads it again. */
+export const ASSISTANT_CHANGED = 'flow:assistant-changed';
+export function assistantChanged(): void {
+  window.dispatchEvent(new Event(ASSISTANT_CHANGED));
+}
+
 export function useMyAssistant(organizationId: string | null): MyAssistant | null {
   const [mine, setMine] = useState<MyAssistant | null>(null);
+  const [asked, setAsked] = useState(0);
+  useEffect(() => {
+    const again = () => setAsked((n) => n + 1);
+    window.addEventListener(ASSISTANT_CHANGED, again);
+    return () => window.removeEventListener(ASSISTANT_CHANGED, again);
+  }, []);
   useEffect(() => {
     let live = true;
     const url = organizationId ? `/api/agent/agents?workspace=${encodeURIComponent(organizationId)}` : '/api/agent/agents';
@@ -27,7 +39,7 @@ export function useMyAssistant(organizationId: string | null): MyAssistant | nul
       })
       .catch(() => live && setMine(null));
     return () => { live = false; };
-  }, [organizationId]);
+  }, [organizationId, asked]);
   return mine;
 }
 

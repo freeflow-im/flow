@@ -10,6 +10,7 @@ import { adminAddress, chatPageAddress } from '@flow/shared/addresses';
 import { homeApi } from './api';
 import { FilesCard, InboxCard, MentionsCard, TodayCard } from './components/Cards';
 import { HomeSuiteBar } from './components/HomeSuiteBar';
+import { SuiteAssistant } from '@flow/suite-bar/assistant-chat';
 import { appLinks, Sidebar } from './components/Sidebar';
 import { useFrames } from './hooks/frames';
 import { useAppMenus } from './hooks/menus';
@@ -107,7 +108,7 @@ export function App() {
           </a>
         </div>
       ) : (
-        <div className="flex min-h-0 flex-1 bg-panel" onClick={onLinkClick}>
+        <div className="relative flex min-h-0 flex-1 bg-panel" onClick={onLinkClick}>
           <Sidebar
             active={frames.view}
             activeChannel={activeChannel}
@@ -178,6 +179,8 @@ export function App() {
               </div>
             </div>
           </main>
+          {/* The person's assistant on Home's own page (agents.md §1.1); an app open here shows its own. A guest has none. */}
+          {frames.view === 'home' && !setup.guest && <SuiteAssistant organizationId={orgId} />}
         </div>
       )}
     </div>

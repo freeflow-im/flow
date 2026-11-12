@@ -8,6 +8,7 @@ import { AGENT_AVATAR_PRESETS, agentAvatarUrl, ANTHROPIC_MODELS, OPENAI_MODELS, 
 import { adminApi, assistantApi } from '../api';
 import { suite } from '../suite';
 import { tellHome } from '@flow/suite-bar';
+import { assistantChanged } from '@flow/suite-bar/assistant-dock';
 import { Button, Card, ErrorLine, Row } from '../components/ui';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -52,8 +53,9 @@ function NameAndInstructions({ org }: { org: WorkspaceDTO }) {
     onMutate: () => setNotice(null),
     onSuccess: async () => {
       setNotice('Saved.');
-      // Its name shows in Home's sidebar and Chat's lists.
+      // Its name shows in Home's sidebar and Chat's lists, and on this page's AI button.
       tellHome('members');
+      assistantChanged();
       await qc.invalidateQueries({ queryKey: ['assistant', org.id] });
       await qc.invalidateQueries({ queryKey: ['members-chat', org.id] });
     },
@@ -102,6 +104,7 @@ function Picture({ org }: { org: WorkspaceDTO }) {
   const current = mine?.avatarUrl ?? null;
   const done = async () => {
     tellHome('members');
+    assistantChanged();
     await qc.invalidateQueries({ queryKey: ['members-chat', org.id] });
   };
   const preset = useMutation({ mutationFn: (p: (typeof AGENT_AVATAR_PRESETS)[number] | null) => assistantApi.setPreset(org.id, p), onSuccess: done });
