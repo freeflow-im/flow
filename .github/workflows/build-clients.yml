@@ -1,0 +1,56 @@
+# Builds every app's web client once (the manifests' list, packages/edge/scripts/clients.mjs) and keeps the output as an
+# artifact, so the edge Worker and the AWS server's image deploy the very same files: a second build would give the files
+# other names (BUILD_SHA is in them), and pages from one would ask the other for files it does not have. Called by
+# flow-aws-deploy.yml; the same loop as packages/server/deploy/aws/Dockerfile's, which takes these files instead of
+# building when they are passed in.
+name: build-clients
+
+on:
+  workflow_call:
+    outputs:
+      artifact:
+        description: The artifact holding the built clients, laid out as in the repository.
+        value: ${{ jobs.build.outputs.artifact }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+    outputs:
+      artifact: clients-${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: packages/docs/.node-version
+          cache: pnpm
+      - name: Install
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+        run: pnpm install --frozen-lockfile --filter @flow/shared... --filter @flow/web... --filter @flow/docs... --filter @flow/mail... --filter @flow/calendar... --filter @flow/home... --filter @flow/contacts... --filter @flow/admin...
+      - name: Build every client for its manifest's base path
+        run: |
+          set -e
+          pnpm --filter @flow/shared build
+          node packages/edge/scripts/clients.mjs build > "$RUNNER_TEMP/clients"
+          while read -r pkg base; do
+            BUILD_SHA=$(printf '%.7s' "$GITHUB_SHA") BASE_PATH="$base" pnpm --filter "$pkg" build
+          done < "$RUNNER_TEMP/clients"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clients-${{ github.sha }}
+          retention-days: 7
+          if-no-files-found: error
+          # Repository-relative, so a download into the checkout (or into the image's build context) puts each in place.
+          path: |
+            FEATURES.md
+            packages/web/dist
+            packages/docs/dist/client
+            packages/docs/plugin/dist/web
+            packages/mail/dist
+            packages/calendar/dist
+            packages/home/dist
+            packages/contacts/dist
+            packages/admin/dist

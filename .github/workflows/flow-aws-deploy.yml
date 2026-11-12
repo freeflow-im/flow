@@ -5,6 +5,9 @@
 # Does nothing until the repository variables AWS_DEPLOY_ROLE_ARN, AWS_INSTANCE_ID and AWS_FLOW_ECR_REPOSITORY are
 # set (the stack's outputs; docs/ops/FLOW_TO_AWS.md). A change to changelog/ alone does not deploy: "What's New"
 # picks it up with the next server deploy.
+#
+# The clients are built once (build-clients.yml) and both deploys take that artifact: the edge Worker deploys as soon as
+# they are built, without waiting for the image and the instance (minutes), and the image takes the same files.
 name: Flow AWS deploy
 
 on:
@@ -33,13 +36,20 @@ on:
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
       - '.github/workflows/flow-aws-deploy.yml'
+      - '.github/workflows/build-clients.yml'
   workflow_dispatch:
 
 concurrency: flow-aws-deploy
 
 jobs:
-  deploy:
+  clients:
     if: vars.AWS_DEPLOY_ROLE_ARN != '' && vars.AWS_FLOW_ECR_REPOSITORY != ''
+    uses: ./.github/workflows/build-clients.yml
+    permissions:
+      contents: read
+
+  deploy:
+    needs: clients
     runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
@@ -57,9 +67,15 @@ jobs:
 
       - uses: aws-actions/amazon-ecr-login@v2
 
+      # The clients built once for this commit; the image takes them instead of building its own (Dockerfile `prebuilt`).
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.clients.outputs.artifact }}
+          path: ${{ runner.temp }}/prebuilt
+
       - name: Build and push the image
         run: |
-          docker build -f packages/server/deploy/aws/Dockerfile --build-arg GIT_COMMIT_SHA=${{ github.sha }} -t "$IMAGE" -t "${{ vars.AWS_FLOW_ECR_REPOSITORY }}:latest" .
+          docker build -f packages/server/deploy/aws/Dockerfile --build-arg GIT_COMMIT_SHA=${{ github.sha }} --build-context prebuilt="$RUNNER_TEMP/prebuilt" -t "$IMAGE" -t "${{ vars.AWS_FLOW_ECR_REPOSITORY }}:latest" .
           docker push "$IMAGE"
           docker push "${{ vars.AWS_FLOW_ECR_REPOSITORY }}:latest"
 
@@ -78,12 +94,15 @@ jobs:
             --query '[StandardOutputContent,StandardErrorContent]' --output text
           [ "$status" = Success ]
 
-  # The Worker's files come from the image just pushed, so they have the names the server's pages use. A file it does
-  # not have yet is answered by the origin, so a failure here costs speed and no availability.
+  # The Worker deploys the same clients as soon as they are built, beside the image's build, not after it: they have the
+  # names the server's pages use. A file it does not have yet is answered by the origin, so a failure here costs speed
+  # and no availability.
   edge:
-    needs: deploy
+    needs: clients
     if: vars.EDGE_DEPLOY == 'true'
     uses: ./.github/workflows/deploy-edge.yml
+    with:
+      clients_artifact: ${{ needs.clients.outputs.artifact }}
     permissions:
       contents: read
       id-token: write
