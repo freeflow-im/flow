@@ -137,7 +137,7 @@ describe('OpenAI translation', () => {
     expect(input.slice(1)).toEqual([
       { type: 'tool_search_call', call_id: 'ts_1', execution: 'server', status: 'completed', arguments: { query: 'chart' } },
       { type: 'tool_search_output', call_id: 'ts_1', execution: 'server', status: 'completed', tools: [{ type: 'function', name: 'add_chart', description: 'Chart', parameters: { type: 'object', properties: { range: { type: 'string' } } }, strict: false, defer_loading: true }] },
-      { type: 'function_call', call_id: 'call_9', name: 'add_chart', arguments: '{"range":"A1:B4"}' },
+      { type: 'function_call', call_id: 'call_9', name: 'add_chart', arguments: '{"range":"A1:B4"}', namespace: 'add_chart' },
     ]);
   });
 

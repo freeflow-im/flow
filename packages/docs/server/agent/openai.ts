@@ -61,6 +61,8 @@ export function toTools(tools: Params['tools']): OpenAI.Responses.Tool[] {
 export function toInput(messages: Params['messages'], tools: Params['tools'] = []): InputItem[] {
   // A search's result is replayed with the definitions it loaded: nothing is kept on OpenAI's side (store: false).
   const defs = new Map((tools ?? []).flatMap((t) => ('input_schema' in t ? [[t.name, t] as const] : [])));
+  // OpenAI calls a function a search loaded within a namespace of its own name, and wants it back on the call.
+  const searched = new Set<string>();
   const items: InputItem[] = [];
   for (const m of messages) {
     if (typeof m.content === 'string') {
@@ -70,10 +72,11 @@ export function toInput(messages: Params['messages'], tools: Params['tools'] = [
     if (m.role === 'assistant') {
       for (const b of m.content) {
         if (b.type === 'text' && b.text) items.push({ role: 'assistant', content: b.text });
-        else if (b.type === 'tool_use') items.push({ type: 'function_call', call_id: b.id, name: b.name, arguments: JSON.stringify(b.input ?? {}) });
+        else if (b.type === 'tool_use') items.push({ type: 'function_call', call_id: b.id, name: b.name, arguments: JSON.stringify(b.input ?? {}), ...(searched.has(b.name) ? { namespace: b.name } : {}) });
         else if (b.type === 'server_tool_use' && b.name === TOOL_SEARCH_NAME) items.push({ type: 'tool_search_call', call_id: b.id, execution: 'server', status: 'completed', arguments: b.input });
         else if (b.type === 'tool_search_tool_result') {
           const refs = (b.content as { tool_references?: { tool_name: string }[] }).tool_references ?? [];
+          for (const r of refs) searched.add(r.tool_name);
           const loaded = refs.flatMap((r) => {
             const def = defs.get(r.tool_name);
             return def ? [{ ...toFunction(def), defer_loading: true }] : [];
