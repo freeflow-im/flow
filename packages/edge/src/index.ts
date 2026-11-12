@@ -147,6 +147,10 @@ app.all('*', async (c) => {
       hashed.headers.set('Cache-Control', 'public, max-age=31536000, immutable');
       return hashed;
     }
+    // A build file this deploy does not have: a page loaded before the deploy asks for its old code. A plain 404, never the
+    // origin, whose answer is its HTML page: the app then sees a failed import and reloads itself (@flow/suite-bar
+    // reloadOnStaleBuild), where HTML in place of a script was a "MIME type" error and a dead button.
+    if (HASHED_FILE.test(url.pathname)) return new Response('Not found: this file is from an older version of the app.', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' } });
   }
   return proxy(req, c.env);
 });

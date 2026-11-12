@@ -9,3 +9,4 @@ export type { AddressedReference, AdminSection, Attendee, ChatPage, CreateFields
 export { appOfPath, isChangedMessage, isInHome, isOpenMessage, onOpenFromHome, openInHome, routeLinksToHome, tellHome, type SuiteChangedMessage, type SuiteOpenMessage } from './lib/embed';
 export { findMenuItem, isMenuMessage, isSelectMessage, useHomeMenu, SUITE_MENU_ICONS, type SuiteMenuIcon, type SuiteMenuItem, type SuiteMenuMessage, type SuiteSelectMessage } from './lib/menu';
 export { DEFAULT_PROMPTS, MAX_PROMPTS, MAX_PROMPT_LENGTH, PROMPT_PAGES, PROMPT_PAGE_LABELS, PROMPTS_CHANGED, cleanPrompts, promptsAddress, promptsChanged, readPrompts, useSuggestedPrompts, type AssistantPrompts, type PromptPage } from './lib/prompts';
+export { reloadOnStaleBuild } from './lib/staleBuild';

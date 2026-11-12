@@ -4,6 +4,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CalendarApiError } from './api';
 import { App } from './App';
 import './index.css';
+import { reloadOnStaleBuild } from '@flow/suite-bar';
+
+// A page from before a deploy loads again when a part of its old version is gone (lib/staleBuild.ts).
+reloadOnStaleBuild();
 
 const queryClient = new QueryClient({
   defaultOptions: {
