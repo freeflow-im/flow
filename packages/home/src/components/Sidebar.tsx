@@ -1,8 +1,11 @@
 // Home's left column: the apps, then the person's channels, then the organization's agents. Every row is a link to the
 // page its own app shows (a channel or an agent's DM opens in Chat), so a click lands where the app would put you.
+import { Fragment } from 'react';
 import type { ChannelDTO, WorkspaceMemberDTO } from '@flow/shared';
+import type { SuiteMenuItem } from '@flow/suite-bar';
 import { adminAddress } from '@flow/shared/addresses';
 import { channelAddress, SIDEBAR_CHANNELS } from '../lib/home';
+import { AppMenu, Collapse } from './AppMenu';
 
 export interface AppLink {
   id: string;
@@ -36,16 +39,29 @@ export function Sidebar(props: {
   onOpenAgent: (agent: WorkspaceMemberDTO) => void;
   /** Where "+ Add" goes for someone who may add agents (an owner or admin); none otherwise. */
   addAgentHref: string | null;
+  /**
+   * The apps' menus (docs/specs/home.md §2.1). The open app's shows under its row; the others stay drawn, closed, so a
+   * switch slides one shut and the other open.
+   */
+  menus: Partial<Record<string, { items: SuiteMenuItem[]; selected: string | null }>>;
+  onMenuItem: (item: SuiteMenuItem) => void;
 }) {
   const shown = props.channels?.slice(0, SIDEBAR_CHANNELS) ?? [];
   const more = (props.channels?.length ?? 0) - shown.length;
   return (
     <nav aria-label="Home" className="hidden w-60 shrink-0 flex-col gap-1 overflow-y-auto border-r border-hairline bg-white px-3 py-4 md:flex" data-testid="home-sidebar">
       {props.apps.map((a) => (
-        <a key={a.id} href={a.href} aria-current={a.id === props.active ? 'page' : undefined} data-testid={`home-app-${a.id}`} className={`${row} justify-between ${a.id === props.active ? 'bg-row-selected font-semibold' : ''}`}>
-          <span>{a.label}</span>
-          {!!a.count && (a.pill ? <span className="min-w-5 rounded-full bg-ink px-1.5 text-center text-xs font-semibold text-white">{a.count}</span> : <span className="text-xs text-muted">{a.count}</span>)}
-        </a>
+        <Fragment key={a.id}>
+          <a href={a.href} aria-current={a.id === props.active ? 'page' : undefined} data-testid={`home-app-${a.id}`} className={`${row} justify-between ${a.id === props.active ? 'bg-row-selected font-semibold' : ''}`}>
+            <span>{a.label}</span>
+            {!!a.count && (a.pill ? <span className="min-w-5 rounded-full bg-ink px-1.5 text-center text-xs font-semibold text-white">{a.count}</span> : <span className="text-xs text-muted">{a.count}</span>)}
+          </a>
+          {props.menus[a.id] && (
+            <Collapse open={a.id === props.active} testId={`home-menu-wrap-${a.id}`}>
+              <AppMenu app={a.id} items={props.menus[a.id]!.items} selected={props.menus[a.id]!.selected} onItem={props.onMenuItem} />
+            </Collapse>
+          )}
+        </Fragment>
       ))}
 
       <Heading label="Channels" />
