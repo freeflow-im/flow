@@ -25,6 +25,10 @@
     "./addresses": {
       "types": "./dist/addresses.d.ts",
       "import": "./dist/addresses.js"
+    },
+    "./assistant": {
+      "types": "./dist/assistant.d.ts",
+      "import": "./dist/assistant.js"
     }
   },
   "scripts": {

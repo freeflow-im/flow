@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AccountDTO, WorkspaceDTO, WorkspaceMemberDTO } from '@flow/shared';
 import { adminApi } from '../api';
+import { suite } from '../suite';
 import { Button, Card, Confirm, ErrorLine } from '../components/ui';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -13,7 +14,8 @@ export function Agents({ org }: { org: WorkspaceDTO }) {
   const qc = useQueryClient();
   const members = useQuery({ queryKey: ['members', org.id], queryFn: () => adminApi.members(org.id) });
   const all = members.data ?? [];
-  const agents = all.filter((m) => m.isAgent);
+  // Shared agents only: personal agents (each person's assistant among them) are listed below (agents.md §1).
+  const agents = all.filter((m) => m.isAgent && m.kind !== 'personal_agent');
   const accounts = useQuery({ queryKey: ['accounts', org.id], queryFn: () => adminApi.accounts(org.id) });
   const hostedOf = (userId: string) => (accounts.data ?? []).find((a) => a.principalId === userId)?.agentRuntime === 'hosted';
   const nameOf = (userId: string | null) => all.find((m) => m.userId === userId)?.displayName ?? 'unknown';
@@ -72,6 +74,7 @@ function PersonalAgents({ org, nameOf }: { org: WorkspaceDTO; nameOf: (userId: s
   const qc = useQueryClient();
   const accounts = useQuery({ queryKey: ['accounts', org.id], queryFn: () => adminApi.accounts(org.id) });
   const agents = (accounts.data ?? []).filter((a) => a.kind === 'personal_agent' && a.state !== 'removed');
+  const me = useQuery({ queryKey: ['suite', 'me'], queryFn: suite.me });
   const [confirming, setConfirming] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const remove = useMutation({
@@ -84,7 +87,7 @@ function PersonalAgents({ org, nameOf }: { org: WorkspaceDTO; nameOf: (userId: s
     onError: (e) => setError(errorText(e)),
   });
   return (
-    <Card title="Personal agents" intro="A personal agent acts as one person, with that person's access, and only they can use it: Claude Desktop or Claude Code connected through FreeFlow's MCP endpoint, for example. It has no address or mailbox. Removing one ends its connection; the person can connect it again." testid="card-personal-agents">
+    <Card title="Personal agents" intro="A personal agent acts as one person, with that person's access, and only they can use it. Each person's assistant is one: it gets its own address and mailbox when its person names it, and it goes only with them. Claude Desktop or Claude Code connected through FreeFlow's MCP endpoint is another: it has no address, and removing it ends its connection; the person can connect it again." testid="card-personal-agents">
       {accounts.isError && <ErrorLine error={errorText(accounts.error)} />}
       {accounts.isSuccess && agents.length === 0 && <p className="text-sm text-muted" data-testid="personal-agents-empty">No personal agents yet.</p>}
       {agents.length > 0 && (
@@ -92,9 +95,20 @@ function PersonalAgents({ org, nameOf }: { org: WorkspaceDTO; nameOf: (userId: s
           {agents.map((a: AccountDTO) => (
             <li key={a.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-sm" data-testid={`personal-agent-${a.id}`}>
               <span className="font-medium">{a.displayName} 🤖</span>
-              <span className="text-xs text-muted">personal agent of {nameOf(a.sponsorId ?? null)}{a.agentRuntime === 'hosted' ? ' · hosted here' : ''}</span>
+              <span className="text-xs text-muted">
+                {a.agentRuntime === 'hosted' ? 'assistant of ' : 'personal agent of '}
+                {nameOf(a.sponsorId ?? null)}
+                {a.address ? ` · ${a.address}` : ''}
+              </span>
               <span className="flex-1" />
-              {confirming === a.id ? (
+              {a.agentRuntime === 'hosted' ? (
+                // A person's assistant is theirs to name (Docs Settings), and it comes and goes with them (agents.md §6).
+                a.sponsorId === me.data?.id ? (
+                  <a className="text-primary hover:underline" href="/admin/assistant" data-testid={`personal-agent-rename-${a.id}`}>
+                    Rename
+                  </a>
+                ) : null
+              ) : confirming === a.id ? (
                 <Confirm question={`Remove ${a.displayName}? Its connection stops working; ${nameOf(a.sponsorId ?? null)} can connect it again.`} busy={remove.isPending} onYes={() => remove.mutate(a.id)} onNo={() => setConfirming(null)} testid={`personal-agent-remove-confirm-${a.id}`} />
               ) : (
                 <Button kind="link" disabled={remove.isPending} onClick={() => setConfirming(a.id)} testid={`personal-agent-remove-${a.id}`}>

@@ -27,6 +27,7 @@ beforeEach(() => {
     account('Bob'),
     account('Omni', { sponsorId: 'u-ann', agentMode: 'shared', agentRuntime: 'hosted' }),
     account('Claude Desktop', { kind: 'personal_agent', address: null, hosted: false, sponsorId: 'u-bob', agentMode: 'personal' }),
+    account('Ada', { kind: 'personal_agent', address: 'ada@acme.test', hosted: true, sponsorId: 'u-ann', agentMode: 'personal', agentRuntime: 'hosted' }),
     account('Cursor', { kind: 'personal_agent', address: null, hosted: false, sponsorId: 'u-ann', agentMode: 'personal', state: 'removed' }),
   ];
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -34,7 +35,7 @@ beforeEach(() => {
     const method = init?.method ?? 'GET';
     calls.push({ method, path, body: init?.body && typeof init.body === 'string' ? JSON.parse(init.body) : undefined });
     const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { 'content-type': 'application/json' } });
-    if ((path.split('?')[0] ?? '').endsWith('/members')) return json({ members: [member('Ann', { role: 'owner' }), member('Bob'), member('Omni', { isAgent: true, sponsorId: 'u-ann', statusText: 'the team helper' })] });
+    if ((path.split('?')[0] ?? '').endsWith('/members')) return json({ members: [member('Ann', { role: 'owner' }), member('Bob'), member('Omni', { isAgent: true, sponsorId: 'u-ann', statusText: 'the team helper' }), member('Ada', { isAgent: true, sponsorId: 'u-ann', kind: 'personal_agent', agentRuntime: 'hosted' })] });
     if (path.endsWith('/accounts')) return json({ accounts });
     if (method === 'POST' && path.endsWith('/agents/hosted')) return json({ agent: { id: 'u-pip', accountId: 'a-pip', displayName: 'Pip', mode: 'shared', self: false }, definition: { name: 'Pip', instructions: 'Be brief.', updatedAt: '2026-11-11T00:00:00.000Z' } }, 201);
     if (path.endsWith('/agents/u-omni/definition')) return json({ definition: { name: 'Omni', instructions: method === 'PUT' ? 'Updated.' : 'Help the team.', updatedAt: null }, mayEdit: true });
@@ -58,6 +59,10 @@ describe('the Agents section', () => {
     await screen.findByTestId('agent-Omni');
     expect(screen.getByTestId('agent-Omni').textContent).toContain('sponsored by Ann');
     await screen.findByTestId('personal-agent-a-claude-desktop');
+    // A person's assistant is a member too, but it is listed once: as Ann's assistant, with its address and no Remove.
+    expect(screen.queryByTestId('agent-Ada')).toBeNull();
+    expect(screen.getByTestId('personal-agent-a-ada').textContent).toContain('assistant of Ann · ada@acme.test');
+    expect(screen.queryByTestId('personal-agent-remove-a-ada')).toBeNull();
     expect(screen.getByTestId('personal-agent-a-claude-desktop').textContent).toContain('Claude Desktop');
     expect(screen.getByTestId('personal-agent-a-claude-desktop').textContent).toContain('personal agent of Bob');
     expect(screen.queryByTestId('personal-agent-a-cursor')).toBeNull();
@@ -88,6 +93,8 @@ describe('the Agents section', () => {
     fireEvent.click(await screen.findByTestId('personal-agent-remove-confirm-a-claude-desktop-yes'));
     await waitFor(() => expect(calls.some((c) => c.method === 'DELETE' && c.path === '/v1/workspaces/o1/accounts/a-claude-desktop')).toBe(true));
     await waitFor(() => expect(screen.queryByTestId('personal-agent-a-claude-desktop')).toBeNull());
-    expect(await screen.findByTestId('personal-agents-empty')).toBeTruthy();
+    // Claude Desktop is gone; Ann's assistant stays (it goes only with her).
+    await waitFor(() => expect(screen.queryByTestId('personal-agent-a-claude-desktop')).toBeNull());
+    expect(screen.getByTestId('personal-agent-a-ada')).toBeTruthy();
   });
 });

@@ -59,6 +59,20 @@ async function uploadFile(workspaceId: string, file: File): Promise<FileDTO> {
 
 const ws = (id: string) => `/v1/workspaces/${encodeURIComponent(id)}`;
 
+import type { AssistantSettings, AssistantSettingsUpdate } from '@flow/shared/assistant';
+
+/** The person's own assistant (docs/specs/agents.md §1.1): its definition, who may mail it, and the model it runs on, from
+ * the platform's /v1 routes, so this app depends on no other app (decision_log 2026-11-11). */
+const mine = (id: string, part: 'definition' | 'senders' | 'model') => `/v1/workspaces/${encodeURIComponent(id)}/assistant/${part}`;
+export const assistantApi = {
+  definition: async (org: string) => (await request<{ definition: AgentDefinitionDTO }>('GET', mine(org, 'definition'))).definition,
+  saveDefinition: async (org: string, body: { name?: string; instructions?: string }) => (await request<{ definition: AgentDefinitionDTO }>('PUT', mine(org, 'definition'), body)).definition,
+  allowlist: async (org: string) => (await request<{ senders: string[] }>('GET', mine(org, 'senders'))).senders,
+  saveAllowlist: async (org: string, senders: string[]) => (await request<{ senders: string[] }>('PUT', mine(org, 'senders'), { senders })).senders,
+  settings: async (org: string) => (await request<{ settings: AssistantSettings }>('GET', mine(org, 'model'))).settings,
+  saveSettings: async (org: string, body: AssistantSettingsUpdate) => (await request<{ settings: AssistantSettings }>('PUT', mine(org, 'model'), body)).settings,
+};
+
 export const adminApi = {
   update: (id: string, patch: UpdateWorkspaceBody) => request<WorkspaceDTO>('PATCH', ws(id), patch),
   setIcon: (id: string, file: File) => uploadMultipart<WorkspaceDTO>(`${ws(id)}/avatar`, file),

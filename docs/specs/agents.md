@@ -218,7 +218,7 @@ that executes code is the sandboxed runtime above.
 **A hosted agent has a definition.** Today the assistant has one fixed prompt, one tool set and one conversation per
 account. A hosted agent instead carries: a name and avatar; instructions (its system prompt); the model and the key
 that pays for it; the tools it may use, a subset of what the registry offers its kind; what it subscribes to; and its
-memory. A person edits their own assistant's definition in their settings (the model-key settings move there); an
+memory. A person edits their own assistant's definition in Organization settings, under **Your assistant** (the Admin app's section every member has, with who may mail it and the model and key it runs on; operator ruling 2026-11-11: not in Docs); an
 organization's admins and the sponsor edit a hosted shared agent's in the Admin app's Agents section
 (`workspace-admin.md` §3.4), which is also where one is made. Kind and organization are not in the definition: they
 never change (§1).
@@ -459,6 +459,20 @@ its files.
 
 What people see: Scott names his assistant Ada, DMs her, mentions her in #sales where she answers him in the thread,
 and mails her from his own address; a colleague's mention or mail gets nothing from her.
+
+### Phase F: the agent runtime below the apps (operator ruling 2026-11-11)
+
+Identity, organizations, members and agents are the platform's low layer, with the apps on top (decision_log
+2026-11-11). The Assistant object still runs Docs' agent loop (`AgentService`) and stores the model keys with Docs'
+settings code, so the platform's agent runtime depends on an app.
+
+1. **A runtime package** (`packages/agent-runtime`): the model loop, the turn protocol, conversations, the definition
+   and the model settings, with no app's code; the Assistant object runs it.
+2. **Docs as a tool provider**: its editing tools (browser and headless) reach the runtime only through the tool
+   registry, as Mail's and Calendar's do.
+3. **Keys and settings** stored by the runtime, read and written only through `/v1/workspaces/:id/assistant/*`.
+
+Exit: `packages/agent-runtime` imports nothing from `packages/docs`; every e2e passes.
 
 ### Phase D: later, in no order
 
