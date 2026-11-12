@@ -24,7 +24,7 @@ export const CHAT_PAGES = ['chooser', 'invite', 'activity', 'profile'] as const;
 export type ChatPage = (typeof CHAT_PAGES)[number];
 
 /** The Admin app's sections (docs/specs/workspace-admin.md §3), each at `/admin/<section>`. */
-export const ADMIN_SECTIONS = ['general', 'members', 'domains', 'agents', 'assistant', 'connect', 'automations', 'events'] as const;
+export const ADMIN_SECTIONS = ['general', 'members', 'domains', 'agents', 'prompts', 'assistant', 'connect', 'automations', 'events'] as const;
 export type AdminSection = (typeof ADMIN_SECTIONS)[number];
 
 /** The Admin app, at a section or at its first one. */

@@ -98,3 +98,65 @@ export interface AssistantSettingsUpdate {
 export const AGENT_AVATAR_PRESETS = ['sky', 'mint', 'sun', 'rose', 'grape', 'ocean', 'slate', 'lime'] as const;
 export type AgentAvatarPreset = (typeof AGENT_AVATAR_PRESETS)[number];
 export const agentAvatarUrl = (preset: AgentAvatarPreset): string => `/agent-avatars/${preset}.svg`;
+
+// ---- Suggested prompts (docs/specs/agents.md §1.2) ----
+// The prompts the assistant's panel offers before the first message, by the page it is open on. An organization's owners
+// and admins change them in Admin → Prompts; a page they have not changed offers the defaults below.
+
+export const PROMPT_PAGES = ['home', 'admin', 'mail-inbox', 'mail-message', 'chat', 'calendar', 'docs-list', 'docs-file'] as const;
+export type PromptPage = (typeof PROMPT_PAGES)[number];
+
+export const PROMPT_PAGE_LABELS: Record<PromptPage, string> = {
+  home: 'Home',
+  admin: 'Admin',
+  'mail-inbox': 'Mail inbox',
+  'mail-message': 'Mail message',
+  chat: 'Chat',
+  calendar: 'Calendar',
+  'docs-list': 'Docs list',
+  'docs-file': 'Open doc',
+};
+
+/** At most this many prompts a page, each at most this long. */
+export const MAX_PROMPTS = 8;
+export const MAX_PROMPT_LENGTH = 200;
+
+/** A page's own prompts; a page not listed offers its defaults. */
+export type AssistantPrompts = Partial<Record<PromptPage, string[]>>;
+
+/**
+ * The defaults. An app may offer finer ones while a page is not changed (Docs has its own for a spreadsheet and a
+ * presentation, Calendar for an open event); these are what Admin shows and what "Reset" puts back.
+ */
+export const DEFAULT_PROMPTS: Record<PromptPage, string[]> = {
+  home: ['What needs my attention today?', 'Summarize my unread mail', 'What is on my calendar this week?'],
+  admin: ['Who are the members of this organization?', 'Which agents work here, and what are they for?', 'How do I set up mail for our domain?'],
+  'mail-inbox': ['What needs an answer from me today?', 'What did I get last week about invoices?', 'Draft an email to the team about Friday'],
+  'mail-message': ['Summarize this email', 'Draft a reply to this', 'Save the attachments to Docs'],
+  chat: ['Summarize this channel', 'What did I miss today?', 'Draft a reply to the last message'],
+  calendar: ['What does my week look like?', 'Find 30 minutes for a call on Thursday', 'Which invitations have I not answered?'],
+  'docs-list': ['Which spreadsheets did I edit most recently?', 'Create a spreadsheet to track monthly expenses', 'Create a 5-slide presentation about our quarterly goals'],
+  'docs-file': ['Summarize this file', 'Suggest improvements to this', 'Turn this into a short presentation'],
+};
+
+/** A saved set made clean: known pages only, trimmed, no empty or repeated prompts, within the limits. */
+export function cleanPrompts(input: unknown): AssistantPrompts {
+  const out: AssistantPrompts = {};
+  if (!input || typeof input !== 'object') return out;
+  for (const page of PROMPT_PAGES) {
+    const list = (input as Record<string, unknown>)[page];
+    if (!Array.isArray(list)) continue;
+    const seen = new Set<string>();
+    const clean: string[] = [];
+    for (const p of list) {
+      if (typeof p !== 'string') continue;
+      const t = p.trim().slice(0, MAX_PROMPT_LENGTH);
+      if (t && !seen.has(t)) {
+        seen.add(t);
+        clean.push(t);
+      }
+    }
+    out[page] = clean.slice(0, MAX_PROMPTS);
+  }
+  return out;
+}

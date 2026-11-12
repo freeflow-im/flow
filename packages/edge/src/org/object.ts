@@ -29,6 +29,10 @@ import { agentStampFor, logEntryFor, type AgentStamp } from './eventLog';
 import { config } from './config';
 import { isActiveAccount, recordShare, revokeShare, shareEvents, sharedRefsOf, sharedWith, type RecordShareInput, type RevokeShareInput, type SharedItem } from './services/shares';
 import { eq, and } from 'drizzle-orm';
+import { cleanPrompts, type AssistantPrompts } from '@flow/shared/assistant';
+
+/** Where the organization's suggested prompts are kept, in the object's own storage beside its database. */
+const ASSISTANT_PROMPTS_KEY = 'assistant-prompts';
 import { resolveInOrg, type OrgReferenceAnswer } from './services/references';
 import { hostedMailEnabled, type MailProviderEnv } from '../mailprovider/index';
 
@@ -828,6 +832,18 @@ export class Org extends DurableObject<OrgEnv> {
   }
 
   /** A member's profile changed in the directory: refresh this organization's copy and tell its sockets. */
+  /** The organization's suggested prompts for the assistant's panel (agents.md §1.2): only the pages it changed. */
+  async assistantPrompts(): Promise<AssistantPrompts> {
+    return cleanPrompts(await this.ctx.storage.get(ASSISTANT_PROMPTS_KEY));
+  }
+
+  /** Sets them, cleaned; the routes check that an owner or admin asked. */
+  async setAssistantPrompts(prompts: AssistantPrompts): Promise<AssistantPrompts> {
+    const clean = cleanPrompts(prompts);
+    await this.ctx.storage.put(ASSISTANT_PROMPTS_KEY, clean);
+    return clean;
+  }
+
   async syncUser(user: UserDTO): Promise<void> {
     this.ensureUser(user);
     const workspace = this.db.select({ id: schema.workspaces.id }).from(schema.workspaces).get();

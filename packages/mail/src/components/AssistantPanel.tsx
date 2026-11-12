@@ -4,6 +4,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Check, ExternalLink, Loader2, Pencil, Sparkles } from 'lucide-react';
 import { AssistantDockControls, useAssistantDock, useIdleMinimize } from '@flow/suite-bar/assistant-dock';
+import { useSuggestedPrompts } from '@flow/suite-bar';
 import { draftOf, refOfLink, savedFileOf, type MessageRef } from '../lib/assistant';
 import { ChatMarkdown, picturesOf, toolLabel, type ChatItem } from '../lib/docsAgent';
 import { cn } from '../lib/utils';
@@ -12,11 +13,11 @@ import type { useMailAssistant } from '../hooks/assistant';
 
 type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
 
-const MESSAGE_SUGGESTIONS = ['Summarize this email', 'Draft a reply to this', 'Save the attachments to Docs'];
-const LIST_SUGGESTIONS = ['What needs an answer from me today?', 'What did I get last week about invoices?', 'Draft an email to the team about Friday'];
 
 export interface AssistantPanelProps {
   chat: ReturnType<typeof useMailAssistant>;
+  /** The organization whose suggested prompts it offers (Admin → Prompts). */
+  organizationId: string | null;
   /** Whether a message is open (the suggestions are about it). */
   onMessage: boolean;
   /** Over the mail, the whole width of a narrow screen, rather than beside it. */
@@ -27,7 +28,8 @@ export interface AssistantPanelProps {
   onOpenDraft(ref: MessageRef): void;
 }
 
-export function AssistantPanel({ chat, onMessage, overlay, width, onClose, onShow, onOpenDraft }: AssistantPanelProps) {
+export function AssistantPanel({ chat, organizationId, onMessage, overlay, width, onClose, onShow, onOpenDraft }: AssistantPanelProps) {
+  const suggestions = useSuggestedPrompts(organizationId, onMessage ? 'mail-message' : 'mail-inbox');
   const [draft, setDraft] = useState('');
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -90,7 +92,7 @@ export function AssistantPanel({ chat, onMessage, overlay, width, onClose, onSho
         {chat.items.length === 0 && (
           <div className="flex flex-col gap-2 text-muted">
             <p className="mb-1">Ask me to find, summarize or answer your email. I write drafts for you to check and send; I never send email myself.</p>
-            {(onMessage ? MESSAGE_SUGGESTIONS : LIST_SUGGESTIONS).map((s) => (
+            {suggestions.map((s) => (
               <button key={s} type="button" className="rounded-lg border border-border px-3 py-2 text-left text-ink hover:bg-hover" onClick={() => submit(s)}>
                 {s}
               </button>

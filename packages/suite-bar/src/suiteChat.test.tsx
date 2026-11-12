@@ -14,6 +14,7 @@ beforeEach(() => {
     const json = (v: unknown) => new Response(JSON.stringify(v), { status: 200, headers: { 'content-type': 'application/json' } });
     if (path.startsWith('/api/agent/agents')) return json({ agents: [{ id: 'ada', accountId: 'a', displayName: 'Ada', avatarUrl: '/agent-avatars/mint.svg', mode: 'personal', self: true }] });
     if (path.startsWith('/api/agent?')) return json({ items: [] });
+    if (path.endsWith('/assistant-prompts')) return json({ prompts: { home: ['Plan my day'] } });
     if (path.startsWith('/api/agent/turn')) {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       turns.push({ ...body, tz: (init?.headers as Record<string, string>)['X-Timezone'] });
@@ -36,9 +37,11 @@ describe('the suite assistant chat', () => {
   });
 
   it('is the person’s assistant: a turn’s text, its server tool, and a browser tool answered so the turn goes on', async () => {
-    render(<SuiteAssistant organizationId="o1" />);
+    render(<SuiteAssistant organizationId="o1" page="home" />);
     await waitFor(() => expect(screen.getByText('Ada')).toBeTruthy());
     fireEvent.click(screen.getByRole('button', { name: /Open Assistant/ }));
+    // The organization's own suggested prompt for Home (Admin → Prompts).
+    expect(await screen.findByRole('button', { name: 'Plan my day' })).toBeTruthy();
     fireEvent.change(await screen.findByTestId('suite-assistant-input'), { target: { value: 'what is today?' } });
     await act(async () => { fireEvent.click(screen.getByTestId('suite-assistant-send')); });
     await screen.findByText('two');

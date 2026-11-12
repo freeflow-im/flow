@@ -180,7 +180,7 @@ export function App() {
             </div>
           </main>
           {/* The person's assistant on Home's own page (agents.md §1.1); an app open here shows its own. A guest has none. */}
-          {frames.view === 'home' && !setup.guest && <SuiteAssistant organizationId={orgId} />}
+          {frames.view === 'home' && !setup.guest && <SuiteAssistant organizationId={orgId} page="home" />}
         </div>
       )}
     </div>

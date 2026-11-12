@@ -1,13 +1,15 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { AssistantDock, AssistantDockControls, SparkIcon, useIdleMinimize } from '@flow/suite-bar/assistant-dock';
+import { useSuggestedPrompts } from '@flow/suite-bar';
 import { HOME_CHAT, JOB_ACTIVE_STATUSES, type AgentJob, type ChatItem } from '../../../shared/agent/protocol.ts';
 import { MOD } from '../commands.ts';
 import { FileChip, fileOfResult } from '../components/FileChip.tsx';
 import { ResizeHandle, usePanelWidth } from '../components/ResizeHandle.tsx';
 import { ASSISTANT_PANEL } from '../panelSize.ts';
 import { useAuth } from '../auth.tsx';
+import { useOrganization } from '../organization.ts';
 import { useAgent } from './AgentProvider.tsx';
 import { ChatMarkdown, picturesOf } from './ChatMarkdown.tsx';
 import { targetOf } from './clientTools.ts';
@@ -19,9 +21,10 @@ type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
 
 export { SparkIcon };
 
+// Docs' own defaults for an open spreadsheet or presentation, offered while the organization has not changed "Open doc"
+// in Admin → Prompts; the list and any other file offer the suite's (DEFAULT_PROMPTS).
 const SHEET_SUGGESTIONS = ['Summarize what’s in this spreadsheet', 'Add a totals row under the data', 'Make the header row bold and freeze it', 'Turn this data into a short presentation'];
 const DECK_SUGGESTIONS = ['Summarize this presentation', 'Add a closing slide with next steps', 'Tighten the bullets on every slide'];
-const HOME_SUGGESTIONS = ['Which spreadsheets did I edit most recently?', 'Create a spreadsheet to track monthly expenses', 'Create a 5-slide presentation about our quarterly goals'];
 
 export function AgentButton() {
   const { open, setOpen } = useAgent();
@@ -62,6 +65,10 @@ export function AgentPanel() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const onSheet = !!agent.sheet;
   const onDeck = !!agent.deck;
+  // A file's page (a doc, sheet, deck, Markdown or stored file) offers "Open doc"'s prompts; any other page, the list's.
+  const onFile = /^\/(doc|s|d|md|f)\//.test(useLocation().pathname);
+  const organization = useOrganization();
+  const suggestions = useSuggestedPrompts(suite ? (organization.active?.id ?? null) : null, onFile || onSheet || onDeck ? 'docs-file' : 'docs-list', onSheet ? SHEET_SUGGESTIONS : onDeck ? DECK_SUGGESTIONS : undefined);
   const here = onSheet ? 'this spreadsheet' : onDeck ? 'this presentation' : 'your spreadsheets and presentations';
 
   useEffect(() => inputRef.current?.focus(), []);
@@ -156,7 +163,7 @@ export function AgentPanel() {
         {agent.items.length === 0 && (
           <div className="agent-empty">
             <p>Ask me to read, edit or format {here}, or to find and open another one.</p>
-            {(onSheet ? SHEET_SUGGESTIONS : onDeck ? DECK_SUGGESTIONS : HOME_SUGGESTIONS).map((s) => (
+            {suggestions.map((s) => (
               <button key={s} className="agent-suggestion" onClick={() => submit(s)}>
                 {s}
               </button>

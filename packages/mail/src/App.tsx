@@ -935,6 +935,7 @@ export function App() {
           <Suspense fallback={null}>
             <AssistantPanel
               chat={chat}
+              organizationId={org}
               onMessage={openId !== null}
               overlay={assistantOverlay}
               width={assistantPane.width}

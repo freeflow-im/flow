@@ -59,7 +59,7 @@ async function uploadFile(workspaceId: string, file: File): Promise<FileDTO> {
 
 const ws = (id: string) => `/v1/workspaces/${encodeURIComponent(id)}`;
 
-import type { AgentAvatarPreset, AssistantSettings, AssistantSettingsUpdate } from '@flow/shared/assistant';
+import type { AgentAvatarPreset, AssistantPrompts, AssistantSettings, AssistantSettingsUpdate } from '@flow/shared/assistant';
 
 /** The person's own assistant (docs/specs/agents.md §1.1): its definition, who may mail it, and the model it runs on, from
  * the platform's /v1 routes, so this app depends on no other app (decision_log 2026-11-11). */
@@ -78,6 +78,12 @@ export const assistantApi = {
 
 /** An agent the person connected over MCP (Claude Desktop, Claude Code, …), as GET /v1/me/agent-connections lists it. */
 export interface AgentConnection { id: string; name: string; mode?: 'personal' | 'shared'; agentName?: string; origin: string; endpoint: string; connectedAt: string; lastActiveAt?: string; organization?: string }
+/** The organization's suggested prompts for the assistant's panel, by page (agents.md §1.2): only the pages it changed. */
+export const promptsApi = {
+  get: async (org: string) => (await request<{ prompts: AssistantPrompts }>('GET', `${ws(org)}/assistant-prompts`)).prompts,
+  save: async (org: string, prompts: AssistantPrompts) => (await request<{ prompts: AssistantPrompts }>('PUT', `${ws(org)}/assistant-prompts`, { prompts })).prompts,
+};
+
 export const connectionsApi = {
   list: () => request<{ mcpUrl: string; agents: AgentConnection[] }>('GET', '/v1/me/agent-connections'),
   disconnect: (id: string) => request<{ ok: true }>('DELETE', `/v1/me/agent-connections/${encodeURIComponent(id)}`),

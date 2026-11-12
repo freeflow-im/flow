@@ -381,7 +381,7 @@ export function App() {
           <AssistantDock state={assistantDock} label={myAssistant?.displayName} avatarUrl={myAssistant?.avatarUrl ?? null}>
             {assistantDocked && !assistantOverlay && <ResizeHandle label="Resize the assistant" {...assistantPane.handleProps} />}
             <Suspense fallback={null}>
-              <AssistantPanel chat={chat} onEvent={!!open} overlay={assistantOverlay} width={assistantPane.width} onClose={() => setAssistantOpen(false)} onOpenEvent={(id, start) => void openById(id, start)} />
+              <AssistantPanel chat={chat} organizationId={orgId} onEvent={!!open} overlay={assistantOverlay} width={assistantPane.width} onClose={() => setAssistantOpen(false)} onOpenEvent={(id, start) => void openById(id, start)} />
             </Suspense>
           </AssistantDock>
         </div>
