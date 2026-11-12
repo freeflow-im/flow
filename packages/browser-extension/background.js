@@ -1,4 +1,4 @@
-// FreeFlow Browser (prototype). Lets the FreeFlow assistant use web pages in this browser: the assistant's turn pauses
+// FreeFlow Browser. Lets the FreeFlow assistant use web pages in this browser: the assistant's turn pauses
 // on a browser_* tool, the FreeFlow page that started the turn passes the call here (chrome.runtime.sendMessage, allowed
 // by `externally_connectable` for FreeFlow's origins only), and this worker runs it and answers with text.
 //
@@ -8,8 +8,9 @@
 // the numbers are kept on the elements (data-flow-ref) so a click or a typed value names what a read showed.
 //
 // Ideas from anomalyco/browse (MIT): agent tabs in a collapsed group, the take-back toolbar button, handing a tab to the
-// person. The actions are this file's own (chrome.scripting), so nothing runs agent code. Only browser_screenshot attaches
-// the debugger, for the one capture, so a tab in the background can be drawn and captured.
+// person. The actions are this file's own (chrome.scripting), so nothing runs agent code. In the dev build only,
+// browser_screenshot attaches the debugger for the one capture, so a tab in the background can be drawn; the customer
+// build (package.mjs) has no debugger permission and shows the tab for a moment instead.
 
 const VERSION = chrome.runtime.getManifest().version;
 const GROUP_TITLE = 'FreeFlow agent';
@@ -21,8 +22,13 @@ const TOOLS = ['browser_open', 'browser_tabs', 'browser_read', 'browser_click', 
 const SHOT_MAX_WIDTH = 1280;
 const SHOT_TIMEOUT_MS = 8000;
 
-/** FreeFlow's own pages: production, and a local dev server on any port. */
-const allowedOrigin = (origin) => origin === 'https://app.freeflow.im' || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin ?? '');
+/**
+ * FreeFlow's own pages: production always, and a local dev server on any port only when the manifest lists it (the dev
+ * build does; the customer build made by package.mjs does not). Chrome already enforces `externally_connectable`.
+ */
+const LOCAL_ALLOWED = (chrome.runtime.getManifest().externally_connectable?.matches ?? []).some((m) => m.startsWith('http://localhost'));
+const allowedOrigin = (origin) =>
+  origin === 'https://app.freeflow.im' || (LOCAL_ALLOWED && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin ?? ''));
 
 class ToolError extends Error {}
 
@@ -340,6 +346,7 @@ async function screenshot(tab) {
   let raw;
   let how = 'debugger';
   try {
+    if (!chrome.debugger) throw new Error('no debugger permission');
     raw = await captureWithDebugger(tab.id);
   } catch {
     how = 'shown';

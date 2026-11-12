@@ -18,6 +18,7 @@ If you only want to run Flow locally, you want
 | `flow-agent-bridge` (npm) | `pnpm --filter flow-agent-bridge build` | bump `version`, merge to `main` | **Yes** — GitHub Actions publishes |
 | Flow marketing site (`flowlandingpage/`) | `pnpm build` (in `flowlandingpage/`) | merge to `main` | **Yes** — GitHub Actions deploys to Cloudflare Pages |
 | Home page (`freeflowhome/`) | `pnpm build` (in `freeflowhome/`) | merge to `main` | **Yes** — GitHub Actions deploys to Cloudflare Pages |
+| FreeFlow Browser (Chrome extension) | `node packages/browser-extension/package.mjs` | bump `version`, upload the zip in the Chrome Web Store dashboard (`packages/browser-extension/README.md`) | No — uploaded by hand; the store reviews each version |
 | Desktop app (Electron, `apps/desktop`) | `pnpm --filter @flow/desktop build` then `start` | not yet — M5 of `docs/specs/desktop-electron.md` | No — runs from source only today |
 
 The desktop app is in the workspace but **not** in the Railway build

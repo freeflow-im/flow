@@ -1,15 +1,21 @@
-// The page's side of the web tools (prototype): passes the assistant's browser_* calls to the FreeFlow browser extension
+// The page's side of the web tools: passes the assistant's browser_* calls to the FreeFlow browser extension
 // (packages/browser-extension) in this same browser, and says in the turn's context whether it is there, so the assistant
 // is offered the tools only when they can run. The extension answers only FreeFlow's own pages (its
-// `externally_connectable`); its id is fixed by the `key` in its manifest. Mail's and Calendar's panels use it too
+// `externally_connectable`). It has two ids: the Chrome Web Store build's, and the dev build's (fixed by the `key` in its
+// manifest, loaded unpacked); the page asks each and keeps the one that answers. Mail's and Calendar's panels use it too
 // (their lib/docsAgent.ts), so it imports nothing of the Docs editor.
 import { BROWSER_TOOLS, type AgentImage, type ClientToolCall } from '../../../shared/agent/protocol.ts';
 
 /** A web tool's failure, said to the assistant as it is (a closed tab, a missing element, no extension). */
 export class WebToolError extends Error {}
 
-/** The extension's id, from its manifest's `key` (unpacked builds keep it). */
-export const BROWSER_EXTENSION_ID = 'gnmcgiakoiplophhcoekeeaghfiipglo';
+/** The Chrome Web Store build's id, given by the store when the item was first uploaded ('' until then). */
+export const BROWSER_EXTENSION_STORE_ID = '';
+/** The dev build's id, from its manifest's `key` (unpacked builds keep it). */
+export const BROWSER_EXTENSION_DEV_ID = 'gnmcgiakoiplophhcoekeeaghfiipglo';
+const EXTENSION_IDS = [BROWSER_EXTENSION_STORE_ID, BROWSER_EXTENSION_DEV_ID].filter(Boolean);
+/** The id that last answered a ping; calls go there. */
+let extensionId = EXTENSION_IDS[0];
 
 interface ExtensionAnswer {
   ok: boolean;
@@ -35,13 +41,13 @@ interface ChromeRuntime {
 /** `chrome.runtime` exists in a page only when an installed extension lists the page's origin as one that may message it. */
 const runtime = (): ChromeRuntime | null => (globalThis as { chrome?: { runtime?: ChromeRuntime } }).chrome?.runtime ?? null;
 
-function send(message: unknown, timeoutMs: number): Promise<ExtensionAnswer | null> {
+function send(message: unknown, timeoutMs: number, id = extensionId): Promise<ExtensionAnswer | null> {
   const rt = runtime();
   if (!rt?.sendMessage) return Promise.resolve(null);
   return new Promise((resolve) => {
     const timer = setTimeout(() => resolve(null), timeoutMs);
     try {
-      rt.sendMessage(BROWSER_EXTENSION_ID, message, (answer) => {
+      rt.sendMessage(id, message, (answer) => {
         clearTimeout(timer);
         // Reading lastError tells Chrome the failure (no such extension) was handled.
         resolve(rt.lastError ? null : (answer ?? null));
@@ -53,12 +59,24 @@ function send(message: unknown, timeoutMs: number): Promise<ExtensionAnswer | nu
   });
 }
 
+/** Asks each id in turn (the store build first) and keeps the first that answers. */
+async function ping(): Promise<boolean> {
+  for (const id of EXTENSION_IDS) {
+    const answer = await send({ type: 'ping' }, 1500, id);
+    if (answer?.ok) {
+      extensionId = id;
+      return true;
+    }
+  }
+  return false;
+}
+
 let present = false;
 let checking: Promise<boolean> | null = null;
 
 /** Whether the extension answers; asked once, then again only when asked to (`recheck`). */
 export function checkBrowserExtension(recheck = false): Promise<boolean> {
-  if (!checking || recheck) checking = send({ type: 'ping' }, 1500).then((a) => (present = !!a?.ok));
+  if (!checking || recheck) checking = ping().then((ok) => (present = ok));
   return checking;
 }
 

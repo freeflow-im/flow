@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { BROWSER_EXTENSION_ID, checkBrowserExtension, browserExtensionPresent, runWebTool, WebToolError } from './browserBridge.ts';
+import { BROWSER_EXTENSION_DEV_ID, checkBrowserExtension, browserExtensionPresent, runWebTool, WebToolError } from './browserBridge.ts';
 
 type Answer = Record<string, unknown> | undefined;
 
@@ -26,7 +26,7 @@ describe('the browser bridge (prototype)', () => {
     const sent = fakeExtension(() => ({ ok: true, version: '0.0.3' }));
     expect(await checkBrowserExtension(true)).toBe(true);
     expect(browserExtensionPresent()).toBe(true);
-    expect(sent[0]).toEqual({ id: BROWSER_EXTENSION_ID, message: { type: 'ping' } });
+    expect(sent[0]).toEqual({ id: BROWSER_EXTENSION_DEV_ID, message: { type: 'ping' } });
   });
 
   it('finds nothing where no extension lets the page message it', async () => {
