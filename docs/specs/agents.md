@@ -460,6 +460,20 @@ its files.
 What people see: Scott names his assistant Ada, DMs her, mentions her in #sales where she answers him in the thread,
 and mails her from his own address; a colleague's mention or mail gets nothing from her.
 
+### Phase F: the agent runtime below the apps (operator ruling 2026-11-11)
+
+Identity, organizations, members and agents are the platform's low layer, with the apps on top (decision_log
+2026-11-11). The Assistant object still runs Docs' agent loop (`AgentService`) and stores the model keys with Docs'
+settings code, so the platform's agent runtime depends on an app.
+
+1. **A runtime package** (`packages/agent-runtime`): the model loop, the turn protocol, conversations, the definition
+   and the model settings, with no app's code; the Assistant object runs it.
+2. **Docs as a tool provider**: its editing tools (browser and headless) reach the runtime only through the tool
+   registry, as Mail's and Calendar's do.
+3. **Keys and settings** stored by the runtime, read and written only through `/v1/workspaces/:id/assistant/*`.
+
+Exit: `packages/agent-runtime` imports nothing from `packages/docs`; every e2e passes.
+
 ### Phase D: later, in no order
 
 Group agents with their "who may use it" list and "Add an assistant" in the Share dialog; browser tools for external

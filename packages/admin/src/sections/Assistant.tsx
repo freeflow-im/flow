@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { WorkspaceDTO } from '@flow/shared';
-import { ANTHROPIC_MODELS, OPENAI_MODELS, OPENROUTER_MODELS, type AssistantProvider, type AssistantSettings, type AssistantSettingsUpdate } from '@flow/docs/shared/agent/protocol.ts';
+import { ANTHROPIC_MODELS, OPENAI_MODELS, OPENROUTER_MODELS, type AssistantProvider, type AssistantSettings, type AssistantSettingsUpdate } from '@flow/shared/assistant';
 import { adminApi, assistantApi } from '../api';
 import { suite } from '../suite';
 import { Button, Card, ErrorLine, Row } from '../components/ui';

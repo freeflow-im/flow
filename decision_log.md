@@ -1,5 +1,17 @@
 # Decision log
 
+## 2026-11-11 — Identity, organizations, members and agents sit below the apps; Admin depends on no app (operator ruling)
+
+- **Ruling (Scott):** users and agents, organizations and members are the platform's low layer; the apps (Chat, Mail,
+  Calendar, Docs) sit on top. The Admin app, the platform's own screen, depends only on `@flow/shared` and the `/v1`
+  routes, never on an app's package or routes.
+- **Now:** the assistant's model catalogue and settings types move to `@flow/shared/assistant` (Docs re-exports them);
+  "Your assistant" reads `GET/PUT /v1/workspaces/:id/assistant/{definition,senders,model}`.
+- **Next (agents.md phase F):** the agent loop itself still runs on Docs' `AgentService` inside the Assistant object,
+  and the model keys are stored by Docs' settings code. It moves to a platform package, with Docs only supplying tools
+  through the registry.
+- **Where:** `packages/shared/src/assistant.ts`, `packages/edge/src/routes/assistant.ts`, `packages/admin/src/api.ts`.
+
 ## 2026-11-11 — The assistant's settings live in Organization settings, not Docs (operator ruling)
 
 - **Ruling (Scott):** a person's assistant is set up in the Admin app, in a **Your assistant** section every member has

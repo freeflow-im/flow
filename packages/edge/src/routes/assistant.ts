@@ -19,12 +19,12 @@ type C = Context<{ Bindings: AssistantRouteEnv }>;
 export const assistantRoutes = new Hono<{ Bindings: AssistantRouteEnv }>();
 
 /** The organization a request is for: named, else a file chat's file's, else the caller's first; null in none. */
-async function organizationOf(c: C, userId: string): Promise<string | null> {
-  const named = c.req.query('workspace') || c.req.query('org');
+async function organizationOf(c: C, req: Request, userId: string): Promise<string | null> {
+  const named = (new URL(req.url).searchParams.get('workspace') ?? undefined) || (new URL(req.url).searchParams.get('org') ?? undefined);
   if (named) return named;
-  let scope = c.req.query('scope');
-  if (c.req.method === 'POST') {
-    const body = (await c.req.raw.clone().json().catch(() => null)) as { workspace?: unknown; scope?: unknown; context?: unknown } | null;
+  let scope = (new URL(req.url).searchParams.get('scope') ?? undefined);
+  if (req.method === 'POST') {
+    const body = (await req.clone().json().catch(() => null)) as { workspace?: unknown; scope?: unknown; context?: unknown } | null;
     if (typeof body?.workspace === 'string' && body.workspace) return body.workspace;
     if (typeof body?.scope === 'string') scope = body.scope;
     else if (body?.context && typeof body.context === 'object') scope = chatScope(body.context as never);
@@ -37,23 +37,23 @@ async function organizationOf(c: C, userId: string): Promise<string | null> {
 }
 
 /** The agent a request names (`?agent=`, or a turn's `agent`), or null for the person's own assistant. */
-async function agentOf(c: C): Promise<string | null> {
-  const q = c.req.query('agent');
+async function agentOf(req: Request): Promise<string | null> {
+  const q = (new URL(req.url).searchParams.get('agent') ?? undefined);
   if (q) return q;
-  if (c.req.method !== 'POST') return null;
-  const body = (await c.req.raw.clone().json().catch(() => null)) as { agent?: unknown; scope?: unknown; context?: unknown } | null;
+  if (req.method !== 'POST') return null;
+  const body = (await req.clone().json().catch(() => null)) as { agent?: unknown; scope?: unknown; context?: unknown } | null;
   return typeof body?.agent === 'string' && body.agent ? body.agent : null;
 }
 
 /** The files a request is about, to check a shared agent may see them (agents.md §6): the chat's, and the open page's. */
-async function filesOf(c: C): Promise<string[]> {
+async function filesOf(req: Request): Promise<string[]> {
   const ids = new Set<string>();
-  if (c.req.method === 'GET') {
-    const scope = c.req.query('scope');
+  if (req.method === 'GET') {
+    const scope = (new URL(req.url).searchParams.get('scope') ?? undefined);
     if (scope && isFileId(scope)) ids.add(scope);
     return [...ids];
   }
-  const body = (await c.req.raw.clone().json().catch(() => null)) as { scope?: unknown; context?: unknown } | null;
+  const body = (await req.clone().json().catch(() => null)) as { scope?: unknown; context?: unknown } | null;
   if (typeof body?.scope === 'string' && isFileId(body.scope)) ids.add(body.scope);
   if (body?.context && typeof body.context === 'object') {
     const page = chatScope(body.context as never);
@@ -62,12 +62,12 @@ async function filesOf(c: C): Promise<string[]> {
   return [...ids];
 }
 
-async function forward(c: C): Promise<Response> {
+async function forward(c: C, req: Request = c.req.raw): Promise<Response> {
   try {
     if (!tokenOf(c)) return c.json({ error: 'Not signed in' }, 401);
     const signedIn = await resolveCaller(c, null);
     if (!signedIn.user) return c.json({ error: 'Not signed in' }, 401);
-    const organizationId = await organizationOf(c, signedIn.user.id);
+    const organizationId = await organizationOf(c, req, signedIn.user.id);
     const who = organizationId ? await resolveCaller(c, organizationId) : signedIn;
     if (!who.user) return c.json({ error: 'Not signed in' }, 401);
     if (!who.account) return c.json({ error: organizationId ? 'You are not a member of this organization.' : 'Join an organization to use the assistant.', code: 'no_account' }, 403);
@@ -75,7 +75,7 @@ async function forward(c: C): Promise<Response> {
     const guest = guestRefusal(who.account, 'the assistant');
     if (guest) return c.json({ error: guest.message, code: guest.code }, 403);
     const org = c.env.ORG.get(c.env.ORG.idFromName(who.account.organizationId));
-    const [agents, wanted] = await Promise.all([directory(c, 'usableAgents', who.user.id, who.account.organizationId), agentOf(c)]);
+    const [agents, wanted] = await Promise.all([directory(c, 'usableAgents', who.user.id, who.account.organizationId), agentOf(req)]);
     const self = agents.find((a) => a.self);
     const chosen = wanted && wanted !== self?.id ? agents.find((a) => a.id === wanted) : null;
     if (wanted && wanted !== self?.id && !chosen) return c.json({ error: 'That agent is not one you can use here.', code: 'no_agent' }, 404);
@@ -83,18 +83,18 @@ async function forward(c: C): Promise<Response> {
       // A hosted shared agent (agents.md §6): the turn runs as the agent, in its own runtime, asked by the person; the
       // conversation is the person's with it. Its definition and settings are the Admin app's (routes/agents.ts), not any
       // asker's. On a file the agent has no grant on, the page is not its to see: the chat's file and the page's both.
-      const path = new URL(c.req.url).pathname;
+      const path = new URL(req.url).pathname;
       if (path === '/api/agent/definition' || path === '/api/agent/mail-allowlist' || path === '/api/settings/assistant') return c.json({ error: "A shared agent's definition is set in Organization settings, by its sponsor or an admin.", code: 'not_yours' }, 403);
       const identity = await directory(c, 'agentIdentity', chosen.id, who.account.organizationId);
       if (!identity) return c.json({ error: 'That agent is not one you can use here.', code: 'no_agent' }, 404);
       const agentDocs = { userId: identity.user.id, email: identity.user.email, token: '', ip: who.ip, accountId: identity.account.id, channelIds: await org.channelIdsOf(identity.user.id) };
-      for (const file of await filesOf(c)) {
+      for (const file of await filesOf(req)) {
         const seen = await c.env.DOCS.get(c.env.DOCS.idFromName(who.account.organizationId)).handle(new Request(`${c.env.WEB_URL_BASE.replace(/\/+$/, '')}/api/places/${encodeURIComponent(file)}`), agentDocs, who.account.organizationId);
         const place = seen.ok ? ((await seen.json()) as { role?: string }) : null;
         if (!place?.role) return c.json({ error: `${chosen.displayName} can't see this page. Share it with ${chosen.displayName} first, or ask your own assistant.`, code: 'agent_cannot_see', agent: chosen.displayName }, 403);
       }
       const asAgent = { user: identity.user, token: who.token, authKind: 'agent' as const, ip: who.ip, organizationId: who.account.organizationId, account: identity.account, invokedBy: who.account.id };
-      return await c.env.ASSISTANT.get(c.env.ASSISTANT.idFromName(identity.account.id)).handle(c.req.raw, asAgent, agentDocs, chosen.displayName, { conversationUser: who.user.id });
+      return await c.env.ASSISTANT.get(c.env.ASSISTANT.idFromName(identity.account.id)).handle(req, asAgent, agentDocs, chosen.displayName, { conversationUser: who.user.id });
     }
     // The person's assistant (agents.md §6): their hosted personal agent, whose runtime is their account's object. Its
     // turns are the person's, marked `via` the agent, so the events it causes say "Ann (via assistant)".
@@ -102,11 +102,11 @@ async function forward(c: C): Promise<Response> {
     const docs = { userId: who.user.id, email: who.user.email, token: who.token, ip: who.ip, accountId: who.account.id, channelIds };
     // Naming the assistant (agents.md §1.1) names it everywhere: its member row and account too, and the first name gives
     // it its address, mailbox and calendar.
-    const naming = c.req.method === 'PUT' && new URL(c.req.url).pathname === '/api/agent/definition' && self
-      ? ((await c.req.raw.clone().json().catch(() => null)) as { name?: unknown } | null)?.name : undefined;
-    const res = await c.env.ASSISTANT.get(c.env.ASSISTANT.idFromName(who.account.id)).handle(c.req.raw, { ...who, ...(self ? { via: self.id } : {}) }, docs, self?.displayName);
+    const naming = req.method === 'PUT' && new URL(req.url).pathname === '/api/agent/definition' && self
+      ? ((await req.clone().json().catch(() => null)) as { name?: unknown } | null)?.name : undefined;
+    const res = await c.env.ASSISTANT.get(c.env.ASSISTANT.idFromName(who.account.id)).handle(req, { ...who, ...(self ? { via: self.id } : {}) }, docs, self?.displayName);
     // A changed allowlist (agents.md §1.1): the assistant's mailbox starts or stops being checked.
-    if (res.ok && self && c.req.method === 'PUT' && new URL(c.req.url).pathname === '/api/agent/mail-allowlist') {
+    if (res.ok && self && req.method === 'PUT' && new URL(req.url).pathname === '/api/agent/mail-allowlist') {
       await c.env.MAIL.get(c.env.MAIL.idFromName(self.accountId)).assistantPolicyChanged().catch((err: Error) => console.error(`[assistant] allowlist: ${err.message}`));
     }
     if (res.ok && self && typeof naming === 'string' && naming.trim() && naming.trim() !== self.displayName) {
@@ -120,7 +120,26 @@ async function forward(c: C): Promise<Response> {
   }
 }
 
-for (const path of ['/api/agent', '/api/agent/turn', '/api/agent/reset', '/api/agent/permission', '/api/agent/definition', '/api/agent/mail-allowlist', '/api/settings/assistant']) assistantRoutes.all(path, forward);
+for (const path of ['/api/agent', '/api/agent/turn', '/api/agent/reset', '/api/agent/permission', '/api/agent/definition', '/api/agent/mail-allowlist', '/api/settings/assistant']) assistantRoutes.all(path, (c) => forward(c));
+
+/**
+ * The person's own assistant as the platform serves it (agents.md §1.1, decision_log 2026-11-11): its definition, who may
+ * mail it, and the model it runs on, for the organization in the path. The Admin app's "Your assistant" reads these, so it
+ * depends on no app: they go to the same Assistant object as Docs' /api paths above, and answer in /v1's error shape.
+ */
+const ASSISTANT_PARTS: Record<string, string> = { definition: '/api/agent/definition', senders: '/api/agent/mail-allowlist', model: '/api/settings/assistant' };
+for (const [part, inner] of Object.entries(ASSISTANT_PARTS)) {
+  for (const method of ['GET', 'PUT'] as const) {
+    assistantRoutes.on(method, `/v1/workspaces/:id/assistant/${part}`, async (c) => {
+      const url = new URL(c.req.url);
+      const target = `${url.origin}${inner}?workspace=${encodeURIComponent(c.req.param('id'))}`;
+      const res = await forward(c, new Request(target, { method, headers: c.req.raw.headers, ...(method === 'PUT' ? { body: await c.req.raw.text() } : {}) }));
+      if (res.ok) return res;
+      const err = (await res.json().catch(() => null)) as { error?: string; code?: string } | null;
+      return c.json({ error: { code: err?.code ?? 'error', message: err?.error ?? `${res.status}` } }, res.status as 400);
+    });
+  }
+}
 
 /** The agents the person may talk to from the panel in the organization (agents.md §6): their assistant, hosted shared agents. */
 assistantRoutes.get('/api/agent/agents', async (c) => {
@@ -128,7 +147,7 @@ assistantRoutes.get('/api/agent/agents', async (c) => {
     if (!tokenOf(c)) return c.json({ error: 'Not signed in' }, 401);
     const signedIn = await resolveCaller(c, null);
     if (!signedIn.user) return c.json({ error: 'Not signed in' }, 401);
-    const organizationId = await organizationOf(c, signedIn.user.id);
+    const organizationId = await organizationOf(c, c.req.raw, signedIn.user.id);
     if (!organizationId) return c.json({ agents: [] });
     const who = await resolveCaller(c, organizationId);
     if (!who.account) return c.json({ agents: [] });

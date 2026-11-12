@@ -21,9 +21,9 @@ beforeEach(() => {
     const bare = path.split('?')[0] ?? '';
     if (bare === '/v1/me') return json({ id: 'u-ann', displayName: 'Ann' });
     if (bare.endsWith('/members')) return json({ members: [{ userId: 'u-ada', displayName: 'Ada', kind: 'personal_agent', agentRuntime: 'hosted', sponsorId: 'u-ann', address: 'ada@acme.test', isAgent: true }] });
-    if (bare === '/api/agent/definition') return json({ definition: method === 'PUT' ? { name: body.name, instructions: body.instructions, updatedAt: null } : { name: 'Ann’s assistant', instructions: '', updatedAt: null } });
-    if (bare === '/api/agent/mail-allowlist') return json({ senders: method === 'PUT' ? body.senders : [] });
-    if (bare === '/api/settings/assistant') return json({ settings: { provider: 'default', builtIn: true, agents: false, anthropicModel: 'claude-sonnet-5-5', openaiModel: 'gpt-6.1-sol', openrouterModel: '', anthropicKey: null, openaiKey: null, openrouterKey: null, braveKey: null } });
+    if (bare === '/v1/workspaces/o1/assistant/definition') return json({ definition: method === 'PUT' ? { name: body.name, instructions: body.instructions, updatedAt: null } : { name: 'Ann’s assistant', instructions: '', updatedAt: null } });
+    if (bare === '/v1/workspaces/o1/assistant/senders') return json({ senders: method === 'PUT' ? body.senders : [] });
+    if (bare === '/v1/workspaces/o1/assistant/model') return json({ settings: { provider: 'default', builtIn: true, agents: false, anthropicModel: 'claude-sonnet-5-5', openaiModel: 'gpt-6.1-sol', openrouterModel: '', anthropicKey: null, openaiKey: null, openrouterKey: null, braveKey: null } });
     return json({ ok: true });
   }));
 });
@@ -42,7 +42,7 @@ describe('Your assistant', () => {
     await screen.findByText('Its address: ada@acme.test');
     fireEvent.change(name, { target: { value: 'Ada' } });
     fireEvent.click(screen.getByTestId('assistant-save'));
-    await waitFor(() => expect(calls.some((c) => c.method === 'PUT' && c.path === '/api/agent/definition?workspace=o1' && (c.body as { name: string }).name === 'Ada')).toBe(true));
+    await waitFor(() => expect(calls.some((c) => c.method === 'PUT' && c.path === '/v1/workspaces/o1/assistant/definition' && (c.body as { name: string }).name === 'Ada')).toBe(true));
   });
 
   it('starts with nobody allowed to mail it, and saves the senders', async () => {
@@ -51,7 +51,7 @@ describe('Your assistant', () => {
     expect(box.value).toBe('');
     fireEvent.change(box, { target: { value: 'ann@acme.test\npat@partner.example' } });
     fireEvent.click(screen.getByTestId('assistant-allowlist-save'));
-    await waitFor(() => expect(calls.some((c) => c.method === 'PUT' && c.path === '/api/agent/mail-allowlist?workspace=o1' && JSON.stringify((c.body as { senders: string[] }).senders) === '["ann@acme.test","pat@partner.example"]')).toBe(true));
+    await waitFor(() => expect(calls.some((c) => c.method === 'PUT' && c.path === '/v1/workspaces/o1/assistant/senders' && JSON.stringify((c.body as { senders: string[] }).senders) === '["ann@acme.test","pat@partner.example"]')).toBe(true));
   });
 
   it('shows the model it runs on, the built-in one first', async () => {

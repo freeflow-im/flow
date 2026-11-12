@@ -136,6 +136,11 @@ r=await api(Bo.token,'GET',`/v1/mail/accounts?workspace=${W}`);t('Bob, a guest n
 // A guest has no assistant (agents.md §6): Bob's and Gus's are set aside; Ann's stays.
 r=await api(A.token,'GET',`/v1/workspaces/${W}/accounts`);{const live=(r.j.accounts??[]).filter(a=>a.kind==='personal_agent'&&a.agentRuntime==='hosted');t('the guests’ assistants are set aside, the owner’s stays',live.length===1&&live[0].sponsorId===A.user.id,JSON.stringify(live.map(a=>a.sponsorId)));}
 r=await api(Bo.token,'GET',`/api/agent/agents?workspace=${W}`);t('and Bob, a guest, is refused the assistant',r.s===403,r.s);
+// The platform's own routes for "Your assistant" (decision_log 2026-11-11): the Admin app reads these, not Docs' /api paths.
+r=await api(A.token,'GET',`/v1/workspaces/${W}/assistant/definition`);t('GET /v1/…/assistant/definition: Ann’s assistant',r.s===200&&typeof r.j.definition?.name==='string',r.s+' '+JSON.stringify(r.j).slice(0,100));
+r=await api(A.token,'GET',`/v1/workspaces/${W}/assistant/senders`);t('…/senders starts empty',r.s===200&&Array.isArray(r.j.senders)&&r.j.senders.length===0,JSON.stringify(r.j));
+r=await api(A.token,'GET',`/v1/workspaces/${W}/assistant/model`);t('…/model has the settings',r.s===200&&typeof r.j.settings?.provider==='string',JSON.stringify(r.j).slice(0,100));
+r=await api(Bo.token,'GET',`/v1/workspaces/${W}/assistant/definition`);t('a guest is refused in /v1’s error shape',r.s===403&&r.j.error?.code==='guest'&&typeof r.j.error?.message==='string',r.s+' '+JSON.stringify(r.j));
 r=await api(A.token,'GET',`/v1/workspaces/${W}/members?all=1`);{const ms=r.j.members??[];t('guests on the Org’s list, with no assistant there',ms.filter(m=>m.kind==='guest').length===2&&!ms.some(m=>m.kind==='personal_agent'&&(m.sponsorId===Bo.user.id||m.sponsorId===G.user.id)),JSON.stringify(ms.map(m=>[m.displayName,m.kind])));}
 r=await api(Bo.token,'GET',`/v1/workspaces/${W}/members`);t('Chat’s own list still answers a guest',r.s===200,r.s);
 // Removing members: the directory's accounts follow the Org's list, and reconcile finds nothing left behind (outbox.ts).

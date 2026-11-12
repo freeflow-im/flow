@@ -31,7 +31,7 @@ function useSection(sections: readonly AdminSection[]): [AdminSection, (s: Admin
   return [section, go];
 }
 
-const SECTION_ICONS: Record<AdminSection, SuiteMenuIcon> = { general: 'settings', members: 'people', domains: 'mail', agents: 'user', automations: 'clock', events: 'draft' };
+const SECTION_ICONS: Record<AdminSection, SuiteMenuIcon> = { general: 'settings', members: 'people', domains: 'mail', agents: 'user', assistant: 'star', automations: 'clock', events: 'draft' };
 
 export function App() {
   const organizations = useOrganizations();

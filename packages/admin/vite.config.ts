@@ -12,6 +12,6 @@ export default defineConfig({
   server: {
     port: Number(process.env.PORT ?? 5188),
     strictPort: true,
-    proxy: { '/v1': process.env.ADMIN_API ?? 'http://127.0.0.1:8787', '/api': process.env.ADMIN_API ?? 'http://127.0.0.1:8787' },
+    proxy: { '/v1': process.env.ADMIN_API ?? 'http://127.0.0.1:8787' },
   },
 });
