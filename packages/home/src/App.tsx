@@ -91,6 +91,12 @@ export function App() {
     else if (item.href) frames.open(item.href);
   };
 
+  // A choice in an app row's picker (Mail's accounts): that app switches to it and is shown, from whatever view is open.
+  const onPickerItem = (app: string, item: SuiteMenuItem) => {
+    if (menus.select(app as FramedApp, item.id)) frames.show(app as FramedApp);
+    else if (item.href) frames.open(item.href);
+  };
+
   const chatHref = frames.last.chat;
   const activeChannel = chatHref ? channelOf(chatHref, window.location.origin) : null;
 
@@ -121,6 +127,7 @@ export function App() {
             addAgentHref={admin ? adminAddress('agents') : null}
             menus={menus.menus}
             onMenuItem={onMenuItem}
+            onPickerItem={onPickerItem}
           />
           {/* The apps opened so far, each in its own frame, kept loaded while hidden. */}
           {FRAMED_APPS.map((app) => {

@@ -17,7 +17,7 @@ import { ThreadView, type ThreadViewHandle } from './components/ThreadView';
 import { ResizeHandle } from './components/ResizeHandle';
 import { setReadingPane, useReadingPane } from './lib/layoutPref';
 import { Sidebar } from './components/Sidebar';
-import { COMPOSE_ITEM, folderItem, mailMenu } from './lib/homeMenu';
+import { COMPOSE_ITEM, folderItem, mailMenu, mailPicker } from './lib/homeMenu';
 import { useMediaQuery, useResizableWidth } from './hooks/layout';
 import { fetchBody, keys, prefetchThread, useAccounts, useFolders, useMessageActions, useMessages, useThread, useThreads, useTabStatus } from './hooks/mail';
 import { useMailAssistant } from './hooks/assistant';
@@ -401,6 +401,7 @@ export function App() {
   // Inside Home (docs/specs/home.md §2.1), Home's sidebar shows Mail's menu in place of Mail's own sidebar.
   const [inHome] = useState(isInHome);
   const menuItems = useMemo(() => (inHome && account && folders.data ? mailMenu(list, account, folders.data) : null), [inHome, list, account, folders.data]);
+  const picker = useMemo(() => (inHome && account ? mailPicker(list, account) : null), [inHome, list, account]);
   const here = account ? `/mail/?${new URLSearchParams({ account: account.id, ...(folder ? { folder } : {}), ...(openId !== null ? { thread: openId } : {}) })}` : undefined;
   useHomeMenu(
     'mail',
@@ -412,6 +413,7 @@ export function App() {
       else if (id.startsWith('account:')) chooseAccount(id.slice('account:'.length));
     },
     here,
+    picker,
   );
 
   /** Shows a message (the assistant's open_mail_message, a link in its chat): its account and folder, then its thread. */

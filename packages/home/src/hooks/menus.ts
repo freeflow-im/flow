@@ -1,12 +1,14 @@
 // The menus the apps in Home's frames send (docs/specs/home.md §2.1, `@flow/suite-bar` lib/menu.ts): the last one from
 // each app, kept in this browser per organization so it shows at once next time, before the app's frame has loaded.
 import { useCallback, useEffect, useState } from 'react';
-import { isMenuMessage, type SuiteMenuItem, type SuiteSelectMessage } from '@flow/suite-bar';
+import { findMenuItem, isMenuMessage, type SuiteMenuItem, type SuiteMenuPicker, type SuiteSelectMessage } from '@flow/suite-bar';
 import type { FramedApp } from '../lib/views';
 
 export interface AppMenu {
   items: SuiteMenuItem[];
   selected: string | null;
+  /** A choice on the app's row (Mail's accounts). */
+  picker?: SuiteMenuPicker;
   /** Whether the app's frame sent it since it loaded (so it can take a click); false for the copy kept from before. */
   live: boolean;
 }
@@ -16,8 +18,8 @@ const keyOf = (org: string) => `flow.home.menus.${org}`;
 function readSaved(org: string | null): Partial<Record<FramedApp, AppMenu>> {
   if (!org) return {};
   try {
-    const saved = JSON.parse(localStorage.getItem(keyOf(org)) ?? '{}') as Record<string, { items: SuiteMenuItem[]; selected: string | null }>;
-    return Object.fromEntries(Object.entries(saved).map(([app, m]) => [app, { items: m.items, selected: m.selected, live: false }]));
+    const saved = JSON.parse(localStorage.getItem(keyOf(org)) ?? '{}') as Record<string, { items: SuiteMenuItem[]; selected: string | null; picker?: SuiteMenuPicker }>;
+    return Object.fromEntries(Object.entries(saved).map(([app, m]) => [app, { items: m.items, selected: m.selected, ...(m.picker ? { picker: m.picker } : {}), live: false }]));
   } catch {
     return {};
   }
@@ -25,7 +27,7 @@ function readSaved(org: string | null): Partial<Record<FramedApp, AppMenu>> {
 
 function save(org: string, menus: Partial<Record<FramedApp, AppMenu>>): void {
   try {
-    localStorage.setItem(keyOf(org), JSON.stringify(Object.fromEntries(Object.entries(menus).map(([app, m]) => [app, { items: m.items, selected: m.selected }]))));
+    localStorage.setItem(keyOf(org), JSON.stringify(Object.fromEntries(Object.entries(menus).map(([app, m]) => [app, { items: m.items, selected: m.selected, ...(m.picker ? { picker: m.picker } : {}) }]))));
   } catch {
     // Not kept: the menu shows once the app sends it.
   }
@@ -45,9 +47,9 @@ export function useAppMenus(org: string | null, frames: Partial<Record<FramedApp
       const app = e.data.app as FramedApp;
       // Only the app's own frame speaks for it.
       if (!frames[app] || e.source !== frames[app]!.contentWindow) return;
-      const { items, selected, href } = e.data;
+      const { items, selected, href, picker } = e.data;
       setMenus((m) => {
-        const next = { ...m, [app]: { items, selected, live: true } };
+        const next = { ...m, [app]: { items, selected, ...(picker ? { picker } : {}), live: true } };
         if (org) save(org, next);
         return next;
       });
@@ -64,7 +66,13 @@ export function useAppMenus(org: string | null, frames: Partial<Record<FramedApp
       if (!target || !menus[app]?.live) return false;
       target.postMessage({ type: 'flow:select', v: 1, app, id } satisfies SuiteSelectMessage, window.location.origin);
       // Marked at once; the app's next menu says what it actually shows.
-      setMenus((m) => (m[app] ? { ...m, [app]: { ...m[app], selected: id } } : m));
+      setMenus((m) => {
+        const menu = m[app];
+        if (!menu) return m;
+        if (findMenuItem(menu.items, id)) return { ...m, [app]: { ...menu, selected: id } };
+        if (menu.picker && findMenuItem(menu.picker.items, id)) return { ...m, [app]: { ...menu, picker: { ...menu.picker, selected: id } } };
+        return m;
+      });
       return true;
     },
     [frames, menus],

@@ -2,7 +2,7 @@
 // "critical menu" instead: the few places a person goes most (Mail's folders, Docs' lists, Calendar's calendars). Home
 // draws them under the app's row and sends a click back; the app switches in place, as its own sidebar would.
 //
-//   app  → Home  { type: 'flow:menu',   v: 1, app, items, selected, href? }   on load, and whenever any of it changes
+//   app  → Home  { type: 'flow:menu',   v: 1, app, items, selected, href?, picker? }   on load, and whenever any of it changes
 //   Home → app   { type: 'flow:select', v: 1, app, id }                       the person clicked an item
 //
 // The app owns the menu: Home loads none of the apps' data for it. Home keeps the last menu each app sent, so the menu
@@ -55,6 +55,18 @@ export interface SuiteMenuItem {
   children?: SuiteMenuItem[];
 }
 
+/**
+ * A choice drawn on the app's own row in Home's sidebar (`Mail ▾`), above its menu: Mail's accounts. A click on one is
+ * sent back as `flow:select` with its id, as a menu item's is.
+ */
+export interface SuiteMenuPicker {
+  items: SuiteMenuItem[];
+  /** The one the app shows now (checked in the list). */
+  selected: string | null;
+  /** A short name for it, shown on the row beside the app's name (`Mail gmail.com ▾`). */
+  label?: string;
+}
+
 export interface SuiteMenuMessage {
   type: 'flow:menu';
   v: 1;
@@ -64,6 +76,8 @@ export interface SuiteMenuMessage {
   selected: string | null;
   /** The app's address now, so Home's own address follows it (reload comes back to it). */
   href?: string;
+  /** A choice on the app's row (Mail's accounts), when there is one to make. */
+  picker?: SuiteMenuPicker;
 }
 
 export interface SuiteSelectMessage {
@@ -94,16 +108,23 @@ export function findMenuItem(items: SuiteMenuItem[], id: string): SuiteMenuItem 
 }
 
 /**
- * Inside Home: sends Home this app's menu whenever it changes, and calls `onSelect` with the id of an item clicked
- * there. Does nothing outside Home. `items` may be rebuilt on every render: only a change in what it says is sent.
+ * Inside Home: sends Home this app's menu (and its row's `picker`, if any) whenever it changes, and calls `onSelect` with
+ * the id of an item clicked there. Does nothing outside Home. `items` may be rebuilt on every render: only a change in what it says is sent.
  */
-export function useHomeMenu(app: string, items: SuiteMenuItem[] | null, selected: string | null, onSelect: (id: string) => void, href?: string): void {
+export function useHomeMenu(
+  app: string,
+  items: SuiteMenuItem[] | null,
+  selected: string | null,
+  onSelect: (id: string) => void,
+  href?: string,
+  picker?: SuiteMenuPicker | null,
+): void {
   const inHome = useRef<boolean | null>(null);
   if (inHome.current === null) inHome.current = isInHome();
   const select = useRef(onSelect);
   select.current = onSelect;
 
-  const message: SuiteMenuMessage | null = items ? { type: 'flow:menu', v: 1, app, items, selected, ...(href ? { href } : {}) } : null;
+  const message: SuiteMenuMessage | null = items ? { type: 'flow:menu', v: 1, app, items, selected, ...(href ? { href } : {}), ...(picker ? { picker } : {}) } : null;
   const text = message ? JSON.stringify(message) : null;
   useEffect(() => {
     if (!inHome.current || !text) return;
