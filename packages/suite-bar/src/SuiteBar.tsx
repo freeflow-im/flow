@@ -3,6 +3,7 @@
 // Chat, Mail, Calendar, then any app added since (⌘1 onwards, by the manifests). Right, tools then you: search (opens in place, ⌘K), the Assistant,
 // notifications, the account menu. Presentational: every app passes its data and callbacks, the bar fetches nothing.
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { BOOKING_SETTINGS_PATH, useBookingLink } from './bookingLink';
 import { isInHome, routeLinksToHome } from './lib/embed';
 import { SuiteMark } from './SuiteMark';
 import './suite-bar.css';
@@ -163,6 +164,13 @@ const Check = () => (
   </svg>
 );
 const ICONS: Record<string, ReactNode> = {
+  booking: (
+    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="3.5" y="5" width="17" height="15" rx="2" fill="none" stroke="currentColor" strokeWidth="2" />
+      <path d="M3.5 10h17M8 3v4M16 3v4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <path d="M9 15l2 2 4-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
   status: (
     <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
       <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2" />
@@ -237,6 +245,15 @@ function TheSuiteBar({ tabs, organization, search, assistant, notifications, acc
   const open = searching || (live && !!query);
   const orgRef = useRef<HTMLDivElement>(null);
   const accountRef = useRef<HTMLDivElement>(null);
+  // The booking page row: asked for when the account menu opens, in the organization the bar shows.
+  const booking = useBookingLink(menu === 'account', organization?.entries.find((e) => e.active)?.id ?? null);
+  const [copied, setCopied] = useState(false);
+  const copyBooking = (url: string) => {
+    void navigator.clipboard?.writeText(url).catch(() => {});
+    setCopied(true);
+    // The row says so for a moment, then the menu closes.
+    setTimeout(() => { setCopied(false); setMenu(null); }, 900);
+  };
   const searchRef = useRef<HTMLFormElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const tabsRef = useRef(tabs);
@@ -548,6 +565,18 @@ function TheSuiteBar({ tabs, organization, search, assistant, notifications, acc
                 <span className="sb-menu-icon">{ICONS.settings}</span>
                 Settings
               </button>
+              {booking?.kind === 'on' && (
+                <button type="button" role="menuitem" className="sb-menu-item" data-testid="suite-booking-copy" onClick={() => copyBooking(booking.url)}>
+                  <span className="sb-menu-icon">{copied ? <Check /> : ICONS.booking}</span>
+                  {copied ? 'Link copied' : 'Copy booking link'}
+                </button>
+              )}
+              {booking?.kind === 'off' && (
+                <button type="button" role="menuitem" className="sb-menu-item" data-testid="suite-booking-create" onClick={pick(() => window.location.assign(BOOKING_SETTINGS_PATH))}>
+                  <span className="sb-menu-icon">{ICONS.booking}</span>
+                  Create booking page
+                </button>
+              )}
               {account.extra?.map((x) => (
                 <button key={x.label} type="button" role="menuitem" className="sb-menu-item" onClick={pick(x.onSelect)}>
                   <span className="sb-menu-icon">{ICONS[x.label.toLowerCase()] ?? null}</span>

@@ -242,3 +242,6 @@ Where the build differs from the plan above:
   "Booked through <owner>'s booking page." and the guest's cancel or reschedule link (it said "Booked by … through your
   booking page", written to the owner, and had no link). The platform's own mail goes only where no invitation was sent
   (`mailed_ics`), so a guest gets one mail, not two.
+- **The account menu (2026-11-12).** The suite bar's account menu asks `GET /v1/calendar/scheduler` when it opens and shows
+  "Copy booking link" (the page is on) or "Create booking page" (it is not; goes to `/calendar/?booking=1`), and nothing when
+  Calendar does not answer for the account (`suite-bar/src/bookingLink.ts`).
