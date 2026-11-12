@@ -2,7 +2,7 @@
 // the browser. Account tools run here; sheet tools run in the browser against the live spreadsheet,
 // so when Claude calls one the turn pauses: the browser runs it and posts the results to resume.
 import Anthropic from '@anthropic-ai/sdk';
-import { chatScope, HOME_CHAT, IMAGE_MEDIA_TYPES, isChatScope, MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE, type AgentEvent, type AgentImage, type AgentTurnRequest, type ChatItem, type ClientToolCall, SHOWN_RESULTS } from '../../shared/agent/protocol.ts';
+import { chatScope, HOME_CHAT, IMAGE_MEDIA_TYPES, isChatScope, MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE, type AgentEvent, type AgentImage, type AgentTurnRequest, type ChatItem, type ClientToolCall, SHOWN_RESULTS, isPicturesNote, SHOWN_PICTURE_TOOLS } from '../../shared/agent/protocol.ts';
 import { STORED_IMAGE_RE } from '../../shared/types.ts';
 import type { SheetStore } from '../sheets.ts';
 import { providerSearch, type ProviderSearch } from './llmSearch.ts';
@@ -334,6 +334,9 @@ function completePending(pending: Pending, clientResults: { id: string; content:
   });
 }
 
+/** The tools whose step attaches a picture after its results (render_slide, view_image, edit_image, browser_screenshot). */
+const PICTURE_TOOLS: ReadonlySet<string> = new Set(['render_slide', 'view_image', 'edit_image', 'browser_screenshot']);
+
 /** Turn stored API messages into the transcript shown in the panel. */
 export function toChatItems(messages: MessageParam[]): ChatItem[] {
   const items: ChatItem[] = [];
@@ -347,10 +350,22 @@ export function toChatItems(messages: MessageParam[]): ChatItem[] {
     }
     // Images in a user message come before its text; collect them and attach to the text item.
     let pendingImages: string[] = [];
+    // The tools this message answers, in order: a step's pictures follow their results, one per picture tool.
+    const answered: Extract<ChatItem, { kind: 'tool' }>[] = [];
     for (const block of m.content) {
       if (block.type === 'image' && role === 'user' && block.source.type === 'base64') {
         pendingImages.push(`data:${block.source.media_type};base64,${block.source.data}`);
       } else if (block.type === 'text') {
+        // The app's note after a step's pictures: no words of the person's. A browser screenshot's picture goes under its
+        // tool's line (SHOWN_PICTURE_TOOLS); the others were for the model alone.
+        if (role === 'user' && isPicturesNote(block.text)) {
+          const takers = answered.filter((t) => t.status === 'ok' && PICTURE_TOOLS.has(t.name));
+          takers.forEach((t, i) => {
+            if (SHOWN_PICTURE_TOOLS.has(t.name) && pendingImages[i]) t.images = [pendingImages[i]!];
+          });
+          pendingImages = [];
+          continue;
+        }
         const text = role === 'user' ? stripContext(block.text) : block.text;
         if (!text) continue;
         const last = items[items.length - 1];
@@ -367,6 +382,7 @@ export function toChatItems(messages: MessageParam[]): ChatItem[] {
         const item = tools.get(block.tool_use_id);
         if (!item) continue;
         item.status = block.is_error ? 'error' : 'ok';
+        answered.push(item);
         if (block.is_error) item.error = typeof block.content === 'string' ? block.content : undefined;
         else if (SHOWN_RESULTS.has(item.name) && typeof block.content === 'string') item.result = block.content;
       }

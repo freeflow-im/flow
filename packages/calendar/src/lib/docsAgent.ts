@@ -4,6 +4,6 @@
 export { CALENDAR_CHAT, CLIENT_TOOLS, MAX_CALENDARS_SHOWN, MAX_IMAGES_PER_MESSAGE, type AgentEvent, type AgentImage, type AgentTurnRequest, type CalendarContext, type ChatItem, type ClientToolCall, type ClientToolResult } from '../../../docs/shared/agent/protocol';
 export { readAgentEvents } from '../../../docs/client/src/agent/stream';
 export { toolLabel } from '../../../docs/client/src/agent/describe';
-export { ChatMarkdown } from '../../../docs/client/src/agent/ChatMarkdown';
+export { ChatMarkdown, ToolPictures } from '../../../docs/client/src/agent/ChatMarkdown';
 // The web tools (prototype): the FreeFlow browser extension in this browser runs them.
 export { browserExtensionPresent, checkBrowserExtension, isWebTool, runWebTool, webPicturesNote } from '../../../docs/client/src/agent/browserBridge';

@@ -9,7 +9,7 @@ import { ResizeHandle, usePanelWidth } from '../components/ResizeHandle.tsx';
 import { ASSISTANT_PANEL } from '../panelSize.ts';
 import { useAuth } from '../auth.tsx';
 import { useAgent } from './AgentProvider.tsx';
-import { ChatMarkdown, picturesOf } from './ChatMarkdown.tsx';
+import { ChatMarkdown, picturesOf, ToolPictures } from './ChatMarkdown.tsx';
 import { targetOf } from './clientTools.ts';
 import { toolLabel } from './describe.ts';
 import { imageFiles, prepareImage, type PreparedImage } from './images.ts';
@@ -316,6 +316,7 @@ export function ToolRow({ item }: { item: ToolItem }) {
   const file = item.status === 'ok' ? fileOfResult(item.result) : null;
   if (file) return <FileChip file={file} />;
   return (
+    <>
     <div className={`agent-tool ${item.status}`} title={item.error}>
       <span className="agent-tool-icon" aria-hidden="true">
         {item.status === 'running' ? <span className="agent-spinner" /> : item.status === 'ok' ? '✓' : '!'}
@@ -329,6 +330,8 @@ export function ToolRow({ item }: { item: ToolItem }) {
       )}
       {item.status === 'error' && <span className="agent-tool-error">{failureLabel(item.error)}</span>}
     </div>
+    <ToolPictures images={item.images} />
+    </>
   );
 }
 
