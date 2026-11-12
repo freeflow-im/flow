@@ -72,17 +72,33 @@ export function AppMenu(props: { app: string; items: SuiteMenuItem[]; selected: 
 
 function MenuRow({ item, depth, selected, onItem }: { item: SuiteMenuItem; depth: number; selected: string | null; onItem: (item: SuiteMenuItem) => void }) {
   const holdsSelected = !!item.children?.some((c) => c.id === selected);
-  const [open, setOpen] = useState(holdsSelected);
+  // Open while it holds the item shown, until the person closes or opens it themselves.
+  const [open, setOpen] = useState<boolean | null>(null);
   const current = item.id === selected;
   const pad = { paddingLeft: 24 + depth * 14 };
   if (item.children) {
+    const shown = open ?? holdsSelected;
+    const caret = shown ? <ChevronDown className="size-4 shrink-0" aria-hidden /> : <ChevronRight className="size-4 shrink-0" aria-hidden />;
     return (
       <li>
-        <button type="button" className={`${row} text-muted`} style={pad} aria-expanded={open || holdsSelected} onClick={() => setOpen(!open)}>
-          {open || holdsSelected ? <ChevronDown className="size-4 shrink-0" aria-hidden /> : <ChevronRight className="size-4 shrink-0" aria-hidden />}
-          <span className="truncate">{item.label}</span>
-        </button>
-        {(open || holdsSelected) && (
+        {item.href ? (
+          // A place of its own with places in it (Docs' Organization files): the label opens it, the caret its list.
+          <div className={`${row} gap-0 p-0 ${current ? 'bg-row-selected font-semibold' : ''}`} style={{ paddingLeft: 4 + depth * 14 }}>
+            <button type="button" className="flex size-5 shrink-0 items-center justify-center rounded text-muted hover:bg-row-selected" aria-label={shown ? `Close ${item.label}` : `Open ${item.label}`} aria-expanded={shown} onClick={() => setOpen(!shown)}>
+              {caret}
+            </button>
+            <button type="button" className="flex min-w-0 flex-1 items-center gap-2.5 py-1 pl-0.5 text-left" aria-current={current ? 'page' : undefined} data-testid={`home-menu-item-${item.id}`} onClick={() => onItem(item)}>
+              <Icon item={item} />
+              <span className="min-w-0 flex-1 truncate">{item.label}</span>
+            </button>
+          </div>
+        ) : (
+          <button type="button" className={`${row} text-muted`} style={pad} aria-expanded={shown} onClick={() => setOpen(!shown)}>
+            {caret}
+            <span className="truncate">{item.label}</span>
+          </button>
+        )}
+        {shown && (
           <ul>
             {item.children.map((c) => (
               <MenuRow key={c.id} item={c} depth={depth + 1} selected={selected} onItem={onItem} />

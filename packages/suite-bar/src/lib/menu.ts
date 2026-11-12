@@ -48,7 +48,10 @@ export interface SuiteMenuItem {
   on?: boolean;
   /** The app's own address for this item, opened when the app is not loaded yet (and so reload and Back work). */
   href?: string;
-  /** One level below this item ("More folders"), shown when it is opened. */
+  /**
+   * The items below this one, shown when it is opened. An item with an `href` is a place itself (Docs' Organization
+   * files, with its folders below); one without is only a heading that opens ("More folders").
+   */
   children?: SuiteMenuItem[];
 }
 
