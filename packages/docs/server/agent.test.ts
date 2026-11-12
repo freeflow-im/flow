@@ -586,7 +586,7 @@ describe('convert_pdf tool', () => {
   });
 });
 
-describe('search_files and read_stored_file tools', () => {
+describe('find_files and read_stored_file tools', () => {
   afterAll(closePdfReaders);
 
   it('find the user\'s stored files and read their text, a PDF\'s included, from any app (Mail here)', async () => {
@@ -603,9 +603,9 @@ describe('search_files and read_stored_file tools', () => {
     const inMail: AgentContext = { page: 'mail' } as unknown as AgentContext;
     const env = { userId: 'u1', sheets: {} as SheetStore, files, context: inMail };
 
-    const listed = JSON.parse(await runServerTool('search_files', {}, env));
+    const listed = JSON.parse(await runServerTool('find_files', {}, env));
     expect(listed.files.map((f: { id: string }) => f.id)).toEqual(['t1', 'p1', 'i1']);
-    expect(JSON.parse(await runServerTool('search_files', { query: 'STATEMENT' }, env)).files).toEqual([expect.objectContaining({ id: 'p1', filename: 'October statement.pdf', folder: 'Statements' })]);
+    expect(JSON.parse(await runServerTool('find_files', { query: 'STATEMENT' }, env)).files).toEqual([expect.objectContaining({ id: 'p1', filename: 'October statement.pdf', folder: 'Statements' })]);
 
     const pdf = JSON.parse(await runServerTool('read_stored_file', { file_id: 'p1' }, env));
     expect(pdf).toMatchObject({ filename: 'October statement.pdf', pages: 2, offset: 0, more: false });
@@ -613,8 +613,8 @@ describe('search_files and read_stored_file tools', () => {
     const part = JSON.parse(await runServerTool('read_stored_file', { file_id: 't1', offset: 14, max_chars: 4 }, env));
     expect(part).toMatchObject({ text: 'Rent', more: true, total_chars: 24 });
     await expect(runServerTool('read_stored_file', { file_id: 'i1' }, env)).rejects.toThrow(/not text/);
-    await expect(runServerTool('read_stored_file', { file_id: 'nope' }, env)).rejects.toThrow(/search_files/);
-    await expect(runServerTool('search_files', {}, { ...env, files: undefined })).rejects.toThrow(/cannot be listed here/);
+    await expect(runServerTool('read_stored_file', { file_id: 'nope' }, env)).rejects.toThrow(/find_files/);
+    await expect(runServerTool('find_files', {}, { ...env, files: undefined })).rejects.toThrow(/cannot be listed here/);
   });
 });
 

@@ -162,7 +162,7 @@ describe('the registry', () => {
     expect(names('docs')).toEqual(expect.arrayContaining(['write_range', 'read_doc', 'delete_event', 'search_mail', 'list_events', 'list_docs']));
     expect(names('docs')).not.toContain('open_mail_message');
     expect(names('docs')).not.toContain('show_calendar_range');
-    expect(names('mail')).toEqual(expect.arrayContaining(['open_mail_message', 'search_mail', 'create_event', 'list_docs', 'search_files', 'read_stored_file']));
+    expect(names('mail')).toEqual(expect.arrayContaining(['open_mail_message', 'search_mail', 'create_event', 'list_docs', 'find_files', 'read_stored_file']));
     expect(names('mail')).not.toContain('write_range');
     expect(names('mail')).not.toContain('delete_event');
     expect(names('calendar')).toEqual(expect.arrayContaining(['open_calendar_event', 'show_calendar_range', 'delete_event', 'read_mail']));
