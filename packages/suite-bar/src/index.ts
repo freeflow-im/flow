@@ -7,3 +7,4 @@ export { APP_MANIFESTS } from '@flow/shared/manifests';
 export { intent, addressOf, adminAddress, chatPageAddress, createAddress, iconOf, kindLabelOf, referenceOf, shareAddressOf, ADMIN_SECTIONS, CHAT_PAGES, type IntentOptions } from './lib/intents';
 export type { AddressedReference, AdminSection, Attendee, ChatPage, CreateFields, ReferenceTarget, ResolvedReference } from './lib/intents';
 export { appOfPath, isInHome, isOpenMessage, onOpenFromHome, openInHome, routeLinksToHome, type SuiteOpenMessage } from './lib/embed';
+export { findMenuItem, isMenuMessage, isSelectMessage, useHomeMenu, SUITE_MENU_ICONS, type SuiteMenuIcon, type SuiteMenuItem, type SuiteMenuMessage, type SuiteSelectMessage } from './lib/menu';

@@ -6,7 +6,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useQueryClient } from '@tanstack/react-query';
 import { addHours, startOfHour } from 'date-fns';
 import { AlertTriangle, Loader2 } from 'lucide-react';
-import { openSuiteSearch } from '@flow/suite-bar';
+import { isInHome, openSuiteSearch, useHomeMenu, type SuiteMenuItem } from '@flow/suite-bar';
 import { AssistantDock, useAssistantDockState, useNewChatOnClose } from '@flow/suite-bar/assistant-dock';
 import { CalendarApiError, calendarApi, connectGoogle, setCalendarWorkspace, googleErrorText, type CalendarInfo, type EventOccurrence, type Response, type Scope } from './api';
 import { AccountSettingsDialog, AddAccountDialog } from './components/AccountForms';
@@ -286,13 +286,33 @@ export function App() {
   const noOrganization = (organizations.ready && !org) || (accounts.error instanceof CalendarApiError && accounts.error.code === 'no_account');
   // A guest's request is refused (403 guest): guests use Chat only (docs/specs/workspace-admin.md §6.5).
   const guest = accounts.error instanceof CalendarApiError && accounts.error.code === 'guest';
+  const toggleCalendar = (c: CalendarInfo) => (c.shared ? sharedPrefs.set(c.id, { shown: c.hidden }) : prefs.mutate({ id: c.id, patch: { hidden: !c.hidden } }));
+  // Inside Home (docs/specs/home.md §2.1), Home's sidebar shows Calendar's menu in place of Calendar's own column:
+  // Create, Today, and each calendar as a switch in its colour.
+  const [inHome] = useState(isInHome);
+  const calendarItem = (c: CalendarInfo): SuiteMenuItem => ({ id: `calendar:${c.id}`, label: c.name, icon: 'dot', color: c.color, on: !c.hidden });
+  const menu: SuiteMenuItem[] | null =
+    inHome && calendars.data
+      ? [
+          { id: 'create', label: 'Create event', icon: 'plus' },
+          { id: 'today', label: 'Today', icon: 'today' },
+          ...cals.map(calendarItem),
+          ...(sharedCals.length ? [{ id: 'shared', label: 'Shared with me', children: sharedCals.map(calendarItem) }] : []),
+        ]
+      : null;
+  useHomeMenu('calendar', menu, null, (id) => {
+    if (id === 'create') return createNew();
+    if (id === 'today') return today();
+    const c = [...cals, ...sharedCals].find((x) => `calendar:${x.id}` === id);
+    if (c) toggleCalendar(c);
+  }, window.location.pathname + window.location.search);
   const sidebar = (
     <Sidebar
       accounts={accounts.data ?? []} calendars={cals} date={place.date} range={range} weekStartsOn={WEEK_STARTS_ON}
       onCreate={() => { setSidebarOpen(false); createNew(); }}
       onPick={(d) => { setSidebarOpen(false); navigate({ date: d }); }}
       onPickRange={(d, n) => { setSidebarOpen(false); navigate({ date: d, view: narrow ? 'agenda' : n <= 7 ? 'week' : 'month' }); }}
-      onToggle={(c) => (c.shared ? sharedPrefs.set(c.id, { shown: c.hidden }) : prefs.mutate({ id: c.id, patch: { hidden: !c.hidden } }))}
+      onToggle={toggleCalendar}
       onColor={(c, color) => (c.shared ? sharedPrefs.set(c.id, { color: color ?? undefined }) : prefs.mutate({ id: c.id, patch: { color } }))}
       onDefault={(c) => prefs.mutate({ id: c.id, patch: { isDefault: true } })}
       onAccount={(id) => setDialog({ kind: 'settings', accountId: id })}
@@ -322,7 +342,7 @@ export function App() {
         <ConnectCalendar onAdd={(k) => (k === 'google' ? startGoogle() : setDialog({ kind: 'add', connect: k }))} />
       ) : (
         <div className="relative flex min-h-0 flex-1">
-          {!narrow && <aside className="w-64 shrink-0 border-r border-hairline">{sidebar}</aside>}
+          {!narrow && !inHome && <aside className="w-64 shrink-0 border-r border-hairline">{sidebar}</aside>}
           <main className="flex min-w-0 flex-1 flex-col">
             {broken.map((a) => (
               <div key={a.id} role="alert" className="flex shrink-0 items-center gap-3 border-b border-warn-border bg-warn-bg px-4 py-2 text-[14px]">

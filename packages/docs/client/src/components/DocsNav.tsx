@@ -5,6 +5,8 @@
 // page says the folders changed (FOLDERS_CHANGED).
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { isInHome, useHomeMenu, type SuiteMenuItem } from '@flow/suite-bar';
+import { BASE } from '../basePath.ts';
 import { api, type FolderInfo, type Place } from '../api.ts';
 import { cleanFolderPath } from '../../../shared/folders.ts';
 import { FAVORITES_PARAM, last as lastListing, RECENTS_PARAM, SHARED_WITH_ME_PARAM } from '../listing.ts';
@@ -220,6 +222,47 @@ export function DocsNav() {
       </button>
     );
   };
+
+  // Inside Home (docs/specs/home.md §2.1) the panel is Home's: Docs sends it the lists and each root's top folders, and
+  // draws none of its own.
+  const [inHome] = useState(isInHome);
+  useEffect(() => {
+    if (!inHome || (!org.ready && !orgId)) return;
+    for (const root of roots) if (!asked.current.has(keyOf(root, ''))) load(root, '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inHome, orgId, org.ready, load]);
+  const folderHref = (root: Root, path: string) => {
+    const q = new URLSearchParams();
+    if (root === 'org' && orgId) q.set(ORG_PARAM, orgId);
+    if (path) q.set('folder', path);
+    return `${BASE}/${q.size ? `?${q}` : ''}`;
+  };
+  const rootItem = (root: Root, label: string, icon: SuiteMenuItem['icon']): SuiteMenuItem => {
+    const kids = children.get(keyOf(root, ''));
+    return {
+      id: `folder:${root}:`,
+      label,
+      icon,
+      href: folderHref(root, ''),
+      ...(Array.isArray(kids) && kids.length ? { children: kids.map((k) => ({ id: `folder:${root}:${k.path}`, label: k.name, icon: 'folder' as const, href: folderHref(root, k.path) })) } : {}),
+    };
+  };
+  const menu: SuiteMenuItem[] | null = inHome
+    ? [
+        { id: 'list:recents', label: 'Recents', icon: 'clock', href: `${BASE}/?${RECENTS_PARAM}=1` },
+        { id: 'list:favorites', label: 'Favorites', icon: 'star', href: `${BASE}/?${FAVORITES_PARAM}=1` },
+        ...(orgId ? [{ id: 'list:withme', label: 'Shared with me', icon: 'share' as const, href: `${BASE}/?${SHARED_WITH_ME_PARAM}=1` }, rootItem('org', 'Organization files', 'people')] : []),
+        rootItem('me', 'My files', 'lock'),
+      ]
+    : null;
+  // A folder deeper down marks the top folder it is in, the one the menu lists.
+  const menuSelected = !selected ? null : 'list' in selected ? `list:${selected.list}` : `folder:${selected.root}:${selected.path.split('/')[0] ?? ''}`;
+  useHomeMenu('docs', menu, menuSelected, (id) => {
+    if (id.startsWith('list:')) return navigate(`/?${LIST_PARAM[id.slice(5) as List]}=1`);
+    const m = /^folder:(org|me):(.*)$/.exec(id);
+    if (m) openFolder(m[1] as Root, m[2]!);
+  }, window.location.pathname + window.location.search);
+  if (inHome) return null;
 
   if (collapsed) {
     const rail = (key: string, label: string, icon: ReactNode, active: boolean, go: () => void) => (

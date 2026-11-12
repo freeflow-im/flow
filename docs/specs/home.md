@@ -25,6 +25,35 @@ going back to it is instant and it is where it was left (hooks/frames.ts). Home'
 (Home's sidebar has them); a link in an app to another app opens in Home (`@flow/suite-bar` lib/embed.ts). Chat switches
 channel in place when Home asks (a `flow:open` message); the other apps load the address asked for.
 
+### 2.1 The apps' menus in Home's sidebar
+
+Inside Home, an app does not draw its own sidebar. It sends Home its main menu instead, and Home shows it under the
+app's row in Home's sidebar, so there is one sidebar, not two. The app owns its menu: Home loads none of the apps' data
+for it. The protocol is in `@flow/suite-bar` lib/menu.ts:
+
+| Message | From → to | When |
+|---|---|---|
+| `{ type: 'flow:menu', v: 1, app, items, selected, href? }` | app → Home | on load, and whenever the items, the selected item or the app's address change |
+| `{ type: 'flow:select', v: 1, app, id }` | Home → app | the person clicked an item; the app switches to it in place |
+
+- An item: `id`, `label`, an `icon` named from a fixed set (Home draws it), an optional `count`, `color` and `on` (a
+  switch, such as a calendar shown or hidden), the app's own `href` for it, and `children` one level down. An item with
+  children and an `href` is a place itself (its label opens it); without an `href` it is only a heading that opens.
+- An app calls one hook, `useHomeMenu(app, items, selected, onSelect, href)`. It does nothing outside Home.
+- Home keeps each app's last menu in this browser, per organization, so the menu shows at once next time. A click
+  before the app's frame has loaded opens the item's `href` instead.
+- Home's address follows the `href` an app sends, so reload comes back to the folder or section shown.
+
+What each app sends:
+
+| App | Menu |
+|---|---|
+| Mail | Compose; the special folders (Inbox, Starred, Drafts, Sent, …) with their counts; "More folders"; with more than one account, the accounts |
+| Docs | Recents, Favorites, Shared with me, Organization files and My files (each with its top-level folders) |
+| Calendar | Create event, Today, each calendar as a switch in its colour, Shared with me |
+| Admin | its sections |
+| Chat | none: Home's sidebar already lists the channels and agents |
+
 - `packages/home`, a Vite client on the Admin pattern (`packages/admin`): no Durable Object and no routes of its own.
   It reads the other apps' APIs on the same origin with the session cookie: `/v1/mail/*`, `/v1/calendar/events`,
   `/api/recents`, `/v1/workspaces/:id/channels|members`, `/v1/me/notifications`, `/v1/me/accounts`.
@@ -47,4 +76,7 @@ channel in place when Home asks (a `flow:open` message); the other apps load the
 - **Mail, Docs and Calendar switch in place** only for their front page: a conversation, a file or an event opened from
   a card loads that app's frame again (about a second). Chat already switches in place.
 - **`/` landing on Home**: `/` still opens Chat. Changing it touches the sign-in redirects.
+- **The parts of an app's sidebar not in its menu** inside Home: Mail's Add account and account settings, Docs' folders
+  below the top level (the Docs page shows them), Calendar's small month and each calendar's own menu (colour, share).
+  They are in the app outside Home.
 - **macOS and iOS**: web (and the desktop shell) only; see the Parity section of CHANGELOG.md.

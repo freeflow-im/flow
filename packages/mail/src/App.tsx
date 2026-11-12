@@ -4,7 +4,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Loader2 } from 'lucide-react';
-import { openSuiteSearch } from '@flow/suite-bar';
+import { isInHome, openSuiteSearch, useHomeMenu } from '@flow/suite-bar';
 import { AssistantDock, useAssistantDockState, useNewChatOnClose } from '@flow/suite-bar/assistant-dock';
 import { MailApiError, mailApi, setMailWorkspace, type Category, type MailAccount, type MessageDetail, type ThreadSummary, type TabStatus } from './api';
 import { AccountSettingsDialog, AddAccountDialog } from './components/AccountForms';
@@ -17,6 +17,7 @@ import { ThreadView, type ThreadViewHandle } from './components/ThreadView';
 import { ResizeHandle } from './components/ResizeHandle';
 import { setReadingPane, useReadingPane } from './lib/layoutPref';
 import { Sidebar } from './components/Sidebar';
+import { COMPOSE_ITEM, folderItem, mailMenu } from './lib/homeMenu';
 import { useMediaQuery, useResizableWidth } from './hooks/layout';
 import { fetchBody, keys, prefetchThread, useAccounts, useFolders, useMessageActions, useMessages, useThread, useThreads, useTabStatus } from './hooks/mail';
 import { useMailAssistant } from './hooks/assistant';
@@ -393,6 +394,22 @@ export function App() {
       openCompose(account.id, { mode, draft: remode(mode), source, ...(threadId ? { threadId } : {}), remode });
     },
     [account, thread.data, openId, folder, openCompose],
+  );
+
+  // Inside Home (docs/specs/home.md §2.1), Home's sidebar shows Mail's menu in place of Mail's own sidebar.
+  const [inHome] = useState(isInHome);
+  const menuItems = useMemo(() => (inHome && account && folders.data ? mailMenu(list, account, folders.data) : null), [inHome, list, account, folders.data]);
+  const here = account ? `/mail/?${new URLSearchParams({ account: account.id, ...(folder ? { folder } : {}), ...(openId !== null ? { thread: openId } : {}) })}` : undefined;
+  useHomeMenu(
+    'mail',
+    menuItems,
+    folder ? folderItem(folder) : null,
+    (id) => {
+      if (id === COMPOSE_ITEM) startCompose('new');
+      else if (id.startsWith('folder:')) chooseFolder(id.slice('folder:'.length));
+      else if (id.startsWith('account:')) chooseAccount(id.slice('account:'.length));
+    },
+    here,
   );
 
   /** Shows a message (the assistant's open_mail_message, a link in its chat): its account and folder, then its thread. */
@@ -878,7 +895,7 @@ export function App() {
         </div>
       )}
       <div className="relative flex min-h-0 flex-1">
-        {!tiny && (
+        {!tiny && !inHome && (
           <>
             <div style={{ width: sidebar.width }} className="shrink-0 border-r border-hairline">
               {sidebarEl}
