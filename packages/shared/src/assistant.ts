@@ -93,3 +93,8 @@ export interface AssistantSettingsUpdate {
   /** A new Brave Search API key, null to remove the saved one; omitted keeps it. */
   braveKey?: string | null;
 }
+
+/** The pictures a person may give their assistant without uploading one (agents.md §1.1), served by the web client. */
+export const AGENT_AVATAR_PRESETS = ['sky', 'mint', 'sun', 'rose', 'grape', 'ocean', 'slate', 'lime'] as const;
+export type AgentAvatarPreset = (typeof AGENT_AVATAR_PRESETS)[number];
+export const agentAvatarUrl = (preset: AgentAvatarPreset): string => `/agent-avatars/${preset}.svg`;

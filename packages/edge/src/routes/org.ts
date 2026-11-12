@@ -2,6 +2,7 @@
 import { Hono, type Context } from 'hono';
 import { WebhookReceiver } from 'livekit-server-sdk';
 import { PatchMeBody, type UserDTO } from '@flow/shared';
+import { AGENT_AVATAR_PRESETS, agentAvatarUrl, type AgentAvatarPreset } from '@flow/shared/assistant';
 import { accountGate, hashToken, newId } from '../directory/core';
 import { listVar } from '../directory/authHandoff';
 import { ApiError, badRequest, notFound, unauthorized } from '../errors';
@@ -167,6 +168,44 @@ orgRoutes.post('/v1/me/avatar', async (c) => {
   const user = await directory(c, 'patchUser', who.user.id, { avatarUrl: `/v1/avatars/${key}` });
   await afterProfileChange(c, user);
   return c.json(user);
+});
+
+/**
+ * The person's own assistant's picture (agents.md §1.1): a preset (`PUT {preset}`, or `{preset: null}` for none) or an
+ * upload (`POST`, multipart, stored as a person's is). The organization's copy follows, so Chat shows it at once.
+ */
+async function myAssistant(c: C): Promise<{ agentId: string; organizationId: string }> {
+  const organizationId = c.req.param('id')!;
+  const who = await resolveCaller(c, organizationId);
+  if (!who.user || !who.account) throw unauthorized('missing bearer token');
+  if (who.account.kind === 'guest') throw new ApiError(403, 'guest', 'guests use Chat only; the assistant is for the organization\'s members');
+  const agentId = await directory(c, 'assistantOf', who.user.id, organizationId);
+  if (!agentId) throw notFound('you have no assistant here');
+  return { agentId, organizationId };
+}
+async function setAssistantPicture(c: C, agentId: string, organizationId: string, avatarUrl: string | null): Promise<UserDTO> {
+  const user = await directory(c, 'patchUser', agentId, { avatarUrl });
+  await orgStub(c, organizationId).syncUser(user);
+  return user;
+}
+orgRoutes.put('/v1/workspaces/:id/assistant/avatar', async (c) => {
+  const { agentId, organizationId } = await myAssistant(c);
+  const body = (await c.req.json().catch(() => ({}))) as { preset?: unknown };
+  const preset = body.preset === null ? null : (AGENT_AVATAR_PRESETS as readonly unknown[]).includes(body.preset) ? (body.preset as AgentAvatarPreset) : undefined;
+  if (preset === undefined) throw badRequest('bad_preset', `preset: one of ${AGENT_AVATAR_PRESETS.join(', ')}, or null`);
+  const user = await setAssistantPicture(c, agentId, organizationId, preset ? agentAvatarUrl(preset) : null);
+  return c.json({ avatarUrl: user.avatarUrl ?? null });
+});
+orgRoutes.post('/v1/workspaces/:id/assistant/avatar', async (c) => {
+  const { agentId, organizationId } = await myAssistant(c);
+  const file = [...(await c.req.raw.formData()).values()].find((v): v is File => typeof v !== 'string');
+  if (!file) throw badRequest('no_file', 'multipart file field required');
+  if (!AVATAR_TYPES.has(file.type)) throw badRequest('bad_image', 'the picture must be png, jpeg, gif, or webp');
+  if (file.size > 5 * 1024 * 1024) throw badRequest('too_large', 'the picture must be 5 MB or less');
+  const key = `${agentId}-${Date.now()}.${file.type.split('/')[1]}`;
+  await c.env.BLOBS.put(`avatars/${key}`, file.stream(), { httpMetadata: { contentType: file.type } });
+  const user = await setAssistantPicture(c, agentId, organizationId, `/v1/avatars/${key}`);
+  return c.json({ avatarUrl: user.avatarUrl ?? null });
 });
 
 orgRoutes.get('/v1/avatars/:key', async (c) => {

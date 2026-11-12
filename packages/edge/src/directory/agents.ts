@@ -127,11 +127,11 @@ export function assistantOf(sql: AgentSql, sponsorId: string, organizationId: st
 /** The hosted agents a person may use in an organization (agents.md §6): their own assistant, and the shared ones. */
 export function usableAgentsOf(sql: AgentSql, userId: string, organizationId: string): UsableAgentDTO[] {
   return rows(sql,
-    `SELECT u.id, u.display_name, u.mode, u.sponsor_user_id, a.id AS account_id FROM users u JOIN accounts a ON a.user_id = u.id AND a.organization_id = u.organization_id
+    `SELECT u.id, u.display_name, u.avatar_url, u.mode, u.sponsor_user_id, a.id AS account_id FROM users u JOIN accounts a ON a.user_id = u.id AND a.organization_id = u.organization_id
      WHERE u.is_agent = 1 AND u.runtime = 'hosted' AND u.organization_id = ? AND u.deleted_at IS NULL AND a.state <> 'removed'
        AND (u.mode = 'shared' OR u.sponsor_user_id = ?)
      ORDER BY (u.mode = 'personal') DESC, u.display_name`, organizationId, userId,
-  ).map((r) => ({ id: r.id as string, accountId: r.account_id as string, displayName: r.display_name as string, mode: r.mode as AgentMode, self: r.mode === 'personal' && r.sponsor_user_id === userId }));
+  ).map((r) => ({ id: r.id as string, accountId: r.account_id as string, displayName: r.display_name as string, avatarUrl: (r.avatar_url as string | null) ?? null, mode: r.mode as AgentMode, self: r.mode === 'personal' && r.sponsor_user_id === userId }));
 }
 
 /** Marks where an agent's loop runs (agents.md §6). */

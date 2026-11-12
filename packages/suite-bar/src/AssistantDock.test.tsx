@@ -82,6 +82,20 @@ describe('AssistantDock', () => {
   });
 });
 
+describe('the pill', () => {
+  const closed = { open: false, setOpen() {}, placement: 'floating' as const, setPlacement() {}, expanded: false, setExpanded() {} };
+  it('says "AI Help" with the spark, until the person’s assistant is known', () => {
+    render(<AssistantDock state={closed}><div /></AssistantDock>);
+    expect(screen.getByText('AI Help')).toBeTruthy();
+    expect(screen.queryByTestId('assistant-dock-avatar')).toBeNull();
+  });
+  it('is the person’s assistant: its name and picture (agents.md §1.1)', () => {
+    render(<AssistantDock state={closed} label="Ada" avatarUrl="/agent-avatars/mint.svg"><div /></AssistantDock>);
+    expect(screen.getByText('Ada')).toBeTruthy();
+    expect(screen.getByTestId('assistant-dock-avatar').getAttribute('src')).toBe('/agent-avatars/mint.svg');
+  });
+});
+
 describe('useIdleMinimize', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());

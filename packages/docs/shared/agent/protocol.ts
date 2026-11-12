@@ -230,6 +230,7 @@ export interface UsableAgent {
   id: string;
   accountId: string;
   displayName: string;
+  avatarUrl?: string | null;
   mode: 'personal' | 'shared';
   self: boolean;
 }
