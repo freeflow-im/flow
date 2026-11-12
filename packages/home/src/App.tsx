@@ -37,7 +37,7 @@ export function App() {
   const now = useNow();
   const me = useQuery({ queryKey: ['suite', 'me'], queryFn: suite.me, refetchInterval: 60_000 });
   const setup = useAccountSetup(orgId);
-  const chat = useChat(orgId);
+  const chat = useChat(orgId, me.data?.id ?? null);
   const mail = useInbox(orgId, setup.settingUp);
   const today = useToday(orgId, setup.settingUp, now);
   const files = useRecentFiles(orgId);

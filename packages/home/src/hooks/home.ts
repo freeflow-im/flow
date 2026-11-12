@@ -1,7 +1,9 @@
 // Home's data, one query per card, each in the organization the bar selected. The cards load on their own and in
 // parallel, so a slow app holds up only its own card. Each is read again every minute while the page is open, and when
 // the window regains focus (main.tsx).
-import { useQuery } from '@tanstack/react-query';
+import { useEffect } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { isChangedMessage } from '@flow/suite-bar';
 import { homeApi } from '../api';
 import { agentsOf, inboxOf, todayRange, todaysEvents } from '../lib/home';
 
@@ -18,11 +20,20 @@ export function useAccountSetup(org: string | null) {
   return { settingUp: !!account && SETTING_UP.includes(account.state), guest: account?.kind === 'guest', ready: q.isSuccess };
 }
 
-export function useChat(org: string | null) {
+export function useChat(org: string | null, me: string | null = null) {
+  const qc = useQueryClient();
+  // An app in Home's frame changed the member list (Admin: a rename, a kind, a removal): read it again now.
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      if (e.origin === window.location.origin && isChangedMessage(e.data)) void qc.invalidateQueries({ queryKey: ['home', 'members'] });
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [qc]);
   const channels = useQuery({ queryKey: ['home', 'channels', org], queryFn: () => homeApi.channels(org!), enabled: !!org, refetchInterval: REFRESH_MS });
   const members = useQuery({ queryKey: ['home', 'members', org], queryFn: () => homeApi.members(org!), enabled: !!org, refetchInterval: 5 * REFRESH_MS });
   const mentions = useQuery({ queryKey: ['home', 'mentions', org], queryFn: () => homeApi.mentions(org!, MENTION_ROWS), enabled: !!org, refetchInterval: REFRESH_MS });
-  return { channels, members, mentions, agents: agentsOf(members.data ?? []) };
+  return { channels, members, mentions, agents: agentsOf(members.data ?? [], me) };
 }
 
 /** The first mail account's inbox: its unread count and its newest conversations. Waits while the mailbox is being made. */

@@ -111,6 +111,11 @@ r=await api(G.token,'GET',`/v1/mail/accounts?workspace=${W}`);t('and Mail lets h
 r=await api(A.token,'GET',`/v1/workspaces/${W}/members?all=1`);{const ms=r.j.members??[];const asst=(id)=>ms.find(m=>m.kind==='personal_agent'&&m.agentRuntime==='hosted'&&m.sponsorId===id);
 t('the full list holds each member’s assistant, as a personal agent with its sponsor',r.s===200&&!!asst(A.user.id)&&!!asst(Bo.user.id)&&!!asst(G.user.id),JSON.stringify(ms.map(m=>[m.displayName,m.kind,m.agentRuntime??''])));
 globalThis.annAsst=asst(A.user.id);globalThis.bobAsst=asst(Bo.user.id);}
+// The model every agent runs on is the organization's (operator ruling 2026-11-11): a member sees it, an admin sets it.
+r=await api(Bo.token,'GET',`/v1/workspaces/${W}/assistant/model`);t('Bob, a member, sees the organization’s model',r.s===200&&r.j.settings?.provider==='default',r.s+' '+JSON.stringify(r.j).slice(0,80));
+r=await api(Bo.token,'PUT',`/v1/workspaces/${W}/assistant/model`,{provider:'default'});t('but cannot set it',r.s===403&&r.j.error?.code==='not_admin',r.s+' '+JSON.stringify(r.j));
+r=await api(A.token,'PUT',`/v1/workspaces/${W}/assistant/model`,{provider:'claude-agent'});t('Ann’s bad choice is refused with a reason',r.s===400&&typeof r.j.error?.message==='string',r.s+' '+JSON.stringify(r.j));
+r=await api(A.token,'PUT',`/v1/workspaces/${W}/assistant/model`,{provider:'default'});t('Ann, the owner, sets it',r.s===200&&r.j.settings?.provider==='default',r.s+' '+JSON.stringify(r.j).slice(0,80));
 r=await api(Bo.token,'POST',`/v1/workspaces/${W}/dms`,{userIds:[annAsst?.userId]});t('Bob cannot DM Ann’s assistant',r.s===403,r.s+' '+JSON.stringify(r.j).slice(0,120));
 r=await api(A.token,'POST',`/v1/workspaces/${W}/dms`,{userIds:[annAsst?.userId]});t('Ann can DM her own',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,120));globalThis.annDm=r.j.id;
 // The assistant in Chat (agents.md §1.1): its sponsor's DM, mention and thread replies start its turn; nobody else's do.

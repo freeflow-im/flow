@@ -44,9 +44,10 @@ export function sidebarChannels(channels: ChannelDTO[]): ChannelDTO[] {
 /** Chat's tab number: the notifications waiting in every channel and DM, as Chat's own badge counts them. */
 export const chatUnread = (channels: ChannelDTO[]): number => channels.reduce((n, c) => n + (c.isMember ? c.unreadNotifications : 0), 0);
 
-/** The organization's agents, by name. */
-export function agentsOf(members: WorkspaceMemberDTO[]): WorkspaceMemberDTO[] {
-  return members.filter((m) => m.isAgent).sort((a, b) => a.displayName.localeCompare(b.displayName));
+/** The agents the person can talk to, by name: the shared agents and their own assistant. Another person's assistant answers
+ * only them (docs/specs/agents.md §1.1), so it is not listed. */
+export function agentsOf(members: WorkspaceMemberDTO[], me: string | null = null): WorkspaceMemberDTO[] {
+  return members.filter((m) => m.isAgent && (m.kind !== 'personal_agent' || (!!me && m.sponsorId === me))).sort((a, b) => a.displayName.localeCompare(b.displayName));
 }
 
 /** The person's DM with one other member, if they have one already. */

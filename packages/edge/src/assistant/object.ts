@@ -28,6 +28,8 @@ import { openaiErrorMessage } from '@flow/docs/server/agent/openai.ts';
 import { OpenRouterError } from '@flow/docs/server/agent/openrouter.ts';
 import { checkAssistantKey, OwnKeyError } from '@flow/docs/server/agent/providers.ts';
 import { AssistantSettingsStore, SettingsError, type KeyCheck, type SearchKeyCheck } from '@flow/docs/server/agent/settings.ts';
+import { ORG_ROW, OrgModelSettings, orgModelKey, type OrgModel } from './orgModel';
+import type { AssistantSettings } from '@flow/shared/assistant';
 import { AgentStore } from '@flow/docs/server/agent/store.ts';
 import { checkBraveKey } from '@flow/docs/server/agent/tools.ts';
 import { ASSISTANT_PAGES, SUITE_GUIDANCE } from '../docs/assistantTools.ts';
@@ -53,6 +55,8 @@ export interface AssistantEnv {
   ORG?: DurableObjectNamespace<import('../org/object').Org>;
   /** The organizations' event logs: a wake job's steps (ack, done), when this runtime takes one (agents.md §6). */
   EVENTS?: DurableObjectNamespace<import('../events/object').Events>;
+  /** Itself: the `org:<id>` object keeps the organization's model, which every runtime runs on (orgModel.ts). */
+  ASSISTANT?: DurableObjectNamespace<Assistant>;
 }
 
 /** How long an async turn may run before it is given up. */
@@ -121,7 +125,10 @@ export class Assistant extends DurableObject<AssistantEnv> {
   private readonly sql: SqlStorage;
   private readonly context: DocsContext;
   private readonly app = new Hono<{ Bindings: Bindings }>();
-  private services: { agent: AgentService; settings: AssistantSettingsStore } | null = null;
+  private services: { agent: AgentService; settings: OrgModelSettings } | null = null;
+  /** The organization's model as last asked (orgModel.ts), and when: kept a minute. */
+  private orgModelAt = 0;
+  private orgModelOf: string | null = null;
   /** The latest request's caller: the account is always this object's, but its channels and session may change. */
   private who: Who | null = null;
   /** The caller of each turn that is running, by its conversation user: tools read theirs, never a later request's. */
@@ -204,10 +211,11 @@ export class Assistant extends DurableObject<AssistantEnv> {
   }
 
   /** The stores and the loop, made on first use (inside the Docs runtime's context, which their SQL needs). */
-  private service(): { agent: AgentService; settings: AssistantSettingsStore } {
+  private service(): { agent: AgentService; settings: OrgModelSettings } {
     if (this.services) return this.services;
     const db = new DatabaseSync();
-    const settings = new AssistantSettingsStore(db as never, 'data/connector.key', { builtIn: true, agents: false });
+    // Every agent runs on its organization's model (operator ruling 2026-11-11): the loop reads it through this store.
+    const settings = new OrgModelSettings(db as never, 'data/connector.key', { builtIn: true, agents: false });
     const model = this.model();
     const agent = new AgentService(new AgentStore(db as never), null as never, settings, {
       jobs: false,
@@ -297,6 +305,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
   async handle(request: Request, caller: CallerContext, docs: DocsCaller, agentName?: string, opts: { conversationUser?: string } = {}): Promise<Response> {
     const wrong = ownerMismatch(this, caller, 'the Assistant');
     if (wrong) { console.error(`[assistant] ${wrong}`); return ownerRefusal(wrong); }
+    if (caller.organizationId) await this.useOrgModel(caller.organizationId);
     // The agent's name as the directory knows it (agents.md §6), the definition's default until the person sets one.
     if (agentName && this.state('definition_default_name') !== agentName) this.setState('definition_default_name', agentName);
     const who: Who = { caller: caller as AccountCaller, docs, ...(opts.conversationUser ? { conversationUser: opts.conversationUser } : {}) };
@@ -331,6 +340,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
    * One conversation per subscription keeps an automation's memory apart from the person's chats.
    */
   async wake(p: { organizationId: string; job: AgentJobDTO; runtime: HostedRuntimeDTO }): Promise<void> {
+    await this.useOrgModel(p.organizationId);
     const { job, runtime, organizationId } = p;
     const events = this.env.EVENTS?.get(this.env.EVENTS.idFromName(organizationId));
     const step = (s: 'ack' | 'done', opts: { ok?: boolean; note?: string } = {}) => events?.jobStep(job.id, job.agent, s, opts).catch((err: Error) => console.error(`[assistant] job ${job.id} ${s}: ${err.message}`));
@@ -396,6 +406,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
    * one exchange stays with it, and the answer posted in Chat as the assistant itself.
    */
   async chatTurn(p: { organizationId: string; runtime: HostedRuntimeDTO; channelId: string; threadRootId: string | null; messageId: string; prompt: string }): Promise<void> {
+    await this.useOrgModel(p.organizationId);
     const { runtime, organizationId } = p;
     if (runtime.mode !== 'personal' || !runtime.sponsorId || !runtime.sponsorAccountId) return;
     if (this.runningJobs.has(p.messageId)) return;
@@ -453,6 +464,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
    * with the sponsor's access, one conversation per sender, and the answer mailed back from the assistant's mailbox.
    */
   async mailTurn(p: { organizationId: string; runtime: HostedRuntimeDTO; mailboxAccountId: string; from: string; subject: string; text: string; messageId: string }): Promise<void> {
+    await this.useOrgModel(p.organizationId);
     const { runtime, organizationId } = p;
     if (runtime.mode !== 'personal' || !runtime.sponsorId || !runtime.sponsorAccountId || !this.env.MAIL) return;
     if (this.runningJobs.has(p.messageId)) return;
@@ -503,11 +515,51 @@ export class Assistant extends DurableObject<AssistantEnv> {
     }
   }
 
+  // ---- the organization's model (orgModel.ts) ------------------------------------------------------------------------
+
+  /** Asks the organization's object for its model, at most once a minute, before a turn. A failure keeps the last one. */
+  private async useOrgModel(organizationId: string): Promise<void> {
+    if (this.orgModelOf === organizationId && Date.now() - this.orgModelAt < 60_000) return;
+    try {
+      const model = await this.env.ASSISTANT!.get(this.env.ASSISTANT!.idFromName(orgModelKey(organizationId))).orgModel();
+      withDocsContext(this.context, () => { this.service().settings.current = model; });
+      this.orgModelOf = organizationId;
+      this.orgModelAt = Date.now();
+    } catch (err) {
+      console.error(`[assistant] organization model: ${(err as Error).message}`);
+    }
+  }
+
+  /** In the `org:<id>` object: the organization's model, for the runtimes (its keys opened). */
+  async orgModel(): Promise<OrgModel> {
+    return withDocsContext(this.context, () => {
+      const base = new AssistantSettingsStore(new DatabaseSync() as never, 'data/connector.key', { builtIn: true, agents: false });
+      return { shown: base.get(ORG_ROW), choice: base.choice(ORG_ROW), braveKey: base.braveKey(ORG_ROW), openaiKey: base.openaiKey(ORG_ROW) };
+    });
+  }
+
+  /** In the `org:<id>` object: the organization's model, as shown (masked). */
+  async orgSettings(): Promise<AssistantSettings> {
+    return (await this.orgModel()).shown;
+  }
+
+  /** In the `org:<id>` object: an admin changes the organization's model; a key is checked first. Errors come back as answers. */
+  async updateOrgSettings(body: Partial<AssistantSettingsUpdate>): Promise<{ ok: true; settings: AssistantSettings } | { ok: false; message: string }> {
+    try {
+      const checks = this.keyChecks();
+      const settings = await withDocsContext(this.context, () => new AssistantSettingsStore(new DatabaseSync() as never, 'data/connector.key', { builtIn: true, agents: false }).update(ORG_ROW, body, checks.key, checks.search));
+      return { ok: true, settings };
+    } catch (e) {
+      if (e instanceof SettingsError) return { ok: false, message: e.message };
+      throw e;
+    }
+  }
+
   /** The person's own OpenAI key, for Docs' edit_image (its host.assistant.openaiKey); null for none or another person. */
   async openaiKey(userId: string): Promise<string | null> {
     const owner = this.state('owner_user_id');
     if (owner && owner !== userId) return null;
-    return withDocsContext(this.context, () => this.service().settings.openaiKey(userId));
+    return withDocsContext(this.context, () => this.service().settings.openaiKey());
   }
 
   private routes(): void {

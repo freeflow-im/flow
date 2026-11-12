@@ -1,5 +1,16 @@
 # Decision log
 
+## 2026-11-11 — One model per organization, for every agent (operator ruling)
+
+- **Ruling (Scott):** for now the model and API keys agents run on are the **organization's**, set by its owners and
+  admins in Organization settings → Agents, and every agent uses them: each person's assistant and every hosted shared
+  agent. Members see what it is; they no longer set their own.
+- **How:** the Assistant object named `org:<organizationId>` keeps the setting (sealed keys, as before); each runtime asks
+  it at the start of a turn and keeps it a minute (`assistant/orgModel.ts`). `/api/settings/assistant` and
+  `/v1/workspaces/:id/assistant/model` read it for anyone and change it for owners and admins. Keys people saved for
+  themselves before stay stored and are no longer used.
+- **Where:** `docs/specs/agents.md` §6; `packages/admin/src/sections/Agents.tsx`.
+
 ## 2026-11-11 — Identity, organizations, members and agents sit below the apps; Admin depends on no app (operator ruling)
 
 - **Ruling (Scott):** users and agents, organizations and members are the platform's low layer; the apps (Chat, Mail,

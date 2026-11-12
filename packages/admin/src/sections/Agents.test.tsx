@@ -37,6 +37,7 @@ beforeEach(() => {
     const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { 'content-type': 'application/json' } });
     if ((path.split('?')[0] ?? '').endsWith('/members')) return json({ members: [member('Ann', { role: 'owner' }), member('Bob'), member('Omni', { isAgent: true, sponsorId: 'u-ann', statusText: 'the team helper' }), member('Ada', { isAgent: true, sponsorId: 'u-ann', kind: 'personal_agent', agentRuntime: 'hosted' })] });
     if (path.endsWith('/accounts')) return json({ accounts });
+    if (path === '/v1/workspaces/o1/assistant/model') return json({ settings: { provider: method === 'PUT' ? 'anthropic' : 'default', builtIn: true, agents: false, anthropicModel: 'claude-sonnet-5-5', openaiModel: 'gpt-6.1-sol', openrouterModel: '', anthropicKey: method === 'PUT' ? '••••abcd' : null, openaiKey: null, openrouterKey: null, braveKey: null } });
     if (method === 'POST' && path.endsWith('/agents/hosted')) return json({ agent: { id: 'u-pip', accountId: 'a-pip', displayName: 'Pip', mode: 'shared', self: false }, definition: { name: 'Pip', instructions: 'Be brief.', updatedAt: '2026-11-11T00:00:00.000Z' } }, 201);
     if (path.endsWith('/agents/u-omni/definition')) return json({ definition: { name: 'Omni', instructions: method === 'PUT' ? 'Updated.' : 'Help the team.', updatedAt: null }, mayEdit: true });
     if (method === 'DELETE' && path.includes('/accounts/')) {
@@ -85,6 +86,16 @@ describe('the Agents section', () => {
     fireEvent.click(screen.getByTestId('agent-instructions-save-Omni'));
     await waitFor(() => expect(calls.some((c) => c.method === 'PUT' && c.path === '/v1/workspaces/o1/agents/u-omni/definition')).toBe(true));
     expect(calls.find((c) => c.method === 'PUT' && c.path.endsWith('/definition'))?.body).toEqual({ instructions: 'Help the team briefly.' });
+  });
+
+  it('sets the model every agent in the organization runs on', async () => {
+    mount();
+    const pick = (await screen.findByTestId('assistant-provider')) as HTMLSelectElement;
+    await waitFor(() => expect(pick.value).toBe('default'));
+    fireEvent.change(pick, { target: { value: 'anthropic' } });
+    fireEvent.change(await screen.findByTestId('assistant-key'), { target: { value: 'sk-ant-test-abcd' } });
+    fireEvent.click(screen.getByTestId('assistant-model-save'));
+    await waitFor(() => expect(calls.some((c) => c.method === 'PUT' && c.path === '/v1/workspaces/o1/assistant/model' && (c.body as { provider: string; anthropicKey: string }).provider === 'anthropic' && (c.body as { anthropicKey: string }).anthropicKey === 'sk-ant-test-abcd')).toBe(true));
   });
 
   it('removes a personal agent through its account, after a confirmation', async () => {
