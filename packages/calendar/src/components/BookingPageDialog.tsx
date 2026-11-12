@@ -106,7 +106,7 @@ export function BookingPageDialog({ calendars, onClose }: { calendars: CalendarI
             </section>
 
             <section className="grid gap-3 sm:grid-cols-2">
-              <label className="flex flex-col gap-1 sm:col-span-2"><span className="font-medium">Title</span><input className={field} value={draft.title} maxLength={120} onChange={(e) => set({ title: e.target.value })} /></label>
+              <label className="flex flex-col gap-1 sm:col-span-2"><span className="font-medium">Title</span><input className={field} value={draft.title} maxLength={120} placeholder={saved?.defaultTitle ?? 'Meeting with you'} onChange={(e) => set({ title: e.target.value })} /></label>
               <label className="flex flex-col gap-1 sm:col-span-2"><span className="font-medium">Description <span className="font-normal text-muted">(optional)</span></span><textarea className={cn(field, 'h-16 py-1.5')} value={draft.description} maxLength={2000} onChange={(e) => set({ description: e.target.value })} /></label>
               <div className="flex flex-col gap-1 sm:col-span-2">
                 <span className="font-medium">Meeting lengths</span>

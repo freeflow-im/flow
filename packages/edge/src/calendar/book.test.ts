@@ -77,7 +77,7 @@ describe('the guest scheduler', () => {
   it('starts off with the defaults, and turning it on makes a readable link', async () => {
     const w = world();
     const r = await w.owner('GET', `/v1/calendar/scheduler?tz=${encodeURIComponent(LA)}`);
-    expect(r.j).toMatchObject({ token: null, url: null, page: { enabled: false, durations: [30], timezone: LA, weekly: { mon: [[540, 1020]], sat: [] }, minNoticeMin: 240, horizonDays: 60 } });
+    expect(r.j).toMatchObject({ token: null, url: null, page: { enabled: false, title: '', durations: [30], timezone: LA, weekly: { mon: [[540, 1020]], sat: [] }, minNoticeMin: 240, horizonDays: 60 }, defaultTitle: 'Meeting with Ann' });
     const on = await turnedOn(w);
     expect(on.token).toMatch(/^[0-9a-hjkmnp-tv-z]{4}-[0-9a-hjkmnp-tv-z]{4}-[0-9a-hjkmnp-tv-z]{4}$/);
     expect(on.url).toBe(`https://app.test/calendar/book/${on.token}`);

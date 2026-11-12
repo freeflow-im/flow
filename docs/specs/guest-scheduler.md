@@ -236,9 +236,10 @@ Where the build differs from the plan above:
 - **Tests.** `scheduler.test.ts` (slots, DST, zones, settings, tokens), `book.test.ts` (the whole flow on one object
   through the public route), `src/book/book.test.ts` (the page's helpers), and the `book:` section of
   `test/e2e-calendar.mjs` (158 passed on 2026-11-12).
-- **Fixes after launch (2026-11-12).** The default title is "Meeting": "30 Minute Meeting" named one length, and a page
-  offering 45 minutes still said 30. A page saved with the old default and other lengths reads as "Meeting"; a title the
-  owner typed is kept. The event's description, which the guest reads in the invitation, now holds the guest's note,
+- **Fixes after launch (2026-11-12).** The default title is "Meeting with <owner's first name>" ("30 Minute Meeting" named one
+  length, and a page offering 45 minutes still said 30): `title` '' means the default, worked out when shown (`titleOf`), and
+  the old defaults read as ''. A title the owner typed is kept. With the default title the booked event is named
+  "<owner> and <guest>" (`eventSummaryOf`), which reads right in both calendars; with a typed one, "<title>: <guest>". The event's description, which the guest reads in the invitation, now holds the guest's note,
   "Booked through <owner>'s booking page." and the guest's cancel or reschedule link (it said "Booked by … through your
   booking page", written to the owner, and had no link). The platform's own mail goes only where no invitation was sent
   (`mailed_ics`), so a guest gets one mail, not two.

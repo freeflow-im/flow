@@ -174,7 +174,7 @@ export interface SchedulerConfig {
   location: { kind: 'text' | 'none'; value: string };
 }
 /** The booking page: its settings and, once it has been turned on, its public link. */
-export interface SchedulerPage { page: SchedulerConfig; token: string | null; url: string | null }
+export interface SchedulerPage { page: SchedulerConfig; token: string | null; url: string | null; /** The title when `page.title` is '': "Meeting with <first name>". */ defaultTitle?: string }
 export interface SchedulerBooking {
   id: string; eventId: string; status: 'booked' | 'cancelled'; start: string; end: string; duration: number;
   guestName: string; guestEmail: string; note: string | null; guestTimezone: string | null; reschedules: number;

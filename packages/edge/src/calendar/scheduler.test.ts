@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ConfigPatch, applyPatch, busyOf, withDefaults, dateIn, daysWithSlots, defaultConfig, monthWindow, newPageToken, normalizePageToken, openSlots, type SchedulerConfig,
+  ConfigPatch, applyPatch, busyOf, eventSummaryOf, titleOf, withDefaults, dateIn, daysWithSlots, defaultConfig, monthWindow, newPageToken, normalizePageToken, openSlots, type SchedulerConfig,
 } from './scheduler';
 
 const LA = 'America/Los_Angeles';
@@ -80,11 +80,13 @@ describe('open slots', () => {
 });
 
 describe('the settings', () => {
-  it('titles a new page "Meeting", and drops the old "30 Minute Meeting" only where it names the wrong length', () => {
-    expect(defaultConfig(LA).title).toBe('Meeting');
-    expect(withDefaults({ title: '30 Minute Meeting', durations: [30, 45] }, LA).title).toBe('Meeting');
-    expect(withDefaults({ title: '30 Minute Meeting', durations: [30] }, LA).title).toBe('30 Minute Meeting');
-    expect(withDefaults({ title: 'Intro call', durations: [45] }, LA).title).toBe('Intro call');
+  it('titles a page "Meeting with <first name>" unless the owner typed one, and reads the old defaults as none', () => {
+    expect(titleOf(defaultConfig(LA), 'Scott Persinger')).toBe('Meeting with Scott');
+    expect(titleOf(withDefaults({ title: '30 Minute Meeting', durations: [45] }, LA), 'Scott Persinger')).toBe('Meeting with Scott');
+    expect(titleOf(withDefaults({ title: 'Meeting' }, LA), 'Ann')).toBe('Meeting with Ann');
+    expect(titleOf(withDefaults({ title: 'Intro call' }, LA), 'Ann')).toBe('Intro call');
+    expect(eventSummaryOf({ title: '' }, 'Scott Persinger', 'Bo Guest')).toBe('Scott Persinger and Bo Guest');
+    expect(eventSummaryOf({ title: 'Intro call' }, 'Scott Persinger', 'Bo Guest')).toBe('Intro call: Bo Guest');
   });
 
   it('sorts lengths, keeps the default among them, and refuses overlapping or empty ranges', () => {

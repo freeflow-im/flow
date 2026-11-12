@@ -350,11 +350,11 @@ export const CALENDAR_TOOLS: CalendarTool[] = [
     scopes: ['calendar:read'],
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     async run(ctx) {
-      const r = await call<{ url: string | null; page: { enabled: boolean; title: string; durations: number[]; timezone: string; weekly: Record<string, [number, number][]> } }>(ctx, 'GET', '/scheduler');
+      const r = await call<{ url: string | null; defaultTitle?: string; page: { enabled: boolean; title: string; durations: number[]; timezone: string; weekly: Record<string, [number, number][]> } }>(ctx, 'GET', '/scheduler');
       const hm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
       const hours = Object.fromEntries(Object.entries(r.page.weekly).filter(([, v]) => v.length).map(([d, v]) => [d, v.map(([a, b]) => `${hm(a)}-${hm(b)}`)]));
       return {
-        enabled: r.page.enabled, ...(r.page.enabled && r.url ? { url: r.url } : {}), title: r.page.title, lengths_minutes: r.page.durations, timezone: r.page.timezone, hours,
+        enabled: r.page.enabled, ...(r.page.enabled && r.url ? { url: r.url } : {}), title: r.page.title || r.defaultTitle || 'Meeting', lengths_minutes: r.page.durations, timezone: r.page.timezone, hours,
         ...(r.page.enabled ? {} : { note: `The booking page is off. The user can turn it on in FreeFlow Calendar at ${ctx.origin}/calendar (Booking page).` }),
       };
     },
