@@ -45,6 +45,8 @@ export interface MailEnv {
   MAIL_ALARM?: string;
   /** `1` lets an account use `security: 'none'`, any port and a local host: local dev against GreenMail only. */
   MAIL_ALLOW_INSECURE?: string;
+  /** How often a person's assistant's mailbox is checked once its allowlist names a sender (default 600: ten minutes). */
+  ASSISTANT_MAIL_EVERY_SECONDS?: string;
   /** The organizations' event logs (events/object.ts): new INBOX mail is published there as `mail.received`. */
   EVENTS?: DurableObjectNamespace<import('../events/object').Events>;
   /** For a person's assistant's mailbox (agents.md §1.1): who its sponsor is, their mailboxes, the allowlist, the turn. */
@@ -58,8 +60,8 @@ interface AssistantPolicy { allowed: Set<string>; agentId: string; sponsorAccoun
 const POLICY_TTL_MS = 2 * 60_000;
 /** Where refused mail goes: out of the inbox, never shown to the assistant, kept for the sponsor to look at. */
 const REFUSED_FOLDER = 'Refused';
-/** How often an assistant's mailbox is checked for new mail. */
-const ASSISTANT_MAIL_EVERY_MS = 60_000;
+/** How often an assistant's mailbox is checked for new mail, once its allowlist names a sender (operator ruling 2026-11-11). */
+const ASSISTANT_MAIL_EVERY_MS = 10 * 60_000;
 
 interface AccountRow {
   id: string; email: string; display_name: string; imap: string; smtp: string;
@@ -1358,9 +1360,11 @@ export class Mail extends DurableObject<MailEnv> {
   private async armAlarm(now = Date.now()): Promise<void> {
     if (this.env.MAIL_ALARM === 'off') { if ((await this.ctx.storage.getAlarm()) !== null) await this.ctx.storage.deleteAlarm(); return; }
     const has = (this.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM accounts').toArray()[0]?.n ?? 0) > 0;
-    // A person's assistant's mailbox has nobody opening it, so it is checked on a steady beat (agents.md §1.1).
-    const assistant = has && (await this.assistantPolicy().catch(() => null)) !== null;
-    const at = assistant ? now + ASSISTANT_MAIL_EVERY_MS : nextAlarmAt(this.cache.lastActiveAt(), now, has);
+    // A person's assistant's mailbox has nobody opening it (agents.md §1.1): with an empty allowlist it is never checked,
+    // and once the sponsor names a sender it is checked every ten minutes.
+    const policy = has ? await this.assistantPolicy().catch(() => null) : null;
+    const every = (Number(this.env.ASSISTANT_MAIL_EVERY_SECONDS) || 0) * 1000 || ASSISTANT_MAIL_EVERY_MS;
+    const at = policy ? (policy.allowed.size ? now + every : null) : nextAlarmAt(this.cache.lastActiveAt(), now, has);
     const current = await this.ctx.storage.getAlarm();
     if (at === null) { if (current !== null) await this.ctx.storage.deleteAlarm(); return; }
     if (current === null || current > at || current < now) await this.ctx.storage.setAlarm(at);
@@ -1583,8 +1587,8 @@ export class Mail extends DurableObject<MailEnv> {
   private async assistantPolicy(): Promise<AssistantPolicy | null> {
     if (this.policy !== undefined && (this.policy === null || Date.now() - this.policy.at < POLICY_TTL_MS)) return this.policy;
     const owner = this.cache.state('owner_account_id');
-    const { DIRECTORY, MAIL, ASSISTANT } = this.env;
-    if (!owner || !DIRECTORY || !MAIL || !ASSISTANT) return (this.policy = null);
+    const { DIRECTORY, ASSISTANT } = this.env;
+    if (!owner || !DIRECTORY || !ASSISTANT) return (this.policy = null);
     const dir = DIRECTORY.get(DIRECTORY.idFromName('directory'));
     const ask = async <T,>(method: string, ...args: unknown[]) => {
       const a = (await dir.call(method as never, args as never)) as { ok: boolean; value?: T };
@@ -1594,11 +1598,9 @@ export class Mail extends DurableObject<MailEnv> {
     if (!me || me.kind !== 'personal_agent' || me.agentRuntime !== 'hosted' || !me.sponsorId) return (this.policy = null);
     const sponsor = await ask<AccountDTO | null>('accountFor', me.sponsorId, me.organizationId);
     if (!sponsor) return (this.policy = null);
-    const [boxes, extra] = await Promise.all([
-      MAIL.get(MAIL.idFromName(sponsor.id)).calendarIdentities().catch(() => [] as { email: string }[]),
-      ASSISTANT.get(ASSISTANT.idFromName(sponsor.id)).mailAllowlist().catch(() => [] as string[]),
-    ]);
-    const allowed = new Set([sponsor.address, ...boxes.map((b) => b.email), ...extra].filter((x): x is string => !!x).map((x) => x.toLowerCase()));
+    // Only the senders the sponsor named (operator ruling 2026-11-11): the list starts empty, and empty means no mail at all.
+    const extra = await ASSISTANT.get(ASSISTANT.idFromName(sponsor.id)).mailAllowlist().catch(() => [] as string[]);
+    const allowed = new Set(extra.map((x) => x.toLowerCase()));
     return (this.policy = { allowed, agentId: me.principalId, sponsorAccountId: sponsor.id, organizationId: me.organizationId, at: Date.now() });
   }
 
@@ -1644,6 +1646,12 @@ export class Mail extends DurableObject<MailEnv> {
       organizationId: policy.organizationId, runtime: answer.value, mailboxAccountId: this.cache.state('owner_account_id')!,
       from, subject: email.subject ?? '', text, messageId: email.messageId ?? `${r.id}:${folder}:${m.uid}`,
     });
+  }
+
+  /** The sponsor changed the allowlist (routes/assistant.ts): read it again, and check mail (or stop) to match. */
+  async assistantPolicyChanged(): Promise<void> {
+    this.policy = undefined;
+    await this.armAlarm();
   }
 
   /** The assistant's answer by mail (Assistant.mailTurn), from its hosted mailbox, to the sender it is answering: only an

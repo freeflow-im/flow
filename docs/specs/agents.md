@@ -86,9 +86,10 @@ agent of §6, and it works the way a human assistant does:
   (mail, calendars, files others cannot open) where others can read it, Scott sees a confirm card (§1).
 - **Her own mailbox and calendar.** Her address is made as a person's is, from her name on the primary domain
   (`ada@locked-in.freeflow.im`, numbered if taken), and mail she sends shows "Ada 🤖 Scott". She accepts mail only from
-  a **sender allowlist**: by default the sponsor's addresses (their account's and the mailboxes they connected), plus
-  whatever senders the sponsor adds. Mail from anyone else is refused, and a sender is matched only on a message that
-  passes SPF, DKIM or DMARC for its From domain. Invitations to her calendar follow the same list. She works in the
+  a **sender allowlist** the sponsor writes, which **starts empty**: while it is empty her mailbox is never checked at
+  all; once it names a sender it is checked every ten minutes (operator ruling 2026-11-11, "Assistant mail is opt-in").
+  Mail from anyone else is moved to her Refused folder unread, and a sender is matched only on a message that passes
+  SPF, DKIM or DMARC for its From domain. Invitations to her calendar follow the same list. She works in the
   sponsor's mailbox and calendars too, through the sponsor's access.
 - **Guests have none** (§6), and an external personal agent (Claude Desktop on `/mcp`) stays as it was: on the member
   list, with no address, mailbox or channels.
