@@ -1,16 +1,16 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { BROWSER_EXTENSION_DEV_ID, checkBrowserExtension, browserExtensionPresent, runWebTool, WebToolError } from './browserBridge.ts';
+import { BROWSER_EXTENSION_DEV_ID, BROWSER_EXTENSION_STORE_ID, checkBrowserExtension, browserExtensionPresent, runWebTool, WebToolError } from './browserBridge.ts';
 
 type Answer = Record<string, unknown> | undefined;
 
 /** A stand-in for chrome.runtime, answering every message with `reply`. */
-function fakeExtension(reply: (message: { type: string; name?: string }) => Answer) {
+function fakeExtension(reply: (message: { type: string; name?: string }, id: string) => Answer) {
   const sent: { id: string; message: unknown }[] = [];
   (globalThis as { chrome?: unknown }).chrome = {
     runtime: {
       sendMessage(id: string, message: { type: string }, callback: (a: Answer) => void) {
         sent.push({ id, message });
-        queueMicrotask(() => callback(reply(message)));
+        queueMicrotask(() => callback(reply(message, id)));
       },
     },
   };
@@ -21,12 +21,20 @@ afterEach(() => {
   delete (globalThis as { chrome?: unknown }).chrome;
 });
 
-describe('the browser bridge (prototype)', () => {
-  it('finds the extension by its fixed id, and says so', async () => {
-    const sent = fakeExtension(() => ({ ok: true, version: '0.0.3' }));
+describe('the browser bridge', () => {
+  it('finds the Chrome Web Store build first, and says so', async () => {
+    const sent = fakeExtension(() => ({ ok: true, version: '0.1.0' }));
     expect(await checkBrowserExtension(true)).toBe(true);
     expect(browserExtensionPresent()).toBe(true);
-    expect(sent[0]).toEqual({ id: BROWSER_EXTENSION_DEV_ID, message: { type: 'ping' } });
+    expect(sent).toEqual([{ id: BROWSER_EXTENSION_STORE_ID, message: { type: 'ping' } }]);
+  });
+
+  it('falls back to the dev build, and sends its calls there', async () => {
+    const sent = fakeExtension((_m, id) => (id === BROWSER_EXTENSION_DEV_ID ? { ok: true, content: 'Tab 7: Example' } : undefined));
+    expect(await checkBrowserExtension(true)).toBe(true);
+    expect(sent.map((s) => s.id)).toEqual([BROWSER_EXTENSION_STORE_ID, BROWSER_EXTENSION_DEV_ID]);
+    expect(await runWebTool({ id: '1', name: 'browser_read', input: { tab: 7 } })).toBe('Tab 7: Example');
+    expect(sent[2]?.id).toBe(BROWSER_EXTENSION_DEV_ID);
   });
 
   it('finds nothing where no extension lets the page message it', async () => {

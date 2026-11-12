@@ -10,7 +10,7 @@ import { BROWSER_TOOLS, type AgentImage, type ClientToolCall } from '../../../sh
 export class WebToolError extends Error {}
 
 /** The Chrome Web Store build's id, given by the store when the item was first uploaded ('' until then). */
-export const BROWSER_EXTENSION_STORE_ID = '';
+export const BROWSER_EXTENSION_STORE_ID = 'dlfndpnhaonbojepfbiaonajkoonmmok';
 /** The dev build's id, from its manifest's `key` (unpacked builds keep it). */
 export const BROWSER_EXTENSION_DEV_ID = 'gnmcgiakoiplophhcoekeeaghfiipglo';
 const EXTENSION_IDS = [BROWSER_EXTENSION_STORE_ID, BROWSER_EXTENSION_DEV_ID].filter(Boolean);
