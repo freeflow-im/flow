@@ -22,6 +22,7 @@ import { QuickCreate } from './components/QuickCreate';
 import { ScopeDialog } from './components/ScopeDialog';
 import { SearchResults } from './components/SearchResults';
 import { ShareCalendarDialog } from './components/ShareCalendarDialog';
+import { BookingPageDialog } from './components/BookingPageDialog';
 import { Sidebar } from './components/Sidebar';
 import { Toolbar } from './components/Toolbar';
 import type { Anchor } from './components/ui/popover';
@@ -82,6 +83,8 @@ export function App() {
   const members = useMembers(orgId);
   const ownerName = (accountId: string) => members.data?.find((x) => x.accountId === accountId)?.displayName ?? 'Someone';
   const [sharing, setSharing] = useState<CalendarInfo | null>(null);
+  // The guest scheduler's settings (docs/specs/guest-scheduler.md §4); `?booking=1` opens them (a link from elsewhere).
+  const [bookingPage, setBookingPage] = useState(() => new URLSearchParams(window.location.search).get('booking') === '1');
   const events = useEvents(range, ahead, allCals);
   // One copy per event: the person's own invitation over a shared calendar's (phase 4.5).
   const occurrences = useMemo(() => mergeByUid(events.data ?? [], allCals ?? []), [events.data, allCals]);
@@ -314,6 +317,7 @@ export function App() {
       onAccount={(id) => setDialog({ kind: 'settings', accountId: id })}
       onAdd={() => setDialog({ kind: 'add', connect: 'icloud' })}
       shared={sharedCals} ownerName={ownerName} onShare={(c) => { setSidebarOpen(false); setSharing(c); }}
+      onBookingPage={() => { setSidebarOpen(false); setBookingPage(true); }}
     />
   );
 
@@ -400,6 +404,7 @@ export function App() {
           onSave={(input, scope) => (editing.existing ? m.update(editing.existing, input, scope ?? 'all') : m.create(input as Parameters<typeof m.create>[0]))}
           onDelete={editing.existing ? () => { const o = editing.existing!; setEditing(null); remove(o); } : undefined} />
       )}
+      {bookingPage && <BookingPageDialog calendars={cals} onClose={() => setBookingPage(false)} />}
       {sharing && <ShareCalendarDialog calendar={sharing} org={org ? { id: org.id, name: org.name } : null} onClose={() => setSharing(null)} />}
       {ask && <ScopeDialog action={ask.action} allowThis={ask.allowThis} onCancel={() => { ask.cancel(); setAsk(null); }} onChoose={(s) => { setAsk(null); ask.run(s); }} />}
       {dialog?.kind === 'add' && <AddAccountDialog kind={dialog.connect} onClose={() => setDialog(null)} onAdded={() => { setDialog(null); setToast('Connected. Your events are on their way.'); }} />}
