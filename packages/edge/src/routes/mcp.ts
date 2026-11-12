@@ -33,7 +33,9 @@ const CORS = {
   'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS',
   'access-control-expose-headers': 'www-authenticate, mcp-session-id, mcp-protocol-version',
 };
-const PAGE_HEADERS = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'content-security-policy': "frame-ancestors 'none'", 'referrer-policy': 'no-referrer' };
+// `same-origin`, not `no-referrer`: under no-referrer a browser posts the consent form with `Origin: null`, which the
+// decision's origin check refuses ("This request came from another site"). Other sites still get no referrer.
+const PAGE_HEADERS = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'content-security-policy': "frame-ancestors 'none'", 'referrer-policy': 'same-origin' };
 
 const json = (body: unknown, status = 200, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...headers } });
 const html = (body: string, status = 200) => new Response(body, { status, headers: PAGE_HEADERS });
