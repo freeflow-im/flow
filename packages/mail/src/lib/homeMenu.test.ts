@@ -6,32 +6,25 @@ const folder = (path: string, over: Partial<MailFolder> = {}) => ({ path, name: 
 const account = (id: string, email: string) => ({ id, email, displayName: '' }) as MailAccount;
 
 describe('mailMenu', () => {
-  const folders = [
-    folder('INBOX', { unread: 4 }),
-    folder('Sent', { specialUse: 'sent', unread: 2 }),
-    folder('Drafts', { specialUse: 'drafts', total: 3 }),
-    folder('hiring', { unread: 1 }),
-    folder('clients'),
-    folder('clients/acme'),
-  ];
+  const folders = [folder('INBOX', { specialUse: 'inbox', unread: 4 }), folder('Sent', { specialUse: 'sent', unread: 2 }), folder('Drafts', { specialUse: 'drafts', total: 3 }), folder('hiring', { unread: 1 })];
 
-  it('lists Compose, the special folders in order, then the rest under More folders', () => {
+  it('lists only New message, Inbox and Drafts', () => {
     const items = mailMenu([account('a', 'me@x.test')], account('a', 'me@x.test'), folders);
     expect(items.map((i) => [i.id, i.label, i.count ?? null])).toEqual([
-      ['compose', 'Compose', null],
+      ['compose', 'New message', null],
       ['folder:INBOX', 'Inbox', 4],
       ['folder:Drafts', 'Drafts', 3],
-      ['folder:Sent', 'Sent', 0],
-      ['more', 'More folders', null],
     ]);
     expect(items[1]!.href).toBe('/mail/?account=a&folder=INBOX');
-    expect(items[4]!.children!.map((c) => c.label)).toEqual(['clients', 'clients / acme', 'hiring']);
+    expect(items[1]!.children).toBeUndefined();
   });
 
-  it('offers the other accounts when there are several', () => {
+  it('opens the accounts under Inbox when there are several', () => {
     const items = mailMenu([account('a', 'me@x.test'), account('b', 'me@y.test')], account('a', 'me@x.test'), folders);
-    const accounts = items[items.length - 1]!;
-    expect(accounts.label).toBe('me@x.test');
-    expect(accounts.children!.map((c) => c.id)).toEqual(['account:a', 'account:b']);
+    expect(items).toHaveLength(3);
+    expect(items[1]!.children!.map((c) => [c.id, c.label])).toEqual([
+      ['account:a', 'me@x.test'],
+      ['account:b', 'me@y.test'],
+    ]);
   });
 });

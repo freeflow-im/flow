@@ -287,24 +287,18 @@ export function App() {
   // A guest's request is refused (403 guest): guests use Chat only (docs/specs/workspace-admin.md §6.5).
   const guest = accounts.error instanceof CalendarApiError && accounts.error.code === 'guest';
   const toggleCalendar = (c: CalendarInfo) => (c.shared ? sharedPrefs.set(c.id, { shown: c.hidden }) : prefs.mutate({ id: c.id, patch: { hidden: !c.hidden } }));
-  // Inside Home (docs/specs/home.md §2.1), Home's sidebar shows Calendar's menu in place of Calendar's own column:
-  // Create, Today, and each calendar as a switch in its colour.
+  // Inside Home (docs/specs/home.md §2.1), Home's sidebar shows Calendar's menu in place of Calendar's own column: only
+  // New event and Today. The calendars and the small month are in Calendar itself.
   const [inHome] = useState(isInHome);
-  const calendarItem = (c: CalendarInfo): SuiteMenuItem => ({ id: `calendar:${c.id}`, label: c.name, icon: 'dot', color: c.color, on: !c.hidden });
-  const menu: SuiteMenuItem[] | null =
-    inHome && calendars.data
-      ? [
-          { id: 'create', label: 'Create event', icon: 'plus' },
-          { id: 'today', label: 'Today', icon: 'today' },
-          ...cals.map(calendarItem),
-          ...(sharedCals.length ? [{ id: 'shared', label: 'Shared with me', children: sharedCals.map(calendarItem) }] : []),
-        ]
-      : null;
+  const menu: SuiteMenuItem[] | null = inHome
+    ? [
+        { id: 'create', label: 'New event', icon: 'plus' },
+        { id: 'today', label: 'Today', icon: 'today' },
+      ]
+    : null;
   useHomeMenu('calendar', menu, null, (id) => {
-    if (id === 'create') return createNew();
-    if (id === 'today') return today();
-    const c = [...cals, ...sharedCals].find((x) => `calendar:${x.id}` === id);
-    if (c) toggleCalendar(c);
+    if (id === 'create') createNew();
+    else if (id === 'today') today();
   }, window.location.pathname + window.location.search);
   const sidebar = (
     <Sidebar
