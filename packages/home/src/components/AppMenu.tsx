@@ -1,6 +1,6 @@
 // An app's menu under its row in Home's sidebar (docs/specs/home.md §2.1): the items the app sent, with the one it shows
 // marked. A click goes back to the app (App.tsx); an item with children opens them in place.
-import { useState, type ComponentType } from 'react';
+import { useState, type ComponentType, type ReactNode } from 'react';
 import {
   Archive,
   CalendarDays,
@@ -52,10 +52,37 @@ const ICONS: Record<Exclude<SuiteMenuIcon, 'dot'>, ComponentType<LucideProps>> =
 function Icon({ item }: { item: SuiteMenuItem }) {
   if (item.icon === 'dot') {
     const on = item.on !== false;
-    return <span className="size-3 shrink-0 rounded-sm border-2" style={{ borderColor: item.color ?? 'currentColor', background: on ? (item.color ?? 'currentColor') : 'transparent' }} aria-hidden />;
+    return (
+      <span
+        className="size-3 shrink-0 rounded-sm border-2"
+        style={{
+          borderColor: item.color ?? 'currentColor',
+          background: on ? (item.color ?? 'currentColor') : 'transparent',
+        }}
+        aria-hidden
+      />
+    );
   }
   const I = item.icon ? ICONS[item.icon] : null;
   return I ? <I className="size-4 shrink-0 text-muted" strokeWidth={1.75} aria-hidden /> : <span className="size-4 shrink-0" aria-hidden />;
+}
+
+/**
+ * Opens and closes its content by sliding its height (a grid row from 0fr to 1fr, so no height is measured), with a
+ * fade. Closed, it is inert: not focusable, not read out. No movement for someone who asks for less.
+ */
+export function Collapse({ open, children, testId }: { open: boolean; children: ReactNode; testId?: string }) {
+  return (
+    <div
+      className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none ${open ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}
+      inert={!open}
+      aria-hidden={!open}
+      data-testid={testId}
+      data-open={open}
+    >
+      <div className="min-h-0 overflow-hidden">{children}</div>
+    </div>
+  );
 }
 
 const row = 'flex w-full items-center gap-2.5 rounded-md py-1 pr-3 text-left text-[13px] text-ink hover:bg-hover';
@@ -84,10 +111,22 @@ function MenuRow({ item, depth, selected, onItem }: { item: SuiteMenuItem; depth
         {item.href ? (
           // A place of its own with places in it (Docs' Organization files): the label opens it, the caret its list.
           <div className={`${row} gap-0 p-0 ${current ? 'bg-row-selected font-semibold' : ''}`} style={{ paddingLeft: 4 + depth * 14 }}>
-            <button type="button" className="flex size-5 shrink-0 items-center justify-center rounded text-muted hover:bg-row-selected" aria-label={shown ? `Close ${item.label}` : `Open ${item.label}`} aria-expanded={shown} onClick={() => setOpen(!shown)}>
+            <button
+              type="button"
+              className="flex size-5 shrink-0 items-center justify-center rounded text-muted hover:bg-row-selected"
+              aria-label={shown ? `Close ${item.label}` : `Open ${item.label}`}
+              aria-expanded={shown}
+              onClick={() => setOpen(!shown)}
+            >
               {caret}
             </button>
-            <button type="button" className="flex min-w-0 flex-1 items-center gap-2.5 py-1 pl-0.5 text-left" aria-current={current ? 'page' : undefined} data-testid={`home-menu-item-${item.id}`} onClick={() => onItem(item)}>
+            <button
+              type="button"
+              className="flex min-w-0 flex-1 items-center gap-2.5 py-1 pl-0.5 text-left"
+              aria-current={current ? 'page' : undefined}
+              data-testid={`home-menu-item-${item.id}`}
+              onClick={() => onItem(item)}
+            >
               <Icon item={item} />
               <span className="min-w-0 flex-1 truncate">{item.label}</span>
             </button>
@@ -98,13 +137,13 @@ function MenuRow({ item, depth, selected, onItem }: { item: SuiteMenuItem; depth
             <span className="truncate">{item.label}</span>
           </button>
         )}
-        {shown && (
+        <Collapse open={shown}>
           <ul>
             {item.children.map((c) => (
               <MenuRow key={c.id} item={c} depth={depth + 1} selected={selected} onItem={onItem} />
             ))}
           </ul>
-        )}
+        </Collapse>
       </li>
     );
   }

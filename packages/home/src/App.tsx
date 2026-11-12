@@ -89,7 +89,6 @@ export function App() {
     if (menus.select(app, item.id)) frames.show(app);
     else if (item.href) frames.open(item.href);
   };
-  const openMenu = frames.view !== 'home' ? menus.menus[frames.view as FramedApp] : undefined;
 
   const chatHref = frames.last.chat;
   const activeChannel = chatHref ? channelOf(chatHref, window.location.origin) : null;
@@ -117,7 +116,7 @@ export function App() {
             agents={chat.members.data ? chat.agents : null}
             onOpenAgent={(a) => void openAgent(a)}
             addAgentHref={admin ? adminAddress('agents') : null}
-            menu={openMenu ? { items: openMenu.items, selected: openMenu.selected } : null}
+            menus={menus.menus}
             onMenuItem={onMenuItem}
           />
           {/* The apps opened so far, each in its own frame, kept loaded while hidden. */}
