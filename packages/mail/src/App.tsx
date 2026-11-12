@@ -19,7 +19,7 @@ import { setReadingPane, useReadingPane } from './lib/layoutPref';
 import { Sidebar } from './components/Sidebar';
 import { COMPOSE_ITEM, folderItem, mailMenu } from './lib/homeMenu';
 import { useMediaQuery, useResizableWidth } from './hooks/layout';
-import { fetchBody, keys, prefetchThread, useAccounts, useFolders, useMessageActions, useMessages, useThread, useThreads, useTabStatus } from './hooks/mail';
+import { fetchBody, keys, prefetchThread, useAccounts, useFolders, useMessageActions, useMessages, useThread, useThreads, useTabStatus, useTabHeartbeat } from './hooks/mail';
 import { useMailAssistant } from './hooks/assistant';
 import { SETTING_UP, useAccountState, useOrganizations } from './hooks/organization';
 import { mailContext, setAssistantOpen, useAssistantOpen, type MessageRef } from './lib/assistant';
@@ -72,6 +72,7 @@ export function App() {
     void qc.resetQueries({ queryKey: ['mail'] });
   }, [org, qc]);
   const accounts = useAccounts();
+  useTabHeartbeat(org);
   // A new account's mailbox is made after it joins (platform.md §3.4): until then, a notice in place of the accounts,
   // and the accounts read again when it is ready.
   const accountState = useAccountState(org);

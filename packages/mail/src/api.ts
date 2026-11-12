@@ -255,6 +255,8 @@ export function attachmentUrl(accountId: string, folder: string, uid: number, in
 export const mailApi = {
   provider: (email: string) => request<ProviderPreset | null>('GET', `/v1/mail/providers${query({ email })}`),
   accounts: async () => (await request<{ accounts: MailAccount[] }>('GET', '/v1/mail/accounts')).accounts,
+  /** Says a Mail tab is open (even hidden), so the server keeps the mail fresh: `useTabHeartbeat`. */
+  heartbeat: () => request<{ ok: true }>('POST', '/v1/mail/heartbeat'),
   addAccount: async (account: NewAccount) => (await request<{ account: MailAccount }>('POST', '/v1/mail/accounts', account)).account,
   updateAccount: async (id: string, patch: AccountPatch) => (await request<{ account: MailAccount }>('PATCH', base(id), patch)).account,
   deleteAccount: (id: string) => request<{ ok: true }>('DELETE', base(id)),

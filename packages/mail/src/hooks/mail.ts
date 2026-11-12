@@ -36,6 +36,23 @@ export const keys = {
   threadDetails: (accountId: string) => ['mail', 'thread', accountId] as const,
 };
 
+/** As the server's TAB_HEARTBEAT_MS (packages/edge/src/imap/cache.ts). */
+export const HEARTBEAT_MS = 5 * 60_000;
+
+/**
+ * Tells the server a Mail tab is open, at once and every HEARTBEAT_MS, also while the tab is hidden (the lists' polls stop
+ * then), to the Mail object of the organization shown: the server checks for new mail every 5 minutes while a tab is open, 15 after a day without use.
+ */
+export function useTabHeartbeat(organizationId: string | null | undefined) {
+  useEffect(() => {
+    if (!organizationId) return;
+    const beat = () => { mailApi.heartbeat().catch(() => {}); };
+    beat();
+    const timer = setInterval(beat, HEARTBEAT_MS);
+    return () => clearInterval(timer);
+  }, [organizationId]);
+}
+
 export function useAccounts() {
   return useQuery({ queryKey: keys.accounts, queryFn: mailApi.accounts, refetchInterval: POLL_MS });
 }

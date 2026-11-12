@@ -39,6 +39,9 @@ import type { ImportRow } from '../importing';
 import { exportTables, importTable, ownerMismatch, ownerRefusal } from '../perAccount';
 import { AccountPatch, CategoryBody, DeleteBody, DraftBody, FlagsBody, MAX_SEND_BYTES, MoveBody, NewAccount, SendBody, SendersCategoryBody, TIMING_HEADER, checkServer, mailError, notFound, parse, savesSentCopy, sendSize, badRequest, type ServerSettings } from './rules';
 
+/** A Mail tab's heartbeat (`POST /v1/mail/heartbeat`), which must not count as the person being active. */
+const isHeartbeat = (request: Request) => request.method === 'POST' && new URL(request.url).pathname === '/v1/mail/heartbeat';
+
 export interface MailEnv {
   FLOW_DATA_KEY?: string;
   /** `off` stops the prefetch cache's alarm (a kill switch): pages then check the server themselves, as before it. */
@@ -322,7 +325,8 @@ export class Mail extends DurableObject<MailEnv> {
       if (t.test.alarm) await this.runCache(Date.now() + ALARM_BUDGET_MS).catch((err) => console.warn(`[mail] test alarm: ${(err as Error).message}`));
       return this.app.fetch(request, { caller } satisfies ObjectBindings);
     });
-    this.touch();
+    // A tab's heartbeat says only that Mail is open, not that the person is using it.
+    if (!isHeartbeat(request)) this.touch();
     await this.armAlarm().catch((err) => console.warn(`[mail] alarm: ${(err as Error).message}`));
     const out = new Response(res.body, res);
     out.headers.set(TIMING_HEADER, `wait=${Math.round(t.wait)};imap=${Math.round(t.imap)}${t.cache ? `;cache=${t.cache}` : ''}`);
@@ -1354,8 +1358,8 @@ export class Mail extends DurableObject<MailEnv> {
   }
 
   /**
-   * Sets the alarm for the next cache run (cache.ts `nextAlarmAt`: 30 s while the person is active, then less often, none
-   * after a day idle or with no accounts), unless one is already due sooner. After every request and every run.
+   * Sets the alarm for the next cache run (cache.ts `nextAlarmAt`: 30 s while the person is active, 5 or 15 minutes while
+   * a Mail tab is open, else less often, none after a day idle or with no accounts), unless one is already due sooner. After every request and every run.
    */
   private async armAlarm(now = Date.now()): Promise<void> {
     if (this.env.MAIL_ALARM === 'off') { if ((await this.ctx.storage.getAlarm()) !== null) await this.ctx.storage.deleteAlarm(); return; }
@@ -1364,7 +1368,7 @@ export class Mail extends DurableObject<MailEnv> {
     // and once the sponsor names a sender it is checked every ten minutes.
     const policy = has ? await this.assistantPolicy().catch(() => null) : null;
     const every = (Number(this.env.ASSISTANT_MAIL_EVERY_SECONDS) || 0) * 1000 || ASSISTANT_MAIL_EVERY_MS;
-    const at = policy ? (policy.allowed.size ? now + every : null) : nextAlarmAt(this.cache.lastActiveAt(), now, has);
+    const at = policy ? (policy.allowed.size ? now + every : null) : nextAlarmAt(this.cache.lastActiveAt(), now, has, this.cache.tabOpenAt());
     const current = await this.ctx.storage.getAlarm();
     if (at === null) { if (current !== null) await this.ctx.storage.deleteAlarm(); return; }
     if (current === null || current > at || current < now) await this.ctx.storage.setAlarm(at);
@@ -2131,6 +2135,9 @@ export class Mail extends DurableObject<MailEnv> {
 
     app.use('/v1/mail/accounts/:id/*', async (c: MailContext, next) => { c.set('account', this.row(c.req.param('id')!)); await next(); });
 
+    // An open Mail tab, every TAB_HEARTBEAT_MS even when hidden: the idle alarm keeps a shorter cadence (cache.ts cadenceMs).
+    app.post('/v1/mail/heartbeat', (c) => { this.cache.setState('tab_open_at', String(Date.now())); return c.json({ ok: true }); });
+
     // The hosted mailbox first, then the connected accounts in the order they were added.
     app.get('/v1/mail/accounts', (c) => c.json({ accounts: this.sql.exec<AccountRow & Record<string, SqlStorageValue>>("SELECT * FROM accounts ORDER BY kind = 'hosted' DESC, created_at").toArray().map((r) => this.toAccount(r)) }));
 
@@ -2235,7 +2242,7 @@ export class Mail extends DurableObject<MailEnv> {
       const r = c.get('account');
       const count = (table: string) => this.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM ${table} WHERE account_id = ?`, r.id).toArray()[0]?.n ?? 0;
       return c.json({
-        folders: this.cache.report(r.id), log: this.cacheLog, lastActiveAt: this.cache.lastActiveAt(), nextAlarmAt: await this.ctx.storage.getAlarm(),
+        folders: this.cache.report(r.id), log: this.cacheLog, lastActiveAt: this.cache.lastActiveAt(), tabOpenAt: this.cache.tabOpenAt(), nextAlarmAt: await this.ctx.storage.getAlarm(),
         alarmStep: this.cache.state('alarm_step'), alarmProfile: JSON.parse(this.cache.state('alarm_profile') || '{}'), alarmOff: this.env.MAIL_ALARM === 'off',
         tables: { messages: count('mail_messages'), categories: count('mail_categories'), refs: count('mail_refs'), threadIndex: count('mail_thread_index'), overrides: count('mail_category_overrides') },
         databaseBytes: this.sql.databaseSize,

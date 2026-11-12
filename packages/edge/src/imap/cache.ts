@@ -30,6 +30,16 @@ export const IDLE_CADENCES: { under: number; every: number }[] = [
   { under: 60 * 60_000, every: 5 * 60_000 },
   { under: 24 * 60 * 60_000, every: 30 * 60_000 },
 ];
+/**
+ * While a Mail tab is open (its heartbeat, sent every TAB_HEARTBEAT_MS even when hidden, came within TAB_OPEN_MS), the
+ * idle alarm runs every TAB_CADENCE_MS, and every TAB_IDLE_CADENCE_MS once the person has made no request for TAB_IDLE_MS.
+ * With no tab open, IDLE_CADENCES apply.
+ */
+export const TAB_HEARTBEAT_MS = 5 * 60_000;
+export const TAB_OPEN_MS = 11 * 60_000;
+export const TAB_CADENCE_MS = 5 * 60_000;
+export const TAB_IDLE_MS = 24 * 60 * 60_000;
+export const TAB_IDLE_CADENCE_MS = 15 * 60_000;
 /** A folder opened in the list stays cached this long after it was last looked at (the main folders always are). */
 export const RECENT_MS = 7 * 24 * 60 * 60_000;
 /** A folder whose sync failed is left alone this long. */
@@ -115,20 +125,22 @@ export const DDL = [
 export const THREAD_INDEX_CAP = 20_000;
 
 /**
- * How long until the alarm should run again, from when the person last made a request: every 30 s while active, then
- * less often, and not at all after a day idle (the next request starts it again). Null: no alarm.
+ * How long until the alarm should run again, from when the person last made a request and when an open Mail tab last
+ * sent its heartbeat: every 30 s while active; while a tab is open, every 5 minutes, or 15 after a day with no request;
+ * with none open, less often, and not at all after a day idle (the next request starts it again). Null: no alarm.
  */
-export function cadenceMs(lastActiveAt: number, now: number): number | null {
+export function cadenceMs(lastActiveAt: number, now: number, tabOpenAt = 0): number | null {
   const idle = Math.max(0, now - lastActiveAt);
   if (idle < ACTIVE_MS) return ACTIVE_CADENCE_MS;
+  if (now - tabOpenAt < TAB_OPEN_MS) return idle < TAB_IDLE_MS ? TAB_CADENCE_MS : TAB_IDLE_CADENCE_MS;
   for (const c of IDLE_CADENCES) if (idle < c.under) return c.every;
   return null;
 }
 
 /** When the alarm should next run, or null for not at all (no accounts, or idle too long). */
-export function nextAlarmAt(lastActiveAt: number, now: number, hasAccounts: boolean): number | null {
+export function nextAlarmAt(lastActiveAt: number, now: number, hasAccounts: boolean, tabOpenAt = 0): number | null {
   if (!hasAccounts) return null;
-  const every = cadenceMs(lastActiveAt, now);
+  const every = cadenceMs(lastActiveAt, now, tabOpenAt);
   return every === null ? null : now + every;
 }
 
@@ -222,6 +234,11 @@ export class MailCache {
 
   lastActiveAt(): number {
     return Number(this.state('last_active_at') ?? 0) || 0;
+  }
+
+  /** When an open Mail tab last sent its heartbeat (`POST /v1/mail/heartbeat`). */
+  tabOpenAt(): number {
+    return Number(this.state('tab_open_at') ?? 0) || 0;
   }
 
   // ---- folders ----------------------------------------------------------------------------------------------------
