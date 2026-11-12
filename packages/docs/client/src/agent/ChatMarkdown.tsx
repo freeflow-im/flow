@@ -89,3 +89,24 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, pictures = NO_PIC
     </div>
   );
 });
+
+/** Opens a picture full size in a new tab: through a blob address, since browsers refuse to open a data: address. */
+function openPicture(src: string): void {
+  void fetch(src)
+    .then((r) => r.blob())
+    .then((b) => window.open(URL.createObjectURL(b), '_blank', 'noopener'));
+}
+
+/** The pictures a tool took for the person to see (a browser screenshot, SHOWN_PICTURE_TOOLS), under its line in the chat. */
+export function ToolPictures({ images }: { images?: string[] }) {
+  if (!images?.length) return null;
+  return (
+    <div className="agent-tool-pictures" style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
+      {images.map((src, i) => (
+        <button key={i} type="button" onClick={() => openPicture(src)} title="Open full size" style={{ padding: 0, border: '1px solid #dadce0', borderRadius: 8, background: 'none', cursor: 'zoom-in', overflow: 'hidden', alignSelf: 'flex-start', maxWidth: '100%' }} data-testid="tool-picture">
+          <img src={src} alt="A screenshot the assistant took" style={{ display: 'block', maxWidth: '100%', maxHeight: 320, objectFit: 'contain' }} />
+        </button>
+      ))}
+    </div>
+  );
+}

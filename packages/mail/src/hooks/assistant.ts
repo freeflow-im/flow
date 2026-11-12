@@ -129,7 +129,12 @@ export function useMailAssistant({ org, context, show, onMailChanged }: MailAssi
             const pictures: AgentImage[] = [];
             const attach = (img: AgentImage) => pictures.length < MAX_IMAGES_PER_MESSAGE && pictures.push(img) > 0;
             const toolResults = await runMailClientCalls(pending, (ref) => latest.current.show(ref), attach);
-            for (const r of toolResults) updateTool(r.id, { status: r.isError ? 'error' : 'ok', ...(r.isError ? { error: r.content } : {}) });
+            // Each browser screenshot's picture goes under its line (in call order, as they were attached).
+            let shot = 0;
+            for (const r of toolResults) {
+              const picture = !r.isError && pending.find((c) => c.id === r.id)?.name === 'browser_screenshot' ? pictures[shot++] : undefined;
+              updateTool(r.id, { status: r.isError ? 'error' : 'ok', ...(r.isError ? { error: r.content } : {}), ...(picture ? { images: [`data:${picture.mediaType};base64,${picture.data}`] } : {}) });
+            }
             if (abort.signal.aborted) break;
             // Screenshots follow the results in the same message (the API takes only text in tool results).
             req = { context: withBrowser(latest.current.context()), scope: MAIL_CHAT, toolResults, ...(pictures.length ? { images: pictures, message: webPicturesNote(pictures.length) } : {}) };

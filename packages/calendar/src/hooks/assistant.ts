@@ -132,7 +132,12 @@ export function useCalendarAssistant({ org, context, handlers, onCalendarChanged
             const pictures: AgentImage[] = [];
             const attach = (img: AgentImage) => pictures.length < MAX_IMAGES_PER_MESSAGE && pictures.push(img) > 0;
             const toolResults = await runCalendarClientCalls(pending, { ...latest.current.handlers, confirm }, attach);
-            for (const r of toolResults) updateTool(r.id, { status: r.isError ? 'error' : 'ok', ...(r.isError ? { error: r.content } : {}) });
+            // Each browser screenshot's picture goes under its line (in call order, as they were attached).
+            let shot = 0;
+            for (const r of toolResults) {
+              const picture = !r.isError && pending.find((c) => c.id === r.id)?.name === 'browser_screenshot' ? pictures[shot++] : undefined;
+              updateTool(r.id, { status: r.isError ? 'error' : 'ok', ...(r.isError ? { error: r.content } : {}), ...(picture ? { images: [`data:${picture.mediaType};base64,${picture.data}`] } : {}) });
+            }
             if (toolResults.some((r, n) => !r.isError && CHANGES_CALENDAR.has(pending[n]?.name ?? ''))) latest.current.onCalendarChanged();
             if (abort.signal.aborted) break;
             // Screenshots follow the results in the same message (the API takes only text in tool results).

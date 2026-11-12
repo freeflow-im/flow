@@ -5,7 +5,7 @@ import { useAssistantDockState, useNewChatOnClose, type AssistantPlacement } fro
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { rangeToString } from '../../../shared/cellref.ts';
-import { HOME_CHAT, isJobLive, JOB_ACTIVE_STATUSES, MAX_IMAGES_PER_MESSAGE, MAX_INLINE_SELECTED_TEXT, type AgentContext, type ImageRegion, type AgentImage, type AgentJob, type AgentTurnRequest, type ChatItem, type ClientToolCall, type ClientToolResult, type WindowToolCall, type UsableAgent } from '../../../shared/agent/protocol.ts';
+import { HOME_CHAT, isJobLive, JOB_ACTIVE_STATUSES, MAX_IMAGES_PER_MESSAGE, MAX_INLINE_SELECTED_TEXT, type AgentContext, type ImageRegion, type AgentImage, type AgentJob, type AgentTurnRequest, type ChatItem, type ClientToolCall, type ClientToolResult, type WindowToolCall, type UsableAgent, SHOWN_PICTURE_TOOLS } from '../../../shared/agent/protocol.ts';
 import type { SheetMeta, StoredFile } from '../../../shared/types.ts';
 import { shortenHtml } from '../htmlEdit.ts';
 import { api, placeOf, ApiError } from '../api.ts';
@@ -677,9 +677,12 @@ export function AgentProvider({ children }: { children: ReactNode }) {
       }
       if (signal.aborted) break;
       try {
+        const before = rendered.length;
         const content = await runTool(call, group, rendered);
         results.push({ id: call.id, content });
-        updateTool(call.id, { status: 'ok', ...(call.name === 'export_deck' || call.name === 'edit_image' ? { result: content } : {}) });
+        // A browser screenshot is shown to the person too, under its line (SHOWN_PICTURE_TOOLS).
+        const shown = SHOWN_PICTURE_TOOLS.has(call.name) ? rendered.slice(before).map((p) => `data:${p.mediaType};base64,${p.data}`) : [];
+        updateTool(call.id, { status: 'ok', ...(call.name === 'export_deck' || call.name === 'edit_image' ? { result: content } : {}), ...(shown.length ? { images: shown } : {}) });
       } catch (e) {
         const message = e instanceof ToolError ? e.message : `The tool failed: ${e instanceof Error ? e.message : String(e)}`;
         if (!(e instanceof ToolError)) console.error(e);

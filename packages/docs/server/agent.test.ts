@@ -586,6 +586,25 @@ describe('convert_pdf tool', () => {
   });
 });
 
+describe('the transcript', () => {
+  it('puts a browser screenshot under its tool line, and keeps the app\'s note out of the person\'s words', async () => {
+    const { toChatItems } = await import('./agent/agent.ts');
+    const png = 'iVBORw0KGgo=';
+    const items = toChatItems([
+      { role: 'user', content: [{ type: 'text', text: 'show me the photo' }] },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'browser_screenshot', input: {} }] },
+      { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 't1', content: 'Took a screenshot.' },
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: png } },
+        { type: 'text', text: '[browser_screenshot: the picture is attached above, in call order. Added by the app, not written by the user.]' },
+      ] },
+      { role: 'assistant', content: [{ type: 'text', text: 'Here it is.' }] },
+    ] as never);
+    expect(items.map((i) => i.kind)).toEqual(['user', 'tool', 'assistant']);
+    expect(items[1]).toMatchObject({ kind: 'tool', name: 'browser_screenshot', status: 'ok', images: [`data:image/png;base64,${png}`] });
+  });
+});
+
 describe('app context', () => {
 
   it('tells each message the current date and time in the asker\'s time zone, and falls back to UTC', async () => {

@@ -5,7 +5,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Check, ExternalLink, Loader2, Pencil, Sparkles } from 'lucide-react';
 import { AssistantDockControls, useAssistantDock, useIdleMinimize } from '@flow/suite-bar/assistant-dock';
 import { draftOf, refOfLink, savedFileOf, type MessageRef } from '../lib/assistant';
-import { ChatMarkdown, picturesOf, toolLabel, type ChatItem } from '../lib/docsAgent';
+import { ChatMarkdown, picturesOf, toolLabel, ToolPictures, type ChatItem } from '../lib/docsAgent';
 import { cn } from '../lib/utils';
 import { Button } from './ui/button';
 import type { useMailAssistant } from '../hooks/assistant';
@@ -166,6 +166,7 @@ function ToolRow({ item, onOpenDraft }: { item: ToolItem; onOpenDraft(ref: Messa
         <span>{toolLabel(item.name, item.input)}</span>
         {item.status === 'error' && <span className="text-[13px]">{item.error === 'Stopped' ? '· Stopped' : '· Failed'}</span>}
       </div>
+      <ToolPictures images={item.images} />
       {draft && (
         <Button size="sm" variant="secondary" className="self-start" onClick={() => onOpenDraft(draft)}>
           <Pencil className="size-3.5" /> Open draft

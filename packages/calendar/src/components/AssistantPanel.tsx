@@ -5,7 +5,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AlertCircle, CalendarDays, Check, Loader2, Sparkles } from 'lucide-react';
 import { AssistantDockControls, useAssistantDock, useIdleMinimize } from '@flow/suite-bar/assistant-dock';
 import { eventOfLink, madeEventOf } from '../lib/assistant';
-import { ChatMarkdown, toolLabel, type ChatItem } from '../lib/docsAgent';
+import { ChatMarkdown, toolLabel, ToolPictures, type ChatItem } from '../lib/docsAgent';
 import { cn } from '../lib/utils';
 import { Button } from './ui/button';
 import type { useCalendarAssistant } from '../hooks/assistant';
@@ -128,6 +128,7 @@ function ToolRow({ item, onOpenEvent }: { item: ToolItem; onOpenEvent(id: string
         <span>{toolLabel(item.name, item.input)}</span>
         {item.status === 'error' && <span className="text-[13px]">{item.error === 'Stopped' ? '· Stopped' : '· Failed'}</span>}
       </div>
+      <ToolPictures images={item.images} />
       {made && (
         <Button size="sm" variant="secondary" className="self-start" onClick={() => onOpenEvent(made.id, made.start)}>
           <CalendarDays className="size-3.5" /> Open event

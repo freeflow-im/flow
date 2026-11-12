@@ -319,7 +319,15 @@ export type ChatItem =
       error?: string;
       /** The result text of a tool that produces a file (export_deck) or a server tool in SHOWN_RESULTS, so the chat can show a button, or load the pictures an image_search found. */
       result?: string;
+      /** data: URLs of the pictures a browser screenshot took, shown under its line. */
+      images?: string[];
     };
+
+/** The tools whose pictures the person sees in the chat, under the tool's line (the others' are for the model only). */
+export const SHOWN_PICTURE_TOOLS: ReadonlySet<string> = new Set(['browser_screenshot']);
+
+/** The note the app adds after a tool step's pictures ("…attached above, in call order. Added by the app…"). */
+export const isPicturesNote = (text: string): boolean => text.startsWith('[') && text.includes('attached above, in call order. Added by the app, not written by the user.]');
 
 /**
  * queued → starting → coding → verifying → building (production: rebuild the client) → restarting (production:
