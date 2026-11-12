@@ -586,6 +586,38 @@ describe('convert_pdf tool', () => {
   });
 });
 
+describe('find_files and read_stored_file tools', () => {
+  afterAll(closePdfReaders);
+
+  it('find the user\'s stored files and read their text, a PDF\'s included, from any app (Mail here)', async () => {
+    const report = path.join(import.meta.dirname, 'fixtures', 'report.pdf');
+    const notes = path.join(tmpdir(), `notes-${Date.now()}.txt`);
+    writeFileSync(notes, 'Groceries 120\nRent 2000\n');
+    const meta = (id: string, filename: string, type: string, createdAt: string) => ({ id, filename, type, folder: 'Statements', size: 1, createdAt, url: '', downloadUrl: '' });
+    const all = [meta('p1', 'October statement.pdf', 'application/pdf', '2026-11-01'), meta('t1', 'notes.txt', 'text/plain', '2026-11-02'), meta('i1', 'photo.png', 'image/png', '2026-10-01')];
+    const path_ = { p1: report, t1: notes, i1: notes } as Record<string, string>;
+    const files = {
+      list: (owner: string) => (owner === 'u1' ? all : []),
+      get: (owner: string, id: string) => (owner !== 'u1' ? null : all.find((m) => m.id === id) ? { meta: all.find((m) => m.id === id)!, file: path_[id]! } : null),
+    } as unknown as FileStore;
+    const inMail: AgentContext = { page: 'mail' } as unknown as AgentContext;
+    const env = { userId: 'u1', sheets: {} as SheetStore, files, context: inMail };
+
+    const listed = JSON.parse(await runServerTool('find_files', {}, env));
+    expect(listed.files.map((f: { id: string }) => f.id)).toEqual(['t1', 'p1', 'i1']);
+    expect(JSON.parse(await runServerTool('find_files', { query: 'STATEMENT' }, env)).files).toEqual([expect.objectContaining({ id: 'p1', filename: 'October statement.pdf', folder: 'Statements' })]);
+
+    const pdf = JSON.parse(await runServerTool('read_stored_file', { file_id: 'p1' }, env));
+    expect(pdf).toMatchObject({ filename: 'October statement.pdf', pages: 2, offset: 0, more: false });
+    expect(pdf.text).toMatch(/^# Quarterly Report\n/);
+    const part = JSON.parse(await runServerTool('read_stored_file', { file_id: 't1', offset: 14, max_chars: 4 }, env));
+    expect(part).toMatchObject({ text: 'Rent', more: true, total_chars: 24 });
+    await expect(runServerTool('read_stored_file', { file_id: 'i1' }, env)).rejects.toThrow(/not text/);
+    await expect(runServerTool('read_stored_file', { file_id: 'nope' }, env)).rejects.toThrow(/find_files/);
+    await expect(runServerTool('find_files', {}, { ...env, files: undefined })).rejects.toThrow(/cannot be listed here/);
+  });
+});
+
 describe('the transcript', () => {
   it('puts a browser screenshot under its tool line, and keeps the app\'s note out of the person\'s words', async () => {
     const { toChatItems } = await import('./agent/agent.ts');

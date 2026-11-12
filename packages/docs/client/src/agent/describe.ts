@@ -166,6 +166,10 @@ export function toolLabel(name: string, i: Input): string {
       return 'Changed the document’s default style';
     case 'set_page_setup':
       return i.mode === 'pageless' ? 'Switched the document to pageless' : 'Changed the page setup';
+    case 'find_files':
+      return typeof i.query === 'string' && i.query ? `Searched your files for “${i.query}”` : 'Listed your files';
+    case 'read_stored_file':
+      return 'Read a file';
     case 'list_docs':
       return typeof i.query === 'string' && i.query ? `Searched your documents for “${i.query}”` : 'Listed your documents';
     case 'create_doc':
