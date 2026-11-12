@@ -1,8 +1,9 @@
 // Home's left column: the apps, then the person's channels, then the organization's agents. Every row is a link to the
 // page its own app shows (a channel or an agent's DM opens in Chat), so a click lands where the app would put you.
-import { Fragment } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
+import { Check, ChevronDown } from 'lucide-react';
 import type { ChannelDTO, WorkspaceMemberDTO } from '@flow/shared';
-import type { SuiteMenuItem } from '@flow/suite-bar';
+import type { SuiteMenuItem, SuiteMenuPicker } from '@flow/suite-bar';
 import { adminAddress } from '@flow/shared/addresses';
 import { channelAddress, SIDEBAR_CHANNELS } from '../lib/home';
 import { AppMenu, Collapse } from './AppMenu';
@@ -43,8 +44,10 @@ export function Sidebar(props: {
    * The apps' menus (docs/specs/home.md §2.1). The open app's shows under its row; the others stay drawn, closed, so a
    * switch slides one shut and the other open.
    */
-  menus: Partial<Record<string, { items: SuiteMenuItem[]; selected: string | null }>>;
+  menus: Partial<Record<string, { items: SuiteMenuItem[]; selected: string | null; picker?: SuiteMenuPicker }>>;
   onMenuItem: (item: SuiteMenuItem) => void;
+  /** A choice in an app row's picker (Mail's accounts), from any view. */
+  onPickerItem: (app: string, item: SuiteMenuItem) => void;
 }) {
   const shown = props.channels?.slice(0, SIDEBAR_CHANNELS) ?? [];
   const more = (props.channels?.length ?? 0) - shown.length;
@@ -52,10 +55,7 @@ export function Sidebar(props: {
     <nav aria-label="Home" className="hidden w-60 shrink-0 flex-col gap-1 overflow-y-auto border-r border-hairline bg-white px-3 py-4 md:flex" data-testid="home-sidebar">
       {props.apps.map((a) => (
         <Fragment key={a.id}>
-          <a href={a.href} aria-current={a.id === props.active ? 'page' : undefined} data-testid={`home-app-${a.id}`} className={`${row} justify-between ${a.id === props.active ? 'bg-row-selected font-semibold' : ''}`}>
-            <span>{a.label}</span>
-            {!!a.count && (a.pill ? <span className="min-w-5 rounded-full bg-ink px-1.5 text-center text-xs font-semibold text-white">{a.count}</span> : <span className="text-xs text-muted">{a.count}</span>)}
-          </a>
+          <AppRow app={a} active={a.id === props.active} picker={props.menus[a.id]?.picker} onPick={(item) => props.onPickerItem(a.id, item)} />
           {props.menus[a.id] && (
             <Collapse open={a.id === props.active} testId={`home-menu-wrap-${a.id}`}>
               <AppMenu app={a.id} items={props.menus[a.id]!.items} selected={props.menus[a.id]!.selected} onItem={props.onMenuItem} />
@@ -119,4 +119,83 @@ const Placeholder = () => <div className="mx-3 my-1 h-4 animate-pulse rounded bg
 export function Avatar({ name, url }: { name: string; url: string | null }) {
   if (url) return <img src={url} alt="" className="size-7 shrink-0 rounded-full object-cover" />;
   return <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary-tint text-xs font-semibold text-primary-deep">{name.trim().charAt(0).toUpperCase() || '?'}</span>;
+}
+
+function Count({ app }: { app: AppLink }) {
+  if (!app.count) return null;
+  return app.pill ? <span className="min-w-5 rounded-full bg-ink px-1.5 text-center text-xs font-semibold text-white">{app.count}</span> : <span className="text-xs text-muted">{app.count}</span>;
+}
+
+/**
+ * An app's row. With a picker (Mail's accounts, docs/specs/home.md §2.1) it reads `Mail gmail.com ▾`: the name still opens
+ * the app, the short name and ▾ open the list below the row, and a choice goes to the app as a menu item's click does.
+ */
+function AppRow(props: { app: AppLink; active: boolean; picker?: SuiteMenuPicker; onPick: (item: SuiteMenuItem) => void }) {
+  const { app, active, picker } = props;
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: PointerEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('pointerdown', away);
+    document.addEventListener('keydown', esc);
+    return () => { document.removeEventListener('pointerdown', away); document.removeEventListener('keydown', esc); };
+  }, [open]);
+  const cls = `${row} justify-between ${active ? 'bg-row-selected font-semibold' : ''}`;
+  if (!picker || picker.items.length < 2) {
+    return (
+      <a href={app.href} aria-current={active ? 'page' : undefined} data-testid={`home-app-${app.id}`} className={cls}>
+        <span>{app.label}</span>
+        <Count app={app} />
+      </a>
+    );
+  }
+  const current = picker.items.find((i) => i.id === picker.selected);
+  return (
+    <div ref={box} className="relative">
+      <div className={cls}>
+        <span className="flex min-w-0 items-center">
+          <a href={app.href} aria-current={active ? 'page' : undefined} data-testid={`home-app-${app.id}`} className="shrink-0">{app.label}</a>
+          <button
+            type="button"
+            className="ml-1 flex h-5 min-w-0 items-center gap-0.5 rounded px-1 text-xs font-normal text-muted hover:bg-row-selected"
+            aria-label={`Choose ${app.label} account${current ? `, now ${current.label}` : ''}`}
+            aria-haspopup="menu"
+            aria-expanded={open}
+            data-testid={`home-picker-${app.id}`}
+            onClick={() => setOpen(!open)}
+          >
+            {picker.label && <span className="truncate" data-testid={`home-picker-label-${app.id}`}>{picker.label}</span>}
+            <ChevronDown className="size-4 shrink-0" aria-hidden />
+          </button>
+        </span>
+        <Count app={app} />
+      </div>
+      {open && (
+        <ul role="menu" className="absolute left-2 right-0 z-20 mt-1 rounded-md border border-hairline bg-white py-1 shadow-lg" data-testid={`home-picker-list-${app.id}`}>
+          {picker.items.map((item) => (
+            <li key={item.id} role="none">
+              <a
+                role="menuitemradio"
+                aria-checked={item.id === picker.selected}
+                href={item.href ?? app.href}
+                title={item.label}
+                className="flex items-center gap-2 px-2 py-1.5 text-[13px] text-ink hover:bg-hover"
+                onClick={(e) => {
+                  if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                  e.preventDefault();
+                  setOpen(false);
+                  props.onPick(item);
+                }}
+              >
+                {item.id === picker.selected ? <Check className="size-4 shrink-0" aria-hidden /> : <span className="size-4 shrink-0" aria-hidden />}
+                <span className="truncate">{item.label}</span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }

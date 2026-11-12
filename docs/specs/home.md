@@ -34,13 +34,17 @@ for it. The protocol is in `@flow/suite-bar` lib/menu.ts:
 
 | Message | From → to | When |
 |---|---|---|
-| `{ type: 'flow:menu', v: 1, app, items, selected, href? }` | app → Home | on load, and whenever the items, the selected item or the app's address change |
+| `{ type: 'flow:menu', v: 1, app, items, selected, href?, picker? }` | app → Home | on load, and whenever the items, the selected item, the picker or the app's address change |
 | `{ type: 'flow:select', v: 1, app, id }` | Home → app | the person clicked an item; the app switches to it in place |
 
 - An item: `id`, `label`, an `icon` named from a fixed set (Home draws it), an optional `count`, `color` and `on` (a
   switch, such as a calendar shown or hidden), the app's own `href` for it, and `children` one level down. An item with
   children and an `href` is a place itself (its label opens it); without an `href` it is only a heading that opens.
-- An app calls one hook, `useHomeMenu(app, items, selected, onSelect, href)`. It does nothing outside Home.
+- A `picker` (2026-11-12) is a choice drawn on the app's own row, `Mail gmail.com ▾`: `{ items, selected, label? }`, the
+  label a short name for the selected one (Mail: the account's domain, or its address when another account shares the
+  domain). The app's name still opens the app; the label and ▾ open the list, with the selected one checked. A choice is sent back as `flow:select`, from any view,
+  and the app is shown. Home draws it only with two or more items.
+- An app calls one hook, `useHomeMenu(app, items, selected, onSelect, href, picker)`. It does nothing outside Home.
 - Home keeps each app's last menu in this browser, per organization, so the menu shows at once next time. A click
   before the app's frame has loaded opens the item's `href` instead.
 - Home's address follows the `href` an app sends, so reload comes back to the folder or section shown.
@@ -52,7 +56,7 @@ in the app itself.
 
 | App | Menu |
 |---|---|
-| Mail | New message; Inbox (with more than one account, it opens a list of the accounts); Drafts |
+| Mail | New message; Inbox; Drafts. With more than one account, the accounts are the picker on the Mail row |
 | Docs | New document, Recents, Favorites, Shared with me |
 | Calendar | New event, Today |
 | Admin | its sections |
