@@ -47,11 +47,14 @@ for it. The protocol is in `@flow/suite-bar` lib/menu.ts:
 
 What each app sends:
 
+A menu holds only the three or four things a person goes to most, starting with making something new; the rest is
+in the app itself.
+
 | App | Menu |
 |---|---|
-| Mail | Compose; the special folders (Inbox, Starred, Drafts, Sent, …) with their counts; "More folders"; with more than one account, the accounts |
-| Docs | Recents, Favorites, Shared with me, Organization files and My files (each with its top-level folders) |
-| Calendar | Create event, Today, each calendar as a switch in its colour, Shared with me |
+| Mail | New message; Inbox (with more than one account, it opens a list of the accounts); Drafts |
+| Docs | New document, Recents, Favorites, Shared with me |
+| Calendar | New event, Today |
 | Admin | its sections |
 | Chat | none: Home's sidebar already lists the channels and agents |
 
@@ -77,7 +80,6 @@ What each app sends:
 - **Mail, Docs and Calendar switch in place** only for their front page: a conversation, a file or an event opened from
   a card loads that app's frame again (about a second). Chat already switches in place.
 - **`/` landing on Home**: `/` still opens Chat. Changing it touches the sign-in redirects.
-- **The parts of an app's sidebar not in its menu** inside Home: Mail's Add account and account settings, Docs' folders
-  below the top level (the Docs page shows them), Calendar's small month and each calendar's own menu (colour, share).
-  They are in the app outside Home.
+- **The rest of an app's sidebar** inside Home: Mail's other folders and account settings, Docs' folders, Calendar's
+  calendars and small month. They are in the app, outside Home.
 - **macOS and iOS**: web (and the desktop shell) only; see the Parity section of CHANGELOG.md.
