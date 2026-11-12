@@ -153,7 +153,41 @@ const query = (params: Record<string, string | number | undefined | null>) => {
   return s ? `?${s}` : '';
 };
 
+/** The guest scheduler's settings (docs/specs/guest-scheduler.md §3.1): times of day are minutes from midnight in `timezone`. */
+export type Weekday = 'sun' | 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat';
+export interface SchedulerConfig {
+  enabled: boolean;
+  title: string;
+  description: string;
+  durations: number[];
+  defaultDuration: number;
+  timezone: string;
+  weekly: Record<Weekday, [number, number][]>;
+  minNoticeMin: number;
+  horizonDays: number;
+  bufferBeforeMin: number;
+  bufferAfterMin: number;
+  maxPerDay: number | null;
+  incrementMin: number | null;
+  busyCalendarIds: string[] | null;
+  targetCalendarId: string | null;
+  location: { kind: 'text' | 'none'; value: string };
+}
+/** The booking page: its settings and, once it has been turned on, its public link. */
+export interface SchedulerPage { page: SchedulerConfig; token: string | null; url: string | null }
+export interface SchedulerBooking {
+  id: string; eventId: string; status: 'booked' | 'cancelled'; start: string; end: string; duration: number;
+  guestName: string; guestEmail: string; note: string | null; guestTimezone: string | null; reschedules: number;
+}
+const zoneQuery = () => query({ tz: Intl.DateTimeFormat().resolvedOptions().timeZone });
+
 export const calendarApi = {
+  /** The booking page, with the defaults in the browser's zone until it is first saved. */
+  scheduler: () => request<SchedulerPage>('GET', `/v1/calendar/scheduler${zoneQuery()}`),
+  updateScheduler: (patch: Partial<SchedulerConfig>) => request<SchedulerPage>('PATCH', `/v1/calendar/scheduler${zoneQuery()}`, patch),
+  /** A new link for the booking page; the old one stops working (guests' own links keep working). */
+  rotateScheduler: () => request<SchedulerPage>('POST', `/v1/calendar/scheduler/rotate${zoneQuery()}`),
+  schedulerBookings: async () => (await request<{ bookings: SchedulerBooking[] }>('GET', '/v1/calendar/scheduler/bookings')).bookings,
   provider: (email: string) => request<Provider>('GET', `/v1/calendar/providers${query({ email })}`),
   /** Google's consent page for connecting (or reconnecting) a Google Calendar account; the callback comes back to `returnTo`. */
   googleStart: async (returnTo: string, email?: string) => (await request<{ url: string }>('GET', `/v1/calendar/google/start${query({ return: returnTo, email })}`)).url,

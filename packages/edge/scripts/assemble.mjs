@@ -18,6 +18,8 @@ const left = [];
 const belongsHere = (file) => {
   // A client's own page is filed under /_pages; its other HTML (privacy.html, the Mermaid sandbox) is an ordinary file.
   if (/(^|\/)(index|landing)\.html$/.test(file)) return false;
+  // A second entry's page is filed under /_pages too, not served as a file.
+  if (extraPages.has(file)) return false;
   const stat = statSync(file);
   if (stat.isFile() && stat.size > MAX_FILE) {
     left.push(path.basename(file));
@@ -34,10 +36,17 @@ for (const client of clientsFrom(APP_MANIFESTS, path.resolve(packages, '..'), ou
   else if (client.optional) console.warn(`${client.from} has no build; /${client.name} is left out of this deploy`);
   else throw new Error(`${client.from} has no build; build the clients first`);
 }
+const extraPages = new Set(clients.flatMap((c) => c.extra.map((x) => path.join(c.from, x.file))));
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
 for (const { from, to } of clients) cpSync(from, to, { recursive: true, filter: belongsHere });
 // The clients' pages, which the Worker serves on the hosts it answers for (src/routes/pages.ts); the origin's own pages until then.
 mkdirSync(path.join(out, '_pages'), { recursive: true });
-for (const { from, page } of clients) if (page) cpSync(path.join(from, 'index.html'), path.join(out, '_pages', page));
+for (const { from, page, extra } of clients) {
+  if (page) cpSync(path.join(from, 'index.html'), path.join(out, '_pages', page));
+  for (const x of extra) {
+    if (existsSync(path.join(from, x.file))) cpSync(path.join(from, x.file), path.join(out, '_pages', x.page));
+    else console.warn(`${path.join(from, x.file)} is not built; its page is left out of this deploy`);
+  }
+}
 console.log(`assembled ${out}${left.length ? `; left to the origin: ${left.join(', ')}` : ''}`);

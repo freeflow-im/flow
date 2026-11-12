@@ -220,6 +220,8 @@ export function toolLabel(name: string, i: Input): string {
       return 'Looked at your calendars';
     case 'list_shared_calendars':
       return 'Looked at the calendars shared with you';
+    case 'get_booking_link':
+      return 'Looked up your booking page link';
     case 'share_calendar':
       return `Shared a calendar with ${sharee(i.principal)}${typeof i.role === 'string' ? ` as ${i.role}` : ''}`;
     case 'unshare_calendar':

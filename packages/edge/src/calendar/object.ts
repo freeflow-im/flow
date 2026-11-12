@@ -32,11 +32,17 @@ import type { CalendarMail } from './imip';
 import { Invites, type InviteMail, type Notified } from './invites';
 import { CALENDAR_TABLES, CalendarStore, type CalendarRow, type EventOccurrence } from './store';
 import {
+  BookingBody, ConfigPatch, MINUTE, RescheduleBody, applyPatch, atMinute, busyOf, dateIn, daysWithSlots, defaultConfig, guestZone, horizonEnd, isDate, isManageToken,
+  monthWindow, newManageToken, newPageToken, normalizePageToken, openSlots, sha256, type SchedulerConfig,
+} from './scheduler';
+import { bookingMail, type BookingMailInput } from './bookingMail';
+import { sendMail, type MailEnv } from '../mail';
+import {
   AccountPatch, CalendarPatch, EventInput, EventPatch, FreeBusyBody, GrantBody, NATIVE_HREF, NewAccount, RELIST_MS, RespondBody, SYNC_BUDGET_MS, TIMING_HEADER, badRequest, calendarError,
   cadenceMs, checkUrl, conflict, eventIdOf, nextAlarmAt, normalizeUrl, notFound, parse, providerFor, splitId,
 } from './rules';
 
-export interface CalendarEnv {
+export interface CalendarEnv extends MailEnv {
   FLOW_DATA_KEY?: string;
   /** `off` stops the alarm (a kill switch): the cache then stands as it is until a write. */
   CALENDAR_ALARM?: string;
@@ -81,6 +87,24 @@ const DELIVERY_TRIES = 2;
 /** A native calendar as a reader of it sees it (GET /v1/calendar/shared). */
 export interface SharedCalendarInfo { id: string; name: string; color: string; role: Role }
 
+/** A guest scheduler booking (store.ts `scheduler_bookings`). */
+interface BookingRow {
+  id: string; page_id: string; event_id: string; start_utc: number; end_utc: number; duration: number; guest_name: string; guest_email: string;
+  note: string | null; guest_tz: string | null; manage_hash: string; status: 'booked' | 'cancelled'; reschedules: number; mailed_ics: number; created_at: number; updated_at: number;
+}
+/** A guest's request's bindings (`handleBooking`): the page's settings, the caller's address hashed, and the booking a manage link names. */
+interface BookBindings { cfg: SchedulerConfig; ipHash: string; booking: BookingRow | null; manage: string | null }
+/** The guest scheduler's limits and freshness (docs/specs/guest-scheduler.md §3.4, §5). */
+const READS_PER_MINUTE = 60;
+const POSTS_PER_HOUR = 5;
+const BOOKINGS_PER_DAY = 20;
+const RESCHEDULE_LIMIT = 5;
+const OPEN_SYNC_EVERY_MS = 60_000;
+const OPEN_SYNC_MAX_AGE_MS = 5 * 60_000;
+const OPEN_SYNC_WAIT_MS = 2_000;
+const BOOK_SYNC_MAX_AGE_MS = 2 * 60_000;
+const BOOK_SYNC_WAIT_MS = 8_000;
+
 /** A Google account as the callback hands it over (routes/calendar.ts): who, and the tokens the consent gave. */
 export interface GoogleGrant { email: string; displayName: string; refreshToken: string; accessToken: string; expiresAt: number }
 
@@ -111,6 +135,10 @@ export class Calendar extends DurableObject<CalendarEnv> {
   private readonly sql: SqlStorage;
   private readonly store: CalendarStore;
   private readonly app = new Hono<{ Bindings: Bindings }>();
+  /** The guest scheduler's public routes (`handleBooking`), apart from the owner's. */
+  private readonly bookApp = new Hono<{ Bindings: BookBindings }>();
+  /** The sync a guest's visit started (§3.4), while it runs. */
+  private openSync: Promise<void> | null = null;
   /** One sync or write at a time per calendar, so a sync never writes back what a PUT just replaced. */
   private readonly locks = new Map<string, Promise<unknown>>();
   private syncing = false;
@@ -127,6 +155,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
     this.store.init();
     this.accountId = (ctx.id as { name?: string }).name ?? this.store.state('owner_account_id');
     this.routes();
+    this.bookRoutes();
   }
 
   /** A page of every table's rows (or the one named), for the move to the per-account objects (routes/admin.ts). */
@@ -944,6 +973,310 @@ export class Calendar extends DurableObject<CalendarEnv> {
     return out;
   }
 
+  // ---- the guest scheduler (docs/specs/guest-scheduler.md) ---------------------------------------------------------
+
+  /** The booking page: its token (null until first turned on) and its settings, the defaults in `zone` until saved. */
+  private schedulerPage(zone = 'UTC'): { token: string | null; config: SchedulerConfig } {
+    const row = this.sql.exec<{ token: string | null; config: string } & Record<string, SqlStorageValue>>("SELECT token, config FROM scheduler_pages WHERE id = 'default'").toArray()[0];
+    if (!row) return { token: null, config: defaultConfig(zone) };
+    const saved = JSON.parse(row.config) as Partial<SchedulerConfig>;
+    return { token: row.token, config: { ...defaultConfig(saved.timezone ?? zone), ...saved } };
+  }
+  private saveSchedulerPage(token: string | null, config: SchedulerConfig): void {
+    const now = Date.now();
+    this.sql.exec(`INSERT INTO scheduler_pages (id, token, config, created_at, updated_at) VALUES ('default', ?, ?, ?, ?)
+      ON CONFLICT (id) DO UPDATE SET token = excluded.token, config = excluded.config, updated_at = excluded.updated_at`, token, JSON.stringify(config), now, now);
+  }
+  private schedulerUrl(path: string): string { return `${(this.env.WEB_URL_BASE ?? '').replace(/\/+$/, '')}/calendar/book/${path}`; }
+  /** Who the page books with: the native account's name and address, else the first account's. */
+  private schedulerOwner(): { name: string; email: string } {
+    const rows = this.accountRows();
+    const r = rows.find((a) => a.kind === 'native') ?? rows[0];
+    return { name: r?.display_name || 'FreeFlow', email: r?.email ?? '' };
+  }
+
+  /** A call to the directory (the booking links' index); none in tests without one. */
+  private async directoryCall(method: string, args: unknown[]): Promise<unknown> {
+    const dir = this.env.DIRECTORY;
+    if (!dir) return null;
+    const answer = await (dir.get(dir.idFromName('directory')).call as never as (m: string, a: unknown[]) => Promise<{ ok: boolean; value?: unknown }>)(method, args);
+    if (!answer.ok) throw calendarError(502, 'server_error', 'The booking link could not be saved; try again');
+    return answer.value;
+  }
+  /** A new page token, indexed in the directory in place of the old one (which stops working). */
+  private async newSchedulerToken(): Promise<string> {
+    const owner = this.store.state('owner_account_id');
+    if (!owner) throw notFound('no calendar here');
+    const token = newPageToken();
+    await this.directoryCall('setBookingLink', [owner, await sha256(normalizePageToken(token)!)]);
+    return token;
+  }
+
+  /** The calendars whose events are busy time: those the page names that still exist, else every one shown. */
+  private busyCalendars(cfg: SchedulerConfig): CalendarRow[] {
+    const cals = this.store.calendars();
+    return cfg.busyCalendarIds ? cals.filter((c) => cfg.busyCalendarIds!.includes(c.id)) : cals.filter((c) => !c.hidden);
+  }
+  /**
+   * The connected busy calendars whose last sync is older than `maxAgeMs`, synced now (§3.4); native ones are always
+   * current. A failed sync leaves the cache as it was: the guest sees what there is.
+   */
+  private freshen(cfg: SchedulerConfig, maxAgeMs: number): Promise<void> {
+    const accounts = new Map(this.accountRows().map((a) => [a.id, a]));
+    const stale = this.busyCalendars(cfg).filter((c) => {
+      const a = accounts.get(c.account_id);
+      return a && a.kind !== 'native' && a.status !== 'auth_failed' && Date.now() - c.last_synced > maxAgeMs;
+    });
+    return stale.length ? Promise.all(stale.map((c) => this.syncCalendar(c.id).catch(() => {}))).then(() => {}) : Promise.resolve();
+  }
+  /** A guest opened the page: stale calendars synced, at most once a minute however many guests come (§3.4). */
+  private startOpenSync(cfg: SchedulerConfig): void {
+    const last = Number(this.store.state('scheduler_open_sync_at') ?? 0);
+    if (Date.now() - last < OPEN_SYNC_EVERY_MS) return;
+    this.store.setState('scheduler_open_sync_at', String(Date.now()));
+    const run: Promise<void> = this.freshen(cfg, OPEN_SYNC_MAX_AGE_MS).finally(() => { if (this.openSync === run) this.openSync = null; });
+    this.openSync = run;
+    this.ctx.waitUntil(run);
+  }
+  /** Waits for a promise up to `ms`: true when it finished. */
+  private static within(p: Promise<unknown>, ms: number): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    return Promise.race([p.then(() => true, () => true), new Promise<boolean>((r) => { timer = setTimeout(() => r(false), ms); })]).finally(() => clearTimeout(timer));
+  }
+
+  /** Open starts in [from, to) for a length, from the cache; `except` is a booking being moved (its own time is free). */
+  private slotsIn(cfg: SchedulerConfig, from: number, to: number, duration: number, except?: { eventId: string; bookingId: string }): number[] {
+    const margin = DAY_MS + (cfg.bufferBeforeMin + cfg.bufferAfterMin) * MINUTE;
+    const busy = busyOf(this.store.list(this.busyCalendars(cfg).map((c) => c.id), from - margin, to + margin, undefined, 5000), cfg.timezone, except?.eventId);
+    const bookedOn = new Map<string, number>();
+    if (cfg.maxPerDay !== null) {
+      const rows = this.sql.exec<{ id: string; start_utc: number } & Record<string, SqlStorageValue>>("SELECT id, start_utc FROM scheduler_bookings WHERE page_id = 'default' AND status = 'booked' AND start_utc >= ? AND start_utc < ?", from - 2 * DAY_MS, to + 2 * DAY_MS).toArray();
+      for (const b of rows) if (b.id !== except?.bookingId) { const d = dateIn(b.start_utc, cfg.timezone); bookedOn.set(d, (bookedOn.get(d) ?? 0) + 1); }
+    }
+    return openSlots(cfg, { now: Date.now(), from, to, duration, busy, bookedOn });
+  }
+
+  /** What a guest sees of the page: never an address, an id or a calendar's name. */
+  private pageInfo(cfg: SchedulerConfig) {
+    return {
+      ownerName: this.schedulerOwner().name, title: cfg.title, description: cfg.description, durations: cfg.durations, defaultDuration: cfg.defaultDuration,
+      // A link (a video call) is given only to those who book: the page says it comes with the confirmation.
+      location: cfg.location.kind !== 'text' ? { kind: 'none' as const, label: null } : /^https?:\/\//i.test(cfg.location.value.trim()) ? { kind: 'link' as const, label: null } : { kind: 'text' as const, label: cfg.location.value },
+      ownerTimezone: cfg.timezone, horizonEnd: new Date(horizonEnd(cfg, Date.now())).toISOString(),
+    };
+  }
+  private bookingByHash(hash: string): BookingRow | null {
+    return this.sql.exec<BookingRow & Record<string, SqlStorageValue>>('SELECT * FROM scheduler_bookings WHERE manage_hash = ?', hash).toArray()[0] ?? null;
+  }
+  private bookingView(b: BookingRow, cfg: SchedulerConfig) {
+    return {
+      id: b.id, status: b.status, start: new Date(b.start_utc).toISOString(), end: new Date(b.end_utc).toISOString(), duration: b.duration,
+      guestName: b.guest_name, timezone: b.guest_tz ?? cfg.timezone, title: cfg.title, ownerName: this.schedulerOwner().name,
+      location: cfg.location.kind === 'text' ? cfg.location.value : null,
+      canReschedule: b.status === 'booked' && cfg.enabled && b.reschedules < RESCHEDULE_LIMIT && b.start_utc > Date.now(),
+      canCancel: b.status === 'booked' && b.end_utc > Date.now(),
+    };
+  }
+
+  /** One of this object's own routes as its owner: a booking is written, moved and cancelled the way the client does it. */
+  private async asOwner(method: string, path: string, body?: unknown): Promise<Record<string, any>> {
+    const owner = this.store.state('owner_account_id')!, org = this.store.state('owner_organization_id');
+    const who = this.schedulerOwner();
+    const caller = { user: null, token: null, authKind: null, ip: '', organizationId: org, account: { id: owner, principalId: '', organizationId: org ?? '', address: who.email, displayName: who.name } } as unknown as CallerContext;
+    const res = await this.app.fetch(new Request(`https://calendar.internal${path}`, { method, ...(body !== undefined ? { body: JSON.stringify(body), headers: { 'content-type': 'application/json' } } : {}) }), { caller } satisfies Bindings);
+    const j = (await res.json().catch(() => ({}))) as Record<string, any>;
+    if (!res.ok) throw calendarError(res.status, j.error?.code ?? 'server_error', j.error?.message ?? 'The calendar could not be changed');
+    return j;
+  }
+
+  /** The event a booking writes (§3.5): the guest as its one attendee, the note in its description. */
+  private bookingFields(cfg: SchedulerConfig, guest: { name: string; email: string; note?: string }, start: number, duration: number) {
+    return {
+      summary: `${cfg.title}: ${guest.name}`,
+      description: [`Booked by ${guest.name} (${guest.email}) through your booking page.`, ...(guest.note?.trim() ? ['', guest.note.trim()] : [])].join('\n'),
+      location: cfg.location.kind === 'text' ? cfg.location.value : null,
+      start: new Date(start).toISOString(), end: new Date(start + duration * MINUTE).toISOString(), timezone: cfg.timezone,
+      attendees: [{ email: guest.email, name: guest.name }],
+    };
+  }
+  /** The iTIP message for a booking's event as stored, for a mail that carries it (`mailed_ics`). */
+  private bookingIcs(eventId: string, method: 'REQUEST' | 'CANCEL', zone: string, raw?: string | null): string | null {
+    const { calendarId, uid } = splitId(eventId);
+    const text = raw ?? this.store.objectByUid(calendarId, uid)?.raw;
+    try { return text ? itipRequest(text, uid, method, { now: Date.now(), zone }) : null; } catch { return null; }
+  }
+  /** The guest's mail; a failure is logged (no address) and never fails the booking. */
+  private async mailGuest(kind: BookingMailInput['kind'], b: BookingRow, cfg: SchedulerConfig, manage: string | null, ics: string | null): Promise<void> {
+    try {
+      await sendMail(this.env, bookingMail({
+        kind, to: { name: b.guest_name, email: b.guest_email }, owner: this.schedulerOwner(), title: cfg.title, start: b.start_utc, end: b.end_utc,
+        zone: b.guest_tz ?? cfg.timezone, location: cfg.location.kind === 'text' ? cfg.location.value : null, manageUrl: manage ? this.schedulerUrl(`m/${manage}`) : null, ics,
+      }));
+    } catch (err) {
+      console.warn(`[calendar] booking mail (${kind}) failed: ${(err as Error).message.slice(0, 200)}`);
+    }
+  }
+  /** `calendar.booked` to the owner alone (a notification; the bridge's agents), with what happened. */
+  private async publishBooking(eventId: string, action: 'booked' | 'moved' | 'cancelled', b: BookingRow, snapshot?: EventOccurrence | null): Promise<void> {
+    const { calendarId, uid } = splitId(eventId);
+    const cal = this.store.calendar(calendarId), owner = this.store.state('owner_account_id');
+    if (!cal || !owner) return;
+    await this.publish('calendar.booked', cal, uid, { audience: `account:${owner}`, snapshot, extra: { action, bookingId: b.id, guest: { name: b.guest_name, email: b.guest_email } } });
+  }
+
+  /**
+   * A guest's request (routes/book.ts, no session): about the booking page by its token (`page`, which must be the page's
+   * current one, turned on) or one booking by its own link (`manage`, which works while the page is off, to cancel). The
+   * routes are `bookRoutes`; every answer is `no-store`. Reads are limited per address, writes more tightly (§5).
+   */
+  async handleBooking(request: Request, meta: { kind: 'page' | 'manage'; token: string; ip: string }): Promise<Response> {
+    const gone = () => Response.json({ error: { code: 'not_found', message: 'This booking link does not exist or is turned off' } }, { status: 404, headers: { 'cache-control': 'no-store' } });
+    const owner = this.store.state('owner_account_id');
+    if (!owner) return gone();
+    const { token, config } = this.schedulerPage();
+    let booking: BookingRow | null = null;
+    if (meta.kind === 'page') {
+      if (!token || normalizePageToken(token) !== meta.token || !config.enabled) return gone();
+    } else if (!isManageToken(meta.token) || !(booking = this.bookingByHash(await sha256(meta.token)))) return gone();
+    const salt = this.store.state('scheduler_salt') ?? ((s: string) => (this.store.setState('scheduler_salt', s), s))(newManageToken());
+    const ipHash = (await sha256(`${salt}:${meta.ip}`)).slice(0, 32);
+    if (!this.rateAllow(`book-read:${ipHash}`, READS_PER_MINUTE, MINUTE)) return Response.json({ error: { code: 'rate_limited', message: 'Too many requests; wait a minute' } }, { status: 429, headers: { 'cache-control': 'no-store' } });
+    const t: Timing = { server: 0, actor: owner };
+    const res = await timing.run(t, () => this.bookApp.fetch(request, { cfg: config, ipHash, booking, manage: meta.kind === 'manage' ? meta.token : null } satisfies BookBindings));
+    const out = new Response(res.body, res);
+    out.headers.set('cache-control', 'no-store');
+    out.headers.set(TIMING_HEADER, `server=${Math.round(t.server)}`);
+    return out;
+  }
+
+  private bookRoutes(): void {
+    const app = this.bookApp;
+    app.onError((err, c) => {
+      if (err instanceof ApiError) return c.json({ error: { code: err.code, message: err.message } }, err.statusCode as 400);
+      console.error(`[calendar] booking: ${(err as Error).name}: ${(err as Error).message.slice(0, 200)}`);
+      return c.json({ error: { code: 'server_error', message: 'internal server error' } }, 500);
+    });
+    app.notFound((c) => c.json({ error: { code: 'not_found', message: 'not found' } }, 404));
+    type C = Context<{ Bindings: BookBindings }>;
+
+    const lengthOf = (cfg: SchedulerConfig, raw: unknown) => {
+      const n = Number(raw ?? cfg.defaultDuration);
+      if (!cfg.durations.includes(n)) throw badRequest('duration: one of the lengths offered');
+      return n;
+    };
+    const writeAllowed = (c: C) => {
+      if (!this.rateAllow(`book-post:${c.env.ipHash}`, POSTS_PER_HOUR, 60 * MINUTE)) throw calendarError(429, 'rate_limited', 'Too many bookings from here; try again later');
+      this.sql.exec("DELETE FROM rate_limit_windows WHERE key LIKE 'book-%' AND window_start < ?", Date.now() - DAY_MS);
+    };
+    /** The month's dates with an open start, in the guest's zone; waits briefly for a sync a visit started (§3.4). */
+    const days = async (c: C, except?: { eventId: string; bookingId: string }) => {
+      const cfg = c.env.cfg, zone = guestZone(c.req.query('tz'), cfg.timezone), duration = lengthOf(cfg, c.req.query('duration'));
+      const month = c.req.query('month') ?? dateIn(Date.now(), zone).slice(0, 7);
+      const [from, to] = monthWindow(month, zone);
+      const syncing = this.openSync ? !(await Calendar.within(this.openSync, OPEN_SYNC_WAIT_MS)) : false;
+      return c.json({ month, timezone: zone, duration, days: daysWithSlots(this.slotsIn(cfg, from, to, duration, except), zone), ...(syncing ? { syncing: true } : {}) });
+    };
+    const slots = (c: C, except?: { eventId: string; bookingId: string }) => {
+      const cfg = c.env.cfg, zone = guestZone(c.req.query('tz'), cfg.timezone), duration = lengthOf(cfg, c.req.query('duration'));
+      const date = c.req.query('date') ?? '';
+      if (!isDate(date)) throw badRequest('date: YYYY-MM-DD');
+      const found = this.slotsIn(cfg, atMinute(date, 0, zone), atMinute(date, 1440, zone), duration, except);
+      return c.json({ date, timezone: zone, duration, slots: found.map((s) => new Date(s).toISOString()) });
+    };
+    /** A start the guest picked, checked against fresh busy time (§3.4); 409 `slot_taken` with that day's starts when it is gone. */
+    const checkStart = async (c: C, raw: string, duration: number, zone: string, except?: { eventId: string; bookingId: string }): Promise<number | Response> => {
+      const cfg = c.env.cfg, start = Date.parse(raw);
+      if (Number.isNaN(start)) throw badRequest('start: an ISO time');
+      await Calendar.within(this.freshen(cfg, BOOK_SYNC_MAX_AGE_MS), BOOK_SYNC_WAIT_MS);
+      if (this.slotsIn(cfg, start, start + 1, duration, except).includes(start)) return start;
+      const date = dateIn(start, zone);
+      const fresh = this.slotsIn(cfg, atMinute(date, 0, zone), atMinute(date, 1440, zone), duration, except);
+      return c.json({ error: { code: 'slot_taken', message: 'That time is no longer free; pick another' }, date, slots: fresh.map((s) => new Date(s).toISOString()) }, 409);
+    };
+    const manageRow = (c: C): BookingRow => {
+      const b = c.env.booking && this.bookingByHash(c.env.booking.manage_hash);
+      if (!b) throw notFound('no such booking');
+      return b;
+    };
+
+    // One booking, by its guest's own link.
+    app.get('/v1/book/m/:manage', (c) => {
+      const b = manageRow(c);
+      if (b.status === 'booked' && c.env.cfg.enabled) this.startOpenSync(c.env.cfg);
+      return c.json({ booking: this.bookingView(b, c.env.cfg), page: this.pageInfo(c.env.cfg) });
+    });
+    app.get('/v1/book/m/:manage/days', (c) => { const b = manageRow(c); return days(c, { eventId: b.event_id, bookingId: b.id }); });
+    app.get('/v1/book/m/:manage/slots', (c) => { const b = manageRow(c); return slots(c, { eventId: b.event_id, bookingId: b.id }); });
+    app.post('/v1/book/m/:manage/cancel', async (c) => {
+      writeAllowed(c);
+      const b = manageRow(c), cfg = c.env.cfg;
+      if (b.status !== 'booked') return c.json({ booking: this.bookingView(b, cfg) });
+      const { calendarId, uid } = splitId(b.event_id);
+      const before = this.store.find(calendarId, uid, null)?.event ?? null, raw = this.store.objectByUid(calendarId, uid)?.raw ?? null;
+      try {
+        await this.asOwner('DELETE', `/v1/calendar/events/${encodeURIComponent(b.event_id)}`);
+      } catch (err) {
+        // The owner deleted the event already: the booking is cancelled all the same.
+        if (!(err instanceof ApiError && err.code === 'not_found')) throw err;
+      }
+      this.sql.exec("UPDATE scheduler_bookings SET status = 'cancelled', updated_at = ? WHERE id = ?", Date.now(), b.id);
+      const now = this.bookingByHash(b.manage_hash)!;
+      await this.mailGuest('cancelled', now, cfg, null, b.mailed_ics ? this.bookingIcs(b.event_id, 'CANCEL', cfg.timezone, raw) : null);
+      await this.publishBooking(b.event_id, 'cancelled', now, before);
+      return c.json({ booking: this.bookingView(now, cfg) });
+    });
+    app.post('/v1/book/m/:manage/reschedule', async (c) => {
+      writeAllowed(c);
+      const b = manageRow(c), cfg = c.env.cfg;
+      if (!this.bookingView(b, cfg).canReschedule) throw calendarError(409, 'cannot_reschedule', b.status !== 'booked' ? 'This meeting was cancelled' : b.reschedules >= RESCHEDULE_LIMIT ? 'This meeting has been moved too many times; cancel it and book again' : 'This meeting can no longer be moved');
+      const body = parse(RescheduleBody, await json(c));
+      const duration = lengthOf(cfg, body.duration), zone = guestZone(body.tz, b.guest_tz ?? cfg.timezone);
+      const except = { eventId: b.event_id, bookingId: b.id };
+      const start = await checkStart(c, body.start, duration, zone, except);
+      if (start instanceof Response) return start;
+      const f = this.bookingFields(cfg, { name: b.guest_name, email: b.guest_email }, start, duration);
+      await this.asOwner('PATCH', `/v1/calendar/events/${encodeURIComponent(b.event_id)}`, { start: f.start, end: f.end, timezone: f.timezone });
+      this.sql.exec('UPDATE scheduler_bookings SET start_utc = ?, end_utc = ?, duration = ?, guest_tz = ?, reschedules = reschedules + 1, updated_at = ? WHERE id = ?', start, start + duration * MINUTE, duration, zone, Date.now(), b.id);
+      const now = this.bookingByHash(b.manage_hash)!;
+      await this.mailGuest('moved', now, cfg, c.env.manage, now.mailed_ics ? this.bookingIcs(b.event_id, 'REQUEST', cfg.timezone) : null);
+      await this.publishBooking(b.event_id, 'moved', now);
+      return c.json({ booking: this.bookingView(now, cfg) });
+    });
+
+    // The booking page, by its token.
+    app.get('/v1/book/:token', (c) => {
+      this.startOpenSync(c.env.cfg);
+      return c.json({ page: this.pageInfo(c.env.cfg) });
+    });
+    app.get('/v1/book/:token/days', (c) => days(c));
+    app.get('/v1/book/:token/slots', (c) => slots(c));
+    app.post('/v1/book/:token', async (c) => {
+      writeAllowed(c);
+      const cfg = c.env.cfg, body = parse(BookingBody, await json(c));
+      // The form's hidden field, which a person never fills in.
+      if (body.website) throw badRequest('This booking could not be made');
+      const duration = lengthOf(cfg, body.duration), zone = guestZone(body.tz, cfg.timezone);
+      if (!this.rateAllow('book-day', BOOKINGS_PER_DAY, DAY_MS)) throw calendarError(429, 'rate_limited', 'This page has taken all the bookings it can today; try again tomorrow');
+      const start = await checkStart(c, body.start, duration, zone);
+      if (start instanceof Response) return start;
+      const manage = newManageToken(), manageHash = await sha256(manage);
+      await this.directoryCall('addBookingManageLink', [this.store.state('owner_account_id'), manageHash]);
+      const target = cfg.targetCalendarId && this.store.calendar(cfg.targetCalendarId) ? cfg.targetCalendarId : null;
+      const guest = { name: body.name, email: body.email.toLowerCase(), note: body.note };
+      const created = await this.asOwner('POST', '/v1/calendar/events', { ...(target ? { calendarId: target } : {}), ...this.bookingFields(cfg, guest, start, duration) });
+      const eventId = (created.event as EventOccurrence).eventId;
+      // `invitationsSent: false`: no mailbox sends as the owner, so the guest's mail carries the invitation itself.
+      const mailedIcs = created.invitationsSent === false;
+      const id = crypto.randomUUID(), now = Date.now();
+      this.sql.exec(`INSERT INTO scheduler_bookings (id, page_id, event_id, start_utc, end_utc, duration, guest_name, guest_email, note, guest_tz, manage_hash, status, mailed_ics, created_at, updated_at)
+        VALUES (?, 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'booked', ?, ?, ?)`, id, eventId, start, start + duration * MINUTE, duration, guest.name, guest.email, guest.note ?? null, zone, manageHash, mailedIcs ? 1 : 0, now, now);
+      const b = this.bookingByHash(manageHash)!;
+      await this.mailGuest('booked', b, cfg, manage, mailedIcs ? this.bookingIcs(eventId, 'REQUEST', cfg.timezone) : null);
+      await this.publishBooking(eventId, 'booked', b);
+      return c.json({ booking: this.bookingView(b, cfg), manageUrl: this.schedulerUrl(`m/${manage}`), manageToken: manage }, 201);
+    });
+  }
+
   // ---- routes -----------------------------------------------------------------------------------------------------
 
   private routes(): void {
@@ -1240,6 +1573,33 @@ export class Calendar extends DurableObject<CalendarEnv> {
         else unknown.push(e);
       }
       return c.json({ busy, unknown });
+    });
+
+    // The guest scheduler's page, for its owner (docs/specs/guest-scheduler.md §3.2). `tz`: the owner's zone, for the
+    // defaults before the page is first saved. Turning it on the first time makes its link.
+    const schedulerAnswer = (p: { token: string | null; config: SchedulerConfig }) => ({ page: p.config, token: p.token, url: p.token ? this.schedulerUrl(p.token) : null });
+    app.get('/v1/calendar/scheduler', (c) => c.json(schedulerAnswer(this.schedulerPage(guestZone(c.req.query('tz'), 'UTC')))));
+    app.patch('/v1/calendar/scheduler', async (c) => {
+      const p = this.schedulerPage(guestZone(c.req.query('tz'), 'UTC'));
+      const next = applyPatch(p.config, parse(ConfigPatch, await json(c)));
+      const ids = new Set(this.store.calendars().map((x) => x.id));
+      if (next.busyCalendarIds?.some((id) => !ids.has(id))) throw badRequest('busyCalendarIds: a calendar that is not here');
+      if (next.targetCalendarId) this.writable(this.calendar(next.targetCalendarId));
+      const token = next.enabled && !p.token ? await this.newSchedulerToken() : p.token;
+      this.saveSchedulerPage(token, next);
+      return c.json(schedulerAnswer({ token, config: next }));
+    });
+    app.post('/v1/calendar/scheduler/rotate', async (c) => {
+      const p = this.schedulerPage(guestZone(c.req.query('tz'), 'UTC'));
+      const token = await this.newSchedulerToken();
+      this.saveSchedulerPage(token, p.config);
+      return c.json(schedulerAnswer({ token, config: p.config }));
+    });
+    app.get('/v1/calendar/scheduler/bookings', (c) => {
+      const from = c.req.query('from') ? Date.parse(c.req.query('from')!) : Date.now() - DAY_MS;
+      if (Number.isNaN(from)) throw badRequest('from: an ISO time');
+      const rows = this.sql.exec<BookingRow & Record<string, SqlStorageValue>>("SELECT * FROM scheduler_bookings WHERE page_id = 'default' AND end_utc >= ? ORDER BY start_utc LIMIT 200", from).toArray();
+      return c.json({ bookings: rows.map((b) => ({ id: b.id, eventId: b.event_id, status: b.status, start: new Date(b.start_utc).toISOString(), end: new Date(b.end_utc).toISOString(), duration: b.duration, guestName: b.guest_name, guestEmail: b.guest_email, note: b.note, guestTimezone: b.guest_tz, reschedules: b.reschedules })) });
     });
 
     const debug = async () => ({

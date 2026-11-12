@@ -1,0 +1,36 @@
+/* The guest scheduler's page: the Calendar client's tokens (../index.css), and the same names redefined for a dark
+   system theme, since this page is seen by people outside the suite on whatever device they use. */
+@import "../index.css";
+
+:root {
+  --book-card: #fff;
+  /* Text on a filled primary (or danger) button. */
+  --book-on-primary: #fff;
+  color-scheme: light dark;
+}
+body {
+  background: var(--color-panel);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --book-card: #202124;
+    --book-on-primary: #202124;
+    --color-primary: #8ab4f8;
+    --color-primary-deep: #aecbfa;
+    --color-primary-tint: #2d3e5c;
+    --color-selected-blue: #24324a;
+    --color-ink: #e8eaed;
+    --color-muted: #9aa0a6;
+    --color-faint: #5f6368;
+    --color-panel: #17181a;
+    --color-hairline: #3c4043;
+    --color-border: #5f6368;
+    --color-hover: #2a2b2e;
+    --color-danger: #f28b82;
+    --color-warn-bg: #3a3320;
+    --color-warn-border: #6b5a22;
+  }
+  body {
+    color: var(--color-ink);
+  }
+}

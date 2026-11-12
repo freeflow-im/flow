@@ -343,6 +343,23 @@ export const CALENDAR_TOOLS: CalendarTool[] = [
     },
   },
   {
+    name: 'get_booking_link',
+    title: 'Get booking link',
+    description: "The user's booking page (FreeFlow Calendar's guest scheduler): its public link, where anyone can pick a free time and book a meeting with the user, whether it is turned on, the meeting lengths it offers and its weekly hours. Use it to paste the link into a message when someone needs to find a time with the user. The link is private to whoever has it: share it only where the user asked. When it is off, say the user can turn it on in FreeFlow Calendar (Booking page).",
+    shape: {},
+    scopes: ['calendar:read'],
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    async run(ctx) {
+      const r = await call<{ url: string | null; page: { enabled: boolean; title: string; durations: number[]; timezone: string; weekly: Record<string, [number, number][]> } }>(ctx, 'GET', '/scheduler');
+      const hm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+      const hours = Object.fromEntries(Object.entries(r.page.weekly).filter(([, v]) => v.length).map(([d, v]) => [d, v.map(([a, b]) => `${hm(a)}-${hm(b)}`)]));
+      return {
+        enabled: r.page.enabled, ...(r.page.enabled && r.url ? { url: r.url } : {}), title: r.page.title, lengths_minutes: r.page.durations, timezone: r.page.timezone, hours,
+        ...(r.page.enabled ? {} : { note: `The booking page is off. The user can turn it on in FreeFlow Calendar at ${ctx.origin}/calendar (Booking page).` }),
+      };
+    },
+  },
+  {
     name: 'list_shared_calendars',
     title: 'List shared calendars',
     description: "Only the FreeFlow calendars other members shared with the user (what list_calendars also includes, without the user's own): id, name, the user's role (viewer, editor or manager), and the owner's account. Name them in list_events' calendars to read them.",
@@ -569,7 +586,7 @@ export const CALENDAR_INSTRUCTIONS =
  * The assistant has every Calendar tool. delete_event runs in the browser there (protocol CLIENT_TOOLS), so the person
  * confirms it first; the rest run on the server.
  */
-export const ASSISTANT_CALENDAR_TOOLS = ['list_calendars', 'list_shared_calendars', 'list_events', 'get_event', 'find_free_time', 'create_event', 'update_event', 'respond_to_event', 'share_calendar', 'unshare_calendar', 'delete_event'] as const;
+export const ASSISTANT_CALENDAR_TOOLS = ['list_calendars', 'get_booking_link', 'list_shared_calendars', 'list_events', 'get_event', 'find_free_time', 'create_event', 'update_event', 'respond_to_event', 'share_calendar', 'unshare_calendar', 'delete_event'] as const;
 const ASSISTANT_DESCRIPTIONS: Partial<Record<(typeof ASSISTANT_CALENDAR_TOOLS)[number], string>> = {
   delete_event: 'Deletes an event, or for an occurrence of a repeating event this occurrence (default), this and the following ones, or all of them (scope). The user is asked to confirm in the app first; if they decline, do not try again another way.',
 };

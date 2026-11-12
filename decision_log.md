@@ -1890,3 +1890,16 @@ one-recipient MCP correction).
   `flowlandingpage/`) and reuses the Flow site's design files, so it shares
   the CI secrets and look. It is a separate Pages project (`freeflow-home`) so
   each site deploys alone.
+
+## 2026-11-12 — Calendar guest scheduler (`docs/specs/guest-scheduler.md`)
+
+- **One booking page per person**, with one or more meeting lengths on it.
+  Several pages per person ("event types") come later.
+- **The URL is a secret token that is easy to read**:
+  `/calendar/book/k7mq-x3vd-p9tr` (12 lowercase Crockford base32 characters,
+  60 bits). There is no readable handle URL.
+- **A guest visit re-syncs the owner's connected calendars** when they are
+  more than 5 minutes stale, at most once per minute per page. Booking and
+  rescheduling re-sync when the data is more than 2 minutes old.
+- **No video call link in v1.** The location is text that the owner types.
+- **Guests can cancel and reschedule** through a link sent only to them.

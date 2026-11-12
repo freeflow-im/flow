@@ -41,11 +41,15 @@ describe('APP_MANIFESTS', () => {
     }
   });
 
-  it('serves each page under its own app’s path, from one page per app', () => {
+  it('serves each page under its own app’s path, from one main page per app (and its second entries, each its own)', () => {
     for (const m of APP_MANIFESTS) {
       if (!m.pages) continue;
       expect(m.client).toBeDefined();
-      expect(new Set(m.pages.map((p) => p.html)).size).toBe(1);
+      const main = m.pages.filter((p) => !p.file), extra = m.pages.filter((p) => p.file);
+      expect(new Set(main.map((p) => p.html)).size).toBe(1);
+      // A second entry (Calendar's book.html) is filed under its own page name, never the main page's.
+      for (const p of extra) expect(main.some((x) => x.html === p.html)).toBe(false);
+      expect(new Set(extra.map((p) => p.html)).size).toBe(extra.length);
       for (const p of m.pages) {
         // Chat's catch-all (its client is built at the root) is the one page outside its app's path.
         expect(p.path === '*' ? m.name === 'chat' : p.path === m.path || p.path.startsWith(`${m.path}/`)).toBe(true);

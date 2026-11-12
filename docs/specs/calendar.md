@@ -325,7 +325,7 @@ its e2e green.
 - **Google push** (`events.watch` channels to a Worker URL) and **CalDAV polling tuned per server**, so changes show in seconds.
 - **Microsoft 365 / Outlook.com** by the Graph API (Microsoft has no CalDAV); a third driver behind the same interface.
 - **Google OAuth verification** when there are users outside the test list; the privacy policy page it needs.
-- **Scheduling links** (a page where others book time), **organization calendars** (an organization's shared events in its Org
+- **Scheduling links** (a page where others book time; built 2026-11-12 as the guest scheduler, `guest-scheduler.md`), **organization calendars** (an organization's shared events in its Org
   object), **tasks** (VTODO, Google Tasks), natural-language quick add ("lunch with Ann Thursday noon" through the assistant),
   the native and desktop clients (§7 of the suite spec).
 

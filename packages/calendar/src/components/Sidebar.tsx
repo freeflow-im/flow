@@ -1,8 +1,8 @@
 // The left column: Create, the small month, and the calendars grouped by account, each a checkbox in its colour with a
 // menu (colour, default for new events, Share… for a native one, the account's settings); then Shared with me, other
-// accounts' calendars shared with the person (owner and role under each); Add account at the bottom. On a phone it opens
+// accounts' calendars shared with the person (owner and role under each); Booking page and Add account at the bottom. On a phone it opens
 // over the page from the toolbar's Calendars button.
-import { Check, MoreVertical, Plus, Star } from 'lucide-react';
+import { CalendarClock, Check, MoreVertical, Plus, Star } from 'lucide-react';
 import type { CalendarAccount, CalendarInfo } from '../api';
 import type { Range } from '../lib/ranges';
 import { canShare, roleLabel } from '../lib/sharing';
@@ -32,6 +32,8 @@ export interface SidebarProps {
   /** A shared calendar's owner, in words. */
   ownerName(accountId: string): string;
   onShare(c: CalendarInfo): void;
+  /** The guest scheduler's settings (docs/specs/guest-scheduler.md §4). */
+  onBookingPage(): void;
 }
 
 export function Sidebar(p: SidebarProps) {
@@ -64,7 +66,8 @@ export function Sidebar(p: SidebarProps) {
           <ul>{p.shared.map((c) => <CalendarRow key={c.id} c={c} p={p} native />)}</ul>
         </section>
       )}
-      <div className="mt-3 px-3">
+      <div className="mt-3 flex flex-col items-start px-3">
+        <Button variant="ghost" size="sm" onClick={p.onBookingPage} className="text-muted"><CalendarClock /> Booking page</Button>
         <Button variant="ghost" size="sm" onClick={p.onAdd} className="text-muted"><Plus /> Add account</Button>
       </div>
     </nav>

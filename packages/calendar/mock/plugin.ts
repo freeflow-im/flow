@@ -9,6 +9,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
 import type { CalendarInfo, EventInput, EventOccurrence, EventPatch, NewAccount, Scope } from '../src/api';
 import { sampleState, type MockEvent, type MockRule, type MockState } from './data';
+import { createSchedulerMock } from './scheduler';
 
 class HttpError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) { super(message); }
@@ -276,7 +277,9 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
 }
 
 export function calendarMock(): Plugin {
-  const handle = createMockApi(process.env.CALENDAR_MOCK === 'empty');
+  const api = createMockApi(process.env.CALENDAR_MOCK === 'empty');
+  const scheduler = createSchedulerMock();
+  const handle = async (method: string, url: URL, body: unknown) => scheduler(method, url, body) ?? api(method, url, body);
   return {
     name: 'flow-calendar-mock',
     configureServer(server) {
