@@ -302,4 +302,30 @@ r=await api(Bob.token,'PATCH',`/v1/calendar/events/${enc(BCOPY.id)}`,{summary:'M
 r=await api(A.token,'DELETE',`/v1/calendar/events/${enc(REV.id)}`);t('sched: Ann cancels',r.s===200&&r.j.ok,r.s);
 r=await api(Bob.token,'GET',`/v1/calendar/events/${enc(BCOPY.id)}`);t('sched: Bob\'s copy is kept, cancelled',r.s===200&&r.j.event?.status==='cancelled',r.s+' '+JSON.stringify(r.j.event).slice(0,160));
 r=await api(AGT,'GET',`/v1/calendar/events/${enc(ACOPY.id)}`);t('sched: and the agent\'s',r.j.event?.status==='cancelled',JSON.stringify(r.j.event).slice(0,120));
+
+// ---- the guest scheduler (docs/specs/guest-scheduler.md): Ann turns her booking page on, a guest with no session books a
+// slot through /v1/book, the meeting lands on Ann's native calendar with the guest invited, the guest is mailed their own
+// link (the Worker's log), and cancels with it. No token reaches a log line.
+r=await api(A.token,'PATCH','/v1/calendar/scheduler?tz=UTC',{enabled:true,timezone:'UTC',minNoticeMin:0,title:`Chat ${tag}`});
+const BTOK=r.j.token;t('book: Ann turns her page on and gets a readable link',r.s===200&&/^[0-9a-hjkmnp-tv-z]{4}-[0-9a-hjkmnp-tv-z]{4}-[0-9a-hjkmnp-tv-z]{4}$/.test(BTOK??'')&&r.j.url?.endsWith(`/calendar/book/${BTOK}`),r.s+' '+JSON.stringify(r.j).slice(0,200));
+r=await api(null,'GET',`/v1/book/${BTOK.toUpperCase()}`);t('book: the page answers with no session, nothing private',r.s===200&&r.j.page?.title===`Chat ${tag}`&&!JSON.stringify(r.j).includes('@'),r.s+' '+JSON.stringify(r.j).slice(0,200));
+r=await api(null,'GET','/v1/book/zzzz-zzzz-zzzz');t('book: an unknown token is 404',r.s===404,r.s);
+const nextMonth=new Date(Date.UTC(new Date().getUTCFullYear(),new Date().getUTCMonth()+1,1)).toISOString().slice(0,7);
+r=await api(null,'GET',`/v1/book/${BTOK}/days?month=${nextMonth}&duration=30&tz=UTC`);const BDAY=r.j.days?.[0];
+t('book: next month has open weekdays',r.s===200&&r.j.days?.length>=15&&r.j.days.every(d=>![0,6].includes(new Date(d+'T00:00:00Z').getUTCDay())),r.s+' '+JSON.stringify(r.j).slice(0,160));
+r=await api(null,'GET',`/v1/book/${BTOK}/slots?date=${BDAY}&duration=30&tz=UTC`);const BSLOT=r.j.slots?.[0];
+t('book: the first day starts at 9:00 UTC',BSLOT===`${BDAY}T09:00:00.000Z`&&r.j.slots.length===16,JSON.stringify(r.j).slice(0,160));
+const BGUEST=`guest-${tag}@example.com`;
+r=await api(null,'POST',`/v1/book/${BTOK}`,{start:BSLOT,duration:30,name:'Gus Guest',email:BGUEST,tz:'UTC'});
+const MANAGE=r.j.manageToken;t('book: a guest books it',r.s===201&&r.j.booking?.status==='booked'&&/\/calendar\/book\/m\//.test(r.j.manageUrl??''),r.s+' '+JSON.stringify(r.j).slice(0,200));
+r=await api(null,'POST',`/v1/book/${BTOK}`,{start:BSLOT,duration:30,name:'Second',email:`second-${tag}@example.com`,tz:'UTC'},{'cf-connecting-ip':'198.51.100.9'});t('book: the same slot again is slot_taken',r.s===409&&r.j.error?.code==='slot_taken',r.s+' '+JSON.stringify(r.j).slice(0,120));
+r=await api(A.token,'GET',`/v1/calendar/events?from=${BDAY}T00:00:00Z&to=${BDAY}T23:59:59Z`);const BEV=r.j.events?.find(e=>e.summary===`Chat ${tag}: Gus Guest`);
+t('book: on Ann\'s native calendar with the guest invited',!!BEV&&BEV.calendarId===NATIVE.id&&BEV.attendees?.some(a=>a.email===BGUEST),JSON.stringify(r.j).slice(0,200));
+await sleep(300);
+{const L=fs.readFileSync(log,'utf8');
+t('book: the guest is mailed their own link',new RegExp(`\\[mail\\] to=${BGUEST}.*calendar/book/m/${MANAGE}`).test(L));
+t('book: no booking token in a log line',!L.split('\n').some(l=>l.startsWith('[calendar]')&&(l.includes(BTOK)||l.includes(MANAGE))));}
+r=await api(null,'POST',`/v1/book/m/${MANAGE}/cancel`);t('book: the guest cancels with their link',r.s===200&&r.j.booking?.status==='cancelled',r.s+' '+JSON.stringify(r.j).slice(0,160));
+r=await api(A.token,'GET',`/v1/calendar/events?from=${BDAY}T00:00:00Z&to=${BDAY}T23:59:59Z`);t('book: and it is off Ann\'s calendar',!r.j.events?.some(e=>e.summary===`Chat ${tag}: Gus Guest`),JSON.stringify(r.j).slice(0,160));
+r=await api(A.token,'PATCH','/v1/calendar/scheduler',{enabled:false});r=await api(null,'GET',`/v1/book/${BTOK}`);t('book: a page turned off is 404',r.s===404,r.s);
 console.log(`\n${pass} passed, ${fail} failed`);process.exit(fail?1:0);

@@ -12,6 +12,7 @@ This file keeps two things:
 
 ## Parity
 
+- **The Calendar booking page is set up on web only (2026-11-12, docs/specs/guest-scheduler.md).** Guests book on a public web page, and bookings are ordinary events on every client; turning the page on and editing its settings is in the web Calendar app only. macOS and iOS have no Calendar settings screen (gap to close with Calendar there).
 - **The assistant as a Chat member is named and configured on web only (2026-11-11, docs/specs/agents.md §1.1).** Every client lists a person's assistant and its messages (it is a member with `isAgent`), and the server enforces who may DM it; naming it, its mail allowlist and the "Assistant · of Ann" kind are web-only (Docs' panel prompt, Organization settings → Your assistant). macOS and iOS show it as an ordinary agent and do not read `kind` (gap to close).
 - **The assistant panel's agent picker and the assistant's definition are web-only (2026-11-11, docs/specs/agents.md §6).** Docs', Mail's and Calendar's web panels pick the agent and Docs' Settings names the assistant and sets its instructions; macOS and iOS have no assistant panel (gap to close when they gain one).
 - **The Event log is in the Admin app, web-only (2026-11-11, docs/specs/workspace-admin.md §3.6).** macOS and iOS have no admin surface by ruling; the log is readable there only through the API. Deliberate, like the other admin sections.

@@ -165,7 +165,7 @@ can tell an agent that owns a booking page.
 - The guest sees only free time, never event titles or which calendar is busy.
 - Rate limits (the Directory's fixed windows): 60 reads per minute per IP per token; 5 bookings per hour per IP; 20 bookings per
   day per page. A honeypot field in the form. Cloudflare Turnstile is the next step if spam shows up.
-- Tokens are stored only as hashes. Guest IPs are stored only as a hash with a per-page salt, for the limits.
+- The directory stores only token hashes. Guest IPs are stored only as a salted hash, for the limits (§10).
 - No address, name or token in log lines (the rule in `calendar.md` §9).
 - The page is `noindex` and `no-referrer`, so a link does not leak through search engines or the `Referer` header.
 
@@ -205,3 +205,34 @@ location is the owner's text; guests can cancel and reschedule; the secret token
 one booking page per person, with several meeting lengths.
 
 No questions are open.
+
+## 10. As built (2026-11-12)
+
+One branch, `calendar/guest-scheduler`, four commits after the spec: server, guest page, owner settings, tests and docs.
+Where the build differs from the plan above:
+
+- **Guests' own links are not under the page link.** A booking's link is `/calendar/book/m/<token>` (22 base64url
+  characters), indexed in the directory like the page link (`booking_links`, `kind` `page` or `manage`). So a new page link
+  does not break the cancel and reschedule links guests already have. The page link stays one per account.
+- **Storage.** `scheduler_pages` keeps the settings as one JSON column (`config`, scheduler.ts `SchedulerConfig`) and the
+  page token itself, so the owner can copy the link again; only the directory's shared index holds hashes.
+  `scheduler_bookings` also has `mailed_ics` (below).
+- **Rate limits live in the owner's Calendar object** (`rate_limit_windows`), not the directory: 60 reads a minute and 5
+  writes an hour per address (a salted hash of it), 20 new bookings a day per page. The `book-*` rows are pruned after a day.
+- **A link location is hidden until booking.** When the location is a URL, the public page info says `kind: 'link'` with no
+  label, and the page shows "Web conferencing details provided upon confirmation"; the booking and its mail carry the link.
+- **Writes go through the object's own event routes** (`asOwner`: POST, PATCH and DELETE `/v1/calendar/events`), so a
+  booking is scheduled, mailed and published exactly as an event made in the app.
+- **The guest mail.** Always sent, from the platform sender (`mail.ts` `sendMail`), named "<owner> via FreeFlow", Reply-To
+  the owner: booked, moved or cancelled, with the guest's link. When the calendar side sent no invitation
+  (`invitationsSent: false`, for example a native calendar whose owner has no mailbox), the mail attaches it (REQUEST, or
+  CANCEL for a cancellation) and the booking keeps `mailed_ics` so later changes are mailed the same way.
+- **All-day busy events** cover their dates in the page's zone (`busyOf`), not in UTC as the free/busy route does.
+- **The owner's notification** is `calendar.booked` on the bus (audience: the owner; `data.action` booked, moved or
+  cancelled). No client shows it as a notification yet, and the bridge does not subscribe to it.
+- **The pages.** `book.html` is a second Vite entry; the manifest page has `file: 'book.html'` and the assembler files it as
+  `_pages/calendar-book.html`. The page follows the system's light or dark theme. The settings dialog is
+  `BookingPageDialog.tsx` (sidebar → Booking page, or `?booking=1`).
+- **Tests.** `scheduler.test.ts` (slots, DST, zones, settings, tokens), `book.test.ts` (the whole flow on one object
+  through the public route), `src/book/book.test.ts` (the page's helpers), and the `book:` section of
+  `test/e2e-calendar.mjs` (158 passed on 2026-11-12).
