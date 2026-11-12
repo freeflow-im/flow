@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import type { FetchMessageObject } from 'imapflow';
-import { ACTIVE_CADENCE_MS, ACTIVE_MS, BODY, MailCache, cadenceMs, flagDiff, nextAlarmAt, threadPageSql, walkDown, type Flags, type NewRow, type Sql } from './cache';
+import { ACTIVE_CADENCE_MS, ACTIVE_MS, BODY, TAB_CADENCE_MS, TAB_IDLE_CADENCE_MS, TAB_IDLE_MS, TAB_OPEN_MS, MailCache, cadenceMs, flagDiff, nextAlarmAt, threadPageSql, walkDown, type Flags, type NewRow, type Sql } from './cache';
 import { effectiveSql } from './categorize';
 import { toSummary } from './convert';
 
@@ -52,6 +52,15 @@ describe('the alarm', () => {
     expect(cadenceMs(t0, t0 + 23 * 60 * MIN)).toBe(30 * MIN);
     expect(cadenceMs(t0, t0 + 24 * 60 * MIN)).toBeNull();
     expect(cadenceMs(0, t0)).toBeNull();
+    // A Mail tab open (heartbeat within TAB_OPEN_MS): 5 minutes, 15 after a day with no request, never stopping.
+    expect(cadenceMs(t0, t0 + 10_000, t0 + 10_000)).toBe(ACTIVE_CADENCE_MS);
+    expect(cadenceMs(t0, t0 + 2 * 60 * MIN, t0 + 2 * 60 * MIN)).toBe(TAB_CADENCE_MS);
+    expect(cadenceMs(t0, t0 + TAB_IDLE_MS - 1, t0 + TAB_IDLE_MS - 1)).toBe(TAB_CADENCE_MS);
+    expect(cadenceMs(t0, t0 + TAB_IDLE_MS, t0 + TAB_IDLE_MS)).toBe(TAB_IDLE_CADENCE_MS);
+    expect(cadenceMs(t0, t0 + 30 * TAB_IDLE_MS, t0 + 30 * TAB_IDLE_MS - TAB_OPEN_MS + 1)).toBe(TAB_IDLE_CADENCE_MS);
+    // The heartbeat stopped (tab closed): the idle rules again.
+    expect(cadenceMs(t0, t0 + 2 * 60 * MIN, t0 + 2 * 60 * MIN - TAB_OPEN_MS)).toBe(30 * MIN);
+    expect(cadenceMs(t0, t0 + TAB_IDLE_MS, t0 + TAB_IDLE_MS - TAB_OPEN_MS)).toBeNull();
   });
 
   it('is next due one cadence from now, and never with no accounts', () => {
@@ -59,6 +68,7 @@ describe('the alarm', () => {
     expect(nextAlarmAt(t0, t0 + 1000, true)).toBe(t0 + 1000 + ACTIVE_CADENCE_MS);
     expect(nextAlarmAt(t0, t0 + 1000, false)).toBeNull();
     expect(nextAlarmAt(0, t0, true)).toBeNull();
+    expect(nextAlarmAt(0, t0, true, t0)).toBe(t0 + TAB_IDLE_CADENCE_MS);
   });
 });
 

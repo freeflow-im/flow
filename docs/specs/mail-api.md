@@ -94,8 +94,10 @@ interface MessageDetail extends Omit<MessageSummary, 'attachments'> {
 - `GET  /v1/mail/accounts/:id/contacts?q=<text>&limit=8` → `{ contacts: [{ name, address, sent, received, lastAt }] }` (2026-11-04): the
   people written to and heard from, for the composer's address completion (Contacts below): those whose address, or a word of
   whose name, starts with `q`, the most written to first, then the most heard from, then the latest; everyone with no `q`.
+- `POST /v1/mail/heartbeat` → `{ ok: true }` (2026-11-12): a Mail tab is open (sent every 5 minutes, even hidden); sets how
+  often the alarm runs (The prefetch cache, below), and is not a request that makes the person active
 - `GET  /v1/mail/accounts/:id/debug/cache` → `{ folders: [{ folder, kind, validity, high, low, modseq, syncedAt, openedAt, error, errorAt, rows }],
-  log, lastActiveAt, nextAlarmAt, alarmStep }` (each folder also with `bodies` and `bodyBytes`; `alarmStep` is where the alarm's
+  log, lastActiveAt, tabOpenAt, nextAlarmAt, alarmStep }` (each folder also with `bodies` and `bodyBytes`; `alarmStep` is where the alarm's
   last run was, written before each step, which a run cut short by the runtime still shows): how the prefetch cache stands for the account
   (below), and the last 20 alarm runs since the object woke (`{ at, ms, folders: ['inbox: 3 new, 0 flags, 0 gone, 100 older',
   'bodies: 25 bodies'], errors }`), for the account's owner.
@@ -313,7 +315,9 @@ from it and the server is asked only for what is new.
   before a page is full, the rest is fetched from the server as before and cached on the way (`low` moves down to it), so
   scrolling never waits for the alarm. The timing line ends with `cache=hit|fill|live`. With tabs on, each message's tab
   comes from `mail_categories` as for a fetched page (a cached message not sorted yet is sorted then).
-- **The alarm** (`alarm()`, `runCache`): every 30 s while the person is active (a request in the last 3 minutes), every 5 minutes
+- **The alarm** (`alarm()`, `runCache`): every 30 s while the person is active (a request in the last 3 minutes), while a Mail tab is open
+  (2026-11-12: its heartbeat, `POST /v1/mail/heartbeat`, every 5 minutes even when hidden, came in the last 11 minutes; it
+  does not count as a request) every 5 minutes, or every 15 after a day with no request; with no tab open, every 5 minutes
   idle under an hour, every 30 under a day, then not at all until the next request; set after every request and every run
   (`armAlarm`, cache.ts `nextAlarmAt`), and never for a person with no accounts. One run (ALARM_BUDGET_MS = 20 s) takes the
   accounts in turn, starting after the one the last run ended with, on each account's **cache** connection (logged out right
