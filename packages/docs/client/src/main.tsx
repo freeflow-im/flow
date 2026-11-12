@@ -28,6 +28,10 @@ import { isPreview } from './components/FilePreviewFrame.tsx';
 import { useHistoryKeys } from './historyKeys.ts';
 import { desktopHost, useDesktopBridge, useRecentOpens } from './desktopBridge.ts';
 import { HostProvider, type Host } from './host.tsx';
+import { reloadOnStaleBuild } from '@flow/suite-bar';
+
+// A page from before a deploy loads again when a part of its old version is gone (lib/staleBuild.ts).
+reloadOnStaleBuild();
 
 // A file's preview in the file list: the same page with only the file showing (styles.css, .file-preview-page).
 const PREVIEW = isPreview();

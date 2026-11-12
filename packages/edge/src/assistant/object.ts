@@ -63,6 +63,8 @@ export interface AssistantEnv {
 
 /** How long an async turn may run before it is given up. */
 const WAKE_TURN_MS = 8 * 60_000;
+/** How often a Chat turn says it is still at work (Chat drops a typing event after 5 s). */
+const TYPING_EVERY_MS = 3_000;
 
 /**
  * The tables, Docs' own DDL for them (docs/server/db.ts, with its later columns) without the `users` references: this
@@ -422,6 +424,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
     const ORG = this.env.ORG;
     const org = ORG?.get(ORG.idFromName(organizationId));
     const conversation = `chat:${p.channelId}:${p.threadRootId ?? 'main'}`;
+    let stopTyping: ReturnType<typeof setInterval> | undefined;
     try {
       this.requireModel();
       const actorId = runtime.sponsorId;
@@ -436,6 +439,10 @@ export class Assistant extends DurableObject<AssistantEnv> {
       if (wrong) throw new Error(wrong);
       const docs: DocsCaller = { userId: actorId, email: user.email, token: '', ip: '', accountId: account.id, channelIds };
       this.turnWho.set(conversation, { caller, docs, conversationUser: conversation });
+      // "Thinking…" in Chat while the turn runs: a typing event now and every few seconds (the clients drop one after 5 s).
+      const typing = () => void org?.agentTyping({ agentUserId: runtime.agentId, channelId: p.channelId, threadRootId: p.threadRootId }).catch(() => undefined);
+      typing();
+      stopTyping = setInterval(typing, TYPING_EVERY_MS);
       const text = await withDocsContext(this.context, async () => {
         const { agent } = this.service();
         const abort = new AbortController();
@@ -453,11 +460,14 @@ export class Assistant extends DurableObject<AssistantEnv> {
         if (failed) throw new Error(failed);
         return out.trim();
       });
+      clearInterval(stopTyping);
       if (text && org) await org.postAsAssistant({ agentUserId: runtime.agentId, channelId: p.channelId, threadRootId: p.threadRootId, body: text, clientMsgId: `assistant:${p.messageId}` });
     } catch (err) {
+      clearInterval(stopTyping);
       console.error(`[assistant] chat ${p.messageId}: ${(err as Error)?.stack ?? err}`);
       if (org) await org.postAsAssistant({ agentUserId: runtime.agentId, channelId: p.channelId, threadRootId: p.threadRootId, body: `Sorry, I could not answer that: ${agentErrorMessage(err).slice(0, 300)}`, clientMsgId: `assistant:${p.messageId}` }).catch(() => null);
     } finally {
+      clearInterval(stopTyping);
       this.turnWho.delete(conversation);
       this.runningJobs.delete(p.messageId);
     }

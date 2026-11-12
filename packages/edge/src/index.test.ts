@@ -52,6 +52,17 @@ describe('the front door', () => {
     expect(res.headers.get('Cache-Control')).toContain('immutable');
   });
 
+  it('answers a build file this deploy does not have with a 404, not the origin\'s page', async () => {
+    const f = origin('<html>shell</html>');
+    for (const path of ['/mail/assets/InlineCompose-old.js', '/assets/app-old.js', '/docs/assets/w-old.css']) {
+      const res = await app.request(`https://app.example${path}`, {}, env());
+      expect(res.status).toBe(404);
+      expect(res.headers.get('content-type')).toContain('text/plain');
+      expect(res.headers.get('cache-control')).toBe('no-store');
+    }
+    expect(f).not.toHaveBeenCalled();
+  });
+
   it('leaves the cache headers of a file whose name is not hashed', async () => {
     const res = await app.request('https://app.example/logo.svg', {}, env({ '/logo.svg': '<svg/>' }));
     expect(res.headers.get('Cache-Control')).toBe('public, max-age=0');
