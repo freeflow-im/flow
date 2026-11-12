@@ -6,7 +6,8 @@ Status: first version built 2026-11-11 (web). Design reference: the operator's "
 
 One page that brings the suite together, at `/home`:
 
-- **A sidebar**: the apps (Home, Mail, Calendar, Docs, Chat, and Admin for owners and admins), the person's channels,
+- **A sidebar**: the apps (Home, Mail, Calendar, Docs, and Admin for owners and admins), the person's channels (Chat
+  itself: no row of its own, an "Open Chat" link on the heading; the narrow screen's app row keeps a Chat link),
   and the organization's agents. Every row opens that app's own page: a channel opens in Chat, an agent opens the
   person's DM with it (made on the first click, `POST /v1/workspaces/:id/dms`).
 - **Cards**: Today (Calendar), Inbox (Mail), Recent files (Docs) and Mentions (Chat). Each row opens where its app shows it.

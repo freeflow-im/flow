@@ -111,7 +111,9 @@ export function App() {
           <Sidebar
             active={frames.view}
             activeChannel={activeChannel}
-            apps={appLinks({ mailUnread: mail.unread, chatUnread: chatCount, admin })}
+            // Chat is the Channels section below, so it is no row of its own here (the narrow screen's app row keeps it: the
+            // sidebar, with its channels, is hidden there).
+            apps={appLinks({ mailUnread: mail.unread, chatUnread: chatCount, admin }).filter((a) => a.id !== 'chat')}
             channels={channels ? sidebarChannels(channels) : null}
             agents={chat.members.data ? chat.agents : null}
             onOpenAgent={(a) => void openAgent(a)}
