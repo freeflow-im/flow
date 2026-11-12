@@ -483,7 +483,7 @@ function AssistantDefinition() {
   );
 }
 
-/** Who may mail the assistant (agents.md §1.1): one address per line; mail from anyone else goes to its Refused folder. */
+/** Who may mail the assistant (agents.md §1.1): one address per line, empty by default (then its mailbox is never read). */
 function MailAllowlist() {
   const [text, setText] = useState('');
   const [saved, setSaved] = useState<string | null>(null);
@@ -513,7 +513,7 @@ function MailAllowlist() {
         <span>Who may mail it</span>
         <textarea value={text} rows={3} placeholder="name@example.com" onChange={(e) => setText(e.target.value)} disabled={busy} data-testid="assistant-allowlist-input" />
       </label>
-      <p className="muted">Your own addresses are always allowed. Add other senders one per line; mail from anyone else goes to its Refused folder, unread.</p>
+      <p className="muted">Empty, your assistant reads no mail at all. Add the addresses it may take mail from, one per line (yours too, if you want to mail it); it checks every ten minutes, and mail from anyone else goes to its Refused folder, unread.</p>
       <div className="settings-actions">
         <button type="button" className="btn" disabled={busy || text === saved} onClick={() => void save()} data-testid="assistant-allowlist-save">{busy ? 'Saving…' : 'Save senders'}</button>
       </div>

@@ -443,7 +443,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
     }
   }
 
-  /** The senders the sponsor added to their assistant's mail allowlist (agents.md §1.1); their own addresses are always on it. */
+  /** The senders the sponsor allows to mail their assistant (agents.md §1.1): empty by default, and empty means no mail is read. */
   async mailAllowlist(): Promise<string[]> {
     try { return JSON.parse(this.state('mail_allowlist') ?? '[]') as string[]; } catch { return []; }
   }
@@ -552,7 +552,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
     // The agent's definition (agents.md §6): read by anyone the object answers (its owner); set the same way. The default
     // name is the one the route gives on the first request (the directory's "<name>'s assistant").
     app.get('/api/agent/definition', (c) => c.json({ definition: this.definition() }));
-    // The assistant's mail allowlist (agents.md §1.1): the senders the person adds; their own addresses are always on it.
+    // The assistant's mail allowlist (agents.md §1.1): only the senders the person adds; empty, its mailbox is never checked.
     app.get('/api/agent/mail-allowlist', async (c) => c.json({ senders: await this.mailAllowlist() }));
     app.put('/api/agent/mail-allowlist', async (c) => {
       const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { senders?: unknown };

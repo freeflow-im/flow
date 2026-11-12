@@ -13,7 +13,7 @@ import { isFileId } from '@flow/docs/server/ids.ts';
 import { chatScope } from '@flow/docs/shared/agent/protocol.ts';
 import { directory, guestRefusal, resolveCaller, tokenOf, type AuthEnv } from './auth';
 
-export interface AssistantRouteEnv extends AuthEnv { ASSISTANT: DurableObjectNamespace<Assistant>; DOCS: DurableObjectNamespace<import('../docs/object').Docs> }
+export interface AssistantRouteEnv extends AuthEnv { ASSISTANT: DurableObjectNamespace<Assistant>; DOCS: DurableObjectNamespace<import('../docs/object').Docs>; MAIL: DurableObjectNamespace<import('../imap/object').Mail> }
 type C = Context<{ Bindings: AssistantRouteEnv }>;
 
 export const assistantRoutes = new Hono<{ Bindings: AssistantRouteEnv }>();
@@ -105,6 +105,10 @@ async function forward(c: C): Promise<Response> {
     const naming = c.req.method === 'PUT' && new URL(c.req.url).pathname === '/api/agent/definition' && self
       ? ((await c.req.raw.clone().json().catch(() => null)) as { name?: unknown } | null)?.name : undefined;
     const res = await c.env.ASSISTANT.get(c.env.ASSISTANT.idFromName(who.account.id)).handle(c.req.raw, { ...who, ...(self ? { via: self.id } : {}) }, docs, self?.displayName);
+    // A changed allowlist (agents.md §1.1): the assistant's mailbox starts or stops being checked.
+    if (res.ok && self && c.req.method === 'PUT' && new URL(c.req.url).pathname === '/api/agent/mail-allowlist') {
+      await c.env.MAIL.get(c.env.MAIL.idFromName(self.accountId)).assistantPolicyChanged().catch((err: Error) => console.error(`[assistant] allowlist: ${err.message}`));
+    }
     if (res.ok && self && typeof naming === 'string' && naming.trim() && naming.trim() !== self.displayName) {
       const account = await directory(c, 'nameAssistant', self.id, who.account.organizationId, naming);
       await org.renameAssistant(self.id, account.displayName, account.address);

@@ -1,5 +1,16 @@
 # Decision log
 
+## 2026-11-11 — Assistant mail is opt-in: an empty allowlist, and no mail checks until it names a sender (operator ruling)
+
+- **Ruling (Scott):** an assistant's sender allowlist starts **empty** (it no longer includes the sponsor's own
+  addresses by default). Empty means its mailbox is **never checked**. Once the sponsor adds any sender, the mailbox is
+  checked every **ten minutes**; mail from a listed, authenticated sender reaches the assistant, the rest goes to
+  Refused. Removing every sender stops the checks again.
+- **Why:** polling every assistant's mailbox every minute costs a wake per assistant per minute for mail almost nobody
+  sends; most people will never mail their assistant, and those who do say so by naming senders.
+- **Replaces:** the 2026-11-11 entry's "by default the sponsor's own addresses" and the one-minute check of PR #780.
+- **Where:** `docs/specs/agents.md` §1.1; `packages/edge/src/imap/object.ts` (`armAlarm`, `assistantPolicy`).
+
 ## 2026-11-11 — The assistant is a member, with a name, a mailbox and a calendar, answering only its sponsor (operator ruling)
 
 - **Ruling (Scott):** a person's assistant (their hosted personal agent) is named by them at onboarding ("Ada") and is

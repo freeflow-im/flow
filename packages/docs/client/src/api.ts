@@ -446,7 +446,7 @@ export const api = {
   usableAgents: () => request<{ agents: UsableAgent[] }>('GET', `/api/agent/agents${inFolder(undefined, true)}`),
   agentDefinition: () => request<{ definition: AgentDefinition }>('GET', `/api/agent/definition${inFolder(undefined, true)}`),
   saveAgentDefinition: (body: { name?: string; instructions?: string }) => request<{ definition: AgentDefinition }>('PUT', `/api/agent/definition${inFolder(undefined, true)}`, body),
-  // Who may mail the person's assistant (agents.md §1.1): the senders they add; their own addresses are always allowed.
+  // Who may mail the person's assistant (agents.md §1.1): only the senders they add; empty by default.
   mailAllowlist: () => request<{ senders: string[] }>('GET', `/api/agent/mail-allowlist${inFolder(undefined, true)}`),
   saveMailAllowlist: (senders: string[]) => request<{ senders: string[] }>('PUT', `/api/agent/mail-allowlist${inFolder(undefined, true)}`, { senders }),
   agentReset: (scope: string, agent?: string | null) => request<{ ok: true }>('POST', `/api/agent/reset${inFolder(undefined, true)}`, agent ? { scope, agent } : { scope }),
