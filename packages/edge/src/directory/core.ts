@@ -492,6 +492,27 @@ export class DirectoryCore {
     return this.accountRow('address = ?', address)[0] ?? null;
   }
 
+  /**
+   * The guest scheduler's page link of an account (docs/specs/guest-scheduler.md §2.3): its token's hash, which replaces the
+   * one the account had (so the old link stops working); null takes it away. Called by the account's Calendar object.
+   */
+  setBookingLink(accountId: string, tokenHash: string | null): void {
+    this.sql.exec("DELETE FROM booking_links WHERE account_id = ? AND kind = 'page'", accountId);
+    if (tokenHash) this.sql.exec("INSERT INTO booking_links (token_hash, account_id, kind, created_at) VALUES (?, ?, 'page', ?)", tokenHash, accountId, Date.now());
+  }
+
+  /** One booking's own link (its guest's, to cancel or reschedule), added when it is booked. */
+  addBookingManageLink(accountId: string, tokenHash: string): void {
+    this.sql.exec("INSERT OR IGNORE INTO booking_links (token_hash, account_id, kind, created_at) VALUES (?, ?, 'manage', ?)", tokenHash, accountId, Date.now());
+  }
+
+  /** The account a booking link's token hash belongs to (`kind` must match), while that account is active; else null. */
+  bookingOwner(tokenHash: string, kind: 'page' | 'manage' = 'page'): string | null {
+    const row = this.rows('SELECT account_id FROM booking_links WHERE token_hash = ? AND kind = ?', tokenHash, kind)[0];
+    const account = row ? this.accountRow('id = ?', row.account_id)[0] : null;
+    return account && account.state === 'active' ? account.id : null;
+  }
+
   organization(id: string): { id: string; slug: string; ownerUserId: string | null; policies: Record<string, unknown> } | null {
     const o = this.rows('SELECT * FROM organizations WHERE id = ?', id)[0];
     return o ? { id: o.id as string, slug: o.slug as string, ownerUserId: (o.owner_user_id as string | null) ?? null, policies: JSON.parse(o.policies as string) } : null;

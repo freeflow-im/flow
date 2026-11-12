@@ -50,10 +50,10 @@ describe('the manifests and the Worker', () => {
     const out = path.join(edge, 'public');
     const clients = clientsFrom(APP_MANIFESTS, root, out);
     expect(clients.slice(0, 4)).toEqual([
-      { name: 'chat', from: path.join(root, 'packages/web/dist'), to: path.join(out, '/'), page: 'index.html', optional: false },
-      { name: 'docs', from: path.join(root, 'packages/docs/dist/client'), to: path.join(out, 'docs/'), page: 'docs.html', optional: false },
-      { name: 'mail', from: path.join(root, 'packages/mail/dist'), to: path.join(out, 'mail/'), page: 'mail.html', optional: true },
-      { name: 'calendar', from: path.join(root, 'packages/calendar/dist'), to: path.join(out, 'calendar/'), page: 'calendar.html', optional: true },
+      { name: 'chat', from: path.join(root, 'packages/web/dist'), to: path.join(out, '/'), page: 'index.html', extra: [], optional: false },
+      { name: 'docs', from: path.join(root, 'packages/docs/dist/client'), to: path.join(out, 'docs/'), page: 'docs.html', extra: [], optional: false },
+      { name: 'mail', from: path.join(root, 'packages/mail/dist'), to: path.join(out, 'mail/'), page: 'mail.html', extra: [], optional: true },
+      { name: 'calendar', from: path.join(root, 'packages/calendar/dist'), to: path.join(out, 'calendar/'), page: 'calendar.html', extra: [{ file: 'book.html', page: 'calendar-book.html' }], optional: true },
     ]);
     // Any later app's client is optional: a deploy built before it has none.
     expect(clients.slice(4).every((c) => c.optional && c.page === `${c.name}.html`)).toBe(true);
@@ -128,6 +128,13 @@ describe('the pages, from the manifests', () => {
     const preview = await get('/docs/preview/id');
     expect(preview.headers.get('x-frame-options')).toBe('SAMEORIGIN');
     expect(preview.headers.get('content-security-policy')).toBe("frame-ancestors 'self'");
+    // The guest scheduler's page: no sign-in, its own build, out of search engines; the rest of /calendar still asks.
+    const book = await get('/calendar/book/k7mq-x3vd-p9tr?month=2026-11');
+    expect(await book.text()).toBe('page /_pages/calendar-book.html');
+    expect(book.headers.get('referrer-policy')).toBe('no-referrer');
+    expect(book.headers.get('x-robots-tag')).toBe('noindex');
+    expect((await get('/calendar/book/m/abc')).status).toBe(200);
+    expect((await get('/calendar/week')).status).toBe(302);
     const old = await get('/p/tok?a=b');
     expect(old.status).toBe(301);
     expect(old.headers.get('location')).toBe('/docs/p/tok?a=b');

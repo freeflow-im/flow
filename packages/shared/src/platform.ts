@@ -349,6 +349,8 @@ export interface AppScopeGroup {
 export interface AppPage {
   path: string;
   html: string;
+  /** The client's built file this page is, when it is not the client's index.html (a second entry, such as Calendar's book.html). */
+  file?: string;
   signIn?: boolean;
   headers?: Record<string, string>;
   passFiles?: boolean;

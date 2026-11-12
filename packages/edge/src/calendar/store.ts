@@ -40,9 +40,18 @@ export const DDL = [
   `CREATE TABLE IF NOT EXISTS calendar_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
   // Grants on native calendars (platform.md §4.3, phase 4.1): kinds `calendar` (the container) and `event`.
   ...GRANTS_DDL,
+  // The guest scheduler (docs/specs/guest-scheduler.md §3.1): the booking page (one per account, id `default`; `config` is
+  // scheduler.ts SchedulerConfig as JSON; `token` its public link's token, whose hash the directory indexes) and its bookings
+  // (`manage_hash`: the hash of the guest's own link; `mailed_ics`: the confirmation mail carried the invitation, because the
+  // calendar side sent none, so a change is mailed the same way).
+  `CREATE TABLE IF NOT EXISTS scheduler_pages (id TEXT PRIMARY KEY, token TEXT, config TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS scheduler_bookings (id TEXT PRIMARY KEY, page_id TEXT NOT NULL, event_id TEXT NOT NULL, start_utc INTEGER NOT NULL, end_utc INTEGER NOT NULL,
+    duration INTEGER NOT NULL, guest_name TEXT NOT NULL, guest_email TEXT NOT NULL, note TEXT, guest_tz TEXT, manage_hash TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'booked', reschedules INTEGER NOT NULL DEFAULT 0, mailed_ics INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS scheduler_bookings_start ON scheduler_bookings (page_id, start_utc)`,
 ];
 /** Every table of the object, for the move between objects (the object's `exportRows`, `importRows`). */
-export const CALENDAR_TABLES = ['accounts', 'calendars', 'objects', 'events', 'sync_runs', 'rate_limit_windows', 'calendar_state', 'grants'] as const;
+export const CALENDAR_TABLES = ['accounts', 'calendars', 'objects', 'events', 'sync_runs', 'rate_limit_windows', 'calendar_state', 'grants', 'scheduler_pages', 'scheduler_bookings'] as const;
 const SYNC_RUNS_KEEP = 200;
 /**
  * Columns added after the first release, each added once (ALTER fails when it is already there), with what runs once after.

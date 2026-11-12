@@ -36,7 +36,7 @@ describe('the Calendar tools', () => {
   it('are listed by scope: calendar:read reads and finds time, calendar:write also changes', () => {
     const names = (s: string[]) => calendarToolsFor(s).map((t) => t.name);
     expect(names([])).toEqual([]);
-    expect(names(['calendar:read'])).toEqual(['list_calendars', 'list_shared_calendars', 'list_events', 'get_event', 'find_free_time']);
+    expect(names(['calendar:read'])).toEqual(['list_calendars', 'get_booking_link', 'list_shared_calendars', 'list_events', 'get_event', 'find_free_time']);
     expect(names(['calendar:write'])).toHaveLength(CALENDAR_TOOLS.length);
     for (const t of CALENDAR_TOOLS) expect(t.annotations.readOnlyHint).toBe(t.scopes.every((s) => s === 'calendar:read'));
     expect(tool('delete_event').annotations.destructiveHint).toBe(true);

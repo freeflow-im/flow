@@ -141,7 +141,7 @@ export const APP_MANIFESTS: AppManifest[] = [
     kinds: [{ kind: 'calendar', container: true, resolve: 'app' }, { kind: 'event', resolve: 'app' }],
     // Its tools, by name (their definitions: @flow/shared/tools, platform.md §5.4).
     tools: [
-      'list_calendars', 'list_shared_calendars', 'list_events', 'get_event', 'find_free_time', 'create_event', 'update_event', 'delete_event', 'respond_to_event', 'share_calendar', 'unshare_calendar',
+      'list_calendars', 'get_booking_link', 'list_shared_calendars', 'list_events', 'get_event', 'find_free_time', 'create_event', 'update_event', 'delete_event', 'respond_to_event', 'share_calendar', 'unshare_calendar',
       'open_calendar_event', 'show_calendar_range', 'list_my_events',
     ],
     scopes: [
@@ -159,9 +159,12 @@ export const APP_MANIFESTS: AppManifest[] = [
     client: { dist: 'packages/calendar/dist', basePath: '/calendar/', optional: true },
     pages: [
       { path: '/calendar', html: 'calendar.html', signIn: true },
+      // The guest scheduler's public page (docs/specs/guest-scheduler.md §4): its own small build, no sign-in, kept out of
+      // search engines and referrers. Before /calendar/*, which asks a stranger to sign in.
+      { path: '/calendar/book/*', html: 'calendar-book.html', file: 'book.html', headers: PUBLIC },
       { path: '/calendar/*', html: 'calendar.html', signIn: true, passFiles: true },
     ],
-    events: ['calendar.event.added', 'calendar.event.updated', 'calendar.event.cancelled', 'calendar.invited'],
+    events: ['calendar.event.added', 'calendar.event.updated', 'calendar.event.cancelled', 'calendar.invited', 'calendar.booked'],
   },
   {
     name: 'events',

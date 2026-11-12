@@ -304,4 +304,9 @@ export const DIRECTORY_MIGRATIONS: string[] = [
   // Hosted agents (agents.md §6, phase C): where an agent's loop runs. NULL is external (the bridge, a client on /mcp);
   // `hosted` is the platform's runtime object: every person's assistant, made with their account, and hosted shared agents.
   `ALTER TABLE users ADD COLUMN runtime TEXT;`,
+  // The guest scheduler's public links (docs/specs/guest-scheduler.md §2.3): a token's SHA-256 to the account whose Calendar
+  // object answers it. `page`: the booking page, one per account (a new link replaces it, so the old one stops working);
+  // `manage`: one booking's own link, sent to its guest, which outlives a new page link.
+  `CREATE TABLE booking_links (token_hash TEXT PRIMARY KEY, account_id TEXT NOT NULL, kind TEXT NOT NULL, created_at INTEGER NOT NULL);
+  CREATE UNIQUE INDEX booking_links_page ON booking_links(account_id) WHERE kind = 'page';`,
 ];

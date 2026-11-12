@@ -19,6 +19,7 @@ import { adminRoutes } from './routes/admin';
 import { helpRoutes } from './routes/help';
 import { mailRoutes } from './routes/mail';
 import { calendarRoutes } from './routes/calendar';
+import { bookRoutes } from './routes/book';
 import { mcpRoutes } from './routes/mcp';
 import { eventRoutes } from './routes/events';
 import { toolRoutes } from './routes/tools';
@@ -118,6 +119,8 @@ ported.route('/', authRoutes as never);
 ported.route('/', helpRoutes as never);
 ported.route('/', mailRoutes as never);
 ported.route('/', calendarRoutes as never);
+// The guest scheduler's public API (no session): /v1/book/*.
+ported.route('/', bookRoutes as never);
 ported.route('/', contactsRoutes as never);
 ported.route('/', eventRoutes as never);
 ported.route('/', referenceRoutes as never);
