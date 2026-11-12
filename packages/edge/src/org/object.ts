@@ -292,6 +292,24 @@ export class Org extends DurableObject<OrgEnv> {
   }
 
   /**
+   * A hosted agent at work on a turn in Chat (agents.md §1.1): the same typing event a client's composer sends, so Chat
+   * shows "<name> is thinking…" until the answer is posted. Sent again every few seconds while the turn runs, since the
+   * clients drop it after five. Only a hosted agent of this organization, only in a channel it is in.
+   */
+  async agentTyping(p: { agentUserId: string; channelId: string; threadRootId: string | null }): Promise<void> {
+    const sql = this.ctx.storage.sql;
+    const workspace = sql.exec('SELECT id FROM workspaces LIMIT 1').toArray()[0];
+    if (!workspace) return;
+    if (!sql.exec("SELECT 1 FROM workspace_members WHERE user_id = ? AND runtime = 'hosted'", p.agentUserId).toArray().length) return;
+    if (!sql.exec('SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?', p.channelId, p.agentUserId).toArray().length) return;
+    const workspaceId = workspace.id as string;
+    this.broadcast(`ws.${workspaceId}.chan.${p.channelId}.typing`, {
+      type: 'typing', workspaceId, channelId: p.channelId, ts: new Date().toISOString(),
+      data: { userId: p.agentUserId, channelId: p.channelId, ...(p.threadRootId ? { threadRootId: p.threadRootId } : {}) },
+    } as Event);
+  }
+
+  /**
    * An assistant's answer in Chat (agents.md §1.1), posted as the assistant itself, marked as asked by its sponsor. Only a
    * person's assistant, only where it is a channel member. Returns the message id, or null.
    */
@@ -917,7 +935,10 @@ export class Org extends DurableObject<OrgEnv> {
       if (typeof frame.since === 'number' && Number.isFinite(frame.since) && frame.since >= 0 && accountId) {
         await this.sendBacklog(ws, workspace!.id, user.id, accountId, frame.since);
       }
-      const online = new Set(this.sockets().map((s) => s.userId).filter((id): id is string => !!id && id !== user.id));
+      // Online: everyone with a socket here, and every hosted agent (a person's assistant, a hosted shared agent), which runs
+      // in the platform with no socket of its own and so is always present (agents.md §1.1).
+      const hosted = this.ctx.storage.sql.exec("SELECT user_id FROM workspace_members WHERE runtime = 'hosted'").toArray().map((r) => r.user_id as string);
+      const online = new Set([...this.sockets().map((s) => s.userId), ...hosted].filter((id): id is string => !!id && id !== user.id));
       for (const id of online) ws.send(JSON.stringify({ op: 'event', event: this.presence(workspace!.id, id, 'online') }));
       if (!alreadyOnline) this.broadcast(`ws.${workspace!.id}.presence`, this.presence(workspace!.id, user.id, 'online'));
       return;
