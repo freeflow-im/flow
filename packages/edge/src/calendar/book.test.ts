@@ -136,6 +136,10 @@ describe('the guest scheduler', () => {
     expect(ev[0]).toMatchObject({ summary: '30 Minute Meet: Bo Guest', location: 'https://meet.example/ann', start });
     expect(ev[0].attendees.map((a: { email: string }) => a.email)).toContain('bo@example.com');
     expect(ev[0].description).toContain('About the launch');
+    // The guest reads the description in the invitation: their own link, and nothing written to the owner.
+    expect(ev[0].description).toContain(`Cancel or reschedule: ${r.j.manageUrl}`);
+    expect(ev[0].description).toContain("Booked through Ann Lee's booking page.");
+    expect(ev[0].description).not.toMatch(/your booking page|bo@example/);
 
     // No mailbox sends as Ann here, so the guest's mail carries the invitation, with their own link, in their zone.
     expect(mails).toHaveLength(1);

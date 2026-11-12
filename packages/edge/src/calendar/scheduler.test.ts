@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ConfigPatch, applyPatch, busyOf, dateIn, daysWithSlots, defaultConfig, monthWindow, newPageToken, normalizePageToken, openSlots, type SchedulerConfig,
+  ConfigPatch, applyPatch, busyOf, withDefaults, dateIn, daysWithSlots, defaultConfig, monthWindow, newPageToken, normalizePageToken, openSlots, type SchedulerConfig,
 } from './scheduler';
 
 const LA = 'America/Los_Angeles';
@@ -80,6 +80,13 @@ describe('open slots', () => {
 });
 
 describe('the settings', () => {
+  it('titles a new page "Meeting", and drops the old "30 Minute Meeting" only where it names the wrong length', () => {
+    expect(defaultConfig(LA).title).toBe('Meeting');
+    expect(withDefaults({ title: '30 Minute Meeting', durations: [30, 45] }, LA).title).toBe('Meeting');
+    expect(withDefaults({ title: '30 Minute Meeting', durations: [30] }, LA).title).toBe('30 Minute Meeting');
+    expect(withDefaults({ title: 'Intro call', durations: [45] }, LA).title).toBe('Intro call');
+  });
+
   it('sorts lengths, keeps the default among them, and refuses overlapping or empty ranges', () => {
     const c = applyPatch(defaultConfig(LA), ConfigPatch.parse({ durations: [60, 30, 45] }));
     expect(c.durations).toEqual([30, 45, 60]);

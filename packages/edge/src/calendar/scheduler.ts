@@ -37,10 +37,22 @@ export interface SchedulerConfig {
 }
 
 const WORKDAY: [number, number][] = [[9 * 60, 17 * 60]];
-/** Monday to Friday, 9:00 to 17:00, 30 minutes, in the owner's zone; off until the owner turns it on. */
+export const DEFAULT_TITLE = 'Meeting';
+/** The default title before 2026-11-12, which named a length; a page saved with it and other lengths reads as the new one. */
+const OLD_DEFAULT_TITLE = '30 Minute Meeting';
+
+/** Saved settings over the defaults. The old default title is dropped when the page offers a length other than 30 minutes,
+ * where it was wrong (a 45-minute meeting titled "30 Minute Meeting"); a title the owner typed is kept as it is. */
+export function withDefaults(saved: Partial<SchedulerConfig>, zone: string): SchedulerConfig {
+  const c = { ...defaultConfig(saved.timezone ?? zone), ...saved };
+  if (c.title === OLD_DEFAULT_TITLE && c.durations.some((n) => n !== 30)) c.title = DEFAULT_TITLE;
+  return c;
+}
+/** Monday to Friday, 9:00 to 17:00, 30 minutes, in the owner's zone; off until the owner turns it on. The title names no
+ * length: the page shows the length the guest picks beside it. */
 export function defaultConfig(timezone: string): SchedulerConfig {
   return {
-    enabled: false, title: '30 Minute Meeting', description: '', durations: [30], defaultDuration: 30, timezone,
+    enabled: false, title: DEFAULT_TITLE, description: '', durations: [30], defaultDuration: 30, timezone,
     weekly: { sun: [], mon: WORKDAY, tue: WORKDAY, wed: WORKDAY, thu: WORKDAY, fri: WORKDAY, sat: [] },
     minNoticeMin: 4 * 60, horizonDays: 60, bufferBeforeMin: 0, bufferAfterMin: 0, maxPerDay: null, incrementMin: null,
     busyCalendarIds: null, targetCalendarId: null, location: { kind: 'none', value: '' },
