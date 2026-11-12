@@ -52,6 +52,18 @@ async function codeFor(userId = 'u1', org = 'orgA', scope?: string, ticked?: str
 }
 
 describe('MCP OAuth in the directory', () => {
+  it('fetches a client metadata document without `redirect: error` (Workers refuse it), and refuses one that redirects', async () => {
+    const DOC = 'https://client.example/oauth/client.json';
+    const seen: RequestInit[] = [];
+    const answer = (res: () => Response) => new McpOAuth(sql, (async (_u: unknown, init?: RequestInit) => { seen.push(init ?? {}); return res(); }) as typeof fetch);
+    const params = { response_type: 'code', client_id: DOC, redirect_uri: 'http://localhost:4567/callback', code_challenge: challenge, code_challenge_method: 'S256' };
+    const ok = answer(() => Response.json({ client_id: DOC, client_name: 'Claude Code', redirect_uris: ['http://localhost/callback'] }));
+    expect((await ok.authorize(ISSUER, params)).kind).toBe('consent');
+    expect(seen[0]!.redirect).toBe('manual');
+    const moved = answer(() => new Response(null, { status: 302, headers: { location: 'https://elsewhere.example/c.json' } }));
+    await expect(moved.authorize(ISSUER, params)).rejects.toThrow(/redirects/);
+  });
+
   it('describes itself on the request origin', () => {
     expect(authorizationServerMetadata(ISSUER).token_endpoint).toBe(`${ISSUER}/oauth/token`);
     expect(protectedResourceMetadata(ISSUER, '/mcp')).toMatchObject({ resource: `${ISSUER}/mcp`, authorization_servers: [ISSUER] });

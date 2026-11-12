@@ -230,6 +230,7 @@ export interface UsableAgent {
   id: string;
   accountId: string;
   displayName: string;
+  avatarUrl?: string | null;
   mode: 'personal' | 'shared';
   self: boolean;
 }
@@ -249,6 +250,11 @@ export interface AgentTurnRequest {
    * the user's files there (My files); a file's chat takes the file's own organization and root instead.
    */
   workspace?: string;
+  /**
+   * The IANA time zone of whoever asked (their browser's, else their profile's): the turn is told the current date and
+   * time there. Absent, UTC.
+   */
+  timezone?: string;
   /** In the FreeFlow suite, the agent the turn is for (docs/specs/agents.md §6): a hosted shared agent's id; absent, the person's own assistant. */
   agent?: string;
 }

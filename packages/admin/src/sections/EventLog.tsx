@@ -1,8 +1,9 @@
 // Event log (docs/specs/workspace-admin.md §3.6): the organization's event log (platform.md §5.2) as the admin's account
 // may read it, newest first, with filters by type, actor kind, channel and text, and each event's envelope: who acted,
-// through which agent (`via`), asked by whom (`invokedBy`), caused by which job. Read-only.
-import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+// through which agent (`via`), asked by whom (`invokedBy`), caused by which job. Read-only. New events come in on their own
+// (the newest page is read again every few seconds) and older ones load as the list is scrolled to its end.
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import type { ChannelDTO, PlatformEvent, WorkspaceDTO } from '@flow/shared';
 import { formatReference } from '@flow/shared';
 import { adminApi } from '../api';
@@ -10,6 +11,8 @@ import { Button, Card, ErrorLine, Select } from '../components/ui';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const PAGE = 50;
+/** How often the newest events are read again. */
+const LIVE_MS = 10_000;
 
 type ActorFilter = 'any' | 'person' | 'agent';
 
@@ -19,35 +22,49 @@ export function EventLog({ org }: { org: WorkspaceDTO }) {
   const [channel, setChannel] = useState('');
   const [text, setText] = useState('');
   const [applied, setApplied] = useState({ types: '', actor: 'any' as ActorFilter, channel: '', text: '' });
-  /** The pages read so far, newest first; `before` of the next page is the last page's `next`. */
-  const [before, setBefore] = useState(0);
-  const [pages, setPages] = useState<PlatformEvent[][]>([]);
   const [open, setOpen] = useState<string | null>(null);
 
   const members = useQuery({ queryKey: ['members', org.id], queryFn: () => adminApi.members(org.id) });
   const accounts = useQuery({ queryKey: ['accounts', org.id], queryFn: () => adminApi.accounts(org.id) });
   const channels = useQuery({ queryKey: ['channels', org.id], queryFn: () => adminApi.channels(org.id) });
-  const page = useQuery({
-    queryKey: ['events', org.id, applied, before],
-    queryFn: () => adminApi.events(org.id, { before, limit: PAGE, ...(applied.types ? { types: applied.types } : {}), ...(applied.channel ? { channel: applied.channel } : {}), ...(applied.actor !== 'any' ? { actor: applied.actor } : {}), ...(applied.text ? { text: applied.text } : {}) }),
+  const filters = { ...(applied.types ? { types: applied.types } : {}), ...(applied.channel ? { channel: applied.channel } : {}), ...(applied.actor !== 'any' ? { actor: applied.actor } : {}), ...(applied.text ? { text: applied.text } : {}) };
+  // Older pages, read as the list is scrolled to its end; `before` of the next is the last page's `next`. A filter change
+  // is a new query, so it starts over.
+  const page = useInfiniteQuery({
+    queryKey: ['events', org.id, applied],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => adminApi.events(org.id, { before: pageParam, limit: PAGE, ...filters }),
+    getNextPageParam: (last) => (last.events.length >= PAGE && last.next > 1 ? last.next : undefined),
   });
-  // Each page read lands in order; a filter change starts over (see apply).
+  // The newest page, read again on a beat, so what happens now shows at the top without a click.
+  const live = useQuery({
+    queryKey: ['events-live', org.id, applied],
+    queryFn: () => adminApi.events(org.id, { before: 0, limit: PAGE, ...filters }),
+    enabled: page.isSuccess,
+    refetchInterval: LIVE_MS,
+  });
   const shown = useMemo(() => {
-    const all = [...pages, ...(page.data && !pages.some((p) => p === page.data.events) ? [page.data.events] : [])];
     const seen = new Set<string>();
-    return all.flat().filter((e) => !seen.has(e.id) && seen.add(e.id));
-  }, [pages, page.data]);
+    const all = [...(live.data?.events ?? []), ...(page.data?.pages.flatMap((p) => p.events) ?? [])];
+    return all.filter((e) => !seen.has(e.id) && seen.add(e.id)).sort((a, b) => b.seq - a.seq);
+  }, [live.data, page.data]);
+
+  // The end of the list: in sight, the next older page is read.
+  const end = useRef<HTMLDivElement>(null);
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = page;
+  useEffect(() => {
+    const el = end.current;
+    if (!el || !hasNextPage || typeof IntersectionObserver === 'undefined') return;
+    const watch = new IntersectionObserver((seen) => {
+      if (seen.some((s) => s.isIntersecting) && !isFetchingNextPage) void fetchNextPage();
+    }, { rootMargin: '300px' });
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage, shown.length]);
 
   const apply = () => {
     setApplied({ types: types.trim(), actor, channel, text: text.trim() });
-    setPages([]);
-    setBefore(0);
     setOpen(null);
-  };
-  const older = () => {
-    if (!page.data) return;
-    setPages((p) => [...p, page.data.events]);
-    setBefore(page.data.next);
   };
 
   // Who an account id is: the member whose account it is, by name, with the 🤖 mark for an agent.
@@ -67,7 +84,7 @@ export function EventLog({ org }: { org: WorkspaceDTO }) {
   const channelName = (c: ChannelDTO | undefined, id: string | undefined): string => (id ? (c?.name ? `#${c.name}` : c ? (c.kind === 'dm' ? 'a DM' : 'a group DM') : id.slice(0, 8)) : '');
   const channelOf = (id: string | undefined) => channels.data?.find((c) => c.id === id);
   const when = (iso: string) => new Date(iso).toLocaleString();
-  const canReadMore = !!page.data && page.data.events.length >= PAGE && page.data.next > 1;
+
 
   return (
     <Card title="Event log" intro="Everything the apps publish into this organization's event log (platform.md §5.2), as your account may read it: the organization's events, your private channels, and what is shared with you. Newest first. An event says who acted, through which agent, and who asked." testid="card-events">
@@ -125,10 +142,9 @@ export function EventLog({ org }: { org: WorkspaceDTO }) {
       <div className="flex items-center gap-2 text-xs text-muted">
         <span data-testid="events-count">{shown.length} {shown.length === 1 ? 'event' : 'events'}</span>
         <span className="flex-1" />
-        {canReadMore && (
-          <Button kind="link" disabled={page.isFetching} onClick={older} testid="events-older">Older</Button>
-        )}
+        {isFetchingNextPage ? <span>Loading older events…</span> : hasNextPage ? null : shown.length > 0 && <span>The start of the log</span>}
       </div>
+      <div ref={end} aria-hidden="true" data-testid="events-end" />
     </Card>
   );
 }

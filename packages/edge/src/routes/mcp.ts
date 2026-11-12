@@ -33,7 +33,9 @@ const CORS = {
   'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS',
   'access-control-expose-headers': 'www-authenticate, mcp-session-id, mcp-protocol-version',
 };
-const PAGE_HEADERS = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'content-security-policy': "frame-ancestors 'none'", 'referrer-policy': 'no-referrer' };
+// `same-origin`, not `no-referrer`: under no-referrer a browser posts the consent form with `Origin: null`, which the
+// decision's origin check refuses ("This request came from another site"). Other sites still get no referrer.
+const PAGE_HEADERS = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'content-security-policy': "frame-ancestors 'none'", 'referrer-policy': 'same-origin' };
 
 const json = (body: unknown, status = 200, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...headers } });
 const html = (body: string, status = 200) => new Response(body, { status, headers: PAGE_HEADERS });
@@ -296,6 +298,20 @@ mcpRoutes.get('/api/settings/agents', async (c) => {
   const agents = await oauth(c, 'connections', user.id);
   const names = await organizationNames(c, user, agents.map((a) => a.organizationId));
   return json({ enabled: true, everySignIn: true, mcpUrl: `${issuerOf(c)}/mcp`, agents: agents.map((a) => ({ ...a, organization: names.get(a.organizationId) || 'An organization you left' })) });
+});
+
+/** The same, for the Admin app's "Connect an agent" (the platform's /v1, its error shape): the person's connected agents. */
+mcpRoutes.get('/v1/me/agent-connections', async (c) => {
+  const user = await apiUser(c);
+  if (!user) return json({ error: { code: 'unauthorized', message: 'Not signed in' } }, 401);
+  const agents = await oauth(c, 'connections', user.id);
+  const names = await organizationNames(c, user, agents.map((a) => a.organizationId));
+  return json({ mcpUrl: `${issuerOf(c)}/mcp`, agents: agents.map((a) => ({ ...a, organization: names.get(a.organizationId) || 'An organization you left' })) });
+});
+mcpRoutes.delete('/v1/me/agent-connections/:id', async (c) => {
+  const user = await apiUser(c);
+  if (!user) return json({ error: { code: 'unauthorized', message: 'Not signed in' } }, 401);
+  return (await oauth(c, 'disconnect', user.id, c.req.param('id'))) ? json({ ok: true }) : json({ error: { code: 'not_found', message: 'No such agent.' } }, 404);
 });
 
 mcpRoutes.delete('/api/settings/agents/:id', async (c) => {

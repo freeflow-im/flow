@@ -111,6 +111,16 @@ r=await api(G.token,'GET',`/v1/mail/accounts?workspace=${W}`);t('and Mail lets h
 r=await api(A.token,'GET',`/v1/workspaces/${W}/members?all=1`);{const ms=r.j.members??[];const asst=(id)=>ms.find(m=>m.kind==='personal_agent'&&m.agentRuntime==='hosted'&&m.sponsorId===id);
 t('the full list holds each member’s assistant, as a personal agent with its sponsor',r.s===200&&!!asst(A.user.id)&&!!asst(Bo.user.id)&&!!asst(G.user.id),JSON.stringify(ms.map(m=>[m.displayName,m.kind,m.agentRuntime??''])));
 globalThis.annAsst=asst(A.user.id);globalThis.bobAsst=asst(Bo.user.id);}
+// Ann's assistant's picture (agents.md §1.1): a preset, an upload; the agents list and Chat's members carry it.
+r=await api(A.token,'PUT',`/v1/workspaces/${W}/assistant/avatar`,{preset:'mint'});t('Ann gives her assistant a preset picture',r.s===200&&r.j.avatarUrl==='/agent-avatars/mint.svg',r.s+' '+JSON.stringify(r.j));
+r=await api(A.token,'PUT',`/v1/workspaces/${W}/assistant/avatar`,{preset:'nope'});t('an unknown preset is refused',r.s===400&&r.j.error?.code==='bad_preset',r.s);
+r=await api(A.token,'GET',`/api/agent/agents?workspace=${W}`);t('the panels’ agent list carries it',(r.j.agents??[]).find(a=>a.self)?.avatarUrl==='/agent-avatars/mint.svg',JSON.stringify(r.j).slice(0,160));
+{const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==','base64');const fd=new FormData();fd.append('file',new Blob([png],{type:'image/png'}),'a.png');
+const up=await fetch(`${B}/v1/workspaces/${W}/assistant/avatar`,{method:'POST',headers:{authorization:'Bearer '+A.token},body:fd});const uj=await up.json();
+t('or uploads one',up.status===200&&/^\/v1\/avatars\/[0-9a-f-]{36}-\d+\.png$/.test(uj.avatarUrl??''),up.status+' '+JSON.stringify(uj));
+const img=await fetch(`${B}${uj.avatarUrl}`,{headers:{authorization:'Bearer '+A.token}});t('and it is served',img.status===200&&img.headers.get('content-type')==='image/png',img.status);
+r=await api(Bo.token,'GET',`/v1/workspaces/${W}/members`);t('Chat’s members show it',(r.j.members??[]).find(m=>m.userId===annAsst.userId)?.avatarUrl===uj.avatarUrl,JSON.stringify((r.j.members??[]).map(m=>[m.displayName,m.avatarUrl])).slice(0,160));}
+r=await api(A.token,'GET','/v1/me/agent-connections');t('GET /v1/me/agent-connections: the MCP address and none connected',r.s===200&&/\/mcp$/.test(r.j.mcpUrl??'')&&Array.isArray(r.j.agents),r.s+' '+JSON.stringify(r.j));
 // The model every agent runs on is the organization's (operator ruling 2026-11-11): a member sees it, an admin sets it.
 r=await api(Bo.token,'GET',`/v1/workspaces/${W}/assistant/model`);t('Bob, a member, sees the organization’s model',r.s===200&&r.j.settings?.provider==='default',r.s+' '+JSON.stringify(r.j).slice(0,80));
 r=await api(Bo.token,'PUT',`/v1/workspaces/${W}/assistant/model`,{provider:'default'});t('but cannot set it',r.s===403&&r.j.error?.code==='not_admin',r.s+' '+JSON.stringify(r.j));

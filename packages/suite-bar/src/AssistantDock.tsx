@@ -7,6 +7,42 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import './assistant-dock.css';
 
+/** The person's own assistant in an organization (agents.md §1.1): its name and picture, for the pill. */
+export interface MyAssistant { displayName: string; avatarUrl: string | null }
+
+/**
+ * Reads the person's assistant in the organization (`GET /api/agent/agents`, its `self` row), again when the organization
+ * changes. Null until it is known, and for a guest (who has none): the pill then says "AI Help".
+ */
+/** The window event that says the person's assistant changed here (a name, a picture): the pill reads it again. */
+export const ASSISTANT_CHANGED = 'flow:assistant-changed';
+export function assistantChanged(): void {
+  window.dispatchEvent(new Event(ASSISTANT_CHANGED));
+}
+
+export function useMyAssistant(organizationId: string | null): MyAssistant | null {
+  const [mine, setMine] = useState<MyAssistant | null>(null);
+  const [asked, setAsked] = useState(0);
+  useEffect(() => {
+    const again = () => setAsked((n) => n + 1);
+    window.addEventListener(ASSISTANT_CHANGED, again);
+    return () => window.removeEventListener(ASSISTANT_CHANGED, again);
+  }, []);
+  useEffect(() => {
+    let live = true;
+    const url = organizationId ? `/api/agent/agents?workspace=${encodeURIComponent(organizationId)}` : '/api/agent/agents';
+    fetch(url, { credentials: 'same-origin', headers: { accept: 'application/json' } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body: { agents?: { self?: boolean; displayName?: string; avatarUrl?: string | null }[] } | null) => {
+        const self = body?.agents?.find((a) => a.self);
+        if (live) setMine(self?.displayName ? { displayName: self.displayName, avatarUrl: self.avatarUrl ?? null } : null);
+      })
+      .catch(() => live && setMine(null));
+    return () => { live = false; };
+  }, [organizationId, asked]);
+  return mine;
+}
+
 /** Where the panel sits: floating over the page bottom-right (the default), or docked as a side panel beside it. */
 export type AssistantPlacement = 'floating' | 'docked';
 
@@ -67,8 +103,10 @@ export const useAssistantDock = () => useContext(DockCtx);
 
 export interface AssistantDockProps {
   state: AssistantDockState;
-  /** The pill's text. */
+  /** The pill's text: the person's assistant's name (useMyAssistant), else "AI Help". */
   label?: string;
+  /** The assistant's picture, shown on the pill in place of the spark; none, the spark. */
+  avatarUrl?: string | null;
   /** The shortcut that opens and closes the panel (`⌘K`), named in the pill's accessible label and the Minimize button's tooltip. */
   shortcut?: string;
   /** The app's panel, drawn when the dock is open. */
@@ -80,7 +118,8 @@ export interface AssistantDockProps {
  * once anchored, when the panel is a child of the app's own layout (beside the page, with the app's resize handle).
  * Goes inside a `position: relative` element: the page area the pill floats over.
  */
-export function AssistantDock({ state, label = 'AI Help', shortcut, children }: AssistantDockProps) {
+export function AssistantDock({ state, label, avatarUrl, shortcut, children }: AssistantDockProps) {
+  const text = label?.trim() || 'AI Help';
   const { open, placement, expanded, setOpen } = state;
   const launcherRef = useRef<HTMLButtonElement>(null);
   const wasOpen = useRef(open);
@@ -97,8 +136,8 @@ export function AssistantDock({ state, label = 'AI Help', shortcut, children }: 
           children
         ) : (
           <button ref={launcherRef} type="button" className="assistant-dock-launcher" onClick={() => setOpen(true)} aria-label={shortcut ? `Open Assistant (${shortcut})` : 'Open Assistant'}>
-            <SparkIcon />
-            <span className="assistant-dock-launcher-label">{label}</span>
+            {avatarUrl ? <img className="assistant-dock-launcher-avatar" src={avatarUrl} alt="" data-testid="assistant-dock-avatar" /> : <SparkIcon />}
+            <span className="assistant-dock-launcher-label">{text}</span>
           </button>
         )}
       </section>

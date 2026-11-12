@@ -9,6 +9,8 @@ import { MEMBER_SECTIONS, SECTION_LABELS, SECTIONS, sectionOf, sectionPath } fro
 import { Domains } from './sections/Domains';
 import { Agents } from './sections/Agents';
 import { Assistant } from './sections/Assistant';
+import { Connect } from './sections/Connect';
+import { SuiteAssistant } from '@flow/suite-bar/assistant-chat';
 import { Automations } from './sections/Automations';
 import { EventLog } from './sections/EventLog';
 import { General } from './sections/General';
@@ -31,7 +33,7 @@ function useSection(sections: readonly AdminSection[]): [AdminSection, (s: Admin
   return [section, go];
 }
 
-const SECTION_ICONS: Record<AdminSection, SuiteMenuIcon> = { general: 'settings', members: 'people', domains: 'mail', agents: 'user', assistant: 'star', automations: 'clock', events: 'draft' };
+const SECTION_ICONS: Record<AdminSection, SuiteMenuIcon> = { general: 'settings', members: 'people', domains: 'mail', agents: 'user', assistant: 'star', connect: 'share', automations: 'clock', events: 'draft' };
 
 export function App() {
   const organizations = useOrganizations();
@@ -57,7 +59,7 @@ export function App() {
       ) : !allowed ? (
         <NotAllowed name={org.name} />
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col bg-panel sm:flex-row">
+        <div className="relative flex min-h-0 flex-1 flex-col bg-panel sm:flex-row">
           <nav className={`${inHome ? 'hidden' : 'flex'} shrink-0 gap-1 overflow-x-auto border-b border-hairline bg-white px-3 py-2 sm:w-56 sm:flex-col sm:border-r sm:border-b-0 sm:px-3 sm:py-4`} aria-label="Sections">
             {sections.map((s) => (
               <a
@@ -86,10 +88,13 @@ export function App() {
               {section === 'domains' && admin && <Domains org={org} />}
               {section === 'agents' && admin && <Agents org={org} />}
               {section === 'assistant' && <Assistant org={org} />}
+              {section === 'connect' && <Connect />}
               {section === 'automations' && <Automations org={org} />}
               {section === 'events' && admin && <EventLog org={org} />}
             </div>
           </main>
+          {/* The person's assistant, as in every app (agents.md §1.1). */}
+          <SuiteAssistant organizationId={org.id} />
         </div>
       )}
     </div>

@@ -60,12 +60,15 @@ t('the consent page lists both of Uma’s organizations by name',r.s===200&&r.j.
 t('it names the client and the scopes, and one organization is preselected',r.j.includes('E2E Agent')&&r.j.includes('Organization files')&&r.j.includes('My files')&&[A,Bo].includes(C.checked),C.checked);
 t('it offers the Events group, ticked',/name="grant_events" value="on" checked/.test(r.j)&&r.j.includes('Events: read the subscriptions you make'),/grant_events[^>]*/.exec(r.j)?.[0]);
 t('it cannot be framed',r.h.get('x-frame-options')==='DENY'&&/frame-ancestors 'none'/.test(r.h.get('content-security-policy')??''),r.h.get('x-frame-options'));
+// A browser posts the consent form with `Origin: null` under no-referrer, which the decision refuses: same-origin it is.
+t('its referrer policy lets the form post its own origin (same-origin)',r.h.get('referrer-policy')==='same-origin',r.h.get('referrer-policy'));
 if(process.env.CONSENT_HTML)fs.writeFileSync(process.env.CONSENT_HTML,r.j);
 const decide=(fields,extra)=>api(null,'POST','/oauth/decision',form(fields),'application/x-www-form-urlencoded',extra);
 r=await decide({p:C.p,csrf:C.csrf,org:Ch,allow:'yes'},{...cookie(U),origin:B});t('choosing an organization Uma is not in is refused',r.s===403&&!r.h.get('location')&&r.j.includes('Choose one of your organizations'),r.s);
 r=await decide({p:C.p,csrf:'forged',org:A,allow:'yes'},{...cookie(U),origin:B});t('a forged CSRF token is refused',r.s===403,r.s);
 r=await decide({p:C.p,csrf:C.csrf,org:A,allow:'yes'},{...cookie(O),origin:B});t('another person’s session is refused',r.s===403,r.s);
 r=await decide({p:C.p,csrf:C.csrf,org:A,allow:'yes'},{origin:B});t('no session is refused',r.s===401,r.s);
+r=await decide({p:C.p,csrf:C.csrf,org:A,allow:'yes'},{...cookie(U),origin:'null'});t('a post with Origin: null is still refused',r.s===403&&r.j.includes('another site'),r.s);
 r=await decide({p:C.p,csrf:C.csrf,org:A,allow:'yes'},{...cookie(U),origin:'https://evil.example'});t('another site’s form is refused',r.s===403,r.s);
 // Refusals leave it pending; the consent page (which rebinds it to Uma) issued its token already.
 r=await decide({p:C.p,csrf:C.csrf,org:A,allow:'yes'},{...cookie(U),origin:B});const back=new URL(r.h.get('location')??'http://x/');

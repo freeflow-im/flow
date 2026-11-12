@@ -5,7 +5,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { isInHome, openSuiteSearch, useHomeMenu } from '@flow/suite-bar';
-import { AssistantDock, useAssistantDockState, useNewChatOnClose } from '@flow/suite-bar/assistant-dock';
+import { AssistantDock, useAssistantDockState, useMyAssistant, useNewChatOnClose } from '@flow/suite-bar/assistant-dock';
 import { MailApiError, mailApi, setMailWorkspace, type Category, type MailAccount, type MessageDetail, type ThreadSummary, type TabStatus } from './api';
 import { AccountSettingsDialog, AddAccountDialog } from './components/AccountForms';
 import { ConnectMail } from './components/ConnectMail';
@@ -62,6 +62,8 @@ export function App() {
   // choosing another one reads everything again.
   const organizations = useOrganizations();
   const org = organizations.activeId;
+  // The pill is the person's assistant (agents.md §1.1): its name and picture.
+  const myAssistant = useMyAssistant(org);
   setMailWorkspace(org);
   const shownOrg = useRef(org);
   useEffect(() => {
@@ -928,7 +930,7 @@ export function App() {
             </>
           )}
         </div>
-        <AssistantDock state={assistantDock}>
+        <AssistantDock state={assistantDock} label={myAssistant?.displayName} avatarUrl={myAssistant?.avatarUrl ?? null}>
           {assistantDocked && !assistantOverlay && <ResizeHandle label="Resize the assistant" {...assistantPane.handleProps} />}
           <Suspense fallback={null}>
             <AssistantPanel

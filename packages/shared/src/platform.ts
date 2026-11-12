@@ -195,6 +195,8 @@ export interface UsableAgentDTO {
   id: string;
   accountId: string;
   displayName: string;
+  /** Its picture (a preset's or an upload's address), or null. */
+  avatarUrl?: string | null;
   mode: AgentMode;
   self: boolean;
 }

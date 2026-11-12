@@ -7,7 +7,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./intents": "./src/lib/intents.ts",
-    "./assistant-dock": "./src/AssistantDock.tsx"
+    "./assistant-dock": "./src/AssistantDock.tsx",
+    "./assistant-chat": "./src/AssistantChat.tsx"
   },
   "sideEffects": [
     "*.css"
@@ -18,7 +19,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@flow/shared": "workspace:*"
+    "@flow/shared": "workspace:*",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   },
   "peerDependencies": {
     "react": "^19.0.0"

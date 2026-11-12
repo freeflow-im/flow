@@ -273,8 +273,9 @@ describe('agent', () => {
     const events = await turn({ message: 'what is this?', context: home, images: [{ mediaType: 'image/png', data: png }] });
     expect(events.some((e) => e.type === 'done')).toBe(true);
     const content = requests[0].messages.at(-1)!.content as { type: string; source?: { media_type: string; data: string } }[];
-    expect(content.map((b) => b.type)).toEqual(['text', 'image', 'text']);
-    expect(content[1].source).toMatchObject({ type: 'base64', media_type: 'image/png', data: png });
+    // The current time, the app context, the picture, the text.
+    expect(content.map((b) => b.type)).toEqual(['text', 'text', 'image', 'text']);
+    expect(content[2].source).toMatchObject({ type: 'base64', media_type: 'image/png', data: png });
     const items = (await app.inject({ method: 'GET', url: '/api/agent', headers: { cookie } })).json().items as { kind: string; text?: string; images?: string[] }[];
     expect(items[0]).toMatchObject({ kind: 'user', text: 'what is this?', images: [`data:image/png;base64,${png}`] });
 
@@ -288,8 +289,8 @@ describe('agent', () => {
     const url = '/api/images/12345678-1234-1234-1234-123456789abc';
     await turn({ message: 'put this on slide 2', context: home, images: [{ mediaType: 'image/png', data: png, url }] });
     const blocks = requests[2].messages.at(-1)!.content as { type: string; text?: string }[];
-    expect(blocks.map((b) => b.type)).toEqual(['text', 'image', 'text', 'text']);
-    expect(blocks[2].text).toContain(`Attached image 1 is stored at ${url}`);
+    expect(blocks.map((b) => b.type)).toEqual(['text', 'text', 'image', 'text', 'text']);
+    expect(blocks[3].text).toContain(`Attached image 1 is stored at ${url}`);
     const transcript = (await app.inject({ method: 'GET', url: '/api/agent', headers: { cookie } })).json().items as { kind: string; text?: string }[];
     expect(transcript.filter((i) => i.kind === 'user').map((i) => i.text)).toEqual(['what is this?', 'See the attached image.', 'put this on slide 2']);
     expect(JSON.stringify(transcript)).not.toContain('attached_images');
@@ -586,6 +587,17 @@ describe('convert_pdf tool', () => {
 });
 
 describe('app context', () => {
+
+  it('tells each message the current date and time in the asker\'s time zone, and falls back to UTC', async () => {
+    const { renderNow } = await import('./agent/prompt.ts');
+    const at = new Date('2026-11-12T17:30:00Z');
+    const la = renderNow('America/Los_Angeles', at);
+    expect(la).toContain('Thursday, November 12, 2026');
+    expect(la).toContain('9:30');
+    expect(la).toContain('America/Los_Angeles');
+    expect(renderNow('Not/AZone', at)).toContain('time zone UTC');
+    expect(renderNow(undefined, at)).toContain('5:30');
+  });
 
   it('gives a message typed at the cursor the document and the cursor\'s place in it', async () => {
     const { renderContext, stripContext } = await import('./agent/prompt.ts');

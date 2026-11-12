@@ -7,7 +7,7 @@ import { STORED_IMAGE_RE } from '../../shared/types.ts';
 import type { SheetStore } from '../sheets.ts';
 import { providerSearch, type ProviderSearch } from './llmSearch.ts';
 import { ownModel } from './providers.ts';
-import { renderContext, stripContext, systemPrompt } from './prompt.ts';
+import { renderContext, renderNow, stripContext, systemPrompt } from './prompt.ts';
 import type { AssistantSettingsStore, ModelChoice } from './settings.ts';
 import { AgentStore, type Driver, type MessageParam, type Pending } from './store.ts';
 import { AgentNotFoundError, type ClaudeAgentDriver } from '#runtime/local/claudeAgent';
@@ -207,6 +207,7 @@ export class AgentService {
     const text = req.message?.trim();
     const images: AgentImage[] = req.images ?? [];
     if (text || images.length) {
+      content.push({ type: 'text', text: renderNow(req.timezone) });
       content.push({ type: 'text', text: renderContext(req.context) });
       for (const img of images) content.push({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } });
       // The stored addresses let the model place the pictures themselves (set_cell_image, edit_elements, ...).

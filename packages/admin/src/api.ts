@@ -59,7 +59,7 @@ async function uploadFile(workspaceId: string, file: File): Promise<FileDTO> {
 
 const ws = (id: string) => `/v1/workspaces/${encodeURIComponent(id)}`;
 
-import type { AssistantSettings, AssistantSettingsUpdate } from '@flow/shared/assistant';
+import type { AgentAvatarPreset, AssistantSettings, AssistantSettingsUpdate } from '@flow/shared/assistant';
 
 /** The person's own assistant (docs/specs/agents.md §1.1): its definition, who may mail it, and the model it runs on, from
  * the platform's /v1 routes, so this app depends on no other app (decision_log 2026-11-11). */
@@ -71,6 +71,16 @@ export const assistantApi = {
   saveAllowlist: async (org: string, senders: string[]) => (await request<{ senders: string[] }>('PUT', mine(org, 'senders'), { senders })).senders,
   settings: async (org: string) => (await request<{ settings: AssistantSettings }>('GET', mine(org, 'model'))).settings,
   saveSettings: async (org: string, body: AssistantSettingsUpdate) => (await request<{ settings: AssistantSettings }>('PUT', mine(org, 'model'), body)).settings,
+  /** Its picture: a preset (null for none), or an upload. */
+  setPreset: (org: string, preset: AgentAvatarPreset | null) => request<{ avatarUrl: string | null }>('PUT', `/v1/workspaces/${encodeURIComponent(org)}/assistant/avatar`, { preset }),
+  uploadPicture: (org: string, file: File) => uploadMultipart<{ avatarUrl: string | null }>(`/v1/workspaces/${encodeURIComponent(org)}/assistant/avatar`, file),
+};
+
+/** An agent the person connected over MCP (Claude Desktop, Claude Code, …), as GET /v1/me/agent-connections lists it. */
+export interface AgentConnection { id: string; name: string; mode?: 'personal' | 'shared'; agentName?: string; origin: string; endpoint: string; connectedAt: string; lastActiveAt?: string; organization?: string }
+export const connectionsApi = {
+  list: () => request<{ mcpUrl: string; agents: AgentConnection[] }>('GET', '/v1/me/agent-connections'),
+  disconnect: (id: string) => request<{ ok: true }>('DELETE', `/v1/me/agent-connections/${encodeURIComponent(id)}`),
 };
 
 export const adminApi = {

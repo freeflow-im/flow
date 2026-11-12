@@ -118,7 +118,14 @@ export function SettingsPage() {
           ))}
         </div>
       </div>
-      {tab.id === 'agents' ? (
+      {tab.id === 'agents' && suite ? (
+        // In the suite, connecting an agent is the platform's, in Organization settings (decision_log 2026-11-11).
+        <section className="home-inner changes" data-testid="connect-moved">
+          <p className="changes-intro">
+            How to connect Claude Code, Codex, Claude Desktop, ChatGPT or any MCP client, and the agents you have connected, are in Organization settings, under <a href="/admin/connect">Connect an agent</a>.
+          </p>
+        </section>
+      ) : tab.id === 'agents' ? (
         <ConnectedAgents />
       ) : tab.id === 'desktop' ? (
         <NewFiles />

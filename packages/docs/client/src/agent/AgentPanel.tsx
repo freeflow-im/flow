@@ -39,10 +39,12 @@ export function AgentButton() {
  * panel beside the page. Closing the side panel brings the pill back; the panel keeps its draft either way.
  */
 export function AgentDock() {
-  const { open, setOpen, placement, setPlacement, expanded, setExpanded } = useAgent();
+  const { open, setOpen, placement, setPlacement, expanded, setExpanded, agents } = useAgent();
   const { suite } = useAuth();
+  // In the suite the pill is the person's assistant (agents.md §1.1): its name and picture.
+  const self = suite ? agents.find((a) => a.self) : undefined;
   return (
-    <AssistantDock state={{ open, setOpen, placement, setPlacement, expanded, setExpanded }} shortcut={suite ? undefined : `${MOD}K`}>
+    <AssistantDock state={{ open, setOpen, placement, setPlacement, expanded, setExpanded }} label={self?.displayName} avatarUrl={self?.avatarUrl ?? null} shortcut={suite ? undefined : `${MOD}K`}>
       <AgentPanel />
     </AssistantDock>
   );

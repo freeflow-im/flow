@@ -7,7 +7,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { addHours, startOfHour } from 'date-fns';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { isInHome, openSuiteSearch, useHomeMenu, type SuiteMenuItem } from '@flow/suite-bar';
-import { AssistantDock, useAssistantDockState, useNewChatOnClose } from '@flow/suite-bar/assistant-dock';
+import { AssistantDock, useAssistantDockState, useMyAssistant, useNewChatOnClose } from '@flow/suite-bar/assistant-dock';
 import { CalendarApiError, calendarApi, connectGoogle, setCalendarWorkspace, googleErrorText, type CalendarInfo, type EventOccurrence, type Response, type Scope } from './api';
 import { AccountSettingsDialog, AddAccountDialog } from './components/AccountForms';
 import { CalendarGrid } from './components/CalendarGrid';
@@ -61,6 +61,8 @@ export function App() {
   const organizations = useOrganizations();
   const org = organizations.active;
   const orgId = organizations.activeId;
+  // The pill is the person's assistant (agents.md §1.1): its name and picture.
+  const myAssistant = useMyAssistant(orgId);
   setCalendarWorkspace(orgId);
   const shownOrg = useRef(orgId);
   useEffect(() => {
@@ -376,7 +378,7 @@ export function App() {
               </>
             )}
           </main>
-          <AssistantDock state={assistantDock}>
+          <AssistantDock state={assistantDock} label={myAssistant?.displayName} avatarUrl={myAssistant?.avatarUrl ?? null}>
             {assistantDocked && !assistantOverlay && <ResizeHandle label="Resize the assistant" {...assistantPane.handleProps} />}
             <Suspense fallback={null}>
               <AssistantPanel chat={chat} onEvent={!!open} overlay={assistantOverlay} width={assistantPane.width} onClose={() => setAssistantOpen(false)} onOpenEvent={(id, start) => void openById(id, start)} />
