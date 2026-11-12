@@ -3,6 +3,7 @@
 // on screen: a row in the sidebar or a card opens its app beside it. A guest uses Chat only (workspace-admin.md §6.5),
 // so a guest is sent there.
 import { useEffect, useState, type MouseEvent } from 'react';
+import type { SuiteMenuItem } from '@flow/suite-bar';
 import { useQuery } from '@tanstack/react-query';
 import type { WorkspaceMemberDTO } from '@flow/shared';
 import { adminAddress, chatPageAddress } from '@flow/shared/addresses';
@@ -11,10 +12,11 @@ import { FilesCard, InboxCard, MentionsCard, TodayCard } from './components/Card
 import { HomeSuiteBar } from './components/HomeSuiteBar';
 import { appLinks, Sidebar } from './components/Sidebar';
 import { useFrames } from './hooks/frames';
+import { useAppMenus } from './hooks/menus';
 import { useAccountSetup, useChat, useInbox, useRecentFiles, useToday } from './hooks/home';
 import { useOrganizations } from './hooks/organization';
 import { channelAddress, chatUnread, dmWith, greeting, sidebarChannels, summaryLine } from './lib/home';
-import { FRAMED_APPS, channelOf } from './lib/views';
+import { FRAMED_APPS, channelOf, type FramedApp } from './lib/views';
 import { readActiveOrganization, suite, writeActiveOrganization } from './suite';
 
 /** The clock the page reads, moved on every minute so the greeting and "today" follow the day. */
@@ -40,6 +42,7 @@ export function App() {
   const today = useToday(orgId, setup.settingUp, now);
   const files = useRecentFiles(orgId);
   const frames = useFrames();
+  const menus = useAppMenus(orgId, frames.refs.current, frames.follow);
 
   useEffect(() => {
     if (setup.guest) window.location.replace('/chat/');
@@ -79,6 +82,15 @@ export function App() {
     if (!a || (a.target && a.target !== '_self')) return;
     if (frames.open(a.getAttribute('href')!)) e.preventDefault();
   };
+  // An item of the open app's menu: the app switches to it in place; an app not loaded yet opens at the item's address.
+  const onMenuItem = (item: SuiteMenuItem) => {
+    if (frames.view === 'home') return;
+    const app = frames.view as FramedApp;
+    if (menus.select(app, item.id)) frames.show(app);
+    else if (item.href) frames.open(item.href);
+  };
+  const openMenu = frames.view !== 'home' ? menus.menus[frames.view as FramedApp] : undefined;
+
   const chatHref = frames.last.chat;
   const activeChannel = chatHref ? channelOf(chatHref, window.location.origin) : null;
 
@@ -105,6 +117,8 @@ export function App() {
             agents={chat.members.data ? chat.agents : null}
             onOpenAgent={(a) => void openAgent(a)}
             addAgentHref={admin ? adminAddress('agents') : null}
+            menu={openMenu ? { items: openMenu.items, selected: openMenu.selected } : null}
+            onMenuItem={onMenuItem}
           />
           {/* The apps opened so far, each in its own frame, kept loaded while hidden. */}
           {FRAMED_APPS.map((app) => {

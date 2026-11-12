@@ -27,7 +27,7 @@ export function useFrames() {
 
   /** Shows an address: Home's cards, or an app's page in its frame. False for an address Home does not show. */
   const open = useCallback(
-    (href: string, how: { push: boolean } = { push: true }): boolean => {
+    (href: string, how: { push: boolean; asIs?: boolean } = { push: true }): boolean => {
       const view = viewOf(href, origin);
       if (!view) return false;
       const s = current.current;
@@ -36,7 +36,7 @@ export function useFrames() {
         const loaded = s.frames[view];
         let frames = s.frames;
         if (!loaded) frames = { ...s.frames, [view]: { src: href, load: 0 } };
-        else if (!isFrontPage(href, origin)) {
+        else if (!how.asIs && !isFrontPage(href, origin)) {
           if (view === 'chat') refs.current.chat?.contentWindow?.postMessage({ type: 'flow:open', href }, origin);
           else frames = { ...s.frames, [view]: { src: href, load: loaded.load + 1 } };
         }
@@ -51,6 +51,22 @@ export function useFrames() {
       return true;
     },
     [origin],
+  );
+
+  /** Shows an app's frame as it is (loading its front page the first time). */
+  const show = useCallback((app: FramedApp) => open(current.current.last[app] && current.current.frames[app] ? current.current.last[app]! : `/${app}/`, { push: true, asIs: true }), [open]);
+
+  /** The app says what it shows now (its menu's `href`): Home's address follows, without a new history entry. */
+  const follow = useCallback(
+    (app: FramedApp, href: string) => {
+      const s = current.current;
+      if (s.last[app] === href) return;
+      const next = { ...s, last: { ...s.last, [app]: href } };
+      current.current = next;
+      setState(next);
+      if (s.view === app) window.history.replaceState(null, '', homeAddress(href));
+    },
+    [],
   );
 
   // Back and Forward: what Home's address names now.
@@ -71,5 +87,5 @@ export function useFrames() {
     return () => window.removeEventListener('message', onMessage);
   }, [open, origin]);
 
-  return { ...state, open, refs };
+  return { ...state, open, show, follow, refs };
 }
