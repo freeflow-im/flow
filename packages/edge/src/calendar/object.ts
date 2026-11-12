@@ -32,7 +32,7 @@ import type { CalendarMail } from './imip';
 import { Invites, type InviteMail, type Notified } from './invites';
 import { CALENDAR_TABLES, CalendarStore, type CalendarRow, type EventOccurrence } from './store';
 import {
-  BookingBody, ConfigPatch, MINUTE, RescheduleBody, applyPatch, atMinute, busyOf, dateIn, daysWithSlots, defaultConfig, guestZone, horizonEnd, isDate, isManageToken,
+  BookingBody, ConfigPatch, MINUTE, eventSummaryOf, titleOf, withDefaults, RescheduleBody, applyPatch, atMinute, busyOf, dateIn, daysWithSlots, defaultConfig, guestZone, horizonEnd, isDate, isManageToken,
   monthWindow, newManageToken, newPageToken, normalizePageToken, openSlots, sha256, type SchedulerConfig,
 } from './scheduler';
 import { bookingMail, type BookingMailInput } from './bookingMail';
@@ -980,7 +980,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
     const row = this.sql.exec<{ token: string | null; config: string } & Record<string, SqlStorageValue>>("SELECT token, config FROM scheduler_pages WHERE id = 'default'").toArray()[0];
     if (!row) return { token: null, config: defaultConfig(zone) };
     const saved = JSON.parse(row.config) as Partial<SchedulerConfig>;
-    return { token: row.token, config: { ...defaultConfig(saved.timezone ?? zone), ...saved } };
+    return { token: row.token, config: withDefaults(saved, zone) };
   }
   private saveSchedulerPage(token: string | null, config: SchedulerConfig): void {
     const now = Date.now();
@@ -1059,7 +1059,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
   /** What a guest sees of the page: never an address, an id or a calendar's name. */
   private pageInfo(cfg: SchedulerConfig) {
     return {
-      ownerName: this.schedulerOwner().name, title: cfg.title, description: cfg.description, durations: cfg.durations, defaultDuration: cfg.defaultDuration,
+      ownerName: this.schedulerOwner().name, title: titleOf(cfg, this.schedulerOwner().name), description: cfg.description, durations: cfg.durations, defaultDuration: cfg.defaultDuration,
       // A link (a video call) is given only to those who book: the page says it comes with the confirmation.
       location: cfg.location.kind !== 'text' ? { kind: 'none' as const, label: null } : /^https?:\/\//i.test(cfg.location.value.trim()) ? { kind: 'link' as const, label: null } : { kind: 'text' as const, label: cfg.location.value },
       ownerTimezone: cfg.timezone, horizonEnd: new Date(horizonEnd(cfg, Date.now())).toISOString(),
@@ -1071,7 +1071,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
   private bookingView(b: BookingRow, cfg: SchedulerConfig) {
     return {
       id: b.id, status: b.status, start: new Date(b.start_utc).toISOString(), end: new Date(b.end_utc).toISOString(), duration: b.duration,
-      guestName: b.guest_name, timezone: b.guest_tz ?? cfg.timezone, title: cfg.title, ownerName: this.schedulerOwner().name,
+      guestName: b.guest_name, timezone: b.guest_tz ?? cfg.timezone, title: titleOf(cfg, this.schedulerOwner().name), ownerName: this.schedulerOwner().name,
       location: cfg.location.kind === 'text' ? cfg.location.value : null,
       canReschedule: b.status === 'booked' && cfg.enabled && b.reschedules < RESCHEDULE_LIMIT && b.start_utc > Date.now(),
       canCancel: b.status === 'booked' && b.end_utc > Date.now(),
@@ -1089,11 +1089,19 @@ export class Calendar extends DurableObject<CalendarEnv> {
     return j;
   }
 
-  /** The event a booking writes (§3.5): the guest as its one attendee, the note in its description. */
-  private bookingFields(cfg: SchedulerConfig, guest: { name: string; email: string; note?: string }, start: number, duration: number) {
+  /**
+   * The event a booking writes (§3.5): the guest as its one attendee. Its description is what the guest reads in the
+   * invitation, whoever sends it (the owner's mailbox, Google, iCloud): their note, and their own link to cancel or
+   * reschedule. The owner's copy shows the link too, which gives the owner nothing they could not do already.
+   */
+  private bookingFields(cfg: SchedulerConfig, guest: { name: string; email: string; note?: string }, start: number, duration: number, manage: string) {
     return {
-      summary: `${cfg.title}: ${guest.name}`,
-      description: [`Booked by ${guest.name} (${guest.email}) through your booking page.`, ...(guest.note?.trim() ? ['', guest.note.trim()] : [])].join('\n'),
+      summary: eventSummaryOf(cfg, this.schedulerOwner().name, guest.name),
+      description: [
+        ...(guest.note?.trim() ? [guest.note.trim(), ''] : []),
+        `Booked through ${this.schedulerOwner().name}'s booking page.`,
+        `Need to change it? Cancel or reschedule: ${this.schedulerUrl(`m/${manage}`)}`,
+      ].join('\n'),
       location: cfg.location.kind === 'text' ? cfg.location.value : null,
       start: new Date(start).toISOString(), end: new Date(start + duration * MINUTE).toISOString(), timezone: cfg.timezone,
       attendees: [{ email: guest.email, name: guest.name }],
@@ -1109,7 +1117,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
   private async mailGuest(kind: BookingMailInput['kind'], b: BookingRow, cfg: SchedulerConfig, manage: string | null, ics: string | null): Promise<void> {
     try {
       await sendMail(this.env, bookingMail({
-        kind, to: { name: b.guest_name, email: b.guest_email }, owner: this.schedulerOwner(), title: cfg.title, start: b.start_utc, end: b.end_utc,
+        kind, to: { name: b.guest_name, email: b.guest_email }, owner: this.schedulerOwner(), title: titleOf(cfg, this.schedulerOwner().name), start: b.start_utc, end: b.end_utc,
         zone: b.guest_tz ?? cfg.timezone, location: cfg.location.kind === 'text' ? cfg.location.value : null, manageUrl: manage ? this.schedulerUrl(`m/${manage}`) : null, ics,
       }));
     } catch (err) {
@@ -1221,7 +1229,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
       }
       this.sql.exec("UPDATE scheduler_bookings SET status = 'cancelled', updated_at = ? WHERE id = ?", Date.now(), b.id);
       const now = this.bookingByHash(b.manage_hash)!;
-      await this.mailGuest('cancelled', now, cfg, null, b.mailed_ics ? this.bookingIcs(b.event_id, 'CANCEL', cfg.timezone, raw) : null);
+      if (b.mailed_ics) await this.mailGuest('cancelled', now, cfg, null, this.bookingIcs(b.event_id, 'CANCEL', cfg.timezone, raw));
       await this.publishBooking(b.event_id, 'cancelled', now, before);
       return c.json({ booking: this.bookingView(now, cfg) });
     });
@@ -1234,11 +1242,11 @@ export class Calendar extends DurableObject<CalendarEnv> {
       const except = { eventId: b.event_id, bookingId: b.id };
       const start = await checkStart(c, body.start, duration, zone, except);
       if (start instanceof Response) return start;
-      const f = this.bookingFields(cfg, { name: b.guest_name, email: b.guest_email }, start, duration);
+      const f = this.bookingFields(cfg, { name: b.guest_name, email: b.guest_email }, start, duration, c.env.manage ?? '');
       await this.asOwner('PATCH', `/v1/calendar/events/${encodeURIComponent(b.event_id)}`, { start: f.start, end: f.end, timezone: f.timezone });
       this.sql.exec('UPDATE scheduler_bookings SET start_utc = ?, end_utc = ?, duration = ?, guest_tz = ?, reschedules = reschedules + 1, updated_at = ? WHERE id = ?', start, start + duration * MINUTE, duration, zone, Date.now(), b.id);
       const now = this.bookingByHash(b.manage_hash)!;
-      await this.mailGuest('moved', now, cfg, c.env.manage, now.mailed_ics ? this.bookingIcs(b.event_id, 'REQUEST', cfg.timezone) : null);
+      if (now.mailed_ics) await this.mailGuest('moved', now, cfg, c.env.manage, this.bookingIcs(b.event_id, 'REQUEST', cfg.timezone));
       await this.publishBooking(b.event_id, 'moved', now);
       return c.json({ booking: this.bookingView(now, cfg) });
     });
@@ -1263,7 +1271,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
       await this.directoryCall('addBookingManageLink', [this.store.state('owner_account_id'), manageHash]);
       const target = cfg.targetCalendarId && this.store.calendar(cfg.targetCalendarId) ? cfg.targetCalendarId : null;
       const guest = { name: body.name, email: body.email.toLowerCase(), note: body.note };
-      const created = await this.asOwner('POST', '/v1/calendar/events', { ...(target ? { calendarId: target } : {}), ...this.bookingFields(cfg, guest, start, duration) });
+      const created = await this.asOwner('POST', '/v1/calendar/events', { ...(target ? { calendarId: target } : {}), ...this.bookingFields(cfg, guest, start, duration, manage) });
       const eventId = (created.event as EventOccurrence).eventId;
       // `invitationsSent: false`: no mailbox sends as the owner, so the guest's mail carries the invitation itself.
       const mailedIcs = created.invitationsSent === false;
@@ -1271,7 +1279,8 @@ export class Calendar extends DurableObject<CalendarEnv> {
       this.sql.exec(`INSERT INTO scheduler_bookings (id, page_id, event_id, start_utc, end_utc, duration, guest_name, guest_email, note, guest_tz, manage_hash, status, mailed_ics, created_at, updated_at)
         VALUES (?, 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'booked', ?, ?, ?)`, id, eventId, start, start + duration * MINUTE, duration, guest.name, guest.email, guest.note ?? null, zone, manageHash, mailedIcs ? 1 : 0, now, now);
       const b = this.bookingByHash(manageHash)!;
-      await this.mailGuest('booked', b, cfg, manage, mailedIcs ? this.bookingIcs(eventId, 'REQUEST', cfg.timezone) : null);
+      // The invitation carries the guest's link (the description); a mail of our own goes only where none was sent.
+      if (mailedIcs) await this.mailGuest('booked', b, cfg, manage, this.bookingIcs(eventId, 'REQUEST', cfg.timezone));
       await this.publishBooking(eventId, 'booked', b);
       return c.json({ booking: this.bookingView(b, cfg), manageUrl: this.schedulerUrl(`m/${manage}`), manageToken: manage }, 201);
     });
@@ -1577,7 +1586,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
 
     // The guest scheduler's page, for its owner (docs/specs/guest-scheduler.md §3.2). `tz`: the owner's zone, for the
     // defaults before the page is first saved. Turning it on the first time makes its link.
-    const schedulerAnswer = (p: { token: string | null; config: SchedulerConfig }) => ({ page: p.config, token: p.token, url: p.token ? this.schedulerUrl(p.token) : null });
+    const schedulerAnswer = (p: { token: string | null; config: SchedulerConfig }) => ({ page: p.config, token: p.token, url: p.token ? this.schedulerUrl(p.token) : null, defaultTitle: titleOf({ title: '' }, this.schedulerOwner().name) });
     app.get('/v1/calendar/scheduler', (c) => c.json(schedulerAnswer(this.schedulerPage(guestZone(c.req.query('tz'), 'UTC')))));
     app.patch('/v1/calendar/scheduler', async (c) => {
       const p = this.schedulerPage(guestZone(c.req.query('tz'), 'UTC'));

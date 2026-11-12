@@ -37,10 +37,29 @@ export interface SchedulerConfig {
 }
 
 const WORKDAY: [number, number][] = [[9 * 60, 17 * 60]];
-/** Monday to Friday, 9:00 to 17:00, 30 minutes, in the owner's zone; off until the owner turns it on. */
+/** The titles a page was given by default before the owner-named one (2026-11-12): read as no title of the owner's. */
+const OLD_DEFAULT_TITLES = ['30 Minute Meeting', 'Meeting'];
+
+/** Saved settings over the defaults; an old default title reads as none (`title` ''), so the owner-named one shows. */
+export function withDefaults(saved: Partial<SchedulerConfig>, zone: string): SchedulerConfig {
+  const c = { ...defaultConfig(saved.timezone ?? zone), ...saved };
+  if (OLD_DEFAULT_TITLES.includes(c.title)) c.title = '';
+  return c;
+}
+
+/** The first word of a person's name: "Scott Persinger" → "Scott". */
+export const firstName = (name: string) => name.trim().split(/\s+/)[0] || name.trim();
+/** The page's title: the owner's own, else "Meeting with <owner's first name>". */
+export const titleOf = (c: Pick<SchedulerConfig, 'title'>, ownerName: string) => c.title.trim() || `Meeting with ${firstName(ownerName)}`;
+/** The booked event's name: "<title>: <guest>" for a title the owner typed, else both names ("Scott Persinger and Bo Guest"),
+ * which reads right in the owner's calendar and in the guest's invitation alike. */
+export const eventSummaryOf = (c: Pick<SchedulerConfig, 'title'>, ownerName: string, guestName: string) =>
+  c.title.trim() ? `${c.title.trim()}: ${guestName}` : `${ownerName} and ${guestName}`;
+/** Monday to Friday, 9:00 to 17:00, 30 minutes, in the owner's zone; off until the owner turns it on. The title names no
+ * length (the page shows the one the guest picks beside it): '' is "Meeting with <owner's first name>" (`titleOf`). */
 export function defaultConfig(timezone: string): SchedulerConfig {
   return {
-    enabled: false, title: '30 Minute Meeting', description: '', durations: [30], defaultDuration: 30, timezone,
+    enabled: false, title: '', description: '', durations: [30], defaultDuration: 30, timezone,
     weekly: { sun: [], mon: WORKDAY, tue: WORKDAY, wed: WORKDAY, thu: WORKDAY, fri: WORKDAY, sat: [] },
     minNoticeMin: 4 * 60, horizonDays: 60, bufferBeforeMin: 0, bufferAfterMin: 0, maxPerDay: null, incrementMin: null,
     busyCalendarIds: null, targetCalendarId: null, location: { kind: 'none', value: '' },
@@ -50,7 +69,8 @@ export function defaultConfig(timezone: string): SchedulerConfig {
 const Range = z.tuple([z.number().int().min(0).max(1440), z.number().int().min(0).max(1440)]);
 export const ConfigPatch = z.object({
   enabled: z.boolean(),
-  title: z.string().trim().min(1).max(120),
+  /** '' for the default, "Meeting with <first name>". */
+  title: z.string().trim().max(120),
   description: z.string().max(2000),
   durations: z.array(z.number().int().refine((n) => (LENGTHS as readonly number[]).includes(n), 'a length of 15, 30, 45, 60 or 90 minutes')).min(1).max(LENGTHS.length),
   defaultDuration: z.number().int(),

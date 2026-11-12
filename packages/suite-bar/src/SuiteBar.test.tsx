@@ -272,6 +272,38 @@ describe('SuiteBar', () => {
     expect(calls.help).toHaveBeenCalledTimes(1);
   });
 
+  it('offers the booking page in the account menu: copy its link when it is on, create it when it is not, nothing without Calendar', async () => {
+    const answer = (status: number, body: unknown) => vi.fn(async () => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } }));
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+
+    vi.stubGlobal('fetch', answer(200, { url: 'https://app.test/calendar/book/k7mq-x3vd-p9tr', page: { enabled: true } }));
+    setup();
+    fireEvent.click(screen.getByTestId('suite-account-button'));
+    const copy = await screen.findByTestId('suite-booking-copy');
+    expect(String((fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]![0])).toMatch(/^\/v1\/calendar\/scheduler\?/);
+    fireEvent.click(copy);
+    expect(writeText).toHaveBeenCalledWith('https://app.test/calendar/book/k7mq-x3vd-p9tr');
+    expect(screen.getByTestId('suite-booking-copy').textContent).toContain('Link copied');
+    cleanup();
+
+    vi.stubGlobal('fetch', answer(200, { url: null, page: { enabled: false } }));
+    setup();
+    fireEvent.click(screen.getByTestId('suite-account-button'));
+    expect((await screen.findByTestId('suite-booking-create')).textContent).toContain('Create booking page');
+    expect(screen.queryByTestId('suite-booking-copy')).toBeNull();
+    cleanup();
+
+    // A guest account (no calendar) or a host without Calendar: no row.
+    vi.stubGlobal('fetch', answer(403, { error: { code: 'no_account' } }));
+    setup();
+    fireEvent.click(screen.getByTestId('suite-account-button'));
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.queryByTestId('suite-booking-copy')).toBeNull();
+    expect(screen.queryByTestId('suite-booking-create')).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
   it('closes a menu on Esc and on a click elsewhere', () => {
     setup();
     fireEvent.click(screen.getByTestId('suite-account-button'));

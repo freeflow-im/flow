@@ -77,7 +77,7 @@ describe('the guest scheduler', () => {
   it('starts off with the defaults, and turning it on makes a readable link', async () => {
     const w = world();
     const r = await w.owner('GET', `/v1/calendar/scheduler?tz=${encodeURIComponent(LA)}`);
-    expect(r.j).toMatchObject({ token: null, url: null, page: { enabled: false, durations: [30], timezone: LA, weekly: { mon: [[540, 1020]], sat: [] }, minNoticeMin: 240, horizonDays: 60 } });
+    expect(r.j).toMatchObject({ token: null, url: null, page: { enabled: false, title: '', durations: [30], timezone: LA, weekly: { mon: [[540, 1020]], sat: [] }, minNoticeMin: 240, horizonDays: 60 }, defaultTitle: 'Meeting with Ann' });
     const on = await turnedOn(w);
     expect(on.token).toMatch(/^[0-9a-hjkmnp-tv-z]{4}-[0-9a-hjkmnp-tv-z]{4}-[0-9a-hjkmnp-tv-z]{4}$/);
     expect(on.url).toBe(`https://app.test/calendar/book/${on.token}`);
@@ -136,6 +136,10 @@ describe('the guest scheduler', () => {
     expect(ev[0]).toMatchObject({ summary: '30 Minute Meet: Bo Guest', location: 'https://meet.example/ann', start });
     expect(ev[0].attendees.map((a: { email: string }) => a.email)).toContain('bo@example.com');
     expect(ev[0].description).toContain('About the launch');
+    // The guest reads the description in the invitation: their own link, and nothing written to the owner.
+    expect(ev[0].description).toContain(`Cancel or reschedule: ${r.j.manageUrl}`);
+    expect(ev[0].description).toContain("Booked through Ann Lee's booking page.");
+    expect(ev[0].description).not.toMatch(/your booking page|bo@example/);
 
     // No mailbox sends as Ann here, so the guest's mail carries the invitation, with their own link, in their zone.
     expect(mails).toHaveLength(1);

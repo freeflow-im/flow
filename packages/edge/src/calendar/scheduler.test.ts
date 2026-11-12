@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ConfigPatch, applyPatch, busyOf, dateIn, daysWithSlots, defaultConfig, monthWindow, newPageToken, normalizePageToken, openSlots, type SchedulerConfig,
+  ConfigPatch, applyPatch, busyOf, eventSummaryOf, titleOf, withDefaults, dateIn, daysWithSlots, defaultConfig, monthWindow, newPageToken, normalizePageToken, openSlots, type SchedulerConfig,
 } from './scheduler';
 
 const LA = 'America/Los_Angeles';
@@ -80,6 +80,15 @@ describe('open slots', () => {
 });
 
 describe('the settings', () => {
+  it('titles a page "Meeting with <first name>" unless the owner typed one, and reads the old defaults as none', () => {
+    expect(titleOf(defaultConfig(LA), 'Scott Persinger')).toBe('Meeting with Scott');
+    expect(titleOf(withDefaults({ title: '30 Minute Meeting', durations: [45] }, LA), 'Scott Persinger')).toBe('Meeting with Scott');
+    expect(titleOf(withDefaults({ title: 'Meeting' }, LA), 'Ann')).toBe('Meeting with Ann');
+    expect(titleOf(withDefaults({ title: 'Intro call' }, LA), 'Ann')).toBe('Intro call');
+    expect(eventSummaryOf({ title: '' }, 'Scott Persinger', 'Bo Guest')).toBe('Scott Persinger and Bo Guest');
+    expect(eventSummaryOf({ title: 'Intro call' }, 'Scott Persinger', 'Bo Guest')).toBe('Intro call: Bo Guest');
+  });
+
   it('sorts lengths, keeps the default among them, and refuses overlapping or empty ranges', () => {
     const c = applyPatch(defaultConfig(LA), ConfigPatch.parse({ durations: [60, 30, 45] }));
     expect(c.durations).toEqual([30, 45, 60]);
