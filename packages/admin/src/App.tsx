@@ -8,6 +8,7 @@ import { useOrganizations } from './hooks/organization';
 import { MEMBER_SECTIONS, SECTION_LABELS, SECTIONS, sectionOf, sectionPath } from './lib/route';
 import { Domains } from './sections/Domains';
 import { Agents } from './sections/Agents';
+import { Assistant } from './sections/Assistant';
 import { Automations } from './sections/Automations';
 import { EventLog } from './sections/EventLog';
 import { General } from './sections/General';
@@ -34,7 +35,7 @@ export function App() {
   const organizations = useOrganizations();
   const org = organizations.active;
   const admin = org?.role === 'owner' || org?.role === 'admin';
-  // An owner or admin has every section; a member has Automations (§2); an agent or app nothing.
+  // An owner or admin has every section; a member has their assistant and Automations (§2); an agent or app nothing.
   const sections = admin ? SECTIONS : MEMBER_SECTIONS;
   const [section, go] = useSection(sections);
   const allowed = !!org && !!org.role;
@@ -77,6 +78,7 @@ export function App() {
               {section === 'members' && admin && <Members org={org} />}
               {section === 'domains' && admin && <Domains org={org} />}
               {section === 'agents' && admin && <Agents org={org} />}
+              {section === 'assistant' && <Assistant org={org} />}
               {section === 'automations' && <Automations org={org} />}
               {section === 'events' && admin && <EventLog org={org} />}
             </div>

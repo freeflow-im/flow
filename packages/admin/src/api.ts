@@ -18,8 +18,10 @@ async function answer<T>(res: Response): Promise<T> {
     throw new AdminApiError('unauthorized', 'Your session has ended. Sign in again.', 401);
   }
   if (!res.ok) {
-    const err = (await res.json().catch(() => null)) as { error?: { code?: string; message?: string } } | null;
-    throw new AdminApiError(err?.error?.code ?? 'server_error', err?.error?.message ?? `${res.status} ${res.statusText}`, res.status);
+    // The Worker's routes answer { error: { code, message } }; the assistant's (/api/…) answer { error: string, code }.
+    const err = (await res.json().catch(() => null)) as { error?: string | { code?: string; message?: string }; code?: string } | null;
+    const e = typeof err?.error === 'string' ? { code: err.code, message: err.error } : err?.error;
+    throw new AdminApiError(e?.code ?? 'server_error', e?.message ?? `${res.status} ${res.statusText}`, res.status);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -58,6 +60,19 @@ async function uploadFile(workspaceId: string, file: File): Promise<FileDTO> {
 }
 
 const ws = (id: string) => `/v1/workspaces/${encodeURIComponent(id)}`;
+
+import type { AgentDefinition, AssistantSettings, AssistantSettingsUpdate } from '@flow/docs/shared/agent/protocol.ts';
+
+/** The person's own assistant (docs/specs/agents.md §1.1): its definition, who may mail it, and the model it runs on. */
+const inOrg = (id: string) => `?workspace=${encodeURIComponent(id)}`;
+export const assistantApi = {
+  definition: async (org: string) => (await request<{ definition: AgentDefinition }>('GET', `/api/agent/definition${inOrg(org)}`)).definition,
+  saveDefinition: async (org: string, body: { name?: string; instructions?: string }) => (await request<{ definition: AgentDefinition }>('PUT', `/api/agent/definition${inOrg(org)}`, body)).definition,
+  allowlist: async (org: string) => (await request<{ senders: string[] }>('GET', `/api/agent/mail-allowlist${inOrg(org)}`)).senders,
+  saveAllowlist: async (org: string, senders: string[]) => (await request<{ senders: string[] }>('PUT', `/api/agent/mail-allowlist${inOrg(org)}`, { senders })).senders,
+  settings: async (org: string) => (await request<{ settings: AssistantSettings }>('GET', `/api/settings/assistant${inOrg(org)}`)).settings,
+  saveSettings: async (org: string, body: AssistantSettingsUpdate) => (await request<{ settings: AssistantSettings }>('PUT', `/api/settings/assistant${inOrg(org)}`, body)).settings,
+};
 
 export const adminApi = {
   update: (id: string, patch: UpdateWorkspaceBody) => request<WorkspaceDTO>('PATCH', ws(id), patch),

@@ -104,7 +104,7 @@ function PersonalAgents({ org, nameOf }: { org: WorkspaceDTO; nameOf: (userId: s
               {a.agentRuntime === 'hosted' ? (
                 // A person's assistant is theirs to name (Docs Settings), and it comes and goes with them (agents.md §6).
                 a.sponsorId === me.data?.id ? (
-                  <a className="text-primary hover:underline" href="/docs/settings" data-testid={`personal-agent-rename-${a.id}`}>
+                  <a className="text-primary hover:underline" href="/admin/assistant" data-testid={`personal-agent-rename-${a.id}`}>
                     Rename
                   </a>
                 ) : null

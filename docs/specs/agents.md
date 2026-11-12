@@ -218,7 +218,7 @@ that executes code is the sandboxed runtime above.
 **A hosted agent has a definition.** Today the assistant has one fixed prompt, one tool set and one conversation per
 account. A hosted agent instead carries: a name and avatar; instructions (its system prompt); the model and the key
 that pays for it; the tools it may use, a subset of what the registry offers its kind; what it subscribes to; and its
-memory. A person edits their own assistant's definition in their settings (the model-key settings move there); an
+memory. A person edits their own assistant's definition in Organization settings, under **Your assistant** (the Admin app's section every member has, with who may mail it and the model and key it runs on; operator ruling 2026-11-11: not in Docs); an
 organization's admins and the sponsor edit a hosted shared agent's in the Admin app's Agents section
 (`workspace-admin.md` §3.4), which is also where one is made. Kind and organization are not in the definition: they
 never change (§1).

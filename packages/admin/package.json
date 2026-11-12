@@ -11,6 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@flow/docs": "workspace:*",
     "@flow/shared": "workspace:*",
     "@flow/suite-bar": "workspace:*",
     "@tanstack/react-query": "^5.62.0",

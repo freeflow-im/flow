@@ -75,6 +75,9 @@ importers:
 
   packages/admin:
     dependencies:
+      '@flow/docs':
+        specifier: workspace:*
+        version: link:../docs
       '@flow/shared':
         specifier: workspace:*
         version: link:../shared

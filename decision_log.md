@@ -1,5 +1,14 @@
 # Decision log
 
+## 2026-11-11 — The assistant's settings live in Organization settings, not Docs (operator ruling)
+
+- **Ruling (Scott):** a person's assistant is set up in the Admin app, in a **Your assistant** section every member has
+  (admins and members alike): its name, its instructions, who may mail it, and the model and API key it runs on. Docs'
+  Settings in the suite only points there; the standalone MCP Docs desktop app keeps its own settings.
+- **Why:** the assistant works across the suite (Chat, Mail, Calendar, Docs), so its settings belong with the
+  organization's, not inside one app.
+- **Where:** `packages/admin/src/sections/Assistant.tsx`; `docs/specs/agents.md` §6.
+
 ## 2026-11-11 — Assistant mail is opt-in: an empty allowlist, and no mail checks until it names a sender (operator ruling)
 
 - **Ruling (Scott):** an assistant's sender allowlist starts **empty** (it no longer includes the sponsor's own
