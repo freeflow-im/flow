@@ -7,6 +7,7 @@ import type { AgentContext, AgentEvent, AgentTurnRequest } from '../shared/agent
 import type { ModelCall } from './agent/agent.ts';
 import { PROMPT_WITHOUT_JOBS } from './agent/prompt.ts';
 import { resetSearchRateLimit, runServerTool, TOOL_DEFS_WITHOUT_JOBS, validateToolInput } from './agent/tools.ts';
+import { TOOL_SEARCH_NAME, TOOL_SEARCH_PROMPT } from './agent/toolSearch.ts';
 import { imageCandidates } from './agent/llmSearch.ts';
 import { buildApp } from './app.ts';
 import { mailbox, signUp } from './testing.ts';
@@ -328,10 +329,43 @@ describe('agent', () => {
     db.close();
   });
 
+  it('loads the page\'s core tools and defers the rest behind the tool search', async () => {
+    replies.push(() => ({ content: [text('Hi.')] }));
+    await turn({ message: 'hello', context: home });
+    const tools = (requests[0].tools ?? []) as { name: string; type?: string; defer_loading?: boolean }[];
+    expect(tools[0]).toEqual({ type: 'tool_search_tool_bm25_20251119', name: TOOL_SEARCH_NAME });
+    const loaded = tools.filter((t) => !t.defer_loading).map((t) => t.name);
+    expect(loaded.sort()).toEqual([TOOL_SEARCH_NAME, 'find_files', 'list_files', 'open_file'].sort());
+    expect(tools.find((t) => t.name === 'create_doc')?.defer_loading).toBe(true);
+    expect(requests[0].system).toEqual([expect.objectContaining({ type: 'text' }), { type: 'text', text: TOOL_SEARCH_PROMPT }]);
+  });
+
+  it('goes on after a paused server tool, and keeps the tools an earlier search loaded', async () => {
+    const search = { type: 'server_tool_use', id: 'srvtoolu_1', name: TOOL_SEARCH_NAME, input: { query: 'browse the web' } } as unknown as Block;
+    const found = {
+      type: 'tool_search_tool_result',
+      tool_use_id: 'srvtoolu_1',
+      content: { type: 'tool_search_tool_search_result', tool_references: [{ type: 'tool_reference', tool_name: 'browser_open' }, { type: 'tool_reference', tool_name: 'create_doc' }] },
+    } as unknown as Block;
+    replies.push(() => ({ content: [search, found], stop_reason: 'pause_turn' }));
+    replies.push(() => ({ content: [text('Done.')] }));
+    const events = await turn({ message: 'look something up', context: home });
+    expect(events.at(-1)).toEqual({ type: 'done' });
+    expect(requests).toHaveLength(2);
+    // The paused step is sent back as it was, so the model carries on from it.
+    expect(requests[1].messages.at(-1)).toEqual({ role: 'assistant', content: [search, found] });
+    // browser_open is not offered here: it gets a deferred stand-in so the history stays valid; create_doc is the real one.
+    const tools = (requests[1].tools ?? []) as { name: string; description?: string; defer_loading?: boolean }[];
+    expect(tools.filter((t) => t.name === 'browser_open')).toEqual([expect.objectContaining({ description: 'Not available here.', defer_loading: true })]);
+    expect(tools.filter((t) => t.name === 'create_doc')).toHaveLength(1);
+    // The first request had no stand-ins.
+    expect((requests[0].tools ?? []).some((t) => 'name' in t && t.name === 'browser_open')).toBe(false);
+  });
+
   it('offers the background jobs in the hosted app only', async () => {
     replies.push(() => ({ content: [text('Hi.')] }));
     await turn({ message: 'hello', context: home });
-    const names = (requests[0].tools ?? []).map((t) => ('name' in t ? t.name : ''));
+    const names = (requests[0].tools ?? []).map((t) => ('name' in t ? t.name : '')).filter((n) => n !== TOOL_SEARCH_NAME);
     expect(names).toEqual(expect.arrayContaining(['request_app_change', 'request_research']));
     expect(JSON.stringify(requests[0].system)).toContain('request_app_change');
     // The desktop app (jobs: false) has no checkout to change: neither the tools nor the prompt mention them.

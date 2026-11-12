@@ -6,6 +6,7 @@ import OpenAI from 'openai';
 import { OPENAI_MODELS } from '../../shared/agent/protocol.ts';
 import type { ModelCall } from './agent.ts';
 import { SettingsError } from './settings.ts';
+import { TOOL_SEARCH_NAME } from './toolSearch.ts';
 
 type Params = Parameters<ModelCall>[0];
 type Message = Anthropic.Beta.BetaMessage;
@@ -27,10 +28,8 @@ export function toRequest(params: Params, model: string): Request {
   return {
     model,
     instructions: system,
-    input: toInput(params.messages),
-    tools: (params.tools ?? []).flatMap((t) =>
-      'input_schema' in t ? [{ type: 'function' as const, name: t.name, description: t.description ?? '', parameters: t.input_schema as Record<string, unknown>, strict: false }] : [],
-    ),
+    input: toInput(params.messages, params.tools),
+    tools: toTools(params.tools),
     max_output_tokens: params.max_tokens,
     ...(effort ? { reasoning: { effort: effort as OpenAI.ReasoningEffort } } : {}),
     // The whole history is sent with every request, as it is to Claude; nothing is kept on OpenAI's side.
@@ -38,7 +37,30 @@ export function toRequest(params: Params, model: string): Request {
   };
 }
 
-export function toInput(messages: Params['messages']): InputItem[] {
+type FunctionTool = OpenAI.Responses.FunctionTool;
+
+/** A Claude tool definition as an OpenAI function; a deferred one stays deferred. */
+const toFunction = (t: Anthropic.Beta.BetaTool): FunctionTool => ({
+  type: 'function',
+  name: t.name,
+  description: t.description ?? '',
+  parameters: t.input_schema as Record<string, unknown>,
+  strict: false,
+  ...(t.defer_loading ? { defer_loading: true } : {}),
+});
+
+/** The tools: Claude's tool search becomes OpenAI's own (`tool_search`, run on OpenAI's side), which finds the deferred functions. */
+export function toTools(tools: Params['tools']): OpenAI.Responses.Tool[] {
+  return (tools ?? []).flatMap((t): OpenAI.Responses.Tool[] => {
+    if ('input_schema' in t) return [toFunction(t)];
+    if ('name' in t && t.name === TOOL_SEARCH_NAME) return [{ type: 'tool_search' }];
+    return [];
+  });
+}
+
+export function toInput(messages: Params['messages'], tools: Params['tools'] = []): InputItem[] {
+  // A search's result is replayed with the definitions it loaded: nothing is kept on OpenAI's side (store: false).
+  const defs = new Map((tools ?? []).flatMap((t) => ('input_schema' in t ? [[t.name, t] as const] : [])));
   const items: InputItem[] = [];
   for (const m of messages) {
     if (typeof m.content === 'string') {
@@ -49,6 +71,15 @@ export function toInput(messages: Params['messages']): InputItem[] {
       for (const b of m.content) {
         if (b.type === 'text' && b.text) items.push({ role: 'assistant', content: b.text });
         else if (b.type === 'tool_use') items.push({ type: 'function_call', call_id: b.id, name: b.name, arguments: JSON.stringify(b.input ?? {}) });
+        else if (b.type === 'server_tool_use' && b.name === TOOL_SEARCH_NAME) items.push({ type: 'tool_search_call', call_id: b.id, execution: 'server', status: 'completed', arguments: b.input });
+        else if (b.type === 'tool_search_tool_result') {
+          const refs = (b.content as { tool_references?: { tool_name: string }[] }).tool_references ?? [];
+          const loaded = refs.flatMap((r) => {
+            const def = defs.get(r.tool_name);
+            return def ? [{ ...toFunction(def), defer_loading: true }] : [];
+          });
+          items.push({ type: 'tool_search_output', call_id: b.tool_use_id, execution: 'server', status: 'completed', tools: loaded });
+        }
         // Thinking blocks belong to the model that wrote them and are left out.
       }
       continue;
@@ -79,6 +110,8 @@ export function toMessage(res: OpenAI.Responses.Response): Message {
   if (res.status === 'failed') throw new Error(res.error?.message ?? 'The OpenAI request failed.');
   const content: unknown[] = [];
   let refused = false;
+  // A search run on OpenAI's side may leave call_id empty: its output then answers the search just before it.
+  let searchId = '';
   for (const item of res.output) {
     if (item.type === 'message') {
       for (const part of item.content) {
@@ -87,6 +120,13 @@ export function toMessage(res: OpenAI.Responses.Response): Message {
       }
     } else if (item.type === 'function_call') {
       content.push({ type: 'tool_use', id: item.call_id, name: item.name, input: parseArguments(item.arguments) });
+    } else if (item.type === 'tool_search_call') {
+      // Kept as Claude's blocks, as the rest of the history is; toInput turns them back. The pair shares the call's id.
+      searchId = item.call_id ?? item.id;
+      content.push({ type: 'server_tool_use', id: searchId, name: TOOL_SEARCH_NAME, input: item.arguments ?? {} });
+    } else if (item.type === 'tool_search_output') {
+      const names = item.tools.flatMap((t) => (t.type === 'function' ? [t.name] : []));
+      content.push({ type: 'tool_search_tool_result', tool_use_id: item.call_id ?? searchId, content: { type: 'tool_search_tool_search_result', tool_references: names.map((tool_name) => ({ type: 'tool_reference', tool_name })) } });
     }
   }
   const reason = res.incomplete_details?.reason;

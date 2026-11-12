@@ -101,6 +101,46 @@ describe('OpenAI translation', () => {
     expect(msg.usage).toMatchObject({ input_tokens: 12, output_tokens: 7 });
   });
 
+  it('turns deferred tools and the tool search into OpenAI\'s, and replays a search with what it loaded', () => {
+    const tools: Params['tools'] = [
+      { type: 'tool_search_tool_bm25_20251119', name: 'tool_search_tool_bm25' },
+      { name: 'list_files', description: 'List', input_schema: { type: 'object', properties: {} } },
+      { name: 'add_chart', description: 'Chart', input_schema: { type: 'object', properties: { range: { type: 'string' } } }, defer_loading: true },
+    ];
+    const req = toRequest({ model: 'x', max_tokens: 100, messages: [{ role: 'user', content: 'hi' }], tools }, 'gpt-6.1-sol');
+    expect(req.tools).toEqual([
+      { type: 'tool_search' },
+      { type: 'function', name: 'list_files', description: 'List', parameters: { type: 'object', properties: {} }, strict: false },
+      { type: 'function', name: 'add_chart', description: 'Chart', parameters: { type: 'object', properties: { range: { type: 'string' } } }, strict: false, defer_loading: true },
+    ]);
+
+    // OpenAI's search items come back as Claude's blocks, as the rest of the history is kept...
+    const reply = toMessage({
+      id: 'resp_1',
+      model: 'gpt-6.1-sol',
+      status: 'completed',
+      output: [
+        { type: 'tool_search_call', id: 'ts_1', call_id: null, execution: 'server', status: 'completed', arguments: { query: 'chart' } },
+        { type: 'tool_search_output', id: 'tso_1', call_id: null, execution: 'server', status: 'completed', tools: [{ type: 'function', name: 'add_chart', parameters: {}, strict: false, defer_loading: true }] },
+        { type: 'function_call', call_id: 'call_9', name: 'add_chart', arguments: '{"range":"A1:B4"}' },
+      ],
+    } as unknown as OpenAI.Responses.Response);
+    expect(reply.content).toEqual([
+      { type: 'server_tool_use', id: 'ts_1', name: 'tool_search_tool_bm25', input: { query: 'chart' } },
+      { type: 'tool_search_tool_result', tool_use_id: 'ts_1', content: { type: 'tool_search_tool_search_result', tool_references: [{ type: 'tool_reference', tool_name: 'add_chart' }] } },
+      { type: 'tool_use', id: 'call_9', name: 'add_chart', input: { range: 'A1:B4' } },
+    ]);
+    expect(reply.stop_reason).toBe('tool_use');
+
+    // ...and go back as OpenAI's, the output carrying the definitions it loaded (nothing is stored on OpenAI's side).
+    const input = toInput([{ role: 'user', content: 'chart it' }, { role: 'assistant', content: reply.content as Anthropic.Beta.BetaContentBlockParam[] }], tools);
+    expect(input.slice(1)).toEqual([
+      { type: 'tool_search_call', call_id: 'ts_1', execution: 'server', status: 'completed', arguments: { query: 'chart' } },
+      { type: 'tool_search_output', call_id: 'ts_1', execution: 'server', status: 'completed', tools: [{ type: 'function', name: 'add_chart', description: 'Chart', parameters: { type: 'object', properties: { range: { type: 'string' } } }, strict: false, defer_loading: true }] },
+      { type: 'function_call', call_id: 'call_9', name: 'add_chart', arguments: '{"range":"A1:B4"}' },
+    ]);
+  });
+
   it('maps how the reply ended', () => {
     const said = [{ type: 'message', id: 'm1', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'Hi', annotations: [] }] }] as OpenAI.Responses.ResponseOutputItem[];
     expect(toMessage(response({ output: said })).stop_reason).toBe('end_turn');
