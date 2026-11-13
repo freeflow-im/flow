@@ -476,8 +476,9 @@ export const CLIENT_TOOLS = new Set([
   // Runs in the browser so the user can confirm it there; the server then queues the job.
   'request_app_change',
   'request_research',
-  // FreeFlow Mail (hosted only): shows a message in Mail's reading pane.
+  // FreeFlow Mail (hosted only): shows a message in Mail's reading pane; writes a reply in its reply editor.
   'open_mail_message',
+  'draft_mail_reply',
   // FreeFlow Calendar (hosted only): shows an event, moves the view; and deletes an event after the user confirms it.
   'open_calendar_event',
   'show_calendar_range',

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { draftOf, mailContext, messageId, parseMessageId, refOfLink, runMailClientCalls, savedFileOf } from './assistant';
+import { draftOf, mailContext, messageId, parseMessageId, refOfLink, runMailClientCalls, savedFileOf, type ReplyRequest } from './assistant';
 import { chatScope, MAIL_CHAT } from '../../../docs/shared/agent/protocol';
 
 const ACC = '0b6f1c2e-1111-4222-8333-444455556666';
@@ -73,6 +73,37 @@ describe('what the chat links to', () => {
 });
 
 describe('browser tools in Mail', () => {
+  it('opens the reply editor for draft_mail_reply with the body as HTML, and says it was not sent', async () => {
+    const asked: ReplyRequest[] = [];
+    const results = await runMailClientCalls(
+      [
+        { id: 'a', name: 'draft_mail_reply', input: { id: `${ACC}:INBOX:3`, body: 'Hi **Amanda**,\n\nTuesday works.<script>x</script>', reply_all: true } },
+        { id: 'b', name: 'draft_mail_reply', input: { id: `${ACC}:INBOX:4`, body: '  ' } },
+        { id: 'c', name: 'draft_mail_reply', input: { id: 'other:INBOX:3', body: 'Hi' } },
+      ],
+      () => true,
+      undefined,
+      async (r) => {
+        asked.push(r);
+        return r.ref.account === ACC ? { shown: 'inline' } : { error: 'Not here.' };
+      },
+    );
+    expect(asked.map((r) => [messageId(r.ref), r.replyAll])).toEqual([
+      [`${ACC}:INBOX:3`, true],
+      ['other:INBOX:3', false],
+    ]);
+    expect(asked[0]!.html).toContain('<strong>Amanda</strong>');
+    expect(asked[0]!.html).toContain('&lt;script&gt;');
+    expect(asked[0]!.html).not.toContain('<script>');
+    expect(results.map((r) => [r.id, !!r.isError])).toEqual([
+      ['a', false],
+      ['b', true],
+      ['c', true],
+    ]);
+    expect(JSON.parse(results[0]!.content)).toMatchObject({ replied_to: `${ACC}:INBOX:3`, shown: 'in the reply editor under the message' });
+    expect(results[2]!.content).toBe('Not here.');
+  });
+
   it('opens a message for open_mail_message, and answers any other tool as unknown (the server offers Mail only its own)', async () => {
     const shown: unknown[] = [];
     const results = await runMailClientCalls(

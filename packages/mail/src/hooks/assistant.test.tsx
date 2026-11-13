@@ -46,7 +46,7 @@ describe('Mail’s assistant chat', () => {
     );
     const show = vi.fn(() => true);
     const onMailChanged = vi.fn();
-    await act(async () => root.render(createElement(Harness, { org: 'org1', context: () => ctx, show, onMailChanged })));
+    await act(async () => root.render(createElement(Harness, { org: 'org1', context: () => ctx, show, reply: async () => ({ shown: 'inline' as const }), onMailChanged })));
     expect(calls[0]?.url).toBe('/api/agent?scope=mail&workspace=org1');
     expect(chat.items).toEqual([{ kind: 'user', text: 'earlier' }]);
 
@@ -72,7 +72,7 @@ describe('Mail’s assistant chat', () => {
       'fetch',
       vi.fn(async (url: string) => (url.startsWith('/api/agent?') ? Response.json({ items: [], title: null }) : sse([{ type: 'text', text: 'Hal' }]))),
     );
-    await act(async () => root.render(createElement(Harness, { org: null, context: () => ctx, show: () => true, onMailChanged: () => {} })));
+    await act(async () => root.render(createElement(Harness, { org: null, context: () => ctx, show: () => true, reply: async () => ({ shown: 'inline' as const }), onMailChanged: () => {} })));
     await act(async () => {
       chat.send('hello');
       await vi.waitFor(() => expect(chat.running).toBe(false));

@@ -15,6 +15,7 @@
   "dependencies": {
     "@flow/suite-bar": "workspace:*",
     "@tanstack/react-query": "^5.62.0",
+    "@tiptap/extensions": "^3.32.2",
     "@tiptap/pm": "^3.32.2",
     "@tiptap/react": "^3.32.2",
     "@tiptap/starter-kit": "^3.32.2",
@@ -22,11 +23,11 @@
     "clsx": "^2.1.1",
     "dompurify": "^3.4.13",
     "lucide-react": "^1.67.0",
+    "marked": "^18.1.2",
     "radix-ui": "^1.8.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "tailwind-merge": "^3.7.0",
-    "@tiptap/extensions": "^3.32.2"
+    "tailwind-merge": "^3.7.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",

@@ -23,8 +23,8 @@ import { useMediaQuery, useResizableWidth } from './hooks/layout';
 import { fetchBody, keys, prefetchThread, useAccounts, useFolders, useMessageActions, useMessages, useThread, useThreads, useTabStatus, useTabHeartbeat } from './hooks/mail';
 import { useMailAssistant } from './hooks/assistant';
 import { SETTING_UP, useAccountState, useOrganizations } from './hooks/organization';
-import { mailContext, setAssistantOpen, useAssistantOpen, type MessageRef } from './lib/assistant';
-import { cidUrlOf, emptyDraft, fromDraft, prefill, type ComposeMode, type ComposeRequest, type Outgoing } from './lib/compose';
+import { mailContext, setAssistantOpen, useAssistantOpen, type MessageRef, type ReplyOpened, type ReplyRequest } from './lib/assistant';
+import { cidUrlOf, emptyDraft, fromDraft, prefill, type AnswerMode, type ComposeDraft, type ComposeMode, type ComposeRequest, type Outgoing } from './lib/compose';
 import type { Notice } from './lib/notice';
 import { sendInBackground } from './lib/outgoing';
 import { findSpecial, folderLabel } from './lib/folders';
@@ -468,6 +468,51 @@ export function App() {
     openCompose(account.id, { mode: 'draft', draft: fromDraft(m, cidUrlOf(account.id, m)), source: { folder: m.folder, uid: m.uid }, ...(openId ? { threadId: openId } : {}) });
   }, [pendingDraft, thread.data, threadLoaded, account, openId, openCompose]);
 
+  // The assistant's draft_mail_reply: its message is shown, and once its body has loaded the reply opens under it with the
+  // assistant's text above the quote (in the dialog on a narrow screen, or when a reply with something in it is already open).
+  const [pendingReply, setPendingReply] = useState<(ReplyRequest & { done(r: ReplyOpened): void; fetched: boolean }) | null>(null);
+  const draftReply = (request: ReplyRequest): Promise<ReplyOpened> =>
+    new Promise((resolve) => {
+      const { ref } = request;
+      const isOpen = threadLoaded && account?.id === ref.account && thread.data!.messages.some((x) => x.folder === ref.folder && x.uid === ref.uid);
+      if (!isOpen && !showMessage(ref)) return resolve({ error: 'That message is in a mail account the user does not have here.' });
+      let settled = false;
+      const done = (r: ReplyOpened) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(r);
+      };
+      const timer = setTimeout(() => {
+        setPendingReply((cur) => (cur?.done === done ? null : cur));
+        done({ error: 'The message did not open in time. Open it with open_mail_message, then try again.' });
+      }, 20_000);
+      setPendingReply({ ...request, done, fetched: false });
+    });
+  useEffect(() => {
+    const p = pendingReply;
+    if (!p || !threadLoaded || !account || account.id !== p.ref.account || !openId) return;
+    const m = thread.data!.messages.find((x) => x.folder === p.ref.folder && x.uid === p.ref.uid);
+    if (!m) return;
+    if (m.bodyPending) {
+      if (!p.fetched) {
+        setPendingReply({ ...p, fetched: true });
+        void fetchBody(qc, account.id, openId, m);
+      }
+      return;
+    }
+    setPendingReply(null);
+    const mode: AnswerMode = p.replyAll ? 'replyAll' : 'reply';
+    const cidUrl = cidUrlOf(account.id, m);
+    // The text stays when the reply's menu switches it to Reply all or Forward.
+    const written = (d: ComposeDraft): ComposeDraft => ({ ...d, html: p.html + d.html });
+    const remode = (next: AnswerMode) => written(prefill(next, m, account.email, cidUrl));
+    const request: ComposeRequest = { mode, draft: remode(mode), source: { folder: m.folder, uid: m.uid }, threadId: openId, remode, restored: true };
+    if (!narrow && pane.current?.reopen(request)) return p.done({ shown: 'inline' });
+    openCompose(account.id, request);
+    p.done({ shown: 'dialog' });
+  }, [pendingReply, thread.data, threadLoaded, account, openId, narrow, openCompose, qc]);
+
   /**
    * Sends what a composer handed over, the composer already closed: "Sending…" while it goes, then "Message sent." (a sent
    * draft leaves Drafts, and its conversation closes if it is still open); on failure the reason, with Open, which puts the
@@ -514,6 +559,7 @@ export function App() {
       });
     },
     show: showMessage,
+    reply: draftReply,
     onMailChanged: () => {
       void qc.invalidateQueries({ queryKey: ['mail', 'messages'] });
       void qc.invalidateQueries({ queryKey: ['mail', 'threads'] });

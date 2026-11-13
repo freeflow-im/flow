@@ -324,6 +324,7 @@ export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): P
 
   // FreeFlow Mail's own tool (packages/mail): Docs cannot show a message.
   if (call.name === 'open_mail_message') throw new ToolError('Messages open only in FreeFlow Mail; the user is in Docs. Give them the message\'s link instead.');
+  if (call.name === 'draft_mail_reply') throw new ToolError('Replies are written in FreeFlow Mail; the user is in Docs. Use create_mail_draft instead.');
   // FreeFlow Calendar's own tools (packages/calendar): Docs shows no calendar.
   if (call.name === 'open_calendar_event' || call.name === 'show_calendar_range') throw new ToolError('Events show only in FreeFlow Calendar; the user is in Docs. Give them the event\'s link instead.');
   // A calendar event, deleted after the user confirmed it (confirmationFor), through the suite's Calendar API on this origin.

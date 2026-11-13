@@ -107,7 +107,7 @@ export const APP_MANIFESTS: AppManifest[] = [
     // Its tools, by name (their definitions: @flow/shared/tools, platform.md §5.4).
     tools: [
       'list_mail_accounts', 'list_mail_folders', 'search_mail', 'read_mail', 'save_mail_attachment_to_docs', 'mark_mail', 'move_mail', 'archive_mail', 'move_mail_to_tab', 'trash_mail', 'create_mail_draft',
-      'send_mail', 'open_mail_message', 'list_mail',
+      'send_mail', 'open_mail_message', 'draft_mail_reply', 'list_mail',
     ],
     scopes: [
       {
