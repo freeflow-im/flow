@@ -1,5 +1,5 @@
 // Your assistant (docs/specs/agents.md §1.1): a member's own section, against a fetch that answers the assistant's routes.
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkspaceDTO } from '@flow/shared';
@@ -50,7 +50,7 @@ describe('Your assistant', () => {
     mount();
     fireEvent.click(await screen.findByTestId('assistant-picture-mint'));
     await waitFor(() => expect(calls.some((c) => c.method === 'PUT' && c.path === '/v1/workspaces/o1/assistant/avatar' && (c.body as { preset: string }).preset === 'mint')).toBe(true));
-    expect(screen.getAllByRole('radio')).toHaveLength(8);
+    expect(within(screen.getByTestId('card-assistant-picture')).getAllByRole('radio')).toHaveLength(8);
   });
 
   it('starts with nobody allowed to mail it, and saves the senders', async () => {

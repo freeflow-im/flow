@@ -62,7 +62,7 @@ describe('the Agents section', () => {
     await screen.findByTestId('personal-agent-a-claude-desktop');
     // A person's assistant is a member too, but it is listed once: as Ann's assistant, with its address and no Remove.
     expect(screen.queryByTestId('agent-Ada')).toBeNull();
-    expect(screen.getByTestId('personal-agent-a-ada').textContent).toContain('assistant of Ann · ada@acme.test');
+    expect(screen.getByTestId('personal-agent-a-ada').textContent).toContain('hosted, private to Ann · ada@acme.test');
     expect(screen.queryByTestId('personal-agent-remove-a-ada')).toBeNull();
     expect(screen.getByTestId('personal-agent-a-claude-desktop').textContent).toContain('Claude Desktop');
     expect(screen.getByTestId('personal-agent-a-claude-desktop').textContent).toContain('personal agent of Bob');
@@ -74,10 +74,12 @@ describe('the Agents section', () => {
     mount();
     await screen.findByTestId('agent-Omni');
     expect(screen.getByTestId('agent-Omni').textContent).toContain('hosted here');
-    fireEvent.change(screen.getByTestId('hosted-agent-name'), { target: { value: 'Pip' } });
-    fireEvent.change(screen.getByTestId('hosted-agent-instructions'), { target: { value: 'Be brief.' } });
-    fireEvent.click(screen.getByTestId('hosted-agent-make'));
-    await screen.findByTestId('hosted-agent-made');
+    // An admin's form starts on Shared (agents.md §1.3: the kind is chosen once, here).
+    expect((screen.getByTestId('create-agent-shared') as HTMLInputElement).checked).toBe(true);
+    fireEvent.change(screen.getByTestId('create-agent-name'), { target: { value: 'Pip' } });
+    fireEvent.change(screen.getByTestId('create-agent-instructions'), { target: { value: 'Be brief.' } });
+    fireEvent.click(screen.getByTestId('create-agent-make'));
+    await screen.findByTestId('create-agent-made');
     expect(calls.find((c) => c.method === 'POST' && c.path === '/v1/workspaces/o1/agents/hosted')?.body).toEqual({ name: 'Pip', instructions: 'Be brief.' });
     fireEvent.click(screen.getByTestId('agent-instructions-Omni'));
     const text = (await screen.findByTestId('agent-instructions-text-Omni')) as HTMLTextAreaElement;

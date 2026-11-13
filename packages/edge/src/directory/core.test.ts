@@ -824,6 +824,40 @@ describe('agent accounts', () => {
     expect(core.accountFor(id!, org)!.state).toBe('active');
   });
 
+  it('lets a person make up to five private agents, their assistant the default, each with its own runtime (agents.md §1.3)', async () => {
+    const ann = await signUp('pa@example.com');
+    const bob = await signUp('pb@example.com');
+    const org = newId();
+    core.reserveSlug('pacme', org);
+    await core.applyOrgChanges(org, [join(org, ann.user.id), join(org, bob.user.id)]);
+    // Not before the assistant: it is the default, the first one made.
+    expect(() => core.createPersonalAgentFor(ann.user.id, org, 'Scout')).toThrow('not ready');
+    core.ensureAssistantFor(ann.user.id, org, 'Ann');
+    core.ensureAssistantFor(bob.user.id, org, 'Bob');
+    const assistant = core.assistantOf(ann.user.id, org)!;
+    const scout = core.createPersonalAgentFor(ann.user.id, org, '  Scout ');
+    expect(scout).toMatchObject({ kind: 'personal_agent', address: null, sponsorId: ann.user.id, agentMode: 'personal', agentRuntime: 'hosted', displayName: 'Scout' });
+    // The assistant stays the default; Scout is Ann's alone, listed after it and not `self`.
+    expect(core.assistantOf(ann.user.id, org)).toBe(assistant);
+    expect(core.usableAgents(ann.user.id, org).map((a) => [a.displayName, a.mode, a.self])).toEqual([[expect.stringContaining('assistant'), 'personal', true], ['Scout', 'personal', false]]);
+    expect(core.usableAgents(bob.user.id, org).map((a) => a.id)).not.toContain(scout.principalId);
+    // The assistant's runtime is Ann's account's object, as before; Scout's is its own, `agent:<account>`.
+    const annAccount = core.accountFor(ann.user.id, org)!;
+    expect(core.hostedRuntimeOf(core.accountFor(assistant, org)!.id)).toMatchObject({ runtimeKey: annAccount.id, mode: 'personal', sponsorAccountId: annAccount.id });
+    expect(core.hostedRuntimeOf(scout.id)).toMatchObject({ runtimeKey: `agent:${scout.id}`, agentId: scout.principalId, mode: 'personal', sponsorAccountId: annAccount.id });
+    // Five in all, the assistant among them.
+    for (const n of ['Two', 'Three', 'Four']) core.createPersonalAgentFor(ann.user.id, org, n);
+    expect(() => core.createPersonalAgentFor(ann.user.id, org, 'Six')).toThrow('the most one person may have');
+    // Removing one makes room; an agent cannot make one, nor can someone who is not a member.
+    core.removePersonalAgent(org, scout.id);
+    expect(core.createPersonalAgentFor(ann.user.id, org, 'Five').displayName).toBe('Five');
+    expect(() => core.createPersonalAgentFor(assistant, org, 'Sub')).toThrow('an agent cannot sponsor an agent');
+    expect(() => core.createPersonalAgentFor(ann.user.id, newId(), 'Elsewhere')).toThrow('only a member');
+    // When Ann leaves, they all go with her.
+    await core.applyOrgChanges(org, [{ kind: 'leave', id: org, user_id: ann.user.id, role: null, payload: null }]);
+    expect(core.usableAgents(ann.user.id, org)).toEqual([]);
+  });
+
   it("reconciles an organization's accounts with its member list: a lost leave's account goes, with its assistant", async () => {
     const own = await signUp('ro@example.com');
     const ann = await signUp('ra@example.com');

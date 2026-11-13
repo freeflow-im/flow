@@ -10,6 +10,7 @@ import { suite } from '../suite';
 import { tellHome } from '@flow/suite-bar';
 import { assistantChanged } from '@flow/suite-bar/assistant-dock';
 import { Button, Card, ErrorLine, Row } from '../components/ui';
+import { CreateAgent, MyAgents } from './CreateAgent';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const input = 'w-72 rounded-md border border-border px-2 py-1 text-sm';
@@ -28,6 +29,8 @@ export function Assistant({ org }: { org: WorkspaceDTO }) {
       <Picture org={org} />
       <WhoMayMail org={org} />
       <RunsOn org={org} />
+      <MyAgents org={org} />
+      <CreateAgent org={org} initialAccess="private" />
     </>
   );
 }

@@ -386,7 +386,10 @@ turns; hosted shared agents made from the Admin app with a definition, the panel
 runs the turn and answers in the channel as the agent (a personal agent as its sponsor, `via`). Not yet: the model key
 per definition (hosted agents run on the platform's key with the daily limit per asker), headless runners for the Docs
 editing tools in async turns (an async turn has the server tools), the confirm card for a personal agent's writes
-others can see, and object threads. Phase E (branch `agents/assistant-member`, 2026-11-11): the Org object's one member list with kinds and personal agents, the assistant in Chat answering only its sponsor, its mailbox and calendar on first naming with the sender allowlist (refused mail moved to a Refused folder; the mailbox checked every minute), and naming in Docs' panel. Not yet: the confirm card before the assistant posts private data where others read (its prompt says so instead), and the native clients' naming. Phase F (branch `assistant/chat-posting`, 2026-11-12): the assistant posts elsewhere in Chat. A Chat turn has the page `chat` and four Chat tools the Worker runs (`edge/src/assistant/chatTools.ts`): `list_channels` and `read_messages` over the standard channels the sponsor is in, `leave_channel`, and `send_message`, which is the confirm card for posts: the turn stops at a card in the sponsor's DM quoting the post, and only the sponsor's ✅ on that card posts it (the Org object matches the reaction, not the model), joining the channel through the sponsor first; ❌ or a new message cancels. Asked where others read, it leaves no card (the card would show the post) and asks for the DM. The card is a plain message answered by a reaction, so every client has it without new UI. **Not built: a personal agent on the bridge.** A bridge token that acted as its sponsor would be
+others can see, and object threads. Phase E (branch `agents/assistant-member`, 2026-11-11): the Org object's one member list with kinds and personal agents, the assistant in Chat answering only its sponsor, its mailbox and calendar on first naming with the sender allowlist (refused mail moved to a Refused folder; the mailbox checked every minute), and naming in Docs' panel. Not yet: the confirm card before the assistant posts private data where others read (its prompt says so instead), and the native clients' naming. Phase F (branch `assistant/chat-posting`, 2026-11-12): the assistant posts elsewhere in Chat. A Chat turn has the page `chat` and four Chat tools the Worker runs (`edge/src/assistant/chatTools.ts`): `list_channels` and `read_messages` over the standard channels the sponsor is in, `leave_channel`, and `send_message`, which is the confirm card for posts: the turn stops at a card in the sponsor's DM quoting the post, and only the sponsor's ✅ on that card posts it (the Org object matches the reaction, not the model), joining the channel through the sponsor first; ❌ or a new message cancels. Asked where others read, it leaves no card (the card would show the post) and asks for the DM. The card is a plain message answered by a reaction, so every client has it without new UI. Phase G step 1 (branch `agents/multi-agents-memory`, 2026-11-12): up to five hosted personal agents per person, made,
+edited and removed in Organization settings → Your agents (`/v1/workspaces/:id/agents/personal`, `…/agents/mine`), each
+in its own runtime with its own instructions and conversations, picked in the panel and reached in Chat by DM, mention or
+thread; the extra agents have no mailbox yet. **Not built: a personal agent on the bridge.** A bridge token that acted as its sponsor would be
 an unscoped delegation of the whole account (the sponsor's role, sessions, mail, invitations) with no confirm card, which
 the review of phase B showed; §1's "the bridge's self-registration asks the same question" waits for a delegation that
 carries scopes and a confirm step, which the hosted runtime (phase C) can give. Until then a personal agent is an `/mcp`
@@ -567,10 +570,12 @@ Exit: `packages/agent-runtime` imports nothing from `packages/docs`; every e2e p
 
 One branch and one PR, a commit per step.
 
-1. **Several personal agents** (§1.3): a default flag on the member row, which `syncAssistants` keeps to exactly one
-   per person; a runtime object per agent, keyed by the agent's account (the existing assistant keeps its sponsor
-   key); Chat routing by DM, mention and private channel instead of "the" assistant (`org/object.ts` `askAssistant`);
-   the sender allowlist read per agent, not per sponsor (`imap/object.ts`); the limit of five; "Add an agent" on the web.
+1. **Several personal agents** (§1.3): the default is the first one made (`assistantOf`, by `created_at`; a new agent
+   is always made after it); a runtime object per other agent, `agent:<its account>`, owned by the sponsor's account so
+   the panel's turns reach it (the assistant keeps its sponsor key); Chat routing by mention, DM or private channel, and
+   in a thread the agent that last answered there, instead of "the" assistant (`org/object.ts` `askAssistant`); the
+   limit of five; "Create an agent" in Organization settings. The other agents' mailboxes (and a sender allowlist per
+   agent, `imap/object.ts`) come with the switch that turns a mailbox on.
 2. **The memory store and tool** (§6.1): the table, the six commands, the scopes, the listing in the system prompt, the
    limits, and the instructions on what to keep.
 3. **Showing memory**: the "remembered" line with Undo, and the Memory tab.

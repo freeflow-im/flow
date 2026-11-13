@@ -145,6 +145,10 @@ export const adminApi = {
   removePersonalAgent: (id: string, accountId: string) => request<{ account: AccountDTO }>('DELETE', `${ws(id)}/accounts/${encodeURIComponent(accountId)}`),
   agentInvite: (id: string) => request<AgentInviteDTO>('POST', `${ws(id)}/agent-invites`),
   // Hosted shared agents (docs/specs/agents.md §6): made here, with a definition kept by the agent's runtime.
+  // A person's own private agents (docs/specs/agents.md §1.3): their assistant first, up to five in all.
+  myAgents: (id: string) => request<{ agents: UsableAgentDTO[]; limit: number }>('GET', `${ws(id)}/agents/mine`),
+  makePersonalAgent: (id: string, body: { name: string; instructions?: string }) => request<{ agent: UsableAgentDTO; definition: AgentDefinitionDTO }>('POST', `${ws(id)}/agents/personal`, body),
+  removeMyAgent: (id: string, userId: string) => request<{ account: AccountDTO }>('DELETE', `${ws(id)}/agents/personal/${encodeURIComponent(userId)}`),
   makeHostedAgent: (id: string, body: { name: string; instructions?: string }) => request<{ agent: UsableAgentDTO; definition: AgentDefinitionDTO }>('POST', `${ws(id)}/agents/hosted`, body),
   agentDefinition: (id: string, userId: string) => request<{ definition: AgentDefinitionDTO; mayEdit: boolean }>('GET', `${ws(id)}/agents/${encodeURIComponent(userId)}/definition`),
   saveAgentDefinition: (id: string, userId: string, body: { name?: string; instructions?: string }) => request<{ definition: AgentDefinitionDTO; mayEdit: boolean }>('PUT', `${ws(id)}/agents/${encodeURIComponent(userId)}/definition`, body),
