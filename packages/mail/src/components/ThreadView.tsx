@@ -24,6 +24,7 @@ import { FileIcon } from './FileIcon';
 import { InviteCard } from './InviteCard';
 import { TAB_ICONS } from './InboxTabs';
 import { MessageBody } from './MessageBody';
+import { Person, PersonActionsContext, type PersonActions } from './PersonCard';
 import { Button } from './ui/button';
 import type { ComposerHandle } from './ComposeForm';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
@@ -41,6 +42,8 @@ export interface ThreadViewHandle {
 }
 
 export interface ThreadViewProps {
+  /** What the person card on a name or address does (PersonCard.tsx); without it names are plain text. */
+  people?: PersonActions | undefined;
   accountId: string;
   /** The account's own address: "me" among the names. */
   me: string;
@@ -94,7 +97,14 @@ function Addresses({ label, list }: { label: string; list: Address[] }) {
   return (
     <div className="flex gap-1 text-[14px] text-muted">
       <span className="shrink-0">{label}</span>
-      <span className="min-w-0 break-words text-ink/80">{list.map((a) => formatAddress(a)).join(', ')}</span>
+      <span className="min-w-0 break-words text-ink/80">
+        {list.map((a, i) => (
+          <span key={`${a.address}-${i}`}>
+            {i > 0 && ', '}
+            <Person address={a}>{formatAddress(a)}</Person>
+          </span>
+        ))}
+      </span>
     </div>
   );
 }
@@ -201,6 +211,7 @@ export function ThreadView(p: ThreadViewProps) {
   const segments = foldRuns(messages, expanded);
 
   return (
+    <PersonActionsContext.Provider value={p.people ?? null}>
     <section className="flex h-full min-w-0 flex-col bg-white" aria-label="Conversation">
       <div className="flex h-[52px] shrink-0 items-center gap-0.5 border-b border-hairline px-2">
         {p.onBack && (
@@ -419,6 +430,7 @@ export function ThreadView(p: ThreadViewProps) {
         )}
       </div>
     </section>
+    </PersonActionsContext.Provider>
   );
 }
 
@@ -477,8 +489,18 @@ function ThreadMessageItem({ ref, accountId, me, message: m, open, last, focused
         <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary-tint text-sm font-semibold text-primary-deep">{name.slice(0, 1).toUpperCase()}</span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-baseline gap-x-2">
-            <span className={cn('text-ink', !m.seen ? 'font-bold' : 'font-semibold')}>{name}</span>
-            {open && m.from && m.from.name && !fromMe && <span className="text-[14px] text-muted">&lt;{m.from.address}&gt;</span>}
+            {m.from ? (
+              <Person address={m.from} className={cn('text-ink', !m.seen ? 'font-bold' : 'font-semibold')}>
+                {name}
+              </Person>
+            ) : (
+              <span className={cn('text-ink', !m.seen ? 'font-bold' : 'font-semibold')}>{name}</span>
+            )}
+            {open && m.from && m.from.name && !fromMe && (
+              <Person address={m.from} className="text-[14px] text-muted">
+                &lt;{m.from.address}&gt;
+              </Person>
+            )}
             <span className="ml-auto flex shrink-0 items-center gap-1 text-xs text-muted">
               <time dateTime={m.date} title={fullDate(m.date)}>{open ? `${fullDate(m.date)} (${relativeDate(m.date)})` : listDate(m.date)}</time>
               <button
@@ -516,7 +538,17 @@ function ThreadMessageItem({ ref, accountId, me, message: m, open, last, focused
           </div>
           {open ? (
             <>
-              {toLine && <div className="text-[14px] text-muted">to {toLine}</div>}
+              {toLine && (
+                <div className="text-[14px] text-muted">
+                  to{' '}
+                  {m.to.map((a, i) => (
+                    <span key={`${a.address}-${i}`}>
+                      {i > 0 && ', '}
+                      <Person address={a}>{a.address.toLowerCase() === me.toLowerCase() ? 'me' : displayName(a)}</Person>
+                    </span>
+                  ))}
+                </div>
+              )}
               <details className="text-[14px] text-muted">
                 <summary className="cursor-pointer select-none hover:text-ink">Details</summary>
                 <Addresses label="From:" list={m.from ? [m.from] : []} />

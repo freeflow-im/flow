@@ -60,6 +60,22 @@ describe('Compose (the dialog)', () => {
     expect(closed).toBe(0);
   });
 
+  it('a new message opened to someone (the person card) closes without asking while nothing is written; with a recipient typed in, it asks', async () => {
+    let closed = 0;
+    const request: ComposeRequest = { mode: 'new', draft: { to: [{ name: 'Bob', address: 'bob@x.test' }], cc: [], bcc: [], subject: '', html: '' } };
+    await act(() => root.render(createElement(Compose, { account, request, narrow: false, onClose: () => closed++, onSend: () => {} })));
+    await act(() => button('Discard draft')!.click());
+    expect(document.body.textContent).not.toContain('Discard this draft?');
+    expect(closed).toBe(1);
+    act(() => root.unmount());
+    root = createRoot(host);
+    const blank: ComposeRequest = { mode: 'new', draft: { to: [], cc: [], bcc: [], subject: 'Hi', html: '' } };
+    await act(() => root.render(createElement(Compose, { account, request: blank, narrow: false, onClose: () => closed++, onSend: () => {} })));
+    await act(() => button('Discard draft')!.click());
+    expect(document.body.textContent).toContain('Discard this draft?');
+    expect(closed).toBe(1);
+  });
+
   it('what is wrong stays in the composer; one opened again asks before it is dropped and keeps its files', async () => {
     const sent: Outgoing[] = [];
     let closed = 0;

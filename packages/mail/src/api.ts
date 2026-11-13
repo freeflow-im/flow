@@ -382,3 +382,23 @@ export const previewApi = {
   /** Save it as a file in My files in Docs (once: again gives the same file). */
   save: (id: string, workspace: string) => docsRequest<{ saved: SavedToDocs }>('POST', `/api/previews/${enc(id)}/save?workspace=${enc(workspace)}`),
 };
+
+/** A person in the organization's address book (the Contacts app's list: own, member, shared, or written to). */
+export interface PersonContact {
+  id: string;
+  source: 'own' | 'member' | 'shared' | 'mail' | string;
+  name: string;
+  emails: string[];
+  /** A member of the organization: who Chat can open a conversation with. */
+  userId?: string;
+}
+
+/** What the person card (components/PersonCard.tsx) asks of Contacts and Chat. */
+export const peopleApi = {
+  /** The organization's address book, as the Contacts app lists it. */
+  contacts: async (organizationId: string) => (await request<{ contacts: PersonContact[] }>('GET', `/v1/contacts?workspace=${encodeURIComponent(organizationId)}`)).contacts,
+  addContact: async (organizationId: string, name: string, email: string) =>
+    (await request<{ contact: PersonContact }>('POST', `/v1/contacts?workspace=${encodeURIComponent(organizationId)}`, { name: name || email, emails: [email], phone: '', orgName: '', notes: '' })).contact,
+  /** The direct conversation with a member (made if there is none yet): its channel id. */
+  dm: async (organizationId: string, userId: string) => (await request<{ id: string }>('POST', `/v1/workspaces/${encodeURIComponent(organizationId)}/dms`, { userIds: [userId] })).id,
+};

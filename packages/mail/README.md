@@ -31,6 +31,9 @@ Worker holds the credentials and speaks IMAP and SMTP.
   The paperclip offers Upload from computer and From Docs… (`DocsPicker.tsx`, `lib/docsFiles.ts`): files found by name with
   Docs' `/api/library/search` in My files and Organization files (the recent ones before anything is typed), attached as
   Docs downloads them (documents as .docx/.xlsx/.pptx/.md through `/api/files/:id/export`, other files as stored).
+- `src/components/PersonCard.tsx` — the person card on a name or address in an open message (Radix HoverCard): the
+  address with a copy button, Send mail, Find emails, and from the organization's address book (`GET /v1/contacts`)
+  Open in / Add to Contacts and, for a member, Message in Chat (`POST /v1/workspaces/:id/dms`).
 - `src/components/AddressField.tsx` — the To/Cc/Bcc chips, with completion from the account's contacts (`GET …/contacts`:
   the people written to and heard from, docs/specs/mail-api.md Contacts) under the box as the person types.
 - `src/components/AccountForms.tsx` — adding an account (email → `/v1/mail/providers` → name and password, Advanced

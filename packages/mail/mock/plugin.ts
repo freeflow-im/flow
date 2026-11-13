@@ -38,6 +38,11 @@ const MOCK_DOCS: { id: string; kind: 'doc' | 'sheet' | 'deck' | 'markdown' | 'fi
   { id: 'md1', kind: 'markdown', title: 'Meeting notes', folder: 'Notes', body: '# Notes' },
 ];
 
+const mockContacts: { id: string; source: string; name: string; emails: string[]; userId?: string }[] = [
+  { id: 'c1', source: 'member', name: 'Bob Martin', emails: ['bob@acme.test'], userId: 'u-bob' },
+  { id: 'c2', source: 'own', name: 'Eli Novak', emails: ['eli@novak.test'] },
+];
+
 class HttpError extends Error {
   constructor(
     readonly status: number,
@@ -133,6 +138,17 @@ export function createMockApi(empty = false) {
     if (p === '/v1/auth/logout') return { status: 200, json: { ok: true } };
     // Invitations (the Calendar API Mail's card asks, src/calendar/invites.ts): read from the message's part with a few
     // regexes, answered in memory. Not on a calendar until answered; the cancelled one is on it until removed.
+    // The organization's address book, for the person card (src/components/PersonCard.tsx): Bob is a member, Eli an own contact.
+    if (p === '/v1/contacts' && method === 'GET') {
+      return { status: 200, json: { contacts: [...mockContacts] } };
+    }
+    if (p === '/v1/contacts' && method === 'POST') {
+      const b = body as { name: string; emails: string[] };
+      const contact = { id: `c${mockContacts.length + 1}`, source: 'own', name: b.name, emails: b.emails };
+      mockContacts.push(contact);
+      return { status: 201, json: { contact } };
+    }
+    if (/^\/v1\/workspaces\/[^/]+\/dms$/.test(p) && method === 'POST') return { status: 200, json: { id: 'dm-mock' } };
     if (p.startsWith('/v1/calendar/invites') && method === 'POST') {
       const b = body as { account: string; messageId: { folder: string; uid: number }; part: number; response?: 'accepted' | 'declined' | 'tentative' };
       const box = boxOf(b.account);

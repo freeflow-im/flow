@@ -172,7 +172,8 @@ export function ComposeForm({ account, request, variant, handle, onClose, onSend
         bodyChanged: bodyChanged(),
         attachments: files.filter((f) => !f.forwarded).length,
       },
-      mode === 'new' ? null : initial,
+      // A new message measured from nothing, unless it opened with recipients (the person card's Send mail): those are not something written.
+      mode === 'new' && initial.to.length + initial.cc.length + initial.bcc.length === 0 ? null : initial,
     );
   const requestClose = () => (empty() ? onClose() : setConfirming(true));
 
