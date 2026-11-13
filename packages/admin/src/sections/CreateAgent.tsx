@@ -10,6 +10,7 @@ import { adminApi, assistantApi } from '../api';
 import { choiceUrl, PicturePicker, type PictureChoice } from './AgentPicture';
 import { Button, Card, Confirm, ErrorLine } from '../components/ui';
 import { HostedDefinition } from './Agents';
+import { AgentMemory } from './AgentMemory';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 type Access = 'private' | 'shared';
@@ -175,6 +176,7 @@ export function MyAgents({ org }: { org: WorkspaceDTO }) {
               <span className="flex-1" />
               {!a.self && <RowPicture org={org} agent={a} onDone={changed} />}
               {!a.self && <HostedDefinition org={org} userId={a.id} name={a.displayName} />}
+              <AgentMemory org={org} userId={a.id} name={a.displayName} />
               {!a.self &&
                 (confirming === a.id ? (
                   <Confirm question={`Remove ${a.displayName}? Its conversations go with it.`} busy={remove.isPending} onYes={() => remove.mutate(a.id)} onNo={() => setConfirming(null)} testid={`my-agent-remove-confirm-${a.displayName}`} />

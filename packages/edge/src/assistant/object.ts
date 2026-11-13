@@ -37,7 +37,7 @@ import { isFileId } from '@flow/docs/server/ids.ts';
 import { scopeOf, type ScopeArg } from '@flow/docs/server/scope.ts';
 import { chatScope, HOME_CHAT, isChatScope, type AgentDefinition, type AgentEvent, type AgentTurnRequest, type AssistantSettingsUpdate, type ClientToolCall } from '@flow/docs/shared/agent/protocol.ts';
 import { postCard } from './chatTools.ts';
-import { MEMORY_DDL, MemoryStore, type MemoryScope } from './memory.ts';
+import { MEMORY_DDL, MemoryError, MemoryStore, type MemoryScope } from './memory.ts';
 import type { Org } from '../org/object';
 import { docsPageUrl, docsToolContext, importToDocs, type DocsFetch, type DocsPlace } from './docsTools.ts';
 
@@ -375,6 +375,21 @@ export class Assistant extends DurableObject<AssistantEnv> {
   /** A hosted agent's definition, set from the Admin app (agents.md §6): the runtime remakes its loop for the next turn. */
   async updateDefinition(d: { name?: string; instructions?: string }): Promise<AgentDefinition> {
     return this.setDefinition(d);
+  }
+
+  /** The agent's memory files a person may see (agents.md §6.1, the Memory tab), by the scope the route worked out. */
+  async memoryFiles(scope: MemoryScope): Promise<{ path: string; body: string; trust: string; updatedAt: string }[]> {
+    return new MemoryStore(this.sql, scope).files();
+  }
+
+  /** A person's edit of one memory file from the Memory tab: the answer is null, or the refusal to show. */
+  async memoryPut(scope: MemoryScope, path: string, body: string): Promise<string | null> {
+    try { new MemoryStore(this.sql, scope).put(path, body); return null; } catch (e) { if (e instanceof MemoryError) return e.message.replace(/^Error: /, ''); throw e; }
+  }
+
+  /** A person's delete from the Memory tab: one file, or everything this scope sees. Returns how many went. */
+  async memoryRemove(scope: MemoryScope, path?: string): Promise<number> {
+    try { return new MemoryStore(this.sql, scope).remove(path); } catch (e) { if (e instanceof MemoryError) return 0; throw e; }
   }
 
   async currentDefinition(): Promise<AgentDefinition> {
