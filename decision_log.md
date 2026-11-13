@@ -1,5 +1,19 @@
 # Decision log
 
+## 2026-11-13 — Search: FTS5 where the data lives, no index for each user (operator rulings)
+
+- **Ruling (Scott, approving the proposed design):** each app’s Durable Object indexes its own data with SQLite FTS5 (Docs object, Org object, Mail object),
+  and a search is filtered by the person's access when it runs. **No index for each user**: it would copy every shared
+  item once per reader, and a missed update on an edit, delete or permission change would show content to someone who
+  lost access, with no visible error.
+- **Ruling (Scott):** Chat's search index holds message words in **plain text**, beside the AES-GCM bodies in
+  `messages` (the Mail cache already holds mail in plain text). A blind index of hashed words was offered and declined:
+  it loses stemming, prefixes and snippets, for little gain while the data key lives in the same deployment.
+- **Ruling (Scott, approving the proposed design):** FTS5, not a search service (Typesense, Meilisearch, OpenSearch, Algolia): no service to run, no copy to
+  keep in step with permissions. Measured in a workerd Durable Object: 5,000 documents indexed in 263 ms, queries 1–3 ms.
+- **Ruling (Scott):** Docs first, then Chat, then Mail, then the suite-wide router and search box.
+- **Where:** `docs/specs/search.md`.
+
 ## 2026-11-12 — Several agents per person; agent memory (operator rulings)
 
 - **Ruling (Scott):** a person may have up to **five** hosted personal agents in an organization, each with its own

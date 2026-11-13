@@ -4,7 +4,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { isHtmlName, type DeletedFile, type StoredFile } from '../../../shared/types.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { useAgent } from '../agent/AgentProvider.tsx';
-import { api, placeFields as placeFieldsOf, type FolderInfo, type Place, type RecentFile } from '../api.ts';
+import { api, placeFields as placeFieldsOf, type ContentHit, type FolderInfo, type Place, type RecentFile } from '../api.ts';
 import { OrganizationPicker, scopeActionLabels } from '../components/OrganizationActions.tsx';
 import { ShareWithDialog } from '../components/ShareWithDialog.tsx';
 import { useOrganization } from '../organization.ts';
@@ -41,6 +41,25 @@ const pathOf = (s: LibraryItem) => (s.kind === 'deck' ? `/d/${s.id}` : s.kind ==
 let lastFind: { text: string; result: Promise<{ folders: FolderInfo[]; items: LibraryItem[]; truncated: boolean }> } | null = null;
 
 /** A stored file as a row of the list. */
+/**
+ * "Find files": the files and folders whose name has the text (GET /api/library/search) and the documents whose words do
+ * (GET /api/search, server/search.ts), in the root shown. A document found both ways is listed once, with the text
+ * around its words; one found only by its words carries that text too. The words search failing leaves the names.
+ */
+async function findEverywhere(q: string, place: Place): Promise<{ folders: { name: string; path: string }[]; items: LibraryItem[]; truncated: boolean }> {
+  const [names, words] = await Promise.all([api.searchLibrary(q, place), api.searchContent(q, place).catch(() => ({ hits: [] as ContentHit[] }))]);
+  const snippets = new Map(words.hits.map((h) => [h.id, h.snippet]));
+  const items: LibraryItem[] = [...names.docs.map((d) => (snippets.has(d.id) ? { ...d, snippet: snippets.get(d.id) } : d)), ...names.files.map(fileItem)];
+  const listed = new Set(items.map((i) => i.id));
+  for (const h of words.hits) {
+    if (listed.has(h.id)) continue;
+    // In the root shown, as the names search lists its files: its organization, and shared when that root is.
+    const org = placeFieldsOf(place).workspace;
+    items.push({ id: h.id, kind: h.kind, title: h.title, ...(h.container ? { folder: h.container } : {}), ...(org ? { workspaceId: org } : {}), ...(typeof place === 'object' && place.shared ? { shared: true as const } : {}), snippet: h.snippet, createdAt: h.at, updatedAt: h.at });
+  }
+  return { folders: names.folders, items, truncated: names.truncated };
+}
+
 const fileItem = (x: StoredFile): LibraryItem => ({ id: x.id, title: x.filename, kind: 'file', folder: x.folder, ...(x.workspaceId ? { workspaceId: x.workspaceId } : {}), ...(x.shared ? { shared: true } : {}), ...(x.role ? { role: x.role } : {}), ...(x.text ? { text: true } : {}), createdAt: x.createdAt, updatedAt: x.createdAt });
 
 /** A stored file a guest can be shown with a link (server/publicLinks.ts' isSharableVideo), by its name. */
@@ -671,7 +690,7 @@ function FileList() {
       onSearchChange={setSearch}
       onFind={otherShown ? undefined : async (q) => {
         // Coming back to results that were just shown does not search again; a change to the list does.
-        if (lastFind?.text !== `${rootKey}:${q}`) lastFind = { text: `${rootKey}:${q}`, result: api.searchLibrary(q, place).then((r) => ({ folders: r.folders, items: [...r.docs, ...r.files.map(fileItem)], truncated: r.truncated })) };
+        if (lastFind?.text !== `${rootKey}:${q}`) lastFind = { text: `${rootKey}:${q}`, result: findEverywhere(q, place) };
         const mine = lastFind;
         return mine.result.catch((e: unknown) => {
           if (lastFind === mine) lastFind = null;

@@ -60,6 +60,8 @@ import { mailerFromEnv, type Mailer } from './mail.ts';
 import { RevisionFeed } from './revisionFeed.ts';
 import { DirWatchers } from '#runtime/local/folderWatch';
 import { SheetStore, validateWorkbook } from './sheets.ts';
+import { toSearchHit } from './search.ts';
+import { parseSearch } from '@flow/shared/search';
 import { listSheetCharts, loadLinkedChart, loadLinkedTable } from './linkedTable.ts';
 import { importPptx } from './pptxImport.ts';
 import { isSharableVideo, newLinkToken, publicDeck, TOKEN_RE, type SharedKind } from './publicLinks.ts';
@@ -352,6 +354,9 @@ export async function buildApp(opts: AppOptions) {
   const homeFolder = opts.local ? new LocalFolder(homedir(), path.join(opts.dataDir, 'trash'), opts.local.findByName, HOME_FIND_BUDGET_MS) : null;
   const sheets = folder ? new LocalSheetStore(db, folder, opts.dataDir) : new SheetStore(db, path.join(opts.dataDir, 'sheets'));
   await sheets.init();
+  // Documents the search index does not have yet (saved before it, or changed by another path) are indexed in the
+  // background from the start, not at the first search (server/search.ts). Not awaited; nothing for the desktop app's folder.
+  void sheets.reindexStale();
   /**
    * A save may name the revision (updatedAt) the editor loaded. When it does and the file has been saved
    * since, by another editor or the ChatGPT plugin, the current metadata is returned so the save is refused
@@ -2041,6 +2046,19 @@ export async function buildApp(opts: AppOptions) {
       const d = loaded.data;
       const preview: FilePreview = d.kind === 'doc' ? docPreview(d.doc) : d.kind === 'markdown' ? markdownPreview(d.markdown) : d.kind === 'deck' ? deckPreview(d.deck) : sheetPreview(d.workbook);
       return { preview };
+    });
+
+    // Find by the words inside documents (server/search.ts, docs/specs/search.md §5): the query language of
+    // @flow/shared/search, in the organization the request names; `prefix=1` for search as you type.
+    r.get('/api/search', async (req, reply) => {
+      const qs = req.query as { q?: unknown; type?: unknown; limit?: unknown; prefix?: unknown };
+      const text = [String(qs.q ?? ''), qs.type ? `type:${String(qs.type)}` : ''].join(' ').trim().slice(0, 1000);
+      const query = parseSearch(text);
+      if (!query.groups.length && !Object.keys(query.filters).length) return reply.code(400).send({ error: 'Say what to look for.' });
+      const scope = scopeOf(req.scope);
+      const limit = Math.min(Math.max(Number(qs.limit) || 20, 1), 100);
+      const hits = sheets.searchContent(req.viewer, query, { workspaceId: scope.workspaceId, limit, prefixLast: qs.prefix === '1' });
+      return { hits: hits.map(toSearchHit) };
     });
 
     // Find by name through the whole library, every folder (the desktop app: the whole mounted folder).

@@ -19,6 +19,8 @@ import { SheetController } from '../../client/src/state/controller.ts';
 import { openDb, type DB } from '../../server/db.ts';
 import { FolderStore, type Folders } from '../../server/folders.ts';
 import { cleanFolderPath } from '../../shared/folders.ts';
+import type { SearchHit, SearchQuery } from '@flow/shared/search';
+import { toSearchHit } from '../../server/search.ts';
 import type { ScopeArg, ViewerArg } from '../../server/scope.ts';
 import { ImageStore } from '../../server/images.ts';
 import { SheetStore, validateWorkbook } from '../../server/sheets.ts';
@@ -472,6 +474,16 @@ export class FileService {
       ...(this.orgId && meta ? { root: meta.shared ? 'Organization files' : 'My files' } : {}),
       ...(this.hub.appUrl ? { url: `${this.hub.appUrl}/${page}/${encodeURIComponent(f.id)}` } : {}),
     };
+  }
+
+  /** Documents by the words inside them (server/search.ts), the organization's and the user's own, with their pages in the app. */
+  searchContent(query: SearchQuery, limit: number): SearchHit[] {
+    return this.sheets.searchContent(this.who, query, { workspaceId: this.orgId, limit }).map(toSearchHit);
+  }
+
+  /** A hit's page in the app, as list_files gives it (`placed`); the in-app path without an app address. */
+  hitUrl(h: SearchHit): string {
+    return this.hub.appUrl ? `${this.hub.appUrl}${h.url}` : h.url;
   }
 
   /**

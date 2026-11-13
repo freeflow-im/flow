@@ -12,6 +12,7 @@ import { editElementsV1, schemas } from '../../server/agent/tools.ts';
 import { MAX_OUTLINE_BLOCKS } from '../../shared/agent/docRead.ts';
 import type { ThemeId } from '../../shared/deck.ts';
 import { webImportName } from '../../server/importFile.ts';
+import { contentSearchLimit, contentSearchQuery, contentSearchResult, SEARCH_CONTENT_DESCRIPTION } from '../../server/search.ts';
 import { fetchPublicFile, WebFetchError, type FetchedFile } from '../../server/webFetch.ts';
 import { appName } from '../../shared/brand.ts';
 import type { ImageJobResult, LiveResult, ToolImage } from './files.ts';
@@ -368,6 +369,21 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
             ...(files.length > limit || folders.length > MAX_LISTED ? { truncated: true, note: 'Not everything is listed: narrow it with query or kind, or use search_files.' } : {}),
             ...service.state(),
           });
+        }),
+    );
+    server.registerTool(
+      'search_content',
+      {
+        title: 'Search inside files',
+        description: SEARCH_CONTENT_DESCRIPTION,
+        inputSchema: schemas.search_content.shape,
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      },
+      async (input) =>
+        guard(async () => {
+          const q = contentSearchQuery(input);
+          if (!q.groups.length && !Object.keys(q.filters).length) throw new ToolError('Say what to look for in query.');
+          return ok({ ...JSON.parse(contentSearchResult(service.searchContent(q, contentSearchLimit(input)), (h) => service.hitUrl(h))), ...service.state() });
         }),
     );
     server.registerTool(

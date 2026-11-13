@@ -26,6 +26,10 @@
       "types": "./dist/addresses.d.ts",
       "import": "./dist/addresses.js"
     },
+    "./search": {
+      "types": "./dist/search.d.ts",
+      "import": "./dist/search.js"
+    },
     "./assistant": {
       "types": "./dist/assistant.d.ts",
       "import": "./dist/assistant.js"

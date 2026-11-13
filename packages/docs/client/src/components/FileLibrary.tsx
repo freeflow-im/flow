@@ -2,6 +2,7 @@
 // per-row menu, plus the create, rename and delete prompts and the import progress. It is the home page
 // of the app (client/src/pages/HomePage.tsx) and the library inside ChatGPT (plugin/web/Library.tsx);
 // each passes its own data source, actions and header controls, so both look and behave the same.
+import { SearchSnippet } from './SearchSnippet.tsx';
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import { isHtmlName, opensInApp, type SheetMeta } from '../../../shared/types.ts';
 import { DeckIcon, DocIcon, FileIcon, Logo, MarkdownIcon } from './Logo.tsx';
@@ -33,6 +34,8 @@ export interface LibraryItem {
   updatedAt: string;
   createdAt: string;
   branch?: SheetMeta['branch'];
+  /** A search result found by its words: the text around them (SearchSnippet). */
+  snippet?: string;
 }
 
 /** A list beside the folder's (FileLibrary's `otherLists`). */
@@ -1050,6 +1053,7 @@ export function FileLibrary(props: FileLibraryProps) {
                   {results && <> · {whereTag(s.folder ?? '')}</>}
                   {s.branch && <> · branch</>}
                 </div>
+                {results && s.snippet && <div className="found-snippet"><SearchSnippet text={s.snippet} /></div>}
               </div>
             ))}
           </div>
@@ -1138,6 +1142,7 @@ export function FileLibrary(props: FileLibraryProps) {
                       </>,
                     )}
                     </span>
+                    {results && s.snippet && <div className="found-snippet"><SearchSnippet text={s.snippet} /></div>}
                   </td>
                   <td className="col-type">{kindLabel(s)}</td>
                   <td>{formatWhen(s.updatedAt)}</td>

@@ -79,12 +79,22 @@ describe('MCP server', () => {
     const newer = (await v2.listTools()).tools;
     expect(v2.getServerVersion()?.version).toBe('0.3.0');
     expect(v2.getInstructions()).toContain('read_file');
-    const added = ['search_files', 'create_folder', 'move_file', 'upload_file', 'read_file', 'edit_file', 'convert_pdf_to_markdown', 'add_chart', 'edit_chart', 'delete_chart'];
+    const added = ['search_content', 'search_files', 'create_folder', 'move_file', 'upload_file', 'read_file', 'edit_file', 'convert_pdf_to_markdown', 'add_chart', 'edit_chart', 'delete_chart'];
     expect(newer.map((t) => t.name).filter((n) => !tools.some((t) => t.name === n))).toEqual(added);
     // Besides those, three tools differ: list_files knows about folders, transform_image puts pictures on top, and edit_elements places an arc by its own box or its center and radius.
     expect(newer.filter((t) => !added.includes(t.name) && JSON.stringify(t) !== JSON.stringify(tools.find((o) => o.name === t.name))).map((t) => t.name)).toEqual(['list_files', 'import_file', 'transform_image', 'edit_elements']);
     expect(newer.find((t) => t.name === 'transform_image')?.inputSchema.properties).toHaveProperty('overlays');
     expect(tools.find((t) => t.name === 'transform_image')?.inputSchema.properties).not.toHaveProperty('overlays');
+    await v2.close();
+  });
+
+  it('finds documents by the words inside them in version 2 (search_content)', async () => {
+    const v2 = await connect(2);
+    await call('create_doc', { title: 'Field notes', markdown: 'The kestrel hovers before it dives.' }, v2);
+    const found = (await call('search_content', { query: 'hovering kestrel' }, v2)).data!;
+    expect(found).toMatchObject({ total: 1, hits: [{ kind: 'doc', title: 'Field notes', snippet: expect.stringContaining('«kestrel»') }] });
+    expect((await call('search_content', { query: 'kestrel', type: 'sheet' }, v2)).data).toMatchObject({ total: 0 });
+    expect((await call('search_content', { query: ' ' }, v2)).isError).toBe(true);
     await v2.close();
   });
 
