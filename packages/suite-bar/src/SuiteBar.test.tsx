@@ -91,6 +91,18 @@ describe('SuiteBar', () => {
     expect(screen.getByLabelText('3 unread')).toBeTruthy();
   });
 
+  it('opens another app in its own browser tab, and names this tab for its app', () => {
+    setup({
+      tabs: [
+        { id: 'home', label: 'Home', href: '/home/', active: true },
+        { id: 'mail', label: 'Mail', href: '/mail/' },
+      ],
+    });
+    expect(screen.getByTestId('suite-tab-mail').getAttribute('target')).toBe('freeflow-mail');
+    expect(screen.getByTestId('suite-tab-home').getAttribute('target')).toBeNull();
+    expect(window.name).toBe('freeflow-home');
+  });
+
   it("the logo goes to the app's home", () => {
     const home = vi.fn();
     setup({ home: { href: '/docs/', onSelect: home } });
