@@ -1,7 +1,7 @@
 // Channel member list hung off the header avatar stack (issue #70). Kept as a
 // pure presentational component — ChannelView owns the fetch, presence lookup
 // and the user-card handoff, so the ordering rule stays unit-testable.
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Avatar } from './Avatar';
 
 export interface MemberRow {
@@ -13,6 +13,8 @@ export interface MemberRow {
   statusText?: string;
   online: boolean;
   isSelf?: boolean;
+  /** You may take this member out of the channel: an owner or admin may take anyone, a person their own assistant. */
+  removable?: boolean;
 }
 
 /** Online first, then alphabetical — the roster is short, so no other grouping. */
@@ -29,6 +31,7 @@ export default function ChannelMembersPopover({
   loading = false,
   onSelect,
   onAdd,
+  onRemove,
   onClose,
 }: {
   rows: MemberRow[];
@@ -36,10 +39,24 @@ export default function ChannelMembersPopover({
   onSelect: (userId: string) => void;
   /** "Add people", for a channel people can be added to. */
   onAdd?: () => void;
+  /** Takes a removable member out of the channel; rejects with what to show when the server refuses. */
+  onRemove?: (userId: string) => Promise<void>;
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const ordered = orderMembers(rows);
+  // Remove asks once more on the row itself ("Remove?"), as Really delete? does elsewhere.
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const remove = async (userId: string) => {
+    setError(null);
+    try {
+      await onRemove?.(userId);
+      setConfirming(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not remove them from the channel.');
+    }
+  };
 
   // Dismiss like the other header affordances: click anywhere outside, or Esc.
   // The trigger button lives outside this node, so it toggles on its own click
@@ -85,11 +102,12 @@ export default function ChannelMembersPopover({
       {rows.length === 0 && (
         <p className="px-2 py-2 text-sm text-faint">{loading ? 'Loading…' : 'No members.'}</p>
       )}
+      {error && <p data-testid="channel-member-remove-error" className="px-2 py-1 text-[12px] text-red-600">{error}</p>}
       {ordered.map((m) => (
+        <div key={m.userId} className="group flex items-center gap-1 rounded-[9px] hover:bg-accent/10">
         <button
-          key={m.userId}
           data-testid={`channel-member-${m.displayName}`}
-          className="flex w-full items-center gap-2.5 rounded-[9px] p-1.5 text-left hover:bg-accent/10"
+          className="flex min-w-0 flex-1 items-center gap-2.5 rounded-[9px] p-1.5 text-left"
           onClick={() => onSelect(m.userId)}
         >
           <Avatar userId={m.userId} name={m.displayName} avatarUrl={m.avatarUrl} size={26} radius={9} />
@@ -109,6 +127,17 @@ export default function ChannelMembersPopover({
             className={`inline-block h-2 w-2 shrink-0 rounded-full ${m.online ? 'bg-online' : 'border-[1.5px] border-hairline'}`}
           />
         </button>
+        {m.removable && onRemove && (
+          <button
+            data-testid={`channel-member-remove-${m.displayName}`}
+            aria-label={confirming === m.userId ? `Confirm removing ${m.displayName} from the channel` : `Remove ${m.displayName} from the channel`}
+            className={`shrink-0 rounded-[7px] px-1.5 py-1 text-[11.5px] font-semibold ${confirming === m.userId ? 'bg-red-600 text-white hover:bg-red-700' : 'text-faint hover:text-red-600'}`}
+            onClick={() => (confirming === m.userId ? void remove(m.userId) : setConfirming(m.userId))}
+          >
+            {confirming === m.userId ? 'Remove?' : 'Remove'}
+          </button>
+        )}
+        </div>
       ))}
     </div>
   );
