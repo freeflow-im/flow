@@ -64,6 +64,7 @@ export type AgentContext = (
     }
   | MailContext
   | CalendarContext
+  | ChatContext
 ) & BrowserReach;
 
 /**
@@ -129,6 +130,19 @@ export interface CalendarContext {
   event?: { id: string; summary: string; start: string; end: string; allDay: boolean; calendar: string; native?: boolean; role?: 'owner' | 'manager' | 'editor' | 'viewer' };
   /** What Calendar's search looks for, when its results are shown. */
   search?: string;
+}
+
+/**
+ * FreeFlow Chat (the hosted suite only): the person asked their assistant in Chat (agents.md §1.1), and the Worker runs
+ * the turn. The answer posts where it was asked. Channel ids are Chat's.
+ */
+export interface ChatContext {
+  page: 'chat';
+  /** Where the request was asked, and so where the answer posts: the channel, and the thread's root in a thread. */
+  channelId: string;
+  threadRootId: string | null;
+  /** `private`: a conversation of the assistant and the person alone; `shared`: others in it read the answer too. */
+  audience: 'private' | 'shared';
 }
 
 /** Most calendars a Calendar context names. */

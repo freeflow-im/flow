@@ -35,7 +35,9 @@ import { checkBraveKey } from '@flow/docs/server/agent/tools.ts';
 import { ASSISTANT_PAGES, SUITE_GUIDANCE } from '../docs/assistantTools.ts';
 import { isFileId } from '@flow/docs/server/ids.ts';
 import { scopeOf, type ScopeArg } from '@flow/docs/server/scope.ts';
-import { chatScope, HOME_CHAT, isChatScope, type AgentDefinition, type AgentEvent, type AgentTurnRequest, type AssistantSettingsUpdate } from '@flow/docs/shared/agent/protocol.ts';
+import { chatScope, HOME_CHAT, isChatScope, type AgentDefinition, type AgentEvent, type AgentTurnRequest, type AssistantSettingsUpdate, type ClientToolCall } from '@flow/docs/shared/agent/protocol.ts';
+import { postCard } from './chatTools.ts';
+import type { Org } from '../org/object';
 import { docsPageUrl, docsToolContext, importToDocs, type DocsFetch, type DocsPlace } from './docsTools.ts';
 
 export type { DocsCaller };
@@ -65,6 +67,8 @@ export interface AssistantEnv {
 const WAKE_TURN_MS = 8 * 60_000;
 /** How often a Chat turn says it is still at work (Chat drops a typing event after 5 s). */
 const TYPING_EVERY_MS = 3_000;
+/** Most times one Chat run goes back to the model after running its Chat tools (each round is up to the loop's own steps). */
+const MAX_CHAT_ROUNDS = 8;
 
 /**
  * The tables, Docs' own DDL for them (docs/server/db.ts, with its later columns) without the `users` references: this
@@ -413,17 +417,62 @@ export class Assistant extends DurableObject<AssistantEnv> {
   /**
    * A request to a person's assistant in Chat (agents.md §1.1), handed over by the organization's object: run as an async
    * turn with the sponsor's access (marked `via` the assistant), in one conversation per thread or DM so its memory of
-   * one exchange stays with it, and the answer posted in Chat as the assistant itself.
+   * one exchange stays with it, and the answer posted in Chat as the assistant itself. `audience`: whether others read
+   * that conversation (a mention in a channel) or only the two of them do.
    */
-  async chatTurn(p: { organizationId: string; runtime: HostedRuntimeDTO; channelId: string; threadRootId: string | null; messageId: string; prompt: string }): Promise<void> {
-    await this.useOrgModel(p.organizationId);
-    const { runtime, organizationId } = p;
+  async chatTurn(p: { organizationId: string; runtime: HostedRuntimeDTO; channelId: string; threadRootId: string | null; messageId: string; prompt: string; audience?: 'private' | 'shared' }): Promise<void> {
+    const run: ChatRun = { organizationId: p.organizationId, runtime: p.runtime, channelId: p.channelId, threadRootId: p.threadRootId, audience: p.audience ?? (p.threadRootId ? 'shared' : 'private') };
+    await this.runChat(run, p.messageId, { message: p.prompt });
+  }
+
+  /**
+   * The sponsor's ✅ or ❌ on a card the assistant left for a post (assistant/chatTools.ts), from the organization's object,
+   * which checked it is the sponsor's reaction on this assistant's message. A card the turn has moved past (the sponsor
+   * wrote again) is dropped. ✅ posts, as the assistant; then the turn goes on with the outcome, and its answer is posted.
+   */
+  async chatCardAnswered(p: { organizationId: string; runtime: HostedRuntimeDTO; cardMessageId: string; approve: boolean }): Promise<void> {
+    const key = `card:${p.cardMessageId}`;
+    const raw = this.state(key);
+    if (!raw) return;
+    this.sql.exec('DELETE FROM assistant_state WHERE key = ?', key);
+    const card = JSON.parse(raw) as ChatCard;
+    if (card.run.runtime.agentId !== p.runtime.agentId || card.run.organizationId !== p.organizationId) return;
+    // The sponsor wrote again instead of answering: the turn no longer waits on this post, so nothing is posted.
+    const conversation = chatConversation(card.run);
+    if (!(await withDocsContext(this.context, async () => this.service().agent.pendingCalls(conversation, HOME_CHAT, p.organizationId).includes(card.callId)))) return;
+    const ORG = this.env.ORG;
+    const org = ORG?.get(ORG.idFromName(p.organizationId));
+    let result: { id: string; content: string; isError?: boolean };
+    if (!p.approve) result = { id: card.callId, content: 'The user declined with ❌: nothing was posted.' };
+    else {
+      try {
+        if (!org) throw new Error('Chat is not reachable here.');
+        const posted = await org.assistantPost({ agentUserId: p.runtime.agentId, channelId: card.input.channelId, threadRootId: card.input.threadRootId ?? null, body: card.input.text, clientMsgId: `assistant-post:${card.callId}` });
+        result = { id: card.callId, content: `The user approved with ✅. Posted in #${card.channelName}${card.input.threadRootId ? ' (in the thread)' : ''}${posted.joined ? ', after joining it' : ''}.` };
+      } catch (err) {
+        result = { id: card.callId, content: `The post was approved but failed: ${(err as Error).message}`, isError: true };
+      }
+    }
+    await this.runChat(card.run, key, { toolResults: [...card.others, result] }, card.callId);
+  }
+
+  /**
+   * One run of a Chat conversation's turn: the model loop, and each time it pauses for the Chat tools, those run here
+   * through the Org object with the sponsor's access and the loop goes on with their results. send_message stops the run
+   * at a card instead (only in a private conversation, where the card itself shows no one else the post); its answer is
+   * chatCardAnswered. The text the turn wrote is posted as the assistant, before the card if there is one.
+   * `expectCall`: the call a card answers; if the turn no longer waits on it (the sponsor wrote again), nothing runs.
+   */
+  private async runChat(run: ChatRun, jobKey: string, first: Pick<AgentTurnRequest, 'message' | 'toolResults'>, expectCall?: string): Promise<void> {
+    await this.useOrgModel(run.organizationId);
+    const { runtime, organizationId } = run;
     if (runtime.mode !== 'personal' || !runtime.sponsorId || !runtime.sponsorAccountId) return;
-    if (this.runningJobs.has(p.messageId)) return;
-    this.runningJobs.add(p.messageId);
+    if (this.runningJobs.has(jobKey)) return;
+    this.runningJobs.add(jobKey);
     const ORG = this.env.ORG;
     const org = ORG?.get(ORG.idFromName(organizationId));
-    const conversation = `chat:${p.channelId}:${p.threadRootId ?? 'main'}`;
+    const conversation = chatConversation(run);
+    const post = (body: string, clientMsgId: string) => org?.postAsAssistant({ agentUserId: runtime.agentId, channelId: run.channelId, threadRootId: run.threadRootId, body, clientMsgId }) ?? Promise.resolve(null);
     let stopTyping: ReturnType<typeof setInterval> | undefined;
     try {
       this.requireModel();
@@ -439,37 +488,92 @@ export class Assistant extends DurableObject<AssistantEnv> {
       if (wrong) throw new Error(wrong);
       const docs: DocsCaller = { userId: actorId, email: user.email, token: '', ip: '', accountId: account.id, channelIds };
       this.turnWho.set(conversation, { caller, docs, conversationUser: conversation });
+      if (expectCall && !(await withDocsContext(this.context, async () => this.service().agent.pendingCalls(conversation, HOME_CHAT, organizationId).includes(expectCall)))) return;
       // "Thinking…" in Chat while the turn runs: a typing event now and every few seconds (the clients drop one after 5 s).
-      const typing = () => void org?.agentTyping({ agentUserId: runtime.agentId, channelId: p.channelId, threadRootId: p.threadRootId }).catch(() => undefined);
+      const typing = () => void org?.agentTyping({ agentUserId: runtime.agentId, channelId: run.channelId, threadRootId: run.threadRootId }).catch(() => undefined);
       typing();
       stopTyping = setInterval(typing, TYPING_EVERY_MS);
-      const text = await withDocsContext(this.context, async () => {
-        const { agent } = this.service();
-        const abort = new AbortController();
-        const timer = setTimeout(() => abort.abort(), WAKE_TURN_MS);
-        let out = '';
-        let failed: string | null = null;
-        try {
-          await agent.runTurn(conversation, { message: p.prompt, context: { page: 'home' }, workspace: organizationId, timezone: user.timezone }, (e) => {
-            if (e.type === 'text') out += e.text;
-            else if (e.type === 'error') failed = e.message;
-          }, abort.signal, { scope: { ownerId: actorId, workspaceId: organizationId, private: true }, viewer: actorId });
-        } finally {
-          clearTimeout(timer);
+      const context = { page: 'chat' as const, channelId: run.channelId, threadRootId: run.threadRootId, audience: run.audience };
+      let req = first;
+      let text = '';
+      for (let round = 0; round < MAX_CHAT_ROUNDS; round++) {
+        const { out, calls } = await withDocsContext(this.context, async () => {
+          const { agent } = this.service();
+          const abort = new AbortController();
+          const timer = setTimeout(() => abort.abort(), WAKE_TURN_MS);
+          let out = '';
+          let calls: ClientToolCall[] = [];
+          let failed: string | null = null;
+          try {
+            await agent.runTurn(conversation, { ...req, context, workspace: organizationId, timezone: user.timezone }, (e) => {
+              if (e.type === 'text') out += e.text;
+              else if (e.type === 'client_tools') calls = e.calls;
+              else if (e.type === 'error') failed = e.message;
+            }, abort.signal, { scope: { ownerId: actorId, workspaceId: organizationId, private: true }, viewer: actorId });
+          } finally {
+            clearTimeout(timer);
+          }
+          if (failed) throw new Error(failed);
+          return { out, calls };
+        });
+        text += out;
+        if (!calls.length) break;
+        const results: ChatCard['others'] = [];
+        let card: Omit<ChatCard, 'others'> | null = null;
+        for (const c of calls) {
+          if (c.name === 'send_message' && !card) {
+            const made = await this.prepareCard(run, c, org);
+            if ('error' in made) results.push({ id: c.id, content: made.error, isError: true });
+            else card = made;
+          } else if (c.name === 'send_message') {
+            results.push({ id: c.id, content: 'One post at a time: ask for this one again after the user answers the first card.', isError: true });
+          } else results.push(await this.runChatTool(runtime.agentId, c, org));
         }
-        if (failed) throw new Error(failed);
-        return out.trim();
-      });
+        if (card) {
+          clearInterval(stopTyping);
+          if (text.trim()) await post(text.trim(), `assistant:${jobKey}:${round}`);
+          const cardId = await post(postCard({ channelName: card.channelName, threadRootId: card.input.threadRootId, text: card.input.text, joins: card.joins }), `card:${card.callId}`);
+          if (cardId) this.setState(`card:${cardId}`, JSON.stringify({ ...card, others: results } satisfies ChatCard));
+          return;
+        }
+        req = { toolResults: results };
+      }
       clearInterval(stopTyping);
-      if (text && org) await org.postAsAssistant({ agentUserId: runtime.agentId, channelId: p.channelId, threadRootId: p.threadRootId, body: text, clientMsgId: `assistant:${p.messageId}` });
+      if (text.trim()) await post(text.trim(), `assistant:${jobKey}`);
     } catch (err) {
       clearInterval(stopTyping);
-      console.error(`[assistant] chat ${p.messageId}: ${(err as Error)?.stack ?? err}`);
-      if (org) await org.postAsAssistant({ agentUserId: runtime.agentId, channelId: p.channelId, threadRootId: p.threadRootId, body: `Sorry, I could not answer that: ${agentErrorMessage(err).slice(0, 300)}`, clientMsgId: `assistant:${p.messageId}` }).catch(() => null);
+      console.error(`[assistant] chat ${jobKey}: ${(err as Error)?.stack ?? err}`);
+      await post(`Sorry, I could not answer that: ${agentErrorMessage(err).slice(0, 300)}`, `assistant:${jobKey}`)?.catch(() => null);
     } finally {
       clearInterval(stopTyping);
       this.turnWho.delete(conversation);
-      this.runningJobs.delete(p.messageId);
+      this.runningJobs.delete(jobKey);
+    }
+  }
+
+  /** A card for a send_message call, checked first: a private conversation, and a channel the sponsor is in. */
+  private async prepareCard(run: ChatRun, c: ClientToolCall, org: OrgStub | undefined): Promise<Omit<ChatCard, 'others'> | { error: string }> {
+    if (run.audience !== 'private') return { error: 'Posting elsewhere needs the user’s approval on a card, which would show the post to everyone here. Tell the user to ask you in your direct messages instead.' };
+    if (!org) return { error: 'Chat is not reachable here.' };
+    const input = c.input as ChatCard['input'];
+    try {
+      const target = (await org.assistantChat({ agentUserId: run.runtime.agentId, op: 'target', channelId: input.channelId })) as { name: string; assistantIsMember: boolean };
+      return { run, callId: c.id, input, channelName: target.name, joins: !target.assistantIsMember };
+    } catch (err) {
+      return { error: (err as Error).message };
+    }
+  }
+
+  /** list_channels, read_messages or leave_channel, through the Org object as the assistant's sponsor. */
+  private async runChatTool(agentUserId: string, c: ClientToolCall, org: OrgStub | undefined): Promise<ChatCard['others'][number]> {
+    const op = c.name === 'list_channels' ? 'channels' : c.name === 'read_messages' ? 'read' : c.name === 'leave_channel' ? 'leave' : null;
+    if (!op) return { id: c.id, content: `${c.name} works only in the app, not in Chat.`, isError: true };
+    if (!org) return { id: c.id, content: 'Chat is not reachable here.', isError: true };
+    try {
+      const input = c.input as { channelId?: string; limit?: number };
+      return { id: c.id, content: JSON.stringify(await org.assistantChat({ agentUserId, op, channelId: input.channelId, limit: input.limit })) };
+    } catch (err) {
+      return { id: c.id, content: (err as Error).message, isError: true };
     }
   }
 
@@ -802,3 +906,27 @@ function placeOf(scope: ScopeArg): DocsPlace | null {
   const s = scopeOf(scope);
   return s.workspaceId ? { workspace: s.workspaceId, shared: !s.private } : null;
 }
+
+/** Where a Chat conversation is, and who reads it: what a run needs again when a card is answered. */
+interface ChatRun {
+  organizationId: string;
+  runtime: HostedRuntimeDTO;
+  channelId: string;
+  threadRootId: string | null;
+  audience: 'private' | 'shared';
+}
+
+/** A card waiting for the sponsor's ✅ or ❌ (kept under `card:<message id>`), with the results of the turn's other calls. */
+interface ChatCard {
+  run: ChatRun;
+  callId: string;
+  input: { channelId: string; text: string; threadRootId?: string };
+  channelName: string;
+  joins: boolean;
+  others: { id: string; content: string; isError?: boolean }[];
+}
+
+type OrgStub = DurableObjectStub<Org>;
+
+/** A Chat conversation's chat in the loop's store: one per DM or thread, so its memory stays with that exchange. */
+const chatConversation = (run: Pick<ChatRun, 'channelId' | 'threadRootId'>) => `chat:${run.channelId}:${run.threadRootId ?? 'main'}`;
