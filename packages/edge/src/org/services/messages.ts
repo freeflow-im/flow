@@ -19,6 +19,7 @@ import { scheduleForMessage, unfurlsForMessages } from './unfurl/index.js';
 import { requireMembership, notExternalAgent } from './workspaces.js';
 import { expandMentions as expandMentionText } from '../lib/mentionExpansion.js';
 import { inList } from '../sqlList.js';
+import { indexMessage } from './search.js';
 
 const { messages, channelMembers, messageFiles, notifications, users, workspaceMembers } = schema;
 
@@ -264,6 +265,8 @@ export async function sendMessage(
     return (await hydrate([winner[0]!]))[0]!;
   }
 
+  // Search (services/search.ts): before anyone is told of it, so a search right after finds it.
+  await indexMessage(id);
   const dto = toMessageDTO(row, { files: attachRows.map(toFileDTO) });
   publishEvent(subjectMsg(chan.workspaceId, channelId), {
     type: threadRootId ? 'thread.reply' : 'message.created',
@@ -595,6 +598,7 @@ export async function editMessage(messageId: string, userId: string, body: strin
     .set({ body: enc.body, bodyNonce: enc.bodyNonce, encKeyId: enc.encKeyId, encScheme: enc.encScheme, editedAt })
     .where(eq(messages.id, messageId))
     .returning();
+  await indexMessage(messageId);
   const dto = (await hydrate([updated[0]!]))[0]!;
   publishEvent(subjectMsg(chan.workspaceId, row.channelId), {
     type: 'message.updated',

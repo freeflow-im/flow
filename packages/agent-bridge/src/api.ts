@@ -65,6 +65,20 @@ export function filenameFromDisposition(header: string | null): string | undefin
  */
 const REQUEST_TIMEOUT_MS = 30_000;
 
+/** One message the server's search found. */
+export interface MessageSearchHit {
+  id: string;
+  /** `#name`, or `Direct message`. */
+  title: string;
+  /** The text around the matched words, which sit between \u0002 and \u0003. */
+  snippet: string;
+  author?: string;
+  at: string;
+  channelId: string;
+  threadRootId: string | null;
+  authorName: string;
+}
+
 export class FlowApiError extends Error {
   constructor(
     public readonly status: number,
@@ -268,6 +282,11 @@ export class FlowApi {
 
   listMessages(channelId: string, limit = 50, before?: string): Promise<MessagePage> {
     return this.req('GET', `/v1/channels/${channelId}/messages?limit=${limit}${before ? `&before=${before}` : ''}`);
+  }
+
+  /** Message search (the server's GET /v1/workspaces/:id/search): the query language of docs/specs/search.md §3. */
+  searchMessages(workspaceId: string, q: string, limit = 10): Promise<{ hits: MessageSearchHit[] }> {
+    return this.req('GET', `/v1/workspaces/${workspaceId}/search?q=${encodeURIComponent(q)}&limit=${limit}`);
   }
 
   joinChannel(channelId: string): Promise<unknown> {
