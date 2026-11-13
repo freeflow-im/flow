@@ -16,7 +16,7 @@ import type { ImageStore } from '../images.ts';
 import type { PdfMaker } from '../pdf.ts';
 import { assistantTools, isBrowserTool, runServerTool, ToolFailure, validateToolInput, type ServerToolEnvExtensions } from './tools.ts';
 import { closeSearches, deferTools, keepReferencedTools, openSearches, TOOL_SEARCH_PROMPT } from './toolSearch.ts';
-import { portableHistory } from './history.ts';
+import { answerOpenCalls, portableHistory } from './history.ts';
 import { scopeOf, type ScopeArg, type ViewerArg } from '../scope.ts';
 
 type Message = Anthropic.Beta.BetaMessage;
@@ -290,7 +290,8 @@ export class AgentService {
             tools: deferred ? keepReferencedTools(tools, this.store.messages(conv.id)) : tools,
             // Caches the whole prefix up to the latest message; each turn reads the previous one's cache.
             cache_control: { type: 'ephemeral' },
-            messages: this.store.messages(conv.id),
+            // A turn cut off mid-call leaves a call with no result, which every provider refuses (history.ts).
+            messages: answerOpenCalls(this.store.messages(conv.id)),
           },
           { onText: (t) => emit({ type: 'text', text: t }), signal },
         );

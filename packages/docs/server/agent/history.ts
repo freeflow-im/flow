@@ -73,3 +73,38 @@ export function portableHistory(messages: MessageParam[], target: HistoryTarget)
   }
   return changed ? out : messages;
 }
+
+/** What an unanswered tool call is answered with: its turn stopped (a restart or a deploy) before its result was saved. */
+export const INTERRUPTED_RESULT = 'This tool call was interrupted before it finished (the turn stopped), so it has no result. Run it again if it is still needed.';
+
+/**
+ * The history with every tool call answered. A turn cut off between a tool call and its saved result (the Worker restarted
+ * mid-turn) leaves a `tool_use` with no `tool_result`, and every provider then refuses the whole conversation ("No tool
+ * output found for function call"), so the chat could never be used again. Each such call gets an error result, at the
+ * start of the next user message (or a new one at the end). A history with nothing open comes back as it is.
+ */
+export function answerOpenCalls(messages: MessageParam[]): MessageParam[] {
+  let changed = false;
+  const out: MessageParam[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i]!;
+    out.push(m);
+    if (m.role !== 'assistant' || typeof m.content === 'string') continue;
+    const calls = (m.content as Block[]).filter((b) => b.type === 'tool_use').map((b) => b.id!);
+    if (!calls.length) continue;
+    const next = messages[i + 1];
+    const answered = new Set(next && next.role === 'user' && typeof next.content !== 'string' ? (next.content as Block[]).filter((b) => b.type === 'tool_result').map((b) => b.tool_use_id!) : []);
+    const open = calls.filter((id) => !answered.has(id));
+    if (!open.length) continue;
+    changed = true;
+    const results = open.map((id) => ({ type: 'tool_result', tool_use_id: id, content: INTERRUPTED_RESULT, is_error: true }));
+    if (next && next.role === 'user') {
+      const rest = typeof next.content === 'string' ? [{ type: 'text', text: next.content }] : next.content;
+      out.push({ ...next, content: [...results, ...rest] as MessageParam['content'] });
+      i++;
+    } else {
+      out.push({ role: 'user', content: results as MessageParam['content'] });
+    }
+  }
+  return changed ? out : messages;
+}
