@@ -217,10 +217,25 @@ function isMod(e: KeyboardEvent): boolean {
   return (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey;
 }
 
+/**
+ * In a browser, another app opens in a browser tab of its own, named for the app, so choosing it again from any tab
+ * returns to that one rather than opening more. The desktop and native apps show one page at a time, so they stay.
+ */
+export function appsOpenApart(): boolean {
+  if (typeof window === 'undefined' || window.top !== window.self) return false;
+  if (/Electron/.test(navigator.userAgent)) return false;
+  return !(window as { webkit?: { messageHandlers?: unknown } }).webkit?.messageHandlers;
+}
+
+/** The browser tab an app opens in (window.name). */
+export const appWindowName = (appId: string) => `freeflow-${appId}`;
+
 function followTab(tab: SuiteTab): void {
   if (tab.disabled) return;
   if (tab.onSelect) tab.onSelect();
-  else if (!tab.active) window.location.assign(tab.href);
+  else if (tab.active) return;
+  else if (appsOpenApart()) window.open(tab.href, appWindowName(tab.id));
+  else window.location.assign(tab.href);
 }
 
 /**
@@ -231,6 +246,10 @@ export function SuiteBar(props: SuiteBarProps) {
   const [inHome] = useState(isInHome);
   const ownApp = props.tabs.find((t) => t.active)?.id ?? '';
   useEffect(() => (inHome ? routeLinksToHome(ownApp) : undefined), [inHome, ownApp]);
+  // This browser tab is the app's own: another app's bar sends this app here instead of to a new tab.
+  useEffect(() => {
+    if (!inHome && ownApp && appsOpenApart()) window.name = appWindowName(ownApp);
+  }, [inHome, ownApp]);
   return inHome ? null : <TheSuiteBar {...props} />;
 }
 
@@ -259,6 +278,7 @@ function TheSuiteBar({ tabs, organization, search, assistant, notifications, acc
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
   const keys = tabKeys(tabs);
+  const [apart] = useState(appsOpenApart);
 
   const closeSearch = () => {
     setSearching(false);
@@ -447,6 +467,7 @@ function TheSuiteBar({ tabs, organization, search, assistant, notifications, acc
               key={tab.id}
               className="sb-tab"
               href={tab.href}
+              target={!tab.active && !tab.onSelect && apart ? appWindowName(tab.id) : undefined}
               aria-current={tab.active ? 'page' : undefined}
               title={keys[i] ? `${tab.title ?? tab.label} (⌘${keys[i]})` : (tab.title ?? tab.label)}
               data-testid={`suite-tab-${tab.id}`}

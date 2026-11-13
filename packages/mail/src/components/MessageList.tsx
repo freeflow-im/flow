@@ -59,9 +59,9 @@ export interface MessageListProps {
   onRowAction?: ((t: ThreadSummary, action: 'archive' | 'delete' | 'read' | 'unread') => void) | undefined;
   /** On a narrow screen, the button that opens the folders. */
   onShowFolders?: (() => void) | undefined;
-  /** On a phone, where the suite bar has no search: a search field of the list's own. */
+  /** The list's own search (the suite bar has none on Mail): runs a search, or ends it with an empty one. */
   onSearch?: ((q: string) => void) | undefined;
-  /** Inside Home, which draws no suite bar (docs/specs/home.md §2): the list's search field always shows, as the bar's would. */
+  /** A wide screen: the search field always shows, beside the folder's name; otherwise the search button opens it. */
   searchBar?: boolean | undefined;
   /** The inbox tabs (InboxTabs), above the rows. */
   tabBar?: ReactNode | undefined;
@@ -86,7 +86,8 @@ export function MessageList(p: MessageListProps) {
   const [searching, setSearching] = useState(false);
   const [draft, setDraft] = useState(p.searchBar ? (p.query ?? '') : '');
   const showSearch = !!p.onSearch && (searching || !!p.searchBar);
-  // Inside Home the field sits beside the folder's name, in the header row; on a phone it opens on a row of its own.
+  // On a wide screen (the full app and Home) the field sits beside the folder's name, in the header row; on a phone it
+  // opens on a row of its own.
   const inlineSearch = showSearch && !!p.searchBar;
   const searchField = (
     <form
@@ -103,7 +104,18 @@ export function MessageList(p: MessageListProps) {
         aria-label="Search mail"
         placeholder={`Search ${p.title}`}
         value={draft}
-        onChange={(e) => setDraft(e.target.value)}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          // Emptying the field ends the search, as the suite bar's did.
+          if (!e.target.value.trim() && p.query) p.onSearch?.('');
+        }}
+        onKeyDown={(e) => {
+          if (e.key !== 'Escape') return;
+          e.stopPropagation();
+          setDraft('');
+          if (p.query) p.onSearch?.('');
+          e.currentTarget.blur();
+        }}
         className={cn('min-w-0 flex-1 rounded-lg border border-border bg-white px-3 text-sm outline-none focus:border-primary', inlineSearch ? 'h-8' : 'h-9')}
       />
     </form>
