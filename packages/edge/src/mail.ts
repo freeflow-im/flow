@@ -1,5 +1,5 @@
-// Mail through Cloudflare's Email Service, as packages/server/src/email/index.ts sends it. With no token (local runs) it
-// goes to the log, so a test can read the link.
+// Mail through Cloudflare's Email Service, as packages/server/src/email/index.ts sends it. With no token (local runs), or
+// to an address at a test domain (isTestAddress), it goes to the log, so a test can read the link.
 import type { Mail } from './directory/core';
 
 export interface MailEnv {
@@ -31,9 +31,19 @@ export function formatFrom(address: string, name?: string): string {
   return `${display} <${address}>`;
 }
 
+/**
+ * An address at a domain reserved for testing (RFC 2606 and 6761: .test, .example, .invalid, .localhost, example.com/net/org).
+ * No one can receive mail there, so it is never sent: it goes to the log, with sending on or off, which is how a local
+ * run's test account (scripts/dev-suite.mjs) and the e2e scripts read their links.
+ */
+export function isTestAddress(to: string): boolean {
+  const domain = to.slice(to.lastIndexOf('@') + 1).trim().toLowerCase().replace(/\.$/, '');
+  return /(^|\.)(test|example|invalid|localhost)$/.test(domain) || /(^|\.)example\.(com|net|org)$/.test(domain);
+}
+
 export async function sendMail(env: MailEnv, mail: OutgoingMail): Promise<void> {
   const from = formatFrom(env.EMAIL_FROM ?? '', mail.fromName);
-  if (!env.EMAIL_API_TOKEN) {
+  if (!env.EMAIL_API_TOKEN || isTestAddress(mail.to)) {
     const extra = `${mail.replyTo ? ` reply_to=${mail.replyTo}` : ''}${mail.html ? ' +html' : ''}${mail.attachments?.length ? ` attachments=${mail.attachments.map((a) => a.filename).join(',')}` : ''}`;
     console.log(`[mail] to=${mail.to} subject="${mail.subject}"${extra} ${mail.text.replace(/\n/g, ' ')}`);
     return;
