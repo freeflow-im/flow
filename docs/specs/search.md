@@ -64,7 +64,8 @@ CREATE VIRTUAL TABLE search_fts USING fts5(title, body, content='search_docs', c
 
 - The filter columns (owner, organization, folder, time, channel, sender) are **not** copied into the index. A search
   joins the hits to the source table, so a move, a share or a change of owner needs no reindexing.
-- `rev` is the source row's revision (`updated_at` for a document). A row whose `rev` differs from its source, or a
+- `rev` is the source row's revision (`updated_at` for a document), after the version of the text extraction (`2:`), so a
+  change to how words are taken reindexes everything. A row whose `rev` differs from its source, or a
   source row with no index row, is stale: a background pass reindexes it. This repairs anything a missed hook left behind.
 - Titles count five times as much as the body in the ranking (`bm25(search_fts, 5.0, 1.0)`).
 
@@ -88,7 +89,7 @@ from:ann type:doc has:attachment after:2026-10-01 before:2026-11-01 in:#sales "q
 | `after:` / `before:` | a date (`2026-10-01`) or a relative one (`7d`, `3m`) |
 | `in:` | a folder (Docs), a channel (Chat) or a mail folder (Mail) |
 | `has:` | `attachment`, `link` |
-| `is:` | `unread`, `starred`, `shared` |
+| `is:` | `unread`, `starred`, `shared`, `private` |
 
 The parser returns words and filters as data. Each source turns the words into an FTS5 `MATCH` expression; every word
 is quoted there, so text from the box is never read as FTS5 syntax. A source ignores a filter that does not apply to it
@@ -133,6 +134,8 @@ scores from different indexes are not comparable, positions are.
 - **API**: `GET /api/search?q=&type=&limit=` on the Docs app, answering `{ hits: SearchHit[] }`.
 - **Tool**: `search_content` for the assistant, MCP clients and the suite's tool registry: the words inside documents,
   with `type`, `after` and `before`. `search_files` stays the search by name.
+- **UI**: the Docs search bar's "Find files" (Enter in the suite bar) and the ⌘P dialog run the name search and this one
+  together, in the root shown, and list each document once, with its snippet under the name.
 - **The desktop app** (a folder of real files) does not index: its files change outside the app. Its search stays by name.
 
 ## 6. Phases

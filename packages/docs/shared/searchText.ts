@@ -46,13 +46,21 @@ function workbookText(wb: Workbook): string[] {
   return lines;
 }
 
+/** Markdown as it reads: without heading, quote and list marks, emphasis, or the addresses of links and pictures. */
+function markdownWords(md: string): string {
+  return md
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/^\s{0,3}(#{1,6}|>+|[-*+]|\d+[.)])\s+/gm, '')
+    .replace(/[*_~`]+/g, '');
+}
+
 /** The document's searchable text. A CSV file is stored as `{ csv }`; its commas split it into words already. */
 export function searchTextOf(kind: DocKind, stored: unknown): string {
   if (!stored || typeof stored !== 'object') return '';
   const s = stored as Record<string, unknown>;
   let text = '';
   if (typeof s.csv === 'string') text = s.csv;
-  else if (kind === 'markdown') text = typeof s.text === 'string' ? s.text : '';
+  else if (kind === 'markdown') text = typeof s.text === 'string' ? markdownWords(s.text) : '';
   else if (kind === 'doc') {
     const out: string[] = [];
     proseText((stored as Doc).content, out);

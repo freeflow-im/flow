@@ -6,6 +6,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parseSearch } from '@flow/shared/search';
 import { grant } from './access.ts';
+import { TEXT_VERSION } from './search.ts';
 import { openDb, type DB } from './db.ts';
 import type { Scope, Viewer } from './scope.ts';
 import { SheetStore } from './sheets.ts';
@@ -43,7 +44,7 @@ afterAll(() => {
 describe('searchTextOf', () => {
   it('reads what a person would read in each kind', () => {
     expect(searchTextOf('doc', doc('Quarterly plan', 'Pricing goes up'))).toBe('Quarterly plan\nPricing goes up');
-    expect(searchTextOf('markdown', { version: 1, text: '# Notes\nhello' })).toBe('# Notes\nhello');
+    expect(searchTextOf('markdown', { version: 1, text: '# Notes\n- **bold** [link](https://x.test) ![pic](a.png)\n> quote' })).toBe('Notes\nbold link pic\nquote');
     const wb = { version: 1, tabs: [{ name: 'Budget', cells: { A1: { v: 'Rent' }, B1: { v: '1200' }, C1: { v: '=SUM(B1:B2)' } } }] };
     expect(searchTextOf('sheet', wb)).toBe('Budget\nRent\n1200');
     const deck = { version: 1, theme: 'x', slides: [{ id: 's', notes: 'say hi', elements: [{ type: 'text', paragraphs: [{ text: 'Roadmap' }] }, { type: 'table', rows: [[{ text: 'Q1' }, { text: 'Launch' }]] }] }] };
@@ -59,6 +60,8 @@ describe('searchContent', () => {
     const hits = find(ann, 'launch');
     expect(hits.map((h) => h.title)).toEqual(['Launch plan', 'Notes']);
     expect(find(ann, 'prices')[0]!.snippet).toContain('\u0002prices\u0003');
+    // Only the title matched: no snippet of an unrelated body.
+    expect(find(ann, 'launch').find((h) => h.title === 'Launch plan')!.snippet).toBe('');
     // Stemming: "pricing" finds "prices"; and a later save replaces the words.
     expect(titles(ann, 'pricing')).toEqual(['Launch plan']);
     await sheets.saveDoc(ann, plan.id, doc('Prices stay the same.'));
@@ -117,7 +120,11 @@ describe('searchContent', () => {
     db.prepare("UPDATE sheets SET updated_at = '2999-01-01T00:00:00.000Z' WHERE id = ?").run(changed.id);
     await sheets.reindexStale();
     expect(titles(ann, 'heron')).toEqual(['Old memo']);
-    expect(db.prepare("SELECT rev FROM search_docs WHERE object_id = ?").get(changed.id)).toEqual({ rev: '2999-01-01T00:00:00.000Z' });
+    expect(db.prepare("SELECT rev FROM search_docs WHERE object_id = ?").get(changed.id)).toEqual({ rev: `${TEXT_VERSION}:2999-01-01T00:00:00.000Z` });
+    // Rows indexed by an older way of taking the words are indexed again.
+    db.prepare("UPDATE search_docs SET rev = '1:' || substr(rev, 3), body = 'stale' WHERE object_id = ?").run(old.id);
+    await sheets.reindexStale();
+    expect(titles(ann, 'heron')).toEqual(['Old memo']);
   });
 });
 

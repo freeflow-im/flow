@@ -1,5 +1,5 @@
 // Finding a file from an editor or the home page: the search button in the header opens a dialog that looks for
-// files by name in every folder (`/api/library/search`, as the file list's search does; text with a slash is the
+// files by name in every folder, and for documents by the words inside them (`/api/search`, after the names), (`/api/library/search`, as the file list's search does; text with a slash is the
 // end of a path, `backend/.env`); in the desktop app it then looks through the whole home folder too, `/api/local/search`, and
 // lists what it finds outside the open folder after the rest, opened as Open file by path… opens them), and before anything is typed lists the
 // files last opened in the app (its own Recents, `/api/recents`, not the system's). Clicking a file, or Enter,
@@ -9,7 +9,8 @@ import { useEffect, useRef, useState } from 'react';
 import { appUrl } from '../basePath.ts';
 import { useNavigate } from 'react-router-dom';
 import type { SheetMeta, StoredFile } from '../../../shared/types.ts';
-import { api, type RecentFile } from '../api.ts';
+import { api, type ContentHit, type RecentFile } from '../api.ts';
+import { SearchSnippet } from './SearchSnippet.tsx';
 import { useAuth } from '../auth.tsx';
 import { openFromRecents } from '../pages/OpenLocalFile.tsx';
 import { kindIcon, type LibraryItem } from './FileLibrary.tsx';
@@ -21,6 +22,8 @@ interface Row {
   key: string;
   item: Pick<LibraryItem, 'kind' | 'title'>;
   where: string;
+  /** Found by its words: the text around them. */
+  snippet?: string;
   open(): Promise<void> | void;
   openInTab(): Promise<void> | void;
 }
@@ -129,14 +132,18 @@ export function FileSearch({ onClose }: { onClose: () => void }) {
           (r) => live && setHome({ q: text, rows: r.files.map(homeRow) }),
           () => live && setHome({ q: text, rows: [] }),
         );
-      api.searchLibrary(text).then(
-        (r) => {
+      Promise.all([api.searchLibrary(text), api.searchContent(text, '').catch(() => ({ hits: [] as ContentHit[] }))]).then(
+        ([r, words]) => {
           if (!live) return;
+          const snippets = new Map(words.hits.map((h) => [h.id, h.snippet]));
           const items: LibraryItem[] = [
             ...r.docs.map((d: SheetMeta) => ({ id: d.id, kind: d.kind, format: d.format, title: d.title, folder: d.folder, createdAt: d.createdAt, updatedAt: d.updatedAt })),
             ...r.files.map((f: StoredFile) => ({ id: f.id, kind: 'file' as const, title: f.filename, folder: f.folder, ...(f.text ? { text: true } : {}), createdAt: f.createdAt, updatedAt: f.createdAt })),
           ];
-          setFound({ q: text, rows: items.map(libraryRow), truncated: r.truncated });
+          const listed = new Set(items.map((i) => i.id));
+          // Documents found only by their words come after the names, best match first.
+          for (const h of words.hits) if (!listed.has(h.id)) items.push({ id: h.id, kind: h.kind, title: h.title, folder: h.container, createdAt: h.at, updatedAt: h.at });
+          setFound({ q: text, rows: items.map((i) => ({ ...libraryRow(i), snippet: snippets.get(i.id) })), truncated: r.truncated });
           setAt(0);
           setError(null);
         },
@@ -169,7 +176,7 @@ export function FileSearch({ onClose }: { onClose: () => void }) {
         className="file-search-input"
         autoFocus
         value={q}
-        placeholder="Type part of a file's name, or folder/name"
+        placeholder="Type part of a file's name, words inside it, or folder/name"
         aria-label="File name"
         onChange={(e) => setQ(e.target.value)}
         onKeyDown={(e) => {
@@ -186,7 +193,7 @@ export function FileSearch({ onClose }: { onClose: () => void }) {
       {searching && (!found || (!rows.length && !homeDone)) ? (
         <p className="muted file-search-note">Looking…</p>
       ) : searching && !rows.length ? (
-        <p className="muted file-search-note">{found!.q.includes('/') ? `No file’s path has “${found!.q}” in it.` : `No file’s name has “${found!.q}” in it.`}</p>
+        <p className="muted file-search-note">{found!.q.includes('/') ? `No file’s path has “${found!.q}” in it.` : `No file has “${found!.q}” in its name or its text.`}</p>
       ) : !searching && !recent ? null : !searching && !rows.length ? (
         <p className="muted file-search-note">Type to look in every folder. The files you open will be listed here.</p>
       ) : (
@@ -196,7 +203,10 @@ export function FileSearch({ onClose }: { onClose: () => void }) {
             {rows.map((row, i) => (
               <li key={row.key} role="option" aria-selected={i === at} className={i === at ? 'selected' : undefined} onMouseEnter={() => setAt(i)} onClick={() => act(row.open)}>
                 {kindIcon(row.item)}
-                <span className="file-search-name">{row.item.title}</span>
+                <span className="file-search-name">
+                  {row.item.title}
+                  {row.snippet && <span className="file-search-snippet"><SearchSnippet text={row.snippet} /></span>}
+                </span>
                 {row.where && <span className="file-search-where">{row.where}</span>}
                 <button
                   className="btn open-tab-btn"

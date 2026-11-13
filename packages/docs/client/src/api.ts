@@ -154,6 +154,19 @@ export interface SavedSignature {
  * folder of a root: with `shared`, the organization's shared files (Organization files). The organization is the one
  * selected in the suite bar unless `workspace` names another (a file's own); outside the suite there is none.
  */
+/** A document found by the words inside it (GET /api/search; the server's shape is @flow/shared/search's SearchHit). */
+export interface ContentHit {
+  kind: 'doc' | 'sheet' | 'deck' | 'markdown';
+  id: string;
+  title: string;
+  /** The matching text, the matched words between \u0002 and \u0003. */
+  snippet: string;
+  /** The folder it is in; absent at the top. */
+  container?: string;
+  /** When it last changed (ISO). */
+  at: string;
+}
+
 export type Place = string | { folder: string; shared?: boolean; workspace?: string };
 
 /** The fields of a request that name a place (folder, workspace, shared), for a query or a JSON body. */
@@ -223,6 +236,12 @@ export const api = {
   /** A small picture of a document, for the thumbnail view. */
   preview: (id: string, signal?: AbortSignal) => request<{ preview: FilePreview }>('GET', `/api/library/preview/${encodeURIComponent(id)}`, undefined, signal ? { signal } : undefined),
   /** Folders, documents and stored files whose name contains the text, in every folder. */
+  /** Documents by the words inside them (server/search.ts), in the root shown (`root`), or in the whole organization. */
+  searchContent: (q: string, root?: Place) => {
+    const scoped = root === undefined ? '' : typeof root === 'object' && root.shared ? ' is:shared' : activeOrganizationId() ? ' is:private' : '';
+    const fields = new URLSearchParams(placeFields(typeof root === 'object' ? { ...root, folder: '', shared: false } : undefined)).toString();
+    return request<{ hits: ContentHit[] }>('GET', `/api/search?q=${encodeURIComponent(q + scoped)}&limit=50${fields ? `&${fields}` : ''}`);
+  },
   searchLibrary: (q: string, root: Place = '') => request<{ folders: FolderInfo[]; docs: SheetMeta[]; files: StoredFile[]; truncated: boolean }>('GET', `/api/library/search?q=${encodeURIComponent(q)}${inFolder(typeof root === 'string' ? '' : { ...root, folder: '' })}`),
   /** The desktop app: files by name anywhere in the home folder outside the open one, by their paths. */
   searchHome: (q: string) => request<{ files: { path: string; name: string; where: string; kind: RecentFile['kind'] }[]; truncated: boolean }>('GET', `/api/local/search?q=${encodeURIComponent(q)}`),

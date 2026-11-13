@@ -1,6 +1,6 @@
 // The search index of documents (docs/specs/search.md §2.2 and §5): an FTS5 table over the words of every document in
 // `sheets`, kept by SheetStore as it writes them (server/sheets.ts). The filter columns stay in `sheets`, joined at query
-// time, so a move, a share or a new owner needs no reindexing; `rev` is the document's `updated_at` when it was indexed,
+// time, so a move, a share or a new owner needs no reindexing; `rev` is TEXT_VERSION and the document's `updated_at` when it was indexed,
 // so a row whose document changed since (or one with no index row) is stale, and `staleDocuments` finds it.
 //
 // A hit is checked with `roleOf` (server/access.ts), the one access check Docs has, before anything of it is returned.
@@ -38,27 +38,32 @@ export const SEARCH_DDL = `
   END;
 `;
 
-/** Put a document's words in the index, or replace them. */
-export function indexDocument(db: DB, id: string, rev: string, title: string, body: string): void {
+/** How a document's words are taken (shared/searchText.ts): one more after a change to it, and every document is indexed again. */
+export const TEXT_VERSION = 2;
+const REV_PREFIX = `${TEXT_VERSION}:`;
+const revOf = (updatedAt: string) => `${REV_PREFIX}${updatedAt}`;
+
+/** Put a document's words in the index, or replace them; `updatedAt` is the document's, as it was written. */
+export function indexDocument(db: DB, id: string, updatedAt: string, title: string, body: string): void {
   db.prepare(
     `INSERT INTO search_docs (object_kind, object_id, rev, title, body) VALUES ('sheet', ?, ?, ?, ?)
      ON CONFLICT (object_kind, object_id) DO UPDATE SET rev = excluded.rev, title = excluded.title, body = excluded.body`,
-  ).run(id, rev, title, body);
+  ).run(id, revOf(updatedAt), title, body);
 }
 
 /** A renamed document: its title in the index, and its revision, so the rename does not make it stale. */
-export function retitleDocument(db: DB, id: string, rev: string, title: string): void {
-  db.prepare("UPDATE search_docs SET title = ?, rev = ? WHERE object_kind = 'sheet' AND object_id = ?").run(title, rev, id);
+export function retitleDocument(db: DB, id: string, updatedAt: string, title: string): void {
+  db.prepare("UPDATE search_docs SET title = ?, rev = ? WHERE object_kind = 'sheet' AND object_id = ?").run(title, revOf(updatedAt), id);
 }
 
-/** Documents with no index row, or whose row is older than the document, newest first. */
+/** Documents with no index row, or whose row is older than the document or than TEXT_VERSION, newest first. */
 export function staleDocuments(db: DB, limit: number): { id: string }[] {
   return db
     .prepare(
       `SELECT s.id FROM sheets s LEFT JOIN search_docs d ON d.object_kind = 'sheet' AND d.object_id = s.id
-       WHERE d.object_id IS NULL OR d.rev <> s.updated_at ORDER BY s.updated_at DESC LIMIT ?`,
+       WHERE d.object_id IS NULL OR d.rev <> ? || s.updated_at ORDER BY s.updated_at DESC LIMIT ?`,
     )
-    .all(limit) as { id: string }[];
+    .all(REV_PREFIX, limit) as { id: string }[];
 }
 
 export interface DocSearchOptions {
@@ -133,6 +138,7 @@ export function searchDocuments(db: DB, who: ViewerArg, query: SearchQuery, opts
     params.push(folder, `${folder.replace(/[\\%_]/g, (c) => `\\${c}`)}/%`);
   }
   if (f.is?.includes('shared')) where.push('s.private = 0');
+  if (f.is?.includes('private')) where.push('s.private = 1');
 
   // More candidates than asked for: some may be dropped by the access check.
   const candidates = Math.min(limit * 3, 300);
@@ -152,7 +158,8 @@ export function searchDocuments(db: DB, who: ViewerArg, query: SearchQuery, opts
   const out: DocHitRow[] = [];
   for (const r of rows) {
     if (out.length >= limit) break;
-    if (roleOf(db, viewer, 'sheet', r)) out.push({ ...r, snippet: r.snippet ?? '' });
+    // A snippet with no marked word is the start of a body when only the title matched: not worth showing.
+    if (roleOf(db, viewer, 'sheet', r)) out.push({ ...r, snippet: r.snippet?.includes('\u0002') ? r.snippet : '' });
   }
   return out;
 }

@@ -128,6 +128,7 @@ export class SheetStore {
   onRevision: ((id: string, rev: string) => void) | null = null;
   /** The background pass that indexes documents written before search, or changed by another path (search.ts). */
   private reindexing: Promise<void> | null = null;
+  private reindexAgain = false;
 
   constructor(db: DB, dir: string) {
     this.db = db;
@@ -194,10 +195,10 @@ export class SheetStore {
   }
 
   /** Put a document's words in the search index. A failure is logged, never fails the save: the background pass retries it. */
-  private indexText(id: string, kind: DocKind, rev: string, title: string, doc: Stored): void {
+  private indexText(id: string, kind: DocKind, updatedAt: string, title: string, doc: Stored): void {
     if (!this.searchable()) return;
     try {
-      indexDocument(this.db, id, rev, title, searchTextOf(kind, doc));
+      indexDocument(this.db, id, updatedAt, title, searchTextOf(kind, doc));
     } catch (err) {
       console.error(`search index ${id}: ${(err as Error).message}`);
     }
@@ -209,7 +210,11 @@ export class SheetStore {
    */
   reindexStale(batch = 50): Promise<void> {
     if (!this.searchable()) return Promise.resolve();
-    if (this.reindexing) return this.reindexing;
+    // Asked while a pass runs: that pass may have looked already, so it looks once more before it ends.
+    if (this.reindexing) {
+      this.reindexAgain = true;
+      return this.reindexing;
+    }
     const pass = async () => {
       try {
         for (;;) {
@@ -231,10 +236,18 @@ export class SheetStore {
         console.error(`search reindex: ${(err as Error).message}`);
       }
     };
-    // Cleared after it is stored: a pass with nothing to do finishes before `pass()` returns.
-    this.reindexing = pass().finally(() => {
-      this.reindexing = null;
-    });
+    // `await` yields before the first check, so the pass is stored before it can end; nothing runs between the last
+    // look at reindexAgain and the clearing, so a request is never lost between them.
+    this.reindexing = (async () => {
+      try {
+        do {
+          this.reindexAgain = false;
+          await pass();
+        } while (this.reindexAgain);
+      } finally {
+        this.reindexing = null;
+      }
+    })();
     return this.reindexing;
   }
 
