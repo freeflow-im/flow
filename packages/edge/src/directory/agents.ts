@@ -2,7 +2,7 @@
 // per sponsor, client and organization, with its `personal_agent` account. Shared by the core (the backfill, removal) and
 // the MCP authorization server (a new connection), which run over the same SQLite.
 import type { AgentMode, AgentRuntime, SponsoredAgentDTO, UsableAgentDTO } from '@flow/shared';
-import { forbidden } from '../errors';
+import { conflict, forbidden } from '../errors';
 import { newId } from './ids';
 
 export interface AgentSql { exec(query: string, ...bindings: unknown[]): { toArray(): Record<string, unknown>[] } }
@@ -115,23 +115,70 @@ export function ensureAssistant(sql: AgentSql, sponsorId: string, organizationId
   return id;
 }
 
-/** The person's assistant's principal id in an organization, or null (none made, or removed). */
+/**
+ * The person's assistant's principal id in an organization, or null (none made, or removed). A person may have several
+ * hosted personal agents (agents.md §1.3); the assistant, their default, is the first one made.
+ */
 export function assistantOf(sql: AgentSql, sponsorId: string, organizationId: string): string | null {
   const r = rows(sql,
     `SELECT u.id FROM users u JOIN accounts a ON a.user_id = u.id AND a.organization_id = u.organization_id
-     WHERE u.is_agent = 1 AND u.mode = 'personal' AND u.runtime = 'hosted' AND u.sponsor_user_id = ? AND u.organization_id = ? AND u.deleted_at IS NULL AND a.state <> 'removed' LIMIT 1`,
+     WHERE u.is_agent = 1 AND u.mode = 'personal' AND u.runtime = 'hosted' AND u.sponsor_user_id = ? AND u.organization_id = ? AND u.deleted_at IS NULL AND a.state <> 'removed'
+     ORDER BY u.created_at, u.id LIMIT 1`,
     sponsorId, organizationId)[0];
   return (r?.id as string | undefined) ?? null;
 }
 
-/** The hosted agents a person may use in an organization (agents.md §6): their own assistant, and the shared ones. */
+/** The runtime object of a personal agent other than the person's assistant (agents.md §1.3): its own, owned by its sponsor's account. */
+export const personalRuntimeKey = (agentAccountId: string): string => `agent:${agentAccountId}`;
+
+/** The most hosted personal agents one person may have in an organization, their assistant among them (agents.md §1.3). */
+export const MAX_PERSONAL_AGENTS = 5;
+
+/**
+ * Another hosted personal agent for a person (agents.md §1.3): a principal with `mode: personal` and `runtime: hosted`,
+ * and its `personal_agent` account, with no address (a mailbox only when the person asks, later). The person must be a
+ * native member with their assistant already made, and under the limit. Returns its principal id.
+ */
+export function createPersonalAgent(sql: AgentSql, sponsorId: string, organizationId: string, name: string, now = Date.now()): string {
+  const sponsor = rows(sql, 'SELECT is_agent, deleted_at FROM users WHERE id = ?', sponsorId)[0];
+  if (!sponsor || sponsor.deleted_at || sponsor.is_agent) throw forbidden('an agent cannot sponsor an agent');
+  const sponsorAccount = rows(sql, "SELECT kind FROM accounts WHERE user_id = ? AND organization_id = ? AND state NOT IN ('removed', 'suspended')", sponsorId, organizationId)[0];
+  if (!sponsorAccount || sponsorAccount.kind !== 'native') throw forbidden('only a member of this organization may make agents here');
+  const assistant = assistantOf(sql, sponsorId, organizationId);
+  if (!assistant) throw conflict('no_assistant', 'your assistant is not ready yet; try again in a moment');
+  // The assistant is the first one made (assistantOf): a new agent is always made after it, even within the same millisecond.
+  const after = (rows(sql, 'SELECT created_at FROM users WHERE id = ?', assistant)[0]?.created_at as number | undefined) ?? 0;
+  now = Math.max(now, after + 1);
+  const count = rows(sql,
+    `SELECT COUNT(*) AS n FROM users u JOIN accounts a ON a.user_id = u.id AND a.organization_id = u.organization_id
+     WHERE u.is_agent = 1 AND u.mode = 'personal' AND u.runtime = 'hosted' AND u.sponsor_user_id = ? AND u.organization_id = ? AND u.deleted_at IS NULL AND a.state <> 'removed'`,
+    sponsorId, organizationId)[0]?.n as number;
+  if (count >= MAX_PERSONAL_AGENTS) throw conflict('agent_limit', `you have ${MAX_PERSONAL_AGENTS} private agents here, the most one person may have; remove one first`);
+  const clean = name.trim().slice(0, 80);
+  if (!clean) throw conflict('validation', 'an agent needs a name');
+  const id = newId();
+  sql.exec(
+    `INSERT INTO users (id, email, password_hash, display_name, is_agent, sponsor_user_id, organization_id, mode, runtime, email_verified_at, created_at)
+     VALUES (?, ?, '!agent', ?, 1, ?, ?, 'personal', 'hosted', ?, ?)`,
+    id, `agent-${id}@agents.flow.local`, clean, sponsorId, organizationId, now, now);
+  sql.exec(
+    "INSERT INTO accounts (id, user_id, organization_id, address, display_name, role, kind, state, created_at, sponsor_user_id) VALUES (?, ?, ?, NULL, ?, 'member', 'personal_agent', 'active', ?, ?)",
+    newId(), id, organizationId, clean, now, sponsorId);
+  return id;
+}
+
+/**
+ * The hosted agents a person may use in an organization (agents.md §6, §1.3): their own personal agents (their assistant
+ * first, marked `self`) and the shared ones.
+ */
 export function usableAgentsOf(sql: AgentSql, userId: string, organizationId: string): UsableAgentDTO[] {
+  const assistant = assistantOf(sql, userId, organizationId);
   return rows(sql,
     `SELECT u.id, u.display_name, u.avatar_url, u.mode, u.sponsor_user_id, a.id AS account_id FROM users u JOIN accounts a ON a.user_id = u.id AND a.organization_id = u.organization_id
      WHERE u.is_agent = 1 AND u.runtime = 'hosted' AND u.organization_id = ? AND u.deleted_at IS NULL AND a.state <> 'removed'
        AND (u.mode = 'shared' OR u.sponsor_user_id = ?)
-     ORDER BY (u.mode = 'personal') DESC, u.display_name`, organizationId, userId,
-  ).map((r) => ({ id: r.id as string, accountId: r.account_id as string, displayName: r.display_name as string, avatarUrl: (r.avatar_url as string | null) ?? null, mode: r.mode as AgentMode, self: r.mode === 'personal' && r.sponsor_user_id === userId }));
+     ORDER BY (u.id = ?) DESC, (u.mode = 'personal') DESC, u.display_name`, organizationId, userId, assistant ?? '',
+  ).map((r) => ({ id: r.id as string, accountId: r.account_id as string, displayName: r.display_name as string, avatarUrl: (r.avatar_url as string | null) ?? null, mode: r.mode as AgentMode, self: r.id === assistant }));
 }
 
 /** Marks where an agent's loop runs (agents.md §6). */

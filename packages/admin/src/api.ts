@@ -72,8 +72,9 @@ export const assistantApi = {
   settings: async (org: string) => (await request<{ settings: AssistantSettings }>('GET', mine(org, 'model'))).settings,
   saveSettings: async (org: string, body: AssistantSettingsUpdate) => (await request<{ settings: AssistantSettings }>('PUT', mine(org, 'model'), body)).settings,
   /** Its picture: a preset (null for none), or an upload. */
-  setPreset: (org: string, preset: AgentAvatarPreset | null) => request<{ avatarUrl: string | null }>('PUT', `/v1/workspaces/${encodeURIComponent(org)}/assistant/avatar`, { preset }),
-  uploadPicture: (org: string, file: File) => uploadMultipart<{ avatarUrl: string | null }>(`/v1/workspaces/${encodeURIComponent(org)}/assistant/avatar`, file),
+  // The assistant's picture, or with `agent` another agent the person may change (agents.md §1.3).
+  setPreset: (org: string, preset: AgentAvatarPreset | null, agent?: string) => request<{ avatarUrl: string | null }>('PUT', `/v1/workspaces/${encodeURIComponent(org)}/assistant/avatar${agent ? `?agent=${encodeURIComponent(agent)}` : ''}`, { preset }),
+  uploadPicture: (org: string, file: File, agent?: string) => uploadMultipart<{ avatarUrl: string | null }>(`/v1/workspaces/${encodeURIComponent(org)}/assistant/avatar${agent ? `?agent=${encodeURIComponent(agent)}` : ''}`, file),
 };
 
 /** An agent the person connected over MCP (Claude Desktop, Claude Code, …), as GET /v1/me/agent-connections lists it. */
@@ -145,6 +146,10 @@ export const adminApi = {
   removePersonalAgent: (id: string, accountId: string) => request<{ account: AccountDTO }>('DELETE', `${ws(id)}/accounts/${encodeURIComponent(accountId)}`),
   agentInvite: (id: string) => request<AgentInviteDTO>('POST', `${ws(id)}/agent-invites`),
   // Hosted shared agents (docs/specs/agents.md §6): made here, with a definition kept by the agent's runtime.
+  // A person's own private agents (docs/specs/agents.md §1.3): their assistant first, up to five in all.
+  myAgents: (id: string) => request<{ agents: UsableAgentDTO[]; limit: number }>('GET', `${ws(id)}/agents/mine`),
+  makePersonalAgent: (id: string, body: { name: string; instructions?: string }) => request<{ agent: UsableAgentDTO; definition: AgentDefinitionDTO }>('POST', `${ws(id)}/agents/personal`, body),
+  removeMyAgent: (id: string, userId: string) => request<{ account: AccountDTO }>('DELETE', `${ws(id)}/agents/personal/${encodeURIComponent(userId)}`),
   makeHostedAgent: (id: string, body: { name: string; instructions?: string }) => request<{ agent: UsableAgentDTO; definition: AgentDefinitionDTO }>('POST', `${ws(id)}/agents/hosted`, body),
   agentDefinition: (id: string, userId: string) => request<{ definition: AgentDefinitionDTO; mayEdit: boolean }>('GET', `${ws(id)}/agents/${encodeURIComponent(userId)}/definition`),
   saveAgentDefinition: (id: string, userId: string, body: { name?: string; instructions?: string }) => request<{ definition: AgentDefinitionDTO; mayEdit: boolean }>('PUT', `${ws(id)}/agents/${encodeURIComponent(userId)}/definition`, body),

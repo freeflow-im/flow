@@ -8,6 +8,7 @@ import { adminApi } from '../api';
 import { suite } from '../suite';
 import { Model } from './Assistant';
 import { Button, Card, Confirm, ErrorLine } from '../components/ui';
+import { CreateAgent } from './CreateAgent';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -36,7 +37,7 @@ export function Agents({ org }: { org: WorkspaceDTO }) {
   return (
     <>
       <Model org={org} />
-      <MakeHostedAgent org={org} onMade={() => { void qc.invalidateQueries({ queryKey: ['members', org.id] }); void qc.invalidateQueries({ queryKey: ['accounts', org.id] }); }} />
+      <CreateAgent org={org} initialAccess="shared" />
       <InviteAgent org={org} />
       <Card title="Shared agents" intro="Shared agents are members with a 🤖 mark, each sponsored by the person who invited them; anyone in the organization can ask them, and they keep no secrets from it. A shared agent is always native: its mailbox and calendars are part of its work." testid="card-agents">
         {members.isError && <ErrorLine error={errorText(members.error)} />}
@@ -98,7 +99,7 @@ function PersonalAgents({ org, nameOf }: { org: WorkspaceDTO; nameOf: (userId: s
             <li key={a.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-sm" data-testid={`personal-agent-${a.id}`}>
               <span className="font-medium">{a.displayName} 🤖</span>
               <span className="text-xs text-muted">
-                {a.agentRuntime === 'hosted' ? 'assistant of ' : 'personal agent of '}
+                {a.agentRuntime === 'hosted' ? 'hosted, private to ' : 'personal agent of '}
                 {nameOf(a.sponsorId ?? null)}
                 {a.address ? ` · ${a.address}` : ''}
               </span>
@@ -126,40 +127,8 @@ function PersonalAgents({ org, nameOf }: { org: WorkspaceDTO; nameOf: (userId: s
   );
 }
 
-/**
- * A hosted shared agent (docs/specs/agents.md §6): a member the platform runs, made here with a name and standing
- * instructions; everyone in the organization can ask it from the panel, and it keeps no secrets from them.
- */
-function MakeHostedAgent({ org, onMade }: { org: WorkspaceDTO; onMade(): void }) {
-  const [name, setName] = useState('');
-  const [instructions, setInstructions] = useState('');
-  const make = useMutation({
-    mutationFn: () => adminApi.makeHostedAgent(org.id, { name: name.trim(), ...(instructions.trim() ? { instructions: instructions.trim() } : {}) }),
-    onSuccess: () => {
-      setName('');
-      setInstructions('');
-      onMade();
-    },
-  });
-  return (
-    <Card title="Make a hosted agent" intro="A shared agent the platform runs for the organization: no machine of your own. Give it a name and standing instructions; anyone here can then talk to it from the assistant panel, share files with it, and mention it. It sees only what is shared with it, and keeps no secrets from the organization." testid="card-hosted-agent">
-      <div className="flex flex-col gap-2">
-        <input className="rounded-md border border-hairline px-2 py-1 text-sm text-ink" placeholder="Its name, e.g. Omni" maxLength={80} value={name} onChange={(e) => setName(e.target.value)} data-testid="hosted-agent-name" />
-        <textarea className="rounded-md border border-hairline px-2 py-1 text-sm text-ink" rows={3} placeholder="Instructions: what it is for, how it should answer, what to avoid." maxLength={8000} value={instructions} onChange={(e) => setInstructions(e.target.value)} data-testid="hosted-agent-instructions" />
-        <div>
-          <Button kind="primary" disabled={make.isPending || !name.trim()} onClick={() => make.mutate()} testid="hosted-agent-make">
-            {make.isPending ? 'Making…' : 'Make the agent'}
-          </Button>
-        </div>
-      </div>
-      {make.data && <p className="text-xs text-muted" data-testid="hosted-agent-made">{make.data.agent.displayName} is here. Everyone in {org.name} can ask it from the panel.</p>}
-      <ErrorLine error={make.isError ? errorText(make.error) : null} />
-    </Card>
-  );
-}
-
-/** A hosted shared agent's instructions, read and set in place (its sponsor, an owner or an admin). */
-function HostedDefinition({ org, userId, name }: { org: WorkspaceDTO; userId: string; name: string }) {
+/** A hosted agent's instructions, read and set in place: a shared one's by its sponsor, an owner or an admin; a private one's by its sponsor. */
+export function HostedDefinition({ org, userId, name }: { org: WorkspaceDTO; userId: string; name: string }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState<string | null>(null);
   const def = useQuery({ queryKey: ['agent-definition', org.id, userId], queryFn: () => adminApi.agentDefinition(org.id, userId), enabled: open });

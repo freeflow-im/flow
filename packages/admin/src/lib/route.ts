@@ -14,7 +14,7 @@ export const SECTION_LABELS: Record<AdminSection, string> = {
   domains: 'Domains & mail',
   agents: 'Agents',
   prompts: 'Prompts',
-  assistant: 'Your assistant',
+  assistant: 'Your agents',
   connect: 'Connect an agent',
   automations: 'Automations',
   events: 'Event log',

@@ -1,5 +1,21 @@
 # Decision log
 
+## 2026-11-12 — Several agents per person; agent memory (operator rulings)
+
+- **Ruling (Scott):** a person may have up to **five** hosted personal agents in an organization, each with its own
+  name, definition and memory. The one made for every member is the default.
+- **Ruling (Scott):** an agent's kind never changes: private or shared is chosen once, when the agent is made.
+- **Ruling (Scott):** every agent keeps a memory it writes itself, through our own `memory` tool modelled on
+  Anthropic's memory tool (a `/memories` folder and six file commands), not that tool itself, so every model provider
+  gets the same tool and we write its storage and instructions.
+- **Ruling (Scott):** agents do not share memory, not even one person's own agents.
+- **Ruling (Scott):** a shared agent has two memory folders: `team`, read for everyone who asks, and `you`, private
+  to each person who asks. What one person tells it stays in their `you` folder unless they say otherwise.
+- **Why:** several private agents with narrower access are safer than one with everything; a fixed kind means an
+  agent never quietly gains or loses access; and a per-person folder keeps a shared agent from repeating what one
+  person said to everyone.
+- **Where:** `docs/specs/agents.md` §1.3, §6.1, §11 phase G.
+
 ## 2026-11-11 — One model per organization, for every agent (operator ruling)
 
 - **Ruling (Scott):** for now the model and API keys agents run on are the **organization's**, set by its owners and

@@ -131,7 +131,7 @@ export function AgentPanel() {
           <select className="agent-title agent-pick" aria-label="Agent" value={agent.agentId ?? ''} disabled={agent.running} onChange={(e) => agent.setAgent(e.target.value || null)} data-testid="agent-pick">
             {agent.agents.map((a) => (
               <option key={a.id} value={a.id}>
-                {a.displayName}{a.self ? '' : ' · everyone in the organization'}
+                {a.displayName}{a.self ? '' : a.mode === 'personal' ? ' · only you' : ' · everyone in the organization'}
               </option>
             ))}
           </select>

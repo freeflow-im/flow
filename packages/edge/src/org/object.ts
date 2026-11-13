@@ -266,25 +266,39 @@ export class Org extends DurableObject<OrgEnv> {
   }
 
   /**
-   * A message that is its author's request to their assistant (agents.md §1.1) goes to the assistant's runtime: in a DM
-   * with it, in a private channel of the two of them, a mention of it, or a reply in a thread it is answering in. Only the
-   * author's own assistant is ever asked, so nobody else's message reaches it as a request, and an assistant's own
-   * messages ask nothing (an agent has no assistant).
+   * A message that is its author's request to one of their own hosted personal agents (agents.md §1.1, §1.3) goes to that
+   * agent's runtime: the agents it mentions; else the agent in a DM or a private channel of the two of them; else, in a
+   * thread, the one of theirs that last answered there. Only the author's own agents are ever asked, so nobody else's
+   * message reaches one as a request, and an agent's own messages ask nothing (an agent has no agents).
    */
   private async askAssistant(msg: MessageDTO): Promise<void> {
     if (!msg?.id || msg.systemKind || !this.env.ASSISTANT) return;
     const sql = this.ctx.storage.sql;
-    const a = sql.exec("SELECT user_id, account_id FROM workspace_members WHERE kind = 'personal_agent' AND runtime = 'hosted' AND sponsor_user_id = ?", msg.userId).toArray()[0];
-    if (!a?.account_id) return;
-    const agentId = a.user_id as string;
+    const mine = sql.exec("SELECT user_id, account_id FROM workspace_members WHERE kind = 'personal_agent' AND runtime = 'hosted' AND sponsor_user_id = ? AND account_id IS NOT NULL", msg.userId).toArray();
+    if (!mine.length) return;
     const chan = sql.exec('SELECT kind, is_private, workspace_id FROM channels WHERE id = ?', msg.channelId).toArray()[0];
     if (!chan) return;
-    const inChannel = sql.exec('SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?', msg.channelId, agentId).toArray().length > 0;
     const members = sql.exec('SELECT COUNT(*) AS n FROM channel_members WHERE channel_id = ?', msg.channelId).one().n as number;
-    const mentioned = msg.body.includes(`<@${agentId}>`);
-    const twoOfUs = inChannel && members === 2 && (chan.kind === 'dm' || !!chan.is_private);
-    const inItsThread = !!msg.threadRootId && sql.exec('SELECT 1 FROM messages WHERE (id = ? OR thread_root_id = ?) AND user_id = ? LIMIT 1', msg.threadRootId, msg.threadRootId, agentId).toArray().length > 0;
-    if (!(twoOfUs || mentioned || inItsThread)) return;
+    const inChannel = (id: string) => sql.exec('SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?', msg.channelId, id).toArray().length > 0;
+    const mentioned = mine.filter((a) => msg.body.includes(`<@${a.user_id as string}>`));
+    const twoOfUs = members === 2 && (chan.kind === 'dm' || !!chan.is_private) ? mine.find((a) => inChannel(a.user_id as string)) : undefined;
+    let asked = mentioned.length ? mentioned : twoOfUs ? [twoOfUs] : [];
+    if (!asked.length && msg.threadRootId) {
+      const ids = mine.map((a) => a.user_id as string);
+      const last = sql.exec(`SELECT user_id FROM messages WHERE (id = ? OR thread_root_id = ?) AND user_id IN (${ids.map(() => '?').join(', ')}) ORDER BY created_at DESC LIMIT 1`, msg.threadRootId, msg.threadRootId, ...ids).toArray()[0];
+      if (last) asked = mine.filter((a) => a.user_id === last.user_id);
+    }
+    for (const a of asked) {
+      const here = inChannel(a.user_id as string);
+      await this.askOneAgent(msg, chan, { agentId: a.user_id as string, accountId: a.account_id as string, inChannel: here, twoOfUs: here && members === 2 && (chan.kind === 'dm' || !!chan.is_private) });
+    }
+  }
+
+  /** One of the author's agents asked (askAssistant): the transcript, the prompt, and the turn in its runtime. */
+  private async askOneAgent(msg: MessageDTO, chan: Record<string, SqlStorageValue>, a: { agentId: string; accountId: string; inChannel: boolean; twoOfUs: boolean }): Promise<void> {
+    if (!this.env.ASSISTANT) return;
+    const sql = this.ctx.storage.sql;
+    const { agentId, inChannel, twoOfUs } = a;
     // Where the answer goes: beside the request with the two of them; in a thread anywhere others can read.
     const threadRootId = twoOfUs ? msg.threadRootId : (msg.threadRootId ?? msg.id);
     const transcript = await this.scoped(async () => {
@@ -308,7 +322,7 @@ export class Org extends DurableObject<OrgEnv> {
       `${sponsorName}'s request: ${render(msg.body)}`,
       twoOfUs ? '' : `Your reply is posted in the thread for everyone there. Do not include ${sponsorName}'s private information (mail, calendar, files others cannot open) unless ${sponsorName} asked for it here.`,
     ].filter((l) => l !== '').join('\n');
-    const answer = await this.directory().call('hostedRuntimeOf' as never, [a.account_id] as never) as DirectoryAnswer<HostedRuntimeDTO | null>;
+    const answer = await this.directory().call('hostedRuntimeOf' as never, [a.accountId] as never) as DirectoryAnswer<HostedRuntimeDTO | null>;
     if (!answer.ok || !answer.value) return;
     const runtime = answer.value;
     await this.env.ASSISTANT.get(this.env.ASSISTANT.idFromName(runtime.runtimeKey)).chatTurn({
@@ -846,6 +860,22 @@ export class Org extends DurableObject<OrgEnv> {
     sql.exec('UPDATE workspace_members SET address = ? WHERE workspace_id = ? AND user_id = ?', address, org, agentId);
     await this.scoped(async () => {
       publishEvent(subjectMeta(org), { type: 'member.updated', workspaceId: org, ts: new Date().toISOString(), data: await toMemberDTO(org, agentId) } as Event);
+    });
+    await this.logging;
+    await this.flushOutbox(org);
+  }
+
+  /**
+   * Another hosted personal agent a person made (routes/agents.ts, agents.md §1.3): it joins this list beside its sponsor,
+   * and the organization's sockets hear `member.joined`, so Chat and Home show it at once.
+   */
+  async addHostedPersonalAgent(account: AccountDTO): Promise<void> {
+    const sql = this.ctx.storage.sql;
+    const org = sql.exec('SELECT id FROM workspaces LIMIT 1').toArray()[0]?.id as string | undefined;
+    if (!org || account.organizationId !== org || account.kind !== 'personal_agent' || !account.sponsorId) return;
+    this.addPersonalAgent(org, account);
+    await this.scoped(async () => {
+      publishEvent(subjectMeta(org), { type: 'member.joined', workspaceId: org, ts: new Date().toISOString(), data: await toMemberDTO(org, account.principalId) } as Event);
     });
     await this.logging;
     await this.flushOutbox(org);

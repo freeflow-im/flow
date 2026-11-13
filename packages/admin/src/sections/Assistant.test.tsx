@@ -1,5 +1,5 @@
 // Your assistant (docs/specs/agents.md §1.1): a member's own section, against a fetch that answers the assistant's routes.
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkspaceDTO } from '@flow/shared';
@@ -20,6 +20,7 @@ beforeEach(() => {
     const json = (v: unknown) => new Response(JSON.stringify(v), { status: 200, headers: { 'content-type': 'application/json' } });
     const bare = path.split('?')[0] ?? '';
     if (bare === '/v1/me') return json({ id: 'u-ann', displayName: 'Ann' });
+    if (bare.endsWith('/agents/mine')) return json({ agents: [{ id: 'u-ada', accountId: 'a-ada', displayName: 'Ada', mode: 'personal', self: true }], limit: 5 });
     if (bare.endsWith('/members')) return json({ members: [{ userId: 'u-ada', displayName: 'Ada', kind: 'personal_agent', agentRuntime: 'hosted', sponsorId: 'u-ann', address: 'ada@acme.test', isAgent: true }] });
     if (bare === '/v1/workspaces/o1/assistant/definition') return json({ definition: method === 'PUT' ? { name: body.name, instructions: body.instructions, updatedAt: null } : { name: 'Ann’s assistant', instructions: '', updatedAt: null } });
     if (bare === '/v1/workspaces/o1/assistant/senders') return json({ senders: method === 'PUT' ? body.senders : [] });
@@ -50,7 +51,7 @@ describe('Your assistant', () => {
     mount();
     fireEvent.click(await screen.findByTestId('assistant-picture-mint'));
     await waitFor(() => expect(calls.some((c) => c.method === 'PUT' && c.path === '/v1/workspaces/o1/assistant/avatar' && (c.body as { preset: string }).preset === 'mint')).toBe(true));
-    expect(screen.getAllByRole('radio')).toHaveLength(8);
+    expect(within(screen.getByTestId('card-assistant-picture')).getAllByRole('radio')).toHaveLength(8);
   });
 
   it('starts with nobody allowed to mail it, and saves the senders', async () => {

@@ -174,11 +174,23 @@ orgRoutes.post('/v1/me/avatar', async (c) => {
  * The person's own assistant's picture (agents.md §1.1): a preset (`PUT {preset}`, or `{preset: null}` for none) or an
  * upload (`POST`, multipart, stored as a person's is). The organization's copy follows, so Chat shows it at once.
  */
+/**
+ * The agent whose picture a request sets: the caller's assistant, or the hosted agent `?agent=` names (agents.md §1.3) if
+ * the caller may change it: one of their own private agents, or a shared one they sponsor or, as an owner or admin, run.
+ */
 async function myAssistant(c: C): Promise<{ agentId: string; organizationId: string }> {
   const organizationId = c.req.param('id')!;
   const who = await resolveCaller(c, organizationId);
   if (!who.user || !who.account) throw unauthorized('missing bearer token');
   if (who.account.kind === 'guest') throw new ApiError(403, 'guest', 'guests use Chat only; the assistant is for the organization\'s members');
+  const named = c.req.query('agent');
+  if (named) {
+    const a = await directory(c, 'accountFor', named, organizationId);
+    const admin = who.account.role === 'owner' || who.account.role === 'admin';
+    const mine = a?.sponsorId === who.user.id;
+    if (!a || a.state === 'removed' || a.agentRuntime !== 'hosted' || !(a.agentMode === 'personal' ? mine : a.agentMode === 'shared' && (mine || admin))) throw notFound('no such agent of yours here');
+    return { agentId: named, organizationId };
+  }
   const agentId = await directory(c, 'assistantOf', who.user.id, organizationId);
   if (!agentId) throw notFound('you have no assistant here');
   return { agentId, organizationId };

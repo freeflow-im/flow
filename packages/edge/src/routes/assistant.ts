@@ -90,6 +90,25 @@ async function forward(c: C, req: Request = c.req.raw): Promise<Response> {
     const self = agents.find((a) => a.self);
     const chosen = wanted && wanted !== self?.id ? agents.find((a) => a.id === wanted) : null;
     if (wanted && wanted !== self?.id && !chosen) return c.json({ error: 'That agent is not one you can use here.', code: 'no_agent' }, 404);
+    if (chosen && chosen.mode === 'personal') {
+      // Another of the person's own agents (agents.md §1.3): it acts as the person, marked `via` it, as their assistant
+      // does, in its own runtime (`agent:<account>`, owned by the person's account), with its own definition and
+      // conversations. No mailbox yet, so no allowlist; the model is the organization's.
+      const path = new URL(req.url).pathname;
+      if (path === '/api/agent/mail-allowlist') return c.json({ error: `${chosen.displayName} has no mailbox.`, code: 'no_mailbox' }, 404);
+      const runtime = await directory(c, 'hostedRuntimeOf', chosen.accountId);
+      if (!runtime) return c.json({ error: 'That agent is not one you can use here.', code: 'no_agent' }, 404);
+      const channelIds = await org.channelIdsOf(who.user.id);
+      const docs = { userId: who.user.id, email: who.user.email, token: who.token, ip: who.ip, accountId: who.account.id, channelIds };
+      const naming = req.method === 'PUT' && path === '/api/agent/definition'
+        ? ((await req.clone().json().catch(() => null)) as { name?: unknown } | null)?.name : undefined;
+      const res = await c.env.ASSISTANT.get(c.env.ASSISTANT.idFromName(runtime.runtimeKey)).handle(req, { ...who, via: chosen.id }, docs, chosen.displayName);
+      if (res.ok && typeof naming === 'string' && naming.trim() && naming.trim() !== chosen.displayName) {
+        await directory(c, 'renameAgent', chosen.id, naming.trim());
+        await org.renameAssistant(chosen.id, naming.trim(), null);
+      }
+      return res;
+    }
     if (chosen) {
       // A hosted shared agent (agents.md §6): the turn runs as the agent, in its own runtime, asked by the person; the
       // conversation is the person's with it. Its definition and settings are the Admin app's (routes/agents.ts), not any

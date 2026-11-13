@@ -5,7 +5,7 @@ import { ApiError, badRequest, conflict, forbidden, notFound, unauthorized } fro
 import { hashPassword, verifyPassword } from './passwords';
 import { DIRECTORY_MIGRATIONS } from './schema';
 import { newId } from './ids';
-import { assistantOf, ensureAssistant, personalAgentFor, revokePersonalAgent, setAgentRuntime, sponsoredAgentsOf, usableAgentsOf } from './agents';
+import { assistantOf, createPersonalAgent, ensureAssistant, personalAgentFor, personalRuntimeKey, revokePersonalAgent, setAgentRuntime, sponsoredAgentsOf, usableAgentsOf } from './agents';
 import { PLATFORM_DOMAIN, localPart, organizationDomain, uniqueAddress } from './addresses';
 import { checkDomain, checkRecords, dohResolver, normalizeDomain, recordsFor, type Resolve } from './dns';
 import { DEFAULT_DOMAIN_LIMITS, ProviderError, noneMailProvider, type DkimRecord, type MailProvider } from '../mailprovider/index';
@@ -170,6 +170,12 @@ export class DirectoryCore {
     return this.accountFor(id, organizationId)!;
   }
 
+  /** Another hosted personal agent for a person (agents.md §1.3): its account, made under the limit of five. */
+  createPersonalAgentFor(sponsorId: string, organizationId: string, name: string): AccountDTO {
+    const id = createPersonalAgent(this.sql, sponsorId, organizationId, name);
+    return this.accountFor(id, organizationId)!;
+  }
+
   /** The person's assistant in an organization (agents.md §6): its principal id, or null. */
   assistantOf(userId: string, organizationId: string): string | null {
     return assistantOf(this.sql, userId, organizationId);
@@ -194,7 +200,9 @@ export class DirectoryCore {
 
   /**
    * The hosted runtime behind an account (agents.md §6), for the Events object to wake it: null for a person, an external
-   * agent, or a removed account. A personal agent's runtime is its sponsor's account's object; a shared agent's its own.
+   * agent, or a removed account. A person's assistant's runtime is its sponsor's account's object, where its conversations
+   * have always lived; another personal agent's (agents.md §1.3) is `agent:<its account>`, an object its sponsor's account
+   * owns, so the panel's turns, made as the sponsor, reach it; a shared agent's is its own account's.
    */
   hostedRuntimeOf(accountId: string): HostedRuntimeDTO | null {
     const account = this.accountById(accountId);
@@ -206,13 +214,14 @@ export class DirectoryCore {
     const sponsorAccount = sponsorId ? this.accountFor(sponsorId, account.organizationId) : null;
     if (mode === 'personal' && (!sponsorAccount || sponsorAccount.state === 'removed' || sponsorAccount.state === 'suspended')) return null;
     return {
-      runtimeKey: mode === 'personal' ? sponsorAccount!.id : account.id,
+      runtimeKey: mode !== 'personal' ? account.id : assistantOf(this.sql, sponsorId!, account.organizationId) === u.id ? sponsorAccount!.id : personalRuntimeKey(account.id),
       agentId: u.id as string,
       agentAccountId: account.id,
       mode,
       organizationId: account.organizationId,
       sponsorId,
       sponsorAccountId: sponsorAccount?.id ?? null,
+      agentName: u.display_name as string,
     };
   }
 

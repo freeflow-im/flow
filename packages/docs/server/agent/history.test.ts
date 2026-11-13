@@ -1,6 +1,6 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import { describe, expect, it } from 'vitest';
-import { markOpenRouterThinking, portableHistory } from './history.ts';
+import { markOpenRouterThinking, portableHistory, answerOpenCalls, INTERRUPTED_RESULT } from './history.ts';
 
 type Msg = Anthropic.Beta.BetaMessageParam;
 const ask: Msg = { role: 'user', content: 'Book it' };
@@ -63,5 +63,33 @@ describe('portable history', () => {
   it('drops an assistant message left empty', () => {
     const closing: Msg = { role: 'assistant', content: [{ type: 'tool_search_tool_result', tool_use_id: 'srvtoolu_9', content: { type: 'tool_search_tool_result_error', error_code: 'unavailable' } }] as Msg['content'] };
     expect(portableHistory([ask, closing, { role: 'user', content: 'hi' }], 'openrouter').map((m) => m.role)).toEqual(['user', 'user']);
+  });
+});
+
+describe('answerOpenCalls: a turn cut off mid-call does not break the chat', () => {
+  const call = (id: string) => ({ type: 'tool_use', id, name: 'web_search', input: { query: 'x' } });
+  const result = (id: string) => ({ type: 'tool_result', tool_use_id: id, content: 'ok' });
+  it('answers a last call with an error result, in a new user message', () => {
+    const msgs = [{ role: 'user', content: 'find it' }, { role: 'assistant', content: [call('c1')] }] as never[];
+    const out = answerOpenCalls(msgs) as { role: string; content: { type: string; tool_use_id?: string; is_error?: boolean }[] }[];
+    expect(out).toHaveLength(3);
+    expect(out[2]).toEqual({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'c1', content: INTERRUPTED_RESULT, is_error: true }] });
+  });
+  it('puts the missing results first in the next user message, beside its text and any results it has', () => {
+    const msgs = [
+      { role: 'assistant', content: [call('c1'), call('c2')] },
+      { role: 'user', content: [result('c2')] },
+      { role: 'assistant', content: [call('c3')] },
+      { role: 'user', content: 'are you there?' },
+    ] as never[];
+    const out = answerOpenCalls(msgs) as { role: string; content: { type: string; tool_use_id?: string; text?: string }[] }[];
+    expect(out).toHaveLength(4);
+    expect(out[1]!.content.map((b) => b.tool_use_id)).toEqual(['c1', 'c2']);
+    expect(out[3]!.content.map((b) => b.type)).toEqual(['tool_result', 'text']);
+    expect(out[3]!.content[1]!.text).toBe('are you there?');
+  });
+  it('returns a history with every call answered as it is', () => {
+    const msgs = [{ role: 'assistant', content: [call('c1')] }, { role: 'user', content: [result('c1')] }] as never[];
+    expect(answerOpenCalls(msgs)).toBe(msgs);
   });
 });
