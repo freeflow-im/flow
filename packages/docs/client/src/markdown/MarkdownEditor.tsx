@@ -2,6 +2,24 @@
 import { memo, useEffect, type KeyboardEvent, type RefObject, type SyntheticEvent } from 'react';
 import type { TextEdit } from '../../../shared/agent/markdownBlocks.ts';
 import type { MarkdownController } from './controller.ts';
+import { imageIn } from './pastedImage.ts';
+
+/** Stores a pasted or dropped picture beside the document; resolves to its Markdown, or null when it failed (the page says why). */
+export type StoreImage = (file: File) => Promise<string | null>;
+
+let uploads = 0;
+
+/**
+ * Put a picture into the text at the selection: a placeholder while it uploads, then its Markdown. The
+ * placeholder is found again by its text, so typing elsewhere meanwhile does not matter.
+ */
+export async function insertImage(ta: HTMLTextAreaElement, file: File, store: StoreImage): Promise<void> {
+  const token = `![Uploading ${file.name.replace(/[[\]]/g, '')} (${++uploads})…]()`;
+  replaceRange(ta, ta.selectionStart, ta.selectionEnd, token);
+  const md = await store(file);
+  const at = ta.value.indexOf(token);
+  if (at >= 0) replaceRange(ta, at, at + token.length, md ?? '');
+}
 
 /**
  * Replace text[from, to) in the textarea as the user would type it, so the change joins the browser's undo
@@ -37,7 +55,13 @@ export function wrapSelection(ta: HTMLTextAreaElement, before: string, after: st
  * clears the browser's undo history. The textarea owns the text; the controller mirrors it, and only a
  * version saved elsewhere is written back into the element.
  */
-export const MarkdownEditor = memo(function MarkdownEditor({ ctl, editorRef, previewRef }: { ctl: MarkdownController; editorRef: RefObject<HTMLTextAreaElement | null>; previewRef: RefObject<HTMLDivElement | null> }) {
+export const MarkdownEditor = memo(function MarkdownEditor({ ctl, editorRef, previewRef, storeImage }: {
+  ctl: MarkdownController;
+  editorRef: RefObject<HTMLTextAreaElement | null>;
+  previewRef: RefObject<HTMLDivElement | null>;
+  /** Stores pasted and dropped pictures (a stable function, so the editor never re-renders); without it they are not taken. */
+  storeImage?: StoreImage;
+}) {
   useEffect(() => {
     const ta = editorRef.current;
     if (!ta) return;
@@ -105,6 +129,21 @@ export const MarkdownEditor = memo(function MarkdownEditor({ ctl, editorRef, pre
       }}
       onKeyDown={onKeyDown}
       onScroll={syncScroll}
+      onPaste={(e) => {
+        const file = ctl.readOnly || !storeImage ? null : imageIn(e.clipboardData);
+        if (!file) return;
+        e.preventDefault();
+        void insertImage(e.currentTarget, file, storeImage!);
+      }}
+      onDragOver={(e) => {
+        if (!ctl.readOnly && storeImage && e.dataTransfer.types.includes('Files')) e.preventDefault();
+      }}
+      onDrop={(e) => {
+        const file = ctl.readOnly || !storeImage ? null : imageIn(e.dataTransfer);
+        if (!file) return;
+        e.preventDefault();
+        void insertImage(e.currentTarget, file, storeImage!);
+      }}
     />
   );
 });
