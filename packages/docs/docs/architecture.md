@@ -414,8 +414,9 @@ turn's chat stays shown, with a link to the page's (`showPageChat`), until the u
 A user can run the assistant on their own Anthropic, OpenAI or OpenRouter API key instead (the Settings page,
 `/api/settings/assistant`, stored encrypted by `server/agent/settings.ts`; `server/agent/providers.ts` makes
 the model call and checks a key before it is saved). The loop and the stored history stay in the Claude
-message format; `server/agent/openai.ts` translates each request to OpenAI's Responses API and
-`server/agent/openrouter.ts` to Chat Completions, and the reply back. The model choices are
+message format; `server/agent/openai.ts` translates each request to OpenAI's Responses API, and the reply back.
+`server/agent/openrouter.ts` sends it almost as it is to OpenRouter's Anthropic Messages API (without Anthropic's
+`betas` and `fallbacks`), for any model OpenRouter carries. The model choices are
 `ANTHROPIC_MODELS`, `OPENAI_MODELS` and, as suggestions (any tool-calling model id is accepted),
 `OPENROUTER_MODELS` in `shared/agent/protocol.ts`. The desktop app has no model of its own
 (`AssistantSettings.builtIn` is false): its settings are the app's, in `settings.db` in its data folder
@@ -425,10 +426,17 @@ message format; `server/agent/openai.ts` translates each request to OpenAI's Res
 Most tools are deferred (`server/agent/toolSearch.ts`): a turn sends every definition, but only the search tool, the
 file tools (`list_files`, `open_file`, `find_files`) and the open page's main tools (`CORE_BY_PAGE`) are loaded; the
 model finds the rest with the provider's tool search (Claude's `tool_search_tool_bm25`, run by Anthropic; `openai.ts`
-maps it to OpenAI's `tool_search` and replays a search's output with the definitions it loaded). OpenRouter turns load
-every tool, as Chat Completions has no tool search. A search's result stays in the history and names its tools, which
+maps it to OpenAI's `tool_search` and replays a search's output with the definitions it loaded; `openrouter.ts` to
+OpenRouter's `openrouter:tool_search`, run by OpenRouter). A search's result stays in the history and names its tools, which
 the API requires in every later request: a tool it named that a turn does not offer (another app's, the browser
 extension's) gets a deferred stand-in (`keepReferencedTools`), and a call to it is refused as unknown.
+
+A chat can move between providers when the user changes their key, and each refuses some of the others' blocks:
+Anthropic wants `srvtoolu_` ids on search calls and thinking it signed; OpenRouter refuses Claude's search result.
+`server/agent/history.ts` (`portableHistory`) takes another provider's search steps and thinking out of the history
+before each Claude or OpenRouter request; the calls and results stay. OpenRouter's thinking is stored with an
+`openrouter:` mark on its signature or data (`markOpenRouterThinking`), which is how it is told apart from Claude's and
+taken off again for OpenRouter. `openai.ts` drops thinking and what it does not know, so it needs no cleaning.
 
 In the desktop app the assistant can instead run on the user's own Claude Code (provider `claude-agent`,
 `AssistantSettings.agents`): `AgentService` hands those turns to `ClaudeAgentDriver` (`server/agent/claudeAgent.ts`)

@@ -501,18 +501,95 @@ export function NewDmModal({ workspaceId, onClose }: { workspaceId: string; onCl
   );
 }
 
+/**
+ * The organization's people who are not in a channel yet, each with an Add button. Shown in the sidebar row's channel
+ * settings and in the header's "Add people" dialog (the header is the only way in when Chat runs inside Home, which
+ * hides Chat's channel list).
+ */
+export function ChannelInviteList({ channel, onError }: { channel: ChannelDTO; onError: (message: string | null) => void }) {
+  const { api } = useBoundApi();
+  const qc = useQueryClient();
+  const auth = useAuth();
+  const members = useMembers(channel.workspaceId);
+  // Real membership (standard channels have no memberIds in the DTO): keeps
+  // the list from offering people who are already here.
+  const chanMembers = useChannelMembers(channel.id);
+  const [added, setAdded] = useState<Set<string>>(new Set());
+  const [filter, setFilter] = useState('');
+  const candidates = (members.data ?? []).filter(
+    (m) =>
+      m.userId !== auth.user.id &&
+      // Someone's personal assistant joins only channels its own person brings it into (agents.md §1.1); the server refuses the rest.
+      (m.kind !== 'personal_agent' || m.sponsorId === auth.user.id) &&
+      (added.has(m.userId) || !(chanMembers.data ?? channel.memberIds ?? []).includes(m.userId)),
+  );
+  const shown = candidates.filter((m) => m.displayName.toLowerCase().includes(filter.trim().toLowerCase()));
+  const add = async (userId: string) => {
+    onError(null);
+    try {
+      await api('POST', `/v1/channels/${channel.id}/members`, { userId });
+      setAdded((prev) => new Set(prev).add(userId));
+      await qc.invalidateQueries({ queryKey: ['channelMembers', channel.id] });
+      await qc.invalidateQueries({ queryKey: ['channels', channel.workspaceId] });
+    } catch (err) {
+      onError(err instanceof Error ? err.message : 'could not add to channel');
+    }
+  };
+  return (
+    <>
+      {candidates.length > 6 && (
+        <input data-testid="channel-add-filter" className="mb-2 w-full rounded border border-hairline2 px-3 py-1.5 text-sm"
+          placeholder="Find someone" value={filter} onChange={(e) => setFilter(e.target.value)} />
+      )}
+      <div className="mc-scroll mb-3 max-h-60 overflow-y-auto">
+        {members.isLoading || chanMembers.isLoading ? (
+          <p className="px-1 py-1 text-sm text-faint">Loading…</p>
+        ) : candidates.length === 0 ? (
+          <p className="px-1 py-1 text-sm text-faint">Everyone is here.</p>
+        ) : shown.length === 0 ? (
+          <p className="px-1 py-1 text-sm text-faint">No one matches.</p>
+        ) : null}
+        {shown.map((m) => (
+          <div key={m.userId} className="flex items-center justify-between px-1 py-1 text-sm">
+            <span>
+              {m.displayName}
+              {m.isAgent && <span title="AI agent"> 🤖</span>}
+            </span>
+            {added.has(m.userId) ? (
+              <span className="text-xs text-green-600">added ✓</span>
+            ) : (
+              <button data-testid={`channel-add-${m.displayName}`} className="text-xs text-accent-soft hover:underline" onClick={() => void add(m.userId)}>
+                Add
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+/** "Add people" from the channel header's member list. */
+export function AddPeopleModal({ channel, onClose }: { channel: ChannelDTO; onClose: () => void }) {
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <Modal onClose={onClose} testid="channel-add-people-modal">
+      <h3 className="mb-3 font-bold">Add people to #{channel.name}</h3>
+      <ChannelInviteList channel={channel} onError={setError} />
+      {error && <p className="mb-2 text-sm text-red-600">{error}</p>}
+      <div className="flex justify-end">
+        <button data-testid="channel-add-done" className="rounded bg-accent px-3 py-1.5 text-sm font-semibold text-white" onClick={onClose}>Done</button>
+      </div>
+    </Modal>
+  );
+}
+
 /** Channel actions: notify level, invite members, leave, archive. */
 export function ChannelMenu({ channel, onClose }: { channel: ChannelDTO; onClose: () => void }) {
   const { api } = useBoundApi();
   const sel = useSelection();
   const qc = useQueryClient();
-  const auth = useAuth();
-  const members = useMembers(sel.workspaceId);
-  // Real membership (standard channels have no memberIds in the DTO): keeps
-  // the invite list from offering people who are already here.
-  const chanMembers = useChannelMembers(channel.id);
   const [error, setError] = useState<string | null>(null);
-  const [added, setAdded] = useState<Set<string>>(new Set());
 
   const refresh = () => qc.invalidateQueries({ queryKey: ['channels', sel.workspaceId] });
 
@@ -533,9 +610,6 @@ export function ChannelMenu({ channel, onClose }: { channel: ChannelDTO; onClose
     act(() => api('PUT', `/v1/channels/${channel.id}/notify`, { level }), false);
 
   const isDm = channel.kind !== 'standard';
-  const candidates = (members.data ?? []).filter(
-    (m) => m.userId !== auth.user.id && !(chanMembers.data ?? channel.memberIds ?? []).includes(m.userId),
-  );
 
   return (
     <Modal onClose={onClose} testid="channel-menu-modal">
@@ -562,33 +636,7 @@ export function ChannelMenu({ channel, onClose }: { channel: ChannelDTO; onClose
       {!isDm && (
         <>
           <p className="mb-1 text-xs font-semibold text-faint uppercase">Invite to channel</p>
-          <div className="mc-scroll mb-3 max-h-40 overflow-y-auto">
-            {candidates.length === 0 && <p className="px-1 py-1 text-sm text-faint">Everyone is here.</p>}
-            {candidates.map((m) => (
-              <div key={m.userId} className="flex items-center justify-between px-1 py-1 text-sm">
-                <span>
-                  {m.displayName}
-                  {m.isAgent && <span title="AI agent"> 🤖</span>}
-                </span>
-                {added.has(m.userId) ? (
-                  <span className="text-xs text-green-600">added ✓</span>
-                ) : (
-                  <button
-                    data-testid={`channel-add-${m.displayName}`}
-                    className="text-xs text-accent-soft hover:underline"
-                    onClick={() =>
-                      act(async () => {
-                        await api('POST', `/v1/channels/${channel.id}/members`, { userId: m.userId });
-                        setAdded((prev) => new Set(prev).add(m.userId));
-                      }, false)
-                    }
-                  >
-                    Add
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
+          <ChannelInviteList channel={channel} onError={setError} />
         </>
       )}
 

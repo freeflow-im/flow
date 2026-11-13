@@ -13,7 +13,7 @@ import Composer, { arrowUpEdit } from './Composer';
 import FindBar, { useChatFind } from './FindBar';
 import { MobileMenuButton } from './MobileMenuButton';
 import { useHoverTooltip } from './HoverTooltip';
-import { ChannelOptionsModal, Modal, UserCard } from './modals';
+import { AddPeopleModal, ChannelOptionsModal, Modal, UserCard } from './modals';
 import { renderBody } from '../lib/format';
 import { useSyncBar } from '../lib/syncBar';
 import { useCapabilities } from '../lib/backend';
@@ -35,6 +35,7 @@ export default function ChannelView({ channelId }: { channelId: string }) {
   const lastReadRef = useRef<string | null>(null);
   const [cardUserId, setCardUserId] = useState<string | null>(null);
   const [editChannel, setEditChannel] = useState(false);
+  const [addPeople, setAddPeople] = useState(false);
   const [membersOpen, setMembersOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [pinsOpen, setPinsOpen] = useState(false);
@@ -272,6 +273,7 @@ export default function ChannelView({ channelId }: { channelId: string }) {
               loading={chanMembers.isLoading}
               onClose={() => setMembersOpen(false)}
               onSelect={(id) => { setMembersOpen(false); setCardUserId(id); }}
+              onAdd={channel?.kind === 'standard' && !archived ? () => { setMembersOpen(false); setAddPeople(true); } : undefined}
             />
           )}
           {menuOpen && (
@@ -356,6 +358,7 @@ export default function ChannelView({ channelId }: { channelId: string }) {
 
       {cardUserId && <UserCard userId={cardUserId} onClose={() => setCardUserId(null)} />}
       {editChannel && channel && <ChannelOptionsModal channel={channel} onClose={() => setEditChannel(false)} />}
+      {addPeople && channel && <AddPeopleModal channel={channel} onClose={() => setAddPeople(false)} />}
       {pinsOpen && (
         <PinnedMessagesModal
           messages={pins.data ?? []}

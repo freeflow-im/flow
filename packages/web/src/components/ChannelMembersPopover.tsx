@@ -28,11 +28,14 @@ export default function ChannelMembersPopover({
   rows,
   loading = false,
   onSelect,
+  onAdd,
   onClose,
 }: {
   rows: MemberRow[];
   loading?: boolean;
   onSelect: (userId: string) => void;
+  /** "Add people", for a channel people can be added to. */
+  onAdd?: () => void;
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -69,6 +72,16 @@ export default function ChannelMembersPopover({
       <p className="px-2 pt-1 pb-1.5 text-[11px] font-bold tracking-[.05em] text-muted uppercase">
         {loading && rows.length === 0 ? 'Members' : `${rows.length} member${rows.length === 1 ? '' : 's'}`}
       </p>
+      {onAdd && (
+        <button
+          data-testid="channel-add-people"
+          className="mb-1 flex w-full items-center gap-2.5 rounded-[9px] p-1.5 text-left text-[13.5px] font-semibold text-accent-soft hover:bg-accent/10"
+          onClick={onAdd}
+        >
+          <span className="flex h-[26px] w-[26px] items-center justify-center rounded-[9px] bg-accent/10 text-base leading-none">+</span>
+          Add people
+        </button>
+      )}
       {rows.length === 0 && (
         <p className="px-2 py-2 text-sm text-faint">{loading ? 'Loading…' : 'No members.'}</p>
       )}
