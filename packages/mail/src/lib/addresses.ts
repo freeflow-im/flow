@@ -61,6 +61,16 @@ export function formatAddress(a: Address): string {
 /** The name to show for an address: its name, else the part before the @. */
 export const displayName = (a: Address | null | undefined) => (a ? a.name || a.address.split('@')[0] || a.address : '(no sender)');
 
+/** A recipient as the short "to" line under a sender names them (as Gmail does): the first name, or the whole address when there is no name. */
+export function shortName(a: Address): string {
+  const name = a.name.trim().replace(/^["']|["']$/g, '').trim();
+  if (!name || name.includes('@')) return a.address;
+  // "Miller, James" is James.
+  const comma = name.indexOf(',');
+  const first = comma > 0 ? name.slice(comma + 1).trim().split(/\s+/)[0] : name.split(/\s+/)[0];
+  return first || name;
+}
+
 /** Addresses once each (by address, ignoring case), leaving out `exclude`. */
 export function uniqueAddresses(list: Address[], exclude: string[] = []): Address[] {
   const seen = new Set(exclude.map((e) => e.toLowerCase()));
