@@ -55,7 +55,12 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
 - Markdown documents live in `client/src/markdown` (`MarkdownController` over the plain text with autosave,
   the GitHub-flavored `MarkdownPreview` built on react-markdown + remark-gfm) and
   `client/src/pages/MarkdownPage.tsx` (a textarea editor with a resizable preview panel), behind
-  `/api/markdown`. The stored format is `shared/markdown.ts`. A ```mermaid code block is drawn as its diagram
+  `/api/markdown`. The preview can be edited in place (`WysiwygPreview.tsx`, `wysiwyg.ts`): each top-level block
+  (`markdownBlocks`) is its own contentEditable element, frozen while it has the focus, and an edit turns only that
+  block's HTML back into Markdown (hast-util-to-mdast + mdast-util-to-markdown) and replaces its lines, so the other
+  blocks keep their text exactly; front matter and Mermaid blocks stay text-only. A picture pasted or dropped into
+  the text or the preview is stored as a file beside the document (`POST /api/files` in its folder and root) and
+  linked by its relative name (`pastedImage.ts`), which the preview reads back through `/api/files/at`. The stored format is `shared/markdown.ts`. A ```mermaid code block is drawn as its diagram
   (`MermaidDiagram.tsx`); Mermaid is loaded on demand by the page (`loadMermaid`), and the plugin, which is
   built as one script, does not pass it, so there the block stays code. The assistant's content tools (`read_doc`,
   `insert_content`, `replace_blocks`, `delete_blocks`, `replace_text`, plus `open_doc`, `list_docs`,

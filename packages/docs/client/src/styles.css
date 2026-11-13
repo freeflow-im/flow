@@ -4774,6 +4774,38 @@ button.agent-tool-label:hover {
 .md-preview-empty {
   color: var(--muted);
 }
+/* The preview edited in place (markdown/WysiwygPreview.tsx): each block is its own editable element. */
+.md-wy {
+  min-height: 100%;
+}
+.md-wy > .md-wy-block:first-child > :first-child {
+  margin-top: 0;
+}
+.md-wy-block[contenteditable='true'] {
+  outline: none;
+  border-radius: 4px;
+  caret-color: #1a73e8;
+}
+.md-wy-block[contenteditable='true']:hover {
+  box-shadow: -10px 0 0 -7px #dadce0;
+}
+.md-wy-block[contenteditable='true']:focus {
+  box-shadow: -10px 0 0 -7px #1a73e8;
+}
+.md-wy-new {
+  min-height: 3em;
+}
+.md-wy-new:empty::before {
+  content: attr(data-placeholder);
+  color: var(--muted);
+  opacity: 0;
+}
+.md-wy-new:empty:is(:only-child, :hover, :focus)::before {
+  opacity: 1;
+}
+.md-wy-block input[type='checkbox'] {
+  cursor: pointer;
+}
 .md-page .btn.active {
   background: #eceff1;
   border-color: #455a64;

@@ -23,8 +23,11 @@ import { ResizeHandle, usePanelWidth } from '../components/ResizeHandle.tsx';
 import { useFavicon } from '../favicon.ts';
 import { MARKDOWN_ACCEPT, MAX_IMPORT_MB } from '../importFile.ts';
 import { MarkdownController, useMarkdownController } from '../markdown/controller.ts';
-import { MarkdownEditor, replaceRange, wrapSelection } from '../markdown/MarkdownEditor.tsx';
+import { insertImage, MarkdownEditor, replaceRange, wrapSelection, type StoreImage } from '../markdown/MarkdownEditor.tsx';
 import { MarkdownPreview } from '../markdown/MarkdownPreview.tsx';
+import { WysiwygPreview } from '../markdown/WysiwygPreview.tsx';
+import { imageMarkdown } from '../markdown/pastedImage.ts';
+import { rootFields, type ImageRoot } from '../markdown/imagePaths.ts';
 import { MARKDOWN_PREVIEW } from '../panelSize.ts';
 import { FindBox, FindToggle } from '../find/FindBox.tsx';
 import { findAll, stepIndex, useFind } from '../find/find.ts';
@@ -52,6 +55,17 @@ function pickMarkdownFile(): Promise<File | null> {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = MARKDOWN_ACCEPT;
+    input.onchange = () => resolve(input.files?.[0] ?? null);
+    input.addEventListener('cancel', () => resolve(null));
+    input.click();
+  });
+}
+
+function pickPicture(): Promise<File | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/png,image/jpeg,image/gif,image/webp,image/svg+xml,image/avif';
     input.onchange = () => resolve(input.files?.[0] ?? null);
     input.addEventListener('cancel', () => resolve(null));
     input.click();
@@ -232,6 +246,31 @@ function MarkdownWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta;
     toastTimer.current = setTimeout(() => setToast(null), 3500);
   }, []);
 
+  // Pictures pasted or dropped into the text or the preview are stored beside the document (markdown/pastedImage.ts).
+  const metaRef = useRef(meta);
+  metaRef.current = meta;
+  const root = useMemo<ImageRoot>(() => ({ workspaceId: meta.workspaceId, shared: meta.shared }), [meta.workspaceId, meta.shared]);
+  const storeImage = useCallback<StoreImage>(
+    async (file) => {
+      const m = metaRef.current;
+      if (file.size > MAX_IMPORT_MB * 1024 * 1024) {
+        notify(`This picture is too large (${MAX_IMPORT_MB} MB maximum).`);
+        return null;
+      }
+      try {
+        const fields = rootFields(m);
+        const stored = await api.uploadFile(file.name, file, { folder: m.folder ?? '', workspace: fields.workspace, shared: !!fields.shared });
+        return imageMarkdown(stored.filename);
+      } catch (e) {
+        notify(`The picture could not be saved: ${e instanceof Error ? e.message : String(e)}`);
+        return null;
+      }
+    },
+    [notify],
+  );
+  // The preview can be edited in place, except when the file is read-only or being made into a PDF.
+  const editablePreview = !ctl.readOnly && !printingPdf();
+
   /** File › Download as PDF: saved first, then made by the server (print.ts). */
   const exportPdf = async () => {
     notify('Making the PDF…');
@@ -340,6 +379,15 @@ function MarkdownWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta;
         { label: 'Heading', action: insert('## ', '', 'Heading') },
         { label: 'Link', shortcut: `${MOD}K`, action: insert('[', '](https://)', 'link text') },
         { label: 'Image', action: insert('![', '](https://)', 'alt text') },
+        {
+          label: 'Picture from computer…',
+          disabled: ctl.readOnly,
+          action: async () => {
+            const file = await pickPicture();
+            const ta = editorRef.current;
+            if (file && ta) await insertImage(ta, file, storeImage);
+          },
+        },
         { label: 'Code block', action: insert('```\n', '\n```', 'code') },
         { label: 'Quote', action: insert('> ', '', 'quote') },
         { label: 'Bulleted list', action: insert('- ', '', 'item') },
@@ -394,7 +442,7 @@ function MarkdownWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta;
           </nav>
         </div>
         <div className="wb-user">
-          <button className={`btn${showPreview ? ' active' : ''}`} aria-pressed={showPreview} onClick={() => setShowPreview(!showPreview)} title="Show or hide the rendered preview">
+          <button className={`btn${showPreview ? ' active' : ''}`} aria-pressed={showPreview} onClick={() => setShowPreview(!showPreview)} title="Show or hide the rendered preview, which you can also edit in place">
             Preview
           </button>
           <FileSearchButton />
@@ -419,7 +467,7 @@ function MarkdownWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta;
       )}
       <div className="md-body-row" ref={rowRef}>
         <div className="md-editor-col">
-          <MarkdownEditor ctl={ctl} editorRef={editorRef} previewRef={previewRef} />
+          <MarkdownEditor ctl={ctl} editorRef={editorRef} previewRef={previewRef} storeImage={storeImage} />
           {find?.query && <TextareaMatches textareaRef={editorRef} text={ctl.text} starts={starts} length={find.query.length} current={current} />}
           {find && (
             <FindBox
@@ -443,7 +491,11 @@ function MarkdownWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta;
           <>
             <ResizeHandle panel={preview} side="right" label="Resize preview" className="md-preview-resize" />
             <div className="md-preview" style={{ width: preview.width }} ref={previewRef}>
-              <MarkdownPreview text={ctl.text} loadMermaid={loadMermaid} folder={meta.folder ?? ''} />
+              {editablePreview ? (
+                <WysiwygPreview ctl={ctl} text={ctl.text} loadMermaid={loadMermaid} folder={meta.folder ?? ''} root={root} storeImage={storeImage} />
+              ) : (
+                <MarkdownPreview text={ctl.text} loadMermaid={loadMermaid} folder={meta.folder ?? ''} root={root} />
+              )}
             </div>
           </>
         )}
