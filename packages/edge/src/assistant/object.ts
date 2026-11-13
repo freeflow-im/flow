@@ -691,14 +691,14 @@ export class Assistant extends DurableObject<AssistantEnv> {
     }
   }
 
-  /** list_channels, read_messages or leave_channel, through the Org object as the assistant's sponsor. */
+  /** list_channels, read_messages, search_messages or leave_channel, through the Org object as the assistant's sponsor. */
   private async runChatTool(agentUserId: string, c: ClientToolCall, org: OrgStub | undefined): Promise<ChatCard['others'][number]> {
-    const op = c.name === 'list_channels' ? 'channels' : c.name === 'read_messages' ? 'read' : c.name === 'leave_channel' ? 'leave' : null;
+    const op = c.name === 'list_channels' ? 'channels' : c.name === 'read_messages' ? 'read' : c.name === 'search_messages' ? 'search' : c.name === 'leave_channel' ? 'leave' : null;
     if (!op) return { id: c.id, content: `${c.name} works only in the app, not in Chat.`, isError: true };
     if (!org) return { id: c.id, content: 'Chat is not reachable here.', isError: true };
     try {
-      const input = c.input as { channelId?: string; limit?: number };
-      return { id: c.id, content: JSON.stringify(await org.assistantChat({ agentUserId, op, channelId: input.channelId, limit: input.limit })) };
+      const input = c.input as { channelId?: string; limit?: number; query?: string; sort?: 'relevance' | 'recent' };
+      return { id: c.id, content: JSON.stringify(await org.assistantChat({ agentUserId, op, channelId: input.channelId, limit: input.limit, query: input.query, sort: input.sort })) };
     } catch (err) {
       return { id: c.id, content: (err as Error).message, isError: true };
     }

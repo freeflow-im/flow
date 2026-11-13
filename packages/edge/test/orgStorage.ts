@@ -4,6 +4,7 @@ import { DatabaseSync, type SQLInputValue, type StatementSync } from 'node:sqlit
 import { openDb, type DB } from '../src/org/db/index';
 import { ORG_MIGRATIONS } from '../src/org/db/migrations';
 import { HUDDLE_ROSTER_DDL } from '../src/org/huddles';
+import { MESSAGE_SEARCH_DDL } from '../src/org/services/search';
 
 const toBinding = (v: unknown): SQLInputValue => (v instanceof ArrayBuffer ? new Uint8Array(v) : (v as SQLInputValue));
 const fromValue = (v: unknown) => (v instanceof Uint8Array ? v.buffer.slice(v.byteOffset, v.byteOffset + v.byteLength) : v);
@@ -42,5 +43,6 @@ export function orgStorage(): { db: DB; sqlite: DatabaseSync } {
   };
   for (const m of ORG_MIGRATIONS) for (const statement of m.split('--> statement-breakpoint')) if (statement.trim()) sqlite.exec(statement);
   sqlite.exec(HUDDLE_ROSTER_DDL);
+  for (const ddl of MESSAGE_SEARCH_DDL) sqlite.exec(ddl);
   return { db: openDb(storage as unknown as DurableObjectStorage), sqlite };
 }

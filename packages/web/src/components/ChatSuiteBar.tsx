@@ -10,8 +10,8 @@ import { useSwitcherEntries, useWorkspaceInvites, useWorkspaces } from '../hooks
 import { useCapabilities } from '../lib/backend';
 import { connectionManager, type ConnectionRuntime } from '../lib/connectionRuntime';
 import { openWorkspace, showsSource } from '../lib/workspaceSwitcher';
-import { ACTIVITY_VIEW_ID, useAuth, useRuntime, useSelection } from '../state';
-import { FIND_EVENT } from './FindBar';
+import { ACTIVITY_VIEW_ID, SEARCH_VIEW_ID, useAuth, useRuntime, useSelection } from '../state';
+import { setMessageSearch } from '../lib/messageSearch';
 import { HelpModal } from './HelpModal';
 import { InviteModal, ProfileModal } from './modals';
 
@@ -174,10 +174,19 @@ export default function ChatSuiteBar({ activityUnread, intent }: { activityUnrea
           ...(sel.workspaceId && docsHere ? { onAutomations: () => window.location.assign(new URL(adminAddress('automations'), runtime.origin).toString()) } : {}),
           ...(canInvite ? { onInvite: () => setModal('invite') } : {}),
         }}
-        search={{
-          placeholder: 'Find in this conversation',
-          onSubmit: (q) => window.dispatchEvent(new CustomEvent(FIND_EVENT, { detail: q })),
-        }}
+        // Message search (docs/specs/search.md) across the organization's channels; ⌘F still finds in the conversation shown.
+        // Offered once a workspace is open: the search is that workspace's.
+        search={
+          sel.workspaceId
+            ? {
+                placeholder: 'Search messages',
+                onSubmit: (q) => {
+                  setMessageSearch(q.trim());
+                  sel.selectChannel(SEARCH_VIEW_ID);
+                },
+              }
+            : undefined
+        }
         {...(docsHere ? { assistant: { onOpen: () => window.location.assign('/docs?assistant') } } : {})}
         {...(sel.workspaceId && caps.notifications.state !== 'unavailable'
           ? { notifications: { onOpen: () => sel.selectChannel(ACTIVITY_VIEW_ID) } }

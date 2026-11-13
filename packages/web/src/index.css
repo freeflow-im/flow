@@ -49,6 +49,13 @@ html, body, #root {
   color: #fff;
 }
 
+/* Message search (SearchView): the matched words, in the find bar's soft wash of the accent. */
+.search-mark {
+  background-color: color-mix(in oklch, var(--color-accent) 22%, transparent);
+  color: inherit;
+  border-radius: 2px;
+}
+
 /* Reconnect bar (#234): a 2px indeterminate sweep under the channel header
    while the socket is down or the post-connect refetch is still running. */
 @keyframes mc-sync-slide {

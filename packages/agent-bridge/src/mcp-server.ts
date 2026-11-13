@@ -15,8 +15,8 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
-import type { ArtifactDTO, WorkspaceMemberDTO } from '@flow/shared';
-import { FlowApi, FlowApiError } from './api.js';
+import type { ArtifactDTO, MessagePage, WorkspaceMemberDTO } from '@flow/shared';
+import { FlowApi, FlowApiError, type MessageSearchHit } from './api.js';
 import { attachmentFilename, formatAttachments } from './attachments.js';
 import { deliverArtifact, deliveryId, inlineArtifactFile } from './artifact-delivery.js';
 import { CALENDAR_TOOLS, CALENDAR_TOOL_NAMES, calendarTool } from './calendar-tools.js';
@@ -147,13 +147,16 @@ export const BUILT_IN_TOOLS: McpToolEntry[] = [
   },
   {
     name: 'search_history',
-    description: 'Search recent messages in a Flow channel for a substring (case-insensitive).',
+    description:
+      'Search Flow messages by their words, best match first: every channel you can read (the ones you are in and every public channel) and your direct messages, or one channel. ' +
+      'The query takes words (stems match: "pricing" finds "prices"), "exact phrases", word* for a prefix, OR, -word, and filters: from:Name (or from:me), in:#channel, after:2026-10-01 or after:30d, before:, has:attachment, has:link. ' +
+      'Each hit has its time, author, channel, message id (and thread root), and the text around the words «marked».',
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: 'Text to search for.' },
-        channelId: { type: 'string', description: 'Channel to search (default: current conversation).' },
-        limit: { type: 'number', description: 'Max matches to return (default 10).' },
+        query: { type: 'string', description: 'Words and filters to search for.' },
+        channelId: { type: 'string', description: 'Only this channel (default: every channel you can read).' },
+        limit: { type: 'number', description: 'Max matches to return (default 10, at most 50).' },
       },
       required: ['query'],
     },
@@ -420,6 +423,39 @@ function inviteErrorText(err: unknown): string {
   return err.message;
 }
 
+/** The slice of FlowApi that `searchHistoryTool` uses, so a test can stand in for it without a server. */
+interface SearchHistoryApi {
+  searchMessages(workspaceId: string, q: string, limit?: number): Promise<{ hits: MessageSearchHit[] }>;
+  listMessages(channelId: string, limit?: number): Promise<MessagePage>;
+}
+
+/**
+ * search_history: the server's message search (docs/specs/search.md) over every channel the agent can read, or the one
+ * `channelId` names. Against a server from before it (404), the recent messages of the conversation's channel, by
+ * substring, as the tool always did.
+ */
+export async function searchHistoryTool(api: SearchHistoryApi, workspaceId: string, defaultChannelId: string, args: Record<string, unknown>): Promise<string> {
+  const limit = Math.min(Math.max(Number(args.limit ?? 10) || 10, 1), 50);
+  const text = String(args.query ?? '').trim();
+  if (!text) return 'say what to search for in query';
+  const named = typeof args.channelId === 'string' && args.channelId ? args.channelId : null;
+  try {
+    const { hits } = await api.searchMessages(workspaceId, named ? `${text} in:${named}` : text, limit);
+    const mark = (s: string) => s.replace(/\u0002/g, '«').replace(/\u0003/g, '»').replace(/\s+/g, ' ');
+    const lines = hits.map((h) => `[${h.at} <@${h.author ?? ''}> ${h.title} msg ${h.id}${h.threadRootId ? ` in thread ${h.threadRootId}` : ''}] ${mark(h.snippet).slice(0, 300)}`);
+    return lines.length ? lines.join('\n') : 'no matches';
+  } catch (err) {
+    if (!(err instanceof FlowApiError && err.status === 404)) throw err;
+  }
+  const q = text.toLowerCase();
+  const page = await api.listMessages(named ?? defaultChannelId, 200);
+  const hits = page.messages
+    .filter((m) => !m.deletedAt && m.body.toLowerCase().includes(q))
+    .slice(-limit)
+    .map((m) => `[${m.createdAt} <@${m.userId}> msg ${m.id}] ${m.body.slice(0, 300)}${formatAttachments(m.files)}`);
+  return hits.length ? hits.join('\n') : 'no matches';
+}
+
 /** The slice of FlowApi that `deleteArtifactTool` uses — narrow so a test can
  * stand in for it without a server. */
 interface ArtifactDeleteApi {
@@ -610,14 +646,8 @@ export async function runMcpServer(): Promise<void> {
         return toolText(`uploaded ${filename} (message id ${msg.id})`);
       }
       case 'search_history': {
-        const q = String(args.query ?? '').toLowerCase();
-        const limit = Math.min(Number(args.limit ?? 10), 50);
-        const page = await api.listMessages(channelId, 200);
-        const hits = page.messages
-          .filter((m) => !m.deletedAt && m.body.toLowerCase().includes(q))
-          .slice(-limit)
-          .map((m) => `[${m.createdAt} <@${m.userId}> msg ${m.id}] ${m.body.slice(0, 300)}${formatAttachments(m.files)}`);
-        return toolText(hits.length ? hits.join('\n') : 'no matches');
+        const r = await searchHistoryTool(api, workspaceId, channelId, args);
+        return toolText(r);
       }
       case 'list_channels': {
         const channels = await api.listChannels(workspaceId);

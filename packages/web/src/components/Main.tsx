@@ -24,7 +24,7 @@ import { backendFor } from '../lib/backend';
 import { SocketClient, type SocketStatus, type SocketHandlers } from '../lib/ws';
 import { OrganizationSockets } from '../lib/organizationSockets';
 import { plainBody } from '../lib/format';
-import { ACTIVITY_VIEW_ID, CHANNEL_BROWSER_VIEW_ID, DIRECTORY_VIEW_ID, SCHEDULED_VIEW_ID, LiveContext, MobileNavContext, typingKey, useAuth, useRuntime, useSelection } from '../state';
+import { ACTIVITY_VIEW_ID, CHANNEL_BROWSER_VIEW_ID, DIRECTORY_VIEW_ID, SCHEDULED_VIEW_ID, SEARCH_VIEW_ID, LiveContext, MobileNavContext, typingKey, useAuth, useRuntime, useSelection } from '../state';
 import { HuddleProvider, useHuddle, type HuddleState } from '../huddle';
 import { useNameMap, useWorkspaces } from '../hooks';
 import { getHost, isLookingAtApp, onLookingChange } from '../lib/host';
@@ -33,6 +33,7 @@ import type { NotificationRouting } from '@flow/shared';
 import Sidebar from './Sidebar';
 import ChannelView from './ChannelView';
 import ActivityView from './ActivityView';
+import SearchView from './SearchView';
 import DirectoryView from './DirectoryView';
 import ChannelBrowserView from './ChannelBrowserView';
 import ScheduledView from './ScheduledView';
@@ -686,6 +687,8 @@ export default function Main({ onActivityUnread }: { onActivityUnread?: (count: 
               <DirectoryView />
             ) : sel.channelId === CHANNEL_BROWSER_VIEW_ID ? (
               <ChannelBrowserView />
+            ) : sel.channelId === SEARCH_VIEW_ID ? (
+              <SearchView />
             ) : sel.channelId ? (
               <>
                 <ChannelView key={sel.channelId} channelId={sel.channelId} />

@@ -8,6 +8,8 @@ import { directoryLink } from './directoryLink';
 import type { Directory, DirectoryAnswer } from '../directory/object';
 import { publishEvent, subjectMeta, withPublisher } from './bus';
 import { HUDDLE_ROSTER_DDL } from './huddles';
+import { MESSAGE_SEARCH_DDL, reindexMessages, searchMessages } from './services/search';
+import { parseSearch } from '@flow/shared/search';
 import { openDb, withDb, type DB, schema } from './db/index';
 import { ORG_MIGRATIONS } from './db/migrations';
 import { setMailEnv } from './email/index';
@@ -46,6 +48,8 @@ export type OrgEnv = StorageEnv & MailProviderEnv & {
 };
 
 const DAY_MS = 86_400_000;
+/** Messages indexed for search in one go, between other requests (indexMessages). */
+const MESSAGE_INDEX_BATCH = 200;
 /** The storage key of the next mailbox retention sweep's time. */
 const SWEEP_KEY = 'mail_sweep_at';
 /** Set once the agents the directory retired when agents gained kinds (agents.md phase A) have left this roster. */
@@ -97,6 +101,9 @@ export class Org extends DurableObject<OrgEnv> {
   /** Socket events waiting to go into the event log, and the chain of sends, so they arrive in the order they happened. */
   private logQueue: PublishInput[] = [];
   private logging: Promise<void> = Promise.resolve();
+  /** The background pass of the message search index (indexMessages), and whether it was asked for again while running. */
+  private messageIndexing: Promise<void> | null = null;
+  private messageIndexAgain = false;
   /** Each job's depth, once asked of the Events object: it never changes. */
   private readonly jobDepths = new Map<string, number>();
 
@@ -115,6 +122,9 @@ export class Org extends DurableObject<OrgEnv> {
     });
     for (const statement of OUTBOX) sql.exec(statement);
     sql.exec(HUDDLE_ROSTER_DDL);
+    for (const ddl of MESSAGE_SEARCH_DDL) sql.exec(ddl);
+    // Messages the search index does not have yet (sent before it, or missed) are indexed in the background from the start.
+    void this.indexMessages();
     // Answered by the runtime, so a client's heartbeat does not wake the object.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('{"op":"ping"}', '{"op":"pong"}'));
     // A guest's row has no address for good (platform.md §3.3), so a missing account id is what says "not filled in yet".
@@ -452,10 +462,10 @@ export class Org extends DurableObject<OrgEnv> {
   /**
    * The Chat tools of a person's assistant (agents.md §1.1, assistant/chatTools.ts), as its runtime runs them, with its
    * sponsor's access: the standard channels the sponsor is in (`channels`), one of them before a post (`target`), its
-   * recent messages (`read`), and the assistant leaving one (`leave`). A channel the sponsor is not in is refused, so the
+   * recent messages (`read`), the messages it may read by their words (`search`), and the assistant leaving one (`leave`). A channel the sponsor is not in is refused, so the
    * assistant never reaches further than its sponsor. The post itself is assistantPost, after the sponsor's ✅.
    */
-  async assistantChat(p: { agentUserId: string; op: 'channels' | 'target' | 'read' | 'leave'; channelId?: string; limit?: number }): Promise<unknown> {
+  async assistantChat(p: { agentUserId: string; op: 'channels' | 'target' | 'read' | 'search' | 'leave'; channelId?: string; limit?: number; query?: string; sort?: 'relevance' | 'recent' }): Promise<unknown> {
     const sponsorId = this.assistantSponsor(p.agentUserId);
     if (!sponsorId) throw new Error('not a person’s assistant');
     const sql = this.ctx.storage.sql;
@@ -468,9 +478,24 @@ export class Org extends DurableObject<OrgEnv> {
         .filter((c) => c.kind === 'standard' && c.isMember && !c.archivedAt)
         .map((c) => ({ id: c.id, name: c.name, private: c.isPrivate, assistantIsMember: memberOf(c.id, p.agentUserId) }));
     }
+    if (p.op === 'search') {
+      // The sponsor's reach (public channels and theirs) but never direct messages (agents.md §1.1); `search` below.
+      const workspace = sql.exec('SELECT id FROM workspaces LIMIT 1').toArray()[0];
+      if (!workspace) return [];
+      void this.indexMessages();
+      const limit = Math.min(Math.max(p.limit ?? 15, 1), 50);
+      const query = parseSearch(String(p.query ?? '').slice(0, 1000));
+      if (!query.groups.length && !Object.keys(query.filters).length) throw new Error('Say what to look for in query.');
+      const hits = await this.scoped(() => searchMessages(workspace.id as string, sponsorId, query, { limit, sort: p.sort, channelsOnly: true }));
+      const marked = (s: string) => s.replace(/\u0002/g, '«').replace(/\u0003/g, '»');
+      return hits.map((h) => ({ id: h.id, channel: h.title, channelId: h.channelId, from: h.authorName, at: h.at, text: marked(h.snippet), ...(h.threadRootId ? { threadRootId: h.threadRootId } : {}) }));
+    }
     const channelId = p.channelId ?? '';
     const chan = sql.exec('SELECT name, kind, is_private, archived_at FROM channels WHERE id = ?', channelId).toArray()[0];
-    if (!chan || !memberOf(channelId, sponsorId)) throw new Error('No such channel among the ones the user is in. list_channels lists them.');
+    // Reading also reaches a public channel the sponsor has not joined (any member may read one, and search finds them);
+    // posting and leaving stay with the channels the sponsor is in.
+    const readable = !!chan && p.op === 'read' && chan.kind === 'standard' && !chan.is_private;
+    if (!chan || (!memberOf(channelId, sponsorId) && !readable)) throw new Error('No such channel among the ones the user is in. list_channels lists them.');
     if (p.op === 'target') {
       if (chan.kind !== 'standard') throw new Error('Only channels can be posted in this way, not direct messages.');
       if (chan.archived_at) throw new Error('That channel is archived.');
@@ -767,6 +792,31 @@ export class Org extends DurableObject<OrgEnv> {
   }
 
   /** Runs with this object's database, event bus and socket controls in scope; `stamp` marks the events it publishes. */
+  /**
+   * Index the messages the search index lacks or has an older copy of (services/search.ts), 200 at a time, letting other
+   * requests in between batches, until none is left. One pass runs at a time; asked again while it runs, it looks once
+   * more before it ends. If the object stops partway, the next start or search goes on from where it was.
+   */
+  indexMessages(): Promise<void> {
+    if (this.messageIndexing) {
+      this.messageIndexAgain = true;
+      return this.messageIndexing;
+    }
+    this.messageIndexing = (async () => {
+      try {
+        do {
+          this.messageIndexAgain = false;
+          while ((await this.scoped(() => reindexMessages(MESSAGE_INDEX_BATCH))) === MESSAGE_INDEX_BATCH) await new Promise((r) => setTimeout(r, 0));
+        } while (this.messageIndexAgain);
+      } catch (err) {
+        console.error(`message search index: ${(err as Error).message}`);
+      } finally {
+        this.messageIndexing = null;
+      }
+    })();
+    return this.messageIndexing;
+  }
+
   private scoped<T>(fn: () => Promise<T>, stamp?: Stamp): Promise<T> {
     return socketControl.run({ disconnectUser: (id) => this.closeUser(id) }, () =>
       directoryLink.run({ ensureAccount: (...args) => this.ensureAccount(...args), accountFor: (...args) => this.accountFor(...args) }, () =>

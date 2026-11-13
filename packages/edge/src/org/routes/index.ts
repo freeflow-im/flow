@@ -79,6 +79,8 @@ import * as ce from '../services/channelEmoji.js';
 import * as hd from '../services/huddles.js';
 import * as hi from '../services/huddleInvites.js';
 import * as msg from '../services/messages.js';
+import { searchMessages } from '../services/search.js';
+import { parseSearch } from '@flow/shared/search';
 import * as rx from '../services/reactions.js';
 import * as wse from '../services/workspaceEmoji.js';
 import * as fl from '../services/files.js';
@@ -581,6 +583,22 @@ export function registerRoutes(app: FastifyInstance): void {
     const { includeArchived } = req.query as { includeArchived?: string };
     const opts = { includeArchived: includeArchived === '1' || includeArchived === 'true' };
     return { channels: await ch.listChannels(id, req.user.id, opts) };
+  });
+
+  // Message search (services/search.ts, docs/specs/search.md): the query language of @flow/shared/search over the
+  // messages the caller may read, public channels they have not joined included. `sort=recent` for newest first,
+  // `prefix=1` for search as you type.
+  app.get('/v1/workspaces/:id/search', { preHandler: requireAuth }, async (req) => {
+    const { id } = req.params as { id: string };
+    const qs = req.query as { q?: string; sort?: string; limit?: string; prefix?: string };
+    const query = parseSearch(String(qs.q ?? '').slice(0, 1000));
+    if (!query.groups.length && !Object.keys(query.filters).length) throw badRequest('empty_query', 'say what to look for');
+    const hits = await searchMessages(id, req.user.id, query, {
+      limit: Number(qs.limit) || 20,
+      sort: qs.sort === 'recent' ? 'recent' : 'relevance',
+      prefixLast: qs.prefix === '1',
+    });
+    return { hits };
   });
 
   // DM upsert (phase2.md §1): returns the existing channel for this member set or creates it

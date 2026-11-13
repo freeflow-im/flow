@@ -17,7 +17,7 @@ export const APP_MANIFESTS: AppManifest[] = [
     kinds: [{ kind: 'channel', container: true, resolve: 'org' }, { kind: 'message', resolve: 'org' }, { kind: 'artifact', resolve: 'org' }, { kind: 'file', resolve: 'org' }],
     // Its tools, by name (their definitions: @flow/shared/tools, platform.md §5.4).
     tools: [
-      'list_channels', 'read_messages', 'send_message', 'leave_channel', 'react', 'upload_file', 'search_history', 'list_users', 'join_channel', 'set_channel_indicator', 'set_channel_emoji',
+      'list_channels', 'read_messages', 'search_messages', 'send_message', 'leave_channel', 'react', 'upload_file', 'search_history', 'list_users', 'join_channel', 'set_channel_indicator', 'set_channel_emoji',
       'create_channel', 'start_task', 'invite_to_channel', 'set_avatar', 'create_artifact', 'deliver_artifact', 'update_artifact', 'delete_artifact', 'list_artifacts', 'download_file',
     ],
     // A person's assistant asked in Chat (agents.md §1.1): the Worker runs the turn with Chat's page and its Chat tools.
