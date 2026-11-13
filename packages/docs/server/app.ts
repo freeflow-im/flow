@@ -354,6 +354,9 @@ export async function buildApp(opts: AppOptions) {
   const homeFolder = opts.local ? new LocalFolder(homedir(), path.join(opts.dataDir, 'trash'), opts.local.findByName, HOME_FIND_BUDGET_MS) : null;
   const sheets = folder ? new LocalSheetStore(db, folder, opts.dataDir) : new SheetStore(db, path.join(opts.dataDir, 'sheets'));
   await sheets.init();
+  // Documents the search index does not have yet (saved before it, or changed by another path) are indexed in the
+  // background from the start, not at the first search (server/search.ts). Not awaited; nothing for the desktop app's folder.
+  void sheets.reindexStale();
   /**
    * A save may name the revision (updatedAt) the editor loaded. When it does and the file has been saved
    * since, by another editor or the ChatGPT plugin, the current metadata is returned so the save is refused

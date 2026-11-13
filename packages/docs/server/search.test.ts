@@ -175,3 +175,41 @@ describe('the search_content tool', () => {
     expect(JSON.parse(await runServerTool('search_content', { query: 'puffin' }, { ...(env as object), userId: 'bob', viewer: bob, scope: { ...annMine, ownerId: 'bob' } } as never)).total).toBe(0);
   });
 });
+
+describe('at start', () => {
+  it('indexes the documents the index does not have, before anyone searches', async () => {
+    const { buildApp } = await import('./app.ts');
+    const { mailbox, signUp } = await import('./testing.ts');
+    const appDir = mkdtempSync(path.join(tmpdir(), 'docs-search-start-'));
+    const box = mailbox();
+    const rows = () => {
+      const peek = openDb(path.join(appDir, 'app.db'));
+      try {
+        return (peek.prepare("SELECT title FROM search_docs WHERE object_kind = 'sheet'").all() as { title: string }[]).map((r) => r.title);
+      } finally {
+        peek.close();
+      }
+    };
+    try {
+      const first = await buildApp({ dataDir: appDir, sendMail: box.send, appUrl: 'https://sheets.test', blob: null });
+      const cookie = (await signUp(first, box, 'starter@x.com')).cookie;
+      await first.inject({ method: 'POST', url: '/api/markdown', payload: { title: 'Osprey log', text: 'osprey' }, headers: { cookie } });
+      await first.close();
+      // As if it was saved before search existed.
+      const raw = openDb(path.join(appDir, 'app.db'));
+      raw.exec('DELETE FROM search_docs');
+      raw.close();
+      expect(rows()).toEqual([]);
+
+      const again = await buildApp({ dataDir: appDir, sendMail: box.send, appUrl: 'https://sheets.test', blob: null });
+      try {
+        for (let i = 0; i < 50 && !rows().length; i++) await new Promise((r) => setTimeout(r, 20));
+        expect(rows()).toEqual(['Osprey log']);
+      } finally {
+        await again.close();
+      }
+    } finally {
+      rmSync(appDir, { recursive: true, force: true });
+    }
+  });
+});

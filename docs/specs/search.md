@@ -126,8 +126,9 @@ scores from different indexes are not comparable, positions are.
 - **When**: `SheetStore` indexes a document as it writes it (`insert` and `write`, every kind) and updates the title on
   `rename`. A trigger on `sheets` removes the index row when the document is deleted, whatever deleted it. The text is
   taken from the document object being saved, so indexing reads nothing extra.
-- **Backfill**: at start, and after each search, the store indexes up to 50 stale or missing documents (§2.2), reading
-  their files. Documents saved before this change are found within a few searches; nothing blocks on it.
+- **Backfill**: when the Docs object starts (`buildApp`), and again at each search, a background pass indexes the stale or
+  missing documents (§2.2), 50 at a time, reading their files, until none are left. Nothing waits for it. If the object
+  stops partway, the next start or search goes on from where it was, since the check reads the index as it is.
 - **Access**: the query first narrows to rows the person could reach (their own, and their organizations' rows), then
   checks each hit with `roleOf`, the one access check Docs has. A hit the person cannot open is dropped before it is
   returned, title and snippet included.
