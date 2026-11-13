@@ -2,10 +2,10 @@
 import { memo, useEffect, type KeyboardEvent, type RefObject, type SyntheticEvent } from 'react';
 import type { TextEdit } from '../../../shared/agent/markdownBlocks.ts';
 import type { MarkdownController } from './controller.ts';
-import { imageIn } from './pastedImage.ts';
+import { imageIn, imageMarkdown, type StoredImage } from './pastedImage.ts';
 
-/** Stores a pasted or dropped picture beside the document; resolves to its Markdown, or null when it failed (the page says why). */
-export type StoreImage = (file: File) => Promise<string | null>;
+/** Stores a pasted or dropped picture beside the document; resolves to the picture, or null when it failed (the page says why). */
+export type StoreImage = (file: File) => Promise<StoredImage | null>;
 
 let uploads = 0;
 
@@ -16,9 +16,9 @@ let uploads = 0;
 export async function insertImage(ta: HTMLTextAreaElement, file: File, store: StoreImage): Promise<void> {
   const token = `![Uploading ${file.name.replace(/[[\]]/g, '')} (${++uploads})…]()`;
   replaceRange(ta, ta.selectionStart, ta.selectionEnd, token);
-  const md = await store(file);
+  const image = await store(file);
   const at = ta.value.indexOf(token);
-  if (at >= 0) replaceRange(ta, at, at + token.length, md ?? '');
+  if (at >= 0) replaceRange(ta, at, at + token.length, image ? imageMarkdown(image) : '');
 }
 
 /**

@@ -10,6 +10,7 @@ import 'github-markdown-css/github-markdown-light.css';
 import { markdownBlocks } from '../../../shared/agent/markdownBlocks.ts';
 import type { MarkdownController } from './controller.ts';
 import { imageSrc, SOURCE_ATTR, type ImageRoot } from './imagePaths.ts';
+import { TAG_ATTR } from './imgTags.ts';
 import type { StoreImage } from './MarkdownEditor.tsx';
 import { PLUGINS, usePreviewComponents } from './MarkdownPreview.tsx';
 import type { MermaidLoader } from './MermaidDiagram.tsx';
@@ -172,14 +173,15 @@ export function WysiwygPreview({ ctl, text, loadMermaid, folder, root, storeImag
     const id = String(Math.random()).slice(2);
     const local = URL.createObjectURL(file);
     document.execCommand('insertHTML', false, `<img ${PENDING_ATTR}="${id}" src="${local}" alt="">`);
-    const md = await storeImage(file);
+    const stored = await storeImage(file);
     const img = host.querySelector<HTMLImageElement>(`[${PENDING_ATTR}="${id}"]`);
-    const m = md && /^!\[(.*)\]\((.*)\)$/.exec(md);
     if (img) {
-      if (m) {
-        img.alt = m[1];
-        img.setAttribute(SOURCE_ATTR, m[2]);
-        img.src = imageSrc(m[2], folder, root) ?? m[2];
+      if (stored) {
+        img.alt = stored.alt;
+        if (stored.width) img.setAttribute('width', String(stored.width));
+        img.setAttribute(TAG_ATTR, '');
+        img.setAttribute(SOURCE_ATTR, stored.src);
+        img.src = imageSrc(stored.src, folder, root) ?? stored.src;
         img.removeAttribute(PENDING_ATTR);
       } else img.remove();
     }

@@ -3,10 +3,11 @@
 // Markdown and only that block's lines are replaced in the text, so every other block keeps the exact text it
 // was written with.
 import type { Element as HastElement, ElementContent, Nodes as HastNodes, Root as HastRoot } from 'hast';
-import { toMdast } from 'hast-util-to-mdast';
+import { toMdast, type Handle } from 'hast-util-to-mdast';
 import { gfmToMarkdown } from 'mdast-util-gfm';
 import { toMarkdown, type Options } from 'mdast-util-to-markdown';
 import type { MarkdownBlock } from '../../../shared/agent/markdownBlocks.ts';
+import { imgTag, parseImgTags } from './imgTags.ts';
 
 /** The Markdown dialect the editor writes: what the text editor's own shortcuts write (`**bold**`, `_italic_`, `-` items). */
 const WRITE_OPTIONS: Options = { bullet: '-', emphasis: '_', strong: '*', fence: '`', fences: true, rule: '-', listItemIndent: 'one', extensions: [gfmToMarkdown()] };
@@ -31,11 +32,27 @@ function restore(node: HastNodes): void {
   for (const c of node.children) restore(c);
 }
 
+const str = (v: unknown): string | undefined => (v === undefined || v === null || v === '' ? undefined : String(v));
+
+/** A picture written as an `<img>` tag stays one (and one with a size must be one); any other as `![alt](src)`. */
+const img: Handle = (state, node) => {
+  const p = node.properties;
+  const src = str(p.src) ?? '';
+  if (p.dataMdTag !== undefined || str(p.width) || str(p.height)) {
+    const result = { type: 'html' as const, value: imgTag({ src, alt: str(p.alt), width: str(p.width), height: str(p.height), title: str(p.title) }) };
+    state.patch(node, result);
+    return result;
+  }
+  const result = { type: 'image' as const, url: src, alt: str(p.alt) ?? '', title: str(p.title) ?? null };
+  state.patch(node, result);
+  return result;
+};
+
 /** Markdown for the content of an edited block (a hast tree of its element's children). */
 export function hastToMarkdown(children: ElementContent[]): string {
   const root: HastRoot = { type: 'root', children: structuredClone(children) };
   restore(root);
-  const mdast = toMdast(root);
+  const mdast = toMdast(root, { handlers: { img } });
   return toMarkdown(mdast, WRITE_OPTIONS)
     .replace(/\n+$/, '')
     .replace(/^\n+/, '');
@@ -82,7 +99,8 @@ export function blockKeys(blocks: MarkdownBlock[], taken: Iterable<string> = [])
 
 /** Blocks the preview shows but that are only edited as text: front matter, raw HTML and Mermaid diagrams. */
 export function editableBlock(b: MarkdownBlock): boolean {
-  if (b.type === 'front_matter' || b.type === 'html' || b.type === 'definition' || b.type === 'footnoteDefinition') return false;
+  if (b.type === 'html') return parseImgTags(b.markdown) !== null;
+  if (b.type === 'front_matter' || b.type === 'definition' || b.type === 'footnoteDefinition') return false;
   if (b.type === 'code_block' && /^\s*(```|~~~)\s*mermaid\b/.test(b.markdown)) return false;
   return true;
 }

@@ -26,7 +26,7 @@ import { MarkdownController, useMarkdownController } from '../markdown/controlle
 import { insertImage, MarkdownEditor, replaceRange, wrapSelection, type StoreImage } from '../markdown/MarkdownEditor.tsx';
 import { MarkdownPreview } from '../markdown/MarkdownPreview.tsx';
 import { WysiwygPreview } from '../markdown/WysiwygPreview.tsx';
-import { imageMarkdown } from '../markdown/pastedImage.ts';
+import { displayWidth, storedImage } from '../markdown/pastedImage.ts';
 import { rootFields, type ImageRoot } from '../markdown/imagePaths.ts';
 import { MARKDOWN_PREVIEW } from '../panelSize.ts';
 import { FindBox, FindToggle } from '../find/FindBox.tsx';
@@ -259,8 +259,8 @@ function MarkdownWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta;
       }
       try {
         const fields = rootFields(m);
-        const stored = await api.uploadFile(file.name, file, { folder: m.folder ?? '', workspace: fields.workspace, shared: !!fields.shared });
-        return imageMarkdown(stored.filename);
+        const [stored, width] = await Promise.all([api.uploadFile(file.name, file, { folder: m.folder ?? '', workspace: fields.workspace, shared: !!fields.shared }), displayWidth(file)]);
+        return storedImage(stored.filename, width);
       } catch (e) {
         notify(`The picture could not be saved: ${e instanceof Error ? e.message : String(e)}`);
         return null;

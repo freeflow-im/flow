@@ -1,7 +1,10 @@
 import type { ElementContent, Properties } from 'hast';
 import { describe, expect, it } from 'vitest';
 import { markdownBlocks } from '../../../shared/agent/markdownBlocks.ts';
-import { imageIn, imageMarkdown, relativeLink } from './pastedImage.ts';
+import { imageIn, imageMarkdown, relativeLink, storedImage } from './pastedImage.ts';
+import { imgTags, parseImgTags } from './imgTags.ts';
+import remarkParse from 'remark-parse';
+import { unified } from 'unified';
 import { blockKeys, editableBlock, hastToMarkdown, spliceBlock } from './wysiwyg.ts';
 
 const h = (tagName: string, properties: Properties = {}, ...children: (ElementContent | string)[]): ElementContent => ({
@@ -16,6 +19,12 @@ describe('hastToMarkdown', () => {
     expect(hastToMarkdown([h('p', {}, 'Some ', h('strong', {}, 'bold'), ' and ', h('em', {}, 'italic'), ' text')])).toBe('Some **bold** and _italic_ text');
     expect(hastToMarkdown([h('h2', {}, 'Title')])).toBe('## Title');
     expect(hastToMarkdown([h('ul', {}, h('li', {}, 'one'), h('li', {}, 'two'))])).toBe('- one\n- two');
+  });
+
+  it('writes a picture drawn from an <img> tag, or given a size, back as a tag', () => {
+    const tag = h('img', { src: '/api/files/at?name=a.png', alt: 'chart', width: '300', dataMdSrc: 'a.png', dataMdTag: '' });
+    expect(hastToMarkdown([h('p', {}, 'See ', tag)])).toBe('See <img src="a.png" alt="chart" width="300">');
+    expect(hastToMarkdown([tag])).toBe('<img src="a.png" alt="chart" width="300">');
   });
 
   it('turns pictures back into the address written, not the one the preview loads', () => {
@@ -97,6 +106,29 @@ describe('pasted pictures', () => {
 
   it('links to it by a relative path Markdown reads whole', () => {
     expect(relativeLink('Pasted image (1).png')).toBe('Pasted%20image%20%281%29.png');
-    expect(imageMarkdown('Pasted image 2026-11-12 at 09.05.07.png')).toBe('![Pasted image 2026-11-12 at 09.05.07](Pasted%20image%202026-11-12%20at%2009.05.07.png)');
+    expect(imageMarkdown(storedImage('Pasted image 2026-11-12 at 09.05.07.png', 300))).toBe('<img src="Pasted%20image%202026-11-12%20at%2009.05.07.png" alt="Pasted image 2026-11-12 at 09.05.07" width="300">');
+    expect(imageMarkdown(storedImage('a "b".png'))).toBe('<img src="a%20%22b%22.png" alt="a &quot;b&quot;">');
+  });
+});
+
+describe('<img> tags', () => {
+  it('keeps only the picture attributes, and only of HTML that is nothing but <img> tags', () => {
+    expect(parseImgTags('<img src="a%20b.png" alt="x &amp; y" width=300 onerror="alert(1)" style="x">')).toEqual([{ src: 'a%20b.png', alt: 'x & y', width: '300' }]);
+    expect(parseImgTags('<img src="a.png"> <img src=\'b.png\' />')).toEqual([{ src: 'a.png' }, { src: 'b.png' }]);
+    expect(parseImgTags('<div><img src="a.png"></div>')).toBeNull();
+    expect(parseImgTags('<script>alert(1)</script>')).toBeNull();
+  });
+
+  it('makes pictures of them, in a block or within a line', () => {
+    const tree = unified().use(remarkParse).parse('<img src="a.png" width="300">\n\nText <img src="b.png"> here.\n\n<b>bold</b>') as unknown as { children: { type: string; children?: { type: string; data?: unknown }[]; data?: unknown }[] };
+    (imgTags() as (t: unknown) => void)(tree);
+    expect(tree.children[0]).toMatchObject({ type: 'imgTag', data: { hName: 'img', hProperties: { src: 'a.png', width: '300' } } });
+    expect(tree.children[1].children?.[1]).toMatchObject({ type: 'imgTag', data: { hProperties: { src: 'b.png' } } });
+    expect(tree.children[2].children?.[0].type).toBe('html');
+  });
+
+  it('lets a block of <img> tags be edited in the preview', () => {
+    const [tag, other] = markdownBlocks('<img src="a.png">\n\n<div>x</div>');
+    expect([editableBlock(tag), editableBlock(other)]).toEqual([true, false]);
   });
 });

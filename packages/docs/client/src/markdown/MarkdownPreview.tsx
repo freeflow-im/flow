@@ -9,10 +9,11 @@ import remarkFrontmatter from 'remark-frontmatter';
 import remarkGfm from 'remark-gfm';
 import 'github-markdown-css/github-markdown-light.css';
 import { frontMatterAsCode } from './frontMatter.ts';
+import { imgTags } from './imgTags.ts';
 import { imageSrc, SOURCE_ATTR, type ImageRoot } from './imagePaths.ts';
 import { MermaidDiagram, type MermaidLoader } from './MermaidDiagram.tsx';
 
-export const PLUGINS = [remarkFrontmatter, remarkGfm, frontMatterAsCode];
+export const PLUGINS = [remarkFrontmatter, remarkGfm, frontMatterAsCode, imgTags];
 
 /** The text of a code block that is written in Mermaid, or null for any other block. */
 function mermaidCode(children: ReactNode): string | null {
