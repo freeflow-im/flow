@@ -104,7 +104,8 @@ export interface MovedChats { conversations: string[]; usage: { user_id: string;
 
 /** Who is asking, per request: the caller context (the account) and the same person as the Docs object's caller. */
 /** `conversationUser`: whose conversation a request is in; the agent's own identity when it is not the caller's (a shared agent asked by a person). */
-interface Who { caller: AccountCaller; docs: DocsCaller; conversationUser?: string }
+/** `asker`: the person a shared agent's turn is for, where the conversation is not named after them (a Chat turn). */
+interface Who { caller: AccountCaller; docs: DocsCaller; conversationUser?: string; asker?: string }
 type Bindings = { who: Who };
 type C = Context<{ Bindings: Bindings }>;
 
@@ -286,7 +287,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
     const caller = who?.caller;
     const shared = !!caller && !caller.via;
     const external = userId.startsWith('auto:') || userId.startsWith('mail:');
-    return { shared, asker: shared && caller?.invokedBy ? (who?.conversationUser ?? userId) : null, external };
+    return { shared, asker: shared && caller?.invokedBy ? (who?.asker ?? who?.conversationUser ?? userId) : null, external };
   }
 
   /** The organization's Docs object's /api/*, as the person (routes/docs.ts' caller): undefined without Docs or a caller. */
@@ -475,6 +476,80 @@ export class Assistant extends DurableObject<AssistantEnv> {
     this.learnName(p.runtime.agentName);
     const run: ChatRun = { organizationId: p.organizationId, runtime: p.runtime, channelId: p.channelId, threadRootId: p.threadRootId, audience: p.audience ?? (p.threadRootId ? 'shared' : 'private') };
     await this.runChat(run, p.messageId, { message: p.prompt });
+  }
+
+  /**
+   * A member asked a hosted shared agent in Chat (agents.md §1; Org.askSharedAgents). The turn runs as the agent, with its
+   * own grants and channels, asked by the member (`invokedBy`), in a conversation of that member's in that channel, and the
+   * answer is posted as the agent. Chat's tools act with a person's access, so a shared agent has none: a call to one is
+   * answered with a refusal and the turn goes on.
+   */
+  async sharedChatTurn(p: { organizationId: string; runtime: HostedRuntimeDTO; askerUserId: string; askerAccountId: string; channelId: string; threadRootId: string | null; messageId: string; prompt: string; audience: 'private' | 'shared' }): Promise<void> {
+    const { runtime, organizationId } = p;
+    if (runtime.mode !== 'shared') return;
+    this.learnName(runtime.agentName);
+    await this.useOrgModel(organizationId);
+    const jobKey = `shared-chat:${p.messageId}`;
+    if (this.runningJobs.has(jobKey)) return;
+    this.runningJobs.add(jobKey);
+    const ORG = this.env.ORG;
+    const org = ORG?.get(ORG.idFromName(organizationId));
+    const conversation = `chat:${p.channelId}:${p.threadRootId ?? ''}:${p.askerUserId}`;
+    let stopTyping: ReturnType<typeof setInterval> | undefined;
+    try {
+      this.requireModel();
+      const [user, account, channelIds] = await Promise.all([
+        this.directory<UserDTO>('getUser', runtime.agentId, runtime.agentId),
+        this.directory<AccountDTO | null>('accountById', runtime.agentAccountId),
+        org ? org.channelIdsOf(runtime.agentId) : Promise.resolve([] as string[]),
+      ]);
+      if (!account) throw new Error('the agent has no account');
+      const caller = { user, token: '', authKind: 'agent' as const, ip: '', organizationId, account, invokedBy: p.askerAccountId } as AccountCaller;
+      const wrong = ownerMismatch(this, caller, 'the shared agent in Chat');
+      if (wrong) throw new Error(wrong);
+      const docs: DocsCaller = { userId: runtime.agentId, email: user.email, token: '', ip: '', accountId: account.id, channelIds };
+      this.turnWho.set(conversation, { caller, docs, conversationUser: conversation, asker: p.askerUserId });
+      const typing = () => void org?.agentTyping({ agentUserId: runtime.agentId, channelId: p.channelId, threadRootId: p.threadRootId }).catch(() => undefined);
+      typing();
+      stopTyping = setInterval(typing, TYPING_EVERY_MS);
+      const context = { page: 'chat' as const, channelId: p.channelId, threadRootId: p.threadRootId, audience: p.audience };
+      let req: Pick<AgentTurnRequest, 'message' | 'toolResults'> = { message: p.prompt };
+      let text = '';
+      for (let round = 0; round < MAX_CHAT_ROUNDS; round++) {
+        const { out, calls } = await withDocsContext(this.context, async () => {
+          const { agent } = this.service();
+          const abort = new AbortController();
+          const timer = setTimeout(() => abort.abort(), WAKE_TURN_MS);
+          let out = '';
+          let calls: ClientToolCall[] = [];
+          let failed: string | null = null;
+          try {
+            await agent.runTurn(conversation, { ...req, context, workspace: organizationId, timezone: user.timezone }, (e) => {
+              if (e.type === 'text') out += e.text;
+              else if (e.type === 'client_tools') calls = e.calls;
+              else if (e.type === 'error') failed = e.message;
+            }, abort.signal, { scope: { ownerId: runtime.agentId, workspaceId: organizationId, private: true }, viewer: runtime.agentId });
+          } finally {
+            clearTimeout(timer);
+          }
+          if (failed) throw new Error(failed);
+          return { out, calls };
+        });
+        text += out;
+        if (!calls.length) break;
+        req = { toolResults: calls.map((c) => ({ id: c.id, content: 'A shared agent has no Chat tools: answer in this reply instead, which is posted where you were asked.', isError: true })) };
+      }
+      clearInterval(stopTyping);
+      if (text.trim()) await org?.postAsSharedAgent({ agentUserId: runtime.agentId, channelId: p.channelId, threadRootId: p.threadRootId, body: text.trim(), clientMsgId: `shared-agent:${p.messageId}`, invokedBy: p.askerAccountId });
+    } catch (err) {
+      clearInterval(stopTyping);
+      const message = (err as Error).message;
+      console.error(`[assistant] shared chat ${p.messageId}: ${message}`);
+      await org?.postAsSharedAgent({ agentUserId: runtime.agentId, channelId: p.channelId, threadRootId: p.threadRootId, body: `⚠️ I could not answer that: ${message}`, clientMsgId: `shared-agent-error:${p.messageId}`, invokedBy: p.askerAccountId }).catch(() => undefined);
+    } finally {
+      this.turnWho.delete(conversation);
+      this.runningJobs.delete(jobKey);
+    }
   }
 
   /**

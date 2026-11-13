@@ -104,6 +104,7 @@ agentRoutes.post('/v1/workspaces/:id/agents/hosted', async (c) => {
   const org = c.env.ORG.get(c.env.ORG.idFromName(organizationId)) as unknown as { createSharedAgent(p: { sponsorId: string; name: string }): Promise<{ userId: string }> };
   const made = await org.createSharedAgent({ sponsorId: userId, name: r.data.name });
   await directory(c, 'setAgentRuntime', made.userId, 'hosted');
+  await (c.env.ORG.get(c.env.ORG.idFromName(organizationId)) as unknown as { markHostedAgent(userId: string): Promise<void> }).markHostedAgent(made.userId);
   const account = await directory(c, 'accountFor', made.userId, organizationId);
   if (!account) throw new ApiError(500, 'internal', 'the agent has no account');
   const definition = await runtimeOf(c, account.id).adopt(account, r.data.name);

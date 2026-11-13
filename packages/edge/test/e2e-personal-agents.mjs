@@ -74,4 +74,21 @@ r=await api(A.token,'DELETE',`/v1/workspaces/${W}/agents/personal/${scout.id}`);
 t('it leaves the member list',!((await api(A.token,'GET',`/v1/workspaces/${W}/members`)).j.members??[]).some(m=>m.userId===scout.id),'');
 r=await api(A.token,'POST',`/v1/workspaces/${W}/agents/personal`,{name:'Five'});t('which makes room for another',r.s===201,r.s);
 
+// 5. A hosted shared agent answers members in Chat (agents.md §1), and keeps what each tells it in their own `you` folder.
+r=await api(A.token,'POST',`/v1/workspaces/${W}/agents/hosted`,{name:'Omni',instructions:'You are the team helper. Keep answers short.'});
+const omni=r.j.agent;t('Ann makes Omni, a shared agent',r.s===201&&omni?.mode==='shared',r.s);
+r=await api(Bo.token,'POST',`/v1/workspaces/${W}/dms`,{userIds:[omni.id]});const ODM=r.j.id;t('Bob opens a DM with Omni',r.s===201,r.s);
+await say(Bo.token,ODM,'Please remember that my favourite colour is green.');
+let od=await until(()=>msgs(Bo.token,ODM),(l)=>l.some(m=>m.userId===omni.id&&!m.systemKind),120000);
+t('Omni answers Bob in the DM',od.some(m=>m.userId===omni.id&&!m.systemKind),JSON.stringify(od.map(m=>m.body)).slice(0,200));
+const bobMem=(await api(Bo.token,'GET',`/v1/workspaces/${W}/agents/${omni.id}/memory`)).j.files??[];
+t('it keeps that in Bob’s own you folder',bobMem.some(f=>f.path.startsWith('/memories/you/')&&/green/i.test(f.body))&&!bobMem.some(f=>f.path.startsWith('/memories/team/')&&/green/i.test(f.body)),JSON.stringify(bobMem.map(f=>f.path)));
+const annMem=(await api(A.token,'GET',`/v1/workspaces/${W}/agents/${omni.id}/memory`)).j.files??[];
+t('which Ann, its sponsor, does not see',!annMem.some(f=>/green/i.test(f.body)),JSON.stringify(annMem.map(f=>f.path)));
+r=await api(A.token,'POST',`/v1/workspaces/${W}/dms`,{userIds:[omni.id]});const ADM=r.j.id;
+await say(A.token,ADM,'What is Bob’s favourite colour? If you do not know, say you do not know.');
+const ad=await until(()=>msgs(A.token,ADM),(l)=>l.some(m=>m.userId===omni.id&&!m.systemKind),120000);
+const reply=ad.find(m=>m.userId===omni.id&&!m.systemKind)?.body??'';
+t('and Omni does not tell Ann',!!reply&&!/green/i.test(reply),reply);
+
 console.log(`\n${pass} passed, ${fail} failed`);process.exit(fail?1:0);
