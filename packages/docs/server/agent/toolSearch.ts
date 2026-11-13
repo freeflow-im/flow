@@ -1,11 +1,10 @@
 // Deferred tools: the assistant's model sees only a small set of tools at the start of a turn, and finds the rest with
 // its provider's tool search, which loads a tool's definition when a search matches it. Every definition is still sent
 // with each request (the provider searches them), but only the loaded ones count against the context. Claude runs the
-// search on Anthropic's side (tool_search_tool_bm25); OpenAI runs its own (`tool_search`, openai.ts translates).
-// OpenRouter's Chat Completions API has no tool search, so its turns get every tool loaded, as before.
+// search on Anthropic's side (tool_search_tool_bm25); OpenAI runs its own (`tool_search`, openai.ts translates), and
+// OpenRouter its own (`openrouter:tool_search`, openrouter.ts translates).
 import type Anthropic from '@anthropic-ai/sdk';
 import type { AgentContext } from '../../shared/agent/protocol.ts';
-import type { ModelChoice } from './settings.ts';
 
 type Tool = Anthropic.Beta.BetaToolUnion;
 
@@ -36,9 +35,6 @@ export function coreTools(context: AgentContext | undefined): ReadonlySet<string
   return new Set([...ALWAYS, ...(CORE_BY_PAGE[context?.page ?? ''] ?? [])]);
 }
 
-/** Whether the model a turn runs on can search for deferred tools: Claude and OpenAI can; OpenRouter (Chat Completions) cannot. */
-export const searchesTools = (own: ModelChoice | null): boolean => own?.provider !== 'openrouter';
-
 /**
  * The turn's tools with all but the page's core deferred, and the search tool first (it stays loaded, which the API
  * requires of at least one tool). A list too short to be worth deferring is returned as it is.
@@ -53,15 +49,20 @@ export function deferTools(tools: Tool[], context: AgentContext | undefined): To
 export const TOOL_SEARCH_PROMPT =
   'Only some of your tools are loaded at the start. The others (for documents, presentations, spreadsheets, stored files and PDFs, pictures, the web, and the other apps the user has, such as mail, calendars and contacts) are found with the tool search tool: describe the task in a few words, such as "add a chart" or "create a calendar event", and the tools that match load for you to call. Search before you tell the user something cannot be done, and search again with other words if the first search finds nothing that fits.';
 
-/** The tool names earlier searches in this conversation loaded (Claude's tool_search_tool_result blocks). */
+/** The tool names earlier searches in this conversation loaded (Claude's tool_search_tool_result blocks, OpenRouter's own). */
 export function referencedTools(messages: Anthropic.Beta.BetaMessageParam[]): Set<string> {
   const names = new Set<string>();
   for (const m of messages) {
     if (m.role !== 'assistant' || typeof m.content === 'string') continue;
-    for (const b of m.content) {
-      if (b.type !== 'tool_search_tool_result') continue;
-      const c = b.content as { type: string; tool_references?: { tool_name: string }[] };
-      for (const r of c.tool_references ?? []) names.add(r.tool_name);
+    for (const b of m.content as { type: string; content?: unknown }[]) {
+      if (b.type === 'tool_search_tool_result') {
+        const c = b.content as { tool_references?: { tool_name: string }[] };
+        for (const r of c.tool_references ?? []) names.add(r.tool_name);
+      } else if (b.type === 'openrouter_tool_search_result') {
+        // OpenRouter's: { matches: [{ tool_id, schema_digest }] }.
+        const c = b.content as { matches?: { tool_id: string }[] } | undefined;
+        for (const r of c?.matches ?? []) names.add(r.tool_id);
+      }
     }
   }
   return names;
@@ -100,3 +101,4 @@ export const closeSearches = (ids: string[]): Anthropic.Beta.BetaMessageParam =>
   role: 'assistant',
   content: ids.map((id) => ({ type: 'tool_search_tool_result', tool_use_id: id, content: { type: 'tool_search_tool_result_error', error_code: 'unavailable' } }) as Anthropic.Beta.BetaContentBlockParam),
 });
+

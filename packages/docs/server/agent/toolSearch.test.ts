@@ -1,6 +1,6 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import { describe, expect, it } from 'vitest';
-import { coreTools, deferTools, keepReferencedTools, openSearches, referencedTools, searchesTools, TOOL_SEARCH } from './toolSearch.ts';
+import { coreTools, deferTools, keepReferencedTools, openSearches, referencedTools, TOOL_SEARCH } from './toolSearch.ts';
 
 type Tool = Anthropic.Beta.BetaToolUnion;
 const tool = (name: string): Tool => ({ name, description: name, input_schema: { type: 'object', properties: {} } });
@@ -25,12 +25,6 @@ describe('tool search', () => {
     expect(deferTools(few, { page: 'home' })).toBe(few);
   });
 
-  it('defers on Claude and OpenAI, not on OpenRouter', () => {
-    expect(searchesTools(null)).toBe(true);
-    expect(searchesTools({ provider: 'anthropic', apiKey: 'k', model: 'claude-sonnet-5-5' })).toBe(true);
-    expect(searchesTools({ provider: 'openai', apiKey: 'k', model: 'gpt-6.1-sol' })).toBe(true);
-    expect(searchesTools({ provider: 'openrouter', apiKey: 'k', model: 'x/y' })).toBe(false);
-  });
 
   it('adds a deferred stand-in for each tool a past search loaded that is not offered now', () => {
     const history = [

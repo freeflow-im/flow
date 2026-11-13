@@ -15,7 +15,8 @@ import type { FileStore } from '../files.ts';
 import type { ImageStore } from '../images.ts';
 import type { PdfMaker } from '../pdf.ts';
 import { assistantTools, isBrowserTool, runServerTool, ToolFailure, validateToolInput, type ServerToolEnvExtensions } from './tools.ts';
-import { closeSearches, deferTools, keepReferencedTools, openSearches, searchesTools, TOOL_SEARCH_PROMPT } from './toolSearch.ts';
+import { closeSearches, deferTools, keepReferencedTools, openSearches, TOOL_SEARCH_PROMPT } from './toolSearch.ts';
+import { portableHistory } from './history.ts';
 import { scopeOf, type ScopeArg, type ViewerArg } from '../scope.ts';
 
 type Message = Anthropic.Beta.BetaMessage;
@@ -28,7 +29,8 @@ export type ModelCall = (params: StreamParams, opts: { onText: (text: string) =>
 
 export function claudeModel(client: Anthropic = new Anthropic()): ModelCall {
   return async (params, { onText, signal }) => {
-    const stream = client.beta.messages.stream(params, { signal });
+    // Another provider's search steps and thinking, in a chat that moved to Claude, are refused (history.ts).
+    const stream = client.beta.messages.stream({ ...params, messages: portableHistory(params.messages, 'anthropic') }, { signal });
     stream.on('text', onText);
     return stream.finalMessage();
   };
@@ -235,10 +237,10 @@ export class AgentService {
     const search = { braveKey: this.settings.braveKey(userId), provider: this.providerSearch(own) };
     const env = { userId, ...access, sheets: this.sheets, images: this.images, files: this.files, pdf: this.pdf, context: req.context, search, ...(this.extend?.(userId, access.scope) ?? {}) };
     const callModel = own ? this.ownModel(own) : this.getModel();
-    // Most tools are deferred where the provider can search for them (toolSearch.ts); the set is fixed for the turn so the
+    // Most tools are deferred behind the provider's tool search (toolSearch.ts); the set is fixed for the turn so the
     // cached prefix holds across its steps.
     const allTools = assistantTools(req.context, !!this.jobs);
-    const tools = searchesTools(own) ? deferTools(allTools, req.context) : allTools;
+    const tools = deferTools(allTools, req.context);
     const deferred = tools !== allTools;
     const system: Anthropic.Beta.BetaTextBlockParam[] = [{ type: 'text', text: systemPrompt(this.jobs, this.guidance) }];
     if (deferred) system.push({ type: 'text', text: TOOL_SEARCH_PROMPT });

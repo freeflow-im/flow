@@ -517,7 +517,11 @@ export function ChannelInviteList({ channel, onError }: { channel: ChannelDTO; o
   const [added, setAdded] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState('');
   const candidates = (members.data ?? []).filter(
-    (m) => m.userId !== auth.user.id && (added.has(m.userId) || !(chanMembers.data ?? channel.memberIds ?? []).includes(m.userId)),
+    (m) =>
+      m.userId !== auth.user.id &&
+      // Someone's personal assistant joins only channels its own person brings it into (agents.md §1.1); the server refuses the rest.
+      (m.kind !== 'personal_agent' || m.sponsorId === auth.user.id) &&
+      (added.has(m.userId) || !(chanMembers.data ?? channel.memberIds ?? []).includes(m.userId)),
   );
   const shown = candidates.filter((m) => m.displayName.toLowerCase().includes(filter.trim().toLowerCase()));
   const add = async (userId: string) => {
