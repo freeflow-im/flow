@@ -1,5 +1,9 @@
 # Flow to AWS: the cut-over runbook
 
+> **Done, and since superseded.** This ran on 2026-11-01, and Railway was retired. On 2026-11-03 the suite moved
+> again, to Cloudflare (`docs/ops/CUTOVER_TO_CLOUDFLARE.md`); the AWS stack now only serves the legacy ChatGPT
+> plugin and the paths the Worker passes on. Kept as a record of what was done.
+
 Phase 1.5 of the FreeFlow suite (`docs/specs/flow-to-aws.md`, `docs/specs/freeflow-suite.md` §3.4). The Flow
 server moves from Railway onto the AWS stack that already hosts the Workspace app
 (`packages/docs/deploy/aws/template.yaml`, stack `mcpdocs`, us-west-2): one Graviton instance, Caddy for HTTPS,

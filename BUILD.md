@@ -12,7 +12,7 @@ If you only want to run Flow locally, you want
 
 | Artifact | Build | Release | Automatic? |
 |---|---|---|---|
-| Server + web client | `pnpm build` | `git push origin main` | **Yes** — Railway builds every push to `main`; during the move to AWS, `flow-aws-deploy.yml` deploys it there too |
+| The suite: Cloudflare Worker + web clients | `pnpm dev:suite --build` (locally) | merge to `main` | **Yes** — `flow-aws-deploy.yml` deploys the Worker (`deploy-edge.yml`), and the AWS origin that still runs the legacy ChatGPT plugin |
 | macOS app | `apps/macos/tools/make-app.sh` | `apps/macos/tools/release-macos.sh` | No — run locally, needs signing credentials |
 | iOS app | `xcodegen generate` + Xcode | `apps/ios/tools/release-ios.sh` | No — run locally, needs the signing account |
 | `flow-agent-bridge` (npm) | `pnpm --filter flow-agent-bridge build` | bump `version`, merge to `main` | **Yes** — GitHub Actions publishes |
@@ -20,11 +20,6 @@ If you only want to run Flow locally, you want
 | Home page (`freeflowhome/`) | `pnpm build` (in `freeflowhome/`) | merge to `main` | **Yes** — GitHub Actions deploys to Cloudflare Pages |
 | FreeFlow Browser (Chrome extension) | `node packages/browser-extension/package.mjs` | bump `version`, upload the zip in the Chrome Web Store dashboard (`packages/browser-extension/README.md`) | No — uploaded by hand; the store reviews each version |
 | Desktop app (Electron, `apps/desktop`) | `pnpm --filter @flow/desktop build` then `start` | not yet — M5 of `docs/specs/desktop-electron.md` | No — runs from source only today |
-
-The desktop app is in the workspace but **not** in the Railway build
-(`railway.json` filters it out): the server never needs it, and its Electron
-dev dependency is a 100 MB download. Set `ELECTRON_SKIP_BINARY_DOWNLOAD=1` on
-the Railway `app` service so `pnpm install` skips that download too.
 
 Three of these release themselves when you merge, and two do not. **Merging to
 `main` does not ship the macOS or iOS app.** That is the single most common
@@ -135,54 +130,51 @@ see [apps/desktop/README.md](apps/desktop/README.md)) — `apps/macos` and
 
 ---
 
-## Server + web client
+## The suite (Cloudflare) and the AWS origin
 
-**The web client has no release of its own — it ships inside the server
-deploy.** `pnpm -r build` writes `packages/web/dist`, and the running server
-serves it.
+**Production is the Cloudflare Worker in `packages/edge`.** Since 2026-11-03 it
+serves `app.freeflow.im` itself: the account directory, each organization's
+apps as Durable Objects, files in R2, and every web client's built files
+(`docs/ops/CUTOVER_TO_CLOUDFLARE.md`). Railway was retired when Flow moved to
+AWS on 2026-11-01, two days before the move to Cloudflare.
 
-**Production is moving from Railway to AWS** (phase 1.5 of the FreeFlow suite).
-The operator does the cut-over by hand with
-[docs/ops/FLOW_TO_AWS.md](docs/ops/FLOW_TO_AWS.md); until its DNS step,
-`app.freeflow.im` is still Railway.
+**AWS still runs one stack, the origin** (`origin.freeflow.im`, stack `mcpdocs`,
+[`packages/docs/deploy/aws/README.md`](packages/docs/deploy/aws/README.md)). It
+serves the legacy ChatGPT plugin: `docs.freeflow.im` and `mcpdocs.freeflow.im`
+(the Worker's `PLUGIN_HOSTS`) pass through the Worker to it. On `app.freeflow.im`
+the Worker also sends it any path the Worker does not answer itself. Retiring it
+is step 7 of `docs/specs/cloudflare-migration.md`, once the plugin moves.
 
-- **AWS** (the destination): the server's image is
-  [`packages/server/deploy/aws/Dockerfile`](packages/server/deploy/aws/Dockerfile),
-  built from the repository root, and runs as the `flow` container on the stack
-  that hosts the Workspace app
-  ([`packages/docs/deploy/aws/template.yaml`](packages/docs/deploy/aws/template.yaml)),
-  beside its Postgres and NATS containers, behind Caddy.
-  [`flow-aws-deploy.yml`](.github/workflows/flow-aws-deploy.yml) builds and
-  pushes the image and runs `deploy.sh flow <sha>` on the instance on a push to
-  `main` touching the server, web or shared packages (once the repository
-  variable `AWS_FLOW_ECR_REPOSITORY` is set). Logs: CloudWatch `/flow/app`.
+- **One merge deploys both.** [`flow-aws-deploy.yml`](.github/workflows/flow-aws-deploy.yml)
+  runs on a push to `main` that touches the server, shared, the suite bar or a
+  client package. It builds the clients once
+  ([`build-clients.yml`](.github/workflows/build-clients.yml)), then deploys the
+  Worker with them (`edge`, which calls [`deploy-edge.yml`](.github/workflows/deploy-edge.yml),
+  on when the repository variable `EDGE_DEPLOY` is `true`) beside the AWS image
+  (`deploy`: [`packages/server/deploy/aws/Dockerfile`](packages/server/deploy/aws/Dockerfile),
+  which also carries the Workspace app and the plugin; `deploy.sh flow <sha>` on
+  the instance). A push that touches only `packages/edge` runs `deploy-edge.yml`
+  alone, with the clients copied out of the latest image.
 - **The clients come from the manifests** (`APP_MANIFESTS` in `packages/shared/src/manifests.ts`):
   the image's build loop, `deploy-edge.yml`'s copy-out and the assembler all read them through
   `packages/edge/scripts/clients.mjs`. Adding an app is a manifest entry plus
   `node packages/edge/scripts/clients.mjs write`, which regenerates the Dockerfile's COPY lines and
   `flow-aws-deploy.yml`'s static `paths:` filter; the edge tests fail until it is run.
-- **The clients are built once per commit** ([`build-clients.yml`](.github/workflows/build-clients.yml), called by
-  `flow-aws-deploy.yml`), as an artifact both deploys take: the edge Worker deploys as soon as they are built (a few
-  minutes after the merge, not after the image and the instance), and the image takes the same files
-  (`--build-context prebuilt=…`; without it the Dockerfile builds them itself). A push that touches only
-  `packages/edge` deploys the Worker alone, with the clients copied out of the latest image.
-- **Railway** (until the cut-over, then retired): connected to
-  `freeflow-im/flow`, so pushing to `main` builds and ships. The contract is
-  in [`railway.json`](railway.json): Railpack, build `pnpm -r build`, start
-  `node packages/server/dist/index.js`, gated on `/healthz`. The runbook's last
-  step removes it.
+- **The Worker's settings** are vars in [`packages/edge/wrangler.toml`](packages/edge/wrangler.toml)
+  and secrets set with `wrangler secret put` (`packages/edge/scripts/put-secrets.sh`).
+  The origin's are SSM parameters (`/flow/…`, `/mcpdocs/…`). Logs: `pnpm exec wrangler tail`
+  in `packages/edge` for the Worker; CloudWatch `/flow/app` for the origin.
 
 ```sh
-git push origin main
-railway deployment list --service app --json   # poll until SUCCESS
-curl https://app.freeflow.im/healthz           # → {"ok":true}
+gh run list --workflow flow-aws-deploy.yml --branch main   # the merge's deploy
+curl -sI https://app.freeflow.im/chat | head -1            # the Worker answers
 ```
 
-Database migrations are additive `.sql` files in
-`packages/server/src/db/migrations/` and apply at boot — shipping a migration is
-just deploying.
+The Worker's objects migrate their own SQLite when they wake, so shipping a
+schema change is just deploying. The origin's Postgres migrations
+(`packages/server/src/db/migrations/`) still apply at its boot.
 
-Runbooks, environment variables, logs, rollback: **[docs/ops/DEPLOYMENT.md](docs/ops/DEPLOYMENT.md)**.
+Runbooks, rollback and DNS: **[docs/ops/DEPLOYMENT.md](docs/ops/DEPLOYMENT.md)**.
 
 ---
 

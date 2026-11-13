@@ -8,8 +8,9 @@ An editor for office files and more: spreadsheets, presentations, documents, Mar
 and videos, with a built-in AI assistant, and an MCP server so other agents can work on the same files. One
 codebase ships as three products (names in `shared/brand.ts`):
 
-- **MCP Docs on the web**, the hosted app at mcpdocs.freeflow.im (docs.freeflow.im serves it too, as the ChatGPT
-  plugin's server address): accounts, files stored on the server.
+- **MCP Docs on the web**: the suite's Docs app at app.freeflow.im/docs, run by the Cloudflare Worker
+  (`packages/edge`), which imports this package. mcpdocs.freeflow.im and docs.freeflow.im (the ChatGPT plugin's server
+  address) still reach the legacy server on AWS (`deploy/aws/README.md`).
 - **MCP Docs**, the desktop app (`desktop/`, Electron): the same server and client over a folder of real
   Word, PowerPoint, Excel, Markdown and CSV files, and an MCP server for agents on the machine (Claude Code).
 - **Universal Docs in ChatGPT**, the ChatGPT plugin (`plugin/`): model tools and a web view, on the hosted app. It
@@ -46,7 +47,8 @@ for). Read the part you are changing before you change it, and keep it up to dat
   there with `LOCAL_DIR`, `DATA_DIR` and `PORT` serves one folder to a browser, without Electron. Rebuilding the client
   (`npx vite build` here) needs that server restarted.
 - Formatting: long lines (up to ~230) and single quotes. Do not run Prettier with its defaults over a file; it rewraps all of it.
-- Pushing to main deploys the hosted app (`.github/workflows/aws-deploy.yml`).
+- Pushing to main deploys the hosted app: `.github/workflows/flow-aws-deploy.yml` deploys the Cloudflare Worker and
+  the AWS image that still serves the ChatGPT plugin (`BUILD.md` at the repository root).
 - A desktop release, in `apps/mcp-docs`: write `release-notes/<version>.md`, run `pnpm release -- <version>` (sets every
   version, commits and tags `desktop-v<version>`), then `git push origin main desktop-v<version>`. The tag runs
   `.github/workflows/docs-desktop-release.yml` at the repository root: the Mac and Windows builds (their tests run on

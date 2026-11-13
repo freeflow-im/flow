@@ -274,12 +274,13 @@ root). It listens on `0.0.0.0:8787`, runs as an unprivileged user, has a
 `HEALTHCHECK` on `/healthz` and needs the variables from §4, with
 `DATABASE_URL` and `NATS_URL` pointing at your Postgres and NATS.
 
-The hosted instance at app.freeflow.im runs that image on one AWS instance, with
-Postgres and NATS as containers beside it and Caddy in front:
+The hosted instance at app.freeflow.im no longer runs this image: since
+2026-11-03 it is the Cloudflare Worker in `packages/edge` ([BUILD.md](BUILD.md)).
+The image still runs on one AWS instance, with Postgres and NATS as containers
+beside it and Caddy in front, as the origin behind the Worker that serves the
+legacy ChatGPT plugin:
 [`packages/docs/deploy/aws/template.yaml`](packages/docs/deploy/aws/template.yaml)
-and its README. It is moving there from Railway; the move is
-[docs/ops/FLOW_TO_AWS.md](docs/ops/FLOW_TO_AWS.md), and `railway.json` goes when
-it is done.
+and its README.
 
 ## 8. Native clients
 
