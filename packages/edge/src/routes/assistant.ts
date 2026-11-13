@@ -1,4 +1,4 @@
-// The assistant's routes (platform.md §5.5): Docs' old paths, /api/agent, /api/agent/turn, /api/agent/reset,
+// The assistant's routes (platform.md §5.5): Docs' old paths, /api/agent, /api/agent/turn, /api/agent/reset, /api/agent/history, /api/agent/reopen,
 // /api/agent/permission and /api/settings/assistant, served by the Assistant object of the caller's account
 // (src/assistant/object.ts, `idFromName(accountId)`), so Docs', Mail's and Calendar's panels talk to it unchanged. Mounted
 // before Docs' /api/*; the rest of /api/agent (the jobs) stays Docs'. Answers are Docs-shaped (`{ error: string }`), as
@@ -131,7 +131,7 @@ async function forward(c: C, req: Request = c.req.raw): Promise<Response> {
   }
 }
 
-for (const path of ['/api/agent', '/api/agent/turn', '/api/agent/reset', '/api/agent/permission', '/api/agent/definition', '/api/agent/mail-allowlist', '/api/settings/assistant']) assistantRoutes.all(path, (c) => forward(c));
+for (const path of ['/api/agent', '/api/agent/turn', '/api/agent/reset', '/api/agent/history', '/api/agent/reopen', '/api/agent/permission', '/api/agent/definition', '/api/agent/mail-allowlist', '/api/settings/assistant']) assistantRoutes.all(path, (c) => forward(c));
 
 /**
  * The person's own assistant as the platform serves it (agents.md §1.1, decision_log 2026-11-11): its definition, who may

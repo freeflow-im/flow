@@ -58,7 +58,11 @@ export function useMailAssistant({ org, context, show, onMailChanged }: MailAssi
   const latest = useRef({ context, show, onMailChanged });
   latest.current = { context, show, onMailChanged };
 
-  // The chat, loaded again when the organization changes.
+  // Bumped to read the chat again, after ‹ › made an earlier conversation the active one (ChatHistoryNav).
+  const [loads, setLoads] = useState(0);
+  const reload = useCallback(() => setLoads((n) => n + 1), []);
+
+  // The chat, loaded again when the organization changes, or on reload.
   useEffect(() => {
     setItems([]);
     setError(null);
@@ -77,7 +81,7 @@ export function useMailAssistant({ org, context, show, onMailChanged }: MailAssi
     return () => {
       cancelled = true;
     };
-  }, [org]);
+  }, [org, loads]);
 
   const send = useCallback(
     (text: string) => {
@@ -168,5 +172,5 @@ export function useMailAssistant({ org, context, show, onMailChanged }: MailAssi
     }
   }, [org]);
 
-  return { items, running, error, send, stop, reset };
+  return { items, running, error, send, stop, reset, reload };
 }

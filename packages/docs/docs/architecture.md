@@ -416,6 +416,12 @@ and turns name the chat (`AgentTurnRequest.scope`). The panel shows the open pag
 `pageScope`), except that a turn stays in the chat it was sent from: when the assistant opens another file the
 turn's chat stays shown, with a link to the page's (`showPageChat`), until the user moves on.
 
+New chat ends the active conversation and keeps it. The panel's ‹ › (`ChatHistoryNav` in `@flow/suite-bar/assistant-dock`,
+used by Docs', Mail's, Calendar's and the suite bar's panels) step through a chat's conversations: `GET /api/agent/history`
+(`AgentStore.history`: those with messages, newest first, each with its first user message) and `POST /api/agent/reopen`
+(`AgentStore.reopen`: the chosen one becomes active again and the current one ends), after which the panel reads the chat
+again. Only the built-in loop's conversations are listed.
+
 A user can run the assistant on their own Anthropic, OpenAI or OpenRouter API key instead (the Settings page,
 `/api/settings/assistant`, stored encrypted by `server/agent/settings.ts`; `server/agent/providers.ts` makes
 the model call and checks a key before it is saved). The loop and the stored history stay in the Claude

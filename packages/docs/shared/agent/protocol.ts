@@ -208,6 +208,17 @@ export interface WindowToolCall extends ClientToolCall {
   group: string;
 }
 
+/** One conversation of a chat, as the panel's ‹ › list it (GET /api/agent/history). */
+export interface ChatSummary {
+  id: string;
+  /** When it started (ISO). */
+  startedAt: string;
+  /** Its first message, shortened; '' when it started with only a picture. */
+  title: string;
+  /** The conversation the chat is on now. */
+  active: boolean;
+}
+
 export interface ClientToolResult {
   id: string;
   content: string;

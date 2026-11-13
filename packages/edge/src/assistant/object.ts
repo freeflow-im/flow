@@ -727,6 +727,24 @@ export class Assistant extends DurableObject<AssistantEnv> {
       return c.json({ ok: true });
     });
 
+    // The panel's ‹ ›: a chat's conversations, newest first, and going back to one of them.
+    app.get('/api/agent/history', (c) => {
+      const scope = c.req.query('scope') ?? HOME_CHAT;
+      if (!isChatScope(scope)) return c.json({ error: 'That is not a chat.' }, 400);
+      return c.json({ chats: this.service().agent.history(userOf(c), scope) });
+    });
+
+    app.post('/api/agent/reopen', async (c) => {
+      const { scope = HOME_CHAT, id } = (((await c.req.json().catch(() => ({}))) ?? {}) as { scope?: unknown; id?: unknown });
+      if (!isChatScope(scope) || typeof id !== 'string') return c.json({ error: 'Give the chat and the conversation.' }, 400);
+      try {
+        this.service().agent.reopen(userOf(c), scope, id);
+      } catch (e) {
+        return fail(c, e);
+      }
+      return c.json({ ok: true });
+    });
+
     app.post('/api/agent/turn', async (c) => this.turn(c));
 
     app.get('/api/settings/assistant', (c) => c.json({ settings: this.service().settings.get(userOf(c)) }));

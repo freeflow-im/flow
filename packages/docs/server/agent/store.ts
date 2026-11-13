@@ -63,6 +63,39 @@ export class AgentStore {
     this.db.prepare('UPDATE agent_conversations SET session_id = ? WHERE id = ?').run(sessionId, conversationId);
   }
 
+  /**
+   * A chat's conversations that have messages, newest first (at most `limit`), each with when it started and its first
+   * user message, and which one is active: what the panel's ‹ › step through. The built-in loop's only (an agent's own
+   * session is not replayable here).
+   */
+  history(userId: string, scope: string = HOME_CHAT, limit = 50): { id: string; startedAt: string; firstMessage: MessageParam | null; active: boolean }[] {
+    const rows = this.db
+      .prepare(
+        "SELECT c.id, c.created_at, c.ended_at FROM agent_conversations c WHERE c.user_id = ? AND COALESCE(c.scope, 'home') = ? AND c.driver IS NULL AND EXISTS (SELECT 1 FROM agent_messages m WHERE m.conversation_id = c.id) ORDER BY c.created_at DESC, c.id DESC LIMIT ?",
+      )
+      .all(userId, scope, limit) as { id: string; created_at: string; ended_at: string | null }[];
+    const first = this.db.prepare("SELECT content FROM agent_messages WHERE conversation_id = ? AND role = 'user' ORDER BY id LIMIT 1");
+    return rows.map((r) => {
+      const row = first.get(r.id) as { content: string } | undefined;
+      return { id: r.id, startedAt: r.created_at, firstMessage: row ? { role: 'user', content: JSON.parse(row.content) } : null, active: r.ended_at === null };
+    });
+  }
+
+  /**
+   * Make an earlier conversation of a chat the active one again (the panel's ‹ ›): the active one ends, as New chat ends
+   * it, and that one goes on from where it stopped. False when it is not one of this user's built-in conversations in
+   * this chat.
+   */
+  reopen(userId: string, scope: string, conversationId: string): boolean {
+    const row = this.db
+      .prepare("SELECT id FROM agent_conversations WHERE id = ? AND user_id = ? AND COALESCE(scope, 'home') = ? AND driver IS NULL")
+      .get(conversationId, userId, scope) as { id: string } | undefined;
+    if (!row) return false;
+    this.db.prepare("UPDATE agent_conversations SET ended_at = ? WHERE user_id = ? AND COALESCE(scope, 'home') = ? AND ended_at IS NULL AND id <> ?").run(new Date().toISOString(), userId, scope, conversationId);
+    this.db.prepare('UPDATE agent_conversations SET ended_at = NULL, pending = NULL WHERE id = ?').run(conversationId);
+    return true;
+  }
+
   /** End the active conversation of a chat; its next message starts a new one. Old conversations are kept. */
   reset(userId: string, scope: string = HOME_CHAT): void {
     this.db.prepare("UPDATE agent_conversations SET ended_at = ? WHERE user_id = ? AND COALESCE(scope, 'home') = ? AND ended_at IS NULL").run(new Date().toISOString(), userId, scope);

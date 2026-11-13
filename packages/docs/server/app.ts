@@ -2806,6 +2806,25 @@ export async function buildApp(opts: AppOptions) {
         return { ok: true };
       });
 
+      // The panel's ‹ ›: a chat's conversations, newest first, and going back to one of them.
+      r.get('/api/agent/history', async (req, reply) => {
+        const scope = (req.query as { scope?: unknown }).scope ?? HOME_CHAT;
+        if (!isChatScope(scope)) return reply.code(400).send({ error: 'That is not a chat.' });
+        return { chats: agent.history(req.user!.id, scope) };
+      });
+
+      r.post('/api/agent/reopen', async (req, reply) => {
+        const { scope = HOME_CHAT, id } = (req.body ?? {}) as { scope?: unknown; id?: unknown };
+        if (!isChatScope(scope) || typeof id !== 'string') return reply.code(400).send({ error: 'Give the chat and the conversation.' });
+        try {
+          agent.reopen(req.user!.id, scope, id);
+        } catch (e) {
+          if (e instanceof AgentError) return reply.code(e.status).send({ error: e.message });
+          throw e;
+        }
+        return { ok: true };
+      });
+
       // Runs or resumes a turn, streaming AgentEvents as server-sent events.
       r.post('/api/agent/turn', async (req, reply) => {
         const body = (req.body ?? {}) as AgentTurnRequest;

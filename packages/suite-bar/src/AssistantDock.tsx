@@ -229,6 +229,102 @@ export function SparkIcon({ size = 16 }: { size?: number }) {
 }
 
 /** Two overlapping windows: the panel set afloat over the page. */
+/** One conversation of a chat, as GET /api/agent/history lists it (Docs' ChatSummary). */
+export interface ChatSummary {
+  id: string;
+  startedAt: string;
+  title: string;
+  active: boolean;
+}
+
+const withOrg = (path: string, org: string | null) => (org ? `${path}${path.includes('?') ? '&' : '?'}workspace=${encodeURIComponent(org)}` : path);
+
+/** Where ‹ and › go from the active conversation, newest first: older and newer, or none. A new, empty chat is before the newest. */
+export function historySteps(chats: ChatSummary[]): { older?: ChatSummary; newer?: ChatSummary; position: number | null } {
+  const at = chats.findIndex((c) => c.active);
+  if (at === -1) return { older: chats[0], position: null };
+  return { older: chats[at + 1], newer: at > 0 ? chats[at - 1] : undefined, position: chats.length - at };
+}
+
+const describeChat = (c: ChatSummary) => {
+  const when = new Date(c.startedAt);
+  const date = Number.isNaN(when.getTime()) ? '' : when.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  return [c.title || 'Chat', date].filter(Boolean).join(' · ');
+};
+
+/** How a panel reads its chat's conversations and goes back to one: its app's own API calls (Docs' carry a folder). */
+export interface ChatHistoryApi {
+  list(): Promise<ChatSummary[]>;
+  reopen(id: string): Promise<void>;
+}
+
+/** The history calls of a chat in the suite's organization `org` (Mail's, Calendar's, the suite bar's own chat). */
+export function orgChatHistory(org: string | null, scope: string): ChatHistoryApi {
+  return {
+    list: async () => {
+      const r = await fetch(withOrg(`/api/agent/history?scope=${encodeURIComponent(scope)}`, org), { credentials: 'same-origin' });
+      return r.ok ? ((await r.json()) as { chats: ChatSummary[] }).chats ?? [] : [];
+    },
+    reopen: async (id) => {
+      const r = await fetch(withOrg('/api/agent/reopen', org), { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope, id }) });
+      if (!r.ok) throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error ?? `Request failed (${r.status})`);
+    },
+  };
+}
+
+/**
+ * ‹ › in an assistant panel's header: back to the chat's earlier conversations (GET /api/agent/history), one step at a
+ * time, and forward again. A step makes that conversation the chat's active one (POST /api/agent/reopen), which then
+ * goes on from where it stopped; the panel reloads it (`onReopened`). Hidden while there is nothing earlier. `refreshKey`
+ * changes when the chat does (which chat it is, its items, a turn ending), so the list follows.
+ */
+export function ChatHistoryNav({ history, busy, refreshKey, onReopened }: { history: ChatHistoryApi; busy: boolean; refreshKey: unknown; onReopened: () => void }) {
+  const [chats, setChats] = useState<ChatSummary[]>([]);
+  const [moving, setMoving] = useState(false);
+  const [seq, setSeq] = useState(0);
+  const api = useRef(history);
+  api.current = history;
+  useEffect(() => {
+    let live = true;
+    api.current.list().then((list) => { if (live) setChats(list); }).catch(() => undefined);
+    return () => { live = false; };
+  }, [refreshKey, seq]);
+  const { older, newer, position } = historySteps(chats);
+  if (!older && !newer) return null;
+  const go = async (c: ChatSummary) => {
+    setMoving(true);
+    try {
+      await api.current.reopen(c.id);
+      onReopened();
+    } catch {
+      // Gone, or the assistant started working: the list is read again below.
+    } finally {
+      setMoving(false);
+      setSeq((n) => n + 1);
+    }
+  };
+  const off = busy || moving;
+  return (
+    <span className="assistant-history" data-testid="assistant-history">
+      <button type="button" className="assistant-dock-btn" disabled={off || !older} onClick={() => older && void go(older)} aria-label="Earlier chat" title={older ? `Earlier chat: ${describeChat(older)}` : 'No earlier chat'} data-testid="assistant-history-older">
+        <ChevronIcon left />
+      </button>
+      {position !== null && <span className="assistant-history-pos" aria-label={`Chat ${position} of ${chats.length}`}>{position}/{chats.length}</span>}
+      <button type="button" className="assistant-dock-btn" disabled={off || !newer} onClick={() => newer && void go(newer)} aria-label="Later chat" title={newer ? `Later chat: ${describeChat(newer)}` : 'This is the latest chat'} data-testid="assistant-history-newer">
+        <ChevronIcon />
+      </button>
+    </span>
+  );
+}
+
+function ChevronIcon({ left = false }: { left?: boolean }) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d={left ? 'M15 18l-6-6 6-6' : 'M9 18l6-6-6-6'} />
+    </svg>
+  );
+}
+
 function FloatIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

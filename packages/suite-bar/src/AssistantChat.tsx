@@ -3,8 +3,8 @@
 import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { AssistantDock, AssistantDockControls, SparkIcon, useAssistantDockState, useMyAssistant } from './AssistantDock';
-import { useSuiteAssistant } from './suiteChat';
+import { AssistantDock, AssistantDockControls, ChatHistoryNav, orgChatHistory, SparkIcon, useAssistantDockState, useMyAssistant } from './AssistantDock';
+import { HOME_CHAT, useSuiteAssistant } from './suiteChat';
 import { useSuggestedPrompts, type PromptPage } from './lib/prompts';
 import './assistant-chat.css';
 
@@ -39,6 +39,7 @@ function SuiteAssistantPanel({ organizationId, page, name, avatarUrl }: { organi
       <div className="suite-chat-head">
         {avatarUrl ? <img className="suite-chat-avatar" src={avatarUrl} alt="" /> : <SparkIcon />}
         <span className="suite-chat-title">{name}</span>
+        <ChatHistoryNav history={orgChatHistory(organizationId, HOME_CHAT)} busy={chat.running} refreshKey={`${organizationId}:${chat.items.length}:${chat.running}`} onReopened={chat.reload} />
         <button type="button" className="suite-chat-link" onClick={() => void chat.reset()} disabled={chat.running || !chat.items.length}>New chat</button>
         <AssistantDockControls />
       </div>

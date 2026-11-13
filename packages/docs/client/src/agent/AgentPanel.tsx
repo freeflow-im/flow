@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 import { Link, useLocation } from 'react-router-dom';
-import { AssistantDock, AssistantDockControls, SparkIcon, useIdleMinimize } from '@flow/suite-bar/assistant-dock';
+import { AssistantDock, AssistantDockControls, ChatHistoryNav, SparkIcon, useIdleMinimize } from '@flow/suite-bar/assistant-dock';
 import { useSuggestedPrompts } from '@flow/suite-bar';
 import { HOME_CHAT, JOB_ACTIVE_STATUSES, type AgentJob, type ChatItem } from '../../../shared/agent/protocol.ts';
 import { MOD } from '../commands.ts';
@@ -141,6 +141,7 @@ export function AgentPanel() {
         <Link className="link agent-changes" to="/changes" title="Changes the assistant made to the app">
           Changes
         </Link>
+        <ChatHistoryNav history={agent.history} busy={agent.running} refreshKey={`${agent.chatScope}:${agent.agentId ?? ''}:${agent.items.length}:${agent.running}`} onReopened={agent.reload} />
         <button className="link agent-new" onClick={() => void agent.reset()} disabled={agent.running || !agent.items.length} title="Start a new conversation">
           New chat
         </button>

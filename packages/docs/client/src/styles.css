@@ -1775,6 +1775,7 @@ textarea {
 }
 .agent-new {
   font-size: 13px;
+  white-space: nowrap;
 }
 .agent-new:disabled {
   color: var(--muted);
@@ -2056,6 +2057,7 @@ button.agent-tool-label:hover {
 .agent-changes {
   margin-left: auto;
   font-size: 13px;
+  white-space: nowrap;
 }
 .agent-changes + .agent-new {
   margin-left: 0;

@@ -35,6 +35,7 @@
   text-overflow: ellipsis;
 }
 .suite-chat-link {
+  white-space: nowrap;
   border: 0;
   background: none;
   color: var(--assistant-dock-accent, #1a73e8);
