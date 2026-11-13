@@ -51,4 +51,13 @@ describe('ChannelMembersPopover render', () => {
     expect(render([], true)).toContain('Loading…');
     expect(render([], false)).toContain('No members.');
   });
+
+  it('offers Add people only when the channel takes new members', () => {
+    expect(render([row('Alice', true)])).not.toContain('channel-add-people');
+    const html = renderToStaticMarkup(
+      <ChannelMembersPopover rows={[row('Alice', true)]} onSelect={() => {}} onAdd={() => {}} onClose={() => {}} />,
+    );
+    expect(html).toContain('channel-add-people');
+    expect(html).toContain('Add people');
+  });
 });
