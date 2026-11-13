@@ -64,23 +64,6 @@ export function Sidebar(props: {
         </Fragment>
       ))}
 
-      <Heading label="Channels" action={{ label: 'Open Chat', href: '/chat/' }} />
-      {props.channels === null ? (
-        <Placeholder />
-      ) : shown.length === 0 ? (
-        <a href="/chat/" className={`${row} text-muted`}>Find a channel in Chat</a>
-      ) : (
-        <>
-          {shown.map((c) => (
-            <a key={c.id} href={channelAddress(c.id)} data-testid={`home-channel-${c.id}`} aria-current={props.active === 'chat' && props.activeChannel === c.id ? 'page' : undefined} className={`${row} justify-between ${props.active === 'chat' && props.activeChannel === c.id ? 'bg-row-selected' : ''} ${c.unreadCount > 0 || c.unreadNotifications > 0 ? 'font-semibold' : ''}`}>
-              <span className="truncate"># {c.name}</span>
-              {c.unreadNotifications > 0 && <span className="min-w-5 rounded-full bg-ink px-1.5 text-center text-xs font-semibold text-white">{c.unreadNotifications}</span>}
-            </a>
-          ))}
-          {more > 0 && <a href="/chat/" className={`${row} text-xs text-muted`}>{more} more in Chat</a>}
-        </>
-      )}
-
       <Heading label="Agents" action={props.addAgentHref ? { label: '+ Add', href: props.addAgentHref } : undefined} />
       {props.agents === null ? (
         <Placeholder />
@@ -96,6 +79,23 @@ export function Sidebar(props: {
             </span>
           </button>
         ))
+      )}
+
+      <Heading label="Channels" action={{ label: 'Open Chat', href: '/chat/' }} />
+      {props.channels === null ? (
+        <Placeholder />
+      ) : shown.length === 0 ? (
+        <a href="/chat/" className={`${row} text-muted`}>Find a channel in Chat</a>
+      ) : (
+        <>
+          {shown.map((c) => (
+            <a key={c.id} href={channelAddress(c.id)} data-testid={`home-channel-${c.id}`} aria-current={props.active === 'chat' && props.activeChannel === c.id ? 'page' : undefined} className={`${row} justify-between ${props.active === 'chat' && props.activeChannel === c.id ? 'bg-row-selected' : ''} ${c.unreadCount > 0 || c.unreadNotifications > 0 ? 'font-semibold' : ''}`}>
+              <span className="truncate"># {c.name}</span>
+              {c.unreadNotifications > 0 && <span className="min-w-5 rounded-full bg-ink px-1.5 text-center text-xs font-semibold text-white">{c.unreadNotifications}</span>}
+            </a>
+          ))}
+          {more > 0 && <a href="/chat/" className={`${row} text-xs text-muted`}>{more} more in Chat</a>}
+        </>
       )}
     </nav>
   );

@@ -57,3 +57,12 @@ describe('the Mail row picker', () => {
     expect(screen.queryByTestId('home-picker-mail')).toBeNull();
   });
 });
+
+describe('the sections', () => {
+  it('lists Agents before Channels', () => {
+    draw(undefined);
+    const nav = screen.getByTestId('home-sidebar').textContent ?? '';
+    expect(nav.indexOf('Agents')).toBeGreaterThan(-1);
+    expect(nav.indexOf('Agents')).toBeLessThan(nav.indexOf('Channels'));
+  });
+});
