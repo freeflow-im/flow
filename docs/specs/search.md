@@ -139,11 +139,30 @@ scores from different indexes are not comparable, positions are.
   together, in the root shown, and list each document once, with its snippet under the name.
 - **The desktop app** (a folder of real files) does not index: its files change outside the app. Its search stays by name.
 
+## 5a. Chat (phase 2, done 2026-11-13)
+
+- **What is indexed**: every message but system lines ("joined the channel"): its body with `<@id>` as `@Name`, and the
+  names of its files, so "q3-forecast.xlsx" finds the message that carries it. Thread replies too.
+- **When**: `indexMessage` after a send and an edit; SQL triggers drop a message when it is deleted (tombstone or
+  permanent, channel deletions included). The Org object indexes stale or missing messages in batches of 200 between
+  requests, from the start and at each assistant search (`rev` = `MESSAGE_TEXT_VERSION:` and the last change).
+- **Access**: `requireChannelAccess` in the query: a member of the organization, in a channel they are in or one that is
+  not private (public channels they have not joined included, Scott 2026-11-13; direct messages are always private).
+- **Filters**: `from:` (me, a user id, an address, a display name), `in:#channel` (name or id), `after:`/`before:`,
+  `has:attachment`, `has:link`, `type:message`; best match or newest first.
+- **API**: `GET /v1/workspaces/:id/search?q=&sort=recent&limit=&prefix=1` answers `{ hits }` (`MessageSearchHit`: the shared
+  shape plus channel, kind, thread and author name).
+- **Tools**: the assistant's `search_messages` (the sponsor's reach, never direct messages; `read_messages` now also
+  reads a public channel the sponsor has not joined, so a hit can be read around); the bridge's `search_history` uses the
+  server search across channels, or one with `channelId`, and falls back to its old scan against an older server.
+- **UI**: web Chat's suite bar search opens a Search view (best match or newest); a row opens its message, in its thread
+  when it is a reply. ⌘F still finds in the conversation shown. macOS and iOS: later (Parity).
+
 ## 6. Phases
 
 1. **Docs** (this PR): the shared query parser, the Docs index, `/api/search`, the `search_content` tool.
-2. **Chat**: the same in the Org object, over decrypted message bodies (§8.2), filtered by membership; a `search_messages`
-   tool beside the existing `search_history`.
+2. **Chat** (done, §5a): the same in the Org object, over decrypted message bodies (§8.2), filtered by membership; a
+   `search_messages` tool, and `search_history` moved onto it.
 3. **Mail**: index the Mail object's cache (subject, sender, text), and send the same query to the IMAP server's own search
    (and Gmail's `X-GM-RAW`) for mail older than the cache, merging the two.
 4. **The router and the suite search box**: `GET /api/search` in the Worker sends the query to the person's Docs object,

@@ -6,9 +6,6 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { matchLabel, stepIndex } from '../lib/chatSearch';
 import { clearHighlights, collectMatches, paintHighlights, type FoundMatch } from '../lib/findHighlight';
 
-/** The window event that opens the find bar with a query (`detail`): the suite bar's search on Chat. */
-export const FIND_EVENT = 'flow:find';
-
 export type ChatFind = {
   open: boolean;
   query: string;
@@ -65,18 +62,6 @@ export function useChatFind(
     return () => document.removeEventListener('keydown', onKey);
   }, []);
 
-  // The suite bar's search (components/ChatSuiteBar.tsx) hands its query here: the bar opens with it, matched.
-  useEffect(() => {
-    const onFind = (e: Event) => {
-      const q = (e as CustomEvent<string>).detail;
-      if (typeof q !== 'string' || !q) return;
-      setOpen(true);
-      setQuery(q);
-      setIndex(-1);
-    };
-    window.addEventListener(FIND_EVENT, onFind);
-    return () => window.removeEventListener(FIND_EVENT, onFind);
-  }, []);
 
   // Esc closes the bar from anywhere in the chat, not only from inside the box
   // — the caret is often back in the composer by then (AC 5). Skipped while a

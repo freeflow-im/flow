@@ -1,5 +1,14 @@
 # Decision log
 
+## 2026-11-13 — Chat search reaches public channels; native apps later (operator rulings)
+
+- **Ruling (Scott):** message search includes public channels the person has not joined, as Slack's does: anyone in
+  the organization can join and read them. Private channels and direct messages stay their members' only.
+- **Ruling (Scott):** the macOS and iOS apps get message search later; web ships first (CHANGELOG Parity).
+- **Follows from it:** a person's assistant may search and read (`read_messages`) a public channel its sponsor has not
+  joined; it still never reaches direct messages, and it still posts only where the sponsor is.
+- **Where:** `docs/specs/search.md` §5a.
+
 ## 2026-11-13 — Search: FTS5 where the data lives, no index for each user (operator rulings)
 
 - **Ruling (Scott, approving the proposed design):** each app’s Durable Object indexes its own data with SQLite FTS5 (Docs object, Org object, Mail object),

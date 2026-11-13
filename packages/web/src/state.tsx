@@ -44,6 +44,12 @@ export const DIRECTORY_VIEW_ID = '__directory__';
  */
 export const CHANNEL_BROWSER_VIEW_ID = '__channel_browser__';
 
+/**
+ * Sentinel channel id for message search (docs/specs/search.md): the suite bar's search on Chat opens it, and
+ * <SearchView> lists the messages that match (lib/messageSearch.ts holds the text). Not a real channel.
+ */
+export const SEARCH_VIEW_ID = '__search__';
+
 export interface Selection {
   workspaceId: string | null;
   channelId: string | null;
