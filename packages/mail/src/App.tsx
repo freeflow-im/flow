@@ -13,6 +13,7 @@ import { GuestsChatOnly, MailboxSettingUp, NoOrganization } from './components/N
 import { InboxTabs } from './components/InboxTabs';
 import { MailSuiteBar } from './components/MailSuiteBar';
 import { MessageList, type ListTab } from './components/MessageList';
+import type { PersonActions } from './components/PersonCard';
 import { ThreadView, type ThreadViewHandle } from './components/ThreadView';
 import { ResizeHandle } from './components/ResizeHandle';
 import { setReadingPane, useReadingPane } from './lib/layoutPref';
@@ -386,6 +387,24 @@ export function App() {
     const anyUnflagged = ids.some((id) => (id === openId && threadLoaded ? thread.data!.messages.some((m) => m.folder === folder && !m.flagged) : !rowOf(id)?.flagged));
     actions.flags.mutate({ uids, flagged: anyUnflagged });
   };
+
+  // The person card on a name or address (PersonCard.tsx): a new message to them, or their mail found in this folder.
+  const people = useMemo<PersonActions | undefined>(
+    () =>
+      account
+        ? {
+            organizationId: org,
+            compose: (a) => openCompose(account.id, { mode: 'new', draft: { ...emptyDraft(), to: [a] } }),
+            search: (a) => {
+              setQ(a.address);
+              resetSelection();
+              if (stacked) setOpenId(null);
+            },
+          }
+        : undefined,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [account, org, openCompose, stacked],
+  );
 
   /** Compose: new, or an answer to a message of the open thread (the last one unless given). */
   const startCompose = useCallback(
@@ -845,6 +864,7 @@ export function App() {
       position={stacked && openId !== null ? { index: visible.findIndex((t) => t.threadId === openId), count: visible.length } : undefined}
       onNewer={stacked ? () => step(-1) : undefined}
       onOlder={stacked ? () => step(1) : undefined}
+      people={people}
       onReply={(m) => startCompose('reply', m)}
       onReplyAll={(m) => startCompose('replyAll', m)}
       onForward={(m) => startCompose('forward', m)}
