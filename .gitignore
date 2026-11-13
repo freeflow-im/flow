@@ -27,6 +27,8 @@ agent.json
 .mcp.json
 # generated at predev/prebuild from skills/flow-agent-member/SKILL.md
 packages/web/public/flow-agent-member-SKILL.md
+# generated from changelog/ by scripts/build-changelog.mjs (Admin's Changelog page) — never hand-edited
+packages/admin/public/changelog.json
 # generated at predev/prebuild from repo-root FEATURES.md
 packages/web/public/FEATURES.md
 # generated at predev/prebuild from the mermaid package (3.5 MB browser bundle)

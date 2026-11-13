@@ -28,6 +28,9 @@ Worker holds the credentials and speaks IMAP and SMTP.
   StarterKit with Link and a picture node (`Editor.tsx`, loaded on first use; a picture pasted from the clipboard goes in at
   the caret), attachments as base64 up to 20 MB in all. Sent, every picture the body shows from a data: URL or one of the
   app's own attachment URLs (a quoted original's, a draft's) becomes an inline part shown by cid (`lib/inlineImages.ts`).
+  The paperclip offers Upload from computer and From Docs… (`DocsPicker.tsx`, `lib/docsFiles.ts`): files found by name with
+  Docs' `/api/library/search` in My files and Organization files (the recent ones before anything is typed), attached as
+  Docs downloads them (documents as .docx/.xlsx/.pptx/.md through `/api/files/:id/export`, other files as stored).
 - `src/components/AddressField.tsx` — the To/Cc/Bcc chips, with completion from the account's contacts (`GET …/contacts`:
   the people written to and heard from, docs/specs/mail-api.md Contacts) under the box as the person types.
 - `src/components/AccountForms.tsx` — adding an account (email → `/v1/mail/providers` → name and password, Advanced
@@ -66,7 +69,7 @@ pnpm --filter @flow/mail dev:mock          # http://localhost:5185/mail/
 MAIL_MOCK=empty pnpm --filter @flow/mail dev   # starts with no account: the "Connect your mail" screen
 ```
 
-In the mock's Add account flow the password `wrong` answers `auth_failed`, a server host containing `bad` answers
+The mock also serves a small sample Docs library for From Docs… (`MOCK_DOCS` in `mock/plugin.ts`). In the mock's Add account flow the password `wrong` answers `auth_failed`, a server host containing `bad` answers
 `connect_failed`, and `stale` connects an account whose password then stops working (the re-enter banner).
 
 Against a real API: `pnpm --filter @flow/mail dev` proxies `/v1` to `MAIL_API` (default `http://127.0.0.1:8787`, the

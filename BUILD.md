@@ -57,7 +57,15 @@ starts the Worker with production's hostname vars set to `localhost`.
 
 Things to know:
 
-- **Sign-up and sign-in links are printed to the terminal**, not emailed.
+- **Sign-up and sign-in links are printed to the terminal**, not emailed — unless `packages/edge/.dev.vars`
+  has `EMAIL_API_TOKEN` (a Cloudflare API token with Email Sending: Edit), `CLOUDFLARE_ACCOUNT_ID` and
+  `EMAIL_FROM=noreply@mail.freeflow.im`, the secrets production sends with: then all mail is sent for real.
+  Put settings like these in `~/.config/flow/dev.vars` once: `dev:suite` adds every key from it that a
+  checkout's `.dev.vars` lacks, so each new worktree gets them (each keeps its own `FLOW_DATA_KEY` and data).
+- **A test account is made for you.** Each start makes sure `dev@flow.test` exists, with the password
+  `flow-dev-password` and an organization "Dev" (`DEV_USER_EMAIL` / `DEV_USER_PASSWORD` in `.dev.vars` or
+  `~/.config/flow/dev.vars` change them). Mail to test domains (`.test`, `.example`, …) is always printed, never
+  sent, so this works with real mail on too.
   Register at `/chat`, then copy the link from the Worker's log.
 - **A client's build is a snapshot.** After editing a client, rebuild it:
   `pnpm dev:suite --build=mail` (the package name's last part), or `--build`

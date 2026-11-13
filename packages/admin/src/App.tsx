@@ -1,6 +1,6 @@
 // FreeFlow Admin (docs/specs/workspace-admin.md): the suite bar, the section list on the left, the section's page on
 // the right, for the organization the bar has active. Owners and admins see the sections; anyone else sees why not.
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { isInHome, useHomeMenu, type AdminSection, type SuiteMenuIcon } from '@flow/suite-bar';
 import { AdminSuiteBar } from './components/AdminSuiteBar';
 import { NoOrganization, NotAllowed } from './components/Empty';
@@ -16,6 +16,8 @@ import { Automations } from './sections/Automations';
 import { EventLog } from './sections/EventLog';
 import { General } from './sections/General';
 import { Members } from './sections/Members';
+// The changelog page and its Markdown are loaded only when it is opened.
+const Changelog = lazy(() => import('./sections/Changelog').then((m) => ({ default: m.Changelog })));
 
 function useSection(sections: readonly AdminSection[]): [AdminSection, (s: AdminSection) => void] {
   const [wanted, setWanted] = useState(() => window.location.pathname);
@@ -34,7 +36,7 @@ function useSection(sections: readonly AdminSection[]): [AdminSection, (s: Admin
   return [section, go];
 }
 
-const SECTION_ICONS: Record<AdminSection, SuiteMenuIcon> = { general: 'settings', members: 'people', domains: 'mail', agents: 'user', prompts: 'pen', assistant: 'star', connect: 'share', automations: 'clock', events: 'draft' };
+const SECTION_ICONS: Record<AdminSection, SuiteMenuIcon> = { general: 'settings', members: 'people', domains: 'mail', agents: 'user', prompts: 'pen', assistant: 'star', connect: 'share', automations: 'clock', events: 'draft', changelog: 'today' };
 
 export function App() {
   const organizations = useOrganizations();
@@ -93,6 +95,11 @@ export function App() {
               {section === 'connect' && <Connect />}
               {section === 'automations' && <Automations org={org} />}
               {section === 'events' && admin && <EventLog org={org} />}
+              {section === 'changelog' && admin && (
+                <Suspense fallback={<p className="text-sm text-muted">Loading…</p>}>
+                  <Changelog />
+                </Suspense>
+              )}
             </div>
           </main>
           {/* The person's assistant, as in every app (agents.md §1.1). */}

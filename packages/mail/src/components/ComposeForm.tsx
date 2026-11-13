@@ -1,16 +1,18 @@
 // The composer itself, shared by the dialog (Compose.tsx: New message, a draft, and every mode on narrow screens) and the
 // card under a message in a conversation (InlineCompose.tsx: Reply, Reply all and Forward on wide screens). To, Cc and Bcc
 // as chips (the card shows them as one line, "Ann Lee (ann@x.com)", until clicked), the subject (the dialog only), the
-// rich-text body (Editor.tsx), files picked or dropped. Reply, Reply all and Forward arrive prefilled (lib/compose.ts), as
+// rich-text body (Editor.tsx), files picked, dropped or chosen from Docs (DocsPicker.tsx). Reply, Reply all and Forward arrive prefilled (lib/compose.ts), as
 // does a saved draft opened to edit (sending it removes it from Drafts). Send checks what it can at once, then hands the
 // message over (`onSend`, an `Outgoing`) and the composer closes: App.tsx sends it while a toast says "Sending…", and offers
 // to open it again if that fails. Closing with something written asks first.
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, type ReactNode, type Ref } from 'react';
-import { ChevronDown, Forward, Loader2, Paperclip, Reply, ReplyAll, Send, Trash2, X } from 'lucide-react';
+import { ChevronDown, FileText, Forward, Loader2, Paperclip, Reply, ReplyAll, Send, Trash2, Upload, X } from 'lucide-react';
 import { attachmentUrl, mailApi, MAX_SEND_BYTES, type Address, type MailAccount } from '../api';
 import { parseAddressList } from '../lib/addresses';
 import { isDraftEmpty, type AnswerMode, type ComposeDraft, type ComposeMode, type ComposeRequest, type Outgoing } from '../lib/compose';
 import { fileSize } from '../lib/format';
+import { attachedAs, docsFiles, type DocsFile } from '../lib/docsFiles';
+import { DocsPicker } from './DocsPicker';
 import { cn } from '../lib/utils';
 import { EditorArea, EditorToolbar, useMailEditor } from './Editor';
 import { QuoteToggle } from './QuoteToggle';
@@ -82,6 +84,7 @@ export function ComposeForm({ account, request, variant, handle, onClose, onSend
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [picking, setPicking] = useState(false);
   const pending = useRef({ to: '', cc: '', bcc: '' });
   const fileInput = useRef<HTMLInputElement>(null);
   const root = useRef<HTMLDivElement>(null);
@@ -128,6 +131,19 @@ export function ComposeForm({ account, request, variant, handle, onClose, onSend
   const addFiles = (list: FileList | File[]) => {
     const added = Array.from(list).map((file) => ({ id: nextFileId++, name: file.name, type: file.type || 'application/octet-stream', size: file.size, file, status: 'ready' as const, forwarded: false }));
     setFiles((f) => [...f, ...added]);
+  };
+
+  /** Files chosen in Docs: shown at once, attached when their bytes arrive (a document is made into a file first). */
+  const addFromDocs = (list: DocsFile[]) => {
+    const items = list.map((d) => ({ id: nextFileId++, ...attachedAs(d), size: d.kind === 'file' ? (d.size ?? 0) : 0, file: null, status: 'loading' as const, forwarded: false }));
+    setFiles((f) => [...f, ...items]);
+    for (const [i, d] of list.entries()) {
+      const item = items[i]!;
+      docsFiles.fetch(d).then(
+        ({ blob, name, type }) => setFiles((f) => f.map((x) => (x.id === item.id ? { ...x, name, type, file: blob, size: blob.size, status: 'ready' } : x))),
+        () => setFiles((f) => f.map((x) => (x.id === item.id ? { ...x, status: 'error' } : x))),
+      );
+    }
   };
 
   // The editor adds an empty paragraph after a closing quote on its first change (TipTap's trailing node): not a change.
@@ -375,14 +391,29 @@ export function ComposeForm({ account, request, variant, handle, onClose, onSend
         </Button>
         <EditorToolbar editor={editor} />
         <input ref={fileInput} type="file" multiple hidden onChange={(e) => (e.target.files && addFiles(e.target.files), (e.target.value = ''))} />
-        <Button variant="ghost" size="icon-sm" title="Attach files" aria-label="Attach files" onClick={() => fileInput.current?.click()}>
-          <Paperclip />
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon-sm" title="Attach files" aria-label="Attach files">
+              <Paperclip />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" side="top">
+            <DropdownMenuItem onSelect={() => fileInput.current?.click()}>
+              <Upload />
+              Upload from computer
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setPicking(true)}>
+              <FileText />
+              From Docs…
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <span className={cn('text-xs text-muted', total > MAX_SEND_BYTES && 'text-danger')}>{total > 0 && `${fileSize(total)} of 20 MB`}</span>
         <Button variant="ghost" size="icon-sm" className="ml-auto" title="Discard" aria-label="Discard draft" onClick={requestClose}>
           <Trash2 />
         </Button>
       </div>
+      {picking && <DocsPicker onPick={addFromDocs} onClose={() => setPicking(false)} />}
       {confirming && (
         <Dialog open onOpenChange={(o) => !o && setConfirming(false)}>
           <DialogContent className="max-w-sm">
