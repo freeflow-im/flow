@@ -454,6 +454,11 @@ function isZip(file: string): boolean {
 }
 
 export class LocalSheetStore extends SheetStore {
+  /** A folder's files change outside the app, so they are searched by name only (server/search.ts). */
+  protected override searchable(): boolean {
+    return false;
+  }
+
   private folder: LocalFolder;
   private baseDir: string;
   /** The modification time of each file as this store last wrote it: one with another time was written by something else. */

@@ -13,6 +13,9 @@ import { validateCharts } from '../shared/chart.ts';
 import type { Backup } from './backup.ts';
 import type { DB } from './db.ts';
 import { allowed, roleMeta, syncOrgGrant, type Role } from './access.ts';
+import { indexDocument, retitleDocument, searchDocuments, staleDocuments, type DocHitRow, type DocSearchOptions } from './search.ts';
+import { searchTextOf } from '../shared/searchText.ts';
+import type { SearchQuery } from '@flow/shared/search';
 import { scopeColumns, scopeMeta, scopeOfRow, scopeWhere, type Owned, type ScopeArg, type ViewerArg } from './scope.ts';
 
 export interface SheetRow extends Owned {
@@ -123,6 +126,8 @@ export class SheetStore {
   backup: Backup | null = null;
   /** Told each document's new revision after it is written or renamed (revisionFeed.ts). */
   onRevision: ((id: string, rev: string) => void) | null = null;
+  /** The background pass that indexes documents written before search, or changed by another path (search.ts). */
+  private reindexing: Promise<void> | null = null;
 
   constructor(db: DB, dir: string) {
     this.db = db;
@@ -181,6 +186,63 @@ export class SheetStore {
   /** Remove a deleted document's file. */
   protected async removeFile(r: SheetRow): Promise<void> {
     await rm(this.filePath(r.file), { force: true });
+  }
+
+  /** Whether this store keeps the search index (server/search.ts). The desktop app's folder does not: its files change outside the app. */
+  protected searchable(): boolean {
+    return true;
+  }
+
+  /** Put a document's words in the search index. A failure is logged, never fails the save: the background pass retries it. */
+  private indexText(id: string, kind: DocKind, rev: string, title: string, doc: Stored): void {
+    if (!this.searchable()) return;
+    try {
+      indexDocument(this.db, id, rev, title, searchTextOf(kind, doc));
+    } catch (err) {
+      console.error(`search index ${id}: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * Index up to `batch` documents at a time that have no index row or an older one, until none is left; one pass runs
+   * at a time. A document whose file cannot be read is indexed by its title alone, so it is not tried again until it changes.
+   */
+  reindexStale(batch = 50): Promise<void> {
+    if (!this.searchable()) return Promise.resolve();
+    if (this.reindexing) return this.reindexing;
+    const pass = async () => {
+      try {
+        for (;;) {
+          const stale = staleDocuments(this.db, batch);
+          if (!stale.length) return;
+          for (const { id } of stale) {
+            const r = this.find(id);
+            if (!r) continue;
+            const doc = await this.read<Stored>(r).catch(() => null);
+            try {
+              indexDocument(this.db, r.id, r.updated_at, r.title, doc ? searchTextOf(r.kind, doc) : '');
+            } catch (err) {
+              console.error(`search index ${id}: ${(err as Error).message}`);
+            }
+          }
+          if (stale.length < batch) return;
+        }
+      } catch (err) {
+        console.error(`search reindex: ${(err as Error).message}`);
+      }
+    };
+    // Cleared after it is stored: a pass with nothing to do finishes before `pass()` returns.
+    this.reindexing = pass().finally(() => {
+      this.reindexing = null;
+    });
+    return this.reindexing;
+  }
+
+  /** Documents whose words match, that the viewer may open (search.ts). Starts the background pass for any not indexed yet. */
+  searchContent(who: ViewerArg, query: SearchQuery, opts: DocSearchOptions = {}): DocHitRow[] {
+    if (!this.searchable()) return [];
+    void this.reindexStale();
+    return searchDocuments(this.db, who, query, opts);
   }
 
   /** Documents of one kind (spreadsheets by default) in a scope (server/scope.ts), most recently edited first. */
@@ -249,6 +311,7 @@ export class SheetStore {
       .run(id, c.owner_id, c.workspace_id, c.private, kind, format, title, folder, file, now, now);
     syncOrgGrant(this.db, 'sheet', id, c, c.owner_id);
     this.backup?.putFile(c.owner_id, kind, id, now, json);
+    this.indexText(id, kind, now, title, doc);
     return { id, kind, ...(format ? { format } : {}), title, ...(folder ? { folder } : {}), ...scopeMeta(c), createdAt: now, updatedAt: now };
   }
 
@@ -354,6 +417,7 @@ export class SheetStore {
     const now = this.stamp(r.file);
     this.db.prepare('UPDATE sheets SET updated_at = ? WHERE id = ?').run(now, r.id);
     this.backup?.putFile(r.owner_id, r.kind, r.id, now, json);
+    this.indexText(r.id, r.kind, now, r.title, doc);
     this.onRevision?.(r.id, now);
     return { ...toMeta(r), updatedAt: now };
   }
@@ -468,6 +532,7 @@ export class SheetStore {
     if (!r) return null;
     const now = new Date().toISOString();
     this.db.prepare('UPDATE sheets SET title = ?, updated_at = ? WHERE id = ?').run(title, now, id);
+    if (this.searchable()) retitleDocument(this.db, id, now, title);
     this.onRevision?.(id, now);
     return { ...toMeta(r), title, updatedAt: now };
   }

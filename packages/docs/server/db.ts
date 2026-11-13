@@ -1,6 +1,7 @@
 import { DatabaseSync } from '#runtime/sqlite';
 import { GRANTS_DDL } from '@flow/shared/grants';
 import { migrateToGrants } from './access.ts';
+import { SEARCH_DDL } from './search.ts';
 
 export type DB = DatabaseSync;
 
@@ -283,4 +284,7 @@ function migrate(db: DB): void {
     migrateToGrants(db);
     db.prepare("INSERT INTO docs_migrations (name, at) VALUES ('grants', ?)").run(new Date().toISOString());
   }
+  // The words of every document, for search (server/search.ts); SheetStore fills it, documents from before it are indexed
+  // by its background pass.
+  db.exec(SEARCH_DDL);
 }
