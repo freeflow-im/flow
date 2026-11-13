@@ -84,6 +84,7 @@ describe('the list’s search inside Home (home.md §2: no suite bar there)', ()
     const searched: string[] = [];
     render({ searchBar: true, onSearch: (q: string) => searched.push(q) });
     const field = host.querySelector('[data-testid="mail-list-search"]') as HTMLInputElement;
+    expect(field.form?.parentElement?.querySelector('h1')?.textContent).toBeTruthy(); // beside the folder name, in the header row
     expect(field).not.toBeNull();
     expect(host.querySelector('button[aria-label="Search"]')).toBeNull();
     act(() => {
