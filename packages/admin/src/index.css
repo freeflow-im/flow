@@ -46,3 +46,15 @@ body {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
 }
+
+/* Admin → Changelog (sections/Changelog.tsx): an entry's Markdown, which Tailwind's reset would leave unstyled. */
+.changelog-md > * + * { margin-top: 0.5rem; }
+.changelog-md ul { list-style: disc; padding-left: 1.25rem; }
+.changelog-md ol { list-style: decimal; padding-left: 1.25rem; }
+.changelog-md li + li { margin-top: 0.25rem; }
+.changelog-md h2, .changelog-md h3 { font-weight: 600; font-size: 0.8125rem; margin-top: 0.75rem; color: var(--color-ink-soft); }
+.changelog-md code { background: var(--color-hover); border-radius: 3px; padding: 0 0.25em; font-size: 0.85em; }
+.changelog-md pre { background: var(--color-hover); border-radius: 6px; padding: 0.5rem 0.75rem; overflow-x: auto; }
+.changelog-md pre code { background: none; padding: 0; }
+.changelog-md table { border-collapse: collapse; font-size: 0.8125rem; }
+.changelog-md th, .changelog-md td { border: 1px solid var(--color-hairline); padding: 0.25rem 0.5rem; text-align: left; }
