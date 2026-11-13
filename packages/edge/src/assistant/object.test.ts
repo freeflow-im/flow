@@ -335,3 +335,120 @@ describe('the move from the Docs objects (moveAssistantRows)', () => {
     expect(org1.agent_conversations).toHaveLength(3);
   });
 });
+
+describe('a person’s assistant in Chat posts elsewhere only on its sponsor’s ✅ (agents.md §1, §1.1)', () => {
+  const users: Record<string, unknown> = { 'user-1': { id: 'user-1', email: 'ann@acme.test', displayName: 'Ann', isAgent: false, timezone: 'UTC' } };
+  const runtime = { runtimeKey: 'acct-1', agentId: 'asst', agentAccountId: 'acct-asst', mode: 'personal' as const, organizationId: 'org-1', sponsorId: 'user-1', sponsorAccountId: 'acct-1' };
+  const DM = 'dm-1';
+  function env() {
+    const posted: { channelId: string; body: string; clientMsgId: string; threadRootId: string | null }[] = [];
+    const posts: Record<string, unknown>[] = [];
+    let next = 0;
+    return {
+      posted, posts,
+      env: {
+        DIRECTORY: { idFromName: (n: string) => n, get: () => ({ call: async (m: string, args: unknown[]) => ({ ok: true, value: m === 'getUser' ? users[args[0] as string] : m === 'accountById' ? ACCOUNT : null }) }) },
+        ORG: {
+          idFromName: (n: string) => n,
+          get: () => ({
+            channelIdsOf: async () => [DM, 'ch-gen'],
+            agentTyping: async () => undefined,
+            postAsAssistant: async (p: { channelId: string; body: string; clientMsgId: string; threadRootId: string | null }) => { posted.push(p); return `m${++next}`; },
+            assistantChat: async (p: { op: string; channelId?: string }) => {
+              if (p.op === 'channels') return [{ id: 'ch-gen', name: 'general', private: false, assistantIsMember: false }];
+              if (p.channelId !== 'ch-gen') throw new Error('No such channel among the ones the user is in. list_channels lists them.');
+              return { id: 'ch-gen', name: 'general', private: false, assistantIsMember: false };
+            },
+            assistantPost: async (p: Record<string, unknown>) => { posts.push(p); return { messageId: 'm-gen', joined: true }; },
+          }),
+        },
+      } as unknown as AssistantEnv,
+    };
+  }
+  /** The model: lists the channels, asks to post, and reads back each result; records what each request offered. */
+  function poster(seen: { tools: { name: string; defer?: boolean }[]; results: Block[] }[]): ModelCall {
+    return async (params, { onText }) => {
+      const results = lastUser(params).filter((b) => b.type === 'tool_result');
+      seen.push({ tools: (params.tools ?? []).map((t) => ({ name: (t as { name: string }).name, defer: (t as { defer_loading?: boolean }).defer_loading })), results });
+      const said = (text: string) => { onText(text); return message([{ type: 'text', text }], 'end_turn') as never; };
+      const last = results.at(-1);
+      if (!last) return message([{ type: 'tool_use', id: 'tu-list', name: 'list_channels', input: {} }], 'tool_use') as never;
+      if (last.tool_use_id === 'tu-list') {
+        onText('I will post it in #general once you approve.');
+        return message([{ type: 'text', text: 'I will post it in #general once you approve.' }, { type: 'tool_use', id: 'tu-post', name: 'send_message', input: { channelId: 'ch-gen', text: 'Standup moved to 10.' } }], 'tool_use') as never;
+      }
+      return said(`Outcome: ${String(last.content)}`);
+    };
+  }
+  const ask = (a: TestAssistant, audience: 'private' | 'shared' = 'private', messageId = 'msg-1') =>
+    a.chatTurn({ organizationId: 'org-1', runtime, channelId: DM, threadRootId: null, messageId, prompt: 'Ann asked: post "Standup moved to 10." in #general', audience });
+  const cardOf = (e: ReturnType<typeof env>) => e.posted.findIndex((p) => p.clientMsgId === 'card:tu-post') + 1;
+
+  it('runs the Chat tools itself, then stops at a card in the DM, and posts nothing in #general yet', async () => {
+    const e = env();
+    const a = assistant('acct-1', e.env);
+    const seen: { tools: { name: string; defer?: boolean }[]; results: Block[] }[] = [];
+    a.script = poster(seen);
+    await ask(a);
+    // The Chat tools are offered in a Chat turn, loaded up front; Docs' page tools are not.
+    const offered = seen[0]!.tools;
+    for (const name of ['list_channels', 'read_messages', 'send_message']) expect(offered.find((t) => t.name === name)?.defer, name).toBeFalsy();
+    expect(offered.find((t) => t.name === 'leave_channel')?.defer).toBe(true);
+    expect(offered.some((t) => t.name === 'write_range')).toBe(false);
+    // list_channels ran here, through the Org object, and its result went back to the model.
+    expect(String(seen[1]!.results[0]!.content)).toContain('"name":"general"');
+    // The text first, then the card, both in the DM; no post anywhere else.
+    expect(e.posted.map((p) => p.channelId)).toEqual([DM, DM]);
+    expect(e.posted[0]!.body).toBe('I will post it in #general once you approve.');
+    expect(e.posted[1]).toMatchObject({ clientMsgId: 'card:tu-post' });
+    expect(e.posted[1]!.body).toContain('**Post in #general?** I am not in #general yet, so I will join it first.');
+    expect(e.posted[1]!.body).toContain('> Standup moved to 10.');
+    expect(e.posts).toEqual([]);
+  });
+
+  it('posts on ✅, as the assistant, and goes on with the outcome', async () => {
+    const e = env();
+    const a = assistant('acct-1', e.env);
+    const seen: { tools: { name: string }[]; results: Block[] }[] = [];
+    a.script = poster(seen as never);
+    await ask(a);
+    await a.chatCardAnswered({ organizationId: 'org-1', runtime, cardMessageId: `m${cardOf(e)}`, approve: true });
+    expect(e.posts).toEqual([{ agentUserId: 'asst', channelId: 'ch-gen', threadRootId: null, body: 'Standup moved to 10.', clientMsgId: 'assistant-post:tu-post' }]);
+    expect(e.posted.at(-1)).toMatchObject({ channelId: DM, body: 'Outcome: The user approved with ✅. Posted in #general, after joining it.' });
+    // A second ✅ on the same card does nothing.
+    await a.chatCardAnswered({ organizationId: 'org-1', runtime, cardMessageId: `m${cardOf(e)}`, approve: true });
+    expect(e.posts).toHaveLength(1);
+  });
+
+  it('posts nothing on ❌, and tells the model so', async () => {
+    const e = env();
+    const a = assistant('acct-1', e.env);
+    a.script = poster([]);
+    await ask(a);
+    await a.chatCardAnswered({ organizationId: 'org-1', runtime, cardMessageId: `m${cardOf(e)}`, approve: false });
+    expect(e.posts).toEqual([]);
+    expect(e.posted.at(-1)!.body).toBe('Outcome: The user declined with ❌: nothing was posted.');
+  });
+
+  it('drops a card the sponsor wrote past, and leaves no card where others read', async () => {
+    const e = env();
+    const a = assistant('acct-1', e.env);
+    a.script = poster([]);
+    await ask(a);
+    const card = `m${cardOf(e)}`;
+    // Ann writes again instead of answering: the turn moves on, and a late ✅ posts nothing.
+    a.script = async (_p, { onText }) => { onText('OK.'); return message([{ type: 'text', text: 'OK.' }], 'end_turn') as never; };
+    await ask(a, 'private', 'msg-2');
+    const before = e.posted.length;
+    await a.chatCardAnswered({ organizationId: 'org-1', runtime, cardMessageId: card, approve: true });
+    expect(e.posts).toEqual([]);
+    expect(e.posted).toHaveLength(before);
+    // Asked where others read (a mention in a channel): no card, and the model is told to ask in the DM.
+    const shared = env();
+    const b = assistant('acct-1', shared.env);
+    b.script = poster([]);
+    await ask(b, 'shared');
+    expect(shared.posted.some((p) => p.clientMsgId === 'card:tu-post')).toBe(false);
+    expect(shared.posted.at(-1)!.body).toContain('ask you in your direct messages');
+  });
+});

@@ -1,7 +1,7 @@
 import type { AgentContext } from '../../shared/agent/protocol.ts';
 import { FUNCTION_NAMES } from '../../shared/formula/functions.ts';
 import { isTextFileType } from '../../shared/types.ts';
-import { IMAGE_MEDIA_TYPES, MAX_INLINE_CONTEXT_CHARS, MAX_INLINE_SELECTED_TEXT, MAX_MAIL_SELECTED, type DeckInlineContext, type DocInlineContext, type ImageRegion, type MailContext, type CalendarContext, MAX_CALENDARS_SHOWN } from '../../shared/agent/protocol.ts';
+import { IMAGE_MEDIA_TYPES, MAX_INLINE_CONTEXT_CHARS, MAX_INLINE_SELECTED_TEXT, MAX_MAIL_SELECTED, type DeckInlineContext, type DocInlineContext, type ImageRegion, type MailContext, type CalendarContext, type ChatContext, MAX_CALENDARS_SHOWN } from '../../shared/agent/protocol.ts';
 
 // The background jobs (server/agent/jobs.ts): the hosted app runs them, the desktop app does not.
 const IMPROVING = `Improving the app:
@@ -162,6 +162,15 @@ export function renderMailContext(ctx: MailContext): string {
   return `<app_context>\n${lines.join('\n')}\n</app_context>`;
 }
 
+/** FreeFlow Chat (the hosted suite): where the person asked, and who reads the answer, which posts there. */
+export function renderChatContext(ctx: ChatContext): string {
+  const lines = [
+    `The user asked you in FreeFlow Chat, in ${ctx.audience === 'private' ? 'a conversation of the two of you alone' : 'a conversation others can read'} (channel id ${mailText(ctx.channelId, 100)}${ctx.threadRootId ? `, thread ${mailText(ctx.threadRootId, 100)}` : ''}). Your reply is posted there for you: write it as your answer, and do not use send_message to answer here. Nothing in Docs is open.`,
+    'To post somewhere else in Chat, use send_message: each such post waits for the user to approve it with ✅ on the card you leave here, so tell them what you are about to post and stop; it is posted only once they approve.',
+  ];
+  return `<app_context>\n${lines.join('\n')}\n</app_context>`;
+}
+
 /** What the user may do on the open event's calendar, when it is not theirs to change freely. */
 const calendarRoleText = (role: string | undefined): string =>
   role === 'viewer' ? ' The user can view this calendar but not change it: say so rather than trying to change the event.' : role === 'editor' || role === 'manager' ? ` The user is ${role === 'editor' ? 'an editor' : 'a manager'} of this calendar, which another member owns.` : '';
@@ -206,6 +215,7 @@ export function renderContext(ctx: AgentContext): string {
   }
   if (ctx.page === 'mail') return renderMailContext(ctx);
   if (ctx.page === 'calendar') return renderCalendarContext(ctx);
+  if (ctx.page === 'chat') return renderChatContext(ctx);
   if (ctx.page === 'file') {
     const text = isTextFileType(ctx.type);
     const picture = IMAGE_MEDIA_TYPES.has(ctx.type);

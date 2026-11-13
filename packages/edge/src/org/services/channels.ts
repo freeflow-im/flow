@@ -573,10 +573,20 @@ export async function removeMember(channelId: string, actorId: string, targetUse
   const self = actorId === targetUserId;
   if (chan.kind === 'dm') throw badRequest('dm_channel', 'cannot leave a 1:1 DM');
   if (chan.kind === 'group_dm' && !self) throw forbidden('group DM members can only remove themselves');
+  // A person's assistant is in a channel only because its sponsor brought it (agents.md §1.1): it may leave any channel,
+  // #general too, which holds every person but no agent need stay in, and its sponsor may take it out.
+  const target = (
+    await db
+      .select({ kind: workspaceMembers.kind, runtime: workspaceMembers.runtime, sponsorUserId: workspaceMembers.sponsorUserId })
+      .from(workspaceMembers)
+      .where(and(eq(workspaceMembers.workspaceId, chan.workspaceId), eq(workspaceMembers.userId, targetUserId)))
+      .limit(1)
+  )[0];
+  const assistant = target?.kind === 'personal_agent' && target.runtime === 'hosted';
   if (self) {
     if (!isMember) throw badRequest('not_member', 'not a member of this channel');
-    if (chan.kind === 'standard' && chan.name === 'general') throw badRequest('general_channel', 'cannot leave #general');
-  } else {
+    if (chan.kind === 'standard' && chan.name === 'general' && !assistant) throw badRequest('general_channel', 'cannot leave #general');
+  } else if (!(assistant && target.sponsorUserId === actorId)) {
     const actor = await requireMembership(chan.workspaceId, actorId);
     if (actor.role !== 'owner' && actor.role !== 'admin') throw forbidden('only owners and admins can remove members');
   }

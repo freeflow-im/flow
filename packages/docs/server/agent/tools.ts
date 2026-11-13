@@ -748,6 +748,11 @@ export interface AssistantToolSource {
   validate?(name: string, input: unknown, context: AgentContext | undefined): Validated | undefined;
   /** A server tool run. */
   run?(name: string, input: Record<string, unknown>, env: ServerToolEnv): Promise<string> | undefined;
+  /**
+   * Whether a tool pauses the turn for its client to run, where the host has such tools of its own (the suite's Chat
+   * tools, which the Worker runs after a Chat turn pauses). Undefined: this app's own list (CLIENT_TOOLS).
+   */
+  isBrowser?(name: string): boolean | undefined;
 }
 let source: AssistantToolSource | null = null;
 /** Set once by the host at start; null is this app's own tools alone. */
@@ -785,7 +790,7 @@ export function assistantTools(context: AgentContext | undefined, jobs: boolean)
 }
 
 /** Whether a tool runs in the browser (it pauses the turn). */
-export const isBrowserTool = (name: string): boolean => CLIENT_TOOLS.has(name);
+export const isBrowserTool = (name: string): boolean => source?.isBrowser?.(name) ?? CLIENT_TOOLS.has(name);
 
 // ---------------------------------------------------------------------------
 // Server-side tools

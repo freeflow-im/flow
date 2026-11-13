@@ -28,6 +28,7 @@ const CORE_BY_PAGE: Record<string, readonly string[]> = {
   file: ['read_file', 'view_image'],
   mail: ['search_mail', 'read_mail', 'create_mail_draft', 'open_mail_message'],
   calendar: ['list_events', 'get_event', 'find_free_time', 'create_event', 'open_calendar_event'],
+  chat: ['list_channels', 'read_messages', 'send_message'],
 };
 
 /** The tools loaded up front on this page. */

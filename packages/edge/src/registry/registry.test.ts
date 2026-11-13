@@ -3,6 +3,7 @@
 // Events' from their modules), the assistant's from its Zod schemas, and the bridge's from its built-in list. When they
 // drift apart this fails; `UPDATE_TOOL_DEFINITIONS=1 pnpm --filter @flow/edge exec vitest run src/registry` writes them again
 // (then rebuild @flow/shared).
+import { ASSISTANT_CHAT_TOOLS } from '../assistant/chatTools.ts';
 import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -41,7 +42,7 @@ const manifestTools = () => {
 type Input = ToolDefinition['input'];
 
 /** The assistant's browser tools that ask the person first (confirmationFor in the Docs client, Calendar's delete_event). */
-const CONFIRMED = new Set(['delete_event', 'request_app_change', 'edit_image', 'delete_tab', 'delete_rows', 'delete_columns', 'clear_range', 'delete_slides', 'delete_blocks', 'replace_blocks']);
+const CONFIRMED = new Set(['send_message', 'delete_event', 'request_app_change', 'edit_image', 'delete_tab', 'delete_rows', 'delete_columns', 'clear_range', 'delete_slides', 'delete_blocks', 'replace_blocks']);
 /** Browser tools that other apps' pages run too. */
 const RUNS_IN: Record<string, string[]> = { delete_event: ['docs'] };
 
@@ -92,8 +93,9 @@ async function fromImplementations(): Promise<ToolDefinition[]> {
     }),
   ];
   for (const { name, description, input } of assistantTools) {
-    const kind = CLIENT_TOOLS.has(name) ? 'browser' : 'server';
-    const app = assistantMail.has(name) ? 'mail' : assistantCalendar.has(name) ? 'calendar' : 'docs';
+    // Chat's run in the Worker when a Chat turn pauses (assistant/chatTools.ts), as a page's browser tools run in its page.
+    const kind = CLIENT_TOOLS.has(name) || ASSISTANT_CHAT_TOOLS.has(name) ? 'browser' : 'server';
+    const app = assistantMail.has(name) ? 'mail' : assistantCalendar.has(name) ? 'calendar' : ASSISTANT_CHAT_TOOLS.has(name) ? 'chat' : 'docs';
     rows.push({ door: 'assistant', def: { name, app, kind, doors: [], scopes: [], ...(CONFIRMED.has(name) ? { confirm: true } : {}), ...(RUNS_IN[name] ? { runsIn: RUNS_IN[name] } : {}), description, input } });
   }
   for (const t of BUILT_IN_TOOLS) {

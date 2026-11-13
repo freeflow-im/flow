@@ -26,6 +26,7 @@ import type { Events } from '../events/object';
 import type { Assistant } from '../assistant/object';
 import type { PublishInput, SubscriptionRead } from '../events/core';
 import { agentStampFor, logEntryFor, type AgentStamp } from './eventLog';
+import { APPROVE, DECLINE } from '../assistant/chatTools';
 import { config } from './config';
 import { isActiveAccount, recordShare, revokeShare, shareEvents, sharedRefsOf, sharedWith, type RecordShareInput, type RevokeShareInput, type SharedItem } from './services/shares';
 import { eq, and } from 'drizzle-orm';
@@ -238,6 +239,30 @@ export class Org extends DurableObject<OrgEnv> {
     if (event.type === 'message.created' || event.type === 'thread.reply') {
       this.ctx.waitUntil(this.askAssistant(event.data as MessageDTO).catch((err) => console.error(`[assistant] ${(err as Error).message}`)));
     }
+    if (event.type === 'reaction.added') {
+      this.ctx.waitUntil(this.answerAssistantCard(event.data as { messageId: string; emoji: string; userId: string }).catch((err) => console.error(`[assistant] ${(err as Error).message}`)));
+    }
+  }
+
+  /**
+   * A sponsor's ✅ or ❌ on a card their assistant left (assistant/chatTools.ts): the approval of a post the assistant asked
+   * to make where others read it (agents.md §1). Only the sponsor's reaction on their own assistant's message counts; the
+   * runtime matches it to the card it is waiting on and ignores any other.
+   */
+  private async answerAssistantCard(r: { messageId: string; emoji: string; userId: string }): Promise<void> {
+    const approve = APPROVE.has(r.emoji) ? true : DECLINE.has(r.emoji) ? false : null;
+    if (approve === null || !this.env.ASSISTANT) return;
+    const sql = this.ctx.storage.sql;
+    const author = sql.exec('SELECT user_id, channel_id FROM messages WHERE id = ?', r.messageId).toArray()[0];
+    if (!author) return;
+    const a = sql.exec("SELECT account_id FROM workspace_members WHERE user_id = ? AND kind = 'personal_agent' AND runtime = 'hosted' AND sponsor_user_id = ?", author.user_id, r.userId).toArray()[0];
+    if (!a?.account_id) return;
+    const workspace = sql.exec('SELECT id FROM workspaces LIMIT 1').toArray()[0];
+    const answer = await this.directory().call('hostedRuntimeOf' as never, [a.account_id] as never) as DirectoryAnswer<HostedRuntimeDTO | null>;
+    if (!answer.ok || !answer.value || !workspace) return;
+    await this.env.ASSISTANT.get(this.env.ASSISTANT.idFromName(answer.value.runtimeKey)).chatCardAnswered({
+      organizationId: workspace.id as string, runtime: answer.value, cardMessageId: r.messageId, approve,
+    });
   }
 
   /**
@@ -288,6 +313,7 @@ export class Org extends DurableObject<OrgEnv> {
     const runtime = answer.value;
     await this.env.ASSISTANT.get(this.env.ASSISTANT.idFromName(runtime.runtimeKey)).chatTurn({
       organizationId: chan.workspace_id as string, runtime, channelId: msg.channelId, threadRootId: threadRootId ?? null, messageId: msg.id, prompt,
+      audience: twoOfUs ? 'private' : 'shared',
     });
   }
 
@@ -322,6 +348,74 @@ export class Org extends DurableObject<OrgEnv> {
     const msg = await this.scoped(() => assistantPosting.run(p.agentUserId, () => sendMessage(p.channelId, p.agentUserId, p.clientMsgId, p.body, p.threadRootId ?? undefined, undefined, undefined, { expandMentions: true })), stamp);
     await this.logging;
     return msg.id;
+  }
+
+  /** A person's assistant (a hosted personal agent of this organization) and its sponsor, or null for anyone else. */
+  private assistantSponsor(agentUserId: string): string | null {
+    const row = this.ctx.storage.sql.exec("SELECT sponsor_user_id FROM workspace_members WHERE user_id = ? AND kind = 'personal_agent' AND runtime = 'hosted'", agentUserId).toArray()[0];
+    return (row?.sponsor_user_id as string | undefined) ?? null;
+  }
+
+  /**
+   * The Chat tools of a person's assistant (agents.md §1.1, assistant/chatTools.ts), as its runtime runs them, with its
+   * sponsor's access: the standard channels the sponsor is in (`channels`), one of them before a post (`target`), its
+   * recent messages (`read`), and the assistant leaving one (`leave`). A channel the sponsor is not in is refused, so the
+   * assistant never reaches further than its sponsor. The post itself is assistantPost, after the sponsor's ✅.
+   */
+  async assistantChat(p: { agentUserId: string; op: 'channels' | 'target' | 'read' | 'leave'; channelId?: string; limit?: number }): Promise<unknown> {
+    const sponsorId = this.assistantSponsor(p.agentUserId);
+    if (!sponsorId) throw new Error('not a person’s assistant');
+    const sql = this.ctx.storage.sql;
+    const memberOf = (channelId: string, userId: string) => sql.exec('SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?', channelId, userId).toArray().length > 0;
+    if (p.op === 'channels') {
+      const workspace = sql.exec('SELECT id FROM workspaces LIMIT 1').toArray()[0];
+      if (!workspace) return [];
+      const list = await this.scoped(async () => (await import('./services/channels')).listChannels(workspace.id as string, sponsorId));
+      return list
+        .filter((c) => c.kind === 'standard' && c.isMember && !c.archivedAt)
+        .map((c) => ({ id: c.id, name: c.name, private: c.isPrivate, assistantIsMember: memberOf(c.id, p.agentUserId) }));
+    }
+    const channelId = p.channelId ?? '';
+    const chan = sql.exec('SELECT name, kind, is_private, archived_at FROM channels WHERE id = ?', channelId).toArray()[0];
+    if (!chan || !memberOf(channelId, sponsorId)) throw new Error('No such channel among the ones the user is in. list_channels lists them.');
+    if (p.op === 'target') {
+      if (chan.kind !== 'standard') throw new Error('Only channels can be posted in this way, not direct messages.');
+      if (chan.archived_at) throw new Error('That channel is archived.');
+      return { id: channelId, name: chan.name as string, private: !!chan.is_private, assistantIsMember: memberOf(channelId, p.agentUserId) };
+    }
+    if (p.op === 'read') {
+      const limit = Math.min(Math.max(p.limit ?? 20, 1), 50);
+      const page = await this.scoped(async () => (await import('./services/messages')).listMessages(channelId, sponsorId, undefined, limit));
+      const names = new Map(sql.exec('SELECT id, display_name FROM users').toArray().map((r) => [r.id as string, r.display_name as string]));
+      const render = (body: string) => body.replace(/<@([0-9a-f-]{36})>/g, (_, id: string) => `@${names.get(id) ?? 'someone'}`);
+      return [...page.messages].reverse().filter((m) => !m.systemKind).map((m) => ({ id: m.id, from: names.get(m.userId) ?? 'someone', at: m.createdAt, text: render(m.body), replies: m.replyCount }));
+    }
+    if (!memberOf(channelId, p.agentUserId)) return { left: false, note: 'The assistant is not in that channel.' };
+    try {
+      await this.scoped(async () => {
+        const { removeMember } = await import('./services/channels');
+        const { assistantPosting } = await import('./services/workspaces');
+        await assistantPosting.run(p.agentUserId, () => removeMember(channelId, p.agentUserId, p.agentUserId));
+      });
+    } catch (err) {
+      throw new Error((err as Error).message);
+    }
+    return { left: true };
+  }
+
+  /**
+   * A post the sponsor approved with ✅ on their assistant's card: into a standard channel the sponsor is in, the
+   * assistant brought in by its sponsor first if it is not there yet (as a mention does), then posted as the assistant.
+   */
+  async assistantPost(p: { agentUserId: string; channelId: string; threadRootId: string | null; body: string; clientMsgId: string }): Promise<{ messageId: string | null; joined: boolean }> {
+    const target = (await this.assistantChat({ agentUserId: p.agentUserId, op: 'target', channelId: p.channelId })) as { assistantIsMember: boolean };
+    const sponsorId = this.assistantSponsor(p.agentUserId)!;
+    let joined = false;
+    if (!target.assistantIsMember) {
+      await this.scoped(async () => (await import('./services/channels')).addMember(p.channelId, sponsorId, p.agentUserId));
+      joined = true;
+    }
+    return { messageId: await this.postAsAssistant(p), joined };
   }
 
   /** Into the organization's event log as well (platform.md §5.2), in order, batched per turn of the event loop. */

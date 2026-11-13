@@ -136,6 +136,14 @@ export class AgentService {
     return toChatItems(this.store.messages(conv.id));
   }
 
+  /**
+   * The tool calls a chat's turn is paused on, for its client to answer (the browser, or the Worker for the Chat tools):
+   * none when it is not paused. `workspaceId` as the turn gave it (its access's scope).
+   */
+  pendingCalls(userId: string, scope: string = HOME_CHAT, workspaceId?: string): string[] {
+    return this.store.active(userId, 'builtin', scope, workspaceId).pending?.clientIds ?? [];
+  }
+
   /** The user's answer to a permission their own agent asked for; false when there is no such question. */
   answerPermission(id: string, allow: boolean): boolean {
     return this.claudeAgent?.answerPermission(id, allow) ?? false;
