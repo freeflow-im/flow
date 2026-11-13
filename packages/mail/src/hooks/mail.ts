@@ -390,6 +390,42 @@ export function useMessageActions(accountId: string | null, folder: string | nul
     },
   });
 
+  /**
+   * A conversation read: its unread messages marked read in whatever folders they are in. A thread's row counts its unread
+   * messages account-wide (an archived reply, a copy under another label), so marking only this folder's copies left the
+   * row unread for good. Applied to the open thread, this folder's rows and lists, and each folder's count at once.
+   */
+  const threadSeen = useMutation({
+    mutationKey,
+    mutationFn: async (v: { threadId: string; messages: { folder: string; uid: number }[] }) => {
+      const byFolder = new Map<string, number[]>();
+      for (const m of v.messages) byFolder.set(m.folder, [...(byFolder.get(m.folder) ?? []), m.uid]);
+      await Promise.all([...byFolder].map(([f, uids]) => mailApi.setFlags(accountId!, { folder: f, uids, seen: true })));
+    },
+    onMutate: (v) => {
+      const marked = new Set(v.messages.map((m) => `${m.folder}\u0000${m.uid}`));
+      const isMarked = (m: { folder: string; uid: number }) => marked.has(`${m.folder}\u0000${m.uid}`);
+      const snapshots: [readonly unknown[], unknown][] = threadDetails();
+      // What the open thread knew was unread, per folder: what the counts move by.
+      const unreadIn = new Map<string, number>();
+      for (const [key, t] of snapshots as [readonly unknown[], ThreadDetail | undefined][]) {
+        if (!t) continue;
+        if (t.threadId === v.threadId) for (const m of t.messages) if (isMarked(m) && !m.seen) unreadIn.set(m.folder, (unreadIn.get(m.folder) ?? 0) + 1);
+        qc.setQueryData<ThreadDetail>(key, { ...t, messages: t.messages.map((m) => (isMarked(m) && !m.seen ? { ...m, seen: true } : m)) });
+      }
+      const here = new Set(v.messages.filter((m) => m.folder === folder).map((m) => m.uid));
+      snapshots.push(
+        ...patchLists((m) => (here.has(m.uid) && !m.seen ? { ...m, seen: true } : m)),
+        ...patchThreads((t) => (t.threadId === v.threadId ? { ...t, unread: 0, latest: here.has(t.latest.uid) ? { ...t.latest, seen: true } : t.latest } : t)),
+        ...patchCounts([...unreadIn].map(([path, n]) => ({ path, unread: -n }))),
+      );
+      for (const m of v.messages) qc.setQueryData(keys.message(accountId!, m.folder, m.uid), (old: MessageSummary | undefined) => (old ? { ...old, seen: true } : old));
+      return { snapshots };
+    },
+    onError: (_e, _v, ctx) => ctx && restore(ctx.snapshots),
+    onSettled: () => refresh(true),
+  });
+
   /** Messages leaving this folder (for `to`, if known): out of the lists and the threads, and out of the counts. */
   const leave = (uids: number[], to: string | null) => {
     const before = seenOf(uids);
@@ -447,5 +483,5 @@ export function useMessageActions(accountId: string | null, folder: string | nul
     onSettled: () => refresh(true),
   });
 
-  return { flags, move, remove, moveToTab };
+  return { flags, threadSeen, move, remove, moveToTab };
 }

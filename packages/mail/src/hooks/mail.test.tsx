@@ -155,6 +155,21 @@ describe('thread rows and the open thread follow the actions', () => {
     expect(vi.mocked(mailApi.setFlags)).toHaveBeenCalledWith('acc', { folder: 'INBOX', uids: [30, 20, 13], seen: true });
   });
 
+  it('opening a thread marks its unread messages read in every folder they are in, so its row is read', async () => {
+    // A reply that was archived: the row counts it unread, but it is not in this folder.
+    qc.setQueryData(keys.thread('acc', 't:a'), { threadId: 't:a', messages: [detail(13, true), { ...detail(5, false), folder: 'Archive' }, detail(20, false), detail(30, false)] } as ThreadDetail);
+    qc.setQueryData(keys.folders('acc'), folders.map((f) => (f.path === 'Archive' ? { ...f, unread: 1 } : f)));
+    vi.mocked(mailApi.setFlags).mockClear();
+    await act(async () => { actions.threadSeen.mutate({ threadId: 't:a', messages: [{ folder: 'Archive', uid: 5 }, { folder: 'INBOX', uid: 20 }, { folder: 'INBOX', uid: 30 }] }); });
+    expect(threadRows()[0]).toMatchObject({ unread: 0, latest: { seen: true } });
+    expect(threadMessages().every((m) => m.seen)).toBe(true);
+    expect([unreadOf('INBOX'), unreadOf('Archive')]).toEqual([3, 0]);
+    expect(vi.mocked(mailApi.setFlags).mock.calls).toEqual([
+      ['acc', { folder: 'Archive', uids: [5], seen: true }],
+      ['acc', { folder: 'INBOX', uids: [20, 30], seen: true }],
+    ]);
+  });
+
   it('marking one message of a thread unread raises its count; starring and unstarring the thread set its star', async () => {
     await act(async () => { actions.flags.mutate({ uids: [13], seen: false }); });
     expect(threadRows()[0]).toMatchObject({ unread: 3, latest: { seen: false } });

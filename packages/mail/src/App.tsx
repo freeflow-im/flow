@@ -214,29 +214,29 @@ export function App() {
     return () => window.clearTimeout(t);
   }, [toast]);
 
-  // Opening a thread marks the messages it shows expanded (the unread ones) read, in this folder, once they are on
-  // screen: after the frame that shows them, and not for a thread passed over before it was drawn.
+  // Opening a thread marks the messages it shows expanded (the unread ones) read, in whatever folder each is in (the row
+  // counts them all), once they are on screen: after the frame that shows them, and not for a thread passed over before it was drawn.
   const marked = useRef(new Set<string>());
-  const markSeen = actions.flags.mutate;
+  const markThreadSeen = actions.threadSeen.mutate;
   const threadLoaded = !!thread.data && thread.data.threadId === openId;
   useEffect(() => {
     const t = thread.data;
     if (!t || !threadLoaded || !account) return;
     const shown = expandedByDefault(t.messages);
-    const uids = t.messages.filter((m, i) => shown.has(i) && !m.seen && m.folder === folder && !marked.current.has(`${account.id}:${m.folder}:${m.uid}`)).map((m) => m.uid);
-    if (!uids.length) return;
+    const unread = t.messages.filter((m, i) => shown.has(i) && !m.seen && !marked.current.has(`${account.id}:${m.folder}:${m.uid}`)).map((m) => ({ folder: m.folder, uid: m.uid }));
+    if (!unread.length) return;
     let timer = 0;
     const frame = requestAnimationFrame(() => {
       timer = window.setTimeout(() => {
-        for (const uid of uids) marked.current.add(`${account.id}:${folder}:${uid}`);
-        markSeen({ uids, seen: true });
+        for (const m of unread) marked.current.add(`${account.id}:${m.folder}:${m.uid}`);
+        markThreadSeen({ threadId: t.threadId, messages: unread });
       }, 0);
     });
     return () => {
       cancelAnimationFrame(frame);
       window.clearTimeout(timer);
     };
-  }, [thread.data, threadLoaded, account, folder, markSeen]);
+  }, [thread.data, threadLoaded, account, markThreadSeen]);
 
   // The next (older) conversation is read ahead once this one is in, so j opens it at once.
   const nextId = useMemo(() => {
@@ -360,13 +360,22 @@ export function App() {
     );
   };
   const setSeen = (uids: number[], seen: boolean) => uids.length && actions.flags.mutate({ uids, seen });
-  /** Whether any message of these conversations, in this folder, is unread (the open thread knows each of its own). */
+  /** Whether any message of these conversations is unread (the open thread knows each of its own, in any folder). */
   const anyUnread = (ids: string[]) =>
-    ids.some((id) => (id === openId && threadLoaded ? thread.data!.messages.some((m) => m.folder === folder && !m.seen) : (rowOf(id)?.unread ?? 0) > 0));
+    ids.some((id) => (id === openId && threadLoaded ? thread.data!.messages.some((m) => !m.seen) : (rowOf(id)?.unread ?? 0) > 0));
   const toggleSeen = (ids = targetIds()) => {
     const uids = uidsOf(ids);
     if (!uids.length) return;
     const unread = anyUnread(ids);
+    if (unread && openId !== null && threadLoaded && ids.includes(openId)) {
+      // The open conversation is marked read in every folder its unread messages are in (the row counts them all).
+      const t = thread.data!;
+      const open = t.messages.filter((m) => !m.seen).map((m) => ({ folder: m.folder, uid: m.uid }));
+      if (open.length) actions.threadSeen.mutate({ threadId: t.threadId, messages: open });
+      const own = new Set(t.messages.filter((m) => m.folder === folder).map((m) => m.uid));
+      setSeen(uids.filter((u) => !own.has(u)), true);
+      return;
+    }
     setSeen(uids, unread);
     // Marking the open conversation unread closes it, so it stays unread.
     if (!unread && openId !== null && ids.includes(openId)) {
