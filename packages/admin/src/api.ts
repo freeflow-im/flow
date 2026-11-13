@@ -72,8 +72,9 @@ export const assistantApi = {
   settings: async (org: string) => (await request<{ settings: AssistantSettings }>('GET', mine(org, 'model'))).settings,
   saveSettings: async (org: string, body: AssistantSettingsUpdate) => (await request<{ settings: AssistantSettings }>('PUT', mine(org, 'model'), body)).settings,
   /** Its picture: a preset (null for none), or an upload. */
-  setPreset: (org: string, preset: AgentAvatarPreset | null) => request<{ avatarUrl: string | null }>('PUT', `/v1/workspaces/${encodeURIComponent(org)}/assistant/avatar`, { preset }),
-  uploadPicture: (org: string, file: File) => uploadMultipart<{ avatarUrl: string | null }>(`/v1/workspaces/${encodeURIComponent(org)}/assistant/avatar`, file),
+  // The assistant's picture, or with `agent` another agent the person may change (agents.md §1.3).
+  setPreset: (org: string, preset: AgentAvatarPreset | null, agent?: string) => request<{ avatarUrl: string | null }>('PUT', `/v1/workspaces/${encodeURIComponent(org)}/assistant/avatar${agent ? `?agent=${encodeURIComponent(agent)}` : ''}`, { preset }),
+  uploadPicture: (org: string, file: File, agent?: string) => uploadMultipart<{ avatarUrl: string | null }>(`/v1/workspaces/${encodeURIComponent(org)}/assistant/avatar${agent ? `?agent=${encodeURIComponent(agent)}` : ''}`, file),
 };
 
 /** An agent the person connected over MCP (Claude Desktop, Claude Code, …), as GET /v1/me/agent-connections lists it. */

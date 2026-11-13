@@ -1,12 +1,13 @@
 // Making a hosted agent, and a person's own private agents (docs/specs/agents.md §1.3, §6). One form serves "Your agents"
 // (every member: private by default) and Agents (owners and admins: shared by default). Private or shared is chosen here,
 // once: an agent's kind never changes (decision_log 2026-11-12).
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { UsableAgentDTO, WorkspaceDTO } from '@flow/shared';
 import { tellHome } from '@flow/suite-bar';
 import { assistantChanged } from '@flow/suite-bar/assistant-dock';
-import { adminApi } from '../api';
+import { adminApi, assistantApi } from '../api';
+import { choiceUrl, PicturePicker, type PictureChoice } from './AgentPicture';
 import { Button, Card, Confirm, ErrorLine } from '../components/ui';
 import { HostedDefinition } from './Agents';
 
@@ -29,17 +30,26 @@ export function CreateAgent({ org, initialAccess }: { org: WorkspaceDTO; initial
   const [name, setName] = useState('');
   const [access, setAccess] = useState<Access>(initialAccess);
   const [instructions, setInstructions] = useState('');
+  // The picture waits for the agent to exist; an upload shows from a local preview meanwhile.
+  const [picture, setPicture] = useState<PictureChoice>(null);
+  const preview = usePreview(picture && 'file' in picture ? picture.file : null);
   const count = mine.data?.agents?.length ?? 0;
   const limit = mine.data?.limit ?? 5;
   const full = access === 'private' && !!mine.data?.agents && count >= limit;
   const make = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       const body = { name: name.trim(), ...(instructions.trim() ? { instructions: instructions.trim() } : {}) };
-      return access === 'private' ? adminApi.makePersonalAgent(org.id, body) : adminApi.makeHostedAgent(org.id, body);
+      const made = access === 'private' ? await adminApi.makePersonalAgent(org.id, body) : await adminApi.makeHostedAgent(org.id, body);
+      if (picture) {
+        if ('preset' in picture) await assistantApi.setPreset(org.id, picture.preset, made.agent.id);
+        else await assistantApi.uploadPicture(org.id, picture.file, made.agent.id);
+      }
+      return made;
     },
     onSuccess: () => {
       setName('');
       setInstructions('');
+      setPicture(null);
       changed();
     },
   });
@@ -61,6 +71,10 @@ export function CreateAgent({ org, initialAccess }: { org: WorkspaceDTO; initial
           <span className="font-medium">Name</span>
           <input className="rounded-md border border-hairline px-2 py-1 text-sm text-ink" placeholder="For example, Scout" maxLength={80} value={name} onChange={(e) => setName(e.target.value)} data-testid="create-agent-name" />
         </label>
+        <div className="flex flex-col gap-1 text-sm">
+          <span className="font-medium">Picture</span>
+          <PicturePicker current={choiceUrl(picture, preview)} busy={make.isPending} onPreset={(p) => setPicture({ preset: p })} onFile={(f) => setPicture({ file: f })} onNone={() => setPicture(null)} testid="create-agent-picture" />
+        </div>
         <fieldset className="flex flex-col gap-2">
           <legend className="mb-1 text-sm font-medium">Who can use it</legend>
           <label className="flex items-start gap-2 text-sm">
@@ -100,6 +114,41 @@ export function CreateAgent({ org, initialAccess }: { org: WorkspaceDTO; initial
   );
 }
 
+/** A local address for a picked file, while it is picked. */
+function usePreview(file: File | null): string | null {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!file || typeof URL.createObjectURL !== 'function') return setUrl(null);
+    const u = URL.createObjectURL(file);
+    setUrl(u);
+    return () => URL.revokeObjectURL(u);
+  }, [file]);
+  return url;
+}
+
+/** An agent's picture, changed in place from its row (its sponsor). */
+function RowPicture({ org, agent, onDone }: { org: WorkspaceDTO; agent: UsableAgentDTO; onDone(): void }) {
+  const [open, setOpen] = useState(false);
+  const preset = useMutation({ mutationFn: (p: Parameters<typeof assistantApi.setPreset>[1]) => assistantApi.setPreset(org.id, p, agent.id), onSuccess: onDone });
+  const upload = useMutation({ mutationFn: (f: File) => assistantApi.uploadPicture(org.id, f, agent.id), onSuccess: onDone });
+  if (!open) {
+    return (
+      <Button kind="link" onClick={() => setOpen(true)} testid={`my-agent-picture-${agent.displayName}`}>
+        Picture
+      </Button>
+    );
+  }
+  return (
+    <div className="flex w-full flex-col gap-2 pt-1" data-testid={`my-agent-picture-editor-${agent.displayName}`}>
+      <PicturePicker current={agent.avatarUrl ?? null} busy={preset.isPending || upload.isPending} onPreset={(p) => preset.mutate(p)} onFile={(f) => upload.mutate(f)} onNone={() => preset.mutate(null)} testid={`my-agent-picture-${agent.displayName}`} />
+      <div>
+        <Button kind="link" onClick={() => setOpen(false)}>Close</Button>
+      </div>
+      <ErrorLine error={preset.isError ? errorText(preset.error) : upload.isError ? errorText(upload.error) : null} />
+    </div>
+  );
+}
+
 /** The person's own private agents (agents.md §1.3): their assistant, set up above, and the others, each with its instructions. */
 export function MyAgents({ org }: { org: WorkspaceDTO }) {
   const changed = useAgentsChanged(org);
@@ -120,9 +169,11 @@ export function MyAgents({ org }: { org: WorkspaceDTO }) {
         <ul className="divide-y divide-hairline rounded-lg border border-hairline">
           {agents.map((a: UsableAgentDTO) => (
             <li key={a.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-sm" data-testid={`my-agent-${a.displayName}`}>
+              {a.avatarUrl ? <img src={a.avatarUrl} alt="" className="size-7 rounded-lg object-cover" /> : <span className="size-7 rounded-lg bg-panel" aria-hidden="true" />}
               <span className="font-medium">{a.displayName} 🤖</span>
               <span className="text-xs text-muted">{a.self ? 'your assistant · set up above' : 'private · only you'}</span>
               <span className="flex-1" />
+              {!a.self && <RowPicture org={org} agent={a} onDone={changed} />}
               {!a.self && <HostedDefinition org={org} userId={a.id} name={a.displayName} />}
               {!a.self &&
                 (confirming === a.id ? (

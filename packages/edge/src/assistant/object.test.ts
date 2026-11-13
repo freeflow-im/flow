@@ -170,6 +170,9 @@ describe('the Assistant object', () => {
     expect(r.definition).toEqual({ name: 'Ann’s assistant', instructions: '', updatedAt: null });
     await events(await a.handle(req('POST', '/api/agent/turn', { message: 'hello', context: { page: 'home' }, workspace: 'org-1' }), CALLER, DOCS_CALLER));
     expect(systems[0]).not.toContain('Instructions from the person');
+    // It knows its name, as members see it, and not to call itself by the model's.
+    expect(systems[0]).toContain('Your name is Ann’s assistant.');
+    expect(systems[0]).toContain('never call yourself by the name of the model');
     // Set: the next turn's prompt carries the instructions.
     r = (await (await a.handle(req('PUT', '/api/agent/definition', { name: 'Pip', instructions: 'Answer in haiku.' }), CALLER, DOCS_CALLER)).json()) as typeof r;
     expect(r.definition).toMatchObject({ name: 'Pip', instructions: 'Answer in haiku.' });
@@ -178,6 +181,7 @@ describe('the Assistant object', () => {
     await events(await a.handle(req('POST', '/api/agent/turn', { message: 'hello again', context: { page: 'home' }, workspace: 'org-1' }), CALLER, DOCS_CALLER));
     expect(systems[0]).toContain('Answer in haiku.');
     expect(systems[0]).toContain('Instructions from the person');
+    expect(systems[0]).toContain('Your name is Pip.');
     // The name the directory gives later does not undo the one set.
     r = (await (await a.handle(req('GET', '/api/agent/definition'), CALLER, DOCS_CALLER, 'Ann’s assistant')).json()) as typeof r;
     expect(r.definition.name).toBe('Pip');

@@ -221,6 +221,7 @@ export class DirectoryCore {
       organizationId: account.organizationId,
       sponsorId,
       sponsorAccountId: sponsorAccount?.id ?? null,
+      agentName: u.display_name as string,
     };
   }
 

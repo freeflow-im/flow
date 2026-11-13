@@ -65,6 +65,24 @@ describe('your private agents', () => {
     await screen.findByTestId('my-agent-Rex');
   });
 
+  it('gives the new agent the picture picked in the form, once it is made', async () => {
+    mount();
+    fireEvent.click(await screen.findByTestId('create-agent-picture-mint'));
+    expect(screen.getByTestId('create-agent-picture-mint').getAttribute('aria-checked')).toBe('true');
+    fireEvent.change(screen.getByTestId('create-agent-name'), { target: { value: 'Rex' } });
+    fireEvent.click(screen.getByTestId('create-agent-make'));
+    await screen.findByTestId('create-agent-made');
+    const put = calls.find((c) => c.method === 'PUT' && c.path.startsWith('/v1/workspaces/o1/assistant/avatar'));
+    expect(put).toEqual({ method: 'PUT', path: '/v1/workspaces/o1/assistant/avatar?agent=u-rex', body: { preset: 'mint' } });
+  });
+
+  it('changes another agent’s picture from its row', async () => {
+    mount();
+    fireEvent.click(await screen.findByTestId('my-agent-picture-Scout'));
+    fireEvent.click(await screen.findByTestId('my-agent-picture-Scout-mint'));
+    await waitFor(() => expect(calls.some((c) => c.method === 'PUT' && c.path === '/v1/workspaces/o1/assistant/avatar?agent=u-scout')).toBe(true));
+  });
+
   it('makes a shared agent when Shared is picked', async () => {
     mount();
     fireEvent.click(await screen.findByTestId('create-agent-shared'));

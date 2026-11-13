@@ -4,13 +4,13 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { WorkspaceDTO } from '@flow/shared';
-import { AGENT_AVATAR_PRESETS, agentAvatarUrl, ANTHROPIC_MODELS, OPENAI_MODELS, OPENROUTER_MODELS, type AssistantProvider, type AssistantSettings, type AssistantSettingsUpdate } from '@flow/shared/assistant';
+import { AGENT_AVATAR_PRESETS, ANTHROPIC_MODELS, OPENAI_MODELS, OPENROUTER_MODELS, type AssistantProvider, type AssistantSettings, type AssistantSettingsUpdate } from '@flow/shared/assistant';
 import { adminApi, assistantApi } from '../api';
-import { suite } from '../suite';
 import { tellHome } from '@flow/suite-bar';
 import { assistantChanged } from '@flow/suite-bar/assistant-dock';
 import { Button, Card, ErrorLine, Row } from '../components/ui';
 import { CreateAgent, MyAgents } from './CreateAgent';
+import { PicturePicker } from './AgentPicture';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const input = 'w-72 rounded-md border border-border px-2 py-1 text-sm';
@@ -37,11 +37,12 @@ export function Assistant({ org }: { org: WorkspaceDTO }) {
 
 function NameAndInstructions({ org }: { org: WorkspaceDTO }) {
   const qc = useQueryClient();
-  const me = useQuery({ queryKey: ['suite', 'me'], queryFn: suite.me });
   const def = useQuery({ queryKey: ['assistant', org.id, 'definition'], queryFn: () => assistantApi.definition(org.id) });
   // Its address, once named: the member list carries it (the assistant is a member, agents.md §1.1).
   const members = useQuery({ queryKey: ['members-chat', org.id], queryFn: () => adminApi.members(org.id) });
-  const mine = (members.data ?? []).find((m) => m.kind === 'personal_agent' && m.agentRuntime === 'hosted' && m.sponsorId === me.data?.id);
+  const mineList = useQuery({ queryKey: ['my-agents', org.id], queryFn: () => adminApi.myAgents(org.id) });
+  const selfId = mineList.data?.agents?.find((a) => a.self)?.id;
+  const mine = (members.data ?? []).find((m) => m.userId === selfId);
   const [name, setName] = useState('');
   const [instructions, setInstructions] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
@@ -101,49 +102,24 @@ function NameAndInstructions({ org }: { org: WorkspaceDTO }) {
 /** Its picture (agents.md §1.1): one of the presets, an upload, or none (the spark). Shown on the AI button and in Chat. */
 function Picture({ org }: { org: WorkspaceDTO }) {
   const qc = useQueryClient();
-  const me = useQuery({ queryKey: ['suite', 'me'], queryFn: suite.me });
+  // The assistant is the person's default agent (agents.md §1.3): the member row with its id, not just any of theirs.
+  const mineList = useQuery({ queryKey: ['my-agents', org.id], queryFn: () => adminApi.myAgents(org.id) });
+  const selfId = mineList.data?.agents?.find((a) => a.self)?.id;
   const members = useQuery({ queryKey: ['members-chat', org.id], queryFn: () => adminApi.members(org.id) });
-  const mine = (members.data ?? []).find((m) => m.kind === 'personal_agent' && m.agentRuntime === 'hosted' && m.sponsorId === me.data?.id);
+  const mine = (members.data ?? []).find((m) => m.userId === selfId);
   const current = mine?.avatarUrl ?? null;
   const done = async () => {
     tellHome('members');
     assistantChanged();
     await qc.invalidateQueries({ queryKey: ['members-chat', org.id] });
+    await qc.invalidateQueries({ queryKey: ['my-agents', org.id] });
   };
   const preset = useMutation({ mutationFn: (p: (typeof AGENT_AVATAR_PRESETS)[number] | null) => assistantApi.setPreset(org.id, p), onSuccess: done });
   const upload = useMutation({ mutationFn: (f: File) => assistantApi.uploadPicture(org.id, f), onSuccess: done });
-  const busy = preset.isPending || upload.isPending;
-  const tile = 'size-12 rounded-xl border-2 p-0.5';
   return (
     <Card title="Picture" intro="Shown on the AI button in every app and beside its messages in Chat. Pick one, or upload your own (PNG, JPEG, GIF or WebP, up to 5 MB)." testid="card-assistant-picture">
-      <div className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-center gap-2" role="radiogroup" aria-label="Picture">
-          {AGENT_AVATAR_PRESETS.map((p) => {
-            const url = agentAvatarUrl(p);
-            const on = current === url;
-            return (
-              <button key={p} type="button" role="radio" aria-checked={on} aria-label={p} disabled={busy} onClick={() => preset.mutate(p)} className={`${tile} ${on ? 'border-primary' : 'border-transparent hover:border-hairline'}`} data-testid={`assistant-picture-${p}`}>
-                <img src={url} alt="" className="size-full rounded-lg" />
-              </button>
-            );
-          })}
-          {current && !AGENT_AVATAR_PRESETS.some((p) => agentAvatarUrl(p) === current) && (
-            <span className={`${tile} border-primary`} title="Your upload" data-testid="assistant-picture-upload-current">
-              <img src={current} alt="" className="size-full rounded-lg object-cover" />
-            </span>
-          )}
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <label className="cursor-pointer rounded-md border border-border px-3 py-1 text-sm hover:bg-hover">
-            {upload.isPending ? 'Uploading…' : 'Upload a picture'}
-            <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" className="hidden" disabled={busy} onChange={(e) => { const f = e.target.files?.[0]; if (f) upload.mutate(f); e.target.value = ''; }} data-testid="assistant-picture-file" />
-          </label>
-          {current && (
-            <Button kind="link" disabled={busy} onClick={() => preset.mutate(null)} testid="assistant-picture-none">No picture</Button>
-          )}
-        </div>
-        <ErrorLine error={preset.isError ? errorText(preset.error) : upload.isError ? errorText(upload.error) : null} />
-      </div>
+      <PicturePicker current={current} busy={preset.isPending || upload.isPending} onPreset={(p) => preset.mutate(p)} onFile={(f) => upload.mutate(f)} onNone={() => preset.mutate(null)} testid="assistant-picture" />
+      <ErrorLine error={preset.isError ? errorText(preset.error) : upload.isError ? errorText(upload.error) : null} />
     </Card>
   );
 }

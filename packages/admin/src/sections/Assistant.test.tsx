@@ -20,6 +20,7 @@ beforeEach(() => {
     const json = (v: unknown) => new Response(JSON.stringify(v), { status: 200, headers: { 'content-type': 'application/json' } });
     const bare = path.split('?')[0] ?? '';
     if (bare === '/v1/me') return json({ id: 'u-ann', displayName: 'Ann' });
+    if (bare.endsWith('/agents/mine')) return json({ agents: [{ id: 'u-ada', accountId: 'a-ada', displayName: 'Ada', mode: 'personal', self: true }], limit: 5 });
     if (bare.endsWith('/members')) return json({ members: [{ userId: 'u-ada', displayName: 'Ada', kind: 'personal_agent', agentRuntime: 'hosted', sponsorId: 'u-ann', address: 'ada@acme.test', isAgent: true }] });
     if (bare === '/v1/workspaces/o1/assistant/definition') return json({ definition: method === 'PUT' ? { name: body.name, instructions: body.instructions, updatedAt: null } : { name: 'Ann’s assistant', instructions: '', updatedAt: null } });
     if (bare === '/v1/workspaces/o1/assistant/senders') return json({ senders: method === 'PUT' ? body.senders : [] });

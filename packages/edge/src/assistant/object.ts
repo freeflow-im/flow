@@ -125,10 +125,17 @@ function agentErrorMessage(e: unknown): string {
 /** The most a definition's instructions may run to. */
 const MAX_INSTRUCTIONS = 8_000;
 
-/** The definition's instructions as prompt lines (prompt.ts `systemPrompt`'s guidance): one block, marked as the owner's. */
-export function definitionGuidance(d: AgentDefinition): string[] {
+/**
+ * The definition as prompt lines (prompt.ts `systemPrompt`'s guidance): who the agent is, by the name members see it under
+ * (`name`, the directory's, else the definition's), and the instructions, one block marked as the owner's.
+ */
+export function definitionGuidance(d: AgentDefinition, name: string = d.name): string[] {
   const text = d.instructions.trim();
-  return text ? [`- Instructions from the person or organization this agent belongs to, which you follow within the rules above:\n${text}`] : [];
+  const who = name.trim() || d.name;
+  return [
+    `- Your name is ${who}. You are an AI agent in FreeFlow, and people know you by this name in Chat, Mail and the assistant panel. When someone asks who or what you are, you are ${who}: never call yourself by the name of the model you run on or the company that made it (such as ChatGPT, GPT, Claude, OpenAI or Anthropic).`,
+    ...(text ? [`- Instructions from the person or organization this agent belongs to, which you follow within the rules above:\n${text}`] : []),
+  ];
 }
 
 /** Whose conversation a request is in: the caller's, or, for a shared agent asked by a person, that person's (one thread per asker). */
@@ -179,8 +186,16 @@ export class Assistant extends DurableObject<AssistantEnv> {
 
   /** The suite's prompt lines and the definition's instructions, written into the array the loop reads. */
   private refreshGuidance(): string[] {
-    this.guidanceLines.splice(0, this.guidanceLines.length, ...SUITE_GUIDANCE, ...definitionGuidance(this.definition()));
+    const d = this.definition();
+    this.guidanceLines.splice(0, this.guidanceLines.length, ...SUITE_GUIDANCE, ...definitionGuidance(d, this.state('definition_default_name') ?? d.name));
     return this.guidanceLines;
+  }
+
+  /** The agent's name as the directory knows it, which members see (agents.md §6): kept, and put in the prompt when it changes. */
+  private learnName(name: string | undefined): void {
+    if (!name || this.state('definition_default_name') === name) return;
+    this.setState('definition_default_name', name);
+    this.refreshGuidance();
   }
 
   /** The hosted agent's definition (agents.md §6), as set, or the default: a name and no instructions. */
@@ -201,6 +216,8 @@ export class Assistant extends DurableObject<AssistantEnv> {
       updatedAt: new Date().toISOString(),
     };
     this.setState('definition', JSON.stringify(next));
+    // A new name is the directory's too (the routes rename both), so the prompt takes it at once.
+    if (d.name !== undefined) this.setState('definition_default_name', next.name);
     this.refreshGuidance();
     return next;
   }
@@ -320,7 +337,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
     if (wrong) { console.error(`[assistant] ${wrong}`); return ownerRefusal(wrong); }
     if (caller.organizationId) await this.useOrgModel(caller.organizationId);
     // The agent's name as the directory knows it (agents.md §6), the definition's default until the person sets one.
-    if (agentName && this.state('definition_default_name') !== agentName) this.setState('definition_default_name', agentName);
+    this.learnName(agentName);
     const who: Who = { caller: caller as AccountCaller, docs, ...(opts.conversationUser ? { conversationUser: opts.conversationUser } : {}) };
     this.who = who;
     return withDocsContext(this.context, () => this.app.fetch(request, { who } satisfies Bindings));
@@ -333,7 +350,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
   async adopt(account: AccountDTO, name: string): Promise<AgentDefinition> {
     const wrong = ownerMismatch(this, { user: null, account, organizationId: account.organizationId }, 'the agent runtime');
     if (wrong) throw new Error(wrong);
-    if (this.state('definition_default_name') !== name) this.setState('definition_default_name', name);
+    this.learnName(name);
     return this.definition();
   }
 
@@ -353,6 +370,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
    * One conversation per subscription keeps an automation's memory apart from the person's chats.
    */
   async wake(p: { organizationId: string; job: AgentJobDTO; runtime: HostedRuntimeDTO }): Promise<void> {
+    this.learnName(p.runtime.agentName);
     await this.useOrgModel(p.organizationId);
     const { job, runtime, organizationId } = p;
     const events = this.env.EVENTS?.get(this.env.EVENTS.idFromName(organizationId));
@@ -421,6 +439,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
    * that conversation (a mention in a channel) or only the two of them do.
    */
   async chatTurn(p: { organizationId: string; runtime: HostedRuntimeDTO; channelId: string; threadRootId: string | null; messageId: string; prompt: string; audience?: 'private' | 'shared' }): Promise<void> {
+    this.learnName(p.runtime.agentName);
     const run: ChatRun = { organizationId: p.organizationId, runtime: p.runtime, channelId: p.channelId, threadRootId: p.threadRootId, audience: p.audience ?? (p.threadRootId ? 'shared' : 'private') };
     await this.runChat(run, p.messageId, { message: p.prompt });
   }
@@ -587,6 +606,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
    * with the sponsor's access, one conversation per sender, and the answer mailed back from the assistant's mailbox.
    */
   async mailTurn(p: { organizationId: string; runtime: HostedRuntimeDTO; mailboxAccountId: string; from: string; subject: string; text: string; messageId: string }): Promise<void> {
+    this.learnName(p.runtime.agentName);
     await this.useOrgModel(p.organizationId);
     const { runtime, organizationId } = p;
     if (runtime.mode !== 'personal' || !runtime.sponsorId || !runtime.sponsorAccountId || !this.env.MAIL) return;

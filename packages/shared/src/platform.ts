@@ -213,6 +213,8 @@ export interface HostedRuntimeDTO {
   /** A personal agent's sponsor: the person whose account the agent acts as, marked `via`. */
   sponsorId: string | null;
   sponsorAccountId: string | null;
+  /** The agent's name as members see it, which its prompt carries so it knows who it is. */
+  agentName?: string;
 }
 
 /** A hosted agent's definition (agents.md §6), kept by its runtime object: what the person or the admins set. */
