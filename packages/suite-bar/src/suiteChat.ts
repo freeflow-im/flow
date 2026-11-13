@@ -49,6 +49,9 @@ export function useSuiteAssistant(org: string | null) {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Bumped to read the chat again, after ‹ › made an earlier conversation the active one (ChatHistoryNav).
+  const [loads, setLoads] = useState(0);
+  const reload = useCallback(() => setLoads((n) => n + 1), []);
 
   useEffect(() => {
     setItems([]);
@@ -62,7 +65,7 @@ export function useSuiteAssistant(org: string | null) {
       })
       .catch(() => undefined);
     return () => { live = false; };
-  }, [org]);
+  }, [org, loads]);
 
   const send = useCallback((text: string) => {
     const message = text.trim();
@@ -124,5 +127,5 @@ export function useSuiteAssistant(org: string | null) {
     if (res?.ok) { setItems([]); setError(null); } else setError(res ? await errorOf(res) : 'The server could not be reached.');
   }, [org]);
 
-  return { items, running, error, send, stop, reset };
+  return { items, running, error, send, stop, reset, reload };
 }

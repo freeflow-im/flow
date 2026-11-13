@@ -121,6 +121,27 @@
   background: var(--assistant-dock-hover, #f1f3f4);
   color: var(--assistant-dock-ink, #1f1f1f);
 }
+.assistant-dock-btn:disabled {
+  color: var(--assistant-dock-disabled, #c4c7c5);
+  cursor: default;
+  background: none;
+}
+/* ‹ 2/5 › in a panel's header (ChatHistoryNav): earlier conversations of the chat. */
+.assistant-history {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.assistant-history .assistant-dock-btn {
+  width: 26px;
+}
+.assistant-history-pos {
+  min-width: 26px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--assistant-dock-muted, #5f6368);
+  font-variant-numeric: tabular-nums;
+}
 .assistant-dock-close {
   font-size: 22px;
   line-height: 1;

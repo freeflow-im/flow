@@ -61,7 +61,11 @@ export function useCalendarAssistant({ org, context, handlers, onCalendarChanged
   const [question, setQuestion] = useState<{ text: string; answer(yes: boolean): void } | null>(null);
   const confirm = useCallback((text: string) => new Promise<boolean>((resolve) => setQuestion({ text, answer: (yes) => { setQuestion(null); resolve(yes); } })), []);
 
-  // The chat, loaded again when the organization changes.
+  // Bumped to read the chat again, after ‹ › made an earlier conversation the active one (ChatHistoryNav).
+  const [loads, setLoads] = useState(0);
+  const reload = useCallback(() => setLoads((n) => n + 1), []);
+
+  // The chat, loaded again when the organization changes, or on reload.
   useEffect(() => {
     setItems([]);
     setError(null);
@@ -80,7 +84,7 @@ export function useCalendarAssistant({ org, context, handlers, onCalendarChanged
     return () => {
       cancelled = true;
     };
-  }, [org]);
+  }, [org, loads]);
 
   const send = useCallback(
     (text: string) => {
@@ -175,5 +179,5 @@ export function useCalendarAssistant({ org, context, handlers, onCalendarChanged
     }
   }, [org]);
 
-  return { items, running, error, send, stop, reset, question };
+  return { items, running, error, send, stop, reset, question, reload };
 }

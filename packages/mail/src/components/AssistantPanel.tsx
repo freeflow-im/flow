@@ -3,10 +3,10 @@
 // "Open draft", which opens it in Compose, and links to messages in Mail open them here rather than in a new tab.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Check, ExternalLink, Loader2, Pencil, Sparkles } from 'lucide-react';
-import { AssistantDockControls, useAssistantDock, useIdleMinimize } from '@flow/suite-bar/assistant-dock';
+import { AssistantDockControls, ChatHistoryNav, orgChatHistory, useAssistantDock, useIdleMinimize } from '@flow/suite-bar/assistant-dock';
 import { useSuggestedPrompts } from '@flow/suite-bar';
 import { draftOf, refOfLink, savedFileOf, type MessageRef } from '../lib/assistant';
-import { ChatMarkdown, picturesOf, toolLabel, ToolPictures, type ChatItem } from '../lib/docsAgent';
+import { ChatMarkdown, picturesOf, toolLabel, ToolPictures, MAIL_CHAT, type ChatItem } from '../lib/docsAgent';
 import { cn } from '../lib/utils';
 import { Button } from './ui/button';
 import type { useMailAssistant } from '../hooks/assistant';
@@ -71,6 +71,7 @@ export function AssistantPanel({ chat, organizationId, onMessage, overlay, width
         <Sparkles className="size-4 text-primary" />
         <span className="text-[16px] font-semibold">Assistant</span>
         <span className="flex-1" />
+        <ChatHistoryNav history={orgChatHistory(organizationId, MAIL_CHAT)} busy={chat.running} refreshKey={`${organizationId}:${chat.items.length}:${chat.running}`} onReopened={chat.reload} />
         <Button variant="link" size="sm" className="h-7 px-1.5" onClick={() => void chat.reset()} disabled={chat.running || !chat.items.length} title="Start a new conversation">
           New chat
         </Button>

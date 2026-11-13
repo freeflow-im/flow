@@ -117,6 +117,31 @@ describe('agent', () => {
     expect(requests[1].messages).toHaveLength(3);
   });
 
+  it('lists a chat\'s earlier conversations and goes back to one (the panel\'s ‹ ›)', async () => {
+    replies.push(() => ({ content: [text('First answer.')] }));
+    await turn({ message: 'First question\n  about budgets', context: home });
+    await app.inject({ method: 'POST', url: '/api/agent/reset', headers: { cookie }, payload: { scope: 'home' } });
+    replies.push(() => ({ content: [text('Second answer.')] }));
+    await turn({ message: 'Second question', context: home });
+    const history = async () => (await app.inject({ method: 'GET', url: '/api/agent/history?scope=home', headers: { cookie } })).json().chats as { id: string; title: string; active: boolean }[];
+    // Earlier tests leave ended home chats too: these two are the newest.
+    let chats = (await history()).slice(0, 2);
+    expect(chats.map((c) => [c.title, c.active])).toEqual([['Second question', true], ['First question about budgets', false]]);
+    // Back to the first: it is the chat now, with its own messages, and it goes on from there.
+    const res = await app.inject({ method: 'POST', url: '/api/agent/reopen', headers: { cookie }, payload: { scope: 'home', id: chats[1]!.id } });
+    expect(res.statusCode).toBe(200);
+    const items = (await app.inject({ method: 'GET', url: '/api/agent?scope=home', headers: { cookie } })).json().items as { text?: string }[];
+    expect(items.map((i) => i.text)).toEqual(['First question\n  about budgets', 'First answer.']);
+    replies.push(() => ({ content: [text('Third answer.')] }));
+    await turn({ message: 'And a follow-up', context: home });
+    expect(requests.at(-1)!.messages).toHaveLength(3);
+    chats = (await history()).slice(0, 2);
+    expect(chats.map((c) => c.active)).toEqual([false, true]);
+    // Not a conversation of this chat: refused.
+    const other = await app.inject({ method: 'POST', url: '/api/agent/reopen', headers: { cookie }, payload: { scope: 'nosuchfile0', id: chats[0]!.id } });
+    expect(other.statusCode).toBe(404);
+  });
+
   it('keeps a chat for each file and one for the home page', async () => {
     const sheet = (await app.inject({ method: 'POST', url: '/api/sheets', headers: { cookie }, payload: { title: 'Chat sheet' } })).json().sheet as { id: string };
     const onSheet: AgentContext = { page: 'sheet', sheetId: sheet.id, title: 'Chat sheet', tabs: ['Sheet1'], activeTab: 'Sheet1', selection: ['A1'] };

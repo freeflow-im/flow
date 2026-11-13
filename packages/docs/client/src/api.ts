@@ -1,4 +1,4 @@
-import type { AgentDefinition, AgentEvent, AgentJob, AgentTurnRequest, AssistantSettings, AssistantSettingsUpdate, ChatItem, UsableAgent } from '../../shared/agent/protocol.ts';
+import type { AgentDefinition, AgentEvent, AgentJob, AgentTurnRequest, AssistantSettings, AssistantSettingsUpdate, ChatItem, ChatSummary, UsableAgent } from '../../shared/agent/protocol.ts';
 import type { ConnectionInfo, ConnectorInfo, FetchResult } from '../../shared/connectors.ts';
 import type { Deck } from '../../shared/deck.ts';
 import type { LinkedTable, SheetTableRef } from '../../shared/sheetTable.ts';
@@ -449,6 +449,9 @@ export const api = {
   // Who may mail the person's assistant (agents.md §1.1): only the senders they add; empty by default.
   mailAllowlist: () => request<{ senders: string[] }>('GET', `/api/agent/mail-allowlist${inFolder(undefined, true)}`),
   saveMailAllowlist: (senders: string[]) => request<{ senders: string[] }>('PUT', `/api/agent/mail-allowlist${inFolder(undefined, true)}`, { senders }),
+  /** A chat's conversations, newest first, and going back to one (the panel's ‹ ›). */
+  agentHistory: (scope: string, agent?: string | null) => request<{ chats: ChatSummary[] }>('GET', `/api/agent/history?scope=${encodeURIComponent(scope)}${agent ? `&agent=${encodeURIComponent(agent)}` : ''}${inFolder(undefined)}`),
+  agentReopen: (scope: string, id: string, agent?: string | null) => request<{ ok: true }>('POST', `/api/agent/reopen${inFolder(undefined, true)}`, agent ? { scope, id, agent } : { scope, id }),
   agentReset: (scope: string, agent?: string | null) => request<{ ok: true }>('POST', `/api/agent/reset${inFolder(undefined, true)}`, agent ? { scope, agent } : { scope }),
   /** Answer a permission the user's own agent asked for (AgentEvent 'permission'). */
   answerAgentPermission: (id: string, allow: boolean) => request<{ ok: true }>('POST', '/api/agent/permission', { id, allow }),

@@ -2,7 +2,7 @@
 // the browser. Account tools run here; sheet tools run in the browser against the live spreadsheet,
 // so when Claude calls one the turn pauses: the browser runs it and posts the results to resume.
 import Anthropic from '@anthropic-ai/sdk';
-import { chatScope, HOME_CHAT, IMAGE_MEDIA_TYPES, isChatScope, MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE, type AgentEvent, type AgentImage, type AgentTurnRequest, type ChatItem, type ClientToolCall, SHOWN_RESULTS, isPicturesNote, SHOWN_PICTURE_TOOLS } from '../../shared/agent/protocol.ts';
+import { chatScope, HOME_CHAT, IMAGE_MEDIA_TYPES, isChatScope, MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE, type AgentEvent, type AgentImage, type AgentTurnRequest, type ChatItem, type ChatSummary, type ClientToolCall, SHOWN_RESULTS, isPicturesNote, SHOWN_PICTURE_TOOLS } from '../../shared/agent/protocol.ts';
 import { STORED_IMAGE_RE } from '../../shared/types.ts';
 import type { SheetStore } from '../sheets.ts';
 import { providerSearch, type ProviderSearch } from './llmSearch.ts';
@@ -134,6 +134,22 @@ export class AgentService {
   transcript(userId: string, scope: string = HOME_CHAT): ChatItem[] {
     const conv = this.store.active(userId, this.driver(userId), scope);
     return toChatItems(this.store.messages(conv.id));
+  }
+
+  /** The panel's ‹ ›: a chat's conversations, newest first, each with when it started, its first words and whether it is the active one. */
+  history(userId: string, scope: string = HOME_CHAT): ChatSummary[] {
+    return this.store.history(userId, scope).map((c) => {
+      const first = c.firstMessage ? toChatItems([c.firstMessage]).find((i) => i.kind === 'user') : undefined;
+      const text = first?.kind === 'user' ? first.text.replace(/\s+/g, ' ').trim() : '';
+      return { id: c.id, startedAt: c.startedAt, title: text.length > 80 ? `${text.slice(0, 79)}…` : text, active: c.active };
+    });
+  }
+
+  /** Go back to an earlier conversation of a chat (the panel's ‹ ›); the active one ends. */
+  reopen(userId: string, scope: string, conversationId: string): void {
+    if (this.busy.has(userId)) throw new AgentError(409, 'The assistant is still working. Stop it first.');
+    if (this.driver(userId) !== 'builtin') throw new AgentError(400, 'Earlier chats are kept for the built-in assistant only.');
+    if (!this.store.reopen(userId, scope, conversationId)) throw new AgentError(404, 'That chat is not here.');
   }
 
   /**

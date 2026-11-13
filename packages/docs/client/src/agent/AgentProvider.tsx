@@ -1,7 +1,7 @@
 // Agent chat state for the whole app. Lives above the routes, so the conversation (and a turn in
 // progress) survives navigation such as the agent opening another spreadsheet.
 import { useOrganization } from '../organization.ts';
-import { useAssistantDockState, useNewChatOnClose, type AssistantPlacement } from '@flow/suite-bar/assistant-dock';
+import { useAssistantDockState, useNewChatOnClose, type AssistantPlacement, type ChatHistoryApi } from '@flow/suite-bar/assistant-dock';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { rangeToString } from '../../../shared/cellref.ts';
@@ -73,6 +73,9 @@ interface AgentState {
   send(text: string, images?: AgentImage[], opts?: { inline?: boolean }): void;
   stop(): void;
   reset(): Promise<void>;
+  /** The shown chat's conversations, for the header's ‹ › (ChatHistoryNav); reload reads the chat again after a step. */
+  history: ChatHistoryApi;
+  reload(): void;
   /** The spreadsheet page reports the open spreadsheet (null when it closes). */
   setOpenSheet(sheet: OpenSheet | null): void;
   /** The spreadsheet page reports that a spreadsheet failed to load. */
@@ -219,6 +222,14 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   // Where the panel sits and its floating size, remembered as agent-panel-placement / agent-panel-expanded.
   const { placement, setPlacement, expanded, setExpanded } = useAssistantDockState('agent-panel', open, setOpen);
 
+  // Bumped to read the chat again, after ‹ › made an earlier conversation the active one (ChatHistoryNav).
+  const [loads, setLoads] = useState(0);
+  const reload = useCallback(() => setLoads((n) => n + 1), []);
+  const history = useMemo<ChatHistoryApi>(() => ({
+    list: async () => (await api.agentHistory(scope, agentParam)).chats,
+    reopen: async (id) => { await api.agentReopen(scope, id, agentParam); },
+  }), [scope, agentParam]);
+
   // The chat shown: loaded when it changes, and when someone signs in (cleared when they sign out).
   useEffect(() => {
     setItems([]);
@@ -240,7 +251,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [user, scope, agentParam]);
+  }, [user, scope, agentParam, loads]);
 
   // When someone signs in, pick up the latest app change: if one finished while we were away (the app
   // restarts when it lands), tell the assistant.
@@ -847,6 +858,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     send,
     stop,
     reset,
+    history,
+    reload,
     setOpenSheet,
     sheetFailed,
     sheet,
