@@ -29,6 +29,15 @@ const PRESETS: Record<string, ProviderPreset> = {
   'outlook.com': { name: 'Outlook.com', imap: { host: 'outlook.office365.com', port: 993, security: 'tls' }, smtp: { host: 'smtp-mail.outlook.com', port: 587, security: 'starttls' } },
 };
 
+/** The sample Docs library the mock's /api routes serve. */
+const MOCK_DOCS: { id: string; kind: 'doc' | 'sheet' | 'deck' | 'markdown' | 'file'; title: string; folder: string; shared?: boolean; type?: string; body: string }[] = [
+  { id: 'doc1', kind: 'doc', title: 'Q4 plan', folder: '', body: 'A Word file' },
+  { id: 'sheet1', kind: 'sheet', title: 'Budget 2027', folder: 'Finance', shared: true, body: 'An Excel file' },
+  { id: 'file1', kind: 'file', title: 'Signed contract.pdf', folder: 'Legal', type: 'application/pdf', body: '%PDF-1.4 sample' },
+  { id: 'deck1', kind: 'deck', title: 'Launch deck', folder: '', body: 'A PowerPoint file' },
+  { id: 'md1', kind: 'markdown', title: 'Meeting notes', folder: 'Notes', body: '# Notes' },
+];
+
 class HttpError extends Error {
   constructor(
     readonly status: number,
@@ -382,6 +391,32 @@ export function mailMock(): Plugin {
   return {
     name: 'flow-mail-mock',
     configureServer(server) {
+      // The few Docs routes "Attach from Docs" reads (lib/docsFiles.ts), over a small sample library.
+      server.middlewares.use((req: IncomingMessage, res: ServerResponse, next: () => void) => {
+        if (!req.url?.startsWith('/api/')) return next();
+        const url = new URL(req.url, 'http://mock');
+        const json = (status: number, body: unknown) => ((res.statusCode = status), res.setHeader('content-type', 'application/json'), res.end(JSON.stringify(body)));
+        if (url.pathname === '/api/recents') return json(200, { files: MOCK_DOCS.slice(0, 3).map((d) => ({ kind: d.kind, id: d.id, name: d.title, folder: d.folder, ...(d.shared && { shared: true }), lastUsed: '2026-11-12T10:00:00Z' })), system: false });
+        if (url.pathname === '/api/library/search') {
+          const q = (url.searchParams.get('q') ?? '').toLowerCase();
+          const shared = url.searchParams.get('shared') === '1';
+          const hits = MOCK_DOCS.filter((d) => !!d.shared === shared && d.title.toLowerCase().includes(q));
+          return json(200, {
+            folders: [],
+            docs: hits.filter((d) => d.kind !== 'file').map((d) => ({ id: d.id, kind: d.kind, title: d.title, folder: d.folder, ...(d.shared && { shared: true }) })),
+            files: hits.filter((d) => d.kind === 'file').map((d) => ({ id: d.id, filename: d.title, folder: d.folder, type: d.type, size: d.body.length, ...(d.shared && { shared: true }) })),
+            truncated: false,
+          });
+        }
+        const m = /^\/api\/files\/([^/]+)\/(export|download)$/.exec(url.pathname);
+        const d = m && MOCK_DOCS.find((x) => x.id === m[1]);
+        if (!d) return json(404, { error: 'File not found' });
+        const ext = m[2] === 'export' ? url.searchParams.get('format') : null;
+        const name = ext ? `${d.title}.${ext}` : d.title;
+        res.setHeader('content-type', ext || !d.type ? 'application/octet-stream' : d.type);
+        res.setHeader('content-disposition', `attachment; filename="${name}"; filename*=UTF-8''${encodeURIComponent(name)}`);
+        res.end(d.body);
+      });
       server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
         if (!req.url?.startsWith('/v1/')) return next();
         try {
