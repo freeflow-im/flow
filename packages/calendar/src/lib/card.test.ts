@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Attendee, EventOccurrence } from '../api';
-import { conferenceOf, dialIn, groupPin, labelFor, linkify, shownDescription } from './conference';
+import { conferenceOf, descriptionText, dialIn, groupPin, labelFor, linkify, shownDescription } from './conference';
 import { cardWhen, guestName, guestSummary, orderedGuests } from './format';
 
 const FENCE = '-::~:~::~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~::~:~::-';
@@ -37,6 +37,17 @@ describe('the video call', () => {
     expect(shownDescription('Lunch at noon.\n\n\n\nSee you')).toBe('Lunch at noon.\n\nSee you');
     expect(groupPin('1234#')).toBe('123 4#');
     expect(dialIn('not a number')).toBeNull();
+  });
+
+  it('reads an HTML description as text: breaks, lists, entities and links', () => {
+    const zoom = 'This is a Zoom meeting. Click this link to join: <a href="https://us06web.zoom.us/j/832?pwd=Ab.1">https://us06web.zoom.us/j/832?pwd=Ab.1</a><br />Meeting ID: 832<br />Passcode: &amp;kS4^g';
+    expect(descriptionText(zoom)).toBe('This is a Zoom meeting. Click this link to join: https://us06web.zoom.us/j/832?pwd=Ab.1\nMeeting ID: 832\nPasscode: &kS4^g');
+    expect(descriptionText('<b>Agenda</b><ul><li>One</li><li>Two</li></ul>See <a href="https://x.test/doc">the doc</a>.')).toBe('Agenda\n• One\n• Two\nSee [the doc](https://x.test/doc).');
+    expect(descriptionText('Plain <3 text, a < b')).toBe('Plain <3 text, a < b');
+    const card = { description: zoom + '<br /><br />Agenda: <a href="https://x.test/doc">the doc</a>', location: null };
+    expect(conferenceOf(card)).toMatchObject({ url: 'https://us06web.zoom.us/j/832?pwd=Ab.1', meetingId: '832', passcode: '&kS4^g' });
+    expect(shownDescription(card.description)).toBe('Agenda: [the doc](https://x.test/doc)');
+    expect(linkify('See [the doc](https://x.test/doc).')).toEqual([{ text: 'See ' }, { url: 'https://x.test/doc', label: 'the doc' }, { text: '.' }]);
   });
 
   it('makes links in a description clickable, leaving trailing punctuation out', () => {

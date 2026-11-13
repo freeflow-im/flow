@@ -64,9 +64,12 @@ function googleBlock(text: string): { found: Parsed | null; rest: string } {
 /** Zoom's invitation text ("Join Zoom Meeting", the link, Meeting ID, Passcode, the phone numbers): read, and taken out. */
 function zoomBlock(text: string): { found: Parsed | null; rest: string } {
   const lines = text.split(/\r?\n/);
-  const start = lines.findIndex((l) => /^\s*Join Zoom Meeting\s*$/i.test(l));
+  // "Join Zoom Meeting" on its own line, or the Zoom add-on's "This is a Zoom meeting. Click this link to join: <link>".
+  const start = lines.findIndex((l) => /^\s*(Join Zoom Meeting|This is a Zoom meeting\.? Click this link to join:.*)\s*$/i.test(l));
   if (start < 0) return { found: null, rest: text };
   const found: Parsed = {};
+  const first = lines[start] ?? '';
+  if (/zoom\.us\//i.test(first)) found.url = URL_RE.exec(first)?.[0];
   let end = start;
   for (let i = start + 1; i < lines.length; i++) {
     const l = (lines[i] ?? '').trim();
@@ -89,14 +92,15 @@ function zoomBlock(text: string): { found: Parsed | null; rest: string } {
 /** The description as the card shows it: Google's and Zoom's blocks out, blank lines at the ends trimmed; null when nothing is left. */
 export function shownDescription(description: string | null): string | null {
   if (!description) return null;
-  const text = zoomBlock(googleBlock(description).rest).rest.replace(/\n{3,}/g, '\n\n').trim();
+  const text = zoomBlock(googleBlock(descriptionText(description)).rest).rest.replace(/\n{3,}/g, '\n\n').trim();
   return text || null;
 }
 
 /** The event's video call, from the server's `conference`, else what its description's blocks say. */
 export function conferenceOf(o: Pick<EventOccurrence, 'conference' | 'description' | 'location'>): Conference | null {
-  const g = o.description ? googleBlock(o.description).found : null;
-  const z = o.description ? zoomBlock(o.description).found : null;
+  const text = o.description ? descriptionText(o.description) : null;
+  const g = text ? googleBlock(text).found : null;
+  const z = text ? zoomBlock(text).found : null;
   const block = g?.url ? g : z?.url ? z : g ?? z;
   const url = o.conference?.url ?? block?.url ?? null;
   if (!url) return null;
@@ -108,14 +112,51 @@ export function conferenceOf(o: Pick<EventOccurrence, 'conference' | 'descriptio
   };
 }
 
-/** Text with its links as parts, for a description that keeps its line breaks and makes links clickable. */
-export function linkify(text: string): ({ text: string } | { url: string })[] {
-  const out: ({ text: string } | { url: string })[] = [];
-  const re = /https?:\/\/[^\s<>"]+[^\s<>".,;:!?)\]]/gi;
+const HTML_TAG = /<\/?(a|br|p|div|span|b|i|u|strong|em|ul|ol|li|h[1-6]|html|body|font)\b[^>]*>/i;
+const BLOCK = new Set(['P', 'DIV', 'UL', 'OL', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6']);
+
+/** A description as plain text. Google Calendar (and Zoom's invitations) store descriptions as HTML: line breaks, lists
+ *  and entities become text, and a link whose words differ from its address becomes `[words](address)`, which
+ *  `linkify` shows as those words. Plain text comes back as it is. */
+export function descriptionText(description: string): string {
+  if (!HTML_TAG.test(description) || typeof DOMParser === 'undefined') return description;
+  const doc = new DOMParser().parseFromString(description, 'text/html');
+  let out = '';
+  const walk = (node: Node) => {
+    for (const n of Array.from(node.childNodes)) {
+      if (n.nodeType === 3) { out += (n.textContent ?? '').replace(/\n/g, ' '); continue; }
+      if (n.nodeType !== 1) continue;
+      const el = n as Element;
+      const tag = el.tagName;
+      if (tag === 'SCRIPT' || tag === 'STYLE') continue;
+      if (tag === 'BR') { out += '\n'; continue; }
+      if (tag === 'A') {
+        const href = el.getAttribute('href') ?? '';
+        const words = (el.textContent ?? '').trim();
+        if (/^(https?:|mailto:)/i.test(href) && words && words !== href && !/^https?:\/\//i.test(words)) out += `[${words.replace(/[[\]]/g, '')}](${href})`;
+        else out += /^https?:/i.test(href) ? href : words;
+        continue;
+      }
+      const block = BLOCK.has(tag) || tag === 'LI';
+      if (block && out && !out.endsWith('\n')) out += '\n';
+      if (tag === 'LI') out += '• ';
+      walk(el);
+      if (block && !out.endsWith('\n')) out += '\n';
+    }
+  };
+  walk(doc.body);
+  return out.replace(/[ \t]+\n/g, '\n').replace(/\u00a0/g, ' ');
+}
+
+/** Text with its links as parts, for a description that keeps its line breaks and makes links clickable.
+ *  `[words](address)`, from an HTML link, is a link shown as its words. */
+export function linkify(text: string): ({ text: string } | { url: string; label?: string })[] {
+  const out: ({ text: string } | { url: string; label?: string })[] = [];
+  const re = /\[([^\]\n]+)\]\(((?:https?:|mailto:)[^\s)]+)\)|https?:\/\/[^\s<>"]+[^\s<>".,;:!?)\]]/gi;
   let at = 0;
   for (const m of text.matchAll(re)) {
     if (m.index! > at) out.push({ text: text.slice(at, m.index) });
-    out.push({ url: m[0] });
+    out.push(m[1] ? { url: m[2]!, label: m[1] } : { url: m[0] });
     at = m.index! + m[0].length;
   }
   if (at < text.length) out.push({ text: text.slice(at) });

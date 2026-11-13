@@ -45,7 +45,7 @@ function Linked({ text }: { text: string }) {
   return (
     <>
       {linkify(text).map((p, i) => ('url' in p
-        ? <a key={i} href={p.url} target="_blank" rel="noopener noreferrer" className="break-all text-primary hover:underline">{p.url}</a>
+        ? <a key={i} href={p.url} target="_blank" rel="noopener noreferrer" className={cn('text-primary hover:underline', !p.label && 'break-all')}>{p.label ?? p.url}</a>
         : <span key={i}>{p.text}</span>))}
     </>
   );
