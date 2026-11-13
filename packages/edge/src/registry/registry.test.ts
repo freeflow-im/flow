@@ -82,7 +82,7 @@ async function fromImplementations(): Promise<ToolDefinition[]> {
     const scopes = app === 'docs' ? [t.annotations?.readOnlyHint === true ? 'files:read' : 'files:write'] : scoped.get(t.name)!;
     rows.push({ door: 'mcp', def: { name: t.name, app, kind: 'server', doors: [], scopes, ...(t.annotations?.destructiveHint === true ? { destructive: true } : {}), description: t.description ?? '', input: t.inputSchema } });
   }
-  const assistantMail = new Set<string>([...ASSISTANT_MAIL_TOOLS, 'open_mail_message']), assistantCalendar = new Set<string>([...ASSISTANT_CALENDAR_TOOLS, 'open_calendar_event', 'show_calendar_range']);
+  const assistantMail = new Set<string>([...ASSISTANT_MAIL_TOOLS, 'open_mail_message', 'draft_mail_reply']), assistantCalendar = new Set<string>([...ASSISTANT_CALENDAR_TOOLS, 'open_calendar_event', 'show_calendar_range']);
   // The assistant's: Docs' own as its assistant sends them (JSON Schema from Docs' zod; this package's zod is another
   // instance, which would drop their descriptions), and the suite's converted here.
   const assistantTools = [

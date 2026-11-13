@@ -230,6 +230,8 @@ export function toolLabel(name: string, i: Input): string {
       return 'Saved an email attachment to your files';
     case 'open_mail_message':
       return 'Opened an email';
+    case 'draft_mail_reply':
+      return i.reply_all ? 'Wrote a reply to all' : 'Wrote a reply';
     // The user's calendars, in the hosted app (FreeFlow Calendar).
     case 'list_calendars':
       return 'Looked at your calendars';

@@ -27,7 +27,7 @@ const CORE_BY_PAGE: Record<string, readonly string[]> = {
   doc: ['read_doc', 'insert_content', 'replace_blocks', 'replace_text'],
   markdown: ['read_doc', 'insert_content', 'replace_blocks', 'replace_text'],
   file: ['read_file', 'view_image'],
-  mail: ['search_mail', 'read_mail', 'create_mail_draft', 'open_mail_message'],
+  mail: ['search_mail', 'read_mail', 'draft_mail_reply', 'create_mail_draft', 'open_mail_message'],
   calendar: ['list_events', 'get_event', 'find_free_time', 'create_event', 'open_calendar_event'],
   chat: ['list_channels', 'read_messages', 'send_message'],
 };

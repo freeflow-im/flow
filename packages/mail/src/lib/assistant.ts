@@ -1,9 +1,10 @@
 // The assistant in Mail, its pure parts: what each turn says the user is looking at (the `mail` context), the ids the
-// mail tools use, the browser tools Mail runs (open_mail_message), and what the chat links to
+// mail tools use, the browser tools Mail runs (open_mail_message, draft_mail_reply), and what the chat links to
 // (a draft the assistant made, a file it saved to Docs). The panel is components/AssistantPanel.tsx, the turns
 // hooks/assistant.ts.
 import type { MessageDetail, MessageSummary } from '../api';
 import { formatAddress } from './addresses';
+import { markdownToHtml } from './markdown';
 import { isWebTool, MAX_MAIL_SELECTED, runWebTool, type AgentImage, type ChatItem, type ClientToolCall, type ClientToolResult, type MailContext } from './docsAgent';
 import { browserPref } from './prefs';
 
@@ -125,18 +126,52 @@ export function savedFileOf(item: ToolItem): { href: string; name: string } | nu
 /** Mail tools after which the lists may have changed (a new draft in Drafts). */
 export const CHANGES_MAIL = new Set(['create_mail_draft']);
 
+/** A reply the assistant wrote (draft_mail_reply), for Mail to open in its reply editor. */
+export interface ReplyRequest {
+  ref: MessageRef;
+  /** The assistant's text, as HTML: it goes above the quoted message. */
+  html: string;
+  replyAll: boolean;
+}
+
+/** Where the reply opened (under its message, or the Compose dialog on a narrow screen), or why it could not. */
+export type ReplyOpened = { shown: 'inline' | 'dialog' } | { error: string };
+
 /**
- * Runs the browser tools the assistant asked for, in Mail: open_mail_message shows the message. The server offers a turn
- * from Mail only Mail's browser tools (the tool registry, platform.md §5.4); anything else is answered as unknown.
+ * Runs the browser tools the assistant asked for, in Mail: open_mail_message shows the message, draft_mail_reply opens
+ * the reply editor under it with the assistant's text. The server offers a turn from Mail only Mail's browser tools (the
+ * tool registry, platform.md §5.4); anything else is answered as unknown.
  */
 export async function runMailClientCalls(
   calls: ClientToolCall[],
   show: (ref: MessageRef) => boolean | Promise<boolean>,
   /** Takes a picture a web tool took (browser_screenshot), to send with the results; false when the request is full. */
   attach?: (image: AgentImage) => boolean,
+  reply?: (request: ReplyRequest) => Promise<ReplyOpened>,
 ): Promise<ClientToolResult[]> {
   const results: ClientToolResult[] = [];
   for (const call of calls) {
+    if (call.name === 'draft_mail_reply') {
+      const ref = parseMessageId(call.input.id);
+      const body = typeof call.input.body === 'string' ? call.input.body : '';
+      if (!ref) results.push({ id: call.id, content: `"${String(call.input.id)}" is not a message id. Use an id from search_mail or the <app_context>.`, isError: true });
+      else if (!body.trim()) results.push({ id: call.id, content: 'The reply has no body.', isError: true });
+      else if (!reply) results.push({ id: call.id, content: 'Replies open only in FreeFlow Mail.', isError: true });
+      else {
+        const r = await reply({ ref, html: markdownToHtml(body), replyAll: call.input.reply_all === true });
+        if ('error' in r) results.push({ id: call.id, content: r.error, isError: true });
+        else
+          results.push({
+            id: call.id,
+            content: JSON.stringify({
+              replied_to: messageId(ref),
+              shown: r.shown === 'inline' ? 'in the reply editor under the message' : 'in the Compose window',
+              note: 'Not saved and not sent: the user reviews, changes and sends it.',
+            }),
+          });
+      }
+      continue;
+    }
     if (call.name === 'open_mail_message') {
       const ref = parseMessageId(call.input.id);
       if (!ref) results.push({ id: call.id, content: `"${String(call.input.id)}" is not a message id. Use an id from search_mail or the <app_context>.`, isError: true });

@@ -1,9 +1,9 @@
 // Mail's assistant chat: the same assistant as Docs' (POST /api/agent/turn, streamed), in the Docs object of the
 // organization selected in the suite bar (`?workspace=`), in a chat of its own (MAIL_CHAT), so it is kept across reloads
-// and apart from Docs' chats. A turn pauses for browser tools; Mail runs open_mail_message and refuses Docs' own
+// and apart from Docs' chats. A turn pauses for browser tools; Mail runs open_mail_message and draft_mail_reply and refuses Docs' own
 // (lib/assistant.ts). It never sends email: the assistant has no tool that does.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CHANGES_MAIL, runMailClientCalls, type MessageRef } from '../lib/assistant';
+import { CHANGES_MAIL, runMailClientCalls, type MessageRef, type ReplyOpened, type ReplyRequest } from '../lib/assistant';
 import { browserExtensionPresent, checkBrowserExtension, MAIL_CHAT, MAX_IMAGES_PER_MESSAGE, readAgentEvents, webPicturesNote, type AgentEvent, type AgentImage, type AgentTurnRequest, type ChatItem, type ClientToolCall, type MailContext } from '../lib/docsAgent';
 
 /** The context, saying whether the FreeFlow browser extension can run the web tools here (prototype). */
@@ -45,18 +45,20 @@ export interface MailAssistantOptions {
   context(): MailContext;
   /** Shows a message (open_mail_message); false when it is in an account the user does not have. */
   show(ref: MessageRef): boolean;
+  /** Opens the reply editor under a message with the assistant's text (draft_mail_reply). */
+  reply(request: ReplyRequest): Promise<ReplyOpened>;
   /** A mail tool changed something (a draft was made): the lists refresh. */
   onMailChanged(): void;
 }
 
-export function useMailAssistant({ org, context, show, onMailChanged }: MailAssistantOptions) {
+export function useMailAssistant({ org, context, show, reply, onMailChanged }: MailAssistantOptions) {
   const [items, setItems] = useState<ChatItem[]>([]);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // The latest callbacks, for a turn that outlives the render it started in.
-  const latest = useRef({ context, show, onMailChanged });
-  latest.current = { context, show, onMailChanged };
+  const latest = useRef({ context, show, reply, onMailChanged });
+  latest.current = { context, show, reply, onMailChanged };
 
   // Bumped to read the chat again, after ‹ › made an earlier conversation the active one (ChatHistoryNav).
   const [loads, setLoads] = useState(0);
@@ -132,7 +134,7 @@ export function useMailAssistant({ org, context, show, onMailChanged }: MailAssi
             setItems((prev) => [...prev, ...pending.map((c): ChatItem => ({ kind: 'tool', id: c.id, name: c.name, input: c.input, status: 'running' }))]);
             const pictures: AgentImage[] = [];
             const attach = (img: AgentImage) => pictures.length < MAX_IMAGES_PER_MESSAGE && pictures.push(img) > 0;
-            const toolResults = await runMailClientCalls(pending, (ref) => latest.current.show(ref), attach);
+            const toolResults = await runMailClientCalls(pending, (ref) => latest.current.show(ref), attach, (r) => latest.current.reply(r));
             // Each browser screenshot's picture goes under its line (in call order, as they were attached).
             let shot = 0;
             for (const r of toolResults) {
