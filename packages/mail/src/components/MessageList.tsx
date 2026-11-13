@@ -86,6 +86,28 @@ export function MessageList(p: MessageListProps) {
   const [searching, setSearching] = useState(false);
   const [draft, setDraft] = useState(p.searchBar ? (p.query ?? '') : '');
   const showSearch = !!p.onSearch && (searching || !!p.searchBar);
+  // Inside Home the field sits beside the folder's name, in the header row; on a phone it opens on a row of its own.
+  const inlineSearch = showSearch && !!p.searchBar;
+  const searchField = (
+    <form
+      className={inlineSearch ? 'flex min-w-0 flex-1 items-center' : 'flex shrink-0 items-center gap-2 border-b border-hairline px-3 py-2'}
+      onSubmit={(e) => {
+        e.preventDefault();
+        p.onSearch?.(draft.trim());
+      }}
+    >
+      <input
+        autoFocus={!p.searchBar}
+        data-testid="mail-list-search"
+        type="search"
+        aria-label="Search mail"
+        placeholder={`Search ${p.title}`}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        className={cn('min-w-0 flex-1 rounded-lg border border-border bg-white px-3 text-sm outline-none focus:border-primary', inlineSearch ? 'h-8' : 'h-9')}
+      />
+    </form>
+  );
   // The field shows the search in force: cleared with it ("Results for …" ✕), as the suite bar's is.
   useEffect(() => {
     if (p.searchBar) setDraft(p.query ?? '');
@@ -200,7 +222,8 @@ export function MessageList(p: MessageListProps) {
           </div>
         ) : (
           <>
-            <h1 className="min-w-0 flex-1 truncate text-base font-semibold">{p.title}</h1>
+            <h1 className={cn('min-w-0 truncate text-base font-semibold', !inlineSearch && 'flex-1')}>{p.title}</h1>
+            {inlineSearch && searchField}
             {p.onSearch && !p.searchBar && (
               <Button variant="ghost" size="icon-sm" title="Search" aria-label="Search" aria-pressed={searching} onClick={() => setSearching(!searching)}>
                 <Search />
@@ -229,26 +252,7 @@ export function MessageList(p: MessageListProps) {
           </>
         )}
       </div>
-      {showSearch && (
-        <form
-          className="flex shrink-0 items-center gap-2 border-b border-hairline px-3 py-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            p.onSearch?.(draft.trim());
-          }}
-        >
-          <input
-            autoFocus={!p.searchBar}
-            data-testid="mail-list-search"
-            type="search"
-            aria-label="Search mail"
-            placeholder={`Search ${p.title}`}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            className="h-9 min-w-0 flex-1 rounded-lg border border-border bg-white px-3 text-sm outline-none focus:border-primary"
-          />
-        </form>
-      )}
+      {showSearch && !inlineSearch && searchField}
       {!p.query && p.tabBar}
       {p.query && (
         <div className="flex shrink-0 items-center gap-2 border-b border-hairline bg-selected-blue px-4 py-1.5 text-[14px]">
