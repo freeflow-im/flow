@@ -79,3 +79,24 @@ export function keepReferencedTools(tools: Tool[], messages: Anthropic.Beta.Beta
   if (!missing.length) return tools;
   return [...tools, ...missing.map((name): Tool => ({ name, description: 'Not available here.', input_schema: { type: 'object', properties: {} }, defer_loading: true }))];
 }
+
+/**
+ * The searches still open at the end of the conversation: Claude called the tool search beside one of our tools, so the
+ * API holds the search until the tool results come back (in a message of tool results only), and runs it then.
+ */
+export function openSearches(messages: Anthropic.Beta.BetaMessageParam[]): string[] {
+  const last = messages.at(-1);
+  if (last?.role !== 'assistant' || typeof last.content === 'string') return [];
+  const answered = new Set(last.content.flatMap((b) => (b.type === 'tool_search_tool_result' ? [b.tool_use_id] : [])));
+  return last.content.flatMap((b) => (b.type === 'server_tool_use' && b.name === TOOL_SEARCH_NAME && !answered.has(b.id) ? [b.id] : []));
+}
+
+/**
+ * An assistant message that closes open searches without running them, for when the user writes before the turn
+ * finished: the API refuses new text after tool results while a search is open, so the results go in a message of their
+ * own, then this, then the user's message.
+ */
+export const closeSearches = (ids: string[]): Anthropic.Beta.BetaMessageParam => ({
+  role: 'assistant',
+  content: ids.map((id) => ({ type: 'tool_search_tool_result', tool_use_id: id, content: { type: 'tool_search_tool_result_error', error_code: 'unavailable' } }) as Anthropic.Beta.BetaContentBlockParam),
+});

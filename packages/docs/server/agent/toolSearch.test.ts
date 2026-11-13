@@ -1,6 +1,6 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import { describe, expect, it } from 'vitest';
-import { coreTools, deferTools, keepReferencedTools, referencedTools, searchesTools, TOOL_SEARCH } from './toolSearch.ts';
+import { coreTools, deferTools, keepReferencedTools, openSearches, referencedTools, searchesTools, TOOL_SEARCH } from './toolSearch.ts';
 
 type Tool = Anthropic.Beta.BetaToolUnion;
 const tool = (name: string): Tool => ({ name, description: name, input_schema: { type: 'object', properties: {} } });
@@ -49,5 +49,15 @@ describe('tool search', () => {
     expect(kept.slice(0, tools.length)).toEqual(tools);
     expect(kept.slice(tools.length)).toEqual([{ name: 'gone', description: 'Not available here.', input_schema: { type: 'object', properties: {} }, defer_loading: true }]);
     expect(keepReferencedTools(tools, history.slice(0, 1))).toBe(tools);
+  });
+});
+
+describe('open searches', () => {
+  it('finds a search the last reply left without its result', () => {
+    const reply = (content: unknown[]) => [{ role: 'user' as const, content: 'hi' }, { role: 'assistant' as const, content }] as Anthropic.Beta.BetaMessageParam[];
+    const search = { type: 'server_tool_use', id: 'srvtoolu_1', name: 'tool_search_tool_bm25', input: { query: 'x' } };
+    expect(openSearches(reply([search, { type: 'tool_use', id: 't1', name: 'read_range', input: {} }]))).toEqual(['srvtoolu_1']);
+    expect(openSearches(reply([search, { type: 'tool_search_tool_result', tool_use_id: 'srvtoolu_1', content: { type: 'tool_search_tool_search_result', tool_references: [] } }]))).toEqual([]);
+    expect(openSearches([{ role: 'user', content: 'hi' }])).toEqual([]);
   });
 });

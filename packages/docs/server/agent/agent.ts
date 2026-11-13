@@ -15,7 +15,7 @@ import type { FileStore } from '../files.ts';
 import type { ImageStore } from '../images.ts';
 import type { PdfMaker } from '../pdf.ts';
 import { assistantTools, isBrowserTool, runServerTool, ToolFailure, validateToolInput, type ServerToolEnvExtensions } from './tools.ts';
-import { deferTools, keepReferencedTools, searchesTools, TOOL_SEARCH_PROMPT } from './toolSearch.ts';
+import { closeSearches, deferTools, keepReferencedTools, openSearches, searchesTools, TOOL_SEARCH_PROMPT } from './toolSearch.ts';
 import { scopeOf, type ScopeArg, type ViewerArg } from '../scope.ts';
 
 type Message = Anthropic.Beta.BetaMessage;
@@ -203,8 +203,9 @@ export class AgentService {
     const conv = this.store.active(userId, 'builtin', req.scope ?? chatScope(req.context), scopeOf(access.scope).workspaceId);
 
     // 1. The new user message: results for any tool calls still pending, then the context, images and text.
-    const content: (ToolResult | Anthropic.Beta.BetaTextBlockParam | Anthropic.Beta.BetaImageBlockParam)[] = [];
+    let content: (ToolResult | Anthropic.Beta.BetaTextBlockParam | Anthropic.Beta.BetaImageBlockParam)[] = [];
     if (conv.pending) content.push(...completePending(conv.pending, req.toolResults ?? []));
+    const results = content.length;
     const text = req.message?.trim();
     const images: AgentImage[] = req.images ?? [];
     if (text || images.length) {
@@ -217,6 +218,13 @@ export class AgentService {
       content.push({ type: 'text', text: text || 'See the attached image.' });
     }
     if (!content.length) throw new AgentError(400, 'Nothing to send.');
+    // The user wrote while a tool search waited on those results (toolSearch.ts openSearches): close it first.
+    const open = results && content.length > results ? openSearches(this.store.messages(conv.id)) : [];
+    if (open.length) {
+      this.store.append(conv.id, { role: 'user', content: content.slice(0, results) });
+      this.store.append(conv.id, closeSearches(open));
+      content = content.slice(results);
+    }
     this.store.append(conv.id, { role: 'user', content });
     this.store.setPending(conv.id, null);
 

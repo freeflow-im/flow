@@ -190,6 +190,25 @@ describe('agent', () => {
     expect(content.at(-1)).toMatchObject({ type: 'text', text: 'Actually, stop' });
   });
 
+  it('closes a tool search left open beside a browser tool when the user writes instead', async () => {
+    // Claude searched and called a browser tool together: the API holds the search until the tool results come back.
+    const search = { type: 'server_tool_use', id: 'srvtoolu_9', name: TOOL_SEARCH_NAME, input: { query: 'chart' } } as unknown as Block;
+    replies.push(() => ({ content: [search, toolUse('c1', 'get_sheet_overview', {})] }));
+    await turn({ message: 'Chart it', context: home });
+
+    replies.push(() => ({ content: [text('OK.')] }));
+    await turn({ message: 'Actually, stop', context: home });
+    // The results alone, then the search closed unrun, then the new message: text after the results would be refused.
+    const sent = requests[1].messages.slice(2) as { role: string; content: { type: string; text?: string; tool_use_id?: string; content?: unknown }[] }[];
+    expect(sent.map((m) => m.role)).toEqual(['user', 'assistant', 'user']);
+    expect(sent[0]!.content.map((b) => b.type)).toEqual(['tool_result']);
+    expect(sent[1]!.content).toEqual([{ type: 'tool_search_tool_result', tool_use_id: 'srvtoolu_9', content: { type: 'tool_search_tool_result_error', error_code: 'unavailable' } }]);
+    expect(sent[2]!.content.at(-1)).toMatchObject({ type: 'text', text: 'Actually, stop' });
+    // The transcript shows none of this plumbing.
+    const items = (await app.inject({ method: 'GET', url: '/api/agent', headers: { cookie } })).json().items as { kind: string; text?: string }[];
+    expect(items.filter((i) => i.kind !== 'tool').map((i) => i.text)).toEqual(['Chart it', 'Actually, stop', 'OK.']);
+  });
+
   it('rejects invalid tool input without running or forwarding it', async () => {
     replies.push(() => ({ content: [toolUse('c1', 'write_range', { start: 'A1' })] }));
     replies.push(() => ({ content: [text('Fixed.')] }));
