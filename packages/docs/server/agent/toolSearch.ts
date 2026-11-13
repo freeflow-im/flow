@@ -13,7 +13,8 @@ export const TOOL_SEARCH_NAME = 'tool_search_tool_bm25';
 export const TOOL_SEARCH: Tool = { type: 'tool_search_tool_bm25_20251119', name: TOOL_SEARCH_NAME };
 
 /** Loaded on every page: finding and opening files. */
-const ALWAYS = ['list_files', 'open_file', 'find_files'];
+// `memory` (the suite's, agents.md §6.1) is loaded wherever a host offers it: a turn reads and writes it without searching.
+const ALWAYS = ['list_files', 'open_file', 'find_files', 'memory'];
 
 /**
  * Loaded on each page, beside ALWAYS: the tools a turn there almost always starts with, so the model does not search

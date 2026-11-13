@@ -37,6 +37,7 @@ import { isFileId } from '@flow/docs/server/ids.ts';
 import { scopeOf, type ScopeArg } from '@flow/docs/server/scope.ts';
 import { chatScope, HOME_CHAT, isChatScope, type AgentDefinition, type AgentEvent, type AgentTurnRequest, type AssistantSettingsUpdate, type ClientToolCall } from '@flow/docs/shared/agent/protocol.ts';
 import { postCard } from './chatTools.ts';
+import { MEMORY_DDL, MemoryStore, type MemoryScope } from './memory.ts';
 import type { Org } from '../org/object';
 import { docsPageUrl, docsToolContext, importToDocs, type DocsFetch, type DocsPlace } from './docsTools.ts';
 
@@ -90,9 +91,11 @@ export const ASSISTANT_MIGRATIONS: string[][] = [
     // Whose object this is (perAccount.ts' owner keys).
     'CREATE TABLE IF NOT EXISTS assistant_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)',
   ],
+  // The agent's memory (agents.md §6.1, memory.ts).
+  MEMORY_DDL,
 ];
 /** Every table, for exportRows. */
-export const ASSISTANT_TABLES = ['agent_conversations', 'agent_messages', 'agent_usage', 'assistant_settings', 'assistant_state'] as const;
+export const ASSISTANT_TABLES = ['agent_conversations', 'agent_messages', 'agent_usage', 'assistant_settings', 'assistant_state', 'agent_memory_files'] as const;
 /** The tables importRows takes whole; a conversation comes with its messages (importChat). */
 const IMPORTED = ['agent_usage', 'assistant_settings'] as const;
 
@@ -265,10 +268,25 @@ export class Assistant extends DurableObject<AssistantEnv> {
         const calendar = this.calendarContext(who?.docs.userId ?? userId, who);
         // The apps added by manifest (apps.ts): their objects, as the account this object belongs to.
         const apps = appToolContexts(this.env, async () => who?.caller ?? null, this.origin);
-        return { ...(docs ? { docs } : {}), ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}), ...(apps ? { apps } : {}) };
+        const memory = new MemoryStore(this.sql, this.memoryScope(userId, who));
+        return { ...(docs ? { docs } : {}), ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}), ...(apps ? { apps } : {}), memory };
       },
+      // The agent's memory files, listed at the start of each request (agents.md §6.1, loading).
+      notes: (userId: string) => new MemoryStore(this.sql, this.memoryScope(userId, this.turnWho.get(userId) ?? this.who)).listing(),
     });
     return (this.services = { agent, settings });
+  }
+
+  /**
+   * Whose memory a turn sees (agents.md §6.1). A personal agent acts `via` itself as its sponsor: one tree. Otherwise it is a
+   * shared agent: its team folder, and the `you` folder of the person who asked (`invokedBy`, the conversation's user). A
+   * turn mail or a wake job started is someone else's content: what it writes is marked external.
+   */
+  memoryScope(userId: string, who: Who | null): MemoryScope {
+    const caller = who?.caller;
+    const shared = !!caller && !caller.via;
+    const external = userId.startsWith('auto:') || userId.startsWith('mail:');
+    return { shared, asker: shared && caller?.invokedBy ? (who?.conversationUser ?? userId) : null, external };
   }
 
   /** The organization's Docs object's /api/*, as the person (routes/docs.ts' caller): undefined without Docs or a caller. */

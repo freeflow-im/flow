@@ -268,6 +268,7 @@ export function renderContext(ctx: AgentContext): string {
 
 /** Strip the context block from a stored user message, for showing the transcript. */
 export function stripContext(text: string): string | null {
-  if (!text.startsWith('<app_context>') && !text.startsWith('<attached_images>') && !text.startsWith('<current_time>')) return text;
+  // `<memory>`: a host's per-turn note (the suite: the agent's memory files, agent.ts `notes`).
+  if (!text.startsWith('<app_context>') && !text.startsWith('<attached_images>') && !text.startsWith('<current_time>') && !text.startsWith('<memory>')) return text;
   return null;
 }

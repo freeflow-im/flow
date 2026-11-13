@@ -15,6 +15,7 @@ import type { DocsToolContext } from '../assistant/docsTools.ts';
 import type { AppToolContext } from '../apps.ts';
 import { BROWSER_GUIDANCE, browserTools, isBrowserWebTool, validateBrowserTool } from '../assistant/browserTools.ts';
 import { ASSISTANT_CHAT_TOOLS, assistantChatSchemas } from '../assistant/chatTools.ts';
+import { MEMORY_GUIDANCE, MemoryError, memorySchema, type MemoryStore } from '../assistant/memory.ts';
 
 // What the suite adds to every server tool's environment (agent.ts `AgentOptions.extend`): the registered runners read it.
 declare module '@flow/docs/server/agent/tools.ts' {
@@ -27,6 +28,8 @@ declare module '@flow/docs/server/agent/tools.ts' {
     docs?: DocsToolContext;
     /** The objects of the apps added by manifest, by name (apps.ts), for their tools. */
     apps?: Record<string, AppToolContext>;
+    /** The agent's memory, as this turn may see it (agents.md §6.1). */
+    memory?: MemoryStore;
   }
 }
 
@@ -44,6 +47,7 @@ export const SUITE_GUIDANCE: readonly string[] = [
   '- In FreeFlow Calendar the <app_context> says so, with the view, its range and the user\'s time zone, the calendars shown and the open event: "this event" is the open one. open_calendar_event shows an event\'s card and show_calendar_range moves the view, when the user asks to see something. An event you make or change shows in the chat with a button that opens it.',
   "- A file you make or save (create_doc, create_sheet, create_deck, import_file, save_mail_attachment_to_docs) comes back with its url. In Mail or Calendar, give the user that link exactly as returned; never write a Docs address of your own, and do not call open_doc, open_sheet or open_deck there.",
   "- In FreeFlow Chat the <app_context> says so: the user asked you there, and your answer posts where they asked. There you have the Chat tools: list_channels and read_messages for the channels the user is in, send_message to post in one of them (it waits for the user's ✅ on a card, so say what you are about to post and end your reply), and leave_channel. You reach only channels the user is in, never their direct messages with others.",
+  MEMORY_GUIDANCE,
   BROWSER_GUIDANCE,
 ];
 
@@ -59,6 +63,8 @@ export const SUITE_SCHEMAS: Record<string, z.ZodObject> = {
   ...assistantCalendarSchemas(),
   // A turn in FreeFlow Chat (assistant/chatTools.ts): the Worker runs these when the turn pauses; send_message waits for ✅.
   ...assistantChatSchemas(),
+  // The agent's own memory (agents.md §6.1, assistant/memory.ts), kept in its runtime object.
+  memory: memorySchema,
   // Browser tools in FreeFlow Calendar (packages/calendar, src/lib/assistant.ts): the event opens, the view moves.
   open_calendar_event: z
     .object({ id: z.string().min(3).max(1200).describe('The event to show: an id from list_events, get_event, create_event or the <app_context>.') })
@@ -126,5 +132,19 @@ for (const name of Object.keys(schemas)) {
   // In the Assistant object they reach the Docs object over HTTP (env.docs); elsewhere the stores in this process.
   register<ServerToolEnv>('docs', name, { run: (env, input) => (env.docs ? env.docs.run(name, input, env) : runDocsTool(name, input, env)), refusal: (e) => e instanceof ToolFailure }, ['assistant']);
 }
+
+// The agent's memory: a server tool every turn has, run on the runtime object's own SQLite (env.memory).
+register<ServerToolEnv>('docs', 'memory', {
+  run: async (env, input) => {
+    if (!env.memory) throw new ToolFailure('Memory is not available here.');
+    try {
+      return env.memory.run(input);
+    } catch (e) {
+      if (e instanceof MemoryError) throw new ToolFailure(e.message);
+      throw e;
+    }
+  },
+  refusal: (e) => e instanceof ToolFailure,
+}, ['assistant']);
 
 setAssistantToolSource({ tools: suiteTools, validate: validateSuiteTool, run: runSuiteTool, isBrowser: (name) => (ASSISTANT_CHAT_TOOLS.has(name) ? true : undefined) });

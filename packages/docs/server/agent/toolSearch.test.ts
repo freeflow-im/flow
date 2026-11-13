@@ -16,8 +16,8 @@ describe('tool search', () => {
   });
 
   it('loads only the shared core on a page it has no list for', () => {
-    expect([...coreTools({ page: 'home' })].sort()).toEqual(['find_files', 'list_files', 'open_file']);
-    expect([...coreTools(undefined)].sort()).toEqual(['find_files', 'list_files', 'open_file']);
+    expect([...coreTools({ page: 'home' })].sort()).toEqual(['find_files', 'list_files', 'memory', 'open_file']);
+    expect([...coreTools(undefined)].sort()).toEqual(['find_files', 'list_files', 'memory', 'open_file']);
   });
 
   it('leaves a short list alone', () => {
