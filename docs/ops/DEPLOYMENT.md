@@ -175,5 +175,5 @@ onboarding, separately. Hosted mail domains are MXRoute's (`decision_log.md` 202
 ## Known gaps / next steps
 
 - **The AWS origin is not retired yet** (step 7 of `docs/specs/cloudflare-migration.md`): it waits for the ChatGPT
-  plugin to move. `railway.json` in the repository root is left from Railway and is no longer used.
+  plugin to move.
 - **No monitoring or alerting.**
