@@ -157,7 +157,8 @@ describe('GET /api/search', () => {
       await app.close();
       rmSync(appDir, { recursive: true, force: true });
     }
-  });
+    // Builds a whole app and signs two people up: slow when every package's tests run at once.
+  }, 30_000);
 });
 
 describe('the search_content tool', () => {
@@ -211,5 +212,5 @@ describe('at start', () => {
     } finally {
       rmSync(appDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 });

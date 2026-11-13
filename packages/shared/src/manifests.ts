@@ -62,13 +62,13 @@ export const APP_MANIFESTS: AppManifest[] = [
     kinds: [{ kind: 'folder', container: true, resolve: 'app' }, { kind: 'sheet', resolve: 'app' }, { kind: 'file', resolve: 'app' }],
     // Its tools, by name (their definitions: @flow/shared/tools, platform.md §5.4).
     tools: [
-      'list_files', 'search_files', 'get_profile', 'create_doc', 'create_deck', 'create_sheet', 'import_file', 'open_file', 'view_image', 'create_folder', 'move_file', 'upload_file', 'read_file',
+      'list_files', 'search_content', 'search_files', 'get_profile', 'create_doc', 'create_deck', 'create_sheet', 'import_file', 'open_file', 'view_image', 'create_folder', 'move_file', 'upload_file', 'read_file',
       'edit_file', 'convert_pdf_to_markdown', 'export_pdf', 'transform_image', 'rename_file', 'delete_file', 'read_doc', 'get_doc_info', 'insert_content', 'replace_blocks', 'delete_blocks', 'replace_text',
       'format_text', 'format_blocks', 'insert_image', 'set_doc_style', 'set_page_setup', 'read_deck', 'add_slides', 'update_slide', 'edit_elements', 'delete_slides', 'move_slide', 'set_deck_theme',
       'get_sheet_overview', 'read_range', 'write_range', 'clear_range', 'format_range', 'insert_rows', 'delete_rows', 'insert_columns', 'delete_columns', 'move_columns', 'sort_range', 'set_cell_image',
       'set_cell_link', 'set_filter', 'set_filter_criteria', 'set_column_width', 'set_row_height', 'freeze', 'add_chart', 'edit_chart', 'delete_chart', 'add_tab', 'rename_tab', 'delete_tab', 'select_range',
       'open_sheet', 'open_deck', 'render_slide', 'export_deck', 'convert_pdf', 'edit_image', 'open_doc', 'request_app_change', 'request_research', 'list_sheets', 'read_other_sheet', 'list_decks',
-      'find_files', 'read_stored_file', 'search_content',
+      'find_files', 'read_stored_file',
       'list_docs', 'read_other_doc', 'list_connections', 'fetch_connector_data', 'ingest_connector_data', 'web_search', 'image_search',
       // The agent's own memory (agents.md §6.1), registered with Docs' tools since the agent loop is Docs'.
       'memory',
