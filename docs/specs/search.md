@@ -43,6 +43,8 @@ So the access check stays where it already is, at read time:
 - Measured on 2026-11-13 in a workerd Durable Object (wrangler 4.156): 5,000 documents of 300 words indexed in 263 ms;
   a rare word with a prefix answered in under 1 ms, the top 50 hits for a common word in 3 ms; 26 MB of storage in all.
   `porter`, `unicode61`, `trigram`, external content tables and `prefix=` indexes all work there.
+  Through the whole local suite (`packages/edge/test/e2e-search.mjs`), a search over 200 documents answers in 3–7 ms,
+  HTTP included.
 
 What FTS5 does not do: typo tolerance, and meaning ("pricing decision" does not find "we agreed to charge $20"). The
 second matters most to agents; §7 adds embeddings for it later.
@@ -106,7 +108,7 @@ interface SearchHit {
   author?: string;      // user id or email address
   at: string;           // ISO time of the last change (document) or of sending (message, email)
   container?: string;   // folder, channel or mail folder
-  url: string;          // where it opens in the suite
+  url: string;          // its page inside its app (/doc/<id>); the router adds the app's prefix
   rank: number;         // the source's own rank: lower is better, not comparable across sources
 }
 ```
