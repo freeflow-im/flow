@@ -20,7 +20,8 @@ import { notFound } from '../lib/errors.js';
 
 /** Repo-root `docs/help`. This file sits at packages/server/{src,dist}/services,
  * so four levels up is the repo root under tsx and under the compiled build
- * alike (Railway deploys the whole repo — see railway.json). */
+ * alike (the server's image keeps the repo layout and copies docs/help —
+ * packages/server/deploy/aws/Dockerfile). */
 const HELP_DIR =
   process.env.FLOW_HELP_DIR ??
   path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../docs/help');
