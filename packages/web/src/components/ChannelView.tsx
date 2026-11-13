@@ -15,7 +15,6 @@ import { MobileMenuButton } from './MobileMenuButton';
 import { useHoverTooltip } from './HoverTooltip';
 import { AddPeopleModal, ChannelOptionsModal, Modal, UserCard } from './modals';
 import { renderBody } from '../lib/format';
-import { useSyncBar } from '../lib/syncBar';
 import { useCapabilities } from '../lib/backend';
 import { useBoundApi } from '../lib/useBoundApi';
 import { useQueryClient } from '@tanstack/react-query';
@@ -44,7 +43,6 @@ export default function ChannelView({ channelId }: { channelId: string }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [pinsOpen, setPinsOpen] = useState(false);
   // Reconnect bar (#234) — delayed and floored so short drops don't flash.
-  const showSyncBar = useSyncBar(live.syncing);
   // cmd-F find bar (#518) — searches the transcript this pane has loaded.
   const paneRef = useRef<HTMLElement>(null);
 
@@ -327,16 +325,6 @@ export default function ChannelView({ channelId }: { channelId: string }) {
         </div>
       )}
 
-      {showSyncBar && (
-        <div
-          className="mc-sync-bar shrink-0"
-          data-testid="sync-bar"
-          role="status"
-          aria-label="Reconnecting"
-        >
-          <span />
-        </div>
-      )}
 
       {/* key: fresh list per channel so the mount effect re-runs — it restores
           this channel's remembered scroll position (or lands at the bottom when

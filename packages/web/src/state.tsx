@@ -112,9 +112,6 @@ export interface Selection {
 
 export interface LiveState {
   status: SocketStatus;
-  /** Socket down *or* a post-connect refetch still running (#234) — what the
-   * reconnect bar reads. Connected alone isn't caught up. */
-  syncing: boolean;
   /** Is this user online *in the selected workspace* (#364)? Presence is per
    * (user, workspace): an agent connected to another workspace is not online
    * here, and its dot must stay grey. */
