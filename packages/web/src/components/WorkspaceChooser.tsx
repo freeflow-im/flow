@@ -10,6 +10,11 @@ import { EMPTY_SLUG_FIELD, slugEdited, slugForName } from '../lib/slugify';
 import { OpenInAppButton } from './OpenInApp';
 import { AuthImg } from './Avatar';
 import { openServerConnections } from './ServerConnections';
+import { APP_MANIFESTS, isInHome } from '@flow/suite-bar';
+import { isDesktop } from '../lib/host';
+
+/** Home's address, when the suite has it: where an organization just made, joined or chosen opens. */
+const HOME_PATH = APP_MANIFESTS.find((m) => m.name === 'home')?.path ?? null;
 
 export default function WorkspaceChooser() {
   const { api } = useBoundApi();
@@ -43,6 +48,16 @@ export default function WorkspaceChooser() {
   const [inviteToken, setInviteToken] = useState('');
   const [error, setError] = useState<string | null>(null);
 
+  // The organization is kept as the one in use (Home and the other apps read it), then Home opens on it: the
+  // organization's front page, not Chat. Inside Home's own frame, the whole page goes there.
+  const enter = (id: string) => {
+    sel.selectWorkspace(id);
+    // The desktop app serves only Chat (app://flow), which has no Home to go to.
+    if (!HOME_PATH || isDesktop()) return;
+    const target = isInHome() ? window.top : window;
+    target?.location.assign(`${HOME_PATH}/`);
+  };
+
   const create = async () => {
     setError(null);
     try {
@@ -52,7 +67,7 @@ export default function WorkspaceChooser() {
         ...(openToDomain && selfRegisterDomain ? { googleSelfRegisterDomain: selfRegisterDomain } : {}),
       });
       await qc.invalidateQueries({ queryKey: ['workspaces'] });
-      sel.selectWorkspace(ws.id);
+      enter(ws.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'failed');
     }
@@ -66,7 +81,7 @@ export default function WorkspaceChooser() {
       if (m) token = m[1]!;
       const ws = await api<WorkspaceDTO>('POST', '/v1/invites/accept', { token });
       await qc.invalidateQueries({ queryKey: ['workspaces'] });
-      sel.selectWorkspace(ws.id);
+      enter(ws.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'failed');
     }
@@ -82,7 +97,7 @@ export default function WorkspaceChooser() {
           qc.invalidateQueries({ queryKey: ['workspaces'] }),
           qc.invalidateQueries({ queryKey: ['workspaceInvites'] }),
         ]);
-        sel.selectWorkspace(ws.id);
+        enter(ws.id);
         return;
       }
       await api('POST', '/v1/invites/decline', { inviteId: invite.id });
@@ -137,7 +152,7 @@ export default function WorkspaceChooser() {
           <button
             key={ws.id}
             data-testid={`workspace-${ws.slug}`}
-            onClick={() => sel.selectWorkspace(ws.id)}
+            onClick={() => enter(ws.id)}
             className="flex w-full items-center gap-3 rounded-lg border border-hairline bg-white p-3 text-left shadow-sm hover:border-accent"
           >
             {ws.avatarUrl ? (
