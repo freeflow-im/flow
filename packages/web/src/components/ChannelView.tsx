@@ -17,8 +17,12 @@ import { AddPeopleModal, ChannelOptionsModal, Modal, UserCard } from './modals';
 import { renderBody } from '../lib/format';
 import { useSyncBar } from '../lib/syncBar';
 import { useCapabilities } from '../lib/backend';
+import { useBoundApi } from '../lib/useBoundApi';
+import { useQueryClient } from '@tanstack/react-query';
 
 export default function ChannelView({ channelId }: { channelId: string }) {
+  const { api: boundApi } = useBoundApi();
+  const qc = useQueryClient();
   const auth = useAuth();
   const sel = useSelection();
   const live = useLive();
@@ -122,6 +126,20 @@ export default function ChannelView({ channelId }: { channelId: string }) {
   const shown = headerIds.slice(0, 3);
   const extra = headerIds.length - shown.length;
 
+  // Who you may take out of the channel, as the server allows it: an owner or admin anyone, a person their own assistant.
+  const myRole = memberMap[auth.user.id]?.role;
+  const canRemove = (id: string): boolean => {
+    if (channel?.kind !== 'standard' || archived || id === auth.user.id) return false;
+    const m = memberMap[id];
+    return myRole === 'owner' || myRole === 'admin' || (m?.kind === 'personal_agent' && m.agentRuntime === 'hosted' && m.sponsorId === auth.user.id);
+  };
+  const removeMember = async (userId: string) => {
+    if (!channel) return;
+    await boundApi('DELETE', `/v1/channels/${channel.id}/members/${userId}`);
+    await qc.invalidateQueries({ queryKey: ['channelMembers', channel.id] });
+    await qc.invalidateQueries({ queryKey: ['channels', channel.workspaceId] });
+  };
+
   const memberRows: MemberRow[] = headerIds.map((id) => {
     const m = memberMap[id];
     return {
@@ -134,6 +152,7 @@ export default function ChannelView({ channelId }: { channelId: string }) {
       // You're online by definition — this client is the one connected.
       online: id === auth.user.id || live.isOnline(id),
       isSelf: id === auth.user.id,
+      removable: canRemove(id),
     };
   });
 
@@ -274,6 +293,7 @@ export default function ChannelView({ channelId }: { channelId: string }) {
               onClose={() => setMembersOpen(false)}
               onSelect={(id) => { setMembersOpen(false); setCardUserId(id); }}
               onAdd={channel?.kind === 'standard' && !archived ? () => { setMembersOpen(false); setAddPeople(true); } : undefined}
+              onRemove={removeMember}
             />
           )}
           {menuOpen && (
