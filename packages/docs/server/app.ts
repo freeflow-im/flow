@@ -30,7 +30,7 @@ import { checkAssistantKey, OwnKeyError } from './agent/providers.ts';
 import { AssistantSettingsStore, SettingsError, type KeyCheck, type SearchKeyCheck } from './agent/settings.ts';
 import { isSignatureImage, MAX_SIGNATURES, SignatureStore } from './signatures.ts';
 import { AgentStore } from './agent/store.ts';
-import { checkBraveKey, registerConnectorService } from './agent/tools.ts';
+import { checkBraveKey, registerConnectorService, storedFileText, ToolFailure } from './agent/tools.ts';
 import { ConnectorService, type ConnectorServiceOptions } from './connectors/service.ts';
 import { ConnectorError } from './connectors/types.ts';
 import { AuthService, RESET_TTL_MS, SESSION_TTL_MS, VERIFY_TTL_MS, validateCredentials, type User } from './auth.ts';
@@ -1826,6 +1826,19 @@ export async function buildApp(opts: AppOptions) {
       const { name } = req.query as { name?: unknown };
       const f = typeof name === 'string' && name && !/[\\/]/.test(name) ? storedFiles.listIn(req.scope, req.folder ?? '').find((m) => m.filename === name) : undefined;
       return f ? reply.header('Cache-Control', 'no-cache').redirect(`/api/files/${f.id}`) : reply.code(404).send({ error: 'File not found' });
+    });
+
+    // A stored file's text (a PDF's as Markdown), a part at a time: read_stored_file as the suite's agents run it, over HTTP.
+    r.get('/api/files/:id/text', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const q = req.query as { offset?: string; max?: string };
+      if (!isFileId(id)) return reply.code(404).send({ error: 'File not found' });
+      try {
+        return await storedFileText(storedFiles, req.viewer, id, Math.max(0, Number(q.offset) || 0), Math.min(100_000, Math.max(1, Number(q.max) || 30_000)));
+      } catch (e) {
+        if (e instanceof ToolFailure) return reply.code(/^There is no file/.test(e.message) ? 404 : 400).send({ error: e.message });
+        throw e;
+      }
     });
 
     r.get('/api/files/:id/meta', async (req, reply) => {

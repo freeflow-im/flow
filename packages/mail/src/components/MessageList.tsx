@@ -61,6 +61,8 @@ export interface MessageListProps {
   onShowFolders?: (() => void) | undefined;
   /** On a phone, where the suite bar has no search: a search field of the list's own. */
   onSearch?: ((q: string) => void) | undefined;
+  /** Inside Home, which draws no suite bar (docs/specs/home.md §2): the list's search field always shows, as the bar's would. */
+  searchBar?: boolean | undefined;
   /** The inbox tabs (InboxTabs), above the rows. */
   tabBar?: ReactNode | undefined;
   /** "Move to tab", for an inbox with tabs: the tabs, the one open (null while searching), and the move (of a thread's messages in the folder). */
@@ -82,7 +84,12 @@ export function MessageList(p: MessageListProps) {
   const scroller = useRef<HTMLDivElement>(null);
   const { hasMore, loadingMore, onLoadMore } = p;
   const [searching, setSearching] = useState(false);
-  const [draft, setDraft] = useState('');
+  const [draft, setDraft] = useState(p.searchBar ? (p.query ?? '') : '');
+  const showSearch = !!p.onSearch && (searching || !!p.searchBar);
+  // The field shows the search in force: cleared with it ("Results for …" ✕), as the suite bar's is.
+  useEffect(() => {
+    if (p.searchBar) setDraft(p.query ?? '');
+  }, [p.searchBar, p.query]);
 
   useEffect(() => {
     const el = sentinel.current;
@@ -194,7 +201,7 @@ export function MessageList(p: MessageListProps) {
         ) : (
           <>
             <h1 className="min-w-0 flex-1 truncate text-base font-semibold">{p.title}</h1>
-            {p.onSearch && (
+            {p.onSearch && !p.searchBar && (
               <Button variant="ghost" size="icon-sm" title="Search" aria-label="Search" aria-pressed={searching} onClick={() => setSearching(!searching)}>
                 <Search />
               </Button>
@@ -222,7 +229,7 @@ export function MessageList(p: MessageListProps) {
           </>
         )}
       </div>
-      {p.onSearch && searching && (
+      {showSearch && (
         <form
           className="flex shrink-0 items-center gap-2 border-b border-hairline px-3 py-2"
           onSubmit={(e) => {
@@ -231,7 +238,8 @@ export function MessageList(p: MessageListProps) {
           }}
         >
           <input
-            autoFocus
+            autoFocus={!p.searchBar}
+            data-testid="mail-list-search"
             type="search"
             aria-label="Search mail"
             placeholder={`Search ${p.title}`}

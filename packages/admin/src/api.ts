@@ -78,6 +78,9 @@ export const assistantApi = {
 };
 
 /** An agent the person connected over MCP (Claude Desktop, Claude Code, …), as GET /v1/me/agent-connections lists it. */
+/** One of an agent's memory files, as the Memory tab shows it. `trust: external`: written while reading someone else's content. */
+export interface MemoryFileDTO { path: string; body: string; trust: string; updatedAt: string }
+
 export interface AgentConnection { id: string; name: string; mode?: 'personal' | 'shared'; agentName?: string; origin: string; endpoint: string; connectedAt: string; lastActiveAt?: string; organization?: string }
 /** The organization's suggested prompts for the assistant's panel, by page (agents.md §1.2): only the pages it changed. */
 export const promptsApi = {
@@ -150,6 +153,10 @@ export const adminApi = {
   myAgents: (id: string) => request<{ agents: UsableAgentDTO[]; limit: number }>('GET', `${ws(id)}/agents/mine`),
   makePersonalAgent: (id: string, body: { name: string; instructions?: string }) => request<{ agent: UsableAgentDTO; definition: AgentDefinitionDTO }>('POST', `${ws(id)}/agents/personal`, body),
   removeMyAgent: (id: string, userId: string) => request<{ account: AccountDTO }>('DELETE', `${ws(id)}/agents/personal/${encodeURIComponent(userId)}`),
+  // An agent's memory files (docs/specs/agents.md §6.1): what the caller may see of them, edit, and delete.
+  agentMemory: (id: string, userId: string) => request<{ files: MemoryFileDTO[]; shared: boolean; mayEditTeam: boolean }>('GET', `${ws(id)}/agents/${encodeURIComponent(userId)}/memory`),
+  saveAgentMemory: (id: string, userId: string, body: { path: string; body: string }) => request<{ ok: true }>('PUT', `${ws(id)}/agents/${encodeURIComponent(userId)}/memory`, body),
+  forgetAgentMemory: (id: string, userId: string, path?: string) => request<{ removed: number }>('DELETE', `${ws(id)}/agents/${encodeURIComponent(userId)}/memory${path ? `?path=${encodeURIComponent(path)}` : ''}`),
   makeHostedAgent: (id: string, body: { name: string; instructions?: string }) => request<{ agent: UsableAgentDTO; definition: AgentDefinitionDTO }>('POST', `${ws(id)}/agents/hosted`, body),
   agentDefinition: (id: string, userId: string) => request<{ definition: AgentDefinitionDTO; mayEdit: boolean }>('GET', `${ws(id)}/agents/${encodeURIComponent(userId)}/definition`),
   saveAgentDefinition: (id: string, userId: string, body: { name?: string; instructions?: string }) => request<{ definition: AgentDefinitionDTO; mayEdit: boolean }>('PUT', `${ws(id)}/agents/${encodeURIComponent(userId)}/definition`, body),

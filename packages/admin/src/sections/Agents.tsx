@@ -9,6 +9,7 @@ import { suite } from '../suite';
 import { Model } from './Assistant';
 import { Button, Card, Confirm, ErrorLine } from '../components/ui';
 import { CreateAgent } from './CreateAgent';
+import { AgentMemory } from './AgentMemory';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -51,6 +52,7 @@ export function Agents({ org }: { org: WorkspaceDTO }) {
                 {a.statusText && <span className="truncate text-xs text-muted">{a.statusText}</span>}
                 <span className="flex-1" />
                 {hostedOf(a.userId) && <HostedDefinition org={org} userId={a.userId} name={a.displayName} />}
+                {hostedOf(a.userId) && <AgentMemory org={org} userId={a.userId} name={a.displayName} />}
                 {confirming === a.userId ? (
                   <Confirm question={`Remove ${a.displayName}? Its credentials are revoked; history stays.`} busy={remove.isPending} onYes={() => remove.mutate(a.userId)} onNo={() => setConfirming(null)} testid={`agent-remove-confirm-${a.displayName}`} />
                 ) : (

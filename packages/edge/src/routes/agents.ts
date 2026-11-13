@@ -104,6 +104,7 @@ agentRoutes.post('/v1/workspaces/:id/agents/hosted', async (c) => {
   const org = c.env.ORG.get(c.env.ORG.idFromName(organizationId)) as unknown as { createSharedAgent(p: { sponsorId: string; name: string }): Promise<{ userId: string }> };
   const made = await org.createSharedAgent({ sponsorId: userId, name: r.data.name });
   await directory(c, 'setAgentRuntime', made.userId, 'hosted');
+  await (c.env.ORG.get(c.env.ORG.idFromName(organizationId)) as unknown as { markHostedAgent(userId: string): Promise<void> }).markHostedAgent(made.userId);
   const account = await directory(c, 'accountFor', made.userId, organizationId);
   if (!account) throw new ApiError(500, 'internal', 'the agent has no account');
   const definition = await runtimeOf(c, account.id).adopt(account, r.data.name);
@@ -112,6 +113,51 @@ agentRoutes.post('/v1/workspaces/:id/agents/hosted', async (c) => {
   const agent: UsableAgentDTO = { id: made.userId, accountId: account.id, displayName: account.displayName, mode: 'shared', self: false };
   void me;
   return c.json({ agent, definition: final }, 201);
+});
+
+/**
+ * An agent's memory (agents.md §6.1), the Memory tab. A personal agent's is its sponsor's alone (hostedAgent's 404 for
+ * anyone else). A shared agent's: the team folder for its sponsor and the organization's owners and admins, and each
+ * person's own `you` folder for that person.
+ */
+async function memoryScopeOf(c: C) {
+  const { organizationId, userId, account: me } = await memberOf(c);
+  const { account, mayEdit } = await hostedAgent(c, organizationId, c.req.param('userId') ?? '', me);
+  const runtime = runtimeOf(c, await runtimeKeyOf(c, account));
+  const shared = account.agentMode === 'shared';
+  return { runtime, shared, mayEditTeam: !shared || mayEdit, scope: { shared, asker: shared ? userId : null } };
+}
+const MemoryPut = z.object({ path: z.string().min(1).max(240), body: z.string().max(4_000) });
+const teamPath = (p: string) => p === '/memories/team' || p.startsWith('/memories/team/');
+
+agentRoutes.get('/v1/workspaces/:id/agents/:userId/memory', async (c) => {
+  const { runtime, shared, mayEditTeam, scope } = await memoryScopeOf(c);
+  const files = (await runtime.memoryFiles(scope)).filter((f) => !shared || mayEditTeam || !teamPath(f.path));
+  return c.json({ files, shared, mayEditTeam });
+});
+
+agentRoutes.put('/v1/workspaces/:id/agents/:userId/memory', async (c) => {
+  const { runtime, shared, mayEditTeam, scope } = await memoryScopeOf(c);
+  const r = MemoryPut.safeParse(await c.req.json().catch(() => undefined));
+  if (!r.success) throw badRequest('validation', r.error.issues[0]?.message ?? 'invalid request');
+  if (shared && teamPath(r.data.path) && !mayEditTeam) throw forbidden("only the agent's sponsor, an owner or an admin changes its team memory");
+  const refusal = await runtime.memoryPut(scope, r.data.path, r.data.body);
+  if (refusal) throw badRequest('memory', refusal);
+  return c.json({ ok: true });
+});
+
+agentRoutes.delete('/v1/workspaces/:id/agents/:userId/memory', async (c) => {
+  const { runtime, shared, mayEditTeam, scope } = await memoryScopeOf(c);
+  const path = c.req.query('path');
+  if (shared && !mayEditTeam) {
+    // Their own you folder only.
+    if (path && teamPath(path)) throw forbidden("only the agent's sponsor, an owner or an admin changes its team memory");
+    const mine = (await runtime.memoryFiles(scope)).filter((f) => !teamPath(f.path));
+    let removed = 0;
+    for (const f of path ? mine.filter((f) => f.path === path) : mine) removed += await runtime.memoryRemove(scope, f.path);
+    return c.json({ removed });
+  }
+  return c.json({ removed: await runtime.memoryRemove(scope, path || undefined) });
 });
 
 agentRoutes.get('/v1/workspaces/:id/agents/:userId/definition', async (c) => {

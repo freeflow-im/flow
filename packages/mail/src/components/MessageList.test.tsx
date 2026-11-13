@@ -78,3 +78,30 @@ describe.each([false, true])('attachment chips in the list (dense: %s)', (dense)
     expect(opened).toEqual(['m:10']);
   });
 });
+
+describe('the list’s search inside Home (home.md §2: no suite bar there)', () => {
+  it('always shows the field, searches on Enter, and follows the search in force', () => {
+    const searched: string[] = [];
+    render({ searchBar: true, onSearch: (q: string) => searched.push(q) });
+    const field = host.querySelector('[data-testid="mail-list-search"]') as HTMLInputElement;
+    expect(field).not.toBeNull();
+    expect(host.querySelector('button[aria-label="Search"]')).toBeNull();
+    act(() => {
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+      set.call(field, 'invoice');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => field.form!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+    expect(searched).toEqual(['invoice']);
+    render({ searchBar: true, onSearch: (q: string) => searched.push(q), query: 'invoice' });
+    expect((host.querySelector('[data-testid="mail-list-search"]') as HTMLInputElement).value).toBe('invoice');
+    render({ searchBar: true, onSearch: (q: string) => searched.push(q), query: '' });
+    expect((host.querySelector('[data-testid="mail-list-search"]') as HTMLInputElement).value).toBe('');
+  });
+
+  it('keeps the field hidden behind the Search button elsewhere', () => {
+    render({ onSearch: () => {} });
+    expect(host.querySelector('[data-testid="mail-list-search"]')).toBeNull();
+    expect(host.querySelector('button[aria-label="Search"]')).not.toBeNull();
+  });
+});

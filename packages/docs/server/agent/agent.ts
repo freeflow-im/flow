@@ -62,6 +62,8 @@ export interface AgentOptions {
   extend?: (userId: string, scope: ScopeArg) => Partial<ServerToolEnvExtensions>;
   /** Lines a host adds to the system prompt about its own tools (prompt.ts `systemPrompt`). */
   guidance?: readonly string[];
+  /** A block a host adds to each new user message after the context (the suite: the agent's memory files), or null. */
+  notes?: (userId: string, scope: ScopeArg) => string | null;
 }
 
 /** The pages of this app a turn may come from. */
@@ -97,6 +99,7 @@ export class AgentService {
   private claudeAgent: ClaudeAgentDriver | null;
   private pages: ReadonlySet<string>;
   private extend: AgentOptions['extend'];
+  private notes: AgentOptions['notes'];
   private guidance: readonly string[];
   /** Users with a turn in progress (one at a time per user). */
   private busy = new Set<string>();
@@ -115,6 +118,7 @@ export class AgentService {
     this.claudeAgent = opts.claudeAgent ?? null;
     this.pages = opts.pages ?? OWN_PAGES;
     this.extend = opts.extend;
+    this.notes = opts.notes;
     this.guidance = opts.guidance ?? [];
     this.dailyLimit = opts.dailyRequestLimit ?? Number(process.env.AGENT_DAILY_REQUEST_LIMIT ?? 500);
   }
@@ -237,6 +241,8 @@ export class AgentService {
     if (text || images.length) {
       content.push({ type: 'text', text: renderNow(req.timezone) });
       content.push({ type: 'text', text: renderContext(req.context) });
+      const note = this.notes?.(userId, access.scope);
+      if (note) content.push({ type: 'text', text: note });
       for (const img of images) content.push({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } });
       // The stored addresses let the model place the pictures themselves (set_cell_image, edit_elements, ...).
       const stored = images.map((img, i) => (img.url ? `Attached image ${i + 1} is stored at ${img.url}; use that address with the image tools to put the picture itself in a cell or on a slide.` : null)).filter((s): s is string => !!s);

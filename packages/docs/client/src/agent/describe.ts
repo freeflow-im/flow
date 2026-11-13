@@ -203,6 +203,19 @@ export function toolLabel(name: string, i: Input): string {
     case 'image_search':
       return `Searched for images of “${i.query}”`;
     // The user's email, in the hosted app (FreeFlow Mail).
+    case 'memory': {
+      // The agent's memory (suite, agents.md §6.1): a file's name without the /memories/ folder.
+      const file = (v: unknown) => (typeof v === 'string' ? v.replace(/^\/memories\/?/, '') || 'memory' : 'memory');
+      switch (i.command) {
+        case 'view': return !i.path || i.path === '/memories' ? 'Checked its memory' : `Read its memory: ${file(i.path)}`;
+        case 'create': return `Remembered: ${file(i.path)}`;
+        case 'str_replace':
+        case 'insert': return `Updated its memory: ${file(i.path)}`;
+        case 'delete': return `Forgot ${file(i.path)}`;
+        case 'rename': return `Moved ${file(i.old_path)} to ${file(i.new_path)} in its memory`;
+        default: return 'Used its memory';
+      }
+    }
     case 'search_mail':
       return i.query ? `Searched your mail for “${i.query}”` : 'Looked at your latest mail';
     case 'read_mail': {

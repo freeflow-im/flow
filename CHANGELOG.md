@@ -12,6 +12,7 @@ This file keeps two things:
 
 ## Parity
 
+- **Agent memory is seen and edited on web only (2026-11-13, docs/specs/agents.md §6.1).** Agents remember on every client (the memory is the server's), and the web panel labels memory steps; the Memory tab is in the web Admin app (web-only by ruling), and the native apps show no memory steps. Gap to close with the native assistant panel.
 - **Several private agents per person are made and picked on web only (2026-11-12, docs/specs/agents.md §1.3).** Every client lists the extra agents as members and shows their Chat messages, and Chat routing is on the server; making, editing and removing them is in the web Admin app (web-only by ruling), and the panel picker is web's. macOS and iOS can DM and mention them; gap to close with the native assistant picker.
 - **Removing someone from a channel is on web only (2026-11-12).** Web's channel members list has Remove on the rows the server allows: every member for an owner or admin, and a person's own assistant for that person. macOS and iOS have no such button; the server rule (`DELETE /v1/channels/:id/members/:userId`) is the same everywhere (gap to close).
 - **The Calendar booking page is set up on web only (2026-11-12, docs/specs/guest-scheduler.md).** Guests book on a public web page, and bookings are ordinary events on every client; turning the page on and editing its settings is in the web Calendar app only, and "Copy booking link" is in the web suite bar's account menu only. macOS and iOS have no Calendar settings screen (gap to close with Calendar there).

@@ -70,6 +70,8 @@ export const APP_MANIFESTS: AppManifest[] = [
       'open_sheet', 'open_deck', 'render_slide', 'export_deck', 'convert_pdf', 'edit_image', 'open_doc', 'request_app_change', 'request_research', 'list_sheets', 'read_other_sheet', 'list_decks',
       'find_files', 'read_stored_file',
       'list_docs', 'read_other_doc', 'list_connections', 'fetch_connector_data', 'ingest_connector_data', 'web_search', 'image_search',
+      // The agent's own memory (agents.md §6.1), registered with Docs' tools since the agent loop is Docs'.
+      'memory',
     ],
     scopes: [
       {
