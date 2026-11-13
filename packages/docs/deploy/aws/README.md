@@ -1,15 +1,20 @@
 # MCP Docs and Flow on AWS
 
-`template.yaml` is a CloudFormation stack (us-west-2, stack `mcpdocs`) for the FreeFlow suite's hosted apps on one
-EC2 instance, behind Caddy, which gets the HTTPS certificate for each host name itself and routes by host:
+`template.yaml` is a CloudFormation stack (us-west-2, stack `mcpdocs`) on one EC2 instance, behind Caddy, which gets
+the HTTPS certificate for each host name itself and routes by host.
+
+**This is the legacy origin.** The suite runs on Cloudflare since 2026-11-03 (the Worker in `packages/edge`;
+`BUILD.md` at the repository root). This stack stays up for the ChatGPT plugin (`docs.freeflow.im`,
+`mcpdocs.freeflow.im`, reached through the Worker) and for any path the Worker passes on, until step 7 of
+`docs/specs/cloudflare-migration.md` retires it. Its containers:
 
 - **MCP Docs** (the Workspace app): container `app` (`deploy/aws/Dockerfile`), on `DomainName` and `OtherDomains`.
   Its log is the CloudWatch group `/mcpdocs/app`.
 - **Flow** (the Chat app): container `flow` (`packages/server/deploy/aws/Dockerfile`), on `FlowDomainName`, with
   `postgres` (Postgres 17, data at `/data/postgres`) and `nats` (NATS 2.10, core only) containers on the same docker
   network, neither published on a host port. Its log is `/flow/app`. A systemd timer dumps the database every night
-  at 09:30 UTC to `/data/backups/postgres/<date>.sql.gz` and keeps the newest 14. Moving Flow here from Railway is
-  `docs/ops/FLOW_TO_AWS.md`.
+  at 09:30 UTC to `/data/backups/postgres/<date>.sql.gz` and keeps the newest 14. Flow moved here from Railway on 2026-11-01
+  (`docs/ops/FLOW_TO_AWS.md`).
 
 Both images are built from the repository root. The data (`/data`: SQLite, files, Postgres and its dumps, Caddy's
 certificates) is on its own EBS volume, snapshotted daily and kept for 14 days; the volume is kept if the stack is

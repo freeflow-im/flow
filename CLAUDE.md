@@ -63,8 +63,10 @@
 - Key decisions and operator rulings go in `decision_log.md`.
 - **`BUILD.md` is the release map** — what each artifact is built and shipped
   by, and which ones ship automatically. Two rules worth knowing without
-  opening it: merging to `main` deploys the server + web client (Railway) but
-  does **not** release the macOS or iOS app, and shipping macOS is one command,
+  opening it: merging to `main` deploys the suite to Cloudflare (the Worker in
+  `packages/edge`, with every web client; the AWS origin, which still runs the
+  legacy ChatGPT plugin, redeploys alongside) but does **not** release the
+  macOS or iOS app, and shipping macOS is one command,
   `apps/macos/tools/release-macos.sh` (never `dist.sh` + `publish-dmg.sh` as
   separate steps).
 - **NEVER bump a native app's version in a feature PR.** Releasing is a
@@ -96,10 +98,12 @@
   registry. So releasing is just: bump the version in the same PR as the
   change, and merging ships it. Check a release with
   `gh run list --workflow publish-bridge.yml`.
-- Run basics: docker compose in `packages/infra` (postgres on host port 5442),
-  `pnpm dev` in `packages/server` (serves API + WS + web dist on 127.0.0.1:8787;
-  restart after rebuilding `packages/web/dist`), macOS app via
-  `apps/macos/tools/make-app.sh` → `dist/Flow.app`.
+- Run basics: `pnpm dev:suite` (`--build` the first time) runs the whole suite
+  as one Worker on http://localhost:8787, as production does (BUILD.md § Local
+  development). The Node server (`packages/server`, with docker compose in
+  `packages/infra` for Postgres on 5442 and NATS) is now only the AWS origin; run
+  it only to work on that. macOS app via `apps/macos/tools/make-app.sh` →
+  `dist/Flow.app`.
 - UI automation requires an idle desktop or explicit operator authorization
   (see the QA manual in `.claude/agents/quality-assurance.md`).
 - **`packages/docs` is the Docs engine and the Workspace app of the FreeFlow suite** (the

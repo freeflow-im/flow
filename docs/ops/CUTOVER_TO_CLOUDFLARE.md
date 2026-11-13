@@ -28,9 +28,11 @@ Plan an afternoon: an hour to rehearse, an hour for the switch, and time to use 
   the hosts allowed). Check after a deploy: in ChatGPT, connect Universal Docs as a new account; the sign-in lands on
   `app.freeflow.im`, comes back to `docs.freeflow.im`, and the consent page shows.
 
-## What does not work on Cloudflare yet
+## What did not work on Cloudflare at the switch
 
-OCR of scanned PDFs (a Cloudflare Container), resized link-preview pictures (the Images binding); both in progress.
+OCR of scanned PDFs and resized link-preview pictures. Both were ported on 2026-11-03: OCR on a Cloudflare Container
+(`packages/edge/containers/pdf-ocr`), pictures with the Images binding. What still runs on AWS is the ChatGPT plugin
+above (`BUILD.md`).
 
 ## 1. Merge and deploy
 

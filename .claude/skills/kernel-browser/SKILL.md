@@ -27,7 +27,7 @@ the macOS and iOS apps**, which can't run on a Linux VM.
 
 What Kernel is good for here:
 
-- Screenshotting `app.freeflow.im` (or a Railway preview) for a PR
+- Screenshotting `app.freeflow.im` (or `edge.freeflow.im`) for a PR
 - Reproducing a web-client bug on a clean profile, with no cached session
 - Checking rendering at a viewport size the Mac doesn't have
 - Verifying a deploy actually shipped, from outside the local network
