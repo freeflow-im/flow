@@ -968,27 +968,7 @@ export async function runDocsTool(name: string, input: Record<string, unknown>, 
       const id = typeof input.file_id === 'string' ? input.file_id : '';
       const offset = typeof input.offset === 'number' ? input.offset : 0;
       const max = typeof input.max_chars === 'number' ? input.max_chars : 30_000;
-      const f = env.files.get(env.viewer ?? env.userId, id);
-      if (!f) throw new ToolFailure(`There is no file ${id}. Find ids with find_files.`);
-      let text: string;
-      let extra: Record<string, unknown> = {};
-      if (f.meta.type === 'application/pdf') {
-        try {
-          const pdf = await pdfText(env.files, env.viewer ?? env.userId, id);
-          if (!pdf) throw new ToolFailure(`There is no file ${id}. Find ids with find_files.`);
-          text = pdf.markdown;
-          extra = { pages: pdf.pageCount, ...(pdf.warnings.length ? { warnings: pdf.warnings } : {}) };
-        } catch (e) {
-          if (e instanceof PdfError) throw new ToolFailure(e.message);
-          throw e;
-        }
-      } else if (isTextFileType(f.meta.type)) {
-        text = (await readFile(f.file)).toString('utf8');
-      } else {
-        throw new ToolFailure(`${f.meta.filename} is a ${f.meta.type} file, not text: it cannot be read as text.`);
-      }
-      const part = text.slice(offset, offset + max);
-      return JSON.stringify({ file_id: id, filename: f.meta.filename, type: f.meta.type, ...extra, offset, total_chars: text.length, more: offset + part.length < text.length, text: part });
+      return JSON.stringify(await storedFileText(env.files, env.viewer ?? env.userId, id, offset, max));
     }
     case 'convert_pdf': {
       if (!env.files) throw new ToolFailure('Files cannot be converted here.');
@@ -1085,6 +1065,34 @@ export async function runDocsTool(name: string, input: Record<string, unknown>, 
 }
 
 export class ToolFailure extends Error {}
+
+/**
+ * A stored file's text, a part of it from `offset`: a PDF's (as Markdown) or a text file's. read_stored_file's answer, and
+ * GET /api/files/:id/text's, which the suite's agents read it through. Throws ToolFailure for no such file or not text.
+ */
+export async function storedFileText(files: FileStore, viewer: ViewerArg, id: string, offset = 0, max = 30_000): Promise<Record<string, unknown>> {
+  const f = files.get(viewer, id);
+  if (!f) throw new ToolFailure(`There is no file ${id}. Find ids with find_files.`);
+  let text: string;
+  let extra: Record<string, unknown> = {};
+  if (f.meta.type === 'application/pdf') {
+    try {
+      const pdf = await pdfText(files, viewer, id);
+      if (!pdf) throw new ToolFailure(`There is no file ${id}. Find ids with find_files.`);
+      text = pdf.markdown;
+      extra = { pages: pdf.pageCount, ...(pdf.warnings.length ? { warnings: pdf.warnings } : {}) };
+    } catch (e) {
+      if (e instanceof PdfError) throw new ToolFailure(e.message);
+      throw e;
+    }
+  } else if (isTextFileType(f.meta.type)) {
+    text = (await readFile(f.file)).toString('utf8');
+  } else {
+    throw new ToolFailure(`${f.meta.filename} is a ${f.meta.type} file, not text: it cannot be read as text.`);
+  }
+  const part = text.slice(offset, offset + max);
+  return { file_id: id, filename: f.meta.filename, type: f.meta.type, ...extra, offset, total_chars: text.length, more: offset + part.length < text.length, text: part };
+}
 
 // The app's ConnectorService, keyed by its SheetStore (which every server tool env carries).
 const connectorServices = new WeakMap<SheetStore, ConnectorService>();

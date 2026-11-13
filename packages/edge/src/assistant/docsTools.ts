@@ -216,6 +216,28 @@ export async function runDocsToolByHttp(name: string, input: Record<string, unkn
         ...(res.truncated ? { note: 'The row cap was reached; pass a larger params.limit (up to 50000) or a narrower date range for everything.' } : {}),
       });
     }
+    case 'find_files': {
+      // The stored files of the chat's root (Docs' GET /api/files), most recent first, as runDocsTool answers.
+      const a = await call(docs, 'GET', `/api/files?${placeQuery(place)}`);
+      if (a.status !== 200) throw refused(a);
+      const q = typeof input.query === 'string' ? input.query.trim().toLowerCase() : '';
+      const all = ((a.data.files ?? []) as { id: string; filename: string; type: string; size: number; folder?: string; createdAt: string }[])
+        .filter((f) => !q || f.filename.toLowerCase().includes(q))
+        .sort((x, y) => (x.createdAt < y.createdAt ? 1 : x.createdAt > y.createdAt ? -1 : 0));
+      return JSON.stringify({
+        total: all.length,
+        files: all.slice(0, 50).map((f) => ({ id: f.id, filename: f.filename, type: f.type, size: f.size, ...(f.folder ? { folder: f.folder } : {}), created_at: f.createdAt })),
+      });
+    }
+    case 'read_stored_file': {
+      const id = typeof input.file_id === 'string' ? input.file_id : '';
+      const offset = typeof input.offset === 'number' ? input.offset : 0;
+      const max = typeof input.max_chars === 'number' ? input.max_chars : 30_000;
+      const a = await call(docs, 'GET', `/api/files/${enc(id)}/text?${placeQuery(place)}&offset=${offset}&max=${max}`);
+      if (a.status === 404) throw new ToolFailure(a.data.error ?? `There is no file ${id}. Find ids with find_files.`);
+      if (a.status !== 200) throw refused(a);
+      return JSON.stringify(a.data);
+    }
     case 'convert_pdf': {
       const id = typeof input.file_id === 'string' && input.file_id ? input.file_id : env.context.page === 'file' ? env.context.fileId : null;
       if (!id) throw new ToolFailure('Give file_id: the user has no file open. Find ids with list_files.');

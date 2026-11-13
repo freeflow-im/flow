@@ -31,6 +31,28 @@ const run = (f: ReturnType<typeof fake>, place: DocsPlace, name: string, input: 
 };
 
 describe('Docs tools over HTTP', () => {
+  it('finds stored files in the chat’s root and reads a PDF’s text, as the in-process tools do (they had no file store here)', async () => {
+    const f = fake({
+      'GET /api/files': () => Response.json({ files: [
+        { id: 'f-old', filename: 'notes.txt', type: 'text/plain', size: 10, createdAt: '2026-11-01T00:00:00.000Z' },
+        { id: 'f-cv', filename: 'Scott Resume.pdf', type: 'application/pdf', size: 99, folder: 'Jobs', createdAt: '2026-11-12T00:00:00.000Z' },
+      ] }),
+      'GET /api/files/f-cv/text': (req) => Response.json({ file_id: 'f-cv', filename: 'Scott Resume.pdf', type: 'application/pdf', pages: 2, offset: Number(new URL(req.url).searchParams.get('offset')), total_chars: 12, more: false, text: '# Scott\nCTO' }),
+    });
+    expect(await run(f, MY_FILES, 'find_files', {})).toEqual({ total: 2, files: [
+      { id: 'f-cv', filename: 'Scott Resume.pdf', type: 'application/pdf', size: 99, folder: 'Jobs', created_at: '2026-11-12T00:00:00.000Z' },
+      { id: 'f-old', filename: 'notes.txt', type: 'text/plain', size: 10, created_at: '2026-11-01T00:00:00.000Z' },
+    ] });
+    expect((await run(f, MY_FILES, 'find_files', { query: 'résumé' })).total).toBe(0);
+    expect((await run(f, ORG_FILES, 'find_files', { query: 'resume' })).files.map((x: { id: string }) => x.id)).toEqual(['f-cv']);
+    expect(await run(f, MY_FILES, 'read_stored_file', { file_id: 'f-cv', offset: 0 })).toMatchObject({ filename: 'Scott Resume.pdf', pages: 2, text: '# Scott\nCTO' });
+    await expect(run(f, MY_FILES, 'read_stored_file', { file_id: 'nope' })).rejects.toThrow(ToolFailure);
+    expect(f.calls).toEqual([
+      'GET /api/files?workspace=org-1', 'GET /api/files?workspace=org-1', 'GET /api/files?workspace=org-1&shared=1',
+      'GET /api/files/f-cv/text?workspace=org-1&offset=0&max=30000', 'GET /api/files/nope/text?workspace=org-1&offset=0&max=30000',
+    ]);
+  });
+
   it('reads another spreadsheet with computed values, from its JSON', async () => {
     const workbook = { version: 1, tabs: [{ id: 't', name: 'Data', rows: 10, cols: 5, cells: { A1: { v: '2' }, A2: { v: '3' }, A3: { v: '=A1*A2' } }, colWidths: {}, rowHeights: {} }] };
     const f = fake({ 'GET /api/sheets/s1': () => Response.json({ sheet: { id: 's1', title: 'Numbers' }, workbook }) });

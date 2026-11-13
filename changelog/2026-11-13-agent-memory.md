@@ -4,6 +4,7 @@
 - [server] Each request lists the agent's memory files; what a mail or wake turn writes is marked as from someone else's content.
 - [server] `GET/PUT/DELETE /v1/workspaces/:id/agents/:userId/memory` for the Memory tab: a private agent's memory is its sponsor's alone.
 - [server] A hosted shared agent answers members in Chat (a DM, a mention, its thread) as itself, asked by them; it was reachable only from the panel, and the member list never marked one made in Admin as hosted.
+- [server] Agents in the suite can find and read stored files again (`find_files`, `read_stored_file` answered "Stored files cannot be listed here"): both now go through Docs, with a new `GET /api/files/:id/text`.
 - [web] Organization settings: Memory on each of your agents and each shared agent (read, edit, delete, forget everything); the panel shows "Remembered: …" when an agent saves something.
 
 ## Feature
