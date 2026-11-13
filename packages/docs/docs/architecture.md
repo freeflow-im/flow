@@ -422,6 +422,14 @@ message format; `server/agent/openai.ts` translates each request to OpenAI's Res
 (`local.settingsDir`), and on the first run a key found in the user's login shell (`desktop/main.js`) is used
 (`adoptFromEnvironment`: Anthropic's, then OpenAI's, then OpenRouter's).
 
+Most tools are deferred (`server/agent/toolSearch.ts`): a turn sends every definition, but only the search tool, the
+file tools (`list_files`, `open_file`, `find_files`) and the open page's main tools (`CORE_BY_PAGE`) are loaded; the
+model finds the rest with the provider's tool search (Claude's `tool_search_tool_bm25`, run by Anthropic; `openai.ts`
+maps it to OpenAI's `tool_search` and replays a search's output with the definitions it loaded). OpenRouter turns load
+every tool, as Chat Completions has no tool search. A search's result stays in the history and names its tools, which
+the API requires in every later request: a tool it named that a turn does not offer (another app's, the browser
+extension's) gets a deferred stand-in (`keepReferencedTools`), and a call to it is refused as unknown.
+
 In the desktop app the assistant can instead run on the user's own Claude Code (provider `claude-agent`,
 `AssistantSettings.agents`): `AgentService` hands those turns to `ClaudeAgentDriver` (`server/agent/claudeAgent.ts`)
 instead of its loop. Each turn is a Claude Agent SDK `query` on the `claude` the user installed and signed in
