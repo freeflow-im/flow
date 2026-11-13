@@ -75,14 +75,17 @@ const teamMsgs=await msgs(A.token,team);
 const thread=teamMsgs.find(m=>m.replyCount>0);
 const replies=thread?((await api(A.token,'GET',`/v1/messages/${thread.id}/thread`)).j.messages??[]):[];
 t('mentioned in a channel, it leaves no card there',![...teamMsgs,...replies].some(m=>m.userId===asst.userId&&/Post in #/.test(m.body)),JSON.stringify(replies.map(m=>m.body)).slice(0,240));
-// 7. Leaving: not #general (nobody leaves it), but a channel it was brought into, when Ann asks in the DM.
+// 7. Leaving: #general too (it holds every person, but no assistant need stay), when Ann asks in the DM.
+const memberIds=async(ch)=>((await api(A.token,'GET',`/v1/channels/${ch}/members`)).j.userIds??[]);
 n=fromAsst(await msgs(A.token,DM)).length;
 await say(A.token,DM,'Please leave #general.');
-dm=await until(()=>msgs(A.token,DM),(l)=>fromAsst(l).length>n,90000);
-t('it cannot leave #general, and says so',/general/i.test(fromAsst(dm)[0]?.body??''),fromAsst(dm)[0]?.body);
-n=fromAsst(dm).length;
-await say(A.token,DM,`Please leave #team-${tag}.`);
 await until(()=>msgs(A.token,DM),(l)=>fromAsst(l).length>n,90000);
-const ids=((await api(A.token,'GET',`/v1/channels/${team}/members`)).j.userIds??[]);
-t(`it leaves #team-${tag} when asked`,ids.length>0&&!ids.includes(asst.userId),JSON.stringify(ids));
+let ids=await memberIds(general.id);
+t('it leaves #general when Ann asks',ids.length>0&&!ids.includes(asst.userId),JSON.stringify(ids));
+// 8. Ann takes it out of a channel herself (not an admin's power: it is hers), and another member cannot.
+const team2=(await api(A.token,'POST',`/v1/workspaces/${W}/channels`,{name:`team2-${tag}`})).j.id;
+r=await api(A.token,'POST',`/v1/channels/${team2}/members`,{userId:asst.userId});t('Ann brings it into a channel',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,100));
+r=await api(Bo.token,'DELETE',`/v1/channels/${team2}/members/${asst.userId}`);t('someone outside the organization cannot take it out',r.s>=400,r.s);
+r=await api(A.token,'DELETE',`/v1/channels/${team2}/members/${asst.userId}`);ids=await memberIds(team2);
+t('Ann takes it out herself',r.s===200&&!ids.includes(asst.userId),r.s+' '+JSON.stringify(ids));
 console.log(`\n${pass} passed, ${fail} failed`);process.exit(fail?1:0);

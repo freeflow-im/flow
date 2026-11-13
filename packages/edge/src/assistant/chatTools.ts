@@ -37,7 +37,7 @@ export function assistantChatSchemas(): Record<string, z.ZodObject> {
       .describe(
         'Posts a message as you in a channel the user is in, joining it first if you are not a member yet. It is posted only after the user approves: you leave a card here showing the channel and the exact text, and the user reacts ✅ to post it or ❌ to cancel. Use it only when the user asks you to post somewhere. Never put the user’s private information (mail, calendar, files others cannot open) in it unless they asked for exactly that.',
       ),
-    leave_channel: z.object({ channelId }).describe('Leaves a channel you are in, when the user asks you to. You cannot leave #general.'),
+    leave_channel: z.object({ channelId }).describe('Leaves a channel you are in, #general included, when the user asks you to.'),
   };
 }
 
