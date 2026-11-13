@@ -4,7 +4,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Loader2 } from 'lucide-react';
-import { isInHome, openSuiteSearch, useHomeMenu } from '@flow/suite-bar';
+import { isInHome, useHomeMenu } from '@flow/suite-bar';
 import { AssistantDock, useAssistantDockState, useMyAssistant, useNewChatOnClose } from '@flow/suite-bar/assistant-dock';
 import { MailApiError, mailApi, setMailWorkspace, type Category, type MailAccount, type MessageDetail, type ThreadSummary, type TabStatus } from './api';
 import { AccountSettingsDialog, AddAccountDialog } from './components/AccountForms';
@@ -108,7 +108,6 @@ export function App() {
     : (folderChoice ?? 'INBOX');
   const folderInfo = folders.data?.find((f) => f.path === folder) ?? null;
 
-  const [searchText, setSearchText] = useState('');
   const [q, setQ] = useState('');
   const [tab, setTab] = useState<ListTab>('all');
   // The open conversation; a link to one message (`uid=`) opens the thread it is in once that is known.
@@ -258,7 +257,6 @@ export function App() {
     setFolderChoice(path);
     setTabChoice(null);
     setQ('');
-    setSearchText('');
     resetSelection();
     setDrawer(false);
   };
@@ -267,7 +265,6 @@ export function App() {
     setFolderChoice(null);
     setTabChoice(null);
     setQ('');
-    setSearchText('');
     resetSelection();
     setDrawer(false);
   };
@@ -424,7 +421,6 @@ export function App() {
     setFolderChoice(ref.folder);
     setTabChoice(null);
     setQ('');
-    setSearchText('');
     setChecked(new Set());
     setOpenId(null);
     setPendingUid(ref.uid);
@@ -588,7 +584,7 @@ export function App() {
           h.startCompose('new');
           break;
         case '/':
-          openSuiteSearch();
+          document.querySelector<HTMLInputElement>('[data-testid="mail-list-search"]')?.focus();
           break;
         case 'Escape':
           if (isNarrow && open !== null) setOpenId(null);
@@ -614,20 +610,6 @@ export function App() {
         chooseFolder(findSpecial(folders.data, 'inbox')?.path ?? 'INBOX');
         setTab('all');
         setDrawer(false);
-      }}
-      search={{
-        placeholder: folderInfo ? `Search ${folderLabel(folderInfo)}` : 'Search mail',
-        value: searchText,
-        onChange: (text) => {
-          setSearchText(text);
-          // Emptying the field (or Esc) ends the search.
-          if (!text.trim() && q) setQ('');
-        },
-        onSubmit: (text) => {
-          setSearchText(text);
-          setQ(text.trim());
-          resetSelection();
-        },
       }}
       unread={inboxUnread}
       assistant={{ open: assistantOpen, onToggle: () => setAssistantOpen(!assistantOpen) }}
@@ -789,7 +771,6 @@ export function App() {
       query={q}
       onClearQuery={() => {
         setQ('');
-        setSearchText('');
       }}
       openId={openId}
       cursorId={cursorId}
@@ -831,17 +812,13 @@ export function App() {
       tabMove={showTabs ? { tabs: accountTabs, current: category, onMove: moveToTab, onWhy: (t) => setToast(`${reasonText(t.categoryReason, t.category ?? 'primary')}.`) } : undefined}
       draggable={canDrag}
       sorting={!!listing.data?.pages[listing.data.pages.length - 1]?.sorting}
-      // Inside Home there is no suite bar, so no search there: the list shows its own field (home.md §2).
-      searchBar={inHome && !tiny}
-      onSearch={
-        tiny || inHome
-          ? (text) => {
-              setSearchText(text);
-              setQ(text);
-              resetSelection();
-            }
-          : undefined
-      }
+      // The list's own search field, beside the folder's name, in the full app as inside Home (home.md §2); on a phone
+      // it opens from the list's search button.
+      searchBar={!tiny}
+      onSearch={(text) => {
+        setQ(text);
+        resetSelection();
+      }}
     />
   );
   const view = (

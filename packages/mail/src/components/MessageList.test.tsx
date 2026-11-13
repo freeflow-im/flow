@@ -79,7 +79,7 @@ describe.each([false, true])('attachment chips in the list (dense: %s)', (dense)
   });
 });
 
-describe('the list’s search inside Home (home.md §2: no suite bar there)', () => {
+describe('the list’s search field (the suite bar has none on Mail)', () => {
   it('always shows the field, searches on Enter, and follows the search in force', () => {
     const searched: string[] = [];
     render({ searchBar: true, onSearch: (q: string) => searched.push(q) });
@@ -100,7 +100,16 @@ describe('the list’s search inside Home (home.md §2: no suite bar there)', ()
     expect((host.querySelector('[data-testid="mail-list-search"]') as HTMLInputElement).value).toBe('');
   });
 
-  it('keeps the field hidden behind the Search button elsewhere', () => {
+  it('ends the search in force on Escape', () => {
+    const searched: string[] = [];
+    render({ searchBar: true, onSearch: (q: string) => searched.push(q), query: 'invoice' });
+    const field = host.querySelector('[data-testid="mail-list-search"]') as HTMLInputElement;
+    act(() => field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(searched).toEqual(['']);
+    expect(field.value).toBe('');
+  });
+
+  it('keeps the field hidden behind the Search button on a phone', () => {
     render({ onSearch: () => {} });
     expect(host.querySelector('[data-testid="mail-list-search"]')).toBeNull();
     expect(host.querySelector('button[aria-label="Search"]')).not.toBeNull();

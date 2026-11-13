@@ -1,5 +1,5 @@
 // The suite bar on Mail (packages/suite-bar), as Docs' DocsSuiteBar and Chat's ChatSuiteBar draw it: the organization
-// switcher, the apps with Mail active, the search (which searches the open folder), notifications and the account menu.
+// switcher, the apps with Mail active, notifications and the account menu.
 // What belongs to Chat (organizations, invitations, notifications, the profile) opens Chat at `/chat/?open=…`.
 import { useCallback, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -11,8 +11,8 @@ const REFRESH_MS = 60_000;
 const toChat = (page: ChatPage) => intent.open(page);
 
 export interface MailSuiteBarProps {
-  /** The search: what is being searched for in the open folder, and how to change it. */
-  search: { value: string; onChange(q: string): void; onSubmit(q: string): void; placeholder: string };
+  /** The bar's search; Mail leaves it out, since its list has a search field beside the folder's name. */
+  search?: { value: string; onChange(q: string): void; onSubmit(q: string): void; placeholder: string };
   /** The logo and the Mail tab: back to the inbox list. */
   onHome?: (() => void) | undefined;
   unread: number;
@@ -64,7 +64,7 @@ export function MailSuiteBar({ search, unread, onSettings, onHome, assistant, gu
           ...(active ? { onAutomations: () => intent.admin('automations') } : {}),
           ...(active ? { onInvite: () => toChat('invite') } : {}),
         }}
-        search={search}
+        {...(search ? { search } : {})}
         assistant={{ onOpen: assistant.onToggle, active: assistant.open }}
         notifications={{ onOpen: () => toChat('activity') }}
         account={{
