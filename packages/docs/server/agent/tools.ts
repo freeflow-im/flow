@@ -25,7 +25,8 @@ import { PrintError, type PdfMaker } from '../pdf.ts';
 import { isTextFileType, STORED_IMAGE_RE } from '../../shared/types.ts';
 import type { SheetStore } from '../sheets.ts';
 import { fetchPublicFile, WebFetchError } from '../webFetch.ts';
-import type { ScopeArg, ViewerArg } from '../scope.ts';
+import { scopeOf, type ScopeArg, type ViewerArg } from '../scope.ts';
+import { contentSearchLimit, contentSearchQuery, contentSearchResult, SEARCH_CONTENT_DESCRIPTION, toSearchHit } from '../search.ts';
 
 const tab = z.string().optional().describe('Tab name. Defaults to the active tab.');
 const range = z.string().describe('Range in A1 notation, e.g. "B2", "A1:D10", "C:E" (whole columns) or "3:5" (whole rows). May be prefixed with a tab name: \'Q3 Sales\'!A1:D10.');
@@ -647,6 +648,16 @@ export const schemas = {
     .describe('Create a new presentation, optionally with its slides. Open it with open_deck so the user sees it.'),
   // Stored files from anywhere (Mail, Calendar, Home, Admin): the server's own, unlike list_files and read_file, which run
   // on Docs' open page.
+  search_content: z
+    .object({
+      query: z.string().max(1000).describe('Words to find inside files, with any filters (see the tool description), such as "renewal pricing type:doc after:90d".'),
+      type: z.enum(['doc', 'sheet', 'deck', 'markdown']).optional().describe('Only files of this kind.'),
+      after: z.string().optional().describe('Only files changed on or after this date (2026-10-01) or this long ago (30d, 6m).'),
+      before: z.string().optional().describe('Only files changed before this date (2026-10-01) or this long ago (30d, 6m).'),
+      folder: z.string().optional().describe('Only files in this folder and the folders under it, by its path ("Reports/2026").'),
+      limit: z.number().int().min(1).max(50).optional().describe('How many hits to return. Defaults to 10.'),
+    })
+    .describe(SEARCH_CONTENT_DESCRIPTION),
   find_files: z
     .object({ query: z.string().optional().describe('Only files whose name contains this text (case-insensitive).') })
     .describe("List the user's stored files (PDFs, uploads, saved attachments and generated files), most recent first (at most 50): id, filename, type, size, folder, created_at. Works in every app; in Docs list_files does the same. Read one with read_stored_file."),
@@ -952,6 +963,13 @@ export async function runDocsTool(name: string, input: Record<string, unknown>, 
         if (e instanceof ConnectorError) throw new ToolFailure(e.message);
         throw e;
       }
+    }
+    case 'search_content': {
+      const q = contentSearchQuery(input);
+      if (!q.groups.length && !Object.keys(q.filters).length) throw new ToolFailure('Say what to look for in query.');
+      const scope = env.scope ? scopeOf(env.scope) : null;
+      const hits = env.sheets.searchContent(env.viewer ?? env.userId, q, { workspaceId: scope?.workspaceId ?? null, limit: contentSearchLimit(input) });
+      return contentSearchResult(hits.map(toSearchHit));
     }
     case 'find_files': {
       if (!env.files) throw new ToolFailure('Stored files cannot be listed here.');

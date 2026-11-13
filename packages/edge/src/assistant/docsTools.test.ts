@@ -53,6 +53,21 @@ describe('Docs tools over HTTP', () => {
     ]);
   });
 
+  it('searches inside files with Docs’ /api/search in the chat’s organization, filters as fields, links into the suite', async () => {
+    const hit = { source: 'docs', kind: 'doc', id: 'd1', title: 'Pricing memo', snippet: 'we raise \u0002prices\u0003', author: 'user-1', at: '2026-11-10T00:00:00.000Z', container: 'Plans', url: '/doc/d1', rank: -3 };
+    const f = fake({ 'GET /api/search': (req) => Response.json({ hits: new URL(req.url).searchParams.get('q')!.includes('nothing') ? [] : [hit] }) });
+    expect(await run(f, ORG_FILES, 'search_content', { query: 'pricing', type: 'doc', folder: 'Plans', limit: 5 })).toEqual({
+      total: 1,
+      hits: [{ id: 'd1', kind: 'doc', title: 'Pricing memo', folder: 'Plans', updated_at: '2026-11-10T00:00:00.000Z', snippet: 'we raise «prices»', url: 'https://app.test/docs/doc/d1' }],
+    });
+    expect((await run(f, MY_FILES, 'search_content', { query: 'nothing' })).note).toMatch(/Nothing matched/);
+    await expect(run(f, MY_FILES, 'search_content', { query: '' })).rejects.toThrow(ToolFailure);
+    expect(f.calls).toEqual([
+      `GET /api/search?q=${encodeURIComponent('pricing type:doc in:"Plans"')}&limit=5&workspace=org-1`,
+      'GET /api/search?q=nothing&limit=10&workspace=org-1',
+    ]);
+  });
+
   it('reads another spreadsheet with computed values, from its JSON', async () => {
     const workbook = { version: 1, tabs: [{ id: 't', name: 'Data', rows: 10, cols: 5, cells: { A1: { v: '2' }, A2: { v: '3' }, A3: { v: '=A1*A2' } }, colWidths: {}, rowHeights: {} }] };
     const f = fake({ 'GET /api/sheets/s1': () => Response.json({ sheet: { id: 's1', title: 'Numbers' }, workbook }) });

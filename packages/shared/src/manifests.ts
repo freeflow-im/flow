@@ -68,7 +68,7 @@ export const APP_MANIFESTS: AppManifest[] = [
       'get_sheet_overview', 'read_range', 'write_range', 'clear_range', 'format_range', 'insert_rows', 'delete_rows', 'insert_columns', 'delete_columns', 'move_columns', 'sort_range', 'set_cell_image',
       'set_cell_link', 'set_filter', 'set_filter_criteria', 'set_column_width', 'set_row_height', 'freeze', 'add_chart', 'edit_chart', 'delete_chart', 'add_tab', 'rename_tab', 'delete_tab', 'select_range',
       'open_sheet', 'open_deck', 'render_slide', 'export_deck', 'convert_pdf', 'edit_image', 'open_doc', 'request_app_change', 'request_research', 'list_sheets', 'read_other_sheet', 'list_decks',
-      'find_files', 'read_stored_file',
+      'find_files', 'read_stored_file', 'search_content',
       'list_docs', 'read_other_doc', 'list_connections', 'fetch_connector_data', 'ingest_connector_data', 'web_search', 'image_search',
       // The agent's own memory (agents.md §6.1), registered with Docs' tools since the agent loop is Docs'.
       'memory',

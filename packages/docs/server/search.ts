@@ -4,7 +4,7 @@
 // so a row whose document changed since (or one with no index row) is stale, and `staleDocuments` finds it.
 //
 // A hit is checked with `roleOf` (server/access.ts), the one access check Docs has, before anything of it is returned.
-import { hasSearchWords, toFtsMatch, type SearchHit, type SearchKind, type SearchQuery } from '@flow/shared/search';
+import { hasSearchWords, parseSearch, toFtsMatch, type SearchHit, type SearchKind, type SearchQuery } from '@flow/shared/search';
 import type { DocKind } from '../shared/types.ts';
 import { roleOf } from './access.ts';
 import type { DB } from './db.ts';
@@ -173,3 +173,50 @@ export const toSearchHit = (r: DocHitRow): SearchHit => ({
   url: `/${DOC_PAGES[r.kind]}/${encodeURIComponent(r.id)}`,
   rank: r.rank,
 });
+
+// ---- The agents' search_content tool (the assistant's runDocsTool, the suite's Assistant object, the MCP server) ----
+
+/** The tool's input: a query in the search language, with optional filters as fields (the fields win over the text). */
+export interface ContentSearchInput {
+  query?: unknown;
+  type?: unknown;
+  after?: unknown;
+  before?: unknown;
+  folder?: unknown;
+  limit?: unknown;
+}
+
+/** The query a tool input stands for. */
+export function contentSearchQuery(input: ContentSearchInput): SearchQuery {
+  const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+  const q = parseSearch(str(input.query).slice(0, 1000));
+  const types = (Array.isArray(input.type) ? input.type : str(input.type) ? [input.type] : []).map((t) => parseSearch(`type:${String(t)}`).filters.types ?? []).flat();
+  if (types.length) q.filters.types = types;
+  for (const k of ['after', 'before'] as const) {
+    const at = str(input[k]) ? parseSearch(`${k}:${str(input[k])}`).filters[k] : undefined;
+    if (at) q.filters[k] = at;
+  }
+  if (str(input.folder)) q.filters.in = str(input.folder);
+  return q;
+}
+
+/** The tool's limit: 10 by default, at most 50. */
+export const contentSearchLimit = (input: ContentSearchInput): number => Math.min(Math.max(Number(input.limit) || 10, 1), 50);
+
+/** The words a snippet marks, as the model reads them. */
+const marked = (s: string) => s.replace(/\u0002/g, '«').replace(/\u0003/g, '»');
+
+/** What the tool answers, from the hits (`url` makes a hit's link: absolute in the suite). */
+export function contentSearchResult(hits: SearchHit[], url: (h: SearchHit) => string = (h) => h.url): string {
+  return JSON.stringify({
+    total: hits.length,
+    hits: hits.map((h) => ({ id: h.id, kind: h.kind, title: h.title, ...(h.container ? { folder: h.container } : {}), updated_at: h.at, snippet: marked(h.snippet), url: url(h) })),
+    ...(hits.length ? {} : { note: 'Nothing matched. Try fewer or other words, a word stem with * (plan*), or search_files to match names.' }),
+  });
+}
+
+/** The tool's description, the same at every door. */
+export const SEARCH_CONTENT_DESCRIPTION =
+  'Find documents, Markdown documents, presentations and spreadsheets by the words inside them (not their names: search_files matches names), best match first, with a snippet where the words are marked «like this». ' +
+  'The query takes words (stems match: "pricing" finds "prices"), "exact phrases", word* for a prefix, OR between words, -word to leave one out, and filters: type:doc|sheet|deck|markdown, after:2026-10-01 or after:30d, before:, in:Folder/Path, from:me, is:shared. ' +
+  'Searches the organization files and the user’s own files. Open or read a hit by its id with the tools for its kind.';

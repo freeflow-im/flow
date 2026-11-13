@@ -12,6 +12,8 @@ import { STORED_IMAGE_RE } from '@flow/docs/shared/types.ts';
 import { checkSearchRate, runDocsTool, ToolFailure, type ServerToolEnv } from '@flow/docs/server/agent/tools.ts';
 import { importLimit, webImportName } from '@flow/docs/server/importFile.ts';
 import { fetchPublicFile, WebFetchError } from '@flow/docs/server/webFetch.ts';
+import { contentSearchLimit, contentSearchQuery, contentSearchResult } from '@flow/docs/server/search.ts';
+import type { SearchHit } from '@flow/shared/search';
 import { addressOf } from '@flow/shared/addresses';
 
 /** A Docs object's HTTP API (/api/*), as one person in one organization: the paths are the Docs client's. */
@@ -215,6 +217,19 @@ export async function runDocsToolByHttp(name: string, input: Record<string, unkn
         truncated: res.truncated,
         ...(res.truncated ? { note: 'The row cap was reached; pass a larger params.limit (up to 50000) or a narrower date range for everything.' } : {}),
       });
+    }
+    case 'search_content': {
+      // Docs' GET /api/search in the chat's organization (its shared files and the person's own), as runDocsTool answers.
+      const q = contentSearchQuery(input);
+      if (!q.groups.length && !Object.keys(q.filters).length) throw new ToolFailure('Say what to look for in query.');
+      // The fields go as filters in the text, which the route parses again; they come after the query's own, so they win.
+      const f = q.filters;
+      const text = [typeof input.query === 'string' ? input.query.trim() : '', f.types ? `type:${f.types.join(',')}` : '', f.after ? `after:${f.after}` : '', f.before ? `before:${f.before}` : '', f.in ? `in:"${f.in}"` : '']
+        .filter(Boolean)
+        .join(' ');
+      const a = await call(docs, 'GET', `/api/search?q=${encodeURIComponent(text)}&limit=${contentSearchLimit(input)}&workspace=${encodeURIComponent(place.workspace)}`);
+      if (a.status !== 200) throw refused(a);
+      return contentSearchResult(a.data.hits as SearchHit[], (h) => `${origin}${addressOf({ organizationId: place.workspace, app: 'docs', kind: 'sheet', id: h.id }, h.kind) ?? h.url}`);
     }
     case 'find_files': {
       // The stored files of the chat's root (Docs' GET /api/files), most recent first, as runDocsTool answers.

@@ -152,3 +152,19 @@ describe('GET /api/search', () => {
     }
   });
 });
+
+describe('the search_content tool', () => {
+  it('answers hits with marked snippets, takes filters as fields, and says when nothing matched', async () => {
+    const { runServerTool } = await import('./agent/tools.ts');
+    await sheets.createDoc(annMine, 'Puffin survey', doc('Puffins nest on the cliffs.'));
+    const env = { userId: 'ann', viewer: ann, scope: annMine, sheets, context: { page: 'home' } } as never;
+    const found = JSON.parse(await runServerTool('search_content', { query: 'nesting' }, env));
+    expect(found.total).toBe(1);
+    expect(found.hits[0]).toMatchObject({ kind: 'doc', title: 'Puffin survey', snippet: 'Puffins «nest» on the cliffs.' });
+    expect(JSON.parse(await runServerTool('search_content', { query: 'nesting', type: 'sheet' }, env)).total).toBe(0);
+    expect(JSON.parse(await runServerTool('search_content', { query: 'nesting', after: '2999-01-01' }, env)).note).toMatch(/Nothing matched/);
+    await expect(runServerTool('search_content', { query: '  ' }, env)).rejects.toThrow(/Say what to look for/);
+    // Bob does not see Ann's private file.
+    expect(JSON.parse(await runServerTool('search_content', { query: 'puffin' }, { ...(env as object), userId: 'bob', viewer: bob, scope: { ...annMine, ownerId: 'bob' } } as never)).total).toBe(0);
+  });
+});
