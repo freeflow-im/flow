@@ -831,8 +831,10 @@ export function App() {
       tabMove={showTabs ? { tabs: accountTabs, current: category, onMove: moveToTab, onWhy: (t) => setToast(`${reasonText(t.categoryReason, t.category ?? 'primary')}.`) } : undefined}
       draggable={canDrag}
       sorting={!!listing.data?.pages[listing.data.pages.length - 1]?.sorting}
+      // Inside Home there is no suite bar, so no search there: the list shows its own field (home.md §2).
+      searchBar={inHome && !tiny}
       onSearch={
-        tiny
+        tiny || inHome
           ? (text) => {
               setSearchText(text);
               setQ(text);
