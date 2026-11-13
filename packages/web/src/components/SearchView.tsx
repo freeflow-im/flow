@@ -9,7 +9,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { ChannelDTO } from '@flow/shared';
 import { displayTime } from '../lib/format';
 import { dmTitle } from '../lib/channelTitle';
-import { setMessageSearch, useMessageSearch } from '../lib/messageSearch';
+import { setMessageSearch, setMessageSearchSort, useMessageSearch, useMessageSearchSort, type SearchSort } from '../lib/messageSearch';
 import { useBoundApi } from '../lib/useBoundApi';
 import { useAuth, useSelection } from '../state';
 import { useChannels, useMemberMap, useNameMap } from '../hooks';
@@ -30,7 +30,7 @@ export interface MessageHit {
   threadRootId: string | null;
 }
 
-export type SearchSort = 'relevance' | 'recent';
+export type { SearchSort };
 
 /** The snippet with its matched words marked; line breaks read as spaces in a one-line row. */
 export function Snippet({ text }: { text: string }) {
@@ -108,7 +108,8 @@ export default function SearchView() {
   const auth = useAuth();
   const query = useMessageSearch();
   const [draft, setDraft] = useState(query);
-  const [sort, setSort] = useState<SearchSort>('relevance');
+  // Kept beside the text (lib/messageSearch.ts), so Back from a result comes back to the same order.
+  const sort = useMessageSearchSort();
   useEffect(() => setDraft(query), [query]);
   const workspaceId = sel.workspaceId;
   const names = useNameMap(workspaceId);
@@ -152,7 +153,7 @@ export default function SearchView() {
         </form>
         <div className="flex shrink-0 overflow-hidden rounded-md border border-hairline text-xs" role="group" aria-label="Sort">
           {(['relevance', 'recent'] as const).map((s) => (
-            <button key={s} className={`px-2.5 py-1.5 ${sort === s ? 'bg-daypill font-semibold' : 'text-muted'}`} aria-pressed={sort === s} onClick={() => setSort(s)}>
+            <button key={s} className={`px-2.5 py-1.5 ${sort === s ? 'bg-daypill font-semibold' : 'text-muted'}`} aria-pressed={sort === s} onClick={() => setMessageSearchSort(s)}>
               {s === 'relevance' ? 'Best match' : 'Newest'}
             </button>
           ))}
