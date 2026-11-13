@@ -11,7 +11,7 @@ import { Fragment, lazy, Suspense, useEffect, useImperativeHandle, useRef, useSt
 import { attachmentUrl, type Address, type Category, type MailAccount, type MailFolder, type MessageDetail, type ThreadDetail, type ThreadMessage } from '../api';
 import { cidUrlOf, prefill, type AnswerMode, type ComposeRequest, type Outgoing } from '../lib/compose';
 import type { Notice } from '../lib/notice';
-import { displayName, formatAddress } from '../lib/addresses';
+import { displayName, formatAddress, shortName, uniqueAddresses } from '../lib/addresses';
 import { folderLabel, orderFolders } from '../lib/folders';
 import { fileSize, fullDate, listDate, relativeDate } from '../lib/format';
 import { intent } from '@flow/suite-bar/intents';
@@ -469,7 +469,10 @@ function ThreadMessageItem({ ref, accountId, me, message: m, open, last, focused
   const invite = m.bodyPending ? null : invitationPart(m);
   const fromMe = m.from?.address.toLowerCase() === me.toLowerCase();
   const name = fromMe ? 'me' : displayName(m.from);
-  const toLine = m.to.map((a) => (a.address.toLowerCase() === me.toLowerCase() ? 'me' : displayName(a))).join(', ');
+  // Everyone it went to (To, Cc, and a Bcc the account sent), each once, by first name.
+  const recipients = uniqueAddresses([...m.to, ...m.cc, ...m.bcc]);
+  const isMe = (a: { address: string }) => a.address.toLowerCase() === me.toLowerCase();
+  const toLine = recipients.map((a) => (isMe(a) ? 'me' : shortName(a))).join(', ');
   return (
     <article
       ref={ref}
@@ -539,12 +542,12 @@ function ThreadMessageItem({ ref, accountId, me, message: m, open, last, focused
           {open ? (
             <>
               {toLine && (
-                <div className="text-[14px] text-muted">
+                <div className="truncate text-[14px] text-muted" title={`to ${toLine}`}>
                   to{' '}
-                  {m.to.map((a, i) => (
+                  {recipients.map((a, i) => (
                     <span key={`${a.address}-${i}`}>
                       {i > 0 && ', '}
-                      <Person address={a}>{a.address.toLowerCase() === me.toLowerCase() ? 'me' : displayName(a)}</Person>
+                      <Person address={a}>{isMe(a) ? 'me' : shortName(a)}</Person>
                     </span>
                   ))}
                 </div>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatAddress, parseAddress, parseAddressList, uniqueAddresses } from './addresses';
+import { formatAddress, parseAddress, parseAddressList, shortName, uniqueAddresses } from './addresses';
 
 describe('address chips', () => {
   it('reads bare, named and quoted addresses', () => {
@@ -27,5 +27,15 @@ describe('address chips', () => {
 
   it('keeps each address once, ignoring case', () => {
     expect(uniqueAddresses([{ name: '', address: 'A@x.test' }, { name: 'A', address: 'a@x.test' }, { name: '', address: 'me@x.test' }], ['ME@x.test'])).toEqual([{ name: '', address: 'A@x.test' }]);
+  });
+});
+
+describe('shortName', () => {
+  it('names a recipient by first name, or by the address when there is no name', () => {
+    expect(shortName({ name: 'James Miller', address: 'james@x.com' })).toBe('James');
+    expect(shortName({ name: 'Miller, James', address: 'james@x.com' })).toBe('James');
+    expect(shortName({ name: '"Bree"', address: 'bree@x.com' })).toBe('Bree');
+    expect(shortName({ name: '', address: 'jabrams@turnriver.com' })).toBe('jabrams@turnriver.com');
+    expect(shortName({ name: 'jabrams@turnriver.com', address: 'jabrams@turnriver.com' })).toBe('jabrams@turnriver.com');
   });
 });
