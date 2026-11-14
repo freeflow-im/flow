@@ -3,18 +3,14 @@ import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { PendingWorkspaceInviteDTO, WorkspaceDTO } from '@flow/shared';
 import { api } from '../lib/api';
-import { ACTIVE_WS, useAuth, useRuntime, useSelection } from '../state';
+import { useAuth, useRuntime, useSelection } from '../state';
 import { useSelfRegisterDomain, useSwitcherEntries, useWorkspaceInvites, useWorkspaces } from '../hooks';
 import { openWorkspace, showsSource } from '../lib/workspaceSwitcher';
 import { EMPTY_SLUG_FIELD, slugEdited, slugForName } from '../lib/slugify';
 import { OpenInAppButton } from './OpenInApp';
 import { AuthImg } from './Avatar';
 import { openServerConnections } from './ServerConnections';
-import { APP_MANIFESTS, isInHome } from '@flow/suite-bar';
-import { isDesktop } from '../lib/host';
-
-/** Home's address, when the suite has it: where an organization just made, joined or chosen opens. */
-const HOME_PATH = APP_MANIFESTS.find((m) => m.name === 'home')?.path ?? null;
+import { openHome } from '../lib/openHome';
 
 export default function WorkspaceChooser() {
   const { api } = useBoundApi();
@@ -54,12 +50,9 @@ export default function WorkspaceChooser() {
   const runtime = useRuntime();
   const [opening, setOpening] = useState<string | null>(null);
   const enter = (id: string, name?: string) => {
-    // The desktop app serves only Chat (app://flow), which has no Home to go to.
-    if (!HOME_PATH || isDesktop()) return sel.selectWorkspace(id);
-    runtime.write(ACTIVE_WS, id);
+    // The desktop app serves only Chat (app://flow), which has no Home to go to: it opens here.
+    if (!openHome(runtime, id)) return sel.selectWorkspace(id);
     setOpening(name ?? '');
-    const target = isInHome() ? window.top : window;
-    target?.location.assign(`${HOME_PATH}/`);
   };
 
   const create = async () => {

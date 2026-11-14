@@ -6,7 +6,7 @@ import { useEffect, useState, type MouseEvent } from 'react';
 import type { SuiteMenuItem } from '@flow/suite-bar';
 import { useQuery } from '@tanstack/react-query';
 import type { WorkspaceMemberDTO } from '@flow/shared';
-import { adminAddress, chatPageAddress } from '@flow/shared/addresses';
+import { HOME_NOTICE_KEY, adminAddress, chatPageAddress } from '@flow/shared/addresses';
 import { homeApi } from './api';
 import { FilesCard, InboxCard, MentionsCard, TodayCard } from './components/Cards';
 import { HomeSuiteBar } from './components/HomeSuiteBar';
@@ -19,6 +19,17 @@ import { useOrganizations } from './hooks/organization';
 import { channelAddress, chatUnread, dmWith, greeting, sidebarChannels, summaryLine } from './lib/home';
 import { FRAMED_APPS, channelOf, type FramedApp } from './lib/views';
 import { readActiveOrganization, suite, writeActiveOrganization } from './suite';
+
+/** The line the page that sent the person here left for Home (a workspace joined at sign-in), taken once. */
+export function takeHomeNotice(): string | null {
+  try {
+    const notice = sessionStorage.getItem(HOME_NOTICE_KEY);
+    if (notice) sessionStorage.removeItem(HOME_NOTICE_KEY);
+    return notice || null;
+  } catch {
+    return null;
+  }
+}
 
 /** The clock the page reads, moved on every minute so the greeting and "today" follow the day. */
 function useNow(): Date {
@@ -43,6 +54,7 @@ export function App() {
   const today = useToday(orgId, setup.settingUp, now);
   const files = useRecentFiles(orgId);
   const frames = useFrames();
+  const [notice, setNotice] = useState(takeHomeNotice);
   const menus = useAppMenus(orgId, frames.refs.current, frames.follow);
 
   useEffect(() => {
@@ -151,6 +163,14 @@ export function App() {
                 </h1>
                 <p className="mt-1 text-sm text-muted">{summaryLine(now, { meetings: today.events?.filter((e) => !e.allDay).length ?? null, unread: mail.unread, mentions: unreadMentions })}</p>
               </header>
+              {notice && (
+                <div role="status" className="flex items-start gap-3 rounded-lg bg-primary-tint px-4 py-3 text-sm text-primary-deep" data-testid="home-notice">
+                  <span className="flex-1">{notice}</span>
+                  <button type="button" className="text-muted hover:text-ink" aria-label="Dismiss" onClick={() => setNotice(null)}>
+                    ✕
+                  </button>
+                </div>
+              )}
               {/* Below the sidebar's width, the apps as a row: the sidebar is hidden there. */}
               <nav aria-label="Apps" className="flex gap-2 overflow-x-auto md:hidden">
                 {appLinks({ mailUnread: mail.unread, chatUnread: chatCount, admin })
