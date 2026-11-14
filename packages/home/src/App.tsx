@@ -1,6 +1,7 @@
 // FreeFlow Home (docs/specs/home.md): the suite bar, a sidebar of the apps, channels and agents, and beside it either
 // Home's cards (what is new in each app) or the app opened from them, in a frame Home keeps (hooks/frames.ts). Home stays
-// on screen: a row in the sidebar or a card opens its app beside it. A guest uses Chat only (workspace-admin.md §6.5),
+// on screen: a row in the sidebar or a card opens its app beside it. Settings (the person's profile, notifications and
+// privacy) is Home's own page, which every app's account menu opens. A guest uses Chat only (workspace-admin.md §6.5),
 // so a guest is sent there.
 import { useEffect, useState, type MouseEvent } from 'react';
 import type { SuiteMenuItem } from '@flow/suite-bar';
@@ -10,6 +11,7 @@ import { adminAddress, chatPageAddress } from '@flow/shared/addresses';
 import { homeApi } from './api';
 import { FilesCard, InboxCard, MentionsCard, TodayCard } from './components/Cards';
 import { HomeSuiteBar } from './components/HomeSuiteBar';
+import { SettingsPage } from './components/SettingsPage';
 import { SuiteAssistant } from '@flow/suite-bar/assistant-chat';
 import { appLinks, Sidebar } from './components/Sidebar';
 import { useFrames } from './hooks/frames';
@@ -18,6 +20,7 @@ import { useAccountSetup, useChat, useInbox, useRecentFiles, useToday } from './
 import { useOrganizations } from './hooks/organization';
 import { channelAddress, chatUnread, dmWith, greeting, sidebarChannels, summaryLine } from './lib/home';
 import { FRAMED_APPS, channelOf, type FramedApp } from './lib/views';
+import { settingsAddress } from '@flow/suite-bar';
 import { readActiveOrganization, suite, writeActiveOrganization } from './suite';
 
 /** The clock the page reads, moved on every minute so the greeting and "today" follow the day. */
@@ -85,7 +88,7 @@ export function App() {
   };
   // An item of the open app's menu: the app switches to it in place; an app not loaded yet opens at the item's address.
   const onMenuItem = (item: SuiteMenuItem) => {
-    if (frames.view === 'home') return;
+    if (frames.view === 'home' || frames.view === 'settings') return;
     const app = frames.view as FramedApp;
     if (menus.select(app, item.id)) frames.show(app);
     else if (item.href) frames.open(item.href);
@@ -102,7 +105,7 @@ export function App() {
 
   return (
     <div className="flex h-full flex-col">
-      <HomeSuiteBar chatUnread={chatCount} mailUnread={mail.unread} onHome={() => frames.open('/home/')} />
+      <HomeSuiteBar chatUnread={chatCount} mailUnread={mail.unread} onHome={() => frames.open('/home/')} onSettings={(section) => frames.open(settingsAddress(section))} />
       {!organizations.ready ? (
         <div className="flex flex-1 items-center justify-center text-sm text-muted">Loading…</div>
       ) : !org ? (
@@ -186,6 +189,11 @@ export function App() {
               </div>
             </div>
           </main>
+          {frames.view === 'settings' && (
+            <main className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-8" data-testid="home-settings-main">
+              <SettingsPage user={me.data ?? null} section={frames.settings} address={org.address ?? null} />
+            </main>
+          )}
           {/* The person's assistant on Home's own page (agents.md §1.1); an app open here shows its own. A guest has none. */}
           {frames.view === 'home' && !setup.guest && <SuiteAssistant organizationId={orgId} page="home" />}
         </div>

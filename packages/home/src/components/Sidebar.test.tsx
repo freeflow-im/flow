@@ -58,6 +58,19 @@ describe('the Mail row picker', () => {
   });
 });
 
+describe('the Settings row', () => {
+  it('opens Home’s Settings page, and is marked while it shows', () => {
+    draw(undefined);
+    expect(screen.getByTestId('home-app-settings').getAttribute('href')).toBe('/home/settings');
+    expect(screen.getByTestId('home-app-settings').getAttribute('aria-current')).toBeNull();
+    cleanup();
+    render(
+      <Sidebar apps={appLinks({ mailUnread: 0, chatUnread: 0, admin: false })} active="settings" activeChannel={null} channels={[]} agents={[]} onOpenAgent={() => {}} addAgentHref={null} menus={{}} onMenuItem={() => {}} onPickerItem={() => {}} />,
+    );
+    expect(screen.getByTestId('home-app-settings').getAttribute('aria-current')).toBe('page');
+  });
+});
+
 describe('the sections', () => {
   it('lists Agents before Channels', () => {
     draw(undefined);

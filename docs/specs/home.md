@@ -62,6 +62,22 @@ in the app itself.
 | Admin | its sections |
 | Chat | none: Home's sidebar already lists the channels and agents |
 
+### 2.2 Settings (2026-11-14)
+
+The person's own profile and settings are Home's page, not a dialog in Chat. `/home/settings` is the profile (picture,
+name, the caller's address, title, timezone, website, bio) and `/home/settings/notifications` the notification prefs,
+privacy mode and Delete account. Both are tabs of one page, with a Settings row in Home's sidebar.
+
+- Every app's account menu opens it (`intent.settings(section)` in `@flow/suite-bar`): "My profile" at the profile,
+  "Settings" at the notifications. Inside Home's frame the intent asks Home (`flow:open`) instead of loading Home in the
+  frame. Mail, Calendar and Docs keep their own Settings row (their accounts, Docs' settings); only "My profile" moves
+  there. The organization's settings stay Admin's.
+- The form is one component, `@flow/suite-bar/account-settings`. Home saves it with the session cookie. Chat's dialog
+  draws the same form through its connection where Home can't be reached: the desktop shell, or an organization on
+  another server. `/chat/?open=profile`, from older links, goes to Home's page.
+- Everything is saved by `PATCH /v1/me` and `POST /v1/me/avatar`, as before. An open Chat hears `user.updated` and reads
+  `/v1/me` again, so the prefs its banners read are the saved ones without a reload.
+
 - `packages/home`, a Vite client on the Admin pattern (`packages/admin`): no Durable Object and no routes of its own.
   It reads the other apps' APIs on the same origin with the session cookie: `/v1/mail/*`, `/v1/calendar/events`,
   `/api/recents`, `/v1/workspaces/:id/channels|members`, `/v1/me/notifications`, `/v1/me/accounts`.

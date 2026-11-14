@@ -3,12 +3,15 @@
 // loaded shows it as it is when the address is the app's front page; Chat is asked to open the rest in place (it reads
 // `open=` links sent to it); the other apps load the address.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { homeAddress, isFrontPage, openedIn, viewOf, type FramedApp, type View } from '../lib/views';
+import { settingsSectionOf, type SettingsSection } from '@flow/suite-bar';
+import { addressShown, homeAddress, isFrontPage, viewOf, type FramedApp, type View } from '../lib/views';
 
 export interface FrameState {
   /** Each loaded app's address, and a number that changes when it must load again (the same address asked for twice). */
   frames: Partial<Record<FramedApp, { src: string; load: number }>>;
   view: View;
+  /** The Settings page's section, while it shows (and where it goes back to). */
+  settings: SettingsSection;
   /** The last address opened in each app (for the sidebar's selection). */
   last: Partial<Record<FramedApp, string>>;
 }
@@ -17,9 +20,10 @@ export function useFrames() {
   const origin = window.location.origin;
   const refs = useRef<Partial<Record<FramedApp, HTMLIFrameElement | null>>>({});
   const [state, setState] = useState<FrameState>(() => {
-    const href = openedIn(window.location.search);
-    const view = href ? viewOf(href, origin) : 'home';
-    return view && view !== 'home' && href ? { frames: { [view]: { src: href, load: 0 } }, view, last: { [view]: href } } : { frames: {}, view: 'home', last: {} };
+    const href = addressShown(window.location);
+    const view = viewOf(href, origin);
+    if (view === 'settings') return { frames: {}, view, settings: settingsSectionOf(window.location.pathname) ?? 'profile', last: {} };
+    return view && view !== 'home' ? { frames: { [view]: { src: href, load: 0 } }, view, settings: 'profile', last: { [view]: href } } : { frames: {}, view: 'home', settings: 'profile', last: {} };
   });
 
   const current = useRef(state);
@@ -32,7 +36,8 @@ export function useFrames() {
       if (!view) return false;
       const s = current.current;
       let next: FrameState = { ...s, view };
-      if (view !== 'home') {
+      if (view === 'settings') next = { ...s, view, settings: settingsSectionOf(new URL(href, origin).pathname) ?? 'profile' };
+      else if (view !== 'home') {
         const loaded = s.frames[view];
         let frames = s.frames;
         if (!loaded) frames = { ...s.frames, [view]: { src: href, load: 0 } };
@@ -40,12 +45,12 @@ export function useFrames() {
           if (view === 'chat') refs.current.chat?.contentWindow?.postMessage({ type: 'flow:open', href }, origin);
           else frames = { ...s.frames, [view]: { src: href, load: loaded.load + 1 } };
         }
-        next = { frames, view, last: { ...s.last, [view]: href } };
+        next = { ...s, frames, view, last: { ...s.last, [view]: href } };
       }
       current.current = next;
       setState(next);
       if (how.push) {
-        const address = homeAddress(view === 'home' ? null : href);
+        const address = view === 'settings' ? new URL(href, origin).pathname : homeAddress(view === 'home' ? null : href);
         if (address !== window.location.pathname + window.location.search) window.history.pushState(null, '', address);
       }
       return true;
@@ -71,7 +76,7 @@ export function useFrames() {
 
   // Back and Forward: what Home's address names now.
   useEffect(() => {
-    const onPop = () => void open(openedIn(window.location.search) ?? '/home/', { push: false });
+    const onPop = () => void open(addressShown(window.location), { push: false });
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, [open]);

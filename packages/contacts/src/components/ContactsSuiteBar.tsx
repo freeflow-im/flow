@@ -1,6 +1,7 @@
 // The suite bar on Contacts (packages/suite-bar), as Mail's MailSuiteBar draws it: the organization switcher, the apps with
 // Contacts active (from the manifests), the search (which filters the list), notifications and the account menu. What
-// belongs to Chat (organizations, invitations, notifications, the profile) opens Chat at `/chat/?open=…`.
+// belongs to Chat (organizations, invitations, notifications) opens Chat at `/chat/?open=…`; My profile and Settings open
+// Home's Settings page.
 import { useCallback, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { APP_MANIFESTS, AWAY_STATUS, guestTabs, intent, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type ChatPage, type StatusOption } from '@flow/suite-bar';
@@ -61,9 +62,9 @@ export function ContactsSuiteBar({ search, guest = false }: { search: { value: s
             setStatusError(null);
             setStatusOpen(true);
           },
-          onProfile: () => toChat('profile'),
-          // Contacts has no settings of its own: the person's, in Chat.
-          onSettings: () => toChat('profile'),
+          onProfile: () => intent.settings('profile'),
+          // Contacts has no settings of its own: the person's, on Home's Settings page.
+          onSettings: () => intent.settings('notifications'),
           onLogout: () => void suite.logout().finally(() => window.location.assign('/')),
         }}
       />

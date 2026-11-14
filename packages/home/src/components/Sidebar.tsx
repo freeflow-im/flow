@@ -1,10 +1,10 @@
-// Home's left column: the apps, then the person's channels, then the organization's agents. Every row is a link to the
+// Home's left column: the apps and Settings, then the person's channels, then the organization's agents. Every row is a link to the
 // page its own app shows (a channel or an agent's DM opens in Chat), so a click lands where the app would put you.
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { Check, ChevronDown } from 'lucide-react';
 import type { ChannelDTO, WorkspaceMemberDTO } from '@flow/shared';
 import type { SuiteMenuItem, SuiteMenuPicker } from '@flow/suite-bar';
-import { adminAddress } from '@flow/shared/addresses';
+import { adminAddress, settingsAddress } from '@flow/shared/addresses';
 import { channelAddress, SIDEBAR_CHANNELS } from '../lib/home';
 import { AppMenu, Collapse } from './AppMenu';
 
@@ -25,6 +25,8 @@ export function appLinks(opts: { mailUnread: number; chatUnread: number; admin: 
     { id: 'docs', label: 'Docs', href: '/docs/' },
     { id: 'chat', label: 'Chat', href: '/chat/', count: opts.chatUnread, pill: true },
     ...(opts.admin ? [{ id: 'admin', label: 'Admin', href: adminAddress() }] : []),
+    // The person's own profile and settings (Home's page); the organization's are Admin's.
+    { id: 'settings', label: 'Settings', href: settingsAddress() },
   ];
 }
 

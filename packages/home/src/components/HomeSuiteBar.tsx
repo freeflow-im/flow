@@ -1,16 +1,17 @@
 // The suite bar on Home (packages/suite-bar), as Admin's draws it: the organization switcher, the apps (Home's tab
 // active, with Chat's and Mail's numbers as Home counts them), notifications and the account menu. What belongs to Chat
-// (adding an organization, invitations, notifications, the profile) opens Chat at `/chat/?open=…`.
+// (adding an organization, invitations, notifications) opens Chat at `/chat/?open=…`; My profile and Settings open Home's
+// own Settings page, in place.
 import { useCallback, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { APP_MANIFESTS, AWAY_STATUS, intent, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type ChatPage, type StatusOption } from '@flow/suite-bar';
+import { APP_MANIFESTS, AWAY_STATUS, intent, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type ChatPage, type SettingsSection, type StatusOption } from '@flow/suite-bar';
 import { chooseOrganization, useOrganizations } from '../hooks/organization';
 import { suite, type SuiteUser } from '../suite';
 
 const REFRESH_MS = 60_000;
 const toChat = (page: ChatPage) => intent.open(page);
 
-export function HomeSuiteBar({ chatUnread, mailUnread, onHome }: { chatUnread: number; mailUnread: number; onHome: () => void }) {
+export function HomeSuiteBar({ chatUnread, mailUnread, onHome, onSettings }: { chatUnread: number; mailUnread: number; onHome: () => void; onSettings: (section: SettingsSection) => void }) {
   const me = useQuery({ queryKey: ['suite', 'me'], queryFn: suite.me, refetchInterval: REFRESH_MS });
   const { list, active } = useOrganizations();
   const [user, setUser] = useState<SuiteUser | null>(null);
@@ -59,9 +60,8 @@ export function HomeSuiteBar({ chatUnread, mailUnread, onHome }: { chatUnread: n
             setStatusError(null);
             setStatusOpen(true);
           },
-          onProfile: () => toChat('profile'),
-
-          onSettings: () => toChat('profile'),
+          onProfile: () => onSettings('profile'),
+          onSettings: () => onSettings('notifications'),
           onLogout: () => void suite.logout().finally(() => window.location.assign('/')),
         }}
       />

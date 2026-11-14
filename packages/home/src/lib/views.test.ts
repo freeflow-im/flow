@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { channelOf, homeAddress, isFrontPage, openedIn, viewOf } from './views';
+import { addressShown, channelOf, homeAddress, isFrontPage, openedIn, viewOf } from './views';
 
 const O = 'https://app.freeflow.im';
 
@@ -27,6 +27,14 @@ describe('views', () => {
     expect(openedIn(new URL(homeAddress(href), O).search)).toBe(href);
     expect(openedIn('?open=//evil.example/x')).toBeNull();
     expect(openedIn('')).toBeNull();
+  });
+
+  it('shows its Settings page at its own address', () => {
+    expect(viewOf('/home/settings', O)).toBe('settings');
+    expect(viewOf('/home/settings/notifications', O)).toBe('settings');
+    expect(addressShown({ pathname: '/home/settings/notifications', search: '' })).toBe('/home/settings/notifications');
+    expect(addressShown({ pathname: '/home/', search: '?open=%2Fmail%2F' })).toBe('/mail/');
+    expect(addressShown({ pathname: '/home/', search: '' })).toBe('/home/');
   });
 
   it('finds the channel a Chat address opens', () => {

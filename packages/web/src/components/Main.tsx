@@ -14,6 +14,7 @@ import type {
   NotificationDTO,
   TypingData,
   PresenceData,
+  UserDTO,
   WorkspaceMemberDTO,
 } from '@flow/shared';
 import { applyMessageEvent, removeMessageFromCache } from '../lib/messageCache';
@@ -455,10 +456,17 @@ export default function Main({ onActivityUnread }: { onActivityUnread?: (count: 
         void qc.invalidateQueries({ queryKey: ['members', event.workspaceId] });
         void qc.invalidateQueries({ queryKey: ['workspaces'] });
         break;
-      case 'user.updated':
+      case 'user.updated': {
         void qc.invalidateQueries({ queryKey: ['members'] });
         void qc.invalidateQueries({ queryKey: ['me'] });
+        // Our own profile or settings changed elsewhere (Home's Settings page, another tab): read /v1/me again, since
+        // the event's copy is redacted, so the notification prefs and privacy mode banners read are the saved ones.
+        const changed = event.data as { id?: string } | undefined;
+        if (changed?.id === authRef.current.user.id) {
+          void api<UserDTO>('GET', '/v1/me').then((me) => { if (me.id === authRef.current.user.id) authRef.current.setUser(me); }, () => {});
+        }
         break;
+      }
       case 'workspace.joined':
         // this user joined a workspace in another session/tab — refresh the list
         void qc.invalidateQueries({ queryKey: ['workspaces'] });
