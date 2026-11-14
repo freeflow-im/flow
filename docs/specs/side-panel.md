@@ -55,7 +55,7 @@ A new app becomes pluggable by adding `panel`. Where it appears is decided by ad
 
 ## 5. What each tab shows
 
-- **An app's panel is a frame of that app's panel page:** `/calendar/panel` (an agenda for the day or week),
+- **An app's panel is a frame of that app's panel page:** `/calendar/panel` (Day: Calendar's time grid; Week: a list of the seven days with their events),
   `/docs/panel` (recent files and search). Same model as Home's frames: the apps stay separate bundles, each panel uses
   its own app's data and live updates, and a hidden tab's frame is kept so switching back is instant.
 - **The assistant tab is the host app's own assistant panel, not a frame**, because each app's assistant has that
