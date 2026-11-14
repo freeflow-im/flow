@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { APP_MANIFESTS } from './manifests.js';
+import { APP_MANIFESTS, sidePanelsOf } from './manifests.js';
 import { APP_SCOPES } from './platform.js';
 
 const unique = (xs: string[]) => new Set(xs).size === xs.length;
@@ -67,5 +67,17 @@ describe('APP_MANIFESTS', () => {
     const send = groups.find((g) => g.id === 'send');
     expect(send?.checkedByDefault).toBe(false);
     expect(send?.warning).toBeTruthy();
+  });
+
+  it('names only apps with a panel in a side panel, each panel under its own app\'s path (docs/specs/side-panel.md)', () => {
+    for (const m of APP_MANIFESTS) {
+      if (m.panel) expect(m.panel.path.startsWith(`${m.path}/`)).toBe(true);
+      for (const name of m.sidePanels ?? []) {
+        expect(name).not.toBe(m.name);
+        expect(APP_MANIFESTS.find((x) => x.name === name)?.panel).toBeTruthy();
+      }
+    }
+    expect(sidePanelsOf('mail').map((p) => p.app)).toEqual(['calendar', 'docs']);
+    expect(sidePanelsOf('chat')).toEqual([]);
   });
 });

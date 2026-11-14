@@ -358,6 +358,17 @@ export interface AppPage {
   passFiles?: boolean;
 }
 
+/**
+ * An app shown as a tab of another app's side panel (docs/specs/side-panel.md §4): its page, loaded in a frame there.
+ * `icon` names the glyph the panel draws (the suite's fixed set).
+ */
+export interface AppPanel {
+  label: string;
+  icon: 'calendar' | 'docs';
+  /** Its page, under the app's own path: a page made to be narrow, with no suite bar. */
+  path: string;
+}
+
 /** One declaration per app, read by the shell, the registry and the consent
  * page (§6.1). `events` lists the types it publishes into the organization's log. */
 export interface AppManifest {
@@ -393,5 +404,9 @@ export interface AppManifest {
   /** The Vite build folder (from the repository's root) and the path it is served under. `optional`: a deploy may lack it. */
   client?: { dist: string; basePath: string; optional?: boolean };
   pages?: AppPage[];
+  /** It can be shown in another app's side panel (docs/specs/side-panel.md §4). */
+  panel?: AppPanel;
+  /** The apps whose panels it shows in its side panel, in order: their names, each with a `panel`. */
+  sidePanels?: string[];
   events: string[];
 }

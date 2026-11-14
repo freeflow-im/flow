@@ -6,6 +6,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { isInHome, useHomeMenu } from '@flow/suite-bar';
 import { AssistantDock, useAssistantDockState, useMyAssistant, useNewChatOnClose } from '@flow/suite-bar/assistant-dock';
+import { SidePanel, sidePanelsOf } from '@flow/suite-bar/side-panel';
 import { MailApiError, mailApi, setMailWorkspace, type Category, type MailAccount, type MessageDetail, type ThreadSummary, type TabStatus } from './api';
 import { AccountSettingsDialog, AddAccountDialog } from './components/AccountForms';
 import { ConnectMail } from './components/ConnectMail';
@@ -56,6 +57,9 @@ function storedAccount(): string | null {
 type Toast = Notice;
 
 type Dialog = { kind: 'add' } | { kind: 'settings'; accountId: string | null; focusPassword?: boolean } | null;
+
+/** The apps Mail's side panel shows (its manifest's `sidePanels`). */
+const SIDE_PANELS = sidePanelsOf('mail');
 
 export function App() {
   const qc = useQueryClient();
@@ -987,6 +991,8 @@ export function App() {
             </>
           )}
         </div>
+        {/* Calendar and Docs beside the mail (docs/specs/side-panel.md); none on a phone-sized screen. */}
+        {!tiny && <SidePanel host="mail" panels={SIDE_PANELS} overlay={assistantOverlay} />}
         <AssistantDock state={assistantDock} label={myAssistant?.displayName} avatarUrl={myAssistant?.avatarUrl ?? null}>
           {assistantDocked && !assistantOverlay && <ResizeHandle label="Resize the assistant" {...assistantPane.handleProps} />}
           <Suspense fallback={null}>
