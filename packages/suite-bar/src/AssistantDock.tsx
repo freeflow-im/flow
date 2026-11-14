@@ -101,6 +101,14 @@ const DockCtx = createContext<AssistantDockState>(ALONE);
 /** The dock the panel is in: its placement, and the way to change it. */
 export const useAssistantDock = () => useContext(DockCtx);
 
+/**
+ * An anchored panel drawn outside the dock (a tab of the app's side panel, SidePanel.tsx): its header buttons and
+ * idle timer still read and change the dock's state.
+ */
+export function AssistantDockScope({ state, children }: { state: AssistantDockState; children: ReactNode }) {
+  return <DockCtx.Provider value={state}>{children}</DockCtx.Provider>;
+}
+
 export interface AssistantDockProps {
   state: AssistantDockState;
   /** The pill's text: the person's assistant's name (useMyAssistant), else "AI Help". */

@@ -3,7 +3,7 @@
 // the other app's panel page in a frame, made the first time the tab shows and kept, hidden, while another shows. The
 // host app draws it in its own layout (so it is the same in Home and in the app's tab); which panels a host shows is
 // its manifest's `sidePanels` (@flow/shared/manifests' sidePanelsOf).
-import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import type { SidePanelEntry } from '@flow/shared/manifests';
 export { sidePanelsOf, type SidePanelEntry } from '@flow/shared/manifests';
 import { isInHome, isOpenMessage, openInHome } from './lib/embed';
@@ -49,19 +49,36 @@ function follow(href: string): void {
   else window.location.assign(href);
 }
 
+/**
+ * The host's own assistant as the last tab (side-panel.md §5), while it is anchored: the app's panel itself, not a frame,
+ * kept mounted once shown. `open` is the app's: its suite bar button and shortcut show the tab, and closing the side
+ * panel (or the assistant's own Close) closes it. Another tab over it leaves it open, hidden.
+ */
+export interface SidePanelAssistant {
+  label: string;
+  avatarUrl?: string | null;
+  content: ReactNode;
+  open: boolean;
+  setOpen(open: boolean): void;
+}
+
+/** The assistant tab's id among the panels' (an app is never named this). */
+export const ASSISTANT_TAB = 'assistant';
+
 export interface SidePanelProps {
   /** The host app's name: where its state is kept, and what its panels' pages are told (`?host=`). */
   host: string;
   panels: SidePanelEntry[];
   /** Over the page instead of beside it (a narrow window). */
   overlay?: boolean;
+  assistant?: SidePanelAssistant;
 }
 
 /**
  * The side panel, or its pill while closed. Goes in the host's row, right of its main area, inside a
  * `position: relative` element; it takes no width while closed.
  */
-export function SidePanel({ host, panels, overlay = false }: SidePanelProps) {
+export function SidePanel({ host, panels, overlay = false, assistant }: SidePanelProps) {
   const [state, setState] = useState<SidePanelState>(() => readSidePanelState(host));
   const update = useCallback(
     (next: Partial<SidePanelState>) =>
@@ -72,12 +89,24 @@ export function SidePanel({ host, panels, overlay = false }: SidePanelProps) {
       }),
     [host],
   );
-  const active = panels.find((p) => p.app === state.tab) ?? panels[0] ?? null;
+  const tabs = assistant ? [...panels.map((p) => p.app), ASSISTANT_TAB] : panels.map((p) => p.app);
+  const active = tabs.find((t) => t === state.tab) ?? tabs[0] ?? null;
   // The tabs shown so far: their frames stay, so going back to one is instant and it is where it was left.
-  const [made, setMade] = useState<string[]>(() => (state.open && active ? [active.app] : []));
+  const [made, setMade] = useState<string[]>(() => (state.open && active ? [active] : []));
   useEffect(() => {
-    if (state.open && active && !made.includes(active.app)) setMade((m) => [...m, active.app]);
+    if (state.open && active && !made.includes(active)) setMade((m) => [...m, active]);
   }, [state.open, active, made]);
+
+  // The app opens or closes its assistant (its suite bar button, its shortcut, the assistant's own Close): the panel
+  // shows its tab, or closes when that tab is the one showing.
+  const assistantOpen = assistant?.open;
+  const shown = useRef({ open: state.open, active });
+  shown.current = { open: state.open, active };
+  useEffect(() => {
+    if (assistantOpen === undefined) return;
+    if (assistantOpen) update({ open: true, tab: ASSISTANT_TAB });
+    else if (shown.current.open && shown.current.active === ASSISTANT_TAB) update({ open: false });
+  }, [assistantOpen, update]);
 
   // A panel's page asks to open an address (an event, a file): only from this panel's own frames.
   const frames = useRef<Record<string, HTMLIFrameElement | null>>({});
@@ -114,8 +143,16 @@ export function SidePanel({ host, panels, overlay = false }: SidePanelProps) {
     },
   };
 
-  if (!panels.length) return null;
-  const open = (app: string) => update({ open: true, tab: app });
+  if (!tabs.length) return null;
+  const open = (tab: string) => {
+    update({ open: true, tab });
+    if (tab === ASSISTANT_TAB && !assistant?.open) assistant?.setOpen(true);
+  };
+  const close = () => {
+    update({ open: false });
+    if (assistant?.open) assistant.setOpen(false);
+  };
+  const assistantLabel = assistant?.label.trim() || 'Assistant';
 
   return (
     <div className={`side-panel-slot${state.open ? ' open' : ''}${overlay ? ' overlay' : ''}`} data-testid="side-panel">
@@ -126,6 +163,11 @@ export function SidePanel({ host, panels, overlay = false }: SidePanelProps) {
               <PanelIcon icon={p.icon} />
             </button>
           ))}
+          {assistant && (
+            <button type="button" className="side-panel-pill-btn" onClick={() => open(ASSISTANT_TAB)} aria-label={`Show ${assistantLabel}`} title={assistantLabel}>
+              <AssistantIcon avatarUrl={assistant.avatarUrl ?? null} />
+            </button>
+          )}
         </div>
       ) : (
         <aside className="side-panel" style={{ width: state.width }} aria-label="Side panel">
@@ -133,13 +175,19 @@ export function SidePanel({ host, panels, overlay = false }: SidePanelProps) {
           <div className="side-panel-head">
             <div role="tablist" aria-label="Side panel" className="side-panel-tabs">
               {panels.map((p) => (
-                <button key={p.app} type="button" role="tab" aria-selected={p.app === active?.app} className="side-panel-tab" onClick={() => open(p.app)}>
+                <button key={p.app} type="button" role="tab" aria-selected={p.app === active} className="side-panel-tab" onClick={() => open(p.app)}>
                   <PanelIcon icon={p.icon} />
                   <span>{p.label}</span>
                 </button>
               ))}
+              {assistant && (
+                <button type="button" role="tab" aria-selected={active === ASSISTANT_TAB} className="side-panel-tab" onClick={() => open(ASSISTANT_TAB)}>
+                  <AssistantIcon avatarUrl={assistant.avatarUrl ?? null} />
+                  <span className="side-panel-tab-label">{assistantLabel}</span>
+                </button>
+              )}
             </div>
-            <button type="button" className="side-panel-close" onClick={() => update({ open: false })} aria-label="Close the side panel" title="Close">
+            <button type="button" className="side-panel-close" onClick={close} aria-label="Close the side panel" title="Close">
               <CloseIcon />
             </button>
           </div>
@@ -155,9 +203,14 @@ export function SidePanel({ host, panels, overlay = false }: SidePanelProps) {
                   title={p.label}
                   src={`${p.path}?host=${encodeURIComponent(host)}`}
                   className="side-panel-frame"
-                  hidden={p.app !== active?.app}
+                  hidden={p.app !== active}
                 />
               ))}
+            {assistant && made.includes(ASSISTANT_TAB) && (
+              <div className="side-panel-assistant" hidden={active !== ASSISTANT_TAB}>
+                {assistant.content}
+              </div>
+            )}
           </div>
         </aside>
       )}
@@ -175,6 +228,16 @@ function PanelIcon({ icon }: { icon: SidePanelEntry['icon'] }) {
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
       <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
       <path d="M14 3v5h5M9 13h6M9 17h6" />
+    </svg>
+  );
+}
+
+function AssistantIcon({ avatarUrl }: { avatarUrl: string | null }) {
+  return avatarUrl ? (
+    <img className="side-panel-avatar" src={avatarUrl} alt="" />
+  ) : (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <path d="M12 2.5l1.9 5.6 5.6 1.9-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.9zM18.5 15l.9 2.6 2.6.9-2.6.9-.9 2.6-.9-2.6-2.6-.9 2.6-.9z" />
     </svg>
   );
 }
