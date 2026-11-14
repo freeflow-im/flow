@@ -1010,11 +1010,10 @@ export function App() {
               <div className="min-w-0 flex-1">{view}</div>
             </>
           )}
-          {(!assistantDocked || tiny) && (
-            <AssistantDock state={assistantDock} label={myAssistant?.displayName} avatarUrl={myAssistant?.avatarUrl ?? null}>
-              {assistantPanel(false)}
-            </AssistantDock>
-          )}
+          {/* The launcher pill is always here; anchored (beside a phone-sized screen), the panel is the side panel's tab. */}
+          <AssistantDock state={assistantDock} label={myAssistant?.displayName} avatarUrl={myAssistant?.avatarUrl ?? null}>
+            {(!assistantDocked || tiny) && assistantPanel(false)}
+          </AssistantDock>
         </div>
         {/* Calendar and Docs beside the mail, and the assistant once anchored (docs/specs/side-panel.md); none on a
             phone-sized screen, where the anchored assistant covers the mail as before. */}
