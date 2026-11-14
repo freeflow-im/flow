@@ -795,7 +795,7 @@ export class Org extends DurableObject<OrgEnv> {
   /**
    * Index the messages the search index lacks or has an older copy of (services/search.ts), 200 at a time, letting other
    * requests in between batches, until none is left. One pass runs at a time; asked again while it runs, it looks once
-   * more before it ends. If the object stops partway, the next start or search goes on from where it was.
+   * more before it ends. It starts with the object and at every search, so a pass that stopped is picked up again.
    */
   indexMessages(): Promise<void> {
     if (this.messageIndexing) {
@@ -1038,6 +1038,8 @@ export class Org extends DurableObject<OrgEnv> {
     if (request.method === 'GET' && url.searchParams.get('all') === '1' && url.pathname.endsWith('/members')) {
       await this.adoptAccounts(false).catch((err) => console.error(`personal agents: ${(err as Error).message}`));
     }
+    // A message search: any message the index still lacks is indexed in the background (a pass that stopped is picked up).
+    if (request.method === 'GET' && /^\/v1\/workspaces\/[^/]+\/search$/.test(url.pathname)) void this.indexMessages();
     const run = () => this.scoped(async () => {
       if (caller.user) this.ensureUser(caller.user);
       return app.handle(request, caller);
