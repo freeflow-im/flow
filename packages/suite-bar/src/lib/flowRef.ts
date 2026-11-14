@@ -34,9 +34,30 @@ const isRef = (v: unknown): v is FlowRef => {
 /** A drag a panel said it started (its `flow:drag` message), until it ends. */
 let relayed: FlowRef | null = null;
 
+/** The window event when a panel's drag ends: a drag from another frame sends this document no dragend of its own. */
+export const FLOW_DRAG_END = 'flow:dragend';
+
 /** The host: a panel's drag started (its reference) or ended (null). */
 export function noteRelayedDrag(ref: unknown): void {
   relayed = isRef(ref) ? ref : null;
+  if (!relayed) window.dispatchEvent(new Event(FLOW_DRAG_END));
+}
+
+/**
+ * Calls `end` when the drag in progress is over, however it ends: a drop anywhere in the page (seen first, before an
+ * editor or any other target takes it), a drag of this page's own ending, or a panel's drag ending. Returns the stop.
+ * A drop target's highlight uses it, since the drop may land on a child that keeps the event to itself.
+ */
+export function whenDragEnds(end: () => void): () => void {
+  const opts = { capture: true } as const;
+  window.addEventListener('drop', end, opts);
+  window.addEventListener('dragend', end, opts);
+  window.addEventListener(FLOW_DRAG_END, end);
+  return () => {
+    window.removeEventListener('drop', end, opts);
+    window.removeEventListener('dragend', end, opts);
+    window.removeEventListener(FLOW_DRAG_END, end);
+  };
 }
 
 /** Starts a drag of a reference: its data, the address as a link for anything else it is dropped on, and the host told. */

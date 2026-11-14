@@ -10,7 +10,7 @@ import { AttachmentChips, CHIPS_PAPERCLIP } from './AttachmentChips';
 import { AttachmentPreview } from './AttachmentPreview';
 import { displayName } from '../lib/addresses';
 import { startDrag } from '../lib/dnd';
-import { hasFlowRef, readFlowRef } from '@flow/suite-bar';
+import { hasFlowRef, readFlowRef, whenDragEnds } from '@flow/suite-bar';
 import { docsFileOfRef } from '../lib/docsLink';
 import type { DocsFile } from '../lib/docsFiles';
 import { folderLabel, orderFolders } from '../lib/folders';
@@ -161,6 +161,7 @@ export function MessageList(p: MessageListProps) {
   /** A row's drag: its thread's messages, or every checked row's when it is checked. */
   // A Docs file from the side panel dropped on a row: a reply to that conversation (the row is outlined while over it).
   const [docsOver, setDocsOver] = useState<string | null>(null);
+  useEffect(() => (docsOver ? whenDragEnds(() => setDocsOver(null)) : undefined), [docsOver]);
   const dropDocs = (t: ThreadSummary) =>
     p.onDropDocs
       ? {

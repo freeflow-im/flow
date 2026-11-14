@@ -109,4 +109,27 @@ describe('Compose (the dialog)', () => {
     expect(sent[0]!.request.docs).toEqual(docs);
     vi.unstubAllGlobals();
   });
+
+  it('takes a Docs file dropped on the editor as a chip, not as its address typed into the body', async () => {
+    vi.stubGlobal('fetch', async () => new Response(new Blob(['x'])));
+    const request: ComposeRequest = { mode: 'new', draft: { to: [], cc: [], bcc: [], subject: '', html: '<p>Hi</p>' } };
+    await act(() => root.render(createElement(Compose, { account, request, narrow: false, onClose: () => {}, onSend: () => {} })));
+    const ref = { app: 'docs', kind: 'deck', id: 'd1', name: 'Pitch', folder: '', shared: false };
+    const data: Record<string, string> = { 'application/x-flow-ref+json': JSON.stringify(ref), 'text/plain': 'http://x/docs/d/d1' };
+    const dataTransfer = { types: Object.keys(data), files: [], getData: (t: string) => data[t] ?? '', dropEffect: 'none' };
+    const fire = (type: string) => {
+      const e = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(e, 'dataTransfer', { value: dataTransfer });
+      document.querySelector('.ProseMirror')!.dispatchEvent(e);
+      return e;
+    };
+    await act(async () => {
+      expect(fire('dragover').defaultPrevented).toBe(true);
+      expect(fire('drop').defaultPrevented).toBe(true);
+    });
+    expect(document.querySelector('.ProseMirror')!.textContent).toBe('Hi');
+    expect(document.body.textContent).toContain('Pitch.pptx');
+    expect(document.body.textContent).not.toContain('Drop to add to the message');
+    vi.unstubAllGlobals();
+  });
 });

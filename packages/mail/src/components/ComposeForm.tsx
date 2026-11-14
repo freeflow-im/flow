@@ -7,7 +7,7 @@
 // to open it again if that fails. Closing with something written asks first.
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, type ReactNode, type Ref } from 'react';
 import { ChevronDown, FileText, Forward, Link2, Loader2, Paperclip, Reply, ReplyAll, Send, Trash2, Upload, X } from 'lucide-react';
-import { hasFlowRef, readFlowRef } from '@flow/suite-bar';
+import { hasFlowRef, readFlowRef, whenDragEnds } from '@flow/suite-bar';
 import { attachmentUrl, mailApi, MAX_SEND_BYTES, type Address, type MailAccount } from '../api';
 import { parseAddressList } from '../lib/addresses';
 import { isDraftEmpty, type AnswerMode, type ComposeDraft, type ComposeMode, type ComposeRequest, type Outgoing } from '../lib/compose';
@@ -94,6 +94,7 @@ export function ComposeForm({ account, request, variant, handle, onClose, onSend
   const [dragging, setDragging] = useState(false);
   const [picking, setPicking] = useState(false);
   const [sharing, setSharing] = useState(false);
+  useEffect(() => (dragging ? whenDragEnds(() => setDragging(false)) : undefined), [dragging]);
   // The organization's members: who a dropped Docs file can go to as a link (lib/docsLink.ts), and is shared with.
   const workspace = useActiveOrganizationId();
   const members = useOrgMembers(workspace);
@@ -330,6 +331,7 @@ export function ComposeForm({ account, request, variant, handle, onClose, onSend
   return (
     <div
       ref={root}
+      data-composer
       className={cn('relative flex min-h-0 flex-col', !inline && 'flex-1')}
       onKeyDown={(e) => {
         // Keys from the menus and the "Discard?" dialog (portals) reach here through React; they are theirs.
@@ -343,6 +345,23 @@ export function ComposeForm({ account, request, variant, handle, onClose, onSend
           e.stopPropagation();
           requestClose();
         }
+      }}
+      // A file from Docs is the composer's before the editor sees it: the editor would type its address into the body.
+      onDragOverCapture={(e) => {
+        if (!hasFlowRef(e.dataTransfer) || e.dataTransfer.types.includes('Files')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = 'copy';
+        setDragging(true);
+      }}
+      onDropCapture={(e) => {
+        if (e.dataTransfer.files.length) return;
+        const ref = readFlowRef(e.dataTransfer);
+        if (ref?.app !== 'docs') return;
+        e.preventDefault();
+        e.stopPropagation();
+        setDragging(false);
+        addFromDocs([docsFileOfRef(ref)], true);
       }}
       onDragOver={(e) => {
         // Files from the computer, or a file from Docs in the side panel (lib/flowRef.ts in @flow/suite-bar).
