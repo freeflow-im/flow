@@ -1,8 +1,9 @@
-// Members (docs/specs/workspace-admin.md §3.2 and §5): inviting people and chat guests, the pending invitations, and
+// Members (docs/specs/workspace-admin.md §3.2 and §5): inviting people and chat guests or creating a member at an address
+// on the organization's domain, the pending invitations and setups, and
 // the roster with each member's role, kind and mail state. Every change saves at once; a destructive one confirms inline.
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { AccountDTO, AccountKind, InviteResultDTO, MemberRole, WorkspaceDTO, WorkspaceInviteDTO, WorkspaceMemberDTO } from '@flow/shared';
+import type { AccountDTO, AccountKind, CreateMemberResultDTO, InviteResultDTO, MemberRole, PendingSetupDTO, WorkspaceDTO, WorkspaceInviteDTO, WorkspaceMemberDTO } from '@flow/shared';
 import { adminApi } from '../api';
 import { suite } from '../suite';
 import { tellHome } from '@flow/suite-bar';
@@ -65,8 +66,8 @@ export function Members({ org }: { org: WorkspaceDTO }) {
 
   return (
     <>
-      <Invite org={org} onInvited={() => void qc.invalidateQueries({ queryKey: ['invites', org.id] })} />
-      <PendingInvites org={org} />
+      <AddPeople org={org} onInvited={() => void qc.invalidateQueries({ queryKey: ['invites', org.id] })} onCreated={() => Promise.all([refresh(), qc.invalidateQueries({ queryKey: ['setups', org.id] })])} />
+      <Pending org={org} />
       <Card title="Members" testid="card-members">
         <div className="flex flex-wrap items-center gap-2 text-xs" role="tablist" aria-label="Filter">
           {FILTERS.map((f) => {
@@ -308,6 +309,133 @@ const STATUS_TEXT: Record<InviteResultDTO['status'], string> = {
   email_failed: 'invited, but the email could not be sent',
 };
 
+type AddMode = 'invite' | 'create';
+
+/** The ways in, one card: invite people by their own email (as members or chat guests), or create a member with an address
+ * on the organization's domain. */
+function AddPeople({ org, onInvited, onCreated }: { org: WorkspaceDTO; onInvited(): void; onCreated(): Promise<unknown> }) {
+  const [mode, setMode] = useState<AddMode>('invite');
+  const tabs: { id: AddMode; label: string }[] = [
+    { id: 'invite', label: 'Invite by email' },
+    { id: 'create', label: 'Create member' },
+  ];
+  return (
+    <Card title="Add people" testid="card-invite">
+      <div className="flex gap-1 rounded-lg bg-panel p-1 text-sm self-start" role="tablist" aria-label="How to add people">
+        {tabs.map((t) => (
+          <button key={t.id} type="button" role="tab" aria-selected={mode === t.id} className={`rounded-md px-3 py-1 ${mode === t.id ? 'bg-white font-semibold shadow-sm' : 'text-muted hover:text-ink'}`} onClick={() => setMode(t.id)} data-testid={`add-${t.id}`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {mode === 'invite' ? <Invite org={org} onInvited={onInvited} /> : <CreateMember org={org} onCreated={onCreated} />}
+    </Card>
+  );
+}
+
+/** A username from a display name, until the admin types one: "Bea Lin" → "bea.lin". The server checks it. */
+export const suggestUsername = (name: string) =>
+  name.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/['’]/g, '').split(/[^a-z0-9]+/).filter(Boolean).join('.').slice(0, 64);
+
+/** Create member: a native account at username@domain, right away, with no password; the setup link (a week) goes to the
+ * backup email, which "Forgot password" reaches too. */
+function CreateMember({ org, onCreated }: { org: WorkspaceDTO; onCreated(): Promise<unknown> }) {
+  const domains = useQuery({ queryKey: ['domains', org.id], queryFn: () => adminApi.domains(org.id) });
+  const usable = (domains.data ?? []).filter((d) => d.verified).sort((a, b) => Number(b.primary) - Number(a.primary));
+  const primary = usable.find((d) => d.primary)?.domain ?? usable[0]?.domain ?? '';
+  const [displayName, setDisplayName] = useState('');
+  const [username, setUsername] = useState('');
+  const [typedUsername, setTypedUsername] = useState(false);
+  const [domain, setDomain] = useState('');
+  const [backupEmail, setBackupEmail] = useState('');
+  const [done, setDone] = useState<CreateMemberResultDTO | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const chosenDomain = domain || primary;
+  const shownUsername = typedUsername ? username : suggestUsername(displayName);
+  const create = useMutation({
+    mutationFn: () => adminApi.createMember(org.id, { displayName: displayName.trim(), username: shownUsername.trim(), domain: chosenDomain, backupEmail: backupEmail.trim() }),
+    onMutate: () => {
+      setError(null);
+      setDone(null);
+    },
+    onSuccess: async (out) => {
+      setDone(out);
+      setDisplayName('');
+      setUsername('');
+      setTypedUsername(false);
+      setBackupEmail('');
+      await onCreated();
+    },
+    onError: (e) => setError(errorText(e)),
+  });
+  const ready = !!displayName.trim() && !!shownUsername.trim() && !!chosenDomain && !!backupEmail.trim();
+  const input = 'w-full rounded-md border border-border px-2 py-1 text-sm disabled:opacity-50';
+  return (
+    <form
+      className="flex flex-col gap-3"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (ready) create.mutate();
+      }}
+      data-testid="create-member"
+    >
+      <p className="text-xs text-muted">Creates a member with an address on your domain. They get no password yet: a setup link, good for 7 days, goes to their backup email.</p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="font-medium">Display name</span>
+          <input className={input} value={displayName} disabled={create.isPending} onChange={(e) => setDisplayName(e.target.value)} placeholder="Bea Lin" autoComplete="off" data-testid="create-name" />
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="font-medium">Backup email</span>
+          <input className={input} type="email" value={backupEmail} disabled={create.isPending} onChange={(e) => setBackupEmail(e.target.value)} placeholder="bea@gmail.com" autoComplete="off" data-testid="create-backup" />
+          <span className="text-xs text-muted">Outside your domain. The setup link and password resets go here.</span>
+        </label>
+        <div className="flex flex-col gap-1 text-sm sm:col-span-2">
+          <span className="font-medium">Sign-in address</span>
+          <div className="flex items-center gap-1">
+            <input
+              className={`${input} min-w-0 flex-1`}
+              aria-label="Username"
+              value={shownUsername}
+              disabled={create.isPending}
+              onChange={(e) => {
+                setTypedUsername(true);
+                setUsername(e.target.value.replace(/@.*$/, '').toLowerCase());
+              }}
+              placeholder="bea.lin"
+              autoComplete="off"
+              data-testid="create-username"
+            />
+            <span className="text-muted">@</span>
+            {usable.length > 1 ? (
+              <Select value={chosenDomain} disabled={create.isPending} options={usable.map((d) => ({ value: d.domain, label: d.domain }))} onChange={setDomain} testid="create-domain" />
+            ) : (
+              <span className="rounded-md bg-panel px-2 py-1 text-sm" data-testid="create-domain">
+                {chosenDomain || '…'}
+              </span>
+            )}
+          </div>
+          <span className="text-xs text-muted">Letters, digits, dots, hyphens and underscores. Verified domains only; the primary one is first.</span>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button kind="primary" type="submit" disabled={create.isPending || !ready} testid="create-submit">
+          {create.isPending ? 'Creating…' : 'Create member'}
+        </Button>
+        {done && (
+          <span className={`text-xs ${done.emailSent ? 'text-ok' : 'text-warn'}`} data-testid="create-done">
+            {done.emailSent
+              ? `Created ${done.account.address}. A setup link went to ${done.pending?.backupEmail}.`
+              : `Created ${done.account.address}, but the setup email could not be sent. Use Resend setup link below.`}
+          </span>
+        )}
+      </div>
+      {domains.isError && <ErrorLine error={errorText(domains.error)} />}
+      <ErrorLine error={error} testid="create-error" />
+    </form>
+  );
+}
+
 /** Invite people (native members) or chat guests (§3.2, §6.5): the same addresses box, two buttons. */
 function Invite({ org, onInvited }: { org: WorkspaceDTO; onInvited(): void }) {
   const [text, setText] = useState('');
@@ -326,7 +454,8 @@ function Invite({ org, onInvited }: { org: WorkspaceDTO; onInvited(): void }) {
     onError: (e) => setError(errorText(e)),
   });
   return (
-    <Card title="Invite" intro="Separate addresses with commas. Each person gets an email with a link." testid="card-invite">
+    <>
+      <p className="text-xs text-muted">Separate addresses with commas. Each person gets an email with a link and joins with that address.</p>
       <textarea className="w-full rounded-md border border-border px-2 py-1 text-sm" rows={2} placeholder="email@example.com, someone@example.com" value={text} disabled={send.isPending} onChange={(e) => setText(e.target.value)} data-testid="invite-emails" />
       <div className="flex flex-wrap items-center gap-3">
         <Button kind="primary" disabled={send.isPending || emails.length === 0} onClick={() => send.mutate('native')} testid="invite-people">
@@ -351,7 +480,60 @@ function Invite({ org, onInvited }: { org: WorkspaceDTO; onInvited(): void }) {
         </ul>
       )}
       <ErrorLine error={error} testid="invite-error" />
+    </>
+  );
+}
+
+/** Everyone on their way in: created members who have not set a password (with Resend), and open invitations. */
+function Pending({ org }: { org: WorkspaceDTO }) {
+  const setups = useQuery({ queryKey: ['setups', org.id], queryFn: () => adminApi.pendingSetups(org.id) });
+  const invites = useQuery({ queryKey: ['invites', org.id], queryFn: () => adminApi.invites(org.id) });
+  if (setups.isSuccess && invites.isSuccess && setups.data.length === 0 && invites.data.length === 0) return null;
+  return (
+    <Card title="Pending" testid="card-invites">
+      <PendingSetups org={org} list={setups.data ?? []} error={setups.isError ? errorText(setups.error) : null} />
+      <PendingInvites org={org} />
     </Card>
+  );
+}
+
+function PendingSetups({ org, list, error: loadError }: { org: WorkspaceDTO; list: PendingSetupDTO[]; error: string | null }) {
+  const qc = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+  const [resent, setResent] = useState<string | null>(null);
+  const resend = useMutation({
+    mutationFn: (accountId: string) => adminApi.resendSetupLink(org.id, accountId),
+    onMutate: () => {
+      setError(null);
+      setResent(null);
+    },
+    onSuccess: (p) => {
+      setResent(p.accountId);
+      void qc.invalidateQueries({ queryKey: ['setups', org.id] });
+    },
+    onError: (e) => setError(errorText(e)),
+  });
+  if (!list.length && !loadError) return null;
+  return (
+    <div className="flex flex-col gap-2">
+      <h3 className="text-xs font-semibold text-faint uppercase">Waiting to set a password</h3>
+      {loadError && <ErrorLine error={loadError} />}
+      <ul className="divide-y divide-hairline rounded-lg border border-hairline text-sm">
+        {list.map((p) => (
+          <li key={p.accountId} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2" data-testid={`setup-${p.address}`}>
+            <span className="min-w-0 flex-1 truncate">
+              <span className="font-medium">{p.displayName}</span> <span className="text-muted">{p.address}</span>
+            </span>
+            <span className="text-xs text-muted">link to {p.backupEmail}</span>
+            <span className={`text-xs ${p.linkExpiresAt ? 'text-muted' : 'text-warn'}`}>{resent === p.accountId ? 'sent again' : p.linkExpiresAt ? `expires ${new Date(p.linkExpiresAt).toLocaleDateString()}` : 'link expired'}</span>
+            <Button kind="link" disabled={resend.isPending} onClick={() => resend.mutate(p.accountId)} testid={`resend-${p.address}`}>
+              {resend.isPending && resend.variables === p.accountId ? 'Sending…' : 'Resend setup link'}
+            </Button>
+          </li>
+        ))}
+      </ul>
+      <ErrorLine error={error} />
+    </div>
   );
 }
 
@@ -373,7 +555,8 @@ function PendingInvites({ org }: { org: WorkspaceDTO }) {
   const list = invites.data ?? [];
   if (invites.isSuccess && list.length === 0) return null;
   return (
-    <Card title="Pending invitations" testid="card-invites">
+    <div className="flex flex-col gap-2">
+      <h3 className="text-xs font-semibold text-faint uppercase">Invitations</h3>
       {invites.isError && <ErrorLine error={errorText(invites.error)} />}
       {list.length > 0 && (
         <ul className="divide-y divide-hairline rounded-lg border border-hairline text-sm">
@@ -396,6 +579,6 @@ function PendingInvites({ org }: { org: WorkspaceDTO }) {
         </ul>
       )}
       <ErrorLine error={error} />
-    </Card>
+    </div>
   );
 }
