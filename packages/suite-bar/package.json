@@ -8,7 +8,8 @@
     ".": "./src/index.ts",
     "./intents": "./src/lib/intents.ts",
     "./assistant-dock": "./src/AssistantDock.tsx",
-    "./assistant-chat": "./src/AssistantChat.tsx"
+    "./assistant-chat": "./src/AssistantChat.tsx",
+    "./side-panel": "./src/SidePanel.tsx"
   },
   "sideEffects": [
     "*.css"

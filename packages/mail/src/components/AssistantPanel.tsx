@@ -23,14 +23,23 @@ export interface AssistantPanelProps {
   /** Over the mail, the whole width of a narrow screen, rather than beside it. */
   overlay: boolean;
   width: number;
+  /** A tab of Mail's side panel (anchored): it fills the tab, which has the width and the edge. */
+  inSidePanel?: boolean;
   onClose(): void;
   onShow(ref: MessageRef): void;
   onOpenDraft(ref: MessageRef): void;
 }
 
-export function AssistantPanel({ chat, organizationId, onMessage, overlay, width, onClose, onShow, onOpenDraft }: AssistantPanelProps) {
+/** The draft, kept across the panel being drawn again elsewhere (floated, or anchored in the side panel). */
+let keptDraft = '';
+
+export function AssistantPanel({ chat, organizationId, onMessage, overlay, width, inSidePanel = false, onClose, onShow, onOpenDraft }: AssistantPanelProps) {
   const suggestions = useSuggestedPrompts(organizationId, onMessage ? 'mail-message' : 'mail-inbox');
-  const [draft, setDraft] = useState('');
+  const [draft, setDraftState] = useState(() => keptDraft);
+  const setDraft = (text: string) => {
+    keptDraft = text;
+    setDraftState(text);
+  };
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const docked = useAssistantDock().placement === 'docked';
@@ -64,8 +73,8 @@ export function AssistantPanel({ chat, organizationId, onMessage, overlay, width
     <aside
       aria-label="Assistant"
       data-testid="mail-assistant"
-      style={docked && !overlay ? { width } : undefined}
-      className={cn('flex min-h-0 flex-col bg-white', !docked ? 'relative' : overlay ? 'absolute inset-0 z-30 shadow-xl' : 'relative shrink-0 border-l border-hairline')}
+      style={docked && !overlay && !inSidePanel ? { width } : undefined}
+      className={cn('flex min-h-0 flex-col bg-white', inSidePanel ? 'relative h-full' : !docked ? 'relative' : overlay ? 'absolute inset-0 z-30 shadow-xl' : 'relative shrink-0 border-l border-hairline')}
     >
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-hairline px-4">
         <Sparkles className="size-4 text-primary" />

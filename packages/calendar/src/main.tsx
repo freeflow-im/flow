@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CalendarApiError } from './api';
 import { App } from './App';
+import { PanelApp } from './PanelApp';
 import './index.css';
 import { reloadOnStaleBuild } from '@flow/suite-bar';
 
@@ -20,10 +21,13 @@ const queryClient = new QueryClient({
   },
 });
 
+// /calendar/panel is Calendar in another app's side panel (docs/specs/side-panel.md).
+const PANEL = window.location.pathname.replace(/\/+$/, '') === `${import.meta.env.BASE_URL}panel`;
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <App />
+      {PANEL ? <PanelApp /> : <App />}
     </QueryClientProvider>
   </StrictMode>,
 );

@@ -1,5 +1,14 @@
 # Decision log
 
+## 2026-11-13 — Side panel: one per app; a dropped file is a link only inside the sender's domain (operator ruling)
+
+- **Ruling (Scott):** each app has its own side panel (Calendar, Docs, the anchored assistant); Home does not share one
+  across apps.
+- **Ruling (Scott):** a Docs file dropped on an email is sent as a link when every To and Cc address has the sender's
+  domain, and as an attachment otherwise (the default, and when To is empty). Free mail domains never match. A link
+  shares the file with the recipients (read only) when the message is sent.
+- **Where:** `docs/specs/side-panel.md`.
+
 ## 2026-11-13 — Chat search reaches public channels; native apps later (operator rulings)
 
 - **Ruling (Scott):** message search includes public channels the person has not joined, as Slack's does: anyone in

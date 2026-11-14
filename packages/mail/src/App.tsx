@@ -5,7 +5,8 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { isInHome, useHomeMenu } from '@flow/suite-bar';
-import { AssistantDock, useAssistantDockState, useMyAssistant, useNewChatOnClose } from '@flow/suite-bar/assistant-dock';
+import { AssistantDock, AssistantDockScope, useAssistantDockState, useMyAssistant, useNewChatOnClose } from '@flow/suite-bar/assistant-dock';
+import { SidePanel, sidePanelsOf } from '@flow/suite-bar/side-panel';
 import { MailApiError, mailApi, setMailWorkspace, type Category, type MailAccount, type MessageDetail, type ThreadSummary, type TabStatus } from './api';
 import { AccountSettingsDialog, AddAccountDialog } from './components/AccountForms';
 import { ConnectMail } from './components/ConnectMail';
@@ -56,6 +57,9 @@ function storedAccount(): string | null {
 type Toast = Notice;
 
 type Dialog = { kind: 'add' } | { kind: 'settings'; accountId: string | null; focusPassword?: boolean } | null;
+
+/** The apps Mail's side panel shows (its manifest's `sidePanels`). */
+const SIDE_PANELS = sidePanelsOf('mail');
 
 export function App() {
   const qc = useQueryClient();
@@ -932,6 +936,25 @@ export function App() {
     />
   );
 
+  // The assistant's panel: floating in the dock, or a tab of the side panel once anchored.
+  const assistantPanel = (inSidePanel: boolean) => (
+    <Suspense fallback={null}>
+      <AssistantPanel
+        chat={chat}
+        organizationId={org}
+        onMessage={openId !== null}
+        overlay={assistantOverlay}
+        width={assistantPane.width}
+        inSidePanel={inSidePanel}
+        onClose={() => setAssistantOpen(false)}
+        onShow={(ref) => {
+          if (!showMessage(ref)) setToast('That message is in a mail account that is not connected here.');
+        }}
+        onOpenDraft={openDraft}
+      />
+    </Suspense>
+  );
+
   return (
     <div className="flex h-dvh flex-col overflow-hidden">
       {bar}
@@ -970,7 +993,8 @@ export function App() {
             <div className="flex-1 bg-black/30" />
           </div>
         )}
-        <div className="flex min-w-0 flex-1">
+        {/* The mail: the floating assistant floats over it, not over the side panel. */}
+        <div className="relative flex min-w-0 flex-1">
           {stacked ? (
             // The list stays mounted under the open thread, so going back finds it where it was.
             <div className="relative min-w-0 flex-1">
@@ -986,24 +1010,32 @@ export function App() {
               <div className="min-w-0 flex-1">{view}</div>
             </>
           )}
+          {(!assistantDocked || tiny) && (
+            <AssistantDock state={assistantDock} label={myAssistant?.displayName} avatarUrl={myAssistant?.avatarUrl ?? null}>
+              {assistantPanel(false)}
+            </AssistantDock>
+          )}
         </div>
-        <AssistantDock state={assistantDock} label={myAssistant?.displayName} avatarUrl={myAssistant?.avatarUrl ?? null}>
-          {assistantDocked && !assistantOverlay && <ResizeHandle label="Resize the assistant" {...assistantPane.handleProps} />}
-          <Suspense fallback={null}>
-            <AssistantPanel
-              chat={chat}
-              organizationId={org}
-              onMessage={openId !== null}
-              overlay={assistantOverlay}
-              width={assistantPane.width}
-              onClose={() => setAssistantOpen(false)}
-              onShow={(ref) => {
-                if (!showMessage(ref)) setToast('That message is in a mail account that is not connected here.');
-              }}
-              onOpenDraft={openDraft}
-            />
-          </Suspense>
-        </AssistantDock>
+        {/* Calendar and Docs beside the mail, and the assistant once anchored (docs/specs/side-panel.md); none on a
+            phone-sized screen, where the anchored assistant covers the mail as before. */}
+        {!tiny && (
+          <SidePanel
+            host="mail"
+            panels={SIDE_PANELS}
+            overlay={assistantOverlay}
+            assistant={
+              assistantDocked
+                ? {
+                    label: myAssistant?.displayName ?? 'Assistant',
+                    avatarUrl: myAssistant?.avatarUrl ?? null,
+                    open: assistantOpen,
+                    setOpen: setAssistantOpen,
+                    content: <AssistantDockScope state={assistantDock}>{assistantPanel(true)}</AssistantDockScope>,
+                  }
+                : undefined
+            }
+          />
+        )}
       </div>
       {compose && (
         <Suspense fallback={null}>

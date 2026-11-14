@@ -7353,3 +7353,80 @@ a.landing-card {
   flex: 1;
   min-width: 0;
 }
+
+/* The side panel's page (pages/PanelPage.tsx): files in another app's side panel. */
+.docs-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  padding: 10px 8px 0;
+  background: #fff;
+}
+.docs-panel-search {
+  flex-shrink: 0;
+  margin: 0 4px 8px;
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.docs-panel-heading {
+  margin: 4px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.docs-panel-empty {
+  padding: 24px 8px;
+  font-size: 14px;
+  text-align: center;
+  color: var(--muted);
+}
+.docs-panel-list {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 0 0 8px;
+  overflow-y: auto;
+  list-style: none;
+}
+.docs-panel-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px;
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.docs-panel-row:hover {
+  background: #f1f3f4;
+}
+.docs-panel-icon {
+  display: flex;
+  flex-shrink: 0;
+}
+.docs-panel-name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.docs-panel-where {
+  flex-shrink: 0;
+  max-width: 40%;
+  overflow: hidden;
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--muted);
+}

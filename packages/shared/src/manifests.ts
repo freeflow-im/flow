@@ -89,6 +89,7 @@ export const APP_MANIFESTS: AppManifest[] = [
     assistant: { pages: ['home', 'sheet', 'deck', 'doc', 'markdown', 'file'] },
     tab: { label: 'Docs', shortcut: '1', badge: 'none' },
     client: { dist: 'packages/docs/dist/client', basePath: '/docs/' },
+    panel: { label: 'Docs', icon: 'docs', path: '/docs/panel' },
     pages: [
       { path: '/docs', html: 'docs.html', signIn: true },
       { path: '/docs/p/*', html: 'docs.html', headers: PUBLIC },
@@ -131,6 +132,7 @@ export const APP_MANIFESTS: AppManifest[] = [
     assistant: { pages: ['mail'] },
     tab: { label: 'Mail', shortcut: '3', badge: 'mail-unread' },
     client: { dist: 'packages/mail/dist', basePath: '/mail/', optional: true },
+    sidePanels: ['calendar', 'docs'],
     pages: [
       { path: '/mail', html: 'mail.html', signIn: true },
       { path: '/mail/*', html: 'mail.html', signIn: true, passFiles: true },
@@ -162,6 +164,7 @@ export const APP_MANIFESTS: AppManifest[] = [
     assistant: { pages: ['calendar'] },
     tab: { label: 'Calendar', shortcut: '4', badge: 'none' },
     client: { dist: 'packages/calendar/dist', basePath: '/calendar/', optional: true },
+    panel: { label: 'Calendar', icon: 'calendar', path: '/calendar/panel' },
     pages: [
       { path: '/calendar', html: 'calendar.html', signIn: true },
       // The guest scheduler's public page (docs/specs/guest-scheduler.md §4): its own small build, no sign-in, kept out of
@@ -276,3 +279,15 @@ export const APP_MANIFESTS: AppManifest[] = [
     events: [],
   },
 ];
+
+/** A panel in a host's side panel (docs/specs/side-panel.md §4): the app it shows, and how. */
+export interface SidePanelEntry { app: string; label: string; icon: 'calendar' | 'docs'; path: string }
+
+/** The panels an app's side panel shows, in its order: the apps its manifest names that can be shown as a panel. */
+export function sidePanelsOf(host: string): SidePanelEntry[] {
+  const m = APP_MANIFESTS.find((x) => x.name === host);
+  return (m?.sidePanels ?? []).flatMap((name) => {
+    const panel = APP_MANIFESTS.find((x) => x.name === name)?.panel;
+    return panel ? [{ app: name, ...panel }] : [];
+  });
+}
