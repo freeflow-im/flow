@@ -1,6 +1,7 @@
 # Side panel
 
-Status: design, 2026-11-13. Not built.
+Status: phases 1 and 2 built 2026-11-13 (web: Mail hosts Calendar, Docs and the anchored assistant). Phase 3 dropped by
+the operator; drag and drop (phase 4) and more hosts (phase 5) are next.
 
 ## 1. What it is
 
@@ -114,6 +115,6 @@ One branch and one PR, one commit per phase:
    a `flow:drag` message relay with a drag image the host draws.
 1. `SidePanel` and the manifest fields; Mail as the host; `/calendar/panel` and `/docs/panel`.
 2. The assistant as a tab.
-3. `flow:panel:context`.
+3. ~~`flow:panel:context`~~: dropped (operator, 2026-11-13). §6's context message is not built.
 4. Drag and drop: the shared type; Docs → Mail (with §7.1), then Mail → Calendar, then Calendar → Mail.
 5. More hosts: Docs shows Calendar; Calendar shows Docs and Mail.
