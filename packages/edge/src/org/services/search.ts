@@ -6,12 +6,17 @@
 //
 // Who may see a hit is the rule of requireChannelAccess (services/channels.ts), applied in the query: a member of the
 // organization, in a channel they are in or one that is not private (direct messages always are).
-import { and, eq, inArray, sql, type SQL } from 'drizzle-orm';
+import { and, eq, sql, type SQL } from 'drizzle-orm';
 import { hasSearchWords, toFtsMatch, type SearchHit, type SearchQuery } from '@flow/shared/search';
 import { addressOf } from '@flow/shared/addresses';
 import { db, schema } from '../db/index.js';
 import { decryptBody } from '../crypto/index.js';
 import { requireMembership } from './workspaces.js';
+import { inList } from '../sqlList.js';
+
+/** A list as one bound JSON string, read back with json_each: Durable Object SQLite binds at most ~100 variables per
+ * statement, and a batch here is longer (sqlList.ts). */
+const jsonList = (values: readonly string[]) => sql`(SELECT value FROM json_each(${JSON.stringify(values)}))`;
 
 const { messages } = schema;
 
@@ -49,7 +54,7 @@ function fileNamesOf(ids: string[]): Map<string, string[]> {
   const out = new Map<string, string[]>();
   if (!ids.length) return out;
   const rows = db.all<{ message_id: string; name: string }>(
-    sql`SELECT mf.message_id, f.name FROM message_files mf JOIN files f ON f.id = mf.file_id WHERE mf.message_id IN (${sql.join(ids.map((i) => sql`${i}`), sql`, `)})`,
+    sql`SELECT mf.message_id, f.name FROM message_files mf JOIN files f ON f.id = mf.file_id WHERE mf.message_id IN ${jsonList(ids)}`,
   );
   for (const r of rows) out.set(r.message_id, [...(out.get(r.message_id) ?? []), r.name]);
   return out;
@@ -85,7 +90,7 @@ export async function reindexMessages(batch = 200): Promise<number> {
     ORDER BY m.created_at DESC LIMIT ${batch}`);
   if (!stale.length) return 0;
   const ids = stale.map((r) => r.id);
-  const rows = await db.select().from(messages).where(inArray(messages.id, ids));
+  const rows = await db.select().from(messages).where(inList(messages.id, ids));
   const names = userNames();
   const fileNames = fileNamesOf(ids);
   for (const row of rows) {
@@ -177,7 +182,7 @@ export async function searchMessages(workspaceId: string, userId: string, query:
   if (f.from?.length) {
     const authors = authorsNamed(workspaceId, userId, f.from);
     if (!authors.length) return [];
-    where.push(sql`m.user_id IN (${sql.join(authors.map((a) => sql`${a}`), sql`, `)})`);
+    where.push(sql`m.user_id IN ${jsonList(authors)}`);
   }
   if (f.in) {
     const channel = channelNamed(workspaceId, f.in);
@@ -197,10 +202,10 @@ export async function searchMessages(workspaceId: string, userId: string, query:
     ? db.all<HitRow>(sql`SELECT ${cols}, snippet(search_messages_fts, 0, char(2), char(3), '…', 20) AS snippet, bm25(search_messages_fts) AS rank
         FROM search_messages_fts JOIN search_messages s ON s.rowid = search_messages_fts.rowid ${joins}
         WHERE search_messages_fts MATCH ${match} AND ${and(...where)}
-        ORDER BY ${recent ? sql`m.created_at DESC` : sql`rank`} LIMIT ${limit}`)
+        ORDER BY ${recent ? sql`m.created_at DESC, m.id DESC` : sql`rank`} LIMIT ${limit}`)
     : db.all<HitRow>(sql`SELECT ${cols}, substr(s.body, 1, 200) AS snippet, 0 AS rank
         FROM search_messages s ${joins}
-        WHERE ${and(...where)} ORDER BY m.created_at DESC LIMIT ${limit}`);
+        WHERE ${and(...where)} ORDER BY m.created_at DESC, m.id DESC LIMIT ${limit}`);
 
   return rows.map((r) => ({
     source: 'chat',

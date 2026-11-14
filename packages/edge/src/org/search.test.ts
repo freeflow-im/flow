@@ -132,6 +132,17 @@ describe('searchMessages', () => {
 });
 
 describe('reindexMessages', () => {
+  it('indexes a full batch of 200 in one go: Durable Object SQLite binds at most 100 variables per statement', async () => {
+    const file = crypto.randomUUID();
+    await run(async () => db.insert(schema.files).values({ id: file, workspaceId: ws, userId: ANN, name: 'osprey-count.csv', mimeType: 'text/csv', sizeBytes: 1, storageKey: 'k', createdAt: new Date() }).run());
+    await send(pub, ANN, 'osprey with a file', undefined, [file]);
+    for (let i = 0; i < 149; i++) await send(pub, ANN, `osprey ${i}`);
+    sqlite.exec('DELETE FROM search_messages');
+    expect(await run(() => reindexMessages(200))).toBe(150);
+    expect((await find(ANN, 'osprey', { limit: 100 })).length).toBe(100);
+    expect((await find(ANN, 'count')).length).toBe(1);
+  });
+
   it('indexes messages sent before search, and ones indexed by an older way of taking the words, in batches', async () => {
     for (let i = 0; i < 5; i++) await send(pub, ANN, `heron sighting ${i}`);
     await send(pub, ANN, 'egret');
