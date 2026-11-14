@@ -5,6 +5,7 @@
 - `[web]` The Docs side panel's search works: the page sets the suite's selected organization itself (it has no suite bar), and it searches both Organization files and My files.
 
 - `[web]` Drag a file from the Docs panel onto a message being written, an open conversation or a row of the list (a reply with it). It goes as a link, shared read only with the recipients on send, when every recipient is an organization member at the sender's domain; else as an attachment. The chip switches between the two.
+- `[web]` On wide screens, Mail's New message window is no longer modal: it sits at the bottom left, short of the side panel, so files can be dragged in while writing.
 - `[web]` One drag type for every app (`@flow/suite-bar` `flowRef`), with the panel also telling the host by message, for a browser that hides a frame's drag data.
 
 ## Feature

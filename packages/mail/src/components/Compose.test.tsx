@@ -132,4 +132,16 @@ describe('Compose (the dialog)', () => {
     expect(document.body.textContent).not.toContain('Drop to add to the message');
     vi.unstubAllGlobals();
   });
+
+  it('is a window on wide screens, not modal, so the side panel stays usable; Escape closes it', async () => {
+    let closed = 0;
+    const request: ComposeRequest = { mode: 'new', draft: { to: [], cc: [], bcc: [], subject: '', html: '' } };
+    await act(() => root.render(createElement(Compose, { account, request, narrow: false, onClose: () => closed++, onSend: () => {} })));
+    const win = document.querySelector('[role="dialog"]')!;
+    expect(win.getAttribute('aria-modal')).toBe('false');
+    expect(win.textContent).toContain('New message');
+    expect(document.querySelector('.bg-black\\/40')).toBeNull();
+    await act(() => document.querySelector('.ProseMirror')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(closed).toBe(1);
+  });
 });

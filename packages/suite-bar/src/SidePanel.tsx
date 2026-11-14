@@ -125,6 +125,14 @@ export function SidePanel({ host, panels, overlay = false, assistant }: SidePane
     return () => window.removeEventListener('message', onMessage);
   }, []);
 
+  // How much of the window's right side the panel takes (none while closed or over the page), for what floats beside
+  // it: Mail's message window stops short of it (--side-panel-width on the page's root).
+  const taken = state.open && !overlay && tabs.length ? state.width : 0;
+  useEffect(() => {
+    document.documentElement.style.setProperty('--side-panel-width', `${taken}px`);
+    return () => void document.documentElement.style.removeProperty('--side-panel-width');
+  }, [taken]);
+
   // The resize grip on the left edge: the pointer is captured, so the frames under it do not take the drag.
   const drag = useRef<{ x: number; width: number } | null>(null);
   const grip = {
