@@ -3,8 +3,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AccountDTO, WorkspaceDTO, WorkspaceInviteDTO, WorkspaceMemberDTO } from '@flow/shared';
-import { mailState, Members } from './Members';
+import type { AccountDTO, DomainDTO, PendingSetupDTO, WorkspaceDTO, WorkspaceInviteDTO, WorkspaceMemberDTO } from '@flow/shared';
+import { mailState, Members, suggestUsername } from './Members';
 
 const org: WorkspaceDTO = {
   id: 'o1', slug: 'acme', name: 'Acme', createdBy: 'u-ann', createdAt: '2026-01-01T00:00:00.000Z', sidebarColor: 'violet', avatarUrl: null, googleSelfRegisterDomain: null, role: 'owner',
@@ -23,6 +23,10 @@ let members: WorkspaceMemberDTO[];
 let accounts: AccountDTO[];
 let invites: WorkspaceInviteDTO[];
 let hostedMail: boolean;
+let setups: PendingSetupDTO[];
+let createAnswer: { status: number; body: unknown };
+const domain = (name: string, extra: Partial<DomainDTO> = {}): DomainDTO => ({ domain: name, kind: 'own', verified: true, primary: false, records: [], status: [], atProvider: true, createdAt: '', ...extra });
+const domains: DomainDTO[] = [domain('acme.freeflow.im', { kind: 'platform' }), domain('acme.com', { primary: true }), domain('pending.com', { verified: false })];
 
 beforeEach(() => {
   calls = [];
@@ -35,6 +39,8 @@ beforeEach(() => {
     account('Dee', { state: 'requested', hosted: false, statusMessage: 'the provider refused: quota' }),
     account('Botty'),
   ];
+  setups = [{ accountId: 'a-hal', userId: 'u-hal', address: 'hal@acme.com', displayName: 'Hal', backupEmail: 'hal@gmail.example', createdAt: '2026-01-02T00:00:00.000Z', linkExpiresAt: null }];
+  createAnswer = { status: 201, body: { account: account('Bea', { address: 'bea.lin@acme.com' }), pending: { ...setups[0], backupEmail: 'bea@gmail.example' }, emailSent: true } };
   invites = [{ id: 'i1', email: 'eve@example.com', kind: 'guest', invitedBy: { id: 'u-ann', displayName: 'Ann' }, createdAt: '2026-01-02T00:00:00.000Z', expiresAt: '2026-01-09T00:00:00.000Z' }];
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url;
@@ -47,6 +53,10 @@ beforeEach(() => {
     if ((path.split('?')[0] ?? '').endsWith('/members')) return json({ members });
     if (path.endsWith('/accounts')) return json({ accounts });
     if (path.endsWith('/invites') && method === 'GET') return json({ invites });
+    if (path.endsWith('/domains')) return json({ domains });
+    if (path.endsWith('/created-members') && method === 'GET') return json({ pending: setups });
+    if (path.endsWith('/created-members') && method === 'POST') return json(createAnswer.body, createAnswer.status);
+    if (path.endsWith('/setup-link')) return json({ pending: { ...setups[0], linkExpiresAt: '2026-01-20T00:00:00.000Z' } });
     if (path.endsWith('/invites') && method === 'POST') return json({ results: (body as { emails: string[]; kind: string }).emails.map((email) => ({ email, status: email.includes('@') ? 'sent' : 'invalid_email', kind: (body as { kind: string }).kind })) }, 201);
     if (path.endsWith('/provision')) return json(path.includes('/accounts/') ? { queued: true } : { queued: 2 });
     if (path.endsWith('/accounts/kind')) return json({ changed: 2, unchanged: 1 });
@@ -132,6 +142,50 @@ describe('Members', () => {
     fireEvent.click(screen.getByTestId('invite-people'));
     await waitFor(() => expect(calls.filter((c) => c.method === 'POST' && c.path.endsWith('/invites'))).toHaveLength(2));
     expect(calls.filter((c) => c.method === 'POST' && c.path.endsWith('/invites'))[1]!.body).toEqual({ emails: ['gil@example.com'], kind: 'native' });
+  });
+
+  it('creates a member at username@domain on the primary verified domain, the username suggested from the name', async () => {
+    show();
+    fireEvent.click(await screen.findByTestId('add-create'));
+    await waitFor(() => expect((screen.getByTestId('create-domain') as HTMLSelectElement).value).toBe('acme.com'));
+    expect([...(screen.getByTestId('create-domain') as HTMLSelectElement).options].map((o) => o.value)).toEqual(['acme.com', 'acme.freeflow.im']);
+    fireEvent.change(screen.getByTestId('create-name'), { target: { value: 'Bea Lin' } });
+    expect((screen.getByTestId('create-username') as HTMLInputElement).value).toBe('bea.lin');
+    expect((screen.getByTestId('create-submit') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByTestId('create-backup'), { target: { value: 'bea@gmail.example' } });
+    fireEvent.click(screen.getByTestId('create-submit'));
+    expect((await screen.findByTestId('create-done')).textContent).toBe('Created bea.lin@acme.com. A setup link went to bea@gmail.example.');
+    expect(calls.find((c) => c.method === 'POST' && c.path === '/v1/workspaces/o1/created-members')!.body).toEqual({ displayName: 'Bea Lin', username: 'bea.lin', domain: 'acme.com', backupEmail: 'bea@gmail.example' });
+    expect((screen.getByTestId('create-name') as HTMLInputElement).value).toBe('');
+  });
+
+  it('shows the server\'s refusal and keeps what was typed', async () => {
+    createAnswer = { status: 409, body: { error: { code: 'username_taken', message: 'bea@acme.com is already taken.' } } };
+    show();
+    fireEvent.click(await screen.findByTestId('add-create'));
+    await waitFor(() => expect((screen.getByTestId('create-domain') as HTMLSelectElement).value).toBe('acme.com'));
+    fireEvent.change(screen.getByTestId('create-name'), { target: { value: 'Bea' } });
+    fireEvent.change(screen.getByTestId('create-username'), { target: { value: 'Bea' } });
+    fireEvent.change(screen.getByTestId('create-backup'), { target: { value: 'bea@gmail.example' } });
+    fireEvent.click(screen.getByTestId('create-submit'));
+    expect((await screen.findByTestId('create-error')).textContent).toContain('already taken');
+    expect((screen.getByTestId('create-username') as HTMLInputElement).value).toBe('bea');
+  });
+
+  it('lists created members waiting to set a password, and resends a setup link', async () => {
+    show();
+    const row = await screen.findByTestId('setup-hal@acme.com');
+    expect(row.textContent).toContain('hal@gmail.example');
+    expect(row.textContent).toContain('link expired');
+    fireEvent.click(screen.getByTestId('resend-hal@acme.com'));
+    await waitFor(() => expect(calls.some((c) => c.method === 'POST' && c.path === '/v1/workspaces/o1/created-members/a-hal/setup-link')).toBe(true));
+    expect((await screen.findByText('sent again'))).toBeTruthy();
+  });
+
+  it('suggests a username from a display name', () => {
+    expect(suggestUsername('Bea Lin')).toBe('bea.lin');
+    expect(suggestUsername("José O'Brien")).toBe('jose.obrien');
+    expect(suggestUsername('  ')).toBe('');
   });
 
   it('lists pending invitations with their kind and inviter, and revokes one after a confirmation', async () => {

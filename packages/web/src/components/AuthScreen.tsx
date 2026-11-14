@@ -1,6 +1,7 @@
 import { useBoundApi } from '../lib/useBoundApi';
 import { useEffect, useRef, useState } from 'react';
 import type {
+  AccountSetupInfoDTO,
   AuthResponse,
   GoogleAuthResponse,
   PublicConfigDTO,
@@ -24,7 +25,8 @@ type Mode =
   | 'complete'
   | 'reset'
   | 'link-sent'
-  | 'signin-link';
+  | 'signin-link'
+  | 'setup';
 
 const inputCls = 'mb-2 w-full rounded border border-hairline2 px-3 py-2 text-sm';
 const submitCls =
@@ -215,6 +217,8 @@ export default function AuthScreen({
   signupToken,
   resetToken,
   signinToken,
+  setupToken,
+  onSetupDismissed,
   joinWorkspace,
   startOnRegister,
 }: {
@@ -222,6 +226,10 @@ export default function AuthScreen({
   signupToken?: string | null;
   resetToken?: string | null;
   signinToken?: string | null;
+  /** An admin-created member's setup link (?setup=): the Set your password page. */
+  setupToken?: string | null;
+  /** Leaving the setup page for the ordinary sign-in (a dead link, or "Back to sign in"). */
+  onSetupDismissed?: () => void;
   /** Workspace name behind a join link, when JoinScreen is wrapping us — so
    * the card says what the visitor is signing in *for* (issue #85). */
   joinWorkspace?: string | null;
@@ -236,7 +244,8 @@ export default function AuthScreen({
     !!joinWorkspace
     || (typeof localStorage !== 'undefined' && !!localStorage.getItem(scopedStorageKey('pendingInvite')));
   const [mode, setMode] = useState<Mode>(
-    signinToken ? 'signin-link'
+    setupToken ? 'setup'
+      : signinToken ? 'signin-link'
       : signupToken ? 'complete'
       : resetToken ? 'reset'
       : invited || startOnRegister ? 'register'
@@ -312,6 +321,24 @@ export default function AuthScreen({
     void run(async () => {
       e.preventDefault();
       onSignedIn(await api<AuthResponse>('POST', '/v1/auth/password/reset', { token: resetToken, password }));
+    });
+
+  // The setup page shows the address first; the link is only spent by the submit.
+  const [setupInfo, setSetupInfo] = useState<AccountSetupInfoDTO | null>(null);
+  useEffect(() => {
+    if (!setupToken) return;
+    void run(async () => {
+      setSetupInfo(await api<AccountSetupInfoDTO>('GET', `/v1/auth/setup?token=${encodeURIComponent(setupToken)}`));
+    });
+    // setupToken never changes after mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setupToken]);
+  const [confirm, setConfirm] = useState('');
+  const submitSetup = (e: React.FormEvent) =>
+    void run(async () => {
+      e.preventDefault();
+      if (password !== confirm) throw new Error('The passwords do not match.');
+      onSignedIn(await api<AuthResponse>('POST', '/v1/auth/setup', { token: setupToken, password }));
     });
 
   const sendSigninLink = () =>
@@ -439,6 +466,58 @@ export default function AuthScreen({
           Set password &amp; sign in
         </button>
       </form>
+    );
+  } else if (mode === 'setup') {
+    const leave = () => {
+      onSetupDismissed?.();
+      nav('signin');
+    };
+    body = setupInfo ? (
+      <form onSubmit={submitSetup} data-testid="auth-setup">
+        <h2 className="mb-1 text-center text-lg font-semibold text-ink">Set your password</h2>
+        <p className="mb-3 text-center text-sm text-muted">
+          Welcome{setupInfo.displayName ? `, ${setupInfo.displayName}` : ''}. You will sign in to Flow as
+        </p>
+        <p className="mb-4 rounded bg-black/5 px-3 py-2 text-center text-sm font-semibold text-ink" data-testid="auth-setup-email">
+          {setupInfo.email}
+        </p>
+        {/* For password managers: the account this password belongs to. */}
+        <input type="email" autoComplete="username" value={setupInfo.email} readOnly hidden />
+        <input
+          data-testid="auth-password"
+          className={inputCls}
+          placeholder="Password (min 8 characters)"
+          type="password"
+          autoComplete="new-password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
+        <input
+          data-testid="auth-password-confirm"
+          className="mb-3 w-full rounded border border-hairline2 px-3 py-2 text-sm"
+          placeholder="Confirm password"
+          type="password"
+          autoComplete="new-password"
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
+        />
+        {error && <p className="mb-2 text-sm text-red-600">{error}</p>}
+        <button data-testid="auth-submit" className={submitCls} disabled={busy || password.length < 8 || !confirm}>
+          Set password &amp; sign in
+        </button>
+      </form>
+    ) : (
+      <div data-testid="auth-setup">
+        <h2 className="mb-2 text-center text-lg font-semibold text-ink">{error ? 'Setup link problem' : 'Checking your link…'}</h2>
+        {error && (
+          <>
+            <p className="mb-3 text-center text-sm text-red-600" data-testid="auth-setup-error">{error}</p>
+            <button type="button" className="mt-3 w-full text-center text-sm text-muted hover:text-ink" onClick={leave}>
+              Back to sign in
+            </button>
+          </>
+        )}
+      </div>
     );
   } else if (mode === 'link-sent') {
     body = (

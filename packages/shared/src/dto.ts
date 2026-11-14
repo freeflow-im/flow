@@ -1,4 +1,5 @@
 // Plain DTO types returned by the REST API. All timestamps are ISO-8601 strings.
+import type { AccountDTO } from './platform.js';
 
 export interface UserDTO {
   id: string;
@@ -939,4 +940,31 @@ export function describeRecurrence(r: Recurrence, timezone?: string): string {
     case 'cron':
       return `Cron: ${r.expression}`;
   }
+}
+
+/** A member an admin created (Admin › Members › Create member) who has not set a password yet: the Pending list. */
+export interface PendingSetupDTO {
+  accountId: string;
+  userId: string;
+  /** The address they sign in with: `username@domain`. */
+  address: string;
+  displayName: string;
+  /** Where the setup link (and "Forgot password") goes. Owners and admins only. */
+  backupEmail: string;
+  createdAt: string;
+  /** When the live setup link expires; null when it has (Resend makes a new one). */
+  linkExpiresAt: string | null;
+}
+
+/** POST /v1/workspaces/:id/members/create. `emailSent` is false when the account was made but the mail failed. */
+export interface CreateMemberResultDTO {
+  account: AccountDTO;
+  pending: PendingSetupDTO | null;
+  emailSent: boolean;
+}
+
+/** GET /v1/auth/setup?token=: what the Set your password page shows before the link is used. */
+export interface AccountSetupInfoDTO {
+  email: string;
+  displayName: string;
 }

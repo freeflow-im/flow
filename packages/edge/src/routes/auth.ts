@@ -3,7 +3,7 @@ import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import type { ZodTypeAny, z } from 'zod';
 import type { AccountDTO } from '@flow/shared';
-import { AgentLoginBody, AppLinkExchangeBody, AppleAuthBody, CompleteSignupBody, ConsumeSigninLinkBody, ForgotPasswordBody, GoogleAuthBody, LoginBody, RegisterBody, ResetPasswordBody, SigninLinkBody, emailDomain, type UserDTO } from '@flow/shared';
+import { AgentLoginBody, AppLinkExchangeBody, AppleAuthBody, CompleteSetupBody, CompleteSignupBody, ConsumeSigninLinkBody, ForgotPasswordBody, GoogleAuthBody, LoginBody, RegisterBody, ResetPasswordBody, SigninLinkBody, emailDomain, type UserDTO } from '@flow/shared';
 import { accountGate, type DirectoryCore } from '../directory/core';
 import type { CallerContext } from '../org/routes/compat';
 import type { Directory } from '../directory/object';
@@ -162,6 +162,17 @@ authRoutes.post('/v1/auth/password/forgot', async (c) => {
 authRoutes.post('/v1/auth/password/reset', async (c) => {
   const body = await bodyOf(ResetPasswordBody, c);
   return signedIn(c, await directory(c, 'resetPassword', body.token, body.password, agent(c)));
+});
+// An admin-created member's setup link (Admin › Members › Create member): the page shows the address first, then sets
+// the first password, verifies the account and signs them in.
+authRoutes.get('/v1/auth/setup', async (c) => {
+  const token = c.req.query('token') ?? '';
+  if (!token || token.length > 512) throw badRequest('validation', 'token is required');
+  return c.json(await directory(c, 'setupInfo', token));
+});
+authRoutes.post('/v1/auth/setup', async (c) => {
+  const body = await bodyOf(CompleteSetupBody, c);
+  return signedIn(c, await directory(c, 'completeSetup', body.token, body.password, agent(c)));
 });
 authRoutes.post('/v1/auth/signin-link', async (c) => {
   await directory(c, 'sendSigninLink', (await bodyOf(SigninLinkBody, c)).email);

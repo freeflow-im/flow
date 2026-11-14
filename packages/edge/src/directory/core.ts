@@ -1,6 +1,6 @@
 // Identity: accounts, sessions and sign-in. Ported from packages/server/src/services/auth.ts and oauthAccounts.ts, with
 // the same rules and the same mail. It runs over any `SqlStorage`-shaped database, so tests can use node:sqlite.
-import type { AccountDTO, AccountKind, AgentMode, AgentRuntime, HostedRuntimeDTO, SponsoredAgentDTO, UsableAgentDTO, AccountRole, AccountState, AuthResponse, DnsRecordDTO, DomainDTO, DomainKind, OAuthIdentityDTO, RegisterResponse, UserDTO } from '@flow/shared';
+import type { AccountDTO, AccountKind, AccountSetupInfoDTO, AgentMode, PendingSetupDTO, AgentRuntime, HostedRuntimeDTO, SponsoredAgentDTO, UsableAgentDTO, AccountRole, AccountState, AuthResponse, DnsRecordDTO, DomainDTO, DomainKind, OAuthIdentityDTO, RegisterResponse, UserDTO } from '@flow/shared';
 import { ApiError, badRequest, conflict, forbidden, notFound, unauthorized } from '../errors';
 import { hashPassword, verifyPassword } from './passwords';
 import { DIRECTORY_MIGRATIONS } from './schema';
@@ -76,6 +76,14 @@ const DAY = 86_400_000;
 const SESSION_TTL_DAYS = 30;
 const VERIFY_TTL_HOURS = 48;
 const RESET_TTL_MINUTES = 60;
+/** An admin-created member's setup link (Admin › Members › Create member): a week, since it waits on a person. */
+const SETUP_TTL_DAYS = 7;
+/** The sentinel password of a created member who has not set one: no password matches it (passwords.ts). */
+const SETUP_PENDING = '!setup:';
+/** Local parts a created member may not take: the mailbox names RFC 2142 and mail systems reserve. */
+const RESERVED_LOCALS = new Set(['postmaster', 'abuse', 'hostmaster', 'webmaster', 'mailer-daemon', 'noreply', 'no-reply', 'root', 'security']);
+const USERNAME = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/;
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const SIGNIN_TTL_MINUTES = 15;
 const APP_LINK_TTL = 2 * 60_000;
 const DESKTOP_HANDOFF_TTL = 10 * 60_000;
@@ -352,13 +360,14 @@ export class DirectoryCore {
     return asked === 'personal_agent' ? 'native' : (asked ?? 'native');
   }
 
-  private createAccount(userId: string, organizationId: string, role: string, displayName?: string, provision = true, kind?: AccountKind): void {
+  private createAccount(userId: string, organizationId: string, role: string, displayName?: string, provision = true, kind?: AccountKind, chosenAddress?: string): void {
     const user = this.userById(userId);
     if (!user) return;
     const name = displayName || (user.display_name as string);
     const accountKind = this.defaultKind(organizationId, role, user, kind);
     // A guest has no address (§3.3): an address with no mailbox behind it bounces. Nor has a personal agent (agents.md §2).
-    const address = accountKind === 'guest' || accountKind === 'personal_agent' ? null : this.newAddress(user, name, organizationId);
+    // A created member's address is the one the admin chose (createMember checked it is free).
+    const address = accountKind === 'guest' || accountKind === 'personal_agent' ? null : chosenAddress ?? this.newAddress(user, name, organizationId);
     const id = newId();
     // With a provider, a native account starts at the head of the state machine (§3.4); Chat and Docs work from there.
     // A guest has nothing to provision and starts active.
@@ -712,24 +721,147 @@ export class DirectoryCore {
     return { token: await this.issueSession(user.id as string, clientInfo), user: toUserDTO(user, user.id as string) };
   }
 
+  /** The link goes to the account's address and, for a member an admin created, to their backup email too: their
+   * address is an org mailbox, which a locked-out person cannot open. Both carry the one link. */
   async forgotPassword(email: string): Promise<void> {
     const user = this.userByEmail(email);
     if (!user || user.is_bot) return;
     const token = await this.mintEmailToken(user.id as string, 'password_reset', RESET_TTL_MINUTES * 60_000);
-    await this.deps.send({
-      to: user.email as string,
-      subject: 'Reset your Flow password',
-      text: `Hi ${user.display_name},\n\nSomeone (hopefully you) asked to reset the password for this Flow account.\n\n${this.deps.webUrlBase}/?reset=${token}\n\nThis link expires in ${RESET_TTL_MINUTES} minutes and can be used once. If you didn't ask for this, you can ignore this email — your password is unchanged.\n`,
-    });
+    const backup = (user.backup_email as string | null) ?? null;
+    for (const to of [user.email as string, ...(backup && backup.toLowerCase() !== (user.email as string).toLowerCase() ? [backup] : [])]) {
+      await this.deps.send({
+        to,
+        subject: 'Reset your Flow password',
+        text: `Hi ${user.display_name},\n\nSomeone (hopefully you) asked to reset the password for ${to === user.email ? 'this Flow account' : `your Flow account ${user.email as string}`}.\n\n${this.deps.webUrlBase}/?reset=${token}\n\nThis link expires in ${RESET_TTL_MINUTES} minutes and can be used once. If you didn't ask for this, you can ignore this email — your password is unchanged.\n`,
+      });
+    }
   }
 
   /** Sets the password, ends every existing session and signs in fresh. The link proves the address, so it verifies too. */
   async resetPassword(token: string, password: string, clientInfo?: string): Promise<AuthResponse> {
-    const user = await this.consumeEmailToken(token, 'password_reset');
-    if (!user) throw unauthorized('invalid or expired reset link');
+    return this.setPasswordBy(token, 'password_reset', password, clientInfo, 'invalid or expired reset link');
+  }
+
+  private async setPasswordBy(token: string, purpose: string, password: string, clientInfo: string | undefined, refusal: string): Promise<AuthResponse> {
+    const user = await this.consumeEmailToken(token, purpose);
+    if (!user) throw unauthorized(refusal);
     this.sql.exec('UPDATE users SET password_hash = ?, email_verified_at = COALESCE(email_verified_at, ?) WHERE id = ?', hashPassword(password), Date.now(), user.id);
+    // A password set by either link ends the setup: the other link is no use now.
+    this.sql.exec("DELETE FROM email_tokens WHERE user_id = ? AND purpose IN ('account_setup', 'password_reset')", user.id);
     this.sql.exec('DELETE FROM sessions WHERE user_id = ?', user.id);
-    return { token: await this.issueSession(user.id as string, clientInfo), user: toUserDTO(user, user.id as string) };
+    const fresh = this.userById(user.id as string)!;
+    return { token: await this.issueSession(user.id as string, clientInfo), user: toUserDTO(fresh, user.id as string) };
+  }
+
+  // ---- members an admin creates (Admin › Members › Create member) ----------------------------------------------
+
+  /**
+   * A native member at `username@domain` on one of the organization's verified domains, with no password yet: the
+   * principal (its login is the address) and its account, which with hosted mail starts `requested` and is sent to be
+   * provisioned as any native join is. The Org object writes the member row after (routes/accounts.ts); then
+   * `sendSetupLink` mails the backup address. Refusals are 400s and 409s with codes the Admin form shows.
+   */
+  createMember(organizationId: string, input: { displayName: string; username: string; domain: string; backupEmail: string }): { user: UserDTO; account: AccountDTO } {
+    const displayName = input.displayName.trim().slice(0, 80);
+    if (!displayName) throw badRequest('invalid_display_name', 'Enter a display name.');
+    const username = input.username.trim().toLowerCase();
+    if (!USERNAME.test(username) || username.includes('..')) {
+      throw badRequest('invalid_username', 'A username is 1–64 letters, digits, dots, hyphens or underscores, starting and ending with a letter or digit.');
+    }
+    if (RESERVED_LOCALS.has(username)) throw badRequest('username_reserved', `"${username}" is reserved for the mail system.`);
+    const domain = input.domain.trim().toLowerCase().replace(/\.$/, '');
+    const row = this.domainRow('domain = ? AND organization_id = ?', domain, organizationId)[0];
+    if (!row) throw badRequest('invalid_domain', `${domain} is not one of this organization's domains.`);
+    if (!row.verified) throw badRequest('domain_unverified', `Verify ${domain} before creating addresses on it.`);
+    const backup = input.backupEmail.trim();
+    if (!EMAIL.test(backup) || backup.length > 320) throw badRequest('invalid_backup_email', 'Enter a valid backup email address.');
+    const backupDomain = backup.slice(backup.lastIndexOf('@') + 1).toLowerCase();
+    if (this.domainsOf(organizationId).some((d) => backupDomain === d.domain || backupDomain.endsWith(`.${d.domain}`))) {
+      throw badRequest('backup_email_on_domain', "The backup email must be outside this organization's domains: it is how they get in when they can't reach their mailbox.");
+    }
+    const address = `${username}@${domain}`;
+    if (this.addressTaken(address) || this.userByEmail(address)) throw conflict('username_taken', `${address} is already taken.`);
+    const now = Date.now();
+    const user = this.rows(
+      `INSERT INTO users (id, email, password_hash, display_name, backup_email, created_at) VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT (email) DO NOTHING RETURNING *`,
+      newId(), address, `${SETUP_PENDING}${newToken()}`, displayName, backup, now)[0];
+    if (!user) throw conflict('username_taken', `${address} is already taken.`);
+    this.createAccount(user.id as string, organizationId, 'member', displayName, true, 'native', address);
+    return { user: toUserDTO(user, user.id as string), account: this.accountFor(user.id as string, organizationId)! };
+  }
+
+  /** Undoes a `createMember` whose member row could not be written, so the address is free to try again. A provision
+   * message already sent finds no account and does nothing (provisioning/consumer.ts). */
+  discardCreatedMember(organizationId: string, userId: string): void {
+    const u = this.userById(userId);
+    if (!u || !(u.password_hash as string).startsWith(SETUP_PENDING)) return;
+    const account = this.rows('SELECT id FROM accounts WHERE user_id = ? AND organization_id = ?', userId, organizationId)[0];
+    if (account) {
+      this.sql.exec('DELETE FROM addresses WHERE account_id = ?', account.id);
+      this.sql.exec('DELETE FROM accounts WHERE id = ?', account.id);
+    }
+    this.sql.exec('DELETE FROM email_tokens WHERE user_id = ?', userId);
+    this.sql.exec('DELETE FROM users WHERE id = ? AND NOT EXISTS (SELECT 1 FROM accounts WHERE user_id = ?)', userId, userId);
+  }
+
+  /** A created member of the organization who has not set a password yet, or null. */
+  private pendingSetup(organizationId: string, accountId: string): Row | undefined {
+    return this.rows(
+      `SELECT u.*, a.id AS account_id, a.address FROM accounts a JOIN users u ON u.id = a.user_id
+       WHERE a.id = ? AND a.organization_id = ? AND a.state <> 'removed' AND u.password_hash LIKE ? AND u.backup_email IS NOT NULL AND u.deleted_at IS NULL`,
+      accountId, organizationId, `${SETUP_PENDING}%`)[0];
+  }
+
+  /**
+   * Mails a created member's backup address a one-time link to set their password, good for a week; a new one replaces
+   * the last (the Pending list's "Resend setup link"). Only while they have no password. `from` names the workspace and
+   * who created them, for the mail.
+   */
+  async sendSetupLink(organizationId: string, accountId: string, from: { workspaceName?: string; byName?: string } = {}): Promise<PendingSetupDTO> {
+    const u = this.pendingSetup(organizationId, accountId);
+    if (!u) throw conflict('not_pending', 'this member has set their password already');
+    const token = await this.mintEmailToken(u.id as string, 'account_setup', SETUP_TTL_DAYS * DAY);
+    const where = from.workspaceName ? ` in ${from.workspaceName}` : '';
+    const who = from.byName ? `${from.byName} created` : 'An administrator created';
+    await this.deps.send({
+      to: u.backup_email as string,
+      subject: `Set up your Flow account${where}`,
+      text: `Hi ${u.display_name},\n\n${who} a Flow account for you${where}. You will sign in as:\n\n  ${u.email as string}\n\nChoose your password here:\n\n${this.deps.webUrlBase}/?setup=${token}\n\nThis link expires in ${SETUP_TTL_DAYS} days and can be used once. We sent it to this address because it is your backup email; "Forgot password" on the sign-in screen reaches it too.\n`,
+    });
+    return this.pendingSetups(organizationId).find((p) => p.accountId === accountId)!;
+  }
+
+  /** The organization's created members who have not set a password: Admin › Members › Pending. */
+  pendingSetups(organizationId: string): PendingSetupDTO[] {
+    return this.rows(
+      `SELECT a.id AS account_id, u.id AS user_id, u.email, u.display_name, u.backup_email, u.created_at,
+         (SELECT MAX(t.expires_at) FROM email_tokens t WHERE t.user_id = u.id AND t.purpose = 'account_setup') AS link_expires_at
+       FROM accounts a JOIN users u ON u.id = a.user_id
+       WHERE a.organization_id = ? AND a.state <> 'removed' AND u.password_hash LIKE ? AND u.backup_email IS NOT NULL AND u.deleted_at IS NULL
+       ORDER BY u.created_at, u.id`,
+      organizationId, `${SETUP_PENDING}%`).map((r) => ({
+      accountId: r.account_id as string,
+      userId: r.user_id as string,
+      address: r.email as string,
+      displayName: r.display_name as string,
+      backupEmail: r.backup_email as string,
+      createdAt: iso(r.created_at),
+      linkExpiresAt: r.link_expires_at != null && (r.link_expires_at as number) > Date.now() ? iso(r.link_expires_at) : null,
+    }));
+  }
+
+  /** What the Set your password page shows before it is used: the address they will sign in with. The link is not spent. */
+  async setupInfo(token: string): Promise<AccountSetupInfoDTO> {
+    const t = this.rows("SELECT user_id FROM email_tokens WHERE token_hash = ? AND purpose = 'account_setup' AND expires_at > ?", await hashToken(token), Date.now())[0];
+    const u = t && this.userById(t.user_id as string);
+    if (!u || u.deleted_at) throw unauthorized('This setup link is invalid or has expired. Ask your administrator to send a new one.');
+    return { email: u.email as string, displayName: u.display_name as string };
+  }
+
+  /** Sets the created member's first password from their setup link, verifies the account and signs them in. */
+  async completeSetup(token: string, password: string, clientInfo?: string): Promise<AuthResponse> {
+    return this.setPasswordBy(token, 'account_setup', password, clientInfo, 'This setup link is invalid or has expired. Ask your administrator to send a new one.');
   }
 
   async sendSigninLink(email: string): Promise<void> {
@@ -1316,7 +1448,7 @@ export class DirectoryCore {
     // The agents they sponsor follow them out of every organization (§3.3, rule 2).
     this.removeSponsored(userId, null);
     revokePersonalAgent(this.sql, userId);
-    this.sql.exec("UPDATE users SET deleted_at = ?, email = 'deleted-' || id || '@deleted.invalid', password_hash = '!deleted', display_name = 'Deleted user', avatar_url = NULL WHERE id = ?", Date.now(), userId);
+    this.sql.exec("UPDATE users SET deleted_at = ?, email = 'deleted-' || id || '@deleted.invalid', password_hash = '!deleted', display_name = 'Deleted user', avatar_url = NULL, backup_email = NULL WHERE id = ?", Date.now(), userId);
   }
 
   /** The organizations where the principal holds an account that was not removed. */

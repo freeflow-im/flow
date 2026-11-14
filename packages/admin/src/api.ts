@@ -1,6 +1,6 @@
 // The suite's API on the edge Worker, same origin with the session cookie: the Org object's routes (the workspace, its
 // members, invitations, emoji, join link) and the directory's (domains, accounts). A 401 sends the browser to sign in.
-import type { AccountDTO, AccountKind, AgentDefinitionDTO, PlatformEvent, UsableAgentDTO, AgentInviteDTO, ChannelDTO, DnsRecordDTO, DomainDTO, DomainKind, FileDTO, InviteResultDTO, JoinLinkDTO, MemberRole, OAuthIdentityDTO, PresignedUploadDTO, PublicConfigDTO, UpdateWorkspaceBody, WorkspaceDTO, WorkspaceEmojiDTO, WorkspaceInviteDTO, WorkspaceMemberDTO } from '@flow/shared';
+import type { AccountDTO, AccountKind, AgentDefinitionDTO, CreateMemberBody, CreateMemberResultDTO, PendingSetupDTO, PlatformEvent, UsableAgentDTO, AgentInviteDTO, ChannelDTO, DnsRecordDTO, DomainDTO, DomainKind, FileDTO, InviteResultDTO, JoinLinkDTO, MemberRole, OAuthIdentityDTO, PresignedUploadDTO, PublicConfigDTO, UpdateWorkspaceBody, WorkspaceDTO, WorkspaceEmojiDTO, WorkspaceInviteDTO, WorkspaceMemberDTO } from '@flow/shared';
 
 export class AdminApiError extends Error {
   constructor(public readonly code: string, message: string, public readonly status: number) {
@@ -132,6 +132,11 @@ export const adminApi = {
   // Invitations (§6.3, §6.5): pending ones, revoking one, and inviting people or chat guests.
   invites: async (id: string) => (await request<{ invites: WorkspaceInviteDTO[] }>('GET', `${ws(id)}/invites`)).invites,
   revokeInvite: (id: string, inviteId: string) => request<unknown>('DELETE', `${ws(id)}/invites/${encodeURIComponent(inviteId)}`),
+  // Created members (Create member): an account at username@domain whose setup link goes to a backup email; those who have
+  // not set a password yet, and a fresh link for one of them.
+  createMember: (id: string, body: CreateMemberBody) => request<CreateMemberResultDTO>('POST', `${ws(id)}/created-members`, body),
+  pendingSetups: async (id: string) => (await request<{ pending: PendingSetupDTO[] }>('GET', `${ws(id)}/created-members`)).pending,
+  resendSetupLink: async (id: string, accountId: string) => (await request<{ pending: PendingSetupDTO }>('POST', `${ws(id)}/created-members/${encodeURIComponent(accountId)}/setup-link`, {})).pending,
   invite: async (id: string, emails: string[], kind: AccountKind) => (await request<{ results: InviteResultDTO[] }>('POST', `${ws(id)}/invites`, { emails, kind })).results,
   // Channels (the Automations form's choices) and agents (§3.4).
   channels: async (id: string) => (await request<{ channels: ChannelDTO[] }>('GET', `${ws(id)}/channels`)).channels,

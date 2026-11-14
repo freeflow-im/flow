@@ -3,10 +3,10 @@
 // member rows follow its address. Mounted before routes/org.ts, whose catch-all would send these to the Org object.
 import { Hono, type Context } from 'hono';
 import type { ZodTypeAny, z } from 'zod';
-import { BulkAccountKindBody, SetAccountKindBody, type AccountDTO, type AccountKindResult, type BulkAccountKindResult } from '@flow/shared';
+import { BulkAccountKindBody, CreateMemberBody, SetAccountKindBody, type AccountDTO, type AccountKindResult, type BulkAccountKindResult, type CreateMemberResultDTO, type PendingSetupDTO, type UserDTO } from '@flow/shared';
 import { ApiError, badRequest } from '../errors';
 import { directory, type AuthEnv } from './auth';
-import { adminOf } from './domains';
+import { adminCallerOf, adminOf } from './domains';
 
 type C = Context<{ Bindings: AuthEnv }>;
 
@@ -74,4 +74,43 @@ accountRoutes.post('/v1/workspaces/:id/accounts/kind', async (c) => {
   await bodyOf(c, BulkAccountKindBody);
   const out = await c.env.ORG.get(c.env.ORG.idFromName(id)).makeMembersGuests();
   return c.json({ changed: out.changed.length, unchanged: out.unchanged } satisfies BulkAccountKindResult);
+});
+
+// Members an admin creates (Admin › Members › Create member): a native account at `username@domain` with no password,
+// whose setup link goes to a backup email. The directory makes the principal and account (and with hosted mail sends it
+// to be provisioned, as any native join); then the Org object writes the member row; then the link is mailed.
+type OrgStub = { addCreatedMember(u: UserDTO): Promise<{ ok: true; value: { workspaceName: string } } | { ok: false; status: number; code: string; message: string }>; workspaceName(): Promise<string | null> };
+const orgOf = (c: C, id: string) => c.env.ORG.get(c.env.ORG.idFromName(id)) as unknown as OrgStub;
+
+accountRoutes.post('/v1/workspaces/:id/created-members', async (c) => {
+  const { id, user: admin } = await adminCallerOf(c as never, 'create members');
+  const body = await bodyOf(c, CreateMemberBody);
+  const made = await directory(c, 'createMember', id, body);
+  const joined = await orgOf(c, id).addCreatedMember(made.user).catch((err: Error) => ({ ok: false as const, status: 500, code: 'internal', message: err.message }));
+  if (!joined.ok) {
+    await directory(c, 'discardCreatedMember', id, made.user.id);
+    throw new ApiError(joined.status, joined.code, joined.message);
+  }
+  let pending: PendingSetupDTO | null = null;
+  try {
+    pending = await directory(c, 'sendSetupLink', id, made.account.id, { workspaceName: joined.value.workspaceName, byName: admin.displayName });
+  } catch (err) {
+    // The member exists; the Pending list's Resend sends the link again.
+    console.error(`setup link for ${made.account.id}: ${(err as Error).message}`);
+  }
+  const account = (await directory(c, 'accountById', made.account.id)) ?? made.account;
+  return c.json({ account, pending, emailSent: !!pending } satisfies CreateMemberResultDTO, 201);
+});
+
+accountRoutes.get('/v1/workspaces/:id/created-members', async (c) => {
+  const id = await adminOf(c as never, 'see pending members');
+  return c.json({ pending: await directory(c, 'pendingSetups', id) });
+});
+
+/** "Resend setup link": a fresh week-long link, which replaces the last. Only while they have no password (409). */
+accountRoutes.post('/v1/workspaces/:id/created-members/:accountId/setup-link', async (c) => {
+  const { id, user: admin } = await adminCallerOf(c as never, 'send setup links');
+  const workspaceName = (await orgOf(c, id).workspaceName().catch(() => null)) ?? undefined;
+  const pending = await directory(c, 'sendSetupLink', id, c.req.param('accountId'), { workspaceName, byName: admin.displayName });
+  return c.json({ pending });
 });

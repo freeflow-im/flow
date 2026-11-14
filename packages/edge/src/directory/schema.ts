@@ -309,4 +309,7 @@ export const DIRECTORY_MIGRATIONS: string[] = [
   // `manage`: one booking's own link, sent to its guest, which outlives a new page link.
   `CREATE TABLE booking_links (token_hash TEXT PRIMARY KEY, account_id TEXT NOT NULL, kind TEXT NOT NULL, created_at INTEGER NOT NULL);
   CREATE UNIQUE INDEX booking_links_page ON booking_links(account_id) WHERE kind = 'page';`,
+  // Members an admin creates (Admin › Members › Create member): the outside address their setup link goes to, which
+  // "Forgot password" also reaches, since their only other address is the org mailbox they cannot open while locked out.
+  `ALTER TABLE users ADD COLUMN backup_email TEXT;`,
 ];

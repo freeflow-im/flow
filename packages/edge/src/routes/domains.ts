@@ -2,7 +2,7 @@
 // publish and the checks are directory/dns.ts. Mounted before routes/org.ts, whose catch-all would send these to the Org object.
 import { Hono, type Context } from 'hono';
 import type { ZodTypeAny, z } from 'zod';
-import { AddDomainBody, PatchDomainBody } from '@flow/shared';
+import { AddDomainBody, PatchDomainBody, type AccountDTO, type UserDTO } from '@flow/shared';
 import { ApiError, badRequest, unauthorized } from '../errors';
 import { directory, resolveCaller, type AuthEnv } from './auth';
 import { platformDns, type PlatformDnsEnv } from '../directory/providers/cloudflareDns';
@@ -18,12 +18,17 @@ const ORG_ID = /^[0-9a-f-]{36}$/;
 
 /** The organization in the path, for an owner or admin of it. */
 export async function adminOf(c: Context<{ Bindings: AuthEnv }>, what = 'manage domains'): Promise<string> {
+  return (await adminCallerOf(c, what)).id;
+}
+
+/** `adminOf`, with who the owner or admin is. */
+export async function adminCallerOf(c: Context<{ Bindings: AuthEnv }>, what: string): Promise<{ id: string; user: UserDTO; account: AccountDTO }> {
   const id = c.req.param('id') ?? '';
   if (!ORG_ID.test(id)) throw badRequest('validation', 'not an organization id');
   const who = await resolveCaller(c, id);
   if (!who.user) throw unauthorized('missing bearer token');
   if (who.account?.role !== 'owner' && who.account?.role !== 'admin') throw new ApiError(403, 'forbidden', `only owners and admins ${what}`);
-  return id;
+  return { id, user: who.user, account: who.account };
 }
 
 async function bodyOf<S extends ZodTypeAny>(c: C, schema: S): Promise<z.output<S>> {

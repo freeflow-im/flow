@@ -1104,6 +1104,37 @@ export class Org extends DurableObject<OrgEnv> {
     return joined;
   }
 
+  /**
+   * A member an admin created (Admin › Members › Create member; routes/accounts.ts): the directory made the principal and
+   * its account first, so the join's `ensureAccount` finds the account and its chosen address. The row is written and the
+   * join announced as a domain join's is. Returns the workspace's name, for the setup mail. A refusal comes back as data.
+   */
+  async addCreatedMember(user: UserDTO): Promise<DirectoryAnswer<{ workspaceName: string }>> {
+    try {
+      const name = await this.scoped(async () => {
+        this.ensureUser(user);
+        const workspace = this.db.select().from(schema.workspaces).get();
+        if (!workspace) throw new ApiError(404, 'not_found', 'workspace not found');
+        const account = await accountForJoin(workspace.id, user.id);
+        if (!account) throw new ApiError(409, 'already_member', 'already a member');
+        const isNew = await this.db.transaction((tx) => enrollInWorkspace(tx, workspace.id, user.id, 'member', undefined, account));
+        if (isNew) await announceJoin(workspace.id, user.id);
+        return workspace.name;
+      });
+      await this.logging;
+      await this.flushOutbox(null);
+      return { ok: true, value: { workspaceName: name } };
+    } catch (err) {
+      if (err instanceof ApiError) return { ok: false, status: err.statusCode, code: err.code, message: err.message };
+      throw err;
+    }
+  }
+
+  /** The workspace's name, for mail the Worker sends about it (a resent setup link). */
+  workspaceName(): string | null {
+    return this.db.select({ name: schema.workspaces.name }).from(schema.workspaces).get()?.name ?? null;
+  }
+
   /** A member's profile changed in the directory: refresh this organization's copy and tell its sockets. */
   /** The organization's suggested prompts for the assistant's panel (agents.md §1.2): only the pages it changed. */
   async assistantPrompts(): Promise<AssistantPrompts> {
