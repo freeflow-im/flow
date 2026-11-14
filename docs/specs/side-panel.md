@@ -1,6 +1,7 @@
 # Side panel
 
-Status: phases 1 and 2 built 2026-11-13 (web: Mail hosts Calendar, Docs and the anchored assistant). Phase 3 dropped by
+Status: phases 1 and 2 built 2026-11-13; drag and drop of a Docs file into Mail built 2026-11-14 (onto a composer, an open
+conversation or a row of the list; Mail → Calendar and Calendar → Mail not yet). Phases 1 and 2 built 2026-11-13 (web: Mail hosts Calendar, Docs and the anchored assistant). Phase 3 dropped by
 the operator; drag and drop (phase 4) and more hosts (phase 5) are next.
 
 ## 1. What it is
@@ -94,7 +95,8 @@ Mail gets an attachment's bytes from Docs on the server, not through the browser
 
 Decided by the recipients' domains (operator ruling 2026-11-13):
 
-- **A link** when every address in To and Cc has the same domain as the address the message is sent from.
+- **A link** when every recipient (To, Cc and Bcc) has the same domain as the address the message is sent from, and is a
+  member of the organization (matched by their mailbox address or sign-in email): only a member can open the shared file.
 - **An attachment** otherwise. This is the default, and the choice when To is empty.
 - **Free mail domains never match** (gmail.com, outlook.com, icloud.com and the like): two people at gmail.com are not
   colleagues.

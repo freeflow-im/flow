@@ -1,5 +1,6 @@
 // What Reply, Reply all and Forward put in a new message: the recipients, "Re:"/"Fwd:", the original quoted, and the
 // headers that thread it (In-Reply-To and References). And a saved draft (one an agent wrote, say) opened to edit.
+import type { DocsFile } from './docsFiles';
 import { attachmentUrl, type Address, type MessageDetail, type OutgoingMessage } from '../api';
 import { formatAddress, uniqueAddresses } from './addresses';
 import { escapeHtml, sanitizeEmailHtml, textToHtml } from './sanitize';
@@ -154,6 +155,8 @@ export interface ComposeRequest {
   remode?: (mode: AnswerMode) => ComposeDraft;
   /** Files already chosen: a composer opened again after its send failed, or moved out of its conversation. */
   files?: ComposeFile[];
+  /** Docs files dropped on the message (the side panel): each a link or an attachment by the recipients (lib/docsLink.ts). */
+  docs?: DocsFile[];
   /** Opened again with what had been written: closing it asks first. */
   restored?: boolean;
 }

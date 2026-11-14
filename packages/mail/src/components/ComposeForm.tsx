@@ -6,12 +6,15 @@
 // message over (`onSend`, an `Outgoing`) and the composer closes: App.tsx sends it while a toast says "Sending…", and offers
 // to open it again if that fails. Closing with something written asks first.
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, type ReactNode, type Ref } from 'react';
-import { ChevronDown, FileText, Forward, Loader2, Paperclip, Reply, ReplyAll, Send, Trash2, Upload, X } from 'lucide-react';
+import { ChevronDown, FileText, Forward, Link2, Loader2, Paperclip, Reply, ReplyAll, Send, Trash2, Upload, X } from 'lucide-react';
+import { hasFlowRef, readFlowRef } from '@flow/suite-bar';
 import { attachmentUrl, mailApi, MAX_SEND_BYTES, type Address, type MailAccount } from '../api';
 import { parseAddressList } from '../lib/addresses';
 import { isDraftEmpty, type AnswerMode, type ComposeDraft, type ComposeMode, type ComposeRequest, type Outgoing } from '../lib/compose';
 import { fileSize } from '../lib/format';
 import { attachedAs, docsFiles, type DocsFile } from '../lib/docsFiles';
+import { docsFileOfRef, fetchMembers, linkByDefault, linksBlock, memberOf, shareWith, useOrgMembers } from '../lib/docsLink';
+import { useActiveOrganizationId } from '../hooks/organization';
 import { DocsPicker } from './DocsPicker';
 import { cn } from '../lib/utils';
 import { EditorArea, EditorToolbar, useMailEditor } from './Editor';
@@ -30,6 +33,9 @@ interface FileItem {
   file: Blob | null;
   status: 'loading' | 'ready' | 'error';
   forwarded: boolean;
+  /** Dropped from Docs (the side panel): sent as a link or attached, by the recipients unless the person chose (`pick`). */
+  docs?: DocsFile;
+  pick?: 'link' | 'attachment';
 }
 
 export const TITLES: Record<ComposeMode, string> = { new: 'New message', reply: 'Reply', replyAll: 'Reply all', forward: 'Forward', draft: 'Draft' };
@@ -48,6 +54,8 @@ export interface ComposerHandle {
   /** The composer as it is now, to open again elsewhere (the inline card moved to the dialog). */
   snapshot(): ComposeRequest;
   focus(): void;
+  /** Adds Docs files dropped on the conversation it answers (a link or an attachment, as a drop on it would). */
+  addDocs(list: DocsFile[]): void;
 }
 
 export interface ComposeFormProps {
@@ -85,6 +93,10 @@ export function ComposeForm({ account, request, variant, handle, onClose, onSend
   const [confirming, setConfirming] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [picking, setPicking] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  // The organization's members: who a dropped Docs file can go to as a link (lib/docsLink.ts), and is shared with.
+  const workspace = useActiveOrganizationId();
+  const members = useOrgMembers(workspace);
   const pending = useRef({ to: '', cc: '', bcc: '' });
   const fileInput = useRef<HTMLInputElement>(null);
   const root = useRef<HTMLDivElement>(null);
@@ -125,17 +137,27 @@ export function ComposeForm({ account, request, variant, handle, onClose, onSend
     if (loaded.current || request.files) return;
     loaded.current = true;
     if (request.draft.forwardAttachments) loadForwarded(request.draft.forwardAttachments);
+    if (request.docs?.length) addFromDocs(request.docs, true);
+    // addFromDocs is this render's; it only adds.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [request, loadForwarded]);
 
-  const total = files.reduce((n, f) => n + f.size, 0);
+  // A dropped Docs file is a link when every recipient is a colleague who can open it (lib/docsLink.ts), unless chosen.
+  const addressesOf = (r: { to: Address[]; cc: Address[]; bcc: Address[] }) => [...r.to, ...r.cc, ...r.bcc].map((a) => a.address);
+  const autoLink = linkByDefault(account.email, addressesOf({ to, cc, bcc }), members ?? []);
+  const asLink = (f: FileItem) => !!f.docs && (f.pick ? f.pick === 'link' : autoLink);
+  const total = files.reduce((n, f) => (asLink(f) ? n : n + f.size), 0);
   const addFiles = (list: FileList | File[]) => {
     const added = Array.from(list).map((file) => ({ id: nextFileId++, name: file.name, type: file.type || 'application/octet-stream', size: file.size, file, status: 'ready' as const, forwarded: false }));
     setFiles((f) => [...f, ...added]);
   };
 
-  /** Files chosen in Docs: shown at once, attached when their bytes arrive (a document is made into a file first). */
-  const addFromDocs = (list: DocsFile[]) => {
-    const items = list.map((d) => ({ id: nextFileId++, ...attachedAs(d), size: d.kind === 'file' ? (d.size ?? 0) : 0, file: null, status: 'loading' as const, forwarded: false }));
+  /**
+   * Files chosen in Docs: shown at once, attached when their bytes arrive (a document is made into a file first).
+   * `dropped`: dragged from the side panel, so a link or an attachment by the recipients (the bytes are read either way).
+   */
+  const addFromDocs = (list: DocsFile[], dropped = false) => {
+    const items = list.map((d) => ({ id: nextFileId++, ...attachedAs(d), size: d.kind === 'file' ? (d.size ?? 0) : 0, file: null, status: 'loading' as const, forwarded: false, ...(dropped ? { docs: d } : {}) }));
     setFiles((f) => [...f, ...items]);
     for (const [i, d] of list.entries()) {
       const item = items[i]!;
@@ -191,19 +213,37 @@ export function ComposeForm({ account, request, variant, handle, onClose, onSend
     ...request,
     mode,
     draft: { ...initial, ...r, subject, html: fullHtml(), forwardAttachments: undefined },
-    files: files.filter((f) => f.status === 'ready' && f.file).map((f) => ({ name: f.name, type: f.type, size: f.size, file: f.file!, forwarded: f.forwarded })),
+    files: files.filter((f) => !f.docs && f.status === 'ready' && f.file).map((f) => ({ name: f.name, type: f.type, size: f.size, file: f.file!, forwarded: f.forwarded })),
+    docs: files.flatMap((f) => (f.docs ? [f.docs] : [])),
     restored: true,
   });
 
   /** Checks what can be checked at once and hands the message over; what is wrong stays here, said above Send. */
-  const send = () => {
+  const send = async () => {
+    if (sharing) return;
     setError(null);
     try {
       const r = recipients(true);
       if (r.to.length + r.cc.length + r.bcc.length === 0) throw new Error('Add at least one recipient.');
-      if (files.some((f) => f.status === 'loading')) throw new Error('Wait for the attachments to finish loading.');
-      if (files.some((f) => f.status === 'error')) throw new Error('An attachment could not be loaded. Remove it to send.');
+      const attached = files.filter((f) => !asLink(f));
+      const linked = files.flatMap((f) => (asLink(f) && f.docs ? [f.docs] : []));
+      if (attached.some((f) => f.status === 'loading')) throw new Error('Wait for the attachments to finish loading.');
+      if (attached.some((f) => f.status === 'error')) throw new Error('An attachment could not be loaded. Remove it to send.');
       if (total > MAX_SEND_BYTES) throw new Error(`Messages can be at most 20 MB with their attachments (this one is ${fileSize(total)}).`);
+      // A linked file of the sender's own is shared with the recipients who are members first (read only).
+      const toShare = linked.filter((d) => !d.shared);
+      if (toShare.length) {
+        if (!workspace) throw new Error('Choose an organization to share the linked files in, or send them as attachments.');
+        setSharing(true);
+        try {
+          const all = members ?? (await fetchMembers(workspace));
+          const who = addressesOf(r).flatMap((a) => memberOf(a, all) ?? []);
+          for (const d of toShare) await shareWith(d, who, workspace);
+        } finally {
+          setSharing(false);
+        }
+      }
+      const links = linksBlock(linked);
       onSend({
         accountId: account.id,
         message: {
@@ -211,13 +251,14 @@ export function ComposeForm({ account, request, variant, handle, onClose, onSend
           ...(r.cc.length ? { cc: r.cc } : {}),
           ...(r.bcc.length ? { bcc: r.bcc } : {}),
           subject,
-          html: live ? fullHtml() : '',
-          text: (live?.getText({ blockSeparator: '\n\n' }) ?? '') + (hiddenQuote ? `\n\n${quoteText(hiddenQuote)}` : ''),
+          // The links go after what was written, above the folded quote.
+          html: live ? live.getHTML() + links.html + (hiddenQuote ?? '') : links.html,
+          text: (live?.getText({ blockSeparator: '\n\n' }) ?? '') + (links.text ? `\n\n${links.text}` : '') + (hiddenQuote ? `\n\n${quoteText(hiddenQuote)}` : ''),
           ...(initial.inReplyTo ? { inReplyTo: initial.inReplyTo } : {}),
           ...(initial.references?.length ? { references: initial.references } : {}),
           ...(mode === 'draft' && request.source ? { replacesDraft: request.source } : {}),
         },
-        files: files.map((f) => ({ filename: f.name, contentType: f.type, file: f.file! })),
+        files: attached.map((f) => ({ filename: f.name, contentType: f.type, file: f.file! })),
         request: snapshot(r),
       });
     } catch (e) {
@@ -251,7 +292,7 @@ export function ComposeForm({ account, request, variant, handle, onClose, onSend
     if (d.to.length) live?.commands.focus('start');
   };
 
-  useImperativeHandle(handle, () => ({ requestClose, isEmpty: empty, snapshot: () => snapshot(), focus: () => {
+  useImperativeHandle(handle, () => ({ requestClose, isEmpty: empty, snapshot: () => snapshot(), addDocs: (list) => addFromDocs(list, true), focus: () => {
     root.current?.scrollIntoView?.({ block: 'nearest' });
     live?.commands.focus();
   } }));
@@ -295,7 +336,7 @@ export function ComposeForm({ account, request, variant, handle, onClose, onSend
         if (!e.currentTarget.contains(e.target as Node) || confirming) return;
         if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
           e.preventDefault();
-          send();
+          void send();
         } else if (inline && e.key === 'Escape') {
           // (The editor marks Escape handled; an open list of suggested addresses keeps it, AddressField.tsx.)
           e.preventDefault();
@@ -304,8 +345,11 @@ export function ComposeForm({ account, request, variant, handle, onClose, onSend
         }
       }}
       onDragOver={(e) => {
-        if (e.dataTransfer.types.includes('Files')) {
+        // Files from the computer, or a file from Docs in the side panel (lib/flowRef.ts in @flow/suite-bar).
+        if (e.dataTransfer.types.includes('Files') || hasFlowRef(e.dataTransfer)) {
           e.preventDefault();
+          e.stopPropagation();
+          e.dataTransfer.dropEffect = 'copy';
           setDragging(true);
         }
       }}
@@ -313,10 +357,18 @@ export function ComposeForm({ account, request, variant, handle, onClose, onSend
         if (e.currentTarget === e.target) setDragging(false);
       }}
       onDrop={(e) => {
-        if (!e.dataTransfer.files.length) return;
-        e.preventDefault();
         setDragging(false);
-        addFiles(e.dataTransfer.files);
+        if (e.dataTransfer.files.length) {
+          e.preventDefault();
+          e.stopPropagation();
+          addFiles(e.dataTransfer.files);
+          return;
+        }
+        const ref = readFlowRef(e.dataTransfer);
+        if (ref?.app !== 'docs') return;
+        e.preventDefault();
+        e.stopPropagation();
+        addFromDocs([docsFileOfRef(ref)], true);
       }}
     >
       {header?.(TITLES[mode], requestClose)}
@@ -367,10 +419,20 @@ export function ComposeForm({ account, request, variant, handle, onClose, onSend
         {files.length > 0 && (
           <div className="flex flex-wrap gap-2 pb-3">
             {files.map((f) => (
-              <span key={f.id} className={cn('inline-flex max-w-[260px] items-center gap-2 rounded-lg border border-border bg-panel px-2.5 py-1.5 text-[14px]', f.status === 'error' && 'border-danger/40 text-danger')}>
-                {f.status === 'loading' ? <Loader2 className="size-3.5 animate-spin text-muted" /> : <Paperclip className="size-3.5 text-muted" />}
-                <span className="min-w-0 truncate">{f.name}</span>
-                <span className="shrink-0 text-xs text-muted">{f.status === 'error' ? 'failed' : fileSize(f.size)}</span>
+              <span key={f.id} className={cn('inline-flex max-w-[320px] items-center gap-2 rounded-lg border border-border bg-panel px-2.5 py-1.5 text-[14px]', f.status === 'error' && !asLink(f) && 'border-danger/40 text-danger')}>
+                {asLink(f) ? <Link2 className="size-3.5 text-primary" /> : f.status === 'loading' ? <Loader2 className="size-3.5 animate-spin text-muted" /> : <Paperclip className="size-3.5 text-muted" />}
+                <span className="min-w-0 truncate">{asLink(f) && f.docs ? f.docs.name : f.name}</span>
+                {!asLink(f) && <span className="shrink-0 text-xs text-muted">{f.status === 'error' ? 'failed' : fileSize(f.size)}</span>}
+                {f.docs && (
+                  <button
+                    type="button"
+                    className="shrink-0 rounded px-1 text-xs font-medium text-primary hover:bg-row-selected"
+                    title={asLink(f) ? 'Sent as a link to the file in Docs, shared with the recipients. Click to attach a copy instead.' : 'Attached as a copy. Click to send a link to the file in Docs instead.'}
+                    onClick={() => setFiles((all) => all.map((x) => (x.id === f.id ? { ...x, pick: asLink(f) ? 'attachment' : 'link' } : x)))}
+                  >
+                    {asLink(f) ? 'Link' : 'Attachment'}
+                  </button>
+                )}
                 <button type="button" className="rounded p-0.5 text-muted hover:bg-row-selected hover:text-ink" aria-label={`Remove ${f.name}`} onClick={() => setFiles((all) => all.filter((x) => x.id !== f.id))}>
                   <X className="size-3" />
                 </button>
@@ -379,16 +441,16 @@ export function ComposeForm({ account, request, variant, handle, onClose, onSend
           </div>
         )}
       </div>
-      {dragging && <div className="pointer-events-none absolute inset-0 z-10 m-2 flex items-center justify-center rounded-xl border-2 border-dashed border-primary bg-selected-blue/80 text-sm font-medium text-primary">Drop files to attach</div>}
+      {dragging && <div className="pointer-events-none absolute inset-0 z-10 m-2 flex items-center justify-center rounded-xl border-2 border-dashed border-primary bg-selected-blue/80 text-sm font-medium text-primary">Drop to add to the message</div>}
       {error && (
         <div role="alert" className="mx-4 mb-2 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-[14px] text-danger">
           {error}
         </div>
       )}
       <div className={cn('flex shrink-0 flex-wrap items-center gap-2 px-3 py-2', !inline && 'border-t border-hairline')}>
-        <Button onClick={send} className="rounded-full px-5" title="Send (⌘Enter)">
-          <Send />
-          Send
+        <Button onClick={() => void send()} disabled={sharing} className="rounded-full px-5" title="Send (⌘Enter)">
+          {sharing ? <Loader2 className="animate-spin" /> : <Send />}
+          {sharing ? 'Sharing…' : 'Send'}
         </Button>
         <EditorToolbar editor={editor} />
         <input ref={fileInput} type="file" multiple hidden onChange={(e) => (e.target.files && addFiles(e.target.files), (e.target.value = ''))} />

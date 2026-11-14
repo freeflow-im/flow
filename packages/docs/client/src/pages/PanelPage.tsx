@@ -12,8 +12,9 @@ import { api, type ContentHit, type FolderInfo, type Place, type RecentFile } fr
 import { FolderIcon, kindIcon, type LibraryItem } from '../components/FileLibrary.tsx';
 import { pathOfFile } from '../components/WebCopyDialogs.tsx';
 import { organizationSnapshot, readActiveOrganization, setOrganizationState } from '../suite.ts';
+import { endFlowRefDrag, startFlowRefDrag, type DocsFileRef } from '@flow/suite-bar';
 
-type FileRow = Pick<LibraryItem, 'id' | 'kind' | 'title'> & { where?: string };
+type FileRow = Pick<LibraryItem, 'id' | 'kind' | 'title'> & { where?: string; shared?: boolean; format?: string; type?: string; size?: number };
 
 /** Where the panel looks: Recent, or a folder of one of the organization's two roots ('' the root's top). */
 type Spot = { list: 'recent' } | { root: 'org' | 'me'; path: string };
@@ -60,8 +61,21 @@ function openInHost(href: string): void {
   else window.location.assign(href);
 }
 
-const fileOfDoc = (d: SheetMeta): FileRow => ({ id: d.id, kind: d.kind, title: d.title, where: d.folder ?? '' });
-const fileOfStored = (f: StoredFile): FileRow => ({ id: f.id, kind: 'file', title: f.filename, where: f.folder ?? '' });
+const fileOfDoc = (d: SheetMeta): FileRow => ({ id: d.id, kind: d.kind, title: d.title, where: d.folder ?? '', shared: !!d.shared, ...(d.format ? { format: d.format } : {}) });
+const fileOfStored = (f: StoredFile): FileRow => ({ id: f.id, kind: 'file', title: f.filename, where: f.folder ?? '', shared: !!f.shared, type: f.type, size: f.size });
+
+/** A file dragged out of the panel (onto an email in Mail, side-panel.md §7): what it is, and its address for anything else. */
+const refOf = (r: FileRow): DocsFileRef => ({
+  app: 'docs',
+  kind: r.kind as DocsFileRef['kind'],
+  id: r.id,
+  name: r.title,
+  folder: r.where ?? '',
+  shared: !!r.shared,
+  ...(r.format ? { format: r.format } : {}),
+  ...(r.type ? { type: r.type } : {}),
+  ...(r.size !== undefined ? { size: r.size } : {}),
+});
 const placeOfSpot = (spot: Extract<Spot, { root: string }>, org: string | null): Place => (spot.root === 'org' && org ? { folder: spot.path, shared: true, workspace: org } : spot.path);
 
 export function PanelPage() {
@@ -87,7 +101,7 @@ export function PanelPage() {
         setListing({ key: spotKey, folders, files });
       };
       const fail = (e: Error) => live && setError(e.message);
-      if ('list' in spot) api.recents().then((r) => done([], r.files.flatMap((f: RecentFile) => (f.id ? [{ id: f.id, kind: f.kind, title: f.name, where: f.folder ?? '' }] : []))), fail);
+      if ('list' in spot) api.recents().then((r) => done([], r.files.flatMap((f: RecentFile) => (f.id ? [{ id: f.id, kind: f.kind, title: f.name, where: f.folder ?? '', shared: !!f.shared, ...(f.format ? { format: f.format } : {}), ...(f.size !== undefined ? { size: f.size } : {}) }] : []))), fail);
       else api.library(placeOfSpot(spot, org)).then((r) => done(r.folders, [...r.docs.map(fileOfDoc), ...r.files.map(fileOfStored)]), fail);
     };
     read();
@@ -174,7 +188,15 @@ export function PanelPage() {
           ))}
           {shown.files.map((r) => (
             <li key={`${r.kind}:${r.id}`}>
-              <button type="button" className="docs-panel-row" onClick={() => openInHost(appUrl(pathOfFile(r.kind, r.id)))} title={`Open ${r.title} in Docs`}>
+              <button
+                type="button"
+                className="docs-panel-row"
+                draggable
+                onDragStart={(e) => startFlowRefDrag(e, refOf(r), new URL(appUrl(pathOfFile(r.kind, r.id)), window.location.origin).href)}
+                onDragEnd={endFlowRefDrag}
+                onClick={() => openInHost(appUrl(pathOfFile(r.kind, r.id)))}
+                title={`Open ${r.title} in Docs, or drag it onto an email`}
+              >
                 <span className="docs-panel-icon">{kindIcon({ kind: r.kind, title: r.title }, 18)}</span>
                 <span className="docs-panel-name">{r.title}</span>
                 {(searching || 'list' in spot) && r.where && <span className="docs-panel-where">{r.where}</span>}

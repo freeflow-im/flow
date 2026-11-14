@@ -10,3 +10,4 @@ export { appOfPath, isChangedMessage, isInHome, isOpenMessage, onOpenFromHome, o
 export { findMenuItem, isMenuMessage, isSelectMessage, useHomeMenu, SUITE_MENU_ICONS, type SuiteMenuIcon, type SuiteMenuItem, type SuiteMenuMessage, type SuiteMenuPicker, type SuiteSelectMessage } from './lib/menu';
 export { DEFAULT_PROMPTS, MAX_PROMPTS, MAX_PROMPT_LENGTH, PROMPT_PAGES, PROMPT_PAGE_LABELS, PROMPTS_CHANGED, cleanPrompts, promptsAddress, promptsChanged, readPrompts, useSuggestedPrompts, type AssistantPrompts, type PromptPage } from './lib/prompts';
 export { reloadOnStaleBuild } from './lib/staleBuild';
+export { FLOW_REF_TYPE, endFlowRefDrag, hasFlowRef, noteRelayedDrag, readFlowRef, startFlowRefDrag, type DocsFileRef, type FlowRef } from './lib/flowRef';

@@ -17,6 +17,8 @@ import { MessageList, type ListTab } from './components/MessageList';
 import type { PersonActions } from './components/PersonCard';
 import { ThreadView, type ThreadViewHandle } from './components/ThreadView';
 import { ResizeHandle } from './components/ResizeHandle';
+import { DocsDropZone } from './components/DocsDropZone';
+import type { DocsFile } from './lib/docsFiles';
 import { setReadingPane, useReadingPane } from './lib/layoutPref';
 import { Sidebar } from './components/Sidebar';
 import { COMPOSE_ITEM, folderItem, mailMenu, mailPicker } from './lib/homeMenu';
@@ -412,7 +414,7 @@ export function App() {
 
   /** Compose: new, or an answer to a message of the open thread (the last one unless given). */
   const startCompose = useCallback(
-    (mode: ComposeMode, m?: MessageDetail) => {
+    (mode: ComposeMode, m?: MessageDetail, docs?: DocsFile[]) => {
       if (!account) return;
       if (mode === 'new') return openCompose(account.id, { mode, draft: emptyDraft() });
       const target = m ?? (thread.data && thread.data.threadId === openId ? replyTarget(thread.data.messages, folder) : undefined);
@@ -423,10 +425,29 @@ export function App() {
       if (mode === 'draft') return openCompose(account.id, { mode, draft: fromDraft(target, cidUrl), source, ...(threadId ? { threadId } : {}) });
       const me = account.email;
       const remode = (next: typeof mode) => prefill(next, target, me, cidUrl);
-      openCompose(account.id, { mode, draft: remode(mode), source, ...(threadId ? { threadId } : {}), remode });
+      openCompose(account.id, { mode, draft: remode(mode), source, ...(threadId ? { threadId } : {}), remode, ...(docs?.length ? { docs } : {}) });
     },
     [account, thread.data, openId, folder, openCompose],
   );
+
+  // A Docs file dropped on a conversation (docs/specs/side-panel.md §7): a reply to it with the file, under the message
+  // where replies are inline, else in the dialog. Dropped on a row of the list, the conversation opens first.
+  const replyWithDocs = useCallback(
+    (docs: DocsFile[]) => {
+      if (!pane.current?.compose('reply', docs)) startCompose('reply', undefined, docs);
+    },
+    [startCompose],
+  );
+  const [dropReply, setDropReply] = useState<{ threadId: string; docs: DocsFile[] } | null>(null);
+  useEffect(() => {
+    if (!dropReply || !threadLoaded || thread.data!.threadId !== dropReply.threadId) return;
+    const target = replyTarget(thread.data!.messages, folder);
+    if (!target || target.bodyPending) return;
+    const { docs } = dropReply;
+    setDropReply(null);
+    // Once the conversation is drawn, with its composer's place.
+    requestAnimationFrame(() => replyWithDocs(docs));
+  }, [dropReply, threadLoaded, thread.data, folder, replyWithDocs]);
 
   // Inside Home (docs/specs/home.md §2.1), Home's sidebar shows Mail's menu in place of Mail's own sidebar.
   const [inHome] = useState(isInHome);
@@ -856,6 +877,10 @@ export function App() {
       dense={!narrow && readingPane === 'full'}
       onRowAction={(t, a) => (a === 'archive' ? archive([t.threadId]) : a === 'delete' ? remove([t.threadId]) : setSeen(t.uids, a === 'read'))}
       onOpen={openThread}
+      onDropDocs={(threadId, file) => {
+        openThread(threadId);
+        setDropReply({ threadId, docs: [file] });
+      }}
       checked={checked}
       onCheck={onCheck}
       onCheckAll={(on) => setChecked(on ? new Set(visible.map((t) => t.threadId)) : new Set())}
@@ -998,7 +1023,11 @@ export function App() {
             // The list stays mounted under the open thread, so going back finds it where it was.
             <div className="relative min-w-0 flex-1">
               <div className={cn('h-full', openId !== null && 'invisible')}>{listEl}</div>
-              {openId !== null && <div className="absolute inset-0 z-10">{view}</div>}
+              {openId !== null && (
+                <DocsDropZone className="absolute inset-0 z-10" label="Drop to reply with this file" onDrop={(f) => replyWithDocs([f])}>
+                  {view}
+                </DocsDropZone>
+              )}
             </div>
           ) : (
             <>
@@ -1006,7 +1035,9 @@ export function App() {
                 {listEl}
               </div>
               <ResizeHandle label="Resize the message list" {...listPane.handleProps} />
-              <div className="min-w-0 flex-1">{view}</div>
+              <DocsDropZone className="min-w-0 flex-1" label="Drop to reply with this file" onDrop={openId !== null ? (f) => replyWithDocs([f]) : null}>
+                {view}
+              </DocsDropZone>
             </>
           )}
         </div>

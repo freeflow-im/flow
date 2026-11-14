@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { MailAccount } from '../api';
@@ -88,5 +88,25 @@ describe('Compose (the dialog)', () => {
     await act(() => button('Discard draft')!.click());
     expect(document.body.textContent).toContain('Discard this draft?');
     expect(closed).toBe(0);
+  });
+
+  it('a Docs file dropped on it is attached by default, and sent as a link to it when switched (side-panel.md §7.1)', async () => {
+    // The file's bytes, as Docs exports them.
+    vi.stubGlobal('fetch', async () => new Response(new Blob(['xlsx bytes']), { headers: { 'content-type': 'application/vnd.ms-excel' } }));
+    const sent: Outgoing[] = [];
+    const docs = [{ kind: 'sheet' as const, id: 's1', name: 'Budget', folder: '', shared: true }];
+    const request: ComposeRequest = { mode: 'new', draft: { to: [{ name: 'Joe', address: 'joe@other.test' }], cc: [], bcc: [], subject: 'Numbers', html: '<p>Here</p>' }, docs };
+    await act(() => root.render(createElement(Compose, { account, request, narrow: false, onClose: () => {}, onSend: (o: Outgoing) => sent.push(o) })));
+    await act(async () => {});
+    expect(button('Attachment')).toBeTruthy();
+    await act(() => button('Attachment')!.click());
+    expect(button('Link')).toBeTruthy();
+    await act(async () => button('Send')!.click());
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.files).toHaveLength(0);
+    expect(sent[0]!.message.html).toContain('/docs/s/s1">Budget</a>');
+    expect(sent[0]!.message.text).toContain('Budget: ');
+    expect(sent[0]!.request.docs).toEqual(docs);
+    vi.unstubAllGlobals();
   });
 });

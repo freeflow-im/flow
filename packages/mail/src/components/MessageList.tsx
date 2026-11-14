@@ -10,6 +10,9 @@ import { AttachmentChips, CHIPS_PAPERCLIP } from './AttachmentChips';
 import { AttachmentPreview } from './AttachmentPreview';
 import { displayName } from '../lib/addresses';
 import { startDrag } from '../lib/dnd';
+import { hasFlowRef, readFlowRef } from '@flow/suite-bar';
+import { docsFileOfRef } from '../lib/docsLink';
+import type { DocsFile } from '../lib/docsFiles';
 import { folderLabel, orderFolders } from '../lib/folders';
 import { listDate, fullDate, relativeDate } from '../lib/format';
 import { TAB_INFO } from '../lib/tabs';
@@ -43,6 +46,8 @@ export interface MessageListProps {
   openId: string | null;
   cursorId: string | null;
   onOpen(threadId: string): void;
+  /** A Docs file dragged from the side panel dropped on a row: a reply to that conversation with it (App.tsx). */
+  onDropDocs?: ((threadId: string, file: DocsFile) => void) | undefined;
   checked: Set<string>;
   onCheck(threadId: string, on: boolean, range: boolean): void;
   onCheckAll(on: boolean): void;
@@ -154,7 +159,30 @@ export function MessageList(p: MessageListProps) {
   const tabTargets = (current: Category | null | undefined) => (p.tabMove?.tabs ?? []).filter((t) => t !== current);
   const allChecked = p.rows.length > 0 && p.rows.every((t) => p.checked.has(t.threadId));
   /** A row's drag: its thread's messages, or every checked row's when it is checked. */
-  const drag = (t: ThreadSummary) => (p.draggable ? { draggable: true, onDragStart: (e: ReactDragEvent) => startDrag(e, dragThreadUids(t.threadId, p.checked, p.rows)) } : {});
+  // A Docs file from the side panel dropped on a row: a reply to that conversation (the row is outlined while over it).
+  const [docsOver, setDocsOver] = useState<string | null>(null);
+  const dropDocs = (t: ThreadSummary) =>
+    p.onDropDocs
+      ? {
+          onDragOver: (e: ReactDragEvent) => {
+            if (!hasFlowRef(e.dataTransfer)) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+            setDocsOver(t.threadId);
+          },
+          onDragLeave: (e: ReactDragEvent) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDocsOver((cur) => (cur === t.threadId ? null : cur));
+          },
+          onDrop: (e: ReactDragEvent) => {
+            setDocsOver(null);
+            const ref = readFlowRef(e.dataTransfer);
+            if (ref?.app !== 'docs') return;
+            e.preventDefault();
+            p.onDropDocs?.(t.threadId, docsFileOfRef(ref));
+          },
+        }
+      : {};
+  const drag = (t: ThreadSummary) => ({ ...(p.draggable ? { draggable: true, onDragStart: (e: ReactDragEvent) => startDrag(e, dragThreadUids(t.threadId, p.checked, p.rows)) } : {}), ...dropDocs(t) });
   const bulk = p.checked.size > 0;
   const moveTargets = (() => {
     const { special, tree } = orderFolders(p.folders ?? []);
@@ -327,6 +355,7 @@ export function MessageList(p: MessageListProps) {
                   unread ? 'bg-white' : 'bg-[#f2f6fc]',
                   isChecked && 'bg-selected-blue',
                   isCursor && 'shadow-[inset_3px_0_0_var(--color-primary)]',
+                  docsOver === id && 'z-10 outline-2 -outline-offset-2 outline-primary',
                   menuOpen && 'z-10 shadow-[inset_1px_0_0_#dadce0,inset_-1px_0_0_#dadce0,0_1px_2px_0_rgba(60,64,67,.3),0_1px_3px_1px_rgba(60,64,67,.15)]',
                 )}
               >
@@ -436,6 +465,7 @@ export function MessageList(p: MessageListProps) {
                 isChecked && 'bg-selected-blue hover:bg-selected-blue',
                 isOpen && 'bg-row-selected hover:bg-row-selected',
                 isCursor && !isOpen && 'shadow-[inset_3px_0_0_var(--color-primary)]',
+                docsOver === id && 'outline-2 -outline-offset-2 outline-primary',
               )}
             >
               <div className="flex shrink-0 flex-col items-center gap-2 pt-0.5" onClick={(e) => e.stopPropagation()}>
