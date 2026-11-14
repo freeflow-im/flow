@@ -993,7 +993,6 @@ export function App() {
             <div className="flex-1 bg-black/30" />
           </div>
         )}
-        {/* The mail: the floating assistant floats over it, not over the side panel. */}
         <div className="relative flex min-w-0 flex-1">
           {stacked ? (
             // The list stays mounted under the open thread, so going back finds it where it was.
@@ -1010,10 +1009,6 @@ export function App() {
               <div className="min-w-0 flex-1">{view}</div>
             </>
           )}
-          {/* The launcher pill is always here; anchored (beside a phone-sized screen), the panel is the side panel's tab. */}
-          <AssistantDock state={assistantDock} label={myAssistant?.displayName} avatarUrl={myAssistant?.avatarUrl ?? null}>
-            {(!assistantDocked || tiny) && assistantPanel(false)}
-          </AssistantDock>
         </div>
         {/* Calendar and Docs beside the mail, and the assistant once anchored (docs/specs/side-panel.md); none on a
             phone-sized screen, where the anchored assistant covers the mail as before. */}
@@ -1035,6 +1030,11 @@ export function App() {
             }
           />
         )}
+        {/* The launcher pill and the floating panel, over the whole window, side panel included; anchored (beside a
+            phone-sized screen), the panel is the side panel's tab. */}
+        <AssistantDock state={assistantDock} label={myAssistant?.displayName} avatarUrl={myAssistant?.avatarUrl ?? null}>
+          {(!assistantDocked || tiny) && assistantPanel(false)}
+        </AssistantDock>
       </div>
       {compose && (
         <Suspense fallback={null}>
