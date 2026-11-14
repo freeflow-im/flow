@@ -188,3 +188,7 @@ export function kindLabelOf(app: string, kind: string, fileKind?: string): strin
 export type ResolvedReference =
   | { ref: string; app: string; kind: string; title: string; url: string; icon: string; summary?: string; role?: Role; fileKind?: string; denied?: undefined }
   | { ref: string; denied: true };
+
+/** sessionStorage: a line for Home to show once when it opens, left by the page that sent the person there (Chat after a
+ * sign-in that joined them to a workspace, docs/specs/home.md). */
+export const HOME_NOTICE_KEY = 'flow.homeNotice';
