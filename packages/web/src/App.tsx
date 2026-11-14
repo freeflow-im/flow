@@ -48,13 +48,14 @@ export const PENDING_INVITE = 'pendingInvite';
 /** sessionStorage: the path to go to once signed in (?next=, consumed in SessionApp). */
 export const NEXT_AFTER_SIGN_IN = 'flow.nextAfterSignIn';
 
-/** Pull ?signup= / ?reset= / ?signin= (emailed links), ?native= (the native
+/** Pull ?signup= / ?reset= / ?signin= / ?setup= (emailed links), ?native= (the native
  * Google handoff, phase16 §9) and ?register (the marketing site's Sign up
  * button) off the URL before rendering. */
 function consumeEmailLinkParams(runtime: ConnectionRuntime): {
   signupToken: string | null;
   resetToken: string | null;
   signinToken: string | null;
+  setupToken: string | null;
   nativeHandoff: boolean;
   register: boolean;
 } {
@@ -88,14 +89,16 @@ function consumeEmailLinkParams(runtime: ConnectionRuntime): {
   const signupToken = params.get('signup');
   const resetToken = params.get('reset');
   const signinToken = params.get('signin');
+  // An admin-created member's setup link (Admin › Members › Create member): set your password.
+  const setupToken = params.get('setup');
   // Kept in the URL, unlike the one-shot tokens: a reload of the handoff page
   // should still be the handoff page, not the ordinary app.
   const nativeHandoff = params.get('native') === 'google';
   const register = params.has('register');
-  if (signupToken || resetToken || signinToken || register) {
+  if (signupToken || resetToken || signinToken || setupToken || register) {
     history.replaceState(null, '', location.pathname);
   }
-  return { signupToken, resetToken, signinToken, nativeHandoff, register };
+  return { signupToken, resetToken, signinToken, setupToken, nativeHandoff, register };
 }
 
 /** Pull ?open= / ?share= off the URL (lib/chatIntents.ts): what another page of the suite asks Chat for — the suite
@@ -114,7 +117,7 @@ export default function App() {
   const manager = connectionManager();
   const [runtime, selectRuntime] = useState(() => {
     const params = new URLSearchParams(location.search);
-    const ownsAuthLink = ['handoff', 'native', 'signup', 'reset', 'signin'].some(key => params.has(key)) ||
+    const ownsAuthLink = ['handoff', 'native', 'signup', 'reset', 'signin', 'setup'].some(key => params.has(key)) ||
       /^\/(invite|join)\//.test(location.pathname);
     // Auth and invite links are issued by the page's origin, regardless of
     // which remote workspace this browser tab previously selected.
@@ -245,9 +248,10 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
   }, [user, runtime]);
   const [booting, setBooting] = useState(true);
   const [offline, setOffline] = useState(false);
-  const [{ signupToken, resetToken, signinToken, nativeHandoff, register }] = useState(() =>
+  const [{ signupToken, resetToken, signinToken, setupToken, nativeHandoff, register }] = useState(() =>
     consumeEmailLinkParams(runtime),
   );
+  const [setupOpen, setSetupOpen] = useState(true);
   const [intent] = useState(consumeChatIntent);
   const page = intent?.kind === 'page' ? intent.page : null;
   // The Activity count Main keeps live, for the suite bar's Chat tab (null while Main is not mounted).
@@ -561,6 +565,21 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
           resolveJoin();
         }}
         onDismiss={resolveJoin}
+      />
+    );
+  }
+
+  // A setup link owns the screen even over a live session (it may be someone else's browser): using it signs in as the
+  // member it was made for.
+  if (setupToken && setupOpen) {
+    return (
+      <AuthScreen
+        onSignedIn={(r) => {
+          setSetupOpen(false);
+          signIn(r);
+        }}
+        setupToken={setupToken}
+        onSetupDismissed={() => setSetupOpen(false)}
       />
     );
   }

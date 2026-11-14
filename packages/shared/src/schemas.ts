@@ -36,6 +36,13 @@ export const ResetPasswordBody = z.object({
 });
 export type ResetPasswordBody = z.infer<typeof ResetPasswordBody>;
 
+/** The Set your password page (an admin-created member's emailed setup link): the token and their first password. */
+export const CompleteSetupBody = z.object({
+  token: z.string().min(1).max(512),
+  password: z.string().min(8).max(256),
+});
+export type CompleteSetupBody = z.infer<typeof CompleteSetupBody>;
+
 export const LoginBody = z.object({
   email: z.string().email().max(320),
   password: z.string().min(1).max(256),
@@ -861,6 +868,16 @@ export const PatchDomainBody = z.object({
 export type PatchDomainBody = z.infer<typeof PatchDomainBody>;
 
 /** PATCH /v1/workspaces/:id/accounts/:accountId/kind: a native account (address, mailbox, calendar) or a guest (none). */
+/** POST /v1/workspaces/:id/members/create (Admin › Members › Create member): a native member at `username@domain`,
+ * with no password until they use the setup link mailed to `backupEmail`. The directory checks the rest. */
+export const CreateMemberBody = z.object({
+  displayName: z.string().trim().min(1, 'Enter a display name.').max(80),
+  username: z.string().trim().min(1, 'Enter a username.').max(64),
+  domain: z.string().trim().min(1, 'Choose a domain.').max(253),
+  backupEmail: z.string().trim().min(1, 'Enter a backup email.').max(320),
+});
+export type CreateMemberBody = z.infer<typeof CreateMemberBody>;
+
 export const SetAccountKindBody = z.object({
   kind: z.enum(['native', 'guest']),
 });
