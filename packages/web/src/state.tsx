@@ -3,6 +3,9 @@
 import { createContext, useContext } from 'react';
 import type { UserDTO } from '@flow/shared';
 import type { SocketStatus } from './lib/ws';
+
+/** The connection's storage key for the workspace in use: Chat, Home and the other apps open on it. */
+export const ACTIVE_WS = 'activeWorkspace';
 import { activeRuntime, type ConnectionRuntime } from './lib/connectionRuntime';
 
 export interface AuthState {

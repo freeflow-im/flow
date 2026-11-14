@@ -29,7 +29,7 @@ import {
   stepNav,
   type NavHistory,
 } from './lib/navHistory';
-import { ACTIVITY_VIEW_ID, AuthContext, ConnectionContext, SelectionContext } from './state';
+import { ACTIVITY_VIEW_ID, AuthContext, ConnectionContext, SelectionContext, ACTIVE_WS } from './state';
 import AuthScreen from './components/AuthScreen';
 import JoinScreen from './components/JoinScreen';
 import NativeSignIn from './components/NativeSignIn';
@@ -43,7 +43,7 @@ import { readChatIntent, withoutChatIntent, type ChatIntent } from './lib/chatIn
 // turns a name into the storage key its session owns, and the connection the
 // pre-multi-server browser was already using resolves them to exactly the
 // `flow.*` keys it already has (see lib/connections.ts).
-const ACTIVE_WS = 'activeWorkspace';
+// The active workspace's key (state.tsx), which Home and the other apps read too.
 export const PENDING_INVITE = 'pendingInvite';
 /** sessionStorage: the path to go to once signed in (?next=, consumed in SessionApp). */
 export const NEXT_AFTER_SIGN_IN = 'flow.nextAfterSignIn';
