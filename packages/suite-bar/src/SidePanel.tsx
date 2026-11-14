@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPoi
 import type { SidePanelEntry } from '@flow/shared/manifests';
 export { sidePanelsOf, type SidePanelEntry } from '@flow/shared/manifests';
 import { isInHome, isOpenMessage, openInHome } from './lib/embed';
+import { noteRelayedDrag } from './lib/flowRef';
 import './side-panel.css';
 
 export const SIDE_PANEL_WIDTH = 360;
@@ -112,13 +113,25 @@ export function SidePanel({ host, panels, overlay = false, assistant }: SidePane
   const frames = useRef<Record<string, HTMLIFrameElement | null>>({});
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
-      if (e.origin !== window.location.origin || !isOpenMessage(e.data)) return;
+      if (e.origin !== window.location.origin) return;
       if (!Object.values(frames.current).some((f) => f && f.contentWindow === e.source)) return;
-      follow(e.data.href);
+      const data = e.data as { type?: unknown; ref?: unknown } | null;
+      // A drag from the panel (lib/flowRef.ts): the host's drop targets can read it even when the browser hides its data.
+      if (data?.type === 'flow:drag') noteRelayedDrag(data.ref);
+      else if (data?.type === 'flow:dragend') noteRelayedDrag(null);
+      else if (isOpenMessage(data)) follow(data.href);
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
   }, []);
+
+  // How much of the window's right side the panel takes (none while closed or over the page), for what floats beside
+  // it: Mail's message window stops short of it (--side-panel-width on the page's root).
+  const taken = state.open && !overlay && tabs.length ? state.width : 0;
+  useEffect(() => {
+    document.documentElement.style.setProperty('--side-panel-width', `${taken}px`);
+    return () => void document.documentElement.style.removeProperty('--side-panel-width');
+  }, [taken]);
 
   // The resize grip on the left edge: the pointer is captured, so the frames under it do not take the drag.
   const drag = useRef<{ x: number; width: number } | null>(null);

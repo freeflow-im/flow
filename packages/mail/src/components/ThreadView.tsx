@@ -10,6 +10,7 @@ import { Archive, ArrowLeft, CalendarPlus, ChevronLeft, ChevronRight, Download, 
 import { Fragment, lazy, Suspense, useEffect, useImperativeHandle, useRef, useState, type Ref } from 'react';
 import { attachmentUrl, type Address, type Category, type MailAccount, type MailFolder, type MessageDetail, type ThreadDetail, type ThreadMessage } from '../api';
 import { cidUrlOf, prefill, type AnswerMode, type ComposeRequest, type Outgoing } from '../lib/compose';
+import type { DocsFile } from '../lib/docsFiles';
 import type { Notice } from '../lib/notice';
 import { displayName, formatAddress, shortName, uniqueAddresses } from '../lib/addresses';
 import { folderLabel, orderFolders } from '../lib/folders';
@@ -35,8 +36,11 @@ const InlineCompose = lazy(() => import('./InlineCompose'));
 /** What App.tsx asks of the pane: the next (1) or previous (-1) message of the thread, expanded and in view (n, p); an answer to the last message under it (r, a, f); a composer opened again there. */
 export interface ThreadViewHandle {
   step(by: 1 | -1): void;
-  /** Opens the inline composer for the last message; false when there is none here (narrow screens, no thread): App.tsx opens the dialog. */
-  compose(mode: AnswerMode): boolean;
+  /**
+   * Opens the inline composer for the last message; false when there is none here (narrow screens, no thread): App.tsx
+   * opens the dialog. `docs`: Docs files dropped on the conversation, added to it (or to the composer already open).
+   */
+  compose(mode: AnswerMode, docs?: DocsFile[]): boolean;
   /** Opens this composer under its message, if that message is in the open thread and composers are inline here. */
   reopen(request: ComposeRequest): boolean;
 }
@@ -166,22 +170,25 @@ export function ThreadView(p: ThreadViewProps) {
     return true;
   };
   /** Reply, Reply all or Forward to `m`: under it on wide screens, else App.tsx's dialog. */
-  const answer = (mode: AnswerMode, m: MessageDetail) => {
+  const answer = (mode: AnswerMode, m: MessageDetail, docs?: DocsFile[]) => {
     const inline = p.inline;
     if (!inline || !t) return void (mode === 'reply' ? p.onReply : mode === 'replyAll' ? p.onReplyAll : p.onForward)(m);
-    // One composer at a time: one with something in it stays and takes the focus.
-    if (composing && composer.current && !composer.current.isEmpty()) return composer.current.focus();
+    // One composer at a time: one with something in it stays and takes the focus (and the dropped files).
+    if (composing && composer.current && !composer.current.isEmpty()) {
+      if (docs?.length) composer.current.addDocs(docs);
+      return composer.current.focus();
+    }
     const cidUrl = cidUrlOf(p.accountId, m);
     const remode = (next: AnswerMode) => prefill(next, m, p.me, cidUrl);
-    showComposer({ folder: m.folder, uid: m.uid }, { mode, draft: remode(mode), source: { folder: m.folder, uid: m.uid }, threadId: t.threadId, remode });
+    showComposer({ folder: m.folder, uid: m.uid }, { mode, draft: remode(mode), source: { folder: m.folder, uid: m.uid }, threadId: t.threadId, remode, ...(docs?.length ? { docs } : {}) });
   };
 
   const articles = useRef(new Map<number, HTMLElement>());
   useImperativeHandle(p.handle, () => ({
-    compose(mode) {
+    compose(mode, docs) {
       const m = replyTarget(messages, p.folder);
       if (!p.inline || !m || m.bodyPending) return false;
-      answer(mode, m);
+      answer(mode, m, docs);
       return true;
     },
     reopen(request) {

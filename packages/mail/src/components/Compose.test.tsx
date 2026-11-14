@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { MailAccount } from '../api';
@@ -88,5 +88,60 @@ describe('Compose (the dialog)', () => {
     await act(() => button('Discard draft')!.click());
     expect(document.body.textContent).toContain('Discard this draft?');
     expect(closed).toBe(0);
+  });
+
+  it('a Docs file dropped on it is attached by default, and sent as a link to it when switched (side-panel.md §7.1)', async () => {
+    // The file's bytes, as Docs exports them.
+    vi.stubGlobal('fetch', async () => new Response(new Blob(['xlsx bytes']), { headers: { 'content-type': 'application/vnd.ms-excel' } }));
+    const sent: Outgoing[] = [];
+    const docs = [{ kind: 'sheet' as const, id: 's1', name: 'Budget', folder: '', shared: true }];
+    const request: ComposeRequest = { mode: 'new', draft: { to: [{ name: 'Joe', address: 'joe@other.test' }], cc: [], bcc: [], subject: 'Numbers', html: '<p>Here</p>' }, docs };
+    await act(() => root.render(createElement(Compose, { account, request, narrow: false, onClose: () => {}, onSend: (o: Outgoing) => sent.push(o) })));
+    await act(async () => {});
+    expect(button('Attachment')).toBeTruthy();
+    await act(() => button('Attachment')!.click());
+    expect(button('Link')).toBeTruthy();
+    await act(async () => button('Send')!.click());
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.files).toHaveLength(0);
+    expect(sent[0]!.message.html).toContain('/docs/s/s1">Budget</a>');
+    expect(sent[0]!.message.text).toContain('Budget: ');
+    expect(sent[0]!.request.docs).toEqual(docs);
+    vi.unstubAllGlobals();
+  });
+
+  it('takes a Docs file dropped on the editor as a chip, not as its address typed into the body', async () => {
+    vi.stubGlobal('fetch', async () => new Response(new Blob(['x'])));
+    const request: ComposeRequest = { mode: 'new', draft: { to: [], cc: [], bcc: [], subject: '', html: '<p>Hi</p>' } };
+    await act(() => root.render(createElement(Compose, { account, request, narrow: false, onClose: () => {}, onSend: () => {} })));
+    const ref = { app: 'docs', kind: 'deck', id: 'd1', name: 'Pitch', folder: '', shared: false };
+    const data: Record<string, string> = { 'application/x-flow-ref+json': JSON.stringify(ref), 'text/plain': 'http://x/docs/d/d1' };
+    const dataTransfer = { types: Object.keys(data), files: [], getData: (t: string) => data[t] ?? '', dropEffect: 'none' };
+    const fire = (type: string) => {
+      const e = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(e, 'dataTransfer', { value: dataTransfer });
+      document.querySelector('.ProseMirror')!.dispatchEvent(e);
+      return e;
+    };
+    await act(async () => {
+      expect(fire('dragover').defaultPrevented).toBe(true);
+      expect(fire('drop').defaultPrevented).toBe(true);
+    });
+    expect(document.querySelector('.ProseMirror')!.textContent).toBe('Hi');
+    expect(document.body.textContent).toContain('Pitch.pptx');
+    expect(document.body.textContent).not.toContain('Drop to add to the message');
+    vi.unstubAllGlobals();
+  });
+
+  it('is a window on wide screens, not modal, so the side panel stays usable; Escape closes it', async () => {
+    let closed = 0;
+    const request: ComposeRequest = { mode: 'new', draft: { to: [], cc: [], bcc: [], subject: '', html: '' } };
+    await act(() => root.render(createElement(Compose, { account, request, narrow: false, onClose: () => closed++, onSend: () => {} })));
+    const win = document.querySelector('[role="dialog"]')!;
+    expect(win.getAttribute('aria-modal')).toBe('false');
+    expect(win.textContent).toContain('New message');
+    expect(document.querySelector('.bg-black\\/40')).toBeNull();
+    await act(() => document.querySelector('.ProseMirror')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(closed).toBe(1);
   });
 });

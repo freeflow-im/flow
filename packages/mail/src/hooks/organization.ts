@@ -50,6 +50,11 @@ export function useAccountState(organizationId: string | null): SuiteAccount['st
  * the selected one's id, and before the list has come, the id kept from the last visit: the requests already name that
  * one (api.ts), so the page's data is not read a second time when the list arrives and agrees.
  */
+/** The organization selected in the suite bar, without its list (a composer: no query cache needed). */
+export function useActiveOrganizationId(): string | null {
+  return useSyncExternalStore(subscribe, () => current, () => null);
+}
+
 export function useOrganizations(): { list: SuiteOrganization[]; active: SuiteOrganization | undefined; activeId: string | null; ready: boolean } {
   const orgs = useQuery({ queryKey: ['suite', 'organizations'], queryFn: suite.organizations, refetchInterval: REFRESH_MS });
   const activeId = useSyncExternalStore(subscribe, () => current, () => null);

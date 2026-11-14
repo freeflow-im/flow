@@ -58,7 +58,8 @@
   top: 0;
   right: 0;
   bottom: 0;
-  z-index: 35;
+  /* Over the page, under the assistant's pill and floating panel (assistant-dock.css: 30). */
+  z-index: 25;
   max-width: calc(100vw - 48px);
   box-shadow: -8px 0 32px rgba(16, 24, 40, 0.18);
 }
