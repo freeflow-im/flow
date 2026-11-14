@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { PendingWorkspaceInviteDTO, WorkspaceDTO } from '@flow/shared';
 import { api } from '../lib/api';
-import { useAuth, useSelection } from '../state';
+import { ACTIVE_WS, useAuth, useRuntime, useSelection } from '../state';
 import { useSelfRegisterDomain, useSwitcherEntries, useWorkspaceInvites, useWorkspaces } from '../hooks';
 import { openWorkspace, showsSource } from '../lib/workspaceSwitcher';
 import { EMPTY_SLUG_FIELD, slugEdited, slugForName } from '../lib/slugify';
@@ -50,10 +50,14 @@ export default function WorkspaceChooser() {
 
   // The organization is kept as the one in use (Home and the other apps read it), then Home opens on it: the
   // organization's front page, not Chat. Inside Home's own frame, the whole page goes there.
-  const enter = (id: string) => {
-    sel.selectWorkspace(id);
+  // Going to Home, the choice is only stored: selecting it here would mount Chat for the moment before Home loads.
+  const runtime = useRuntime();
+  const [opening, setOpening] = useState<string | null>(null);
+  const enter = (id: string, name?: string) => {
     // The desktop app serves only Chat (app://flow), which has no Home to go to.
-    if (!HOME_PATH || isDesktop()) return;
+    if (!HOME_PATH || isDesktop()) return sel.selectWorkspace(id);
+    runtime.write(ACTIVE_WS, id);
+    setOpening(name ?? '');
     const target = isInHome() ? window.top : window;
     target?.location.assign(`${HOME_PATH}/`);
   };
@@ -67,7 +71,7 @@ export default function WorkspaceChooser() {
         ...(openToDomain && selfRegisterDomain ? { googleSelfRegisterDomain: selfRegisterDomain } : {}),
       });
       await qc.invalidateQueries({ queryKey: ['workspaces'] });
-      enter(ws.id);
+      enter(ws.id, ws.name);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'failed');
     }
@@ -81,7 +85,7 @@ export default function WorkspaceChooser() {
       if (m) token = m[1]!;
       const ws = await api<WorkspaceDTO>('POST', '/v1/invites/accept', { token });
       await qc.invalidateQueries({ queryKey: ['workspaces'] });
-      enter(ws.id);
+      enter(ws.id, ws.name);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'failed');
     }
@@ -97,7 +101,7 @@ export default function WorkspaceChooser() {
           qc.invalidateQueries({ queryKey: ['workspaces'] }),
           qc.invalidateQueries({ queryKey: ['workspaceInvites'] }),
         ]);
-        enter(ws.id);
+        enter(ws.id, ws.name);
         return;
       }
       await api('POST', '/v1/invites/decline', { inviteId: invite.id });
@@ -108,6 +112,14 @@ export default function WorkspaceChooser() {
       setBusyInvite(null);
     }
   };
+
+  if (opening !== null) {
+    return (
+      <div className="flex h-full items-center justify-center bg-base text-sm text-muted" data-testid="workspace-opening">
+        {opening ? `Opening ${opening}…` : 'Opening…'}
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full flex-col items-center justify-center gap-4 bg-base">
@@ -152,7 +164,7 @@ export default function WorkspaceChooser() {
           <button
             key={ws.id}
             data-testid={`workspace-${ws.slug}`}
-            onClick={() => enter(ws.id)}
+            onClick={() => enter(ws.id, ws.name)}
             className="flex w-full items-center gap-3 rounded-lg border border-hairline bg-white p-3 text-left shadow-sm hover:border-accent"
           >
             {ws.avatarUrl ? (
