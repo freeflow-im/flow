@@ -56,7 +56,6 @@ export default function Main({ onActivityUnread }: { onActivityUnread?: (count: 
   const qc = useQueryClient();
   const [status, setStatus] = useState<SocketStatus>('connecting');
   // Post-connect refetches in flight (#234) — see the socket effect below.
-  const [catchUpCount, setCatchUpCount] = useState(0);
   // workspaceId -> userId -> online? Presence is per (user, workspace) since
   // #364 — one socket carries every workspace we belong to, so a flat
   // userId -> bool map lit the dot in all of them at once.
@@ -218,7 +217,6 @@ export default function Main({ onActivityUnread }: { onActivityUnread?: (count: 
             // every cached transcript, which would burn a limited provider's
             // history budget for channels nobody is looking at (#546).
             setStatus('connected');
-            setCatchUpCount((n) => n + 1);
             const current = selRef.current;
             if (current.channelId) {
               // Keep only the newest page so the refetch costs one history call;
@@ -232,7 +230,7 @@ export default function Main({ onActivityUnread }: { onActivityUnread?: (count: 
               ...(current.channelId ? [qc.invalidateQueries({ queryKey: ['messages', current.channelId] })] : []),
               ...(current.threadRootId ? [qc.invalidateQueries({ queryKey: ['thread', current.threadRootId] })] : []),
             ];
-            void Promise.all(scoped).finally(() => setCatchUpCount((n) => Math.max(0, n - 1)));
+            void Promise.all(scoped);
             break;
           }
           case 'member.updated': {
@@ -265,14 +263,10 @@ export default function Main({ onActivityUnread }: { onActivityUnread?: (count: 
         setStatus(s);
         if (s === 'connected') {
           // reconnect backfill = refetch everything (online-only client).
-          // The refetch is what the reconnect bar waits on (#234): the socket
-          // says hello long before the screen stops being stale. Counted, not
-          // flagged, so a second reconnect mid-refetch can't clear the first.
           // the server sends a fresh presence snapshot right after hello, and
           // nobody sends `offline` for a user who left while we were down
           setPresence({});
-          setCatchUpCount((n) => n + 1);
-          void qc.invalidateQueries().finally(() => setCatchUpCount((n) => Math.max(0, n - 1)));
+          void qc.invalidateQueries();
         }
       },
       onEvent: (event: Event) => handleEvent(event),
@@ -621,7 +615,6 @@ export default function Main({ onActivityUnread }: { onActivityUnread?: (count: 
   const live = useMemo(
     () => ({
       status,
-      syncing: status !== 'connected' || catchUpCount > 0,
       isOnline: (userId: string) => !!(sel.workspaceId && presence[sel.workspaceId]?.[userId]),
       typing,
       notificationUnread,
@@ -629,7 +622,7 @@ export default function Main({ onActivityUnread }: { onActivityUnread?: (count: 
       sendTyping: (channelId: string, threadRootId?: string) =>
         socketRef.current?.sendTyping(channelId, threadRootId),
     }),
-    [status, catchUpCount, presence, sel.workspaceId, typing, notificationUnread],
+    [status, presence, sel.workspaceId, typing, notificationUnread],
   );
 
   const mobileNav = useMemo(

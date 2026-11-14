@@ -12,6 +12,7 @@ This file keeps two things:
 
 ## Parity
 
+- **The reconnect bar is gone from web Chat only (2026-11-13).** Web no longer draws the animated line under the channel header while the socket reconnects or catches up (Scott asked for it removed); macOS (`SyncBar.swift`) and iOS (`ChannelScreen`) still show theirs. Decide whether to remove it there too.
 - **Message search is on web only (2026-11-13, docs/specs/search.md).** The search runs on the server for every client (`GET /v1/workspaces/:id/search`, the assistant's `search_messages`, the bridge's `search_history`); web Chat's suite bar search opens a results view. macOS and iOS keep their in-conversation find only (gap to close; deferred by Scott for now).
 - **Agent memory is seen and edited on web only (2026-11-13, docs/specs/agents.md §6.1).** Agents remember on every client (the memory is the server's), and the web panel labels memory steps; the Memory tab is in the web Admin app (web-only by ruling), and the native apps show no memory steps. Gap to close with the native assistant panel.
 - **Several private agents per person are made and picked on web only (2026-11-12, docs/specs/agents.md §1.3).** Every client lists the extra agents as members and shows their Chat messages, and Chat routing is on the server; making, editing and removing them is in the web Admin app (web-only by ruling), and the panel picker is web's. macOS and iOS can DM and mention them; gap to close with the native assistant picker.

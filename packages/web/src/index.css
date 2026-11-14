@@ -56,26 +56,6 @@ html, body, #root {
   border-radius: 2px;
 }
 
-/* Reconnect bar (#234): a 2px indeterminate sweep under the channel header
-   while the socket is down or the post-connect refetch is still running. */
-@keyframes mc-sync-slide {
-  from { transform: translateX(-100%); }
-  to   { transform: translateX(333%); }
-}
-.mc-sync-bar {
-  height: 2px;
-  background: color-mix(in oklab, var(--color-accent) 12%, transparent);
-  overflow: hidden;
-}
-.mc-sync-bar > span {
-  display: block;
-  height: 100%;
-  width: 30%;
-  border-radius: 999px;
-  background: var(--color-accent);
-  animation: mc-sync-slide 1.1s linear infinite;
-}
-
 /* Composer contenteditable (phase 3.5 item 2): live block styling per line.
    The editor holds one <div> per draft line; composerDom.ts assigns cmp-*
    classes as you type. */
