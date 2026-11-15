@@ -343,7 +343,7 @@ function AgentForm({ org, onClose, onAdded, onExternal }: { org: WorkspaceDTO; o
         <span className="pl-6 text-xs text-muted">
           {hosted
             ? 'FreeFlow runs it for you: no machine of your own.'
-            : 'External: it runs somewhere else (Claude Code, Codex, a cloud agent) and connects in. Next you get its connection steps; it joins when it connects and picks its own picture, which you can change later.'}
+            : 'It runs somewhere else (Claude Code, Codex, a cloud agent) and connects in. Next you get its connection steps; it joins when it connects and picks its own picture, which you can change later.'}
         </span>
       </div>
       {hosted && (
