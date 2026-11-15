@@ -15,6 +15,7 @@ import {
   sortChannelsByName,
   openChannelFromSidebar,
   readCollapsedDocs,
+  splitAgentChannels,
   splitAgents,
   writeCollapsedDocs,
   WorkspaceTitle,
@@ -100,6 +101,23 @@ describe('nestChannels', () => {
 });
 
 // The "an agent is working here" spinner (#137).
+describe('splitAgentChannels', () => {
+  it('moves a channel an agent made, with its sub-channels, under that agent', () => {
+    const made = (c: ChannelDTO, by: string) => ({ ...c, createdBy: by });
+    const rows = nestChannels([
+      made(chan('build'), 'agent1'),
+      made(chan('build-sub', 'build'), 'u1'),
+      chan('general'),
+      made(chan('general-sub', 'general'), 'agent1'),
+      made(chan('other'), 'agent2'),
+    ]);
+    const { byAgent, rest } = splitAgentChannels(rows, new Set(['agent1']));
+    expect(byAgent.get('agent1')?.map((r) => `${r.nested ? '  ' : ''}${r.channel.id}`)).toEqual(['build', '  build-sub']);
+    // A sub-channel an agent made in a person's channel stays with its parent; an agent not listed keeps its channels in Channels.
+    expect(rest.map((r) => r.channel.id)).toEqual(['general', 'general-sub', 'other']);
+  });
+});
+
 describe('ActivitySpinner', () => {
   it('spins, and holds still for anyone who asked for less motion', () => {
     const html = renderToStaticMarkup(<ActivitySpinner active={false} />);

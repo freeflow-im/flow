@@ -226,6 +226,27 @@ export function splitAgents(
   return { agents, rest };
 }
 
+/**
+ * Channels an agent made sit under that agent in the Agents section, not under Channels: an agent that opens a channel
+ * for a job and invites you to it would otherwise fill the Channels list with its work. A top-level channel moves with
+ * its sub-channels; a sub-channel an agent made inside someone else's channel stays with its parent. A channel whose
+ * creator is not in `agentIds` (a person, or an agent this list does not show) stays where it was.
+ */
+export function splitAgentChannels<T extends { channel: ChannelDTO; nested: boolean }>(
+  rows: T[],
+  agentIds: Set<string>,
+): { byAgent: Map<string, T[]>; rest: T[] } {
+  const byAgent = new Map<string, T[]>();
+  const rest: T[] = [];
+  let owner: string | null = null; // the agent the last top-level row went to, so its sub-channels follow it
+  for (const r of rows) {
+    if (!r.nested) owner = agentIds.has(r.channel.createdBy) ? r.channel.createdBy : null;
+    if (owner) byAgent.set(owner, [...(byAgent.get(owner) ?? []), r]);
+    else rest.push(r);
+  }
+  return { byAgent, rest };
+}
+
 export default function Sidebar() {
   const { api } = useBoundApi();
   const auth = useAuth();
@@ -402,6 +423,8 @@ export default function Sidebar() {
   // (#361) — every workspace agent, with or without an existing DM. The ones
   // that have a DM take it with them, so nobody is listed twice.
   const { agents, rest: dmList } = splitAgents(dms, Object.values(memberMap), auth.user.id);
+  // Channels an agent made follow it into the Agents section.
+  const { byAgent: agentChannels, rest: channelRows } = splitAgentChannels(joined, new Set(agents.map((a) => a.member.userId)));
   // Direct messages is ONE alphabetically-sorted list (ui_nits). The self-DM
   // ("<you> (you)") is always pinned last: it's a personal scratchpad, not a
   // conversation, so it sinks below everyone else.
@@ -531,7 +554,7 @@ export default function Sidebar() {
             onClick: () => setShowCreateChannel(true),
           } : undefined}
         />
-        {joined.map(({ channel: c, nested }) => (
+        {channelRows.map(({ channel: c, nested }) => (
           <div key={c.id}>
             <ChannelRow channel={c} label={c.name ?? ''} nested={nested} onMenu={() => setMenuChannel(c)} />
             <DocsGroup channelId={c.id} docs={artifactsByChannel.get(c.id) ?? []} />
@@ -586,12 +609,13 @@ export default function Sidebar() {
               }}
             />
             {!agentsCollapsed &&
-              agents.map(({ member: a, channel: c }) =>
-                c ? (
+              agents.map(({ member: a, channel: c }) => (
+                <div key={a.userId} data-testid={`sidebar-agent-group-${a.displayName}`}>
+                {c ? (
                   // The agent's DM, rendered as the agent: same row as any DM,
                   // so unread badges, the working-here spinner and its
                   // sub-channels all come along.
-                  <div key={c.id}>
+                  <div>
                     <ChannelRow
                       channel={c}
                       testid={`sidebar-agent-${a.displayName}`}
@@ -612,7 +636,6 @@ export default function Sidebar() {
                 ) : (
                   // No DM yet — a virtual row; clicking creates one.
                   <button
-                    key={`agent-${a.userId}`}
                     data-testid={`sidebar-agent-${a.displayName}`}
                     title="Start a direct message"
                     className="flex w-full items-center gap-[9px] rounded-lg px-2 py-[7px] text-left text-white/80 hover:bg-white/10"
@@ -621,8 +644,16 @@ export default function Sidebar() {
                     <PresenceDot online={live.isOnline(a.userId)} />
                     <span className="truncate">{a.displayName}</span>
                   </button>
-                ),
-              )}
+                )}
+                {/* Channels this agent made, each with its own sub-channels. */}
+                {(agentChannels.get(a.userId) ?? []).map(({ channel: k, nested }) => (
+                  <div key={k.id}>
+                    <ChannelRow channel={k} label={k.name ?? ''} nested={nested ? 2 : true} onMenu={() => setMenuChannel(k)} />
+                    <DocsGroup channelId={k.id} docs={artifactsByChannel.get(k.id) ?? []} />
+                  </div>
+                ))}
+                </div>
+              ))}
           </>
         )}
 
@@ -1226,8 +1257,9 @@ function ChannelRow({
   statusTitle?: string;
   testid?: string;
   hideUnread?: boolean;
-  /** Sub-channel (#118) — indented under its parent, same as ArtifactRow. */
-  nested?: boolean;
+  /** Sub-channel (#118) — indented under its parent, same as ArtifactRow. 2 = one level deeper (a sub-channel of a
+   * channel that is itself under an agent). */
+  nested?: boolean | 2;
   onMenu: () => void;
 }) {
   const sel = useSelection();
@@ -1266,7 +1298,7 @@ function ChannelRow({
       }}
       {...tipHandlers}
       data-nested={nested ? 'true' : undefined}
-      className={`group flex items-center gap-[9px] rounded-lg px-2 py-[7px] ${nested ? 'ml-3' : ''} ${
+      className={`group flex items-center gap-[9px] rounded-lg px-2 py-[7px] ${nested === 2 ? 'ml-6' : nested ? 'ml-3' : ''} ${
         active ? 'bg-white text-accent-deep' : 'hover:bg-white/10'
       }`}
     >

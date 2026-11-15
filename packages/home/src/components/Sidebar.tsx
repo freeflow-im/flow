@@ -5,7 +5,7 @@ import { Check, ChevronDown } from 'lucide-react';
 import type { ChannelDTO, WorkspaceMemberDTO } from '@flow/shared';
 import type { SuiteMenuItem, SuiteMenuPicker } from '@flow/suite-bar';
 import { adminAddress } from '@flow/shared/addresses';
-import { channelAddress, SIDEBAR_CHANNELS } from '../lib/home';
+import { channelAddress, SIDEBAR_CHANNELS, splitAgentChannels } from '../lib/home';
 import { AppMenu, Collapse } from './AppMenu';
 
 export interface AppLink {
@@ -49,8 +49,19 @@ export function Sidebar(props: {
   /** A choice in an app row's picker (Mail's accounts), from any view. */
   onPickerItem: (app: string, item: SuiteMenuItem) => void;
 }) {
-  const shown = props.channels?.slice(0, SIDEBAR_CHANNELS) ?? [];
-  const more = (props.channels?.length ?? 0) - shown.length;
+  // Channels an agent made show under the agent (while the agents are still loading they wait in Channels).
+  const { byAgent, rest } = splitAgentChannels(props.channels ?? [], props.agents ?? []);
+  const shown = rest.slice(0, SIDEBAR_CHANNELS);
+  const more = rest.length - shown.length;
+  const channelLink = (c: ChannelDTO, nested: boolean) => {
+    const current = props.active === 'chat' && props.activeChannel === c.id;
+    return (
+      <a key={c.id} href={channelAddress(c.id)} data-testid={`home-channel-${c.id}`} aria-current={current ? 'page' : undefined} className={`${row} justify-between ${nested ? 'ml-9' : ''} ${current ? 'bg-row-selected' : ''} ${c.unreadCount > 0 || c.unreadNotifications > 0 ? 'font-semibold' : ''}`}>
+        <span className="truncate"># {c.name}</span>
+        {c.unreadNotifications > 0 && <span className="min-w-5 rounded-full bg-ink px-1.5 text-center text-xs font-semibold text-white">{c.unreadNotifications}</span>}
+      </a>
+    );
+  };
   return (
     <nav aria-label="Home" className="hidden w-60 shrink-0 flex-col gap-1 overflow-y-auto border-r border-hairline bg-white px-3 py-4 md:flex" data-testid="home-sidebar">
       {props.apps.map((a) => (
@@ -71,13 +82,16 @@ export function Sidebar(props: {
         <p className="px-3 py-1.5 text-xs text-muted">{props.addAgentHref ? 'No agents yet. Add one to work beside you.' : 'No agents in this organization yet.'}</p>
       ) : (
         props.agents.map((a) => (
-          <button key={a.userId} type="button" onClick={() => props.onOpenAgent(a)} data-testid={`home-agent-${a.userId}`} className={`${row} w-full text-left`} title={`Message ${a.displayName}`}>
-            <Avatar name={a.displayName} url={a.avatarUrl} />
-            <span className="min-w-0 flex-1">
-              <span className="block truncate">{a.displayName}</span>
-              <span className="block truncate text-xs text-muted">{a.statusText || a.title || 'Agent'}</span>
-            </span>
-          </button>
+          <Fragment key={a.userId}>
+            <button type="button" onClick={() => props.onOpenAgent(a)} data-testid={`home-agent-${a.userId}`} className={`${row} w-full text-left`} title={`Message ${a.displayName}`}>
+              <Avatar name={a.displayName} url={a.avatarUrl} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate">{a.displayName}</span>
+                <span className="block truncate text-xs text-muted">{a.statusText || a.title || 'Agent'}</span>
+              </span>
+            </button>
+            {(byAgent.get(a.userId) ?? []).map((c) => channelLink(c, true))}
+          </Fragment>
         ))
       )}
 
@@ -88,12 +102,7 @@ export function Sidebar(props: {
         <a href="/chat/" className={`${row} text-muted`}>Find a channel in Chat</a>
       ) : (
         <>
-          {shown.map((c) => (
-            <a key={c.id} href={channelAddress(c.id)} data-testid={`home-channel-${c.id}`} aria-current={props.active === 'chat' && props.activeChannel === c.id ? 'page' : undefined} className={`${row} justify-between ${props.active === 'chat' && props.activeChannel === c.id ? 'bg-row-selected' : ''} ${c.unreadCount > 0 || c.unreadNotifications > 0 ? 'font-semibold' : ''}`}>
-              <span className="truncate"># {c.name}</span>
-              {c.unreadNotifications > 0 && <span className="min-w-5 rounded-full bg-ink px-1.5 text-center text-xs font-semibold text-white">{c.unreadNotifications}</span>}
-            </a>
-          ))}
+          {shown.map((c) => channelLink(c, false))}
           {more > 0 && <a href="/chat/" className={`${row} text-xs text-muted`}>{more} more in Chat</a>}
         </>
       )}

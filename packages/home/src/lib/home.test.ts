@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ChannelDTO, WorkspaceMemberDTO } from '@flow/shared';
 import type { CalendarEvent } from '../api';
-import { agentsOf, chatUnread, dmWith, fileAddress, greeting, inboxOf, messageLine, sidebarChannels, summaryLine, threadAddress, todayRange, todaysEvents } from './home';
+import { agentsOf, chatUnread, dmWith, fileAddress, greeting, inboxOf, messageLine, sidebarChannels, splitAgentChannels, summaryLine, threadAddress, todayRange, todaysEvents } from './home';
 
 const ME = '00000000-0000-4000-8000-000000000001';
 const AGENT = '00000000-0000-4000-8000-000000000002';
@@ -93,6 +93,15 @@ describe('the sidebar', () => {
     const group = channel({ id: 'g', kind: 'dm', name: null, memberIds: [ME, AGENT, OTHER] });
     expect(dmWith([group, dm], ME, AGENT)?.id).toBe('dm');
     expect(dmWith([group], ME, AGENT)).toBeNull();
+  });
+
+  it('lists the channels an agent made under that agent, the rest under Channels', () => {
+    const { byAgent, rest } = splitAgentChannels(
+      [channel({ id: 'b', createdBy: AGENT }), channel({ id: 'g' }), channel({ id: 'x', createdBy: 'unlisted-agent' })],
+      [member(AGENT, 'Wren', true)],
+    );
+    expect(byAgent.get(AGENT)?.map((c) => c.id)).toEqual(['b']);
+    expect(rest.map((c) => c.id)).toEqual(['g', 'x']);
   });
 });
 

@@ -12,6 +12,7 @@ This file keeps two things:
 
 ## Parity
 
+- **Channels an agent made are nested under the agent on web only (2026-11-15).** Web Home and Chat (and the desktop shell) list them under the agent's row; macOS and iOS still list them under Channels (gap to close; the data is `createdBy`, already on every client).
 - **The side panel is on web only (2026-11-13, docs/specs/side-panel.md).** Mail on the web and the desktop shell shows Calendar and Docs in a side panel; macOS has none (gap to close later), and iOS has none by design (no room beside the main view).
 - **Creating members and the Set your password page are web-only (2026-11-13).** Create member is in the web Admin app (no native admin surface, by ruling); the emailed setup link opens the web page on every device, as reset links always have. The server's "Forgot password" change reaches every client. Deliberate.
 - **The reconnect bar is gone from web Chat only (2026-11-13).** Web no longer draws the animated line under the channel header while the socket reconnects or catches up (Scott asked for it removed); macOS (`SyncBar.swift`) and iOS (`ChannelScreen`) still show theirs. Decide whether to remove it there too.
