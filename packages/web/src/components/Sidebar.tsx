@@ -149,21 +149,33 @@ export function filterDocs<T extends { name: string }>(docs: T[], query: string)
   return docs.filter((d) => d.name.toLowerCase().includes(q));
 }
 
-export function readCollapsedDocs(): Set<string> {
+export const readCollapsedDocs = (): Set<string> => readCollapsedIds(DOCS_COLLAPSED_KEY);
+export const writeCollapsedDocs = (channelId: string, collapsed: boolean) => writeCollapsedIds(DOCS_COLLAPSED_KEY, channelId, collapsed);
+
+/**
+ * The agents whose channel list is folded away, by agent user id. Same key as Home's sidebar (one origin), so folding an
+ * agent in one shows it folded in the other.
+ */
+export const AGENT_CHANNELS_COLLAPSED_KEY = 'flow.sidebarAgentChannelsCollapsed';
+export const readCollapsedAgents = (): Set<string> => readCollapsedIds(AGENT_CHANNELS_COLLAPSED_KEY);
+export const writeCollapsedAgents = (agentId: string, collapsed: boolean) => writeCollapsedIds(AGENT_CHANNELS_COLLAPSED_KEY, agentId, collapsed);
+
+/** A per-device list of ids that are collapsed, under one localStorage key. */
+function readCollapsedIds(key: string): Set<string> {
   try {
-    const raw: unknown = JSON.parse(localStorage.getItem(DOCS_COLLAPSED_KEY) ?? '[]');
+    const raw: unknown = JSON.parse(localStorage.getItem(key) ?? '[]');
     return new Set(Array.isArray(raw) ? raw.filter((id): id is string => typeof id === 'string') : []);
   } catch {
     return new Set(); // an unreadable preference is not worth breaking the sidebar over
   }
 }
 
-export function writeCollapsedDocs(channelId: string, collapsed: boolean) {
-  const ids = readCollapsedDocs();
-  if (collapsed) ids.add(channelId);
-  else ids.delete(channelId);
+function writeCollapsedIds(key: string, id: string, collapsed: boolean) {
+  const ids = readCollapsedIds(key);
+  if (collapsed) ids.add(id);
+  else ids.delete(id);
   try {
-    localStorage.setItem(DOCS_COLLAPSED_KEY, JSON.stringify([...ids]));
+    localStorage.setItem(key, JSON.stringify([...ids]));
   } catch {
     /* storage denied (private mode): the toggle still works for this session */
   }
@@ -277,6 +289,15 @@ export default function Sidebar() {
   const [agentsCollapsed, setAgentsCollapsed] = useState(
     () => localStorage.getItem(AGENTS_COLLAPSED_KEY) === '1',
   );
+  const [collapsedAgents, setCollapsedAgents] = useState(readCollapsedAgents);
+  const toggleAgentChannels = (agentId: string) => {
+    const next = new Set(collapsedAgents);
+    const fold = !next.has(agentId);
+    if (fold) next.add(agentId);
+    else next.delete(agentId);
+    setCollapsedAgents(next);
+    writeCollapsedAgents(agentId, fold);
+  };
   const [appsCollapsed, setAppsCollapsed] = useState(
     () => localStorage.getItem(APPS_COLLAPSED_KEY) === '1',
   );
@@ -609,7 +630,19 @@ export default function Sidebar() {
               }}
             />
             {!agentsCollapsed &&
-              agents.map(({ member: a, channel: c }) => (
+              agents.map(({ member: a, channel: c }) => {
+                const made = agentChannels.get(a.userId) ?? [];
+                const folded = collapsedAgents.has(a.userId);
+                const fold = made.length > 0 && (
+                  <AgentFold
+                    name={a.displayName}
+                    collapsed={folded}
+                    // Folded away, a channel that needs you still shows: as a dot on the chevron.
+                    unread={folded && made.some(({ channel: k }) => k.unreadNotifications > 0)}
+                    onToggle={() => toggleAgentChannels(a.userId)}
+                  />
+                );
+                return (
                 <div key={a.userId} data-testid={`sidebar-agent-group-${a.displayName}`}>
                 {c ? (
                   // The agent's DM, rendered as the agent: same row as any DM,
@@ -623,6 +656,7 @@ export default function Sidebar() {
                       statusEmoji={a.statusEmoji}
                       statusTitle={a.statusText}
                       leading={<PresenceDot online={live.isOnline(a.userId)} />}
+                      trailing={fold}
                       onMenu={() => setMenuChannel(c)}
                     />
                     <DocsGroup channelId={c.id} docs={artifactsByChannel.get(c.id) ?? []} />
@@ -635,25 +669,29 @@ export default function Sidebar() {
                   </div>
                 ) : (
                   // No DM yet — a virtual row; clicking creates one.
-                  <button
-                    data-testid={`sidebar-agent-${a.displayName}`}
-                    title="Start a direct message"
-                    className="flex w-full items-center gap-[9px] rounded-lg px-2 py-[7px] text-left text-white/80 hover:bg-white/10"
-                    onClick={() => void openDm(a.userId)}
-                  >
-                    <PresenceDot online={live.isOnline(a.userId)} />
-                    <span className="truncate">{a.displayName}</span>
-                  </button>
+                  <div className="flex items-center gap-[9px] rounded-lg px-2 py-[7px] text-white/80 hover:bg-white/10">
+                    <button
+                      data-testid={`sidebar-agent-${a.displayName}`}
+                      title="Start a direct message"
+                      className="flex min-w-0 flex-1 items-center gap-[9px] text-left"
+                      onClick={() => void openDm(a.userId)}
+                    >
+                      <PresenceDot online={live.isOnline(a.userId)} />
+                      <span className="truncate">{a.displayName}</span>
+                    </button>
+                    {fold}
+                  </div>
                 )}
-                {/* Channels this agent made, each with its own sub-channels. */}
-                {(agentChannels.get(a.userId) ?? []).map(({ channel: k, nested }) => (
+                {/* Channels this agent made, indented under its name, each with its own sub-channels. */}
+                {!folded && made.map(({ channel: k, nested }) => (
                   <div key={k.id}>
-                    <ChannelRow channel={k} label={k.name ?? ''} nested={nested ? 2 : true} onMenu={() => setMenuChannel(k)} />
+                    <ChannelRow channel={k} label={k.name ?? ''} nested={nested ? 3 : 2} onMenu={() => setMenuChannel(k)} />
                     <DocsGroup channelId={k.id} docs={artifactsByChannel.get(k.id) ?? []} />
                   </div>
                 ))}
                 </div>
-              ))}
+                );
+              })}
           </>
         )}
 
@@ -1239,6 +1277,24 @@ export function openChannelFromSidebar(
   else sel.selectChannel(channel.id);
 }
 
+/** The chevron on an agent's row that folds away the channels the agent made (shown only when it made some). */
+export function AgentFold({ name, collapsed, unread, onToggle }: { name: string; collapsed: boolean; unread: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      data-testid={`sidebar-agent-fold-${name}`}
+      aria-expanded={!collapsed}
+      aria-label={`${collapsed ? 'Show' : 'Hide'} ${name}'s channels`}
+      title={`${collapsed ? 'Show' : 'Hide'} ${name}'s channels`}
+      className="relative shrink-0 rounded px-1.5 text-xs text-white/60 hover:bg-white/10 hover:text-white"
+      onClick={onToggle}
+    >
+      <span aria-hidden>{collapsed ? '▸' : '▾'}</span>
+      {unread && <span data-testid={`sidebar-agent-fold-unread-${name}`} className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-unread" />}
+    </button>
+  );
+}
+
 function ChannelRow({
   channel,
   label,
@@ -1248,6 +1304,7 @@ function ChannelRow({
   testid,
   hideUnread,
   nested,
+  trailing,
   onMenu,
 }: {
   channel: ChannelDTO;
@@ -1257,9 +1314,11 @@ function ChannelRow({
   statusTitle?: string;
   testid?: string;
   hideUnread?: boolean;
-  /** Sub-channel (#118) — indented under its parent, same as ArtifactRow. 2 = one level deeper (a sub-channel of a
-   * channel that is itself under an agent). */
-  nested?: boolean | 2;
+  /** Sub-channel (#118) — indented under its parent, same as ArtifactRow. 2 and 3 indent further: a channel an agent
+   * made sits under the agent's name (2), and its sub-channels one step deeper (3). */
+  nested?: boolean | 2 | 3;
+  /** Drawn at the row's end, outside the row's own button (the agent row's fold chevron). */
+  trailing?: React.ReactNode;
   onMenu: () => void;
 }) {
   const sel = useSelection();
@@ -1298,7 +1357,7 @@ function ChannelRow({
       }}
       {...tipHandlers}
       data-nested={nested ? 'true' : undefined}
-      className={`group flex items-center gap-[9px] rounded-lg px-2 py-[7px] ${nested === 2 ? 'ml-6' : nested ? 'ml-3' : ''} ${
+      className={`group flex items-center gap-[9px] rounded-lg px-2 py-[7px] ${nested === 3 ? 'ml-9' : nested === 2 ? 'ml-6' : nested ? 'ml-3' : ''} ${
         active ? 'bg-white text-accent-deep' : 'hover:bg-white/10'
       }`}
     >
@@ -1341,6 +1400,7 @@ function ChannelRow({
           </span>
         )}
       </button>
+      {trailing}
       <button
         data-testid={`channel-menu-${channel.name ?? channel.id}`}
         className={`hidden rounded px-1 text-xs group-hover:block ${

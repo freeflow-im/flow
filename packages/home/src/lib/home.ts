@@ -57,6 +57,27 @@ export function splitAgentChannels(channels: ChannelDTO[], agents: WorkspaceMemb
   return { byAgent, rest };
 }
 
+/** The agents whose channel list is folded away, by user id; per device, and the same key Chat's sidebar uses. */
+const AGENT_CHANNELS_COLLAPSED_KEY = 'flow.sidebarAgentChannelsCollapsed';
+export function readCollapsedAgents(): Set<string> {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(AGENT_CHANNELS_COLLAPSED_KEY) ?? '[]');
+    return new Set(Array.isArray(raw) ? raw.filter((id): id is string => typeof id === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+export function writeCollapsedAgents(agentId: string, collapsed: boolean): void {
+  const ids = readCollapsedAgents();
+  if (collapsed) ids.add(agentId);
+  else ids.delete(agentId);
+  try {
+    localStorage.setItem(AGENT_CHANNELS_COLLAPSED_KEY, JSON.stringify([...ids]));
+  } catch {
+    /* storage denied: the fold still works until the page reloads */
+  }
+}
+
 /** Chat's tab number: the notifications waiting in every channel and DM, as Chat's own badge counts them. */
 export const chatUnread = (channels: ChannelDTO[]): number => channels.reduce((n, c) => n + (c.isMember ? c.unreadNotifications : 0), 0);
 

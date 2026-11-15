@@ -4,6 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ArtifactDTO, ChannelDTO, WorkspaceMemberDTO } from '@flow/shared';
 import {
   ActivityBell,
+  AgentFold,
+  AGENT_CHANNELS_COLLAPSED_KEY,
+  readCollapsedAgents,
+  writeCollapsedAgents,
   ActivitySpinner,
   appEntries,
   channelLabel,
@@ -115,6 +119,18 @@ describe('splitAgentChannels', () => {
     expect(byAgent.get('agent1')?.map((r) => `${r.nested ? '  ' : ''}${r.channel.id}`)).toEqual(['build', '  build-sub']);
     // A sub-channel an agent made in a person's channel stays with its parent; an agent not listed keeps its channels in Channels.
     expect(rest.map((r) => r.channel.id)).toEqual(['general', 'general-sub', 'other']);
+  });
+});
+
+describe('AgentFold', () => {
+  it('shows which way it folds, and a dot only when folded channels need you', () => {
+    const open = renderToStaticMarkup(<AgentFold name="Cypress" collapsed={false} unread={false} onToggle={() => {}} />);
+    expect(open).toContain('aria-expanded="true"');
+    expect(open).toContain('▾');
+    const shut = renderToStaticMarkup(<AgentFold name="Cypress" collapsed unread onToggle={() => {}} />);
+    expect(shut).toContain('aria-expanded="false"');
+    expect(shut).toContain('▸');
+    expect(shut).toContain('sidebar-agent-fold-unread-Cypress');
   });
 });
 
@@ -485,6 +501,15 @@ describe('collapsed-docs preference', () => {
     });
   });
   afterEach(() => vi.unstubAllGlobals());
+
+  it('remembers a folded agent under the key Home shares, apart from the docs list', () => {
+    writeCollapsedAgents('agent1', true);
+    expect(readCollapsedAgents().has('agent1')).toBe(true);
+    expect(JSON.parse(store[AGENT_CHANNELS_COLLAPSED_KEY] ?? '[]')).toEqual(['agent1']);
+    expect(readCollapsedDocs().size).toBe(0);
+    writeCollapsedAgents('agent1', false);
+    expect(readCollapsedAgents().size).toBe(0);
+  });
 
   it('remembers a collapsed channel and forgets it again', () => {
     writeCollapsedDocs('factory', true);

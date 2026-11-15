@@ -1,11 +1,11 @@
 // Home's left column: the apps, then the person's channels, then the organization's agents. Every row is a link to the
 // page its own app shows (a channel or an agent's DM opens in Chat), so a click lands where the app would put you.
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Check, ChevronDown } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight } from 'lucide-react';
 import type { ChannelDTO, WorkspaceMemberDTO } from '@flow/shared';
 import type { SuiteMenuItem, SuiteMenuPicker } from '@flow/suite-bar';
 import { adminAddress } from '@flow/shared/addresses';
-import { channelAddress, SIDEBAR_CHANNELS, splitAgentChannels } from '../lib/home';
+import { channelAddress, readCollapsedAgents, SIDEBAR_CHANNELS, splitAgentChannels, writeCollapsedAgents } from '../lib/home';
 import { AppMenu, Collapse } from './AppMenu';
 
 export interface AppLink {
@@ -53,10 +53,20 @@ export function Sidebar(props: {
   const { byAgent, rest } = splitAgentChannels(props.channels ?? [], props.agents ?? []);
   const shown = rest.slice(0, SIDEBAR_CHANNELS);
   const more = rest.length - shown.length;
+  // Agents whose channel list is folded away, remembered per device (the same key as Chat's sidebar).
+  const [folded, setFolded] = useState(readCollapsedAgents);
+  const toggle = (agentId: string) => {
+    const next = new Set(folded);
+    const fold = !next.has(agentId);
+    if (fold) next.add(agentId);
+    else next.delete(agentId);
+    setFolded(next);
+    writeCollapsedAgents(agentId, fold);
+  };
   const channelLink = (c: ChannelDTO, nested: boolean) => {
     const current = props.active === 'chat' && props.activeChannel === c.id;
     return (
-      <a key={c.id} href={channelAddress(c.id)} data-testid={`home-channel-${c.id}`} aria-current={current ? 'page' : undefined} className={`${row} justify-between ${nested ? 'ml-9' : ''} ${current ? 'bg-row-selected' : ''} ${c.unreadCount > 0 || c.unreadNotifications > 0 ? 'font-semibold' : ''}`}>
+      <a key={c.id} href={channelAddress(c.id)} data-testid={`home-channel-${c.id}`} aria-current={current ? 'page' : undefined} className={`${row} justify-between ${nested ? 'ml-12' : ''} ${current ? 'bg-row-selected' : ''} ${c.unreadCount > 0 || c.unreadNotifications > 0 ? 'font-semibold' : ''}`}>
         <span className="truncate"># {c.name}</span>
         {c.unreadNotifications > 0 && <span className="min-w-5 rounded-full bg-ink px-1.5 text-center text-xs font-semibold text-white">{c.unreadNotifications}</span>}
       </a>
@@ -81,18 +91,39 @@ export function Sidebar(props: {
       ) : props.agents.length === 0 ? (
         <p className="px-3 py-1.5 text-xs text-muted">{props.addAgentHref ? 'No agents yet. Add one to work beside you.' : 'No agents in this organization yet.'}</p>
       ) : (
-        props.agents.map((a) => (
-          <Fragment key={a.userId}>
-            <button type="button" onClick={() => props.onOpenAgent(a)} data-testid={`home-agent-${a.userId}`} className={`${row} w-full text-left`} title={`Message ${a.displayName}`}>
-              <Avatar name={a.displayName} url={a.avatarUrl} />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate">{a.displayName}</span>
-                <span className="block truncate text-xs text-muted">{a.statusText || a.title || 'Agent'}</span>
-              </span>
-            </button>
-            {(byAgent.get(a.userId) ?? []).map((c) => channelLink(c, true))}
-          </Fragment>
-        ))
+        props.agents.map((a) => {
+          const made = byAgent.get(a.userId) ?? [];
+          const closed = folded.has(a.userId);
+          return (
+            <Fragment key={a.userId}>
+              <div className="flex items-center rounded-md hover:bg-hover">
+                <button type="button" onClick={() => props.onOpenAgent(a)} data-testid={`home-agent-${a.userId}`} className={`${row} min-w-0 flex-1 text-left hover:bg-transparent`} title={`Message ${a.displayName}`}>
+                  <Avatar name={a.displayName} url={a.avatarUrl} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate">{a.displayName}</span>
+                    <span className="block truncate text-xs text-muted">{a.statusText || a.title || 'Agent'}</span>
+                  </span>
+                </button>
+                {made.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => toggle(a.userId)}
+                    aria-expanded={!closed}
+                    aria-label={`${closed ? 'Show' : 'Hide'} ${a.displayName}'s channels`}
+                    title={`${closed ? 'Show' : 'Hide'} ${a.displayName}'s channels`}
+                    data-testid={`home-agent-fold-${a.userId}`}
+                    className="relative mr-1 flex size-6 shrink-0 items-center justify-center rounded text-muted hover:bg-row-selected hover:text-ink"
+                  >
+                    {closed ? <ChevronRight className="size-4" aria-hidden /> : <ChevronDown className="size-4" aria-hidden />}
+                    {/* Folded away, a channel that needs you still shows: as a dot on the chevron. */}
+                    {closed && made.some((c) => c.unreadNotifications > 0) && <span className="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-ink" />}
+                  </button>
+                )}
+              </div>
+              {!closed && made.map((c) => channelLink(c, true))}
+            </Fragment>
+          );
+        })
       )}
 
       <Heading label="Channels" action={{ label: 'Open Chat', href: '/chat/' }} />
