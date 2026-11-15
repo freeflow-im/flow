@@ -4,8 +4,8 @@ import { addDays, format, isSameDay } from 'date-fns';
 import type { EventOccurrence, Response } from '../api';
 import { parseDate } from './ranges';
 
-const time = (d: Date) => format(d, d.getMinutes() ? 'h:mm a' : 'h a').replace(':00 ', ' ');
-function timeRange(a: Date, b: Date): string {
+export const time = (d: Date) => format(d, d.getMinutes() ? 'h:mm a' : 'h a').replace(':00 ', ' ');
+export function timeRange(a: Date, b: Date): string {
   const sameHalf = format(a, 'a') === format(b, 'a');
   const left = sameHalf ? time(a).replace(/ (AM|PM)$/, '') : time(a);
   return `${left} – ${time(b)}`;
