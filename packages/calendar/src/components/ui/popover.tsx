@@ -9,7 +9,8 @@ export type Anchor = { el: Element } | { x: number; y: number } | null;
 /** Whether an event's target is in the assistant's dock (AssistantDock, `data-testid="assistant-dock"`). */
 const insideAssistant = (target: EventTarget | null): boolean => target instanceof Element && !!target.closest('[data-testid="assistant-dock"]');
 
-export function AnchoredPopover({ anchor, onClose, className, children, label, autoFocus = false }: { anchor: Anchor; onClose(): void; className?: string; children: ReactNode; label: string; autoFocus?: boolean }) {
+/** `side`: where it opens by its anchor, beside it (the default) or below it (the side panel, too narrow for beside). */
+export function AnchoredPopover({ anchor, onClose, className, children, label, autoFocus = false, side = 'right' }: { anchor: Anchor; onClose(): void; className?: string; children: ReactNode; label: string; autoFocus?: boolean; side?: 'right' | 'bottom' }) {
   const virtual = { current: { getBoundingClientRect: () => (anchor && 'el' in anchor ? anchor.el.getBoundingClientRect() : anchor ? new DOMRect(anchor.x, anchor.y, 0, 0) : new DOMRect(window.innerWidth / 2, window.innerHeight / 3, 0, 0)) } };
   return (
     <P.Root open onOpenChange={(o) => !o && onClose()}>
@@ -17,8 +18,8 @@ export function AnchoredPopover({ anchor, onClose, className, children, label, a
       <P.Portal>
         <P.Content
           aria-label={label}
-          side={anchor ? 'right' : 'bottom'}
-          align={anchor ? 'start' : 'center'}
+          side={anchor ? side : 'bottom'}
+          align={anchor && side === 'right' ? 'start' : 'center'}
           sideOffset={8}
           collisionPadding={12}
           className={cn('z-50 w-[min(400px,calc(100vw-24px))] rounded-xl border border-hairline bg-white p-4 text-ink shadow-xl outline-none', className)}
