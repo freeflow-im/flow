@@ -58,16 +58,13 @@ describe('the Mail row picker', () => {
   });
 });
 
-describe('the Settings row', () => {
-  it('opens Home’s Settings page, and is marked while it shows', () => {
-    draw(undefined);
-    expect(screen.getByTestId('home-app-settings').getAttribute('href')).toBe('/home/settings');
-    expect(screen.getByTestId('home-app-settings').getAttribute('aria-current')).toBeNull();
-    cleanup();
+describe('Settings', () => {
+  it('has no sidebar row (the account menu opens it), and no row is marked while it shows', () => {
     render(
-      <Sidebar apps={appLinks({ mailUnread: 0, chatUnread: 0, admin: false })} active="settings" activeChannel={null} channels={[]} agents={[]} onOpenAgent={() => {}} addAgentHref={null} menus={{}} onMenuItem={() => {}} onPickerItem={() => {}} />,
+      <Sidebar apps={appLinks({ mailUnread: 0, chatUnread: 0, admin: true })} active="settings" activeChannel={null} channels={[]} agents={[]} onOpenAgent={() => {}} addAgentHref={null} menus={{}} onMenuItem={() => {}} onPickerItem={() => {}} />,
     );
-    expect(screen.getByTestId('home-app-settings').getAttribute('aria-current')).toBe('page');
+    expect(screen.queryByTestId('home-app-settings')).toBeNull();
+    expect(document.querySelector('[aria-current="page"]')).toBeNull();
   });
 });
 

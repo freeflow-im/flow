@@ -66,7 +66,7 @@ in the app itself.
 
 The person's own profile and settings are Home's page, not a dialog in Chat. `/home/settings` is the profile (picture,
 name, the caller's address, title, timezone, website, bio) and `/home/settings/notifications` the notification prefs,
-privacy mode and Delete account. Both are tabs of one page, with a Settings row in Home's sidebar.
+privacy mode and Delete account. Both are tabs of one page, reached only from the account menu: Home's sidebar has no Settings row.
 
 - Every app's account menu opens it (`intent.settings(section)` in `@flow/suite-bar`): "My profile" at the profile,
   "Settings" at the notifications. Inside Home's frame the intent asks Home (`flow:open`) instead of loading Home in the

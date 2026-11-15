@@ -6,4 +6,4 @@
 
 ## Feature
 
-- **Settings live in Home.** Your profile, notifications and privacy mode are now one Settings page in Home, with a Settings entry in Home's sidebar. "My profile" and "Settings" in any app's account menu take you straight there.
+- **Settings live in Home.** Your profile, notifications and privacy mode are now one Settings page in Home. "My profile" and "Settings" in any app's account menu take you straight there.
