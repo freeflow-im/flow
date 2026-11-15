@@ -1,7 +1,8 @@
 // The suite bar on Calendar (packages/suite-bar), as Mail's MailSuiteBar draws it: the organization switcher, the apps
 // with Calendar active (⌘4), the search (which searches the calendars), the Assistant (Calendar's panel), notifications and
 // the account menu.
-// What belongs to Chat (organizations, invitations, notifications, the profile) opens Chat at `/chat/?open=…`.
+// What belongs to Chat (organizations, invitations, notifications) opens Chat at `/chat/?open=…`; My profile opens Home's
+// Settings page.
 import { useCallback, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { APP_MANIFESTS, AWAY_STATUS, guestTabs, intent, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type ChatPage, type StatusOption } from '@flow/suite-bar';
@@ -77,7 +78,7 @@ export function CalendarSuiteBar({ search, onSettings, onHome, assistant, guest 
             setStatusError(null);
             setStatusOpen(true);
           },
-          onProfile: () => toChat('profile'),
+          onProfile: () => intent.settings('profile'),
           // Calendar's own settings: the connected accounts.
           onSettings,
           onLogout: () => void suite.logout().finally(() => window.location.assign('/')),

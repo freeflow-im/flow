@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addressOf, chatPageAddress, createAddress, referenceOf, shareAddressOf, type AddressedReference } from './addresses.js';
+import { addressOf, chatPageAddress, createAddress, referenceOf, settingsAddress, settingsSectionOf, shareAddressOf, type AddressedReference } from './addresses.js';
 import { APP_MANIFESTS } from './manifests.js';
 import { formatReference, parseReference } from './platform.js';
 
@@ -81,5 +81,16 @@ describe('addresses', () => {
     const msg = new URL(createAddress('chat-message', { channel: 'c1', text: 'hi there' }), ORIGIN);
     expect([msg.pathname, msg.searchParams.get('open'), msg.searchParams.get('text')]).toEqual(['/chat/', 'channel:c1', 'hi there']);
     expect(chatPageAddress('admin')).toBe('/chat/?open=admin');
+  });
+
+  it('names Home’s Settings page by section, and reads the section back', () => {
+    expect(settingsAddress()).toBe('/home/settings');
+    expect(settingsAddress('notifications')).toBe('/home/settings/notifications');
+    expect(settingsSectionOf('/home/settings')).toBe('profile');
+    expect(settingsSectionOf('/home/settings/')).toBe('profile');
+    expect(settingsSectionOf('/home/settings/notifications')).toBe('notifications');
+    expect(settingsSectionOf('/home/settings/nope')).toBe('profile');
+    expect(settingsSectionOf('/home/')).toBeNull();
+    expect(settingsSectionOf('/chat/settings')).toBeNull();
   });
 });

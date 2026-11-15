@@ -9,7 +9,8 @@
     "./intents": "./src/lib/intents.ts",
     "./assistant-dock": "./src/AssistantDock.tsx",
     "./assistant-chat": "./src/AssistantChat.tsx",
-    "./side-panel": "./src/SidePanel.tsx"
+    "./side-panel": "./src/SidePanel.tsx",
+    "./account-settings": "./src/AccountSettings.tsx"
   },
   "sideEffects": [
     "*.css"

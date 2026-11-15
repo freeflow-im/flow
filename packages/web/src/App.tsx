@@ -29,10 +29,11 @@ import {
   stepNav,
   type NavHistory,
 } from './lib/navHistory';
-import { ACTIVITY_VIEW_ID, AuthContext, ConnectionContext, SelectionContext } from './state';
+import { ACTIVITY_VIEW_ID, AuthContext, ConnectionContext, SelectionContext, ACTIVE_WS } from './state';
 import AuthScreen from './components/AuthScreen';
 import JoinScreen from './components/JoinScreen';
 import NativeSignIn from './components/NativeSignIn';
+import { openHome } from './lib/openHome';
 import WorkspaceChooser from './components/WorkspaceChooser';
 import Main from './components/Main';
 import ChatSuiteBar from './components/ChatSuiteBar';
@@ -43,7 +44,7 @@ import { readChatIntent, withoutChatIntent, type ChatIntent } from './lib/chatIn
 // turns a name into the storage key its session owns, and the connection the
 // pre-multi-server browser was already using resolves them to exactly the
 // `flow.*` keys it already has (see lib/connections.ts).
-const ACTIVE_WS = 'activeWorkspace';
+// The active workspace's key (state.tsx), which Home and the other apps read too.
 export const PENDING_INVITE = 'pendingInvite';
 /** sessionStorage: the path to go to once signed in (?next=, consumed in SessionApp). */
 export const NEXT_AFTER_SIGN_IN = 'flow.nextAfterSignIn';
@@ -272,6 +273,16 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
 
   // Transient one-line banner (currently only the Google domain auto-join).
   const [notice, setNotice] = useState<string | null>(null);
+  // A workspace joined at sign-in opens in Home (lib/openHome.ts): while the page goes, this says so instead of Chat.
+  const [openingHome, setOpeningHome] = useState<string | null>(null);
+  /** Opens Home on a workspace just joined, with `message` shown there; false (nothing done) where it stays in Chat:
+   * the desktop app, or a sign-in on its way back to another page (?next=). */
+  const joinedToHome = useCallback((ws: WorkspaceDTO, message: string): boolean => {
+    if (sessionStorage.getItem(NEXT_AFTER_SIGN_IN)) return false;
+    if (!openHome(runtime, ws.id, message)) return false;
+    setOpeningHome(ws.name);
+    return true;
+  }, [runtime]);
   const readNavigation = (id: string | null) => {
     if (!id) return null;
     try { return JSON.parse(runtime.read(`navigation:${id}`) ?? 'null') as {
@@ -364,6 +375,7 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
     void (async () => {
       try {
         const ws = await runtime.api<WorkspaceDTO>('POST', '/v1/invites/accept', { token });
+        if (joinedToHome(ws, `You've joined ${ws.name}.`)) return;
         runtime.write(ACTIVE_WS, ws.id);
         setWorkspaceId(ws.id);
         await qc.invalidateQueries({ queryKey: ['workspaces'] });
@@ -373,7 +385,7 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
         runtime.write(PENDING_INVITE, null);
       }
     })();
-  }, [runtime, user, qc, inviteNonce]);
+  }, [runtime, user, qc, inviteNonce, joinedToHome]);
 
 
   // A stashed join link (issue #85) takes over the whole screen until it's
@@ -415,15 +427,15 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
     const joined = resp.autoJoined ?? [];
     if (joined.length > 0) {
       const first = joined[0]!;
+      const message = joined.length === 1
+        ? `You've joined ${first.name} — everyone on your email domain is welcome there.`
+        : `You've joined ${joined.length} workspaces on your email domain.`;
+      if (joinedToHome(first, message)) return;
       runtime.write(ACTIVE_WS, first.id);
       setWorkspaceId(first.id);
-      setNotice(
-        joined.length === 1
-          ? `You've joined ${first.name} — everyone on your email domain is welcome there.`
-          : `You've joined ${joined.length} workspaces on your email domain.`,
-      );
+      setNotice(message);
     }
-  }, [replaceToken, runtime, qc, threadMemory]);
+  }, [replaceToken, runtime, qc, threadMemory, joinedToHome]);
 
   // A `flow://` link nobody was waiting for (see lib/deepLinks.ts): an invite
   // to accept, or a sign-in code minted on the web. The rules follow the
@@ -547,6 +559,14 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
     return <NativeSignIn user={user} />;
   }
 
+  if (openingHome !== null) {
+    return (
+      <div className="flex h-full items-center justify-center bg-base text-sm text-muted" data-testid="opening-home">
+        {openingHome ? `Opening ${openingHome}…` : 'Opening…'}
+      </div>
+    );
+  }
+
   // A join link owns the screen until it's joined, declined, or found dead —
   // signed out it wraps the auth card so that names the workspace too.
   if (pendingJoin) {
@@ -559,10 +579,12 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
         resetToken={resetToken}
         signinToken={signinToken}
         onJoined={(ws, alreadyMember) => {
+          const message = alreadyMember ? `You're already in ${ws.name}.` : `You've joined ${ws.name}.`;
+          resolveJoin();
+          if (joinedToHome(ws, message)) return;
           runtime.write(ACTIVE_WS, ws.id);
           setWorkspaceId(ws.id);
-          setNotice(alreadyMember ? `You're already in ${ws.name}.` : `You've joined ${ws.name}.`);
-          resolveJoin();
+          setNotice(message);
         }}
         onDismiss={resolveJoin}
       />

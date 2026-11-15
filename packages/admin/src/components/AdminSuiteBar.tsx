@@ -1,6 +1,7 @@
 // The suite bar on Admin (packages/suite-bar), as Contacts' draws it: the organization switcher, the apps (Admin has no
 // tab of its own, so none is active), notifications and the account menu. What belongs to Chat (adding an organization,
-// invitations, notifications, the profile) opens Chat at `/chat/?open=…`. "Organization settings" is left out: this is it.
+// invitations, notifications) opens Chat at `/chat/?open=…`; My profile and Settings open Home's Settings page.
+// "Organization settings" is left out: this is it.
 import { useCallback, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { APP_MANIFESTS, AWAY_STATUS, intent, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type ChatPage, type StatusOption } from '@flow/suite-bar';
@@ -59,9 +60,9 @@ export function AdminSuiteBar() {
             setStatusError(null);
             setStatusOpen(true);
           },
-          onProfile: () => toChat('profile'),
-          // Admin is the organization's settings; the person's own are in Chat.
-          onSettings: () => toChat('profile'),
+          onProfile: () => intent.settings('profile'),
+          // Admin is the organization's settings; the person's own are on Home's Settings page.
+          onSettings: () => intent.settings('notifications'),
           onLogout: () => void suite.logout().finally(() => window.location.assign('/')),
         }}
       />

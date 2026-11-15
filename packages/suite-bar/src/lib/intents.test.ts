@@ -19,4 +19,9 @@ describe('intents', () => {
     expect(followed((navigate) => intent.share(ref, { navigate }))).toEqual(['/docs/?share=o1%2Fdocs%2Fsheet%2Fs1']);
     expect(intent.share({ ...ref, app: 'mail', kind: 'message' }, { navigate: () => {} })).toBe(false);
   });
+
+  it('settings opens Home’s Settings page at the section asked for', () => {
+    expect(followed((navigate) => intent.settings(undefined, { navigate }))).toEqual(['/home/settings']);
+    expect(followed((navigate) => intent.settings('notifications', { navigate }))).toEqual(['/home/settings/notifications']);
+  });
 });

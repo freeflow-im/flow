@@ -2,12 +2,9 @@ import { isDesktop } from '../lib/host';
 import { useBoundApi } from '../lib/useBoundApi';
 import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import {
-  PROFILE_BIO_MAX,
-  PROFILE_TITLE_MAX,
-  PROFILE_WEBSITE_MAX,
-  isProfileWebsiteUrl,
-} from '@flow/shared';
+import { isProfileWebsiteUrl } from '@flow/shared';
+import { SETTINGS_SECTIONS } from '@flow/shared/addresses';
+import { AccountSettings, type AccountSettingsApi } from '@flow/suite-bar/account-settings';
 import type {
   ChannelDTO,
   InviteBatchDTO,
@@ -795,44 +792,13 @@ export function DeleteWorkspaceModal({ workspaceId, onClose }: { workspaceId: st
   );
 }
 
-/** One live-saved notification-pref toggle (phase 10 settings). */
-function PrefToggle({
-  label,
-  hint,
-  checked,
-  onChange,
-  testid,
-}: {
-  label: string;
-  hint?: string;
-  checked: boolean;
-  onChange: (value: boolean) => void;
-  testid: string;
-}) {
-  return (
-    <label className="flex cursor-pointer items-center gap-2.5 py-1 text-sm text-ink">
-      <input
-        type="checkbox"
-        data-testid={testid}
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        className="h-4 w-4 accent-accent"
-      />
-      <span>
-        {label}
-        {hint && <span className="text-xs text-faint"> — {hint}</span>}
-      </span>
-    </label>
-  );
-}
-
-/** The profile and the account's settings. `section: 'notifications'` opens it at the notification settings: the
- * suite bar's Settings row (its My profile row opens it at the top). */
-export function ProfileModal({ onClose, section }: { onClose: () => void; section?: 'notifications' }) {
-  const notificationsRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (section === 'notifications') notificationsRef.current?.scrollIntoView({ block: 'start' });
-  }, [section]);
+/**
+ * The profile and the account's settings in a dialog, for where Home's Settings page cannot be reached: the desktop
+ * shell, or an organization on another server. In a browser on the suite's own server the account menu opens Home's page
+ * instead (ChatSuiteBar). The form is the suite's one (@flow/suite-bar/account-settings), saved through this connection;
+ * `section: 'notifications'` brings the notification settings into view (the menu's Settings row).
+ */
+export function ProfileModal({ onClose, section, avatarSrc }: { onClose: () => void; section?: 'notifications'; avatarSrc: string | null }) {
   const { serverOrigin, api, uploadAvatar } = useBoundApi();
   const auth = useAuth();
   const sel = useSelection();
@@ -840,222 +806,35 @@ export function ProfileModal({ onClose, section }: { onClose: () => void; sectio
   // platform.md §3.2: the caller's own address in the workspace they are in, when the server sends it.
   const address = (workspaces.data ?? []).find((w) => w.id === sel.workspaceId)?.address;
   const qc = useQueryClient();
-  const [displayName, setDisplayName] = useState(auth.user.displayName);
-  const [title, setTitle] = useState(auth.user.title ?? '');
-  const [timezone, setTimezone] = useState(auth.user.timezone || 'UTC');
-  const [website, setWebsite] = useState(auth.user.website ?? '');
-  const [bio, setBio] = useState(auth.user.bio ?? '');
-  const [error, setError] = useState<string | null>(null);
-  const [avatarBusy, setAvatarBusy] = useState(false);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [deleteBusy, setDeleteBusy] = useState(false);
-  const timezones = Intl.supportedValuesOf('timeZone');
-  const prefs = auth.user.notificationPrefs;
-
-  /** App Store 5.1.1(v) parity: the same self-service deletion the apps offer. */
-  const deleteAccount = async () => {
-    setDeleteBusy(true);
-    setError(null);
-    try {
-      await api('DELETE', '/v1/me');
-      auth.signOut(); // local teardown; its logout POST failing on the dead session is fine
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'failed');
-      setDeleteBusy(false);
-    }
+  const settingsApi: AccountSettingsApi = {
+    patchMe: (patch) => api<UserDTO>('PATCH', '/v1/me', patch),
+    uploadAvatar: async (file) => (await uploadAvatar(file)) as UserDTO,
+    deleteAccount: async () => void (await api('DELETE', '/v1/me')),
   };
-
-  // #220: the server rejects anything that isn't an absolute http(s) URL, so say
-  // so here rather than letting Save fail with a raw validation error.
-  const websiteInvalid = website.trim() !== '' && !isProfileWebsiteUrl(website.trim());
-
-  const save = async () => {
-    try {
-      const me = await api<UserDTO>('PATCH', '/v1/me', {
-        displayName,
-        // #434: '' clears the title — the server trims, so a blank field is "unset"
-        title: title.trim(),
-        timezone,
-        website: website.trim(),
-        bio,
-      });
-      auth.setUser(me);
-      await qc.invalidateQueries({ queryKey: ['members'] });
-      onClose();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'failed');
-    }
+  const onUser = (me: UserDTO) => {
+    auth.setUser(me);
+    // The roster carries the name, picture and privacy mode (the Directory drops a private member in the same beat).
+    void qc.invalidateQueries({ queryKey: ['members'] });
   };
-
-  /** Live-saved pref toggle: one PATCH per flip, shallow-merged server-side. */
-  const setPref = async (key: keyof NotificationPrefs, value: boolean) => {
-    try {
-      const me = await api<UserDTO>('PATCH', '/v1/me', { notificationPrefs: { [key]: value } });
-      auth.setUser(me);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'failed');
-    }
-  };
-
-  /** #489: live-saved like the notification prefs rather than waiting on Save —
-   * a privacy switch that needed a second click to take effect would be the
-   * wrong shape. The roster is refetched so the Directory drops (or restores)
-   * this member in the same beat. */
-  const setPrivacyMode = async (value: boolean) => {
-    try {
-      const me = await api<UserDTO>('PATCH', '/v1/me', { privacyMode: value });
-      auth.setUser(me);
-      await qc.invalidateQueries({ queryKey: ['members'] });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'failed');
-    }
-  };
-
-  const pickAvatar = async (files: FileList | null) => {
-    const file = files?.[0];
-    if (!file) return;
-    setAvatarBusy(true);
-    try {
-      const me = (await uploadAvatar(file)) as UserDTO;
-      auth.setUser(me);
-      await qc.invalidateQueries({ queryKey: ['members'] });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'avatar failed');
-    } finally {
-      setAvatarBusy(false);
-    }
-  };
-
   return (
     <Modal onClose={onClose} testid="profile-modal">
       <h3 className="mb-3 font-bold">Settings</h3>
-      <div className="mb-3 flex items-center gap-3">
-        {auth.user.avatarUrl ? (
-          <AuthImg path={auth.user.avatarUrl} alt="avatar" className="h-14 w-14 rounded-full object-cover" />
-        ) : (
-          <span className="flex h-14 w-14 items-center justify-center rounded-full bg-daypill text-lg font-bold text-muted">
-            {auth.user.displayName.slice(0, 1).toUpperCase()}
-          </span>
-        )}
-        <label className="cursor-pointer text-sm text-accent-soft hover:underline">
-          {avatarBusy ? 'Uploading…' : 'Change avatar…'}
-          <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden
-            data-testid="profile-avatar-input"
-            onChange={(e) => void pickAvatar(e.target.files)} />
-        </label>
-      </div>
-      <label className="mb-1 block text-xs font-semibold text-faint uppercase">Display name</label>
-      <input data-testid="profile-name" className="mb-3 w-full rounded border border-hairline2 px-3 py-2 text-sm"
-        value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
-      {address && (
-        <p data-testid="profile-address" className="-mt-2 mb-3 truncate text-xs text-muted select-all" title={address}>
-          {address}
-        </p>
-      )}
-      {/* #434: directly under the name — the two together are what a Directory
-          card shows, so they are edited together. */}
-      <label className="mb-1 block text-xs font-semibold text-faint uppercase">Title</label>
-      <input data-testid="profile-title" placeholder="Title (optional)" maxLength={PROFILE_TITLE_MAX}
-        className="w-full rounded border border-hairline2 px-3 py-2 text-sm"
-        value={title} onChange={(e) => setTitle(e.target.value)} />
-      <p className="mb-3 mt-1 text-xs text-faint">Shown under your name in the Directory.</p>
-
-      <label className="mb-1 block text-xs font-semibold text-faint uppercase">Timezone</label>
-      <select data-testid="profile-timezone" className="mb-3 w-full rounded border border-hairline2 px-3 py-2 text-sm"
-        value={timezone} onChange={(e) => setTimezone(e.target.value)}>
-        {timezones.map((tz) => <option key={tz} value={tz}>{tz}</option>)}
-      </select>
-
-      <label className="mb-1 block text-xs font-semibold text-faint uppercase">Website</label>
-      <input data-testid="profile-website" type="url" placeholder="https://example.com"
-        maxLength={PROFILE_WEBSITE_MAX}
-        className={`w-full rounded border px-3 py-2 text-sm ${websiteInvalid ? 'border-red-500' : 'border-hairline2'}`}
-        value={website} onChange={(e) => setWebsite(e.target.value)} />
-      <p data-testid="profile-website-error"
-        className={`mb-3 mt-1 text-xs ${websiteInvalid ? 'text-red-600' : 'text-faint'}`}>
-        {websiteInvalid ? 'Must be a full link starting with http:// or https://' : 'Shown on your profile card.'}
-      </p>
-
-      <div className="mb-1 flex items-baseline justify-between">
-        <label className="block text-xs font-semibold text-faint uppercase">Bio</label>
-        <span data-testid="profile-bio-count"
-          className={`text-xs ${bio.length >= PROFILE_BIO_MAX ? 'text-red-600' : 'text-faint'}`}>
-          {bio.length}/{PROFILE_BIO_MAX}
-        </span>
-      </div>
-      <textarea data-testid="profile-bio" rows={3} maxLength={PROFILE_BIO_MAX}
-        placeholder="A sentence or two about you."
-        className="mb-3 w-full resize-y rounded border border-hairline2 px-3 py-2 text-sm"
-        value={bio} onChange={(e) => setBio(e.target.value)} />
-
-      <div ref={notificationsRef} className="mt-2 mb-1 border-t border-hairline pt-3 text-xs font-semibold text-faint uppercase">
-        Notifications
-      </div>
-      <p className="mb-1 text-xs text-faint">Off means no banner — everything still lands in the 🔔 list.</p>
-      <PrefToggle testid="pref-dm" label="Direct messages" hint="any message in a DM"
-        checked={prefs.dm !== false} onChange={(v) => void setPref('dm', v)} />
-      <PrefToggle testid="pref-mention" label="Mentions of me" hint="@you"
-        checked={prefs.mention !== false} onChange={(v) => void setPref('mention', v)} />
-      <PrefToggle testid="pref-group-mention" label="Group mentions" hint="@here, @channel"
-        checked={prefs.groupMention !== false} onChange={(v) => void setPref('groupMention', v)} />
-      <PrefToggle testid="pref-thread-reply" label="Thread replies" hint="threads you started or joined"
-        checked={prefs.threadReply !== false} onChange={(v) => void setPref('threadReply', v)} />
-      <PrefToggle testid="pref-reaction" label="Reactions" hint="someone reacts to your message"
-        checked={prefs.reaction !== false} onChange={(v) => void setPref('reaction', v)} />
-      <PrefToggle testid="pref-channel-invite" label="Channel invites" hint="someone adds you to a channel"
-        checked={prefs.channelInvite !== false} onChange={(v) => void setPref('channelInvite', v)} />
-      <PrefToggle testid="pref-sound" label="Play a sound" hint="with every banner"
-        checked={prefs.sound !== false} onChange={(v) => void setPref('sound', v)} />
-      {/* In the desktop shell how long a banner stays is an OS setting, as on
-          macOS and iOS; the preference round-trips untouched there. */}
-      {!isDesktop() && <PrefToggle testid="pref-persistent" label="Keep banners on screen" hint="until dismissed (browser permitting)"
-        checked={prefs.persistentBanners === true} onChange={(v) => void setPref('persistentBanners', v)} />}
-
-      {/* #489. The address sits in this section rather than up with the
-          editable fields because it is not editable — and because "here is
-          your email, here is the switch that hides it" is one thought. */}
-      <div className="mt-2 mb-1 border-t border-hairline pt-3 text-xs font-semibold text-faint uppercase">
-        Privacy
-      </div>
-      <p className="mb-1 text-sm text-ink">
-        <span className="text-faint">Email: </span>
-        <span data-testid="profile-email" className="select-all">{auth.user.email}</span>
-      </p>
-      <PrefToggle testid="pref-privacy-mode" label="Privacy mode"
-        hint="Hide your email and remove you from the Directory."
-        checked={auth.user.privacyMode} onChange={(v) => void setPrivacyMode(v)} />
-
-      <div className="mt-3 border-t border-hairline pt-3">
-        {confirmingDelete ? (
-          <div data-testid="profile-delete-confirm">
-            <p className="mb-2 text-sm text-red-600">
-              Permanently delete {auth.user.email} on {serverOrigin}? You leave every workspace on this server, your email is freed for future
-              use, and this cannot be undone. Past messages remain, attributed to your name.
-            </p>
-            <div className="flex gap-2">
-              <button data-testid="profile-delete-really"
-                className="rounded bg-red-600 px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
-                disabled={deleteBusy} onClick={() => void deleteAccount()}>
-                {deleteBusy ? 'Deleting…' : 'Delete my account'}
-              </button>
-              <button className="px-3 py-1.5 text-sm text-ink-soft" disabled={deleteBusy}
-                onClick={() => setConfirmingDelete(false)}>Keep my account</button>
-            </div>
-          </div>
-        ) : (
-          <button data-testid="profile-delete"
-            className="text-sm text-red-600 hover:underline"
-            onClick={() => setConfirmingDelete(true)}>Delete account…</button>
-        )}
-      </div>
-
-      {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
-      <div className="mt-3 flex justify-end gap-2">
-        <button className="px-3 py-1.5 text-sm text-ink-soft" onClick={onClose}>Cancel</button>
-        <button data-testid="profile-save"
-          className="rounded bg-accent px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
-          disabled={!displayName.trim() || websiteInvalid} onClick={() => void save()}>Save</button>
-      </div>
+      <AccountSettings
+        user={auth.user}
+        sections={SETTINGS_SECTIONS}
+        {...(section ? { focus: section } : {})}
+        api={settingsApi}
+        avatarSrc={avatarSrc}
+        address={address ?? null}
+        serverOrigin={serverOrigin}
+        // In the desktop shell how long a banner stays is an OS setting, as on macOS and iOS.
+        persistentBanners={!isDesktop()}
+        onUser={onUser}
+        onProfileSaved={onClose}
+        onCancel={onClose}
+        // Local teardown; its logout POST failing on the dead session is fine.
+        onDeleted={auth.signOut}
+      />
     </Modal>
   );
 }

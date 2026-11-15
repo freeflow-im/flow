@@ -19,7 +19,8 @@ export type AddressedReference = Reference & { fileKind?: string };
 export type ReferenceTarget = Pick<Reference, 'app' | 'kind' | 'id'> & { organizationId?: string; fileKind?: string };
 
 /** Chat's pages the other apps' suite bars open (`/?open=<page>`, Chat's App.tsx). Administration is the Admin app
- * (`adminAddress`, docs/specs/workspace-admin.md). */
+ * (`adminAddress`, docs/specs/workspace-admin.md). `profile` is kept for links made before the profile moved to Home's
+ * Settings page (`settingsAddress`): Chat sends it there. */
 export const CHAT_PAGES = ['chooser', 'invite', 'activity', 'profile'] as const;
 export type ChatPage = (typeof CHAT_PAGES)[number];
 
@@ -29,6 +30,21 @@ export type AdminSection = (typeof ADMIN_SECTIONS)[number];
 
 /** The Admin app, at a section or at its first one. */
 export const adminAddress = (section?: AdminSection): string => (section ? `/admin/${section}` : '/admin');
+
+/** The sections of Home's Settings page (docs/specs/home.md §2.2): the person's profile, and their notifications and
+ * privacy. The suite bar's "My profile" opens the first, its "Settings" the second. */
+export const SETTINGS_SECTIONS = ['profile', 'notifications'] as const;
+export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
+
+/** Home's Settings page, at a section: `/home/settings` (the profile) or `/home/settings/notifications`. */
+export const settingsAddress = (section: SettingsSection = 'profile'): string => (section === 'profile' ? '/home/settings' : `/home/settings/${section}`);
+
+/** The section a Settings address names, or null for an address that is not Home's Settings page. */
+export function settingsSectionOf(pathname: string): SettingsSection | null {
+  const m = /^\/home\/settings(?:\/([a-z]+))?\/?$/.exec(pathname);
+  if (!m) return null;
+  return m[1] && (SETTINGS_SECTIONS as readonly string[]).includes(m[1]) ? (m[1] as SettingsSection) : 'profile';
+}
 
 /** Chat's kinds an address opens: `/?open=<kind>:<id>`. */
 const CHAT_OPENS = ['artifact', 'channel', 'message'] as const;
@@ -188,3 +204,7 @@ export function kindLabelOf(app: string, kind: string, fileKind?: string): strin
 export type ResolvedReference =
   | { ref: string; app: string; kind: string; title: string; url: string; icon: string; summary?: string; role?: Role; fileKind?: string; denied?: undefined }
   | { ref: string; denied: true };
+
+/** sessionStorage: a line for Home to show once when it opens, left by the page that sent the person there (Chat after a
+ * sign-in that joined them to a workspace, docs/specs/home.md). */
+export const HOME_NOTICE_KEY = 'flow.homeNotice';
