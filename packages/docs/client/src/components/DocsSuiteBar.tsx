@@ -1,7 +1,7 @@
 // The suite bar on the Docs app (packages/suite-bar; docs/specs/freeflow-suite.md §2.5), above every signed-in page
 // when the app is hosted in the FreeFlow suite (main.tsx). Its data comes from the suite's API (suite.ts); what
-// belongs to Chat (adding an organization, its settings, inviting people, notifications, the profile) opens Chat at
-// `/chat/?open=…` (the suite bar's `intent.open`), which Chat's App.tsx honours.
+// belongs to Chat (adding an organization, its settings, inviting people, notifications) opens Chat at `/chat/?open=…`
+// (the suite bar's `intent.open`), which Chat's App.tsx honours; My profile opens Home's Settings page.
 import { useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { APP_MANIFESTS, AWAY_STATUS, guestTabs, intent, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type ChatPage, type StatusOption } from '@flow/suite-bar';
@@ -135,7 +135,7 @@ export function DocsSuiteBar() {
             setStatusError(null);
             setStatusOpen(true);
           },
-          onProfile: () => toChat('profile'),
+          onProfile: () => intent.settings('profile'),
           onSettings: () => navigate('/settings'),
           onLogout: () => void finishBeforeLeave().then(logout),
         }}

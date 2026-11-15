@@ -3,10 +3,11 @@
 // the server reads too), followed in this tab, or in a new one. The receiving app reads the address in one place
 // (Chat's App.tsx, Docs' HomePage, Calendar's App.tsx).
 import type { Reference } from '@flow/shared';
-import { addressOf, adminAddress, CHAT_PAGES, chatPageAddress, createAddress, shareAddressOf, type AdminSection, type ChatPage, type CreateFields, type ReferenceTarget } from '@flow/shared/addresses';
+import { addressOf, adminAddress, CHAT_PAGES, chatPageAddress, createAddress, settingsAddress, shareAddressOf, type AdminSection, type ChatPage, type CreateFields, type ReferenceTarget, type SettingsSection } from '@flow/shared/addresses';
+import { isInHome, openInHome } from './embed';
 
-export { addressOf, adminAddress, chatPageAddress, createAddress, iconOf, kindLabelOf, referenceOf, shareAddressOf, ADMIN_SECTIONS, CHAT_PAGES } from '@flow/shared/addresses';
-export type { AddressedReference, AdminSection, Attendee, ChatPage, CreateFields, ReferenceTarget, ResolvedReference } from '@flow/shared/addresses';
+export { addressOf, adminAddress, chatPageAddress, createAddress, iconOf, kindLabelOf, referenceOf, settingsAddress, settingsSectionOf, shareAddressOf, ADMIN_SECTIONS, CHAT_PAGES, SETTINGS_SECTIONS } from '@flow/shared/addresses';
+export type { AddressedReference, AdminSection, Attendee, ChatPage, CreateFields, ReferenceTarget, ResolvedReference, SettingsSection } from '@flow/shared/addresses';
 
 /** How an intent is followed: in this tab (the default), a new one, or by the caller (an app's own router, a test). */
 export interface IntentOptions { newTab?: boolean; navigate?: (url: string) => void }
@@ -33,6 +34,15 @@ export const intent = {
   /** Asks an app to make something, filled in: a Calendar event (`calendar`), a Chat message (`chat-message`). */
   create<K extends keyof CreateFields>(what: K, fields: CreateFields[K], opts?: IntentOptions): void {
     go(createAddress(what, fields), opts);
+  },
+  /**
+   * Opens Home's Settings page (the person's profile, notifications and privacy) at a section: the account menu's
+   * "My profile" and "Settings" in every app. Inside Home's frame, Home shows it beside the app instead.
+   */
+  settings(section: SettingsSection = 'profile', opts?: IntentOptions): void {
+    const url = settingsAddress(section);
+    if (!opts?.navigate && !opts?.newTab && isInHome()) openInHome(url);
+    else go(url, opts);
   },
   /** Opens the owning app's Share dialog on an object. False for an app that shares nothing (Mail). */
   share(ref: Reference, opts?: IntentOptions): boolean {

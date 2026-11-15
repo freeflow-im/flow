@@ -1,11 +1,12 @@
 // The suite bar on Chat (packages/suite-bar; docs/specs/freeflow-suite.md §2.5), above Main and the workspace
 // chooser. It takes over what the workspace rail and the sidebar's lower-left user block did: the organization menu
 // is the rail's switcher (every connection's workspaces with their unread counts, "+" for the chooser and its
-// invitations), and the account menu has presence, status, the profile, settings, Help and sign out.
+// invitations), and the account menu has presence, status, the profile, settings, Help and sign out. The profile and
+// settings open Home's Settings page (docs/specs/home.md §2.2) where it can be reached.
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CHAT_PATH, type AccountDTO, type UserDTO } from '@flow/shared';
-import { adminAddress, APP_MANIFESTS, AWAY_STATUS, GUEST_TABS_NOTE, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type StatusOption } from '@flow/suite-bar';
+import { adminAddress, APP_MANIFESTS, AWAY_STATUS, GUEST_TABS_NOTE, intent as suiteIntent, isAway, settingsAddress, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type StatusOption } from '@flow/suite-bar';
 import { useSwitcherEntries, useWorkspaceInvites, useWorkspaces } from '../hooks';
 import { useCapabilities } from '../lib/backend';
 import { connectionManager, type ConnectionRuntime } from '../lib/connectionRuntime';
@@ -85,12 +86,16 @@ export default function ChatSuiteBar({ activityUnread, intent }: { activityUnrea
   });
   const guest = !!sel.workspaceId && (accounts.data ?? []).find((a) => a.organizationId === sel.workspaceId)?.kind === 'guest';
 
-  // Opened from another page of the suite (Docs' menus).
+  // Opened from another page of the suite. `profile` is an older link's: the profile is Home's Settings page now, where
+  // it can be reached (on the desktop shell or another server, this connection's dialog).
   useEffect(() => {
-    if (intent === 'profile') setModal('profile');
+    if (intent === 'profile') {
+      if (docsHere) window.location.replace(settingsAddress('profile'));
+      else setModal('profile');
+    }
     else if (intent === 'invite' && canInvite) setModal('invite');
     // `canInvite` settles once the workspace list has loaded.
-  }, [intent, canInvite]);
+  }, [intent, canInvite, docsHere]);
 
   const avatar = useImage(me.avatarUrl, runtime);
   // The rows' avatars, each fetched from (and authorized by) its own server.
@@ -205,14 +210,16 @@ export default function ChatSuiteBar({ activityUnread, intent }: { activityUnrea
                 },
               }
             : {}),
-          onProfile: () => setModal('profile'),
-          onSettings: () => setModal('settings'),
+          // The person's profile and settings are Home's Settings page, on this page's server; an organization on another
+          // server (and the desktop shell) edits them in this connection's dialog.
+          onProfile: () => (docsHere ? suiteIntent.settings('profile') : setModal('profile')),
+          onSettings: () => (docsHere ? suiteIntent.settings('notifications') : setModal('settings')),
           onLogout: auth.signOut,
           // Built-in help (#383) moved here from the rail's "?"; large layout only, as it was.
           extra: narrow ? [] : [{ label: 'Help', onSelect: () => setModal('help') }],
         }}
       />
-      {(modal === 'profile' || modal === 'settings') && <ProfileModal onClose={() => setModal(null)} {...(modal === 'settings' ? { section: 'notifications' as const } : {})} />}
+      {(modal === 'profile' || modal === 'settings') && <ProfileModal onClose={() => setModal(null)} avatarSrc={avatar} {...(modal === 'settings' ? { section: 'notifications' as const } : {})} />}
       {modal === 'invite' && sel.workspaceId && <InviteModal workspaceId={sel.workspaceId} onClose={() => setModal(null)} />}
       {modal === 'help' && <HelpModal onClose={() => setModal(null)} />}
       {modal === 'status' && (

@@ -58,6 +58,16 @@ describe('the Mail row picker', () => {
   });
 });
 
+describe('Settings', () => {
+  it('has no sidebar row (the account menu opens it), and no row is marked while it shows', () => {
+    render(
+      <Sidebar apps={appLinks({ mailUnread: 0, chatUnread: 0, admin: true })} active="settings" activeChannel={null} channels={[]} agents={[]} onOpenAgent={() => {}} addAgentHref={null} menus={{}} onMenuItem={() => {}} onPickerItem={() => {}} />,
+    );
+    expect(screen.queryByTestId('home-app-settings')).toBeNull();
+    expect(document.querySelector('[aria-current="page"]')).toBeNull();
+  });
+});
+
 describe('the sections', () => {
   it('lists Agents before Channels', () => {
     draw(undefined);
