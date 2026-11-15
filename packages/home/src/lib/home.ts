@@ -41,6 +41,43 @@ export function sidebarChannels(channels: ChannelDTO[]): ChannelDTO[] {
     .sort((a, b) => Number(b.unreadNotifications > 0) - Number(a.unreadNotifications > 0) || Number(b.unreadCount > 0) - Number(a.unreadCount > 0) || (a.name ?? '').localeCompare(b.name ?? ''));
 }
 
+/**
+ * Channels an agent made are listed under that agent, not under Channels (as in Chat's sidebar), so an agent that opens a
+ * channel per job does not fill the Channels list. A channel whose creator is not one of `agents` stays in `rest`. Order
+ * is kept, so each agent's channels read in `sidebarChannels` order.
+ */
+export function splitAgentChannels(channels: ChannelDTO[], agents: WorkspaceMemberDTO[]): { byAgent: Map<string, ChannelDTO[]>; rest: ChannelDTO[] } {
+  const ids = new Set(agents.map((a) => a.userId));
+  const byAgent = new Map<string, ChannelDTO[]>();
+  const rest: ChannelDTO[] = [];
+  for (const c of channels) {
+    if (ids.has(c.createdBy)) byAgent.set(c.createdBy, [...(byAgent.get(c.createdBy) ?? []), c]);
+    else rest.push(c);
+  }
+  return { byAgent, rest };
+}
+
+/** The agents whose channel list is folded away, by user id; per device, and the same key Chat's sidebar uses. */
+const AGENT_CHANNELS_COLLAPSED_KEY = 'flow.sidebarAgentChannelsCollapsed';
+export function readCollapsedAgents(): Set<string> {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(AGENT_CHANNELS_COLLAPSED_KEY) ?? '[]');
+    return new Set(Array.isArray(raw) ? raw.filter((id): id is string => typeof id === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+export function writeCollapsedAgents(agentId: string, collapsed: boolean): void {
+  const ids = readCollapsedAgents();
+  if (collapsed) ids.add(agentId);
+  else ids.delete(agentId);
+  try {
+    localStorage.setItem(AGENT_CHANNELS_COLLAPSED_KEY, JSON.stringify([...ids]));
+  } catch {
+    /* storage denied: the fold still works until the page reloads */
+  }
+}
+
 /** Chat's tab number: the notifications waiting in every channel and DM, as Chat's own badge counts them. */
 export const chatUnread = (channels: ChannelDTO[]): number => channels.reduce((n, c) => n + (c.isMember ? c.unreadNotifications : 0), 0);
 
