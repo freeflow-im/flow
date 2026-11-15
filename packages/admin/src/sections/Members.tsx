@@ -38,10 +38,11 @@ export function mailState(a: AccountDTO | undefined, hostedMail: boolean): { tex
 const needsAttention = (a: AccountDTO | undefined) => !!a && a.kind === 'native' && (a.state !== 'active' || !!a.statusMessage);
 
 /** The Kind column's word for a member (agents.md §1, §2): a person, a guest, a shared agent hosted here or connected
- * from elsewhere, or a person's own agent (their assistant, or one connected over MCP). */
+ * from elsewhere, or a person's own agent (private and hosted here, their assistant included, or connected over MCP). */
 export function kindLabel(m: WorkspaceMemberDTO, a: AccountDTO | undefined): string {
   const hosted = (m.agentRuntime ?? a?.agentRuntime) === 'hosted';
-  if (m.kind === 'personal_agent' || a?.kind === 'personal_agent') return hosted ? 'Assistant' : 'Personal agent';
+  // A private hosted agent (a person's assistant among them, agents.md §1.3), or one the person connected over MCP.
+  if (m.kind === 'personal_agent' || a?.kind === 'personal_agent') return hosted ? 'Private agent' : 'Personal agent';
   if (m.isAgent) return hosted ? 'Agent' : 'External agent';
   if ((m.kind ?? a?.kind) === 'guest') return 'Guest';
   return 'Person';
@@ -201,7 +202,7 @@ function EmailCell({ m, a, hostedMail, keyId, busy, queued, onProvision }: { m: 
             {shownEmail}
           </span>
         ) : (
-          <span className="truncate text-xs text-faint" title={a?.agentRuntime === 'hosted' ? 'A person’s assistant gets its address and inbox when its person names it (Admin › Assistant).' : 'A personal agent acts as its person and has no address of its own.'} data-testid={`address-${keyId}`}>
+          <span className="truncate text-xs text-faint" title={a?.agentRuntime === 'hosted' ? 'A private agent acts as its person and has no inbox of its own; a person’s assistant gets one when its person names it (Admin › Assistant).' : 'A personal agent acts as its person and has no address of its own.'} data-testid={`address-${keyId}`}>
             No inbox
           </span>
         )}

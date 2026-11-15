@@ -1,7 +1,7 @@
 // Add member (docs/specs/workspace-admin.md §3.2): the Members page's one way in, a dialog with a User / Agent switch.
 // A user is created at username@domain with a setup link to a backup email (as Create member did), or invited by an
-// outside address as a member or a chat guest. An agent is a hosted shared agent made here at once (name and picture),
-// or an external one: a one-time invite code and the MCP address, shown in the connection dialog, and the agent joins
+// outside address as a member or a chat guest. An agent is hosted (made here at once with its name and picture, shared
+// with the organization or private to the admin), or external: a one-time invite code and the MCP address, shown in the connection dialog, and the agent joins
 // when it connects (no account exists before then).
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
@@ -279,14 +279,22 @@ function usePreview(file: File | null): string | null {
 function AgentForm({ org, onClose, onAdded, onExternal }: { org: WorkspaceDTO; onClose(): void; onAdded(a: Added): Promise<unknown> | void; onExternal(name: string, invite: AgentInviteDTO): void }) {
   const { primary } = useDomains(org);
   const [name, setName] = useState('');
-  const [external, setExternal] = useState(false);
+  // Hosted (FreeFlow runs it) is the default; unchecking it means External. A hosted agent is private (acts as you, only
+  // you can ask it, as Your agents makes one) or shared (anyone in the organization can ask it): chosen once (agents.md §1.3).
+  const [hosted, setHosted] = useState(true);
+  const external = !hosted;
+  const [access, setAccess] = useState<'private' | 'shared'>('shared');
+  const priv = hosted && access === 'private';
+  const mine = useQuery({ queryKey: ['my-agents', org.id], queryFn: () => adminApi.myAgents(org.id), enabled: priv });
+  const limit = mine.data?.limit ?? 5;
+  const full = priv && !!mine.data?.agents && mine.data.agents.length >= limit;
   const [picture, setPicture] = useState<PictureChoice>(null);
   const preview = usePreview(picture && 'file' in picture ? picture.file : null);
   const [error, setError] = useState<string | null>(null);
   const make = useMutation({
     mutationFn: async () => {
       if (external) return { kind: 'external' as const, invite: await adminApi.agentInvite(org.id) };
-      const made = await adminApi.makeHostedAgent(org.id, { name: name.trim() });
+      const made = priv ? await adminApi.makePersonalAgent(org.id, { name: name.trim() }) : await adminApi.makeHostedAgent(org.id, { name: name.trim() });
       // The picture waits for the agent to exist; a failed one leaves the agent made, with the error said.
       let pictureError: string | null = null;
       if (picture) {
@@ -306,7 +314,11 @@ function AgentForm({ org, onClose, onAdded, onExternal }: { org: WorkspaceDTO; o
       await onAdded({
         userId: out.made.agent.id,
         tone: out.pictureError ? 'warn' : 'ok',
-        message: out.pictureError ? `Created ${out.made.agent.displayName}, but its picture was not saved: ${out.pictureError}` : `Created ${out.made.agent.displayName}. Anyone in ${org.name} can ask it from the assistant panel or in Chat.`,
+        message: out.pictureError
+          ? `Created ${out.made.agent.displayName}, but its picture was not saved: ${out.pictureError}`
+          : out.made.agent.mode === 'personal'
+            ? `Created ${out.made.agent.displayName}. Only you can ask it: pick it in the assistant panel, or message it in Chat.`
+            : `Created ${out.made.agent.displayName}. Anyone in ${org.name} can ask it from the assistant panel or in Chat.`,
       });
     },
     onError: (e) => setError(errorText(e)),
@@ -318,7 +330,7 @@ function AgentForm({ org, onClose, onAdded, onExternal }: { org: WorkspaceDTO; o
       className="flex flex-col gap-3"
       onSubmit={(e) => {
         e.preventDefault();
-        if (name.trim()) make.mutate();
+        if (name.trim() && !full) make.mutate();
       }}
       data-testid="create-agent-form"
     >
@@ -327,28 +339,48 @@ function AgentForm({ org, onClose, onAdded, onExternal }: { org: WorkspaceDTO; o
         <input className={input} value={name} maxLength={80} disabled={make.isPending} onChange={(e) => setName(e.target.value)} placeholder="Scout" autoComplete="off" data-testid="agent-name" />
       </label>
       <div className="flex flex-col gap-1">
-        <Toggle checked={external} disabled={make.isPending} onChange={setExternal} label="External" testid="agent-external" />
+        <Toggle checked={hosted} disabled={make.isPending} onChange={setHosted} label="Hosted" testid="agent-hosted" />
         <span className="pl-6 text-xs text-muted">
-          {external
-            ? 'It runs somewhere else (Claude Code, Codex, a cloud agent) and connects in. Next you get its connection steps; it joins when it connects and picks its own picture, which you can change later.'
-            : `FreeFlow runs it for you. It is shared: anyone in ${org.name} can ask it, and you are its sponsor.`}
+          {hosted
+            ? 'FreeFlow runs it for you: no machine of your own.'
+            : 'External: it runs somewhere else (Claude Code, Codex, a cloud agent) and connects in. Next you get its connection steps; it joins when it connects and picks its own picture, which you can change later.'}
         </span>
       </div>
-      {!external && (
+      {hosted && (
+        <fieldset className="flex flex-col gap-2">
+          <legend className="mb-1 text-sm font-medium">Who can use it</legend>
+          <div className="flex gap-1 self-start rounded-lg bg-panel p-1 text-sm" role="radiogroup" aria-label="Who can use it">
+            {(['shared', 'private'] as const).map((v) => (
+              <button key={v} type="button" role="radio" aria-checked={access === v} disabled={make.isPending} className={`rounded-md px-3 py-0.5 ${access === v ? 'bg-white font-semibold shadow-sm' : 'text-muted hover:text-ink'}`} onClick={() => setAccess(v)} data-testid={`agent-${v}`}>
+                {v === 'shared' ? 'Shared' : 'Private'}
+              </button>
+            ))}
+          </div>
+          <span className="text-xs text-muted">
+            {access === 'shared'
+              ? `Anyone in ${org.name} can ask it. It sees only what is shared with it, and you are its sponsor.`
+              : `Only you can ask it. It acts as you and sees what you see.${mine.data?.agents ? ` You have ${mine.data.agents.length} of ${limit}, your assistant included.` : ''}`}{' '}
+            You choose this once.
+          </span>
+        </fieldset>
+      )}
+      {hosted && (
         <div className="flex flex-col gap-1 text-sm">
           <span className="font-medium">Picture</span>
           <PicturePicker current={choiceUrl(picture, preview)} busy={make.isPending} onPreset={(p) => setPicture({ preset: p })} onFile={(f) => setPicture({ file: f })} onNone={() => setPicture(null)} testid="agent-picture" />
         </div>
       )}
-      <Preview
-        label={external ? 'Its address once it connects:' : 'Its address:'}
-        address={address}
-        note="A shared agent gets an inbox at this address. If it is taken, a number is added."
-        testid="agent-preview"
-      />
+      {priv ? (
+        <div className="rounded-md border border-hairline bg-panel px-3 py-2 text-xs text-muted" data-testid="agent-preview">
+          No address: a private agent acts as you and has no inbox of its own.
+        </div>
+      ) : (
+        <Preview label={external ? 'Its address once it connects:' : 'Its address:'} address={address} note="A shared agent gets an inbox at this address. If it is taken, a number is added." testid="agent-preview" />
+      )}
+      {full && <p className="text-xs text-warn" data-testid="agent-full">You have {limit} private agents, the most one person may have. Remove one under Your agents first.</p>}
       <div className="flex items-center justify-end gap-2">
         <Button onClick={onClose}>Cancel</Button>
-        <Button kind="primary" type="submit" disabled={make.isPending || !name.trim()} testid="agent-submit">
+        <Button kind="primary" type="submit" disabled={make.isPending || !name.trim() || full} testid="agent-submit">
           {make.isPending ? 'Creating…' : external ? 'Create and connect' : 'Create'}
         </Button>
       </div>

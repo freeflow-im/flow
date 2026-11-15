@@ -61,6 +61,8 @@ beforeEach(() => {
     if (path.endsWith('/created-members') && method === 'POST') return json(createAnswer.body, createAnswer.status);
     if (path.endsWith('/setup-link')) return json({ pending: { ...setups[0], linkExpiresAt: '2026-01-20T00:00:00.000Z' } });
     if (path.endsWith('/invites') && method === 'POST') return json({ results: (body as { emails: string[]; kind: string }).emails.map((email) => ({ email, status: email.includes('@') ? 'sent' : 'invalid_email', kind: (body as { kind: string }).kind })) }, 201);
+    if (path.endsWith('/agents/mine')) return json({ agents: [{ id: 'u-ada', accountId: 'a-ada', displayName: 'Ada', mode: 'personal', self: true }], limit: 5 });
+    if (path.endsWith('/agents/personal')) return json({ agent: { id: 'u-pip', accountId: 'a-pip', displayName: 'Pip', mode: 'personal', self: false }, definition: { name: 'Pip', instructions: '', updatedAt: null } }, 201);
     if (path.endsWith('/agents/hosted')) return json({ agent: { id: 'u-scout', accountId: 'a-scout', displayName: 'Scout', mode: 'shared', self: false }, definition: { name: 'Scout', instructions: '', updatedAt: null } }, 201);
     if (path.includes('/assistant/avatar')) return json({ avatarUrl: '/x.png' });
     if (path.endsWith('/agent-invites')) return json({ code: 'flow-ABCD-EFGH', command: 'npx flow-agent-bridge flow-ABCD-EFGH', expiresAt: '2026-01-09T00:00:00.000Z' }, 201);
@@ -222,12 +224,28 @@ describe('Members', () => {
     expect(calls.some((c) => c.path.endsWith('/agent-invites'))).toBe(false);
   });
 
-  it('an external agent: a one-time code, then its connection steps with the name it joins as', async () => {
+  it('a hosted agent is shared by default; Private makes the admin’s own private agent, with no address', async () => {
+    show();
+    fireEvent.click(await screen.findByTestId('add-member'));
+    fireEvent.click(screen.getByTestId('add-kind-agent'));
+    expect(screen.getByTestId('agent-shared').getAttribute('aria-checked')).toBe('true');
+    fireEvent.change(screen.getByTestId('agent-name'), { target: { value: 'Pip' } });
+    fireEvent.click(screen.getByTestId('agent-private'));
+    expect(screen.getByTestId('agent-preview').textContent).toContain('No address');
+    expect(await screen.findByText(/You have 1 of 5/)).toBeTruthy();
+    fireEvent.click(screen.getByTestId('agent-submit'));
+    expect((await screen.findByTestId('add-done')).textContent).toContain('Only you can ask it');
+    expect(calls.find((c) => c.method === 'POST' && c.path === '/v1/workspaces/o1/agents/personal')!.body).toEqual({ name: 'Pip' });
+    expect(calls.some((c) => c.path.endsWith('/agents/hosted'))).toBe(false);
+  });
+
+  it('an external agent (Hosted unchecked): a one-time code, then its connection steps with the name it joins as', async () => {
     show();
     fireEvent.click(await screen.findByTestId('add-member'));
     fireEvent.click(screen.getByTestId('add-kind-agent'));
     fireEvent.change(screen.getByTestId('agent-name'), { target: { value: "Bob's Builder" } });
-    fireEvent.click(screen.getByTestId('agent-external'));
+    fireEvent.click(screen.getByTestId('agent-hosted'));
+    expect(screen.queryByTestId('agent-private')).toBeNull();
     expect(screen.queryByTestId('agent-picture-file')).toBeNull();
     fireEvent.click(screen.getByTestId('agent-submit'));
     const command = await screen.findByTestId('connect-command');
@@ -257,7 +275,7 @@ describe('Members', () => {
     const key = 'agent-u-ada@agents.flow.local';
     expect((await screen.findByTestId(`address-${key}`)).textContent).toBe('No inbox');
     expect(screen.queryByTestId(`create-inbox-${key}`)).toBeNull();
-    expect(screen.getByTestId(`kind-${key}`).textContent).toBe('Assistant');
+    expect(screen.getByTestId(`kind-${key}`).textContent).toBe('Private agent');
     expect(screen.getByTestId(`sponsor-${key}`).textContent).toBe('of Bob');
     expect(screen.queryByTestId(`remove-${key}`)).toBeNull();
   });
@@ -306,7 +324,7 @@ describe('labels', () => {
     expect(kindLabel(member('A', { kind: 'guest' }), account('A', { kind: 'guest' }))).toBe('Guest');
     expect(kindLabel(member('A', { isAgent: true }), account('A', { agentRuntime: 'hosted' }))).toBe('Agent');
     expect(kindLabel(member('A', { isAgent: true }), account('A'))).toBe('External agent');
-    expect(kindLabel(member('A', { isAgent: true, kind: 'personal_agent', agentRuntime: 'hosted' }), undefined)).toBe('Assistant');
+    expect(kindLabel(member('A', { isAgent: true, kind: 'personal_agent', agentRuntime: 'hosted' }), undefined)).toBe('Private agent');
     expect(kindLabel(member('A', { isAgent: true, kind: 'personal_agent' }), undefined)).toBe('Personal agent');
     expect(visibleEmail('agent-01a1@agents.flow.local')).toBeNull();
     expect(visibleEmail('u1@hidden.invalid')).toBeNull();
