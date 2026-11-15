@@ -1,17 +1,20 @@
 // Calendar as a panel in another app's side panel (docs/specs/side-panel.md §5): /calendar/panel, in a frame there. A
 // day (Calendar's time grid) or a week (a list of days, WeekAgenda.tsx), with ‹ Today › and the choice remembered; no
-// suite bar, sidebar or assistant. An event, or the title, opens in Calendar itself (the host is asked to open it: in
-// Home, Home does).
-import { useMemo, useState } from 'react';
+// suite bar, sidebar or assistant. An event opens Calendar's event card as a popup below it (Going? answered here; Edit
+// opens Calendar in a new tab); the title opens Calendar itself (the host is asked to open it: in Home, Home does).
+import { useEffect, useMemo, useState } from 'react';
 import { addDays, format, isSameMonth, isSameYear } from 'date-fns';
 import { ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
-import { setCalendarWorkspace, type EventOccurrence } from './api';
+import { setCalendarWorkspace, type EventOccurrence, type Response } from './api';
 import { CalendarGrid } from './components/CalendarGrid';
+import { EventPopover } from './components/EventPopover';
+import type { Anchor } from './components/ui/popover';
 import { WeekAgenda } from './components/WeekAgenda';
 import { Button } from './components/ui/button';
-import { useCalendars, useEvents, useSharedCalendars } from './hooks/calendar';
+import { useCalendars, useEventMutations, useEvents, useMembers, useSharedCalendars } from './hooks/calendar';
 import { useOrganizations } from './hooks/organization';
-import { mergeByUid } from './lib/merge';
+import { RESPONDED_TEXT, withMyResponse } from './lib/format';
+import { alsoOnNote, mergeByUid } from './lib/merge';
 import { sharedPrefs } from './lib/prefs';
 import { neighbours, rangeOf, step } from './lib/ranges';
 import { cn } from './lib/utils';
@@ -73,18 +76,43 @@ export function PanelApp() {
   );
   const events = useEvents(range, ahead, allCals);
   const occurrences = useMemo(() => mergeByUid(events.data ?? [], allCals ?? []), [events.data, allCals]);
-  const open = (o: EventOccurrence | null) => openInHost(pathOf({ view, date: o ? new Date(o.allDay ? `${o.start.slice(0, 10)}T00:00` : o.start) : date, eventId: o?.id ?? null }, BASE));
+  const members = useMembers(organizations.activeId);
+  const ownerName = (accountId: string) => members.data?.find((x) => x.accountId === accountId)?.displayName ?? 'Someone';
+  const [note, setNote] = useState<string | null>(null);
+  useEffect(() => {
+    if (!note) return;
+    const t = setTimeout(() => setNote(null), 3000);
+    return () => clearTimeout(t);
+  }, [note]);
+  const m = useEventMutations(() => {});
+  // The event whose card is open, by the event clicked.
+  const [shown, setShown] = useState<{ event: EventOccurrence; anchor: Anchor } | null>(null);
+  const show = (event: EventOccurrence, el: Element) => setShown({ event, anchor: { el } });
+  const placeOf = (o: EventOccurrence | null) => pathOf({ view, date: o ? new Date(o.allDay ? `${o.start.slice(0, 10)}T00:00` : o.start) : date, eventId: o?.id ?? null }, BASE);
+  const openCalendar = () => openInHost(placeOf(null));
+  // Editing is Calendar's own (its dialog, the this / following / all question): in a tab of its own, the panel stays.
+  const editInCalendar = (o: EventOccurrence) => window.open(new URL(placeOf(o), window.location.origin).href, '_blank', 'noopener');
+  const respond = (o: EventOccurrence, r: Exclude<Response, 'needs-action'>) => {
+    setShown((x) => (x?.event.id === o.id ? { ...x, event: withMyResponse(x.event, r) } : x));
+    m.respond(o, r).then(
+      () => setNote(RESPONDED_TEXT[r]),
+      () => {
+        setShown((x) => (x?.event.id === o.id ? { ...x, event: o } : x));
+        setNote('Could not respond. Try again.');
+      },
+    );
+  };
   const now = new Date();
   const showsToday = range.start <= now && now < range.end;
   const unit = view === 'day' ? 'day' : 'week';
 
   return (
-    <div className="flex h-dvh flex-col bg-white">
+    <div className="relative flex h-dvh flex-col bg-white">
       <div className="flex h-12 shrink-0 items-center gap-1 border-b border-hairline px-2">
         <Button variant="outline" size="sm" onClick={() => setDate(new Date())} disabled={showsToday}>Today</Button>
         <Button variant="ghost" size="icon-sm" aria-label={`Previous ${unit}`} onClick={() => setDate((d) => step(view, d, -1))}><ChevronLeft /></Button>
         <Button variant="ghost" size="icon-sm" aria-label={`Next ${unit}`} onClick={() => setDate((d) => step(view, d, 1))}><ChevronRight /></Button>
-        <button type="button" className="min-w-0 truncate text-left text-[15px] font-semibold text-ink hover:underline" title="Open in Calendar" onClick={() => open(null)}>
+        <button type="button" className="min-w-0 truncate text-left text-[15px] font-semibold text-ink hover:underline" title="Open in Calendar" onClick={openCalendar}>
           {panelTitle(view, date)}
         </button>
         {events.isFetching && <Loader2 className="size-4 shrink-0 animate-spin text-faint" aria-label="Loading" />}
@@ -105,7 +133,7 @@ export function PanelApp() {
           <Button variant="outline" size="sm" onClick={() => openInHost(BASE)}>Open Calendar</Button>
         </div>
       ) : view === 'week' ? (
-        <WeekAgenda start={range.start} occurrences={occurrences} calendars={allCals} onOpen={(o) => open(o)} />
+        <WeekAgenda start={range.start} occurrences={occurrences} calendars={allCals} onOpen={show} />
       ) : (
         <div className="min-h-0 flex-1">
           <CalendarGrid
@@ -116,13 +144,19 @@ export function PanelApp() {
             weekStartsOn={0}
             selecting={false}
             onSelect={() => {}}
-            onOpen={(o) => open(o)}
+            onOpen={show}
             onDay={(d) => setDate(d)}
             // Moving an event is Calendar's own (with its this / following / all question): here it goes back.
             onChange={(_o, _s, _e, _a, revert) => revert()}
           />
         </div>
       )}
+      {shown && (
+        <EventPopover event={shown.event} calendar={allCals?.find((c) => c.id === shown.event.calendarId)} members={members.data ?? []}
+          alsoOn={alsoOnNote(shown.event, allCals ?? [], ownerName)} anchor={shown.anchor} side="bottom" editLabel="Edit in Calendar"
+          onClose={() => setShown(null)} onEdit={() => editInCalendar(shown.event)} onRespond={(r) => respond(shown.event, r)} />
+      )}
+      {note && <div role="status" className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-lg bg-[#323232] px-3 py-2 text-[13px] text-white shadow-lg">{note}</div>}
     </div>
   );
 }

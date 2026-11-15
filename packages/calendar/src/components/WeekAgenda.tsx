@@ -34,14 +34,17 @@ export function eventsOfDay(occurrences: readonly EventOccurrence[], day: Date):
     .sort((a, b) => Number(b.allDay) - Number(a.allDay) || +new Date(a.start) - +new Date(b.start) || +new Date(a.end) - +new Date(b.end));
 }
 
-export function WeekAgenda({ start, occurrences, calendars, onOpen }: { start: Date; occurrences: readonly EventOccurrence[]; calendars: readonly CalendarInfo[]; onOpen(o: EventOccurrence): void }) {
+export function WeekAgenda({ start, occurrences, calendars, onOpen }: { start: Date; occurrences: readonly EventOccurrence[]; calendars: readonly CalendarInfo[]; onOpen(o: EventOccurrence, el: Element): void }) {
   const byId = new Map(calendars.map((c) => [c.id, c]));
   const shown = occurrences.filter((o) => !byId.get(o.calendarId)?.hidden);
   const days = Array.from({ length: 7 }, (_, i) => addDays(start, i));
   // The week that has today opens at today.
   const todayRow = useRef<HTMLLIElement>(null);
   const startKey = +start;
-  useEffect(() => todayRow.current?.scrollIntoView?.({ block: 'start' }), [startKey]);
+  // In braces: newer browsers' scrollIntoView returns a promise, which React would take for a cleanup and call.
+  useEffect(() => {
+    todayRow.current?.scrollIntoView?.({ block: 'start' });
+  }, [startKey]);
 
   return (
     <ol className="min-h-0 flex-1 overflow-y-auto" aria-label="Week">
@@ -64,7 +67,7 @@ export function WeekAgenda({ start, occurrences, calendars, onOpen }: { start: D
                   <button
                     key={o.id}
                     type="button"
-                    onClick={() => onOpen(o)}
+                    onClick={(e) => onOpen(o, e.currentTarget)}
                     className={cn('truncate rounded-md px-3 py-1.5 text-left text-[13px] font-semibold', declined && 'line-through opacity-60')}
                     style={{ background: color, color: textOn(color) }}
                     title={`${title} · all day`}
@@ -75,7 +78,7 @@ export function WeekAgenda({ start, occurrences, calendars, onOpen }: { start: D
                   <button
                     key={o.id}
                     type="button"
-                    onClick={() => onOpen(o)}
+                    onClick={(e) => onOpen(o, e.currentTarget)}
                     className={cn('rounded-md px-3 py-1.5 text-left', declined && 'opacity-60')}
                     style={{ background: `color-mix(in srgb, ${color} 14%, white)`, color: `color-mix(in srgb, ${color} 72%, black)` }}
                     title={title}

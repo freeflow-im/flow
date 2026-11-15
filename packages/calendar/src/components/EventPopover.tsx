@@ -1,7 +1,8 @@
 // An event's card, by the event clicked (or centred, for one opened from a link or a search), after Google Calendar's:
 // edit, delete, a menu and close at the top; the colour, title, when and how it repeats; the video call with its dial-in;
 // the guests, summed up and folded; reminders, the organizer, the place and the description; and, for an invitation,
-// Going? Yes · No · Maybe in a band at the bottom. Edit and delete only on a calendar the person may change.
+// Going? Yes · No · Maybe in a band at the bottom. Edit and delete only on a calendar the person may change. The side panel's
+// Calendar (PanelApp.tsx) opens it too, below the event (no Delete; Edit opens Calendar). EventCard is its contents.
 import { useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AlignLeft, Bell, Calendar as CalendarIcon, Check, ChevronDown, ChevronUp, Copy, MapPin, MoreVertical, Pencil, Phone, Trash2, Users, Video, X } from 'lucide-react';
@@ -58,7 +59,31 @@ function useCopy(): [string | null, (what: string, text: string) => void] {
   }];
 }
 
-export function EventPopover({ event, calendar, members = [], alsoOn, anchor, onClose, onEdit, onDelete, onRespond }: { event: EventOccurrence; calendar: CalendarInfo | undefined; members?: SuiteMember[]; alsoOn?: string | null; anchor: Anchor; onClose(): void; onEdit(): void; onDelete(): void; onRespond(r: Exclude<Response, 'needs-action'>): void }) {
+export interface EventCardProps {
+  event: EventOccurrence;
+  calendar: CalendarInfo | undefined;
+  members?: SuiteMember[];
+  alsoOn?: string | null;
+  onClose(): void;
+  onEdit(): void;
+  /** Left out where deleting is not offered (the side panel's card). */
+  onDelete?: () => void;
+  onRespond(r: Exclude<Response, 'needs-action'>): void;
+  /** The edit button's name: "Edit in Calendar" where it opens Calendar itself. */
+  editLabel?: string;
+}
+
+export function EventPopover({ anchor, side, ...card }: EventCardProps & { anchor: Anchor; side?: 'right' | 'bottom' }) {
+  return (
+    <AnchoredPopover anchor={anchor} side={side} onClose={card.onClose} label={card.event.summary || 'Event'} autoFocus
+      className="flex max-h-[min(720px,calc(100dvh-24px),var(--radix-popover-content-available-height))] w-[min(440px,calc(100vw-24px))] flex-col overflow-hidden rounded-2xl border-0 p-0 shadow-[0_4px_8px_3px_rgba(60,64,67,.15),0_1px_3px_rgba(60,64,67,.3)]">
+      <EventCard {...card} />
+    </AnchoredPopover>
+  );
+}
+
+/** The card's contents (a column: the buttons, the details scrolling, the Going? band), for a popover or a panel. */
+export function EventCard({ event, calendar, members = [], alsoOn, onClose, onEdit, onDelete, onRespond, editLabel = 'Edit event' }: EventCardProps) {
   const writable = canChange(calendar);
   const viewOnly = readOnlyNote(calendar);
   const color = calendar?.color ?? '#1a73e8';
@@ -79,11 +104,10 @@ export function EventPopover({ event, calendar, members = [], alsoOn, anchor, on
   const link = () => `${window.location.origin}${pathOf({ view: 'week', date: event.allDay ? parseDate(event.start) : new Date(event.start), eventId: event.id }, import.meta.env.BASE_URL)}`;
 
   return (
-    <AnchoredPopover anchor={anchor} onClose={onClose} label={event.summary || 'Event'} autoFocus
-      className="flex max-h-[min(720px,calc(100dvh-24px),var(--radix-popover-content-available-height))] w-[min(440px,calc(100vw-24px))] flex-col overflow-hidden rounded-2xl border-0 p-0 shadow-[0_4px_8px_3px_rgba(60,64,67,.15),0_1px_3px_rgba(60,64,67,.3)]">
+    <>
       <div className="flex shrink-0 justify-end gap-0.5 px-2 pt-2">
-        {writable && <IconButton label="Edit event" onClick={onEdit}><Pencil /></IconButton>}
-        {writable && <IconButton label="Delete event" onClick={onDelete}><Trash2 /></IconButton>}
+        {writable && <IconButton label={editLabel} onClick={onEdit}><Pencil /></IconButton>}
+        {writable && onDelete && <IconButton label="Delete event" onClick={onDelete}><Trash2 /></IconButton>}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button type="button" aria-label="More options" title="More options" className="flex size-9 items-center justify-center rounded-full text-muted outline-none hover:bg-hover focus-visible:ring-2 focus-visible:ring-primary/40"><MoreVertical className="size-[18px]" /></button>
@@ -214,6 +238,6 @@ export function EventPopover({ event, calendar, members = [], alsoOn, anchor, on
           })}
         </div>
       )}
-    </AnchoredPopover>
+    </>
   );
 }
