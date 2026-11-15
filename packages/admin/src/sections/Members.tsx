@@ -1,13 +1,17 @@
-// Members (docs/specs/workspace-admin.md §3.2 and §5): inviting people and chat guests or creating a member at an address
-// on the organization's domain, the pending invitations and setups, and
-// the roster with each member's role, kind and mail state. Every change saves at once; a destructive one confirms inline.
-import { useMemo, useState } from 'react';
+// Members (docs/specs/workspace-admin.md §3.2 and §5): one Add member button (a dialog for a user or an agent, AddMember.tsx),
+// and the roster, one line per member: name, email, role, kind and actions, with the pending invitations and setups below
+// it. Every change saves at once; a destructive one confirms inline.
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { AccountDTO, AccountKind, CreateMemberResultDTO, InviteResultDTO, MemberRole, PendingSetupDTO, WorkspaceDTO, WorkspaceInviteDTO, WorkspaceMemberDTO } from '@flow/shared';
+import type { AccountDTO, AccountKind, AgentInviteDTO, MemberRole, PendingSetupDTO, WorkspaceDTO, WorkspaceInviteDTO, WorkspaceMemberDTO } from '@flow/shared';
+import { Plus } from 'lucide-react';
 import { adminApi } from '../api';
 import { suite } from '../suite';
 import { tellHome } from '@flow/suite-bar';
 import { Button, Card, Confirm, ErrorLine, Select } from '../components/ui';
+import { AddMemberModal, ConnectAgentModal, type Added } from './AddMember';
+
+export { suggestUsername } from './AddMember';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -33,16 +37,45 @@ export function mailState(a: AccountDTO | undefined, hostedMail: boolean): { tex
 
 const needsAttention = (a: AccountDTO | undefined) => !!a && a.kind === 'native' && (a.state !== 'active' || !!a.statusMessage);
 
+/** The Kind column's word for a member (agents.md §1, §2): a person, a guest, a shared agent hosted here or connected
+ * from elsewhere, or a person's own agent (their assistant, or one connected over MCP). */
+export function kindLabel(m: WorkspaceMemberDTO, a: AccountDTO | undefined): string {
+  const hosted = (m.agentRuntime ?? a?.agentRuntime) === 'hosted';
+  if (m.kind === 'personal_agent' || a?.kind === 'personal_agent') return hosted ? 'Assistant' : 'Personal agent';
+  if (m.isAgent) return hosted ? 'Agent' : 'External agent';
+  if ((m.kind ?? a?.kind) === 'guest') return 'Guest';
+  return 'Person';
+}
+
+/** An address a person can write to: never an agent's synthetic sign-in (`agent-<id>@agents.flow.local`) or a hidden one. */
+export const visibleEmail = (e: string | null | undefined): string | null => (e && !/@(agents\.flow\.local|hidden\.invalid)$/i.test(e) ? e : null);
+
 export function Members({ org }: { org: WorkspaceDTO }) {
   const qc = useQueryClient();
   const config = useQuery({ queryKey: ['config'], queryFn: adminApi.config, staleTime: Infinity });
   const hostedMail = !!config.data?.hostedMail;
   const me = useQuery({ queryKey: ['suite', 'me'], queryFn: suite.me });
-  const members = useQuery({ queryKey: ['members', org.id], queryFn: () => adminApi.members(org.id) });
-  const accounts = useQuery({ queryKey: ['accounts', org.id], queryFn: () => adminApi.accounts(org.id) });
-  const refresh = () => {
+  // While an external agent's connection steps are open, the roster is re-read, so the agent appears when it connects;
+  // and for a while after a mailbox is sent to be made, which happens on the provisioning queue, so its state follows.
+  const [connecting, setConnecting] = useState<{ name: string; invite: AgentInviteDTO } | null>(null);
+  const [provisioning, setProvisioning] = useState(false);
+  useEffect(() => {
+    if (!provisioning) return;
+    const t = setTimeout(() => setProvisioning(false), 30_000);
+    return () => clearTimeout(t);
+  }, [provisioning]);
+  const poll = connecting ? 3000 : provisioning ? 2000 : false;
+  const members = useQuery({ queryKey: ['members', org.id], queryFn: () => adminApi.members(org.id), refetchInterval: poll });
+  const accounts = useQuery({ queryKey: ['accounts', org.id], queryFn: () => adminApi.accounts(org.id), refetchInterval: poll });
+  const refresh = useCallback(() => {
     tellHome('members');
     return Promise.all([qc.invalidateQueries({ queryKey: ['members', org.id] }), qc.invalidateQueries({ queryKey: ['accounts', org.id] })]);
+  }, [qc, org.id]);
+  const [adding, setAdding] = useState(false);
+  const [added, setAdded] = useState<Added | null>(null);
+  const onAdded = async (a: Added) => {
+    setAdded(a);
+    await Promise.all([refresh(), qc.invalidateQueries({ queryKey: ['setups', org.id] }), qc.invalidateQueries({ queryKey: ['invites', org.id] })]);
   };
 
   const accountOf = (m: WorkspaceMemberDTO) => (accounts.data ?? []).find((a) => a.principalId === m.userId);
@@ -63,18 +96,30 @@ export function Members({ org }: { org: WorkspaceDTO }) {
     attention: roster.filter((m) => needsAttention(accountOf(m))).length,
     guests: roster.filter((m) => (m.kind ?? accountOf(m)?.kind) === 'guest').length,
   };
+  const nameOf = (id: string | null | undefined) => (id ? roster.find((x) => x.userId === id)?.displayName : undefined);
 
   return (
     <>
-      <AddPeople org={org} onInvited={() => void qc.invalidateQueries({ queryKey: ['invites', org.id] })} onCreated={() => Promise.all([refresh(), qc.invalidateQueries({ queryKey: ['setups', org.id] })])} />
-      <Pending org={org} />
+      <div className="flex min-h-8 items-center gap-3" data-testid="members-top">
+        <Button kind="primary" onClick={() => setAdding(true)} testid="add-member">
+          <span className="inline-flex items-center gap-1">
+            <Plus className="size-4" aria-hidden="true" />
+            Add member
+          </span>
+        </Button>
+        {added && (
+          <span className={`min-w-0 truncate text-xs ${added.tone === 'ok' ? 'text-ok' : 'text-warn'}`} title={added.message} data-testid="add-done">
+            {added.message}
+          </span>
+        )}
+      </div>
       <Card title="Members" testid="card-members">
         <div className="flex flex-wrap items-center gap-2 text-xs" role="tablist" aria-label="Filter">
           {FILTERS.map((f) => {
             const n = f.id === 'attention' ? counts.attention : f.id === 'guests' ? counts.guests : null;
             if (f.id === 'attention' && n === 0) return null;
             return (
-              <button key={f.id} type="button" role="tab" aria-selected={filter === f.id} className={`rounded-full px-2.5 py-1 ${filter === f.id ? 'bg-primary text-white' : 'bg-panel text-muted hover:bg-hover'}`} onClick={() => setFilter(f.id)} data-testid={`filter-${f.id}`}>
+              <button key={f.id} type="button" role="tab" aria-selected={filter === f.id} className={`rounded-full px-2.5 py-0.5 ${filter === f.id ? 'bg-primary text-white' : 'bg-panel text-muted hover:bg-hover'}`} onClick={() => setFilter(f.id)} data-testid={`filter-${f.id}`}>
                 {f.label}
                 {n !== null && n > 0 ? ` ${n}` : ''}
               </button>
@@ -87,23 +132,32 @@ export function Members({ org }: { org: WorkspaceDTO }) {
         </div>
         {members.isError && <ErrorLine error={errorText(members.error)} />}
         <div className="overflow-x-auto rounded-lg border border-hairline">
-          <table className="w-full text-sm">
+          <table className="w-full min-w-[720px] table-fixed text-sm">
+            <colgroup>
+              <col className="w-[24%]" />
+              <col className="w-[29%]" />
+              <col className="w-[96px]" />
+              <col />
+              <col className="w-[76px]" />
+            </colgroup>
             <thead>
               <tr className="border-b border-hairline bg-panel text-left text-xs text-faint uppercase">
-                <th className="px-3 py-2 font-semibold">Member</th>
-                <th className="px-3 py-2 font-semibold">Role</th>
-                <th className="px-3 py-2 font-semibold" title="Native accounts have an address and a mailbox; guests have neither and use Chat only">Kind</th>
-                {hostedMail && <th className="px-3 py-2 font-semibold">Mail</th>}
-                <th className="px-3 py-2 text-right font-semibold">Actions</th>
+                <th className="px-3 py-1.5 font-semibold">Name</th>
+                <th className="px-3 py-1.5 font-semibold">Email</th>
+                <th className="px-3 py-1.5 font-semibold">Role</th>
+                <th className="px-3 py-1.5 font-semibold" title="A person has an address and a mailbox; a guest has neither and uses Chat only">Kind</th>
+                <th className="px-3 py-1.5 text-right font-semibold">
+                  <span className="sr-only">Actions</span>
+                </th>
               </tr>
             </thead>
             <tbody>
               {shown.map((m) => (
-                <MemberRow key={m.userId} org={org} member={m} account={accountOf(m)} sponsorName={roster.find((x) => x.userId === m.sponsorId)?.displayName} meId={me.data?.id} hostedMail={hostedMail} onChanged={refresh} />
+                <MemberRow key={m.userId} org={org} member={m} account={accountOf(m)} sponsorName={nameOf(m.sponsorId ?? accountOf(m)?.sponsorId)} meId={me.data?.id} hostedMail={hostedMail} fresh={added?.userId === m.userId} onChanged={refresh} onProvisioned={() => setProvisioning(true)} />
               ))}
               {members.isSuccess && shown.length === 0 && (
                 <tr>
-                  <td className="px-3 py-3 text-sm text-muted" colSpan={hostedMail ? 5 : 4}>
+                  <td className="px-3 py-3 text-sm text-muted" colSpan={5}>
                     Nobody here.
                   </td>
                 </tr>
@@ -111,13 +165,79 @@ export function Members({ org }: { org: WorkspaceDTO }) {
             </tbody>
           </table>
         </div>
+        <Pending org={org} />
         <Bulk org={org} hostedMail={hostedMail} accounts={accounts.data} onChanged={refresh} />
       </Card>
+      {adding && <AddMemberModal org={org} onClose={() => setAdding(false)} onAdded={onAdded} onExternal={(name, invite) => { setAdded(null); setConnecting({ name, invite }); }} />}
+      {connecting && (
+        <ConnectAgentModal
+          name={connecting.name}
+          invite={connecting.invite}
+          onClose={() => {
+            setConnecting(null);
+            void refresh();
+          }}
+        />
+      )}
     </>
   );
 }
 
-function MemberRow({ org, member: m, account: a, sponsorName, meId, hostedMail, onChanged }: { org: WorkspaceDTO; member: WorkspaceMemberDTO; account: AccountDTO | undefined; sponsorName: string | undefined; meId: string | undefined; hostedMail: boolean; onChanged(): Promise<unknown> }) {
+/** The Email column: the member's address here, else (a person) their sign-in email, with the mailbox's state beside it
+ * when it is not ready: Create inbox for an agent with none (or whose setup stopped), Set up or Retry for a person. */
+function EmailCell({ m, a, hostedMail, keyId, busy, queued, onProvision }: { m: WorkspaceMemberDTO; a: AccountDTO | undefined; hostedMail: boolean; keyId: string; busy: boolean; queued: boolean; onProvision(): void }) {
+  const mail = mailState(a, hostedMail);
+  const shownEmail = a?.address ?? (m.isAgent ? null : visibleEmail(m.email));
+  const action = 'shrink-0 text-xs text-primary hover:underline disabled:opacity-50';
+  if (m.isAgent) {
+    // A shared agent is native, and gets its inbox when it is made (decision_log 2026-11-09); one without (provisioning
+    // stopped, or none was set up) gets it here, through the same route as Set up mailboxes (§5).
+    const mayCreate = hostedMail && !queued && !!a && a.kind === 'native' && !a.hosted && a.state !== 'suspended' && a.state !== 'removed' && (a.state === 'active' || !!a.statusMessage);
+    const settingUp = hostedMail && !!a && a.kind === 'native' && !a.hosted && !mayCreate && a.state !== 'suspended';
+    return (
+      <div className="flex min-w-0 items-center gap-2" data-testid={`email-${keyId}`}>
+        {shownEmail ? (
+          <span className={`truncate ${a?.hosted || !hostedMail ? '' : 'text-muted'}`} title={shownEmail} data-testid={`address-${keyId}`}>
+            {shownEmail}
+          </span>
+        ) : (
+          <span className="truncate text-xs text-faint" title={a?.agentRuntime === 'hosted' ? 'A person’s assistant gets its address and inbox when its person names it (Admin › Assistant).' : 'A personal agent acts as its person and has no address of its own.'} data-testid={`address-${keyId}`}>
+            No inbox
+          </span>
+        )}
+        {mayCreate && (
+          <button type="button" className={action} disabled={busy} onClick={onProvision} title={a?.statusMessage ? `The last setup stopped: ${a.statusMessage}` : 'Make its mailbox and calendar'} data-testid={`create-inbox-${keyId}`}>
+            {busy ? 'Creating…' : 'Create inbox'}
+          </button>
+        )}
+        {settingUp && (
+          <span className="shrink-0 text-xs text-faint" data-testid={`mail-${keyId}`}>
+            setting up…
+          </span>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className="flex min-w-0 items-center gap-2" data-testid={`email-${keyId}`}>
+      <span className="truncate" title={shownEmail ?? undefined} data-testid={`address-${keyId}`}>
+        {shownEmail ?? <span className="text-faint">—</span>}
+      </span>
+      {mail && mail.text !== 'ready' && mail.text !== '—' && (
+        <span className={`shrink-0 text-xs ${mail.tone === 'warn' ? 'text-warn' : 'text-faint'}`} title={mail.text} data-testid={`mail-${keyId}`}>
+          {mail.tone === 'warn' ? 'stopped' : mail.text}
+        </span>
+      )}
+      {mail?.retry && !queued && (
+        <button type="button" className={action} disabled={busy} onClick={onProvision} data-testid={`retry-${keyId}`}>
+          {busy ? 'Sending…' : a?.statusMessage ? 'Retry' : 'Set up'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function MemberRow({ org, member: m, account: a, sponsorName, meId, hostedMail, fresh, onChanged, onProvisioned }: { org: WorkspaceDTO; member: WorkspaceMemberDTO; account: AccountDTO | undefined; sponsorName: string | undefined; meId: string | undefined; hostedMail: boolean; fresh: boolean; onChanged(): Promise<unknown>; onProvisioned(): void }) {
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const isOwner = m.role === 'owner';
@@ -140,40 +260,45 @@ function MemberRow({ org, member: m, account: a, sponsorName, meId, hostedMail, 
   const setRole = act((role: Exclude<MemberRole, 'owner'>) => adminApi.setRole(org.id, m.userId, role));
   const setKind = act((kind: AccountKind) => adminApi.setKind(org.id, a!.id, kind));
   const remove = act(() => (personal ? adminApi.removePersonalAgent(org.id, m.accountId ?? a!.id) : adminApi.removeMember(org.id, m.userId)));
-  const retry = act(() => adminApi.provisionOne(org.id, a!.id));
+  const retry = act(async () => {
+    await adminApi.provisionOne(org.id, a!.id);
+    onProvisioned();
+  });
+  // Sent to be made: "setting up…" until the account says its mailbox is there (or the run stops again).
+  const queued = retry.isSuccess && !!a && !a.hosted;
   const busy = setRole.isPending || setKind.isPending || remove.isPending || retry.isPending;
-  const mail = mailState(a, hostedMail);
   const key = m.email || m.userId;
+  const kind = kindLabel(m, a);
+  const sponsor = m.isAgent && sponsorName ? `of ${sponsorName}` : null;
+  const cell = 'px-3 py-1.5 align-middle';
 
   return (
-    <tr data-testid={`member-${key}`} className="border-b border-hairline last:border-0">
-      <td className="px-3 py-2.5">
-        <div className="flex items-center gap-2.5">
+    <tr data-testid={`member-${key}`} className={`border-b border-hairline last:border-0 ${fresh ? 'bg-selected-blue' : ''}`}>
+      <td className={cell}>
+        <div className="flex min-w-0 items-center gap-2">
           {m.avatarUrl ? (
-            <img src={m.avatarUrl} alt="" className="size-8 rounded-lg object-cover" />
+            <img src={m.avatarUrl} alt="" className="size-6 shrink-0 rounded-md object-cover" />
           ) : (
-            <span className="flex size-8 items-center justify-center rounded-lg bg-panel text-xs font-semibold text-muted">{m.displayName.slice(0, 1).toUpperCase()}</span>
+            <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-panel text-[11px] font-semibold text-muted">{m.displayName.slice(0, 1).toUpperCase()}</span>
           )}
-          <div className="min-w-0">
-            <div className="truncate font-medium">
-              {m.displayName}
-              {m.isAgent && <span title="AI agent"> 🤖</span>}
-              {isSelf && <span className="text-faint"> (you)</span>}
-            </div>
-            <div className="truncate text-xs text-muted">{m.email}</div>
-            {a && (
-              <div className="truncate text-xs text-faint" data-testid={`address-${key}`}>
-                {a.kind === 'guest' ? 'guest' : a.address}
-              </div>
-            )}
-          </div>
+          <span className="truncate font-medium" title={m.displayName}>
+            {m.displayName}
+          </span>
+          {isSelf && <span className="shrink-0 text-xs text-faint">(you)</span>}
         </div>
       </td>
-      <td className="px-3 py-2.5">
+      <td className={cell}>
+        <EmailCell m={m} a={a} hostedMail={hostedMail} keyId={key} busy={retry.isPending} queued={queued} onProvision={() => retry.mutate(undefined)} />
+      </td>
+      <td className={cell}>
         {locked || personal ? (
-          <span className={`rounded-full px-2 py-0.5 text-xs font-semibold capitalize ${isOwner ? 'bg-primary-tint text-primary-deep' : 'bg-panel text-muted'}`}>{m.role}</span>
+          <span className={`rounded-full px-2 py-0.5 text-xs font-semibold capitalize ${isOwner ? 'bg-primary-tint text-primary-deep' : 'bg-panel text-muted'}`} data-testid={`role-${key}`}>
+            {m.role}
+          </span>
         ) : (
           <Select
+            compact
+            label={`Role of ${m.displayName}`}
             value={m.role as Exclude<MemberRole, 'owner'>}
             disabled={busy}
             options={[
@@ -185,24 +310,26 @@ function MemberRow({ org, member: m, account: a, sponsorName, meId, hostedMail, 
           />
         )}
       </td>
-      <td className="px-3 py-2.5">
-        {personal ? (
-          <span className="text-xs text-muted" data-testid={`kind-${key}`}>
-            {assistant ? 'Assistant' : 'Personal agent'}
-            {sponsorName && <span className="text-faint"> · of {sponsorName}</span>}
-          </span>
-        ) : !a ? (
-          <span className="text-xs text-faint">—</span>
-        ) : isOwner || m.isAgent ? (
-          <span className="text-xs text-muted" data-testid={`kind-${key}`}>
-            Native
-          </span>
+      <td className={cell}>
+        {!a || isOwner || m.isAgent || personal ? (
+          <div className="flex min-w-0 items-baseline gap-1 text-xs whitespace-nowrap" title={sponsor ? `${kind} ${sponsor}` : kind}>
+            <span className="shrink-0 text-muted" data-testid={`kind-${key}`}>
+              {kind}
+            </span>
+            {sponsor && (
+              <span className="truncate text-faint" data-testid={`sponsor-${key}`}>
+                {sponsor}
+              </span>
+            )}
+          </div>
         ) : (
           <Select
+            compact
+            label={`Kind of ${m.displayName}`}
             value={(m.kind ?? a.kind) as AccountKind}
             disabled={busy}
             options={[
-              { value: 'native', label: 'Native' },
+              { value: 'native', label: 'Person' },
               { value: 'guest', label: 'Guest' },
             ]}
             onChange={(v) => setKind.mutate(v)}
@@ -210,24 +337,13 @@ function MemberRow({ org, member: m, account: a, sponsorName, meId, hostedMail, 
           />
         )}
       </td>
-      {hostedMail && (
-        <td className="px-3 py-2.5">
-          {mail && (
-            <span className={`text-xs ${mail.tone === 'ok' ? 'text-ok' : mail.tone === 'warn' ? 'text-warn' : 'text-muted'}`} data-testid={`mail-${key}`}>
-              {mail.text}
-            </span>
-          )}
-        </td>
-      )}
-      <td className="px-3 py-2.5 text-right">
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          {mail?.retry && a && (
-            <Button disabled={busy} onClick={() => retry.mutate(undefined)} testid={`retry-${key}`}>
-              {retry.isPending ? 'Sending…' : a.statusMessage ? 'Retry setup' : 'Set up'}
-            </Button>
-          )}
+      <td className={`${cell} relative text-right`}>
+        <div className="flex items-center justify-end gap-2 whitespace-nowrap">
           {locked ? null : confirming ? (
-            <Confirm question={`Remove ${m.displayName}?`} busy={busy} onYes={() => remove.mutate(undefined)} onNo={() => setConfirming(false)} testid={`remove-confirm-${key}`} />
+            // Over the row's end, so the confirmation does not widen the column.
+            <span className="absolute inset-y-0 right-0 z-10 flex w-max items-center bg-white pr-3 pl-3 shadow-[-8px_0_8px_white]">
+              <Confirm question={`Remove ${m.displayName}?`} busy={busy} onYes={() => remove.mutate(undefined)} onNo={() => setConfirming(false)} testid={`remove-confirm-${key}`} />
+            </span>
           ) : (
             <Button kind="link" disabled={busy} onClick={() => setConfirming(true)} testid={`remove-${key}`}>
               Remove
@@ -299,201 +415,16 @@ function Bulk({ org, hostedMail, accounts, onChanged }: { org: WorkspaceDTO; hos
   );
 }
 
-const parseEmails = (text: string) => [...new Set(text.split(/[\s,;]+/).map((e) => e.trim()).filter(Boolean))];
-
-const STATUS_TEXT: Record<InviteResultDTO['status'], string> = {
-  sent: 'invited',
-  resent: 'invited again',
-  already_member: 'already a member',
-  invalid_email: 'not an email address',
-  email_failed: 'invited, but the email could not be sent',
-};
-
-type AddMode = 'invite' | 'create';
-
-/** The ways in, one card: invite people by their own email (as members or chat guests), or create a member with an address
- * on the organization's domain. */
-function AddPeople({ org, onInvited, onCreated }: { org: WorkspaceDTO; onInvited(): void; onCreated(): Promise<unknown> }) {
-  const [mode, setMode] = useState<AddMode>('invite');
-  const tabs: { id: AddMode; label: string }[] = [
-    { id: 'invite', label: 'Invite by email' },
-    { id: 'create', label: 'Create member' },
-  ];
-  return (
-    <Card title="Add people" testid="card-invite">
-      <div className="flex gap-1 rounded-lg bg-panel p-1 text-sm self-start" role="tablist" aria-label="How to add people">
-        {tabs.map((t) => (
-          <button key={t.id} type="button" role="tab" aria-selected={mode === t.id} className={`rounded-md px-3 py-1 ${mode === t.id ? 'bg-white font-semibold shadow-sm' : 'text-muted hover:text-ink'}`} onClick={() => setMode(t.id)} data-testid={`add-${t.id}`}>
-            {t.label}
-          </button>
-        ))}
-      </div>
-      {mode === 'invite' ? <Invite org={org} onInvited={onInvited} /> : <CreateMember org={org} onCreated={onCreated} />}
-    </Card>
-  );
-}
-
-/** A username from a display name, until the admin types one: "Bea Lin" → "bea.lin". The server checks it. */
-export const suggestUsername = (name: string) =>
-  name.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/['’]/g, '').split(/[^a-z0-9]+/).filter(Boolean).join('.').slice(0, 64);
-
-/** Create member: a native account at username@domain, right away, with no password; the setup link (a week) goes to the
- * backup email, which "Forgot password" reaches too. */
-function CreateMember({ org, onCreated }: { org: WorkspaceDTO; onCreated(): Promise<unknown> }) {
-  const domains = useQuery({ queryKey: ['domains', org.id], queryFn: () => adminApi.domains(org.id) });
-  const usable = (domains.data ?? []).filter((d) => d.verified).sort((a, b) => Number(b.primary) - Number(a.primary));
-  const primary = usable.find((d) => d.primary)?.domain ?? usable[0]?.domain ?? '';
-  const [displayName, setDisplayName] = useState('');
-  const [username, setUsername] = useState('');
-  const [typedUsername, setTypedUsername] = useState(false);
-  const [domain, setDomain] = useState('');
-  const [backupEmail, setBackupEmail] = useState('');
-  const [done, setDone] = useState<CreateMemberResultDTO | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const chosenDomain = domain || primary;
-  const shownUsername = typedUsername ? username : suggestUsername(displayName);
-  const create = useMutation({
-    mutationFn: () => adminApi.createMember(org.id, { displayName: displayName.trim(), username: shownUsername.trim(), domain: chosenDomain, backupEmail: backupEmail.trim() }),
-    onMutate: () => {
-      setError(null);
-      setDone(null);
-    },
-    onSuccess: async (out) => {
-      setDone(out);
-      setDisplayName('');
-      setUsername('');
-      setTypedUsername(false);
-      setBackupEmail('');
-      await onCreated();
-    },
-    onError: (e) => setError(errorText(e)),
-  });
-  const ready = !!displayName.trim() && !!shownUsername.trim() && !!chosenDomain && !!backupEmail.trim();
-  const input = 'w-full rounded-md border border-border px-2 py-1 text-sm disabled:opacity-50';
-  return (
-    <form
-      className="flex flex-col gap-3"
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (ready) create.mutate();
-      }}
-      data-testid="create-member"
-    >
-      <p className="text-xs text-muted">Creates a member with an address on your domain. They get no password yet: a setup link, good for 7 days, goes to their backup email.</p>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="font-medium">Display name</span>
-          <input className={input} value={displayName} disabled={create.isPending} onChange={(e) => setDisplayName(e.target.value)} placeholder="Bea Lin" autoComplete="off" data-testid="create-name" />
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="font-medium">Backup email</span>
-          <input className={input} type="email" value={backupEmail} disabled={create.isPending} onChange={(e) => setBackupEmail(e.target.value)} placeholder="bea@gmail.com" autoComplete="off" data-testid="create-backup" />
-          <span className="text-xs text-muted">Outside your domain. The setup link and password resets go here.</span>
-        </label>
-        <div className="flex flex-col gap-1 text-sm sm:col-span-2">
-          <span className="font-medium">Sign-in address</span>
-          <div className="flex items-center gap-1">
-            <input
-              className={`${input} min-w-0 flex-1`}
-              aria-label="Username"
-              value={shownUsername}
-              disabled={create.isPending}
-              onChange={(e) => {
-                setTypedUsername(true);
-                setUsername(e.target.value.replace(/@.*$/, '').toLowerCase());
-              }}
-              placeholder="bea.lin"
-              autoComplete="off"
-              data-testid="create-username"
-            />
-            <span className="text-muted">@</span>
-            {usable.length > 1 ? (
-              <Select value={chosenDomain} disabled={create.isPending} options={usable.map((d) => ({ value: d.domain, label: d.domain }))} onChange={setDomain} testid="create-domain" />
-            ) : (
-              <span className="rounded-md bg-panel px-2 py-1 text-sm" data-testid="create-domain">
-                {chosenDomain || '…'}
-              </span>
-            )}
-          </div>
-          <span className="text-xs text-muted">Letters, digits, dots, hyphens and underscores. Verified domains only; the primary one is first.</span>
-        </div>
-      </div>
-      <div className="flex flex-wrap items-center gap-3">
-        <Button kind="primary" type="submit" disabled={create.isPending || !ready} testid="create-submit">
-          {create.isPending ? 'Creating…' : 'Create member'}
-        </Button>
-        {done && (
-          <span className={`text-xs ${done.emailSent ? 'text-ok' : 'text-warn'}`} data-testid="create-done">
-            {done.emailSent
-              ? `Created ${done.account.address}. A setup link went to ${done.pending?.backupEmail}.`
-              : `Created ${done.account.address}, but the setup email could not be sent. Use Resend setup link below.`}
-          </span>
-        )}
-      </div>
-      {domains.isError && <ErrorLine error={errorText(domains.error)} />}
-      <ErrorLine error={error} testid="create-error" />
-    </form>
-  );
-}
-
-/** Invite people (native members) or chat guests (§3.2, §6.5): the same addresses box, two buttons. */
-function Invite({ org, onInvited }: { org: WorkspaceDTO; onInvited(): void }) {
-  const [text, setText] = useState('');
-  const [results, setResults] = useState<InviteResultDTO[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const emails = parseEmails(text);
-  const send = useMutation({
-    mutationFn: (kind: AccountKind) => adminApi.invite(org.id, emails, kind),
-    onMutate: () => setError(null),
-    onSuccess: (out) => {
-      setResults(out);
-      // Only what failed stays in the box, so a retry does not send the rest again.
-      setText(out.filter((r) => r.status === 'invalid_email' || r.status === 'email_failed').map((r) => r.email).join(', '));
-      onInvited();
-    },
-    onError: (e) => setError(errorText(e)),
-  });
-  return (
-    <>
-      <p className="text-xs text-muted">Separate addresses with commas. Each person gets an email with a link and joins with that address.</p>
-      <textarea className="w-full rounded-md border border-border px-2 py-1 text-sm" rows={2} placeholder="email@example.com, someone@example.com" value={text} disabled={send.isPending} onChange={(e) => setText(e.target.value)} data-testid="invite-emails" />
-      <div className="flex flex-wrap items-center gap-3">
-        <Button kind="primary" disabled={send.isPending || emails.length === 0} onClick={() => send.mutate('native')} testid="invite-people">
-          {emails.length > 1 ? `Invite ${emails.length} people` : 'Invite people'}
-        </Button>
-        <Button disabled={send.isPending || emails.length === 0} onClick={() => send.mutate('guest')} testid="invite-guests">
-          {emails.length > 1 ? `Invite ${emails.length} as chat guests` : 'Invite a chat guest'}
-        </Button>
-        <span className="text-xs text-muted">Guests use Chat only. They get no address and no mailbox here.</span>
-      </div>
-      {results && (
-        <ul className="divide-y divide-hairline rounded-lg border border-hairline text-sm" data-testid="invite-results">
-          {results.map((r) => (
-            <li key={r.email} className="flex items-center justify-between gap-3 px-3 py-1.5">
-              <span className="truncate">{r.email}</span>
-              <span className={`text-xs ${r.status === 'invalid_email' || r.status === 'email_failed' ? 'text-warn' : 'text-muted'}`}>
-                {STATUS_TEXT[r.status]}
-                {r.kind === 'guest' && (r.status === 'sent' || r.status === 'resent') ? ' as a chat guest' : ''}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-      <ErrorLine error={error} testid="invite-error" />
-    </>
-  );
-}
-
-/** Everyone on their way in: created members who have not set a password (with Resend), and open invitations. */
+/** Everyone on their way in, below the roster: created members who have not set a password (with Resend), and open invitations. */
 function Pending({ org }: { org: WorkspaceDTO }) {
   const setups = useQuery({ queryKey: ['setups', org.id], queryFn: () => adminApi.pendingSetups(org.id) });
   const invites = useQuery({ queryKey: ['invites', org.id], queryFn: () => adminApi.invites(org.id) });
   if (setups.isSuccess && invites.isSuccess && setups.data.length === 0 && invites.data.length === 0) return null;
   return (
-    <Card title="Pending" testid="card-invites">
+    <div className="flex flex-col gap-3" data-testid="card-invites">
       <PendingSetups org={org} list={setups.data ?? []} error={setups.isError ? errorText(setups.error) : null} />
       <PendingInvites org={org} />
-    </Card>
+    </div>
   );
 }
 

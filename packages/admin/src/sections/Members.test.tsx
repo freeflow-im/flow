@@ -1,10 +1,12 @@
-// Members (docs/specs/workspace-admin.md §3.2, §5), against a fetch that answers the suite's API: the roster with roles,
-// kinds and mail state, the filters, Retry setup, the bulk actions, inviting people and chat guests, pending invitations.
+// Members (docs/specs/workspace-admin.md §3.2, §5), against a fetch that answers the suite's API: the one-line roster with
+// email, role, kind and mail state, the filters, Retry and Create inbox, the bulk actions, the Add member dialog (a user
+// created or invited, a chat guest, a native or an external agent), pending invitations.
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AccountDTO, DomainDTO, PendingSetupDTO, WorkspaceDTO, WorkspaceInviteDTO, WorkspaceMemberDTO } from '@flow/shared';
-import { mailState, Members, suggestUsername } from './Members';
+import { kindLabel, mailState, Members, suggestUsername, visibleEmail } from './Members';
+import { addressLocal, agentHandle, bridgeCommand } from './AddMember';
 
 const org: WorkspaceDTO = {
   id: 'o1', slug: 'acme', name: 'Acme', createdBy: 'u-ann', createdAt: '2026-01-01T00:00:00.000Z', sidebarColor: 'violet', avatarUrl: null, googleSelfRegisterDomain: null, role: 'owner',
@@ -31,13 +33,14 @@ const domains: DomainDTO[] = [domain('acme.freeflow.im', { kind: 'platform' }), 
 beforeEach(() => {
   calls = [];
   hostedMail = true;
-  members = [member('Ann', { role: 'owner' }), member('Bob'), member('Cal'), member('Dee'), member('Botty', { isAgent: true })];
+  members = [member('Ann', { role: 'owner' }), member('Bob'), member('Cal'), member('Dee'), member('Botty', { isAgent: true, email: 'agent-u-botty@agents.flow.local', sponsorId: 'u-ann' }), member('Hosty', { isAgent: true, agentRuntime: undefined, email: 'agent-u-hosty@agents.flow.local', sponsorId: 'u-bob' })];
   accounts = [
     account('Ann', { role: 'owner' }),
     account('Bob'),
     account('Cal', { kind: 'guest', address: null, hosted: false }),
     account('Dee', { state: 'requested', hosted: false, statusMessage: 'the provider refused: quota' }),
     account('Botty'),
+    account('Hosty', { agentRuntime: 'hosted', hosted: false, sponsorId: 'u-bob' }),
   ];
   setups = [{ accountId: 'a-hal', userId: 'u-hal', address: 'hal@acme.com', displayName: 'Hal', backupEmail: 'hal@gmail.example', createdAt: '2026-01-02T00:00:00.000Z', linkExpiresAt: null }];
   createAnswer = { status: 201, body: { account: account('Bea', { address: 'bea.lin@acme.com' }), pending: { ...setups[0], backupEmail: 'bea@gmail.example' }, emailSent: true } };
@@ -58,6 +61,10 @@ beforeEach(() => {
     if (path.endsWith('/created-members') && method === 'POST') return json(createAnswer.body, createAnswer.status);
     if (path.endsWith('/setup-link')) return json({ pending: { ...setups[0], linkExpiresAt: '2026-01-20T00:00:00.000Z' } });
     if (path.endsWith('/invites') && method === 'POST') return json({ results: (body as { emails: string[]; kind: string }).emails.map((email) => ({ email, status: email.includes('@') ? 'sent' : 'invalid_email', kind: (body as { kind: string }).kind })) }, 201);
+    if (path.endsWith('/agents/hosted')) return json({ agent: { id: 'u-scout', accountId: 'a-scout', displayName: 'Scout', mode: 'shared', self: false }, definition: { name: 'Scout', instructions: '', updatedAt: null } }, 201);
+    if (path.includes('/assistant/avatar')) return json({ avatarUrl: '/x.png' });
+    if (path.endsWith('/agent-invites')) return json({ code: 'flow-ABCD-EFGH', command: 'npx flow-agent-bridge flow-ABCD-EFGH', expiresAt: '2026-01-09T00:00:00.000Z' }, 201);
+    if (path === '/v1/me/agent-connections') return json({ mcpUrl: 'https://app.test/mcp', agents: [] });
     if (path.endsWith('/provision')) return json(path.includes('/accounts/') ? { queued: true } : { queued: 2 });
     if (path.endsWith('/accounts/kind')) return json({ changed: 2, unchanged: 1 });
     return json({ ok: true });
@@ -78,22 +85,31 @@ const show = () => {
 };
 
 describe('Members', () => {
-  it('lists the roster owner first, with each member’s address or "guest", role, kind and mail state', async () => {
+  it('lists the roster owner first, one line each: the address here or a guest’s own email, role, kind and mail state', async () => {
     show();
     await screen.findByTestId('member-bob@example.com');
     const rows = [...document.querySelectorAll('tbody tr')].map((r) => r.getAttribute('data-testid'));
     expect(rows[0]).toBe('member-ann@example.com');
-    expect(screen.getByTestId('address-cal@example.com').textContent).toBe('guest');
+    expect(screen.getByTestId('address-cal@example.com').textContent).toBe('cal@example.com');
     expect(screen.getByTestId('address-bob@example.com').textContent).toBe('bob@acme.freeflow.im');
-    expect(screen.getByTestId('mail-bob@example.com').textContent).toBe('ready');
-    expect(screen.getByTestId('mail-cal@example.com').textContent).toBe('—');
-    expect(screen.getByTestId('mail-dee@example.com').textContent).toBe('stopped: the provider refused: quota');
+    expect(screen.queryByTestId('mail-bob@example.com')).toBeNull();
+    expect(screen.queryByTestId('mail-cal@example.com')).toBeNull();
+    expect(screen.getByTestId('mail-dee@example.com').textContent).toBe('stopped');
+    expect(screen.getByTestId('mail-dee@example.com').getAttribute('title')).toBe('stopped: the provider refused: quota');
+    // Agents: never the synthetic sign-in; a short kind, and the sponsor as a muted suffix.
+    expect(document.body.textContent).not.toContain('agents.flow.local');
+    expect(screen.getByTestId('address-agent-u-botty@agents.flow.local').textContent).toBe('botty@acme.freeflow.im');
+    expect(screen.getByTestId('kind-agent-u-botty@agents.flow.local').textContent).toBe('External agent');
+    expect(screen.getByTestId('sponsor-agent-u-botty@agents.flow.local').textContent).toBe('of Ann');
+    expect(screen.getByTestId('kind-agent-u-hosty@agents.flow.local').textContent).toBe('Agent');
+    expect(screen.getByTestId('sponsor-agent-u-hosty@agents.flow.local').textContent).toBe('of Bob');
+    expect(screen.queryByTestId('add-member-modal')).toBeNull();
     // The owner and an agent are native with no choice; the owner cannot be removed; you cannot act on yourself.
     expect(screen.getByTestId('kind-ann@example.com').tagName).toBe('SPAN');
-    expect(screen.getByTestId('kind-botty@example.com').tagName).toBe('SPAN');
+    expect(screen.getByTestId('kind-agent-u-botty@agents.flow.local').tagName).toBe('SPAN');
     expect(screen.getByTestId('kind-bob@example.com').tagName).toBe('SELECT');
     expect(screen.queryByTestId('remove-ann@example.com')).toBeNull();
-    expect(screen.getByTestId('members-count').textContent).toBe('5 members');
+    expect(screen.getByTestId('members-count').textContent).toBe('6 members');
   });
 
   it('filters: Guests shows the guest, Needs attention the stopped account, Agents the agent', async () => {
@@ -106,7 +122,8 @@ describe('Members', () => {
     expect(screen.getByTestId('member-dee@example.com')).toBeTruthy();
     expect(screen.queryByTestId('member-bob@example.com')).toBeNull();
     fireEvent.click(screen.getByTestId('filter-agents'));
-    expect(screen.getByTestId('member-botty@example.com')).toBeTruthy();
+    expect(screen.getByTestId('member-agent-u-botty@agents.flow.local')).toBeTruthy();
+    expect(screen.queryByTestId('member-bob@example.com')).toBeNull();
   });
 
   it('changes a role and a kind with one call each, retries a stopped account, and removes after a confirmation', async () => {
@@ -129,6 +146,8 @@ describe('Members', () => {
   it('invites people as members and, separately, as chat guests; only what failed stays in the box', async () => {
     show();
     await screen.findByTestId('member-bob@example.com');
+    fireEvent.click(screen.getByTestId('add-member'));
+    fireEvent.click(screen.getByTestId('add-mode-guest'));
     fireEvent.change(screen.getByTestId('invite-emails'), { target: { value: 'fay@example.com, not-an-address' } });
     fireEvent.click(screen.getByTestId('invite-guests'));
     await screen.findByTestId('invite-results');
@@ -137,7 +156,8 @@ describe('Members', () => {
     expect(screen.getByTestId('invite-results').textContent).toContain('invited as a chat guest');
     expect(screen.getByTestId('invite-results').textContent).toContain('not an email address');
     expect((screen.getByTestId('invite-emails') as HTMLTextAreaElement).value).toBe('not-an-address');
-    expect(document.body.textContent).toContain('Guests use Chat only.');
+    expect(document.body.textContent).toContain('Chat guests use Chat only.');
+    fireEvent.click(screen.getByTestId('add-mode-invite'));
     fireEvent.change(screen.getByTestId('invite-emails'), { target: { value: 'gil@example.com' } });
     fireEvent.click(screen.getByTestId('invite-people'));
     await waitFor(() => expect(calls.filter((c) => c.method === 'POST' && c.path.endsWith('/invites'))).toHaveLength(2));
@@ -146,23 +166,29 @@ describe('Members', () => {
 
   it('creates a member at username@domain on the primary verified domain, the username suggested from the name', async () => {
     show();
-    fireEvent.click(await screen.findByTestId('add-create'));
+    fireEvent.click(await screen.findByTestId('add-member'));
     await waitFor(() => expect((screen.getByTestId('create-domain') as HTMLSelectElement).value).toBe('acme.com'));
     expect([...(screen.getByTestId('create-domain') as HTMLSelectElement).options].map((o) => o.value)).toEqual(['acme.com', 'acme.freeflow.im']);
     fireEvent.change(screen.getByTestId('create-name'), { target: { value: 'Bea Lin' } });
     expect((screen.getByTestId('create-username') as HTMLInputElement).value).toBe('bea.lin');
+    expect(screen.getByTestId('create-preview').textContent).toContain('bea.lin@acme.com');
+    fireEvent.change(screen.getByTestId('create-domain'), { target: { value: 'acme.freeflow.im' } });
+    expect(screen.getByTestId('create-preview').textContent).toContain('bea.lin@acme.freeflow.im');
+    fireEvent.change(screen.getByTestId('create-domain'), { target: { value: 'acme.com' } });
     expect((screen.getByTestId('create-submit') as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(screen.getByTestId('create-backup'), { target: { value: 'bea@gmail.example' } });
     fireEvent.click(screen.getByTestId('create-submit'));
-    expect((await screen.findByTestId('create-done')).textContent).toBe('Created bea.lin@acme.com. A setup link went to bea@gmail.example.');
+    expect((await screen.findByTestId('add-done')).textContent).toBe('Created bea.lin@acme.com. A setup link went to bea@gmail.example.');
     expect(calls.find((c) => c.method === 'POST' && c.path === '/v1/workspaces/o1/created-members')!.body).toEqual({ displayName: 'Bea Lin', username: 'bea.lin', domain: 'acme.com', backupEmail: 'bea@gmail.example' });
-    expect((screen.getByTestId('create-name') as HTMLInputElement).value).toBe('');
+    // The dialog closes and the roster is read again, so the new member shows at once.
+    expect(screen.queryByTestId('add-member-modal')).toBeNull();
+    expect(calls.filter((c) => (c.path.split('?')[0] ?? '').endsWith('/members')).length).toBeGreaterThan(1);
   });
 
   it('shows the server\'s refusal and keeps what was typed', async () => {
     createAnswer = { status: 409, body: { error: { code: 'username_taken', message: 'bea@acme.com is already taken.' } } };
     show();
-    fireEvent.click(await screen.findByTestId('add-create'));
+    fireEvent.click(await screen.findByTestId('add-member'));
     await waitFor(() => expect((screen.getByTestId('create-domain') as HTMLSelectElement).value).toBe('acme.com'));
     fireEvent.change(screen.getByTestId('create-name'), { target: { value: 'Bea' } });
     fireEvent.change(screen.getByTestId('create-username'), { target: { value: 'Bea' } });
@@ -180,6 +206,60 @@ describe('Members', () => {
     fireEvent.click(screen.getByTestId('resend-hal@acme.com'));
     await waitFor(() => expect(calls.some((c) => c.method === 'POST' && c.path === '/v1/workspaces/o1/created-members/a-hal/setup-link')).toBe(true));
     expect((await screen.findByText('sent again'))).toBeTruthy();
+  });
+
+  it('makes a native agent with its picture, which shows in the roster', async () => {
+    show();
+    fireEvent.click(await screen.findByTestId('add-member'));
+    fireEvent.click(screen.getByTestId('add-kind-agent'));
+    fireEvent.change(screen.getByTestId('agent-name'), { target: { value: 'Scout Bot' } });
+    await waitFor(() => expect(screen.getByTestId('agent-preview').textContent).toContain('scout.bot@acme.com'));
+    fireEvent.change(screen.getByTestId('agent-picture-file'), { target: { files: [new File(['x'], 'a.png', { type: 'image/png' })] } });
+    fireEvent.click(screen.getByTestId('agent-submit'));
+    expect((await screen.findByTestId('add-done')).textContent).toContain('Created Scout.');
+    expect(calls.find((c) => c.method === 'POST' && c.path === '/v1/workspaces/o1/agents/hosted')!.body).toEqual({ name: 'Scout Bot' });
+    expect(calls.some((c) => c.method === 'POST' && c.path === '/v1/workspaces/o1/assistant/avatar?agent=u-scout')).toBe(true);
+    expect(calls.some((c) => c.path.endsWith('/agent-invites'))).toBe(false);
+  });
+
+  it('an external agent: a one-time code, then its connection steps with the name it joins as', async () => {
+    show();
+    fireEvent.click(await screen.findByTestId('add-member'));
+    fireEvent.click(screen.getByTestId('add-kind-agent'));
+    fireEvent.change(screen.getByTestId('agent-name'), { target: { value: "Bob's Builder" } });
+    fireEvent.click(screen.getByTestId('agent-external'));
+    expect(screen.queryByTestId('agent-picture-file')).toBeNull();
+    fireEvent.click(screen.getByTestId('agent-submit'));
+    const command = await screen.findByTestId('connect-command');
+    expect(command.textContent).toBe("npx flow-agent-bridge flow-ABCD-EFGH --name 'Bob'\\''s Builder' --handle bob-s-builder");
+    expect(calls.some((c) => c.path.endsWith('/agents/hosted'))).toBe(false);
+    fireEvent.click(screen.getByTestId('connect-tab-mcp'));
+    expect((await screen.findByTestId('connect-url')).textContent).toBe('https://app.test/mcp');
+    expect(screen.getByTestId('connect-prompt').textContent).toContain('claude mcp add --transport http freeflow https://app.test/mcp');
+    fireEvent.click(screen.getByTestId('connect-done'));
+    expect(screen.queryByTestId('connect-agent-modal')).toBeNull();
+  });
+
+  it('Create inbox: an agent with no mailbox gets one through the provision route; a person’s assistant has none to make', async () => {
+    show();
+    const btn = await screen.findByTestId('create-inbox-agent-u-hosty@agents.flow.local');
+    expect(screen.queryByTestId('create-inbox-agent-u-botty@agents.flow.local')).toBeNull();
+    fireEvent.click(btn);
+    await waitFor(() => expect(calls.some((c) => c.method === 'POST' && c.path === '/v1/workspaces/o1/accounts/a-hosty/provision')).toBe(true));
+    expect((await screen.findByTestId('mail-agent-u-hosty@agents.flow.local')).textContent).toBe('setting up…');
+    expect(screen.queryByTestId('create-inbox-agent-u-hosty@agents.flow.local')).toBeNull();
+  });
+
+  it('a person’s assistant has no address and shows No inbox, with nothing for an admin to make', async () => {
+    members.push(member('Ada', { isAgent: true, kind: 'personal_agent', agentRuntime: 'hosted', email: 'agent-u-ada@agents.flow.local', sponsorId: 'u-bob' }));
+    accounts.push(account('Ada', { kind: 'personal_agent', address: null, hosted: false, agentRuntime: 'hosted', sponsorId: 'u-bob' }));
+    show();
+    const key = 'agent-u-ada@agents.flow.local';
+    expect((await screen.findByTestId(`address-${key}`)).textContent).toBe('No inbox');
+    expect(screen.queryByTestId(`create-inbox-${key}`)).toBeNull();
+    expect(screen.getByTestId(`kind-${key}`).textContent).toBe('Assistant');
+    expect(screen.getByTestId(`sponsor-${key}`).textContent).toBe('of Bob');
+    expect(screen.queryByTestId(`remove-${key}`)).toBeNull();
   });
 
   it('suggests a username from a display name', () => {
@@ -201,7 +281,7 @@ describe('Members', () => {
   it('runs the bulk actions: mailboxes for everyone, and every member a guest after a confirmation', async () => {
     show();
     await screen.findByTestId('provision-all');
-    expect(screen.getByTestId('provision-count').textContent).toBe('4 native accounts; guests get none');
+    expect(screen.getByTestId('provision-count').textContent).toBe('5 native accounts; guests get none');
     fireEvent.click(screen.getByTestId('provision-all'));
     await waitFor(() => expect(calls.some((c) => c.method === 'POST' && c.path === '/v1/workspaces/o1/provision')).toBe(true));
     expect((await screen.findByText('Setting up 2 mailboxes.'))).toBeTruthy();
@@ -217,6 +297,23 @@ describe('Members', () => {
     await screen.findByTestId('member-bob@example.com');
     expect(screen.queryByTestId('mail-bob@example.com')).toBeNull();
     expect(screen.queryByTestId('provision-all')).toBeNull();
+  });
+});
+
+describe('labels', () => {
+  it('names each kind shortly, and hides synthetic addresses', () => {
+    expect(kindLabel(member('A'), account('A'))).toBe('Person');
+    expect(kindLabel(member('A', { kind: 'guest' }), account('A', { kind: 'guest' }))).toBe('Guest');
+    expect(kindLabel(member('A', { isAgent: true }), account('A', { agentRuntime: 'hosted' }))).toBe('Agent');
+    expect(kindLabel(member('A', { isAgent: true }), account('A'))).toBe('External agent');
+    expect(kindLabel(member('A', { isAgent: true, kind: 'personal_agent', agentRuntime: 'hosted' }), undefined)).toBe('Assistant');
+    expect(kindLabel(member('A', { isAgent: true, kind: 'personal_agent' }), undefined)).toBe('Personal agent');
+    expect(visibleEmail('agent-01a1@agents.flow.local')).toBeNull();
+    expect(visibleEmail('u1@hidden.invalid')).toBeNull();
+    expect(visibleEmail('bea@example.com')).toBe('bea@example.com');
+    expect(agentHandle('Scout Bot')).toBe('scout-bot');
+    expect(addressLocal(agentHandle('Scout Bot'))).toBe('scout.bot');
+    expect(bridgeCommand({ code: 'c', command: 'npx flow-agent-bridge c', expiresAt: '' }, 'Scout')).toBe('npx flow-agent-bridge c --name Scout --handle scout');
   });
 });
 

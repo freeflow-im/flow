@@ -27,9 +27,9 @@ export function Row({ label, help, children, testid }: { label: string; help?: R
 
 export const ErrorLine = ({ error, testid }: { error: string | null; testid?: string }) => (error ? <p className="text-xs text-danger" data-testid={testid ?? 'error'}>{error}</p> : null);
 
-export function Select<V extends string>({ value, options, disabled, onChange, testid }: { value: V; options: { value: V; label: string }[]; disabled?: boolean; onChange(v: V): void; testid?: string }) {
+export function Select<V extends string>({ value, options, disabled, onChange, testid, compact, label }: { value: V; options: { value: V; label: string }[]; disabled?: boolean; onChange(v: V): void; testid?: string; compact?: boolean; label?: string }) {
   return (
-    <select className="rounded-md border border-border bg-white px-2 py-1 text-sm disabled:opacity-50" value={value} disabled={disabled} onChange={(e) => onChange(e.target.value as V)} data-testid={testid}>
+    <select aria-label={label} className={`rounded-md border border-border bg-white disabled:opacity-50 ${compact ? 'px-1.5 py-0.5 text-xs' : 'px-2 py-1 text-sm'}`} value={value} disabled={disabled} onChange={(e) => onChange(e.target.value as V)} data-testid={testid}>
       {options.map((o) => (
         <option key={o.value} value={o.value}>
           {o.label}

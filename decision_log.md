@@ -1,5 +1,15 @@
 # Decision log
 
+## 2026-11-15 — Admin › Members: Add member maps onto the existing agent kinds (mapping proposed in PR; inbox default is an operator ruling)
+
+- **Native agent** in the Add member dialog = the hosted shared agent (`POST /agents/hosted`), made at once with its name
+  and picture. **External agent** = the existing connection paths (one-time invite code with `npx flow-agent-bridge`, or
+  MCP with OAuth consent); no new mechanics, so the member appears when the agent connects, not at Create. The bridge's
+  `--name`/`--handle` flags carry the admin's chosen name, so the address preview holds.
+- **Agents keep getting an inbox by default** (Scott, 2026-11-15, reaffirming 2026-11-09). "Create inbox" in the roster is
+  for a shared agent whose mailbox is missing or whose setup stopped, through the existing provision route; a person's
+  assistant gets its address when its person names it.
+
 ## 2026-11-13 — Side panel: one per app; a dropped file is a link only inside the sender's domain (operator ruling)
 
 - **Ruling (Scott):** each app has its own side panel (Calendar, Docs, the anchored assistant); Home does not share one
