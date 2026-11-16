@@ -264,6 +264,8 @@ export type AccountState = (typeof ACCOUNT_STATES)[number];
 export interface AccountAddressesDTO {
   address: string | null;
   others: { address: string; removable: boolean }[];
+  /** The domains a new alias can be on: the organization's own with mail on, and for an agent its platform one too. */
+  domains: string[];
 }
 
 export interface AccountDTO {

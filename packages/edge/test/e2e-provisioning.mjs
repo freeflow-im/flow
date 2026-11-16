@@ -113,7 +113,10 @@ r=await api(A.token,'POST',`/v1/workspaces/${W}/provision`,{});t('everyone has a
 // Addresses (platform.md §3.2, decision_log 2026-11-16): an alias, and a changed address that mail is sent as; the mailbox
 // keeps logging in as the address it was made with.
 const AP=`/v1/workspaces/${W}/accounts/${bob.a?.id}`;
-r=await api(Bo.token,'POST',`${AP}/addresses`,{address:`sales@${DOM}`});t('a member cannot add addresses',r.s===403,r.s);
+r=await api(Bo.token,'POST',`${AP}/addresses`,{address:`sales@${DOM}`});t('a member cannot use the admin route',r.s===403,r.s);
+r=await api(Bo.token,'POST',`/v1/workspaces/${W}/me/addresses`,{address:`bobby@${DOM}`});t('but adds an alias of his own',r.s===201&&r.j.others?.some(o=>o.address===`bobby@${DOM}`&&o.removable)&&r.j.domains?.includes(DOM),r.s+' '+JSON.stringify(r.j).slice(0,140));
+r=await api(Bo.token,'DELETE',`/v1/workspaces/${W}/me/addresses/${encodeURIComponent(`bobby@${DOM}`)}`);t('and removes it',r.s===200&&!r.j.others?.some(o=>o.address===`bobby@${DOM}`),r.s+' '+JSON.stringify(r.j).slice(0,140));
+r=await api(AGT,'POST',`/v1/workspaces/${W}/me/addresses`,{address:`botty@${DOM}`});t('an agent cannot add its own',r.s===403,r.s+' '+JSON.stringify(r.j).slice(0,100));
 r=await api(A.token,'POST',`${AP}/addresses`,{address:`Sales@${DOM}`});t('Ann gives Bob an alias',r.s===201&&r.j.address===`bob@${DOM}`&&r.j.others?.[0]?.address===`sales@${DOM}`,r.s+' '+JSON.stringify(r.j).slice(0,140));
 r=await api(A.token,'POST',`/v1/workspaces/${W}/accounts/${ann?.id}/addresses`,{address:`sales@${DOM}`});t('nobody else can have it',r.s===409&&r.j.error?.code==='address_taken',r.s+' '+JSON.stringify(r.j).slice(0,120));
 r=await api(A.token,'PUT',`${AP}/address`,{address:`robert@${DOM}`});t('Ann changes Bob\'s address',r.s===200&&r.j.account?.address===`robert@${DOM}`&&r.j.addresses?.others?.some(o=>o.address===`bob@${DOM}`&&!o.removable),r.s+' '+JSON.stringify(r.j).slice(0,170));

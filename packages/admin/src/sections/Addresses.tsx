@@ -10,13 +10,12 @@ import { Button, ErrorLine, Select } from '../components/ui';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-export function AddressesModal({ org, account, name, isAgent, onClose, onChanged }: { org: WorkspaceDTO; account: AccountDTO; name: string; isAgent: boolean; onClose(): void; onChanged(): Promise<unknown> | void }) {
+export function AddressesModal({ org, account, name, onClose, onChanged }: { org: WorkspaceDTO; account: AccountDTO; name: string; onClose(): void; onChanged(): Promise<unknown> | void }) {
   const qc = useQueryClient();
   const key = ['addresses', org.id, account.id];
   const list = useQuery({ queryKey: key, queryFn: () => adminApi.addresses(org.id, account.id) });
-  const domains = useQuery({ queryKey: ['domains', org.id], queryFn: () => adminApi.domains(org.id) });
-  // A person's addresses are on the organization's own domains with mail on; an agent's may be on the platform one too.
-  const usable = (domains.data ?? []).filter((d) => d.verified && d.atProvider && (d.kind === 'own' || isAgent)).map((d) => d.domain);
+  // The domains an alias can be on (the directory decides: its own with mail on, and for an agent its platform one too).
+  const usable = list.data?.domains ?? [];
   const [local, setLocal] = useState('');
   const [domain, setDomain] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -96,7 +95,7 @@ export function AddressesModal({ org, account, name, isAgent, onClose, onChanged
             </Button>
           </form>
         ) : (
-          domains.isSuccess && <p className="text-xs text-muted">Turn on mail for a domain of your own (Domains & mail) to add addresses.</p>
+          list.isSuccess && <p className="text-xs text-muted">Turn on mail for a domain of your own (Domains & mail) to add addresses.</p>
         )}
         <ErrorLine error={error} testid="addresses-error" />
       </div>

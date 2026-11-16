@@ -180,7 +180,8 @@ The directory holds the organization row, its slugs and domains. The Org object 
   addresses are kept per account, not in `addresses`: two workspaces may each have a member linking the same mailbox.
 - **Aliases and changed addresses** (decision_log 2026-11-16). An owner or admin can give a member with a hosted
   mailbox more addresses (aliases), each a forwarder at the mail provider to the mailbox, and can make any of them
-  the address the member goes by. A person's are on the organization's own domains with mail on; an agent's may also
+  the address the member goes by. A person can add and remove their own aliases (not change the address they go by;
+  an agent neither). A person's are on the organization's own domains with mail on; an agent's may also
   be on the platform subdomain. MXRoute cannot rename a mailbox, so a changed address is an alias: the mailbox keeps
   the address it was made with (`accounts.mailbox_address`) as its login, mail is sent as the new one, and the old one
   still delivers. The mailbox's own address cannot be removed; aliases can, and are deleted with the mailbox. Aliases

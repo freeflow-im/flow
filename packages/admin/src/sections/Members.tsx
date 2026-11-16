@@ -363,7 +363,7 @@ function MemberRow({ org, member: m, account: a, sponsorName, meId, hostedMail, 
           )}
         </div>
         <ErrorLine error={error} testid={`error-${key}`} />
-        {addresses && a && <AddressesModal org={org} account={a} name={m.displayName} isAgent={m.isAgent} onClose={() => setAddresses(false)} onChanged={onChanged} />}
+        {addresses && a && <AddressesModal org={org} account={a} name={m.displayName} onClose={() => setAddresses(false)} onChanged={onChanged} />}
       </td>
     </tr>
   );

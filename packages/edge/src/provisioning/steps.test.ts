@@ -477,7 +477,7 @@ describe('aliases and changed addresses (platform.md §3.2, decision_log 2026-11
     const { org, ann } = await setUp();
     const bob = join(org, user('Bob'));
     await drain();
-    expect(await core.addAlias(org, ann.id, ' Sales@Acme.test ')).toEqual({ address: 'ann@acme.test', others: [{ address: 'sales@acme.test', removable: true }] });
+    expect(await core.addAlias(org, ann.id, ' Sales@Acme.test ')).toEqual({ address: 'ann@acme.test', others: [{ address: 'sales@acme.test', removable: true }], domains: ['acme.test'] });
     expect(provider.aliases.get('sales@acme.test')).toBe('ann@acme.test');
     expect(core.accountByAddress('sales@acme.test')?.id).toBe(ann.id);
     await expect(core.addAlias(org, bob.id, 'sales@acme.test')).rejects.toMatchObject({ code: 'address_taken' });
@@ -491,7 +491,7 @@ describe('aliases and changed addresses (platform.md §3.2, decision_log 2026-11
     await expect(core.addAlias(org, ann.id, 'info@acme.test')).rejects.toMatchObject({ code: 'mail_provider_bad_request' });
     expect(core.accountByAddress('info@acme.test')).toBeNull();
     await expect(core.removeAlias(org, ann.id, 'ann@acme.test')).rejects.toMatchObject({ code: 'address_in_use' });
-    expect(await core.removeAlias(org, ann.id, 'sales@acme.test')).toEqual({ address: 'ann@acme.test', others: [] });
+    expect(await core.removeAlias(org, ann.id, 'sales@acme.test')).toEqual({ address: 'ann@acme.test', others: [], domains: ['acme.test'] });
     expect(provider.aliases.has('sales@acme.test')).toBe(false);
     expect(core.accountByAddress('sales@acme.test')).toBeNull();
   });
@@ -501,12 +501,12 @@ describe('aliases and changed addresses (platform.md §3.2, decision_log 2026-11
     const after = await core.changeAddress(org, ann.id, 'scott@acme.test');
     expect(after.address).toBe('scott@acme.test');
     expect(provider.aliases.get('scott@acme.test')).toBe('ann@acme.test');
-    expect(core.addressesOf(ann.id)).toEqual({ address: 'scott@acme.test', others: [{ address: 'ann@acme.test', removable: false }] });
+    expect(core.addressesOf(ann.id)).toEqual({ address: 'scott@acme.test', others: [{ address: 'ann@acme.test', removable: false }], domains: ['acme.test'] });
     expect(core.accountByAddress('ann@acme.test')?.id).toBe(ann.id);
     expect(core.provisioningTarget(ann.id)!.mailboxAddress).toBe('ann@acme.test');
     // Back to the mailbox's own address: no forwarder needed, the changed one stays an alias.
     expect((await core.changeAddress(org, ann.id, 'ann@acme.test')).address).toBe('ann@acme.test');
-    expect(core.addressesOf(ann.id)).toEqual({ address: 'ann@acme.test', others: [{ address: 'scott@acme.test', removable: true }] });
+    expect(core.addressesOf(ann.id)).toEqual({ address: 'ann@acme.test', others: [{ address: 'scott@acme.test', removable: true }], domains: ['acme.test'] });
     // A mailbox written again (its Mail row lost) sends as the address it goes by and logs in as the mailbox.
     await core.changeAddress(org, ann.id, 'scott@acme.test');
     mail.delete(ann.id);

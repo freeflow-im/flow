@@ -1,7 +1,7 @@
 // Connecting a mail account (email, then the provider's servers filled in, then name and password; Advanced for the
 // servers themselves) and changing one (name, password, servers, removing it).
 import { useState, type FormEvent, type ReactNode } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertCircle, ChevronDown, ChevronRight, ExternalLink, Loader2, Trash2 } from 'lucide-react';
 import { MailApiError, mailApi, mailWorkspace, type MailAccount, type ProviderPreset, type Security, type ServerSettings, type TabCategory } from '../api';
 import { isEmail } from '../lib/addresses';
@@ -370,6 +370,71 @@ function WorkspaceAddress({ email }: { email: string }) {
   );
 }
 
+/**
+ * The organization's mailbox's addresses (platform.md §3.2, decision_log 2026-11-16): the main one, which mail is sent
+ * as, and the others that deliver to it. A person adds and removes their own aliases; an admin changes the main one.
+ */
+function HostedAddresses() {
+  const org = mailWorkspace();
+  const qc = useQueryClient();
+  const key = ['suite', 'addresses', org];
+  const list = useQuery({ queryKey: key, queryFn: () => suite.addresses(org!), enabled: !!org });
+  const [local, setLocal] = useState('');
+  const [domain, setDomain] = useState<string | null>(null);
+  const done = (out: Awaited<ReturnType<typeof suite.addresses>>) => qc.setQueryData(key, out);
+  const add = useMutation({ mutationFn: (address: string) => suite.addAddress(org!, address), onSuccess: (out) => { done(out); setLocal(''); } });
+  const remove = useMutation({ mutationFn: (address: string) => suite.removeAddress(org!, address), onSuccess: done });
+  const data = list.data;
+  if (!org || !data) return null;
+  const chosen = domain ?? data.domains[0] ?? '';
+  const busy = add.isPending || remove.isPending;
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (local.trim() && chosen) add.mutate(`${local.trim().toLowerCase()}@${chosen}`);
+  };
+  return (
+    <div className="flex flex-col gap-2 text-[14px]" data-testid="hosted-addresses">
+      <Label>Your addresses</Label>
+      <p className="text-muted">Mail to any of these arrives here. You send from {data.address}; an admin can change that.</p>
+      {data.others.length > 0 && (
+        <ul className="flex flex-col gap-1">
+          {data.others.map((o) => (
+            <li key={o.address} className="flex items-center gap-2" data-testid={`hosted-address-${o.address}`}>
+              <span className="min-w-0 flex-1 truncate">{o.address}</span>
+              {o.removable ? (
+                <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={() => remove.mutate(o.address)} data-testid={`hosted-address-remove-${o.address}`}>
+                  Remove
+                </Button>
+              ) : (
+                <span className="text-[12px] text-muted" title="Your mailbox was made with this address; it always delivers.">mailbox</span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {data.domains.length > 0 && (
+        // Not a nested <form>: the editor is one. Enter adds.
+        <div className="flex flex-wrap items-center gap-2" onKeyDown={(e) => { if (e.key === 'Enter') submit(e as unknown as FormEvent); }}>
+          <Input className="w-40" placeholder="name" aria-label="New address, before @" value={local} onChange={(e) => setLocal(e.target.value)} data-testid="hosted-address-local" />
+          <span className="text-muted">@</span>
+          {data.domains.length > 1 ? (
+            <select className="rounded-md border border-border bg-transparent px-2 py-1" aria-label="Domain" value={chosen} onChange={(e) => setDomain(e.target.value)} data-testid="hosted-address-domain">
+              {data.domains.map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
+          ) : (
+            <span>{chosen}</span>
+          )}
+          <Button type="button" size="sm" variant="outline" disabled={busy || !local.trim()} onClick={(e) => submit(e as unknown as FormEvent)} data-testid="hosted-address-add">
+            {add.isPending ? 'Adding…' : 'Add address'}
+          </Button>
+        </div>
+      )}
+      <ErrorBox error={add.error ?? remove.error ?? list.error} />
+    </div>
+  );
+}
+
 function AccountEditor({ account, focusPassword, onSaved, onRemoved }: { account: MailAccount; focusPassword: boolean; onSaved(a: MailAccount): void; onRemoved(): void }) {
   const [displayName, setDisplayName] = useState(account.displayName);
   const [password, setPassword] = useState('');
@@ -416,6 +481,7 @@ function AccountEditor({ account, focusPassword, onSaved, onRemoved }: { account
         <Input id="edit-email" value={account.email} disabled />
       </Field>
       {!hosted && <WorkspaceAddress email={account.email} />}
+      {hosted && <HostedAddresses />}
       <Field label="Your name" htmlFor="edit-name">
         <Input id="edit-name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
       </Field>

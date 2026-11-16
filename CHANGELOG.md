@@ -13,6 +13,7 @@ This file keeps two things:
 ## Parity
 
 - **Picking the address coworkers see is on web only (2026-11-15).** A person without a hosted address picks a linked mailbox in web Mail's account settings; macOS and iOS have no Mail and show no addresses (deliberate).
+- **Your own email aliases are managed on web only (2026-11-16).** Members add and remove aliases in web Mail's account settings, and admins manage addresses in web Admin; macOS and iOS have no Mail or Admin (deliberate).
 - **Meet and huddle calls run on web and desktop only (2026-11-16, docs/specs/meetings.md).** The Meet app and its rooms run in the browser and the desktop shell; on macOS and iOS the Huddle button and ring card open the room in the browser (gap to close in Meet phase 6, native call screens).
 - **Channels an agent made are nested under the agent on web only (2026-11-15).** Web Home and Chat (and the desktop shell) list them under the agent's row; macOS and iOS still list them under Channels (gap to close; the data is `createdBy`, already on every client).
 - **The side panel is on web only (2026-11-13, docs/specs/side-panel.md).** Mail on the web and the desktop shell shows Calendar and Docs in a side panel; macOS has none (gap to close later), and iOS has none by design (no room beside the main view).

@@ -3,8 +3,9 @@
 ## 2026-11-16 — Aliases, changed addresses, and the first domain made primary (operator rulings)
 
 - **Ruling (Scott):** a member's hosted mailbox can have more addresses (aliases), and its address can be changed.
-  Built as owner and admin actions on Members (platform.md §3.2). Not built: members changing their own; admin-only
-  was the default chosen while building, not a ruling.
+  Owners and admins do both on Members (platform.md §3.2).
+- **Ruling (Scott):** members can add and remove their own aliases (Mail › account settings). Changing the address a
+  member sends from stays with owners and admins; agents cannot change their own addresses.
 - **How a change works:** MXRoute's API has forwarders but no mailbox rename. A changed address is a forwarder to the
   mailbox, which keeps its first address as its login; Mail sends as the new address (MXRoute only checks that the
   From address is one it delivers). The old address keeps delivering. Copying mail into a new mailbox was the other

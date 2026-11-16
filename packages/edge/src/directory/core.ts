@@ -386,7 +386,11 @@ export class DirectoryCore {
     for (const a of this.rows('SELECT address FROM aliases WHERE account_id = ? ORDER BY created_at, address', accountId)) {
       if (!same(a.address as string)) others.push({ address: a.address as string, removable: true });
     }
-    return { address, others };
+    const agent = !!this.userById(row.user_id as string)?.is_agent;
+    const domains = mailbox ? this.domainsOf(row.organization_id as string)
+      .filter((d) => d.verified && d.providerAt != null && (d.kind === 'own' || agent))
+      .sort((a, b) => Number(b.primary) - Number(a.primary) || a.domain.localeCompare(b.domain)).map((d) => d.domain) : [];
+    return { address, others, domains };
   }
 
   /** A native account of the organization with its hosted mailbox made, and that mailbox's address. */

@@ -5,7 +5,7 @@ import { Hono, type Context } from 'hono';
 import type { ZodTypeAny, z } from 'zod';
 import { AccountAddressBody, BulkAccountKindBody, CreateMemberBody, SetAccountKindBody, type AccountAddressesDTO, type AccountDTO, type AccountKindResult, type BulkAccountKindResult, type CreateMemberResultDTO, type PendingSetupDTO, type UserDTO } from '@flow/shared';
 import { ApiError, badRequest } from '../errors';
-import { directory, type AuthEnv } from './auth';
+import { directory, resolveCaller, type AuthEnv } from './auth';
 import { adminCallerOf, adminOf } from './domains';
 import type { Calendar } from '../calendar/object';
 import type { Mail } from '../imap/object';
@@ -81,6 +81,34 @@ accountRoutes.post('/v1/workspaces/:id/accounts/:accountId/addresses', async (c)
 accountRoutes.delete('/v1/workspaces/:id/accounts/:accountId/addresses/:address', async (c) => {
   const id = await adminOf(c as never, 'remove addresses');
   return c.json(await directory(c, 'removeAlias', id, c.req.param('accountId'), decodeURIComponent(c.req.param('address'))) satisfies AccountAddressesDTO);
+});
+
+/** The caller's own aliases (decision_log 2026-11-16): any member may list, add and remove theirs. Changing the address
+ * they go by stays with owners and admins. */
+async function myAccount(c: C): Promise<{ id: string; accountId: string }> {
+  const id = c.req.param('id') ?? '';
+  const who = await resolveCaller(c as never, id);
+  if (!who.user) throw new ApiError(401, 'unauthorized', 'missing bearer token');
+  if (!who.account) throw new ApiError(403, 'no_account', 'not a member of this organization');
+  // People only: an agent's addresses are its sponsor's or an admin's to change.
+  if (who.user.isAgent) throw new ApiError(403, 'forbidden', 'an agent cannot change its own addresses');
+  return { id, accountId: who.account.id };
+}
+
+accountRoutes.get('/v1/workspaces/:id/me/addresses', async (c) => {
+  const me = await myAccount(c);
+  return c.json(await directory(c, 'addressesOf', me.accountId) satisfies AccountAddressesDTO);
+});
+
+accountRoutes.post('/v1/workspaces/:id/me/addresses', async (c) => {
+  const me = await myAccount(c);
+  const body = await bodyOf(c, AccountAddressBody);
+  return c.json(await directory(c, 'addAlias', me.id, me.accountId, body.address) satisfies AccountAddressesDTO, 201);
+});
+
+accountRoutes.delete('/v1/workspaces/:id/me/addresses/:address', async (c) => {
+  const me = await myAccount(c);
+  return c.json(await directory(c, 'removeAlias', me.id, me.accountId, decodeURIComponent(c.req.param('address'))) satisfies AccountAddressesDTO);
 });
 
 /** The address the account goes by: one of its others, or a new one (made an alias first). Mail is sent as it from now on. */
