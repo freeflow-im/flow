@@ -883,6 +883,11 @@ export const SetAccountKindBody = z.object({
 });
 export type SetAccountKindBody = z.infer<typeof SetAccountKindBody>;
 
+/** PUT /v1/workspaces/:id/me/address: the linked mailbox a person without a hosted address goes by (platform.md §3.2);
+ * null for none. */
+export const SetLinkedAddressBody = z.object({ address: z.string().trim().toLowerCase().email().max(320).nullable() });
+export type SetLinkedAddressBody = z.infer<typeof SetLinkedAddressBody>;
+
 /** POST /v1/workspaces/:id/accounts/kind: every account whose role is `member` made a guest; owners and admins keep theirs. */
 export const BulkAccountKindBody = z.object({
   kind: z.literal('guest'),

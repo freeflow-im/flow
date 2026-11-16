@@ -11,7 +11,10 @@
 - **Ruling (Scott):** a custom domain with mail turned on gives people hosted mailboxes and calendars on it. New agents
   are made on it; existing agents keep their address ("addresses never move", 2026-11-09).
 - **Ruling (Scott):** a person's address in the workspace is a linked mailbox they pick, never their login email
-  (`platform.md` §2.1). A person with no linked mailbox has no address; invitations to them stay in FreeFlow.
+  (`platform.md` §2.1). A person with no linked mailbox has no address.
+- **Ruling (Scott):** no calendar, no invitations. A person with no hosted or linked calendar gets no meeting
+  invitations from coworkers, shows as unknown in free/busy and has no booking page until they link a calendar. No
+  internal calendar is made for them.
 - **Ruling (Scott):** the existing people's mailboxes on platform subdomains are deleted, without a migration: nobody
   uses them. Scott's was copied to Gmail first (label `FreeFlow`, 18 messages, 2026-11-15).
 - **Why:** a free `freeflow.im` address for every person is a spam and support cost with no customer asking for it;

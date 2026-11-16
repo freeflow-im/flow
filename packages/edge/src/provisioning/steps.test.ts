@@ -407,6 +407,25 @@ describe("people's addresses (platform.md §3.2, decision_log 2026-11-15)", () =
     expect(core.accountById(cy.id)!.address).toBe('cy@beta.test');
   });
 
+  it('lets a person without a hosted address go by a linked mailbox, never an agent or a person with an address', async () => {
+    const org = newId();
+    core.reserveSlug('acme', org);
+    const ann = join(org, user('Ann'), 'owner');
+    const bot = join(org, user('Builder', 'builder'));
+    const cy = join(org, user('Cy'), 'member', 'guest');
+    expect(ann.linkedAddress).toBeNull();
+    expect(core.setLinkedAddress(ann.id, ' Ann@Gmail.example ')).toMatchObject({ address: null, linkedAddress: 'ann@gmail.example' });
+    expect(core.accountByAddress('ann@gmail.example')).toBeNull();
+    expect(core.setLinkedAddress(ann.id, null).linkedAddress).toBeNull();
+    expect(() => core.setLinkedAddress(bot.id, 'b@x.example')).toThrow(expect.objectContaining({ code: 'no_linked_address' }));
+    expect(() => core.setLinkedAddress(cy.id, 'c@x.example')).toThrow(expect.objectContaining({ code: 'no_linked_address' }));
+    core.setLinkedAddress(ann.id, 'ann@gmail.example');
+    await ownDomain(org, 'acme.test');
+    core.setPrimaryDomain(org, 'acme.test');
+    expect(core.accountById(ann.id)).toMatchObject({ address: 'ann@acme.test', linkedAddress: 'ann@gmail.example' });
+    expect(() => core.setLinkedAddress(ann.id, 'ann@gmail.example')).toThrow(expect.objectContaining({ code: 'has_address' }));
+  });
+
   it("takes people's hosted mail off the platform subdomain: address, mailbox and calendar gone at once; agents and own domains kept", async () => {
     const org = newId();
     core.reserveSlug('acme', org);

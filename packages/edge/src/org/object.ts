@@ -993,8 +993,10 @@ export class Org extends DurableObject<OrgEnv> {
     const changed: string[] = [];
     for (const a of answer.value) {
       const row = sql.exec('SELECT user_id, address FROM workspace_members WHERE workspace_id = ? AND account_id = ?', org, a.id).toArray()[0];
-      if (!row || (row.address ?? null) === a.address) continue;
-      sql.exec('UPDATE workspace_members SET address = ? WHERE workspace_id = ? AND account_id = ?', a.address, org, a.id);
+      // A person without a hosted address is shown and written to by the mailbox they linked (§3.2).
+      const shown = a.address ?? a.linkedAddress ?? null;
+      if (!row || (row.address ?? null) === shown) continue;
+      sql.exec('UPDATE workspace_members SET address = ? WHERE workspace_id = ? AND account_id = ?', shown, org, a.id);
       changed.push(row.user_id as string);
     }
     if (!changed.length) return 0;

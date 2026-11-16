@@ -360,6 +360,17 @@ export class DirectoryCore {
     return asked === 'personal_agent' ? 'native' : (asked ?? 'native');
   }
 
+  /** The linked mailbox a person without a hosted address goes by (§3.2), or null for none. The caller checked the
+   * person has linked it. An account with a hosted address, an agent's or a guest's has none to set. */
+  setLinkedAddress(accountId: string, address: string | null): AccountDTO {
+    const row = this.rows('SELECT a.address, a.kind, u.is_agent FROM accounts a JOIN users u ON u.id = a.user_id WHERE a.id = ?', accountId)[0];
+    if (!row) throw notFound('account not found');
+    if (row.is_agent || row.kind !== 'native') throw conflict('no_linked_address', 'only a member who is a person goes by a linked mailbox');
+    if (row.address) throw conflict('has_address', `this account goes by its hosted address, ${row.address as string}`);
+    this.sql.exec('UPDATE accounts SET linked_address = ? WHERE id = ?', address?.trim().toLowerCase() || null, accountId);
+    return this.accountById(accountId)!;
+  }
+
   /** Whether people get hosted addresses in the organization (platform.md §3.2, decision_log 2026-11-15): its primary
    * domain is its own, with mail turned on. On the platform subdomain only agents have addresses. */
   peopleHosted(organizationId: string): boolean {
@@ -455,6 +466,7 @@ export class DirectoryCore {
       state: a.state as AccountState,
       statusMessage: (a.status_message as string | null) ?? null,
       hosted: a.hosted_at != null,
+      linkedAddress: (a.linked_address as string | null) ?? null,
       ...(a.sponsor_user_id || a.agent_mode ? { sponsorId: (a.sponsor_user_id as string | null) ?? null, agentMode: (a.agent_mode as AgentMode | null) ?? null, agentRuntime: a.agent_mode ? ((a.agent_runtime as AgentRuntime | null) ?? 'external') : null } : {}),
       createdAt: iso(a.created_at),
     }));

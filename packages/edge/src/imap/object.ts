@@ -2053,6 +2053,13 @@ export class Mail extends DurableObject<MailEnv> {
     if (wrong) throw new Error(wrong);
   }
 
+  /** The mailboxes the account linked (every one but the hosted mailbox), oldest first: what a person without a hosted
+   * address may go by in the organization (platform.md §3.2). */
+  async linkedEmails(account: AccountDTO): Promise<string[]> {
+    this.provisioningOwner(account);
+    return this.sql.exec<{ email: string }>("SELECT email FROM accounts WHERE kind <> 'hosted' ORDER BY created_at").toArray().map((r) => r.email.toLowerCase());
+  }
+
   /** The hosted mailbox's row, or null. */
   async hostedAccount(account: AccountDTO): Promise<{ id: string; email: string } | null> {
     this.provisioningOwner(account);
