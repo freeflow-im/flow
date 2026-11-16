@@ -56,7 +56,7 @@ function world() {
     const res = await bookRoutes.request(`https://app.test${path}`, { method, headers: { 'cf-connecting-ip': ip, ...(body !== undefined ? { 'content-type': 'application/json' } : {}) }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) }, env as never);
     return { s: res.status, j: (await res.json()) as Record<string, any>, h: res.headers };
   };
-  return { cal, published, links, owner, guest };
+  return { cal, env, published, links, owner, guest };
 }
 
 let mails: string[];
@@ -161,6 +161,31 @@ describe('the guest scheduler', () => {
     expect((await w.guest('POST', `/v1/book/${token}`, { start: '2026-11-16T17:10:00Z', duration: 30, name: 'Cy', email: 'cy@example.com' }, '198.51.100.1')).s).toBe(409);
     expect((await w.guest('POST', `/v1/book/${token}`, { start: '2026-11-16T18:00:00Z', duration: 45, name: 'Cy', email: 'cy@example.com' }, '198.51.100.1')).s).toBe(400);
     expect((await w.guest('POST', `/v1/book/${token}`, { start: '2026-11-16T18:00:00Z', duration: 30, name: 'Cy', email: 'cy@example.com', website: 'x' }, '198.51.100.1')).s).toBe(400);
+  });
+
+  it('with FreeFlow Meet as the place, gives each booking its own meeting link, which moving it keeps', async () => {
+    const w = world();
+    const made: unknown[][] = [];
+    w.env.ORG = { idFromName: (n: string) => n, get: () => ({ createMeetingForAccount: async (...a: unknown[]) => (made.push(a), 'kqd-wmzt-fra') }) };
+    const { token, page } = await turnedOn(w, { location: { kind: 'meet', value: 'ignored' } });
+    expect(page.location).toEqual({ kind: 'meet', value: '' });
+    expect((await w.guest('GET', `/v1/book/${token}`)).j.page.location).toEqual({ kind: 'link', label: null });
+    const start = '2026-11-16T17:00:00.000Z';
+    const r = await w.guest('POST', `/v1/book/${token}`, { start, duration: 30, name: 'Bo Guest', email: 'bo@example.com' });
+    expect(r.s).toBe(201);
+    expect(made).toEqual([['acct-ann', '30 Minute Meet: Bo Guest']]);
+    const link = 'https://app.test/meet/kqd-wmzt-fra';
+    expect(r.j.booking.location).toBe(link);
+    const ev = (await w.owner('GET', '/v1/calendar/events?from=2026-11-16T00:00:00Z&to=2026-11-17T00:00:00Z')).j.events;
+    expect(ev[0].location).toBe(link);
+    expect(ev[0].description).toContain(`Join with FreeFlow Meet: ${link}`);
+    expect(mails[0]).toContain(link);
+    // Moving it keeps the same link; nothing new is made.
+    const manage = String(r.j.manageToken);
+    const moved = await w.guest('POST', `/v1/book/m/${manage}/reschedule`, { start: '2026-11-16T18:00:00.000Z', duration: 30 });
+    expect(moved.s).toBe(200);
+    expect(moved.j.booking.location).toBe(link);
+    expect(made).toHaveLength(1);
   });
 
   it('moves the same meeting and then cancels it by the guest\'s own link, which outlives a new page link', async () => {

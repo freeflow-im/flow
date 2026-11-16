@@ -121,6 +121,8 @@ let workspace: string | null = null;
 export const setCalendarWorkspace = (id: string | null) => {
   workspace = id;
 };
+/** The organization Calendar is showing: the suite bar's, else the one Chat selected. */
+export const calendarWorkspace = (): string | null => workspace ?? readActiveOrganization();
 /** A /v1/calendar (or /v1/mail: contacts) path, naming the organization. */
 export function inWorkspace(path: string): string {
   const id = workspace ?? readActiveOrganization();
@@ -171,7 +173,7 @@ export interface SchedulerConfig {
   incrementMin: number | null;
   busyCalendarIds: string[] | null;
   targetCalendarId: string | null;
-  location: { kind: 'text' | 'none'; value: string };
+  location: { kind: 'text' | 'none' | 'meet'; value: string };
 }
 /** The booking page: its settings and, once it has been turned on, its public link. */
 export interface SchedulerPage { page: SchedulerConfig; token: string | null; url: string | null; /** The title when `page.title` is '': "Meeting with <first name>". */ defaultTitle?: string }

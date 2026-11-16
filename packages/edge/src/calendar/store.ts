@@ -62,6 +62,8 @@ const SYNC_RUNS_KEEP = 200;
 const ADDED_COLUMNS: { add: string; then?: string }[] = [
   { add: 'ALTER TABLE calendars ADD COLUMN owner_address TEXT' },
   { add: 'ALTER TABLE calendars ADD COLUMN reparse INTEGER NOT NULL DEFAULT 1', then: 'UPDATE accounts SET calendars_at = 0' },
+  // meet_url (2026-11-16, Meet phase 3): a booking's own FreeFlow Meet link, when the page's location is FreeFlow Meet.
+  { add: 'ALTER TABLE scheduler_bookings ADD COLUMN meet_url TEXT' },
 ];
 
 export interface CalendarRow {

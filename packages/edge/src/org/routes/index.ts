@@ -691,6 +691,31 @@ export function registerRoutes(app: FastifyInstance): void {
     return mt.joinMeeting(id, req.user.id);
   });
 
+  // Hosts lock a meeting so no new guests come in (phase 3); members still join.
+  app.patch('/v1/meetings/:id', { preHandler: requireAuth }, async (req) => {
+    const { id } = req.params as { id: string };
+    const locked = (req.body as { locked?: unknown } | undefined)?.locked;
+    if (typeof locked !== 'boolean') throw badRequest('validation', 'locked: expected true or false');
+    return mt.setMeetingLocked(id, req.user.id, locked);
+  });
+
+  // A meeting's link for someone with no account (phase 3, ruling R2: guests go straight in). No sign-in: the code is
+  // the invitation, so both routes are capped per address, and joining per meeting too, against guessing and floods.
+  app.get('/v1/meetings/:id/guest', async (req) => {
+    if (!rateAllow(`meet-preview:${req.ip}`, 120, 10 * 60_000)) throw new ApiError(429, 'rate_limited', 'Too many tries. Wait a few minutes.');
+    const { id } = req.params as { id: string };
+    return mt.previewMeeting(id);
+  });
+  app.post('/v1/meetings/:id/guest', async (req) => {
+    const { id } = req.params as { id: string };
+    if (!rateAllow(`meet-guest:${req.ip}`, 20, 10 * 60_000) || !rateAllow(`meet-guest-room:${id}`, 100, 10 * 60_000)) {
+      throw new ApiError(429, 'rate_limited', 'Too many tries. Wait a few minutes.');
+    }
+    const name = (req.body as { name?: unknown } | undefined)?.name;
+    if (typeof name !== 'string') throw badRequest('validation', 'name: expected a string');
+    return mt.joinAsGuest(id, name);
+  });
+
   app.post('/v1/meetings/:id/leave', { preHandler: requireAuth }, async (req) => {
     const { id } = req.params as { id: string };
     await mt.leaveMeeting(id, req.user.id);

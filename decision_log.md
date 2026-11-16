@@ -32,6 +32,10 @@
   share, leave). Chat and huddles are left out of it, and LiveKit is untouched until phase 2.
 - RealtimeKit apps: `freeflow-meetings` (production) and `freeflow-meet-dev` (local); one account-owned token with
   Realtime Read + Admin. Details in docs/specs/meetings.md.
+- **Phase 3 guests (2026-11-16):** a meeting's link opens for anyone; a guest types a name and goes straight in (R2).
+  Guests use our own RTK preset `flow_guest` (`packages/edge/scripts/rtk-presets.mjs`), because RTK's `group_call_guest`
+  puts guests in a waiting room nobody can answer. **Guests cannot join huddles** (a conversation's call is for its
+  members). Guest routes are rate limited per address and per meeting; Turnstile is left for later.
 
 ## 2026-11-15 — Admin › Members: Add member maps onto the existing agent kinds (operator rulings)
 

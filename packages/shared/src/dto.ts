@@ -340,6 +340,8 @@ export interface MeetingDTO {
   createdAt: string;
   /** The conversation whose huddle this is, when it is one (Meet phase 2). */
   channelId: string | null;
+  /** A host locked it: no new guests may join (members still can). */
+  locked: boolean;
 }
 
 /** Someone in a live meeting, as RealtimeKit reports its active session. */
@@ -370,6 +372,29 @@ export interface MeetingJoinDTO {
   meeting: MeetingDTO;
   authToken: string;
   host: boolean;
+}
+
+/**
+ * GET /v1/meetings/:code/guest — what a meeting's link shows someone who is not signed in (Meet phase 3, the check
+ * screen): no ids, and only first names of who is in.
+ */
+export interface MeetingPreviewDTO {
+  code: string;
+  title: string;
+  /** First name of whoever made the meeting. */
+  hostName: string;
+  /** First names of who is in now. */
+  people: string[];
+  locked: boolean;
+  /** False for a huddle: a conversation's call is for its members only. */
+  guestsAllowed: boolean;
+}
+
+/** POST /v1/meetings/:code/guest — a guest's way in: the RealtimeKit token, with the meeting's title. */
+export interface MeetingGuestJoinDTO {
+  code: string;
+  title: string;
+  authToken: string;
 }
 
 export interface ChannelDTO {

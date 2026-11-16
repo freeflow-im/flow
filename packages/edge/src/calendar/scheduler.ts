@@ -33,7 +33,8 @@ export interface SchedulerConfig {
   busyCalendarIds: string[] | null;
   /** Where bookings go; null for the default calendar. */
   targetCalendarId: string | null;
-  location: { kind: 'text' | 'none'; value: string };
+  /** `meet`: each booking gets its own FreeFlow Meet link (Meet phase 3); its value is empty. */
+  location: { kind: 'text' | 'none' | 'meet'; value: string };
 }
 
 const WORKDAY: [number, number][] = [[9 * 60, 17 * 60]];
@@ -84,7 +85,7 @@ export const ConfigPatch = z.object({
   incrementMin: z.number().int().refine((n) => [5, 10, 15, 20, 30, 60].includes(n), 'every 5, 10, 15, 20, 30 or 60 minutes').nullable(),
   busyCalendarIds: z.array(z.string().min(1).max(100)).max(100).nullable(),
   targetCalendarId: z.string().min(1).max(100).nullable(),
-  location: z.object({ kind: z.enum(['text', 'none']), value: z.string().max(500) }),
+  location: z.object({ kind: z.enum(['text', 'none', 'meet']), value: z.string().max(500) }),
 }).partial().strict();
 
 /**
@@ -105,7 +106,7 @@ export function applyPatch(current: SchedulerConfig, patch: z.infer<typeof Confi
     }
     next.weekly[d] = ranges;
   }
-  if (next.location.kind === 'none') next.location = { kind: 'none', value: '' };
+  if (next.location.kind === 'none' || next.location.kind === 'meet') next.location = { kind: next.location.kind, value: '' };
   else if (!next.location.value.trim()) throw badRequest('location.value: required for a text location');
   return next;
 }

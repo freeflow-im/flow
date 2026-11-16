@@ -4,9 +4,10 @@
 // (not "this" when its rule changed).
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { addMinutes, format } from 'date-fns';
-import { Loader2, X } from 'lucide-react';
+import { Loader2, Video, X } from 'lucide-react';
 import { calendarApi, type CalendarAccount, type CalendarInfo, type EventInput, type EventOccurrence, type EventPatch, type Scope } from '../api';
 import { allZones, browserZone, reminderText, wallIn, zoneLabel } from '../lib/format';
+import { createMeetLink, meetLinkIn, withMeetLink, withoutMeetLink } from '../lib/meet';
 import { parseDate } from '../lib/ranges';
 import { WEEKDAYS, defaultRule, describeRule, parseRule, positionOf, presetOf, presetsFor, ruleLine, withRule, type PresetId, type Rule } from '../lib/recurrence';
 import { Button } from './ui/button';
@@ -179,6 +180,17 @@ export function EventDialog({ initial, existing, calendars, accounts, onSave, on
   const onShared = !!existing && !!calendars.find((c) => c.id === existing.calendarId)?.shared;
   const sharedChoices = onShared ? writable.filter((c) => c.id === existing!.calendarId) : existing ? [] : writable.filter((c) => c.shared);
   const set = (patch: Partial<Draft>) => setD((x) => ({ ...x, ...patch }));
+  // FreeFlow Meet (phase 3): a meeting made for this event, its link kept as one line of the description (lib/meet.ts).
+  const meetLink = meetLinkIn(d.description);
+  const [makingMeet, setMakingMeet] = useState(false);
+  const addMeet = () => {
+    setMakingMeet(true);
+    setError(null);
+    createMeetLink(d.summary)
+      .then((url) => setD((x) => ({ ...x, description: withMeetLink(x.description, url) })))
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setMakingMeet(false));
+  };
 
   // Moving the start keeps the length; an end before the start follows it.
   const setStart = (date: string, time: string) => {
@@ -262,6 +274,20 @@ export function EventDialog({ initial, existing, calendars, accounts, onSave, on
             </select>
           </Row>
           <Row label="Location"><Input aria-label="Location" placeholder="Add a place or a link" value={d.location} onChange={(e) => set({ location: e.target.value })} /></Row>
+          <Row label="Video">
+            {meetLink ? (
+              <span className="flex min-w-0 items-center gap-2 text-[14px]">
+                <Video className="size-4 flex-none text-primary" aria-hidden="true" />
+                <a href={meetLink} target="_blank" rel="noopener noreferrer" className="truncate text-primary hover:underline">FreeFlow Meet</a>
+                <button type="button" aria-label="Remove FreeFlow Meet" className="rounded-full p-0.5 text-muted hover:bg-track" onClick={() => set({ description: withoutMeetLink(d.description) })}><X className="size-3.5" /></button>
+              </span>
+            ) : (
+              <Button type="button" variant="outline" onClick={addMeet} disabled={makingMeet || busy}>
+                {makingMeet ? <Loader2 className="size-4 animate-spin" /> : <Video className="size-4" />}
+                Add FreeFlow Meet
+              </Button>
+            )}
+          </Row>
           <Row label="Guests"><Guests value={d.attendees} onChange={(attendees) => set({ attendees })} /></Row>
           <Row label="Reminders">
             <div className="flex flex-wrap items-center gap-1.5">
