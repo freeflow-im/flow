@@ -557,7 +557,11 @@ describe('aliases and changed addresses (platform.md §3.2, decision_log 2026-11
     expect(after.address).toBe('scott@acme.test');
     expect(provider.mailboxes.has('ann@acme.test')).toBe(false);
     expect(Object.fromEntries(provider.aliases)).toEqual({ 'ann@acme.test': 'scott@acme.test', 'sales@acme.test': 'scott@acme.test' });
-    expect(core.addressesOf(ann.id)).toMatchObject({ address: 'scott@acme.test', others: [{ address: 'sales@acme.test', removable: true }, { address: 'ann@acme.test', removable: true }] });
+    // Both aliases may be made in the same millisecond, so their order is not fixed.
+    const moved = core.addressesOf(ann.id);
+    expect(moved.address).toBe('scott@acme.test');
+    expect(moved.others).toEqual(expect.arrayContaining([{ address: 'sales@acme.test', removable: true }, { address: 'ann@acme.test', removable: true }]));
+    expect(moved.others).toHaveLength(2);
     expect(core.provisioningTarget(ann.id)!.mailboxAddress).toBe('scott@acme.test');
     // To the mailbox's own address: nothing to move.
     expect(await core.startMove(org, ann.id, 'scott@acme.test')).toBeNull();
