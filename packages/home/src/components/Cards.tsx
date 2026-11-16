@@ -54,13 +54,15 @@ function Failed({ error, app }: { error: unknown; app: string }) {
   return <Empty text={`${app} could not be reached. It will try again in a minute.`} />;
 }
 
-export function TodayCard(props: { events: CalendarEvent[] | null; error: unknown; settingUp: boolean }) {
+export function TodayCard(props: { events: CalendarEvent[] | null; error: unknown; settingUp: boolean; hasCalendar?: boolean | null }) {
   return (
     <Card title="Today" link={{ label: 'Calendar', href: '/calendar/' }} testId="home-card-today">
       {props.settingUp ? (
         <Empty text="Your calendar is being set up. This takes a minute or two." />
       ) : props.error ? (
         <Failed error={props.error} app="Calendar" />
+      ) : props.hasCalendar === false ? (
+        <Empty text="No calendar linked yet. Link one to see your day and get meeting invites." action={{ label: 'Link a calendar', href: '/calendar/' }} />
       ) : props.events === null ? (
         <Loading />
       ) : props.events.length === 0 ? (
@@ -102,7 +104,7 @@ export function InboxCard(props: {
       ) : props.error ? (
         <Failed error={props.error} app="Mail" />
       ) : props.hasAccount === false ? (
-        <Empty text="No mail account yet." action={{ label: 'Set up Mail', href: '/mail/' }} />
+        <Empty text="No email linked yet." action={{ label: 'Link your email', href: '/mail/' }} />
       ) : props.threads === null ? (
         <Loading />
       ) : props.threads.length === 0 ? (

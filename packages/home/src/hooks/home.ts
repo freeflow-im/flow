@@ -55,7 +55,8 @@ export function useInbox(org: string | null, settingUp: boolean) {
 export function useToday(org: string | null, settingUp: boolean, now: Date) {
   const { from, to } = todayRange(now);
   const q = useQuery({ queryKey: ['home', 'events', org, from], queryFn: () => homeApi.events(org!, from, to), enabled: !!org && !settingUp, refetchInterval: REFRESH_MS });
-  return { ...q, events: q.data ? todaysEvents(q.data) : null };
+  const cals = useQuery({ queryKey: ['home', 'calendar-count', org], queryFn: () => homeApi.calendarCount(org!), enabled: !!org && !settingUp, refetchInterval: REFRESH_MS });
+  return { ...q, events: q.data ? todaysEvents(q.data) : null, hasCalendar: cals.data === undefined ? null : cals.data > 0 };
 }
 
 export function useRecentFiles(org: string | null) {

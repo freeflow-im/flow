@@ -70,6 +70,8 @@ export const homeApi = {
   mailFolders: async (org: string, account: string) => (await get<{ folders: MailFolder[] }>(inOrg(`/v1/mail/accounts/${enc(account)}/folders`, org))).folders,
   inbox: async (org: string, account: string, inboxPath: string, limit: number) =>
     (await get<{ threads: MailThread[] }>(inOrg(`/v1/mail/accounts/${enc(account)}/threads?folder=${enc(inboxPath)}&limit=${limit}`, org))).threads,
+  /** How many calendars the person has: none means nothing is linked (and no hosted one, platform.md §3.2). */
+  calendarCount: async (org: string) => (await get<{ calendars: unknown[] }>(inOrg('/v1/calendar/calendars', org))).calendars.length,
   events: async (org: string, from: string, to: string) => (await get<{ events: CalendarEvent[] }>(inOrg(`/v1/calendar/events?from=${enc(from)}&to=${enc(to)}`, org))).events,
   recentFiles: async (org: string) => (await get<{ files: RecentFile[] }>(inOrg('/api/recents', org))).files,
   channels: async (org: string) => (await get<{ channels: ChannelDTO[] }>(`/v1/workspaces/${enc(org)}/channels`)).channels,

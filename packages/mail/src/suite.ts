@@ -15,7 +15,10 @@ export interface SuiteUser {
 export interface SuiteAccount {
   id: string;
   organizationId: string;
-  address: string;
+  /** The hosted address; null where people get none (platform.md §3.2). */
+  address: string | null;
+  /** Without a hosted address: the linked mailbox the person goes by in the organization, or null. */
+  linkedAddress?: string | null;
   state: 'requested' | 'mailbox_ready' | 'calendars_ready' | 'active' | 'suspended' | 'removed';
 }
 
@@ -45,6 +48,8 @@ export const suite = {
   me: () => suiteApi<SuiteUser>('GET', '/v1/me'),
   organizations: async () => (await suiteApi<{ workspaces: SuiteOrganization[] }>('GET', '/v1/me/workspaces')).workspaces,
   accounts: async () => (await suiteApi<{ accounts: SuiteAccount[] }>('GET', '/v1/me/accounts')).accounts,
+  /** The linked mailbox the person goes by in the organization (platform.md §3.2), or null for none. */
+  setAddress: (organizationId: string, address: string | null) => suiteApi<{ account: SuiteAccount }>('PUT', `/v1/workspaces/${encodeURIComponent(organizationId)}/me/address`, { address }),
   setStatus: (patch: { statusEmoji: string; statusText: string; statusSuppressAlerts: boolean }) => suiteApi<SuiteUser>('PATCH', '/v1/me', patch),
   logout: () => suiteApi<{ ok: true }>('POST', '/v1/auth/logout', {}),
 };
