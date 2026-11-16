@@ -64,6 +64,10 @@ ASSET_HOSTS = "app.freeflow.im,edge.freeflow.im"
 PORTED_HOSTS = "edge.freeflow.im,app.freeflow.im"
 # The ChatGPT plugin's hosts, on the origin (docs/ops/CUTOVER_TO_CLOUDFLARE.md): their sign-in is this host's, handed across (routes/crossHost.ts).
 PLUGIN_HOSTS = "docs.freeflow.im,mcpdocs.freeflow.im"
+# Meet (docs/specs/meetings.md): the production RealtimeKit app `freeflow-meetings`. The token is the RTK_API_TOKEN secret
+# (`wrangler secret put RTK_API_TOKEN`, not in /flow/); local runs use the `freeflow-meet-dev` app from ~/.config/flow/dev.vars.
+RTK_ACCOUNT_ID = "82ee23850b6ae0a1277e3a957c0c8517"
+RTK_APP_ID = "6f9fcd55-ecb5-4f3e-9232-9e88ae36a1de"
 WEB_URL_BASE = "https://app.freeflow.im"
 # The web-to-app sign-in handoff's return destinations, exact (the server's FLOW_HANDOFF_RETURN_URLS): the Mac, iOS and
 # desktop apps' flow://signin, and the web client's own page. None turns the handoff off, and /v1/client-info says so.
