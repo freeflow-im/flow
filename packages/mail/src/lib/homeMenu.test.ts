@@ -28,18 +28,20 @@ describe('mailMenu', () => {
     expect(picker.items.map((c) => [c.id, c.label, c.href])).toEqual([
       ['account:a', 'me@x.test', '/mail/?account=a'],
       ['account:b', 'me@y.test', '/mail/?account=b'],
+      ['add-account', 'Add account', undefined],
     ]);
     expect(picker.selected).toBe('account:b');
-    expect(picker.label).toBe('y.test');
+    expect(picker.label).toBe('me@y.test');
   });
 
-  it('names the account by its domain, or its address when the domain is shared', () => {
-    const accounts = [account('a', 'me@gmail.com'), account('b', 'work@Gmail.com'), account('c', 'pat@lockedin.ai')];
-    expect(mailPicker(accounts, accounts[2]!)!.label).toBe('lockedin.ai');
-    expect(mailPicker(accounts, accounts[1]!)!.label).toBe('work@Gmail.com');
+  it('names the account by its whole address', () => {
+    const accounts = [account('a', 'me@gmail.com'), account('c', 'pat@lockedin.ai')];
+    expect(mailPicker(accounts, accounts[1]!).label).toBe('pat@lockedin.ai');
   });
 
-  it('has no picker with one account', () => {
-    expect(mailPicker([account('a', 'me@x.test')], account('a', 'me@x.test'))).toBeNull();
+  it('shows the address with one account too, with Add account to choose', () => {
+    const one = mailPicker([account('a', 'me@x.test')], account('a', 'me@x.test'));
+    expect(one.label).toBe('me@x.test');
+    expect(one.items.map((i) => i.id)).toEqual(['account:a', 'add-account']);
   });
 });
