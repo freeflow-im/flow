@@ -983,6 +983,37 @@ export class Org extends DurableObject<OrgEnv> {
     return answer.value;
   }
 
+  /**
+   * The directory gave or took members' addresses (platform.md §3.2: mail turned on for the primary domain of the
+   * organization's own, or the operator's clean-up of people's platform-subdomain mail): each member row whose address
+   * differs takes the directory's, and the organization's sockets hear `member.updated` for it. Returns how many changed.
+   */
+  async syncAddresses(): Promise<number> {
+    const sql = this.ctx.storage.sql;
+    const org = sql.exec('SELECT id FROM workspaces LIMIT 1').toArray()[0]?.id as string | undefined;
+    if (!org) return 0;
+    const answer = await this.directory().call('accountsOfOrganization' as never, [org] as never) as DirectoryAnswer<AccountDTO[]>;
+    if (!answer.ok) throw new ApiError(answer.status, answer.code, answer.message);
+    const changed: string[] = [];
+    for (const a of answer.value) {
+      const row = sql.exec('SELECT user_id, address FROM workspace_members WHERE workspace_id = ? AND account_id = ?', org, a.id).toArray()[0];
+      // A person without a hosted address is shown and written to by the mailbox they linked (§3.2).
+      const shown = a.address ?? a.linkedAddress ?? null;
+      if (!row || (row.address ?? null) === shown) continue;
+      sql.exec('UPDATE workspace_members SET address = ? WHERE workspace_id = ? AND account_id = ?', shown, org, a.id);
+      changed.push(row.user_id as string);
+    }
+    if (!changed.length) return 0;
+    await this.scoped(async () => {
+      for (const userId of changed) {
+        publishEvent(subjectMeta(org), { type: 'member.updated', workspaceId: org, ts: new Date().toISOString(), data: await toMemberDTO(org, userId) } as Event);
+      }
+    });
+    await this.logging;
+    await this.flushOutbox(org);
+    return changed.length;
+  }
+
   /** A person named their assistant (routes/assistant.ts): its member row takes the name and address, and the
    * organization's sockets hear `member.updated`. */
   async renameAssistant(agentId: string, name: string, address: string | null): Promise<void> {

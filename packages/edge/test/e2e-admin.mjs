@@ -41,16 +41,16 @@ r=await api(A.token,'POST','/v1/workspaces',{name:`Adm ${tag}`,slug:`adm-${tag}`
 // Signed in, the page route serves the client (built and assembled into public/) rather than sending to sign in; without a
 // build here the asset fetch fails, so only the redirect's absence is checked.
 r=await api(null,'GET','/admin',undefined,{cookie:`sid=${A.token}`});t('/admin does not send a signed-in person to sign in',r.s!==302&&r.s!==401,r.s+' '+String(r.j).slice(0,60));
-let ann=await accountUntil(A.token,W,(a)=>a.state==='active',15000);t('Ann\'s account reaches active with a hosted mailbox (the fake provider)',ann?.state==='active'&&ann.kind==='native',JSON.stringify(ann).slice(0,160));
+let ann=await accountUntil(A.token,W,(a)=>a.state==='active',15000);t('Ann\'s account is active, with no address on the platform subdomain (§3.2)',ann?.state==='active'&&ann.kind==='native'&&ann.address===null,JSON.stringify(ann).slice(0,160));
 r=await api(A.token,'GET',`/v1/workspaces/${W}/accounts`);const annAcct=r.j.accounts?.find(a=>a.principalId===A.user.id);
 t('Ann’s assistant came with her account: a hosted personal agent, hers',(r.j.accounts??[]).some(a=>a.kind==='personal_agent'&&a.agentRuntime==='hosted'&&a.sponsorId===A.user.id&&a.address===null),JSON.stringify((r.j.accounts??[]).map(a=>[a.kind,a.agentRuntime])).slice(0,160));
-t('the accounts list carries hosted for the Mail column',r.s===200&&annAcct?.hosted===true&&annAcct.state==='active',JSON.stringify(r.j).slice(0,160));
+t('the accounts list carries hosted (false: no mailbox) for the Mail column',r.s===200&&annAcct?.hosted===false&&annAcct.state==='active',JSON.stringify(r.j).slice(0,160));
 r=await api(A.token,'PATCH',`/v1/workspaces/${W}`,{name:`Adm ${tag} Rockets`});t('the name can be changed; the slug stays',r.s===200&&r.j.name===`Adm ${tag} Rockets`&&r.j.slug===`adm-${tag}`,r.s+' '+JSON.stringify(r.j).slice(0,120));
 r=await api(A.token,'PATCH',`/v1/workspaces/${W}`,{policies:{defaultAccountKind:'guest'}});t('the retired default-kind policy is refused',r.s===400,r.s+' '+JSON.stringify(r.j).slice(0,100));
 
 // --- The domain card's five steps (§4.1) ------------------------------------------------------------------------------------
 const D=`/v1/workspaces/${W}/domains`;const DOM=`acme-${tag}.test`;
-r=await api(A.token,'GET',D);const pd=r.j.domains?.[0];t('the platform domain is listed with atProvider (true once the first mailbox was made)',pd?.kind==='platform'&&pd.atProvider===true&&pd.primary===true,JSON.stringify(pd).slice(0,160));
+r=await api(A.token,'GET',D);const pd=r.j.domains?.[0];t('the platform domain is listed, not yet at the provider (no agent has a mailbox yet)',pd?.kind==='platform'&&pd.atProvider===false&&pd.primary===true,JSON.stringify(pd).slice(0,160));
 r=await api(A.token,'POST',D,{domain:DOM});const added=r.j;const vt=added.records?.find(x=>x.purpose==='verification');
 t('step 1: added, not verified, not at the provider, with its records and their status',r.s===201&&added.verified===false&&added.atProvider===false&&vt&&added.status?.length===added.records?.length,r.s+' '+JSON.stringify(added).slice(0,160));
 r=await api(A.token,'POST',`${D}/${DOM}/verify`);t('step 2 before the TXT: not verified, nothing found',r.s===200&&r.j.verified===false&&r.j.found?.length===0,JSON.stringify(r.j));
@@ -67,6 +67,7 @@ r=await api(A.token,'GET',D);d=r.j.domains?.find(x=>x.domain===DOM);t('the list 
 publish(dk.name,'TXT',dk.value);await sleep(5200);r=await api(A.token,'GET',`${D}?refresh=1`);d=r.j.domains?.find(x=>x.domain===DOM);
 t('step 5: the signing record is found; every step is done',statusOf('dkim')[0]==='present'&&d.status.every(s=>s.record==='present'),JSON.stringify(d?.status));
 r=await api(A.token,'PATCH',`${D}/${DOM}`,{primary:true});t('Make primary',r.s===200&&r.j.primary===true,r.s);
+ann=await accountUntil(A.token,W,(a)=>a.hosted&&a.state==='active',15000);t('Ann gets an address on it and a mailbox (§3.2)',ann?.address===`ann@${DOM}`&&ann.hosted===true&&ann.state==='active',JSON.stringify(ann).slice(0,160));
 r=await api(A.token,'DELETE',`${D}/${DOM}`);t('a primary domain cannot be removed',r.s===409&&r.j.error?.code==='domain_primary',r.s+' '+JSON.stringify(r.j).slice(0,80));
 
 // --- Invitations: members and chat guests, the pending list, a revoke (§3.2, §6.3, §6.5) ---------------------------------

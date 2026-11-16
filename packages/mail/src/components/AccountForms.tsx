@@ -3,10 +3,12 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { AlertCircle, ChevronDown, ChevronRight, ExternalLink, Loader2, Trash2 } from 'lucide-react';
-import { MailApiError, mailApi, type MailAccount, type ProviderPreset, type Security, type ServerSettings, type TabCategory } from '../api';
+import { MailApiError, mailApi, mailWorkspace, type MailAccount, type ProviderPreset, type Security, type ServerSettings, type TabCategory } from '../api';
 import { isEmail } from '../lib/addresses';
 import { setImagePref, useImagePref } from '../lib/imagePref';
 import { keys } from '../hooks/mail';
+import { useMyAccount } from '../hooks/organization';
+import { suite } from '../suite';
 import { TAB_INFO, TAB_ORDER } from '../lib/tabs';
 import { cn } from '../lib/utils';
 import { TAB_ICONS } from './InboxTabs';
@@ -337,6 +339,37 @@ function ImagesSetting() {
   );
 }
 
+/**
+ * A person without a hosted address goes by one of their linked mailboxes in the organization (platform.md §3.2): it is
+ * what coworkers see and write to. Shown only to such a person.
+ */
+function WorkspaceAddress({ email }: { email: string }) {
+  const org = mailWorkspace();
+  const me = useMyAccount(org);
+  const qc = useQueryClient();
+  const use = useMutation({
+    mutationFn: () => suite.setAddress(org!, email.toLowerCase()),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['suite', 'accounts'] }),
+  });
+  if (!org || !me || me.address) return null;
+  const current = me.linkedAddress === email.toLowerCase();
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-[14px]" data-testid="workspace-address">
+      {current ? (
+        <span className="text-muted">Coworkers see and write to this address.</span>
+      ) : (
+        <>
+          <span className="text-muted">{me.linkedAddress ? `Coworkers see ${me.linkedAddress}.` : 'Coworkers see no address for you.'}</span>
+          <Button type="button" size="sm" variant="outline" onClick={() => use.mutate()} disabled={use.isPending} data-testid="use-workspace-address">
+            Use this address instead
+          </Button>
+        </>
+      )}
+      <ErrorBox error={use.error} />
+    </div>
+  );
+}
+
 function AccountEditor({ account, focusPassword, onSaved, onRemoved }: { account: MailAccount; focusPassword: boolean; onSaved(a: MailAccount): void; onRemoved(): void }) {
   const [displayName, setDisplayName] = useState(account.displayName);
   const [password, setPassword] = useState('');
@@ -382,6 +415,7 @@ function AccountEditor({ account, focusPassword, onSaved, onRemoved }: { account
       <Field label="Email address" htmlFor="edit-email">
         <Input id="edit-email" value={account.email} disabled />
       </Field>
+      {!hosted && <WorkspaceAddress email={account.email} />}
       <Field label="Your name" htmlFor="edit-name">
         <Input id="edit-name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
       </Field>

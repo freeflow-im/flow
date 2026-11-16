@@ -7,11 +7,14 @@
 //   npx wrangler dev --port 18799 --local --enable-containers=false --local-upstream localhost:18799 \
 //     --var PORTED_HOSTS:edge.freeflow.im,localhost --var ASSET_HOSTS:none --var ORIGIN_URL:http://localhost:9 \
 //     --var WEB_URL_BASE:http://localhost:18799 --var CALENDAR_ALLOW_INSECURE:1 > /tmp/edge-calendar.log 2>&1 &
+// (with MAIL_PROVIDER:fake and DNS_RESOLVER_URL as there: native calendars need the organization's own domain with mail on,
+// platform.md §3.2, verified against a DNS-over-HTTPS stub this script serves on DOH_PORT, default 18899)
 //   node test/e2e-calendar-mcp.mjs /tmp/edge-calendar.log
 // (B=http://localhost:<port> points it at another port; test/e2e-calendar.mjs runs against the same Worker.)
 // It reads signup links from the Worker's log (local mail goes there). Each run uses Radicale calendars of its own.
 import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
+import http from 'node:http';
 const log=process.argv[2]; const B=process.env.B??'http://localhost:18799';
 const DAV=process.env.DAV??'http://127.0.0.1:5232';
 let pass=0,fail=0; const t=(n,ok,d='')=>{ok?pass++:fail++;console.log((ok?'ok  ':'FAIL')+' '+n+(d?': '+String(d).slice(0,220):''));};
@@ -28,6 +31,13 @@ const ics=(...lines)=>['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//e2e//EN',...li
 const A=await signup(`calmcp-${tag}@example.com`,'Ann');
 let r=await api(A.token,'POST','/v1/workspaces',{name:`Acme ${tag}`,slug:`acme-${tag}`});const ORG=r.j.id;
 t('Ann, with an organization',A.token&&ORG,r.s);
+// People have a native calendar only on a primary domain of the organization's own with mail on (platform.md §3.2).
+{const TXT=new Map();const doh=http.createServer((q,res)=>{const u=new URL(q.url,'http://x');const v=u.searchParams.get('type')==='TXT'&&TXT.get(u.searchParams.get('name'));res.setHeader('content-type','application/dns-json');res.end(JSON.stringify(v?{Status:0,Answer:[{name:u.searchParams.get('name'),type:16,TTL:60,data:JSON.stringify(v)}]}:{Status:3}));});
+ await new Promise(res=>doh.listen(Number(process.env.DOH_PORT||18899),'127.0.0.1',res));
+ const D=`/v1/workspaces/${ORG}/domains`,dom=`acme-${tag}.test`;let x=await api(A.token,'POST',D,{domain:dom});const v=x.j.records?.find(y=>y.purpose==='verification');if(v)TXT.set(v.name,v.value);
+ const ok=[x.s===201,(await api(A.token,'POST',`${D}/${dom}/verify`)).j.verified===true,(await api(A.token,'POST',`${D}/${dom}/dkim`)).s===200,(await api(A.token,'PATCH',`${D}/${dom}`,{primary:true},undefined)).s===200];
+ doh.close();let a;for(let i=0;i<60;i++){a=(await api(A.token,'GET','/v1/me/accounts')).j.accounts?.find(y=>y.organizationId===ORG);if(a?.hosted&&a.state==='active')break;await sleep(250);}
+ t('Ann\'s organization turns on mail on a domain of its own: she gets an address and a mailbox there',ok.every(Boolean)&&a?.address===`ann@${dom}`&&a.hosted,JSON.stringify(ok)+' '+a?.address);}
 const WORK=`/${USER}/work/`;
 let res=await dav('MKCALENDAR',WORK,`<?xml version="1.0"?><C:mkcalendar xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:set><D:prop><D:displayname>Work</D:displayname></D:prop></D:set></C:mkcalendar>`,{'content-type':'application/xml'});
 t('Radicale: a Work calendar',res.status===201,res.status);

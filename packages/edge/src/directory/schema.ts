@@ -312,4 +312,7 @@ export const DIRECTORY_MIGRATIONS: string[] = [
   // Members an admin creates (Admin › Members › Create member): the outside address their setup link goes to, which
   // "Forgot password" also reaches, since their only other address is the org mailbox they cannot open while locked out.
   `ALTER TABLE users ADD COLUMN backup_email TEXT;`,
+  // A person without a hosted address goes by a mailbox they linked (platform.md §3.2, decision_log 2026-11-15). Not in
+  // `addresses`: a linked mailbox is not unique across organizations, and no mail is routed by it.
+  `ALTER TABLE accounts ADD COLUMN linked_address TEXT;`,
 ];

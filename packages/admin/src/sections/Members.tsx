@@ -31,6 +31,8 @@ export function mailState(a: AccountDTO | undefined, hostedMail: boolean): { tex
   if (a.state === 'suspended') return { text: 'suspended', tone: 'muted', retry: false };
   if (a.statusMessage) return { text: `stopped: ${a.statusMessage}`, tone: 'warn', retry: true };
   if (a.state === 'active' && a.hosted) return { text: 'ready', tone: 'ok', retry: false };
+  // A person where people get no hosted address (platform.md §3.2): their own linked mailbox, or none.
+  if (!a.address && !a.agentMode) return { text: a.linkedAddress ? 'linked' : 'none', tone: 'muted', retry: false };
   if (a.state !== 'active') return { text: 'being set up', tone: 'muted', retry: false };
   return { text: 'no mailbox yet', tone: 'muted', retry: true };
 }
@@ -188,7 +190,7 @@ export function Members({ org }: { org: WorkspaceDTO }) {
  * when it is not ready: Create inbox for an agent with none (or whose setup stopped), Set up or Retry for a person. */
 function EmailCell({ m, a, hostedMail, keyId, busy, queued, onProvision }: { m: WorkspaceMemberDTO; a: AccountDTO | undefined; hostedMail: boolean; keyId: string; busy: boolean; queued: boolean; onProvision(): void }) {
   const mail = mailState(a, hostedMail);
-  const shownEmail = a?.address ?? (m.isAgent ? null : visibleEmail(m.email));
+  const shownEmail = a?.address ?? a?.linkedAddress ?? (m.isAgent ? null : visibleEmail(m.email));
   const action = 'shrink-0 text-xs text-primary hover:underline disabled:opacity-50';
   if (m.isAgent) {
     // A shared agent is native, and gets its inbox when it is made (decision_log 2026-11-09); one without (provisioning

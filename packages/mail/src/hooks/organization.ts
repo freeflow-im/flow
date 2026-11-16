@@ -45,6 +45,12 @@ export function useAccountState(organizationId: string | null): SuiteAccount['st
   return q.data?.find((a) => a.organizationId === organizationId)?.state ?? null;
 }
 
+/** The person's account in the organization, as the suite last read it (shares `useAccountState`'s query). */
+export function useMyAccount(organizationId: string | null): SuiteAccount | null {
+  const q = useQuery({ queryKey: ['suite', 'accounts'], queryFn: suite.accounts, enabled: !!organizationId });
+  return q.data?.find((a) => a.organizationId === organizationId) ?? null;
+}
+
 /**
  * The user's organizations, the one selected (else the first), and whether the list has come (`ready`). `activeId` is
  * the selected one's id, and before the list has come, the id kept from the last visit: the requests already name that

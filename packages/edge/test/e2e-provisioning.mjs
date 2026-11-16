@@ -9,10 +9,15 @@
 //     --var ASSET_HOSTS:none --var ORIGIN_URL:http://localhost:9 --var WEB_URL_BASE:http://localhost:18797 \
 //     --var MAIL_ALLOW_INSECURE:1 --var MAIL_PROVIDER:fake --var GREENMAIL_API_URL:http://127.0.0.1:8081 \
 //     --var GREENMAIL_IMAP_PORT:3144 --var GREENMAIL_SMTP_PORT:3026 > /tmp/edge-prov.log 2>&1 &
+//     --var DNS_RESOLVER_URL:http://localhost:18898/dns-query
 //   node test/e2e-provisioning.mjs /tmp/edge-prov.log
+// People get hosted mail only on a domain of the organization's own, verified, with mail on, and primary (platform.md §3.2);
+// on the platform subdomain only agents do. The domain is verified against a DNS-over-HTTPS stub this script serves on
+// DOH_PORT (default 18898), hence DNS_RESOLVER_URL.
 // (B=http://localhost:<port> for another port, GM=http://127.0.0.1:<port> for another GreenMail API, SECRET= for another
 // EDGE_ORIGIN_SECRET.) It reads signup links from the Worker's log, because local mail goes there.
 import fs from 'node:fs';
+import http from 'node:http';
 const log=process.argv[2]; const B=process.env.B??'http://localhost:18797', GM=process.env.GM??'http://127.0.0.1:8081', SECRET=process.env.SECRET??'x';
 let pass=0,fail=0; const t=(n,ok,d='')=>{ok?pass++:fail++;console.log((ok?'ok  ':'FAIL')+' '+n+(d?': '+String(d).slice(0,170):''));};
 const api=async(tok,m,p,b,h={})=>{const r=await fetch(B+p,{method:m,headers:{...(tok?{authorization:'Bearer '+tok}:{}),...(b!==undefined?{'content-type':'application/json'}:{}),...h},body:b===undefined?undefined:JSON.stringify(b)});const x=await r.text();let j;try{j=JSON.parse(x)}catch{j=x}return{s:r.status,j}};
@@ -28,8 +33,36 @@ const cfg=(await api(null,'GET','/v1/config')).j;t('config says hosted mail is o
 const A=await signup(`prov-ann-${tag}@example.com`,'Ann'),Bo=await signup(`prov-bob-${tag}@example.com`,'Bob');t('sign up Ann and Bob',A.token&&Bo.token);
 let r=await api(A.token,'POST','/v1/workspaces',{name:`Prov ${tag}`,slug:`prov-${tag}`});const W=r.j.id;t('Ann creates an organization',r.s===201,r.s);
 let t0=Date.now();let {a:ann,seen}=await accountUntil(A.token,W,(a)=>a.state==='active',15000);
-t('Ann\'s account reaches active within 15 s',ann?.state==='active',`${Date.now()-t0} ms, states ${seen.join(' → ')}`);
-t('her address is on the platform subdomain',ann?.address===`ann@prov-${tag}.freeflow.im`,ann?.address);
+t('Ann\'s account is active from the start',ann?.state==='active'&&seen.join()==='active',`${Date.now()-t0} ms, states ${seen.join(' → ')}`);
+t('on the platform subdomain she has no address and no mailbox (§3.2)',ann?.address===null&&ann?.hosted===false,JSON.stringify(ann).slice(0,160));
+r=await api(A.token,'GET','/v1/mail/accounts');t('Mail lists no hosted account for her',r.s===200&&!r.j.accounts?.some(a=>a.kind==='hosted'),r.s+' '+JSON.stringify(r.j).slice(0,140));
+r=await api(A.token,'GET','/v1/calendar/calendars');t('nor a FreeFlow calendar',r.s===200&&!(r.j.calendars??[]).some(c=>/^n\./.test(c.id)),r.s+' '+JSON.stringify(r.j).slice(0,140));
+
+// Bob by invitation, an agent by its code: the agent gets its address and mailbox on the platform subdomain; Bob gets none.
+r=await api(A.token,'POST',`/v1/workspaces/${W}/invites`,{email:`prov-bob-${tag}@example.com`});const inv=(r.j.inviteUrl??'').split('/').pop();
+r=await api(Bo.token,'POST','/v1/invites/accept',{token:inv});t('Bob accepts an invitation',r.s<300,r.s);
+r=await api(A.token,'POST',`/v1/workspaces/${W}/agent-invites`,{});r=await api(null,'POST','/v1/agents/redeem',{code:r.j.code,username:`provbot${tag}`,key:'a-long-agent-key-for-provisioning',name:'Provbot'});const AGT=r.j.agentToken;t('an agent joins',r.s===201&&!!AGT,r.s);
+t0=Date.now();const bot=await accountUntil(AGT,W,(a)=>a.state==='active',15000);
+t('the agent reaches active at its own address on the platform subdomain',bot.a?.state==='active'&&bot.a.address===`provbot${tag}@prov-${tag}.freeflow.im`,`${Date.now()-t0} ms ${bot.seen.join(' → ')} ${bot.a?.address}`);
+r=await api(AGT,'GET','/v1/mail/accounts');t('the agent has a hosted mail account',r.j.accounts?.length===1&&r.j.accounts[0].kind==='hosted'&&r.j.accounts[0].email===bot.a?.address,JSON.stringify(r.j).slice(0,140));
+let bob=await accountUntil(Bo.token,W,(a)=>a.state==='active',5000);t('Bob is active with no address',bob.a?.state==='active'&&bob.a.address===null&&!bob.a.hosted,JSON.stringify(bob.a).slice(0,140));
+r=await api(A.token,'POST',`/v1/workspaces/${W}/provision`,{});t('provision queues nobody without an address',r.s===200&&r.j.queued===0,r.s+' '+JSON.stringify(r.j));
+
+// Mail on a domain of the organization's own, made primary, gives the people addresses and mailboxes there.
+const DOM=`prov-${tag}.test`;let vtok='';
+const doh=http.createServer((q,res)=>{const u=new URL(q.url,'http://x');const name=u.searchParams.get('name'),type=u.searchParams.get('type');res.setHeader('content-type','application/dns-json');
+  res.end(JSON.stringify(name===`_freeflow.${DOM}`&&type==='TXT'&&vtok?{Status:0,Answer:[{name,type:16,TTL:60,data:JSON.stringify(vtok)}]}:{Status:3}));});
+await new Promise(res=>doh.listen(Number(process.env.DOH_PORT||18898),'127.0.0.1',res));
+const D=`/v1/workspaces/${W}/domains`;
+r=await api(A.token,'POST',D,{domain:DOM});vtok=r.j.records?.find(x=>x.purpose==='verification')?.value??'';t('Ann adds a domain of her own',r.s===201&&!!vtok,r.s+' '+JSON.stringify(r.j).slice(0,120));
+r=await api(A.token,'POST',`${D}/${DOM}/verify`);t('and verifies it',r.s===200&&r.j.verified===true,r.s+' '+JSON.stringify(r.j).slice(0,120));
+r=await api(A.token,'PATCH',`${D}/${DOM}`,{primary:true});t('and makes it primary',r.s===200&&r.j.primary===true,r.s+' '+JSON.stringify(r.j).slice(0,120));
+r=await api(Bo.token,'GET','/v1/me/accounts');t('primary without mail: Bob still has no address',r.j.accounts?.find(a=>a.organizationId===W)?.address===null,JSON.stringify(r.j.accounts).slice(0,140));
+r=await api(A.token,'POST',`/v1/workspaces/${W}/created-members`,{displayName:'Cy',username:'cy',domain:DOM,backupEmail:`prov-cy-${tag}@example.com`});t('Create member refuses a domain without mail',r.s===400&&r.j.error?.code==='domain_no_mail',r.s+' '+JSON.stringify(r.j).slice(0,120));
+r=await api(A.token,'POST',`${D}/${DOM}/dkim`);t('Ann turns mail on (DKIM)',r.s===200&&!!r.j.record,r.s+' '+JSON.stringify(r.j).slice(0,120));
+doh.close();
+t0=Date.now();({a:ann,seen}=await accountUntil(A.token,W,(a)=>a.hosted&&a.state==='active',15000));
+t('Ann gets an address on her domain and a mailbox within 15 s',ann?.address===`ann@${DOM}`&&ann.hosted&&ann.state==='active',`${Date.now()-t0} ms, states ${seen.join(' → ')} ${JSON.stringify(ann).slice(0,120)}`);
 r=await api(A.token,'GET','/v1/mail/accounts');const annBox=r.j.accounts?.[0];
 t('Mail lists one hosted account at her address',r.s===200&&r.j.accounts?.length===1&&annBox?.kind==='hosted'&&annBox.email===ann?.address&&annBox.imap?.port===3144&&annBox.smtp?.port===3026,r.s+' '+JSON.stringify(r.j).slice(0,170));
 t('the password is never shown',!JSON.stringify(r.j).includes('password'));
@@ -38,14 +71,9 @@ r=await api(A.token,'DELETE',`/v1/mail/accounts/${annBox?.id}`);t('nor remove it
 r=await api(A.token,'GET',`/v1/mail/accounts/${annBox?.id}/folders`);t('its folders come from GreenMail',r.s===200&&r.j.folders?.[0]?.path==='INBOX',r.s+' '+JSON.stringify(r.j).slice(0,120));
 const users=await fetch(GM+'/api/user').then(x=>x.json()).catch(e=>String(e));t('GreenMail has her as a user, made through its API',Array.isArray(users)&&users.some(u=>u.email===ann?.address),JSON.stringify(users).slice(0,160));
 
-// Bob by invitation, an agent by its code: the same path.
-r=await api(A.token,'POST',`/v1/workspaces/${W}/invites`,{email:`prov-bob-${tag}@example.com`});const inv=(r.j.inviteUrl??'').split('/').pop();
-r=await api(Bo.token,'POST','/v1/invites/accept',{token:inv});t('Bob accepts an invitation',r.s<300,r.s);
-r=await api(A.token,'POST',`/v1/workspaces/${W}/agent-invites`,{});r=await api(null,'POST','/v1/agents/redeem',{code:r.j.code,username:`provbot${tag}`,key:'a-long-agent-key-for-provisioning',name:'Provbot'});const AGT=r.j.agentToken;t('an agent joins',r.s===201&&!!AGT,r.s);
-t0=Date.now();const [bob,bot]=await Promise.all([accountUntil(Bo.token,W,(a)=>a.state==='active',15000),accountUntil(AGT,W,(a)=>a.state==='active',15000)]);
-t('Bob reaches active',bob.a?.state==='active',`${Date.now()-t0} ms, ${bob.seen.join(' → ')}`);
-t('the agent reaches active at its own address',bot.a?.state==='active'&&bot.a.address===`provbot${tag}@prov-${tag}.freeflow.im`,`${bot.seen.join(' → ')} ${bot.a?.address}`);
-r=await api(AGT,'GET','/v1/mail/accounts');t('the agent has a hosted mail account',r.j.accounts?.length===1&&r.j.accounts[0].kind==='hosted'&&r.j.accounts[0].email===bot.a?.address,JSON.stringify(r.j).slice(0,140));
+t0=Date.now();bob=await accountUntil(Bo.token,W,(a)=>a.hosted&&a.state==='active',15000);
+t('so does Bob',bob.a?.address===`bob@${DOM}`&&bob.a.hosted&&bob.a.state==='active',`${Date.now()-t0} ms, ${bob.seen.join(' → ')} ${bob.a?.address}`);
+r=await api(A.token,'GET',`/v1/workspaces/${W}/members`);t('the members list takes the new addresses; the agent keeps its own',(r.j.members??[]).find(m=>m.userId===Bo.user.id)?.address===`bob@${DOM}`&&(r.j.members??[]).find(m=>m.isAgent&&m.kind!=='personal_agent')?.address===bot.a?.address,JSON.stringify((r.j.members??[]).map(m=>m.address)));
 r=await api(Bo.token,'GET','/v1/mail/accounts');const bobBox=r.j.accounts?.[0];t('so has Bob',bobBox?.kind==='hosted'&&bobBox.email===bob.a?.address,JSON.stringify(r.j).slice(0,140));
 
 // Mail between two provisioned mailboxes.

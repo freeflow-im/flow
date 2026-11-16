@@ -30,7 +30,9 @@ r=await api(A.token,'POST',`/v1/workspaces/${W}/invites`,{email:'bob@example.com
 const tokm=[null,(inv.inviteUrl??'').split('/').pop()];t('invite carries link',!!tokm[1],inv.inviteUrl);
 r=await api(Bo.token,'POST','/v1/invites/accept',{token:tokm[1]});t('accept by token',r.s<300,r.s+' '+JSON.stringify(r.j).slice(0,120));
 r=await api(Bo.token,'GET','/v1/me/workspaces');t('membership reached directory',r.j.workspaces?.length===1);
-r=await api(Bo.token,'GET','/v1/me');t('the membership made an account with an address',r.j.accounts?.length===1&&r.j.accounts[0].address.endsWith('@locked-in.freeflow.im'),JSON.stringify(r.j.accounts));
+r=await api(Bo.token,'GET','/v1/me');t('the membership made an account, with no address on the platform subdomain (§3.2)',r.j.accounts?.length===1&&r.j.accounts[0].address===null&&r.j.accounts[0].state==='active'&&!r.j.accounts[0].hosted&&r.j.accounts[0].linkedAddress===null,JSON.stringify(r.j.accounts));
+r=await api(Bo.token,'PUT',`/v1/workspaces/${W}/me/address`,{address:'bob@example.com'});t('Bob cannot go by a mailbox he has not linked',r.s===400&&r.j.error?.code==='not_linked',r.s+' '+JSON.stringify(r.j).slice(0,120));
+r=await api(Bo.token,'PUT',`/v1/workspaces/${W}/me/address`,{address:null});t('but may go by none',r.s===200&&r.j.account?.address===null&&r.j.account?.linkedAddress===null,r.s+' '+JSON.stringify(r.j).slice(0,120));
 const sock=(tok)=>new Promise((res,rej)=>{const ws=new WebSocket(`${WS}/v1/ws?workspace=${W}`);const ev=[];ws.onopen=()=>ws.send(JSON.stringify({op:'auth',token:tok}));ws.onmessage=e=>{const f=JSON.parse(e.data);if(f.op==='hello')res({ws,ev,hello:f});if(f.op==='event')ev.push(f.event);if(f.op==='error')rej(new Error(f.message));};ws.onerror=()=>rej(new Error('ws'));setTimeout(()=>rej(new Error('ws timeout')),6000)});
 const sa=await sock(A.token),sb=await sock(Bo.token);t('sockets hello',sa.hello.heartbeat==='client');
 await sleep(200);t('presence reaches Ann',sa.ev.some(e=>e.type==='presence'&&e.data.userId===Bo.user.id));
@@ -235,7 +237,7 @@ r=await api(A.token,'PATCH',`/v1/workspaces/${W}/members/${AGT_ID}/role`,{role:'
 r=await api(A.token,'POST',`/v1/workspaces/${W}/owner`,{userId:AGT_ID});t('nor own the organization',r.s===403&&r.j.error?.code==='agent_forbidden',r.s+' '+JSON.stringify(r.j).slice(0,90));
 // ---- organizations: the address on every member, the policies, handing the organization on (platform.md §3.1, §3.2)
 r=await api(Bo.token,'GET','/v1/me');const bobAddr=r.j.accounts?.find(a=>a.organizationId===W)?.address;
-r=await api(A.token,'GET',`/v1/workspaces/${W}/members`);const ms=r.j.members??r.j??[];t('the members list carries Bob\'s address',!!bobAddr&&ms.find(m=>m.userId===Bo.user.id)?.address===bobAddr,JSON.stringify(ms.map(m=>m.address)));
+r=await api(A.token,'GET',`/v1/workspaces/${W}/members`);const ms=r.j.members??r.j??[];t('the members list carries Bob with no address',bobAddr===null&&(ms.find(m=>m.userId===Bo.user.id)?.address??null)===null,JSON.stringify(ms.map(m=>m.address)));
 t('and the agent\'s, made after its redeem',!!ms.find(m=>m.isAgent&&m.kind!=='personal_agent')?.address?.startsWith('flowbot@'),JSON.stringify(ms.map(m=>m.address)));
 r=await api(Bo.token,'PATCH',`/v1/workspaces/${W}`,{policies:{inviteBy:'admins'}});t('a member cannot set policies',r.s===403,r.s);
 r=await api(A.token,'PATCH',`/v1/workspaces/${W}`,{policies:{inviteBy:'admins'}});t('Ann sets who may invite',r.s===200&&r.j.policies?.inviteBy==='admins'&&r.j.policies?.agentsBy==='members'&&r.j.policies?.linkSharing===true,r.s+' '+JSON.stringify(r.j.policies));
@@ -243,7 +245,7 @@ r=await api(Bo.token,'POST',`/v1/workspaces/${W}/invites`,{email:'dee@example.co
 r=await api(Bo.token,'POST',`/v1/workspaces/${W}/join-link`);t('and so is a join link',r.s===403&&r.j.error?.code==='policy_forbids',r.s+' '+JSON.stringify(r.j).slice(0,90));
 r=await api(A.token,'POST',`/v1/workspaces/${W}/owner`,{userId:Bo.user.id});t('Ann hands the organization to Bob',r.s===200&&r.j.role==='admin',r.s+' '+JSON.stringify(r.j).slice(0,90));
 r=await api(A.token,'POST',`/v1/workspaces/${W}/owner`,{userId:Bo.user.id});t('Ann cannot hand it on again',r.s===403,r.s);
-r=await api(Bo.token,'GET','/v1/me/workspaces');const bw=r.j.workspaces?.find(w=>w.id===W);t('Bob\'s workspaces say owner, with his address',bw?.role==='owner'&&bw.address===bobAddr,JSON.stringify(bw).slice(0,160));
+r=await api(Bo.token,'GET','/v1/me/workspaces');const bw=r.j.workspaces?.find(w=>w.id===W);t('Bob\'s workspaces say owner, with his address (none)',bw?.role==='owner'&&(bw.address??null)===bobAddr,JSON.stringify(bw).slice(0,160));
 r=await api(Bo.token,'GET','/v1/me');t('his account in the directory says owner',r.j.accounts?.find(a=>a.organizationId===W)?.role==='owner',JSON.stringify(r.j.accounts));
 r=await api(Bo.token,'POST',`/v1/workspaces/${W}/owner`,{userId:A.user.id});t('Bob hands it back',r.s===200&&r.j.role==='admin',r.s);
 // ---- domains: the platform subdomain, an own domain verified over DNS, new addresses on the primary (platform.md §3.2, phase 5.1)
@@ -264,15 +266,17 @@ r=await api(Bo.token,'POST',`/v1/workspaces/${W}/owner`,{userId:A.user.id});t('B
  r=await api(A.token,'POST',`${D}/nope.test/dkim`);t('DKIM on a domain the organization does not have is refused',r.s===404,r.s);
  r=await api(A.token,'POST',`${D}/acme.test/dkim`);const dk=r.j.record;t('Ann sets up DKIM and gets the TXT record',r.s===200&&dk?.type==='TXT'&&dk?.purpose==='dkim'&&dk?.name===`${r.j.selector}._domainkey.acme.test`&&/^v=DKIM1; k=rsa; p=[A-Za-z0-9+/=]{300,}$/.test(dk?.value),r.s+' '+JSON.stringify(r.j).slice(0,160));
  r=await api(A.token,'GET',D);t('the list now has the DKIM record',r.j.domains?.find(d=>d.domain==='acme.test')?.records?.some(x=>x.purpose==='dkim'&&x.value===dk?.value),JSON.stringify(r.j.domains?.find(d=>d.domain==='acme.test')?.records?.map(x=>x.purpose)));
+ r=await api(Bo.token,'GET','/v1/me');t('mail on a domain that is not primary gives Bob no address',r.j.accounts?.find(a=>a.organizationId===W)?.address===null,JSON.stringify(r.j.accounts?.map(a=>a.address)));
  r=await api(A.token,'PATCH',`${D}/acme.test`,{primary:true});t('Ann makes it primary',r.s===200&&r.j.primary===true,r.s+' '+JSON.stringify(r.j).slice(0,90));
  r=await api(A.token,'GET',D);t('the list says so',r.j.domains?.find(d=>d.domain==='acme.test')?.primary===true&&r.j.domains?.find(d=>d.kind==='platform')?.primary===false,JSON.stringify(r.j.domains?.map(d=>[d.domain,d.verified,d.primary])));
  const C=await signup('carol@example.com','Carol');r=await api(A.token,'POST',`/v1/workspaces/${W}/invites`,{email:'carol@example.com'});const ctok=(r.j.inviteUrl??'').split('/').pop();
  r=await api(C.token,'POST','/v1/invites/accept',{token:ctok});t('Ann invites Carol',r.s<300,r.s+' '+JSON.stringify(r.j).slice(0,90));
  r=await api(C.token,'GET','/v1/me');t('Carol\'s address is on acme.test',r.j.accounts?.find(a=>a.organizationId===W)?.address==='carol@acme.test',JSON.stringify(r.j.accounts));
- r=await api(Bo.token,'GET','/v1/me');t('Bob\'s address is unchanged',r.j.accounts?.find(a=>a.organizationId===W)?.address===bobAddr,JSON.stringify(r.j.accounts?.map(a=>a.address)));
+ r=await api(Bo.token,'GET','/v1/me');t('Bob got an address on acme.test once it was primary with mail on (§3.2)',r.j.accounts?.find(a=>a.organizationId===W)?.address==='bob@acme.test',JSON.stringify(r.j.accounts?.map(a=>a.address)));
+ r=await api(A.token,'GET',`/v1/workspaces/${W}/members`);{const ms2=r.j.members??[];t('the members list takes it, and the agent keeps its platform address',ms2.find(m=>m.userId===Bo.user.id)?.address==='bob@acme.test'&&ms2.find(m=>m.userId===A.user.id)?.address==='ann@acme.test'&&ms2.find(m=>m.isAgent&&m.kind!=='personal_agent')?.address==='flowbot@locked-in.freeflow.im',JSON.stringify(ms2.map(m=>m.address)));}
  r=await api(C.token,'GET',D);t('a member cannot see the domains',r.s===403,r.s);
  await api(A.token,'PATCH',`${D}/locked-in.freeflow.im`,{primary:true});
- r=await api(A.token,'DELETE',`${D}/acme.test`);t('acme.test cannot be removed while Carol\'s address is on it',r.s===409&&r.j.error?.code==='domain_in_use',r.s+' '+JSON.stringify(r.j).slice(0,90));
+ r=await api(A.token,'DELETE',`${D}/acme.test`);t('acme.test cannot be removed while addresses are on it',r.s===409&&r.j.error?.code==='domain_in_use',r.s+' '+JSON.stringify(r.j).slice(0,90));
  r=await api(A.token,'DELETE',`${D}/locked-in.freeflow.im`);t('nor can the platform domain',r.s===409&&r.j.error?.code==='domain_platform',r.s);
  await api(A.token,'POST',D,{domain:'spare.test'});r=await api(A.token,'DELETE',`${D}/spare.test`);t('an unused domain can',r.s===200,r.s);
  doh.close();}

@@ -234,6 +234,18 @@ adminRoutes.post('/v1/admin/accounts/provision', async (c) => {
 });
 
 /**
+ * POST /v1/admin/accounts/unhost-people: the one-time clean-up of decision_log 2026-11-15. Every person with an address
+ * on a platform subdomain loses it, and their mailbox and native calendar are deleted (by the provisioning Queue); agents
+ * and addresses on organizations' own domains are kept. Each organization's member list takes the change. Safe to run
+ * again: a second run finds nobody.
+ */
+adminRoutes.post('/v1/admin/accounts/unhost-people', async (c) => {
+  const done = (await directory(c as never, 'unhostAllPeople')) as { organizationId: string; addresses: string[] }[];
+  for (const o of done) await c.env.ORG.get(c.env.ORG.idFromName(o.organizationId)).syncAddresses();
+  return c.json({ organizations: done, addresses: done.reduce((n, o) => n + o.addresses.length, 0) });
+});
+
+/**
  * POST /v1/admin/assistant/migrate: `moveAssistantRows` for every organization with members, or the ones named
  * (`{ organizations: [...] }`; a Worker request may make only so many calls, so a large deployment runs it in parts).
  */

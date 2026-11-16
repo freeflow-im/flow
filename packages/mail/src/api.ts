@@ -215,6 +215,8 @@ let workspace: string | null = null;
 export const setMailWorkspace = (id: string | null) => {
   workspace = id;
 };
+/** The organization Mail is showing. */
+export const mailWorkspace = (): string | null => workspace ?? readActiveOrganization();
 /** A /v1/mail (or /v1/calendar: invitations) path, naming the organization. */
 export function inWorkspace(path: string): string {
   const id = workspace ?? readActiveOrganization();

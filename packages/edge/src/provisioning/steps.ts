@@ -19,7 +19,7 @@ export interface ProvisioningDeps {
     put(account: AccountDTO, mailbox: HostedMailbox): Promise<void>;
     clear(account: AccountDTO): Promise<void>;
   };
-  calendar: { ensureNative(account: AccountDTO): Promise<void> };
+  calendar: { ensureNative(account: AccountDTO): Promise<void>; dropNative(account: AccountDTO): Promise<void> };
   /** Writes `<slug>.freeflow.im`'s MX, SPF and DMARC (directory/providers/cloudflareDns.ts). */
   publishPlatformDns(slug: string): Promise<void>;
   password?(): string;
@@ -111,14 +111,17 @@ export async function runMessage(msg: ProvisioningMessage, deps: ProvisioningDep
     return;
   }
   if (msg.kind === 'delete') {
-    // A removed account's mailbox, or a guest's kept one, past the retention period.
-    if (account.state !== 'removed' && account.kind !== 'guest') return;
+    // A removed account's mailbox, or a guest's kept one, past the retention period; or a person's taken from them at
+    // once, with their native calendar, when hosted mail left the platform subdomain (decision_log 2026-11-15).
+    const unhosted = account.kind === 'native' && !account.address && account.state !== 'removed';
+    if (account.state !== 'removed' && account.kind !== 'guest' && !unhosted) return;
     if (mailbox) await deps.provider.deleteMailbox(mailbox).catch(missing);
     await deps.mail.clear(account);
+    if (unhosted) await deps.calendar.dropNative(account);
     await deps.directory.setHosted(account.id, false);
     return;
   }
-  if (account.kind === 'guest') return;
+  if (account.kind === 'guest' || !account.address) return;
   if (account.state === 'removed' || account.state === 'suspended') return;
   if (account.state === 'active' && t.hosted) return;
   if (account.state === 'requested' || !t.hosted) {

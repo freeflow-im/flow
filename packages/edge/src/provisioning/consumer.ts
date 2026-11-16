@@ -50,6 +50,10 @@ export function deps(env: ProvisioningEnv): ProvisioningDeps {
         const out = await env.CALENDAR.get(env.CALENDAR.idFromName(a.id)).provisionNative(a);
         if (!out.ok) throw new Error(out.message);
       },
+      dropNative: async (a) => {
+        const out = await env.CALENDAR.get(env.CALENDAR.idFromName(a.id)).dropNative(a);
+        if (!out.ok) throw new Error(out.message);
+      },
     },
     publishPlatformDns: async (slug) => publishPlatformDomain(env, slug, await provider.records(organizationDomain(slug))),
   };

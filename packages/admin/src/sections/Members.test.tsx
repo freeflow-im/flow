@@ -344,6 +344,9 @@ describe('mailState', () => {
     expect(mailState(a({ statusMessage: 'refused' }), true)).toEqual({ text: 'stopped: refused', tone: 'warn', retry: true });
     expect(mailState(a({ hosted: false }), true)).toEqual({ text: 'no mailbox yet', tone: 'muted', retry: true });
     expect(mailState(a({ state: 'suspended' }), true)).toEqual({ text: 'suspended', tone: 'muted', retry: false });
+    // A person where people get no hosted address (platform.md §3.2): their linked mailbox, or none; nothing to retry.
+    expect(mailState(a({ address: null, hosted: false, linkedAddress: 'x@gmail.example' }), true)).toEqual({ text: 'linked', tone: 'muted', retry: false });
+    expect(mailState(a({ address: null, hosted: false }), true)).toEqual({ text: 'none', tone: 'muted', retry: false });
     expect(mailState(a({}), false)).toBeNull();
     expect(mailState(undefined, true)).toBeNull();
   });

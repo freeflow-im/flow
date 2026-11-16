@@ -186,7 +186,7 @@ export function App() {
                   ))}
               </nav>
               <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
-                <TodayCard events={today.events} error={today.error} settingUp={setup.settingUp} />
+                <TodayCard events={today.events} error={today.error} settingUp={setup.settingUp} hasCalendar={today.hasCalendar} />
                 <InboxCard
                   address={mail.account?.email ?? null}
                   account={mail.account?.id ?? null}

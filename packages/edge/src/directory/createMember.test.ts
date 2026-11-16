@@ -44,7 +44,8 @@ beforeEach(() => {
   org = newId();
   core.reserveSlug('acme', org);
   core.addDomain(org, 'acme.test');
-  sql.exec('UPDATE domains SET verified_at = 1 WHERE domain = ?', 'acme.test');
+  // Mail is on for acme.test: people get addresses there (platform.md §3.2).
+  sql.exec('UPDATE domains SET verified_at = 1, provider_at = 1 WHERE domain = ?', 'acme.test');
   core.addDomain(org, 'unverified.test');
 });
 afterEach(() => vi.useRealTimers());
@@ -67,12 +68,15 @@ describe('creating a member', () => {
     await expect(core.login('bea.lin@acme.test', '')).rejects.toThrow('invalid email or password');
   });
 
-  it('defaults to the platform domain too, and sends a native account to be provisioned when hosted mail is on', () => {
-    const hosted = new DirectoryCore(nodeSql(), { webUrlBase: 'https://app.test', registrationEnabled: true, send: async () => {}, provisioning: true });
+  it('sends a native account to be provisioned when hosted mail is on', () => {
+    const hostedSql = nodeSql();
+    const hosted = new DirectoryCore(hostedSql, { webUrlBase: 'https://app.test', registrationEnabled: true, send: async () => {}, provisioning: true });
     const o = newId();
     hosted.reserveSlug('beta', o);
-    const { account } = hosted.createMember(o, input({ domain: hosted.primaryDomainOf(o) }));
-    expect(account).toMatchObject({ address: 'bea@beta.freeflow.im', state: 'requested' });
+    hosted.addDomain(o, 'beta.test');
+    hostedSql.exec('UPDATE domains SET verified_at = 1, provider_at = 1 WHERE domain = ?', 'beta.test');
+    const { account } = hosted.createMember(o, input({ domain: 'beta.test' }));
+    expect(account).toMatchObject({ address: 'bea@beta.test', state: 'requested' });
     expect(hosted.takeProvisioning()).toEqual([{ kind: 'provision', organizationId: o, accountId: account.id }]);
   });
 
@@ -110,7 +114,9 @@ describe('validation', () => {
     sql.exec("INSERT INTO users (id, email, password_hash, display_name, created_at) VALUES ('u9', 'carl@acme.test', 'x', 'Carl', 1)");
     refused({ username: 'carl' }, 'username_taken', 409);
     // The same name on another of the organization's domains is free.
-    expect(core.createMember(org, input({ domain: core.primaryDomainOf(org) })).account.address).toBe('bea@acme.freeflow.im');
+    core.addDomain(org, 'beta.test');
+    sql.exec('UPDATE domains SET verified_at = 1, provider_at = 1 WHERE domain = ?', 'beta.test');
+    expect(core.createMember(org, input({ domain: 'beta.test' })).account.address).toBe('bea@beta.test');
   });
 
   it('refuses a domain that is not the organization\'s, or not verified', () => {
@@ -119,6 +125,13 @@ describe('validation', () => {
     const other = newId();
     core.reserveSlug('other', other);
     refused({ domain: 'other.freeflow.im' }, 'invalid_domain');
+  });
+
+  it('refuses the platform subdomain, and a domain of its own with mail not turned on: people get no address there', () => {
+    refused({ domain: core.primaryDomainOf(org) }, 'domain_no_mail');
+    core.addDomain(org, 'nomail.test');
+    sql.exec('UPDATE domains SET verified_at = 1 WHERE domain = ?', 'nomail.test');
+    refused({ domain: 'nomail.test' }, 'domain_no_mail');
   });
 
   it('refuses an invalid backup email, or one on the organization\'s own domains', () => {

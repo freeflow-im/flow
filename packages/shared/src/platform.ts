@@ -263,8 +263,10 @@ export interface AccountDTO {
   id: string;
   principalId: string;
   organizationId: string;
-  /** The account's email address; null for a guest, which has none (§3.3). */
+  /** The account's hosted email address; null for a guest, and for a person where people get none (§3.2, §3.3). */
   address: string | null;
+  /** A person without a hosted address: the linked mailbox they go by in the organization (§3.2); null for none. */
+  linkedAddress?: string | null;
   displayName: string;
   role: AccountRole;
   kind: AccountKind;
