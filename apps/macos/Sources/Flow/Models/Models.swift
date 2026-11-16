@@ -806,9 +806,9 @@ struct ChannelsResponse: Decodable, Sendable {
     /// on disk, and a spinner must never survive a relaunch — it's a claim
     /// about what an agent is doing this second.
     let busyChannelIds: Set<String>
-    /// channelId -> live voice-huddle roster (Phase 1). Same reasoning as
-    /// busyChannelIds — LiveKit is the source of truth, not this cache
-    /// (decision log 2026-08-20), so it must never survive a relaunch either.
+    /// channelId -> who is in each conversation's huddle (its Meet room). Same
+    /// reasoning as busyChannelIds: the server's roster is the truth, not this
+    /// cache, so it must never survive a relaunch either.
     let huddleRosters: [String: [HuddleParticipant]]
 
     private struct IndicatorRow: Decodable {
@@ -916,14 +916,18 @@ struct HuddleUpdatedData: Decodable, Sendable {
     let participants: [HuddleParticipant]
 }
 
-/// POST /v1/channels/:id/huddle/join response: a LiveKit access token scoped
-/// to that entity's room, and the server URL to connect to. In a DM the same
-/// call starts the ring, so it also carries the invite and the names it could
-/// not reach; both are absent for an ambient channel huddle (and on a server
-/// that predates #436, which is why they decode optionally).
-struct HuddleJoinResponse: Decodable, Sendable {
-    let token: String
-    let url: String
+/// A Meet room, as the huddle routes answer with it (docs/specs/meetings.md). Its link is `<server>/meet/<code>`.
+struct MeetRoom: Decodable, Sendable {
+    let id: String
+    let code: String
+    let title: String
+    let channelId: String?
+}
+
+/// POST /v1/channels/:id/huddle/join (and accepting a ring) since Meet phase 2: the conversation's Meet room, which
+/// the app opens in the browser, and the ring that starting it began, with the names it could not reach.
+struct HuddleStartResponse: Decodable, Sendable {
+    let meeting: MeetRoom
     let invite: HuddleInvite?
     let unavailable: [String]?
 }

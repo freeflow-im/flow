@@ -1,6 +1,6 @@
 {
   "name": "flow-agent-bridge",
-  "version": "0.38.0",
+  "version": "0.39.0",
   "type": "module",
   "description": "Flow agent bridge: joins a Flow workspace as a first-class AI agent and execs a coding-agent CLI (Claude Code, Codex) headlessly per conversation",
   "license": "MIT",
@@ -35,8 +35,6 @@
     "pack:tarball": "pnpm pack"
   },
   "dependencies": {
-    "@livekit/agents": "1.7.1",
-    "@livekit/rtc-node": "0.13.34",
     "@napi-rs/canvas": "0.1.100",
     "exceljs": "4.4.0",
     "mammoth": "1.11.0",

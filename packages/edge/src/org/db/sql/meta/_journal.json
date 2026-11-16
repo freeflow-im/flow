@@ -50,6 +50,27 @@
       "when": 1794438049720,
       "tag": "0006_member_kind",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1794796376189,
+      "tag": "0007_meetings",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1794798733473,
+      "tag": "0008_meeting_codes",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1794799447592,
+      "tag": "0009_meeting_channels",
+      "breakpoints": true
     }
   ]
 }

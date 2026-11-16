@@ -78,6 +78,7 @@ import * as ci from '../services/channelIndicators.js';
 import * as ce from '../services/channelEmoji.js';
 import * as hd from '../services/huddles.js';
 import * as hi from '../services/huddleInvites.js';
+import * as mt from '../services/meetings.js';
 import * as msg from '../services/messages.js';
 import { searchMessages } from '../services/search.js';
 import { parseSearch } from '@flow/shared/search';
@@ -668,31 +669,48 @@ export function registerRoutes(app: FastifyInstance): void {
     return ce.setChannelEmoji(id, req.user.id, body.emoji);
   });
 
-  // Huddles (LiveKit Cloud): entity-scoped voice/video. Ambient in a channel,
-  // a ring in a DM or group DM (#436). See CONTEXT.md (Huddle, Huddle invite)
-  // and services/huddles.ts for the join/leave/webhook design. Join is
-  // idempotent — re-mints a fresh token, also the reconnect path — and in a DM
-  // it is what starts the ring.
-  app.post('/v1/channels/:id/huddle/join', { preHandler: requireAuth }, async (req) => {
+  // Meet (docs/specs/meetings.md): meeting rooms on Cloudflare RealtimeKit, members only in phase 1. A room's link is its
+  // short code (or its id, for older links); both are routable alone (routes/org.ts MEETING_CODE, BY_ID), so a link finds
+  // its organization. `:id` below is either.
+  app.post('/v1/workspaces/:id/meetings', { preHandler: requireAuth }, async (req) => {
     const { id } = req.params as { id: string };
-    return hd.joinHuddle(id, req.user.id);
+    const title = (req.body as { title?: unknown } | undefined)?.title;
+    if (title !== undefined && typeof title !== 'string') throw badRequest('validation', 'title: expected a string');
+    return mt.createMeeting(id, req.user.id, title);
+  });
+  app.get('/v1/workspaces/:id/meetings/live', { preHandler: requireAuth }, async (req) => {
+    const { id } = req.params as { id: string };
+    return { meetings: await mt.liveMeetings(id, req.user.id) };
+  });
+  app.get('/v1/meetings/:id', { preHandler: requireAuth }, async (req) => {
+    const { id } = req.params as { id: string };
+    return mt.getMeeting(id, req.user.id);
+  });
+  app.post('/v1/meetings/:id/join', { preHandler: requireAuth }, async (req) => {
+    const { id } = req.params as { id: string };
+    return mt.joinMeeting(id, req.user.id);
   });
 
-  // LiveKit webhook: the safety net for a participant or room that vanished without a leave. Not a Flow user, so no
-  // requireAuth: the request's own signed Authorization header is verified instead (the Worker checked it once
-  // already, to find this organization by the room's name; routes/org.ts). LiveKit sends application/webhook+json,
-  // which arrives here as raw bytes, exactly what the signature covers.
-  app.post('/v1/livekit/webhook', async (req, reply) => {
-    const authHeader = (req.headers as Record<string, string | undefined>).authorization ?? '';
-    const raw: unknown = req.body;
-    const body = Buffer.isBuffer(raw) ? (raw as Buffer).toString('utf8') : typeof raw === 'string' ? raw : JSON.stringify(raw ?? '');
-    try {
-      await hd.handleLiveKitWebhook(body, authHeader);
-    } catch (err) {
-      console.warn('livekit webhook rejected', String(err));
-      return reply.status(400).send({ error: { code: 'invalid_webhook', message: 'invalid webhook' } });
-    }
-    return reply.status(200).send({ ok: true });
+  app.post('/v1/meetings/:id/leave', { preHandler: requireAuth }, async (req) => {
+    const { id } = req.params as { id: string };
+    await mt.leaveMeeting(id, req.user.id);
+    return { ok: true };
+  });
+
+  // RealtimeKit's webhook, already verified by the Worker (routes/org.ts) against RealtimeKit's published key, which
+  // also found this organization by the meeting's RTK id. Not a Flow user, so no requireAuth; it only moves huddle rosters.
+  app.post('/v1/rtk/webhook', async (req) => {
+    if (!req.headers['x-flow-rtk-verified']) throw new ApiError(401, 'invalid_webhook', 'invalid webhook');
+    await mt.handleRtkWebhook((req.body ?? {}) as Parameters<typeof mt.handleRtkWebhook>[0]);
+    return { ok: true };
+  });
+
+  // Huddles (docs/specs/meetings.md phase 2): a conversation's call is its Meet room. "Join" gets or makes the room and
+  // rings the conversation's people (see services/meetings.ts startHuddle); the client then opens /meet/<code>, and
+  // being in that room is what puts a person on the roster. Refused (409) in a room of more than six people.
+  app.post('/v1/channels/:id/huddle/join', { preHandler: requireAuth }, async (req) => {
+    const { id } = req.params as { id: string };
+    return mt.startHuddle(id, req.user.id);
   });
 
   app.post('/v1/channels/:id/huddle/leave', { preHandler: requireAuth }, async (req) => {
@@ -703,15 +721,13 @@ export function registerRoutes(app: FastifyInstance): void {
 
   // Answering a ring is joining: accept marks the target answered (so the
   // user's other devices dismiss with "Answered on another device") and then
-  // takes the ordinary join path for the token — there is no second way in.
-  // Agent-token callers additionally get a short-lived speech-only grant;
-  // ordinary joins and all human clients never receive one.
+  // answers with the conversation's Meet room, which the client opens.
   app.post('/v1/huddle/invites/:id/accept', { preHandler: requireAuth }, async (req) => {
     const { id } = req.params as { id: string };
     const body = parse(HuddleInviteReplyBody, req.body ?? {});
     const invite = await hi.acceptInvite(id, req.user.id, body.sessionId);
     if (!invite) throw new ApiError(404, 'invite_not_found', 'that huddle is no longer ringing');
-    return hd.joinHuddle(invite.channelId, req.user.id, { includeInferenceToken: req.authKind === 'agent' });
+    return mt.startHuddle(invite.channelId, req.user.id);
   });
 
   app.post('/v1/huddle/invites/:id/decline', { preHandler: requireAuth }, async (req) => {

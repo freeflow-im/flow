@@ -460,27 +460,23 @@ struct ChannelView: View {
         .background(MC.chat)
     }
 
-    /// Huddles run in any entity now — channel, DM or group DM (#436) — just
-    /// not in an archived one. In a channel the button joins something ambient
-    /// and nobody is rung; in a DM the same button *rings* the other
-    /// member(s), so it says so. The participant count is the ambient
-    /// indicator for a huddle that's live but not yet joined.
+    /// A huddle is the conversation's Meet room (Meet phase 2): the button rings the conversation's people and
+    /// opens the room in the browser. Any conversation that isn't archived; the server refuses a new one in a room
+    /// of more than six people. The count shows a huddle that's live.
     @ViewBuilder
     private var huddleButton: some View {
         if let channel = currentChannel, channel.archivedAt == nil, app.can(.huddles) {
             let isDm = channel.kind != "standard"
-            let inThisHuddle = app.activeHuddleChannelId == channelId
+            let inThisHuddle = app.isInHuddle(channelId: channelId)
             let roster = app.huddleRosters[channelId] ?? []
             Button {
-                if inThisHuddle {
-                    app.leaveHuddle()
-                } else if let workspaceId = currentChannel?.workspaceId {
+                if let workspaceId = currentChannel?.workspaceId {
                     app.joinHuddle(channelId: channelId, workspaceId: workspaceId)
                 }
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "mic.fill")
-                    Text(inThisHuddle ? "Leave Huddle" : isDm ? "Huddle" : "Join Huddle")
+                    Text(inThisHuddle ? "Back to Huddle" : roster.isEmpty ? "Huddle" : "Join Huddle")
                     if !inThisHuddle, !roster.isEmpty {
                         Text("\(roster.count)")
                             .flowFont(size: 11, weight: .bold)
@@ -494,8 +490,8 @@ struct ChannelView: View {
             }
             .buttonStyle(.plain)
             .disabled(app.huddleConnecting)
-            .help(inThisHuddle ? "Leave huddle" : isDm ? "Start a huddle — this rings them" : "Join huddle")
-            .accessibilityIdentifier(inThisHuddle ? "huddle.leave" : "huddle.join")
+            .help(inThisHuddle ? "Open the huddle in your browser" : !roster.isEmpty ? "Join the huddle in your browser" : isDm ? "Start a huddle — this rings them" : "Start a huddle — this rings everyone here")
+            .accessibilityIdentifier(inThisHuddle ? "huddle.return" : "huddle.join")
         }
     }
 

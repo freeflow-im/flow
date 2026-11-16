@@ -91,17 +91,15 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# --- Embed Sparkle (auto-update) + LiveKit's XCFrameworks (voice huddle) -----
-# SwiftPM resolves these as XCFrameworks but, unlike Xcode, does nothing to put
-# them inside the bundle: without this the app launches and immediately dies on
-# a missing @rpath/<Name>.framework. Copy each macOS slice, then teach the
+# --- Embed Sparkle (auto-update) ----------------------------------------------
+# SwiftPM resolves it as an XCFramework but, unlike Xcode, does nothing to put
+# it inside the bundle: without this the app launches and immediately dies on
+# a missing @rpath/<Name>.framework. Copy the macOS slice, then teach the
 # executable to look in Contents/Frameworks (SwiftPM emits @loader_path and the
-# toolchain paths, neither of which finds it). LiveKit ships two — its Rust
-# core (RustLiveKitUniFFI) and WebRTC (LiveKitWebRTC) — same treatment as
-# Sparkle, one rpath covers all three.
+# toolchain paths, neither of which finds it).
 mkdir -p "$APP/Contents/Frameworks"
 NEEDS_RPATH=0
-for FW_NAME in Sparkle RustLiveKitUniFFI LiveKitWebRTC; do
+for FW_NAME in Sparkle; do
   # Excludes __MACOSX: some of these XCFrameworks arrive as a re-zipped
   # download, which leaves an `__MACOSX/` sibling of AppleDouble resource-fork
   # stubs alongside the real tree — same framework name, no real symlinks
@@ -141,8 +139,6 @@ sign_nested() {
     "$sparkle/Versions/B/Updater.app"
     "$sparkle/Versions/B/Autoupdate"
     "$sparkle"
-    "$APP/Contents/Frameworks/RustLiveKitUniFFI.framework"
-    "$APP/Contents/Frameworks/LiveKitWebRTC.framework"
   )
   for t in "${targets[@]}"; do
     [ -e "$t" ] || continue

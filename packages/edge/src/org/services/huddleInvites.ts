@@ -4,9 +4,9 @@
 // A huddle in a *channel* is ambient: you see it in the sidebar and drop in.
 // A huddle in a *DM* is a call — starting one rings the other member(s), and
 // the DM has to show afterwards that it happened, whether or not anyone
-// answered. That difference is the whole of this module: services/huddles.ts
-// still owns the LiveKit room and the roster, and calls in here only when the
-// entity is a DM or group DM.
+// answered. That difference is the whole of this module: the Meet room
+// (services/meetings.ts) and the roster (services/huddles.ts) live elsewhere,
+// and call in here to ring and to end the ring.
 //
 // **Track A only.** "Reachable" means *a live socket right now* — there is no
 // push, so a closed tab or a backgrounded iPhone is simply unavailable and the
@@ -292,7 +292,11 @@ export async function startOrJoinRing(
     .select({ userId: channelMembers.userId })
     .from(channelMembers)
     .where(eq(channelMembers.channelId, chan.id));
-  const callees = memberRows.map((r) => r.userId).filter((id) => id !== callerId);
+  // People only: agents are not rung (their voice calls were removed with LiveKit, ruling R6).
+  const agentIds = new Set(
+    (await db.select({ id: users.id }).from(users).where(and(inList(users.id, memberRows.map((r) => r.userId)), eq(users.isAgent, true)))).map((r) => r.id),
+  );
+  const callees = memberRows.map((r) => r.userId).filter((id) => id !== callerId && !agentIds.has(id));
   // A "DM" with only you in it (your own notes) has nobody to ring; it behaves
   // like an ambient huddle rather than a call that instantly misses itself.
   if (callees.length === 0) return { invite: null, unavailable: [] };
@@ -436,8 +440,8 @@ export async function cancelInvite(inviteId: string, callerId: string): Promise<
 /**
  * The DM's huddle room emptied — end whatever invite is live for it. Called
  * from services/huddles.ts on every roster change that reaches zero, which
- * covers a clean leave, a dropped connection (LiveKit webhook) and a finished
- * room alike.
+ * covers a clean leave, a dropped connection (RealtimeKit webhook) and a
+ * finished meeting alike.
  *
  * A `ringing` invite whose caller left is a cancel; an `active` one is a
  * finished call with a duration.
@@ -452,9 +456,8 @@ export async function endInviteForChannel(channelId: string): Promise<void> {
  * Boot sweep. Ring timers are the one piece of state this module keeps in
  * memory, so a restart leaves `ringing` rows with nothing to resolve them —
  * every reconnecting client would raise an overlay for a call that ended
- * whenever the old process died. `active` rows are left alone: the LiveKit
- * room outlives our process, and huddles.ts's own boot reconciliation decides
- * whether that call is still up.
+ * whenever the old process died. `active` rows are left alone: the Meet room
+ * outlives our process, and its leave or the RealtimeKit webhook ends the call.
  */
 export async function sweepStaleOnBoot(): Promise<number> {
   const stale = await db.select().from(huddleInvites).where(eq(huddleInvites.status, 'ringing'));

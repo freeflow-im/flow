@@ -195,26 +195,8 @@ export function registerRoutes(app: FastifyInstance): void {
     googleClientId: config.googleClientId ?? null,
     apple: config.appleEnabled,
     maxFileBytes: config.maxFileBytes,
-    huddles: config.livekitEnabled,
+    huddles: false, // huddles run in Meet, on the Worker only
   }));
-
-  // LiveKit webhook (Phase 1 voice huddle): the reconciliation safety net for
-  // a participant/room that vanished without a REST leave call. Not a Flow
-  // user — no requireAuth — `WebhookReceiver` verifies the request's own
-  // signed Authorization header instead. The body arrives as a raw Buffer via
-  // app.ts's catch-all content-type parser, which is exactly what
-  // WebhookReceiver.receive() wants (it parses the JSON itself post-verify).
-  app.post('/v1/livekit/webhook', async (req, reply) => {
-    const authHeader = req.headers.authorization ?? '';
-    const body = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : String(req.body ?? '');
-    try {
-      await hd.handleLiveKitWebhook(body, authHeader);
-    } catch (err) {
-      req.log.warn({ err }, 'livekit webhook rejected');
-      return reply.status(400).send({ error: { code: 'invalid_webhook', message: 'invalid webhook' } });
-    }
-    return reply.status(200).send({ ok: true });
-  });
 
   // Public macOS app download (operator feature): 302 to a short-lived signed
   // URL for the notarized DMG in blob storage. No auth — it's linked from the
@@ -808,14 +790,10 @@ export function registerRoutes(app: FastifyInstance): void {
     return ce.setChannelEmoji(id, req.user.id, body.emoji);
   });
 
-  // Huddles (LiveKit Cloud): entity-scoped voice/video. Ambient in a channel,
-  // a ring in a DM or group DM (#436). See CONTEXT.md (Huddle, Huddle invite)
-  // and services/huddles.ts for the join/leave/webhook design. Join is
-  // idempotent — re-mints a fresh token, also the reconnect path — and in a DM
-  // it is what starts the ring.
-  app.post('/v1/channels/:id/huddle/join', { preHandler: requireAuth }, async (req) => {
-    const { id } = req.params as { id: string };
-    return hd.joinHuddle(id, req.user.id);
+  // Huddles run in Meet on the Worker (docs/specs/meetings.md phase 2); this
+  // server cannot start one. Leave, decline and cancel stay, for old clients.
+  app.post('/v1/channels/:id/huddle/join', { preHandler: requireAuth }, async () => {
+    throw hd.huddlesUnavailable();
   });
 
   app.post('/v1/channels/:id/huddle/leave', { preHandler: requireAuth }, async (req) => {
@@ -824,17 +802,8 @@ export function registerRoutes(app: FastifyInstance): void {
     return { ok: true };
   });
 
-  // Answering a ring is joining: accept marks the target answered (so the
-  // user's other devices dismiss with "Answered on another device") and then
-  // takes the ordinary join path for the token — there is no second way in.
-  // Agent-token callers additionally get a short-lived speech-only grant;
-  // ordinary joins and all human clients never receive one.
-  app.post('/v1/huddle/invites/:id/accept', { preHandler: requireAuth }, async (req) => {
-    const { id } = req.params as { id: string };
-    const body = parse(HuddleInviteReplyBody, req.body ?? {});
-    const invite = await hi.acceptInvite(id, req.user.id, body.sessionId);
-    if (!invite) throw new ApiError(404, 'invite_not_found', 'that huddle is no longer ringing');
-    return hd.joinHuddle(invite.channelId, req.user.id, { includeInferenceToken: req.authKind === 'agent' });
+  app.post('/v1/huddle/invites/:id/accept', { preHandler: requireAuth }, async () => {
+    throw hd.huddlesUnavailable();
   });
 
   app.post('/v1/huddle/invites/:id/decline', { preHandler: requireAuth }, async (req) => {

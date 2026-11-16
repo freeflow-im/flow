@@ -1,20 +1,7 @@
-// Voice huddle (Phase 1) — the in-memory roster of who's live in a channel's
-// ambient audio call. See CONTEXT.md for the Huddle glossary entry and
-// decision_log.md (2026-08-20) for the rulings behind this design.
-//
-// Unlike channelIndicators (../indicators.ts), this store is NOT the source of
-// truth — LiveKit is. A participant's aliveness is a real RTC connection that
-// LiveKit's own server already tracks and times out; this map is a cache of
-// that, kept in sync by three writers:
-//   1. REST join/leave (services/huddles.ts), the primary path,
-//   2. the LiveKit webhook (participant_left / room_finished), the
-//      reconciliation safety net for a client that vanished without calling
-//      leave,
-//   3. boot-time reconciliation against LiveKit's REST API, since a server
-//      restart wipes this map while LiveKit's rooms keep running.
-// There is deliberately no TTL sweep here (contrast channelIndicators):
-// LiveKit's webhook already fires on a dead peer, so there's no "forgot to
-// refresh" failure mode to guard against.
+// Huddle roster on the Node server (the legacy AWS origin): an in-memory map
+// of who is in a conversation's huddle. Huddles now run in Meet on the Worker
+// (docs/specs/meetings.md phase 2), so this server never adds anyone; the map
+// stays for leave and the replica roster sync (services/huddles.ts).
 import type { HuddleParticipantDTO } from '@flow/shared';
 
 interface Entry {
@@ -80,10 +67,7 @@ export function joinHuddle(
 }
 
 /** Drop one user from a channel's huddle (no-op if they weren't in it).
- * Used by both the REST leave path and the webhook's `participant_left`
- * safety net — LiveKit's room name is the channel id, so both name the same
- * entry. Carries the departing entry's workspaceId, since a webhook caller
- * has no other way to know it. */
+ * Carries the departing entry's workspaceId for the caller's event. */
 export function leaveHuddle(
   channelId: string,
   userId: string,
@@ -96,8 +80,7 @@ export function leaveHuddle(
   return { before, after: huddleParticipants(channelId), workspaceId };
 }
 
-/** Wipe a whole channel's huddle — the webhook's `room_finished` safety net
- * (LiveKit itself says the room is gone, so every participant is gone). */
+/** Wipe a whole channel's huddle. */
 export function clearChannelHuddle(channelId: string): { before: HuddleParticipant[]; workspaceId: string | undefined } {
   const users = byChannel.get(channelId);
   const before = toParticipants(users);
@@ -107,8 +90,8 @@ export function clearChannelHuddle(channelId: string): { before: HuddleParticipa
 }
 
 /**
- * Boot-time reconciliation: replace one channel's roster with LiveKit's real
- * participant list (LiveKit is the source of truth — see module doc).
+ * Replace one channel's roster with a full roster (the replica sync's
+ * `huddle.updated` events).
  * `participants: []` clears the channel entirely.
  */
 export function reconcileChannel(

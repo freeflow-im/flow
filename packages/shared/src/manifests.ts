@@ -212,6 +212,21 @@ export const APP_MANIFESTS: AppManifest[] = [
     events: [],
   },
   {
+    // Meet (docs/specs/meetings.md): video meetings on Cloudflare RealtimeKit. No object and no routes file of its own:
+    // a room is a row in the organization's object (org/services/meetings.ts), whose id is the room's link (/meet/<id>).
+    name: 'meet',
+    path: '/meet',
+    scope: 'organization',
+    kinds: [],
+    tab: { label: 'Meet', shortcut: '5', badge: 'none' },
+    client: { dist: 'packages/meet/dist', basePath: '/meet/', optional: true },
+    pages: [
+      { path: '/meet', html: 'meet.html', signIn: true },
+      { path: '/meet/*', html: 'meet.html', signIn: true, passFiles: true },
+    ],
+    events: [],
+  },
+  {
     // The assistant (platform.md §5.5): one object per account holding its chats, settings and usage, which runs the model
     // loop with the registry's tools; the apps above give it page context and browser tools (their `assistant`).
     name: 'assistant',

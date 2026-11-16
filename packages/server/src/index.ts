@@ -13,7 +13,7 @@ import { startOrphanSweep } from './services/files.js';
 import { startPushWorker } from './services/pushOutbox.js';
 import { startIndicatorSweeper } from './services/channelIndicators.js';
 import { startScheduler } from './services/scheduledMessages.js';
-import { reconcileHuddlesFromLiveKit, startHuddleRosterSync } from './services/huddles.js';
+import { startHuddleRosterSync } from './services/huddles.js';
 import { sweepStaleOnBoot } from './services/huddleInvites.js';
 
 async function main(): Promise<void> {
@@ -50,9 +50,6 @@ async function main(): Promise<void> {
   // the catch-up path: a row that came due while the server was down is overdue
   // now and fires once here — never once per occurrence it missed.
   const scheduler = startScheduler(app.log);
-  // Rebuild the huddle cache from LiveKit's real rooms (decision log 2026-08-20):
-  // a restart wipes our in-memory map, but LiveKit's rooms keep running.
-  void reconcileHuddlesFromLiveKit().catch((err) => app.log.error({ err }, 'livekit huddle reconciliation failed'));
   // A DM ring's 30s timer is process-local, so any invite left `ringing` by the
   // previous process has nothing to resolve it (#436). Retire those to missed
   // before clients reconnect and raise an overlay for a dead call.

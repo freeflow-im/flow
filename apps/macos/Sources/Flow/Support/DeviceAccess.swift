@@ -4,8 +4,8 @@ import Foundation
 /// Asking the OS for the microphone or camera, keeping the three answers the
 /// UI actually has different words for.
 ///
-/// `LiveKitSDK.ensureDeviceAccess` flattens all of them into one `Bool`, and
-/// that is how #469 shipped an alert telling people to flip a Privacy toggle
+/// The old huddle SDK's `ensureDeviceAccess` flattened all of them into one
+/// `Bool`, and that is how #469 shipped an alert telling people to flip a Privacy toggle
 /// that wasn't there: the hardened runtime was refusing the request before TCC
 /// ever saw it, so Flow never appeared in the pane the alert pointed at. The
 /// entitlements fix stops that happening — this type stops it being

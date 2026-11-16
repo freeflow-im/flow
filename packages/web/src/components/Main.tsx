@@ -40,8 +40,6 @@ import ChannelBrowserView from './ChannelBrowserView';
 import ScheduledView from './ScheduledView';
 import SidePanel from './SidePanel';
 import { OpenInAppBanner } from './OpenInApp';
-import HuddleMiniBar from './HuddleMiniBar';
-import HuddleGrid from './HuddleGrid';
 import IncomingHuddle from './IncomingHuddle';
 import { MobileMenuButton } from './MobileMenuButton';
 
@@ -650,8 +648,6 @@ export default function Main({ onActivityUnread }: { onActivityUnread?: (count: 
       <HuddleWiring bridge={huddleBridge} />
       <div className="flex h-full flex-col bg-base text-ink">
         {!inHome && <OpenInAppBanner />}
-        <HuddleMiniBar />
-        <HuddleGrid />
         <IncomingHuddle />
         <div className="relative flex min-h-0 flex-1">
           {/* Inside Home (docs/specs/home.md), Home's own sidebar lists the channels and agents: Chat draws none. */}
