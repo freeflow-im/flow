@@ -261,6 +261,11 @@ export function sampleMailbox(): Mailbox {
     calendar('REQUEST', 'q3-planning@mock.test', 'Q3 planning', day(2, 15), day(2, 16), ['LOCATION:Room 4', 'RRULE:FREQ=WEEKLY;COUNT=6', 'X-GOOGLE-CONFERENCE:https://meet.google.com/abc-defg-hij']));
   invited(60 * 2, 'Cancelled event: Vendor call', 'This event has been cancelled.', calendar('CANCEL', 'vendor-call@mock.test', 'Vendor call', day(1, 18), day(1, 19), ['STATUS:CANCELLED']));
 
+  // An HTML message with mailto: links (a click opens a new message here).
+  const intro = base('INBOX', people[6]!, 15, 'Intro: Chris at Keycard', 'Meet Chris (creager@keycard.test).');
+  intro.html = '<p>Hi Ann,</p><p>Meet Chris: <a href="mailto:creager@keycard.test">creager@keycard.test</a>. Or <a href="mailto:creager@keycard.test?cc=grace@example.org&amp;subject=Intro%20call">write to us both</a>.</p><p>— Grace</p>';
+  messages.push(intro);
+
   // The newest: a short unread note.
   const latest = base('INBOX', people[3]!, 6, 'Quick question about the logo', 'Do you still have the SVG of the old logo? Need it for the archive page. dana@studio.test if easier.');
   latest.seen = false;

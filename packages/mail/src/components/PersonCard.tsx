@@ -7,12 +7,15 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Copy, Mail, MessageSquare, Search, UserPlus, UserRound } from 'lucide-react';
 import { addressOf, isInHome, openInHome } from '@flow/suite-bar';
 import { peopleApi, type Address, type PersonContact } from '../api';
+import type { ComposeDraft } from '../lib/compose';
 import { cn } from '../lib/utils';
 
 /** What the card's buttons do, from the page (App.tsx through ThreadView); without it a name is plain text. */
 export interface PersonActions {
   /** A new message to them. */
   compose(a: Address): void;
+  /** A new message from a `mailto:` link in a message's body (MessageBody.tsx). */
+  composeDraft(draft: ComposeDraft): void;
   /** Their mail, as a search of the open folder. */
   search(a: Address): void;
   /** The organization the suite bar has active: whose contacts and members the card knows. */
