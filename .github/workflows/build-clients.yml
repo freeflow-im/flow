@@ -52,5 +52,6 @@ jobs:
             packages/mail/dist
             packages/calendar/dist
             packages/home/dist
+            packages/meet/dist
             packages/contacts/dist
             packages/admin/dist
