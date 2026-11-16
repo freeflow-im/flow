@@ -39,6 +39,7 @@ export function deps(env: ProvisioningEnv): ProvisioningDeps {
       setState: async (id, state, message = null) => void (await directoryCall(env, 'setAccountState', id, state, message)),
       setHosted: async (id, hosted) => void (await directoryCall(env, 'setHosted', id, hosted)),
       setDomainAtProvider: async (domain) => void (await directoryCall(env, 'setDomainAtProvider', domain)),
+      dropAliases: async (id) => void (await directoryCall(env, 'dropAliases', id)),
     },
     mail: {
       hosted: (a) => mail(a).hostedAccount(a),

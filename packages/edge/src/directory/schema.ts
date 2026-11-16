@@ -315,4 +315,13 @@ export const DIRECTORY_MIGRATIONS: string[] = [
   // A person without a hosted address goes by a mailbox they linked (platform.md §3.2, decision_log 2026-11-15). Not in
   // `addresses`: a linked mailbox is not unique across organizations, and no mail is routed by it.
   `ALTER TABLE accounts ADD COLUMN linked_address TEXT;`,
+  // Aliases (platform.md §3.2): addresses that deliver to an account's mailbox, each a forwarder at the mail provider. An
+  // account's changed address is one too, its mailbox keeping the address it was made with (`mailbox_address`). Each is
+  // also in `addresses`, which keeps every address unique and finds its account.
+  `CREATE TABLE aliases (
+    address TEXT PRIMARY KEY COLLATE NOCASE,
+    account_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX aliases_account ON aliases(account_id);`,
 ];

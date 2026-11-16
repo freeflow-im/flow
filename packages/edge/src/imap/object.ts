@@ -2086,6 +2086,16 @@ export class Mail extends DurableObject<MailEnv> {
     return { id };
   }
 
+  /** The account's address changed (platform.md §3.2): the hosted mailbox sends as the new one. Its login (the IMAP and
+   * SMTP username) stays the address it was made with. No row (not made yet) is nothing to do. */
+  async renameHosted(account: AccountDTO, email: string): Promise<void> {
+    this.provisioningOwner(account);
+    const r = this.sql.exec<{ id: string }>("SELECT id FROM accounts WHERE kind = 'hosted' LIMIT 1").toArray()[0];
+    if (!r) return;
+    this.sql.exec('UPDATE accounts SET email = ? WHERE id = ?', email, r.id);
+    this.forget(r.id);
+  }
+
   /** The hosted mailbox is gone at the provider (deleted after the retention period): its row goes too. */
   async clearHosted(account: AccountDTO): Promise<void> {
     this.provisioningOwner(account);

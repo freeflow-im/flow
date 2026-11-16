@@ -24,6 +24,8 @@ export const noneMailProvider: MailProvider = {
   setMailboxState: unconfigured,
   deleteMailbox: unconfigured,
   getMailbox: unconfigured,
+  createAlias: unconfigured,
+  deleteAlias: unconfigured,
 };
 
 /** One fake per isolate and settings, so the Queue consumer, the routes and the dev log route see the same mailboxes. */

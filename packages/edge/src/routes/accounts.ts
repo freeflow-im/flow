@@ -3,10 +3,12 @@
 // member rows follow its address. Mounted before routes/org.ts, whose catch-all would send these to the Org object.
 import { Hono, type Context } from 'hono';
 import type { ZodTypeAny, z } from 'zod';
-import { BulkAccountKindBody, CreateMemberBody, SetAccountKindBody, type AccountDTO, type AccountKindResult, type BulkAccountKindResult, type CreateMemberResultDTO, type PendingSetupDTO, type UserDTO } from '@flow/shared';
+import { AccountAddressBody, BulkAccountKindBody, CreateMemberBody, SetAccountKindBody, type AccountAddressesDTO, type AccountDTO, type AccountKindResult, type BulkAccountKindResult, type CreateMemberResultDTO, type PendingSetupDTO, type UserDTO } from '@flow/shared';
 import { ApiError, badRequest } from '../errors';
 import { directory, type AuthEnv } from './auth';
 import { adminCallerOf, adminOf } from './domains';
+import type { Calendar } from '../calendar/object';
+import type { Mail } from '../imap/object';
 
 type C = Context<{ Bindings: AuthEnv }>;
 
@@ -46,6 +48,48 @@ accountRoutes.patch('/v1/workspaces/:id/accounts/:accountId/kind', async (c) => 
   const answer = await c.env.ORG.get(c.env.ORG.idFromName(id)).setMemberKind(c.req.param('accountId'), body.kind);
   if (!answer.ok) throw new ApiError(answer.status, answer.code, answer.message);
   return c.json({ account: answer.value } satisfies AccountKindResult);
+});
+
+// ---- an account's addresses (platform.md §3.2, decision_log 2026-11-16): owners and admins only ----------------------
+
+type AddressEnv = AuthEnv & { MAIL: DurableObjectNamespace<Mail>; CALENDAR: DurableObjectNamespace<Calendar> };
+
+/** The member list, the account's Mail and its Calendar take the address it now goes by. */
+async function followAddress(c: C, account: AccountDTO): Promise<void> {
+  const env = c.env as AddressEnv;
+  await Promise.all([
+    env.MAIL.get(env.MAIL.idFromName(account.id)).renameHosted(account, account.address!),
+    env.CALENDAR.get(env.CALENDAR.idFromName(account.id)).renameNative(account).then((r) => { if (!r.ok) throw new Error(r.message); }),
+  ]);
+  await c.env.ORG.get(c.env.ORG.idFromName(account.organizationId)).syncAddresses();
+}
+
+accountRoutes.get('/v1/workspaces/:id/accounts/:accountId/addresses', async (c) => {
+  const id = await adminOf(c as never, 'see addresses');
+  const account = await directory(c, 'accountById', c.req.param('accountId'));
+  if (!account || account.organizationId !== id) throw new ApiError(404, 'not_found', 'account not found');
+  return c.json(await directory(c, 'addressesOf', account.id) satisfies AccountAddressesDTO);
+});
+
+/** An alias: another address that delivers to the account's mailbox. */
+accountRoutes.post('/v1/workspaces/:id/accounts/:accountId/addresses', async (c) => {
+  const id = await adminOf(c as never, 'add addresses');
+  const body = await bodyOf(c, AccountAddressBody);
+  return c.json(await directory(c, 'addAlias', id, c.req.param('accountId'), body.address) satisfies AccountAddressesDTO, 201);
+});
+
+accountRoutes.delete('/v1/workspaces/:id/accounts/:accountId/addresses/:address', async (c) => {
+  const id = await adminOf(c as never, 'remove addresses');
+  return c.json(await directory(c, 'removeAlias', id, c.req.param('accountId'), decodeURIComponent(c.req.param('address'))) satisfies AccountAddressesDTO);
+});
+
+/** The address the account goes by: one of its others, or a new one (made an alias first). Mail is sent as it from now on. */
+accountRoutes.put('/v1/workspaces/:id/accounts/:accountId/address', async (c) => {
+  const id = await adminOf(c as never, 'change addresses');
+  const body = await bodyOf(c, AccountAddressBody);
+  const account = await directory(c, 'changeAddress', id, c.req.param('accountId'), body.address);
+  await followAddress(c, account);
+  return c.json({ account, addresses: await directory(c, 'addressesOf', account.id) });
 });
 
 /** An admin removes a personal agent (docs/specs/agents.md §2): its account, and every delegation it acted through. Only a

@@ -18,6 +18,8 @@ export class FakeMailProvider implements MailProvider {
   readonly calls: FakeCall[] = [];
   readonly domains = new Map<string, { quotaBytes: number; maxUsers: number; dkim?: { selector: string; privateKeyPem: string } }>();
   readonly mailboxes = new Map<string, { displayName: string; password: string; quotaBytes: number; state: MailboxState }>();
+  /** Alias → the mailbox it delivers to. */
+  readonly aliases = new Map<string, string>();
 
   constructor(private readonly opts: { greenmailApiUrl?: string | undefined; imapPort?: number | undefined; smtpPort?: number | undefined; fetch?: typeof fetch } = {}) {}
 
@@ -83,6 +85,19 @@ export class FakeMailProvider implements MailProvider {
     this.record('getMailbox', address);
     const m = this.mailboxes.get(address.toLowerCase());
     return m ? { exists: true, state: m.state, quotaBytes: m.quotaBytes } : { exists: false };
+  }
+
+  async createAlias(alias: string, mailbox: string) {
+    this.record('createAlias', alias, mailbox);
+    const key = alias.toLowerCase();
+    if (!this.domains.has(domainOf(key))) throw new ProviderError('not_found', `no domain ${domainOf(key)}`);
+    if (this.mailboxes.has(key)) throw new ProviderError('conflict', `${alias} is a mailbox`);
+    this.aliases.set(key, mailbox.toLowerCase());
+  }
+
+  async deleteAlias(alias: string) {
+    this.record('deleteAlias', alias);
+    this.aliases.delete(alias.toLowerCase());
   }
 
   private mailbox(address: string) {
