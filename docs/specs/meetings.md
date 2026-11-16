@@ -368,6 +368,12 @@ RTK file retention (7 days).
      `flow_guest` (`packages/edge/scripts/rtk-presets.mjs`, run once per RTK app): RTK's `group_call_guest` sends guests
      to a waiting room. Each guest join is a new RTK participant with a `guest-` id; nothing is stored for a guest.
      Huddles refuse guests. Lock is a `meetings.locked` column, set by the creator (or a host).
+   - **As built, Calendar and booking page (2026-11-16):** no `kind`/`source_ref` columns. "Add FreeFlow Meet" in the
+     event editor makes an ordinary meeting from the browser (`POST /v1/workspaces/:id/meetings`) and writes one line,
+     `Join with FreeFlow Meet: <link>`, into the description, which every calendar shows and Calendar's card reads back
+     as Join (`packages/calendar/src/lib/meet.ts`). The booking page's location `{ kind: 'meet' }` asks the Org object
+     (`createMeetingForAccount`) for a meeting per booking, kept in `scheduler_bookings.meet_url`. Home's Today card
+     shows Join for any event with a call link.
 4. **After the meeting** — recording to R2, transcript, summary, meeting page, search, summary back to Chat and
    Calendar, Save as doc.
 5. **Agents** — MeetingAgent DO, note takers, bridge events and tools.

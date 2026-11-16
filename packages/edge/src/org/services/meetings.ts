@@ -100,6 +100,20 @@ export async function createMeeting(workspaceId: string, userId: string, title?:
   return toDTO({ ...row, lastJoinedAt: null });
 }
 
+/**
+ * A meeting made for a member by their account (the booking page's "FreeFlow Meet" location, phase 3: the Calendar object
+ * has the account, not the user). Its short code, or null when the account is not a member here.
+ */
+export async function createMeetingForAccount(accountId: string, title: string): Promise<string | null> {
+  const [member] = await db
+    .select({ userId: schema.workspaceMembers.userId, workspaceId: schema.workspaceMembers.workspaceId })
+    .from(schema.workspaceMembers)
+    .where(eq(schema.workspaceMembers.accountId, accountId))
+    .limit(1);
+  if (!member) return null;
+  return (await createMeeting(member.workspaceId, member.userId, title)).code;
+}
+
 export async function getMeeting(ref: string, userId: string): Promise<MeetingDTO> {
   const m = await meetingRow(ref);
   await requireRoomAccess(m, userId);

@@ -1,6 +1,6 @@
 ---
 title: Meet
-order: 6
+order: 7
 ---
 
 # Meet
@@ -36,6 +36,17 @@ room. Guests show as **Guest** in the People list.
   **Sign in** link) so you join as yourself.
 - Huddles are only for the people in their conversation, so guests cannot join
   a huddle.
+
+## Meet in Calendar and on your booking page
+
+- In **Calendar**, an event's editor has **Add FreeFlow Meet**. It makes a
+  meeting and puts its link in the event, so everyone invited sees it, even
+  people outside FreeFlow (they join as guests). The event's card then has a
+  **Join with FreeFlow Meet** button.
+- On your **booking page**, choose **FreeFlow Meet** as the location. Each
+  booking gets its own meeting link, in the event and in the guest's mail.
+- **Home**'s Today card has a **Join** button for any meeting with a video
+  link: FreeFlow Meet, Google Meet, Zoom or Teams.
 
 ## Locking a meeting
 

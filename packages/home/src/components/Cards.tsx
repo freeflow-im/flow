@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import type { ChannelDTO, NotificationDTO, WorkspaceMemberDTO } from '@flow/shared';
 import { HomeApiError, type CalendarEvent, type MailThread, type RecentFile } from '../api';
 import { eventAddress, eventTime, fileAddress, messageAddress, messageLine, shortWhen, threadAddress } from '../lib/home';
+import { joinLink } from '../lib/joinLink';
 
 export function Card(props: { title: string; link?: { label: string; href: string }; children: ReactNode; testId: string }) {
   return (
@@ -70,14 +71,19 @@ export function TodayCard(props: { events: CalendarEvent[] | null; error: unknow
       ) : (
         <ol className="flex flex-col gap-3">
           {props.events.slice(0, 5).map((e) => (
-            <li key={e.id}>
-              <a href={eventAddress(e.id)} className="flex gap-3 rounded-md hover:bg-hover">
+            <li key={e.id} className="flex items-center gap-2">
+              <a href={eventAddress(e.id)} className="flex min-w-0 flex-1 gap-3 rounded-md hover:bg-hover">
                 <span className="w-14 shrink-0 pt-0.5 font-mono text-xs text-muted">{eventTime(e)}</span>
                 <span className="min-w-0 border-l-2 border-primary pl-3">
                   <span className="block truncate text-sm font-medium">{e.summary || '(No title)'}</span>
                   {e.attendees.length > 0 && <span className="block truncate text-xs text-muted">{e.attendees.map((a) => a.name || a.email).slice(0, 3).join(', ')}</span>}
                 </span>
               </a>
+              {joinLink(e) && (
+                <a href={joinLink(e)!} target="_blank" rel="noopener noreferrer" className="shrink-0 rounded-full border border-primary px-3 py-1 text-xs font-medium text-primary hover:bg-primary hover:text-white">
+                  Join
+                </a>
+              )}
             </li>
           ))}
           {props.events.length > 5 && <li className="text-xs text-muted">{props.events.length - 5} more today</li>}

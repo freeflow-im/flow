@@ -91,7 +91,12 @@ export interface SharedCalendarInfo { id: string; name: string; color: string; r
 interface BookingRow {
   id: string; page_id: string; event_id: string; start_utc: number; end_utc: number; duration: number; guest_name: string; guest_email: string;
   note: string | null; guest_tz: string | null; manage_hash: string; status: 'booked' | 'cancelled'; reschedules: number; mailed_ics: number; created_at: number; updated_at: number;
+  /** Its own FreeFlow Meet link, when the page's location is FreeFlow Meet (Meet phase 3). */
+  meet_url: string | null;
 }
+/** Where a booking happens, as the event, the page and the mails say it: the page's text, or the booking's Meet link. */
+const whereOf = (cfg: SchedulerConfig, meetUrl: string | null): string | null =>
+  cfg.location.kind === 'text' ? cfg.location.value : cfg.location.kind === 'meet' ? meetUrl : null;
 /** A guest's request's bindings (`handleBooking`): the page's settings, the caller's address hashed, and the booking a manage link names. */
 interface BookBindings { cfg: SchedulerConfig; ipHash: string; booking: BookingRow | null; manage: string | null }
 /** The guest scheduler's limits and freshness (docs/specs/guest-scheduler.md §3.4, §5). */
@@ -892,6 +897,22 @@ export class Calendar extends DurableObject<CalendarEnv> {
     return cal;
   }
 
+  /**
+   * A booking's own FreeFlow Meet link (Meet phase 3): a meeting the organization's object makes for the page's owner.
+   * Null (logged) when it cannot be made; the booking still goes ahead, without a link.
+   */
+  private async meetLinkFor(title: string): Promise<string | null> {
+    const ns = this.env.ORG, org = this.store.state('owner_organization_id'), owner = this.store.state('owner_account_id');
+    if (!ns || !org || !owner) return null;
+    try {
+      const code = await ns.get(ns.idFromName(org)).createMeetingForAccount(owner, title);
+      return code ? `${(this.env.WEB_URL_BASE ?? '').replace(/\/+$/, '')}/meet/${code}` : null;
+    } catch (err) {
+      console.warn(`[calendar] booking meeting failed: ${(err as Error).message.slice(0, 200)}`);
+      return null;
+    }
+  }
+
   /** Whether an account is an active member of the owner's organization (the Org object knows its members' accounts): an
    * `account:` grant must name one. No Org binding, no member. */
   private async isMemberAccount(accountId: string): Promise<boolean> {
@@ -1074,7 +1095,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
     return {
       ownerName: this.schedulerOwner().name, title: titleOf(cfg, this.schedulerOwner().name), description: cfg.description, durations: cfg.durations, defaultDuration: cfg.defaultDuration,
       // A link (a video call) is given only to those who book: the page says it comes with the confirmation.
-      location: cfg.location.kind !== 'text' ? { kind: 'none' as const, label: null } : /^https?:\/\//i.test(cfg.location.value.trim()) ? { kind: 'link' as const, label: null } : { kind: 'text' as const, label: cfg.location.value },
+      location: cfg.location.kind === 'meet' ? { kind: 'link' as const, label: null } : cfg.location.kind !== 'text' ? { kind: 'none' as const, label: null } : /^https?:\/\//i.test(cfg.location.value.trim()) ? { kind: 'link' as const, label: null } : { kind: 'text' as const, label: cfg.location.value },
       ownerTimezone: cfg.timezone, horizonEnd: new Date(horizonEnd(cfg, Date.now())).toISOString(),
     };
   }
@@ -1085,7 +1106,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
     return {
       id: b.id, status: b.status, start: new Date(b.start_utc).toISOString(), end: new Date(b.end_utc).toISOString(), duration: b.duration,
       guestName: b.guest_name, timezone: b.guest_tz ?? cfg.timezone, title: titleOf(cfg, this.schedulerOwner().name), ownerName: this.schedulerOwner().name,
-      location: cfg.location.kind === 'text' ? cfg.location.value : null,
+      location: whereOf(cfg, b.meet_url),
       canReschedule: b.status === 'booked' && cfg.enabled && b.reschedules < RESCHEDULE_LIMIT && b.start_utc > Date.now(),
       canCancel: b.status === 'booked' && b.end_utc > Date.now(),
     };
@@ -1107,15 +1128,17 @@ export class Calendar extends DurableObject<CalendarEnv> {
    * invitation, whoever sends it (the owner's mailbox, Google, iCloud): their note, and their own link to cancel or
    * reschedule. The owner's copy shows the link too, which gives the owner nothing they could not do already.
    */
-  private bookingFields(cfg: SchedulerConfig, guest: { name: string; email: string; note?: string }, start: number, duration: number, manage: string) {
+  private bookingFields(cfg: SchedulerConfig, guest: { name: string; email: string; note?: string }, start: number, duration: number, manage: string, meetUrl: string | null = null) {
     return {
       summary: eventSummaryOf(cfg, this.schedulerOwner().name, guest.name),
       description: [
         ...(guest.note?.trim() ? [guest.note.trim(), ''] : []),
         `Booked through ${this.schedulerOwner().name}'s booking page.`,
         `Need to change it? Cancel or reschedule: ${this.schedulerUrl(`m/${manage}`)}`,
+        // Calendar reads this line back as the event's Join button (packages/calendar/src/lib/meet.ts).
+        ...(meetUrl ? ['', `Join with FreeFlow Meet: ${meetUrl}`] : []),
       ].join('\n'),
-      location: cfg.location.kind === 'text' ? cfg.location.value : null,
+      location: whereOf(cfg, meetUrl),
       start: new Date(start).toISOString(), end: new Date(start + duration * MINUTE).toISOString(), timezone: cfg.timezone,
       attendees: [{ email: guest.email, name: guest.name }],
     };
@@ -1131,7 +1154,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
     try {
       await sendMail(this.env, bookingMail({
         kind, to: { name: b.guest_name, email: b.guest_email }, owner: this.schedulerOwner(), title: titleOf(cfg, this.schedulerOwner().name), start: b.start_utc, end: b.end_utc,
-        zone: b.guest_tz ?? cfg.timezone, location: cfg.location.kind === 'text' ? cfg.location.value : null, manageUrl: manage ? this.schedulerUrl(`m/${manage}`) : null, ics,
+        zone: b.guest_tz ?? cfg.timezone, location: whereOf(cfg, b.meet_url), manageUrl: manage ? this.schedulerUrl(`m/${manage}`) : null, ics,
       }));
     } catch (err) {
       console.warn(`[calendar] booking mail (${kind}) failed: ${(err as Error).message.slice(0, 200)}`);
@@ -1255,7 +1278,7 @@ export class Calendar extends DurableObject<CalendarEnv> {
       const except = { eventId: b.event_id, bookingId: b.id };
       const start = await checkStart(c, body.start, duration, zone, except);
       if (start instanceof Response) return start;
-      const f = this.bookingFields(cfg, { name: b.guest_name, email: b.guest_email }, start, duration, c.env.manage ?? '');
+      const f = this.bookingFields(cfg, { name: b.guest_name, email: b.guest_email }, start, duration, c.env.manage ?? '', b.meet_url);
       await this.asOwner('PATCH', `/v1/calendar/events/${encodeURIComponent(b.event_id)}`, { start: f.start, end: f.end, timezone: f.timezone });
       this.sql.exec('UPDATE scheduler_bookings SET start_utc = ?, end_utc = ?, duration = ?, guest_tz = ?, reschedules = reschedules + 1, updated_at = ? WHERE id = ?', start, start + duration * MINUTE, duration, zone, Date.now(), b.id);
       const now = this.bookingByHash(b.manage_hash)!;
@@ -1284,13 +1307,14 @@ export class Calendar extends DurableObject<CalendarEnv> {
       await this.directoryCall('addBookingManageLink', [this.store.state('owner_account_id'), manageHash]);
       const target = cfg.targetCalendarId && this.store.calendar(cfg.targetCalendarId) ? cfg.targetCalendarId : null;
       const guest = { name: body.name, email: body.email.toLowerCase(), note: body.note };
-      const created = await this.asOwner('POST', '/v1/calendar/events', { ...(target ? { calendarId: target } : {}), ...this.bookingFields(cfg, guest, start, duration, manage) });
+      const meetUrl = cfg.location.kind === 'meet' ? await this.meetLinkFor(eventSummaryOf(cfg, this.schedulerOwner().name, guest.name)) : null;
+      const created = await this.asOwner('POST', '/v1/calendar/events', { ...(target ? { calendarId: target } : {}), ...this.bookingFields(cfg, guest, start, duration, manage, meetUrl) });
       const eventId = (created.event as EventOccurrence).eventId;
       // `invitationsSent: false`: no mailbox sends as the owner, so the guest's mail carries the invitation itself.
       const mailedIcs = created.invitationsSent === false;
       const id = crypto.randomUUID(), now = Date.now();
-      this.sql.exec(`INSERT INTO scheduler_bookings (id, page_id, event_id, start_utc, end_utc, duration, guest_name, guest_email, note, guest_tz, manage_hash, status, mailed_ics, created_at, updated_at)
-        VALUES (?, 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'booked', ?, ?, ?)`, id, eventId, start, start + duration * MINUTE, duration, guest.name, guest.email, guest.note ?? null, zone, manageHash, mailedIcs ? 1 : 0, now, now);
+      this.sql.exec(`INSERT INTO scheduler_bookings (id, page_id, event_id, start_utc, end_utc, duration, guest_name, guest_email, note, guest_tz, manage_hash, status, mailed_ics, created_at, updated_at, meet_url)
+        VALUES (?, 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'booked', ?, ?, ?, ?)`, id, eventId, start, start + duration * MINUTE, duration, guest.name, guest.email, guest.note ?? null, zone, manageHash, mailedIcs ? 1 : 0, now, now, meetUrl);
       const b = this.bookingByHash(manageHash)!;
       // The invitation carries the guest's link (the description); a mail of our own goes only where none was sent.
       if (mailedIcs) await this.mailGuest('booked', b, cfg, manage, this.bookingIcs(eventId, 'REQUEST', cfg.timezone));

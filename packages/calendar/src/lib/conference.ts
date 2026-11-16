@@ -2,6 +2,7 @@
 // dial-in that Google Meet and Zoom put in the description, read out of it; the same blocks are taken out of the
 // description shown, so the card's description row has only what a person wrote.
 import type { EventOccurrence } from '../api';
+import { MEET_URL, meetLinkIn, withoutMeetLink } from './meet';
 
 export interface DialIn { text: string; tel: string; pin: string | null }
 export interface Conference {
@@ -21,6 +22,7 @@ const PROVIDERS: [RegExp, string][] = [
   [/^https:\/\/[\w.-]*zoom\.us\//i, 'Join Zoom Meeting'],
   [/^https:\/\/teams\.(microsoft|live)\.com\//i, 'Join Microsoft Teams meeting'],
   [/^https:\/\/[\w.-]*webex\.com\//i, 'Join Webex meeting'],
+  [MEET_URL, 'Join with FreeFlow Meet'],
 ];
 const URL_RE = /https?:\/\/[^\s<>"')]+/i;
 /** Google's delimiter line around its Meet block: `-::~:~::~:~ … ::~:~::-`. */
@@ -92,7 +94,7 @@ function zoomBlock(text: string): { found: Parsed | null; rest: string } {
 /** The description as the card shows it: Google's and Zoom's blocks out, blank lines at the ends trimmed; null when nothing is left. */
 export function shownDescription(description: string | null): string | null {
   if (!description) return null;
-  const text = zoomBlock(googleBlock(descriptionText(description)).rest).rest.replace(/\n{3,}/g, '\n\n').trim();
+  const text = withoutMeetLink(zoomBlock(googleBlock(descriptionText(description)).rest).rest).replace(/\n{3,}/g, '\n\n').trim();
   return text || null;
 }
 
@@ -102,7 +104,9 @@ export function conferenceOf(o: Pick<EventOccurrence, 'conference' | 'descriptio
   const g = text ? googleBlock(text).found : null;
   const z = text ? zoomBlock(text).found : null;
   const block = g?.url ? g : z?.url ? z : g ?? z;
-  const url = o.conference?.url ?? block?.url ?? null;
+  // FreeFlow Meet's own line (lib/meet.ts), or a Meet link alone in the location.
+  const meet = meetLinkIn(text) ?? (o.location ? MEET_URL.exec(o.location)?.[0] ?? null : null);
+  const url = o.conference?.url ?? block?.url ?? meet;
   if (!url) return null;
   const mine = block && (!block.url || block.url === url) ? block : null;
   return {

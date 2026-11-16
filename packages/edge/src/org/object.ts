@@ -20,6 +20,7 @@ import { registerRoutes } from './routes/index';
 import { deleteMyAccount } from './services/accountDeletion';
 import { drainDuePushes, nextPushDueAt } from './services/pushOutbox';
 import { runSchedulerTick } from './services/scheduledMessages';
+import { createMeetingForAccount } from './services/meetings';
 import { accountForJoin, announceJoin, enrollInWorkspace, toMemberDTO, toWorkspaceDTO } from './services/workspaces';
 import { socketControl } from './sockets';
 import { setStorageEnv, type StorageEnv } from './storage/index';
@@ -771,6 +772,11 @@ export class Org extends DurableObject<OrgEnv> {
    * what is shared with the whole organization. */
   async sharedWith(reader: { accountId: string; channelIds?: string[] }, opts?: { includeOrg?: boolean }): Promise<SharedItem[]> {
     return withDb(this.db, () => sharedWith(this.shareReader(reader), opts));
+  }
+
+  /** A Meet meeting made for a member, by their account: the booking page's "FreeFlow Meet" (Calendar). Its code, or null. */
+  async createMeetingForAccount(accountId: string, title: string): Promise<string | null> {
+    return this.scoped(() => createMeetingForAccount(accountId, title));
   }
 
   /** Whether the account is an active member here: an app object checks an `account:` grant's principal with this. */

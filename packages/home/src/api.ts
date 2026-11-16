@@ -49,6 +49,10 @@ export interface CalendarEvent {
   allDay: boolean;
   status: 'confirmed' | 'tentative' | 'cancelled';
   attendees: { name?: string | null; email: string }[];
+  location?: string | null;
+  description?: string | null;
+  /** The video call the server read from the invitation (Google Meet, Teams). */
+  conference?: { url: string; label: string };
 }
 export interface RecentFile {
   id?: string;

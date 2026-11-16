@@ -20,6 +20,7 @@ const TOPICS = [
   { slug: 'mini-apps', title: 'Mini Apps', order: 4 },
   { slug: 'huddles', title: 'Huddles', order: 5 },
   { slug: 'scheduled-messages', title: 'Scheduled Messages', order: 6 },
+  { slug: 'meet', title: 'Meet', order: 7 },
 ];
 
 // "What's New" (#474) is the one topic with no file: the server generates it

@@ -129,9 +129,19 @@ export function BookingPageDialog({ calendars, onClose }: { calendars: CalendarI
                   )}
                 </div>
               </div>
-              <label className="flex flex-col gap-1 sm:col-span-2"><span className="font-medium">Location <span className="font-normal text-muted">(a video call link or an address; a link is shown only after booking)</span></span>
-                <input className={field} value={draft.location.value} maxLength={500} placeholder="None" onChange={(e) => set({ location: e.target.value.trim() ? { kind: 'text', value: e.target.value } : { kind: 'none', value: '' } })} />
-              </label>
+              <div className="flex flex-col gap-1 sm:col-span-2">
+                <span className="font-medium">Location <span className="font-normal text-muted">(a video link is shown only after booking)</span></span>
+                <div className="flex flex-wrap gap-2">
+                  {/* FreeFlow Meet (Meet phase 3): each booking gets its own meeting link, and the guest joins it as a guest. */}
+                  <select aria-label="Location" className={field} value={draft.location.kind === 'meet' ? 'meet' : 'other'} onChange={(e) => set({ location: e.target.value === 'meet' ? { kind: 'meet', value: '' } : { kind: 'none', value: '' } })}>
+                    <option value="meet">FreeFlow Meet (a link for each booking)</option>
+                    <option value="other">Another link, an address, or none</option>
+                  </select>
+                  {draft.location.kind !== 'meet' && (
+                    <input aria-label="Link or address" className={`${field} min-w-[220px] flex-1`} value={draft.location.value} maxLength={500} placeholder="None" onChange={(e) => set({ location: e.target.value.trim() ? { kind: 'text', value: e.target.value } : { kind: 'none', value: '' } })} />
+                  )}
+                </div>
+              </div>
             </section>
 
             <section>
