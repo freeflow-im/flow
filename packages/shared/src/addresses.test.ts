@@ -81,6 +81,8 @@ describe('addresses', () => {
     const msg = new URL(createAddress('chat-message', { channel: 'c1', text: 'hi there' }), ORIGIN);
     expect([msg.pathname, msg.searchParams.get('open'), msg.searchParams.get('text')]).toEqual(['/chat/', 'channel:c1', 'hi there']);
     expect(chatPageAddress('admin')).toBe('/chat/?open=admin');
+    const mail = new URL(createAddress('mail', { to: [{ email: 'a@x.org', name: 'Ann' }, 'b+c@y.org'], subject: 'Call & notes', body: 'Hi there' }), ORIGIN);
+    expect([mail.pathname, mail.searchParams.get('mailto')]).toEqual(['/mail/', 'mailto:a@x.org,b%2Bc@y.org?subject=Call%20%26%20notes&body=Hi%20there']);
   });
 
   it('names Home’s Settings page by section, and reads the section back', () => {

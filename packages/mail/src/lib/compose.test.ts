@@ -123,6 +123,11 @@ describe('fromDraft', () => {
 });
 
 describe('draftFromMailto', () => {
+  it('reads what another app asks for (@flow/shared createAddress(\'mail\'))', () => {
+    expect(draftFromMailto('mailto:a@x.org,b%2Bc@y.org?subject=Call%20%26%20notes&body=Hi%20there')).toMatchObject({
+      to: [{ address: 'a@x.org' }, { address: 'b+c@y.org' }], subject: 'Call & notes', html: expect.stringContaining('Hi there'),
+    });
+  });
   it('a bare address', () => {
     expect(draftFromMailto('mailto:creager@keycard.ai')).toEqual({ to: [{ name: '', address: 'creager@keycard.ai' }], cc: [], bcc: [], subject: '', html: '' });
   });
