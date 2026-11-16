@@ -2,7 +2,7 @@
 // headers that thread it (In-Reply-To and References). And a saved draft (one an agent wrote, say) opened to edit.
 import type { DocsFile } from './docsFiles';
 import { attachmentUrl, type Address, type MessageDetail, type OutgoingMessage } from '../api';
-import { formatAddress, uniqueAddresses } from './addresses';
+import { formatAddress, parseAddressList, uniqueAddresses } from './addresses';
 import { escapeHtml, sanitizeEmailHtml, textToHtml } from './sanitize';
 
 export type ComposeMode = 'new' | 'reply' | 'replyAll' | 'forward' | 'draft';
@@ -23,6 +23,34 @@ export interface ComposeDraft {
 }
 
 export const emptyDraft = (to: Address[] = []): ComposeDraft => ({ to, cc: [], bcc: [], subject: '', html: '' });
+
+/**
+ * A new message from a `mailto:` link (RFC 6068): its addresses, and the `to`, `cc`, `bcc`, `subject` and `body` it asks
+ * for. Null when it is not a `mailto:` link or names nobody and nothing.
+ */
+export function draftFromMailto(href: string): ComposeDraft | null {
+  const m = /^mailto:([^?#]*)(?:\?([^#]*))?/i.exec(href.trim());
+  if (!m) return null;
+  const decode = (v: string) => {
+    try { return decodeURIComponent(v); } catch { return v; }
+  };
+  const list = (v: string) => parseAddressList(decode(v)).addresses;
+  const draft = emptyDraft(list(m[1]!));
+  let body = '';
+  for (const pair of (m[2] ?? '').split('&')) {
+    const eq = pair.indexOf('=');
+    if (eq < 1) continue;
+    const key = pair.slice(0, eq).toLowerCase(), value = pair.slice(eq + 1);
+    if (key === 'to') draft.to.push(...list(value));
+    else if (key === 'cc') draft.cc.push(...list(value));
+    else if (key === 'bcc') draft.bcc.push(...list(value));
+    else if (key === 'subject') draft.subject = decode(value);
+    else if (key === 'body') body = decode(value);
+  }
+  draft.to = uniqueAddresses(draft.to);
+  if (body) draft.html = textToHtml(body);
+  return draft.to.length || draft.cc.length || draft.bcc.length || draft.subject || body ? draft : null;
+}
 
 /** "Re: Lunch", without stacking another "Re:" on one already there (or on a "Fwd:" chain's "RE:"). */
 export function replySubject(subject: string): string {

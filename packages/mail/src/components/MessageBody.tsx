@@ -4,20 +4,37 @@
 // frame relays its key presses to this window (relayKey) and the app's shortcuts keep working. Remote images wait for
 // "Show images" until the user has chosen it once (lib/imagePref.ts); after that they load. Plain text is rendered by
 // React (so escaped), with its links made links. The earlier messages quoted at the end (lib/quote.ts) are folded away
-// behind "⋯" until clicked, as Gmail does, so a reply reads as what was written.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+// behind "⋯" until clicked, as Gmail does, so a reply reads as what was written. A `mailto:` link, in either kind of
+// body, opens a new message here (the person card's actions, PersonCard.tsx) rather than the browser's mail handler.
+import { useCallback, useContext, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { ImageOff } from 'lucide-react';
 import { attachmentUrl, type MessageDetail } from '../api';
+import { draftFromMailto } from '../lib/compose';
 import { setImagePref, useImagePref } from '../lib/imagePref';
 import { markQuote, splitQuotedText } from '../lib/quote';
 import { QUOTE_HIDDEN_CLASS, buildSrcdoc, linkify, sanitizeEmailHtml, type TextSegment } from '../lib/sanitize';
+import { PersonActionsContext, type PersonActions } from './PersonCard';
 import { QuoteToggle } from './QuoteToggle';
 
 export const IFRAME_SANDBOX = 'allow-popups allow-popups-to-escape-sandbox allow-same-origin';
 
+/**
+ * A click on a `mailto:` link, as a new message here: the click is cancelled and the composer opens. False (the click goes
+ * on as before) for any other link, or with no page to compose in.
+ */
+export function composeFromLink(e: { target: EventTarget | null; preventDefault(): void }, actions: PersonActions | null): boolean {
+  const link = (e.target as Element | null)?.closest?.('a[href]');
+  const draft = link && actions ? draftFromMailto(link.getAttribute('href') ?? '') : null;
+  if (!draft) return false;
+  e.preventDefault();
+  actions!.composeDraft(draft);
+  return true;
+}
+
 export function MessageBody({ accountId, message }: { accountId: string; message: MessageDetail }) {
   const pref = useImagePref();
   const showImages = pref === 'always';
+  const people = useContext(PersonActionsContext);
 
   const [showQuote, setShowQuote] = useState(false);
 
@@ -39,9 +56,9 @@ export function MessageBody({ accountId, message }: { accountId: string; message
     const split = splitQuotedText(text);
     return (
       <div className="px-1 pb-4 text-sm leading-relaxed text-ink">
-        <div className="whitespace-pre-wrap break-words">{renderText(split ? split.head : text)}</div>
+        <div className="whitespace-pre-wrap break-words" onClick={(e: ReactMouseEvent) => composeFromLink(e, people)}>{renderText(split ? split.head : text)}</div>
         {split && <QuoteToggle open={showQuote} onClick={() => setShowQuote((v) => !v)} className="my-2" />}
-        {split && showQuote && <div className="whitespace-pre-wrap break-words border-l-[3px] border-border pl-3 text-muted">{renderText(split.quote)}</div>}
+        {split && showQuote && <div className="whitespace-pre-wrap break-words border-l-[3px] border-border pl-3 text-muted" onClick={(e: ReactMouseEvent) => composeFromLink(e, people)}>{renderText(split.quote)}</div>}
       </div>
     );
   }
@@ -56,7 +73,7 @@ export function MessageBody({ accountId, message }: { accountId: string; message
           </button>
         </div>
       )}
-      <HtmlFrame html={clean.html} allowRemote={showImages} quoteHidden={clean.quoted && !showQuote} title={message.subject || 'Message'} />
+      <HtmlFrame html={clean.html} allowRemote={showImages} quoteHidden={clean.quoted && !showQuote} title={message.subject || 'Message'} people={people} />
       {clean.quoted && <QuoteToggle open={showQuote} onClick={() => setShowQuote((v) => !v)} className="mb-3 ml-0.5" />}
     </>
   );
@@ -85,8 +102,12 @@ export function relayKey(e: KeyboardEvent): void {
   if (!window.dispatchEvent(copy)) e.preventDefault();
 }
 
-function HtmlFrame({ html, allowRemote, quoteHidden, title }: { html: string; allowRemote: boolean; quoteHidden: boolean; title: string }) {
+function HtmlFrame({ html, allowRemote, quoteHidden, title, people }: { html: string; allowRemote: boolean; quoteHidden: boolean; title: string; people: PersonActions | null }) {
   const ref = useRef<HTMLIFrameElement>(null);
+  // Read at click time, so the frame's listener (added once per document) uses the page's current actions.
+  const peopleRef = useRef(people);
+  peopleRef.current = people;
+  const onFrameClick = useCallback((e: MouseEvent) => { composeFromLink(e, peopleRef.current); }, []);
   const observer = useRef<ResizeObserver | null>(null);
   const [height, setHeight] = useState(120);
   // The quote's state is read when the document is built and applied to it live after (allow-same-origin lets this
@@ -117,9 +138,11 @@ function HtmlFrame({ html, allowRemote, quoteHidden, title }: { html: string; al
       observer.current.observe(doc.body);
     }
     doc?.addEventListener('keydown', relayKey);
+    // Added twice (the early tick, then `load`) it is still one listener: the same function.
+    doc?.addEventListener('click', onFrameClick);
     // Images arriving late change the height without resizing the body's box in every browser.
     doc?.querySelectorAll('img').forEach((img) => img.addEventListener('load', measure));
-  }, [measure, applyQuote]);
+  }, [measure, applyQuote, onFrameClick]);
   const onLoad = useCallback(() => watch(), [watch]);
   useEffect(() => {
     applyQuote();
