@@ -1,5 +1,7 @@
 // The incoming-call card (#436) — Flow's whole answer to "someone is calling
-// you", and deliberately only that. There is no lock-screen answer, no system
+// you", and deliberately only that. Accept opens the huddle's Meet room in a new
+// tab (Meet phase 2). The same corner shows the huddle's one-line notices
+// ("Ben isn't available", or why a huddle could not start). There is no lock-screen answer, no system
 // call UI and no Recents entry: Track A rings a *live socket*, so this card
 // exists exactly while the app is open, which is exactly when the ring reached
 // you at all.
@@ -65,6 +67,21 @@ export default function IncomingHuddle() {
   const members = useMembers(invite?.workspaceId ?? null);
   useRingtone(invite !== null);
 
+  if (!invite && huddle.notice) {
+    return (
+      <div
+        data-testid="huddle-notice"
+        role="status"
+        className="fixed bottom-6 right-6 z-50 max-w-[320px] rounded-lg border border-hairline bg-panel px-4 py-3 text-sm text-ink shadow-lg"
+      >
+        {huddle.notice}
+        <button className="ml-3 text-faint hover:text-ink" aria-label="Dismiss" onClick={huddle.dismissNotice}>
+          ✕
+        </button>
+      </div>
+    );
+  }
+
   if (huddle.answeredElsewhere) {
     return (
       <div
@@ -108,9 +125,10 @@ export default function IncomingHuddle() {
         <button
           data-testid="huddle-accept"
           className="flex-1 rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white hover:opacity-90"
+          disabled={huddle.starting}
           onClick={() => void huddle.acceptIncoming()}
         >
-          Accept
+          Join
         </button>
       </div>
     </div>

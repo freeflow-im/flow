@@ -1,20 +1,12 @@
-// Voice huddle (Phase 1) — the roster of who's live in a channel's
-// ambient audio call. See CONTEXT.md for the Huddle glossary entry and
-// decision_log.md (2026-08-20) for the rulings behind this design.
+// Huddle roster: who is in a conversation's huddle, which is its Meet room on
+// Cloudflare RealtimeKit (docs/specs/meetings.md phase 2). See CONTEXT.md for
+// the Huddle glossary entry.
 //
-// Unlike channelIndicators (../indicators.ts), this store is NOT the source of
-// truth — LiveKit is. A participant's aliveness is a real RTC connection that
-// LiveKit's own server already tracks and times out; this map is a cache of
-// that, kept in sync by three writers:
-//   1. REST join/leave (services/huddles.ts), the primary path,
-//   2. the LiveKit webhook (participant_left / room_finished), the
-//      reconciliation safety net for a client that vanished without calling
-//      leave,
-//   3. on Node, boot-time reconciliation against LiveKit's REST API, since a
-//      server restart wiped its map while LiveKit's rooms kept running.
-// There is deliberately no TTL sweep here (contrast channelIndicators):
-// LiveKit's webhook already fires on a dead peer, so there's no "forgot to
-// refresh" failure mode to guard against.
+// This store is a cache of who is in the room, kept in sync by two writers:
+//   1. the Meet room's join and leave (services/meetings.ts), the primary path,
+//   2. RealtimeKit's webhook (meeting.participantLeft / meeting.ended), the
+//      safety net for a tab that closed without leaving.
+// There is no TTL sweep: RealtimeKit's webhook already fires on a dead peer.
 // On Workers the roster is a table in the organization's database, not a module-level map: an Org object is evicted
 // from memory between requests (its sockets hibernate), and a map would forget every live huddle each time. The
 // functions keep the Node signatures, synchronous, because the object's SQLite is.
@@ -78,10 +70,9 @@ export function joinHuddle(
 }
 
 /** Drop one user from a channel's huddle (no-op if they weren't in it).
- * Used by both the REST leave path and the webhook's `participant_left`
- * safety net — LiveKit's room name is the channel id, so both name the same
- * entry. Carries the departing entry's workspaceId, since a webhook caller
- * has no other way to know it. */
+ * Used by both the room's leave and the webhook's `participantLeft` safety
+ * net. Carries the departing entry's workspaceId, since a webhook caller has
+ * no other way to know it. */
 export function leaveHuddle(
   channelId: string,
   userId: string,
@@ -92,30 +83,12 @@ export function leaveHuddle(
   return { before: toParticipants(list), after: huddleParticipants(channelId), workspaceId };
 }
 
-/** Wipe a whole channel's huddle — the webhook's `room_finished` safety net
- * (LiveKit itself says the room is gone, so every participant is gone). */
+/** Wipe a whole channel's huddle — the webhook's `meeting.ended` safety net
+ * (the room is gone, so every participant is gone). */
 export function clearChannelHuddle(channelId: string): { before: HuddleParticipant[]; workspaceId: string | undefined } {
   const list = rows(channelId);
   db.run(sql`DELETE FROM _huddle_participants WHERE channel_id = ${channelId}`);
   return { before: toParticipants(list), workspaceId: list[0]?.workspace_id };
-}
-
-/**
- * Boot-time reconciliation: replace one channel's roster with LiveKit's real
- * participant list (LiveKit is the source of truth — see module doc).
- * `participants: []` clears the channel entirely.
- */
-export function reconcileChannel(
-  channelId: string,
-  workspaceId: string,
-  participants: HuddleParticipant[],
-): { before: HuddleParticipant[]; after: HuddleParticipant[] } {
-  const before = huddleParticipants(channelId);
-  db.run(sql`DELETE FROM _huddle_participants WHERE channel_id = ${channelId}`);
-  for (const p of participants) {
-    db.run(sql`INSERT INTO _huddle_participants (channel_id, user_id, workspace_id, joined_at) VALUES (${channelId}, ${p.userId}, ${workspaceId}, ${p.joinedAt})`);
-  }
-  return { before, after: huddleParticipants(channelId) };
 }
 
 /**

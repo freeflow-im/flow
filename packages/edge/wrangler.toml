@@ -41,8 +41,8 @@ not_found_handling = "none"
 # local dev, where the callback is not the Worker's own origin.
 # Pushes (src/org/push): FLOW_PUSH_DRIVER=apns with the secrets FLOW_APNS_KEY (base64 of the .p8), FLOW_APNS_KEY_ID and
 # FLOW_APNS_TEAM_ID, the values in /flow/ on AWS; FLOW_APNS_ENV and FLOW_APNS_TOPIC are optional. Without them the dev
-# driver logs each push and Apple is never called. Huddles: LIVEKIT_API_KEY, LIVEKIT_API_SECRET and LIVEKIT_URL (/flow/
-# too); all three turn huddles on in /v1/config, and LiveKit's webhook comes to /v1/livekit/webhook.
+# driver logs each push and Apple is never called. Meet and huddles: RTK_API_TOKEN (RealtimeKit Admin), beside the
+# RTK_ACCOUNT_ID and RTK_APP_ID vars; without it Meet is off, and RealtimeKit's webhook comes to /v1/rtk/webhook.
 # Domains (src/directory/dns.ts, providers/cloudflareDns.ts): CLOUDFLARE_DNS_TOKEN (DNS edit on freeflow.im) and
 # CLOUDFLARE_DNS_ZONE_ID write each organization's <slug>.freeflow.im records; without them the dev driver logs them.
 # DNS_RESOLVER_URL (a var) is the DNS-over-HTTPS JSON resolver domain checks use, Cloudflare's when unset; the e2e sets it.
@@ -64,6 +64,10 @@ ASSET_HOSTS = "app.freeflow.im,edge.freeflow.im"
 PORTED_HOSTS = "edge.freeflow.im,app.freeflow.im"
 # The ChatGPT plugin's hosts, on the origin (docs/ops/CUTOVER_TO_CLOUDFLARE.md): their sign-in is this host's, handed across (routes/crossHost.ts).
 PLUGIN_HOSTS = "docs.freeflow.im,mcpdocs.freeflow.im"
+# Meet (docs/specs/meetings.md): the production RealtimeKit app `freeflow-meetings`. The token is the RTK_API_TOKEN secret
+# (`wrangler secret put RTK_API_TOKEN`, not in /flow/); local runs use the `freeflow-meet-dev` app from ~/.config/flow/dev.vars.
+RTK_ACCOUNT_ID = "82ee23850b6ae0a1277e3a957c0c8517"
+RTK_APP_ID = "6f9fcd55-ecb5-4f3e-9232-9e88ae36a1de"
 WEB_URL_BASE = "https://app.freeflow.im"
 # The web-to-app sign-in handoff's return destinations, exact (the server's FLOW_HANDOFF_RETURN_URLS): the Mac, iOS and
 # desktop apps' flow://signin, and the web client's own page. None turns the handoff off, and /v1/client-info says so.

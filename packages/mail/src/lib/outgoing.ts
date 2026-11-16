@@ -36,18 +36,19 @@ export async function outgoingMessage(out: Pick<Outgoing, 'message' | 'files'>, 
  */
 export function sendInBackground(
   out: Outgoing,
-  d: { send(accountId: string, message: OutgoingMessage): Promise<unknown>; notice(n: Notice): void; onSent(): void; reopen(out: Outgoing): void; read?: (url: string) => Promise<Blob | null> },
+  d: { send(accountId: string, message: OutgoingMessage): Promise<unknown>; notice(n: Notice): void; onSent(answer: unknown): void; onFailed?(): void; reopen(out: Outgoing): void; read?: (url: string) => Promise<Blob | null> },
 ): Promise<boolean> {
   d.notice({ text: 'Sending…', progress: true });
   return outgoingMessage(out, d.read)
     .then((message) => d.send(out.accountId, message))
     .then(
-      () => {
-        d.onSent();
+      (answer) => {
+        d.onSent(answer);
         d.notice('Message sent.');
         return true;
       },
       (e: unknown) => {
+        d.onFailed?.();
         d.notice({ text: `Could not send: ${e instanceof Error ? e.message : String(e)}`, action: { label: 'Open', run: () => d.reopen(out) } });
         return false;
       },

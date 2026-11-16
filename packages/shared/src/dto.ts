@@ -329,23 +329,47 @@ export interface HuddleInviteDTO {
   targets: HuddleInviteTargetDTO[];
 }
 
+/** A Meet meeting room (docs/specs/meetings.md). Its link is `/meet/<code>`. */
+export interface MeetingDTO {
+  id: string;
+  /** The short code in the room's link: `/meet/<code>`, e.g. `kqd-wmzt-fra`. */
+  code: string;
+  workspaceId: string;
+  title: string;
+  createdBy: string;
+  createdAt: string;
+  /** The conversation whose huddle this is, when it is one (Meet phase 2). */
+  channelId: string | null;
+}
+
+/** Someone in a live meeting, as RealtimeKit reports its active session. */
+export interface MeetingPersonDTO {
+  /** The FreeFlow user id (RTK's custom participant id), when RTK knows it. */
+  userId: string | null;
+  name: string;
+}
+
+/** A meeting with a session running now: Meet's "Live now". */
+export interface LiveMeetingDTO extends MeetingDTO {
+  people: MeetingPersonDTO[];
+  startedAt: string | null;
+}
+
 /**
- * POST /v1/channels/:id/huddle/join — a LiveKit token scoped to the room whose
- * name is the entity id. In a DM the same call *starts the ring* (#436), so
- * the response also carries the invite it created and the names it could not
- * reach; a channel huddle is ambient and leaves both null/empty.
+ * POST /v1/channels/:id/huddle/join since Meet phase 2: the conversation's Meet meeting (open `/meet/<code>` to be in
+ * it) and the ring that starting it began, with the names it could not reach.
  */
-export interface HuddleJoinDTO {
-  token: string;
-  url: string;
-  /**
-   * Short-lived LiveKit Cloud Inference grant. The server includes this only
-   * when an agent-token caller accepts a ring, so a bridge can transcribe and
-   * speak without storing the LiveKit project secret (or a provider API key).
-   */
-  inferenceToken?: string;
+export interface HuddleStartDTO {
+  meeting: MeetingDTO;
   invite: HuddleInviteDTO | null;
   unavailable: string[];
+}
+
+/** POST /v1/meetings/:id/join — what the RealtimeKit client needs to join, and whether this person hosts. */
+export interface MeetingJoinDTO {
+  meeting: MeetingDTO;
+  authToken: string;
+  host: boolean;
 }
 
 export interface ChannelDTO {
@@ -416,9 +440,9 @@ export interface ChannelDTO {
    */
   emoji?: string | null;
   /**
-   * Live voice huddle participants (Phase 1) — ambient, per-channel audio call.
-   * Transient server state, never a DB column (see `huddles.ts`): LiveKit is
-   * the source of truth, this is a cache of it. Present on the channel list so
+   * Who is in the conversation's huddle (its Meet room). Transient server
+   * state, never a DB column (see `huddles.ts`): the Meet room's join and
+   * leave move it. Present on the channel list so
    * a fresh client shows an already-active huddle; `huddle.updated` events
    * carry every change after that. Absent/empty means no active huddle.
    */

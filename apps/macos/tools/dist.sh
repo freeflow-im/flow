@@ -79,9 +79,7 @@ for nested in \
   "$SPARKLE_FW/Versions/B/XPCServices/Installer.xpc" \
   "$SPARKLE_FW/Versions/B/Updater.app" \
   "$SPARKLE_FW/Versions/B/Autoupdate" \
-  "$SPARKLE_FW" \
-  "$APP/Contents/Frameworks/RustLiveKitUniFFI.framework" \
-  "$APP/Contents/Frameworks/LiveKitWebRTC.framework"; do
+  "$SPARKLE_FW"; do
   [ -e "$nested" ] || continue
   codesign --force --options runtime --timestamp \
     -s "$FLOW_SIGN_IDENTITY" "$nested" \

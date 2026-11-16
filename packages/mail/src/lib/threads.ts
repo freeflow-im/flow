@@ -1,7 +1,7 @@
 // Conversations in the list and the reading pane, the pure parts: search results grouped into threads (the server
 // groups a folder's own pages), the row's "Ann, Bob, me" label, which messages of an open thread start expanded, and
 // where long runs of read messages fold.
-import type { Address, MessageSummary, ThreadMessage, ThreadSummary } from '../api';
+import type { Address, MessageSummary, ThreadDetail, ThreadMessage, ThreadSummary } from '../api';
 import { displayName } from './addresses';
 
 /** The thread id of a message the server does not place in one: a thread of its own (`m:<uid>`, in the folder it is in). */
@@ -114,4 +114,34 @@ export function dragThreadUids(threadId: string, checked: ReadonlySet<string>, r
 export function replyTarget(messages: readonly ThreadMessage[], folder: string | null): ThreadMessage | undefined {
   const ready = messages.filter((m) => !m.bodyPending);
   return [...ready].reverse().find((m) => m.folder === folder) ?? ready[ready.length - 1] ?? messages[messages.length - 1];
+}
+
+const bareId = (id: string | null | undefined) => (id ?? '').trim().replace(/^<|>$/g, '').toLowerCase();
+
+/**
+ * The person's message as its conversation shows it from Send until the server's copy arrives (`sending`). Its uid is
+ * negative, so it is never taken for a message on the server.
+ */
+export function sendingCopy(
+  message: { to: Address[]; cc?: Address[] | undefined; bcc?: Address[] | undefined; subject: string; html: string; text?: string | undefined; inReplyTo?: string | undefined; references?: string[] | undefined },
+  from: Address,
+  uid: number,
+  at: Date = new Date(),
+): ThreadMessage {
+  return {
+    uid, folder: '', messageId: null, from, to: message.to, cc: message.cc ?? [], bcc: message.bcc ?? [], replyTo: [],
+    subject: message.subject, snippet: (message.text ?? '').slice(0, 160), date: at.toISOString(),
+    seen: true, flagged: false, answered: false, hasAttachments: false, size: 0,
+    inReplyTo: message.inReplyTo ?? null, references: message.references ?? [], html: message.html, text: message.text ?? null,
+    attachments: [], sending: true,
+  };
+}
+
+/** A fresh read of a conversation, keeping the messages still being sent that it does not have yet (by Message-ID), at its end. */
+export function keepSending(old: ThreadDetail | undefined, fresh: ThreadDetail): ThreadDetail {
+  const sending = old?.messages.filter((m) => m.sending) ?? [];
+  if (!sending.length) return fresh;
+  const have = new Set(fresh.messages.map((m) => bareId(m.messageId)));
+  const keep = sending.filter((m) => !m.messageId || !have.has(bareId(m.messageId)));
+  return keep.length ? { ...fresh, messages: [...fresh.messages, ...keep] } : fresh;
 }

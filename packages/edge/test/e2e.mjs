@@ -2,7 +2,6 @@
 //   printf 'EDGE_ORIGIN_SECRET=x\nFLOW_DATA_KEY=%s\n' "$(openssl rand -base64 32)" > .dev.vars; mkdir -p public
 //   npx wrangler dev --port 18796 --local --var PORTED_HOSTS:edge.freeflow.im,localhost --var ASSET_HOSTS:none \
 //     --var ORIGIN_URL:http://localhost:9 --var WEB_URL_BASE:http://localhost:18796 \
-//     --var LIVEKIT_API_KEY:devkey --var LIVEKIT_API_SECRET:devsecret-devsecret-devsecret-00 --var LIVEKIT_URL:wss://dev.livekit.invalid \
 //     --var FLOW_UNFURL_ALLOW_HOSTS:localhost > /tmp/edge.log 2>&1 &
 // (FLOW_UNFURL_ALLOW_HOSTS lets the link preview check fetch the test page this script serves on localhost.)
 //   node test/e2e.mjs /tmp/edge.log
@@ -10,7 +9,7 @@
 // The domain checks serve a DNS-over-HTTPS stub on DOH_PORT (default 18897): add --var DNS_RESOLVER_URL:http://localhost:18897/dns-query.
 // The mail provider's records and DKIM want the fake provider: add --var MAIL_PROVIDER:fake.
 // It reads signup links and the dev push driver's lines from the Worker's log, because local mail and pushes go there.
-// Without the LIVEKIT_* vars the huddle checks expect huddles to be off instead.
+// Without the RTK_* vars (Meet) the huddle checks expect huddles to be off instead.
 import fs from 'node:fs';
 import http from 'node:http';
 import zlib from 'node:zlib';
@@ -211,15 +210,14 @@ if(r.s<300){const f=r.j.file;await fetch(B+r.j.upload.url,{method:'PUT',headers:
   else t('an attached picture keeps itself as its thumbnail (no Images binding)',th.status===200&&tb.equals(png),th.status);}
 else t('presign a picture',false,r.s);
 site.close();
-// ---- huddles
+// ---- huddles (Meet rooms since Meet phase 2; with the RTK_* vars they reach RealtimeKit for real)
 const cfg=(await api(null,'GET','/v1/config')).j;
+t('the LiveKit huddle flag is off for older apps',cfg.huddles===false,JSON.stringify(cfg.huddles));
 r=await api(A.token,'POST',`/v1/channels/${gen.id}/huddle/join`);
-if(cfg.huddles){t('huddle join returns a LiveKit token',r.s===200&&typeof r.j.token==='string'&&r.j.token.split('.').length===3&&r.j.url.startsWith('wss://'),r.s+' '+JSON.stringify(r.j).slice(0,120));
- const claims=r.j.token?JSON.parse(Buffer.from(r.j.token.split('.')[1],'base64url').toString()):{};t('the token is for the channel room',claims.video?.room===gen.id&&claims.sub===A.user.id,JSON.stringify(claims.video));
- r=await api(A.token,'GET',`/v1/workspaces/${W}/channels`);const hc=(r.j.channels??r.j).find(c=>c.id===gen.id);t('the channel list shows who is in the huddle',hc?.huddleParticipants?.[0]?.userId===A.user.id,JSON.stringify(hc?.huddleParticipants));
- r=await api(A.token,'POST',`/v1/channels/${gen.id}/huddle/leave`);t('huddle leave',r.s===200);
- const wh=await fetch(B+'/v1/livekit/webhook',{method:'POST',headers:{'content-type':'application/webhook+json',authorization:'forged'},body:JSON.stringify({event:'room_finished',room:{name:gen.id}})});t('an unsigned LiveKit webhook is refused',wh.status===400,wh.status);}
-else{t('huddles off without LiveKit settings',r.s===503,r.s);}
+if(cfg.meet){t('starting a huddle answers with the conversation\'s Meet room',r.s===200&&/^[a-z]{3}-[a-z]{4}-[a-z]{3}$/.test(r.j.meeting?.code)&&r.j.meeting?.channelId===gen.id,r.s+' '+JSON.stringify(r.j).slice(0,120));
+ r=await api(A.token,'POST',`/v1/meetings/${r.j.meeting.code}/leave`);t('leaving the room',r.s===200,r.s);
+ const wh=await fetch(B+'/v1/rtk/webhook',{method:'POST',headers:{'content-type':'application/json','rtk-signature':'Zm9yZ2Vk'},body:JSON.stringify({event:'meeting.ended',meeting:{id:gen.id}})});t('an unsigned RealtimeKit webhook is refused',wh.status===401,wh.status);}
+else{t('huddles off without Meet settings',r.s===503,r.s);}
 // ---- agents
 r=await api(A.token,'POST',`/v1/workspaces/${W}/agent-invites`,{});t('agent invite',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,100));const code=r.j.code;
 r=await api(null,'POST','/v1/agents/redeem',{code,username:'flowbot',key:'a-long-agent-key-for-the-test',name:'Flowbot'});t('redeem',r.s===201,r.s+' '+JSON.stringify(r.j).slice(0,110));const AGT=r.j.agentToken,AGT_ID=r.j.user?.id;

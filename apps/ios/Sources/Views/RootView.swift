@@ -29,15 +29,6 @@ struct RootView: View {
             // notifications or mark its channel read: its `WindowState`
             // outlives the switch to another server (#542).
             .onAppear { showing(active) }
-            .overlay(alignment: .topTrailing) {
-                if let owner = AppState.joinedHuddleOwner, owner !== active {
-                    Button("Return to huddle on \(URL(string: owner.serverOrigin)?.host ?? "server")") {
-                        selected = owner
-                        workspace = owner.activeHuddleWorkspaceId
-                        showing(owner)
-                    }.padding(8)
-                }
-            }
             .onReceive(NotificationCenter.default.publisher(for: .init("flow.selectConnection"))) { event in
                 if let app = event.object as? AppState { selected = app; workspace = nil; showing(app) }
             }
@@ -91,30 +82,6 @@ private struct SessionRootView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(app.errorMessage ?? "")
-        }
-        // Voice huddle (Phase 1): unmuting with no OS mic permission. Its own
-        // alert (not the generic one above) because this is the one place an
-        // action button — jumping straight to Flow's Settings page — actually
-        // helps. Port of the macOS RootView alert.
-        .alert(
-            "Microphone Access Needed",
-            isPresented: $app.micPermissionBlocked
-        ) {
-            Button("Open Settings") { app.openMicrophoneSettings() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Flow needs microphone access to talk in a huddle. Enable it in Settings → Flow → Microphone.")
-        }
-        // Same shape for the camera (#435): a separate OS grant, and "Open
-        // Settings" is the only useful thing to offer once it's refused.
-        .alert(
-            "Camera Access Needed",
-            isPresented: $app.cameraPermissionBlocked
-        ) {
-            Button("Open Settings") { app.openCameraSettings() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Flow needs camera access to turn on video in a huddle. Enable it in Settings → Flow → Camera.")
         }
     }
 }

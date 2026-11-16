@@ -110,7 +110,8 @@ export interface ThreadPage {
  * A message of an open conversation: its body is `null` with `bodyPending` while the server has not fetched it yet (ask
  * again shortly, or read the message itself: hooks/mail.ts `fetchBody`). `bodyFailed` is the client's: that read failed.
  */
-export type ThreadMessage = MessageDetail & { bodyPending?: true; bodyFailed?: true };
+/** `sending`: the person's own message, shown in its conversation from Send until the server's copy replaces it. */
+export type ThreadMessage = MessageDetail & { bodyPending?: true; bodyFailed?: true; sending?: true };
 export interface ThreadDetail {
   threadId: string;
   /** Oldest first, across the account's folders. */

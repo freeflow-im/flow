@@ -4,9 +4,9 @@
 // A huddle in a *channel* is ambient: you see it in the sidebar and drop in.
 // A huddle in a *DM* is a call — starting one rings the other member(s), and
 // the DM has to show afterwards that it happened, whether or not anyone
-// answered. That difference is the whole of this module: services/huddles.ts
-// still owns the LiveKit room and the roster, and calls in here only when the
-// entity is a DM or group DM.
+// answered. That difference is the whole of this module. On this server
+// huddles no longer start (they run in Meet on the Worker), so only the
+// decline, cancel, end and boot-sweep paths are still reached.
 //
 // **Track A only.** "Reachable" means *a live socket right now* — there is no
 // push, so a closed tab or a backgrounded iPhone is simply unavailable and the
@@ -435,8 +435,7 @@ export async function cancelInvite(inviteId: string, callerId: string): Promise<
 /**
  * The DM's huddle room emptied — end whatever invite is live for it. Called
  * from services/huddles.ts on every roster change that reaches zero, which
- * covers a clean leave, a dropped connection (LiveKit webhook) and a finished
- * room alike.
+ * covers a clean leave.
  *
  * A `ringing` invite whose caller left is a cancel; an `active` one is a
  * finished call with a duration.
@@ -451,9 +450,7 @@ export async function endInviteForChannel(channelId: string): Promise<void> {
  * Boot sweep. Ring timers are the one piece of state this module keeps in
  * memory, so a restart leaves `ringing` rows with nothing to resolve them —
  * every reconnecting client would raise an overlay for a call that ended
- * whenever the old process died. `active` rows are left alone: the LiveKit
- * room outlives our process, and huddles.ts's own boot reconciliation decides
- * whether that call is still up.
+ * whenever the old process died.
  */
 export async function sweepStaleOnBoot(): Promise<number> {
   const stale = await db.select().from(huddleInvites).where(eq(huddleInvites.status, 'ringing'));

@@ -104,7 +104,7 @@ struct ChannelScreen: View {
     }
 
     /// An agent call is deliberately one-to-one. Group DMs keep their normal
-    /// LiveKit huddle because a spoken turn cannot be paired safely with one
+    /// huddle because a spoken turn cannot be paired safely with one
     /// responding agent when several people or agents share the room.
     private var agentParticipantId: String? {
         guard let ch = resolvedChannel else { return nil }
@@ -165,15 +165,12 @@ struct ChannelScreen: View {
                     }
                 } else if app.can(.huddles) {
                     let isDm = ch.kind != "standard"
-                    let inThisHuddle = app.activeHuddleChannelId == channelId
+                    // A huddle is the conversation's Meet room (Meet phase 2); it opens in the browser.
+                    let inThisHuddle = app.isInHuddle(channelId: channelId)
                     let roster = app.huddleRosters[channelId] ?? []
                     Button {
                         agentCall.end()
-                        if inThisHuddle {
-                            app.leaveHuddle()
-                        } else {
-                            app.joinHuddle(channelId: channelId, workspaceId: ch.workspaceId)
-                        }
+                        app.joinHuddle(channelId: channelId, workspaceId: ch.workspaceId)
                     } label: {
                         HStack(spacing: 3) {
                             Image(systemName: "mic.fill")
@@ -190,8 +187,8 @@ struct ChannelScreen: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(app.huddleConnecting)
-                    .accessibilityLabel(inThisHuddle ? "Leave huddle" : isDm ? "Start a huddle" : "Join huddle")
-                    .accessibilityIdentifier(inThisHuddle ? "huddle.leave" : "huddle.join")
+                    .accessibilityLabel(inThisHuddle ? "Back to huddle" : !roster.isEmpty ? "Join huddle" : isDm ? "Start a huddle" : "Start a huddle for everyone here")
+                    .accessibilityIdentifier(inThisHuddle ? "huddle.return" : "huddle.join")
                 }
             }
         }
@@ -205,9 +202,6 @@ struct ChannelScreen: View {
         guard let workspaceId = resolvedChannel?.workspaceId, !startingAgentCall else { return }
         startingAgentCall = true
         Task {
-            if app.activeHuddleChannelId != nil {
-                await app.leaveHuddleAndWait()
-            }
             agentCall.start(channelId: channelId, workspaceId: workspaceId, agent: agent)
             startingAgentCall = false
         }

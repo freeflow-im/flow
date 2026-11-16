@@ -2,7 +2,7 @@ import { isLookingAtApp, onLookingChange } from '../lib/host';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { MessageDTO } from '@flow/shared';
 import { typingKey, useAuth, useLive, useSelection } from '../state';
-import { useHuddle } from '../huddle';
+import { HUDDLE_MAX_PEOPLE, useHuddle } from '../huddle';
 import { useArtifacts, useChannel, useChannelMembers, useDisplayNameMap, useMarkRead, useMemberMap, useMessages, useNameMap, usePinnedMessages, useTogglePin, useWorkspaces, flattenMessages } from '../hooks';
 import { dmTitle } from './Sidebar';
 import { Avatar } from './Avatar';
@@ -157,12 +157,15 @@ export default function ChannelView({ channelId }: { channelId: string }) {
   // Switching channels shouldn't leave the previous channel's roster hanging open.
   useEffect(() => setMembersOpen(false), [channelId]);
 
-  // Huddles run in any entity now — channel, DM or group DM (#436) — just not
-  // in an archived one. In a channel the button joins something ambient; in a
-  // DM the same button *rings* the other member(s), so it says so.
+  // A huddle is the conversation's Meet room (Meet phase 2, docs/specs/meetings.md): the button rings the room's
+  // people and opens the room in a new tab. Any conversation that isn't archived, but only a small one (ruling R5:
+  // six people or fewer, agents not counted); a running huddle can always be joined.
   const huddleParticipants = channel?.huddleParticipants ?? [];
-  const inThisHuddle = huddle.channelId === channelId;
-  const huddleEligible = !!channel && !channel.archivedAt && caps.huddles.state !== 'unavailable';
+  const inThisHuddle = huddleParticipants.some((p) => p.userId === auth.user.id);
+  const huddleRunning = huddleParticipants.length > 0;
+  const people = headerIds.filter((id) => !memberMap[id]?.isAgent).length;
+  const huddleEligible =
+    !!channel && !channel.archivedAt && caps.huddles.state !== 'unavailable' && (huddleRunning || people <= HUDDLE_MAX_PEOPLE);
   const canEditChannel = channel?.kind === 'standard' && !archived && caps.channelManagement.state !== 'unavailable';
   const isDmHuddle = !!channel && channel.kind !== 'standard';
 
@@ -222,21 +225,26 @@ export default function ChannelView({ channelId }: { channelId: string }) {
           {huddleEligible && (
             <button
               type="button"
-              data-testid={inThisHuddle ? 'huddle-leave' : 'huddle-join'}
-              title={inThisHuddle ? 'Leave huddle' : isDmHuddle ? 'Start a huddle — this rings them' : 'Join huddle'}
-              disabled={huddle.connecting}
-              className={`flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-semibold max-md:hidden ${
+              data-testid={inThisHuddle ? 'huddle-return' : 'huddle-join'}
+              title={
                 inThisHuddle
+                  ? 'Go back to the huddle (it is open in another tab)'
+                  : huddleRunning
+                    ? 'Join the huddle in Meet'
+                    : isDmHuddle
+                      ? 'Start a huddle in Meet — this rings them'
+                      : 'Start a huddle in Meet — this rings everyone here'
+              }
+              disabled={huddle.starting}
+              className={`flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-semibold max-md:hidden ${
+                huddleRunning
                   ? 'bg-accent/15 text-accent-soft hover:bg-accent/25'
                   : 'text-muted hover:bg-daypill/60 hover:text-ink'
               }`}
-              onClick={() => {
-                if (inThisHuddle) void huddle.leave();
-                else if (channel) void huddle.join(channelId, channel.workspaceId).catch(() => {});
-              }}
+              onClick={() => void huddle.start(channelId)}
             >
-              🎙 {inThisHuddle ? 'Leave Huddle' : isDmHuddle ? 'Huddle' : 'Join Huddle'}
-              {/* ambient indicator: a huddle live but not yet joined shows who's in it */}
+              🎙 {inThisHuddle ? 'Back to Huddle' : huddleRunning ? 'Join Huddle' : 'Huddle'}
+              {/* a live huddle shows how many are in it */}
               {!inThisHuddle && huddleParticipants.length > 0 && (
                 <span className="rounded-full bg-accent/15 px-1.5 text-accent-soft">{huddleParticipants.length}</span>
               )}

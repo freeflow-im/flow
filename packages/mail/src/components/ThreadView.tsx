@@ -132,18 +132,30 @@ export function ThreadView(p: ThreadViewProps) {
   const [unfolded, setUnfolded] = useState(false);
   const [focus, setFocus] = useState<number | null>(null);
   const [previewing, setPreviewing] = useState<{ index: number; at: number } | null>(null);
-  const shownKey = t ? `${t.threadId}:${messages.length}` : '';
-  const lastKey = useRef(shownKey);
+  // A message joining the conversation (an answer sent, a new one arrived) leaves the rest as they were and opens itself;
+  // only another conversation, or one that lost messages, starts over.
+  const shown = useRef({ threadId: t?.threadId ?? '', count: messages.length });
   useEffect(() => {
-    if (lastKey.current === shownKey) return;
-    lastKey.current = shownKey;
+    const before = shown.current;
+    const threadId = t?.threadId ?? '';
+    shown.current = { threadId, count: messages.length };
+    if (before.threadId === threadId && before.count === messages.length) return;
+    if (threadId && before.threadId === threadId && messages.length > before.count) {
+      const added = expandedByDefault(messages);
+      setExpanded((cur) => {
+        const next = new Set(cur);
+        for (let i = before.count; i < messages.length; i++) if (added.has(i)) next.add(i);
+        return next;
+      });
+      return;
+    }
     setExpanded(expandedByDefault(messages));
     setUnfolded(false);
     setFocus(null);
     setPreviewing(null);
-    // (messages change with shownKey.)
+    // (messages change with the thread and its length.)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shownKey]);
+  }, [t?.threadId, messages.length]);
   const toggle = (i: number) => {
     const m = messages[i];
     if (m?.bodyPending && !expanded.has(i)) p.onNeedBody(m);
@@ -512,7 +524,14 @@ function ThreadMessageItem({ ref, accountId, me, message: m, open, last, focused
               </Person>
             )}
             <span className="ml-auto flex shrink-0 items-center gap-1 text-xs text-muted">
-              <time dateTime={m.date} title={fullDate(m.date)}>{open ? `${fullDate(m.date)} (${relativeDate(m.date)})` : listDate(m.date)}</time>
+              {m.sending ? (
+                <span className="flex items-center gap-1.5" role="status">
+                  <Loader2 className="size-3.5 animate-spin" /> Sending…
+                </span>
+              ) : (
+                <time dateTime={m.date} title={fullDate(m.date)}>{open ? `${fullDate(m.date)} (${relativeDate(m.date)})` : listDate(m.date)}</time>
+              )}
+              {!m.sending && (<>
               <button
                 type="button"
                 aria-label={m.flagged ? 'Unstar' : 'Star'}
@@ -544,6 +563,7 @@ function ThreadMessageItem({ ref, accountId, me, message: m, open, last, focused
                   </DropdownMenu>
                 </>
               )}
+              </>)}
             </span>
           </div>
           {open ? (

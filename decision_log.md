@@ -20,6 +20,18 @@
 - **Why:** a free `freeflow.im` address for every person is a spam and support cost with no customer asking for it;
   agents need an address to work, people already have one.
 - **Where:** `docs/specs/platform.md` §3.2, §3.3.
+## 2026-11-13 / 2026-11-15 — Meet: video meetings on Cloudflare RealtimeKit (operator rulings)
+
+- **Move calls off LiveKit to RealtimeKit (R1).** Huddles become Meet meetings in a later phase; agent voice calls in DM
+  huddles are deleted, not deferred (R6: "never worked well"). Agents get audio when RealtimeKit supports it.
+- **Guests join straight in (R2)**, no waiting room; **Meet is its own suite app at `/meet` (R3)**; recording and
+  transcripts off by default (R7).
+- **"Start a huddle" in a Chat room instantly starts a Meet meeting with that room's people (R4), only in rooms of 6 or
+  fewer people (R5)**, and everyone in the room is rung.
+- **Phase 1 is small (2026-11-15):** a web-only meeting room for members (start, copy link, Live now, grid, mic, camera,
+  share, leave). Chat and huddles are left out of it, and LiveKit is untouched until phase 2.
+- RealtimeKit apps: `freeflow-meetings` (production) and `freeflow-meet-dev` (local); one account-owned token with
+  Realtime Read + Admin. Details in docs/specs/meetings.md.
 
 ## 2026-11-15 — Admin › Members: Add member maps onto the existing agent kinds (operator rulings)
 

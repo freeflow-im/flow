@@ -442,7 +442,7 @@ describe('suiteTabsFrom', () => {
 
   it('gives every bar every app’s tab, and an app without one (Contacts, reached from Mail) no tab anywhere', () => {
     const withTabs = APP_MANIFESTS.filter((m) => m.tab);
-    expect(withTabs.map((m) => m.name)).toEqual(['chat', 'docs', 'mail', 'calendar', 'home']);
+    expect(withTabs.map((m) => m.name)).toEqual(['chat', 'docs', 'mail', 'calendar', 'home', 'meet']);
     for (const bar of withTabs) {
       const tabs = suiteTabsFrom(APP_MANIFESTS, bar.name);
       expect(tabs.map((t) => t.id).sort()).toEqual(withTabs.map((m) => m.name).sort());

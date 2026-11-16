@@ -1595,18 +1595,17 @@ actor SyncEngine {
 
     // MARK: - Huddle
 
-    /// Mints a LiveKit access token scoped to this entity's room. Idempotent
-    /// server-side — calling it while already an active participant re-mints
-    /// a fresh token rather than erroring (decision log 2026-08-20); this is
-    /// also the reconnect path. In a DM this is also what starts the ring.
-    func joinHuddle(channelId: String) async throws -> HuddleJoinResponse {
+    /// Starts or joins the conversation's huddle: the server makes (or finds)
+    /// its Meet room and rings the other people, and answers with the room's
+    /// code. Calling it again while the huddle runs returns the same room.
+    func joinHuddle(channelId: String) async throws -> HuddleStartResponse {
         try await api.post("/v1/channels/\(channelId)/huddle/join")
     }
 
     /// Answering a ring (#436). Accept *is* join — the server marks the target
-    /// answered (dismissing this user's other devices) and hands back a token
+    /// answered (dismissing this user's other devices) and hands back the room
     /// through the same path, so there is no second way into the room.
-    func acceptHuddleInvite(inviteId: String, sessionId: String?) async throws -> HuddleJoinResponse {
+    func acceptHuddleInvite(inviteId: String, sessionId: String?) async throws -> HuddleStartResponse {
         try await api.post("/v1/huddle/invites/\(inviteId)/accept", body: HuddleInviteReplyBody(sessionId: sessionId))
     }
 
@@ -1617,16 +1616,6 @@ actor SyncEngine {
             "/v1/huddle/invites/\(inviteId)/decline",
             body: HuddleInviteReplyBody(sessionId: sessionId)
         )
-    }
-
-    func cancelHuddleInvite(inviteId: String) async {
-        let _: OkResponse? = try? await api.post("/v1/huddle/invites/\(inviteId)/cancel")
-    }
-
-    /// Best-effort: the webhook safety net (participant_left) covers a
-    /// request that never lands.
-    func leaveHuddle(channelId: String) async {
-        let _: OkResponse? = try? await api.post("/v1/channels/\(channelId)/huddle/leave")
     }
 
     func archiveChannel(_ channelId: String) async throws {
