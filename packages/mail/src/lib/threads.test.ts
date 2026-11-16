@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { Address, MessageSummary, ThreadMessage, ThreadSummary } from '../api';
-import { dragThreadUids, expandedByDefault, foldRuns, groupByThread, participantsLabel, replyTarget, soloThreadId, soloUid, threadOfMessage } from './threads';
+import type { Address, MessageSummary, ThreadDetail, ThreadMessage, ThreadSummary } from '../api';
+import { dragThreadUids, expandedByDefault, keepSending, sendingCopy, foldRuns, groupByThread, participantsLabel, replyTarget, soloThreadId, soloUid, threadOfMessage } from './threads';
 
 const ann: Address = { name: 'Ann Lee', address: 'ann@example.com' };
 const bob: Address = { name: 'Bob Martin', address: 'bob@acme.test' };
@@ -84,5 +84,24 @@ describe('dragThreadUids', () => {
     expect(dragThreadUids('t:a', new Set(), rows)).toEqual([9, 4]);
     expect(dragThreadUids('m:8', new Set(['t:a', 'm:7']), rows)).toEqual([8]);
     expect(dragThreadUids('m:7', new Set(['t:a', 'm:7']), rows)).toEqual([9, 4, 7]);
+  });
+});
+
+describe('an answer being sent', () => {
+  const ann = { name: 'Ann', address: 'ann@x.test' };
+  const copy = sendingCopy({ to: [{ name: 'Bob', address: 'bob@x.test' }], subject: 'Re: Plans', html: '<p>Yes</p>', text: 'Yes', inReplyTo: '<m1@x>' }, ann, -1, new Date('2026-11-15T10:00:00Z'));
+  const server = (messageId: string): ThreadMessage => ({ ...copy, uid: 9, folder: 'Sent', messageId, sending: undefined } as ThreadMessage);
+  const base = (messages: ThreadMessage[]): ThreadDetail => ({ threadId: 't', messages });
+
+  it('is the person\'s own message, read, marked sending, with a uid no server message has', () => {
+    expect(copy).toMatchObject({ uid: -1, from: ann, seen: true, sending: true, html: '<p>Yes</p>', snippet: 'Yes', inReplyTo: '<m1@x>', date: '2026-11-15T10:00:00.000Z' });
+  });
+
+  it('stays at the end of a fresh read until the server\'s copy (by Message-ID) is in it', () => {
+    const old = base([copy]);
+    expect(keepSending(old, base([])).messages).toEqual([copy]);
+    const sent = { ...copy, messageId: '<abc@x>' };
+    expect(keepSending(base([sent]), base([server('<other@x>')])).messages).toEqual([server('<other@x>'), sent]);
+    expect(keepSending(base([sent]), base([server('abc@x')])).messages).toEqual([server('abc@x')]);
   });
 });

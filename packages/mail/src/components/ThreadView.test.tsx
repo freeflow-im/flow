@@ -64,6 +64,25 @@ describe('ThreadView', () => {
     expect(article(2).textContent).toContain('me');
   });
 
+  it('a message joining the thread (an answer being sent) leaves the others as they were, and shows Sending…', async () => {
+    await render();
+    await act(() => host.querySelector<HTMLButtonElement>('button[class*="border-dashed"]')!.click());
+    await act(() => article(3).querySelector<HTMLElement>('div[class*="cursor-pointer"]')!.click());
+    const sending = m(-1, { folder: '', messageId: null, from: { name: 'Ann', address: me }, text: 'my answer', sending: true });
+    await render({ thread: { ...thread, messages: [...thread.messages, sending] } });
+    expect(articles().map((a) => a.dataset.uid)).toEqual(['1', '2', '3', '4', '5', '-1']);
+    expect(article(3).getAttribute('aria-expanded')).toBe('true');
+    expect(article(5).getAttribute('aria-expanded')).toBe('true');
+    expect(article(-1).getAttribute('aria-expanded')).toBe('true');
+    expect(article(-1).textContent).toContain('Sending…');
+    expect(article(-1).querySelector('button[aria-label="Star"]')).toBeNull();
+    // The server's copy takes its place: still open, nothing else moves.
+    await render({ thread: { ...thread, messages: [...thread.messages, m(6, { folder: 'Sent', from: { name: 'Ann', address: me }, text: 'my answer' })] } });
+    expect(article(3).getAttribute('aria-expanded')).toBe('true');
+    expect(article(6).getAttribute('aria-expanded')).toBe('true');
+    expect(article(6).textContent).not.toContain('Sending…');
+  });
+
   it('a click expands a message and shows its body; another collapses it', async () => {
     await render();
     await act(() => host.querySelector<HTMLButtonElement>('button[class*="border-dashed"]')!.click());

@@ -7,7 +7,7 @@ import { AlertTriangle, Loader2 } from 'lucide-react';
 import { isInHome, useHomeMenu } from '@flow/suite-bar';
 import { AssistantDock, AssistantDockScope, useAssistantDockState, useMyAssistant, useNewChatOnClose } from '@flow/suite-bar/assistant-dock';
 import { SidePanel, sidePanelsOf } from '@flow/suite-bar/side-panel';
-import { MailApiError, mailApi, setMailWorkspace, type Category, type MailAccount, type MessageDetail, type ThreadSummary, type TabStatus } from './api';
+import { MailApiError, mailApi, setMailWorkspace, type Category, type MailAccount, type MessageDetail, type ThreadDetail, type ThreadMessage, type ThreadSummary, type TabStatus } from './api';
 import { AccountSettingsDialog, AddAccountDialog } from './components/AccountForms';
 import { ConnectMail } from './components/ConnectMail';
 import { GuestsChatOnly, MailboxSettingUp, NoOrganization } from './components/NoOrganization';
@@ -33,7 +33,7 @@ import { sendInBackground } from './lib/outgoing';
 import { findSpecial, folderLabel } from './lib/folders';
 import { folderDropTarget, tabDropTarget, useCanDrag } from './lib/dnd';
 import { TAB_INFO, reasonText, tabFromParam, tabsOf, writeTabParam, markTabSeen, readTabSeen, type TabSeen } from './lib/tabs';
-import { expandedByDefault, groupByThread, replyTarget, soloThreadId } from './lib/threads';
+import { expandedByDefault, groupByThread, replyTarget, sendingCopy, soloThreadId } from './lib/threads';
 import { cn } from './lib/utils';
 
 // The editor (TipTap) is most of the code: it loads when compose first opens.
@@ -105,6 +105,10 @@ export function App() {
 
   const [accountId, setAccountId] = useState<string | null>(storedAccount);
   const list = accounts.data ?? [];
+  // The accounts for callbacks made once (sendMail), and the uids of the messages shown while they are sent (negative).
+  const accountsRef = useRef(list);
+  accountsRef.current = list;
+  const sendingSeq = useRef(0);
   const account: MailAccount | null = list.find((a) => a.id === accountId) ?? list[0] ?? null;
   const folders = useFolders(account?.id ?? null);
   const [folderChoice, setFolderChoice] = useState<string | null>(() => initialParam('folder'));
@@ -550,12 +554,26 @@ export function App() {
     openCompose(accountId, request);
   };
   const sendMail = useCallback(
-    (out: Outgoing) =>
+    (out: Outgoing) => {
+      // An answer shows at the end of its conversation at once, marked as sending, until the server's copy replaces it.
+      const from = accountsRef.current.find((a) => a.id === out.accountId);
+      const threadId = out.request.mode !== 'draft' ? out.request.threadId : undefined;
+      const threadKey = threadId ? keys.thread(out.accountId, threadId) : null;
+      const uid = -++sendingSeq.current;
+      const sameCopy = (m: ThreadMessage) => m.sending && m.uid === uid;
+      const patchThread = (fn: (list: ThreadMessage[]) => ThreadMessage[]) => {
+        if (threadKey) qc.setQueryData<ThreadDetail>(threadKey, (old) => (old ? { ...old, messages: fn(old.messages) } : old));
+      };
+      if (from) patchThread((list) => [...list, sendingCopy(out.message, { name: from.displayName, address: from.email }, uid)]);
       void sendInBackground(out, {
         send: mailApi.send,
         notice: setToast,
         reopen: (o) => reopen.current(o.accountId, o.request),
-        onSent: () => {
+        onFailed: () => patchThread((list) => list.filter((m) => !sameCopy(m))),
+        onSent: (answer) => {
+          // The server's Message-ID, so a read of the conversation that has the server's copy drops this one.
+          const messageId = (answer as { messageId?: string } | null)?.messageId ?? null;
+          patchThread((list) => list.map((m) => (sameCopy(m) ? { ...m, messageId } : m)));
           const sentDraft = out.request.mode === 'draft' ? out.request.threadId : undefined;
           if (sentDraft) setOpenId((cur) => (cur === sentDraft ? null : cur));
           void qc.invalidateQueries({ queryKey: keys.allMessages(out.accountId) });
@@ -564,7 +582,8 @@ export function App() {
           void qc.invalidateQueries({ queryKey: keys.threadDetails(out.accountId) });
           void qc.invalidateQueries({ queryKey: keys.folders(out.accountId) });
         },
-      }),
+      });
+    },
     [qc],
   );
 
