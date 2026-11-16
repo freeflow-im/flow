@@ -5,11 +5,15 @@
 //   npx wrangler dev --port 18797 --local --enable-containers=false --local-upstream localhost:18797 \
 //     --var PORTED_HOSTS:edge.freeflow.im,localhost --var ASSET_HOSTS:none --var ORIGIN_URL:http://localhost:9 \
 //     --var WEB_URL_BASE:http://localhost:18797 --var FLOW_WEB_URL:http://localhost:18797 > /tmp/edge-contacts.log 2>&1 &
+// plus --var MAIL_PROVIDER:fake --var DNS_RESOLVER_URL:http://localhost:18899/dns-query: members are contacts by their
+// addresses, which people have only on the organization's own domain with mail on (platform.md §3.2), verified against a
+// DNS-over-HTTPS stub this script serves on DOH_PORT (default 18899).
 //   B=http://localhost:18797 node test/e2e-contacts.mjs /tmp/edge-contacts.log
 // It reads signup links from the Worker's log. The Mail source (people written to) is unit-tested (src/contacts); here the
 // people are Ann's own contacts and the organization's members.
 import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
+import http from 'node:http';
 const log=process.argv[2]; const B=process.env.B??'http://localhost:18797';
 let pass=0,fail=0; const t=(n,ok,d='')=>{ok?pass++:fail++;console.log((ok?'ok  ':'FAIL')+' '+n+(d?': '+String(d).slice(0,200):''));};
 const api=async(tok,m,p,b,type,extra={})=>{const r=await fetch(B+p,{method:m,redirect:'manual',headers:{...extra,...(tok?{authorization:'Bearer '+tok}:{}),...(b!==undefined?{'content-type':type??'application/json'}:{})},body:b===undefined?undefined:(type?b:JSON.stringify(b))});const x=await r.text();let j;try{j=JSON.parse(x)}catch{j=x}return{s:r.status,j,h:r.headers}};
@@ -31,6 +35,14 @@ r=await api(null,'GET',q('/v1/contacts'));t('no session: 401',r.s===401,r.s);
 r=await api(A.token,'POST',q('/v1/contacts'),{name:`Zed Quill ${tag}`,emails:[`zed-${tag}@quill.test`],orgName:'Quill & Co'});
 const ZED=r.j.contact;t('Ann adds a contact',r.s===201&&ZED?.source==='own'&&ZED.id?.includes(':'),r.s+' '+JSON.stringify(r.j).slice(0,160));
 r=await api(A.token,'GET',q(`/v1/contacts/search?q=${enc('zed quill')}`));t('Ann finds it by searching',r.s===200&&r.j.contacts?.length===1&&r.j.contacts[0].id===ZED?.id,JSON.stringify(r.j).slice(0,160));
+r=await api(A.token,'GET',q('/v1/contacts'));t('on the platform subdomain Bob has no address, so he is no member contact yet',r.s===200&&!r.j.contacts?.some((c)=>c.source==='member'),JSON.stringify(r.j.contacts).slice(0,160));
+// Mail turned on for a primary domain of the organization's own gives Ann and Bob addresses there (platform.md §3.2).
+{const TXT=new Map();const doh=http.createServer((q2,res)=>{const u=new URL(q2.url,'http://x');const v=u.searchParams.get('type')==='TXT'&&TXT.get(u.searchParams.get('name'));res.setHeader('content-type','application/dns-json');res.end(JSON.stringify(v?{Status:0,Answer:[{name:u.searchParams.get('name'),type:16,TTL:60,data:JSON.stringify(v)}]}:{Status:3}));});
+ await new Promise(res=>doh.listen(Number(process.env.DOH_PORT||18899),'127.0.0.1',res));
+ const D=`/v1/workspaces/${W}/domains`,dom=`acme-${tag}.test`;let x=await api(A.token,'POST',D,{domain:dom});const v=x.j.records?.find(y=>y.purpose==='verification');if(v)TXT.set(v.name,v.value);
+ const ok=[x.s===201,(await api(A.token,'POST',`${D}/${dom}/verify`)).j.verified===true,(await api(A.token,'POST',`${D}/${dom}/dkim`)).s===200,(await api(A.token,'PATCH',`${D}/${dom}`,{primary:true})).s===200];
+ doh.close();const b=(await api(Bo.token,'GET','/v1/me/accounts')).j.accounts?.find(y=>y.organizationId===W);
+ t('Ann turns on mail on a domain of the organization\'s own: Bob gets an address there',ok.every(Boolean)&&b?.address===`bob@${dom}`,JSON.stringify(ok)+' '+b?.address);}
 r=await api(A.token,'GET',q('/v1/contacts'));const annBob=r.j.contacts?.find((c)=>c.source==='member');
 t('Ann’s list has Bob as a member, with his address, and not herself',r.j.contacts?.filter((c)=>c.source==='member').length===1&&annBob?.name==='Bob'&&/@/.test(annBob.emails?.[0]??'')&&annBob.userId,JSON.stringify(r.j.contacts).slice(0,200));
 r=await api(Bo.token,'GET',q(`/v1/contacts/search?q=${enc('zed quill')}`));t('Bob does not see Ann’s contact',r.s===200&&r.j.contacts?.length===0,JSON.stringify(r.j).slice(0,120));

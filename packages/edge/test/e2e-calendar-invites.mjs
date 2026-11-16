@@ -9,12 +9,16 @@
 //   npx wrangler dev --port 18799 --local --enable-containers=false --var PORTED_HOSTS:edge.freeflow.im,localhost \
 //     --var ASSET_HOSTS:none --var ORIGIN_URL:http://localhost:9 --var WEB_URL_BASE:http://localhost:18799 \
 //     --var MAIL_ALLOW_INSECURE:1 --var CALENDAR_ALLOW_INSECURE:1 > /tmp/edge-invites.log 2>&1 &
+// plus --var MAIL_PROVIDER:fake --var DNS_RESOLVER_URL:http://localhost:18899/dns-query: a person has a native calendar and
+// a hosted mailbox only on the organization's own domain with mail on (platform.md §3.2), verified against a DNS-over-HTTPS
+// stub this script serves on DOH_PORT (default 18899). The fake provider's hosted mailbox is on the same GreenMail.
 //   node test/e2e-calendar-invites.mjs /tmp/edge-invites.log
 // Restart wrangler after editing the server (its hot reload has served a stale bundle). The person's mail account and calendar
 // account share one address, as they would for a real person. "Ann", the organizer, sends her invitation and cancellation
 // straight into GreenMail's SMTP (with nodemailer's icalEvent: Google's shape, a text/calendar alternative and invite.ics), and
 // her mailbox is read straight over IMAP to see the answer arrive.
 import fs from 'node:fs';
+import http from 'node:http';
 import { ImapFlow } from 'imapflow';
 import nodemailer from 'nodemailer';
 import PostalMime from 'postal-mime';
@@ -44,7 +48,15 @@ const A=await signup(`invites-${tag}@example.com`,'Scott'),Bo=await signup(`invi
 t('sign up',A.token&&Bo.token);
 // Mail and calendars are an account's (platform.md §3.6): each person gets an organization.
 const org=async(u,n)=>(await api(u.token,'POST','/v1/workspaces',{name:`${n} ${tag}`,slug:`${n.toLowerCase()}-${tag}`})).j?.id;
-t('each with an organization',!!(await org(A,'Invann'))&&!!(await org(Bo,'Invbo')));
+const ORGA=await org(A,'Invann');
+t('each with an organization',!!ORGA&&!!(await org(Bo,'Invbo')));
+// Scott's organization turns on mail on a domain of its own (platform.md §3.2): he gets an address, a mailbox and a native calendar.
+{const TXT=new Map();const doh=http.createServer((q,res)=>{const u=new URL(q.url,'http://x');const v=u.searchParams.get('type')==='TXT'&&TXT.get(u.searchParams.get('name'));res.setHeader('content-type','application/dns-json');res.end(JSON.stringify(v?{Status:0,Answer:[{name:u.searchParams.get('name'),type:16,TTL:60,data:JSON.stringify(v)}]}:{Status:3}));});
+ await new Promise(res=>doh.listen(Number(process.env.DOH_PORT||18899),'127.0.0.1',res));
+ const D=`/v1/workspaces/${ORGA}/domains`,dom=`invann-${tag}.test`;let x=await api(A.token,'POST',D,{domain:dom});const v=x.j.records?.find(y=>y.purpose==='verification');if(v)TXT.set(v.name,v.value);
+ const ok=[x.s===201,(await api(A.token,'POST',`${D}/${dom}/verify`)).j.verified===true,(await api(A.token,'POST',`${D}/${dom}/dkim`)).s===200,(await api(A.token,'PATCH',`${D}/${dom}`,{primary:true})).s===200];
+ doh.close();let a;for(let i=0;i<60;i++){a=(await api(A.token,'GET','/v1/me/accounts')).j.accounts?.find(y=>y.organizationId===ORGA);if(a?.hosted&&a.state==='active')break;await sleep(250);}
+ t('mail on a domain of his own: Scott gets an address there and a mailbox',ok.every(Boolean)&&a?.address===`scott@${dom}`&&a.hosted,JSON.stringify(ok)+' '+a?.address);}
 
 // ---- the person's mail account and calendar account, one address
 const server=(port)=>({host:'127.0.0.1',port,security:'none'});
@@ -140,9 +152,8 @@ const chenMail=await waitFor(async()=>(await mailbox(CHEN)).find(m=>m.subject?.s
 // emailed answer goes on the event when Mail's card reads it, and an outside invitation lands on the default native calendar
 r=await api(A.token,'GET','/v1/calendar/accounts');const NADDR=r.j.accounts?.find(a=>a.kind==='native')?.email;
 const NCAL=(await api(A.token,'GET','/v1/calendar/calendars')).j.calendars?.find(c=>/^n\./.test(c.id));
-r=await api(A.token,'POST','/v1/mail/accounts',{email:NADDR,displayName:'Scott Persinger',password:'x',imap:server(3143),smtp:server(3025)});
-t('native: a mail account at the account\'s own address',r.s===201&&!!NCAL,r.s+' '+JSON.stringify(r.j).slice(0,120));
-const NACC=r.j.account?.id, NP=`/v1/mail/accounts/${NACC}`;
+r=await api(A.token,'GET','/v1/mail/accounts');const NACC=r.j.accounts?.find(a=>a.kind==='hosted'&&a.email===NADDR)?.id, NP=`/v1/mail/accounts/${NACC}`;
+t('native: the hosted mailbox is at the account\'s own address',!!NACC&&!!NCAL,NADDR+' '+JSON.stringify(r.j).slice(0,120));
 const ninbox=async(subject)=>waitFor(async()=>{const x=await api(A.token,'GET',`${NP}/messages?folder=INBOX&limit=30`);return x.j.messages?.find(m=>m.subject===subject)});
 const GUEST=`guest-${tag}@example.com`;
 r=await api(A.token,'POST','/v1/calendar/events',{calendarId:NCAL.id,summary:`Native review ${tag}`,start:'2026-11-18T15:00:00Z',end:'2026-11-18T16:00:00Z',timezone:'UTC',attendees:[{email:GUEST,name:'Guest'}]});

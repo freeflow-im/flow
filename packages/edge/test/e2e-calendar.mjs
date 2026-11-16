@@ -6,14 +6,19 @@
 // calendar's insecure dev mode on (http and local hosts):
 //   npx wrangler dev --port 18799 --local --enable-containers=false --var PORTED_HOSTS:edge.freeflow.im,localhost \
 //     --var ASSET_HOSTS:none --var ORIGIN_URL:http://localhost:9 --var WEB_URL_BASE:http://localhost:18799 \
-//     --var CALENDAR_ALLOW_INSECURE:1 > /tmp/edge-calendar.log 2>&1 &
+//     --var CALENDAR_ALLOW_INSECURE:1 --var MAIL_PROVIDER:fake --var DNS_RESOLVER_URL:http://localhost:18899/dns-query \
+//     > /tmp/edge-calendar.log 2>&1 &
 //   node test/e2e-calendar.mjs /tmp/edge-calendar.log
+// A person has a native calendar only where the organization gives people hosted mail: its primary domain its own, verified,
+// with mail on (platform.md §3.2). So each organization here gets one, verified against a DNS-over-HTTPS stub served on
+// DOH_PORT (default 18899), with the fake mail provider; hence MAIL_PROVIDER and DNS_RESOLVER_URL.
 // Restart wrangler after editing the server: its hot reload has served a stale bundle. It reads signup links from the
 // Worker's log (local mail goes there), and checks the timing lines there too. Google Calendar is not covered here (no
 // Google in Docker) beyond its routes' refusals; its flow is unit-tested and verified by hand (docs/specs/calendar.md §12). The calendars are made, and some events put,
 // straight into Radicale (MKCALENDAR and PUT from here), as another calendar app would. The last part waits for the
 // object's own alarm (every 60 s while the person is active) to pick up an event put straight into Radicale: about a minute.
 import fs from 'node:fs';
+import http from 'node:http';
 const log=process.argv[2]; const B=process.env.B??'http://localhost:18799';
 const DAV=process.env.DAV??'http://127.0.0.1:5232';
 let pass=0,fail=0; const t=(n,ok,d='')=>{ok?pass++:fail++;console.log((ok?'ok  ':'FAIL')+' '+n+(d?': '+String(d).slice(0,200):''));};
@@ -30,8 +35,18 @@ const A=await signup(`cal-${tag}@example.com`,'Ann'),Bo=await signup(`cal-other-
 t('sign up',A.token&&Bo.token);
 // Calendars are an account's (platform.md §3.6): each person gets an organization, and someone in none is refused.
 const org=async(u,n)=>(await api(u.token,'POST','/v1/workspaces',{name:`${n} ${tag}`,slug:`${n.toLowerCase()}-${tag}`})).j?.id;
-const ORGA=await org(A,'Calann');
-t('each with an organization',!!ORGA&&!!(await org(Bo,'Calbo')));
+// The DNS stub and the steps to an own domain with mail on, made primary (as test/e2e-provisioning.mjs).
+const TXT=new Map();const doh=http.createServer((q,res)=>{const u=new URL(q.url,'http://x');const v=u.searchParams.get('type')==='TXT'&&TXT.get(u.searchParams.get('name'));res.setHeader('content-type','application/dns-json');res.end(JSON.stringify(v?{Status:0,Answer:[{name:u.searchParams.get('name'),type:16,TTL:60,data:JSON.stringify(v)}]}:{Status:3}));});
+await new Promise(res=>doh.listen(Number(process.env.DOH_PORT||18899),'127.0.0.1',res));doh.unref();
+const accountOf=async(u,o)=>(await api(u.token,'GET','/v1/me/accounts')).j.accounts?.find(a=>a.organizationId===o);
+async function hostMail(u,o,dom){const D=`/v1/workspaces/${o}/domains`;let x=await api(u.token,'POST',D,{domain:dom});const v=x.j.records?.find(y=>y.purpose==='verification');if(v)TXT.set(v.name,v.value);
+  const ok=[x.s===201,(await api(u.token,'POST',`${D}/${dom}/verify`)).j.verified===true,(await api(u.token,'POST',`${D}/${dom}/dkim`)).s===200,(await api(u.token,'PATCH',`${D}/${dom}`,{primary:true})).s===200];
+  let a;for(let i=0;i<60;i++){a=await accountOf(u,o);if(a?.hosted&&a.state==='active')break;await sleep(250);}
+  return ok.every(Boolean)&&a?.address?.endsWith('@'+dom)&&a.hosted;}
+const ORGA=await org(A,'Calann'),ORGB=await org(Bo,'Calbo');
+t('each with an organization',!!ORGA&&!!ORGB);
+t('on the platform subdomain a person has no address and no native calendar (§3.2)',(await accountOf(A,ORGA))?.address===null&&(await api(A.token,'GET','/v1/calendar/calendars')).j.calendars?.length===0);
+t('each organization turns on mail on a domain of its own: the person gets an address and a mailbox',await hostMail(A,ORGA,`calann-${tag}.test`)&&await hostMail(Bo,ORGB,`calbo-${tag}.test`));
 {const Cy=await signup(`cal-none-${tag}@example.com`,'Cy');const x=await api(Cy.token,'GET','/v1/calendar/accounts');t('someone in no organization is refused, no_account',x.s===403&&x.j.error?.code==='no_account',x.s+' '+JSON.stringify(x.j));}
 
 let r=await api(null,'GET','/v1/calendar/accounts');t('no session refused',r.s===401,r.s);
@@ -281,7 +296,7 @@ t('sched: Bob\'s and the agent\'s addresses',!!BOB_ADDR&&!!BOT_ADDR&&BOB_ADDR!==
 r=await api(A.token,'POST','/v1/calendar/events',{summary:`Review ${tag}`,start:'2027-01-14T15:00:00Z',end:'2027-01-14T16:00:00Z',attendees:[{email:BOB_ADDR},{email:BOT_ADDR},{email:GUEST}]});
 const REV=r.j.event;const acctOf=(ev,e)=>ev?.attendees?.find(a=>a.email===e)?.accountId;const answerOf=(ev,e)=>ev?.attendees?.find(a=>a.email===e)?.response;
 t('sched: Ann creates it; Bob and the agent resolve to accounts, the guest is outside',r.s===201&&!!acctOf(REV,BOB_ADDR)&&!!acctOf(REV,BOT_ADDR)&&!acctOf(REV,GUEST),r.s+' '+JSON.stringify(REV?.attendees));
-t('sched: the guest is the only one emailed (Ann has no mail account here, so it says so)',r.j.invitationsSent===false&&/No mail account/.test(r.j.invitationsNote??''),JSON.stringify(r.j).slice(-160));
+t('sched: the guest is the only one emailed, from Ann\'s hosted mailbox',r.j.invitationsSent===true&&!r.j.invitationsNote,JSON.stringify(r.j).slice(-160));
 r=await api(Bob.token,'GET',`/v1/calendar/events?${SW}`);const BCOPY=r.j.events?.find(e=>e.summary===`Review ${tag}`);
 const bobDefault=(await api(Bob.token,'GET','/v1/calendar/calendars')).j.calendars?.find(c=>c.isDefault);
 t('sched: Bob\'s default calendar holds it, needs-action',!!BCOPY&&BCOPY.calendarId===bobDefault?.id&&BCOPY.myResponse==='needs-action'&&BCOPY.organizer?.email===ANN_ADDR,JSON.stringify(BCOPY).slice(0,200));
@@ -323,7 +338,8 @@ r=await api(A.token,'GET',`/v1/calendar/events?from=${BDAY}T00:00:00Z&to=${BDAY}
 t('book: on Ann\'s native calendar with the guest invited',!!BEV&&BEV.calendarId===NATIVE.id&&BEV.attendees?.some(a=>a.email===BGUEST),JSON.stringify(r.j).slice(0,200));
 await sleep(300);
 {const L=fs.readFileSync(log,'utf8');
-t('book: the guest is mailed their own link',new RegExp(`\\[mail\\] to=${BGUEST}.*calendar/book/m/${MANAGE}`).test(L));
+// Ann has a hosted mailbox, so it sends the invitation, which carries the guest's link; no mail of the platform's goes.
+t('book: the invitation from Ann\'s mailbox carries the guest\'s link, and no platform mail goes',BEV?.description?.includes(`calendar/book/m/${MANAGE}`)&&!new RegExp(`\\[mail\\] to=${BGUEST}`).test(L),BEV?.description);
 t('book: no booking token in a log line',!L.split('\n').some(l=>l.startsWith('[calendar]')&&(l.includes(BTOK)||l.includes(MANAGE))));}
 r=await api(null,'POST',`/v1/book/m/${MANAGE}/cancel`);t('book: the guest cancels with their link',r.s===200&&r.j.booking?.status==='cancelled',r.s+' '+JSON.stringify(r.j).slice(0,160));
 r=await api(A.token,'GET',`/v1/calendar/events?from=${BDAY}T00:00:00Z&to=${BDAY}T23:59:59Z`);t('book: and it is off Ann\'s calendar',!r.j.events?.some(e=>e.summary===`Chat ${tag}: Gus Guest`),JSON.stringify(r.j).slice(0,160));

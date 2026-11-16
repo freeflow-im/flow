@@ -20,11 +20,14 @@ const inbox=(user,folder='INBOX')=>imap(user,async(c)=>{const out=[];const lock=
 
 const A=await signup(`am-ann-${tag}@example.com`,'Ann');
 let r=await api(A.token,'POST','/v1/workspaces',{name:`Am ${tag}`,slug:`am-${tag}`});const W=r.j.id;t('Ann creates an organization',r.s===201,r.s);
-const ann=await accountUntil(A.token,W,(a)=>a.state==='active'&&a.hosted,20000);t('Ann has a hosted mailbox',!!ann?.address,JSON.stringify(ann).slice(0,140));
+// On the platform subdomain Ann has no hosted address (platform.md §3.2): she writes from her own mail, the address she
+// signed up with (GreenMail takes mail for any address). Her assistant, an agent, still gets an address there.
+const annAcct=await accountUntil(A.token,W,(a)=>a.state==='active',20000);t('Ann is active, with no hosted address on the platform subdomain',annAcct?.address===null&&!annAcct.hosted,JSON.stringify(annAcct).slice(0,140));
+const ann={address:`am-ann-${tag}@example.com`};
 const asst=async()=>((await api(A.token,'GET',`/v1/workspaces/${W}/accounts`)).j.accounts??[]).find(a=>a.kind==='personal_agent'&&a.sponsorId===A.user.id);
 t('before it is named, her assistant has no address',(await asst())?.address===null,JSON.stringify(await asst()).slice(0,140));
 r=await api(A.token,'PUT',`/api/agent/definition?workspace=${W}`,{name:'Ada'});t('Ann names her assistant Ada',r.s===200,r.s+' '+JSON.stringify(r.j).slice(0,100));
-const domain=ann.address.split('@')[1];
+const domain=`am-${tag}.freeflow.im`;
 let ada=await until(asst,(a)=>a?.hosted===true,30000);
 t('Ada gets ada@domain and a mailbox',ada?.address===`ada@${domain}`&&ada.displayName==='Ada'&&ada.hosted===true,JSON.stringify(ada).slice(0,180));
 r=await api(A.token,'GET',`/v1/workspaces/${W}/members`);t('Chat’s list shows her as Ada',(r.j.members??[]).some(m=>m.kind==='personal_agent'&&m.displayName==='Ada'&&m.address===ada.address),JSON.stringify((r.j.members??[]).map(m=>[m.displayName,m.address])));
