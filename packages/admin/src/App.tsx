@@ -16,6 +16,9 @@ import { Automations } from './sections/Automations';
 import { EventLog } from './sections/EventLog';
 import { General } from './sections/General';
 import { Members } from './sections/Members';
+
+/** Sections built around a wide table get more room; forms keep the narrow column. */
+const WIDE_SECTIONS: ReadonlySet<string> = new Set(['members', 'events']);
 // The changelog page and its Markdown are loaded only when it is opened.
 const Changelog = lazy(() => import('./sections/Changelog').then((m) => ({ default: m.Changelog })));
 
@@ -81,7 +84,7 @@ export function App() {
             ))}
           </nav>
           <main className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-8">
-            <div className="mx-auto flex max-w-3xl flex-col gap-5">
+            <div className={`mx-auto flex flex-col gap-5 ${WIDE_SECTIONS.has(section) ? 'max-w-6xl' : 'max-w-3xl'}`}>
               <header>
                 <p className="text-xs font-semibold tracking-wide text-muted uppercase">{org.name}</p>
                 <h1 className="text-xl font-semibold">{SECTION_LABELS[section]}</h1>
