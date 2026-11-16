@@ -1,4 +1,4 @@
-// A meeting room (/meet/<id>): joins straight in, mic on and camera off, then shows everyone in a grid (a shared screen
+// A meeting room (/meet/<code>): joins straight in, mic on and camera off, then shows everyone in a grid (a shared screen
 // large, with people in a strip), the controls (mic, camera, share, people, leave) and a People panel. Built on the
 // RealtimeKit core SDK with our own layout (docs/specs/meetings.md, P2); remote audio plays from an <audio> per person.
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
@@ -22,14 +22,14 @@ function joinError(e: unknown): string {
 }
 
 /** Joins the room and keeps the phase; `attempt` rejoins after a leave. */
-function useMeeting(meetingId: string, attempt: number): [Phase, (p: Phase) => void] {
+function useMeeting(meetingRef: string, attempt: number): [Phase, (p: Phase) => void] {
   const [phase, setPhase] = useState<Phase>({ kind: 'joining' });
   useEffect(() => {
     let cancelled = false;
     let client: Client | null = null;
     setPhase({ kind: 'joining' });
     (async () => {
-      const info = await api.join(meetingId);
+      const info = await api.join(meetingRef);
       if (cancelled) return;
       document.title = `${info.meeting.title} · FreeFlow Meet`;
       // The browser may now ask for the microphone; the page says so instead of only "Joining…".
@@ -46,7 +46,7 @@ function useMeeting(meetingId: string, attempt: number): [Phase, (p: Phase) => v
       cancelled = true;
       if (client?.self.roomJoined) void client.leave().catch(() => {});
     };
-  }, [meetingId, attempt]);
+  }, [meetingRef, attempt]);
   return [phase, setPhase];
 }
 
@@ -259,9 +259,9 @@ function InRoom({ client, info, onLeft }: { client: Client; info: MeetingJoinDTO
   );
 }
 
-export function Room({ meetingId }: { meetingId: string }) {
+export function Room({ meetingRef }: { meetingRef: string }) {
   const [attempt, setAttempt] = useState(0);
-  const [phase, setPhase] = useMeeting(meetingId, attempt);
+  const [phase, setPhase] = useMeeting(meetingRef, attempt);
 
   if (phase.kind === 'in') return <InRoom client={phase.client} info={phase.info} onLeft={() => setPhase({ kind: 'left' })} />;
   return (

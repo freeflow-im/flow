@@ -329,9 +329,11 @@ export interface HuddleInviteDTO {
   targets: HuddleInviteTargetDTO[];
 }
 
-/** A Meet meeting room (docs/specs/meetings.md). Its id is the link: `/meet/<id>`. */
+/** A Meet meeting room (docs/specs/meetings.md). Its link is `/meet/<code>`. */
 export interface MeetingDTO {
   id: string;
+  /** The short code in the room's link: `/meet/<code>`, e.g. `kqd-wmzt-fra`. */
+  code: string;
   workspaceId: string;
   title: string;
   createdBy: string;

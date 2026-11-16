@@ -41,6 +41,8 @@ type C = Context<{ Bindings: OrgRouteEnv }>;
 
 const orgStub = (c: C, id: string) => c.env.ORG.get(c.env.ORG.idFromName(id));
 const IN_PATH = /^\/v1\/workspaces\/([0-9a-f-]{36})(?:\/|$)/;
+/** A Meet link's short code (org/services/meetings.ts `newMeetingCode`), indexed like an id. */
+const MEETING_CODE = /^\/v1\/meetings\/([a-z]{3}-[a-z]{4}-[a-z]{3})(?:\/|$)/;
 const BY_ID = /^\/v1\/(?:channels|messages|files|artifacts|scheduled-messages|huddle\/invites|meetings)\/([0-9a-f-]{36})(?:\/|$)/;
 
 export const orgRoutes = new Hono<{ Bindings: OrgRouteEnv }>();
@@ -295,7 +297,7 @@ async function organizationInRequest(c: C): Promise<string | null> {
 orgRoutes.all('/v1/*', async (c) => {
   const { pathname } = new URL(c.req.url);
   let id = IN_PATH.exec(pathname)?.[1] ?? null;
-  const named = BY_ID.exec(pathname)?.[1];
+  const named = BY_ID.exec(pathname)?.[1] ?? MEETING_CODE.exec(pathname)?.[1];
   if (!id && named) {
     id = await directory(c, 'organizationOfId', named);
     if (!id) throw notFound();

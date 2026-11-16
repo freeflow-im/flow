@@ -669,8 +669,9 @@ export function registerRoutes(app: FastifyInstance): void {
     return ce.setChannelEmoji(id, req.user.id, body.emoji);
   });
 
-  // Meet (docs/specs/meetings.md): meeting rooms on Cloudflare RealtimeKit, members only in phase 1. A room's id is its
-  // link and is routable by id alone (routes/org.ts BY_ID), so a link finds its organization.
+  // Meet (docs/specs/meetings.md): meeting rooms on Cloudflare RealtimeKit, members only in phase 1. A room's link is its
+  // short code (or its id, for older links); both are routable alone (routes/org.ts MEETING_CODE, BY_ID), so a link finds
+  // its organization. `:id` below is either.
   app.post('/v1/workspaces/:id/meetings', { preHandler: requireAuth }, async (req) => {
     const { id } = req.params as { id: string };
     const title = (req.body as { title?: unknown } | undefined)?.title;

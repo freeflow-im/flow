@@ -27,15 +27,15 @@ export const api = {
   enabled: async () => (await call<{ meet?: boolean }>('GET', '/v1/config')).meet === true,
   create: (workspaceId: string, title?: string) => call<MeetingDTO>('POST', `/v1/workspaces/${workspaceId}/meetings`, title ? { title } : {}),
   live: async (workspaceId: string) => (await call<{ meetings: LiveMeetingDTO[] }>('GET', `/v1/workspaces/${workspaceId}/meetings/live`)).meetings,
-  join: (meetingId: string) => call<MeetingJoinDTO>('POST', `/v1/meetings/${meetingId}/join`, {}),
+  join: (ref: string) => call<MeetingJoinDTO>('POST', `/v1/meetings/${ref}/join`, {}),
 };
 
-/** A room's link: the page that joins it. */
-export const meetingUrl = (id: string) => new URL(`${import.meta.env.BASE_URL}${id}`, window.location.origin).toString();
+/** A room's link: the page that joins it, by the room's short code. */
+export const meetingUrl = (code: string) => new URL(`${import.meta.env.BASE_URL}${code}`, window.location.origin).toString();
 
-/** The room a path names (`/meet/<id>`), or null for Meet's home. */
-export function meetingIdOf(pathname: string): string | null {
+/** The room a path names (`/meet/<code>`, or `/meet/<id>` from before codes), or null for Meet's home. */
+export function meetingRefOf(pathname: string): string | null {
   const rest = pathname.startsWith(import.meta.env.BASE_URL) ? pathname.slice(import.meta.env.BASE_URL.length) : '';
   const id = rest.split('/')[0] ?? '';
-  return /^[0-9a-f-]{36}$/.test(id) ? id : null;
+  return /^[a-z]{3}-[a-z]{4}-[a-z]{3}$/.test(id) || /^[0-9a-f-]{36}$/.test(id) ? id : null;
 }

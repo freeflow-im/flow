@@ -57,6 +57,13 @@
       "when": 1794796376189,
       "tag": "0007_meetings",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1794798733473,
+      "tag": "0008_meeting_codes",
+      "breakpoints": true
     }
   ]
 }

@@ -2,7 +2,7 @@
 // creates a room, anyone in the organization joins it by its link, and RTK carries the media. This module keeps our
 // side (the room and one RTK participant per person) and asks RTK for the rest: a participant token on every join,
 // and who is in a room now (Live now). No webhooks yet: RTK is asked directly, which also works on a laptop.
-import { and, desc, eq, gt } from 'drizzle-orm';
+import { and, desc, eq, gt, or } from 'drizzle-orm';
 import type { LiveMeetingDTO, MeetingDTO, MeetingJoinDTO, MeetingPersonDTO } from '@flow/shared';
 import { db, schema } from '../db/index.js';
 import { config } from '../config.js';
@@ -15,6 +15,16 @@ const MEMBER_PRESET = 'group_call_participant';
 /** Live now only asks RTK about rooms joined this recently. */
 const LIVE_WINDOW_MS = 12 * 60 * 60 * 1000;
 const MAX_TITLE = 120;
+/** Letters for a meeting code: no i, l or o, which read as 1 or 0 when a link is typed from a screen. */
+const CODE_LETTERS = 'abcdefghjkmnpqrstuvwxyz';
+const CODE_SHAPE = /^[a-z]{3}-[a-z]{4}-[a-z]{3}$/;
+
+/** A meeting's short code, `kqd-wmzt-fra`: 23^10 (about 4e13) codes, so a clash is not a practical worry. */
+export function newMeetingCode(random: (n: number) => Uint8Array = (n) => crypto.getRandomValues(new Uint8Array(n))): string {
+  const bytes = random(10);
+  const letters = [...bytes].map((b) => CODE_LETTERS[b % CODE_LETTERS.length]);
+  return `${letters.slice(0, 3).join('')}-${letters.slice(3, 7).join('')}-${letters.slice(7).join('')}`;
+}
 
 type MeetingRow = typeof schema.meetings.$inferSelect;
 
@@ -43,14 +53,18 @@ async function rtk<T>(method: string, path: string, body?: unknown): Promise<T |
 
 const toDTO = (m: MeetingRow): MeetingDTO => ({
   id: m.id,
+  // A room made before codes existed has none; its id still works in the link.
+  code: m.code ?? m.id,
   workspaceId: m.workspaceId,
   title: m.title,
   createdBy: m.createdBy,
   createdAt: m.createdAt.toISOString(),
 });
 
-async function meetingRow(meetingId: string): Promise<MeetingRow> {
-  const [m] = await db.select().from(schema.meetings).where(eq(schema.meetings.id, meetingId)).limit(1);
+/** A room by its link: the short code, or the id (older links). */
+async function meetingRow(ref: string): Promise<MeetingRow> {
+  const where = CODE_SHAPE.test(ref) ? eq(schema.meetings.code, ref) : or(eq(schema.meetings.id, ref), eq(schema.meetings.code, ref));
+  const [m] = await db.select().from(schema.meetings).where(where).limit(1);
   if (!m) throw notFound('meeting not found');
   return m;
 }
@@ -62,13 +76,13 @@ export async function createMeeting(workspaceId: string, userId: string, title?:
   const name = (title ?? '').trim().slice(0, MAX_TITLE) || `${me?.displayName?.split(' ')[0] || 'A'}'s meeting`;
   const created = await rtk<{ id: string }>('POST', '/meetings', { title: name });
   if (!created) throw new ApiError(502, 'meet_upstream', 'The meeting service did not answer');
-  const row = { id: newId(), workspaceId, rtkMeetingId: created.id, title: name, createdBy: userId, createdAt: new Date() };
+  const row = { id: newId(), code: newMeetingCode(), workspaceId, rtkMeetingId: created.id, title: name, createdBy: userId, createdAt: new Date() };
   await db.insert(schema.meetings).values(row);
   return toDTO({ ...row, lastJoinedAt: null });
 }
 
-export async function getMeeting(meetingId: string, userId: string): Promise<MeetingDTO> {
-  const m = await meetingRow(meetingId);
+export async function getMeeting(ref: string, userId: string): Promise<MeetingDTO> {
+  const m = await meetingRow(ref);
   await requireMembership(m.workspaceId, userId);
   return toDTO(m);
 }
@@ -77,8 +91,8 @@ export async function getMeeting(meetingId: string, userId: string): Promise<Mee
  * A token for this person in this room. The first join adds them to RTK as a participant (the creator as host); later
  * joins refresh that participant's token, so RTK sees one person, not one per join.
  */
-export async function joinMeeting(meetingId: string, userId: string): Promise<MeetingJoinDTO> {
-  const m = await meetingRow(meetingId);
+export async function joinMeeting(ref: string, userId: string): Promise<MeetingJoinDTO> {
+  const m = await meetingRow(ref);
   await requireMembership(m.workspaceId, userId);
   const expiresOn = new Date(Date.now() + config.rtkTokenTtlMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
   const [existing] = await db

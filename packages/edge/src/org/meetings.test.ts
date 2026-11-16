@@ -5,8 +5,9 @@ import { randomBytes } from 'node:crypto';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DatabaseSync } from 'node:sqlite';
 import { orgStorage } from '../../test/orgStorage';
+import { orgRoutes } from '../routes/org';
 import { withDb, schema, type DB } from './db/index';
-import { createMeeting, getMeeting, joinMeeting, liveMeetings } from './services/meetings';
+import { createMeeting, getMeeting, joinMeeting, liveMeetings, newMeetingCode } from './services/meetings';
 import { createWorkspace } from './services/workspaces';
 
 const ANN = '00000000-0000-7000-8000-00000000000a';
@@ -56,6 +57,20 @@ describe('a meeting room', () => {
     expect(m).toMatchObject({ workspaceId, title: "Ann's meeting", createdBy: ANN });
     expect(calls[0]).toMatchObject({ method: 'POST', url: `${BASE}/meetings`, body: { title: "Ann's meeting" } });
     expect(sqlite.prepare('SELECT rtk_meeting_id FROM meetings WHERE id = ?').get(m.id)).toEqual({ rtk_meeting_id: 'rtk-m1' });
+    expect(m.code).toMatch(/^[a-z]{3}-[a-z]{4}-[a-z]{3}$/);
+  });
+
+  it('is found by its short code or by its id', async () => {
+    fakeRtk({ 'POST /meetings': { id: 'rtk-m1' } });
+    const m = await withDb(db, () => createMeeting(workspaceId, ANN));
+    expect(await withDb(db, () => getMeeting(m.code, BEN))).toEqual(m);
+    expect(await withDb(db, () => getMeeting(m.id, BEN))).toEqual(m);
+    await expect(withDb(db, () => getMeeting('zzz-zzzz-zzz', BEN))).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it('makes codes from letters that cannot be misread (no i, l or o)', () => {
+    expect(newMeetingCode(() => new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))).toBe('abc-defg-hjk');
+    for (let i = 0; i < 200; i++) expect(newMeetingCode()).toMatch(/^[a-hj-km-np-z]{3}-[a-hj-km-np-z]{4}-[a-hj-km-np-z]{3}$/);
   });
 
   it('adds a person to RTK on the first join (the creator as host) and only refreshes the token after that', async () => {
@@ -109,5 +124,22 @@ describe('a meeting room', () => {
     } finally {
       process.env.RTK_API_TOKEN = saved;
     }
+  });
+});
+
+describe('the Worker side', () => {
+  it('finds the organization of a meeting link by its short code, as by an id', async () => {
+    const lookups: unknown[][] = [];
+    const env = {
+      DIRECTORY: { idFromName: () => 'd', get: () => ({ call: async (...args: unknown[]) => (lookups.push(args), { ok: true, value: null }) }) },
+      ORG: { idFromName: (id: string) => id, get: () => ({ handle: vi.fn(async () => Response.json({})) }) },
+    };
+    const handle = env.ORG.get().handle;
+    env.ORG.get = () => ({ handle });
+    const res = await orgRoutes.request('https://app.example/v1/meetings/kqd-wmzt-fra/join', { method: 'POST' }, env as never);
+    expect(lookups[0]).toEqual(['organizationOfId', ['kqd-wmzt-fra']]);
+    // The fake directory knows no such code, so nothing reaches an organization (index.ts turns the throw into a 404).
+    expect(res.ok).toBe(false);
+    expect(handle).not.toHaveBeenCalled();
   });
 });

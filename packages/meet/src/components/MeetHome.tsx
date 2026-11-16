@@ -54,7 +54,7 @@ function LiveRow({ meeting }: { meeting: LiveMeetingDTO }) {
           </span>
         ))}
       </div>
-      <a href={meetingUrl(meeting.id)} target="_blank" rel="noopener" className="flex h-9 items-center rounded-full bg-primary px-[18px] text-sm font-semibold text-white no-underline hover:bg-primary-deep">
+      <a href={meetingUrl(meeting.code)} target="_blank" rel="noopener" className="flex h-9 items-center rounded-full bg-primary px-[18px] text-sm font-semibold text-white no-underline hover:bg-primary-deep">
         Join
       </a>
     </li>
@@ -74,12 +74,12 @@ export function MeetHome() {
   const [error, setError] = useState<string | null>(null);
 
   const start = useMutation({
-    mutationFn: () => openRoom(async () => meetingUrl((await api.create(active!.id)).id)),
+    mutationFn: () => openRoom(async () => meetingUrl((await api.create(active!.id)).code)),
     onError: (e) => setError(e instanceof Error ? e.message : String(e)),
   });
   const copyLink = useMutation({
     mutationFn: async () => {
-      const url = meetingUrl((await api.create(active!.id)).id);
+      const url = meetingUrl((await api.create(active!.id)).code);
       await navigator.clipboard.writeText(url);
     },
     onSuccess: () => {

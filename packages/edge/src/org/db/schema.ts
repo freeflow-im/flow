@@ -670,13 +670,15 @@ export const meetings = sqliteTable(
     workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
     /** RTK's meeting id. */
     rtkMeetingId: text('rtk_meeting_id').notNull(),
+    /** The short code in the room's link (`/meet/kqd-wmzt-fra`), unique across organizations (indexed like the id). */
+    code: text('code'),
     title: text('title').notNull(),
     createdBy: text('created_by').notNull().references(() => users.id, { onDelete: 'cascade' }),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
     /** The last time someone joined: Live now only asks RTK about rooms used recently. */
     lastJoinedAt: integer('last_joined_at', { mode: 'timestamp_ms' }),
   },
-  (t) => [index('meetings_workspace_idx').on(t.workspaceId, t.lastJoinedAt)],
+  (t) => [index('meetings_workspace_idx').on(t.workspaceId, t.lastJoinedAt), uniqueIndex('meetings_code_idx').on(t.code)],
 );
 
 /** One RTK participant per person per meeting, so a rejoin refreshes a token instead of adding a second participant. */
