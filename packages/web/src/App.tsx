@@ -253,6 +253,8 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
     consumeEmailLinkParams(runtime),
   );
   const [setupOpen, setSetupOpen] = useState(true);
+  // A sign-in or reset link opened in a browser signed in as someone else: see below.
+  const [linkOpen, setLinkOpen] = useState(true);
   const [intent] = useState(consumeChatIntent);
   const page = intent?.kind === 'page' ? intent.page : null;
   // The Activity count Main keeps live, for the suite bar's Chat tab (null while Main is not mounted).
@@ -603,6 +605,26 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
         setupToken={setupToken}
         onSetupDismissed={() => setSetupOpen(false)}
       />
+    );
+  }
+
+  // A sign-in or password-reset link names one person: like a setup link, it owns the screen even over a live session,
+  // and using it signs in as them (signIn drops the other user's state). The person signed in now can stay instead.
+  if (user && linkOpen && (signinToken || resetToken)) {
+    return (
+      <div className="flex h-full flex-col" data-testid="auth-link-over-session">
+        <AuthScreen
+          onSignedIn={(r) => {
+            setLinkOpen(false);
+            signIn(r);
+          }}
+          signinToken={signinToken}
+          resetToken={resetToken}
+        />
+        <button type="button" className="mx-auto mb-6 text-sm text-muted hover:text-ink" onClick={() => setLinkOpen(false)} data-testid="auth-link-stay">
+          Stay signed in as {user.displayName}
+        </button>
+      </div>
     );
   }
 
