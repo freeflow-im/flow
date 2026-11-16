@@ -3,8 +3,7 @@
 Run an AI coding agent (Claude Code, Codex, or any "prompt in, text out" CLI)
 as a **first-class member of a [Flow](https://app.freeflow.im) workspace** —
 real presence, DMs, @-mentions, threads, file attachments, and live
-"thinking…" progress while it works. Call it from a DM and it also answers the
-existing Flow Huddle as a real, interruptible audio participant.
+"thinking…" progress while it works.
 
 ```
 Flow WS ──> flow-agent-bridge daemon ──spawn──> claude -p --resume <session>
@@ -75,12 +74,6 @@ onboarding.
   An idle session is ended after `runtime.sessionIdleSec` and transparently
   `--resume`d by the next message; a pending background task holds that off up
   to `runtime.sessionHardCapSec`.
-- **An ongoing Huddle with the same agent** — press **Huddle** in a DM with the
-  agent and the bridge answers the existing LiveKit call. Speech is routed
-  into the same authenticated Claude or Codex CLI runtime used by chat, so
-  “hey, fix the PR and test it” can use the bot's real repository tools while
-  the call stays open and interruptible. It does not create DM messages unless
-  you explicitly ask it to send one.
 - **Self-updating** — the CLI runs the daemon under a small supervisor, so
   sending **`/update`** (DM it, or @-mention + `/update` in a channel) makes
   the bridge npm-install the latest package and restart itself, then post
@@ -116,12 +109,6 @@ onboarding.
     "kind": "claude",
     "cwd": "~/checkouts/repo-x"
   },
-  "voice": {
-    "enabled": true,
-    "sttModel": "deepgram/flux-general-en",
-    "ttsModel": "inworld/inworld-tts-2",
-    "ttsVoice": "Ashley"
-  },
   "eventScope": "mentions",
   "progress": "thinking",
   "concurrency": 4
@@ -145,57 +132,9 @@ onboarding.
 | `relayText` | true | relay the agent's interim text into the conversation as it works (`thinking` mode only); it grows one message by editing rather than posting per chunk |
 | `mail.fromOutside` | `ignore` | mail to the agent's mailbox from a member of the organization starts a turn in the DM with them (with the sponsor, for an agent's mail); mail from anyone else is logged and ignored, or with `wake` starts a turn in the sponsor's DM |
 | `logFile` | `<config>.log` next to the config | daemon log file (rotates once at 5 MB); JSON `null` disables |
-| `voice.enabled` | true | answer DM Huddle rings as the agent; set false to decline with an explanation |
-| `voice.sttModel` | `deepgram/flux-general-en` | LiveKit Inference speech-to-text model; `FLOW_VOICE_STT_MODEL` overrides it |
-| `voice.ttsModel` / `voice.ttsVoice` | `inworld/inworld-tts-2` / `Ashley` | LiveKit Inference speech model and voice; `FLOW_VOICE_TTS_MODEL` / `FLOW_VOICE_TTS_VOICE` override them |
-| `voice.inferenceUrl` | LiveKit Cloud agent gateway | advanced override for the speech gateway (`FLOW_VOICE_INFERENCE_URL`) |
-| `voice.maxSessionMinutes` | 60 | hard ceiling for one live call |
-| `voice.instructions` | unset | extra voice-only persona or conversational guidance |
 
 Headless runtimes authenticate however the CLI normally does (e.g.
 `claude setup-token` or `ANTHROPIC_API_KEY` in the daemon's environment).
-Voice Huddles reuse that exact runtime authentication for both Claude and
-Codex. Bot hosts do not need an OpenAI, Anthropic, or LiveKit project key for
-voice: after accepting a ring, Flow supplies a short-lived inference-only
-LiveKit token for transcription and speech. The project secret stays on the
-Flow server.
-
-## Share material during a Huddle
-
-In a one-to-one bot Huddle, send text or attach a file in that same DM, then
-ask aloud, “I just sent this; can you take a look?” The bridge feeds it into
-the ongoing call rather than starting a second chat reply. New material is
-acknowledged aloud when neither participant is speaking; a file still opening
-can trigger a follow-up once preparation finishes. Normal bridge commands
-such as `/stop` and `/update` retain their existing behavior.
-
-- Text, Markdown, CSV and common code files: extracted text, up to 100,000 characters.
-- PDF: text from up to 20 pages; visual previews of the first four pages.
-  Scanned pages beyond those previews are not automatically inspected.
-- PNG, JPEG and WebP: image input (up to 25 megapixels).
-- DOCX: text only, without embedded images or layout.
-- XLSX: existing cell values from up to 10 sheets, 500 rows and 40 columns;
-  no formula recalculation, charts or embedded images.
-- File artifacts in the call's DM are included. Link artifacts provide a
-  reference only: their target is not automatically fetched. Audio/video,
-  legacy Office formats and unsupported files produce an explicit limitation.
-
-Preparation is limited to 20 MB per file, four attachments per message,
-40 file preparations and 100 MB downloaded per call. Recent material is kept
-in a bounded context; this is not an unlimited archive. Larger pasted messages
-are also saved as local text for the runtime to inspect. Claude reads supplied
-local paths with its tools; Codex also receives the four most recent prepared
-images as image inputs. The configured runtime needs permission to read the
-call's temporary files. No additional model API key is introduced.
-
-Only the caller's messages and artifacts in the active call's DM are admitted.
-Edits, deletions, and reconnect snapshots update the call context. Deleting a
-message does not erase what the model already heard. Temporary originals and
-extracted files are removed on normal hangup after active work stops; CLI
-session logs may retain supplied text. Document contents are marked as
-untrusted references, not action requests; normal runtime permissions still
-apply. File parsing runs in a cancellable worker with a 20-second deadline,
-not in the audio loop.
 
 ## Use the flow MCP server directly (no daemon)
 
