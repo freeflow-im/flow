@@ -61,6 +61,13 @@ describe('InviteCardView', () => {
     expect([...host.querySelectorAll('button')].map((b) => b.getAttribute('aria-pressed'))).toEqual(['false', 'false', 'true']);
   });
 
+  it('the person organized it (a booking on their own calendar): no answer to give, so no Yes · No · Maybe', async () => {
+    await view({ answer: request({ organizerIsMe: true, onCalendar: { calendarId: 'work', id: 'work:u1', eventId: 'work:u1', myResponse: null, cancelled: false } }) });
+    expect(host.textContent).toContain("On your calendar · You're the organizer");
+    expect(host.textContent).not.toContain('Not answered yet');
+    expect(buttons()).toEqual([]);
+  });
+
   it('with no calendar connected it says where to connect one', async () => {
     await view({ answer: request({ calendars: [] }) });
     expect(host.textContent).toContain('Connect a calendar to answer this invitation.');

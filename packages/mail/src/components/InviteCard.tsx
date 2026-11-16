@@ -76,7 +76,11 @@ export function InviteCardView({ answer: a, pending, onRespond, onRemove }: Invi
             )}
           </>
         )}
-        {a.action === 'request' && (a.onCalendar || a.calendars.length ? (
+        {a.action === 'request' && a.organizerIsMe ? (
+          // The person's own event (a booking from their scheduling page, say): an organizer has no answer to give, so no
+          // Yes · No · Maybe, and no "Not answered yet" (Calendar keeps no PARTSTAT for the organizer, ical.ts).
+          <span className="text-ink">{a.onCalendar ? <>On your calendar · <span className="font-medium">You're the organizer</span></> : "You're the organizer"}</span>
+        ) : a.action === 'request' && (a.onCalendar || a.calendars.length ? (
           <>
             <span className="mr-1 text-ink">{a.onCalendar ? <>On your calendar · <span className="font-medium">{responseWord(mine)}</span></> : 'Going?'}</span>
             <div role="group" aria-label="Going?" className="flex gap-1.5">
