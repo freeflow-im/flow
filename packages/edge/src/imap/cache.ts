@@ -629,6 +629,12 @@ export class MailCache {
   }
 
   /** The message with this Message-ID was answered (a reply sent through us), wherever it is cached. */
+  /** Whether a message with this Message-ID is cached in this folder. */
+  hasMessage(accountId: string, folder: string, messageId: string): boolean {
+    const id = bare(messageId);
+    return !!id && this.sql.exec('SELECT 1 FROM mail_messages WHERE account_id = ? AND folder = ? AND message_id = ? LIMIT 1', accountId, folder, id).toArray().length > 0;
+  }
+
   setAnswered(accountId: string, messageId: string, at: number): void {
     const id = bare(messageId);
     if (id) this.sql.exec('UPDATE mail_messages SET answered = 1, flags_at = ? WHERE account_id = ? AND message_id = ?', at, accountId, id);

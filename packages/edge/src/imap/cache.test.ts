@@ -263,6 +263,14 @@ describe('MailCache bodies', () => {
     expect(rows.get(2)?.summary.answered).toBe(false);
     expect(rows.get(1)?.flagsAt).toBe(3000);
   });
+
+  it('finds a message in a folder by its Message-ID (the sent copy a send waits for)', () => {
+    const cache = cacheWith([withPlan(1)]);
+    expect(cache.hasMessage(A, F, '<m1@example.com>')).toBe(true);
+    expect(cache.hasMessage(A, F, 'm1@example.com')).toBe(true);
+    expect(cache.hasMessage(A, F, '<m9@example.com>')).toBe(false);
+    expect(cache.hasMessage(A, 'Elsewhere', '<m1@example.com>')).toBe(false);
+  });
 });
 
 describe('MailCache threads', () => {
