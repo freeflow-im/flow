@@ -312,9 +312,11 @@ export class Contacts extends DurableObject<ContactsEnv> {
     const answer = await (stub.call as never as (m: string, a: unknown[]) => Promise<{ ok: boolean; value?: AccountDTO[]; message?: string }>)('accountsOfOrganization', [org]);
     if (!answer.ok) throw new Error(answer.message ?? 'the directory refused');
     return (answer.value ?? [])
-      // A guest has no address (§3.3), so it is no one to write to.
-      .filter((a): a is AccountDTO & { address: string } => a.id !== caller.account?.id && a.state !== 'removed' && a.state !== 'suspended' && !!a.address)
-      .map((a) => ({ id: `member:${a.id}`, source: 'member', name: a.displayName || a.address, emails: [a.address.toLowerCase()], accountId: a.id, userId: a.principalId }));
+      // A member is written to at their hosted address, else the linked mailbox they go by (platform.md §3.2). A guest,
+      // or a person with neither, is no one to write to.
+      .map((a) => ({ a, email: a.address ?? a.linkedAddress ?? null }))
+      .filter((x): x is { a: AccountDTO; email: string } => x.a.id !== caller.account?.id && x.a.state !== 'removed' && x.a.state !== 'suspended' && !!x.email)
+      .map(({ a, email }) => ({ id: `member:${a.id}`, source: 'member', name: a.displayName || email, emails: [email.toLowerCase()], accountId: a.id, userId: a.principalId }));
   }
 
   /** The lists shared with the caller's organization by other members: the share index names them, their objects answer. */
