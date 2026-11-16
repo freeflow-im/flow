@@ -900,9 +900,6 @@ importers:
       '@flow/shared':
         specifier: workspace:*
         version: link:../shared
-      '@livekit/protocol':
-        specifier: ^1.50.4
-        version: 1.50.4
       argon2:
         specifier: ^0.41.1
         version: 0.41.1
@@ -918,9 +915,6 @@ importers:
       jose:
         specifier: ^6.2.4
         version: 6.2.4
-      livekit-server-sdk:
-        specifier: ^2.18.0
-        version: 2.18.0
       marked:
         specifier: ^18.0.11
         version: 18.0.11
@@ -1325,9 +1319,6 @@ packages:
   '@bramus/specificity@2.4.3':
     resolution: {integrity: sha512-0GEz8qJWokkUVYQYRukmkSHIFNoBH8QTreeHrAFbvz1XFYc3Y+puhMs8PQ5x8GNugiC2l5jvDBXKLbBIByeSBw==}
     hasBin: true
-
-  '@bufbuild/protobuf@1.10.1':
-    resolution: {integrity: sha512-wJ8ReQbHxsAfXhrf9ixl0aYbZorRuOWpBNzm8pL8ftmSxQx/wnJD5Eg861NwJU/czy2VXFIebCeZnZrI9rktIQ==}
 
   '@cantoo/pdf-lib@2.11.1':
     resolution: {integrity: sha512-lYuRJFfXgoP8WVE8HYSeoLfDcnSXmjMLmdZS7YvmYHngbcZfiqDOruHrZBqjYizkrNa4ad1yW4WCrPYyb26T3Q==}
@@ -2572,12 +2563,6 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.9':
     resolution: {integrity: sha512-3Belt6tdc8bPgAtbcmdtNJlirVoTmEb5e2gC94PnkwEW9jI6CAHUeoG85tjWP5WquqfavoMtMwiG4P926ZKKuQ==}
-
-  '@livekit/protocol@1.48.0':
-    resolution: {integrity: sha512-fYHYgltH6YavAsokl3qsHLkBdQeKCl4UORVTub5crS3t8JtKFZ0uinHDFQ+XXdNKS6Ub9gcOjV+UHcDiqnWXoQ==}
-
-  '@livekit/protocol@1.50.4':
-    resolution: {integrity: sha512-L1uggNQAqyY21smQY8AllyOYbcv9Me9TaxwuLytL1R8ck9nbYPmQLNwEDi3pOFGAMa5F8I2nUi2Jc59W5awxlA==}
 
   '@llamaindex/liteparse-darwin-arm64@2.17.0':
     resolution: {integrity: sha512-ha3yTgVXVi3zucs28MnZ7Sb9jiX8Pw2SX04kuPbjUDpXh6xw+kBZ+5kZhnt5ok2SMYcHYOMJJv6ptbXBzmtg8A==}
@@ -6023,9 +6008,6 @@ packages:
     resolution: {integrity: sha512-AC/7JofJvZGrrneWNaEnJeOLUx+JlGt7tNa0wZiRPT4MY1wmfKjt2+6O2p2uz2+skll8OZZmJMNqeke7kKbNgQ==}
     hasBin: true
 
-  jose@5.10.0:
-    resolution: {integrity: sha512-s+3Al/p9g32Iq+oqXxkW//7jk2Vig6FF1CFqzVXoTUXt2qz89YWbL+OwS17NFYEvxC35n0FKeGO2LGYSxeM2Gg==}
-
   jose@6.2.4:
     resolution: {integrity: sha512-N8acGzVsQy6M/fjFcxtysNc4Q379TcM5dM/qKkNtsHFji88yANnXTr7BLeP75iPnFwBfQzM/jg2BZ9+HZrHCZA==}
 
@@ -6308,10 +6290,6 @@ packages:
 
   listenercount@1.0.1:
     resolution: {integrity: sha512-3mk/Zag0+IJxeDrxSgaDPy4zZ3w05PRZeJNnlWhzFz5OkX49J4krc+A8X2d2M69vGMBEX0uyl8M+W+8gH+kBqQ==}
-
-  livekit-server-sdk@2.18.0:
-    resolution: {integrity: sha512-iUGmkbyi0g4DHKQ0Z4VSVs/V+ddp3T75ccQIe6LX94AYlqgyh+SVSM1lQMjFQuI3Qh6Z9v06T4xxV+vWmp7VeQ==}
-    engines: {node: '>=18'}
 
   lodash-es@4.18.1:
     resolution: {integrity: sha512-J8xewKD/Gk22OZbhpOVSwcs60zhd95ESDwezOFuA3/099925PdHJ7OFHNTGtajL3AlZkykD32HykiMo+BIBI8A==}
@@ -8604,8 +8582,6 @@ snapshots:
     dependencies:
       css-tree: 3.2.1
 
-  '@bufbuild/protobuf@1.10.1': {}
-
   '@cantoo/pdf-lib@2.11.1(html-entities@2.6.0)':
     dependencies:
       culori: 4.0.2
@@ -9502,14 +9478,6 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.6.0
-
-  '@livekit/protocol@1.48.0':
-    dependencies:
-      '@bufbuild/protobuf': 1.10.1
-
-  '@livekit/protocol@1.50.4':
-    dependencies:
-      '@bufbuild/protobuf': 1.10.1
 
   '@llamaindex/liteparse-darwin-arm64@2.17.0':
     optional: true
@@ -13112,8 +13080,6 @@ snapshots:
 
   jiti@2.7.0: {}
 
-  jose@5.10.0: {}
-
   jose@6.2.4: {}
 
   js-tokens@4.0.0: {}
@@ -13401,12 +13367,6 @@ snapshots:
   linkifyjs@4.4.0: {}
 
   listenercount@1.0.1: {}
-
-  livekit-server-sdk@2.18.0:
-    dependencies:
-      '@bufbuild/protobuf': 1.10.1
-      '@livekit/protocol': 1.48.0
-      jose: 5.10.0
 
   lodash-es@4.18.1: {}
 

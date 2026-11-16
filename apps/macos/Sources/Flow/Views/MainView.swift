@@ -72,10 +72,6 @@ struct MainView: View {
                 .frame(width: clampedSidebarWidth)
             sidebarResizer
             VStack(spacing: 0) {
-                HuddleBar()
-                // Only mounts once someone turns on a camera or a share (#435);
-                // an audio-only huddle is the bar alone, exactly as before.
-                HuddleGridView()
                 detail
             }
             // The ring floats over everything — it is the one thing that has to

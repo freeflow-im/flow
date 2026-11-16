@@ -372,25 +372,6 @@ export interface MeetingJoinDTO {
   host: boolean;
 }
 
-/**
- * POST /v1/channels/:id/huddle/join — a LiveKit token scoped to the room whose
- * name is the entity id. In a DM the same call *starts the ring* (#436), so
- * the response also carries the invite it created and the names it could not
- * reach; a channel huddle is ambient and leaves both null/empty.
- */
-export interface HuddleJoinDTO {
-  token: string;
-  url: string;
-  /**
-   * Short-lived LiveKit Cloud Inference grant. The server includes this only
-   * when an agent-token caller accepts a ring, so a bridge can transcribe and
-   * speak without storing the LiveKit project secret (or a provider API key).
-   */
-  inferenceToken?: string;
-  invite: HuddleInviteDTO | null;
-  unavailable: string[];
-}
-
 export interface ChannelDTO {
   id: string;
   workspaceId: string;
@@ -459,9 +440,9 @@ export interface ChannelDTO {
    */
   emoji?: string | null;
   /**
-   * Live voice huddle participants (Phase 1) — ambient, per-channel audio call.
-   * Transient server state, never a DB column (see `huddles.ts`): LiveKit is
-   * the source of truth, this is a cache of it. Present on the channel list so
+   * Who is in the conversation's huddle (its Meet room). Transient server
+   * state, never a DB column (see `huddles.ts`): the Meet room's join and
+   * leave move it. Present on the channel list so
    * a fresh client shows an already-active huddle; `huddle.updated` events
    * carry every change after that. Absent/empty means no active huddle.
    */

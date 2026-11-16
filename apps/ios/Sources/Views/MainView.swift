@@ -22,10 +22,6 @@ struct MainView: View {
             ZStack(alignment: .leading) {
                 VStack(spacing: 0) {
                     content
-                    // Only mounts once someone turns on a camera or a share
-                    // (#435); an audio-only huddle is the bar alone, as before.
-                    HuddleGridView()
-                    HuddleBar()
                     AgentCallBar()
                 }
                 // The ring floats over everything — it is the one thing that
@@ -88,11 +84,6 @@ struct MainView: View {
         // The workspace and the cached channel rows arrive in either order on a
         // cold launch, and the restore needs both — so try again from this side.
         .onChange(of: app.selectedWorkspaceId) { _, _ in restoreLastChannel(allChannels.value) }
-        // A LiveKit huddle and an agent call both own the microphone. Joining
-        // the former always releases the latter, including from an incoming ring.
-        .onChange(of: app.activeHuddleChannelId) { _, channelId in
-            if channelId != nil { agentCall.end() }
-        }
         .onDisappear { agentCall.end() }
         .sheet(isPresented: $agentCall.showingCall) {
             if let call = agentCall.activeCall {

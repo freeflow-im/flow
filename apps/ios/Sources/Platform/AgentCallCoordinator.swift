@@ -1,8 +1,7 @@
 import Foundation
 import SwiftUI
 
-/// App-level owner for one ongoing agent call. Like Flow's LiveKit huddle,
-/// leaving the conversation or minimizing the expanded UI does not end it;
+/// App-level owner for one ongoing agent call. Leaving the conversation or minimizing the expanded UI does not end it;
 /// only the explicit red end control does.
 @MainActor
 final class AgentCallCoordinator: ObservableObject {

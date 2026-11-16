@@ -17,7 +17,7 @@
 #   scripts/check-clients.sh --serial     # interleaved logs, one at a time
 #
 # The first run in a fresh worktree pays for fetching and building the SPM
-# dependencies (LiveKit's WebRTC binary is the big one) and takes minutes.
+# dependencies and takes minutes.
 # After that both halves are incremental — seconds when nothing shared moved.
 set -uo pipefail
 

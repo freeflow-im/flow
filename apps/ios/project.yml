@@ -8,9 +8,6 @@ packages:
   GRDB:
     url: https://github.com/groue/GRDB.swift.git
     from: 7.0.0
-  LiveKit:
-    url: https://github.com/livekit/client-sdk-swift.git
-    from: 2.0.0
 targets:
   Flow:
     type: application
@@ -37,10 +34,6 @@ targets:
         excludes: [Banners.swift, Updater.swift]
     dependencies:
       - package: GRDB
-      # Voice huddle (Phase 1). XcodeGen/SPM auto-embeds its XCFrameworks —
-      # unlike the macOS SwiftPM executable, no make-app.sh-style manual
-      # embedding/signing needed here.
-      - package: LiveKit
       # Embeds FlowShare.appex in the app's PlugIns folder. A share extension
       # is only installed as part of its host app.
       - target: FlowShare

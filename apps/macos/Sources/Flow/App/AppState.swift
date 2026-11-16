@@ -1,7 +1,6 @@
 import AVFoundation
 import Combine
 import Foundation
-import LiveKit
 import SwiftUI
 #if os(macOS)
 import AppKit
@@ -17,11 +16,6 @@ import UIKit
 /// directly by views.
 @MainActor
 final class AppState: ObservableObject {
-    private static weak var huddleOwner: AppState?
-    static var joinedHuddleOwner: AppState? {
-        guard let owner = huddleOwner, owner.activeHuddleChannelId != nil else { return nil }
-        return owner
-    }
     enum Phase: Equatable {
         case loading
         case signedOut
@@ -94,70 +88,20 @@ final class AppState: ObservableObject {
     @Published private(set) var typing: [String: [String: Date]] = [:]
     /// Channels an agent is working in right now (#137) — the sidebar spinner.
     @Published private(set) var busyChannelIds: Set<String> = []
-    /// channelId -> live voice-huddle roster (Phase 1). Purely in-memory, like
-    /// busyChannelIds: LiveKit is the source of truth (decision log
-    /// 2026-08-20), not this cache, so nothing here is worth persisting.
+    /// channelId -> who is in each conversation's huddle (its Meet room). Purely
+    /// in-memory, like busyChannelIds: the server's roster is the truth, and
+    /// `huddle.updated` events keep this copy current.
     @Published private(set) var huddleRosters: [String: [HuddleParticipant]] = [:]
-    /// Channel id of the huddle this app is connected to, or nil. App-level
-    /// (not per-window) so the connection survives navigating between
-    /// channels — see CONTEXT.md (Huddle).
-    @Published private(set) var activeHuddleChannelId: String?
-    @Published private(set) var activeHuddleWorkspaceId: String?
+    /// A huddle is being started or answered: the request is in flight.
     @Published private(set) var huddleConnecting: Bool = false
-    /// Muted on join, by decision — the mic is never auto-published.
-    @Published private(set) var huddleMuted: Bool = true
-    /// Set when an unmute attempt finds the OS mic permission *settled* as
-    /// denied — either a standing `.denied`/`.restricted` or a Don't Allow at
-    /// the prompt. Not for "never asked": `DeviceAccess` asks first, and a
-    /// refusal the OS never put to the user goes to `errorMessage` instead,
-    /// because there is no Privacy row to send anyone to (#469). Drives a
-    /// dedicated alert with an "Open Settings" action; separate from
-    /// `errorMessage` because that one's alert is a plain "OK" everywhere else.
-    @Published var micPermissionBlocked = false
-    /// Same story for the camera (#435) and, on macOS, for Screen Recording:
-    /// each is a separate OS grant with its own Settings pane, and each has to
-    /// degrade to an explanation rather than a button that silently does nothing.
-    @Published var cameraPermissionBlocked = false
-    @Published var screenPermissionBlocked = false
-    /// Camera and screen share both start off, always — each is turned on
-    /// deliberately (#435).
-    @Published private(set) var huddleCameraOn: Bool = false
-    @Published private(set) var huddleSharing: Bool = false
-    /// What the video grid draws. While everyone is audio-only this holds only
-    /// avatar tiles and the grid stays unmounted — the thin bar is the whole UI.
-    @Published private(set) var huddleTiles: [HuddleTile] = []
-    /// Tap-to-focus: the tile blown up, or nil for the even grid.
-    @Published var huddleFocusedUserId: String?
-    /// Transient one-liner over the huddle UI ("Ada started sharing").
-    @Published private(set) var huddleNotice: String?
-    /// Is the other side of the call actually here (#508)? The rule itself is
-    /// `huddleConnection` in Support/HuddleConnection.swift — shared with iOS,
-    /// mirrored by the web client.
-    @Published private(set) var huddleConnectionState: HuddleConnection = .idle
-    /// Invite targets that said yes but have not turned up in the room yet.
-    private var huddleAccepted: [String] = []
-    /// One connect chime per call (#509), cleared only when the call ends.
-    private var huddleChimed = false
-    /// Which of this workspace's users are agents. Silence from a person is a
-    /// choice; silence from an agent is a symptom — see `peerConnected`.
-    private var huddleAgentIds: Set<String> = []
-    /// Set when backgrounding turned the camera off, so returning turns it
-    /// back on — and says so (#435).
-    private var cameraSuspendedByBackground = false
     /// A ring aimed at us (#436) — drives the incoming-call overlay.
     @Published private(set) var incomingHuddleInvite: HuddleInvite?
-    /// Our own outgoing ring while we wait for an answer.
-    @Published private(set) var outgoingHuddleInvite: HuddleInvite?
-    /// Names we could not reach — the "X isn't available" line.
-    @Published private(set) var huddleUnavailable: [String] = []
     /// Another of our devices answered; this one says so rather than blinking out.
     @Published var huddleAnsweredElsewhere: Bool = false
     /// This connection's WS session id, from the `hello` frame. It identifies
     /// the *device*, which is how a ring answered here is told apart from the
     /// same ring answered on a phone.
     private(set) var wsSessionId: String?
-    private var huddleRoom: Room?
-    private var noticeTask: Task<Void, Never>?
     /// channelId -> more history available on the server
     @Published private(set) var hasMore: [String: Bool] = [:]
     /// Channels whose history page is in flight (#191). A transcript with
@@ -412,7 +356,6 @@ final class AppState: ObservableObject {
         typing = [:]
         busyChannelIds = []
         huddleRosters = [:]
-        leaveHuddle() // don't leave a signed-out session's token connected
         hasMore = [:]
         loadingHistory = []
         notificationUnreadByWorkspace = [:]
@@ -694,22 +637,6 @@ final class AppState: ObservableObject {
     func setAppActive(_ active: Bool) {
         guard isAppActive != active else { return }
         isAppActive = active
-        // Backgrounding turns the camera off and the huddle keeps running on
-        // audio (#435). Not a cosmetic choice: a suspended app cannot hold a
-        // capture session open, so the alternative to turning it off is a
-        // frozen frame of whatever the camera last saw, published to everyone.
-        // Coming back turns it on again — and says so, since the gap was ours,
-        // not theirs.
-        if !active, huddleCameraOn {
-            cameraSuspendedByBackground = true
-            setHuddleCamera(false)
-            return
-        }
-        if active, cameraSuspendedByBackground {
-            cameraSuspendedByBackground = false
-            setHuddleCamera(true)
-            flashHuddleNotice("Your camera turned off while Flow was in the background")
-        }
         guard active else { return }
         catchUpOpenChannels()
         // A suspended app's socket is regularly dead with no error on either
@@ -847,40 +774,17 @@ final class AppState: ObservableObject {
 
     // MARK: - Huddle
 
-    /// Publish settings, all four #435 acceptance criteria in one object:
-    /// camera capped at 360p and screen share at 720p/15fps to protect
-    /// LiveKit free-tier bandwidth; `adaptiveStream` so a tile nobody can see
-    /// stops being sent at all; `dynacast` so simulcast layers nobody
-    /// subscribes to stop being encoded. The cap is on *capture* as well as
-    /// encoding — a 1080p webcam downscaled at the encoder still costs the
-    /// whole capture pipeline.
-    private var huddleRoomOptions: RoomOptions {
-        RoomOptions(
-            defaultCameraCaptureOptions: CameraCaptureOptions(dimensions: .h360_169, fps: 24),
-            defaultScreenShareCaptureOptions: ScreenShareCaptureOptions(dimensions: .h720_169, fps: 15),
-            defaultVideoPublishOptions: VideoPublishOptions(
-                encoding: VideoParameters.presetH360_169.encoding,
-                screenShareEncoding: VideoParameters.presetScreenShareH720FPS15.encoding,
-                // Two layers, both at or under the cap — the point of the cap
-                // is that there is no 720p layer to fall back *up* to.
-                simulcastLayers: [.presetH180_169, .presetH360_169]
-            ),
-            adaptiveStream: true,
-            dynacast: true
-        )
-    }
-
     /// Start or join a conversation's huddle. Since Meet phase 2 (docs/specs/meetings.md) a huddle is the
     /// conversation's Meet room: the server makes it and rings the other people, and the app opens the room in the
     /// browser (`<server>/meet/<code>`) until Meet has a native call screen (phase 6). Pressing it again, or while the
     /// huddle is running, opens the same room.
     func joinHuddle(channelId: String, workspaceId: String) {
-        Task { await joinHuddleAsync(channelId: channelId, workspaceId: workspaceId, accepting: nil) }
+        Task { await joinHuddleAsync(channelId: channelId, accepting: nil) }
     }
 
     /// The shared body of starting and of answering a ring — accepting a call *is* joining, and the only difference
     /// is which endpoint answers with the room.
-    private func joinHuddleAsync(channelId: String, workspaceId: String, accepting inviteId: String?) async {
+    private func joinHuddleAsync(channelId: String, accepting inviteId: String?) async {
         huddleConnecting = true
         defer { huddleConnecting = false }
         do {
@@ -890,7 +794,6 @@ final class AppState: ObservableObject {
             } else {
                 resp = try await engine.joinHuddle(channelId: channelId)
             }
-            huddleUnavailable = resp.unavailable ?? []
             if let names = resp.unavailable, !names.isEmpty {
                 errorMessage = "\(names.joined(separator: ", ")) \(names.count == 1 ? "isn't" : "aren't") available right now."
             }
@@ -917,223 +820,6 @@ final class AppState: ObservableObject {
         return (huddleRosters[channelId] ?? []).contains { $0.userId == me }
     }
 
-    func leaveHuddle() {
-        Task { await leaveHuddleAsync() }
-    }
-
-    /// Synchronous hand-off point for another audio mode. UI leave buttons use
-    /// the fire-and-forget method above; a caller taking over AVAudioSession
-    /// must wait until LiveKit has disconnected first.
-    func leaveHuddleAndWait() async {
-        await leaveHuddleAsync()
-    }
-
-    private func leaveHuddleAsync() async {
-        guard let channelId = activeHuddleChannelId else { return }
-        let room = huddleRoom
-        huddleRoom = nil
-        activeHuddleChannelId = nil
-        activeHuddleWorkspaceId = nil
-        huddleMuted = true
-        huddleCameraOn = false
-        huddleSharing = false
-        huddleTiles = []
-        huddleFocusedUserId = nil
-        outgoingHuddleInvite = nil
-        huddleUnavailable = []
-        huddleAccepted = []
-        huddleChimed = false
-        huddleConnectionState = .idle
-        cameraSuspendedByBackground = false
-        await room?.disconnect()
-        await engine.leaveHuddle(channelId: channelId)
-    }
-
-    /// Rebuild the tile list from the Room's own state — one place, so every
-    /// track/mute/speaker callback converges on the same shape rather than each
-    /// patching a slice of it.
-    private func syncHuddleTiles() {
-        guard let room = huddleRoom else {
-            huddleTiles = []
-            return
-        }
-        func tile(_ p: Participant, isLocal: Bool) -> HuddleTile {
-            HuddleTile(
-                userId: p.identity?.stringValue ?? "",
-                isLocal: isLocal,
-                camera: p.firstCameraVideoTrack,
-                screen: p.firstScreenShareVideoTrack,
-                micOn: p.isMicrophoneEnabled(),
-                speaking: p.isSpeaking,
-                // A *muted* publication still counts: LiveKit keeps it across
-                // a mute, so unmuting mid-call doesn't reconnect anyone. What
-                // this rules out is a participant that published no audio.
-                audioLive: p.audioTracks.contains { $0.source == .microphone && $0.isSubscribed }
-            )
-        }
-        huddleTiles = [tile(room.localParticipant, isLocal: true)]
-            + room.remoteParticipants.values.map { tile($0, isLocal: false) }
-        huddleCameraOn = room.localParticipant.isCameraEnabled()
-        huddleSharing = room.localParticipant.isScreenShareEnabled()
-        updateHuddleConnection()
-    }
-
-    /// Re-read the connection state, and chime the first time a call comes up
-    /// (#509). Called from every place the room or the ring changes, so the
-    /// badge and the sound share one edge rather than two near-enough ones.
-    private func updateHuddleConnection() {
-        let remotes = huddleTiles.filter { !$0.isLocal }
-        let inRoom = Set(remotes.map(\.userId))
-        let peers = remotes.map {
-            HuddlePeerState(userId: $0.userId, audioLive: $0.audioLive, isAgent: huddleAgentIds.contains($0.userId))
-        }
-        huddleConnectionState = huddleConnection(
-            peers: peers,
-            awaiting: huddleAccepted.filter { !inRoom.contains($0) }
-        )
-        if shouldChime(huddleConnectionState, alreadyChimed: huddleChimed) {
-            huddleChimed = true
-            ConnectChime.play()
-        }
-    }
-
-    /// Per-tile connection state for the grid (#508). Your own tile is never
-    /// "connecting" — you are already here.
-    func huddleTileConnected(_ tile: HuddleTile) -> Bool {
-        if tile.isLocal { return true }
-        return peerConnected(
-            HuddlePeerState(userId: tile.userId, audioLive: tile.audioLive, isAgent: huddleAgentIds.contains(tile.userId))
-        )
-    }
-
-    /// Who in the local user cache is an agent. Loaded per join (and when
-    /// somebody new arrives) rather than kept live: a call's participants
-    /// don't change species mid-call.
-    private func refreshHuddleAgentIds() async {
-        huddleAgentIds = (try? await db.reader.read { db in
-            Set(try User.fetchAll(db).filter { $0.isAgent == true }.map(\.id))
-        }) ?? []
-    }
-
-    /// Whoever is currently sharing a screen — at most one (see below).
-    var huddleScreenSharerId: String? { huddleTiles.first { $0.screen != nil }?.userId }
-    /// True once anyone turns on a camera or a share: the bar becomes a grid.
-    var huddleHasVideo: Bool { huddleTiles.contains { $0.camera != nil || $0.screen != nil } }
-
-    private func flashHuddleNotice(_ text: String) {
-        huddleNotice = text
-        noticeTask?.cancel()
-        noticeTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 4 * NSEC_PER_SEC)
-            guard !Task.isCancelled else { return }
-            self?.huddleNotice = nil
-        }
-    }
-
-    /// Turn the camera on or off. Like the mic, the OS grant is asked for
-    /// explicitly first: LiveKit's SDK never prompts on its own, so without
-    /// this the capture just fails with a generic error and Flow never even
-    /// appears in the Camera privacy list.
-    func toggleHuddleCamera() {
-        // A deliberate camera-off is not the background one: forget any pending
-        // resume, so coming back to the app doesn't undo what the user just did.
-        cameraSuspendedByBackground = false
-        setHuddleCamera(!huddleCameraOn)
-    }
-
-    private func setHuddleCamera(_ on: Bool) {
-        guard let room = huddleRoom, huddleCameraOn != on else { return }
-        Task {
-            if on {
-                switch await DeviceAccess.request(.video) {
-                case .granted: break
-                case .refused:
-                    cameraPermissionBlocked = true
-                    return
-                case .unavailable:
-                    errorMessage = Self.deviceUnavailableMessage("camera")
-                    return
-                }
-            }
-            do {
-                try await room.localParticipant.setCamera(enabled: on)
-                huddleCameraOn = on
-                syncHuddleTiles()
-            } catch {
-                errorMessage = "Couldn't turn on the camera: \(error.localizedDescription)"
-            }
-        }
-    }
-
-    /// Start or stop sharing. On macOS `source` names the window or display the
-    /// picker chose; iOS ignores it and shares Flow's own content, which is all
-    /// a plain app can capture without a Broadcast Upload Extension (#435, and
-    /// the extension is explicitly deferred).
-    func toggleHuddleScreenShare(source: Any? = nil) {
-        guard let room = huddleRoom else { return }
-        let next = !huddleSharing
-        Task {
-            do {
-                #if os(macOS)
-                if next, let captureSource = source as? MacOSScreenCaptureSource {
-                    let track = LocalVideoTrack.createMacOSScreenShareTrack(
-                        source: captureSource,
-                        options: ScreenShareCaptureOptions(dimensions: .h720_169, fps: 15)
-                    )
-                    try await room.localParticipant.publish(videoTrack: track)
-                } else {
-                    try await room.localParticipant.setScreenShare(enabled: next)
-                }
-                #else
-                try await room.localParticipant.setScreenShare(enabled: next)
-                #endif
-                huddleSharing = next
-                syncHuddleTiles()
-            } catch {
-                // macOS: the overwhelmingly common failure is Screen Recording
-                // not being granted, and that one needs Settings rather than an
-                // apology — ScreenCaptureKit reports it as a plain capture error,
-                // so the guidance has to cover the whole failure.
-                #if os(macOS)
-                screenPermissionBlocked = true
-                #else
-                errorMessage = "Couldn't share the screen: \(error.localizedDescription)"
-                #endif
-            }
-        }
-    }
-
-    /// The window/display list for the macOS share picker. Empty is itself the
-    /// signal that Screen Recording was refused — ScreenCaptureKit returns no
-    /// sources rather than an error when the app has no permission.
-    #if os(macOS)
-    func screenShareSources() async -> [MacOSScreenCaptureSource] {
-        (try? await MacOSScreenCapturer.sources(for: .any)) ?? []
-    }
-    #endif
-
-    /// "Open Settings" for the camera / screen-recording alerts. Same shape as
-    /// `openMicrophoneSettings`.
-    func openCameraSettings() {
-        #if os(macOS)
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera") {
-            NSWorkspace.shared.open(url)
-        }
-        #else
-        if let url = URL(string: UIApplication.openSettingsURLString) {
-            UIApplication.shared.open(url)
-        }
-        #endif
-    }
-
-    #if os(macOS)
-    func openScreenRecordingSettings() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
-            NSWorkspace.shared.open(url)
-        }
-    }
-    #endif
-
     // MARK: - Huddle invites (#436)
 
     /// The `hello` frame's session id — set by SyncEngine on every connect.
@@ -1143,16 +829,10 @@ final class AppState: ObservableObject {
 
     /// Fold a `huddle.invite` event into ring state. The decision itself lives
     /// in `ringEffect` (Support/HuddleRing.swift) so it can be unit-tested and
-    /// so macOS, iOS and web all read one rule.
+    /// so macOS, iOS and web all read one rule. Our own outgoing ring needs
+    /// nothing here: the start response already named anyone unavailable.
     func huddleInviteEvent(_ data: HuddleInviteData) {
         guard let selfId = currentUser?.id else { return }
-        // Our own ring: remember who said yes. Once a target accepts, the
-        // invite stops being "ringing" and the ring state drops it — but we
-        // are still waiting for that participant to turn up (#508).
-        if data.invite.startedBy == selfId {
-            huddleAccepted = data.invite.targets.filter { $0.status == .accepted }.map(\.userId)
-            updateHuddleConnection()
-        }
         switch ringEffect(
             data.invite,
             selfId: selfId,
@@ -1167,10 +847,7 @@ final class AppState: ObservableObject {
             huddleAnsweredElsewhere = true
         case .dismiss:
             if incomingHuddleInvite?.id == data.invite.id { incomingHuddleInvite = nil }
-        case .outgoing(let invite, let unavailable):
-            outgoingHuddleInvite = invite
-            if !unavailable.isEmpty { huddleUnavailable = unavailable }
-        case .ignore:
+        case .outgoing, .ignore:
             break
         }
     }
@@ -1178,191 +855,12 @@ final class AppState: ObservableObject {
     func acceptHuddleInvite() {
         guard let invite = incomingHuddleInvite else { return }
         incomingHuddleInvite = nil
-        Task {
-            await joinHuddleAsync(
-                channelId: invite.channelId,
-                workspaceId: invite.workspaceId,
-                accepting: invite.id
-            )
-        }
+        Task { await joinHuddleAsync(channelId: invite.channelId, accepting: invite.id) }
     }
 
     func declineHuddleInvite() {
         guard let invite = incomingHuddleInvite else { return }
         incomingHuddleInvite = nil
         Task { await engine.declineHuddleInvite(inviteId: invite.id, sessionId: wsSessionId) }
-    }
-
-    /// Give up on a ring nobody has answered. Leaving the room ends it
-    /// server-side anyway (the roster empties); this is the explicit button.
-    func cancelHuddleRing() {
-        let invite = outgoingHuddleInvite
-        outgoingHuddleInvite = nil
-        Task {
-            await leaveHuddleAsync()
-            if let invite { await engine.cancelHuddleInvite(inviteId: invite.id) }
-        }
-    }
-
-    func toggleHuddleMute() {
-        guard let room = huddleRoom else { return }
-        let next = !huddleMuted
-        Task {
-            // Unmuting is the only transition that opens the mic. LiveKit's
-            // SDK never requests OS permission itself, so until an app asks,
-            // macOS/iOS never show the consent prompt and never list Flow in
-            // the Microphone privacy settings at all — the capture just fails
-            // with a generic "permission not granted" every time. Ask first,
-            // via DeviceAccess rather than the SDK's helper, so a refusal that
-            // the user never saw doesn't get reported as one they chose (#469).
-            if !next {
-                switch await DeviceAccess.request(.audio) {
-                case .granted: break
-                case .refused:
-                    micPermissionBlocked = true
-                    return
-                case .unavailable:
-                    errorMessage = Self.deviceUnavailableMessage("microphone")
-                    return
-                }
-            }
-            do {
-                try await room.localParticipant.setMicrophone(enabled: !next)
-                huddleMuted = next
-            } catch {
-                // Mic permission denied or capture failed — leave the UI
-                // reflecting reality (still muted) rather than claiming live
-                // audio that was never actually published.
-                errorMessage = "Couldn't turn on the microphone: \(error.localizedDescription)"
-            }
-        }
-    }
-
-    /// Shown when the OS refuses a device without ever asking the user — no
-    /// prompt, no Privacy row, so the "Open Settings" alert would be a dead
-    /// end. #469 was one cause (a missing hardened-runtime entitlement); this
-    /// keeps any future one legible instead of blaming the user for a choice
-    /// they were never offered.
-    static func deviceUnavailableMessage(_ device: String) -> String {
-        "The system blocked Flow's \(device) request without asking you, so "
-            + "there's nothing to enable in Privacy & Security. Update Flow to "
-            + "the latest version, and report this if it keeps happening."
-    }
-
-    /// "Open Settings" action for the mic-permission alert. Deep-links to the
-    /// exact pane on macOS; iOS has no per-permission deep link, so it opens
-    /// Flow's own Settings page, which lists Microphone among its toggles —
-    /// the standard iOS pattern (same one users see in Slack/Zoom).
-    func openMicrophoneSettings() {
-        #if os(macOS)
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
-            NSWorkspace.shared.open(url)
-        }
-        #else
-        if let url = URL(string: UIApplication.openSettingsURLString) {
-            UIApplication.shared.open(url)
-        }
-        #endif
-    }
-}
-
-/// One person in the huddle, as the grid draws them (#435). Built from the
-/// LiveKit `Room` on every track/mute/speaker callback — see
-/// `AppState.syncHuddleTiles`.
-struct HuddleTile: Identifiable, Equatable {
-    let userId: String
-    let isLocal: Bool
-    let camera: VideoTrack?
-    let screen: VideoTrack?
-    let micOn: Bool
-    let speaking: Bool
-    /// They have an audio track published to the room — muted or not. The mic
-    /// badge answers "are they talking"; this answers "is there a voice path
-    /// at all", which is what a silent agent gets wrong (#508).
-    let audioLive: Bool
-
-    var id: String { userId }
-
-    static func == (a: HuddleTile, b: HuddleTile) -> Bool {
-        a.userId == b.userId && a.isLocal == b.isLocal && a.micOn == b.micOn && a.speaking == b.speaking
-            && a.audioLive == b.audioLive && a.camera?.sid == b.camera?.sid && a.screen?.sid == b.screen?.sid
-    }
-}
-
-extension AppState: RoomDelegate {
-    /// LiveKit's own disconnect signal — not guaranteed to arrive on the main
-    /// thread, hence the hop. Covers both a real network drop and a second
-    /// device/tab taking over our identity (decision log 2026-08-20:
-    /// bare-userId identity, one live presence per person) — both look the
-    /// same from here, and both should clear local huddle state.
-    nonisolated func room(_ room: Room, didDisconnectWithError error: LiveKitError?) {
-        Task { @MainActor [weak self] in
-            guard let self, self.huddleRoom === room else { return }
-            self.huddleRoom = nil
-            self.activeHuddleChannelId = nil
-            self.activeHuddleWorkspaceId = nil
-            self.huddleMuted = true
-            self.huddleCameraOn = false
-            self.huddleSharing = false
-            self.huddleTiles = []
-            self.outgoingHuddleInvite = nil
-            self.huddleAccepted = []
-            self.huddleChimed = false
-            self.huddleConnectionState = .idle
-        }
-    }
-
-    // Every media change funnels into one rebuild (see syncHuddleTiles): a
-    // callback per event, each doing the same whole-state refresh, is far
-    // easier to keep correct than half a dozen partial patches.
-    /// Someone arrived: re-read who is an agent first, since the rule for
-    /// "connected" differs for one (see `peerConnected`).
-    nonisolated func room(_ room: Room, participantDidConnect _: RemoteParticipant) {
-        Task { @MainActor [weak self] in
-            guard let self, self.huddleRoom === room else { return }
-            await self.refreshHuddleAgentIds()
-            self.syncHuddleTiles()
-        }
-    }
-    nonisolated func room(_ room: Room, participantDidDisconnect _: RemoteParticipant) { refreshTiles(room) }
-    nonisolated func room(_ room: Room, didUpdateSpeakingParticipants _: [Participant]) { refreshTiles(room) }
-    nonisolated func room(_ room: Room, participant _: Participant, trackPublication _: TrackPublication, didUpdateIsMuted _: Bool) {
-        refreshTiles(room)
-    }
-    nonisolated func room(_ room: Room, participant _: LocalParticipant, didPublishTrack _: LocalTrackPublication) {
-        refreshTiles(room)
-    }
-    nonisolated func room(_ room: Room, participant _: LocalParticipant, didUnpublishTrack _: LocalTrackPublication) {
-        refreshTiles(room)
-    }
-    nonisolated func room(_ room: Room, participant _: RemoteParticipant, didUnsubscribeTrack _: RemoteTrackPublication) {
-        refreshTiles(room)
-    }
-
-    /// A remote track arrived. Screen shares get two extra behaviours here:
-    /// the grid focuses them, and — since only one share may be live at a time
-    /// (#435) — the newest one wins, so ours stops.
-    nonisolated func room(_ room: Room, participant: RemoteParticipant, didSubscribeTrack publication: RemoteTrackPublication) {
-        let isShare = publication.source == .screenShareVideo
-        let sharer = participant.identity?.stringValue
-        let name = participant.name
-        Task { @MainActor [weak self] in
-            guard let self, self.huddleRoom === room else { return }
-            if isShare {
-                self.flashHuddleNotice("\(name?.isEmpty == false ? name! : "Someone") started sharing")
-                self.huddleFocusedUserId = sharer
-                if room.localParticipant.isScreenShareEnabled() {
-                    try? await room.localParticipant.setScreenShare(enabled: false)
-                }
-            }
-            self.syncHuddleTiles()
-        }
-    }
-
-    nonisolated private func refreshTiles(_ room: Room) {
-        Task { @MainActor [weak self] in
-            guard let self, self.huddleRoom === room else { return }
-            self.syncHuddleTiles()
-        }
     }
 }

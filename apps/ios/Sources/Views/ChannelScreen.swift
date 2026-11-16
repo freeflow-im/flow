@@ -104,7 +104,7 @@ struct ChannelScreen: View {
     }
 
     /// An agent call is deliberately one-to-one. Group DMs keep their normal
-    /// LiveKit huddle because a spoken turn cannot be paired safely with one
+    /// huddle because a spoken turn cannot be paired safely with one
     /// responding agent when several people or agents share the room.
     private var agentParticipantId: String? {
         guard let ch = resolvedChannel else { return nil }
@@ -202,9 +202,6 @@ struct ChannelScreen: View {
         guard let workspaceId = resolvedChannel?.workspaceId, !startingAgentCall else { return }
         startingAgentCall = true
         Task {
-            if app.activeHuddleChannelId != nil {
-                await app.leaveHuddleAndWait()
-            }
             agentCall.start(channelId: channelId, workspaceId: workspaceId, agent: agent)
             startingAgentCall = false
         }

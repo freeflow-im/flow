@@ -57,15 +57,6 @@ struct RootView: View {
                     showing(app)
                 }
             })
-            .overlay(alignment: .topTrailing) {
-                if let owner = AppState.joinedHuddleOwner, owner !== active {
-                    Button("Return to huddle on \(URL(string: owner.serverOrigin)?.host ?? "server")") {
-                        selected = owner
-                        workspace = owner.activeHuddleWorkspaceId
-                        showing(owner)
-                    }.padding(8)
-                }
-            }
             .onOpenURL { url in
                 if url.scheme == "https" || url.scheme == "http" {
                     incomingAddress = url.absoluteString
@@ -196,44 +187,6 @@ struct SessionRootView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(app.errorMessage ?? "")
-        }
-        // Voice huddle (Phase 1): unmuting with no OS mic permission. Its own
-        // alert (not the generic one above) because this is the one place an
-        // action button — jumping straight to the Microphone privacy pane —
-        // actually helps.
-        .alert(
-            "Microphone Access Needed",
-            isPresented: $app.micPermissionBlocked
-        ) {
-            Button("Open Settings") { app.openMicrophoneSettings() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Flow needs microphone access to talk in a huddle. Enable it in System Settings → Privacy & Security → Microphone.")
-        }
-        // Same shape for the camera (#435) — a separate OS grant, a separate
-        // pane, and the same reason for its own alert: "Open Settings" is the
-        // only useful thing to offer.
-        .alert(
-            "Camera Access Needed",
-            isPresented: $app.cameraPermissionBlocked
-        ) {
-            Button("Open Settings") { app.openCameraSettings() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Flow needs camera access to turn on video in a huddle. Enable it in System Settings → Privacy & Security → Camera.")
-        }
-        // Screen Recording refused, or never granted. ScreenCaptureKit answers
-        // an ungranted app with an empty source list rather than an error, so
-        // this covers both "denied" and "never asked" — and both are fixed in
-        // the same pane.
-        .alert(
-            "Screen Recording Access Needed",
-            isPresented: $app.screenPermissionBlocked
-        ) {
-            Button("Open Settings") { app.openScreenRecordingSettings() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Flow needs Screen Recording access to share a window or screen. Enable it in System Settings → Privacy & Security → Screen Recording, then reopen Flow.")
         }
     }
 }
