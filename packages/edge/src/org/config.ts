@@ -242,23 +242,6 @@ export const config = {
   thumbMaxPx: 512,
   avatarPx: 512,
   orphanFileTtlHours: 24, // unattached files older than this are swept (decision log ruling 5)
-  // ---- voice huddle (Phase 1, LiveKit Cloud) ---------------------
-  get livekitApiKey(): string | undefined {
-    return process.env.LIVEKIT_API_KEY || undefined;
-  },
-  get livekitApiSecret(): string | undefined {
-    return process.env.LIVEKIT_API_SECRET || undefined;
-  },
-  /** Project URL, e.g. https://<project>.livekit.cloud. */
-  get livekitUrl(): string | undefined {
-    return process.env.LIVEKIT_URL || undefined;
-  },
-  /** Huddles are available. When false, join/leave 503 and clients hide the affordance. */
-  get livekitEnabled(): boolean {
-    return !!(process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET && process.env.LIVEKIT_URL);
-  },
-  /** No token-refresh path exists yet (decision log 2026-08-20), so this errs long. */
-  livekitTokenTtl: '24h',
   // ---- Meet (docs/specs/meetings.md, Cloudflare RealtimeKit) -----
   get rtkAccountId(): string | undefined {
     return process.env.RTK_ACCOUNT_ID || undefined;

@@ -672,13 +672,15 @@ export const meetings = sqliteTable(
     rtkMeetingId: text('rtk_meeting_id').notNull(),
     /** The short code in the room's link (`/meet/kqd-wmzt-fra`), unique across organizations (indexed like the id). */
     code: text('code'),
+    /** The conversation whose huddle this room is (one per conversation), or null for a meeting started in Meet. */
+    channelId: text('channel_id').references(() => channels.id, { onDelete: 'cascade' }),
     title: text('title').notNull(),
     createdBy: text('created_by').notNull().references(() => users.id, { onDelete: 'cascade' }),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
     /** The last time someone joined: Live now only asks RTK about rooms used recently. */
     lastJoinedAt: integer('last_joined_at', { mode: 'timestamp_ms' }),
   },
-  (t) => [index('meetings_workspace_idx').on(t.workspaceId, t.lastJoinedAt), uniqueIndex('meetings_code_idx').on(t.code)],
+  (t) => [index('meetings_workspace_idx').on(t.workspaceId, t.lastJoinedAt), uniqueIndex('meetings_code_idx').on(t.code), uniqueIndex('meetings_channel_idx').on(t.channelId)],
 );
 
 /** One RTK participant per person per meeting, so a rejoin refreshes a token instead of adding a second participant. */

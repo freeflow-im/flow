@@ -28,6 +28,9 @@ export const api = {
   create: (workspaceId: string, title?: string) => call<MeetingDTO>('POST', `/v1/workspaces/${workspaceId}/meetings`, title ? { title } : {}),
   live: async (workspaceId: string) => (await call<{ meetings: LiveMeetingDTO[] }>('GET', `/v1/workspaces/${workspaceId}/meetings/live`)).meetings,
   join: (ref: string) => call<MeetingJoinDTO>('POST', `/v1/meetings/${ref}/join`, {}),
+  leave: (ref: string) => call<{ ok: true }>('POST', `/v1/meetings/${ref}/leave`, {}),
+  /** The tab is closing: a request that outlives the page (no answer is read). */
+  leaveOnClose: (ref: string) => navigator.sendBeacon(`/v1/meetings/${ref}/leave`),
 };
 
 /** A room's link: the page that joins it, by the room's short code. */

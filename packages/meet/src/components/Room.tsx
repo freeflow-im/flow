@@ -42,9 +42,18 @@ function useMeeting(meetingRef: string, attempt: number): [Phase, (p: Phase) => 
     })().catch((e: unknown) => {
       if (!cancelled) setPhase({ kind: 'error', message: joinError(e) });
     });
+    // Closing the tab leaves too: the server hears it at once (a huddle's roster in Chat), not when RealtimeKit notices.
+    const onClose = () => {
+      if (client?.self.roomJoined) api.leaveOnClose(meetingRef);
+    };
+    window.addEventListener('pagehide', onClose);
     return () => {
       cancelled = true;
-      if (client?.self.roomJoined) void client.leave().catch(() => {});
+      window.removeEventListener('pagehide', onClose);
+      if (client?.self.roomJoined) {
+        void client.leave().catch(() => {});
+        void api.leave(meetingRef).catch(() => {});
+      }
     };
   }, [meetingRef, attempt]);
   return [phase, setPhase];
@@ -280,7 +289,17 @@ export function Room({ meetingRef }: { meetingRef: string }) {
   const [attempt, setAttempt] = useState(0);
   const [phase, setPhase] = useMeeting(meetingRef, attempt);
 
-  if (phase.kind === 'in') return <InRoom client={phase.client} info={phase.info} onLeft={() => setPhase({ kind: 'left' })} />;
+  if (phase.kind === 'in')
+    return (
+      <InRoom
+        client={phase.client}
+        info={phase.info}
+        onLeft={() => {
+          void api.leave(meetingRef).catch(() => {});
+          setPhase({ kind: 'left' });
+        }}
+      />
+    );
   return (
     <div className="flex h-full flex-col items-center justify-center gap-4 bg-[#202124] p-6 text-center text-[#e8eaed]">
       {phase.kind === 'joining' && (

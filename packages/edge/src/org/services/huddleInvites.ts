@@ -292,7 +292,11 @@ export async function startOrJoinRing(
     .select({ userId: channelMembers.userId })
     .from(channelMembers)
     .where(eq(channelMembers.channelId, chan.id));
-  const callees = memberRows.map((r) => r.userId).filter((id) => id !== callerId);
+  // People only: agents are not rung (their voice calls were removed with LiveKit, ruling R6).
+  const agentIds = new Set(
+    (await db.select({ id: users.id }).from(users).where(and(inList(users.id, memberRows.map((r) => r.userId)), eq(users.isAgent, true)))).map((r) => r.id),
+  );
+  const callees = memberRows.map((r) => r.userId).filter((id) => id !== callerId && !agentIds.has(id));
   // A "DM" with only you in it (your own notes) has nobody to ring; it behaves
   // like an ambient huddle rather than a call that instantly misses itself.
   if (callees.length === 0) return { invite: null, unavailable: [] };

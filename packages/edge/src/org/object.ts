@@ -66,6 +66,8 @@ const OUTBOX = [
   `CREATE TRIGGER IF NOT EXISTS _index_links AFTER INSERT ON workspace_join_links BEGIN INSERT INTO _outbox (kind, id) VALUES ('token', NEW.token); END`,
   // A meeting's short code is a link too (/meet/<code>), so the directory knows its organization (routes/org.ts MEETING_CODE).
   `CREATE TRIGGER IF NOT EXISTS _index_meeting_codes AFTER INSERT ON meetings WHEN NEW.code IS NOT NULL BEGIN INSERT INTO _outbox (kind, id) VALUES ('index', NEW.code); END`,
+  // RealtimeKit's webhook names its own meeting id, which the Worker resolves to this organization the same way.
+  `CREATE TRIGGER IF NOT EXISTS _index_meeting_rtk AFTER INSERT ON meetings BEGIN INSERT INTO _outbox (kind, id) VALUES ('index', NEW.rtk_meeting_id); END`,
   `CREATE TRIGGER IF NOT EXISTS _index_huddle_invites AFTER INSERT ON huddle_invites BEGIN INSERT INTO _outbox (kind, id) VALUES ('index', NEW.id); END`,
   // An agent's account and tokens begin here, at redeem, and have to reach the directory, which authenticates every request.
   `CREATE TRIGGER IF NOT EXISTS _index_agent_invites AFTER INSERT ON agent_invites BEGIN INSERT INTO _outbox (kind, id) VALUES ('index', lower(hex(NEW.code_hash))); END`,

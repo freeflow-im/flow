@@ -1,14 +1,20 @@
-// Meet (docs/specs/meetings.md): meeting rooms on Cloudflare RealtimeKit (RTK). Phase 1 is members only: a member
-// creates a room, anyone in the organization joins it by its link, and RTK carries the media. This module keeps our
-// side (the room and one RTK participant per person) and asks RTK for the rest: a participant token on every join,
-// and who is in a room now (Live now). No webhooks yet: RTK is asked directly, which also works on a laptop.
+// Meet (docs/specs/meetings.md): meeting rooms on Cloudflare RealtimeKit (RTK), members only for now. A member creates
+// a room, anyone in the organization joins it by its link, and RTK carries the media. This module keeps our side (the
+// room and one RTK participant per person) and asks RTK for the rest: a participant token on every join, and who is in
+// a room now (Live now).
+//
+// A conversation's huddle is a room too (phase 2): `startHuddle` makes the conversation's one room and rings its
+// people; the room's join and leave move the huddle roster (./huddles.ts), and RTK's webhook is the safety net for a
+// tab closed without leaving.
 import { and, desc, eq, gt, or } from 'drizzle-orm';
-import type { LiveMeetingDTO, MeetingDTO, MeetingJoinDTO, MeetingPersonDTO } from '@flow/shared';
+import type { HuddleStartDTO, LiveMeetingDTO, MeetingDTO, MeetingJoinDTO, MeetingPersonDTO } from '@flow/shared';
 import { db, schema } from '../db/index.js';
 import { config } from '../config.js';
 import { newId } from '../lib/ids.js';
 import { ApiError, notFound } from '../lib/errors.js';
-import { requireMembership } from './workspaces.js';
+import { isUniqueViolation, requireMembership } from './workspaces.js';
+import { clearHuddle, enterHuddle, exitHuddle, requireHuddleEligible, requireHuddleSize } from './huddles.js';
+import { startOrJoinRing } from './huddleInvites.js';
 
 const HOST_PRESET = 'group_call_host';
 const MEMBER_PRESET = 'group_call_participant';
@@ -59,7 +65,14 @@ const toDTO = (m: MeetingRow): MeetingDTO => ({
   title: m.title,
   createdBy: m.createdBy,
   createdAt: m.createdAt.toISOString(),
+  channelId: m.channelId ?? null,
 });
+
+/** Who may be in a room: any member of its organization, and for a huddle, whoever may be in that conversation. */
+async function requireRoomAccess(m: MeetingRow, userId: string): Promise<void> {
+  await requireMembership(m.workspaceId, userId);
+  if (m.channelId) await requireHuddleEligible(m.channelId, userId);
+}
 
 /** A room by its link: the short code, or the id (older links). */
 async function meetingRow(ref: string): Promise<MeetingRow> {
@@ -76,14 +89,14 @@ export async function createMeeting(workspaceId: string, userId: string, title?:
   const name = (title ?? '').trim().slice(0, MAX_TITLE) || `${me?.displayName?.split(' ')[0] || 'A'}'s meeting`;
   const created = await rtk<{ id: string }>('POST', '/meetings', { title: name });
   if (!created) throw new ApiError(502, 'meet_upstream', 'The meeting service did not answer');
-  const row = { id: newId(), code: newMeetingCode(), workspaceId, rtkMeetingId: created.id, title: name, createdBy: userId, createdAt: new Date() };
+  const row = { id: newId(), code: newMeetingCode(), workspaceId, rtkMeetingId: created.id, title: name, createdBy: userId, createdAt: new Date(), channelId: null };
   await db.insert(schema.meetings).values(row);
   return toDTO({ ...row, lastJoinedAt: null });
 }
 
 export async function getMeeting(ref: string, userId: string): Promise<MeetingDTO> {
   const m = await meetingRow(ref);
-  await requireMembership(m.workspaceId, userId);
+  await requireRoomAccess(m, userId);
   return toDTO(m);
 }
 
@@ -93,7 +106,7 @@ export async function getMeeting(ref: string, userId: string): Promise<MeetingDT
  */
 export async function joinMeeting(ref: string, userId: string): Promise<MeetingJoinDTO> {
   const m = await meetingRow(ref);
-  await requireMembership(m.workspaceId, userId);
+  await requireRoomAccess(m, userId);
   const expiresOn = new Date(Date.now() + config.rtkTokenTtlMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
   const [existing] = await db
     .select()
@@ -101,7 +114,8 @@ export async function joinMeeting(ref: string, userId: string): Promise<MeetingJ
     .where(and(eq(schema.meetingParticipants.meetingId, m.id), eq(schema.meetingParticipants.userId, userId)))
     .limit(1);
   let authToken: string | undefined;
-  let host = m.createdBy === userId;
+  // A huddle has no organizer: everyone in the conversation hosts it (docs/specs/meetings.md §3).
+  let host = m.createdBy === userId || !!m.channelId;
   if (existing) {
     host = existing.preset === HOST_PRESET;
     const refreshed = await rtk<{ token: string }>('POST', `/meetings/${m.rtkMeetingId}/participants/${existing.rtkParticipantId}/token`, { expires_on: expiresOn });
@@ -134,7 +148,79 @@ export async function joinMeeting(ref: string, userId: string): Promise<MeetingJ
       });
   }
   await db.update(schema.meetings).set({ lastJoinedAt: new Date() }).where(eq(schema.meetings.id, m.id));
+  if (m.channelId) enterHuddle(m.channelId, m.workspaceId, userId);
   return { meeting: toDTO(m), authToken, host };
+}
+
+/** The room says this person left (Leave, or the tab closing). Moves a huddle's roster; nothing to do for a meeting. */
+export async function leaveMeeting(ref: string, userId: string): Promise<void> {
+  const m = await meetingRow(ref);
+  await requireMembership(m.workspaceId, userId);
+  if (m.channelId) await exitHuddle(m.channelId, userId);
+}
+
+/** What a huddle's room is called: the channel's name, or the other people's first names in a DM. */
+async function huddleTitle(chan: { id: string; kind: string; name: string | null }, userId: string): Promise<string> {
+  if (chan.kind === 'standard' && chan.name) return `#${chan.name}`;
+  const others = await db
+    .select({ name: schema.users.displayName })
+    .from(schema.channelMembers)
+    .innerJoin(schema.users, eq(schema.users.id, schema.channelMembers.userId))
+    .where(eq(schema.channelMembers.channelId, chan.id));
+  const [me] = await db.select({ name: schema.users.displayName }).from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+  const names = others.map((o) => o.name.split(' ')[0]).filter((n) => n && n !== me?.name.split(' ')[0]);
+  return names.length ? `Huddle with ${names.slice(0, 3).join(', ')}${names.length > 3 ? ' and others' : ''}` : 'Huddle';
+}
+
+/** The conversation's one room, made the first time someone starts a huddle there. */
+async function channelRoom(chan: { id: string; workspaceId: string; kind: string; name: string | null }, userId: string): Promise<MeetingRow> {
+  const [existing] = await db.select().from(schema.meetings).where(eq(schema.meetings.channelId, chan.id)).limit(1);
+  if (existing) return existing;
+  const title = await huddleTitle(chan, userId);
+  const created = await rtk<{ id: string }>('POST', '/meetings', { title });
+  if (!created) throw new ApiError(502, 'meet_upstream', 'The meeting service did not answer');
+  const row = { id: newId(), code: newMeetingCode(), workspaceId: chan.workspaceId, rtkMeetingId: created.id, title, createdBy: userId, createdAt: new Date(), channelId: chan.id, lastJoinedAt: null };
+  try {
+    await db.insert(schema.meetings).values(row);
+    return row;
+  } catch (err) {
+    // Two people started it at once: the other's room is the one.
+    if (!isUniqueViolation(err)) throw err;
+    const [won] = await db.select().from(schema.meetings).where(eq(schema.meetings.channelId, chan.id)).limit(1);
+    if (!won) throw err;
+    return won;
+  }
+}
+
+/**
+ * "Huddle" in a conversation (rulings R4, R5): its Meet room, made on first use, and a ring for its people. Refused in
+ * a room of more than six people unless a huddle is already running there. The caller then opens `/meet/<code>`; being
+ * in the room (joinMeeting) is what puts them on the roster.
+ */
+export async function startHuddle(channelId: string, userId: string): Promise<HuddleStartDTO> {
+  requireMeet();
+  const { chan } = await requireHuddleEligible(channelId, userId);
+  await requireHuddleSize(chan.id);
+  const room = await channelRoom(chan, userId);
+  const { invite, unavailable } = await startOrJoinRing(chan, userId);
+  return { meeting: toDTO(room), invite, unavailable };
+}
+
+/** A RealtimeKit webhook, already verified by the Worker (routes/org.ts). Only huddles care, to drop who left. */
+export async function handleRtkWebhook(event: {
+  event?: string;
+  meeting?: { id?: string };
+  participant?: { customParticipantId?: string };
+}): Promise<void> {
+  const rtkMeetingId = event.meeting?.id;
+  if (!rtkMeetingId) return;
+  const [m] = await db.select().from(schema.meetings).where(eq(schema.meetings.rtkMeetingId, rtkMeetingId)).limit(1);
+  if (!m?.channelId) return;
+  if (event.event === 'meeting.participantLeft' && event.participant?.customParticipantId) {
+    await exitHuddle(m.channelId, event.participant.customParticipantId);
+  } else if (event.event === 'meeting.ended') {
+    await clearHuddle(m.channelId);
+  }
 }
 
 interface RtkSession {

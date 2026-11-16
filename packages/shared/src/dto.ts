@@ -338,6 +338,8 @@ export interface MeetingDTO {
   title: string;
   createdBy: string;
   createdAt: string;
+  /** The conversation whose huddle this is, when it is one (Meet phase 2). */
+  channelId: string | null;
 }
 
 /** Someone in a live meeting, as RealtimeKit reports its active session. */
@@ -351,6 +353,16 @@ export interface MeetingPersonDTO {
 export interface LiveMeetingDTO extends MeetingDTO {
   people: MeetingPersonDTO[];
   startedAt: string | null;
+}
+
+/**
+ * POST /v1/channels/:id/huddle/join since Meet phase 2: the conversation's Meet meeting (open `/meet/<code>` to be in
+ * it) and the ring that starting it began, with the names it could not reach.
+ */
+export interface HuddleStartDTO {
+  meeting: MeetingDTO;
+  invite: HuddleInviteDTO | null;
+  unavailable: string[];
 }
 
 /** POST /v1/meetings/:id/join — what the RealtimeKit client needs to join, and whether this person hosts. */

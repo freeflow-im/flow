@@ -1,6 +1,6 @@
 // Everything an organization owns goes to its object: the path names the organization, or an id the directory can look up.
 import { Hono, type Context } from 'hono';
-import { WebhookReceiver } from 'livekit-server-sdk';
+import { verifyRtkWebhook } from '../rtkWebhook';
 import { PatchMeBody, type UserDTO } from '@flow/shared';
 import { AGENT_AVATAR_PRESETS, agentAvatarUrl, type AgentAvatarPreset } from '@flow/shared/assistant';
 import { accountGate, hashToken, newId } from '../directory/core';
@@ -17,10 +17,6 @@ export interface OrgRouteEnv extends AuthEnv, PlatformDnsEnv, MailProviderEnv {
   APPLE_AUDIENCE?: string;
   FLOW_SERVER_NAME?: string;
   FLOW_MAX_FILE_BYTES?: string;
-  /** Huddles (LiveKit Cloud): all three set turns them on, as on the Node server. */
-  LIVEKIT_API_KEY?: string;
-  LIVEKIT_API_SECRET?: string;
-  LIVEKIT_URL?: string;
   /** Meet (Cloudflare RealtimeKit): all three set turns it on (docs/specs/meetings.md). */
   RTK_ACCOUNT_ID?: string;
   RTK_APP_ID?: string;
@@ -34,7 +30,6 @@ export interface OrgRouteEnv extends AuthEnv, PlatformDnsEnv, MailProviderEnv {
   PROVISIONING?: Queue<unknown>;
 }
 
-const huddlesEnabled = (env: OrgRouteEnv) => !!(env.LIVEKIT_API_KEY && env.LIVEKIT_API_SECRET && env.LIVEKIT_URL);
 const meetEnabled = (env: OrgRouteEnv) => !!(env.RTK_ACCOUNT_ID && env.RTK_APP_ID && env.RTK_API_TOKEN);
 const pushEnabled = (env: OrgRouteEnv) => env.FLOW_PUSH_DRIVER === 'apns' && !!(env.FLOW_APNS_KEY && env.FLOW_APNS_KEY_ID && env.FLOW_APNS_TEAM_ID);
 type C = Context<{ Bindings: OrgRouteEnv }>;
@@ -106,7 +101,9 @@ orgRoutes.get('/v1/config', (c) => {
     googleClientId: c.env.GOOGLE_CLIENT_ID ?? null,
     apple: !!c.env.APPLE_AUDIENCE,
     maxFileBytes: Number(c.env.FLOW_MAX_FILE_BYTES ?? 100 * 1024 * 1024),
-    huddles: huddlesEnabled(c.env),
+    // Huddles were LiveKit calls; they are Meet rooms now (docs/specs/meetings.md phase 2), which clients find by `meet`.
+    // Always false, so an app from before Meet hides its LiveKit huddle button instead of failing to join.
+    huddles: false,
     meet: meetEnabled(c.env),
     hostedMail,
     ...(settings ? { mail: { imapHost: settings.imap.host, smtpHost: settings.smtp.host } } : {}),
@@ -114,25 +111,20 @@ orgRoutes.get('/v1/config', (c) => {
 });
 
 /**
- * LiveKit's webhook names no organization, only a room, whose name is the channel's id. The signature is checked here
- * first, so an unsigned request never wakes an object; the organization's object checks it again and applies it.
- * A room that is no channel of ours is acknowledged and dropped, so LiveKit does not retry it.
+ * RealtimeKit's webhook names its own meeting id, which the organization's object indexed when it made the room
+ * (object.ts `_index_meeting_rtk`). The signature is checked here, so an unsigned request never wakes an object; a
+ * meeting that is not ours is acknowledged and dropped, so RealtimeKit does not retry it. Only huddles use it.
  */
-orgRoutes.post('/v1/livekit/webhook', async (c) => {
-  const invalid = () => c.json({ error: { code: 'invalid_webhook', message: 'invalid webhook' } }, 400);
-  if (!huddlesEnabled(c.env)) return invalid();
+orgRoutes.post('/v1/rtk/webhook', async (c) => {
   const body = await c.req.text();
-  let room: string | undefined;
-  try {
-    const event = await new WebhookReceiver(c.env.LIVEKIT_API_KEY!, c.env.LIVEKIT_API_SECRET!).receive(body, c.req.header('authorization') ?? '');
-    room = event.room?.name;
-  } catch (err) {
-    console.warn('livekit webhook rejected', String(err));
-    return invalid();
+  if (!meetEnabled(c.env) || !(await verifyRtkWebhook(body, c.req.header('rtk-signature')))) {
+    console.warn('realtimekit webhook rejected');
+    return c.json({ error: { code: 'invalid_webhook', message: 'invalid webhook' } }, 401);
   }
-  const id = room && /^[0-9a-f-]{36}$/.test(room) ? await directory(c, 'organizationOfId', room) : null;
+  const rtkMeetingId = (JSON.parse(body) as { meeting?: { id?: string } }).meeting?.id;
+  const id = rtkMeetingId && /^[0-9a-f-]{36}$/.test(rtkMeetingId) ? await directory(c, 'organizationOfId', rtkMeetingId) : null;
   if (!id) return c.json({ ok: true });
-  const forward = new Request(c.req.url, { method: 'POST', headers: c.req.raw.headers, body });
+  const forward = new Request(c.req.url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-flow-rtk-verified': '1' }, body });
   return orgStub(c, id).handle(forward, { user: null, token: null, authKind: null, ip: c.req.header('cf-connecting-ip') ?? '', organizationId: id, account: null }, null);
 });
 
