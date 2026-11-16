@@ -401,7 +401,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
    * A wake job for the hosted agent this object runs (agents.md §6), handed over by the organization's Events object: the
    * job is acked, the prompt run as an async turn (no page, so no browser tools; the server tools as the agent), the answer
    * posted in the job's channel as the agent (a personal agent: as its sponsor, marked `via`), and the job stepped to done.
-   * One conversation per subscription keeps an automation's memory apart from the person's chats.
+   * Each job runs in a new conversation of its subscription's own (`auto:<subscription>`), apart from the person's chats.
    */
   async wake(p: { organizationId: string; job: AgentJobDTO; runtime: HostedRuntimeDTO }): Promise<void> {
     this.learnName(p.runtime.agentName);
@@ -437,6 +437,9 @@ export class Assistant extends DurableObject<AssistantEnv> {
       this.turnWho.set(`auto:${job.subscriptionId}`, who);
       const text = await withDocsContext(this.context, async () => {
         const { agent } = this.service();
+        // Each job starts a new conversation: an earlier run's answer ("the mail tools are unavailable") must not stand in
+        // for trying again. What an automation should keep across runs goes in its memory files. Old runs are kept.
+        agent.reset(`auto:${job.subscriptionId}`);
         const abort = new AbortController();
         const timer = setTimeout(() => abort.abort(), WAKE_TURN_MS);
         let out = '';

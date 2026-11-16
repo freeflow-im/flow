@@ -253,6 +253,22 @@ describe('a hosted agent’s runtime takes a wake job (agents.md §6)', () => {
     const t = (await (await a.handle(req('GET', '/api/agent?scope=home'), CALLER, DOCS_CALLER)).json()) as { items: unknown[] };
     expect(t.items).toEqual([]);
   });
+
+  it('starts each job of a subscription in a new conversation: an earlier run’s answer is not replayed', async () => {
+    const e = env();
+    const a = assistant('acct-1', e.env);
+    const seen: number[] = [];
+    a.script = async (params, { onText }) => {
+      seen.push((params.messages as unknown[]).length);
+      onText('I could not reach your mail.');
+      return message([{ type: 'text', text: 'I could not reach your mail.' }], 'end_turn') as never;
+    };
+    const runtime = { runtimeKey: 'acct-1', agentId: 'asst', agentAccountId: 'acct-asst', mode: 'personal' as const, organizationId: 'org-1', sponsorId: 'user-1', sponsorAccountId: 'acct-1' };
+    await a.wake({ organizationId: 'org-1', job: job('job-4', { agent: 'acct-asst' }), runtime });
+    await a.wake({ organizationId: 'org-1', job: job('job-5', { agent: 'acct-asst' }), runtime });
+    // Each run's model call sees only its own prompt, not the run before it.
+    expect(seen).toEqual([1, 1]);
+  });
 });
 
 describe('the runtime under concurrent use (agents.md §6)', () => {
