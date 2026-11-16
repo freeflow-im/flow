@@ -29,7 +29,7 @@ jobs:
       - name: Install
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
-        run: pnpm install --frozen-lockfile --filter @flow/shared... --filter @flow/web... --filter @flow/docs... --filter @flow/mail... --filter @flow/calendar... --filter @flow/home... --filter @flow/contacts... --filter @flow/admin...
+        run: pnpm install --frozen-lockfile --filter @flow/shared... --filter @flow/web... --filter @flow/docs... --filter @flow/mail... --filter @flow/calendar... --filter @flow/home... --filter @flow/contacts... --filter @flow/admin... --filter @flow/meet...
       - name: Build every client for its manifest's base path
         run: |
           set -e
