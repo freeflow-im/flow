@@ -272,6 +272,15 @@ export class Calendar extends DurableObject<CalendarEnv> {
     return { ok: true };
   }
 
+  /** The account's address changed (platform.md §3.2): its native calendar goes by the new one, as organizer and
+   * attendee from now on. Events already sent keep the old one, which still delivers. */
+  async renameNative(account: AccountDTO): Promise<{ ok: true } | { ok: false; message: string }> {
+    const wrong = ownerMismatch(this.store, { account, user: null }, 'the Calendar');
+    if (wrong) { console.error(`[calendar] ${wrong}`); return { ok: false, message: wrong }; }
+    if (account.address) this.sql.exec("UPDATE accounts SET email = ? WHERE kind = 'native'", account.address.toLowerCase());
+    return { ok: true };
+  }
+
   /** The account's native calendar and its events deleted, when the account loses its hosted address (provisioning's
    * `delete`, decision_log 2026-11-15). Linked calendars stay. Safe to run again. */
   async dropNative(account: AccountDTO): Promise<{ ok: true } | { ok: false; message: string }> {

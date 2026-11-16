@@ -59,6 +59,7 @@ beforeEach(() => {
       setState: async (id, state, message = null) => core.setAccountState(id, state, message),
       setHosted: async (id, hosted) => core.setHosted(id, hosted),
       setDomainAtProvider: async (d) => core.setDomainAtProvider(d),
+      dropAliases: async (id) => void core.dropAliases(id),
     },
     mail: {
       hosted: async (a: AccountDTO) => (mail.has(a.id) ? { id: `m-${a.id}`, email: mail.get(a.id)!.email } : null),
@@ -450,5 +451,134 @@ describe("people's addresses (platform.md §3.2, decision_log 2026-11-15)", () =
     await drain();
     expect(core.accountById(ann.id)!.address).toBe('ann@acme.test');
     expect(core.unhostPeople(org)).toEqual([]);
+  });
+});
+
+describe('aliases and changed addresses (platform.md §3.2, decision_log 2026-11-16)', () => {
+  const sqlOf = () => (core as unknown as { sql: Sql }).sql;
+  beforeEach(() => vi.mocked(core.peopleHosted).mockRestore());
+
+  /** An organization on acme.test with mail on, and Ann with her mailbox made. */
+  async function setUp() {
+    const org = newId();
+    core.reserveSlug('acme', org);
+    const ann = join(org, user('Ann'), 'owner');
+    core.addDomain(org, 'acme.test');
+    sqlOf().exec('UPDATE domains SET verified_at = 1 WHERE domain = ?', 'acme.test');
+    core.setPrimaryDomain(org, 'acme.test');
+    await provider.createDomain('acme.test', { quotaBytes: 1, maxUsers: 10 });
+    core.setDomainAtProvider('acme.test');
+    await drain();
+    expect(core.accountById(ann.id)!.address).toBe('ann@acme.test');
+    return { org, ann };
+  }
+
+  it('adds and removes aliases as forwarders to the mailbox, each address unique', async () => {
+    const { org, ann } = await setUp();
+    const bob = join(org, user('Bob'));
+    await drain();
+    expect(await core.addAlias(org, ann.id, ' Sales@Acme.test ')).toEqual({ address: 'ann@acme.test', others: [{ address: 'sales@acme.test', removable: true }], domains: ['acme.test'] });
+    expect(provider.aliases.get('sales@acme.test')).toBe('ann@acme.test');
+    expect(core.accountByAddress('sales@acme.test')?.id).toBe(ann.id);
+    await expect(core.addAlias(org, bob.id, 'sales@acme.test')).rejects.toMatchObject({ code: 'address_taken' });
+    await expect(core.addAlias(org, bob.id, 'bob@acme.test')).rejects.toMatchObject({ code: 'address_taken' });
+    await expect(core.addAlias(org, ann.id, 'postmaster@acme.test')).rejects.toMatchObject({ code: 'username_reserved' });
+    await expect(core.addAlias(org, ann.id, 'ann@other.test')).rejects.toMatchObject({ code: 'invalid_domain' });
+    // A person never gets an address on the platform subdomain.
+    await expect(core.addAlias(org, ann.id, 'ann@acme.freeflow.im')).rejects.toMatchObject({ code: 'domain_no_mail' });
+    // A provider refusal lets the address go.
+    provider.createAlias = async () => { throw new ProviderError('bad_request', 'no'); };
+    await expect(core.addAlias(org, ann.id, 'info@acme.test')).rejects.toMatchObject({ code: 'mail_provider_bad_request' });
+    expect(core.accountByAddress('info@acme.test')).toBeNull();
+    await expect(core.removeAlias(org, ann.id, 'ann@acme.test')).rejects.toMatchObject({ code: 'address_in_use' });
+    expect(await core.removeAlias(org, ann.id, 'sales@acme.test')).toEqual({ address: 'ann@acme.test', others: [], domains: ['acme.test'] });
+    expect(provider.aliases.has('sales@acme.test')).toBe(false);
+    expect(core.accountByAddress('sales@acme.test')).toBeNull();
+  });
+
+  it('changes the address an account goes by; the mailbox keeps its login and the old address still delivers', async () => {
+    const { org, ann } = await setUp();
+    const after = await core.changeAddress(org, ann.id, 'scott@acme.test');
+    expect(after.address).toBe('scott@acme.test');
+    expect(provider.aliases.get('scott@acme.test')).toBe('ann@acme.test');
+    expect(core.addressesOf(ann.id)).toEqual({ address: 'scott@acme.test', others: [{ address: 'ann@acme.test', removable: false }], domains: ['acme.test'] });
+    expect(core.accountByAddress('ann@acme.test')?.id).toBe(ann.id);
+    expect(core.provisioningTarget(ann.id)!.mailboxAddress).toBe('ann@acme.test');
+    // Back to the mailbox's own address: no forwarder needed, the changed one stays an alias.
+    expect((await core.changeAddress(org, ann.id, 'ann@acme.test')).address).toBe('ann@acme.test');
+    expect(core.addressesOf(ann.id)).toEqual({ address: 'ann@acme.test', others: [{ address: 'scott@acme.test', removable: true }], domains: ['acme.test'] });
+    // A mailbox written again (its Mail row lost) sends as the address it goes by and logs in as the mailbox.
+    await core.changeAddress(org, ann.id, 'scott@acme.test');
+    mail.delete(ann.id);
+    sqlOf().exec('UPDATE accounts SET hosted_at = NULL WHERE id = ?', ann.id);
+    await runMessage({ kind: 'provision', organizationId: org, accountId: ann.id }, deps);
+    expect(mail.get(ann.id)).toMatchObject({ email: 'scott@acme.test', imap: { username: 'ann@acme.test' }, smtp: { username: 'ann@acme.test' } });
+    expect(provider.calls.filter((c) => c.method === 'createMailbox')).toHaveLength(1);
+  });
+
+  it('deletes the aliases with the mailbox', async () => {
+    const { org } = await setUp();
+    const ann = join(org, user('Anna'));
+    await drain();
+    await core.changeAddress(org, ann.id, 'scott@acme.test');
+    await core.addAlias(org, ann.id, 'sales@acme.test');
+    core.setAccountKind(org, ann.id, 'guest');
+    expect(core.accountByAddress('sales@acme.test')?.id).toBe(ann.id);
+    sqlOf().exec("UPDATE accounts SET state = 'removed' WHERE id = ?", ann.id);
+    await runMessage({ kind: 'delete', organizationId: org, accountId: ann.id }, deps);
+    expect(provider.aliases.size).toBe(0);
+    expect(provider.mailboxes.has('anna@acme.test')).toBe(false);
+    expect(core.accountByAddress('sales@acme.test')).toBeNull();
+  });
+
+  it("makes the organization's first own domain primary when it is verified, and no later one", async () => {
+    const org = newId();
+    core.reserveSlug('acme', org);
+    join(org, user('Ann'), 'owner');
+    const token = core.addDomain(org, 'acme.test').verifyToken;
+    core.addDomain(org, 'beta.test');
+    (core as unknown as { deps: { resolve: unknown } }).deps.resolve = async () => [token];
+    await core.verifyDomain(org, 'acme.test');
+    const primary = () => sqlOf().exec('SELECT domain FROM domains WHERE organization_id = ? AND is_primary = 1', org).toArray()[0]?.domain;
+    expect(primary()).toBe('acme.test');
+    sqlOf().exec('UPDATE domains SET verify_token = ? WHERE domain = ?', token, 'beta.test');
+    await core.verifyDomain(org, 'beta.test');
+    expect(primary()).toBe('acme.test');
+  });
+
+  it('moves a mailbox to a new one at the new address: the old one deleted, its address and the aliases forwarding', async () => {
+    const { org, ann } = await setUp();
+    await core.addAlias(org, ann.id, 'sales@acme.test');
+    const start = (await core.startMove(org, ann.id, 'Scott@acme.test'))!;
+    expect(start).toMatchObject({ address: 'scott@acme.test', wasAlias: false, mailbox: { email: 'scott@acme.test', imap: { username: 'scott@acme.test' } } });
+    expect(provider.mailboxes.has('scott@acme.test')).toBe(true);
+    expect(core.accountByAddress('scott@acme.test')?.id).toBe(ann.id);
+    const after = await core.finishMove(org, ann.id, start.address);
+    expect(after.address).toBe('scott@acme.test');
+    expect(provider.mailboxes.has('ann@acme.test')).toBe(false);
+    expect(Object.fromEntries(provider.aliases)).toEqual({ 'ann@acme.test': 'scott@acme.test', 'sales@acme.test': 'scott@acme.test' });
+    expect(core.addressesOf(ann.id)).toMatchObject({ address: 'scott@acme.test', others: [{ address: 'sales@acme.test', removable: true }, { address: 'ann@acme.test', removable: true }] });
+    expect(core.provisioningTarget(ann.id)!.mailboxAddress).toBe('scott@acme.test');
+    // To the mailbox's own address: nothing to move.
+    expect(await core.startMove(org, ann.id, 'scott@acme.test')).toBeNull();
+  });
+
+  it('undoes a move that did not finish: the new mailbox deleted, the address let go or its forwarder made again', async () => {
+    const { org, ann } = await setUp();
+    const fresh = (await core.startMove(org, ann.id, 'scott@acme.test'))!;
+    await core.abortMove(ann.id, fresh.address, fresh.wasAlias, 'ann@acme.test');
+    expect(provider.mailboxes.has('scott@acme.test')).toBe(false);
+    expect(core.accountByAddress('scott@acme.test')).toBeNull();
+    await core.addAlias(org, ann.id, 'sales@acme.test');
+    const alias = (await core.startMove(org, ann.id, 'sales@acme.test'))!;
+    expect(alias.wasAlias).toBe(true);
+    expect(provider.aliases.has('sales@acme.test')).toBe(false);
+    await core.abortMove(ann.id, alias.address, alias.wasAlias, 'ann@acme.test');
+    expect(provider.aliases.get('sales@acme.test')).toBe('ann@acme.test');
+    expect(core.accountByAddress('sales@acme.test')?.id).toBe(ann.id);
+    // A provider refusal undoes it before anything is made.
+    provider.createMailbox = async () => { throw new ProviderError('bad_request', 'no'); };
+    await expect(core.startMove(org, ann.id, 'other@acme.test')).rejects.toMatchObject({ code: 'mail_provider_bad_request' });
+    expect(core.accountByAddress('other@acme.test')).toBeNull();
   });
 });

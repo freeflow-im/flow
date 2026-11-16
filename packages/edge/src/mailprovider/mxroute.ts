@@ -179,6 +179,27 @@ export class MxRouteMailProvider implements MailProvider {
     await this.ignoring('not_found', this.call('DELETE', `/domains/${enc(domain)}/email-accounts/${enc(user)}`));
   }
 
+  /** `POST /domains/{domain}/forwarders` with the alias's local part and the mailbox as its one destination. One there
+   * already (409) is deleted and made again, so it points at this mailbox. A mailbox may send as a forwarder of its
+   * server: MXRoute's sender check only asks that the From address be one it delivers (docs.mxroute.com, sender verify). */
+  async createAlias(alias: string, mailbox: string) {
+    const { user, domain } = splitAddress(alias);
+    const body = { alias: user, destinations: [mailbox.toLowerCase()] };
+    try {
+      await this.call('POST', `/domains/${enc(domain)}/forwarders`, body);
+    } catch (err) {
+      if (!(err instanceof ProviderError && err.code === 'conflict')) throw err;
+      await this.deleteAlias(alias);
+      await this.call('POST', `/domains/${enc(domain)}/forwarders`, body);
+    }
+  }
+
+  /** `DELETE /domains/{domain}/forwarders/{alias}`. Gone already is done. */
+  async deleteAlias(alias: string) {
+    const { user, domain } = splitAddress(alias);
+    await this.ignoring('not_found', this.call('DELETE', `/domains/${enc(domain)}/forwarders/${enc(user)}`));
+  }
+
   /** `GET .../email-accounts/{user}`: `suspended` (MXRoute's own flag, not ours) and `quota` in MB, 0 being unlimited. */
   async getMailbox(address: string) {
     const { user, domain } = splitAddress(address);

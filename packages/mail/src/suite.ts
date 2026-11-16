@@ -44,12 +44,25 @@ async function suiteApi<T>(method: string, path: string, body?: unknown): Promis
   return (await res.json()) as T;
 }
 
+/** The person's hosted addresses in an organization (platform.md §3.2): the one they go by, the others that deliver to
+ * their mailbox (aliases are removable), and the domains a new alias can be on. */
+export interface SuiteAddresses {
+  address: string | null;
+  others: { address: string; removable: boolean }[];
+  domains: string[];
+}
+
+const myAddresses = (organizationId: string) => `/v1/workspaces/${encodeURIComponent(organizationId)}/me/addresses`;
+
 export const suite = {
   me: () => suiteApi<SuiteUser>('GET', '/v1/me'),
   organizations: async () => (await suiteApi<{ workspaces: SuiteOrganization[] }>('GET', '/v1/me/workspaces')).workspaces,
   accounts: async () => (await suiteApi<{ accounts: SuiteAccount[] }>('GET', '/v1/me/accounts')).accounts,
   /** The linked mailbox the person goes by in the organization (platform.md §3.2), or null for none. */
   setAddress: (organizationId: string, address: string | null) => suiteApi<{ account: SuiteAccount }>('PUT', `/v1/workspaces/${encodeURIComponent(organizationId)}/me/address`, { address }),
+  addresses: (organizationId: string) => suiteApi<SuiteAddresses>('GET', myAddresses(organizationId)),
+  addAddress: (organizationId: string, address: string) => suiteApi<SuiteAddresses>('POST', myAddresses(organizationId), { address }),
+  removeAddress: (organizationId: string, address: string) => suiteApi<SuiteAddresses>('DELETE', `${myAddresses(organizationId)}/${encodeURIComponent(address)}`),
   setStatus: (patch: { statusEmoji: string; statusText: string; statusSuppressAlerts: boolean }) => suiteApi<SuiteUser>('PATCH', '/v1/me', patch),
   logout: () => suiteApi<{ ok: true }>('POST', '/v1/auth/logout', {}),
 };

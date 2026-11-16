@@ -259,6 +259,15 @@ export const ACCOUNT_STATES = ['requested', 'mailbox_ready', 'calendars_ready', 
 export type AccountState = (typeof ACCOUNT_STATES)[number];
 
 /** One principal in one organization (§3.3). Mail and Calendar are keyed by `id`. */
+/** An account's hosted addresses (platform.md §3.2): the one it goes by, and the others that deliver to its mailbox. The
+ * mailbox's own address (the one it was made with) cannot be removed; aliases can. */
+export interface AccountAddressesDTO {
+  address: string | null;
+  others: { address: string; removable: boolean }[];
+  /** The domains a new alias can be on: the organization's own with mail on, and for an agent its platform one too. */
+  domains: string[];
+}
+
 export interface AccountDTO {
   id: string;
   principalId: string;

@@ -13,6 +13,7 @@ export interface ProvisioningDeps {
     setState(accountId: string, state: AccountDTO['state'], statusMessage?: string | null): Promise<void>;
     setHosted(accountId: string, hosted: boolean): Promise<void>;
     setDomainAtProvider(domain: string): Promise<void>;
+    dropAliases(accountId: string): Promise<void>;
   };
   mail: {
     hosted(account: AccountDTO): Promise<{ id: string; email: string } | null>;
@@ -51,8 +52,10 @@ export function classify(err: unknown): 'retry' | 'stop' | 'throw' {
 /** The account's mailbox at the provider and its row in the Mail object; the domain made first. */
 async function mailboxStep(t: ProvisioningTarget, deps: ProvisioningDeps): Promise<void> {
   const { account, domain } = t;
-  const address = account.address;
-  if (!address) throw new ProviderError('bad_request', `${account.displayName} has no address`);
+  // The mailbox is made with, and logs in as, the address it was first given (its domain is `t.domain`); mail is sent as
+  // the one the account goes by (§3.2).
+  const address = t.mailboxAddress ?? account.address;
+  if (!address || !account.address) throw new ProviderError('bad_request', `${account.displayName} has no address`);
   if (!domain) throw new ProviderError('bad_request', `the domain of ${address} is not one of the organization's`);
   if (!domain.verified) throw new ProviderError('bad_request', `the domain ${domain.domain} is not verified yet`);
   if (!t.domainAtProvider) {
@@ -77,7 +80,7 @@ async function mailboxStep(t: ProvisioningTarget, deps: ProvisioningDeps): Promi
     if (box.exists) await deps.provider.setPassword(address, password);
     else await deps.provider.createMailbox({ address, displayName: t.fromName ?? account.displayName, password, quotaBytes: DEFAULT_DOMAIN_LIMITS.quotaBytes });
     const settings = deps.provider.mailSettings(address);
-    await deps.mail.put(account, { email: address, displayName: t.fromName ?? account.displayName, imap: settings.imap, smtp: settings.smtp, password });
+    await deps.mail.put(account, { email: account.address, displayName: t.fromName ?? account.displayName, imap: settings.imap, smtp: settings.smtp, password });
   }
   await deps.directory.setHosted(account.id, true);
 }
@@ -106,7 +109,7 @@ export async function runMessage(msg: ProvisioningMessage, deps: ProvisioningDep
       const password = (deps.password ?? mailboxPassword)();
       await deps.provider.setPassword(mailbox, password);
       const settings = deps.provider.mailSettings(mailbox);
-      await deps.mail.put(account, { email: mailbox, displayName: account.displayName, imap: settings.imap, smtp: settings.smtp, password });
+      await deps.mail.put(account, { email: account.address ?? mailbox, displayName: account.displayName, imap: settings.imap, smtp: settings.smtp, password });
     }
     return;
   }
@@ -115,6 +118,8 @@ export async function runMessage(msg: ProvisioningMessage, deps: ProvisioningDep
     // once, with their native calendar, when hosted mail left the platform subdomain (decision_log 2026-11-15).
     const unhosted = account.kind === 'native' && !account.address && account.state !== 'removed';
     if (account.state !== 'removed' && account.kind !== 'guest' && !unhosted) return;
+    for (const alias of t.aliases ?? []) await deps.provider.deleteAlias(alias).catch(missing);
+    if (t.aliases?.length) await deps.directory.dropAliases(account.id);
     if (mailbox) await deps.provider.deleteMailbox(mailbox).catch(missing);
     await deps.mail.clear(account);
     if (unhosted) await deps.calendar.dropNative(account);

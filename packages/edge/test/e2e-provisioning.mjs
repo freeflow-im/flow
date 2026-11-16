@@ -56,7 +56,7 @@ await new Promise(res=>doh.listen(Number(process.env.DOH_PORT||18898),'127.0.0.1
 const D=`/v1/workspaces/${W}/domains`;
 r=await api(A.token,'POST',D,{domain:DOM});vtok=r.j.records?.find(x=>x.purpose==='verification')?.value??'';t('Ann adds a domain of her own',r.s===201&&!!vtok,r.s+' '+JSON.stringify(r.j).slice(0,120));
 r=await api(A.token,'POST',`${D}/${DOM}/verify`);t('and verifies it',r.s===200&&r.j.verified===true,r.s+' '+JSON.stringify(r.j).slice(0,120));
-r=await api(A.token,'PATCH',`${D}/${DOM}`,{primary:true});t('and makes it primary',r.s===200&&r.j.primary===true,r.s+' '+JSON.stringify(r.j).slice(0,120));
+r=await api(A.token,'GET',D);t('verifying made it primary, her first domain of her own (decision_log 2026-11-16)',r.j.domains?.find(d=>d.domain===DOM)?.primary===true,JSON.stringify(r.j.domains?.map(d=>[d.domain,d.primary])));
 r=await api(Bo.token,'GET','/v1/me/accounts');t('primary without mail: Bob still has no address',r.j.accounts?.find(a=>a.organizationId===W)?.address===null,JSON.stringify(r.j.accounts).slice(0,140));
 r=await api(A.token,'POST',`/v1/workspaces/${W}/created-members`,{displayName:'Cy',username:'cy',domain:DOM,backupEmail:`prov-cy-${tag}@example.com`});t('Create member refuses a domain without mail',r.s===400&&r.j.error?.code==='domain_no_mail',r.s+' '+JSON.stringify(r.j).slice(0,120));
 r=await api(A.token,'POST',`${D}/${DOM}/dkim`);t('Ann turns mail on (DKIM)',r.s===200&&!!r.j.record,r.s+' '+JSON.stringify(r.j).slice(0,120));
@@ -110,15 +110,36 @@ t('Ann\'s inbox lists the agent\'s reply',!!got&&got.from?.address===bot.a?.addr
 r=await api(Bo.token,'POST',`/v1/workspaces/${W}/provision`,{});t('a member cannot send everyone to be provisioned',r.s===403,r.s);
 r=await api(A.token,'POST',`/v1/workspaces/${W}/provision`,{});t('everyone has a mailbox: provision queues 0',r.s===200&&r.j.queued===0,r.s+' '+JSON.stringify(r.j));
 
-// Removal suspends the mailbox at the provider; a rejoin resumes it.
-const bobAddr=bob.a?.address;
+// Addresses (platform.md §3.2, decision_log 2026-11-16): an alias, and a changed address that mail is sent as; the mailbox
+// keeps logging in as the address it was made with.
+const AP=`/v1/workspaces/${W}/accounts/${bob.a?.id}`;
+r=await api(Bo.token,'POST',`${AP}/addresses`,{address:`sales@${DOM}`});t('a member cannot use the admin route',r.s===403,r.s);
+r=await api(Bo.token,'POST',`/v1/workspaces/${W}/me/addresses`,{address:`bobby@${DOM}`});t('but adds an alias of his own',r.s===201&&r.j.others?.some(o=>o.address===`bobby@${DOM}`&&o.removable)&&r.j.domains?.includes(DOM),r.s+' '+JSON.stringify(r.j).slice(0,140));
+r=await api(Bo.token,'DELETE',`/v1/workspaces/${W}/me/addresses/${encodeURIComponent(`bobby@${DOM}`)}`);t('and removes it',r.s===200&&!r.j.others?.some(o=>o.address===`bobby@${DOM}`),r.s+' '+JSON.stringify(r.j).slice(0,140));
+r=await api(AGT,'POST',`/v1/workspaces/${W}/me/addresses`,{address:`botty@${DOM}`});t('an agent cannot add its own',r.s===403,r.s+' '+JSON.stringify(r.j).slice(0,100));
+r=await api(A.token,'POST',`${AP}/addresses`,{address:`Sales@${DOM}`});t('Ann gives Bob an alias',r.s===201&&r.j.address===`bob@${DOM}`&&r.j.others?.[0]?.address===`sales@${DOM}`,r.s+' '+JSON.stringify(r.j).slice(0,140));
+r=await api(A.token,'POST',`/v1/workspaces/${W}/accounts/${ann?.id}/addresses`,{address:`sales@${DOM}`});t('nobody else can have it',r.s===409&&r.j.error?.code==='address_taken',r.s+' '+JSON.stringify(r.j).slice(0,120));
+r=await api(A.token,'PUT',`${AP}/address`,{address:`robert@${DOM}`});t('Ann changes Bob\'s address: his small mailbox moves to a new one',r.s===200&&r.j.account?.address===`robert@${DOM}`&&r.j.moved?.messages>=1&&r.j.addresses?.others?.some(o=>o.address===`bob@${DOM}`&&o.removable),r.s+' '+JSON.stringify(r.j).slice(0,200));
+r=await api(Bo.token,'GET','/v1/mail/accounts');const bobBox2=r.j.accounts?.[0];t('his Mail is the new mailbox, logging in as the new address',r.j.accounts?.length===1&&bobBox2?.email===`robert@${DOM}`&&bobBox2.imap?.username===`robert@${DOM}`&&bobBox2.smtp?.username===`robert@${DOM}`,JSON.stringify(r.j.accounts).slice(0,170));
+r=await api(Bo.token,'GET',`/v1/mail/accounts/${bobBox2?.id}/messages?folder=Sent&limit=20`);t('his mail came along (the one he sent Ann)',r.s===200&&r.j.messages?.some(m=>m.subject===SUBJECT),r.s+' '+JSON.stringify(r.j).slice(0,140));
+{const calls=await providerLog();t('the old mailbox is deleted and its address forwards to the new one',calls.some(c=>c.method==='deleteMailbox'&&c.args[0]===`bob@${DOM}`)&&calls.some(c=>c.method==='createAlias'&&c.args[0]===`bob@${DOM}`&&c.args[1]===`robert@${DOM}`)&&calls.some(c=>c.method==='createAlias'&&c.args[0]===`sales@${DOM}`&&c.args[1]===`robert@${DOM}`),JSON.stringify(calls.filter(c=>/Alias|deleteMailbox/.test(c.method))).slice(0,200));}
+r=await api(A.token,'GET',`/v1/workspaces/${W}/members`);t('the members list takes it',(r.j.members??[]).find(m=>m.userId===Bo.user.id)?.address===`robert@${DOM}`,JSON.stringify((r.j.members??[]).map(m=>m.address)));
+const SUBJ2=`From Robert ${tag}`;
+r=await api(Bo.token,'POST',`/v1/mail/accounts/${bobBox2?.id}/send`,{to:[{name:'Ann',address:ann?.address}],subject:SUBJ2,text:'New mailbox, new address.'});t('he sends again',r.s===200&&r.j.ok,r.s+' '+JSON.stringify(r.j).slice(0,140));
+t0=Date.now();got=null;while(!got&&Date.now()-t0<20000){r=await api(A.token,'GET',`/v1/mail/accounts/${annBox?.id}/messages?folder=INBOX&limit=20`);got=r.j.messages?.find(m=>m.subject===SUBJ2);if(!got)await sleep(500);}
+t('Ann gets it from his new address',!!got&&got.from?.address===`robert@${DOM}`,`${Date.now()-t0} ms ${JSON.stringify(got??r.j).slice(0,140)}`);
+r=await api(A.token,'DELETE',`${AP}/addresses/${encodeURIComponent(`robert@${DOM}`)}`);t('the address he goes by cannot be removed',r.s===409&&r.j.error?.code==='address_in_use',r.s+' '+JSON.stringify(r.j).slice(0,120));
+r=await api(A.token,'DELETE',`${AP}/addresses/${encodeURIComponent(`sales@${DOM}`)}`);t('an alias can',r.s===200&&!r.j.others?.some(o=>o.address===`sales@${DOM}`),r.s+' '+JSON.stringify(r.j).slice(0,140));
+
+// Removal suspends the mailbox at the provider; a rejoin resumes it. Both go by his mailbox, the one he moved to.
+const bobAddr=`robert@${DOM}`;
 r=await api(null,'GET','/v1/admin/mailprovider/log');t('the provider log wants the secret',r.s===403,r.s);
 let calls=await providerLog();t('the provider made the domain once and three mailboxes',calls.filter(c=>c.method==='createDomain'&&c.args[0]===`prov-${tag}.freeflow.im`).length===1&&[ann?.address,bobAddr,bot.a?.address].every(x=>calls.some(c=>c.method==='createMailbox'&&c.args[0]?.address===x)),JSON.stringify(calls.map(c=>c.method)).slice(0,160));
 t('no password reaches the log',!JSON.stringify(calls).includes('"password":"')||JSON.stringify(calls).match(/"password":"([^"]*)"/g).every(x=>x==='"password":"[redacted]"'));
 r=await api(A.token,'DELETE',`/v1/workspaces/${W}/members/${Bo.user.id}`);t('Ann removes Bob',r.s===200,r.s);
 t0=Date.now();let suspended;while(!suspended&&Date.now()-t0<10000){calls=await providerLog();suspended=calls.find(c=>c.method==='setMailboxState'&&c.args[0]===bobAddr&&c.args[1]==='suspended');if(!suspended)await sleep(250);}
 t('the provider suspends Bob\'s mailbox',!!suspended,`${Date.now()-t0} ms`);
-r=await api(Bo.token,'GET','/v1/me/accounts');t('his account is removed, its address kept',r.j.accounts?.find(a=>a.organizationId===W)?.state==='removed'&&r.j.accounts.find(a=>a.organizationId===W).address===bobAddr,JSON.stringify(r.j.accounts).slice(0,140));
+r=await api(Bo.token,'GET','/v1/me/accounts');t('his account is removed, its address kept',r.j.accounts?.find(a=>a.organizationId===W)?.state==='removed'&&r.j.accounts.find(a=>a.organizationId===W).address===`robert@${DOM}`,JSON.stringify(r.j.accounts).slice(0,140));
 r=await api(A.token,'POST',`/v1/workspaces/${W}/invites`,{email:`prov-bob-${tag}@example.com`});r=await api(Bo.token,'POST','/v1/invites/accept',{token:(r.j.inviteUrl??'').split('/').pop()});
 t0=Date.now();let resumed;while(!resumed&&Date.now()-t0<10000){calls=await providerLog();resumed=calls.find(c=>c.method==='setMailboxState'&&c.args[0]===bobAddr&&c.args[1]==='enabled');if(!resumed)await sleep(250);}
 t('Bob rejoins: his mailbox is resumed, not made again',!!resumed&&calls.filter(c=>c.method==='createMailbox'&&c.args[0]?.address===bobAddr).length===1,`${Date.now()-t0} ms`);

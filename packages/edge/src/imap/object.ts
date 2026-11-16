@@ -2086,6 +2086,80 @@ export class Mail extends DurableObject<MailEnv> {
     return { id };
   }
 
+  /** A fresh, unpooled IMAP connection, for a copy between two mailboxes. */
+  private async connectOnce(imap: ServerSettings, user: string, password: string): Promise<ImapFlow> {
+    const client = new ImapFlow(imapOptions(imap, user, password));
+    client.on('error', (err: Error) => console.warn(`[mail] imap copy: ${err.message}`));
+    await client.connect();
+    return client;
+  }
+
+  /** What the hosted mailbox holds: its messages over every folder, or null when it has none (platform.md §3.2: an
+   * address change moves a small mailbox to a new one). */
+  async hostedSize(account: AccountDTO): Promise<{ messages: number } | null> {
+    this.provisioningOwner(account);
+    const r = this.sql.exec<AccountRow & Record<string, SqlStorageValue>>("SELECT * FROM accounts WHERE kind = 'hosted' LIMIT 1").toArray()[0];
+    if (!r) return null;
+    const imap = JSON.parse(r.imap) as ServerSettings;
+    const c = await this.connectOnce(imap, imap.username || r.email, this.password(r));
+    try {
+      const folders = await c.list({ statusQuery: { messages: true } });
+      return { messages: folders.reduce((n, f) => n + (f.status?.messages ?? 0), 0) };
+    } finally {
+      await c.logout().catch(() => {});
+    }
+  }
+
+  /**
+   * Copies every folder of the hosted mailbox into a new one (flags and dates kept), then makes the new one the hosted
+   * mailbox: the address change of a small mailbox (platform.md §3.2). Over `maxBytes` the copy stops, the new mailbox
+   * is left for the caller to delete, and nothing here changes (`too_big`). The old mailbox is not touched.
+   */
+  async moveHosted(account: AccountDTO, to: HostedMailbox, maxBytes: number): Promise<{ ok: true; messages: number } | { ok: false; reason: 'too_big' | 'failed'; message: string }> {
+    this.provisioningOwner(account);
+    const r = this.sql.exec<AccountRow & Record<string, SqlStorageValue>>("SELECT * FROM accounts WHERE kind = 'hosted' LIMIT 1").toArray()[0];
+    if (!r) return { ok: false, reason: 'failed', message: 'no hosted mailbox' };
+    const imap = JSON.parse(r.imap) as ServerSettings;
+    let src: ImapFlow | null = null, dst: ImapFlow | null = null;
+    let messages = 0, bytes = 0;
+    try {
+      src = await this.connectOnce(imap, imap.username || r.email, this.password(r));
+      dst = await this.connectOnce(to.imap, to.imap.username || to.email, to.password);
+      for (const f of await src.list()) {
+        if (f.flags?.has('\\Noselect') || f.flags?.has('\\NonExistent')) continue;
+        if (f.path.toUpperCase() !== 'INBOX') await dst.mailboxCreate(f.path).catch(() => undefined);
+        const box = await src.mailboxOpen(f.path, { readOnly: true });
+        if (!box.exists) continue;
+        for await (const m of src.fetch('1:*', { source: true, flags: true, internalDate: true })) {
+          if (!m.source) continue;
+          bytes += m.source.length;
+          if (bytes > maxBytes) return { ok: false, reason: 'too_big', message: `more than ${Math.round(maxBytes / 2 ** 20)} MB of mail` };
+          await dst.append(f.path, m.source, [...(m.flags ?? [])].filter((x) => x !== '\\Recent'), m.internalDate as Date | undefined);
+          messages++;
+        }
+      }
+    } catch (err) {
+      return { ok: false, reason: 'failed', message: (err as Error).message };
+    } finally {
+      await src?.logout().catch(() => {});
+      await dst?.logout().catch(() => {});
+    }
+    // The new mailbox is the hosted one from now on: a new row, so nothing cached for the old one's UIDs is kept.
+    this.dropAccount(r.id);
+    await this.putHosted(account, to);
+    return { ok: true, messages };
+  }
+
+  /** The account's address changed (platform.md §3.2): the hosted mailbox sends as the new one. Its login (the IMAP and
+   * SMTP username) stays the address it was made with. No row (not made yet) is nothing to do. */
+  async renameHosted(account: AccountDTO, email: string): Promise<void> {
+    this.provisioningOwner(account);
+    const r = this.sql.exec<{ id: string }>("SELECT id FROM accounts WHERE kind = 'hosted' LIMIT 1").toArray()[0];
+    if (!r) return;
+    this.sql.exec('UPDATE accounts SET email = ? WHERE id = ?', email, r.id);
+    this.forget(r.id);
+  }
+
   /** The hosted mailbox is gone at the provider (deleted after the retention period): its row goes too. */
   async clearHosted(account: AccountDTO): Promise<void> {
     this.provisioningOwner(account);

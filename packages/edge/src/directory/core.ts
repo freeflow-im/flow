@@ -1,6 +1,6 @@
 // Identity: accounts, sessions and sign-in. Ported from packages/server/src/services/auth.ts and oauthAccounts.ts, with
 // the same rules and the same mail. It runs over any `SqlStorage`-shaped database, so tests can use node:sqlite.
-import type { AccountDTO, AccountKind, AccountSetupInfoDTO, AgentMode, PendingSetupDTO, AgentRuntime, HostedRuntimeDTO, SponsoredAgentDTO, UsableAgentDTO, AccountRole, AccountState, AuthResponse, DnsRecordDTO, DomainDTO, DomainKind, OAuthIdentityDTO, RegisterResponse, UserDTO } from '@flow/shared';
+import type { AccountAddressesDTO, AccountDTO, AccountKind, AccountSetupInfoDTO, AgentMode, PendingSetupDTO, AgentRuntime, HostedRuntimeDTO, SponsoredAgentDTO, UsableAgentDTO, AccountRole, AccountState, AuthResponse, DnsRecordDTO, DomainDTO, DomainKind, OAuthIdentityDTO, RegisterResponse, UserDTO } from '@flow/shared';
 import { ApiError, badRequest, conflict, forbidden, notFound, unauthorized } from '../errors';
 import { hashPassword, verifyPassword } from './passwords';
 import { DIRECTORY_MIGRATIONS } from './schema';
@@ -10,6 +10,8 @@ import { PLATFORM_DOMAIN, localPart, organizationDomain, uniqueAddress } from '.
 import { checkDomain, checkRecords, dohResolver, normalizeDomain, recordsFor, type Resolve } from './dns';
 import { DEFAULT_DOMAIN_LIMITS, ProviderError, noneMailProvider, type DkimRecord, type MailProvider } from '../mailprovider/index';
 import { generateDkimKey } from '../mailprovider/dkim';
+import { mailboxPassword } from '../provisioning/steps';
+import type { HostedMailbox } from '../imap/object';
 import { encryptBlob } from '../org/crypto/index';
 import { HandoffApprove, HandoffExchange, HandoffStart, parseBody, pkceChallenge, validateContext, type HandoffContext, type HandoffPolicy } from './authHandoff';
 
@@ -48,11 +50,13 @@ export interface ProvisioningTarget {
   slug: string;
   hosted: boolean;
   removedAt: string | null;
-  /** The hosted mailbox's address: the account's own, or, for a guest, the one it had when it became a guest (null once
-   * the mailbox is deleted). Suspend, resume and delete go by it. */
+  /** The hosted mailbox's address: the one it was made with, which is the account's own unless the address was changed
+   * (§3.2) or the account became a guest (null once the mailbox is deleted). Suspend, resume and delete go by it. */
   mailboxAddress: string | null;
   /** The name mail from the mailbox carries: the account's, or for a person's assistant "Ada 🤖 Scott" (agents.md §1.1). */
   fromName?: string;
+  /** The account's aliases (forwarders to the mailbox), deleted with it. */
+  aliases?: string[];
 }
 
 /** One of an organization's domains, as the directory keeps it. */
@@ -371,6 +375,172 @@ export class DirectoryCore {
     return this.accountById(accountId)!;
   }
 
+  // ---- aliases and changed addresses (platform.md §3.2, decision_log 2026-11-16) ----------------------------------
+
+  /** The account's address and the others that deliver to its mailbox. */
+  addressesOf(accountId: string): AccountAddressesDTO {
+    const row = this.rows('SELECT * FROM accounts WHERE id = ?', accountId)[0];
+    if (!row) throw notFound('account not found');
+    const address = (row.address as string | null) ?? null;
+    const same = (a: string) => !!address && a.toLowerCase() === address.toLowerCase();
+    const mailbox = row.hosted_at != null ? ((row.mailbox_address as string | null) ?? address) : null;
+    const others: AccountAddressesDTO['others'] = mailbox && !same(mailbox) ? [{ address: mailbox, removable: false }] : [];
+    for (const a of this.rows('SELECT address FROM aliases WHERE account_id = ? ORDER BY created_at, address', accountId)) {
+      if (!same(a.address as string)) others.push({ address: a.address as string, removable: true });
+    }
+    const agent = !!this.userById(row.user_id as string)?.is_agent;
+    const domains = mailbox ? this.domainsOf(row.organization_id as string)
+      .filter((d) => d.verified && d.providerAt != null && (d.kind === 'own' || agent))
+      .sort((a, b) => Number(b.primary) - Number(a.primary) || a.domain.localeCompare(b.domain)).map((d) => d.domain) : [];
+    return { address, others, domains };
+  }
+
+  /** A native account of the organization with its hosted mailbox made, and that mailbox's address. */
+  private mailboxOf(organizationId: string, accountId: string): { row: Row; mailbox: string } {
+    const row = this.rows('SELECT * FROM accounts WHERE id = ? AND organization_id = ?', accountId, organizationId)[0];
+    if (!row) throw notFound('account not found');
+    const mailbox = (row.mailbox_address as string | null) ?? (row.address as string | null);
+    if (row.kind !== 'native' || row.hosted_at == null || row.state === 'removed' || !mailbox) {
+      throw conflict('no_mailbox', 'Only a member with a hosted mailbox can have its addresses changed.');
+    }
+    return { row, mailbox };
+  }
+
+  /** A new address for the account: a valid local part, on a domain of the organization with mail on (a person's on one
+   * of its own), and free. */
+  private freeAddress(row: Row, raw: string): string {
+    const address = raw.trim().toLowerCase();
+    const at = address.lastIndexOf('@');
+    const local = address.slice(0, at), domain = address.slice(at + 1);
+    if (at < 1 || !USERNAME.test(local) || local.includes('..')) {
+      throw badRequest('invalid_username', 'The part before @ is 1–64 letters, digits, dots, hyphens or underscores, starting and ending with a letter or digit.');
+    }
+    if (RESERVED_LOCALS.has(local)) throw badRequest('username_reserved', `"${local}" is reserved for the mail system.`);
+    const d = this.domainRow('domain = ? AND organization_id = ?', domain, row.organization_id)[0];
+    if (!d) throw badRequest('invalid_domain', `${domain} is not one of this organization's domains.`);
+    const agent = !!this.userById(row.user_id as string)?.is_agent;
+    if (!d.verified || d.providerAt == null || (d.kind === 'platform' && !agent)) {
+      throw badRequest('domain_no_mail', `${domain} has no mail for people; turn on mail for a domain of your own.`);
+    }
+    if (this.addressTaken(address) || this.userByEmail(address)) throw conflict('address_taken', `${address} is already taken.`);
+    return address;
+  }
+
+  /** Adds an alias: a forwarder at the provider to the account's mailbox. The address is claimed before the provider is
+   * asked, and let go if it refuses. */
+  async addAlias(organizationId: string, accountId: string, raw: string): Promise<AccountAddressesDTO> {
+    const { row, mailbox } = this.mailboxOf(organizationId, accountId);
+    const address = this.freeAddress(row, raw);
+    this.sql.exec('INSERT INTO addresses (address, account_id) VALUES (?, ?)', address, accountId);
+    try {
+      await this.mailProvider().createAlias(address, mailbox);
+    } catch (err) {
+      this.sql.exec('DELETE FROM addresses WHERE address = ? AND account_id = ?', address, accountId);
+      providerFailure(err);
+    }
+    this.sql.exec('INSERT OR REPLACE INTO aliases (address, account_id, created_at) VALUES (?, ?, ?)', address, accountId, Date.now());
+    return this.addressesOf(accountId);
+  }
+
+  /** Removes an alias. The address the account goes by and its mailbox's own cannot be removed. */
+  async removeAlias(organizationId: string, accountId: string, raw: string): Promise<AccountAddressesDTO> {
+    const { row } = this.mailboxOf(organizationId, accountId);
+    const address = raw.trim().toLowerCase();
+    if (address === String(row.address ?? '').toLowerCase()) throw conflict('address_in_use', 'Choose another address to go by before removing this one.');
+    if (!this.rows('SELECT 1 FROM aliases WHERE address = ? AND account_id = ?', address, accountId).length) throw notFound(`${address} is not an alias of this account`);
+    try {
+      await this.mailProvider().deleteAlias(address);
+    } catch (err) {
+      providerFailure(err);
+    }
+    this.sql.exec('DELETE FROM aliases WHERE address = ?', address);
+    this.sql.exec('DELETE FROM addresses WHERE address = ? AND account_id = ?', address, accountId);
+    return this.addressesOf(accountId);
+  }
+
+  /**
+   * Changes the address the account goes by: one of its other addresses, or a new one, made an alias first. MXRoute
+   * cannot rename a mailbox, so the mailbox keeps the address it was made with, which still delivers, and mail is sent
+   * as the new one. The caller updates the Mail and Calendar objects and the member list (routes/addresses.ts).
+   */
+  async changeAddress(organizationId: string, accountId: string, raw: string): Promise<AccountDTO> {
+    const { row, mailbox } = this.mailboxOf(organizationId, accountId);
+    const address = raw.trim().toLowerCase();
+    const current = String(row.address ?? '').toLowerCase();
+    if (address === current) return this.accountById(accountId)!;
+    const ours = address === mailbox.toLowerCase() || this.rows('SELECT 1 FROM aliases WHERE address = ? AND account_id = ?', address, accountId).length > 0;
+    if (!ours) await this.addAlias(organizationId, accountId, address);
+    this.sql.exec('UPDATE accounts SET mailbox_address = COALESCE(mailbox_address, address) WHERE id = ?', accountId);
+    this.sql.exec('UPDATE accounts SET address = ? WHERE id = ?', address, accountId);
+    // The mailbox's own address needs no forwarder; keep `mailbox_address` only while they differ.
+    this.sql.exec('UPDATE accounts SET mailbox_address = NULL WHERE id = ? AND mailbox_address = address', accountId);
+    return this.accountById(accountId)!;
+  }
+
+  /**
+   * The first half of moving to a new mailbox (platform.md §3.2): a small mailbox changes address by being copied into
+   * a new one at the new address. The address is claimed (an alias of the account's becomes a mailbox: its forwarder
+   * goes first), and the new mailbox is made. Returns what the Mail object copies into, with the password, or null
+   * when the address needs no move (it is the mailbox's own already). `abortMove` undoes it; `finishMove` completes it.
+   */
+  async startMove(organizationId: string, accountId: string, raw: string): Promise<{ address: string; wasAlias: boolean; mailbox: HostedMailbox } | null> {
+    const { row, mailbox } = this.mailboxOf(organizationId, accountId);
+    const address = raw.trim().toLowerCase();
+    if (address === mailbox.toLowerCase()) return null;
+    const wasAlias = this.rows('SELECT 1 FROM aliases WHERE address = ? AND account_id = ?', address, accountId).length > 0;
+    if (!wasAlias) {
+      this.freeAddress(row, address);
+      this.sql.exec('INSERT INTO addresses (address, account_id) VALUES (?, ?)', address, accountId);
+    }
+    const provider = this.mailProvider();
+    const password = mailboxPassword();
+    try {
+      if (wasAlias) await provider.deleteAlias(address);
+      await provider.createMailbox({ address, displayName: row.display_name as string, password, quotaBytes: DEFAULT_DOMAIN_LIMITS.quotaBytes });
+    } catch (err) {
+      await this.abortMove(accountId, address, wasAlias, mailbox, false).catch(() => {});
+      providerFailure(err);
+    }
+    const settings = provider.mailSettings(address);
+    return { address, wasAlias, mailbox: { email: address, displayName: row.display_name as string, imap: settings.imap, smtp: settings.smtp, password } };
+  }
+
+  /** Undoes `startMove`: the new mailbox deleted (when it was made), the address let go, or an alias's forwarder made again. */
+  async abortMove(accountId: string, address: string, wasAlias: boolean, oldMailbox: string, made = true): Promise<void> {
+    const provider = this.mailProvider();
+    if (made) await provider.deleteMailbox(address).catch((err: Error) => console.error(`abort move ${address}: ${err.message}`));
+    if (wasAlias) await provider.createAlias(address, oldMailbox).catch((err: Error) => console.error(`abort move alias ${address}: ${err.message}`));
+    else this.sql.exec('DELETE FROM addresses WHERE address = ? AND account_id = ?', address, accountId);
+  }
+
+  /**
+   * The second half, once the Mail object has copied the mail and goes by the new mailbox: the account goes by the new
+   * address, the old mailbox is deleted, its address and every alias forward to the new one, and the old one stays an
+   * alias (removable). Returns the account.
+   */
+  async finishMove(organizationId: string, accountId: string, address: string): Promise<AccountDTO> {
+    const { mailbox: old } = this.mailboxOf(organizationId, accountId);
+    const provider = this.mailProvider();
+    this.sql.exec('UPDATE accounts SET address = ?, mailbox_address = NULL WHERE id = ?', address, accountId);
+    this.sql.exec('DELETE FROM aliases WHERE address = ?', address);
+    this.sql.exec('INSERT OR REPLACE INTO addresses (address, account_id) VALUES (?, ?)', address, accountId);
+    // The old mailbox goes before its address can be a forwarder (a mailbox and a forwarder cannot share a name).
+    await provider.deleteMailbox(old).catch((err: Error) => console.error(`move: delete ${old}: ${err.message}`));
+    this.sql.exec('INSERT OR REPLACE INTO aliases (address, account_id, created_at) VALUES (?, ?, ?)', old.toLowerCase(), accountId, Date.now());
+    for (const a of this.rows('SELECT address FROM aliases WHERE account_id = ?', accountId)) {
+      await provider.createAlias(a.address as string, address).catch((err: Error) => console.error(`move: alias ${a.address as string}: ${err.message}`));
+    }
+    return this.accountById(accountId)!;
+  }
+
+  /** The account's aliases, to delete at the provider with its mailbox, and their rows. */
+  dropAliases(accountId: string): string[] {
+    const list = this.rows('SELECT address FROM aliases WHERE account_id = ?', accountId).map((r) => r.address as string);
+    this.sql.exec('DELETE FROM aliases WHERE account_id = ?', accountId);
+    for (const a of list) this.sql.exec('DELETE FROM addresses WHERE address = ? AND account_id = ?', a, accountId);
+    return list;
+  }
+
   /** Whether people get hosted addresses in the organization (platform.md §3.2, decision_log 2026-11-15): its primary
    * domain is its own, with mail turned on. On the platform subdomain only agents have addresses. */
   peopleHosted(organizationId: string): boolean {
@@ -417,10 +587,10 @@ export class DirectoryCore {
        WHERE a.organization_id = ? AND a.kind = 'native' AND u.is_agent = 0 AND a.address LIKE '%@' || d.domain`, organizationId);
     for (const row of rows) {
       this.sql.exec(
-        `UPDATE accounts SET address = NULL, mailbox_address = ?, status_message = NULL,
+        `UPDATE accounts SET address = NULL, mailbox_address = COALESCE(mailbox_address, ?), status_message = NULL,
            state = CASE WHEN state IN ('requested', 'mailbox_ready', 'calendars_ready') THEN 'active' ELSE state END
          WHERE id = ?`, row.address, row.id);
-      this.sql.exec('DELETE FROM addresses WHERE account_id = ?', row.id);
+      this.sql.exec('DELETE FROM addresses WHERE account_id = ? AND address NOT IN (SELECT address FROM aliases WHERE account_id = ?)', row.id, row.id);
       this.enqueue('delete', organizationId, row.id as string);
     }
     return rows.map((r) => r.address as string);
@@ -514,7 +684,7 @@ export class DirectoryCore {
     const row = this.rows('SELECT * FROM accounts WHERE id = ?', accountId)[0];
     const account = this.accountById(accountId);
     if (!row || !account) return null;
-    const mailboxAddress = account.address ?? (row.mailbox_address as string | null) ?? null;
+    const mailboxAddress = (row.mailbox_address as string | null) ?? account.address ?? null;
     const domainName = mailboxAddress ? mailboxAddress.slice(mailboxAddress.lastIndexOf('@') + 1) : null;
     const domain = domainName ? this.domainRow('domain = ? AND organization_id = ?', domainName, account.organizationId)[0] ?? null : null;
     const atProvider = domain ? this.rows('SELECT provider_at FROM domains WHERE domain = ?', domain.domain)[0]?.provider_at != null : false;
@@ -523,6 +693,7 @@ export class DirectoryCore {
     return {
       account, domain, domainAtProvider: atProvider, slug: this.organizationSlug(account.organizationId),
       hosted: row.hosted_at != null, removedAt: row.removed_at != null ? iso(row.removed_at) : null, mailboxAddress, fromName,
+      aliases: this.rows('SELECT address FROM aliases WHERE account_id = ? ORDER BY address', accountId).map((r) => r.address as string),
     };
   }
 
@@ -578,8 +749,13 @@ export class DirectoryCore {
     return due.length;
   }
 
+  /** The account an address delivers to: the one it goes by, or another of its addresses (an alias, or its mailbox's own
+   * after the address was changed, §3.2). */
   accountByAddress(address: string): AccountDTO | null {
-    return this.accountRow('address = ?', address)[0] ?? null;
+    const own = this.accountRow('address = ?', address)[0];
+    if (own) return own;
+    const other = this.rows('SELECT account_id FROM addresses WHERE address = ?', address)[0];
+    return other ? this.accountById(other.account_id as string) : null;
   }
 
   /**
@@ -642,8 +818,9 @@ export class DirectoryCore {
       `UPDATE accounts SET kind = 'guest', address = NULL, mailbox_address = ?, kind_changed_at = ?, status_message = NULL,
          state = CASE WHEN state IN ('requested', 'mailbox_ready', 'calendars_ready') THEN 'active' ELSE state END
        WHERE id = ?`,
-      hosted ? row.address : null, Date.now(), row.id);
-    this.sql.exec('DELETE FROM addresses WHERE account_id = ?', row.id);
+      hosted ? (row.mailbox_address ?? row.address) : null, Date.now(), row.id);
+    // Its aliases stay with the kept mailbox, deleted with it (provisioning's `delete`).
+    this.sql.exec('DELETE FROM addresses WHERE account_id = ? AND address NOT IN (SELECT address FROM aliases WHERE account_id = ?)', row.id, row.id);
     // A removed account's mailbox is suspended already.
     if (hosted && row.state !== 'removed') this.enqueue('suspend', row.organization_id as string, row.id as string);
   }
@@ -1377,7 +1554,13 @@ export class DirectoryCore {
     const row = this.ownDomain(organizationId, domain);
     if (row.kind === 'platform') return { verified: true, found: [] };
     const check = await checkDomain(row.domain, row.verifyToken ?? '', this.resolver());
-    if (check.verified && !row.verified) this.sql.exec('UPDATE domains SET verified_at = ? WHERE domain = ?', Date.now(), row.domain);
+    if (check.verified && !row.verified) {
+      this.sql.exec('UPDATE domains SET verified_at = ? WHERE domain = ?', Date.now(), row.domain);
+      // The organization's first domain of its own becomes primary when it is verified (decision_log 2026-11-16).
+      if (!this.rows("SELECT 1 FROM domains WHERE organization_id = ? AND kind = 'own' AND is_primary = 1", organizationId).length) {
+        this.setPrimaryDomain(organizationId, row.domain);
+      }
+    }
     this.domainStatus.delete(row.domain);
     return { verified: check.verified || row.verified, found: check.found };
   }

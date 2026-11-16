@@ -888,6 +888,10 @@ export type SetAccountKindBody = z.infer<typeof SetAccountKindBody>;
 export const SetLinkedAddressBody = z.object({ address: z.string().trim().toLowerCase().email().max(320).nullable() });
 export type SetLinkedAddressBody = z.infer<typeof SetLinkedAddressBody>;
 
+/** POST /v1/workspaces/:id/accounts/:accountId/addresses (an alias) and PUT .../address (the address it goes by). */
+export const AccountAddressBody = z.object({ address: z.string().trim().toLowerCase().email().max(254) });
+export type AccountAddressBody = z.infer<typeof AccountAddressBody>;
+
 /** POST /v1/workspaces/:id/accounts/kind: every account whose role is `member` made a guest; owners and admins keep theirs. */
 export const BulkAccountKindBody = z.object({
   kind: z.literal('guest'),

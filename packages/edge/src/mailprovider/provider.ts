@@ -36,6 +36,11 @@ export interface MailProvider {
   setMailboxState(address: string, state: MailboxState): Promise<void>;
   deleteMailbox(address: string): Promise<void>;
   getMailbox(address: string): Promise<{ exists: boolean; state?: string; quotaBytes?: number }>;
+  /** Makes `alias` deliver to the mailbox `mailbox` (on the same provider): an extra address, or a changed one that the
+   * mailbox sends as. An existing alias is pointed at `mailbox`. */
+  createAlias(alias: string, mailbox: string): Promise<void>;
+  /** Removes an alias. Gone already is done. */
+  deleteAlias(alias: string): Promise<void>;
 }
 
 /** `pending`: the provider cannot do it yet for a reason outside it that time may fix, such as its ownership TXT not being

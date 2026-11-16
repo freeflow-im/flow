@@ -168,7 +168,8 @@ The directory holds the organization row, its slugs and domains. The Org object 
 ### 3.2 Domains and addresses
 
 - An organization registers one or more domains and verifies each with a DNS record. One is primary. An
-  organization with no domain of its own gets `<slug>.freeflow.im`.
+  organization with no domain of its own gets `<slug>.freeflow.im`. Its first domain of its own becomes primary when
+  it is verified (decision_log 2026-11-16); a later one becomes primary only when an admin makes it so.
 - **Who gets a hosted address** (operator ruling, decision_log 2026-11-15). Agents always: on the primary domain, which
   is `<slug>.freeflow.im` until a custom domain is made primary. People only on a custom domain with mail turned on;
   on the platform subdomain a person has no hosted address, mailbox or native calendar. When mail is turned on for the
@@ -177,6 +178,17 @@ The directory holds the organization row, its slugs and domains. The Org object 
 - **A person's linked address.** A person without a hosted address may pick one of their linked mailboxes as their
   address in the workspace; it is shown and written to like a hosted one. It is never the login email. Linked
   addresses are kept per account, not in `addresses`: two workspaces may each have a member linking the same mailbox.
+- **Aliases and changed addresses** (decision_log 2026-11-16). An owner or admin can give a member with a hosted
+  mailbox more addresses (aliases), each a forwarder at the mail provider to the mailbox, and can make any of them
+  the address the member goes by. A person can add and remove their own aliases (not change the address they go by;
+  an agent neither). A person's are on the organization's own domains with mail on; an agent's may also
+  be on the platform subdomain. MXRoute cannot rename a mailbox. A small mailbox (up to 200 messages and 50 MB)
+  therefore moves: a new mailbox is made at the new address, the mail is copied into it over IMAP (folders, flags and
+  dates kept), Mail switches to it, the old mailbox is deleted, and the old address and every alias forward to the new
+  one (the old address is then an ordinary, removable alias). A bigger mailbox keeps its mailbox: the new address is
+  an alias, the mailbox keeps the address it was made with (`accounts.mailbox_address`) as its login, mail is sent as
+  the new one, and the old one still delivers. The mailbox's own address cannot be removed; aliases can, and are deleted with the mailbox. Aliases
+  are kept in `aliases` and in `addresses`, so an address is still unique and finds its account.
 - A domain belongs to one organization. An address is therefore unique across the platform.
 - The directory keeps `addresses (address → account_id)`. Inbound mail routing, invitation delivery and the
   address completer resolve through it.

@@ -115,6 +115,20 @@ describe('MXRoute requests', () => {
     expect(paths(sent)).toEqual(['DELETE /domains/acme.test/email-accounts/gone', 'DELETE /domains/acme.test']);
   });
 
+  it('makes an alias as a forwarder to the mailbox, replacing one there already; deletes it, taking 404 as done', async () => {
+    const { sent, fn } = fakeFetch([{ status: 201 }, CONFLICT, { status: 204 }, { status: 201 }, NOT_FOUND]);
+    const p = make(fn);
+    await p.createAlias('Sales@acme.test', 'Ann@acme.test');
+    await p.createAlias('sales@acme.test', 'bob@acme.test');
+    await p.deleteAlias('gone@acme.test');
+    expect(paths(sent)).toEqual([
+      'POST /domains/acme.test/forwarders', 'POST /domains/acme.test/forwarders', 'DELETE /domains/acme.test/forwarders/sales',
+      'POST /domains/acme.test/forwarders', 'DELETE /domains/acme.test/forwarders/gone',
+    ]);
+    expect(sent[0]!.body).toEqual({ alias: 'Sales', destinations: ['ann@acme.test'] });
+    expect(sent[3]!.body).toEqual({ alias: 'sales', destinations: ['bob@acme.test'] });
+  });
+
   it('cannot be given a DKIM key: MXRoute makes its own', async () => {
     const p = make(fakeFetch().fn);
     expect(p.managesDkim).toBe(true);

@@ -150,6 +150,15 @@ export class OpenSrsMailProvider implements MailProvider {
   }
 
   /** delete_user (https://email.opensrs.guide/docs/delete_user). Gone already is done. */
+  /** Not built: OpenSRS keeps aliases on the mailbox (change_user's `aliases`), and it is not the provider in production. */
+  async createAlias(_alias: string, _mailbox: string): Promise<void> {
+    throw new ProviderError('bad_request', 'aliases are not supported with OpenSRS');
+  }
+
+  async deleteAlias(_alias: string): Promise<void> {
+    throw new ProviderError('bad_request', 'aliases are not supported with OpenSRS');
+  }
+
   async deleteMailbox(address: string) {
     await this.ignoring('not_found', this.call('delete_user', { user: address }));
   }
