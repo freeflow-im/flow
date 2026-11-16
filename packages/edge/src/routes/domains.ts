@@ -39,6 +39,10 @@ async function bodyOf<S extends ZodTypeAny>(c: C, schema: S): Promise<z.output<S
 
 const domainParam = (c: C) => decodeURIComponent(c.req.param('domain') ?? '').toLowerCase();
 
+/** Mail on, or a new primary domain, may give people addresses (platform.md §3.2): the member list takes them. */
+const syncAddresses = (c: C, id: string) => c.env.ORG.get(c.env.ORG.idFromName(id)).syncAddresses()
+  .catch((err: Error) => console.error(`address sync ${id}: ${err.message}`));
+
 domainRoutes.get('/v1/workspaces/:id/domains', async (c) => {
   const id = await adminOf(c as never);
   return c.json({ domains: await directory(c, 'describeDomains', id, c.req.query('refresh') === '1') });
@@ -62,6 +66,7 @@ domainRoutes.post('/v1/workspaces/:id/domains/:domain/verify', async (c) => {
 domainRoutes.post('/v1/workspaces/:id/domains/:domain/dkim', async (c) => {
   const id = await adminOf(c as never);
   const out = await directory(c, 'setDomainDkim', id, domainParam(c));
+  await syncAddresses(c, id);
   if (out.kind === 'platform') {
     const provider = await mailProviderFor(c.env).records(out.domain, { selector: out.selector, value: out.record.value });
     c.executionCtx.waitUntil(platformDns(c.env, provider).publish(recordsFor(out.domain, provider)).catch((err) => console.error(`platform dns ${out.domain}: ${(err as Error).message}`)));
@@ -73,6 +78,7 @@ domainRoutes.patch('/v1/workspaces/:id/domains/:domain', async (c) => {
   const id = await adminOf(c as never);
   await bodyOf(c, PatchDomainBody);
   const row = await directory(c, 'setPrimaryDomain', id, domainParam(c));
+  await syncAddresses(c, id);
   return c.json({ domain: row.domain, kind: row.kind, verified: row.verified, primary: row.primary });
 });
 

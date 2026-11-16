@@ -38,6 +38,8 @@ const lastLink = (param: string) => new RegExp(`[?]${param}=([A-Za-z0-9_-]+)`).e
 beforeEach(() => {
   sent = [];
   core = new DirectoryCore(nodeSql(), { webUrlBase: 'https://app.test', registrationEnabled: true, send: async (m) => void sent.push(m) });
+  // These tests cover addresses and accounts where people have them; `people's addresses (§3.2)` covers where they don't.
+  vi.spyOn(core, 'peopleHosted').mockReturnValue(true);
 });
 
 async function signUp(email = 'a@example.com', password = 'pw-pw-pw-pw') {
@@ -259,7 +261,7 @@ describe('accounts', () => {
   const join = (org: string, userId: string, role = 'member') => core.applyOrgChanges(org, [{ kind: 'join', id: org, user_id: userId, role, payload: null }]);
   const leave = (org: string, userId: string) => core.applyOrgChanges(org, [{ kind: 'leave', id: org, user_id: userId, role: null, payload: null }]);
 
-  it('backfills an account and an address for every membership, the first time it sees the migration', () => {
+  it('backfills an account for every membership, the first time it sees the migration; only agents get addresses (§3.2)', () => {
     const sql = nodeSql();
     const accountsAt = DIRECTORY_MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE accounts'));
     sql.exec('CREATE TABLE _migrations (n INTEGER PRIMARY KEY)');
@@ -274,12 +276,12 @@ describe('accounts', () => {
     }
     const c = new DirectoryCore(sql, { webUrlBase: 'https://app.test', registrationEnabled: true, send: async () => {} });
     const addresses = (u: string) => c.accountsOf(u).map((a) => a.address).sort();
-    expect(addresses('u1')).toEqual(['ann.smith@acme.freeflow.im', 'ann.smith@beta.freeflow.im']);
-    expect(addresses('u2')).toEqual(['ann.smith2@acme.freeflow.im']);
-    expect(addresses('u3')).toEqual(['jose@acme.freeflow.im']);
+    expect(addresses('u1')).toEqual([null, null]);
+    expect(addresses('u2')).toEqual([null]);
+    expect(addresses('u3')).toEqual([null]);
     expect(addresses('u4')).toEqual(['builder.bot@acme.freeflow.im']);
     expect(c.accountFor('u3', 'o1')).toMatchObject({ principalId: 'u3', organizationId: 'o1', displayName: 'José', role: 'admin', kind: 'native', state: 'active' });
-    expect(sql.exec('SELECT COUNT(*) AS n FROM addresses').toArray()[0]!.n).toBe(5);
+    expect(sql.exec('SELECT COUNT(*) AS n FROM addresses').toArray()[0]!.n).toBe(1);
     expect(c.organization('o1')).toEqual({ id: 'o1', slug: 'acme', ownerUserId: 'u1', policies: {} });
     expect(c.organization('o2')!.ownerUserId).toBeNull();
     c.backfillAccounts();
@@ -450,6 +452,7 @@ describe('domains (platform.md §3.2)', () => {
     txt = [];
     lookups = 0;
     core = new DirectoryCore(nodeSql(), { webUrlBase: 'https://app.test', registrationEnabled: true, send: async (m) => void sent.push(m), resolve });
+    vi.spyOn(core, 'peopleHosted').mockReturnValue(true);
   });
   const join = (org: string, userId: string, role = 'member') => core.applyOrgChanges(org, [{ kind: 'join', id: org, user_id: userId, role, payload: null }]);
 

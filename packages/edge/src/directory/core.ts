@@ -360,18 +360,75 @@ export class DirectoryCore {
     return asked === 'personal_agent' ? 'native' : (asked ?? 'native');
   }
 
+  /** Whether people get hosted addresses in the organization (platform.md §3.2, decision_log 2026-11-15): its primary
+   * domain is its own, with mail turned on. On the platform subdomain only agents have addresses. */
+  peopleHosted(organizationId: string): boolean {
+    return this.rows("SELECT 1 FROM domains WHERE organization_id = ? AND is_primary = 1 AND kind = 'own' AND provider_at IS NOT NULL", organizationId).length > 0;
+  }
+
+  /** Every person of the organization who is a member with no address gets one on the primary domain and is sent to be
+   * provisioned, once that domain gives people addresses (§3.2). Agents and existing addresses are left as they are.
+   * Returns how many. */
+  private hostPeople(organizationId: string): number {
+    if (!this.peopleHosted(organizationId)) return 0;
+    const rows = this.rows(
+      `SELECT a.id, a.user_id, a.display_name FROM accounts a JOIN users u ON u.id = a.user_id
+       WHERE a.organization_id = ? AND a.kind = 'native' AND a.address IS NULL AND u.is_agent = 0 AND a.state NOT IN ('removed', 'suspended')
+       ORDER BY a.created_at, a.id`, organizationId);
+    for (const row of rows) {
+      const user = this.userById(row.user_id as string);
+      if (!user) continue;
+      const address = this.newAddress(user, row.display_name as string, organizationId);
+      this.sql.exec('UPDATE accounts SET address = ? WHERE id = ?', address, row.id);
+      this.sql.exec('INSERT OR REPLACE INTO addresses (address, account_id) VALUES (?, ?)', address, row.id);
+      // An active account without a mailbox gets its mailbox and calendar and stays active (provisioning/steps.ts).
+      this.enqueue('provision', organizationId, row.id as string);
+    }
+    return rows.length;
+  }
+
+  /** `unhostPeople` for every organization; the ones where addresses were let go, with them. */
+  unhostAllPeople(): { organizationId: string; addresses: string[] }[] {
+    return this.rows('SELECT id FROM organizations ORDER BY id')
+      .map((o) => ({ organizationId: o.id as string, addresses: this.unhostPeople(o.id as string) }))
+      .filter((o) => o.addresses.length);
+  }
+
+  /**
+   * Takes hosted mail away from the organization's people on its platform subdomain (decision_log 2026-11-15): each
+   * loses its address, and its mailbox and native calendar are deleted now, not after a retention period. Agents keep
+   * theirs. The operator's one-time clean-up (`POST /v1/admin/accounts/unhost-people`); safe to run twice. Returns the
+   * addresses let go.
+   */
+  unhostPeople(organizationId: string): string[] {
+    const rows = this.rows(
+      `SELECT a.id, a.address, a.hosted_at FROM accounts a JOIN users u ON u.id = a.user_id JOIN domains d ON d.organization_id = a.organization_id AND d.kind = 'platform'
+       WHERE a.organization_id = ? AND a.kind = 'native' AND u.is_agent = 0 AND a.address LIKE '%@' || d.domain`, organizationId);
+    for (const row of rows) {
+      this.sql.exec(
+        `UPDATE accounts SET address = NULL, mailbox_address = ?, status_message = NULL,
+           state = CASE WHEN state IN ('requested', 'mailbox_ready', 'calendars_ready') THEN 'active' ELSE state END
+         WHERE id = ?`, row.address, row.id);
+      this.sql.exec('DELETE FROM addresses WHERE account_id = ?', row.id);
+      this.enqueue('delete', organizationId, row.id as string);
+    }
+    return rows.map((r) => r.address as string);
+  }
+
   private createAccount(userId: string, organizationId: string, role: string, displayName?: string, provision = true, kind?: AccountKind, chosenAddress?: string): void {
     const user = this.userById(userId);
     if (!user) return;
     const name = displayName || (user.display_name as string);
     const accountKind = this.defaultKind(organizationId, role, user, kind);
-    // A guest has no address (§3.3): an address with no mailbox behind it bounces. Nor has a personal agent (agents.md §2).
-    // A created member's address is the one the admin chose (createMember checked it is free).
-    const address = accountKind === 'guest' || accountKind === 'personal_agent' ? null : chosenAddress ?? this.newAddress(user, name, organizationId);
+    // A guest has no address (§3.3): an address with no mailbox behind it bounces. Nor has a personal agent (agents.md §2),
+    // nor a person while the organization's primary domain gives people none (§3.2). A created member's address is the
+    // one the admin chose (createMember checked it is free and on a domain that gives people addresses).
+    const addressless = accountKind === 'guest' || accountKind === 'personal_agent' || (!user.is_agent && !chosenAddress && !this.peopleHosted(organizationId));
+    const address = addressless ? null : chosenAddress ?? this.newAddress(user, name, organizationId);
     const id = newId();
-    // With a provider, a native account starts at the head of the state machine (§3.4); Chat and Docs work from there.
-    // A guest has nothing to provision and starts active.
-    const requested = provision && !!this.deps.provisioning && accountKind === 'native';
+    // With a provider, an account with an address starts at the head of the state machine (§3.4); Chat and Docs work
+    // from there. One without has nothing to provision and starts active.
+    const requested = provision && !!this.deps.provisioning && accountKind === 'native' && address != null;
     // An agent's sponsor here starts as its principal's; the member row's own sponsor follows on the join (applyOrgChanges).
     this.sql.exec('INSERT INTO accounts (id, user_id, organization_id, address, display_name, role, kind, sponsor_user_id, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       id, userId, organizationId, address, name, role, accountKind, user.is_agent ? ((user.sponsor_user_id as string | null) ?? null) : null, requested ? 'requested' : 'active', Date.now());
@@ -469,16 +526,19 @@ export class DirectoryCore {
     else this.sql.exec('UPDATE accounts SET hosted_at = NULL, mailbox_address = NULL WHERE id = ?', accountId);
   }
 
-  /** The domain is made at the provider, with its platform DNS written. */
+  /** The domain is made at the provider, with its platform DNS written. Mail turned on for an organization's primary
+   * domain of its own gives its people addresses there (§3.2). */
   setDomainAtProvider(domain: string): void {
     this.sql.exec('UPDATE domains SET provider_at = COALESCE(provider_at, ?) WHERE domain = ?', Date.now(), domain);
+    const org = this.rows('SELECT organization_id FROM domains WHERE domain = ?', domain)[0]?.organization_id as string | undefined;
+    if (org) this.hostPeople(org);
   }
 
   /** Every native account of the organization with no hosted mailbox, neither removed nor suspended, sent to be
    * provisioned (existing members, and any whose run stopped). Guests have no mailbox to make. Returns how many. */
   provisionMissing(organizationId: string): number {
     if (!this.deps.provisioning) throw conflict('hosted_mail_off', 'no mail provider is configured');
-    const missing = this.rows("SELECT id FROM accounts WHERE organization_id = ? AND kind = 'native' AND hosted_at IS NULL AND state NOT IN ('removed', 'suspended') ORDER BY created_at, id", organizationId);
+    const missing = this.rows("SELECT id FROM accounts WHERE organization_id = ? AND kind = 'native' AND address IS NOT NULL AND hosted_at IS NULL AND state NOT IN ('removed', 'suspended') ORDER BY created_at, id", organizationId);
     for (const a of missing) this.enqueue('provision', organizationId, a.id as string);
     return missing.length;
   }
@@ -487,7 +547,7 @@ export class DirectoryCore {
    * removed or suspended. Returns whether it was sent. */
   provisionAccount(accountId: string): boolean {
     if (!this.deps.provisioning) throw conflict('hosted_mail_off', 'no mail provider is configured');
-    const a = this.rows("SELECT id, organization_id FROM accounts WHERE id = ? AND kind = 'native' AND hosted_at IS NULL AND state NOT IN ('removed', 'suspended')", accountId)[0];
+    const a = this.rows("SELECT id, organization_id FROM accounts WHERE id = ? AND kind = 'native' AND address IS NOT NULL AND hosted_at IS NULL AND state NOT IN ('removed', 'suspended')", accountId)[0];
     if (!a) return false;
     this.enqueue('provision', a.organization_id as string, a.id as string);
     return true;
@@ -583,6 +643,11 @@ export class DirectoryCore {
     if (!address) {
       const user = this.userById(row.user_id as string);
       if (!user) throw notFound('user not found');
+      // A person on a primary domain that gives people no address (§3.2) is a member with none.
+      if (!user.is_agent && !this.peopleHosted(organizationId)) {
+        this.sql.exec("UPDATE accounts SET kind = 'native', address = NULL, mailbox_address = NULL, kind_changed_at = ? WHERE id = ?", Date.now(), id);
+        return;
+      }
       address = this.newAddress(user, row.display_name as string, organizationId);
     }
     this.sql.exec("UPDATE accounts SET kind = 'native', address = ?, mailbox_address = NULL, kind_changed_at = ? WHERE id = ?", address, Date.now(), id);
@@ -613,7 +678,7 @@ export class DirectoryCore {
     }
     // Back in (§3.4): a kept mailbox is resumed; one deleted after the retention period (or never made) is made again.
     const id = existing.id as string;
-    const remake = !!this.deps.provisioning && existing.hosted_at == null;
+    const remake = !!this.deps.provisioning && existing.hosted_at == null && existing.address != null;
     this.sql.exec('UPDATE accounts SET state = ?, removed_at = NULL, status_message = NULL WHERE id = ?', remake ? 'requested' : 'active', id);
     if (remake) this.enqueue('provision', organizationId, id);
     else if (existing.hosted_at != null) this.enqueue('resume', organizationId, id);
@@ -773,6 +838,8 @@ export class DirectoryCore {
     const row = this.domainRow('domain = ? AND organization_id = ?', domain, organizationId)[0];
     if (!row) throw badRequest('invalid_domain', `${domain} is not one of this organization's domains.`);
     if (!row.verified) throw badRequest('domain_unverified', `Verify ${domain} before creating addresses on it.`);
+    // People have addresses only on a domain of the organization's own with mail turned on (§3.2).
+    if (row.kind === 'platform' || row.providerAt == null) throw badRequest('domain_no_mail', `Turn on mail for a domain of your own before creating addresses for people; ${domain} has none for people.`);
     const backup = input.backupEmail.trim();
     if (!EMAIL.test(backup) || backup.length > 320) throw badRequest('invalid_backup_email', 'Enter a valid backup email address.');
     const backupDomain = backup.slice(backup.lastIndexOf('@') + 1).toLowerCase();
@@ -1308,6 +1375,7 @@ export class DirectoryCore {
     const row = this.ownDomain(organizationId, domain);
     if (!row.verified) throw conflict('domain_unverified', 'verify the domain before making it primary');
     this.sql.exec('UPDATE domains SET is_primary = (domain = ?) WHERE organization_id = ?', row.domain, organizationId);
+    this.hostPeople(organizationId);
     return this.ownDomain(organizationId, row.domain);
   }
 

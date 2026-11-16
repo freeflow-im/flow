@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AccountDTO } from '@flow/shared';
 import { DirectoryCore, newId, type ProvisioningMessage, type Sql } from '../directory/core';
 import { FakeMailProvider } from '../mailprovider/fake';
@@ -47,6 +47,8 @@ async function drain(): Promise<ProvisioningMessage[]> {
 beforeEach(() => {
   provider = new FakeMailProvider();
   core = new DirectoryCore(nodeSql(), { webUrlBase: 'https://app.test', registrationEnabled: true, send: async () => {}, mailProvider: provider, provisioning: true });
+  // These tests cover the mailbox steps where people have mailboxes; the platform-subdomain rule is tested on its own below.
+  vi.spyOn(core, 'peopleHosted').mockReturnValue(true);
   mail = new Map();
   calendars = new Set();
   dns = [];
@@ -63,7 +65,7 @@ beforeEach(() => {
       put: async (a, m) => void mail.set(a.id, m),
       clear: async (a) => void mail.delete(a.id),
     },
-    calendar: { ensureNative: async (a) => void calendars.add(a.id) },
+    calendar: { ensureNative: async (a) => void calendars.add(a.id), dropNative: async (a) => void calendars.delete(a.id) },
     publishPlatformDns: async (slug) => void dns.push(slug),
   };
 });
@@ -339,5 +341,95 @@ describe('provisioning (platform.md §3.4)', () => {
     const pws = Array.from({ length: 50 }, () => mailboxPassword());
     expect(pws.every((p) => /^[A-Za-z0-9]{32}$/.test(p) && /[a-z]/.test(p) && /[A-Z]/.test(p) && /\d/.test(p))).toBe(true);
     expect(new Set(pws).size).toBe(50);
+  });
+});
+
+describe("people's addresses (platform.md §3.2, decision_log 2026-11-15)", () => {
+  const sqlOf = () => (core as unknown as { sql: Sql }).sql;
+  /** A domain of the organization's own, verified, with mail turned on at the provider when `mail`. */
+  const ownDomain = async (org: string, domain: string, mail = true) => {
+    core.addDomain(org, domain);
+    sqlOf().exec('UPDATE domains SET verified_at = 1 WHERE domain = ?', domain);
+    if (mail) await mailOn(domain);
+  };
+  /** What "Turn on mail" does with a provider that keeps DKIM itself (setDomainDkim): the domain made there, then marked. */
+  const mailOn = async (domain: string) => {
+    await provider.createDomain(domain, { quotaBytes: 1, maxUsers: 10 });
+    core.setDomainAtProvider(domain);
+  };
+  beforeEach(() => vi.mocked(core.peopleHosted).mockRestore());
+
+  it('gives a person on the platform subdomain no address, mailbox or calendar; an agent gets all three', async () => {
+    const org = newId();
+    core.reserveSlug('acme', org);
+    const ann = join(org, user('Ann'), 'owner');
+    const bob = join(org, user('Bob'));
+    const bot = join(org, user('Builder', 'builder'));
+    expect(ann).toMatchObject({ kind: 'native', address: null, state: 'active' });
+    expect(bob).toMatchObject({ kind: 'native', address: null, state: 'active' });
+    expect(bot).toMatchObject({ address: 'builder@acme.freeflow.im', state: 'requested' });
+    expect((await drain()).map((m) => m.accountId)).toEqual([bot.id]);
+    expect(mail.has(ann.id) || calendars.has(ann.id)).toBe(false);
+    expect(mail.has(bot.id) && calendars.has(bot.id)).toBe(true);
+    // A guest made a member stays without an address; "everyone" sends nobody without one.
+    const cy = join(org, user('Cy'), 'member', 'guest');
+    expect(core.setAccountKind(org, cy.id, 'native')).toMatchObject({ kind: 'native', address: null });
+    expect(core.provisionMissing(org)).toBe(0);
+    expect(core.provisionAccount(bob.id)).toBe(false);
+  });
+
+  it('gives people addresses on a domain of their own once it is primary and has mail, in either order; agents keep theirs', async () => {
+    const org = newId();
+    core.reserveSlug('acme', org);
+    const ann = join(org, user('Ann'), 'owner');
+    const bot = join(org, user('Builder', 'builder'));
+    await drain();
+    // Primary without mail gives nobody an address.
+    await ownDomain(org, 'acme.test', false);
+    core.setPrimaryDomain(org, 'acme.test');
+    expect(core.accountById(ann.id)!.address).toBeNull();
+    await mailOn('acme.test');
+    expect(core.accountById(ann.id)!.address).toBe('ann@acme.test');
+    await drain();
+    expect(provider.mailboxes.has('ann@acme.test') && calendars.has(ann.id)).toBe(true);
+    expect(core.accountById(ann.id)!.state).toBe('active');
+    expect(core.accountById(bot.id)!.address).toBe('builder@acme.freeflow.im');
+    // New people and new agents are made on it.
+    expect(join(org, user('Bob')).address).toBe('bob@acme.test');
+    expect(join(org, user('Helper', 'helper')).address).toBe('helper@acme.test');
+    // Mail first, then primary: the same.
+    const beta = newId();
+    core.reserveSlug('beta', beta);
+    const cy = join(beta, user('Cy'), 'owner');
+    await ownDomain(beta, 'beta.test');
+    expect(core.accountById(cy.id)!.address).toBeNull();
+    core.setPrimaryDomain(beta, 'beta.test');
+    expect(core.accountById(cy.id)!.address).toBe('cy@beta.test');
+  });
+
+  it("takes people's hosted mail off the platform subdomain: address, mailbox and calendar gone at once; agents and own domains kept", async () => {
+    const org = newId();
+    core.reserveSlug('acme', org);
+    // Accounts made before the ruling: people with mailboxes on the platform subdomain.
+    const spy = vi.spyOn(core, 'peopleHosted').mockReturnValue(true);
+    const ann = join(org, user('Ann'), 'owner');
+    const bot = join(org, user('Builder', 'builder'));
+    await drain();
+    spy.mockRestore();
+    expect(provider.mailboxes.has('ann@acme.freeflow.im')).toBe(true);
+    expect(core.unhostPeople(org)).toEqual(['ann@acme.freeflow.im']);
+    expect(core.accountById(ann.id)).toMatchObject({ kind: 'native', address: null, state: 'active' });
+    expect(core.accountByAddress('ann@acme.freeflow.im')).toBeNull();
+    await drain();
+    expect(provider.mailboxes.has('ann@acme.freeflow.im') || mail.has(ann.id) || calendars.has(ann.id)).toBe(false);
+    expect(core.accountById(ann.id)!.hosted).toBe(false);
+    expect(provider.mailboxes.has('builder@acme.freeflow.im') && calendars.has(bot.id)).toBe(true);
+    expect(core.unhostPeople(org)).toEqual([]);
+    // A person on a domain of the organization's own keeps theirs.
+    await ownDomain(org, 'acme.test');
+    core.setPrimaryDomain(org, 'acme.test');
+    await drain();
+    expect(core.accountById(ann.id)!.address).toBe('ann@acme.test');
+    expect(core.unhostPeople(org)).toEqual([]);
   });
 });

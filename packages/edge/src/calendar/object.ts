@@ -267,6 +267,19 @@ export class Calendar extends DurableObject<CalendarEnv> {
     return { ok: true };
   }
 
+  /** The account's native calendar and its events deleted, when the account loses its hosted address (provisioning's
+   * `delete`, decision_log 2026-11-15). Linked calendars stay. Safe to run again. */
+  async dropNative(account: AccountDTO): Promise<{ ok: true } | { ok: false; message: string }> {
+    const wrong = ownerMismatch(this.store, { account, user: null }, 'the Calendar');
+    if (wrong) { console.error(`[calendar] ${wrong}`); return { ok: false, message: wrong }; }
+    for (const r of this.sql.exec<{ id: string }>("SELECT id FROM accounts WHERE kind = 'native'").toArray()) {
+      for (const cal of this.store.calendarsOf(r.id)) this.store.forgetCalendar(cal.id);
+      this.sql.exec('DELETE FROM accounts WHERE id = ?', r.id);
+    }
+    this.store.ensureDefault();
+    return { ok: true };
+  }
+
   /**
    * An iTIP message from another account's Calendar object, by binding (platform.md §3.5, phase 4.2): a REQUEST, ADD or
    * CANCEL from an event's organizer to this attendee, or a REPLY from an attendee to this organizer. The rules are
