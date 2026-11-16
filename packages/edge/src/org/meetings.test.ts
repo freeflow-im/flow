@@ -7,7 +7,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { orgStorage } from '../../test/orgStorage';
 import { orgRoutes } from '../routes/org';
 import { withDb, schema, type DB } from './db/index';
-import { createMeeting, getMeeting, joinMeeting, liveMeetings, newMeetingCode } from './services/meetings';
+import { createMeeting, getMeeting, joinAsGuest, joinMeeting, liveMeetings, newMeetingCode, previewMeeting, setMeetingLocked } from './services/meetings';
 import { createWorkspace } from './services/workspaces';
 
 const ANN = '00000000-0000-7000-8000-00000000000a';
@@ -127,6 +127,48 @@ describe('a meeting room', () => {
   });
 });
 
+describe('guests (phase 3)', () => {
+  const made = async () => {
+    fakeRtk({ 'POST /meetings': { id: 'rtk-m1' }, 'POST /meetings/rtk-m1/participants': { id: 'p-g', token: 'guest-tok' } });
+    return withDb(db, () => createMeeting(workspaceId, ANN, 'Design review'));
+  };
+
+  it('a link shows its title, who made it and who is in, with first names only and no ids', async () => {
+    const m = await made();
+    fakeRtk({ 'GET /meetings/rtk-m1/active-session': { id: 's1' }, 'GET /sessions/s1/participants': [{ custom_participant_id: BEN, display_name: 'Ben Kim' }] });
+    const preview = await withDb(db, () => previewMeeting(m.code));
+    expect(preview).toEqual({ code: m.code, title: 'Design review', hostName: 'Ann', people: ['Ben'], locked: false, guestsAllowed: true });
+  });
+
+  it('a guest joins straight in with their name, as a new RTK guest that is never a member', async () => {
+    const m = await made();
+    const joined = await withDb(db, () => joinAsGuest(m.code, '  Dana   Guest '));
+    expect(joined).toEqual({ code: m.code, title: 'Design review', authToken: 'guest-tok' });
+    const add = calls.find((c) => c.url.endsWith('/participants'))!;
+    expect(add.body).toMatchObject({ name: 'Dana Guest', preset_name: 'flow_guest' });
+    expect(String(add.body!.custom_participant_id)).toMatch(/^guest-/);
+    expect(sqlite.prepare('SELECT COUNT(*) AS n FROM meeting_participants').get()).toEqual({ n: 0 });
+    await expect(withDb(db, () => joinAsGuest(m.code, '   '))).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it('only takes a code, never an id, from a guest', async () => {
+    const m = await made();
+    await expect(withDb(db, () => previewMeeting(m.id))).rejects.toMatchObject({ statusCode: 404 });
+    await expect(withDb(db, () => joinAsGuest(m.id, 'Dana'))).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it('a host locks a meeting: guests are refused, members still join; others cannot lock it', async () => {
+    const m = await made();
+    await expect(withDb(db, () => setMeetingLocked(m.code, BEN, true))).rejects.toMatchObject({ statusCode: 403, code: 'not_host' });
+    await expect(withDb(db, () => setMeetingLocked(m.code, EVE, true))).rejects.toMatchObject({ statusCode: 404 });
+    expect(await withDb(db, () => setMeetingLocked(m.code, ANN, true))).toMatchObject({ locked: true });
+    await expect(withDb(db, () => joinAsGuest(m.code, 'Dana'))).rejects.toMatchObject({ statusCode: 403, code: 'meeting_locked' });
+    fakeRtk({ 'POST /meetings/rtk-m1/participants': { id: 'p-b', token: 'ben-tok' } });
+    await expect(withDb(db, () => joinMeeting(m.code, BEN))).resolves.toMatchObject({ authToken: 'ben-tok' });
+    expect(await withDb(db, () => setMeetingLocked(m.code, ANN, false))).toMatchObject({ locked: false });
+  });
+});
+
 describe('the Worker side', () => {
   it('finds the organization of a meeting link by its short code, as by an id', async () => {
     const lookups: unknown[][] = [];
@@ -141,5 +183,17 @@ describe('the Worker side', () => {
     // The fake directory knows no such code, so nothing reaches an organization (index.ts turns the throw into a 404).
     expect(res.ok).toBe(false);
     expect(handle).not.toHaveBeenCalled();
+  });
+
+  it('sends a guest link, with no sign-in, to the organization that owns the code', async () => {
+    const handle = vi.fn(async () => Response.json({ title: 'Design review' }));
+    const env = {
+      DIRECTORY: { idFromName: () => 'd', get: () => ({ call: async () => ({ ok: true, value: 'org-1' }) }) },
+      ORG: { idFromName: (id: string) => id, get: () => ({ handle }) },
+    };
+    const res = await orgRoutes.request('https://app.example/v1/meetings/kqd-wmzt-fra/guest', {}, env as never);
+    expect(res.status).toBe(200);
+    const [, who] = handle.mock.calls[0]! as unknown as [Request, { user: unknown; organizationId: string }];
+    expect(who).toMatchObject({ user: null, organizationId: 'org-1' });
   });
 });

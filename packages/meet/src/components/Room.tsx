@@ -1,63 +1,54 @@
-// A meeting room (/meet/<code>): joins straight in, mic on and camera off, then shows everyone in a grid (a shared screen
-// large, with people in a strip), the controls (mic, camera, share, people, leave) and a People panel. Built on the
-// RealtimeKit core SDK with our own layout (docs/specs/meetings.md, P2); remote audio plays from an <audio> per person.
-import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
+// A meeting room (/meet/<code>). A member of the room's organization joins as themselves; anyone else with the link
+// joins as a guest with a name (phase 3, ruling R2). Both go through the check screen first, except a huddle opened from
+// Chat, which joins straight in. Then everyone is in a grid (a shared screen large, with people in a strip), with the
+// controls (mic, camera, share, people, leave) and a People panel. Built on the RealtimeKit core SDK with our own
+// layout (docs/specs/meetings.md, P2); remote audio plays from an <audio> per person.
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import RealtimeKitClient, { type RTKParticipant, type RTKSelf } from '@cloudflare/realtimekit';
-import { Check, ChevronLeft, Link2, Mic, MicOff, MonitorUp, PhoneOff, Users, Video, VideoOff } from 'lucide-react';
-import type { MeetingJoinDTO } from '@flow/shared';
-import { api, MeetApiError, meetingUrl } from '../api';
+import { Check, ChevronLeft, Link2, Lock, LockOpen, Mic, MicOff, MonitorUp, PhoneOff, Users, Video, VideoOff } from 'lucide-react';
+import type { MeetingDTO, MeetingPreviewDTO } from '@flow/shared';
+import { api, isGuestId, MeetApiError, meetingUrl, signInUrl } from '../api';
+import { CheckScreen, type JoinChoice } from './CheckScreen';
 
 type Client = Awaited<ReturnType<typeof RealtimeKitClient.init>>;
 type Person = RTKParticipant | RTKSelf;
-type Phase = { kind: 'joining'; media?: boolean } | { kind: 'in'; client: Client; info: MeetingJoinDTO } | { kind: 'left' } | { kind: 'error'; message: string };
+
+/** Who is joining which room: a member (`meeting` set) or a guest (only the link's preview). */
+interface Entry {
+  meeting: MeetingDTO | null;
+  preview: MeetingPreviewDTO | null;
+}
+
+/** The room as the call screen needs it, the same for a member and a guest. */
+export interface RoomInfo {
+  /** What the server calls the room by: its code. */
+  ref: string;
+  title: string;
+  host: boolean;
+  guest: boolean;
+  /** The member's view of the room (null for a guest): huddle or not, locked or not. */
+  meeting: MeetingDTO | null;
+}
+
+type Phase =
+  | { kind: 'loading' }
+  | { kind: 'check'; entry: Entry }
+  | { kind: 'joining'; media?: boolean }
+  | { kind: 'in'; client: Client; info: RoomInfo }
+  | { kind: 'left' }
+  | { kind: 'error'; message: string; signIn?: boolean };
 
 function joinError(e: unknown): string {
   if (e instanceof MeetApiError) {
-    if (e.status === 404) return 'This meeting was not found. It may belong to an organization you are not in.';
+    if (e.status === 404) return 'This meeting was not found. Check the link.';
     if (e.status === 503) return 'Meet is not set up on this server yet.';
-    if (e.status === 401) return 'Sign in to join this meeting.';
+    if (e.status === 429) return 'Too many tries from here. Wait a few minutes, then reload.';
     return e.message;
   }
   return e instanceof Error ? e.message : String(e);
 }
 
-/** Joins the room and keeps the phase; `attempt` rejoins after a leave. */
-function useMeeting(meetingRef: string, attempt: number): [Phase, (p: Phase) => void] {
-  const [phase, setPhase] = useState<Phase>({ kind: 'joining' });
-  useEffect(() => {
-    let cancelled = false;
-    let client: Client | null = null;
-    setPhase({ kind: 'joining' });
-    (async () => {
-      const info = await api.join(meetingRef);
-      if (cancelled) return;
-      document.title = `${info.meeting.title} · FreeFlow Meet`;
-      // The browser may now ask for the microphone; the page says so instead of only "Joining…".
-      setPhase({ kind: 'joining', media: true });
-      client = await RealtimeKitClient.init({ authToken: info.authToken, defaults: { audio: true, video: false } });
-      if (cancelled) return;
-      await client.join();
-      if (cancelled) return void client.leave().catch(() => {});
-      setPhase({ kind: 'in', client, info });
-    })().catch((e: unknown) => {
-      if (!cancelled) setPhase({ kind: 'error', message: joinError(e) });
-    });
-    // Closing the tab leaves too: the server hears it at once (a huddle's roster in Chat), not when RealtimeKit notices.
-    const onClose = () => {
-      if (client?.self.roomJoined) api.leaveOnClose(meetingRef);
-    };
-    window.addEventListener('pagehide', onClose);
-    return () => {
-      cancelled = true;
-      window.removeEventListener('pagehide', onClose);
-      if (client?.self.roomJoined) {
-        void client.leave().catch(() => {});
-        void api.leave(meetingRef).catch(() => {});
-      }
-    };
-  }, [meetingRef, attempt]);
-  return [phase, setPhase];
-}
+const isOutsider = (e: unknown) => e instanceof MeetApiError && (e.status === 401 || e.status === 403 || e.status === 404);
 
 /** Draws again whenever anything in the room changes (people, their media, who is speaking). */
 function useRoomUpdates(client: Client): void {
@@ -152,17 +143,28 @@ function ControlButton({ label, on, danger, onClick, children }: { label: string
   );
 }
 
-function InRoom({ client, info, onLeft }: { client: Client; info: MeetingJoinDTO; onLeft: () => void }) {
+function InRoom({ client, info, onLeft }: { client: Client; info: RoomInfo; onLeft: () => void }) {
   useRoomUpdates(client);
   const [peopleOpen, setPeopleOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const copyLink = () => {
-    void navigator.clipboard.writeText(meetingUrl(info.meeting.code)).then(() => {
+    void navigator.clipboard.writeText(meetingUrl(info.ref)).then(() => {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 3000);
     });
   };
   const [mediaError, setMediaError] = useState<string | null>(null);
+  // A host locks a meeting so no new guests come in; a huddle never has guests, so it has no lock.
+  const canLock = info.host && !info.guest && !!info.meeting && !info.meeting.channelId;
+  const [locked, setLocked] = useState(info.meeting?.locked ?? false);
+  const toggleLock = () => {
+    const next = !locked;
+    setLocked(next);
+    api.setLocked(info.ref, next).catch((e: unknown) => {
+      setLocked(!next);
+      setMediaError(`Could not ${next ? 'lock' : 'unlock'} the meeting: ${e instanceof Error ? e.message : String(e)}`);
+    });
+  };
   const self = client.self;
   const others = client.participants.joined.toArray() as RTKParticipant[];
   const everyone: Person[] = [self, ...others];
@@ -193,19 +195,41 @@ function InRoom({ client, info, onLeft }: { client: Client; info: MeetingJoinDTO
   return (
     <div className="flex h-full flex-col bg-[#202124] text-[#e8eaed]">
       <header className="flex h-14 flex-none flex-wrap items-center gap-3 px-5">
-        <a href={import.meta.env.BASE_URL} className="flex items-center gap-1 text-sm text-[#e8eaed] no-underline hover:text-white">
-          <ChevronLeft size={18} aria-hidden="true" />
-          Meet
-        </a>
-        <span className="h-5 w-px bg-[#5f6368]" />
-        <h1 className="m-0 truncate text-base font-semibold">{info.meeting.title}</h1>
+        {!info.guest && (
+          <>
+            <a href={import.meta.env.BASE_URL} className="flex items-center gap-1 text-sm text-[#e8eaed] no-underline hover:text-white">
+              <ChevronLeft size={18} aria-hidden="true" />
+              Meet
+            </a>
+            <span className="h-5 w-px bg-[#5f6368]" />
+          </>
+        )}
+        <h1 className="m-0 truncate text-base font-semibold">{info.title}</h1>
         <span className="text-sm text-[#bdc1c6]">{minutes < 1 ? 'Just joined' : `${minutes} min`}</span>
-        {/* The room's link is its invitation: anyone in the organization who opens it joins (guests come in phase 3). */}
+        {locked && !canLock && (
+          <span className="flex items-center gap-1 text-sm text-[#bdc1c6]">
+            <Lock size={14} aria-hidden="true" />
+            Locked
+          </span>
+        )}
+        {canLock && (
+          <button
+            type="button"
+            onClick={toggleLock}
+            aria-pressed={locked}
+            title={locked ? 'Let guests join again' : 'Stop new guests from joining. People in your organization can still join.'}
+            className="ml-auto flex h-9 cursor-pointer items-center gap-2 rounded-full border border-[#5f6368] bg-transparent px-4 text-sm text-[#e8eaed] hover:bg-[#303134]"
+          >
+            {locked ? <Lock size={16} aria-hidden="true" /> : <LockOpen size={16} aria-hidden="true" />}
+            {locked ? 'Locked' : 'Lock'}
+          </button>
+        )}
+        {/* The room's link is its invitation: a member joins as themselves, anyone else as a guest (unless locked). */}
         <button
           type="button"
           onClick={copyLink}
-          title="Copy this meeting's link to send to someone in your organization"
-          className="ml-auto flex h-9 cursor-pointer items-center gap-2 rounded-full border border-[#5f6368] bg-transparent px-4 text-sm text-[#e8eaed] hover:bg-[#303134]"
+          title={info.meeting?.channelId ? "Copy this huddle's link for the people in its conversation" : "Copy this meeting's link to send to anyone"}
+          className={`${canLock ? '' : 'ml-auto '}flex h-9 cursor-pointer items-center gap-2 rounded-full border border-[#5f6368] bg-transparent px-4 text-sm text-[#e8eaed] hover:bg-[#303134]`}
         >
           {copied ? <Check size={16} aria-hidden="true" /> : <Link2 size={16} aria-hidden="true" />}
           {copied ? 'Link copied' : 'Copy link'}
@@ -250,6 +274,7 @@ function InRoom({ client, info, onLeft }: { client: Client; info: MeetingJoinDTO
                   </span>
                   <span className="min-w-0 flex-1 truncate">
                     {p === self ? `${p.name} (you)` : p.name}
+                    {isGuestId(p.customParticipantId) && <span className="ml-1.5 text-xs text-muted">Guest</span>}
                   </span>
                   {!p.audioEnabled && <MicOff size={15} className="text-muted" aria-label="Muted" />}
                 </li>
@@ -286,8 +311,88 @@ function InRoom({ client, info, onLeft }: { client: Client; info: MeetingJoinDTO
 }
 
 export function Room({ meetingRef }: { meetingRef: string }) {
-  const [attempt, setAttempt] = useState(0);
-  const [phase, setPhase] = useMeeting(meetingRef, attempt);
+  const [phase, setPhase] = useState<Phase>({ kind: 'loading' });
+  const client = useRef<Client | null>(null);
+  const info = useRef<RoomInfo | null>(null);
+  const last = useRef<{ entry: Entry; choice: JoinChoice } | null>(null);
+  const mounted = useRef(true);
+
+  const join = useCallback(async (entry: Entry, choice: JoinChoice) => {
+    last.current = { entry, choice };
+    setPhase({ kind: 'joining' });
+    try {
+      let room: RoomInfo;
+      let authToken: string;
+      if (entry.meeting) {
+        const r = await api.join(entry.meeting.code);
+        room = { ref: r.meeting.code, title: r.meeting.title, host: r.host, guest: false, meeting: r.meeting };
+        authToken = r.authToken;
+      } else {
+        const r = await api.joinAsGuest(entry.preview!.code, choice.name ?? '');
+        room = { ref: r.code, title: r.title, host: false, guest: true, meeting: null };
+        authToken = r.authToken;
+      }
+      if (!mounted.current) return;
+      document.title = `${room.title} · FreeFlow Meet`;
+      // The browser may now ask for the microphone or camera; the page says so instead of only "Joining…".
+      setPhase({ kind: 'joining', media: choice.audio || choice.video });
+      const c = await RealtimeKitClient.init({ authToken, defaults: { audio: choice.audio, video: choice.video } });
+      await c.join();
+      if (!mounted.current) return void c.leave().catch(() => {});
+      client.current = c;
+      info.current = room;
+      setPhase({ kind: 'in', client: c, info: room });
+    } catch (e) {
+      if (mounted.current) setPhase({ kind: 'error', message: joinError(e) });
+    }
+  }, []);
+
+  // Who is opening the link: a member of its organization, or a guest.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const meeting = await api.get(meetingRef);
+        if (cancelled) return;
+        document.title = `${meeting.title} · FreeFlow Meet`;
+        // A huddle opened from Chat goes straight in: the person already chose to call.
+        if (meeting.channelId) return void join({ meeting, preview: null }, { audio: true, video: false });
+        const preview = await api.preview(meeting.code).catch(() => null);
+        if (!cancelled) setPhase({ kind: 'check', entry: { meeting, preview } });
+      } catch (e) {
+        if (!isOutsider(e)) throw e;
+        const preview = await api.preview(meetingRef);
+        if (cancelled) return;
+        document.title = `${preview.title} · FreeFlow Meet`;
+        if (!preview.guestsAllowed) {
+          setPhase({ kind: 'error', message: 'This call is only for the people in its conversation. Sign in to join it.', signIn: true });
+        } else setPhase({ kind: 'check', entry: { meeting: null, preview } });
+      }
+    })().catch((e: unknown) => {
+      if (!cancelled) setPhase({ kind: 'error', message: joinError(e) });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [meetingRef, join]);
+
+  // Closing the tab leaves too: the server hears it at once (a huddle's roster in Chat), not when RealtimeKit notices.
+  useEffect(() => {
+    mounted.current = true;
+    const onClose = () => {
+      if (client.current?.self.roomJoined && info.current && !info.current.guest) api.leaveOnClose(info.current.ref);
+    };
+    window.addEventListener('pagehide', onClose);
+    return () => {
+      mounted.current = false;
+      window.removeEventListener('pagehide', onClose);
+      const c = client.current;
+      if (c?.self.roomJoined) {
+        void c.leave().catch(() => {});
+        if (info.current && !info.current.guest) void api.leave(info.current.ref).catch(() => {});
+      }
+    };
+  }, []);
 
   if (phase.kind === 'in')
     return (
@@ -295,17 +400,32 @@ export function Room({ meetingRef }: { meetingRef: string }) {
         client={phase.client}
         info={phase.info}
         onLeft={() => {
-          void api.leave(meetingRef).catch(() => {});
+          if (!phase.info.guest) void api.leave(phase.info.ref).catch(() => {});
+          client.current = null;
           setPhase({ kind: 'left' });
         }}
       />
     );
+  if (phase.kind === 'check') {
+    const { meeting, preview } = phase.entry;
+    return (
+      <CheckScreen
+        code={meeting?.code ?? preview!.code}
+        title={meeting?.title ?? preview!.title}
+        people={preview?.people ?? []}
+        guest={!meeting}
+        locked={!meeting && !!preview?.locked}
+        onJoin={(choice) => void join(phase.entry, choice)}
+      />
+    );
+  }
   return (
     <div className="flex h-full flex-col items-center justify-center gap-4 bg-[#202124] p-6 text-center text-[#e8eaed]">
+      {phase.kind === 'loading' && <p className="m-0 text-lg">Opening the meeting…</p>}
       {phase.kind === 'joining' && (
         <>
           <p className="m-0 text-lg">Joining…</p>
-          {phase.media && <p className="m-0 max-w-sm text-sm text-[#bdc1c6]">If your browser asks, allow the microphone. You join with the mic on and the camera off.</p>}
+          {phase.media && <p className="m-0 max-w-sm text-sm text-[#bdc1c6]">If your browser asks, allow the microphone and camera.</p>}
         </>
       )}
       {phase.kind === 'error' && (
@@ -313,21 +433,35 @@ export function Room({ meetingRef }: { meetingRef: string }) {
           <p role="alert" className="m-0 max-w-md text-lg">
             {phase.message}
           </p>
-          <a href={import.meta.env.BASE_URL} className="text-[#8ab4f8]">
-            Back to Meet
-          </a>
+          {phase.signIn ? (
+            <a href={signInUrl(meetingRef)} className="text-[#8ab4f8]">
+              Sign in
+            </a>
+          ) : (
+            last.current?.entry.meeting !== null && (
+              <a href={import.meta.env.BASE_URL} className="text-[#8ab4f8]">
+                Back to Meet
+              </a>
+            )
+          )}
         </>
       )}
       {phase.kind === 'left' && (
         <>
           <p className="m-0 text-lg">You left the meeting.</p>
           <div className="flex gap-3">
-            <button type="button" onClick={() => setAttempt((n) => n + 1)} className="h-10 cursor-pointer rounded-full border-0 bg-primary px-5 font-semibold text-white hover:bg-primary-deep">
+            <button
+              type="button"
+              onClick={() => last.current && void join(last.current.entry, last.current.choice)}
+              className="h-10 cursor-pointer rounded-full border-0 bg-primary px-5 font-semibold text-white hover:bg-primary-deep"
+            >
               Rejoin
             </button>
-            <a href={import.meta.env.BASE_URL} className="flex h-10 items-center rounded-full border border-[#5f6368] px-5 text-[#e8eaed] no-underline">
-              Back to Meet
-            </a>
+            {!last.current || last.current.entry.meeting ? (
+              <a href={import.meta.env.BASE_URL} className="flex h-10 items-center rounded-full border border-[#5f6368] px-5 text-[#e8eaed] no-underline">
+                Back to Meet
+              </a>
+            ) : null}
           </div>
         </>
       )}

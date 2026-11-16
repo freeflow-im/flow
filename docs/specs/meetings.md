@@ -362,6 +362,12 @@ RTK file retention (7 days).
    in the suite shell; remove LiveKit from web and bridge (§7 step 1).
 3. **Links and guests** — public `/meet/:code`, check screen, guest join, lock; Calendar "Add FreeFlow Meet" + Join;
    scheduler `kind: 'meet'`; Home Today Join.
+   - **As built, guests (2026-11-16):** the public routes are `GET`/`POST /v1/meetings/:code/guest` (codes only, never
+     ids; per-address and per-meeting rate limits; no Turnstile yet), and the page `/meet/<code>` needs no sign-in (Meet's
+     home still does). A member who opens a link joins as themselves, anyone else as a guest. Guests use our own preset
+     `flow_guest` (`packages/edge/scripts/rtk-presets.mjs`, run once per RTK app): RTK's `group_call_guest` sends guests
+     to a waiting room. Each guest join is a new RTK participant with a `guest-` id; nothing is stored for a guest.
+     Huddles refuse guests. Lock is a `meetings.locked` column, set by the creator (or a host).
 4. **After the meeting** — recording to R2, transcript, summary, meeting page, search, summary back to Chat and
    Calendar, Save as doc.
 5. **Agents** — MeetingAgent DO, note takers, bridge events and tools.

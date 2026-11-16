@@ -7,17 +7,22 @@
 // people; the room's join and leave move the huddle roster (./huddles.ts), and RTK's webhook is the safety net for a
 // tab closed without leaving.
 import { and, desc, eq, gt, or } from 'drizzle-orm';
-import type { HuddleStartDTO, LiveMeetingDTO, MeetingDTO, MeetingJoinDTO, MeetingPersonDTO } from '@flow/shared';
+import type { HuddleStartDTO, LiveMeetingDTO, MeetingDTO, MeetingGuestJoinDTO, MeetingJoinDTO, MeetingPersonDTO, MeetingPreviewDTO } from '@flow/shared';
 import { db, schema } from '../db/index.js';
 import { config } from '../config.js';
 import { newId } from '../lib/ids.js';
-import { ApiError, notFound } from '../lib/errors.js';
+import { ApiError, badRequest, notFound } from '../lib/errors.js';
 import { isUniqueViolation, requireMembership } from './workspaces.js';
 import { clearHuddle, enterHuddle, exitHuddle, requireHuddleEligible, requireHuddleSize } from './huddles.js';
 import { startOrJoinRing } from './huddleInvites.js';
 
 const HOST_PRESET = 'group_call_host';
 const MEMBER_PRESET = 'group_call_participant';
+/** Our own guest preset, with no waiting room (scripts/rtk-presets.mjs makes it on each RTK app). */
+const GUEST_PRESET = 'flow_guest';
+/** A guest's RTK custom participant id starts with this; a member's is their user id. */
+export const GUEST_ID_PREFIX = 'guest-';
+const MAX_GUEST_NAME = 60;
 /** Live now only asks RTK about rooms joined this recently. */
 const LIVE_WINDOW_MS = 12 * 60 * 60 * 1000;
 const MAX_TITLE = 120;
@@ -66,6 +71,7 @@ const toDTO = (m: MeetingRow): MeetingDTO => ({
   createdBy: m.createdBy,
   createdAt: m.createdAt.toISOString(),
   channelId: m.channelId ?? null,
+  locked: m.locked ?? false,
 });
 
 /** Who may be in a room: any member of its organization, and for a huddle, whoever may be in that conversation. */
@@ -89,7 +95,7 @@ export async function createMeeting(workspaceId: string, userId: string, title?:
   const name = (title ?? '').trim().slice(0, MAX_TITLE) || `${me?.displayName?.split(' ')[0] || 'A'}'s meeting`;
   const created = await rtk<{ id: string }>('POST', '/meetings', { title: name });
   if (!created) throw new ApiError(502, 'meet_upstream', 'The meeting service did not answer');
-  const row = { id: newId(), code: newMeetingCode(), workspaceId, rtkMeetingId: created.id, title: name, createdBy: userId, createdAt: new Date(), channelId: null };
+  const row = { id: newId(), code: newMeetingCode(), workspaceId, rtkMeetingId: created.id, title: name, createdBy: userId, createdAt: new Date(), channelId: null, locked: false };
   await db.insert(schema.meetings).values(row);
   return toDTO({ ...row, lastJoinedAt: null });
 }
@@ -107,7 +113,7 @@ export async function getMeeting(ref: string, userId: string): Promise<MeetingDT
 export async function joinMeeting(ref: string, userId: string): Promise<MeetingJoinDTO> {
   const m = await meetingRow(ref);
   await requireRoomAccess(m, userId);
-  const expiresOn = new Date(Date.now() + config.rtkTokenTtlMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const expiresOn = tokenExpiry();
   const [existing] = await db
     .select()
     .from(schema.meetingParticipants)
@@ -152,6 +158,80 @@ export async function joinMeeting(ref: string, userId: string): Promise<MeetingJ
   return { meeting: toDTO(m), authToken, host };
 }
 
+/** RTK's expiry format: whole seconds, UTC. */
+const tokenExpiry = () => new Date(Date.now() + config.rtkTokenTtlMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
+
+const firstName = (name: string | null | undefined) => (name ?? '').trim().split(/\s+/)[0] || 'Someone';
+
+/** A room by its link's short code only: the public guest routes never take an id. */
+async function meetingByCode(code: string): Promise<MeetingRow> {
+  if (!CODE_SHAPE.test(code)) throw notFound('meeting not found');
+  return meetingRow(code);
+}
+
+/** Whether this person hosts the room: they made it, or they were added to it as a host. A huddle has no lock. */
+async function isHost(m: MeetingRow, userId: string): Promise<boolean> {
+  if (m.createdBy === userId) return true;
+  const [p] = await db
+    .select({ preset: schema.meetingParticipants.preset })
+    .from(schema.meetingParticipants)
+    .where(and(eq(schema.meetingParticipants.meetingId, m.id), eq(schema.meetingParticipants.userId, userId)))
+    .limit(1);
+  return p?.preset === HOST_PRESET;
+}
+
+/**
+ * What a meeting's link shows before joining, to anyone who has it (the check screen, phase 3): the title, who made
+ * it, and the first names of who is in. A huddle says guests may not join.
+ */
+export async function previewMeeting(code: string): Promise<MeetingPreviewDTO> {
+  requireMeet();
+  const m = await meetingByCode(code);
+  const [maker] = await db.select({ name: schema.users.displayName }).from(schema.users).where(eq(schema.users.id, m.createdBy)).limit(1);
+  const live = await liveSession(m).catch(() => null);
+  return {
+    code: m.code ?? code,
+    title: m.title,
+    hostName: firstName(maker?.name),
+    people: (live?.people ?? []).map((p) => firstName(p.name)),
+    locked: m.locked,
+    guestsAllowed: !m.channelId,
+  };
+}
+
+/**
+ * A guest's way in (ruling R2: straight in, no waiting room). Each join is a new RTK guest: a guest has no account to
+ * tie a participant to. Refused for a huddle (a conversation's call is for its members) and while a host has locked it.
+ */
+export async function joinAsGuest(code: string, name: string): Promise<MeetingGuestJoinDTO> {
+  requireMeet();
+  const shown = name.replace(/\s+/g, ' ').trim().slice(0, MAX_GUEST_NAME);
+  if (!shown) throw badRequest('validation', 'name: enter your name');
+  const m = await meetingByCode(code);
+  if (m.channelId) throw new ApiError(403, 'guests_not_allowed', 'This call is only for the people in its conversation.');
+  if (m.locked) throw new ApiError(403, 'meeting_locked', 'This meeting is locked. Ask the host to unlock it.');
+  const guestId = `${GUEST_ID_PREFIX}${crypto.randomUUID()}`;
+  const added = await rtk<{ id: string; token: string }>('POST', `/meetings/${m.rtkMeetingId}/participants`, {
+    name: shown,
+    preset_name: GUEST_PRESET,
+    custom_participant_id: guestId,
+    expires_on: tokenExpiry(),
+  });
+  if (!added) throw new ApiError(502, 'meet_upstream', 'The meeting service did not answer');
+  await db.update(schema.meetings).set({ lastJoinedAt: new Date() }).where(eq(schema.meetings.id, m.id));
+  return { code: m.code ?? code, title: m.title, authToken: added.token };
+}
+
+/** Lock or unlock a meeting (hosts only; not a huddle). Locked keeps new guests out; members still join. */
+export async function setMeetingLocked(ref: string, userId: string, locked: boolean): Promise<MeetingDTO> {
+  const m = await meetingRow(ref);
+  await requireRoomAccess(m, userId);
+  if (m.channelId) throw badRequest('not_for_huddles', 'A huddle cannot be locked: guests cannot join it.');
+  if (!(await isHost(m, userId))) throw new ApiError(403, 'not_host', 'Only a host can lock this meeting.');
+  await db.update(schema.meetings).set({ locked }).where(eq(schema.meetings.id, m.id));
+  return toDTO({ ...m, locked });
+}
+
 /** The room says this person left (Leave, or the tab closing). Moves a huddle's roster; nothing to do for a meeting. */
 export async function leaveMeeting(ref: string, userId: string): Promise<void> {
   const m = await meetingRow(ref);
@@ -179,7 +259,7 @@ async function channelRoom(chan: { id: string; workspaceId: string; kind: string
   const title = await huddleTitle(chan, userId);
   const created = await rtk<{ id: string }>('POST', '/meetings', { title });
   if (!created) throw new ApiError(502, 'meet_upstream', 'The meeting service did not answer');
-  const row = { id: newId(), code: newMeetingCode(), workspaceId: chan.workspaceId, rtkMeetingId: created.id, title, createdBy: userId, createdAt: new Date(), channelId: chan.id, lastJoinedAt: null };
+  const row = { id: newId(), code: newMeetingCode(), workspaceId: chan.workspaceId, rtkMeetingId: created.id, title, createdBy: userId, createdAt: new Date(), channelId: chan.id, lastJoinedAt: null, locked: false };
   try {
     await db.insert(schema.meetings).values(row);
     return row;

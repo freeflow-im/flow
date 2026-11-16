@@ -679,6 +679,8 @@ export const meetings = sqliteTable(
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
     /** The last time someone joined: Live now only asks RTK about rooms used recently. */
     lastJoinedAt: integer('last_joined_at', { mode: 'timestamp_ms' }),
+    /** A host locked it: no new guests may join (members still can). */
+    locked: integer('locked', { mode: 'boolean' }).notNull().default(false),
   },
   (t) => [index('meetings_workspace_idx').on(t.workspaceId, t.lastJoinedAt), uniqueIndex('meetings_code_idx').on(t.code), uniqueIndex('meetings_channel_idx').on(t.channelId)],
 );

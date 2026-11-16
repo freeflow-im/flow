@@ -9,7 +9,7 @@ import { orgStorage } from '../../test/orgStorage';
 import { orgRoutes } from '../routes/org';
 import { verifyRtkWebhook, importRtkKey } from '../rtkWebhook';
 import { withDb, schema, type DB } from './db/index';
-import { handleRtkWebhook, joinMeeting, leaveMeeting, startHuddle } from './services/meetings';
+import { handleRtkWebhook, joinAsGuest, joinMeeting, leaveMeeting, previewMeeting, setMeetingLocked, startHuddle } from './services/meetings';
 import { huddleParticipants } from './huddles';
 import { createWorkspace } from './services/workspaces';
 
@@ -68,6 +68,13 @@ describe('a huddle is the conversation’s Meet room', () => {
     const again = await withDb(db, () => startHuddle(channelId, BEN));
     expect(again.meeting.id).toBe(first.meeting.id);
     expect(sqlite.prepare('SELECT COUNT(*) AS n FROM meetings').get()).toEqual({ n: 1 });
+  });
+
+  it('is for its members only: a guest link says so, and a guest cannot join', async () => {
+    const { meeting } = await withDb(db, () => startHuddle(channelId, ANN));
+    expect(await withDb(db, () => previewMeeting(meeting.code))).toMatchObject({ guestsAllowed: false });
+    await expect(withDb(db, () => joinAsGuest(meeting.code, 'Dana'))).rejects.toMatchObject({ statusCode: 403, code: 'guests_not_allowed' });
+    await expect(withDb(db, () => setMeetingLocked(meeting.code, ANN, true))).rejects.toMatchObject({ statusCode: 400 });
   });
 
   it('puts a person on the roster when they are in the room, and takes them off when they leave', async () => {

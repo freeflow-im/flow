@@ -222,7 +222,10 @@ export const APP_MANIFESTS: AppManifest[] = [
     client: { dist: 'packages/meet/dist', basePath: '/meet/', optional: true },
     pages: [
       { path: '/meet', html: 'meet.html', signIn: true },
-      { path: '/meet/*', html: 'meet.html', signIn: true, passFiles: true },
+      // Meet's home with its slash: signed in only, and before the room pages, which match it too.
+      { path: '/meet/', html: 'meet.html', signIn: true },
+      // A meeting's link opens for anyone (phase 3): a member signs in to join, a guest types a name (ruling R2).
+      { path: '/meet/*', html: 'meet.html', passFiles: true, headers: PUBLIC },
     ],
     events: [],
   },

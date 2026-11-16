@@ -1,6 +1,6 @@
 // What Meet asks the suite's API (the session cookie, same origin): the organization's object keeps the rooms and gives
 // out RealtimeKit tokens (packages/edge/src/org/services/meetings.ts).
-import type { LiveMeetingDTO, MeetingDTO, MeetingJoinDTO } from '@flow/shared';
+import type { LiveMeetingDTO, MeetingDTO, MeetingGuestJoinDTO, MeetingJoinDTO, MeetingPreviewDTO } from '@flow/shared';
 
 export class MeetApiError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) {
@@ -27,11 +27,23 @@ export const api = {
   enabled: async () => (await call<{ meet?: boolean }>('GET', '/v1/config')).meet === true,
   create: (workspaceId: string, title?: string) => call<MeetingDTO>('POST', `/v1/workspaces/${workspaceId}/meetings`, title ? { title } : {}),
   live: async (workspaceId: string) => (await call<{ meetings: LiveMeetingDTO[] }>('GET', `/v1/workspaces/${workspaceId}/meetings/live`)).meetings,
+  /** A room, for a member of its organization (401 signed out, 404 for anyone else). */
+  get: (ref: string) => call<MeetingDTO>('GET', `/v1/meetings/${ref}`),
   join: (ref: string) => call<MeetingJoinDTO>('POST', `/v1/meetings/${ref}/join`, {}),
+  /** What the link shows anyone, signed in or not (phase 3's check screen). */
+  preview: (code: string) => call<MeetingPreviewDTO>('GET', `/v1/meetings/${code}/guest`),
+  joinAsGuest: (code: string, name: string) => call<MeetingGuestJoinDTO>('POST', `/v1/meetings/${code}/guest`, { name }),
+  setLocked: (ref: string, locked: boolean) => call<MeetingDTO>('PATCH', `/v1/meetings/${ref}`, { locked }),
   leave: (ref: string) => call<{ ok: true }>('POST', `/v1/meetings/${ref}/leave`, {}),
   /** The tab is closing: a request that outlives the page (no answer is read). */
   leaveOnClose: (ref: string) => navigator.sendBeacon(`/v1/meetings/${ref}/leave`),
 };
+
+/** A guest's RealtimeKit participant id starts with this (the server's GUEST_ID_PREFIX). */
+export const isGuestId = (id: string | undefined) => !!id?.startsWith('guest-');
+
+/** The sign-in page, coming back to this room afterwards. */
+export const signInUrl = (code: string) => `/?next=${encodeURIComponent(`${import.meta.env.BASE_URL}${code}`)}`;
 
 /** A room's link: the page that joins it, by the room's short code. */
 export const meetingUrl = (code: string) => new URL(`${import.meta.env.BASE_URL}${code}`, window.location.origin).toString();

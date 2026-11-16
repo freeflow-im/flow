@@ -1,0 +1,1 @@
+ALTER TABLE `meetings` ADD `locked` integer DEFAULT false NOT NULL;
