@@ -56,6 +56,10 @@ describe('the records checker', () => {
     expect((await checkRecords(records, resolve)).map((s) => s.record)).toEqual(['present', 'present', 'missing', 'present', 'present']);
     expect(resolve).toHaveBeenCalledTimes(4);
   });
+  it('a DKIM value given quoted and split matches the record DNS joins', async () => {
+    const dkim = { type: 'TXT' as const, name: 'x._domainkey.acme.test', value: '"v=DKIM1; k=rsa; p=AB" "CD"', purpose: 'dkim' as const };
+    expect(await checkRecords([dkim], zone({ 'TXT x._domainkey.acme.test': ['v=DKIM1; k=rsa; p=ABCD'] }))).toEqual([{ record: 'present' }]);
+  });
   it('an SPF without the include is missing', async () => {
     const [spf] = recordsFor('acme.test', provider).filter((r) => r.purpose === 'spf');
     expect(await checkRecords([spf!], zone({ 'TXT acme.test': ['v=spf1 include:_spf.google.com ~all'] }))).toEqual([{ record: 'missing' }]);

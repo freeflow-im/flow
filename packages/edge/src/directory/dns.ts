@@ -77,7 +77,7 @@ function satisfies(expected: DnsRecordDTO, found: string): boolean {
     return /^v=spf1\b/i.test(found) && (!include || found.split(/\s+/).includes(`include:${include}`));
   }
   if (expected.purpose === 'dmarc') return /^v=DMARC1\b/i.test(found.trim());
-  return found.trim() === expected.value;
+  return found.trim() === unquoteTxt(expected.value).trim();
 }
 
 /** Each expected record, present or missing, in order. One lookup per name and type. */
