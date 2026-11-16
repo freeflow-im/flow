@@ -3,9 +3,9 @@
 // RealtimeKit core SDK with our own layout (docs/specs/meetings.md, P2); remote audio plays from an <audio> per person.
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import RealtimeKitClient, { type RTKParticipant, type RTKSelf } from '@cloudflare/realtimekit';
-import { ChevronLeft, Mic, MicOff, MonitorUp, PhoneOff, Users, Video, VideoOff } from 'lucide-react';
+import { Check, ChevronLeft, Link2, Mic, MicOff, MonitorUp, PhoneOff, Users, Video, VideoOff } from 'lucide-react';
 import type { MeetingJoinDTO } from '@flow/shared';
-import { api, MeetApiError } from '../api';
+import { api, MeetApiError, meetingUrl } from '../api';
 
 type Client = Awaited<ReturnType<typeof RealtimeKitClient.init>>;
 type Person = RTKParticipant | RTKSelf;
@@ -146,6 +146,13 @@ function ControlButton({ label, on, danger, onClick, children }: { label: string
 function InRoom({ client, info, onLeft }: { client: Client; info: MeetingJoinDTO; onLeft: () => void }) {
   useRoomUpdates(client);
   const [peopleOpen, setPeopleOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const copyLink = () => {
+    void navigator.clipboard.writeText(meetingUrl(info.meeting.code)).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 3000);
+    });
+  };
   const [mediaError, setMediaError] = useState<string | null>(null);
   const self = client.self;
   const others = client.participants.joined.toArray() as RTKParticipant[];
@@ -184,6 +191,16 @@ function InRoom({ client, info, onLeft }: { client: Client; info: MeetingJoinDTO
         <span className="h-5 w-px bg-[#5f6368]" />
         <h1 className="m-0 truncate text-base font-semibold">{info.meeting.title}</h1>
         <span className="text-sm text-[#bdc1c6]">{minutes < 1 ? 'Just joined' : `${minutes} min`}</span>
+        {/* The room's link is its invitation: anyone in the organization who opens it joins (guests come in phase 3). */}
+        <button
+          type="button"
+          onClick={copyLink}
+          title="Copy this meeting's link to send to someone in your organization"
+          className="ml-auto flex h-9 cursor-pointer items-center gap-2 rounded-full border border-[#5f6368] bg-transparent px-4 text-sm text-[#e8eaed] hover:bg-[#303134]"
+        >
+          {copied ? <Check size={16} aria-hidden="true" /> : <Link2 size={16} aria-hidden="true" />}
+          {copied ? 'Link copied' : 'Copy link'}
+        </button>
       </header>
 
       {mediaError && (
