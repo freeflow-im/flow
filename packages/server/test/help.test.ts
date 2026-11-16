@@ -54,6 +54,7 @@ describe('GET /v1/help/topics', () => {
       'mini-apps',
       'huddles',
       'scheduled-messages',
+      'meet',
       'whats-new',
     ]);
     expect(topics[0]!.title).toBe('Home');
