@@ -174,6 +174,8 @@ describe('MXRoute domains', () => {
     expect(recordsFor('acme.test', r).at(-1)).toEqual({ type: 'TXT', name: 'x._domainkey.acme.test', value: 'v=DKIM1; k=rsa; p=MIIB', purpose: 'dkim' });
     const full = fakeFetch([{ body: KEY_ANSWER }, { body: { success: true, data: { ...DNS_INFO.data, dkim: { name: 'x._domainkey.acme.test.', value: 'v=DKIM1; p=A' } } } }]);
     expect((await make(full.fn).records('acme.test')).dkim).toEqual({ selector: 'x', value: 'v=DKIM1; p=A' });
+    const quoted = fakeFetch([{ body: KEY_ANSWER }, { body: { success: true, data: { ...DNS_INFO.data, dkim: { name: 'x._domainkey', value: '"v=DKIM1; k=rsa; p=AB" "CD"' } } } }]);
+    expect((await make(quoted.fn).records('acme.test')).dkim).toEqual({ selector: 'x', value: 'v=DKIM1; k=rsa; p=ABCD' });
   });
 
   it('connects mailboxes to the server over TLS, or the host given', () => {

@@ -10,7 +10,7 @@
 // - MXRoute makes and keeps each domain's DKIM key itself (DirectAdmin, selector `x` today): `managesDkim`. The record to
 //   publish comes from `GET /domains/{domain}/dns` once the domain exists there, as do its exact MX hosts.
 // - A mailbox cannot be suspended through the API (PATCH takes only password, quota and limit): `suspendsByPassword`.
-import type { ProviderRecords, Resolve } from '../directory/dns';
+import { unquoteTxt, type ProviderRecords, type Resolve } from '../directory/dns';
 import { ProviderError, type DkimRecord, type MailProvider, type MailboxState, type ProviderErrorCode } from './provider';
 
 export interface MxRouteConfig {
@@ -261,11 +261,12 @@ export class MxRouteMailProvider implements MailProvider {
 
 const enc = (s: string) => encodeURIComponent(s);
 
-/** The DKIM TXT from the DNS info as selector and value: the name may be `x`, `x._domainkey` or `x._domainkey.<domain>`. */
+/** The DKIM TXT from the DNS info as selector and value: the name may be `x`, `x._domainkey` or `x._domainkey.<domain>`.
+ * MXRoute gives the value in zone-file form, quoted and split in two (`"v=DKIM1; ..." "..."`); it is kept as its text. */
 function dkimOf(d: DnsInfo['dkim'], domain: string): { selector: string; value: string } | null {
   if (!d?.value || !d.name) return null;
   const selector = d.name.replace(new RegExp(`\\.?${domain.replace(/\./g, '\\.')}\\.?$`, 'i'), '').replace(/\._domainkey$/i, '').replace(/\.$/, '');
-  return selector ? { selector, value: d.value } : null;
+  return selector ? { selector, value: unquoteTxt(d.value) } : null;
 }
 
 function errorCode(status: number, answer: Answer | null): ProviderErrorCode {
