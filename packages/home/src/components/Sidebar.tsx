@@ -206,7 +206,7 @@ function AppRow(props: { app: AppLink; active: boolean; picker?: SuiteMenuPicker
             data-testid={`home-picker-${app.id}`}
             onClick={() => setOpen(!open)}
           >
-            {picker.label && <span className="truncate" data-testid={`home-picker-label-${app.id}`}>{picker.label}</span>}
+            {picker.label && <span className="truncate" title={picker.label} data-testid={`home-picker-label-${app.id}`}>{picker.label}</span>}
             <ChevronDown className="size-4 shrink-0" aria-hidden />
           </button>
         </span>

@@ -21,7 +21,7 @@ import { DocsDropZone } from './components/DocsDropZone';
 import type { DocsFile } from './lib/docsFiles';
 import { setReadingPane, useReadingPane } from './lib/layoutPref';
 import { Sidebar } from './components/Sidebar';
-import { COMPOSE_ITEM, folderItem, mailMenu, mailPicker } from './lib/homeMenu';
+import { ADD_ACCOUNT_ITEM, COMPOSE_ITEM, folderItem, mailMenu, mailPicker } from './lib/homeMenu';
 import { useMediaQuery, useResizableWidth } from './hooks/layout';
 import { fetchBody, keys, prefetchThread, useAccounts, useFolders, useMessageActions, useMessages, useThread, useThreads, useTabStatus, useTabHeartbeat } from './hooks/mail';
 import { useMailAssistant } from './hooks/assistant';
@@ -467,6 +467,7 @@ export function App() {
       if (id === COMPOSE_ITEM) startCompose('new');
       else if (id.startsWith('folder:')) chooseFolder(id.slice('folder:'.length));
       else if (id.startsWith('account:')) chooseAccount(id.slice('account:'.length));
+      else if (id === ADD_ACCOUNT_ITEM) setDialog({ kind: 'add' });
     },
     here,
     picker,

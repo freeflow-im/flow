@@ -122,7 +122,8 @@ export function Sidebar(p: SidebarProps) {
         </button>
       </div>
 
-      {p.accounts.length > 1 && p.account && (
+      {/* Always shown: the inbox's address, and the way to switch or add an account. */}
+      {p.account && (
         <div className="px-2 pb-1">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

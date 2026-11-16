@@ -1,6 +1,6 @@
 // Mail's menu in Home's sidebar (docs/specs/home.md §2.1): only what a person goes to most. New message, Inbox and
-// Drafts. With more than one account, the accounts are a picker on the Mail row itself (`Mail ▾`), to switch to another
-// one's inbox. The other folders are in Mail itself.
+// Drafts. The accounts are a picker on the Mail row itself (`Mail ann@acme.test ▾`): it always shows the inbox's address,
+// switches to another account's inbox, and adds an account. The other folders are in Mail itself.
 import type { SuiteMenuItem, SuiteMenuPicker } from '@flow/suite-bar';
 import type { MailAccount, MailFolder } from '../api';
 import { findSpecial } from './folders';
@@ -8,6 +8,7 @@ import { findSpecial } from './folders';
 export const COMPOSE_ITEM = 'compose';
 export const folderItem = (path: string) => `folder:${path}`;
 export const accountItem = (id: string) => `account:${id}`;
+export const ADD_ACCOUNT_ITEM = 'add-account';
 
 export function folderHref(account: string, path: string): string {
   return `/mail/?${new URLSearchParams({ account, folder: path })}`;
@@ -30,19 +31,15 @@ export function mailMenu(accounts: MailAccount[], account: MailAccount, folders:
   return items;
 }
 
-/** The accounts, for the picker on the Mail row in Home's sidebar; null with only one (nothing to choose). */
-export function mailPicker(accounts: MailAccount[], account: MailAccount): SuiteMenuPicker | null {
-  if (accounts.length < 2) return null;
+/** The accounts, for the picker on the Mail row in Home's sidebar, labelled with the shown inbox's address, and Add
+ * account last. Shown with one account too, so the address is always in sight. */
+export function mailPicker(accounts: MailAccount[], account: MailAccount): SuiteMenuPicker {
   return {
-    items: accounts.map((a) => ({ id: accountItem(a.id), label: a.email, icon: 'user', href: `/mail/?${new URLSearchParams({ account: a.id })}` })),
+    items: [
+      ...accounts.map((a) => ({ id: accountItem(a.id), label: a.email, icon: 'user' as const, href: `/mail/?${new URLSearchParams({ account: a.id })}` })),
+      { id: ADD_ACCOUNT_ITEM, label: 'Add account', icon: 'plus' as const },
+    ],
     selected: accountItem(account.id),
-    label: shortName(accounts, account),
+    label: account.email,
   };
-}
-
-/** The account's domain, or its whole address when another account shares that domain (two gmail.com accounts). */
-export function shortName(accounts: MailAccount[], account: MailAccount): string {
-  const domain = (email: string) => email.slice(email.lastIndexOf('@') + 1).toLowerCase();
-  const mine = domain(account.email);
-  return accounts.some((a) => a.id !== account.id && domain(a.email) === mine) ? account.email : mine;
 }
