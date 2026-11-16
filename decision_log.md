@@ -1,5 +1,19 @@
 # Decision log
 
+## 2026-11-16 — Aliases, changed addresses, and the first domain made primary (operator rulings)
+
+- **Ruling (Scott):** a member's hosted mailbox can have more addresses (aliases), and its address can be changed.
+  Built as owner and admin actions on Members (platform.md §3.2). Not built: members changing their own; admin-only
+  was the default chosen while building, not a ruling.
+- **How a change works:** MXRoute's API has forwarders but no mailbox rename. A changed address is a forwarder to the
+  mailbox, which keeps its first address as its login; Mail sends as the new address (MXRoute only checks that the
+  From address is one it delivers). The old address keeps delivering. Copying mail into a new mailbox was the other
+  choice: slower, and mailboxes are new, so nothing is gained. MXRoute adds an `X-AuthUser` header naming the login,
+  so a recipient who reads headers can see the first address.
+- **Ruling (Scott):** a workspace's first domain of its own is made primary automatically. A domain must be verified
+  before it can be primary, so it becomes primary at the moment it is verified. Before this, a
+  verified domain with mail on gave nobody an address until an admin found Make primary (persinger.us, 2026-11-16).
+
 ## 2026-11-15 — Hosted mail for people needs a custom domain; agents always have it (operator rulings)
 
 - **Ruling (Scott):** a person is always in a workspace, named anything at sign-up. There is no "personal" workspace
