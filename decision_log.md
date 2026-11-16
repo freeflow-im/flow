@@ -1,5 +1,23 @@
 # Decision log
 
+## 2026-11-15 — Hosted mail for people needs a custom domain; agents always have it (operator rulings)
+
+- **Ruling (Scott):** a person is always in a workspace, named anything at sign-up. There is no "personal" workspace
+  kind. Someone who signs up from an invitation joins that workspace only and gets no second one.
+- **Ruling (Scott):** people are never given a hosted mailbox or calendar on a platform subdomain
+  (`<slug>.freeflow.im`). They have mail and calendars only by linking accounts they already have (Gmail, iCloud, …).
+  Agents, shared and each person's assistant, always have a hosted mailbox and calendar, on the platform subdomain
+  when there is no custom domain (`ada@locked-in.freeflow.im`).
+- **Ruling (Scott):** a custom domain with mail turned on gives people hosted mailboxes and calendars on it. New agents
+  are made on it; existing agents keep their address ("addresses never move", 2026-11-09).
+- **Ruling (Scott):** a person's address in the workspace is a linked mailbox they pick, never their login email
+  (`platform.md` §2.1). A person with no linked mailbox has no address; invitations to them stay in FreeFlow.
+- **Ruling (Scott):** the existing people's mailboxes on platform subdomains are deleted, without a migration: nobody
+  uses them. Scott's was copied to Gmail first (label `FreeFlow`, 18 messages, 2026-11-15).
+- **Why:** a free `freeflow.im` address for every person is a spam and support cost with no customer asking for it;
+  agents need an address to work, people already have one.
+- **Where:** `docs/specs/platform.md` §3.2, §3.3.
+
 ## 2026-11-15 — Admin › Members: Add member maps onto the existing agent kinds (operator rulings)
 
 - **Hosted agent** in the Add member dialog (the default) is shared (`POST /agents/hosted`) or private to the admin

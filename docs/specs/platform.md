@@ -169,6 +169,14 @@ The directory holds the organization row, its slugs and domains. The Org object 
 
 - An organization registers one or more domains and verifies each with a DNS record. One is primary. An
   organization with no domain of its own gets `<slug>.freeflow.im`.
+- **Who gets a hosted address** (operator ruling, decision_log 2026-11-15). Agents always: on the primary domain, which
+  is `<slug>.freeflow.im` until a custom domain is made primary. People only on a custom domain with mail turned on;
+  on the platform subdomain a person has no hosted address, mailbox or native calendar. When mail is turned on for the
+  primary custom domain, every person without an address gets one there and is provisioned. Existing addresses never
+  move.
+- **A person's linked address.** A person without a hosted address may pick one of their linked mailboxes as their
+  address in the workspace; it is shown and written to like a hosted one. It is never the login email. Linked
+  addresses are kept per account, not in `addresses`: two workspaces may each have a member linking the same mailbox.
 - A domain belongs to one organization. An address is therefore unique across the platform.
 - The directory keeps `addresses (address → account_id)`. Inbound mail routing, invitation delivery and the
   address completer resolve through it.
@@ -202,7 +210,7 @@ The new thing. One per principal per organization; today's `memberships` row wit
 | `address` | `local@domain`, the account's name inside the organization, unique; none for a guest |
 | `display_name` | what members see; defaults from the principal |
 | `role` | `owner`, `admin`, `member` |
-| `kind` | `native` (an address, a mailbox, a native calendar), `guest` (none of them) or `personal_agent` (none of them, no channels, no grants; §2.3) |
+| `kind` | `native` (a full member: an address, a mailbox and a native calendar when §3.2 gives them, else none), `guest` (none of them) or `personal_agent` (none of them, no channels, no grants; §2.3) |
 | `state` | the provisioning state (§3.4), then `active`, `suspended`, `removed` |
 
 Everything the organization gives a member hangs off the account: the mailbox, the calendars, the role, the profile.
