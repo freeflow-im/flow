@@ -253,7 +253,7 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
     consumeEmailLinkParams(runtime),
   );
   const [setupOpen, setSetupOpen] = useState(true);
-  // A sign-in or reset link opened in a browser signed in as someone else (decision_log 2026-11-16): see below.
+  // A sign-in or reset link opened in a browser signed in as someone else: see below.
   const [linkOpen, setLinkOpen] = useState(true);
   const [intent] = useState(consumeChatIntent);
   const page = intent?.kind === 'page' ? intent.page : null;
