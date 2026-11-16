@@ -659,6 +659,40 @@ export const huddleInvites = sqliteTable(
   ],
 );
 
+/**
+ * Meet (docs/specs/meetings.md): a meeting room on Cloudflare RealtimeKit (RTK). One row per room; RTK holds the live
+ * session. Its id is the link (`/meet/<id>`) and is indexed for the Worker's id-only routes (object.ts OUTBOX).
+ */
+export const meetings = sqliteTable(
+  'meetings',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+    /** RTK's meeting id. */
+    rtkMeetingId: text('rtk_meeting_id').notNull(),
+    title: text('title').notNull(),
+    createdBy: text('created_by').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+    /** The last time someone joined: Live now only asks RTK about rooms used recently. */
+    lastJoinedAt: integer('last_joined_at', { mode: 'timestamp_ms' }),
+  },
+  (t) => [index('meetings_workspace_idx').on(t.workspaceId, t.lastJoinedAt)],
+);
+
+/** One RTK participant per person per meeting, so a rejoin refreshes a token instead of adding a second participant. */
+export const meetingParticipants = sqliteTable(
+  'meeting_participants',
+  {
+    meetingId: text('meeting_id').notNull().references(() => meetings.id, { onDelete: 'cascade' }),
+    userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    rtkParticipantId: text('rtk_participant_id').notNull(),
+    /** The RTK preset it was added with: 'group_call_host' | 'group_call_participant'. */
+    preset: text('preset').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+  },
+  (t) => [primaryKey({ columns: [t.meetingId, t.userId] })],
+);
+
 export const huddleInviteTargets = sqliteTable(
   'huddle_invite_targets',
   {

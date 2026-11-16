@@ -12,6 +12,7 @@ This file keeps two things:
 
 ## Parity
 
+- **Meet is on web and desktop only (2026-11-16, docs/specs/meetings.md).** The Meet app and its rooms run in the browser and the desktop shell; macOS and iOS have no Meet yet, and their people can join a meeting by opening its link in a browser (gap to close in Meet phase 6). Huddles are unchanged on every client.
 - **Channels an agent made are nested under the agent on web only (2026-11-15).** Web Home and Chat (and the desktop shell) list them under the agent's row; macOS and iOS still list them under Channels (gap to close; the data is `createdBy`, already on every client).
 - **The side panel is on web only (2026-11-13, docs/specs/side-panel.md).** Mail on the web and the desktop shell shows Calendar and Docs in a side panel; macOS has none (gap to close later), and iOS has none by design (no room beside the main view).
 - **Creating members and the Set your password page are web-only (2026-11-13).** Create member is in the web Admin app (no native admin surface, by ruling); the emailed setup link opens the web page on every device, as reset links always have. The server's "Forgot password" change reaches every client. Deliberate.

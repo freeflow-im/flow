@@ -349,6 +349,10 @@ RTK file retention (7 days).
    - `packages/meet`, web and desktop: Meet home with **Start a meeting now**, **Copy link** and **Live now**; the room
      (grid, a shared screen shown large, mute, camera, share, leave, a simple People list) using the mockups' layout
      with RTK's video tile. The room opens in its own browser tab, so there is no mini window yet.
+   - **As built (2026-11-16):** the link is the meeting's id (`/meet/<id>`, routable through the object's index like a
+     channel id), not a short code; RTK's default presets `group_call_host` / `group_call_participant` instead of our
+     own; and Live now asks RTK's active-session API for rooms joined in the last 12 hours instead of webhooks (works on
+     a laptop too). Webhooks, short codes and own presets come with phase 2 or 3.
    - Not in it: Chat and huddles, guests, check screen, Calendar and scheduler, recording, transcripts, agents,
      in-meeting chat, raise hand, reactions, speaker view, blur, lock, mini window, native apps.
 2. **Chat and huddles** — Huddle button for rooms of 6 or fewer, ring, huddle card, `MeetingProvider` and mini window

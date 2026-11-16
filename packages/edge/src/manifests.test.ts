@@ -38,8 +38,8 @@ describe('the manifests and the Worker', () => {
   it('has a route file for every app that has routes, and mounts it in index.ts', () => {
     for (const m of APP_MANIFESTS) {
       // An app with a page has routes, unless it works through the others' (Admin, docs/specs/workspace-admin.md §2.1; Home,
-      // docs/specs/home.md).
-      if (m.path && m.name !== 'admin' && m.name !== 'home') expect(m.routes).toBeTruthy();
+      // docs/specs/home.md) or lives in the organization's object (Meet, docs/specs/meetings.md).
+      if (m.path && !['admin', 'home', 'meet'].includes(m.name)) expect(m.routes).toBeTruthy();
       if (!m.routes) continue;
       expect(existsSync(path.join(src, 'routes', `${m.routes}.ts`))).toBe(true);
       expect(index).toContain(`from './routes/${m.routes}';`);

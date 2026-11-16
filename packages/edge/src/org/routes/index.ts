@@ -78,6 +78,7 @@ import * as ci from '../services/channelIndicators.js';
 import * as ce from '../services/channelEmoji.js';
 import * as hd from '../services/huddles.js';
 import * as hi from '../services/huddleInvites.js';
+import * as mt from '../services/meetings.js';
 import * as msg from '../services/messages.js';
 import { searchMessages } from '../services/search.js';
 import { parseSearch } from '@flow/shared/search';
@@ -666,6 +667,27 @@ export function registerRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const body = parse(SetChannelEmojiBody, req.body);
     return ce.setChannelEmoji(id, req.user.id, body.emoji);
+  });
+
+  // Meet (docs/specs/meetings.md): meeting rooms on Cloudflare RealtimeKit, members only in phase 1. A room's id is its
+  // link and is routable by id alone (routes/org.ts BY_ID), so a link finds its organization.
+  app.post('/v1/workspaces/:id/meetings', { preHandler: requireAuth }, async (req) => {
+    const { id } = req.params as { id: string };
+    const title = (req.body as { title?: unknown } | undefined)?.title;
+    if (title !== undefined && typeof title !== 'string') throw badRequest('validation', 'title: expected a string');
+    return mt.createMeeting(id, req.user.id, title);
+  });
+  app.get('/v1/workspaces/:id/meetings/live', { preHandler: requireAuth }, async (req) => {
+    const { id } = req.params as { id: string };
+    return { meetings: await mt.liveMeetings(id, req.user.id) };
+  });
+  app.get('/v1/meetings/:id', { preHandler: requireAuth }, async (req) => {
+    const { id } = req.params as { id: string };
+    return mt.getMeeting(id, req.user.id);
+  });
+  app.post('/v1/meetings/:id/join', { preHandler: requireAuth }, async (req) => {
+    const { id } = req.params as { id: string };
+    return mt.joinMeeting(id, req.user.id);
   });
 
   // Huddles (LiveKit Cloud): entity-scoped voice/video. Ambient in a channel,

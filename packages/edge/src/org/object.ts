@@ -60,7 +60,7 @@ const MEMBERS_KEY = 'members_v2';
 /** What each id-only path needs (`routes/org.ts`), and who belongs here (`memberships`), reported to the directory by trigger. */
 const OUTBOX = [
   `CREATE TABLE IF NOT EXISTS _outbox (seq INTEGER PRIMARY KEY, kind TEXT NOT NULL, id TEXT NOT NULL, user_id TEXT, role TEXT, payload TEXT)`,
-  ...[['channels', 'id'], ['messages', 'id'], ['files', 'id'], ['artifacts', 'id'], ['scheduled_messages', 'id']].map(([t, c]) =>
+  ...[['channels', 'id'], ['messages', 'id'], ['files', 'id'], ['artifacts', 'id'], ['scheduled_messages', 'id'], ['meetings', 'id']].map(([t, c]) =>
     `CREATE TRIGGER IF NOT EXISTS _index_${t} AFTER INSERT ON ${t} BEGIN INSERT INTO _outbox (kind, id) VALUES ('index', NEW.${c}); END`),
   `CREATE TRIGGER IF NOT EXISTS _index_invites AFTER INSERT ON invites BEGIN INSERT INTO _outbox (kind, id) VALUES ('index', lower(hex(NEW.token_hash))); INSERT INTO _outbox (kind, id) VALUES ('index', NEW.id); END`,
   `CREATE TRIGGER IF NOT EXISTS _index_links AFTER INSERT ON workspace_join_links BEGIN INSERT INTO _outbox (kind, id) VALUES ('token', NEW.token); END`,

@@ -21,6 +21,10 @@ export interface OrgRouteEnv extends AuthEnv, PlatformDnsEnv, MailProviderEnv {
   LIVEKIT_API_KEY?: string;
   LIVEKIT_API_SECRET?: string;
   LIVEKIT_URL?: string;
+  /** Meet (Cloudflare RealtimeKit): all three set turns it on (docs/specs/meetings.md). */
+  RTK_ACCOUNT_ID?: string;
+  RTK_APP_ID?: string;
+  RTK_API_TOKEN?: string;
   /** Pushes: `apns` with the three credentials sends to Apple (org/push); anything else is the dev driver. */
   FLOW_PUSH_DRIVER?: string;
   FLOW_APNS_KEY?: string;
@@ -31,12 +35,13 @@ export interface OrgRouteEnv extends AuthEnv, PlatformDnsEnv, MailProviderEnv {
 }
 
 const huddlesEnabled = (env: OrgRouteEnv) => !!(env.LIVEKIT_API_KEY && env.LIVEKIT_API_SECRET && env.LIVEKIT_URL);
+const meetEnabled = (env: OrgRouteEnv) => !!(env.RTK_ACCOUNT_ID && env.RTK_APP_ID && env.RTK_API_TOKEN);
 const pushEnabled = (env: OrgRouteEnv) => env.FLOW_PUSH_DRIVER === 'apns' && !!(env.FLOW_APNS_KEY && env.FLOW_APNS_KEY_ID && env.FLOW_APNS_TEAM_ID);
 type C = Context<{ Bindings: OrgRouteEnv }>;
 
 const orgStub = (c: C, id: string) => c.env.ORG.get(c.env.ORG.idFromName(id));
 const IN_PATH = /^\/v1\/workspaces\/([0-9a-f-]{36})(?:\/|$)/;
-const BY_ID = /^\/v1\/(?:channels|messages|files|artifacts|scheduled-messages|huddle\/invites)\/([0-9a-f-]{36})(?:\/|$)/;
+const BY_ID = /^\/v1\/(?:channels|messages|files|artifacts|scheduled-messages|huddle\/invites|meetings)\/([0-9a-f-]{36})(?:\/|$)/;
 
 export const orgRoutes = new Hono<{ Bindings: OrgRouteEnv }>();
 
@@ -100,6 +105,7 @@ orgRoutes.get('/v1/config', (c) => {
     apple: !!c.env.APPLE_AUDIENCE,
     maxFileBytes: Number(c.env.FLOW_MAX_FILE_BYTES ?? 100 * 1024 * 1024),
     huddles: huddlesEnabled(c.env),
+    meet: meetEnabled(c.env),
     hostedMail,
     ...(settings ? { mail: { imapHost: settings.imap.host, smtpHost: settings.smtp.host } } : {}),
   });

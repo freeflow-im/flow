@@ -329,6 +329,35 @@ export interface HuddleInviteDTO {
   targets: HuddleInviteTargetDTO[];
 }
 
+/** A Meet meeting room (docs/specs/meetings.md). Its id is the link: `/meet/<id>`. */
+export interface MeetingDTO {
+  id: string;
+  workspaceId: string;
+  title: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+/** Someone in a live meeting, as RealtimeKit reports its active session. */
+export interface MeetingPersonDTO {
+  /** The FreeFlow user id (RTK's custom participant id), when RTK knows it. */
+  userId: string | null;
+  name: string;
+}
+
+/** A meeting with a session running now: Meet's "Live now". */
+export interface LiveMeetingDTO extends MeetingDTO {
+  people: MeetingPersonDTO[];
+  startedAt: string | null;
+}
+
+/** POST /v1/meetings/:id/join — what the RealtimeKit client needs to join, and whether this person hosts. */
+export interface MeetingJoinDTO {
+  meeting: MeetingDTO;
+  authToken: string;
+  host: boolean;
+}
+
 /**
  * POST /v1/channels/:id/huddle/join — a LiveKit token scoped to the room whose
  * name is the entity id. In a DM the same call *starts the ring* (#436), so

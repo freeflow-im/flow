@@ -259,4 +259,20 @@ export const config = {
   },
   /** No token-refresh path exists yet (decision log 2026-08-20), so this errs long. */
   livekitTokenTtl: '24h',
+  // ---- Meet (docs/specs/meetings.md, Cloudflare RealtimeKit) -----
+  get rtkAccountId(): string | undefined {
+    return process.env.RTK_ACCOUNT_ID || undefined;
+  },
+  get rtkAppId(): string | undefined {
+    return process.env.RTK_APP_ID || undefined;
+  },
+  get rtkApiToken(): string | undefined {
+    return process.env.RTK_API_TOKEN || undefined;
+  },
+  /** Meet is available. When false, the meeting routes 503 and clients hide Meet's actions. */
+  get rtkEnabled(): boolean {
+    return !!(process.env.RTK_ACCOUNT_ID && process.env.RTK_APP_ID && process.env.RTK_API_TOKEN);
+  },
+  /** How long a meeting token lives; the client asks for a new one on every join. */
+  rtkTokenTtlMs: 12 * 60 * 60 * 1000,
 } as const;
