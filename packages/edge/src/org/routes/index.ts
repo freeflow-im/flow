@@ -694,9 +694,13 @@ export function registerRoutes(app: FastifyInstance): void {
   // Hosts lock a meeting so no new guests come in (phase 3); members still join.
   app.patch('/v1/meetings/:id', { preHandler: requireAuth }, async (req) => {
     const { id } = req.params as { id: string };
-    const locked = (req.body as { locked?: unknown } | undefined)?.locked;
-    if (typeof locked !== 'boolean') throw badRequest('validation', 'locked: expected true or false');
-    return mt.setMeetingLocked(id, req.user.id, locked);
+    const body = (req.body ?? {}) as { locked?: unknown; title?: unknown };
+    if (body.locked === undefined && body.title === undefined) throw badRequest('validation', 'Send locked or title.');
+    if (body.locked !== undefined && typeof body.locked !== 'boolean') throw badRequest('validation', 'locked: expected true or false');
+    if (body.title !== undefined && typeof body.title !== 'string') throw badRequest('validation', 'title: expected text');
+    let out = typeof body.title === 'string' ? await mt.setMeetingTitle(id, req.user.id, body.title) : null;
+    if (typeof body.locked === 'boolean') out = await mt.setMeetingLocked(id, req.user.id, body.locked);
+    return out;
   });
 
   // A meeting's link for someone with no account (phase 3, ruling R2: guests go straight in). No sign-in: the code is

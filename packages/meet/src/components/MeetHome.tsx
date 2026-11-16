@@ -1,14 +1,17 @@
-// Meet's home (/meet/): start a meeting now, copy a link for later, and the organization's meetings running now.
-// A meeting opens in its own tab (App.tsx).
-import { useState } from 'react';
+// Meet's home (/meet/): start a meeting now, schedule one in Calendar, copy a link for later, join by a code or link;
+// the organization's meetings running now, and the calls left on the person's calendar today (docs/specs/meetings.md
+// §2.1). A meeting opens in its own tab (App.tsx).
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { Link2, Video } from 'lucide-react';
+import { CalendarPlus, Link2, Video } from 'lucide-react';
 import type { LiveMeetingDTO } from '@flow/shared';
-import { api, meetingUrl } from '../api';
+import { api, codeFrom, meetingUrl, scheduleUrl } from '../api';
+import { dayAround, todayCalls, type TodayCall } from '../lib/today';
 import { useOrganizations } from '../hooks/organization';
 import { MeetSuiteBar } from './MeetSuiteBar';
 
 const LIVE_REFRESH_MS = 15_000;
+const TODAY_REFRESH_MS = 60_000;
 
 /** Opens a tab at once (a tab opened after an await is blocked as a pop-up), then sends it to the room. */
 function openRoom(make: () => Promise<string>): Promise<void> {
@@ -61,6 +64,41 @@ function LiveRow({ meeting }: { meeting: LiveMeetingDTO }) {
   );
 }
 
+const clock = (d: Date) => d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+
+function TodayRow({ call }: { call: TodayCall }) {
+  return (
+    <li className="flex flex-wrap items-center gap-4 rounded-xl border border-hairline px-4 py-3">
+      <span className="w-[150px] whitespace-nowrap font-mono text-xs text-muted">
+        {call.now ? (
+          <span className="font-sans font-semibold text-ok">Now</span>
+        ) : (
+          clock(call.start)
+        )}
+        {' – '}
+        {clock(call.end)}
+      </span>
+      <div className="min-w-[180px] flex-1">
+        <div className="text-[15px] font-semibold">{call.title}</div>
+        {call.kind && <div className="text-xs text-muted">{call.kind}</div>}
+      </div>
+      <a href={call.url} target="_blank" rel="noopener noreferrer" className="flex h-9 items-center rounded-full border border-primary px-[18px] text-sm font-semibold text-primary no-underline hover:bg-primary hover:text-white">
+        Join
+      </a>
+    </li>
+  );
+}
+
+/** The clock the Today list reads, moved on every minute so finished calls drop off and "Now" follows. */
+function useNow(): Date {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(new Date()), 60_000);
+    return () => window.clearInterval(t);
+  }, []);
+  return now;
+}
+
 export function MeetHome() {
   const { active, ready } = useOrganizations();
   const enabled = useQuery({ queryKey: ['meet', 'enabled'], queryFn: api.enabled, staleTime: 5 * 60_000 });
@@ -70,8 +108,27 @@ export function MeetHome() {
     enabled: !!active && enabled.data === true,
     refetchInterval: LIVE_REFRESH_MS,
   });
+  const now = useNow();
+  const day = dayAround(now);
+  const events = useQuery({
+    queryKey: ['meet', 'today', active?.id, day.from.toISOString()],
+    queryFn: () => api.events(active!.id, day.from, day.to),
+    enabled: !!active && enabled.data === true,
+    refetchInterval: TODAY_REFRESH_MS,
+  });
+  const today = events.data ? todayCalls(events.data, now) : null;
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [code, setCode] = useState('');
+  const [codeError, setCodeError] = useState<string | null>(null);
+  const joinByCode = (e: React.FormEvent) => {
+    e.preventDefault();
+    const found = codeFrom(code);
+    if (!found) return setCodeError('That is not a meeting code or link. A code looks like kqd-wmzt-fra.');
+    setCodeError(null);
+    window.open(meetingUrl(found), '_blank', 'noopener');
+    setCode('');
+  };
 
   const start = useMutation({
     mutationFn: () => openRoom(async () => meetingUrl((await api.create(active!.id)).code)),
@@ -127,7 +184,47 @@ export function MeetHome() {
                 <Link2 size={20} className="text-muted" aria-hidden="true" />
                 {copied ? 'Link copied' : copyLink.isPending ? 'Making a link…' : 'Copy a link for later'}
               </button>
+              <a
+                href={scheduleUrl()}
+                className="flex h-11 items-center gap-3 rounded-lg px-3 text-[15px] text-ink no-underline hover:bg-hover"
+              >
+                <CalendarPlus size={20} className="text-muted" aria-hidden="true" />
+                Schedule in Calendar
+              </a>
             </div>
+          )}
+          {!off && (
+            <form onSubmit={joinByCode} className="flex flex-col gap-1.5">
+              <label htmlFor="meet-code" className="text-sm font-semibold">
+                Join with a code or link
+              </label>
+              <div className="flex gap-2">
+                <input
+                  id="meet-code"
+                  value={code}
+                  onChange={(e) => {
+                    setCode(e.target.value);
+                    setCodeError(null);
+                  }}
+                  placeholder="kqd-wmzt-fra"
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="h-10 min-w-0 flex-1 rounded-lg border border-border bg-transparent px-3 text-[15px] text-ink outline-none focus:border-primary"
+                />
+                <button
+                  type="submit"
+                  disabled={!code.trim()}
+                  className="h-10 cursor-pointer rounded-full border-0 bg-transparent px-4 text-[15px] font-semibold text-primary hover:bg-hover disabled:cursor-default disabled:opacity-50"
+                >
+                  Join
+                </button>
+              </div>
+              {codeError && (
+                <p role="alert" className="m-0 text-sm text-danger">
+                  {codeError}
+                </p>
+              )}
+            </form>
           )}
           {error && (
             <p role="alert" className="m-0 text-sm text-danger">
@@ -148,6 +245,30 @@ export function MeetHome() {
             </ul>
           ) : (
             <p className="m-0 rounded-xl border border-hairline p-4 text-sm text-muted">No meetings are running in {active?.name ?? 'your organization'} right now.</p>
+          )}
+
+          {!off && (
+            <>
+              <h2 className="m-0 mt-6 flex items-baseline justify-between text-xs font-semibold uppercase tracking-[0.6px] text-muted">
+                Today
+                <a href="/calendar/" className="text-xs font-normal normal-case tracking-normal text-primary no-underline hover:underline">
+                  Open Calendar
+                </a>
+              </h2>
+              {events.isError ? (
+                <p className="m-0 rounded-xl border border-hairline p-4 text-sm text-muted">Your calendar could not be read just now.</p>
+              ) : !today ? (
+                <p className="m-0 text-sm text-muted">Loading…</p>
+              ) : today.length > 0 ? (
+                <ul className="m-0 flex list-none flex-col gap-2 p-0">
+                  {today.map((c) => (
+                    <TodayRow key={c.id} call={c} />
+                  ))}
+                </ul>
+              ) : (
+                <p className="m-0 rounded-xl border border-hairline p-4 text-sm text-muted">No more calls on your calendar today.</p>
+              )}
+            </>
           )}
         </section>
       </main>

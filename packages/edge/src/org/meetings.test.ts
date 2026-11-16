@@ -7,7 +7,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { orgStorage } from '../../test/orgStorage';
 import { orgRoutes } from '../routes/org';
 import { withDb, schema, type DB } from './db/index';
-import { createMeeting, getMeeting, joinAsGuest, joinMeeting, liveMeetings, newMeetingCode, previewMeeting, setMeetingLocked } from './services/meetings';
+import { createMeeting, getMeeting, joinAsGuest, joinMeeting, liveMeetings, newMeetingCode, previewMeeting, setMeetingLocked, setMeetingTitle } from './services/meetings';
 import { createWorkspace } from './services/workspaces';
 
 const ANN = '00000000-0000-7000-8000-00000000000a';
@@ -166,6 +166,14 @@ describe('guests (phase 3)', () => {
     fakeRtk({ 'POST /meetings/rtk-m1/participants': { id: 'p-b', token: 'ben-tok' } });
     await expect(withDb(db, () => joinMeeting(m.code, BEN))).resolves.toMatchObject({ authToken: 'ben-tok' });
     expect(await withDb(db, () => setMeetingLocked(m.code, ANN, false))).toMatchObject({ locked: false });
+  });
+
+  it('a host renames a meeting (Calendar, once the event has a title); others cannot; empty changes nothing', async () => {
+    const m = await made();
+    await expect(withDb(db, () => setMeetingTitle(m.code, BEN, 'Plan'))).rejects.toMatchObject({ statusCode: 403, code: 'not_host' });
+    expect(await withDb(db, () => setMeetingTitle(m.code, ANN, '  Weekly plan '))).toMatchObject({ title: 'Weekly plan' });
+    expect(await withDb(db, () => setMeetingTitle(m.code, ANN, '   '))).toMatchObject({ title: 'Weekly plan' });
+    expect(await withDb(db, () => previewMeeting(m.code))).toMatchObject({ title: 'Weekly plan' });
   });
 });
 

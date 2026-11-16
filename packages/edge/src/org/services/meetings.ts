@@ -246,6 +246,21 @@ export async function setMeetingLocked(ref: string, userId: string, locked: bool
   return toDTO({ ...m, locked });
 }
 
+/**
+ * Renames a meeting (Calendar names a meeting made before its event had a title; docs/specs/meetings.md §1.2). A host
+ * only; a huddle keeps its conversation's name. An empty title changes nothing.
+ */
+export async function setMeetingTitle(ref: string, userId: string, title: string): Promise<MeetingDTO> {
+  const m = await meetingRow(ref);
+  await requireRoomAccess(m, userId);
+  if (m.channelId) throw badRequest('not_for_huddles', 'A huddle is named after its conversation.');
+  if (!(await isHost(m, userId))) throw new ApiError(403, 'not_host', 'Only a host can rename this meeting.');
+  const name = title.trim().slice(0, MAX_TITLE);
+  if (!name || name === m.title) return toDTO(m);
+  await db.update(schema.meetings).set({ title: name }).where(eq(schema.meetings.id, m.id));
+  return toDTO({ ...m, title: name });
+}
+
 /** The room says this person left (Leave, or the tab closing). Moves a huddle's roster; nothing to do for a meeting. */
 export async function leaveMeeting(ref: string, userId: string): Promise<void> {
   const m = await meetingRow(ref);

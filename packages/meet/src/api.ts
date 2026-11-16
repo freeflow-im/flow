@@ -37,7 +37,40 @@ export const api = {
   leave: (ref: string) => call<{ ok: true }>('POST', `/v1/meetings/${ref}/leave`, {}),
   /** The tab is closing: a request that outlives the page (no answer is read). */
   leaveOnClose: (ref: string) => navigator.sendBeacon(`/v1/meetings/${ref}/leave`),
+  /** The person's events between two times, from Calendar's API, in this organization (Meet home's Today list). */
+  events: async (workspaceId: string, from: Date, to: Date) =>
+    (
+      await call<{ events: CalendarEvent[] }>(
+        'GET',
+        `/v1/calendar/events?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}&workspace=${encodeURIComponent(workspaceId)}`,
+      )
+    ).events,
 };
+
+/** The fields of a Calendar event Meet's Today list reads (packages/calendar has the rest). */
+export interface CalendarEvent {
+  id: string;
+  summary: string;
+  start: string;
+  end: string;
+  allDay: boolean;
+  status: 'confirmed' | 'tentative' | 'cancelled';
+  location?: string | null;
+  description?: string | null;
+  conference?: { url: string; label: string };
+}
+
+/** Calendar's new-event editor with a FreeFlow Meet link already added (docs/specs/meetings.md §1.2). */
+export const scheduleUrl = () => '/calendar/?new=&meet=1';
+
+/** The room code in what someone pasted: a code (`kqd-wmzt-fra`, any case, dashes or not) or a Meet link. */
+export function codeFrom(text: string): string | null {
+  const t = text.trim().toLowerCase();
+  const inLink = /\/meet\/([a-z]{3}-[a-z]{4}-[a-z]{3})(?![a-z-])/.exec(t);
+  if (inLink) return inLink[1]!;
+  const letters = t.replace(/[\s-]/g, '');
+  return /^[a-z]{10}$/.test(letters) ? `${letters.slice(0, 3)}-${letters.slice(3, 7)}-${letters.slice(7)}` : null;
+}
 
 /** A guest's RealtimeKit participant id starts with this (the server's GUEST_ID_PREFIX). */
 export const isGuestId = (id: string | undefined) => !!id?.startsWith('guest-');
