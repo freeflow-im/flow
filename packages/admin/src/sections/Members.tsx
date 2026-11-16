@@ -10,6 +10,7 @@ import { suite } from '../suite';
 import { tellHome } from '@flow/suite-bar';
 import { Button, Card, Confirm, ErrorLine, Select } from '../components/ui';
 import { AddMemberModal, ConnectAgentModal, type Added } from './AddMember';
+import { AddressesModal } from './Addresses';
 
 export { suggestUsername } from './AddMember';
 
@@ -243,6 +244,7 @@ function EmailCell({ m, a, hostedMail, keyId, busy, queued, onProvision }: { m: 
 function MemberRow({ org, member: m, account: a, sponsorName, meId, hostedMail, fresh, onChanged, onProvisioned }: { org: WorkspaceDTO; member: WorkspaceMemberDTO; account: AccountDTO | undefined; sponsorName: string | undefined; meId: string | undefined; hostedMail: boolean; fresh: boolean; onChanged(): Promise<unknown>; onProvisioned(): void }) {
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [addresses, setAddresses] = useState(false);
   const isOwner = m.role === 'owner';
   const isSelf = m.userId === meId;
   const personal = m.kind === 'personal_agent';
@@ -274,6 +276,8 @@ function MemberRow({ org, member: m, account: a, sponsorName, meId, hostedMail, 
   const kind = kindLabel(m, a);
   const sponsor = m.isAgent && sponsorName ? `of ${sponsorName}` : null;
   const cell = 'px-3 py-1.5 align-middle';
+  // Addresses (platform.md §3.2): any member with a hosted mailbox, the admin's own included.
+  const hasMailbox = !!a && a.kind === 'native' && a.hosted && !!a.address && a.state !== 'removed';
 
   return (
     <tr data-testid={`member-${key}`} className={`border-b border-hairline last:border-0 ${fresh ? 'bg-selected-blue' : ''}`}>
@@ -341,7 +345,12 @@ function MemberRow({ org, member: m, account: a, sponsorName, meId, hostedMail, 
         )}
       </td>
       <td className={`${cell} relative text-right`}>
-        <div className="flex items-center justify-end gap-2 whitespace-nowrap">
+        <div className="flex items-center justify-end gap-3 whitespace-nowrap">
+          {hasMailbox && !confirming && (
+            <Button kind="link" disabled={busy} onClick={() => setAddresses(true)} testid={`addresses-${key}`}>
+              Addresses
+            </Button>
+          )}
           {locked ? null : confirming ? (
             // Over the row's end, so the confirmation does not widen the column.
             <span className="absolute inset-y-0 right-0 z-10 flex w-max items-center bg-white pr-3 pl-3 shadow-[-8px_0_8px_white]">
@@ -354,6 +363,7 @@ function MemberRow({ org, member: m, account: a, sponsorName, meId, hostedMail, 
           )}
         </div>
         <ErrorLine error={error} testid={`error-${key}`} />
+        {addresses && a && <AddressesModal org={org} account={a} name={m.displayName} isAgent={m.isAgent} onClose={() => setAddresses(false)} onChanged={onChanged} />}
       </td>
     </tr>
   );

@@ -1,6 +1,6 @@
 // The suite's API on the edge Worker, same origin with the session cookie: the Org object's routes (the workspace, its
 // members, invitations, emoji, join link) and the directory's (domains, accounts). A 401 sends the browser to sign in.
-import type { AccountDTO, AccountKind, AgentDefinitionDTO, CreateMemberBody, CreateMemberResultDTO, PendingSetupDTO, PlatformEvent, UsableAgentDTO, AgentInviteDTO, ChannelDTO, DnsRecordDTO, DomainDTO, DomainKind, FileDTO, InviteResultDTO, JoinLinkDTO, MemberRole, OAuthIdentityDTO, PresignedUploadDTO, PublicConfigDTO, UpdateWorkspaceBody, WorkspaceDTO, WorkspaceEmojiDTO, WorkspaceInviteDTO, WorkspaceMemberDTO } from '@flow/shared';
+import type { AccountAddressesDTO, AccountDTO, AccountKind, AgentDefinitionDTO, CreateMemberBody, CreateMemberResultDTO, PendingSetupDTO, PlatformEvent, UsableAgentDTO, AgentInviteDTO, ChannelDTO, DnsRecordDTO, DomainDTO, DomainKind, FileDTO, InviteResultDTO, JoinLinkDTO, MemberRole, OAuthIdentityDTO, PresignedUploadDTO, PublicConfigDTO, UpdateWorkspaceBody, WorkspaceDTO, WorkspaceEmojiDTO, WorkspaceInviteDTO, WorkspaceMemberDTO } from '@flow/shared';
 
 export class AdminApiError extends Error {
   constructor(public readonly code: string, message: string, public readonly status: number) {
@@ -128,6 +128,11 @@ export const adminApi = {
   setKind: (id: string, accountId: string, kind: AccountKind) => request<{ account: AccountDTO }>('PATCH', `${ws(id)}/accounts/${encodeURIComponent(accountId)}/kind`, { kind }),
   makeMembersGuests: (id: string) => request<{ changed: number; unchanged: number }>('POST', `${ws(id)}/accounts/kind`, { kind: 'guest', all: true }),
   provisionAll: (id: string) => request<{ queued: number }>('POST', `${ws(id)}/provision`, {}),
+  // An account's addresses (platform.md §3.2): the one it goes by and its aliases.
+  addresses: (id: string, accountId: string) => request<AccountAddressesDTO>('GET', `${ws(id)}/accounts/${encodeURIComponent(accountId)}/addresses`),
+  addAddress: (id: string, accountId: string, address: string) => request<AccountAddressesDTO>('POST', `${ws(id)}/accounts/${encodeURIComponent(accountId)}/addresses`, { address }),
+  removeAddress: (id: string, accountId: string, address: string) => request<AccountAddressesDTO>('DELETE', `${ws(id)}/accounts/${encodeURIComponent(accountId)}/addresses/${encodeURIComponent(address)}`),
+  changeAddress: (id: string, accountId: string, address: string) => request<{ account: AccountDTO; addresses: AccountAddressesDTO }>('PUT', `${ws(id)}/accounts/${encodeURIComponent(accountId)}/address`, { address }),
   provisionOne: (id: string, accountId: string) => request<{ queued: boolean }>('POST', `${ws(id)}/accounts/${encodeURIComponent(accountId)}/provision`, {}),
   // Invitations (§6.3, §6.5): pending ones, revoking one, and inviting people or chat guests.
   invites: async (id: string) => (await request<{ invites: WorkspaceInviteDTO[] }>('GET', `${ws(id)}/invites`)).invites,
