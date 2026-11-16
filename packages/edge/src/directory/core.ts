@@ -10,6 +10,8 @@ import { PLATFORM_DOMAIN, localPart, organizationDomain, uniqueAddress } from '.
 import { checkDomain, checkRecords, dohResolver, normalizeDomain, recordsFor, type Resolve } from './dns';
 import { DEFAULT_DOMAIN_LIMITS, ProviderError, noneMailProvider, type DkimRecord, type MailProvider } from '../mailprovider/index';
 import { generateDkimKey } from '../mailprovider/dkim';
+import { mailboxPassword } from '../provisioning/steps';
+import type { HostedMailbox } from '../imap/object';
 import { encryptBlob } from '../org/crypto/index';
 import { HandoffApprove, HandoffExchange, HandoffStart, parseBody, pkceChallenge, validateContext, type HandoffContext, type HandoffPolicy } from './authHandoff';
 
@@ -472,6 +474,62 @@ export class DirectoryCore {
     this.sql.exec('UPDATE accounts SET address = ? WHERE id = ?', address, accountId);
     // The mailbox's own address needs no forwarder; keep `mailbox_address` only while they differ.
     this.sql.exec('UPDATE accounts SET mailbox_address = NULL WHERE id = ? AND mailbox_address = address', accountId);
+    return this.accountById(accountId)!;
+  }
+
+  /**
+   * The first half of moving to a new mailbox (platform.md §3.2): a small mailbox changes address by being copied into
+   * a new one at the new address. The address is claimed (an alias of the account's becomes a mailbox: its forwarder
+   * goes first), and the new mailbox is made. Returns what the Mail object copies into, with the password, or null
+   * when the address needs no move (it is the mailbox's own already). `abortMove` undoes it; `finishMove` completes it.
+   */
+  async startMove(organizationId: string, accountId: string, raw: string): Promise<{ address: string; wasAlias: boolean; mailbox: HostedMailbox } | null> {
+    const { row, mailbox } = this.mailboxOf(organizationId, accountId);
+    const address = raw.trim().toLowerCase();
+    if (address === mailbox.toLowerCase()) return null;
+    const wasAlias = this.rows('SELECT 1 FROM aliases WHERE address = ? AND account_id = ?', address, accountId).length > 0;
+    if (!wasAlias) {
+      this.freeAddress(row, address);
+      this.sql.exec('INSERT INTO addresses (address, account_id) VALUES (?, ?)', address, accountId);
+    }
+    const provider = this.mailProvider();
+    const password = mailboxPassword();
+    try {
+      if (wasAlias) await provider.deleteAlias(address);
+      await provider.createMailbox({ address, displayName: row.display_name as string, password, quotaBytes: DEFAULT_DOMAIN_LIMITS.quotaBytes });
+    } catch (err) {
+      await this.abortMove(accountId, address, wasAlias, mailbox, false).catch(() => {});
+      providerFailure(err);
+    }
+    const settings = provider.mailSettings(address);
+    return { address, wasAlias, mailbox: { email: address, displayName: row.display_name as string, imap: settings.imap, smtp: settings.smtp, password } };
+  }
+
+  /** Undoes `startMove`: the new mailbox deleted (when it was made), the address let go, or an alias's forwarder made again. */
+  async abortMove(accountId: string, address: string, wasAlias: boolean, oldMailbox: string, made = true): Promise<void> {
+    const provider = this.mailProvider();
+    if (made) await provider.deleteMailbox(address).catch((err: Error) => console.error(`abort move ${address}: ${err.message}`));
+    if (wasAlias) await provider.createAlias(address, oldMailbox).catch((err: Error) => console.error(`abort move alias ${address}: ${err.message}`));
+    else this.sql.exec('DELETE FROM addresses WHERE address = ? AND account_id = ?', address, accountId);
+  }
+
+  /**
+   * The second half, once the Mail object has copied the mail and goes by the new mailbox: the account goes by the new
+   * address, the old mailbox is deleted, its address and every alias forward to the new one, and the old one stays an
+   * alias (removable). Returns the account.
+   */
+  async finishMove(organizationId: string, accountId: string, address: string): Promise<AccountDTO> {
+    const { mailbox: old } = this.mailboxOf(organizationId, accountId);
+    const provider = this.mailProvider();
+    this.sql.exec('UPDATE accounts SET address = ?, mailbox_address = NULL WHERE id = ?', address, accountId);
+    this.sql.exec('DELETE FROM aliases WHERE address = ?', address);
+    this.sql.exec('INSERT OR REPLACE INTO addresses (address, account_id) VALUES (?, ?)', address, accountId);
+    // The old mailbox goes before its address can be a forwarder (a mailbox and a forwarder cannot share a name).
+    await provider.deleteMailbox(old).catch((err: Error) => console.error(`move: delete ${old}: ${err.message}`));
+    this.sql.exec('INSERT OR REPLACE INTO aliases (address, account_id, created_at) VALUES (?, ?, ?)', old.toLowerCase(), accountId, Date.now());
+    for (const a of this.rows('SELECT address FROM aliases WHERE account_id = ?', accountId)) {
+      await provider.createAlias(a.address as string, address).catch((err: Error) => console.error(`move: alias ${a.address as string}: ${err.message}`));
+    }
     return this.accountById(accountId)!;
   }
 

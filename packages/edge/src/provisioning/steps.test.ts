@@ -545,4 +545,40 @@ describe('aliases and changed addresses (platform.md §3.2, decision_log 2026-11
     await core.verifyDomain(org, 'beta.test');
     expect(primary()).toBe('acme.test');
   });
+
+  it('moves a mailbox to a new one at the new address: the old one deleted, its address and the aliases forwarding', async () => {
+    const { org, ann } = await setUp();
+    await core.addAlias(org, ann.id, 'sales@acme.test');
+    const start = (await core.startMove(org, ann.id, 'Scott@acme.test'))!;
+    expect(start).toMatchObject({ address: 'scott@acme.test', wasAlias: false, mailbox: { email: 'scott@acme.test', imap: { username: 'scott@acme.test' } } });
+    expect(provider.mailboxes.has('scott@acme.test')).toBe(true);
+    expect(core.accountByAddress('scott@acme.test')?.id).toBe(ann.id);
+    const after = await core.finishMove(org, ann.id, start.address);
+    expect(after.address).toBe('scott@acme.test');
+    expect(provider.mailboxes.has('ann@acme.test')).toBe(false);
+    expect(Object.fromEntries(provider.aliases)).toEqual({ 'ann@acme.test': 'scott@acme.test', 'sales@acme.test': 'scott@acme.test' });
+    expect(core.addressesOf(ann.id)).toMatchObject({ address: 'scott@acme.test', others: [{ address: 'sales@acme.test', removable: true }, { address: 'ann@acme.test', removable: true }] });
+    expect(core.provisioningTarget(ann.id)!.mailboxAddress).toBe('scott@acme.test');
+    // To the mailbox's own address: nothing to move.
+    expect(await core.startMove(org, ann.id, 'scott@acme.test')).toBeNull();
+  });
+
+  it('undoes a move that did not finish: the new mailbox deleted, the address let go or its forwarder made again', async () => {
+    const { org, ann } = await setUp();
+    const fresh = (await core.startMove(org, ann.id, 'scott@acme.test'))!;
+    await core.abortMove(ann.id, fresh.address, fresh.wasAlias, 'ann@acme.test');
+    expect(provider.mailboxes.has('scott@acme.test')).toBe(false);
+    expect(core.accountByAddress('scott@acme.test')).toBeNull();
+    await core.addAlias(org, ann.id, 'sales@acme.test');
+    const alias = (await core.startMove(org, ann.id, 'sales@acme.test'))!;
+    expect(alias.wasAlias).toBe(true);
+    expect(provider.aliases.has('sales@acme.test')).toBe(false);
+    await core.abortMove(ann.id, alias.address, alias.wasAlias, 'ann@acme.test');
+    expect(provider.aliases.get('sales@acme.test')).toBe('ann@acme.test');
+    expect(core.accountByAddress('sales@acme.test')?.id).toBe(ann.id);
+    // A provider refusal undoes it before anything is made.
+    provider.createMailbox = async () => { throw new ProviderError('bad_request', 'no'); };
+    await expect(core.startMove(org, ann.id, 'other@acme.test')).rejects.toMatchObject({ code: 'mail_provider_bad_request' });
+    expect(core.accountByAddress('other@acme.test')).toBeNull();
+  });
 });

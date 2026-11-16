@@ -19,14 +19,21 @@ export function AddressesModal({ org, account, name, onClose, onChanged }: { org
   const [local, setLocal] = useState('');
   const [domain, setDomain] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const chosenDomain = domain ?? usable[0] ?? '';
 
-  const act = <V,>(fn: (v: V) => Promise<AccountAddressesDTO | { addresses: AccountAddressesDTO }>) =>
+  const act = <V,>(fn: (v: V) => Promise<AccountAddressesDTO | { addresses: AccountAddressesDTO; moved: { messages: number } | null }>) =>
     useMutation({
       mutationFn: fn,
-      onMutate: () => setError(null),
+      onMutate: () => { setError(null); setNote(null); },
       onSuccess: async (out) => {
         qc.setQueryData(key, 'addresses' in out ? out.addresses : out);
+        // A small mailbox moves to a new one at the address; a bigger one keeps its mailbox (platform.md §3.2).
+        if ('moved' in out) {
+          setNote(out.moved
+            ? `Moved to a new mailbox at ${out.addresses.address}, with its ${out.moved.messages === 1 ? '1 message' : `${out.moved.messages} messages`}.`
+            : `Mail is now sent from ${out.addresses.address}. The mailbox had too much mail to move, so it keeps its first address as its login.`);
+        }
         await onChanged();
       },
       onError: (e) => setError(errorText(e)),
@@ -47,7 +54,7 @@ export function AddressesModal({ org, account, name, onClose, onChanged }: { org
   return (
     <Modal title={`Addresses of ${name}`} onClose={onClose} testid="addresses-modal">
       <div className="flex flex-col gap-4 text-sm">
-        <p className="text-muted">Mail to any of these reaches {name}'s mailbox. Mail they send comes from the main address.</p>
+        <p className="text-muted">Mail to any of these reaches {name}'s mailbox. Mail they send comes from the main address. Making another address main moves a small mailbox (up to 200 messages) to a new one at that address, its mail included.</p>
         {list.isError && <ErrorLine error={errorText(list.error)} />}
         {data && (
           <ul className="divide-y divide-hairline rounded-md border border-border" data-testid="addresses-list">
@@ -97,6 +104,7 @@ export function AddressesModal({ org, account, name, onClose, onChanged }: { org
         ) : (
           list.isSuccess && <p className="text-xs text-muted">Turn on mail for a domain of your own (Domains & mail) to add addresses.</p>
         )}
+        {note && <p className="text-xs text-ok" data-testid="addresses-note">{note}</p>}
         <ErrorLine error={error} testid="addresses-error" />
       </div>
     </Modal>

@@ -111,13 +111,43 @@ accountRoutes.delete('/v1/workspaces/:id/me/addresses/:address', async (c) => {
   return c.json(await directory(c, 'removeAlias', me.id, me.accountId, decodeURIComponent(c.req.param('address'))) satisfies AccountAddressesDTO);
 });
 
-/** The address the account goes by: one of its others, or a new one (made an alias first). Mail is sent as it from now on. */
+/** A mailbox this small changes address by moving to a new mailbox; a bigger one gets a forwarder (platform.md §3.2). */
+export const MOVE_MAX_MESSAGES = 200;
+export const MOVE_MAX_BYTES = 50 * 2 ** 20;
+
+/**
+ * The address the account goes by: one of its others, or a new one. A small mailbox moves to a new mailbox at that
+ * address (its mail copied, the old mailbox deleted, the old address forwarding to it); a bigger one keeps its mailbox
+ * and the address becomes a forwarder that mail is sent as. `moved` says which, with the messages copied.
+ */
 accountRoutes.put('/v1/workspaces/:id/accounts/:accountId/address', async (c) => {
   const id = await adminOf(c as never, 'change addresses');
   const body = await bodyOf(c, AccountAddressBody);
-  const account = await directory(c, 'changeAddress', id, c.req.param('accountId'), body.address);
+  const accountId = c.req.param('accountId');
+  const before = await directory(c, 'accountById', accountId);
+  if (!before || before.organizationId !== id) throw new ApiError(404, 'not_found', 'account not found');
+  const env = c.env as AddressEnv;
+  const mail = env.MAIL.get(env.MAIL.idFromName(before.id));
+  let account: AccountDTO | null = null;
+  let moved: { messages: number } | null = null;
+  const size = await mail.hostedSize(before).catch((err: Error) => { console.error(`address size ${before.id}: ${err.message}`); return null; });
+  if (size && size.messages <= MOVE_MAX_MESSAGES && body.address !== before.address?.toLowerCase()) {
+    const start = await directory(c, 'startMove', id, accountId, body.address);
+    if (start) {
+      const old = (await directory(c, 'addressesOf', accountId)).others.find((o) => !o.removable)?.address ?? before.address!;
+      const out = await mail.moveHosted(before, start.mailbox, MOVE_MAX_BYTES);
+      if (out.ok) {
+        account = await directory(c, 'finishMove', id, accountId, start.address);
+        moved = { messages: out.messages };
+      } else {
+        await directory(c, 'abortMove', accountId, start.address, start.wasAlias, old);
+        if (out.reason !== 'too_big') throw new ApiError(502, 'move_failed', `Could not copy the mail to the new mailbox: ${out.message}`);
+      }
+    }
+  }
+  account ??= await directory(c, 'changeAddress', id, accountId, body.address);
   await followAddress(c, account);
-  return c.json({ account, addresses: await directory(c, 'addressesOf', account.id) });
+  return c.json({ account, addresses: await directory(c, 'addressesOf', account.id), moved });
 });
 
 /** An admin removes a personal agent (docs/specs/agents.md §2): its account, and every delegation it acted through. Only a

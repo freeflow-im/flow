@@ -34,7 +34,7 @@ beforeEach(() => {
     if (path.endsWith('/address') && method === 'PUT') {
       const to = (body as { address: string }).address;
       state = { ...state, address: to, others: [...state.others.filter((o) => o.address !== to), { address: state.address!, removable: true }] };
-      return json({ account: { ...account, address: to }, addresses: state });
+      return json({ account: { ...account, address: to }, addresses: state, moved: { messages: 3 } });
     }
     if (path.endsWith('/addresses')) return json(state);
     return json({});
@@ -78,6 +78,7 @@ describe('Addresses', () => {
     show();
     fireEvent.click(await screen.findByTestId('address-use-sales@acme.test'));
     await waitFor(() => expect(screen.getByTestId('address-main').textContent).toContain('sales@acme.test'));
+    expect(screen.getByTestId('addresses-note').textContent).toContain('Moved to a new mailbox at sales@acme.test, with its 3 messages');
     expect(calls.find((c) => c.method === 'PUT')).toMatchObject({ path: '/v1/workspaces/o1/accounts/a1/address', body: { address: 'sales@acme.test' } });
     fireEvent.click(screen.getByTestId('address-remove-ann@acme.test'));
     await waitFor(() => expect(screen.queryByTestId('address-other-ann@acme.test')).toBeNull());

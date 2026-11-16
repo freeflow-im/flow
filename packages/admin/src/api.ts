@@ -132,7 +132,7 @@ export const adminApi = {
   addresses: (id: string, accountId: string) => request<AccountAddressesDTO>('GET', `${ws(id)}/accounts/${encodeURIComponent(accountId)}/addresses`),
   addAddress: (id: string, accountId: string, address: string) => request<AccountAddressesDTO>('POST', `${ws(id)}/accounts/${encodeURIComponent(accountId)}/addresses`, { address }),
   removeAddress: (id: string, accountId: string, address: string) => request<AccountAddressesDTO>('DELETE', `${ws(id)}/accounts/${encodeURIComponent(accountId)}/addresses/${encodeURIComponent(address)}`),
-  changeAddress: (id: string, accountId: string, address: string) => request<{ account: AccountDTO; addresses: AccountAddressesDTO }>('PUT', `${ws(id)}/accounts/${encodeURIComponent(accountId)}/address`, { address }),
+  changeAddress: (id: string, accountId: string, address: string) => request<{ account: AccountDTO; addresses: AccountAddressesDTO; moved: { messages: number } | null }>('PUT', `${ws(id)}/accounts/${encodeURIComponent(accountId)}/address`, { address }),
   provisionOne: (id: string, accountId: string) => request<{ queued: boolean }>('POST', `${ws(id)}/accounts/${encodeURIComponent(accountId)}/provision`, {}),
   // Invitations (§6.3, §6.5): pending ones, revoking one, and inviting people or chat guests.
   invites: async (id: string) => (await request<{ invites: WorkspaceInviteDTO[] }>('GET', `${ws(id)}/invites`)).invites,

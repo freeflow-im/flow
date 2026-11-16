@@ -6,11 +6,12 @@
   Owners and admins do both on Members (platform.md §3.2).
 - **Ruling (Scott):** members can add and remove their own aliases (Mail › account settings). Changing the address a
   member sends from stays with owners and admins; agents cannot change their own addresses.
-- **How a change works:** MXRoute's API has forwarders but no mailbox rename. A changed address is a forwarder to the
-  mailbox, which keeps its first address as its login; Mail sends as the new address (MXRoute only checks that the
-  From address is one it delivers). The old address keeps delivering. Copying mail into a new mailbox was the other
-  choice: slower, and mailboxes are new, so nothing is gained. MXRoute adds an `X-AuthUser` header naming the login,
-  so a recipient who reads headers can see the first address.
+- **How a change works (Scott: people change their address early, when the mailbox is nearly empty):** MXRoute's API
+  has forwarders but no mailbox rename. A mailbox of up to 200 messages and 50 MB moves to a new mailbox at the new
+  address, its mail copied over IMAP; the old mailbox is deleted and its address forwards to the new one, so nothing
+  is lost and the login is the new address. A bigger mailbox, whose copy would not fit in one request, keeps its
+  mailbox: the new address is a forwarder that Mail sends as (MXRoute only checks that the From address is one it
+  delivers), and MXRoute's `X-AuthUser` header still names the first address.
 - **Ruling (Scott):** a workspace's first domain of its own is made primary automatically. A domain must be verified
   before it can be primary, so it becomes primary at the moment it is verified. Before this, a
   verified domain with mail on gave nobody an address until an admin found Make primary (persinger.us, 2026-11-16).

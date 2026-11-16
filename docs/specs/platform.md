@@ -182,9 +182,12 @@ The directory holds the organization row, its slugs and domains. The Org object 
   mailbox more addresses (aliases), each a forwarder at the mail provider to the mailbox, and can make any of them
   the address the member goes by. A person can add and remove their own aliases (not change the address they go by;
   an agent neither). A person's are on the organization's own domains with mail on; an agent's may also
-  be on the platform subdomain. MXRoute cannot rename a mailbox, so a changed address is an alias: the mailbox keeps
-  the address it was made with (`accounts.mailbox_address`) as its login, mail is sent as the new one, and the old one
-  still delivers. The mailbox's own address cannot be removed; aliases can, and are deleted with the mailbox. Aliases
+  be on the platform subdomain. MXRoute cannot rename a mailbox. A small mailbox (up to 200 messages and 50 MB)
+  therefore moves: a new mailbox is made at the new address, the mail is copied into it over IMAP (folders, flags and
+  dates kept), Mail switches to it, the old mailbox is deleted, and the old address and every alias forward to the new
+  one (the old address is then an ordinary, removable alias). A bigger mailbox keeps its mailbox: the new address is
+  an alias, the mailbox keeps the address it was made with (`accounts.mailbox_address`) as its login, mail is sent as
+  the new one, and the old one still delivers. The mailbox's own address cannot be removed; aliases can, and are deleted with the mailbox. Aliases
   are kept in `aliases` and in `addresses`, so an address is still unique and finds its account.
 - A domain belongs to one organization. An address is therefore unique across the platform.
 - The directory keeps `addresses (address → account_id)`. Inbound mail routing, invitation delivery and the
