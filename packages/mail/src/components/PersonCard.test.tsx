@@ -45,7 +45,7 @@ afterEach(() => {
 });
 
 const show = async (address: Address, actions: Partial<PersonActions> = {}) => {
-  const all: PersonActions = { organizationId: 'o1', compose: vi.fn(), search: vi.fn(), ...actions };
+  const all: PersonActions = { organizationId: 'o1', compose: vi.fn(), composeDraft: vi.fn(), search: vi.fn(), ...actions };
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);

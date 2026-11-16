@@ -405,6 +405,7 @@ export function App() {
         ? {
             organizationId: org,
             compose: (a) => openCompose(account.id, { mode: 'new', draft: { ...emptyDraft(), to: [a] } }),
+            composeDraft: (draft) => openCompose(account.id, { mode: 'new', draft }),
             search: (a) => {
               setQ(a.address);
               resetSelection();

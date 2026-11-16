@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MessageDetail } from '../api';
-import { forwardSubject, fromDraft, isDraftEmpty, prefill, replySubject } from './compose';
+import { draftFromMailto, forwardSubject, fromDraft, isDraftEmpty, prefill, replySubject } from './compose';
 
 const msg = (over: Partial<MessageDetail> = {}): MessageDetail => ({
   uid: 7,
@@ -119,5 +119,24 @@ describe('fromDraft', () => {
     expect(d.html).toContain('Sounds good');
     expect(d.html).not.toContain('script');
     expect(d.forwardAttachments).toEqual([{ index: 0, filename: 'plan.csv', mimeType: 'text/csv', size: 4 }]);
+  });
+});
+
+describe('draftFromMailto', () => {
+  it('a bare address', () => {
+    expect(draftFromMailto('mailto:creager@keycard.ai')).toEqual({ to: [{ name: '', address: 'creager@keycard.ai' }], cc: [], bcc: [], subject: '', html: '' });
+  });
+  it('several addresses, cc, bcc, subject and body (RFC 6068); a + stays a +', () => {
+    const d = draftFromMailto('MAILTO:a+tag@x.test,b@x.test?cc=c@x.test&bcc=d%40x.test&subject=Hello%20there&body=Line%201%0ALine%202&to=a+tag@x.test')!;
+    expect(d.to.map((a) => a.address)).toEqual(['a+tag@x.test', 'b@x.test']);
+    expect(d.cc.map((a) => a.address)).toEqual(['c@x.test']);
+    expect(d.bcc.map((a) => a.address)).toEqual(['d@x.test']);
+    expect(d.subject).toBe('Hello there');
+    expect(d.html).toBe('<p>Line 1<br>Line 2</p>');
+  });
+  it('not a mailto link, or one that asks for nothing', () => {
+    expect(draftFromMailto('https://example.test')).toBeNull();
+    expect(draftFromMailto('mailto:')).toBeNull();
+    expect(draftFromMailto('mailto:not-an-address')).toBeNull();
   });
 });

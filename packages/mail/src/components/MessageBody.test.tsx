@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { MessageDetail } from '../api';
+import type { ComposeDraft } from '../lib/compose';
 import { MessageBody } from './MessageBody';
+import { PersonActionsContext, type PersonActions } from './PersonCard';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -82,5 +84,37 @@ describe('MessageBody', () => {
     } finally {
       window.removeEventListener('keydown', onKey);
     }
+  });
+
+  describe('a mailto: link opens a new message here', () => {
+    const drafts: ComposeDraft[] = [];
+    const people: PersonActions = { organizationId: null, compose() {}, search() {}, composeDraft: (d) => drafts.push(d) };
+    const render = (m: MessageDetail) => act(() => root.render(createElement(PersonActionsContext.Provider, { value: people }, createElement(MessageBody, { accountId: 'acc', message: m }))));
+    const click = (el: Element) => {
+      const e = new MouseEvent('click', { bubbles: true, cancelable: true });
+      el.dispatchEvent(e);
+      return e;
+    };
+    beforeEach(() => { drafts.length = 0; });
+
+    it('in an HTML message (in the frame); other links are left alone', async () => {
+      await render(message);
+      // jsdom does not load srcdoc: the document is written here, then the frame's watcher finds it (as in the browser).
+      const doc = host.querySelector('iframe')!.contentDocument!;
+      doc.body.innerHTML = '<p><a href="mailto:creager@keycard.ai?subject=Hi">creager@keycard.ai</a> <a href="https://example.test">site</a></p>';
+      await act(() => vi.advanceTimersByTimeAsync(300));
+      const [mail, web] = [...doc.querySelectorAll('a')];
+      expect(click(mail!).defaultPrevented).toBe(true);
+      expect(drafts).toEqual([{ to: [{ name: '', address: 'creager@keycard.ai' }], cc: [], bcc: [], subject: 'Hi', html: '' }]);
+      expect(click(web!).defaultPrevented).toBe(false);
+      expect(drafts).toHaveLength(1);
+    });
+
+    it('in a plain-text message, where an address is made a link', async () => {
+      await render({ ...message, html: null, text: 'Write to creager@keycard.ai today' });
+      const link = host.querySelector('a[href^="mailto:"]')!;
+      expect(click(link).defaultPrevented).toBe(true);
+      expect(drafts.map((d) => d.to[0]!.address)).toEqual(['creager@keycard.ai']);
+    });
   });
 });
