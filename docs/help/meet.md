@@ -13,8 +13,14 @@ order: 7
 - **Start a meeting now** makes a meeting and opens it in a new tab.
 - **Copy a link for later** makes a meeting and copies its link, to paste into
   a message, an email or a calendar event.
+- **Schedule in Calendar** opens a new Calendar event with a FreeFlow Meet link
+  already in it. Add a title, a time and guests, then save.
+- **Join with a code or link**: paste a meeting's link or type its code
+  (`kqd-wmzt-fra`) and press **Join**.
 - **Live now** lists your organization's meetings that are running, with who
   is in each. Press **Join** to go in.
+- **Today** lists the calls left on your calendar today, with a **Join**
+  button: FreeFlow Meet, Google Meet, Zoom and Teams.
 
 A meeting's link looks like `…/meet/kqd-wmzt-fra`. It keeps working, so you can
 use the same link for a meeting that repeats.
@@ -42,7 +48,8 @@ room. Guests show as **Guest** in the People list.
 - In **Calendar**, an event's editor has **Add FreeFlow Meet**. It makes a
   meeting and puts its link in the event, so everyone invited sees it, even
   people outside FreeFlow (they join as guests). The event's card then has a
-  **Join with FreeFlow Meet** button.
+  **Join with FreeFlow Meet** button. When you save the event, the meeting
+  takes the event's title.
 - On your **booking page**, choose **FreeFlow Meet** as the location. Each
   booking gets its own meeting link, in the event and in the guest's mail.
 - **Home**'s Today card has a **Join** button for any meeting with a video

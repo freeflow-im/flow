@@ -2,12 +2,12 @@
 // and a custom rule), calendar, location, guests (completed from Mail's contacts), description and reminders. A new event
 // is created as it stands; an existing one sends only what changed, and a repeating one asks this / following / all first
 // (not "this" when its rule changed).
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { addMinutes, format } from 'date-fns';
 import { Loader2, Video, X } from 'lucide-react';
 import { calendarApi, type CalendarAccount, type CalendarInfo, type EventInput, type EventOccurrence, type EventPatch, type Scope } from '../api';
 import { allZones, browserZone, reminderText, wallIn, zoneLabel } from '../lib/format';
-import { createMeetLink, meetLinkIn, withMeetLink, withoutMeetLink } from '../lib/meet';
+import { createMeetLink, meetLinkIn, nameMeeting, withMeetLink, withoutMeetLink } from '../lib/meet';
 import { parseDate } from '../lib/ranges';
 import { WEEKDAYS, defaultRule, describeRule, parseRule, positionOf, presetOf, presetsFor, ruleLine, withRule, type PresetId, type Rule } from '../lib/recurrence';
 import { Button } from './ui/button';
@@ -160,8 +160,10 @@ function Guests({ value, onChange }: { value: Draft['attendees']; onChange(v: Dr
   );
 }
 
-export function EventDialog({ initial, existing, calendars, accounts, onSave, onDelete, onClose }: {
+export function EventDialog({ initial, existing, calendars, accounts, onSave, onDelete, onClose, addMeetOnOpen }: {
   initial: Draft; existing?: EventOccurrence; calendars: CalendarInfo[]; accounts: CalendarAccount[];
+  /** Add a FreeFlow Meet link as the dialog opens (Meet's "Schedule in Calendar"). */
+  addMeetOnOpen?: boolean;
   onSave(input: EventInput | EventPatch, scope: Scope | undefined): Promise<unknown>; onDelete?: () => void; onClose(): void;
 }) {
   const [d, setD] = useState<Draft>(initial);
@@ -191,6 +193,14 @@ export function EventDialog({ initial, existing, calendars, accounts, onSave, on
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setMakingMeet(false));
   };
+  // Once, even when React runs effects twice in development: a second call would make a second meeting.
+  const meetAsked = useRef(false);
+  useEffect(() => {
+    if (!addMeetOnOpen || meetAsked.current || meetLinkIn(initial.description)) return;
+    meetAsked.current = true;
+    addMeet();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addMeetOnOpen]);
 
   // Moving the start keeps the length; an end before the start follows it.
   const setStart = (date: string, time: string) => {
@@ -209,6 +219,8 @@ export function EventDialog({ initial, existing, calendars, accounts, onSave, on
     setError(null);
     try {
       await onSave(input, scope);
+      const link = meetLinkIn(d.description);
+      if (link) void nameMeeting(link, d.summary);
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

@@ -374,6 +374,11 @@ RTK file retention (7 days).
      as Join (`packages/calendar/src/lib/meet.ts`). The booking page's location `{ kind: 'meet' }` asks the Org object
      (`createMeetingForAccount`) for a meeting per booking, kept in `scheduler_bookings.meet_url`. Home's Today card
      shows Join for any event with a call link.
+   - **As built, scheduling from Meet (2026-11-16):** Meet's home has **Schedule in Calendar** (`/calendar/?new=&meet=1`:
+     Calendar's new-event editor, which adds the Meet link as it opens), **Join with a code or link**, and **Today** (the
+     calls left today, from `/v1/calendar/events`; the Join rule moved to `@flow/shared` `callLinks.ts`, shared with
+     Home). Saving an event with a Meet link gives the meeting the event's title (`PATCH /v1/meetings/:code {title}`,
+     host only), since the meeting is made before the event has one. No "Past" list yet: that is phase 4.
 4. **After the meeting** — recording to R2, transcript, summary, meeting page, search, summary back to Chat and
    Calendar, Save as doc.
 5. **Agents** — MeetingAgent DO, note takers, bridge events and tools.

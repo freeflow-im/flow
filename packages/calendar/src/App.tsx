@@ -95,7 +95,7 @@ export function App() {
   const prefs = useCalendarPrefs(onError);
   const [open, setOpen] = useState<{ event: EventOccurrence; anchor: Anchor } | null>(null);
   const [quick, setQuick] = useState<{ draft: Draft; anchor: Anchor } | null>(null);
-  const [editing, setEditing] = useState<{ draft: Draft; existing?: EventOccurrence } | null>(null);
+  const [editing, setEditing] = useState<{ draft: Draft; existing?: EventOccurrence; addMeet?: boolean } | null>(null);
   const [ask, setAsk] = useState<Ask>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [searchText, setSearchText] = useState('');
@@ -121,7 +121,7 @@ export function App() {
     q.delete('error');
     history.replaceState(null, '', `${window.location.pathname}${q.size ? `?${q}` : ''}`);
   }, []);
-  // "Create event" from Mail (`?new=<title>&guests=…`, lib/deeplink.ts): the edit dialog, filled in, once the calendars are
+  // "Create event" from Mail (`?new=<title>&guests=…`, lib/deeplink.ts) or Meet's "Schedule in Calendar" (`&meet=1`): the edit dialog, filled in, once the calendars are
   // here; then taken off the address.
   const [asked] = useState(() => parseNewEvent(window.location.search));
   const [askedDone, setAskedDone] = useState(false);
@@ -131,7 +131,7 @@ export function App() {
     history.replaceState(null, '', `${window.location.pathname}${withoutNewEvent(window.location.search)}`);
     if (!defaultCalendar) return setToast('Connect a calendar you can write to first.');
     const at = asked.start ?? startOfHour(addHours(new Date(), 1));
-    setEditing({ draft: { ...newDraft(at, addHours(at, 1), false, defaultCalendar.id, asked.summary), attendees: asked.attendees } });
+    setEditing({ draft: { ...newDraft(at, addHours(at, 1), false, defaultCalendar.id, asked.summary), attendees: asked.attendees }, addMeet: asked.meet });
   }, [asked, askedDone, calendars.isSuccess, defaultCalendar]);
   // A share's link (`?calendar=<id>`, the notice's address): that calendar ticked and scrolled into view once the lists are
   // here, then taken off the address.
@@ -400,7 +400,7 @@ export function App() {
           onSave={(d) => m.create(inputOf(d))} onMore={(d) => { setQuick(null); setEditing({ draft: d }); }} />
       )}
       {editing && (
-        <EventDialog initial={editing.draft} existing={editing.existing} calendars={allCals ?? cals} accounts={accounts.data ?? []} onClose={() => setEditing(null)}
+        <EventDialog initial={editing.draft} existing={editing.existing} addMeetOnOpen={editing.addMeet} calendars={allCals ?? cals} accounts={accounts.data ?? []} onClose={() => setEditing(null)}
           onSave={(input, scope) => (editing.existing ? m.update(editing.existing, input, scope ?? 'all') : m.create(input as Parameters<typeof m.create>[0]))}
           onDelete={editing.existing ? () => { const o = editing.existing!; setEditing(null); remove(o); } : undefined} />
       )}

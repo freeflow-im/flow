@@ -40,3 +40,20 @@ export async function createMeetLink(title: string): Promise<string> {
   if (!res.ok || !json?.code) throw new Error(json?.error?.message ?? 'The meeting could not be made.');
   return `${window.location.origin}/meet/${json.code}`;
 }
+
+/**
+ * Gives the meeting behind a Meet link the event's title, once the event is saved: "Add FreeFlow Meet" (and Meet's
+ * Schedule) can make the meeting before the event has a title. Only a link on this server, and only by its host; a
+ * failure leaves the old title, so it is not reported.
+ */
+export async function nameMeeting(link: string, title: string): Promise<void> {
+  const url = new URL(link, window.location.origin);
+  const code = /^\/meet\/([a-z]{3}-[a-z]{4}-[a-z]{3})$/.exec(url.pathname)?.[1];
+  if (url.origin !== window.location.origin || !code || !title.trim()) return;
+  await fetch(`/v1/meetings/${code}`, {
+    method: 'PATCH',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ title: title.trim() }),
+  }).catch(() => undefined);
+}

@@ -5,7 +5,13 @@
 // optional `start`), and `share` `/calendar/?share=<ref>`, which opens the calendar's Share dialog.
 // Pure: what the address asks for, and the address without it.
 
-export interface NewEventLink { summary: string; attendees: { email: string; name?: string }[]; start?: Date }
+export interface NewEventLink {
+  summary: string;
+  attendees: { email: string; name?: string }[];
+  start?: Date;
+  /** `&meet=1`: the event comes with a FreeFlow Meet link (Meet's "Schedule in Calendar", docs/specs/meetings.md §1.2). */
+  meet?: boolean;
+}
 
 const ADDRESS = /^[^\s@<>,]+@[^\s@<>,]+\.[^\s@<>,]+$/;
 
@@ -25,7 +31,12 @@ export function parseNewEvent(search: string): NewEventLink | null {
     attendees.push({ email, ...(name ? { name } : {}) });
   }
   const start = q.get('start') ? new Date(q.get('start')!) : null;
-  return { summary: (q.get('new') ?? '').trim().slice(0, 1000), attendees, ...(start && !Number.isNaN(+start) ? { start } : {}) };
+  return {
+    summary: (q.get('new') ?? '').trim().slice(0, 1000),
+    attendees,
+    ...(start && !Number.isNaN(+start) ? { start } : {}),
+    ...(q.get('meet') === '1' ? { meet: true } : {}),
+  };
 }
 
 /** The query string with `new` and `guests` taken out ('' when nothing is left; else with its `?`). */
@@ -34,6 +45,7 @@ export function withoutNewEvent(search: string): string {
   q.delete('new');
   q.delete('guests');
   q.delete('start');
+  q.delete('meet');
   const s = q.toString();
   return s ? `?${s}` : '';
 }

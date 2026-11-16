@@ -15,6 +15,12 @@ describe('?new= from Mail', () => {
     expect(withoutNewEvent('?new=Hi&guests=a%40b.co')).toBe('');
     expect(withoutNewEvent('?new=Hi&event=c1%3Au')).toBe('?event=c1%3Au');
   });
+
+  it('asks for a FreeFlow Meet link with &meet=1 (Meet’s Schedule in Calendar)', () => {
+    expect(parseNewEvent('?new=&meet=1')).toEqual({ summary: '', attendees: [], meet: true });
+    expect(parseNewEvent('?new=&meet=0')).toEqual({ summary: '', attendees: [] });
+    expect(withoutNewEvent('?new=&meet=1&workspace=o')).toBe('?workspace=o');
+  });
 });
 
 describe('?calendar= from a share\'s notice', () => {
