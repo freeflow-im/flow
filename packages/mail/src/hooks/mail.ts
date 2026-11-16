@@ -9,7 +9,7 @@ import { useEffect, useRef } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/react-query';
 import { mailApi, type Category, type MailFolder, type MessageDetail, type MessagePage, type MessageSummary, type ThreadDetail, type ThreadMessage, type ThreadPage, type ThreadSummary } from '../api';
 import { adjustFolders, debounced } from '../lib/counts';
-import { expandedByDefault, soloUid } from '../lib/threads';
+import { expandedByDefault, keepSending, soloUid } from '../lib/threads';
 
 export const POLL_MS = 60_000;
 /** How soon a tab's page is asked for again while the server sorts older mail into tabs. */
@@ -205,8 +205,9 @@ export function useThread(accountId: string | null, threadId: string | null, fol
       const fresh = await fetchThread(accountId!, threadId!, folder!);
       const old = qc.getQueryData<ThreadDetail>(queryKey);
       if (!old) return fresh;
-      const have = new Map(old.messages.filter((x) => !x.bodyPending && (x.html !== null || x.text !== null)).map((x) => [`${x.folder}/${x.uid}`, x]));
-      return { ...fresh, messages: fresh.messages.map((x) => (x.bodyPending && have.has(`${x.folder}/${x.uid}`) ? { ...have.get(`${x.folder}/${x.uid}`)!, seen: x.seen, flagged: x.flagged, answered: x.answered } : x)) };
+      const have = new Map(old.messages.filter((x) => !x.sending && !x.bodyPending && (x.html !== null || x.text !== null)).map((x) => [`${x.folder}/${x.uid}`, x]));
+      // A message still being sent stays at the end until the server's copy of it is here (lib/threads.ts).
+      return keepSending(old, { ...fresh, messages: fresh.messages.map((x) => (x.bodyPending && have.has(`${x.folder}/${x.uid}`) ? { ...have.get(`${x.folder}/${x.uid}`)!, seen: x.seen, flagged: x.flagged, answered: x.answered } : x)) });
     },
     enabled: !!accountId && !!threadId && !!folder,
     staleTime: (q) => (bodiesPending(q.state.data) ? 0 : MESSAGE_STALE_MS),
