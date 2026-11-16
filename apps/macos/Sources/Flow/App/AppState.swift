@@ -870,62 +870,51 @@ final class AppState: ObservableObject {
         )
     }
 
-    /// Join an entity's huddle: mints a token via the server, then connects
-    /// LiveKit's `Room`. In a channel "join" doubles as start and nobody is
-    /// rung; in a DM the same call *is* the call, and the server rings the
-    /// other member(s) (#436). Idempotent — calling this while already in this
-    /// entity's huddle is a no-op.
+    /// Start or join a conversation's huddle. Since Meet phase 2 (docs/specs/meetings.md) a huddle is the
+    /// conversation's Meet room: the server makes it and rings the other people, and the app opens the room in the
+    /// browser (`<server>/meet/<code>`) until Meet has a native call screen (phase 6). Pressing it again, or while the
+    /// huddle is running, opens the same room.
     func joinHuddle(channelId: String, workspaceId: String) {
-        guard activeHuddleChannelId != channelId else { return }
         Task { await joinHuddleAsync(channelId: channelId, workspaceId: workspaceId, accepting: nil) }
     }
 
-    /// The shared body of joining and of answering a ring — accepting a call
-    /// *is* joining, and the only difference is which endpoint mints the token.
+    /// The shared body of starting and of answering a ring — accepting a call *is* joining, and the only difference
+    /// is which endpoint answers with the room.
     private func joinHuddleAsync(channelId: String, workspaceId: String, accepting inviteId: String?) async {
-        if let owner = Self.huddleOwner, owner !== self { await owner.leaveHuddleAndWait() }
-        Self.huddleOwner = self
-        if activeHuddleChannelId != nil { await leaveHuddleAsync() }
         huddleConnecting = true
-        huddleAccepted = []
-        huddleChimed = false
-        huddleConnectionState = .idle
         defer { huddleConnecting = false }
         do {
-            let resp: HuddleJoinResponse
+            let resp: HuddleStartResponse
             if let inviteId {
                 resp = try await engine.acceptHuddleInvite(inviteId: inviteId, sessionId: wsSessionId)
             } else {
                 resp = try await engine.joinHuddle(channelId: channelId)
             }
-            let room = Room(delegate: self, roomOptions: huddleRoomOptions)
-            do {
-                try await room.connect(url: resp.url, token: resp.token)
-            } catch {
-                // The REST join already landed server-side (it publishes
-                // on roster change), but the RTC connection never came
-                // up — without this, the roster would show a participant
-                // who was never actually live. Roll it back.
-                await engine.leaveHuddle(channelId: channelId)
-                throw error
-            }
-            huddleRoom = room
-            activeHuddleChannelId = channelId
-            activeHuddleWorkspaceId = workspaceId
-            huddleMuted = true
-            huddleCameraOn = false
-            huddleSharing = false
-            huddleFocusedUserId = nil
-            // In a DM the join is the call: hold the ring so the bar can say
-            // "Ringing…", or name who could not be reached.
-            outgoingHuddleInvite = resp.invite?.status == .ringing ? resp.invite : nil
             huddleUnavailable = resp.unavailable ?? []
-            huddleAccepted = resp.invite?.targets.filter { $0.status == .accepted }.map(\.userId) ?? []
-            await refreshHuddleAgentIds()
-            syncHuddleTiles()
+            if let names = resp.unavailable, !names.isEmpty {
+                errorMessage = "\(names.joined(separator: ", ")) \(names.count == 1 ? "isn't" : "aren't") available right now."
+            }
+            openMeetRoom(code: resp.meeting.code)
         } catch {
-            errorMessage = "Couldn't join the huddle: \(error.localizedDescription)"
+            errorMessage = "Couldn't start the huddle: \(error.localizedDescription)"
         }
+    }
+
+    /// Opens a Meet room on this server in the browser.
+    func openMeetRoom(code: String) {
+        let origin = serverOrigin.hasSuffix("/") ? String(serverOrigin.dropLast()) : serverOrigin
+        guard let url = URL(string: "\(origin)/meet/\(code)") else { return }
+        #if os(macOS)
+        NSWorkspace.shared.open(url)
+        #else
+        UIApplication.shared.open(url)
+        #endif
+    }
+
+    /// Whether the signed-in person is in a conversation's huddle right now (its Meet room, open in the browser).
+    func isInHuddle(channelId: String) -> Bool {
+        guard let me = currentUser?.id else { return false }
+        return (huddleRosters[channelId] ?? []).contains { $0.userId == me }
     }
 
     func leaveHuddle() {

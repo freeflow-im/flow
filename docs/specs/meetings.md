@@ -313,10 +313,13 @@ the session alive and is billed), with an alarm as a backstop.
 
 Native apps ship later than the web, and old app versions only know LiveKit. Plan:
 
-1. Ship server + web + desktop + bridge on RTK. The server **stops offering the `huddles` capability** (the one
-   `ChannelView` on web and macOS already checks), so old macOS / iOS builds hide their huddle button instead of
-   joining a LiveKit room no one else is in. They can still join meetings by link in the browser.
-2. Release macOS and iOS with Meet; they read `meet: true`.
+1. Ship server + web + desktop + bridge on RTK, and the native "open Meet in the browser" change (operator,
+   2026-11-16). `/v1/config` reports `huddles: false`, but **the native apps do not read it** (their huddles
+   capability is per backend, not per server), so an old macOS / iOS build still shows its Huddle button and fails
+   with "Couldn't join the huddle" until it is updated; its ring card's Accept fails the same way. They can still
+   join any meeting by opening its link in a browser.
+2. Release macOS and iOS: the Huddle button and the ring card open the room in the browser. Their LiveKit call
+   code (HuddleBar, HuddleGridView, the `Room` in AppState) is dead from then on and goes with phase 6.
 3. Remove the LiveKit routes, webhook, secrets and the `livekit-server-sdk` dependency; close the LiveKit Cloud
    account. Supersede ADR 0001 / 0002 with an ADR for RTK, and record R1–R4 in `decision_log.md`.
 

@@ -916,7 +916,23 @@ struct HuddleUpdatedData: Decodable, Sendable {
     let participants: [HuddleParticipant]
 }
 
-/// POST /v1/channels/:id/huddle/join response: a LiveKit access token scoped
+/// A Meet room, as the huddle routes answer with it (docs/specs/meetings.md). Its link is `<server>/meet/<code>`.
+struct MeetRoom: Decodable, Sendable {
+    let id: String
+    let code: String
+    let title: String
+    let channelId: String?
+}
+
+/// POST /v1/channels/:id/huddle/join (and accepting a ring) since Meet phase 2: the conversation's Meet room, which
+/// the app opens in the browser, and the ring that starting it began, with the names it could not reach.
+struct HuddleStartResponse: Decodable, Sendable {
+    let meeting: MeetRoom
+    let invite: HuddleInvite?
+    let unavailable: [String]?
+}
+
+/// The LiveKit-era response, before Meet phase 2: a LiveKit access token scoped
 /// to that entity's room, and the server URL to connect to. In a DM the same
 /// call starts the ring, so it also carries the invite and the names it could
 /// not reach; both are absent for an ambient channel huddle (and on a server
