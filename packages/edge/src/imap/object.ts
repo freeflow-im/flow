@@ -125,6 +125,9 @@ const CACHE_LOG_KEEP = 20;
 const timing = new AsyncLocalStorage<Timing | undefined>();
 
 const IDLE_MS = 60_000;
+/** After a send to a server that saves its own sent copy (Gmail): how often, and how far apart, Sent is synced to find it. */
+const SENT_COPY_TRIES = 4;
+const SENT_COPY_WAIT_MS = 750;
 const LOGIN_LIMIT = 10;
 const LOGIN_WINDOW_MS = 15 * 60_000;
 const MAX_MESSAGE_BYTES = 50 * 1024 * 1024;
@@ -1934,20 +1937,28 @@ export class Mail extends DurableObject<MailEnv> {
       transport.close();
     }
     // What follows is bookkeeping: the message has gone, so a failure here is logged, not reported.
-    if (!savesSentCopy(account.imap, account.smtp)) {
-      await this.withImap(r, 'interactive', async (c) => {
-        let sent = await this.special(r, c, 'sent');
+    // The conversation is read from the cache (threadRead): the Sent copy joins it now rather than at the next sync, so a
+    // client's refetch right after the send shows the reply under its message. Gmail saves that copy itself, a moment
+    // after the send: its Sent folder is synced until the copy is there (a few tries, then the next sync brings it).
+    const serverSaves = savesSentCopy(account.imap, account.smtp);
+    await this.withImap(r, 'interactive', async (c) => {
+      let sent = await this.special(r, c, 'sent');
+      if (!serverSaves) {
         if (!sent) {
           await c.mailboxCreate('Sent').catch(() => {});
           sent = (await this.folderList(r, c, true)).find((f) => specialUseOf(f) === 'sent')?.path ?? 'Sent';
         }
         await c.append(sent, await compileMime(message, true), ['\\Seen']);
-        // The conversation is read from the cache (threadRead): the copy joins it now rather than at the next sync, so a
-        // client's refetch right after the send shows the reply under its message.
-        const f = this.cache.touchFolder(r.id, sent, 'sent', Date.now(), false);
-        await this.locked(c, sent, () => this.syncFolder(r, c, f, Date.now() + 5_000));
-      }).catch((err) => console.warn(`[mail] sent copy: ${(err as Error).message}`));
-    }
+      }
+      if (!sent) return;
+      const folder = sent;
+      const f = this.cache.touchFolder(r.id, folder, 'sent', Date.now(), false);
+      for (let attempt = 0; attempt < SENT_COPY_TRIES; attempt++) {
+        if (attempt) await new Promise((done) => setTimeout(done, SENT_COPY_WAIT_MS));
+        await this.locked(c, folder, () => this.syncFolder(r, c, f, Date.now() + 5_000));
+        if (!serverSaves || this.cache.hasMessage(r.id, folder, message.messageId)) break;
+      }
+    }).catch((err) => console.warn(`[mail] sent copy: ${(err as Error).message}`));
     if (body.replacesDraft) await this.deleteDraft(r, body.replacesDraft.folder, body.replacesDraft.uid).catch((err) => console.warn(`[mail] sent draft: ${(err as Error).message}`));
     if (body.inReplyTo) {
       await this.withFolder(r, 'INBOX', 'interactive', async (c) => {
