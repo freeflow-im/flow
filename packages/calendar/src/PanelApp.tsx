@@ -8,6 +8,7 @@ import { ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
 import { setCalendarWorkspace, type EventOccurrence, type Response } from './api';
 import { CalendarGrid } from './components/CalendarGrid';
 import { EventPopover } from './components/EventPopover';
+import { createAddress } from '@flow/suite-bar';
 import type { Anchor } from './components/ui/popover';
 import { WeekAgenda } from './components/WeekAgenda';
 import { Button } from './components/ui/button';
@@ -154,7 +155,8 @@ export function PanelApp() {
       {shown && (
         <EventPopover event={shown.event} calendar={allCals?.find((c) => c.id === shown.event.calendarId)} members={members.data ?? []}
           alsoOn={alsoOnNote(shown.event, allCals ?? [], ownerName)} anchor={shown.anchor} side="bottom" editLabel="Edit in Calendar"
-          onClose={() => setShown(null)} onEdit={() => editInCalendar(shown.event)} onRespond={(r) => respond(shown.event, r)} />
+          onClose={() => setShown(null)} onEdit={() => editInCalendar(shown.event)} onRespond={(r) => respond(shown.event, r)}
+          onMail={(to, subject) => { setShown(null); openInHost(createAddress('mail', { to: [{ email: to.email, name: to.name ?? null }], subject })); }} />
       )}
       {note && <div role="status" className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-lg bg-[#323232] px-3 py-2 text-[13px] text-white shadow-lg">{note}</div>}
     </div>

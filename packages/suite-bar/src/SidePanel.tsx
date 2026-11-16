@@ -73,13 +73,16 @@ export interface SidePanelProps {
   /** Over the page instead of beside it (a narrow window). */
   overlay?: boolean;
   assistant?: SidePanelAssistant;
+  /** An address a panel asks to open, for the host to handle itself (Mail: a new email in its own composer). True when it
+   * did; otherwise it is opened as usual. */
+  onOpen?(href: string): boolean;
 }
 
 /**
  * The side panel, or its pill while closed. Goes in the host's row, right of its main area, inside a
  * `position: relative` element; it takes no width while closed.
  */
-export function SidePanel({ host, panels, overlay = false, assistant }: SidePanelProps) {
+export function SidePanel({ host, panels, overlay = false, assistant, onOpen }: SidePanelProps) {
   const [state, setState] = useState<SidePanelState>(() => readSidePanelState(host));
   const update = useCallback(
     (next: Partial<SidePanelState>) =>
@@ -110,6 +113,8 @@ export function SidePanel({ host, panels, overlay = false, assistant }: SidePane
   }, [assistantOpen, update]);
 
   // A panel's page asks to open an address (an event, a file): only from this panel's own frames.
+  const onOpenRef = useRef(onOpen);
+  onOpenRef.current = onOpen;
   const frames = useRef<Record<string, HTMLIFrameElement | null>>({});
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
@@ -119,7 +124,7 @@ export function SidePanel({ host, panels, overlay = false, assistant }: SidePane
       // A drag from the panel (lib/flowRef.ts): the host's drop targets can read it even when the browser hides its data.
       if (data?.type === 'flow:drag') noteRelayedDrag(data.ref);
       else if (data?.type === 'flow:dragend') noteRelayedDrag(null);
-      else if (isOpenMessage(data)) follow(data.href);
+      else if (isOpenMessage(data)) { if (!onOpenRef.current?.(data.href)) follow(data.href); }
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);

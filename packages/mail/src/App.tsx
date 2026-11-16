@@ -27,7 +27,7 @@ import { fetchBody, keys, prefetchThread, useAccounts, useFolders, useMessageAct
 import { useMailAssistant } from './hooks/assistant';
 import { SETTING_UP, useAccountState, useOrganizations } from './hooks/organization';
 import { mailContext, setAssistantOpen, useAssistantOpen, type MessageRef, type ReplyOpened, type ReplyRequest } from './lib/assistant';
-import { cidUrlOf, emptyDraft, fromDraft, prefill, type AnswerMode, type ComposeDraft, type ComposeMode, type ComposeRequest, type Outgoing } from './lib/compose';
+import { cidUrlOf, draftFromMailto, emptyDraft, fromDraft, prefill, type AnswerMode, type ComposeDraft, type ComposeMode, type ComposeRequest, type Outgoing } from './lib/compose';
 import type { Notice } from './lib/notice';
 import { sendInBackground } from './lib/outgoing';
 import { findSpecial, folderLabel } from './lib/folders';
@@ -418,6 +418,29 @@ export function App() {
   );
 
   /** Compose: new, or an answer to a message of the open thread (the last one unless given). */
+  // A new email asked for by another app (`/mail/?mailto=`, @flow/shared createAddress('mail')): its composer opens once
+  // there is an account to send from, and the address drops the request so a reload does not open it again.
+  const mailtoAsked = useRef(initialParam('mailto'));
+  useEffect(() => {
+    const href = mailtoAsked.current;
+    if (!href || !account) return;
+    mailtoAsked.current = null;
+    const draft = draftFromMailto(href);
+    if (draft) openCompose(account.id, { mode: 'new', draft });
+    const url = new URL(window.location.href);
+    url.searchParams.delete('mailto');
+    window.history.replaceState(window.history.state, '', url);
+  }, [account, openCompose]);
+  /** A panel (Calendar's event, an address in it) asks for a new email: this Mail's composer, not a page load. */
+  const openFromPanel = useCallback((href: string): boolean => {
+    const url = new URL(href, window.location.origin);
+    const mailto = url.pathname.replace(/\/+$/, '') === '/mail' ? url.searchParams.get('mailto') : null;
+    const draft = mailto ? draftFromMailto(mailto) : null;
+    if (!draft || !account) return false;
+    openCompose(account.id, { mode: 'new', draft });
+    return true;
+  }, [account, openCompose]);
+
   const startCompose = useCallback(
     (mode: ComposeMode, m?: MessageDetail, docs?: DocsFile[]) => {
       if (!account) return;
@@ -1068,6 +1091,7 @@ export function App() {
           <SidePanel
             host="mail"
             panels={SIDE_PANELS}
+            onOpen={openFromPanel}
             overlay={assistantOverlay}
             assistant={
               assistantDocked

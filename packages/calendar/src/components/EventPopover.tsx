@@ -5,7 +5,7 @@
 // Calendar (PanelApp.tsx) opens it too, below the event (no Delete; Edit opens Calendar). EventCard is its contents.
 import { useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { AlignLeft, Bell, Calendar as CalendarIcon, Check, ChevronDown, ChevronUp, Copy, MapPin, MoreVertical, Pencil, Phone, Trash2, Users, Video, X } from 'lucide-react';
+import { AlignLeft, Bell, Calendar as CalendarIcon, Check, ChevronDown, ChevronUp, Copy, Mail, MapPin, MoreVertical, Pencil, Phone, Trash2, Users, Video, X } from 'lucide-react';
 import { calendarApi, type CalendarInfo, type EventOccurrence, type Response } from '../api';
 import { conferenceOf, linkify, shownDescription } from '../lib/conference';
 import { RESPONSE_LABEL, cardWhen, guestName, guestSummary, orderedGuests, reminderText } from '../lib/format';
@@ -71,6 +71,18 @@ export interface EventCardProps {
   onRespond(r: Exclude<Response, 'needs-action'>): void;
   /** The edit button's name: "Edit in Calendar" where it opens Calendar itself. */
   editLabel?: string;
+  /** A new email to someone on the event (the mail icon by an address); left out, no icons. */
+  onMail?(to: { email: string; name?: string | null }, subject: string): void;
+}
+
+/** The mail icon by an address: a new email to them, about the event. */
+function MailButton({ name, onClick }: { name: string; onClick(): void }) {
+  return (
+    <button type="button" aria-label={`Email ${name}`} title={`Email ${name}`} onClick={onClick} data-testid="mail-person"
+      className="flex size-7 shrink-0 items-center justify-center rounded-full text-muted outline-none hover:bg-hover hover:text-ink focus-visible:ring-2 focus-visible:ring-primary/40">
+      <Mail className="size-4" />
+    </button>
+  );
 }
 
 export function EventPopover({ anchor, side, ...card }: EventCardProps & { anchor: Anchor; side?: 'right' | 'bottom' }) {
@@ -83,7 +95,7 @@ export function EventPopover({ anchor, side, ...card }: EventCardProps & { ancho
 }
 
 /** The card's contents (a column: the buttons, the details scrolling, the Going? band), for a popover or a panel. */
-export function EventCard({ event, calendar, members = [], alsoOn, onClose, onEdit, onDelete, onRespond, editLabel = 'Edit event' }: EventCardProps) {
+export function EventCard({ event, calendar, members = [], alsoOn, onClose, onEdit, onDelete, onRespond, onMail, editLabel = 'Edit event' }: EventCardProps) {
   const writable = canChange(calendar);
   const viewOnly = readOnlyNote(calendar);
   const color = calendar?.color ?? '#1a73e8';
@@ -196,6 +208,7 @@ export function EventCard({ event, calendar, members = [], alsoOn, onClose, onEd
                         </span>
                       </span>
                       <span className="shrink-0 text-[12px] text-muted">{ANSWER_TEXT[g.response]}</span>
+                      {onMail && !g.self && <MailButton name={name ?? g.email} onClick={() => onMail({ email: g.email, name }, event.summary ?? '')} />}
                     </li>
                   );
                 })}
@@ -208,8 +221,15 @@ export function EventCard({ event, calendar, members = [], alsoOn, onClose, onEd
 
         {host && (
           <Row icon={<CalendarIcon />}>
-            <span className="block truncate">{host}</span>
-            {event.organizer && calendar && <span className="block truncate text-[13px] leading-5 text-muted">{calendar.name}</span>}
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="min-w-0 flex-1">
+                <span className="block truncate">{host}</span>
+                {event.organizer && calendar && <span className="block truncate text-[13px] leading-5 text-muted">{calendar.name}</span>}
+              </span>
+              {onMail && event.organizer && !event.organizer.self && (
+                <MailButton name={host} onClick={() => onMail({ email: event.organizer!.email, name: guestName(event.organizer!) }, event.summary ?? '')} />
+              )}
+            </span>
           </Row>
         )}
 

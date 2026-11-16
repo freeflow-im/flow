@@ -8,6 +8,7 @@ import { addHours, startOfHour } from 'date-fns';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { isInHome, openSuiteSearch, useHomeMenu, type SuiteMenuItem } from '@flow/suite-bar';
 import { AssistantDock, useAssistantDockState, useMyAssistant, useNewChatOnClose } from '@flow/suite-bar/assistant-dock';
+import { ComposeDrawer, type MailTo } from './components/ComposeDrawer';
 import { CalendarApiError, calendarApi, connectGoogle, setCalendarWorkspace, googleErrorText, type CalendarInfo, type EventOccurrence, type Response, type Scope } from './api';
 import { AccountSettingsDialog, AddAccountDialog } from './components/AccountForms';
 import { CalendarGrid } from './components/CalendarGrid';
@@ -94,6 +95,8 @@ export function App() {
   const m = useEventMutations(onError);
   const prefs = useCalendarPrefs(onError);
   const [open, setOpen] = useState<{ event: EventOccurrence; anchor: Anchor } | null>(null);
+  // A new email to someone on an event: Mail's composer in a drawer (components/ComposeDrawer.tsx).
+  const [mailing, setMailing] = useState<{ to: MailTo; subject: string } | null>(null);
   const [quick, setQuick] = useState<{ draft: Draft; anchor: Anchor } | null>(null);
   const [editing, setEditing] = useState<{ draft: Draft; existing?: EventOccurrence; addMeet?: boolean } | null>(null);
   const [ask, setAsk] = useState<Ask>(null);
@@ -393,7 +396,8 @@ export function App() {
       {open && (
         <EventPopover event={open.event} calendar={byId.get(open.event.calendarId)} members={members.data ?? []}
           alsoOn={alsoOnNote(open.event, allCals ?? [], ownerName)} anchor={open.anchor} onClose={closeEvent}
-          onEdit={() => edit(open.event)} onDelete={() => remove(open.event)} onRespond={(r) => respond(open.event, r)} />
+          onEdit={() => edit(open.event)} onDelete={() => remove(open.event)} onRespond={(r) => respond(open.event, r)}
+          onMail={(to, subject) => setMailing({ to, subject })} />
       )}
       {quick && (
         <QuickCreate draft={quick.draft} anchor={quick.anchor} calendars={cals} accounts={accounts.data ?? []} onClose={() => setQuick(null)}
@@ -409,6 +413,7 @@ export function App() {
       {ask && <ScopeDialog action={ask.action} allowThis={ask.allowThis} onCancel={() => { ask.cancel(); setAsk(null); }} onChoose={(s) => { setAsk(null); ask.run(s); }} />}
       {dialog?.kind === 'add' && <AddAccountDialog kind={dialog.connect} onClose={() => setDialog(null)} onAdded={() => { setDialog(null); setToast('Connected. Your events are on their way.'); }} />}
       {dialog?.kind === 'settings' && <AccountSettingsDialog accounts={(accounts.data ?? []).filter((a) => a.kind !== 'native')} initialId={dialog.accountId} focusPassword={dialog.focusPassword} onClose={() => setDialog(null)} onAdd={() => setDialog({ kind: 'add', connect: 'icloud' })} />}
+      {mailing && <ComposeDrawer to={mailing.to} subject={mailing.subject} onClose={(sent) => { setMailing(null); if (sent) setToast('Email sent.'); }} />}
       {toast && (
         <div role="status" className={cn('fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-lg bg-[#323232] px-4 py-3 text-[14px] text-white shadow-lg')}>
           {typeof toast !== 'string' && <Loader2 className="size-4 animate-spin" aria-hidden />}

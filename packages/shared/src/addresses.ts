@@ -157,14 +157,33 @@ export type Attendee = string | { email: string; name?: string | null };
 export interface CreateFields {
   calendar: { title?: string; attendees?: readonly Attendee[]; start?: string };
   'chat-message': { channel: string; text?: string };
+  /** A new email: Mail's composer, filled in (a `mailto:` link, RFC 6068). */
+  mail: { to: readonly Attendee[]; subject?: string; body?: string };
+}
+
+/** A `mailto:` link (RFC 6068) to the people, with a subject and body. */
+export function mailtoOf(to: readonly Attendee[], subject?: string, body?: string): string {
+  const one = (a: Attendee) => (typeof a === 'string' ? a : a.email);
+  const q = new URLSearchParams();
+  if (subject) q.set('subject', subject);
+  if (body) q.set('body', body);
+  // RFC 6068 wants %20, not URLSearchParams' +.
+  const query = q.toString().replace(/\+/g, '%20');
+  return `mailto:${to.map((a) => encodeURIComponent(one(a)).replace(/%40/g, '@')).join(',')}${query ? `?${query}` : ''}`;
 }
 
 /**
  * The address that asks an app to create something: Calendar's `/calendar/?new=<title>&guests=Name <a@x>,b@y&start=`
- * (packages/calendar lib/deeplink.ts reads it), Chat's `/chat/?open=channel:<id>&text=<text>`.
+ * (packages/calendar lib/deeplink.ts reads it), Chat's `/chat/?open=channel:<id>&text=<text>`, Mail's
+ * `/mail/?mailto=<mailto: link>` (its composer opens with it).
  */
 export function createAddress<K extends keyof CreateFields>(what: K, fields: CreateFields[K]): string {
   const q = new URLSearchParams();
+  if (what === 'mail') {
+    const f = fields as CreateFields['mail'];
+    q.set('mailto', mailtoOf(f.to, f.subject, f.body));
+    return `/mail/?${q}`;
+  }
   if (what === 'chat-message') {
     const f = fields as CreateFields['chat-message'];
     q.set('open', `channel:${f.channel}`);

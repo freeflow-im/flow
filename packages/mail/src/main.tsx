@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MailApiError } from './api';
 import { App } from './App';
+import { ComposePage } from './ComposePage';
 import './index.css';
 import { reloadOnStaleBuild } from '@flow/suite-bar';
 
@@ -27,10 +28,13 @@ try {
   // Nothing kept.
 }
 
+// /mail/compose is Mail's composer alone, beside another app (ComposePage.tsx).
+const COMPOSE = window.location.pathname.replace(/\/+$/, '') === `${import.meta.env.BASE_URL}compose`;
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <App />
+      {COMPOSE ? <ComposePage /> : <App />}
     </QueryClientProvider>
   </StrictMode>,
 );
