@@ -12,6 +12,7 @@ This file keeps two things:
 
 ## Parity
 
+- **Picking the address coworkers see is on web only (2026-11-15).** A person without a hosted address picks a linked mailbox in web Mail's account settings; macOS and iOS have no Mail and show no addresses (deliberate).
 - **Channels an agent made are nested under the agent on web only (2026-11-15).** Web Home and Chat (and the desktop shell) list them under the agent's row; macOS and iOS still list them under Channels (gap to close; the data is `createdBy`, already on every client).
 - **The side panel is on web only (2026-11-13, docs/specs/side-panel.md).** Mail on the web and the desktop shell shows Calendar and Docs in a side panel; macOS has none (gap to close later), and iOS has none by design (no room beside the main view).
 - **Creating members and the Set your password page are web-only (2026-11-13).** Create member is in the web Admin app (no native admin surface, by ruling); the emailed setup link opens the web page on every device, as reset links always have. The server's "Forgot password" change reaches every client. Deliberate.
