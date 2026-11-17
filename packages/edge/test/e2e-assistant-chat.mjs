@@ -1,6 +1,6 @@
 // End-to-end check of a person's assistant posting elsewhere in Chat (docs/specs/agents.md §1, §1.1): Ann asks her
-// assistant in their DM to post in #general; it leaves a card in the DM and posts nothing; her ❌ posts nothing; her ✅
-// brings it into #general and posts there as itself; another member's ✅ counts for nothing. Against a local `wrangler dev`
+// assistant in their DM to post in #general; it joins #general and posts there as itself at once, with no card to approve
+// (operator ruling 2026-11-17, R-C); asked by a mention in another channel, it posts too. Against a local `wrangler dev`
 // with a real model key (ANTHROPIC_API_KEY in .dev.vars, beside EDGE_ORIGIN_SECRET and FLOW_DATA_KEY), on port 18797:
 //   npx wrangler dev --port 18797 --local --enable-containers=false --var PORTED_HOSTS:edge.freeflow.im,localhost \
 //     --var ASSET_HOSTS:none --var ORIGIN_URL:http://localhost:9 --var WEB_URL_BASE:http://localhost:18797 \
@@ -17,7 +17,6 @@ async function signup(email,name){await api(null,'POST','/v1/auth/register',{ema
 const until=async(get,ok,ms)=>{const t0=Date.now();for(;;){const v=await get();if(ok(v)||Date.now()-t0>ms)return v;await sleep(1500);}};
 const say=(tok,ch,body)=>api(tok,'POST',`/v1/channels/${ch}/messages`,{clientMsgId:crypto.randomUUID(),body});
 const msgs=async(tok,ch)=>((await api(tok,'GET',`/v1/channels/${ch}/messages?limit=50`)).j.messages??[]);
-const react=(tok,id,emoji)=>api(tok,'PUT',`/v1/messages/${id}/reactions/${encodeURIComponent(emoji)}`);
 const tag=Date.now().toString(36);
 
 const A=await signup(`ac-ann-${tag}@example.com`,'Ann');
@@ -27,54 +26,25 @@ t('Ann has an assistant in Chat',!!asst?.userId,JSON.stringify(asst).slice(0,160
 const general=((await api(A.token,'GET',`/v1/workspaces/${W}/channels`)).j.channels??[]).find(c=>c.name==='general');
 r=await api(A.token,'POST',`/v1/workspaces/${W}/dms`,{userIds:[asst.userId]});const DM=r.j.id;t('Ann opens a DM with it',r.s===201,r.s);
 const fromAsst=(list)=>list.filter(m=>m.userId===asst.userId);
-const card=(list)=>fromAsst(list).find(m=>/Post in #general\?/.test(m.body));
-
-// 1. Ask; a card, and nothing in #general.
+// 1. Ask; it posts in #general at once, as itself, and leaves no card.
 await say(A.token,DM,'Please post exactly this in #general: "Lunch order closes at noon." Nothing else.');
-let dm=await until(()=>msgs(A.token,DM),(l)=>!!card(l),120000);
-let c1=card(dm);
-t('it leaves a card in the DM, quoting the post',!!c1&&c1.body.includes('Lunch order closes at noon')&&c1.body.includes('React ✅'),JSON.stringify(fromAsst(dm).map(m=>m.body)).slice(0,300));
-t('and posts nothing in #general yet',!fromAsst(await msgs(A.token,general.id)).length,'');
+const gen=await until(()=>msgs(A.token,general.id),(l)=>fromAsst(l).length>0,120000);
+t('it joins #general and posts the text there as itself, at once',fromAsst(gen).some(m=>m.body.includes('Lunch order closes at noon')),JSON.stringify(gen.map(m=>[m.userId===asst.userId?'asst':'other',m.systemKind,m.body])).slice(0,300));
+let dm=await until(()=>msgs(A.token,DM),(l)=>fromAsst(l).length>0,60000);
+t('and tells Ann in the DM, with no card to approve',fromAsst(dm).length>0&&!fromAsst(dm).some(m=>/React ✅|Post in #general\?/.test(m.body)),JSON.stringify(fromAsst(dm).map(m=>m.body)).slice(0,200));
 
-// 2. Bob's ✅ counts for nothing (he cannot even see the DM, so he cannot react there).
-const Bo=await signup(`ac-bob-${tag}@example.com`,'Bob');
-r=await api(Bo.token,'PUT',`/v1/messages/${c1.id}/reactions/${encodeURIComponent('✅')}`);t('Bob cannot react on Ann’s card',r.s>=400,r.s);
-
-// 3. ❌: nothing posted, and the assistant says so.
-const shown=fromAsst(dm).length;
-r=await react(A.token,c1.id,'❌');t('Ann reacts ❌',r.s<300,r.s);
-dm=await until(()=>msgs(A.token,DM),(l)=>fromAsst(l).length>shown,90000);
-t('nothing is posted in #general',!fromAsst(await msgs(A.token,general.id)).length,'');
-t('and it answers in the DM',fromAsst(dm).length>shown,JSON.stringify(fromAsst(dm).map(m=>m.body).slice(0,2)).slice(0,200));
-
-// 4. Ask again; ✅ this time.
-const before=fromAsst(dm).length;
-await say(A.token,DM,'OK, post it now please: "Lunch order closes at noon."');
-dm=await until(()=>msgs(A.token,DM),(l)=>fromAsst(l).filter(m=>/Post in #general\?/.test(m.body)).length>1,120000);
-const c2=fromAsst(dm).filter(m=>/Post in #general\?/.test(m.body))[0];
-t('a second card',!!c2&&c2.id!==c1.id,'');
-r=await react(A.token,c2.id,'✅');t('Ann reacts ✅',r.s<300,r.s);
-const gen=await until(()=>msgs(A.token,general.id),(l)=>fromAsst(l).length>0,90000);
-t('it joins #general and posts the text there as itself',fromAsst(gen).some(m=>m.body.includes('Lunch order closes at noon')),JSON.stringify(gen.map(m=>[m.userId===asst.userId?'asst':'other',m.systemKind,m.body])).slice(0,300));
-dm=await until(()=>msgs(A.token,DM),(l)=>fromAsst(l).length>before+2,60000);
-t('and tells Ann in the DM',fromAsst(dm).length>before+1,'');
-// A second ✅ on the same card posts nothing more.
-await react(A.token,c2.id,'✔️');await sleep(8000);
-t('a second approval of the same card posts nothing more',fromAsst(await msgs(A.token,general.id)).length===fromAsst(gen).length,'');
-
-// 5. Reading a channel Ann is in, and leaving it when she asks.
+// 2. Reading a channel Ann is in.
 let n=fromAsst(await msgs(A.token,DM)).length;
 await say(A.token,DM,'What is the newest message in #general? Quote it.');
 dm=await until(()=>msgs(A.token,DM),(l)=>fromAsst(l).length>n,90000);
 t('it reads #general for Ann',/Lunch order closes at noon/.test(fromAsst(dm)[0]?.body??''),fromAsst(dm)[0]?.body);
-// 6. Asked where others read (a mention in a channel), it leaves no card: the card would show the post to everyone there.
+// 3. Asked where others read (a mention in a channel), it posts too.
+const Bo=await signup(`ac-bob-${tag}@example.com`,'Bob');
 r=await api(A.token,'POST',`/v1/workspaces/${W}/channels`,{name:`team-${tag}`});const team=r.j.id;
-await say(A.token,team,`<@${asst.userId}> please post "hello" in #general`);
-await sleep(30000);
-const teamMsgs=await msgs(A.token,team);
-const thread=teamMsgs.find(m=>m.replyCount>0);
-const replies=thread?((await api(A.token,'GET',`/v1/messages/${thread.id}/thread`)).j.messages??[]):[];
-t('mentioned in a channel, it leaves no card there',![...teamMsgs,...replies].some(m=>m.userId===asst.userId&&/Post in #/.test(m.body)),JSON.stringify(replies.map(m=>m.body)).slice(0,240));
+const before=fromAsst(await msgs(A.token,general.id)).length;
+await say(A.token,team,`<@${asst.userId}> please post "hello from the team" in #general`);
+const gen2=await until(()=>msgs(A.token,general.id),(l)=>fromAsst(l).length>before,120000);
+t('mentioned in a channel, it posts in #general at once',fromAsst(gen2).some(m=>/hello from the team/i.test(m.body)),JSON.stringify(fromAsst(gen2).map(m=>m.body)).slice(0,240));
 // 7. Leaving: #general too (it holds every person, but no assistant need stay), when Ann asks in the DM.
 const memberIds=async(ch)=>((await api(A.token,'GET',`/v1/channels/${ch}/members`)).j.userIds??[]);
 n=fromAsst(await msgs(A.token,DM)).length;

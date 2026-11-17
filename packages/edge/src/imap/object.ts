@@ -61,7 +61,7 @@ export interface MailEnv {
 }
 
 /** Who may mail a person's assistant, and where its turn runs: read from the directory and kept a while. */
-interface AssistantPolicy { allowed: Set<string>; agentId: string; sponsorAccountId: string; organizationId: string; at: number; /** Kept mail starts a turn that answers it (off by default). */ autoReply: boolean }
+interface AssistantPolicy { allowed: Set<string>; agentId: string; sponsorAccountId: string; organizationId: string; at: number }
 const POLICY_TTL_MS = 2 * 60_000;
 /** Where refused mail goes: out of the inbox, never shown to the assistant, kept for the sponsor to look at. */
 const REFUSED_FOLDER = 'Refused';
@@ -1578,12 +1578,8 @@ export class Mail extends DurableObject<MailEnv> {
       return [];
     });
     if (!this.env.EVENTS || !summaries.length) return;
-    const events = [...summaries].sort((a, b) => a.uid - b.uid).map((m) => ({
-      type: 'mail.received', organizationId: org, actor: null, audience: `account:${owner}` as const,
-      ref: { organizationId: org, app: 'mail', kind: 'message', id: `${r.id}:${folder}:${m.uid}` },
-      ts: new Date().toISOString(),
-      data: { accountId: r.id, folder, uid: m.uid, from: m.from, subject: m.subject, date: m.date },
-    }));
+    const { mailReceivedEvents } = await import('./received');
+    const events = mailReceivedEvents({ organizationId: org, owner, accountId: r.id, folder, summaries });
     try {
       await this.env.EVENTS.get(this.env.EVENTS.idFromName(org)).publishMany(events);
     } catch (err) {
@@ -1609,9 +1605,14 @@ export class Mail extends DurableObject<MailEnv> {
     if (!sponsor) return (this.policy = null);
     // Only the senders the sponsor named (operator ruling 2026-11-11): the list starts empty, and empty means no mail at all.
     const runtime = ASSISTANT.get(ASSISTANT.idFromName(sponsor.id));
-    const [extra, autoReply] = await Promise.all([runtime.mailAllowlist().catch(() => [] as string[]), runtime.mailAutoReply().catch(() => false)]);
+    const extra = await runtime.mailAllowlist().catch(() => [] as string[]);
     const allowed = new Set(extra.map((x) => x.toLowerCase()));
-    return (this.policy = { allowed, agentId: me.principalId, sponsorAccountId: sponsor.id, organizationId: me.organizationId, at: Date.now(), autoReply });
+    // Answering is a `wake` subscription on this mailbox's mail.received (assistant/mailWake.ts), which the runtime keeps in
+    // step with "Agent always responds to incoming email". Asked here as well as when the setting changes, so an assistant
+    // that had it on before the subscription existed gets one on its next check (decision_log 2026-11-17, R-B).
+    // Awaited: the mail this check publishes must find the subscription already there.
+    await runtime.syncMailWake({ organizationId: me.organizationId, agentAccountId: owner }).catch((err: Error) => console.error(`[mail] assistant mail wake: ${err.message}`));
+    return (this.policy = { allowed, agentId: me.principalId, sponsorAccountId: sponsor.id, organizationId: me.organizationId, at: Date.now() });
   }
 
   /**
@@ -1623,9 +1624,9 @@ export class Mail extends DurableObject<MailEnv> {
     const policy = await this.assistantPolicy();
     if (!policy) return summaries;
     const { screenReason } = await import('./allowlist');
+    const { screenMessages } = await import('./received');
     const trustFrom = this.env.MAIL_ALLOW_INSECURE === '1';
-    const keep: MessageSummary[] = [], refuse: number[] = [];
-    for (const m of summaries) {
+    const { keep, refused } = await screenMessages(summaries, async (m) => {
       const head = await c.fetchOne(String(m.uid), { uid: true, headers: ['authentication-results', 'from'] }, { uid: true });
       const raw = head && head.headers ? head.headers.toString('utf8') : '';
       const auth = [...raw.matchAll(/^authentication-results:([\s\S]*?)(?=^\S|$(?![\s\S]))/gim)].map((x) => x[1]!.replace(/\r?\n\s+/g, ' '));
@@ -1646,8 +1647,7 @@ export class Mail extends DurableObject<MailEnv> {
           if (reason !== 'ok') console.log(`[mail] assistant ${policy.agentId}: uid ${m.uid} dkim: ${results.length ? results.map((r) => `${r.domain}/${r.selector} ${r.pass ? 'pass' : `fail (${r.reason})`}`).join(', ') : 'no signature'}`);
         }
       }
-      if (reason === 'ok') { keep.push(m); continue; }
-      refuse.push(m.uid);
+      if (reason === 'ok') return reason;
       // Why, for whoever reads the logs: an allowlisted sender refused means the receiving server's verdict was missing or
       // not understood, so its authentication headers are logged as they came (header lines only, never the body).
       if (reason === 'unauthenticated') {
@@ -1657,31 +1657,18 @@ export class Mail extends DurableObject<MailEnv> {
           .map((l) => l.replace(/\b(b|bh)=[A-Za-z0-9+/=\s]{20,}/g, '$1=…').slice(0, 400));
         console.log(`[mail] assistant ${policy.agentId}: refused uid ${m.uid} from ${from} (allowlisted, unauthenticated); auth headers: ${lines.length ? lines.join(' || ') : 'none'}`);
       } else console.log(`[mail] assistant ${policy.agentId}: refused uid ${m.uid} (sender not on the allowlist)`);
-    }
+      return reason;
+    });
+    const refuse = refused.map((x) => x.message.uid);
     if (refuse.length) {
       await c.mailboxCreate(REFUSED_FOLDER).catch(() => undefined);
       if (!(await c.messageMove(refuse.join(','), REFUSED_FOLDER, { uid: true }))) throw new Error(`the mail server did not move ${refuse.length} refused message(s)`);
       this.left(r.id, folder, refuse);
       console.log(`[mail] assistant ${policy.agentId}: ${refuse.length} message(s) from senders not on the allowlist, moved to ${REFUSED_FOLDER}`);
     }
-    // Kept mail stays in the inbox; it starts a turn that answers it only when the sponsor turned that on (agents.md §1.1).
-    if (policy.autoReply) for (const m of keep) this.ctx.waitUntil(this.toAssistant(r, c, folder, m, policy).catch((err) => console.error(`[mail] to assistant: ${(err as Error).message}`)));
+    // Kept mail stays in the inbox and is published as mail.received (publishReceived): an automation on it wakes the
+    // assistant, and so does its answering subscription when the sponsor turned that on (assistant/mailWake.ts).
     return keep;
-  }
-
-  /** An accepted message, as a request to the assistant: its text, and where to answer. */
-  private async toAssistant(r: AccountRow, c: ImapFlow, folder: string, m: MessageSummary, policy: AssistantPolicy): Promise<void> {
-    const src = await c.fetchOne(String(m.uid), { uid: true, source: true }, { uid: true });
-    if (!src || !src.source) return;
-    const email = await PostalMime.parse(src.source);
-    const from = email.from?.address ?? '';
-    const text = (email.text ?? (email.html ?? '').replace(/<[^>]+>/g, ' ')).slice(0, 20_000);
-    const answer = (await this.env.DIRECTORY!.get(this.env.DIRECTORY!.idFromName('directory')).call('hostedRuntimeOf' as never, [this.cache.state('owner_account_id')] as never)) as { ok: boolean; value?: import('@flow/shared').HostedRuntimeDTO | null };
-    if (!answer.ok || !answer.value) return;
-    await this.env.ASSISTANT!.get(this.env.ASSISTANT!.idFromName(policy.sponsorAccountId)).mailTurn({
-      organizationId: policy.organizationId, runtime: answer.value, mailboxAccountId: this.cache.state('owner_account_id')!,
-      from, subject: email.subject ?? '', text, messageId: email.messageId ?? `${r.id}:${folder}:${m.uid}`,
-    });
   }
 
   /** The sponsor changed the allowlist (routes/assistant.ts): read it again, and check mail (or stop) to match. */
@@ -1690,8 +1677,8 @@ export class Mail extends DurableObject<MailEnv> {
     await this.armAlarm();
   }
 
-  /** The assistant's answer by mail (Assistant.mailTurn), from its hosted mailbox, to the sender it is answering: only an
-   * allowlisted one. A binding, never a route, as sendCalendarMail is. */
+  /** The assistant's answer by mail (the output step of its `reply: 'mail'` wake job, Assistant.wake), from its hosted
+   * mailbox, to the sender it is answering: only an allowlisted one. A binding, never a route, as sendCalendarMail is. */
   async sendAsAssistant(p: { to: string; subject: string; text: string; inReplyTo?: string }): Promise<{ ok: boolean; message?: string }> {
     try {
       const policy = await this.assistantPolicy();

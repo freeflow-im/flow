@@ -47,7 +47,11 @@ export interface ReadQuery {
  * (for a `ref:` audience) the references shared with it, from the Org object's share index. Without `sharedRefs`, a
  * `ref:` event is its owner's alone.
  */
-export interface Reader { accountId: string; channelIds: string[]; agentAccountIds?: string[]; sharedRefs?: string[] }
+export interface Reader {
+  accountId: string; channelIds: string[]; agentAccountIds?: string[]; sharedRefs?: string[];
+  /** The personal agents this reader sponsors: their own account's events are the reader's too, as their mailbox is. */
+  sponsoredAgentIds?: string[];
+}
 
 export interface EventStats { count: number; first: number | null; last: number | null; oldestTs: string | null }
 
@@ -159,12 +163,13 @@ export class EventsCore {
     const channels = new Set(reader.channelIds);
     const refs = new Set(reader.sharedRefs ?? []);
     const own = `account:${reader.accountId}`;
+    const sponsored = new Set((reader.sponsoredAgentIds ?? []).map((id) => `account:${id}`));
     const owns = (r: Record<string, unknown>) => {
       try { return (JSON.parse(r.data as string) as { ownerAccountId?: unknown } | null)?.ownerAccountId === reader.accountId; } catch { return false; }
     };
     const visible = (r: Record<string, unknown>) => {
       const audience = r.audience as string;
-      if (audience === 'org' || audience === own) return true;
+      if (audience === 'org' || audience === own || sponsored.has(audience)) return true;
       if (audience.startsWith('channel:')) return channels.has(audience.slice(8));
       if (audience.startsWith('ref:')) return refs.has(audience.slice(4)) || owns(r);
       return false;
@@ -319,7 +324,7 @@ export class EventsCore {
     const out: PlatformEvent[] = [];
     let since = after;
     while (since < through) {
-      const page = this.read({ ...queryOf(sub.filter, sub.owner), since, limit: READ_LIMIT_MAX }, reader);
+      const page = this.read({ ...queryOf(sub.filter, sub.owner, sub.consumer), since, limit: READ_LIMIT_MAX }, reader);
       for (const e of page.events) if (e.seq <= through) out.push(e);
       if (page.next <= since || !page.events.length || page.next >= through) break;
       since = page.next;
@@ -381,6 +386,12 @@ export class EventsCore {
     });
     this.sql.exec("UPDATE agent_jobs SET state = 'delivered', lease_until = NULL, updated_at = ? WHERE id = ?", now, job.id);
     return out;
+  }
+
+  /** The event that woke the agent's job (its type and reference), for the runtime; null for another agent's job. */
+  triggerOf(jobId: string, agent: string): Pick<PlatformEvent, 'id' | 'seq' | 'type' | 'ref' | 'channelId'> | null {
+    const job = this.getJob(jobId);
+    return job && job.agent === agent ? this.jobTrigger(job) : null;
   }
 
   /** The event that woke a job, as its first `agent.job` named it (the trigger itself may have aged out). */
@@ -596,14 +607,14 @@ function toSubscription(r: Record<string, unknown>): SubscriptionDTO {
   };
 }
 
-/** A subscription's filter as a read's query; `self` names the consumer's own account. */
-export function queryOf(f: EventFilter, consumer: string): ReadQuery {
+/** A subscription's filter as a read's query; `self` names the reading account's own, `consumerOwn` the consumer's. */
+export function queryOf(f: EventFilter, consumer: string, agent: string = consumer): ReadQuery {
   return {
     ...(f.types?.length ? { types: f.types } : {}),
     ...(f.ref ? { ref: formatReference(f.ref) } : {}),
     ...(f.channelId ? { channelId: f.channelId } : {}),
     ...(f.actorKind ? { actorKind: f.actorKind } : {}),
     ...(f.text ? { text: f.text } : {}),
-    ...(f.self ? { self: consumer } : {}),
+    ...(f.consumerOwn ? { self: agent } : f.self ? { self: consumer } : {}),
   };
 }

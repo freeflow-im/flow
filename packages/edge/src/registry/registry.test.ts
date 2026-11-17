@@ -42,7 +42,7 @@ const manifestTools = () => {
 type Input = ToolDefinition['input'];
 
 /** The assistant's browser tools that ask the person first (confirmationFor in the Docs client, Calendar's delete_event). */
-const CONFIRMED = new Set(['send_message', 'delete_event', 'request_app_change', 'edit_image', 'delete_tab', 'delete_rows', 'delete_columns', 'clear_range', 'delete_slides', 'delete_blocks', 'replace_blocks']);
+const CONFIRMED = new Set(['delete_event', 'request_app_change', 'edit_image', 'delete_tab', 'delete_rows', 'delete_columns', 'clear_range', 'delete_slides', 'delete_blocks', 'replace_blocks']);
 /** Browser tools that other apps' pages run too. */
 const RUNS_IN: Record<string, string[]> = { delete_event: ['docs'] };
 

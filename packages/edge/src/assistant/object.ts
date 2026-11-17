@@ -20,6 +20,8 @@ import { calendarRequest, type AccountCaller } from '../calendar/forward';
 import type { CalendarToolContext } from '../calendar/calendarTools';
 import type { MailToolContext } from '../imap/mailTools';
 import { appToolContexts } from '../apps';
+import { runnerOf } from '../registry';
+import { mailWakeSubscription } from './mailWake.ts';
 import { withDocsContext, type DocsContext } from '@flow/docs/server/runtime/workerd/context.ts';
 import type { Caller as DocsCaller } from '@flow/docs/server/runtime/workerd/http.ts';
 import { DatabaseSync } from '@flow/docs/server/runtime/workerd/sqlite.ts';
@@ -35,8 +37,10 @@ import { checkBraveKey } from '@flow/docs/server/agent/tools.ts';
 import { ASSISTANT_PAGES, SUITE_GUIDANCE } from '../docs/assistantTools.ts';
 import { isFileId } from '@flow/docs/server/ids.ts';
 import { scopeOf, type ScopeArg } from '@flow/docs/server/scope.ts';
-import { chatScope, HOME_CHAT, isChatScope, type AgentDefinition, type AgentEvent, type AgentTurnRequest, type AssistantSettingsUpdate, type ClientToolCall } from '@flow/docs/shared/agent/protocol.ts';
-import { postCard } from './chatTools.ts';
+import { chatScope, HOME_CHAT, isChatScope, type AgentContext, type AgentDefinition, type AgentEvent, type AgentTurnRequest, type AssistantSettingsUpdate, type ClientToolCall, type ClientToolResult } from '@flow/docs/shared/agent/protocol.ts';
+import { ASSISTANT_CHAT_TOOLS } from './chatTools.ts';
+import { HEADLESS_DOCS_TOOLS, headlessRefusal } from '../docs/assistantTools.ts';
+import type { McpRequestCaller } from '../docs/mcp.ts';
 import { ADMIN_GUIDANCE, AdminToolError, type AdminToolContext } from './adminTools.ts';
 import { MEMORY_DDL, MemoryError, MemoryStore, type MemoryScope } from './memory.ts';
 import type { Org } from '../org/object';
@@ -69,8 +73,10 @@ export interface AssistantEnv {
 const WAKE_TURN_MS = 8 * 60_000;
 /** How often a Chat turn says it is still at work (Chat drops a typing event after 5 s). */
 const TYPING_EVERY_MS = 3_000;
-/** Most times one Chat run goes back to the model after running its Chat tools (each round is up to the loop's own steps). */
-const MAX_CHAT_ROUNDS = 8;
+/** Most times a headless turn goes back to the model after running the tools it paused on (each round is up to the loop's own steps). */
+const MAX_HEADLESS_ROUNDS = 8;
+/** Most of a headless Docs tool's answer the model is given. */
+const MAX_HEADLESS_RESULT = 60_000;
 
 /**
  * The tables, Docs' own DDL for them (docs/server/db.ts, with its later columns) without the `users` references: this
@@ -524,9 +530,9 @@ export class Assistant extends DurableObject<AssistantEnv> {
 
   /**
    * A wake job for the hosted agent this object runs (agents.md §6), handed over by the organization's Events object: the
-   * job is acked, the prompt run as an async turn (no page, so no browser tools; the server tools as the agent), the answer
-   * posted in the job's channel as the agent (a personal agent: as its sponsor, marked `via`), and the job stepped to done.
-   * Each job runs in a new conversation of its subscription's own (`auto:<subscription>`), apart from the person's chats.
+   * job is acked, the prompt run as a headless turn with every tool the agent may use (runHeadless), the answer posted in
+   * the job's channel as the agent (a personal agent: as its sponsor, marked `via`), and the job stepped to done. Each job
+   * runs in a new conversation of its subscription's own (`auto:<subscription>`), apart from the person's chats.
    */
   async wake(p: { organizationId: string; job: AgentJobDTO; runtime: HostedRuntimeDTO }): Promise<void> {
     this.learnName(p.runtime.agentName);
@@ -540,48 +546,39 @@ export class Assistant extends DurableObject<AssistantEnv> {
     const acked = await step('ack');
     if (acked && 'conflict' in acked) return console.log(`[assistant] job ${job.id}: not taken, it is ${acked.conflict}`);
     this.runningJobs.add(job.id);
-    const ORG = this.env.ORG;
-    const org = ORG?.get(ORG.idFromName(organizationId));
+    const org = this.orgStub(organizationId);
     let note = '';
     let ok = false;
+    // A job whose output step mails the answer back (assistant/mailWake.ts): the email it answers, and its sender's mailbox.
+    let mail: { from: string; subject: string; body: string; messageId: string | null } | null = null;
+    const mailbox = runtime.agentAccountId && this.env.MAIL ? this.env.MAIL.get(this.env.MAIL.idFromName(runtime.agentAccountId)) : null;
+    const reSubject = (s: string) => (/^re:/i.test(s) ? s : `Re: ${s}`);
     try {
-      // Whom the turn runs as: the shared agent itself, or the personal agent's sponsor (marked via).
+      const sub = events ? await Promise.resolve().then(() => events.getSubscription(job.subscriptionId)).catch(() => null) : null;
+      const replyByMail = sub?.action?.kind === 'wake' && sub.action.reply === 'mail' && runtime.mode === 'personal';
+      let conversation = `auto:${job.subscriptionId}`;
+      const { who, user, actorAccountId } = await this.actorOf(runtime, organizationId, conversation, 'the agent runtime');
+      let prompt = job.prompt;
+      if (replyByMail) {
+        mail = await this.triggeringMail(job, organizationId, who.caller);
+        if (!mail) throw new Error('the email that woke this job is no longer in the mailbox');
+        // One conversation per sender, kept across their emails (as the assistant's mail turns always were).
+        conversation = `mail:${mail.from.toLowerCase()}`;
+        who.conversationUser = conversation;
+        prompt = `${job.prompt}\n\nFrom: ${mail.from} (a sender ${user.displayName} allows)\nSubject: ${mail.subject}\n\n${mail.body}`;
+      }
       this.requireModel();
-      const actorId = runtime.mode === 'personal' ? runtime.sponsorId! : runtime.agentId;
-      const actorAccountId = runtime.mode === 'personal' ? runtime.sponsorAccountId! : runtime.agentAccountId;
-      const [user, account, channelIds] = await Promise.all([
-        this.directory<UserDTO>('getUser', actorId, actorId),
-        this.directory<AccountDTO | null>('accountById', actorAccountId),
-        org ? org.channelIdsOf(actorId) : Promise.resolve([] as string[]),
-      ]);
-      if (!account) throw new Error('the agent has no account');
-      const caller = { user, token: '', authKind: 'agent' as const, ip: '', organizationId, account, ...(runtime.mode === 'personal' ? { via: runtime.agentId } : {}) } as AccountCaller;
-      const wrong = ownerMismatch(this, caller, 'the agent runtime');
-      if (wrong) throw new Error(wrong);
-      const docs: DocsCaller = { userId: actorId, email: user.email, token: '', ip: '', accountId: account.id, channelIds };
-      const who: Who = { caller, docs, conversationUser: `auto:${job.subscriptionId}` };
-      this.turnWho.set(`auto:${job.subscriptionId}`, who);
-      const text = await withDocsContext(this.context, async () => {
-        const { agent } = this.service();
-        // Each job starts a new conversation: an earlier run's answer ("the mail tools are unavailable") must not stand in
-        // for trying again. What an automation should keep across runs goes in its memory files. Old runs are kept.
-        agent.reset(`auto:${job.subscriptionId}`);
-        const abort = new AbortController();
-        const timer = setTimeout(() => abort.abort(), WAKE_TURN_MS);
-        let out = '';
-        let failed: string | null = null;
-        try {
-          await agent.runTurn(`auto:${job.subscriptionId}`, { message: job.prompt, context: { page: 'home' }, workspace: organizationId, timezone: user.timezone }, (e) => {
-            if (e.type === 'text') out += e.text;
-            else if (e.type === 'error') failed = e.message;
-          }, abort.signal, { scope: { ownerId: actorId, workspaceId: organizationId, private: true }, viewer: actorId });
-        } finally {
-          clearTimeout(timer);
-        }
-        if (failed) throw new Error(failed);
-        return out.trim();
+      // Each automation's job starts a new conversation: an earlier run's answer ("the mail tools are unavailable") must not
+      // stand in for trying again. What an automation should keep across runs goes in its memory files. Old runs are kept.
+      if (!replyByMail) withDocsContext(this.context, () => this.service().agent.reset(conversation));
+      const { text } = await this.runHeadless({
+        organizationId, runtime, conversation, who, timezone: user.timezone, context: { page: 'home', headless: true },
+        first: { message: prompt }, stamp: { depth: job.depth + 1, causedBy: job.id },
       });
-      if (job.channelId && text && org) {
+      if (mail && text && mailbox) {
+        const sent = await mailbox.sendAsAssistant({ to: mail.from, subject: reSubject(mail.subject), text, ...(mail.messageId ? { inReplyTo: mail.messageId } : {}) });
+        if (!sent.ok) throw new Error(`the answer could not be mailed: ${sent.message ?? 'refused'}`);
+      } else if (job.channelId && text && org) {
         await org.postAutomation({ ownerAccountId: actorAccountId, channelId: job.channelId, body: text, clientMsgId: job.id, depth: job.depth + 1, causedBy: job.id, ...(runtime.mode === 'personal' ? { via: runtime.agentId } : {}) });
       }
       ok = true;
@@ -589,17 +586,18 @@ export class Assistant extends DurableObject<AssistantEnv> {
     } catch (err) {
       note = agentErrorMessage(err).slice(0, 500);
       console.error(`[assistant] job ${job.id}: ${(err as Error)?.stack ?? err}`);
+      // The sender is told the assistant could not answer, as a mail turn always did.
+      if (mail && mailbox) await mailbox.sendAsAssistant({ to: mail.from, subject: reSubject(mail.subject), text: `Sorry, I could not answer that: ${agentErrorMessage(err).slice(0, 300)}`, ...(mail.messageId ? { inReplyTo: mail.messageId } : {}) }).catch(() => null);
     }
-    this.turnWho.delete(`auto:${job.subscriptionId}`);
     this.runningJobs.delete(job.id);
     await step('done', { ok, note });
   }
 
   /**
-   * A request to a person's assistant in Chat (agents.md §1.1), handed over by the organization's object: run as an async
-   * turn with the sponsor's access (marked `via` the assistant), in one conversation per thread or DM so its memory of
-   * one exchange stays with it, and the answer posted in Chat as the assistant itself. `audience`: whether others read
-   * that conversation (a mention in a channel) or only the two of them do.
+   * A request to a person's assistant in Chat (agents.md §1.1), handed over by the organization's object: run as a
+   * headless turn with the sponsor's access (marked `via` the assistant), in one conversation per thread or DM so its
+   * memory of one exchange stays with it, and the answer posted in Chat as the assistant itself. `audience`: whether
+   * others read that conversation (a mention in a channel) or only the two of them do.
    */
   async chatTurn(p: { organizationId: string; runtime: HostedRuntimeDTO; channelId: string; threadRootId: string | null; messageId: string; prompt: string; audience?: 'private' | 'shared' }): Promise<void> {
     this.learnName(p.runtime.agentName);
@@ -610,9 +608,8 @@ export class Assistant extends DurableObject<AssistantEnv> {
 
   /**
    * A member asked a hosted shared agent in Chat (agents.md §1; Org.askSharedAgents). The turn runs as the agent, with its
-   * own grants and channels, asked by the member (`invokedBy`), in a conversation of that member's in that channel, and the
-   * answer is posted as the agent. Chat's tools act with a person's access, so a shared agent has none: a call to one is
-   * answered with a refusal and the turn goes on.
+   * own grants and channels, asked by the member (`invokedBy`), in a conversation of that member's in that channel, with
+   * every tool it may use (runHeadless; its Chat tools reach what the agent itself can), and the answer is posted as the agent.
    */
   async sharedChatTurn(p: { organizationId: string; runtime: HostedRuntimeDTO; askerUserId: string; askerAccountId: string; channelId: string; threadRootId: string | null; messageId: string; prompt: string; audience: 'private' | 'shared' }): Promise<void> {
     const { runtime, organizationId } = p;
@@ -623,138 +620,110 @@ export class Assistant extends DurableObject<AssistantEnv> {
     const jobKey = `shared-chat:${p.messageId}`;
     if (this.runningJobs.has(jobKey)) return;
     this.runningJobs.add(jobKey);
-    const ORG = this.env.ORG;
-    const org = ORG?.get(ORG.idFromName(organizationId));
+    const org = this.orgStub(organizationId);
     const conversation = `chat:${p.channelId}:${p.threadRootId ?? ''}:${p.askerUserId}`;
     let stopTyping: ReturnType<typeof setInterval> | undefined;
     try {
       this.requireModel();
-      const [user, account, channelIds] = await Promise.all([
-        this.directory<UserDTO>('getUser', runtime.agentId, runtime.agentId),
-        this.directory<AccountDTO | null>('accountById', runtime.agentAccountId),
-        org ? org.channelIdsOf(runtime.agentId) : Promise.resolve([] as string[]),
-      ]);
-      if (!account) throw new Error('the agent has no account');
-      const caller = { user, token: '', authKind: 'agent' as const, ip: '', organizationId, account, invokedBy: p.askerAccountId } as AccountCaller;
-      const wrong = ownerMismatch(this, caller, 'the shared agent in Chat');
-      if (wrong) throw new Error(wrong);
-      const docs: DocsCaller = { userId: runtime.agentId, email: user.email, token: '', ip: '', accountId: account.id, channelIds };
-      this.turnWho.set(conversation, { caller, docs, conversationUser: conversation, asker: p.askerUserId });
+      const { who, user } = await this.actorOf(runtime, organizationId, conversation, 'the shared agent in Chat', { invokedBy: p.askerAccountId, asker: p.askerUserId });
       const typing = () => void org?.agentTyping({ agentUserId: runtime.agentId, channelId: p.channelId, threadRootId: p.threadRootId }).catch(() => undefined);
       typing();
       stopTyping = setInterval(typing, TYPING_EVERY_MS);
-      const context = { page: 'chat' as const, channelId: p.channelId, threadRootId: p.threadRootId, audience: p.audience };
-      let req: Pick<AgentTurnRequest, 'message' | 'toolResults'> = { message: p.prompt };
-      let text = '';
-      for (let round = 0; round < MAX_CHAT_ROUNDS; round++) {
-        const { out, calls } = await withDocsContext(this.context, async () => {
-          const { agent } = this.service();
-          const abort = new AbortController();
-          const timer = setTimeout(() => abort.abort(), WAKE_TURN_MS);
-          let out = '';
-          let calls: ClientToolCall[] = [];
-          let failed: string | null = null;
-          try {
-            await agent.runTurn(conversation, { ...req, context, workspace: organizationId, timezone: user.timezone }, (e) => {
-              if (e.type === 'text') out += e.text;
-              else if (e.type === 'client_tools') calls = e.calls;
-              else if (e.type === 'error') failed = e.message;
-            }, abort.signal, { scope: { ownerId: runtime.agentId, workspaceId: organizationId, private: true }, viewer: runtime.agentId });
-          } finally {
-            clearTimeout(timer);
-          }
-          if (failed) throw new Error(failed);
-          return { out, calls };
-        });
-        text += out;
-        if (!calls.length) break;
-        req = { toolResults: calls.map((c) => ({ id: c.id, content: 'A shared agent has no Chat tools: answer in this reply instead, which is posted where you were asked.', isError: true })) };
-      }
+      const { text } = await this.runHeadless({
+        organizationId, runtime, conversation, who, timezone: user.timezone,
+        context: { page: 'chat', channelId: p.channelId, threadRootId: p.threadRootId, audience: p.audience, headless: true },
+        first: { message: p.prompt }, stamp: { invokedBy: p.askerAccountId },
+      });
       clearInterval(stopTyping);
-      if (text.trim()) await org?.postAsSharedAgent({ agentUserId: runtime.agentId, channelId: p.channelId, threadRootId: p.threadRootId, body: text.trim(), clientMsgId: `shared-agent:${p.messageId}`, invokedBy: p.askerAccountId });
+      if (text) await org?.postAsSharedAgent({ agentUserId: runtime.agentId, channelId: p.channelId, threadRootId: p.threadRootId, body: text, clientMsgId: `shared-agent:${p.messageId}`, invokedBy: p.askerAccountId });
     } catch (err) {
       clearInterval(stopTyping);
       const message = (err as Error).message;
       console.error(`[assistant] shared chat ${p.messageId}: ${message}`);
       await org?.postAsSharedAgent({ agentUserId: runtime.agentId, channelId: p.channelId, threadRootId: p.threadRootId, body: `⚠️ I could not answer that: ${message}`, clientMsgId: `shared-agent-error:${p.messageId}`, invokedBy: p.askerAccountId }).catch(() => undefined);
     } finally {
-      this.turnWho.delete(conversation);
       this.runningJobs.delete(jobKey);
     }
   }
 
   /**
-   * The sponsor's ✅ or ❌ on a card the assistant left for a post (assistant/chatTools.ts), from the organization's object,
-   * which checked it is the sponsor's reaction on this assistant's message. A card the turn has moved past (the sponsor
-   * wrote again) is dropped. ✅ posts, as the assistant; then the turn goes on with the outcome, and its answer is posted.
+   * One run of a Chat conversation's turn (runHeadless, with the sponsor's access): the text the turn wrote is posted as
+   * the assistant where it was asked. Its send_message posts go out at once (operator ruling 2026-11-17, R-C).
    */
-  async chatCardAnswered(p: { organizationId: string; runtime: HostedRuntimeDTO; cardMessageId: string; approve: boolean }): Promise<void> {
-    const key = `card:${p.cardMessageId}`;
-    const raw = this.state(key);
-    if (!raw) return;
-    this.sql.exec('DELETE FROM assistant_state WHERE key = ?', key);
-    const card = JSON.parse(raw) as ChatCard;
-    if (card.run.runtime.agentId !== p.runtime.agentId || card.run.organizationId !== p.organizationId) return;
-    // The sponsor wrote again instead of answering: the turn no longer waits on this post, so nothing is posted.
-    const conversation = chatConversation(card.run);
-    if (!(await withDocsContext(this.context, async () => this.service().agent.pendingCalls(conversation, HOME_CHAT, p.organizationId).includes(card.callId)))) return;
-    const ORG = this.env.ORG;
-    const org = ORG?.get(ORG.idFromName(p.organizationId));
-    let result: { id: string; content: string; isError?: boolean };
-    if (!p.approve) result = { id: card.callId, content: 'The user declined with ❌: nothing was posted.' };
-    else {
-      try {
-        if (!org) throw new Error('Chat is not reachable here.');
-        const posted = await org.assistantPost({ agentUserId: p.runtime.agentId, channelId: card.input.channelId, threadRootId: card.input.threadRootId ?? null, body: card.input.text, clientMsgId: `assistant-post:${card.callId}` });
-        result = { id: card.callId, content: `The user approved with ✅. Posted in #${card.channelName}${card.input.threadRootId ? ' (in the thread)' : ''}${posted.joined ? ', after joining it' : ''}.` };
-      } catch (err) {
-        result = { id: card.callId, content: `The post was approved but failed: ${(err as Error).message}`, isError: true };
-      }
-    }
-    await this.runChat(card.run, key, { toolResults: [...card.others, result] }, card.callId);
-  }
-
-  /**
-   * One run of a Chat conversation's turn: the model loop, and each time it pauses for the Chat tools, those run here
-   * through the Org object with the sponsor's access and the loop goes on with their results. send_message stops the run
-   * at a card instead (only in a private conversation, where the card itself shows no one else the post); its answer is
-   * chatCardAnswered. The text the turn wrote is posted as the assistant, before the card if there is one.
-   * `expectCall`: the call a card answers; if the turn no longer waits on it (the sponsor wrote again), nothing runs.
-   */
-  private async runChat(run: ChatRun, jobKey: string, first: Pick<AgentTurnRequest, 'message' | 'toolResults'>, expectCall?: string): Promise<void> {
+  private async runChat(run: ChatRun, jobKey: string, first: Pick<AgentTurnRequest, 'message' | 'toolResults'>): Promise<void> {
     await this.useOrgModel(run.organizationId);
     const { runtime, organizationId } = run;
     if (runtime.mode !== 'personal' || !runtime.sponsorId || !runtime.sponsorAccountId) return;
     if (this.runningJobs.has(jobKey)) return;
     this.runningJobs.add(jobKey);
-    const ORG = this.env.ORG;
-    const org = ORG?.get(ORG.idFromName(organizationId));
+    const org = this.orgStub(organizationId);
     const conversation = chatConversation(run);
     const post = (body: string, clientMsgId: string) => org?.postAsAssistant({ agentUserId: runtime.agentId, channelId: run.channelId, threadRootId: run.threadRootId, body, clientMsgId }) ?? Promise.resolve(null);
     let stopTyping: ReturnType<typeof setInterval> | undefined;
     try {
       this.requireModel();
-      const actorId = runtime.sponsorId;
-      const [user, account, channelIds] = await Promise.all([
-        this.directory<UserDTO>('getUser', actorId, actorId),
-        this.directory<AccountDTO | null>('accountById', runtime.sponsorAccountId),
-        org ? org.channelIdsOf(actorId) : Promise.resolve([] as string[]),
-      ]);
-      if (!account) throw new Error('the sponsor has no account');
-      const caller = { user, token: '', authKind: 'agent' as const, ip: '', organizationId, account, via: runtime.agentId } as AccountCaller;
-      const wrong = ownerMismatch(this, caller, 'the assistant in Chat');
-      if (wrong) throw new Error(wrong);
-      const docs: DocsCaller = { userId: actorId, email: user.email, token: '', ip: '', accountId: account.id, channelIds };
-      this.turnWho.set(conversation, { caller, docs, conversationUser: conversation });
-      if (expectCall && !(await withDocsContext(this.context, async () => this.service().agent.pendingCalls(conversation, HOME_CHAT, organizationId).includes(expectCall)))) return;
+      const { who, user } = await this.actorOf(runtime, organizationId, conversation, 'the assistant in Chat');
       // "Thinking…" in Chat while the turn runs: a typing event now and every few seconds (the clients drop one after 5 s).
       const typing = () => void org?.agentTyping({ agentUserId: runtime.agentId, channelId: run.channelId, threadRootId: run.threadRootId }).catch(() => undefined);
       typing();
       stopTyping = setInterval(typing, TYPING_EVERY_MS);
-      const context = { page: 'chat' as const, channelId: run.channelId, threadRootId: run.threadRootId, audience: run.audience };
-      let req = first;
+      const { text } = await this.runHeadless({
+        organizationId, runtime, conversation, who, timezone: user.timezone,
+        context: { page: 'chat', channelId: run.channelId, threadRootId: run.threadRootId, audience: run.audience, headless: true },
+        first,
+      });
+      clearInterval(stopTyping);
+      if (text) await post(text, `assistant:${jobKey}`);
+    } catch (err) {
+      clearInterval(stopTyping);
+      console.error(`[assistant] chat ${jobKey}: ${(err as Error)?.stack ?? err}`);
+      await post(`Sorry, I could not answer that: ${agentErrorMessage(err).slice(0, 300)}`, `assistant:${jobKey}`)?.catch(() => null);
+    } finally {
+      clearInterval(stopTyping);
+      this.runningJobs.delete(jobKey);
+    }
+  }
+
+  // ---- the one tool loop of every turn with no page open (decision_log 2026-11-17, "Every agent turn runs its tools") ----
+
+  /**
+   * Whom a turn of this runtime runs as (agents.md §1): a personal agent's sponsor, marked `via` the agent; a shared agent
+   * itself, marked `invokedBy` the member who asked, when one did. The caller context, the same person as the Docs object
+   * knows them, and the conversation they are in.
+   */
+  private async actorOf(runtime: HostedRuntimeDTO, organizationId: string, conversation: string, label: string, opts: { invokedBy?: string; asker?: string } = {}): Promise<{ who: Who; user: UserDTO; actorId: string; actorAccountId: string }> {
+    const personal = runtime.mode === 'personal';
+    const actorId = personal ? runtime.sponsorId : runtime.agentId;
+    const actorAccountId = personal ? runtime.sponsorAccountId : runtime.agentAccountId;
+    if (!actorId || !actorAccountId) throw new Error(personal ? 'the agent has no sponsor' : 'the agent has no account');
+    const org = this.orgStub(organizationId);
+    const [user, account, channelIds] = await Promise.all([
+      this.directory<UserDTO>('getUser', actorId, actorId),
+      this.directory<AccountDTO | null>('accountById', actorAccountId),
+      org ? org.channelIdsOf(actorId) : Promise.resolve([] as string[]),
+    ]);
+    if (!account) throw new Error(personal ? 'the sponsor has no account' : 'the agent has no account');
+    const caller = { user, token: '', authKind: 'agent' as const, ip: '', organizationId, account, ...(personal ? { via: runtime.agentId } : {}), ...(opts.invokedBy ? { invokedBy: opts.invokedBy } : {}) } as AccountCaller;
+    const wrong = ownerMismatch(this, caller, label);
+    if (wrong) throw new Error(wrong);
+    const docs: DocsCaller = { userId: actorId, email: user.email, token: '', ip: '', accountId: account.id, channelIds };
+    return { who: { caller, docs, conversationUser: conversation, ...(opts.asker ? { asker: opts.asker } : {}) }, user, actorId, actorAccountId };
+  }
+
+  /**
+   * A turn no browser runs (agents.md §6, "async turn"): an automation's wake job, a message in Chat, an email. The model
+   * loop is offered every tool the agent may use without a page (AgentContext `headless`, assistantTools.ts
+   * headlessTools): the server tools run in the loop itself; when the model pauses on the others, they run here
+   * (runHeadlessTool) and the loop goes on with their results, up to MAX_HEADLESS_ROUNDS times. Returns what the turn
+   * wrote, for the caller to deliver.
+   */
+  private async runHeadless(t: HeadlessTurn): Promise<{ text: string }> {
+    const org = this.orgStub(t.organizationId);
+    this.turnWho.set(t.conversation, t.who);
+    try {
+      let req = t.first;
       let text = '';
-      for (let round = 0; round < MAX_CHAT_ROUNDS; round++) {
+      for (let round = 0; round < MAX_HEADLESS_ROUNDS; round++) {
         const { out, calls } = await withDocsContext(this.context, async () => {
           const { agent } = this.service();
           const abort = new AbortController();
@@ -763,11 +732,11 @@ export class Assistant extends DurableObject<AssistantEnv> {
           let calls: ClientToolCall[] = [];
           let failed: string | null = null;
           try {
-            await agent.runTurn(conversation, { ...req, context, workspace: organizationId, timezone: user.timezone }, (e) => {
+            await agent.runTurn(t.conversation, { ...req, context: t.context, workspace: t.organizationId, ...(t.timezone ? { timezone: t.timezone } : {}) }, (e) => {
               if (e.type === 'text') out += e.text;
               else if (e.type === 'client_tools') calls = e.calls;
               else if (e.type === 'error') failed = e.message;
-            }, abort.signal, { scope: { ownerId: actorId, workspaceId: organizationId, private: true }, viewer: actorId });
+            }, abort.signal, { scope: { ownerId: t.who.docs.userId!, workspaceId: t.organizationId, private: true }, viewer: t.who.docs.userId! });
           } finally {
             clearTimeout(timer);
           }
@@ -776,63 +745,78 @@ export class Assistant extends DurableObject<AssistantEnv> {
         });
         text += out;
         if (!calls.length) break;
-        const results: ChatCard['others'] = [];
-        let card: Omit<ChatCard, 'others'> | null = null;
-        for (const c of calls) {
-          if (c.name === 'send_message' && !card) {
-            const made = await this.prepareCard(run, c, org);
-            if ('error' in made) results.push({ id: c.id, content: made.error, isError: true });
-            else card = made;
-          } else if (c.name === 'send_message') {
-            results.push({ id: c.id, content: 'One post at a time: ask for this one again after the user answers the first card.', isError: true });
-          } else results.push(await this.runChatTool(runtime.agentId, c, org));
-        }
-        if (card) {
-          clearInterval(stopTyping);
-          if (text.trim()) await post(text.trim(), `assistant:${jobKey}:${round}`);
-          const cardId = await post(postCard({ channelName: card.channelName, threadRootId: card.input.threadRootId, text: card.input.text, joins: card.joins }), `card:${card.callId}`);
-          if (cardId) this.setState(`card:${cardId}`, JSON.stringify({ ...card, others: results } satisfies ChatCard));
-          return;
-        }
+        const results: ClientToolResult[] = [];
+        // One at a time and in order: a post may depend on what a read before it found.
+        for (const c of calls) results.push(await this.runHeadlessTool(c, t, org));
         req = { toolResults: results };
       }
-      clearInterval(stopTyping);
-      if (text.trim()) await post(text.trim(), `assistant:${jobKey}`);
-    } catch (err) {
-      clearInterval(stopTyping);
-      console.error(`[assistant] chat ${jobKey}: ${(err as Error)?.stack ?? err}`);
-      await post(`Sorry, I could not answer that: ${agentErrorMessage(err).slice(0, 300)}`, `assistant:${jobKey}`)?.catch(() => null);
+      return { text: text.trim() };
     } finally {
-      clearInterval(stopTyping);
-      this.turnWho.delete(conversation);
-      this.runningJobs.delete(jobKey);
+      if (this.turnWho.get(t.conversation) === t.who) this.turnWho.delete(t.conversation);
     }
   }
 
-  /** A card for a send_message call, checked first: a private conversation, and a channel the sponsor is in. */
-  private async prepareCard(run: ChatRun, c: ClientToolCall, org: OrgStub | undefined): Promise<Omit<ChatCard, 'others'> | { error: string }> {
-    if (run.audience !== 'private') return { error: 'Posting elsewhere needs the user’s approval on a card, which would show the post to everyone here. Tell the user to ask you in your direct messages instead.' };
-    if (!org) return { error: 'Chat is not reachable here.' };
-    const input = c.input as ChatCard['input'];
-    try {
-      const target = (await org.assistantChat({ agentUserId: run.runtime.agentId, op: 'target', channelId: input.channelId })) as { name: string; assistantIsMember: boolean };
-      return { run, callId: c.id, input, channelName: target.name, joins: !target.assistantIsMember };
-    } catch (err) {
-      return { error: (err as Error).message };
-    }
+  /**
+   * One call the loop paused on, run here: Chat's tools through the Org object (as the personal agent's sponsor, or as the
+   * shared agent itself), Docs' editing tools headless on the stored file (the Docs object's /mcp door), and anything else,
+   * which needs a page, refused with the reason.
+   */
+  private async runHeadlessTool(c: ClientToolCall, t: HeadlessTurn, org: OrgStub | undefined): Promise<ClientToolResult> {
+    if (ASSISTANT_CHAT_TOOLS.has(c.name)) return this.runChatTool(c, t, org);
+    if (HEADLESS_DOCS_TOOLS.has(c.name)) return this.runDocsHeadless(c, t);
+    return { id: c.id, content: headlessRefusal(c.name), isError: true };
   }
 
-  /** list_channels, read_messages, search_messages or leave_channel, through the Org object as the assistant's sponsor. */
-  private async runChatTool(agentUserId: string, c: ClientToolCall, org: OrgStub | undefined): Promise<ChatCard['others'][number]> {
-    const op = c.name === 'list_channels' ? 'channels' : c.name === 'read_messages' ? 'read' : c.name === 'search_messages' ? 'search' : c.name === 'leave_channel' ? 'leave' : null;
-    if (!op) return { id: c.id, content: `${c.name} works only in the app, not in Chat.`, isError: true };
+  /** A Chat tool, through the Org object: with the sponsor's reach for a person's assistant, the agent's own for a shared one. */
+  private async runChatTool(c: ClientToolCall, t: HeadlessTurn, org: OrgStub | undefined): Promise<ClientToolResult> {
     if (!org) return { id: c.id, content: 'Chat is not reachable here.', isError: true };
+    const agentUserId = t.runtime.agentId;
     try {
+      if (c.name === 'send_message') {
+        const input = c.input as { channelId: string; text: string; threadRootId?: string };
+        const posted = await org.assistantPost({ agentUserId, channelId: input.channelId, threadRootId: input.threadRootId ?? null, body: input.text, clientMsgId: `assistant-post:${c.id}`, ...(t.stamp ?? {}) });
+        return { id: c.id, content: `Posted in #${posted.channel}${input.threadRootId ? ' (in the thread)' : ''}${posted.joined ? ', after joining it' : ''}.` };
+      }
+      const op = c.name === 'list_channels' ? 'channels' : c.name === 'read_messages' ? 'read' : c.name === 'search_messages' ? 'search' : 'leave';
       const input = c.input as { channelId?: string; limit?: number; query?: string; sort?: 'relevance' | 'recent' };
       return { id: c.id, content: JSON.stringify(await org.assistantChat({ agentUserId, op, channelId: input.channelId, limit: input.limit, query: input.query, sort: input.sort })) };
     } catch (err) {
       return { id: c.id, content: (err as Error).message, isError: true };
     }
+  }
+
+  /**
+   * A Docs editing tool with no page open (agents.md §5, "headless"): its /mcp twin, in the organization's Docs object, as
+   * whom the turn runs as (the personal agent's sponsor via the agent, or the shared agent itself), on the stored file
+   * the call names. The same client code the open editor runs, and a saved revision.
+   */
+  private async runDocsHeadless(c: ClientToolCall, t: HeadlessTurn): Promise<ClientToolResult> {
+    const ns = this.env.DOCS;
+    if (!ns) return { id: c.id, content: 'Docs is not reachable here.', isError: true };
+    const { caller, docs } = t.who;
+    const as: McpRequestCaller = {
+      userId: docs.userId!, email: docs.email ?? '', orgId: t.organizationId, accountId: caller.account.id,
+      via: caller.via ?? null, invokedBy: caller.invokedBy ?? null, scope: 'files:read files:write', endpoint: '/mcp', origin: this.origin,
+    };
+    const request = new Request(`${this.origin}/mcp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2025-11-25' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: c.name, arguments: c.input ?? {} } }),
+    });
+    try {
+      const res = await ns.get(ns.idFromName(t.organizationId)).mcp(request, as);
+      const body = (await res.json().catch(() => null)) as { result?: { content?: { type: string; text?: string }[]; structuredContent?: unknown; isError?: boolean }; error?: { message?: string } } | null;
+      if (!body || body.error || !body.result) return { id: c.id, content: body?.error?.message ?? `Docs answered ${res.status}.`, isError: true };
+      const text = (body.result.content ?? []).filter((x) => x.type === 'text' && x.text).map((x) => x.text).join('\n') || JSON.stringify(body.result.structuredContent ?? {});
+      return { id: c.id, content: text.length > MAX_HEADLESS_RESULT ? `${text.slice(0, MAX_HEADLESS_RESULT)}\n[Result truncated.]` : text, ...(body.result.isError ? { isError: true } : {}) };
+    } catch (err) {
+      return { id: c.id, content: `Docs could not run ${c.name}: ${(err as Error).message}`, isError: true };
+    }
+  }
+
+  private orgStub(organizationId: string): OrgStub | undefined {
+    const ORG = this.env.ORG;
+    return ORG?.get(ORG.idFromName(organizationId));
   }
 
   /** The senders the sponsor allows to mail their assistant (agents.md §1.1): empty by default, and empty means no mail is read. */
@@ -846,62 +830,63 @@ export class Assistant extends DurableObject<AssistantEnv> {
   }
 
   /**
-   * Mail to the person's assistant from an allowlisted sender (the assistant's Mail object screened it): an async turn
-   * with the sponsor's access, one conversation per sender, and the answer mailed back from the assistant's mailbox.
+   * Keeps the assistant's answering subscription in step with its settings (assistant/mailWake.ts; decision_log 2026-11-17,
+   * R-B): one `wake` subscription on its own mailbox's `mail.received` while "Agent always responds to incoming email" is
+   * on and the allowlist names a sender, none otherwise. Asked when the sponsor changes either, and by the assistant's Mail
+   * object each time it reads them again (every few minutes while it checks mail), so an assistant that had answering on
+   * before this existed gets its subscription on its next check: that is the migration. Idempotent; one at a time.
    */
-  async mailTurn(p: { organizationId: string; runtime: HostedRuntimeDTO; mailboxAccountId: string; from: string; subject: string; text: string; messageId: string }): Promise<void> {
-    this.learnName(p.runtime.agentName);
-    await this.learnAgentAccount(p.runtime.agentAccountId, p.runtime.mode);
-    await this.useOrgModel(p.organizationId);
-    const { runtime, organizationId } = p;
-    if (runtime.mode !== 'personal' || !runtime.sponsorId || !runtime.sponsorAccountId || !this.env.MAIL) return;
-    if (this.runningJobs.has(p.messageId)) return;
-    this.runningJobs.add(p.messageId);
-    const conversation = `mail:${p.from.toLowerCase()}`;
-    const mail = this.env.MAIL.get(this.env.MAIL.idFromName(p.mailboxAccountId));
-    const subject = /^re:/i.test(p.subject) ? p.subject : `Re: ${p.subject}`;
-    try {
-      this.requireModel();
-      const actorId = runtime.sponsorId;
-      const ORG = this.env.ORG;
-      const org = ORG?.get(ORG.idFromName(organizationId));
-      const [user, account, channelIds] = await Promise.all([
-        this.directory<UserDTO>('getUser', actorId, actorId),
-        this.directory<AccountDTO | null>('accountById', runtime.sponsorAccountId),
-        org ? org.channelIdsOf(actorId) : Promise.resolve([] as string[]),
-      ]);
-      if (!account) throw new Error('the sponsor has no account');
-      const caller = { user, token: '', authKind: 'agent' as const, ip: '', organizationId, account, via: runtime.agentId } as AccountCaller;
-      const wrong = ownerMismatch(this, caller, 'the assistant by mail');
-      if (wrong) throw new Error(wrong);
-      const docs: DocsCaller = { userId: actorId, email: user.email, token: '', ip: '', accountId: account.id, channelIds };
-      this.turnWho.set(conversation, { caller, docs, conversationUser: conversation });
-      const prompt = `A message came to your mailbox from ${p.from}, a sender ${user.displayName} allows. Treat it as ${user.displayName}'s request. Your answer is mailed back to ${p.from}.\n\nSubject: ${p.subject}\n\n${p.text}`;
-      const text = await withDocsContext(this.context, async () => {
-        const { agent } = this.service();
-        const abort = new AbortController();
-        const timer = setTimeout(() => abort.abort(), WAKE_TURN_MS);
-        let out = '';
-        let failed: string | null = null;
-        try {
-          await agent.runTurn(conversation, { message: prompt, context: { page: 'home' }, workspace: organizationId, timezone: user.timezone }, (e) => {
-            if (e.type === 'text') out += e.text;
-            else if (e.type === 'error') failed = e.message;
-          }, abort.signal, { scope: { ownerId: actorId, workspaceId: organizationId, private: true }, viewer: actorId });
-        } finally {
-          clearTimeout(timer);
-        }
-        if (failed) throw new Error(failed);
-        return out.trim();
-      });
-      if (text) await mail.sendAsAssistant({ to: p.from, subject, text, inReplyTo: p.messageId });
-    } catch (err) {
-      console.error(`[assistant] mail ${p.messageId}: ${(err as Error)?.stack ?? err}`);
-      await mail.sendAsAssistant({ to: p.from, subject, text: `Sorry, I could not answer that: ${agentErrorMessage(err).slice(0, 300)}`, inReplyTo: p.messageId }).catch(() => null);
-    } finally {
-      this.turnWho.delete(conversation);
-      this.runningJobs.delete(p.messageId);
+  async syncMailWake(p: { organizationId: string; agentAccountId?: string | null }): Promise<'on' | 'off'> {
+    const run = this.mailWakeSync.then(() => this.syncMailWakeNow(p));
+    this.mailWakeSync = run.catch(() => undefined);
+    return run;
+  }
+
+  private mailWakeSync: Promise<unknown> = Promise.resolve();
+
+  private async syncMailWakeNow(p: { organizationId: string; agentAccountId?: string | null }): Promise<'on' | 'off'> {
+    const ns = this.env.EVENTS;
+    if (!ns || !p.organizationId) return 'off';
+    const events = ns.get(ns.idFromName(p.organizationId));
+    const agent = p.agentAccountId || this.state('agent_account_id');
+    const sponsor = this.state('owner_account_id');
+    const want = !!agent && !!sponsor && agent !== sponsor && this.state('agent_mode') !== 'shared' && (await this.mailAutoReply()) && (await this.mailAllowlist()).length > 0;
+    const id = this.state('mail_wake_subscription');
+    const existing = id ? await events.getSubscription(id) : null;
+    if (id && !existing) {
+      // The sponsor deleted it from their Automations list: that turns answering off, rather than the next check making it again.
+      this.sql.exec('DELETE FROM assistant_state WHERE key = ?', 'mail_wake_subscription');
+      this.setState('mail_auto_reply', '0');
+      return 'off';
     }
+    if (want && existing && existing.consumer === agent && existing.owner === sponsor && existing.filter.consumerOwn && existing.action?.kind === 'wake' && existing.action.reply === 'mail') return 'on';
+    if (existing) await events.deleteSubscription(existing.id);
+    if (!want) {
+      if (id) this.sql.exec('DELETE FROM assistant_state WHERE key = ?', 'mail_wake_subscription');
+      return 'off';
+    }
+    const sub = await events.createSubscription(mailWakeSubscription({ organizationId: p.organizationId, agentAccountId: agent!, sponsorAccountId: sponsor! }));
+    this.setState('mail_wake_subscription', sub.id);
+    console.log(`[assistant] mail wake for ${agent}: subscription ${sub.id}`);
+    return 'on';
+  }
+
+  /**
+   * The email that woke a `reply: 'mail'` job (assistant/mailWake.ts): the trigger's reference names the message in the
+   * assistant's own mailbox, read there with the mail tools' read_mail, as the assistant. Null when it is not there.
+   */
+  private async triggeringMail(job: AgentJobDTO, organizationId: string, caller: AccountCaller): Promise<{ from: string; subject: string; body: string; messageId: string | null } | null> {
+    const events = this.env.EVENTS?.get(this.env.EVENTS.idFromName(organizationId));
+    const trigger = await events?.jobTrigger(job.id, job.agent);
+    if (!trigger || trigger.type !== 'mail.received' || trigger.ref?.app !== 'mail') return null;
+    const own = await this.ownMailbox(caller);
+    const runner = runnerOf('assistant', 'read_mail');
+    if (!own || !runner) return null;
+    const out = (await runner.run({ mail: { mail: own.fetch, origin: this.origin } } as never, { ids: [trigger.ref.id] })) as { messages?: { from?: string | null; subject?: string; body?: string; message_id?: string | null }[] };
+    const m = out.messages?.[0];
+    const from = m?.from ? (/<([^<>\s]+@[^<>\s]+)>/.exec(m.from)?.[1] ?? m.from).trim() : '';
+    if (!m || !from) return null;
+    return { from, subject: m.subject ?? '', body: (m.body ?? '').slice(0, 20_000), messageId: m.message_id ?? null };
   }
 
   // ---- the organization's model (orgModel.ts) ------------------------------------------------------------------------
@@ -1030,6 +1015,9 @@ export class Assistant extends DurableObject<AssistantEnv> {
         this.setState('mail_auto_reply', body.autoReply ? '1' : '0');
         this.refreshGuidance();
       }
+      // Answering is a subscription on the mailbox's mail.received (assistant/mailWake.ts): made or removed to match.
+      const organizationId = c.env.who.caller.account.organizationId || c.env.who.caller.organizationId;
+      if (organizationId) await this.syncMailWake({ organizationId }).catch((err: Error) => console.error(`[assistant] mail wake: ${err.message}`));
       return c.json({ senders: await this.mailAllowlist(), autoReply: await this.mailAutoReply() });
     });
     app.put('/api/agent/definition', async (c) => {
@@ -1074,6 +1062,8 @@ export class Assistant extends DurableObject<AssistantEnv> {
     // never the browser.
     if (body.context && typeof body.context === 'object') {
       delete (body.context as { admin?: boolean }).admin;
+      // A panel turn has its page: only the runtime's own turns are headless (runHeadless).
+      delete (body.context as { headless?: boolean }).headless;
       if (this.isAdminAgent() && c.env.who.caller.invokedBy) (body.context as { admin?: boolean }).admin = true;
     }
     // Where the asker is: their browser's zone (the panels send it), else their profile's.
@@ -1202,7 +1192,7 @@ function placeOf(scope: ScopeArg): DocsPlace | null {
   return s.workspaceId ? { workspace: s.workspaceId, shared: !s.private } : null;
 }
 
-/** Where a Chat conversation is, and who reads it: what a run needs again when a card is answered. */
+/** Where a Chat conversation is, and who reads it. */
 interface ChatRun {
   organizationId: string;
   runtime: HostedRuntimeDTO;
@@ -1211,14 +1201,19 @@ interface ChatRun {
   audience: 'private' | 'shared';
 }
 
-/** A card waiting for the sponsor's ✅ or ❌ (kept under `card:<message id>`), with the results of the turn's other calls. */
-interface ChatCard {
-  run: ChatRun;
-  callId: string;
-  input: { channelId: string; text: string; threadRootId?: string };
-  channelName: string;
-  joins: boolean;
-  others: { id: string; content: string; isError?: boolean }[];
+/** One turn runHeadless runs: whose, where, as whom, and how its posts are stamped. */
+interface HeadlessTurn {
+  organizationId: string;
+  runtime: HostedRuntimeDTO;
+  /** The loop's conversation (`auto:<subscription>`, `chat:…`, `mail:<sender>`). */
+  conversation: string;
+  who: Who;
+  timezone?: string;
+  /** The page the turn has (`home` or `chat`), always `headless`. */
+  context: AgentContext;
+  first: Pick<AgentTurnRequest, 'message' | 'toolResults'>;
+  /** What a send_message post carries: a wake job's depth and cause (loop safety, platform.md §5.2), who asked a shared agent. */
+  stamp?: { depth?: number; causedBy?: string; invokedBy?: string };
 }
 
 type OrgStub = DurableObjectStub<Org>;

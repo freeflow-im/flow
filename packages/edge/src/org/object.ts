@@ -29,7 +29,6 @@ import type { Events } from '../events/object';
 import type { Assistant } from '../assistant/object';
 import type { PublishInput, SubscriptionRead } from '../events/core';
 import { agentStampFor, logEntryFor, type AgentStamp } from './eventLog';
-import { APPROVE, DECLINE } from '../assistant/chatTools';
 import { config } from './config';
 import { isActiveAccount, recordShare, revokeShare, shareEvents, sharedRefsOf, sharedWith, type RecordShareInput, type RevokeShareInput, type SharedItem } from './services/shares';
 import { eq, and } from 'drizzle-orm';
@@ -344,30 +343,6 @@ export class Org extends DurableObject<OrgEnv> {
     if (event.type === 'message.created' || event.type === 'thread.reply') {
       this.ctx.waitUntil(this.askAssistant(event.data as MessageDTO).catch((err) => console.error(`[assistant] ${(err as Error).message}`)));
     }
-    if (event.type === 'reaction.added') {
-      this.ctx.waitUntil(this.answerAssistantCard(event.data as { messageId: string; emoji: string; userId: string }).catch((err) => console.error(`[assistant] ${(err as Error).message}`)));
-    }
-  }
-
-  /**
-   * A sponsor's ✅ or ❌ on a card their assistant left (assistant/chatTools.ts): the approval of a post the assistant asked
-   * to make where others read it (agents.md §1). Only the sponsor's reaction on their own assistant's message counts; the
-   * runtime matches it to the card it is waiting on and ignores any other.
-   */
-  private async answerAssistantCard(r: { messageId: string; emoji: string; userId: string }): Promise<void> {
-    const approve = APPROVE.has(r.emoji) ? true : DECLINE.has(r.emoji) ? false : null;
-    if (approve === null || !this.env.ASSISTANT) return;
-    const sql = this.ctx.storage.sql;
-    const author = sql.exec('SELECT user_id, channel_id FROM messages WHERE id = ?', r.messageId).toArray()[0];
-    if (!author) return;
-    const a = sql.exec("SELECT account_id FROM workspace_members WHERE user_id = ? AND kind = 'personal_agent' AND runtime = 'hosted' AND sponsor_user_id = ?", author.user_id, r.userId).toArray()[0];
-    if (!a?.account_id) return;
-    const workspace = sql.exec('SELECT id FROM workspaces LIMIT 1').toArray()[0];
-    const answer = await this.directory().call('hostedRuntimeOf' as never, [a.account_id] as never) as DirectoryAnswer<HostedRuntimeDTO | null>;
-    if (!answer.ok || !answer.value || !workspace) return;
-    await this.env.ASSISTANT.get(this.env.ASSISTANT.idFromName(answer.value.runtimeKey)).chatCardAnswered({
-      organizationId: workspace.id as string, runtime: answer.value, cardMessageId: r.messageId, approve,
-    });
   }
 
   /**
@@ -540,12 +515,13 @@ export class Org extends DurableObject<OrgEnv> {
    * An assistant's answer in Chat (agents.md §1.1), posted as the assistant itself, marked as asked by its sponsor. Only a
    * person's assistant, only where it is a channel member. Returns the message id, or null.
    */
-  async postAsAssistant(p: { agentUserId: string; channelId: string; threadRootId: string | null; body: string; clientMsgId: string }): Promise<string | null> {
+  async postAsAssistant(p: { agentUserId: string; channelId: string; threadRootId: string | null; body: string; clientMsgId: string; depth?: number; causedBy?: string }): Promise<string | null> {
     const row = this.ctx.storage.sql.exec("SELECT m.sponsor_user_id, s.account_id AS sponsor_account FROM workspace_members m LEFT JOIN workspace_members s ON s.user_id = m.sponsor_user_id WHERE m.user_id = ? AND m.kind = 'personal_agent' AND m.runtime = 'hosted'", p.agentUserId).toArray()[0];
     if (!row) return null;
     const { sendMessage } = await import('./services/messages');
     const { assistantPosting } = await import('./services/workspaces');
-    const stamp: Stamp = { depth: 1, ...(row.sponsor_account ? { invokedBy: row.sponsor_account as string } : {}) };
+    // A post a wake job made carries the job's depth and cause (platform.md §5.2, loop safety); any other, depth 1.
+    const stamp: Stamp = { depth: p.depth ?? 1, ...(p.causedBy ? { causedBy: p.causedBy } : {}), ...(row.sponsor_account ? { invokedBy: row.sponsor_account as string } : {}) };
     const msg = await this.scoped(() => assistantPosting.run(p.agentUserId, () => sendMessage(p.channelId, p.agentUserId, p.clientMsgId, p.body, p.threadRootId ?? undefined, undefined, undefined, { expandMentions: true })), stamp);
     await this.logging;
     return msg.id;
@@ -558,14 +534,27 @@ export class Org extends DurableObject<OrgEnv> {
   }
 
   /**
+   * Whose reach an agent's Chat tools have (agents.md §1; decision_log 2026-11-17): a person's assistant, its sponsor's; a
+   * shared agent (an agent member of the organization in its own right), its own. Null for anyone else. Only the agent
+   * runtime calls the methods that ask (a binding, never a route), so an external agent never gets here.
+   */
+  private chatReach(agentUserId: string): { reachId: string; personal: boolean } | null {
+    const sponsor = this.assistantSponsor(agentUserId);
+    if (sponsor) return { reachId: sponsor, personal: true };
+    const shared = this.ctx.storage.sql.exec("SELECT 1 FROM workspace_members m JOIN users u ON u.id = m.user_id WHERE m.user_id = ? AND m.kind = 'native' AND u.is_agent", agentUserId).toArray().length > 0;
+    return shared ? { reachId: agentUserId, personal: false } : null;
+  }
+
+  /**
    * The Chat tools of a person's assistant (agents.md §1.1, assistant/chatTools.ts), as its runtime runs them, with its
    * sponsor's access: the standard channels the sponsor is in (`channels`), one of them before a post (`target`), its
    * recent messages (`read`), the messages it may read by their words (`search`), and the assistant leaving one (`leave`). A channel the sponsor is not in is refused, so the
-   * assistant never reaches further than its sponsor. The post itself is assistantPost, after the sponsor's ✅.
+   * assistant never reaches further than its sponsor. The post itself is assistantPost.
    */
   async assistantChat(p: { agentUserId: string; op: 'channels' | 'target' | 'read' | 'search' | 'leave'; channelId?: string; limit?: number; query?: string; sort?: 'relevance' | 'recent' }): Promise<unknown> {
-    const sponsorId = this.assistantSponsor(p.agentUserId);
-    if (!sponsorId) throw new Error('not a person’s assistant');
+    // `sponsorId` is whose reach the tools have: the sponsor's for a person's assistant, a shared agent's own (chatReach).
+    const sponsorId = this.chatReach(p.agentUserId)?.reachId;
+    if (!sponsorId) throw new Error('not an agent of this organization');
     const sql = this.ctx.storage.sql;
     const memberOf = (channelId: string, userId: string) => sql.exec('SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?', channelId, userId).toArray().length > 0;
     if (p.op === 'channels') {
@@ -620,18 +609,26 @@ export class Org extends DurableObject<OrgEnv> {
   }
 
   /**
-   * A post the sponsor approved with ✅ on their assistant's card: into a standard channel the sponsor is in, the
-   * assistant brought in by its sponsor first if it is not there yet (as a mention does), then posted as the assistant.
+   * An agent's send_message (its Chat tools): into a standard channel within its reach (chatReach). A person's assistant
+   * is brought in by its sponsor first if it is not there yet (as a mention does), then posts as itself; a shared agent
+   * posts where it is a member. `depth` and `causedBy` are a wake job's (loop safety); `invokedBy`, who asked a shared agent.
    */
-  async assistantPost(p: { agentUserId: string; channelId: string; threadRootId: string | null; body: string; clientMsgId: string }): Promise<{ messageId: string | null; joined: boolean }> {
-    const target = (await this.assistantChat({ agentUserId: p.agentUserId, op: 'target', channelId: p.channelId })) as { assistantIsMember: boolean };
-    const sponsorId = this.assistantSponsor(p.agentUserId)!;
+  async assistantPost(p: { agentUserId: string; channelId: string; threadRootId: string | null; body: string; clientMsgId: string; depth?: number; causedBy?: string; invokedBy?: string }): Promise<{ messageId: string | null; joined: boolean; channel: string }> {
+    const target = (await this.assistantChat({ agentUserId: p.agentUserId, op: 'target', channelId: p.channelId })) as { name: string; assistantIsMember: boolean };
+    const reach = this.chatReach(p.agentUserId)!;
+    if (!reach.personal) {
+      const { sendMessage } = await import('./services/messages');
+      const stamp: Stamp = { depth: p.depth ?? 1, ...(p.causedBy ? { causedBy: p.causedBy } : {}), ...(p.invokedBy ? { invokedBy: p.invokedBy } : {}) };
+      const msg = await this.scoped(() => sendMessage(p.channelId, p.agentUserId, p.clientMsgId, p.body, p.threadRootId ?? undefined, undefined, undefined, { expandMentions: true }), stamp);
+      await this.logging;
+      return { messageId: msg.id, joined: false, channel: target.name };
+    }
     let joined = false;
     if (!target.assistantIsMember) {
-      await this.scoped(async () => (await import('./services/channels')).addMember(p.channelId, sponsorId, p.agentUserId));
+      await this.scoped(async () => (await import('./services/channels')).addMember(p.channelId, reach.reachId, p.agentUserId));
       joined = true;
     }
-    return { messageId: await this.postAsAssistant(p), joined };
+    return { messageId: await this.postAsAssistant(p), joined, channel: target.name };
   }
 
   /** Into the organization's event log as well (platform.md §5.2), in order, batched per turn of the event loop. */
@@ -742,6 +739,18 @@ export class Org extends DurableObject<OrgEnv> {
     for (const id of accountIds) {
       const user = this.userOfAccount(id);
       out[id] = user ? this.privateChannelIdsOf(user) : [];
+    }
+    return out;
+  }
+
+  /** The hosted personal agents' accounts each account sponsors: an email-answering automation's owner reads their mail events. */
+  personalAgentAccountsOf(accountIds: string[]): Record<string, string[]> {
+    const out: Record<string, string[]> = {};
+    for (const id of accountIds) {
+      out[id] = this.ctx.storage.sql.exec(
+        "SELECT a.account_id FROM workspace_members a JOIN workspace_members s ON s.user_id = a.sponsor_user_id WHERE s.account_id = ? AND a.kind = 'personal_agent' AND a.account_id IS NOT NULL",
+        id,
+      ).toArray().map((r) => r.account_id as string);
     }
     return out;
   }

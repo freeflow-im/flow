@@ -61,6 +61,9 @@ export interface EventFilter {
   actorKind?: 'person' | 'agent' | 'any';
   text?: string;
   self?: boolean;
+  /** Only the events on the consumer's own account: a personal agent's own mailbox, matched for its sponsor (the owner),
+   * who may read them as they may read the agent's mailbox (agents.md §1.1). Seen only where the owner sponsors the consumer. */
+  consumerOwn?: boolean;
 }
 
 /** How a subscription is told of a match (§5.2, "Delivery modes"). `wake` files a job for an agent; `post` posts a
@@ -74,7 +77,12 @@ export const MAX_EVENT_DEPTH = 4;
 /** A `wake` subscription's action: the prompt (with `{{type}}`, `{{ref}}`, `{{channel}}`, `{{actor}}`, `{{data}}`)
  * run as a turn of the consumer agent, in `channelId` or a channel of its own. `includeSelf` lets events the agent
  * itself caused wake it too. */
-export interface WakeAction { kind: 'wake'; prompt: string; channelId?: string; includeSelf?: boolean }
+export interface WakeAction {
+  kind: 'wake'; prompt: string; channelId?: string; includeSelf?: boolean;
+  /** The turn's answer is mailed back to the sender of the `mail.received` that woke it, from the agent's own mailbox
+   * (agents.md §1.1: a person's assistant answering its allowlisted senders). Set by the platform, never by the API. */
+  reply?: 'mail';
+}
 /** A `post` subscription's action: `body` (the same placeholders) posted into `channelId` as the owner. */
 export interface PostAction { kind: 'post'; channelId: string; body: string; includeSelf?: boolean }
 export type SubscriptionAction = WakeAction | PostAction;

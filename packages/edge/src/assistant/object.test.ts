@@ -317,6 +317,97 @@ describe('the assistant’s own mailbox (agents.md §1.1)', () => {
   });
 });
 
+describe('incoming email wakes the assistant through its subscription (decision_log 2026-11-17, R-B)', () => {
+  const ADA = { id: 'acct-ada', principalId: 'ada', organizationId: 'org-1', state: 'active', role: 'member', address: 'ada@acme.test', displayName: 'Ada', kind: 'personal_agent', agentMode: 'personal', sponsorId: 'user-1' } as unknown as AccountDTO;
+  const users: Record<string, unknown> = { ada: { id: 'ada', email: 'agent-ada@agents.flow.local', displayName: 'Ada', isAgent: true }, 'user-1': { id: 'user-1', email: 'ann@acme.test', displayName: 'Ann', isAgent: false, timezone: 'UTC' } };
+  const runtime = { runtimeKey: 'acct-1', agentId: 'ada', agentAccountId: 'acct-ada', mode: 'personal' as const, organizationId: 'org-1', sponsorId: 'user-1', sponsorAccountId: 'acct-1' };
+  function env() {
+    const subs = new Map<string, Record<string, unknown>>();
+    const mailed: Record<string, unknown>[] = [];
+    const steps: { step: string; opts?: Record<string, unknown> }[] = [];
+    let n = 0;
+    return {
+      subs, mailed, steps,
+      env: {
+        DIRECTORY: { idFromName: (x: string) => x, get: () => ({ call: async (m: string, args: unknown[]) => ({ ok: true, value: m === 'getUser' ? users[args[0] as string] : m === 'accountById' ? (args[0] === 'acct-ada' ? ADA : ACCOUNT) : null }) }) },
+        ORG: { idFromName: (x: string) => x, get: () => ({ channelIdsOf: async () => [] }) },
+        EVENTS: {
+          idFromName: (x: string) => x,
+          get: () => ({
+            getSubscription: async (id: string) => subs.get(id) ?? null,
+            createSubscription: async (sub: Record<string, unknown>) => { const made = { ...sub, id: `sub-${++n}` }; subs.set(made.id, made); return made; },
+            deleteSubscription: async (id: string) => subs.delete(id),
+            jobTrigger: async (_id: string, agent: string) => (agent === 'acct-ada' ? { id: 'e1', seq: 1, type: 'mail.received', ref: { organizationId: 'org-1', app: 'mail', kind: 'message', id: 'hosted-ada:INBOX:4' } } : null),
+            jobStep: async (id: string, _a: string, step: string, opts?: Record<string, unknown>) => { steps.push({ step, opts }); return { id, state: step === 'ack' ? 'running' : 'done' }; },
+          }),
+        },
+        MAIL: {
+          idFromName: (x: string) => x,
+          get: (owner: string) => ({
+            handle: async (r: Request, caller: { account: { id: string } }) => {
+              const path = new URL(r.url).pathname;
+              if (owner !== 'acct-ada' || caller.account.id !== 'acct-ada') return Response.json({ accounts: [] });
+              if (path === '/v1/mail/accounts') return Response.json({ accounts: [{ id: 'hosted-ada', email: 'ada@acme.test', displayName: 'Ada', status: 'ok', tabs: [] }] });
+              if (path === '/v1/mail/accounts/hosted-ada/messages/4') {
+                return Response.json({ message: { from: { name: 'Ann', address: 'ann@acme.test' }, to: [], cc: [], bcc: [], replyTo: [], subject: 'Plan my week', date: '2026-11-17T08:00:00Z', folder: 'INBOX', seen: false, flagged: false, messageId: '<m4@acme.test>', text: 'What is on my plate?', html: null, attachments: [] } });
+              }
+              return Response.json({ error: 'not found' }, { status: 404 });
+            },
+            sendAsAssistant: async (p: Record<string, unknown>) => { mailed.push(p); return { ok: true }; },
+          }),
+        },
+      } as unknown as AssistantEnv,
+    };
+  }
+  const put = (a: TestAssistant, body: unknown) => a.handle(req('PUT', '/api/agent/mail-allowlist', body), CALLER, DOCS_CALLER, 'Ada', { agentAccountId: 'acct-ada', agentMode: 'personal' });
+
+  it('keeps one answering subscription while answering is on and a sender is allowed, and none otherwise', async () => {
+    const e = env();
+    const a = assistant('acct-1', e.env);
+    await put(a, { senders: ['ann@acme.test'] });
+    expect(e.subs.size).toBe(0);
+    await put(a, { autoReply: true });
+    expect([...e.subs.values()]).toEqual([expect.objectContaining({ consumer: 'acct-ada', owner: 'acct-1', createdBy: 'acct-1', delivery: 'wake', filter: { types: ['mail.received'], consumerOwn: true }, action: expect.objectContaining({ reply: 'mail' }) })]);
+    // Asked again (the mailbox's check, every few minutes): the same one stays.
+    expect(await a.syncMailWake({ organizationId: 'org-1', agentAccountId: 'acct-ada' })).toBe('on');
+    expect(e.subs.size).toBe(1);
+    // The sponsor deleted it from their Automations list: answering turns off, and the next check does not make it again.
+    e.subs.clear();
+    expect(await a.syncMailWake({ organizationId: 'org-1', agentAccountId: 'acct-ada' })).toBe('off');
+    expect(await a.mailAutoReply()).toBe(false);
+    expect(await a.syncMailWake({ organizationId: 'org-1', agentAccountId: 'acct-ada' })).toBe('off');
+    expect(e.subs.size).toBe(0);
+    await put(a, { autoReply: true });
+    expect(e.subs.size).toBe(1);
+    await put(a, { autoReply: false });
+    expect(e.subs.size).toBe(0);
+  });
+
+  it('runs the job as a headless turn with every tool, and mails the answer back to the sender, in the thread', async () => {
+    const e = env();
+    const a = assistant('acct-1', e.env);
+    await put(a, { senders: ['ann@acme.test'], autoReply: true });
+    const sub = [...e.subs.values()][0]!;
+    const seen: { tools: string[]; text: string }[] = [];
+    a.script = async (params, { onText }) => {
+      seen.push({ tools: (params.tools ?? []).map((t) => (t as { name: string }).name), text: lastUser(params).filter((b) => b.type === 'text').map((b) => String(b.text)).join('\n') });
+      onText('Tuesday: the budget review.');
+      return message([{ type: 'text', text: 'Tuesday: the budget review.' }], 'end_turn') as never;
+    };
+    const job = { id: 'job-m1', subscriptionId: sub.id, agent: 'acct-ada', eventId: 'e1', eventSeq: 1, prompt: (sub.action as { prompt: string }).prompt, state: 'queued', attempts: 0, depth: 1, createdAt: '', updatedAt: '' } as never;
+    await a.wake({ organizationId: 'org-1', job, runtime });
+    // Every tool it may use, Chat's among them (Ada once said "Chat access isn't available here").
+    expect(seen[0]!.tools).toEqual(expect.arrayContaining(['list_channels', 'send_message', 'read_messages', 'search_mail', 'insert_content']));
+    expect(seen[0]!.text).toContain('From: ann@acme.test (a sender Ann allows)');
+    expect(seen[0]!.text).toContain('What is on my plate?');
+    expect(e.mailed).toEqual([{ to: 'ann@acme.test', subject: 'Re: Plan my week', text: 'Tuesday: the budget review.', inReplyTo: '<m4@acme.test>' }]);
+    expect(e.steps.at(-1)).toMatchObject({ step: 'done', opts: { ok: true } });
+    // Its conversation is the sender's, kept across their emails.
+    const convs = (a as unknown as { sql: { exec(q: string): { toArray(): { user_id: string }[] } } }).sql.exec('SELECT user_id FROM agent_conversations').toArray().map((r) => r.user_id);
+    expect(convs).toContain('mail:ann@acme.test');
+  });
+});
+
 describe('a hosted agent’s runtime takes a wake job (agents.md §6)', () => {
   const OMNI_ACCOUNT = { id: 'acct-omni', principalId: 'omni', organizationId: 'org-1', state: 'active', role: 'member', address: 'omni@acme.test', displayName: 'Omni', kind: 'native', agentMode: 'shared', sponsorId: 'user-1' } as unknown as AccountDTO;
   const users: Record<string, unknown> = { omni: { id: 'omni', email: 'omni@agents.flow.local', displayName: 'Omni', isAgent: true, agentMode: 'shared' }, 'user-1': { id: 'user-1', email: 'ann@acme.test', displayName: 'Ann', isAgent: false } };
@@ -386,6 +477,100 @@ describe('a hosted agent’s runtime takes a wake job (agents.md §6)', () => {
     await a.wake({ organizationId: 'org-1', job: job('job-5', { agent: 'acct-asst' }), runtime });
     // Each run's model call sees only its own prompt, not the run before it.
     expect(seen).toEqual([1, 1]);
+  });
+});
+
+describe('every turn with no page open runs its tools (decision_log 2026-11-17)', () => {
+  const users: Record<string, unknown> = { 'user-1': { id: 'user-1', email: 'ann@acme.test', displayName: 'Ann', isAgent: false, timezone: 'UTC' } };
+  const runtime = { runtimeKey: 'acct-1', agentId: 'asst', agentAccountId: 'acct-asst', mode: 'personal' as const, organizationId: 'org-1', sponsorId: 'user-1', sponsorAccountId: 'acct-1' };
+  const job = (id: string) => ({ id, subscriptionId: 'sub-9', agent: 'acct-asst', eventId: 'e1', eventSeq: 1, prompt: 'Summarize #general into the notes doc.', channelId: 'ch-1', state: 'queued', attempts: 0, depth: 1, createdAt: '', updatedAt: '' }) as never;
+  function env() {
+    const chat: Record<string, unknown>[] = [];
+    const mcp: { body: { method: string; params: { name: string; arguments: Record<string, unknown> } }; caller: Record<string, unknown> }[] = [];
+    const posted: Record<string, unknown>[] = [];
+    return {
+      chat, mcp, posted,
+      env: {
+        DIRECTORY: { idFromName: (n: string) => n, get: () => ({ call: async (m: string, args: unknown[]) => ({ ok: true, value: m === 'getUser' ? users[args[0] as string] : m === 'accountById' ? ACCOUNT : null }) }) },
+        ORG: {
+          idFromName: (n: string) => n,
+          get: () => ({
+            channelIdsOf: async () => ['ch-1'],
+            postAutomation: async (p: Record<string, unknown>) => { posted.push(p); return 'm1'; },
+            assistantChat: async (p: Record<string, unknown>) => { chat.push(p); return [{ id: 'm-7', from: 'Bob', at: '2026-11-17T09:00:00Z', text: 'Ship it Friday.' }]; },
+          }),
+        },
+        DOCS: {
+          idFromName: (n: string) => n,
+          get: () => ({
+            mcp: async (req: Request, caller: Record<string, unknown>) => {
+              const body = (await req.json()) as (typeof mcp)[number]['body'];
+              mcp.push({ body, caller });
+              return Response.json({ jsonrpc: '2.0', id: 1, result: { content: [{ type: 'text', text: JSON.stringify({ doc_id: 'd0c000000001', inserted: 1 }) }] } });
+            },
+          }),
+        },
+        EVENTS: { idFromName: (n: string) => n, get: () => ({ jobStep: async (id: string, _a: string, step: string) => ({ id, state: step === 'ack' ? 'running' : 'done' }) }) },
+      } as unknown as AssistantEnv,
+    };
+  }
+
+  it('runs an automation’s Chat and Docs calls itself, with real results, and refuses a page-only tool with the reason', async () => {
+    const e = env();
+    const a = assistant('acct-1', e.env);
+    const seen: { tools: string[]; results: Block[] }[] = [];
+    a.script = async (params, { onText }) => {
+      const results = lastUser(params).filter((b) => b.type === 'tool_result');
+      seen.push({ tools: (params.tools ?? []).map((t) => (t as { name: string }).name), results });
+      if (!results.length) return message([{ type: 'tool_use', id: 'tu-read', name: 'read_messages', input: { channelId: 'ch-gen' } }], 'tool_use') as never;
+      if (results[0]!.tool_use_id === 'tu-read') {
+        return message([
+          { type: 'tool_use', id: 'tu-ins', name: 'insert_content', input: { doc_id: 'd0c000000001', markdown: 'Ship it Friday.' } },
+          { type: 'tool_use', id: 'tu-open', name: 'open_doc', input: { doc_id: 'd0c000000001' } },
+        ], 'tool_use') as never;
+      }
+      onText('Added the summary.');
+      return message([{ type: 'text', text: 'Added the summary.' }], 'end_turn') as never;
+    };
+    await a.wake({ organizationId: 'org-1', job: job('job-r1'), runtime });
+    // The turn was offered Chat's tools and Docs' editing tools, with no page.
+    expect(seen[0]!.tools).toEqual(expect.arrayContaining(['list_channels', 'read_messages', 'send_message', 'insert_content', 'write_range', 'search_mail']));
+    expect(seen[0]!.tools).not.toContain('open_doc');
+    // read_messages ran through the Org object as the assistant (its sponsor's reach), and its result went back.
+    expect(e.chat).toEqual([expect.objectContaining({ agentUserId: 'asst', op: 'read', channelId: 'ch-gen' })]);
+    expect(String(seen[1]!.results[0]!.content)).toContain('Ship it Friday.');
+    // insert_content ran headless in the Docs object's /mcp door, as the sponsor via the assistant.
+    expect(e.mcp).toHaveLength(1);
+    expect(e.mcp[0]!.body).toMatchObject({ method: 'tools/call', params: { name: 'insert_content', arguments: { doc_id: 'd0c000000001' } } });
+    expect(e.mcp[0]!.caller).toMatchObject({ userId: 'user-1', orgId: 'org-1', via: 'asst', scope: 'files:read files:write' });
+    const [ins, open] = seen[2]!.results;
+    expect(String(ins!.content)).toContain('"inserted":1');
+    expect(open).toMatchObject({ is_error: true });
+    expect(String(open!.content)).toMatch(/open_doc works on a page open in the app/);
+    // The answer is posted in the job's channel.
+    expect(e.posted).toEqual([expect.objectContaining({ channelId: 'ch-1', body: 'Added the summary.', causedBy: 'job-r1' })]);
+  });
+
+  it('gives a shared agent asked in Chat its Chat tools, with its own reach', async () => {
+    const e = env();
+    const omniUsers: Record<string, unknown> = { omni: { id: 'omni', email: 'omni@agents.flow.local', displayName: 'Omni', isAgent: true } };
+    const OMNI = { id: 'acct-omni', principalId: 'omni', organizationId: 'org-1', state: 'active', role: 'member', displayName: 'Omni', kind: 'native', agentMode: 'shared' } as unknown as AccountDTO;
+    const shared: Record<string, unknown>[] = [];
+    const env2 = {
+      ...e.env,
+      DIRECTORY: { idFromName: (n: string) => n, get: () => ({ call: async (m: string, args: unknown[]) => ({ ok: true, value: m === 'getUser' ? omniUsers[args[0] as string] : m === 'accountById' ? OMNI : null }) }) },
+      ORG: { idFromName: (n: string) => n, get: () => ({ channelIdsOf: async () => ['ch-1'], agentTyping: async () => undefined, assistantChat: async (p: Record<string, unknown>) => { e.chat.push(p); return []; }, postAsSharedAgent: async (p: Record<string, unknown>) => { shared.push(p); return 'm1'; } }) },
+    } as unknown as AssistantEnv;
+    const a = assistant('acct-omni', env2);
+    a.script = async (params, { onText }) => {
+      if (!lastUser(params).some((b) => b.type === 'tool_result')) return message([{ type: 'tool_use', id: 'tu-ch', name: 'list_channels', input: {} }], 'tool_use') as never;
+      onText('You have no channels in common with me.');
+      return message([{ type: 'text', text: 'You have no channels in common with me.' }], 'end_turn') as never;
+    };
+    const omniRuntime = { runtimeKey: 'acct-omni', agentId: 'omni', agentAccountId: 'acct-omni', mode: 'shared' as const, organizationId: 'org-1', sponsorId: 'user-1', sponsorAccountId: 'acct-1' };
+    await a.sharedChatTurn({ organizationId: 'org-1', runtime: omniRuntime, askerUserId: 'user-1', askerAccountId: 'acct-1', channelId: 'ch-1', threadRootId: null, messageId: 'msg-s1', prompt: 'Which channels are you in?', audience: 'private' });
+    expect(e.chat).toEqual([expect.objectContaining({ agentUserId: 'omni', op: 'channels' })]);
+    expect(shared).toEqual([expect.objectContaining({ body: 'You have no channels in common with me.', invokedBy: 'acct-1' })]);
   });
 });
 
@@ -474,16 +659,17 @@ describe('the move from the Docs objects (moveAssistantRows)', () => {
   });
 });
 
-describe('a person’s assistant in Chat posts elsewhere only on its sponsor’s ✅ (agents.md §1, §1.1)', () => {
+describe('a person’s assistant in Chat posts elsewhere at once, with no approval (operator ruling 2026-11-17, R-C)', () => {
   const users: Record<string, unknown> = { 'user-1': { id: 'user-1', email: 'ann@acme.test', displayName: 'Ann', isAgent: false, timezone: 'UTC' } };
   const runtime = { runtimeKey: 'acct-1', agentId: 'asst', agentAccountId: 'acct-asst', mode: 'personal' as const, organizationId: 'org-1', sponsorId: 'user-1', sponsorAccountId: 'acct-1' };
   const DM = 'dm-1';
   function env() {
     const posted: { channelId: string; body: string; clientMsgId: string; threadRootId: string | null }[] = [];
     const posts: Record<string, unknown>[] = [];
+    const automation: Record<string, unknown>[] = [];
     let next = 0;
     return {
-      posted, posts,
+      posted, posts, automation,
       env: {
         DIRECTORY: { idFromName: (n: string) => n, get: () => ({ call: async (m: string, args: unknown[]) => ({ ok: true, value: m === 'getUser' ? users[args[0] as string] : m === 'accountById' ? ACCOUNT : null }) }) },
         ORG: {
@@ -492,101 +678,73 @@ describe('a person’s assistant in Chat posts elsewhere only on its sponsor’s
             channelIdsOf: async () => [DM, 'ch-gen'],
             agentTyping: async () => undefined,
             postAsAssistant: async (p: { channelId: string; body: string; clientMsgId: string; threadRootId: string | null }) => { posted.push(p); return `m${++next}`; },
+            postAutomation: async (p: Record<string, unknown>) => { automation.push(p); return 'm-auto'; },
             assistantChat: async (p: { op: string; channelId?: string }) => {
               if (p.op === 'channels') return [{ id: 'ch-gen', name: 'general', private: false, assistantIsMember: false }];
-              if (p.channelId !== 'ch-gen') throw new Error('No such channel among the ones the user is in. list_channels lists them.');
-              return { id: 'ch-gen', name: 'general', private: false, assistantIsMember: false };
+              if (p.op === 'read') return [{ id: 'm-1', from: 'Bob', at: '2026-11-17T09:00:00Z', text: 'Standup moved to 10.' }];
+              throw new Error('No such channel among the ones the user is in. list_channels lists them.');
             },
-            assistantPost: async (p: Record<string, unknown>) => { posts.push(p); return { messageId: 'm-gen', joined: true }; },
+            assistantPost: async (p: Record<string, unknown>) => { posts.push(p); return { messageId: 'm-gen', joined: true, channel: 'general' }; },
           }),
         },
+        EVENTS: { idFromName: (n: string) => n, get: () => ({ jobStep: async (id: string, _a: string, step: string) => ({ id, state: step === 'ack' ? 'running' : 'done' }) }) },
       } as unknown as AssistantEnv,
     };
   }
-  /** The model: lists the channels, asks to post, and reads back each result; records what each request offered. */
-  function poster(seen: { tools: { name: string; defer?: boolean }[]; results: Block[] }[]): ModelCall {
+  /** The model: lists the channels (or reads one), posts, and reads back each result; records what each request offered. */
+  function poster(seen: { tools: { name: string; defer?: boolean }[]; results: Block[] }[], first: 'list_channels' | 'read_messages' = 'list_channels'): ModelCall {
     return async (params, { onText }) => {
       const results = lastUser(params).filter((b) => b.type === 'tool_result');
       seen.push({ tools: (params.tools ?? []).map((t) => ({ name: (t as { name: string }).name, defer: (t as { defer_loading?: boolean }).defer_loading })), results });
       const said = (text: string) => { onText(text); return message([{ type: 'text', text }], 'end_turn') as never; };
       const last = results.at(-1);
-      if (!last) return message([{ type: 'tool_use', id: 'tu-list', name: 'list_channels', input: {} }], 'tool_use') as never;
-      if (last.tool_use_id === 'tu-list') {
-        onText('I will post it in #general once you approve.');
-        return message([{ type: 'text', text: 'I will post it in #general once you approve.' }, { type: 'tool_use', id: 'tu-post', name: 'send_message', input: { channelId: 'ch-gen', text: 'Standup moved to 10.' } }], 'tool_use') as never;
-      }
+      if (!last) return message([{ type: 'tool_use', id: 'tu-first', name: first, input: first === 'read_messages' ? { channelId: 'ch-gen' } : {} }], 'tool_use') as never;
+      if (last.tool_use_id === 'tu-first') return message([{ type: 'tool_use', id: 'tu-post', name: 'send_message', input: { channelId: 'ch-gen', text: 'Standup moved to 10.' } }], 'tool_use') as never;
       return said(`Outcome: ${String(last.content)}`);
     };
   }
   const ask = (a: TestAssistant, audience: 'private' | 'shared' = 'private', messageId = 'msg-1') =>
     a.chatTurn({ organizationId: 'org-1', runtime, channelId: DM, threadRootId: null, messageId, prompt: 'Ann asked: post "Standup moved to 10." in #general', audience });
-  const cardOf = (e: ReturnType<typeof env>) => e.posted.findIndex((p) => p.clientMsgId === 'card:tu-post') + 1;
 
-  it('runs the Chat tools itself, then stops at a card in the DM, and posts nothing in #general yet', async () => {
+  it('runs the Chat tools itself and posts in #general at once, as the assistant, with no card', async () => {
     const e = env();
     const a = assistant('acct-1', e.env);
     const seen: { tools: { name: string; defer?: boolean }[]; results: Block[] }[] = [];
     a.script = poster(seen);
     await ask(a);
-    // The Chat tools are offered in a Chat turn, loaded up front; Docs' page tools are not.
+    // The Chat tools are offered in a Chat turn, loaded up front.
     const offered = seen[0]!.tools;
     for (const name of ['list_channels', 'read_messages', 'send_message']) expect(offered.find((t) => t.name === name)?.defer, name).toBeFalsy();
     expect(offered.find((t) => t.name === 'leave_channel')?.defer).toBe(true);
-    expect(offered.some((t) => t.name === 'write_range')).toBe(false);
+    // No page is open: Docs' editing tools are there headless (found by search), the ones that only show a page are not.
+    expect(offered.find((t) => t.name === 'write_range')?.defer).toBe(true);
+    expect(offered.some((t) => t.name === 'open_sheet' || t.name === 'render_slide')).toBe(false);
     // list_channels ran here, through the Org object, and its result went back to the model.
     expect(String(seen[1]!.results[0]!.content)).toContain('"name":"general"');
-    // The text first, then the card, both in the DM; no post anywhere else.
-    expect(e.posted.map((p) => p.channelId)).toEqual([DM, DM]);
-    expect(e.posted[0]!.body).toBe('I will post it in #general once you approve.');
-    expect(e.posted[1]).toMatchObject({ clientMsgId: 'card:tu-post' });
-    expect(e.posted[1]!.body).toContain('**Post in #general?** I am not in #general yet, so I will join it first.');
-    expect(e.posted[1]!.body).toContain('> Standup moved to 10.');
-    expect(e.posts).toEqual([]);
+    // send_message posted at once; the model heard so, and its answer is the only message in the DM.
+    expect(e.posts).toEqual([{ agentUserId: 'asst', channelId: 'ch-gen', threadRootId: null, body: 'Standup moved to 10.', clientMsgId: 'assistant-post:tu-post' }]);
+    expect(e.posted).toEqual([expect.objectContaining({ channelId: DM, body: 'Outcome: Posted in #general, after joining it.' })]);
+    expect(e.posted.some((p) => /React ✅|card:/.test(`${p.body} ${p.clientMsgId}`))).toBe(false);
   });
 
-  it('posts on ✅, as the assistant, and goes on with the outcome', async () => {
+  it('posts at once where others read too (a mention in a channel)', async () => {
+    const e = env();
+    const a = assistant('acct-1', e.env);
+    a.script = poster([]);
+    await ask(a, 'shared');
+    expect(e.posts).toHaveLength(1);
+    expect(e.posted.at(-1)!.body).toBe('Outcome: Posted in #general, after joining it.');
+  });
+
+  it('lets an automation read a channel and post, with real results, the post stamped with the job (loop safety)', async () => {
     const e = env();
     const a = assistant('acct-1', e.env);
     const seen: { tools: { name: string }[]; results: Block[] }[] = [];
-    a.script = poster(seen as never);
-    await ask(a);
-    await a.chatCardAnswered({ organizationId: 'org-1', runtime, cardMessageId: `m${cardOf(e)}`, approve: true });
-    expect(e.posts).toEqual([{ agentUserId: 'asst', channelId: 'ch-gen', threadRootId: null, body: 'Standup moved to 10.', clientMsgId: 'assistant-post:tu-post' }]);
-    expect(e.posted.at(-1)).toMatchObject({ channelId: DM, body: 'Outcome: The user approved with ✅. Posted in #general, after joining it.' });
-    // A second ✅ on the same card does nothing.
-    await a.chatCardAnswered({ organizationId: 'org-1', runtime, cardMessageId: `m${cardOf(e)}`, approve: true });
-    expect(e.posts).toHaveLength(1);
-  });
-
-  it('posts nothing on ❌, and tells the model so', async () => {
-    const e = env();
-    const a = assistant('acct-1', e.env);
-    a.script = poster([]);
-    await ask(a);
-    await a.chatCardAnswered({ organizationId: 'org-1', runtime, cardMessageId: `m${cardOf(e)}`, approve: false });
-    expect(e.posts).toEqual([]);
-    expect(e.posted.at(-1)!.body).toBe('Outcome: The user declined with ❌: nothing was posted.');
-  });
-
-  it('drops a card the sponsor wrote past, and leaves no card where others read', async () => {
-    const e = env();
-    const a = assistant('acct-1', e.env);
-    a.script = poster([]);
-    await ask(a);
-    const card = `m${cardOf(e)}`;
-    // Ann writes again instead of answering: the turn moves on, and a late ✅ posts nothing.
-    a.script = async (_p, { onText }) => { onText('OK.'); return message([{ type: 'text', text: 'OK.' }], 'end_turn') as never; };
-    await ask(a, 'private', 'msg-2');
-    const before = e.posted.length;
-    await a.chatCardAnswered({ organizationId: 'org-1', runtime, cardMessageId: card, approve: true });
-    expect(e.posts).toEqual([]);
-    expect(e.posted).toHaveLength(before);
-    // Asked where others read (a mention in a channel): no card, and the model is told to ask in the DM.
-    const shared = env();
-    const b = assistant('acct-1', shared.env);
-    b.script = poster([]);
-    await ask(b, 'shared');
-    expect(shared.posted.some((p) => p.clientMsgId === 'card:tu-post')).toBe(false);
-    expect(shared.posted.at(-1)!.body).toContain('ask you in your direct messages');
+    a.script = poster(seen as never, 'read_messages');
+    const job = { id: 'job-p1', subscriptionId: 'sub-p', agent: 'acct-asst', eventId: 'e1', eventSeq: 1, prompt: 'Repost the newest message of #general.', channelId: DM, state: 'queued', attempts: 0, depth: 1, createdAt: '', updatedAt: '' } as never;
+    await a.wake({ organizationId: 'org-1', job, runtime });
+    expect(String(seen[1]!.results[0]!.content)).toContain('Standup moved to 10.');
+    expect(e.posts).toEqual([expect.objectContaining({ agentUserId: 'asst', channelId: 'ch-gen', body: 'Standup moved to 10.', depth: 2, causedBy: 'job-p1' })]);
+    expect(e.automation).toEqual([expect.objectContaining({ channelId: DM, body: 'Outcome: Posted in #general, after joining it.', causedBy: 'job-p1' })]);
   });
 });
