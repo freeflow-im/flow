@@ -1,5 +1,18 @@
 # Decision log
 
+## 2026-11-17 — Hosted user apps run on the Worker Loader; app screens on flowtoo.org (operator rulings)
+
+- **Ruling (Scott): the Worker Loader, not Workers for Platforms, for now.** A hosted user app's server code
+  (`docs/specs/user-apps.md` §7.2) is loaded from text into its own isolate by the suite Worker's `LOADER` binding.
+  Workers for Platforms waits until we need it. A test on the account (`spike-loader-tmp`, deployed and deleted the
+  same day) showed: the binding is available; code loads in ~270 ms cold, then 35–70 ms per request; the app's env
+  holds only what the host passes; `globalOutbound` limits it to its declared hosts; the CPU limit is enforced (not by
+  the local runtime: test limits on Cloudflare); and a store's restore point brings back the earlier data.
+- **The store is the platform's (§8):** one SQLite Durable Object per (app, organization), reached by the app only
+  through a binding the host gives it. Each call is a round trip to that object, so the app SDK batches statements.
+- **Ruling (Scott): app screens are served from `flowtoo.org`**, which we own: `<app>--<org>.flowtoo.org`, a registered
+  domain apart from `freeflow.im` (§6.1). It needs wildcard DNS and a certificate, and a Public Suffix List entry.
+
 ## 2026-11-17 — Agents send email only on the person's click (operator ruling)
 
 - **Ruling R-E (Scott):** agents can send email, to any address, but every message needs the person's approval. The

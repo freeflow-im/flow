@@ -332,6 +332,13 @@ The candidate is Cloudflare Workers for Platforms: each app version is a user Wo
 dispatch Worker in the suite routes each call to the right one. The other candidate is the Worker Loader binding,
 which loads code into an isolate at run time. A spike picks one (§12). In both, the app's code:
 
+*Ruled 2026-11-17 (decision_log.md): the Worker Loader.* The suite Worker's `LOADER` binding loads an app version's
+server code, kept as text, into its own isolate. The dispatcher is the suite Worker itself; the outbound Worker is a
+`WorkerEntrypoint` of the suite passed as the isolate's `globalOutbound`; the store, the files and the suite are
+`WorkerEntrypoint`s passed in its `env`, each bound to the app and organization by `ctx.props`, which the app cannot
+change. No suite token reaches the app: it calls the suite through that binding, which checks `uses` and the
+caller's access on each call (§6.3).
+
 - runs in its own isolate, never in the suite's Worker;
 - has no bindings except those the dispatcher passes: its store, its files, the caller context and a scoped token;
 - reaches the internet only through an **outbound Worker** that allows the hosts in `egress` and nothing else. An
@@ -477,8 +484,9 @@ In Admin → General, beside "Who can add agents" (`workspace-admin.md` §3.1):
 
 1. **Workers for Platforms or the Worker Loader.** Which one fits our plan, its cost, whether a user Worker may hold a
    Durable Object for its store, whether the restore point of §8 works there, and the cold start. A spike of a day,
-   with Taskboard as the test.
-2. **App domain.** Which registered domain to buy for app origins (for example `freeflow-apps.com`). It needs a
+   with Taskboard as the test. *Answered 2026-11-17: the Worker Loader (decision_log.md, with the spike's numbers).
+   The store is the platform's Durable Object, and its restore point works.*
+2. **App domain.** *Answered 2026-11-17: `flowtoo.org`, which we own.* Which registered domain to buy for app origins (for example `freeflow-apps.com`). It needs a
    wildcard certificate, DNS, and a Public Suffix List entry, which takes weeks to reach browsers; until then the
    separate domain already protects the suite, and only app-to-app cookie isolation waits. A custom domain per
    organization later.
@@ -550,6 +558,28 @@ Builder through a `self: true` subscription; an account without `taskboard:read`
 4. Publishing by a person: `flow-agent-bridge app publish ./taskboard` uploads a version, and an admin installs it
    from Admin. No dev installs and no install requests yet.
 5. Taskboard rebuilt as a hosted app and published this way; the external Task Board retired.
+
+*The build, after the ruling (2026-11-17), one commit each on one branch:*
+
+1. **The hosted manifest and its versions.** `server: { hosted: true }` in place of a URL, `ui: { hosted: true }`,
+   and `uses` and `egress` allowed. A version is its manifest, `server.js` (one ES module), `migrations/*.sql` and
+   `ui/*` (static files), at most 5 MB; the files go to R2 under `apps/<org>/<name>/<version>/`, the manifest and the
+   file list to `user_app_versions`.
+2. **The runner.** `AppStore`, the SQLite Durable Object per (app, organization), with `exec`, `batch`, migrations
+   applied in order before a version runs, and the restore point; the `AppDb`, `AppSuite` and `AppEgress`
+   entrypoints; `LOADER.get(<org>:<name>:<version>)` with a CPU limit. A tool call reaches the isolate as a request
+   the host makes, with the caller context; the registry's routing (phase 1) sends a hosted app's calls here
+   instead of to a URL. Events go through `AppSuite.publish`, with no signature: the binding says which app it is.
+3. **The screen on `flowtoo.org`.** The Worker answers `<app>--<org>.flowtoo.org` (`.flowtoo.localhost` in local
+   development): the door key of §6.2, its own session cookie on that host, a membership and scope check on every
+   request, `ui/*` from R2, and the app's own paths passed to its isolate with the viewer's context.
+4. **The suite for the app (`uses`).** `AppSuite` methods (read a Docs file, post in Chat) each checked against
+   `uses` and the caller's access, in place of the tokens of §6.3: nothing the app holds can be taken elsewhere.
+5. **Publishing and installing.** `POST /v1/workspaces/:id/apps/versions` (owners and admins), `flow-agent-bridge app
+   publish <dir>`, and Admin → Apps showing an uploaded version to install or update to, a restore point before each
+   update, **Go back**, and **Export data**.
+6. **`@freeflow/app-sdk`, and Taskboard as a hosted app** (`examples/user-apps/taskboard-hosted`), with the
+   end-to-end check of this phase's exit.
 
 Exit: the hosted Taskboard passes phase 1's exit; it cannot reach a host outside `egress`; two organizations with
 the same app see separate data; a person removed from the organization loses the screen at once; going back after
