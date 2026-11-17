@@ -50,6 +50,8 @@ export interface MailEnv {
   MAIL_ALLOW_INSECURE?: string;
   /** How often a person's assistant's mailbox is checked once its allowlist names a sender (default 600: ten minutes). */
   ASSISTANT_MAIL_EVERY_SECONDS?: string;
+  /** DNS over HTTPS, for the DKIM keys an assistant's mailbox checks senders against (dkim.ts); Cloudflare's by default. */
+  DNS_RESOLVER_URL?: string;
   /** The organizations' event logs (events/object.ts): new INBOX mail is published there as `mail.received`. */
   EVENTS?: DurableObjectNamespace<import('../events/object').Events>;
   /** For a person's assistant's mailbox (agents.md §1.1): who its sponsor is, their mailboxes, the allowlist, the turn. */
@@ -1627,7 +1629,22 @@ export class Mail extends DurableObject<MailEnv> {
       const raw = head && head.headers ? head.headers.toString('utf8') : '';
       const auth = [...raw.matchAll(/^authentication-results:([\s\S]*?)(?=^\S|$(?![\s\S]))/gim)].map((x) => x[1]!.replace(/\r?\n\s+/g, ' '));
       const from = m.from?.address ?? null;
-      const reason = screenReason(from, auth, policy.allowed, trustFrom);
+      let reason = screenReason(from, auth, policy.allowed, trustFrom);
+      // No verdict the receiving server wrote (MXRoute writes none in Authentication-Results): the message's own DKIM
+      // signatures, checked here against the signers' keys in DNS (dkim.ts).
+      if (reason === 'unauthenticated') {
+        const src = await c.fetchOne(String(m.uid), { uid: true, source: true }, { uid: true }).catch(() => null);
+        if (src && src.source) {
+          const { verifyDkim } = await import('./dkim');
+          const { dohResolver } = await import('../directory/dns');
+          const results = await verifyDkim(src.source.toString('latin1'), dohResolver(this.env.DNS_RESOLVER_URL || 'https://cloudflare-dns.com/dns-query')).catch((err: Error) => {
+            console.error(`[mail] dkim: ${err.message}`);
+            return [];
+          });
+          reason = screenReason(from, auth, policy.allowed, trustFrom, results.filter((r) => r.pass).map((r) => r.domain));
+          if (reason !== 'ok') console.log(`[mail] assistant ${policy.agentId}: uid ${m.uid} dkim: ${results.length ? results.map((r) => `${r.domain}/${r.selector} ${r.pass ? 'pass' : `fail (${r.reason})`}`).join(', ') : 'no signature'}`);
+        }
+      }
       if (reason === 'ok') { keep.push(m); continue; }
       refuse.push(m.uid);
       // Why, for whoever reads the logs: an allowlisted sender refused means the receiving server's verdict was missing or
