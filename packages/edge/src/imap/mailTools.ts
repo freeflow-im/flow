@@ -69,7 +69,7 @@ export function groupIds(ids: string[]): { account: string; folder: string; uids
 
 // ---- the Mail object -------------------------------------------------------------------------------------------------
 
-interface Account { id: string; email: string; displayName: string; status: string; statusMessage?: string; tabs: string[] }
+interface Account { id: string; email: string; displayName: string; status: string; statusMessage?: string; tabs: string[]; /** The agent's own mailbox, not the user's (agents.md §1.1). */ yours?: boolean }
 
 async function call<T>(ctx: MailToolContext, method: string, path: string, body?: unknown): Promise<T> {
   const res = await ctx.mail(`/v1/mail${path}`, {
@@ -213,7 +213,7 @@ export const MAIL_TOOLS: MailTool[] = [
     async run(ctx) {
       const all = await accountsOf(ctx);
       return {
-        accounts: all.map((a) => ({ id: a.id, email: a.email, name: a.displayName, inbox_tabs: a.tabs.length ? ['primary', ...a.tabs] : false, status: a.status, ...(a.statusMessage ? { status_message: a.statusMessage } : {}) })),
+        accounts: all.map((a) => ({ id: a.id, email: a.email, name: a.displayName, inbox_tabs: a.tabs.length ? ['primary', ...a.tabs] : false, status: a.status, ...(a.statusMessage ? { status_message: a.statusMessage } : {}), ...(a.yours ? { yours: true } : {}) })),
         ...(all.length ? {} : { note: `No mail account is connected. The user can connect one in FreeFlow Mail at ${ctx.origin}/mail.` }),
       };
     },
