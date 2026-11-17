@@ -9,6 +9,15 @@ describe('slide link menu helpers', () => {
     expect(normalizeLinkUrl('javascript:alert(1)')).toBeNull();
     expect(normalizeLinkUrl('  ')).toBeNull();
   });
+  it('writes level 0 and non-bullets out, so an edit does not inherit the indent of the line before', async () => {
+    const { renderToStaticMarkup } = await import('react-dom/server');
+    const { createElement } = await import('react');
+    const { Paragraphs } = await import('./SlideView.tsx');
+    const html = renderToStaticMarkup(createElement(Paragraphs, { paragraphs: [{ text: 'a', bullet: true, level: 1 }, { text: 'b', bullet: true }, { text: 'c' }] }));
+    expect(html).toContain('data-bullet="1" data-level="1" data-p="0"');
+    expect(html).toContain('data-bullet="1" data-level="0" data-p="1"');
+    expect(html).toContain('data-bullet="0" data-level="0" data-p="2"');
+  });
   it('renders links as sl-link anchors that open in a new tab', async () => {
     const { renderToStaticMarkup } = await import('react-dom/server');
     const { createElement } = await import('react');
