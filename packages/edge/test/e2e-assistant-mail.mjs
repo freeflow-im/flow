@@ -43,6 +43,12 @@ r=await api(A.token,'PUT',`/api/agent/mail-allowlist?workspace=${W}`,{senders:[`
 const refused=await until(()=>inbox(ada.address,'Refused'),(m)=>m.length>0,150000);
 t('the stranger’s mail is moved to Refused',refused.some(m=>m.from?.address==='mallory@evil.example'),JSON.stringify(refused));
 const left=await inbox(ada.address);t('and only Ann’s stays in Ada’s inbox',left.length===1&&left[0].from?.address===ann.address,JSON.stringify(left));
+// Answering mail on her own is off by default (decision_log 2026-11-17): Ann's mail waits in the inbox, unanswered.
+r=await api(A.token,'GET',`/api/agent/mail-allowlist?workspace=${W}`);t('“Agent always responds to incoming email” starts off',r.s===200&&r.j.autoReply===false,JSON.stringify(r.j));
+await sleep(30000);
+t('off, Ada does not answer Ann’s mail',!(await inbox(ann.address)).some(x=>x.from?.address===ada.address),'');
+r=await api(A.token,'PUT',`/api/agent/mail-allowlist?workspace=${W}`,{autoReply:true});t('Ann turns it on, her senders kept',r.s===200&&r.j.autoReply===true&&r.j.senders.length===2,JSON.stringify(r.j));
+await smtp.sendMail({from:`Ann <${ann.address}>`,to:ada.address,subject:'Plan my week',text:'What is on my plate now?'});
 const back=await until(()=>inbox(ann.address),(m)=>m.some(x=>x.from?.address===ada.address),120000);
 const reply=back.find(x=>x.from?.address===ada.address);
 t('Ada answers Ann by mail, as “Ada 🤖 Ann”, in the same thread',reply?.from?.name==='Ada 🤖 Ann'&&reply.subject==='Re: Plan my week',JSON.stringify(back));

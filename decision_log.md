@@ -1,5 +1,14 @@
 # Decision log
 
+## 2026-11-17 — Agents do not answer email on their own by default (operator ruling)
+
+- **Ruling (Scott):** an agent should not respond to incoming email automatically. It is a setting, "Agent always
+  responds to incoming email", off by default, in Organization settings → Your assistant. Off, allowlisted mail waits
+  in the assistant's inbox; it reads it when the person asks, or when an automation the person made wakes it. Existing
+  assistants start off too.
+- **Context:** the same day, the assistant's mailbox began verifying senders' DKIM signatures itself, since MXRoute writes
+  no Authentication-Results header and its X-DKIM / X-DMARC-Status headers can be forged (PR #861).
+
 ## 2026-11-16 — The admin agent (operator rulings)
 
 - **Ruling (Scott):** every workspace gets a default agent, Carl, the admin agent. Carl has the admin tools: what an

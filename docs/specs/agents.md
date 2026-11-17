@@ -90,7 +90,9 @@ agent of §6, and it works the way a human assistant does:
   a **sender allowlist** the sponsor writes, which **starts empty**: while it is empty her mailbox is never checked at
   all; once it names a sender it is checked every ten minutes (operator ruling 2026-11-11, "Assistant mail is opt-in").
   Mail from anyone else is moved to her Refused folder unread, and a sender is matched only on a message that passes
-  SPF, DKIM or DMARC for its From domain. Invitations to her calendar follow the same list. She works in the
+  SPF, DKIM or DMARC for its From domain. Mail she takes waits in her inbox: she answers it by email on her own only when
+  the sponsor turns on "Agent always responds to incoming email" (off by default; operator ruling 2026-11-17); otherwise she
+  reads it when the sponsor asks, or when an automation they made wakes her. Invitations to her calendar follow the same list. She works in the
   sponsor's mailbox and calendars too, through the sponsor's access. She knows her own mailbox: her prompt gives her address and who may mail her, and in the
   panel and in Chat her mailbox is one of the mail accounts her mail tools list (marked `yours`), read as her own account,
   beside the sponsor's (2026-11-16).

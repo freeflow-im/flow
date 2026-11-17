@@ -61,7 +61,7 @@ export interface MailEnv {
 }
 
 /** Who may mail a person's assistant, and where its turn runs: read from the directory and kept a while. */
-interface AssistantPolicy { allowed: Set<string>; agentId: string; sponsorAccountId: string; organizationId: string; at: number }
+interface AssistantPolicy { allowed: Set<string>; agentId: string; sponsorAccountId: string; organizationId: string; at: number; /** Kept mail starts a turn that answers it (off by default). */ autoReply: boolean }
 const POLICY_TTL_MS = 2 * 60_000;
 /** Where refused mail goes: out of the inbox, never shown to the assistant, kept for the sponsor to look at. */
 const REFUSED_FOLDER = 'Refused';
@@ -1608,9 +1608,10 @@ export class Mail extends DurableObject<MailEnv> {
     const sponsor = await ask<AccountDTO | null>('accountFor', me.sponsorId, me.organizationId);
     if (!sponsor) return (this.policy = null);
     // Only the senders the sponsor named (operator ruling 2026-11-11): the list starts empty, and empty means no mail at all.
-    const extra = await ASSISTANT.get(ASSISTANT.idFromName(sponsor.id)).mailAllowlist().catch(() => [] as string[]);
+    const runtime = ASSISTANT.get(ASSISTANT.idFromName(sponsor.id));
+    const [extra, autoReply] = await Promise.all([runtime.mailAllowlist().catch(() => [] as string[]), runtime.mailAutoReply().catch(() => false)]);
     const allowed = new Set(extra.map((x) => x.toLowerCase()));
-    return (this.policy = { allowed, agentId: me.principalId, sponsorAccountId: sponsor.id, organizationId: me.organizationId, at: Date.now() });
+    return (this.policy = { allowed, agentId: me.principalId, sponsorAccountId: sponsor.id, organizationId: me.organizationId, at: Date.now(), autoReply });
   }
 
   /**
@@ -1663,7 +1664,8 @@ export class Mail extends DurableObject<MailEnv> {
       this.left(r.id, folder, refuse);
       console.log(`[mail] assistant ${policy.agentId}: ${refuse.length} message(s) from senders not on the allowlist, moved to ${REFUSED_FOLDER}`);
     }
-    for (const m of keep) this.ctx.waitUntil(this.toAssistant(r, c, folder, m, policy).catch((err) => console.error(`[mail] to assistant: ${(err as Error).message}`)));
+    // Kept mail stays in the inbox; it starts a turn that answers it only when the sponsor turned that on (agents.md §1.1).
+    if (policy.autoReply) for (const m of keep) this.ctx.waitUntil(this.toAssistant(r, c, folder, m, policy).catch((err) => console.error(`[mail] to assistant: ${(err as Error).message}`)));
     return keep;
   }
 

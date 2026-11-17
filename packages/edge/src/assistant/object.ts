@@ -207,8 +207,11 @@ export class Assistant extends DurableObject<AssistantEnv> {
     if (this.state('agent_mode') !== 'personal') {
       return [`- Your own email address is ${address}, with its own mailbox and calendar. The mail tools work on your mailbox: search_mail and read_mail read the mail sent to you.`];
     }
+    const answering = this.state('mail_auto_reply') === '1'
+      ? 'and you answer that mail yourself, by email'
+      : 'and you do not answer it on your own: you read it when the user asks, or when an automation they made wakes you (the user can turn on answering it in Organization settings → Your assistant)';
     return [
-      `- You have your own email address, ${address}, with its own mailbox, separate from the user's. Mail to it reaches you only from the senders the user allows (they set them in Organization settings → Your assistant; until they add one, your mailbox is not read), and you answer that mail yourself, by email. In the panel and in Chat, your mailbox is one of the mail accounts: list_mail_accounts marks it yours: true, and search_mail and read_mail read it when you name it (account: "${address}"). When the user asks about "your inbox" or mail sent to you, look there; "my inbox" is the user's own accounts.`,
+      `- You have your own email address, ${address}, with its own mailbox, separate from the user's. Mail to it reaches you only from the senders the user allows (they set them in Organization settings → Your assistant; until they add one, your mailbox is not read), ${answering}. In the panel and in Chat, your mailbox is one of the mail accounts: list_mail_accounts marks it yours: true, and search_mail and read_mail read it when you name it (account: "${address}"). When the user asks about "your inbox" or mail sent to you, look there; "my inbox" is the user's own accounts.`,
     ];
   }
 
@@ -833,6 +836,11 @@ export class Assistant extends DurableObject<AssistantEnv> {
   }
 
   /** The senders the sponsor allows to mail their assistant (agents.md §1.1): empty by default, and empty means no mail is read. */
+  /** Whether allowlisted mail starts a turn that answers it by email (agents.md §1.1): off unless the sponsor turns it on. */
+  async mailAutoReply(): Promise<boolean> {
+    return this.state('mail_auto_reply') === '1';
+  }
+
   async mailAllowlist(): Promise<string[]> {
     try { return JSON.parse(this.state('mail_allowlist') ?? '[]') as string[]; } catch { return []; }
   }
@@ -1010,13 +1018,19 @@ export class Assistant extends DurableObject<AssistantEnv> {
     // name is the one the route gives on the first request (the directory's "<name>'s assistant").
     app.get('/api/agent/definition', (c) => c.json({ definition: this.definition() }));
     // The assistant's mail allowlist (agents.md §1.1): only the senders the person adds; empty, its mailbox is never checked.
-    app.get('/api/agent/mail-allowlist', async (c) => c.json({ senders: await this.mailAllowlist() }));
+    // And whether it answers that mail on its own (`autoReply`, off by default): each part is set alone.
+    app.get('/api/agent/mail-allowlist', async (c) => c.json({ senders: await this.mailAllowlist(), autoReply: await this.mailAutoReply() }));
     app.put('/api/agent/mail-allowlist', async (c) => {
-      const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { senders?: unknown };
-      const { cleanAllowlist } = await import('../imap/allowlist');
-      const senders = cleanAllowlist(body.senders);
-      this.setState('mail_allowlist', JSON.stringify(senders));
-      return c.json({ senders });
+      const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { senders?: unknown; autoReply?: unknown };
+      if (body.senders !== undefined) {
+        const { cleanAllowlist } = await import('../imap/allowlist');
+        this.setState('mail_allowlist', JSON.stringify(cleanAllowlist(body.senders)));
+      }
+      if (typeof body.autoReply === 'boolean' && body.autoReply !== (await this.mailAutoReply())) {
+        this.setState('mail_auto_reply', body.autoReply ? '1' : '0');
+        this.refreshGuidance();
+      }
+      return c.json({ senders: await this.mailAllowlist(), autoReply: await this.mailAutoReply() });
     });
     app.put('/api/agent/definition', async (c) => {
       const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { name?: unknown; instructions?: unknown };
