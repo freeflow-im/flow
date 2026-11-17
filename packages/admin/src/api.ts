@@ -1,6 +1,6 @@
 // The suite's API on the edge Worker, same origin with the session cookie: the Org object's routes (the workspace, its
 // members, invitations, emoji, join link) and the directory's (domains, accounts). A 401 sends the browser to sign in.
-import type { AccountAddressesDTO, AccountDTO, AccountKind, AgentDefinitionDTO, CreateMemberBody, CreateMemberResultDTO, PendingSetupDTO, PlatformEvent, UsableAgentDTO, AgentInviteDTO, ChannelDTO, DnsRecordDTO, DomainDTO, DomainKind, FileDTO, InviteResultDTO, JoinLinkDTO, MemberRole, OAuthIdentityDTO, PresignedUploadDTO, PublicConfigDTO, UpdateWorkspaceBody, WorkspaceDTO, WorkspaceEmojiDTO, WorkspaceInviteDTO, WorkspaceMemberDTO } from '@flow/shared';
+import type { AccountAddressesDTO, AccountDTO, AccountKind, AgentDefinitionDTO, CreateMemberBody, CreateMemberResultDTO, PendingSetupDTO, PlatformEvent, UsableAgentDTO, AgentInviteDTO, ChannelDTO, DnsRecordDTO, DomainDTO, DomainKind, FileDTO, InviteResultDTO, JoinLinkDTO, MemberRole, OAuthIdentityDTO, PresignedUploadDTO, PublicConfigDTO, UpdateWorkspaceBody, WorkspaceDTO, WorkspaceEmojiDTO, WorkspaceInviteDTO, WorkspaceMemberDTO, InstalledAppDTO, UserAppManifest } from '@flow/shared';
 
 export class AdminApiError extends Error {
   constructor(public readonly code: string, message: string, public readonly status: number) {
@@ -89,6 +89,22 @@ export interface AgentConnection { id: string; name: string; mode?: 'personal' |
 export const promptsApi = {
   get: async (org: string) => (await request<{ prompts: AssistantPrompts }>('GET', `${ws(org)}/assistant-prompts`)).prompts,
   save: async (org: string, prompts: AssistantPrompts) => (await request<{ prompts: AssistantPrompts }>('PUT', `${ws(org)}/assistant-prompts`, { prompts })).prompts,
+};
+
+/** Who gets an installed app's scopes (docs/specs/user-apps.md §5.2): every member, and named people or shared agents. */
+export interface AppGrants { members: boolean; accounts: string[] }
+
+// Installed apps (packages/edge/src/routes/userApps.ts): every member lists them and turns one on for their own agents;
+// owners and admins install, update, change who has them, rotate the secret and remove.
+export const appsApi = {
+  list: async (org: string) => (await request<{ apps: InstalledAppDTO[] }>('GET', `${ws(org)}/apps`)).apps,
+  preview: async (org: string, url: string) => (await request<{ manifest: UserAppManifest }>('POST', `${ws(org)}/apps/preview`, { url })).manifest,
+  install: (org: string, url: string, grants: AppGrants) => request<{ app: string; secret: string }>('POST', `${ws(org)}/apps`, { url, grants }),
+  update: (org: string, name: string, grants: AppGrants) => request<{ ok: true }>('PUT', `${ws(org)}/apps/${encodeURIComponent(name)}`, { grants }),
+  setGrants: (org: string, name: string, grants: AppGrants) => request<{ ok: true }>('PUT', `${ws(org)}/apps/${encodeURIComponent(name)}/grants`, grants),
+  remove: (org: string, name: string) => request<{ ok: true }>('DELETE', `${ws(org)}/apps/${encodeURIComponent(name)}`),
+  rotateSecret: (org: string, name: string) => request<{ secret: string }>('POST', `${ws(org)}/apps/${encodeURIComponent(name)}/secret`, {}),
+  setAgents: (org: string, name: string, on: boolean) => request<{ ok: true }>('PUT', `${ws(org)}/apps/${encodeURIComponent(name)}/agents`, { on }),
 };
 
 export const connectionsApi = {

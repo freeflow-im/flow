@@ -3,16 +3,17 @@
 import { ADMIN_SECTIONS, adminAddress, type AdminSection } from '@flow/suite-bar';
 
 /** The sections this build of the app has, in the order the list shows them. */
-export const SECTIONS: readonly AdminSection[] = ['general', 'members', 'domains', 'agents', 'prompts', 'assistant', 'connect', 'automations', 'events', 'changelog'];
+export const SECTIONS: readonly AdminSection[] = ['general', 'members', 'domains', 'agents', 'apps', 'prompts', 'assistant', 'connect', 'automations', 'events', 'changelog'];
 
 /** What a member who is not an owner or admin may open (docs/specs/workspace-admin.md §2). */
-export const MEMBER_SECTIONS: readonly AdminSection[] = ['assistant', 'connect', 'automations'];
+export const MEMBER_SECTIONS: readonly AdminSection[] = ['assistant', 'apps', 'connect', 'automations'];
 
 export const SECTION_LABELS: Record<AdminSection, string> = {
   general: 'General',
   members: 'Members',
   domains: 'Domains & mail',
   agents: 'Agents',
+  apps: 'Apps',
   prompts: 'Prompts',
   assistant: 'Your agents',
   connect: 'Connect an agent',

@@ -3,7 +3,7 @@
 // opens Chat at `/chat/?open=…`; My profile and Settings open Home's Settings page.
 import { useCallback, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { APP_MANIFESTS, AWAY_STATUS, intent, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type ChatPage, type StatusOption } from '@flow/suite-bar';
+import { APP_MANIFESTS, AWAY_STATUS, intent, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type ChatPage, type StatusOption, useUserAppTabs } from '@flow/suite-bar';
 import { chooseOrganization, useOrganizations } from '../hooks/organization';
 import { suite, type SuiteUser } from '../suite';
 
@@ -13,6 +13,8 @@ const toChat = (page: ChatPage) => intent.open(page);
 export function MeetSuiteBar() {
   const me = useQuery({ queryKey: ['suite', 'me'], queryFn: suite.me, refetchInterval: REFRESH_MS });
   const { list, active } = useOrganizations();
+  // The organization's installed apps, after the built-in ones (docs/specs/user-apps.md §6).
+  const appTabs = useUserAppTabs(active?.id);
   const [user, setUser] = useState<SuiteUser | null>(null);
   const [statusOpen, setStatusOpen] = useState(false);
   const [statusBusy, setStatusBusy] = useState(false);
@@ -41,7 +43,7 @@ export function MeetSuiteBar() {
     <>
       <SuiteBar
         home={{ href: import.meta.env.BASE_URL }}
-        tabs={suiteTabsFrom(APP_MANIFESTS, 'meet', { 'chat-unread': active?.unreadCount ?? 0 }, { activeHref: import.meta.env.BASE_URL })}
+        tabs={suiteTabsFrom(APP_MANIFESTS, 'meet', { 'chat-unread': active?.unreadCount ?? 0 }, { activeHref: import.meta.env.BASE_URL, extra: appTabs })}
         organization={{
           name: active?.name ?? '',
           entries: list.map((o) => ({ id: o.id, name: o.name, unread: o.unreadCount ?? 0, active: o.id === active?.id, avatarUrl: o.avatarUrl })),

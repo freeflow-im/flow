@@ -10,6 +10,8 @@ export interface SuiteTabOptions {
   onSelect?: () => void;
   /** A tab that cannot be followed from here: why, shown on hover. Null to leave it as it is. */
   unavailable?: (tab: { id: string; label: string }) => string | null;
+  /** Tabs after the manifests' (the installed apps', userAppTabs.ts), as they are. */
+  extra?: readonly SuiteTab[];
 }
 
 /** A guest uses Chat only (docs/specs/workspace-admin.md §6.5): every other app's tab says so and cannot be followed. */
@@ -39,6 +41,7 @@ export function suiteTabsFrom(
         ...(why ? { disabled: true, title: why } : {}),
         ...(isActive && options.onSelect ? { onSelect: options.onSelect } : {}),
         shortcut: tab.shortcut,
-      };
-    });
+      } as SuiteTab;
+    })
+    .concat(options.extra ?? []);
 }

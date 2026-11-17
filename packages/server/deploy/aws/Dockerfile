@@ -39,10 +39,11 @@ COPY packages/calendar/package.json packages/calendar/
 COPY packages/home/package.json packages/home/
 COPY packages/meet/package.json packages/meet/
 COPY packages/contacts/package.json packages/contacts/
+COPY packages/apps/package.json packages/apps/
 COPY packages/admin/package.json packages/admin/
 # clients:manifests end
 # clients:install begin (node packages/edge/scripts/clients.mjs write)
-RUN pnpm install --frozen-lockfile --filter @flow/server... --filter @flow/web... --filter @flow/docs... --filter @flow/mail... --filter @flow/calendar... --filter @flow/home... --filter @flow/meet... --filter @flow/contacts... --filter @flow/admin...
+RUN pnpm install --frozen-lockfile --filter @flow/server... --filter @flow/web... --filter @flow/docs... --filter @flow/mail... --filter @flow/calendar... --filter @flow/home... --filter @flow/meet... --filter @flow/contacts... --filter @flow/apps... --filter @flow/admin...
 # clients:install end
 
 # The web build reads the changelog (FEATURES.md, through scripts/build-features.mjs) and the agent skill from the
@@ -65,6 +66,7 @@ COPY packages/calendar packages/calendar
 COPY packages/home packages/home
 COPY packages/meet packages/meet
 COPY packages/contacts packages/contacts
+COPY packages/apps packages/apps
 COPY packages/admin packages/admin
 # clients:sources end
 
@@ -122,6 +124,7 @@ COPY --from=build /app/packages/calendar/dist packages/calendar/dist
 COPY --from=build /app/packages/home/dist packages/home/dist
 COPY --from=build /app/packages/meet/dist packages/meet/dist
 COPY --from=build /app/packages/contacts/dist packages/contacts/dist
+COPY --from=build /app/packages/apps/dist packages/apps/dist
 COPY --from=build /app/packages/admin/dist packages/admin/dist
 # clients:dists end
 COPY --from=build /app/FEATURES.md ./
