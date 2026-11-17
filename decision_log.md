@@ -21,6 +21,8 @@
   turns "Agent always responds to incoming email" off.
 - **Ruling R-C (Scott):** posting to Chat never requires approval. `send_message` posts at once, as the agent, in every
   turn; the ✅ card is gone. Old card messages stay as plain messages.
+  Scott accepted (2026-11-17) that, for now, only the agent's instructions keep the sponsor's private data out of
+  shared channels; revisit if that fails in practice.
 - **Why (Scott):** an assistant answering an email said "Chat access isn't available here": wake and mail turns dropped
   tool calls. Agents should be able to do their work wherever they were started.
 - **Choice (implementation):** the mail answer stays an output step (`reply: 'mail'` on the wake action, sent by the
