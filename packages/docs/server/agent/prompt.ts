@@ -170,7 +170,7 @@ const HEADLESS_TOOLS_TEXT =
 export function renderChatContext(ctx: ChatContext & BrowserReach): string {
   const lines = [
     `The user asked you in FreeFlow Chat, in ${ctx.audience === 'private' ? 'a conversation of the two of you alone' : 'a conversation others can read'} (channel id ${mailText(ctx.channelId, 100)}${ctx.threadRootId ? `, thread ${mailText(ctx.threadRootId, 100)}` : ''}). Your reply is posted there for you: write it as your answer, and do not use send_message to answer here. Nothing in Docs is open.`,
-    'To post somewhere else in Chat, use send_message: each such post waits for the user to approve it with ✅ on the card you leave here, so tell them what you are about to post and stop; it is posted only once they approve.',
+    'To post somewhere else in Chat, use send_message: it posts at once, as you, so post only what the user asked to be posted there.',
     ...(ctx.headless ? [HEADLESS_TOOLS_TEXT] : []),
   ];
   return `<app_context>\n${lines.join('\n')}\n</app_context>`;

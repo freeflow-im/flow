@@ -29,7 +29,6 @@ import type { Events } from '../events/object';
 import type { Assistant } from '../assistant/object';
 import type { PublishInput, SubscriptionRead } from '../events/core';
 import { agentStampFor, logEntryFor, type AgentStamp } from './eventLog';
-import { APPROVE, DECLINE } from '../assistant/chatTools';
 import { config } from './config';
 import { isActiveAccount, recordShare, revokeShare, shareEvents, sharedRefsOf, sharedWith, type RecordShareInput, type RevokeShareInput, type SharedItem } from './services/shares';
 import { eq, and } from 'drizzle-orm';
@@ -344,30 +343,6 @@ export class Org extends DurableObject<OrgEnv> {
     if (event.type === 'message.created' || event.type === 'thread.reply') {
       this.ctx.waitUntil(this.askAssistant(event.data as MessageDTO).catch((err) => console.error(`[assistant] ${(err as Error).message}`)));
     }
-    if (event.type === 'reaction.added') {
-      this.ctx.waitUntil(this.answerAssistantCard(event.data as { messageId: string; emoji: string; userId: string }).catch((err) => console.error(`[assistant] ${(err as Error).message}`)));
-    }
-  }
-
-  /**
-   * A sponsor's ✅ or ❌ on a card their assistant left (assistant/chatTools.ts): the approval of a post the assistant asked
-   * to make where others read it (agents.md §1). Only the sponsor's reaction on their own assistant's message counts; the
-   * runtime matches it to the card it is waiting on and ignores any other.
-   */
-  private async answerAssistantCard(r: { messageId: string; emoji: string; userId: string }): Promise<void> {
-    const approve = APPROVE.has(r.emoji) ? true : DECLINE.has(r.emoji) ? false : null;
-    if (approve === null || !this.env.ASSISTANT) return;
-    const sql = this.ctx.storage.sql;
-    const author = sql.exec('SELECT user_id, channel_id FROM messages WHERE id = ?', r.messageId).toArray()[0];
-    if (!author) return;
-    const a = sql.exec("SELECT account_id FROM workspace_members WHERE user_id = ? AND kind = 'personal_agent' AND runtime = 'hosted' AND sponsor_user_id = ?", author.user_id, r.userId).toArray()[0];
-    if (!a?.account_id) return;
-    const workspace = sql.exec('SELECT id FROM workspaces LIMIT 1').toArray()[0];
-    const answer = await this.directory().call('hostedRuntimeOf' as never, [a.account_id] as never) as DirectoryAnswer<HostedRuntimeDTO | null>;
-    if (!answer.ok || !answer.value || !workspace) return;
-    await this.env.ASSISTANT.get(this.env.ASSISTANT.idFromName(answer.value.runtimeKey)).chatCardAnswered({
-      organizationId: workspace.id as string, runtime: answer.value, cardMessageId: r.messageId, approve,
-    });
   }
 
   /**
@@ -574,7 +549,7 @@ export class Org extends DurableObject<OrgEnv> {
    * The Chat tools of a person's assistant (agents.md §1.1, assistant/chatTools.ts), as its runtime runs them, with its
    * sponsor's access: the standard channels the sponsor is in (`channels`), one of them before a post (`target`), its
    * recent messages (`read`), the messages it may read by their words (`search`), and the assistant leaving one (`leave`). A channel the sponsor is not in is refused, so the
-   * assistant never reaches further than its sponsor. The post itself is assistantPost, after the sponsor's ✅.
+   * assistant never reaches further than its sponsor. The post itself is assistantPost.
    */
   async assistantChat(p: { agentUserId: string; op: 'channels' | 'target' | 'read' | 'search' | 'leave'; channelId?: string; limit?: number; query?: string; sort?: 'relevance' | 'recent' }): Promise<unknown> {
     // `sponsorId` is whose reach the tools have: the sponsor's for a person's assistant, a shared agent's own (chatReach).

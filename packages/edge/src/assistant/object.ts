@@ -38,7 +38,7 @@ import { ASSISTANT_PAGES, SUITE_GUIDANCE } from '../docs/assistantTools.ts';
 import { isFileId } from '@flow/docs/server/ids.ts';
 import { scopeOf, type ScopeArg } from '@flow/docs/server/scope.ts';
 import { chatScope, HOME_CHAT, isChatScope, type AgentContext, type AgentDefinition, type AgentEvent, type AgentTurnRequest, type AssistantSettingsUpdate, type ClientToolCall, type ClientToolResult } from '@flow/docs/shared/agent/protocol.ts';
-import { ASSISTANT_CHAT_TOOLS, postCard } from './chatTools.ts';
+import { ASSISTANT_CHAT_TOOLS } from './chatTools.ts';
 import { HEADLESS_DOCS_TOOLS, headlessRefusal } from '../docs/assistantTools.ts';
 import type { McpRequestCaller } from '../docs/mcp.ts';
 import { ADMIN_GUIDANCE, AdminToolError, type AdminToolContext } from './adminTools.ts';
@@ -574,7 +574,6 @@ export class Assistant extends DurableObject<AssistantEnv> {
       const { text } = await this.runHeadless({
         organizationId, runtime, conversation, who, timezone: user.timezone, context: { page: 'home', headless: true },
         first: { message: prompt }, stamp: { depth: job.depth + 1, causedBy: job.id },
-        card: async (c) => ({ id: c.id, content: 'Posting in Chat needs the user’s ✅ on a card, which an automation cannot ask for. Say what you would post in your answer instead.', isError: true }),
       });
       if (mail && text && mailbox) {
         const sent = await mailbox.sendAsAssistant({ to: mail.from, subject: reSubject(mail.subject), text, ...(mail.messageId ? { inReplyTo: mail.messageId } : {}) });
@@ -634,7 +633,6 @@ export class Assistant extends DurableObject<AssistantEnv> {
         organizationId, runtime, conversation, who, timezone: user.timezone,
         context: { page: 'chat', channelId: p.channelId, threadRootId: p.threadRootId, audience: p.audience, headless: true },
         first: { message: p.prompt }, stamp: { invokedBy: p.askerAccountId },
-        card: async (c) => ({ id: c.id, content: 'Posting elsewhere in Chat needs a person’s ✅ on a card, which a shared agent cannot ask for: answer in this reply instead, which is posted where you were asked.', isError: true }),
       });
       clearInterval(stopTyping);
       if (text) await org?.postAsSharedAgent({ agentUserId: runtime.agentId, channelId: p.channelId, threadRootId: p.threadRootId, body: text, clientMsgId: `shared-agent:${p.messageId}`, invokedBy: p.askerAccountId });
@@ -649,42 +647,10 @@ export class Assistant extends DurableObject<AssistantEnv> {
   }
 
   /**
-   * The sponsor's ✅ or ❌ on a card the assistant left for a post (assistant/chatTools.ts), from the organization's object,
-   * which checked it is the sponsor's reaction on this assistant's message. A card the turn has moved past (the sponsor
-   * wrote again) is dropped. ✅ posts, as the assistant; then the turn goes on with the outcome, and its answer is posted.
+   * One run of a Chat conversation's turn (runHeadless, with the sponsor's access): the text the turn wrote is posted as
+   * the assistant where it was asked. Its send_message posts go out at once (operator ruling 2026-11-17, R-C).
    */
-  async chatCardAnswered(p: { organizationId: string; runtime: HostedRuntimeDTO; cardMessageId: string; approve: boolean }): Promise<void> {
-    const key = `card:${p.cardMessageId}`;
-    const raw = this.state(key);
-    if (!raw) return;
-    this.sql.exec('DELETE FROM assistant_state WHERE key = ?', key);
-    const card = JSON.parse(raw) as ChatCard;
-    if (card.run.runtime.agentId !== p.runtime.agentId || card.run.organizationId !== p.organizationId) return;
-    // The sponsor wrote again instead of answering: the turn no longer waits on this post, so nothing is posted.
-    const conversation = chatConversation(card.run);
-    if (!(await withDocsContext(this.context, async () => this.service().agent.pendingCalls(conversation, HOME_CHAT, p.organizationId).includes(card.callId)))) return;
-    const org = this.orgStub(p.organizationId);
-    let result: { id: string; content: string; isError?: boolean };
-    if (!p.approve) result = { id: card.callId, content: 'The user declined with ❌: nothing was posted.' };
-    else {
-      try {
-        if (!org) throw new Error('Chat is not reachable here.');
-        const posted = await org.assistantPost({ agentUserId: p.runtime.agentId, channelId: card.input.channelId, threadRootId: card.input.threadRootId ?? null, body: card.input.text, clientMsgId: `assistant-post:${card.callId}` });
-        result = { id: card.callId, content: `The user approved with ✅. Posted in #${card.channelName}${card.input.threadRootId ? ' (in the thread)' : ''}${posted.joined ? ', after joining it' : ''}.` };
-      } catch (err) {
-        result = { id: card.callId, content: `The post was approved but failed: ${(err as Error).message}`, isError: true };
-      }
-    }
-    await this.runChat(card.run, key, { toolResults: [...card.others, result] }, card.callId);
-  }
-
-  /**
-   * One run of a Chat conversation's turn (runHeadless, with the sponsor's access). send_message stops the run at a card
-   * instead (only in a private conversation, where the card itself shows no one else the post); its answer is
-   * chatCardAnswered. The text the turn wrote is posted as the assistant, before the card if there is one.
-   * `expectCall`: the call a card answers; if the turn no longer waits on it (the sponsor wrote again), nothing runs.
-   */
-  private async runChat(run: ChatRun, jobKey: string, first: Pick<AgentTurnRequest, 'message' | 'toolResults'>, expectCall?: string): Promise<void> {
+  private async runChat(run: ChatRun, jobKey: string, first: Pick<AgentTurnRequest, 'message' | 'toolResults'>): Promise<void> {
     await this.useOrgModel(run.organizationId);
     const { runtime, organizationId } = run;
     if (runtime.mode !== 'personal' || !runtime.sponsorId || !runtime.sponsorAccountId) return;
@@ -697,7 +663,6 @@ export class Assistant extends DurableObject<AssistantEnv> {
     try {
       this.requireModel();
       const { who, user } = await this.actorOf(runtime, organizationId, conversation, 'the assistant in Chat');
-      if (expectCall && !(await withDocsContext(this.context, async () => this.service().agent.pendingCalls(conversation, HOME_CHAT, organizationId).includes(expectCall)))) return;
       // "Thinking…" in Chat while the turn runs: a typing event now and every few seconds (the clients drop one after 5 s).
       const typing = () => void org?.agentTyping({ agentUserId: runtime.agentId, channelId: run.channelId, threadRootId: run.threadRootId }).catch(() => undefined);
       typing();
@@ -706,15 +671,6 @@ export class Assistant extends DurableObject<AssistantEnv> {
         organizationId, runtime, conversation, who, timezone: user.timezone,
         context: { page: 'chat', channelId: run.channelId, threadRootId: run.threadRootId, audience: run.audience, headless: true },
         first,
-        card: async (c, others, said, round) => {
-          const made = await this.prepareCard(run, c, org);
-          if ('error' in made) return { id: c.id, content: made.error, isError: true };
-          clearInterval(stopTyping);
-          if (said) await post(said, `assistant:${jobKey}:${round}`);
-          const cardId = await post(postCard({ channelName: made.channelName, threadRootId: made.input.threadRootId, text: made.input.text, joins: made.joins }), `card:${made.callId}`);
-          if (cardId) this.setState(`card:${cardId}`, JSON.stringify({ ...made, others } satisfies ChatCard));
-          return 'stopped';
-        },
       });
       clearInterval(stopTyping);
       if (text) await post(text, `assistant:${jobKey}`);
@@ -725,19 +681,6 @@ export class Assistant extends DurableObject<AssistantEnv> {
     } finally {
       clearInterval(stopTyping);
       this.runningJobs.delete(jobKey);
-    }
-  }
-
-  /** A card for a send_message call, checked first: a private conversation, and a channel the sponsor is in. */
-  private async prepareCard(run: ChatRun, c: ClientToolCall, org: OrgStub | undefined): Promise<Omit<ChatCard, 'others'> | { error: string }> {
-    if (run.audience !== 'private') return { error: 'Posting elsewhere needs the user’s approval on a card, which would show the post to everyone here. Tell the user to ask you in your direct messages instead.' };
-    if (!org) return { error: 'Chat is not reachable here.' };
-    const input = c.input as ChatCard['input'];
-    try {
-      const target = (await org.assistantChat({ agentUserId: run.runtime.agentId, op: 'target', channelId: input.channelId })) as { name: string; assistantIsMember: boolean };
-      return { run, callId: c.id, input, channelName: target.name, joins: !target.assistantIsMember };
-    } catch (err) {
-      return { error: (err as Error).message };
     }
   }
 
@@ -772,9 +715,9 @@ export class Assistant extends DurableObject<AssistantEnv> {
    * loop is offered every tool the agent may use without a page (AgentContext `headless`, assistantTools.ts
    * headlessTools): the server tools run in the loop itself; when the model pauses on the others, they run here
    * (runHeadlessTool) and the loop goes on with their results, up to MAX_HEADLESS_ROUNDS times. Returns what the turn
-   * wrote, for the caller to deliver; `stopped` when a `card` hook ended the run at a send_message.
+   * wrote, for the caller to deliver.
    */
-  private async runHeadless(t: HeadlessTurn): Promise<{ text: string; stopped?: boolean }> {
+  private async runHeadless(t: HeadlessTurn): Promise<{ text: string }> {
     const org = this.orgStub(t.organizationId);
     this.turnWho.set(t.conversation, t.who);
     try {
@@ -803,21 +746,8 @@ export class Assistant extends DurableObject<AssistantEnv> {
         text += out;
         if (!calls.length) break;
         const results: ClientToolResult[] = [];
-        let held: ClientToolCall | null = null;
         // One at a time and in order: a post may depend on what a read before it found.
-        for (const c of calls) {
-          if (c.name === 'send_message' && t.card) {
-            if (!held) held = c;
-            else results.push({ id: c.id, content: 'One post at a time: ask for this one again after the user answers the first card.', isError: true });
-            continue;
-          }
-          results.push(await this.runHeadlessTool(c, t, org));
-        }
-        if (held && t.card) {
-          const answer = await t.card(held, results, text.trim(), round);
-          if (answer === 'stopped') return { text: '', stopped: true };
-          results.push(answer);
-        }
+        for (const c of calls) results.push(await this.runHeadlessTool(c, t, org));
         req = { toolResults: results };
       }
       return { text: text.trim() };
@@ -1256,7 +1186,7 @@ function placeOf(scope: ScopeArg): DocsPlace | null {
   return s.workspaceId ? { workspace: s.workspaceId, shared: !s.private } : null;
 }
 
-/** Where a Chat conversation is, and who reads it: what a run needs again when a card is answered. */
+/** Where a Chat conversation is, and who reads it. */
 interface ChatRun {
   organizationId: string;
   runtime: HostedRuntimeDTO;
@@ -1278,18 +1208,6 @@ interface HeadlessTurn {
   first: Pick<AgentTurnRequest, 'message' | 'toolResults'>;
   /** What a send_message post carries: a wake job's depth and cause (loop safety, platform.md §5.2), who asked a shared agent. */
   stamp?: { depth?: number; causedBy?: string; invokedBy?: string };
-  /** A send_message the caller answers itself: a result, or 'stopped' when it ended the run (the Chat card). */
-  card?: (c: ClientToolCall, others: ClientToolResult[], said: string, round: number) => Promise<ClientToolResult | 'stopped'>;
-}
-
-/** A card waiting for the sponsor's ✅ or ❌ (kept under `card:<message id>`), with the results of the turn's other calls. */
-interface ChatCard {
-  run: ChatRun;
-  callId: string;
-  input: { channelId: string; text: string; threadRootId?: string };
-  channelName: string;
-  joins: boolean;
-  others: { id: string; content: string; isError?: boolean }[];
 }
 
 type OrgStub = DurableObjectStub<Org>;
