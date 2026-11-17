@@ -148,6 +148,18 @@ describe('the pages, from the manifests', () => {
     }
   });
 
+  it('shows a signed-out visitor the Welcome page at the root, and sends any query on to Chat', async () => {
+    const withWelcome = { ...env, ASSETS: { fetch: async (req: Request | URL) => {
+      const name = new URL(req instanceof URL ? req : req.url).pathname;
+      return name === '/home/welcome.html' ? new Response('welcome') : env.ASSETS.fetch(req as Request);
+    } } as unknown as Fetcher };
+    const root = await pageRoutes.request('https://app.example/', {}, withWelcome as never);
+    expect(root.status).toBe(200);
+    expect(await root.text()).toBe('welcome');
+    const next = await pageRoutes.request('https://app.example/?next=%2Fdocs', {}, withWelcome as never);
+    expect(next.headers.get('location')).toBe('/chat?next=%2Fdocs');
+  });
+
   it('sends Docs’ addresses under /workspace, its base until 2026-11-10, to the same page under /docs', async () => {
     for (const [from, to] of [['/workspace', '/docs'], ['/workspace/', '/docs/'], ['/workspace/s/abc?x=1', '/docs/s/abc?x=1'], ['/workspace/?withme=1&in=f', '/docs/?withme=1&in=f']]) {
       const res = await get(from!);

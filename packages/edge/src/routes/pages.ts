@@ -49,7 +49,15 @@ const moved = (to: (pathname: string) => string) => (c: C) => {
   return c.redirect(`${to(url.pathname)}${url.search}`, 301);
 };
 // The root is Chat's page, at /chat since 2026-11-10 (its query kept: a sign-in link from an email, `?next=`, a handoff).
-pageRoutes.get('/', (c) => c.redirect(`/chat${new URL(c.req.url).search}`));
+// A signed-out visitor with no query sees the Welcome page instead (docs/specs/onboarding.md §1), Home's static file.
+pageRoutes.get('/', async (c) => {
+  const url = new URL(c.req.url);
+  if (!url.search && !(await signedIn(c))) {
+    const welcome = await c.env.ASSETS.fetch(new URL('/home/welcome.html', c.req.url));
+    if (welcome.ok) return new Response(welcome.body, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' } });
+  }
+  return c.redirect(`/chat${url.search}`);
+});
 pageRoutes.get('/p/*', moved((p) => `/docs${p}`));
 pageRoutes.get('/workspace', moved(() => '/docs'));
 pageRoutes.get('/workspace/*', moved((p) => `/docs${p.slice('/workspace'.length)}`));

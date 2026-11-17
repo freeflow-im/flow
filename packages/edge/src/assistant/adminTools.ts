@@ -204,7 +204,7 @@ export const ADMIN_TOOLS: AdminTool[] = [
   },
   {
     name: 'admin_create_automation',
-    description: "Makes an automation, as Admin → Automations does. subscription is the body: {name, filter? {types, channelId, actorKind, text}, delivery: 'wake' | 'post', consumer? (the account id of the agent to wake), action {kind: 'wake', prompt, channelId?} or {kind: 'post', channelId, body}, schedule? {every: hourly | daily@HH:MM | weekly@DAY HH:MM | monthly@D HH:MM, timezone}}.",
+    description: "Makes an automation, as Admin → Automations does. subscription is the body: {name, filter? {types, channelId, actorKind, text}, delivery: 'wake' | 'post', consumer? (the account id of the agent to wake), action {kind: 'wake', prompt, channelId?} or {kind: 'post', channelId, body}, schedule? {every: hourly | daily@HH:MM | weekdays@HH:MM | weekly@DAY HH:MM | monthly@D HH:MM, timezone}}.",
     shape: { subscription: z.record(z.string(), z.unknown()) },
     run: (ctx, input) => ctx.call('POST', `/v1/events/subscriptions?workspace=${enc(ctx.organizationId)}`, input.subscription),
   },

@@ -15,7 +15,7 @@ import { directory, guestRefusal, resolveCaller, type AuthEnv } from './auth';
 import { MAX_PERSONAL_AGENTS } from '../directory/agents';
 
 export interface AgentRouteEnv extends AuthEnv { ASSISTANT: DurableObjectNamespace<Assistant> }
-type C = Context<{ Bindings: AgentRouteEnv }>;
+export type C = Context<{ Bindings: AgentRouteEnv }>;
 
 export const agentRoutes = new Hono<{ Bindings: AgentRouteEnv }>();
 
@@ -23,7 +23,7 @@ const ORG_ID = /^[0-9a-f-]{36}$/;
 const HostedAgentBody = z.object({ name: z.string().trim().min(1).max(80), instructions: z.string().max(8_000).optional() });
 const DefinitionBody = z.object({ name: z.string().trim().min(1).max(80).optional(), instructions: z.string().max(8_000).optional() });
 
-async function memberOf(c: C): Promise<{ organizationId: string; userId: string; account: AccountDTO }> {
+export async function memberOf(c: C): Promise<{ organizationId: string; userId: string; account: AccountDTO }> {
   const organizationId = c.req.param('id') ?? '';
   if (!ORG_ID.test(organizationId)) throw badRequest('validation', 'not an organization id');
   const who = await resolveCaller(c, organizationId);
@@ -99,23 +99,29 @@ agentRoutes.delete('/v1/workspaces/:id/agents/personal/:userId', async (c) => {
   return c.json({ account: removed });
 });
 
-agentRoutes.post('/v1/workspaces/:id/agents/hosted', async (c) => {
-  const { organizationId, userId, account: me } = await memberOf(c);
-  const r = HostedAgentBody.safeParse(await c.req.json().catch(() => undefined));
-  if (!r.success) throw badRequest('validation', r.error.issues[0]?.message ?? 'invalid request');
+/**
+ * A hosted shared agent made and adopted (agents.md §6): the Org object's member with the person as sponsor, hosted in
+ * the directory and on the roster, its runtime given its name and instructions. Setup's Omni is one (routes/setup.ts).
+ */
+export async function makeHostedSharedAgent(c: C, organizationId: string, sponsorId: string, name: string, instructions?: string): Promise<{ agent: UsableAgentDTO; definition: unknown }> {
   // The member, under the organization's agentsBy policy, with the person as sponsor (the Org object refuses otherwise).
-  const org = c.env.ORG.get(c.env.ORG.idFromName(organizationId)) as unknown as { createSharedAgent(p: { sponsorId: string; name: string }): Promise<{ userId: string }> };
-  const made = await org.createSharedAgent({ sponsorId: userId, name: r.data.name });
+  const org = c.env.ORG.get(c.env.ORG.idFromName(organizationId)) as unknown as { createSharedAgent(p: { sponsorId: string; name: string }): Promise<{ userId: string }>; markHostedAgent(userId: string): Promise<void> };
+  const made = await org.createSharedAgent({ sponsorId, name });
   await directory(c, 'setAgentRuntime', made.userId, 'hosted');
-  await (c.env.ORG.get(c.env.ORG.idFromName(organizationId)) as unknown as { markHostedAgent(userId: string): Promise<void> }).markHostedAgent(made.userId);
+  await org.markHostedAgent(made.userId);
   const account = await directory(c, 'accountFor', made.userId, organizationId);
   if (!account) throw new ApiError(500, 'internal', 'the agent has no account');
-  const definition = await runtimeOf(c, account.id).adopt(account, r.data.name);
-  const final = r.data.instructions ? await runtimeOf(c, account.id).updateDefinition({ instructions: r.data.instructions }) : definition;
-  void definition;
+  const definition = await runtimeOf(c, account.id).adopt(account, name);
+  const final = instructions ? await runtimeOf(c, account.id).updateDefinition({ instructions }) : definition;
   const agent: UsableAgentDTO = { id: made.userId, accountId: account.id, displayName: account.displayName, mode: 'shared', self: false };
-  void me;
-  return c.json({ agent, definition: final }, 201);
+  return { agent, definition: final };
+}
+
+agentRoutes.post('/v1/workspaces/:id/agents/hosted', async (c) => {
+  const { organizationId, userId } = await memberOf(c);
+  const r = HostedAgentBody.safeParse(await c.req.json().catch(() => undefined));
+  if (!r.success) throw badRequest('validation', r.error.issues[0]?.message ?? 'invalid request');
+  return c.json(await makeHostedSharedAgent(c, organizationId, userId, r.data.name, r.data.instructions), 201);
 });
 
 /**

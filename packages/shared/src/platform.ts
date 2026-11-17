@@ -90,8 +90,9 @@ export interface WakeAction {
 export interface PostAction { kind: 'post'; channelId: string; body: string; includeSelf?: boolean }
 export type SubscriptionAction = WakeAction | PostAction;
 
-/** When a schedule fires: `hourly`, `daily@HH:MM`, `weekly@DAY HH:MM` (MON..SUN) or `monthly@D HH:MM`, local to its timezone. */
-export const SCHEDULE_EVERY = /^(hourly|daily@([01]\d|2[0-3]):[0-5]\d|weekly@(MON|TUE|WED|THU|FRI|SAT|SUN) ([01]\d|2[0-3]):[0-5]\d|monthly@([1-9]|[12]\d|3[01]) ([01]\d|2[0-3]):[0-5]\d)$/i;
+/** When a schedule fires: `hourly`, `daily@HH:MM`, `weekdays@HH:MM` (Monday to Friday), `weekly@DAY HH:MM` (MON..SUN) or
+ * `monthly@D HH:MM`, local to its timezone. */
+export const SCHEDULE_EVERY = /^(hourly|(daily|weekdays)@([01]\d|2[0-3]):[0-5]\d|weekly@(MON|TUE|WED|THU|FRI|SAT|SUN) ([01]\d|2[0-3]):[0-5]\d|monthly@([1-9]|[12]\d|3[01]) ([01]\d|2[0-3]):[0-5]\d)$/i;
 export interface ScheduleDTO { id: string; every: string; timezone: string; nextAt: string }
 
 /** A wake job's states: `queued`, `delivered` (its `agent.job` event is out), `running` (acked, under a lease), then

@@ -6,7 +6,7 @@ import { isValidTimezone, nextOccurrence } from '../org/lib/recurrence';
 
 const DAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
-/** `hourly`, `daily@HH:MM`, `weekly@DAY HH:MM`, `monthly@D HH:MM`, as a recurrence; null when it is none of them. */
+/** `hourly`, `daily@HH:MM`, `weekdays@HH:MM`, `weekly@DAY HH:MM`, `monthly@D HH:MM`, as a recurrence; null when it is none of them. */
 export function recurrenceOf(every: string): Recurrence | null {
   const e = every.trim().toUpperCase();
   if (!SCHEDULE_EVERY.test(e)) return null;
@@ -16,6 +16,7 @@ export function recurrenceOf(every: string): Recurrence | null {
   const hour = Number(hm[1]);
   const minute = Number(hm[2]);
   if (kind === 'DAILY') return { type: 'daily', hour, minute };
+  if (kind === 'WEEKDAYS') return { type: 'cron', expression: `${minute} ${hour} * * 1-5` };
   if (kind === 'WEEKLY') return { type: 'weekly', weekday: DAYS.indexOf(rest.slice(0, 3)), hour, minute };
   return { type: 'cron', expression: `${minute} ${hour} ${Number(rest.split(' ')[0])} * *` };
 }
