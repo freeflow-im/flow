@@ -10,4 +10,4 @@
 
 ## Feature
 
-- **Invite a visitor to a channel.** Anyone in a public channel can make a link that lets someone with no account into just that channel for a day. They type their name and can read and post, but see only what is posted after they join. Visitors are labelled, and anyone can remove them from the channel's people list. Admins can turn visitors off in Admin › General.
+- **Invite a visitor to a channel.** Anyone in a public channel can make a link that lets someone with no account into just that channel. The link works for a day. They type their name and can read and post, but see only what is posted after they join. Visitors are labelled, and anyone can remove them from the channel's people list. Admins can turn visitors off in Admin › General.
