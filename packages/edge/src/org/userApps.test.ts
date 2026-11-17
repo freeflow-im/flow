@@ -80,7 +80,7 @@ beforeEach(async () => {
 afterEach(() => { vi.restoreAllMocks(); });
 
 const tryInstall = (grants = { members: true, accounts: [] as string[] }) =>
-  org.installUserApp({ manifest: taskboard(), manifestUrl: 'https://tasks.example.com/freeflow-app.json', by: ACCT.ann, grants });
+  org.installUserApp({ source: { manifest: taskboard(), manifestUrl: 'https://tasks.example.com/freeflow-app.json' }, by: ACCT.ann, grants });
 const install = async (grants?: { members: boolean; accounts: string[] }) => {
   const a = await tryInstall(grants);
   if (!a.ok) throw new Error(a.message);
@@ -238,5 +238,36 @@ describe("the screen's door key (§6.2)", () => {
     expect(createHmac('sha256', Buffer.from(secret, 'base64url')).update(Buffer.from(json!, 'base64url')).digest('base64url')).toBe(mac);
     expect(JSON.parse(Buffer.from(json!, 'base64url').toString())).toMatchObject({ v: 2, app: 'taskboard', workspaceId: ORG_ID, userId: BEN, accountId: ACCT.ben });
     expect(await org.userAppScreen({ organizationId: ORG_ID, name: 'taskboard', holder: gus, userId: GUS, displayName: 'gus', isAgent: false })).toBeNull();
+  });
+});
+
+describe('hosted versions (§14 phase 2, step 1)', () => {
+  const hosted = (): UserAppManifest => ({ ...taskboard(), server: { hosted: true }, ui: { hosted: true } });
+  const files = { 'server.js': 120, 'ui/index.html': 40 };
+
+  it('keeps an uploaded version, installs it, and gives its code to the runner', async () => {
+    const up = await org.recordUserAppUpload({ manifest: hosted(), files, prefix: 'apps/o/taskboard/u1/', by: ACCT.ann });
+    expect(up).toEqual({ name: 'taskboard', version: 1 });
+    expect((await org.listUserAppUploads()).map((u) => [u.version, u.installed])).toEqual([[1, false]]);
+    expect(await org.userAppCode('taskboard')).toBeNull();
+    const installed = await org.installUserApp({ source: { name: 'taskboard', version: 1 }, by: ACCT.ann, grants: { members: true, accounts: [] } });
+    expect(installed).toMatchObject({ ok: true, value: { name: 'taskboard', version: 1 } });
+    expect(await org.userAppCode('taskboard')).toMatchObject({ version: 1, prefix: 'apps/o/taskboard/u1/', files });
+    const [listed] = await org.listUserApps({ ...ann, admin: true });
+    expect(listed).toMatchObject({ hosted: true, serverOrigin: null, hasScreen: true });
+  });
+
+  it('updates to a later upload, and numbers versions past every earlier one', async () => {
+    await org.recordUserAppUpload({ manifest: hosted(), files, prefix: 'p1/', by: ACCT.ann });
+    await org.installUserApp({ source: { name: 'taskboard', version: 1 }, by: ACCT.ann, grants: { members: true, accounts: [] } });
+    const up2 = await org.recordUserAppUpload({ manifest: { ...hosted(), label: 'Tasks 2' }, files, prefix: 'p2/', by: ACCT.ann });
+    expect(up2.version).toBe(2);
+    expect(await org.updateUserApp({ name: 'taskboard', source: { name: 'taskboard', version: 2 }, by: ACCT.ann, grants: { members: true, accounts: [] } })).toEqual({ ok: true, value: { version: 2 } });
+    expect((await org.userAppCode('taskboard'))?.prefix).toBe('p2/');
+    expect((await org.listUserApps({ ...ann, admin: true }))[0]!.label).toBe('Tasks 2');
+  });
+
+  it('refuses a version that was never uploaded', async () => {
+    expect(await org.installUserApp({ source: { name: 'taskboard', version: 7 }, by: ACCT.ann, grants: { members: true, accounts: [] } })).toMatchObject({ ok: false, status: 404 });
   });
 });

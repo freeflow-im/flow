@@ -7,7 +7,7 @@ export interface InstalledApp {
   label: string;
   icon?: string;
   description?: string;
-  serverOrigin: string;
+  serverOrigin: string | null;
   hasScreen: boolean;
   usable: boolean;
 }

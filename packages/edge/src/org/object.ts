@@ -36,8 +36,8 @@ import { sweepIdleVisitors, visitorBySession, visitorMayReceive, type MessageTim
 import { cleanPrompts, type AssistantPrompts } from '@flow/shared/assistant';
 import {
   AppEventLimiter, appForUse, appHolderOf, callAppTool, checkAppEvent, heldScopes, installApp, listApps, offeredAppTools, readableApps,
-  removeApp, rotateAppSecret, setAgentsOn, setAppGrants, updateApp,
-  type AppGrants, type AppHolder, type AppToolAnswer, type OfferedAppTool,
+  removeApp, rotateAppSecret, setAgentsOn, setAppGrants, updateApp, recordUpload, listUploads, installedCode,
+  type AppGrants, type AppHolder, type AppSource, type AppToolAnswer, type AppUpload, type OfferedAppTool,
 } from './services/userApps';
 import { mintUserAppToken, verifyBody } from './lib/appSigning';
 
@@ -1013,12 +1013,26 @@ export class Org extends DurableObject<OrgEnv> {
     return withDb(this.db, () => listApps(viewer));
   }
 
-  async installUserApp(p: { manifest: UserAppManifest; manifestUrl: string; by: string; grants: AppGrants }): Promise<DirectoryAnswer<{ name: string; secret: string }>> {
+  async installUserApp(p: { source: AppSource; by: string; grants: AppGrants }): Promise<DirectoryAnswer<{ name: string; secret: string; version: number }>> {
     return answered(() => withDb(this.db, () => installApp(p)));
   }
 
-  async updateUserApp(p: { name: string; manifest: UserAppManifest; manifestUrl: string; by: string; grants: AppGrants }): Promise<DirectoryAnswer<void>> {
+  async updateUserApp(p: { name: string; source: AppSource; by: string; grants: AppGrants }): Promise<DirectoryAnswer<{ version: number }>> {
     return answered(() => withDb(this.db, () => updateApp(p)));
+  }
+
+  /** A hosted app's version, uploaded to R2 by the Worker's route, kept here until it is installed (§14 phase 2, step 1). */
+  async recordUserAppUpload(p: { manifest: UserAppManifest; files: Record<string, number>; prefix: string; by: string }): Promise<{ name: string; version: number }> {
+    return withDb(this.db, () => recordUpload(p));
+  }
+
+  async listUserAppUploads(): Promise<AppUpload[]> {
+    return withDb(this.db, () => listUploads());
+  }
+
+  /** The installed version of a hosted app, for its runner. */
+  async userAppCode(name: string): Promise<{ manifest: UserAppManifest; version: number; prefix: string; files: Record<string, number> } | null> {
+    return withDb(this.db, () => installedCode(name));
   }
 
   async setUserAppGrants(name: string, grants: AppGrants): Promise<DirectoryAnswer<void>> {
@@ -1107,7 +1121,8 @@ export class Org extends DurableObject<OrgEnv> {
   async userAppScreen(p: { organizationId: string; name: string; holder: AppHolder; userId: string; displayName: string; isAgent: boolean }): Promise<{ url: string; expiresAt: string } | null> {
     return withDb(this.db, async () => {
       const app = await appForUse(p.name);
-      if (!app?.manifest.ui || !(await heldScopes(p.holder)).get(p.name)?.size) return null;
+      // A hosted app's screen is served on the apps domain (user-apps.md §14 phase 2, step 3); this is an external app's.
+      if (!app?.manifest.ui || !('url' in app.manifest.ui) || !(await heldScopes(p.holder)).get(p.name)?.size) return null;
       const { token, expiresAt } = mintUserAppToken(app.secret, {
         app: p.name, workspaceId: p.organizationId, userId: p.userId, accountId: p.holder.accountId, displayName: p.displayName, isAgent: p.isAgent,
       });

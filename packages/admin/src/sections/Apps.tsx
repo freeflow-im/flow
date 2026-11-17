@@ -112,6 +112,15 @@ const ExternalNotice = ({ origin }: { origin: string }) => (
   </p>
 );
 
+/** A hosted app's notice (§7.2): FreeFlow runs it; what of the suite it may use, and which outside hosts it may reach. */
+const HostedNotice = ({ uses, egress }: { uses: string[]; egress: string[] }) => (
+  <p className="rounded-md border border-hairline bg-panel px-3 py-2 text-xs" data-testid="hosted-notice">
+    FreeFlow runs this app and keeps its data in this organization.{' '}
+    {uses.length ? `It may use: ${uses.join(', ')}, and only what the person using it may use too. ` : 'It gets no access to anything else in FreeFlow. '}
+    {egress.length ? `It may reach these outside hosts: ${egress.join(', ')}.` : 'It cannot reach the internet.'}
+  </p>
+);
+
 /** The secret, shown once (install and rotation), with where the app sends its events. */
 function SecretOnce({ org, name, secret, onDone }: { org: WorkspaceDTO; name: string; secret: string; onDone(): void }) {
   const events = `${window.location.origin}/v1/apps/${org.id}/${name}/events`;
@@ -161,7 +170,7 @@ function Install({ org, accounts, onInstalled }: { org: WorkspaceDTO; accounts: 
         <div className="flex flex-col gap-3 border-t border-hairline pt-3" data-testid="install-card">
           <div className="text-sm font-semibold">{manifest.icon ? `${manifest.icon} ` : ''}{manifest.label} <span className="font-normal text-muted">({manifest.name})</span></div>
           {manifest.description && <p className="text-xs text-muted">{manifest.description}</p>}
-          <ExternalNotice origin={new URL(manifest.server.url).origin} />
+          {'url' in manifest.server ? <ExternalNotice origin={new URL(manifest.server.url).origin} /> : <HostedNotice uses={manifest.uses ?? []} egress={manifest.egress ?? []} />}
           <Asks manifest={manifest} />
           <GrantEditor value={grants} onChange={setGrants} accounts={accounts} />
           <div>
@@ -194,7 +203,7 @@ function InstalledApp({ org, app, admin, accounts, onChanged }: { org: Workspace
     <div className="flex flex-col gap-3 border-t border-hairline pt-4 first:border-t-0 first:pt-0" data-testid={`app-${app.name}`}>
       <Row
         label={`${app.icon ? `${app.icon} ` : ''}${app.label}`}
-        help={<>{app.description ? `${app.description} ` : ''}Runs on {app.serverOrigin}.{app.hasScreen && app.usable ? <> <a className="text-primary hover:underline" href={`/apps/${app.name}`}>Open</a></> : null}</>}
+        help={<>{app.description ? `${app.description} ` : ''}{app.serverOrigin ? `Runs on ${app.serverOrigin}.` : 'Run by FreeFlow.'}{app.hasScreen && app.usable ? <> <a className="text-primary hover:underline" href={`/apps/${app.name}`}>Open</a></> : null}</>}
       >
         {app.usable ? (
           <Toggle checked={app.agentsOn} disabled={agents.isPending} onChange={(on) => agents.mutate(on)} label="My agents may use it" testid={`agents-on-${app.name}`} />

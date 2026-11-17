@@ -852,7 +852,11 @@ export const userApps = sqliteTable('user_apps', {
   updatedAt: integer('updated_at').notNull(),
 });
 
-/** Each manifest an app was installed or updated with, in order (§4 `app_versions`): what an admin approved, kept after removal. */
+/**
+ * Each manifest an app was installed or updated with, in order (§4 `app_versions`): what an admin approved, kept after
+ * removal. A hosted app's version (phase 2) is uploaded first (`state` `uploaded`) and installed later (`installed`);
+ * `files` is its file list (path → bytes) and `prefix` where they are in R2. An external app's has neither.
+ */
 export const userAppVersions = sqliteTable(
   'user_app_versions',
   {
@@ -861,6 +865,9 @@ export const userAppVersions = sqliteTable(
     manifest: text('manifest').notNull(),
     by: text('by').notNull(),
     at: integer('at').notNull(),
+    state: text('state', { enum: ['uploaded', 'installed'] as const }).notNull().default('installed'),
+    files: text('files'),
+    prefix: text('prefix'),
   },
   (t) => [primaryKey({ columns: [t.name, t.version] })],
 );

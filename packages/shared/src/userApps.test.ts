@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appEventType, appOfEventType, appToolName, checkUserAppManifest, parseAppToolName, RESERVED_APP_NAMES } from './userApps.js';
+import { appEventType, appOfEventType, appToolName, checkHostedFiles, checkUserAppManifest, parseAppToolName, RESERVED_APP_NAMES } from './userApps.js';
 
 const taskboard = () => ({
   name: 'taskboard',
@@ -91,5 +91,33 @@ describe('names', () => {
     expect(appEventType('taskboard', 'task.assigned')).toBe('app.taskboard.task.assigned');
     expect(appOfEventType('app.taskboard.task.assigned')).toBe('taskboard');
     expect(appOfEventType('chat.message.created')).toBeNull();
+  });
+});
+
+describe('hosted apps (user-apps.md §7.2, phase 2)', () => {
+  const hosted = () => ({ ...taskboard(), server: { hosted: true }, ui: { hosted: true }, uses: ['docs:read'], egress: ['api.example.com'] });
+
+  it('accepts a hosted manifest with uses and egress', () => {
+    expect(problems(hosted())).toEqual([]);
+  });
+
+  it('refuses an unknown use and a bad host', () => {
+    expect(problems({ ...hosted(), uses: ['mail:send'] }).length).toBeGreaterThan(0);
+    expect(problems({ ...hosted(), egress: ['https://api.example.com/x'] })).toContain('egress: "https://api.example.com/x" must be a host name, such as api.example.com');
+  });
+
+  it('refuses a hosted screen on an external server', () => {
+    expect(problems({ ...taskboard(), ui: { hosted: true } })).toContain('ui: only a hosted app has a hosted screen (user-apps.md §7.1)');
+  });
+
+  it("checks a version's files", () => {
+    const m = checkUserAppManifest(hosted());
+    if (!m.ok) throw new Error('manifest');
+    expect(checkHostedFiles(m.manifest, { 'server.js': 100, 'ui/index.html': 50, 'ui/app.js': 10, 'migrations/0001_tasks.sql': 20 })).toEqual([]);
+    const p = checkHostedFiles(m.manifest, { 'ui/app.js': 10, '../x': 1, 'migrations/1.sql': 1 });
+    expect(p).toContain('files: server.js is missing');
+    expect(p).toContain('files: ui/index.html is missing, and the manifest has a hosted screen');
+    expect(p.filter((x) => x.includes('is not server.js'))).toHaveLength(2);
+    expect(checkHostedFiles(m.manifest, { 'server.js': 6_000_000, 'ui/index.html': 1 })[0]).toMatch(/over the 5000000/);
   });
 });

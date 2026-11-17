@@ -1,7 +1,7 @@
 // Apps installed in this organization (docs/specs/user-apps.md, phase 1: external apps). These functions run inside the
 // Org object's database scope (withDb): install, update and remove an app, give out its scopes (§5.2), decide which of
 // an account's calls may use it, and send a tool call to the app's server, signed (§5).
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, max } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import type { AccountKind, AgentMode, InstalledAppDTO, UserAppManifest } from '@flow/shared';
 import { appToolName } from '@flow/shared';
@@ -65,30 +65,87 @@ async function writeGrants(name: string, manifest: UserAppManifest, grants: AppG
   if (rows.length) await db.insert(userAppGrants).values(rows);
 }
 
-/** Installs an app from its checked manifest. The secret comes back once, here: the author's server needs it (§5, §6.2). */
-export async function installApp(p: { manifest: UserAppManifest; manifestUrl: string; by: string; grants: AppGrants }): Promise<{ name: string; secret: string }> {
-  if (await rowOf(p.manifest.name)) throw new ApiError(409, 'app_exists', `an app named "${p.manifest.name}" is already installed here`);
-  await checkGrantees(p.grants.accounts);
-  const { secret, cols } = newSecret();
-  const now = Date.now();
-  const manifest = JSON.stringify(p.manifest);
-  await db.insert(userApps).values({ name: p.manifest.name, version: 1, manifest, manifestUrl: p.manifestUrl, ...cols, installedBy: p.by, installedAt: now, updatedAt: now });
-  await db.insert(userAppVersions).values({ name: p.manifest.name, version: 1, manifest, by: p.by, at: now });
-  await writeGrants(p.manifest.name, p.manifest, p.grants);
-  return { name: p.manifest.name, secret: secret.toString('base64url') };
+/** The next version number of an app here: one past every version it had, uploaded or installed. */
+async function nextVersion(name: string): Promise<number> {
+  const [r] = await db.select({ v: max(userAppVersions.version) }).from(userAppVersions).where(eq(userAppVersions.name, name));
+  return (r?.v ?? 0) + 1;
 }
 
-/** Installs a new manifest for an installed app, and who gets its scopes now: the admin confirms them again (§9.3). */
-export async function updateApp(p: { name: string; manifest: UserAppManifest; manifestUrl: string; by: string; grants: AppGrants }): Promise<void> {
-  const row = await requireRow(p.name);
-  if (p.manifest.name !== p.name) throw badRequest('validation', `the manifest names "${p.manifest.name}", not "${p.name}"`);
+/**
+ * What an install or an update puts in place: an external app's manifest from its URL, or a hosted app's uploaded
+ * version, by number (its manifest is the one uploaded with it).
+ */
+export type AppSource = { manifest: UserAppManifest; manifestUrl: string } | { name: string; version: number };
+
+async function versionFrom(source: AppSource, by: string): Promise<{ manifest: UserAppManifest; manifestUrl: string; version: number }> {
+  if ('manifest' in source) {
+    const version = await nextVersion(source.manifest.name);
+    await db.insert(userAppVersions).values({ name: source.manifest.name, version, manifest: JSON.stringify(source.manifest), by, at: Date.now() });
+    return { manifest: source.manifest, manifestUrl: source.manifestUrl, version };
+  }
+  const [row] = await db.select().from(userAppVersions).where(and(eq(userAppVersions.name, source.name), eq(userAppVersions.version, source.version))).limit(1);
+  if (!row?.prefix) throw notFound(`no uploaded version ${source.version} of "${source.name}" here`);
+  await db.update(userAppVersions).set({ state: 'installed' }).where(and(eq(userAppVersions.name, source.name), eq(userAppVersions.version, source.version)));
+  return { manifest: JSON.parse(row.manifest) as UserAppManifest, manifestUrl: '', version: source.version };
+}
+
+/**
+ * Keeps a hosted app's uploaded version (§14 phase 2, step 1): its manifest, its file list (path → bytes) and where the
+ * files are in R2. It runs nowhere until an owner or admin installs it.
+ */
+export async function recordUpload(p: { manifest: UserAppManifest; files: Record<string, number>; prefix: string; by: string }): Promise<{ name: string; version: number }> {
+  const version = await nextVersion(p.manifest.name);
+  await db.insert(userAppVersions).values({
+    name: p.manifest.name, version, manifest: JSON.stringify(p.manifest), by: p.by, at: Date.now(), state: 'uploaded', files: JSON.stringify(p.files), prefix: p.prefix,
+  });
+  return { name: p.manifest.name, version };
+}
+
+/** A hosted app's version as uploaded, for Admin's install card. */
+export interface AppUpload { name: string; version: number; manifest: UserAppManifest; files: Record<string, number>; by: string; at: string; installed: boolean }
+
+/** The hosted versions uploaded here, newest first. */
+export async function listUploads(): Promise<AppUpload[]> {
+  const rows = await db.select().from(userAppVersions);
+  const installed = new Map((await db.select({ name: userApps.name, version: userApps.version }).from(userApps)).map((r) => [r.name, r.version]));
+  return rows
+    .filter((r) => r.prefix)
+    .sort((a, b) => b.at - a.at)
+    .map((r) => ({ name: r.name, version: r.version, manifest: JSON.parse(r.manifest) as UserAppManifest, files: JSON.parse(r.files ?? '{}') as Record<string, number>, by: r.by, at: new Date(r.at).toISOString(), installed: installed.get(r.name) === r.version }));
+}
+
+/** The installed version of a hosted app, as its runner loads it: the manifest, the version, and its files' place in R2. */
+export async function installedCode(name: string): Promise<{ manifest: UserAppManifest; version: number; prefix: string; files: Record<string, number> } | null> {
+  const app = await rowOf(name);
+  if (!app) return null;
+  const [v] = await db.select().from(userAppVersions).where(and(eq(userAppVersions.name, name), eq(userAppVersions.version, app.version))).limit(1);
+  if (!v?.prefix) return null;
+  return { manifest: JSON.parse(v.manifest) as UserAppManifest, version: v.version, prefix: v.prefix, files: JSON.parse(v.files ?? '{}') as Record<string, number> };
+}
+
+/** Installs an app: an external one from its checked manifest, a hosted one from its uploaded version. The secret comes back once, here (§5, §6.2). */
+export async function installApp(p: { source: AppSource; by: string; grants: AppGrants }): Promise<{ name: string; secret: string; version: number }> {
+  const name = 'manifest' in p.source ? p.source.manifest.name : p.source.name;
+  if (await rowOf(name)) throw new ApiError(409, 'app_exists', `an app named "${name}" is already installed here`);
   await checkGrantees(p.grants.accounts);
-  const version = row.version + 1;
-  const manifest = JSON.stringify(p.manifest);
+  const v = await versionFrom(p.source, p.by);
+  const { secret, cols } = newSecret();
   const now = Date.now();
-  await db.update(userApps).set({ version, manifest, manifestUrl: p.manifestUrl, updatedAt: now }).where(eq(userApps.name, p.name));
-  await db.insert(userAppVersions).values({ name: p.name, version, manifest, by: p.by, at: now });
-  await writeGrants(p.name, p.manifest, p.grants);
+  await db.insert(userApps).values({ name, version: v.version, manifest: JSON.stringify(v.manifest), manifestUrl: v.manifestUrl, ...cols, installedBy: p.by, installedAt: now, updatedAt: now });
+  await writeGrants(name, v.manifest, p.grants);
+  return { name, secret: secret.toString('base64url'), version: v.version };
+}
+
+/** Puts a new version of an installed app in place, and who gets its scopes now: the admin confirms them again (§9.3). */
+export async function updateApp(p: { name: string; source: AppSource; by: string; grants: AppGrants }): Promise<{ version: number }> {
+  await requireRow(p.name);
+  const named = 'manifest' in p.source ? p.source.manifest.name : p.source.name;
+  if (named !== p.name) throw badRequest('validation', `the new version names "${named}", not "${p.name}"`);
+  await checkGrantees(p.grants.accounts);
+  const v = await versionFrom(p.source, p.by);
+  await db.update(userApps).set({ version: v.version, manifest: JSON.stringify(v.manifest), manifestUrl: v.manifestUrl, updatedAt: Date.now() }).where(eq(userApps.name, p.name));
+  await writeGrants(p.name, v.manifest, p.grants);
+  return { version: v.version };
 }
 
 /** Changes who holds the app's scopes (§5.2). */
@@ -194,7 +251,8 @@ export async function listApps(viewer: AppHolder & { admin: boolean }): Promise<
       ...(m.icon ? { icon: m.icon } : {}),
       ...(m.description ? { description: m.description } : {}),
       manifestUrl: row.manifestUrl,
-      serverOrigin: new URL(m.server.url).origin,
+      serverOrigin: 'url' in m.server ? new URL(m.server.url).origin : null,
+      hosted: !('url' in m.server),
       hasScreen: !!m.ui,
       scopes: m.scopes,
       tools: m.tools.map((t) => ({ name: t.name, description: t.description, scopes: t.scopes })),
@@ -241,10 +299,12 @@ export type AppToolAnswer = { ok: true; result: unknown } | { ok: false; error: 
  * is `{ v: 1, kind: 'tool', app, tool, input, caller, requestId }`; the app answers `{ result }` or `{ error }`.
  */
 export async function callAppTool(app: { manifest: UserAppManifest; secret: Buffer }, tool: string, input: unknown, caller: AppCallerContext, fetcher: typeof fetch = fetch): Promise<AppToolAnswer> {
+  const server = app.manifest.server;
+  if (!('url' in server)) return { ok: false, error: `${app.manifest.label} is a hosted app; it is not called over the network` };
   const body = JSON.stringify({ v: 1, kind: 'tool', app: app.manifest.name, tool, input: input ?? {}, caller, requestId: crypto.randomUUID() });
   let res: Response;
   try {
-    res = await fetcher(app.manifest.server.url, {
+    res = await fetcher(server.url, {
       method: 'POST',
       headers: { 'content-type': 'application/json', [SIGNATURE_HEADER]: signBody(app.secret, body), 'user-agent': 'FreeFlow-Apps/1' },
       body,

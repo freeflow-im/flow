@@ -20,7 +20,7 @@ const manifest: UserAppManifest = {
 
 const installed: InstalledAppDTO = {
   name: 'taskboard', label: 'Tasks', icon: '🗂️', manifestUrl: 'https://tasks.example.com/freeflow-app.json', serverOrigin: 'https://tasks.example.com',
-  hasScreen: true, scopes: manifest.scopes, tools: manifest.tools.map((t) => ({ name: t.name, description: t.description, scopes: t.scopes })), events: ['task.assigned'],
+  hasScreen: true, hosted: false, scopes: manifest.scopes, tools: manifest.tools.map((t) => ({ name: t.name, description: t.description, scopes: t.scopes })), events: ['task.assigned'],
   grants: { 'taskboard:read': ['members', 'acct-bot'], 'taskboard:write': ['members', 'acct-bot'] }, usable: true, agentsOn: false,
   installedBy: 'acct-ann', installedAt: '2026-11-17T00:00:00.000Z', updatedAt: '2026-11-17T00:00:00.000Z',
 };

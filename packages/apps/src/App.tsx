@@ -57,7 +57,7 @@ function Screen({ org, app }: { org: string; app: InstalledApp }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-8 items-center gap-2 border-b border-hairline bg-panel px-3 text-xs text-muted" data-testid="app-notice">
-        <span className="truncate">{app.icon ? `${app.icon} ` : ''}{app.label} runs on its author’s server, {app.serverOrigin}.</span>
+        <span className="truncate">{app.icon ? `${app.icon} ` : ''}{app.label} {app.serverOrigin ? `runs on its author’s server, ${app.serverOrigin}.` : 'is run by FreeFlow.'}</span>
         <button type="button" className="ml-auto flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-hover" onClick={() => setLoad((n) => n + 1)} title="Reload the app">
           <RotateCw className="size-3.5" /> Reload
         </button>
