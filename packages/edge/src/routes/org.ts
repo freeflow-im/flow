@@ -38,7 +38,7 @@ const orgStub = (c: C, id: string) => c.env.ORG.get(c.env.ORG.idFromName(id));
 const IN_PATH = /^\/v1\/workspaces\/([0-9a-f-]{36})(?:\/|$)/;
 /** A Meet link's short code (org/services/meetings.ts `newMeetingCode`), indexed like an id. */
 const MEETING_CODE = /^\/v1\/meetings\/([a-z]{3}-[a-z]{4}-[a-z]{3})(?:\/|$)/;
-const BY_ID = /^\/v1\/(?:channels|messages|files|artifacts|scheduled-messages|huddle\/invites|meetings)\/([0-9a-f-]{36})(?:\/|$)/;
+const BY_ID = /^\/v1\/(?:channels|messages|files|artifacts|scheduled-messages|huddle\/invites|meetings|visitor-links)\/([0-9a-f-]{36})(?:\/|$)/;
 
 export const orgRoutes = new Hono<{ Bindings: OrgRouteEnv }>();
 
@@ -285,6 +285,33 @@ async function organizationInRequest(c: C): Promise<string | null> {
   if (body.workspaceId) return body.workspaceId;
   return body.channelId ? directory(c, 'organizationOfId', body.channelId) : null;
 }
+
+// ---- channel visitors (docs/specs/chat-visitors.md) ---------------------------------------------------------------------
+
+/** No one signed in: a visitor, or someone opening a visitor link. The object checks the link or the visitor's cookie. */
+const nobody = (c: C, organizationId: string) => ({ user: null, token: null, authKind: null, ip: c.req.header('cf-connecting-ip') ?? '', organizationId, account: null });
+const VISIT_TOKEN = /^[A-Za-z0-9_-]{16,64}$/;
+const LINK_GONE = 'This link no longer works. Ask the person who sent it for a new one.';
+
+/** A visitor link names its organization only by its token, whose hash the object reported when it was made (§4). */
+orgRoutes.on(['GET', 'POST'], '/v1/visit/:token', async (c) => {
+  const token = c.req.param('token');
+  const id = VISIT_TOKEN.test(token) ? await directory(c, 'organizationOfId', await hashToken(token)) : null;
+  if (!id) throw notFound(LINK_GONE);
+  return orgStub(c, id).handle(c.req.raw, nobody(c, id), null);
+});
+
+/**
+ * The visitor's own routes and socket, by the `vsid` cookie: `<organization id>.<random>`. The prefix routes the request
+ * to the organization's object, which checks the whole value's hash against its sessions; a forged prefix only reaches
+ * an object that refuses it.
+ */
+orgRoutes.all('/v1/visitor/*', async (c) => {
+  const id = /(?:^|;\s*)vsid=([0-9a-f-]{36})\./.exec(c.req.header('cookie') ?? '')?.[1];
+  if (!id || !(await directory(c, 'organizationKnown', id))) throw unauthorized('your visit has ended');
+  if (c.req.header('upgrade')?.toLowerCase() === 'websocket') return orgStub(c, id).fetch(c.req.raw);
+  return orgStub(c, id).handle(c.req.raw, nobody(c, id), null);
+});
 
 orgRoutes.all('/v1/*', async (c) => {
   const { pathname } = new URL(c.req.url);

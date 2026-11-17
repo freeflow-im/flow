@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, isNull, lt, or, sql } from 'drizzle-orm';
 import { HUDDLE_SYSTEM_KINDS } from '@flow/shared';
 import type { FileDTO, MessageDTO, MessagePage, ReactionAggDTO, SystemMessageKind, UnfurlDTO } from '@flow/shared';
 import { db, schema } from '../db/index.js';
@@ -16,7 +16,7 @@ import {
 } from './notifications.js';
 import { publishEvent, subjectMsg } from '../bus.js';
 import { scheduleForMessage, unfurlsForMessages } from './unfurl/index.js';
-import { requireMembership, notExternalAgent } from './workspaces.js';
+import { requireMembership, notExternalAgent, visitorGrant } from './workspaces.js';
 import { expandMentions as expandMentionText } from '../lib/mentionExpansion.js';
 import { inList } from '../sqlList.js';
 import { indexMessage } from './search.js';
@@ -46,6 +46,8 @@ interface DtoExtras {
   replyParticipants?: string[] | undefined;
   unfurls?: UnfurlDTO[] | undefined;
   pin?: { pinnedAt: Date; pinnedBy: string | null } | undefined;
+  /** The author is a channel visitor (docs/specs/chat-visitors.md). Unset: a visitor's own request says so. */
+  visitor?: boolean | undefined;
 }
 
 export function toMessageDTO(row: MessageRow, extras?: DtoExtras): MessageDTO {
@@ -69,7 +71,16 @@ export function toMessageDTO(row: MessageRow, extras?: DtoExtras): MessageDTO {
     reactions: extras?.reactions ?? [],
     files: extras?.files ?? [],
     unfurls: extras?.unfurls ?? [],
+    ...((extras?.visitor ?? visitorGrant.getStore()?.userId === row.userId) ? { visitor: true } : {}),
   };
+}
+
+/** The authors among `userIds` who are channel visitors. */
+async function visitorAuthors(userIds: string[]): Promise<Set<string>> {
+  const ids = [...new Set(userIds)];
+  if (ids.length === 0) return new Set();
+  const rows = await db.select({ id: users.id }).from(users).where(and(inList(users.id, ids), eq(users.isVisitor, true)));
+  return new Set(rows.map((r) => r.id));
 }
 
 /** Reply-avatar stack cap (phase5.md item 7): first 4 distinct authors per thread. */
@@ -105,12 +116,13 @@ async function replyParticipantsForRoots(rows: MessageRow[]): Promise<Map<string
 /** Page hydration (phase2.md §2/§3): one grouped reactions query + one files join per page. */
 async function hydrate(rows: MessageRow[]): Promise<MessageDTO[]> {
   const ids = rows.map((r) => r.id);
-  const [reactions, files, participants, unfurls, pins] = await Promise.all([
+  const [reactions, files, participants, unfurls, pins, visitors] = await Promise.all([
     reactionsForMessages(ids),
     filesForMessages(ids),
     replyParticipantsForRoots(rows),
     unfurlsForMessages(ids),
     pinsForMessages(ids),
+    visitorAuthors(rows.map((r) => r.userId)),
   ]);
   return rows.map((r) =>
     toMessageDTO(r, {
@@ -119,6 +131,7 @@ async function hydrate(rows: MessageRow[]): Promise<MessageDTO[]> {
       replyParticipants: participants.get(r.id),
       unfurls: unfurls.get(r.id),
       pin: pins.get(r.id),
+      visitor: visitors.has(r.userId),
     }),
   );
 }
@@ -313,6 +326,8 @@ export async function postSystemMessage(
   chan: { id: string; workspaceId: string; kind: string },
   subjectUserId: string,
   kind: SystemMessageKind,
+  /** The sentence after the name, in place of the kind's ("joined as a visitor", docs/specs/chat-visitors.md §1.2). */
+  predicate?: string,
 ): Promise<MessageDTO | null> {
   if (chan.kind !== 'standard') return null;
   try {
@@ -322,7 +337,7 @@ export async function postSystemMessage(
       .where(eq(schema.users.id, subjectUserId))
       .limit(1);
     const name = who[0]?.displayName ?? 'Someone';
-    const body = `${name} ${SYSTEM_PREDICATE[kind]}`;
+    const body = `${name} ${predicate ?? SYSTEM_PREDICATE[kind]}`;
     const id = newId();
     const now = new Date();
     const enc = encryptBody(body);
@@ -451,16 +466,22 @@ export async function getMessageFor(messageId: string, userId: string): Promise<
   return (await hydrate([row]))[0]!;
 }
 
-/** Channel history: top-level messages, newest first, cursor on id (spec §2 index). */
+/** What a channel visitor may read (docs/specs/chat-visitors.md §2): only messages created at or after this time. */
+export interface ReadCut { since?: Date | undefined }
+
+/** Channel history: top-level messages, newest first, cursor on id (spec §2 index). With `cut.since`, only those
+ * created at or after it (a visitor's view). */
 export async function listMessages(
   channelId: string,
   userId: string,
   before: string | undefined,
   limit: number,
+  cut?: ReadCut,
 ): Promise<MessagePage> {
   await requireChannelAccess(channelId, userId);
   const conds = [eq(messages.channelId, channelId), isNull(messages.threadRootId)];
   if (before) conds.push(lt(messages.id, before));
+  if (cut?.since) conds.push(gte(messages.createdAt, cut.since));
   const rows = await db
     .select()
     .from(messages)
@@ -552,21 +573,25 @@ export async function unpinMessage(messageId: string, userId: string): Promise<M
   return dto;
 }
 
-/** Thread view: root + replies ascending, cursor after=<msgId>. */
+/** Thread view: root + replies ascending, cursor after=<msgId>. With `cut.since`, a thread whose root is older is not
+ * there at all (a visitor's view, docs/specs/chat-visitors.md V3). */
 export async function listThread(
   rootId: string,
   userId: string,
   after: string | undefined,
   limit: number,
+  cut?: ReadCut,
 ): Promise<MessagePage & { root: MessageDTO }> {
   const roots = await db.select().from(messages).where(eq(messages.id, rootId)).limit(1);
   const root = roots[0];
   if (!root) throw notFound('message not found');
+  if (cut?.since && root.createdAt < cut.since) throw notFound('message not found');
   if (root.threadRootId) throw badRequest('not_a_root', 'message is not a thread root');
   await requireChannelAccess(root.channelId, userId);
 
   const conds = [eq(messages.threadRootId, rootId)];
   if (after) conds.push(gt(messages.id, after));
+  if (cut?.since) conds.push(gte(messages.createdAt, cut.since));
   const rows = await db
     .select()
     .from(messages)

@@ -25,7 +25,8 @@ function cursor(statement: StatementSync, bindings: SQLInputValue[]) {
   };
 }
 
-export function orgStorage(): { db: DB; sqlite: DatabaseSync } {
+/** `bare` leaves the database empty, for a test that constructs the Org object itself (it applies the migrations). */
+export function orgStorage(opts: { bare?: boolean } = {}): { db: DB; sqlite: DatabaseSync; storage: Record<string, unknown> } {
   // Durable Object SQLite binds at most 100 variables per statement; hold the tests to the same (Node 24+ honours the
   // option, older Nodes ignore it).
   const sqlite = new DatabaseSync(':memory:', { limits: { variableNumber: 100 } } as ConstructorParameters<typeof DatabaseSync>[1]);
@@ -41,8 +42,10 @@ export function orgStorage(): { db: DB; sqlite: DatabaseSync } {
     transactionSync: <T>(fn: () => T): T => fn(),
     transaction: async <T>(fn: () => Promise<T>): Promise<T> => fn(),
   };
-  for (const m of ORG_MIGRATIONS) for (const statement of m.split('--> statement-breakpoint')) if (statement.trim()) sqlite.exec(statement);
-  sqlite.exec(HUDDLE_ROSTER_DDL);
-  for (const ddl of MESSAGE_SEARCH_DDL) sqlite.exec(ddl);
-  return { db: openDb(storage as unknown as DurableObjectStorage), sqlite };
+  if (!opts.bare) {
+    for (const m of ORG_MIGRATIONS) for (const statement of m.split('--> statement-breakpoint')) if (statement.trim()) sqlite.exec(statement);
+    sqlite.exec(HUDDLE_ROSTER_DDL);
+    for (const ddl of MESSAGE_SEARCH_DDL) sqlite.exec(ddl);
+  }
+  return { db: openDb(storage as unknown as DurableObjectStorage), sqlite, storage };
 }

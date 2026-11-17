@@ -497,3 +497,11 @@ describe('failureReply', () => {
     expect(out.endsWith('…')).toBe(true);
   });
 });
+
+describe('inScope — channel visitors (docs/specs/chat-visitors.md V5)', () => {
+  it('never answers a visitor, even one that mentions us in a channel we created', async () => {
+    const b = bridge(config({ eventScope: 'all' }), [channel({ createdBy: AGENT })]);
+    expect(await b.inScope(message({ body: `<@${AGENT}> hi`, visitor: true }))).toBe(false);
+    expect(await b.inScope(message({ body: `<@${AGENT}> hi` }))).toBe(true);
+  });
+});

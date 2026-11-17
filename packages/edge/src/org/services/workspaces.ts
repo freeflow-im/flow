@@ -210,6 +210,8 @@ export async function updateWorkspace(
     .where(eq(workspaces.id, workspaceId))
     .returning();
   if (!updated[0]) throw notFound('workspace not found');
+  // Visitors turned off (docs/specs/chat-visitors.md §1.1): current visitors lose access at once.
+  if (set.policies?.visitors === 'off') await (await import('./visitors.js')).removeAllVisitors();
   const dto = toWorkspaceDTO(updated[0]);
   publishEvent(subjectMeta(workspaceId), {
     type: 'workspace.updated',
@@ -311,7 +313,21 @@ export async function clearWorkspaceAvatar(workspaceId: string, actorId: string)
   return saveWorkspaceAvatar(workspaceId, m.role, null);
 }
 
+/**
+ * A visitor's request (services/visitors.ts, docs/specs/chat-visitors.md): set only by the visitor routes, around the same
+ * services members use. Inside it the visitor passes `requireMembership` as a plain member and `requireChannelAccess`
+ * for their one channel only; outside it a visitor has no workspace_members row, so every member route refuses them.
+ */
+export interface VisitorGrant { userId: string; workspaceId: string; channelId: string }
+export const visitorGrant = new AsyncLocalStorage<VisitorGrant>();
+
 export async function requireMembership(workspaceId: string, userId: string) {
+  const grant = visitorGrant.getStore();
+  if (grant && grant.userId === userId) {
+    if (grant.workspaceId !== workspaceId) throw notFound('workspace not found');
+    // A guest's kind, so any rule that holds back guests holds back a visitor too.
+    return { workspaceId, userId, role: 'member' as const, kind: 'guest' as const, runtime: null, sponsorUserId: null, joinedAt: new Date(0), address: null, accountId: null };
+  }
   const rows = await db
     .select()
     .from(workspaceMembers)

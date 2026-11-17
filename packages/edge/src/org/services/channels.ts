@@ -4,7 +4,7 @@ import type { ChannelDTO, ChannelIndicatorState, ChannelKind, HuddleParticipantD
 import { db, schema } from '../db/index.js';
 import { newId } from '../lib/ids.js';
 import { badRequest, conflict, forbidden, notFound } from '../lib/errors.js';
-import { isUniqueViolation, requireMembership } from './workspaces.js';
+import { isUniqueViolation, requireMembership, visitorGrant } from './workspaces.js';
 import { postSystemMessage } from './messages.js';
 import {
   clearChannelNotifications,
@@ -482,6 +482,12 @@ export async function requireChannelAccess(channelId: string, userId: string) {
   const rows = await db.select().from(channels).where(eq(channels.id, channelId)).limit(1);
   const chan = rows[0];
   if (!chan) throw notFound('channel not found');
+  // A visitor (services/visitors.ts) reads and writes their one channel as if a member of it, and no other.
+  const grant = visitorGrant.getStore();
+  if (grant && grant.userId === userId) {
+    if (grant.channelId !== channelId) throw notFound('channel not found');
+    return { chan, isMember: true };
+  }
   await requireMembership(chan.workspaceId, userId);
   const mem = await db
     .select()
