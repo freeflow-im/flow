@@ -10,7 +10,8 @@
     "./assistant-dock": "./src/AssistantDock.tsx",
     "./assistant-chat": "./src/AssistantChat.tsx",
     "./side-panel": "./src/SidePanel.tsx",
-    "./account-settings": "./src/AccountSettings.tsx"
+    "./account-settings": "./src/AccountSettings.tsx",
+    "./email-approval": "./src/EmailApproval.tsx"
   },
   "sideEffects": [
     "*.css"

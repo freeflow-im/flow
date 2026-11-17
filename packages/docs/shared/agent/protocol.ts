@@ -499,7 +499,7 @@ export const CLIENT_TOOLS = new Set([
 ]);
 
 /** Server tools whose result the chat is given (tool_end, the transcript): it links to the draft, file or event they made. */
-export const SHOWN_RESULTS: ReadonlySet<string> = new Set(['create_mail_draft', 'save_mail_attachment_to_docs', 'create_event', 'update_event', 'image_search']);
+export const SHOWN_RESULTS: ReadonlySet<string> = new Set(['create_mail_draft', 'send_email', 'save_mail_attachment_to_docs', 'create_event', 'update_event', 'image_search']);
 
 // The model catalogue and the assistant's settings are the platform's (decision_log 2026-11-11: identity, agents and their
 // settings sit below the apps), so the Admin app reads them without Docs: they live in @flow/shared/assistant.

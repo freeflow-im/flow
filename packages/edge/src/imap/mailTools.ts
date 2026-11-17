@@ -202,6 +202,27 @@ async function composed(ctx: MailToolContext, input: DraftInput): Promise<{ acco
   return { account, body: { to, ...(cc.length ? { cc } : {}), ...(bcc.length ? { bcc } : {}), subject, html, text, ...extra } };
 }
 
+/** An email made ready to send but not sent (assistant/mailApprovals.ts): the account it goes from, and the Mail object's body. */
+export interface PreparedMail { account: { id: string; email: string }; body: Record<string, unknown>; to: string[]; cc: string[]; bcc: string[]; subject: string }
+
+/** An email composed as send_mail would send it (reply quoting, threading, attachments of a forward), for approval first. */
+export async function prepareMail(ctx: MailToolContext, input: DraftInput): Promise<PreparedMail> {
+  const { account: a, body } = await composed(ctx, input);
+  const list = (k: string) => shown((body[k] as Address[] | undefined) ?? []);
+  const to = list('to'), cc = list('cc'), bcc = list('bcc');
+  if (!to.length && !cc.length && !bcc.length) throw new MailToolError('to: give at least one recipient.');
+  return { account: { id: a.id, email: a.email }, body, to, cc, bcc, subject: String(body.subject ?? '') };
+}
+
+/** Sends a prepared email from its account, now; the Mail object keeps a copy in Sent. */
+export async function sendPrepared(ctx: MailToolContext, prepared: Pick<PreparedMail, 'account' | 'body'>): Promise<{ messageId: string }> {
+  return call<{ messageId: string }>(ctx, 'POST', `${accountPath(prepared.account.id)}/send`, prepared.body);
+}
+
+/** send_email's input (the assistant's): create_mail_draft's. */
+export const SEND_EMAIL_SHAPE = draftShape;
+export type { DraftInput };
+
 export const MAIL_TOOLS: MailTool[] = [
   {
     name: 'list_mail_accounts',
@@ -513,18 +534,25 @@ export const ASSISTANT_MAIL_TOOLS = ['search_mail', 'read_mail', 'create_mail_dr
 const ASSISTANT_DESCRIPTIONS: Partial<Record<(typeof ASSISTANT_MAIL_TOOLS)[number], string>> = {
   save_mail_attachment_to_docs: `Saves one attachment of a message (its index from read_mail) as a file in the user's files: a Word file becomes a document, PowerPoint a presentation, Excel or CSV a spreadsheet, Markdown a Markdown document, and a PDF, picture or other file a stored file. Returns the new file's id and kind; read it with your file tools (read_other_sheet, read_doc, read_deck and so on) or open it for the user. Files up to ${MAX_SAVE_BYTES / 1024 / 1024} MB.`,
   create_mail_draft:
-    "Writes an email and saves it in the account's Drafts folder, unsent: the user reviews and sends it from FreeFlow Mail (give them the link). You cannot send email from the user's accounts (email_members sends a note to members of the organization, or to the user, from FreeFlow). The body is Markdown. For a reply give reply_to_id (and reply_all for everyone); for a forward give forward_id and to: the original is quoted below your body and the message threaded. Returns the draft's id and link.",
+    "Writes an email and saves it in the account's Drafts folder, unsent: the user reviews and sends it from FreeFlow Mail (give them the link). To have it sent once the user approves it, use send_email instead (email_members sends a note to members of the organization, or to the user, from FreeFlow, at once). The body is Markdown. For a reply give reply_to_id (and reply_all for everyone); for a forward give forward_id and to: the original is quoted below your body and the message threaded. Returns the draft's id and link.",
 };
 
-/** The assistant's Mail tools as Zod objects (described), for its tool list: never send_mail. */
+/** The assistant's Mail tools as Zod objects (described), for its tool list: never send_mail, which sends at once; send_email asks first. */
 export function assistantMailSchemas(): Record<string, z.ZodObject> {
-  return Object.fromEntries(
-    ASSISTANT_MAIL_TOOLS.map((name) => {
-      const t = MAIL_TOOLS.find((x) => x.name === name)!;
-      return [name, z.object(t.shape).describe(ASSISTANT_DESCRIPTIONS[name] ?? t.description)];
-    }),
-  );
+  return {
+    ...Object.fromEntries(
+      ASSISTANT_MAIL_TOOLS.map((name) => {
+        const t = MAIL_TOOLS.find((x) => x.name === name)!;
+        return [name, z.object(t.shape).describe(ASSISTANT_DESCRIPTIONS[name] ?? t.description)];
+      }),
+    ),
+    send_email: z.object(draftShape).describe(SEND_EMAIL_DESCRIPTION),
+  };
 }
+
+/** send_email, the assistant's: it sends nothing itself (decision_log 2026-11-17, "Email needs the person's click"). */
+export const SEND_EMAIL_DESCRIPTION =
+  "Sends an email for the user, to anyone (inside or outside the organization), once the user approves it: the email is shown to them with a Send message button (in this chat when they are here, else in your direct message with them in Chat) and goes out only when they click it. It goes from the account named (an id or address from list_mail_accounts: the user's own, by default their first, or your own mailbox, listed as yours). Arguments as create_mail_draft (Markdown body; reply_to_id or forward_id to answer or forward). Returns that it is waiting for approval: never say it was sent; say it is waiting for their click.";
 
 /** Runs one of the assistant's Mail tools (its input already validated). Throws MailToolError for what the model should see. */
 export async function runAssistantMailTool(name: string, input: Record<string, unknown>, ctx: MailToolContext): Promise<Record<string, unknown>> {
@@ -566,3 +594,21 @@ for (const t of MAIL_TOOLS) {
     needs: 'mail',
   }, (ASSISTANT_MAIL_TOOLS as readonly string[]).includes(t.name) ? ['mcp', 'assistant'] : ['mcp']);
 }
+
+// send_email (the assistant's alone, never at /mcp): the email waits for the person's click (assistant/mailApprovals.ts).
+register<{ mailApproval?: (input: DraftInput) => Promise<{ id: string; from: string; to: string[]; cc: string[]; bcc: string[]; subject: string }> }>('mail', 'send_email', {
+  run: async (ctx, input) => {
+    if (!ctx.mailApproval) throw new MailToolError('Sending email is not available here: only your personal agents send email, with your approval.');
+    const a = await ctx.mailApproval(input as unknown as DraftInput);
+    return {
+      waiting_for_approval: true, id: a.id, from: a.from, to: a.to, ...(a.cc.length ? { cc: a.cc } : {}), ...(a.bcc.length ? { bcc: a.bcc } : {}), subject: a.subject,
+      note: 'Not sent yet: it is shown to the user with a Send message button and goes out only when they click it. Tell them it is waiting for their approval.',
+    };
+  },
+  shape: draftShape,
+  title: 'Send email (after approval)',
+  annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  refusal: (e) => e instanceof MailToolError,
+  failure: () => 'The email could not be prepared just now. Try again in a moment.',
+  needs: 'mail',
+}, ['assistant']);

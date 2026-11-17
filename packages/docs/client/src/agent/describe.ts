@@ -226,6 +226,8 @@ export function toolLabel(name: string, i: Input): string {
     }
     case 'create_mail_draft':
       return i.reply_to_id ? 'Drafted a reply' : i.forward_id ? 'Drafted a forward' : 'Drafted an email';
+    case 'send_email':
+      return 'Wrote an email for you to approve';
     case 'save_mail_attachment_to_docs':
       return 'Saved an email attachment to your files';
     case 'open_mail_message':

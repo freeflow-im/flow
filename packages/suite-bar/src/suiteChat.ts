@@ -10,12 +10,12 @@ export const HOME_CHAT = 'home';
 export type ChatItem =
   | { kind: 'user'; text: string }
   | { kind: 'assistant'; text: string }
-  | { kind: 'tool'; id: string; name: string; status: 'running' | 'ok' | 'error'; error?: string };
+  | { kind: 'tool'; id: string; name: string; status: 'running' | 'ok' | 'error'; error?: string; result?: string };
 
 type AgentEvent =
   | { type: 'text'; text: string }
   | { type: 'tool_start'; id: string; name: string }
-  | { type: 'tool_end'; id: string; ok: boolean }
+  | { type: 'tool_end'; id: string; ok: boolean; result?: string }
   | { type: 'client_tools'; calls: { id: string; name: string }[] }
   | { type: 'permission'; id: string }
   | { type: 'done' }
@@ -82,7 +82,7 @@ export function useSuiteAssistant(org: string | null, agent: string | null = nul
       const last = prev[prev.length - 1];
       return last?.kind === 'assistant' ? [...prev.slice(0, -1), { ...last, text: last.text + t }] : [...prev, { kind: 'assistant', text: t }];
     });
-    const setTool = (id: string, status: 'ok' | 'error', err?: string) => setItems((prev) => prev.map((i) => (i.kind === 'tool' && i.id === id ? { ...i, status, ...(err ? { error: err } : {}) } : i)));
+    const setTool = (id: string, status: 'ok' | 'error', err?: string, result?: string) => setItems((prev) => prev.map((i) => (i.kind === 'tool' && i.id === id ? { ...i, status, ...(err ? { error: err } : {}), ...(result !== undefined ? { result } : {}) } : i)));
     void (async () => {
       const whose = { ...(org ? { workspace: org } : {}), ...(agent ? { agent } : {}) };
       let body: Record<string, unknown> = { message, context: { page: 'home' }, scope: HOME_CHAT, ...whose };
@@ -101,7 +101,7 @@ export function useSuiteAssistant(org: string | null, agent: string | null = nul
             for (const e of events) {
               if (e.type === 'text') appendText(e.text);
               else if (e.type === 'tool_start') setItems((prev) => [...prev, { kind: 'tool', id: e.id, name: e.name, status: 'running' }]);
-              else if (e.type === 'tool_end') setTool(e.id, e.ok ? 'ok' : 'error');
+              else if (e.type === 'tool_end') setTool(e.id, e.ok ? 'ok' : 'error', undefined, e.result);
               else if (e.type === 'client_tools') calls = e.calls;
               else if (e.type === 'error') setError(e.message);
             }

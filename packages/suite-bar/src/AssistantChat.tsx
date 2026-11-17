@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm';
 import { AssistantDock, AssistantDockControls, ChatHistoryNav, orgChatHistory, SparkIcon, useAssistantDockState, useUsableAgents, type UsableAgent } from './AssistantDock';
 import { HOME_CHAT, useSuiteAssistant } from './suiteChat';
 import { useSuggestedPrompts, type PromptPage } from './lib/prompts';
+import { EmailApprovalCard, WaitingEmails, emailApprovalOf } from './EmailApproval';
 import './assistant-chat.css';
 
 /**
@@ -77,6 +78,7 @@ function SuiteAssistantPanel({ organizationId, page, agents, chosen, onPick }: {
         <AssistantDockControls />
       </div>
       <div className="suite-chat-list" ref={list}>
+        <WaitingEmails organizationId={organizationId} refreshKey={chat.running} />
         {!chat.items.length && <p className="suite-chat-empty">{emptyLine(chosen, name)}</p>}
         {!chat.items.length &&
           suggestions.map((s) => (
@@ -89,6 +91,8 @@ function SuiteAssistantPanel({ organizationId, page, agents, chosen, onPick }: {
             <div key={i} className="suite-chat-user">{item.text}</div>
           ) : item.kind === 'assistant' ? (
             <div key={i} className="suite-chat-assistant"><ReactMarkdown remarkPlugins={[remarkGfm]}>{item.text}</ReactMarkdown></div>
+          ) : emailApprovalOf(item.name, item.result) ? (
+            <EmailApprovalCard key={item.id} id={emailApprovalOf(item.name, item.result)!} organizationId={organizationId} />
           ) : (
             <div key={item.id} className={`suite-chat-tool ${item.status}`}>{item.name.replace(/_/g, ' ')}{item.status === 'running' ? '…' : item.error ? ` · ${item.error}` : ''}</div>
           ),

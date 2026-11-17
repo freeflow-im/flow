@@ -1,5 +1,24 @@
 # Decision log
 
+## 2026-11-17 — Agents send email only on the person's click (operator ruling)
+
+- **Ruling R-E (Scott):** agents can send email, to any address, but every message needs the person's approval. The
+  agent's `send_email` tool composes the email as Mail would send it and keeps it waiting
+  (`edge/src/assistant/mailApprovals.ts`); a card shows it (from, to, cc, bcc, subject, text) with **Send message** and
+  **Discard**. Only the person, signed in with a session, can click them: the routes refuse an agent's or an app's token,
+  so no agent approves its own email. The card also ignores a script's click (`isTrusted` false), so an agent driving the
+  person's browser through the FreeFlow Browser extension cannot press Send message either.
+- **Where the card is (Scott):** in the assistant panel when the person is there; when no page runs the turn (an
+  automation, an email to the agent, a Chat mention) the agent posts the email in its DM with the person, with a link to
+  the card in Home (`/home/?email-approval=`), and the panels list every email still waiting.
+- **Sender (Scott):** the person's own mail account by default; the agent may choose its own mailbox when it has one.
+  The card says which.
+- **Unchanged (Scott):** `email_members` (notes from FreeFlow to members, "email me") and the automatic replies to
+  allowlisted senders ("Agent always responds to incoming email") still send without a click.
+- Every personal agent keeps its waiting emails in the person's own Assistant object, so there is one list. Shared agents
+  get no `send_email`. An email waits at most 14 days; at most 50 wait at once. `send_mail` (sends at once) stays an
+  `/mcp` tool for apps the person connects with the `mail:send` scope, never the assistant's.
+
 ## 2026-11-17 — Every agent turn runs its tools; email is a trigger; Chat posts need no approval (operator rulings)
 
 - **Ruling R-A (Scott):** every agent turn that no browser runs (an automation's wake job, a turn started in Chat, an

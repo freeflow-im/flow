@@ -12,13 +12,14 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { DurableObject } from 'cloudflare:workers';
 import { Hono, type Context } from 'hono';
-import type { AccountDTO, AgentJobDTO, HostedRuntimeDTO, UserDTO } from '@flow/shared';
+import { mailApprovalPath, type AccountDTO, type AgentJobDTO, type HostedRuntimeDTO, type MailApprovalDTO, type UserDTO } from '@flow/shared';
 import type { CallerContext } from '../org/routes/compat';
 import type { ImportRow } from '../importing';
 import { exportTables, importTable, ownerMismatch, ownerRefusal } from '../perAccount';
 import { calendarRequest, type AccountCaller } from '../calendar/forward';
 import type { CalendarToolContext } from '../calendar/calendarTools';
-import type { MailToolContext } from '../imap/mailTools';
+import { MailToolError, prepareMail, sendPrepared, type DraftInput, type MailToolContext } from '../imap/mailTools';
+import { MAIL_APPROVALS_DDL, MailApprovals, type NewApproval } from './mailApprovals.ts';
 import { appToolContexts } from '../apps';
 import { runnerOf } from '../registry';
 import { mailWakeSubscription } from './mailWake.ts';
@@ -100,9 +101,11 @@ export const ASSISTANT_MIGRATIONS: string[][] = [
   ],
   // The agent's memory (agents.md §6.1, memory.ts).
   MEMORY_DDL,
+  // Email waiting for the person's click (mailApprovals.ts).
+  MAIL_APPROVALS_DDL,
 ];
 /** Every table, for exportRows. */
-export const ASSISTANT_TABLES = ['agent_conversations', 'agent_messages', 'agent_usage', 'assistant_settings', 'assistant_state', 'agent_memory_files'] as const;
+export const ASSISTANT_TABLES = ['agent_conversations', 'agent_messages', 'agent_usage', 'assistant_settings', 'assistant_state', 'agent_memory_files', 'mail_approvals'] as const;
 /** The tables importRows takes whole; a conversation comes with its messages (importChat). */
 const IMPORTED = ['agent_usage', 'assistant_settings'] as const;
 
@@ -164,6 +167,8 @@ export class Assistant extends DurableObject<AssistantEnv> {
   private who: Who | null = null;
   /** The caller of each turn that is running, by its conversation user: tools read theirs, never a later request's. */
   private readonly turnWho = new Map<string, Who>();
+  /** The turns no page runs, by conversation: where send_email tells the person (their DM with the agent in Chat). */
+  private readonly headlessTurns = new Map<string, { organizationId: string; agentUserId: string }>();
   /** Wake jobs this runtime is running now. */
   private readonly runningJobs = new Set<string>();
   /** The prompt lines the loop reads on every model call; a definition change rewrites them in place (no new loop, so
@@ -387,7 +392,9 @@ export class Assistant extends DurableObject<AssistantEnv> {
         const apps = appToolContexts(this.env, async () => who?.caller ?? null, this.origin);
         const memory = new MemoryStore(this.sql, this.memoryScope(userId, who));
         const admin = this.adminContext(who);
-        return { ...(docs ? { docs } : {}), ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}), ...(apps ? { apps } : {}), ...(admin ? { admin } : {}), memory };
+        // send_email (mailApprovals.ts): a personal agent's, as its person; a shared agent sends none.
+        const mailApproval = mail && who && personalTurn(who) ? (input: DraftInput) => this.requestMailApproval(input, mail, who, userId) : undefined;
+        return { ...(docs ? { docs } : {}), ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}), ...(apps ? { apps } : {}), ...(admin ? { admin } : {}), ...(mailApproval ? { mailApproval } : {}), memory };
       },
       // The agent's memory files, listed at the start of each request (agents.md §6.1, loading).
       notes: (userId: string) => new MemoryStore(this.sql, this.memoryScope(userId, this.turnWho.get(userId) ?? this.who)).listing(),
@@ -720,6 +727,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
   private async runHeadless(t: HeadlessTurn): Promise<{ text: string }> {
     const org = this.orgStub(t.organizationId);
     this.turnWho.set(t.conversation, t.who);
+    this.headlessTurns.set(t.conversation, { organizationId: t.organizationId, agentUserId: t.runtime.agentId });
     try {
       let req = t.first;
       let text = '';
@@ -753,6 +761,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
       return { text: text.trim() };
     } finally {
       if (this.turnWho.get(t.conversation) === t.who) this.turnWho.delete(t.conversation);
+      this.headlessTurns.delete(t.conversation);
     }
   }
 
@@ -869,6 +878,46 @@ export class Assistant extends DurableObject<AssistantEnv> {
     this.setState('mail_wake_subscription', sub.id);
     console.log(`[assistant] mail wake for ${agent}: subscription ${sub.id}`);
     return 'on';
+  }
+
+  // ---- email waiting for the person's click (mailApprovals.ts) ------------------------------------------------------
+
+  /**
+   * send_email: the email composed as Mail would send it, kept in the person's own object as waiting, and, when no page
+   * runs the turn, a note in the person's DM with the agent linking to it. The person sends it (or not) with a click.
+   */
+  private async requestMailApproval(input: DraftInput, mail: MailToolContext, who: Who, conversation: string): Promise<MailApprovalDTO> {
+    const prepared = await prepareMail(mail, input);
+    const own = await this.ownMailbox(who.caller);
+    const approval: NewApproval = {
+      agentName: this.definition().name, prepared, fromAgent: !!own?.ids.has(prepared.account.id), body: input.body,
+      quotes: input.reply_to_id ? 'reply' : input.forward_id ? 'forward' : null,
+    };
+    const ns = this.env.ASSISTANT;
+    const home = ns?.idFromName(who.caller.account.id);
+    const saved = !ns || !home || home.equals(this.ctx.id) ? this.addMailApproval(approval) : ((await ns.get(home).addMailApproval(approval)) as MailApprovalDTO);
+    const away = this.headlessTurns.get(conversation);
+    if (away && who.docs.userId) {
+      const link = `${this.origin}${mailApprovalPath(saved.id, away.organizationId)}`;
+      const lines = [
+        `✉️ I wrote an email for you to approve. It is not sent until you click **Send message**.`,
+        `**From:** ${saved.from}  `, `**To:** ${[...saved.to, ...saved.cc].join(', ')}  `, `**Subject:** ${saved.subject || '(no subject)'}`,
+        '', ...saved.body.slice(0, 1500).split('\n').map((l) => `> ${l}`), ...(saved.body.length > 1500 ? ['> …'] : []),
+        '', `[Review and send](${link})`,
+      ];
+      await this.orgStub(away.organizationId)?.agentDmNotice({ agentUserId: away.agentUserId, personUserId: who.docs.userId, text: lines.join('\n') })
+        .catch((err: Error) => console.error(`[assistant] email approval note: ${err.message}`));
+    }
+    return saved;
+  }
+
+  /** Keeps an email waiting here (an RPC from the person's other agents' runtimes, or this object's own turn). */
+  addMailApproval(a: NewApproval): MailApprovalDTO {
+    try {
+      return new MailApprovals(this.sql).add(a);
+    } catch (e) {
+      throw new MailToolError((e as Error).message);
+    }
   }
 
   /**
@@ -1004,6 +1053,34 @@ export class Assistant extends DurableObject<AssistantEnv> {
     app.get('/api/agent/definition', (c) => c.json({ definition: this.definition() }));
     // The assistant's mail allowlist (agents.md §1.1): only the senders the person adds; empty, its mailbox is never checked.
     // And whether it answers that mail on its own (`autoReply`, off by default): each part is set alone.
+    // Email waiting for the person's click (mailApprovals.ts): the list, one, and Send message or Discard. Only the person,
+    // signed in with a session, decides: never an agent's or an app's token, so no agent can approve its own email.
+    app.get('/api/agent/mail-approvals', (c) => c.json({ approvals: new MailApprovals(this.sql).waiting() }));
+    app.get('/api/agent/mail-approvals/:id', (c) => {
+      const a = new MailApprovals(this.sql).get(c.req.param('id'));
+      return a ? c.json({ approval: a }) : c.json({ error: 'That email is not here.' }, 404);
+    });
+    app.post('/api/agent/mail-approvals/:id/:action', async (c) => {
+      const caller = c.env.who.caller;
+      if (caller.authKind !== 'session' || caller.user?.isAgent) return c.json({ error: 'Only you can send or discard this email, signed in to FreeFlow.', code: 'person_only' }, 403);
+      const store = new MailApprovals(this.sql);
+      const id = c.req.param('id'), action = c.req.param('action');
+      if (action === 'discard') return store.discard(id) ? c.json({ approval: store.get(id) }) : c.json({ error: 'That email is no longer waiting.', approval: store.get(id) }, 409);
+      if (action !== 'send') return c.json({ error: 'Not found' }, 404);
+      const claimed = store.claim(id);
+      if (!claimed) return c.json({ error: 'That email is no longer waiting.', approval: store.get(id) }, 409);
+      const mail = this.mailContext(HOME_CHAT, c.env.who);
+      try {
+        if (!mail) throw new Error('Mail is not available here.');
+        await sendPrepared(mail, claimed);
+        console.log(`[assistant] email ${id} sent on the person's click`);
+        return c.json({ approval: store.get(id) });
+      } catch (e) {
+        // Still waiting: the person may try again, or discard it.
+        store.release(id, (e as Error).message.slice(0, 300));
+        return c.json({ error: `It could not be sent: ${(e as Error).message.slice(0, 300)}`, approval: store.get(id) }, 502);
+      }
+    });
     app.get('/api/agent/mail-allowlist', async (c) => c.json({ senders: await this.mailAllowlist(), autoReply: await this.mailAutoReply() }));
     app.put('/api/agent/mail-allowlist', async (c) => {
       const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { senders?: unknown; autoReply?: unknown };
@@ -1220,3 +1297,8 @@ type OrgStub = DurableObjectStub<Org>;
 
 /** A Chat conversation's chat in the loop's store: one per DM or thread, so its memory stays with that exchange. */
 const chatConversation = (run: Pick<ChatRun, 'channelId' | 'threadRootId'>) => `chat:${run.channelId}:${run.threadRootId ?? 'main'}`;
+
+/** A turn of a person's own agent (it acts as them, marked `via` it), or the person's own panel: not a shared agent's. */
+function personalTurn(who: Who): boolean {
+  return who.caller.authKind === 'session' || !!who.caller.via;
+}

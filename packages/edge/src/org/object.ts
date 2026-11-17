@@ -816,6 +816,22 @@ export class Org extends DurableObject<OrgEnv> {
   }
 
   /**
+   * A note from an agent to its person in their DM (an email waiting for the person's click, assistant/mailApprovals.ts),
+   * made if it is not there yet. Posted at the depth cap, so it wakes no automation.
+   */
+  async agentDmNotice(p: { agentUserId: string; personUserId: string; text: string }): Promise<void> {
+    const workspace = this.db.select({ id: schema.workspaces.id }).from(schema.workspaces).get();
+    if (!workspace) return;
+    const [{ createDm }, { sendMessage }] = await Promise.all([import('./services/channels'), import('./services/messages')]);
+    await this.scoped(async () => {
+      const dm = await createDm(workspace.id, p.agentUserId, [p.personUserId]);
+      await sendMessage(dm.id, p.agentUserId, crypto.randomUUID(), p.text);
+    }, { depth: MAX_EVENT_DEPTH });
+    await this.logging;
+    await this.armAlarm();
+  }
+
+  /**
    * Provisioning could not make an account's mailbox (provisioning/consumer.ts): each owner and admin hears it in their DM
    * with that account's holder, as a DM notification, or in their own DM when the account is theirs.
    */
