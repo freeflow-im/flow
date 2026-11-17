@@ -516,6 +516,23 @@ export class EventsCore {
     });
   }
 
+  /**
+   * Run now: one `schedule.tick` for a subscription's schedule, as its timer would publish, marked `manual` and acted by
+   * the person who asked; the schedule's next timed run stays as it was. Null when the subscription has no schedule.
+   */
+  tickNow(subscriptionId: string, actor: string, now = Date.now()): { seq: number; id: string } | null {
+    return this.transact(() => {
+      const r = this.sql.exec('SELECT s.*, u.owner FROM schedules s JOIN subscriptions u ON u.id = s.subscription_id WHERE s.subscription_id = ?', subscriptionId).toArray()[0];
+      if (!r) return null;
+      const org = this.organizationId() ?? '';
+      return this.publish({
+        type: 'schedule.tick', organizationId: org, actor, audience: `account:${r.owner as string}`, ref: scheduleRef(org, r.id as string),
+        ts: new Date(now).toISOString(),
+        data: { scheduleId: r.id, subscriptionId: r.subscription_id, every: r.every, timezone: r.timezone, at: new Date(now).toISOString(), manual: true },
+      });
+    });
+  }
+
   stats(): EventStats {
     const r = this.sql.exec('SELECT COUNT(*) AS count, MIN(seq) AS first, MAX(seq) AS last, MIN(ts) AS oldest FROM events').toArray()[0]!;
     return { count: r.count as number, first: (r.first as number | null) ?? null, last: (r.last as number | null) ?? null, oldestTs: r.oldest == null ? null : new Date(r.oldest as number).toISOString() };

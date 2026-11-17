@@ -19,6 +19,8 @@ export interface SubscriptionOps {
   read(id: string, limit?: number, waitS?: number): Promise<SubscriptionRead | null>;
   ack(id: string, cursor: number): Promise<number | null>;
   remove(id: string): Promise<boolean>;
+  /** Run now: a scheduled subscription the caller owns fires once, as its timer would. False when it is not theirs or has no schedule. */
+  run(id: string): Promise<boolean>;
   /** A subscription's last 50 jobs, for its owner or its agent; null when it is neither's. */
   jobs(subscriptionId: string): Promise<AgentJobDTO[] | null>;
   /** The agent's side of a job; null for a job that is not the caller's. A 409 `job_state` when its state forbids the step. */
@@ -75,6 +77,11 @@ export function subscriptionsAs(
       const sub = await get(id);
       return sub && (sub.consumer === accountId || sub.owner === accountId) ? ((await events.deleteSubscription(id)) as boolean) : false;
     },
+    run: async (id) => {
+      const sub = await get(id);
+      if (!sub || sub.owner !== accountId || !sub.schedule) return false;
+      return (await events.runNow(id, accountId)) as boolean;
+    },
     jobs: async (subscriptionId) => {
       const sub = await get(subscriptionId);
       if (!sub || (sub.consumer !== accountId && sub.owner !== accountId)) return null;
@@ -98,6 +105,7 @@ export function lazySubscriptions(make: () => Promise<SubscriptionOps>): Subscri
     read: async (id, limit, waitS) => (await get()).read(id, limit, waitS),
     ack: async (id, cursor) => (await get()).ack(id, cursor),
     remove: async (id) => (await get()).remove(id),
+    run: async (id) => (await get()).run(id),
     jobs: async (id) => (await get()).jobs(id),
     jobStep: async (id, step, opts) => (await get()).jobStep(id, step, opts),
   };

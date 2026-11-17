@@ -219,6 +219,14 @@ export class Events extends DurableObject<EventsEnv> {
     await this.rearm();
   }
 
+  /** Run now (subscriptions.ts' `run`): a scheduled subscription's tick, published and acted on as the timer's is. */
+  runNow(subscriptionId: string, actor: string): boolean {
+    const t = this.core.tickNow(subscriptionId, actor);
+    if (!t) return false;
+    this.published(this.core.organizationId() ?? '', t.seq - 1, t.seq);
+    return true;
+  }
+
   /**
    * The `socket` delivery mode (§5.2): each such subscription with a match among the events just appended (`after`,
    * `through`] has its consumer's sockets told `{ op: 'subscription', id }`, by the Org object that holds them. The

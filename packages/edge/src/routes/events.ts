@@ -105,6 +105,12 @@ eventRoutes.post('/v1/events/subscriptions/:id/ack', async (c) => {
   return c.json({ cursor: stored });
 });
 
+// Run now: a scheduled automation its owner starts at once, as its timer would (its next timed run stays).
+eventRoutes.post('/v1/events/subscriptions/:id/run', async (c) => {
+  if (!(await (await opsOf(c)).run(c.req.param('id')))) throw noSuch();
+  return c.json({ ok: true }, 202);
+});
+
 eventRoutes.delete('/v1/events/subscriptions/:id', async (c) => {
   if (!(await (await opsOf(c)).remove(c.req.param('id')))) throw noSuch();
   return c.json({ ok: true });
