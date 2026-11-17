@@ -84,6 +84,8 @@ export const manifest = {
 
 const tasks = new Map();
 let seq = 0;
+/** Goes up on every change: the board asks for it every few seconds and reloads when it moves. */
+let version = 0;
 
 class Refusal extends Error {}
 
@@ -103,6 +105,7 @@ const status = (s) => {
 /** Runs one tool for a caller FreeFlow vouched for; returns the result and the events it caused. */
 export function runTool(tool, input, caller) {
   const events = [];
+  if (tool !== 'list_tasks' && tool !== 'get_task') version++;
   const ref = (t) => ({ kind: 'task', id: t.id });
   const moved = (t, from) => { if (t.status !== from) events.push({ type: 'task.status_changed', data: { id: t.id, title: t.title, from, to: t.status }, ref: ref(t) }); };
   const assigned = (t, from) => { if (t.assignee && t.assignee !== from) events.push({ type: 'task.assigned', data: { id: t.id, title: t.title, assignee: t.assignee, by: caller.accountId }, ref: ref(t), about: [t.assignee] }); };
@@ -200,7 +203,14 @@ function board(viewer) {
 <style>body{font:14px system-ui;margin:16px}main{display:flex;gap:12px;overflow-x:auto}section{min-width:200px;background:#f8f9fa;border-radius:8px;padding:8px}ul{list-style:none;padding:0}li{background:#fff;border:1px solid #e3e6ea;border-radius:6px;padding:8px;margin:6px 0}</style>
 <p>${viewer ? `Signed in as ${esc(viewer)}.` : 'Open this board from its tab in FreeFlow.'}</p>
 <form method="post" action="tasks"><input name="title" placeholder="New task" required> <button>Add</button></form>
-<main>${columns}</main>`;
+<main>${columns}</main>
+<script>
+  // Changes made elsewhere (an agent's tool call) show without a reload: the board asks for the version every 3 seconds.
+  const seen = ${version};
+  setInterval(async () => {
+    try { const r = await fetch('version'); if (r.ok && (await r.json()).version !== seen) location.reload(); } catch {}
+  }, 3000);
+</script>`;
 }
 
 // ---- the server ----
@@ -233,6 +243,7 @@ export const server = http.createServer(async (req, res) => {
     }
     // The screen, behind the guard: who is looking comes in the guard's headers.
     const viewer = { accountId: req.headers['x-flow-account-id'] ?? 'unknown', displayName: req.headers['x-flow-user-name'] ?? 'someone' };
+    if (req.method === 'GET' && url.pathname === '/version') return json(res, 200, { version });
     if (req.method === 'GET' && url.pathname === '/') return res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(board(req.headers['x-flow-user-name']));
     if (req.method === 'POST' && url.pathname === '/tasks') {
       const title = new URLSearchParams(await read(req)).get('title') ?? '';
