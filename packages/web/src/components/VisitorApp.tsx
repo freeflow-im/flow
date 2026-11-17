@@ -242,13 +242,29 @@ function VisitorJoin({
 
 // ---- inside the channel -----------------------------------------------------------------------------------------------
 
-/** Everything the shared components read from context, for a visitor: their identity, their one channel, live typing. */
-function VisitorChannel({ me: first, onEnded }: { me: VisitorMeDTO; onEnded: (left: boolean) => void }) {
+/**
+ * Everything the shared components read from context, for a visitor: their identity, their one channel, live typing.
+ * The visitor page draws the channel with its header; Meet's chat panel (MeetingChatApp) passes its own `pane`, and
+ * hears of each new message (`onMessage`) for the dot on its Chat tab.
+ */
+export function VisitorChannel({
+  me: first,
+  onEnded,
+  pane,
+  onMessage,
+}: {
+  me: VisitorMeDTO;
+  onEnded: (left: boolean) => void;
+  pane?: (me: VisitorMeDTO) => React.ReactNode;
+  onMessage?: (msg: MessageDTO) => void;
+}) {
   const qc = useQueryClient();
   const runtime = useMemo(() => new VisitorRuntime(first), [first]);
   const [me, setMe] = useState(first);
   const onEndedRef = useRef(onEnded);
   onEndedRef.current = onEnded;
+  const onMessageRef = useRef(onMessage);
+  onMessageRef.current = onMessage;
 
   // Who is in the channel changes as people join and leave: ask again, and let every list read it afresh.
   const refreshMe = useCallback(async () => {
@@ -322,6 +338,7 @@ function VisitorChannel({ me: first, onEnded }: { me: VisitorMeDTO; onEnded: (le
             });
           }
           applyMessageEvent(qc, msg, insert);
+          if (event.type === 'message.created') onMessageRef.current?.(msg);
           // Someone this page does not know yet (they just joined): ask who is here now.
           if (!runtime.me.channel.people.some((p) => p.userId === msg.userId)) void refreshMe();
           break;
@@ -417,8 +434,9 @@ function VisitorChannel({ me: first, onEnded }: { me: VisitorMeDTO; onEnded: (le
           <LiveContext.Provider value={live}>
             <MobileNavContext.Provider value={mobileNav}>
               <div className="flex h-full min-h-0" data-testid="visitor-app">
-                <VisitorChannelPane me={me} onLeave={() => void leave()} />
-                {threadRootId && <ThreadPanel key={threadRootId} rootId={threadRootId} />}
+                {pane ? pane(me) : <VisitorChannelPane me={me} onLeave={() => void leave()} />}
+                {/* A pane of its own (Meet's chat panel) draws the thread itself. */}
+                {!pane && threadRootId && <ThreadPanel key={threadRootId} rootId={threadRootId} />}
               </div>
             </MobileNavContext.Provider>
           </LiveContext.Provider>

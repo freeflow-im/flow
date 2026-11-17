@@ -1,14 +1,17 @@
 // A meeting room (/meet/<code>). A member of the room's organization joins as themselves; anyone else with the link
 // joins as a guest with a name (phase 3, ruling R2). Both go through the check screen first, except a huddle opened from
 // Chat, which joins straight in. Then everyone is in a grid (a shared screen large, with people in a strip), with the
-// controls (mic, camera, share, people, leave) and a People panel. Built on the RealtimeKit core SDK with our own
+// controls (mic, camera, share, people, chat, leave) and a side panel with People and Chat tabs (the Chat tab is Chat's
+// own page in a frame: lib/chat.ts). Built on the RealtimeKit core SDK with our own
 // layout (docs/specs/meetings.md, P2); remote audio plays from an <audio> per person.
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import RealtimeKitClient, { type RTKParticipant, type RTKSelf } from '@cloudflare/realtimekit';
-import { Check, ChevronLeft, Link2, Lock, LockOpen, Mic, MicOff, MonitorUp, PhoneOff, Users, Video, VideoOff } from 'lucide-react';
+import { Check, ChevronLeft, Link2, Lock, LockOpen, MessageSquare, Mic, MicOff, MonitorUp, PhoneOff, Users, Video, VideoOff, X } from 'lucide-react';
 import type { MeetingDTO, MeetingPreviewDTO } from '@flow/shared';
 import { api, isGuestId, MeetApiError, meetingUrl, signInUrl } from '../api';
 import { CheckScreen, type JoinChoice } from './CheckScreen';
+import { guestChat, memberChat, unseenAfter, type RoomChat } from '../lib/chat';
+import { ChatFrame } from './ChatFrame';
 
 type Client = Awaited<ReturnType<typeof RealtimeKitClient.init>>;
 type Person = RTKParticipant | RTKSelf;
@@ -28,7 +31,11 @@ export interface RoomInfo {
   guest: boolean;
   /** The member's view of the room (null for a guest): huddle or not, locked or not. */
   meeting: MeetingDTO | null;
+  /** The conversation on the Chat tab (phase 3b), or none. */
+  chat: RoomChat | null;
 }
+
+type Panel = 'people' | 'chat';
 
 type Phase =
   | { kind: 'loading' }
@@ -128,7 +135,7 @@ function ScreenShare({ person }: { person: Person }) {
   );
 }
 
-function ControlButton({ label, on, danger, onClick, children }: { label: string; on?: boolean; danger?: boolean; onClick: () => void; children: React.ReactNode }) {
+function ControlButton({ label, on, danger, dot, onClick, children }: { label: string; on?: boolean; danger?: boolean; dot?: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
       type="button"
@@ -136,16 +143,39 @@ function ControlButton({ label, on, danger, onClick, children }: { label: string
       title={label}
       aria-pressed={on}
       onClick={onClick}
-      className={`flex size-12 cursor-pointer items-center justify-center rounded-full border-0 text-white ${danger ? 'bg-[#ea4335] hover:bg-[#d93025]' : on ? 'bg-[#8ab4f8] text-[#202124]' : 'bg-[#3c4043] hover:bg-[#4a4f55]'}`}
+      className={`relative flex size-12 cursor-pointer items-center justify-center rounded-full border-0 text-white ${danger ? 'bg-[#ea4335] hover:bg-[#d93025]' : on ? 'bg-[#8ab4f8] text-[#202124]' : 'bg-[#3c4043] hover:bg-[#4a4f55]'}`}
     >
       {children}
+      {dot && <span data-testid="chat-dot" className="absolute right-1.5 top-1.5 size-2.5 rounded-full bg-[#8ab4f8] ring-2 ring-[#202124]" aria-hidden="true" />}
+    </button>
+  );
+}
+
+function PanelTab({ label, selected, dot, onClick }: { label: string; selected: boolean; dot?: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={selected}
+      onClick={onClick}
+      className={`relative cursor-pointer rounded-full border-0 px-3 py-1.5 text-sm font-semibold ${selected ? 'bg-primary/10 text-primary' : 'bg-transparent text-muted hover:bg-black/5'}`}
+    >
+      {label}
+      {dot && <span className="absolute right-0.5 top-1 size-2 rounded-full bg-primary" aria-hidden="true" />}
     </button>
   );
 }
 
 function InRoom({ client, info, onLeft }: { client: Client; info: RoomInfo; onLeft: () => void }) {
   useRoomUpdates(client);
-  const [peopleOpen, setPeopleOpen] = useState(false);
+  const [panel, setPanel] = useState<Panel | null>(null);
+  const toggle = (p: Panel) => setPanel((cur) => (cur === p ? null : p));
+  // Messages posted while the Chat tab is closed: the dot on the Chat button.
+  const [unseen, setUnseen] = useState(0);
+  const chatOpen = panel === 'chat';
+  useEffect(() => {
+    if (chatOpen) setUnseen(0);
+  }, [chatOpen]);
   const [copied, setCopied] = useState(false);
   const copyLink = () => {
     void navigator.clipboard.writeText(meetingUrl(info.ref)).then(() => {
@@ -263,9 +293,23 @@ function InRoom({ client, info, onLeft }: { client: Client; info: RoomInfo; onLe
           )}
         </section>
 
-        {peopleOpen && (
-          <aside className="flex w-[300px] flex-none flex-col overflow-hidden rounded-xl bg-white text-ink" aria-label="People">
-            <h2 className="m-0 border-b border-hairline px-4 py-3 text-sm font-semibold">People ({everyone.length})</h2>
+        {/* The side panel. With a chat it stays mounted while closed (off screen), so the chat keeps listening for the
+            dot and opens where it was. */}
+        {(panel || info.chat) && (
+          <aside
+            className={panel ? 'relative flex w-[340px] flex-none flex-col overflow-hidden rounded-xl bg-white text-ink max-sm:fixed max-sm:inset-0 max-sm:z-20 max-sm:w-auto max-sm:rounded-none' : 'invisible fixed -left-[10000px] top-0 flex h-[600px] w-[340px] flex-col'}
+            aria-label={panel === 'chat' ? 'Chat' : 'People'}
+            aria-hidden={!panel}
+          >
+            <div className="flex flex-none items-center gap-1 border-b border-hairline px-2 py-1.5" role="tablist">
+              <PanelTab label={`People (${everyone.length})`} selected={panel === 'people'} onClick={() => setPanel('people')} />
+              {info.chat && <PanelTab label="Chat" selected={chatOpen} onClick={() => setPanel('chat')} dot={unseen > 0} />}
+              <button type="button" aria-label="Close the panel" title="Close" onClick={() => setPanel(null)} className="ml-auto flex size-8 cursor-pointer items-center justify-center rounded-full border-0 bg-transparent text-muted hover:bg-black/5">
+                <X size={18} />
+              </button>
+            </div>
+            {info.chat && <ChatFrame chat={info.chat} shown={chatOpen} onPosted={(data) => setUnseen((n) => unseenAfter(n, data, chatOpen))} />}
+            {panel === 'people' && (
             <ul className="m-0 flex list-none flex-col gap-2.5 overflow-auto p-4">
               {everyone.map((p) => (
                 <li key={p.id} className="flex items-center gap-2.5 text-[15px]">
@@ -280,6 +324,7 @@ function InRoom({ client, info, onLeft }: { client: Client; info: RoomInfo; onLe
                 </li>
               ))}
             </ul>
+            )}
           </aside>
         )}
       </div>
@@ -294,9 +339,14 @@ function InRoom({ client, info, onLeft }: { client: Client; info: RoomInfo; onLe
         <ControlButton label={self.screenShareEnabled ? 'Stop sharing' : 'Share screen'} on={self.screenShareEnabled} onClick={() => act('share the screen', () => (self.screenShareEnabled ? self.disableScreenShare() : self.enableScreenShare()))}>
           <MonitorUp size={22} />
         </ControlButton>
-        <ControlButton label="People" on={peopleOpen} onClick={() => setPeopleOpen((o) => !o)}>
+        <ControlButton label="People" on={panel === 'people'} onClick={() => toggle('people')}>
           <Users size={22} />
         </ControlButton>
+        {info.chat && (
+          <ControlButton label={unseen > 0 ? `Chat (${unseen} new)` : 'Chat'} on={chatOpen} onClick={() => toggle('chat')} dot={unseen > 0}>
+            <MessageSquare size={22} />
+          </ControlButton>
+        )}
         <button
           type="button"
           onClick={() => void client.leave().finally(onLeft)}
@@ -325,11 +375,11 @@ export function Room({ meetingRef }: { meetingRef: string }) {
       let authToken: string;
       if (entry.meeting) {
         const r = await api.join(entry.meeting.code);
-        room = { ref: r.meeting.code, title: r.meeting.title, host: r.host, guest: false, meeting: r.meeting };
+        room = { ref: r.meeting.code, title: r.meeting.title, host: r.host, guest: false, meeting: r.meeting, chat: memberChat(r.meeting) };
         authToken = r.authToken;
       } else {
         const r = await api.joinAsGuest(entry.preview!.code, choice.name ?? '');
-        room = { ref: r.code, title: r.title, host: false, guest: true, meeting: null };
+        room = { ref: r.code, title: r.title, host: false, guest: true, meeting: null, chat: guestChat(r) };
         authToken = r.authToken;
       }
       if (!mounted.current) return;

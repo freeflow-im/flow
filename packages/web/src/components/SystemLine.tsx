@@ -32,6 +32,16 @@ export function SystemLine({ message }: { message: MessageDTO }) {
       </div>
     );
   }
+  // A meeting chat's session line (Meet phase 3b): "Meeting started · Mon 16 Nov", drawn as a divider across the list.
+  if (message.systemKind === 'meeting_started') {
+    return (
+      <div data-testid={`system-message-${message.id}`} data-kind="meeting-started" role="separator" aria-label={message.body} className="my-2 flex items-center gap-3 px-[22px]">
+        <span className="h-px flex-1 bg-hairline" />
+        <span className="shrink-0 text-[11px] font-semibold text-faint">{message.body}</span>
+        <span className="h-px flex-1 bg-hairline" />
+      </div>
+    );
+  }
   const body = message.body;
   const parts: React.ReactNode[] = [];
   if (message.systemKind === 'file_shared') {

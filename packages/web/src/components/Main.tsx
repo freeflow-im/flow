@@ -10,6 +10,7 @@ import type {
   Event,
   HuddleInviteData,
   HuddleUpdatedData,
+  MeetingChatDTO,
   MessageDTO,
   NotificationDTO,
   TypingData,
@@ -18,14 +19,14 @@ import type {
   WorkspaceMemberDTO,
 } from '@flow/shared';
 import { applyMessageEvent, removeMessageFromCache } from '../lib/messageCache';
-import { applyChannelEmoji, applyHuddle, applyIndicator } from '../lib/channelCache';
+import { applyChannelEmoji, applyHuddle, applyIndicator, isUnlistedChannel } from '../lib/channelCache';
 import { api } from '../lib/api';
 import { shouldOpenArtifact } from '../lib/artifactDelivery';
 import { backendFor } from '../lib/backend';
 import { SocketClient, type SocketStatus, type SocketHandlers } from '../lib/ws';
 import { OrganizationSockets } from '../lib/organizationSockets';
 import { plainBody } from '../lib/format';
-import { ACTIVITY_VIEW_ID, CHANNEL_BROWSER_VIEW_ID, DIRECTORY_VIEW_ID, SCHEDULED_VIEW_ID, SEARCH_VIEW_ID, LiveContext, MobileNavContext, typingKey, useAuth, useRuntime, useSelection } from '../state';
+import { ACTIVITY_VIEW_ID, CHANNEL_BROWSER_VIEW_ID, DIRECTORY_VIEW_ID, MEETINGS_VIEW_ID, SCHEDULED_VIEW_ID, SEARCH_VIEW_ID, LiveContext, MobileNavContext, typingKey, useAuth, useRuntime, useSelection } from '../state';
 import { HuddleProvider, useHuddle, type HuddleState } from '../huddle';
 import { useNameMap, useWorkspaces } from '../hooks';
 import { getHost, isLookingAtApp, onLookingChange } from '../lib/host';
@@ -38,6 +39,7 @@ import SearchView from './SearchView';
 import DirectoryView from './DirectoryView';
 import ChannelBrowserView from './ChannelBrowserView';
 import ScheduledView from './ScheduledView';
+import MeetingsView from './MeetingsView';
 import SidePanel from './SidePanel';
 import { OpenInAppBanner } from './OpenInApp';
 import IncomingHuddle from './IncomingHuddle';
@@ -347,6 +349,12 @@ export default function Main({ onActivityUnread }: { onActivityUnread?: (count: 
           void qc.invalidateQueries({ queryKey: ['channelFiles', msg.channelId] });
         }
         // Sidebar unread counts/ordering still come from the channels query.
+        // A meeting's chat (Meet phase 3b) is not in it: its message moves only the Meetings list, never a sidebar row
+        // or an unread count (the server counts only mentions there, and the list it answers leaves the channel out).
+        if (isUnlistedChannel(qc.getQueryData<{ channels: ChannelDTO[] }>(['channels', event.workspaceId])?.channels, msg.channelId)) {
+          void qc.invalidateQueries({ queryKey: ['meetingChats', event.workspaceId] });
+          break;
+        }
         void qc.invalidateQueries({ queryKey: ['channels', event.workspaceId] });
         break;
       }
@@ -521,6 +529,8 @@ export default function Main({ onActivityUnread }: { onActivityUnread?: (count: 
         void qc.invalidateQueries({ queryKey: ['notifications'] });
         // the sidebar badge is this channel's unread-notification count
         void qc.invalidateQueries({ queryKey: ['channels', event.workspaceId] });
+        // …or, for a mention in a meeting's chat, the Meetings item's.
+        void qc.invalidateQueries({ queryKey: ['meetingChats', event.workspaceId] });
         // …and the rail badge (#345) counts these same rows per workspace.
         void qc.invalidateQueries({ queryKey: ['workspaces'] });
         // "Looking at it" means the row is actually on screen: this channel,
@@ -569,6 +579,7 @@ export default function Main({ onActivityUnread }: { onActivityUnread?: (count: 
         void refreshNotificationBadge();
         // rows can span workspaces (Activity feed) — refresh every channel list
         void qc.invalidateQueries({ queryKey: ['channels'] });
+        void qc.invalidateQueries({ queryKey: ['meetingChats'] });
         // …and the rail badges, which another session's reading also moves.
         void qc.invalidateQueries({ queryKey: ['workspaces'] });
         break;
@@ -595,12 +606,14 @@ export default function Main({ onActivityUnread }: { onActivityUnread?: (count: 
       : `${sender} mentioned you`;
     // Name the conversation (#460's subtitle): the channel when it has a
     // name; a DM already names its sender in the title.
-    const channel = qc.getQueryData<{ channels: ChannelDTO[] }>(['channels', n.workspaceId])?.channels.find((c) => c.id === n.channelId);
+    const channel = qc.getQueryData<{ channels: ChannelDTO[] }>(['channels', n.workspaceId])?.channels.find((c) => c.id === n.channelId)
+      // A meeting's chat is not in the channel list: it is named by its meeting.
+      ?? qc.getQueryData<{ chats: MeetingChatDTO[] }>(['meetingChats', n.workspaceId])?.chats.find((c) => c.channel.id === n.channelId)?.channel;
     const prefs = authRef.current.user.notificationPrefs;
     getHost().notifications.show({
       id: n.id,
       title,
-      ...(channel?.name ? { subtitle: `#${channel.name}` } : {}),
+      ...(channel?.name ? { subtitle: `#${channel.name}` } : channel?.meeting ? { subtitle: channel.meeting.title } : {}),
       body: plainBody(n.message.body, namesRef.current),
       // #251: the same `sound` pref the phone honours.
       silent: prefs.sound === false,
@@ -686,6 +699,8 @@ export default function Main({ onActivityUnread }: { onActivityUnread?: (count: 
               <ChannelBrowserView />
             ) : sel.channelId === SEARCH_VIEW_ID ? (
               <SearchView />
+            ) : sel.channelId === MEETINGS_VIEW_ID ? (
+              <MeetingsView />
             ) : sel.channelId ? (
               <>
                 <ChannelView key={sel.channelId} channelId={sel.channelId} />

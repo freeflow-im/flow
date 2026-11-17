@@ -14,4 +14,11 @@ describe('SystemLine', () => {
     expect(html).toContain('Ann shared Q4 plan with you\n');
     expect(line('member_joined', 'Bob joined https://app.example/x')).not.toContain('<a');
   });
+
+  it('draws a meeting chat’s session line as a divider with its date', () => {
+    const html = line('meeting_started', 'Meeting started · Mon 16 Nov');
+    expect(html).toContain('data-kind="meeting-started"');
+    expect(html).toContain('role="separator"');
+    expect(html).toContain('>Meeting started · Mon 16 Nov</span>');
+  });
 });

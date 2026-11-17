@@ -36,6 +36,8 @@ export function toChannelDTO(
     indicator?: ChannelIndicatorState | null | undefined;
     huddleParticipants?: HuddleParticipantDTO[] | undefined;
     memberCount?: number | undefined;
+    /** A meeting chat's meeting (kind `meeting` only). */
+    meeting?: { code: string; title: string } | undefined;
   },
 ): ChannelDTO {
   const dto: ChannelDTO = {
@@ -70,6 +72,7 @@ export function toChannelDTO(
   // Same absent-means-quiet convention as indicator, for the same reason:
   // every other DTO path (create, patch, join…) leaves this out entirely.
   if (opts.huddleParticipants?.length) dto.huddleParticipants = opts.huddleParticipants;
+  if (opts.meeting && c.kind === 'meeting') dto.meeting = opts.meeting;
   return dto;
 }
 
@@ -165,6 +168,7 @@ async function requireValidParent(workspaceId: string, callerId: string, parentI
   if (!parent || parent.workspaceId !== workspaceId) throw notFound('parent channel not found');
   if (parent.archivedAt) throw badRequest('parent_archived', 'cannot nest under an archived channel');
   if (parent.parentId) throw badRequest('parent_is_child', 'sub-channels can only be one level deep');
+  if (parent.kind === 'meeting') throw badRequest('parent_is_meeting', 'a meeting chat has no sub-channels');
   // Membership in the parent, not mere visibility: nesting under a channel is a
   // write to it, and for a DM the id alone must not be enough to attach to it.
   const mine = await db
@@ -366,10 +370,11 @@ export async function listChannels(
         channelMembers,
         and(eq(channelMembers.channelId, channels.id), eq(channelMembers.userId, userId)),
       )
+      // Meeting chats (Meet phase 3b) are never in the channel list, on any client: GET …/meetings/chats lists them.
       .where(
         opts.includeArchived
-          ? eq(channels.workspaceId, workspaceId)
-          : and(eq(channels.workspaceId, workspaceId), isNull(channels.archivedAt)),
+          ? and(eq(channels.workspaceId, workspaceId), ne(channels.kind, 'meeting'))
+          : and(eq(channels.workspaceId, workspaceId), isNull(channels.archivedAt), ne(channels.kind, 'meeting')),
       )
       .orderBy(channels.name),
   ]);

@@ -7,7 +7,7 @@ import { api } from '../lib/api';
 import { artifactGlyph } from '../lib/fileKind';
 import { dmTitle, isSelfDm as isSelfDmChannel } from '../lib/channelTitle';
 import { workspaceExit } from '../lib/workspaceExit';
-import { ACTIVITY_VIEW_ID, CHANNEL_BROWSER_VIEW_ID, DIRECTORY_VIEW_ID, SCHEDULED_VIEW_ID, useAuth, useLive, useMobileNav, useRuntime, useSelection } from '../state';
+import { ACTIVITY_VIEW_ID, CHANNEL_BROWSER_VIEW_ID, DIRECTORY_VIEW_ID, MEETINGS_VIEW_ID, SCHEDULED_VIEW_ID, useAuth, useLive, useMobileNav, useRuntime, useSelection } from '../state';
 import type { Selection } from '../state';
 import { useCapabilities } from '../lib/backend';
 import {
@@ -21,6 +21,8 @@ import {
   useNameMap,
   useWorkspaces,
   useSwitcherEntries,
+  meetingMentions,
+  useMeetingChats,
 } from '../hooks';
 import {
   ChannelMenu,
@@ -566,6 +568,8 @@ export default function Sidebar() {
         data-sidebar-scroll
         className="mc-scroll mc-scroll-dark min-h-0 flex-1 overflow-y-auto px-3.5 pb-2 text-sm"
       >
+        {/* Meetings (Meet phase 3b): the meeting chats, which the channel list leaves out. Shown once there is one. */}
+        <MeetingsRow workspaceId={sel.workspaceId} active={sel.channelId === MEETINGS_VIEW_ID} onOpen={() => sel.selectChannel(MEETINGS_VIEW_ID)} />
         <SectionHeader
           label="Channels"
           action={canManage ? {
@@ -965,6 +969,36 @@ function BrowseAllRow({ active, onOpen }: { active: boolean; onOpen: () => void 
     >
       <span className={active ? 'opacity-70' : 'text-white/50'}>⋯</span>
       <span className={`truncate ${active ? 'font-[650]' : 'text-white/60'}`}>Browse all</span>
+    </button>
+  );
+}
+
+/**
+ * The Meetings entry at the top of the channel list (Meet phase 3b): opens the list of meeting chats, with a badge for
+ * the mentions of you in them (their only unread). Absent until the person has a meeting chat, so an organization that
+ * does not use Meet never sees it.
+ */
+export function MeetingsRow({ workspaceId, active, onOpen }: { workspaceId: string | null; active: boolean; onOpen: () => void }) {
+  const chats = useMeetingChats(workspaceId);
+  const mentions = meetingMentions(chats.data);
+  const live = (chats.data ?? []).some((c) => c.live);
+  if (!active && (chats.data?.length ?? 0) === 0) return null;
+  return (
+    <button
+      data-testid="sidebar-meetings"
+      data-unread={mentions}
+      title="Your meetings’ chats"
+      className={`mb-1 flex w-full items-center gap-[9px] rounded-lg px-2 py-[7px] text-left ${
+        active ? 'bg-white text-accent-deep' : 'hover:bg-white/10'
+      }`}
+      onClick={onOpen}
+    >
+      <span className={active ? 'opacity-70' : 'text-white/60'} aria-hidden="true">🎥</span>
+      <span className={`min-w-0 flex-1 truncate ${active ? 'font-[650]' : 'text-white/82'}`}>Meetings</span>
+      {live && <span data-testid="sidebar-meetings-live" title="A meeting is live" className="size-2 shrink-0 rounded-full bg-red-500" />}
+      {mentions > 0 && (
+        <span className="shrink-0 rounded-[9px] bg-unread px-[5px] py-px text-[10px] font-bold text-white">{Math.min(mentions, 99)}</span>
+      )}
     </button>
   );
 }

@@ -13,6 +13,7 @@ This file keeps two things:
 ## Parity
 
 - **The admin agent and the panel's agent picker are on web only (2026-11-16, docs/specs/agents.md §1.4).** Carl works in the suite panel on web Admin and Home (and the desktop shell); macOS and iOS have no Admin app and no agent picker, and their member lists show Carl to owners and admins as an agent who does not answer in Chat (deliberate for Admin; picker is a gap to close with the native assistant panel).
+- **Meetings in Chat and the in-meeting chat are web only (2026-11-16, docs/specs/meetings.md §9 3b).** Web Chat's Meetings list and Meet's Chat tab; macOS and iOS get a meeting chat's mentions (Activity, push) and open its channel from them, but have no Meetings list (gap to close; Meet itself is web and desktop only).
 - **Channel visitors are invited and labelled on web only (2026-11-16, docs/specs/chat-visitors.md).** Invite a visitor, the Visitors section and the visitor's own page are web Chat (V11, deliberate); the Visitor label on a visitor's name is web only too, so macOS and iOS show a visitor's messages with no label (gap to close, phase 3 of the spec).
 - **Picking the address coworkers see is on web only (2026-11-15).** A person without a hosted address picks a linked mailbox in web Mail's account settings; macOS and iOS have no Mail and show no addresses (deliberate).
 - **Your own email aliases are managed on web only (2026-11-16).** Members add and remove aliases in web Mail's account settings, and admins manage addresses in web Admin; macOS and iOS have no Mail or Admin (deliberate).

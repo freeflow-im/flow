@@ -278,7 +278,11 @@ export interface JoinLinkPreviewDTO {
   name: string;
 }
 
-export type ChannelKind = 'standard' | 'dm' | 'group_dm';
+/**
+ * `meeting`: a Meet room's chat (docs/specs/meetings.md §9 3b). Private, no name (clients show `ChannelDTO.meeting.title`),
+ * left out of the channel list (GET /v1/workspaces/:id/meetings/chats lists them).
+ */
+export type ChannelKind = 'standard' | 'dm' | 'group_dm' | 'meeting';
 
 /** channel_members.notify_level: 0=mute, 1=mentions (default), 2=all */
 export type NotifyLevel = 0 | 1 | 2;
@@ -350,6 +354,12 @@ export interface MeetingDTO {
   channelId: string | null;
   /** A host locked it: no new guests may join (members still can). */
   locked: boolean;
+  /**
+   * The room's chat channel (kind `meeting`, Meet phase 3b), made the first time anyone joins; null for a huddle (its
+   * chat is its conversation, `channelId`) and for a room nobody has joined yet. A member reads and posts in it through
+   * the ordinary channel routes.
+   */
+  chatChannelId: string | null;
 }
 
 /** Someone in a live meeting, as RealtimeKit reports its active session. */
@@ -403,6 +413,30 @@ export interface MeetingGuestJoinDTO {
   code: string;
   title: string;
   authToken: string;
+  /**
+   * The meeting's chat channel, when the guest is a visitor of it (Meet phase 3b): the answer also sets the `vsid` cookie,
+   * so the page reads and posts through /v1/visitor/* and the visitor socket. Null when there is no chat for guests
+   * (visitors turned off in the organization).
+   */
+  chatChannelId: string | null;
+}
+
+/**
+ * GET /v1/workspaces/:id/meetings/chats: one meeting chat the caller is in (Chat's "Meetings" list, Meet phase 3b).
+ */
+export interface MeetingChatDTO {
+  /** The channel (kind `meeting`, with `meeting`); `unreadNotifications` counts only mentions of the caller. */
+  channel: ChannelDTO;
+  meeting: MeetingDTO;
+  /** The channel's members (the creator and every member who joined), not guests. */
+  peopleIds: string[];
+  /** When the room's latest session started (its date line), if one has. */
+  lastSessionAt: string | null;
+  /** The newest message in the channel, if any (date lines included). */
+  lastMessageAt: string | null;
+  /** A session is running now (Meet's Live now), with who is in it. */
+  live: boolean;
+  livePeople: MeetingPersonDTO[];
 }
 
 export interface ChannelDTO {
@@ -480,6 +514,8 @@ export interface ChannelDTO {
    * carry every change after that. Absent/empty means no active huddle.
    */
   huddleParticipants?: HuddleParticipantDTO[];
+  /** For kind `meeting` only: the meeting whose chat this is (clients show its title as the channel's name). */
+  meeting?: { code: string; title: string };
 }
 
 export interface ReactionAggDTO {
@@ -673,7 +709,9 @@ export type SystemMessageKind =
   | 'huddle_ended'
   // A file shared with a channel, or with one person in their DM (platform phase 3.3): "Ann shared Q4 plan with this
   // channel", then the file's address on its own line.
-  | 'file_shared';
+  | 'file_shared'
+  // A meeting chat's date line, one per session (Meet phase 3b): "Meeting started · Mon 16 Nov".
+  | 'meeting_started';
 
 /**
  * The huddle outcome kinds (#436). Split out because they are the system
@@ -1051,7 +1089,7 @@ export interface VisitorChannelPersonDTO {
 export interface VisitorMeDTO {
   user: { id: string; displayName: string; visitor: true };
   organization: { id: string; name: string; avatarUrl: string | null };
-  channel: { id: string; name: string; topic: string | null; people: VisitorChannelPersonDTO[] };
+  channel: { id: string; name: string; topic: string | null; people: VisitorChannelPersonDTO[]; meeting?: { code: string; title: string } };
   seesFrom: string;
 }
 

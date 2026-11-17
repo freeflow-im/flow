@@ -6,8 +6,17 @@
 // A conversation's huddle is a room too (phase 2): `startHuddle` makes the conversation's one room and rings its
 // people; the room's join and leave move the huddle roster (./huddles.ts), and RTK's webhook is the safety net for a
 // tab closed without leaving.
-import { and, desc, eq, gt, or } from 'drizzle-orm';
-import type { HuddleStartDTO, LiveMeetingDTO, MeetingDTO, MeetingGuestJoinDTO, MeetingJoinDTO, MeetingPersonDTO, MeetingPreviewDTO } from '@flow/shared';
+import { and, desc, eq, gt, inArray, isNull, lt, or, sql } from 'drizzle-orm';
+import type {
+  HuddleStartDTO,
+  LiveMeetingDTO,
+  MeetingChatDTO,
+  MeetingDTO,
+  MeetingGuestJoinDTO,
+  MeetingJoinDTO,
+  MeetingPersonDTO,
+  MeetingPreviewDTO,
+} from '@flow/shared';
 import { db, schema } from '../db/index.js';
 import { config } from '../config.js';
 import { newId } from '../lib/ids.js';
@@ -15,6 +24,9 @@ import { ApiError, badRequest, notFound } from '../lib/errors.js';
 import { isUniqueViolation, requireMembership } from './workspaces.js';
 import { clearHuddle, enterHuddle, exitHuddle, requireHuddleEligible, requireHuddleSize } from './huddles.js';
 import { startOrJoinRing } from './huddleInvites.js';
+import { toChannelDTO } from './channels.js';
+import { postMeetingStartedLine } from './messages.js';
+import { addMeetingGuestVisitor, endMeetingVisits } from './visitors.js';
 
 const HOST_PRESET = 'group_call_host';
 const MEMBER_PRESET = 'group_call_participant';
@@ -29,6 +41,8 @@ const MAX_TITLE = 120;
 /** Letters for a meeting code: no i, l or o, which read as 1 or 0 when a link is typed from a screen. */
 const CODE_LETTERS = 'abcdefghjkmnpqrstuvwxyz';
 const CODE_SHAPE = /^[a-z]{3}-[a-z]{4}-[a-z]{3}$/;
+/** Joins this close to a session's start belong to it: RTK may not report a session until its first person connects. */
+const SESSION_GAP_MS = 2 * 60_000;
 
 /** A meeting's short code, `kqd-wmzt-fra`: 23^10 (about 4e13) codes, so a clash is not a practical worry. */
 export function newMeetingCode(random: (n: number) => Uint8Array = (n) => crypto.getRandomValues(new Uint8Array(n))): string {
@@ -38,6 +52,7 @@ export function newMeetingCode(random: (n: number) => Uint8Array = (n) => crypto
 }
 
 type MeetingRow = typeof schema.meetings.$inferSelect;
+type ChannelRow = typeof schema.channels.$inferSelect;
 
 function requireMeet(): { accountId: string; appId: string; token: string } {
   const { rtkAccountId: accountId, rtkAppId: appId, rtkApiToken: token } = config;
@@ -72,6 +87,7 @@ const toDTO = (m: MeetingRow): MeetingDTO => ({
   createdAt: m.createdAt.toISOString(),
   channelId: m.channelId ?? null,
   locked: m.locked ?? false,
+  chatChannelId: m.chatChannelId ?? null,
 });
 
 /** Who may be in a room: any member of its organization, and for a huddle, whoever may be in that conversation. */
@@ -97,7 +113,7 @@ export async function createMeeting(workspaceId: string, userId: string, title?:
   if (!created) throw new ApiError(502, 'meet_upstream', 'The meeting service did not answer');
   const row = { id: newId(), code: newMeetingCode(), workspaceId, rtkMeetingId: created.id, title: name, createdBy: userId, createdAt: new Date(), channelId: null, locked: false };
   await db.insert(schema.meetings).values(row);
-  return toDTO({ ...row, lastJoinedAt: null });
+  return toDTO({ ...row, lastJoinedAt: null, chatChannelId: null, sessionStartedAt: null });
 }
 
 /**
@@ -168,8 +184,150 @@ export async function joinMeeting(ref: string, userId: string): Promise<MeetingJ
       });
   }
   await db.update(schema.meetings).set({ lastJoinedAt: new Date() }).where(eq(schema.meetings.id, m.id));
-  if (m.channelId) enterHuddle(m.channelId, m.workspaceId, userId);
-  return { meeting: toDTO(m), authToken, host };
+  if (m.channelId) {
+    enterHuddle(m.channelId, m.workspaceId, userId);
+    return { meeting: toDTO(m), authToken, host };
+  }
+  // Any other room has its chat (phase 3b): the member is in it from their first join on.
+  const chat = await meetingChat(m);
+  await db.insert(schema.channelMembers).values({ channelId: chat.id, userId }).onConflictDoNothing();
+  await noteSession(m, chat, userId);
+  return { meeting: toDTO({ ...m, chatChannelId: chat.id }), authToken, host };
+}
+
+// ---- the meeting's chat (docs/specs/meetings.md §9 3b) ------------------------------------------------------------------
+
+/**
+ * The room's chat: a private channel of kind `meeting` with no name, made the first time anyone joins (never for a
+ * huddle), with the room's creator as its first member. One per room, not per session.
+ */
+async function meetingChat(m: MeetingRow): Promise<ChannelRow> {
+  if (m.chatChannelId) {
+    const [c] = await db.select().from(schema.channels).where(eq(schema.channels.id, m.chatChannelId)).limit(1);
+    if (c) return c;
+  }
+  const chan: ChannelRow = {
+    id: newId(), workspaceId: m.workspaceId, name: null, kind: 'meeting', dmKey: null, topic: null, isPrivate: true,
+    createdBy: m.createdBy, createdAt: new Date(), archivedAt: null, parentId: null, emoji: null,
+  };
+  await db.insert(schema.channels).values(chan);
+  const won = await db
+    .update(schema.meetings)
+    .set({ chatChannelId: chan.id })
+    .where(and(eq(schema.meetings.id, m.id), or(isNull(schema.meetings.chatChannelId), eq(schema.meetings.chatChannelId, m.chatChannelId ?? ''))))
+    .returning({ id: schema.meetings.id });
+  if (!won.length) {
+    // Someone else's join made it first: theirs is the one.
+    await db.delete(schema.channels).where(eq(schema.channels.id, chan.id));
+    const [again] = await db.select().from(schema.meetings).where(eq(schema.meetings.id, m.id)).limit(1);
+    if (!again?.chatChannelId) throw notFound('meeting not found');
+    return meetingChat(again);
+  }
+  m.chatChannelId = chan.id;
+  await db.insert(schema.channelMembers).values({ channelId: chan.id, userId: m.createdBy }).onConflictDoNothing();
+  return chan;
+}
+
+/** "Mon 16 Nov" in a person's time zone (UTC when theirs is unknown). */
+export function sessionDate(at: Date, timeZone: string | null | undefined): string {
+  const fmt = (tz: string) => new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: tz }).format(at).replace(/,/g, '');
+  try {
+    return fmt(timeZone || 'UTC');
+  } catch {
+    return fmt('UTC');
+  }
+}
+
+/**
+ * A session begins (the first join while RTK has none running, or RTK's meeting.started): the room's chat gets its date
+ * line, "Meeting started · Mon 16 Nov", and the visits of earlier sessions' guests end. Joins within a couple of minutes
+ * of a start belong to that session (RTK reports a session only once someone connects), so two people arriving together
+ * post one line. Returns the session's start when this call began one, else null.
+ */
+async function beginSession(m: MeetingRow, chat: ChannelRow, authorId: string, at = new Date()): Promise<Date | null> {
+  const began = await db
+    .update(schema.meetings)
+    .set({ sessionStartedAt: at })
+    .where(
+      and(
+        eq(schema.meetings.id, m.id),
+        or(isNull(schema.meetings.sessionStartedAt), lt(schema.meetings.sessionStartedAt, new Date(at.getTime() - SESSION_GAP_MS))),
+      ),
+    )
+    .returning({ id: schema.meetings.id });
+  if (!began.length) return null;
+  m.sessionStartedAt = at;
+  await endMeetingVisits(chat.id, at);
+  const [author] = await db.select({ timezone: schema.users.timezone }).from(schema.users).where(eq(schema.users.id, authorId)).limit(1);
+  await postMeetingStartedLine(chat, authorId, `Meeting started · ${sessionDate(at, author?.timezone)}`, at);
+  return at;
+}
+
+/** On a join: begins a session when RTK has none running. An RTK that does not answer begins none (no line is better than ending guests' visits by mistake). */
+async function noteSession(m: MeetingRow, chat: ChannelRow, authorId: string): Promise<Date | null> {
+  let running: boolean;
+  try {
+    const session = await rtk<RtkSession>('GET', `/meetings/${m.rtkMeetingId}/active-session`);
+    running = !!session && session.live_participants !== 0;
+  } catch {
+    return null;
+  }
+  return running ? null : beginSession(m, chat, authorId);
+}
+
+/**
+ * GET /v1/workspaces/:id/meetings/chats: the meeting chats the caller is in (Chat's "Meetings"), live ones first, then
+ * newest session or message first. Each has its channel (unreadNotifications counts only mentions), meeting and people.
+ */
+export async function meetingChats(workspaceId: string, userId: string): Promise<MeetingChatDTO[]> {
+  await requireMembership(workspaceId, userId);
+  const rows = await db
+    .select({ m: schema.meetings, c: schema.channels, lastReadMsgId: schema.channelMembers.lastReadMsgId, notifyLevel: schema.channelMembers.notifyLevel })
+    .from(schema.meetings)
+    .innerJoin(schema.channels, eq(schema.channels.id, schema.meetings.chatChannelId))
+    .innerJoin(schema.channelMembers, and(eq(schema.channelMembers.channelId, schema.channels.id), eq(schema.channelMembers.userId, userId)))
+    .where(and(eq(schema.meetings.workspaceId, workspaceId), isNull(schema.channels.archivedAt)));
+  if (!rows.length) return [];
+  const ids = rows.map((r) => r.c.id);
+  const [members, lastMessages, mentions] = await Promise.all([
+    db.select({ channelId: schema.channelMembers.channelId, userId: schema.channelMembers.userId }).from(schema.channelMembers).where(inArray(schema.channelMembers.channelId, ids)),
+    db
+      .select({ channelId: schema.messages.channelId, at: sql<number>`max(${schema.messages.createdAt})` })
+      .from(schema.messages)
+      .where(and(inArray(schema.messages.channelId, ids), isNull(schema.messages.deletedAt)))
+      .groupBy(schema.messages.channelId),
+    db
+      .select({ channelId: schema.notifications.channelId, n: sql<number>`count(*)` })
+      .from(schema.notifications)
+      .where(and(eq(schema.notifications.userId, userId), isNull(schema.notifications.readAt), inArray(schema.notifications.channelId, ids)))
+      .groupBy(schema.notifications.channelId),
+  ]);
+  const people = new Map<string, string[]>();
+  for (const r of members) people.set(r.channelId, [...(people.get(r.channelId) ?? []), r.userId]);
+  const lastAt = new Map(lastMessages.map((r) => [r.channelId, Number(r.at)]));
+  const unread = new Map(mentions.map((r) => [r.channelId, Number(r.n)]));
+  const recent = Date.now() - LIVE_WINDOW_MS;
+  const live = await Promise.all(
+    rows.map(async ({ m }) => (config.rtkEnabled && m.lastJoinedAt && m.lastJoinedAt.getTime() > recent ? await liveSession(m).catch(() => null) : null)),
+  );
+  const chats = rows.map(({ m, c, lastReadMsgId, notifyLevel }, i): MeetingChatDTO => {
+    const meeting = toDTO(m);
+    const last = lastAt.get(c.id);
+    return {
+      channel: toChannelDTO(c, {
+        isMember: true, lastReadMsgId, notifyLevel, unreadCount: 0, unreadNotifications: unread.get(c.id) ?? 0,
+        meeting: { code: meeting.code, title: m.title },
+      }),
+      meeting,
+      peopleIds: people.get(c.id) ?? [],
+      lastSessionAt: m.sessionStartedAt?.toISOString() ?? null,
+      lastMessageAt: last ? new Date(last).toISOString() : null,
+      live: !!live[i],
+      livePeople: live[i]?.people ?? [],
+    };
+  });
+  const newest = (x: MeetingChatDTO) => Math.max(Date.parse(x.lastSessionAt ?? '') || 0, Date.parse(x.lastMessageAt ?? '') || 0, Date.parse(x.channel.createdAt));
+  return chats.sort((a, b) => Number(b.live) - Number(a.live) || newest(b) - newest(a));
 }
 
 /** RTK's expiry format: whole seconds, UTC. */
@@ -217,7 +375,7 @@ export async function previewMeeting(code: string): Promise<MeetingPreviewDTO> {
  * A guest's way in (ruling R2: straight in, no waiting room). Each join is a new RTK guest: a guest has no account to
  * tie a participant to. Refused for a huddle (a conversation's call is for its members) and while a host has locked it.
  */
-export async function joinAsGuest(code: string, name: string): Promise<MeetingGuestJoinDTO> {
+export async function joinAsGuest(code: string, name: string): Promise<{ join: MeetingGuestJoinDTO; visitorToken: string | null }> {
   requireMeet();
   const shown = name.replace(/\s+/g, ' ').trim().slice(0, MAX_GUEST_NAME);
   if (!shown) throw badRequest('validation', 'name: enter your name');
@@ -233,7 +391,15 @@ export async function joinAsGuest(code: string, name: string): Promise<MeetingGu
   });
   if (!added) throw new ApiError(502, 'meet_upstream', 'The meeting service did not answer');
   await db.update(schema.meetings).set({ lastJoinedAt: new Date() }).where(eq(schema.meetings.id, m.id));
-  return { code: m.code ?? code, title: m.title, authToken: added.token };
+  // Phase 3b: the guest is a visitor of the meeting's chat, seeing from the moment they joined (from their session's date
+  // line when their join began the session), until the session ends.
+  const chat = await meetingChat(m);
+  const began = await noteSession(m, chat, m.createdBy);
+  const visit = await addMeetingGuestVisitor(chat, shown, began ?? new Date());
+  return {
+    join: { code: m.code ?? code, title: m.title, authToken: added.token, chatChannelId: visit ? chat.id : null },
+    visitorToken: visit?.sessionToken ?? null,
+  };
 }
 
 /** Lock or unlock a meeting (hosts only; not a huddle). Locked keeps new guests out; members still join. */
@@ -288,7 +454,7 @@ async function channelRoom(chan: { id: string; workspaceId: string; kind: string
   const title = await huddleTitle(chan, userId);
   const created = await rtk<{ id: string }>('POST', '/meetings', { title });
   if (!created) throw new ApiError(502, 'meet_upstream', 'The meeting service did not answer');
-  const row = { id: newId(), code: newMeetingCode(), workspaceId: chan.workspaceId, rtkMeetingId: created.id, title, createdBy: userId, createdAt: new Date(), channelId: chan.id, lastJoinedAt: null, locked: false };
+  const row = { id: newId(), code: newMeetingCode(), workspaceId: chan.workspaceId, rtkMeetingId: created.id, title, createdBy: userId, createdAt: new Date(), channelId: chan.id, lastJoinedAt: null, locked: false, chatChannelId: null, sessionStartedAt: null };
   try {
     await db.insert(schema.meetings).values(row);
     return row;
@@ -315,7 +481,10 @@ export async function startHuddle(channelId: string, userId: string): Promise<Hu
   return { meeting: toDTO(room), invite, unavailable };
 }
 
-/** A RealtimeKit webhook, already verified by the Worker (routes/org.ts). Only huddles care, to drop who left. */
+/**
+ * A RealtimeKit webhook, already verified by the Worker (routes/org.ts). Huddles drop who left; a meeting's chat gets its
+ * date line on meeting.started (if a join has not already posted it) and ends its guests' visits on meeting.ended.
+ */
 export async function handleRtkWebhook(event: {
   event?: string;
   meeting?: { id?: string };
@@ -324,7 +493,15 @@ export async function handleRtkWebhook(event: {
   const rtkMeetingId = event.meeting?.id;
   if (!rtkMeetingId) return;
   const [m] = await db.select().from(schema.meetings).where(eq(schema.meetings.rtkMeetingId, rtkMeetingId)).limit(1);
-  if (!m?.channelId) return;
+  if (!m) return;
+  if (!m.channelId) {
+    if (!m.chatChannelId) return;
+    const [chat] = await db.select().from(schema.channels).where(eq(schema.channels.id, m.chatChannelId)).limit(1);
+    if (!chat) return;
+    if (event.event === 'meeting.started') await beginSession(m, chat, m.createdBy);
+    else if (event.event === 'meeting.ended') await endMeetingVisits(chat.id);
+    return;
+  }
   if (event.event === 'meeting.participantLeft' && event.participant?.customParticipantId) {
     await exitHuddle(m.channelId, event.participant.customParticipantId);
   } else if (event.event === 'meeting.ended') {
