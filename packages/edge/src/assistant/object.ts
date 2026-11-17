@@ -9,6 +9,8 @@
 // The Worker (routes/assistant.ts) serves Docs' old paths here (/api/agent, /api/agent/turn, /api/agent/reset,
 // /api/agent/permission, /api/settings/assistant), so the three clients' panels talk to it unchanged. The chats used to be
 // in each organization's Docs object; POST /v1/admin/assistant/migrate copies them here once (`importChat`, `importRows`).
+import { subscriptionsAs } from '../events/subscriptions';
+import type { EventToolContext } from '../events/eventTools';
 import Anthropic from '@anthropic-ai/sdk';
 import { DurableObject } from 'cloudflare:workers';
 import { Hono, type Context } from 'hono';
@@ -420,13 +422,15 @@ export class Assistant extends DurableObject<AssistantEnv> {
         const apps = appToolContexts(this.env, async () => who?.caller ?? null, this.origin);
         const memory = new MemoryStore(this.sql, this.memoryScope(userId, who));
         const admin = this.adminContext(who);
+        // Automations (onboarding.md §4): a person's own assistant makes and lists them as the person; a shared agent none.
+        const events = who && personalTurn(who) ? this.eventsContext(who) : undefined;
         // send_email (mailApprovals.ts): a personal agent's, as its person; a shared agent sends none.
         const mailApproval = mail && who && personalTurn(who) ? (input: DraftInput) => this.requestMailApproval(input, mail, who, userId) : undefined;
         // The installed apps' tools (user-apps.md §5), as the turn's caller: the Org object checks the scopes again.
         const appCaller = this.appCallerOf(who);
         const ORG = this.env.ORG;
         const userApps = appCaller && ORG ? (name: string, input: Record<string, unknown>) => runAppTool({ ORG }, appCaller, name, input) : undefined;
-        return { ...(docs ? { docs } : {}), ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}), ...(apps ? { apps } : {}), ...(admin ? { admin } : {}), ...(mailApproval ? { mailApproval } : {}), ...(userApps ? { userApps } : {}), memory };
+        return { ...(docs ? { docs } : {}), ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}), ...(apps ? { apps } : {}), ...(admin ? { admin } : {}), ...(mailApproval ? { mailApproval } : {}), ...(userApps ? { userApps } : {}), ...(events ? { events } : {}), memory };
       },
       // The agent's memory files, listed at the start of each request (agents.md §6.1, loading).
       notes: (userId: string) => new MemoryStore(this.sql, this.memoryScope(userId, this.turnWho.get(userId) ?? this.who)).listing(),
@@ -489,6 +493,15 @@ export class Assistant extends DurableObject<AssistantEnv> {
           }
         : {}),
     };
+  }
+
+  /** The event tools' context (events/eventTools.ts) as the turn's person: their subscriptions, as the HTTP routes make them. */
+  private eventsContext(who: Who): EventToolContext | undefined {
+    const { EVENTS, ORG } = this.env;
+    const c = who.caller;
+    if (!EVENTS || !ORG || !c.user || !c.account) return undefined;
+    const org = c.account.organizationId;
+    return { subscriptions: subscriptionsAs(EVENTS.get(EVENTS.idFromName(org)), ORG.get(ORG.idFromName(org)) as never, c.account.id, c.user.id, c.account.role, org) };
   }
 
   /** Calendar's tools: the account's Calendar object (or a shared calendar's owner's), as routes/calendar.ts reaches them. */

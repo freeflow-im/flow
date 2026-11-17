@@ -16,7 +16,7 @@ import { TOOL_DEFS } from '@flow/docs/server/agent/tools.ts';
 import { CLIENT_TOOLS } from '@flow/docs/shared/agent/protocol.ts';
 import { ASSISTANT_MAIL_TOOLS, MAIL_TOOLS } from '../imap/mailTools.ts';
 import { ASSISTANT_CALENDAR_TOOLS, CALENDAR_TOOLS } from '../calendar/calendarTools.ts';
-import { EVENT_TOOLS } from '../events/eventTools.ts';
+import { ASSISTANT_EVENT_TOOLS, EVENT_TOOLS } from '../events/eventTools.ts';
 import { SCOPE_GROUPS } from '../directory/mcpOAuth.ts';
 import { toolLabel } from '@flow/docs/client/src/agent/describe.ts';
 import { BUILT_IN_TOOLS } from '../../../agent-bridge/src/mcp-server.ts';
@@ -95,7 +95,7 @@ async function fromImplementations(): Promise<ToolDefinition[]> {
   for (const { name, description, input } of assistantTools) {
     // Chat's run in the Worker when a Chat turn pauses (assistant/chatTools.ts), as a page's browser tools run in its page.
     const kind = CLIENT_TOOLS.has(name) || ASSISTANT_CHAT_TOOLS.has(name) ? 'browser' : 'server';
-    const app = assistantMail.has(name) ? 'mail' : assistantCalendar.has(name) ? 'calendar' : ASSISTANT_CHAT_TOOLS.has(name) ? 'chat' : 'docs';
+    const app = assistantMail.has(name) ? 'mail' : assistantCalendar.has(name) ? 'calendar' : ASSISTANT_EVENT_TOOLS.has(name) ? 'events' : ASSISTANT_CHAT_TOOLS.has(name) ? 'chat' : 'docs';
     rows.push({ door: 'assistant', def: { name, app, kind, doors: [], scopes: [], ...(CONFIRMED.has(name) ? { confirm: true } : {}), ...(RUNS_IN[name] ? { runsIn: RUNS_IN[name] } : {}), description, input } });
   }
   for (const t of BUILT_IN_TOOLS) {
