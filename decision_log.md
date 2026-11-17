@@ -13,6 +13,9 @@
   the card in Home (`/home/?email-approval=`), and the panels list every email still waiting.
 - **Sender (Scott):** the person's own mail account by default; the agent may choose its own mailbox when it has one.
   The card says which.
+- **Email to me needs no approval (Scott, later the same day):** `send_email` to the person themself ("me", their
+  sign-in, hosted or linked address, or a mail account they connected) sends at once and is kept as sent. With no mail
+  account connected, an approved email goes from FreeFlow's address as "<person> via FreeFlow", Reply-To the person.
 - **Unchanged (Scott):** `email_members` (notes from FreeFlow to members, "email me") and the automatic replies to
   allowlisted senders ("Agent always responds to incoming email") still send without a click.
 - Every personal agent keeps its waiting emails in the person's own Assistant object, so there is one list. Shared agents
