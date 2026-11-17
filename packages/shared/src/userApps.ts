@@ -10,6 +10,9 @@ export const APP_NAME = /^[a-z][a-z0-9]{1,19}$/;
 export const APP_TOOL_NAME = /^[a-z][a-z0-9_]{1,31}$/;
 /** An event's short name; the registry adds `app.<name>.` (§4). */
 export const APP_EVENT_NAME = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$/;
+/** The consent page's scope for installed apps' tools at /mcp (user-apps.md §5.2): with it, a token gets the app tools its
+ * account holds the scopes of, and for a personal agent only those of the apps its person turned on. */
+export const USER_APPS_SCOPE = 'apps:use';
 /** The separator between an app's name and its tool's in the registry (§3.3). */
 export const APP_TOOL_SEPARATOR = '__';
 

@@ -282,6 +282,31 @@ export const APP_MANIFESTS: AppManifest[] = [
     events: ['contacts.changed'],
   },
   {
+    // Installed apps (docs/specs/user-apps.md, phase 1): the page that shows one in a frame (/apps/<name>), and the consent
+    // page's group for their tools at /mcp. The apps themselves are data, per organization (the Org object's user_apps),
+    // and their tabs come from GET /v1/workspaces/:id/apps (routes/userApps.ts). No object of its own.
+    name: 'apps',
+    path: '/apps',
+    scope: 'organization',
+    routes: 'userApps',
+    kinds: [],
+    scopes: [
+      {
+        id: 'apps',
+        label: 'Installed apps',
+        detail: 'Use the apps installed in the organization below, with the access you hold in each. For this agent to use an app, you also turn the app on for your agents in Organization settings → Apps. Each app runs on its author’s server.',
+        scopes: ['apps:use'],
+        checkedByDefault: true,
+      },
+    ],
+    client: { dist: 'packages/apps/dist', basePath: '/apps/', optional: true },
+    pages: [
+      { path: '/apps', html: 'apps.html', signIn: true },
+      { path: '/apps/*', html: 'apps.html', signIn: true, passFiles: true },
+    ],
+    events: [],
+  },
+  {
     // Admin (docs/specs/workspace-admin.md §2.1): the organization's settings, an app of its own rather than a view in
     // Chat. No object and no routes: it reads and writes through the directory's routes (domains, accounts) and the Org
     // object's (the workspace, members, invitations, emoji, agents). No tab: the suite bar's organization menu opens it.

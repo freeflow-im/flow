@@ -18,6 +18,8 @@ import { BROWSER_GUIDANCE, browserTools, isBrowserWebTool, validateBrowserTool }
 import { ASSISTANT_CHAT_TOOLS, assistantChatSchemas } from '../assistant/chatTools.ts';
 import { MEMORY_GUIDANCE, MemoryError, memorySchema, type MemoryStore } from '../assistant/memory.ts';
 import { AdminToolError, adminToolDefinitions, isAdminTool, runAdminTool, validateAdminTool, type AdminToolContext } from '../assistant/adminTools.ts';
+import { parseAppToolName } from '@flow/shared';
+import type { AppToolAnswer } from '../org/services/userApps.ts';
 
 // What the suite adds to every server tool's environment (agent.ts `AgentOptions.extend`): the registered runners read it.
 declare module '@flow/docs/server/agent/tools.ts' {
@@ -36,6 +38,8 @@ declare module '@flow/docs/server/agent/tools.ts' {
     mailApproval?: (input: import('../imap/mailTools.ts').DraftInput) => Promise<import('@flow/shared').MailApprovalDTO>;
     /** The admin agent's way into the /v1 routes, as the admin who asked (agents.md §1.4); only in its panel turns. */
     admin?: AdminToolContext;
+    /** An installed app's tool, through the Org object as the turn's caller (docs/specs/user-apps.md §5). */
+    userApps?: (name: string, input: Record<string, unknown>) => Promise<AppToolAnswer>;
   }
 }
 
@@ -116,8 +120,18 @@ function headlessTools(): ToolDefinition[] {
 }
 
 /** The definitions a turn may use: the open app's browser tools and every server tool, or the headless set. */
-const definitionsFor = (context: AgentContext | undefined): ToolDefinition[] =>
-  context?.headless ? headlessTools() : toolsFor('assistant', { app: openApp(context) }).map((t) => t.definition);
+const definitionsFor = (context: AgentContext | undefined): ToolDefinition[] => [
+  ...(context?.headless ? headlessTools() : toolsFor('assistant', { app: openApp(context) }).map((t) => t.definition)),
+  ...appToolDefinitions(context),
+];
+
+/** The installed apps' tools the server put in the turn's context (user-apps.md §3.3), as the registry's definitions. */
+function appToolDefinitions(context: AgentContext | undefined): ToolDefinition[] {
+  return (context?.appTools ?? []).flatMap((t) => {
+    const parsed = parseAppToolName(t.name);
+    return parsed ? [{ name: t.name, app: parsed.app, kind: 'server' as const, doors: ['assistant' as const], scopes: [], description: t.description, input: t.input as ToolDefinition['input'] }] : [];
+  });
+}
 
 /** Whether the assistant has this tool in this context: every server tool, and the open app's browser tools. */
 const offered = (name: string, context: AgentContext | undefined): boolean => definitionsFor(context).some((d) => d.name === name);
@@ -156,6 +170,10 @@ export function validateSuiteTool(name: string, input: unknown, context: AgentCo
   if (context?.headless && !offered(name, context) && isAnyBrowserTool(name)) return { ok: false, error: headlessRefusal(name) };
   if (context && !offered(name, context)) return { ok: false, error: `Unknown tool "${name}".` };
   if (isToolName(name)) return undefined;
+  // An installed app's tool: the app checks its own input (user-apps.md §5).
+  if (parseAppToolName(name)) {
+    return input && typeof input === 'object' && !Array.isArray(input) ? { ok: true, input: input as Record<string, unknown> } : { ok: false, error: `Invalid input for ${name}: an object.` };
+  }
   // An app added by manifest has no schema here: its registered runner's shape is its schema.
   const shape = runnerOf('assistant', name)?.shape;
   const schema = SUITE_SCHEMAS[name] ?? (shape ? z.object(shape as z.ZodRawShape) : null);
@@ -170,6 +188,14 @@ export function runSuiteTool(name: string, input: Record<string, unknown>, env: 
   if (isAdminTool(name)) {
     return runAdminTool(name, input, env.admin).catch((e: unknown) => {
       throw e instanceof AdminToolError ? new ToolFailure(e.message) : e;
+    });
+  }
+  if (parseAppToolName(name)) {
+    const call = env.userApps;
+    if (!call) return Promise.reject(new ToolFailure(`${name} is an installed app's tool, and this turn cannot reach the app.`));
+    return call(name, input).then((answer) => {
+      if (!answer.ok) throw new ToolFailure(answer.error);
+      return JSON.stringify({ result: answer.result });
     });
   }
   const runner = runnerOf('assistant', name);

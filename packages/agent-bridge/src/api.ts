@@ -163,9 +163,15 @@ export class FlowApi {
     return this.req('GET', '/v1/me');
   }
 
-  /** The suite's tool definitions for a door (the registry, platform.md §5.4); an older server answers 404. */
-  tools(door: 'bridge'): Promise<{ tools: { name: string; description: string; input: Record<string, unknown> }[] }> {
-    return this.req('GET', `/v1/tools?door=${door}`);
+  /** The suite's tool definitions for a door (the registry, platform.md §5.4); an older server answers 404. With a
+   * workspace, the tools of the apps installed there that this agent may use come too (docs/specs/user-apps.md §3.3). */
+  tools(door: 'bridge', workspaceId?: string): Promise<{ tools: { name: string; description: string; input: Record<string, unknown> }[] }> {
+    return this.req('GET', `/v1/tools?door=${door}${workspaceId ? `&workspace=${encodeURIComponent(workspaceId)}` : ''}`);
+  }
+
+  /** Runs an installed app's tool (`<app>__<tool>`) through the suite, which checks the agent's scopes and calls the app. */
+  callAppTool(workspaceId: string, name: string, input: Record<string, unknown>): Promise<{ ok: true; result: unknown } | { ok: false; error: string }> {
+    return this.req('POST', `/v1/workspaces/${encodeURIComponent(workspaceId)}/tools/call`, { name, input });
   }
 
   // ---- the event bus's subscriptions (platform.md §5.2), as the agent's account in one organization ----

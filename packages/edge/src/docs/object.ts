@@ -18,6 +18,9 @@ import { lazySubscriptions, subscriptionsAs, type SubscriptionOps } from '../eve
 import { addressOf } from '@flow/shared/addresses';
 import { calendarRequest, type AccountCaller } from '../calendar/forward';
 import { appToolContexts } from '../apps';
+import type { DoorTool } from '../registry';
+import { appDoorTools } from '../registry/userApps';
+import { USER_APPS_SCOPE } from '@flow/shared';
 import type { FileChange, GrantChange } from '@flow/docs/server/app.ts';
 import { MOVED_TABLES, OWNED_TABLES, parseKey, type MovedTable, type OwnedTable, type PruneSelection, type Row } from './move';
 
@@ -317,7 +320,22 @@ export class Docs extends DurableObject<DocsEnv> {
   /** A request to /mcp, authenticated by the Worker against the directory (routes/mcp.ts), as `caller` in this organization. */
   async mcp(request: Request, caller: McpRequestCaller): Promise<Response> {
     const agent = { via: caller.via ?? null, invokedBy: caller.invokedBy ?? null };
-    return this.inOrganization(caller.orgId, () => handleMcp(request, this.hub!, caller, this.mailOf(caller.userId, caller.origin, caller.orgId, agent), this.calendarOf(caller.userId, caller.origin, caller.orgId, agent), this.eventsOf(caller.userId, caller.orgId), this.memberOf(caller.orgId), appToolContexts(this.env, this.accountCaller(caller.userId, caller.orgId, agent), caller.origin)));
+    const accountCaller = this.accountCaller(caller.userId, caller.orgId, agent);
+    const userAppTools = await this.userAppToolsOf(caller, accountCaller);
+    return this.inOrganization(caller.orgId, () => handleMcp(request, this.hub!, caller, this.mailOf(caller.userId, caller.origin, caller.orgId, agent), this.calendarOf(caller.userId, caller.origin, caller.orgId, agent), this.eventsOf(caller.userId, caller.orgId), this.memberOf(caller.orgId), appToolContexts(this.env, accountCaller, caller.origin), userAppTools));
+  }
+
+  /**
+   * The tools of the apps installed in the organization (docs/specs/user-apps.md §3.3), for a token granted `apps:use`: the
+   * ones the caller's account holds the scopes of, and for a personal agent only the apps its person turned on (§5.2).
+   */
+  private async userAppToolsOf(caller: McpRequestCaller, accountCaller: () => Promise<CallerContext | null>): Promise<DoorTool[]> {
+    if (!this.env.ORG || !caller.scope.split(' ').includes(USER_APPS_SCOPE)) return [];
+    const who = await accountCaller();
+    if (!who?.account) return [];
+    return appDoorTools({ ORG: this.env.ORG }, {
+      organizationId: caller.orgId, account: who.account, userId: caller.userId, displayName: who.account.displayName, via: who.via ?? null, invokedBy: who.invokedBy ?? null,
+    }, 'mcp');
   }
 
   /**

@@ -130,9 +130,10 @@ function registerTools(mcp: ReturnType<typeof createMcpServer>, tools: DoorTool[
 /**
  * One MCP request, as `caller`. `mail` and `calendar` reach the caller's own Mail and Calendar objects, and `events` the
  * organization's event subscriptions as the caller's account, where the Worker has them; `member` finds an account of the
- * organization by address (share_calendar); `apps` are the objects of the apps added by manifest (apps.ts), by name.
+ * organization by address (share_calendar); `apps` are the objects of the apps added by manifest (apps.ts), by name;
+ * `userAppTools` the tools of the apps installed in the organization that the caller may use (user-apps.md §3.3).
  */
-export async function handleMcp(request: Request, hub: FileHub, caller: McpRequestCaller, mail?: MailFetch, calendar?: CalendarFetch, events?: SubscriptionOps, member?: CalendarToolContext['member'], apps: Record<string, AppToolContext> = {}): Promise<Response> {
+export async function handleMcp(request: Request, hub: FileHub, caller: McpRequestCaller, mail?: MailFetch, calendar?: CalendarFetch, events?: SubscriptionOps, member?: CalendarToolContext['member'], apps: Record<string, AppToolContext> = {}, userAppTools: DoorTool[] = []): Promise<Response> {
   const version = suiteMcpVersion(caller.endpoint);
   if (!version) return json(404, { error: 'Not found' });
   if (request.method !== 'POST') return json(405, { error: 'This endpoint takes POST (Streamable HTTP, JSON responses); it has no GET stream.' }, { allow: 'POST' });
@@ -182,7 +183,8 @@ export async function handleMcp(request: Request, hub: FileHub, caller: McpReque
     ...(events ? { events: { subscriptions: events } } : {}),
     apps,
   };
-  registerTools(mcp, [...access.mail, ...access.calendar, ...access.events, ...access.others], ctx);
+  // The installed apps' tools (user-apps.md §3.3), already filtered to the caller's scopes, each with its runner.
+  registerTools(mcp, [...access.mail, ...access.calendar, ...access.events, ...access.others, ...userAppTools], ctx);
   const transport = adaptTransport(new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true }) as never, info, stateless) as unknown as WebStandardStreamableHTTPServerTransport;
   try {
     await mcp.connect(transport);
