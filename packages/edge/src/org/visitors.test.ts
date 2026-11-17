@@ -250,6 +250,9 @@ describe('visitor links', () => {
     expect(left.headers.get('set-cookie')).toMatch(/vsid=;.*Max-Age=0/);
     expect((await call('GET', '/v1/visitor/me', { cookie: b.cookie })).status).toBe(401);
     expect(await json(await call('GET', `/v1/channels/${lobby}/visitors`, { as: ANN }))).toEqual({ visitors: [] });
+    // With all=1 members can still name them (their older messages keep an author).
+    const all = await json<{ visitors: { userId: string; displayName: string; removedAt?: string }[] }>(await call('GET', `/v1/channels/${lobby}/visitors?all=1`, { as: ANN }));
+    expect(all.visitors.map((x) => [x.displayName, !!x.removedAt])).toEqual([['Amy', true], ['Bob', true]]);
   });
 
   it('with visitors off: links 404, no new links, and current visitors lose access', async () => {

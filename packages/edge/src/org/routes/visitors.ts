@@ -236,7 +236,8 @@ export function registerVisitorRoutes(app: CompatApp): void {
 
   app.get('/v1/channels/:id/visitors', { preHandler: requireAuth }, async (req) => {
     const { id } = req.params as { id: string };
-    return { visitors: await vs.listChannelVisitors(id, req.user.id) };
+    const all = (req.query as { all?: string } | undefined)?.all === '1';
+    return { visitors: await vs.listChannelVisitors(id, req.user.id, all) };
   });
 
   app.delete('/v1/channels/:id/visitors/:userId', { preHandler: requireAuth }, async (req) => {

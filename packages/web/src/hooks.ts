@@ -645,7 +645,8 @@ export function useChannelVisitors(channelId: string | null | undefined, enabled
   const api = runtime.api.bind(runtime);
   return useQuery({
     queryKey: ['channelVisitors', channelId],
-    queryFn: () => api<{ visitors: ChannelVisitorDTO[] }>('GET', `/v1/channels/${channelId}/visitors`),
+    // `all=1`: past visitors too, so an older message by a removed visitor keeps its author's name.
+    queryFn: () => api<{ visitors: ChannelVisitorDTO[] }>('GET', `/v1/channels/${channelId}/visitors?all=1`),
     select: (d) => d.visitors,
     enabled: !!channelId && enabled,
     // An older server has no such route: no visitors, and nothing to retry.
@@ -677,7 +678,8 @@ export function useChannelPeople(workspaceId: string | null, channel: Pick<Chann
       displayNames[v.userId] = v.displayName;
       memberMap[v.userId] = visitorPerson(v);
     }
-    return { names, displayNames, memberMap, visitors: visitors.data ?? [], refetchVisitors: visitors.refetch };
+    const current = (visitors.data ?? []).filter((v) => !v.removedAt);
+    return { names, displayNames, memberMap, visitors: current, refetchVisitors: visitors.refetch };
   }, [members.data, visitors.data, visitors.refetch]);
 }
 

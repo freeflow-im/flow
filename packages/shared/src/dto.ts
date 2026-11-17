@@ -1074,4 +1074,6 @@ export interface ChannelVisitorDTO {
   linkId: string | null;
   seesFrom: string;
   lastSeenAt: string;
+  /** Only with `?all=1`: when the visit ended. */
+  removedAt?: string;
 }

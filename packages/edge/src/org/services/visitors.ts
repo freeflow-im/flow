@@ -119,14 +119,17 @@ export async function revokeVisitorLink(linkId: string, actorId: string): Promis
   return { ok: true, removed };
 }
 
-/** GET /v1/channels/:id/visitors: the channel's current visitors. */
-export async function listChannelVisitors(channelId: string, actorId: string): Promise<ChannelVisitorDTO[]> {
+/**
+ * GET /v1/channels/:id/visitors: the channel's current visitors; with `?all=1` also those whose visit ended (marked
+ * `removedAt`), so members' clients can still name the author of an older visitor message.
+ */
+export async function listChannelVisitors(channelId: string, actorId: string, includeRemoved = false): Promise<ChannelVisitorDTO[]> {
   await requireChannelAccess(channelId, actorId);
   const rows = await db
     .select({ v: channelVisitors, displayName: users.displayName })
     .from(channelVisitors)
     .innerJoin(users, eq(users.id, channelVisitors.userId))
-    .where(and(eq(channelVisitors.channelId, channelId), isNull(channelVisitors.removedAt)))
+    .where(includeRemoved ? eq(channelVisitors.channelId, channelId) : and(eq(channelVisitors.channelId, channelId), isNull(channelVisitors.removedAt)))
     .orderBy(channelVisitors.seesFrom);
   return rows.map(({ v, displayName }) => ({
     userId: v.userId,
@@ -135,6 +138,7 @@ export async function listChannelVisitors(channelId: string, actorId: string): P
     linkId: v.linkId,
     seesFrom: v.seesFrom.toISOString(),
     lastSeenAt: v.lastSeenAt.toISOString(),
+    ...(v.removedAt ? { removedAt: v.removedAt.toISOString() } : {}),
   }));
 }
 

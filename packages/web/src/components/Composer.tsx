@@ -67,7 +67,7 @@ export default function Composer({
   const people = useMemo((): ChannelPerson[] => {
     const all: ChannelPerson[] = [...(members.data ?? [])];
     const known = new Set(all.map((m) => m.userId));
-    for (const v of channelVisitors.data ?? []) if (!known.has(v.userId)) all.push(visitorPerson(v));
+    for (const v of channelVisitors.data ?? []) if (!v.removedAt && !known.has(v.userId)) all.push(visitorPerson(v));
     return visitorMode ? all.filter((m) => !m.isAgent) : all;
   }, [members.data, channelVisitors.data, visitorMode]);
   const send = useSendMessage(channelId);
