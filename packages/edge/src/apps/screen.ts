@@ -38,7 +38,7 @@ function cookieOf(req: Request, name: string): string | null {
  */
 function hostOf(env: HostedEnv, req: Request): string {
   const url = new URL(req.url);
-  if (env.APPS_SCHEME === 'http') return req.headers.get('x-forwarded-host') ?? url.host;
+  if (env.APPS_SCHEME === 'http') return req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? url.host;
   return url.host;
 }
 
