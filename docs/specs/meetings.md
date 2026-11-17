@@ -1,6 +1,39 @@
-# FreeFlow Meet — video meetings and huddles on Cloudflare RealtimeKit (draft 2026-11-13)
+# FreeFlow Meet — video meetings and huddles on Cloudflare RealtimeKit (2026-11-13, live from 2026-11-16)
 
-Status: **draft, UX reviewed twice** (rulings 2026-11-13 below); web mockups next. Technical plan (§4–§9) not yet reviewed.
+Status: **phases 1, 2, 3 and 3b built and live** (2026-11-17); phase 4 next. Keep the table below current: update it in
+the PR that changes it.
+
+## Status and TODO (updated 2026-11-17)
+
+**Live**
+
+| What | PR |
+|---|---|
+| Meetings on the web: start now, copy link, Live now, the room (phase 1) | #838 |
+| Huddles from Chat on RTK; LiveKit gone from server, web and bridge (phase 2) | #838, #840, #841 |
+| Guest links, check screen, lock, Calendar "Add FreeFlow Meet", booking page `meet`, Home Today Join (phase 3) | #843 |
+| Meet home: Schedule in Calendar, Join with a code or link, Today; meeting takes the event's title | #845 |
+| Chat visitors: one public channel by a 24-hour link (docs/specs/chat-visitors.md) | #852 |
+| Meeting chat: a channel per room, Meet's Chat tab, Chat › Meetings, guests as visitors (phase 3b) | #853 |
+| Side panel width can be dragged | #855 |
+| The tab closes itself 30 s after leaving | #857 |
+
+**TODO**
+
+1. Operator: release macOS and iOS (§7 step 2), then remove the `LIVEKIT_*` Worker secrets and close LiveKit Cloud
+   (§7 step 3).
+2. Phase 4, after the meeting (recording, transcript, summary, meeting page). Waiting on four answers: who can turn
+   recording on (proposed: the host, per meeting); transcript a separate button (proposed: yes); same buttons in
+   huddles (proposed: yes); how long recordings are kept (proposed: until deleted). Outputs go to the meeting's chat.
+3. Phase 5, agents as note takers. Phase 6, native (iOS on RTK, a Meet window on macOS).
+4. Smaller items:
+   - Turnstile on Meet guest join (Chat visitor join has it).
+   - "Make a new link" for a meeting; more than one host per meeting.
+   - The "Meeting started" line uses the time zone of whoever starts the session.
+   - Chat inside Home draws no sidebar, so no Meetings item there.
+   - Visitors and guests see initials, not avatar pictures (`/v1/avatars` has no visitor route).
+5. Parity gaps (CHANGELOG.md Parity): macOS and iOS show no Visitor label, no Meetings list and no in-meeting chat.
+6. Watch: one deploy (#855) failed with Cloudflare 10021 "Script startup exceeded CPU time limit"; a re-run passed.
 
 Meet is a new suite app for video meetings, on Cloudflare RealtimeKit (RTK). It **replaces LiveKit**: Chat's huddles
 become Meet meetings that start from a channel or DM. So there is one call system in FreeFlow: a meeting can be
