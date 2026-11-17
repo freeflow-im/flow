@@ -204,4 +204,17 @@ describe('the Worker side', () => {
     const [, who] = handle.mock.calls[0]! as unknown as [Request, { user: unknown; organizationId: string }];
     expect(who).toMatchObject({ user: null, organizationId: 'org-1' });
   });
+
+  it('lets a guest in when the browser still holds an expired session cookie, but not on member routes', async () => {
+    const handle = vi.fn(async () => Response.json({ title: 'Design review' }));
+    const call = async (name: string) => (name === 'authenticateIn' ? { ok: false, status: 401, code: 'unauthorized', message: 'invalid or expired token' } : { ok: true, value: 'org-1' });
+    const env = { DIRECTORY: { idFromName: () => 'd', get: () => ({ call }) }, ORG: { idFromName: (id: string) => id, get: () => ({ handle }) } };
+    const headers = { cookie: 'sid=stale-token' };
+    const guest = await orgRoutes.request('https://app.example/v1/meetings/kqd-wmzt-fra/guest', { headers }, env as never);
+    expect(guest.status).toBe(200);
+    expect((handle.mock.calls[0]! as unknown as [Request, { user: unknown }])[1]).toMatchObject({ user: null });
+    const join = await orgRoutes.request('https://app.example/v1/meetings/kqd-wmzt-fra/join', { method: 'POST', headers }, env as never);
+    expect(join.ok).toBe(false);
+    expect(handle).toHaveBeenCalledTimes(1);
+  });
 });
