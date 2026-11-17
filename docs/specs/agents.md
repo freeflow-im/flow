@@ -161,6 +161,33 @@ from "Add an agent", for example a "Scout" that researches.
 - **The kind never changes** (§1). The Shared / Private choice in "Add an agent" is made once, at creation; to change
   it, make a new agent. A shared agent a person makes counts against the organization's agents, not against these five.
 
+### 1.4 The admin agent
+
+(Operator rulings, decision_log 2026-11-16, "The admin agent".) Every organization has one **admin agent**, named Carl
+when it is made. Carl does in the panel what an owner or admin does in the Admin app.
+
+- **What it is.** A hosted shared agent (`mode: shared`, `runtime: hosted`) with `agent_role: admin` on its principal,
+  sponsored by the owner. The Org object makes it once (`ensureAdminAgent`, storage key `admin_agent_v1`), for a new
+  organization and for an existing one at its object's next start. It joins no channel, is not announced, and has no
+  address or mailbox (the directory lets go of the one its join gave it before any mailbox is made). It cannot
+  be removed; owners and admins may rename it and give it instructions in Admin → Agents.
+- **Who can use it.** Owners and admins only. `usableAgents` lists it only for them, the panel's routes check the role
+  on every request, and the member list leaves it out for everyone else. All admins share the one agent and its
+  definition; each admin has their own conversation with it.
+- **Whose authority.** Its admin tools act with the **asking admin's** access, not its own: each tool calls the Admin
+  app's own `/v1` route in the same Worker with that admin's token, and the caller context carries `via: <Carl>`, so the
+  Event log reads "Scott, via Carl". Carl can never do more than the person asking; an owner-only action works only for
+  the owner. This keeps §2's rule that an agent never holds the admin role.
+- **Its tools** (`packages/edge/src/assistant/adminTools.ts`): settings and policies, members (role, kind, removal),
+  invitations and the join link, domains and hosted mail, agents, automations, the event log, the suggested prompts.
+  A tool that removes or takes away something runs only with `confirmed: true`, which Carl sets after the admin says
+  yes in the chat. Deleting the organization and transferring ownership are not among them. The tools are outside the
+  registry (§5): they reach neither `/mcp` nor the bridge, and only a panel turn the server marks as the admin agent's,
+  asked by a person, is offered them (`context.admin`, set by the Assistant object, never by the browser).
+- **Where it works.** In the panel only. On `/admin` the panel opens with Carl for owners and admins; elsewhere they can
+  pick it in the panel's header, which lists every agent the person may use (§6). Chat never starts its turns (a wake job
+  has no admin token, so it would have no admin tools).
+
 ## 2. Principals and accounts
 
 **The principal** (P§2.1) carries what identifies an agent: `kind: agent`, a required `sponsor_id` (a person

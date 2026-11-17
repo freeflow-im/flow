@@ -16,6 +16,7 @@ import type { AppToolContext } from '../apps.ts';
 import { BROWSER_GUIDANCE, browserTools, isBrowserWebTool, validateBrowserTool } from '../assistant/browserTools.ts';
 import { ASSISTANT_CHAT_TOOLS, assistantChatSchemas } from '../assistant/chatTools.ts';
 import { MEMORY_GUIDANCE, MemoryError, memorySchema, type MemoryStore } from '../assistant/memory.ts';
+import { AdminToolError, adminToolDefinitions, isAdminTool, runAdminTool, validateAdminTool, type AdminToolContext } from '../assistant/adminTools.ts';
 
 // What the suite adds to every server tool's environment (agent.ts `AgentOptions.extend`): the registered runners read it.
 declare module '@flow/docs/server/agent/tools.ts' {
@@ -30,6 +31,8 @@ declare module '@flow/docs/server/agent/tools.ts' {
     apps?: Record<string, AppToolContext>;
     /** The agent's memory, as this turn may see it (agents.md §6.1). */
     memory?: MemoryStore;
+    /** The admin agent's way into the /v1 routes, as the admin who asked (agents.md §1.4); only in its panel turns. */
+    admin?: AdminToolContext;
   }
 }
 
@@ -100,13 +103,15 @@ export function suiteTools(context: AgentContext | undefined, jobs: boolean): An
       // Stream large inputs (write_range rows) as they are generated; validateToolInput checks them afterwards.
       eager_input_streaming: true,
     }));
-  // The web tools last, so the cached prefix is the same with or without the browser extension (prototype).
-  return [...registered, ...browserTools(context)];
+  // The admin agent's tools (agents.md §1.4) after the registry's, only in its turns; the web tools last, so the cached
+  // prefix is the same with or without the browser extension (prototype).
+  return [...registered, ...(context?.admin ? adminToolDefinitions() : []), ...browserTools(context)];
 }
 
 /** A suite tool's input checked; a tool the open app does not have refused; Docs' own left to the core (undefined). */
 export function validateSuiteTool(name: string, input: unknown, context: AgentContext | undefined): Validated | undefined {
   if (isBrowserWebTool(name)) return validateBrowserTool(name, input, context);
+  if (isAdminTool(name)) return context?.admin ? validateAdminTool(name, input) : { ok: false, error: `Unknown tool "${name}".` };
   if (context && !offered(name, context)) return { ok: false, error: `Unknown tool "${name}".` };
   if (isToolName(name)) return undefined;
   // An app added by manifest has no schema here: its registered runner's shape is its schema.
@@ -120,6 +125,11 @@ export function validateSuiteTool(name: string, input: unknown, context: AgentCo
 
 /** A server tool run through the registry, where each app registered how its tools run (Docs' are runDocsTool's, below). */
 export function runSuiteTool(name: string, input: Record<string, unknown>, env: ServerToolEnv): Promise<string> | undefined {
+  if (isAdminTool(name)) {
+    return runAdminTool(name, input, env.admin).catch((e: unknown) => {
+      throw e instanceof AdminToolError ? new ToolFailure(e.message) : e;
+    });
+  }
   const runner = runnerOf('assistant', name);
   if (!runner) return undefined;
   return (async () => {

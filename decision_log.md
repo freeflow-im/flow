@@ -1,5 +1,18 @@
 # Decision log
 
+## 2026-11-16 — The admin agent (operator rulings)
+
+- **Ruling (Scott):** every workspace gets a default agent, Carl, the admin agent. Carl has the admin tools: what an
+  owner or admin can do in the Admin app. Only owners and admins can use Carl; all of them share him. On `/admin` the
+  panel talks to Carl instead of the person's own assistant (agents.md §1.4).
+- **Ruling (Scott):** Carl acts with the **asking admin's** authority, marked "via Carl" in the Event log, not with a
+  standing admin role of his own. He can never do more than the admin asking.
+- **Ruling (Scott):** each admin has their own conversation with Carl; his name and instructions are shared.
+- **Ruling (Scott):** Carl may do the risky changes (remove members and domains, change roles, revoke invitations) only
+  after the admin says yes in the chat. Deleting the workspace and transferring ownership are left out of his tools.
+- **Direction (Scott):** the assistant panel should ultimately talk to any agent the person may use. The suite panel
+  now has an agent picker; Carl is only its default on `/admin`.
+
 ## 2026-11-16 — Aliases, changed addresses, and the first domain made primary (operator rulings)
 
 - **Ruling (Scott):** a member's hosted mailbox can have more addresses (aliases), and its address can be changed.

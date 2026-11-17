@@ -34,6 +34,19 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* The agent picker (any agent the person may talk to): the title, as a quiet select. */
+.suite-chat-picker {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  padding: 0 2px;
+  cursor: pointer;
+}
+.suite-chat-picker:disabled {
+  cursor: default;
+}
 .suite-chat-link {
   white-space: nowrap;
   border: 0;

@@ -199,7 +199,12 @@ export interface UsableAgentDTO {
   avatarUrl?: string | null;
   mode: AgentMode;
   self: boolean;
+  /** `admin`: the organization's admin agent (agents.md §1.4), listed only for owners and admins. */
+  role?: AgentRole;
 }
+
+/** A hosted agent's special role (agents.md §1.4). Only `admin` exists: the admin agent every organization has. */
+export type AgentRole = 'admin';
 
 /** A hosted agent's runtime, as the directory places it (agents.md §6): the object its loop runs in (`runtimeKey`: the agent's
  * own account for a shared agent, the sponsor's account for a personal one, where the assistant's conversations live), and
@@ -215,6 +220,8 @@ export interface HostedRuntimeDTO {
   sponsorAccountId: string | null;
   /** The agent's name as members see it, which its prompt carries so it knows who it is. */
   agentName?: string;
+  /** `admin`: the organization's admin agent (agents.md §1.4), which works only in the panel, for owners and admins. */
+  role?: AgentRole;
 }
 
 /** A hosted agent's definition (agents.md §6), kept by its runtime object: what the person or the admins set. */
@@ -288,6 +295,8 @@ export interface AccountDTO {
   sponsorId?: string | null;
   agentMode?: AgentMode | null;
   agentRuntime?: AgentRuntime | null;
+  /** `admin`: the organization's admin agent (agents.md §1.4). Absent for every other account. */
+  agentRole?: AgentRole;
   createdAt: string;
 }
 

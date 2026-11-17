@@ -827,6 +827,37 @@ describe('agent accounts', () => {
     expect(core.accountFor(id!, org)!.state).toBe('active');
   });
 
+  it('lists the admin agent to owners and admins only, and marks it on its account (agents.md §1.4)', async () => {
+    const own = await signUp('o@example.com');
+    const adm = await signUp('d@example.com');
+    const mem = await signUp('m@example.com');
+    const org = newId();
+    core.reserveSlug('acme', org);
+    await core.applyOrgChanges(org, [
+      { kind: 'join', id: org, user_id: own.user.id, role: 'owner', payload: null },
+      { kind: 'join', id: org, user_id: adm.user.id, role: 'admin', payload: null },
+      join(org, mem.user.id),
+    ]);
+    expect(core.adminAgentOf(org)).toBeNull();
+    const carl = newId();
+    await core.applyOrgChanges(org, [agent(carl, own.user.id, 'carl'), join(org, carl, own.user.id)]);
+    core.markAdminAgent(carl, org);
+    expect(core.adminAgentOf(org)).toBe(carl);
+    expect(core.accountFor(carl, org)).toMatchObject({ agentMode: 'shared', agentRuntime: 'hosted', agentRole: 'admin', address: null, state: 'active' });
+    expect(core.hostedRuntimeOf(core.accountFor(carl, org)!.id)).toMatchObject({ mode: 'shared', role: 'admin' });
+    const sees = (userId: string) => core.usableAgents(userId, org).filter((a) => a.id === carl);
+    expect(sees(own.user.id)).toEqual([expect.objectContaining({ role: 'admin', mode: 'shared', self: false })]);
+    expect(sees(adm.user.id)).toHaveLength(1);
+    expect(sees(mem.user.id)).toEqual([]);
+    // A plain shared agent stays usable by everyone, unmarked.
+    const omni = newId();
+    await core.applyOrgChanges(org, [agent(omni, mem.user.id, 'omni'), join(org, omni, mem.user.id)]);
+    core.setAgentRuntime(omni, 'hosted');
+    expect(core.usableAgents(mem.user.id, org).find((a) => a.id === omni)).not.toHaveProperty('role');
+    // Only a shared agent of this organization can be made the admin agent.
+    expect(() => core.markAdminAgent(carl, newId())).toThrow();
+  });
+
   it('lets a person make up to five private agents, their assistant the default, each with its own runtime (agents.md §1.3)', async () => {
     const ann = await signUp('pa@example.com');
     const bob = await signUp('pb@example.com');

@@ -238,7 +238,8 @@ r=await api(A.token,'POST',`/v1/workspaces/${W}/owner`,{userId:AGT_ID});t('nor o
 // ---- organizations: the address on every member, the policies, handing the organization on (platform.md §3.1, §3.2)
 r=await api(Bo.token,'GET','/v1/me');const bobAddr=r.j.accounts?.find(a=>a.organizationId===W)?.address;
 r=await api(A.token,'GET',`/v1/workspaces/${W}/members`);const ms=r.j.members??r.j??[];t('the members list carries Bob with no address',bobAddr===null&&(ms.find(m=>m.userId===Bo.user.id)?.address??null)===null,JSON.stringify(ms.map(m=>m.address)));
-t('and the agent\'s, made after its redeem',!!ms.find(m=>m.isAgent&&m.kind!=='personal_agent')?.address?.startsWith('flowbot@'),JSON.stringify(ms.map(m=>m.address)));
+t('the admin agent Carl is on the owner\'s list, marked (agents.md §1.4)',ms.some(m=>m.agentRole==='admin'&&m.displayName==='Carl'),JSON.stringify(ms.map(m=>m.displayName)));
+t('and the agent\'s, made after its redeem',!!ms.find(m=>m.isAgent&&m.kind!=='personal_agent'&&m.agentRole!=='admin')?.address?.startsWith('flowbot@'),JSON.stringify(ms.map(m=>m.address)));
 r=await api(Bo.token,'PATCH',`/v1/workspaces/${W}`,{policies:{inviteBy:'admins'}});t('a member cannot set policies',r.s===403,r.s);
 r=await api(A.token,'PATCH',`/v1/workspaces/${W}`,{policies:{inviteBy:'admins'}});t('Ann sets who may invite',r.s===200&&r.j.policies?.inviteBy==='admins'&&r.j.policies?.agentsBy==='members'&&r.j.policies?.linkSharing===true,r.s+' '+JSON.stringify(r.j.policies));
 r=await api(Bo.token,'POST',`/v1/workspaces/${W}/invites`,{email:'dee@example.com'});t('an invite by Bob is refused by the policy',r.s===403&&r.j.error?.code==='policy_forbids',r.s+' '+JSON.stringify(r.j).slice(0,90));
@@ -274,7 +275,7 @@ r=await api(Bo.token,'POST',`/v1/workspaces/${W}/owner`,{userId:A.user.id});t('B
  r=await api(C.token,'POST','/v1/invites/accept',{token:ctok});t('Ann invites Carol',r.s<300,r.s+' '+JSON.stringify(r.j).slice(0,90));
  r=await api(C.token,'GET','/v1/me');t('Carol\'s address is on acme.test',r.j.accounts?.find(a=>a.organizationId===W)?.address==='carol@acme.test',JSON.stringify(r.j.accounts));
  r=await api(Bo.token,'GET','/v1/me');t('Bob got an address on acme.test once mail was on (§3.2)',r.j.accounts?.find(a=>a.organizationId===W)?.address==='bob@acme.test',JSON.stringify(r.j.accounts?.map(a=>a.address)));
- r=await api(A.token,'GET',`/v1/workspaces/${W}/members`);{const ms2=r.j.members??[];t('the members list takes it, and the agent keeps its platform address',ms2.find(m=>m.userId===Bo.user.id)?.address==='bob@acme.test'&&ms2.find(m=>m.userId===A.user.id)?.address==='ann@acme.test'&&ms2.find(m=>m.isAgent&&m.kind!=='personal_agent')?.address==='flowbot@locked-in.freeflow.im',JSON.stringify(ms2.map(m=>m.address)));}
+ r=await api(A.token,'GET',`/v1/workspaces/${W}/members`);{const ms2=r.j.members??[];t('the members list takes it, and the agent keeps its platform address',ms2.find(m=>m.userId===Bo.user.id)?.address==='bob@acme.test'&&ms2.find(m=>m.userId===A.user.id)?.address==='ann@acme.test'&&ms2.find(m=>m.isAgent&&m.kind!=='personal_agent'&&m.agentRole!=='admin')?.address==='flowbot@locked-in.freeflow.im',JSON.stringify(ms2.map(m=>m.address)));}
  r=await api(C.token,'GET',D);t('a member cannot see the domains',r.s===403,r.s);
  await api(A.token,'PATCH',`${D}/locked-in.freeflow.im`,{primary:true});
  r=await api(A.token,'DELETE',`${D}/acme.test`);t('acme.test cannot be removed while addresses are on it',r.s===409&&r.j.error?.code==='domain_in_use',r.s+' '+JSON.stringify(r.j).slice(0,90));

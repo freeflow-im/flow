@@ -84,7 +84,8 @@ export const chatUnread = (channels: ChannelDTO[]): number => channels.reduce((n
 /** The agents the person can talk to, by name: the shared agents and their own assistant. Another person's assistant answers
  * only them (docs/specs/agents.md §1.1), so it is not listed. */
 export function agentsOf(members: WorkspaceMemberDTO[], me: string | null = null): WorkspaceMemberDTO[] {
-  return members.filter((m) => m.isAgent && (m.kind !== 'personal_agent' || (!!me && m.sponsorId === me))).sort((a, b) => a.displayName.localeCompare(b.displayName));
+  // The admin agent (agents.md §1.4) works in Admin's panel, not in Chat, so it is not one to open from here.
+  return members.filter((m) => m.isAgent && m.agentRole !== 'admin' && (m.kind !== 'personal_agent' || (!!me && m.sponsorId === me))).sort((a, b) => a.displayName.localeCompare(b.displayName));
 }
 
 /** The person's DM with one other member, if they have one already. */

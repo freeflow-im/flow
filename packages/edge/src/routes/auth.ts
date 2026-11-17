@@ -20,6 +20,12 @@ export interface AuthEnv {
   WEB_URL_BASE: string;
   GOOGLE_CLIENT_ID?: string;
   APPLE_AUDIENCE?: string;
+  /**
+   * Set only by the Assistant object, on the env of a request it makes to this Worker for the admin agent (agents.md §1.4,
+   * assistant/adminTools.ts): the agent's principal id, which the caller context carries as `via`. Never a binding or a
+   * header, so nothing outside can set it.
+   */
+  ADMIN_AGENT_VIA?: string;
 }
 type Vars = { user: UserDTO; token: string; authKind: 'session' | 'agent' };
 type C = Context<{ Bindings: AuthEnv; Variables: Vars }>;
@@ -72,10 +78,13 @@ export async function resolveCaller<E extends AuthEnv>(c: Context<{ Bindings: E 
   if (refused) throw refused;
   // A wake job's turn (platform.md §5.2): the Org object stamps the request's events with it, once it has checked it.
   const job = c.req.header('x-flow-job')?.trim();
+  // The admin agent at work for the admin whose token this is (agents.md §1.4): the admin acts, via the agent.
+  const via = c.env.ADMIN_AGENT_VIA && user && !user.isAgent ? c.env.ADMIN_AGENT_VIA : null;
   return {
     user, token, authKind: kind, ip, organizationId: org, account,
     ...(job && UUID.test(job) ? { jobId: job } : {}),
     ...(invokedBy ? { invokedBy } : {}),
+    ...(via ? { via } : {}),
   };
 }
 

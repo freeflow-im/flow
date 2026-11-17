@@ -173,12 +173,28 @@ export function createPersonalAgent(sql: AgentSql, sponsorId: string, organizati
  */
 export function usableAgentsOf(sql: AgentSql, userId: string, organizationId: string): UsableAgentDTO[] {
   const assistant = assistantOf(sql, userId, organizationId);
+  // The admin agent (agents.md §1.4) is for the organization's owners and admins alone: everyone else never sees it.
+  const role = rows(sql, "SELECT role FROM accounts WHERE user_id = ? AND organization_id = ? AND state NOT IN ('removed', 'suspended')", userId, organizationId)[0]?.role;
+  const admin = role === 'owner' || role === 'admin';
   return rows(sql,
-    `SELECT u.id, u.display_name, u.avatar_url, u.mode, u.sponsor_user_id, a.id AS account_id FROM users u JOIN accounts a ON a.user_id = u.id AND a.organization_id = u.organization_id
-     WHERE u.is_agent = 1 AND u.runtime = 'hosted' AND u.organization_id = ? AND u.deleted_at IS NULL AND a.state <> 'removed'
+    `SELECT u.id, u.display_name, u.avatar_url, u.mode, u.sponsor_user_id, u.agent_role, a.id AS account_id FROM users u JOIN accounts a ON a.user_id = u.id AND a.organization_id = u.organization_id
+     WHERE u.is_agent = 1 AND u.runtime = 'hosted' AND u.organization_id = ? AND u.deleted_at IS NULL AND a.state NOT IN ('removed', 'suspended')
        AND (u.mode = 'shared' OR u.sponsor_user_id = ?)
-     ORDER BY (u.id = ?) DESC, (u.mode = 'personal') DESC, u.display_name`, organizationId, userId, assistant ?? '',
-  ).map((r) => ({ id: r.id as string, accountId: r.account_id as string, displayName: r.display_name as string, avatarUrl: (r.avatar_url as string | null) ?? null, mode: r.mode as AgentMode, self: r.id === assistant }));
+       AND (u.agent_role IS NULL OR ?)
+     ORDER BY (u.id = ?) DESC, (u.mode = 'personal') DESC, u.display_name`, organizationId, userId, admin ? 1 : 0, assistant ?? '',
+  ).map((r) => ({
+    id: r.id as string, accountId: r.account_id as string, displayName: r.display_name as string, avatarUrl: (r.avatar_url as string | null) ?? null, mode: r.mode as AgentMode, self: r.id === assistant,
+    ...(r.agent_role === 'admin' ? { role: 'admin' as const } : {}),
+  }));
+}
+
+/** The organization's admin agent (agents.md §1.4): its principal id, or null when none is made (or it was removed). */
+export function adminAgentOf(sql: AgentSql, organizationId: string): string | null {
+  const r = rows(sql,
+    `SELECT u.id FROM users u JOIN accounts a ON a.user_id = u.id AND a.organization_id = u.organization_id
+     WHERE u.is_agent = 1 AND u.agent_role = 'admin' AND u.organization_id = ? AND u.deleted_at IS NULL AND a.state <> 'removed'
+     ORDER BY u.created_at LIMIT 1`, organizationId)[0];
+  return (r?.id as string | undefined) ?? null;
 }
 
 /** Marks where an agent's loop runs (agents.md §6). */

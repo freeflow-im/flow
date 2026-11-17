@@ -275,7 +275,7 @@ async function freeUsername(workspaceId: string, name: string): Promise<string> 
  * with a handle from its name and no key, since the directory's OAuth tokens are its credential. The sponsoring policy
  * applies as it does to an invite. Returns the agent's principal id.
  */
-export async function createSharedAgent(sponsorId: string, rawName: string): Promise<{ userId: string; username: string }> {
+export async function createSharedAgent(sponsorId: string, rawName: string, opts: { quiet?: boolean } = {}): Promise<{ userId: string; username: string }> {
   const workspaceId = (await db.select({ id: workspaces.id }).from(workspaces).limit(1))[0]?.id;
   if (!workspaceId) throw notFound('workspace not found');
   const name = rawName.trim().slice(0, 80);
@@ -299,7 +299,8 @@ export async function createSharedAgent(sponsorId: string, rawName: string): Pro
       agentKeyHash: null,
     });
     await tx.insert(workspaceMembers).values({ workspaceId, userId, role: 'member', sponsorUserId: sponsorId }).onConflictDoNothing();
-    const general = await tx.select().from(channels).where(and(eq(channels.workspaceId, workspaceId), eq(channels.name, 'general'))).limit(1);
+    // A quiet agent (the admin agent, agents.md §1.4) joins no channel and is not announced: it works in the panel only.
+    const general = opts.quiet ? [] : await tx.select().from(channels).where(and(eq(channels.workspaceId, workspaceId), eq(channels.name, 'general'))).limit(1);
     if (general[0]) {
       await tx.insert(channelMembers).values({ channelId: general[0].id, userId }).onConflictDoNothing();
       generalChannel = { id: general[0].id, workspaceId, kind: general[0].kind };
@@ -319,7 +320,7 @@ export async function createSharedAgent(sponsorId: string, rawName: string): Pro
       console.error(`agent avatar assignment failed for ${userId}: ${(err as Error).message}`);
     }
   }
-  await announceJoin(workspaceId, userId);
+  if (!opts.quiet) await announceJoin(workspaceId, userId);
   if (generalChannel) await postSystemMessage(generalChannel, userId, 'member_joined');
   return { userId, username };
 }
