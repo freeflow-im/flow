@@ -757,12 +757,13 @@ describe('email waits for the person’s click (decision_log 2026-11-17, mailApp
     const sent: { path: string; body: Record<string, unknown> }[] = [];
     const notes: { agentUserId: string; personUserId: string; text: string }[] = [];
     const results: string[] = [];
+    const logged: Record<string, unknown>[] = [];
     return {
-      sent, notes, results,
+      sent, notes, results, logged,
       env: {
         DIRECTORY: { idFromName: (x: string) => x, get: () => ({ call: async (m: string, args: unknown[]) => ({ ok: true, value: m === 'getUser' ? users[args[0] as string] : m === 'accountById' ? (args[0] === 'acct-ada' ? ADA : ACCOUNT) : null }) }) },
         ORG: { idFromName: (x: string) => x, get: () => ({ channelIdsOf: async () => [], postAutomation: async () => 'm1', agentDmNotice: async (p: { agentUserId: string; personUserId: string; text: string }) => { notes.push(p); } }) },
-        EVENTS: { idFromName: (x: string) => x, get: () => ({ jobStep: async (id: string, _a: string, step: string) => ({ id, state: step === 'ack' ? 'running' : 'done' }), jobTrigger: async () => null }) },
+        EVENTS: { idFromName: (x: string) => x, get: () => ({ jobStep: async (id: string, _a: string, step: string) => ({ id, state: step === 'ack' ? 'running' : 'done' }), jobTrigger: async () => null, publish: async (ev: Record<string, unknown>) => { logged.push(ev); return { seq: logged.length, id: 'e' }; } }) },
         MAIL: {
           idFromName: (x: string) => x,
           get: (owner: string) => ({
@@ -805,6 +806,9 @@ describe('email waits for the person’s click (decision_log 2026-11-17, mailApp
     expect(res.status).toBe(200);
     expect(((await res.json()) as { approval: MailApprovalDTO }).approval.state).toBe('sent');
     expect(e.sent).toHaveLength(1);
+    // The log says the person sent it with their click (no via), whom to and the subject.
+    expect(e.logged).toEqual([expect.objectContaining({ type: 'mail.sent', actor: 'acct-1', audience: 'account:acct-1', data: expect.objectContaining({ to: ['Zoe <zoe@outside.example>'], subject: 'Lunch', approval: 'click', how: 'send_email' }) })]);
+    expect(e.logged[0]).not.toHaveProperty('via');
     expect(e.sent[0]!.body).toMatchObject({ to: [{ name: 'Zoe', address: 'zoe@outside.example' }], subject: 'Lunch' });
     expect(String(e.sent[0]!.body.html)).toContain('<strong>Friday</strong>');
     // A second click sends nothing.
@@ -838,6 +842,7 @@ describe('email waits for the person’s click (decision_log 2026-11-17, mailApp
     await events(await a.handle(req('POST', '/api/agent/turn', { message: 'Email me a summary', context: { page: 'home' }, workspace: 'org-1' }), CALLER, DOCS_CALLER, 'Ada', { agentAccountId: 'acct-ada', agentMode: 'personal' }));
     expect(e.results[0]).toContain('"sent":true');
     expect(e.sent).toHaveLength(1);
+    expect(e.logged).toEqual([expect.objectContaining({ type: 'mail.sent', data: expect.objectContaining({ approval: 'self', subject: 'Your summary' }) })]);
     expect(e.sent[0]!.body).toMatchObject({ to: [{ address: 'ann@gmail.test' }], subject: 'Your summary' });
     expect(((await (await a.handle(req('GET', '/api/agent/mail-approvals'), CALLER, DOCS_CALLER)).json()) as { approvals: unknown[] }).approvals).toEqual([]);
   });

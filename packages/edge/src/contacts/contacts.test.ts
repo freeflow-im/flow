@@ -266,6 +266,15 @@ describe('email to members', () => {
     expect(sent[0]!.attachments).toBeUndefined();
   });
 
+  it('logs mail.sent for the sender: whom and the subject, never the text', async () => {
+    mailbox();
+    const { call, published } = world();
+    await call(ANN, 'POST', '/v1/contacts/email', { to: ['me'], subject: 'Hi', body: 'Secret **news**.' });
+    const ev = published.find((e) => e.type === 'mail.sent');
+    expect(ev).toMatchObject({ audience: 'account:acct-ann', actor: 'acct-ann', data: { to: ['ann@acme.freeflow.im'], subject: 'Hi', from: 'freeflow', how: 'email_members' } });
+    expect(JSON.stringify(ev)).not.toContain('Secret');
+  });
+
   it('reaches a member with no hosted address at the mailbox they go by, "me" included', async () => {
     const sent = mailbox();
     const { call } = world();

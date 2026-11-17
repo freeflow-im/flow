@@ -911,6 +911,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
     const saved = !ns || !home || home.equals(this.ctx.id) ? this.addMailApproval(approval) : ((await ns.get(home).addMailApproval(approval)) as MailApprovalDTO);
     if (toSelf) {
       console.log(`[assistant] email ${saved.id} sent to the person themself, no click needed`);
+      await this.publishMailSent(who.caller, saved, 'self');
       return saved;
     }
     const away = this.headlessTurns.get(conversation);
@@ -970,6 +971,27 @@ export class Assistant extends DurableObject<AssistantEnv> {
       // No mail here: the account's own addresses are enough.
     }
     return out;
+  }
+
+  /**
+   * `mail.sent` into the organization's log, for the person's account: whom send_email's email went to, its subject, the
+   * account it went from, and how it was approved (`self`: to the person, no click; `click`: their Send message). Never
+   * its text. Marked as the agent's (`via`) when it sent on its own.
+   */
+  private async publishMailSent(caller: AccountCaller, a: MailApprovalDTO, approval: 'self' | 'click'): Promise<void> {
+    const ns = this.env.EVENTS, org = caller.account.organizationId || caller.organizationId;
+    if (!ns || !org) return;
+    try {
+      await ns.get(ns.idFromName(org)).publish({
+        type: 'mail.sent', organizationId: org, actor: caller.account.id,
+        ...(caller.via ? { via: caller.via } : {}), ...(caller.invokedBy ? { invokedBy: caller.invokedBy } : {}),
+        ref: { organizationId: org, app: 'mail', kind: 'approval', id: a.id },
+        audience: `account:${caller.account.id}`, ts: new Date().toISOString(),
+        data: { to: [...a.to, ...a.cc, ...a.bcc], subject: a.subject, from: a.from, how: 'send_email', approval, agent: a.agentName },
+      });
+    } catch (err) {
+      console.error(`[assistant] mail.sent: ${(err as Error).message.slice(0, 200)}`);
+    }
   }
 
   /** Keeps an email waiting here (an RPC from the person's other agents' runtimes, or this object's own turn). */
@@ -1140,6 +1162,8 @@ export class Assistant extends DurableObject<AssistantEnv> {
         if (!mail) throw new Error('Mail is not available here.');
         await this.deliver(claimed, mail);
         console.log(`[assistant] email ${id} sent on the person's click`);
+        // The person sent it with their own click: no `via` (the route marks every request to this object with the assistant).
+        await this.publishMailSent({ ...c.env.who.caller, via: undefined }, store.get(id)!, 'click');
         return c.json({ approval: store.get(id) });
       } catch (e) {
         // Still waiting: the person may try again, or discard it.

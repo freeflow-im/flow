@@ -172,7 +172,12 @@ export class Events extends DurableObject<EventsEnv> {
   }
 
   jobStep(id: string, agent: string, step: 'ack' | 'extend' | 'done', opts: { ok?: boolean; note?: string } = {}): AgentJobDTO | { conflict: JobState } | null {
-    return this.core.jobStep(id, agent, step, opts);
+    const before = this.core.head();
+    const out = this.core.jobStep(id, agent, step, opts);
+    // A finished job's event (core.publishFinished) reaches sockets and subscriptions like any publish.
+    const org = this.core.organizationId();
+    if (org && this.core.head() > before) this.published(org, before, this.core.head());
+    return out;
   }
 
   /**
@@ -192,6 +197,8 @@ export class Events extends DurableObject<EventsEnv> {
     if (out.kind === 'later') return { requeueAfter: out.delayS };
     if (out.kind === 'parked') {
       console.log(`[events] job ${jobId}: parked (${out.job.note})`);
+      const seq = this.core.head();
+      this.published(org, seq - 1, seq);
       const sub = this.core.getSubscription(out.job.subscriptionId);
       if (sub) await this.notify(org, sub, 'parked');
     }
