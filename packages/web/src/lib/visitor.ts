@@ -90,10 +90,20 @@ export function visitorUser(me: VisitorMeDTO): UserDTO {
   } as unknown as UserDTO;
 }
 
-/** The visitor's one channel, as the channel list would carry it. */
+/**
+ * Whether a channel has visitors to show: a public standard channel (by a link), or a meeting's chat (Meet's guests,
+ * docs/specs/meetings.md §9 3b).
+ */
+export function takesVisitors(channel: Pick<ChannelDTO, 'kind' | 'isPrivate'> | null | undefined): boolean {
+  return !!channel && (channel.kind === 'meeting' || (channel.kind === 'standard' && !channel.isPrivate));
+}
+
+/** The visitor's one channel, as the channel list would carry it: a meeting's chat for a Meet guest. */
 export function visitorChannel(me: VisitorMeDTO): ChannelDTO {
+  const meeting = me.channel.meeting;
   return {
-    id: me.channel.id, workspaceId: me.organization.id, name: me.channel.name, kind: 'standard', topic: me.channel.topic, isPrivate: false,
+    id: me.channel.id, workspaceId: me.organization.id, name: meeting ? null : me.channel.name, kind: meeting ? 'meeting' : 'standard',
+    topic: me.channel.topic, isPrivate: !!meeting, ...(meeting ? { meeting } : {}),
     createdBy: '', createdAt: me.seesFrom, archivedAt: null, isMember: true, lastReadMsgId: null, unreadCount: 0, unreadNotifications: 0,
     unreadThreadRootIds: [], notifyLevel: 'all', parentId: null, memberIds: [],
   } as unknown as ChannelDTO;

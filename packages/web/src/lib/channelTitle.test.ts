@@ -35,4 +35,9 @@ describe('dmTitle', () => {
   it('names the self-DM after you', () => {
     expect(dmTitle(chan({ kind: 'dm', memberIds: ['me'] }), names, 'me')).toBe('Me (you)');
   });
+
+  it('names a meeting chat after its meeting', () => {
+    expect(dmTitle(chan({ kind: 'meeting', isPrivate: true, meeting: { code: 'kqd-wmzt-fra', title: 'Weekly sync' } }), names, 'me')).toBe('Weekly sync');
+    expect(dmTitle(chan({ kind: 'meeting', isPrivate: true }), names, 'me')).toBe('Meeting');
+  });
 });

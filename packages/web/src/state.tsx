@@ -53,6 +53,12 @@ export const CHANNEL_BROWSER_VIEW_ID = '__channel_browser__';
  */
 export const SEARCH_VIEW_ID = '__search__';
 
+/**
+ * Sentinel channel id for Meetings (Meet phase 3b, docs/specs/meetings.md §9): the meeting chats you are in, which the
+ * channel list leaves out. <MeetingsView> lists them; opening one selects its channel as usual.
+ */
+export const MEETINGS_VIEW_ID = '__meetings__';
+
 export interface Selection {
   workspaceId: string | null;
   channelId: string | null;

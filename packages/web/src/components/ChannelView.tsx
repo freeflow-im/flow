@@ -2,8 +2,8 @@ import { isLookingAtApp, onLookingChange } from '../lib/host';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { MessageDTO } from '@flow/shared';
 import { typingKey, useAuth, useLive, useSelection } from '../state';
-import { HUDDLE_MAX_PEOPLE, useHuddle } from '../huddle';
-import { useArtifacts, useChannel, useChannelMembers, useChannelPeople, useMarkRead, useMessages, usePinnedMessages, useTogglePin, useWorkspaces, flattenMessages } from '../hooks';
+import { HUDDLE_MAX_PEOPLE, meetRoomUrl, useHuddle } from '../huddle';
+import { meetingChatOf, useArtifacts, useChannel, useChannelMembers, useChannelPeople, useMarkRead, useMeetingChats, useMessages, usePinnedMessages, useTogglePin, useWorkspaces, flattenMessages } from '../hooks';
 import { dmTitle } from './Sidebar';
 import { Avatar } from './Avatar';
 import ChannelMembersPopover, { type MemberRow } from './ChannelMembersPopover';
@@ -21,7 +21,7 @@ import { useBoundApi } from '../lib/useBoundApi';
 import { useQueryClient } from '@tanstack/react-query';
 
 export default function ChannelView({ channelId }: { channelId: string }) {
-  const { api: boundApi } = useBoundApi();
+  const { api: boundApi, serverOrigin: boundApiOrigin } = useBoundApi();
   const qc = useQueryClient();
   const auth = useAuth();
   const sel = useSelection();
@@ -188,8 +188,13 @@ export default function ChannelView({ channelId }: { channelId: string }) {
   const inThisHuddle = huddleParticipants.some((p) => p.userId === auth.user.id);
   const huddleRunning = huddleParticipants.length > 0;
   const people = headerIds.filter((id) => !memberMap[id]?.isAgent).length;
+  // A meeting's chat (Meet phase 3b) has its meeting instead of a huddle: the header links back to it, Join while live.
+  const isMeeting = channel?.kind === 'meeting';
+  const meetingChats = useMeetingChats(sel.workspaceId, isMeeting);
+  const meetingChat = isMeeting ? meetingChatOf(meetingChats.data, channelId) : undefined;
+  const meetingCode = channel?.meeting?.code ?? meetingChat?.meeting.code;
   const huddleEligible =
-    !!channel && !channel.archivedAt && caps.huddles.state !== 'unavailable' && (huddleRunning || people <= HUDDLE_MAX_PEOPLE);
+    !!channel && !isMeeting && !channel.archivedAt && caps.huddles.state !== 'unavailable' && (huddleRunning || people <= HUDDLE_MAX_PEOPLE);
   const canEditChannel = channel?.kind === 'standard' && !archived && caps.channelManagement.state !== 'unavailable';
   const isDmHuddle = !!channel && channel.kind !== 'standard';
 
@@ -224,8 +229,13 @@ export default function ChannelView({ channelId }: { channelId: string }) {
                   : undefined
             }
           >
-            {channel?.kind === 'standard' ? <><span className="text-muted"># </span>{title}</> : title}
+            {channel?.kind === 'standard' ? <><span className="text-muted"># </span>{title}</> : isMeeting ? <><span aria-hidden="true">🎥 </span>{title}</> : title}
           </h2>
+          {isMeeting && (
+            <p data-testid="meeting-chat-note" className="truncate text-xs text-muted">
+              Meeting chat{meetingChat?.live ? ' · live now' : ''}. Only people who joined the meeting see it.
+            </p>
+          )}
           {dmAgent && (
             <p data-testid="dm-agent-note" className="truncate text-xs text-muted">
               Not private: anyone in {workspaceName} can ask {dmAgent.displayName}.
@@ -246,6 +256,20 @@ export default function ChannelView({ channelId }: { channelId: string }) {
           {topicTip.tooltip}
         </div>
         <div className="relative flex shrink-0 items-center gap-3">
+          {isMeeting && meetingCode && (
+            <a
+              data-testid={meetingChat?.live ? 'meeting-join' : 'meeting-open'}
+              href={meetRoomUrl(boundApiOrigin, meetingCode)}
+              target="_blank"
+              rel="noopener"
+              title={meetingChat?.live ? 'Join the meeting in Meet' : 'Open the meeting in Meet'}
+              className={`flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-semibold no-underline ${
+                meetingChat?.live ? 'bg-accent/15 text-accent-soft hover:bg-accent/25' : 'text-muted hover:bg-daypill/60 hover:text-ink'
+              }`}
+            >
+              🎥 {meetingChat?.live ? 'Join' : 'Open meeting'}
+            </a>
+          )}
           {huddleEligible && (
             <button
               type="button"

@@ -4,6 +4,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
 import VisitorApp from './components/VisitorApp';
 import { parseVisitPath } from './lib/visitor';
+import MeetingChatApp from './components/MeetingChatApp';
+import { parseMeetingChatFramePath } from '@flow/shared';
 import './index.css';
 import { reloadOnStaleBuild } from '@flow/suite-bar';
 
@@ -12,6 +14,8 @@ reloadOnStaleBuild();
 
 // A channel visitor's link (docs/specs/chat-visitors.md): a page of its own, outside the signed-in app and its sessions.
 const visitToken = parseVisitPath(location.pathname);
+// A meeting's chat in Meet's room (docs/specs/meetings.md §9 3b): the chat on its own, for the room's frame.
+const meetingChat = parseMeetingChatFramePath(location.pathname, location.search);
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -22,7 +26,7 @@ const queryClient = new QueryClient({
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      {visitToken ? <VisitorApp token={visitToken} /> : <App />}
+      {visitToken ? <VisitorApp token={visitToken} /> : meetingChat ? <MeetingChatApp target={meetingChat} /> : <App />}
     </QueryClientProvider>
   </React.StrictMode>,
 );

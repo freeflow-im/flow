@@ -63,6 +63,26 @@ can. Press it again to unlock.
 
 ## In the meeting
 
-The bar at the bottom has **Mute**, **Camera**, **Share screen**, **People**
-and **Leave**. **Copy link** at the top copies the meeting's link. Nothing is
-recorded.
+The bar at the bottom has **Mute**, **Camera**, **Share screen**, **People**,
+**Chat** and **Leave**. **Copy link** at the top copies the meeting's link.
+Nothing is recorded.
+
+## Chat in a meeting
+
+**Chat** opens the meeting's chat beside the call. Post messages, reply in a
+thread, react and add files, as in any Chat channel. When someone posts while
+the chat is closed, a dot shows on the **Chat** button.
+
+- Each meeting room has one chat, kept from one meeting to the next: a line
+  such as "Meeting started · Mon 16 Nov" marks each time it met.
+- It is private to the people who joined. Guests can read and post too, but
+  only see what was posted after they joined, and only until the meeting ends.
+- A huddle's chat is the conversation it was started from.
+
+## Meetings in Chat
+
+Chat's sidebar has **Meetings** once you have joined a meeting: the chats of
+your meetings, a meeting that is on now at the top with **Join**, then the
+newest. Open one to read it like a channel; **Open meeting** (or **Join**,
+while it is on) goes back to the call. Meeting chats are not in the channel
+list, and their messages do not count as unread unless they mention you.
