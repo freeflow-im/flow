@@ -54,10 +54,16 @@ export function senderAllowed(from: string | null | undefined, authResults: stri
 }
 
 /** Why a message is taken or refused: `ok`, its sender is `not_on_list`, or the receiving server did not vouch for it (`unauthenticated`). */
-export function screenReason(from: string | null | undefined, authResults: string[], allowed: Set<string>, trustFrom = false): 'ok' | 'not_on_list' | 'unauthenticated' {
+export function screenReason(from: string | null | undefined, authResults: string[], allowed: Set<string>, trustFrom = false, dkimPassed: string[] = []): 'ok' | 'not_on_list' | 'unauthenticated' {
   const address = (from ?? '').trim().toLowerCase();
   if (!address || !allowed.has(address)) return 'not_on_list';
-  return trustFrom || authPasses(address, authResults) ? 'ok' : 'unauthenticated';
+  return trustFrom || authPasses(address, authResults) || dkimAligned(address, dkimPassed) ? 'ok' : 'unauthenticated';
+}
+
+/** A DKIM signature verified here (dkim.ts) for a domain aligned with the From address's: the sender is who it says. */
+export function dkimAligned(from: string, passedDomains: string[]): boolean {
+  const fromDomain = domainOf(from);
+  return !!fromDomain && passedDomains.some((d) => aligned(d.toLowerCase(), fromDomain));
 }
 
 /** An allowlist as the sponsor typed it: addresses, trimmed, lower-cased, deduplicated, invalid ones dropped. */
