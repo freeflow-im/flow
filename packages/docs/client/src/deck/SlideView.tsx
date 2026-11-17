@@ -359,7 +359,7 @@ export const Paragraphs = memo(function Paragraphs({ paragraphs, live = false }:
   return (
     <>
       {paragraphs.map((p, i) => (
-        <div key={i} className={`sl-p${p.bullet ? ' bullet' : ''}`} data-bullet={p.bullet ? '1' : undefined} data-level={p.level || undefined} data-p={i} style={paragraphStyle(p)}>
+        <div key={i} className={`sl-p${p.bullet ? ' bullet' : ''}`} data-bullet={p.bullet ? '1' : '0'} data-level={p.level ?? 0} data-p={i} style={paragraphStyle(p)}>
           {p.runs?.length ? p.runs.map((r, k) => <Run key={k} run={r} index={k} live={live} />) : p.text || '​'}
         </div>
       ))}
@@ -578,9 +578,9 @@ function TextEditor({ initial, onCommit, onStop, style, caret }: { initial: Para
           while (block && block.parentElement !== ref.current) block = block.parentElement;
           if (!block) return;
           const level = Math.max(0, Math.min(4, (Number(block.dataset.level) || 0) + (e.shiftKey ? -1 : 1)));
-          block.dataset.level = level ? String(level) : '';
-          if (!level) delete block.dataset.level;
-          if (block.dataset.bullet === undefined && !e.shiftKey) block.dataset.bullet = '1';
+          // Level 0 is written out too: a block with no data-level inherits the level of the one before it.
+          block.dataset.level = String(level);
+          if (block.dataset.bullet !== '1' && !e.shiftKey) block.dataset.bullet = '1';
           const bullet = block.dataset.bullet === '1';
           block.style.paddingLeft = `${(bullet ? 28 : 0) + level * 28}px`;
           block.classList.toggle('bullet', bullet);
