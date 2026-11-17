@@ -6,6 +6,7 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod4';
 import { APP_MANIFESTS } from '@flow/shared/manifests';
+import { toolsAtDoor, type ToolDefinition } from '@flow/shared/tools';
 import { CLIENT_TOOLS, type AgentContext } from '@flow/docs/shared/agent/protocol.ts';
 import { isToolName, JOB_TOOLS, runDocsTool, schemas, setAssistantToolSource, ToolFailure, type ServerToolEnv, type Validated } from '@flow/docs/server/agent/tools.ts';
 import { ASSISTANT_MAIL_TOOLS, assistantMailSchemas, type MailToolContext } from '../imap/mailTools.ts';
@@ -89,14 +90,48 @@ export const SUITE_SCHEMAS: Record<string, z.ZodObject> = {
     .describe('Moves FreeFlow Calendar\'s view to a day, week or month, when the user is in Calendar and asks to see a time ("show me next week"). Only works in Calendar.'),
 };
 
+/**
+ * Docs' editing tools that run without a page (decision_log 2026-11-17, "Every agent turn runs its tools"): the browser
+ * tools whose twin the /mcp door serves headless, on the stored file by its id (the Docs object's `mcp`, the plugin's
+ * FileHub running the same client code, agents.md §5). A turn with no page open is offered the twin's definition, and
+ * the runtime (Assistant.runHeadless) runs the call there. `open_file` and `view_image` stay out: one only shows a file on
+ * screen, the other answers with a picture, which a tool result here cannot carry.
+ */
+const NOT_HEADLESS: ReadonlySet<string> = new Set(['open_file', 'view_image']);
+const HEADLESS_DOCS_DEFINITIONS: readonly ToolDefinition[] = (() => {
+  const browser = new Set(toolsAtDoor('assistant').filter((t) => t.app === 'docs' && t.kind === 'browser').map((t) => t.name));
+  return toolsAtDoor('mcp').filter((t) => t.app === 'docs' && t.kind === 'server' && browser.has(t.name) && !NOT_HEADLESS.has(t.name));
+})();
+export const HEADLESS_DOCS_TOOLS: ReadonlySet<string> = new Set(HEADLESS_DOCS_DEFINITIONS.map((t) => t.name));
+
+/**
+ * What a turn with no page open has (AgentContext `headless`: an automation's, an email's, a Chat turn): every server
+ * tool, Chat's tools (which the runtime runs through the Org object), and Docs' editing tools headless. No other browser
+ * tool: they act on what is on screen.
+ */
+function headlessTools(): ToolDefinition[] {
+  return [...toolsFor('assistant', { app: 'chat' }).map((t) => t.definition), ...HEADLESS_DOCS_DEFINITIONS];
+}
+
+/** The definitions a turn may use: the open app's browser tools and every server tool, or the headless set. */
+const definitionsFor = (context: AgentContext | undefined): ToolDefinition[] =>
+  context?.headless ? headlessTools() : toolsFor('assistant', { app: openApp(context) }).map((t) => t.definition);
+
 /** Whether the assistant has this tool in this context: every server tool, and the open app's browser tools. */
-const offered = (name: string, context: AgentContext | undefined): boolean => toolsFor('assistant', { app: openApp(context) }).some((t) => t.definition.name === name);
+const offered = (name: string, context: AgentContext | undefined): boolean => definitionsFor(context).some((d) => d.name === name);
+
+/** A browser tool of any app (it acts on what is on screen), for the refusal a turn with no page gives it. */
+const isAnyBrowserTool = (name: string): boolean => toolsAtDoor('assistant').some((t) => t.name === name && t.kind === 'browser');
+
+/** Why a tool cannot run in a turn with no page open. */
+export const headlessRefusal = (name: string): string =>
+  `${name} works on a page open in the app, and this turn has none (an automation, an email or Chat started it). Use a tool that takes the file's or message's id instead, or tell the user what to open.`;
 
 /** Tool definitions for a turn, in a fixed order per app so the prompt prefix stays cacheable: the registry's, for the open app. */
 export function suiteTools(context: AgentContext | undefined, jobs: boolean): Anthropic.Beta.BetaTool[] {
-  const registered = toolsFor('assistant', { app: openApp(context) })
-    .filter((t) => jobs || !JOB_TOOLS.has(t.definition.name))
-    .map(({ definition }) => ({
+  const registered = definitionsFor(context)
+    .filter((definition) => jobs || !JOB_TOOLS.has(definition.name))
+    .map((definition) => ({
       name: definition.name,
       description: definition.description,
       input_schema: definition.input as Anthropic.Beta.BetaTool.InputSchema,
@@ -112,6 +147,11 @@ export function suiteTools(context: AgentContext | undefined, jobs: boolean): An
 export function validateSuiteTool(name: string, input: unknown, context: AgentContext | undefined): Validated | undefined {
   if (isBrowserWebTool(name)) return validateBrowserTool(name, input, context);
   if (isAdminTool(name)) return context?.admin ? validateAdminTool(name, input) : { ok: false, error: `Unknown tool "${name}".` };
+  if (context?.headless && HEADLESS_DOCS_TOOLS.has(name)) {
+    // The /mcp door's twin checks its own input (its schema is the one the model was given), and says what is wrong.
+    return input && typeof input === 'object' && !Array.isArray(input) ? { ok: true, input: input as Record<string, unknown> } : { ok: false, error: `Invalid input for ${name}: an object.` };
+  }
+  if (context?.headless && !offered(name, context) && isAnyBrowserTool(name)) return { ok: false, error: headlessRefusal(name) };
   if (context && !offered(name, context)) return { ok: false, error: `Unknown tool "${name}".` };
   if (isToolName(name)) return undefined;
   // An app added by manifest has no schema here: its registered runner's shape is its schema.

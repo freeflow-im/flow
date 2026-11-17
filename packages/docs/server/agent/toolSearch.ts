@@ -34,8 +34,11 @@ const CORE_BY_PAGE: Record<string, readonly string[]> = {
 
 /** The tools loaded up front on this page. */
 export function coreTools(context: AgentContext | undefined): ReadonlySet<string> {
-  return new Set([...ALWAYS, ...(CORE_BY_PAGE[context?.page ?? ''] ?? [])]);
+  return new Set([...ALWAYS, ...(CORE_BY_PAGE[context?.page ?? ''] ?? []), ...(context?.headless ? HEADLESS_CORE : [])]);
 }
+
+/** Loaded in a turn with no page open (an automation's, an email's): Chat's tools and the mail tools, beside its page's. */
+const HEADLESS_CORE = ['list_channels', 'read_messages', 'send_message', 'search_mail', 'read_mail'];
 
 /**
  * The turn's tools with all but the page's core deferred, and the search tool first (it stays loaded, which the API

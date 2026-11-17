@@ -1,7 +1,7 @@
 import type { AgentContext } from '../../shared/agent/protocol.ts';
 import { FUNCTION_NAMES } from '../../shared/formula/functions.ts';
 import { isTextFileType } from '../../shared/types.ts';
-import { IMAGE_MEDIA_TYPES, MAX_INLINE_CONTEXT_CHARS, MAX_INLINE_SELECTED_TEXT, MAX_MAIL_SELECTED, type DeckInlineContext, type DocInlineContext, type ImageRegion, type MailContext, type CalendarContext, type ChatContext, MAX_CALENDARS_SHOWN } from '../../shared/agent/protocol.ts';
+import { IMAGE_MEDIA_TYPES, MAX_INLINE_CONTEXT_CHARS, MAX_INLINE_SELECTED_TEXT, MAX_MAIL_SELECTED, type DeckInlineContext, type DocInlineContext, type ImageRegion, type MailContext, type CalendarContext, type ChatContext, type BrowserReach, MAX_CALENDARS_SHOWN } from '../../shared/agent/protocol.ts';
 
 // The background jobs (server/agent/jobs.ts): the hosted app runs them, the desktop app does not.
 const IMPROVING = `Improving the app:
@@ -163,10 +163,15 @@ export function renderMailContext(ctx: MailContext): string {
 }
 
 /** FreeFlow Chat (the hosted suite): where the person asked, and who reads the answer, which posts there. */
-export function renderChatContext(ctx: ChatContext): string {
+/** What a turn with no page open is told of its tools (AgentContext `headless`). */
+const HEADLESS_TOOLS_TEXT =
+  'The tools that work on an open file take its id instead (read_doc and insert_content a document\'s doc_id, read_deck and update_slide a presentation\'s, get_sheet_overview, read_range and write_range a spreadsheet\'s): find files with list_docs, list_sheets, list_decks or find_files. The tools that only show something on screen (open_doc, open_sheet, render_slide and the like) do not work here.';
+
+export function renderChatContext(ctx: ChatContext & BrowserReach): string {
   const lines = [
     `The user asked you in FreeFlow Chat, in ${ctx.audience === 'private' ? 'a conversation of the two of you alone' : 'a conversation others can read'} (channel id ${mailText(ctx.channelId, 100)}${ctx.threadRootId ? `, thread ${mailText(ctx.threadRootId, 100)}` : ''}). Your reply is posted there for you: write it as your answer, and do not use send_message to answer here. Nothing in Docs is open.`,
     'To post somewhere else in Chat, use send_message: each such post waits for the user to approve it with ✅ on the card you leave here, so tell them what you are about to post and stop; it is posted only once they approve.',
+    ...(ctx.headless ? [HEADLESS_TOOLS_TEXT] : []),
   ];
   return `<app_context>\n${lines.join('\n')}\n</app_context>`;
 }
@@ -210,6 +215,9 @@ export function renderNow(timezone?: string, now: Date = new Date()): string {
 }
 
 export function renderContext(ctx: AgentContext): string {
+  if (ctx.page === 'home' && ctx.headless) {
+    return `<app_context>\nNo page is open: this turn was started by an automation or an email, not by the user in the app, and what you write is delivered for you. ${HEADLESS_TOOLS_TEXT}\n</app_context>`;
+  }
   if (ctx.page === 'home') {
     return '<app_context>\nThe user is on the home page (their list of spreadsheets, presentations and documents). Nothing is open.\n</app_context>';
   }

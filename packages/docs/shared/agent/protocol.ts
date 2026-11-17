@@ -78,6 +78,12 @@ export interface BrowserReach {
    * it is offered the admin tools. Set by the server for that agent alone; a value a browser sends is dropped.
    */
   admin?: boolean;
+  /**
+   * The hosted suite only: no page is open. The turn was started by an automation, an email or a message in Chat, and the
+   * Worker runs every tool itself: the server tools, Chat's, and the Docs editing tools headless, by the file's id
+   * (decision_log 2026-11-17, "Every agent turn runs its tools"). Set by the server; a value a browser sends is dropped.
+   */
+  headless?: boolean;
 }
 
 /** The web tools the FreeFlow browser extension runs, in the agent's own tabs (prototype). */

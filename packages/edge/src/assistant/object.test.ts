@@ -389,6 +389,100 @@ describe('a hosted agent’s runtime takes a wake job (agents.md §6)', () => {
   });
 });
 
+describe('every turn with no page open runs its tools (decision_log 2026-11-17)', () => {
+  const users: Record<string, unknown> = { 'user-1': { id: 'user-1', email: 'ann@acme.test', displayName: 'Ann', isAgent: false, timezone: 'UTC' } };
+  const runtime = { runtimeKey: 'acct-1', agentId: 'asst', agentAccountId: 'acct-asst', mode: 'personal' as const, organizationId: 'org-1', sponsorId: 'user-1', sponsorAccountId: 'acct-1' };
+  const job = (id: string) => ({ id, subscriptionId: 'sub-9', agent: 'acct-asst', eventId: 'e1', eventSeq: 1, prompt: 'Summarize #general into the notes doc.', channelId: 'ch-1', state: 'queued', attempts: 0, depth: 1, createdAt: '', updatedAt: '' }) as never;
+  function env() {
+    const chat: Record<string, unknown>[] = [];
+    const mcp: { body: { method: string; params: { name: string; arguments: Record<string, unknown> } }; caller: Record<string, unknown> }[] = [];
+    const posted: Record<string, unknown>[] = [];
+    return {
+      chat, mcp, posted,
+      env: {
+        DIRECTORY: { idFromName: (n: string) => n, get: () => ({ call: async (m: string, args: unknown[]) => ({ ok: true, value: m === 'getUser' ? users[args[0] as string] : m === 'accountById' ? ACCOUNT : null }) }) },
+        ORG: {
+          idFromName: (n: string) => n,
+          get: () => ({
+            channelIdsOf: async () => ['ch-1'],
+            postAutomation: async (p: Record<string, unknown>) => { posted.push(p); return 'm1'; },
+            assistantChat: async (p: Record<string, unknown>) => { chat.push(p); return [{ id: 'm-7', from: 'Bob', at: '2026-11-17T09:00:00Z', text: 'Ship it Friday.' }]; },
+          }),
+        },
+        DOCS: {
+          idFromName: (n: string) => n,
+          get: () => ({
+            mcp: async (req: Request, caller: Record<string, unknown>) => {
+              const body = (await req.json()) as (typeof mcp)[number]['body'];
+              mcp.push({ body, caller });
+              return Response.json({ jsonrpc: '2.0', id: 1, result: { content: [{ type: 'text', text: JSON.stringify({ doc_id: 'd0c000000001', inserted: 1 }) }] } });
+            },
+          }),
+        },
+        EVENTS: { idFromName: (n: string) => n, get: () => ({ jobStep: async (id: string, _a: string, step: string) => ({ id, state: step === 'ack' ? 'running' : 'done' }) }) },
+      } as unknown as AssistantEnv,
+    };
+  }
+
+  it('runs an automation’s Chat and Docs calls itself, with real results, and refuses a page-only tool with the reason', async () => {
+    const e = env();
+    const a = assistant('acct-1', e.env);
+    const seen: { tools: string[]; results: Block[] }[] = [];
+    a.script = async (params, { onText }) => {
+      const results = lastUser(params).filter((b) => b.type === 'tool_result');
+      seen.push({ tools: (params.tools ?? []).map((t) => (t as { name: string }).name), results });
+      if (!results.length) return message([{ type: 'tool_use', id: 'tu-read', name: 'read_messages', input: { channelId: 'ch-gen' } }], 'tool_use') as never;
+      if (results[0]!.tool_use_id === 'tu-read') {
+        return message([
+          { type: 'tool_use', id: 'tu-ins', name: 'insert_content', input: { doc_id: 'd0c000000001', markdown: 'Ship it Friday.' } },
+          { type: 'tool_use', id: 'tu-open', name: 'open_doc', input: { doc_id: 'd0c000000001' } },
+        ], 'tool_use') as never;
+      }
+      onText('Added the summary.');
+      return message([{ type: 'text', text: 'Added the summary.' }], 'end_turn') as never;
+    };
+    await a.wake({ organizationId: 'org-1', job: job('job-r1'), runtime });
+    // The turn was offered Chat's tools and Docs' editing tools, with no page.
+    expect(seen[0]!.tools).toEqual(expect.arrayContaining(['list_channels', 'read_messages', 'send_message', 'insert_content', 'write_range', 'search_mail']));
+    expect(seen[0]!.tools).not.toContain('open_doc');
+    // read_messages ran through the Org object as the assistant (its sponsor's reach), and its result went back.
+    expect(e.chat).toEqual([expect.objectContaining({ agentUserId: 'asst', op: 'read', channelId: 'ch-gen' })]);
+    expect(String(seen[1]!.results[0]!.content)).toContain('Ship it Friday.');
+    // insert_content ran headless in the Docs object's /mcp door, as the sponsor via the assistant.
+    expect(e.mcp).toHaveLength(1);
+    expect(e.mcp[0]!.body).toMatchObject({ method: 'tools/call', params: { name: 'insert_content', arguments: { doc_id: 'd0c000000001' } } });
+    expect(e.mcp[0]!.caller).toMatchObject({ userId: 'user-1', orgId: 'org-1', via: 'asst', scope: 'files:read files:write' });
+    const [ins, open] = seen[2]!.results;
+    expect(String(ins!.content)).toContain('"inserted":1');
+    expect(open).toMatchObject({ is_error: true });
+    expect(String(open!.content)).toMatch(/open_doc works on a page open in the app/);
+    // The answer is posted in the job's channel.
+    expect(e.posted).toEqual([expect.objectContaining({ channelId: 'ch-1', body: 'Added the summary.', causedBy: 'job-r1' })]);
+  });
+
+  it('gives a shared agent asked in Chat its Chat tools, with its own reach', async () => {
+    const e = env();
+    const omniUsers: Record<string, unknown> = { omni: { id: 'omni', email: 'omni@agents.flow.local', displayName: 'Omni', isAgent: true } };
+    const OMNI = { id: 'acct-omni', principalId: 'omni', organizationId: 'org-1', state: 'active', role: 'member', displayName: 'Omni', kind: 'native', agentMode: 'shared' } as unknown as AccountDTO;
+    const shared: Record<string, unknown>[] = [];
+    const env2 = {
+      ...e.env,
+      DIRECTORY: { idFromName: (n: string) => n, get: () => ({ call: async (m: string, args: unknown[]) => ({ ok: true, value: m === 'getUser' ? omniUsers[args[0] as string] : m === 'accountById' ? OMNI : null }) }) },
+      ORG: { idFromName: (n: string) => n, get: () => ({ channelIdsOf: async () => ['ch-1'], agentTyping: async () => undefined, assistantChat: async (p: Record<string, unknown>) => { e.chat.push(p); return []; }, postAsSharedAgent: async (p: Record<string, unknown>) => { shared.push(p); return 'm1'; } }) },
+    } as unknown as AssistantEnv;
+    const a = assistant('acct-omni', env2);
+    a.script = async (params, { onText }) => {
+      if (!lastUser(params).some((b) => b.type === 'tool_result')) return message([{ type: 'tool_use', id: 'tu-ch', name: 'list_channels', input: {} }], 'tool_use') as never;
+      onText('You have no channels in common with me.');
+      return message([{ type: 'text', text: 'You have no channels in common with me.' }], 'end_turn') as never;
+    };
+    const omniRuntime = { runtimeKey: 'acct-omni', agentId: 'omni', agentAccountId: 'acct-omni', mode: 'shared' as const, organizationId: 'org-1', sponsorId: 'user-1', sponsorAccountId: 'acct-1' };
+    await a.sharedChatTurn({ organizationId: 'org-1', runtime: omniRuntime, askerUserId: 'user-1', askerAccountId: 'acct-1', channelId: 'ch-1', threadRootId: null, messageId: 'msg-s1', prompt: 'Which channels are you in?', audience: 'private' });
+    expect(e.chat).toEqual([expect.objectContaining({ agentUserId: 'omni', op: 'channels' })]);
+    expect(shared).toEqual([expect.objectContaining({ body: 'You have no channels in common with me.', invokedBy: 'acct-1' })]);
+  });
+});
+
 describe('the runtime under concurrent use (agents.md §6)', () => {
   it('keeps a running turn’s guard across a definition change: a second turn in the same conversation is still refused', async () => {
     const a = assistant('acct-1');
@@ -532,7 +626,9 @@ describe('a person’s assistant in Chat posts elsewhere only on its sponsor’s
     const offered = seen[0]!.tools;
     for (const name of ['list_channels', 'read_messages', 'send_message']) expect(offered.find((t) => t.name === name)?.defer, name).toBeFalsy();
     expect(offered.find((t) => t.name === 'leave_channel')?.defer).toBe(true);
-    expect(offered.some((t) => t.name === 'write_range')).toBe(false);
+    // No page is open: Docs' editing tools are there headless (found by search), the ones that only show a page are not.
+    expect(offered.find((t) => t.name === 'write_range')?.defer).toBe(true);
+    expect(offered.some((t) => t.name === 'open_sheet' || t.name === 'render_slide')).toBe(false);
     // list_channels ran here, through the Org object, and its result went back to the model.
     expect(String(seen[1]!.results[0]!.content)).toContain('"name":"general"');
     // The text first, then the card, both in the DM; no post anywhere else.
