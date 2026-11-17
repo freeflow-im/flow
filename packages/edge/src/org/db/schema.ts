@@ -830,3 +830,62 @@ export const grants = sqliteTable(
     index('grants_object').on(t.objectKind, t.objectId),
   ],
 );
+
+/**
+ * Apps installed in this organization (docs/specs/user-apps.md §4): one row per app, named by the app's name, which is
+ * unique here. Phase 1 installs external apps only (§7.1): `manifest` is the checked manifest (JSON), fetched from
+ * `manifest_url`; `secret*` is the install's signing secret, encrypted as an app artifact's is (it signs the tool calls the
+ * registry sends, checks the events the app sends, and signs the screen's tokens). `installed_by` is an account id; times
+ * are epoch milliseconds.
+ */
+export const userApps = sqliteTable('user_apps', {
+  name: text('name').primaryKey(),
+  version: integer('version').notNull(),
+  manifest: text('manifest').notNull(),
+  manifestUrl: text('manifest_url').notNull(),
+  secret: bytea('secret').notNull(),
+  secretNonce: bytea('secret_nonce').notNull(),
+  encKeyId: text('enc_key_id').notNull(),
+  encScheme: integer('enc_scheme').notNull(),
+  installedBy: text('installed_by').notNull(),
+  installedAt: integer('installed_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+});
+
+/** Each manifest an app was installed or updated with, in order (§4 `app_versions`): what an admin approved, kept after removal. */
+export const userAppVersions = sqliteTable(
+  'user_app_versions',
+  {
+    name: text('name').notNull(),
+    version: integer('version').notNull(),
+    manifest: text('manifest').notNull(),
+    by: text('by').notNull(),
+    at: integer('at').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.name, t.version] })],
+);
+
+/**
+ * Who holds an installed app's scopes (§5.2): `grantee` is `members` (every member who is not a guest) or an account id (a
+ * person or a shared agent). Installing changes no token; uninstalling deletes the rows.
+ */
+export const userAppGrants = sqliteTable(
+  'user_app_grants',
+  {
+    name: text('name').notNull(),
+    scope: text('scope').notNull(),
+    grantee: text('grantee').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.name, t.scope, t.grantee] }), index('user_app_grants_grantee').on(t.grantee)],
+);
+
+/** A person has turned an app on for their personal agents (§5.2): those agents get the scopes the person holds. */
+export const userAppAgents = sqliteTable(
+  'user_app_agents',
+  {
+    name: text('name').notNull(),
+    accountId: text('account_id').notNull(),
+    at: integer('at').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.name, t.accountId] })],
+);

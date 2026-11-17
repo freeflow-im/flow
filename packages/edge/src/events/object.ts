@@ -92,6 +92,27 @@ export class Events extends DurableObject<EventsEnv> {
    * Without the Org object (or when it fails) a `ref:` event is its owner's alone.
    */
   private async withShares(reader: Reader, since: unknown): Promise<Reader> {
+    return this.withApps(await this.sharesOf(reader, since), since);
+  }
+
+  /**
+   * The user apps whose events the reader may see (user-apps.md §5.1), asked of the Org object only when an app event
+   * follows `since`. Without the Org object (or when it fails) the reader sees no app event: the rule fails closed.
+   */
+  private async withApps(reader: Reader, since: unknown): Promise<Reader> {
+    if (reader.readableApps || !this.env.ORG || !this.core.hasAppEvents(Number(since) || 0)) return reader;
+    const org = this.core.organizationId();
+    if (!org) return reader;
+    try {
+      const readableApps = await this.env.ORG.get(this.env.ORG.idFromName(org)).readableAppsOf(reader.accountId);
+      return { ...reader, readableApps };
+    } catch (err) {
+      console.error(`[events] apps of ${reader.accountId}: ${(err as Error).message}`);
+      return reader;
+    }
+  }
+
+  private async sharesOf(reader: Reader, since: unknown): Promise<Reader> {
     if (reader.sharedRefs || !this.env.ORG || !this.core.hasRefAudience(Number(since) || 0)) return reader;
     const org = this.core.organizationId();
     if (!org) return reader;
