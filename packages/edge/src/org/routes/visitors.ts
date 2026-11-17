@@ -36,8 +36,11 @@ function parse<S extends ZodTypeAny>(schema: S, data: unknown): z.output<S> {
 const TEN_MINUTES = 10 * 60_000;
 const limited = () => new ApiError(429, 'rate_limited', 'Too many tries. Wait a few minutes.');
 
-/** The visitor's cookie: HttpOnly, only sent to /v1/visitor, never cross-site; kept 30 days, renewed on each visit. */
-function setVisitorCookie(reply: CompatReply, token: string | null): void {
+/**
+ * The visitor's cookie: HttpOnly, only sent to /v1/visitor, never cross-site; kept 30 days, renewed on each visit. Also
+ * set by a Meet guest's join (routes/index.ts), which makes the guest a visitor of the meeting's chat.
+ */
+export function setVisitorCookie(reply: CompatReply, token: string | null): void {
   const maxAge = token ? Math.floor(vs.VISITOR_IDLE_MS / 1000) : 0;
   reply.header(
     'set-cookie',

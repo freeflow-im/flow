@@ -308,6 +308,7 @@ const SYSTEM_PREDICATE: Record<SystemMessageKind, string> = {
   huddle_declined: '',
   huddle_ended: '',
   file_shared: '',
+  meeting_started: '',
 };
 
 /**
@@ -342,42 +343,69 @@ export async function postSystemMessage(
       .where(eq(schema.users.id, subjectUserId))
       .limit(1);
     const name = who[0]?.displayName ?? 'Someone';
-    const body = `${name} ${predicate ?? SYSTEM_PREDICATE[kind]}`;
-    const id = newId();
-    const now = new Date();
-    const enc = encryptBody(body);
-    const inserted = await db
-      .insert(messages)
-      .values({
-        id,
-        channelId: chan.id,
-        userId: subjectUserId,
-        threadRootId: null,
-        clientMsgId: newId(),
-        body: enc.body,
-        bodyNonce: enc.bodyNonce,
-        encKeyId: enc.encKeyId,
-        encScheme: enc.encScheme,
-        createdAt: now,
-        systemKind: kind,
-      })
-      .returning();
-    const row = inserted[0];
-    if (!row) return null;
-    const dto = toMessageDTO(row);
-    publishEvent(subjectMsg(chan.workspaceId, chan.id), {
-      type: 'message.created',
-      workspaceId: chan.workspaceId,
-      channelId: chan.id,
-      ts: now.toISOString(),
-      data: dto,
-    });
-    return dto;
+    return insertSystemLine(chan, subjectUserId, kind, `${name} ${predicate ?? SYSTEM_PREDICATE[kind]}`);
   } catch (err) {
     // Best-effort: a failed courtesy line must not abort the join/leave.
     console.error('postSystemMessage failed', { channelId: chan.id, kind, err });
     return null;
   }
+}
+
+/**
+ * A meeting chat's date line (Meet phase 3b), posted when a session starts: "Meeting started · Mon 16 Nov". Like the
+ * join lines, no notifications and no unread; `at` is its time, which is also when that session's guests start seeing.
+ */
+export async function postMeetingStartedLine(
+  chan: { id: string; workspaceId: string; kind: string },
+  authorId: string,
+  body: string,
+  at: Date,
+): Promise<MessageDTO | null> {
+  if (chan.kind !== 'meeting') return null;
+  try {
+    return await insertSystemLine(chan, authorId, 'meeting_started', body, at);
+  } catch (err) {
+    console.error('postMeetingStartedLine failed', { channelId: chan.id, err });
+    return null;
+  }
+}
+
+async function insertSystemLine(
+  chan: { id: string; workspaceId: string },
+  subjectUserId: string,
+  kind: SystemMessageKind,
+  body: string,
+  now = new Date(),
+): Promise<MessageDTO | null> {
+  const id = newId();
+  const enc = encryptBody(body);
+  const inserted = await db
+    .insert(messages)
+    .values({
+      id,
+      channelId: chan.id,
+      userId: subjectUserId,
+      threadRootId: null,
+      clientMsgId: newId(),
+      body: enc.body,
+      bodyNonce: enc.bodyNonce,
+      encKeyId: enc.encKeyId,
+      encScheme: enc.encScheme,
+      createdAt: now,
+      systemKind: kind,
+    })
+    .returning();
+  const row = inserted[0];
+  if (!row) return null;
+  const dto = toMessageDTO(row);
+  publishEvent(subjectMsg(chan.workspaceId, chan.id), {
+    type: 'message.created',
+    workspaceId: chan.workspaceId,
+    channelId: chan.id,
+    ts: now.toISOString(),
+    data: dto,
+  });
+  return dto;
 }
 
 /**

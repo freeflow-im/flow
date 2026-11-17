@@ -137,7 +137,7 @@ export async function computeRecipients(
     if (cur === undefined || PRIORITY[kind] < PRIORITY[cur.kind]) out.set(uid, { kind, subkind });
   };
 
-  if (chan.kind !== 'standard') {
+  if (chan.kind !== 'standard' && chan.kind !== 'meeting') {
     // any DM message notifies every other member (kind 1). Your personal DM
     // (a "DM" whose only member is you) therefore never notifies — `propose`
     // drops the sender, and there is nobody else (issue #63).
@@ -169,6 +169,10 @@ export async function computeRecipients(
       propose(uid, 0, 'mention');
     }
   }
+
+  // A meeting chat (Meet phase 3b) counts toward nobody's unread or badges except a direct @mention of them: no group
+  // mentions, thread replies or "all activity", so a busy meeting's chat never piles up in Activity.
+  if (chan.kind === 'meeting') return finish(out);
 
   // group mentions (operator ruling): <!channel>/<!everyone> → all channel
   // members; <!here> → currently-online channel members (single-node presence)
@@ -381,6 +385,7 @@ export async function notifyReaction(
 ): Promise<void> {
   const authorId = message.userId;
   if (authorId === actorId) return; // your own reaction on your own message
+  if (chan.kind === 'meeting') return; // a meeting chat notifies only @mentions (Meet phase 3b)
   const mem = await db
     .select({ notifyLevel: channelMembers.notifyLevel })
     .from(channelMembers)

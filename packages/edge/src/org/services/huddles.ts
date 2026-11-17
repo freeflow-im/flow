@@ -43,6 +43,8 @@ function publish(channelId: string, workspaceId: string, participants: HuddlePar
 export async function requireHuddleEligible(channelId: string, userId: string) {
   const { chan, isMember } = await requireChannelAccess(channelId, userId);
   if (chan.archivedAt) throw badRequest('channel_archived', 'channel is archived');
+  // A meeting chat belongs to its meeting: its call is that meeting, not a huddle.
+  if (chan.kind === 'meeting') throw badRequest('meeting_channel', 'this chat belongs to a meeting; join the meeting instead');
   if (chan.kind !== 'standard' && !isMember) throw badRequest('not_a_member', 'not a member of this conversation');
   return { chan, isMember };
 }

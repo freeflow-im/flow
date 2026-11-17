@@ -143,7 +143,7 @@ describe('guests (phase 3)', () => {
   it('a guest joins straight in with their name, as a new RTK guest that is never a member', async () => {
     const m = await made();
     const joined = await withDb(db, () => joinAsGuest(m.code, '  Dana   Guest '));
-    expect(joined).toEqual({ code: m.code, title: 'Design review', authToken: 'guest-tok' });
+    expect(joined.join).toEqual({ code: m.code, title: 'Design review', authToken: 'guest-tok', chatChannelId: expect.any(String) });
     const add = calls.find((c) => c.url.endsWith('/participants'))!;
     expect(add.body).toMatchObject({ name: 'Dana Guest', preset_name: 'flow_guest' });
     expect(String(add.body!.custom_participant_id)).toMatch(/^guest-/);

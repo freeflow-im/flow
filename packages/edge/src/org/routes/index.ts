@@ -96,7 +96,7 @@ import * as ag from '../services/agents.js';
 import * as wi from '../services/workspaceInvites.js';
 import * as ar from '../services/artifacts.js';
 import * as sm from '../services/scheduledMessages.js';
-import { registerVisitorRoutes } from './visitors';
+import { registerVisitorRoutes, setVisitorCookie } from './visitors';
 
 
 function parse<S extends ZodTypeAny>(schema: S, data: unknown): z.output<S> {
@@ -686,6 +686,11 @@ export function registerRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     return { meetings: await mt.liveMeetings(id, req.user.id) };
   });
+  // Meeting chats (phase 3b): the meeting channels the caller is in, which the channel list leaves out.
+  app.get('/v1/workspaces/:id/meetings/chats', { preHandler: requireAuth }, async (req) => {
+    const { id } = req.params as { id: string };
+    return { chats: await mt.meetingChats(id, req.user.id) };
+  });
   app.get('/v1/meetings/:id', { preHandler: requireAuth }, async (req) => {
     const { id } = req.params as { id: string };
     return mt.getMeeting(id, req.user.id);
@@ -714,14 +719,18 @@ export function registerRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     return mt.previewMeeting(id);
   });
-  app.post('/v1/meetings/:id/guest', async (req) => {
+  // The answer also sets the visitor cookie (`vsid`, path /v1/visitor) when the guest is a visitor of the meeting's chat
+  // (phase 3b): the Meet page then reads and posts through /v1/visitor/* like any visitor.
+  app.post('/v1/meetings/:id/guest', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!rateAllow(`meet-guest:${req.ip}`, 20, 10 * 60_000) || !rateAllow(`meet-guest-room:${id}`, 100, 10 * 60_000)) {
       throw new ApiError(429, 'rate_limited', 'Too many tries. Wait a few minutes.');
     }
     const name = (req.body as { name?: unknown } | undefined)?.name;
     if (typeof name !== 'string') throw badRequest('validation', 'name: expected a string');
-    return mt.joinAsGuest(id, name);
+    const { join, visitorToken } = await mt.joinAsGuest(id, name);
+    if (visitorToken) setVisitorCookie(reply, visitorToken);
+    return reply.send(join);
   });
 
   app.post('/v1/meetings/:id/leave', { preHandler: requireAuth }, async (req) => {

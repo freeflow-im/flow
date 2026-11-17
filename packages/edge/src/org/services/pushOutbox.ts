@@ -15,7 +15,7 @@
 // ONE ROW PER NOTIFICATION, not per device. The fan-out to a user's devices
 // happens here, at send time: devices change between commit and delivery, and
 // the badge count is computed once per notification instead of once per phone.
-import { and, desc, eq, isNull, lte } from 'drizzle-orm';
+import { and, desc, eq, isNull, lte, sql } from 'drizzle-orm';
 import { USER_MENTION_RE, type NotificationKind, type NotificationSubkind } from '@flow/shared';
 import { db, schema, type Tx } from '../db/index.js';
 import { decryptBody } from '../crypto/index.js';
@@ -121,7 +121,7 @@ type CtxRow = {
  */
 export async function hydratePushContexts(rows: CtxRow[]): Promise<Map<string, PushContext>> {
   const bodies = new Map(rows.map((r) => [r.notificationId, r.deletedAt ? '' : decryptBody(r)]));
-  const dmChannelIds = [...new Set(rows.filter((r) => r.channelKind !== 'standard').map((r) => r.channelId))];
+  const dmChannelIds = [...new Set(rows.filter((r) => r.channelKind === 'dm' || r.channelKind === 'group_dm').map((r) => r.channelId))];
   const dmMembers = dmChannelIds.length
     ? await db
         .select({ channelId: channelMembers.channelId, userId: channelMembers.userId })
@@ -160,7 +160,7 @@ export async function hydratePushContexts(rows: CtxRow[]): Promise<Map<string, P
         names,
         channelKind: r.channelKind,
         conversationName:
-          r.channelKind === 'standard'
+          r.channelKind === 'standard' || r.channelKind === 'meeting'
             ? r.channelName
             : dmName(membersByChannel.get(r.channelId) ?? [], r.recipientId, names),
         soloDmWithActor:
@@ -279,7 +279,8 @@ export async function drainPendingPush(log: Logger): Promise<number> {
       workspaceId: channels.workspaceId,
       channelId: notifications.channelId,
       recipientId: notifications.userId,
-      channelName: channels.name,
+      // A meeting chat (Meet phase 3b) has no name: its alert names the meeting.
+      channelName: sql<string | null>`CASE WHEN ${channels.kind} = 'meeting' THEN (SELECT title FROM meetings WHERE chat_channel_id = ${channels.id}) ELSE ${channels.name} END`,
       channelKind: channels.kind,
       messageId: notifications.messageId,
       threadRootId: messages.threadRootId,

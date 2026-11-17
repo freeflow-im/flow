@@ -98,7 +98,7 @@ export interface PushContext {
 }
 
 /** Channel kinds, as the `channel_kind` enum spells them. */
-export type ChannelKind = 'standard' | 'dm' | 'group_dm';
+export type ChannelKind = 'standard' | 'dm' | 'group_dm' | 'meeting';
 
 /**
  * The middle row of the alert (#460): which conversation this came from, so a

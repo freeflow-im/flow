@@ -110,7 +110,7 @@ export interface MessageSearchHit extends SearchHit {
   channelId: string;
   /** The channel's name; null for a direct message. */
   channelName: string | null;
-  channelKind: 'standard' | 'dm' | 'group_dm';
+  channelKind: 'standard' | 'dm' | 'group_dm' | 'meeting';
   threadRootId: string | null;
   authorName: string;
 }
@@ -132,7 +132,8 @@ interface HitRow {
   thread_root_id: string | null;
   created_at: number;
   channel_name: string | null;
-  channel_kind: 'standard' | 'dm' | 'group_dm';
+  channel_kind: 'standard' | 'dm' | 'group_dm' | 'meeting';
+  meeting_title: string | null;
   author_name: string | null;
   snippet: string;
   rank: number;
@@ -196,7 +197,7 @@ export async function searchMessages(workspaceId: string, userId: string, query:
 
   const match = hasSearchWords(query) ? toFtsMatch(query, { prefixLast: opts.prefixLast }) : null;
   const recent = !match || opts.sort === 'recent';
-  const cols = sql`m.id, m.channel_id, m.user_id, m.thread_root_id, m.created_at, c.name AS channel_name, c.kind AS channel_kind, u.display_name AS author_name`;
+  const cols = sql`m.id, m.channel_id, m.user_id, m.thread_root_id, m.created_at, c.name AS channel_name, c.kind AS channel_kind, (SELECT title FROM meetings WHERE chat_channel_id = c.id) AS meeting_title, u.display_name AS author_name`;
   const joins = sql`JOIN messages m ON m.id = s.message_id JOIN channels c ON c.id = m.channel_id LEFT JOIN users u ON u.id = m.user_id`;
   const rows = match
     ? db.all<HitRow>(sql`SELECT ${cols}, snippet(search_messages_fts, 0, char(2), char(3), '…', 20) AS snippet, bm25(search_messages_fts) AS rank
@@ -211,7 +212,7 @@ export async function searchMessages(workspaceId: string, userId: string, query:
     source: 'chat',
     kind: 'message',
     id: r.id,
-    title: r.channel_kind === 'standard' ? `#${r.channel_name ?? ''}` : 'Direct message',
+    title: r.channel_kind === 'standard' ? `#${r.channel_name ?? ''}` : r.channel_kind === 'meeting' ? (r.meeting_title ?? 'Meeting') : 'Direct message',
     snippet: r.snippet ?? '',
     author: r.user_id,
     at: new Date(r.created_at).toISOString(),

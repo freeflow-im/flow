@@ -3,7 +3,7 @@
 // every member route refuses them as it is; the visitor routes (routes/visitors.ts) check the visitor's session and run
 // the members' services inside `visitorGrant`, with the "sees from" cut (§2) applied. The socket filter is
 // `visitorMayReceive`, which the Org object applies to every event it sends a visitor's socket.
-import { and, eq, gt, inArray, isNull, sql, type SQL } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNull, lt, sql, type SQL } from 'drizzle-orm';
 import type {
   ChannelVisitorDTO,
   Event,
@@ -38,12 +38,17 @@ const LINK_GONE = 'This link no longer works. Ask the person who sent it for a n
 type ChannelRow = typeof channels.$inferSelect;
 
 /**
- * Which channels take visitors (V6): public standard channels that are not archived. Meeting channels (the meeting chat
- * phase of docs/specs/meetings.md) are their own kind and will take visitors too: add that kind here.
+ * Which channels take visitors (V6): public standard channels that are not archived, and meeting chats (kind `meeting`,
+ * docs/specs/meetings.md §9 3b), whose visitors are the meeting's guests.
  */
 export function channelTakesVisitors(chan: Pick<ChannelRow, 'kind' | 'isPrivate' | 'archivedAt'>): boolean {
   if (chan.archivedAt) return false;
-  return chan.kind === 'standard' && !chan.isPrivate;
+  return chan.kind === 'meeting' || (chan.kind === 'standard' && !chan.isPrivate);
+}
+
+/** Which channels take visitor links: public standard channels only. A meeting chat gets visitors only by a guest join. */
+export function channelTakesVisitorLinks(chan: Pick<ChannelRow, 'kind' | 'isPrivate' | 'archivedAt'>): boolean {
+  return !chan.archivedAt && chan.kind === 'standard' && !chan.isPrivate;
 }
 
 async function visitorsOn(workspaceId: string): Promise<boolean> {
@@ -58,7 +63,7 @@ async function requireLinkMaker(channelId: string, actorId: string): Promise<Cha
   const { chan, isMember } = await requireChannelAccess(channelId, actorId);
   const m = await requireMembership(chan.workspaceId, actorId);
   if (m.kind === 'guest') throw forbidden('guests cannot invite visitors');
-  if (!channelTakesVisitors(chan)) throw badRequest('visitors_not_allowed', 'visitor links are for public channels only');
+  if (!channelTakesVisitorLinks(chan)) throw badRequest('visitors_not_allowed', 'visitor links are for public channels only');
   if (!isMember) throw forbidden('join the channel to invite a visitor');
   return chan;
 }
@@ -187,6 +192,47 @@ export function sweepIdleVisitors(now = Date.now()): Promise<number> {
   return removeVisitorsWhere(sql`${channelVisitors.lastSeenAt} < ${now - VISITOR_IDLE_MS}`);
 }
 
+/**
+ * A meeting's session ended (or a new one began): its guests' visits of the meeting chat end. With `before`, only the
+ * visits that began before that time (a new session's own guests stay).
+ */
+export function endMeetingVisits(channelId: string, before?: Date): Promise<number> {
+  return removeVisitorsWhere(
+    before ? and(eq(channelVisitors.channelId, channelId), lt(channelVisitors.seesFrom, before))! : eq(channelVisitors.channelId, channelId),
+  );
+}
+
+/**
+ * A meeting guest becomes a visitor of the meeting's chat (Meet phase 3b): a users row with no member row, their place in
+ * the channel with "sees from" = `seesFrom` (the moment they joined, or their session's date line), and a session for
+ * the `vsid` cookie. No link and no join line. Null when visitors are off in the organization. Returns the cookie's value
+ * once.
+ */
+export async function addMeetingGuestVisitor(
+  chan: Pick<ChannelRow, 'id' | 'workspaceId' | 'kind' | 'isPrivate' | 'archivedAt'>,
+  rawName: string,
+  seesFrom: Date,
+): Promise<{ userId: string; sessionToken: string } | null> {
+  if (chan.kind !== 'meeting' || !channelTakesVisitors(chan) || !(await visitorsOn(chan.workspaceId))) return null;
+  let name: string;
+  try {
+    name = cleanVisitorName(rawName.slice(0, VISITOR_NAME_MAX));
+  } catch {
+    name = 'Guest'; // the call already took the name; the chat must not refuse it
+  }
+  const userId = newId();
+  const now = new Date();
+  const sessionToken = `${chan.workspaceId}.${newToken()}`;
+  await db.transaction(async (tx) => {
+    await tx.insert(users).values({
+      id: userId, email: `visitor-${userId}@visitors.flow.local`, passwordHash: '!visitor', displayName: name, isVisitor: true, createdAt: now,
+    });
+    await tx.insert(channelVisitors).values({ channelId: chan.id, userId, linkId: null, seesFrom, lastSeenAt: now });
+    await tx.insert(visitorSessions).values({ tokenHash: hashToken(sessionToken), userId, channelId: chan.id, createdAt: now });
+  });
+  return { userId, sessionToken };
+}
+
 // ---- the public link --------------------------------------------------------------------------------------------------
 
 /** A link that still works: known, not turned off, not past its 24 hours, visitors on, its channel still public. */
@@ -198,7 +244,7 @@ async function liveLink(token: string) {
     .where(eq(visitorLinks.tokenHash, hashToken(token)))
     .limit(1))[0];
   if (!row || row.link.revokedAt || row.link.expiresAt.getTime() <= Date.now()) return null;
-  if (!channelTakesVisitors(row.chan) || !(await visitorsOn(row.chan.workspaceId))) return null;
+  if (!channelTakesVisitorLinks(row.chan) || !(await visitorsOn(row.chan.workspaceId))) return null;
   return row;
 }
 
@@ -294,6 +340,12 @@ export async function visitorBySession(token: string): Promise<VisitorContext | 
     .limit(1))[0];
   if (!row || row.v.removedAt) return null;
   if (!channelTakesVisitors(row.chan) || !(await visitorsOn(row.chan.workspaceId))) return null;
+  // A meeting guest's visit is one session (Meet phase 3b): once a later session has begun, it has ended, even if the
+  // end of theirs was never heard (RealtimeKit's meeting.ended webhook is what ends it otherwise).
+  if (row.chan.kind === 'meeting') {
+    const m = (await db.select({ at: schema.meetings.sessionStartedAt }).from(schema.meetings).where(eq(schema.meetings.chatChannelId, row.chan.id)).limit(1))[0];
+    if (!m || (m.at && row.v.seesFrom < m.at)) return null;
+  }
   const now = new Date();
   if (now.getTime() - row.v.lastSeenAt.getTime() >= VISITOR_IDLE_MS) return null;
   await db.update(channelVisitors).set({ lastSeenAt: now }).where(and(eq(channelVisitors.channelId, row.v.channelId), eq(channelVisitors.userId, row.v.userId)));
@@ -323,10 +375,13 @@ export async function visitorMe(v: VisitorContext): Promise<VisitorMeDTO> {
     ...members.map((m) => ({ userId: m.userId, displayName: m.displayName, avatarUrl: m.avatarUrl, isAgent: m.isAgent })),
     ...visitors.map((p) => ({ ...p, isAgent: false, visitor: true })),
   ];
+  const meeting = chan.kind === 'meeting'
+    ? (await db.select({ code: schema.meetings.code, id: schema.meetings.id, title: schema.meetings.title }).from(schema.meetings).where(eq(schema.meetings.chatChannelId, chan.id)).limit(1))[0]
+    : undefined;
   return {
     user: { id: v.userId, displayName: v.displayName, visitor: true },
     organization: { id: w.id, name: w.name, avatarUrl: w.avatarUrl },
-    channel: { id: chan.id, name: chan.name ?? '', topic: chan.topic, people },
+    channel: { id: chan.id, name: chan.name ?? '', topic: chan.topic, people, ...(meeting ? { meeting: { code: meeting.code ?? meeting.id, title: meeting.title } } : {}) },
     seesFrom: v.seesFrom.toISOString(),
   };
 }
