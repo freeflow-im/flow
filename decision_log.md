@@ -1,5 +1,27 @@
 # Decision log
 
+## 2026-11-17 — Every agent turn runs its tools; email is a trigger; Chat posts need no approval (operator rulings)
+
+- **Ruling R-A (Scott):** every agent turn that no browser runs (an automation's wake job, a turn started in Chat, an
+  email) runs a server-side tool loop that offers the agent every tool it is authorized for: the server tools, Chat's
+  tools (through the Org object, as the sponsor for a personal agent, as the agent for a shared one) and the Docs
+  editing tools headless (their `/mcp` twins in the Docs object). One loop for all of them (`Assistant.runHeadless`).
+  Tools that only act on an open page (open_doc, open_sheet, render_slide, export_deck, edit_image, select_range,
+  view_image, open_file, the Mail and Calendar page tools, request_app_change, request_research,
+  ingest_connector_data, the browser extension's tools) are not offered there and are refused with the reason.
+- **Ruling R-B (Scott):** incoming email is an event-based trigger like any other. The assistant's mailbox publishes
+  `mail.received` only for allowlisted, authenticated senders (the screen stays at the publisher, with #858's reasons
+  and #861's DKIM check); "Agent always responds to incoming email" is a `wake` subscription on those events whose
+  output step mails the answer back. The special mail turn is gone. Existing assistants with answering on get the
+  subscription on their mailbox's next check (no separate migration step).
+- **Ruling R-C (Scott):** posting to Chat never requires approval. `send_message` posts at once, as the agent, in every
+  turn; the ✅ card is gone. Old card messages stay as plain messages.
+- **Why (Scott):** an assistant answering an email said "Chat access isn't available here": wake and mail turns dropped
+  tool calls. Agents should be able to do their work wherever they were started.
+- **Choice (implementation):** the mail answer stays an output step (`reply: 'mail'` on the wake action, sent by the
+  mailbox's `sendAsAssistant`, which re-checks the allowlist) rather than a new send tool, so an email cannot steer the
+  agent into mailing anyone but its allowlisted sender.
+
 ## 2026-11-17 — Agents do not answer email on their own by default (operator ruling)
 
 - **Ruling (Scott):** an agent should not respond to incoming email automatically. It is a setting, "Agent always

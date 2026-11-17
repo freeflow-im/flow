@@ -64,8 +64,9 @@ the agent's principal id. The agent's own account exists so the organization can
 its runtime, subscriptions and events have an owner; it holds no grants and nothing can be shared with it. Its caller
 context is the sponsor's account with `via: <agent id>` (§3); grants are checked against the sponsor. It may act in
 shared places for the sponsor ("post this summary to #sales" posts as Ann, via her agent), since nobody else can
-start its turns; any write someone other than the sponsor can see (posting, sending, sharing, deleting, editing a
-shared object, answering an invitation) shows the sponsor a confirm card first. Its conversation and memory are
+start its turns; any write someone other than the sponsor can see (sending, sharing, deleting, editing a shared
+object, answering an invitation) shows the sponsor a confirm card first, except posting in Chat, which never waits for
+approval (operator ruling 2026-11-17, R-C). Its conversation and memory are
 private to the sponsor, as a mailbox is: an admin sees the agent but cannot start its turns, read its conversation or
 memory, or change its scopes.
 
@@ -83,15 +84,19 @@ agent of §6, and it works the way a human assistant does:
   her in any channel he is in, where she replies in the thread for everyone in it to see. Only Scott's messages start
   her turns: a mention, a DM, a reply in her thread or an automation from anyone else never does, and an owner or admin
   cannot point an automation at her. In a thread she reads others' messages as quoted content, never as requests: she
-  holds Scott's access, so their words must not steer it. Before she posts anything from Scott's private sources
-  (mail, calendars, files others cannot open) where others can read it, Scott sees a confirm card (§1).
+  holds Scott's access, so their words must not steer it. She posts in Chat at once when asked (`send_message`, no card:
+  operator ruling 2026-11-17, R-C); her prompt tells her not to put Scott's private sources (mail, calendars, files
+  others cannot open) where others can read them unless he asked for exactly that.
 - **Her own mailbox and calendar.** Her address is made as a person's is, from her name on the primary domain
   (`ada@locked-in.freeflow.im`, numbered if taken), and mail she sends shows "Ada 🤖 Scott". She accepts mail only from
   a **sender allowlist** the sponsor writes, which **starts empty**: while it is empty her mailbox is never checked at
   all; once it names a sender it is checked every ten minutes (operator ruling 2026-11-11, "Assistant mail is opt-in").
   Mail from anyone else is moved to her Refused folder unread, and a sender is matched only on a message that passes
-  SPF, DKIM or DMARC for its From domain. Mail she takes waits in her inbox: she answers it by email on her own only when
-  the sponsor turns on "Agent always responds to incoming email" (off by default; operator ruling 2026-11-17); otherwise she
+  SPF, DKIM or DMARC for its From domain. Mail she takes waits in her inbox and is published as `mail.received` on her
+  account (refused mail never is): incoming email is an event-based trigger like any other (operator ruling 2026-11-17,
+  R-B). She answers it by email on her own only when the sponsor turns on "Agent always responds to incoming email" (off
+  by default; operator ruling 2026-11-17), which is a `wake` subscription on her `mail.received` (`assistant/mailWake.ts`,
+  kept by `Assistant.syncMailWake`) whose output step mails her answer back to the sender (`reply: 'mail'`); otherwise she
   reads it when the sponsor asks, or when an automation they made wakes her. Invitations to her calendar follow the same list. She works in the
   sponsor's mailbox and calendars too, through the sponsor's access. She knows her own mailbox: her prompt gives her address and who may mail her, and in the
   panel and in Chat her mailbox is one of the mail accounts her mail tools list (marked `yours`), read as her own account,
@@ -249,6 +254,16 @@ carry an agent's edits; they give no access. They are offered only in a sync tur
 open (§6), and each call is checked against the agent's own access: the sponsor's for a personal agent, its own
 grants for a shared one.
 
+**Every turn no browser runs offers every tool the agent may use** (operator ruling 2026-11-17, R-A): an automation's
+wake job, a turn started in Chat, an email. One loop runs them (`Assistant.runHeadless`, AgentContext `headless`): the
+server tools in the model loop; Chat's tools (`list_channels`, `read_messages`, `search_messages`, `send_message`,
+`leave_channel`) through the Org object, with the sponsor's reach for a personal agent and the agent's own for a shared
+one; and Docs' editing tools headless, their `/mcp` twins in the Docs object, by the file's id. The tools that only act on
+an open page are not offered there and a call to one is refused with the reason: `open_doc`, `open_sheet`, `open_deck`,
+`open_file`, `select_range`, `render_slide`, `export_deck`, `view_image`, `edit_image`, `request_app_change`,
+`request_research`, `ingest_connector_data`, Mail's and Calendar's page tools (`open_mail_message`, `draft_mail_reply`,
+`open_calendar_event`, `show_calendar_range`, `delete_event`) and the browser extension's tools.
+
 **Where a tool runs is a property of the turn, not of the tool.** The Docs editing tools (`insert_content`,
 `write_range`, `add_slides` and the rest of `CLIENT_TOOLS` in `packages/docs/shared/agent/protocol.ts`) are one
 definition with three runners today: the live editor in the tab when the assistant calls them, a **headless**
@@ -299,7 +314,7 @@ never change (§1).
 | Started by | a person in the panel, on an open page | a trigger: a subscription (a mention, a DM, `docs.changed`), a schedule, or a `wake` job another agent queued |
 | Delivery | the panel calls the runtime directly and streams the answer | a `wake` job from `agent_jobs`, as the bridge takes them |
 | Page context and browser tools | yes (below) | no tab, so no; the same editing tools run headless (§5) |
-| Writes | through the editor, undoable; or server tools, marked as such | server tools only |
+| Writes | through the editor, undoable; or server tools, marked as such | server tools, Chat's tools, and the editing tools headless (§5) |
 | Where the answer goes | the panel | the conversation the trigger belongs to (a channel, a thread, the person's assistant conversation) |
 
 **The in-app assistant is the person's hosted personal agent.** Every member (not a guest) gets one in each
@@ -417,7 +432,7 @@ turns; hosted shared agents made from the Admin app with a definition, the panel
 runs the turn and answers in the channel as the agent (a personal agent as its sponsor, `via`). Not yet: the model key
 per definition (hosted agents run on the platform's key with the daily limit per asker), headless runners for the Docs
 editing tools in async turns (an async turn has the server tools), the confirm card for a personal agent's writes
-others can see, and object threads. Phase E (branch `agents/assistant-member`, 2026-11-11): the Org object's one member list with kinds and personal agents, the assistant in Chat answering only its sponsor, its mailbox and calendar on first naming with the sender allowlist (refused mail moved to a Refused folder; the mailbox checked every minute), and naming in Docs' panel. Not yet: the confirm card before the assistant posts private data where others read (its prompt says so instead), and the native clients' naming. Phase F (branch `assistant/chat-posting`, 2026-11-12): the assistant posts elsewhere in Chat. A Chat turn has the page `chat` and four Chat tools the Worker runs (`edge/src/assistant/chatTools.ts`): `list_channels` and `read_messages` over the standard channels the sponsor is in, `leave_channel`, and `send_message`, which is the confirm card for posts: the turn stops at a card in the sponsor's DM quoting the post, and only the sponsor's ✅ on that card posts it (the Org object matches the reaction, not the model), joining the channel through the sponsor first; ❌ or a new message cancels. Asked where others read, it leaves no card (the card would show the post) and asks for the DM. The card is a plain message answered by a reaction, so every client has it without new UI. Phase G step 1 (branch `agents/multi-agents-memory`, 2026-11-12): up to five hosted personal agents per person, made,
+others can see, and object threads. Phase E (branch `agents/assistant-member`, 2026-11-11): the Org object's one member list with kinds and personal agents, the assistant in Chat answering only its sponsor, its mailbox and calendar on first naming with the sender allowlist (refused mail moved to a Refused folder; the mailbox checked every minute), and naming in Docs' panel. Not yet: the confirm card before the assistant posts private data where others read (its prompt says so instead), and the native clients' naming. Phase F (branch `assistant/chat-posting`, 2026-11-12): the assistant posts elsewhere in Chat. A Chat turn has the page `chat` and four Chat tools the Worker runs (`edge/src/assistant/chatTools.ts`): `list_channels` and `read_messages` over the standard channels the sponsor is in, `leave_channel`, and `send_message`, which is the confirm card for posts: the turn stops at a card in the sponsor's DM quoting the post, and only the sponsor's ✅ on that card posts it (the Org object matches the reaction, not the model), joining the channel through the sponsor first; ❌ or a new message cancels. Asked where others read, it leaves no card (the card would show the post) and asks for the DM. The card is a plain message answered by a reaction, so every client has it without new UI. (Superseded 2026-11-17, branch `agents/automation-tool-loop`: the card is gone and `send_message` posts at once (R-C); the Chat tools, Docs' headless editing tools and the server tools run in every turn no browser runs, wake jobs and email included, through one loop (R-A); email to the assistant wakes it through a `mail.received` subscription (R-B).) Phase G step 1 (branch `agents/multi-agents-memory`, 2026-11-12): up to five hosted personal agents per person, made,
 edited and removed in Organization settings → Your agents (`/v1/workspaces/:id/agents/personal`, `…/agents/mine`), each
 in its own runtime with its own instructions and conversations, picked in the panel and reached in Chat by DM, mention or
 thread; the extra agents have no mailbox yet. Phase G steps 2–3 (branch `agents/memory`, 2026-11-13): the `memory` tool and store (`assistant/memory.ts`), the `<memory>` listing on each request, `trust: external` for mail and wake turns, the Memory tab and its routes; not yet: `read_objects` and holding files back when access goes, and Undo on the "remembered" line (the Memory tab deletes instead). **Not built: a personal agent on the bridge.** A bridge token that acted as its sponsor would be
@@ -483,6 +498,15 @@ agent"): kind and runtime are two independent axes; the runtimes are hosted and 
 property of the agent; there is no single Assistant, the assistant is the person's hosted personal agent, and a
 hosted shared agent runs the same way; a hosted agent has a definition; sync and async are properties of the turn,
 and browser tools exist only in a sync turn from an open page.
+
+Three rulings of 2026-11-17 (`decision_log.md`, "Every agent turn runs its tools; email is a trigger; Chat posts need no
+approval"):
+
+| | Ruling |
+| --- | --- |
+| R-A | Every turn no browser runs (wake job, Chat, email) runs one server-side tool loop offering every tool the agent is authorized for: server tools, Chat's tools, Docs' editing tools headless; page-only tools are refused with the reason (§5). |
+| R-B | Incoming email is an event-based trigger: `mail.received`, screened by the allowlist at the publisher; answering is a `wake` subscription whose output step mails the answer back (§1.1). |
+| R-C | Posting to Chat never requires approval: `send_message` posts at once in every turn; the ✅ card is gone (§1). |
 
 ## 11. Implementation phases
 
