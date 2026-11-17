@@ -12,6 +12,7 @@ import { api, isGuestId, MeetApiError, meetingUrl, signInUrl } from '../api';
 import { CheckScreen, type JoinChoice } from './CheckScreen';
 import { guestChat, memberChat, unseenAfter, type RoomChat } from '../lib/chat';
 import { ChatFrame } from './ChatFrame';
+import { useMediaQuery, useResizableWidth } from '../hooks/layout';
 
 type Client = Awaited<ReturnType<typeof RealtimeKitClient.init>>;
 type Person = RTKParticipant | RTKSelf;
@@ -173,6 +174,9 @@ function InRoom({ client, info, onLeft }: { client: Client; info: RoomInfo; onLe
   // Messages posted while the Chat tab is closed: the dot on the Chat button.
   const [unseen, setUnseen] = useState(0);
   const chatOpen = panel === 'chat';
+  // The side panel is as wide as the person drags it (on a phone it fills the screen instead).
+  const wide = useMediaQuery('(min-width: 640px)');
+  const panelWidth = useResizableWidth('meet.panelWidth', 340, 280, 760, 'left');
   useEffect(() => {
     if (chatOpen) setUnseen(0);
   }, [chatOpen]);
@@ -295,8 +299,21 @@ function InRoom({ client, info, onLeft }: { client: Client; info: RoomInfo; onLe
 
         {/* The side panel. With a chat it stays mounted while closed (off screen), so the chat keeps listening for the
             dot and opens where it was. */}
+        {panel && wide && (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize the panel"
+            title="Drag to resize, double-click to reset"
+            className="group relative z-10 -mx-[5px] w-[10px] flex-none cursor-col-resize touch-none self-stretch"
+            {...panelWidth.handleProps}
+          >
+            <div className="absolute inset-y-4 left-[4px] w-[2px] rounded-full bg-transparent transition-colors group-hover:bg-white/50 group-active:bg-white/80" />
+          </div>
+        )}
         {(panel || info.chat) && (
           <aside
+            style={panel && wide ? { width: panelWidth.width } : undefined}
             className={panel ? 'relative flex w-[340px] flex-none flex-col overflow-hidden rounded-xl bg-white text-ink max-sm:fixed max-sm:inset-0 max-sm:z-20 max-sm:w-auto max-sm:rounded-none' : 'invisible fixed -left-[10000px] top-0 flex h-[600px] w-[340px] flex-col'}
             aria-label={panel === 'chat' ? 'Chat' : 'People'}
             aria-hidden={!panel}
