@@ -37,8 +37,13 @@ export interface GuardSession {
   userId: string;
   displayName: string;
   isAgent: boolean;
-  artifactId: string;
-  channelId: string;
+  /** An app artifact's viewer (token version 1). */
+  artifactId?: string;
+  channelId?: string;
+  /** An installed app's viewer, from its tab (token version 2, docs/specs/user-apps.md §6.2). */
+  app?: string;
+  accountId?: string;
+  workspaceId: string;
   expiresAt: number; // epoch ms
 }
 
@@ -100,8 +105,11 @@ export function upstreamHeaders(inbound: http.IncomingHttpHeaders, session: Guar
   else delete out.cookie;
   out['x-flow-user-id'] = session.userId;
   out['x-flow-user-name'] = session.displayName;
-  out['x-flow-artifact-id'] = session.artifactId;
-  out['x-flow-channel-id'] = session.channelId;
+  if (session.artifactId) out['x-flow-artifact-id'] = session.artifactId;
+  if (session.channelId) out['x-flow-channel-id'] = session.channelId;
+  if (session.app) out['x-flow-app'] = session.app;
+  if (session.accountId) out['x-flow-account-id'] = session.accountId;
+  out['x-flow-workspace-id'] = session.workspaceId;
   out['x-flow-is-agent'] = session.isAgent ? 'true' : 'false';
   return out;
 }
@@ -179,8 +187,8 @@ export class AppGuard {
       userId: payload.userId,
       displayName: payload.displayName,
       isAgent: payload.isAgent,
-      artifactId: payload.artifactId,
-      channelId: payload.channelId,
+      workspaceId: payload.workspaceId,
+      ...(payload.v === 1 ? { artifactId: payload.artifactId, channelId: payload.channelId } : { app: payload.app, accountId: payload.accountId }),
       expiresAt: this.now().getTime() + SESSION_TTL_MS,
     });
     return id;

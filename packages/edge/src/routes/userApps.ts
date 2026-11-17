@@ -1,0 +1,195 @@
+// User apps (docs/specs/user-apps.md, phase 1: external apps). The routes check who is calling and their role; the Org
+// object keeps the app's rows (org/services/userApps.ts).
+//
+//   GET    /v1/workspaces/:id/apps                  every installed app, as the caller sees it (members; a guest gets none)
+//   POST   /v1/workspaces/:id/apps/preview          an app's manifest fetched from a URL and checked, for the install card
+//   POST   /v1/workspaces/:id/apps                  install from a manifest URL, with who gets its scopes (owners, admins)
+//   PUT    /v1/workspaces/:id/apps/:name            install the manifest again (an update), with who gets its scopes
+//   PUT    /v1/workspaces/:id/apps/:name/grants     change who holds its scopes
+//   DELETE /v1/workspaces/:id/apps/:name            remove it
+//   POST   /v1/workspaces/:id/apps/:name/secret     a new secret; the old one stops at once
+//   PUT    /v1/workspaces/:id/apps/:name/agents     a person turns the app on or off for their personal agents (§5.2)
+//   POST   /v1/workspaces/:id/apps/:name/screen     the screen's URL with a one-use door key (§6.2)
+//   POST   /v1/workspaces/:id/tools/call            the bridge runs an app tool (the bridge runs built-in tools itself)
+//   POST   /v1/apps/:org/:name/events               an event from the app, signed with its secret (§5.1): no session
+import { Hono, type Context } from 'hono';
+import { z } from 'zod';
+import { checkUserAppManifest, parseAppToolName, USER_APP_LIMITS, type AccountDTO, type UserAppManifest } from '@flow/shared';
+import { ApiError, badRequest, forbidden, unauthorized } from '../errors';
+import { directory, guestRefusal, resolveCaller, type AuthEnv } from './auth';
+import { holderOf, runAppTool } from '../registry/userApps';
+import { SIGNATURE_HEADER } from '../org/lib/appSigning';
+
+type C = Context<{ Bindings: AuthEnv }>;
+
+export const userAppRoutes = new Hono<{ Bindings: AuthEnv }>();
+
+const ORG_ID = /^[0-9a-f-]{36}$/;
+const Grants = z.object({ members: z.boolean(), accounts: z.array(z.string().min(1).max(100)).max(200).default([]) });
+const InstallBody = z.object({ url: z.string().url().max(2000), grants: Grants });
+const UpdateBody = z.object({ url: z.string().url().max(2000).optional(), grants: Grants });
+const PreviewBody = z.object({ url: z.string().url().max(2000) });
+const AgentsBody = z.object({ on: z.boolean() });
+const CallBody = z.object({ name: z.string().min(1).max(64), input: z.record(z.unknown()).default({}) });
+
+const orgStub = (c: C, id: string) => c.env.ORG.get(c.env.ORG.idFromName(id));
+
+/** The Org object's answer as a value, or its refusal as the ApiError it was. */
+function unwrap<T>(a: { ok: true; value: T } | { ok: false; status: number; code: string; message: string }): T {
+  if (!a.ok) throw new ApiError(a.status, a.code, a.message);
+  return a.value;
+}
+
+async function body<S extends z.ZodTypeAny>(c: C, schema: S): Promise<z.output<S>> {
+  const r = schema.safeParse(await c.req.json().catch(() => undefined));
+  if (!r.success) {
+    const issue = r.error.issues[0];
+    throw badRequest('validation', issue ? `${issue.path.join('.')}: ${issue.message}` : 'invalid request');
+  }
+  return r.data;
+}
+
+interface Member { organizationId: string; userId: string; displayName: string; isAgent: boolean; account: AccountDTO; via: string | null; invokedBy: string | null }
+
+/** The caller's account in the organization the path names, or a 4xx. */
+async function memberOf(c: C): Promise<Member> {
+  const organizationId = c.req.param('id') ?? '';
+  if (!ORG_ID.test(organizationId)) throw badRequest('validation', 'not an organization id');
+  const who = await resolveCaller(c, organizationId);
+  if (!who.user) throw unauthorized('missing bearer token');
+  if (!who.account) throw new ApiError(403, 'no_account', 'not a member of this organization');
+  return {
+    organizationId, userId: who.user.id, displayName: who.user.displayName, isAgent: !!who.user.isAgent, account: who.account,
+    via: who.via ?? null, invokedBy: who.invokedBy ?? null,
+  };
+}
+
+const isAdmin = (m: Member) => m.account.role === 'owner' || m.account.role === 'admin';
+
+/** An owner or an admin, as a person: an agent never installs or changes an app for the organization (§9.4). */
+async function adminOf(c: C): Promise<Member> {
+  const m = await memberOf(c);
+  if (m.isAgent || m.via || !isAdmin(m)) throw forbidden('only owners and admins install and change apps');
+  return m;
+}
+
+/** A local suite (http://localhost) may reach an app on http://; a deployed one only on https (§4). */
+const allowHttp = (c: C) => c.env.WEB_URL_BASE.startsWith('http://');
+
+/** Fetches and checks a manifest from its URL: at most 128 KB, ten seconds, no redirects. */
+async function fetchManifest(c: C, url: string): Promise<{ ok: true; manifest: UserAppManifest } | { ok: false; problems: string[] }> {
+  if (!url.startsWith('https://') && !(allowHttp(c) && url.startsWith('http://'))) return { ok: false, problems: ['url: the manifest URL must be https'] };
+  let res: Response;
+  try {
+    res = await fetch(url, { headers: { accept: 'application/json', 'user-agent': 'FreeFlow-Apps/1' }, redirect: 'manual', signal: AbortSignal.timeout(10_000) });
+  } catch {
+    return { ok: false, problems: [`url: ${url} could not be reached`] };
+  }
+  if (!res.ok) return { ok: false, problems: [`url: ${url} answered ${res.status}`] };
+  const text = await res.text();
+  if (text.length > USER_APP_LIMITS.manifestBytes) return { ok: false, problems: [`url: the manifest is over ${USER_APP_LIMITS.manifestBytes} bytes`] };
+  let json: unknown;
+  try { json = JSON.parse(text); } catch { return { ok: false, problems: ['url: the manifest is not JSON'] }; }
+  return checkUserAppManifest(json, { allowHttp: allowHttp(c) });
+}
+
+/** A manifest that does not pass: 400, with every problem, so its author can fix them all. */
+const refused = (c: C, problems: string[]) => c.json({ error: { code: 'manifest', message: problems.join('\n') || 'the manifest is not valid', problems } }, 400);
+
+userAppRoutes.get('/v1/workspaces/:id/apps', async (c) => {
+  const m = await memberOf(c);
+  if (m.account.kind === 'guest') return c.json({ apps: [] });
+  const apps = await orgStub(c, m.organizationId).listUserApps({ ...holderOf({ ...m, account: m.account }), via: null, admin: isAdmin(m) && !m.isAgent });
+  c.header('Cache-Control', 'no-store');
+  return c.json({ apps });
+});
+
+userAppRoutes.post('/v1/workspaces/:id/apps/preview', async (c) => {
+  await adminOf(c);
+  const { url } = await body(c, PreviewBody);
+  const r = await fetchManifest(c, url);
+  return r.ok ? c.json({ manifest: r.manifest }) : refused(c, r.problems);
+});
+
+userAppRoutes.post('/v1/workspaces/:id/apps', async (c) => {
+  const m = await adminOf(c);
+  const { url, grants } = await body(c, InstallBody);
+  const r = await fetchManifest(c, url);
+  if (!r.ok) return refused(c, r.problems);
+  const installed = unwrap(await orgStub(c, m.organizationId).installUserApp({ manifest: r.manifest, manifestUrl: url, by: m.account.id, grants }));
+  return c.json({ app: installed.name, secret: installed.secret }, 201);
+});
+
+userAppRoutes.put('/v1/workspaces/:id/apps/:name', async (c) => {
+  const m = await adminOf(c);
+  const name = c.req.param('name');
+  const { url, grants } = await body(c, UpdateBody);
+  const org = orgStub(c, m.organizationId);
+  const current = (await org.listUserApps({ ...holderOf(m), via: null, admin: true })).find((a) => a.name === name);
+  if (!current) throw new ApiError(404, 'not_found', 'no such app here');
+  const from = url ?? current.manifestUrl;
+  const r = await fetchManifest(c, from);
+  if (!r.ok) return refused(c, r.problems);
+  unwrap(await org.updateUserApp({ name, manifest: r.manifest, manifestUrl: from, by: m.account.id, grants }));
+  return c.json({ ok: true });
+});
+
+userAppRoutes.put('/v1/workspaces/:id/apps/:name/grants', async (c) => {
+  const m = await adminOf(c);
+  const grants = await body(c, Grants);
+  unwrap(await orgStub(c, m.organizationId).setUserAppGrants(c.req.param('name'), grants));
+  return c.json({ ok: true });
+});
+
+userAppRoutes.delete('/v1/workspaces/:id/apps/:name', async (c) => {
+  const m = await adminOf(c);
+  unwrap(await orgStub(c, m.organizationId).removeUserApp(c.req.param('name')));
+  return c.json({ ok: true });
+});
+
+userAppRoutes.post('/v1/workspaces/:id/apps/:name/secret', async (c) => {
+  const m = await adminOf(c);
+  const secret = unwrap(await orgStub(c, m.organizationId).rotateUserAppSecret(c.req.param('name')));
+  return c.json({ secret });
+});
+
+userAppRoutes.put('/v1/workspaces/:id/apps/:name/agents', async (c) => {
+  const m = await memberOf(c);
+  const guest = guestRefusal(m.account, 'apps');
+  if (guest) throw guest;
+  if (m.isAgent || m.via) throw forbidden('a person turns an app on for their own agents');
+  const { on } = await body(c, AgentsBody);
+  unwrap(await orgStub(c, m.organizationId).setUserAppAgents(c.req.param('name'), m.account.id, on));
+  return c.json({ ok: true });
+});
+
+userAppRoutes.post('/v1/workspaces/:id/apps/:name/screen', async (c) => {
+  const m = await memberOf(c);
+  const guest = guestRefusal(m.account, 'apps');
+  if (guest) throw guest;
+  const screen = await orgStub(c, m.organizationId).userAppScreen({
+    organizationId: m.organizationId, name: c.req.param('name'), holder: { ...holderOf(m), via: null }, userId: m.userId, displayName: m.displayName, isAgent: m.isAgent,
+  });
+  if (!screen) throw new ApiError(404, 'not_found', 'no such app, or it has no screen for you');
+  c.header('Cache-Control', 'no-store');
+  return c.json(screen);
+});
+
+userAppRoutes.post('/v1/workspaces/:id/tools/call', async (c) => {
+  const m = await memberOf(c);
+  const { name, input } = await body(c, CallBody);
+  if (!parseAppToolName(name)) throw badRequest('validation', `${name} is not an app tool: the bridge runs built-in tools itself`);
+  const answer = await runAppTool(c.env, { ...m, account: m.account }, name, input);
+  return c.json(answer);
+});
+
+userAppRoutes.post('/v1/apps/:org/:name/events', async (c) => {
+  const organizationId = c.req.param('org');
+  if (!ORG_ID.test(organizationId)) throw badRequest('validation', 'not an organization id');
+  // An organization the directory knows: a stranger's request never wakes an object of its own.
+  if (!(await directory(c, 'organization', organizationId))) return c.json({ error: { code: 'refused', message: 'bad or missing signature' } }, 401);
+  const raw = await c.req.text();
+  if (raw.length > 80_000) return c.json({ error: { code: 'too_large', message: 'the event is too large' } }, 413);
+  const r = await orgStub(c, organizationId).publishUserAppEvent({ organizationId, name: c.req.param('name'), body: raw, signature: c.req.header(SIGNATURE_HEADER) ?? null });
+  return r.ok ? c.json({ id: r.id }, 201) : c.json({ error: { code: 'refused', message: r.error } }, r.status as 400);
+});

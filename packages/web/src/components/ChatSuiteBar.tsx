@@ -6,7 +6,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CHAT_PATH, type AccountDTO, type UserDTO } from '@flow/shared';
-import { adminAddress, APP_MANIFESTS, AWAY_STATUS, GUEST_TABS_NOTE, intent as suiteIntent, isAway, settingsAddress, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type StatusOption } from '@flow/suite-bar';
+import { adminAddress, APP_MANIFESTS, AWAY_STATUS, GUEST_TABS_NOTE, intent as suiteIntent, isAway, settingsAddress, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, useUserAppTabs, type StatusOption } from '@flow/suite-bar';
 import { useSwitcherEntries, useWorkspaceInvites, useWorkspaces } from '../hooks';
 import { useCapabilities } from '../lib/backend';
 import { connectionManager, type ConnectionRuntime } from '../lib/connectionRuntime';
@@ -153,6 +153,8 @@ export default function ChatSuiteBar({ activityUnread, intent }: { activityUnrea
   // The Chat tab's count is the Activity count Main keeps live; until Main has it (the chooser, a first render),
   // the workspace list's number for the same unread rows.
   const chatBadge = activityUnread ?? ws?.unreadCount ?? 0;
+  // The organization's installed apps, after the built-in ones (docs/specs/user-apps.md §6): only on this page's own server.
+  const appTabs = useUserAppTabs(docsHere ? sel.workspaceId : null);
 
   return (
     <>
@@ -162,6 +164,7 @@ export default function ChatSuiteBar({ activityUnread, intent }: { activityUnrea
         // The other apps live on this page's own server: an organization on another server has none of them yet.
         tabs={suiteTabsFrom(APP_MANIFESTS, 'chat', { 'chat-unread': chatBadge }, {
           unavailable: (t) => (!docsHere ? `${t.label} is not available for an organization on another server yet` : guest && t.id !== 'chat' ? GUEST_TABS_NOTE : null),
+          extra: appTabs,
         })}
         organization={{
           name: ws?.name ?? '',

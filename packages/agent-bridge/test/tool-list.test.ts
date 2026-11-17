@@ -53,3 +53,21 @@ describe('the tool list', () => {
     expect(await loadToolList(new FlowApi(empty.url, 'tok'), BUILT_IN_TOOLS, () => {})).toEqual(BUILT_IN_TOOLS);
   });
 });
+
+describe('installed apps’ tools (user-apps.md §3.3)', () => {
+  it('lists an app tool though the bridge has no implementation of its own', () => {
+    const lines: string[] = [];
+    const list = toolListFrom([
+      { name: 'taskboard__claim_task', description: 'From the installed app Tasks (taskboard). Claim a task.', input: { type: 'object' } },
+      { name: 'not_an_app_tool', description: 'x', input: { type: 'object' } },
+    ], BUILT_IN_TOOLS, (l) => lines.push(l));
+    expect(list.map((t) => t.name)).toEqual(['taskboard__claim_task']);
+    expect(lines).toHaveLength(1);
+  });
+
+  it('asks for the workspace’s app tools when it knows the workspace', async () => {
+    const { url, hits } = await fake(() => ({ status: 200, body: { tools: [] } }));
+    await loadToolList(new FlowApi(url, 'tok'), BUILT_IN_TOOLS, () => {}, 'ws-1');
+    expect(hits).toEqual(['/v1/tools?door=bridge&workspace=ws-1']);
+  });
+});

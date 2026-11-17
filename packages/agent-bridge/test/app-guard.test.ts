@@ -286,3 +286,29 @@ describe('app-guard: startup failures', () => {
     await new Promise<void>((r) => blocker.close(() => r()));
   });
 });
+
+describe('app-guard: an installed app’s tab (token version 2, user-apps.md §6.2)', () => {
+  function mintV2(secret: Buffer = SECRET): string {
+    const iat = Math.floor(Date.now() / 1000);
+    const p = { v: 2, app: 'taskboard', workspaceId: 'ws-1', userId: 'u-ben', accountId: 'acct-ben', displayName: 'Ben', isAgent: false, iat, exp: iat + APP_TOKEN_TTL_SECONDS, jti: `jti-${++jtiSeq}` };
+    const json = Buffer.from(JSON.stringify(p), 'utf8');
+    return `${json.toString('base64url')}.${createHmac('sha256', secret).update(json).digest().toString('base64url')}`;
+  }
+
+  it('opens a session and tells the app which app, account and organization', async () => {
+    const cookie = await openSession(mintV2());
+    const res = await fetch(`${base}/board`, { headers: { cookie } });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { headers: Record<string, string> };
+    expect(body.headers['x-flow-user-id']).toBe('u-ben');
+    expect(body.headers['x-flow-app']).toBe('taskboard');
+    expect(body.headers['x-flow-account-id']).toBe('acct-ben');
+    expect(body.headers['x-flow-workspace-id']).toBe('ws-1');
+    expect(body.headers['x-flow-artifact-id']).toBeUndefined();
+  });
+
+  it('refuses a version 2 token signed with another secret', async () => {
+    const res = await fetch(`${base}/?flow_token=${encodeURIComponent(mintV2(randomBytes(32)))}`, { redirect: 'manual' });
+    expect(res.status).toBe(401);
+  });
+});

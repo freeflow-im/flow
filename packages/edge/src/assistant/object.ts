@@ -35,6 +35,8 @@ import { OpenRouterError } from '@flow/docs/server/agent/openrouter.ts';
 import { checkAssistantKey, OwnKeyError } from '@flow/docs/server/agent/providers.ts';
 import { AssistantSettingsStore, SettingsError, type KeyCheck, type SearchKeyCheck } from '@flow/docs/server/agent/settings.ts';
 import { ORG_ROW, OrgModelSettings, orgModelKey, type OrgModel } from './orgModel';
+import { appToolsFor, runAppTool, type AppToolCaller } from '../registry/userApps';
+import type { AppToolOffer } from '@flow/docs/shared/agent/protocol.ts';
 import type { AssistantSettings } from '@flow/shared/assistant';
 import { AgentStore } from '@flow/docs/server/agent/store.ts';
 import { checkBraveKey } from '@flow/docs/server/agent/tools.ts';
@@ -271,6 +273,24 @@ export class Assistant extends DurableObject<AssistantEnv> {
     return { fetch, ids: new Set(accounts.map((a) => String(a.id))), accounts };
   }
 
+  /** The turn's caller as an installed app sees it (user-apps.md §5): its account, and the agent it acts through. */
+  private appCallerOf(who: Who | null): AppToolCaller | null {
+    const c = who?.caller;
+    if (!c?.account) return null;
+    return {
+      organizationId: c.account.organizationId, account: c.account, userId: c.user?.id ?? who!.docs.userId ?? c.account.principalId,
+      displayName: c.user?.displayName ?? c.account.displayName, via: c.via ?? null, invokedBy: c.invokedBy ?? null,
+    };
+  }
+
+  /** The installed apps' tools this turn's caller may use (user-apps.md §3.3), for the turn's context. */
+  private async appToolOffers(who: Who | null): Promise<AppToolOffer[]> {
+    const caller = this.appCallerOf(who);
+    const ORG = this.env.ORG;
+    if (!caller || !ORG) return [];
+    return (await appToolsFor({ ORG }, caller, 'assistant')).map((d) => ({ name: d.name, description: d.description, input: d.input as unknown as Record<string, unknown> }));
+  }
+
   /** This runtime is the organization's admin agent's (agents.md §1.4): its panel turns get the admin tools. */
   private isAdminAgent(): boolean {
     return this.state('agent_role') === 'admin';
@@ -402,7 +422,11 @@ export class Assistant extends DurableObject<AssistantEnv> {
         const admin = this.adminContext(who);
         // send_email (mailApprovals.ts): a personal agent's, as its person; a shared agent sends none.
         const mailApproval = mail && who && personalTurn(who) ? (input: DraftInput) => this.requestMailApproval(input, mail, who, userId) : undefined;
-        return { ...(docs ? { docs } : {}), ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}), ...(apps ? { apps } : {}), ...(admin ? { admin } : {}), ...(mailApproval ? { mailApproval } : {}), memory };
+        // The installed apps' tools (user-apps.md §5), as the turn's caller: the Org object checks the scopes again.
+        const appCaller = this.appCallerOf(who);
+        const ORG = this.env.ORG;
+        const userApps = appCaller && ORG ? (name: string, input: Record<string, unknown>) => runAppTool({ ORG }, appCaller, name, input) : undefined;
+        return { ...(docs ? { docs } : {}), ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}), ...(apps ? { apps } : {}), ...(admin ? { admin } : {}), ...(mailApproval ? { mailApproval } : {}), ...(userApps ? { userApps } : {}), memory };
       },
       // The agent's memory files, listed at the start of each request (agents.md §6.1, loading).
       notes: (userId: string) => new MemoryStore(this.sql, this.memoryScope(userId, this.turnWho.get(userId) ?? this.who)).listing(),
@@ -736,6 +760,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
     const org = this.orgStub(t.organizationId);
     this.turnWho.set(t.conversation, t.who);
     this.headlessTurns.set(t.conversation, { organizationId: t.organizationId, agentUserId: t.runtime.agentId });
+    const context = { ...t.context, appTools: await this.appToolOffers(t.who) };
     try {
       let req = t.first;
       let text = '';
@@ -748,7 +773,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
           let calls: ClientToolCall[] = [];
           let failed: string | null = null;
           try {
-            await agent.runTurn(t.conversation, { ...req, context: t.context, workspace: t.organizationId, ...(t.timezone ? { timezone: t.timezone } : {}) }, (e) => {
+            await agent.runTurn(t.conversation, { ...req, context, workspace: t.organizationId, ...(t.timezone ? { timezone: t.timezone } : {}) }, (e) => {
               if (e.type === 'text') out += e.text;
               else if (e.type === 'client_tools') calls = e.calls;
               else if (e.type === 'error') failed = e.message;
@@ -1232,6 +1257,8 @@ export class Assistant extends DurableObject<AssistantEnv> {
       // A panel turn has its page: only the runtime's own turns are headless (runHeadless).
       delete (body.context as { headless?: boolean }).headless;
       if (this.isAdminAgent() && c.env.who.caller.invokedBy) (body.context as { admin?: boolean }).admin = true;
+      // The installed apps' tools are the server's to say (user-apps.md §3.3), never the browser's.
+      (body.context as { appTools?: AppToolOffer[] }).appTools = await this.appToolOffers(c.env.who);
     }
     // Where the asker is: their browser's zone (the panels send it), else their profile's.
     body.timezone = c.req.header('x-timezone') || body.timezone || c.env.who.caller.user?.timezone || undefined;

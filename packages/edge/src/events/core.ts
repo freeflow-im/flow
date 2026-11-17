@@ -5,6 +5,7 @@ import {
   formatReference, MAX_EVENT_DEPTH, parseReference, type AgentJobDTO, type AgentJobEventData, type DeliveryMode, type EventFilter,
   type JobState, type PlatformEvent, type Reference, type ScheduleDTO, type SubscriptionAction, type SubscriptionDTO,
 } from '@flow/shared';
+import { appOfEventType } from '@flow/shared';
 import { nextScheduleAt } from './schedule';
 
 export interface Sql {
@@ -19,7 +20,8 @@ export interface Sql {
  */
 export type Audience = 'org' | `channel:${string}` | `account:${string}` | `ref:${string}`;
 
-/** What a publisher hands over: the envelope less its `seq` (and its `id`, made here when absent), and the audience. */
+/** What a publisher hands over: the envelope less its `seq` (and its `id`, made here when absent), and the audience. `about`
+ * names the accounts the event is about (a user app's assignee, user-apps.md §5.1): a filter's `self` matches them. */
 export type PublishInput = Omit<PlatformEvent, 'seq' | 'id' | 'actor' | 'depth'> & {
   id?: string; actor?: string | null; depth?: number; audience: Audience;
 };
@@ -38,8 +40,11 @@ export interface ReadQuery {
   actorKind?: 'person' | 'agent' | 'any';
   /** Words the event's data contains, ignoring ASCII case. */
   text?: string;
-  /** An account id: only the events whose audience is that account alone (a subscription's `self: true`). */
+  /** An account id: only the events whose audience is that account alone (a subscription's `self: true`), or that name
+   * `about` (below) among the accounts they are about. */
   self?: string;
+  /** With `self`: the account an event's `about` must name; `self`'s own when absent (a wake subscription's agent). */
+  about?: string;
 }
 
 /**
@@ -51,6 +56,11 @@ export interface Reader {
   accountId: string; channelIds: string[]; agentAccountIds?: string[]; sharedRefs?: string[];
   /** The personal agents this reader sponsors: their own account's events are the reader's too, as their mailbox is. */
   sponsoredAgentIds?: string[];
+  /**
+   * The user apps whose events the reader may see: it holds one of the app's read scopes (user-apps.md §5.1), from the Org
+   * object. Without it, no `app.<name>.*` event is visible: the rule fails closed.
+   */
+  readableApps?: string[];
 }
 
 export interface EventStats { count: number; first: number | null; last: number | null; oldestTs: string | null }
@@ -115,6 +125,10 @@ export const EVENTS_MIGRATIONS: string[] = [
   // agent for the turn the event came from.
   `ALTER TABLE events ADD COLUMN via TEXT;
   ALTER TABLE events ADD COLUMN invoked_by TEXT;`,
+  // User apps (docs/specs/user-apps.md §5.1): the accounts an event is about (a JSON array, matched by `self`), and the
+  // app events a read asks about before it fetches the reader's apps.
+  `ALTER TABLE events ADD COLUMN about TEXT;
+  CREATE INDEX events_app ON events (seq) WHERE type LIKE 'app.%';`,
 ];
 
 const AUDIENCE = /^(org|channel:.+|account:.+|ref:.+)$/;
@@ -137,9 +151,10 @@ export class EventsCore {
     const id = input.id || crypto.randomUUID();
     const ts = Date.parse(input.ts);
     const row = this.sql.exec(
-      `INSERT INTO events (id, type, actor, ref, channel_id, audience, caused_by, depth, ts, data, via, invoked_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
+      `INSERT INTO events (id, type, actor, ref, channel_id, audience, caused_by, depth, ts, data, via, invoked_by, about) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq`,
       id, input.type, input.actor ?? null, input.ref ? formatReference(input.ref) : null, input.channelId ?? null, input.audience,
       input.causedBy ?? null, input.depth ?? 0, Number.isFinite(ts) ? ts : Date.now(), JSON.stringify(input.data ?? null), input.via ?? null, input.invokedBy ?? null,
+      input.about?.length ? JSON.stringify(input.about) : null,
     ).toArray()[0]!;
     return { seq: row.seq as number, id };
   }
@@ -167,7 +182,10 @@ export class EventsCore {
     const owns = (r: Record<string, unknown>) => {
       try { return (JSON.parse(r.data as string) as { ownerAccountId?: unknown } | null)?.ownerAccountId === reader.accountId; } catch { return false; }
     };
+    const apps = new Set(reader.readableApps ?? []);
     const visible = (r: Record<string, unknown>) => {
+      const app = appOfEventType(r.type as string);
+      if (app && !apps.has(app)) return false;
       const audience = r.audience as string;
       if (audience === 'org' || audience === own || sponsored.has(audience)) return true;
       if (audience.startsWith('channel:')) return channels.has(audience.slice(8));
@@ -193,6 +211,11 @@ export class EventsCore {
       if (rows.length < SCAN_BATCH) break;
     }
     return { events, next: backwards ? Math.min(cursor, ...(events.length ? [events.at(-1)!.seq] : [])) : Math.max(cursor, this.head()) };
+  }
+
+  /** Whether any event after `since` is a user app's: a read then needs the apps the reader may see (user-apps.md §5.1). */
+  hasAppEvents(since: number): boolean {
+    return this.sql.exec("SELECT 1 FROM events WHERE seq > ? AND type LIKE 'app.%' LIMIT 1", Math.max(0, Math.floor(Number(since) || 0))).toArray().length > 0;
   }
 
   /** Whether any event after `since` has a `ref:` audience: a read then needs the reader's shared references. */
@@ -592,7 +615,10 @@ function whereOf(q: ReadQuery, agentAccountIds: string[]): { filter: string; arg
   }
   if (q.ref) { where.push('ref = ?'); args.push(q.ref); }
   if (q.channelId) { where.push('channel_id = ?'); args.push(q.channelId); }
-  if (q.self) { where.push('audience = ?'); args.push(`account:${q.self}`); }
+  if (q.self) {
+    where.push('(audience = ? OR (about IS NOT NULL AND EXISTS (SELECT 1 FROM json_each(about) WHERE value = ?)))');
+    args.push(`account:${q.self}`, q.about ?? q.self);
+  }
   if (q.text?.trim()) { where.push('instr(lower(data), lower(?)) > 0'); args.push(q.text.trim()); }
   if (q.actorKind === 'agent' || q.actorKind === 'person') {
     where.push(q.actorKind === 'agent'
@@ -610,6 +636,7 @@ function toEvent(r: Record<string, unknown>, organizationId: string): PlatformEv
     ...(ref ? { ref } : {}), ...(r.channel_id ? { channelId: r.channel_id as string } : {}),
     ...(r.caused_by ? { causedBy: r.caused_by as string } : {}),
     ...(r.via ? { via: r.via as string } : {}), ...(r.invoked_by ? { invokedBy: r.invoked_by as string } : {}),
+    ...(r.about ? { about: JSON.parse(r.about as string) as string[] } : {}),
     depth: r.depth as number, ts: new Date(r.ts as number).toISOString(), data: JSON.parse(r.data as string),
   };
 }
@@ -647,6 +674,8 @@ export function queryOf(f: EventFilter, consumer: string, agent: string = consum
     ...(f.channelId ? { channelId: f.channelId } : {}),
     ...(f.actorKind ? { actorKind: f.actorKind } : {}),
     ...(f.text ? { text: f.text } : {}),
-    ...(f.consumerOwn ? { self: agent } : f.self ? { self: consumer } : {}),
+    // `self` also matches the events about the agent the subscription serves (user-apps.md §5.1): a wake subscription's
+    // owner reads, and its agent is who an app's event names.
+    ...(f.consumerOwn ? { self: agent } : f.self ? { self: consumer, about: agent } : {}),
   };
 }

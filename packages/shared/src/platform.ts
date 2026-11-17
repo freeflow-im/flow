@@ -47,6 +47,9 @@ export interface PlatformEvent<T = unknown> {
   causedBy?: string;
   via?: string;
   invokedBy?: string;
+  /** The accounts the event is about (a user app's assignee, docs/specs/user-apps.md §5.1): a filter's `self` matches them.
+   * It never widens who may see the event. */
+  about?: string[];
   depth: number;
   ts: string;
   data: T;

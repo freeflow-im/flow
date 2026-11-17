@@ -84,7 +84,16 @@ export interface BrowserReach {
    * (decision_log 2026-11-17, "Every agent turn runs its tools"). Set by the server; a value a browser sends is dropped.
    */
   headless?: boolean;
+  /**
+   * The hosted suite only: the tools of the apps installed in the organization that this turn's caller may use
+   * (docs/specs/user-apps.md §3.3), named `<app>__<tool>`; the Worker runs them. Set by the server; a value a browser
+   * sends is dropped.
+   */
+  appTools?: AppToolOffer[];
 }
+
+/** An installed app's tool as a turn is offered it (BrowserReach `appTools`). */
+export interface AppToolOffer { name: string; description: string; input: Record<string, unknown> }
 
 /** The web tools the FreeFlow browser extension runs, in the agent's own tabs (prototype). */
 export const BROWSER_TOOLS: ReadonlySet<string> = new Set([

@@ -19,7 +19,8 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
  * `jti` has to be remembered. */
 export const APP_TOKEN_TTL_SECONDS = 300;
 
-export interface AppTokenPayload {
+/** Version 1: an app artifact's viewer, in a channel. */
+export interface ArtifactTokenPayload {
   v: 1;
   artifactId: string;
   channelId: string;
@@ -31,6 +32,23 @@ export interface AppTokenPayload {
   exp: number; // iat + APP_TOKEN_TTL_SECONDS
   jti: string; // single-use nonce; the guard remembers it until exp
 }
+
+/** Version 2: an installed app's viewer, from its tab (docs/specs/user-apps.md §6.2): the app and the viewer's account,
+ * no artifact or channel. The secret is the install's. */
+export interface UserAppTokenPayload {
+  v: 2;
+  app: string;
+  workspaceId: string;
+  userId: string;
+  accountId: string;
+  displayName: string;
+  isAgent: boolean;
+  iat: number;
+  exp: number;
+  jti: string;
+}
+
+export type AppTokenPayload = ArtifactTokenPayload | UserAppTokenPayload;
 
 /** The secret as it reaches the agent: base64url of 32 random bytes, straight
  * from `create_artifact`. Decoded once at startup so a typo fails loudly there
@@ -44,10 +62,11 @@ export function decodeAppSecret(secret: string): Buffer {
 function isPayload(p: unknown): p is AppTokenPayload {
   if (typeof p !== 'object' || p === null) return false;
   const o = p as Record<string, unknown>;
+  const which =
+    (o.v === 1 && typeof o.artifactId === 'string' && typeof o.channelId === 'string') ||
+    (o.v === 2 && typeof o.app === 'string' && typeof o.accountId === 'string');
   return (
-    o.v === 1 &&
-    typeof o.artifactId === 'string' &&
-    typeof o.channelId === 'string' &&
+    which &&
     typeof o.workspaceId === 'string' &&
     typeof o.userId === 'string' &&
     typeof o.displayName === 'string' &&

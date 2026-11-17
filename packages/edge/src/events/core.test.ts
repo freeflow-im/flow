@@ -284,3 +284,41 @@ describe('the ref: audience (phase 3.3)', () => {
     expect(core.matching([{ ...sub, delivery: 'socket' }], 0, 1).map((s) => s.id)).toEqual([sub.id]);
   });
 });
+
+describe('user app events (user-apps.md §5.1)', () => {
+  const app = (type: string, extra: Partial<PublishInput> = {}) => ev(`app.taskboard.${type}`, { actor: null, ...extra });
+
+  it('shows an app event only to a reader who may see the app', () => {
+    core.publish(app('task.created'));
+    core.publish(ev('chat.message.created'));
+    expect(core.hasAppEvents(0)).toBe(true);
+    // No list of readable apps: the rule fails closed.
+    expect(core.read({}, ANN).events.map((e) => e.type)).toEqual(['chat.message.created']);
+    expect(core.read({}, { ...ANN, readableApps: ['other'] }).events.map((e) => e.type)).toEqual(['chat.message.created']);
+    expect(core.read({}, { ...ANN, readableApps: ['taskboard'] }).events.map((e) => e.type)).toEqual(['app.taskboard.task.created', 'chat.message.created']);
+  });
+
+  it('keeps about on the event, and self matches it', () => {
+    core.publish(app('task.assigned', { about: ['acct-bob'] }));
+    core.publish(app('task.assigned', { about: ['acct-ann'] }));
+    const bob = { ...BOB, readableApps: ['taskboard'] };
+    const all = core.read({}, bob).events;
+    expect(all.map((e) => e.about)).toEqual([['acct-bob'], ['acct-ann']]);
+    const mine = core.read({ self: 'acct-bob' }, bob).events;
+    expect(mine).toHaveLength(1);
+    expect(mine[0]!.about).toEqual(['acct-bob']);
+  });
+
+  it('about never widens who may see an event', () => {
+    core.publish(app('task.assigned', { about: ['acct-bob'] }));
+    expect(core.read({ self: 'acct-bob' }, BOB).events).toEqual([]);
+  });
+
+  it("a wake subscription's self matches events about its agent, read as its owner", () => {
+    core.publish(app('task.assigned', { about: ['acct-builder'] }));
+    core.publish(app('task.assigned', { about: ['acct-ann'] }));
+    const sub = core.createSubscription({ name: 'w', consumer: 'acct-builder', owner: 'acct-ann', filter: { types: ['app.taskboard.task.assigned'], self: true }, createdBy: 'acct-ann' });
+    const got = core.matchingEvents(sub, 0, core.head(), { ...ANN, readableApps: ['taskboard'] });
+    expect(got.map((e) => e.about)).toEqual([['acct-builder']]);
+  });
+});

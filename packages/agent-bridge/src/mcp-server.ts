@@ -21,7 +21,7 @@ import { attachmentFilename, formatAttachments } from './attachments.js';
 import { deliverArtifact, deliveryId, inlineArtifactFile } from './artifact-delivery.js';
 import { CALENDAR_TOOLS, CALENDAR_TOOL_NAMES, calendarTool } from './calendar-tools.js';
 import { MAIL_TOOLS, MAIL_TOOL_NAMES, mailTool } from './mail-tools.js';
-import { loadToolList, type McpToolEntry } from './tool-list.js';
+import { APP_TOOL, loadToolList, type McpToolEntry } from './tool-list.js';
 
 interface JsonRpcRequest {
   jsonrpc: '2.0';
@@ -572,7 +572,9 @@ export async function runMcpServer(): Promise<void> {
   };
   const api = new FlowApi(serverUrl, token, jobHeader);
   // The list comes from the server's tool registry when it has one; tools/list waits for it.
-  const toolList = loadToolList(api, BUILT_IN_TOOLS, (line) => process.stderr.write(`${line}\n`));
+  const log = (line: string) => process.stderr.write(`${line}\n`);
+  // The list comes again for each tools/list, so an app installed while the bridge runs is listed (user-apps.md §3.3).
+  let toolList = loadToolList(api, BUILT_IN_TOOLS, log, workspaceId);
 
   const write = (msg: unknown): void => {
     process.stdout.write(`${JSON.stringify(msg)}\n`);
@@ -622,6 +624,12 @@ export async function runMcpServer(): Promise<void> {
     if (MAIL_TOOL_NAMES.has(name)) {
       const out = await mailTool(api, workspaceId, name, args);
       return toolText(out.text, out.isError);
+    }
+    // An installed app's tool (docs/specs/user-apps.md §5): the suite checks the scopes and calls the app.
+    if (APP_TOOL.test(name)) {
+      if (!workspaceId) return toolText('error: no workspace is set for this bridge, so installed apps cannot be reached', true);
+      const answer = await api.callAppTool(workspaceId, name, args);
+      return answer.ok ? toolText(JSON.stringify(answer.result ?? null)) : toolText(`error: ${answer.error}`, true);
     }
     const { channelId, threadRootId } = resolveMessageTarget(args, {
       channelId: defaultChannelId,
@@ -947,6 +955,7 @@ export async function runMcpServer(): Promise<void> {
           case 'ping':
             return reply(id, {});
           case 'tools/list':
+            toolList = loadToolList(api, BUILT_IN_TOOLS, log, workspaceId);
             return reply(id, { tools: await toolList });
           case 'tools/call': {
             const name = String(req.params?.name ?? '');

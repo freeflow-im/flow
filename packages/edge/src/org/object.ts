@@ -34,6 +34,23 @@ import { isActiveAccount, recordShare, revokeShare, shareEvents, sharedRefsOf, s
 import { eq, and } from 'drizzle-orm';
 import { sweepIdleVisitors, visitorBySession, visitorMayReceive, type MessageTimes, type VisitorSocket } from './services/visitors';
 import { cleanPrompts, type AssistantPrompts } from '@flow/shared/assistant';
+import {
+  AppEventLimiter, appForUse, appHolderOf, callAppTool, checkAppEvent, heldScopes, installApp, listApps, offeredAppTools, readableApps,
+  removeApp, rotateAppSecret, setAgentsOn, setAppGrants, updateApp,
+  type AppGrants, type AppHolder, type AppToolAnswer, type OfferedAppTool,
+} from './services/userApps';
+import { mintUserAppToken, verifyBody } from './lib/appSigning';
+
+/** A user-app change's outcome for the Worker's routes: the value, or the ApiError's status, code and message. */
+async function answered<T>(fn: () => Promise<T>): Promise<DirectoryAnswer<T>> {
+  try {
+    return { ok: true, value: await fn() };
+  } catch (e) {
+    if (e instanceof ApiError) return { ok: false, status: e.statusCode, code: e.code, message: e.message };
+    throw e;
+  }
+}
+import { parseAppToolName, type InstalledAppDTO, type UserAppManifest } from '@flow/shared';
 
 /** Where the organization's suggested prompts are kept, in the object's own storage beside its database. */
 const ASSISTANT_PROMPTS_KEY = 'assistant-prompts';
@@ -925,6 +942,120 @@ export class Org extends DurableObject<OrgEnv> {
   /** The references shared with the reader: the Events object's `ref:` audience (events/core.ts). */
   async sharedRefsOf(reader: { accountId: string; channelIds?: string[] }): Promise<string[]> {
     return withDb(this.db, () => sharedRefsOf(this.shareReader(reader)));
+  }
+
+  // ---- user apps (docs/specs/user-apps.md, phase 1) ----
+  // The Worker's routes (routes/userApps.ts) check who is calling and their role; these run the app's rows here. A
+  // refusal comes back as an answer, not a throw: an ApiError loses its status crossing the object's boundary.
+
+  private readonly appEvents = new AppEventLimiter();
+
+  async listUserApps(viewer: AppHolder & { admin: boolean }): Promise<InstalledAppDTO[]> {
+    return withDb(this.db, () => listApps(viewer));
+  }
+
+  async installUserApp(p: { manifest: UserAppManifest; manifestUrl: string; by: string; grants: AppGrants }): Promise<DirectoryAnswer<{ name: string; secret: string }>> {
+    return answered(() => withDb(this.db, () => installApp(p)));
+  }
+
+  async updateUserApp(p: { name: string; manifest: UserAppManifest; manifestUrl: string; by: string; grants: AppGrants }): Promise<DirectoryAnswer<void>> {
+    return answered(() => withDb(this.db, () => updateApp(p)));
+  }
+
+  async setUserAppGrants(name: string, grants: AppGrants): Promise<DirectoryAnswer<void>> {
+    return answered(() => withDb(this.db, () => setAppGrants(name, grants)));
+  }
+
+  async removeUserApp(name: string): Promise<DirectoryAnswer<void>> {
+    return answered(() => withDb(this.db, () => removeApp(name)));
+  }
+
+  async rotateUserAppSecret(name: string): Promise<DirectoryAnswer<string>> {
+    return answered(() => withDb(this.db, () => rotateAppSecret(name)));
+  }
+
+  async setUserAppAgents(name: string, accountId: string, on: boolean): Promise<DirectoryAnswer<void>> {
+    return answered(() => withDb(this.db, () => setAgentsOn(name, accountId, on)));
+  }
+
+  /** The app tools the holder may call (the registry's list, user-apps.md §3.3). */
+  async offeredUserAppTools(holder: AppHolder): Promise<OfferedAppTool[]> {
+    return withDb(this.db, () => offeredAppTools(holder));
+  }
+
+  /** The apps whose events the account may see (events/object.ts withApps, §5.1). */
+  async readableAppsOf(accountId: string): Promise<string[]> {
+    return withDb(this.db, async () => {
+      const holder = await appHolderOf(accountId);
+      return holder ? readableApps(holder) : [];
+    });
+  }
+
+  /**
+   * One app tool call (§5): the holder must hold every scope the tool names, checked here at call time whatever the list
+   * said; then the call goes to the app's server, signed, with the caller context.
+   */
+  async callUserAppTool(p: {
+    organizationId: string; toolName: string; input: unknown; holder: AppHolder; userId: string; displayName: string; role: string; invokedBy?: string | null;
+  }): Promise<AppToolAnswer> {
+    const parsed = parseAppToolName(p.toolName);
+    if (!parsed) return { ok: false, error: `${p.toolName} is not an app tool` };
+    const found = await withDb(this.db, async () => {
+      const app = await appForUse(parsed.app);
+      const held = app ? (await heldScopes(p.holder)).get(parsed.app) ?? new Set<string>() : new Set<string>();
+      return { app, held };
+    });
+    const tool = found.app?.manifest.tools.find((t) => t.name === parsed.tool);
+    if (!found.app || !tool) return { ok: false, error: `no app tool ${p.toolName} here` };
+    if (!tool.scopes.every((s) => found.held.has(s))) return { ok: false, error: `${p.toolName} needs ${tool.scopes.join(' and ')}, which this account does not hold` };
+    const kind = p.holder.kind === 'guest' ? 'guest' : p.holder.agentMode === 'shared' ? 'shared_agent' : p.holder.via || p.holder.agentMode === 'personal' ? 'personal_agent' : 'person';
+    return callAppTool(found.app, parsed.tool, p.input, {
+      organizationId: p.organizationId, accountId: p.holder.accountId, userId: p.userId, displayName: p.displayName, kind, role: p.role,
+      via: p.holder.via ?? null, invokedBy: p.invokedBy ?? null, scopes: [...found.held],
+    });
+  }
+
+  /**
+   * An event the app sent (POST /v1/apps/:org/:name/events, §5.1): checked against the install's secret and the manifest,
+   * counted against the limit, then published as `app.<name>.<type>` for the whole organization, which the read-scope rule
+   * narrows at read time. `about` keeps only active members.
+   */
+  async publishUserAppEvent(p: { organizationId: string; name: string; body: string; signature: string | null }): Promise<{ ok: true; id: string } | { ok: false; status: number; error: string }> {
+    const app = await withDb(this.db, () => appForUse(p.name));
+    if (!app || !verifyBody(app.secret, p.signature, p.body)) return { ok: false, status: 401, error: 'bad or missing signature' };
+    let body: unknown;
+    try { body = JSON.parse(p.body); } catch { return { ok: false, status: 400, error: 'the body is not JSON' }; }
+    const checked = checkAppEvent(app.manifest, body);
+    if (!checked.ok) return { ok: false, status: 400, error: checked.error };
+    if (!this.appEvents.hit(p.name)) return { ok: false, status: 429, error: 'over the limit of events a minute' };
+    if (!this.env.EVENTS) return { ok: false, status: 503, error: 'the event log is not available' };
+    const about = await withDb(this.db, async () => {
+      const kept: string[] = [];
+      for (const a of checked.event.about) if (await isActiveAccount(a)) kept.push(a);
+      return kept;
+    });
+    const e = checked.event;
+    const id = crypto.randomUUID();
+    await this.env.EVENTS.get(this.env.EVENTS.idFromName(p.organizationId)).publish({
+      id, type: `app.${p.name}.${e.type}`, organizationId: p.organizationId, actor: null, audience: 'org', ts: new Date().toISOString(),
+      data: e.data, ...(e.ref ? { ref: { organizationId: p.organizationId, app: p.name, kind: e.ref.kind, id: e.ref.id } } : {}),
+      ...(about.length ? { about } : {}),
+    });
+    return { ok: true, id };
+  }
+
+  /** The screen's door key (§6.2): the app's screen URL with a one-use token, for a viewer who holds one of its scopes. */
+  async userAppScreen(p: { organizationId: string; name: string; holder: AppHolder; userId: string; displayName: string; isAgent: boolean }): Promise<{ url: string; expiresAt: string } | null> {
+    return withDb(this.db, async () => {
+      const app = await appForUse(p.name);
+      if (!app?.manifest.ui || !(await heldScopes(p.holder)).get(p.name)?.size) return null;
+      const { token, expiresAt } = mintUserAppToken(app.secret, {
+        app: p.name, workspaceId: p.organizationId, userId: p.userId, accountId: p.holder.accountId, displayName: p.displayName, isAgent: p.isAgent,
+      });
+      const url = new URL(app.manifest.ui.url);
+      url.searchParams.set('flow_token', token);
+      return { url: url.toString(), expiresAt: expiresAt.toISOString() };
+    });
   }
 
   /** References resolved for a member (GET /v1/references, routes/references.ts): Chat's kinds here, and anything in the
