@@ -44,10 +44,13 @@ const refuse = (message: string) => new ApiError(400, 'bad_request', message);
 /** Someone the caller may email: an active member of their organization with an address (a guest has none). */
 export interface Member { accountId: string; name: string; address: string }
 
+/** A member's address: the hosted one, else the linked mailbox they go by (people get hosted mail only on a custom domain). */
+export const memberAddress = (a: Pick<AccountDTO, 'address' | 'linkedAddress'>): string | null => a.address || a.linkedAddress || null;
+
 export function membersOf(accounts: AccountDTO[]): Member[] {
   return accounts
-    .filter((a): a is AccountDTO & { address: string } => a.state !== 'removed' && a.state !== 'suspended' && a.kind !== 'guest' && !!a.address)
-    .map((a) => ({ accountId: a.id, name: a.displayName || a.address, address: a.address.toLowerCase() }));
+    .filter((a) => a.state !== 'removed' && a.state !== 'suspended' && a.kind !== 'guest' && !!memberAddress(a))
+    .map((a) => ({ accountId: a.id, name: a.displayName || memberAddress(a)!, address: memberAddress(a)!.toLowerCase() }));
 }
 
 /**

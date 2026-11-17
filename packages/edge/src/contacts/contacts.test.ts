@@ -28,6 +28,10 @@ function sqlStorage() {
 const account = (id: string, org = 'org-1') => ({ id: `acct-${id}`, principalId: `u-${id}`, organizationId: org, address: `${id}@acme.freeflow.im`, displayName: id[0]!.toUpperCase() + id.slice(1), role: 'member', kind: 'native', state: 'active', createdAt: '' });
 const callerOf = (id: string, org = 'org-1') => ({ user: { id: `u-${id}`, email: `${id}@x.test` }, token: `tok-${id}`, authKind: 'session', ip: '', organizationId: org, account: account(id, org) }) as unknown as CallerContext;
 const ANN = callerOf('ann'), BOB = callerOf('bob'), CY = callerOf('cy', 'org-2');
+/** A member with no hosted address, only the linked mailbox she goes by. */
+const dee = { ...account('dee', 'org-3'), address: null, linkedAddress: 'Dee@Home-Mail.net' };
+const DEE = { ...callerOf('dee', 'org-3'), account: dee } as unknown as CallerContext;
+const EVE = callerOf('eve', 'org-3');
 
 /** A world: every account's Contacts object, the stand-ins they call, and what they published and indexed. */
 function world() {
@@ -57,7 +61,7 @@ function world() {
       get: () => ({
         call: async (method: string, args: unknown[]) => {
           const users: Record<string, string> = { 'tok-ann': 'ann', 'tok-bob': 'bob', 'tok-cy': 'cy' };
-          if (method === 'accountsOfOrganization') return { ok: true, value: args[0] === 'org-1' ? [account('ann'), account('bob'), { ...account('gone'), state: 'removed' }] : [account('cy', 'org-2')] };
+          if (method === 'accountsOfOrganization') return { ok: true, value: args[0] === 'org-1' ? [account('ann'), account('bob'), { ...account('gone'), state: 'removed' }] : args[0] === 'org-3' ? [dee, account('eve', 'org-3')] : [account('cy', 'org-2')] };
           if (method === 'authenticateIn' || method === 'authenticate') {
             const id = users[args[0] as string];
             if (!id) return { ok: false, status: 401, code: 'unauthorized', message: 'no' };
@@ -260,6 +264,18 @@ describe('email to members', () => {
     expect(sent[0]!.html).toContain('<strong>news</strong>');
     expect(sent[0]!.text).toMatch(/Some \*\*news\*\*\.\n\n--\nSent through FreeFlow by Ann \(ann@acme\.freeflow\.im\)/);
     expect(sent[0]!.attachments).toBeUndefined();
+  });
+
+  it('reaches a member with no hosted address at the mailbox they go by, "me" included', async () => {
+    const sent = mailbox();
+    const { call } = world();
+    // Dee has no hosted mail (no custom domain): her account carries only the linked mailbox (an automation's "email me").
+    let r = await call(DEE, 'POST', '/v1/contacts/email', { to: ['me'], subject: 'Hi', body: 'x' });
+    expect(r.s).toBe(200);
+    expect(r.j.sent).toEqual([{ name: 'Dee', address: 'dee@home-mail.net' }]);
+    expect(sent[0]).toMatchObject({ to: 'dee@home-mail.net', reply_to: 'Dee@Home-Mail.net' });
+    r = await call(EVE, 'POST', '/v1/contacts/email', { to: ['DEE@home-mail.net'], subject: 'Hi', body: 'x' });
+    expect(r.j.sent).toEqual([{ name: 'Dee', address: 'dee@home-mail.net' }]);
   });
 
   it('refuses anyone outside the organization, and removed members, sending nothing', async () => {
