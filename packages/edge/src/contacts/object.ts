@@ -19,7 +19,7 @@ import type { CallerContext, ObjectBindings } from '../org/routes/compat';
 import { ownerMismatch, ownerRefusal } from '../perAccount';
 import { ApiError } from '../errors';
 import { sendMail, type MailEnv } from '../mail';
-import { EmailBody, compose, loadAttachments, membersOf, resolveRecipients, withinHourly, type FileReach } from './email';
+import { EmailBody, compose, loadAttachments, memberAddress, membersOf, resolveRecipients, withinHourly, type FileReach } from './email';
 import './tools';
 
 export interface ContactsEnv extends MailEnv {
@@ -238,7 +238,7 @@ export class Contacts extends DurableObject<ContactsEnv> {
     const log = withinHourly(JSON.parse(this.state('email_sent') ?? '[]') as number[], to.length);
     if (!log.ok) throw new ApiError(429, 'rate_limited', 'Too many emails in the last hour (at most 50 recipients an hour). Try again later.');
     const attachments = await loadAttachments(input.attachments ?? [], this.fileReach(caller, org));
-    const sender = { name: account.displayName || account.address || caller.user?.email || 'A member', address: account.address ?? caller.user?.email ?? null };
+    const sender = { name: account.displayName || account.address || caller.user?.email || 'A member', address: memberAddress(account) ?? caller.user?.email ?? null };
     const sent: { name: string; address: string }[] = [], failed: { name: string; address: string; error: string }[] = [];
     for (const m of to) {
       try {
