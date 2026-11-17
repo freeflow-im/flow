@@ -4,7 +4,7 @@
 // from the Docs objects (routes/admin.ts' moveAssistantRows), run twice.
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
-import type { AccountDTO } from '@flow/shared';
+import type { AccountDTO, MailApprovalDTO } from '@flow/shared';
 import type { ModelCall } from '@flow/docs/server/agent/agent.ts';
 import type { AgentEvent } from '@flow/docs/shared/agent/protocol.ts';
 import { moveAssistantRows } from '../routes/admin';
@@ -746,5 +746,88 @@ describe('a person’s assistant in Chat posts elsewhere at once, with no approv
     expect(String(seen[1]!.results[0]!.content)).toContain('Standup moved to 10.');
     expect(e.posts).toEqual([expect.objectContaining({ agentUserId: 'asst', channelId: 'ch-gen', body: 'Standup moved to 10.', depth: 2, causedBy: 'job-p1' })]);
     expect(e.automation).toEqual([expect.objectContaining({ channelId: DM, body: 'Outcome: Posted in #general, after joining it.', causedBy: 'job-p1' })]);
+  });
+});
+
+describe('email waits for the person’s click (decision_log 2026-11-17, mailApprovals.ts)', () => {
+  const ADA = { id: 'acct-ada', principalId: 'ada', organizationId: 'org-1', state: 'active', role: 'member', address: 'ada@acme.test', displayName: 'Ada', kind: 'personal_agent', agentMode: 'personal', sponsorId: 'user-1' } as unknown as AccountDTO;
+  const users: Record<string, unknown> = { ada: { id: 'ada', email: 'agent-ada@agents.flow.local', displayName: 'Ada', isAgent: true }, 'user-1': { id: 'user-1', email: 'ann@acme.test', displayName: 'Ann', isAgent: false, timezone: 'UTC' } };
+  const runtime = { runtimeKey: 'acct-1', agentId: 'ada', agentAccountId: 'acct-ada', mode: 'personal' as const, organizationId: 'org-1', sponsorId: 'user-1', sponsorAccountId: 'acct-1' };
+  function env() {
+    const sent: { path: string; body: Record<string, unknown> }[] = [];
+    const notes: { agentUserId: string; personUserId: string; text: string }[] = [];
+    const results: string[] = [];
+    return {
+      sent, notes, results,
+      env: {
+        DIRECTORY: { idFromName: (x: string) => x, get: () => ({ call: async (m: string, args: unknown[]) => ({ ok: true, value: m === 'getUser' ? users[args[0] as string] : m === 'accountById' ? (args[0] === 'acct-ada' ? ADA : ACCOUNT) : null }) }) },
+        ORG: { idFromName: (x: string) => x, get: () => ({ channelIdsOf: async () => [], postAutomation: async () => 'm1', agentDmNotice: async (p: { agentUserId: string; personUserId: string; text: string }) => { notes.push(p); } }) },
+        EVENTS: { idFromName: (x: string) => x, get: () => ({ jobStep: async (id: string, _a: string, step: string) => ({ id, state: step === 'ack' ? 'running' : 'done' }), jobTrigger: async () => null }) },
+        MAIL: {
+          idFromName: (x: string) => x,
+          get: (owner: string) => ({
+            handle: async (r: Request, caller: { account: { id: string } }) => {
+              const path = new URL(r.url).pathname;
+              if (owner !== 'acct-1' || caller.account.id !== 'acct-1') return Response.json({ accounts: [] });
+              if (path === '/v1/mail/accounts') return Response.json({ accounts: [{ id: 'gmail-1', email: 'ann@gmail.test', displayName: 'Ann', status: 'ok', tabs: [] }] });
+              if (path === '/v1/mail/accounts/gmail-1/send' && r.method === 'POST') { sent.push({ path, body: (await r.json()) as Record<string, unknown> }); return Response.json({ messageId: '<sent-1@gmail.test>' }); }
+              return Response.json({ error: 'not found' }, { status: 404 });
+            },
+          }),
+        },
+      } as unknown as AssistantEnv,
+    };
+  }
+  /** The model: send_email to someone outside, then what the tool said, back as text. */
+  const scripted = (results: string[]): ModelCall => async (_params, { onText }) => {
+    const result = lastUser(_params).find((b) => b.type === 'tool_result');
+    if (result) { results.push(String(typeof result.content === 'string' ? result.content : JSON.stringify(result.content))); onText('It is waiting for you.'); return message([{ type: 'text', text: 'It is waiting for you.' }], 'end_turn') as never; }
+    return message([{ type: 'tool_use', id: 'tu_send', name: 'send_email', input: { to: ['Zoe <zoe@outside.example>'], subject: 'Lunch', body: 'Shall we meet **Friday**?' } }], 'tool_use') as never;
+  };
+  const AGENT_CALLER = { ...(CALLER as object), authKind: 'agent', via: 'ada' } as never;
+
+  it('keeps the email waiting, sends nothing until the person clicks Send message, and sends it once', async () => {
+    const e = env();
+    const a = assistant('acct-1', e.env);
+    a.script = scripted(e.results);
+    await events(await a.handle(req('POST', '/api/agent/turn', { message: 'Email Zoe about lunch', context: { page: 'home' }, workspace: 'org-1' }), CALLER, DOCS_CALLER, 'Ada', { agentAccountId: 'acct-ada', agentMode: 'personal' }));
+    expect(e.results[0]).toContain('"waiting_for_approval":true');
+    expect(e.sent).toEqual([]);
+    // Live in the panel: the card is the tool's row; no note in Chat.
+    expect(e.notes).toEqual([]);
+    const list = (await (await a.handle(req('GET', '/api/agent/mail-approvals'), CALLER, DOCS_CALLER)).json()) as { approvals: MailApprovalDTO[] };
+    expect(list.approvals).toEqual([expect.objectContaining({ state: 'waiting', agentName: 'Ada', from: 'ann@gmail.test', fromAgent: false, to: ['Zoe <zoe@outside.example>'], subject: 'Lunch', body: 'Shall we meet **Friday**?' })]);
+    const id = list.approvals[0]!.id;
+    // An agent (or an app's token) cannot approve it: only the person, signed in.
+    expect((await a.handle(req('POST', `/api/agent/mail-approvals/${id}/send`), AGENT_CALLER, DOCS_CALLER)).status).toBe(403);
+    expect(e.sent).toEqual([]);
+    const res = await a.handle(req('POST', `/api/agent/mail-approvals/${id}/send`), CALLER, DOCS_CALLER);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { approval: MailApprovalDTO }).approval.state).toBe('sent');
+    expect(e.sent).toHaveLength(1);
+    expect(e.sent[0]!.body).toMatchObject({ to: [{ name: 'Zoe', address: 'zoe@outside.example' }], subject: 'Lunch' });
+    expect(String(e.sent[0]!.body.html)).toContain('<strong>Friday</strong>');
+    // A second click sends nothing.
+    expect((await a.handle(req('POST', `/api/agent/mail-approvals/${id}/send`), CALLER, DOCS_CALLER)).status).toBe(409);
+    expect(e.sent).toHaveLength(1);
+    expect(((await (await a.handle(req('GET', '/api/agent/mail-approvals'), CALLER, DOCS_CALLER)).json()) as { approvals: unknown[] }).approvals).toEqual([]);
+  });
+
+  it('tells the person in their DM with the agent when no page runs the turn, and discards on their click', async () => {
+    const e = env();
+    const a = assistant('acct-1', e.env);
+    a.script = scripted(e.results);
+    const job = { id: 'job-e1', subscriptionId: 'sub-1', agent: 'acct-ada', eventId: 'e1', eventSeq: 1, prompt: 'Email Zoe about lunch', state: 'queued', attempts: 0, depth: 1, createdAt: '', updatedAt: '' } as never;
+    await a.wake({ organizationId: 'org-1', job, runtime });
+    expect(e.results[0]).toContain('"waiting_for_approval":true');
+    expect(e.sent).toEqual([]);
+    expect(e.notes).toHaveLength(1);
+    expect(e.notes[0]).toMatchObject({ agentUserId: 'ada', personUserId: 'user-1' });
+    expect(e.notes[0]!.text).toContain('**To:** Zoe <zoe@outside.example>');
+    expect(e.notes[0]!.text).toMatch(/\[Review and send\]\(https:\/\/app\.test\/home\/\?email-approval=[0-9a-f-]+&workspace=org-1\)/);
+    const id = /email-approval=([0-9a-f-]+)/.exec(e.notes[0]!.text)![1]!;
+    expect((await a.handle(req('POST', `/api/agent/mail-approvals/${id}/discard`), CALLER, DOCS_CALLER)).status).toBe(200);
+    expect((await a.handle(req('POST', `/api/agent/mail-approvals/${id}/send`), CALLER, DOCS_CALLER)).status).toBe(409);
+    expect(e.sent).toEqual([]);
   });
 });

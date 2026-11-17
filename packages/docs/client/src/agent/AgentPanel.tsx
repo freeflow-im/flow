@@ -1,4 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { EmailApprovalCard, WaitingEmails, emailApprovalOf } from '@flow/suite-bar/email-approval';
+import { activeOrganizationId } from '../suite.ts';
 import { api } from '../api';
 import { Link, useLocation } from 'react-router-dom';
 import { AssistantDock, AssistantDockControls, ChatHistoryNav, SparkIcon, useIdleMinimize } from '@flow/suite-bar/assistant-dock';
@@ -161,6 +163,7 @@ export function AgentPanel() {
       </div>
 
       <div className="agent-list" ref={listRef}>
+        <WaitingEmails organizationId={activeOrganizationId()} refreshKey={agent.running} />
         {agent.items.length === 0 && (
           <div className="agent-empty">
             <p>Ask me to read, edit or format {here}, or to find and open another one.</p>
@@ -323,6 +326,9 @@ export function ToolRow({ item }: { item: ToolItem }) {
   };
   const file = item.status === 'ok' ? fileOfResult(item.result) : null;
   if (file) return <FileChip file={file} />;
+  // send_email: the email waits for the person's click (decision_log 2026-11-17), here as its card.
+  const approval = item.status === 'ok' ? emailApprovalOf(item.name, item.result) : null;
+  if (approval) return <EmailApprovalCard id={approval} organizationId={activeOrganizationId()} />;
   return (
     <>
     <div className={`agent-tool ${item.status}`} title={item.error}>

@@ -13,6 +13,7 @@ import { FilesCard, InboxCard, MentionsCard, TodayCard } from './components/Card
 import { HomeSuiteBar } from './components/HomeSuiteBar';
 import { SettingsPage } from './components/SettingsPage';
 import { SuiteAssistant } from '@flow/suite-bar/assistant-chat';
+import { EmailApprovalOverlay } from '@flow/suite-bar/email-approval';
 import { appLinks, Sidebar } from './components/Sidebar';
 import { useFrames } from './hooks/frames';
 import { useAppMenus } from './hooks/menus';
@@ -216,6 +217,8 @@ export function App() {
           )}
           {/* The person's assistant on Home's own page (agents.md §1.1); an app open here shows its own. A guest has none. */}
           {frames.view === 'home' && !setup.guest && <SuiteAssistant organizationId={orgId} page="home" />}
+          {/* The link in an agent's note in Chat: an email waiting for the person's click (decision_log 2026-11-17). */}
+          {!setup.guest && <EmailApprovalOverlay />}
         </div>
       )}
     </div>

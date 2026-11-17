@@ -508,6 +508,7 @@ approval"):
 | R-B | Incoming email is an event-based trigger: `mail.received`, screened by the allowlist at the publisher; answering is a `wake` subscription whose output step mails the answer back (§1.1). |
 | R-D | Every automation is owned by a person, never an agent; the email-answering one is the sponsor's, worked by the agent (§1.1). |
 | R-C | Posting to Chat never requires approval: `send_message` posts at once in every turn; the ✅ card is gone (§1). |
+| R-E | Agents send email to anyone, but only on the person's click: `send_email` keeps the email waiting with a Send message card, in the panel or (no page) in the agent's DM linking to Home; only a session may send it (`assistant/mailApprovals.ts`). `email_members` and automatic replies are unchanged. |
 
 ## 11. Implementation phases
 

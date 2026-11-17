@@ -153,6 +153,9 @@ async function forward(c: C, req: Request = c.req.raw): Promise<Response> {
   }
 }
 
+// Email waiting for the person's click (assistant/mailApprovals.ts): always the person's own object, whichever agent wrote it.
+assistantRoutes.all('/api/agent/mail-approvals', (c) => forward(c));
+assistantRoutes.all('/api/agent/mail-approvals/*', (c) => forward(c));
 for (const path of ['/api/agent', '/api/agent/turn', '/api/agent/reset', '/api/agent/history', '/api/agent/reopen', '/api/agent/permission', '/api/agent/definition', '/api/agent/mail-allowlist', '/api/settings/assistant']) assistantRoutes.all(path, (c) => forward(c));
 
 /**

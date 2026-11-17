@@ -1,5 +1,5 @@
 // The Docs assistant on the Worker (docs/server/agent, edge copy) has four of the Mail tools: it searches, reads, drafts and
-// saves attachments, and never sends. Its tool list is fixed (the prompt stays cacheable); without a Mail object the tools
+// saves attachments, and never sends by itself: send_email waits for the person's click (mailApprovals.ts). Its tool list is fixed (the prompt stays cacheable); without a Mail object the tools
 // say mail is not here.
 import { describe, expect, it } from 'vitest';
 import { assistantTools, runServerTool, ToolFailure, validateToolInput } from '@flow/docs/server/agent/tools.ts';
@@ -19,13 +19,15 @@ const IN_MAIL = assistantTools({ page: 'mail', accountId: ACC, account: 'ann@tes
 const IN_DOCS = assistantTools({ page: 'home' }, false);
 
 describe('the assistant’s mail tools', () => {
-  it('lists search, read, draft and save, never send', () => {
+  it('lists search, read, draft and save, and send_email (which waits for approval), never send_mail', () => {
     const names = IN_MAIL.map((t) => t.name);
     expect(IN_DOCS.map((t) => t.name)).toEqual(expect.arrayContaining(['search_mail', 'read_mail', 'create_mail_draft', 'save_mail_attachment_to_docs']));
     for (const n of ['search_mail', 'read_mail', 'create_mail_draft', 'save_mail_attachment_to_docs']) expect(names).toContain(n);
     expect(names).not.toContain('send_mail');
     expect(names).not.toContain('trash_mail');
-    expect(IN_MAIL.find((t) => t.name === 'create_mail_draft')!.description).toMatch(/cannot send/);
+    expect(names).toContain('send_email');
+    expect(IN_MAIL.find((t) => t.name === 'create_mail_draft')!.description).toMatch(/use send_email instead/);
+    expect(IN_MAIL.find((t) => t.name === 'send_email')!.description).toMatch(/only when they click it/);
     expect(PROMPT_WITHOUT_JOBS).toMatch(/create_mail_draft/);
   });
 
