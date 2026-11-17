@@ -37,9 +37,10 @@ import { cleanPrompts, type AssistantPrompts } from '@flow/shared/assistant';
 import {
   AppEventLimiter, appForUse, appHolderOf, callAppTool, checkAppEvent, heldScopes, installApp, listApps, offeredAppTools, readableApps,
   removeApp, rotateAppSecret, setAgentsOn, setAppGrants, updateApp, recordUpload, listUploads, installedCode,
-  type AppGrants, type AppHolder, type AppSource, type AppToolAnswer, type AppUpload, type OfferedAppTool,
+  type AppCallerContext, type AppGrants, type AppHolder, type AppSource, type AppToolAnswer, type AppUpload, type OfferedAppTool,
 } from './services/userApps';
 import { mintUserAppToken, verifyBody } from './lib/appSigning';
+import { callHostedTool, hostedWorker, type HostedEnv, type HostedExports } from '../apps/hosted';
 
 /** A user-app change's outcome for the Worker's routes: the value, or the ApiError's status, code and message. */
 async function answered<T>(fn: () => Promise<T>): Promise<DirectoryAnswer<T>> {
@@ -50,7 +51,7 @@ async function answered<T>(fn: () => Promise<T>): Promise<DirectoryAnswer<T>> {
     throw e;
   }
 }
-import { parseAppToolName, type InstalledAppDTO, type UserAppManifest } from '@flow/shared';
+import { isHosted, parseAppToolName, type InstalledAppDTO, type UserAppManifest } from '@flow/shared';
 
 /** Where the organization's suggested prompts are kept, in the object's own storage beside its database. */
 const ASSISTANT_PROMPTS_KEY = 'assistant-prompts';
@@ -63,7 +64,7 @@ import { hostedMailEnabled, type MailProviderEnv } from '../mailprovider/index';
 export type OrgEnv = StorageEnv & MailProviderEnv & {
   FLOW_DATA_KEY?: string; DIRECTORY: DurableObjectNamespace<Directory>; IMAGES?: ImagesBinding; EVENTS?: DurableObjectNamespace<Events>;
   PROVISIONING?: Queue<unknown>; MAIL_RETENTION_DAYS?: string; ASSISTANT?: DurableObjectNamespace<Assistant>;
-};
+} & HostedEnv;
 
 const DAY_MS = 86_400_000;
 /** The storage key of the next sweep of idle visitors (V8). */
@@ -1082,10 +1083,28 @@ export class Org extends DurableObject<OrgEnv> {
     if (!found.app || !tool) return { ok: false, error: `no app tool ${p.toolName} here` };
     if (!tool.scopes.every((s) => found.held.has(s))) return { ok: false, error: `${p.toolName} needs ${tool.scopes.join(' and ')}, which this account does not hold` };
     const kind = p.holder.kind === 'guest' ? 'guest' : p.holder.agentMode === 'shared' ? 'shared_agent' : p.holder.via || p.holder.agentMode === 'personal' ? 'personal_agent' : 'person';
-    return callAppTool(found.app, parsed.tool, p.input, {
+    const caller = {
       organizationId: p.organizationId, accountId: p.holder.accountId, userId: p.userId, displayName: p.displayName, kind, role: p.role,
       via: p.holder.via ?? null, invokedBy: p.invokedBy ?? null, scopes: [...found.held],
-    });
+    } satisfies AppCallerContext;
+    if (!isHosted(found.app.manifest)) return callAppTool(found.app, parsed.tool, p.input, caller);
+    // A hosted app (user-apps.md §7.2): its installed version, loaded into its own isolate, with this object's entrypoints.
+    try {
+      const code = await withDb(this.db, () => installedCode(parsed.app));
+      if (!code) return { ok: false, error: `${found.app.manifest.label} has no installed version to run` };
+      const worker = await hostedWorker(this.env, this.ctx.exports as unknown as HostedExports, p.organizationId, code);
+      return await callHostedTool(worker, parsed.tool, p.input, caller);
+    } catch (err) {
+      console.error(`[apps] ${p.toolName}: ${(err as Error).message}`);
+      return { ok: false, error: `${found.app.manifest.label} could not run: ${(err as Error).message}`.slice(0, 500) };
+    }
+  }
+
+  /** An event a hosted app published through its SUITE binding (§5.1): the binding names the app, so no signature. */
+  async publishHostedAppEvent(p: { organizationId: string; name: string; event: unknown }): Promise<{ ok: true; id: string } | { ok: false; status: number; error: string }> {
+    const app = await withDb(this.db, () => appForUse(p.name));
+    if (!app || !isHosted(app.manifest)) return { ok: false, status: 404, error: 'no such hosted app here' };
+    return this.publishAppEvent(p.organizationId, p.name, app.manifest, p.event);
   }
 
   /**
@@ -1098,7 +1117,13 @@ export class Org extends DurableObject<OrgEnv> {
     if (!app || !verifyBody(app.secret, p.signature, p.body)) return { ok: false, status: 401, error: 'bad or missing signature' };
     let body: unknown;
     try { body = JSON.parse(p.body); } catch { return { ok: false, status: 400, error: 'the body is not JSON' }; }
-    const checked = checkAppEvent(app.manifest, body);
+    return this.publishAppEvent(p.organizationId, p.name, app.manifest, body);
+  }
+
+  /** An app's event, checked against its manifest and the limit, published as `app.<name>.<type>` (§5.1). */
+  private async publishAppEvent(organizationId: string, name: string, manifest: UserAppManifest, body: unknown): Promise<{ ok: true; id: string } | { ok: false; status: number; error: string }> {
+    const p = { organizationId, name };
+    const checked = checkAppEvent(manifest, body);
     if (!checked.ok) return { ok: false, status: 400, error: checked.error };
     if (!this.appEvents.hit(p.name)) return { ok: false, status: 429, error: 'over the limit of events a minute' };
     if (!this.env.EVENTS) return { ok: false, status: 503, error: 'the event log is not available' };

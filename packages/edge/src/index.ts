@@ -39,6 +39,8 @@ export { Calendar } from './calendar/object';
 export { Events } from './events/object';
 export { Assistant } from './assistant/object';
 export { Contacts } from './contacts/object';
+// Hosted user apps (src/apps/hosted.ts): the app's store, and the entrypoints its isolate is bound with (ctx.exports).
+export { AppStore, AppDb, AppSuite, AppEgress } from './apps/hosted';
 import type { Org as OrgObject } from './org/object';
 import type { JobMessage } from './events/object';
 import { handleJobBatch } from './events/queue';
