@@ -317,6 +317,93 @@ describe('the assistant’s own mailbox (agents.md §1.1)', () => {
   });
 });
 
+describe('incoming email wakes the assistant through its subscription (decision_log 2026-11-17, R-B)', () => {
+  const ADA = { id: 'acct-ada', principalId: 'ada', organizationId: 'org-1', state: 'active', role: 'member', address: 'ada@acme.test', displayName: 'Ada', kind: 'personal_agent', agentMode: 'personal', sponsorId: 'user-1' } as unknown as AccountDTO;
+  const users: Record<string, unknown> = { ada: { id: 'ada', email: 'agent-ada@agents.flow.local', displayName: 'Ada', isAgent: true }, 'user-1': { id: 'user-1', email: 'ann@acme.test', displayName: 'Ann', isAgent: false, timezone: 'UTC' } };
+  const runtime = { runtimeKey: 'acct-1', agentId: 'ada', agentAccountId: 'acct-ada', mode: 'personal' as const, organizationId: 'org-1', sponsorId: 'user-1', sponsorAccountId: 'acct-1' };
+  function env() {
+    const subs = new Map<string, Record<string, unknown>>();
+    const mailed: Record<string, unknown>[] = [];
+    const steps: { step: string; opts?: Record<string, unknown> }[] = [];
+    let n = 0;
+    return {
+      subs, mailed, steps,
+      env: {
+        DIRECTORY: { idFromName: (x: string) => x, get: () => ({ call: async (m: string, args: unknown[]) => ({ ok: true, value: m === 'getUser' ? users[args[0] as string] : m === 'accountById' ? (args[0] === 'acct-ada' ? ADA : ACCOUNT) : null }) }) },
+        ORG: { idFromName: (x: string) => x, get: () => ({ channelIdsOf: async () => [] }) },
+        EVENTS: {
+          idFromName: (x: string) => x,
+          get: () => ({
+            getSubscription: async (id: string) => subs.get(id) ?? null,
+            createSubscription: async (sub: Record<string, unknown>) => { const made = { ...sub, id: `sub-${++n}` }; subs.set(made.id, made); return made; },
+            deleteSubscription: async (id: string) => subs.delete(id),
+            jobTrigger: async (_id: string, agent: string) => (agent === 'acct-ada' ? { id: 'e1', seq: 1, type: 'mail.received', ref: { organizationId: 'org-1', app: 'mail', kind: 'message', id: 'hosted-ada:INBOX:4' } } : null),
+            jobStep: async (id: string, _a: string, step: string, opts?: Record<string, unknown>) => { steps.push({ step, opts }); return { id, state: step === 'ack' ? 'running' : 'done' }; },
+          }),
+        },
+        MAIL: {
+          idFromName: (x: string) => x,
+          get: (owner: string) => ({
+            handle: async (r: Request, caller: { account: { id: string } }) => {
+              const path = new URL(r.url).pathname;
+              if (owner !== 'acct-ada' || caller.account.id !== 'acct-ada') return Response.json({ accounts: [] });
+              if (path === '/v1/mail/accounts') return Response.json({ accounts: [{ id: 'hosted-ada', email: 'ada@acme.test', displayName: 'Ada', status: 'ok', tabs: [] }] });
+              if (path === '/v1/mail/accounts/hosted-ada/messages/4') {
+                return Response.json({ message: { from: { name: 'Ann', address: 'ann@acme.test' }, to: [], cc: [], bcc: [], replyTo: [], subject: 'Plan my week', date: '2026-11-17T08:00:00Z', folder: 'INBOX', seen: false, flagged: false, messageId: '<m4@acme.test>', text: 'What is on my plate?', html: null, attachments: [] } });
+              }
+              return Response.json({ error: 'not found' }, { status: 404 });
+            },
+            sendAsAssistant: async (p: Record<string, unknown>) => { mailed.push(p); return { ok: true }; },
+          }),
+        },
+      } as unknown as AssistantEnv,
+    };
+  }
+  const put = (a: TestAssistant, body: unknown) => a.handle(req('PUT', '/api/agent/mail-allowlist', body), CALLER, DOCS_CALLER, 'Ada', { agentAccountId: 'acct-ada', agentMode: 'personal' });
+
+  it('keeps one answering subscription while answering is on and a sender is allowed, and none otherwise', async () => {
+    const e = env();
+    const a = assistant('acct-1', e.env);
+    await put(a, { senders: ['ann@acme.test'] });
+    expect(e.subs.size).toBe(0);
+    await put(a, { autoReply: true });
+    expect([...e.subs.values()]).toEqual([expect.objectContaining({ consumer: 'acct-ada', owner: 'acct-ada', createdBy: 'acct-1', delivery: 'wake', filter: { types: ['mail.received'], self: true }, action: expect.objectContaining({ reply: 'mail' }) })]);
+    // Asked again (the mailbox's check, every few minutes): the same one stays.
+    expect(await a.syncMailWake({ organizationId: 'org-1', agentAccountId: 'acct-ada' })).toBe('on');
+    expect(e.subs.size).toBe(1);
+    // Gone when the subscription was lost: made again (the migration path, for assistants answering before this existed).
+    e.subs.clear();
+    expect(await a.syncMailWake({ organizationId: 'org-1', agentAccountId: 'acct-ada' })).toBe('on');
+    expect(e.subs.size).toBe(1);
+    await put(a, { autoReply: false });
+    expect(e.subs.size).toBe(0);
+  });
+
+  it('runs the job as a headless turn with every tool, and mails the answer back to the sender, in the thread', async () => {
+    const e = env();
+    const a = assistant('acct-1', e.env);
+    await put(a, { senders: ['ann@acme.test'], autoReply: true });
+    const sub = [...e.subs.values()][0]!;
+    const seen: { tools: string[]; text: string }[] = [];
+    a.script = async (params, { onText }) => {
+      seen.push({ tools: (params.tools ?? []).map((t) => (t as { name: string }).name), text: lastUser(params).filter((b) => b.type === 'text').map((b) => String(b.text)).join('\n') });
+      onText('Tuesday: the budget review.');
+      return message([{ type: 'text', text: 'Tuesday: the budget review.' }], 'end_turn') as never;
+    };
+    const job = { id: 'job-m1', subscriptionId: sub.id, agent: 'acct-ada', eventId: 'e1', eventSeq: 1, prompt: (sub.action as { prompt: string }).prompt, state: 'queued', attempts: 0, depth: 1, createdAt: '', updatedAt: '' } as never;
+    await a.wake({ organizationId: 'org-1', job, runtime });
+    // Every tool it may use, Chat's among them (Ada once said "Chat access isn't available here").
+    expect(seen[0]!.tools).toEqual(expect.arrayContaining(['list_channels', 'send_message', 'read_messages', 'search_mail', 'insert_content']));
+    expect(seen[0]!.text).toContain('From: ann@acme.test (a sender Ann allows)');
+    expect(seen[0]!.text).toContain('What is on my plate?');
+    expect(e.mailed).toEqual([{ to: 'ann@acme.test', subject: 'Re: Plan my week', text: 'Tuesday: the budget review.', inReplyTo: '<m4@acme.test>' }]);
+    expect(e.steps.at(-1)).toMatchObject({ step: 'done', opts: { ok: true } });
+    // Its conversation is the sender's, kept across their emails.
+    const convs = (a as unknown as { sql: { exec(q: string): { toArray(): { user_id: string }[] } } }).sql.exec('SELECT user_id FROM agent_conversations').toArray().map((r) => r.user_id);
+    expect(convs).toContain('mail:ann@acme.test');
+  });
+});
+
 describe('a hosted agent’s runtime takes a wake job (agents.md §6)', () => {
   const OMNI_ACCOUNT = { id: 'acct-omni', principalId: 'omni', organizationId: 'org-1', state: 'active', role: 'member', address: 'omni@acme.test', displayName: 'Omni', kind: 'native', agentMode: 'shared', sponsorId: 'user-1' } as unknown as AccountDTO;
   const users: Record<string, unknown> = { omni: { id: 'omni', email: 'omni@agents.flow.local', displayName: 'Omni', isAgent: true, agentMode: 'shared' }, 'user-1': { id: 'user-1', email: 'ann@acme.test', displayName: 'Ann', isAgent: false } };

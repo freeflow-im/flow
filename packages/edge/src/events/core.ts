@@ -383,6 +383,12 @@ export class EventsCore {
     return out;
   }
 
+  /** The event that woke the agent's job (its type and reference), for the runtime; null for another agent's job. */
+  triggerOf(jobId: string, agent: string): Pick<PlatformEvent, 'id' | 'seq' | 'type' | 'ref' | 'channelId'> | null {
+    const job = this.getJob(jobId);
+    return job && job.agent === agent ? this.jobTrigger(job) : null;
+  }
+
   /** The event that woke a job, as its first `agent.job` named it (the trigger itself may have aged out). */
   private jobTrigger(job: AgentJobDTO): Pick<PlatformEvent, 'id' | 'seq' | 'type' | 'ref' | 'channelId'> {
     const row = this.sql.exec("SELECT data FROM events WHERE type = 'agent.job' AND caused_by = ? ORDER BY seq LIMIT 1", job.id).toArray()[0];

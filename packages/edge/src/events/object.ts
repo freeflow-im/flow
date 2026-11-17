@@ -162,6 +162,11 @@ export class Events extends DurableObject<EventsEnv> {
     return this.core.listJobs(subscriptionId);
   }
 
+  /** The event that woke the agent's job: what a hosted runtime answers (a `reply: 'mail'` wake answers its mail). */
+  jobTrigger(id: string, agent: string): Pick<PlatformEvent, 'id' | 'seq' | 'type' | 'ref' | 'channelId'> | null {
+    return this.core.triggerOf(id, agent);
+  }
+
   jobDepth(id: string, agent: string): number | null {
     return this.core.jobDepth(id, agent);
   }

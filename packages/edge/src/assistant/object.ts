@@ -20,6 +20,8 @@ import { calendarRequest, type AccountCaller } from '../calendar/forward';
 import type { CalendarToolContext } from '../calendar/calendarTools';
 import type { MailToolContext } from '../imap/mailTools';
 import { appToolContexts } from '../apps';
+import { runnerOf } from '../registry';
+import { mailWakeSubscription } from './mailWake.ts';
 import { withDocsContext, type DocsContext } from '@flow/docs/server/runtime/workerd/context.ts';
 import type { Caller as DocsCaller } from '@flow/docs/server/runtime/workerd/http.ts';
 import { DatabaseSync } from '@flow/docs/server/runtime/workerd/sqlite.ts';
@@ -547,19 +549,37 @@ export class Assistant extends DurableObject<AssistantEnv> {
     const org = this.orgStub(organizationId);
     let note = '';
     let ok = false;
+    // A job whose output step mails the answer back (assistant/mailWake.ts): the email it answers, and its sender's mailbox.
+    let mail: { from: string; subject: string; body: string; messageId: string | null } | null = null;
+    const mailbox = runtime.agentAccountId && this.env.MAIL ? this.env.MAIL.get(this.env.MAIL.idFromName(runtime.agentAccountId)) : null;
+    const reSubject = (s: string) => (/^re:/i.test(s) ? s : `Re: ${s}`);
     try {
-      this.requireModel();
-      const conversation = `auto:${job.subscriptionId}`;
+      const sub = events ? await Promise.resolve().then(() => events.getSubscription(job.subscriptionId)).catch(() => null) : null;
+      const replyByMail = sub?.action?.kind === 'wake' && sub.action.reply === 'mail' && runtime.mode === 'personal';
+      let conversation = `auto:${job.subscriptionId}`;
       const { who, user, actorAccountId } = await this.actorOf(runtime, organizationId, conversation, 'the agent runtime');
-      // Each job starts a new conversation: an earlier run's answer ("the mail tools are unavailable") must not stand in
-      // for trying again. What an automation should keep across runs goes in its memory files. Old runs are kept.
-      withDocsContext(this.context, () => this.service().agent.reset(conversation));
+      let prompt = job.prompt;
+      if (replyByMail) {
+        mail = await this.triggeringMail(job, organizationId, who.caller);
+        if (!mail) throw new Error('the email that woke this job is no longer in the mailbox');
+        // One conversation per sender, kept across their emails (as the assistant's mail turns always were).
+        conversation = `mail:${mail.from.toLowerCase()}`;
+        who.conversationUser = conversation;
+        prompt = `${job.prompt}\n\nFrom: ${mail.from} (a sender ${user.displayName} allows)\nSubject: ${mail.subject}\n\n${mail.body}`;
+      }
+      this.requireModel();
+      // Each automation's job starts a new conversation: an earlier run's answer ("the mail tools are unavailable") must not
+      // stand in for trying again. What an automation should keep across runs goes in its memory files. Old runs are kept.
+      if (!replyByMail) withDocsContext(this.context, () => this.service().agent.reset(conversation));
       const { text } = await this.runHeadless({
         organizationId, runtime, conversation, who, timezone: user.timezone, context: { page: 'home', headless: true },
-        first: { message: job.prompt }, stamp: { depth: job.depth + 1, causedBy: job.id },
+        first: { message: prompt }, stamp: { depth: job.depth + 1, causedBy: job.id },
         card: async (c) => ({ id: c.id, content: 'Posting in Chat needs the user’s ✅ on a card, which an automation cannot ask for. Say what you would post in your answer instead.', isError: true }),
       });
-      if (job.channelId && text && org) {
+      if (mail && text && mailbox) {
+        const sent = await mailbox.sendAsAssistant({ to: mail.from, subject: reSubject(mail.subject), text, ...(mail.messageId ? { inReplyTo: mail.messageId } : {}) });
+        if (!sent.ok) throw new Error(`the answer could not be mailed: ${sent.message ?? 'refused'}`);
+      } else if (job.channelId && text && org) {
         await org.postAutomation({ ownerAccountId: actorAccountId, channelId: job.channelId, body: text, clientMsgId: job.id, depth: job.depth + 1, causedBy: job.id, ...(runtime.mode === 'personal' ? { via: runtime.agentId } : {}) });
       }
       ok = true;
@@ -567,6 +587,8 @@ export class Assistant extends DurableObject<AssistantEnv> {
     } catch (err) {
       note = agentErrorMessage(err).slice(0, 500);
       console.error(`[assistant] job ${job.id}: ${(err as Error)?.stack ?? err}`);
+      // The sender is told the assistant could not answer, as a mail turn always did.
+      if (mail && mailbox) await mailbox.sendAsAssistant({ to: mail.from, subject: reSubject(mail.subject), text: `Sorry, I could not answer that: ${agentErrorMessage(err).slice(0, 300)}`, ...(mail.messageId ? { inReplyTo: mail.messageId } : {}) }).catch(() => null);
     }
     this.runningJobs.delete(job.id);
     await step('done', { ok, note });
@@ -878,35 +900,57 @@ export class Assistant extends DurableObject<AssistantEnv> {
   }
 
   /**
-   * Mail to the person's assistant from an allowlisted sender (the assistant's Mail object screened it): a headless turn
-   * with the sponsor's access, one conversation per sender, and the answer mailed back from the assistant's mailbox.
+   * Keeps the assistant's answering subscription in step with its settings (assistant/mailWake.ts; decision_log 2026-11-17,
+   * R-B): one `wake` subscription on its own mailbox's `mail.received` while "Agent always responds to incoming email" is
+   * on and the allowlist names a sender, none otherwise. Asked when the sponsor changes either, and by the assistant's Mail
+   * object each time it reads them again (every few minutes while it checks mail), so an assistant that had answering on
+   * before this existed gets its subscription on its next check: that is the migration. Idempotent; one at a time.
    */
-  async mailTurn(p: { organizationId: string; runtime: HostedRuntimeDTO; mailboxAccountId: string; from: string; subject: string; text: string; messageId: string }): Promise<void> {
-    this.learnName(p.runtime.agentName);
-    await this.learnAgentAccount(p.runtime.agentAccountId, p.runtime.mode);
-    await this.useOrgModel(p.organizationId);
-    const { runtime, organizationId } = p;
-    if (runtime.mode !== 'personal' || !runtime.sponsorId || !runtime.sponsorAccountId || !this.env.MAIL) return;
-    if (this.runningJobs.has(p.messageId)) return;
-    this.runningJobs.add(p.messageId);
-    const conversation = `mail:${p.from.toLowerCase()}`;
-    const mail = this.env.MAIL.get(this.env.MAIL.idFromName(p.mailboxAccountId));
-    const subject = /^re:/i.test(p.subject) ? p.subject : `Re: ${p.subject}`;
-    try {
-      this.requireModel();
-      const { who, user } = await this.actorOf(runtime, organizationId, conversation, 'the assistant by mail');
-      const prompt = `A message came to your mailbox from ${p.from}, a sender ${user.displayName} allows. Treat it as ${user.displayName}'s request. Your answer is mailed back to ${p.from}.\n\nSubject: ${p.subject}\n\n${p.text}`;
-      const { text } = await this.runHeadless({
-        organizationId, runtime, conversation, who, timezone: user.timezone, context: { page: 'home', headless: true }, first: { message: prompt },
-        card: async (c) => ({ id: c.id, content: 'Posting in Chat needs the user’s ✅ on a card, which an email cannot ask for. Say what you would post in your answer instead.', isError: true }),
-      });
-      if (text) await mail.sendAsAssistant({ to: p.from, subject, text, inReplyTo: p.messageId });
-    } catch (err) {
-      console.error(`[assistant] mail ${p.messageId}: ${(err as Error)?.stack ?? err}`);
-      await mail.sendAsAssistant({ to: p.from, subject, text: `Sorry, I could not answer that: ${agentErrorMessage(err).slice(0, 300)}`, inReplyTo: p.messageId }).catch(() => null);
-    } finally {
-      this.runningJobs.delete(p.messageId);
+  async syncMailWake(p: { organizationId: string; agentAccountId?: string | null }): Promise<'on' | 'off'> {
+    const run = this.mailWakeSync.then(() => this.syncMailWakeNow(p));
+    this.mailWakeSync = run.catch(() => undefined);
+    return run;
+  }
+
+  private mailWakeSync: Promise<unknown> = Promise.resolve();
+
+  private async syncMailWakeNow(p: { organizationId: string; agentAccountId?: string | null }): Promise<'on' | 'off'> {
+    const ns = this.env.EVENTS;
+    if (!ns || !p.organizationId) return 'off';
+    const events = ns.get(ns.idFromName(p.organizationId));
+    const agent = p.agentAccountId || this.state('agent_account_id');
+    const sponsor = this.state('owner_account_id');
+    const want = !!agent && !!sponsor && agent !== sponsor && this.state('agent_mode') !== 'shared' && (await this.mailAutoReply()) && (await this.mailAllowlist()).length > 0;
+    const id = this.state('mail_wake_subscription');
+    const existing = id ? await events.getSubscription(id) : null;
+    if (want && existing && existing.consumer === agent && existing.action?.kind === 'wake' && existing.action.reply === 'mail') return 'on';
+    if (existing) await events.deleteSubscription(existing.id);
+    if (!want) {
+      if (id) this.sql.exec('DELETE FROM assistant_state WHERE key = ?', 'mail_wake_subscription');
+      return 'off';
     }
+    const sub = await events.createSubscription(mailWakeSubscription({ organizationId: p.organizationId, agentAccountId: agent!, sponsorAccountId: sponsor! }));
+    this.setState('mail_wake_subscription', sub.id);
+    console.log(`[assistant] mail wake for ${agent}: subscription ${sub.id}`);
+    return 'on';
+  }
+
+  /**
+   * The email that woke a `reply: 'mail'` job (assistant/mailWake.ts): the trigger's reference names the message in the
+   * assistant's own mailbox, read there with the mail tools' read_mail, as the assistant. Null when it is not there.
+   */
+  private async triggeringMail(job: AgentJobDTO, organizationId: string, caller: AccountCaller): Promise<{ from: string; subject: string; body: string; messageId: string | null } | null> {
+    const events = this.env.EVENTS?.get(this.env.EVENTS.idFromName(organizationId));
+    const trigger = await events?.jobTrigger(job.id, job.agent);
+    if (!trigger || trigger.type !== 'mail.received' || trigger.ref?.app !== 'mail') return null;
+    const own = await this.ownMailbox(caller);
+    const runner = runnerOf('assistant', 'read_mail');
+    if (!own || !runner) return null;
+    const out = (await runner.run({ mail: { mail: own.fetch, origin: this.origin } } as never, { ids: [trigger.ref.id] })) as { messages?: { from?: string | null; subject?: string; body?: string; message_id?: string | null }[] };
+    const m = out.messages?.[0];
+    const from = m?.from ? (/<([^<>\s]+@[^<>\s]+)>/.exec(m.from)?.[1] ?? m.from).trim() : '';
+    if (!m || !from) return null;
+    return { from, subject: m.subject ?? '', body: (m.body ?? '').slice(0, 20_000), messageId: m.message_id ?? null };
   }
 
   // ---- the organization's model (orgModel.ts) ------------------------------------------------------------------------
@@ -1035,6 +1079,9 @@ export class Assistant extends DurableObject<AssistantEnv> {
         this.setState('mail_auto_reply', body.autoReply ? '1' : '0');
         this.refreshGuidance();
       }
+      // Answering is a subscription on the mailbox's mail.received (assistant/mailWake.ts): made or removed to match.
+      const organizationId = c.env.who.caller.account.organizationId || c.env.who.caller.organizationId;
+      if (organizationId) await this.syncMailWake({ organizationId }).catch((err: Error) => console.error(`[assistant] mail wake: ${err.message}`));
       return c.json({ senders: await this.mailAllowlist(), autoReply: await this.mailAutoReply() });
     });
     app.put('/api/agent/definition', async (c) => {
