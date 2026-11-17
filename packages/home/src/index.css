@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* The suite bar's domain card (DomainSetup.tsx) is drawn with this app's Tailwind. */
+@source "../../suite-bar/src/DomainSetup.tsx";
 
 /* The suite's colours (packages/suite-bar/src/suite-bar.css), as Admin, Contacts and Mail use them. */
 @theme {

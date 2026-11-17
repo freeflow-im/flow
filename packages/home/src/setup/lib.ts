@@ -4,16 +4,24 @@ import type { MemberRole, SubscriptionDTO } from '@flow/shared';
 
 export const STEPS = [
   { n: 1, label: 'Workspace' },
-  { n: 2, label: 'Chief of Staff' },
-  { n: 3, label: 'Omni' },
-  { n: 4, label: 'Team' },
-  { n: 5, label: 'Automations' },
+  { n: 2, label: 'Domain' },
+  { n: 3, label: 'Chief of Staff' },
+  { n: 4, label: 'Omni' },
+  { n: 5, label: 'Team' },
+  { n: 6, label: 'Automations' },
 ] as const;
 export type StepNumber = (typeof STEPS)[number]['n'];
+/** The last step, where the ready-made automations are made the first time it is reached. */
+export const LAST_STEP: StepNumber = 6;
 
-/** The steps a person goes through: all five for an owner or admin, else their assistant and automations (§1). */
-export function stepsFor(role: MemberRole | string | null): StepNumber[] {
-  return role === 'owner' || role === 'admin' || role === null ? [1, 2, 3, 4, 5] : [2, 5];
+/**
+ * The steps a person goes through (§1): an owner or admin all of them, the Domain step only when the workspace has a
+ * domain of its own to set up; everyone else their assistant and automations.
+ */
+export function stepsFor(role: MemberRole | string | null, ownDomain = false): StepNumber[] {
+  const admin = role === 'owner' || role === 'admin' || role === null;
+  if (!admin) return [3, 6];
+  return ownDomain ? [1, 2, 3, 4, 5, 6] : [1, 3, 4, 5, 6];
 }
 
 /** The step after `n` among `steps`, or null after the last. */

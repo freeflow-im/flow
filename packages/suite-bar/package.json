@@ -11,7 +11,8 @@
     "./assistant-chat": "./src/AssistantChat.tsx",
     "./side-panel": "./src/SidePanel.tsx",
     "./account-settings": "./src/AccountSettings.tsx",
-    "./email-approval": "./src/EmailApproval.tsx"
+    "./email-approval": "./src/EmailApproval.tsx",
+    "./domain-setup": "./src/DomainSetup.tsx"
   },
   "sideEffects": [
     "*.css"

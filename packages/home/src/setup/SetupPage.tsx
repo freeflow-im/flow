@@ -1,14 +1,13 @@
 // Setup (docs/specs/onboarding.md §1): Home's own page at /home/setup, with no sidebar. A step bar, then one step at a
-// time: the workspace, the person's assistant (their Chief of Staff), Omni, the team and automations. Each step moved
-// to is saved, so a reload comes back to it; "Finish setup" ends it and opens Home (or Admin › Domains, after choosing a
-// domain of one's own).
+// time: the workspace, its own domain (when one was chosen), the person's assistant (their Chief of Staff), Omni, the team
+// and automations. Each step moved to is saved, so a reload comes back to it; "Finish setup" ends it and opens Home.
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { adminAddress } from '@flow/shared/addresses';
 import { chooseOrganization, ORGANIZATIONS_KEY, useOrganizations } from '../hooks/organization';
 import { setupApi } from './api';
-import { nextStep, previousStep, STEPS, stepsFor, type StepNumber } from './lib';
+import { LAST_STEP, nextStep, previousStep, STEPS, stepsFor, type StepNumber } from './lib';
 import { WorkspaceStep } from './WorkspaceStep';
+import { DomainStep } from './DomainStep';
 import { AssistantStep } from './AssistantStep';
 import { OmniStep } from './OmniStep';
 import { TeamStep } from './TeamStep';
@@ -18,7 +17,7 @@ import { Logo } from './ui';
 /** The step the address names (`?step=3`), if any. */
 function stepInAddress(): StepNumber | null {
   const n = Number(new URLSearchParams(window.location.search).get('step'));
-  return n >= 1 && n <= 5 ? (n as StepNumber) : null;
+  return n >= 1 && n <= LAST_STEP ? (n as StepNumber) : null;
 }
 
 export function SetupPage() {
@@ -28,23 +27,25 @@ export function SetupPage() {
   const orgId = org?.id ?? null;
   const state = useQuery({ queryKey: ['setup', orgId], queryFn: () => setupApi.state(orgId!), enabled: !!orgId });
   const [step, setStep] = useState<StepNumber | null>(null);
-  // The domain chosen at step 1, for the end of setup.
-  const [ownDomain, setOwnDomain] = useState<string | null>(null);
-  // Where setup stood when the page opened: step 5 makes the ready-made automations only the first time it is reached.
+  // Where setup stood when the page opened: the last step makes the ready-made automations only the first time it is reached.
   const [reachedBefore, setReachedBefore] = useState<number | null>(null);
 
-  const steps = stepsFor(org ? org.role ?? 'member' : null);
+  const admin = !!org && (org.role === 'owner' || org.role === 'admin');
+  // An owner or admin with a domain of their own (chosen at step 1) has the Domain step; it stays until setup ends.
+  const domains = useQuery({ queryKey: ['setup', 'domains', orgId], queryFn: () => setupApi.domains(orgId!), enabled: admin });
+  const ownDomain = (domains.data ?? []).some((d) => d.kind === 'own');
+  const steps = stepsFor(org ? org.role ?? 'member' : null, ownDomain);
 
   // The step to open on: the address's, else the saved one, else the first this person has (1 with no workspace yet).
   useEffect(() => {
     if (step !== null || !organizations.ready) return;
     if (!org) return setStep(1);
-    if (!state.data) return;
+    if (!state.data || (admin && !domains.isFetched)) return;
     setReachedBefore(state.data.step);
     const saved = (stepInAddress() ?? state.data.step) as StepNumber;
     const first = steps.find((s) => s !== 1)!;
     setStep(steps.includes(saved) && saved !== 1 ? saved : first);
-  }, [step, organizations.ready, org, state.data, steps]);
+  }, [step, organizations.ready, org, state.data, steps, admin, domains.isFetched]);
 
   const go = (n: StepNumber, id = orgId) => {
     setStep(n);
@@ -64,16 +65,15 @@ export function SetupPage() {
   const finish = async () => {
     if (orgId) await setupApi.save(orgId, { done: true }).catch(() => undefined);
     await qc.invalidateQueries({ queryKey: ['setup', orgId] });
-    window.location.assign(ownDomain ? adminAddress('domains') : '/home/');
+    window.location.assign('/home/');
   };
 
   const created = async (id: string, domain: string | null) => {
-    setOwnDomain(domain);
     chooseOrganization(id);
     await qc.invalidateQueries({ queryKey: ORGANIZATIONS_KEY });
     setReachedBefore(1);
-    // An owner of a new workspace goes on to every step.
-    go(2, id);
+    // An owner of a new workspace goes on to every step: its domain first when one was chosen.
+    go(domain ? 2 : 3, id);
   };
 
   if (!organizations.ready || step === null) {
@@ -105,11 +105,12 @@ export function SetupPage() {
       <main className="mx-auto flex w-full max-w-[1200px] flex-wrap items-start gap-12 px-4 py-10 sm:px-10 sm:py-14">
         {step > 1 && !org && <p className="text-sm text-muted">Loading…</p>}
         {step === 1 && <WorkspaceStep stepOf={label(steps, 1)} onCreated={created} />}
-        {step === 2 && org && <AssistantStep org={org} stepOf={label(steps, 2)} onDone={() => forward(2)} />}
-        {step === 3 && org && <OmniStep org={org} stepOf={label(steps, 3)} onDone={() => forward(3)} onBack={() => back(3)} />}
-        {step === 4 && org && <TeamStep org={org} stepOf={label(steps, 4)} onDone={() => forward(4)} onBack={() => back(4)} />}
-        {step === 5 && org && (
-          <AutomationsStep org={org} stepOf={label(steps, 5)} firstVisit={(reachedBefore ?? 5) < 5} onFinish={() => void finish()} onBack={previousStep(steps, 5) ? () => back(5) : null} />
+        {step === 2 && org && <DomainStep org={org} stepOf={label(steps, 2)} onDone={() => forward(2)} />}
+        {step === 3 && org && <AssistantStep org={org} stepOf={label(steps, 3)} onDone={() => forward(3)} />}
+        {step === 4 && org && <OmniStep org={org} stepOf={label(steps, 4)} onDone={() => forward(4)} onBack={() => back(4)} />}
+        {step === 5 && org && <TeamStep org={org} stepOf={label(steps, 5)} onDone={() => forward(5)} onBack={() => back(5)} />}
+        {step === 6 && org && (
+          <AutomationsStep org={org} stepOf={label(steps, 6)} firstVisit={(reachedBefore ?? LAST_STEP) < LAST_STEP} onFinish={() => void finish()} onBack={previousStep(steps, 6) ? () => back(6) : null} />
         )}
       </main>
     </div>
@@ -117,4 +118,4 @@ export function SetupPage() {
 }
 
 /** "Step 2 of 5", counting only the steps this person has. */
-const label = (steps: StepNumber[], n: StepNumber) => `Step ${steps.indexOf(n) + 1} of ${steps.length}`;
+const label = (steps: StepNumber[], n: StepNumber) => `Step ${Math.max(1, steps.indexOf(n) + 1)} of ${steps.length + (steps.includes(n) ? 0 : 1)}`;

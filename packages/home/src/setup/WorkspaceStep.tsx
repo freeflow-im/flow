@@ -1,5 +1,5 @@
 // Step 1, the workspace (docs/specs/onboarding.md §1): its name and its address. The free address is
-// `<slug>.freeflow.im`; a domain of one's own is recorded now and set up in Admin › Domains when setup ends. As the
+// `<slug>.freeflow.im`; a domain of one's own is added now and connected in the next step (or later, in Admin › Domains). As the
 // 2026-11-15 ruling has it, agents get mailboxes at the workspace's address; a person links their own mail, or gets an
 // address once an own domain has mail.
 import { useState } from 'react';
@@ -70,7 +70,7 @@ export function WorkspaceStep({ stepOf, onCreated }: { stepOf: string; onCreated
             </div>
           )}
           <Choice checked={own} onChange={() => setOwn(true)} title="Use a domain you own" testid="setup-address-own">
-            Like yourcompany.com. You add its DNS records after setup.
+            Like yourcompany.com. You connect it in the next step, or later.
           </Choice>
           {own && (
             <div className="flex flex-col gap-1.5 pl-1">
@@ -110,9 +110,9 @@ export function WorkspaceStep({ stepOf, onCreated }: { stepOf: string; onCreated
           </div>
           <span className="ml-auto rounded-md bg-track px-2 py-1 text-xs font-semibold text-ink-soft">Person</span>
         </div>
-        <Placeholder agent tone="#a78bfa">Your Chief of Staff — next step</Placeholder>
-        <Placeholder agent tone="#f59e0b">Omni, the team’s shared agent — step 3</Placeholder>
-        <Placeholder tone="#9aa0a6">Teammates and agents — step 4</Placeholder>
+        <Placeholder agent tone="#a78bfa">Your Chief of Staff — coming up</Placeholder>
+        <Placeholder agent tone="#f59e0b">Omni, the team’s shared agent — coming up</Placeholder>
+        <Placeholder tone="#9aa0a6">Teammates and agents — coming up</Placeholder>
         <p className="m-0 text-xs leading-relaxed text-muted">People and agents are listed together. Round pictures are people; rounded squares are agents.</p>
       </SideCard>
     </>

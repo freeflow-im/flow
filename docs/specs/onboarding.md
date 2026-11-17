@@ -9,10 +9,13 @@ Status: built 2026-11-17 (branch `onboarding/workspace-setup`). Design: the "Fre
    people joining from the left, agents (hosted and connected over MCP) from the right. "Set up your workspace" goes to
    sign-up; "Sign in" to Chat's sign-in. A signed-in visitor, or any `/` address with a query (sign-in links, `?next=`,
    `?signup=`), goes to `/chat` as before.
-2. **Setup** (`/home/setup`, Home's own page, no sidebar). Five steps, with a step bar at the top:
+2. **Setup** (`/home/setup`, Home's own page, no sidebar). Five steps (six with an own domain), with a step bar at the top:
    1. **Workspace** — name and address. The free choice is `<slug>.freeflow.im`; the own-domain choice records the
-      domain and opens Admin › Domains when setup ends. The screen states the 2026-11-15 ruling plainly: agents get
-      addresses at the workspace domain; a person links their own mail, or gets an address once an own domain has mail.
+      domain, which the next step connects. The screen states the 2026-11-15 ruling plainly: agents get addresses at the
+      workspace domain; a person links their own mail, or gets an address once an own domain has mail.
+   1b. **Domain** — only when an own domain was chosen (owners and admins). The same card as Admin › Domains (the suite
+      bar's `DomainCard`): prove ownership, mail records, turn on mail, signing record. "Set this up later" goes on; the
+      card stays in Admin › Domains.
    2. **Chief of Staff** — the person's assistant introduces itself in a scripted chat (no model call). The person picks
       a name (chips or typed) and one of the eight picture presets. Saving names the assistant (`nameAssistant`: its
       address and mailbox) and sets its picture.

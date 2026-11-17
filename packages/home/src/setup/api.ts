@@ -1,6 +1,6 @@
 // The calls setup makes (docs/specs/onboarding.md): the platform's /v1 routes and the assistant's /api/agent ones, so
 // Home depends on no other app.
-import type { AccountKind, AgentDefinitionDTO, InviteResultDTO, SubscriptionDTO, UsableAgentDTO, WorkspaceDTO, WorkspaceInviteDTO, WorkspaceMemberDTO } from '@flow/shared';
+import type { AccountKind, AgentDefinitionDTO, DomainDTO, InviteResultDTO, SubscriptionDTO, UsableAgentDTO, WorkspaceDTO, WorkspaceInviteDTO, WorkspaceMemberDTO } from '@flow/shared';
 import type { AgentAvatarPreset, AssistantSettings } from '@flow/shared/assistant';
 import { HomeApiError } from '../api';
 
@@ -30,6 +30,12 @@ export const setupApi = {
 
   createWorkspace: (name: string, slug: string) => request<WorkspaceDTO>('POST', '/v1/workspaces', { name, slug }),
   addDomain: (org: string, domain: string) => request<unknown>('POST', `${ws(org)}/domains`, { domain }),
+  /** The workspace's domains with each record's DNS check (Admin › Domains' list), looked at again with `refresh`. */
+  domains: async (org: string, refresh = false) => (await request<{ domains: DomainDTO[] }>('GET', `${ws(org)}/domains${refresh ? '?refresh=1' : ''}`)).domains,
+  verifyDomain: (org: string, domain: string) => request<{ verified: boolean; found: string[] }>('POST', `${ws(org)}/domains/${enc(domain)}/verify`),
+  turnOnMail: (org: string, domain: string) => request<unknown>('POST', `${ws(org)}/domains/${enc(domain)}/dkim`),
+  makePrimary: (org: string, domain: string) => request<unknown>('PATCH', `${ws(org)}/domains/${enc(domain)}`, { primary: true }),
+  removeDomain: (org: string, domain: string) => request<unknown>('DELETE', `${ws(org)}/domains/${enc(domain)}`),
 
   assistant: async (org: string) => (await request<{ definition: AgentDefinitionDTO }>('GET', `${ws(org)}/assistant/definition`)).definition,
   nameAssistant: async (org: string, name: string) => (await request<{ definition: AgentDefinitionDTO }>('PUT', `${ws(org)}/assistant/definition`, { name })).definition,
