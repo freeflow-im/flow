@@ -229,15 +229,44 @@ function SubscriptionRow({ sub, workspaceId, names, onDeleted }: { sub: Subscrip
     }
   };
 
-  const toggleJobs = async () => {
-    const next = !open;
-    setOpen(next);
-    if (!next) return;
+  const loadJobs = async () => {
     try {
       const r = await api<{ jobs: AgentJobDTO[] }>('GET', `/v1/events/jobs?subscription=${encodeURIComponent(sub.id)}&${ws}`);
       setJobs(r.jobs);
+      return r.jobs;
     } catch (err) {
       setError(errorText(err));
+      return null;
+    }
+  };
+
+  const toggleJobs = async () => {
+    const next = !open;
+    setOpen(next);
+    if (next) await loadJobs();
+  };
+
+  // Run now: the automation fires once, as its timer would; its jobs open and are read again until the new one ends.
+  const [started, setStarted] = useState(false);
+  const runNow = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api('POST', `/v1/events/subscriptions/${encodeURIComponent(sub.id)}/run?${ws}`);
+      setStarted(true);
+      setOpen(true);
+      const before = Date.now();
+      for (let i = 0; i < 40; i++) {
+        await new Promise((r) => setTimeout(r, i === 0 ? 1000 : 3000));
+        const list = await loadJobs();
+        const latest = list?.find((j) => Date.parse(j.createdAt) >= before - 5000);
+        if (latest && (latest.state === 'done' || latest.state === 'failed' || latest.state === 'parked')) break;
+      }
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setBusy(false);
+      setStarted(false);
     }
   };
 
@@ -253,7 +282,18 @@ function SubscriptionRow({ sub, workspaceId, names, onDeleted }: { sub: Subscrip
             {sub.parkedAt && <span data-testid={`automation-parked-${sub.id}`} className="text-red-600"> · parked {when(sub.parkedAt)}</span>}
           </div>
         </div>
-        <div className="shrink-0">
+        <div className="flex shrink-0 items-center gap-2">
+          {sub.schedule && sub.delivery === 'wake' && !confirming && (
+            <button
+              data-testid={`automation-run-${sub.id}`}
+              className="rounded border border-border px-2.5 py-1 text-xs hover:bg-hover disabled:opacity-50"
+              disabled={busy}
+              onClick={() => void runNow()}
+              title="Run it once now, as its timer would; its next timed run stays as it is"
+            >
+              {started ? 'Running…' : 'Run now'}
+            </button>
+          )}
           {confirming ? (
             <span className="inline-flex items-center gap-2">
               <span className="text-xs text-muted">Delete?</span>

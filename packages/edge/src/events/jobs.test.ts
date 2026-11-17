@@ -229,3 +229,27 @@ describe('the flow-jobs consumer', () => {
     expect(asked.sort()).toEqual(['acct-omni', BOT].sort());
   });
 });
+
+describe('run now', () => {
+  it('fires a scheduled automation once, as its owner, and leaves its next timed run as it was', async () => {
+    const h = harness();
+    const sub = await wakeSub(h.o, { filter: {}, schedule: { every: 'daily@09:00', timezone: 'UTC' }, organizationId: ORG });
+    const nextAt = (await h.o.getSubscription(sub.id))!.schedule!.nextAt;
+    expect(h.o.runNow(sub.id, BOB)).toBe(true);
+    await h.o.settled();
+    const jobs = h.o.listJobs(sub.id);
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({ agent: BOT, state: 'delivered' });
+    const tick = (await h.o.read({ types: ['schedule.tick'] }, { accountId: BOB, channelIds: [] })).events;
+    expect(tick).toEqual([expect.objectContaining({ actor: BOB, data: expect.objectContaining({ manual: true, subscriptionId: sub.id }) })]);
+    expect((await h.o.getSubscription(sub.id))!.schedule!.nextAt).toBe(nextAt);
+  });
+
+  it('does nothing for an automation with no schedule', async () => {
+    const h = harness();
+    const sub = await wakeSub(h.o);
+    expect(h.o.runNow(sub.id, BOB)).toBe(false);
+    await h.o.settled();
+    expect(h.o.listJobs(sub.id)).toEqual([]);
+  });
+});

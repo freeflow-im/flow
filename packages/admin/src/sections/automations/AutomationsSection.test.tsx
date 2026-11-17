@@ -94,6 +94,30 @@ describe('the automations list', () => {
     expect($('automation-job-j1')!.textContent).toContain('summarized');
   });
 
+  it('runs a scheduled automation now, and shows its job once it ends', async () => {
+    await mount();
+    expect($('automation-run-s-sched')).not.toBeNull();
+    // Only a scheduled wake has Run now: an event's automation needs its event.
+    expect($('automation-run-s-wake')).toBeNull();
+    expect($('automation-run-s-post')).toBeNull();
+    const fresh = { id: 'j2', subscriptionId: 's-sched', agent: 'acct-botty', eventId: 'e2', eventSeq: 10, prompt: 'Run standup', state: 'done', attempts: 0, note: 'standup sent', depth: 1, createdAt: new Date().toISOString(), updatedAt: '' };
+    api.mockImplementation(async (method: string, path: string) => {
+      if (method === 'GET' && path.startsWith('/v1/events/jobs')) return { jobs: [fresh] };
+      return { ok: true };
+    });
+    vi.useFakeTimers();
+    try {
+      await click('automation-run-s-sched');
+      expect(api).toHaveBeenCalledWith('POST', '/v1/events/subscriptions/s-sched/run?workspace=w1');
+      await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+    } finally {
+      vi.useRealTimers();
+    }
+    await flush();
+    expect($('automation-job-j2')!.textContent).toContain('standup sent');
+    expect($('automation-run-s-sched')!.textContent).toBe('Run now');
+  });
+
   it('deletes after a confirm, then reloads', async () => {
     await mount();
     await click('automation-delete-s-post');
