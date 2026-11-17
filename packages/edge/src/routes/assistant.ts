@@ -127,7 +127,7 @@ async function forward(c: C, req: Request = c.req.raw): Promise<Response> {
       // lost since is checked here. Its admin tools act with this person's token (assistant/adminTools.ts).
       if (chosen.role === 'admin' && who.account.role !== 'owner' && who.account.role !== 'admin') return c.json({ error: 'Only owners and admins can use the admin agent.', code: 'not_admin' }, 403);
       const asAgent = { user: identity.user, token: who.token, authKind: 'agent' as const, ip: who.ip, organizationId: who.account.organizationId, account: identity.account, invokedBy: who.account.id };
-      return await c.env.ASSISTANT.get(c.env.ASSISTANT.idFromName(identity.account.id)).handle(req, asAgent, agentDocs, chosen.displayName, { conversationUser: who.user.id, ...(chosen.role ? { agentRole: chosen.role } : {}) });
+      return await c.env.ASSISTANT.get(c.env.ASSISTANT.idFromName(identity.account.id)).handle(req, asAgent, agentDocs, chosen.displayName, { conversationUser: who.user.id, agentAccountId: identity.account.id, agentMode: 'shared', ...(chosen.role ? { agentRole: chosen.role } : {}) });
     }
     // The person's assistant (agents.md §6): their hosted personal agent, whose runtime is their account's object. Its
     // turns are the person's, marked `via` the agent, so the events it causes say "Ann (via assistant)".
@@ -137,7 +137,7 @@ async function forward(c: C, req: Request = c.req.raw): Promise<Response> {
     // it its address, mailbox and calendar.
     const naming = req.method === 'PUT' && new URL(req.url).pathname === '/api/agent/definition' && self
       ? ((await req.clone().json().catch(() => null)) as { name?: unknown } | null)?.name : undefined;
-    const res = await c.env.ASSISTANT.get(c.env.ASSISTANT.idFromName(who.account.id)).handle(req, { ...who, ...(self ? { via: self.id } : {}) }, docs, self?.displayName);
+    const res = await c.env.ASSISTANT.get(c.env.ASSISTANT.idFromName(who.account.id)).handle(req, { ...who, ...(self ? { via: self.id } : {}) }, docs, self?.displayName, self ? { agentAccountId: self.accountId, agentMode: 'personal' } : {});
     // A changed allowlist (agents.md §1.1): the assistant's mailbox starts or stops being checked.
     if (res.ok && self && req.method === 'PUT' && new URL(req.url).pathname === '/api/agent/mail-allowlist') {
       await c.env.MAIL.get(c.env.MAIL.idFromName(self.accountId)).assistantPolicyChanged().catch((err: Error) => console.error(`[assistant] allowlist: ${err.message}`));

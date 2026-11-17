@@ -193,8 +193,60 @@ export class Assistant extends DurableObject<AssistantEnv> {
   private refreshGuidance(): string[] {
     const d = this.definition();
     const admin = this.isAdminAgent() ? ADMIN_GUIDANCE : [];
-    this.guidanceLines.splice(0, this.guidanceLines.length, ...SUITE_GUIDANCE, ...admin, ...definitionGuidance(d, this.state('definition_default_name') ?? d.name));
+    this.guidanceLines.splice(0, this.guidanceLines.length, ...SUITE_GUIDANCE, ...admin, ...definitionGuidance(d, this.state('definition_default_name') ?? d.name), ...this.mailboxGuidance());
     return this.guidanceLines;
+  }
+
+  /**
+   * What the agent is told of its own mailbox (agents.md §1.1): its address, who may mail it, and that its mail tools reach
+   * it. Nothing for an agent with no address (an external personal agent, the admin agent).
+   */
+  private mailboxGuidance(): string[] {
+    const address = this.state('agent_address');
+    if (!address) return [];
+    if (this.state('agent_mode') !== 'personal') {
+      return [`- Your own email address is ${address}, with its own mailbox and calendar. The mail tools work on your mailbox: search_mail and read_mail read the mail sent to you.`];
+    }
+    return [
+      `- You have your own email address, ${address}, with its own mailbox, separate from the user's. Mail to it reaches you only from the senders the user allows (they set them in Organization settings → Your assistant; until they add one, your mailbox is not read), and you answer that mail yourself, by email. In the panel and in Chat, your mailbox is one of the mail accounts: list_mail_accounts marks it yours: true, and search_mail and read_mail read it when you name it (account: "${address}"). When the user asks about "your inbox" or mail sent to you, look there; "my inbox" is the user's own accounts.`,
+    ];
+  }
+
+  /**
+   * The agent's own account here (agents.md §1.1): a personal agent's runtime runs its turns as its sponsor, so it learns its
+   * own account to reach its mailbox, and its address for its prompt. Looked up again at most every ten minutes.
+   */
+  private async learnAgentAccount(accountId: string | undefined, mode: 'personal' | 'shared'): Promise<void> {
+    if (!accountId) return;
+    const at = Number(this.state('agent_account_at') ?? 0);
+    if (this.state('agent_account_id') === accountId && this.state('agent_mode') === mode && Date.now() - at < 10 * 60_000) return;
+    const account = await this.directory<AccountDTO | null>('accountById', accountId).catch(() => null);
+    if (!account) return;
+    const before = `${this.state('agent_address') ?? ''}|${this.state('agent_mode') ?? ''}`;
+    this.setState('agent_account_id', accountId);
+    this.setState('agent_mode', mode);
+    this.setState('agent_address', account.address ?? '');
+    this.setState('agent_account_at', String(Date.now()));
+    if (before !== `${account.address ?? ''}|${mode}`) this.refreshGuidance();
+  }
+
+  /**
+   * A personal agent's own mailbox (agents.md §1.1), when the turn runs as its sponsor: the agent's Mail object, as the
+   * agent's account. Null for a shared agent (its turns already run as itself) and an agent with no address.
+   */
+  private async ownMailbox(caller: AccountCaller): Promise<{ fetch: (path: string, init?: RequestInit) => Promise<Response>; ids: Set<string>; accounts: Record<string, unknown>[] } | null> {
+    const id = this.state('agent_account_id'), ns = this.env.MAIL;
+    if (!ns || !id || !this.state('agent_address') || id === caller.account.id) return null;
+    const account = await this.directory<AccountDTO | null>('accountById', id).catch(() => null);
+    if (!account || account.state === 'removed' || account.state === 'suspended' || account.organizationId !== caller.account.organizationId) return null;
+    const user = await this.directory<UserDTO | null>('getUser', account.principalId, account.principalId).catch(() => null);
+    if (!user) return null;
+    const asAgent = { user, token: '', authKind: 'agent' as const, ip: '', organizationId: account.organizationId, account } as unknown as CallerContext;
+    const stub = ns.get(ns.idFromName(account.id));
+    const fetch = (path: string, init?: RequestInit) => stub.handle(new Request(`${this.origin}${path}`, init), asAgent);
+    const res = await fetch('/v1/mail/accounts');
+    const accounts = res.ok ? (((await res.json()) as { accounts?: Record<string, unknown>[] }).accounts ?? []) : [];
+    return { fetch, ids: new Set(accounts.map((a) => String(a.id))), accounts };
   }
 
   /** This runtime is the organization's admin agent's (agents.md §1.4): its panel turns get the admin tools. */
@@ -361,8 +413,19 @@ export class Assistant extends DurableObject<AssistantEnv> {
     const place = placeOf(scope);
     const docs = place ? this.docsFetch(place.workspace, who) : undefined;
     const stub = ns.get(ns.idFromName(caller.account.id));
+    // A personal agent's own mailbox sits beside its sponsor's accounts (agents.md §1.1): listed with them, marked
+    // `yours`, and a request for one of its accounts goes to the agent's Mail object.
+    const mail = async (path: string, init?: RequestInit): Promise<Response> => {
+      const own = await this.ownMailbox(caller);
+      const named = /^\/v1\/mail\/accounts\/([^/?]+)/.exec(path)?.[1];
+      if (own && named && own.ids.has(decodeURIComponent(named))) return own.fetch(path, init);
+      const res = await stub.handle(new Request(`${this.origin}${path}`, init), caller);
+      if (!own || !own.accounts.length || path !== '/v1/mail/accounts' || (init?.method ?? 'GET') !== 'GET' || !res.ok) return res;
+      const theirs = ((await res.json()) as { accounts?: Record<string, unknown>[] }).accounts ?? [];
+      return Response.json({ accounts: [...theirs, ...own.accounts.map((a) => ({ ...a, yours: true }))] });
+    };
     return {
-      mail: (path, init) => stub.handle(new Request(`${this.origin}${path}`, init), caller),
+      mail,
       origin: this.origin,
       ...(docs && place
         ? {
@@ -407,13 +470,14 @@ export class Assistant extends DurableObject<AssistantEnv> {
    * A request for the account this object belongs to (routes/assistant.ts), with its caller context and the same person
    * as the Docs object knows them; a caller of another account is refused.
    */
-  async handle(request: Request, caller: CallerContext, docs: DocsCaller, agentName?: string, opts: { conversationUser?: string; agentRole?: 'admin' } = {}): Promise<Response> {
+  async handle(request: Request, caller: CallerContext, docs: DocsCaller, agentName?: string, opts: { conversationUser?: string; agentRole?: 'admin'; agentAccountId?: string; agentMode?: 'personal' | 'shared' } = {}): Promise<Response> {
     const wrong = ownerMismatch(this, caller, 'the Assistant');
     if (wrong) { console.error(`[assistant] ${wrong}`); return ownerRefusal(wrong); }
     if (caller.organizationId) await this.useOrgModel(caller.organizationId);
     // The agent's name as the directory knows it (agents.md §6), the definition's default until the person sets one.
     this.learnName(agentName);
     this.learnRole(opts.agentRole);
+    await this.learnAgentAccount(opts.agentAccountId, opts.agentMode ?? 'personal');
     const who: Who = { caller: caller as AccountCaller, docs, ...(opts.conversationUser ? { conversationUser: opts.conversationUser } : {}) };
     this.who = who;
     return withDocsContext(this.context, () => this.app.fetch(request, { who } satisfies Bindings));
@@ -463,6 +527,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
    */
   async wake(p: { organizationId: string; job: AgentJobDTO; runtime: HostedRuntimeDTO }): Promise<void> {
     this.learnName(p.runtime.agentName);
+    await this.learnAgentAccount(p.runtime.agentAccountId, p.runtime.mode);
     await this.useOrgModel(p.organizationId);
     const { job, runtime, organizationId } = p;
     const events = this.env.EVENTS?.get(this.env.EVENTS.idFromName(organizationId));
@@ -535,6 +600,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
    */
   async chatTurn(p: { organizationId: string; runtime: HostedRuntimeDTO; channelId: string; threadRootId: string | null; messageId: string; prompt: string; audience?: 'private' | 'shared' }): Promise<void> {
     this.learnName(p.runtime.agentName);
+    await this.learnAgentAccount(p.runtime.agentAccountId, p.runtime.mode);
     const run: ChatRun = { organizationId: p.organizationId, runtime: p.runtime, channelId: p.channelId, threadRootId: p.threadRootId, audience: p.audience ?? (p.threadRootId ? 'shared' : 'private') };
     await this.runChat(run, p.messageId, { message: p.prompt });
   }
@@ -549,6 +615,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
     const { runtime, organizationId } = p;
     if (runtime.mode !== 'shared') return;
     this.learnName(runtime.agentName);
+    await this.learnAgentAccount(runtime.agentAccountId, 'shared');
     await this.useOrgModel(organizationId);
     const jobKey = `shared-chat:${p.messageId}`;
     if (this.runningJobs.has(jobKey)) return;
@@ -776,6 +843,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
    */
   async mailTurn(p: { organizationId: string; runtime: HostedRuntimeDTO; mailboxAccountId: string; from: string; subject: string; text: string; messageId: string }): Promise<void> {
     this.learnName(p.runtime.agentName);
+    await this.learnAgentAccount(p.runtime.agentAccountId, p.runtime.mode);
     await this.useOrgModel(p.organizationId);
     const { runtime, organizationId } = p;
     if (runtime.mode !== 'personal' || !runtime.sponsorId || !runtime.sponsorAccountId || !this.env.MAIL) return;

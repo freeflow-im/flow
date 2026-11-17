@@ -91,7 +91,9 @@ agent of §6, and it works the way a human assistant does:
   all; once it names a sender it is checked every ten minutes (operator ruling 2026-11-11, "Assistant mail is opt-in").
   Mail from anyone else is moved to her Refused folder unread, and a sender is matched only on a message that passes
   SPF, DKIM or DMARC for its From domain. Invitations to her calendar follow the same list. She works in the
-  sponsor's mailbox and calendars too, through the sponsor's access.
+  sponsor's mailbox and calendars too, through the sponsor's access. She knows her own mailbox: her prompt gives her address and who may mail her, and in the
+  panel and in Chat her mailbox is one of the mail accounts her mail tools list (marked `yours`), read as her own account,
+  beside the sponsor's (2026-11-16).
 - **Guests have none** (§6), and an external personal agent (Claude Desktop on `/mcp`) stays as it was: on the member
   list, with no address, mailbox or channels.
 

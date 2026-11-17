@@ -9,6 +9,7 @@ import type { ModelCall } from '@flow/docs/server/agent/agent.ts';
 import type { AgentEvent } from '@flow/docs/shared/agent/protocol.ts';
 import { moveAssistantRows } from '../routes/admin';
 import { Assistant, type AssistantEnv, type DocsCaller } from './object';
+import { MAIL_TOOLS, type MailToolContext } from '../imap/mailTools';
 
 type Params = Parameters<ModelCall>[0];
 type Block = Record<string, unknown>;
@@ -255,6 +256,64 @@ describe('the Assistant object', () => {
     const res = await a.handle(req('GET', '/api/agent'), other, DOCS_CALLER);
     expect(res.status).toBe(500);
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('wrong_account');
+  });
+});
+
+describe('the assistant’s own mailbox (agents.md §1.1)', () => {
+  const ADA = { id: 'acct-ada', principalId: 'ada', organizationId: 'org-1', state: 'active', role: 'member', address: 'ada@acme.test', displayName: 'Ada', kind: 'personal_agent', agentMode: 'personal', sponsorId: 'user-1' } as unknown as AccountDTO;
+  const users: Record<string, unknown> = { ada: { id: 'ada', email: 'agent-ada@agents.flow.local', displayName: 'Ada', isAgent: true }, 'user-1': { id: 'user-1', email: 'ann@acme.test', displayName: 'Ann', isAgent: false } };
+  /** Two Mail objects: Ann's (her Gmail) and Ada's (her hosted mailbox); each answers only its own account's caller. */
+  function mailNs(seen: string[]) {
+    const lists: Record<string, unknown[]> = {
+      'acct-1': [{ id: 'gmail-1', email: 'ann@gmail.test', displayName: 'Ann', status: 'ok', tabs: [] }],
+      'acct-ada': [{ id: 'hosted-ada', email: 'ada@acme.test', displayName: 'Ada', status: 'ok', tabs: [] }],
+    };
+    return {
+      idFromName: (n: string) => n,
+      get: (owner: string) => ({
+        handle: async (r: Request, caller: { account: { id: string } }) => {
+          const path = new URL(r.url).pathname;
+          seen.push(`${owner} ${caller.account.id} ${path}`);
+          if (caller.account.id !== owner) return Response.json({ error: { code: 'wrong_account' } }, { status: 500 });
+          if (path === '/v1/mail/accounts') return Response.json({ accounts: lists[owner] });
+          return Response.json({ messages: [{ uid: 7, subject: `In ${owner}` }], next: null });
+        },
+      }),
+    };
+  }
+
+  it('lists the assistant’s own mailbox beside the person’s, marked yours, reads it as the assistant, and names its address in the prompt', async () => {
+    const seen: string[] = [];
+    const a = assistant('acct-1', {
+      DIRECTORY: { idFromName: (n: string) => n, get: () => ({ call: async (m: string, args: unknown[]) => ({ ok: true, value: m === 'getUser' ? users[args[0] as string] : m === 'accountById' ? (args[0] === 'acct-ada' ? ADA : ACCOUNT) : null }) }) },
+      MAIL: mailNs(seen),
+    } as unknown as AssistantEnv);
+    const systems: string[] = [];
+    a.script = async (params, { onText }) => { systems.push(JSON.stringify(params.system)); onText('ok'); return message([{ type: 'text', text: 'ok' }], 'end_turn') as never; };
+    await events(await a.handle(req('POST', '/api/agent/turn', { message: 'Can you see your own inbox?', context: { page: 'home' }, workspace: 'org-1' }), CALLER, DOCS_CALLER, 'Ada', { agentAccountId: 'acct-ada', agentMode: 'personal' }));
+    expect(systems[0]).toContain('your own email address, ada@acme.test');
+    // The mail tools' context, as a turn of Ann's assistant gets it (the turn runs as Ann).
+    const ctx = (a as unknown as { mailContext(scope: string, who: unknown): MailToolContext }).mailContext('home', { caller: CALLER, docs: DOCS_CALLER });
+    const list = MAIL_TOOLS.find((t) => t.name === 'list_mail_accounts')!;
+    const listed = (await list.run(ctx as never, {})) as { accounts: { email: string; yours?: boolean }[] };
+    expect(listed.accounts).toEqual([expect.objectContaining({ email: 'ann@gmail.test' }), expect.objectContaining({ email: 'ada@acme.test', yours: true })]);
+    expect(listed.accounts[0]).not.toHaveProperty('yours');
+    // A request for Ada's account goes to her Mail object, as her account; Ann's to Ann's.
+    await ctx.mail('/v1/mail/accounts/hosted-ada/messages?folder=INBOX');
+    await ctx.mail('/v1/mail/accounts/gmail-1/messages?folder=INBOX');
+    expect(seen).toContain('acct-ada acct-ada /v1/mail/accounts/hosted-ada/messages');
+    expect(seen).toContain('acct-1 acct-1 /v1/mail/accounts/gmail-1/messages');
+    expect(seen.some((l) => l.startsWith('acct-ada acct-1') || l.startsWith('acct-1 acct-ada'))).toBe(false);
+  });
+
+  it('tells an assistant with no address nothing about a mailbox', async () => {
+    const a = assistant('acct-1', {
+      DIRECTORY: { idFromName: (n: string) => n, get: () => ({ call: async (m: string) => ({ ok: true, value: m === 'accountById' ? { ...ADA, address: null } : null }) }) },
+    } as unknown as AssistantEnv);
+    const systems: string[] = [];
+    a.script = async (params, { onText }) => { systems.push(JSON.stringify(params.system)); onText('hi'); return message([{ type: 'text', text: 'hi' }], 'end_turn') as never; };
+    await events(await a.handle(req('POST', '/api/agent/turn', { message: 'Hi', context: { page: 'home' } }), CALLER, DOCS_CALLER, 'Ada', { agentAccountId: 'acct-ada', agentMode: 'personal' }));
+    expect(systems[0]).not.toContain('your own email address');
   });
 });
 
