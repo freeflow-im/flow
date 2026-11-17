@@ -163,7 +163,7 @@ export function AgentPanel() {
       </div>
 
       <div className="agent-list" ref={listRef}>
-        <WaitingEmails organizationId={activeOrganizationId()} refreshKey={agent.running} />
+        <WaitingEmails organizationId={activeOrganizationId()} refreshKey={agent.running} hide={agent.items.flatMap((i) => (i.kind === 'tool' ? [emailApprovalOf(i.name, i.result)].filter((x): x is string => !!x) : []))} />
         {agent.items.length === 0 && (
           <div className="agent-empty">
             <p>Ask me to read, edit or format {here}, or to find and open another one.</p>

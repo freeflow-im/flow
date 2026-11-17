@@ -18,7 +18,10 @@ import type { ImportRow } from '../importing';
 import { exportTables, importTable, ownerMismatch, ownerRefusal } from '../perAccount';
 import { calendarRequest, type AccountCaller } from '../calendar/forward';
 import type { CalendarToolContext } from '../calendar/calendarTools';
-import { MailToolError, prepareMail, sendPrepared, type DraftInput, type MailToolContext } from '../imap/mailTools';
+import { FREEFLOW_SENDER, MailToolError, prepareFreeflowMail, prepareMail, sendPrepared, type DraftInput, type MailToolContext, type PreparedMail } from '../imap/mailTools';
+import { parseAddress } from '../imap/mailText';
+import { memberAddress } from '../contacts/email';
+import { sendMail, type MailEnv } from '../mail';
 import { MAIL_APPROVALS_DDL, MailApprovals, type NewApproval } from './mailApprovals.ts';
 import { appToolContexts } from '../apps';
 import { runnerOf } from '../registry';
@@ -54,6 +57,11 @@ export interface AssistantEnv {
   FLOW_DATA_KEY?: string;
   FLOW_WEB_URL?: string;
   /** The platform's own model key: with it, "the built-in model" is a choice; without it, the organization must set one. */
+  /** Local development only (scripts/dev-suite.mjs sets DEV_ADOPT_MODEL_KEYS): an organization with no model chosen yet
+   * takes the first of these keys from .dev.vars, Anthropic's, then OpenAI's, then OpenRouter's. Production never sets it. */
+  DEV_ADOPT_MODEL_KEYS?: string;
+  OPENAI_API_KEY?: string;
+  OPENROUTER_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;
   BLOBS?: R2Bucket;
   DIRECTORY?: DurableObjectNamespace<import('../directory/object').Directory>;
@@ -887,15 +895,24 @@ export class Assistant extends DurableObject<AssistantEnv> {
    * runs the turn, a note in the person's DM with the agent linking to it. The person sends it (or not) with a click.
    */
   private async requestMailApproval(input: DraftInput, mail: MailToolContext, who: Who, conversation: string): Promise<MailApprovalDTO> {
-    const prepared = await prepareMail(mail, input);
+    const prepared = await this.prepareForSend(input, mail, who);
     const own = await this.ownMailbox(who.caller);
+    // Email to the person themself needs no click (operator ruling 2026-11-17): it goes now, and is kept as sent.
+    const mine = await this.ownAddresses(who, mail);
+    const recipients = [...prepared.to, ...prepared.cc, ...prepared.bcc].map((r) => parseAddress(r)?.address.toLowerCase() ?? r.toLowerCase());
+    const toSelf = recipients.length > 0 && recipients.every((r) => mine.has(r));
+    if (toSelf) await this.deliver(prepared, mail);
     const approval: NewApproval = {
       agentName: this.definition().name, prepared, fromAgent: !!own?.ids.has(prepared.account.id), body: input.body,
-      quotes: input.reply_to_id ? 'reply' : input.forward_id ? 'forward' : null,
+      quotes: input.reply_to_id ? 'reply' : input.forward_id ? 'forward' : null, ...(toSelf ? { sent: true } : {}),
     };
     const ns = this.env.ASSISTANT;
     const home = ns?.idFromName(who.caller.account.id);
     const saved = !ns || !home || home.equals(this.ctx.id) ? this.addMailApproval(approval) : ((await ns.get(home).addMailApproval(approval)) as MailApprovalDTO);
+    if (toSelf) {
+      console.log(`[assistant] email ${saved.id} sent to the person themself, no click needed`);
+      return saved;
+    }
     const away = this.headlessTurns.get(conversation);
     if (away && who.docs.userId) {
       const link = `${this.origin}${mailApprovalPath(saved.id, away.organizationId)}`;
@@ -909,6 +926,50 @@ export class Assistant extends DurableObject<AssistantEnv> {
         .catch((err: Error) => console.error(`[assistant] email approval note: ${err.message}`));
     }
     return saved;
+  }
+
+  /** The email as it will go: from the person's mail account, or, with none connected, from FreeFlow's address in their name. */
+  private async prepareForSend(raw: DraftInput, mail: MailToolContext, who: Who): Promise<PreparedMail> {
+    // "me" is the person: their member address, else the one they sign in with.
+    const self = memberAddress(who.caller.account) ?? who.caller.user?.email ?? null;
+    const meToSelf = (list: string[] | undefined) => list?.map((r) => (r.trim().toLowerCase() === 'me' && self ? self : r));
+    const input: DraftInput = { ...raw, ...(raw.to ? { to: meToSelf(raw.to) } : {}), ...(raw.cc ? { cc: meToSelf(raw.cc) } : {}), ...(raw.bcc ? { bcc: meToSelf(raw.bcc) } : {}) };
+    try {
+      return await prepareMail(mail, input);
+    } catch (e) {
+      if (!(e instanceof MailToolError) || !/^No mail account is connected/.test(e.message) || input.reply_to_id || input.forward_id) throw e;
+      const account = who.caller.account;
+      return prepareFreeflowMail(input, { name: account.displayName || who.caller.user?.displayName || 'A member', replyTo: memberAddress(account) ?? who.caller.user?.email ?? null });
+    }
+  }
+
+  /** Sends a prepared email: from its mail account, or from FreeFlow's address, one message to each recipient. */
+  private async deliver(prepared: Pick<PreparedMail, 'account' | 'body'>, mail: MailToolContext): Promise<void> {
+    if (prepared.account.id !== FREEFLOW_SENDER) {
+      await sendPrepared(mail, prepared);
+      return;
+    }
+    const b = prepared.body as { to: { address: string }[]; cc?: { address: string }[]; bcc?: { address: string }[]; subject: string; html: string; text: string; fromName: string; replyTo?: string };
+    for (const r of [...b.to, ...(b.cc ?? []), ...(b.bcc ?? [])]) {
+      await sendMail(this.env as MailEnv, { to: r.address, subject: b.subject, text: b.text, html: b.html, fromName: b.fromName, ...(b.replyTo ? { replyTo: b.replyTo } : {}) });
+    }
+  }
+
+  /** The person's own addresses: sign-in, account and linked mailbox, and each mail account they connected (not the agent's). */
+  private async ownAddresses(who: Who, mail: MailToolContext): Promise<Set<string>> {
+    const out = new Set<string>();
+    const add = (a: string | null | undefined) => { if (a) out.add(a.trim().toLowerCase()); };
+    add(who.caller.user?.email);
+    add(who.caller.account.address);
+    add(who.caller.account.linkedAddress);
+    try {
+      const res = await mail.mail('/v1/mail/accounts');
+      const list = res.ok ? (((await res.json()) as { accounts?: { email?: string; yours?: boolean }[] }).accounts ?? []) : [];
+      for (const a of list) if (!a.yours) add(a.email);
+    } catch {
+      // No mail here: the account's own addresses are enough.
+    }
+    return out;
   }
 
   /** Keeps an email waiting here (an RPC from the person's other agents' runtimes, or this object's own turn). */
@@ -963,6 +1024,11 @@ export class Assistant extends DurableObject<AssistantEnv> {
   async orgModel(): Promise<OrgModel> {
     return withDocsContext(this.context, () => {
       const base = new AssistantSettingsStore(new DatabaseSync() as never, 'data/connector.key', { builtIn: !!this.env.ANTHROPIC_API_KEY, agents: false });
+      // Local development: the first time, the organization runs on the key in .dev.vars (none of production's).
+      if (this.env.DEV_ADOPT_MODEL_KEYS === '1') {
+        const adopted = base.adoptFromEnvironment(ORG_ROW, { ANTHROPIC_API_KEY: this.env.ANTHROPIC_API_KEY, OPENAI_API_KEY: this.env.OPENAI_API_KEY, OPENROUTER_API_KEY: this.env.OPENROUTER_API_KEY });
+        if (adopted) console.log(`[assistant] local development: the organization runs on the ${adopted} key from .dev.vars`);
+      }
       return { shown: base.get(ORG_ROW), choice: base.choice(ORG_ROW), braveKey: base.braveKey(ORG_ROW), openaiKey: base.openaiKey(ORG_ROW) };
     });
   }
@@ -1072,7 +1138,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
       const mail = this.mailContext(HOME_CHAT, c.env.who);
       try {
         if (!mail) throw new Error('Mail is not available here.');
-        await sendPrepared(mail, claimed);
+        await this.deliver(claimed, mail);
         console.log(`[assistant] email ${id} sent on the person's click`);
         return c.json({ approval: store.get(id) });
       } catch (e) {

@@ -278,6 +278,16 @@ describe('email to members', () => {
     expect(r.j.sent).toEqual([{ name: 'Dee', address: 'dee@home-mail.net' }]);
   });
 
+  it('reaches "me" at the sign-in address when the account has no hosted address and no linked mailbox', async () => {
+    const sent = mailbox();
+    const { call } = world();
+    // Fay's account has no address the directory lists (no hosted mail, no linked mailbox): she is not among the members.
+    const bare = { ...EVE, account: { ...(EVE as unknown as { account: object }).account, id: 'acct-fay', displayName: 'Fay', address: null, linkedAddress: null }, user: { id: 'u-fay', email: 'Fay@Home-Mail.net' } } as unknown as CallerContext;
+    const r = await call(bare, 'POST', '/v1/contacts/email', { to: ['me'], subject: 'Hi', body: 'x' });
+    expect(r.s).toBe(200);
+    expect(sent.map((m) => m.to)).toEqual(['fay@home-mail.net']);
+  });
+
   it('refuses anyone outside the organization, and removed members, sending nothing', async () => {
     const sent = mailbox();
     const { call } = world();

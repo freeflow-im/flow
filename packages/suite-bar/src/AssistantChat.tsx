@@ -78,7 +78,7 @@ function SuiteAssistantPanel({ organizationId, page, agents, chosen, onPick }: {
         <AssistantDockControls />
       </div>
       <div className="suite-chat-list" ref={list}>
-        <WaitingEmails organizationId={organizationId} refreshKey={chat.running} />
+        <WaitingEmails organizationId={organizationId} refreshKey={chat.running} hide={chat.items.flatMap((i) => (i.kind === 'tool' ? [emailApprovalOf(i.name, i.result)].filter((x): x is string => !!x) : []))} />
         {!chat.items.length && <p className="suite-chat-empty">{emptyLine(chosen, name)}</p>}
         {!chat.items.length &&
           suggestions.map((s) => (
