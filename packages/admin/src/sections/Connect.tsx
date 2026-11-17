@@ -4,25 +4,11 @@
 // one; the platform's /v1 routes, so this depends on no app.
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { connectPrompt } from '@flow/shared/assistant';
 import { connectionsApi } from '../api';
 import { Button, Card, Confirm, ErrorLine } from '../components/ui';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
-
-/** What to paste into an agent so it connects itself (the same steps as /llms.txt). */
-export function connectPrompt(url: string): string {
-  const origin = new URL(url).origin;
-  return [
-    `Connect to FreeFlow, where my chat, mail, calendar and documents are, as a remote MCP server (streamable HTTP, with OAuth sign-in): ${url}`,
-    '',
-    `- Claude Code: claude mcp add --transport http freeflow ${url}`,
-    `- Codex: codex mcp add freeflow --url ${url}`,
-    `- Claude Desktop or ChatGPT: add a custom connector with this address.`,
-    `- Another MCP client: add a remote (HTTP) server at that address. If it only runs stdio servers, or cannot open a browser to sign in, use: npx -y mcp-remote ${url} --device-code — it prints an address and a code; show them to me so I can allow you.`,
-    '',
-    `Full instructions: ${origin}/llms.txt`,
-  ].join('\n');
-}
 
 export function Connect() {
   const qc = useQueryClient();

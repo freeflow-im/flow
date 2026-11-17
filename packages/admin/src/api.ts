@@ -126,6 +126,9 @@ export const adminApi = {
     return request<WorkspaceEmojiDTO>('POST', `${ws(id)}/emoji`, { shortcode, fileId: uploaded.id });
   },
   removeEmoji: (id: string, emojiId: string) => request<unknown>('DELETE', `${ws(id)}/emoji/${encodeURIComponent(emojiId)}`),
+  // The team agent, Omni (docs/specs/onboarding.md §2): a shared agent that joins every public channel.
+  teamAgent: async (id: string) => (await request<{ agent: { id: string; displayName: string } | null }>('GET', `${ws(id)}/team-agent`)).agent,
+  addTeamAgent: async (id: string) => (await request<{ agent: { id: string; displayName: string } }>('POST', `${ws(id)}/team-agent`)).agent,
   joinLink: (id: string) => request<JoinLinkDTO>('GET', `${ws(id)}/join-link`),
   newJoinLink: (id: string) => request<JoinLinkDTO>('POST', `${ws(id)}/join-link`),
   revokeJoinLink: (id: string) => request<JoinLinkDTO>('DELETE', `${ws(id)}/join-link`),

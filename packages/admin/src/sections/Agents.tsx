@@ -40,6 +40,7 @@ export function Agents({ org }: { org: WorkspaceDTO }) {
   return (
     <>
       <Model org={org} />
+      <TeamAgent org={org} />
       <CreateAgent org={org} initialAccess="shared" />
       <InviteAgent org={org} />
       <Card title="Shared agents" intro="Shared agents are members with a 🤖 mark, each sponsored by the person who invited them; anyone in the organization can ask them, and they keep no secrets from it. A shared agent is always native: its mailbox and calendars are part of its work." testid="card-agents">
@@ -134,6 +135,35 @@ function PersonalAgents({ org, nameOf }: { org: WorkspaceDTO; nameOf: (userId: s
 }
 
 /** A hosted agent's instructions, read and set in place: a shared one's by its sponsor, an owner or an admin; a private one's by its sponsor. */
+/**
+ * The team agent, Omni (docs/specs/onboarding.md §2): a hosted shared agent that joins every public channel, now and as
+ * new ones are made. Setup offers it; this adds it later, or says which agent it is.
+ */
+function TeamAgent({ org }: { org: WorkspaceDTO }) {
+  const qc = useQueryClient();
+  const agent = useQuery({ queryKey: ['team-agent', org.id], queryFn: () => adminApi.teamAgent(org.id) });
+  const add = useMutation({
+    mutationFn: () => adminApi.addTeamAgent(org.id),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['team-agent', org.id] });
+      void qc.invalidateQueries({ queryKey: ['members', org.id] });
+      void qc.invalidateQueries({ queryKey: ['accounts', org.id] });
+    },
+  });
+  return (
+    <Card title="Team agent" intro="Omni is the team's shared agent: it joins every public channel, now and as new ones are made, and answers anyone from what the team shares with it." testid="card-team-agent">
+      {agent.isSuccess && agent.data ? (
+        <p className="text-sm" data-testid="team-agent-name"><span className="font-medium">{agent.data.displayName} 🤖</span> is your team agent.</p>
+      ) : agent.isSuccess ? (
+        <div className="flex flex-wrap items-center gap-3">
+          <Button kind="primary" onClick={() => add.mutate()} disabled={add.isPending} testid="team-agent-add">{add.isPending ? 'Adding…' : 'Add Omni'}</Button>
+          {add.isError && <ErrorLine error={errorText(add.error)} />}
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
 export function HostedDefinition({ org, userId, name }: { org: WorkspaceDTO; userId: string; name: string }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState<string | null>(null);

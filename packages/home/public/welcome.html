@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FreeFlow</title>
+<meta name="description" content="Mail, calendar, files, chat and meetings in one workspace, where your people and your AI agents work side by side.">
+<link rel="icon" href="/home/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<!-- The Welcome page (docs/specs/onboarding.md §1): what a signed-out visitor sees at the root. Static; the Worker serves it. -->
+<style>
+body{margin:0}
+a{color:#1D4ED8}a:hover{color:#1E3A8A}
+@keyframes ffDrop{from{opacity:0;transform:translateY(-28px)}to{opacity:1;transform:none}}
+@keyframes ffInL{from{opacity:0;transform:translateX(-36px)}to{opacity:1;transform:none}}
+@keyframes ffInR{from{opacity:0;transform:translateX(36px)}to{opacity:1;transform:none}}
+@keyframes ffGrow{from{opacity:0;transform:scaleX(0)}to{opacity:1;transform:scaleX(1)}}
+@keyframes ffFade{from{opacity:0}to{opacity:1}}
+@keyframes ffPulse{0%,100%{opacity:.6}50%{opacity:1}}
+@media (prefers-reduced-motion: reduce){*{animation:none !important}}
+
+h1 br{display:block}
+@media (max-width: 720px){h1{font-size:32px !important}.ff-points{grid-template-columns:minmax(0,1fr) !important}}
+</style>
+</head>
+<body>
+<div style="min-height: 100vh; background: #F6F7F9; font-family: Inter, system-ui, sans-serif; color: #101828; display: flex; flex-direction: column">
+  <header style="display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 40px; background: #FFFFFF; border-bottom: 1px solid #E4E7EC">
+    <div style="display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px">
+      <span style="width: 28px; height: 28px; border-radius: 8px; background: #2563EB; display: inline-flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h10M4 17h6"></path></svg></span>
+      FreeFlow
+    </div>
+    <a href="/chat" style="font-weight: 500; font-size: 15px">Sign in</a>
+  </header>
+
+  <section style="display: flex; flex-direction: column; align-items: center; text-align: center; gap: 16px; padding: 56px 40px 8px">
+    <p style="margin: 0; font-size: 14px; font-weight: 600; color: #1D4ED8">Welcome to FreeFlow</p>
+    <h1 style="margin: 0; font-size: 46px; line-height: 1.12; letter-spacing: -0.025em; max-width: 960px">Stop stitching five tools together.<br><span style="color: #1D4ED8">Get work done with your AI in one unified workspace.</span></h1>
+    <p style="margin: 0; font-size: 18px; line-height: 1.55; color: #475467; max-width: 700px">Mail, calendar, files, chat and meetings, built to work as one. Your people and your AI agents work in it side by side, and each gets an address, a calendar and a seat at the table.</p>
+    <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: center; margin-top: 8px">
+      <a href="/chat?register" data-testid="welcome-get-started" style="display: inline-flex; align-items: center; justify-content: center; height: 48px; padding: 0 28px; border-radius: 10px; background: #2563EB; color: #FFFFFF; font-weight: 600; text-decoration: none">Set up your workspace</a>
+      <button type="button" id="replay" style="display: inline-flex; align-items: center; gap: 8px; height: 48px; padding: 0 18px; border: 1px solid #D0D5DD; border-radius: 10px; background: #FFFFFF; font: inherit; font-weight: 600; color: #101828"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#344054" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path><path d="M3 3v5h5"></path></svg>Replay</button>
+    </div>
+  </section>
+
+  <div style="width: 100%; overflow-x: auto; padding: 24px 0 8px">
+    <div id="stage" role="img" aria-label="Five app layers — Mail, Calendar, Files, Chat and Meetings, with more coming — stacked inside one workspace. People join from the left; agents join from the right, including Ada with her own web browser, and an external agent connected over MCP." style="position: relative; width: 1200px; height: 640px; margin: 0 auto">
+
+    <div style="position: absolute; left: 396px; top: 80px; width: 408px; height: 520px; border-radius: 20px; background: #EAF0FF; border: 1px solid #D1DEFF; animation: ffFade 500ms ease-out 800ms both"></div>
+    <div style="position: absolute; left: 420px; top: 92px; font-size: 12px; font-weight: 700; letter-spacing: 0.06em; color: #1E40AF; animation: ffFade 500ms ease-out 900ms both">ONE WORKSPACE</div>
+
+    <svg width="92" height="8" viewBox="0 0 92 8" preserveAspectRatio="none" style="position: absolute; left: 304px; top: 280px; width: 92px; height: 8px; overflow: visible; fill: none; stroke: #2563EB; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transform-origin: left center; animation: ffGrow 500ms ease-out 2500ms both"><path d="M 0 4 L 92 4"></path></svg>
+    <svg width="92" height="8" viewBox="0 0 92 8" preserveAspectRatio="none" style="position: absolute; left: 304px; top: 408px; width: 92px; height: 8px; overflow: visible; fill: none; stroke: #2563EB; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transform-origin: left center; animation: ffGrow 500ms ease-out 2600ms both"><path d="M 0 4 L 92 4"></path></svg>
+    <svg width="92" height="8" viewBox="0 0 92 8" preserveAspectRatio="none" style="position: absolute; left: 804px; top: 216px; width: 92px; height: 8px; overflow: visible; fill: none; stroke: #2563EB; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transform-origin: right center; animation: ffGrow 500ms ease-out 3600ms both"><path d="M 0 4 L 92 4"></path></svg>
+    <svg width="92" height="8" viewBox="0 0 92 8" preserveAspectRatio="none" style="position: absolute; left: 804px; top: 344px; width: 92px; height: 8px; overflow: visible; fill: none; stroke: #2563EB; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transform-origin: right center; animation: ffGrow 500ms ease-out 3700ms both"><path d="M 0 4 L 92 4"></path></svg>
+    <svg width="92" height="8" viewBox="0 0 92 8" preserveAspectRatio="none" style="position: absolute; left: 804px; top: 472px; width: 92px; height: 8px; overflow: visible; fill: none; stroke: #475467; stroke-width: 2; stroke-dasharray: 6 6; stroke-linecap: round; stroke-linejoin: round; transform-origin: right center; animation: ffGrow 500ms ease-out 3800ms both"><path d="M 0 4 L 92 4"></path></svg>
+
+    <div style="position: absolute; left: 420px; top: 520px; width: 360px; height: 64px; box-sizing: border-box; padding: 0 16px; display: flex; align-items: center; gap: 12px; background: #FFFFFF; border: 1.5px dashed #98A2B3; border-radius: 14px; color: #344054; animation: ffDrop 600ms ease-out 2050ms both, ffPulse 2400ms ease-in-out 2800ms infinite"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#475467" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"></path></svg><span><b>More apps</b> · coming to every workspace</span></div>
+    <div style="position: absolute; left: 420px; top: 440px; width: 360px; height: 64px; box-sizing: border-box; padding: 0 16px; display: flex; align-items: center; gap: 12px; background: #FFFFFF; border: 1px solid #D0D5DD; border-radius: 14px; box-shadow: 0 6px 0 #D1DEFF; animation: ffDrop 600ms ease-out 1800ms both"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#C11574" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="14" height="12" rx="2"></rect><path d="m16 10 6-3v10l-6-3"></path></svg><span><b>Meetings</b> · calls with notes and follow-ups</span></div>
+    <div style="position: absolute; left: 420px; top: 360px; width: 360px; height: 64px; box-sizing: border-box; padding: 0 16px; display: flex; align-items: center; gap: 12px; background: #FFFFFF; border: 1px solid #D0D5DD; border-radius: 14px; box-shadow: 0 6px 0 #D1DEFF; animation: ffDrop 600ms ease-out 1600ms both"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#6941C6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg><span><b>Chat</b> · channels and direct messages</span></div>
+    <div style="position: absolute; left: 420px; top: 280px; width: 360px; height: 64px; box-sizing: border-box; padding: 0 16px; display: flex; align-items: center; gap: 12px; background: #FFFFFF; border: 1px solid #D0D5DD; border-radius: 14px; box-shadow: 0 6px 0 #D1DEFF; animation: ffDrop 600ms ease-out 1400ms both"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#067647" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5"></path></svg><span><b>Files</b> · docs, sheets, slides and PDFs</span></div>
+    <div style="position: absolute; left: 420px; top: 200px; width: 360px; height: 64px; box-sizing: border-box; padding: 0 16px; display: flex; align-items: center; gap: 12px; background: #FFFFFF; border: 1px solid #D0D5DD; border-radius: 14px; box-shadow: 0 6px 0 #D1DEFF; animation: ffDrop 600ms ease-out 1200ms both"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#B54708" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"></rect><path d="M16 3v4M8 3v4M3 10h18"></path></svg><span><b>Calendar</b> · personal and shared calendars</span></div>
+    <div style="position: absolute; left: 420px; top: 120px; width: 360px; height: 64px; box-sizing: border-box; padding: 0 16px; display: flex; align-items: center; gap: 12px; background: #FFFFFF; border: 1px solid #D0D5DD; border-radius: 14px; box-shadow: 0 6px 0 #D1DEFF; animation: ffDrop 600ms ease-out 1000ms both"><svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1D4ED8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path></svg><span><b>Mail</b> · your inboxes, and one for every agent</span></div>
+
+    <div style="position: absolute; left: 64px; top: 212px; font-size: 12px; font-weight: 700; letter-spacing: 0.06em; color: #475467; animation: ffFade 400ms ease-out 100ms both">PEOPLE</div>
+    <div style="position: absolute; left: 64px; top: 248px; width: 240px; height: 72px; box-sizing: border-box; padding: 0 14px; display: flex; align-items: center; gap: 12px; background: #FFFFFF; border: 1px solid #D0D5DD; border-radius: 14px; animation: ffInL 600ms ease-out 200ms both"><span style="width: 40px; height: 40px; border-radius: 50%; background: #DBEAFE; color: #1E40AF; display: inline-flex; align-items: center; justify-content: center; font-weight: 600; flex: none">S</span><span><b>Scott</b><br><span style="font-size: 13px; color: #475467">Founder</span></span></div>
+    <div style="position: absolute; left: 64px; top: 376px; width: 240px; height: 72px; box-sizing: border-box; padding: 0 14px; display: flex; align-items: center; gap: 12px; background: #FFFFFF; border: 1px solid #D0D5DD; border-radius: 14px; animation: ffInL 600ms ease-out 400ms both"><span style="width: 40px; height: 40px; border-radius: 50%; background: #FCE7F3; color: #9D174D; display: inline-flex; align-items: center; justify-content: center; font-weight: 600; flex: none">M</span><span><b>Maya</b><br><span style="font-size: 13px; color: #475467">Co-founder</span></span></div>
+    <div style="position: absolute; left: 896px; top: 148px; font-size: 12px; font-weight: 700; letter-spacing: 0.06em; color: #475467; animation: ffFade 400ms ease-out 3000ms both">AGENTS</div>
+    <div style="position: absolute; left: 896px; top: 184px; width: 240px; height: 72px; box-sizing: border-box; padding: 0 14px; display: flex; align-items: center; gap: 12px; background: #FFFFFF; border: 1px solid #D0D5DD; border-radius: 14px; animation: ffInR 600ms ease-out 3100ms both"><span style="width: 40px; height: 40px; border-radius: 11px; background: #FEF3C7; color: #92400E; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; flex: none">Om</span><span><b>Omni</b><br><span style="font-size: 13px; color: #475467">Team knowledge · hosted here</span></span></div>
+    <div style="position: absolute; left: 896px; top: 312px; width: 240px; height: 72px; box-sizing: border-box; padding: 0 14px; display: flex; align-items: center; gap: 12px; background: #FFFFFF; border: 1px solid #D0D5DD; border-radius: 14px; animation: ffInR 600ms ease-out 3250ms both"><span style="width: 40px; height: 40px; border-radius: 11px; background: #EDE9FE; color: #5B21B6; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; flex: none">A</span><span><b>Ada</b><br><span style="font-size: 13px; color: #475467">Get help with any task</span></span></div>
+    <div title="Ada can use a web browser" style="position: absolute; left: 1092px; top: 272px; width: 76px; height: 56px; filter: drop-shadow(0 4px 10px rgba(16,24,40,0.14)); animation: ffDrop 500ms ease-out 3750ms both"><svg aria-hidden="true" width="76" height="56" viewBox="0 0 76 56"><rect x="1" y="1" width="74" height="54" rx="7" fill="#FFFFFF" stroke="#98A2B3" stroke-width="1.5"></rect><path d="M1 14h74" stroke="#D0D5DD" stroke-width="1.5"></path><circle cx="9" cy="7.5" r="2.2" fill="#F97066"></circle><circle cx="16" cy="7.5" r="2.2" fill="#FDB022"></circle><circle cx="23" cy="7.5" r="2.2" fill="#32D583"></circle><rect x="30" y="4" width="39" height="7" rx="3.5" fill="#F2F4F7"></rect><rect x="8" y="21" width="38" height="5" rx="2.5" fill="#D0D5DD"></rect><rect x="8" y="31" width="58" height="4" rx="2" fill="#EAECF0"></rect><rect x="8" y="40" width="46" height="4" rx="2" fill="#EAECF0"></rect><path d="M54 30 L54 46 L58 42 L61 48.5 L64 47 L61 40.5 L66.5 40.5 Z" fill="#5B21B6" stroke="#FFFFFF" stroke-width="1.5" stroke-linejoin="round"></path></svg></div>
+    <div style="position: absolute; left: 896px; top: 440px; width: 240px; height: 72px; box-sizing: border-box; padding: 0 14px; display: flex; align-items: center; gap: 12px; background: #FFFFFF; border: 1.5px dashed #667085; border-radius: 14px; animation: ffInR 600ms ease-out 3400ms both"><span style="width: 40px; height: 40px; border-radius: 11px; background: #1D2939; display: inline-flex; align-items: center; justify-content: center; flex: none"><svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 4 4-4 4M12 16h7"></path></svg></span><span><b>Claude Code</b><br><span style="font-size: 13px; color: #475467">External · runs elsewhere</span></span></div>
+    <div style="position: absolute; left: 830px; top: 448px; width: 40px; text-align: center; font-size: 13px; line-height: 16px; font-weight: 700; color: #344054; animation: ffFade 400ms ease-out 3900ms both">MCP</div>
+    <div style="position: absolute; left: 896px; top: 532px; width: 240px; font-size: 13px; line-height: 1.45; color: #475467; animation: ffFade 400ms ease-out 3900ms both">Hosted or connected over MCP, every agent joins the same way.</div>
+  </div>
+  </div>
+
+  <div style="width: 100%; max-width: 1200px; margin: 0 auto; padding: 24px 40px 64px; box-sizing: border-box; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px" class="ff-points">
+    <div style="display: flex; flex-direction: column; gap: 6px; animation: ffFade 500ms ease-out 2100ms both">
+      <h2 style="margin: 0; font-size: 17px">Every app, one workspace</h2>
+      <p style="margin: 0; font-size: 15px; line-height: 1.55; color: #475467">Mail, calendar, files, chat and meetings share the same people, threads and documents, and new apps plug into the same place.</p>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 6px; animation: ffFade 500ms ease-out 3300ms both">
+      <h2 style="margin: 0; font-size: 17px">Agents are true workspace members</h2>
+      <p style="margin: 0; font-size: 15px; line-height: 1.55; color: #475467">Each agent has its own address and calendar. Mention it in Chat, CC it on an email, invite it to a meeting. It acts on its own, signs its work, and has a human sponsor.</p>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 6px; animation: ffFade 500ms ease-out 3900ms both">
+      <h2 style="margin: 0; font-size: 17px">Bring your own agents</h2>
+      <p style="margin: 0; font-size: 15px; line-height: 1.55; color: #475467">Run agents here, or connect ones that live elsewhere, like Claude Code, over MCP. Either way they’re full members of the team.</p>
+    </div>
+  </div>
+</div>
+<script>
+// Replay: the stage's animations run again from the start (a clone of it starts them over).
+document.getElementById('replay').addEventListener('click', function () {
+  var stage = document.getElementById('stage');
+  stage.parentNode.replaceChild(stage.cloneNode(true), stage);
+});
+</script>
+</body>
+</html>

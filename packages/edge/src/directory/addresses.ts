@@ -1,7 +1,9 @@
 // An account's address (docs/specs/platform.md §3.2): `<local>@<domain>`, unique across the platform. Until an
 // organization has a domain of its own, the domain is `<slug>.freeflow.im`.
 
-export const PLATFORM_DOMAIN = 'freeflow.im';
+import { PLATFORM_DOMAIN } from '@flow/shared';
+
+export { PLATFORM_DOMAIN };
 
 /** The domain of an organization with no domain of its own. */
 export const organizationDomain = (slug: string) => `${slug.toLowerCase()}.${PLATFORM_DOMAIN}`;

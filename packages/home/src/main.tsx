@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { App } from './App';
+import { SetupPage } from './setup/SetupPage';
 import './index.css';
 import { reloadOnStaleBuild } from '@flow/suite-bar';
 
@@ -14,7 +15,8 @@ const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1, ref
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <App />
+      {/* Setup is Home's own page, with none of Home's frames (docs/specs/onboarding.md). */}
+      {/^\/home\/setup\/?$/.test(window.location.pathname) ? <SetupPage /> : <App />}
     </QueryClientProvider>
   </StrictMode>,
 );

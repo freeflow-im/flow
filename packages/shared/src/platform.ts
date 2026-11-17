@@ -320,6 +320,9 @@ export interface BulkAccountKindResult { changed: number; unchanged: number }
 
 // ---- domains (§3.2) ------------------------------------------------------------
 
+/** The platform's own mail domain: an organization with no domain of its own is `<slug>.freeflow.im` (§3.2). */
+export const PLATFORM_DOMAIN = 'freeflow.im';
+
 /** `platform` is the organization's `<slug>.freeflow.im`, made with it; `own` is one its admin registered. */
 export type DomainKind = 'own' | 'platform';
 
