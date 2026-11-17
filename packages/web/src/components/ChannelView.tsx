@@ -3,11 +3,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { MessageDTO } from '@flow/shared';
 import { typingKey, useAuth, useLive, useSelection } from '../state';
 import { HUDDLE_MAX_PEOPLE, useHuddle } from '../huddle';
-import { useArtifacts, useChannel, useChannelMembers, useDisplayNameMap, useMarkRead, useMemberMap, useMessages, useNameMap, usePinnedMessages, useTogglePin, useWorkspaces, flattenMessages } from '../hooks';
+import { useArtifacts, useChannel, useChannelMembers, useChannelPeople, useMarkRead, useMessages, usePinnedMessages, useTogglePin, useWorkspaces, flattenMessages } from '../hooks';
 import { dmTitle } from './Sidebar';
 import { Avatar } from './Avatar';
 import ChannelMembersPopover, { type MemberRow } from './ChannelMembersPopover';
 import ChannelOverflowMenu from './ChannelOverflowMenu';
+import VisitorLinksModal from './VisitorLinksModal';
 import MessageList, { PinIcon } from './MessageList';
 import Composer, { arrowUpEdit } from './Composer';
 import FindBar, { useChatFind } from './FindBar';
@@ -26,9 +27,6 @@ export default function ChannelView({ channelId }: { channelId: string }) {
   const sel = useSelection();
   const live = useLive();
   const huddle = useHuddle();
-  const memberMap = useMemberMap(sel.workspaceId);
-  const names = useNameMap(sel.workspaceId);
-  const displayNames = useDisplayNameMap(sel.workspaceId); // agent names carry the 🤖 badge
   const messagesQ = useMessages(channelId);
   const pins = usePinnedMessages(channelId);
   const markRead = useMarkRead();
@@ -42,6 +40,7 @@ export default function ChannelView({ channelId }: { channelId: string }) {
   const [membersOpen, setMembersOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [pinsOpen, setPinsOpen] = useState(false);
+  const [inviteVisitor, setInviteVisitor] = useState(false);
   // Reconnect bar (#234) — delayed and floored so short drops don't flash.
   // cmd-F find bar (#518) — searches the transcript this pane has loaded.
   const paneRef = useRef<HTMLElement>(null);
@@ -50,6 +49,8 @@ export default function ChannelView({ channelId }: { channelId: string }) {
   // from the channel browser (#588) resolves — read-only, with its banner.
   const channel = useChannel(sel.workspaceId, channelId);
   const archived = !!channel?.archivedAt;
+  // The roster plus this channel's visitors (docs/specs/chat-visitors.md §1.4); agent display names carry the 🤖 badge.
+  const { names, displayNames, memberMap, visitors, refetchVisitors } = useChannelPeople(sel.workspaceId, channel);
   // This channel's artifacts, for the "⋯" menu's Artifacts section (#188).
   const artifacts = useArtifacts(sel.workspaceId);
   const channelArtifacts = useMemo(
@@ -98,6 +99,15 @@ export default function ChannelView({ channelId }: { channelId: string }) {
     }
   }, [focusId, messages, messagesQ.hasNextPage, messagesQ.isFetchingNextPage, sel]);
 
+  // A visitor's message from someone not yet on the visitor list (they just joined): fetch the list once more.
+  const unknownVisitor = messages.find((m) => m.visitor && !memberMap[m.userId])?.userId ?? null;
+  const askedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!unknownVisitor || askedFor.current === unknownVisitor) return;
+    askedFor.current = unknownVisitor;
+    void refetchVisitors();
+  }, [unknownVisitor, refetchVisitors]);
+
   const isDm = channel && channel.kind !== 'standard';
   // 1:1 DM header click opens the other member's card (ruling 4); self-DM shows your own.
   const dmOtherId =
@@ -113,7 +123,8 @@ export default function ChannelView({ channelId }: { channelId: string }) {
   // no secrets from them. Every agent on a roster is a shared one; personal agents are never members.
   const workspaces = useWorkspaces();
   const dmAgent = channel?.kind === 'dm' && dmOtherId && dmOtherId !== auth.user.id && memberMap[dmOtherId]?.isAgent ? memberMap[dmOtherId] : null;
-  const workspaceName = workspaces.data?.find((w) => w.id === sel.workspaceId)?.name ?? 'this organization';
+  const workspace = workspaces.data?.find((w) => w.id === sel.workspaceId);
+  const workspaceName = workspace?.name ?? 'this organization';
 
   // Header avatar stack: this channel's membership for every kind (issue #70 —
   // standard channels used to show the whole workspace roster, which said
@@ -131,6 +142,19 @@ export default function ChannelView({ channelId }: { channelId: string }) {
     const m = memberMap[id];
     return myRole === 'owner' || myRole === 'admin' || (m?.kind === 'personal_agent' && m.agentRuntime === 'hosted' && m.sponsorId === auth.user.id);
   };
+  // Visitors (docs/specs/chat-visitors.md §1.1): a member of a public channel who is not a guest may let someone in by a
+  // link, unless the organization has visitors off. Removing one is open to every non-guest member.
+  const notGuest = memberMap[auth.user.id]?.kind !== 'guest';
+  const canInviteVisitor =
+    channel?.kind === 'standard' && !channel.isPrivate && !archived && channel.isMember && notGuest &&
+    workspace?.policies?.visitors !== 'off' && caps.channelManagement.state !== 'unavailable';
+  const removeVisitor = async (userId: string) => {
+    if (!channel) return;
+    await boundApi('DELETE', `/v1/channels/${channel.id}/visitors/${userId}`);
+    await qc.invalidateQueries({ queryKey: ['channelVisitors', channel.id] });
+    await qc.invalidateQueries({ queryKey: ['visitorLinks', channel.id] });
+  };
+
   const removeMember = async (userId: string) => {
     if (!channel) return;
     await boundApi('DELETE', `/v1/channels/${channel.id}/members/${userId}`);
@@ -300,6 +324,8 @@ export default function ChannelView({ channelId }: { channelId: string }) {
               onSelect={(id) => { setMembersOpen(false); setCardUserId(id); }}
               onAdd={channel?.kind === 'standard' && !archived ? () => { setMembersOpen(false); setAddPeople(true); } : undefined}
               onRemove={removeMember}
+              visitors={visitors}
+              onRemoveVisitor={notGuest ? removeVisitor : undefined}
             />
           )}
           {menuOpen && (
@@ -311,6 +337,7 @@ export default function ChannelView({ channelId }: { channelId: string }) {
               onOpenPins={() => setPinsOpen(true)}
               onOpenArtifact={(id) => sel.selectArtifact(id)}
               onOpenOptions={() => setEditChannel(true)}
+              onInviteVisitor={canInviteVisitor ? () => setInviteVisitor(true) : undefined}
               onClose={() => setMenuOpen(false)}
             />
           )}
@@ -375,6 +402,7 @@ export default function ChannelView({ channelId }: { channelId: string }) {
       {cardUserId && <UserCard userId={cardUserId} onClose={() => setCardUserId(null)} />}
       {editChannel && channel && <ChannelOptionsModal channel={channel} onClose={() => setEditChannel(false)} />}
       {addPeople && channel && <AddPeopleModal channel={channel} onClose={() => setAddPeople(false)} />}
+      {inviteVisitor && channel && <VisitorLinksModal channel={channel} names={names} onClose={() => setInviteVisitor(false)} />}
       {pinsOpen && (
         <PinnedMessagesModal
           messages={pins.data ?? []}

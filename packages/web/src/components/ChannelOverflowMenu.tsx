@@ -16,6 +16,7 @@ export default function ChannelOverflowMenu({
   onOpenPins,
   onOpenArtifact,
   onOpenOptions,
+  onInviteVisitor,
   onClose,
 }: {
   artifacts: ArtifactDTO[];
@@ -26,6 +27,8 @@ export default function ChannelOverflowMenu({
   onOpenPins: () => void;
   onOpenArtifact: (id: string) => void;
   onOpenOptions: () => void;
+  /** "Invite a visitor" (docs/specs/chat-visitors.md §1.1): only for a public channel, a non-guest, and visitors on. */
+  onInviteVisitor?: (() => void) | undefined;
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -81,6 +84,19 @@ export default function ChannelOverflowMenu({
         <span className="flex-1">Pinned messages</span>
         {pinCount > 0 && <span className="text-xs font-semibold text-accent-soft">{pinCount}</span>}
       </button>
+
+      {onInviteVisitor && (
+        <button
+          type="button"
+          role="menuitem"
+          data-testid="channel-menu-invite-visitor"
+          className={item}
+          onClick={() => { onClose(); onInviteVisitor(); }}
+        >
+          <span aria-hidden>🔗</span>
+          <span className="flex-1">Invite a visitor</span>
+        </button>
+      )}
 
       <p className="px-2 pt-2 pb-1 text-[11px] font-bold tracking-[.05em] text-muted uppercase">
         Artifacts

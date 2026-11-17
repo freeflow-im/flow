@@ -348,7 +348,7 @@ function Policies({ org }: { org: WorkspaceDTO }) {
   const { save, busy, error } = useUpdate(org);
   const policies: WorkspacePolicies = { ...WORKSPACE_POLICY_DEFAULTS, ...org.policies };
   return (
-    <Card title="Agents and sharing" testid="card-policies">
+    <Card title="Agents, sharing and visitors" testid="card-policies">
       <Row label="Who can add agents" help="An agent's sponsor is responsible for it; its mailbox and calendars are part of its account.">
         <Select
           value={policies.agentsBy}
@@ -363,6 +363,9 @@ function Policies({ org }: { org: WorkspaceDTO }) {
       </Row>
       <Row label="Sharing by link" help="Whether a document or calendar can be opened by anyone with its link.">
         <Toggle checked={policies.linkSharing} disabled={busy} label={policies.linkSharing ? 'Allowed' : 'Not allowed'} onChange={(v) => save({ policies: { linkSharing: v } })} testid="policy-linkSharing" />
+      </Row>
+      <Row label="Visitors in channels" help="Members can let someone with no account into one public channel by a link; a visitor sees only what is posted after they join. Off: no new links, open links stop working and current visitors lose access.">
+        <Toggle checked={policies.visitors !== 'off'} disabled={busy} label={policies.visitors !== 'off' ? 'On' : 'Off'} onChange={(v) => save({ policies: { visitors: v ? 'on' : 'off' } })} testid="policy-visitors" />
       </Row>
       <ErrorLine error={error} />
     </Card>

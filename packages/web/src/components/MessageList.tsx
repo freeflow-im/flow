@@ -1,5 +1,5 @@
 import { useBoundApi } from '../lib/useBoundApi';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { ArtifactDTO, FileDTO, MessageDTO, WorkspaceMemberDTO } from '@flow/shared';
 import { bytesLabel, CustomEmojiContext, displayTime, InlineLinkContext, renderBlocks } from '../lib/format';
@@ -25,6 +25,7 @@ import { UnfurlCard } from './UnfurlCard';
 import { HoverTooltip } from './HoverTooltip';
 import { SystemLine } from './SystemLine';
 import { ReferenceChip } from './ReferenceChip';
+import type { ChannelPerson } from '../lib/visitor';
 import { ReferencesContext, referencesIn, referencesOfMessages, useReferenceLookup, useResolvedReferences } from '../lib/references';
 
 /** Remembered scroll position per channel, so switching away and back lands
@@ -96,6 +97,8 @@ export default function MessageList({
   // FreeFlow addresses in these messages, resolved for the reader in one call (lib/references.ts, platform phase 6.4).
   const workspaceId = useSelection().workspaceId;
   const references = useResolvedReferences(api, serverOrigin, workspaceId, referencesOfMessages(messages, serverOrigin, workspaceId));
+  // A mention of a channel visitor reads "@Ann (Visitor)" (docs/specs/chat-visitors.md §1.4).
+  const mentionNames = useMemo(() => withVisitorLabels(names, membersById), [names, membersById]);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -248,6 +251,7 @@ export default function MessageList({
                 <MessageRow
                   message={m}
                   names={names}
+                  mentionNames={mentionNames}
                   membersById={membersById}
                   showHeader={showsHeader(messages, i)}
                   showThreadAffordances={showThreadAffordances}
@@ -379,6 +383,7 @@ function relTime(iso: string | null): string {
 function MessageRow({
   message,
   names,
+  mentionNames = names,
   membersById,
   showHeader,
   showThreadAffordances,
@@ -387,6 +392,8 @@ function MessageRow({
 }: {
   message: MessageDTO;
   names: Record<string, string>;
+  /** `names` with the Visitor label on visitors, for the mentions in the body. */
+  mentionNames?: Record<string, string>;
   membersById: Record<string, WorkspaceMemberDTO>;
   showHeader: boolean;
   showThreadAffordances: boolean;
@@ -422,8 +429,13 @@ function MessageRow({
   const deleteConfirmation = deleteMode
     ? messageDeleteConfirmation(deleteMode, message.threadRootId, message.replyCount)
     : null;
-  const sender = names[message.userId] ?? 'Unknown';
   const member = membersById[message.userId];
+  // A channel visitor (docs/specs/chat-visitors.md): the message says so, and a visitor still in the channel is on the
+  // merged people map. One who has left keeps the label, under a name the client no longer knows.
+  const byVisitor = message.visitor === true || (member as ChannelPerson | undefined)?.visitor === true;
+  const sender = names[message.userId] ?? (byVisitor ? 'A visitor' : 'Unknown');
+  // Profiles are not open to visitors, and a visitor has none (§1.3).
+  const hasCard = !byVisitor && !auth.user.visitor;
   // Optimistic row awaiting the server echo: actions suppressed. It renders
   // at full strength and only dims if the commit is slow (>3s) or fails.
   const pending = (message as LocalMessage).pending === true;
@@ -510,9 +522,9 @@ function MessageRow({
           <button
             type="button"
             data-testid={`avatar-${message.userId}`}
-            title={`View ${sender}'s profile`}
-            className="block cursor-pointer leading-none"
-            onClick={() => setShowCard(true)}
+            title={hasCard ? `View ${sender}'s profile` : sender}
+            className={`block leading-none ${hasCard ? 'cursor-pointer' : 'cursor-default'}`}
+            onClick={() => { if (hasCard) setShowCard(true); }}
           >
             <Avatar userId={message.userId} name={sender} avatarUrl={member?.avatarUrl} size={38} radius={11} />
           </button>
@@ -529,6 +541,7 @@ function MessageRow({
                   🤖
                 </span>
               )}
+              {byVisitor && <VisitorLabel />}
               {member?.statusEmoji && (
                 <span className="ml-1 text-sm font-normal" title={member.statusText} data-testid={`status-of-${sender}`}>
                   {member.statusEmoji}
@@ -562,9 +575,9 @@ function MessageRow({
                 data-search-body=""
                 className="text-sm leading-normal break-words whitespace-pre-wrap"
               >
-                <InlineLinkContext.Provider value={{ onPinLink: (url) => void pinUrl(url), onOpenArtifact: sel.selectArtifact }}>
+                <InlineLinkContext.Provider value={caps.artifacts.state !== 'unavailable' ? { onPinLink: (url) => void pinUrl(url), onOpenArtifact: sel.selectArtifact } : {}}>
                   <CustomEmojiContext.Provider value={customEmoji}>
-                    {renderBlocks(message.body, names, auth.user.id)}
+                    {renderBlocks(message.body, mentionNames, auth.user.id)}
                   </CustomEmojiContext.Provider>
                 </InlineLinkContext.Provider>
                 {message.editedAt && (
@@ -1461,6 +1474,30 @@ function ImageLightbox({
  * automatic. Clicking it opens the Scheduled panel, where the row that posted
  * it lives.
  */
+/** The label on a channel visitor's name (docs/specs/chat-visitors.md §1.4): messages, mentions and people lists. */
+export function VisitorLabel() {
+  return (
+    <span
+      data-testid="visitor-label"
+      title="A visitor: no account, in this channel only, by a link"
+      className="ml-1.5 rounded bg-daypill px-1.5 py-px align-[1px] text-[10px] font-bold tracking-wide text-muted uppercase"
+    >
+      Visitor
+    </span>
+  );
+}
+
+/** `names`, with " (Visitor)" after each channel visitor's name. */
+export function withVisitorLabels(names: Record<string, string>, people: Record<string, WorkspaceMemberDTO>): Record<string, string> {
+  let out: Record<string, string> | null = null;
+  for (const [id, p] of Object.entries(people)) {
+    if (!(p as ChannelPerson).visitor || names[id] === undefined) continue;
+    out ??= { ...names };
+    out[id] = `${names[id]} (Visitor)`;
+  }
+  return out ?? names;
+}
+
 function ScheduledBadge({ author }: { author: string }) {
   const sel = useSelection();
   return (

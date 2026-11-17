@@ -1,5 +1,5 @@
 import { useBoundApi } from '../lib/useBoundApi';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { FileDTO, MessageDTO } from '@flow/shared';
 import { emojiMatches } from '@flow/shared';
 import { api } from '../lib/api';
@@ -8,8 +8,9 @@ import { decorate, domToText, getSelectionOffsets, rebuild, setCaretAt } from '.
 import { addDictationTranscript, exceedsMessageLength, type DictationDraft } from '../lib/dictationSession';
 import { createDeferredEditorFocus } from '../lib/dictationFocus';
 import { useDictation } from '../lib/useDictation';
-import { useLive, useSelection } from '../state';
-import { useChannelMembers, useChannels, useEditMessage, useMembers, useSendMessage } from '../hooks';
+import { useAuth, useLive, useSelection } from '../state';
+import { useChannelMembers, useChannels, useChannelVisitors, useEditMessage, useMembers, useSendMessage, visitorPerson } from '../hooks';
+import type { ChannelPerson } from '../lib/visitor';
 import { useBackend, useCapabilities } from '../lib/backend';
 import { useQueryClient } from '@tanstack/react-query';
 import { FileImage } from './FileImage';
@@ -57,6 +58,18 @@ export default function Composer({
   const members = useMembers(sel.workspaceId);
   const channels = useChannels(sel.workspaceId);
   const channelMembers = useChannelMembers(channelId);
+  // Channel visitors (docs/specs/chat-visitors.md) are on no roster: a public channel's are added for mentions. A visitor
+  // mentions only the channel's people, never an agent or a group (V5).
+  const auth = useAuth();
+  const visitorMode = auth.user.visitor === true;
+  const thisChannel = channels.data?.find((c) => c.id === channelId);
+  const channelVisitors = useChannelVisitors(channelId, thisChannel?.kind === 'standard' && !thisChannel.isPrivate);
+  const people = useMemo((): ChannelPerson[] => {
+    const all: ChannelPerson[] = [...(members.data ?? [])];
+    const known = new Set(all.map((m) => m.userId));
+    for (const v of channelVisitors.data ?? []) if (!known.has(v.userId)) all.push(visitorPerson(v));
+    return visitorMode ? all.filter((m) => !m.isAgent) : all;
+  }, [members.data, channelVisitors.data, visitorMode]);
   const send = useSendMessage(channelId);
   const edit = useEditMessage();
   // Capability gating (#545): a control whose capability is unavailable is not
@@ -315,7 +328,7 @@ export default function Composer({
   const [selIndex, setSelIndex] = useState(0);
   const [suppressedToken, setSuppressedToken] = useState<string | null>(null);
   const token = trailingToken(text);
-  const suggestions = token && token !== suppressedToken ? buildSuggestions(token, members.data ?? []) : [];
+  const suggestions = token && token !== suppressedToken ? buildSuggestions(token, people, { groups: !visitorMode }) : [];
   const selected = Math.min(selIndex, Math.max(0, suggestions.length - 1));
 
   const applySuggestion = (insert: string) => {
@@ -336,12 +349,13 @@ export default function Composer({
       return;
     }
     if ((!raw && attachments.length === 0) || uploading > 0) return;
-    const { body, mentions } = transformOutgoing(raw || ' ', members.data ?? []);
+    const { body, mentions } = transformOutgoing(raw || ' ', people);
     // Detect @mentions of users who aren't in this standard channel; the CTA
     // banner renders above the composer after the send.
     const chanKind = channels.data?.find((c) => c.id === channelId)?.kind;
     if (chanKind === 'standard' && channelMembers.data) {
-      const missing = mentions.filter((id) => !channelMembers.data.includes(id));
+      // A visitor is in the channel without being a member of it.
+      const missing = visitorMode ? [] : mentions.filter((id) => !channelMembers.data.includes(id) && !people.some((p) => p.userId === id && p.visitor));
       setMissingMentions(missing);
     }
     setAddedNotice(null);
@@ -801,20 +815,21 @@ function trailingToken(text: string): string | null {
   return tok;
 }
 
-function buildSuggestions(
+export function buildSuggestions(
   token: string,
-  members: { userId: string; displayName: string; isAgent?: boolean }[],
+  members: { userId: string; displayName: string; isAgent?: boolean; visitor?: boolean }[],
+  { groups: withGroups = true }: { groups?: boolean } = {},
 ): { label: string; insert: string }[] {
   const query = token.slice(1).toLowerCase();
   if (token.startsWith('@')) {
-    const groups = ['channel', 'here', 'everyone']
+    const groups = (withGroups ? ['channel', 'here', 'everyone'] : [])
       .filter((g) => g.startsWith(query))
       .map((g) => ({ label: `@${g}`, insert: `@${g} ` }));
     const users = members
       .filter((m) => m.displayName.toLowerCase().startsWith(query))
       .slice(0, 6)
       // agents get the 🤖 badge in the popup label; the insert stays the plain name
-      .map((m) => ({ label: `@${m.displayName}${m.isAgent ? ' 🤖' : ''}`, insert: `@${m.displayName} ` }));
+      .map((m) => ({ label: `@${m.displayName}${m.isAgent ? ' 🤖' : ''}${m.visitor ? ' (Visitor)' : ''}`, insert: `@${m.displayName} ` }));
     return [...groups, ...users].slice(0, 8);
   }
   return emojiMatches(query).map((e) => ({ label: `${e.emoji} :${e.code}:`, insert: `${e.emoji} ` }));

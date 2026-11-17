@@ -20,10 +20,11 @@ export class FlowBackend implements WorkspaceBackend {
   readonly connectionId: string;
   private caps: Capabilities;
 
-  constructor(private readonly runtime: ConnectionRuntime) {
+  /** `caps`: a narrower grant than a member's — a channel visitor's (lib/visitor.ts). */
+  constructor(private readonly runtime: ConnectionRuntime, caps?: Capabilities) {
     this.connectionId = runtime.connectionId;
     // Flow has no server-side search yet; everything else is native.
-    this.caps = { ...allSupported(), search: unavailable('Search is not available on this server yet.') };
+    this.caps = caps ?? { ...allSupported(), search: unavailable('Search is not available on this server yet.') };
   }
 
   private api<T>(method: string, path: string, body?: unknown): Promise<T> {
