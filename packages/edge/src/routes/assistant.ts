@@ -123,8 +123,11 @@ async function forward(c: C, req: Request = c.req.raw): Promise<Response> {
         const place = seen.ok ? ((await seen.json()) as { role?: string }) : null;
         if (!place?.role) return c.json({ error: `${chosen.displayName} can't see this page. Share it with ${chosen.displayName} first, or ask your own assistant.`, code: 'agent_cannot_see', agent: chosen.displayName }, 403);
       }
+      // The admin agent (agents.md §1.4) is for owners and admins alone: usableAgents lists it only for them, and a role
+      // lost since is checked here. Its admin tools act with this person's token (assistant/adminTools.ts).
+      if (chosen.role === 'admin' && who.account.role !== 'owner' && who.account.role !== 'admin') return c.json({ error: 'Only owners and admins can use the admin agent.', code: 'not_admin' }, 403);
       const asAgent = { user: identity.user, token: who.token, authKind: 'agent' as const, ip: who.ip, organizationId: who.account.organizationId, account: identity.account, invokedBy: who.account.id };
-      return await c.env.ASSISTANT.get(c.env.ASSISTANT.idFromName(identity.account.id)).handle(req, asAgent, agentDocs, chosen.displayName, { conversationUser: who.user.id });
+      return await c.env.ASSISTANT.get(c.env.ASSISTANT.idFromName(identity.account.id)).handle(req, asAgent, agentDocs, chosen.displayName, { conversationUser: who.user.id, ...(chosen.role ? { agentRole: chosen.role } : {}) });
     }
     // The person's assistant (agents.md §6): their hosted personal agent, whose runtime is their account's object. Its
     // turns are the person's, marked `via` the agent, so the events it causes say "Ann (via assistant)".

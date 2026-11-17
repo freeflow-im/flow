@@ -143,6 +143,8 @@ export interface WorkspaceMemberDTO {
    * on the Admin app's full list only, an external personal agent. Absent from older servers. */
   kind?: 'native' | 'guest' | 'personal_agent';
   agentRuntime?: 'hosted';
+  /** `admin`: the organization's admin agent (agents.md §1.4), which only owners and admins are shown. */
+  agentRole?: 'admin';
   /** Agents only: the human member who sponsored (approved) the agent and is responsible for it. */
   sponsorId: string | null;
   /** #489: leave this member out of the Directory and its search. They stay on

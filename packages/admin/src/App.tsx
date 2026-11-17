@@ -105,8 +105,8 @@ export function App() {
               )}
             </div>
           </main>
-          {/* The person's assistant, as in every app (agents.md §1.1). */}
-          <SuiteAssistant organizationId={org.id} page="admin" />
+          {/* The panel, as in every app; here it starts with the admin agent for an owner or admin (agents.md §1.4). */}
+          <SuiteAssistant organizationId={org.id} page="admin" prefer="admin" />
         </div>
       )}
     </div>

@@ -1,6 +1,6 @@
 // One organization: its database and its sockets. HTTP requests arrive from the Worker with the caller already known.
 import { DurableObject } from 'cloudflare:workers';
-import { MAX_EVENT_DEPTH, type AccountDTO, type AccountKind, type HostedRuntimeDTO, type MessageDTO, type Event, type MemberRole, type UserDTO } from '@flow/shared';
+import { MAX_EVENT_DEPTH, type AccountDTO, type AccountKind, type HostedRuntimeDTO, type MessageDTO, type Event, type MemberRole, type UserDTO, type WorkspaceMemberDTO } from '@flow/shared';
 import { accountGate, type DirectoryCore } from '../directory/core';
 import { ApiError } from '../errors';
 import { OutboxFlusher } from './outbox';
@@ -60,6 +60,10 @@ const SWEEP_KEY = 'mail_sweep_at';
 const AGENTS_RETIRED_KEY = 'agents_retired_v1';
 /** Set once this member list holds kinds and the organization's personal agents (agents.md phase E). */
 const MEMBERS_KEY = 'members_v2';
+/** The admin agent's principal id, once this organization has one (agents.md §1.4). */
+const ADMIN_AGENT_KEY = 'admin_agent_v1';
+/** The admin agent's name when it is made; the admins may rename it in Admin → Agents. */
+export const ADMIN_AGENT_NAME = 'Carl';
 
 /** What each id-only path needs (`routes/org.ts`), and who belongs here (`memberships`), reported to the directory by trigger. */
 const OUTBOX = [
@@ -149,7 +153,69 @@ export class Org extends DurableObject<OrgEnv> {
     void ctx.blockConcurrencyWhile(async () => {
       if (!(await ctx.storage.get<boolean>(MEMBERS_KEY))) await this.adoptAccounts().catch((err) => console.error(`member adoption: ${(err as Error).message}`));
       await this.syncAssistants().catch((err) => console.error(`assistants: ${(err as Error).message}`));
+      await this.ensureAdminAgent().catch((err) => console.error(`admin agent: ${(err as Error).message}`));
     });
+  }
+
+  /** A making of the admin agent under way, so two requests at once make one. */
+  private adminAgentMaking: Promise<void> | null = null;
+
+  /**
+   * The organization's admin agent (agents.md §1.4, decision_log 2026-11-16): a hosted shared agent named Carl, sponsored
+   * by the owner, in no channel and never announced, which only owners and admins can use, from the panel. Made once, when
+   * the organization has its owner; an organization made before it gets one at its object's next start. A failure leaves
+   * it for the next request.
+   */
+  private ensureAdminAgent(): Promise<void> {
+    this.adminAgentMaking ??= this.makeAdminAgent().finally(() => { this.adminAgentMaking = null; });
+    return this.adminAgentMaking;
+  }
+
+  private async makeAdminAgent(): Promise<void> {
+    if (!this.env.ASSISTANT || (await this.ctx.storage.get<string>(ADMIN_AGENT_KEY))) return;
+    const sql = this.ctx.storage.sql;
+    const org = sql.exec('SELECT id FROM workspaces LIMIT 1').toArray()[0]?.id as string | undefined;
+    if (!org) return;
+    const owner = sql.exec("SELECT m.user_id FROM workspace_members m JOIN users u ON u.id = m.user_id WHERE m.workspace_id = ? AND m.role = 'owner' AND NOT u.is_agent LIMIT 1", org).toArray()[0]?.user_id as string | undefined;
+    if (!owner) return;
+    const found = await this.directory().call('adminAgentOf' as never, [org] as never) as DirectoryAnswer<string | null>;
+    if (!found.ok) throw new Error(found.message);
+    let agentId = found.value;
+    if (!agentId) {
+      const made = await this.scoped(async () => (await import('./services/agents')).createSharedAgent(owner, ADMIN_AGENT_NAME, { quiet: true }));
+      await this.flushOutbox(org);
+      agentId = made.userId;
+    }
+    const marked = await this.directory().call('markAdminAgent' as never, [agentId, org] as never) as DirectoryAnswer<void>;
+    if (!marked.ok) throw new Error(marked.message);
+    await this.markHostedAgent(agentId);
+    const account = await this.accountFor(org, agentId);
+    // No address (the directory let it go when it marked the agent): the member row follows.
+    if (account && !account.address) sql.exec('UPDATE workspace_members SET address = NULL WHERE user_id = ?', agentId);
+    if (!account) throw new Error('the admin agent has no account');
+    await this.env.ASSISTANT.get(this.env.ASSISTANT.idFromName(account.id)).adopt(account, account.displayName ?? ADMIN_AGENT_NAME, 'admin');
+    await this.ctx.storage.put(ADMIN_AGENT_KEY, agentId);
+    console.log(`[agents] admin agent ${agentId} made for ${org}`);
+  }
+
+  /**
+   * The member list as the caller may see it (agents.md §1.4): the admin agent marked `agentRole: 'admin'` for an owner or
+   * admin, and left out for everyone else, who cannot use it.
+   */
+  private async markAdminAgent(res: Response, caller: CallerContext): Promise<Response> {
+    const carl = await this.ctx.storage.get<string>(ADMIN_AGENT_KEY);
+    if (!carl) return res;
+    const body = (await res.json()) as { members: WorkspaceMemberDTO[] };
+    const admin = caller.account?.role === 'owner' || caller.account?.role === 'admin';
+    body.members = admin
+      ? body.members.map((m) => (m.userId === carl ? { ...m, agentRole: 'admin' as const } : m))
+      : body.members.filter((m) => m.userId !== carl);
+    return Response.json(body, { status: res.status, headers: res.headers });
+  }
+
+  /** The admin agent's principal id here, once it is made (agents.md §1.4). */
+  async adminAgentId(): Promise<string | null> {
+    return (await this.ctx.storage.get<string>(ADMIN_AGENT_KEY)) ?? null;
   }
 
   /**
@@ -388,7 +454,8 @@ export class Org extends DurableObject<OrgEnv> {
         'You are a shared agent: you work only with what is shared with you, and anyone in the organization may ask you, so keep what one person tells you in confidence out of your answers to others.',
       ].filter((l) => l !== '').join('\n');
       const answer = await this.directory().call('hostedRuntimeOf' as never, [a.account_id] as never) as DirectoryAnswer<HostedRuntimeDTO | null>;
-      if (!answer.ok || !answer.value || answer.value.mode !== 'shared') continue;
+      // The admin agent works only in the panel, as the admin who asks (agents.md §1.4): Chat never starts its turns.
+      if (!answer.ok || !answer.value || answer.value.mode !== 'shared' || answer.value.role === 'admin') continue;
       // The list learns it is hosted (Chat's "thinking…" and the answer's post check it).
       sql.exec("UPDATE workspace_members SET runtime = 'hosted' WHERE user_id = ? AND runtime IS NULL", agentId);
       await this.env.ASSISTANT!.get(this.env.ASSISTANT!.idFromName(answer.value.runtimeKey)).sharedChatTurn({
@@ -1122,13 +1189,20 @@ export class Org extends DurableObject<OrgEnv> {
     }
     // A message search: any message the index still lacks is indexed in the background (a pass that stopped is picked up).
     if (request.method === 'GET' && /^\/v1\/workspaces\/[^/]+\/search$/.test(url.pathname)) void this.indexMessages();
+    // The admin agent comes with the organization (agents.md §1.4): it is never removed, only renamed.
+    const removing = request.method === 'DELETE' ? /^\/v1\/workspaces\/[^/]+\/(?:agents|members)\/([^/]+)$/.exec(url.pathname)?.[1] : undefined;
+    if (removing && removing === (await this.ctx.storage.get<string>(ADMIN_AGENT_KEY))) {
+      return Response.json({ error: { code: 'admin_agent', message: 'The admin agent comes with the organization and cannot be removed.' } }, { status: 400 });
+    }
     const run = () => this.scoped(async () => {
       if (caller.user) this.ensureUser(caller.user);
       return app.handle(request, caller);
     }, stamp);
-    const res = await (newWorkspaceId ? presetWorkspaceId.run(newWorkspaceId, run) : run()).finally(() => this.logging);
+    let res = await (newWorkspaceId ? presetWorkspaceId.run(newWorkspaceId, run) : run()).finally(() => this.logging);
+    if (request.method === 'GET' && res.ok && /^\/v1\/workspaces\/[^/]+\/members$/.test(url.pathname)) res = await this.markAdminAgent(res, caller);
     await this.flushOutbox(newWorkspaceId);
     await this.syncAssistants().catch((err) => console.error(`assistants: ${(err as Error).message}`));
+    await this.ensureAdminAgent().catch((err) => console.error(`admin agent: ${(err as Error).message}`));
     await this.armAlarm();
     return res;
   }

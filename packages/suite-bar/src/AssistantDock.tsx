@@ -21,7 +21,20 @@ export function assistantChanged(): void {
 }
 
 export function useMyAssistant(organizationId: string | null): MyAssistant | null {
-  const [mine, setMine] = useState<MyAssistant | null>(null);
+  const agents = useUsableAgents(organizationId);
+  const self = agents?.find((a) => a.self);
+  return self?.displayName ? { displayName: self.displayName, avatarUrl: self.avatarUrl ?? null } : null;
+}
+
+/** An agent the person may talk to from the panel (GET /api/agent/agents, agents.md §6): their own or a shared one. */
+export interface UsableAgent { id: string; displayName: string; avatarUrl?: string | null; mode: 'personal' | 'shared'; self: boolean; role?: 'admin' }
+
+/**
+ * The hosted agents the person may talk to in an organization: their assistant first, their other private agents, the
+ * shared ones (and, for an owner or admin, the admin agent, agents.md §1.4). Null until known, again when it changes.
+ */
+export function useUsableAgents(organizationId: string | null): UsableAgent[] | null {
+  const [agents, setAgents] = useState<UsableAgent[] | null>(null);
   const [asked, setAsked] = useState(0);
   useEffect(() => {
     const again = () => setAsked((n) => n + 1);
@@ -33,14 +46,13 @@ export function useMyAssistant(organizationId: string | null): MyAssistant | nul
     const url = organizationId ? `/api/agent/agents?workspace=${encodeURIComponent(organizationId)}` : '/api/agent/agents';
     fetch(url, { credentials: 'same-origin', headers: { accept: 'application/json' } })
       .then((r) => (r.ok ? r.json() : null))
-      .then((body: { agents?: { self?: boolean; displayName?: string; avatarUrl?: string | null }[] } | null) => {
-        const self = body?.agents?.find((a) => a.self);
-        if (live) setMine(self?.displayName ? { displayName: self.displayName, avatarUrl: self.avatarUrl ?? null } : null);
+      .then((body: { agents?: UsableAgent[] } | null) => {
+        if (live) setAgents(body?.agents ?? []);
       })
-      .catch(() => live && setMine(null));
+      .catch(() => live && setAgents([]));
     return () => { live = false; };
   }, [organizationId, asked]);
-  return mine;
+  return agents;
 }
 
 /** Where the panel sits: floating over the page bottom-right (the default), or docked as a side panel beside it. */
@@ -267,14 +279,15 @@ export interface ChatHistoryApi {
 }
 
 /** The history calls of a chat in the suite's organization `org` (Mail's, Calendar's, the suite bar's own chat). */
-export function orgChatHistory(org: string | null, scope: string): ChatHistoryApi {
+export function orgChatHistory(org: string | null, scope: string, agent: string | null = null): ChatHistoryApi {
+  const ofAgent = agent ? `&agent=${encodeURIComponent(agent)}` : '';
   return {
     list: async () => {
-      const r = await fetch(withOrg(`/api/agent/history?scope=${encodeURIComponent(scope)}`, org), { credentials: 'same-origin' });
+      const r = await fetch(withOrg(`/api/agent/history?scope=${encodeURIComponent(scope)}${ofAgent}`, org), { credentials: 'same-origin' });
       return r.ok ? ((await r.json()) as { chats: ChatSummary[] }).chats ?? [] : [];
     },
     reopen: async (id) => {
-      const r = await fetch(withOrg('/api/agent/reopen', org), { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope, id }) });
+      const r = await fetch(withOrg('/api/agent/reopen', org), { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope, id, ...(agent ? { agent } : {}) }) });
       if (!r.ok) throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error ?? `Request failed (${r.status})`);
     },
   };

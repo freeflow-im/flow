@@ -37,6 +37,7 @@ import { isFileId } from '@flow/docs/server/ids.ts';
 import { scopeOf, type ScopeArg } from '@flow/docs/server/scope.ts';
 import { chatScope, HOME_CHAT, isChatScope, type AgentDefinition, type AgentEvent, type AgentTurnRequest, type AssistantSettingsUpdate, type ClientToolCall } from '@flow/docs/shared/agent/protocol.ts';
 import { postCard } from './chatTools.ts';
+import { ADMIN_GUIDANCE, AdminToolError, type AdminToolContext } from './adminTools.ts';
 import { MEMORY_DDL, MemoryError, MemoryStore, type MemoryScope } from './memory.ts';
 import type { Org } from '../org/object';
 import { docsPageUrl, docsToolContext, importToDocs, type DocsFetch, type DocsPlace } from './docsTools.ts';
@@ -191,8 +192,52 @@ export class Assistant extends DurableObject<AssistantEnv> {
   /** The suite's prompt lines and the definition's instructions, written into the array the loop reads. */
   private refreshGuidance(): string[] {
     const d = this.definition();
-    this.guidanceLines.splice(0, this.guidanceLines.length, ...SUITE_GUIDANCE, ...definitionGuidance(d, this.state('definition_default_name') ?? d.name));
+    const admin = this.isAdminAgent() ? ADMIN_GUIDANCE : [];
+    this.guidanceLines.splice(0, this.guidanceLines.length, ...SUITE_GUIDANCE, ...admin, ...definitionGuidance(d, this.state('definition_default_name') ?? d.name));
     return this.guidanceLines;
+  }
+
+  /** This runtime is the organization's admin agent's (agents.md §1.4): its panel turns get the admin tools. */
+  private isAdminAgent(): boolean {
+    return this.state('agent_role') === 'admin';
+  }
+
+  /** Marks this runtime as the admin agent's (once, when the Org object makes it), and its prompt says so from then on. */
+  private learnRole(role: 'admin' | undefined): void {
+    if (role !== 'admin' || this.isAdminAgent()) return;
+    this.setState('agent_role', 'admin');
+    this.refreshGuidance();
+  }
+
+  /**
+   * The admin agent's way into the /v1 routes (adminTools.ts), as the owner or admin who asked for the turn: their token,
+   * so each route checks their role, and the agent as `via`, so the Event log reads "Scott, via Carl". Undefined for any
+   * other runtime, and for a turn no person asked for (a wake job carries no token).
+   */
+  private adminContext(who: Who | null): AdminToolContext | undefined {
+    const caller = who?.caller;
+    if (!this.isAdminAgent() || !caller?.user || !caller.token || !caller.invokedBy) return undefined;
+    const token = caller.token, via = caller.user.id, organizationId = caller.account.organizationId;
+    const origin = this.origin;
+    return {
+      organizationId,
+      call: async (method, path, body) => {
+        const req = new Request(`${origin}${path}`, {
+          method,
+          headers: { authorization: `Bearer ${token}`, accept: 'application/json', ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
+          ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        });
+        const res = await this.workerFetch(req, via);
+        const text = await res.text();
+        let json: unknown = null;
+        try { json = text ? JSON.parse(text) : null; } catch { json = text; }
+        if (!res.ok) {
+          const err = (json as { error?: { message?: string } | string } | null)?.error;
+          throw new AdminToolError(typeof err === 'string' ? err : err?.message ?? `The request failed (${res.status}).`);
+        }
+        return json ?? { ok: true };
+      },
+    };
   }
 
   /** The agent's name as the directory knows it, which members see (agents.md §6): kept, and put in the prompt when it changes. */
@@ -228,6 +273,16 @@ export class Assistant extends DurableObject<AssistantEnv> {
 
   setState(key: string, value: string): void {
     this.sql.exec('INSERT INTO assistant_state (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value', key, value);
+  }
+
+  /**
+   * A request to this Worker's own routes, in this isolate, with `via` on the env (routes/auth.ts resolveCaller reads it):
+   * the admin agent's tools. The module is the Worker's entry, imported when first needed. Tests give a stand-in.
+   */
+  protected async workerFetch(req: Request, via: string): Promise<Response> {
+    const { default: worker } = await import('../index');
+    const ctx = { waitUntil: (p: Promise<unknown>) => this.ctx.waitUntil(p), passThroughOnException: () => undefined, props: {} } as unknown as ExecutionContext;
+    return worker.fetch(req, { ...(this.env as object), ADMIN_AGENT_VIA: via } as never, ctx);
   }
 
   /** The model loop's own model call (null: Claude on the Worker's key). Tests give a scripted one. */
@@ -270,7 +325,8 @@ export class Assistant extends DurableObject<AssistantEnv> {
         // The apps added by manifest (apps.ts): their objects, as the account this object belongs to.
         const apps = appToolContexts(this.env, async () => who?.caller ?? null, this.origin);
         const memory = new MemoryStore(this.sql, this.memoryScope(userId, who));
-        return { ...(docs ? { docs } : {}), ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}), ...(apps ? { apps } : {}), memory };
+        const admin = this.adminContext(who);
+        return { ...(docs ? { docs } : {}), ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}), ...(apps ? { apps } : {}), ...(admin ? { admin } : {}), memory };
       },
       // The agent's memory files, listed at the start of each request (agents.md §6.1, loading).
       notes: (userId: string) => new MemoryStore(this.sql, this.memoryScope(userId, this.turnWho.get(userId) ?? this.who)).listing(),
@@ -351,12 +407,13 @@ export class Assistant extends DurableObject<AssistantEnv> {
    * A request for the account this object belongs to (routes/assistant.ts), with its caller context and the same person
    * as the Docs object knows them; a caller of another account is refused.
    */
-  async handle(request: Request, caller: CallerContext, docs: DocsCaller, agentName?: string, opts: { conversationUser?: string } = {}): Promise<Response> {
+  async handle(request: Request, caller: CallerContext, docs: DocsCaller, agentName?: string, opts: { conversationUser?: string; agentRole?: 'admin' } = {}): Promise<Response> {
     const wrong = ownerMismatch(this, caller, 'the Assistant');
     if (wrong) { console.error(`[assistant] ${wrong}`); return ownerRefusal(wrong); }
     if (caller.organizationId) await this.useOrgModel(caller.organizationId);
     // The agent's name as the directory knows it (agents.md §6), the definition's default until the person sets one.
     this.learnName(agentName);
+    this.learnRole(opts.agentRole);
     const who: Who = { caller: caller as AccountCaller, docs, ...(opts.conversationUser ? { conversationUser: opts.conversationUser } : {}) };
     this.who = who;
     return withDocsContext(this.context, () => this.app.fetch(request, { who } satisfies Bindings));
@@ -366,10 +423,11 @@ export class Assistant extends DurableObject<AssistantEnv> {
    * A hosted shared agent's runtime, claimed for the agent's account when the Admin app makes the agent (agents.md §6): the
    * owner keys the first request would set, and the definition's name. Idempotent.
    */
-  async adopt(account: AccountDTO, name: string): Promise<AgentDefinition> {
+  async adopt(account: AccountDTO, name: string, role?: 'admin'): Promise<AgentDefinition> {
     const wrong = ownerMismatch(this, { user: null, account, organizationId: account.organizationId }, 'the agent runtime');
     if (wrong) throw new Error(wrong);
     this.learnName(name);
+    this.learnRole(role);
     return this.definition();
   }
 
@@ -930,6 +988,12 @@ export class Assistant extends DurableObject<AssistantEnv> {
   /** Runs or resumes a turn, streaming AgentEvents as server-sent events (as the Docs server's /api/agent/turn did). */
   private async turn(c: C): Promise<Response> {
     const body = ((await c.req.json().catch(() => ({}))) ?? {}) as AgentTurnRequest;
+    // The admin tools are the admin agent's, in a turn an owner or admin asked for (agents.md §1.4): the server says so,
+    // never the browser.
+    if (body.context && typeof body.context === 'object') {
+      delete (body.context as { admin?: boolean }).admin;
+      if (this.isAdminAgent() && c.env.who.caller.invokedBy) (body.context as { admin?: boolean }).admin = true;
+    }
     // Where the asker is: their browser's zone (the panels send it), else their profile's.
     body.timezone = c.req.header('x-timezone') || body.timezone || c.env.who.caller.user?.timezone || undefined;
     const userId = conversationUserOf(c);

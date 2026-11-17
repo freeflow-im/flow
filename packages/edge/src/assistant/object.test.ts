@@ -64,6 +64,13 @@ function scripted(seen: string[][]): ModelCall {
 
 class TestAssistant extends Assistant {
   script: ModelCall = async () => { throw new Error('no script'); };
+  /** The admin agent's calls into the Worker's routes, with their token and `via`. */
+  workerCalls: { method: string; path: string; auth: string | null; via: string }[] = [];
+  protected override async workerFetch(req: Request, via: string): Promise<Response> {
+    const url = new URL(req.url);
+    this.workerCalls.push({ method: req.method, path: url.pathname + url.search, auth: req.headers.get('authorization'), via });
+    return Response.json({ members: [{ userId: 'u-bob', displayName: 'Bob', role: 'member', kind: 'native', isAgent: false }] });
+  }
   protected override model(): ModelCall { return (params, opts) => this.script(params, opts); }
   protected override keyChecks() { return { key: async () => {}, search: async () => null }; }
 }
@@ -83,6 +90,58 @@ async function events(res: Response): Promise<AgentEvent[]> {
 }
 const req = (method: string, path: string, body?: unknown) =>
   new Request(`https://app.test${path}`, { method, ...(body === undefined ? {} : { body: JSON.stringify(body), headers: { 'content-type': 'application/json' } }) });
+
+/** The model, scripted for the admin agent: admin_list_members, then its result read back. Records each request's tools. */
+function scriptedAdmin(seen: string[][]): ModelCall {
+  return async (params, { onText }) => {
+    seen.push((params.tools ?? []).map((t) => (t as { name: string }).name));
+    const result = lastUser(params).find((b) => b.type === 'tool_result');
+    if (result) {
+      const text = `Found: ${String(result.content)}`;
+      onText(text);
+      return message([{ type: 'text', text }], 'end_turn') as never;
+    }
+    if (!(params.tools ?? []).some((t) => (t as { name: string }).name === 'admin_list_members')) { onText('No.'); return message([{ type: 'text', text: 'No.' }], 'end_turn') as never; }
+    return message([{ type: 'tool_use', id: 'tu_members', name: 'admin_list_members', input: {} }], 'tool_use') as never;
+  };
+}
+
+describe('the admin agent (agents.md §1.4)', () => {
+  const CARL = { id: 'acct-carl', principalId: 'u-carl', organizationId: 'org-1', state: 'active', role: 'member', address: null, displayName: 'Carl', agentMode: 'shared', agentRuntime: 'hosted', agentRole: 'admin' } as unknown as AccountDTO;
+  const CARL_DOCS: DocsCaller = { userId: 'u-carl', email: '', token: '', ip: '', accountId: 'acct-carl', channelIds: [] };
+  const asked = (by: string | null) => ({ user: { id: 'u-carl', isAgent: true }, token: 'admin-token', authKind: 'agent', ip: '', organizationId: 'org-1', account: CARL, ...(by ? { invokedBy: by } : {}) }) as never;
+
+  it('runs a panel turn with the admin tools, calling the routes with the asking admin\'s token, via the agent', async () => {
+    const seen: string[][] = [];
+    const a = assistant('acct-carl');
+    await a.adopt(CARL, 'Carl', 'admin');
+    a.script = scriptedAdmin(seen);
+    const ev = await events(await a.handle(req('POST', '/api/agent/turn', { message: 'Who is here?', context: { page: 'home' }, workspace: 'org-1' }), asked('acct-scott'), CARL_DOCS, 'Carl', { conversationUser: 'u-scott' }));
+    expect(ev.map((e) => e.type)).toEqual(['tool_start', 'tool_end', 'text', 'done']);
+    expect((ev[2] as { text: string }).text).toContain('Bob');
+    expect(seen[0]).toContain('admin_remove_member');
+    expect(a.workerCalls).toEqual([{ method: 'GET', path: '/v1/workspaces/org-1/members?all=1', auth: 'Bearer admin-token', via: 'u-carl' }]);
+  });
+
+  it('offers no admin tools to another agent, or when the browser claims them', async () => {
+    const seen: string[][] = [];
+    const a = assistant('acct-carl');
+    await a.adopt({ ...CARL, agentRole: undefined } as never, 'Omni');
+    a.script = scriptedAdmin(seen);
+    await events(await a.handle(req('POST', '/api/agent/turn', { message: 'Who is here?', context: { page: 'home', admin: true }, workspace: 'org-1' }), asked('acct-scott'), CARL_DOCS, 'Omni', { conversationUser: 'u-scott' }));
+    expect(seen[0]!.some((n) => n.startsWith('admin_'))).toBe(false);
+    expect(a.workerCalls).toEqual([]);
+  });
+
+  it('offers none in a turn no person asked for', async () => {
+    const seen: string[][] = [];
+    const a = assistant('acct-carl');
+    await a.adopt(CARL, 'Carl', 'admin');
+    a.script = scriptedAdmin(seen);
+    await events(await a.handle(req('POST', '/api/agent/turn', { message: 'Who is here?', context: { page: 'home' }, workspace: 'org-1' }), asked(null), CARL_DOCS, 'Carl', { conversationUser: 'u-scott' }));
+    expect(seen[0]!.some((n) => n.startsWith('admin_'))).toBe(false);
+  });
+});
 
 describe('the Assistant object', () => {
   it('runs a turn whose server tool reaches the Docs object over HTTP, through the registry, as the person', async () => {

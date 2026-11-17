@@ -73,6 +73,11 @@ export type AgentContext = (
  */
 export interface BrowserReach {
   browser?: boolean;
+  /**
+   * The hosted suite only: the turn is the organization's admin agent's, asked by an owner or admin (agents.md §1.4), so
+   * it is offered the admin tools. Set by the server for that agent alone; a value a browser sends is dropped.
+   */
+  admin?: boolean;
 }
 
 /** The web tools the FreeFlow browser extension runs, in the agent's own tabs (prototype). */

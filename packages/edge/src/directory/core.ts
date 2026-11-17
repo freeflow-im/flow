@@ -5,7 +5,7 @@ import { ApiError, badRequest, conflict, forbidden, notFound, unauthorized } fro
 import { hashPassword, verifyPassword } from './passwords';
 import { DIRECTORY_MIGRATIONS } from './schema';
 import { newId } from './ids';
-import { assistantOf, createPersonalAgent, ensureAssistant, personalAgentFor, personalRuntimeKey, revokePersonalAgent, setAgentRuntime, sponsoredAgentsOf, usableAgentsOf } from './agents';
+import { adminAgentOf, assistantOf, createPersonalAgent, ensureAssistant, personalAgentFor, personalRuntimeKey, revokePersonalAgent, setAgentRuntime, sponsoredAgentsOf, usableAgentsOf } from './agents';
 import { PLATFORM_DOMAIN, localPart, organizationDomain, uniqueAddress } from './addresses';
 import { checkDomain, checkRecords, dohResolver, normalizeDomain, recordsFor, type Resolve } from './dns';
 import { DEFAULT_DOMAIN_LIMITS, ProviderError, noneMailProvider, type DkimRecord, type MailProvider } from '../mailprovider/index';
@@ -198,6 +198,28 @@ export class DirectoryCore {
     return usableAgentsOf(this.sql, userId, organizationId);
   }
 
+  /** The organization's admin agent (agents.md §1.4): its principal id, or null when there is none yet. */
+  adminAgentOf(organizationId: string): string | null {
+    return adminAgentOf(this.sql, organizationId);
+  }
+
+  /**
+   * Makes a hosted shared agent the organization's admin agent (agents.md §1.4): its loop is hosted and its role `admin`,
+   * so only owners and admins see it. Called once, by the Org object that made it.
+   */
+  markAdminAgent(agentId: string, organizationId: string): void {
+    const u = this.userById(agentId);
+    if (!u?.is_agent || u.organization_id !== organizationId || u.mode !== 'shared') throw notFound('agent not found');
+    this.sql.exec("UPDATE users SET runtime = 'hosted', agent_role = 'admin' WHERE id = ?", agentId);
+    // It works in the panel only, so it has no address and no mailbox: the address its join gave it is let go before any
+    // mailbox is made (provisioning skips an account with no address), and the account is active at once.
+    const row = this.rows('SELECT id, address, hosted_at FROM accounts WHERE user_id = ? AND organization_id = ?', agentId, organizationId)[0];
+    if (row?.address && row.hosted_at == null) {
+      this.sql.exec('DELETE FROM addresses WHERE account_id = ?', row.id);
+      this.sql.exec("UPDATE accounts SET address = NULL, state = CASE WHEN state IN ('requested', 'mailbox_ready', 'calendars_ready') THEN 'active' ELSE state END WHERE id = ?", row.id);
+    }
+  }
+
   /**
    * A hosted agent in an organization, as the Worker acts as it (agents.md §6): its principal and its account there; null
    * for anything else (an external agent, a person, a removed account). The caller must be one who may use it (usableAgents).
@@ -234,6 +256,7 @@ export class DirectoryCore {
       sponsorId,
       sponsorAccountId: sponsorAccount?.id ?? null,
       agentName: u.display_name as string,
+      ...(u.agent_role === 'admin' ? { role: 'admin' as const } : {}),
     };
   }
 
@@ -625,7 +648,7 @@ export class DirectoryCore {
 
   private accountRow(where: string, ...args: unknown[]): AccountDTO[] {
     // An agent's mode rides along (agents.md §2) by subquery: a join would make `organization_id` ambiguous in `where`.
-    return this.rows(`SELECT *, (SELECT u.mode FROM users u WHERE u.id = accounts.user_id AND u.is_agent = 1) AS agent_mode, (SELECT u.runtime FROM users u WHERE u.id = accounts.user_id AND u.is_agent = 1) AS agent_runtime FROM accounts WHERE ${where} ORDER BY created_at, id`, ...args).map((a) => ({
+    return this.rows(`SELECT *, (SELECT u.mode FROM users u WHERE u.id = accounts.user_id AND u.is_agent = 1) AS agent_mode, (SELECT u.runtime FROM users u WHERE u.id = accounts.user_id AND u.is_agent = 1) AS agent_runtime, (SELECT u.agent_role FROM users u WHERE u.id = accounts.user_id AND u.is_agent = 1) AS agent_role FROM accounts WHERE ${where} ORDER BY created_at, id`, ...args).map((a) => ({
       id: a.id as string,
       principalId: a.user_id as string,
       organizationId: a.organization_id as string,
@@ -638,6 +661,7 @@ export class DirectoryCore {
       hosted: a.hosted_at != null,
       linkedAddress: (a.linked_address as string | null) ?? null,
       ...(a.sponsor_user_id || a.agent_mode ? { sponsorId: (a.sponsor_user_id as string | null) ?? null, agentMode: (a.agent_mode as AgentMode | null) ?? null, agentRuntime: a.agent_mode ? ((a.agent_runtime as AgentRuntime | null) ?? 'external') : null } : {}),
+      ...(a.agent_role === 'admin' ? { agentRole: 'admin' as const } : {}),
       createdAt: iso(a.created_at),
     }));
   }

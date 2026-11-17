@@ -55,7 +55,10 @@ async function hostedAgent(c: C, organizationId: string, userId: string, me: Acc
     if (account.sponsorId !== me.principalId) throw notFound('no such hosted agent here');
     return { account, mayEdit: true };
   }
-  const mayEdit = me.role === 'owner' || me.role === 'admin' || account.sponsorId === me.principalId;
+  const admin = me.role === 'owner' || me.role === 'admin';
+  // The admin agent (agents.md §1.4) is for owners and admins alone: to anyone else it is not there.
+  if (!admin && (await directory(c, 'adminAgentOf', organizationId)) === userId) throw notFound('no such hosted agent here');
+  const mayEdit = admin || account.sponsorId === me.principalId;
   return { account, mayEdit };
 }
 

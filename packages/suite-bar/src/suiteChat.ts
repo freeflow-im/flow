@@ -43,8 +43,11 @@ const zone = () => {
 const withOrg = (path: string, org: string | null) => (org ? `${path}${path.includes('?') ? '&' : '?'}workspace=${encodeURIComponent(org)}` : path);
 const errorOf = async (res: Response) => ((await res.json().catch(() => ({}))) as { error?: string }).error ?? `Request failed (${res.status})`;
 
-/** The chat: its transcript, a turn running, and send, stop and new chat. `org` is the organization the bar selected. */
-export function useSuiteAssistant(org: string | null) {
+/**
+ * The chat: its transcript, a turn running, and send, stop and new chat. `org` is the organization the bar selected;
+ * `agent` the agent talked to (an id from GET /api/agent/agents), or null for the person's own assistant.
+ */
+export function useSuiteAssistant(org: string | null, agent: string | null = null) {
   const [items, setItems] = useState<ChatItem[]>([]);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -57,7 +60,7 @@ export function useSuiteAssistant(org: string | null) {
     setItems([]);
     setError(null);
     let live = true;
-    fetch(withOrg(`/api/agent?scope=${HOME_CHAT}`, org), { credentials: 'same-origin' })
+    fetch(withOrg(`/api/agent?scope=${HOME_CHAT}${agent ? `&agent=${encodeURIComponent(agent)}` : ''}`, org), { credentials: 'same-origin' })
       .then((r) => (r.ok ? (r.json() as Promise<{ items: (ChatItem & { kind: string })[] }>) : null))
       .then((r) => {
         const kept = (r?.items ?? []).filter((i): i is ChatItem => i.kind === 'user' || i.kind === 'assistant' || i.kind === 'tool');
@@ -65,7 +68,7 @@ export function useSuiteAssistant(org: string | null) {
       })
       .catch(() => undefined);
     return () => { live = false; };
-  }, [org, loads]);
+  }, [org, agent, loads]);
 
   const send = useCallback((text: string) => {
     const message = text.trim();
@@ -81,7 +84,8 @@ export function useSuiteAssistant(org: string | null) {
     });
     const setTool = (id: string, status: 'ok' | 'error', err?: string) => setItems((prev) => prev.map((i) => (i.kind === 'tool' && i.id === id ? { ...i, status, ...(err ? { error: err } : {}) } : i)));
     void (async () => {
-      let body: Record<string, unknown> = { message, context: { page: 'home' }, scope: HOME_CHAT, ...(org ? { workspace: org } : {}) };
+      const whose = { ...(org ? { workspace: org } : {}), ...(agent ? { agent } : {}) };
+      let body: Record<string, unknown> = { message, context: { page: 'home' }, scope: HOME_CHAT, ...whose };
       try {
         for (;;) {
           const res = await fetch(withOrg('/api/agent/turn', org), { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Timezone': zone() }, body: JSON.stringify(body), signal: abort.signal });
@@ -106,7 +110,7 @@ export function useSuiteAssistant(org: string | null) {
           // A browser tool acts on an app's open page, which this one is not: the model is told so, and goes on.
           const pending: { id: string; name: string }[] = calls;
           setItems((prev) => [...prev, ...pending.map((c): ChatItem => ({ kind: 'tool', id: c.id, name: c.name, status: 'error', error: 'Works in its own app' }))]);
-          body = { context: { page: 'home' }, scope: HOME_CHAT, ...(org ? { workspace: org } : {}), toolResults: pending.map((c) => ({ id: c.id, isError: true, content: `${c.name} works only on its app's open page (Docs, Mail or Calendar), not here. Tell the person to open that app and ask there, or use a server tool.` })) };
+          body = { context: { page: 'home' }, scope: HOME_CHAT, ...whose, toolResults: pending.map((c) => ({ id: c.id, isError: true, content: `${c.name} works only on its app's open page (Docs, Mail or Calendar), not here. Tell the person to open that app and ask there, or use a server tool.` })) };
         }
       } catch (e) {
         if (!abort.signal.aborted) setError(e instanceof Error ? e.message : String(e));
@@ -118,14 +122,14 @@ export function useSuiteAssistant(org: string | null) {
         }
       }
     })();
-  }, [org]);
+  }, [org, agent]);
 
   const stop = useCallback(() => abortRef.current?.abort(), []);
   const reset = useCallback(async () => {
     if (abortRef.current) return;
-    const res = await fetch(withOrg('/api/agent/reset', org), { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope: HOME_CHAT }) }).catch(() => null);
+    const res = await fetch(withOrg('/api/agent/reset', org), { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope: HOME_CHAT, ...(agent ? { agent } : {}) }) }).catch(() => null);
     if (res?.ok) { setItems([]); setError(null); } else setError(res ? await errorOf(res) : 'The server could not be reached.');
-  }, [org]);
+  }, [org, agent]);
 
   return { items, running, error, send, stop, reset, reload };
 }

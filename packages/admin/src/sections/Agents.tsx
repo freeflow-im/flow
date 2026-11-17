@@ -21,6 +21,8 @@ export function Agents({ org }: { org: WorkspaceDTO }) {
   const agents = all.filter((m) => m.isAgent && m.kind !== 'personal_agent');
   const accounts = useQuery({ queryKey: ['accounts', org.id], queryFn: () => adminApi.accounts(org.id) });
   const hostedOf = (userId: string) => (accounts.data ?? []).find((a) => a.principalId === userId)?.agentRuntime === 'hosted';
+  // The admin agent (agents.md §1.4) comes with the organization: it can be renamed and instructed, never removed.
+  const isAdminAgent = (userId: string) => (accounts.data ?? []).find((a) => a.principalId === userId)?.agentRole === 'admin';
   const nameOf = (userId: string | null) => all.find((m) => m.userId === userId)?.displayName ?? 'unknown';
   const [confirming, setConfirming] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -48,12 +50,14 @@ export function Agents({ org }: { org: WorkspaceDTO }) {
             {agents.map((a: WorkspaceMemberDTO) => (
               <li key={a.userId} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-sm" data-testid={`agent-${a.displayName}`}>
                 <span className="font-medium">{a.displayName} 🤖</span>
-                <span className="text-xs text-muted">sponsored by {nameOf(a.sponsorId)}{hostedOf(a.userId) ? ' · hosted here' : ''}</span>
+                <span className="text-xs text-muted">
+                  {isAdminAgent(a.userId) ? 'admin agent · only owners and admins can use it, from the panel' : <>sponsored by {nameOf(a.sponsorId)}{hostedOf(a.userId) ? ' · hosted here' : ''}</>}
+                </span>
                 {a.statusText && <span className="truncate text-xs text-muted">{a.statusText}</span>}
                 <span className="flex-1" />
                 {hostedOf(a.userId) && <HostedDefinition org={org} userId={a.userId} name={a.displayName} />}
                 {hostedOf(a.userId) && <AgentMemory org={org} userId={a.userId} name={a.displayName} />}
-                {confirming === a.userId ? (
+                {isAdminAgent(a.userId) ? null : confirming === a.userId ? (
                   <Confirm question={`Remove ${a.displayName}? Its credentials are revoked; history stays.`} busy={remove.isPending} onYes={() => remove.mutate(a.userId)} onNo={() => setConfirming(null)} testid={`agent-remove-confirm-${a.displayName}`} />
                 ) : (
                   <Button kind="link" disabled={remove.isPending} onClick={() => setConfirming(a.userId)} testid={`agent-remove-${a.displayName}`}>

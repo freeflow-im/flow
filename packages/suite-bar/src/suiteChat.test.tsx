@@ -7,12 +7,16 @@ import { SuiteAssistant } from './AssistantChat';
 
 const sse = (...events: unknown[]) => new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(''))); c.close(); } }), { status: 200 });
 let turns: Record<string, unknown>[];
+/** The agents GET /api/agent/agents lists (the person's assistant alone, unless a test adds more). */
+let usable: Record<string, unknown>[];
+const ADA = { id: 'ada', accountId: 'a', displayName: 'Ada', avatarUrl: '/agent-avatars/mint.svg', mode: 'personal', self: true };
 beforeEach(() => {
   turns = [];
+  usable = [ADA];
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = typeof input === 'string' ? input : input instanceof URL ? input.pathname + input.search : input.url;
     const json = (v: unknown) => new Response(JSON.stringify(v), { status: 200, headers: { 'content-type': 'application/json' } });
-    if (path.startsWith('/api/agent/agents')) return json({ agents: [{ id: 'ada', accountId: 'a', displayName: 'Ada', avatarUrl: '/agent-avatars/mint.svg', mode: 'personal', self: true }] });
+    if (path.startsWith('/api/agent/agents')) return json({ agents: usable });
     if (path.startsWith('/api/agent?')) return json({ items: [] });
     if (path.endsWith('/assistant-prompts')) return json({ prompts: { home: ['Plan my day'] } });
     if (path.startsWith('/api/agent/turn')) {
@@ -30,6 +34,31 @@ afterEach(() => {
 });
 
 describe('the suite assistant chat', () => {
+  it('starts with the admin agent where Admin prefers it, and the picker switches to any other agent (agents.md §1.4)', async () => {
+    usable = [ADA, { id: 'carl', accountId: 'c', displayName: 'Carl', avatarUrl: null, mode: 'shared', self: false, role: 'admin' }];
+    render(<SuiteAssistant organizationId="o1" page="admin" prefer="admin" />);
+    await waitFor(() => expect(screen.getByText('Carl')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /Open Assistant/ }));
+    const picker = (await screen.findByTestId('suite-assistant-picker')) as HTMLSelectElement;
+    expect(picker.value).toBe('carl');
+    fireEvent.change(await screen.findByTestId('suite-assistant-input'), { target: { value: 'who is here?' } });
+    await act(async () => { fireEvent.click(screen.getByTestId('suite-assistant-send')); });
+    await screen.findByText('two');
+    // Both requests of the turn (the message, then the browser tool's answer) go to Carl.
+    expect(turns.map((t) => t.agent)).toEqual(['carl', 'carl']);
+    expect(turns[0]).toMatchObject({ workspace: 'o1' });
+    await waitFor(() => expect(picker.disabled).toBe(false));
+    fireEvent.change(picker, { target: { value: 'ada' } });
+    expect(picker.value).toBe('ada');
+  });
+
+  it('starts with the person\'s own assistant when they cannot use the admin agent', async () => {
+    render(<SuiteAssistant organizationId="o1" page="admin" prefer="admin" />);
+    await waitFor(() => expect(screen.getByText('Ada')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: /Open Assistant/ }));
+    expect(screen.queryByTestId('suite-assistant-picker')).toBeNull();
+  });
+
   it('reads the stream event by event, keeping a part event for the next chunk', () => {
     const { events, rest } = parseEvents('data: {"type":"text","text":"a"}\n\ndata: {"type":"do');
     expect(events).toEqual([{ type: 'text', text: 'a' }]);
