@@ -53,6 +53,8 @@ export function logEntryFor(sql: Sql, subject: string, event: Event): PublishInp
     if (chan?.is_private) audience = `channel:${event.channelId}`;
   }
   const user = actingUser(event.data);
+  // A visitor's act (docs/specs/chat-visitors.md V5) is marked, so no subscription wakes an agent or posts on it.
+  const byVisitor = !!user && sql.exec('SELECT 1 AS x FROM users WHERE id = ? AND is_visitor = 1', user).toArray().length > 0;
   return {
     type: `chat.${event.type}`,
     organizationId: event.workspaceId,
@@ -60,6 +62,6 @@ export function logEntryFor(sql: Sql, subject: string, event: Event): PublishInp
     ...(event.channelId ? { channelId: event.channelId } : {}),
     audience,
     ts: event.ts,
-    data: event.data,
+    data: byVisitor && event.data && typeof event.data === 'object' ? { ...(event.data as object), visitor: true } : event.data,
   };
 }

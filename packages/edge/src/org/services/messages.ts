@@ -3,7 +3,7 @@ import { HUDDLE_SYSTEM_KINDS } from '@flow/shared';
 import type { FileDTO, MessageDTO, MessagePage, ReactionAggDTO, SystemMessageKind, UnfurlDTO } from '@flow/shared';
 import { db, schema } from '../db/index.js';
 import { newId } from '../lib/ids.js';
-import { badRequest, forbidden, notFound } from '../lib/errors.js';
+import { badRequest, conflict, forbidden, notFound } from '../lib/errors.js';
 import { decryptBody, encryptBody } from '../crypto/index.js';
 import { requireChannelAccess } from './channels.js';
 import { reactionsForMessages } from './reactions.js';
@@ -192,7 +192,11 @@ export async function sendMessage(
     .from(messages)
     .where(and(eq(messages.channelId, channelId), eq(messages.clientMsgId, clientMsgId)))
     .limit(1);
-  if (existing[0]) return (await hydrate([existing[0]]))[0]!;
+  if (existing[0]) {
+    // Only the author's own retry gets the row back: an id someone else used must not hand over their message.
+    if (existing[0].userId !== userId) throw conflict('client_msg_id_taken', 'that clientMsgId is already used');
+    return (await hydrate([existing[0]]))[0]!;
+  }
 
   if (threadRootId) {
     const roots = await db.select().from(messages).where(eq(messages.id, threadRootId)).limit(1);
@@ -275,6 +279,7 @@ export async function sendMessage(
       .from(messages)
       .where(and(eq(messages.channelId, channelId), eq(messages.clientMsgId, clientMsgId)))
       .limit(1);
+    if (winner[0]!.userId !== userId) throw conflict('client_msg_id_taken', 'that clientMsgId is already used');
     return (await hydrate([winner[0]!]))[0]!;
   }
 

@@ -671,6 +671,8 @@ export async function archiveChannel(channelId: string, actorId: string): Promis
   // An archived channel leaves the sidebar, so its unread rows would count in
   // Activity forever with no visit to clear them — retire them for everyone.
   await clearChannelNotificationsForAll(updated[0]!);
+  // Visitors (docs/specs/chat-visitors.md) lose an archived channel; unarchiving does not bring them back.
+  await (await import('./visitors.js')).removeChannelVisitors(channelId);
   publishEvent(subjectMeta(chan.workspaceId), {
     type: 'channel.archived',
     workspaceId: chan.workspaceId,

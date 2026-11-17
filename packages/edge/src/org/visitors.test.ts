@@ -9,7 +9,9 @@ import { orgStorage } from '../../test/orgStorage';
 import { Org } from './object';
 import { withDb, schema, type DB } from './db/index';
 import { createWorkspace, updateWorkspace } from './services/workspaces';
-import { createChannel, createDm, joinChannel } from './services/channels';
+import { archiveChannel, createChannel, createDm, joinChannel } from './services/channels';
+import { logEntryFor } from './eventLog';
+import { EventsCore } from '../events/core';
 import { sendMessage } from './services/messages';
 import { sweepIdleVisitors, visitorBySession, visitorMayReceive, VISITOR_IDLE_MS } from './services/visitors';
 import { _resetRateLimitsForTests } from './lib/rateLimit';
@@ -593,5 +595,51 @@ describe('the Worker routes a visitor', () => {
     expect(lookups).toEqual([['organizationKnown', [org1]]]);
     await orgRoutes.request('https://app.example/v1/visitor/ws', { headers: { cookie: `vsid=${org1}.secret`, upgrade: 'websocket' } }, e.env as never);
     expect(e.fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('review fixes', () => {
+  it("event-log entries for a visitor's acts are marked, and no subscription action runs on them (V5)", async () => {
+    const link = await makeLink();
+    const v = await join(link.token);
+    const sql = { exec: (q: string, ...args: unknown[]) => { const st = sqlite.prepare(q); return { toArray: () => st.all(...(args as never[])) as Record<string, unknown>[] }; } };
+    const ts = new Date().toISOString();
+    const byVisitor = logEntryFor(sql as never, `ws.${workspaceId}.chan.${lobby}.msg`, { type: 'reaction.added', workspaceId, channelId: lobby, ts, data: { userId: v.userId, messageId: 'm', emoji: 'x' } } as never)!;
+    expect((byVisitor.data as { visitor?: boolean }).visitor).toBe(true);
+    const byMember = logEntryFor(sql as never, `ws.${workspaceId}.chan.${lobby}.msg`, { type: 'reaction.added', workspaceId, channelId: lobby, ts, data: { userId: BEN, messageId: 'm', emoji: 'x' } } as never)!;
+    expect((byMember.data as { visitor?: boolean }).visitor).toBeUndefined();
+    const sub = { consumer: 'acct-bot', action: { kind: 'wake', prompt: '{{data}}' } } as never;
+    const decide = (data: unknown) => EventsCore.prototype.decide.call({} as never, sub, { actor: null, depth: 0, data } as never);
+    expect(decide(byVisitor.data)).toEqual({ kind: 'skip', why: 'visitor' });
+    expect(decide(byMember.data)).toEqual({ kind: 'wake' });
+  });
+
+  it("a visitor cannot get someone else's message back by reusing its clientMsgId", async () => {
+    const link = await makeLink();
+    const v = await join(link.token);
+    const clientMsgId = crypto.randomUUID();
+    await withDb(db, () => sendMessage(lobby, BEN, clientMsgId, 'members only, from later'));
+    const res = await call('POST', '/v1/visitor/messages', { cookie: v.cookie, body: { clientMsgId, body: 'hi' } });
+    expect(res.status).toBe(409);
+    expect(JSON.stringify(await res.json())).not.toContain('members only');
+  });
+
+  it('archiving the channel ends its visits', async () => {
+    const link = await makeLink();
+    const v = await join(link.token);
+    await withDb(db, () => archiveChannel(lobby, ANN));
+    expect((await call('GET', '/v1/visitor/me', { cookie: v.cookie })).status).toBe(401);
+    expect(await json(await call('GET', `/v1/channels/${lobby}/visitors`, { as: ANN }))).toEqual({ visitors: [] });
+  });
+
+  it('with no TURNSTILE_SECRET, production (https) refuses joining rather than skipping the check', async () => {
+    const link = await makeLink();
+    const prev = process.env.FLOW_WEB_URL;
+    process.env.FLOW_WEB_URL = 'https://app.example.test';
+    try {
+      expect((await call('POST', `/v1/visit/${link.token}`, { body: { name: 'Vic' } })).status).toBe(503);
+    } finally {
+      if (prev === undefined) delete process.env.FLOW_WEB_URL; else process.env.FLOW_WEB_URL = prev;
+    }
   });
 });

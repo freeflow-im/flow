@@ -80,7 +80,7 @@ export type JobCheck =
   | { kind: 'later'; delayS: number }
   | { kind: 'parked'; job: AgentJobDTO };
 /** What a matched action subscription should do with one event (`act`): file a job, post, or nothing (and why). */
-export type ActionDecision = { kind: 'wake' | 'post' } | { kind: 'skip'; why: 'self' | 'depth' };
+export type ActionDecision = { kind: 'wake' | 'post' } | { kind: 'skip'; why: 'self' | 'depth' | 'visitor' };
 /** A subscription's read: `gap` when events after its cursor aged out of the window before it read them. */
 export interface SubscriptionRead { events: PlatformEvent[]; next: number; gap?: { from: number; to: number } }
 
@@ -331,6 +331,8 @@ export class EventsCore {
   decide(sub: SubscriptionDTO, e: PlatformEvent): ActionDecision {
     if (!sub.action) return { kind: 'skip', why: 'self' };
     if ((e.depth ?? 0) >= MAX_EVENT_DEPTH) return { kind: 'skip', why: 'depth' };
+    // A Chat visitor's act never drives an agent (docs/specs/chat-visitors.md V5; org/eventLog.ts marks it).
+    if ((e.data as { visitor?: unknown } | null)?.visitor === true) return { kind: 'skip', why: 'visitor' };
     if (e.actor && e.actor === sub.consumer && !sub.action.includeSelf) return { kind: 'skip', why: 'self' };
     return { kind: sub.action.kind };
   }

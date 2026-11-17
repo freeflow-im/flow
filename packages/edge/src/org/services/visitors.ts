@@ -153,6 +153,11 @@ export async function removeChannelVisitor(channelId: string, actorId: string, v
  * Ends the visits `where` names: the row marked removed (the users row stays, so old messages keep their name), the
  * session deleted, the socket closed. Returns how many ended.
  */
+/** Archiving a channel ends its visits (a live socket would otherwise keep receiving its events). */
+export async function removeChannelVisitors(channelId: string): Promise<number> {
+  return removeVisitorsWhere(eq(channelVisitors.channelId, channelId));
+}
+
 async function removeVisitorsWhere(where: SQL): Promise<number> {
   const rows = await db.select({ userId: channelVisitors.userId }).from(channelVisitors).where(and(where, isNull(channelVisitors.removedAt)));
   if (!rows.length) return 0;
@@ -211,7 +216,11 @@ export async function previewVisitorLink(token: string): Promise<VisitorPreviewD
  */
 export async function verifyTurnstile(response: unknown, ip: string): Promise<void> {
   const secret = config.turnstileSecret;
-  if (!secret) return;
+  if (!secret) {
+    // Production (https) never runs without the check: refuse rather than let anyone in unchecked.
+    if (config.secureCookies) throw new ApiError(503, 'turnstile_unavailable', 'Joining is not available right now.');
+    return;
+  }
   if (typeof response !== 'string' || !response) throw badRequest('turnstile_required', 'complete the check first');
   const form = new URLSearchParams({ secret, response });
   if (ip) form.set('remoteip', ip);
