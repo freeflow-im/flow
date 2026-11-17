@@ -1,9 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { authPasses, cleanAllowlist, senderAllowed } from './allowlist';
+import { authPasses, cleanAllowlist, screenReason, senderAllowed, stripComments } from './allowlist';
 
 const allowed = new Set(['scott@locked-in.freeflow.im', 'scott@gmail.com']);
 
 describe('the assistant’s sender allowlist', () => {
+  it('reads a verdict whose comment holds a semicolon, and says why it refuses', () => {
+    const commented = ['sunfire.mxrouting.net; dkim=pass (2048-bit key; unprotected) header.d=gmail.com header.i=@gmail.com header.b=AbC; spf=pass (sunfire.mxrouting.net: domain of scott@gmail.com designates 1.2.3.4 as permitted sender) smtp.mailfrom=scott@gmail.com'];
+    expect(stripComments('a (b; (c)) d')).toBe('a  d');
+    expect(authPasses('scott@gmail.com', ['x; dkim=pass (2048-bit key; unprotected) header.d=gmail.com'])).toBe(true);
+    expect(screenReason('scott@gmail.com', commented, allowed)).toBe('ok');
+    expect(screenReason('scott@gmail.com', [], allowed)).toBe('unauthenticated');
+    expect(screenReason('bob@gmail.com', commented, allowed)).toBe('not_on_list');
+  });
+
   it('takes an allowlisted sender only when the receiving server vouches for the From domain', () => {
     const dmarc = ['mx.mxrouting.net; dkim=pass header.d=gmail.com header.s=20230601; spf=pass smtp.mailfrom=scott@gmail.com; dmarc=pass (p=NONE) header.from=gmail.com'];
     expect(senderAllowed('Scott@Gmail.com', dmarc, allowed)).toBe(true);

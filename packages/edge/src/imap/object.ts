@@ -1619,7 +1619,7 @@ export class Mail extends DurableObject<MailEnv> {
   private async screenForAssistant(r: AccountRow, c: ImapFlow, folder: string, summaries: MessageSummary[]): Promise<MessageSummary[]> {
     const policy = await this.assistantPolicy();
     if (!policy) return summaries;
-    const { senderAllowed } = await import('./allowlist');
+    const { screenReason } = await import('./allowlist');
     const trustFrom = this.env.MAIL_ALLOW_INSECURE === '1';
     const keep: MessageSummary[] = [], refuse: number[] = [];
     for (const m of summaries) {
@@ -1627,8 +1627,18 @@ export class Mail extends DurableObject<MailEnv> {
       const raw = head && head.headers ? head.headers.toString('utf8') : '';
       const auth = [...raw.matchAll(/^authentication-results:([\s\S]*?)(?=^\S|$(?![\s\S]))/gim)].map((x) => x[1]!.replace(/\r?\n\s+/g, ' '));
       const from = m.from?.address ?? null;
-      if (senderAllowed(from, auth, policy.allowed, trustFrom)) keep.push(m);
-      else refuse.push(m.uid);
+      const reason = screenReason(from, auth, policy.allowed, trustFrom);
+      if (reason === 'ok') { keep.push(m); continue; }
+      refuse.push(m.uid);
+      // Why, for whoever reads the logs: an allowlisted sender refused means the receiving server's verdict was missing or
+      // not understood, so its authentication headers are logged as they came (header lines only, never the body).
+      if (reason === 'unauthenticated') {
+        const all = await c.fetchOne(String(m.uid), { uid: true, headers: true }, { uid: true }).catch(() => null);
+        const lines = (all && all.headers ? all.headers.toString('utf8') : '').replace(/\r?\n[ \t]+/g, ' ').split(/\r?\n/)
+          .filter((l) => /^(authentication-results|arc-authentication-results|received-spf|dkim-signature|x-spam[\w-]*|x-[\w-]*(auth|spf|dkim|dmarc)[\w-]*):/i.test(l))
+          .map((l) => l.replace(/\b(b|bh)=[A-Za-z0-9+/=\s]{20,}/g, '$1=…').slice(0, 400));
+        console.log(`[mail] assistant ${policy.agentId}: refused uid ${m.uid} from ${from} (allowlisted, unauthenticated); auth headers: ${lines.length ? lines.join(' || ') : 'none'}`);
+      } else console.log(`[mail] assistant ${policy.agentId}: refused uid ${m.uid} (sender not on the allowlist)`);
     }
     if (refuse.length) {
       await c.mailboxCreate(REFUSED_FOLDER).catch(() => undefined);
