@@ -8,12 +8,25 @@ const domainOf = (address: string) => address.slice(address.lastIndexOf('@') + 1
 /** `sub` is `parent` or under it (alignment, relaxed as DMARC's default is). */
 const aligned = (sub: string, parent: string) => sub === parent || sub.endsWith(`.${parent}`) || parent.endsWith(`.${sub}`);
 
+/** A header value without its `( … )` comments (RFC 5322 CFWS, nested), which may hold a `;` of their own. */
+export function stripComments(value: string): string {
+  let out = '', depth = 0;
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i]!;
+    if (ch === '\\' && depth > 0) { i++; continue; }
+    if (ch === '(') { depth++; continue; }
+    if (ch === ')' && depth > 0) { depth--; continue; }
+    if (depth === 0) out += ch;
+  }
+  return out;
+}
+
 /** Whether the Authentication-Results headers vouch for `from`'s domain. */
 export function authPasses(from: string, authResults: string[]): boolean {
   const fromDomain = domainOf(from);
   if (!fromDomain) return false;
   for (const header of authResults) {
-    for (const clause of header.split(';').map((c) => c.trim().toLowerCase())) {
+    for (const clause of stripComments(header).split(';').map((c) => c.trim().toLowerCase())) {
       const m = /^(dmarc|dkim|spf)\s*=\s*(\w+)(.*)$/.exec(clause);
       if (!m || m[2] !== 'pass') continue;
       const rest = m[3]!;
@@ -37,9 +50,14 @@ export function authPasses(from: string, authResults: string[]): boolean {
  * authentication check, for local development against a test server that adds no Authentication-Results.
  */
 export function senderAllowed(from: string | null | undefined, authResults: string[], allowed: Set<string>, trustFrom = false): boolean {
+  return screenReason(from, authResults, allowed, trustFrom) === 'ok';
+}
+
+/** Why a message is taken or refused: `ok`, its sender is `not_on_list`, or the receiving server did not vouch for it (`unauthenticated`). */
+export function screenReason(from: string | null | undefined, authResults: string[], allowed: Set<string>, trustFrom = false): 'ok' | 'not_on_list' | 'unauthenticated' {
   const address = (from ?? '').trim().toLowerCase();
-  if (!address || !allowed.has(address)) return false;
-  return trustFrom || authPasses(address, authResults);
+  if (!address || !allowed.has(address)) return 'not_on_list';
+  return trustFrom || authPasses(address, authResults) ? 'ok' : 'unauthenticated';
 }
 
 /** An allowlist as the sponsor typed it: addresses, trimmed, lower-cased, deduplicated, invalid ones dropped. */
