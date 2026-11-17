@@ -117,6 +117,10 @@ const vars = {
   MAIL_ALLOW_INSECURE: '1',
   CALENDAR_ALLOW_INSECURE: '1',
   FLOW_UNFURL_ALLOW_HOSTS: 'localhost',
+  // Hosted user apps' screens (src/apps/screen.ts): <app>--<org>.flowtoo.localhost:<port>, which browsers send to this
+  // machine with no DNS. Never production's flowtoo.org.
+  APPS_DOMAIN: `flowtoo.localhost:${new URL(origin).port}`,
+  APPS_SCHEME: 'http',
 };
 const flags = Object.entries(vars).flatMap(([k, v]) => ['--var', `${k}:${v}`]);
 for (const v of values('var')) flags.push('--var', v);
