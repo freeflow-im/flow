@@ -1773,6 +1773,39 @@ textarea {
   font-weight: 500;
   flex: 1;
 }
+/* The agent picker (several agents): drawn as the title, with a small chevron, not as a form control. */
+select.agent-pick {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  margin-right: auto;
+  padding: 2px 20px 2px 4px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%235f6368' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 6px center;
+  appearance: none;
+  -webkit-appearance: none;
+  /* As wide as the chosen agent's name, not the longest one in the list (where the browser supports it). */
+  field-sizing: content;
+  font: inherit;
+  font-weight: 500;
+  color: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+}
+select.agent-pick:hover:not(:disabled) {
+  background-color: #f1f3f4;
+}
+select.agent-pick:focus-visible {
+  outline: none;
+  border-color: var(--blue);
+}
+select.agent-pick:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
 .agent-new {
   font-size: 13px;
   white-space: nowrap;
@@ -2058,6 +2091,10 @@ button.agent-tool-label:hover {
   margin-left: auto;
   font-size: 13px;
   white-space: nowrap;
+  text-decoration: none;
+}
+.agent-changes:hover {
+  text-decoration: underline;
 }
 .agent-changes + .agent-new {
   margin-left: 0;
