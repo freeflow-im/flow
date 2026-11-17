@@ -67,6 +67,9 @@ The bar at the bottom has **Mute**, **Camera**, **Share screen**, **People**,
 **Chat** and **Leave**. **Copy link** at the top copies the meeting's link.
 Nothing is recorded.
 
+After you leave, the tab closes itself after 30 seconds, so meeting tabs do not pile
+up. Click **Keep it open** to stop it, or **Rejoin** to go back in.
+
 ## Chat in a meeting
 
 **Chat** opens the meeting's chat beside the call. Post messages, reply in a

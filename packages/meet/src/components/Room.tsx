@@ -12,6 +12,7 @@ import { api, isGuestId, MeetApiError, meetingUrl, signInUrl } from '../api';
 import { CheckScreen, type JoinChoice } from './CheckScreen';
 import { guestChat, memberChat, unseenAfter, type RoomChat } from '../lib/chat';
 import { ChatFrame } from './ChatFrame';
+import { AutoClose } from './AutoClose';
 import { useMediaQuery, useResizableWidth } from '../hooks/layout';
 
 type Client = Awaited<ReturnType<typeof RealtimeKitClient.init>>;
@@ -530,6 +531,7 @@ export function Room({ meetingRef }: { meetingRef: string }) {
               </a>
             ) : null}
           </div>
+          <AutoClose fallbackUrl={!last.current || last.current.entry.meeting ? import.meta.env.BASE_URL : null} />
         </>
       )}
     </div>
