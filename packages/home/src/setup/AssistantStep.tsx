@@ -27,7 +27,7 @@ export function scriptFor(p: { firstName: string; name: string | null; picture: 
     { key: 'names', block: 'names' },
   ];
   if (p.name) parts.push({ key: 'reply', reply: p.name }, { key: 'look', text: `${p.name} it is. Now pick a look for me:` }, { key: 'pictures', block: 'pictures' });
-  if (p.name && p.picture) parts.push({ key: 'next', text: 'Love it. Next, let’s add Omni, the agent your whole team shares.' }, { key: 'continue', block: 'continue' });
+  if (p.name && p.picture) parts.push({ key: 'next', text: 'Love it.' }, { key: 'continue', block: 'continue' });
   return parts;
 }
 
