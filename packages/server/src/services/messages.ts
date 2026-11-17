@@ -290,6 +290,7 @@ const SYSTEM_PREDICATE: Record<SystemMessageKind, string> = {
   huddle_declined: '',
   huddle_ended: '',
   file_shared: '',
+  meeting_started: '',
 };
 
 /**

@@ -379,6 +379,32 @@ RTK file retention (7 days).
      calls left today, from `/v1/calendar/events`; the Join rule moved to `@flow/shared` `callLinks.ts`, shared with
      Home). Saving an event with a Meet link gives the meeting the event's title (`PATCH /v1/meetings/:code {title}`,
      host only), since the meeting is made before the event has one. No "Past" list yet: that is phase 4.
+3b. **Meeting chat** (operator 2026-11-16, before recording). Chat in a meeting is a Chat channel, so search, files,
+   threads, reactions and agents work as in any channel, and the recording, transcript and summary (phase 4) have a
+   place to go. Builds on Chat visitors (docs/specs/chat-visitors.md).
+   - **Huddles** keep using their own conversation: the meeting's chat panel shows that channel or DM (the thread under
+     the huddle card, §1.4). No new channel.
+   - **Every other meeting room has one channel** of a new kind, `meeting`, made the first time someone joins. One per
+     room, not per session: a room used every week keeps one channel, with a date line ("Mon 16 Nov") for each
+     session. `meetings.chat_channel_id` points to it. The channel has no name (as DMs); clients show the meeting's
+     title (`ChannelDTO.meeting: { code, title }`).
+   - **Who is in it**: the meeting's creator, and each member the first time they join the meeting. Invited people who
+     never join do not get it. It is private to them (the private-channel rules already keep it out of search and
+     other people's sockets).
+   - **Guests are visitors** of the meeting's channel (Chat visitors, V6 allows the `meeting` kind): each guest join makes
+     a visitor with "sees from" = the moment they joined, so a guest never sees earlier sessions' chat. A guest's visit
+     ends when the meeting session ends (not 30 days). Guests post through the visitor routes; the Meet page holds the
+     visitor cookie. No Turnstile for this path yet (the guest join's own rate limits apply; Turnstile on guest join is
+     a later item).
+   - **Not in the channel list**: `GET …/channels` leaves `meeting` channels out (on the server, so the native apps do
+     not show them either). Messages in a meeting channel do not count toward unread, except @mentions.
+   - **Chat's sidebar gets "Meetings"** (under Activity): the meeting channels you are in, newest session first, with
+     title, date and people; a live meeting at the top with Join. Opening one shows the channel as usual, with a header
+     link back to the meeting (Join while live).
+   - **Meet's room gets a Chat tab** in the side panel: the channel's messages and a composer (Chat's message list and
+     composer, as the visitor page reuses them), for members and guests alike. A dot on the tab for new messages.
+   - Native apps: no Meetings list yet (Parity line); a meeting channel's messages and mentions still arrive, and
+     opening one from a mention shows the channel.
 4. **After the meeting** — recording to R2, transcript, summary, meeting page, search, summary back to Chat and
    Calendar, Save as doc.
 5. **Agents** — MeetingAgent DO, note takers, bridge events and tools.

@@ -9,8 +9,8 @@ import { addDictationTranscript, exceedsMessageLength, type DictationDraft } fro
 import { createDeferredEditorFocus } from '../lib/dictationFocus';
 import { useDictation } from '../lib/useDictation';
 import { useAuth, useLive, useSelection } from '../state';
-import { useChannelMembers, useChannels, useChannelVisitors, useEditMessage, useMembers, useSendMessage, visitorPerson } from '../hooks';
-import type { ChannelPerson } from '../lib/visitor';
+import { useChannel, useChannelMembers, useChannelVisitors, useEditMessage, useMembers, useSendMessage, visitorPerson } from '../hooks';
+import { takesVisitors, type ChannelPerson } from '../lib/visitor';
 import { useBackend, useCapabilities } from '../lib/backend';
 import { useQueryClient } from '@tanstack/react-query';
 import { FileImage } from './FileImage';
@@ -56,14 +56,14 @@ export default function Composer({
   const live = useLive();
   const qc = useQueryClient();
   const members = useMembers(sel.workspaceId);
-  const channels = useChannels(sel.workspaceId);
   const channelMembers = useChannelMembers(channelId);
   // Channel visitors (docs/specs/chat-visitors.md) are on no roster: a public channel's are added for mentions. A visitor
   // mentions only the channel's people, never an agent or a group (V5).
   const auth = useAuth();
   const visitorMode = auth.user.visitor === true;
-  const thisChannel = channels.data?.find((c) => c.id === channelId);
-  const channelVisitors = useChannelVisitors(channelId, thisChannel?.kind === 'standard' && !thisChannel.isPrivate);
+  // A meeting's chat is not in the channel list: useChannel finds it in the Meetings list.
+  const thisChannel = useChannel(sel.workspaceId, channelId);
+  const channelVisitors = useChannelVisitors(channelId, takesVisitors(thisChannel));
   const people = useMemo((): ChannelPerson[] => {
     const all: ChannelPerson[] = [...(members.data ?? [])];
     const known = new Set(all.map((m) => m.userId));
@@ -352,7 +352,7 @@ export default function Composer({
     const { body, mentions } = transformOutgoing(raw || ' ', people);
     // Detect @mentions of users who aren't in this standard channel; the CTA
     // banner renders above the composer after the send.
-    const chanKind = channels.data?.find((c) => c.id === channelId)?.kind;
+    const chanKind = thisChannel?.kind;
     if (chanKind === 'standard' && channelMembers.data) {
       // A visitor is in the channel without being a member of it.
       const missing = visitorMode ? [] : mentions.filter((id) => !channelMembers.data.includes(id) && !people.some((p) => p.userId === id && p.visitor));

@@ -14,6 +14,7 @@ import type {
   ChannelDTO,
   ChannelFilePage,
   ChannelVisitorDTO,
+  MeetingChatDTO,
   VisitorLinkDTO,
   ChannelFileSort,
   FileDTO,
@@ -42,7 +43,7 @@ import { connectionManager } from './lib/connectionRuntime';
 import { switcherEntries, syncedBindings, type SwitcherEntry } from './lib/workspaceSwitcher';
 import { useBackend } from './lib/backend';
 import { useAuth, useRuntime } from './state';
-import type { ChannelPerson } from './lib/visitor';
+import { takesVisitors, type ChannelPerson } from './lib/visitor';
 
 // Chat-core hooks go through the connection's WorkspaceBackend (#545): the
 // same hook serves every connected Flow server, and no component builds a
@@ -164,7 +165,36 @@ export function useChannel(workspaceId: string | null, channelId: string | null 
   const channels = useChannels(workspaceId);
   const found = channelId ? (channels.data ?? []).find((c) => c.id === channelId) : undefined;
   const withArchived = useChannelsWithArchived(workspaceId, !!channelId && channels.isSuccess && !found);
-  return found ?? (channelId ? (withArchived.data ?? []).find((c) => c.id === channelId) : undefined);
+  const archived = channelId ? (withArchived.data ?? []).find((c) => c.id === channelId) : undefined;
+  // A meeting's chat (Meet phase 3b) is in neither list: it comes from the Meetings list.
+  const chats = useMeetingChats(workspaceId, !!channelId && withArchived.isSuccess && !found && !archived);
+  return found ?? archived ?? (channelId ? meetingChatOf(chats.data, channelId)?.channel : undefined);
+}
+
+/** The meeting chat whose channel this is, from the Meetings list. */
+export function meetingChatOf(chats: MeetingChatDTO[] | undefined, channelId: string | null | undefined): MeetingChatDTO | undefined {
+  return channelId ? chats?.find((c) => c.channel.id === channelId) : undefined;
+}
+
+/**
+ * The meeting chats the person is in (Meet phase 3b, Chat's "Meetings"): live ones first, then the newest. The channel
+ * list leaves these channels out, so this is also how a meeting's channel is found by id. Flow only.
+ */
+export function useMeetingChats(workspaceId: string | null, enabled = true) {
+  const runtime = useRuntime();
+  return useQuery({
+    queryKey: ['meetingChats', workspaceId],
+    queryFn: () => runtime.api<{ chats: MeetingChatDTO[] }>('GET', `/v1/workspaces/${workspaceId}/meetings/chats`),
+    select: (d) => d.chats,
+    enabled: workspaceId !== null && enabled && runtime.provider === 'flow',
+    // An older server has no such route: no meeting chats.
+    retry: false,
+  });
+}
+
+/** How many of the person's mentions in meeting chats are unread: the Meetings item's badge (only mentions count). */
+export function meetingMentions(chats: MeetingChatDTO[] | undefined): number {
+  return (chats ?? []).reduce((n, c) => n + (c.channel.unreadNotifications ?? 0), 0);
 }
 
 export function useMembers(workspaceId: string | null) {
@@ -534,6 +564,8 @@ export function useMarkRead() {
       // Reading a channel drops that workspace's rail badge (#345) — the total
       // lives on the workspace list, so it has to be refetched too.
       void qc.invalidateQueries({ queryKey: ['workspaces'] });
+      // …and a meeting chat's mentions, the Meetings item's badge (Meet phase 3b).
+      void qc.invalidateQueries({ queryKey: ['meetingChats'] });
     },
   });
 }
@@ -661,8 +693,7 @@ export function useChannelVisitors(channelId: string | null | undefined, enabled
  */
 export function useChannelPeople(workspaceId: string | null, channel: Pick<ChannelDTO, 'id' | 'kind' | 'isPrivate'> | null | undefined) {
   const members = useMembers(workspaceId);
-  const takesVisitors = !!channel && channel.kind === 'standard' && !channel.isPrivate;
-  const visitors = useChannelVisitors(channel?.id, takesVisitors);
+  const visitors = useChannelVisitors(channel?.id, takesVisitors(channel));
   return useMemo(() => {
     const names: Record<string, string> = {};
     const displayNames: Record<string, string> = {};

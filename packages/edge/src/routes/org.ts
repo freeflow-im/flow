@@ -37,6 +37,7 @@ type C = Context<{ Bindings: OrgRouteEnv }>;
 const orgStub = (c: C, id: string) => c.env.ORG.get(c.env.ORG.idFromName(id));
 const IN_PATH = /^\/v1\/workspaces\/([0-9a-f-]{36})(?:\/|$)/;
 /** A Meet link's short code (org/services/meetings.ts `newMeetingCode`), indexed like an id. */
+const MEETING_GUEST = /^\/v1\/meetings\/[a-z]{3}-[a-z]{4}-[a-z]{3}\/guest$/;
 const MEETING_CODE = /^\/v1\/meetings\/([a-z]{3}-[a-z]{4}-[a-z]{3})(?:\/|$)/;
 const BY_ID = /^\/v1\/(?:channels|messages|files|artifacts|scheduled-messages|huddle\/invites|meetings|visitor-links)\/([0-9a-f-]{36})(?:\/|$)/;
 
@@ -325,7 +326,9 @@ orgRoutes.all('/v1/*', async (c) => {
   const viaToken = id ? null : await organizationOfToken(c, pathname);
   if (viaToken) return orgStub(c, viaToken).handle(c.req.raw, { ...(await resolveCaller(c)), organizationId: viaToken }, null);
   id ??= await organizationInRequest(c);
-  let who = await resolveCaller(c, id);
+  // A meeting's public guest routes work for anyone: a stale or expired session cookie makes the caller nobody there,
+  // rather than refusing the guest (Meet docs/specs/meetings.md, guests by link).
+  let who = id && MEETING_GUEST.test(pathname) ? await resolveCaller(c, id).catch((e) => { if (e instanceof ApiError && e.statusCode === 401) return nobody(c, id!); throw e; }) : await resolveCaller(c, id);
   if (!id) {
     // Paths that name no organization (join links, a member's own notifications, avatars) go to the caller's first one for now.
     if (!who.user) throw unauthorized('missing bearer token');

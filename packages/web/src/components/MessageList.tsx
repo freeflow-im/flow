@@ -244,7 +244,8 @@ export default function MessageList({
             // echo share a clientMsgId but not an id, so keying on id
             // remounts the row (and re-flashes its avatar) on reconcile.
             <div key={m.clientMsgId || m.id}>
-              {startsNewDay(messages, i) && <DayDivider iso={m.createdAt} />}
+              {/* A meeting's session line names its own date: no day pill over it. */}
+              {startsNewDay(messages, i) && m.systemKind !== 'meeting_started' && <DayDivider iso={m.createdAt} />}
               {m.systemKind ? (
                 <SystemLine message={m} />
               ) : (

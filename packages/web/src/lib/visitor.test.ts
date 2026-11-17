@@ -4,7 +4,7 @@
 // first frame.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { VisitorMeDTO } from '@flow/shared';
-import { cleanName, parseVisitPath, VisitorRuntime, VisitorSocketClient, visitorAnswer, visitorCapabilities, visitorPath, worksUntil } from './visitor';
+import { cleanName, parseVisitPath, takesVisitors, VisitorRuntime, VisitorSocketClient, visitorAnswer, visitorCapabilities, visitorChannel, visitorPath, worksUntil } from './visitor';
 import { withVisitorLabels } from '../components/MessageList';
 import { buildSuggestions } from '../components/Composer';
 
@@ -161,5 +161,25 @@ describe('worksUntil', () => {
     expect(worksUntil(new Date(2026, 10, 16, 18, 0).toISOString(), now)).toMatch(/^today /);
     expect(worksUntil(new Date(2026, 10, 17, 15, 40).toISOString(), now)).toMatch(/^tomorrow /);
     expect(worksUntil(new Date(2026, 10, 19, 9, 0).toISOString(), now)).not.toMatch(/^(today|tomorrow)/);
+  });
+});
+
+describe('a meeting chat’s visitors (Meet guests)', () => {
+  it('has visitors in a public channel or a meeting chat, never a private channel or a DM', () => {
+    expect(takesVisitors({ kind: 'standard', isPrivate: false })).toBe(true);
+    expect(takesVisitors({ kind: 'meeting', isPrivate: true })).toBe(true);
+    expect(takesVisitors({ kind: 'standard', isPrivate: true })).toBe(false);
+    expect(takesVisitors({ kind: 'dm', isPrivate: true })).toBe(false);
+    expect(takesVisitors(undefined)).toBe(false);
+  });
+
+  it('gives a guest their meeting chat as a meeting channel, named by the meeting', () => {
+    const guest: VisitorMeDTO = { ...me, channel: { ...me.channel, meeting: { code: 'kqd-wmzt-fra', title: 'Weekly sync' } } };
+    const c = visitorChannel(guest);
+    expect(c.kind).toBe('meeting');
+    expect(c.isPrivate).toBe(true);
+    expect(c.name).toBeNull();
+    expect(c.meeting).toEqual({ code: 'kqd-wmzt-fra', title: 'Weekly sync' });
+    expect(visitorChannel(me).kind).toBe('standard');
   });
 });

@@ -241,8 +241,9 @@ export const channels = sqliteTable(
   {
     id: text('id').primaryKey(),
     workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
-    name: citext('name'), // null for dm/group_dm
-    kind: text('kind', { enum: ['standard', 'dm', 'group_dm'] as const }).notNull().default('standard'),
+    name: citext('name'), // null for dm/group_dm/meeting
+    // `meeting`: a Meet room's chat (meetings.chat_channel_id), private, left out of the channel list.
+    kind: text('kind', { enum: ['standard', 'dm', 'group_dm', 'meeting'] as const }).notNull().default('standard'),
     dmKey: text('dm_key'), // sorted member ids joined with ':'
     topic: text('topic'),
     isPrivate: integer('is_private', { mode: 'boolean' }).notNull().default(false),
@@ -724,8 +725,20 @@ export const meetings = sqliteTable(
     lastJoinedAt: integer('last_joined_at', { mode: 'timestamp_ms' }),
     /** A host locked it: no new guests may join (members still can). */
     locked: integer('locked', { mode: 'boolean' }).notNull().default(false),
+    /**
+     * The room's chat (a channel of kind `meeting`, Meet phase 3b), made the first time anyone joins. Never set for a
+     * huddle, whose chat is its conversation (`channel_id`).
+     */
+    chatChannelId: text('chat_channel_id').references(() => channels.id, { onDelete: 'set null' }),
+    /** When the room's current (or last) session began: its date line in the chat, and the start of guests' visits. */
+    sessionStartedAt: integer('session_started_at', { mode: 'timestamp_ms' }),
   },
-  (t) => [index('meetings_workspace_idx').on(t.workspaceId, t.lastJoinedAt), uniqueIndex('meetings_code_idx').on(t.code), uniqueIndex('meetings_channel_idx').on(t.channelId)],
+  (t) => [
+    index('meetings_workspace_idx').on(t.workspaceId, t.lastJoinedAt),
+    uniqueIndex('meetings_code_idx').on(t.code),
+    uniqueIndex('meetings_channel_idx').on(t.channelId),
+    uniqueIndex('meetings_chat_channel_idx').on(t.chatChannelId),
+  ],
 );
 
 /** One RTK participant per person per meeting, so a rejoin refreshes a token instead of adding a second participant. */

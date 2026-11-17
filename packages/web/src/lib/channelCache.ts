@@ -38,3 +38,12 @@ export function applyHuddle(channels: ChannelDTO[], data: HuddleUpdatedData): Ch
   if (same) return channels;
   return channels.map((c) => (c.id === data.channelId ? { ...c, huddleParticipants: data.participants } : c));
 }
+
+/**
+ * Whether a message event is for a channel the channel list leaves out — a meeting's chat (Meet phase 3b). Its events
+ * reach the socket like a private channel's, but it never gets a sidebar row or an unread count: the event only moves
+ * the Meetings list (its newest message, its mentions). False while the list has not loaded: nothing to compare with.
+ */
+export function isUnlistedChannel(channels: ChannelDTO[] | undefined, channelId: string): boolean {
+  return !!channels && !channels.some((c) => c.id === channelId);
+}

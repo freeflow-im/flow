@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ChannelDTO, HuddleParticipantDTO } from '@flow/shared';
-import { applyChannelEmoji, applyHuddle, applyIndicator } from './channelCache';
+import { applyChannelEmoji, applyHuddle, applyIndicator, isUnlistedChannel } from './channelCache';
 
 const chan = (
   id: string,
@@ -126,5 +126,13 @@ describe('applyChannelEmoji', () => {
     const original = chan('a');
     applyChannelEmoji([original], { channelId: 'a', emoji: '🔥' });
     expect(original.emoji ?? null).toBeNull();
+  });
+});
+
+describe('isUnlistedChannel (a meeting chat’s events)', () => {
+  it('is a channel the loaded list leaves out, and nothing before the list loads', () => {
+    expect(isUnlistedChannel([chan('a'), chan('b')], 'm1')).toBe(true);
+    expect(isUnlistedChannel([chan('a'), chan('m1')], 'm1')).toBe(false);
+    expect(isUnlistedChannel(undefined, 'm1')).toBe(false);
   });
 });

@@ -12,6 +12,7 @@ export default defineConfig({
   server: {
     port: Number(process.env.PORT ?? 5190),
     strictPort: true,
-    proxy: { '/v1': { target: process.env.MEET_API ?? 'http://127.0.0.1:8787', ws: true }, '/api': process.env.MEET_API ?? 'http://127.0.0.1:8787' },
+    // /chat: the room's Chat tab frames Chat's page for the meeting's chat (src/lib/chat.ts).
+    proxy: { '/v1': { target: process.env.MEET_API ?? 'http://127.0.0.1:8787', ws: true }, '/api': process.env.MEET_API ?? 'http://127.0.0.1:8787', '/chat': process.env.MEET_API ?? 'http://127.0.0.1:8787' },
   },
 });
