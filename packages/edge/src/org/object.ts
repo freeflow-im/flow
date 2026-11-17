@@ -39,8 +39,8 @@ import {
   removeApp, rotateAppSecret, setAgentsOn, setAppGrants, updateApp, recordUpload, listUploads, installedCode,
   type AppCallerContext, type AppGrants, type AppHolder, type AppSource, type AppToolAnswer, type AppUpload, type OfferedAppTool,
 } from './services/userApps';
-import { mintUserAppToken, verifyBody } from './lib/appSigning';
-import { callHostedTool, hostedWorker, type HostedEnv, type HostedExports } from '../apps/hosted';
+import { APP_SESSION_SECONDS, mintUserAppToken, signAppSession, verifyAppSession, verifyBody, verifyUserAppToken, type AppSession } from './lib/appSigning';
+import { appOrigin, callHostedTool, hostedWorker, type HostedEnv, type HostedExports } from '../apps/hosted';
 
 /** A user-app change's outcome for the Worker's routes: the value, or the ApiError's status, code and message. */
 async function answered<T>(fn: () => Promise<T>): Promise<DirectoryAnswer<T>> {
@@ -1100,6 +1100,49 @@ export class Org extends DurableObject<OrgEnv> {
     }
   }
 
+  /** Door keys already used on a hosted app's screen, until they expire: a key opens one session (§6.2). */
+  private readonly usedKeys = new Map<string, number>();
+
+  /**
+   * A hosted app's screen, opened with its door key (§6.2): the key checked against the install's secret, used once, and
+   * the viewer's scope checked; back comes the session cookie's value, signed, for the app's host.
+   */
+  async openHostedAppSession(p: { organizationId: string; name: string; token: string }): Promise<{ cookie: string; maxAge: number } | null> {
+    const app = await withDb(this.db, () => appForUse(p.name));
+    if (!app || !isHosted(app.manifest)) return null;
+    const key = verifyUserAppToken(app.secret, p.token);
+    if (!key || key.app !== p.name || key.workspaceId !== p.organizationId) return null;
+    const now = Date.now();
+    for (const [jti, exp] of this.usedKeys) if (exp * 1000 < now) this.usedKeys.delete(jti);
+    if (this.usedKeys.has(key.jti)) return null;
+    this.usedKeys.set(key.jti, key.exp);
+    if (!(await this.viewerHolds(p.name, key.accountId))) return null;
+    const exp = Math.floor(now / 1000) + APP_SESSION_SECONDS;
+    return { cookie: signAppSession(app.secret, { accountId: key.accountId, userId: key.userId, displayName: key.displayName, isAgent: key.isAgent, exp }), maxAge: APP_SESSION_SECONDS };
+  }
+
+  /**
+   * Who is looking at a hosted app's screen, from its session cookie: checked on every request, so a person removed from
+   * the organization, or whose scopes were taken away, loses the screen at once (§6.2). Null when they may not.
+   */
+  async checkHostedAppSession(p: { name: string; cookie: string }): Promise<(AppSession & { scopes: string[] }) | null> {
+    const app = await withDb(this.db, () => appForUse(p.name));
+    if (!app || !isHosted(app.manifest)) return null;
+    const s = verifyAppSession(app.secret, p.cookie);
+    if (!s) return null;
+    const scopes = await this.viewerHolds(p.name, s.accountId);
+    return scopes ? { ...s, scopes } : null;
+  }
+
+  /** The scopes of the app an account holds here as a viewer (no agent `via`), or null for none. */
+  private async viewerHolds(name: string, accountId: string): Promise<string[] | null> {
+    return withDb(this.db, async () => {
+      const holder = await appHolderOf(accountId);
+      const held = holder ? (await heldScopes({ ...holder, via: null })).get(name) : undefined;
+      return held?.size ? [...held] : null;
+    });
+  }
+
   /** An event a hosted app published through its SUITE binding (§5.1): the binding names the app, so no signature. */
   async publishHostedAppEvent(p: { organizationId: string; name: string; event: unknown }): Promise<{ ok: true; id: string } | { ok: false; status: number; error: string }> {
     const app = await withDb(this.db, () => appForUse(p.name));
@@ -1146,12 +1189,13 @@ export class Org extends DurableObject<OrgEnv> {
   async userAppScreen(p: { organizationId: string; name: string; holder: AppHolder; userId: string; displayName: string; isAgent: boolean }): Promise<{ url: string; expiresAt: string } | null> {
     return withDb(this.db, async () => {
       const app = await appForUse(p.name);
-      // A hosted app's screen is served on the apps domain (user-apps.md §14 phase 2, step 3); this is an external app's.
-      if (!app?.manifest.ui || !('url' in app.manifest.ui) || !(await heldScopes(p.holder)).get(p.name)?.size) return null;
+      if (!app?.manifest.ui || !(await heldScopes(p.holder)).get(p.name)?.size) return null;
+      // A hosted app's screen is on the apps domain (§6.1); an external app's at its author's URL, behind their guard.
+      if (!('url' in app.manifest.ui) && !this.env.APPS_DOMAIN) return null;
       const { token, expiresAt } = mintUserAppToken(app.secret, {
         app: p.name, workspaceId: p.organizationId, userId: p.userId, accountId: p.holder.accountId, displayName: p.displayName, isAgent: p.isAgent,
       });
-      const url = new URL(app.manifest.ui.url);
+      const url = new URL('url' in app.manifest.ui ? app.manifest.ui.url : `${appOrigin(p.name, p.organizationId, this.env.APPS_DOMAIN!, this.env.APPS_SCHEME)}/`);
       url.searchParams.set('flow_token', token);
       return { url: url.toString(), expiresAt: expiresAt.toISOString() };
     });

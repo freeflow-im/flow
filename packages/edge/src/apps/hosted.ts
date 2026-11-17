@@ -25,6 +25,10 @@ export interface HostedEnv {
   APP_STORE?: DurableObjectNamespace<AppStore>;
   EVENTS?: DurableObjectNamespace<import('../events/object').Events>;
   ORG?: DurableObjectNamespace<import('../org/object').Org>;
+  /** The apps domain the screens are served on (§6.1): `flowtoo.org`; `flowtoo.localhost:<port>` in local development. */
+  APPS_DOMAIN?: string;
+  /** `http` in local development; https otherwise. */
+  APPS_SCHEME?: string;
 }
 
 /** The props every app entrypoint is bound with. */
@@ -167,3 +171,22 @@ export async function callHostedTool(worker: WorkerStub, tool: string, input: un
   if (!res.ok) return { ok: false, error: `the app answered ${res.status}` };
   return { ok: true, result: answer.result ?? null };
 }
+
+// ---- the screen's host (§6.1): <app>--<org without dashes>.<apps domain> ----
+
+/** The host label of an app in an organization: at most 20 + 2 + 32 = 54 characters, inside the 63 a label may hold. */
+export const appHostLabel = (app: string, org: string): string => `${app}--${org.replace(/-/g, '')}`;
+
+/** The app and organization a host on the apps domain names, or null. `domain` may carry a port (local development). */
+export function parseAppHost(host: string, domain: string): { app: string; org: string } | null {
+  const bare = domain.replace(/:\d+$/, '').toLowerCase();
+  const h = host.replace(/:\d+$/, '').toLowerCase();
+  if (!h.endsWith(`.${bare}`)) return null;
+  const m = /^([a-z][a-z0-9]{1,19})--([0-9a-f]{32})$/.exec(h.slice(0, -bare.length - 1));
+  if (!m) return null;
+  const x = m[2]!;
+  return { app: m[1]!, org: `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20)}` };
+}
+
+/** The origin an app's screen is served from in an organization. */
+export const appOrigin = (app: string, org: string, domain: string, scheme = 'https'): string => `${scheme}://${appHostLabel(app, org)}.${domain}`;

@@ -7,6 +7,7 @@
 //     --var WEB_URL_BASE:http://localhost:18799 --var FLOW_WEB_URL:http://localhost:18799 > /tmp/edge-hosted.log 2>&1 &
 //   node test/e2e-hosted-apps.mjs /tmp/edge-hosted.log
 import fs from 'node:fs';
+import http from 'node:http';
 
 const log = process.argv[2];
 const B = process.env.B ?? 'http://localhost:18799';
@@ -41,6 +42,8 @@ const manifest = {
 const server = (label) => `
 export default {
   async fetch(request, env) {
+    const path = new URL(request.url).pathname;
+    if (path === '/api/whoami') return new Response(request.headers.get('x-freeflow-viewer'), { headers: { 'content-type': 'application/json' } });
     const { tool, input, caller } = await request.json();
     const ok = (result) => Response.json({ result });
     if (tool === 'add_note') {
@@ -97,6 +100,41 @@ r = await api(O.token, 'PUT', `/v1/workspaces/${A}/apps/notes`, { version: r.j.v
 t('Olga updates Acme to version 2', r.s === 200 && r.j.version === 2, JSON.stringify(r.j));
 r = await call(O.token, A, 'notes__list_notes', {});
 t('the new code runs on the same data', r.j.ok && r.j.result.label === 'v2' && r.j.result.notes.length === 2, JSON.stringify(r.j));
+
+// --- The screen on the apps domain (step 3) ------------------------------------------------------------------------------
+// The app's host goes in the Host header, to the local Worker's port: *.flowtoo.localhost needs no DNS this way.
+const DOMAIN = process.env.APPS_DOMAIN ?? 'flowtoo.localhost:18899';
+const raw = (u, cookie) => new Promise((resolve, reject) => {
+  const url = new URL(u);
+  const req = http.request({ host: '127.0.0.1', port: new URL(B).port, path: url.pathname + url.search, method: 'GET', headers: { host: url.host, 'x-forwarded-host': url.host, ...(cookie ? { cookie } : {}) } }, (res) => {
+    let body = ''; res.setEncoding('utf8'); res.on('data', (d) => { body += d; }); res.on('end', () => resolve({ s: res.statusCode, h: res.headers, body }));
+  });
+  req.on('error', reject); req.end();
+});
+const screenManifest = { ...manifest, ui: { hosted: true } };
+r = await api(O.token, 'POST', `/v1/workspaces/${A}/apps/versions`, { manifest: screenManifest, files: { ...files('v3'), 'ui/index.html': b64('<!doctype html><title>Notes</title><h1>Notes screen</h1>') } });
+await api(O.token, 'PUT', `/v1/workspaces/${A}/apps/notes`, { version: r.j.version, grants: { members: true, accounts: [] } });
+r = await api(O.token, 'POST', `/v1/workspaces/${A}/apps/notes/screen`, {});
+const screenUrl = r.j.url ?? '';
+t("the tab's door key points at the app's own host", r.s === 200 && new URL(screenUrl).host === `notes--${A.replace(/-/g, '')}.${DOMAIN}`, screenUrl);
+let s1 = await raw(screenUrl);
+const cookie = (s1.h['set-cookie']?.[0] ?? '').split(';')[0];
+t('the key opens a session on that host, and the address loses the key', s1.s === 302 && cookie.startsWith('ff_app_session=') && s1.h.location === '/', s1.s + ' ' + JSON.stringify(s1.h));
+s1 = await raw(screenUrl);
+t('the same key does not open a second', s1.s === 401, s1.s);
+const home = `http://notes--${A.replace(/-/g, '')}.${DOMAIN}/`;
+s1 = await raw(home, cookie);
+t('the session gets the screen from its ui/ files', s1.s === 200 && s1.body.includes('Notes screen') && /text\/html/.test(s1.h['content-type']), s1.s + ' ' + s1.body.slice(0, 80));
+s1 = await raw(home + 'api/whoami', cookie);
+let who = null; try { who = JSON.parse(s1.body); } catch { /* below */ }
+t("the app's own path is answered by its isolate, told who is looking", s1.s === 200 && who?.organizationId === A && who?.scopes?.includes('notes:read'), s1.s + ' ' + s1.body.slice(0, 160));
+s1 = await raw(home);
+t('without the session, nothing', s1.s === 401, s1.s);
+s1 = await raw(home + '__freeflow/tool', cookie);
+t("the host's own path is not the screen's", s1.s === 404, s1.s);
+await api(O.token, 'PUT', `/v1/workspaces/${A}/apps/notes/grants`, { members: false, accounts: [] });
+s1 = await raw(home, cookie);
+t('taking the scopes away closes the screen at once', s1.s === 401, s1.s);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
