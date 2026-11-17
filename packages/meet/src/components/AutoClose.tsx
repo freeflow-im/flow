@@ -5,7 +5,14 @@ import { useEffect, useState } from 'react';
 
 export const AUTO_CLOSE_SECONDS = 30;
 
-export function AutoClose({ fallbackUrl, seconds = AUTO_CLOSE_SECONDS }: { fallbackUrl: string | null; seconds?: number }) {
+/** Inside an app's own window (the desktop app's), closing would close the app: no countdown there. */
+const inAppWindow = () => typeof window !== 'undefined' && 'flowDesktop' in window;
+
+export function AutoClose(props: { fallbackUrl: string | null; seconds?: number }) {
+  return inAppWindow() ? null : <Countdown {...props} />;
+}
+
+function Countdown({ fallbackUrl, seconds = AUTO_CLOSE_SECONDS }: { fallbackUrl: string | null; seconds?: number }) {
   const [left, setLeft] = useState(seconds);
   const [kept, setKept] = useState(false);
   const [closeFailed, setCloseFailed] = useState(false);

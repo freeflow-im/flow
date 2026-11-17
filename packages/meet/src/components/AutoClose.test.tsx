@@ -41,4 +41,16 @@ describe('AutoClose', () => {
     expect(close).toHaveBeenCalled();
     expect(screen.getByText('You can close this tab.')).toBeTruthy();
   });
+
+  it("never counts down inside the desktop app's window", () => {
+    (window as unknown as Record<string, unknown>).flowDesktop = {};
+    try {
+      render(<AutoClose fallbackUrl="/meet/" seconds={1} />);
+      tick(2);
+      expect(close).not.toHaveBeenCalled();
+      expect(screen.queryByText(/closes in/)).toBeNull();
+    } finally {
+      delete (window as unknown as Record<string, unknown>).flowDesktop;
+    }
+  });
 });
