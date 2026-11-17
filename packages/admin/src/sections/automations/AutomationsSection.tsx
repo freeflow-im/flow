@@ -120,6 +120,7 @@ export function filterSummary(sub: SubscriptionDTO, names: Names): string {
   if (f.text) parts.push(`matching “${f.text}”`);
   if (f.actorKind && f.actorKind !== 'any') parts.push(`by a ${f.actorKind}`);
   if (f.self) parts.push('about me');
+  if (f.consumerOwn) parts.push(`for ${names.member(sub.consumer)} itself`);
   if (f.ref) parts.push(`on ${f.ref.app}/${f.ref.kind}/${f.ref.id}`);
   return parts.join(' ');
 }

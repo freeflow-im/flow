@@ -853,7 +853,13 @@ export class Assistant extends DurableObject<AssistantEnv> {
     const want = !!agent && !!sponsor && agent !== sponsor && this.state('agent_mode') !== 'shared' && (await this.mailAutoReply()) && (await this.mailAllowlist()).length > 0;
     const id = this.state('mail_wake_subscription');
     const existing = id ? await events.getSubscription(id) : null;
-    if (want && existing && existing.consumer === agent && existing.action?.kind === 'wake' && existing.action.reply === 'mail') return 'on';
+    if (id && !existing) {
+      // The sponsor deleted it from their Automations list: that turns answering off, rather than the next check making it again.
+      this.sql.exec('DELETE FROM assistant_state WHERE key = ?', 'mail_wake_subscription');
+      this.setState('mail_auto_reply', '0');
+      return 'off';
+    }
+    if (want && existing && existing.consumer === agent && existing.owner === sponsor && existing.filter.consumerOwn && existing.action?.kind === 'wake' && existing.action.reply === 'mail') return 'on';
     if (existing) await events.deleteSubscription(existing.id);
     if (!want) {
       if (id) this.sql.exec('DELETE FROM assistant_state WHERE key = ?', 'mail_wake_subscription');

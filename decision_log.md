@@ -14,6 +14,11 @@
   and #861's DKIM check); "Agent always responds to incoming email" is a `wake` subscription on those events whose
   output step mails the answer back. The special mail turn is gone. Existing assistants with answering on get the
   subscription on their mailbox's next check (no separate migration step).
+- **Ruling R-D (Scott):** every automation is owned by a person, never by an agent: an automation is how someone gets a
+  task done ("ask Ada for a daily summary every morning" is mine; Ada does the work). The email-answering subscription is
+  the sponsor's: owner = sponsor, consumer = the agent, filter `consumerOwn` (the agent's own `mail.received`, which the
+  sponsor may read as they may read the agent's mailbox). It shows in the sponsor's Automations list; deleting it there
+  turns "Agent always responds to incoming email" off.
 - **Ruling R-C (Scott):** posting to Chat never requires approval. `send_message` posts at once, as the agent, in every
   turn; the ✅ card is gone. Old card messages stay as plain messages.
 - **Why (Scott):** an assistant answering an email said "Chat access isn't available here": wake and mail turns dropped

@@ -25,7 +25,10 @@ const ANN = 'acct-ann';
 
 function harness() {
   const sent: JobMessage[] = [];
-  const org = { privateChannelIdsOfAccounts: async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, []])), agentAccountIds: async () => [ADA], pokeSubscription: async () => 0 };
+  const org = {
+    privateChannelIdsOfAccounts: async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, []])), agentAccountIds: async () => [ADA], pokeSubscription: async () => 0,
+    personalAgentAccountsOf: async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, id === ANN ? [ADA] : []])),
+  };
   const env = { ORG: { idFromName: (n: string) => n, get: () => org }, JOBS: { send: async (body: JobMessage) => { sent.push(body); } } };
   const storage = { sql: sqlite(), transactionSync: <T>(fn: () => T) => fn(), getAlarm: async () => null, setAlarm: async () => undefined };
   return { o: new Events({ storage, waitUntil: () => undefined } as never, env as never), sent };
@@ -43,7 +46,9 @@ describe('the assistant answering its email (assistant/mailWake.ts)', () => {
   it('wakes the assistant for mail from an allowlisted sender, as a reply-by-mail job', async () => {
     const { o, sent } = harness();
     const sub = await o.createSubscription(mailWakeSubscription({ organizationId: ORG, agentAccountId: ADA, sponsorAccountId: ANN }));
-    expect(sub).toMatchObject({ consumer: ADA, owner: ADA, createdBy: ANN, delivery: 'wake', filter: { types: ['mail.received'], self: true }, action: { kind: 'wake', reply: 'mail' } });
+    // Ann's automation, worked by Ada: it is in Ann's list (and Ada's), and matches Ada's own mailbox.
+    expect(sub).toMatchObject({ consumer: ADA, owner: ANN, createdBy: ANN, delivery: 'wake', filter: { types: ['mail.received'], consumerOwn: true }, action: { kind: 'wake', reply: 'mail' } });
+    expect(o.listSubscriptions(ANN).map((s) => s.id)).toContain(sub.id);
     await deliver(o, ADA, [{ uid: 4, from: { address: 'ann@acme.test' } }], ['ann@acme.test']);
     const jobs = o.listJobs(sub.id);
     expect(jobs).toHaveLength(1);
@@ -62,6 +67,14 @@ describe('the assistant answering its email (assistant/mailWake.ts)', () => {
     expect(refused).toEqual([{ message: expect.objectContaining({ uid: 5 }), reason: 'not_on_list' }]);
     // Ann's own new mail is her account's event: Ada's subscription never sees it.
     await deliver(o, ANN, [{ uid: 6, from: { address: 'ann@acme.test' } }], ['ann@acme.test']);
+    expect(o.listJobs(sub.id)).toEqual([]);
+  });
+
+  it('wakes nobody when the owner does not sponsor the agent whose mailbox it names', async () => {
+    const { o } = harness();
+    const BOB = 'acct-bob';
+    const sub = await o.createSubscription(mailWakeSubscription({ organizationId: ORG, agentAccountId: ADA, sponsorAccountId: BOB }));
+    await deliver(o, ADA, [{ uid: 7, from: { address: 'ann@acme.test' } }], ['ann@acme.test']);
     expect(o.listJobs(sub.id)).toEqual([]);
   });
 });

@@ -61,6 +61,9 @@ export interface EventFilter {
   actorKind?: 'person' | 'agent' | 'any';
   text?: string;
   self?: boolean;
+  /** Only the events on the consumer's own account: a personal agent's own mailbox, matched for its sponsor (the owner),
+   * who may read them as they may read the agent's mailbox (agents.md §1.1). Seen only where the owner sponsors the consumer. */
+  consumerOwn?: boolean;
 }
 
 /** How a subscription is told of a match (§5.2, "Delivery modes"). `wake` files a job for an agent; `post` posts a

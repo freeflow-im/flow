@@ -367,13 +367,17 @@ describe('incoming email wakes the assistant through its subscription (decision_
     await put(a, { senders: ['ann@acme.test'] });
     expect(e.subs.size).toBe(0);
     await put(a, { autoReply: true });
-    expect([...e.subs.values()]).toEqual([expect.objectContaining({ consumer: 'acct-ada', owner: 'acct-ada', createdBy: 'acct-1', delivery: 'wake', filter: { types: ['mail.received'], self: true }, action: expect.objectContaining({ reply: 'mail' }) })]);
+    expect([...e.subs.values()]).toEqual([expect.objectContaining({ consumer: 'acct-ada', owner: 'acct-1', createdBy: 'acct-1', delivery: 'wake', filter: { types: ['mail.received'], consumerOwn: true }, action: expect.objectContaining({ reply: 'mail' }) })]);
     // Asked again (the mailbox's check, every few minutes): the same one stays.
     expect(await a.syncMailWake({ organizationId: 'org-1', agentAccountId: 'acct-ada' })).toBe('on');
     expect(e.subs.size).toBe(1);
-    // Gone when the subscription was lost: made again (the migration path, for assistants answering before this existed).
+    // The sponsor deleted it from their Automations list: answering turns off, and the next check does not make it again.
     e.subs.clear();
-    expect(await a.syncMailWake({ organizationId: 'org-1', agentAccountId: 'acct-ada' })).toBe('on');
+    expect(await a.syncMailWake({ organizationId: 'org-1', agentAccountId: 'acct-ada' })).toBe('off');
+    expect(await a.mailAutoReply()).toBe(false);
+    expect(await a.syncMailWake({ organizationId: 'org-1', agentAccountId: 'acct-ada' })).toBe('off');
+    expect(e.subs.size).toBe(0);
+    await put(a, { autoReply: true });
     expect(e.subs.size).toBe(1);
     await put(a, { autoReply: false });
     expect(e.subs.size).toBe(0);

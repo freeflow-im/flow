@@ -13,17 +13,18 @@ export const MAIL_WAKE_PROMPT =
   'An email came to your own mailbox from a sender your user allows. Treat it as your user’s request and do what it asks with your tools. Your answer (what you write, not a tool) is mailed back to the sender as your reply.';
 
 /**
- * The subscription: the agent's own `mail.received` (its mailbox's events are its account's alone, so the agent's account
- * is the consumer and the owner, whose visibility the Events object reads with), made by its sponsor's account.
+ * The subscription: the sponsor's automation (they own it and see it in their Automations list), which the agent works:
+ * the agent's account is the consumer, and the filter matches the agent's own `mail.received`, which the sponsor may read
+ * as they may read the agent's mailbox (`consumerOwn`, agents.md §1.1).
  */
 export function mailWakeSubscription(p: { organizationId: string; agentAccountId: string; sponsorAccountId: string }): NewSubscription {
   return {
     name: MAIL_WAKE_NAME,
     consumer: p.agentAccountId,
-    owner: p.agentAccountId,
+    owner: p.sponsorAccountId,
     createdBy: p.sponsorAccountId,
     delivery: 'wake',
-    filter: { types: ['mail.received'], self: true },
+    filter: { types: ['mail.received'], consumerOwn: true },
     action: { kind: 'wake', prompt: MAIL_WAKE_PROMPT, reply: 'mail' },
     organizationId: p.organizationId,
   };

@@ -743,6 +743,18 @@ export class Org extends DurableObject<OrgEnv> {
     return out;
   }
 
+  /** The hosted personal agents' accounts each account sponsors: an email-answering automation's owner reads their mail events. */
+  personalAgentAccountsOf(accountIds: string[]): Record<string, string[]> {
+    const out: Record<string, string[]> = {};
+    for (const id of accountIds) {
+      out[id] = this.ctx.storage.sql.exec(
+        "SELECT a.account_id FROM workspace_members a JOIN workspace_members s ON s.user_id = a.sponsor_user_id WHERE s.account_id = ? AND a.kind = 'personal_agent' AND a.account_id IS NOT NULL",
+        id,
+      ).toArray().map((r) => r.account_id as string);
+    }
+    return out;
+  }
+
   private userOfAccount(accountId: string): string | null {
     return (this.ctx.storage.sql.exec('SELECT user_id FROM workspace_members WHERE account_id = ?', accountId).toArray()[0]?.user_id as string | undefined) ?? null;
   }

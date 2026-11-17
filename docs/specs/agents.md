@@ -96,7 +96,7 @@ agent of §6, and it works the way a human assistant does:
   account (refused mail never is): incoming email is an event-based trigger like any other (operator ruling 2026-11-17,
   R-B). She answers it by email on her own only when the sponsor turns on "Agent always responds to incoming email" (off
   by default; operator ruling 2026-11-17), which is a `wake` subscription on her `mail.received` (`assistant/mailWake.ts`,
-  kept by `Assistant.syncMailWake`) whose output step mails her answer back to the sender (`reply: 'mail'`); otherwise she
+  kept by `Assistant.syncMailWake`), owned by the sponsor and listed in their Automations (R-D: automations are a person's, never an agent's; deleting it there turns answering off), whose output step mails her answer back to the sender (`reply: 'mail'`); otherwise she
   reads it when the sponsor asks, or when an automation they made wakes her. Invitations to her calendar follow the same list. She works in the
   sponsor's mailbox and calendars too, through the sponsor's access. She knows her own mailbox: her prompt gives her address and who may mail her, and in the
   panel and in Chat her mailbox is one of the mail accounts her mail tools list (marked `yours`), read as her own account,
@@ -506,6 +506,7 @@ approval"):
 | --- | --- |
 | R-A | Every turn no browser runs (wake job, Chat, email) runs one server-side tool loop offering every tool the agent is authorized for: server tools, Chat's tools, Docs' editing tools headless; page-only tools are refused with the reason (§5). |
 | R-B | Incoming email is an event-based trigger: `mail.received`, screened by the allowlist at the publisher; answering is a `wake` subscription whose output step mails the answer back (§1.1). |
+| R-D | Every automation is owned by a person, never an agent; the email-answering one is the sponsor's, worked by the agent (§1.1). |
 | R-C | Posting to Chat never requires approval: `send_message` posts at once in every turn; the ✅ card is gone (§1). |
 
 ## 11. Implementation phases

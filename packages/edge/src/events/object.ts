@@ -270,12 +270,17 @@ export class Events extends DurableObject<EventsEnv> {
     const org = this.env.ORG?.get(this.env.ORG.idFromName(organizationId));
     const owners = [...new Set(subs.map((s) => s.owner))];
     const kinds = subs.some((s) => s.filter.actorKind === 'person' || s.filter.actorKind === 'agent');
-    const [channels, agents] = await Promise.all([
+    const sponsors = [...new Set(subs.filter((s) => s.filter.consumerOwn).map((s) => s.owner))];
+    const [channels, agents, sponsored] = await Promise.all([
       org ? (org.privateChannelIdsOfAccounts(owners) as Promise<Record<string, string[]>>) : Promise.resolve({} as Record<string, string[]>),
       kinds && org ? (org.agentAccountIds() as Promise<string[]>) : Promise.resolve(undefined),
+      sponsors.length && org ? (org.personalAgentAccountsOf(sponsors) as Promise<Record<string, string[]>>) : Promise.resolve({} as Record<string, string[]>),
     ]);
     for (const sub of subs) {
-      const reader = await this.withShares({ accountId: sub.owner, channelIds: channels[sub.owner] ?? [], ...(agents ? { agentAccountIds: agents } : {}) }, after);
+      const reader = await this.withShares({
+        accountId: sub.owner, channelIds: channels[sub.owner] ?? [], ...(agents ? { agentAccountIds: agents } : {}),
+        ...(sub.filter.consumerOwn ? { sponsoredAgentIds: sponsored[sub.owner] ?? [] } : {}),
+      }, after);
       const events = this.core.matchingEvents(sub, after, through, reader);
       for (const e of events) {
         const d = this.core.decide(sub, e);
