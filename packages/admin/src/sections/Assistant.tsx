@@ -136,10 +136,15 @@ function WhoMayMail({ org }: { org: WorkspaceDTO }) {
     onSuccess: async () => qc.invalidateQueries({ queryKey: ['assistant', org.id, 'allowlist'] }),
   });
   const saved = (list.data ?? []).join('\n');
+  const auto = useQuery({ queryKey: ['assistant', org.id, 'autoReply'], queryFn: () => assistantApi.autoReply(org.id) });
+  const setAuto = useMutation({
+    mutationFn: (on: boolean) => assistantApi.saveAutoReply(org.id, on),
+    onSuccess: async () => qc.invalidateQueries({ queryKey: ['assistant', org.id, 'autoReply'] }),
+  });
   return (
     <Card
       title="Who may mail it"
-      intro="Empty, your assistant reads no mail at all. Add the addresses it may take mail from, one per line (yours too, if you want to mail it); it then checks every ten minutes, and mail from anyone else goes to its Refused folder, unread."
+      intro="Empty, your assistant reads no mail at all. Add the addresses it may take mail from, one per line (yours too, if you want to mail it); it then checks every ten minutes, and mail from anyone else goes to its Refused folder, unread. Mail it takes waits in its inbox until you ask about it, unless it always responds."
       testid="card-assistant-allowlist"
     >
       {list.isError && <ErrorLine error={errorText(list.error)} />}
@@ -152,6 +157,21 @@ function WhoMayMail({ org }: { org: WorkspaceDTO }) {
             </Button>
           </div>
           <ErrorLine error={save.isError ? errorText(save.error) : null} />
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={auto.data === true}
+              disabled={!auto.isSuccess || setAuto.isPending}
+              onChange={(e) => setAuto.mutate(e.target.checked)}
+              data-testid="assistant-autoreply"
+            />
+            <span>
+              <span className="font-medium">Agent always responds to incoming email</span>
+              <span className="block text-xs text-muted">Each message from a sender above starts its turn, and it answers by email from its own address. Off, it only reads that mail when you ask, or when an automation wakes it.</span>
+            </span>
+          </label>
+          <ErrorLine error={setAuto.isError ? errorText(setAuto.error) : null} />
         </div>
       )}
     </Card>
