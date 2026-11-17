@@ -177,6 +177,7 @@ export const UpdateWorkspaceBody = z
         inviteBy: z.enum(['admins', 'members']).optional(),
         agentsBy: z.enum(['admins', 'members']).optional(),
         linkSharing: z.boolean().optional(),
+        visitors: z.enum(['on', 'off']).optional(),
       })
       .strict()
       .optional(),

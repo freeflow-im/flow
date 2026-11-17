@@ -146,7 +146,16 @@ export async function computeRecipients(
   }
 
   // user mentions: validate workspace membership (400 on strangers)
-  const uniqueMentions = [...new Set(mentions)];
+  let uniqueMentions = [...new Set(mentions)];
+  // A channel visitor (docs/specs/chat-visitors.md) gets no notifications: a mention of one is a name, nothing more.
+  if (uniqueMentions.length > 0) {
+    const visitorRows = await db
+      .select({ id: schema.users.id })
+      .from(schema.users)
+      .where(and(inList(schema.users.id, uniqueMentions), eq(schema.users.isVisitor, true)));
+    const visitorIds = new Set(visitorRows.map((r) => r.id));
+    uniqueMentions = uniqueMentions.filter((id) => !visitorIds.has(id));
+  }
   if (uniqueMentions.length > 0) {
     const wsRows = await db
       .select({ userId: workspaceMembers.userId })

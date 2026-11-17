@@ -126,6 +126,8 @@ export const config = {
     const v = process.env.FLOW_PUSH_BODY_PREVIEW;
     return !(v === '0' || v === 'false');
   },
+  /** Cloudflare Turnstile's secret for the visitor name screen (docs/specs/chat-visitors.md V10). Unset: no check (dev). */
+  get turnstileSecret(): string | undefined { return process.env.TURNSTILE_SECRET || undefined; },
   /** Base URL the web client is served from — used in emailed links. */
   get webUrlBase(): string {
     return process.env.FLOW_WEB_URL ?? 'http://127.0.0.1:8787';

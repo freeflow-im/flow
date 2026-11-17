@@ -2014,3 +2014,15 @@ one-recipient MCP correction).
   rescheduling re-sync when the data is more than 2 minutes old.
 - **No video call link in v1.** The location is text that the owner types.
 - **Guests can cancel and reschedule** through a link sent only to them.
+
+## 2026-11-16 — Chat visitors (`docs/specs/chat-visitors.md`)
+
+- **A visitor is a person with no account, let into one public channel by a link**,
+  after typing their name. Not a member, not a guest account (operator ruling).
+- **A visitor sees only what was posted after they joined**, checked on the server;
+  no part of an older thread; no search; old edits and reactions never reach them.
+- **Visitors cannot message agents.** Public channels only (meeting channels are
+  their own kind and allow visitors). Files allowed. Web only for now.
+- **A link works for 24 hours; a visitor's access ends 30 days after their last visit.**
+- **This comes before Meet recording**: each meeting room gets its own channel, and
+  Meet guests join its chat as visitors.

@@ -29,6 +29,8 @@ export const users = sqliteTable('users', {
   timezone: text('timezone').notNull().default('UTC'),
   isBot: integer('is_bot', { mode: 'boolean' }).notNull().default(false), // bot users of the removed Slack-compatible API (migration 0047); kept for their rows
   isAgent: integer('is_agent', { mode: 'boolean' }).notNull().default(false), // first-class AI agents (AGENTS_DESIGN.md)
+  // A channel visitor (docs/specs/chat-visitors.md): no account, no workspace_members row; let into one channel by a link.
+  isVisitor: integer('is_visitor', { mode: 'boolean' }).notNull().default(false),
   // Agents only (AGENT_MEMBERS.md): the human member responsible for the agent,
   // and the agent's durable credentials (username + argon2 key hash) — nulled
   // on removal so a removed agent can never log back in.
@@ -270,6 +272,47 @@ export const channelMembers = sqliteTable(
     notifyLevel: integer('notify_level').notNull().default(1), // 0=mute 1=mentions 2=all
   },
   (t) => [primaryKey({ columns: [t.channelId, t.userId] }), index('ix_2').on(t.userId)],
+);
+
+/** A link that lets someone with no account into one public channel (docs/specs/chat-visitors.md §4). Works 24 hours. */
+export const visitorLinks = sqliteTable(
+  'visitor_links',
+  {
+    id: text('id').primaryKey(),
+    channelId: text('channel_id').notNull().references(() => channels.id, { onDelete: 'cascade' }),
+    tokenHash: bytea('token_hash').notNull(),
+    createdBy: text('created_by').notNull().references(() => users.id),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+    expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+    revokedAt: integer('revoked_at', { mode: 'timestamp_ms' }),
+  },
+  (t) => [uniqueIndex('visitor_links_token_idx').on(t.tokenHash), index('visitor_links_channel_idx').on(t.channelId)],
+);
+
+/** A visitor in their channel: what they see starts at `sees_from`. `removed_at` ends it; the users row stays for authorship. */
+export const channelVisitors = sqliteTable(
+  'channel_visitors',
+  {
+    channelId: text('channel_id').notNull().references(() => channels.id, { onDelete: 'cascade' }),
+    userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    linkId: text('link_id').references(() => visitorLinks.id, { onDelete: 'set null' }),
+    seesFrom: integer('sees_from', { mode: 'timestamp_ms' }).notNull(),
+    lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }).notNull(),
+    removedAt: integer('removed_at', { mode: 'timestamp_ms' }),
+  },
+  (t) => [primaryKey({ columns: [t.channelId, t.userId] }), index('channel_visitors_link_idx').on(t.linkId), index('channel_visitors_user_idx').on(t.userId)],
+);
+
+/** A visitor's cookie (`vsid`), hashed. Deleted when their access ends. */
+export const visitorSessions = sqliteTable(
+  'visitor_sessions',
+  {
+    tokenHash: bytea('token_hash').primaryKey(),
+    userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    channelId: text('channel_id').notNull().references(() => channels.id, { onDelete: 'cascade' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+  },
+  (t) => [index('visitor_sessions_user_idx').on(t.userId)],
 );
 
 export const messages = sqliteTable(

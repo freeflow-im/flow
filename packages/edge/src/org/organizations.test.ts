@@ -74,12 +74,12 @@ describe('organizations', () => {
     await expect(run(() => createJoinLink(workspaceId, BOT))).rejects.toMatchObject({ statusCode: 403, code: 'forbidden' });
     await expect(run(() => updateWorkspace(workspaceId, BOB, { policies: { inviteBy: 'admins' } }))).rejects.toMatchObject({ statusCode: 403 });
     const ws = await run(() => updateWorkspace(workspaceId, ANN, { policies: { inviteBy: 'admins', agentsBy: 'admins' } }));
-    expect(ws.policies).toEqual({ inviteBy: 'admins', agentsBy: 'admins', linkSharing: true });
+    expect(ws.policies).toEqual({ inviteBy: 'admins', agentsBy: 'admins', linkSharing: true, visitors: 'on' });
     await expect(run(() => createJoinLink(workspaceId, BOB))).rejects.toMatchObject({ statusCode: 403, code: 'policy_forbids' });
     await expect(run(() => createAgentInvite(workspaceId, BOB))).rejects.toMatchObject({ statusCode: 403, code: 'policy_forbids' });
     await run(() => createJoinLink(workspaceId, ANN));
     const kept = await run(() => updateWorkspace(workspaceId, ANN, { policies: { linkSharing: false } }));
-    expect(kept.policies).toEqual({ inviteBy: 'admins', agentsBy: 'admins', linkSharing: false });
+    expect(kept.policies).toEqual({ inviteBy: 'admins', agentsBy: 'admins', linkSharing: false, visitors: 'on' });
   });
 
   it('renames the organization for an owner or admin, within 1 to 80 characters; the slug stays', async () => {

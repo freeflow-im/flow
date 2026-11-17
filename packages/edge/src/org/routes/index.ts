@@ -96,6 +96,7 @@ import * as ag from '../services/agents.js';
 import * as wi from '../services/workspaceInvites.js';
 import * as ar from '../services/artifacts.js';
 import * as sm from '../services/scheduledMessages.js';
+import { registerVisitorRoutes } from './visitors';
 
 
 function parse<S extends ZodTypeAny>(schema: S, data: unknown): z.output<S> {
@@ -132,6 +133,9 @@ export function registerRoutes(app: FastifyInstance): void {
     app.log.error(err);
     return reply.status(500).send({ error: { code: 'internal', message: 'internal server error' } });
   });
+
+  // Channel visitors (docs/specs/chat-visitors.md): the link, the visitor's own routes, and the members' links and lists.
+  registerVisitorRoutes(app);
 
 
 

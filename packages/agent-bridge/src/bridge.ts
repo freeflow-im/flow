@@ -1137,6 +1137,8 @@ export class AgentBridge {
   private async addressedToMe(msg: MessageDTO): Promise<boolean> {
     const sender = this.members.get(msg.userId);
     if (msg.userId === this.me.id) return false; // never our own messages (incl. MCP-sent)
+    // A channel visitor (docs/specs/chat-visitors.md V5) never asks an agent, mention or not, even in a thread we are in.
+    if (msg.visitor) return false;
     if (!sender) return false; // only workspace members
     if (sender.isAgent && !this.cfg.respondToAgents) return false; // agent-to-agent loop guard
     // Agent-to-agent traffic must be an explicit hand-off: with

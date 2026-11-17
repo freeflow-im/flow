@@ -4,6 +4,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { Avatar } from './Avatar';
 
+/** A channel visitor (docs/specs/chat-visitors.md §1.4): in the channel by a link, with no account. */
+export interface VisitorRow {
+  userId: string;
+  displayName: string;
+}
+
 export interface MemberRow {
   userId: string;
   displayName: string;
@@ -32,9 +38,15 @@ export default function ChannelMembersPopover({
   onSelect,
   onAdd,
   onRemove,
+  visitors = [],
+  onRemoveVisitor,
   onClose,
 }: {
   rows: MemberRow[];
+  /** The channel's visitors, listed under their own heading. */
+  visitors?: VisitorRow[];
+  /** Ends a visitor's access; absent for someone who may not (a guest account). */
+  onRemoveVisitor?: (userId: string) => Promise<void>;
   loading?: boolean;
   onSelect: (userId: string) => void;
   /** "Add people", for a channel people can be added to. */
@@ -51,7 +63,8 @@ export default function ChannelMembersPopover({
   const remove = async (userId: string) => {
     setError(null);
     try {
-      await onRemove?.(userId);
+      const visitor = visitors.some((v) => v.userId === userId);
+      await (visitor ? onRemoveVisitor : onRemove)?.(userId);
       setConfirming(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not remove them from the channel.');
@@ -139,6 +152,32 @@ export default function ChannelMembersPopover({
         )}
         </div>
       ))}
+      {visitors.length > 0 && (
+        <div data-testid="channel-visitors-section">
+          <p className="mt-1 border-t border-hairline px-2 pt-2 pb-1.5 text-[11px] font-bold tracking-[.05em] text-muted uppercase">
+            Visitors
+          </p>
+          {[...visitors].sort((a, b) => a.displayName.localeCompare(b.displayName, undefined, { sensitivity: 'base' })).map((v) => (
+            <div key={v.userId} className="group flex items-center gap-1 rounded-[9px] hover:bg-accent/10">
+              <span data-testid={`channel-visitor-${v.displayName}`} className="flex min-w-0 flex-1 items-center gap-2.5 p-1.5">
+                <Avatar userId={v.userId} name={v.displayName} avatarUrl={null} size={26} radius={9} />
+                <span className="truncate text-[13.5px] font-semibold text-ink">{v.displayName}</span>
+                <span className="shrink-0 rounded bg-daypill px-1.5 py-px text-[10px] font-bold tracking-wide text-muted uppercase">Visitor</span>
+              </span>
+              {onRemoveVisitor && (
+                <button
+                  data-testid={`channel-visitor-remove-${v.displayName}`}
+                  aria-label={confirming === v.userId ? `Confirm removing ${v.displayName}` : `Remove ${v.displayName} from the channel`}
+                  className={`shrink-0 rounded-[7px] px-1.5 py-1 text-[11.5px] font-semibold ${confirming === v.userId ? 'bg-red-600 text-white hover:bg-red-700' : 'text-faint hover:text-red-600'}`}
+                  onClick={() => (confirming === v.userId ? void remove(v.userId) : setConfirming(v.userId))}
+                >
+                  {confirming === v.userId ? 'Remove?' : 'Remove'}
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

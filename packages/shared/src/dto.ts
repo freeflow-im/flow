@@ -27,6 +27,9 @@ export interface UserDTO {
   title: string;
   /** First-class AI agent (AGENTS_DESIGN.md) — clients render a small 🤖 next to the name. */
   isAgent: boolean;
+  /** A channel visitor (docs/specs/chat-visitors.md): a person with no account, let into one channel by a link. Clients
+   * draw a "Visitor" label. Absent for everyone else. */
+  visitor?: boolean;
   /** Agents only: the human member who sponsored (approved) the agent. null for
    * humans and unsponsored agents. Mirrors WorkspaceMemberDTO.sponsorId so a
    * profile card fetched via /v1/users/:id can show the sponsor without the roster. */
@@ -111,9 +114,12 @@ export interface WorkspacePolicies {
   agentsBy: 'admins' | 'members';
   /** Stored only until phase 3 enforces it. */
   linkSharing: boolean;
+  /** Visitor links into public channels (docs/specs/chat-visitors.md). `off`: no new links, open links stop working and
+   * current visitors lose access. */
+  visitors: 'on' | 'off';
 }
 
-export const WORKSPACE_POLICY_DEFAULTS: WorkspacePolicies = { inviteBy: 'admins', agentsBy: 'members', linkSharing: true };
+export const WORKSPACE_POLICY_DEFAULTS: WorkspacePolicies = { inviteBy: 'admins', agentsBy: 'members', linkSharing: true, visitors: 'on' };
 
 export type MemberRole = 'owner' | 'admin' | 'member';
 
@@ -707,6 +713,9 @@ export interface MessageDTO {
    * message has no links, unfurling is off, or the worker hasn't finished —
    * cards arrive later via a `message.updated` event. */
   unfurls: UnfurlDTO[];
+  /** True when the author is a channel visitor (docs/specs/chat-visitors.md), so clients draw a "Visitor" label; absent
+   * otherwise. Agents never answer a visitor's message. */
+  visitor?: boolean;
 }
 
 /**
@@ -1016,4 +1025,55 @@ export interface CreateMemberResultDTO {
 export interface AccountSetupInfoDTO {
   email: string;
   displayName: string;
+}
+
+// ---- channel visitors (docs/specs/chat-visitors.md) -------------------------------------------------------------------
+
+/** GET /v1/visit/:token: what the name screen shows before anyone joins. */
+export interface VisitorPreviewDTO {
+  organization: { name: string; avatarUrl: string | null };
+  channel: { name: string; topic: string | null };
+  expiresAt: string;
+}
+
+/** A person in a visitor's channel, for display and mentions: a member, an agent or another visitor. */
+export interface VisitorChannelPersonDTO {
+  userId: string;
+  displayName: string;
+  avatarUrl: string | null;
+  isAgent: boolean;
+  visitor?: boolean;
+}
+
+/** GET /v1/visitor/me (and the answer to a join): the visitor, their one channel and their "sees from" time. */
+export interface VisitorMeDTO {
+  user: { id: string; displayName: string; visitor: true };
+  organization: { id: string; name: string; avatarUrl: string | null };
+  channel: { id: string; name: string; topic: string | null; people: VisitorChannelPersonDTO[] };
+  seesFrom: string;
+}
+
+/** A visitor link, as members see it. `url` only in the answer that made it. */
+export interface VisitorLinkDTO {
+  id: string;
+  channelId: string;
+  createdBy: string;
+  createdAt: string;
+  expiresAt: string;
+  revokedAt: string | null;
+  /** How many people came in by it. */
+  visitorCount: number;
+  url?: string;
+}
+
+/** A channel's current visitor, as members see it. */
+export interface ChannelVisitorDTO {
+  userId: string;
+  displayName: string;
+  visitor: true;
+  linkId: string | null;
+  seesFrom: string;
+  lastSeenAt: string;
+  /** Only with `?all=1`: when the visit ended. */
+  removedAt?: string;
 }

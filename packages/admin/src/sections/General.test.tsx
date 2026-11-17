@@ -18,7 +18,7 @@ const org: WorkspaceDTO = {
   unfurlEnabled: true,
   unfurlDomainAllowlist: null,
   role: 'owner',
-  policies: { inviteBy: 'admins', agentsBy: 'members', linkSharing: true },
+  policies: { inviteBy: 'admins', agentsBy: 'members', linkSharing: true, visitors: 'on' },
 };
 
 let calls: { method: string; path: string; body: unknown }[];
@@ -82,6 +82,20 @@ describe('General', () => {
     fireEvent.change(screen.getByTestId('policy-inviteBy'), { target: { value: 'members' } });
     await waitFor(() => expect(calls.some((c) => c.method === 'PATCH')).toBe(true));
     expect(calls.find((c) => c.method === 'PATCH')!.body).toEqual({ policies: { inviteBy: 'members' } });
+  });
+
+  it('turns visitors in channels off and on', async () => {
+    show();
+    const box = screen.getByTestId('policy-visitors') as HTMLInputElement;
+    expect(box.checked).toBe(true);
+    fireEvent.click(box);
+    await waitFor(() => expect(calls.some((c) => c.method === 'PATCH')).toBe(true));
+    expect(calls.find((c) => c.method === 'PATCH')!.body).toEqual({ policies: { visitors: 'off' } });
+  });
+
+  it('shows visitors on when an older server sends no visitors policy', () => {
+    show({ ...org, policies: { inviteBy: 'admins', agentsBy: 'members', linkSharing: true } as WorkspaceDTO['policies'] });
+    expect((screen.getByTestId('policy-visitors') as HTMLInputElement).checked).toBe(true);
   });
 
   it('has no "new members join as" setting: joiners are native (ruling 6)', () => {

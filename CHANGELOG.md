@@ -12,6 +12,7 @@ This file keeps two things:
 
 ## Parity
 
+- **Channel visitors are invited and labelled on web only (2026-11-16, docs/specs/chat-visitors.md).** Invite a visitor, the Visitors section and the visitor's own page are web Chat (V11, deliberate); the Visitor label on a visitor's name is web only too, so macOS and iOS show a visitor's messages with no label (gap to close, phase 3 of the spec).
 - **Picking the address coworkers see is on web only (2026-11-15).** A person without a hosted address picks a linked mailbox in web Mail's account settings; macOS and iOS have no Mail and show no addresses (deliberate).
 - **Your own email aliases are managed on web only (2026-11-16).** Members add and remove aliases in web Mail's account settings, and admins manage addresses in web Admin; macOS and iOS have no Mail or Admin (deliberate).
 - **Emailing someone from a calendar event is web only (2026-11-16).** The mail icon by a guest opens Mail's composer beside Calendar; macOS and iOS have no Mail (deliberate).

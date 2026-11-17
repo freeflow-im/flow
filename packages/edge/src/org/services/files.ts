@@ -25,7 +25,7 @@ import { inList } from '../sqlList.js';
 
 const { files, messageFiles, messages, users } = schema;
 
-type FileRow = typeof files.$inferSelect;
+export type FileRow = typeof files.$inferSelect;
 
 // What we ask sharp to thumbnail. Deliberately no HEIC (#243): the prebuilt
 // libvips parses the HEIF container but can't decode HEVC pixels, so
@@ -262,7 +262,11 @@ export function readBlob(key: string, encKeyId: string | null): Promise<Buffer> 
 }
 
 export async function getFileDownload(fileId: string, userId: string): Promise<FileDownload> {
-  const f = await requireFileAccess(fileId, userId);
+  return downloadOfFile(await requireFileAccess(fileId, userId));
+}
+
+/** The download of a file whose access the caller has already checked (a visitor's, services/visitors.ts). */
+export async function downloadOfFile(f: FileRow): Promise<FileDownload> {
   if (!f.encKeyId) {
     // legacy encrypted rows can't be served by R2 directly — proxy those
     const url = await blobStore().presignGet(f.storageKey, { filename: f.name, contentType: f.mimeType });
@@ -310,7 +314,11 @@ export async function getThumbUrl(
 }
 
 export async function getThumbDownload(fileId: string, userId: string): Promise<FileDownload> {
-  const f = await requireFileAccess(fileId, userId);
+  return thumbOfFile(await requireFileAccess(fileId, userId));
+}
+
+/** The thumbnail of a file whose access the caller has already checked (a visitor's, services/visitors.ts). */
+export async function thumbOfFile(f: FileRow): Promise<FileDownload> {
   if (!f.thumbKey) throw notFound('no thumbnail for this file');
   if (!f.encKeyId) {
     const url = await blobStore().presignGet(f.thumbKey, { contentType: 'image/webp', inline: true });
@@ -493,6 +501,8 @@ export async function listChannelFiles(
   sort: ChannelFileSortName,
   before: string | undefined,
   limit: number,
+  /** A visitor's view (docs/specs/chat-visitors.md §2): only files on messages they can see. */
+  cut?: { since?: Date | undefined },
 ): Promise<ChannelFilePage> {
   await requireChannelAccess(channelId, userId);
   const { key, dir } = CHANNEL_FILE_SORTS[sort] ?? CHANNEL_FILE_SORTS.newest;
@@ -513,6 +523,10 @@ export async function listChannelFiles(
     isNull(messages.deletedAt),
     isNull(files.deletedAt),
     eq(files.status, 'ready'),
+    // A reply counts from its thread's first message (V3): the root's time, else the message's own.
+    cut?.since
+      ? sql`coalesce((select r.created_at from messages r where r.id = ${messages.threadRootId}), ${messages.createdAt}) >= ${cut.since.getTime()}`
+      : undefined,
   );
 
   const conds = [live];

@@ -78,6 +78,13 @@
       "when": 1794809766462,
       "tag": "0010_meeting_locks",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1794875497943,
+      "tag": "0011_chat_visitors",
+      "breakpoints": true
     }
   ]
 }

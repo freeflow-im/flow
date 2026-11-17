@@ -141,6 +141,11 @@ export class SocketClient {
     this.ws = null;
   }
 
+  /** The first frame, proving who this socket is: a member's bearer here, a channel visitor's cookie in lib/visitor.ts. */
+  protected authFrame(since: number | null): Record<string, unknown> {
+    return { op: 'auth', token: this.token, ...(since !== null ? { since } : {}) };
+  }
+
   sendTyping(channelId: string, threadRootId?: string): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ op: 'typing', channelId, ...(threadRootId ? { threadRootId } : {}) }));
@@ -162,7 +167,7 @@ export class SocketClient {
       // The first connect loads everything over REST; a reconnect also asks the
       // server for what it missed since the last cursor it applied.
       const since = this.connectedBefore ? this.cursors.get(this.url) : null;
-      ws.send(JSON.stringify({ op: 'auth', token: this.token, ...(since !== null ? { since } : {}) }));
+      ws.send(JSON.stringify(this.authFrame(since)));
     };
     ws.onmessage = (msg) => {
       // Any frame is proof of life — pings included, and they are what keeps an

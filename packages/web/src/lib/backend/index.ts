@@ -6,13 +6,14 @@ import type { Capabilities, Capability, CapabilityName, WorkspaceBackend } from 
 import type { ConnectionRuntime } from '../connectionRuntime';
 import { useRuntime } from '../../state';
 import { FlowBackend } from './flowBackend';
+import { VisitorRuntime, visitorCapabilities } from '../visitor';
 
 const backends = new WeakMap<ConnectionRuntime, WorkspaceBackend>();
 
 export function backendFor(runtime: ConnectionRuntime): WorkspaceBackend {
   let backend = backends.get(runtime);
   if (backend) return backend;
-  backend = new FlowBackend(runtime);
+  backend = runtime instanceof VisitorRuntime ? new FlowBackend(runtime, visitorCapabilities()) : new FlowBackend(runtime);
   backends.set(runtime, backend);
   return backend;
 }

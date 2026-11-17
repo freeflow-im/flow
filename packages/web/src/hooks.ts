@@ -1,6 +1,6 @@
 // TanStack Query hooks over the REST API (phase2.md §7: online-only —
 // queries are the state; WS events invalidate them).
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import {
   useInfiniteQuery,
   useMutation,
@@ -13,6 +13,8 @@ import type {
   ArtifactDTO,
   ChannelDTO,
   ChannelFilePage,
+  ChannelVisitorDTO,
+  VisitorLinkDTO,
   ChannelFileSort,
   FileDTO,
   MessageDTO,
@@ -40,6 +42,7 @@ import { connectionManager } from './lib/connectionRuntime';
 import { switcherEntries, syncedBindings, type SwitcherEntry } from './lib/workspaceSwitcher';
 import { useBackend } from './lib/backend';
 import { useAuth, useRuntime } from './state';
+import type { ChannelPerson } from './lib/visitor';
 
 // Chat-core hooks go through the connection's WorkspaceBackend (#545): the
 // same hook serves every connected Flow server, and no component builds a
@@ -629,4 +632,73 @@ export function useScheduledMessageActions() {
     onSuccess: refresh,
   });
   return { create, update, remove, setEnabled, runNow };
+}
+
+// ---- channel visitors (docs/specs/chat-visitors.md) -------------------------------------------------------------------
+
+/**
+ * A channel's current visitors (§1.4). Visitors are on no roster, so this is how a member's client names them; a
+ * visitor's own page answers it from `/v1/visitor/me` (lib/visitor.ts). Only public standard channels take visitors.
+ */
+export function useChannelVisitors(channelId: string | null | undefined, enabled = true) {
+  const runtime = useRuntime();
+  const api = runtime.api.bind(runtime);
+  return useQuery({
+    queryKey: ['channelVisitors', channelId],
+    // `all=1`: past visitors too, so an older message by a removed visitor keeps its author's name.
+    queryFn: () => api<{ visitors: ChannelVisitorDTO[] }>('GET', `/v1/channels/${channelId}/visitors?all=1`),
+    select: (d) => d.visitors,
+    enabled: !!channelId && enabled,
+    // An older server has no such route: no visitors, and nothing to retry.
+    retry: false,
+  });
+}
+
+/**
+ * The people a channel's messages name: the organization's roster plus the channel's visitors, each visitor marked so
+ * the list, the thread and the composer can draw the Visitor label. A message by a visitor who has since left still
+ * says "Visitor" (MessageDTO.visitor), under the name "A visitor".
+ */
+export function useChannelPeople(workspaceId: string | null, channel: Pick<ChannelDTO, 'id' | 'kind' | 'isPrivate'> | null | undefined) {
+  const members = useMembers(workspaceId);
+  const takesVisitors = !!channel && channel.kind === 'standard' && !channel.isPrivate;
+  const visitors = useChannelVisitors(channel?.id, takesVisitors);
+  return useMemo(() => {
+    const names: Record<string, string> = {};
+    const displayNames: Record<string, string> = {};
+    const memberMap: Record<string, ChannelPerson> = {};
+    for (const m of members.data ?? []) {
+      names[m.userId] = m.displayName;
+      displayNames[m.userId] = m.isAgent ? `${m.displayName} 🤖` : m.displayName;
+      memberMap[m.userId] = m;
+    }
+    for (const v of visitors.data ?? []) {
+      if (memberMap[v.userId]) continue;
+      names[v.userId] = v.displayName;
+      displayNames[v.userId] = v.displayName;
+      memberMap[v.userId] = visitorPerson(v);
+    }
+    const current = (visitors.data ?? []).filter((v) => !v.removedAt);
+    return { names, displayNames, memberMap, visitors: current, refetchVisitors: visitors.refetch };
+  }, [members.data, visitors.data, visitors.refetch]);
+}
+
+/** A visitor as a roster row, for the maps the message list reads. */
+export function visitorPerson(v: Pick<ChannelVisitorDTO, 'userId' | 'displayName'>): ChannelPerson {
+  return {
+    userId: v.userId, displayName: v.displayName, email: '', avatarUrl: null, statusEmoji: '', statusText: '', title: '', isAgent: false,
+    isBot: false, sponsorId: null, privacyMode: true, role: 'member', joinedAt: '', visitor: true,
+  };
+}
+
+/** Visitor links of a channel (§1.1): the open ones, for the Invite a visitor dialog. */
+export function useVisitorLinks(channelId: string | null, enabled = true) {
+  const runtime = useRuntime();
+  const api = runtime.api.bind(runtime);
+  return useQuery({
+    queryKey: ['visitorLinks', channelId],
+    queryFn: () => api<{ links: VisitorLinkDTO[] }>('GET', `/v1/channels/${channelId}/visitor-links`),
+    select: (d) => d.links,
+    enabled: !!channelId && enabled,
+  });
 }

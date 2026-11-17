@@ -33,6 +33,7 @@ import { APPROVE, DECLINE } from '../assistant/chatTools';
 import { config } from './config';
 import { isActiveAccount, recordShare, revokeShare, shareEvents, sharedRefsOf, sharedWith, type RecordShareInput, type RevokeShareInput, type SharedItem } from './services/shares';
 import { eq, and } from 'drizzle-orm';
+import { sweepIdleVisitors, visitorBySession, visitorMayReceive, type MessageTimes, type VisitorSocket } from './services/visitors';
 import { cleanPrompts, type AssistantPrompts } from '@flow/shared/assistant';
 
 /** Where the organization's suggested prompts are kept, in the object's own storage beside its database. */
@@ -49,6 +50,8 @@ export type OrgEnv = StorageEnv & MailProviderEnv & {
 };
 
 const DAY_MS = 86_400_000;
+/** The storage key of the next sweep of idle visitors (V8). */
+const VISITOR_SWEEP_KEY = 'visitor_sweep_at';
 /** Messages indexed for search in one go, between other requests (indexMessages). */
 const MESSAGE_INDEX_BATCH = 200;
 /** The storage key of the next mailbox retention sweep's time. */
@@ -69,6 +72,8 @@ const OUTBOX = [
   `CREATE TRIGGER IF NOT EXISTS _index_meeting_codes AFTER INSERT ON meetings WHEN NEW.code IS NOT NULL BEGIN INSERT INTO _outbox (kind, id) VALUES ('index', NEW.code); END`,
   // RealtimeKit's webhook names its own meeting id, which the Worker resolves to this organization the same way.
   `CREATE TRIGGER IF NOT EXISTS _index_meeting_rtk AFTER INSERT ON meetings BEGIN INSERT INTO _outbox (kind, id) VALUES ('index', NEW.rtk_meeting_id); END`,
+  // A visitor link's token hash (/v1/visit/<token>) and its id (DELETE /v1/visitor-links/<id>) find this organization.
+  `CREATE TRIGGER IF NOT EXISTS _index_visitor_links AFTER INSERT ON visitor_links BEGIN INSERT INTO _outbox (kind, id) VALUES ('index', lower(hex(NEW.token_hash))); INSERT INTO _outbox (kind, id) VALUES ('index', NEW.id); END`,
   `CREATE TRIGGER IF NOT EXISTS _index_huddle_invites AFTER INSERT ON huddle_invites BEGIN INSERT INTO _outbox (kind, id) VALUES ('index', NEW.id); END`,
   // An agent's account and tokens begin here, at redeem, and have to reach the directory, which authenticates every request.
   `CREATE TRIGGER IF NOT EXISTS _index_agent_invites AFTER INSERT ON agent_invites BEGIN INSERT INTO _outbox (kind, id) VALUES ('index', lower(hex(NEW.code_hash))); END`,
@@ -90,7 +95,9 @@ const OUTBOX = [
 const app = new CompatApp();
 registerRoutes(app as never);
 
-interface Attachment { userId: string; accountId: string | null }
+/** A socket's identity: a member's (userId, accountId), or a channel visitor's (`visitor`, docs/specs/chat-visitors.md §6).
+ * A visitor's socket opened with its cookie keeps the cookie's value until its first frame (`visitorToken`). */
+interface Attachment { userId?: string; accountId: string | null; visitor?: VisitorSocket; visitorToken?: string }
 const pushLog = { info: (o: unknown, msg?: string) => console.log(`[push] ${msg}`, JSON.stringify(o)), warn: (o: unknown, msg?: string) => console.warn(`[push] ${msg}`, JSON.stringify(o)) };
 const USER_SUBJECT = /(?:^|\.)user\.([0-9a-f-]{36})(?:\.|$)/;
 /** A reconnecting socket's backlog: read in pages of this many, and no more than the cap (the client refetches past it). */
@@ -228,8 +235,22 @@ export class Org extends DurableObject<OrgEnv> {
       .onConflictDoUpdate({ target: schema.users.id, set: copy }).run();
   }
 
-  private sockets(): { ws: WebSocket; userId: string | undefined }[] {
-    return this.ctx.getWebSockets().map((ws) => ({ ws, userId: (ws.deserializeAttachment() as Attachment | null)?.userId }));
+  private sockets(): { ws: WebSocket; userId: string | undefined; visitor: VisitorSocket | undefined }[] {
+    return this.ctx.getWebSockets().map((ws) => {
+      const att = ws.deserializeAttachment() as Attachment | null;
+      return { ws, userId: att?.userId, visitor: att?.visitor };
+    });
+  }
+
+  /** A message's creation time and thread root, for the visitor filter (services/visitors.ts `visitorMayReceive`). */
+  private readonly messageTimes: MessageTimes = (id) => {
+    const row = this.ctx.storage.sql.exec('SELECT created_at, thread_root_id FROM messages WHERE id = ?', id).toArray()[0];
+    return row ? { createdAt: row.created_at as number, threadRootId: (row.thread_root_id as string | null) ?? null } : null;
+  };
+
+  /** Whether a user is a channel visitor (docs/specs/chat-visitors.md): never asks an agent (V5). */
+  private isVisitor(userId: string): boolean {
+    return !!this.ctx.storage.sql.exec('SELECT is_visitor FROM users WHERE id = ?', userId).toArray()[0]?.is_visitor;
   }
 
   /** Who may see an event, as the gateway decided on Node: a user's own subject goes to that user, and a private channel to its members. */
@@ -246,8 +267,11 @@ export class Org extends DurableObject<OrgEnv> {
       }
     }
     const frame = JSON.stringify({ op: 'event', event });
-    for (const { ws, userId } of this.sockets()) {
-      if (!userId || (onlyUser && userId !== onlyUser) || (allowed && !allowed.has(userId))) continue;
+    for (const { ws, userId, visitor } of this.sockets()) {
+      // A visitor's socket: their channel only, cut to what they may see (§2, V4).
+      if (visitor) {
+        if (!visitorMayReceive(visitor, subject, event, this.messageTimes)) continue;
+      } else if (!userId || (onlyUser && userId !== onlyUser) || (allowed && !allowed.has(userId))) continue;
       try { ws.send(frame); } catch { /* the socket is closing */ }
     }
     this.logEvent(subject, event, frame, stamp);
@@ -288,6 +312,8 @@ export class Org extends DurableObject<OrgEnv> {
    */
   private async askAssistant(msg: MessageDTO): Promise<void> {
     if (!msg?.id || msg.systemKind || !this.env.ASSISTANT) return;
+    // A visitor's message never asks an agent, hosted, shared or personal, even in a thread one is in (V5).
+    if (this.isVisitor(msg.userId)) return;
     const sql = this.ctx.storage.sql;
     await this.askSharedAgents(msg).catch((err) => console.error(`[assistant] shared agent: ${(err as Error).message}`));
     const mine = sql.exec("SELECT user_id, account_id FROM workspace_members WHERE kind = 'personal_agent' AND runtime = 'hosted' AND sponsor_user_id = ? AND account_id IS NOT NULL", msg.userId).toArray();
@@ -592,18 +618,33 @@ export class Org extends DurableObject<OrgEnv> {
    * A `since` older than the window sends `gap` first. The events still on their way to the log go in first.
    */
   private async sendBacklog(ws: WebSocket, workspaceId: string, userId: string, accountId: string, since: number): Promise<void> {
+    return this.sendBacklogAs(ws, workspaceId, { accountId, channelIds: this.privateChannelIdsOf(userId) }, since);
+  }
+
+  /** A visitor's backlog: their channel's events, through the same filter as their live events (§2). */
+  private sendVisitorBacklog(ws: WebSocket, workspaceId: string, v: VisitorSocket, since: number): Promise<void> {
+    return this.sendBacklogAs(ws, workspaceId, { accountId: `visitor:${v.userId}`, channelIds: [], sharedRefs: [] }, since, {
+      channelId: v.channelId,
+      keep: (event) => visitorMayReceive(v, '', event, this.messageTimes),
+    });
+  }
+
+  private async sendBacklogAs(
+    ws: WebSocket, workspaceId: string, reader: { accountId: string; channelIds: string[]; sharedRefs?: string[] }, since: number,
+    only?: { channelId: string; keep: (event: Event) => boolean },
+  ): Promise<void> {
     if (!this.env.EVENTS) return;
     await this.logging;
     const events = this.env.EVENTS.get(this.env.EVENTS.idFromName(workspaceId));
-    const reader = { accountId, channelIds: this.privateChannelIdsOf(userId) };
     let cursor = Math.max(0, Math.floor(since));
     let sent = 0;
     try {
       for (let page = 0; sent < BACKLOG_MAX; page++) {
-        const out = (await events.readFrom({ since: cursor, limit: Math.min(BACKLOG_PAGE, BACKLOG_MAX - sent), types: ['chat.*'] }, reader)) as SubscriptionRead;
+        const out = (await events.readFrom({ since: cursor, limit: Math.min(BACKLOG_PAGE, BACKLOG_MAX - sent), types: ['chat.*'], ...(only ? { channelId: only.channelId } : {}) }, reader)) as SubscriptionRead;
         if (page === 0 && out.gap) ws.send(JSON.stringify({ op: 'gap', from: out.gap.from, to: out.gap.to }));
         for (const e of out.events) {
           const event = { type: e.type.slice('chat.'.length), workspaceId, ...(e.channelId ? { channelId: e.channelId } : {}), ts: e.ts, data: e.data };
+          if (only && !only.keep(event as Event)) continue;
           ws.send(JSON.stringify({ op: 'event', event, seq: e.seq }));
         }
         sent += out.events.length;
@@ -1101,7 +1142,13 @@ export class Org extends DurableObject<OrgEnv> {
       sweep = (await this.ctx.storage.get<number>(SWEEP_KEY)) ?? null;
       if (sweep === null) await this.ctx.storage.put(SWEEP_KEY, (sweep = Date.now() + DAY_MS));
     }
-    const due = [scheduled, push, sweep].filter((n): n is number => n !== null);
+    // The daily sweep of idle visitors (V8), while there are any.
+    let visitorSweep: number | null = null;
+    if (this.ctx.storage.sql.exec('SELECT 1 FROM channel_visitors WHERE removed_at IS NULL LIMIT 1').toArray().length) {
+      visitorSweep = (await this.ctx.storage.get<number>(VISITOR_SWEEP_KEY)) ?? null;
+      if (visitorSweep === null) await this.ctx.storage.put(VISITOR_SWEEP_KEY, (visitorSweep = Date.now() + DAY_MS));
+    }
+    const due = [scheduled, push, sweep, visitorSweep].filter((n): n is number => n !== null);
     if (!due.length) await this.ctx.storage.deleteAlarm();
     else await this.ctx.storage.setAlarm(Math.min(...due));
   }
@@ -1115,7 +1162,17 @@ export class Org extends DurableObject<OrgEnv> {
     await this.logging;
     await this.flushOutbox(null);
     await this.sweepMailboxes().catch((err) => console.error(`[provisioning] sweep: ${(err as Error).message}`));
+    await this.sweepVisitors().catch((err) => console.error(`[visitors] sweep: ${(err as Error).message}`));
     await this.armAlarm();
+  }
+
+  /** Visitors not seen for 30 days lose access (V8), once a day while there are visitors. */
+  private async sweepVisitors(): Promise<void> {
+    const due = await this.ctx.storage.get<number>(VISITOR_SWEEP_KEY);
+    if (due === undefined || due > Date.now()) return;
+    await this.ctx.storage.put(VISITOR_SWEEP_KEY, Date.now() + DAY_MS);
+    const removed = await this.scoped(() => sweepIdleVisitors());
+    if (removed) console.log(`[visitors] sweep: ${removed} visitor(s) idle for 30 days removed`);
   }
 
   /** A person's whole account is going: leave this organization as the Node server's deletion did. */
@@ -1224,10 +1281,36 @@ export class Org extends DurableObject<OrgEnv> {
   }
 
   /** A client's socket. It proves who it is in its first frame, which is the protocol the clients already speak. */
-  override async fetch(_request: Request): Promise<Response> {
+  override async fetch(request: Request): Promise<Response> {
     const [client, server] = Object.values(new WebSocketPair()) as [WebSocket, WebSocket];
     this.ctx.acceptWebSocket(server);
+    // A visitor's socket (GET /v1/visitor/ws): the browser sent the HttpOnly cookie, which the page cannot read, so the
+    // socket keeps it for the first frame, `{op: 'visitor'}`, to prove who it is.
+    if (new URL(request.url).pathname === '/v1/visitor/ws') {
+      const token = /(?:^|;\s*)vsid=([^;]+)/.exec(request.headers.get('cookie') ?? '')?.[1];
+      if (token) server.serializeAttachment({ accountId: null, visitorToken: decodeURIComponent(token) } satisfies Attachment);
+    }
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  /**
+   * A visitor's socket proves who it is (docs/specs/chat-visitors.md §6): `{op: 'visitor', token?, since?}`, the token
+   * from the frame or the cookie the socket opened with. It then gets only its channel's events that pass §2.
+   */
+  private async authVisitor(ws: WebSocket, frame: { token?: string; since?: unknown }, att: Attachment | null): Promise<void> {
+    if (att?.userId) return;
+    const token = typeof frame.token === 'string' && frame.token ? frame.token : att?.visitorToken;
+    const v = token ? await this.scoped(() => visitorBySession(token)) : null;
+    if (!v) {
+      ws.send(JSON.stringify({ op: 'error', code: 'unauthorized', message: 'your visit has ended' }));
+      return ws.close(4003, 'unauthorized');
+    }
+    const visitor: VisitorSocket = { userId: v.userId, channelId: v.channelId, seesFrom: v.seesFrom.getTime() };
+    ws.serializeAttachment({ userId: v.userId, accountId: null, visitor } satisfies Attachment);
+    ws.send(JSON.stringify({ op: 'hello', sessionId: crypto.randomUUID(), heartbeat: 'client' }));
+    if (typeof frame.since === 'number' && Number.isFinite(frame.since) && frame.since >= 0) {
+      await this.sendVisitorBacklog(ws, v.workspaceId, visitor, frame.since);
+    }
   }
 
   private presence(workspaceId: string, userId: string, status: 'online' | 'offline'): Event {
@@ -1240,8 +1323,21 @@ export class Org extends DurableObject<OrgEnv> {
     const att = ws.deserializeAttachment() as Attachment | null;
     const workspace = this.db.select().from(schema.workspaces).get();
 
+    if (frame.op === 'visitor') return this.authVisitor(ws, frame, att);
+    // A visitor's socket sends typing in their own channel only, outside threads older than they are (§2).
+    if (att?.visitor) {
+      const v = att.visitor;
+      if (frame.op !== 'typing' || frame.channelId !== v.channelId || !workspace) return;
+      if (frame.threadRootId && !((this.messageTimes(frame.threadRootId)?.createdAt ?? -1) >= v.seesFrom)) return;
+      this.broadcast(`ws.${workspace.id}.chan.${v.channelId}.typing`, {
+        type: 'typing', workspaceId: workspace.id, channelId: v.channelId, ts: new Date().toISOString(),
+        data: { userId: v.userId, channelId: v.channelId, ...(frame.threadRootId ? { threadRootId: frame.threadRootId } : {}) },
+      } as Event);
+      return;
+    }
+
     if (frame.op === 'auth') {
-      if (att) return;
+      if (att?.userId) return;
       // The principal and its account here, in one call (platform.md §3.6): a suspended or removed account is refused.
       const answer = workspace ? await this.directory().call('authenticateIn' as never, [frame.token, workspace.id] as never) : null;
       const value = answer?.ok ? (answer as unknown as { value: { user: UserDTO; account: AccountDTO | null } }).value : null;
@@ -1265,26 +1361,28 @@ export class Org extends DurableObject<OrgEnv> {
       // Online: everyone with a socket here, and every hosted agent (a person's assistant, a hosted shared agent), which runs
       // in the platform with no socket of its own and so is always present (agents.md §1.1).
       const hosted = this.ctx.storage.sql.exec("SELECT user_id FROM workspace_members WHERE runtime = 'hosted'").toArray().map((r) => r.user_id as string);
-      const online = new Set([...this.sockets().map((s) => s.userId), ...hosted].filter((id): id is string => !!id && id !== user.id));
+      const online = new Set([...this.sockets().filter((s) => !s.visitor).map((s) => s.userId), ...hosted].filter((id): id is string => !!id && id !== user.id));
       for (const id of online) ws.send(JSON.stringify({ op: 'event', event: this.presence(workspace!.id, id, 'online') }));
       if (!alreadyOnline) this.broadcast(`ws.${workspace!.id}.presence`, this.presence(workspace!.id, user.id, 'online'));
       return;
     }
-    if (!att) return ws.send(JSON.stringify({ op: 'error', code: 'unauthorized', message: 'authenticate first' }));
+    if (!att?.userId) return ws.send(JSON.stringify({ op: 'error', code: 'unauthorized', message: 'authenticate first' }));
     // A client sends typing to all its organizations' sockets, since it does not track which holds a channel.
     if (frame.op === 'typing' && frame.channelId && workspace && this.ctx.storage.sql.exec('SELECT 1 FROM channels WHERE id = ?', frame.channelId).toArray().length) {
       this.broadcast(`ws.${workspace.id}.chan.${frame.channelId}.typing`, {
         type: 'typing', workspaceId: workspace.id, channelId: frame.channelId, ts: new Date().toISOString(),
-        data: { userId: att.userId, channelId: frame.channelId, ...(frame.threadRootId ? { threadRootId: frame.threadRootId } : {}) },
+        data: { userId: att.userId!, channelId: frame.channelId, ...(frame.threadRootId ? { threadRootId: frame.threadRootId } : {}) },
       } as Event);
     }
   }
 
   override async webSocketClose(ws: WebSocket): Promise<void> {
     const att = ws.deserializeAttachment() as Attachment | null;
-    if (!att) return;
+    // A visitor has no presence (§1.3); a socket that never authenticated has no one to mark offline.
+    if (!att?.userId || att.visitor) return;
+    const userId = att.userId;
     const workspace = this.db.select({ id: schema.workspaces.id }).from(schema.workspaces).get();
-    const stillHere = this.sockets().some((s) => s.ws !== ws && s.userId === att.userId);
-    if (workspace && !stillHere) this.broadcast(`ws.${workspace.id}.presence`, this.presence(workspace.id, att.userId, 'offline'));
+    const stillHere = this.sockets().some((s) => s.ws !== ws && s.userId === userId);
+    if (workspace && !stillHere) this.broadcast(`ws.${workspace.id}.presence`, this.presence(workspace.id, userId, 'offline'));
   }
 }
