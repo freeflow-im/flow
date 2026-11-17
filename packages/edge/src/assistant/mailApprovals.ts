@@ -20,23 +20,24 @@ export const MAX_WAITING = 50;
 interface Sql { exec(query: string, ...args: unknown[]): { toArray(): Record<string, unknown>[] } }
 
 /** What send_email hands the store: the prepared email, who wrote it, and the agent's own words. */
-export interface NewApproval { agentName: string; prepared: PreparedMail; fromAgent: boolean; body: string; quotes: 'reply' | 'forward' | null }
+export interface NewApproval { agentName: string; prepared: PreparedMail; fromAgent: boolean; body: string; quotes: 'reply' | 'forward' | null; /** Already sent (to the person themself): kept for the record. */ sent?: boolean }
 
 export class MailApprovals {
   constructor(private readonly sql: Sql) {}
 
   add(a: NewApproval): MailApprovalDTO {
     this.expire();
-    const waiting = Number(this.sql.exec("SELECT COUNT(*) AS n FROM mail_approvals WHERE state = 'waiting'").toArray()[0]?.n ?? 0);
+    const waiting = a.sent ? 0 : Number(this.sql.exec("SELECT COUNT(*) AS n FROM mail_approvals WHERE state = 'waiting'").toArray()[0]?.n ?? 0);
     if (waiting >= MAX_WAITING) throw new Error(`${MAX_WAITING} emails are already waiting for the user's approval; ask them to send or discard some first.`);
     const id = crypto.randomUUID();
     const p = a.prepared;
     this.sql.exec(
       `INSERT INTO mail_approvals (id, state, agent_name, account_id, from_address, from_agent, recipients, subject, body, quotes, payload, created_at)
-       VALUES (?, 'waiting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      id, a.agentName, p.account.id, p.account.email, a.fromAgent ? 1 : 0, JSON.stringify({ to: p.to, cc: p.cc, bcc: p.bcc }), p.subject, a.body,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id, a.sent ? 'sent' : 'waiting', a.agentName, p.account.id, p.account.email, a.fromAgent ? 1 : 0, JSON.stringify({ to: p.to, cc: p.cc, bcc: p.bcc }), p.subject, a.body,
       a.quotes, JSON.stringify(p.body), new Date().toISOString(),
     );
+    if (a.sent) this.decide(id, 'sent');
     return this.get(id)!;
   }
 

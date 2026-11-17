@@ -127,6 +127,11 @@ describe('a job', () => {
     expect(h.o.jobDepth(job!.id, BOT)).toBe(1);
     expect(h.o.jobDepth(job!.id, BOB)).toBeNull();
     expect(h.o.jobStep(job!.id, BOT, 'done', { ok: true, note: 'summarized' })).toMatchObject({ state: 'done', note: 'summarized' });
+    // Its end is in the log, for the agent's account (and its sponsor), beside its agent.job.
+    const finished = (await h.o.read({ types: ['agent.job.finished'] }, { accountId: BOT, channelIds: [] })).events;
+    expect(finished).toEqual([expect.objectContaining({ type: 'agent.job.finished', causedBy: job!.id, data: { jobId: job!.id, subscriptionId: sub.id, state: 'done', note: 'summarized' } })]);
+    expect((await h.o.read({ types: ['agent.job.finished'] }, { accountId: 'someone-else', channelIds: [] })).events).toEqual([]);
+    expect((await h.o.read({ types: ['agent.job.finished'] }, { accountId: 'sponsor', channelIds: [], sponsoredAgentIds: [BOT] })).events).toHaveLength(1);
     expect(h.o.jobStep(job!.id, BOT, 'extend')).toEqual({ conflict: 'done' });
     expect(await h.o.checkJob(job!.id)).toEqual({ ack: true });
   });

@@ -17,6 +17,9 @@ async function call(path: string, org: string | null, method = 'GET'): Promise<{
   return body;
 }
 
+/** Told to every card and list on the page when the person sends or discards an email, so each copy shows its new state. */
+const DECIDED = 'flow:mail-approval';
+
 /** One email and the person's two choices, read from the server so every place shows its current state. */
 export function useMailApproval(id: string, organizationId: string | null, initial?: MailApprovalDTO | null) {
   const [approval, setApproval] = useState<MailApprovalDTO | null>(initial ?? null);
@@ -29,14 +32,22 @@ export function useMailApproval(id: string, organizationId: string | null, initi
       if (r.approval) setApproval(r.approval);
       else if (r.error) setError(r.error);
     });
-    return () => { live = false; };
+    const onDecided = (e: Event) => {
+      const a = (e as CustomEvent<MailApprovalDTO>).detail;
+      if (live && a?.id === id) setApproval(a);
+    };
+    window.addEventListener(DECIDED, onDecided);
+    return () => { live = false; window.removeEventListener(DECIDED, onDecided); };
   }, [id, organizationId]);
   const act = useCallback(async (action: 'send' | 'discard') => {
     setBusy(true);
     setError(null);
     try {
       const r = await call(`/api/agent/mail-approvals/${encodeURIComponent(id)}/${action}`, organizationId, 'POST');
-      if (r.approval) setApproval(r.approval);
+      if (r.approval) {
+        setApproval(r.approval);
+        window.dispatchEvent(new CustomEvent(DECIDED, { detail: r.approval }));
+      }
       if (r.error) setError(r.error);
     } finally {
       setBusy(false);
@@ -107,7 +118,7 @@ export function emailApprovalOf(name: string, result: unknown): string | null {
 }
 
 /** The emails waiting for the person, at the top of a panel; read again when the window comes back into view. */
-export function WaitingEmails({ organizationId, refreshKey }: { organizationId: string | null; refreshKey?: unknown }) {
+export function WaitingEmails({ organizationId, refreshKey, hide = [] }: { organizationId: string | null; refreshKey?: unknown; /** Emails the chat below already shows. */ hide?: string[] }) {
   const [list, setList] = useState<MailApprovalDTO[]>([]);
   const load = useCallback(() => {
     void call('/api/agent/mail-approvals', organizationId).then((r) => setList(r.approvals ?? []));
@@ -115,13 +126,15 @@ export function WaitingEmails({ organizationId, refreshKey }: { organizationId: 
   useEffect(() => {
     load();
     window.addEventListener('focus', load);
-    return () => window.removeEventListener('focus', load);
+    window.addEventListener(DECIDED, load);
+    return () => { window.removeEventListener('focus', load); window.removeEventListener(DECIDED, load); };
   }, [load, refreshKey]);
-  if (!list.length) return null;
+  const shown = list.filter((a) => !hide.includes(a.id));
+  if (!shown.length) return null;
   return (
     <div className="email-approval-waiting" data-testid="email-approval-waiting">
-      <div className="email-approval-waiting-title">Waiting for your approval ({list.length})</div>
-      {list.map((a) => <EmailApprovalCard key={a.id} id={a.id} organizationId={organizationId} initial={a} />)}
+      <div className="email-approval-waiting-title">Waiting for your approval ({shown.length})</div>
+      {shown.map((a) => <EmailApprovalCard key={a.id} id={a.id} organizationId={organizationId} initial={a} />)}
     </div>
   );
 }

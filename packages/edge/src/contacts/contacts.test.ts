@@ -266,6 +266,15 @@ describe('email to members', () => {
     expect(sent[0]!.attachments).toBeUndefined();
   });
 
+  it('logs mail.sent for the sender: whom and the subject, never the text', async () => {
+    mailbox();
+    const { call, published } = world();
+    await call(ANN, 'POST', '/v1/contacts/email', { to: ['me'], subject: 'Hi', body: 'Secret **news**.' });
+    const ev = published.find((e) => e.type === 'mail.sent');
+    expect(ev).toMatchObject({ audience: 'account:acct-ann', actor: 'acct-ann', data: { to: ['ann@acme.freeflow.im'], subject: 'Hi', from: 'freeflow', how: 'email_members' } });
+    expect(JSON.stringify(ev)).not.toContain('Secret');
+  });
+
   it('reaches a member with no hosted address at the mailbox they go by, "me" included', async () => {
     const sent = mailbox();
     const { call } = world();
@@ -276,6 +285,16 @@ describe('email to members', () => {
     expect(sent[0]).toMatchObject({ to: 'dee@home-mail.net', reply_to: 'Dee@Home-Mail.net' });
     r = await call(EVE, 'POST', '/v1/contacts/email', { to: ['DEE@home-mail.net'], subject: 'Hi', body: 'x' });
     expect(r.j.sent).toEqual([{ name: 'Dee', address: 'dee@home-mail.net' }]);
+  });
+
+  it('reaches "me" at the sign-in address when the account has no hosted address and no linked mailbox', async () => {
+    const sent = mailbox();
+    const { call } = world();
+    // Fay's account has no address the directory lists (no hosted mail, no linked mailbox): she is not among the members.
+    const bare = { ...EVE, account: { ...(EVE as unknown as { account: object }).account, id: 'acct-fay', displayName: 'Fay', address: null, linkedAddress: null }, user: { id: 'u-fay', email: 'Fay@Home-Mail.net' } } as unknown as CallerContext;
+    const r = await call(bare, 'POST', '/v1/contacts/email', { to: ['me'], subject: 'Hi', body: 'x' });
+    expect(r.s).toBe(200);
+    expect(sent.map((m) => m.to)).toEqual(['fay@home-mail.net']);
   });
 
   it('refuses anyone outside the organization, and removed members, sending nothing', async () => {

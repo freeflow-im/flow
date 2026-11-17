@@ -34,11 +34,14 @@ eventRoutes.get('/v1/events', async (c) => {
     ...(actor === 'person' || actor === 'agent' ? { actorKind: actor } : {}),
   };
   const orgObject = c.env.ORG.get(c.env.ORG.idFromName(org));
-  const [channelIds, agentAccountIds] = await Promise.all([
+  const [channelIds, agentAccountIds, sponsored] = await Promise.all([
     orgObject.privateChannelIdsOf(who.user.id),
     query.actorKind ? orgObject.agentAccountIds() : Promise.resolve(undefined),
+    // A person reads their personal agents' own events too (their jobs, their mailbox's mail), as they read its mailbox.
+    orgObject.personalAgentAccountsOf([who.account.id]) as Promise<Record<string, string[]>>,
   ]);
-  const answer = await c.env.EVENTS.get(c.env.EVENTS.idFromName(org)).read(query, { accountId: who.account.id, channelIds, ...(agentAccountIds ? { agentAccountIds } : {}) });
+  const sponsoredAgentIds = sponsored[who.account.id] ?? [];
+  const answer = await c.env.EVENTS.get(c.env.EVENTS.idFromName(org)).read(query, { accountId: who.account.id, channelIds, ...(agentAccountIds ? { agentAccountIds } : {}), ...(sponsoredAgentIds.length ? { sponsoredAgentIds } : {}) });
   c.header('Cache-Control', 'no-store');
   return c.json(answer);
 });

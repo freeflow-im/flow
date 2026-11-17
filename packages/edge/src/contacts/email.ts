@@ -58,7 +58,11 @@ export function membersOf(accounts: AccountDTO[]): Member[] {
  * from list_contacts). Anything else is refused, naming it, and nothing is sent.
  */
 export function resolveRecipients(to: string[], members: Member[], caller: CallerContext): Member[] {
-  const me = caller.account ? members.find((m) => m.accountId === caller.account!.id) : undefined;
+  // "me" always reaches the caller: their member address, else the address they sign in with (a person with no hosted
+  // mail and no linked mailbox has only that).
+  const listed = caller.account ? members.find((m) => m.accountId === caller.account!.id) : undefined;
+  const signIn = caller.user?.email?.trim().toLowerCase();
+  const me = listed ?? (caller.account && signIn ? { accountId: caller.account.id, name: caller.account.displayName || signIn, address: signIn } : undefined);
   const out = new Map<string, Member>();
   const unknown: string[] = [];
   for (const raw of to) {

@@ -111,6 +111,9 @@ const vars = {
   FLOW_WEB_URL: origin,
   FLOW_HANDOFF_RETURN_URLS: `flow://signin,${origin}/`,
   MAIL_PROVIDER: 'fake',
+  // The organization's model, the first time, from a model key in .dev.vars (ANTHROPIC_API_KEY, OPENAI_API_KEY or
+  // OPENROUTER_API_KEY; put it in ~/.config/flow/dev.vars once): the assistant works locally with nothing to set.
+  DEV_ADOPT_MODEL_KEYS: '1',
   MAIL_ALLOW_INSECURE: '1',
   CALENDAR_ALLOW_INSECURE: '1',
   FLOW_UNFURL_ALLOW_HOSTS: 'localhost',

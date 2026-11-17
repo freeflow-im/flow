@@ -3,7 +3,7 @@
 // tools by the turn's page, one assistant across Docs' and Mail's chats, settings, the owner guard, and the one-time move
 // from the Docs objects (routes/admin.ts' moveAssistantRows), run twice.
 import { DatabaseSync } from 'node:sqlite';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { AccountDTO, MailApprovalDTO } from '@flow/shared';
 import type { ModelCall } from '@flow/docs/server/agent/agent.ts';
 import type { AgentEvent } from '@flow/docs/shared/agent/protocol.ts';
@@ -753,23 +753,24 @@ describe('email waits for the person’s click (decision_log 2026-11-17, mailApp
   const ADA = { id: 'acct-ada', principalId: 'ada', organizationId: 'org-1', state: 'active', role: 'member', address: 'ada@acme.test', displayName: 'Ada', kind: 'personal_agent', agentMode: 'personal', sponsorId: 'user-1' } as unknown as AccountDTO;
   const users: Record<string, unknown> = { ada: { id: 'ada', email: 'agent-ada@agents.flow.local', displayName: 'Ada', isAgent: true }, 'user-1': { id: 'user-1', email: 'ann@acme.test', displayName: 'Ann', isAgent: false, timezone: 'UTC' } };
   const runtime = { runtimeKey: 'acct-1', agentId: 'ada', agentAccountId: 'acct-ada', mode: 'personal' as const, organizationId: 'org-1', sponsorId: 'user-1', sponsorAccountId: 'acct-1' };
-  function env() {
+  function env(opts: { noAccount?: boolean } = {}) {
     const sent: { path: string; body: Record<string, unknown> }[] = [];
     const notes: { agentUserId: string; personUserId: string; text: string }[] = [];
     const results: string[] = [];
+    const logged: Record<string, unknown>[] = [];
     return {
-      sent, notes, results,
+      sent, notes, results, logged,
       env: {
         DIRECTORY: { idFromName: (x: string) => x, get: () => ({ call: async (m: string, args: unknown[]) => ({ ok: true, value: m === 'getUser' ? users[args[0] as string] : m === 'accountById' ? (args[0] === 'acct-ada' ? ADA : ACCOUNT) : null }) }) },
         ORG: { idFromName: (x: string) => x, get: () => ({ channelIdsOf: async () => [], postAutomation: async () => 'm1', agentDmNotice: async (p: { agentUserId: string; personUserId: string; text: string }) => { notes.push(p); } }) },
-        EVENTS: { idFromName: (x: string) => x, get: () => ({ jobStep: async (id: string, _a: string, step: string) => ({ id, state: step === 'ack' ? 'running' : 'done' }), jobTrigger: async () => null }) },
+        EVENTS: { idFromName: (x: string) => x, get: () => ({ jobStep: async (id: string, _a: string, step: string) => ({ id, state: step === 'ack' ? 'running' : 'done' }), jobTrigger: async () => null, publish: async (ev: Record<string, unknown>) => { logged.push(ev); return { seq: logged.length, id: 'e' }; } }) },
         MAIL: {
           idFromName: (x: string) => x,
           get: (owner: string) => ({
             handle: async (r: Request, caller: { account: { id: string } }) => {
               const path = new URL(r.url).pathname;
               if (owner !== 'acct-1' || caller.account.id !== 'acct-1') return Response.json({ accounts: [] });
-              if (path === '/v1/mail/accounts') return Response.json({ accounts: [{ id: 'gmail-1', email: 'ann@gmail.test', displayName: 'Ann', status: 'ok', tabs: [] }] });
+              if (path === '/v1/mail/accounts') return Response.json({ accounts: opts.noAccount ? [] : [{ id: 'gmail-1', email: 'ann@gmail.test', displayName: 'Ann', status: 'ok', tabs: [] }] });
               if (path === '/v1/mail/accounts/gmail-1/send' && r.method === 'POST') { sent.push({ path, body: (await r.json()) as Record<string, unknown> }); return Response.json({ messageId: '<sent-1@gmail.test>' }); }
               return Response.json({ error: 'not found' }, { status: 404 });
             },
@@ -779,10 +780,10 @@ describe('email waits for the person’s click (decision_log 2026-11-17, mailApp
     };
   }
   /** The model: send_email to someone outside, then what the tool said, back as text. */
-  const scripted = (results: string[]): ModelCall => async (_params, { onText }) => {
+  const scripted = (results: string[], input: Record<string, unknown> = { to: ['Zoe <zoe@outside.example>'], subject: 'Lunch', body: 'Shall we meet **Friday**?' }): ModelCall => async (_params, { onText }) => {
     const result = lastUser(_params).find((b) => b.type === 'tool_result');
     if (result) { results.push(String(typeof result.content === 'string' ? result.content : JSON.stringify(result.content))); onText('It is waiting for you.'); return message([{ type: 'text', text: 'It is waiting for you.' }], 'end_turn') as never; }
-    return message([{ type: 'tool_use', id: 'tu_send', name: 'send_email', input: { to: ['Zoe <zoe@outside.example>'], subject: 'Lunch', body: 'Shall we meet **Friday**?' } }], 'tool_use') as never;
+    return message([{ type: 'tool_use', id: 'tu_send', name: 'send_email', input }], 'tool_use') as never;
   };
   const AGENT_CALLER = { ...(CALLER as object), authKind: 'agent', via: 'ada' } as never;
 
@@ -805,6 +806,9 @@ describe('email waits for the person’s click (decision_log 2026-11-17, mailApp
     expect(res.status).toBe(200);
     expect(((await res.json()) as { approval: MailApprovalDTO }).approval.state).toBe('sent');
     expect(e.sent).toHaveLength(1);
+    // The log says the person sent it with their click (no via), whom to and the subject.
+    expect(e.logged).toEqual([expect.objectContaining({ type: 'mail.sent', actor: 'acct-1', audience: 'account:acct-1', data: expect.objectContaining({ to: ['Zoe <zoe@outside.example>'], subject: 'Lunch', approval: 'click', how: 'send_email' }) })]);
+    expect(e.logged[0]).not.toHaveProperty('via');
     expect(e.sent[0]!.body).toMatchObject({ to: [{ name: 'Zoe', address: 'zoe@outside.example' }], subject: 'Lunch' });
     expect(String(e.sent[0]!.body.html)).toContain('<strong>Friday</strong>');
     // A second click sends nothing.
@@ -829,5 +833,33 @@ describe('email waits for the person’s click (decision_log 2026-11-17, mailApp
     expect((await a.handle(req('POST', `/api/agent/mail-approvals/${id}/discard`), CALLER, DOCS_CALLER)).status).toBe(200);
     expect((await a.handle(req('POST', `/api/agent/mail-approvals/${id}/send`), CALLER, DOCS_CALLER)).status).toBe(409);
     expect(e.sent).toEqual([]);
+  });
+
+  it('sends email to the person themself at once, with no click', async () => {
+    const e = env();
+    const a = assistant('acct-1', e.env);
+    a.script = scripted(e.results, { to: ['ann@gmail.test'], subject: 'Your summary', body: 'Here it is.' });
+    await events(await a.handle(req('POST', '/api/agent/turn', { message: 'Email me a summary', context: { page: 'home' }, workspace: 'org-1' }), CALLER, DOCS_CALLER, 'Ada', { agentAccountId: 'acct-ada', agentMode: 'personal' }));
+    expect(e.results[0]).toContain('"sent":true');
+    expect(e.sent).toHaveLength(1);
+    expect(e.logged).toEqual([expect.objectContaining({ type: 'mail.sent', data: expect.objectContaining({ approval: 'self', subject: 'Your summary' }) })]);
+    expect(e.sent[0]!.body).toMatchObject({ to: [{ address: 'ann@gmail.test' }], subject: 'Your summary' });
+    expect(((await (await a.handle(req('GET', '/api/agent/mail-approvals'), CALLER, DOCS_CALLER)).json()) as { approvals: unknown[] }).approvals).toEqual([]);
+  });
+
+  it('with no mail account, sends from FreeFlow in the person’s name after the click', async () => {
+    const e = env({ noAccount: true });
+    const a = assistant('acct-1', e.env);
+    a.script = scripted(e.results);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await events(await a.handle(req('POST', '/api/agent/turn', { message: 'Email Zoe about lunch', context: { page: 'home' }, workspace: 'org-1' }), CALLER, DOCS_CALLER, 'Ada', { agentAccountId: 'acct-ada', agentMode: 'personal' }));
+    const list = (await (await a.handle(req('GET', '/api/agent/mail-approvals'), CALLER, DOCS_CALLER)).json()) as { approvals: MailApprovalDTO[] };
+    expect(list.approvals).toEqual([expect.objectContaining({ state: 'waiting', from: 'Ann via FreeFlow', to: ['Zoe <zoe@outside.example>'] })]);
+    expect(log.mock.calls.some((c) => String(c[0]).startsWith('[mail] to=zoe@outside.example'))).toBe(false);
+    const res = await a.handle(req('POST', `/api/agent/mail-approvals/${list.approvals[0]!.id}/send`), CALLER, DOCS_CALLER);
+    expect(res.status).toBe(200);
+    // No EMAIL_API_TOKEN here: the message is printed instead of sent, as named, with Reply-To the person.
+    expect(log.mock.calls.some((c) => /^\[mail\] to=zoe@outside\.example subject="Lunch" reply_to=ann@acme\.test/.test(String(c[0])))).toBe(true);
+    log.mockRestore();
   });
 });

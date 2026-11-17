@@ -252,6 +252,7 @@ export class Contacts extends DurableObject<ContactsEnv> {
       this.setState('email_sent', JSON.stringify(log.kept));
     }
     console.log(`[contacts] email from ${account.id}: ${sent.length} sent, ${failed.length} failed, ${attachments.length} attachment(s)`);
+    if (sent.length) await this.publishSent(caller, org, sent.map((m) => m.address), input.subject);
     if (!sent.length) throw new ApiError(502, 'send_failed', 'The email could not be sent just now. Try again in a moment.');
     return { sent, ...(failed.length ? { failed } : {}), attachments: attachments.map((a) => ({ filename: a.filename, type: a.type, bytes: Math.floor((a.content.length * 3) / 4) - (a.content.endsWith('==') ? 2 : a.content.endsWith('=') ? 1 : 0) })) };
   }
@@ -393,6 +394,23 @@ export class Contacts extends DurableObject<ContactsEnv> {
   }
 
   // ---- events ---------------------------------------------------------------------------------------------------------
+
+  /** `mail.sent` into the organization's log, for the sender's account: who it went to and its subject, never its text. */
+  private async publishSent(caller: CallerContext, org: string, to: string[], subject: string): Promise<void> {
+    const ns = this.env.EVENTS, owner = this.state('owner_account_id');
+    if (!ns || !owner) return;
+    try {
+      await ns.get(ns.idFromName(org)).publish({
+        type: 'mail.sent', organizationId: org, actor: caller.account?.id ?? null,
+        ...(caller.via ? { via: caller.via } : {}), ...(caller.invokedBy ? { invokedBy: caller.invokedBy } : {}),
+        ref: { organizationId: org, app: 'contacts', kind: 'email', id: crypto.randomUUID() },
+        audience: `account:${owner}`, ts: new Date().toISOString(),
+        data: { to, subject, from: 'freeflow', how: 'email_members' },
+      });
+    } catch (err) {
+      console.error(`[contacts] mail.sent: ${(err as Error).message.slice(0, 200)}`);
+    }
+  }
 
   /** `contacts.changed` into the organization's log, for the account alone (platform.md §5.2). A failure is logged, never the write's. */
   private async publish(change: 'added' | 'updated' | 'deleted', contact: ContactDTO, caller: CallerContext): Promise<void> {

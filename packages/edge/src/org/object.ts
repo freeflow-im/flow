@@ -806,10 +806,21 @@ export class Org extends DurableObject<OrgEnv> {
     const text = p.why === 'parked'
       ? `⚠️ Automation “${p.name}” could not wake ${agentName}: the job was delivered several times and never finished, so it is parked.`
       : `⚠️ Automation “${p.name}” stopped waking ${agentName}: a chain of events it set off reached the depth limit (${MAX_EVENT_DEPTH}).`;
-    const [{ createDm }, { sendMessage }] = await Promise.all([import('./services/channels'), import('./services/messages')]);
+    await this.noteInDm(workspace.id, agent, owner, text);
+  }
+
+  /**
+   * A note from an agent to a person in their DM, made if it is not there yet, at the depth cap (it wakes no automation).
+   * A person's own agent posts only through its sponsor (workspaces.ts' check): the person opens the DM, and the post is
+   * the assistant's (`assistantPosting`), as its Chat replies are.
+   */
+  private async noteInDm(workspaceId: string, agentUserId: string, personUserId: string, text: string): Promise<void> {
+    const [{ createDm }, { sendMessage }, { assistantPosting }] = await Promise.all([import('./services/channels'), import('./services/messages'), import('./services/workspaces')]);
+    const personal = !!this.assistantSponsor(agentUserId);
     await this.scoped(async () => {
-      const dm = await createDm(workspace.id, agent, [owner]);
-      await sendMessage(dm.id, agent, crypto.randomUUID(), text);
+      const dm = personal ? await createDm(workspaceId, personUserId, [agentUserId]) : await createDm(workspaceId, agentUserId, [personUserId]);
+      const post = () => sendMessage(dm.id, agentUserId, crypto.randomUUID(), text);
+      await (personal ? assistantPosting.run(agentUserId, post) : post());
     }, { depth: MAX_EVENT_DEPTH });
     await this.logging;
     await this.armAlarm();
@@ -822,13 +833,7 @@ export class Org extends DurableObject<OrgEnv> {
   async agentDmNotice(p: { agentUserId: string; personUserId: string; text: string }): Promise<void> {
     const workspace = this.db.select({ id: schema.workspaces.id }).from(schema.workspaces).get();
     if (!workspace) return;
-    const [{ createDm }, { sendMessage }] = await Promise.all([import('./services/channels'), import('./services/messages')]);
-    await this.scoped(async () => {
-      const dm = await createDm(workspace.id, p.agentUserId, [p.personUserId]);
-      await sendMessage(dm.id, p.agentUserId, crypto.randomUUID(), p.text);
-    }, { depth: MAX_EVENT_DEPTH });
-    await this.logging;
-    await this.armAlarm();
+    await this.noteInDm(workspace.id, p.agentUserId, p.personUserId, p.text);
   }
 
   /**

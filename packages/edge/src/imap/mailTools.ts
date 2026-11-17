@@ -219,6 +219,25 @@ export async function sendPrepared(ctx: MailToolContext, prepared: Pick<Prepared
   return call<{ messageId: string }>(ctx, 'POST', `${accountPath(prepared.account.id)}/send`, prepared.body);
 }
 
+/** The sender of an email that goes from FreeFlow's own address (the person has no mail account connected). */
+export const FREEFLOW_SENDER = 'freeflow';
+
+/**
+ * An email to send from FreeFlow's address, named "<person> via FreeFlow", with Reply-To the person (as email_members
+ * sends), for a person with no mail account: no reply or forward, which need the original in a mailbox.
+ */
+export function prepareFreeflowMail(input: DraftInput, sender: { name: string; replyTo: string | null }): PreparedMail {
+  const to = addresses(input.to, 'to'), cc = addresses(input.cc, 'cc'), bcc = addresses(input.bcc, 'bcc');
+  if (!to.length && !cc.length && !bcc.length) throw new MailToolError('to: give at least one recipient.');
+  const subject = input.subject?.trim() ?? '';
+  const fromName = `${sender.name} via FreeFlow`;
+  return {
+    account: { id: FREEFLOW_SENDER, email: fromName },
+    body: { to, cc, bcc, subject, html: markdownToHtml(input.body), text: input.body, fromName, ...(sender.replyTo ? { replyTo: sender.replyTo } : {}) },
+    to: shown(to), cc: shown(cc), bcc: shown(bcc), subject,
+  };
+}
+
 /** send_email's input (the assistant's): create_mail_draft's. */
 export const SEND_EMAIL_SHAPE = draftShape;
 export type { DraftInput };
@@ -552,7 +571,7 @@ export function assistantMailSchemas(): Record<string, z.ZodObject> {
 
 /** send_email, the assistant's: it sends nothing itself (decision_log 2026-11-17, "Email needs the person's click"). */
 export const SEND_EMAIL_DESCRIPTION =
-  "Sends an email for the user, to anyone (inside or outside the organization), once the user approves it: the email is shown to them with a Send message button (in this chat when they are here, else in your direct message with them in Chat) and goes out only when they click it. It goes from the account named (an id or address from list_mail_accounts: the user's own, by default their first, or your own mailbox, listed as yours). Arguments as create_mail_draft (Markdown body; reply_to_id or forward_id to answer or forward). Returns that it is waiting for approval: never say it was sent; say it is waiting for their click.";
+  "Sends an email for the user. To the user themself (\"me\", or their own address) it is sent at once. To anyone else (inside or outside the organization) it is sent once the user approves it: the email is shown to them with a Send message button (in this chat when they are here, else in your direct message with them in Chat) and goes out only when they click it. It goes from the account named (an id or address from list_mail_accounts: the user's own, by default their first, or your own mailbox, listed as yours; with no account connected it goes from FreeFlow's address in the user's name, and cannot reply or forward). Arguments as create_mail_draft (Markdown body; reply_to_id or forward_id to answer or forward). Returns either sent (to the user themself) or waiting for approval: then never say it was sent; say it is waiting for their click.";
 
 /** Runs one of the assistant's Mail tools (its input already validated). Throws MailToolError for what the model should see. */
 export async function runAssistantMailTool(name: string, input: Record<string, unknown>, ctx: MailToolContext): Promise<Record<string, unknown>> {
@@ -596,10 +615,12 @@ for (const t of MAIL_TOOLS) {
 }
 
 // send_email (the assistant's alone, never at /mcp): the email waits for the person's click (assistant/mailApprovals.ts).
-register<{ mailApproval?: (input: DraftInput) => Promise<{ id: string; from: string; to: string[]; cc: string[]; bcc: string[]; subject: string }> }>('mail', 'send_email', {
+register<{ mailApproval?: (input: DraftInput) => Promise<{ id: string; state: string; from: string; to: string[]; cc: string[]; bcc: string[]; subject: string }> }>('mail', 'send_email', {
   run: async (ctx, input) => {
     if (!ctx.mailApproval) throw new MailToolError('Sending email is not available here: only your personal agents send email, with your approval.');
     const a = await ctx.mailApproval(input as unknown as DraftInput);
+    // To the user themself: sent now, no click (decision_log 2026-11-17).
+    if (a.state === 'sent') return { sent: true, from: a.from, to: a.to, subject: a.subject, note: 'Sent to the user themself: email to them needs no approval.' };
     return {
       waiting_for_approval: true, id: a.id, from: a.from, to: a.to, ...(a.cc.length ? { cc: a.cc } : {}), ...(a.bcc.length ? { bcc: a.bcc } : {}), subject: a.subject,
       note: 'Not sent yet: it is shown to the user with a Send message button and goes out only when they click it. Tell them it is waiting for their approval.',

@@ -439,8 +439,22 @@ export class EventsCore {
       if (job.state === 'parked') return { conflict: job.state };
       this.sql.exec('UPDATE agent_jobs SET state = ?, lease_until = NULL, note = ?, updated_at = ? WHERE id = ?',
         opts.ok ? 'done' : 'failed', opts.note?.slice(0, 500) ?? null, now, id);
+      this.publishFinished(this.getJob(id)!, now);
     }
     return this.getJob(id);
+  }
+
+  /**
+   * `agent.job.finished`: a job's end (done, failed or parked) and the agent's note, beside its `agent.job`, so the
+   * Event log shows what the automation did. For the agent's account, as `agent.job` is (its sponsor reads it too).
+   */
+  private publishFinished(job: AgentJobDTO, now: number): void {
+    const org = this.organizationId() ?? '';
+    this.publish({
+      type: 'agent.job.finished', organizationId: org, actor: null, audience: `account:${job.agent}`, ref: { organizationId: org, app: 'events', kind: 'job', id: job.id },
+      causedBy: job.id, depth: job.depth, ts: new Date(now).toISOString(),
+      data: { jobId: job.id, subscriptionId: job.subscriptionId, state: job.state, ...(job.note ? { note: job.note } : {}) },
+    });
   }
 
   /**
@@ -460,6 +474,7 @@ export class EventsCore {
       if (job.attempts >= JOB_MAX_ATTEMPTS) {
         this.sql.exec("UPDATE agent_jobs SET state = 'parked', lease_until = NULL, note = ?, updated_at = ? WHERE id = ?",
           `parked after ${job.attempts + 1} deliveries: ${why}`, now, id);
+        this.publishFinished(this.getJob(id)!, now);
         return { kind: 'parked', job: this.getJob(id)! } as const;
       }
       const attempts = job.attempts + 1;
