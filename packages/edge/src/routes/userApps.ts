@@ -34,6 +34,12 @@ const CallBody = z.object({ name: z.string().min(1).max(64), input: z.record(z.u
 
 const orgStub = (c: C, id: string) => c.env.ORG.get(c.env.ORG.idFromName(id));
 
+/** The Org object's answer as a value, or its refusal as the ApiError it was. */
+function unwrap<T>(a: { ok: true; value: T } | { ok: false; status: number; code: string; message: string }): T {
+  if (!a.ok) throw new ApiError(a.status, a.code, a.message);
+  return a.value;
+}
+
 async function body<S extends z.ZodTypeAny>(c: C, schema: S): Promise<z.output<S>> {
   const r = schema.safeParse(await c.req.json().catch(() => undefined));
   if (!r.success) {
@@ -110,7 +116,7 @@ userAppRoutes.post('/v1/workspaces/:id/apps', async (c) => {
   const { url, grants } = await body(c, InstallBody);
   const r = await fetchManifest(c, url);
   if (!r.ok) return refused(c, r.problems);
-  const installed = await orgStub(c, m.organizationId).installUserApp({ manifest: r.manifest, manifestUrl: url, by: m.account.id, grants });
+  const installed = unwrap(await orgStub(c, m.organizationId).installUserApp({ manifest: r.manifest, manifestUrl: url, by: m.account.id, grants }));
   return c.json({ app: installed.name, secret: installed.secret }, 201);
 });
 
@@ -124,26 +130,26 @@ userAppRoutes.put('/v1/workspaces/:id/apps/:name', async (c) => {
   const from = url ?? current.manifestUrl;
   const r = await fetchManifest(c, from);
   if (!r.ok) return refused(c, r.problems);
-  await org.updateUserApp({ name, manifest: r.manifest, manifestUrl: from, by: m.account.id, grants });
+  unwrap(await org.updateUserApp({ name, manifest: r.manifest, manifestUrl: from, by: m.account.id, grants }));
   return c.json({ ok: true });
 });
 
 userAppRoutes.put('/v1/workspaces/:id/apps/:name/grants', async (c) => {
   const m = await adminOf(c);
   const grants = await body(c, Grants);
-  await orgStub(c, m.organizationId).setUserAppGrants(c.req.param('name'), grants);
+  unwrap(await orgStub(c, m.organizationId).setUserAppGrants(c.req.param('name'), grants));
   return c.json({ ok: true });
 });
 
 userAppRoutes.delete('/v1/workspaces/:id/apps/:name', async (c) => {
   const m = await adminOf(c);
-  await orgStub(c, m.organizationId).removeUserApp(c.req.param('name'));
+  unwrap(await orgStub(c, m.organizationId).removeUserApp(c.req.param('name')));
   return c.json({ ok: true });
 });
 
 userAppRoutes.post('/v1/workspaces/:id/apps/:name/secret', async (c) => {
   const m = await adminOf(c);
-  const secret = await orgStub(c, m.organizationId).rotateUserAppSecret(c.req.param('name'));
+  const secret = unwrap(await orgStub(c, m.organizationId).rotateUserAppSecret(c.req.param('name')));
   return c.json({ secret });
 });
 
@@ -153,7 +159,7 @@ userAppRoutes.put('/v1/workspaces/:id/apps/:name/agents', async (c) => {
   if (guest) throw guest;
   if (m.isAgent || m.via) throw forbidden('a person turns an app on for their own agents');
   const { on } = await body(c, AgentsBody);
-  await orgStub(c, m.organizationId).setUserAppAgents(c.req.param('name'), m.account.id, on);
+  unwrap(await orgStub(c, m.organizationId).setUserAppAgents(c.req.param('name'), m.account.id, on));
   return c.json({ ok: true });
 });
 

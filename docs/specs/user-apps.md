@@ -180,6 +180,11 @@ A user app's manifest is the built-in `AppManifest` with these differences:
 `app_installs` (which version is installed in this organization, and by whom). The suite bar, the registry and the
 consent page read `APP_MANIFESTS` plus the organization's installed manifests.
 
+*As built in phase 1 (2026-11-17):* an app belongs to the organization it was installed in (§12.3), so every table is
+the Org object's: `user_apps` (the installed manifest, its URL and the install's encrypted secret), `user_app_versions`
+(each manifest installed, kept after removal), `user_app_grants` (§5.2) and `user_app_agents` (§5.2's switch). The
+directory's tables wait for phase 3, when an author makes an app before any organization installs it.
+
 **Checks at publish.** The manifest is validated against a schema; tool names match `^[a-z][a-z0-9_]{1,31}$` and
 have no `__`; each tool's input is a JSON Schema the registry already accepts; descriptions have a length limit;
 scopes the tools name are declared; event names are unique; an external app declares no `uses` and no `egress`
@@ -235,6 +240,10 @@ Installing an app does not change any token that exists. The scopes are given ou
 - **Personal agents.** A personal agent gets an app's scopes through its sponsor's delegation, and only after the
   sponsor turns the app on for that agent. A token made on the consent page before the install does not hold them:
   the consent page lists the installed apps' scope groups the next time the agent connects.
+
+  *As built in phase 1:* the switch is per person and app, "My agents may use it" in Admin → Apps, and covers all of
+  the person's personal agents. At /mcp the token also needs the consent page's one **Installed apps** group
+  (`apps:use`); the page cannot list each organization's apps, because its scope groups are fixed in the build.
 - **Uninstalling** removes every grant of the app's scopes.
 
 ## 6. The screen
@@ -522,6 +531,11 @@ Hosted apps come before the authoring tools because the authoring tools make onl
 5. Admin → Agents & apps: install from a manifest URL, see what it asks for and the external-app notice, choose who
    gets its scopes (§5.2), remove. The consent page and the personal agent's settings list installed apps' scopes.
 6. The existing Task Board gets a manifest and its tools.
+
+*As built:* the Task Board's code is not in this repository (it runs on an agent's machine), so phase 1 ships
+`examples/user-apps/taskboard`, an external app with the manifest, the six tools, signed events and a screen, which
+`packages/edge/test/e2e-user-apps.mjs` installs and drives against a local Worker. Converting the running Task Board is
+the same few steps (its README), done where it runs.
 
 Exit: an agent finds and claims Task Board cards through `taskboard__*` tools; assigning a card to Builder wakes
 Builder through a `self: true` subscription; an account without `taskboard:read` sees no Task Board events.

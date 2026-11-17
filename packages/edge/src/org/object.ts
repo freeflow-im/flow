@@ -40,6 +40,16 @@ import {
   type AppGrants, type AppHolder, type AppToolAnswer, type OfferedAppTool,
 } from './services/userApps';
 import { mintUserAppToken, verifyBody } from './lib/appSigning';
+
+/** A user-app change's outcome for the Worker's routes: the value, or the ApiError's status, code and message. */
+async function answered<T>(fn: () => Promise<T>): Promise<DirectoryAnswer<T>> {
+  try {
+    return { ok: true, value: await fn() };
+  } catch (e) {
+    if (e instanceof ApiError) return { ok: false, status: e.statusCode, code: e.code, message: e.message };
+    throw e;
+  }
+}
 import { parseAppToolName, type InstalledAppDTO, type UserAppManifest } from '@flow/shared';
 
 /** Where the organization's suggested prompts are kept, in the object's own storage beside its database. */
@@ -935,7 +945,8 @@ export class Org extends DurableObject<OrgEnv> {
   }
 
   // ---- user apps (docs/specs/user-apps.md, phase 1) ----
-  // The Worker's routes (routes/userApps.ts) check who is calling and their role; these run the app's rows here.
+  // The Worker's routes (routes/userApps.ts) check who is calling and their role; these run the app's rows here. A
+  // refusal comes back as an answer, not a throw: an ApiError loses its status crossing the object's boundary.
 
   private readonly appEvents = new AppEventLimiter();
 
@@ -943,28 +954,28 @@ export class Org extends DurableObject<OrgEnv> {
     return withDb(this.db, () => listApps(viewer));
   }
 
-  async installUserApp(p: { manifest: UserAppManifest; manifestUrl: string; by: string; grants: AppGrants }): Promise<{ name: string; secret: string }> {
-    return withDb(this.db, () => installApp(p));
+  async installUserApp(p: { manifest: UserAppManifest; manifestUrl: string; by: string; grants: AppGrants }): Promise<DirectoryAnswer<{ name: string; secret: string }>> {
+    return answered(() => withDb(this.db, () => installApp(p)));
   }
 
-  async updateUserApp(p: { name: string; manifest: UserAppManifest; manifestUrl: string; by: string; grants: AppGrants }): Promise<void> {
-    return withDb(this.db, () => updateApp(p));
+  async updateUserApp(p: { name: string; manifest: UserAppManifest; manifestUrl: string; by: string; grants: AppGrants }): Promise<DirectoryAnswer<void>> {
+    return answered(() => withDb(this.db, () => updateApp(p)));
   }
 
-  async setUserAppGrants(name: string, grants: AppGrants): Promise<void> {
-    return withDb(this.db, () => setAppGrants(name, grants));
+  async setUserAppGrants(name: string, grants: AppGrants): Promise<DirectoryAnswer<void>> {
+    return answered(() => withDb(this.db, () => setAppGrants(name, grants)));
   }
 
-  async removeUserApp(name: string): Promise<void> {
-    return withDb(this.db, () => removeApp(name));
+  async removeUserApp(name: string): Promise<DirectoryAnswer<void>> {
+    return answered(() => withDb(this.db, () => removeApp(name)));
   }
 
-  async rotateUserAppSecret(name: string): Promise<string> {
-    return withDb(this.db, () => rotateAppSecret(name));
+  async rotateUserAppSecret(name: string): Promise<DirectoryAnswer<string>> {
+    return answered(() => withDb(this.db, () => rotateAppSecret(name)));
   }
 
-  async setUserAppAgents(name: string, accountId: string, on: boolean): Promise<void> {
-    return withDb(this.db, () => setAgentsOn(name, accountId, on));
+  async setUserAppAgents(name: string, accountId: string, on: boolean): Promise<DirectoryAnswer<void>> {
+    return answered(() => withDb(this.db, () => setAgentsOn(name, accountId, on)));
   }
 
   /** The app tools the holder may call (the registry's list, user-apps.md §3.3). */

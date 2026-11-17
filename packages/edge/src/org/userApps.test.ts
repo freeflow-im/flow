@@ -79,15 +79,20 @@ beforeEach(async () => {
 });
 afterEach(() => { vi.restoreAllMocks(); });
 
-const install = (grants = { members: true, accounts: [] as string[] }) =>
+const tryInstall = (grants = { members: true, accounts: [] as string[] }) =>
   org.installUserApp({ manifest: taskboard(), manifestUrl: 'https://tasks.example.com/freeflow-app.json', by: ACCT.ann, grants });
+const install = async (grants?: { members: boolean; accounts: string[] }) => {
+  const a = await tryInstall(grants);
+  if (!a.ok) throw new Error(a.message);
+  return a.value;
+};
 
 describe('installing', () => {
   it('installs once, returns the secret once, and lists the app', async () => {
     const { name, secret } = await install();
     expect(name).toBe('taskboard');
     expect(Buffer.from(secret, 'base64url')).toHaveLength(32);
-    await expect(install()).rejects.toThrow(/already installed/);
+    expect(await tryInstall()).toMatchObject({ ok: false, status: 409, code: 'app_exists' });
     const [listed] = await org.listUserApps({ ...ben, admin: false });
     expect(listed).toMatchObject({ name: 'taskboard', label: 'Tasks', usable: true, agentsOn: false, serverOrigin: 'https://tasks.example.com', hasScreen: true });
     expect(listed!.grants).toBeUndefined();
@@ -96,7 +101,7 @@ describe('installing', () => {
   });
 
   it('refuses a grant to someone who is not a member', async () => {
-    await expect(install({ members: false, accounts: ['acct-nobody'] })).rejects.toThrow(/not an active member/);
+    expect(await tryInstall({ members: false, accounts: ['acct-nobody'] })).toMatchObject({ ok: false, status: 400 });
   });
 
   it('removes the app and its grants', async () => {
@@ -214,7 +219,8 @@ describe("an app's events (§5.1)", () => {
 
   it('stops a rotated secret at once', async () => {
     const { secret } = await install();
-    const fresh = await org.rotateUserAppSecret('taskboard');
+    const rotated = await org.rotateUserAppSecret('taskboard');
+    const fresh = rotated.ok ? rotated.value : '';
     expect(await send(secret, { type: 'task.assigned' })).toMatchObject({ ok: false, status: 401 });
     expect(await send(fresh, { type: 'task.assigned' })).toMatchObject({ ok: true });
   });
