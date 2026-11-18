@@ -10,6 +10,7 @@
 //
 // ctx.caller   who is calling: { accountId, userId, displayName, kind, scopes, ... } (the tool's caller, or the viewer)
 // ctx.db       the app's SQLite here: all(sql, ...params), one(sql, ...params), run(sql, ...params), batch([{ sql, params }])
+// ctx.files    put(key, data, { type }), get(key), delete(key), list(prefix), response(key): the app's files in R2
 // ctx.publish  publish(type, data, { ref: { kind, id }, about: [accountId] }): one of the manifest's events
 // ctx.docs     read(path): a Docs read path as the caller (needs "docs:read" in uses)
 // ctx.chat     post(channelId, text): a message as the caller (needs "chat:write" in uses)
@@ -32,9 +33,27 @@ function makeCtx(env, caller) {
   };
   const view = caller ? { ...caller } : null;
   if (view) delete view.ticket;
+  const files = {
+    // data: a Blob or File (a form's), an ArrayBuffer, a typed array, or text; type defaults to the Blob's.
+    put: async (key, data, opts = {}) => {
+      let type = opts.type;
+      let body = data;
+      if (data && typeof data.arrayBuffer === 'function') { type = type ?? data.type; body = await data.arrayBuffer(); }
+      return env.FILES.put(String(key), body, type || 'application/octet-stream');
+    },
+    get: (key) => env.FILES.get(String(key)),
+    delete: (key) => env.FILES.delete(String(key)),
+    list: (prefix = '') => env.FILES.list(String(prefix)),
+    // The file as a Response for the screen (a route that shows an image), or 404.
+    response: async (key) => {
+      const f = await env.FILES.get(String(key));
+      return f ? new Response(f.data, { headers: { 'content-type': f.type, 'cache-control': 'private, max-age=60' } }) : new Response('not found', { status: 404 });
+    },
+  };
   return {
     caller: view,
     db,
+    files,
     publish: (type, data, opts = {}) => env.SUITE.publish(type, data ?? null, opts.ref, opts.about),
     docs: { read: (path) => env.SUITE.readDocs(ticket, path) },
     chat: { post: (channelId, text) => env.SUITE.postMessage(ticket, channelId, text) },
@@ -77,7 +96,15 @@ export function defineApp(app) {
       let viewer = null;
       try { viewer = JSON.parse(request.headers.get('x-freeflow-viewer') ?? 'null'); } catch {}
       const ctx = makeCtx(env, viewer);
-      const handler = routes[request.method + ' ' + url.pathname] ?? routes['* ' + url.pathname];
+      // An exact route first; then one ending in /* for the paths under it (GET /api/files/*), longest first.
+      let handler = routes[request.method + ' ' + url.pathname] ?? routes['* ' + url.pathname];
+      if (!handler) {
+        const prefixes = Object.keys(routes).filter((k) => k.endsWith('/*')).sort((a, b) => b.length - a.length);
+        for (const k of prefixes) {
+          const [method, path] = k.split(' ');
+          if ((method === request.method || method === '*') && url.pathname.startsWith(path.slice(0, -1))) { handler = routes[k]; break; }
+        }
+      }
       if (typeof handler === 'function') {
         try {
           return toResponse(await handler(request, ctx));
@@ -100,7 +127,7 @@ export const FREEFLOW_SDK_DOC = `A hosted app's server.js is one ES module, run 
     tools: {                                        // one per tool in freeflow-app.json; return any JSON
       list_tasks: async (input, ctx) => ctx.db.all('SELECT * FROM tasks WHERE status = ?', input.status ?? 'Ready'),
     },
-    routes: {                                       // the screen's own paths, for ui/ to fetch; return JSON or a Response
+    routes: {                                       // the screen's own paths, for ui/ to fetch; return JSON or a Response; 'GET /api/files/*' takes every path under it
       'GET /api/tasks': async (request, ctx) => ctx.db.all('SELECT * FROM tasks'),
       'POST /api/tasks': async (request, ctx) => { const b = await request.json(); /* ... */ return { ok: true }; },
     },
@@ -108,6 +135,7 @@ export const FREEFLOW_SDK_DOC = `A hosted app's server.js is one ES module, run 
 
 ctx.caller: { accountId, userId, displayName, kind, scopes } of who called the tool or is viewing the screen.
 ctx.db: all(sql, ...params) → rows; one(sql, ...params) → a row or null; run(sql, ...params); batch([{ sql, params }]) in one transaction. The tables come from migrations/NNNN_name.sql, applied once each in order.
+ctx.files: the app's own file storage (images, attachments, any upload). put(key, data, { type }) takes a File or Blob (from request.formData()), an ArrayBuffer or text; get(key) → { data, type, size } or null; delete(key); list(prefix) → [{ key, size, type }]; response(key) → a Response to return from a route. At most 10 MB a file. Keep the key in the database row (e.g. 'tasks/42/photo.png'); never put file contents in the database. The screen uploads with fetch('api/...', { method: 'POST', body: formData }) to a route that calls ctx.files.put, and shows a file with <img src="api/files/..."> from a route that returns ctx.files.response(key). Nothing is public: routes check who is looking.
 ctx.publish(type, data, { ref: { kind, id }, about: [accountId] }): one of the manifest's events; "about" makes a self subscription wake that account.
 ctx.docs.read(path) (uses "docs:read") and ctx.chat.post(channelId, text) (uses "chat:write") act as the caller.
 Throw an Error (or AppError(message, status) in a route) to refuse; the message goes back as it is.

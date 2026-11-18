@@ -3,7 +3,8 @@
 // each bound to its app and organization by `ctx.props`, which the app cannot change:
 //
 //   DB     AppDb      SQL on the app's store in this organization (AppStore, one Durable Object per app and organization)
-//   SUITE  AppSuite   the suite as the app may use it: publish its events (§5.1); `uses` methods come in step 4
+//   FILES  AppFiles   files in R2 under the install's own prefix (§8)
+//   SUITE  AppSuite   the suite as the app may use it: its events (§5.1), and as its caller what `uses` declares (§6.3)
 //
 // and its `globalOutbound` is AppEgress, which lets it reach only the hosts its manifest declared. A tool call reaches
 // the app as a request the host makes (`POST https://app.invalid/__freeflow/tool`), with the caller context in the body.
@@ -13,6 +14,15 @@ import { FREEFLOW_SDK_SOURCE, SDK_MODULE } from './sdk';
 
 /** What the runner needs of a hosted app's installed version (the Org object's `installedCode`). */
 export interface HostedCode { manifest: UserAppManifest; version: number; prefix: string; files: Record<string, number> }
+
+/** The limits on an install's files (§8): per file, and in all. */
+export const APP_FILE_MAX_BYTES = 10_000_000;
+export const APP_FILES_MAX_BYTES = 10_000_000_000;
+/** A file's key in the app: letters, digits and `._-/`, no `..`, at most 300 characters. */
+const FILE_KEY = /^(?!.*\.\.)(?!\/)[A-Za-z0-9._\-/]{1,300}$/;
+
+/** Where an install's files are in R2 (§8): its own prefix, a dev install's apart from the organization's. */
+export const filesPrefix = (p: AppProps): string => `appfiles/${p.org}/${p.app}/${p.dev ? `dev/${p.dev}` : 'live'}/`;
 
 /** The limits an app's isolate runs with (§7.2). */
 export const HOSTED_CPU_MS = 1_000;
@@ -87,6 +97,30 @@ export class AppStore extends DurableObject<HostedEnv> {
     return Object.fromEntries(tables.map((t) => [t, sql.exec(`SELECT * FROM "${t.replace(/"/g, '""')}"`).toArray()]));
   }
 
+  /** The file index (§8): each file's size and type, for the limit, the listing and the export. */
+  private files() {
+    this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS _freeflow_files (key TEXT PRIMARY KEY, size INTEGER NOT NULL, type TEXT NOT NULL, at INTEGER NOT NULL)');
+    return this.ctx.storage.sql;
+  }
+
+  /** Records a file about to be written; false when it would take the install over its limit. */
+  fileWillPut(key: string, size: number, type: string): boolean {
+    const sql = this.files();
+    const others = (sql.exec('SELECT COALESCE(SUM(size), 0) AS n FROM _freeflow_files WHERE key != ?', key).one().n as number) ?? 0;
+    if (others + size > APP_FILES_MAX_BYTES) return false;
+    sql.exec('INSERT INTO _freeflow_files (key, size, type, at) VALUES (?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET size = excluded.size, type = excluded.type, at = excluded.at', key, size, type, Date.now());
+    return true;
+  }
+
+  fileRemoved(key: string): void {
+    this.files().exec('DELETE FROM _freeflow_files WHERE key = ?', key);
+  }
+
+  /** The files under a prefix, by key. */
+  fileList(prefix = ''): { key: string; size: number; type: string; at: number }[] {
+    return this.files().exec('SELECT key, size, type, at FROM _freeflow_files WHERE substr(key, 1, ?) = ? ORDER BY key LIMIT 1000', prefix.length, prefix).toArray() as never;
+  }
+
   /** Deletes everything: a deleted draft's dev install (§9.3). */
   async clear(): Promise<void> {
     await this.ctx.storage.deleteAll();
@@ -116,6 +150,46 @@ export class AppDb extends WorkerEntrypoint<HostedEnv, AppProps> {
 
 /** Docs' read paths an app may ask for, as its caller (`docs:read`): a file's text or meta, a document, sheet or deck. */
 const DOCS_READ = /^\/api\/(files\/[A-Za-z0-9_-]{1,80}\/(text|meta)|(docs|sheets|decks|markdown)\/[A-Za-z0-9_-]{1,80})(\?[A-Za-z0-9=&_-]{0,200})?$/;
+
+/** One file as the app gets it back. */
+export interface AppFile { data: ArrayBuffer; type: string; size: number }
+
+/**
+ * The app's `env.FILES` (§8): files in R2 under its install's prefix, at most 10 MB each and 10 GB in all. The app's screen
+ * uploads and shows them through its own routes, which check who is looking; nothing here is public.
+ */
+export class AppFiles extends WorkerEntrypoint<HostedEnv, AppProps> {
+  private check(key: string): string {
+    if (typeof key !== 'string' || !FILE_KEY.test(key)) throw new Error('a file key is letters, digits and . _ - /, at most 300, not starting with /');
+    if (!this.env.BLOBS) throw new Error('this server has no file storage');
+    return filesPrefix(this.ctx.props) + key;
+  }
+
+  async put(key: string, data: ArrayBuffer | ArrayBufferView | string, type = 'application/octet-stream'): Promise<{ key: string; size: number }> {
+    const full = this.check(key);
+    const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    if (bytes.byteLength > APP_FILE_MAX_BYTES) throw new Error(`a file is at most ${APP_FILE_MAX_BYTES} bytes`);
+    const kind = String(type).slice(0, 100) || 'application/octet-stream';
+    if (!(await storeOf(this.env, this.ctx.props).fileWillPut(key, bytes.byteLength, kind))) throw new Error('this app has used its 10 GB of files here');
+    await this.env.BLOBS!.put(full, bytes, { httpMetadata: { contentType: kind } });
+    return { key, size: bytes.byteLength };
+  }
+
+  async get(key: string): Promise<AppFile | null> {
+    const o = await this.env.BLOBS!.get(this.check(key));
+    if (!o) return null;
+    return { data: await o.arrayBuffer(), type: o.httpMetadata?.contentType ?? 'application/octet-stream', size: o.size };
+  }
+
+  async delete(key: string): Promise<void> {
+    await this.env.BLOBS!.delete(this.check(key));
+    await storeOf(this.env, this.ctx.props).fileRemoved(key);
+  }
+
+  list(prefix = ''): Promise<{ key: string; size: number; type: string; at: number }[]> {
+    return storeOf(this.env, this.ctx.props).fileList(String(prefix)) as Promise<{ key: string; size: number; type: string; at: number }[]>;
+  }
+}
 
 /**
  * The app's `env.SUITE`: what of the suite the app may use (§6.3). Its events, checked against its manifest; and as a
@@ -167,6 +241,7 @@ export interface HostedExports {
   AppDb(opts: { props: AppProps }): Fetcher;
   AppSuite(opts: { props: AppProps }): Fetcher;
   AppEgress(opts: { props: { allow: string[] } }): Fetcher;
+  AppFiles(opts: { props: AppProps }): Fetcher;
 }
 
 const decoder = new TextDecoder();
@@ -194,7 +269,7 @@ export async function sourceWorker(env: HostedEnv, exports: HostedExports, src: 
     mainModule: 'server.js',
     // The built-in SDK (§9.6) beside the app's code: `import { defineApp } from 'freeflow'`.
     modules: { 'server.js': await src.read('server.js'), [SDK_MODULE]: { js: FREEFLOW_SDK_SOURCE } },
-    env: { DB: exports.AppDb({ props: src.props }), SUITE: exports.AppSuite({ props: src.props }) },
+    env: { DB: exports.AppDb({ props: src.props }), FILES: exports.AppFiles({ props: src.props }), SUITE: exports.AppSuite({ props: src.props }) },
     globalOutbound: exports.AppEgress({ props: { allow: src.egress } }),
     limits: { cpuMs: HOSTED_CPU_MS, subRequests: HOSTED_SUBREQUESTS },
   }));

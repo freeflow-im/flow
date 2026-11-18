@@ -358,5 +358,67 @@ t("and her door key does not open Uma's", pv.s === 401, pv.s);
 pv = await raw(prevHome, cookie);
 t("nor in with another app's session", pv.s === 401, pv.s);
 
+// --- Files (ctx.files, §8) -----------------------------------------------------------------------------------------
+const pics = { name: 'pics', label: 'Pics', server: { hosted: true }, ui: { hosted: true }, scopes: [{ id: 'pics:use', label: 'Use it' }],
+  tools: [{ name: 'save', description: 'Saves text as a file.', input: { type: 'object' }, scopes: ['pics:use'] }, { name: 'files', description: 'Lists files.', input: { type: 'object' }, scopes: ['pics:use'] },
+    { name: 'big', description: 'Saves 11 MB.', input: { type: 'object' }, scopes: ['pics:use'] }, { name: 'bad', description: 'A bad key.', input: { type: 'object' }, scopes: ['pics:use'] },
+    { name: 'drop', description: 'Deletes a file.', input: { type: 'object' }, scopes: ['pics:use'] }] };
+const picsServer = `import { defineApp } from 'freeflow';
+export default defineApp({
+  tools: {
+    save: async (input, ctx) => ctx.files.put(input.key, input.text, { type: 'text/plain' }),
+    files: async (input, ctx) => ctx.files.list(input.prefix ?? ''),
+    big: async (input, ctx) => ctx.files.put('big.bin', new Uint8Array(11_000_000)),
+    bad: async (input, ctx) => ctx.files.put('../escape.txt', 'x'),
+    drop: async (input, ctx) => ctx.files.delete(input.key),
+  },
+  routes: {
+    'POST /api/upload': async (request, ctx) => { const f = (await request.formData()).get('file'); return ctx.files.put('uploads/' + f.name, f); },
+    'GET /api/files/*': async (request, ctx) => ctx.files.response(new URL(request.url).pathname.slice('/api/files/'.length)),
+  },
+});`;
+r = await api(O.token, 'POST', `/v1/workspaces/${A}/apps/versions`, { manifest: pics, files: { 'server.js': b64(picsServer), 'ui/index.html': b64('<h1>Pics</h1>') } });
+await api(O.token, 'POST', `/v1/workspaces/${A}/apps`, { name: 'pics', version: r.j.version, grants: { members: true, accounts: [] } });
+r = await call(O.token, A, 'pics__save', { key: 'notes/hello.txt', text: 'hello files' });
+t('an app saves a file', r.j.ok && r.j.result.size === 11, JSON.stringify(r.j));
+r = await call(O.token, A, 'pics__files', {});
+t('and lists it', r.j.ok && r.j.result.length === 1 && r.j.result[0].key === 'notes/hello.txt' && r.j.result[0].type === 'text/plain', JSON.stringify(r.j));
+r = await call(O.token, A, 'pics__big', {});
+t('a file over 10 MB is refused', r.j.ok === false && /at most 10000000 bytes/.test(r.j.error), JSON.stringify(r.j).slice(0, 120));
+r = await call(O.token, A, 'pics__bad', {});
+t('a key that climbs out is refused', r.j.ok === false && /file key/.test(r.j.error), JSON.stringify(r.j).slice(0, 120));
+// The screen uploads a picture and shows it back.
+r = await api(O.token, 'POST', `/v1/workspaces/${A}/apps/pics/screen`, {});
+let ps = await raw(r.j.url);
+const picsCookie = (ps.h['set-cookie']?.[0] ?? '').split(';')[0];
+const picsHome = `http://pics--${A.replace(/-/g, '')}.${DOMAIN}/`;
+const png = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8ffff3f0005fe02fea7a6a4b10000000049454e44ae426082', 'hex');
+const upload = await new Promise((resolve, reject) => {
+  const boundary = 'ffboundary' + tag;
+  const bodyBuf = Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="dot.png"\r\nContent-Type: image/png\r\n\r\n`), png, Buffer.from(`\r\n--${boundary}--\r\n`)]);
+  const u = new URL(picsHome + 'api/upload');
+  const req = http.request({ host: '127.0.0.1', port: new URL(B).port, path: u.pathname, method: 'POST', headers: { host: u.host, 'x-forwarded-host': u.host, cookie: picsCookie, 'content-type': `multipart/form-data; boundary=${boundary}`, 'content-length': bodyBuf.length } }, (res) => {
+    let b = ''; res.setEncoding('utf8'); res.on('data', (d) => { b += d; }); res.on('end', () => resolve({ s: res.statusCode, body: b }));
+  });
+  req.on('error', reject); req.end(bodyBuf);
+});
+t('the screen uploads a picture through its route', upload.s === 200 && JSON.parse(upload.body).key === 'uploads/dot.png', upload.s + ' ' + upload.body);
+ps = await raw(picsHome + 'api/files/uploads/dot.png', picsCookie);
+t('and shows it back, with its type', ps.s === 200 && /image\/png/.test(ps.h['content-type']), ps.s + ' ' + ps.h['content-type']);
+ps = await raw(picsHome + 'api/files/uploads/dot.png');
+t('never without the session', ps.s === 401, ps.s);
+r = await api(O.token, 'GET', `/v1/workspaces/${A}/apps/pics/export`);
+t('the export holds the files, their bytes in base64', r.s === 200 && r.j.files?.length === 2 && r.j.files.some((f) => f.key === 'notes/hello.txt' && Buffer.from(f.base64, 'base64').toString() === 'hello files'), JSON.stringify(r.j).slice(0, 200));
+// A draft's files are its own.
+await api(O.token, 'POST', `/v1/workspaces/${A}/apps/drafts`, { name: 'pics', label: 'Pics', fromInstalled: true });
+r = await api(O.token, 'POST', `/v1/workspaces/${A}/apps/drafts/pics/try`, { tool: 'files', input: {} });
+t("a draft's dev install starts with no files of the installed app's", r.j.ok && r.j.result.length === 0, JSON.stringify(r.j));
+await api(O.token, 'POST', `/v1/workspaces/${A}/apps/drafts/pics/try`, { tool: 'save', input: { key: 'dev.txt', text: 'dev' } });
+r = await call(O.token, A, 'pics__files', {});
+t('and what it saves stays out of the installed app', r.j.ok && !r.j.result.some((f) => f.key === 'dev.txt'), JSON.stringify(r.j));
+r = await call(O.token, A, 'pics__drop', { key: 'notes/hello.txt' });
+r = await call(O.token, A, 'pics__files', {});
+t('a deleted file leaves the list', r.j.ok && r.j.result.length === 1, JSON.stringify(r.j));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

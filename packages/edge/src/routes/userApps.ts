@@ -26,7 +26,7 @@ import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { checkHostedFiles, checkUserAppManifest, isHosted, parseAppToolName, USER_APP_LIMITS, type AccountDTO, type UserAppManifest } from '@flow/shared';
 import type { AppSource } from '../org/services/userApps';
-import type { HostedEnv } from '../apps/hosted';
+import { filesPrefix, type HostedEnv } from '../apps/hosted';
 import { ApiError, badRequest, forbidden, unauthorized } from '../errors';
 import { directory, guestRefusal, resolveCaller, type AuthEnv } from './auth';
 import { holderOf, runAppTool } from '../registry/userApps';
@@ -223,10 +223,20 @@ userAppRoutes.get('/v1/workspaces/:id/apps/:name/export', async (c) => {
   const name = c.req.param('name');
   const store = (c.env as AuthEnv & HostedEnv).APP_STORE;
   if (!store) throw new ApiError(503, 'no_storage', 'this server has no app stores');
-  const tables = await store.get(store.idFromName(`${name}:${m.organizationId}`)).dump();
+  const stub = store.get(store.idFromName(`${name}:${m.organizationId}`));
+  const tables = await stub.dump();
+  // Its files (§8): each with its bytes in base64 while the export stays under 50 MB, else listed only.
+  const list = (await stub.fileList('')) as { key: string; size: number; type: string; at: number }[];
+  const bucket = (c.env as AuthEnv & HostedEnv).BLOBS;
+  const whole = list.reduce((n, f) => n + f.size, 0) <= 50_000_000;
+  const files = [];
+  for (const f of list) {
+    const o = whole && bucket ? await bucket.get(filesPrefix({ org: m.organizationId, app: name }) + f.key) : null;
+    files.push({ ...f, at: new Date(f.at).toISOString(), ...(o ? { base64: Buffer.from(await o.arrayBuffer()).toString('base64') } : {}) });
+  }
   c.header('Cache-Control', 'no-store');
   c.header('Content-Disposition', `attachment; filename="${name}-data.json"`);
-  return c.json({ app: name, organizationId: m.organizationId, exportedAt: new Date().toISOString(), tables });
+  return c.json({ app: name, organizationId: m.organizationId, exportedAt: new Date().toISOString(), tables, files, ...(whole ? {} : { note: 'The files are over 50 MB together, so they are listed without their contents.' }) });
 });
 
 // ---- drafts (§9.6): apps being built in the suite, each its author's ----

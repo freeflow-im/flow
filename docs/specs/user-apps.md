@@ -362,6 +362,10 @@ Each install of a hosted app gets one SQLite store and one file prefix, keyed by
   was written after the update; the card says so, and the data can be exported first. Files in R2 are not rolled
   back. The spike confirms the bookmark works for the store wherever it lives (§12.1).
 - **Files**: an R2 prefix per (app, organization), with presigned upload and download as Docs uses today.
+  *As built (2026-11-17):* `ctx.files` (put, get, delete, list, response) over an `AppFiles` binding, under
+  `appfiles/<org>/<app>/live/` (a dev install's under `dev/<author>/`), at most 10 MB a file and 10 GB an install, with
+  a file index in the store. No presigned links: the app's screen uploads and shows files through its own routes, which
+  check who is looking. Export data includes the files; deleting a draft deletes its dev files.
 - **Limits** per install: 1 GB of SQLite and 10 GB of files to start.
 - **Export and removal**: an admin can download an install's data as JSON and files at any time. Uninstalling keeps
   the data 30 days, then deletes it.

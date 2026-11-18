@@ -40,7 +40,7 @@ import {
   type AppCallerContext, type AppGrants, type AppHolder, type AppSource, type AppToolAnswer, type AppUpload, type OfferedAppTool,
 } from './services/userApps';
 import { APP_SESSION_SECONDS, mintUserAppToken, signAppSession, signAppTicket, verifyAppSession, verifyAppTicket, verifyBody, verifyUserAppToken, type AppSession, type AppTicket } from './lib/appSigning';
-import { appOrigin, callHostedTool, devHostLabel, draftWorker, hostedWorker, storeName, type HostedEnv, type HostedExports } from '../apps/hosted';
+import { appOrigin, callHostedTool, devHostLabel, draftWorker, filesPrefix, hostedWorker, storeName, type HostedEnv, type HostedExports } from '../apps/hosted';
 import { BUILDING_APP, BUILDING_GUIDE, BUILDING_LABEL, BUILDING_TOOLS } from '../apps/buildingTools';
 import { createDraft, deleteDraft, deleteDraftFile, draftByDevHost, draftCode, getDraft, listDrafts, readDraftFile, writeDraftFile, type AppDraftDTO } from './services/appDrafts';
 
@@ -1067,7 +1067,18 @@ export class Org extends DurableObject<OrgEnv> {
     const done = await answered(() => withDb(this.db, () => deleteDraft(name, author)));
     // Its dev install's data goes with it (§9.3).
     if (done.ok && organizationId && this.env.APP_STORE) {
-      await this.env.APP_STORE.get(this.env.APP_STORE.idFromName(storeName({ org: organizationId, app: name, dev: author }))).clear().catch((err: Error) => console.error(`[apps] clear ${name}: ${err.message}`));
+      const props = { org: organizationId, app: name, dev: author };
+      await this.env.APP_STORE.get(this.env.APP_STORE.idFromName(storeName(props))).clear().catch((err: Error) => console.error(`[apps] clear ${name}: ${err.message}`));
+      // And its files (§8).
+      if (this.env.BLOBS) {
+        const bucket = this.env.BLOBS;
+        let cursor: string | undefined;
+        do {
+          const page = await bucket.list({ prefix: filesPrefix(props), ...(cursor ? { cursor } : {}) });
+          if (page.objects.length) await bucket.delete(page.objects.map((o) => o.key));
+          cursor = page.truncated ? page.cursor : undefined;
+        } while (cursor);
+      }
     }
     return done;
   }
