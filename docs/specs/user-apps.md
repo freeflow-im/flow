@@ -457,6 +457,26 @@ In Admin → General, beside "Who can add agents" (`workspace-admin.md` §3.1):
 6. The Tasks tab appears for everyone; the tools appear for Builder and for each personal agent whose sponsor turns
    the app on (§5.2); Scott makes the wake subscription of §3.4.
 
+### 9.6 Building an app in the suite (operator ruling 2026-11-17)
+
+A person builds or changes an app in the suite itself, with the assistant: no machine, no command line, no build step.
+
+- **The SDK is built in.** A hosted app's `server.js` imports `freeflow`, a module the runner supplies (§7.2):
+  `defineApp({ tools, routes })` answers the host's tool calls and the screen's paths, with `ctx.caller`, `ctx.db`,
+  `ctx.publish`, `ctx.docs` and `ctx.chat` (the ticket of §6.3 is passed for the app). Nothing to bundle.
+- **Drafts.** Each app being built has one working copy per author: the manifest and the files of a version (§14
+  phase 2, step 1), saved as they change. A draft runs nothing until it is tried.
+- **Dev installs** (§9.3): trying a draft runs it in its own store, visible to its author alone, its `uses` cut down to
+  the author's access and no egress.
+- **The Build app page** is the apps home, `/apps/`: the installed apps and the person's drafts, and **New app**. A
+  draft opens with its files, a live preview of its screen (its dev install), and the suite's assistant panel, told the
+  app and the file open. **Check**, **Try it** and **Publish version** are buttons; publishing makes the version an
+  owner or admin installs from Admin → Apps.
+- **The assistant's building tools** (also at /mcp and the bridge): list, read, write and delete a draft's files, check
+  it, try one of its tools in the dev install, and publish it. They are the authoring tools of §9.2, sooner.
+- **Every member may build** (Scott, 2026-11-17), and their agents; guests may not. Installing for the organization
+  stays an owner's or admin's (§9.3).
+
 ## 10. Clients
 
 - **Web and desktop (Electron)**: the tab and the frame, as §6.
@@ -583,8 +603,11 @@ Builder through a `self: true` subscription; an account without `taskboard:read`
 5. **Publishing and installing.** `POST /v1/workspaces/:id/apps/versions` (owners and admins), `flow-agent-bridge app
    publish <dir>`, and Admin → Apps showing an uploaded version to install or update to, a restore point before each
    update, **Go back**, and **Export data**.
-6. **`@freeflow/app-sdk`, and Taskboard as a hosted app** (`examples/user-apps/taskboard-hosted`), with the
-   end-to-end check of this phase's exit.
+6. **The SDK, built into the runner** (§9.6): `import { defineApp } from 'freeflow'`.
+7. **Drafts and dev installs** (§9.6, §9.3).
+8. **The assistant's building tools** (§9.6), at every door.
+9. **The Build app page** at `/apps/` (§9.6): drafts, files, the live preview, the assistant panel.
+10. **Taskboard built on that page with the assistant**, and the end-to-end check of this phase's exit.
 
 Exit: the hosted Taskboard passes phase 1's exit; it cannot reach a host outside `egress`; two organizations with
 the same app see separate data; a person removed from the organization loses the screen at once; going back after

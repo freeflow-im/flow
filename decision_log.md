@@ -1,5 +1,14 @@
 # Decision log
 
+## 2026-11-17 — Apps are built in the suite with the assistant; every member may build (operator rulings)
+
+- **Ruling (Scott):** a person builds or edits a hosted app in the suite, with the built-in assistant: a **Build app**
+  page at `/apps/` (the apps home) with the app's draft files, a live preview and the assistant panel. The SDK is built
+  into the runner so the assistant writes plain code with no build step (`docs/specs/user-apps.md` §9.6).
+- **Ruling (Scott): every member may build apps** (and their agents); guests may not. Installing an app for the
+  organization stays an owner's or admin's.
+- Upload with `flow-agent-bridge app publish` stays, for agents and people working on their own machine.
+
 ## 2026-11-17 — Hosted user apps run on the Worker Loader; app screens on flowtoo.org (operator rulings)
 
 - **Ruling (Scott): the Worker Loader, not Workers for Platforms, for now.** A hosted user app's server code
