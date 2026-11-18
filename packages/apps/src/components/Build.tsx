@@ -92,6 +92,7 @@ export function Builder({ org, name, admin }: { org: string; name: string; admin
   const [saved, setSaved] = useState('');
   const [view, setView] = useState<'code' | 'preview' | 'try'>('code');
   const [notice, setNotice] = useState<string | null>(null);
+  const [noticeLink, setNoticeLink] = useState<{ label: string; href: string } | null>(null);
   // An owner or admin installs a published version from here (§9.6): the version the popup is for.
   const [installing, setInstalling] = useState<number | null>(null);
   const loadedAt = useRef<string | null>(null);
@@ -196,7 +197,13 @@ export function Builder({ org, name, admin }: { org: string; name: string; admin
           <button type="button" className="flex items-center gap-1 rounded-md bg-primary px-3 py-1 text-sm font-semibold text-white disabled:opacity-50" disabled={d.problems.length > 0} onClick={() => void publish()} data-testid="publish"><Upload className="size-4" />Publish version</button>
         </div>
       </div>
-      {notice && <div className="border-b border-hairline bg-warn-bg px-3 py-1.5 text-xs" data-testid="build-notice">{notice} <button type="button" className="ml-2 text-primary" onClick={() => setNotice(null)}>Close</button></div>}
+      {notice && (
+        <div className="border-b border-hairline bg-warn-bg px-3 py-1.5 text-xs" data-testid="build-notice">
+          {notice}
+          {noticeLink && <a className="ml-2 font-semibold text-primary hover:underline" href={noticeLink.href} data-testid="build-notice-open">{noticeLink.label}</a>}
+          <button type="button" className="ml-2 text-primary" onClick={() => { setNotice(null); setNoticeLink(null); }}>Close</button>
+        </div>
+      )}
       {d.problems.length > 0 && (
         <ul className="max-h-24 overflow-y-auto border-b border-hairline bg-white px-3 py-1 text-xs text-danger" data-testid="problems">
           {d.problems.map((p) => <li key={p}>{p}</li>)}
@@ -225,7 +232,7 @@ export function Builder({ org, name, admin }: { org: string; name: string; admin
           {view === 'try' && <Try org={org} name={name} draft={d} />}
         </main>
       </div>
-      {installing !== null && <InstallDialog org={org} name={name} version={installing} onClose={() => { setInstalling(null); setNotice(`Published version ${installing}. You can install it later with Install… or in Organization settings → Apps.`); }} onDone={(t) => { setInstalling(null); setNotice(t); }} />}
+      {installing !== null && <InstallDialog org={org} name={name} version={installing} onClose={() => { setInstalling(null); setNotice(`Published version ${installing}. You can install it later with Install… or in Organization settings → Apps.`); }} onDone={(t, open) => { setInstalling(null); setNotice(t); setNoticeLink(open ?? null); }} />}
       <SuiteAssistant organizationId={org} page="home" context={{ building: { app: name, label: d.label, file: view === 'code' ? path : undefined } }} />
     </div>
   );

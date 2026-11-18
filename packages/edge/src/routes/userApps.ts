@@ -116,10 +116,11 @@ const refused = (c: C, problems: string[]) => c.json({ error: { code: 'manifest'
 
 userAppRoutes.get('/v1/workspaces/:id/apps', async (c) => {
   const m = await memberOf(c);
-  if (m.account.kind === 'guest') return c.json({ apps: [] });
+  // `canBuild`: the Apps menu's Build an app (§9.6): every member and agent but a guest.
+  if (m.account.kind === 'guest') return c.json({ apps: [], canBuild: false });
   const apps = await orgStub(c, m.organizationId).listUserApps({ ...holderOf({ ...m, account: m.account }), via: null, admin: isAdmin(m) && !m.isAgent });
   c.header('Cache-Control', 'no-store');
-  return c.json({ apps });
+  return c.json({ apps, canBuild: true });
 });
 
 userAppRoutes.post('/v1/workspaces/:id/apps/preview', async (c) => {

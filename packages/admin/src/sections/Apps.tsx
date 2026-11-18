@@ -5,6 +5,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AccountDTO, InstalledAppDTO, UserAppManifest, WorkspaceDTO } from '@flow/shared';
+import { appsChanged } from '@flow/suite-bar';
 import { adminApi, appsApi, type AppGrants, type AppUploadDTO } from '../api';
 import { Button, Card, Confirm, ErrorLine, Row, Toggle } from '../components/ui';
 
@@ -23,7 +24,8 @@ export function Apps({ org, admin }: { org: WorkspaceDTO; admin: boolean }) {
   const qc = useQueryClient();
   const apps = useQuery({ queryKey: ['apps', org.id], queryFn: () => appsApi.list(org.id) });
   const accounts = useQuery({ queryKey: ['accounts', org.id], queryFn: () => adminApi.accounts(org.id), enabled: admin });
-  const refresh = () => qc.invalidateQueries({ queryKey: ['apps', org.id] });
+  // The suite bar's Apps menu on this page reads its list again too.
+  const refresh = () => { appsChanged(); return qc.invalidateQueries({ queryKey: ['apps', org.id] }); };
   const list = apps.data ?? [];
 
   return (

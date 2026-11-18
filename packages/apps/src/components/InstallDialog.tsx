@@ -3,11 +3,12 @@
 // hosts it may reach, its tools with their whole descriptions (an agent reads them as guidance), and who gets it.
 import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
+import { appsChanged } from '@flow/suite-bar';
 import { appsApi, type AppGrants, type InstalledApp, type OrgAccount } from '../api';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-interface Manifest { label?: string; uses?: string[]; egress?: string[]; scopes?: { id: string; label: string }[]; tools?: { name: string; description: string }[] }
+interface Manifest { label?: string; ui?: unknown; uses?: string[]; egress?: string[]; scopes?: { id: string; label: string }[]; tools?: { name: string; description: string }[] }
 
 /** The grants an installed app has now, as the popup starts with them. */
 function grantsOf(app: InstalledApp | undefined): AppGrants {
@@ -16,7 +17,7 @@ function grantsOf(app: InstalledApp | undefined): AppGrants {
   return { members: all.includes('members'), accounts: [...new Set(all.filter((g) => g !== 'members'))] };
 }
 
-export function InstallDialog({ org, name, version, onClose, onDone }: { org: string; name: string; version: number; onClose(): void; onDone(text: string): void }) {
+export function InstallDialog({ org, name, version, onClose, onDone }: { org: string; name: string; version: number; onClose(): void; onDone(text: string, open?: { label: string; href: string }): void }) {
   const [manifest, setManifest] = useState<Manifest | null>(null);
   const [installed, setInstalled] = useState<InstalledApp | undefined>(undefined);
   const [accounts, setAccounts] = useState<OrgAccount[]>([]);
@@ -44,7 +45,11 @@ export function InstallDialog({ org, name, version, onClose, onDone }: { org: st
     try {
       if (update) await appsApi.updateToVersion(org, name, version, grants);
       else await appsApi.installVersion(org, name, version, grants);
-      onDone(update ? `Updated ${manifest?.label ?? name} to version ${version}. Everyone with access now runs it.` : `Installed ${manifest?.label ?? name}. It has a tab now, and agents with access have its tools.`);
+      // The suite bar's Apps menu on this page reads its list again.
+      appsChanged();
+      const label = manifest?.label ?? name;
+      const open = manifest && 'ui' in manifest ? { label: `Open ${label}`, href: `/apps/${name}` } : undefined;
+      onDone(update ? `Updated ${label} to version ${version}. Everyone with access now runs it.` : `Installed ${label}. It is in the Apps menu now, and agents with access have its tools.`, open);
     } catch (e) {
       setError(errorText(e));
     } finally {

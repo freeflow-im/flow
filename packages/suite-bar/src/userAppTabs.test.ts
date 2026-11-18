@@ -9,12 +9,23 @@ const apps = [
   { name: 'bot', label: 'Bot', usable: true, hasScreen: false },
 ];
 
-describe("installed apps' tabs (user-apps.md §6)", () => {
-  it('shows the apps the person may open that have a screen, after the built-in tabs and with no ⌘ digit', () => {
+describe("the Apps tab (user-apps.md §6)", () => {
+  it('comes after the built-in tabs with no ⌘ digit, its menu the apps the person may open and Build an app', () => {
     const tabs = suiteTabsFrom(APP_MANIFESTS, 'chat', {}, { extra: userAppTabs(apps, 'taskboard') });
     const last = tabs.at(-1)!;
-    expect(last).toEqual({ id: 'app:taskboard', label: '🗂️ Tasks', href: '/apps/taskboard', active: true });
-    expect(tabs.filter((t) => t.id.startsWith('app:'))).toHaveLength(1);
+    expect(last).toMatchObject({ id: 'apps', label: 'Apps', href: '/apps/', active: true });
     expect(last.shortcut).toBeUndefined();
+    expect(last.menu!.map((m) => [m.label, m.href, !!m.current])).toEqual([
+      ['🗂️ Tasks', '/apps/taskboard', true],
+      ['', '', false],
+      ['Build an app', '/apps/', false],
+    ]);
+  });
+
+  it('offers Build an app with no app installed, and nothing to a guest', () => {
+    expect(userAppTabs([], undefined, true)[0]!.menu!.map((m) => m.label)).toEqual(['Build an app']);
+    expect(userAppTabs([], undefined, true)[0]!.active).toBeUndefined();
+    expect(userAppTabs([], '', true)[0]!.menu![0]!.current).toBe(true);
+    expect(userAppTabs([], undefined, false)).toEqual([]);
   });
 });
