@@ -22,6 +22,7 @@
 // in ~/.config/flow/dev.vars once and every checkout and worktree gets them.
 // Hot reload of a client: start its own Vite dev server beside this (BUILD.md, "Local development").
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import http from 'node:http';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -34,6 +35,8 @@ const has = (name) => args.some((a) => a === `--${name}` || a.startsWith(`--${na
 const values = (name) => args.filter((a) => a.startsWith(`--${name}=`)).map((a) => a.slice(name.length + 3));
 const port = Number(values('port')[0] ?? 8787);
 const origin = `http://localhost:${port}`;
+/** The apps proxy's port: hosted apps' screens and draft previews (below). */
+const appsPort = port + 1;
 
 const run = (cmd, cmdArgs, opts = {}) => {
   const r = spawnSync(cmd, cmdArgs, { stdio: 'inherit', cwd: root, ...opts });
@@ -117,12 +120,24 @@ const vars = {
   MAIL_ALLOW_INSECURE: '1',
   CALENDAR_ALLOW_INSECURE: '1',
   FLOW_UNFURL_ALLOW_HOSTS: 'localhost',
-  // Hosted user apps' screens (src/apps/screen.ts): <app>--<org>.flowtoo.localhost:<port>, which browsers send to this
-  // machine with no DNS. Never production's flowtoo.org.
-  APPS_DOMAIN: `flowtoo.localhost:${new URL(origin).port}`,
+  // Hosted user apps' screens (src/apps/screen.ts): <app>--<org>.flowtoo.localhost:<port + 1>, which browsers send to this
+  // machine with no DNS, through the apps proxy below. Never production's flowtoo.org.
+  APPS_DOMAIN: `flowtoo.localhost:${appsPort}`,
   APPS_SCHEME: 'http',
 };
 const flags = Object.entries(vars).flatMap(([k, v]) => ['--var', `${k}:${v}`]);
+
+// The apps proxy: `wrangler dev --local-upstream` gives the Worker its own host for every request, so an app's screen on
+// <app>--<org>.flowtoo.localhost could not be told from the suite. This port takes those hosts and passes each request
+// on with the host it asked for in x-forwarded-host, which src/apps/screen.ts reads in local development only.
+http.createServer((req, res) => {
+  const up = http.request({ host: '127.0.0.1', port, path: req.url, method: req.method, headers: { ...req.headers, 'x-forwarded-host': req.headers.host ?? '' } }, (r) => {
+    res.writeHead(r.statusCode ?? 502, r.headers);
+    r.pipe(res);
+  });
+  up.on('error', () => { res.writeHead(502).end('the suite is not up yet'); });
+  req.pipe(up);
+}).listen(appsPort, '127.0.0.1');
 for (const v of values('var')) flags.push('--var', v);
 
 console.log(`\ndev:suite: the suite is at ${origin}  (Chat ${origin}/chat, Docs ${origin}/docs, Mail ${origin}/mail, Calendar ${origin}/calendar, Contacts ${origin}/contacts, Apps ${origin}/apps, Admin ${origin}/admin, Home ${origin}/home)`);

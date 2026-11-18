@@ -35,11 +35,13 @@ function cookieOf(req: Request, name: string): string | null {
 
 /**
  * The host a request is for. In production that is the URL's. A local `wrangler dev --local-upstream` rewrites the URL to
- * its own host, so in local development (APPS_SCHEME http) the forwarded host is read instead; never in production.
+ * its own host, so in local development (APPS_SCHEME http) the host the dev suite's apps proxy forwards is read instead;
+ * never in production.
  */
 function hostOf(env: HostedEnv, req: Request): string {
   const url = new URL(req.url);
-  if (env.APPS_SCHEME === 'http') return req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? url.host;
+  // Local development: the dev suite's apps proxy (scripts/dev-suite.mjs) says which host the browser asked for.
+  if (env.APPS_SCHEME === 'http') return req.headers.get('x-forwarded-host') ?? url.host;
   return url.host;
 }
 
@@ -56,7 +58,6 @@ export async function serveAppScreen(req: Request, env: HostedEnv, exports: Host
   const at = parseAppHost(url.host, env.APPS_DOMAIN ?? '');
   if (!at || !env.ORG) return new Response('not found', { status: 404 });
   const org = env.ORG.get(env.ORG.idFromName(at.org));
-  const secure = (env.APPS_SCHEME ?? 'https') === 'https';
 
   const token = url.searchParams.get(TOKEN_PARAM);
   if (token) {
@@ -64,7 +65,8 @@ export async function serveAppScreen(req: Request, env: HostedEnv, exports: Host
     if (!opened) return refuse();
     url.searchParams.delete(TOKEN_PARAM);
     // Framed by the suite on another site: SameSite=None needs Secure, and Partitioned keeps it the suite's frame's alone.
-    const attrs = secure ? 'Secure; SameSite=None; Partitioned' : 'SameSite=Lax';
+    // Framed by the suite from another site, so SameSite=None, which needs Secure; browsers count *.localhost as secure too.
+    const attrs = 'Secure; SameSite=None; Partitioned';
     return new Response(null, { status: 302, headers: { location: url.pathname + url.search, 'set-cookie': `${APP_SESSION_COOKIE}=${opened.cookie}; Path=/; HttpOnly; ${attrs}; Max-Age=${opened.maxAge}`, 'cache-control': 'no-store' } });
   }
 
@@ -104,13 +106,13 @@ export async function serveAppScreen(req: Request, env: HostedEnv, exports: Host
 async function serveDraftScreen(req: Request, url: URL, at: { devHost: string; org: string }, env: HostedEnv, exports: HostedExports): Promise<Response> {
   if (!env.ORG) return new Response('not found', { status: 404 });
   const org = env.ORG.get(env.ORG.idFromName(at.org));
-  const secure = (env.APPS_SCHEME ?? 'https') === 'https';
   const token = url.searchParams.get(TOKEN_PARAM);
   if (token) {
     const opened = await org.openDraftSession({ organizationId: at.org, devHost: at.devHost, token });
     if (!opened) return refuse();
     url.searchParams.delete(TOKEN_PARAM);
-    const attrs = secure ? 'Secure; SameSite=None; Partitioned' : 'SameSite=Lax';
+    // Framed by the suite from another site, so SameSite=None, which needs Secure; browsers count *.localhost as secure too.
+    const attrs = 'Secure; SameSite=None; Partitioned';
     return new Response(null, { status: 302, headers: { location: url.pathname + url.search, 'set-cookie': `${APP_SESSION_COOKIE}=${opened.cookie}; Path=/; HttpOnly; ${attrs}; Max-Age=${opened.maxAge}`, 'cache-control': 'no-store' } });
   }
   const cookie = cookieOf(req, APP_SESSION_COOKIE);
