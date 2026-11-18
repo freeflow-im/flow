@@ -78,6 +78,10 @@ const AGENTS_RETIRED_KEY = 'agents_retired_v1';
 const MEMBERS_KEY = 'members_v2';
 /** The admin agent's principal id, once this organization has one (agents.md §1.4). */
 const ADMIN_AGENT_KEY = 'admin_agent_v1';
+/** The workspace's team agent, Omni (docs/specs/onboarding.md §2): the principal id of the shared agent that joins every public channel. */
+const TEAM_AGENT_KEY = 'team_agent_v1';
+/** A person's place in setup (docs/specs/onboarding.md §5), per user: `setup:<userId>`. */
+const SETUP_PREFIX = 'setup:';
 /** The admin agent's name when it is made; the admins may rename it in Admin → Agents. */
 export const ADMIN_AGENT_NAME = 'Carl';
 
@@ -357,6 +361,11 @@ export class Org extends DurableObject<OrgEnv> {
       try { ws.send(frame); } catch { /* the socket is closing */ }
     }
     this.logEvent(subject, event, frame, stamp);
+    // A new public channel gets the team agent (docs/specs/onboarding.md §2), once the request that made it is done.
+    if (event.type === 'channel.created' && event.channelId) {
+      const channelId = event.channelId;
+      void Promise.resolve().then(() => this.joinTeamAgent(channelId));
+    }
     if (event.type === 'message.created' || event.type === 'thread.reply') {
       this.ctx.waitUntil(this.askAssistant(event.data as MessageDTO).catch((err) => console.error(`[assistant] ${(err as Error).message}`)));
     }
@@ -460,6 +469,56 @@ export class Org extends DurableObject<OrgEnv> {
   /** A shared agent the Admin app made is hosted (routes/agents.ts): this list's row says so, as the directory's does. */
   async markHostedAgent(userId: string): Promise<void> {
     this.ctx.storage.sql.exec("UPDATE workspace_members SET runtime = 'hosted' WHERE user_id = ? AND kind = 'native'", userId);
+  }
+
+  /**
+   * A person's place in setup (docs/specs/onboarding.md §5): pending from when their assistant is made here (a new native
+   * member) until they finish; null for a person never marked (a member from before setup shipped).
+   */
+  async setupOf(userId: string): Promise<{ pending: boolean; step: number } | null> {
+    return (await this.ctx.storage.get<{ pending: boolean; step: number }>(SETUP_PREFIX + userId)) ?? null;
+  }
+
+  /** Moves a person's setup on (`step`) or ends it (`done`). Returns where it is now. */
+  async saveSetup(userId: string, patch: { step?: number; done?: boolean }): Promise<{ pending: boolean; step: number }> {
+    const now = (await this.setupOf(userId)) ?? { pending: true, step: 1 };
+    const next = { pending: patch.done ? false : now.pending, step: patch.step ?? now.step };
+    await this.ctx.storage.put(SETUP_PREFIX + userId, next);
+    return next;
+  }
+
+  /** The workspace's team agent (Omni, docs/specs/onboarding.md §2), while it is still a member; null otherwise. */
+  async teamAgentId(): Promise<string | null> {
+    const id = await this.ctx.storage.get<string>(TEAM_AGENT_KEY);
+    if (!id) return null;
+    if (!this.ctx.storage.sql.exec('SELECT 1 FROM workspace_members WHERE user_id = ?', id).toArray().length) {
+      await this.ctx.storage.delete(TEAM_AGENT_KEY);
+      return null;
+    }
+    return id;
+  }
+
+  /** Makes a hosted shared agent the team agent: it joins every public channel now, and each new one as it is made. */
+  async markTeamAgent(agentId: string): Promise<void> {
+    await this.ctx.storage.put(TEAM_AGENT_KEY, agentId);
+    const open = this.ctx.storage.sql.exec("SELECT id FROM channels WHERE kind = 'standard' AND NOT is_private AND archived_at IS NULL").toArray().map((r) => r.id as string);
+    for (const channelId of open) await this.joinTeamAgent(channelId, agentId);
+  }
+
+  /** The team agent into a public channel it is not in yet (a new channel, or one it missed). */
+  private async joinTeamAgent(channelId: string, agentId?: string | null): Promise<void> {
+    const id = agentId ?? (await this.teamAgentId());
+    if (!id) return;
+    const sql = this.ctx.storage.sql;
+    const chan = sql.exec('SELECT kind, is_private, archived_at FROM channels WHERE id = ?', channelId).toArray()[0];
+    if (!chan || chan.kind !== 'standard' || chan.is_private || chan.archived_at) return;
+    if (sql.exec('SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?', channelId, id).toArray().length) return;
+    try {
+      await this.scoped(async () => (await import('./services/channels')).joinChannel(channelId, id));
+      await this.logging;
+    } catch (err) {
+      console.error(`team agent into ${channelId}: ${(err as Error).message}`);
+    }
   }
 
   /** A hosted shared agent's answer in Chat (askSharedAgents), posted as the agent, asked by the member. Returns the message id, or null. */
@@ -1222,6 +1281,8 @@ export class Org extends DurableObject<OrgEnv> {
       const answer = await this.directory().call('ensureAssistantFor' as never, [m.user_id, org, m.display_name] as never) as DirectoryAnswer<AccountDTO>;
       if (!answer.ok) { console.error(`assistant for ${m.user_id as string}: ${answer.message}`); continue; }
       this.addPersonalAgent(org, answer.value);
+      // A new member here: setup is theirs to do (docs/specs/onboarding.md §5).
+      if (!(await this.setupOf(m.user_id as string))) await this.ctx.storage.put(SETUP_PREFIX + (m.user_id as string), { pending: true, step: 1 });
     }
     await this.flushOutbox(org);
   }

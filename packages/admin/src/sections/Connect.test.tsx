@@ -3,7 +3,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Connect, connectPrompt } from './Connect';
+import { connectPrompt } from '@flow/shared/assistant';
+import { Connect } from './Connect';
 
 let calls: { method: string; path: string }[];
 let agents: { id: string; name: string; mode?: 'personal' | 'shared'; origin: string; endpoint: string; connectedAt: string; organization?: string }[];

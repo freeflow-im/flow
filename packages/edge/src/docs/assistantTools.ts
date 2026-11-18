@@ -13,6 +13,8 @@ import { ASSISTANT_MAIL_TOOLS, assistantMailSchemas, type MailToolContext } from
 import { ASSISTANT_CALENDAR_TOOLS, assistantCalendarSchemas, type CalendarToolContext } from '../calendar/calendarTools.ts';
 import { register, runnerOf, toolsFor } from '../registry/index.ts';
 import type { DocsToolContext } from '../assistant/docsTools.ts';
+// The event tools register themselves (a person's assistant makes automations with them, onboarding.md §4).
+import { ASSISTANT_EVENT_TOOLS, EVENT_TOOLS, type EventToolContext } from '../events/eventTools.ts';
 import type { AppToolContext } from '../apps.ts';
 import { BROWSER_GUIDANCE, browserTools, isBrowserWebTool, validateBrowserTool } from '../assistant/browserTools.ts';
 import { ASSISTANT_CHAT_TOOLS, assistantChatSchemas } from '../assistant/chatTools.ts';
@@ -28,6 +30,8 @@ declare module '@flow/docs/server/agent/tools.ts' {
     mail?: MailToolContext;
     /** The person's own Calendar object, for the Calendar tools; without it they say Calendar is not here. */
     calendar?: CalendarToolContext;
+    /** The organization's automations as the person, in their own assistant's turn (events/eventTools.ts); absent otherwise. */
+    events?: EventToolContext;
     /** The organization's Docs object over HTTP, as the person (the Assistant object): Docs' tools then run there, not on `sheets`. */
     docs?: DocsToolContext;
     /** The objects of the apps added by manifest, by name (apps.ts), for their tools. */
@@ -57,6 +61,7 @@ export const SUITE_GUIDANCE: readonly string[] = [
   '- In FreeFlow Calendar the <app_context> says so, with the view, its range and the user\'s time zone, the calendars shown and the open event: "this event" is the open one. open_calendar_event shows an event\'s card and show_calendar_range moves the view, when the user asks to see something. An event you make or change shows in the chat with a button that opens it.',
   "- A file you make or save (create_doc, create_sheet, create_deck, import_file, save_mail_attachment_to_docs) comes back with its url. In Mail or Calendar, give the user that link exactly as returned; never write a Docs address of your own, and do not call open_doc, open_sheet or open_deck there.",
   "- In FreeFlow Chat the <app_context> says so: the user asked you there, and your answer posts where they asked. There you have the Chat tools: list_channels and read_messages for the channels the user is in, search_messages to find messages by their words in those and in every public channel, send_message to post in one of them (it posts at once, as you), and leave_channel. You reach only channels the user is in, never their direct messages with others. You have the Chat tools in every turn no page started too (an automation's, an email's).",
+  "- Automations: when the user asks for something to happen on its own (at a time, or when an email, a chat message or a calendar event comes in), make it with create_subscription, as the user: a schedule {every, timezone} for a time (the user's time zone), else a filter on the event types that match, with delivery 'wake', the agent to do it as consumer (your own account id for yourself) and action {kind:'wake', prompt}; a condition no filter can say goes at the start of the prompt. Then say in a sentence or two when it runs and what it does. list_subscriptions lists theirs, list_jobs one's runs. Only in the user's own conversations with you.",
   MEMORY_GUIDANCE,
   BROWSER_GUIDANCE,
 ];
@@ -83,6 +88,8 @@ export const SUITE_SCHEMAS: Record<string, z.ZodObject> = {
   ...assistantChatSchemas(),
   // The agent's own memory (agents.md §6.1, assistant/memory.ts), kept in its runtime object.
   memory: memorySchema,
+  // Automations (onboarding.md §4): a person's own assistant makes and lists them as the person (events/eventTools.ts).
+  ...Object.fromEntries(EVENT_TOOLS.filter((t) => ASSISTANT_EVENT_TOOLS.has(t.name)).map((t) => [t.name, z.object(t.shape).describe(t.description)])),
   // Browser tools in FreeFlow Calendar (packages/calendar, src/lib/assistant.ts): the event opens, the view moves.
   open_calendar_event: z
     .object({ id: z.string().min(3).max(1200).describe('The event to show: an id from list_events, get_event, create_event or the <app_context>.') })

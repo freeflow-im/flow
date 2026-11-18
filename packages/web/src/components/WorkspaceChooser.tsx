@@ -1,5 +1,5 @@
 import { useBoundApi } from '../lib/useBoundApi';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { PendingWorkspaceInviteDTO, WorkspaceDTO } from '@flow/shared';
 import { api } from '../lib/api';
@@ -10,7 +10,7 @@ import { EMPTY_SLUG_FIELD, slugEdited, slugForName } from '../lib/slugify';
 import { OpenInAppButton } from './OpenInApp';
 import { AuthImg } from './Avatar';
 import { openServerConnections } from './ServerConnections';
-import { openHome } from '../lib/openHome';
+import { openHome, opensInHome } from '../lib/openHome';
 
 export default function WorkspaceChooser() {
   const { api } = useBoundApi();
@@ -105,6 +105,14 @@ export default function WorkspaceChooser() {
       setBusyInvite(null);
     }
   };
+
+  // A person in no workspace, with no invitation waiting and no other server, sets one up in Home's setup
+  // (docs/specs/onboarding.md §1) instead of this screen. The desktop app (Chat only) keeps this screen.
+  const nothingHere = workspaces.isSuccess && workspaces.data.length === 0 && invites.isSuccess && (invites.data ?? []).length === 0
+    && elsewhere.length === 0 && !runtime.read('pendingInvite');
+  useEffect(() => {
+    if (nothingHere && opensInHome()) window.location.assign('/home/setup');
+  }, [nothingHere]);
 
   if (opening !== null) {
     return (

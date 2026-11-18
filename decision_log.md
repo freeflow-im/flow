@@ -2099,3 +2099,17 @@ one-recipient MCP correction).
 - **A link works for 24 hours; a visitor's access ends 30 days after their last visit.**
 - **This comes before Meet recording**: each meeting room gets its own channel, and
   Meet guests join its chat as visitors.
+
+## 2026-11-17 — Workspace onboarding (`docs/specs/onboarding.md`)
+
+- **Step 1 keeps the 2026-11-15 mail ruling.** The free workspace address gives agents mailboxes, not people; the
+  screen says so instead of showing a personal mailbox (operator ruling).
+- **Omni is an ordinary hosted shared agent that joins every public channel**, now and as new ones are made. No new
+  "company brain" access rule; files, calendars and shared inboxes are shared with it the usual way (operator ruling).
+- **Automations in setup are written in plain language and made by the person's assistant** with its
+  `create_subscription` tool; Daily Briefing and Meeting Prep are made for every person, on by default (operator ruling).
+- **The signed-out root shows the Welcome page**; Home A/B are left for later (operator ruling).
+- **Only people who join after this ships are marked for setup**; existing members never see it.
+- **Sign-in screen follows the "Sign up or log in" design; password login stays the main action** (operator ruling
+  2026-11-17). New: a 6-digit email code that logs in an account or starts a sign-up, and "Your name" on the password
+  step. The email label is "Email" (personal addresses are fine).

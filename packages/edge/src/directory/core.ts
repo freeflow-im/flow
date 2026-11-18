@@ -89,6 +89,10 @@ const RESERVED_LOCALS = new Set(['postmaster', 'abuse', 'hostmaster', 'webmaster
 const USERNAME = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const SIGNIN_TTL_MINUTES = 15;
+/** An email code (onboarding.md §1): ten minutes, five tries, and no new one mailed within half a minute of the last. */
+const EMAIL_CODE_TTL_MINUTES = 10;
+const EMAIL_CODE_TRIES = 5;
+const EMAIL_CODE_RESEND_MS = 30_000;
 const APP_LINK_TTL = 2 * 60_000;
 const DESKTOP_HANDOFF_TTL = 10 * 60_000;
 /** How long the ChatGPT plugin's server has to trade a cross-host sign-in key (routes/crossHost.ts): one redirect's worth. */
@@ -116,6 +120,14 @@ type Row = Record<string, unknown>;
 export async function hashToken(token: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
   return Buffer.from(digest).toString('hex');
+}
+/** A 6-digit code, every value equally likely. */
+export function sixDigits(): string {
+  const max = Math.floor(0x1_0000_0000 / 1_000_000) * 1_000_000;
+  for (;;) {
+    const n = crypto.getRandomValues(new Uint32Array(1))[0]!;
+    if (n < max) return String(n % 1_000_000).padStart(6, '0');
+  }
 }
 export const newToken = () => Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url');
 
@@ -1153,6 +1165,64 @@ export class DirectoryCore {
       subject: 'Your Flow sign-in link',
       text: `Hi ${user.display_name},\n\nSomeone (hopefully you) asked to sign in to Flow with this email.\n\n${this.deps.webUrlBase}/?signin=${token}\n\nThis link expires in ${SIGNIN_TTL_MINUTES} minutes and can be used once. If you didn't ask for this, you can ignore this email — no one can sign in without it.\n`,
     });
+  }
+
+  /**
+   * Mails a 6-digit code to an address (onboarding.md §1). For an account it signs in; for an address with none (where
+   * registration is open) it starts a sign-up. The answer is the same either way, so it never says which addresses have
+   * accounts. A new code replaces the last, at most one every half minute.
+   */
+  async sendEmailCode(rawEmail: string): Promise<void> {
+    const email = rawEmail.trim().toLowerCase();
+    const user = this.userByEmail(email);
+    if (user?.is_bot || (!user && !this.deps.registrationEnabled)) return;
+    const now = Date.now();
+    this.sql.exec('DELETE FROM email_codes WHERE expires_at < ?', now);
+    const last = this.rows('SELECT created_at FROM email_codes WHERE email = ?', email)[0];
+    if (last && now - (last.created_at as number) < EMAIL_CODE_RESEND_MS) return;
+    const code = sixDigits();
+    this.sql.exec('INSERT OR REPLACE INTO email_codes (email, code_hash, created_at, expires_at, attempts) VALUES (?, ?, ?, ?, 0)',
+      email, await hashToken(`${email}:${code}`), now, now + EMAIL_CODE_TTL_MINUTES * 60_000);
+    await this.deps.send({
+      to: email,
+      subject: `${code} is your FreeFlow code`,
+      text: user
+        ? `Hi ${user.display_name},\n\nYour FreeFlow sign-in code is:\n\n${code}\n\nIt expires in ${EMAIL_CODE_TTL_MINUTES} minutes. If you didn't ask for it, you can ignore this email: no one can sign in without it.\n`
+        : `Welcome to FreeFlow!\n\nYour code to create your account is:\n\n${code}\n\nIt expires in ${EMAIL_CODE_TTL_MINUTES} minutes. If you didn't ask for a FreeFlow account, you can ignore this email.\n`,
+    });
+  }
+
+  /**
+   * Checks an email code: for an account, signs it in (and marks the address verified); for an address with none, answers
+   * a sign-up token, which POST /v1/auth/register/complete takes with a name and a password. A wrong code counts a try;
+   * after five the code is gone and a new one is needed.
+   */
+  async verifyEmailCode(rawEmail: string, code: string, clientInfo?: string): Promise<AuthResponse | { status: 'new'; signupToken: string; email: string }> {
+    const email = rawEmail.trim().toLowerCase();
+    const now = Date.now();
+    const row = this.rows('SELECT * FROM email_codes WHERE email = ? AND expires_at > ?', email, now)[0];
+    if (!row) throw unauthorized('this code has expired; ask for a new one');
+    if ((row.attempts as number) >= EMAIL_CODE_TRIES) {
+      this.sql.exec('DELETE FROM email_codes WHERE email = ?', email);
+      throw unauthorized('too many tries; ask for a new code');
+    }
+    if (row.code_hash !== (await hashToken(`${email}:${code.trim()}`))) {
+      this.sql.exec('UPDATE email_codes SET attempts = attempts + 1 WHERE email = ?', email);
+      throw unauthorized('that code is not right; check the email and try again');
+    }
+    this.sql.exec('DELETE FROM email_codes WHERE email = ?', email);
+    const user = this.userByEmail(email);
+    if (user && !user.is_bot) {
+      if (!user.email_verified_at) this.sql.exec('UPDATE users SET email_verified_at = ? WHERE id = ?', now, user.id);
+      return { token: await this.issueSession(user.id as string, clientInfo), user: toUserDTO(user, user.id as string) };
+    }
+    if (!this.deps.registrationEnabled) throw new ApiError(403, 'registration_disabled', 'Account registration is disabled on this server');
+    // The address is proven: a sign-up token, as the emailed sign-up link carries, for the name and password to come.
+    this.sql.exec('DELETE FROM pending_signups WHERE email = ?', email);
+    const signupToken = newToken();
+    this.sql.exec('INSERT INTO pending_signups (token_hash, email, created_at, expires_at) VALUES (?, ?, ?, ?)',
+      await hashToken(signupToken), email, now, now + VERIFY_TTL_HOURS * 3_600_000);
+    return { status: 'new', signupToken, email };
   }
 
   async consumeSigninLink(token: string, clientInfo?: string): Promise<AuthResponse> {

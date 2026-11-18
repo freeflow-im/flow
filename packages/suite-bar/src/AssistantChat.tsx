@@ -9,6 +9,9 @@ import { useSuggestedPrompts, type PromptPage } from './lib/prompts';
 import { EmailApprovalCard, WaitingEmails, emailApprovalOf } from './EmailApproval';
 import './assistant-chat.css';
 
+// The chat itself, for a page that shows the assistant's answer in its own place (Home's setup, docs/specs/onboarding.md §4).
+export { useSuiteAssistant, type ChatItem } from './suiteChat';
+
 /**
  * The pill and, opened, the panel, in the organization the bar selected: any agent the person may talk to (agents.md §6),
  * picked in the panel's header. It starts with `prefer` when the person may use such an agent (Admin passes `admin`: the

@@ -10,7 +10,7 @@ import { adminApi, assistantApi, connectionsApi } from '../api';
 import { Button, ErrorLine, Select, Toggle } from '../components/ui';
 import { Modal } from '../components/Modal';
 import { choiceUrl, PicturePicker, type PictureChoice } from './AgentPicture';
-import { connectPrompt } from './Connect';
+import { connectPrompt } from '@flow/shared/assistant';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const input = 'w-full rounded-md border border-border px-2 py-1 text-sm disabled:opacity-50';

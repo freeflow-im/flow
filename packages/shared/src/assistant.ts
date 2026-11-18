@@ -160,3 +160,20 @@ export function cleanPrompts(input: unknown): AssistantPrompts {
   }
   return out;
 }
+
+// ---- connecting an outside agent (Admin › Connect an agent, setup's Team step) ------------------------------------
+
+/** What to paste into an agent so it connects itself (the same steps as /llms.txt). */
+export function connectPrompt(url: string): string {
+  const origin = /^[a-z]+:\/\/[^/]+/i.exec(url)?.[0] ?? url;
+  return [
+    `Connect to FreeFlow, where my chat, mail, calendar and documents are, as a remote MCP server (streamable HTTP, with OAuth sign-in): ${url}`,
+    '',
+    `- Claude Code: claude mcp add --transport http freeflow ${url}`,
+    `- Codex: codex mcp add freeflow --url ${url}`,
+    `- Claude Desktop or ChatGPT: add a custom connector with this address.`,
+    `- Another MCP client: add a remote (HTTP) server at that address. If it only runs stdio servers, or cannot open a browser to sign in, use: npx -y mcp-remote ${url} --device-code — it prints an address and a code; show them to me so I can allow you.`,
+    '',
+    `Full instructions: ${origin}/llms.txt`,
+  ].join('\n');
+}

@@ -859,6 +859,9 @@ export interface OAuthIdentityDTO {
 }
 
 /** Registration that must be completed by clicking the emailed verify link. */
+/** POST /v1/auth/code/verify for an address with no account: the sign-up token register/complete takes. */
+export interface EmailCodeNewAccount { status: 'new'; signupToken: string; email: string }
+
 export interface RegisterPendingResponse {
   requiresVerification: true;
   email: string;

@@ -19,8 +19,9 @@ import { useFrames } from './hooks/frames';
 import { useAppMenus } from './hooks/menus';
 import { useAccountSetup, useChat, useInbox, useRecentFiles, useToday } from './hooks/home';
 import { useOrganizations } from './hooks/organization';
+import { setupApi } from './setup/api';
 import { channelAddress, chatUnread, dmWith, greeting, sidebarChannels, summaryLine } from './lib/home';
-import { FRAMED_APPS, channelOf, type FramedApp } from './lib/views';
+import { FRAMED_APPS, channelOf, openedIn, type FramedApp } from './lib/views';
 import { settingsAddress } from '@flow/suite-bar';
 import { readActiveOrganization, suite, writeActiveOrganization } from './suite';
 
@@ -64,6 +65,14 @@ export function App() {
   useEffect(() => {
     if (setup.guest) window.location.replace('/chat/');
   }, [setup.guest]);
+  // Setup (docs/specs/onboarding.md §5): a person with no workspace starts it, and one who has not finished it goes back
+  // to it, from Home's own front page only (an app's address opened in Home is followed as asked).
+  const onFront = !openedIn(window.location.search) && frames.view === 'home';
+  const setupState = useQuery({ queryKey: ['setup', orgId], queryFn: () => setupApi.state(orgId!), enabled: !!orgId && onFront && !setup.guest, retry: false });
+  useEffect(() => {
+    if (!onFront) return;
+    if ((organizations.ready && !org) || setupState.data?.pending) window.location.replace('/home/setup');
+  }, [onFront, organizations.ready, org, setupState.data?.pending]);
   // The organization shown is kept where Chat keeps its selection, so a channel or an agent opened from here opens in it
   // (Chat follows an `open=` link only in the organization it has selected; with none it asks which one first).
   useEffect(() => {
@@ -125,7 +134,7 @@ export function App() {
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center" data-testid="home-no-organization">
           <h1 className="text-xl font-semibold">Welcome to FreeFlow</h1>
           <p className="max-w-sm text-sm text-muted">Create an organization for your team, or join one you were invited to.</p>
-          <a href={chatPageAddress('chooser')} className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary-deep">
+          <a href="/home/setup" className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary-deep">
             Get started
           </a>
         </div>

@@ -33,7 +33,7 @@ import { ACTIVITY_VIEW_ID, AuthContext, ConnectionContext, SelectionContext, ACT
 import AuthScreen from './components/AuthScreen';
 import JoinScreen from './components/JoinScreen';
 import NativeSignIn from './components/NativeSignIn';
-import { openHome } from './lib/openHome';
+import { openHome, opensInHome } from './lib/openHome';
 import WorkspaceChooser from './components/WorkspaceChooser';
 import Main from './components/Main';
 import ChatSuiteBar from './components/ChatSuiteBar';
@@ -66,7 +66,9 @@ function consumeEmailLinkParams(runtime: ConnectionRuntime): {
   const invite = location.pathname.match(/^\/invite\/([A-Za-z0-9_-]+)$/);
   if (invite) {
     runtime.write(PENDING_INVITE, invite[1]!);
-    history.replaceState(null, '', CHAT_PATH);
+    // Shown as the Create an account page while signed out (docs/specs/onboarding.md §1); signed in, the invite is
+    // accepted at once and the page goes to Home.
+    history.replaceState(null, '', '/signup');
   }
   // /join/<workspace-slug>/<token> (issue #85): the persistent join link. Same
   // stash trick as the emailed invite — it has to survive the sign-in round
@@ -76,7 +78,7 @@ function consumeEmailLinkParams(runtime: ConnectionRuntime): {
   const joinToken = parseJoinPath(location.pathname);
   if (joinToken) {
     stashJoinToken(joinToken, Date.now(), runtime.key('pendingJoinLink'));
-    history.replaceState(null, '', CHAT_PATH);
+    history.replaceState(null, '', '/signup');
   }
   const params = new URLSearchParams(location.search);
   // ?next=<path>: where to go once signed in — the Workspace app (/docs/...) and the ChatGPT plugin's
@@ -95,7 +97,8 @@ function consumeEmailLinkParams(runtime: ConnectionRuntime): {
   // Kept in the URL, unlike the one-shot tokens: a reload of the handoff page
   // should still be the handoff page, not the ordinary app.
   const nativeHandoff = params.get('native') === 'google';
-  const register = params.has('register');
+  // /signup is the Create an account page (docs/specs/onboarding.md §1); ?register is its older address.
+  const register = params.has('register') || location.pathname === '/signup';
   if (signupToken || resetToken || signinToken || setupToken || register) {
     history.replaceState(null, '', location.pathname);
   }
@@ -252,6 +255,31 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
   const [{ signupToken, resetToken, signinToken, setupToken, nativeHandoff, register }] = useState(() =>
     consumeEmailLinkParams(runtime),
   );
+  // Signed out, the sign-in screen goes by its own address (docs/specs/onboarding.md §1): /login, or /signup for a new
+  // account. An app page opened signed out (/chat) is kept as where to go back to; /login itself goes on to Home (which
+  // sends a person with no workspace to setup). Not while an invite or join link is being carried through sign-in.
+  useEffect(() => {
+    if (booting) return;
+    const path = location.pathname;
+    // Already signed in on the sign-in page, with no link to redeem: on to where it was going.
+    const carrying = !!runtime.read(PENDING_INVITE) || !!readJoinToken(Date.now(), runtime.key('pendingJoinLink'));
+    if (user) {
+      if ((path === '/login' || path === '/signup') && !carrying && !signinToken && !resetToken && !setupToken && !signupToken) {
+        const next = sessionStorage.getItem(NEXT_AFTER_SIGN_IN) ?? (opensInHome() ? '/home/' : CHAT_PATH);
+        sessionStorage.removeItem(NEXT_AFTER_SIGN_IN);
+        void runtime.api('POST', '/v1/auth/session-cookie').catch(() => {}).then(() => location.assign(next));
+      }
+      return;
+    }
+    if (carrying) return;
+    if (path === '/login' || path === '/signup') {
+      if (!sessionStorage.getItem(NEXT_AFTER_SIGN_IN)) sessionStorage.setItem(NEXT_AFTER_SIGN_IN, opensInHome() ? '/home/' : CHAT_PATH);
+      return;
+    }
+    if (!/^\/(chat\/?)?$/.test(path) || location.search) return;
+    if (!sessionStorage.getItem(NEXT_AFTER_SIGN_IN)) sessionStorage.setItem(NEXT_AFTER_SIGN_IN, path === '/' ? (opensInHome() ? '/home/' : CHAT_PATH) : path);
+    history.replaceState(null, '', '/login');
+  }, [user, booting, runtime, signinToken, resetToken, setupToken, signupToken]);
   const [setupOpen, setSetupOpen] = useState(true);
   // A sign-in or reset link opened in a browser signed in as someone else: see below.
   const [linkOpen, setLinkOpen] = useState(true);

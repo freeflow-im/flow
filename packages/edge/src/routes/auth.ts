@@ -3,7 +3,7 @@ import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import type { ZodTypeAny, z } from 'zod';
 import type { AccountDTO } from '@flow/shared';
-import { AgentLoginBody, AppLinkExchangeBody, AppleAuthBody, CompleteSetupBody, CompleteSignupBody, ConsumeSigninLinkBody, ForgotPasswordBody, GoogleAuthBody, LoginBody, RegisterBody, ResetPasswordBody, SigninLinkBody, emailDomain, type UserDTO } from '@flow/shared';
+import { AgentLoginBody, AppLinkExchangeBody, AppleAuthBody, CompleteSetupBody, CompleteSignupBody, ConsumeSigninLinkBody, EmailCodeBody, ForgotPasswordBody, GoogleAuthBody, LoginBody, RegisterBody, ResetPasswordBody, SigninLinkBody, VerifyEmailCodeBody, emailDomain, type UserDTO } from '@flow/shared';
 import { accountGate, type DirectoryCore } from '../directory/core';
 import type { CallerContext } from '../org/routes/compat';
 import type { Directory } from '../directory/object';
@@ -182,6 +182,16 @@ authRoutes.get('/v1/auth/setup', async (c) => {
 authRoutes.post('/v1/auth/setup', async (c) => {
   const body = await bodyOf(CompleteSetupBody, c);
   return signedIn(c, await directory(c, 'completeSetup', body.token, body.password, agent(c)));
+});
+// Email codes (docs/specs/onboarding.md §1): one code signs in an account or starts a sign-up, and never says which.
+authRoutes.post('/v1/auth/code', async (c) => {
+  await directory(c, 'sendEmailCode', (await bodyOf(EmailCodeBody, c)).email);
+  return c.json({ ok: true });
+});
+authRoutes.post('/v1/auth/code/verify', async (c) => {
+  const body = await bodyOf(VerifyEmailCodeBody, c);
+  const res = await directory(c, 'verifyEmailCode', body.email, body.code, agent(c));
+  return 'signupToken' in res ? c.json(res) : signedIn(c, res);
 });
 authRoutes.post('/v1/auth/signin-link', async (c) => {
   await directory(c, 'sendSigninLink', (await bodyOf(SigninLinkBody, c)).email);

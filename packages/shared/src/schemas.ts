@@ -50,6 +50,13 @@ export const LoginBody = z.object({
 export type LoginBody = z.infer<typeof LoginBody>;
 
 /** Passwordless sign-in: request a one-time link emailed to an existing account. */
+/** POST /v1/auth/code: mail a 6-digit code (docs/specs/onboarding.md §1). */
+export const EmailCodeBody = z.object({ email: z.string().email().max(320) });
+export type EmailCodeBody = z.infer<typeof EmailCodeBody>;
+/** POST /v1/auth/code/verify: an account signs in; a new address gets a sign-up token. */
+export const VerifyEmailCodeBody = z.object({ email: z.string().email().max(320), code: z.string().regex(/^\s*\d{6}\s*$/, 'the code is 6 digits') });
+export type VerifyEmailCodeBody = z.infer<typeof VerifyEmailCodeBody>;
+
 export const SigninLinkBody = z.object({
   email: z.string().email().max(320),
 });

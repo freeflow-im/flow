@@ -117,6 +117,43 @@ describe('signing in', () => {
     expect((await core.authenticate(token)).kind).toBe('session');
     await expect(core.consumeSigninLink(link)).rejects.toThrow();
   });
+  describe('email codes', () => {
+    const lastCode = () => /\b(\d{6})\b/.exec(sent.at(-1)!.text)![1]!;
+    it('sign in an account, once', async () => {
+      const { user } = await signUp();
+      await core.sendEmailCode('A@Example.com');
+      const code = lastCode();
+      const res = await core.verifyEmailCode('a@example.com', code, 'test');
+      expect('token' in res && res.user.id).toBe(user.id);
+      await expect(core.verifyEmailCode('a@example.com', code)).rejects.toThrow(/expired/);
+    });
+    it('start a sign-up for a new address, finished with a name and a password', async () => {
+      await core.sendEmailCode('new@example.com');
+      expect(sent.at(-1)!.subject).toMatch(/is your FreeFlow code/);
+      const res = await core.verifyEmailCode('new@example.com', lastCode());
+      if (!('signupToken' in res)) throw new Error('expected a sign-up token');
+      const made = await core.completeSignup(res.signupToken, 'Neo', 'a-long-password-1');
+      expect(made.user.email).toBe('new@example.com');
+      expect((await core.login('new@example.com', 'a-long-password-1')).token).toBeTruthy();
+    });
+    it('end after five wrong tries', async () => {
+      await core.sendEmailCode('new@example.com');
+      const code = lastCode();
+      const wrong = code === '000000' ? '111111' : '000000';
+      for (let i = 0; i < 5; i++) await expect(core.verifyEmailCode('new@example.com', wrong)).rejects.toThrow(/not right/);
+      await expect(core.verifyEmailCode('new@example.com', code)).rejects.toThrow(/too many/);
+    });
+    it('mail at most one every half minute', async () => {
+      await core.sendEmailCode('new@example.com');
+      await core.sendEmailCode('new@example.com');
+      expect(sent).toHaveLength(1);
+    });
+    it('mail nothing to a new address when registration is closed', async () => {
+      const closed = new DirectoryCore(nodeSql(), { webUrlBase: 'https://app.test', registrationEnabled: false, send: async (m) => void sent.push(m) });
+      await closed.sendEmailCode('new@example.com');
+      expect(sent).toEqual([]);
+    });
+  });
   it('an app link is single use', async () => {
     const { user } = await signUp();
     const { code } = await core.createAppLink(user.id);

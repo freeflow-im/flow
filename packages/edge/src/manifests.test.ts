@@ -115,7 +115,7 @@ describe('the pages, from the manifests', () => {
     for (const p of new Set(['/docs', '/mail', '/mail/inbox', '/calendar', '/calendar/week', ...declared])) {
       const res = await get(`${p}?x=1`);
       expect(res.status).toBe(302);
-      expect(res.headers.get('location')).toBe(`/?next=${encodeURIComponent(`${p}?x=1`)}`);
+      expect(res.headers.get('location')).toBe(`/login?next=${encodeURIComponent(`${p}?x=1`)}`);
     }
     expect((await get('/mail/assets/x.js')).status).toBe(404);
   });
@@ -140,12 +140,28 @@ describe('the pages, from the manifests', () => {
     expect(old.headers.get('location')).toBe('/docs/p/tok?a=b');
   });
 
-  it('sends the root to Chat at /chat, with its query (a sign-in link, ?next=, a handoff)', async () => {
-    for (const [from, to] of [['/', '/chat'], ['/?next=%2Fdocs', '/chat?next=%2Fdocs'], ['/?signin=tok&x=1', '/chat?signin=tok&x=1']]) {
+  it('sends the root to Chat at /chat, and a sign-in link or ?next= to /login, with its query', async () => {
+    for (const [from, to] of [['/', '/chat'], ['/?open=channel%3Ax', '/chat?open=channel%3Ax'], ['/?next=%2Fdocs', '/login?next=%2Fdocs'], ['/?signin=tok&x=1', '/login?signin=tok&x=1']]) {
       const res = await get(from!);
       expect(res.status, from).toBe(302);
       expect(res.headers.get('location'), from).toBe(to);
     }
+  });
+
+  it('shows a signed-out visitor the Welcome page at the root, and sends any query on to Chat', async () => {
+    const withWelcome = { ...env, ASSETS: { fetch: async (req: Request | URL) => {
+      const name = new URL(req instanceof URL ? req : req.url).pathname;
+      return name === '/home/welcome.html' ? new Response('welcome') : env.ASSETS.fetch(req as Request);
+    } } as unknown as Fetcher };
+    const root = await pageRoutes.request('https://app.example/', {}, withWelcome as never);
+    expect(root.status).toBe(200);
+    expect(await root.text()).toBe('welcome');
+    const next = await pageRoutes.request('https://app.example/?next=%2Fdocs', {}, withWelcome as never);
+    expect(next.headers.get('location')).toBe('/login?next=%2Fdocs');
+  });
+
+  it('serves the sign-in page at /login and /signup to a stranger', async () => {
+    for (const p of ['/login', '/signup', '/login?next=%2Fdocs']) expect(await (await get(p)).text(), p).toBe('page /_pages/index.html');
   });
 
   it('sends Docs’ addresses under /workspace, its base until 2026-11-10, to the same page under /docs', async () => {
