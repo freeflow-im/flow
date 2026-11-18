@@ -2110,3 +2110,6 @@ one-recipient MCP correction).
   `create_subscription` tool; Daily Briefing and Meeting Prep are made for every person, on by default (operator ruling).
 - **The signed-out root shows the Welcome page**; Home A/B are left for later (operator ruling).
 - **Only people who join after this ships are marked for setup**; existing members never see it.
+- **Sign-in screen follows the "Sign up or log in" design; password login stays the main action** (operator ruling
+  2026-11-17). New: a 6-digit email code that logs in an account or starts a sign-up, and "Your name" on the password
+  step. The email label is "Email" (personal addresses are fine).

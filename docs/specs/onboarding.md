@@ -9,6 +9,13 @@ Status: built 2026-11-17 (branch `onboarding/workspace-setup`). Design: the "Fre
    people joining from the left, agents (hosted and connected over MCP) from the right. "Set up your workspace" goes to
    sign-up; "Sign in" to Chat's sign-in. A signed-in visitor, or any `/` address with a query (sign-in links, `?next=`,
    `?signup=`), goes to `/chat` as before.
+1b. **Log in or create an account** (Chat's sign-in screen, restyled to the "Sign up or log in" design: a blue panel
+   saying what FreeFlow is, the form beside it). Log in with email and password is the main action; beside it "Email me a
+   code instead", Google, and "Create an account". Creating one is an email (any, personal or work), a 6-digit code mailed
+   to it, then "Your name" and a password (12+ characters, a number or symbol, not the email). One code route serves both:
+   `POST /v1/auth/code` mails it and never says whether the address has an account; `POST /v1/auth/code/verify` signs an
+   account in, or answers a sign-up token for `register/complete`. A code lasts 10 minutes and 5 tries, one mailed per 30
+   seconds. Emailed sign-up and sign-in links, reset and setup links keep working.
 2. **Setup** (`/home/setup`, Home's own page, no sidebar). Five steps (six with an own domain), with a step bar at the top:
    1. **Workspace** — name and address. The free choice is `<slug>.freeflow.im`; the own-domain choice records the
       domain, which the next step connects. The screen states the 2026-11-15 ruling plainly: agents get addresses at the

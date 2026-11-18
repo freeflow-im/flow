@@ -12,6 +12,7 @@ This file keeps two things:
 
 ## Parity
 
+- **Email sign-in codes and the new sign-in design are on web only (2026-11-17, docs/specs/onboarding.md §1).** macOS and iOS keep their own sign-in (password, links, Google, Apple); the server's code routes are ready for them (gap to close).
 - **Workspace setup and the Welcome page are on web only (2026-11-17, docs/specs/onboarding.md).** The five setup steps run in web Home (and the desktop shell); a new person on macOS or iOS starts in the workspace chooser as before, and Omni and the ready-made automations reach them through the server (gap to close: open setup in the browser from the native chooser).
 - **Installed apps are on web and desktop only (2026-11-17, docs/specs/user-apps.md §10).** Their tabs, the `/apps/<name>` page and Admin → Apps are in the web clients; macOS and iOS show no app tabs (gap to close: open the app in the artifact panel's web view on macOS, the system browser on iOS). Agents on every client get the apps' tools.
 - **Approving an agent's email is on web only (2026-11-17, decision_log R-E).** The Send message card is in the web assistant panels and Home; on macOS and iOS the agent's DM note shows the email and its Review and send link opens Home in the browser (gap to close with the native assistant panel).

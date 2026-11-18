@@ -327,4 +327,13 @@ export const DIRECTORY_MIGRATIONS: string[] = [
   // The admin agent (agents.md §1.4, decision_log 2026-11-16): a hosted shared agent every organization has, used only by
   // its owners and admins. `admin` here; NULL for every other agent.
   `ALTER TABLE users ADD COLUMN agent_role TEXT;`,
+  // Email codes (docs/specs/onboarding.md §1): a 6-digit code mailed to an address, which signs in its account or starts
+  // its sign-up. One per address (a new one replaces it); its SHA-256 with the address, a few tries, ten minutes.
+  `CREATE TABLE email_codes (
+    email TEXT PRIMARY KEY COLLATE NOCASE,
+    code_hash TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0
+  );`,
 ];
