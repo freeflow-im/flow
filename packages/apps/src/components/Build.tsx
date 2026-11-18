@@ -6,7 +6,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, FilePlus, Play, RotateCw, Trash2, Upload } from 'lucide-react';
-import { SuiteAssistant } from '@flow/suite-bar/assistant-chat';
+import { SuiteAssistantColumn } from '@flow/suite-bar/assistant-chat';
 import { intent } from '@flow/suite-bar';
 import { appsApi, type AppDraft, type InstalledApp, type ToolAnswer } from '../api';
 import { InstallDialog } from './InstallDialog';
@@ -91,6 +91,38 @@ export function AppsHome({ org, apps, admin }: { org: string; apps: InstalledApp
   );
 }
 
+const WIDTH_KEY = 'ff-builder-assistant-width';
+const MIN_WIDTH = 280;
+const MAX_WIDTH = 720;
+
+/** The assistant column's width: dragged by its edge, kept in this browser (a convenience: the default when it cannot be). */
+function useAssistantWidth(): { width: number; dragging: boolean; startDrag(e: React.PointerEvent): void } {
+  const [width, setWidth] = useState(() => {
+    try { const w = Number(localStorage.getItem(WIDTH_KEY)); return w >= MIN_WIDTH && w <= MAX_WIDTH ? w : 380; } catch { return 380; }
+  });
+  const [dragging, setDragging] = useState(false);
+  const startDrag = (e: React.PointerEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = width;
+    setDragging(true);
+    let last = startW;
+    const move = (ev: PointerEvent) => {
+      last = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, startW + ev.clientX - startX));
+      setWidth(last);
+    };
+    const up = () => {
+      setDragging(false);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      try { localStorage.setItem(WIDTH_KEY, String(last)); } catch { /* the default next time */ }
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+  return { width, dragging, startDrag };
+}
+
 /** The order the file list shows: the manifest, the server, migrations, then the screen's files. */
 function fileOrder(a: string, b: string): number {
   const rank = (p: string) => (p === 'freeflow-app.json' ? 0 : p === 'server.js' ? 1 : p.startsWith('migrations/') ? 2 : 3);
@@ -106,7 +138,9 @@ export function Builder({ org, name, admin }: { org: string; name: string; admin
   const [path, setPath] = useState('server.js');
   const [text, setText] = useState('');
   const [saved, setSaved] = useState('');
-  const [view, setView] = useState<'code' | 'preview' | 'try'>('code');
+  // The app first (its live preview); the code is a click away.
+  const [view, setView] = useState<'code' | 'preview' | 'try'>('preview');
+  const assistant = useAssistantWidth();
   const [notice, setNotice] = useState<string | null>(null);
   const [noticeLink, setNoticeLink] = useState<{ label: string; href: string } | null>(null);
   // An owner or admin installs a published version from here (§9.6): the version the popup is for.
@@ -226,13 +260,18 @@ export function Builder({ org, name, admin }: { org: string; name: string; admin
         </ul>
       )}
       <div className="flex min-h-0 flex-1">
-        <nav className="flex w-52 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-hairline bg-white p-2" aria-label="Files" data-testid="files">
-          {files.map((f) => (
-            <button key={f} type="button" onClick={() => open(f)} className={`truncate rounded px-2 py-1 text-left font-mono text-xs ${f === path && view === 'code' ? 'bg-selected-blue text-primary' : 'text-ink hover:bg-hover'}`} title={f}>{f}</button>
-          ))}
-          <button type="button" onClick={() => void newFile()} className="mt-2 flex items-center gap-1 px-2 py-1 text-xs text-primary"><FilePlus className="size-3.5" />New file</button>
-        </nav>
-        <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {/* The assistant on the left, the main way to build (§9.6); its width is the person's, dragged and kept. */}
+        <aside className="flex min-h-0 shrink-0 flex-col border-r border-hairline bg-white" style={{ width: assistant.width }} aria-label="Assistant" data-testid="builder-assistant">
+          <SuiteAssistantColumn
+            organizationId={org}
+            page="home"
+            context={{ building: { app: name, label: d.label, file: view === 'code' ? path : undefined } }}
+            intro={`Tell me what ${d.label} should do, and I will change its code, try it and show it here. I publish only when you ask.`}
+            prompts={[`What does ${d.label} do now?`, 'Add a field to each item, and show it on the screen', 'Make the screen look cleaner', 'Add a tool agents can use to search the items']}
+          />
+        </aside>
+        <div className="w-1 shrink-0 cursor-col-resize bg-hairline hover:bg-primary" role="separator" aria-orientation="vertical" aria-label="Resize the assistant" onPointerDown={assistant.startDrag} data-testid="assistant-resize" />
+        <main className={`flex min-h-0 min-w-0 flex-1 flex-col ${assistant.dragging ? 'pointer-events-none select-none' : ''}`}>
           {view === 'code' && (
             <>
               <div className="flex items-center gap-2 border-b border-hairline bg-white px-3 py-1 text-xs">
@@ -247,9 +286,17 @@ export function Builder({ org, name, admin }: { org: string; name: string; admin
           {view === 'preview' && <Preview org={org} name={name} updatedAt={d.updatedAt} />}
           {view === 'try' && <Try org={org} name={name} draft={d} />}
         </main>
+        {/* The files, on the right, with the code only. */}
+        {view === 'code' && (
+          <nav className="flex w-52 shrink-0 flex-col gap-0.5 overflow-y-auto border-l border-hairline bg-white p-2" aria-label="Files" data-testid="files">
+            {files.map((f) => (
+              <button key={f} type="button" onClick={() => open(f)} className={`truncate rounded px-2 py-1 text-left font-mono text-xs ${f === path ? 'bg-selected-blue text-primary' : 'text-ink hover:bg-hover'}`} title={f}>{f}</button>
+            ))}
+            <button type="button" onClick={() => void newFile()} className="mt-2 flex items-center gap-1 px-2 py-1 text-xs text-primary"><FilePlus className="size-3.5" />New file</button>
+          </nav>
+        )}
       </div>
       {installing !== null && <InstallDialog org={org} name={name} version={installing} onClose={() => { setInstalling(null); setNotice(`Published version ${installing}. You can install it later with Install… or in Organization settings → Apps.`); }} onDone={(t, open) => { setInstalling(null); setNotice(t); setNoticeLink(open ?? null); }} />}
-      <SuiteAssistant organizationId={org} page="home" context={{ building: { app: name, label: d.label, file: view === 'code' ? path : undefined } }} />
     </div>
   );
 }
