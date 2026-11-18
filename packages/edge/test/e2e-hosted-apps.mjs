@@ -234,5 +234,34 @@ const dataBack = r.j.ok && r.j.result.rows.map((x) => x.k).join() === 'a';
 t('version 1 runs again' + (process.env.RESTORE_DATA ? ', on the data from before the update' : ''), r.j.ok && r.j.result.label === 'kv1' && (!process.env.RESTORE_DATA || dataBack), JSON.stringify(r.j));
 fs.rmSync(folder, { recursive: true, force: true });
 
+// --- The built-in SDK (step 6) ----------------------------------------------------------------------------------------
+const sdkApp = { name: 'todo', label: 'Todo', server: { hosted: true }, ui: { hosted: true }, scopes: [{ id: 'todo:use', label: 'Use it', read: true }],
+  tools: [{ name: 'add', description: 'Adds a todo.', input: { type: 'object', properties: { text: { type: 'string' } } }, scopes: ['todo:use'] },
+    { name: 'fail', description: 'Refuses.', input: { type: 'object' }, scopes: ['todo:use'] }],
+  events: ['todo.added'] };
+const sdkServer = `import { defineApp } from 'freeflow';
+export default defineApp({
+  tools: {
+    add: async (input, ctx) => {
+      await ctx.db.run('INSERT INTO todos (text, by) VALUES (?, ?)', input.text, ctx.caller.accountId);
+      await ctx.publish('todo.added', { text: input.text }, { about: [ctx.caller.accountId] });
+      return { count: (await ctx.db.one('SELECT COUNT(*) AS n FROM todos')).n };
+    },
+    fail: async () => { throw new Error('not today'); },
+  },
+  routes: { 'GET /api/todos': async (request, ctx) => ({ viewer: ctx.caller.displayName, todos: await ctx.db.all('SELECT text FROM todos') }) },
+});`;
+r = await api(O.token, 'POST', `/v1/workspaces/${A}/apps/versions`, { manifest: sdkApp, files: { 'server.js': b64(sdkServer), 'migrations/0001_todos.sql': b64('CREATE TABLE todos (id INTEGER PRIMARY KEY, text TEXT, by TEXT);'), 'ui/index.html': b64('<h1>Todo</h1>') } });
+await api(O.token, 'POST', `/v1/workspaces/${A}/apps`, { name: 'todo', version: r.j.version, grants: { members: true, accounts: [] } });
+r = await call(O.token, A, 'todo__add', { text: 'buy milk' });
+t('an app written with the built-in SDK answers its tool', r.j.ok && r.j.result.count === 1, JSON.stringify(r.j));
+r = await call(O.token, A, 'todo__fail', {});
+t("a tool's throw is the agent's error", r.j.ok === false && r.j.error === 'not today', JSON.stringify(r.j));
+r = await api(O.token, 'POST', `/v1/workspaces/${A}/apps/todo/screen`, {});
+let s2 = await raw(r.j.url);
+const todoCookie = (s2.h['set-cookie']?.[0] ?? '').split(';')[0];
+s2 = await raw(`http://todo--${A.replace(/-/g, '')}.${DOMAIN}/api/todos`, todoCookie);
+t("and the screen's route, with ctx.caller the viewer", s2.s === 200 && JSON.parse(s2.body).viewer === 'Olga' && JSON.parse(s2.body).todos.length === 1, s2.s + ' ' + s2.body.slice(0, 120));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

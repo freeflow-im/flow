@@ -9,6 +9,7 @@
 // the app as a request the host makes (`POST https://app.invalid/__freeflow/tool`), with the caller context in the body.
 import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers';
 import type { UserAppManifest } from '@flow/shared';
+import { FREEFLOW_SDK_SOURCE, SDK_MODULE } from './sdk';
 
 /** What the runner needs of a hosted app's installed version (the Org object's `installedCode`). */
 export interface HostedCode { manifest: UserAppManifest; version: number; prefix: string; files: Record<string, number> }
@@ -185,7 +186,8 @@ export async function hostedWorker(env: HostedEnv, exports: HostedExports, org: 
     compatibilityDate: '2026-10-01',
     compatibilityFlags: ['nodejs_compat'],
     mainModule: 'server.js',
-    modules: { 'server.js': await textOf(env, `${code.prefix}server.js`) },
+    // The built-in SDK (§9.6) beside the app's code: `import { defineApp } from 'freeflow'`.
+    modules: { 'server.js': await textOf(env, `${code.prefix}server.js`), [SDK_MODULE]: { js: FREEFLOW_SDK_SOURCE } },
     env: { DB: exports.AppDb({ props: { org, app } }), SUITE: exports.AppSuite({ props: { org, app } }) },
     globalOutbound: exports.AppEgress({ props: { allow: code.manifest.egress ?? [] } }),
     limits: { cpuMs: HOSTED_CPU_MS, subRequests: HOSTED_SUBREQUESTS },
