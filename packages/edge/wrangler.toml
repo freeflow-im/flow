@@ -5,7 +5,7 @@
 name = "freeflow-edge"
 main = "src/index.ts"
 compatibility_date = "2026-10-01"
-compatibility_flags = ["nodejs_compat"]
+compatibility_flags = ["nodejs_compat", "enable_ctx_exports"]
 workers_dev = false
 # A cold start costs time in proportion to the script's size (scripts/perf/README.md: about 0.45 s at 5 MB, 1.2-2.1 s at
 # 22 MB, and loading a library late does not help), so the script is minified: 21.8 MB becomes 12.0 MB. Names are kept
@@ -18,6 +18,9 @@ routes = [
   { pattern = "app.freeflow.im/*", zone_name = "freeflow.im" },
   { pattern = "docs.freeflow.im/*", zone_name = "freeflow.im" },
   { pattern = "mcpdocs.freeflow.im/*", zone_name = "freeflow.im" },
+  # Hosted user apps' screens (docs/specs/user-apps.md §6.1): <app>--<org>.flowtoo.org, a proxied *.flowtoo.org record
+  # (AAAA 100::, made 2026-11-17) and Universal SSL's wildcard certificate.
+  { pattern = "*.flowtoo.org/*", zone_name = "flowtoo.org" },
 ]
 
 # The built-in help (docs/help, and What's New from changelog/) bundled into src/help/bundle.generated.ts; runs before
@@ -64,6 +67,8 @@ ASSET_HOSTS = "app.freeflow.im,edge.freeflow.im"
 PORTED_HOSTS = "edge.freeflow.im,app.freeflow.im"
 # The ChatGPT plugin's hosts, on the origin (docs/ops/CUTOVER_TO_CLOUDFLARE.md): their sign-in is this host's, handed across (routes/crossHost.ts).
 PLUGIN_HOSTS = "docs.freeflow.im,mcpdocs.freeflow.im"
+# Hosted user apps' screens are served on <app>--<org>.<APPS_DOMAIN> (src/apps/screen.ts; decision_log 2026-11-17).
+APPS_DOMAIN = "flowtoo.org"
 # Meet (docs/specs/meetings.md): the production RealtimeKit app `freeflow-meetings`. The token is the RTK_API_TOKEN secret
 # (`wrangler secret put RTK_API_TOKEN`, not in /flow/); local runs use the `freeflow-meet-dev` app from ~/.config/flow/dev.vars.
 RTK_ACCOUNT_ID = "82ee23850b6ae0a1277e3a957c0c8517"
@@ -170,6 +175,21 @@ class_name = "Contacts"
 [[migrations]]
 tag = "v8"
 new_sqlite_classes = ["Contacts"]
+
+# Hosted user apps (docs/specs/user-apps.md §7.2, §8; decision_log 2026-11-17): LOADER loads an app version's server code
+# into an isolate of its own; APP_STORE is its data, one object per app and organization (`idFromName("<app>:<org>")`),
+# reached by the app only through the AppDb entrypoint (src/apps/hosted.ts). `enable_ctx_exports` above lets the Worker
+# and its objects hand an isolate those entrypoints, bound to the app and organization.
+[[worker_loaders]]
+binding = "LOADER"
+
+[[durable_objects.bindings]]
+name = "APP_STORE"
+class_name = "AppStore"
+
+[[migrations]]
+tag = "v9"
+new_sqlite_classes = ["AppStore"]
 
 # Wake jobs (src/events/object.ts, platform.md §5.2): the Events object sends each job's check to flow-jobs, delayed by
 # JOBS_ACK_DELAY_SECONDS (default 60); the Worker's `queue` handler (src/index.ts) asks the Events object, which delivers

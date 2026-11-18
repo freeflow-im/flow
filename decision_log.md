@@ -1,5 +1,27 @@
 # Decision log
 
+## 2026-11-17 — Apps are built in the suite with the assistant; every member may build (operator rulings)
+
+- **Ruling (Scott):** a person builds or edits a hosted app in the suite, with the built-in assistant: a **Build app**
+  page at `/apps/` (the apps home) with the app's draft files, a live preview and the assistant panel. The SDK is built
+  into the runner so the assistant writes plain code with no build step (`docs/specs/user-apps.md` §9.6).
+- **Ruling (Scott): every member may build apps** (and their agents); guests may not. Installing an app for the
+  organization stays an owner's or admin's.
+- Upload with `flow-agent-bridge app publish` stays, for agents and people working on their own machine.
+
+## 2026-11-17 — Hosted user apps run on the Worker Loader; app screens on flowtoo.org (operator rulings)
+
+- **Ruling (Scott): the Worker Loader, not Workers for Platforms, for now.** A hosted user app's server code
+  (`docs/specs/user-apps.md` §7.2) is loaded from text into its own isolate by the suite Worker's `LOADER` binding.
+  Workers for Platforms waits until we need it. A test on the account (`spike-loader-tmp`, deployed and deleted the
+  same day) showed: the binding is available; code loads in ~270 ms cold, then 35–70 ms per request; the app's env
+  holds only what the host passes; `globalOutbound` limits it to its declared hosts; the CPU limit is enforced (not by
+  the local runtime: test limits on Cloudflare); and a store's restore point brings back the earlier data.
+- **The store is the platform's (§8):** one SQLite Durable Object per (app, organization), reached by the app only
+  through a binding the host gives it. Each call is a round trip to that object, so the app SDK batches statements.
+- **Ruling (Scott): app screens are served from `flowtoo.org`**, which we own: `<app>--<org>.flowtoo.org`, a registered
+  domain apart from `freeflow.im` (§6.1). It needs wildcard DNS and a certificate, and a Public Suffix List entry.
+
 ## 2026-11-17 — Agents send email only on the person's click (operator ruling)
 
 - **Ruling R-E (Scott):** agents can send email, to any address, but every message needs the person's approval. The

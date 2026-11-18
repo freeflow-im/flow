@@ -47,7 +47,10 @@ const errorOf = async (res: Response) => ((await res.json().catch(() => ({}))) a
  * The chat: its transcript, a turn running, and send, stop and new chat. `org` is the organization the bar selected;
  * `agent` the agent talked to (an id from GET /api/agent/agents), or null for the person's own assistant.
  */
-export function useSuiteAssistant(org: string | null, agent: string | null = null) {
+export function useSuiteAssistant(org: string | null, agent: string | null = null, context: Record<string, unknown> = {}) {
+  // What the page says it shows (the Build app page's draft and file): read at send time, so it is always the current one.
+  const contextRef = useRef(context);
+  contextRef.current = context;
   const [items, setItems] = useState<ChatItem[]>([]);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -85,7 +88,7 @@ export function useSuiteAssistant(org: string | null, agent: string | null = nul
     const setTool = (id: string, status: 'ok' | 'error', err?: string, result?: string) => setItems((prev) => prev.map((i) => (i.kind === 'tool' && i.id === id ? { ...i, status, ...(err ? { error: err } : {}), ...(result !== undefined ? { result } : {}) } : i)));
     void (async () => {
       const whose = { ...(org ? { workspace: org } : {}), ...(agent ? { agent } : {}) };
-      let body: Record<string, unknown> = { message, context: { page: 'home' }, scope: HOME_CHAT, ...whose };
+      let body: Record<string, unknown> = { message, context: { page: 'home', ...contextRef.current }, scope: HOME_CHAT, ...whose };
       try {
         for (;;) {
           const res = await fetch(withOrg('/api/agent/turn', org), { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Timezone': zone() }, body: JSON.stringify(body), signal: abort.signal });
@@ -110,7 +113,7 @@ export function useSuiteAssistant(org: string | null, agent: string | null = nul
           // A browser tool acts on an app's open page, which this one is not: the model is told so, and goes on.
           const pending: { id: string; name: string }[] = calls;
           setItems((prev) => [...prev, ...pending.map((c): ChatItem => ({ kind: 'tool', id: c.id, name: c.name, status: 'error', error: 'Works in its own app' }))]);
-          body = { context: { page: 'home' }, scope: HOME_CHAT, ...whose, toolResults: pending.map((c) => ({ id: c.id, isError: true, content: `${c.name} works only on its app's open page (Docs, Mail or Calendar), not here. Tell the person to open that app and ask there, or use a server tool.` })) };
+          body = { context: { page: 'home', ...contextRef.current }, scope: HOME_CHAT, ...whose, toolResults: pending.map((c) => ({ id: c.id, isError: true, content: `${c.name} works only on its app's open page (Docs, Mail or Calendar), not here. Tell the person to open that app and ask there, or use a server tool.` })) };
         }
       } catch (e) {
         if (!abort.signal.aborted) setError(e instanceof Error ? e.message : String(e));

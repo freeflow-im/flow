@@ -105,7 +105,16 @@ export const appsApi = {
   remove: (org: string, name: string) => request<{ ok: true }>('DELETE', `${ws(org)}/apps/${encodeURIComponent(name)}`),
   rotateSecret: (org: string, name: string) => request<{ secret: string }>('POST', `${ws(org)}/apps/${encodeURIComponent(name)}/secret`, {}),
   setAgents: (org: string, name: string, on: boolean) => request<{ ok: true }>('PUT', `${ws(org)}/apps/${encodeURIComponent(name)}/agents`, { on }),
+  // Hosted apps (user-apps.md §14 phase 2): uploaded versions, installing or updating to one, going back, the data.
+  uploads: async (org: string) => (await request<{ versions: AppUploadDTO[] }>('GET', `${ws(org)}/apps/versions`)).versions,
+  installVersion: (org: string, name: string, version: number, grants: AppGrants) => request<{ app: string; version: number; secret: string }>('POST', `${ws(org)}/apps`, { name, version, grants }),
+  updateToVersion: (org: string, name: string, version: number, grants: AppGrants) => request<{ ok: true; version: number }>('PUT', `${ws(org)}/apps/${encodeURIComponent(name)}`, { version, grants }),
+  goBack: (org: string, name: string) => request<{ ok: true; version: number }>('POST', `${ws(org)}/apps/${encodeURIComponent(name)}/restore`, {}),
+  exportUrl: (org: string, name: string) => `${ws(org)}/apps/${encodeURIComponent(name)}/export`,
 };
+
+/** A hosted app's uploaded version, as Admin lists them. */
+export interface AppUploadDTO { name: string; version: number; manifest: UserAppManifest; files: Record<string, number>; by: string; at: string; installed: boolean }
 
 export const connectionsApi = {
   list: () => request<{ mcpUrl: string; agents: AgentConnection[] }>('GET', '/v1/me/agent-connections'),

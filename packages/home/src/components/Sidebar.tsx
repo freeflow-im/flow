@@ -24,6 +24,8 @@ export function appLinks(opts: { mailUnread: number; chatUnread: number; admin: 
     { id: 'calendar', label: 'Calendar', href: '/calendar/' },
     { id: 'docs', label: 'Docs', href: '/docs/' },
     { id: 'chat', label: 'Chat', href: '/chat/', count: opts.chatUnread, pill: true },
+    // The installed apps and Build an app (docs/specs/user-apps.md §9.6): the apps home.
+    { id: 'apps', label: 'Apps', href: '/apps/' },
     ...(opts.admin ? [{ id: 'admin', label: 'Admin', href: adminAddress() }] : []),
   ];
 }

@@ -15,7 +15,8 @@ export function AppsSuiteBar({ app }: { app: string | null }) {
   const me = useQuery({ queryKey: ['suite', 'me'], queryFn: suite.me, refetchInterval: REFRESH_MS });
   const { list, active } = useOrganizations();
   // The organization's installed apps, after the built-in ones (docs/specs/user-apps.md §6).
-  const appTabs = useUserAppTabs(active?.id, app ?? undefined);
+  // The app whose page this is; '' marks the apps home (Build an app) in the menu.
+  const appTabs = useUserAppTabs(active?.id, app ?? '');
   const [user, setUser] = useState<SuiteUser | null>(null);
   const [statusOpen, setStatusOpen] = useState(false);
   const [statusBusy, setStatusBusy] = useState(false);

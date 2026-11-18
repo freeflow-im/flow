@@ -90,6 +90,11 @@ export interface BrowserReach {
    * sends is dropped.
    */
   appTools?: AppToolOffer[];
+  /**
+   * The hosted suite only: the person is on the Build app page (docs/specs/user-apps.md §9.6), with this app's draft and
+   * (`file`) one of its files open. The page sends it; it says only what is on screen.
+   */
+  building?: { app: string; label?: string; file?: string };
 }
 
 /** An installed app's tool as a turn is offered it (BrowserReach `appTools`). */

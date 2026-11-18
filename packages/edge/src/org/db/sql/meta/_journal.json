@@ -99,6 +99,27 @@
       "when": 1794952433371,
       "tag": "0013_user_apps",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1794957444694,
+      "tag": "0014_hosted_app_versions",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1794960311858,
+      "tag": "0015_app_restore_points",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1794961066551,
+      "tag": "0016_app_drafts",
+      "breakpoints": true
     }
   ]
 }

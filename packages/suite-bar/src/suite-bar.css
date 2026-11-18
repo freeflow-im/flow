@@ -694,3 +694,31 @@
     display: none !important;
   }
 }
+
+/* A tab with a menu: the installed apps (docs/specs/user-apps.md §6). */
+.sb-tab-menu {
+  position: relative;
+}
+.sb-tab-menu > .sb-tab {
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+}
+.sb-tab-dropdown {
+  top: calc(100% + 10px);
+  left: 0;
+  width: 240px;
+}
+.sb-tab-dropdown .sb-menu-item {
+  color: var(--sb-text);
+  text-decoration: none;
+}
+.sb-tab-dropdown .sb-menu-item[aria-current='page'] {
+  background: var(--sb-selected);
+  font-weight: 600;
+}
+.sb-menu-divider {
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--sb-hairline);
+}

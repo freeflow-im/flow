@@ -8,6 +8,9 @@ import { isInHome, routeLinksToHome } from './lib/embed';
 import { SuiteMark } from './SuiteMark';
 import './suite-bar.css';
 
+/** One entry of a tab's menu: a link, or a line apart (`divider`). */
+export interface SuiteTabMenuItem { id: string; label: string; href: string; current?: boolean; divider?: boolean }
+
 export interface SuiteTab {
   id: string;
   label: string;
@@ -23,6 +26,8 @@ export interface SuiteTab {
   onSelect?: () => void;
   /** The digit after ⌘ that opens it (its manifest's), when 1–9. Tabs given none are numbered by their place. */
   shortcut?: string;
+  /** A menu instead of a link (the installed apps, docs/specs/user-apps.md §6): its entries, each a link. */
+  menu?: SuiteTabMenuItem[];
 }
 
 /** Each tab's ⌘ digit: its own `shortcut` when the tabs carry them (a tab outside 1–9, Home's 0, has none), else its place. */
@@ -104,7 +109,7 @@ export interface SuiteBarProps {
   home?: { href: string; onSelect?: () => void };
 }
 
-type Menu = 'org' | 'account' | null;
+type Menu = 'org' | 'account' | 'apps' | null;
 
 /** Initials for an avatar without a picture: the first letters of the first two words (one for a single word). */
 export function initials(name: string): string {
@@ -264,6 +269,7 @@ function TheSuiteBar({ tabs, organization, search, assistant, notifications, acc
   const open = searching || (live && !!query);
   const orgRef = useRef<HTMLDivElement>(null);
   const accountRef = useRef<HTMLDivElement>(null);
+  const appsRef = useRef<HTMLSpanElement>(null);
   // The booking page row: asked for when the account menu opens, in the organization the bar shows.
   const booking = useBookingLink(menu === 'account', organization?.entries.find((e) => e.active)?.id ?? null);
   const [copied, setCopied] = useState(false);
@@ -330,6 +336,7 @@ function TheSuiteBar({ tabs, organization, search, assistant, notifications, acc
       const t = e.target as Node;
       if (menu === 'org' && !orgRef.current?.contains(t)) setMenu(null);
       if (menu === 'account' && !accountRef.current?.contains(t)) setMenu(null);
+      if (menu === 'apps' && !appsRef.current?.contains(t)) setMenu(null);
       // A live search keeps its text (it is filtering the page); only the focus goes.
       if (searching && !searchRef.current?.contains(t)) (live ? setSearching(false) : closeSearch());
     };
@@ -458,7 +465,36 @@ function TheSuiteBar({ tabs, organization, search, assistant, notifications, acc
 
       <nav className="sb-tabs" aria-label="Apps">
         {tabs.map((tab, i) =>
-          tab.disabled ? (
+          tab.menu ? (
+            <span key={tab.id} className="sb-tab-menu" ref={appsRef}>
+              <button
+                type="button"
+                className="sb-tab"
+                aria-current={tab.active ? 'page' : undefined}
+                aria-haspopup="menu"
+                aria-expanded={menu === 'apps'}
+                title={tab.title ?? tab.label}
+                data-testid={`suite-tab-${tab.id}`}
+                onClick={() => setMenu(menu === 'apps' ? null : 'apps')}
+              >
+                {tab.label}
+                <Caret up={menu === 'apps'} />
+              </button>
+              {menu === 'apps' && (
+                <div className="sb-menu sb-tab-dropdown" role="menu" aria-label={tab.label} data-testid={`suite-tab-menu-${tab.id}`}>
+                  {tab.menu.map((item) =>
+                    item.divider ? (
+                      <div key={item.id} className="sb-menu-divider" role="separator" />
+                    ) : (
+                      <a key={item.id} className="sb-menu-item" role="menuitem" href={item.href} aria-current={item.current ? 'page' : undefined} onClick={() => setMenu(null)}>
+                        {item.label}
+                      </a>
+                    ),
+                  )}
+                </div>
+              )}
+            </span>
+          ) : tab.disabled ? (
             <a key={tab.id} className="sb-tab" aria-disabled="true" title={tab.title ?? 'Coming soon'} data-testid={`suite-tab-${tab.id}`}>
               {tab.label}
             </a>

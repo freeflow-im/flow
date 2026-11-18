@@ -36,10 +36,13 @@ import { sweepIdleVisitors, visitorBySession, visitorMayReceive, type MessageTim
 import { cleanPrompts, type AssistantPrompts } from '@flow/shared/assistant';
 import {
   AppEventLimiter, appForUse, appHolderOf, callAppTool, checkAppEvent, heldScopes, installApp, listApps, offeredAppTools, readableApps,
-  removeApp, rotateAppSecret, setAgentsOn, setAppGrants, updateApp,
-  type AppGrants, type AppHolder, type AppToolAnswer, type OfferedAppTool,
+  removeApp, rotateAppSecret, setAgentsOn, setAppGrants, updateApp, recordUpload, listUploads, installedCode, restorePointOf, revertApp,
+  type AppCallerContext, type AppGrants, type AppHolder, type AppSource, type AppToolAnswer, type AppUpload, type OfferedAppTool,
 } from './services/userApps';
-import { mintUserAppToken, verifyBody } from './lib/appSigning';
+import { APP_SESSION_SECONDS, mintUserAppToken, signAppSession, signAppTicket, verifyAppSession, verifyAppTicket, verifyBody, verifyUserAppToken, type AppSession, type AppTicket } from './lib/appSigning';
+import { appOrigin, callHostedTool, devHostLabel, draftWorker, filesPrefix, hostedWorker, storeName, type HostedEnv, type HostedExports } from '../apps/hosted';
+import { BUILDING_APP, BUILDING_GUIDE, BUILDING_LABEL, BUILDING_TOOLS } from '../apps/buildingTools';
+import { createDraft, deleteDraft, deleteDraftFile, draftByDevHost, draftCode, getDraft, listDrafts, readDraftFile, writeDraftFile, type AppDraftDTO } from './services/appDrafts';
 
 /** A user-app change's outcome for the Worker's routes: the value, or the ApiError's status, code and message. */
 async function answered<T>(fn: () => Promise<T>): Promise<DirectoryAnswer<T>> {
@@ -50,7 +53,7 @@ async function answered<T>(fn: () => Promise<T>): Promise<DirectoryAnswer<T>> {
     throw e;
   }
 }
-import { parseAppToolName, type InstalledAppDTO, type UserAppManifest } from '@flow/shared';
+import { isHosted, parseAppToolName, type AppUse, type InstalledAppDTO, type UserAppManifest } from '@flow/shared';
 
 /** Where the organization's suggested prompts are kept, in the object's own storage beside its database. */
 const ASSISTANT_PROMPTS_KEY = 'assistant-prompts';
@@ -63,7 +66,7 @@ import { hostedMailEnabled, type MailProviderEnv } from '../mailprovider/index';
 export type OrgEnv = StorageEnv & MailProviderEnv & {
   FLOW_DATA_KEY?: string; DIRECTORY: DurableObjectNamespace<Directory>; IMAGES?: ImagesBinding; EVENTS?: DurableObjectNamespace<Events>;
   PROVISIONING?: Queue<unknown>; MAIL_RETENTION_DAYS?: string; ASSISTANT?: DurableObjectNamespace<Assistant>;
-};
+} & HostedEnv;
 
 const DAY_MS = 86_400_000;
 /** The storage key of the next sweep of idle visitors (V8). */
@@ -1013,12 +1016,176 @@ export class Org extends DurableObject<OrgEnv> {
     return withDb(this.db, () => listApps(viewer));
   }
 
-  async installUserApp(p: { manifest: UserAppManifest; manifestUrl: string; by: string; grants: AppGrants }): Promise<DirectoryAnswer<{ name: string; secret: string }>> {
+  async installUserApp(p: { source: AppSource; by: string; grants: AppGrants }): Promise<DirectoryAnswer<{ name: string; secret: string; version: number }>> {
     return answered(() => withDb(this.db, () => installApp(p)));
   }
 
-  async updateUserApp(p: { name: string; manifest: UserAppManifest; manifestUrl: string; by: string; grants: AppGrants }): Promise<DirectoryAnswer<void>> {
+  async updateUserApp(p: { name: string; source: AppSource; by: string; grants: AppGrants; bookmark?: string }): Promise<DirectoryAnswer<{ version: number }>> {
     return answered(() => withDb(this.db, () => updateApp(p)));
+  }
+
+  // ---- drafts (§9.6): apps being built in the suite, by their author ----
+
+  async listAppDrafts(author: string): Promise<AppDraftDTO[]> {
+    return withDb(this.db, () => listDrafts(author));
+  }
+
+  async getAppDraft(name: string, author: string): Promise<DirectoryAnswer<AppDraftDTO>> {
+    return answered(() => withDb(this.db, () => getDraft(name, author)));
+  }
+
+  /** A new draft: the starter project, or (`fromInstalled`) the installed hosted app's files, to change it. */
+  async createAppDraft(p: { name: string; label: string; author: string; fromInstalled?: boolean }): Promise<DirectoryAnswer<AppDraftDTO>> {
+    return answered(async () => {
+      let files: Record<string, Uint8Array> | undefined;
+      if (p.fromInstalled) {
+        const code = await withDb(this.db, () => installedCode(p.name));
+        if (!code || !this.env.BLOBS) throw new ApiError(404, 'not_found', `"${p.name}" is not an installed hosted app here`);
+        files = { 'freeflow-app.json': new TextEncoder().encode(JSON.stringify(code.manifest, null, 2) + '\n') };
+        for (const path of Object.keys(code.files)) {
+          const o = await this.env.BLOBS.get(code.prefix + path);
+          if (o) files[path] = new Uint8Array(await o.arrayBuffer());
+        }
+      }
+      return withDb(this.db, () => createDraft({ name: p.name, label: p.label, author: p.author, ...(files ? { files } : {}) }));
+    });
+  }
+
+  async readAppDraftFile(name: string, author: string, path: string): Promise<DirectoryAnswer<string>> {
+    return answered(() => withDb(this.db, () => readDraftFile(name, author, path)));
+  }
+
+  async writeAppDraftFile(name: string, author: string, path: string, text: string): Promise<DirectoryAnswer<AppDraftDTO>> {
+    return answered(() => withDb(this.db, () => writeDraftFile(name, author, path, text)));
+  }
+
+  async deleteAppDraftFile(name: string, author: string, path: string): Promise<DirectoryAnswer<AppDraftDTO>> {
+    return answered(() => withDb(this.db, () => deleteDraftFile(name, author, path)));
+  }
+
+  async deleteAppDraft(name: string, author: string, organizationId?: string): Promise<DirectoryAnswer<void>> {
+    const done = await answered(() => withDb(this.db, () => deleteDraft(name, author)));
+    // Its dev install's data goes with it (§9.3).
+    if (done.ok && organizationId && this.env.APP_STORE) {
+      const props = { org: organizationId, app: name, dev: author };
+      await this.env.APP_STORE.get(this.env.APP_STORE.idFromName(storeName(props))).clear().catch((err: Error) => console.error(`[apps] clear ${name}: ${err.message}`));
+      // And its files (§8).
+      if (this.env.BLOBS) {
+        const bucket = this.env.BLOBS;
+        let cursor: string | undefined;
+        do {
+          const page = await bucket.list({ prefix: filesPrefix(props), ...(cursor ? { cursor } : {}) });
+          if (page.objects.length) await bucket.delete(page.objects.map((o) => o.key));
+          cursor = page.truncated ? page.cursor : undefined;
+        } while (cursor);
+      }
+    }
+    return done;
+  }
+
+  /**
+   * Tries one of a draft's tools in its dev install (§9.3), as its author: its own store, no internet, the author's access
+   * at most. Any other caller is refused: a draft is its author's alone.
+   */
+  async tryAppDraftTool(p: { organizationId: string; name: string; author: string; userId: string; displayName: string; role: string; tool: string; input: unknown }): Promise<AppToolAnswer> {
+    let draft;
+    try {
+      draft = await withDb(this.db, () => draftCode(p.name, p.author));
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
+    if (!draft.manifest.tools.some((t) => t.name === p.tool)) return { ok: false, error: `the draft has no tool ${p.tool}` };
+    const caller = {
+      organizationId: p.organizationId, accountId: p.author, userId: p.userId, displayName: p.displayName, kind: 'person' as const, role: p.role,
+      via: null, invokedBy: null, scopes: draft.manifest.scopes.map((s) => s.id),
+      ticket: signAppTicket(draft.secret, { app: p.name, org: p.organizationId, accountId: p.author, userId: p.userId, via: null, invokedBy: null }),
+    };
+    try {
+      const worker = await draftWorker(this.env, this.ctx.exports as unknown as HostedExports, p.organizationId, p.author, draft);
+      return await callHostedTool(worker, p.tool, p.input, caller);
+    } catch (err) {
+      return { ok: false, error: `the draft could not run: ${(err as Error).message}`.slice(0, 500) };
+    }
+  }
+
+  /** The draft preview's address with a one-use door key (§9.6): its author's alone. */
+  async draftPreview(p: { organizationId: string; name: string; author: string; userId: string; displayName: string }): Promise<DirectoryAnswer<{ url: string }>> {
+    return answered(async () => {
+      if (!this.env.APPS_DOMAIN) throw new ApiError(503, 'no_apps_domain', 'this server does not serve app screens');
+      const draft = await withDb(this.db, () => draftCode(p.name, p.author));
+      if (!draft.manifest.ui) throw new ApiError(400, 'no_screen', 'this draft has no screen ("ui": { "hosted": true } in its manifest)');
+      const { token } = mintUserAppToken(draft.secret, { app: p.name, workspaceId: p.organizationId, userId: p.userId, accountId: p.author, displayName: p.displayName, isAgent: false });
+      const url = new URL(`${this.env.APPS_SCHEME ?? 'https'}://${devHostLabel(draft.devHost, p.organizationId)}.${this.env.APPS_DOMAIN}/`);
+      url.searchParams.set('flow_token', token);
+      return { url: url.toString() };
+    });
+  }
+
+  /** A draft preview opened with its door key: its author only, the key used once; back comes the session cookie. */
+  async openDraftSession(p: { organizationId: string; devHost: string; token: string }): Promise<{ cookie: string; maxAge: number } | null> {
+    const draft = await withDb(this.db, async () => {
+      const d = await draftByDevHost(p.devHost);
+      return d ? { ...d, code: await draftCode(d.name, d.author).catch(() => null) } : null;
+    });
+    if (!draft?.code) return null;
+    const key = verifyUserAppToken(draft.code.secret, p.token);
+    if (!key || key.app !== draft.name || key.workspaceId !== p.organizationId || key.accountId !== draft.author) return null;
+    if (this.usedKeys.has(key.jti)) return null;
+    this.usedKeys.set(key.jti, key.exp);
+    const exp = Math.floor(Date.now() / 1000) + APP_SESSION_SECONDS;
+    return { cookie: signAppSession(draft.code.secret, { accountId: key.accountId, userId: key.userId, displayName: key.displayName, isAgent: false, exp }), maxAge: APP_SESSION_SECONDS };
+  }
+
+  /**
+   * A draft preview's request (§9.6): the session checked, its author still a member; back come the viewer with a ticket,
+   * and the draft's files, to serve its screen and run its isolate.
+   */
+  async draftForPreview(p: { organizationId: string; devHost: string; cookie: string }): Promise<{ name: string; author: string; manifest: UserAppManifest; files: Record<string, Uint8Array>; key: string; viewer: AppSession & { ticket: string } } | null> {
+    const found = await withDb(this.db, async () => {
+      const d = await draftByDevHost(p.devHost);
+      return d ? { ...d, code: await draftCode(d.name, d.author).catch(() => null) } : null;
+    });
+    if (!found?.code) return null;
+    const s = verifyAppSession(found.code.secret, p.cookie);
+    if (!s || s.accountId !== found.author || !this.userOfAccount(found.author)) return null;
+    const ticket = signAppTicket(found.code.secret, { app: found.name, org: p.organizationId, accountId: s.accountId, userId: s.userId, via: null, invokedBy: null });
+    return { name: found.name, author: found.author, manifest: found.code.manifest, files: found.code.files, key: found.code.key, viewer: { ...s, ticket } };
+  }
+
+  /** Publishes a draft as a hosted version (§9.6): its files to R2 and a version an owner or admin installs. */
+  async publishAppDraft(p: { organizationId: string; name: string; author: string }): Promise<DirectoryAnswer<{ name: string; version: number }>> {
+    return answered(async () => {
+      const draft = await withDb(this.db, () => draftCode(p.name, p.author));
+      if (!this.env.BLOBS) throw new ApiError(503, 'no_storage', 'this server has no file storage for apps');
+      const prefix = `apps/${p.organizationId}/${p.name}/${crypto.randomUUID()}/`;
+      const files = Object.fromEntries(Object.entries(draft.files).filter(([path]) => path !== 'freeflow-app.json'));
+      await Promise.all(Object.entries(files).map(([path, b]) => this.env.BLOBS!.put(prefix + path, b)));
+      return withDb(this.db, () => recordUpload({ manifest: draft.manifest, files: Object.fromEntries(Object.entries(files).map(([path, b]) => [path, b.byteLength])), prefix, by: p.author }));
+    });
+  }
+
+  /** The restore point that undoes a hosted app's latest update (§8), or null. */
+  async userAppRestorePoint(name: string): Promise<{ fromVersion: number; toVersion: number; bookmark: string; at: number } | null> {
+    return withDb(this.db, () => restorePointOf(name));
+  }
+
+  /** After its store went back: the app runs the version it ran before the update. */
+  async revertUserApp(name: string, at: number): Promise<DirectoryAnswer<{ version: number }>> {
+    return answered(() => withDb(this.db, () => revertApp(name, at)));
+  }
+
+  /** A hosted app's version, uploaded to R2 by the Worker's route, kept here until it is installed (§14 phase 2, step 1). */
+  async recordUserAppUpload(p: { manifest: UserAppManifest; files: Record<string, number>; prefix: string; by: string }): Promise<{ name: string; version: number }> {
+    return withDb(this.db, () => recordUpload(p));
+  }
+
+  async listUserAppUploads(): Promise<AppUpload[]> {
+    return withDb(this.db, () => listUploads());
+  }
+
+  /** The installed version of a hosted app, for its runner. */
+  async userAppCode(name: string): Promise<{ manifest: UserAppManifest; version: number; prefix: string; files: Record<string, number> } | null> {
+    return withDb(this.db, () => installedCode(name));
   }
 
   async setUserAppGrants(name: string, grants: AppGrants): Promise<DirectoryAnswer<void>> {
@@ -1039,7 +1206,34 @@ export class Org extends DurableObject<OrgEnv> {
 
   /** The app tools the holder may call (the registry's list, user-apps.md §3.3). */
   async offeredUserAppTools(holder: AppHolder): Promise<OfferedAppTool[]> {
-    return withDb(this.db, () => offeredAppTools(holder));
+    const installed = await withDb(this.db, () => offeredAppTools(holder));
+    // The building tools (§9.6): every member and their agents, never a guest.
+    if (holder.kind === 'guest') return installed;
+    return [...installed, ...BUILDING_TOOLS.map((tool) => ({ name: `${BUILDING_APP}__${tool.name}`, app: BUILDING_APP, label: BUILDING_LABEL, tool }))];
+  }
+
+  /** One building tool (§9.6), as its caller: the drafts are the caller's account's. */
+  private async runBuildingTool(p: { organizationId: string; tool: string; input: Record<string, unknown>; holder: AppHolder; userId: string; displayName: string; role: string }): Promise<AppToolAnswer> {
+    if (p.holder.kind === 'guest') return { ok: false, error: 'guests do not build apps' };
+    const author = p.holder.accountId;
+    const str = (k: string) => (typeof p.input[k] === 'string' ? (p.input[k] as string) : '');
+    const ok = (result: unknown): AppToolAnswer => ({ ok: true, result });
+    const of = <T,>(a: DirectoryAnswer<T>): AppToolAnswer => (a.ok ? ok(a.value) : { ok: false, error: a.message });
+    switch (p.tool) {
+      case 'guide': return ok({ guide: BUILDING_GUIDE });
+      case 'list_drafts': return ok({ drafts: await this.listAppDrafts(author) });
+      case 'create_draft': return of(await this.createAppDraft({ name: str('name'), label: str('label') || str('name'), author, ...(p.input.from_installed === true ? { fromInstalled: true } : {}) }));
+      case 'read_file': return of(await this.readAppDraftFile(str('app'), author, str('path')));
+      case 'write_file': return of(await this.writeAppDraftFile(str('app'), author, str('path'), str('text')));
+      case 'delete_file': return of(await this.deleteAppDraftFile(str('app'), author, str('path')));
+      case 'check_draft': return of(await this.getAppDraft(str('app'), author));
+      case 'try_tool': return this.tryAppDraftTool({ organizationId: p.organizationId, name: str('app'), author, userId: p.userId, displayName: p.displayName, role: p.role, tool: str('tool'), input: (p.input.input as Record<string, unknown>) ?? {} });
+      case 'publish_draft': {
+        const r = await this.publishAppDraft({ organizationId: p.organizationId, name: str('app'), author });
+        return r.ok ? ok({ ...r.value, next: 'An owner or admin installs or updates to it in Organization settings → Apps.' }) : { ok: false, error: r.message };
+      }
+      default: return { ok: false, error: `no building tool ${p.tool}` };
+    }
   }
 
   /** The apps whose events the account may see (events/object.ts withApps, §5.1). */
@@ -1059,6 +1253,7 @@ export class Org extends DurableObject<OrgEnv> {
   }): Promise<AppToolAnswer> {
     const parsed = parseAppToolName(p.toolName);
     if (!parsed) return { ok: false, error: `${p.toolName} is not an app tool` };
+    if (parsed.app === BUILDING_APP) return this.runBuildingTool({ ...p, tool: parsed.tool, input: (p.input && typeof p.input === 'object' ? p.input : {}) as Record<string, unknown> });
     const found = await withDb(this.db, async () => {
       const app = await appForUse(parsed.app);
       const held = app ? (await heldScopes(p.holder)).get(parsed.app) ?? new Set<string>() : new Set<string>();
@@ -1068,10 +1263,118 @@ export class Org extends DurableObject<OrgEnv> {
     if (!found.app || !tool) return { ok: false, error: `no app tool ${p.toolName} here` };
     if (!tool.scopes.every((s) => found.held.has(s))) return { ok: false, error: `${p.toolName} needs ${tool.scopes.join(' and ')}, which this account does not hold` };
     const kind = p.holder.kind === 'guest' ? 'guest' : p.holder.agentMode === 'shared' ? 'shared_agent' : p.holder.via || p.holder.agentMode === 'personal' ? 'personal_agent' : 'person';
-    return callAppTool(found.app, parsed.tool, p.input, {
+    const caller = {
       organizationId: p.organizationId, accountId: p.holder.accountId, userId: p.userId, displayName: p.displayName, kind, role: p.role,
       via: p.holder.via ?? null, invokedBy: p.invokedBy ?? null, scopes: [...found.held],
+    } satisfies AppCallerContext;
+    if (!isHosted(found.app.manifest)) return callAppTool(found.app, parsed.tool, p.input, caller);
+    // A hosted app (user-apps.md §7.2): its installed version, loaded into its own isolate, with this object's entrypoints.
+    try {
+      const code = await withDb(this.db, () => installedCode(parsed.app));
+      if (!code) return { ok: false, error: `${found.app.manifest.label} has no installed version to run` };
+      const worker = await hostedWorker(this.env, this.ctx.exports as unknown as HostedExports, p.organizationId, code);
+      // The app acts as this caller in the suite only with this ticket (§6.3).
+      const ticket = signAppTicket(found.app.secret, { app: parsed.app, org: p.organizationId, accountId: p.holder.accountId, userId: p.userId, via: p.holder.via ?? null, invokedBy: p.invokedBy ?? null });
+      return await callHostedTool(worker, parsed.tool, p.input, { ...caller, ticket });
+    } catch (err) {
+      console.error(`[apps] ${p.toolName}: ${(err as Error).message}`);
+      return { ok: false, error: `${found.app.manifest.label} could not run: ${(err as Error).message}`.slice(0, 500) };
+    }
+  }
+
+  /** Door keys already used on a hosted app's screen, until they expire: a key opens one session (§6.2). */
+  private readonly usedKeys = new Map<string, number>();
+
+  /**
+   * A hosted app's screen, opened with its door key (§6.2): the key checked against the install's secret, used once, and
+   * the viewer's scope checked; back comes the session cookie's value, signed, for the app's host.
+   */
+  async openHostedAppSession(p: { organizationId: string; name: string; token: string }): Promise<{ cookie: string; maxAge: number } | null> {
+    const app = await withDb(this.db, () => appForUse(p.name));
+    if (!app || !isHosted(app.manifest)) return null;
+    const key = verifyUserAppToken(app.secret, p.token);
+    if (!key || key.app !== p.name || key.workspaceId !== p.organizationId) return null;
+    const now = Date.now();
+    for (const [jti, exp] of this.usedKeys) if (exp * 1000 < now) this.usedKeys.delete(jti);
+    if (this.usedKeys.has(key.jti)) return null;
+    this.usedKeys.set(key.jti, key.exp);
+    if (!(await this.viewerHolds(p.name, key.accountId))) return null;
+    const exp = Math.floor(now / 1000) + APP_SESSION_SECONDS;
+    return { cookie: signAppSession(app.secret, { accountId: key.accountId, userId: key.userId, displayName: key.displayName, isAgent: key.isAgent, exp }), maxAge: APP_SESSION_SECONDS };
+  }
+
+  /**
+   * Who is looking at a hosted app's screen, from its session cookie: checked on every request, so a person removed from
+   * the organization, or whose scopes were taken away, loses the screen at once (§6.2). Null when they may not.
+   */
+  async checkHostedAppSession(p: { organizationId: string; name: string; cookie: string }): Promise<(AppSession & { scopes: string[]; ticket: string }) | null> {
+    const app = await withDb(this.db, () => appForUse(p.name));
+    if (!app || !isHosted(app.manifest)) return null;
+    const s = verifyAppSession(app.secret, p.cookie);
+    if (!s) return null;
+    const scopes = await this.viewerHolds(p.name, s.accountId);
+    if (!scopes) return null;
+    const ticket = signAppTicket(app.secret, { app: p.name, org: p.organizationId, accountId: s.accountId, userId: s.userId, via: null, invokedBy: null });
+    return { ...s, scopes, ticket };
+  }
+
+  /**
+   * A hosted app asks to use the suite as a caller (§6.3, AppSuite): the ticket must be this install's and fresh, the use
+   * declared in the installed manifest, and the caller still a member here. Back comes who to act as, with what Docs
+   * needs to read as them; any refusal comes back as the reason.
+   */
+  async appSuiteCaller(p: { organizationId: string; name: string; ticket: string; use: AppUse; dev?: string }): Promise<{ ok: true; ticket: AppTicket; docs: { userId: string; email: string | null; token: null; ip: string; accountId: string; channelIds: string[] } } | { ok: false; error: string }> {
+    // The installed app's manifest and secret; a dev install's are its draft's (§9.3).
+    const app = p.dev
+      ? await withDb(this.db, () => draftCode(p.name, p.dev!)).then((d) => ({ manifest: d.manifest, secret: d.secret }), () => null)
+      : await withDb(this.db, () => appForUse(p.name));
+    if (!app || !isHosted(app.manifest)) return { ok: false, error: 'no such hosted app here' };
+    if (!(app.manifest.uses ?? []).includes(p.use)) return { ok: false, error: `this app does not declare "${p.use}" in its manifest's uses` };
+    const t = verifyAppTicket(app.secret, p.ticket);
+    if (!t || t.app !== p.name || t.org !== p.organizationId) return { ok: false, error: 'the ticket is not valid: use the one from this request' };
+    // A dev install acts only as its author: never with anyone else's access (§9.3).
+    if (p.dev && t.accountId !== p.dev) return { ok: false, error: 'a draft acts only as its author' };
+    const userId = this.userOfAccount(t.accountId);
+    if (!userId) return { ok: false, error: 'the caller is not a member here any more' };
+    const email = (this.ctx.storage.sql.exec('SELECT email FROM users WHERE id = ?', userId).toArray()[0]?.email as string | undefined) ?? null;
+    return { ok: true, ticket: t, docs: { userId, email, token: null, ip: '', accountId: t.accountId, channelIds: this.channelIdsOf(userId) } };
+  }
+
+  /** A hosted app posts in Chat as its caller (§6.3, `chat:write`): Chat's own checks apply, as for the caller's own post. */
+  async postAsAppCaller(p: { organizationId: string; name: string; ticket: string; channelId: string; text: string; dev?: string }): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
+    const who = await this.appSuiteCaller({ organizationId: p.organizationId, name: p.name, ticket: p.ticket, use: 'chat:write', ...(p.dev ? { dev: p.dev } : {}) });
+    if (!who.ok) return who;
+    const { sendMessage } = await import('./services/messages');
+    const stamp: Stamp = { depth: 0, ...(who.ticket.via ? { via: who.ticket.via } : {}), ...(who.ticket.invokedBy ? { invokedBy: who.ticket.invokedBy } : {}) };
+    try {
+      const msg = await this.scoped(() => sendMessage(p.channelId, who.docs.userId, `app:${p.name}:${crypto.randomUUID()}`, p.text, undefined, undefined, undefined, { expandMentions: true }), stamp);
+      await this.logging;
+      await this.armAlarm();
+      return { ok: true, id: msg.id };
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
+  }
+
+  /** The scopes of the app an account holds here as a viewer (no agent `via`), or null for none. */
+  private async viewerHolds(name: string, accountId: string): Promise<string[] | null> {
+    return withDb(this.db, async () => {
+      const holder = await appHolderOf(accountId);
+      const held = holder ? (await heldScopes({ ...holder, via: null })).get(name) : undefined;
+      return held?.size ? [...held] : null;
     });
+  }
+
+  /** An event a hosted app published through its SUITE binding (§5.1): the binding names the app, so no signature. */
+  async publishHostedAppEvent(p: { organizationId: string; name: string; event: unknown; dev?: string }): Promise<{ ok: true; id: string } | { ok: false; status: number; error: string }> {
+    if (p.dev) {
+      const draft = await withDb(this.db, () => draftCode(p.name, p.dev!)).catch(() => null);
+      if (!draft) return { ok: false, status: 404, error: 'no such draft here' };
+      return this.publishAppEvent(p.organizationId, p.name, draft.manifest, p.event, p.dev);
+    }
+    const app = await withDb(this.db, () => appForUse(p.name));
+    if (!app || !isHosted(app.manifest)) return { ok: false, status: 404, error: 'no such hosted app here' };
+    return this.publishAppEvent(p.organizationId, p.name, app.manifest, p.event);
   }
 
   /**
@@ -1084,7 +1387,13 @@ export class Org extends DurableObject<OrgEnv> {
     if (!app || !verifyBody(app.secret, p.signature, p.body)) return { ok: false, status: 401, error: 'bad or missing signature' };
     let body: unknown;
     try { body = JSON.parse(p.body); } catch { return { ok: false, status: 400, error: 'the body is not JSON' }; }
-    const checked = checkAppEvent(app.manifest, body);
+    return this.publishAppEvent(p.organizationId, p.name, app.manifest, body);
+  }
+
+  /** An app's event, checked against its manifest and the limit, published as `app.<name>.<type>` (§5.1). */
+  private async publishAppEvent(organizationId: string, name: string, manifest: UserAppManifest, body: unknown, dev?: string): Promise<{ ok: true; id: string } | { ok: false; status: number; error: string }> {
+    const p = { organizationId, name };
+    const checked = checkAppEvent(manifest, body);
     if (!checked.ok) return { ok: false, status: 400, error: checked.error };
     if (!this.appEvents.hit(p.name)) return { ok: false, status: 429, error: 'over the limit of events a minute' };
     if (!this.env.EVENTS) return { ok: false, status: 503, error: 'the event log is not available' };
@@ -1096,7 +1405,9 @@ export class Org extends DurableObject<OrgEnv> {
     const e = checked.event;
     const id = crypto.randomUUID();
     await this.env.EVENTS.get(this.env.EVENTS.idFromName(p.organizationId)).publish({
-      id, type: `app.${p.name}.${e.type}`, organizationId: p.organizationId, actor: null, audience: 'org', ts: new Date().toISOString(),
+      // A dev install's events are its author's alone (§9.3), and outside the app's `app.<name>.*` namespace.
+      id, type: dev ? `appdev.${p.name}.${e.type}` : `app.${p.name}.${e.type}`, organizationId: p.organizationId, actor: null,
+      audience: dev ? `account:${dev}` : 'org', ts: new Date().toISOString(),
       data: e.data, ...(e.ref ? { ref: { organizationId: p.organizationId, app: p.name, kind: e.ref.kind, id: e.ref.id } } : {}),
       ...(about.length ? { about } : {}),
     });
@@ -1108,10 +1419,12 @@ export class Org extends DurableObject<OrgEnv> {
     return withDb(this.db, async () => {
       const app = await appForUse(p.name);
       if (!app?.manifest.ui || !(await heldScopes(p.holder)).get(p.name)?.size) return null;
+      // A hosted app's screen is on the apps domain (§6.1); an external app's at its author's URL, behind their guard.
+      if (!('url' in app.manifest.ui) && !this.env.APPS_DOMAIN) return null;
       const { token, expiresAt } = mintUserAppToken(app.secret, {
         app: p.name, workspaceId: p.organizationId, userId: p.userId, accountId: p.holder.accountId, displayName: p.displayName, isAgent: p.isAgent,
       });
-      const url = new URL(app.manifest.ui.url);
+      const url = new URL('url' in app.manifest.ui ? app.manifest.ui.url : `${appOrigin(p.name, p.organizationId, this.env.APPS_DOMAIN!, this.env.APPS_SCHEME)}/`);
       url.searchParams.set('flow_token', token);
       return { url: url.toString(), expiresAt: expiresAt.toISOString() };
     });

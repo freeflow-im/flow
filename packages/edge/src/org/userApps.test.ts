@@ -80,7 +80,9 @@ beforeEach(async () => {
 afterEach(() => { vi.restoreAllMocks(); });
 
 const tryInstall = (grants = { members: true, accounts: [] as string[] }) =>
-  org.installUserApp({ manifest: taskboard(), manifestUrl: 'https://tasks.example.com/freeflow-app.json', by: ACCT.ann, grants });
+  org.installUserApp({ source: { manifest: taskboard(), manifestUrl: 'https://tasks.example.com/freeflow-app.json' }, by: ACCT.ann, grants });
+/** The installed apps' tools offered, without FreeFlow's own building tools (apps__*, §9.6). */
+const installedTools = async (h: AppHolder) => (await org.offeredUserAppTools(h)).filter((t) => t.app !== 'apps');
 const install = async (grants?: { members: boolean; accounts: string[] }) => {
   const a = await tryInstall(grants);
   if (!a.ok) throw new Error(a.message);
@@ -108,34 +110,34 @@ describe('installing', () => {
     await install();
     await org.removeUserApp('taskboard');
     expect(await org.listUserApps({ ...ann, admin: true })).toEqual([]);
-    expect(await org.offeredUserAppTools(ben)).toEqual([]);
+    expect(await installedTools(ben)).toEqual([]);
   });
 });
 
 describe('who holds the scopes (§5.2)', () => {
   it('gives every member the scopes, never a guest, and a shared agent only by name', async () => {
     await install();
-    expect((await org.offeredUserAppTools(ben)).map((t) => t.name)).toEqual(['taskboard__list_tasks', 'taskboard__claim_task']);
-    expect(await org.offeredUserAppTools(gus)).toEqual([]);
-    expect(await org.offeredUserAppTools(bot)).toEqual([]);
+    expect((await installedTools(ben)).map((t) => t.name)).toEqual(['taskboard__list_tasks', 'taskboard__claim_task']);
+    expect(await installedTools(gus)).toEqual([]);
+    expect(await installedTools(bot)).toEqual([]);
     await org.setUserAppGrants('taskboard', { members: true, accounts: [ACCT.bot] });
-    expect(await org.offeredUserAppTools(bot)).toHaveLength(2);
+    expect(await installedTools(bot)).toHaveLength(2);
   });
 
   it('gives named people only, when not every member', async () => {
     await install({ members: false, accounts: [ACCT.ann] });
-    expect(await org.offeredUserAppTools(ann)).toHaveLength(2);
-    expect(await org.offeredUserAppTools(ben)).toEqual([]);
+    expect(await installedTools(ann)).toHaveLength(2);
+    expect(await installedTools(ben)).toEqual([]);
   });
 
   it("gives a person's personal agent nothing until the person turns the app on", async () => {
     await install();
-    expect(await org.offeredUserAppTools(annsAgent)).toEqual([]);
+    expect(await installedTools(annsAgent)).toEqual([]);
     await org.setUserAppAgents('taskboard', ACCT.ann, true);
-    expect(await org.offeredUserAppTools(annsAgent)).toHaveLength(2);
+    expect(await installedTools(annsAgent)).toHaveLength(2);
     expect((await org.listUserApps({ ...ann, admin: false }))[0]!.agentsOn).toBe(true);
     await org.setUserAppAgents('taskboard', ACCT.ann, false);
-    expect(await org.offeredUserAppTools(annsAgent)).toEqual([]);
+    expect(await installedTools(annsAgent)).toEqual([]);
   });
 
   it('lets an account see the events of the apps whose read scope it holds', async () => {
@@ -238,5 +240,57 @@ describe("the screen's door key (§6.2)", () => {
     expect(createHmac('sha256', Buffer.from(secret, 'base64url')).update(Buffer.from(json!, 'base64url')).digest('base64url')).toBe(mac);
     expect(JSON.parse(Buffer.from(json!, 'base64url').toString())).toMatchObject({ v: 2, app: 'taskboard', workspaceId: ORG_ID, userId: BEN, accountId: ACCT.ben });
     expect(await org.userAppScreen({ organizationId: ORG_ID, name: 'taskboard', holder: gus, userId: GUS, displayName: 'gus', isAgent: false })).toBeNull();
+  });
+});
+
+describe('hosted versions (§14 phase 2, step 1)', () => {
+  const hosted = (): UserAppManifest => ({ ...taskboard(), server: { hosted: true }, ui: { hosted: true } });
+  const files = { 'server.js': 120, 'ui/index.html': 40 };
+
+  it('keeps an uploaded version, installs it, and gives its code to the runner', async () => {
+    const up = await org.recordUserAppUpload({ manifest: hosted(), files, prefix: 'apps/o/taskboard/u1/', by: ACCT.ann });
+    expect(up).toEqual({ name: 'taskboard', version: 1 });
+    expect((await org.listUserAppUploads()).map((u) => [u.version, u.installed])).toEqual([[1, false]]);
+    expect(await org.userAppCode('taskboard')).toBeNull();
+    const installed = await org.installUserApp({ source: { name: 'taskboard', version: 1 }, by: ACCT.ann, grants: { members: true, accounts: [] } });
+    expect(installed).toMatchObject({ ok: true, value: { name: 'taskboard', version: 1 } });
+    expect(await org.userAppCode('taskboard')).toMatchObject({ version: 1, prefix: 'apps/o/taskboard/u1/', files });
+    const [listed] = await org.listUserApps({ ...ann, admin: true });
+    expect(listed).toMatchObject({ hosted: true, serverOrigin: null, hasScreen: true });
+  });
+
+  it('updates to a later upload, and numbers versions past every earlier one', async () => {
+    await org.recordUserAppUpload({ manifest: hosted(), files, prefix: 'p1/', by: ACCT.ann });
+    await org.installUserApp({ source: { name: 'taskboard', version: 1 }, by: ACCT.ann, grants: { members: true, accounts: [] } });
+    const up2 = await org.recordUserAppUpload({ manifest: { ...hosted(), label: 'Tasks 2' }, files, prefix: 'p2/', by: ACCT.ann });
+    expect(up2.version).toBe(2);
+    expect(await org.updateUserApp({ name: 'taskboard', source: { name: 'taskboard', version: 2 }, by: ACCT.ann, grants: { members: true, accounts: [] } })).toEqual({ ok: true, value: { version: 2 } });
+    expect((await org.userAppCode('taskboard'))?.prefix).toBe('p2/');
+    expect((await org.listUserApps({ ...ann, admin: true }))[0]!.label).toBe('Tasks 2');
+  });
+
+  it('refuses a version that was never uploaded', async () => {
+    expect(await org.installUserApp({ source: { name: 'taskboard', version: 7 }, by: ACCT.ann, grants: { members: true, accounts: [] } })).toMatchObject({ ok: false, status: 404 });
+  });
+});
+
+describe('the building tools (§9.6)', () => {
+  it('are offered to members and agents, never to a guest', async () => {
+    const names = (await org.offeredUserAppTools(ben)).map((t) => t.name);
+    expect(names).toContain('apps__create_draft');
+    expect(names).toContain('apps__publish_draft');
+    expect((await org.offeredUserAppTools(bot)).some((t) => t.name === 'apps__write_file')).toBe(true);
+    expect(await org.offeredUserAppTools(gus)).toEqual([]);
+  });
+
+  it("build the caller's own drafts", async () => {
+    const run = (holder: AppHolder, toolName: string, input: unknown) => org.callUserAppTool({ organizationId: ORG_ID, toolName, input, holder, userId: BEN, displayName: 'ben', role: 'member' });
+    expect(await run(ben, 'apps__create_draft', { name: 'shop', label: 'Shopping' })).toMatchObject({ ok: true, result: { name: 'shop', problems: [] } });
+    const read = await run(ben, 'apps__read_file', { app: 'shop', path: 'server.js' });
+    expect(read.ok && String(read.result)).toContain("from 'freeflow'");
+    expect(await run(bot, 'apps__read_file', { app: 'shop', path: 'server.js' })).toMatchObject({ ok: false });
+    expect(await run(gus, 'apps__list_drafts', {})).toMatchObject({ ok: false, error: 'guests do not build apps' });
+    const guide = await run(ben, 'apps__guide', {});
+    expect(guide.ok && JSON.stringify(guide.result)).toContain('defineApp');
   });
 });

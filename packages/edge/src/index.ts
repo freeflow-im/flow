@@ -39,6 +39,10 @@ export { Calendar } from './calendar/object';
 export { Events } from './events/object';
 export { Assistant } from './assistant/object';
 export { Contacts } from './contacts/object';
+// Hosted user apps (src/apps/hosted.ts): the app's store, and the entrypoints its isolate is bound with (ctx.exports).
+export { AppStore, AppDb, AppFiles, AppSuite, AppEgress } from './apps/hosted';
+import type { HostedExports } from './apps/hosted';
+import { isAppHost, serveAppScreen } from './apps/screen';
 import type { Org as OrgObject } from './org/object';
 import type { JobMessage } from './events/object';
 import { handleJobBatch } from './events/queue';
@@ -83,6 +87,11 @@ export interface Env extends ProxyEnv, AuthEnv {
   GOOGLE_REDIRECT_URL?: string;
   /** Seals Chat's messages and files, and the passwords of mail and calendar accounts (org/crypto). A secret. */
   FLOW_DATA_KEY?: string;
+  /** Hosted user apps (src/apps/hosted.ts): the loader, the stores, and the apps domain their screens are on. */
+  LOADER?: WorkerLoader;
+  APP_STORE?: DurableObjectNamespace<import('./apps/hosted').AppStore>;
+  APPS_DOMAIN?: string;
+  APPS_SCHEME?: string;
 }
 
 /** Paths that are never files: they skip the look in the assets. */
@@ -136,6 +145,13 @@ ported.route('/', userAppRoutes as never);
 ported.route('/', promptRoutes as never);
 ported.route('/', orgRoutes as never);
 ported.route('/', pageRoutes as never);
+// A hosted user app's screen, on its own host on the apps domain (docs/specs/user-apps.md §6.1; src/apps/screen.ts). Off
+// until APPS_DOMAIN is set: the domain's DNS and route come first.
+app.use('*', async (c, next) => {
+  if (!isAppHost(c.env, c.req.raw)) return next();
+  return serveAppScreen(c.req.raw, c.env, (c.executionCtx as unknown as { exports: HostedExports }).exports);
+});
+
 app.use('*', async (c, next) => {
   if (!c.env.PORTED_HOSTS.split(',').includes(new URL(c.req.url).hostname)) return next();
   const res = await ported.fetch(c.req.raw, c.env, c.executionCtx);

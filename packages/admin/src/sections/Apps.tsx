@@ -5,7 +5,8 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AccountDTO, InstalledAppDTO, UserAppManifest, WorkspaceDTO } from '@flow/shared';
-import { adminApi, appsApi, type AppGrants } from '../api';
+import { appsChanged } from '@flow/suite-bar';
+import { adminApi, appsApi, type AppGrants, type AppUploadDTO } from '../api';
 import { Button, Card, Confirm, ErrorLine, Row, Toggle } from '../components/ui';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -23,12 +24,14 @@ export function Apps({ org, admin }: { org: WorkspaceDTO; admin: boolean }) {
   const qc = useQueryClient();
   const apps = useQuery({ queryKey: ['apps', org.id], queryFn: () => appsApi.list(org.id) });
   const accounts = useQuery({ queryKey: ['accounts', org.id], queryFn: () => adminApi.accounts(org.id), enabled: admin });
-  const refresh = () => qc.invalidateQueries({ queryKey: ['apps', org.id] });
+  // The suite bar's Apps menu on this page reads its list again too.
+  const refresh = () => { appsChanged(); return qc.invalidateQueries({ queryKey: ['apps', org.id] }); };
   const list = apps.data ?? [];
 
   return (
     <>
       {admin && <Install org={org} accounts={grantable(accounts.data ?? [])} onInstalled={refresh} />}
+      {admin && <Uploads org={org} installed={list} accounts={grantable(accounts.data ?? [])} onChanged={refresh} />}
       <Card title="Installed apps" intro="Apps made outside FreeFlow that this organization added. Each has its own tab, and agents use its tools." testid="installed-apps">
         {apps.isLoading && <p className="text-sm text-muted">Loading…</p>}
         <ErrorLine error={apps.error ? errorText(apps.error) : null} />
@@ -38,6 +41,61 @@ export function Apps({ org, admin }: { org: WorkspaceDTO; admin: boolean }) {
         ))}
       </Card>
     </>
+  );
+}
+
+/**
+ * Hosted apps' versions uploaded here (§14 phase 2, step 5), newest first: install one, or update an installed app to a
+ * newer one, after reading what it asks for. A restore point is taken before each update.
+ */
+function Uploads({ org, installed, accounts, onChanged }: { org: WorkspaceDTO; installed: InstalledAppDTO[]; accounts: AccountDTO[]; onChanged(): void }) {
+  const uploads = useQuery({ queryKey: ['app-uploads', org.id], queryFn: () => appsApi.uploads(org.id) });
+  const [open, setOpen] = useState<AppUploadDTO | null>(null);
+  const [grants, setGrants] = useState<AppGrants>({ members: true, accounts: [] });
+  const [error, setError] = useState<string | null>(null);
+  const qc = useQueryClient();
+  const pending = (uploads.data ?? []).filter((u) => !u.installed && u.version > (installed.find((a) => a.name === u.name)?.version ?? 0));
+  if (!pending.length) return null;
+  const choose = (u: AppUploadDTO) => {
+    const current = installed.find((a) => a.name === u.name);
+    setGrants(current ? grantsOf(current) : { members: true, accounts: [] });
+    setError(null);
+    setOpen(u);
+  };
+  const go = async () => {
+    if (!open) return;
+    setError(null);
+    try {
+      if (installed.some((a) => a.name === open.name)) await appsApi.updateToVersion(org.id, open.name, open.version, grants);
+      // A hosted app's secret stays with FreeFlow, which runs it: nothing to hand anyone.
+      else await appsApi.installVersion(org.id, open.name, open.version, grants);
+      setOpen(null);
+      void qc.invalidateQueries({ queryKey: ['app-uploads', org.id] });
+      onChanged();
+    } catch (e) {
+      setError(errorText(e));
+    }
+  };
+  return (
+    <Card title="Uploaded versions" intro="Hosted apps uploaded to this organization with flow-agent-bridge app publish. They run nowhere until you install them." testid="app-uploads">
+      {pending.map((u) => (
+        <Row key={`${u.name}-${u.version}`} label={`${u.manifest.icon ? `${u.manifest.icon} ` : ''}${u.manifest.label} · version ${u.version}`} help={`Uploaded ${new Date(u.at).toLocaleString()}, ${Object.keys(u.files).length} files.`} testid={`upload-${u.name}-${u.version}`}>
+          <Button onClick={() => choose(u)} testid={`open-upload-${u.name}-${u.version}`}>{installed.some((a) => a.name === u.name) ? 'Update to it' : 'Install'}</Button>
+        </Row>
+      ))}
+      {open && (
+        <div className="flex flex-col gap-3 border-t border-hairline pt-3" data-testid="upload-card">
+          <HostedNotice uses={open.manifest.uses ?? []} egress={open.manifest.egress ?? []} />
+          <Asks manifest={open.manifest} />
+          <GrantEditor value={grants} onChange={setGrants} accounts={accounts} />
+          <div className="flex gap-2">
+            <Button kind="primary" onClick={() => void go()} testid="upload-confirm">{installed.some((a) => a.name === open.name) ? `Update ${open.manifest.label} to version ${open.version}` : `Install ${open.manifest.label}`}</Button>
+            <Button kind="link" onClick={() => setOpen(null)}>Cancel</Button>
+          </div>
+        </div>
+      )}
+      {error && <p className="text-xs whitespace-pre-line text-danger">{error}</p>}
+    </Card>
   );
 }
 
@@ -112,6 +170,15 @@ const ExternalNotice = ({ origin }: { origin: string }) => (
   </p>
 );
 
+/** A hosted app's notice (§7.2): FreeFlow runs it; what of the suite it may use, and which outside hosts it may reach. */
+const HostedNotice = ({ uses, egress }: { uses: string[]; egress: string[] }) => (
+  <p className="rounded-md border border-hairline bg-panel px-3 py-2 text-xs" data-testid="hosted-notice">
+    FreeFlow runs this app and keeps its data in this organization.{' '}
+    {uses.length ? `It may use: ${uses.join(', ')}, and only what the person using it may use too. ` : 'It gets no access to anything else in FreeFlow. '}
+    {egress.length ? `It may reach these outside hosts: ${egress.join(', ')}.` : 'It cannot reach the internet.'}
+  </p>
+);
+
 /** The secret, shown once (install and rotation), with where the app sends its events. */
 function SecretOnce({ org, name, secret, onDone }: { org: WorkspaceDTO; name: string; secret: string; onDone(): void }) {
   const events = `${window.location.origin}/v1/apps/${org.id}/${name}/events`;
@@ -161,7 +228,7 @@ function Install({ org, accounts, onInstalled }: { org: WorkspaceDTO; accounts: 
         <div className="flex flex-col gap-3 border-t border-hairline pt-3" data-testid="install-card">
           <div className="text-sm font-semibold">{manifest.icon ? `${manifest.icon} ` : ''}{manifest.label} <span className="font-normal text-muted">({manifest.name})</span></div>
           {manifest.description && <p className="text-xs text-muted">{manifest.description}</p>}
-          <ExternalNotice origin={new URL(manifest.server.url).origin} />
+          {'url' in manifest.server ? <ExternalNotice origin={new URL(manifest.server.url).origin} /> : <HostedNotice uses={manifest.uses ?? []} egress={manifest.egress ?? []} />}
           <Asks manifest={manifest} />
           <GrantEditor value={grants} onChange={setGrants} accounts={accounts} />
           <div>
@@ -176,7 +243,7 @@ function Install({ org, accounts, onInstalled }: { org: WorkspaceDTO; accounts: 
 
 function InstalledApp({ org, app, admin, accounts, onChanged }: { org: WorkspaceDTO; app: InstalledAppDTO; admin: boolean; accounts: AccountDTO[]; onChanged(): void }) {
   const [editing, setEditing] = useState<AppGrants | null>(null);
-  const [confirm, setConfirm] = useState<'remove' | 'secret' | null>(null);
+  const [confirm, setConfirm] = useState<'remove' | 'secret' | 'back' | null>(null);
   const [secret, setSecret] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const run = <T,>(fn: () => Promise<T>, after?: (r: T) => void) => async () => {
@@ -194,7 +261,7 @@ function InstalledApp({ org, app, admin, accounts, onChanged }: { org: Workspace
     <div className="flex flex-col gap-3 border-t border-hairline pt-4 first:border-t-0 first:pt-0" data-testid={`app-${app.name}`}>
       <Row
         label={`${app.icon ? `${app.icon} ` : ''}${app.label}`}
-        help={<>{app.description ? `${app.description} ` : ''}Runs on {app.serverOrigin}.{app.hasScreen && app.usable ? <> <a className="text-primary hover:underline" href={`/apps/${app.name}`}>Open</a></> : null}</>}
+        help={<>{app.description ? `${app.description} ` : ''}{app.serverOrigin ? `Runs on ${app.serverOrigin}.` : 'Run by FreeFlow.'}{app.hasScreen && app.usable ? <> <a className="text-primary hover:underline" href={`/apps/${app.name}`}>Open</a></> : null}</>}
       >
         {app.usable ? (
           <Toggle checked={app.agentsOn} disabled={agents.isPending} onChange={(on) => agents.mutate(on)} label="My agents may use it" testid={`agents-on-${app.name}`} />
@@ -206,7 +273,13 @@ function InstalledApp({ org, app, admin, accounts, onChanged }: { org: Workspace
       {admin && (
         <div className="flex flex-wrap items-center gap-2">
           <Button onClick={() => setEditing(grantsOf(app))} testid={`edit-grants-${app.name}`}>Who has it</Button>
-          <Button onClick={run(() => appsApi.update(org.id, app.name, grantsOf(app)))} testid={`update-${app.name}`}>Update from manifest</Button>
+          {!app.hosted && <Button onClick={run(() => appsApi.update(org.id, app.name, grantsOf(app)))} testid={`update-${app.name}`}>Update from manifest</Button>}
+          {app.hosted && app.restorePoint && (confirm === 'back' ? (
+            <Confirm question={`Go back to version ${app.restorePoint.fromVersion} and its data from ${new Date(app.restorePoint.at).toLocaleString()}? What was written since is lost: export it first.`} onYes={run(() => appsApi.goBack(org.id, app.name), () => setConfirm(null))} onNo={() => setConfirm(null)} testid={`back-${app.name}`} />
+          ) : (
+            <Button onClick={() => setConfirm('back')} testid={`go-back-${app.name}`}>Go back to version {app.restorePoint.fromVersion}</Button>
+          ))}
+          {app.hosted && <a className="text-sm text-primary hover:underline" href={appsApi.exportUrl(org.id, app.name)} download data-testid={`export-${app.name}`}>Export data</a>}
           {confirm === 'secret' ? (
             <Confirm question="The old secret stops at once. Make a new one?" onYes={run(() => appsApi.rotateSecret(org.id, app.name), (r) => { setSecret(r.secret); setConfirm(null); })} onNo={() => setConfirm(null)} testid={`rotate-${app.name}`} />
           ) : (

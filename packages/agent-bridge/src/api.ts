@@ -207,6 +207,11 @@ export class FlowApi {
     return r.job;
   }
 
+  /** Uploads a hosted app's version (docs/specs/user-apps.md §14 phase 2): the manifest and its files, each base64. */
+  publishAppVersion(workspaceId: string, manifest: unknown, files: Record<string, string>): Promise<{ name: string; version: number }> {
+    return this.req('POST', `/v1/workspaces/${encodeURIComponent(workspaceId)}/apps/versions`, { manifest, files });
+  }
+
   async myWorkspaces(): Promise<WorkspaceDTO[]> {
     const r = await this.req<{ workspaces: WorkspaceDTO[] }>('GET', '/v1/me/workspaces');
     return r.workspaces;

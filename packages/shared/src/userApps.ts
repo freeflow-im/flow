@@ -16,7 +16,7 @@ export const USER_APPS_SCOPE = 'apps:use';
 /** The separator between an app's name and its tool's in the registry (§3.3). */
 export const APP_TOOL_SEPARATOR = '__';
 
-const RESERVED_WORDS = ['dev', 'app', 'apps', 'suite', 'admin', 'system'];
+const RESERVED_WORDS = ['dev', 'app', 'apps', 'suite', 'admin', 'system', 'drafts', 'versions', 'preview', 'export', 'restore', 'publish', 'file', 'try'];
 
 /** Names no user app may take: a few words, every built-in app's name and every built-in scope's prefix (§4). */
 export const RESERVED_APP_NAMES: ReadonlySet<string> = new Set([
@@ -54,11 +54,25 @@ export interface UserAppManifest {
   scopes: UserAppScope[];
   tools: UserAppTool[];
   events?: string[];
-  /** Where the registry sends tool calls: signed POSTs (§5). */
-  server: { url: string };
-  /** The screen the tab frames, behind the author's guard (§6.2). None: the app has no tab. */
-  ui?: { url: string };
+  /**
+   * An external app's server: where the registry sends tool calls, signed POSTs (§5). A hosted app's: `hosted`, its code
+   * in the version's `server.js`, run by the platform (§7.2).
+   */
+  server: { url: string } | { hosted: true };
+  /** The screen the tab frames: an external app's behind the author's guard, a hosted app's from its `ui/` files (§6). */
+  ui?: { url: string } | { hosted: true };
+  /** A hosted app's access to the suite (§6.3): the methods it may call, each checked against the caller's access too. */
+  uses?: AppUse[];
+  /** The hosts a hosted app's server may reach (§7.2). */
+  egress?: string[];
 }
+
+/** What a hosted app may ask to use of the suite (§6.3): each is an AppSuite method the platform checks. */
+export const APP_USES = ['docs:read', 'chat:write'] as const;
+export type AppUse = (typeof APP_USES)[number];
+
+/** Whether the app's server is the platform's (§7.1). */
+export const isHosted = (m: Pick<UserAppManifest, 'server'>): boolean => 'hosted' in m.server;
 
 /** The limits of §4 and §11. */
 export const USER_APP_LIMITS = {
@@ -98,11 +112,11 @@ const Manifest = z
       )
       .max(USER_APP_LIMITS.tools),
     events: z.array(z.string().max(64)).max(USER_APP_LIMITS.events).optional(),
-    server: z.object({ url }).strict(),
-    ui: z.object({ url }).strict().optional(),
-    // Hosted apps only (§7.1): named so the check below can say why, not just "unknown key".
-    uses: z.unknown().optional(),
-    egress: z.unknown().optional(),
+    server: z.union([z.object({ url }).strict(), z.object({ hosted: z.literal(true) }).strict()]),
+    ui: z.union([z.object({ url }).strict(), z.object({ hosted: z.literal(true) }).strict()]).optional(),
+    // Hosted apps only (§7.1): an external app that declares them is told why below.
+    uses: z.array(z.enum(APP_USES)).max(APP_USES.length).optional(),
+    egress: z.array(z.string().max(253)).max(20).optional(),
   })
   .strict();
 
@@ -121,10 +135,14 @@ export function checkUserAppManifest(input: unknown, opts: { allowHttp?: boolean
   if (!APP_NAME.test(m.name)) problems.push(`name: "${m.name}" must be 2-20 lowercase letters and digits, starting with a letter`);
   else if (RESERVED_APP_NAMES.has(m.name)) problems.push(`name: "${m.name}" is reserved`);
 
-  if (m.uses !== undefined) problems.push('uses: an external app gets no suite token, so it declares no uses (user-apps.md §7.1)');
-  if (m.egress !== undefined) problems.push('egress: an external app declares no egress; its server is its own (user-apps.md §7.1)');
+  const hosted = 'hosted' in m.server;
+  if (!hosted && m.uses !== undefined) problems.push('uses: an external app gets no suite token, so it declares no uses (user-apps.md §7.1)');
+  if (!hosted && m.egress !== undefined) problems.push('egress: an external app declares no egress; its server is its own (user-apps.md §7.1)');
+  if (!hosted && m.ui && 'hosted' in m.ui) problems.push('ui: only a hosted app has a hosted screen (user-apps.md §7.1)');
+  for (const h of m.egress ?? []) if (!/^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(h)) problems.push(`egress: "${h}" must be a host name, such as api.example.com`);
 
-  for (const [field, value] of [['server.url', m.server.url], ['ui.url', m.ui?.url]] as const) {
+  const urls: [string, string | undefined][] = [['server.url', 'url' in m.server ? m.server.url : undefined], ['ui.url', m.ui && 'url' in m.ui ? m.ui.url : undefined]];
+  for (const [field, value] of urls) {
     if (!value) continue;
     if (!value.startsWith('https://') && !(opts.allowHttp && value.startsWith('http://'))) problems.push(`${field}: must be https`);
   }
@@ -155,8 +173,29 @@ export function checkUserAppManifest(input: unknown, opts: { allowHttp?: boolean
   if (events.length && !m.scopes.some((s) => s.read)) problems.push('scopes: an app with events marks at least one scope "read": true, which lets an account see them (user-apps.md §5.1)');
 
   if (problems.length) return { ok: false, problems };
-  const { uses: _u, egress: _e, ...manifest } = m;
-  return { ok: true, manifest: manifest as UserAppManifest };
+  return { ok: true, manifest: m as UserAppManifest };
+}
+
+/** The most a hosted app's version may hold (§14 phase 2, step 1). */
+export const HOSTED_APP_LIMITS = { bytes: 5_000_000, files: 200, path: 200 } as const;
+const VERSION_FILE = /^(server\.js|migrations\/[0-9]{4}_[a-z0-9_]{1,60}\.sql|ui\/[A-Za-z0-9._\-/]{1,190})$/;
+
+/**
+ * Checks a hosted app version's files (§14 phase 2, step 1), given their sizes in bytes: `server.js` (one ES module),
+ * `migrations/NNNN_name.sql` applied in order, and `ui/*`, the screen's static files, with `ui/index.html` when the
+ * manifest has a hosted screen. Every problem is listed.
+ */
+export function checkHostedFiles(manifest: UserAppManifest, sizes: Record<string, number>): string[] {
+  const problems: string[] = [];
+  if (!isHosted(manifest)) return ['server: this manifest is an external app\'s; a version with files is a hosted app\'s ({ "hosted": true })'];
+  const paths = Object.keys(sizes);
+  if (paths.length > HOSTED_APP_LIMITS.files) problems.push(`files: at most ${HOSTED_APP_LIMITS.files}`);
+  const total = Object.values(sizes).reduce((a, b) => a + b, 0);
+  if (total > HOSTED_APP_LIMITS.bytes) problems.push(`files: ${total} bytes, over the ${HOSTED_APP_LIMITS.bytes} a version may hold`);
+  for (const p of paths) if (!VERSION_FILE.test(p) || p.includes('..') || p.includes('//')) problems.push(`files: "${p}" is not server.js, migrations/NNNN_name.sql or ui/<path>`);
+  if (!('server.js' in sizes)) problems.push('files: server.js is missing');
+  if (manifest.ui && 'hosted' in manifest.ui && !('ui/index.html' in sizes)) problems.push('files: ui/index.html is missing, and the manifest has a hosted screen');
+  return problems;
 }
 
 /** The registry's name for an app's tool: `taskboard__claim_task` (§3.3). */
@@ -190,8 +229,14 @@ export interface InstalledAppDTO {
   icon?: string;
   description?: string;
   manifestUrl: string;
-  /** The external server's origin, for the install card's notice (§7.1). */
-  serverOrigin: string;
+  /** An external app's server origin, for the install card's notice (§7.1); null for a hosted app. */
+  serverOrigin: string | null;
+  /** The platform runs it (§7.2). */
+  hosted: boolean;
+  /** The installed version. */
+  version: number;
+  /** Owners and admins: the restore point that undoes the latest update of a hosted app, within 30 days (§8). */
+  restorePoint?: { fromVersion: number; at: string };
   hasScreen: boolean;
   scopes: UserAppScope[];
   tools: { name: string; description: string; scopes: string[] }[];
