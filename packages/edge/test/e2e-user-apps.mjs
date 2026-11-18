@@ -134,10 +134,17 @@ try {
   t('with it again, a one-use version 2 door key for her account', payload?.v === 2 && payload.app === 'taskboard' && payload.accountId === UA, JSON.stringify(payload));
 
   // --- A personal agent's switch (§5.2) -----------------------------------------------------------------------------------
+  // The panel over the app's screen offers only the agents that may use it (§5.2).
+  const panelAgents = async (q) => ((await api(U.token, 'GET', `/api/agent/agents?workspace=${A}${q}`)).j.agents ?? []);
+  const own = (await panelAgents('')).find((a) => a.self);
+  t('Uma has an assistant to ask', !!own, JSON.stringify(await panelAgents('')));
+  t('which the panel over Taskboard does not offer while the app is off for her agents', !(await panelAgents('&app=taskboard')).some((a) => a.self));
   r = await api(U.token, 'PUT', `/v1/workspaces/${A}/apps/taskboard/agents`, { on: true });
   t('Uma turns it on for her agents', r.s === 200, r.s);
   r = await api(U.token, 'GET', `/v1/workspaces/${A}/apps`);
   t('and the list says so', r.j.apps?.[0]?.agentsOn === true, JSON.stringify(r.j.apps?.[0]).slice(0, 120));
+  t('and now the panel offers her assistant', (await panelAgents('&app=taskboard')).some((a) => a.self && a.id === own?.id));
+  t('but no agent for an app that is not installed', (await panelAgents('&app=nothing')).length === 0);
 
   // --- Removal ------------------------------------------------------------------------------------------------------------
   r = await api(O.token, 'DELETE', `/v1/workspaces/${A}/apps/taskboard`);

@@ -31,9 +31,10 @@ export interface UsableAgent { id: string; displayName: string; avatarUrl?: stri
 
 /**
  * The hosted agents the person may talk to in an organization: their assistant first, their other private agents, the
- * shared ones (and, for an owner or admin, the admin agent, agents.md §1.4). Null until known, again when it changes.
+ * shared ones (and, for an owner or admin, the admin agent, agents.md §1.4); with `app`, only those that may use that
+ * installed app. Null until known, again when it changes.
  */
-export function useUsableAgents(organizationId: string | null): UsableAgent[] | null {
+export function useUsableAgents(organizationId: string | null, app?: string): UsableAgent[] | null {
   const [agents, setAgents] = useState<UsableAgent[] | null>(null);
   const [asked, setAsked] = useState(0);
   useEffect(() => {
@@ -43,7 +44,9 @@ export function useUsableAgents(organizationId: string | null): UsableAgent[] | 
   }, []);
   useEffect(() => {
     let live = true;
-    const url = organizationId ? `/api/agent/agents?workspace=${encodeURIComponent(organizationId)}` : '/api/agent/agents';
+    // `app`: only the agents that may use that installed app (the panel over its screen, user-apps.md §5.2).
+    const query = [organizationId ? `workspace=${encodeURIComponent(organizationId)}` : '', app ? `app=${encodeURIComponent(app)}` : ''].filter(Boolean).join('&');
+    const url = query ? `/api/agent/agents?${query}` : '/api/agent/agents';
     fetch(url, { credentials: 'same-origin', headers: { accept: 'application/json' } })
       .then((r) => (r.ok ? r.json() : null))
       .then((body: { agents?: UsableAgent[] } | null) => {
@@ -51,7 +54,7 @@ export function useUsableAgents(organizationId: string | null): UsableAgent[] | 
       })
       .catch(() => live && setAgents([]));
     return () => { live = false; };
-  }, [organizationId, asked]);
+  }, [organizationId, app, asked]);
   return agents;
 }
 

@@ -222,6 +222,12 @@ export function renderContext(ctx: AgentContext): string {
     const b = ctx.building;
     return `<app_context>\nThe user is on FreeFlow's Build app page, working on their draft of the app ${JSON.stringify(b.app)}${b.label ? ` (${JSON.stringify(String(b.label).slice(0, 40))})` : ''}${b.file ? `, with the file ${JSON.stringify(String(b.file).slice(0, 200))} open` : ''}. "This app" and "this file" mean those. Build it with the apps__ tools on that draft (apps__guide first if you have not read it): read a file before you change it, write whole files, then apps__check_draft and apps__try_tool. The page shows the draft's files and its screen as you change them. Publish only when the user asks.\n</app_context>`;
   }
+  if (ctx.page === 'home' && ctx.installedApp && typeof ctx.installedApp.app === 'string') {
+    const a = ctx.installedApp;
+    const name = JSON.stringify(a.app.slice(0, 60));
+    const label = a.label ? ` (${JSON.stringify(String(a.label).slice(0, 40))})` : '';
+    return `<app_context>\nThe user has the installed app ${name}${label} open in its tab, with you in a panel over it. "This app", "here" and what it shows mean that app. Work in it with its tools, named ${JSON.stringify(`${a.app.slice(0, 60)}__`)} followed by the tool; you cannot see its screen, so read through those tools. If you have none of them, say the app is not turned on for you.\n</app_context>`;
+  }
   if (ctx.page === 'home') {
     return '<app_context>\nThe user is on the home page (their list of spreadsheets, presentations and documents). Nothing is open.\n</app_context>';
   }

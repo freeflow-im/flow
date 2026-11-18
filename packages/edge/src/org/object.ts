@@ -36,8 +36,8 @@ import { sweepIdleVisitors, visitorBySession, visitorMayReceive, type MessageTim
 import { cleanPrompts, type AssistantPrompts } from '@flow/shared/assistant';
 import {
   AppEventLimiter, appForUse, appHolderOf, callAppTool, checkAppEvent, heldScopes, installApp, listApps, offeredAppTools, readableApps,
-  removeApp, rotateAppSecret, setAgentsOn, setAppGrants, updateApp, recordUpload, listUploads, installedCode, restorePointOf, revertApp,
-  type AppCallerContext, type AppGrants, type AppHolder, type AppSource, type AppToolAnswer, type AppUpload, type OfferedAppTool,
+  removeApp, rotateAppSecret, setAgentsOn, agentsWithApp, setAppGrants, updateApp, recordUpload, listUploads, installedCode, restorePointOf, revertApp,
+  type AppCallerContext, type AgentForApp, type AppGrants, type AppHolder, type AppSource, type AppToolAnswer, type AppUpload, type OfferedAppTool,
 } from './services/userApps';
 import { APP_SESSION_SECONDS, mintUserAppToken, signAppSession, signAppTicket, verifyAppSession, verifyAppTicket, verifyBody, verifyUserAppToken, type AppSession, type AppTicket } from './lib/appSigning';
 import { appOrigin, callHostedTool, devHostLabel, draftWorker, filesPrefix, hostedWorker, storeName, type HostedEnv, type HostedExports } from '../apps/hosted';
@@ -1198,6 +1198,11 @@ export class Org extends DurableObject<OrgEnv> {
 
   async rotateUserAppSecret(name: string): Promise<DirectoryAnswer<string>> {
     return answered(() => withDb(this.db, () => rotateAppSecret(name)));
+  }
+
+  /** Which of these agents may use the app for this person (the panel over an app's screen, user-apps.md §5.2). */
+  async userAppAgents(name: string, person: AppHolder, agents: AgentForApp[]): Promise<string[]> {
+    return withDb(this.db, () => agentsWithApp(name, person, agents));
   }
 
   async setUserAppAgents(name: string, accountId: string, on: boolean): Promise<DirectoryAnswer<void>> {

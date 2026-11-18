@@ -1,6 +1,7 @@
 // The page of an app installed in the organization (docs/specs/user-apps.md §6): the suite bar, then the app's screen in a
 // sandboxed frame loaded from the app's own origin with a one-use door key (§6.2), minted again for every load. The screen
-// never runs on the suite's origin. At /apps/ itself: the installed apps the person may open.
+// never runs on the suite's origin. The person's assistant floats over it, or anchors beside it, offering the agents that
+// may use the app. At /apps/ itself: the installed apps the person may open.
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { RotateCw } from 'lucide-react';
@@ -9,6 +10,7 @@ import { AppsHome, Builder, editApp } from './components/Build';
 import { AppsSuiteBar } from './components/AppsSuiteBar';
 import { Notice } from './components/Notice';
 import { useOrganizations } from './hooks/organization';
+import { SuiteAssistant } from '@flow/suite-bar/assistant-chat';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -32,7 +34,14 @@ export function App() {
   else if (!app) body = <Notice testid="no-such-app">No app named “{name}” is installed in {active?.name}.</Notice>;
   else if (!app.usable) body = <Notice testid="no-access">{app.label} is installed, but you have no access to it. An owner or admin can give it to you in Organization settings → Apps.</Notice>;
   else if (!app.hasScreen) body = <Notice testid="no-screen">{app.label} has no screen. Agents use it through its tools.</Notice>;
-  else body = <Screen org={org!} app={app} />;
+  else
+    body = (
+      // The screen, and over it the person's assistant: floating at its corner, or anchored beside it (AssistantDock).
+      <div className="relative flex min-h-0 flex-1" data-testid="app-page">
+        <Screen org={org!} app={app} />
+        <SuiteAssistant organizationId={org} page="home" app={{ name: app.name, label: app.label }} />
+      </div>
+    );
 
   return (
     <div className="flex h-screen flex-col">
@@ -57,7 +66,7 @@ function Screen({ org, app }: { org: string; app: InstalledApp }) {
     };
   }, [org, app.name, load]);
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex h-8 items-center gap-2 border-b border-hairline bg-panel px-3 text-xs text-muted" data-testid="app-notice">
         <span className="truncate">{app.icon ? `${app.icon} ` : ''}{app.label} {app.serverOrigin ? `runs on its author’s server, ${app.serverOrigin}.` : 'is run by FreeFlow.'}</span>
         {/* A hosted app opens in the builder: the person's draft of it (§9.6). */}

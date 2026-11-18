@@ -225,6 +225,29 @@ export async function heldScopes(who: AppHolder): Promise<Map<string, Set<string
   return held;
 }
 
+/** An agent the person may talk to (usableAgents), as far as an app's scopes go. */
+export interface AgentForApp { id: string; accountId: string; mode: AgentMode }
+
+/**
+ * Which of the person's agents may use the app `name` when the person asks them (§5.2), as a turn would hold its scopes:
+ * a personal agent acts as the person, `via` it, so it may where the person holds the app and turned it on for their
+ * agents; a shared agent (the admin agent too) acts as itself, with the grants made to it. The ids of those that may.
+ */
+export async function agentsWithApp(name: string, person: AppHolder, agents: AgentForApp[]): Promise<string[]> {
+  if (person.kind === 'guest') return [];
+  const may = new Set<string>();
+  const personal = agents.filter((a) => a.mode === 'personal');
+  if (personal.length && (await heldScopes({ accountId: person.accountId, kind: person.kind, agentMode: null, via: personal[0]!.id })).has(name)) {
+    for (const a of personal) may.add(a.id);
+  }
+  for (const a of agents) {
+    if (a.mode === 'personal') continue;
+    const holder = await appHolderOf(a.accountId);
+    if (holder && (await heldScopes(holder)).has(name)) may.add(a.id);
+  }
+  return agents.filter((a) => may.has(a.id)).map((a) => a.id);
+}
+
 /** An account of this organization as an app holder, from the member list: a person, a guest, or an agent and its mode. */
 export async function appHolderOf(accountId: string): Promise<AppHolder | null> {
   const [row] = await db
