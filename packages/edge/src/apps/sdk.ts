@@ -113,3 +113,21 @@ ctx.docs.read(path) (uses "docs:read") and ctx.chat.post(channelId, text) (uses 
 Throw an Error (or AppError(message, status) in a route) to refuse; the message goes back as it is.
 The app reaches the internet only with fetch to the hosts in the manifest's "egress".
 ui/index.html and the other ui/ files are the screen, served on the app's own host; its scripts fetch the routes above with relative paths (fetch('api/tasks')).`;
+
+/** What the assistant and agents are told of a hosted app's manifest when they build one (§4, §9.6). */
+export const FREEFLOW_MANIFEST_DOC = `freeflow-app.json, the manifest of a hosted app:
+{
+  "name": "tasks",                      2-20 lowercase letters and digits; the app's name in tool names (tasks__list_tasks) and its address
+  "label": "Tasks", "icon": "🗂️", "description": "One line for the people who install it.",
+  "server": { "hosted": true }, "ui": { "hosted": true },   (leave "ui" out for an app with no screen)
+  "kinds": [{ "kind": "task", "label": "Task" }],             the kinds of objects its events refer to
+  "scopes": [                                                  who may use it is given out by scope; one scope marked "read" lets an account see its events
+    { "id": "tasks:read", "label": "See tasks", "read": true },
+    { "id": "tasks:write", "label": "Change tasks" } ],
+  "tools": [{ "name": "list_tasks", "description": "What it does and when to use it.",
+              "input": { "type": "object", "properties": { "status": { "type": "string" } } }, "scopes": ["tasks:read"] }],
+  "events": ["task.created", "task.assigned"],                what it publishes with ctx.publish
+  "uses": ["docs:read", "chat:write"],                        optional: what of FreeFlow it uses, as its caller
+  "egress": ["api.example.com"]                               optional: the only hosts its server may fetch
+}
+Files: server.js (one ES module, with the SDK), migrations/0001_name.sql (applied once each in order; add a new file for a change, never edit an applied one), ui/index.html and other ui/ files.`;

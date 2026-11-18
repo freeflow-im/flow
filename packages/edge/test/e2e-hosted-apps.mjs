@@ -305,5 +305,31 @@ t("Olga starts a draft from the installed app's files", r.s === 201 && r.j.draft
 r = await api(U.token, 'POST', `/v1/workspaces/${A}/apps/drafts`, { name: 'drafts', label: 'x' });
 t('a reserved name is refused', r.s === 400, r.s);
 
+// --- An agent builds an app with the building tools (step 8) ------------------------------------------------------
+r = await api(O.token, 'POST', `/v1/workspaces/${A}/agent-invites`, {});
+r = await api(null, 'POST', '/v1/agents/redeem', { code: r.j.code, username: `builder${tag}`, key: 'a-long-agent-key-for-the-hosted-test', name: 'Builder' });
+const BLD = r.j.agentToken;
+r = await api(BLD, 'GET', `/v1/tools?door=bridge&workspace=${A}`);
+const bt = (r.j.tools ?? []).map((x) => x.name);
+t('the bridge lists Builder the building tools', bt.includes('apps__create_draft') && bt.includes('apps__try_tool') && bt.includes('apps__publish_draft'), bt.filter((n) => n.startsWith('apps__')).join());
+r = await call(BLD, A, 'apps__guide', {});
+t('the guide tells it how', r.j.ok && /defineApp/.test(r.j.result.guide) && /freeflow-app\.json/.test(r.j.result.guide), JSON.stringify(r.j).slice(0, 100));
+r = await call(BLD, A, 'apps__create_draft', { name: 'polls', label: 'Polls' });
+t('Builder starts a draft', r.j.ok && r.j.result.name === 'polls', JSON.stringify(r.j).slice(0, 120));
+r = await call(BLD, A, 'apps__read_file', { app: 'polls', path: 'freeflow-app.json' });
+const pm = JSON.parse(r.j.result);
+pm.tools.push({ name: 'vote', description: 'Votes for an option.', input: { type: 'object', properties: { option: { type: 'string' } }, required: ['option'] }, scopes: ['polls:use'] });
+await call(BLD, A, 'apps__write_file', { app: 'polls', path: 'freeflow-app.json', text: JSON.stringify(pm, null, 2) });
+await call(BLD, A, 'apps__write_file', { app: 'polls', path: 'migrations/0002_votes.sql', text: 'CREATE TABLE votes (option TEXT NOT NULL, by TEXT NOT NULL);' });
+r = await call(BLD, A, 'apps__read_file', { app: 'polls', path: 'server.js' });
+r = await call(BLD, A, 'apps__write_file', { app: 'polls', path: 'server.js', text: r.j.result.replace('  tools: {', "  tools: {\n    vote: async (input, ctx) => { await ctx.db.run('INSERT INTO votes (option, by) VALUES (?, ?)', input.option, ctx.caller.accountId); return ctx.db.all('SELECT option, COUNT(*) AS n FROM votes GROUP BY option'); },") });
+t('it adds a tool, a table and the code, and the draft has no problems', r.j.ok && r.j.result.problems.length === 0, JSON.stringify(r.j).slice(0, 200));
+r = await call(BLD, A, 'apps__try_tool', { app: 'polls', tool: 'vote', input: { option: 'tea' } });
+t('it tries the new tool', r.j.ok && r.j.result?.[0]?.option === 'tea' && r.j.result[0].n === 1, JSON.stringify(r.j));
+r = await call(BLD, A, 'apps__publish_draft', { app: 'polls' });
+t('and publishes it, told an owner or admin installs it', r.j.ok && r.j.result.name === 'polls' && /owner or admin/.test(r.j.result.next), JSON.stringify(r.j));
+r = await api(BLD, 'POST', `/v1/workspaces/${A}/apps`, { name: 'polls', version: r.j.result?.version, grants: { members: true, accounts: [] } });
+t('Builder cannot install it itself', r.s === 403, r.s);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

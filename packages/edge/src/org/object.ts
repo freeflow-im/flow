@@ -41,6 +41,7 @@ import {
 } from './services/userApps';
 import { APP_SESSION_SECONDS, mintUserAppToken, signAppSession, signAppTicket, verifyAppSession, verifyAppTicket, verifyBody, verifyUserAppToken, type AppSession, type AppTicket } from './lib/appSigning';
 import { appOrigin, callHostedTool, draftWorker, hostedWorker, type HostedEnv, type HostedExports } from '../apps/hosted';
+import { BUILDING_APP, BUILDING_GUIDE, BUILDING_LABEL, BUILDING_TOOLS } from '../apps/buildingTools';
 import { createDraft, deleteDraft, deleteDraftFile, draftCode, getDraft, listDrafts, readDraftFile, writeDraftFile, type AppDraftDTO } from './services/appDrafts';
 
 /** A user-app change's outcome for the Worker's routes: the value, or the ApiError's status, code and message. */
@@ -1145,7 +1146,34 @@ export class Org extends DurableObject<OrgEnv> {
 
   /** The app tools the holder may call (the registry's list, user-apps.md §3.3). */
   async offeredUserAppTools(holder: AppHolder): Promise<OfferedAppTool[]> {
-    return withDb(this.db, () => offeredAppTools(holder));
+    const installed = await withDb(this.db, () => offeredAppTools(holder));
+    // The building tools (§9.6): every member and their agents, never a guest.
+    if (holder.kind === 'guest') return installed;
+    return [...installed, ...BUILDING_TOOLS.map((tool) => ({ name: `${BUILDING_APP}__${tool.name}`, app: BUILDING_APP, label: BUILDING_LABEL, tool }))];
+  }
+
+  /** One building tool (§9.6), as its caller: the drafts are the caller's account's. */
+  private async runBuildingTool(p: { organizationId: string; tool: string; input: Record<string, unknown>; holder: AppHolder; userId: string; displayName: string; role: string }): Promise<AppToolAnswer> {
+    if (p.holder.kind === 'guest') return { ok: false, error: 'guests do not build apps' };
+    const author = p.holder.accountId;
+    const str = (k: string) => (typeof p.input[k] === 'string' ? (p.input[k] as string) : '');
+    const ok = (result: unknown): AppToolAnswer => ({ ok: true, result });
+    const of = <T,>(a: DirectoryAnswer<T>): AppToolAnswer => (a.ok ? ok(a.value) : { ok: false, error: a.message });
+    switch (p.tool) {
+      case 'guide': return ok({ guide: BUILDING_GUIDE });
+      case 'list_drafts': return ok({ drafts: await this.listAppDrafts(author) });
+      case 'create_draft': return of(await this.createAppDraft({ name: str('name'), label: str('label') || str('name'), author, ...(p.input.from_installed === true ? { fromInstalled: true } : {}) }));
+      case 'read_file': return of(await this.readAppDraftFile(str('app'), author, str('path')));
+      case 'write_file': return of(await this.writeAppDraftFile(str('app'), author, str('path'), str('text')));
+      case 'delete_file': return of(await this.deleteAppDraftFile(str('app'), author, str('path')));
+      case 'check_draft': return of(await this.getAppDraft(str('app'), author));
+      case 'try_tool': return this.tryAppDraftTool({ organizationId: p.organizationId, name: str('app'), author, userId: p.userId, displayName: p.displayName, role: p.role, tool: str('tool'), input: (p.input.input as Record<string, unknown>) ?? {} });
+      case 'publish_draft': {
+        const r = await this.publishAppDraft({ organizationId: p.organizationId, name: str('app'), author });
+        return r.ok ? ok({ ...r.value, next: 'An owner or admin installs or updates to it in Organization settings → Apps.' }) : { ok: false, error: r.message };
+      }
+      default: return { ok: false, error: `no building tool ${p.tool}` };
+    }
   }
 
   /** The apps whose events the account may see (events/object.ts withApps, §5.1). */
@@ -1165,6 +1193,7 @@ export class Org extends DurableObject<OrgEnv> {
   }): Promise<AppToolAnswer> {
     const parsed = parseAppToolName(p.toolName);
     if (!parsed) return { ok: false, error: `${p.toolName} is not an app tool` };
+    if (parsed.app === BUILDING_APP) return this.runBuildingTool({ ...p, tool: parsed.tool, input: (p.input && typeof p.input === 'object' ? p.input : {}) as Record<string, unknown> });
     const found = await withDb(this.db, async () => {
       const app = await appForUse(parsed.app);
       const held = app ? (await heldScopes(p.holder)).get(parsed.app) ?? new Set<string>() : new Set<string>();
