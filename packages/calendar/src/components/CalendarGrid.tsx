@@ -28,9 +28,11 @@ export interface GridProps {
   onDay(date: Date): void;
   /** A drag or a resize; `revert` puts it back (a cancelled scope question, a refusal). */
   onChange(o: EventOccurrence, start: Date, end: Date | null, allDay: boolean, revert: () => void): void;
+  /** Where the time grid opens, "HH:mm:ss"; 7:30 AM when not given. */
+  scrollTime?: string;
 }
 
-export function CalendarGrid({ view, date, occurrences, calendars, weekStartsOn, selecting, onSelect, onOpen, onDay, onChange }: GridProps) {
+export function CalendarGrid({ view, date, occurrences, calendars, weekStartsOn, selecting, onSelect, onOpen, onDay, onChange, scrollTime = '07:30:00' }: GridProps) {
   const ref = useRef<FullCalendar>(null);
   const byId = useMemo(() => new Map(calendars.map((c) => [c.id, c])), [calendars]);
   const events = useMemo(() => occurrences.filter((o) => !byId.get(o.calendarId)?.hidden).map((o) => toFcEvent(o, byId.get(o.calendarId))), [occurrences, byId]);
@@ -83,7 +85,7 @@ export function CalendarGrid({ view, date, occurrences, calendars, weekStartsOn,
         eventResizableFromStart={false}
         snapDuration="00:15:00"
         slotDuration="00:30:00"
-        scrollTime="07:30:00"
+        scrollTime={scrollTime}
         scrollTimeReset={false}
         allDayText="All day"
         noEventsText="Nothing on the calendar this week"

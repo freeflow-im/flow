@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { CalendarInfo, EventOccurrence } from '../api';
-import { panelTitle } from '../PanelApp';
-import { eventsOfDay, WeekAgenda } from './WeekAgenda';
+import { panelTitle, scrollTimeAt } from '../PanelApp';
+import { eventsOfDay, nowIndex, WeekAgenda } from './WeekAgenda';
 
 afterEach(cleanup);
 
@@ -40,6 +40,28 @@ describe('WeekAgenda (the side panel\'s week)', () => {
     expect(screen.getByText('Until 2 AM')).toBeTruthy();
     fireEvent.click(screen.getByText('Investor update'));
     expect(opened).toEqual(['c']);
+  });
+
+  it('puts the now line before the first timed event that has not started', () => {
+    const day = eventsOfDay(occurrences, new Date(2026, 10, 11)); // Q4 planning (all day), Investor update 11–12
+    expect(nowIndex(day, new Date(2026, 10, 11, 8))).toBe(1);
+    expect(nowIndex(day, new Date(2026, 10, 11, 11, 30))).toBe(2);
+    expect(nowIndex(day, new Date(2026, 10, 11, 13))).toBe(2);
+  });
+
+  it('draws the now line on today\'s row only', () => {
+    const today = new Date();
+    const sunday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - today.getDay());
+    render(<WeekAgenda start={sunday} occurrences={[]} calendars={cals} onOpen={() => {}} />);
+    expect(screen.getAllByRole('separator', { name: 'Now' })).toHaveLength(1);
+    cleanup();
+    render(<WeekAgenda start={sun} occurrences={[]} calendars={cals} onOpen={() => {}} />);
+    expect(screen.queryByRole('separator', { name: 'Now' })).toBeNull();
+  });
+
+  it('opens the panel\'s day an hour before now', () => {
+    expect(scrollTimeAt(new Date(2026, 10, 18, 14, 40))).toBe('13:00:00');
+    expect(scrollTimeAt(new Date(2026, 10, 18, 0, 10))).toBe('00:00:00');
   });
 
   it('titles the panel short, with the year only when it is not this one', () => {
