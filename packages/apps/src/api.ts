@@ -11,6 +11,9 @@ export interface InstalledApp {
   hasScreen: boolean;
   usable: boolean;
   hosted?: boolean;
+  version?: number;
+  /** Owners and admins: per scope, `members` or the account ids it is given to. */
+  grants?: Record<string, string[]>;
 }
 
 /** One of the person's drafts (§9.6): its files (path → bytes) and what stands between it and a version. */
@@ -60,7 +63,18 @@ export const appsApi = {
   tryTool: (org: string, name: string, tool: string, input: Record<string, unknown>) => request<ToolAnswer>('POST', `${ws(org)}/apps/drafts/${encodeURIComponent(name)}/try`, { tool, input }),
   preview: (org: string, name: string) => request<{ url: string }>('POST', `${ws(org)}/apps/drafts/${encodeURIComponent(name)}/preview`, {}),
   publish: (org: string, name: string) => request<{ name: string; version: number }>('POST', `${ws(org)}/apps/drafts/${encodeURIComponent(name)}/publish`, {}),
+  // Installing from the builder (owners and admins, §9.6): a published version, with who gets it.
+  installVersion: (org: string, name: string, version: number, grants: AppGrants) => request<{ app: string; version: number }>('POST', `${ws(org)}/apps`, { name, version, grants }),
+  updateToVersion: (org: string, name: string, version: number, grants: AppGrants) => request<{ ok: true; version: number }>('PUT', `${ws(org)}/apps/${encodeURIComponent(name)}`, { version, grants }),
+  accounts: async (org: string) => (await request<{ accounts: OrgAccount[] }>('GET', `${ws(org)}/accounts`)).accounts,
+  uploads: async (org: string) => (await request<{ versions: { name: string; version: number; installed: boolean }[] }>('GET', `${ws(org)}/apps/versions`)).versions,
 };
+
+/** Who gets an installed app's scopes (§5.2): every member, and named people or shared agents. */
+export interface AppGrants { members: boolean; accounts: string[] }
+
+/** An account of the organization, as the install popup lists them. */
+export interface OrgAccount { id: string; displayName: string; kind: string; state: string; agentMode?: 'personal' | 'shared' | null }
 
 /** The draft a Build page address opens: `/apps/?build=<name>`, or null. */
 export function buildingOf(search: string): string | null {

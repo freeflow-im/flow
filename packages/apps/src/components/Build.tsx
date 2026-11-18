@@ -9,6 +9,7 @@ import { ChevronLeft, FilePlus, Play, RotateCw, Trash2, Upload } from 'lucide-re
 import { SuiteAssistant } from '@flow/suite-bar/assistant-chat';
 import { intent } from '@flow/suite-bar';
 import { appsApi, type AppDraft, type InstalledApp, type ToolAnswer } from '../api';
+import { InstallDialog } from './InstallDialog';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const POLL_MS = 3000;
@@ -91,6 +92,8 @@ export function Builder({ org, name, admin }: { org: string; name: string; admin
   const [saved, setSaved] = useState('');
   const [view, setView] = useState<'code' | 'preview' | 'try'>('code');
   const [notice, setNotice] = useState<string | null>(null);
+  // An owner or admin installs a published version from here (§9.6): the version the popup is for.
+  const [installing, setInstalling] = useState<number | null>(null);
   const loadedAt = useRef<string | null>(null);
   const dirty = text !== saved;
 
@@ -156,7 +159,21 @@ export function Builder({ org, name, admin }: { org: string; name: string; admin
   const publish = async () => {
     try {
       const v = await appsApi.publish(org, name);
-      setNotice(`Published version ${v.version}. ${admin ? 'Install it' : 'An owner or admin installs it'} in Organization settings → Apps.`);
+      if (admin) setInstalling(v.version);
+      else setNotice(`Published version ${v.version}. An owner or admin installs it in Organization settings → Apps.`);
+    } catch (e) {
+      setNotice(errorText(e));
+    }
+  };
+
+  /** Install… opens the popup for the newest published version that is not the one installed. */
+  const openInstall = async () => {
+    try {
+      const mine = (await appsApi.uploads(org)).filter((u) => u.name === name).sort((a, b) => b.version - a.version);
+      const latest = mine[0];
+      if (!latest) setNotice('Nothing is published yet: Publish version first.');
+      else if (latest.installed) setNotice(`Version ${latest.version} is installed already. Publish a new version to update it.`);
+      else setInstalling(latest.version);
     } catch (e) {
       setNotice(errorText(e));
     }
@@ -175,6 +192,7 @@ export function Builder({ org, name, admin }: { org: string; name: string; admin
           {(['code', 'preview', 'try'] as const).map((v) => (
             <button key={v} type="button" onClick={() => setView(v)} className={`rounded-md px-3 py-1 text-sm ${view === v ? 'bg-selected-blue font-semibold text-primary' : 'text-ink hover:bg-hover'}`} data-testid={`view-${v}`}>{v === 'code' ? 'Code' : v === 'preview' ? 'Preview' : 'Try'}</button>
           ))}
+          {admin && <button type="button" className="rounded-md border border-border px-3 py-1 text-sm hover:bg-hover" onClick={() => void openInstall()} data-testid="install-latest">Install…</button>}
           <button type="button" className="flex items-center gap-1 rounded-md bg-primary px-3 py-1 text-sm font-semibold text-white disabled:opacity-50" disabled={d.problems.length > 0} onClick={() => void publish()} data-testid="publish"><Upload className="size-4" />Publish version</button>
         </div>
       </div>
@@ -207,6 +225,7 @@ export function Builder({ org, name, admin }: { org: string; name: string; admin
           {view === 'try' && <Try org={org} name={name} draft={d} />}
         </main>
       </div>
+      {installing !== null && <InstallDialog org={org} name={name} version={installing} onClose={() => { setInstalling(null); setNotice(`Published version ${installing}. You can install it later with Install… or in Organization settings → Apps.`); }} onDone={(t) => { setInstalling(null); setNotice(t); }} />}
       <SuiteAssistant organizationId={org} page="home" context={{ building: { app: name, label: d.label, file: view === 'code' ? path : undefined } }} />
     </div>
   );
