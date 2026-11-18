@@ -87,6 +87,11 @@ export class AppStore extends DurableObject<HostedEnv> {
     return Object.fromEntries(tables.map((t) => [t, sql.exec(`SELECT * FROM "${t.replace(/"/g, '""')}"`).toArray()]));
   }
 
+  /** Deletes everything: a deleted draft's dev install (§9.3). */
+  async clear(): Promise<void> {
+    await this.ctx.storage.deleteAll();
+  }
+
   bookmark(): Promise<string> {
     return this.ctx.storage.getCurrentBookmark();
   }
@@ -256,6 +261,20 @@ export function parseAppHost(host: string, domain: string): { app: string; org: 
   if (!m) return null;
   const x = m[2]!;
   return { app: m[1]!, org: `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20)}` };
+}
+
+/** A draft's preview host label (§9.6): `dev-<id>--<org>`; the `-` keeps it apart from any app's label. */
+export const devHostLabel = (devHost: string, org: string): string => `dev-${devHost}--${org.replace(/-/g, '')}`;
+
+/** The draft preview and organization a host names, or null. */
+export function parseDevHost(host: string, domain: string): { devHost: string; org: string } | null {
+  const bare = domain.replace(/:\d+$/, '').toLowerCase();
+  const h = host.replace(/:\d+$/, '').toLowerCase();
+  if (!h.endsWith(`.${bare}`)) return null;
+  const m = /^dev-([0-9a-f]{10})--([0-9a-f]{32})$/.exec(h.slice(0, -bare.length - 1));
+  if (!m) return null;
+  const x = m[2]!;
+  return { devHost: m[1]!, org: `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20)}` };
 }
 
 /** The origin an app's screen is served from in an organization. */

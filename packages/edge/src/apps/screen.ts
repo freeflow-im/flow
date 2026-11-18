@@ -9,7 +9,8 @@
 //     anything else         the app's own isolate, with the viewer in `x-freeflow-viewer`
 //   neither                 401, one line: the screen is opened from its tab
 import type { HostedCode, HostedEnv, HostedExports } from './hosted';
-import { HOST_PATH, hostedWorker, parseAppHost } from './hosted';
+import type { UserAppManifest } from '@flow/shared';
+import { draftWorker, HOST_PATH, hostedWorker, parseAppHost, parseDevHost } from './hosted';
 
 export const APP_SESSION_COOKIE = 'ff_app_session';
 const TOKEN_PARAM = 'flow_token';
@@ -43,12 +44,15 @@ function hostOf(env: HostedEnv, req: Request): string {
 }
 
 /** Whether a request is for an app's screen: its host is on the apps domain. */
-export const isAppHost = (env: HostedEnv, req: Request): boolean => !!env.APPS_DOMAIN && !!parseAppHost(hostOf(env, req), env.APPS_DOMAIN);
+export const isAppHost = (env: HostedEnv, req: Request): boolean =>
+  !!env.APPS_DOMAIN && (!!parseAppHost(hostOf(env, req), env.APPS_DOMAIN) || !!parseDevHost(hostOf(env, req), env.APPS_DOMAIN));
 
 /** Serves one request to a hosted app's host. `exports` are the Worker's own (`ctx.exports`), to bind the app's isolate. */
 export async function serveAppScreen(req: Request, env: HostedEnv, exports: HostedExports): Promise<Response> {
   const url = new URL(req.url);
   url.host = hostOf(env, req);
+  const dev = parseDevHost(url.host, env.APPS_DOMAIN ?? '');
+  if (dev) return serveDraftScreen(req, url, dev, env, exports);
   const at = parseAppHost(url.host, env.APPS_DOMAIN ?? '');
   if (!at || !env.ORG) return new Response('not found', { status: 404 });
   const org = env.ORG.get(env.ORG.idFromName(at.org));
@@ -90,5 +94,44 @@ export async function serveAppScreen(req: Request, env: HostedEnv, exports: Host
     return await worker.getEntrypoint().fetch(new Request(url.toString(), { method: req.method, headers, body: req.body, redirect: 'manual' }));
   } catch (err) {
     return new Response(`The app failed: ${(err as Error).message}`.slice(0, 300), { status: 502 });
+  }
+}
+
+/**
+ * A draft's preview (§9.6): as an installed app's screen, but its author's alone, its files from the draft, and its isolate
+ * the draft's dev install (§9.3).
+ */
+async function serveDraftScreen(req: Request, url: URL, at: { devHost: string; org: string }, env: HostedEnv, exports: HostedExports): Promise<Response> {
+  if (!env.ORG) return new Response('not found', { status: 404 });
+  const org = env.ORG.get(env.ORG.idFromName(at.org));
+  const secure = (env.APPS_SCHEME ?? 'https') === 'https';
+  const token = url.searchParams.get(TOKEN_PARAM);
+  if (token) {
+    const opened = await org.openDraftSession({ organizationId: at.org, devHost: at.devHost, token });
+    if (!opened) return refuse();
+    url.searchParams.delete(TOKEN_PARAM);
+    const attrs = secure ? 'Secure; SameSite=None; Partitioned' : 'SameSite=Lax';
+    return new Response(null, { status: 302, headers: { location: url.pathname + url.search, 'set-cookie': `${APP_SESSION_COOKIE}=${opened.cookie}; Path=/; HttpOnly; ${attrs}; Max-Age=${opened.maxAge}`, 'cache-control': 'no-store' } });
+  }
+  const cookie = cookieOf(req, APP_SESSION_COOKIE);
+  type Preview = { name: string; author: string; manifest: UserAppManifest; files: Record<string, Uint8Array>; key: string; viewer: { accountId: string; userId: string; displayName: string; ticket: string } };
+  const draft = cookie ? ((await org.draftForPreview({ organizationId: at.org, devHost: at.devHost, cookie })) as unknown as Preview | null) : null;
+  if (!draft) return refuse();
+  if (url.pathname.startsWith(HOST_PATH)) return new Response('not found', { status: 404 });
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    const file = `ui${url.pathname === '/' ? '/index.html' : url.pathname}`;
+    const body = draft.files[file];
+    if (body) return new Response(req.method === "HEAD" ? null : (body as unknown as BodyInit), { headers: { 'content-type': typeOf(file), 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' } });
+  }
+  const headers = new Headers(req.headers);
+  for (const k of [...headers.keys()]) if (k.startsWith('x-freeflow-')) headers.delete(k);
+  headers.delete('cookie');
+  const v = draft.viewer;
+  headers.set('x-freeflow-viewer', JSON.stringify({ organizationId: at.org, accountId: v.accountId, userId: v.userId, displayName: v.displayName, isAgent: false, scopes: draft.manifest.scopes.map((s) => s.id), ticket: v.ticket }));
+  try {
+    const worker = await draftWorker(env, exports, at.org, draft.author, draft);
+    return await worker.getEntrypoint().fetch(new Request(url.toString(), { method: req.method, headers, body: req.body, redirect: 'manual' }));
+  } catch (err) {
+    return new Response(`The draft failed: ${(err as Error).message}`.slice(0, 300), { status: 502 });
   }
 }

@@ -40,9 +40,9 @@ import {
   type AppCallerContext, type AppGrants, type AppHolder, type AppSource, type AppToolAnswer, type AppUpload, type OfferedAppTool,
 } from './services/userApps';
 import { APP_SESSION_SECONDS, mintUserAppToken, signAppSession, signAppTicket, verifyAppSession, verifyAppTicket, verifyBody, verifyUserAppToken, type AppSession, type AppTicket } from './lib/appSigning';
-import { appOrigin, callHostedTool, draftWorker, hostedWorker, type HostedEnv, type HostedExports } from '../apps/hosted';
+import { appOrigin, callHostedTool, devHostLabel, draftWorker, hostedWorker, storeName, type HostedEnv, type HostedExports } from '../apps/hosted';
 import { BUILDING_APP, BUILDING_GUIDE, BUILDING_LABEL, BUILDING_TOOLS } from '../apps/buildingTools';
-import { createDraft, deleteDraft, deleteDraftFile, draftCode, getDraft, listDrafts, readDraftFile, writeDraftFile, type AppDraftDTO } from './services/appDrafts';
+import { createDraft, deleteDraft, deleteDraftFile, draftByDevHost, draftCode, getDraft, listDrafts, readDraftFile, writeDraftFile, type AppDraftDTO } from './services/appDrafts';
 
 /** A user-app change's outcome for the Worker's routes: the value, or the ApiError's status, code and message. */
 async function answered<T>(fn: () => Promise<T>): Promise<DirectoryAnswer<T>> {
@@ -1063,8 +1063,13 @@ export class Org extends DurableObject<OrgEnv> {
     return answered(() => withDb(this.db, () => deleteDraftFile(name, author, path)));
   }
 
-  async deleteAppDraft(name: string, author: string): Promise<DirectoryAnswer<void>> {
-    return answered(() => withDb(this.db, () => deleteDraft(name, author)));
+  async deleteAppDraft(name: string, author: string, organizationId?: string): Promise<DirectoryAnswer<void>> {
+    const done = await answered(() => withDb(this.db, () => deleteDraft(name, author)));
+    // Its dev install's data goes with it (§9.3).
+    if (done.ok && organizationId && this.env.APP_STORE) {
+      await this.env.APP_STORE.get(this.env.APP_STORE.idFromName(storeName({ org: organizationId, app: name, dev: author }))).clear().catch((err: Error) => console.error(`[apps] clear ${name}: ${err.message}`));
+    }
+    return done;
   }
 
   /**
@@ -1090,6 +1095,50 @@ export class Org extends DurableObject<OrgEnv> {
     } catch (err) {
       return { ok: false, error: `the draft could not run: ${(err as Error).message}`.slice(0, 500) };
     }
+  }
+
+  /** The draft preview's address with a one-use door key (§9.6): its author's alone. */
+  async draftPreview(p: { organizationId: string; name: string; author: string; userId: string; displayName: string }): Promise<DirectoryAnswer<{ url: string }>> {
+    return answered(async () => {
+      if (!this.env.APPS_DOMAIN) throw new ApiError(503, 'no_apps_domain', 'this server does not serve app screens');
+      const draft = await withDb(this.db, () => draftCode(p.name, p.author));
+      if (!draft.manifest.ui) throw new ApiError(400, 'no_screen', 'this draft has no screen ("ui": { "hosted": true } in its manifest)');
+      const { token } = mintUserAppToken(draft.secret, { app: p.name, workspaceId: p.organizationId, userId: p.userId, accountId: p.author, displayName: p.displayName, isAgent: false });
+      const url = new URL(`${this.env.APPS_SCHEME ?? 'https'}://${devHostLabel(draft.devHost, p.organizationId)}.${this.env.APPS_DOMAIN}/`);
+      url.searchParams.set('flow_token', token);
+      return { url: url.toString() };
+    });
+  }
+
+  /** A draft preview opened with its door key: its author only, the key used once; back comes the session cookie. */
+  async openDraftSession(p: { organizationId: string; devHost: string; token: string }): Promise<{ cookie: string; maxAge: number } | null> {
+    const draft = await withDb(this.db, async () => {
+      const d = await draftByDevHost(p.devHost);
+      return d ? { ...d, code: await draftCode(d.name, d.author).catch(() => null) } : null;
+    });
+    if (!draft?.code) return null;
+    const key = verifyUserAppToken(draft.code.secret, p.token);
+    if (!key || key.app !== draft.name || key.workspaceId !== p.organizationId || key.accountId !== draft.author) return null;
+    if (this.usedKeys.has(key.jti)) return null;
+    this.usedKeys.set(key.jti, key.exp);
+    const exp = Math.floor(Date.now() / 1000) + APP_SESSION_SECONDS;
+    return { cookie: signAppSession(draft.code.secret, { accountId: key.accountId, userId: key.userId, displayName: key.displayName, isAgent: false, exp }), maxAge: APP_SESSION_SECONDS };
+  }
+
+  /**
+   * A draft preview's request (§9.6): the session checked, its author still a member; back come the viewer with a ticket,
+   * and the draft's files, to serve its screen and run its isolate.
+   */
+  async draftForPreview(p: { organizationId: string; devHost: string; cookie: string }): Promise<{ name: string; author: string; manifest: UserAppManifest; files: Record<string, Uint8Array>; key: string; viewer: AppSession & { ticket: string } } | null> {
+    const found = await withDb(this.db, async () => {
+      const d = await draftByDevHost(p.devHost);
+      return d ? { ...d, code: await draftCode(d.name, d.author).catch(() => null) } : null;
+    });
+    if (!found?.code) return null;
+    const s = verifyAppSession(found.code.secret, p.cookie);
+    if (!s || s.accountId !== found.author || !this.userOfAccount(found.author)) return null;
+    const ticket = signAppTicket(found.code.secret, { app: found.name, org: p.organizationId, accountId: s.accountId, userId: s.userId, via: null, invokedBy: null });
+    return { name: found.name, author: found.author, manifest: found.code.manifest, files: found.code.files, key: found.code.key, viewer: { ...s, ticket } };
   }
 
   /** Publishes a draft as a hosted version (§9.6): its files to R2 and a version an owner or admin installs. */

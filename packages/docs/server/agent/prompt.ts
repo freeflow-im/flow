@@ -218,6 +218,10 @@ export function renderContext(ctx: AgentContext): string {
   if (ctx.page === 'home' && ctx.headless) {
     return `<app_context>\nNo page is open: this turn was started by an automation or an email, not by the user in the app, and what you write is delivered for you. ${HEADLESS_TOOLS_TEXT}\n</app_context>`;
   }
+  if (ctx.page === 'home' && ctx.building && typeof ctx.building.app === 'string') {
+    const b = ctx.building;
+    return `<app_context>\nThe user is on FreeFlow's Build app page, working on their draft of the app ${JSON.stringify(b.app)}${b.label ? ` (${JSON.stringify(String(b.label).slice(0, 40))})` : ''}${b.file ? `, with the file ${JSON.stringify(String(b.file).slice(0, 200))} open` : ''}. "This app" and "this file" mean those. Build it with the apps__ tools on that draft (apps__guide first if you have not read it): read a file before you change it, write whole files, then apps__check_draft and apps__try_tool. The page shows the draft's files and its screen as you change them. Publish only when the user asks.\n</app_context>`;
+  }
   if (ctx.page === 'home') {
     return '<app_context>\nThe user is on the home page (their list of spreadsheets, presentations and documents). Nothing is open.\n</app_context>';
   }

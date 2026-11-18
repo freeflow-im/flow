@@ -17,8 +17,10 @@ export { useSuiteAssistant, type ChatItem } from './suiteChat';
  * picked in the panel's header. It starts with `prefer` when the person may use such an agent (Admin passes `admin`: the
  * admin agent, agents.md §1.4), else with their own assistant.
  */
-export function SuiteAssistant({ organizationId, page, prefer }: {
+export function SuiteAssistant({ organizationId, page, prefer, context }: {
   organizationId: string | null;
+  /** What the page shows, sent with each turn (the Build app page's draft and file, user-apps.md §9.6). */
+  context?: Record<string, unknown>;
   /** Whose suggested prompts it offers (Admin → Prompts). */
   page: PromptPage;
   /** The agent to start with, by role, when there is one. */
@@ -35,17 +37,17 @@ export function SuiteAssistant({ organizationId, page, prefer }: {
     ?? agents?.find((a) => a.self) ?? null;
   return (
     <AssistantDock state={dock} label={chosen?.displayName} avatarUrl={chosen?.avatarUrl ?? null}>
-      <SuiteAssistantPanel organizationId={organizationId} page={page} agents={agents ?? []} chosen={chosen} onPick={setPicked} />
+      <SuiteAssistantPanel organizationId={organizationId} page={page} agents={agents ?? []} chosen={chosen} onPick={setPicked} context={context} />
     </AssistantDock>
   );
 }
 
-function SuiteAssistantPanel({ organizationId, page, agents, chosen, onPick }: { organizationId: string | null; page: PromptPage; agents: UsableAgent[]; chosen: UsableAgent | null; onPick: (id: string) => void }) {
+function SuiteAssistantPanel({ organizationId, page, agents, chosen, onPick, context }: { organizationId: string | null; page: PromptPage; agents: UsableAgent[]; chosen: UsableAgent | null; onPick: (id: string) => void; context?: Record<string, unknown> }) {
   const name = chosen?.displayName ?? 'Assistant';
   const avatarUrl = chosen?.avatarUrl ?? null;
   // The person's own assistant goes by no id (the routes' default); any other agent by its own.
   const agentId = chosen && !chosen.self ? chosen.id : null;
-  const chat = useSuiteAssistant(organizationId, agentId);
+  const chat = useSuiteAssistant(organizationId, agentId, context);
   const suggestions = useSuggestedPrompts(organizationId, page);
   const [draft, setDraft] = useState('');
   const list = useRef<HTMLDivElement>(null);

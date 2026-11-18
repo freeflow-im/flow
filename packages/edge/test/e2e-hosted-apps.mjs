@@ -268,6 +268,11 @@ r = await api(U.token, 'POST', `/v1/workspaces/${A}/apps/drafts`, { name: 'shop'
 t('a member starts a draft from the starter project', r.s === 201 && r.j.draft?.problems?.length === 0 && 'server.js' in (r.j.draft?.files ?? {}), JSON.stringify(r.j).slice(0, 200));
 r = await api(U.token, 'POST', `/v1/workspaces/${A}/apps/drafts/shop/try`, { tool: 'add_item', input: { text: 'bread' } });
 t('Uma tries its tool in her dev install', r.j.ok && r.j.result?.id === 1, JSON.stringify(r.j));
+await api(U.token, 'DELETE', `/v1/workspaces/${A}/apps/drafts/shop`);
+await api(U.token, 'POST', `/v1/workspaces/${A}/apps/drafts`, { name: 'shop', label: 'Shopping' });
+r = await api(U.token, 'POST', `/v1/workspaces/${A}/apps/drafts/shop/try`, { tool: 'list_items', input: {} });
+t("deleting a draft deletes its dev install's data", r.j.ok && r.j.result.length === 0, JSON.stringify(r.j));
+r = await api(U.token, 'POST', `/v1/workspaces/${A}/apps/drafts/shop/try`, { tool: 'add_item', input: { text: 'bread' } });
 r = await api(U.token, 'POST', `/v1/workspaces/${A}/apps/drafts/shop/try`, { tool: 'list_items', input: {} });
 t('and its data is there', r.j.ok && r.j.result?.length === 1 && r.j.result[0].text === 'bread', JSON.stringify(r.j));
 r = await api(O.token, 'GET', `/v1/workspaces/${A}/apps/drafts/shop`);
@@ -330,6 +335,28 @@ r = await call(BLD, A, 'apps__publish_draft', { app: 'polls' });
 t('and publishes it, told an owner or admin installs it', r.j.ok && r.j.result.name === 'polls' && /owner or admin/.test(r.j.result.next), JSON.stringify(r.j));
 r = await api(BLD, 'POST', `/v1/workspaces/${A}/apps`, { name: 'polls', version: r.j.result?.version, grants: { members: true, accounts: [] } });
 t('Builder cannot install it itself', r.s === 403, r.s);
+
+// --- A draft's preview (step 9) --------------------------------------------------------------------------------------
+r = await api(U.token, 'POST', `/v1/workspaces/${A}/apps/drafts/shop/preview`, {});
+const prevUrl = r.j.url ?? '';
+t("the draft's preview is on a dev host of its own", r.s === 200 && /^http:\/\/dev-[0-9a-f]{10}--[0-9a-f]{32}\./.test(prevUrl), prevUrl.slice(0, 90));
+let pv = await raw(prevUrl);
+const prevCookie = (pv.h['set-cookie']?.[0] ?? '').split(';')[0];
+t('its author opens it', pv.s === 302 && prevCookie.startsWith('ff_app_session='), pv.s);
+const prevHome = `${new URL(prevUrl).origin}/`;
+pv = await raw(prevHome, prevCookie);
+t("and sees the draft's screen", pv.s === 200 && pv.body.includes('<h1>Shopping</h1>'), pv.s + ' ' + pv.body.slice(0, 60));
+pv = await raw(prevHome + 'api/items', prevCookie);
+t('its routes run in the dev install, as the author', pv.s === 200 && JSON.parse(pv.body).viewer === 'Uma', pv.s + ' ' + pv.body.slice(0, 100));
+await api(U.token, 'PUT', `/v1/workspaces/${A}/apps/drafts/shop/file`, { path: 'ui/index.html', text: '<h1>Changed</h1>' });
+pv = await raw(prevHome, prevCookie);
+t('an edit shows on the next load', pv.body.includes('Changed'), pv.body.slice(0, 60));
+r = await api(O.token, 'POST', `/v1/workspaces/${A}/apps/drafts/shop/preview`, {});
+t("Olga's own draft of shop has a preview of its own, not Uma's", r.s === 200 && new URL(r.j.url).host !== new URL(prevUrl).host, r.j.url?.slice(0, 60));
+pv = await raw(r.j.url.replace(new URL(r.j.url).host, new URL(prevUrl).host));
+t("and her door key does not open Uma's", pv.s === 401, pv.s);
+pv = await raw(prevHome, cookie);
+t("nor in with another app's session", pv.s === 401, pv.s);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

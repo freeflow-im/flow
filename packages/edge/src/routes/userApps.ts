@@ -263,7 +263,7 @@ userAppRoutes.get('/v1/workspaces/:id/apps/drafts/:name', async (c) => {
 
 userAppRoutes.delete('/v1/workspaces/:id/apps/drafts/:name', async (c) => {
   const m = await builderOf(c);
-  unwrap(await orgStub(c, m.organizationId).deleteAppDraft(c.req.param('name'), m.account.id));
+  unwrap(await orgStub(c, m.organizationId).deleteAppDraft(c.req.param('name'), m.account.id, m.organizationId));
   return c.json({ ok: true });
 });
 
@@ -293,6 +293,13 @@ userAppRoutes.post('/v1/workspaces/:id/apps/drafts/:name/try', async (c) => {
   return c.json(await orgStub(c, m.organizationId).tryAppDraftTool({
     organizationId: m.organizationId, name: c.req.param('name'), author: m.account.id, userId: m.userId, displayName: m.displayName, role: m.account.role, tool: t.tool, input: t.input,
   }));
+});
+
+/** The draft's preview address with a one-use door key (§9.6), for the Build app page's frame. */
+userAppRoutes.post('/v1/workspaces/:id/apps/drafts/:name/preview', async (c) => {
+  const m = await builderOf(c);
+  c.header('Cache-Control', 'no-store');
+  return c.json(unwrap(await orgStub(c, m.organizationId).draftPreview({ organizationId: m.organizationId, name: c.req.param('name'), author: m.account.id, userId: m.userId, displayName: m.displayName })));
 });
 
 /** Publishes a draft as a version an owner or admin installs (§9.6). */
