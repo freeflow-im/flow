@@ -77,7 +77,7 @@ export function WeekAgenda({ start, occurrences, calendars, onOpen }: { start: D
   useLayoutEffect(() => {
     const ol = list.current, row = todayRow.current;
     if (!ol || !row || moved.current) return;
-    ol.scrollTop = row.offsetTop - ol.offsetTop;
+    ol.scrollTop = row.offsetTop; // the list is the rows' offsetParent (relative)
   }, [startKey, shown.length]);
   const byPerson = () => {
     moved.current = true;
