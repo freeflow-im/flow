@@ -42,6 +42,8 @@ export function GoogleButton(props: {
   showDivider: boolean;
   /** Google's own button's width in px (at most 400); 288 fits the old card. */
   width?: number;
+  /** Where the "or" line goes when `showDivider`: above the button (default) or below it (Google first). */
+  dividerBelow?: boolean;
 }) {
   if (inMcpDocsApp()) return <McpDocsGoogleButton showDivider={props.showDivider} />;
   return isDesktop() ? <DesktopGoogleButton {...props} /> : <BrowserGoogleButton {...props} />;
@@ -140,10 +142,12 @@ function BrowserGoogleButton({
   onSignedIn,
   showDivider,
   width = 288,
+  dividerBelow = false,
 }: {
   onSignedIn: (r: GoogleAuthResponse) => void;
   showDivider: boolean;
   width?: number;
+  dividerBelow?: boolean;
 }) {
   const { api } = useBoundApi();
   const slot = useRef<HTMLDivElement | null>(null);
@@ -200,17 +204,19 @@ function BrowserGoogleButton({
   }, [clientId, onSignedIn, width]);
 
   if (!clientId) return null;
+  const divider = (
+    <div className="my-3 flex items-center gap-2 text-xs text-faint">
+      <span className="h-px flex-1 bg-hairline2" />
+      or
+      <span className="h-px flex-1 bg-hairline2" />
+    </div>
+  );
   return (
     <div data-testid="auth-google">
-      {showDivider && (
-        <div className="my-3 flex items-center gap-2 text-xs text-faint">
-          <span className="h-px flex-1 bg-hairline2" />
-          or
-          <span className="h-px flex-1 bg-hairline2" />
-        </div>
-      )}
+      {showDivider && !dividerBelow && divider}
       <div ref={slot} className="mb-2 flex justify-center" />
       {error && <p className="mt-2 text-center text-sm text-red-600">{error}</p>}
+      {showDivider && dividerBelow && divider}
     </div>
   );
 }
@@ -601,10 +607,10 @@ export default function AuthScreen({
         <Heading title="Create your account">
           <p className={ledeCls}>We’ll email you a code to confirm it’s you. Any email works, personal or work.</p>
         </Heading>
+        <GoogleButton onSignedIn={onSignedIn} showDivider dividerBelow width={400} />
         {emailField(true)}
         <ErrorLine error={error} />
         <button data-testid="auth-submit" className={primaryCls} disabled={busy || !email.trim()}>Continue with email</button>
-        <GoogleButton onSignedIn={onSignedIn} showDivider width={400} />
         <p className="m-0 text-sm text-[#475467]">
           {invited ? 'Joining a team? Use the email your invite was sent to. ' : ''}Already have an account?{' '}
           <button type="button" className={linkCls} onClick={() => nav('signin')} data-testid="auth-to-login">Log in</button>
