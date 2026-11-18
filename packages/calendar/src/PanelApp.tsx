@@ -53,8 +53,14 @@ export function panelTitle(view: PanelView, date: Date, today = new Date()): str
   return `${format(start, 'MMM d, yyyy')} – ${format(last, 'MMM d, yyyy')}`;
 }
 
+/** Where the panel's day opens: an hour before now, so the now line and what is next are in sight. */
+export function scrollTimeAt(now: Date): string {
+  return `${String(Math.max(0, now.getHours() - 1)).padStart(2, '0')}:00:00`;
+}
+
 export function PanelApp() {
   const [date, setDate] = useState(() => new Date());
+  const [scrollTime] = useState(() => scrollTimeAt(new Date()));
   const [view, setViewState] = useState<PanelView>(readView);
   const setView = (v: PanelView) => {
     setViewState(v);
@@ -143,6 +149,7 @@ export function PanelApp() {
             occurrences={occurrences}
             calendars={allCals}
             weekStartsOn={0}
+            scrollTime={scrollTime}
             selecting={false}
             onSelect={() => {}}
             onOpen={show}
