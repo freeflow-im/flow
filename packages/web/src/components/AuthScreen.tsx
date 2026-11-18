@@ -340,6 +340,14 @@ export default function AuthScreen({
     setMode(m);
   };
 
+  // The address follows the screen on /login and /signup: Log in and Create an account each have their own.
+  useEffect(() => {
+    const path = window.location.pathname;
+    if (path !== '/login' && path !== '/signup') return;
+    const want = mode === 'register' || mode === 'code' || mode === 'password' ? '/signup' : mode === 'signin' ? '/login' : path;
+    if (want !== path) window.history.replaceState(null, '', want);
+  }, [mode]);
+
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
     setError(null);

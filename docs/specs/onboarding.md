@@ -9,7 +9,7 @@ Status: built 2026-11-17 (branch `onboarding/workspace-setup`). Design: the "Fre
    people joining from the left, agents (hosted and connected over MCP) from the right. "Set up your workspace" goes to
    sign-up; "Sign in" to Chat's sign-in. A signed-in visitor, or any `/` address with a query (sign-in links, `?next=`,
    `?signup=`), goes to `/chat` as before.
-1b. **Log in or create an account** (Chat's sign-in screen, restyled to the "Sign up or log in" design: a blue panel
+1b. **Log in or create an account** at `/login` and `/signup` (Chat's sign-in screen, restyled to the "Sign up or log in" design: a blue panel
    saying what FreeFlow is, the form beside it). Log in with email and password is the main action; beside it "Email me a
    code instead", Google, and "Create an account". Creating one is an email (any, personal or work), a 6-digit code mailed
    to it, then "Your name" and a password (12+ characters, a number or symbol, not the email). One code route serves both:

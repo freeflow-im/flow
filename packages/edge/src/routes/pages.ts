@@ -27,7 +27,7 @@ async function signedIn(c: C): Promise<boolean> {
   return directory(c, 'authenticate', token).then(() => true, () => false);
 }
 
-const toSignIn = (c: C) => c.redirect(`/?next=${encodeURIComponent(new URL(c.req.url).pathname + new URL(c.req.url).search)}`);
+const toSignIn = (c: C) => c.redirect(`/login?next=${encodeURIComponent(new URL(c.req.url).pathname + new URL(c.req.url).search)}`);
 
 /** One manifest page: a file under it falls through to the built files (`passFiles`), a stranger goes to sign in (`signIn`). */
 const servePage = (p: AppPage) => async (c: C) => {
@@ -56,8 +56,22 @@ pageRoutes.get('/', async (c) => {
     const welcome = await c.env.ASSETS.fetch(new URL('/home/welcome.html', c.req.url));
     if (welcome.ok) return new Response(welcome.body, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' } });
   }
-  return c.redirect(`/chat${url.search}`);
+  // An emailed sign-up, sign-in, reset or setup link, or a sign-in on its way back somewhere (`next`): the sign-in page.
+  const auth = ['signup', 'signin', 'reset', 'setup', 'next', 'register'].some((k) => url.searchParams.has(k));
+  return c.redirect(`${auth ? '/login' : '/chat'}${url.search}`);
 });
+// The sign-in pages (onboarding.md §1), Chat's page by their own addresses. Someone signed in with nothing to redeem goes
+// on: to `next`, else Home.
+const signInPage = async (c: C) => {
+  const url = new URL(c.req.url);
+  if (!['signup', 'signin', 'reset', 'setup'].some((k) => url.searchParams.has(k)) && (await signedIn(c))) {
+    const next = url.searchParams.get('next');
+    return c.redirect(next && /^\/(?!\/)/.test(next) ? next : '/home/');
+  }
+  return page(c, 'index.html');
+};
+pageRoutes.get('/login', signInPage);
+pageRoutes.get('/signup', signInPage);
 pageRoutes.get('/p/*', moved((p) => `/docs${p}`));
 pageRoutes.get('/workspace', moved(() => '/docs'));
 pageRoutes.get('/workspace/*', moved((p) => `/docs${p.slice('/workspace'.length)}`));

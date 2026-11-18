@@ -6,6 +6,7 @@
 - `[server]` Schedules take `weekdays@HH:MM`, used by the ready-made Daily Briefing.
 - `[web]` Admin › Domains' domain card moved to `@flow/suite-bar/domain-setup`, shared with setup's Domain step.
 - `[server]` `[web]` Email codes (`/v1/auth/code`, `/code/verify`): one 6-digit code logs in an account or starts a sign-up; Chat's sign-in screen restyled to the new design (password login first).
+- `[server]` `[web]` The sign-in screen lives at `/login` and `/signup`; sign-in redirects and emailed links go there, and `/chat` signed out shows `/login`.
 - `[web]` Chat sends a person with no workspace to setup instead of the chooser; `connectPrompt` moved to `@flow/shared/assistant`.
 
 ## Feature
