@@ -97,3 +97,31 @@ export function verifyAppSession(secret: Buffer, cookie: string, now: Date = new
   try { s = JSON.parse(json.toString('utf8')) as AppSession; } catch { return null; }
   return typeof s.exp === 'number' && s.exp * 1000 > now.getTime() && typeof s.accountId === 'string' ? s : null;
 }
+
+/**
+ * A hosted app's ticket for one caller (§6.3): who called it, for a short while. The host hands one with each tool call
+ * and each screen request; the app hands it back to SUITE to act as that caller. It cannot make one up: it is signed
+ * with the install's secret, which the app never holds.
+ */
+export interface AppTicket { app: string; org: string; accountId: string; userId: string; via: string | null; invokedBy: string | null; exp: number }
+
+/** How long a ticket lasts: one request's work, with room for a slow one. */
+export const APP_TICKET_SECONDS = 120;
+
+export function signAppTicket(secret: Buffer, t: Omit<AppTicket, 'exp'>, now: Date = new Date()): string {
+  const json = Buffer.from(JSON.stringify({ ...t, exp: Math.floor(now.getTime() / 1000) + APP_TICKET_SECONDS }), 'utf8');
+  return `${json.toString('base64url')}.${createHmac('sha256', secret).update(Buffer.concat([Buffer.from('ticket:'), json])).digest('base64url')}`;
+}
+
+export function verifyAppTicket(secret: Buffer, ticket: string, now: Date = new Date()): AppTicket | null {
+  if (typeof ticket !== 'string') return null;
+  const dot = ticket.indexOf('.');
+  if (dot <= 0) return null;
+  const json = Buffer.from(ticket.slice(0, dot), 'base64url');
+  const given = Buffer.from(ticket.slice(dot + 1), 'base64url');
+  const expected = createHmac('sha256', secret).update(Buffer.concat([Buffer.from('ticket:'), json])).digest();
+  if (!json.length || given.length !== expected.length || !timingSafeEqual(given, expected)) return null;
+  let t: AppTicket;
+  try { t = JSON.parse(json.toString('utf8')) as AppTicket; } catch { return null; }
+  return typeof t.exp === 'number' && t.exp * 1000 > now.getTime() && typeof t.accountId === 'string' ? t : null;
+}

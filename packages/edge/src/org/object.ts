@@ -39,7 +39,7 @@ import {
   removeApp, rotateAppSecret, setAgentsOn, setAppGrants, updateApp, recordUpload, listUploads, installedCode,
   type AppCallerContext, type AppGrants, type AppHolder, type AppSource, type AppToolAnswer, type AppUpload, type OfferedAppTool,
 } from './services/userApps';
-import { APP_SESSION_SECONDS, mintUserAppToken, signAppSession, verifyAppSession, verifyBody, verifyUserAppToken, type AppSession } from './lib/appSigning';
+import { APP_SESSION_SECONDS, mintUserAppToken, signAppSession, signAppTicket, verifyAppSession, verifyAppTicket, verifyBody, verifyUserAppToken, type AppSession, type AppTicket } from './lib/appSigning';
 import { appOrigin, callHostedTool, hostedWorker, type HostedEnv, type HostedExports } from '../apps/hosted';
 
 /** A user-app change's outcome for the Worker's routes: the value, or the ApiError's status, code and message. */
@@ -51,7 +51,7 @@ async function answered<T>(fn: () => Promise<T>): Promise<DirectoryAnswer<T>> {
     throw e;
   }
 }
-import { isHosted, parseAppToolName, type InstalledAppDTO, type UserAppManifest } from '@flow/shared';
+import { isHosted, parseAppToolName, type AppUse, type InstalledAppDTO, type UserAppManifest } from '@flow/shared';
 
 /** Where the organization's suggested prompts are kept, in the object's own storage beside its database. */
 const ASSISTANT_PROMPTS_KEY = 'assistant-prompts';
@@ -1093,7 +1093,9 @@ export class Org extends DurableObject<OrgEnv> {
       const code = await withDb(this.db, () => installedCode(parsed.app));
       if (!code) return { ok: false, error: `${found.app.manifest.label} has no installed version to run` };
       const worker = await hostedWorker(this.env, this.ctx.exports as unknown as HostedExports, p.organizationId, code);
-      return await callHostedTool(worker, parsed.tool, p.input, caller);
+      // The app acts as this caller in the suite only with this ticket (§6.3).
+      const ticket = signAppTicket(found.app.secret, { app: parsed.app, org: p.organizationId, accountId: p.holder.accountId, userId: p.userId, via: p.holder.via ?? null, invokedBy: p.invokedBy ?? null });
+      return await callHostedTool(worker, parsed.tool, p.input, { ...caller, ticket });
     } catch (err) {
       console.error(`[apps] ${p.toolName}: ${(err as Error).message}`);
       return { ok: false, error: `${found.app.manifest.label} could not run: ${(err as Error).message}`.slice(0, 500) };
@@ -1125,13 +1127,48 @@ export class Org extends DurableObject<OrgEnv> {
    * Who is looking at a hosted app's screen, from its session cookie: checked on every request, so a person removed from
    * the organization, or whose scopes were taken away, loses the screen at once (§6.2). Null when they may not.
    */
-  async checkHostedAppSession(p: { name: string; cookie: string }): Promise<(AppSession & { scopes: string[] }) | null> {
+  async checkHostedAppSession(p: { organizationId: string; name: string; cookie: string }): Promise<(AppSession & { scopes: string[]; ticket: string }) | null> {
     const app = await withDb(this.db, () => appForUse(p.name));
     if (!app || !isHosted(app.manifest)) return null;
     const s = verifyAppSession(app.secret, p.cookie);
     if (!s) return null;
     const scopes = await this.viewerHolds(p.name, s.accountId);
-    return scopes ? { ...s, scopes } : null;
+    if (!scopes) return null;
+    const ticket = signAppTicket(app.secret, { app: p.name, org: p.organizationId, accountId: s.accountId, userId: s.userId, via: null, invokedBy: null });
+    return { ...s, scopes, ticket };
+  }
+
+  /**
+   * A hosted app asks to use the suite as a caller (§6.3, AppSuite): the ticket must be this install's and fresh, the use
+   * declared in the installed manifest, and the caller still a member here. Back comes who to act as, with what Docs
+   * needs to read as them; any refusal comes back as the reason.
+   */
+  async appSuiteCaller(p: { organizationId: string; name: string; ticket: string; use: AppUse }): Promise<{ ok: true; ticket: AppTicket; docs: { userId: string; email: string | null; token: null; ip: string; accountId: string; channelIds: string[] } } | { ok: false; error: string }> {
+    const app = await withDb(this.db, () => appForUse(p.name));
+    if (!app || !isHosted(app.manifest)) return { ok: false, error: 'no such hosted app here' };
+    if (!(app.manifest.uses ?? []).includes(p.use)) return { ok: false, error: `this app does not declare "${p.use}" in its manifest's uses` };
+    const t = verifyAppTicket(app.secret, p.ticket);
+    if (!t || t.app !== p.name || t.org !== p.organizationId) return { ok: false, error: 'the ticket is not valid: use the one from this request' };
+    const userId = this.userOfAccount(t.accountId);
+    if (!userId) return { ok: false, error: 'the caller is not a member here any more' };
+    const email = (this.ctx.storage.sql.exec('SELECT email FROM users WHERE id = ?', userId).toArray()[0]?.email as string | undefined) ?? null;
+    return { ok: true, ticket: t, docs: { userId, email, token: null, ip: '', accountId: t.accountId, channelIds: this.channelIdsOf(userId) } };
+  }
+
+  /** A hosted app posts in Chat as its caller (§6.3, `chat:write`): Chat's own checks apply, as for the caller's own post. */
+  async postAsAppCaller(p: { organizationId: string; name: string; ticket: string; channelId: string; text: string }): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
+    const who = await this.appSuiteCaller({ organizationId: p.organizationId, name: p.name, ticket: p.ticket, use: 'chat:write' });
+    if (!who.ok) return who;
+    const { sendMessage } = await import('./services/messages');
+    const stamp: Stamp = { depth: 0, ...(who.ticket.via ? { via: who.ticket.via } : {}), ...(who.ticket.invokedBy ? { invokedBy: who.ticket.invokedBy } : {}) };
+    try {
+      const msg = await this.scoped(() => sendMessage(p.channelId, who.docs.userId, `app:${p.name}:${crypto.randomUUID()}`, p.text, undefined, undefined, undefined, { expandMentions: true }), stamp);
+      await this.logging;
+      await this.armAlarm();
+      return { ok: true, id: msg.id };
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
   }
 
   /** The scopes of the app an account holds here as a viewer (no agent `via`), or null for none. */

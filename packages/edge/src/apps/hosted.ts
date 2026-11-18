@@ -25,6 +25,7 @@ export interface HostedEnv {
   APP_STORE?: DurableObjectNamespace<AppStore>;
   EVENTS?: DurableObjectNamespace<import('../events/object').Events>;
   ORG?: DurableObjectNamespace<import('../org/object').Org>;
+  DOCS?: DurableObjectNamespace<import('../docs/object').Docs>;
   /** The apps domain the screens are served on (§6.1): `flowtoo.org`; `flowtoo.localhost:<port>` in local development. */
   APPS_DOMAIN?: string;
   /** `http` in local development; https otherwise. */
@@ -97,11 +98,40 @@ export class AppDb extends WorkerEntrypoint<HostedEnv, AppProps> {
   }
 }
 
-/** The app's `env.SUITE`: what of the suite the app may use. Publishing its own events, checked against its manifest. */
+/** Docs' read paths an app may ask for, as its caller (`docs:read`): a file's text or meta, a document, sheet or deck. */
+const DOCS_READ = /^\/api\/(files\/[A-Za-z0-9_-]{1,80}\/(text|meta)|(docs|sheets|decks|markdown)\/[A-Za-z0-9_-]{1,80})(\?[A-Za-z0-9=&_-]{0,200})?$/;
+
+/**
+ * The app's `env.SUITE`: what of the suite the app may use (§6.3). Its events, checked against its manifest; and as a
+ * caller, with the ticket the host gave it for that caller's request, each use it declared in `uses`: never more than the
+ * caller may do, and no token that could be taken elsewhere.
+ */
 export class AppSuite extends WorkerEntrypoint<HostedEnv, AppProps> {
+  private org() {
+    return this.env.ORG!.get(this.env.ORG!.idFromName(this.ctx.props.org));
+  }
+
+  /** `docs:read`: a Docs read path (DOCS_READ) as the caller: what the caller may read, nothing else. */
+  async readDocs(ticket: string, path: string): Promise<unknown> {
+    if (!DOCS_READ.test(String(path))) throw new Error('readDocs reads /api/files/<id>/text, /api/files/<id>/meta, /api/docs/<id>, /api/sheets/<id>, /api/decks/<id> or /api/markdown/<id>');
+    const who = await this.org().appSuiteCaller({ organizationId: this.ctx.props.org, name: this.ctx.props.app, ticket, use: 'docs:read' });
+    if (!who.ok) throw new Error(who.error);
+    if (!this.env.DOCS) throw new Error('Docs is not here');
+    const res = await this.env.DOCS.get(this.env.DOCS.idFromName(this.ctx.props.org)).handle(new Request(`https://suite.invalid${path}`), who.docs as never, this.ctx.props.org);
+    const body = await res.json().catch(() => null);
+    if (!res.ok) throw new Error((body as { error?: string } | null)?.error ?? `Docs answered ${res.status}`);
+    return body;
+  }
+
+  /** `chat:write`: a message in a channel, posted as the caller, where the caller may post. */
+  async postMessage(ticket: string, channelId: string, text: string): Promise<{ id: string }> {
+    const r = await this.org().postAsAppCaller({ organizationId: this.ctx.props.org, name: this.ctx.props.app, ticket, channelId: String(channelId), text: String(text).slice(0, 40_000) });
+    if (!r.ok) throw new Error(r.error);
+    return { id: r.id };
+  }
+
   async publish(type: string, data?: unknown, ref?: { kind: string; id: string }, about?: string[]): Promise<{ id: string }> {
-    const org = this.env.ORG!.get(this.env.ORG!.idFromName(this.ctx.props.org));
-    const r = await org.publishHostedAppEvent({ organizationId: this.ctx.props.org, name: this.ctx.props.app, event: { type, data, ref, about } });
+    const r = await this.org().publishHostedAppEvent({ organizationId: this.ctx.props.org, name: this.ctx.props.app, event: { type, data, ref, about } });
     if (!r.ok) throw new Error(r.error);
     return { id: r.id };
   }

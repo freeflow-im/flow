@@ -287,6 +287,11 @@ own access (§9.3). Two ways:
 - **As itself.** For work with no caller (an event it reacts to, a timer), the app has its own principal, which holds
   grants and never a delegation, the same rule as a shared agent (A§1). It sees only what was shared with it.
 
+*As built in phase 2 (2026-11-17):* no token reaches the app. With each tool call and each screen request the host
+hands the app a **ticket**: the caller, signed with the install's secret, good for two minutes. The app hands it back to
+its `SUITE` binding (`readDocs`, `postMessage`), which checks the ticket, that the manifest declares the use, and then
+acts as the caller through the suite's own checks. "As itself" is not built yet: it waits for an app's own principal.
+
 ### 6.4 The SDK
 
 `@freeflow/app-sdk`, published from this repository the way the bridge is:

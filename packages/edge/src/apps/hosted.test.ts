@@ -2,7 +2,7 @@
 import { randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { appHostLabel, appOrigin, parseAppHost } from './hosted';
-import { mintUserAppToken, signAppSession, verifyAppSession, verifyUserAppToken } from '../org/lib/appSigning';
+import { mintUserAppToken, signAppSession, signAppTicket, verifyAppSession, verifyAppTicket, verifyUserAppToken } from '../org/lib/appSigning';
 
 const ORG = '01a1ebd3-be55-7b8d-9021-9e61067a68a6';
 
@@ -42,5 +42,23 @@ describe('door keys and sessions', () => {
     expect(verifyAppSession(randomBytes(32), cookie)).toBeNull();
     expect(verifyAppSession(secret, cookie, new Date((exp + 1) * 1000))).toBeNull();
     expect(verifyAppSession(secret, mintUserAppToken(secret, who).token)).toBeNull();
+  });
+});
+
+describe('tickets (§6.3)', () => {
+  const secret = randomBytes(32);
+  const who = { app: 'notes', org: ORG, accountId: 'a1', userId: 'u1', via: null, invokedBy: null };
+
+  it('name the caller for two minutes, with the install\'s secret only', () => {
+    const ticket = signAppTicket(secret, who);
+    expect(verifyAppTicket(secret, ticket)).toMatchObject({ accountId: 'a1', app: 'notes' });
+    expect(verifyAppTicket(randomBytes(32), ticket)).toBeNull();
+    expect(verifyAppTicket(secret, ticket, new Date(Date.now() + 3 * 60_000))).toBeNull();
+  });
+
+  it('cannot stand in for a session, or a session for one', () => {
+    const exp = Math.floor(Date.now() / 1000) + 60;
+    expect(verifyAppTicket(secret, signAppSession(secret, { accountId: 'a1', userId: 'u1', displayName: 'A', isAgent: false, exp }))).toBeNull();
+    expect(verifyAppSession(secret, signAppTicket(secret, who))).toBeNull();
   });
 });

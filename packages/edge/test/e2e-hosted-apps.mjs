@@ -136,5 +136,56 @@ await api(O.token, 'PUT', `/v1/workspaces/${A}/apps/notes/grants`, { members: fa
 s1 = await raw(home, cookie);
 t('taking the scopes away closes the screen at once', s1.s === 401, s1.s);
 
+// --- The suite for the app, as its caller (step 4) --------------------------------------------------------------------
+const U = await signup(`uma-${tag}@example.com`, 'Uma');
+r = await api(O.token, 'POST', `/v1/workspaces/${A}/invites`, { email: `uma-${tag}@example.com` });
+await api(U.token, 'POST', '/v1/invites/accept', { token: (r.j.inviteUrl ?? '').split('/').pop() });
+await api(O.token, 'PUT', `/v1/workspaces/${A}/apps/notes/grants`, { members: true, accounts: [] });
+r = await api(O.token, 'GET', `/v1/workspaces/${A}/channels`);
+const general = (r.j.channels ?? r.j ?? []).find?.((c) => c.name === 'general')?.id;
+r = await api(O.token, 'POST', `/api/sheets?workspace=${A}`, { title: `Olga's private sheet ${tag}` });
+const sheet = r.j.sheet?.id;
+t('a channel and a private sheet of Olga\'s', general && sheet, JSON.stringify([general, sheet]));
+const suiteServer = `
+export default {
+  async fetch(request, env) {
+    const { tool, input, caller } = await request.json();
+    try {
+      if (tool === 'announce') return Response.json({ result: await env.SUITE.postMessage(input.forged ? 'x.y' : caller.ticket, input.channelId, input.text) });
+      if (tool === 'read_doc') return Response.json({ result: await env.SUITE.readDocs(caller.ticket, input.path) });
+    } catch (e) { return Response.json({ error: e.message }); }
+    return Response.json({ error: 'no tool ' + tool });
+  },
+};`;
+const suiteManifest = (uses) => ({
+  name: 'notes', label: 'Notes', server: { hosted: true }, ...(uses ? { uses } : {}),
+  scopes: [{ id: 'notes:read', label: 'Read notes', read: true }],
+  tools: [
+    { name: 'announce', description: 'Posts in Chat.', input: { type: 'object', properties: { channelId: { type: 'string' }, text: { type: 'string' }, forged: { type: 'boolean' } } }, scopes: ['notes:read'] },
+    { name: 'read_doc', description: 'Reads a Docs file.', input: { type: 'object', properties: { path: { type: 'string' } } }, scopes: ['notes:read'] },
+  ],
+});
+const installSuite = async (uses) => {
+  const up = await api(O.token, 'POST', `/v1/workspaces/${A}/apps/versions`, { manifest: suiteManifest(uses), files: { 'server.js': b64(suiteServer) } });
+  return api(O.token, 'PUT', `/v1/workspaces/${A}/apps/notes`, { version: up.j.version, grants: { members: true, accounts: [] } });
+};
+r = await installSuite(null);
+r = await call(O.token, A, 'notes__announce', { channelId: general, text: 'hello' });
+t('without chat:write in its uses, the app cannot post', r.j.ok === false && /does not declare "chat:write"/.test(r.j.error), JSON.stringify(r.j));
+r = await installSuite(['chat:write', 'docs:read']);
+r = await call(O.token, A, 'notes__announce', { channelId: general, text: `hello from the app ${tag}` });
+t('with it, the app posts as its caller', r.j.ok && r.j.result?.id, JSON.stringify(r.j));
+r = await api(O.token, 'GET', `/v1/channels/${general}/messages?limit=5`);
+const posted = (r.j.messages ?? r.j ?? []).find?.((m) => (m.body ?? m.text ?? '').includes(`hello from the app ${tag}`));
+t('the message is in the channel, from Olga', !!posted, JSON.stringify(r.j).slice(0, 160));
+r = await call(O.token, A, 'notes__announce', { channelId: general, text: 'x', forged: true });
+t('a made-up ticket is refused', r.j.ok === false && /ticket is not valid/.test(r.j.error), JSON.stringify(r.j));
+r = await call(O.token, A, 'notes__read_doc', { path: `/api/sheets/${sheet}` });
+t('the app reads Olga\'s sheet for Olga', r.j.ok && JSON.stringify(r.j.result).includes(sheet), JSON.stringify(r.j).slice(0, 160));
+r = await call(U.token, A, 'notes__read_doc', { path: `/api/sheets/${sheet}` });
+t('but not for Uma, who cannot see it', r.j.ok === false, JSON.stringify(r.j).slice(0, 160));
+r = await call(O.token, A, 'notes__read_doc', { path: '/api/settings' });
+t('and only Docs\' read paths', r.j.ok === false && /readDocs reads/.test(r.j.error), JSON.stringify(r.j));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

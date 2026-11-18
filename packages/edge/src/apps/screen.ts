@@ -65,7 +65,7 @@ export async function serveAppScreen(req: Request, env: HostedEnv, exports: Host
   }
 
   const cookie = cookieOf(req, APP_SESSION_COOKIE);
-  const viewer = cookie ? await org.checkHostedAppSession({ name: at.app, cookie }) : null;
+  const viewer = cookie ? await org.checkHostedAppSession({ organizationId: at.org, name: at.app, cookie }) : null;
   if (!viewer) return refuse();
   if (url.pathname.startsWith(HOST_PATH)) return new Response('not found', { status: 404 });
 
@@ -84,7 +84,7 @@ export async function serveAppScreen(req: Request, env: HostedEnv, exports: Host
   const headers = new Headers(req.headers);
   for (const k of [...headers.keys()]) if (k.startsWith('x-freeflow-')) headers.delete(k);
   headers.delete('cookie');
-  headers.set('x-freeflow-viewer', JSON.stringify({ organizationId: at.org, accountId: viewer.accountId, userId: viewer.userId, displayName: viewer.displayName, isAgent: viewer.isAgent, scopes: viewer.scopes }));
+  headers.set('x-freeflow-viewer', JSON.stringify({ organizationId: at.org, accountId: viewer.accountId, userId: viewer.userId, displayName: viewer.displayName, isAgent: viewer.isAgent, scopes: viewer.scopes, ticket: viewer.ticket }));
   const worker = await hostedWorker(env, exports, at.org, code);
   try {
     return await worker.getEntrypoint().fetch(new Request(url.toString(), { method: req.method, headers, body: req.body, redirect: 'manual' }));
