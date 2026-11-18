@@ -15,6 +15,20 @@ const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const POLL_MS = 3000;
 const go = (search: string) => window.location.assign(`/apps/${search}`);
 
+/**
+ * Opens an installed hosted app in the builder (§9.6): the person's draft of it, made from the installed version when
+ * they have none yet. Back comes an error to show, or nothing when the page is on its way.
+ */
+export async function editApp(org: string, name: string, label: string): Promise<string | null> {
+  try {
+    await appsApi.createDraft(org, name, label, true);
+  } catch (e) {
+    if (!/already have a draft/.test(errorText(e))) return errorText(e);
+  }
+  go(`?build=${name}`);
+  return null;
+}
+
 /** The apps home: what is installed, what the person is building, and New app. */
 export function AppsHome({ org, apps, admin }: { org: string; apps: InstalledApp[]; admin: boolean }) {
   const drafts = useQuery({ queryKey: ['drafts', org], queryFn: () => appsApi.drafts(org) });
@@ -23,13 +37,15 @@ export function AppsHome({ org, apps, admin }: { org: string; apps: InstalledApp
   const [error, setError] = useState<string | null>(null);
   const create = async (n: string, l: string, fromInstalled = false) => {
     setError(null);
+    if (fromInstalled) {
+      setError(await editApp(org, n, l));
+      return;
+    }
     try {
-      await appsApi.createDraft(org, n, l, fromInstalled);
+      await appsApi.createDraft(org, n, l);
       go(`?build=${n}`);
     } catch (e) {
-      // Already a draft of it: open that one.
-      if (fromInstalled && /already have a draft/.test(errorText(e))) go(`?build=${n}`);
-      else setError(errorText(e));
+      setError(errorText(e));
     }
   };
   const shown = apps.filter((a) => a.usable);

@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { RotateCw } from 'lucide-react';
 import { appNameOf, appsApi, buildingOf, type InstalledApp } from './api';
-import { AppsHome, Builder } from './components/Build';
+import { AppsHome, Builder, editApp } from './components/Build';
 import { AppsSuiteBar } from './components/AppsSuiteBar';
 import { Notice } from './components/Notice';
 import { useOrganizations } from './hooks/organization';
@@ -60,7 +60,13 @@ function Screen({ org, app }: { org: string; app: InstalledApp }) {
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-8 items-center gap-2 border-b border-hairline bg-panel px-3 text-xs text-muted" data-testid="app-notice">
         <span className="truncate">{app.icon ? `${app.icon} ` : ''}{app.label} {app.serverOrigin ? `runs on its author’s server, ${app.serverOrigin}.` : 'is run by FreeFlow.'}</span>
-        <button type="button" className="ml-auto flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-hover" onClick={() => setLoad((n) => n + 1)} title="Reload the app">
+        {/* A hosted app opens in the builder: the person's draft of it (§9.6). */}
+        {app.hosted && (
+          <button type="button" className="ml-auto rounded px-1.5 py-0.5 font-semibold text-primary hover:bg-hover" onClick={() => void editApp(org, app.name, app.label).then((e) => e && setError(e))} data-testid="edit-app">
+            Edit
+          </button>
+        )}
+        <button type="button" className={`${app.hosted ? '' : 'ml-auto '}flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-hover`} onClick={() => setLoad((n) => n + 1)} title="Reload the app">
           <RotateCw className="size-3.5" /> Reload
         </button>
       </div>
