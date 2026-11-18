@@ -8,6 +8,11 @@
 //   POST   /v1/workspaces/:id/apps/versions         upload a hosted app's version: manifest and files (members, agents)
 //   GET    /v1/workspaces/:id/apps/versions         the hosted versions uploaded here
 //   POST   /v1/workspaces/:id/apps/:name/restore    go back before a hosted app's latest update: its data and its version
+//   GET    /v1/workspaces/:id/apps/drafts           the caller's drafts (§9.6); POST makes one (starter, or the installed app)
+//   GET    /v1/workspaces/:id/apps/drafts/:name     one draft: its files and problems; DELETE drops it
+//   GET|PUT|DELETE …/drafts/:name/file             one file's text (?path=), written, or deleted
+//   POST   …/drafts/:name/try                       one of its tools in its dev install, as its author (§9.3)
+//   POST   …/drafts/:name/publish                   the draft as a version an owner or admin installs
 //   GET    /v1/workspaces/:id/apps/:name/export     a hosted app's data here, as JSON
 //   PUT    /v1/workspaces/:id/apps/:name            install the manifest again (an update), with who gets its scopes
 //   PUT    /v1/workspaces/:id/apps/:name/grants     change who holds its scopes
@@ -221,6 +226,79 @@ userAppRoutes.get('/v1/workspaces/:id/apps/:name/export', async (c) => {
   c.header('Cache-Control', 'no-store');
   c.header('Content-Disposition', `attachment; filename="${name}-data.json"`);
   return c.json({ app: name, organizationId: m.organizationId, exportedAt: new Date().toISOString(), tables });
+});
+
+// ---- drafts (§9.6): apps being built in the suite, each its author's ----
+
+const DraftBody = z.object({ name: z.string().min(2).max(20), label: z.string().trim().min(1).max(40).optional(), fromInstalled: z.boolean().optional() });
+const FileBody = z.object({ path: z.string().min(1).max(200), text: z.string().max(1_500_000) });
+const TryBody = z.object({ tool: z.string().min(1).max(32), input: z.record(z.unknown()).default({}) });
+
+/** Who builds: any member or agent but a guest (Scott, 2026-11-17); the draft is the caller's account's. */
+async function builderOf(c: C): Promise<Member> {
+  const m = await memberOf(c);
+  const guest = guestRefusal(m.account, 'building apps');
+  if (guest) throw guest;
+  return m;
+}
+
+userAppRoutes.get('/v1/workspaces/:id/apps/drafts', async (c) => {
+  const m = await builderOf(c);
+  c.header('Cache-Control', 'no-store');
+  return c.json({ drafts: await orgStub(c, m.organizationId).listAppDrafts(m.account.id) });
+});
+
+userAppRoutes.post('/v1/workspaces/:id/apps/drafts', async (c) => {
+  const m = await builderOf(c);
+  const b = await body(c, DraftBody);
+  const draft = unwrap(await orgStub(c, m.organizationId).createAppDraft({ name: b.name, label: b.label ?? b.name, author: m.account.id, ...(b.fromInstalled ? { fromInstalled: true } : {}) }));
+  return c.json({ draft }, 201);
+});
+
+userAppRoutes.get('/v1/workspaces/:id/apps/drafts/:name', async (c) => {
+  const m = await builderOf(c);
+  c.header('Cache-Control', 'no-store');
+  return c.json({ draft: unwrap(await orgStub(c, m.organizationId).getAppDraft(c.req.param('name'), m.account.id)) });
+});
+
+userAppRoutes.delete('/v1/workspaces/:id/apps/drafts/:name', async (c) => {
+  const m = await builderOf(c);
+  unwrap(await orgStub(c, m.organizationId).deleteAppDraft(c.req.param('name'), m.account.id));
+  return c.json({ ok: true });
+});
+
+/** One file's text: `?path=server.js`. */
+userAppRoutes.get('/v1/workspaces/:id/apps/drafts/:name/file', async (c) => {
+  const m = await builderOf(c);
+  const path = c.req.query('path') ?? '';
+  c.header('Cache-Control', 'no-store');
+  return c.json({ path, text: unwrap(await orgStub(c, m.organizationId).readAppDraftFile(c.req.param('name'), m.account.id, path)) });
+});
+
+userAppRoutes.put('/v1/workspaces/:id/apps/drafts/:name/file', async (c) => {
+  const m = await builderOf(c);
+  const f = await body(c, FileBody);
+  return c.json({ draft: unwrap(await orgStub(c, m.organizationId).writeAppDraftFile(c.req.param('name'), m.account.id, f.path, f.text)) });
+});
+
+userAppRoutes.delete('/v1/workspaces/:id/apps/drafts/:name/file', async (c) => {
+  const m = await builderOf(c);
+  return c.json({ draft: unwrap(await orgStub(c, m.organizationId).deleteAppDraftFile(c.req.param('name'), m.account.id, c.req.query('path') ?? '')) });
+});
+
+/** Tries a draft's tool in its dev install, as its author (§9.3). */
+userAppRoutes.post('/v1/workspaces/:id/apps/drafts/:name/try', async (c) => {
+  const m = await builderOf(c);
+  const t = await body(c, TryBody);
+  return c.json(await orgStub(c, m.organizationId).tryAppDraftTool({
+    organizationId: m.organizationId, name: c.req.param('name'), author: m.account.id, userId: m.userId, displayName: m.displayName, role: m.account.role, tool: t.tool, input: t.input,
+  }));
+});
+
+/** Publishes a draft as a version an owner or admin installs (§9.6). */
+userAppRoutes.post('/v1/workspaces/:id/apps/drafts/:name/publish', async (c) => {
+  const m = await builderOf(c);
+  return c.json(unwrap(await orgStub(c, m.organizationId).publishAppDraft({ organizationId: m.organizationId, name: c.req.param('name'), author: m.account.id })), 201);
 });
 
 /** The hosted versions uploaded here, newest first (owners and admins). */

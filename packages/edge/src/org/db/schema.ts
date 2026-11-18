@@ -914,3 +914,36 @@ export const userAppRestorePoints = sqliteTable(
   },
   (t) => [primaryKey({ columns: [t.name, t.at] })],
 );
+
+/**
+ * Apps being built in the suite (docs/specs/user-apps.md §9.6): one draft per app and author, its own signing secret
+ * (its tickets, §6.3) and its preview's host id (`dev_host`, §6.1). Times are epoch milliseconds.
+ */
+export const userAppDrafts = sqliteTable(
+  'user_app_drafts',
+  {
+    name: text('name').notNull(),
+    author: text('author').notNull(),
+    secret: bytea('secret').notNull(),
+    secretNonce: bytea('secret_nonce').notNull(),
+    encKeyId: text('enc_key_id').notNull(),
+    encScheme: integer('enc_scheme').notNull(),
+    devHost: text('dev_host').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.name, t.author] }), uniqueIndex('user_app_drafts_dev_host').on(t.devHost)],
+);
+
+/** A draft's files, by their path in a version (`freeflow-app.json`, `server.js`, `migrations/…`, `ui/…`). */
+export const userAppDraftFiles = sqliteTable(
+  'user_app_draft_files',
+  {
+    name: text('name').notNull(),
+    author: text('author').notNull(),
+    path: text('path').notNull(),
+    body: bytea('body').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.name, t.author, t.path] })],
+);

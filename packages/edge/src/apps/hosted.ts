@@ -33,13 +33,15 @@ export interface HostedEnv {
   APPS_SCHEME?: string;
 }
 
-/** The props every app entrypoint is bound with. */
-export interface AppProps { org: string; app: string }
+/** The props every app entrypoint is bound with. `dev`: a draft's dev install (§9.3), by its author's account. */
+export interface AppProps { org: string; app: string; dev?: string }
 
 /** One SQL statement and its parameters. */
 export interface Statement { sql: string; params?: unknown[] }
 
-const storeOf = (env: HostedEnv, p: AppProps) => env.APP_STORE!.get(env.APP_STORE!.idFromName(`${p.app}:${p.org}`));
+/** The store's name: the install's, or a dev install's own (§9.3), apart from it. */
+export const storeName = (p: AppProps): string => (p.dev ? `${p.app}:${p.org}:dev:${p.dev}` : `${p.app}:${p.org}`);
+const storeOf = (env: HostedEnv, p: AppProps) => env.APP_STORE!.get(env.APP_STORE!.idFromName(storeName(p)));
 
 /**
  * One installed app's data in one organization (§8): its SQLite, its migrations applied once each in order, and the
@@ -123,7 +125,7 @@ export class AppSuite extends WorkerEntrypoint<HostedEnv, AppProps> {
   /** `docs:read`: a Docs read path (DOCS_READ) as the caller: what the caller may read, nothing else. */
   async readDocs(ticket: string, path: string): Promise<unknown> {
     if (!DOCS_READ.test(String(path))) throw new Error('readDocs reads /api/files/<id>/text, /api/files/<id>/meta, /api/docs/<id>, /api/sheets/<id>, /api/decks/<id> or /api/markdown/<id>');
-    const who = await this.org().appSuiteCaller({ organizationId: this.ctx.props.org, name: this.ctx.props.app, ticket, use: 'docs:read' });
+    const who = await this.org().appSuiteCaller({ organizationId: this.ctx.props.org, name: this.ctx.props.app, ticket, use: 'docs:read', ...(this.ctx.props.dev ? { dev: this.ctx.props.dev } : {}) });
     if (!who.ok) throw new Error(who.error);
     if (!this.env.DOCS) throw new Error('Docs is not here');
     const res = await this.env.DOCS.get(this.env.DOCS.idFromName(this.ctx.props.org)).handle(new Request(`https://suite.invalid${path}`), who.docs as never, this.ctx.props.org);
@@ -134,13 +136,13 @@ export class AppSuite extends WorkerEntrypoint<HostedEnv, AppProps> {
 
   /** `chat:write`: a message in a channel, posted as the caller, where the caller may post. */
   async postMessage(ticket: string, channelId: string, text: string): Promise<{ id: string }> {
-    const r = await this.org().postAsAppCaller({ organizationId: this.ctx.props.org, name: this.ctx.props.app, ticket, channelId: String(channelId), text: String(text).slice(0, 40_000) });
+    const r = await this.org().postAsAppCaller({ organizationId: this.ctx.props.org, name: this.ctx.props.app, ticket, channelId: String(channelId), text: String(text).slice(0, 40_000), ...(this.ctx.props.dev ? { dev: this.ctx.props.dev } : {}) });
     if (!r.ok) throw new Error(r.error);
     return { id: r.id };
   }
 
   async publish(type: string, data?: unknown, ref?: { kind: string; id: string }, about?: string[]): Promise<{ id: string }> {
-    const r = await this.org().publishHostedAppEvent({ organizationId: this.ctx.props.org, name: this.ctx.props.app, event: { type, data, ref, about } });
+    const r = await this.org().publishHostedAppEvent({ organizationId: this.ctx.props.org, name: this.ctx.props.app, event: { type, data, ref, about }, ...(this.ctx.props.dev ? { dev: this.ctx.props.dev } : {}) });
     if (!r.ok) throw new Error(r.error);
     return { id: r.id };
   }
@@ -170,28 +172,56 @@ async function textOf(env: HostedEnv, key: string): Promise<string> {
   return decoder.decode(await o.arrayBuffer());
 }
 
-/**
- * The isolate of an app's installed version in an organization, loaded once per (organization, app, version, upload) and
- * kept by the Loader while warm. Its migrations are applied before it is handed out.
- */
-export async function hostedWorker(env: HostedEnv, exports: HostedExports, org: string, code: HostedCode): Promise<WorkerStub> {
-  if (!env.LOADER || !env.BLOBS || !env.APP_STORE) throw new Error('this server cannot run hosted apps (no LOADER, BLOBS or APP_STORE)');
-  const app = code.manifest.name;
-  const migrations = Object.keys(code.files).filter((p) => p.startsWith('migrations/'));
+/** What an isolate runs: its files (by path, and how to read one), its store's props, the hosts it may reach, a cache key. */
+export interface RunSource { key: string; files: Record<string, number>; read(path: string): Promise<string>; props: AppProps; egress: string[] }
+
+/** An isolate for a source, kept by the Loader while warm under its key. Its migrations are applied before it is handed out. */
+export async function sourceWorker(env: HostedEnv, exports: HostedExports, src: RunSource): Promise<WorkerStub> {
+  if (!env.LOADER || !env.APP_STORE) throw new Error('this server cannot run hosted apps (no LOADER or APP_STORE)');
+  const migrations = Object.keys(src.files).filter((p) => p.startsWith('migrations/'));
   if (migrations.length) {
-    const sql = await Promise.all(migrations.map(async (p) => ({ name: p.slice('migrations/'.length), sql: await textOf(env, code.prefix + p) })));
-    await storeOf(env, { org, app }).migrate(sql);
+    const sql = await Promise.all(migrations.map(async (p) => ({ name: p.slice('migrations/'.length), sql: await src.read(p) })));
+    await storeOf(env, src.props).migrate(sql);
   }
-  return env.LOADER.get(`${org}:${app}:${code.version}:${code.prefix}`, async () => ({
+  return env.LOADER.get(src.key, async () => ({
     compatibilityDate: '2026-10-01',
     compatibilityFlags: ['nodejs_compat'],
     mainModule: 'server.js',
     // The built-in SDK (§9.6) beside the app's code: `import { defineApp } from 'freeflow'`.
-    modules: { 'server.js': await textOf(env, `${code.prefix}server.js`), [SDK_MODULE]: { js: FREEFLOW_SDK_SOURCE } },
-    env: { DB: exports.AppDb({ props: { org, app } }), SUITE: exports.AppSuite({ props: { org, app } }) },
-    globalOutbound: exports.AppEgress({ props: { allow: code.manifest.egress ?? [] } }),
+    modules: { 'server.js': await src.read('server.js'), [SDK_MODULE]: { js: FREEFLOW_SDK_SOURCE } },
+    env: { DB: exports.AppDb({ props: src.props }), SUITE: exports.AppSuite({ props: src.props }) },
+    globalOutbound: exports.AppEgress({ props: { allow: src.egress } }),
     limits: { cpuMs: HOSTED_CPU_MS, subRequests: HOSTED_SUBREQUESTS },
   }));
+}
+
+/** The isolate of an app's installed version in an organization, its files in R2. */
+export async function hostedWorker(env: HostedEnv, exports: HostedExports, org: string, code: HostedCode): Promise<WorkerStub> {
+  if (!env.BLOBS) throw new Error('this server cannot run hosted apps (no BLOBS)');
+  const app = code.manifest.name;
+  return sourceWorker(env, exports, {
+    key: `${org}:${app}:${code.version}:${code.prefix}`, files: code.files, read: (p) => textOf(env, code.prefix + p),
+    props: { org, app }, egress: code.manifest.egress ?? [],
+  });
+}
+
+/**
+ * A draft's dev install (§9.3): its files from the draft, its own store apart from the install's, and no internet until an
+ * admin approves a version. Only its author calls it, so every ticket it gets is the author's.
+ */
+export async function draftWorker(env: HostedEnv, exports: HostedExports, org: string, author: string, draft: { manifest: UserAppManifest; files: Record<string, Uint8Array>; key: string }): Promise<WorkerStub> {
+  const app = draft.manifest.name;
+  return sourceWorker(env, exports, {
+    key: `dev:${org}:${app}:${author}:${draft.key}`,
+    files: Object.fromEntries(Object.entries(draft.files).map(([p, b]) => [p, b.byteLength])),
+    read: async (p) => {
+      const b = draft.files[p];
+      if (!b) throw new Error(`the draft has no ${p}`);
+      return decoder.decode(b);
+    },
+    props: { org, app, dev: author },
+    egress: [],
+  });
 }
 
 /** A tool call to a hosted app (§5): the caller context and the input go in; `{ result }` or `{ error }` comes back. */

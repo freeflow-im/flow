@@ -40,7 +40,8 @@ import {
   type AppCallerContext, type AppGrants, type AppHolder, type AppSource, type AppToolAnswer, type AppUpload, type OfferedAppTool,
 } from './services/userApps';
 import { APP_SESSION_SECONDS, mintUserAppToken, signAppSession, signAppTicket, verifyAppSession, verifyAppTicket, verifyBody, verifyUserAppToken, type AppSession, type AppTicket } from './lib/appSigning';
-import { appOrigin, callHostedTool, hostedWorker, type HostedEnv, type HostedExports } from '../apps/hosted';
+import { appOrigin, callHostedTool, draftWorker, hostedWorker, type HostedEnv, type HostedExports } from '../apps/hosted';
+import { createDraft, deleteDraft, deleteDraftFile, draftCode, getDraft, listDrafts, readDraftFile, writeDraftFile, type AppDraftDTO } from './services/appDrafts';
 
 /** A user-app change's outcome for the Worker's routes: the value, or the ApiError's status, code and message. */
 async function answered<T>(fn: () => Promise<T>): Promise<DirectoryAnswer<T>> {
@@ -1022,6 +1023,86 @@ export class Org extends DurableObject<OrgEnv> {
     return answered(() => withDb(this.db, () => updateApp(p)));
   }
 
+  // ---- drafts (§9.6): apps being built in the suite, by their author ----
+
+  async listAppDrafts(author: string): Promise<AppDraftDTO[]> {
+    return withDb(this.db, () => listDrafts(author));
+  }
+
+  async getAppDraft(name: string, author: string): Promise<DirectoryAnswer<AppDraftDTO>> {
+    return answered(() => withDb(this.db, () => getDraft(name, author)));
+  }
+
+  /** A new draft: the starter project, or (`fromInstalled`) the installed hosted app's files, to change it. */
+  async createAppDraft(p: { name: string; label: string; author: string; fromInstalled?: boolean }): Promise<DirectoryAnswer<AppDraftDTO>> {
+    return answered(async () => {
+      let files: Record<string, Uint8Array> | undefined;
+      if (p.fromInstalled) {
+        const code = await withDb(this.db, () => installedCode(p.name));
+        if (!code || !this.env.BLOBS) throw new ApiError(404, 'not_found', `"${p.name}" is not an installed hosted app here`);
+        files = { 'freeflow-app.json': new TextEncoder().encode(JSON.stringify(code.manifest, null, 2) + '\n') };
+        for (const path of Object.keys(code.files)) {
+          const o = await this.env.BLOBS.get(code.prefix + path);
+          if (o) files[path] = new Uint8Array(await o.arrayBuffer());
+        }
+      }
+      return withDb(this.db, () => createDraft({ name: p.name, label: p.label, author: p.author, ...(files ? { files } : {}) }));
+    });
+  }
+
+  async readAppDraftFile(name: string, author: string, path: string): Promise<DirectoryAnswer<string>> {
+    return answered(() => withDb(this.db, () => readDraftFile(name, author, path)));
+  }
+
+  async writeAppDraftFile(name: string, author: string, path: string, text: string): Promise<DirectoryAnswer<AppDraftDTO>> {
+    return answered(() => withDb(this.db, () => writeDraftFile(name, author, path, text)));
+  }
+
+  async deleteAppDraftFile(name: string, author: string, path: string): Promise<DirectoryAnswer<AppDraftDTO>> {
+    return answered(() => withDb(this.db, () => deleteDraftFile(name, author, path)));
+  }
+
+  async deleteAppDraft(name: string, author: string): Promise<DirectoryAnswer<void>> {
+    return answered(() => withDb(this.db, () => deleteDraft(name, author)));
+  }
+
+  /**
+   * Tries one of a draft's tools in its dev install (§9.3), as its author: its own store, no internet, the author's access
+   * at most. Any other caller is refused: a draft is its author's alone.
+   */
+  async tryAppDraftTool(p: { organizationId: string; name: string; author: string; userId: string; displayName: string; role: string; tool: string; input: unknown }): Promise<AppToolAnswer> {
+    let draft;
+    try {
+      draft = await withDb(this.db, () => draftCode(p.name, p.author));
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
+    if (!draft.manifest.tools.some((t) => t.name === p.tool)) return { ok: false, error: `the draft has no tool ${p.tool}` };
+    const caller = {
+      organizationId: p.organizationId, accountId: p.author, userId: p.userId, displayName: p.displayName, kind: 'person' as const, role: p.role,
+      via: null, invokedBy: null, scopes: draft.manifest.scopes.map((s) => s.id),
+      ticket: signAppTicket(draft.secret, { app: p.name, org: p.organizationId, accountId: p.author, userId: p.userId, via: null, invokedBy: null }),
+    };
+    try {
+      const worker = await draftWorker(this.env, this.ctx.exports as unknown as HostedExports, p.organizationId, p.author, draft);
+      return await callHostedTool(worker, p.tool, p.input, caller);
+    } catch (err) {
+      return { ok: false, error: `the draft could not run: ${(err as Error).message}`.slice(0, 500) };
+    }
+  }
+
+  /** Publishes a draft as a hosted version (§9.6): its files to R2 and a version an owner or admin installs. */
+  async publishAppDraft(p: { organizationId: string; name: string; author: string }): Promise<DirectoryAnswer<{ name: string; version: number }>> {
+    return answered(async () => {
+      const draft = await withDb(this.db, () => draftCode(p.name, p.author));
+      if (!this.env.BLOBS) throw new ApiError(503, 'no_storage', 'this server has no file storage for apps');
+      const prefix = `apps/${p.organizationId}/${p.name}/${crypto.randomUUID()}/`;
+      const files = Object.fromEntries(Object.entries(draft.files).filter(([path]) => path !== 'freeflow-app.json'));
+      await Promise.all(Object.entries(files).map(([path, b]) => this.env.BLOBS!.put(prefix + path, b)));
+      return withDb(this.db, () => recordUpload({ manifest: draft.manifest, files: Object.fromEntries(Object.entries(files).map(([path, b]) => [path, b.byteLength])), prefix, by: p.author }));
+    });
+  }
+
   /** The restore point that undoes a hosted app's latest update (§8), or null. */
   async userAppRestorePoint(name: string): Promise<{ fromVersion: number; toVersion: number; bookmark: string; at: number } | null> {
     return withDb(this.db, () => restorePointOf(name));
@@ -1153,12 +1234,17 @@ export class Org extends DurableObject<OrgEnv> {
    * declared in the installed manifest, and the caller still a member here. Back comes who to act as, with what Docs
    * needs to read as them; any refusal comes back as the reason.
    */
-  async appSuiteCaller(p: { organizationId: string; name: string; ticket: string; use: AppUse }): Promise<{ ok: true; ticket: AppTicket; docs: { userId: string; email: string | null; token: null; ip: string; accountId: string; channelIds: string[] } } | { ok: false; error: string }> {
-    const app = await withDb(this.db, () => appForUse(p.name));
+  async appSuiteCaller(p: { organizationId: string; name: string; ticket: string; use: AppUse; dev?: string }): Promise<{ ok: true; ticket: AppTicket; docs: { userId: string; email: string | null; token: null; ip: string; accountId: string; channelIds: string[] } } | { ok: false; error: string }> {
+    // The installed app's manifest and secret; a dev install's are its draft's (§9.3).
+    const app = p.dev
+      ? await withDb(this.db, () => draftCode(p.name, p.dev!)).then((d) => ({ manifest: d.manifest, secret: d.secret }), () => null)
+      : await withDb(this.db, () => appForUse(p.name));
     if (!app || !isHosted(app.manifest)) return { ok: false, error: 'no such hosted app here' };
     if (!(app.manifest.uses ?? []).includes(p.use)) return { ok: false, error: `this app does not declare "${p.use}" in its manifest's uses` };
     const t = verifyAppTicket(app.secret, p.ticket);
     if (!t || t.app !== p.name || t.org !== p.organizationId) return { ok: false, error: 'the ticket is not valid: use the one from this request' };
+    // A dev install acts only as its author: never with anyone else's access (§9.3).
+    if (p.dev && t.accountId !== p.dev) return { ok: false, error: 'a draft acts only as its author' };
     const userId = this.userOfAccount(t.accountId);
     if (!userId) return { ok: false, error: 'the caller is not a member here any more' };
     const email = (this.ctx.storage.sql.exec('SELECT email FROM users WHERE id = ?', userId).toArray()[0]?.email as string | undefined) ?? null;
@@ -1166,8 +1252,8 @@ export class Org extends DurableObject<OrgEnv> {
   }
 
   /** A hosted app posts in Chat as its caller (§6.3, `chat:write`): Chat's own checks apply, as for the caller's own post. */
-  async postAsAppCaller(p: { organizationId: string; name: string; ticket: string; channelId: string; text: string }): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
-    const who = await this.appSuiteCaller({ organizationId: p.organizationId, name: p.name, ticket: p.ticket, use: 'chat:write' });
+  async postAsAppCaller(p: { organizationId: string; name: string; ticket: string; channelId: string; text: string; dev?: string }): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
+    const who = await this.appSuiteCaller({ organizationId: p.organizationId, name: p.name, ticket: p.ticket, use: 'chat:write', ...(p.dev ? { dev: p.dev } : {}) });
     if (!who.ok) return who;
     const { sendMessage } = await import('./services/messages');
     const stamp: Stamp = { depth: 0, ...(who.ticket.via ? { via: who.ticket.via } : {}), ...(who.ticket.invokedBy ? { invokedBy: who.ticket.invokedBy } : {}) };
@@ -1191,7 +1277,12 @@ export class Org extends DurableObject<OrgEnv> {
   }
 
   /** An event a hosted app published through its SUITE binding (§5.1): the binding names the app, so no signature. */
-  async publishHostedAppEvent(p: { organizationId: string; name: string; event: unknown }): Promise<{ ok: true; id: string } | { ok: false; status: number; error: string }> {
+  async publishHostedAppEvent(p: { organizationId: string; name: string; event: unknown; dev?: string }): Promise<{ ok: true; id: string } | { ok: false; status: number; error: string }> {
+    if (p.dev) {
+      const draft = await withDb(this.db, () => draftCode(p.name, p.dev!)).catch(() => null);
+      if (!draft) return { ok: false, status: 404, error: 'no such draft here' };
+      return this.publishAppEvent(p.organizationId, p.name, draft.manifest, p.event, p.dev);
+    }
     const app = await withDb(this.db, () => appForUse(p.name));
     if (!app || !isHosted(app.manifest)) return { ok: false, status: 404, error: 'no such hosted app here' };
     return this.publishAppEvent(p.organizationId, p.name, app.manifest, p.event);
@@ -1211,7 +1302,7 @@ export class Org extends DurableObject<OrgEnv> {
   }
 
   /** An app's event, checked against its manifest and the limit, published as `app.<name>.<type>` (§5.1). */
-  private async publishAppEvent(organizationId: string, name: string, manifest: UserAppManifest, body: unknown): Promise<{ ok: true; id: string } | { ok: false; status: number; error: string }> {
+  private async publishAppEvent(organizationId: string, name: string, manifest: UserAppManifest, body: unknown, dev?: string): Promise<{ ok: true; id: string } | { ok: false; status: number; error: string }> {
     const p = { organizationId, name };
     const checked = checkAppEvent(manifest, body);
     if (!checked.ok) return { ok: false, status: 400, error: checked.error };
@@ -1225,7 +1316,9 @@ export class Org extends DurableObject<OrgEnv> {
     const e = checked.event;
     const id = crypto.randomUUID();
     await this.env.EVENTS.get(this.env.EVENTS.idFromName(p.organizationId)).publish({
-      id, type: `app.${p.name}.${e.type}`, organizationId: p.organizationId, actor: null, audience: 'org', ts: new Date().toISOString(),
+      // A dev install's events are its author's alone (§9.3), and outside the app's `app.<name>.*` namespace.
+      id, type: dev ? `appdev.${p.name}.${e.type}` : `app.${p.name}.${e.type}`, organizationId: p.organizationId, actor: null,
+      audience: dev ? `account:${dev}` : 'org', ts: new Date().toISOString(),
       data: e.data, ...(e.ref ? { ref: { organizationId: p.organizationId, app: p.name, kind: e.ref.kind, id: e.ref.id } } : {}),
       ...(about.length ? { about } : {}),
     });

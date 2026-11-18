@@ -16,7 +16,7 @@ export const USER_APPS_SCOPE = 'apps:use';
 /** The separator between an app's name and its tool's in the registry (§3.3). */
 export const APP_TOOL_SEPARATOR = '__';
 
-const RESERVED_WORDS = ['dev', 'app', 'apps', 'suite', 'admin', 'system'];
+const RESERVED_WORDS = ['dev', 'app', 'apps', 'suite', 'admin', 'system', 'drafts', 'versions', 'preview', 'export', 'restore', 'publish', 'file', 'try'];
 
 /** Names no user app may take: a few words, every built-in app's name and every built-in scope's prefix (§4). */
 export const RESERVED_APP_NAMES: ReadonlySet<string> = new Set([
