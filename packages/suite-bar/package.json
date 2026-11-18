@@ -12,7 +12,8 @@
     "./side-panel": "./src/SidePanel.tsx",
     "./account-settings": "./src/AccountSettings.tsx",
     "./email-approval": "./src/EmailApproval.tsx",
-    "./domain-setup": "./src/DomainSetup.tsx"
+    "./domain-setup": "./src/DomainSetup.tsx",
+    "./link-accounts": "./src/LinkAccounts.tsx"
   },
   "sideEffects": [
     "*.css"

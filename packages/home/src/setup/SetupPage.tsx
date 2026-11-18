@@ -1,5 +1,5 @@
 // Setup (docs/specs/onboarding.md §1): Home's own page at /home/setup, with no sidebar. A step bar, then one step at a
-// time: the workspace, its own domain (when one was chosen), the person's assistant (their Chief of Staff), Omni, the team
+// time: the workspace, its own domain (when one was chosen), the person's own email and calendar, their assistant (their Chief of Staff), Omni, the team
 // and automations. Each step moved to is saved, so a reload comes back to it; "Finish setup" ends it and opens Home.
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -8,6 +8,7 @@ import { setupApi } from './api';
 import { LAST_STEP, nextStep, previousStep, STEPS, stepsFor, type StepNumber } from './lib';
 import { WorkspaceStep } from './WorkspaceStep';
 import { DomainStep } from './DomainStep';
+import { AccountsStep } from './AccountsStep';
 import { AssistantStep } from './AssistantStep';
 import { OmniStep } from './OmniStep';
 import { TeamStep } from './TeamStep';
@@ -111,11 +112,12 @@ export function SetupPage() {
         {step > 1 && !org && <p className="text-sm text-muted">Loading…</p>}
         {step === 1 && <WorkspaceStep stepOf={label(steps, 1)} onCreated={created} />}
         {step === 2 && org && <DomainStep org={org} stepOf={label(steps, 2)} problem={domainProblem} onDone={() => forward(2)} />}
-        {step === 3 && org && <AssistantStep org={org} stepOf={label(steps, 3)} onDone={() => forward(3)} />}
-        {step === 4 && org && <OmniStep org={org} stepOf={label(steps, 4)} onDone={() => forward(4)} onBack={() => back(4)} />}
-        {step === 5 && org && <TeamStep org={org} stepOf={label(steps, 5)} onDone={() => forward(5)} onBack={() => back(5)} />}
-        {step === 6 && org && (
-          <AutomationsStep org={org} stepOf={label(steps, 6)} firstVisit={(reachedBefore ?? LAST_STEP) < LAST_STEP} onFinish={() => void finish()} onBack={previousStep(steps, 6) ? () => back(6) : null} />
+        {step === 3 && org && <AccountsStep org={org} stepOf={label(steps, 3)} onDone={() => forward(3)} />}
+        {step === 4 && org && <AssistantStep org={org} stepOf={label(steps, 4)} onDone={() => forward(4)} />}
+        {step === 5 && org && <OmniStep org={org} stepOf={label(steps, 5)} onDone={() => forward(5)} onBack={() => back(5)} />}
+        {step === 6 && org && <TeamStep org={org} stepOf={label(steps, 6)} onDone={() => forward(6)} onBack={() => back(6)} />}
+        {step === 7 && org && (
+          <AutomationsStep org={org} stepOf={label(steps, 7)} firstVisit={(reachedBefore ?? LAST_STEP) < LAST_STEP} onFinish={() => void finish()} onBack={previousStep(steps, 7) ? () => back(7) : null} />
         )}
       </main>
     </div>

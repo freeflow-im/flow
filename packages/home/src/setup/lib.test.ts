@@ -6,21 +6,21 @@ import { automationRequest, cleanDomain, nextStep, previousStep, readyMadeBody, 
 import { modelReady } from './api';
 
 describe('setup steps', () => {
-  it('gives owners and admins every step, the Domain step only with a domain of their own, and everyone else two', () => {
-    expect(stepsFor(null)).toEqual([1, 3, 4, 5, 6]);
-    expect(stepsFor('owner', true)).toEqual([1, 2, 3, 4, 5, 6]);
-    expect(stepsFor('admin')).toEqual([1, 3, 4, 5, 6]);
-    expect(stepsFor('member', true)).toEqual([3, 6]);
+  it('gives owners and admins every step, the Domain step only with a domain of their own, and everyone else three', () => {
+    expect(stepsFor(null)).toEqual([1, 3, 4, 5, 6, 7]);
+    expect(stepsFor('owner', true)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(stepsFor('admin')).toEqual([1, 3, 4, 5, 6, 7]);
+    expect(stepsFor('member', true)).toEqual([3, 4, 7]);
   });
 
   it('moves forward and back, never back to making the workspace', () => {
-    expect(nextStep([3, 6], 3)).toBe(6);
-    expect(nextStep([3, 6], 6)).toBeNull();
-    expect(nextStep([1, 2, 3, 4, 5, 6], 2)).toBe(3);
-    expect(previousStep([1, 3, 4, 5, 6], 4)).toBe(3);
-    expect(previousStep([1, 2, 3, 4, 5, 6], 3)).toBe(2);
-    expect(previousStep([1, 3, 4, 5, 6], 3)).toBeNull();
-    expect(previousStep([3, 6], 6)).toBe(3);
+    expect(nextStep([3, 4, 7], 4)).toBe(7);
+    expect(nextStep([3, 4, 7], 7)).toBeNull();
+    expect(nextStep([1, 2, 3, 4, 5, 6, 7], 2)).toBe(3);
+    expect(previousStep([1, 3, 4, 5, 6, 7], 5)).toBe(4);
+    expect(previousStep([1, 2, 3, 4, 5, 6, 7], 3)).toBe(2);
+    expect(previousStep([1, 3, 4, 5, 6, 7], 3)).toBeNull();
+    expect(previousStep([3, 4, 7], 7)).toBe(4);
   });
 });
 

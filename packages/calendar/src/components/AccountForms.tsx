@@ -1,7 +1,8 @@
 // Connecting a calendar account (Google by signing in with Google; iCloud and Fastmail by their presets, any other CalDAV
 // server by its address) and changing one (name, password, server, a Google account's Reconnect, removing it), as Mail's
 // AccountForms do for mail.
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
+import { CalendarAccountForm, type CalendarLinkApi } from '@flow/suite-bar/link-accounts';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { AlertCircle, ExternalLink, Loader2, RefreshCw, Trash2 } from 'lucide-react';
 import { CalendarApiError, GOOGLE_SYNC_SETTINGS, calendarApi, connectGoogle, type CalendarAccount, type CalendarInfo } from '../api';
@@ -9,14 +10,9 @@ import { keys, useAddAccount } from '../hooks/calendar';
 import { cn } from '../lib/utils';
 import type { ConnectKind } from './ConnectCalendar';
 import { Button } from './ui/button';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog';
 import { Input, Label } from './ui/input';
 
-const isEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim());
-const PRESETS: Record<'icloud' | 'fastmail', { name: string; url: string; appPasswordUrl: string; placeholder: string }> = {
-  icloud: { name: 'iCloud', url: 'https://caldav.icloud.com/', appPasswordUrl: 'https://account.apple.com/account/manage', placeholder: 'you@icloud.com' },
-  fastmail: { name: 'Fastmail', url: 'https://caldav.fastmail.com/', appPasswordUrl: 'https://app.fastmail.com/settings/security/apps', placeholder: 'you@fastmail.com' },
-};
 
 /** What to tell the person when the calendar server says no. */
 export function accountErrorText(e: unknown): { title: string; detail: string } {
@@ -55,36 +51,13 @@ function PasswordHint({ name, url }: { name: string | null; url: string | null }
   );
 }
 
-export function AddAccountDialog({ kind: initialKind, defaultName, onClose, onAdded }: { kind: ConnectKind; defaultName?: string; onClose(): void; onAdded(a: CalendarAccount): void }) {
-  const [kind, setKind] = useState<ConnectKind>(initialKind);
-  const [email, setEmail] = useState('');
-  const [displayName, setDisplayName] = useState(defaultName ?? '');
-  const [password, setPassword] = useState('');
-  const [url, setUrl] = useState('');
-  const [username, setUsername] = useState('');
-  const [note, setNote] = useState<string | null>(null);
-  const preset = kind === 'icloud' || kind === 'fastmail' ? PRESETS[kind] : null;
-  const [leaving, setLeaving] = useState<string | null>(null);
-  const signInWithGoogle = async () => {
-    setLeaving('');
-    try {
-      await connectGoogle(isEmail(email) ? email.trim() : undefined);
-    } catch (e) {
-      setLeaving(e instanceof Error ? e.message : String(e));
-    }
-  };
+export function AddAccountDialog({ kind, defaultName, onClose, onAdded }: { kind: ConnectKind; defaultName?: string; onClose(): void; onAdded(a: CalendarAccount): void }) {
+  // The form is the suite's (suite-bar LinkAccounts.tsx), shared with Home's setup; Calendar keeps its lists fresh.
   const add = useAddAccount(onAdded);
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!isEmail(email) || !password) return;
-    setNote(null);
-    if (kind === 'other' && !url.trim()) {
-      // An address with a preset needs no URL (the server knows it); any other needs one.
-      const p = await calendarApi.provider(email.trim()).catch(() => null);
-      if (p && 'google' in p) { setKind('google'); return; }
-      if (!p) { setNote('Enter the server address of your calendar.'); document.getElementById('cal-url')?.focus(); return; }
-    }
-    add.mutate({ email: email.trim(), displayName: displayName.trim(), password, server: preset ? { url: preset.url } : url.trim() ? { url: url.trim(), ...(username.trim() ? { username: username.trim() } : {}) } : undefined });
+  const api: CalendarLinkApi<CalendarAccount> = {
+    provider: (email) => calendarApi.provider(email),
+    add: async (body) => (await add.mutateAsync(body)).account,
+    connectGoogle: (email) => connectGoogle(email),
   };
   return (
     <Dialog open onOpenChange={(o) => !o && !add.isPending && onClose()}>
@@ -93,48 +66,8 @@ export function AddAccountDialog({ kind: initialKind, defaultName, onClose, onAd
           <DialogTitle>Add a calendar account</DialogTitle>
           <DialogDescription>Connect the calendars you already have. Your events stay with your provider.</DialogDescription>
         </DialogHeader>
-        <div role="tablist" aria-label="Provider" className="flex rounded-lg bg-track p-0.5 text-[14px]">
-          {(['icloud', 'fastmail', 'other'] as const).map((k) => (
-            <button key={k} type="button" role="tab" aria-selected={kind === k} onClick={() => setKind(k)} className={cn('flex-1 whitespace-nowrap rounded-md px-2 py-1.5', kind === k ? 'bg-white font-medium shadow-sm' : 'text-muted')}>{k === 'other' ? 'Other CalDAV' : PRESETS[k].name}</button>
-          ))}
-          <button type="button" role="tab" aria-selected={kind === 'google'} onClick={() => setKind('google')} className={cn('flex-1 whitespace-nowrap rounded-md px-2 py-1.5', kind === 'google' ? 'bg-white font-medium shadow-sm' : 'text-muted')}>Google</button>
-        </div>
-        {kind === 'google' ? (
-          <div className="flex flex-col gap-4">
-            <p className="text-[14px] leading-relaxed text-muted">Sign in with Google and allow FreeFlow to see and change your calendars. You come back here when it is done; there is no password to type.</p>
-            {leaving && <p role="alert" className="rounded-lg border border-warn-border bg-warn-bg px-3 py-2 text-[14px]">{leaving}</p>}
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-              <Button type="button" onClick={() => void signInWithGoogle()} disabled={leaving === ''}>{leaving === '' && <Loader2 className="animate-spin" />}Sign in with Google</Button>
-            </DialogFooter>
-          </div>
-        ) : (
-        <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-4">
-          <Field label={kind === 'icloud' ? 'Apple Account email' : 'Email address'} htmlFor="cal-email" hint="Events you create are organized by this address.">
-            <Input id="cal-email" type="email" autoFocus autoComplete="email" placeholder={preset?.placeholder ?? 'you@example.com'} value={email} onChange={(e) => setEmail(e.target.value)} />
-          </Field>
-          {kind === 'other' && (
-            <>
-              <Field label="Server address" htmlFor="cal-url" hint="The CalDAV address: for Nextcloud https://cloud.example.com/remote.php/dav, for others often just the server's name.">
-                <Input id="cal-url" inputMode="url" placeholder="https://dav.example.com" value={url} onChange={(e) => setUrl(e.target.value)} />
-              </Field>
-              <Field label="User name" htmlFor="cal-user">
-                <Input id="cal-user" autoComplete="username" placeholder={email || 'Your email address'} value={username} onChange={(e) => setUsername(e.target.value)} />
-              </Field>
-            </>
-          )}
-          <Field label="Your name" htmlFor="cal-name"><Input id="cal-name" autoComplete="name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Ann Lee" /></Field>
-          <Field label="Password" htmlFor="cal-password" hint={<PasswordHint name={preset?.name ?? null} url={preset?.appPasswordUrl ?? null} />}>
-            <Input id="cal-password" type="password" autoComplete="off" value={password} onChange={(e) => setPassword(e.target.value)} aria-invalid={add.error instanceof CalendarApiError && add.error.code === 'auth_failed'} />
-          </Field>
-          {note && <p role="alert" className="rounded-lg border border-warn-border bg-warn-bg px-3 py-2 text-[14px]">{note}</p>}
-          <ErrorBox error={add.error} />
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={onClose} disabled={add.isPending}>Cancel</Button>
-            <Button type="submit" disabled={!isEmail(email) || !password || add.isPending}>{add.isPending && <Loader2 className="animate-spin" />}{add.isPending ? 'Connecting…' : 'Connect'}</Button>
-          </DialogFooter>
-        </form>
-        )}
+        {/* useAddAccount calls onAdded itself once the account is in. */}
+        <CalendarAccountForm api={api} initialKind={kind} defaultName={defaultName} onAdded={() => undefined} onCancel={onClose} />
       </DialogContent>
     </Dialog>
   );

@@ -1,8 +1,12 @@
 // The calls setup makes (docs/specs/onboarding.md): the platform's /v1 routes and the assistant's /api/agent ones, so
 // Home depends on no other app.
-import type { AccountKind, AgentDefinitionDTO, DomainDTO, InviteResultDTO, SubscriptionDTO, UsableAgentDTO, WorkspaceDTO, WorkspaceInviteDTO, WorkspaceMemberDTO } from '@flow/shared';
+import type { AccountDTO, AccountKind, AgentDefinitionDTO, DomainDTO, InviteResultDTO, SubscriptionDTO, UsableAgentDTO, WorkspaceDTO, WorkspaceInviteDTO, WorkspaceMemberDTO } from '@flow/shared';
 import type { AgentAvatarPreset, AssistantSettings } from '@flow/shared/assistant';
+import type { CalendarProvider, MailProviderPreset, NewCalendarAccount, NewMailAccount } from '@flow/suite-bar/link-accounts';
 import { HomeApiError } from '../api';
+
+/** A linked mail or calendar account, as its app lists it (only what setup shows). */
+export interface LinkedAccount { id: string; email: string; status?: string; kind?: string }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
@@ -36,6 +40,23 @@ export const setupApi = {
   turnOnMail: (org: string, domain: string) => request<unknown>('POST', `${ws(org)}/domains/${enc(domain)}/dkim`),
   makePrimary: (org: string, domain: string) => request<unknown>('PATCH', `${ws(org)}/domains/${enc(domain)}`, { primary: true }),
   removeDomain: (org: string, domain: string) => request<unknown>('DELETE', `${ws(org)}/domains/${enc(domain)}`),
+
+  // Linking the mail and calendars a person already has (the "Your email and calendar" step), as Mail and Calendar do.
+  mailAccounts: async (org: string) => (await request<{ accounts: LinkedAccount[] }>('GET', `/v1/mail/accounts?workspace=${enc(org)}`)).accounts,
+  mailProvider: (org: string, email: string) => request<MailProviderPreset | null>('GET', `/v1/mail/providers?email=${enc(email)}&workspace=${enc(org)}`),
+  addMailAccount: async (org: string, body: NewMailAccount) => (await request<{ account: LinkedAccount }>('POST', `/v1/mail/accounts?workspace=${enc(org)}`, body)).account,
+  calendarAccounts: async (org: string) => (await request<{ accounts: LinkedAccount[] }>('GET', `/v1/calendar/accounts?workspace=${enc(org)}`)).accounts,
+  calendarProvider: (org: string, email: string) => request<CalendarProvider>('GET', `/v1/calendar/providers?email=${enc(email)}&workspace=${enc(org)}`),
+  addCalendarAccount: async (org: string, body: NewCalendarAccount) => (await request<{ account: LinkedAccount }>('POST', `/v1/calendar/accounts?workspace=${enc(org)}`, body)).account,
+  /** Google's consent page for calendars, coming back to setup (it keeps the path; the step is saved). */
+  googleCalendarStart: async (org: string, email?: string) =>
+    (await request<{ url: string }>('GET', `/v1/calendar/google/start?return=${enc(`${window.location.origin}/home/setup`)}${email ? `&email=${enc(email)}` : ''}&workspace=${enc(org)}`)).url,
+  /** The person's own account in the organization: its hosted address, or the linked mailbox they go by. */
+  myAccount: async (org: string) => (await request<{ accounts: AccountDTO[] }>('GET', '/v1/me/accounts')).accounts.find((a) => a.organizationId === org) ?? null,
+  /** Which linked mailbox coworkers see (platform.md §3.2), for a person with no hosted address. */
+  setAddress: (org: string, address: string | null) => request<unknown>('PUT', `${ws(org)}/me/address`, { address }),
+  /** Whether this server has Google sign-in for calendars (its client id). */
+  googleAvailable: async () => !!(await request<{ google?: boolean }>('GET', '/v1/config').catch(() => ({ google: false }))).google,
 
   assistant: async (org: string) => (await request<{ definition: AgentDefinitionDTO }>('GET', `${ws(org)}/assistant/definition`)).definition,
   nameAssistant: async (org: string, name: string) => (await request<{ definition: AgentDefinitionDTO }>('PUT', `${ws(org)}/assistant/definition`, { name })).definition,

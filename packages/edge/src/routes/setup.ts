@@ -31,7 +31,7 @@ interface OrgSetup {
 }
 const orgOf = (c: C, id: string) => c.env.ORG.get(c.env.ORG.idFromName(id)) as unknown as OrgSetup;
 
-const SetupBody = z.object({ step: z.number().int().min(1).max(6).optional(), done: z.literal(true).optional() });
+const SetupBody = z.object({ step: z.number().int().min(1).max(7).optional(), done: z.literal(true).optional() });
 
 setupRoutes.get('/v1/workspaces/:id/setup', async (c) => {
   const { organizationId, userId } = await memberOf(c);

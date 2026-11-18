@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* The suite bar's account-linking forms (LinkAccounts.tsx) are drawn with this app's Tailwind. */
+@source "../../suite-bar/src/LinkAccounts.tsx";
 
 /* The suite's colours (packages/suite-bar/src/suite-bar.css and Docs' folder panel). */
 @theme {

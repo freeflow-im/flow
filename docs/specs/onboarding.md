@@ -16,13 +16,18 @@ Status: built 2026-11-17 (branch `onboarding/workspace-setup`). Design: the "Fre
    `POST /v1/auth/code` mails it and never says whether the address has an account; `POST /v1/auth/code/verify` signs an
    account in, or answers a sign-up token for `register/complete`. A code lasts 10 minutes and 5 tries, one mailed per 30
    seconds. Emailed sign-up and sign-in links, reset and setup links keep working.
-2. **Setup** (`/home/setup`, Home's own page, no sidebar). Five steps (six with an own domain), with a step bar at the top:
+2. **Setup** (`/home/setup`, Home's own page, no sidebar). Six steps (seven with an own domain), with a step bar at the top:
    1. **Workspace** — name and address. The free choice is `<slug>.freeflow.im`; the own-domain choice records the
       domain, which the next step connects. The screen states the 2026-11-15 ruling plainly: agents get addresses at the
       workspace domain; a person links their own mail, or gets an address once an own domain has mail.
    1b. **Domain** — only when an own domain was chosen (owners and admins). The same card as Admin › Domains (the suite
       bar's `DomainCard`): prove ownership, mail records, turn on mail, signing record. "Set this up later" goes on; the
       card stays in Admin › Domains.
+   1c. **Your email and calendar** — everyone (joiners too). Link the mail and calendars one already has, with the same
+      forms as Mail's and Calendar's "Add an account" (moved to the suite bar's `LinkAccounts`): mail by IMAP/SMTP (Gmail,
+      iCloud, Outlook, Yahoo, Fastmail, any server), calendars by Google sign-in, iCloud, Fastmail or any CalDAV server.
+      Where people get no hosted mailbox, the first linked mailbox becomes the address coworkers see, and the person can
+      pick another. "Set this up later" goes on.
    2. **Chief of Staff** — the person's assistant introduces itself in a scripted chat (no model call). The person picks
       a name (chips or typed) and one of the eight picture presets. Saving names the assistant (`nameAssistant`: its
       address and mailbox) and sets its picture.
@@ -34,7 +39,7 @@ Status: built 2026-11-17 (branch `onboarding/workspace-setup`). Design: the "Fre
       write a new one in plain language (§4).
    "Finish setup" marks setup done and opens Home.
 
-A person who joins an existing workspace sees steps 2 and 5 only.
+A person who joins an existing workspace sees their email and calendar, their Chief of Staff and automations.
 
 ## 2. Omni
 

@@ -1,10 +1,10 @@
 // Connecting a mail account (email, then the provider's servers filled in, then name and password; Advanced for the
 // servers themselves) and changing one (name, password, servers, removing it).
 import { useState, type FormEvent, type ReactNode } from 'react';
+import { MailAccountForm, type MailLinkApi } from '@flow/suite-bar/link-accounts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertCircle, ChevronDown, ChevronRight, ExternalLink, Loader2, Trash2 } from 'lucide-react';
 import { MailApiError, mailApi, mailWorkspace, type MailAccount, type ProviderPreset, type Security, type ServerSettings, type TabCategory } from '../api';
-import { isEmail } from '../lib/addresses';
 import { setImagePref, useImagePref } from '../lib/imagePref';
 import { keys } from '../hooks/mail';
 import { useMyAccount } from '../hooks/organization';
@@ -13,7 +13,7 @@ import { TAB_INFO, TAB_ORDER } from '../lib/tabs';
 import { cn } from '../lib/utils';
 import { TAB_ICONS } from './InboxTabs';
 import { Button } from './ui/button';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog';
 import { Input, Label } from './ui/input';
 
 /** What to tell the user when the mail server says no. */
@@ -118,58 +118,18 @@ function PasswordHint({ preset }: { preset: ProviderPreset | null }) {
   );
 }
 
-const guess = (email: string): { imap: ServerSettings; smtp: ServerSettings } => {
-  const domain = email.split('@')[1] ?? '';
-  return { imap: { host: domain ? `imap.${domain}` : '', port: 993, security: 'tls' }, smtp: { host: domain ? `smtp.${domain}` : '', port: 465, security: 'tls' } };
-};
-
 export function AddAccountDialog({ onClose, onAdded, defaultName }: { onClose(): void; onAdded(account: MailAccount): void; defaultName?: string }) {
   const qc = useQueryClient();
-  const [step, setStep] = useState<'email' | 'details'>('email');
-  const [email, setEmail] = useState('');
-  const [displayName, setDisplayName] = useState(defaultName ?? '');
-  const [password, setPassword] = useState('');
-  const [preset, setPreset] = useState<ProviderPreset | null>(null);
-  const [servers, setServers] = useState(guess(''));
-  const [advanced, setAdvanced] = useState(false);
-
-  const lookup = useMutation({
-    mutationFn: () => mailApi.provider(email.trim()),
-    onSuccess: (p) => {
-      setPreset(p);
-      setServers(p ? { imap: p.imap, smtp: p.smtp } : guess(email.trim()));
-      setAdvanced(!p);
-      setStep('details');
-    },
-    // No answer about the provider: the user fills the servers in.
-    onError: () => {
-      setPreset(null);
-      setServers(guess(email.trim()));
-      setAdvanced(true);
-      setStep('details');
-    },
-  });
-  const add = useMutation({
-    mutationFn: () => mailApi.addAccount({ email: email.trim(), displayName: displayName.trim() || email.trim(), password, imap: servers.imap, smtp: servers.smtp }),
-    onSuccess: (account) => {
+  // The form is the suite's (suite-bar LinkAccounts.tsx), shared with Home's setup; Mail keeps its accounts list fresh.
+  const api: MailLinkApi<MailAccount> = {
+    provider: (email) => mailApi.provider(email),
+    add: async (body) => {
+      const account = await mailApi.addAccount(body);
       qc.setQueryData<MailAccount[]>(keys.accounts, (old) => [...(old ?? []).filter((a) => a.id !== account.id), account]);
       void qc.invalidateQueries({ queryKey: keys.accounts });
-      onAdded(account);
+      return account;
     },
-    onError: (e) => {
-      if (e instanceof MailApiError && e.code === 'connect_failed') setAdvanced(true);
-    },
-  });
-
-  const submitEmail = (e: FormEvent) => {
-    e.preventDefault();
-    if (isEmail(email)) lookup.mutate();
   };
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    if (password) add.mutate();
-  };
-
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-md">
@@ -177,54 +137,7 @@ export function AddAccountDialog({ onClose, onAdded, defaultName }: { onClose():
           <DialogTitle>Add a mail account</DialogTitle>
           <DialogDescription>Connect the mail you already have: Gmail, iCloud, Outlook, Yahoo, Fastmail or your company’s mail server.</DialogDescription>
         </DialogHeader>
-        {step === 'email' ? (
-          <form onSubmit={submitEmail} className="flex flex-col gap-4">
-            <Field label="Email address" htmlFor="acct-email">
-              <Input id="acct-email" type="email" autoFocus autoComplete="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
-            </Field>
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={onClose}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={!isEmail(email) || lookup.isPending}>
-                {lookup.isPending && <Loader2 className="animate-spin" />}
-                Next
-              </Button>
-            </DialogFooter>
-          </form>
-        ) : (
-          <form onSubmit={submit} className="flex flex-col gap-4">
-            <div className="flex items-center justify-between rounded-lg bg-panel px-3 py-2 text-[14px]">
-              <span className="min-w-0 truncate">
-                <span className="font-medium">{email}</span>
-                {preset && <span className="text-muted"> · {preset.name}</span>}
-              </span>
-              <button type="button" className="ml-2 shrink-0 text-primary hover:underline" onClick={() => setStep('email')}>
-                Change
-              </button>
-            </div>
-            <Field label="Your name" htmlFor="acct-name" hint="Shown to the people you write to.">
-              <Input id="acct-name" autoComplete="name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Ann Lee" />
-            </Field>
-            <Field label="Password" htmlFor="acct-password" hint={<PasswordHint preset={preset} />}>
-              <Input id="acct-password" type="password" autoFocus autoComplete="off" value={password} onChange={(e) => setPassword(e.target.value)} aria-invalid={add.error instanceof MailApiError && add.error.code === 'auth_failed'} />
-            </Field>
-            <Advanced open={advanced} onToggle={() => setAdvanced(!advanced)}>
-              <ServerFields id="imap" title="Incoming (IMAP)" value={servers.imap} onChange={(imap) => setServers((s) => ({ ...s, imap }))} email={email} />
-              <ServerFields id="smtp" title="Outgoing (SMTP)" value={servers.smtp} onChange={(smtp) => setServers((s) => ({ ...s, smtp }))} email={email} />
-            </Advanced>
-            <ErrorBox error={add.error} />
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={onClose}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={!password || add.isPending || !servers.imap.host || !servers.smtp.host}>
-                {add.isPending && <Loader2 className="animate-spin" />}
-                {add.isPending ? 'Checking…' : 'Connect'}
-              </Button>
-            </DialogFooter>
-          </form>
-        )}
+        <MailAccountForm api={api} defaultName={defaultName} onAdded={onAdded} onCancel={onClose} />
       </DialogContent>
     </Dialog>
   );
