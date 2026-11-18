@@ -187,5 +187,52 @@ t('but not for Uma, who cannot see it', r.j.ok === false, JSON.stringify(r.j).sl
 r = await call(O.token, A, 'notes__read_doc', { path: '/api/settings' });
 t('and only Docs\' read paths', r.j.ok === false && /readDocs reads/.test(r.j.error), JSON.stringify(r.j));
 
+// --- Publishing with the bridge, going back, the export (step 5) ------------------------------------------------------
+const { execFileSync } = await import('node:child_process');
+const os = await import('node:os');
+const pathMod = await import('node:path');
+const bridge = pathMod.resolve(pathMod.dirname(new URL(import.meta.url).pathname), '../../agent-bridge/dist/index.js');
+const folder = fs.mkdtempSync(pathMod.join(os.tmpdir(), 'ff-app-'));
+const kv = { name: 'kv', label: 'Key values', server: { hosted: true }, scopes: [{ id: 'kv:use', label: 'Use it' }],
+  tools: [{ name: 'put', description: 'Sets a key.', input: { type: 'object' }, scopes: ['kv:use'] }, { name: 'all', description: 'Lists keys.', input: { type: 'object' }, scopes: ['kv:use'] }] };
+const kvServer = (label) => `export default { async fetch(request, env) {
+  const { tool, input } = await request.json();
+  if (tool === 'put') { await env.DB.exec('INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)', [input.k, input.v]); return Response.json({ result: { ok: true } }); }
+  return Response.json({ result: { label: ${JSON.stringify('LABEL')}.replace('LABEL', ${JSON.stringify(label)}), rows: await env.DB.exec('SELECT k, v FROM kv ORDER BY k') } });
+} };`;
+fs.writeFileSync(pathMod.join(folder, 'freeflow-app.json'), JSON.stringify(kv));
+fs.writeFileSync(pathMod.join(folder, 'server.js'), kvServer('kv1'));
+fs.mkdirSync(pathMod.join(folder, 'migrations'));
+fs.writeFileSync(pathMod.join(folder, 'migrations', '0001_kv.sql'), 'CREATE TABLE kv (k TEXT PRIMARY KEY, v TEXT);');
+const publish = () => execFileSync(process.execPath, [bridge, 'app', 'publish', folder, '--workspace', A], { env: { ...process.env, FLOW_SERVER_URL: B, FLOW_TOKEN: U.token }, cwd: os.tmpdir(), encoding: 'utf8' });
+let out = publish();
+t('a member publishes a folder with the bridge', /uploaded kv version 1/.test(out), out);
+r = await api(U.token, 'POST', `/v1/workspaces/${A}/apps`, { name: 'kv', version: 1, grants: { members: true, accounts: [] } });
+t('but only an owner or admin installs it', r.s === 403, r.s);
+r = await api(O.token, 'GET', `/v1/workspaces/${A}/apps/versions`);
+t('Olga sees the upload, not installed', (r.j.versions ?? []).some((v) => v.name === 'kv' && v.version === 1 && !v.installed), JSON.stringify(r.j).slice(0, 160));
+await api(O.token, 'POST', `/v1/workspaces/${A}/apps`, { name: 'kv', version: 1, grants: { members: true, accounts: [] } });
+await call(O.token, A, 'kv__put', { k: 'a', v: 'before' });
+fs.writeFileSync(pathMod.join(folder, 'server.js'), kvServer('kv2'));
+out = publish();
+await api(O.token, 'PUT', `/v1/workspaces/${A}/apps/kv`, { version: 2, grants: { members: true, accounts: [] } });
+await call(O.token, A, 'kv__put', { k: 'b', v: 'after' });
+r = await call(O.token, A, 'kv__all', {});
+t('version 2 runs, with a row written after the update', r.j.ok && r.j.result.label === 'kv2' && r.j.result.rows.length === 2, JSON.stringify(r.j));
+r = await api(O.token, 'GET', `/v1/workspaces/${A}/apps`);
+const kvApp = (r.j.apps ?? []).find((a) => a.name === 'kv');
+t('Admin sees a restore point back to version 1', kvApp?.restorePoint?.fromVersion === 1 && kvApp.version === 2, JSON.stringify(kvApp?.restorePoint));
+r = await api(O.token, 'GET', `/v1/workspaces/${A}/apps/kv/export`);
+t('the export holds the app\'s table and its rows, not the platform\'s', r.s === 200 && r.j.tables?.kv?.length === 2 && !Object.keys(r.j.tables).some((k) => k.startsWith('_freeflow')), JSON.stringify(r.j).slice(0, 200));
+r = await api(O.token, 'POST', `/v1/workspaces/${A}/apps/kv/restore`, {});
+t('Olga goes back', r.s === 200 && r.j.version === 1, JSON.stringify(r.j));
+await sleep(500);
+r = await call(O.token, A, 'kv__all', {});
+// A local runtime switches the version back but keeps the data (its restore points are not real); Cloudflare restores
+// it too, which the spike on the account showed (decision_log 2026-11-17). RESTORE_DATA=1 asks for both, there.
+const dataBack = r.j.ok && r.j.result.rows.map((x) => x.k).join() === 'a';
+t('version 1 runs again' + (process.env.RESTORE_DATA ? ', on the data from before the update' : ''), r.j.ok && r.j.result.label === 'kv1' && (!process.env.RESTORE_DATA || dataBack), JSON.stringify(r.j));
+fs.rmSync(folder, { recursive: true, force: true });
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

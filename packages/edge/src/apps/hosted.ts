@@ -76,6 +76,14 @@ export class AppStore extends DurableObject<HostedEnv> {
     return { applied };
   }
 
+  /** Every table of the app and its rows, for an owner's or admin's export (§8). The platform's own tables stay out. */
+  dump(): Record<string, Record<string, unknown>[]> {
+    const sql = this.sql();
+    // GLOB, not LIKE: in LIKE `_` is any one character. The runtime's tables (`_cf_*`, a local runtime's `__*`) stay out.
+    const tables = sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT GLOB 'sqlite_*' AND name NOT GLOB '_cf_*' AND name NOT GLOB '__*' AND name NOT GLOB '_freeflow_*'").toArray().map((r) => r.name as string);
+    return Object.fromEntries(tables.map((t) => [t, sql.exec(`SELECT * FROM "${t.replace(/"/g, '""')}"`).toArray()]));
+  }
+
   bookmark(): Promise<string> {
     return this.ctx.storage.getCurrentBookmark();
   }

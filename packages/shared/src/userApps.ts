@@ -233,6 +233,10 @@ export interface InstalledAppDTO {
   serverOrigin: string | null;
   /** The platform runs it (§7.2). */
   hosted: boolean;
+  /** The installed version. */
+  version: number;
+  /** Owners and admins: the restore point that undoes the latest update of a hosted app, within 30 days (§8). */
+  restorePoint?: { fromVersion: number; at: string };
   hasScreen: boolean;
   scopes: UserAppScope[];
   tools: { name: string; description: string; scopes: string[] }[];

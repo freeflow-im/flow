@@ -19,6 +19,8 @@
 //   (write ./.mcp.json so MCP clients like the claude CLI load the flow server directly)
 //   flow-agent-bridge app-guard --upstream http://localhost:3000 --port 8788
 //   (put an agent-hosted web app behind Flow membership; secret in FLOW_APP_SECRET)
+//   flow-agent-bridge app publish <dir> [--workspace <id>]
+//   (upload a hosted app's folder as a new version; an owner or admin installs it)
 //   flow-agent-bridge mcp                   (internal) the flow MCP stdio server
 import fs from 'node:fs';
 import { loadConfig } from './config.js';
@@ -29,6 +31,7 @@ import { runMcpInit } from './mcp-init.js';
 import { runSetup, type SetupOptions } from './setup.js';
 import { runSupervisor } from './supervisor.js';
 import { AppGuardUsageError, runAppGuard } from './app-guard-cli.js';
+import { AppPublishUsageError, runAppPublish } from './app-publish.js';
 
 /** An invite code positional (`flow-XXXX-XXXX`), told apart from a config path. */
 const INVITE_CODE_RE = /^flow-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/;
@@ -45,7 +48,9 @@ function usage(): never {
       '  flow-agent-bridge mcp-init [config.json]   write ./.mcp.json for MCP clients (claude CLI)\n' +
       '  flow-agent-bridge app-guard --upstream <url> [--port 8788] [--host 0.0.0.0]\n' +
       '      only Flow members of the app’s channel reach it; FLOW_APP_SECRET holds the\n' +
-      '      secret create_artifact returned (comma-separate several). Tunnel this port.\n',
+      '      secret create_artifact returned (comma-separate several). Tunnel this port.\n' +
+      '  flow-agent-bridge app publish <dir> [--workspace <id>] [--config agent.json]\n' +
+      '      upload a hosted app (freeflow-app.json, server.js, migrations/, ui/) as a new version\n',
   );
   process.exit(2);
 }
@@ -114,6 +119,17 @@ async function main(): Promise<void> {
       return await runAppGuard(rest);
     } catch (err) {
       if (err instanceof AppGuardUsageError) {
+        console.error(err.message);
+        process.exit(2);
+      }
+      throw err;
+    }
+  }
+  if (cmd === 'app' && rest[0] === 'publish') {
+    try {
+      return await runAppPublish(rest.slice(1));
+    } catch (err) {
+      if (err instanceof AppPublishUsageError) {
         console.error(err.message);
         process.exit(2);
       }

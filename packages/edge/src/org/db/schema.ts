@@ -896,3 +896,21 @@ export const userAppAgents = sqliteTable(
   },
   (t) => [primaryKey({ columns: [t.name, t.accountId] })],
 );
+
+/**
+ * A hosted app's restore points (docs/specs/user-apps.md §8): before each update, the store's point-in-time bookmark with
+ * the version that ran before it. For 30 days an owner or admin may go back to that version and that data in one step.
+ * `at` is epoch milliseconds.
+ */
+export const userAppRestorePoints = sqliteTable(
+  'user_app_restore_points',
+  {
+    name: text('name').notNull(),
+    fromVersion: integer('from_version').notNull(),
+    toVersion: integer('to_version').notNull(),
+    bookmark: text('bookmark').notNull(),
+    by: text('by').notNull(),
+    at: integer('at').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.name, t.at] })],
+);

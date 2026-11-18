@@ -11,7 +11,7 @@ import { ApiError, badRequest, notFound } from '../../errors';
 import { isActiveAccount } from './shares.js';
 import { signBody, SIGNATURE_HEADER } from '../lib/appSigning';
 
-const { userApps, userAppVersions, userAppGrants, userAppAgents, workspaceMembers, users } = schema;
+const { userApps, userAppVersions, userAppGrants, userAppAgents, userAppRestorePoints, workspaceMembers, users } = schema;
 type AppRow = typeof userApps.$inferSelect;
 
 /** The grantee that means every member who is not a guest (§5.2). */
@@ -137,15 +137,40 @@ export async function installApp(p: { source: AppSource; by: string; grants: App
 }
 
 /** Puts a new version of an installed app in place, and who gets its scopes now: the admin confirms them again (§9.3). */
-export async function updateApp(p: { name: string; source: AppSource; by: string; grants: AppGrants }): Promise<{ version: number }> {
-  await requireRow(p.name);
+export async function updateApp(p: { name: string; source: AppSource; by: string; grants: AppGrants; bookmark?: string }): Promise<{ version: number }> {
+  const before = await requireRow(p.name);
   const named = 'manifest' in p.source ? p.source.manifest.name : p.source.name;
   if (named !== p.name) throw badRequest('validation', `the new version names "${named}", not "${p.name}"`);
   await checkGrantees(p.grants.accounts);
   const v = await versionFrom(p.source, p.by);
   await db.update(userApps).set({ version: v.version, manifest: JSON.stringify(v.manifest), manifestUrl: v.manifestUrl, updatedAt: Date.now() }).where(eq(userApps.name, p.name));
   await writeGrants(p.name, v.manifest, p.grants);
+  // A hosted app's store, as it was before this update (§8): the route took the bookmark just before.
+  if (p.bookmark) await db.insert(userAppRestorePoints).values({ name: p.name, fromVersion: before.version, toVersion: v.version, bookmark: p.bookmark, by: p.by, at: Date.now() });
   return { version: v.version };
+}
+
+/** How long a restore point may be gone back to (§8). */
+export const RESTORE_DAYS = 30;
+
+/** The restore point that undoes the app's latest update: taken before it, within 30 days. Null when there is none. */
+export async function restorePointOf(name: string): Promise<{ fromVersion: number; toVersion: number; bookmark: string; at: number } | null> {
+  const app = await rowOf(name);
+  if (!app) return null;
+  const rows = await db.select().from(userAppRestorePoints).where(and(eq(userAppRestorePoints.name, name), eq(userAppRestorePoints.toVersion, app.version)));
+  const p = rows.sort((a, b) => b.at - a.at)[0];
+  return p && p.at > Date.now() - RESTORE_DAYS * 86_400_000 ? { fromVersion: p.fromVersion, toVersion: p.toVersion, bookmark: p.bookmark, at: p.at } : null;
+}
+
+/** After the store went back to a restore point: the app runs the version it ran then, and the point is used up. */
+export async function revertApp(name: string, at: number): Promise<{ version: number }> {
+  const [p] = await db.select().from(userAppRestorePoints).where(and(eq(userAppRestorePoints.name, name), eq(userAppRestorePoints.at, at))).limit(1);
+  if (!p) throw notFound('no such restore point');
+  const [v] = await db.select().from(userAppVersions).where(and(eq(userAppVersions.name, name), eq(userAppVersions.version, p.fromVersion))).limit(1);
+  if (!v) throw notFound(`version ${p.fromVersion} is gone`);
+  await db.update(userApps).set({ version: p.fromVersion, manifest: v.manifest, updatedAt: Date.now() }).where(eq(userApps.name, name));
+  await db.delete(userAppRestorePoints).where(and(eq(userAppRestorePoints.name, name), eq(userAppRestorePoints.at, at)));
+  return { version: p.fromVersion };
 }
 
 /** Changes who holds the app's scopes (§5.2). */
@@ -242,6 +267,13 @@ export async function listApps(viewer: AppHolder & { admin: boolean }): Promise<
   if (!rows.length) return [];
   const held = await heldScopes({ ...viewer, via: null });
   const grants = viewer.admin ? await db.select().from(userAppGrants) : [];
+  const points = new Map<string, { fromVersion: number; at: string }>();
+  if (viewer.admin) {
+    for (const r of rows) {
+      const p = await restorePointOf(r.name);
+      if (p) points.set(r.name, { fromVersion: p.fromVersion, at: new Date(p.at).toISOString() });
+    }
+  }
   const on = new Set((await db.select({ name: userAppAgents.name }).from(userAppAgents).where(eq(userAppAgents.accountId, viewer.accountId))).map((r) => r.name));
   return rows.sort((a, b) => a.name.localeCompare(b.name)).map((row) => {
     const m = manifestOf(row);
@@ -253,6 +285,7 @@ export async function listApps(viewer: AppHolder & { admin: boolean }): Promise<
       manifestUrl: row.manifestUrl,
       serverOrigin: 'url' in m.server ? new URL(m.server.url).origin : null,
       hosted: !('url' in m.server),
+      version: row.version,
       hasScreen: !!m.ui,
       scopes: m.scopes,
       tools: m.tools.map((t) => ({ name: t.name, description: t.description, scopes: t.scopes })),
@@ -264,6 +297,8 @@ export async function listApps(viewer: AppHolder & { admin: boolean }): Promise<
       updatedAt: new Date(row.updatedAt).toISOString(),
     };
     if (viewer.admin) {
+      const point = points.get(m.name);
+      if (point) dto.restorePoint = point;
       const g: Record<string, string[]> = {};
       for (const s of m.scopes) g[s.id] = grants.filter((r) => r.name === m.name && r.scope === s.id).map((r) => r.grantee);
       dto.grants = g;

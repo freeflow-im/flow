@@ -5,8 +5,10 @@
 //   POST   /v1/workspaces/:id/apps/preview          an app's manifest fetched from a URL and checked, for the install card
 //   POST   /v1/workspaces/:id/apps                  install from a manifest URL, or a hosted app's uploaded version, with who
 //                                                   gets its scopes (owners, admins)
-//   POST   /v1/workspaces/:id/apps/versions         upload a hosted app's version: manifest and files (owners, admins)
+//   POST   /v1/workspaces/:id/apps/versions         upload a hosted app's version: manifest and files (members, agents)
 //   GET    /v1/workspaces/:id/apps/versions         the hosted versions uploaded here
+//   POST   /v1/workspaces/:id/apps/:name/restore    go back before a hosted app's latest update: its data and its version
+//   GET    /v1/workspaces/:id/apps/:name/export     a hosted app's data here, as JSON
 //   PUT    /v1/workspaces/:id/apps/:name            install the manifest again (an update), with who gets its scopes
 //   PUT    /v1/workspaces/:id/apps/:name/grants     change who holds its scopes
 //   DELETE /v1/workspaces/:id/apps/:name            remove it
@@ -19,6 +21,7 @@ import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { checkHostedFiles, checkUserAppManifest, isHosted, parseAppToolName, USER_APP_LIMITS, type AccountDTO, type UserAppManifest } from '@flow/shared';
 import type { AppSource } from '../org/services/userApps';
+import type { HostedEnv } from '../apps/hosted';
 import { ApiError, badRequest, forbidden, unauthorized } from '../errors';
 import { directory, guestRefusal, resolveCaller, type AuthEnv } from './auth';
 import { holderOf, runAppTool } from '../registry/userApps';
@@ -144,7 +147,13 @@ userAppRoutes.put('/v1/workspaces/:id/apps/:name', async (c) => {
   const current = (await org.listUserApps({ ...holderOf(m), via: null, admin: true })).find((a) => a.name === name);
   if (!current) throw new ApiError(404, 'not_found', 'no such app here');
   let source: AppSource;
-  if (version !== undefined) source = { name, version };
+  let bookmark: string | undefined;
+  if (version !== undefined) {
+    source = { name, version };
+    // A hosted app's restore point (§8): its store as it is now, taken before the new version's migrations can run.
+    const store = (c.env as AuthEnv & HostedEnv).APP_STORE;
+    if (current.hosted && store) bookmark = await store.get(store.idFromName(`${name}:${m.organizationId}`)).bookmark();
+  }
   else if (current.hosted) throw badRequest('validation', 'a hosted app is updated to an uploaded version: name it as version');
   else {
     const from = url ?? current.manifestUrl;
@@ -152,7 +161,7 @@ userAppRoutes.put('/v1/workspaces/:id/apps/:name', async (c) => {
     if (!r.ok) return refused(c, r.problems);
     source = { manifest: r.manifest, manifestUrl: from };
   }
-  const updated = unwrap(await org.updateUserApp({ name, source, by: m.account.id, grants }));
+  const updated = unwrap(await org.updateUserApp({ name, source, by: m.account.id, grants, ...(bookmark ? { bookmark } : {}) }));
   return c.json({ ok: true, version: updated.version });
 });
 
@@ -161,7 +170,11 @@ userAppRoutes.put('/v1/workspaces/:id/apps/:name', async (c) => {
  * prefix of their own, the rest to the Org object. It runs nowhere until an owner or admin installs it.
  */
 userAppRoutes.post('/v1/workspaces/:id/apps/versions', async (c) => {
-  const m = await adminOf(c);
+  // Any member or agent but a guest may upload (§9.4's default, members and their agents): a version runs nowhere until
+  // an owner or admin installs it.
+  const m = await memberOf(c);
+  const guest = guestRefusal(m.account, 'apps');
+  if (guest) throw guest;
   const bucket = (c.env as AuthEnv & { BLOBS?: R2Bucket }).BLOBS;
   if (!bucket) throw new ApiError(503, 'no_storage', 'this server has no file storage for apps');
   const { manifest: raw, files } = await body(c, UploadBody);
@@ -178,6 +191,36 @@ userAppRoutes.post('/v1/workspaces/:id/apps/versions', async (c) => {
     manifest: checked.manifest, files: Object.fromEntries(Object.entries(bytes).map(([p, b]) => [p, b.byteLength])), prefix, by: m.account.id,
   });
   return c.json(uploaded, 201);
+});
+
+/**
+ * Goes back before a hosted app's latest update (§8): its store to the restore point taken then, and the version it ran
+ * then. What was written since is lost; the card says so, and offers the export first.
+ */
+userAppRoutes.post('/v1/workspaces/:id/apps/:name/restore', async (c) => {
+  const m = await adminOf(c);
+  const name = c.req.param('name');
+  const org = orgStub(c, m.organizationId);
+  const point = await org.userAppRestorePoint(name);
+  if (!point) throw new ApiError(404, 'not_found', 'there is no update of this app to go back from');
+  const store = (c.env as AuthEnv & HostedEnv).APP_STORE;
+  if (!store) throw new ApiError(503, 'no_storage', 'this server has no app stores');
+  // The object restarts as it goes back: the call may end with that restart.
+  await store.get(store.idFromName(`${name}:${m.organizationId}`)).restore(point.bookmark).catch(() => undefined);
+  const reverted = unwrap(await org.revertUserApp(name, point.at));
+  return c.json({ ok: true, version: reverted.version });
+});
+
+/** A hosted app's data in this organization, every table and its rows, as JSON (owners and admins, §8). */
+userAppRoutes.get('/v1/workspaces/:id/apps/:name/export', async (c) => {
+  const m = await adminOf(c);
+  const name = c.req.param('name');
+  const store = (c.env as AuthEnv & HostedEnv).APP_STORE;
+  if (!store) throw new ApiError(503, 'no_storage', 'this server has no app stores');
+  const tables = await store.get(store.idFromName(`${name}:${m.organizationId}`)).dump();
+  c.header('Cache-Control', 'no-store');
+  c.header('Content-Disposition', `attachment; filename="${name}-data.json"`);
+  return c.json({ app: name, organizationId: m.organizationId, exportedAt: new Date().toISOString(), tables });
 });
 
 /** The hosted versions uploaded here, newest first (owners and admins). */

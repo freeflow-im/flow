@@ -36,7 +36,7 @@ import { sweepIdleVisitors, visitorBySession, visitorMayReceive, type MessageTim
 import { cleanPrompts, type AssistantPrompts } from '@flow/shared/assistant';
 import {
   AppEventLimiter, appForUse, appHolderOf, callAppTool, checkAppEvent, heldScopes, installApp, listApps, offeredAppTools, readableApps,
-  removeApp, rotateAppSecret, setAgentsOn, setAppGrants, updateApp, recordUpload, listUploads, installedCode,
+  removeApp, rotateAppSecret, setAgentsOn, setAppGrants, updateApp, recordUpload, listUploads, installedCode, restorePointOf, revertApp,
   type AppCallerContext, type AppGrants, type AppHolder, type AppSource, type AppToolAnswer, type AppUpload, type OfferedAppTool,
 } from './services/userApps';
 import { APP_SESSION_SECONDS, mintUserAppToken, signAppSession, signAppTicket, verifyAppSession, verifyAppTicket, verifyBody, verifyUserAppToken, type AppSession, type AppTicket } from './lib/appSigning';
@@ -1018,8 +1018,18 @@ export class Org extends DurableObject<OrgEnv> {
     return answered(() => withDb(this.db, () => installApp(p)));
   }
 
-  async updateUserApp(p: { name: string; source: AppSource; by: string; grants: AppGrants }): Promise<DirectoryAnswer<{ version: number }>> {
+  async updateUserApp(p: { name: string; source: AppSource; by: string; grants: AppGrants; bookmark?: string }): Promise<DirectoryAnswer<{ version: number }>> {
     return answered(() => withDb(this.db, () => updateApp(p)));
+  }
+
+  /** The restore point that undoes a hosted app's latest update (§8), or null. */
+  async userAppRestorePoint(name: string): Promise<{ fromVersion: number; toVersion: number; bookmark: string; at: number } | null> {
+    return withDb(this.db, () => restorePointOf(name));
+  }
+
+  /** After its store went back: the app runs the version it ran before the update. */
+  async revertUserApp(name: string, at: number): Promise<DirectoryAnswer<{ version: number }>> {
+    return answered(() => withDb(this.db, () => revertApp(name, at)));
   }
 
   /** A hosted app's version, uploaded to R2 by the Worker's route, kept here until it is installed (§14 phase 2, step 1). */
