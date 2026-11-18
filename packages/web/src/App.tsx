@@ -66,7 +66,9 @@ function consumeEmailLinkParams(runtime: ConnectionRuntime): {
   const invite = location.pathname.match(/^\/invite\/([A-Za-z0-9_-]+)$/);
   if (invite) {
     runtime.write(PENDING_INVITE, invite[1]!);
-    history.replaceState(null, '', CHAT_PATH);
+    // Shown as the Create an account page while signed out (docs/specs/onboarding.md §1); signed in, the invite is
+    // accepted at once and the page goes to Home.
+    history.replaceState(null, '', '/signup');
   }
   // /join/<workspace-slug>/<token> (issue #85): the persistent join link. Same
   // stash trick as the emailed invite — it has to survive the sign-in round
@@ -76,7 +78,7 @@ function consumeEmailLinkParams(runtime: ConnectionRuntime): {
   const joinToken = parseJoinPath(location.pathname);
   if (joinToken) {
     stashJoinToken(joinToken, Date.now(), runtime.key('pendingJoinLink'));
-    history.replaceState(null, '', CHAT_PATH);
+    history.replaceState(null, '', '/signup');
   }
   const params = new URLSearchParams(location.search);
   // ?next=<path>: where to go once signed in — the Workspace app (/docs/...) and the ChatGPT plugin's
@@ -260,15 +262,16 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
     if (booting) return;
     const path = location.pathname;
     // Already signed in on the sign-in page, with no link to redeem: on to where it was going.
+    const carrying = !!runtime.read(PENDING_INVITE) || !!readJoinToken(Date.now(), runtime.key('pendingJoinLink'));
     if (user) {
-      if ((path === '/login' || path === '/signup') && !signinToken && !resetToken && !setupToken && !signupToken) {
+      if ((path === '/login' || path === '/signup') && !carrying && !signinToken && !resetToken && !setupToken && !signupToken) {
         const next = sessionStorage.getItem(NEXT_AFTER_SIGN_IN) ?? (opensInHome() ? '/home/' : CHAT_PATH);
         sessionStorage.removeItem(NEXT_AFTER_SIGN_IN);
         void runtime.api('POST', '/v1/auth/session-cookie').catch(() => {}).then(() => location.assign(next));
       }
       return;
     }
-    if (runtime.read(PENDING_INVITE) || readJoinToken(Date.now(), runtime.key('pendingJoinLink'))) return;
+    if (carrying) return;
     if (path === '/login' || path === '/signup') {
       if (!sessionStorage.getItem(NEXT_AFTER_SIGN_IN)) sessionStorage.setItem(NEXT_AFTER_SIGN_IN, opensInHome() ? '/home/' : CHAT_PATH);
       return;
