@@ -95,6 +95,11 @@ export interface BrowserReach {
    * (`file`) one of its files open. The page sends it; it says only what is on screen.
    */
   building?: { app: string; label?: string; file?: string };
+  /**
+   * The hosted suite only: the person has this installed app's screen open (docs/specs/user-apps.md §6), with the
+   * assistant's panel over it. The page sends it; it says only what is on screen.
+   */
+  installedApp?: { app: string; label?: string };
 }
 
 /** An installed app's tool as a turn is offered it (BrowserReach `appTools`). */

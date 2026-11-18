@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AssistantDock, AssistantDockControls, ChatHistoryNav, orgChatHistory, SparkIcon, useAssistantDockState, useUsableAgents, type UsableAgent } from './AssistantDock';
+import { adminAddress } from '@flow/shared/addresses';
 import { HOME_CHAT, useSuiteAssistant } from './suiteChat';
 import { useSuggestedPrompts, type PromptPage } from './lib/prompts';
 import { EmailApprovalCard, WaitingEmails, emailApprovalOf } from './EmailApproval';
@@ -17,8 +18,13 @@ export { useSuiteAssistant, type ChatItem } from './suiteChat';
  * picked in the panel's header. It starts with `prefer` when the person may use such an agent (Admin passes `admin`: the
  * admin agent, agents.md §1.4), else with their own assistant.
  */
-export function SuiteAssistant({ organizationId, page, prefer, context }: {
+export function SuiteAssistant({ organizationId, page, prefer, context, app }: {
   organizationId: string | null;
+  /**
+   * The installed app whose screen the page shows (user-apps.md §6): the picker offers only the agents that may use it,
+   * and each turn says it is open.
+   */
+  app?: { name: string; label: string };
   /** What the page shows, sent with each turn (the Build app page's draft and file, user-apps.md §9.6). */
   context?: Record<string, unknown>;
   /** Whose suggested prompts it offers (Admin → Prompts). */
@@ -28,16 +34,29 @@ export function SuiteAssistant({ organizationId, page, prefer, context }: {
 }) {
   const [open, setOpen] = useState(false);
   const dock = useAssistantDockState('suite-assistant', open, setOpen);
-  const agents = useUsableAgents(organizationId);
+  const agents = useUsableAgents(organizationId, app?.name);
   const [picked, setPicked] = useState<string | null>(null);
   // A pick from another organization is dropped when the bar switches.
   useEffect(() => setPicked(null), [organizationId]);
+  const turnContext = app ? { ...context, installedApp: { app: app.name, label: app.label } } : context;
   const chosen = (picked ? agents?.find((a) => a.id === picked) : undefined)
     ?? (prefer ? agents?.find((a) => a.role === prefer) : undefined)
     ?? agents?.find((a) => a.self) ?? null;
   return (
     <AssistantDock state={dock} label={chosen?.displayName} avatarUrl={chosen?.avatarUrl ?? null}>
-      <SuiteAssistantPanel organizationId={organizationId} page={page} agents={agents ?? []} chosen={chosen} onPick={setPicked} context={context} />
+      {app && agents && !agents.length ? (
+        <NoAgentForApp label={app.label} />
+      ) : (
+        <SuiteAssistantPanel
+          organizationId={organizationId}
+          page={page}
+          agents={agents ?? []}
+          chosen={chosen}
+          onPick={setPicked}
+          context={turnContext}
+          {...(app && chosen ? { intro: `Ask ${chosen.displayName} to work in ${app.label}. It reads and changes it through the app's tools, and can still use your mail, calendar, chats and files.`, prompts: [`What can you do in ${app.label}?`] } : {})}
+        />
+      )}
     </AssistantDock>
   );
 }
@@ -140,6 +159,28 @@ function SuiteAssistantPanel({ organizationId, page, agents, chosen, onPick, con
           <button type="submit" className="suite-chat-send" disabled={!draft.trim()} data-testid="suite-assistant-send">Send</button>
         )}
       </form>
+    </div>
+  );
+}
+
+/**
+ * The panel over an installed app when none of the person's agents may use it: where to turn it on. A personal agent may
+ * once the person turns the app on for their agents (Organization settings → Apps); a shared agent once an admin grants it.
+ */
+function NoAgentForApp({ label }: { label: string }) {
+  return (
+    <div className="suite-chat" data-testid="suite-assistant-panel">
+      <div className="suite-chat-head">
+        <SparkIcon />
+        <span className="suite-chat-title">Assistant</span>
+        <AssistantDockControls />
+      </div>
+      <div className="suite-chat-list">
+        <p className="suite-chat-empty" data-testid="suite-assistant-no-agent">
+          None of your agents can use {label} yet. Turn on “My agents may use it” for {label} in{' '}
+          <a href={adminAddress('apps')}>Organization settings → Apps</a>, or ask an admin to give it to a shared agent.
+        </p>
+      </div>
     </div>
   );
 }

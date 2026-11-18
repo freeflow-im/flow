@@ -189,7 +189,14 @@ assistantRoutes.get('/api/agent/agents', async (c) => {
     if (!who.account) return c.json({ agents: [] });
     const guest = guestRefusal(who.account, 'the assistant');
     if (guest) return c.json({ error: guest.message, code: guest.code }, 403);
-    return c.json({ agents: await directory(c, 'usableAgents', who.user!.id, organizationId) });
+    const agents = await directory(c, 'usableAgents', who.user!.id, organizationId);
+    // `?app=`: the panel over an installed app's screen offers only the agents that may use that app (user-apps.md §5.2).
+    const app = new URL(c.req.url).searchParams.get('app');
+    if (!app) return c.json({ agents });
+    const org = c.env.ORG.get(c.env.ORG.idFromName(organizationId));
+    const person = { accountId: who.account.id, kind: who.account.kind, agentMode: null, via: null };
+    const may = new Set(await org.userAppAgents(app, person, agents.map((a) => ({ id: a.id, accountId: a.accountId, mode: a.mode }))));
+    return c.json({ agents: agents.filter((a) => may.has(a.id)) });
   } catch (err) {
     if (err instanceof ApiError) return c.json({ error: err.message, code: err.code }, err.statusCode as 400);
     throw err;
