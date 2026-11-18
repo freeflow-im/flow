@@ -30,11 +30,14 @@ export function SetupPage() {
   // Where setup stood when the page opened: the last step makes the ready-made automations only the first time it is reached.
   const [reachedBefore, setReachedBefore] = useState<number | null>(null);
 
+  // Step 1's domain when it could not be added, for the Domain step to say why and offer it again.
+  const [domainProblem, setDomainProblem] = useState<{ domain: string; message: string } | null>(null);
   const admin = !!org && (org.role === 'owner' || org.role === 'admin');
   // An owner or admin with a domain of their own (chosen at step 1) has the Domain step; it stays until setup ends.
   const domains = useQuery({ queryKey: ['setup', 'domains', orgId], queryFn: () => setupApi.domains(orgId!), enabled: admin });
   const ownDomain = (domains.data ?? []).some((d) => d.kind === 'own');
-  const steps = stepsFor(org ? org.role ?? 'member' : null, ownDomain);
+  // (Also while step 1's domain could not be added, or the Domain step is open: it is still this person's step.)
+  const steps = stepsFor(org ? org.role ?? 'member' : null, ownDomain || !!domainProblem || step === 2);
 
   // The step to open on: the address's, else the saved one, else the first this person has (1 with no workspace yet).
   useEffect(() => {
@@ -44,7 +47,8 @@ export function SetupPage() {
     setReachedBefore(state.data.step);
     const saved = (stepInAddress() ?? state.data.step) as StepNumber;
     const first = steps.find((s) => s !== 1)!;
-    setStep(steps.includes(saved) && saved !== 1 ? saved : first);
+    // The Domain step comes back on a reload even when no domain is added yet (step 1's could not be).
+    setStep((steps.includes(saved) || (saved === 2 && admin)) && saved !== 1 ? saved : first);
   }, [step, organizations.ready, org, state.data, steps, admin, domains.isFetched]);
 
   const go = (n: StepNumber, id = orgId) => {
@@ -68,7 +72,8 @@ export function SetupPage() {
     window.location.assign('/home/');
   };
 
-  const created = async (id: string, domain: string | null) => {
+  const created = async (id: string, domain: string | null, problem: string | null) => {
+    if (domain && problem) setDomainProblem({ domain, message: problem });
     chooseOrganization(id);
     await qc.invalidateQueries({ queryKey: ORGANIZATIONS_KEY });
     setReachedBefore(1);
@@ -105,7 +110,7 @@ export function SetupPage() {
       <main className="mx-auto flex w-full max-w-[1200px] flex-wrap items-start gap-12 px-4 py-10 sm:px-10 sm:py-14">
         {step > 1 && !org && <p className="text-sm text-muted">Loading…</p>}
         {step === 1 && <WorkspaceStep stepOf={label(steps, 1)} onCreated={created} />}
-        {step === 2 && org && <DomainStep org={org} stepOf={label(steps, 2)} onDone={() => forward(2)} />}
+        {step === 2 && org && <DomainStep org={org} stepOf={label(steps, 2)} problem={domainProblem} onDone={() => forward(2)} />}
         {step === 3 && org && <AssistantStep org={org} stepOf={label(steps, 3)} onDone={() => forward(3)} />}
         {step === 4 && org && <OmniStep org={org} stepOf={label(steps, 4)} onDone={() => forward(4)} onBack={() => back(4)} />}
         {step === 5 && org && <TeamStep org={org} stepOf={label(steps, 5)} onDone={() => forward(5)} onBack={() => back(5)} />}

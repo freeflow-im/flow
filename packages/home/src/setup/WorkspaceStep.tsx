@@ -10,7 +10,14 @@ import { setupApi } from './api';
 import { cleanDomain, slugify } from './lib';
 import { ErrorText, input, lead, Mark, PrimaryButton, SideCard, StepHeading } from './ui';
 
-export function WorkspaceStep({ stepOf, onCreated }: { stepOf: string; onCreated: (organizationId: string, ownDomain: string | null) => void }) {
+/** Why a domain could not be added, in the person's terms. */
+function domainProblem(err: unknown, domain: string): string {
+  const code = (err as { code?: string }).code;
+  if (code === 'domain_taken') return `${domain} is already registered by another workspace. Enter a different domain, or set this up later.`;
+  return `${domain} could not be added: ${err instanceof Error ? err.message : String(err)}`;
+}
+
+export function WorkspaceStep({ stepOf, onCreated }: { stepOf: string; onCreated: (organizationId: string, ownDomain: string | null, problem: string | null) => void }) {
   const me = useQuery({ queryKey: ['suite', 'me'], queryFn: suite.me });
   const [name, setName] = useState('');
   const [slugTyped, setSlugTyped] = useState<string | null>(null);
@@ -31,9 +38,11 @@ export function WorkspaceStep({ stepOf, onCreated }: { stepOf: string; onCreated
     setError(null);
     try {
       const ws = await setupApi.createWorkspace(name.trim(), slug);
-      // The domain is only added here; its records and mail are set up in Admin › Domains after setup.
-      if (domain) await setupApi.addDomain(ws.id, domain).catch(() => undefined);
-      onCreated(ws.id, domain);
+      // The domain is added here and connected at the next step, which says why when it could not be added (another
+      // workspace has it, say): the workspace exists by then, so this step cannot be sent again.
+      let problem: string | null = null;
+      if (domain) await setupApi.addDomain(ws.id, domain).catch((err: unknown) => { problem = domainProblem(err, domain); });
+      onCreated(ws.id, domain, problem);
     } catch (err) {
       setError(err);
       setBusy(false);

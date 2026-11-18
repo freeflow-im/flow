@@ -9,7 +9,7 @@ import { setupApi } from './api';
 import { cleanDomain } from './lib';
 import { ErrorText, input, lead, PrimaryButton, SecondaryButton, StepHeading, TextButton } from './ui';
 
-export function DomainStep({ org, stepOf, onDone }: { org: WorkspaceDTO; stepOf: string; onDone: () => void }) {
+export function DomainStep({ org, stepOf, problem, onDone }: { org: WorkspaceDTO; stepOf: string; problem: { domain: string; message: string } | null; onDone: () => void }) {
   const qc = useQueryClient();
   const key = ['setup', 'domains', org.id];
   const domains = useQuery({ queryKey: key, queryFn: () => setupApi.domains(org.id) });
@@ -37,7 +37,7 @@ export function DomainStep({ org, stepOf, onDone }: { org: WorkspaceDTO; stepOf:
         {domains.isLoading && <p className="m-0 text-sm text-muted">Loading…</p>}
         <ErrorText error={domains.error} />
         {own.map((d) => <DomainCard key={d.domain} api={api} domain={d} hostedMail onChanged={reload} canRemove={false} />)}
-        {domains.isSuccess && own.length === 0 && <AddDomain org={org} onAdded={() => void reload()} />}
+        {domains.isSuccess && own.length === 0 && <AddDomain org={org} initial={problem?.domain ?? ''} problem={problem?.message ?? null} onAdded={() => void reload()} />}
       </div>
 
       <div className="flex flex-wrap items-center gap-5">
@@ -51,11 +51,11 @@ export function DomainStep({ org, stepOf, onDone }: { org: WorkspaceDTO; stepOf:
   );
 }
 
-/** When step 1's domain could not be added (or was removed), it can be added here. */
-function AddDomain({ org, onAdded }: { org: WorkspaceDTO; onAdded: () => void }) {
-  const [text, setText] = useState('');
+/** When step 1's domain could not be added (the reason shown, the domain filled in), another can be added here. */
+function AddDomain({ org, initial, problem, onAdded }: { org: WorkspaceDTO; initial: string; problem: string | null; onAdded: () => void }) {
+  const [text, setText] = useState(initial);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<unknown>(null);
+  const [error, setError] = useState<unknown>(problem);
   const domain = cleanDomain(text);
   const add = async () => {
     if (!domain || busy) return;
@@ -65,7 +65,7 @@ function AddDomain({ org, onAdded }: { org: WorkspaceDTO; onAdded: () => void })
       await setupApi.addDomain(org.id, domain);
       onAdded();
     } catch (err) {
-      setError(err);
+      setError((err as { code?: string }).code === 'domain_taken' ? `${domain} is already registered by another workspace.` : err);
     } finally {
       setBusy(false);
     }
