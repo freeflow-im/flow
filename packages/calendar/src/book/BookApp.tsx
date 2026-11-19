@@ -342,6 +342,7 @@ function Shell({ page, duration, tz, when, lengths, onBack, children }: {
         <section className="border-b border-hairline p-6 md:w-80 md:shrink-0 md:border-b-0 md:border-r md:p-8">
           {onBack ? <button type="button" onClick={onBack} aria-label="Back" className="mb-4 flex size-10 items-center justify-center rounded-full border border-border text-primary hover:bg-selected-blue"><ChevronLeft className="size-5" /></button> : null}
           <p className="font-medium text-muted">{page.ownerName}</p>
+          {page.ownerEmail ? <a href={`mailto:${page.ownerEmail}`} className="block truncate text-sm text-muted hover:text-primary hover:underline">{page.ownerEmail}</a> : null}
           <h1 className="mt-1 text-2xl font-bold leading-tight sm:text-[28px]">{page.title}</h1>
           <ul className="mt-5 flex flex-col gap-3 text-[15px] font-medium text-muted">
             <li className="flex items-start gap-2.5">

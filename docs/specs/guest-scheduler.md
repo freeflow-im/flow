@@ -87,8 +87,9 @@ open time are highlighted, a time zone picker under the grid.
 `routes/book.ts` hashes the token, looks up the owner in the Directory, and forwards to the owner's object. An unknown or
 disabled token is 404 with the same body, so a guess learns nothing.
 
-- `GET /v1/book/:token` → `{ ownerName, title, description, durations, defaultDuration, location: { kind, label }, ownerTimezone,
-  horizonEnd }`. No email, no account id, no calendar names.
+- `GET /v1/book/:token` → `{ ownerName, ownerEmail, title, description, durations, defaultDuration, location: { kind, label }, ownerTimezone,
+  horizonEnd }`. The owner's address (the one invitations come from) is shown under their name (operator ruling 2026-11-19);
+  no account id, no calendar names.
 - `GET /v1/book/:token/days?month=2026-11&duration=30&tz=America/Los_Angeles` → `{ days: ['2026-11-13', '2026-11-16', ...] }`: the
   dates (in the guest's zone) with at least one open slot.
 - `GET /v1/book/:token/slots?date=2026-11-16&duration=30&tz=…` → `{ slots: ['2026-11-16T17:00:00Z', ...] }`.

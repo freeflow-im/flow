@@ -87,15 +87,15 @@ describe('the guest scheduler', () => {
     expect((await w.owner('PATCH', '/v1/calendar/scheduler', { weekly: { mon: [[600, 500]] } })).s).toBe(400);
   });
 
-  it('shows the page and its open days without anything private, in any case of the token', async () => {
+  it('shows the page (with the owner\'s address) and its open days without anything private, in any case of the token', async () => {
     const w = world();
     const { token } = await turnedOn(w);
     let r = await w.guest('GET', `/v1/book/${token.toUpperCase().replace(/-/g, '')}`);
     expect(r.s).toBe(200);
     expect(r.h.get('cache-control')).toBe('no-store');
-    expect(r.j.page).toMatchObject({ ownerName: 'Ann Lee', title: '30 Minute Meet', durations: [30, 60], defaultDuration: 30, location: { kind: 'link', label: null }, ownerTimezone: LA });
+    expect(r.j.page).toMatchObject({ ownerName: 'Ann Lee', ownerEmail: 'ann@acme.freeflow.im', title: '30 Minute Meet', durations: [30, 60], defaultDuration: 30, location: { kind: 'link', label: null }, ownerTimezone: LA });
     expect(JSON.stringify(r.j)).not.toContain('meet.example');
-    expect(JSON.stringify(r.j)).not.toMatch(/ann@|acct-|org-1/);
+    expect(JSON.stringify(r.j)).not.toMatch(/acct-|org-1/);
     r = await w.guest('GET', `/v1/book/${token}/days?month=2026-11&duration=30&tz=${encodeURIComponent(LA)}`);
     // From today (Thursday 12th, 08:00 + 4 hours' notice) on weekdays.
     expect(r.j.days).toEqual(['2026-11-12', '2026-11-13', '2026-11-16', '2026-11-17', '2026-11-18', '2026-11-19', '2026-11-20', '2026-11-23', '2026-11-24', '2026-11-25', '2026-11-26', '2026-11-27', '2026-11-30']);
