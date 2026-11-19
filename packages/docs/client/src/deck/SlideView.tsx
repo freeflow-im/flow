@@ -57,6 +57,8 @@ export interface SlideViewProps {
   rich?: boolean;
   /** Pictures are drawn over everything else (a whiteboard's layer of pictures above its text), in their own order. */
   imagesOnTop?: boolean;
+  /** A picture pasted while text is being edited (a whiteboard's): added to the canvas rather than lost. */
+  onPasteImages?(files: File[]): void;
 }
 
 export interface TableCellState {
@@ -542,7 +544,23 @@ export function caretAt(x: number, y: number): Range | null {
 }
 
 /** Inline editor for a text element. Uncontrolled: the DOM is the draft; the text is committed on blur. */
-function TextEditor({ initial, onCommit, onStop, style, caret, rich }: { initial: Paragraph[]; onCommit(p: Paragraph[], size?: { w: number; h: number }): void; onStop(): void; style: CSSProperties; caret?: { x: number; y: number }; rich?: boolean }) {
+function TextEditor({
+  initial,
+  onCommit,
+  onStop,
+  style,
+  caret,
+  rich,
+  onPasteImages,
+}: {
+  initial: Paragraph[];
+  onCommit(p: Paragraph[], size?: { w: number; h: number }): void;
+  onStop(): void;
+  style: CSSProperties;
+  caret?: { x: number; y: number };
+  rich?: boolean;
+  onPasteImages?(files: File[]): void;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const committed = useRef(false);
   const [anchor, setAnchor] = useState<HTMLAnchorElement | null>(null);
@@ -627,6 +645,12 @@ function TextEditor({ initial, onCommit, onStop, style, caret, rich }: { initial
         // Plain text only, as paragraphs.
         e.preventDefault();
         const text = e.clipboardData.getData('text/plain');
+        // A picture with no text beside it (a screenshot, an image copied from a page) goes on the canvas.
+        const images = Array.from(e.clipboardData.files ?? []).filter((f) => f.type.startsWith('image/'));
+        if (images.length && !text.trim() && onPasteImages) {
+          onPasteImages(images);
+          return;
+        }
         if (rich) {
           // Each line its own paragraph, typed where the caret is (so it can be undone like typing).
           text.split(/\r?\n/).forEach((line, i) => {
@@ -751,7 +775,7 @@ function TableView({ el, theme, bg, cell }: { el: TableElement; theme: Theme; bg
   );
 }
 
-export function SlideView({ slide, theme: themeId, scale, preview, editing, tableCell, onElementMouseDown, onElementDoubleClick, playVideo, children, className, width = SLIDE_W, height = SLIDE_H, rich, imagesOnTop }: SlideViewProps) {
+export function SlideView({ slide, theme: themeId, scale, preview, editing, tableCell, onElementMouseDown, onElementDoubleClick, playVideo, children, className, width = SLIDE_W, height = SLIDE_H, rich, imagesOnTop, onPasteImages }: SlideViewProps) {
   const theme = THEMES[themeId];
   // On the editor canvas (not present mode or thumbnails) a plain click on a link of a non-editing box shows the link menu.
   const [linkAnchor, setLinkAnchor] = useState<HTMLAnchorElement | null>(null);
@@ -800,6 +824,7 @@ export function SlideView({ slide, theme: themeId, scale, preview, editing, tabl
                     onStop={editing.onStop}
                     caret={editing.caret}
                     rich={rich}
+                    onPasteImages={onPasteImages}
                     style={{ ...textStyleOf(el, theme), ...(el.anchored ? { minWidth: 12, whiteSpace: 'pre' } : { width: '100%', height: '100%' }), ...(el.fill ? { padding: 14, boxSizing: 'border-box' } : {}) }}
                   />
                 </div>
@@ -867,6 +892,7 @@ export function SlideView({ slide, theme: themeId, scale, preview, editing, tabl
                   onCommit={(ps) => editing.onCommit(ps)}
                   onStop={editing.onStop}
                   caret={editing.caret}
+                  onPasteImages={onPasteImages}
                   style={{ width: '100%', height: '100%', justifyContent: 'center', textAlign: 'center', fontSize: el.textSize ?? 18 }}
                 />
               </div>

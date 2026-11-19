@@ -2,6 +2,7 @@
 
 - `[web]` `[desktop]` New kind `whiteboard` (`shared/whiteboard.ts`, `/api/whiteboards`, page `/w/:id`): a 5760×3600 board edited with the slide editor in a whiteboard mode.
 - `[web]` Text tool (typed text stays where it was typed and grows with its lines), sticky notes, shapes, lines, Upload image and ⌘V; positions and sizes snap to a 4-point grid; pictures draw above text.
+- `[web]` ⌘V of a picture while typing in a text or note puts the picture on the board.
 - `[web]` Text being typed on a whiteboard takes ⌘B / ⌘I / ⌘U on a few words, and the slide editor now keeps bold, italic and colored words through a re-edit.
 - `[web]` The assistant has no whiteboard tools yet; a whiteboard's text is searchable and exports as JSON.
 

@@ -699,7 +699,7 @@ export function DeckEditor({
         onElementDoubleClick={onElementDoubleClick}
         playVideo={playing}
         className="deck-canvas-slide"
-        {...(board ? { width: board.w, height: board.h, rich: true, imagesOnTop: true } : {})}
+        {...(board ? { width: board.w, height: board.h, rich: true, imagesOnTop: true, onPasteImages: onImageFiles } : {})}
       >
         {lineDrag?.mode === 'draw' && (
           <div className="sl-el" style={{ left: lineDrag.line.x, top: lineDrag.line.y, width: lineDrag.line.w, height: lineDrag.line.h, pointerEvents: 'none' }}>
