@@ -1,9 +1,9 @@
 // Convert an uploaded .xlsx file into the native workbook format.
 import { randomUUID } from 'node:crypto';
 import { readXlsxCharts } from './xlsxCharts.ts';
-import ExcelJS from 'exceljs';
+import type ExcelJS from 'exceljs';
 import JSZip from 'jszip';
-import * as XLSX from 'xlsx';
+import type * as XLSX from 'xlsx';
 import { cellKey, parseRangeString, MAX_COLS } from '../shared/cellref.ts';
 import { renameSheetRefs, shiftFormula } from '../shared/formula/adjust.ts';
 import { FUNCTIONS } from '../shared/formula/functions.ts';
@@ -212,11 +212,15 @@ function sanitizeTabName(name: string, used: Set<string>): string {
   return n;
 }
 
+// exceljs and xlsx are loaded on first use, not with this module: loaded at the top they ran on every start of the suite's
+// Worker, whose startup CPU Cloudflare caps at 1 s.
+const loadExcelJs = async () => (await import('exceljs')).default;
+
 // Legacy .xls files (and encrypted .xlsx files) are OLE compound documents.
 const CFB_MAGIC = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
 
 /** Convert a legacy .xls workbook to .xlsx so it can go through the same importer. */
-function xlsToXlsx(buf: Buffer): Buffer {
+function xlsToXlsx(XLSX: typeof import('xlsx'), buf: Buffer): Buffer {
   let wb: XLSX.WorkBook;
   try {
     wb = XLSX.read(buf, { type: 'buffer', cellFormula: true, cellNF: true, cellStyles: true, sheetRows: IMPORT_LIMITS.maxRows });
@@ -231,7 +235,7 @@ function xlsToXlsx(buf: Buffer): Buffer {
 /** Import an Excel workbook in either .xlsx or legacy .xls format (detected from the file contents). */
 export async function importExcel(buf: Buffer): Promise<ImportResult> {
   if (buf.length >= 8 && buf.subarray(0, 8).equals(CFB_MAGIC)) {
-    const result = await importXlsx(xlsToXlsx(buf));
+    const result = await importXlsx(xlsToXlsx(await import('xlsx'), buf));
     result.warnings.unshift(
       'This is an older .xls file: values, formulas, number formats and column widths were imported, but fonts, colors and alignment were not.',
     );
@@ -243,7 +247,8 @@ export async function importExcel(buf: Buffer): Promise<ImportResult> {
 
 export async function importXlsx(buf: Buffer): Promise<ImportResult> {
   const zip = await checkArchive(buf);
-  const wb = new ExcelJS.Workbook();
+  const Excel = await loadExcelJs();
+  const wb = new Excel.Workbook();
   try {
     await wb.xlsx.load((await withoutDrawings(zip, buf)) as unknown as ArrayBuffer);
   } catch {
@@ -282,7 +287,7 @@ export async function importXlsx(buf: Buffer): Promise<ImportResult> {
       if (rowNumber > IMPORT_LIMITS.maxRows) return;
       row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
         if (colNumber > MAX_COLS) return;
-        if (cell.type === ExcelJS.ValueType.Merge) return;
+        if (cell.type === Excel.ValueType.Merge) return;
         if (++totalCells > IMPORT_LIMITS.maxCells) throw new ImportError(`This workbook has more than ${IMPORT_LIMITS.maxCells.toLocaleString()} cells, which is the import limit.`);
         const r = rowNumber - 1;
         const c = colNumber - 1;
@@ -290,29 +295,29 @@ export async function importXlsx(buf: Buffer): Promise<ImportResult> {
         let v = '';
         const val = cell.value;
         switch (cell.type) {
-          case ExcelJS.ValueType.Number:
+          case Excel.ValueType.Number:
             v = String(val);
             break;
-          case ExcelJS.ValueType.String:
-          case ExcelJS.ValueType.SharedString:
+          case Excel.ValueType.String:
+          case Excel.ValueType.SharedString:
             v = textInput(String(val));
             break;
-          case ExcelJS.ValueType.RichText:
+          case Excel.ValueType.RichText:
             v = textInput(richTextToString(val));
             break;
-          case ExcelJS.ValueType.Hyperlink:
+          case Excel.ValueType.Hyperlink:
             v = textInput(richTextToString((val as ExcelJS.CellHyperlinkValue).text));
             break;
-          case ExcelJS.ValueType.Boolean:
+          case Excel.ValueType.Boolean:
             v = val ? 'TRUE' : 'FALSE';
             break;
-          case ExcelJS.ValueType.Date:
+          case Excel.ValueType.Date:
             v = dateInput(val as Date);
             break;
-          case ExcelJS.ValueType.Error:
+          case Excel.ValueType.Error:
             v = '=' + (val as ExcelJS.CellErrorValue).error;
             break;
-          case ExcelJS.ValueType.Formula: {
+          case Excel.ValueType.Formula: {
             const fv = val as ExcelJS.CellFormulaValue & ExcelJS.CellSharedFormulaValue;
             let f: string | undefined = fv.formula;
             if (f) masters.set(cellKey(r, c), f);

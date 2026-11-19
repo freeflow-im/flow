@@ -6,14 +6,12 @@ import { formatReference, type AccountDTO } from '@flow/shared';
 import type { CallerContext } from '../org/routes/compat';
 import { withDocsContext, type DocsContext } from '@flow/docs/server/runtime/workerd/context.ts';
 import { DocsApp, type Caller, type DocsRequest } from '@flow/docs/server/runtime/workerd/http.ts';
-import { buildApp } from '@flow/docs/server/app.ts';
 import { insertRows, tableCounts } from '../importing';
 import { setBrowserLauncher } from '@flow/docs/server/runtime/workerd/browser.ts';
 import { setOcrBinding } from '@flow/docs/server/runtime/workerd/pdfOcr.ts';
-import { handleMcp, handleMcpImport, suiteHub, type McpRequestCaller } from './mcp.ts';
+import type { McpRequestCaller, suiteHub } from './mcp.ts';
 import type { FileHub } from '@flow/docs/plugin/server/files.ts';
 import { DatabaseSync } from '@flow/docs/server/runtime/workerd/sqlite.ts';
-import { PREVIEW_TTL_MS, Previews } from '@flow/docs/server/previews.ts';
 import { lazySubscriptions, subscriptionsAs, type SubscriptionOps } from '../events/subscriptions.ts';
 import { addressOf } from '@flow/shared/addresses';
 import { calendarRequest, type AccountCaller } from '../calendar/forward';
@@ -90,7 +88,13 @@ export class Docs extends DurableObject<DocsEnv> {
     return (stub.call as never as (m: string, a: unknown[]) => Promise<{ ok: boolean; value: T }>)(method, args).then((a) => a.value);
   }
 
-  private build(): Promise<unknown> {
+  // The Docs server and its MCP and previews code are loaded when an object is first built, not when the Worker starts:
+  // loaded at the top they ran on every start of the Worker (about a third of its startup CPU, which Cloudflare caps at 1 s).
+  private lazy?: { mcp: typeof import('./mcp.ts'); previews: typeof import('@flow/docs/server/previews.ts') };
+
+  private async build(): Promise<unknown> {
+    const [{ buildApp }, mcp, previews] = await Promise.all([import('@flow/docs/server/app.ts'), import('./mcp.ts'), import('@flow/docs/server/previews.ts')]);
+    this.lazy = { mcp, previews };
     const base = (this.env.FLOW_WEB_URL ?? 'https://app.freeflow.im').replace(/\/+$/, '');
     const callerOf = (req: DocsRequest) => req.caller;
     return (buildApp as never as (o: unknown) => Promise<unknown>)({
@@ -116,7 +120,7 @@ export class Docs extends DurableObject<DocsEnv> {
         onGrantChange: (change: GrantChange) => this.reportGrant(change),
         onFileChanged: (change: FileChange) => this.fileChanged(change),
         stores: (stores: Parameters<typeof suiteHub>[0]) => {
-          this.hub = suiteHub(stores, `${base}/docs`);
+          this.hub = mcp.suiteHub(stores, `${base}/docs`);
         },
         // The assistant is the account's Assistant object (src/assistant/object.ts): no chats, settings or usage here.
         assistant: {
@@ -322,7 +326,7 @@ export class Docs extends DurableObject<DocsEnv> {
     const agent = { via: caller.via ?? null, invokedBy: caller.invokedBy ?? null };
     const accountCaller = this.accountCaller(caller.userId, caller.orgId, agent);
     const userAppTools = await this.userAppToolsOf(caller, accountCaller);
-    return this.inOrganization(caller.orgId, () => handleMcp(request, this.hub!, caller, this.mailOf(caller.userId, caller.origin, caller.orgId, agent), this.calendarOf(caller.userId, caller.origin, caller.orgId, agent), this.eventsOf(caller.userId, caller.orgId), this.memberOf(caller.orgId), appToolContexts(this.env, accountCaller, caller.origin), userAppTools));
+    return this.inOrganization(caller.orgId, () => this.lazy!.mcp.handleMcp(request, this.hub!, caller, this.mailOf(caller.userId, caller.origin, caller.orgId, agent), this.calendarOf(caller.userId, caller.origin, caller.orgId, agent), this.eventsOf(caller.userId, caller.orgId), this.memberOf(caller.orgId), appToolContexts(this.env, accountCaller, caller.origin), userAppTools));
   }
 
   /**
@@ -410,7 +414,7 @@ export class Docs extends DurableObject<DocsEnv> {
 
   /** An agent's upload to the address upload_file gave it; the ticket in it is the credential. */
   async mcpImport(request: Request, organizationId: string): Promise<Response> {
-    return this.inOrganization(organizationId, () => handleMcpImport(request, this.hub!));
+    return this.inOrganization(organizationId, () => this.lazy!.mcp.handleMcpImport(request, this.hub!));
   }
 
   private async inOrganization(organizationId: string, fn: () => Promise<Response>): Promise<Response> {
@@ -432,7 +436,7 @@ export class Docs extends DurableObject<DocsEnv> {
     await this.flush(organizationId);
     // A preview was made (server/previews.ts): the alarm removes it once it expires, if no use has swept it before.
     if (request.method === 'POST' && new URL(request.url).pathname === '/api/previews' && res.ok && (await this.ctx.storage.getAlarm()) === null) {
-      await this.ctx.storage.setAlarm(Date.now() + PREVIEW_TTL_MS + 60_000);
+      await this.ctx.storage.setAlarm(Date.now() + this.lazy!.previews.PREVIEW_TTL_MS + 60_000);
     }
     return res;
   }
@@ -441,7 +445,7 @@ export class Docs extends DurableObject<DocsEnv> {
   async alarm(): Promise<void> {
     const next = await withDocsContext(this.context, async () => {
       await this.ready;
-      return new Previews(new DatabaseSync() as never, 'data/previews').sweep();
+      return new this.lazy!.previews.Previews(new DatabaseSync() as never, 'data/previews').sweep();
     });
     if (next !== null) await this.ctx.storage.setAlarm(next + 60_000);
   }
