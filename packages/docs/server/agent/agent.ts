@@ -67,7 +67,7 @@ export interface AgentOptions {
 }
 
 /** The pages of this app a turn may come from. */
-const OWN_PAGES: ReadonlySet<string> = new Set(['home', 'sheet', 'deck', 'doc', 'markdown', 'file', 'mail', 'calendar']);
+const OWN_PAGES: ReadonlySet<string> = new Set(['home', 'sheet', 'deck', 'whiteboard', 'doc', 'markdown', 'file', 'mail', 'calendar']);
 
 /** The model the live assistant runs on. Set AGENT_MODEL (e.g. claude-opus-5-5) to change it per deployment. */
 const MODEL = process.env.AGENT_MODEL?.trim() || 'claude-sonnet-5-5';

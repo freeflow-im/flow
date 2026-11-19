@@ -7,6 +7,7 @@ import type { Deck } from '../../../shared/deck.ts';
 import type { SheetMeta } from '../../../shared/types.ts';
 import { BOARD_H, BOARD_W, boardAsDeck, deckAsBoard, GRID } from '../../../shared/whiteboard.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
+import { useRegisterWhiteboard } from '../agent/AgentProvider.tsx';
 import { api, ApiError } from '../api.ts';
 import { useAuth } from '../auth.tsx';
 import { uploadImageFile, pickImageFile } from '../cellImage.ts';
@@ -112,6 +113,7 @@ function WhiteboardWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMet
   useFavicon('whiteboard');
   const navigate = useNavigate();
   const [meta, setMeta] = useState(initialMeta);
+  useRegisterWhiteboard(ctl, meta);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [openMenu, setOpenMenu] = useState<string | null>(null);

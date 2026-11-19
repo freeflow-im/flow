@@ -138,6 +138,38 @@ const editElements = <T extends z.ZodType>(spec: T, kinds = 'text boxes, images,
     })
     .describe(`Fine-grained changes to the elements of one slide: move, resize, restyle, add or remove ${kinds}. Prefer update_slide for text changes.`);
 
+/** An item of a whiteboard (shared/whiteboard.ts) as read_whiteboard reads it and edit_whiteboard takes it. */
+const boardItemSpec = elementSpecV1
+  .extend({
+    id: z.string().optional().describe('Id of an existing item (from read_whiteboard) to change. Omit to add a new item.'),
+    type: z
+      .enum(['text', 'note', 'shape', 'line', 'image'])
+      .optional()
+      .describe('Required for a new item. "text": text typed on the board, as wide and tall as its lines (w and h are ignored). "note": a sticky note (a square of colored paper with text, 200×200 by default). "line" for lines, arrows and connectors.'),
+    x: z.number().optional().describe('Left edge in points (the board is 5760 wide; positions snap to a 4-point grid). Omit x and y to put a new item where the user is looking, next to the others added in the same call.'),
+    y: z.number().optional().describe('Top edge in points (the board is 3600 tall).'),
+    text: z
+      .string()
+      .max(20_000)
+      .optional()
+      .describe('Text and notes: one paragraph per line; "- " makes a bullet; **bold**, *italic* and [label](https://...) style words. Shapes: a label centered in the shape.'),
+    fill: z.string().max(64).optional().describe('Notes: the paper color (default #fff59d, yellow; #ffcc80 orange, #f8bbd0 pink, #b3e5fc blue, #c8e6c9 green, #e1bee7 purple, #ffffff white). Shapes: the fill CSS color, or "none".'),
+    x1: z.number().optional().describe('Lines: x of the start point. A line can point in any direction.'),
+    y1: z.number().optional().describe('Lines: y of the start point.'),
+    connect_start: connection.optional().describe('Lines: attach the start to a side of an item (id from read_whiteboard: to connect new items, add them first, then the line in a second call); the line follows it when it moves. null detaches.'),
+    src: z.string().optional().describe('Images: an http(s) image URL, or the /api/images/... address of an image attached to the chat. Pictures are drawn above text.'),
+  })
+  .describe('An item to add or change. Only the properties given change.');
+
+const editWhiteboard = z
+  .object({
+    set: z.array(boardItemSpec).max(100).optional().describe('Items to add (no id) or change (with id).'),
+    remove: z.array(z.string()).max(500).optional().describe('Ids of items to remove.'),
+  })
+  .describe(
+    'Add, change or remove items on the open whiteboard in one step: typed text, sticky notes, shapes, lines and arrows, and pictures. Read it first with read_whiteboard for ids and positions. Returns each item set with its id and place.',
+  );
+
 /** edit_elements as version 1 of the ChatGPT plugin's tools has it. */
 export const editElementsV1 = editElements(elementSpecV1, 'text boxes, images, shapes, and lines/arrows/connectors (type "line")');
 
@@ -357,6 +389,11 @@ export const schemas = {
       'Change the content of one slide by role: title, subtitle, body, body2, image, caption, notes, background. Only the properties given change, and elements keep their positions. Pass layout to rearrange the slide.',
     ),
   edit_elements: editElements(elementSpec),
+  // --- Open whiteboard (run in the browser; client/src/agent/whiteboardTools.ts) ---
+  read_whiteboard: z
+    .object({})
+    .describe('Read the open whiteboard: its size and grid, every item (id, type text/note/shape/line/image, position, size, text with **bold** and *italic*, colors), what the user has selected, and the middle of what they see (view_center). Call this before changing it.'),
+  edit_whiteboard: editWhiteboard,
   render_slide: z
     .object({
       slide: slideNumber,

@@ -266,6 +266,13 @@ export function renderContext(ctx: AgentContext): string {
     ];
     return `<app_context>\n${lines.join('\n')}\n</app_context>`;
   }
+  if (ctx.page === 'whiteboard') {
+    const lines = [
+      `Open whiteboard: "${ctx.title}" (id ${ctx.boardId}), ${ctx.itemCount} item${ctx.itemCount === 1 ? '' : 's'}. No spreadsheet, presentation or document is open: read it with read_whiteboard and change it with edit_whiteboard.`,
+      ...(ctx.selectedItems.length ? [`Selected items: ${ctx.selectedItems.join(', ')}`] : []),
+    ];
+    return `<app_context>\n${lines.join('\n')}\n</app_context>`;
+  }
   if (ctx.page === 'deck') {
     const lines = [
       `Open presentation: "${ctx.title}" (id ${ctx.deckId}), ${ctx.slideCount} slide${ctx.slideCount === 1 ? '' : 's'}. No spreadsheet is open.`,

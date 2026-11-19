@@ -111,6 +111,16 @@ export function toolLabel(name: string, i: Input): string {
       const n = (Array.isArray(i.set) ? i.set.length : 0) + (Array.isArray(i.remove) ? i.remove.length : 0);
       return `Changed ${plural(n, 'element')} on slide ${i.slide}`;
     }
+    case 'read_whiteboard':
+      return 'Read the whiteboard';
+    case 'edit_whiteboard': {
+      const set = Array.isArray(i.set) ? i.set : [];
+      const added = set.filter((s) => !(s as { id?: unknown }).id).length;
+      const removed = Array.isArray(i.remove) ? i.remove.length : 0;
+      const parts = [added ? `added ${plural(added, 'item')}` : '', set.length - added ? `changed ${plural(set.length - added, 'item')}` : '', removed ? `removed ${plural(removed, 'item')}` : ''].filter(Boolean);
+      const text = parts.join(', ') || 'changed the whiteboard';
+      return text.charAt(0).toUpperCase() + text.slice(1);
+    }
     case 'delete_slides':
       return Array.isArray(i.slides) && i.slides.length === 1 ? `Deleted slide ${i.slides[0]}` : `Deleted ${plural(Array.isArray(i.slides) ? i.slides.length : 0, 'slide')}`;
     case 'move_slide':

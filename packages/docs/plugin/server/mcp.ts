@@ -107,7 +107,7 @@ export const instructionsFor = (version: McpVersion = 1, local = false): string 
   const intro = version === 1 && !local ? INSTRUCTIONS : INSTRUCTIONS.replace(/^Universal Docs:/, `${appName(true)}:`);
   return version === 1
     ? intro
-    : `${intro}\n${V2_INSTRUCTIONS}\nStored files (kind file: PDFs, web pages, pictures, videos and other uploads) are not edited. read_file returns one exactly as it is (a text file's text, a picture, or the bytes of a PDF or other file), and read_doc with its id as doc_id reads its text as numbered blocks. convert_pdf_to_markdown makes a Markdown document of a PDF's text, to edit.`;
+    : `${intro}\n${V2_INSTRUCTIONS}\nStored files (kind file: PDFs, web pages, pictures, videos and other uploads) are not edited. read_file returns one exactly as it is (a text file's text, a picture, or the bytes of a PDF or other file), and read_doc with its id as doc_id reads its text as numbered blocks. convert_pdf_to_markdown makes a Markdown document of a PDF's text, to edit.\nWhiteboards (large boards of typed text, sticky notes, shapes, lines and pictures) have their own tools: list_whiteboards, create_whiteboard, read_whiteboard and edit_whiteboard, each naming the board by board_id.`;
 };
 
 const DOC_ICON = {
@@ -642,6 +642,49 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
   );
 
   if (version >= 2) {
+    // Whiteboards (shared/whiteboard.ts) have tools of their own: they are not among the file kinds of version 1.
+    const boardId = z.string().min(1).max(100).describe('The whiteboard (list_whiteboards gives ids).');
+    server.registerTool(
+      'list_whiteboards',
+      {
+        title: 'List whiteboards',
+        description: "The user's whiteboards (large boards of typed text, sticky notes, shapes, lines and pictures), most recently edited first, with their ids and folders. list_files does not list them.",
+        inputSchema: { query: z.string().max(200).optional().describe('Only whiteboards whose title contains this text.') },
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      },
+      async ({ query }) => guard(() => ok({ whiteboards: service.listWhiteboards(query).slice(0, MAX_LISTED), ...service.state() })),
+    );
+    server.registerTool(
+      'create_whiteboard',
+      {
+        title: 'Create whiteboard',
+        description: 'Create a new, empty whiteboard: a board 5760×3600 points (about four screens each way). Fill it with edit_whiteboard.',
+        inputSchema: { title: z.string().min(1).max(200) },
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      },
+      async ({ title }) => guard(async () => ok({ whiteboard: await service.createWhiteboard(title), ...service.state() })),
+    );
+    server.registerTool(
+      'read_whiteboard',
+      {
+        title: 'Read whiteboard',
+        description: 'Read a whiteboard: its size and grid, and every item (id, type text/note/shape/line/image, position, size, text with **bold** and *italic*, colors). Call this before changing it.',
+        inputSchema: { board_id: boardId },
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      },
+      async ({ board_id }) => guard(async () => ok(await service.editWhiteboard(board_id, 'read_whiteboard', {}))),
+    );
+    server.registerTool(
+      'edit_whiteboard',
+      {
+        title: 'Edit whiteboard',
+        description: `${schemas.edit_whiteboard.description ?? ''} Items without x and y go below what is on the board. The whiteboard updates in the app by itself.`,
+        inputSchema: { board_id: boardId, ...schemas.edit_whiteboard.shape },
+        annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+      },
+      async ({ board_id, ...input }) => guard(async () => ok(await service.editWhiteboard(board_id, 'edit_whiteboard', input as Record<string, unknown>))),
+    );
+
     const folderPath = z.string().max(1000);
     server.registerTool(
       'create_folder',

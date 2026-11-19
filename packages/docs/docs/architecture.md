@@ -77,7 +77,10 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   read back into runs by `editedRuns`) and `imagesOnTop`. Typed text is a text element with `anchored`: placed at the click,
   edited where it is (never dragged), with no paragraph spacing, its stored box measured from the page after each change
   and merged into that change's undo step (`DeckStore.amend`); left empty, it goes. A sticky note is a text element with a
-  `fill`. The assistant has no whiteboard tools yet.
+  `fill`. The assistant's tools are `read_whiteboard` and `edit_whiteboard` (`client/src/agent/whiteboardTools.ts`, items as
+  `edit_elements` takes them plus `note` and typed `text`, **bold**/*italic* in text): browser tools on the open board
+  (`useRegisterWhiteboard`, page `whiteboard`), and over MCP (version 2, with `board_id`, plus `list_whiteboards` and
+  `create_whiteboard`) the same code on a stored board through a headless controller (`FileService.editWhiteboard`).
 - A video in a presentation or a document is named by its address (`shared/video.ts`): a stored video
   file (`/api/files/<id>`) or a YouTube video's watch address. It is a slide element of type `video`
   (`shared/deck.ts`) and a `video` block in a document (`shared/doc.ts`; in Markdown an image whose address

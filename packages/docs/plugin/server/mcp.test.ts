@@ -79,12 +79,26 @@ describe('MCP server', () => {
     const newer = (await v2.listTools()).tools;
     expect(v2.getServerVersion()?.version).toBe('0.3.0');
     expect(v2.getInstructions()).toContain('read_file');
-    const added = ['search_content', 'search_files', 'create_folder', 'move_file', 'upload_file', 'read_file', 'edit_file', 'convert_pdf_to_markdown', 'add_chart', 'edit_chart', 'delete_chart'];
+    const added = ['search_content', 'search_files', 'list_whiteboards', 'create_whiteboard', 'read_whiteboard', 'edit_whiteboard', 'create_folder', 'move_file', 'upload_file', 'read_file', 'edit_file', 'convert_pdf_to_markdown', 'add_chart', 'edit_chart', 'delete_chart'];
     expect(newer.map((t) => t.name).filter((n) => !tools.some((t) => t.name === n))).toEqual(added);
     // Besides those, three tools differ: list_files knows about folders, transform_image puts pictures on top, and edit_elements places an arc by its own box or its center and radius.
     expect(newer.filter((t) => !added.includes(t.name) && JSON.stringify(t) !== JSON.stringify(tools.find((o) => o.name === t.name))).map((t) => t.name)).toEqual(['list_files', 'import_file', 'transform_image', 'edit_elements']);
     expect(newer.find((t) => t.name === 'transform_image')?.inputSchema.properties).toHaveProperty('overlays');
     expect(tools.find((t) => t.name === 'transform_image')?.inputSchema.properties).not.toHaveProperty('overlays');
+    await v2.close();
+  });
+
+  it('makes, lists, fills and reads whiteboards in version 2', async () => {
+    const v2 = await connect(2);
+    const { whiteboard } = (await call('create_whiteboard', { title: 'Retro board' }, v2)).data! as { whiteboard: { id: string } };
+    expect((await call('list_whiteboards', { query: 'retro' }, v2)).data).toMatchObject({ whiteboards: [{ id: whiteboard.id, kind: 'whiteboard', title: 'Retro board' }] });
+    const edited = await call('edit_whiteboard', { board_id: whiteboard.id, set: [{ type: 'note', text: 'Went **well**' }, { type: 'text', x: 400, y: 81, text: 'Retro' }] }, v2);
+    expect(edited.isError).toBe(false);
+    expect(edited.data).toMatchObject({ board_id: whiteboard.id, item_count: 2, set: [{ type: 'note' }, { type: 'text', x: 400, y: 80 }] });
+    const read = (await call('read_whiteboard', { board_id: whiteboard.id }, v2)).data!;
+    expect(read).toMatchObject({ title: 'Retro board', items: [{ type: 'note', text: 'Went **well**' }, { type: 'text', text: 'Retro' }] });
+    expect((await call('read_whiteboard', { board_id: 'nope' }, v2)).text).toMatch(/no whiteboard nope/);
+    expect((await call('list_whiteboards', {}, client)).isError).toBe(true); // not in version 1
     await v2.close();
   });
 

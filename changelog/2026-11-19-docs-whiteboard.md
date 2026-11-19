@@ -4,8 +4,10 @@
 - `[web]` Text tool (typed text stays where it was typed and grows with its lines), sticky notes, shapes, lines, Upload image and ⌘V; positions and sizes snap to a 4-point grid; pictures draw above text.
 - `[web]` ⌘V of a picture while typing in a text or note puts the picture on the board.
 - `[web]` Text being typed on a whiteboard takes ⌘B / ⌘I / ⌘U on a few words, and the slide editor now keeps bold, italic and colored words through a re-edit.
-- `[web]` The assistant has no whiteboard tools yet; a whiteboard's text is searchable and exports as JSON.
+- `[web]` `[desktop]` The assistant reads and changes the open whiteboard (`read_whiteboard`, `edit_whiteboard`, browser tools on the live editor).
+- `[server]` MCP (v2): `list_whiteboards`, `create_whiteboard`, `read_whiteboard`, `edit_whiteboard` on stored boards, the same tool code run headless.
+- `[web]` A whiteboard's text is searchable and exports as JSON; it has no PDF yet.
 
 ## Feature
 
-- **Whiteboards in Docs.** Make a Whiteboard from New: a large board, about four screens each way, that you scroll around. Click anywhere with the Text tool and type, add sticky notes, shapes and lines, and drop in pictures with Upload image or ⌘V. Everything lines up on an invisible grid.
+- **Whiteboards in Docs.** Make a Whiteboard from New: a large board, about four screens each way, that you scroll around. Click anywhere with the Text tool and type, add sticky notes, shapes and lines, and drop in pictures with Upload image or ⌘V. Everything lines up on an invisible grid. Your assistant can read and change the open whiteboard ("add three sticky notes with ideas"), and agents connected over MCP can make and edit whiteboards too.
