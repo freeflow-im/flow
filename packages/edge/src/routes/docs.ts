@@ -25,7 +25,7 @@ export async function who(c: C) {
   }
 }
 
-const BY_FILE = /^\/api\/(?:sheets|docs|decks|markdown|files|images|revisions)\/([^/]+)/;
+export const BY_FILE = /^\/api\/(?:sheets|docs|decks|markdown|whiteboards|files|images|revisions)\/([^/]+)/;
 
 /** A request that names only a file: the directory knows which organization's object made it. */
 async function placeOfFile(c: C): Promise<string | null> {
@@ -41,7 +41,7 @@ async function placeOfOpened(c: C): Promise<string | null> {
 }
 
 /** The routes that make a file or folder, naming where in their JSON body (docs client api.ts placeFields). */
-const MAKES = /^\/api\/(?:sheets|docs|decks|markdown|folders)$/;
+export const MAKES = /^\/api\/(?:sheets|docs|decks|markdown|whiteboards|folders)$/;
 
 /**
  * A new file or folder's organization, named in the body (`{ workspace }`): without this one made in any organization
