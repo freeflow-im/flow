@@ -142,3 +142,28 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+  # The Worker's startup CPU (packages/edge/scripts/check-startup.mjs). Cloudflare refuses a version whose startup takes
+  # more than 1 s (error 10021; #872's deploy was refused on 2026-11-18), and only says so at deploy, after the merge. This
+  # measures the bundle a deploy would build and fails when code that runs at load has grown past the limit.
+  edge-startup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile --filter @flow/edge...
+      - name: Build @flow/shared
+        run: pnpm --filter @flow/shared build
+      # CI measured 95-103 ms on PR #877 (2026-11-19), where Cloudflare reports about 220-360 ms for the same code. 200 ms
+      # is about twice today's: a change that doubles startup fails here, well before Cloudflare's 1 s.
+      - name: Measure startup
+        working-directory: packages/edge
+        env:
+          STARTUP_LIMIT_MS: 200
+        run: node scripts/check-startup.mjs
