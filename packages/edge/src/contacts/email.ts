@@ -3,7 +3,7 @@
 // organization only (the sender included: "email it to me"). An address outside the organization is refused here, on the
 // server, whatever the model asked for. Attachments come inline from the agent, or by reference to a file the sender can
 // open: a Docs file (a stored file as it is; a document, sheet or presentation exported) or a file attached in Chat.
-import { z } from 'zod4';
+import { z } from 'zod';
 import type { AccountDTO } from '@flow/shared';
 import { ApiError } from '../errors';
 import { markdownToHtml } from '../imap/mailText';

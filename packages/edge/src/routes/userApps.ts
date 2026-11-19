@@ -45,10 +45,10 @@ const InstallBody = z.union([
 ]);
 const UpdateBody = z.object({ url: z.string().url().max(2000).optional(), version: z.number().int().positive().optional(), grants: Grants });
 // A hosted app's version: its manifest and its files, each base64 (§14 phase 2, step 1).
-const UploadBody = z.object({ manifest: z.unknown(), files: z.record(z.string().max(7_000_000)) });
+const UploadBody = z.object({ manifest: z.unknown(), files: z.record(z.string(), z.string().max(7_000_000)) });
 const PreviewBody = z.object({ url: z.string().url().max(2000) });
 const AgentsBody = z.object({ on: z.boolean() });
-const CallBody = z.object({ name: z.string().min(1).max(64), input: z.record(z.unknown()).default({}) });
+const CallBody = z.object({ name: z.string().min(1).max(64), input: z.record(z.string(), z.unknown()).default({}) });
 
 const orgStub = (c: C, id: string) => c.env.ORG.get(c.env.ORG.idFromName(id));
 
@@ -243,7 +243,7 @@ userAppRoutes.get('/v1/workspaces/:id/apps/:name/export', async (c) => {
 
 const DraftBody = z.object({ name: z.string().min(2).max(20), label: z.string().trim().min(1).max(40).optional(), fromInstalled: z.boolean().optional() });
 const FileBody = z.object({ path: z.string().min(1).max(200), text: z.string().max(1_500_000) });
-const TryBody = z.object({ tool: z.string().min(1).max(32), input: z.record(z.unknown()).default({}) });
+const TryBody = z.object({ tool: z.string().min(1).max(32), input: z.record(z.string(), z.unknown()).default({}) });
 
 /** Who builds: any member or agent but a guest (Scott, 2026-11-17); the draft is the caller's account's. */
 async function builderOf(c: C): Promise<Member> {

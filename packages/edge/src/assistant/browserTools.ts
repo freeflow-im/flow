@@ -7,7 +7,7 @@
 // They sit outside the registry's definitions while this is a prototype: the registry offers a browser tool by app, and
 // these belong to no app.
 import type Anthropic from '@anthropic-ai/sdk';
-import { z } from 'zod4';
+import { z } from 'zod';
 import { BROWSER_TOOLS, type AgentContext } from '@flow/docs/shared/agent/protocol.ts';
 
 const tab = z.number().int().positive().describe('The tab, by the number browser_open or browser_tabs gave.');

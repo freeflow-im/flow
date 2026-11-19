@@ -7,7 +7,7 @@
 // turn whoever asked, and /memories/you/, the person who asked this turn's own (rows of theirs, so the agent never opens
 // another person's). A file written in a turn started by someone else's content (mail, a wake job) is marked external,
 // and read back with a header saying it is information, not instructions.
-import { z } from 'zod4';
+import { z } from 'zod';
 
 export const MEMORY_DDL: string[] = [
   `CREATE TABLE IF NOT EXISTS agent_memory_files (owner TEXT NOT NULL, path TEXT NOT NULL, body TEXT NOT NULL, trust TEXT NOT NULL DEFAULT 'own',

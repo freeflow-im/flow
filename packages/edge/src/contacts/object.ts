@@ -12,7 +12,7 @@
 // is `member:<accountId>` and a Mail correspondent `mail:<address>`, neither stored.
 import { DurableObject } from 'cloudflare:workers';
 import { Hono, type Context } from 'hono';
-import { z } from 'zod4';
+import { z } from 'zod';
 import { formatReference, type AccountDTO, type Role } from '@flow/shared';
 import { GRANTS_DDL, grantSql, grantsForChainSql, principalsOf, revokeSql, type GrantPrincipal } from '@flow/shared/grants';
 import type { CallerContext, ObjectBindings } from '../org/routes/compat';

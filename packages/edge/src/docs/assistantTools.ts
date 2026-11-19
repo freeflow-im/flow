@@ -4,7 +4,7 @@
 // person's own objects, the apps added by manifest bring their own, and the prompt says how to use them. Importing this
 // module registers Docs' own tools and hands the core the source; the Assistant object imports it.
 import type Anthropic from '@anthropic-ai/sdk';
-import { z } from 'zod4';
+import { z } from 'zod';
 import { APP_MANIFESTS } from '@flow/shared/manifests';
 import { toolsAtDoor, type ToolDefinition } from '@flow/shared/tools';
 import { CLIENT_TOOLS, type AgentContext } from '@flow/docs/shared/agent/protocol.ts';

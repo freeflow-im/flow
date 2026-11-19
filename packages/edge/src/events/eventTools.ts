@@ -1,7 +1,7 @@
 // The event bus's tools on /mcp (platform.md §5.2, §5.4): a subscription's four operations, and a wake subscription's
 // jobs, as the grant's account in the grant's organization, through the same code as the HTTP routes (subscriptions.ts).
 // One scope, events:read: an agent reads the queues it makes, and sees only events its account may see.
-import { z } from 'zod4';
+import { z } from 'zod';
 import { register } from '../registry';
 import { CreateSubscriptionBody } from '@flow/shared';
 import type { SubscriptionOps } from './subscriptions';
