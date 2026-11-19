@@ -3,12 +3,12 @@
 // hosts it may reach, its tools with their whole descriptions (an agent reads them as guidance), and who gets it.
 import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
-import { appsChanged } from '@flow/suite-bar';
+import { AppIcon, appIconUrl, appsChanged, isImageIcon } from '@flow/suite-bar';
 import { appsApi, type AppGrants, type InstalledApp, type OrgAccount } from '../api';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-interface Manifest { label?: string; ui?: unknown; uses?: string[]; egress?: string[]; scopes?: { id: string; label: string }[]; tools?: { name: string; description: string }[] }
+interface Manifest { label?: string; icon?: string; ui?: unknown; uses?: string[]; egress?: string[]; scopes?: { id: string; label: string }[]; tools?: { name: string; description: string }[] }
 
 /** The grants an installed app has now, as the popup starts with them. */
 function grantsOf(app: InstalledApp | undefined): AppGrants {
@@ -61,6 +61,8 @@ export function InstallDialog({ org, name, version, onClose, onDone }: { org: st
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" role="dialog" aria-modal="true" aria-label={`Install ${name}`} data-testid="install-dialog">
       <div className="flex max-h-[85vh] w-full max-w-lg flex-col gap-3 overflow-y-auto rounded-xl bg-white p-5 text-sm shadow-xl">
         <div className="flex items-center">
+          {/* The version's own icon (user-apps.md §4): its image from the version's files, or its emoji. */}
+          <AppIcon icon={isImageIcon(manifest?.icon) ? null : manifest?.icon} iconUrl={isImageIcon(manifest?.icon) ? appIconUrl(org, name, version) : null} size={20} className="mr-2" />
           <h2 className="text-base font-semibold">{update ? `Update ${manifest?.label ?? name} to version ${version}` : `Install ${manifest?.label ?? name}`}</h2>
           <button type="button" className="ml-auto text-muted hover:text-ink" onClick={onClose} aria-label="Close"><X className="size-4" /></button>
         </div>

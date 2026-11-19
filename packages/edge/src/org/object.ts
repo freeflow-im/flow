@@ -36,7 +36,7 @@ import { sweepIdleVisitors, visitorBySession, visitorMayReceive, type MessageTim
 import { cleanPrompts, type AssistantPrompts } from '@flow/shared/assistant';
 import {
   AppEventLimiter, appForUse, appHolderOf, callAppTool, checkAppEvent, heldScopes, installApp, listApps, offeredAppTools, readableApps,
-  removeApp, rotateAppSecret, setAgentsOn, agentsWithApp, setAppGrants, updateApp, recordUpload, listUploads, installedCode, restorePointOf, revertApp,
+  removeApp, rotateAppSecret, setAgentsOn, agentsWithApp, appMembers, appIconFile, type AppMember, setAppGrants, updateApp, recordUpload, listUploads, installedCode, restorePointOf, revertApp,
   type AppCallerContext, type AgentForApp, type AppGrants, type AppHolder, type AppSource, type AppToolAnswer, type AppUpload, type OfferedAppTool,
 } from './services/userApps';
 import { APP_SESSION_SECONDS, mintUserAppToken, signAppSession, signAppTicket, verifyAppSession, verifyAppTicket, verifyBody, verifyUserAppToken, type AppSession, type AppTicket } from './lib/appSigning';
@@ -1343,6 +1343,23 @@ export class Org extends DurableObject<OrgEnv> {
     if (!userId) return { ok: false, error: 'the caller is not a member here any more' };
     const email = (this.ctx.storage.sql.exec('SELECT email FROM users WHERE id = ?', userId).toArray()[0]?.email as string | undefined) ?? null;
     return { ok: true, ticket: t, docs: { userId, email, token: null, ip: '', accountId: t.accountId, channelIds: this.channelIdsOf(userId) } };
+  }
+
+  /**
+   * A hosted app lists the organization's members as its caller (§6.3, `members:read`): Chat's roster as the caller sees
+   * it, less guests and removed members, with no email addresses (appMembers).
+   */
+  async membersForAppCaller(p: { organizationId: string; name: string; ticket: string; search?: string; dev?: string }): Promise<{ ok: true; members: AppMember[] } | { ok: false; error: string }> {
+    const who = await this.appSuiteCaller({ organizationId: p.organizationId, name: p.name, ticket: p.ticket, use: 'members:read', ...(p.dev ? { dev: p.dev } : {}) });
+    if (!who.ok) return who;
+    const adminAgentId = await this.adminAgentId();
+    const members = await withDb(this.db, () => appMembers({ organizationId: p.organizationId, callerUserId: who.docs.userId, adminAgentId, ...(p.search !== undefined ? { search: p.search } : {}) }));
+    return { ok: true, members };
+  }
+
+  /** Where an app's image icon is kept (§4): the installed version's, or `version`'s. */
+  async userAppIcon(name: string, version?: number): Promise<{ key: string; type: string } | null> {
+    return withDb(this.db, () => appIconFile(name, version));
   }
 
   /** A hosted app posts in Chat as its caller (§6.3, `chat:write`): Chat's own checks apply, as for the caller's own post. */

@@ -20,12 +20,13 @@
 //   POST   /v1/workspaces/:id/apps/:name/secret     a new secret; the old one stops at once
 //   PUT    /v1/workspaces/:id/apps/:name/agents     a person turns the app on or off for their personal agents (§5.2)
 //   POST   /v1/workspaces/:id/apps/:name/screen     the screen's URL with a one-use door key (§6.2)
+//   GET    /v1/workspaces/:id/apps/:name/icon       an image icon (§4): the installed version's, or ?v=<version>'s (members)
 //   POST   /v1/workspaces/:id/tools/call            the bridge runs an app tool (the bridge runs built-in tools itself)
 //   POST   /v1/apps/:org/:name/events               an event from the app, signed with its secret (§5.1): no session
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
-import { checkHostedFiles, checkUserAppManifest, isHosted, parseAppToolName, USER_APP_LIMITS, type AccountDTO, type UserAppManifest } from '@flow/shared';
-import type { AppSource } from '../org/services/userApps';
+import { appIconUrl, checkAppIcon, checkHostedFiles, checkUserAppManifest, isHosted, isImageIcon, parseAppToolName, USER_APP_LIMITS, type AccountDTO, type UserAppManifest } from '@flow/shared';
+import type { AppSource, AppUpload } from '../org/services/userApps';
 import { filesPrefix, type HostedEnv } from '../apps/hosted';
 import { ApiError, badRequest, forbidden, unauthorized } from '../errors';
 import { directory, guestRefusal, resolveCaller, type AuthEnv } from './auth';
@@ -118,7 +119,9 @@ userAppRoutes.get('/v1/workspaces/:id/apps', async (c) => {
   const m = await memberOf(c);
   // `canBuild`: the Apps menu's Build an app (§9.6): every member and agent but a guest.
   if (m.account.kind === 'guest') return c.json({ apps: [], canBuild: false });
-  const apps = await orgStub(c, m.organizationId).listUserApps({ ...holderOf({ ...m, account: m.account }), via: null, admin: isAdmin(m) && !m.isAgent });
+  const listed = await orgStub(c, m.organizationId).listUserApps({ ...holderOf({ ...m, account: m.account }), via: null, admin: isAdmin(m) && !m.isAgent });
+  // An image icon's address, on this organization's path (the Org object names it from the app's own).
+  const apps = listed.map((a) => (a.iconUrl ? { ...a, iconUrl: `/v1/workspaces/${m.organizationId}/${a.iconUrl}` } : a));
   c.header('Cache-Control', 'no-store');
   return c.json({ apps, canBuild: true });
 });
@@ -189,7 +192,7 @@ userAppRoutes.post('/v1/workspaces/:id/apps/versions', async (c) => {
   if (!isHosted(checked.manifest)) return refused(c, ['server: an uploaded version is a hosted app\'s: { "hosted": true }']);
   const bytes: Record<string, Uint8Array> = {};
   for (const [path, b64] of Object.entries(files)) bytes[path] = Buffer.from(b64, 'base64');
-  const problems = checkHostedFiles(checked.manifest, Object.fromEntries(Object.entries(bytes).map(([p, b]) => [p, b.byteLength])));
+  const problems = [...checkHostedFiles(checked.manifest, Object.fromEntries(Object.entries(bytes).map(([p, b]) => [p, b.byteLength]))), ...checkAppIcon(checked.manifest, bytes)];
   if (problems.length) return refused(c, problems);
   const prefix = `apps/${m.organizationId}/${checked.manifest.name}/${crypto.randomUUID()}/`;
   await Promise.all(Object.entries(bytes).map(([path, b]) => bucket.put(prefix + path, b)));
@@ -323,7 +326,9 @@ userAppRoutes.post('/v1/workspaces/:id/apps/drafts/:name/publish', async (c) => 
 userAppRoutes.get('/v1/workspaces/:id/apps/versions', async (c) => {
   const m = await adminOf(c);
   c.header('Cache-Control', 'no-store');
-  return c.json({ versions: await orgStub(c, m.organizationId).listUserAppUploads() });
+  const versions = (await orgStub(c, m.organizationId).listUserAppUploads()) as AppUpload[];
+  // The install card shows each version's image icon from its own files.
+  return c.json({ versions: versions.map((v) => (isImageIcon(v.manifest.icon) ? { ...v, iconUrl: appIconUrl(m.organizationId, v.name, v.version) } : v)) });
 });
 
 userAppRoutes.put('/v1/workspaces/:id/apps/:name/grants', async (c) => {
@@ -373,6 +378,25 @@ userAppRoutes.post('/v1/workspaces/:id/tools/call', async (c) => {
   if (!parseAppToolName(name)) throw badRequest('validation', `${name} is not an app tool: the bridge runs built-in tools itself`);
   const answer = await runAppTool(c.env, { ...m, account: m.account }, name, input);
   return c.json(answer);
+});
+
+/**
+ * An app's image icon (§4), for the Apps menu, the app cards, Admin and the install card: the installed version's, or the
+ * version `?v=` names. Any member but a guest. An SVG gets a policy that runs nothing in it, if it is opened on its own.
+ */
+userAppRoutes.get('/v1/workspaces/:id/apps/:name/icon', async (c) => {
+  const m = await memberOf(c);
+  const guest = guestRefusal(m.account, 'apps');
+  if (guest) throw guest;
+  const v = Number(c.req.query('v'));
+  const icon = await orgStub(c, m.organizationId).userAppIcon(c.req.param('name'), Number.isInteger(v) && v > 0 ? v : undefined);
+  const bucket = (c.env as AuthEnv & { BLOBS?: R2Bucket }).BLOBS;
+  const o = icon && bucket ? await bucket.get(icon.key) : null;
+  if (!icon || !o) throw new ApiError(404, 'not_found', 'this app has no image icon');
+  return new Response(o.body, { headers: {
+    'content-type': icon.type, 'cache-control': 'private, max-age=86400', 'x-content-type-options': 'nosniff',
+    'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox",
+  } });
 });
 
 userAppRoutes.post('/v1/apps/:org/:name/events', async (c) => {

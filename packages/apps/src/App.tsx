@@ -11,6 +11,7 @@ import { AppsSuiteBar } from './components/AppsSuiteBar';
 import { Notice } from './components/Notice';
 import { useOrganizations } from './hooks/organization';
 import { SuiteAssistant } from '@flow/suite-bar/assistant-chat';
+import { AppIcon } from '@flow/suite-bar';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -24,6 +25,7 @@ export function App() {
   useEffect(() => {
     document.title = app ? `${app.label} · FreeFlow` : building ? `Building ${building} · FreeFlow` : 'FreeFlow Apps';
   }, [app, building]);
+  useAppFavicon(app?.iconUrl);
 
   let body;
   if (ready && !org) body = <Notice testid="no-organization">You are not in an organization yet. Apps come with an organization. <a href="/" className="font-semibold text-primary hover:underline">Go to Chat</a></Notice>;
@@ -51,6 +53,17 @@ export function App() {
   );
 }
 
+/** The browser tab's icon on an app's page: its image icon (user-apps.md §4), else the suite's, as it was. */
+function useAppFavicon(iconUrl: string | undefined) {
+  useEffect(() => {
+    if (!iconUrl) return;
+    const links = [...document.querySelectorAll<HTMLLinkElement>('link[rel~="icon"]')];
+    const before = links.map((l) => l.href);
+    for (const l of links) l.href = iconUrl;
+    return () => links.forEach((l, i) => { l.href = before[i]!; });
+  }, [iconUrl]);
+}
+
 /** The app's screen, in a frame on its own origin: the door key is minted for each load, and Reload mints a new one. */
 function Screen({ org, app }: { org: string; app: InstalledApp }) {
   const [load, setLoad] = useState(0);
@@ -68,7 +81,7 @@ function Screen({ org, app }: { org: string; app: InstalledApp }) {
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex h-8 items-center gap-2 border-b border-hairline bg-panel px-3 text-xs text-muted" data-testid="app-notice">
-        <span className="truncate">{app.icon ? `${app.icon} ` : ''}{app.label} {app.serverOrigin ? `runs on its author’s server, ${app.serverOrigin}.` : 'is run by FreeFlow.'}</span>
+        <span className="flex min-w-0 items-center gap-1.5 truncate"><AppIcon icon={app.icon} iconUrl={app.iconUrl} size={14} />{app.label} {app.serverOrigin ? `runs on its author’s server, ${app.serverOrigin}.` : 'is run by FreeFlow.'}</span>
         {/* A hosted app opens in the builder: the person's draft of it (§9.6). */}
         {app.hosted && (
           <button type="button" className="ml-auto rounded px-1.5 py-0.5 font-semibold text-primary hover:bg-hover" onClick={() => void editApp(org, app.name, app.label).then((e) => e && setError(e))} data-testid="edit-app">

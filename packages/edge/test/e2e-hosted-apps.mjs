@@ -420,5 +420,95 @@ r = await call(O.token, A, 'pics__drop', { key: 'notes/hello.txt' });
 r = await call(O.token, A, 'pics__files', {});
 t('a deleted file leaves the list', r.j.ok && r.j.result.length === 1, JSON.stringify(r.j));
 
+
+// --- members:read and image icons (user-apps.md §6.3, §4) -----------------------------------------------------------
+const zlib = await import('node:zlib');
+/** A real PNG, w×h, one colour. */
+function pngOf(w, h) {
+  const crcTable = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+  const crc = (buf) => { let c = 0xffffffff; for (const b of buf) c = crcTable[(c ^ b) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+  const chunk = (type, data) => { const len = Buffer.alloc(4); len.writeUInt32BE(data.length); const td = Buffer.concat([Buffer.from(type), data]); const c = Buffer.alloc(4); c.writeUInt32BE(crc(td)); return Buffer.concat([len, td, c]); };
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 2;
+  const rows = Buffer.concat(Array.from({ length: h }, () => Buffer.concat([Buffer.from([0]), Buffer.alloc(w * 3, 0x40)])));
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(rows)), chunk('IEND', Buffer.alloc(0))]);
+}
+// Uma gets a picture, so the list carries one.
+{
+  const boundary = 'ffavatar' + tag;
+  const bodyBuf = Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="me.png"\r\nContent-Type: image/png\r\n\r\n`), pngOf(32, 32), Buffer.from(`\r\n--${boundary}--\r\n`)]);
+  const res = await fetch(B + '/v1/me/avatar', { method: 'POST', headers: { authorization: 'Bearer ' + U.token, 'content-type': `multipart/form-data; boundary=${boundary}` }, body: bodyBuf });
+  t('Uma sets a picture', res.ok, res.status + ' ' + (await res.text()).slice(0, 120));
+}
+const crewManifest = (icon, uses = ['members:read']) => ({
+  name: 'crew', label: 'Crew', icon, server: { hosted: true }, ui: { hosted: true }, uses,
+  scopes: [{ id: 'crew:use', label: 'Use it', read: true }],
+  tools: [{ name: 'people', description: 'Lists the members.', input: { type: 'object', properties: { q: { type: 'string' } } }, scopes: ['crew:use'] }],
+});
+const crewServer = `import { defineApp } from 'freeflow';
+export default defineApp({
+  tools: { people: async (input, ctx) => (input.q ? ctx.members.search(input.q) : ctx.members.list()) },
+  routes: { 'GET /api/people': async (request, ctx) => ctx.members.list() },
+});`;
+const crewFiles = (icon) => ({ 'server.js': b64(crewServer), 'ui/index.html': b64('<h1>Crew</h1>'), ...(icon ? { 'ui/icon.png': icon.toString('base64') } : {}) });
+r = await api(O.token, 'POST', `/v1/workspaces/${A}/apps/versions`, { manifest: crewManifest('ui/icon.png'), files: crewFiles(pngOf(64, 32)) });
+t('an icon that is not square is refused at upload, with the reason', r.s === 400 && /64×32; an icon is square/.test(r.j.error?.message), JSON.stringify(r.j).slice(0, 200));
+r = await api(O.token, 'POST', `/v1/workspaces/${A}/apps/versions`, { manifest: crewManifest('ui/icon.png'), files: crewFiles(null) });
+t('and one that is not among the files', r.s === 400 && /ui\/icon\.png is not among the files/.test(r.j.error?.message), JSON.stringify(r.j).slice(0, 200));
+r = await api(O.token, 'POST', `/v1/workspaces/${A}/apps/versions`, { manifest: crewManifest('ui/icon.png'), files: crewFiles(pngOf(64, 64)) });
+const crewV = r.j.version;
+t('a square PNG icon uploads', r.s === 201 && crewV >= 1, JSON.stringify(r.j));
+r = await api(O.token, 'GET', `/v1/workspaces/${A}/apps/versions`);
+const crewUp = (r.j.versions ?? []).find((v) => v.name === 'crew' && v.version === crewV);
+t('the install card gets the version\'s icon address', crewUp?.iconUrl === `/v1/workspaces/${A}/apps/crew/icon?v=${crewV}`, JSON.stringify(crewUp?.iconUrl));
+r = await fetch(B + crewUp.iconUrl, { headers: { authorization: 'Bearer ' + O.token } });
+t('which serves the PNG before it is installed', r.status === 200 && r.headers.get('content-type') === 'image/png' && /sandbox/.test(r.headers.get('content-security-policy') ?? ''), r.status + ' ' + r.headers.get('content-type'));
+await api(O.token, 'POST', `/v1/workspaces/${A}/apps`, { name: 'crew', version: crewV, grants: { members: true, accounts: [] } });
+r = await api(U.token, 'GET', `/v1/workspaces/${A}/apps`);
+const crew = (r.j.apps ?? []).find((a) => a.name === 'crew');
+t('the app list gives an image icon as its address, never the path', crew?.iconUrl === `/v1/workspaces/${A}/apps/crew/icon?v=${crewV}` && crew.icon === undefined, JSON.stringify(crew).slice(0, 200));
+r = await fetch(B + crew.iconUrl, { headers: { authorization: 'Bearer ' + U.token } });
+t('a member gets the icon', r.status === 200 && Buffer.from(await r.arrayBuffer()).subarray(1, 4).toString() === 'PNG', r.status);
+r = await fetch(B + `/v1/workspaces/${A}/apps/todo/icon`, { headers: { authorization: 'Bearer ' + U.token } });
+t('an app with an emoji icon or none has no icon to serve', r.status === 404, r.status);
+
+r = await call(U.token, A, 'crew__people', {});
+const people = r.j.result ?? [];
+const uma = people.find((p) => p.displayName === 'Uma');
+t('the app lists the members as its caller', r.j.ok && people.some((p) => p.displayName === 'Olga') && uma?.kind === 'person' && !!uma.accountId, JSON.stringify(r.j).slice(0, 240));
+t('with no email addresses', !JSON.stringify(people).includes('@example.com'), JSON.stringify(people).slice(0, 200));
+t("and a picture from the app's own host", !uma?.picture || uma.picture.startsWith('/__freeflow/avatars/'), JSON.stringify(uma));
+r = await call(U.token, A, 'crew__people', { q: 'olg' });
+t('search finds by name', r.j.ok && r.j.result.length >= 1 && r.j.result.every((p) => /olg/i.test(p.displayName)), JSON.stringify(r.j).slice(0, 160));
+// A guest is left out.
+const G = await signup(`gus-${tag}@example.com`, 'Gus');
+r = await api(O.token, 'POST', `/v1/workspaces/${A}/invites`, { email: `gus-${tag}@example.com`, kind: 'guest' });
+const gInv = (r.j.inviteUrl ?? '').split('/').pop();
+if (gInv) await api(G.token, 'POST', '/v1/invites/accept', { token: gInv });
+// Only where the invite made Gus a guest (the roster says so); a server that joins him as a member is not this test's.
+const gusKind = ((await api(O.token, 'GET', `/v1/workspaces/${A}/members`)).j.members ?? []).find((x) => x.displayName === 'Gus')?.kind;
+r = await call(U.token, A, 'crew__people', {});
+if (gusKind === 'guest') t('guests are left out', !(r.j.result ?? []).some((p) => p.displayName === 'Gus'), JSON.stringify(r.j.result?.map((p) => p.displayName)));
+else console.log(`skip guests are left out: Gus joined as ${gusKind}`);
+// The picture, on the app's host, for its screen.
+r = await api(U.token, 'POST', `/v1/workspaces/${A}/apps/crew/screen`, {});
+let cs = await raw(r.j.url);
+const crewCookie = (cs.h['set-cookie']?.[0] ?? '').split(';')[0];
+const crewHome = `http://crew--${A.replace(/-/g, '')}.${DOMAIN}`;
+if (uma?.picture) {
+  cs = await raw(crewHome + uma.picture, crewCookie);
+  t("the app's host serves the picture to its viewer", cs.s === 200 && /^image\//.test(cs.h['content-type']), cs.s + ' ' + cs.h['content-type']);
+  cs = await raw(crewHome + uma.picture);
+  t('never without the session', cs.s === 401, cs.s);
+  r = await api(O.token, 'POST', `/v1/workspaces/${A}/apps/todo/screen`, {});
+  const tc = (await raw(r.j.url)).h['set-cookie']?.[0]?.split(';')[0];
+  cs = await raw(`http://todo--${A.replace(/-/g, '')}.${DOMAIN}` + uma.picture, tc);
+  t('nor on the host of an app without members:read', cs.s === 404, cs.s);
+} else t('Uma has a picture to serve', false, JSON.stringify(uma));
+// Without members:read in its uses, the app gets no list.
+r = await api(O.token, 'POST', `/v1/workspaces/${A}/apps/versions`, { manifest: crewManifest('🧑‍🤝‍🧑', []), files: crewFiles(null) });
+await api(O.token, 'PUT', `/v1/workspaces/${A}/apps/crew`, { version: r.j.version, grants: { members: true, accounts: [] } });
+r = await call(U.token, A, 'crew__people', {});
+t('without members:read in its uses, the app cannot list members', r.j.ok === false && /does not declare "members:read"/.test(r.j.error), JSON.stringify(r.j));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

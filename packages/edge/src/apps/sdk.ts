@@ -14,6 +14,7 @@
 // ctx.publish  publish(type, data, { ref: { kind, id }, about: [accountId] }): one of the manifest's events
 // ctx.docs     read(path): a Docs read path as the caller (needs "docs:read" in uses)
 // ctx.chat     post(channelId, text): a message as the caller (needs "chat:write" in uses)
+// ctx.members  list(), search(text): the organization's people and agents as the caller sees them (needs "members:read")
 
 /** The module's name in the app's isolate: `import { defineApp } from 'freeflow'`. */
 export const SDK_MODULE = 'freeflow';
@@ -57,6 +58,7 @@ function makeCtx(env, caller) {
     publish: (type, data, opts = {}) => env.SUITE.publish(type, data ?? null, opts.ref, opts.about),
     docs: { read: (path) => env.SUITE.readDocs(ticket, path) },
     chat: { post: (channelId, text) => env.SUITE.postMessage(ticket, channelId, text) },
+    members: { list: () => env.SUITE.members(ticket), search: (text) => env.SUITE.members(ticket, String(text ?? '')) },
   };
 }
 
@@ -138,6 +140,7 @@ ctx.db: all(sql, ...params) → rows; one(sql, ...params) → a row or null; run
 ctx.files: the app's own file storage (images, attachments, any upload). put(key, data, { type }) takes a File or Blob (from request.formData()), an ArrayBuffer or text; get(key) → { data, type, size } or null; delete(key); list(prefix) → [{ key, size, type }]; response(key) → a Response to return from a route. At most 10 MB a file. Keep the key in the database row (e.g. 'tasks/42/photo.png'); never put file contents in the database. The screen uploads with fetch('api/...', { method: 'POST', body: formData }) to a route that calls ctx.files.put, and shows a file with <img src="api/files/..."> from a route that returns ctx.files.response(key). Nothing is public: routes check who is looking.
 ctx.publish(type, data, { ref: { kind, id }, about: [accountId] }): one of the manifest's events; "about" makes a self subscription wake that account.
 ctx.docs.read(path) (uses "docs:read") and ctx.chat.post(channelId, text) (uses "chat:write") act as the caller.
+ctx.members.list() and ctx.members.search(text) (uses "members:read"): the organization's people and agents as the caller sees them in Chat, no guests and no email addresses: [{ accountId, displayName, picture, kind: 'person' | 'agent' }], by name. For an assignee picker: keep the accountId; ctx.publish(..., { about: [accountId] }) can wake an assigned agent. picture is a URL the screen can show in <img> as it is, or null.
 Throw an Error (or AppError(message, status) in a route) to refuse; the message goes back as it is.
 The app reaches the internet only with fetch to the hosts in the manifest's "egress".
 ui/index.html and the other ui/ files are the screen, served on the app's own host; its scripts fetch the routes above with relative paths (fetch('api/tasks')).`;
@@ -147,6 +150,7 @@ export const FREEFLOW_MANIFEST_DOC = `freeflow-app.json, the manifest of a hoste
 {
   "name": "tasks",                      2-20 lowercase letters and digits; the app's name in tool names (tasks__list_tasks) and its address
   "label": "Tasks", "icon": "🗂️", "description": "One line for the people who install it.",
+                                        icon: an emoji, or a PNG or SVG among the ui/ files ("ui/icon.png"), square, 16-512 px, at most 64 KB
   "server": { "hosted": true }, "ui": { "hosted": true },   (leave "ui" out for an app with no screen)
   "kinds": [{ "kind": "task", "label": "Task" }],             the kinds of objects its events refer to
   "scopes": [                                                  who may use it is given out by scope; one scope marked "read" lets an account see its events
@@ -155,7 +159,7 @@ export const FREEFLOW_MANIFEST_DOC = `freeflow-app.json, the manifest of a hoste
   "tools": [{ "name": "list_tasks", "description": "What it does and when to use it.",
               "input": { "type": "object", "properties": { "status": { "type": "string" } } }, "scopes": ["tasks:read"] }],
   "events": ["task.created", "task.assigned"],                what it publishes with ctx.publish
-  "uses": ["docs:read", "chat:write"],                        optional: what of FreeFlow it uses, as its caller
+  "uses": ["docs:read", "chat:write", "members:read"],        optional: what of FreeFlow it uses, as its caller
   "egress": ["api.example.com"]                               optional: the only hosts its server may fetch
 }
 Files: server.js (one ES module, with the SDK), migrations/0001_name.sql (applied once each in order; add a new file for a change, never edit an applied one), ui/index.html and other ui/ files.`;

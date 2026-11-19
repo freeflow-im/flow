@@ -7,6 +7,7 @@
 //   a session cookie        checked on every request (membership and scopes, §6.2); then
 //     GET of a ui/ file     the file, from R2 (`/` is ui/index.html)
 //     anything else         the app's own isolate, with the viewer in `x-freeflow-viewer`
+//     GET /__freeflow/avatars/<key>  a member's picture, for an app that declares "members:read" (ctx.members' `picture`)
 //   neither                 401, one line: the screen is opened from its tab
 import type { HostedCode, HostedEnv, HostedExports } from './hosted';
 import type { UserAppManifest } from '@flow/shared';
@@ -21,6 +22,20 @@ const TYPES: Record<string, string> = {
   ico: 'image/x-icon', woff2: 'font/woff2', woff: 'font/woff', txt: 'text/plain; charset=utf-8', map: 'application/json', wasm: 'application/wasm',
 };
 const typeOf = (path: string) => TYPES[path.split('.').pop()?.toLowerCase() ?? ''] ?? 'application/octet-stream';
+
+/** A member's picture on the app's host (APP_AVATAR_PATH): the suite's avatar, for an app that may list members. */
+const AVATAR = /^\/__freeflow\/avatars\/([0-9a-f-]{36}-\d+(?:\.[a-z]{1,5})?)$/;
+
+async function memberPicture(env: HostedEnv, manifest: UserAppManifest, path: string): Promise<Response | null> {
+  const key = AVATAR.exec(path)?.[1];
+  if (!key) return null;
+  if (!(manifest.uses ?? []).includes('members:read') || !env.BLOBS) return new Response('not found', { status: 404 });
+  const o = await env.BLOBS.get(`avatars/${key}`);
+  // Only a picture: an avatar is stored with its image type (routes/org.ts), the older ones as WebP.
+  const type = o?.httpMetadata?.contentType ?? 'image/webp';
+  if (!o || !/^image\/(png|jpeg|gif|webp)$/.test(type)) return new Response('not found', { status: 404 });
+  return new Response(o.body, { headers: { 'content-type': type, 'cache-control': 'private, max-age=86400', 'x-content-type-options': 'nosniff' } });
+}
 
 const refuse = () =>
   new Response('<!doctype html><meta charset="utf-8"><p>Open this app from its tab in FreeFlow.</p>', { status: 401, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
@@ -73,10 +88,10 @@ export async function serveAppScreen(req: Request, env: HostedEnv, exports: Host
   const cookie = cookieOf(req, APP_SESSION_COOKIE);
   const viewer = cookie ? await org.checkHostedAppSession({ organizationId: at.org, name: at.app, cookie }) : null;
   if (!viewer) return refuse();
-  if (url.pathname.startsWith(HOST_PATH)) return new Response('not found', { status: 404 });
 
   const code = (await org.userAppCode(at.app)) as HostedCode | null;
   if (!code) return new Response('This app has no installed version.', { status: 404 });
+  if (url.pathname.startsWith(HOST_PATH)) return (req.method === 'GET' && (await memberPicture(env, code.manifest, url.pathname))) || new Response('not found', { status: 404 });
 
   if (req.method === 'GET' || req.method === 'HEAD') {
     const file = `ui${url.pathname === '/' ? '/index.html' : url.pathname}`;
@@ -119,7 +134,7 @@ async function serveDraftScreen(req: Request, url: URL, at: { devHost: string; o
   type Preview = { name: string; author: string; manifest: UserAppManifest; files: Record<string, Uint8Array>; key: string; viewer: { accountId: string; userId: string; displayName: string; ticket: string } };
   const draft = cookie ? ((await org.draftForPreview({ organizationId: at.org, devHost: at.devHost, cookie })) as unknown as Preview | null) : null;
   if (!draft) return refuse();
-  if (url.pathname.startsWith(HOST_PATH)) return new Response('not found', { status: 404 });
+  if (url.pathname.startsWith(HOST_PATH)) return (req.method === 'GET' && (await memberPicture(env, draft.manifest, url.pathname))) || new Response('not found', { status: 404 });
   if (req.method === 'GET' || req.method === 'HEAD') {
     const file = `ui${url.pathname === '/' ? '/index.html' : url.pathname}`;
     const body = draft.files[file];

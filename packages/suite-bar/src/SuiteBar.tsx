@@ -9,7 +9,7 @@ import { SuiteMark } from './SuiteMark';
 import './suite-bar.css';
 
 /** One entry of a tab's menu: a link, or a line apart (`divider`). */
-export interface SuiteTabMenuItem { id: string; label: string; href: string; current?: boolean; divider?: boolean }
+export interface SuiteTabMenuItem { id: string; label: string; href: string; current?: boolean; divider?: boolean; /** An emoji before the label. */ icon?: string; /** An image before the label (an installed app's icon). */ iconUrl?: string }
 
 export interface SuiteTab {
   id: string;
@@ -487,6 +487,7 @@ function TheSuiteBar({ tabs, organization, search, assistant, notifications, acc
                       <div key={item.id} className="sb-menu-divider" role="separator" />
                     ) : (
                       <a key={item.id} className="sb-menu-item" role="menuitem" href={item.href} aria-current={item.current ? 'page' : undefined} onClick={() => setMenu(null)}>
+                        {item.iconUrl ? <img className="sb-menu-app-icon" src={item.iconUrl} alt="" /> : item.icon ? <span aria-hidden="true">{item.icon}</span> : null}
                         {item.label}
                       </a>
                     ),

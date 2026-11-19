@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appEventType, appOfEventType, appToolName, checkHostedFiles, checkUserAppManifest, parseAppToolName, RESERVED_APP_NAMES } from './userApps.js';
+import { appEventType, appOfEventType, appToolName, checkAppIcon, checkHostedFiles, checkUserAppManifest, isImageIcon, parseAppToolName, RESERVED_APP_NAMES } from './userApps.js';
 
 const taskboard = () => ({
   name: 'taskboard',
@@ -119,5 +119,54 @@ describe('hosted apps (user-apps.md §7.2, phase 2)', () => {
     expect(p).toContain('files: ui/index.html is missing, and the manifest has a hosted screen');
     expect(p.filter((x) => x.includes('is not server.js'))).toHaveLength(2);
     expect(checkHostedFiles(m.manifest, { 'server.js': 6_000_000, 'ui/index.html': 1 })[0]).toMatch(/over the 5000000/);
+  });
+});
+
+describe('image icons (user-apps.md §4)', () => {
+  const hosted = (icon: string) => ({ ...taskboard(), server: { hosted: true }, ui: { hosted: true }, icon });
+  /** A PNG's first bytes, enough for its header: the signature and IHDR with its width and height. */
+  const png = (w: number, h: number, pad = 0) => {
+    const b = new Uint8Array(33 + pad);
+    b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
+    new DataView(b.buffer).setUint32(16, w);
+    new DataView(b.buffer).setUint32(20, h);
+    return b;
+  };
+  const svg = (attrs: string) => new TextEncoder().encode(`<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg" ${attrs}><circle r="4"/></svg>`);
+
+  it('takes an emoji, or a PNG or SVG in ui/ for a hosted app', () => {
+    expect(problems(hosted('🗂️'))).toEqual([]);
+    expect(problems(hosted('ui/icon.png'))).toEqual([]);
+    expect(problems(hosted('ui/img/icon.svg'))).toEqual([]);
+    expect(isImageIcon('ui/icon.png')).toBe(true);
+    expect(isImageIcon('🗂️')).toBe(false);
+    expect(isImageIcon('ui/../server.js.png')).toBe(false);
+  });
+
+  it('refuses an image icon on an external app, another kind of file, and a long text', () => {
+    expect(problems({ ...taskboard(), icon: 'ui/icon.png' })).toContain("icon: only a hosted app's icon can be an image in ui/; an external app uses an emoji");
+    expect(problems(hosted('icon.png'))[0]).toMatch(/must be an emoji, or a PNG or SVG in ui\//);
+    expect(problems(hosted('ui/icon.jpg'))[0]).toMatch(/must be an emoji, or a PNG or SVG in ui\//);
+    expect(problems(hosted('a very long icon text'))[0]).toMatch(/at most 16 characters/);
+  });
+
+  it("checks the file: there, small, a PNG or SVG, and square", () => {
+    const m = { icon: 'ui/icon.png' };
+    expect(checkAppIcon(m, { 'ui/icon.png': png(64, 64) })).toEqual([]);
+    expect(checkAppIcon(m, {})).toEqual(['icon: ui/icon.png is not among the files']);
+    expect(checkAppIcon(m, { 'ui/icon.png': png(64, 32) })[0]).toMatch(/64×32; an icon is square/);
+    expect(checkAppIcon(m, { 'ui/icon.png': png(1024, 1024) })[0]).toMatch(/16 to 512 pixels square/);
+    expect(checkAppIcon(m, { 'ui/icon.png': png(64, 64, 70_000) })[0]).toMatch(/an icon is at most 64000/);
+    expect(checkAppIcon(m, { 'ui/icon.png': svg('viewBox="0 0 24 24"') })).toEqual(['icon: ui/icon.png is not a PNG']);
+    const s = { icon: 'ui/icon.svg' };
+    expect(checkAppIcon(s, { 'ui/icon.svg': svg('viewBox="0 0 24 24"') })).toEqual([]);
+    expect(checkAppIcon(s, { 'ui/icon.svg': svg('width="48" height="48"') })).toEqual([]);
+    expect(checkAppIcon(s, { 'ui/icon.svg': svg('viewBox="0 0 48 24"') })[0]).toMatch(/48×24; an icon is square/);
+    expect(checkAppIcon(s, { 'ui/icon.svg': png(64, 64) })).toEqual(['icon: ui/icon.svg is not an SVG']);
+    expect(checkAppIcon({ icon: '🗂️' }, {})).toEqual([]);
+  });
+
+  it('accepts members:read in uses', () => {
+    expect(problems({ ...hosted('🗂️'), uses: ['members:read'] })).toEqual([]);
   });
 });

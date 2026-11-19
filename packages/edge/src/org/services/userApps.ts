@@ -1,10 +1,10 @@
 // Apps installed in this organization (docs/specs/user-apps.md, phase 1: external apps). These functions run inside the
 // Org object's database scope (withDb): install, update and remove an app, give out its scopes (§5.2), decide which of
 // an account's calls may use it, and send a tool call to the app's server, signed (§5).
-import { and, eq, inArray, max } from 'drizzle-orm';
+import { and, eq, inArray, isNull, max, ne, sql } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import type { AccountKind, AgentMode, InstalledAppDTO, UserAppManifest } from '@flow/shared';
-import { appToolName } from '@flow/shared';
+import { appIconType, appToolName, isImageIcon } from '@flow/shared';
 import { db, schema } from '../db/index.js';
 import { decryptBody, encryptBody } from '../crypto/index.js';
 import { ApiError, badRequest, notFound } from '../../errors';
@@ -225,6 +225,63 @@ export async function heldScopes(who: AppHolder): Promise<Map<string, Set<string
   return held;
 }
 
+/** A member as a hosted app sees it (`members:read`, §6.3): no email, and a picture the app's own host serves. */
+export interface AppMember { accountId: string; displayName: string; picture: string | null; kind: 'person' | 'agent' }
+
+/** The path on an app's own host that serves a member's picture (apps/screen.ts), for an avatar the suite keeps. */
+export const APP_AVATAR_PATH = '/__freeflow/avatars/';
+const SUITE_AVATAR = /^\/v1\/avatars\/([0-9a-f-]{36}-\d+(?:\.[a-z]{1,5})?)$/;
+
+/** A member's picture for an app's screen: the suite's own through the app's host, an outside URL as it is, else none. */
+export function appPictureOf(avatarUrl: string | null): string | null {
+  if (!avatarUrl) return null;
+  const own = SUITE_AVATAR.exec(avatarUrl);
+  if (own) return APP_AVATAR_PATH + own[1];
+  return /^https:\/\//.test(avatarUrl) ? avatarUrl : null;
+}
+
+/** At most this many members in one answer. */
+export const APP_MEMBERS_MAX = 500;
+
+/**
+ * The organization's people and agents as a hosted app may list them for its caller (`members:read`): Chat's roster as
+ * the caller sees it (no external personal agents; the admin agent only for an owner or admin), less guests and removed
+ * members, with no email addresses. `search`: names containing the text, case-insensitive.
+ */
+export async function appMembers(p: { organizationId: string; callerUserId: string; adminAgentId: string | null; search?: string }): Promise<AppMember[]> {
+  const rows = await db
+    .select({ userId: users.id, displayName: users.displayName, avatarUrl: users.avatarUrl, isAgent: users.isAgent, isBot: users.isBot, accountId: workspaceMembers.accountId, role: workspaceMembers.role })
+    .from(workspaceMembers)
+    .innerJoin(users, eq(users.id, workspaceMembers.userId))
+    .where(and(
+      eq(workspaceMembers.workspaceId, p.organizationId), isNull(users.deletedAt), ne(workspaceMembers.kind, 'guest'),
+      sql`NOT (${workspaceMembers.kind} = 'personal_agent' AND ${workspaceMembers.runtime} IS NULL)`,
+    ))
+    .orderBy(users.displayName);
+  const me = rows.find((r) => r.userId === p.callerUserId);
+  if (!me) return [];
+  const admin = me.role === 'owner' || me.role === 'admin';
+  const text = p.search?.trim().toLowerCase() ?? '';
+  return rows
+    .filter((r) => r.accountId && (admin || r.userId !== p.adminAgentId) && (!text || r.displayName.toLowerCase().includes(text)))
+    .slice(0, APP_MEMBERS_MAX)
+    .map((r) => ({ accountId: r.accountId!, displayName: r.displayName, picture: appPictureOf(r.avatarUrl), kind: r.isAgent || r.isBot ? 'agent' : 'person' }));
+}
+
+/**
+ * Where an app version's image icon is kept (§4): its R2 key and type. The installed version's when `version` is not
+ * given. Null for an emoji icon, no icon, or no such version.
+ */
+export async function appIconFile(name: string, version?: number): Promise<{ key: string; type: string } | null> {
+  const v = version ?? (await rowOf(name))?.version;
+  if (v === undefined) return null;
+  const [row] = await db.select({ manifest: userAppVersions.manifest, prefix: userAppVersions.prefix, files: userAppVersions.files }).from(userAppVersions).where(and(eq(userAppVersions.name, name), eq(userAppVersions.version, v))).limit(1);
+  if (!row?.prefix) return null;
+  const icon = (JSON.parse(row.manifest) as UserAppManifest).icon;
+  if (!icon || !isImageIcon(icon) || !(icon in (JSON.parse(row.files ?? '{}') as Record<string, number>))) return null;
+  return { key: row.prefix + icon, type: appIconType(icon) };
+}
+
 /** An agent the person may talk to (usableAgents), as far as an app's scopes go. */
 export interface AgentForApp { id: string; accountId: string; mode: AgentMode }
 
@@ -303,7 +360,8 @@ export async function listApps(viewer: AppHolder & { admin: boolean }): Promise<
     const dto: InstalledAppDTO = {
       name: m.name,
       label: m.label,
-      ...(m.icon ? { icon: m.icon } : {}),
+      // An image icon (§4) comes as its address on the suite's origin; the route adds the organization (routes/userApps.ts).
+      ...(m.icon ? (isImageIcon(m.icon) ? { iconUrl: `apps/${encodeURIComponent(m.name)}/icon?v=${row.version}` } : { icon: m.icon }) : {}),
       ...(m.description ? { description: m.description } : {}),
       manifestUrl: row.manifestUrl,
       serverOrigin: 'url' in m.server ? new URL(m.server.url).origin : null,

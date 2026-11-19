@@ -722,3 +722,12 @@
   margin: 6px 4px;
   background: var(--sb-hairline);
 }
+
+/* An installed app's image icon in the Apps menu (user-apps.md §4). */
+.sb-menu-app-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border-radius: 4px;
+  object-fit: contain;
+}

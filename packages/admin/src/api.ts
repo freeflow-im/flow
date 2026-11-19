@@ -114,7 +114,7 @@ export const appsApi = {
 };
 
 /** A hosted app's uploaded version, as Admin lists them. */
-export interface AppUploadDTO { name: string; version: number; manifest: UserAppManifest; files: Record<string, number>; by: string; at: string; installed: boolean }
+export interface AppUploadDTO { name: string; version: number; manifest: UserAppManifest; files: Record<string, number>; by: string; at: string; installed: boolean; /** An image icon (user-apps.md §4), from this version's files. */ iconUrl?: string }
 
 export const connectionsApi = {
   list: () => request<{ mcpUrl: string; agents: AgentConnection[] }>('GET', '/v1/me/agent-connections'),
