@@ -12,6 +12,7 @@ export const FAVICONS: Record<FaviconKind, string> = {
   deck: appUrl('/favicon-deck.svg'),
   doc: appUrl('/favicon-doc.svg'),
   markdown: appUrl('/favicon-markdown.svg'),
+  whiteboard: appUrl('/favicon-whiteboard.svg'),
   image: appUrl('/favicon-image.svg'),
   pdf: appUrl('/favicon-pdf.svg'),
 };

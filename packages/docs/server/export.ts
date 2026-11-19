@@ -12,6 +12,7 @@ import type { Deck } from '../shared/deck.ts';
 import { docSchema, type Doc } from '../shared/doc.ts';
 import { docToMarkdown } from '../shared/docMarkdown.ts';
 import type { MarkdownDoc } from '../shared/markdown.ts';
+import type { Whiteboard } from '../shared/whiteboard.ts';
 import { cellKey } from '../shared/cellref.ts';
 import { Engine } from '../shared/formula/engine.ts';
 import { writePptx } from '../shared/pptxExport.ts';
@@ -34,6 +35,7 @@ export const EXPORT_FORMATS: Record<DocKind, ExportFormat[]> = {
   markdown: ['md', 'json'],
   deck: ['pptx', 'json'],
   sheet: ['xlsx', 'csv', 'json'],
+  whiteboard: ['json'],
 };
 
 const MIME: Record<ExportFormat, string> = {
@@ -261,7 +263,7 @@ export async function deckPptx(deck: Deck, title: string, source: ImageSource): 
 
 // --- One file ---------------------------------------------------------------------------
 
-export type FileData = { kind: 'doc'; doc: Doc } | { kind: 'markdown'; markdown: MarkdownDoc } | { kind: 'deck'; deck: Deck } | { kind: 'sheet'; workbook: Workbook };
+export type FileData = { kind: 'doc'; doc: Doc } | { kind: 'markdown'; markdown: MarkdownDoc } | { kind: 'deck'; deck: Deck } | { kind: 'sheet'; workbook: Workbook } | { kind: 'whiteboard'; board: Whiteboard };
 
 export async function loadFile(sheets: SheetStore, ownerId: ViewerArg, id: string): Promise<{ meta: SheetMeta; data: FileData } | null> {
   const meta = sheets.get(ownerId, id);
@@ -274,6 +276,10 @@ export async function loadFile(sheets: SheetStore, ownerId: ViewerArg, id: strin
     const d = await sheets.loadMarkdown(ownerId, id);
     return d && { meta, data: { kind: 'markdown', markdown: d.doc } };
   }
+  if (meta.kind === 'whiteboard') {
+    const d = await sheets.loadWhiteboard(ownerId, id);
+    return d && { meta, data: { kind: 'whiteboard', board: d.board } };
+  }
   if (meta.kind === 'deck') {
     const d = await sheets.loadDeck(ownerId, id);
     return d && { meta, data: { kind: 'deck', deck: d.deck } };
@@ -285,7 +291,7 @@ export async function loadFile(sheets: SheetStore, ownerId: ViewerArg, id: strin
 /** One file in one format. `tab` picks the spreadsheet tab for CSV (by name or index; the first by default). */
 export async function exportFile(meta: SheetMeta, data: FileData, format: ExportFormat, source: ImageSource, tab?: string): Promise<ExportedFile> {
   if (!EXPORT_FORMATS[meta.kind].includes(format)) throw new ExportError(`A ${NOUN[meta.kind]} cannot be exported as ${format}`);
-  const raw = data.kind === 'doc' ? data.doc : data.kind === 'markdown' ? data.markdown : data.kind === 'deck' ? data.deck : data.workbook;
+  const raw = data.kind === 'doc' ? data.doc : data.kind === 'markdown' ? data.markdown : data.kind === 'deck' ? data.deck : data.kind === 'whiteboard' ? data.board : data.workbook;
   const type = MIME[format];
   switch (format) {
     case 'json':
@@ -319,8 +325,8 @@ export async function exportFile(meta: SheetMeta, data: FileData, format: Export
 
 // --- Everything -------------------------------------------------------------------------
 
-const FOLDER: Record<DocKind, string> = { doc: 'Documents', markdown: 'Markdown', deck: 'Presentations', sheet: 'Spreadsheets' };
-const NOUN: Record<DocKind, string> = { doc: 'document', markdown: 'Markdown document', deck: 'presentation', sheet: 'spreadsheet' };
+const FOLDER: Record<DocKind, string> = { doc: 'Documents', markdown: 'Markdown', deck: 'Presentations', sheet: 'Spreadsheets', whiteboard: 'Whiteboards' };
+const NOUN: Record<DocKind, string> = { doc: 'document', markdown: 'Markdown document', deck: 'presentation', sheet: 'spreadsheet', whiteboard: 'whiteboard' };
 
 /**
  * Every file of the account as a zip: per kind a folder with each file in its readable format and as JSON,
@@ -355,7 +361,7 @@ export async function exportAll(sheets: SheetStore, ownerId: string, source: Ima
     return name;
   };
 
-  const metas = (['doc', 'markdown', 'deck', 'sheet'] as DocKind[]).flatMap((k) => sheets.list(ownerId, k));
+  const metas = (['doc', 'markdown', 'deck', 'sheet', 'whiteboard'] as DocKind[]).flatMap((k) => sheets.list(ownerId, k));
   for (const meta of metas) {
     try {
       const loaded = await loadFile(sheets, ownerId, meta.id);

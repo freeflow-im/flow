@@ -40,7 +40,7 @@ export const docsPageUrl = (origin: string, place: DocsPlace, kind: 'sheet' | 'f
   `${origin}${addressOf({ organizationId: place.workspace, app: 'docs', kind, id }, fileKind) ?? ''}`;
 
 /** The pages of Docs itself: there a file just made is opened with a browser tool; in Mail or Calendar the user gets its link. */
-const DOCS_PAGES: ReadonlySet<string> = new Set(['home', 'sheet', 'deck', 'doc', 'markdown', 'file']);
+const DOCS_PAGES: ReadonlySet<string> = new Set(['home', 'sheet', 'deck', 'whiteboard', 'doc', 'markdown', 'file']);
 const madeNote = (env: ServerToolEnv, opener: string, url: string): string =>
   DOCS_PAGES.has(env.context.page) ? `Call ${opener} to show it to the user.` : `Give the user this link to it in your answer, exactly as it is: ${url}`;
 

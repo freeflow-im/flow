@@ -94,6 +94,13 @@ export interface TextElement extends ElementBase {
   role?: TextRole;
   paragraphs: Paragraph[];
   style?: TextStyle;
+  /** A background behind the text (a whiteboard's sticky note), any CSS color; none when absent. */
+  fill?: string;
+  /**
+   * A whiteboard's typed text (shared/whiteboard.ts): placed where the click was, its height follows its lines, and it
+   * is edited where it is rather than moved or resized.
+   */
+  anchored?: boolean;
 }
 
 export interface ImageElement extends ElementBase {
@@ -677,6 +684,8 @@ export function validateElement(e: unknown, where: string): string | null {
         chars += p.text.length;
       }
       if (chars > MAX_TEXT) return `${where}: too much text in one element`;
+      if (el.fill !== undefined && !isPaint(el.fill)) return `${where}: invalid fill`;
+      if (el.anchored !== undefined && typeof el.anchored !== 'boolean') return `${where}: invalid anchored`;
       const s = el.style;
       if (s !== undefined) {
         if (!s || typeof s !== 'object') return `${where}: invalid style`;

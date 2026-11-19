@@ -84,6 +84,7 @@ interface AgentState {
   sheet: OpenSheet | null;
   /** The presentation page reports the open presentation (null when it closes). */
   setOpenDeck(deck: OpenDeck | null): void;
+  setOpenBoard(board: OpenDeck | null): void;
   /** The presentation page reports that a presentation failed to load. */
   deckFailed(id: string, message: string): void;
   /** The open presentation, or null on other pages. */
@@ -169,6 +170,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   const [sheet, setSheet] = useState<OpenSheet | null>(null);
   const deckRef = useRef<OpenDeck | null>(null);
   const [deck, setDeck] = useState<OpenDeck | null>(null);
+  /** The open whiteboard (its editor's controller holds it as a one-slide deck). */
+  const boardRef = useRef<OpenDeck | null>(null);
   const docRef = useRef<OpenDoc | null>(null);
   const markdownRef = useRef<OpenMarkdown | null>(null);
   /** The stored file whose preview page is showing. */
@@ -358,6 +361,10 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const setOpenBoard = useCallback((board: OpenDeck | null) => {
+    boardRef.current = board;
+  }, []);
+
   const setOpenDeck = useCallback((deck: OpenDeck | null) => {
     deckRef.current = deck;
     setDeck(deck);
@@ -416,6 +423,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
         ...(inline ? { inline: docInlineContext(t.ctl.doc, t.ctl.state.selection) } : {}),
       };
     }
+    const b = boardRef.current;
+    if (b) return { page: 'whiteboard', boardId: b.meta.id, title: b.meta.title, itemCount: b.ctl.deck.slides[0]?.elements.length ?? 0, selectedItems: b.ctl.selection };
     const d = deckRef.current;
     if (d) {
       return {
@@ -458,6 +467,11 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     if (deck) {
       deck.ctl.stopEditing();
       await deck.ctl.saver.flush();
+    }
+    const board = boardRef.current;
+    if (board) {
+      board.ctl.stopEditing();
+      await board.ctl.saver.flush();
     }
     const doc = docRef.current;
     if (doc) await doc.ctl.saver.flush();
@@ -581,6 +595,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     runClientTool(await keepDeckPictures(await linkDeckTables(call, api.sheetTable, api.sheetChart), api.keepWebImage), {
       ctl: sheetRef.current?.ctl ?? null,
       deck: deckRef.current?.ctl ?? null,
+      board: boardRef.current?.ctl ?? null,
       doc: docRef.current?.ctl ?? null,
       markdown: markdownRef.current?.ctl ?? null,
       deckId: deckRef.current?.meta.id ?? null,
@@ -679,7 +694,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     for (const call of calls) {
       if (signal.aborted) break;
       setItems((prev) => [...prev, { kind: 'tool', id: call.id, name: call.name, input: call.input, status: 'running' }]);
-      const question = confirmationFor(call, sheetRef.current?.ctl ?? null, deckRef.current?.ctl ?? null, docRef.current?.ctl ?? null, markdownRef.current?.ctl ?? null);
+      const question = confirmationFor(call, sheetRef.current?.ctl ?? null, deckRef.current?.ctl ?? null, docRef.current?.ctl ?? null, markdownRef.current?.ctl ?? null, boardRef.current?.ctl ?? null);
       if (question && !(await ask(question))) {
         const declined = 'The user declined this action.';
         results.push({ id: call.id, content: declined, isError: true });
@@ -864,6 +879,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     sheetFailed,
     sheet,
     setOpenDeck,
+    setOpenBoard,
     deckFailed: sheetFailed,
     deck,
     setOpenDoc,
@@ -947,4 +963,14 @@ export function useRegisterDeck(ctl: DeckController, meta: SheetMeta): void {
     setOpenDeck(deck);
     return () => setOpenDeck(null);
   }, [deck, setOpenDeck]);
+}
+
+/** Report the open whiteboard to the agent while a whiteboard page is mounted. */
+export function useRegisterWhiteboard(ctl: DeckController, meta: SheetMeta): void {
+  const { setOpenBoard } = useAgent();
+  const board = useMemo(() => ({ ctl, meta }), [ctl, meta]);
+  useEffect(() => {
+    setOpenBoard(board);
+    return () => setOpenBoard(null);
+  }, [board, setOpenBoard]);
 }

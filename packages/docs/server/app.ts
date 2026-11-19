@@ -16,6 +16,7 @@ import { chatScope, HOME_CHAT, isChatScope, type AgentEvent, type AgentTurnReque
 import { newDeck, validateDeck, type Deck } from '../shared/deck.ts';
 import { newDoc, validateDoc, type Doc } from '../shared/doc.ts';
 import { MAX_MARKDOWN_CHARS, newMarkdownDoc, validateMarkdownDoc, type MarkdownDoc } from '../shared/markdown.ts';
+import { newWhiteboard, validateWhiteboard, type Whiteboard } from '../shared/whiteboard.ts';
 import { CsvError, MAX_CSV_CHARS } from '../shared/csv.ts';
 import { importDocx } from './docxImport.ts';
 import { closePdfReaders, isPdf, PdfError, pdfToMarkdownFile } from './pdfMarkdown.ts';
@@ -42,7 +43,7 @@ import { appName, ORIGIN_MARK } from '../shared/brand.ts';
 import { openGettingStarted } from './gettingStarted.ts';
 import { isFileId } from './ids.ts';
 import { ImageStore } from './images.ts';
-import { deckPreview, docPreview, markdownPreview, sheetPreview, type FilePreview } from '../shared/preview.ts';
+import { deckPreview, docPreview, markdownPreview, sheetPreview, whiteboardPreview, type FilePreview } from '../shared/preview.ts';
 import { cleanFolderName, cleanFolderPath, folderName, joinFolder, parentFolder } from '../shared/folders.ts';
 import { FolderStore, type Folders, type GrantUnder } from './folders.ts';
 import { inScope, scopeKey, scopeOf, scopeOfRow, viewerOf, type Owned, type Scope, type ScopeArg, type Viewer, type ViewerArg } from './scope.ts';
@@ -302,7 +303,7 @@ const HANDOFF_PAGE = `<!doctype html>
 <style>body{font-family:system-ui,sans-serif;max-width:420px;margin:80px auto;padding:0 16px;color:#1f1f1f;text-align:center}p{color:#5f6368}</style>
 </head><body><h1>You're signed in</h1><p>Go back to MCP Docs: it is signed in now. You can close this tab.</p></body></html>`;
 
-const LIBRARY_KINDS: readonly LibraryKind[] = ['doc', 'deck', 'sheet', 'markdown', 'file'];
+const LIBRARY_KINDS: readonly LibraryKind[] = ['doc', 'deck', 'sheet', 'markdown', 'whiteboard', 'file'];
 const DOWNLOAD_FORMATS: readonly DownloadFormat[] = ['office', 'native', 'pdf', 'csv', 'as-is'];
 
 function cleanTitle(t: unknown): string | null {
@@ -490,7 +491,7 @@ export async function buildApp(opts: AppOptions) {
   windowTools = opts.local?.mcp ? new WindowTools() : null;
   // A file named by its path, for the MCP server's open_path: one in the folder is its document or stored file;
   // for any other the app opens the file's own folder in a new tab.
-  const openLocalPath = (given: string): { kind: LibraryKind; id: string } | { elsewhere: string } => {
+  const openLocalPath = (given: string): { kind: Exclude<LibraryKind, 'whiteboard'>; id: string } | { elsewhere: string } => {
     const target = path.resolve(folder!.root, given === '~' || given.startsWith('~/') ? path.join(homedir(), given.slice(1)) : given);
     let isFile = false;
     try {
@@ -508,6 +509,7 @@ export async function buildApp(opts: AppOptions) {
     }
     const file = parts.join('/');
     const kind = listedKind(file);
+    if (kind === 'whiteboard') throw new ToolError(`${file} is a whiteboard, which the tools cannot open yet.`);
     const id = kind === 'file' ? (storedFiles as LocalFileStore).idOf(localUser!.id, file) : (sheets as LocalSheetStore).idOf(localUser!.id, file);
     if (!id) throw new ToolError(`${file} is not a file the app shows.`);
     return { kind, id };
@@ -1248,6 +1250,56 @@ export async function buildApp(opts: AppOptions) {
     r.delete('/api/markdown/:id', async (req, reply) => {
       const { id } = req.params as { id: string };
       if (!(await sheets.delete(req.viewer, id, 'markdown'))) return reply.code(404).send({ error: 'Document not found' });
+      return { ok: true };
+    });
+  });
+
+  // --- Whiteboards (shared/whiteboard.ts) -------------------------------------------
+  app.register(async (r) => {
+    r.addHook('preHandler', requireUser);
+
+    r.get('/api/whiteboards', async (req) => ({ boards: sheets.list(req.scope, 'whiteboard') }));
+
+    r.post('/api/whiteboards', async (req, reply) => {
+      const body = (req.body ?? {}) as { title?: unknown; board?: unknown };
+      const title = cleanTitle(body.title) ?? 'Untitled whiteboard';
+      const board = body.board === undefined ? newWhiteboard() : body.board;
+      const problem = validateWhiteboard(board);
+      if (problem) return reply.code(400).send({ error: problem });
+      return { board: await sheets.createWhiteboard(req.scope, title, board as Whiteboard, req.folder) };
+    });
+
+    r.get('/api/whiteboards/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const res = await sheets.loadWhiteboard(req.viewer, id);
+      if (!res) return reply.code(404).send({ error: 'Whiteboard not found' });
+      return { meta: res.meta, board: res.board };
+    });
+
+    r.put('/api/whiteboards/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const body = req.body as { board?: unknown; rev?: unknown } | undefined;
+      const problem = validateWhiteboard(body?.board);
+      if (problem) return reply.code(400).send({ error: problem });
+      const stale = staleRev(req.viewer, id, 'whiteboard', body?.rev);
+      if (stale) return reply.code(409).send({ error: 'The whiteboard was changed elsewhere since you loaded it.', meta: stale });
+      const meta = await sheets.saveWhiteboard(req.viewer, id, body!.board as Whiteboard);
+      if (!meta) return reply.code(404).send({ error: 'Whiteboard not found' });
+      return { meta };
+    });
+
+    r.patch('/api/whiteboards/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const title = cleanTitle((req.body as { title?: unknown } | undefined)?.title);
+      if (!title) return reply.code(400).send({ error: 'Title is required' });
+      const meta = sheets.rename(req.viewer, id, title, 'whiteboard');
+      if (!meta) return reply.code(404).send({ error: 'Whiteboard not found' });
+      return { meta };
+    });
+
+    r.delete('/api/whiteboards/:id', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      if (!(await sheets.delete(req.viewer, id, 'whiteboard'))) return reply.code(404).send({ error: 'Whiteboard not found' });
       return { ok: true };
     });
   });
@@ -2044,7 +2096,7 @@ export async function buildApp(opts: AppOptions) {
       }
       if (!loaded) return reply.code(404).send({ error: 'File not found' });
       const d = loaded.data;
-      const preview: FilePreview = d.kind === 'doc' ? docPreview(d.doc) : d.kind === 'markdown' ? markdownPreview(d.markdown) : d.kind === 'deck' ? deckPreview(d.deck) : sheetPreview(d.workbook);
+      const preview: FilePreview = d.kind === 'doc' ? docPreview(d.doc) : d.kind === 'markdown' ? markdownPreview(d.markdown) : d.kind === 'deck' ? deckPreview(d.deck) : d.kind === 'whiteboard' ? whiteboardPreview(d.board) : sheetPreview(d.workbook);
       return { preview };
     });
 
@@ -2098,7 +2150,7 @@ export async function buildApp(opts: AppOptions) {
     // A page reports each file it shows. On the web it is named by its kind and id, in the desktop app by its path.
     r.post('/api/recents', async (req, reply) => {
       const { kind, id } = (req.body ?? {}) as { kind?: unknown; id?: unknown };
-      const shown = typeof id === 'string' && (['doc', 'deck', 'sheet', 'markdown', 'file'] as const).find((k) => k === kind);
+      const shown = typeof id === 'string' && (['doc', 'deck', 'sheet', 'markdown', 'whiteboard', 'file'] as const).find((k) => k === kind);
       if (!shown) return reply.code(400).send({ error: 'Give the kind and id of the file opened.' });
       const user = req.user!.id;
       if (folder) {
@@ -2173,7 +2225,7 @@ export async function buildApp(opts: AppOptions) {
         const p = cleanFolderPath(b.folder);
         return p && folders.exists(req.scope, p) ? [FOLDER_REF + folderRefPrefix(req.scope) + p] : null;
       }
-      const kind = (['doc', 'deck', 'sheet', 'markdown', 'file'] as const).find((k) => k === b.kind);
+      const kind = (['doc', 'deck', 'sheet', 'markdown', 'whiteboard', 'file'] as const).find((k) => k === b.kind);
       if (!kind || typeof b.id !== 'string') return null;
       if (folder) {
         const file = kind === 'file' ? (storedFiles as LocalFileStore).get(user, b.id)?.file : (sheets as LocalSheetStore).fileOf(user, b.id);
@@ -2320,9 +2372,9 @@ export async function buildApp(opts: AppOptions) {
     // The file the window shows ({kind, id}, or nothing): what the MCP tools act on when no id is given.
     r.post('/api/local/showing', async (req) => {
       const { kind, id, window } = (req.body ?? {}) as { kind?: unknown; id?: unknown; window?: unknown };
-      const shown = typeof id === 'string' && (['doc', 'deck', 'sheet', 'markdown', 'file'] as const).find((k) => k === kind);
+      const shown = typeof id === 'string' && (['doc', 'deck', 'sheet', 'markdown', 'whiteboard', 'file'] as const).find((k) => k === kind);
       try {
-        localMcp?.setOpen(shown ? { kind: shown, id } : null);
+        localMcp?.setOpen(shown && shown !== 'whiteboard' ? { kind: shown, id } : null);
       } catch {
         // Not a file of this folder (any more): nothing is open.
         localMcp?.setOpen(null);

@@ -165,7 +165,7 @@ export function searchDocuments(db: DB, who: ViewerArg, query: SearchQuery, opts
 }
 
 /** Each kind's page in the app (the client's routes; plugin/server/files.ts `placed` names them too). */
-export const DOC_PAGES: Record<DocKind, string> = { sheet: 's', doc: 'doc', deck: 'd', markdown: 'md' };
+export const DOC_PAGES: Record<DocKind, string> = { sheet: 's', doc: 'doc', deck: 'd', markdown: 'md', whiteboard: 'w' };
 
 /** A hit as every source returns it (`@flow/shared/search`); `url` is the page inside the Docs app. */
 export const toSearchHit = (r: DocHitRow): SearchHit => ({

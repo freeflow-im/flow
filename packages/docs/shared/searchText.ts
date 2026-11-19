@@ -2,6 +2,7 @@
 // it, as plain text, one block per line. Formulas, styles, pictures and ids are left out.
 import type { Deck } from './deck.ts';
 import type { Doc } from './doc.ts';
+import { whiteboardText, type Whiteboard } from './whiteboard.ts';
 import type { DocKind, Workbook } from './types.ts';
 
 /** Most text indexed for one document; the rest of a very long one is not searchable. */
@@ -66,6 +67,7 @@ export function searchTextOf(kind: DocKind, stored: unknown): string {
     proseText((stored as Doc).content, out);
     text = out.join('');
   } else if (kind === 'deck') text = deckText(stored as Deck).join('\n');
+  else if (kind === 'whiteboard') text = whiteboardText(stored as Whiteboard);
   else if (kind === 'sheet') text = workbookText(stored as Workbook).join('\n');
   return text.replace(/\n{2,}/g, '\n').trim().slice(0, MAX_SEARCH_TEXT);
 }

@@ -16,6 +16,7 @@ import type { SheetController } from '../state/controller.ts';
 import * as ops from '../state/ops.ts';
 import type { WorkbookStore } from '../state/store.ts';
 import { DECK_TOOLS, deckConfirmationFor, exportDeckTool, renderSlideTool, runDeckTool, type RenderSlideEnv } from './deckTools.ts';
+import { runWhiteboardTool, WHITEBOARD_TOOLS, whiteboardConfirmationFor } from './whiteboardTools.ts';
 import { DOC_TOOLS, docConfirmationFor, runDocTool } from './docTools.ts';
 import { markdownConfirmationFor, markdownOutline, markdownToolProblem, runMarkdownTool } from './markdownTools.ts';
 import type { MarkdownController } from '../markdown/controller.ts';
@@ -39,6 +40,8 @@ export interface ClientToolEnv extends Omit<RenderSlideEnv, 'deck' | 'uploadImag
   deck: DeckController | null;
   /** The open text document, or null on other pages. */
   doc: DocController | null;
+  /** The open whiteboard (its editor holds it as a one-slide deck), or null on other pages. */
+  board?: DeckController | null;
   /** The open Markdown document, or null on other pages (the content tools act on it as on a text document). */
   markdown?: MarkdownController | null;
   /** Undo group for this agent request. */
@@ -151,7 +154,7 @@ export function deleteEventQuestion(i: Record<string, unknown>, summary?: string
 }
 
 /** A question to ask the user before running a destructive call, or null if it can run straight away. */
-export function confirmationFor(call: ClientToolCall, ctl: SheetController | null, deck: DeckController | null = null, doc: DocController | null = null, markdown: MarkdownController | null = null): string | null {
+export function confirmationFor(call: ClientToolCall, ctl: SheetController | null, deck: DeckController | null = null, doc: DocController | null = null, markdown: MarkdownController | null = null, board: DeckController | null = null): string | null {
   const i = call.input;
   if (call.name === 'delete_event') return deleteEventQuestion(i);
   if (call.name === 'request_app_change') {
@@ -162,6 +165,7 @@ export function confirmationFor(call: ClientToolCall, ctl: SheetController | nul
   }
   if (replacesImageFile(call)) return 'Save the edited picture over the original file? The version before it is kept, and can be put back once.';
   if (DECK_TOOLS.has(call.name)) return deckConfirmationFor(call, deck);
+  if (WHITEBOARD_TOOLS.has(call.name)) return whiteboardConfirmationFor(call, board);
   if (DOC_TOOLS.has(call.name)) return markdown ? markdownConfirmationFor(call, markdown) : docConfirmationFor(call, doc);
   if (!ctl) return null;
   try {
@@ -203,7 +207,7 @@ async function attachPicture(env: ClientToolEnv, file: StoredFile, data: ArrayBu
 export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): Promise<string> {
   // A stored picture file given where a picture goes (on a slide, in a document, in a cell) is stored as a
   // picture, and that address used. A Markdown document keeps addresses as the text they are.
-  if (DECK_TOOLS.has(call.name) || call.name === 'set_cell_image' || (DOC_TOOLS.has(call.name) && !(env.markdown && !env.doc))) call = { ...call, input: await withFilePictures(call.input, env) };
+  if (DECK_TOOLS.has(call.name) || call.name === 'edit_whiteboard' || call.name === 'set_cell_image' || (DOC_TOOLS.has(call.name) && !(env.markdown && !env.doc))) call = { ...call, input: await withFilePictures(call.input, env) };
   const i = call.input;
   if (call.name === 'request_app_change') {
     const { id } = await env.requestAppChange(String(i.title), String(i.spec));
@@ -308,6 +312,7 @@ export async function runClientTool(call: ClientToolCall, env: ClientToolEnv): P
     return JSON.stringify({ edited: true, file_id: saved.id, filename: saved.filename, ...(edits.length ? { replacements } : {}), total_chars: text.length });
   }
   if (DECK_TOOLS.has(call.name)) return runDeckTool(call, env);
+  if (WHITEBOARD_TOOLS.has(call.name)) return runWhiteboardTool(call, { board: env.board ?? null, group: env.group });
   if (call.name === 'open_doc') {
     const opened = await env.openDoc(String(i.doc_id));
     if (opened.kind === 'markdown') return JSON.stringify({ opened: true, format: 'markdown', ...markdownOutline(opened.ctl.text, { cursor: opened.ctl.cursor }) });

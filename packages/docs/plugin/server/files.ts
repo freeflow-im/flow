@@ -7,6 +7,8 @@ import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { runClientTool, type ClientToolEnv } from '../../client/src/agent/clientTools.ts';
 import { linkDeckTables, runDeckTool } from '../../client/src/agent/deckTools.ts';
+import { runWhiteboardTool } from '../../client/src/agent/whiteboardTools.ts';
+import { BOARD_H, BOARD_W, boardAsDeck, deckAsBoard, newWhiteboard } from '../../shared/whiteboard.ts';
 import { loadLinkedChart, loadLinkedTable } from '../../server/linkedTable.ts';
 import { importExcel, ImportError } from '../../server/xlsxImport.ts';
 import { runDocTool } from '../../client/src/agent/docTools.ts';
@@ -468,7 +470,7 @@ export class FileService {
   /** In the suite: which root a file is in, and its page in the app. */
   placed<T extends FileSummary>(f: T, meta?: { shared?: boolean }): T {
     if (!this.orgId && !this.hub.appUrl) return f;
-    const page = { sheet: 's', doc: 'doc', deck: 'd', markdown: 'md', file: 'f' }[f.kind] ?? 'f';
+    const page = ({ sheet: 's', doc: 'doc', deck: 'd', markdown: 'md', whiteboard: 'w', file: 'f' } as Record<string, string>)[f.kind] ?? 'f';
     return {
       ...f,
       ...(this.orgId && meta ? { root: meta.shared ? 'Organization files' : 'My files' } : {}),
@@ -976,6 +978,46 @@ export class FileService {
   }
 
   /** The same for a presentation and the app's deck tools. */
+  // --- Whiteboards (shared/whiteboard.ts): their own tools, outside the file kinds above --------------------
+
+  /** The whiteboards of every root, most recently edited first, with their pages in the app. */
+  listWhiteboards(query?: string): FileSummary[] {
+    const q = query?.trim().toLowerCase();
+    return this.roots
+      .flatMap((r) => this.sheets.list(r, 'whiteboard').map((m) => this.docRow(m)))
+      .filter((m) => !q || m.title.toLowerCase().includes(q))
+      .sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
+  }
+
+  async createWhiteboard(title: string): Promise<FileSummary> {
+    return this.placed(summary(await this.sheets.createWhiteboard(this.home, title.trim() || 'Untitled whiteboard', newWhiteboard())), {});
+  }
+
+  /**
+   * read_whiteboard or edit_whiteboard on a stored whiteboard, through a headless editor (the browser's own tools,
+   * client/src/agent/whiteboardTools.ts), saved when it changed. A page that has it open takes the new version.
+   */
+  async editWhiteboard(id: string, tool: 'read_whiteboard' | 'edit_whiteboard', input: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const loaded = await this.sheets.loadWhiteboard(this.who, id);
+    if (!loaded) throw new ToolError(`There is no whiteboard ${id}. Find ids with list_whiteboards.`);
+    const before = JSON.stringify(loaded.board);
+    const ctl = new DeckController(boardAsDeck(loaded.board), async () => {});
+    ctl.canvas = { w: BOARD_W, h: BOARD_H };
+    try {
+      const result = JSON.parse(runWhiteboardTool({ id: 'mcp', name: tool, input }, { board: ctl, group: `mcp-${Date.now()}` }, false)) as Record<string, unknown>;
+      const after = deckAsBoard(ctl.deck);
+      let rev = loaded.meta.updatedAt;
+      if (JSON.stringify(after) !== before) {
+        const saved = await this.sheets.saveWhiteboard(this.who, id, after);
+        if (!saved) throw new ToolError(`The whiteboard ${id} cannot be changed: it is read only for you.`);
+        rev = saved.updatedAt;
+      }
+      return { board_id: id, title: loaded.meta.title, rev, ...result };
+    } finally {
+      ctl.dispose();
+    }
+  }
+
   async editDeck(id: string, tool: DeckEditTool, given: Record<string, unknown>): Promise<Record<string, unknown>> {
     // A spreadsheet range a table is linked to is read here, so the tool has it in the window or headless.
     const { input } = await linkDeckTables({ id: 'mcp', name: tool, input: given }, async (sheetId, ref) => {

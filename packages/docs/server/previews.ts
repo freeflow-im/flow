@@ -39,7 +39,7 @@ export type PreviewView =
 
 /** A preview saved to Docs: the file it became. `path` is its page in the Docs app ("/doc/<id>"). */
 export interface SavedPreview {
-  kind: 'doc' | 'deck' | 'sheet' | 'markdown' | 'file';
+  kind: 'doc' | 'deck' | 'sheet' | 'markdown' | 'whiteboard' | 'file';
   id: string;
   title: string;
   path: string;
@@ -253,7 +253,7 @@ export class Previews {
 }
 
 /** Each kind's page in the Docs app. */
-const PAGE_OF = { doc: 'doc', deck: 'd', sheet: 's', markdown: 'md', file: 'f' } as const;
+const PAGE_OF = { doc: 'doc', deck: 'd', sheet: 's', markdown: 'md', whiteboard: 'w', file: 'f' } as const;
 
 /**
  * The routes, for a signed-in user (`requireUser` has set `req.scope`, whose organization the preview is made in).

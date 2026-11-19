@@ -27,6 +27,15 @@ export type AgentContext = (
       inline?: DeckInlineContext;
     }
   | {
+      /** A whiteboard (shared/whiteboard.ts): its tools are read_whiteboard and edit_whiteboard. */
+      page: 'whiteboard';
+      boardId: string;
+      title: string;
+      itemCount: number;
+      /** Ids of the selected items. */
+      selectedItems: string[];
+    }
+  | {
       page: 'doc';
       docId: string;
       title: string;
@@ -330,6 +339,8 @@ export function chatScope(ctx: AgentContext): string {
       return ctx.sheetId;
     case 'deck':
       return ctx.deckId;
+    case 'whiteboard':
+      return ctx.boardId;
     case 'doc':
     case 'markdown':
       return ctx.docId;
@@ -465,6 +476,9 @@ export const CLIENT_TOOLS = new Set([
   'delete_tab',
   'select_range',
   'open_sheet',
+  // Whiteboards: act on the open whiteboard (client/src/agent/whiteboardTools.ts).
+  'read_whiteboard',
+  'edit_whiteboard',
   // Slide decks: act on the open presentation (client/src/agent/deckTools.ts).
   'open_deck',
   'read_deck',

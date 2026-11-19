@@ -82,7 +82,7 @@ const spec = (s: Input): SlideContent & { layout?: LayoutId } => ({
  * needs to be saved as a file in the user's library to be used.
  */
 export async function keepDeckPictures(call: ClientToolCall, keep: (url: string) => Promise<string>): Promise<ClientToolCall> {
-  if (call.name !== 'add_slides' && call.name !== 'update_slide' && call.name !== 'edit_elements') return call;
+  if (call.name !== 'add_slides' && call.name !== 'update_slide' && call.name !== 'edit_elements' && call.name !== 'edit_whiteboard') return call;
   const kept = new Map<string, string>();
   const stored = async (src: unknown): Promise<unknown> => {
     // A YouTube link is a video's address, not a picture to keep.
@@ -293,7 +293,7 @@ function applyChartSpec(prev: ChartElement | undefined, s: Input): ChartElement 
 }
 
 /** Merge an element spec from edit_elements into an existing element, or build a new one. */
-function applyElementSpec(existing: SlideElement | undefined, s: Input, byId: Map<string, SlideElement> = new Map()): SlideElement {
+export function applyElementSpec(existing: SlideElement | undefined, s: Input, byId: Map<string, SlideElement> = new Map()): SlideElement {
   if (existing?.type === 'shape' && existing.shape === 'line') existing = lineFromShape(existing);
   if (s.type === 'shape' && s.shape === 'line') s = { ...s, type: 'line' };
   const type = (s.type ?? existing?.type) as SlideElement['type'] | undefined;

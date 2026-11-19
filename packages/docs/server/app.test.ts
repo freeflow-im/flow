@@ -613,6 +613,62 @@ describe('documents', () => {
   });
 });
 
+describe('whiteboards', () => {
+  it('creates, saves with revision checks, validates, searches, exports and deletes, kept apart from other kinds', async () => {
+    const { cookie } = await signUp(app, box, 'wb@x.com');
+    const { cookie: other } = await signUp(app, box, 'wb2@x.com');
+    let res;
+
+    res = await app.inject({ method: 'POST', url: '/api/whiteboards', headers: { cookie }, payload: { title: 'Plan' } });
+    expect(res.statusCode).toBe(200);
+    const { board: meta } = res.json();
+    expect(meta).toMatchObject({ title: 'Plan', kind: 'whiteboard' });
+    res = await app.inject({ method: 'GET', url: `/api/whiteboards/${meta.id}`, headers: { cookie } });
+    expect(res.json().board).toEqual({ version: 1, elements: [] });
+
+    const board = {
+      version: 1,
+      elements: [
+        { id: 't1', type: 'text', anchored: true, x: 40, y: 40, w: 120, h: 24, paragraphs: [{ text: 'Roadmap ideas', runs: [{ text: 'Roadmap', bold: true }, { text: ' ideas' }] }], style: { size: 18, paraSpacing: 0 } },
+        { id: 'n1', type: 'text', x: 400, y: 40, w: 200, h: 200, fill: '#fff59d', paragraphs: [{ text: 'Ship the whiteboard' }] },
+        { id: 's1', type: 'shape', shape: 'rect', x: 800, y: 40, w: 200, h: 120, text: 'Box' },
+      ],
+    };
+    res = await app.inject({ method: 'PUT', url: `/api/whiteboards/${meta.id}`, headers: { cookie }, payload: { board, rev: meta.updatedAt } });
+    expect(res.statusCode).toBe(200);
+    res = await app.inject({ method: 'PUT', url: `/api/whiteboards/${meta.id}`, headers: { cookie }, payload: { board, rev: meta.updatedAt } });
+    expect(res.statusCode).toBe(409);
+    res = await app.inject({ method: 'GET', url: `/api/whiteboards/${meta.id}`, headers: { cookie } });
+    expect(res.json().board).toEqual(board);
+
+    // What a whiteboard cannot hold is refused: a table, an item off the board.
+    for (const bad of [{ version: 1, elements: [{ id: 'x', type: 'table', x: 0, y: 0, w: 10, h: 10, rows: [] }] }, { version: 1, elements: [{ ...board.elements[2], x: 99_000 }] }, { version: 2, elements: [] }]) {
+      res = await app.inject({ method: 'PUT', url: `/api/whiteboards/${meta.id}`, headers: { cookie }, payload: { board: bad } });
+      expect(res.statusCode).toBe(400);
+    }
+    for (const url of [`/api/docs/${meta.id}`, `/api/decks/${meta.id}`, `/api/markdown/${meta.id}`]) {
+      res = await app.inject({ method: 'GET', url, headers: { cookie } });
+      expect(res.statusCode).toBe(404);
+    }
+    res = await app.inject({ method: 'GET', url: `/api/whiteboards/${meta.id}`, headers: { cookie: other } });
+    expect(res.statusCode).toBe(404);
+
+    // Listed with its kind, its text in the preview, exported as JSON.
+    res = await app.inject({ method: 'GET', url: '/api/whiteboards', headers: { cookie } });
+    expect(res.json().boards.map((b: { title: string }) => b.title)).toEqual(['Plan']);
+    res = await app.inject({ method: 'GET', url: `/api/files/${meta.id}/export`, headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual(board);
+
+    res = await app.inject({ method: 'PATCH', url: `/api/whiteboards/${meta.id}`, headers: { cookie }, payload: { title: 'Q1 plan' } });
+    expect(res.json().meta.title).toBe('Q1 plan');
+    res = await app.inject({ method: 'DELETE', url: `/api/whiteboards/${meta.id}`, headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    res = await app.inject({ method: 'GET', url: `/api/whiteboards/${meta.id}`, headers: { cookie } });
+    expect(res.statusCode).toBe(404);
+  });
+});
+
 describe('markdown documents', () => {
   it('creates from text, saves with revision checks, lists, exports, renames and deletes, kept apart from other kinds', async () => {
     const { cookie } = await signUp(app, box, 'md@x.com');

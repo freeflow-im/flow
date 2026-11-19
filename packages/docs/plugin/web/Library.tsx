@@ -104,6 +104,7 @@ export function Library({ host, onOpen }: { host: Host; onOpen(file: { kind: Lib
         createKinds={['sheet', 'deck', 'doc', 'markdown']}
         onGettingStarted={() => void openGuide()}
         onCreate={async (kind, title) => {
+          if (kind === 'whiteboard') return; // not offered in the plugin
           const r = await host.call<{ file: FileSummary }>(kind === 'markdown' ? 'create_doc' : CREATE_TOOLS[kind], { title, ...(kind === 'markdown' ? { kind } : {}) });
           onOpen({ kind, id: r.file.id });
         }}

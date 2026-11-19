@@ -5,6 +5,7 @@ import type { LinkedTable, SheetTableRef } from '../../shared/sheetTable.ts';
 import type { LinkedChart, SheetChartList } from '../../shared/chart.ts';
 import type { Doc } from '../../shared/doc.ts';
 import type { MarkdownDoc } from '../../shared/markdown.ts';
+import type { Whiteboard } from '../../shared/whiteboard.ts';
 import type { FilePreview } from '../../shared/preview.ts';
 import { CELL_IMAGE_TOO_LARGE, type ConnectedAgent, type DeletedFile, type NewFilesSettings, type NewFilesUpdate, type SheetMeta, type StoredFile, type Workbook } from '../../shared/types.ts';
 import type { ZipEntry, ZipOfficeView } from '../../shared/zip.ts';
@@ -156,7 +157,7 @@ export interface SavedSignature {
  */
 /** A document found by the words inside it (GET /api/search; the server's shape is @flow/shared/search's SearchHit). */
 export interface ContentHit {
-  kind: 'doc' | 'sheet' | 'deck' | 'markdown';
+  kind: 'doc' | 'sheet' | 'deck' | 'markdown' | 'whiteboard';
   id: string;
   title: string;
   /** The matching text, the matched words between \u0002 and \u0003. */
@@ -217,7 +218,7 @@ export interface RecentFile {
 
 /** A web file copied into the folder, or a folder's file copied to the web (desktop app; server/webCopy.ts). */
 export interface CopiedFile {
-  kind: 'doc' | 'deck' | 'sheet' | 'markdown' | 'file';
+  kind: 'doc' | 'deck' | 'sheet' | 'markdown' | 'whiteboard' | 'file';
   id: string;
   title: string;
   warnings: string[];
@@ -349,7 +350,7 @@ export const api = {
   opened: (kind: RecentFile['kind'], id: string) => request<{ ok: true }>('POST', '/api/recents', { kind, id }),
   /** Open one of them: answers with its path in the open folder, or that the app is switching to the file's folder. */
   /** The desktop app: the file the window shows, for the MCP tools to act on (server/localMcp.ts); null for none. */
-  localShowing: (file: { kind: 'doc' | 'deck' | 'sheet' | 'markdown' | 'file'; id: string } | null, window?: string) => request<{ ok: true }>('POST', '/api/local/showing', { ...(file ?? {}), ...(window ? { window } : {}) }),
+  localShowing: (file: { kind: 'doc' | 'deck' | 'sheet' | 'markdown' | 'whiteboard' | 'file'; id: string } | null, window?: string) => request<{ ok: true }>('POST', '/api/local/showing', { ...(file ?? {}), ...(window ? { window } : {}) }),
   /** The desktop app: answer an agent's tool call that ran in this window (server/windowTools.ts). */
   answerToolCall: (id: string, answer: { content: string; isError?: boolean; images?: { mediaType: string; data: string }[] } | { unavailable: true }) => request<{ ok: true }>('POST', `/api/local/tool-calls/${encodeURIComponent(id)}`, answer),
   openLocal: (path: string) => request<{ file?: string; switching?: true }>('POST', '/api/local/open', { path }),
@@ -447,6 +448,12 @@ export const api = {
   renameDoc: (id: string, title: string) => request<{ meta: SheetMeta }>('PATCH', `/api/docs/${encodeURIComponent(id)}`, { title }),
   deleteDoc: (id: string) => request<{ ok: true }>('DELETE', `/api/docs/${encodeURIComponent(id)}`),
 
+  createWhiteboard: (title: string, folder?: Place) => request<{ board: SheetMeta }>('POST', '/api/whiteboards', { title, ...placeFields(folder) }),
+  getWhiteboard: (id: string) => request<{ meta: SheetMeta; board: Whiteboard }>('GET', `/api/whiteboards/${encodeURIComponent(id)}`),
+  saveWhiteboard: (id: string, board: Whiteboard, rev?: string, keepalive = false) =>
+    request<{ meta: SheetMeta }>('PUT', `/api/whiteboards/${encodeURIComponent(id)}`, { board, rev }, keepalive ? { keepalive: true } : undefined),
+  renameWhiteboard: (id: string, title: string) => request<{ meta: SheetMeta }>('PATCH', `/api/whiteboards/${encodeURIComponent(id)}`, { title }),
+  deleteWhiteboard: (id: string) => request<{ ok: true }>('DELETE', `/api/whiteboards/${encodeURIComponent(id)}`),
   listMarkdown: () => request<{ docs: SheetMeta[] }>('GET', '/api/markdown'),
   /** Create a Markdown document, empty or from the text of an uploaded .md file. */
   createMarkdown: (title: string, text = '', folder?: Place) => request<{ doc: SheetMeta }>('POST', '/api/markdown', { title, text, ...placeFields(folder) }),

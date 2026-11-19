@@ -32,6 +32,18 @@ export function MarkdownIcon({ size = 28 }: { size?: number }) {
   );
 }
 
+/** Icon for whiteboards: a note and a circle on orange. */
+export function WhiteboardIcon({ size = 28 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
+      <rect width="32" height="32" rx="6" fill="#e8710a" />
+      <rect x="6" y="7" width="10" height="9" rx="1.5" fill="#fff" />
+      <circle cx="21.5" cy="20.5" r="4.5" fill="none" stroke="#fff" strokeWidth="2" />
+      <path d="M8 23l6-3.5" stroke="#fff" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 /** The app's own mark (all document kinds), for the home page, file previews and sign-in pages. */
 export function HomeIcon({ size = 28 }: { size?: number }) {
   return (

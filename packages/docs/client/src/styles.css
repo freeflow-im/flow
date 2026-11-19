@@ -7515,3 +7515,36 @@ a.landing-card {
   color: var(--text);
   cursor: default;
 }
+
+/* Whiteboards (pages/WhiteboardPage.tsx): the board at its real size in a scrolled frame, a cursor per tool. */
+.deck-canvas.board {
+  background: #eef0f3;
+}
+.deck-canvas.board > .slide-scaler {
+  margin: 0;
+}
+.deck-canvas.board .deck-canvas-slide {
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+}
+.deck-canvas.placing-text,
+.deck-canvas.placing-text .slide,
+.deck-canvas.placing-text .sl-el {
+  cursor: text;
+}
+.deck-canvas.placing-note,
+.deck-canvas.placing-note .slide,
+.deck-canvas.placing-note .sl-el {
+  cursor: crosshair;
+}
+/* Typed text is edited where it is, not moved. */
+.deck-canvas.board .sl-text[style*='max-content'] {
+  cursor: text;
+}
+.note-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  vertical-align: middle;
+}

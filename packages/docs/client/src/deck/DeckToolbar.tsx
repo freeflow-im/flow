@@ -439,7 +439,51 @@ function ChartLinkControls({ ctl, el, linked, onOpenSheet }: { ctl: DeckControll
   );
 }
 
-export function DeckToolbar({ ctl, onPresent, onInsertImage, onInsertVideo, onEditImage, onInsertSheetTable, linked, onOpenSheet }: { ctl: DeckController; onPresent(): void; onInsertImage(): void; /** Open the Table from spreadsheet dialog. */ onInsertSheetTable?(): void; /** The page's linked tables, for the state of the selected one. */ linked?: LinkedTableSync | null; onOpenSheet?(id: string): void; /** Open the video dialog; without it the button is not shown. */ onInsertVideo?(): void; /** Open the image editor on a picture element; without it the button is not shown. */ onEditImage?(id: string): void }) {
+/** The colors a whiteboard's sticky note comes in. */
+const NOTE_COLORS: [string, string][] = [
+  ['#fff59d', 'Yellow'],
+  ['#ffcc80', 'Orange'],
+  ['#f8bbd0', 'Pink'],
+  ['#b3e5fc', 'Blue'],
+  ['#c8e6c9', 'Green'],
+  ['#e1bee7', 'Purple'],
+  ['#ffffff', 'White'],
+];
+
+const pointerIcon = (
+  <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M6 3l12 9-5.5 1 3 6.5-2.5 1-3-6.5L6 18z" fill="currentColor" />
+  </svg>
+);
+const noteIcon = (
+  <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M4 4h16v11l-5 5H4z" fill="#fff59d" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+    <path d="M15 20v-5h5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+  </svg>
+);
+
+/** A whiteboard's tools: select, type text, put a note, and add a picture. */
+function BoardTools({ ctl, onInsertImage }: { ctl: DeckController; onInsertImage(): void }) {
+  const select = !ctl.place && !ctl.tool;
+  return (
+    <>
+      <Btn title="Select and move (Esc)" active={select} onClick={() => (ctl.setPlace(null), ctl.setTool(null))}>
+        {pointerIcon}
+      </Btn>
+      <Btn title="Text: click anywhere on the board and type" active={ctl.place === 'text'} onClick={() => ctl.setPlace(ctl.place === 'text' ? null : 'text')}>
+        <span className="a-icon">T</span>
+      </Btn>
+      <Btn title="Sticky note: click where it goes" active={ctl.place === 'note'} onClick={() => ctl.setPlace(ctl.place === 'note' ? null : 'note')}>
+        {noteIcon}
+      </Btn>
+      <button className="btn" onMouseDown={(e) => e.preventDefault()} onClick={onInsertImage} title="Add a picture from your computer (or paste one with ⌘V)">
+        Upload image
+      </button>
+    </>
+  );
+}
+
+export function DeckToolbar({ ctl, onPresent, onInsertImage, onInsertVideo, onEditImage, onInsertSheetTable, linked, onOpenSheet, board }: { /** A whiteboard's toolbar: its tools in place of the slide's. */ board?: boolean; ctl: DeckController; onPresent?(): void; onInsertImage(): void; /** Open the Table from spreadsheet dialog. */ onInsertSheetTable?(): void; /** The page's linked tables, for the state of the selected one. */ linked?: LinkedTableSync | null; onOpenSheet?(id: string): void; /** Open the video dialog; without it the button is not shown. */ onInsertVideo?(): void; /** Open the image editor on a picture element; without it the button is not shown. */ onEditImage?(id: string): void }) {
   const selected = ctl.selected;
   const texts = selected.filter((e): e is TextElement => e.type === 'text');
   const text = texts[0];
@@ -457,7 +501,11 @@ export function DeckToolbar({ ctl, onPresent, onInsertImage, onInsertVideo, onEd
   const themeItems: MenuItem[] = THEME_IDS.map((t: ThemeId) => ({ label: THEMES[t].name, checked: ctl.deck.theme === t, action: () => ctl.setTheme(t) }));
 
   return (
-    <div className="toolbar deck-toolbar" role="toolbar" aria-label="Deck toolbar">
+    <div className="toolbar deck-toolbar" role="toolbar" aria-label={board ? 'Whiteboard toolbar' : 'Deck toolbar'}>
+      {board ? (
+        <BoardTools ctl={ctl} onInsertImage={onInsertImage} />
+      ) : (
+        <>
       <LayoutPicker title="New slide" label="+ Slide" theme={ctl.deck.theme} onPick={(l) => ctl.addSlide(l)} />
       <LayoutPicker title="Layout" label="Layout" theme={ctl.deck.theme} current={ctl.slide.layout} onPick={(l) => ctl.setLayout(l)} />
       <Drop title="Theme" label="Theme" items={themeItems} />
@@ -481,6 +529,8 @@ export function DeckToolbar({ ctl, onPresent, onInsertImage, onInsertVideo, onEd
         </Btn>
       )}
       <TablePicker ctl={ctl} onFromSheet={onInsertSheetTable} />
+        </>
+      )}
       <ShapePicker ctl={ctl} />
       <LinePicker ctl={ctl} />
       {/* The controls for a kind of element are there while one is selected, so the bar holds what can be
@@ -601,7 +651,22 @@ export function DeckToolbar({ ctl, onPresent, onInsertImage, onInsertVideo, onEd
           }
         />
       )}
-      <ColorPicker title="Slide background" icon={<span className="fill-icon">▭</span>} value={ctl.slide.bg} onPick={(c) => ctl.setBackground(c)} />
+      {board && texts.some((t) => t.fill) && (
+        <Drop
+          title="Note color"
+          label={<span className="note-swatch" style={{ background: texts.find((t) => t.fill)?.fill }} />}
+          items={NOTE_COLORS.map(([c, name]) => ({
+            label: (
+              <span className="menu-icon-label">
+                <span className="note-swatch" style={{ background: c }} /> {name}
+              </span>
+            ),
+            checked: texts.find((t) => t.fill)?.fill === c,
+            action: () => ctl.updateElements(texts.filter((t) => t.fill).map((t) => t.id), (e) => (e.type === 'text' ? { ...e, fill: c } : e)),
+          }))}
+        />
+      )}
+      {!board && <ColorPicker title="Slide background" icon={<span className="fill-icon">▭</span>} value={ctl.slide.bg} onPick={(c) => ctl.setBackground(c)} />}
       {selected.length > 0 && (
         <>
           <span className="tb-sep" />
@@ -629,9 +694,11 @@ export function DeckToolbar({ ctl, onPresent, onInsertImage, onInsertVideo, onEd
         </>
       )}
       <span className="tb-grow" />
-      <button className="btn primary present-btn" onClick={onPresent} title="Present from the current slide">
-        ▶ Present
-      </button>
+      {onPresent && (
+        <button className="btn primary present-btn" onClick={onPresent} title="Present from the current slide">
+          ▶ Present
+        </button>
+      )}
     </div>
   );
 }

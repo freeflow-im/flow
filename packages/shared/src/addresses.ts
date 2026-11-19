@@ -50,7 +50,7 @@ export function settingsSectionOf(pathname: string): SettingsSection | null {
 const CHAT_OPENS = ['artifact', 'channel', 'message'] as const;
 
 /** A Docs document's page by its kind (packages/docs client main.tsx' routes). */
-const DOCS_PATHS: Record<string, string> = { sheet: 's', deck: 'd', doc: 'doc', markdown: 'md', file: 'f' };
+const DOCS_PATHS: Record<string, string> = { sheet: 's', deck: 'd', doc: 'doc', markdown: 'md', whiteboard: 'w', file: 'f' };
 const DOCS_KINDS: Record<string, string> = Object.fromEntries(Object.entries(DOCS_PATHS).map(([k, p]) => [p, k]));
 
 /** A kind as its app's manifest declares it (`address`, `icon`, `label`): what the tables below fall back to, so an app
@@ -205,14 +205,14 @@ export function createAddress<K extends keyof CreateFields>(what: K, fields: Cre
 /** A glyph for a kind of object, as a chip draws it. */
 export function iconOf(app: string, kind: string, fileKind?: string): string {
   if (app === 'chat') return ({ channel: '#', message: '💬', artifact: '📌', file: '📎' } as Record<string, string>)[kind] ?? '🔗';
-  if (app === 'docs') return kind === 'folder' ? '📁' : (({ sheet: '📊', deck: '📽️', doc: '📄', markdown: '📝', file: '📎' } as Record<string, string>)[fileKind ?? ''] ?? '📄');
+  if (app === 'docs') return kind === 'folder' ? '📁' : (({ sheet: '📊', deck: '📽️', doc: '📄', markdown: '📝', whiteboard: '🗒️', file: '📎' } as Record<string, string>)[fileKind ?? ''] ?? '📄');
   if (app === 'calendar') return kind === 'event' ? '🗓️' : '📅';
   return manifestKind(app, kind)?.icon ?? '🔗';
 }
 
 /** What a kind of object is called, as a chip says it. */
 export function kindLabelOf(app: string, kind: string, fileKind?: string): string {
-  if (app === 'docs' && kind !== 'folder') return ({ sheet: 'Spreadsheet', deck: 'Presentation', doc: 'Document', markdown: 'Markdown', file: 'File' } as Record<string, string>)[fileKind ?? ''] ?? 'File';
+  if (app === 'docs' && kind !== 'folder') return ({ sheet: 'Spreadsheet', deck: 'Presentation', doc: 'Document', markdown: 'Markdown', whiteboard: 'Whiteboard', file: 'File' } as Record<string, string>)[fileKind ?? ''] ?? 'File';
   return ({ channel: 'Channel', message: 'Message', artifact: 'Artifact', file: 'File', folder: 'Folder', calendar: 'Calendar', event: 'Event' } as Record<string, string>)[kind] ?? manifestKind(app, kind)?.label ?? kind;
 }
 

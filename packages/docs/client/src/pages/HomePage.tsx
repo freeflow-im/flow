@@ -779,6 +779,7 @@ function FileList() {
         if (kind === 'sheet') navigate(`/s/${(await api.createSheet(title, newPlace)).sheet.id}`);
         else if (kind === 'deck') navigate(`/d/${(await api.createDeck(title, undefined, newPlace)).deck.id}`);
         else if (kind === 'markdown') navigate(`/md/${(await api.createMarkdown(title, '', newPlace)).doc.id}`);
+        else if (kind === 'whiteboard') navigate(`/w/${(await api.createWhiteboard(title, newPlace)).board.id}`);
         else navigate(`/doc/${(await api.createDoc(title, undefined, newPlace)).doc.id}`);
       }}
       // Any file can be added: the kinds the app knows open in it, the rest are kept to download, move or delete.
@@ -837,11 +838,11 @@ function FileList() {
           : [{ label: inDesktopApp() ? 'Download to Folder…' : 'Download to MCP Docs', onClick: () => void (window.location.href = downloadLink(s)) }]),
       ]}
       onRename={async (s, title) => {
-        await (s.kind === 'file' ? api.renameFile(s.id, title) : s.kind === 'deck' ? api.renameDeck(s.id, title) : s.kind === 'doc' ? api.renameDoc(s.id, title) : s.kind === 'markdown' ? api.renameMarkdown(s.id, title) : api.renameSheet(s.id, title));
+        await (s.kind === 'file' ? api.renameFile(s.id, title) : s.kind === 'deck' ? api.renameDeck(s.id, title) : s.kind === 'doc' ? api.renameDoc(s.id, title) : s.kind === 'markdown' ? api.renameMarkdown(s.id, title) : s.kind === 'whiteboard' ? api.renameWhiteboard(s.id, title) : api.renameSheet(s.id, title));
         await load();
       }}
       onDelete={async (s) => {
-        await (s.kind === 'deck' ? api.deleteDeck(s.id) : s.kind === 'doc' ? api.deleteDoc(s.id) : s.kind === 'markdown' ? api.deleteMarkdown(s.id) : s.kind === 'file' ? api.deleteFile(s.id) : api.deleteSheet(s.id));
+        await (s.kind === 'deck' ? api.deleteDeck(s.id) : s.kind === 'doc' ? api.deleteDoc(s.id) : s.kind === 'markdown' ? api.deleteMarkdown(s.id) : s.kind === 'whiteboard' ? api.deleteWhiteboard(s.id) : s.kind === 'file' ? api.deleteFile(s.id) : api.deleteSheet(s.id));
         await load();
       }}
     >

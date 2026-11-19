@@ -3,7 +3,7 @@
 // (`toFtsMatch`), quoting every word, so text from the box is never read as FTS5 syntax.
 
 /** What a hit can be. */
-export const SEARCH_KINDS = ['doc', 'sheet', 'deck', 'markdown', 'file', 'message', 'email'] as const;
+export const SEARCH_KINDS = ['doc', 'sheet', 'deck', 'markdown', 'whiteboard', 'file', 'message', 'email'] as const;
 export type SearchKind = (typeof SEARCH_KINDS)[number];
 export const isSearchKind = (k: unknown): k is SearchKind => typeof k === 'string' && (SEARCH_KINDS as readonly string[]).includes(k);
 
@@ -67,6 +67,7 @@ const KIND_ALIASES: Record<string, SearchKind> = {
   sheet: 'sheet', sheets: 'sheet', spreadsheet: 'sheet', spreadsheets: 'sheet',
   deck: 'deck', decks: 'deck', presentation: 'deck', presentations: 'deck', slides: 'deck',
   markdown: 'markdown', md: 'markdown',
+  whiteboard: 'whiteboard', whiteboards: 'whiteboard', board: 'whiteboard',
   file: 'file', files: 'file', pdf: 'file',
   message: 'message', messages: 'message', chat: 'message',
   email: 'email', emails: 'email', mail: 'email',
