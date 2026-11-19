@@ -160,6 +160,10 @@ jobs:
         run: pnpm install --frozen-lockfile --filter @flow/edge...
       - name: Build @flow/shared
         run: pnpm --filter @flow/shared build
+      # CI measured 95-103 ms on PR #877 (2026-11-19), where Cloudflare reports about 220-360 ms for the same code. 200 ms
+      # is about twice today's: a change that doubles startup fails here, well before Cloudflare's 1 s.
       - name: Measure startup
         working-directory: packages/edge
+        env:
+          STARTUP_LIMIT_MS: 200
         run: node scripts/check-startup.mjs
