@@ -272,9 +272,13 @@ export async function appMembers(p: { organizationId: string; callerUserId: stri
  * Where an app version's image icon is kept (§4): its R2 key and type. The installed version's when `version` is not
  * given. Null for an emoji icon, no icon, or no such version.
  */
-export async function appIconFile(name: string, version?: number): Promise<{ key: string; type: string } | null> {
-  const v = version ?? (await rowOf(name))?.version;
-  if (v === undefined) return null;
+export async function appIconFile(name: string, version: number | null): Promise<{ key: string; type: string } | null> {
+  let v = version;
+  if (v === null) {
+    const [app] = await db.select({ version: userApps.version }).from(userApps).where(eq(userApps.name, name)).limit(1);
+    if (!app) return null;
+    v = app.version;
+  }
   const [row] = await db.select({ manifest: userAppVersions.manifest, prefix: userAppVersions.prefix, files: userAppVersions.files }).from(userAppVersions).where(and(eq(userAppVersions.name, name), eq(userAppVersions.version, v))).limit(1);
   if (!row?.prefix) return null;
   const icon = (JSON.parse(row.manifest) as UserAppManifest).icon;

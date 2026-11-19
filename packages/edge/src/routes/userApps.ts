@@ -389,7 +389,12 @@ userAppRoutes.get('/v1/workspaces/:id/apps/:name/icon', async (c) => {
   const guest = guestRefusal(m.account, 'apps');
   if (guest) throw guest;
   const v = Number(c.req.query('v'));
-  const icon = await orgStub(c, m.organizationId).userAppIcon(c.req.param('name'), Number.isInteger(v) && v > 0 ? v : undefined);
+  const found = await orgStub(c, m.organizationId).userAppIcon({ name: c.req.param('name'), version: Number.isInteger(v) && v > 0 ? v : null });
+  if (!found.ok) {
+    console.error(`[apps] icon of ${c.req.param('name')} in ${m.organizationId}: ${found.error}`);
+    throw new ApiError(500, 'icon_failed', `the icon could not be read: ${found.error}`);
+  }
+  const icon = found.icon;
   const bucket = (c.env as AuthEnv & { BLOBS?: R2Bucket }).BLOBS;
   const o = icon && bucket ? await bucket.get(icon.key) : null;
   if (!icon || !o) throw new ApiError(404, 'not_found', 'this app has no image icon');
