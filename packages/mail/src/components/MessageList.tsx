@@ -121,7 +121,7 @@ export function MessageList(p: MessageListProps) {
           if (p.query) p.onSearch?.('');
           e.currentTarget.blur();
         }}
-        className={cn('min-w-0 flex-1 rounded-lg border border-border bg-white px-3 text-sm outline-none focus:border-primary', inlineSearch ? 'h-8' : 'h-9')}
+        className={cn('min-w-0 flex-1 rounded-lg border border-border bg-white px-3 text-sm outline-none focus:border-primary', inlineSearch ? 'h-9' : 'h-10')}
       />
     </form>
   );
@@ -199,7 +199,7 @@ export function MessageList(p: MessageListProps) {
 
   return (
     <section className="@container flex h-full min-w-0 flex-col bg-white" aria-label="Messages">
-      <div className="flex h-[52px] shrink-0 items-center gap-2 border-b border-hairline px-3">
+      <div className="flex h-14 shrink-0 items-center gap-3 border-b border-hairline px-4">
         {p.onShowFolders && !bulk && (
           <Button variant="ghost" size="icon-sm" onClick={p.onShowFolders} aria-label="Show folders">
             <Menu />
@@ -360,7 +360,7 @@ export function MessageList(p: MessageListProps) {
                   menuOpen && 'z-10 shadow-[inset_1px_0_0_#dadce0,inset_-1px_0_0_#dadce0,0_1px_2px_0_rgba(60,64,67,.3),0_1px_3px_1px_rgba(60,64,67,.15)]',
                 )}
               >
-                <div className="flex h-10 items-center gap-1">
+                <div className="flex h-12 items-center gap-1">
                 <div className="flex shrink-0 items-center" onClick={(e) => e.stopPropagation()}>
                   <span className="flex size-8 items-center justify-center">
                     <input
