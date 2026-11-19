@@ -50,7 +50,7 @@ function InboxTab({ id, active, compact, status, onChange, onDrop }: { id: Categ
       onClick={() => onChange(id)}
       {...drop.props}
       className={cn(
-        'relative flex h-14 min-w-0 items-center text-sm outline-none hover:bg-hover focus-visible:bg-hover',
+        'relative flex h-16 min-w-0 items-center text-sm outline-none hover:bg-hover focus-visible:bg-hover',
         compact ? (active ? 'shrink-0 gap-2 px-4' : 'min-w-[56px] flex-1 justify-center px-2') : 'flex-1 gap-4 px-4',
         active ? 'font-semibold text-primary' : 'font-medium text-muted',
         drop.over && 'bg-selected-blue text-primary ring-2 ring-primary ring-inset hover:bg-selected-blue',
