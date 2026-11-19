@@ -6,7 +6,7 @@
 //
 // send_message posts at once, as the agent: posting in Chat never waits for an approval (operator ruling 2026-11-17, R-C;
 // it used to leave a ✅ card for the sponsor).
-import { z } from 'zod4';
+import { z } from 'zod';
 
 /** An agent's Chat tools. */
 export const ASSISTANT_CHAT_TOOLS: ReadonlySet<string> = new Set(['list_channels', 'read_messages', 'search_messages', 'send_message', 'leave_channel']);

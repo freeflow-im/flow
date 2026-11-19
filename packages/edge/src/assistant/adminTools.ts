@@ -8,7 +8,7 @@
 // These are not in the tool registry (registry/index.ts): they reach neither /mcp nor the bridge, and only an admin agent's
 // panel turns are offered them (assistantTools.ts suiteTools, by the turn's `context.admin`).
 import type Anthropic from '@anthropic-ai/sdk';
-import { z } from 'zod4';
+import { z } from 'zod';
 
 /** A refusal or a route's error, which the agent sees as it is. */
 export class AdminToolError extends Error {}

@@ -8,7 +8,7 @@
 //
 // Which tools a token gets is its scopes' (`mailToolsFor`): mail:read lists, searches and reads; mail:write organises and
 // drafts; mail:send sends; saving an attachment to Docs needs files:write too. A tool the scopes do not allow is not listed.
-import { z } from 'zod4';
+import { z } from 'zod';
 import { register } from '../registry';
 import type { Address, MailFolder, MessageDetail, MessageSummary } from './convert';
 import { bodyText, formatAddress, markdownToHtml, parseAddress, prefill, truncateText } from './mailText';

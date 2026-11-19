@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod4';
+import { z } from 'zod';
 import { TOOL_DEFINITIONS, TOOL_DOORS, toolsAtDoor, type ToolDefinition, type ToolDoor } from '@flow/shared/tools';
 import { createMcpServer, MCP_VERSIONS, type McpVersion } from '@flow/docs/plugin/server/mcp.ts';
 import { TOOL_DEFS } from '@flow/docs/server/agent/tools.ts';

@@ -10,7 +10,7 @@
 //
 // Which tools a token gets is its scopes' (`calendarToolsFor`): calendar:read lists, reads and finds free time;
 // calendar:write creates, changes, deletes, answers invitations and shares calendars. A tool the scopes do not allow is not listed.
-import { z } from 'zod4';
+import { z } from 'zod';
 import { register } from '../registry';
 import type { CalendarAccount, CalendarInfo } from './object';
 import type { EventOccurrence } from './store';

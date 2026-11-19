@@ -2,7 +2,7 @@
 // run on the caller's own Contacts object through `ctx.apps.contacts` (apps.ts), the same HTTP API the routes forward to.
 // contacts:read lists and searches the merged list (the person's own contacts, the organization's members, the lists
 // shared with it, the people written to); contacts:write adds a contact; contacts:email sends email to members (email.ts).
-import { z } from 'zod4';
+import { z } from 'zod';
 import type { AppToolContext } from '../apps';
 import { register } from '../registry';
 import type { ContactDTO } from './object';

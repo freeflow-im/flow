@@ -20,8 +20,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { DurableObject } from 'cloudflare:workers';
 import { connect } from 'cloudflare:sockets';
 import { Hono, type Context } from 'hono';
-import { ImapFlow, createSocketsTransport, type FetchMessageObject, type FetchQueryObject, type ListResponse, type SearchObject } from 'imapflow';
-import nodemailer from 'nodemailer';
+import type { ImapFlow, FetchMessageObject, FetchQueryObject, ListResponse, SearchObject } from 'imapflow';
 import PostalMime, { type Email } from 'postal-mime';
 import { ApiError } from '../errors';
 import { decryptBlob, encryptBlob } from '../org/crypto/index';
@@ -230,14 +229,18 @@ function commandError(err: unknown): unknown {
 }
 const dropped = (err: unknown) => ['NoConnection', 'EConnectionClosed', 'StateLogout'].includes((err as { code?: string }).code ?? '');
 
-function imapOptions(s: ServerSettings, user: string, pass: string) {
-  return {
+// imapflow and nodemailer are loaded on first use, not at the Worker's start: at the top they ran on every start of the
+// suite's Worker, whose startup CPU Cloudflare caps at 1 s.
+async function newImap(s: ServerSettings, user: string, pass: string): Promise<ImapFlow> {
+  const { ImapFlow, createSocketsTransport } = await import('imapflow');
+  return new ImapFlow({
     host: s.host, port: s.port, secure: s.security === 'tls', doSTARTTLS: s.security === 'starttls' ? true : s.security === 'none' ? false : undefined,
     auth: { user, pass }, logger: false as const, transport: createSocketsTransport(connect as never), disableAutoIdle: true,
     connectionTimeout: 15_000, greetingTimeout: 15_000, socketTimeout: 5 * 60_000, clientInfo: { name: 'FreeFlow Mail' },
-  };
+  });
 }
-function smtpTransport(s: ServerSettings, user: string, pass: string) {
+async function smtpTransport(s: ServerSettings, user: string, pass: string) {
+  const { default: nodemailer } = await import('nodemailer');
   return nodemailer.createTransport({
     host: s.host, port: s.port, secure: s.security === 'tls', requireTLS: s.security === 'starttls', ignoreTLS: s.security === 'none',
     auth: { user, pass }, connectionTimeout: 15_000, greetingTimeout: 15_000, socketTimeout: 60_000, logger: false,
@@ -392,13 +395,13 @@ export class Mail extends DurableObject<MailEnv> {
     checkServer('smtp', smtp, this.allowInsecure);
     if (!this.rateAllow('login', LOGIN_LIMIT, LOGIN_WINDOW_MS)) throw mailError(429, 'rate_limited', 'Too many sign-in attempts; try again in a few minutes');
     const imapCheck = (async () => {
-      const client = new ImapFlow(imapOptions(imap, imap.username || email, password));
+      const client = await newImap(imap, imap.username || email, password);
       client.on('error', () => {});
       try { await client.connect(); } catch (err) { throw failed(imapFailure(err)); }
       await client.logout().catch(() => {});
     })();
     const smtpCheck = (async () => {
-      const transport = smtpTransport(smtp, smtp.username || email, password);
+      const transport = await smtpTransport(smtp, smtp.username || email, password);
       try { await transport.verify(); } catch (err) { throw failed(smtpFailure(err)); } finally { transport.close(); }
     })();
     const [a, b] = await Promise.allSettled([imapCheck, smtpCheck]);
@@ -416,10 +419,11 @@ export class Mail extends DurableObject<MailEnv> {
 
   private open(r: AccountRow, key: string): Promise<ImapFlow> {
     const imap = JSON.parse(r.imap) as ServerSettings;
-    const client = new ImapFlow(imapOptions(imap, imap.username || r.email, this.password(r)));
-    client.on('error', (err: Error) => console.warn(`[mail] imap ${key}: ${err.message}`));
-    client.on('close', () => { if (this.conns.get(key) === pending) this.conns.delete(key); });
-    const pending = client.connect().then(() => {
+    const pending: Promise<ImapFlow> = newImap(imap, imap.username || r.email, this.password(r)).then((client) => {
+      client.on('error', (err: Error) => console.warn(`[mail] imap ${key}: ${err.message}`));
+      client.on('close', () => { if (this.conns.get(key) === pending) this.conns.delete(key); });
+      return client.connect().then(() => client);
+    }).then((client) => {
       this.setStatus(r.id, 'ok', null);
       return client;
     }, (err) => {
@@ -1940,7 +1944,7 @@ export class Mail extends DurableObject<MailEnv> {
     if (!recipients.length) throw badRequest('to: name at least one recipient');
     if (sendSize(body) > MAX_SEND_BYTES) throw mailError(413, 'bad_request', 'the message is larger than 20 MB');
     const message = outgoingMessage(account, body, await this.filesOf(r, body));
-    const transport = smtpTransport(account.smtp, account.smtp.username || account.email, this.password(r));
+    const transport = await smtpTransport(account.smtp, account.smtp.username || account.email, this.password(r));
     try {
       await transport.sendMail(message);
     } catch (err) {
@@ -2104,7 +2108,7 @@ export class Mail extends DurableObject<MailEnv> {
 
   /** A fresh, unpooled IMAP connection, for a copy between two mailboxes. */
   private async connectOnce(imap: ServerSettings, user: string, password: string): Promise<ImapFlow> {
-    const client = new ImapFlow(imapOptions(imap, user, password));
+    const client = await newImap(imap, user, password);
     client.on('error', (err: Error) => console.warn(`[mail] imap copy: ${err.message}`));
     await client.connect();
     return client;
@@ -2209,7 +2213,7 @@ export class Mail extends DurableObject<MailEnv> {
       const r = this.row(accountId);
       const account = this.toAccount(r);
       const message = calendarMessage(account, checkCalendarMail(mail));
-      const transport = smtpTransport(account.smtp, account.smtp.username || account.email, this.password(r));
+      const transport = await smtpTransport(account.smtp, account.smtp.username || account.email, this.password(r));
       try {
         await transport.sendMail(message);
       } catch (err) {

@@ -3,7 +3,7 @@
 // (one tab) or Excel, and every kind as its native JSON. Images stored on the server go into the zip's
 // images/ folder, and Markdown exports point at them with relative paths.
 import { addChartsToXlsx } from './xlsxCharts.ts';
-import ExcelJS from 'exceljs';
+import type ExcelJS from 'exceljs';
 import JSZip from 'jszip';
 import { readFile } from '#runtime/fsp';
 import { workbookToCsv } from '../shared/csv.ts';
@@ -205,7 +205,8 @@ function xlsxValue(engine: Engine, tab: Tab, r: number, c: number, raw: string):
 /** The workbook as an Excel file: values, formulas, styles, widths, heights, frozen panes and the filtered range. */
 export async function workbookXlsx(wb: Workbook, title: string): Promise<Buffer> {
   const engine = new Engine(wb);
-  const book = new ExcelJS.Workbook();
+  // exceljs is loaded on first use (see loadExcelJs in xlsxImport.ts).
+  const book = new (await import('exceljs')).default.Workbook();
   book.title = title;
   const used = new Set<string>();
   const names = new Map<string, string>();

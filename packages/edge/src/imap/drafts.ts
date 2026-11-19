@@ -1,6 +1,5 @@
 // The message a send or a draft is made of, and its MIME (nodemailer's MailComposer, as the Sent copy is made). Pure apart
 // from the composer, so drafts.test.ts can check what a draft's bytes say: its threading headers, Bcc kept, both bodies.
-import MailComposer from 'nodemailer/lib/mail-composer';
 import type Mail from 'nodemailer/lib/mailer';
 import type { Address } from './convert';
 
@@ -39,7 +38,9 @@ export function outgoingMessage(from: { email: string; displayName: string }, pa
 }
 
 /** The message's bytes. `keepBcc` for a copy kept in a folder (Sent, Drafts), where the Bcc line is the sender's own record. */
-export function compileMime(message: Mail.Options, keepBcc: boolean): Promise<Buffer> {
+export async function compileMime(message: Mail.Options, keepBcc: boolean): Promise<Buffer> {
+  // Loaded on first use, not at the Worker's start (whose CPU Cloudflare caps at 1 s).
+  const { default: MailComposer } = await import('nodemailer/lib/mail-composer');
   const composer = new MailComposer(message).compile();
   composer.keepBcc = keepBcc;
   return new Promise<Buffer>((resolve, reject) => composer.build((err, out) => (err ? reject(err) : resolve(out))));
