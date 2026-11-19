@@ -5,6 +5,7 @@ import path from 'node:path';
 import type { Deck } from '../shared/deck.ts';
 import type { Doc } from '../shared/doc.ts';
 import type { MarkdownDoc } from '../shared/markdown.ts';
+import type { Whiteboard } from '../shared/whiteboard.ts';
 import { csvProblem, csvStyle, csvToWorkbook, isCsvDoc, newCsvDoc, workbookToCsv, type CsvDoc } from '../shared/csv.ts';
 import { migrateDeck } from '../shared/lines.ts';
 import { checkCellImage, newWorkbook, type DocKind, type SheetMeta, type Workbook } from '../shared/types.ts';
@@ -69,7 +70,7 @@ const toMeta = (r: SheetRow): SheetMeta => ({
 
 const baseFileOf = (id: string) => `${id}.base.json`;
 
-export type Stored = Workbook | Deck | Doc | MarkdownDoc | CsvDoc;
+export type Stored = Workbook | Deck | Doc | MarkdownDoc | Whiteboard | CsvDoc;
 /** How a document's file holds it, when not as the app's JSON: a spreadsheet as CSV text or an Excel file, a presentation as a PowerPoint file, a document as a Word file. */
 export type SheetFormat = 'csv' | 'xlsx' | 'pptx' | 'docx';
 
@@ -536,6 +537,23 @@ export class SheetStore {
   async saveMarkdown(who: ViewerArg, id: string, doc: MarkdownDoc): Promise<SheetMeta | null> {
     const r = this.row(who, id, 'markdown', 'editor');
     return r ? this.write(r, doc) : null;
+  }
+
+  // --- Whiteboards ----------------------------------------------------------------
+
+  async createWhiteboard(scope: ScopeArg, title: string, board: Whiteboard, folder = ''): Promise<SheetMeta> {
+    return this.insert(scope, 'whiteboard', title, board, folder);
+  }
+
+  async loadWhiteboard(who: ViewerArg, id: string): Promise<{ meta: SheetMeta; board: Whiteboard } | null> {
+    const r = this.row(who, id, 'whiteboard');
+    if (!r) return null;
+    return { meta: toMeta(r), board: await this.read<Whiteboard>(r) };
+  }
+
+  async saveWhiteboard(who: ViewerArg, id: string, board: Whiteboard): Promise<SheetMeta | null> {
+    const r = this.row(who, id, 'whiteboard', 'editor');
+    return r ? this.write(r, board) : null;
   }
 
   // --- Any kind ------------------------------------------------------------------

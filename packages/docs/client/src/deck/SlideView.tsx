@@ -40,7 +40,7 @@ export interface SlideViewProps {
   /** Live positions during a drag, by element id. */
   preview?: Record<string, BoxPreview>;
   /** Element whose text is being edited inline, with the callback that commits the text. */
-  editing?: { id: string; caret?: { x: number; y: number }; onCommit(paragraphs: Paragraph[]): void; onStop(): void } | null;
+  editing?: { id: string; caret?: { x: number; y: number }; onCommit(paragraphs: Paragraph[], size?: { w: number; h: number }): void; onStop(): void } | null;
   onElementMouseDown?(e: MouseEvent, el: SlideElement): void;
   onElementDoubleClick?(e: MouseEvent, el: SlideElement): void;
   /** The current cell of a table (outlined), and, while its text is being edited, the callbacks of the cell editor. */
@@ -50,6 +50,13 @@ export interface SlideViewProps {
   /** Drawn on top of the elements (selection handles). */
   children?: ReactNode;
   className?: string;
+  /** The canvas size in points: a slide's by default, a whiteboard's (shared/whiteboard.ts) when given. */
+  width?: number;
+  height?: number;
+  /** Text can be styled a few words at a time while it is edited (⌘B, ⌘I, ⌘U): a whiteboard's. */
+  rich?: boolean;
+  /** Pictures are drawn over everything else (a whiteboard's layer of pictures above its text), in their own order. */
+  imagesOnTop?: boolean;
 }
 
 export interface TableCellState {
@@ -105,6 +112,10 @@ export function textStyleOf(el: TextElement, theme: Theme): CSSProperties {
 function boxStyle(el: SlideElement, preview?: BoxPreview): CSSProperties {
   const b = { x: el.x, y: el.y, w: el.w, h: el.h, ...preview };
   const style: CSSProperties = { left: b.x, top: b.y, width: b.w, height: b.h };
+  // A whiteboard's typed text is as wide and as tall as its lines.
+  if (el.type === 'text' && el.anchored) return { left: b.x, top: b.y, width: 'max-content', height: 'auto', minWidth: 12, minHeight: '1.25em', whiteSpace: 'pre' };
+  // A sticky note: its paper, with the text inset.
+  if (el.type === 'text' && el.fill) Object.assign(style, { background: el.fill, padding: 14, borderRadius: 3, boxShadow: '0 1px 3px rgba(0,0,0,0.18), 0 4px 10px rgba(0,0,0,0.08)' });
   if (el.rot) style.transform = `rotate(${el.rot}deg)`;
   // A straight line's thickness comes from its stroke; the vertical/horizontal style overrides the zero dimension.
   if (el.type === 'shape' && el.shape === 'line' && !isDiagonal(el)) {
@@ -367,37 +378,59 @@ export const Paragraphs = memo(function Paragraphs({ paragraphs, live = false }:
   );
 });
 
+type RunLook = Omit<TextRun, 'text'>;
+
+/** The look an element of the edited text gives what is inside it: its run's (data-r), its tag's, its inline style's. */
+function lookOf(node: HTMLElement, outer: RunLook, source: Paragraph | undefined): RunLook {
+  const look: RunLook = { ...outer };
+  if (node.dataset.r !== undefined) Object.assign(look, source?.runs?.[Number(node.dataset.r)] ?? {}, { text: undefined });
+  delete (look as { text?: string }).text;
+  const tag = node.tagName;
+  if (tag === 'A') {
+    const href = node.getAttribute('href');
+    if (href) look.link = href;
+  }
+  if (tag === 'B' || tag === 'STRONG') look.bold = true;
+  if (tag === 'I' || tag === 'EM') look.italic = true;
+  if (tag === 'U') look.underline = true;
+  if (tag === 'FONT' && node.getAttribute('color')) look.color = node.getAttribute('color')!;
+  const st = node.style;
+  if (st.fontWeight) look.bold = st.fontWeight === 'bold' || Number(st.fontWeight) >= 600;
+  if (st.fontStyle) look.italic = st.fontStyle === 'italic';
+  if (st.textDecorationLine || st.textDecoration) {
+    const d = st.textDecorationLine || st.textDecoration;
+    if (d.includes('underline')) look.underline = true;
+    else if (d === 'none') delete look.underline;
+  }
+  if (st.color && node.dataset.r === undefined) look.color = st.color;
+  return look;
+}
+
+const sameLook = (a: RunLook, b: RunLook) => a.bold === b.bold && a.italic === b.italic && a.underline === b.underline && a.color === b.color && a.link === b.link;
+
 /**
- * The runs of an edited paragraph block, so links survive retyping: a span or anchor the editor made keeps the
- * look of the original run it came from; anything else is plain text. Undefined when the block has no links.
+ * The runs of an edited paragraph block: links, and words made bold, italic, underlined or colored, keep their
+ * look through retyping (a span the editor drew from a run keeps that run's look; the browser's own <b>, <i> and
+ * <u> from ⌘B, ⌘I and ⌘U add to it). Undefined when the whole block is plain.
  */
 function editedRuns(block: HTMLElement, source: Paragraph | undefined): TextRun[] | undefined {
-  if (!block.querySelector('a[data-r]')) return undefined;
   const runs: TextRun[] = [];
-  const walk = (node: Node) => {
-    if (node instanceof HTMLElement && node.dataset.r !== undefined) {
-      const text = (node.textContent ?? '').replace(/​/g, '');
-      const orig = source?.runs?.[Number(node.dataset.r)];
-      const link = node.tagName === 'A' ? (node.getAttribute('href') ?? undefined) : undefined;
-      if (text) runs.push({ ...(orig ?? {}), text, ...(link ? { link } : {}) });
-      return;
-    }
-    if (node instanceof HTMLElement && node.tagName === 'BR') {
-      runs.push({ text: '\n' });
-      return;
-    }
-    if (node.nodeType === Node.TEXT_NODE) {
-      const text = (node.textContent ?? '').replace(/​/g, '');
-      const prev = runs[runs.length - 1];
-      if (!text) return;
-      if (prev && Object.keys(prev).length === 1) prev.text += text;
-      else runs.push({ text });
-      return;
-    }
-    for (const c of Array.from(node.childNodes)) walk(c);
+  const add = (text: string, look: RunLook) => {
+    if (!text) return;
+    const prev = runs[runs.length - 1];
+    if (prev && sameLook(prev, look)) prev.text += text;
+    else runs.push({ ...look, text });
   };
-  walk(block);
-  return runs.length ? runs : undefined;
+  const walk = (node: Node, look: RunLook) => {
+    if (node.nodeType === Node.TEXT_NODE) return add((node.textContent ?? '').replace(/​/g, ''), look);
+    if (!(node instanceof HTMLElement)) return;
+    if (node.tagName === 'BR') return;
+    const inner = node === block ? look : lookOf(node, look, source);
+    for (const c of Array.from(node.childNodes)) walk(c, inner);
+  };
+  walk(block, {});
+  for (const r of runs) for (const k of Object.keys(r) as (keyof TextRun)[]) if (r[k] === undefined) delete r[k];
+  return runs.some((r) => Object.keys(r).length > 1) ? runs : undefined;
 }
 
 /**
@@ -509,7 +542,7 @@ export function caretAt(x: number, y: number): Range | null {
 }
 
 /** Inline editor for a text element. Uncontrolled: the DOM is the draft; the text is committed on blur. */
-function TextEditor({ initial, onCommit, onStop, style, caret }: { initial: Paragraph[]; onCommit(p: Paragraph[]): void; onStop(): void; style: CSSProperties; caret?: { x: number; y: number } }) {
+function TextEditor({ initial, onCommit, onStop, style, caret, rich }: { initial: Paragraph[]; onCommit(p: Paragraph[], size?: { w: number; h: number }): void; onStop(): void; style: CSSProperties; caret?: { x: number; y: number }; rich?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const committed = useRef(false);
   const [anchor, setAnchor] = useState<HTMLAnchorElement | null>(null);
@@ -528,7 +561,8 @@ function TextEditor({ initial, onCommit, onStop, style, caret }: { initial: Para
   const commit = () => {
     if (committed.current || !ref.current) return;
     committed.current = true;
-    onCommit(parseEditedText(ref.current, initial));
+    // Its size as drawn (before the canvas's scale), for a box that follows its text.
+    onCommit(parseEditedText(ref.current, initial), { w: ref.current.offsetWidth, h: ref.current.offsetHeight });
   };
   useLayoutEffect(() => {
     const el = ref.current;
@@ -585,13 +619,22 @@ function TextEditor({ initial, onCommit, onStop, style, caret }: { initial: Para
           block.style.paddingLeft = `${(bullet ? 28 : 0) + level * 28}px`;
           block.classList.toggle('bullet', bullet);
         } else if ((e.metaKey || e.ctrlKey) && ['b', 'i', 'u'].includes(e.key.toLowerCase())) {
-          e.preventDefault(); // Styling applies to the whole element from the toolbar.
+          e.preventDefault(); // On a slide, styling applies to the whole element from the toolbar.
+          if (rich) document.execCommand({ b: 'bold', i: 'italic', u: 'underline' }[e.key.toLowerCase()]!);
         }
       }}
       onPaste={(e) => {
         // Plain text only, as paragraphs.
         e.preventDefault();
         const text = e.clipboardData.getData('text/plain');
+        if (rich) {
+          // Each line its own paragraph, typed where the caret is (so it can be undone like typing).
+          text.split(/\r?\n/).forEach((line, i) => {
+            if (i) document.execCommand('insertParagraph');
+            if (line) document.execCommand('insertText', false, line);
+          });
+          return;
+        }
         const sel = window.getSelection();
         if (!sel?.rangeCount) return;
         sel.deleteFromDocument();
@@ -708,7 +751,7 @@ function TableView({ el, theme, bg, cell }: { el: TableElement; theme: Theme; bg
   );
 }
 
-export function SlideView({ slide, theme: themeId, scale, preview, editing, tableCell, onElementMouseDown, onElementDoubleClick, playVideo, children, className }: SlideViewProps) {
+export function SlideView({ slide, theme: themeId, scale, preview, editing, tableCell, onElementMouseDown, onElementDoubleClick, playVideo, children, className, width = SLIDE_W, height = SLIDE_H, rich, imagesOnTop }: SlideViewProps) {
   const theme = THEMES[themeId];
   // On the editor canvas (not present mode or thumbnails) a plain click on a link of a non-editing box shows the link menu.
   const [linkAnchor, setLinkAnchor] = useState<HTMLAnchorElement | null>(null);
@@ -730,7 +773,7 @@ export function SlideView({ slide, theme: themeId, scale, preview, editing, tabl
   return (
     <div
       className={`slide-scaler${className ? ` ${className}` : ''}`}
-      style={{ width: SLIDE_W * scale, height: SLIDE_H * scale }}
+      style={{ width: width * scale, height: height * scale }}
       onClick={(e) => {
         if (!onElementMouseDown || e.metaKey || e.ctrlKey) return;
         const a = (e.target as Element).closest?.('a.sl-link');
@@ -738,8 +781,8 @@ export function SlideView({ slide, theme: themeId, scale, preview, editing, tabl
       }}
     >
       {linkAnchor && linkAnchor.isConnected && <LinkBubble anchor={linkAnchor} onChange={() => setLinkAnchor(null)} />}
-      <div className="slide" style={{ ...themeVars(theme), width: SLIDE_W, height: SLIDE_H, transform: `scale(${scale})`, background: slide.bg ?? theme.bg }}>
-        {slide.elements.map((el) => {
+      <div className="slide" style={{ ...themeVars(theme), width, height, transform: `scale(${scale})`, background: slide.bg ?? theme.bg }}>
+        {(imagesOnTop ? [...slide.elements.filter((el) => el.type !== 'image'), ...slide.elements.filter((el) => el.type === 'image')] : slide.elements).map((el) => {
           const box = boxStyle(el, preview?.[el.id]);
           const common = {
             'data-el': el.id,
@@ -750,8 +793,15 @@ export function SlideView({ slide, theme: themeId, scale, preview, editing, tabl
             const style = { ...box, ...textStyleOf(el, theme) };
             if (editing?.id === el.id) {
               return (
-                <div key={el.id} className="sl-el" style={box} data-el={el.id}>
-                  <TextEditor initial={el.paragraphs} onCommit={editing.onCommit} onStop={editing.onStop} caret={editing.caret} style={{ ...textStyleOf(el, theme), width: '100%', height: '100%' }} />
+                <div key={el.id} className="sl-el" style={el.fill ? { ...box, padding: 0 } : box} data-el={el.id}>
+                  <TextEditor
+                    initial={el.paragraphs}
+                    onCommit={editing.onCommit}
+                    onStop={editing.onStop}
+                    caret={editing.caret}
+                    rich={rich}
+                    style={{ ...textStyleOf(el, theme), ...(el.anchored ? { minWidth: 12, whiteSpace: 'pre' } : { width: '100%', height: '100%' }), ...(el.fill ? { padding: 14, boxSizing: 'border-box' } : {}) }}
+                  />
                 </div>
               );
             }

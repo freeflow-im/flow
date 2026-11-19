@@ -60,6 +60,12 @@ export class DeckController {
   cropping: string | null = null;
   /** The line tool picked in the toolbar: the next drag on the slide draws this kind of line. */
   tool: { kind: LineKind; arrow: boolean } | null = null;
+  /** A whiteboard's place tool: the next click on the board types text there, or puts a sticky note there. */
+  place: 'text' | 'note' | null = null;
+  /** The canvas: a slide, or a whiteboard (shared/whiteboard.ts). */
+  canvas = { w: SLIDE_W, h: SLIDE_H };
+  /** Where new elements go: the canvas's middle, unless the editor says what part of it is in view (a whiteboard). */
+  viewCenter: (() => { x: number; y: number }) | null = null;
   /** Presenting (full-screen) mode. */
   presenting = false;
   /** The prompt to the assistant, while it is open on the slide (Mod-J), with the text that was selected in the text box being edited. */
@@ -339,6 +345,7 @@ export class DeckController {
   setTool(tool: DeckController['tool']): void {
     this.tool = tool;
     if (tool) {
+      this.place = null;
       this.editing = null;
       this.cropping = null;
       this.selection = [];
@@ -443,7 +450,53 @@ export class DeckController {
     );
   }
 
+  setPlace(place: DeckController['place']): void {
+    this.place = place;
+    if (place) {
+      this.tool = null;
+      this.editing = null;
+      this.cropping = null;
+      this.selection = [];
+    }
+    this.emit();
+  }
+
   // --- Elements -------------------------------------------------------------------
+
+  /** The top-left corner that puts a w × h box in the middle of the view. */
+  private centered(w: number, h: number): { x: number; y: number } {
+    const c = this.viewCenter?.() ?? { x: this.canvas.w / 2, y: this.canvas.h / 2 };
+    return { x: Math.round(Math.max(0, Math.min(this.canvas.w - w, c.x - w / 2))), y: Math.round(Math.max(0, Math.min(this.canvas.h - h, c.y - h / 2))) };
+  }
+
+  /**
+   * A whiteboard's typed text at (x, y), being edited: it stays where it is, its lines one under the other (Enter
+   * starts the next), and its box follows its text (sized by the page as it is drawn).
+   */
+  addTypedText(x: number, y: number): string {
+    const id = this.addElement({ type: 'text', anchored: true, x, y, w: 24, h: 28, paragraphs: [{ text: '' }], style: { size: 18, paraSpacing: 0 } });
+    this.startEditing(id);
+    return id;
+  }
+
+  /** A whiteboard's sticky note at (x, y) (its top left), being edited. */
+  addNote(x: number, y: number, fill = '#fff59d'): string {
+    const id = this.addElement({ type: 'text', x, y, w: 200, h: 200, fill, paragraphs: [{ text: '' }], style: { size: 18, color: '#202124' } });
+    this.startEditing(id);
+    return id;
+  }
+
+  /**
+   * Change elements as a follow-up of the last step (see DeckStore.amend): sizes measured after a change, or (null)
+   * typed text left empty, which goes.
+   */
+  amendElements(ids: string[], fn: (el: SlideElement) => SlideElement | null): void {
+    const set = new Set(ids);
+    this.store.amend((tx) =>
+      tx.updateSlide(this.current, (s) => ({ ...s, elements: s.elements.flatMap((e) => (set.has(e.id) ? (fn(e) ?? []) : [e])) })),
+    );
+    this.selection = this.selection.filter((id) => this.slide.elements.some((e) => e.id === id));
+  }
 
   /** Add an element to the current slide and select it. */
   addElement(el: NewElement): string {
@@ -457,7 +510,7 @@ export class DeckController {
   addText(role: TextElement['role'] = 'body'): string {
     const w = 400;
     const h = 80;
-    return this.addElement({ type: 'text', role, x: (SLIDE_W - w) / 2, y: (SLIDE_H - h) / 2, w, h, paragraphs: [{ text: role === 'title' ? 'Title' : 'Text' }] });
+    return this.addElement({ type: 'text', role, ...this.centered(w, h), w, h, paragraphs: [{ text: role === 'title' ? 'Title' : 'Text' }] });
   }
 
   addShape(shape: ShapeKind): string {
@@ -466,14 +519,14 @@ export class DeckController {
     const square = SHAPES[shape].square;
     const w = square ? 150 : 200;
     const h = square ? 150 : 120;
-    return this.addElement({ type: 'shape', shape, x: (SLIDE_W - w) / 2, y: (SLIDE_H - h) / 2, w, h });
+    return this.addElement({ type: 'shape', shape, ...this.centered(w, h), w, h });
   }
 
   /** Add a line from (x1, y1) to (x2, y2), by default one across the middle of the slide. */
   addLine(kind: LineKind, arrow = false, ends?: { x1: number; y1: number; x2: number; y2: number } & Partial<Pick<LineElement, 'startConnection' | 'endConnection'>>): string {
     const el: Omit<LineElement, 'id'> = ends
       ? { type: 'line', kind, ...boxFromEnds(ends.x1, ends.y1, ends.x2, ends.y2), strokeWidth: DEFAULT_LINE_WIDTH }
-      : { type: 'line', kind, x: (SLIDE_W - 300) / 2, y: SLIDE_H / 2, w: 300, h: kind === 'straight' ? 0 : 100, strokeWidth: DEFAULT_LINE_WIDTH };
+      : { type: 'line', kind, ...this.centered(300, kind === 'straight' ? 0 : 100), w: 300, h: kind === 'straight' ? 0 : 100, strokeWidth: DEFAULT_LINE_WIDTH };
     if (arrow) el.endArrow = 'arrow';
     if (ends?.startConnection) el.startConnection = ends.startConnection;
     if (ends?.endConnection) el.endConnection = ends.endConnection;
@@ -511,7 +564,8 @@ export class DeckController {
 
   /** Add an arc (default: the top-right quarter of a circle) with its tight box. */
   private addArc(): string {
-    const box = arcTightBox({ cx: SLIDE_W / 2, cy: SLIDE_H / 2, rx: 150, ry: 150 }, 270, 0, 2);
+    const mid = this.centered(0, 0);
+    const box = arcTightBox({ cx: mid.x, cy: mid.y, rx: 150, ry: 150 }, 270, 0, 2);
     return this.addElement({ type: 'shape', shape: 'arc', ...box, tight: true, startAngle: 270, endAngle: 0 });
   }
 
@@ -647,7 +701,7 @@ export class DeckController {
     const scale = Math.min(1, 800 / Math.max(1, c.w), 440 / Math.max(1, c.h));
     const w = Math.round(c.w * scale);
     const h = Math.round(c.h * scale);
-    return this.addElement({ type: 'chart', x: Math.round((SLIDE_W - w) / 2), y: Math.round((SLIDE_H - h) / 2), w, h, chart: c.chart, data: c.data, ...(linked ? { source: chartSourceOf(sheetId, chartId, c) } : {}) });
+    return this.addElement({ type: 'chart', ...this.centered(w, h), w, h, chart: c.chart, data: c.data, ...(linked ? { source: chartSourceOf(sheetId, chartId, c) } : {}) });
   }
 
   /** Put the latest look and data of its spreadsheet chart in a linked slide chart, as refreshLinkedTable does a table. */
@@ -674,18 +728,19 @@ export class DeckController {
     let w = 480;
     let h = 270;
     if (natural && natural.w > 0 && natural.h > 0) {
-      const scale = Math.min(1, (SLIDE_W - 120) / natural.w, (SLIDE_H - 120) / natural.h);
+      // Within the slide, or on a whiteboard within about a screen.
+      const scale = Math.min(1, (Math.min(this.canvas.w, 1440) - 120) / natural.w, (Math.min(this.canvas.h, 900) - 120) / natural.h);
       w = Math.round(natural.w * scale);
       h = Math.round(natural.h * scale);
     }
-    return this.addElement({ type: 'image', src, x: Math.round((SLIDE_W - w) / 2), y: Math.round((SLIDE_H - h) / 2), w, h });
+    return this.addElement({ type: 'image', src, ...this.centered(w, h), w, h });
   }
 
   /** Add a video (shared/video.ts) in the middle of the slide, 16:9. */
   addVideo(src: string): string {
     const w = 560;
     const h = 315;
-    return this.addElement({ type: 'video', src, x: Math.round((SLIDE_W - w) / 2), y: Math.round((SLIDE_H - h) / 2), w, h });
+    return this.addElement({ type: 'video', src, ...this.centered(w, h), w, h });
   }
 
   /**

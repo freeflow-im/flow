@@ -69,6 +69,15 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   `create_doc`, `read_other_doc`) work on them too, through `client/src/agent/markdownTools.ts` and
   `shared/agent/markdownBlocks.ts` (blocks are the top-level Markdown constructs, edits are text ranges
   applied through the editor so they are undoable); the formatting and page tools do not.
+- Whiteboards (`shared/whiteboard.ts`, `pages/WhiteboardPage.tsx`, behind `/api/whiteboards`, page `/w/:id`) are one
+  5760×3600 board of slide elements (text, notes, shapes, lines, pictures), stored like the other kinds. The page holds the
+  board as a one-slide deck (`boardAsDeck` / `deckAsBoard`) and edits it with the slide editor in its whiteboard mode:
+  `DeckEditor`'s `board` prop (real size, scrolled; moves, resizes and line ends snap to the 4-point `GRID`; the place tools
+  `ctl.place`), `DeckToolbar`'s `board` prop, and `SlideView`'s `width`/`height`, `rich` (⌘B/⌘I/⌘U on words while typing,
+  read back into runs by `editedRuns`) and `imagesOnTop`. Typed text is a text element with `anchored`: placed at the click,
+  edited where it is (never dragged), with no paragraph spacing, its stored box measured from the page after each change
+  and merged into that change's undo step (`DeckStore.amend`); left empty, it goes. A sticky note is a text element with a
+  `fill`. The assistant has no whiteboard tools yet.
 - A video in a presentation or a document is named by its address (`shared/video.ts`): a stored video
   file (`/api/files/<id>`) or a YouTube video's watch address. It is a slide element of type `video`
   (`shared/deck.ts`) and a `video` block in a document (`shared/doc.ts`; in Markdown an image whose address

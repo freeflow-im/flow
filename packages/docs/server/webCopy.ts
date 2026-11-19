@@ -59,7 +59,7 @@ export interface CopyStores {
 const IMAGE_ADDR = /\/api\/images\/[0-9a-f-]{36}/g;
 const VIDEO_ADDR = /"\/api\/files\/[0-9a-z-]+"/g;
 const OFFICE_EXT: Partial<Record<DocKind, string>> = { doc: '.docx', deck: '.pptx', sheet: '.xlsx' };
-const NATIVE_EXT: Record<DocKind, string> = { doc: '.ffdoc', deck: '.ffslides', sheet: '.ffsheet', markdown: '.md' };
+const NATIVE_EXT: Record<DocKind, string> = { doc: '.ffdoc', deck: '.ffslides', sheet: '.ffsheet', markdown: '.md', whiteboard: '.ffboard' };
 const OFFICE_NAME: Partial<Record<DocKind, string>> = { doc: 'Word', deck: 'PowerPoint', sheet: 'Excel' };
 
 const SIGNED_OUT = 'Sign in to MCP Docs on the web first: open a Web tab (File › Open Web Tab) and sign in.';
@@ -144,7 +144,7 @@ export async function uploadToWeb(web: Web, s: CopyStores, id: string, webFolder
     const { doc } = await call<{ doc: { id: string; title: string } }>(web, 'POST', '/api/markdown', { title: titleBase(meta.title), text: data.markdown.text, ...folder });
     return { kind: 'markdown', id: doc.id, title: doc.title, warnings: [] };
   }
-  const raw = data.kind === 'doc' ? data.doc : data.kind === 'deck' ? data.deck : data.workbook;
+  const raw = data.kind === 'doc' ? data.doc : data.kind === 'deck' ? data.deck : data.kind === 'whiteboard' ? data.board : data.workbook;
   const source = imageSource(s.images, s.userId);
   const { json, missing } = await carryImages(JSON.stringify(raw), async (addr) => {
     const img = await source.stored(addr);
@@ -156,6 +156,10 @@ export async function uploadToWeb(web: Web, s: CopyStores, id: string, webFolder
   if (data.kind === 'doc') {
     const { doc } = await call<{ doc: { id: string; title: string } }>(web, 'POST', '/api/docs', { title: titleBase(meta.title), doc: content, ...folder });
     return { kind: 'doc', id: doc.id, title: doc.title, warnings };
+  }
+  if (data.kind === 'whiteboard') {
+    const { board } = await call<{ board: { id: string; title: string } }>(web, 'POST', '/api/whiteboards', { title: titleBase(meta.title), board: content, ...folder });
+    return { kind: 'whiteboard', id: board.id, title: board.title, warnings };
   }
   if (data.kind === 'deck') {
     const { deck } = await call<{ deck: { id: string; title: string } }>(web, 'POST', '/api/decks', { title: titleBase(meta.title), deck: content, ...folder });
@@ -171,6 +175,7 @@ export async function uploadToWeb(web: Web, s: CopyStores, id: string, webFolder
 /** What the download dialog offers for a web file: its formats, and what an Office file of it would not hold. */
 export async function webPreview(web: Web, kind: LibraryKind, id: string): Promise<{ formats: DownloadFormat[]; officeLosses: string[] }> {
   if (kind === 'file' || kind === 'markdown') return { formats: ['as-is'], officeLosses: [] };
+  if (kind === 'whiteboard') return { formats: ['native'], officeLosses: [] };
   const raw = parse<unknown>(await bytes(web, `/api/files/${encodeURIComponent(id)}/export?format=json`));
   const officeLosses = kind === 'doc' ? [docxProblem(raw as Doc)].filter((p): p is string => !!p) : kind === 'deck' ? pptxGaps(raw as Deck) : [xlsxProblem(raw as Workbook)].filter((p): p is string => !!p);
   return { formats: kind === 'sheet' ? ['office', 'csv', 'native'] : ['office', 'native', 'pdf'], officeLosses };

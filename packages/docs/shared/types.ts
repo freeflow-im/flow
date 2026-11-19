@@ -127,7 +127,7 @@ export interface Workbook {
  * What a stored document is: a spreadsheet (workbook JSON), a slide deck (shared/deck.ts), a text document
  * (shared/doc.ts) or a Markdown document (shared/markdown.ts).
  */
-export type DocKind = 'sheet' | 'deck' | 'doc' | 'markdown';
+export type DocKind = 'sheet' | 'deck' | 'doc' | 'markdown' | 'whiteboard';
 
 /** A role on a file or folder someone else owns (platform.md §4.3; the owner's is not told). */
 export type SharedRole = 'viewer' | 'editor' | 'manager';

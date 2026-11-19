@@ -117,8 +117,15 @@ export function DeckEditor({
   onImageFiles,
   onEditImage,
   onContextMenu,
+  board,
 }: {
   ctl: DeckController;
+  /**
+   * A whiteboard (shared/whiteboard.ts) rather than a slide: a canvas of this size shown at its real size (zoom 1)
+   * and scrolled, positions and sizes snapped to the grid, the place tools (typed text, notes), and typed text that
+   * is edited where it is rather than moved.
+   */
+  board?: { w: number; h: number; grid: number };
   onImageFiles(files: File[]): void;
   /** Open the image editor on a picture element (a double-click on it). */
   onEditImage?(id: string): void;
@@ -151,7 +158,27 @@ export function DeckEditor({
     return () => ro.disconnect();
   }, []);
 
-  const scale = Math.max(0.1, Math.min((size.w - 48) / SLIDE_W, (size.h - 48) / SLIDE_H)) * zoom;
+  const scale = board ? zoom : Math.max(0.1, Math.min((size.w - 48) / SLIDE_W, (size.h - 48) / SLIDE_H)) * zoom;
+  /** A position or size on the grid (a whiteboard's), else in whole points. */
+  const sn = (v: number) => (board ? Math.round(v / board.grid) * board.grid : Math.round(v));
+  const snapBox = (b: Box): Box => (board ? { x: sn(b.x), y: sn(b.y), w: Math.max(board.grid, sn(b.x + b.w) - sn(b.x)), h: Math.max(board.grid, sn(b.y + b.h) - sn(b.y)) } : b);
+  const isTyped = (el: SlideElement | undefined) => !!board && el?.type === 'text' && !!el.anchored;
+
+  // On a whiteboard new elements go in the middle of what is in view.
+  useEffect(() => {
+    if (!board) return;
+    ctl.viewCenter = () => {
+      const w = wrapRef.current;
+      const r = w?.querySelector('.slide')?.getBoundingClientRect();
+      const v = w?.getBoundingClientRect();
+      if (!r || !v) return { x: board.w / 2, y: board.h / 2 };
+      return { x: sn((v.left + v.width / 2 - r.left) / scale), y: sn((v.top + v.height / 2 - r.top) / scale) };
+    };
+    return () => {
+      ctl.viewCenter = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ctl, board, scale]);
 
   useWheelZoom(frameRef, setZoom);
   const slide = ctl.slide;
@@ -178,7 +205,7 @@ export function DeckEditor({
     wrapRef.current?.focus();
     const [px, py] = toSlide(e);
     const { near, snap } = nearSites(slide.elements, px, py, 14 / scale, 28 / scale);
-    const [x, y] = snap ? [snap.x, snap.y] : [px, py];
+    const [x, y] = snap ? [snap.x, snap.y] : board ? [sn(px), sn(py)] : [px, py];
     const line: LineElement = {
       id: 'draft',
       type: 'line',
@@ -220,7 +247,7 @@ export function DeckEditor({
         line = { ...line, bend: Math.round(Math.min(1, Math.max(0, bend)) * 100) / 100 };
       } else {
         ({ near, snap } = nearSites(slide.elements, px, py, 14 / scale, 28 / scale, d.mode === 'draw' ? undefined : line.id));
-        const [qx, qy] = snap ? [snap.x, snap.y] : e.shiftKey ? snapAngle(d.fixed.x, d.fixed.y, px, py) : [px, py];
+        const [qx, qy] = snap ? [snap.x, snap.y] : e.shiftKey ? snapAngle(d.fixed.x, d.fixed.y, px, py) : board ? [sn(px), sn(py)] : [px, py];
         const dragStart = d.mode === 'start';
         const [x1, y1, x2, y2] = dragStart ? [qx, qy, d.fixed.x, d.fixed.y] : [d.fixed.x, d.fixed.y, qx, qy];
         const conn = snap ? { elementId: snap.elementId, site: snap.site } : undefined;
@@ -265,7 +292,7 @@ export function DeckEditor({
     const boxes: Record<string, Box> = {};
     const ratios: Record<string, number | null> = {};
     for (const el of slide.elements) {
-      if (!ids.includes(el.id)) continue;
+      if (!ids.includes(el.id) || (kind === 'move' && isTyped(el))) continue; // typed text stays where it was typed
       boxes[el.id] = { x: el.x, y: el.y, w: el.w, h: el.h };
       ratios[el.id] = (el.type === 'image' || el.type === 'video') && el.w > 0 ? el.h / el.w : null;
     }
@@ -298,7 +325,7 @@ export function DeckEditor({
       }
       for (const id in d.arc ? {} : d.boxes) {
         const b = d.boxes[id];
-        preview[id] = d.kind === 'move' ? { x: Math.round(b.x + dx), y: Math.round(b.y + dy) } : resizeBox(b, d.handle!, dx, dy, e.shiftKey ? null : d.ratios[id]);
+        preview[id] = d.kind === 'move' ? (board ? { x: Math.max(0, Math.min(board.w - b.w, sn(b.x + dx))), y: Math.max(0, Math.min(board.h - b.h, sn(b.y + dy))) } : { x: Math.round(b.x + dx), y: Math.round(b.y + dy) }) : snapBox(resizeBox(b, d.handle!, dx, dy, e.shiftKey ? null : d.ratios[id]));
       }
       const next = { ...d, preview, moved: d.moved || Math.abs(dx) + Math.abs(dy) >= 1 };
       dragRef.current = next;
@@ -386,7 +413,31 @@ export function DeckEditor({
       startDraw(e);
       return;
     }
+    if (ctl.place && !(ctl.place === 'text' && isTyped(el))) {
+      placeAt(e);
+      return;
+    }
+    // Typed text is edited where it is: a click puts the caret there (Shift adds it to the selection instead).
+    if (isTyped(el) && !e.shiftKey && ctl.editing !== el.id) {
+      e.preventDefault();
+      if (ctl.editing) ctl.stopEditing();
+      caretRef.current = { x: e.clientX, y: e.clientY };
+      ctl.startEditing(el.id);
+      return;
+    }
     pressElement(e, through(e, el));
+  };
+
+  /** A whiteboard's place tool used at the pointer: typed text starts there, a note is put there. */
+  const placeAt = (e: ReactMouseEvent) => {
+    e.preventDefault();
+    const [px, py] = toSlide(e);
+    if (ctl.editing) ctl.stopEditing();
+    caretRef.current = null;
+    if (ctl.place === 'note') {
+      ctl.setPlace(null);
+      ctl.addNote(Math.max(0, sn(px - 100)), Math.max(0, sn(py - 100)));
+    } else ctl.addTypedText(Math.max(0, sn(px)), Math.max(0, sn(py - 14)));
   };
 
   /** A press that is for this element: select it (or add it to the selection) and be ready to drag it. */
@@ -445,8 +496,15 @@ export function DeckEditor({
     ? {
         id: editingId,
         caret: caretRef.current ?? undefined,
-        onCommit: (paragraphs: { text: string; bullet?: boolean; level?: number }[]) => {
+        onCommit: (paragraphs: { text: string; bullet?: boolean; level?: number }[], measured?: { w: number; h: number }) => {
           const id = editingId;
+          const typed = slide.elements.find((x) => x.id === id);
+          if (isTyped(typed)) {
+            // Typed text left empty goes, as part of the step that made it; otherwise its box follows its text.
+            if (paragraphs.every((p) => !p.text.trim())) return ctl.amendElements([id], () => null);
+            ctl.updateElements([id], (el) => (el.type === 'text' ? { ...el, paragraphs, ...(measured ? { w: Math.ceil(measured.w), h: Math.ceil(measured.h) } : {}) } : el));
+            return;
+          }
           ctl.updateElements([id], (el) => {
             if (el.type === 'text') return { ...el, paragraphs };
             if (el.type === 'shape') {
@@ -481,6 +539,22 @@ export function DeckEditor({
           : {}),
       }
     : null;
+
+  // A whiteboard's typed text is as big as its text as drawn: its stored box follows (after a style change, a font
+  // that arrived late), as part of the step that changed it.
+  useLayoutEffect(() => {
+    if (!board) return;
+    const fix: Record<string, { w: number; h: number }> = {};
+    for (const el of slide.elements) {
+      if (!isTyped(el) || el.id === ctl.editing) continue;
+      const node = wrapRef.current?.querySelector<HTMLElement>(`[data-el="${CSS.escape(el.id)}"]`);
+      if (!node) continue;
+      const w = Math.ceil(node.offsetWidth);
+      const h = Math.ceil(node.offsetHeight);
+      if (Math.abs(w - el.w) > 1 || Math.abs(h - el.h) > 1) fix[el.id] = { w, h };
+    }
+    if (Object.keys(fix).length) ctl.amendElements(Object.keys(fix), (el) => ({ ...el, ...fix[el.id] }));
+  });
 
   // --- Table columns: dragging the border between two ---
   const [colDrag, setColDrag] = useState<ColDrag | null>(null);
@@ -554,7 +628,7 @@ export function DeckEditor({
     <div ref={frameRef} className="deck-canvas-frame">
     <div
       ref={wrapRef}
-      className={`deck-canvas${zoom > 1 ? ' zoomed' : ''}${drag ? ` dragging ${drag.kind}` : ''}${ctl.tool ? ' drawing' : ''}${hoverFrame ? ' over-frame' : ''}`}
+      className={`deck-canvas${zoom > 1 || board ? ' zoomed' : ''}${board ? ' board' : ''}${ctl.place ? ` placing-${ctl.place}` : ''}${drag ? ` dragging ${drag.kind}` : ''}${ctl.tool ? ' drawing' : ''}${hoverFrame ? ' over-frame' : ''}`}
       onMouseMove={onPointerMove}
       onMouseLeave={() => hoverFrame && setHoverFrame(null)}
       tabIndex={-1}
@@ -576,6 +650,10 @@ export function DeckEditor({
           startDraw(e);
           return;
         }
+        if (e.button === 0 && ctl.place && (e.target as Element).closest?.('.slide')) {
+          placeAt(e);
+          return;
+        }
         // A click on the backdrop or the slide background clears the selection, unless it is just outside a
         // frame's line, which takes the frame.
         if (e.button === 0 && (e.target === e.currentTarget || (e.target as HTMLElement).classList.contains('slide') || (e.target as HTMLElement).classList.contains('slide-scaler'))) {
@@ -593,6 +671,13 @@ export function DeckEditor({
           setMq({ x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY, base: e.shiftKey ? ctl.selection : [], moved: false });
         }
       }}
+      onDoubleClick={(e) => {
+        // On a whiteboard a double-click on an empty spot starts typing there.
+        if (!board || !(e.target as HTMLElement).classList.contains('slide')) return;
+        const [px, py] = toSlide(e);
+        caretRef.current = null;
+        ctl.addTypedText(Math.max(0, sn(px)), Math.max(0, sn(py - 14)));
+      }}
       onDragOver={(e) => {
         if (Array.from(e.dataTransfer.types).includes('Files')) e.preventDefault();
       }}
@@ -603,7 +688,19 @@ export function DeckEditor({
         onImageFiles(files);
       }}
     >
-      <SlideView slide={shown} theme={ctl.deck.theme} scale={scale} preview={preview} editing={editing} tableCell={tableCell} onElementMouseDown={onElementMouseDown} onElementDoubleClick={onElementDoubleClick} playVideo={playing} className="deck-canvas-slide">
+      <SlideView
+        slide={shown}
+        theme={ctl.deck.theme}
+        scale={scale}
+        preview={preview}
+        editing={editing}
+        tableCell={tableCell}
+        onElementMouseDown={onElementMouseDown}
+        onElementDoubleClick={onElementDoubleClick}
+        playVideo={playing}
+        className="deck-canvas-slide"
+        {...(board ? { width: board.w, height: board.h, rich: true, imagesOnTop: true } : {})}
+      >
         {lineDrag?.mode === 'draw' && (
           <div className="sl-el" style={{ left: lineDrag.line.x, top: lineDrag.line.y, width: lineDrag.line.w, height: lineDrag.line.h, pointerEvents: 'none' }}>
             <LineDrawing el={lineDrag.line} theme={theme} />
@@ -643,7 +740,8 @@ export function DeckEditor({
             .filter((el) => el.type !== 'line' && !ctl.selection.includes(el.id) && boxed.includes(el.id))
             .map((el) => <div key={`mq-${el.id}`} className="sl-outline" style={{ left: el.x, top: el.y, width: el.w, height: el.h, borderWidth: 1.5 / scale, ...(el.rot ? { transform: `rotate(${el.rot}deg)` } : {}) }} />)}
         {selected.map((el) => {
-          if (el.type === 'line' || el.id === cropped?.id) return null;
+          // Typed text being edited has the caret to show where it is; its stored box catches up when the edit ends.
+          if (el.type === 'line' || el.id === cropped?.id || (isTyped(el) && ctl.editing === el.id)) return null;
           const b = boxOf(el);
           return <div key={el.id} className="sl-outline" style={{ left: b.x, top: b.y, width: b.w, height: b.h, borderWidth: 1.5 / scale, ...(el.rot ? { transform: `rotate(${el.rot}deg)` } : {}) }} />;
         })}
@@ -704,6 +802,7 @@ export function DeckEditor({
           })}
         {single &&
           single.type !== 'line' &&
+          !isTyped(single) && // typed text is as big as its text
           !single.rot && // a rotated box moves but has no resize handles
           !(single.type === 'shape' && single.shape === 'arc') && // an arc has its endpoint handles instead
           (single.type === 'shape' && single.shape === 'line' && !(single.w > 0 && single.h > 0) ? ((single.h > single.w ? ['n', 's'] : ['e', 'w']) as Handle[]) : HANDLES).map((h) => {

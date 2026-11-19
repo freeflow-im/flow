@@ -3,6 +3,7 @@
 import type { Deck, Slide, ThemeId } from './deck.ts';
 import type { Doc } from './doc.ts';
 import type { MarkdownDoc } from './markdown.ts';
+import { whiteboardText, type Whiteboard } from './whiteboard.ts';
 import type { Workbook } from './types.ts';
 
 export type FilePreview =
@@ -17,6 +18,12 @@ export type FilePreview =
 const TEXT_CHARS = 900;
 const GRID_ROWS = 12;
 const GRID_COLS = 6;
+
+/** A whiteboard's text, one item per line. */
+export function whiteboardPreview(board: Whiteboard): FilePreview {
+  const text = whiteboardText(board).slice(0, TEXT_CHARS);
+  return text ? { kind: 'text', text } : { kind: 'empty' };
+}
 
 export function markdownPreview(doc: MarkdownDoc): FilePreview {
   const text = doc.text.trim().slice(0, TEXT_CHARS);

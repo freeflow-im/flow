@@ -153,6 +153,20 @@ export class DeckStore<M = unknown> {
     return true;
   }
 
+  /**
+   * A change that follows from the last step rather than being one (a whiteboard text's size, measured after its
+   * text changed): merged into that step, so undo takes both back together.
+   */
+  amend(fn: (tx: DeckTx) => void): boolean {
+    const tx = new DeckTx(this);
+    fn(tx);
+    if (!tx.patches.length) return false;
+    const top = this.undoStack[this.undoStack.length - 1];
+    if (top && !this.redoStack.length) top.patches.push(...tx.patches);
+    this.emit();
+    return true;
+  }
+
   amendLastMeta(after: M): void {
     const e = this.undoStack[this.undoStack.length - 1];
     if (e) e.metaAfter = after;

@@ -5,7 +5,7 @@
 import { SearchSnippet } from './SearchSnippet.tsx';
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import { isHtmlName, opensInApp, type SheetMeta } from '../../../shared/types.ts';
-import { DeckIcon, DocIcon, FileIcon, Logo, MarkdownIcon } from './Logo.tsx';
+import { DeckIcon, DocIcon, FileIcon, Logo, MarkdownIcon, WhiteboardIcon } from './Logo.tsx';
 import { openSuiteSearch } from '@flow/suite-bar';
 import { pastedFile } from '../pastedFile.ts';
 import { ConfirmModal, PromptModal } from './Modal.tsx';
@@ -69,7 +69,7 @@ export interface LibraryAction {
   danger?: boolean;
 }
 
-export const KIND_NAMES: Record<LibraryKind, string> = { sheet: 'spreadsheet', deck: 'presentation', doc: 'document', markdown: 'Markdown document', file: 'file' };
+export const KIND_NAMES: Record<LibraryKind, string> = { sheet: 'spreadsheet', deck: 'presentation', doc: 'document', markdown: 'Markdown document', whiteboard: 'whiteboard', file: 'file' };
 
 /** The Type column: a short label per kind (stored files show their file type). */
 export function kindLabel(item: Pick<LibraryItem, 'kind' | 'title' | 'format'>): string {
@@ -81,7 +81,7 @@ export function kindLabel(item: Pick<LibraryItem, 'kind' | 'title' | 'format'>):
     const ext = /\.([a-z0-9]+)$/i.exec(item.title)?.[1];
     return ext ? ext.toUpperCase() : 'File';
   }
-  return { sheet: 'Spreadsheet', deck: 'Presentation', doc: 'Document', markdown: 'Markdown' }[item.kind];
+  return { sheet: 'Spreadsheet', deck: 'Presentation', doc: 'Document', markdown: 'Markdown', whiteboard: 'Whiteboard' }[item.kind];
 }
 
 /** The groups of the file type filter, in the order the menu lists them. */
@@ -99,7 +99,7 @@ export type TypeGroup = (typeof TYPE_GROUPS)[number][0];
 /** The filter group an item is in: its kind, or for a stored file what its name says it is. */
 export function typeGroup(item: Pick<LibraryItem, 'kind' | 'title'>): TypeGroup {
   if (item.kind === 'sheet' || item.kind === 'deck') return item.kind;
-  if (item.kind === 'doc' || item.kind === 'markdown') return 'doc';
+  if (item.kind === 'doc' || item.kind === 'markdown' || item.kind === 'whiteboard') return 'doc';
   const ext = /\.([a-z0-9]+)$/i.exec(item.title)?.[1]?.toLowerCase() ?? '';
   if (ext === 'pdf') return 'pdf';
   if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) return 'image';
@@ -182,6 +182,7 @@ export function kindIcon(item: Pick<LibraryItem, 'kind' | 'title'>, size = 18): 
   if (item.kind === 'deck') return <DeckIcon size={size} />;
   if (item.kind === 'doc') return <DocIcon size={size} />;
   if (item.kind === 'markdown') return <MarkdownIcon size={size} />;
+  if (item.kind === 'whiteboard') return <WhiteboardIcon size={size} />;
   if (item.kind === 'file') return <FileIcon kind={isHtmlName(item.title) ? 'page' : (typeGroup(item) as 'pdf' | 'image' | 'video' | 'other')} size={size} />;
   return <Logo size={size} />;
 }
@@ -302,10 +303,10 @@ export interface FileLibraryProps {
   children?: ReactNode;
 }
 
-const ALL_KINDS: Exclude<LibraryKind, 'file'>[] = ['sheet', 'deck', 'doc', 'markdown'];
+const ALL_KINDS: Exclude<LibraryKind, 'file'>[] = ['sheet', 'deck', 'doc', 'markdown', 'whiteboard'];
 /** The kinds as the "New" tile's menu lists them. */
-const KIND_LABELS: Record<Exclude<LibraryKind, 'file'>, string> = { sheet: 'Spreadsheet', deck: 'Presentation', doc: 'Document', markdown: 'Markdown document' };
-const KIND_ICONS: Record<Exclude<LibraryKind, 'file'>, ReactNode> = { sheet: <Logo size={18} />, deck: <DeckIcon size={18} />, doc: <DocIcon size={18} />, markdown: <MarkdownIcon size={18} /> };
+const KIND_LABELS: Record<Exclude<LibraryKind, 'file'>, string> = { sheet: 'Spreadsheet', deck: 'Presentation', doc: 'Document', markdown: 'Markdown document', whiteboard: 'Whiteboard' };
+const KIND_ICONS: Record<Exclude<LibraryKind, 'file'>, ReactNode> = { sheet: <Logo size={18} />, deck: <DeckIcon size={18} />, doc: <DocIcon size={18} />, markdown: <MarkdownIcon size={18} />, whiteboard: <WhiteboardIcon size={18} /> };
 /** `menuFor` while the "New" tile's menu is open (the other values are row ids). */
 const NEW_MENU = 'tile:new';
 const HELP_HIDDEN_KEY = 'ui.hideGettingStarted';

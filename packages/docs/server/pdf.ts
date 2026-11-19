@@ -125,6 +125,7 @@ export class PdfMaker {
     const meta = this.sheets.get(userId, id);
     if (meta) {
       if (meta.kind === 'sheet') throw new NotPrintableError('A spreadsheet cannot be made into a PDF yet.');
+      if (meta.kind === 'whiteboard') throw new NotPrintableError('A whiteboard cannot be made into a PDF yet.');
       const ticket = this.tickets.create(viewerId(userId));
       try {
         const url = `${o.origin ?? this.origin()}/${PAGES[meta.kind]}/${encodeURIComponent(id)}?print=pdf`;

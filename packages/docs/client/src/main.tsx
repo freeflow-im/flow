@@ -21,6 +21,7 @@ import { HomePage } from './pages/HomePage.tsx';
 import { LandingPage } from './pages/LandingPage.tsx';
 import { OpenLocalFile } from './pages/OpenLocalFile.tsx';
 import { MarkdownPage } from './pages/MarkdownPage.tsx';
+import { WhiteboardPage } from './pages/WhiteboardPage.tsx';
 import { SettingsPage } from './pages/SettingsPage.tsx';
 import { SpreadsheetPage } from './pages/SpreadsheetPage.tsx';
 import { VerifyEmailPage } from './pages/VerifyEmailPage.tsx';
@@ -110,6 +111,7 @@ function AppShell() {
           <Route path="/d/:id" element={<RequireAuth><DeckPage /></RequireAuth>} />
           <Route path="/doc/:id" element={<RequireAuth><DocPage /></RequireAuth>} />
           <Route path="/md/:id" element={<RequireAuth><MarkdownPage /></RequireAuth>} />
+          <Route path="/w/:id" element={<RequireAuth><WhiteboardPage /></RequireAuth>} />
           <Route path="/f/:id" element={<RequireAuth><FilePage /></RequireAuth>} />
           <Route path="/open" element={<RequireAuth><OpenLocalFile /></RequireAuth>} />
           <Route path="/changes" element={<RequireAuth><ChangesPage /></RequireAuth>} />

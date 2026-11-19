@@ -44,9 +44,10 @@ const DOC_TYPES: Record<string, { kind: DocKind; format: SheetFormat | null }> =
   '.ffsheet': { kind: 'sheet', format: null },
   '.ffslides': { kind: 'deck', format: null },
   '.ffdoc': { kind: 'doc', format: null },
+  '.ffboard': { kind: 'whiteboard', format: null },
 };
 /** The extension of a document of each kind in the app's own format. */
-const NEW_EXT: Record<DocKind, string> = { sheet: '.ffsheet', deck: '.ffslides', doc: '.ffdoc', markdown: '.md' };
+const NEW_EXT: Record<DocKind, string> = { sheet: '.ffsheet', deck: '.ffslides', doc: '.ffdoc', markdown: '.md', whiteboard: '.ffboard' };
 /** The extension of a document's file, by its kind and format. */
 const extFor = (kind: DocKind, format: SheetFormat | null) => (format ? `.${format}` : NEW_EXT[kind]);
 
