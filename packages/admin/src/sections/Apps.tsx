@@ -5,7 +5,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AccountDTO, InstalledAppDTO, UserAppManifest, WorkspaceDTO } from '@flow/shared';
-import { appsChanged } from '@flow/suite-bar';
+import { AppIcon, appsChanged } from '@flow/suite-bar';
 import { adminApi, appsApi, type AppGrants, type AppUploadDTO } from '../api';
 import { Button, Card, Confirm, ErrorLine, Row, Toggle } from '../components/ui';
 
@@ -79,12 +79,13 @@ function Uploads({ org, installed, accounts, onChanged }: { org: WorkspaceDTO; i
   return (
     <Card title="Uploaded versions" intro="Hosted apps uploaded to this organization with flow-agent-bridge app publish. They run nowhere until you install them." testid="app-uploads">
       {pending.map((u) => (
-        <Row key={`${u.name}-${u.version}`} label={`${u.manifest.icon ? `${u.manifest.icon} ` : ''}${u.manifest.label} · version ${u.version}`} help={`Uploaded ${new Date(u.at).toLocaleString()}, ${Object.keys(u.files).length} files.`} testid={`upload-${u.name}-${u.version}`}>
+        <Row key={`${u.name}-${u.version}`} label={<span className="inline-flex items-center gap-1.5"><AppIcon icon={u.iconUrl ? null : u.manifest.icon} iconUrl={u.iconUrl} />{u.manifest.label} · version {u.version}</span>} help={`Uploaded ${new Date(u.at).toLocaleString()}, ${Object.keys(u.files).length} files.`} testid={`upload-${u.name}-${u.version}`}>
           <Button onClick={() => choose(u)} testid={`open-upload-${u.name}-${u.version}`}>{installed.some((a) => a.name === u.name) ? 'Update to it' : 'Install'}</Button>
         </Row>
       ))}
       {open && (
         <div className="flex flex-col gap-3 border-t border-hairline pt-3" data-testid="upload-card">
+          <div className="inline-flex items-center gap-2 text-sm font-semibold"><AppIcon icon={open.iconUrl ? null : open.manifest.icon} iconUrl={open.iconUrl} size={24} />{open.manifest.label} <span className="font-normal text-muted">version {open.version}</span></div>
           <HostedNotice uses={open.manifest.uses ?? []} egress={open.manifest.egress ?? []} />
           <Asks manifest={open.manifest} />
           <GrantEditor value={grants} onChange={setGrants} accounts={accounts} />
@@ -260,7 +261,7 @@ function InstalledApp({ org, app, admin, accounts, onChanged }: { org: Workspace
   return (
     <div className="flex flex-col gap-3 border-t border-hairline pt-4 first:border-t-0 first:pt-0" data-testid={`app-${app.name}`}>
       <Row
-        label={`${app.icon ? `${app.icon} ` : ''}${app.label}`}
+        label={<span className="inline-flex items-center gap-1.5"><AppIcon icon={app.icon} iconUrl={app.iconUrl} />{app.label}</span>}
         help={<>{app.description ? `${app.description} ` : ''}{app.serverOrigin ? `Runs on ${app.serverOrigin}.` : 'Run by FreeFlow.'}{app.hasScreen && app.usable ? <> <a className="text-primary hover:underline" href={`/apps/${app.name}`}>Open</a></> : null}</>}
       >
         {app.usable ? (

@@ -101,6 +101,12 @@ The manifest:
 (§7.2); Taskboard needs none. `"read": true` marks the scope that lets an account see the app's events (§5.1).
 Both `uses` and `egress` are for hosted apps: an external app may declare neither (§7.1).
 
+`icon` is an emoji, or for a hosted app an image among its `ui/` files (`"ui/icon.png"`): a PNG or SVG, square, 16 to
+512 pixels, at most 64 KB, checked when a draft is checked and when a version is uploaded (2026-11-18). The suite serves
+it from its own origin (`GET /v1/workspaces/:id/apps/:name/icon?v=<version>`, members only; an SVG under a policy that
+runs nothing), so the Apps menu, the app cards, Admin → Apps, the install card and the app page's browser tab show it;
+the app list carries it as `iconUrl` and never the path.
+
 ### 3.2 Its data
 
 One SQLite store per organization that installs it (§8):
@@ -291,6 +297,13 @@ own access (§9.3). Two ways:
 hands the app a **ticket**: the caller, signed with the install's secret, good for two minutes. The app hands it back to
 its `SUITE` binding (`readDocs`, `postMessage`), which checks the ticket, that the manifest declares the use, and then
 acts as the caller through the suite's own checks. "As itself" is not built yet: it waits for an app's own principal.
+
+`members:read` (2026-11-18): `ctx.members.list()` and `ctx.members.search(text)` give the organization's people and
+agents as the caller sees them in Chat (the admin agent only for an owner or admin), less guests and removed members:
+`{ accountId, displayName, picture, kind: 'person' | 'agent' }`, with no email addresses. For an assignee picker: an
+account id in an event's `about` can wake that agent (§5.1). `picture` is a path on the app's own host
+(`/__freeflow/avatars/<key>`), which serves the suite's avatar to the app's viewer, and only for an app that declares
+`members:read`: the screen's origin cannot reach the suite's signed-in avatar route.
 
 ### 6.4 The SDK
 

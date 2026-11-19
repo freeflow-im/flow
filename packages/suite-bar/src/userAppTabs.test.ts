@@ -7,6 +7,7 @@ const apps = [
   { name: 'taskboard', label: 'Tasks', icon: '🗂️', usable: true, hasScreen: true },
   { name: 'crm', label: 'CRM', usable: false, hasScreen: true },
   { name: 'bot', label: 'Bot', usable: true, hasScreen: false },
+  { name: 'board', label: 'Board', iconUrl: '/v1/workspaces/o/apps/board/icon?v=2', usable: true, hasScreen: true },
 ];
 
 describe("the Apps tab (user-apps.md §6)", () => {
@@ -16,10 +17,18 @@ describe("the Apps tab (user-apps.md §6)", () => {
     expect(last).toMatchObject({ id: 'apps', label: 'Apps', href: '/apps/', active: true });
     expect(last.shortcut).toBeUndefined();
     expect(last.menu!.map((m) => [m.label, m.href, !!m.current])).toEqual([
-      ['🗂️ Tasks', '/apps/taskboard', true],
+      ['Tasks', '/apps/taskboard', true],
+      ['Board', '/apps/board', false],
       ['', '', false],
       ['Build an app', '/apps/', false],
     ]);
+  });
+
+  it("carries each app's emoji or image icon beside its name (§4)", () => {
+    const menu = userAppTabs(apps, 'taskboard')[0]!.menu!;
+    expect(menu[0]).toMatchObject({ label: 'Tasks', icon: '🗂️' });
+    expect(menu[1]).toMatchObject({ label: 'Board', iconUrl: '/v1/workspaces/o/apps/board/icon?v=2' });
+    expect(menu[1]!.icon).toBeUndefined();
   });
 
   it('offers Build an app with no app installed, and nothing to a guest', () => {

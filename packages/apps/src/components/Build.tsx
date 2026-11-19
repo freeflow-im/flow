@@ -7,7 +7,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, FilePlus, Play, RotateCw, Trash2, Upload } from 'lucide-react';
 import { SuiteAssistantColumn } from '@flow/suite-bar/assistant-chat';
-import { intent } from '@flow/suite-bar';
+import { AppIcon, intent } from '@flow/suite-bar';
 import { appsApi, type AppDraft, type InstalledApp, type ToolAnswer } from '../api';
 import { InstallDialog } from './InstallDialog';
 
@@ -58,7 +58,7 @@ export function AppsHome({ org, apps, admin }: { org: string; apps: InstalledApp
           <ul className="grid gap-3 sm:grid-cols-2" data-testid="app-list">
             {shown.map((a) => (
               <li key={a.name} className="rounded-xl border border-hairline bg-white p-4">
-                <a href={`/apps/${a.name}`} className="text-sm font-semibold text-ink hover:text-primary">{a.icon ? `${a.icon} ` : ''}{a.label}</a>
+                <a href={`/apps/${a.name}`} className="inline-flex items-center gap-1.5 text-sm font-semibold text-ink hover:text-primary"><AppIcon icon={a.icon} iconUrl={a.iconUrl} />{a.label}</a>
                 {a.description && <p className="mt-1 text-xs text-muted">{a.description}</p>}
                 {a.hosted && <button type="button" className="mt-2 text-xs font-semibold text-primary hover:underline" onClick={() => void create(a.name, a.label, true)} data-testid={`edit-${a.name}`}>Edit</button>}
               </li>

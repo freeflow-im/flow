@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react';
 import type { SuiteTab } from './SuiteBar';
 
 /** What the menu needs of an installed app (the API's InstalledAppDTO). */
-export interface UserAppTabSource { name: string; label: string; icon?: string; usable: boolean; hasScreen: boolean }
+export interface UserAppTabSource { name: string; label: string; icon?: string; iconUrl?: string; usable: boolean; hasScreen: boolean }
 
 /** A window event: an app was installed, updated or removed on this page; the Apps menu reads its list again. */
 export const APPS_CHANGED = 'freeflow:apps-changed';
@@ -29,7 +29,7 @@ export function userAppTabs(apps: readonly UserAppTabSource[], active?: string, 
     href: '/apps/',
     ...(active !== undefined ? { active: true } : {}),
     menu: [
-      ...open.map((a) => ({ id: userAppTabId(a.name), label: a.icon ? `${a.icon} ${a.label}` : a.label, href: `/apps/${a.name}`, ...(a.name === active ? { current: true } : {}) })),
+      ...open.map((a) => ({ id: userAppTabId(a.name), label: a.label, ...(a.iconUrl ? { iconUrl: a.iconUrl } : a.icon ? { icon: a.icon } : {}), href: `/apps/${a.name}`, ...(a.name === active ? { current: true } : {}) })),
       ...(canBuild ? [...(open.length ? [{ id: 'apps-divider', label: '', href: '', divider: true }] : []), { id: 'apps-build', label: 'Build an app', href: '/apps/', ...(active === '' ? { current: true } : {}) }] : []),
     ],
   }];

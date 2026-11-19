@@ -68,7 +68,7 @@ export interface UserAppManifest {
 }
 
 /** What a hosted app may ask to use of the suite (§6.3): each is an AppSuite method the platform checks. */
-export const APP_USES = ['docs:read', 'chat:write'] as const;
+export const APP_USES = ['docs:read', 'chat:write', 'members:read'] as const;
 export type AppUse = (typeof APP_USES)[number];
 
 /** Whether the app's server is the platform's (§7.1). */
@@ -86,13 +86,17 @@ export const USER_APP_LIMITS = {
   label: 40,
 } as const;
 
+/** The most a hosted app's version may hold (§14 phase 2, step 1). */
+export const HOSTED_APP_LIMITS = { bytes: 5_000_000, files: 200, path: 200 } as const;
+
 const url = z.string().url().max(2000);
 
 const Manifest = z
   .object({
     name: z.string(),
     label: z.string().min(1).max(USER_APP_LIMITS.label),
-    icon: z.string().max(16).optional(),
+    // An emoji, or a hosted app's image in ui/ ("ui/icon.png", PNG or SVG): checkAppIcon checks the file.
+    icon: z.string().min(1).max(HOSTED_APP_LIMITS.path).optional(),
     description: z.string().max(USER_APP_LIMITS.description).optional(),
     scope: z.literal('organization').optional(),
     kinds: z.array(z.object({ kind: z.string().regex(/^[a-z][a-z0-9_]{0,31}$/), container: z.boolean().optional(), label: z.string().max(40).optional() }).strict()).max(USER_APP_LIMITS.kinds).optional(),
@@ -139,6 +143,12 @@ export function checkUserAppManifest(input: unknown, opts: { allowHttp?: boolean
   if (!hosted && m.uses !== undefined) problems.push('uses: an external app gets no suite token, so it declares no uses (user-apps.md §7.1)');
   if (!hosted && m.egress !== undefined) problems.push('egress: an external app declares no egress; its server is its own (user-apps.md §7.1)');
   if (!hosted && m.ui && 'hosted' in m.ui) problems.push('ui: only a hosted app has a hosted screen (user-apps.md §7.1)');
+  if (m.icon !== undefined) {
+    if (isImageIcon(m.icon)) {
+      if (!hosted) problems.push('icon: only a hosted app\'s icon can be an image in ui/; an external app uses an emoji');
+    } else if (m.icon.includes('/') || /\.(png|svg|jpe?g|gif|webp|ico)$/i.test(m.icon)) problems.push(`icon: "${m.icon}" must be an emoji, or a PNG or SVG in ui/ ("ui/icon.png")`);
+    else if (m.icon.length > ICON_TEXT_MAX) problems.push(`icon: an emoji icon is at most ${ICON_TEXT_MAX} characters; for an image, name a PNG or SVG in ui/ ("ui/icon.png")`);
+  }
   for (const h of m.egress ?? []) if (!/^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(h)) problems.push(`egress: "${h}" must be a host name, such as api.example.com`);
 
   const urls: [string, string | undefined][] = [['server.url', 'url' in m.server ? m.server.url : undefined], ['ui.url', m.ui && 'url' in m.ui ? m.ui.url : undefined]];
@@ -176,9 +186,69 @@ export function checkUserAppManifest(input: unknown, opts: { allowHttp?: boolean
   return { ok: true, manifest: m as UserAppManifest };
 }
 
-/** The most a hosted app's version may hold (§14 phase 2, step 1). */
-export const HOSTED_APP_LIMITS = { bytes: 5_000_000, files: 200, path: 200 } as const;
 const VERSION_FILE = /^(server\.js|migrations\/[0-9]{4}_[a-z0-9_]{1,60}\.sql|ui\/[A-Za-z0-9._\-/]{1,190})$/;
+
+/** An emoji icon's longest text (some emoji are several code points). */
+const ICON_TEXT_MAX = 16;
+/** An image icon: a PNG or SVG among the version's ui/ files. */
+const IMAGE_ICON = /^ui\/[A-Za-z0-9._\-/]{1,190}\.(png|svg)$/;
+/** The limits of an image icon: small and square. */
+export const APP_ICON_LIMITS = { bytes: 64_000, minPx: 16, maxPx: 512 } as const;
+
+/** Whether a manifest's icon names an image in ui/ (else it is an emoji). */
+export const isImageIcon = (icon: string | null | undefined): boolean => !!icon && IMAGE_ICON.test(icon) && !icon.includes('..') && !icon.includes('//');
+
+/** An app version's image icon on the suite's origin (GET /v1/workspaces/:id/apps/:name/icon?v=). */
+export const appIconUrl = (organizationId: string, name: string, version: number): string =>
+  `/v1/workspaces/${encodeURIComponent(organizationId)}/apps/${encodeURIComponent(name)}/icon?v=${version}`;
+
+/** An image icon's content type, by its extension. */
+export const appIconType = (icon: string): string => (icon.toLowerCase().endsWith('.svg') ? 'image/svg+xml' : 'image/png');
+
+/** The width and height of a PNG from its header, or null when it is not a PNG. */
+function pngSize(b: Uint8Array): { w: number; h: number } | null {
+  const sig = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  if (b.length < 24 || sig.some((x, i) => b[i] !== x)) return null;
+  const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  return { w: v.getUint32(16), h: v.getUint32(20) };
+}
+
+/** An SVG's width and height, from its viewBox else its width and height attributes; null when it says neither. */
+function svgSize(text: string): { w: number; h: number } | null {
+  const tag = /<svg\b[^>]*>/i.exec(text)?.[0];
+  if (!tag) return null;
+  const box = /viewBox\s*=\s*["']\s*[-\d.]+[\s,]+[-\d.]+[\s,]+([\d.]+)[\s,]+([\d.]+)\s*["']/i.exec(tag);
+  if (box) return { w: Number(box[1]), h: Number(box[2]) };
+  const w = /\swidth\s*=\s*["']([\d.]+)(px)?["']/i.exec(tag), h = /\sheight\s*=\s*["']([\d.]+)(px)?["']/i.exec(tag);
+  return w && h ? { w: Number(w[1]), h: Number(h[1]) } : null;
+}
+
+/**
+ * Checks a hosted app's image icon against its files (at publish and upload): the file is there, a PNG or an SVG, small,
+ * and square. Nothing to check for an emoji icon. Every problem is listed.
+ */
+export function checkAppIcon(manifest: Pick<UserAppManifest, 'icon'>, files: Record<string, Uint8Array>): string[] {
+  const icon = manifest.icon;
+  if (!icon || !isImageIcon(icon)) return [];
+  const b = files[icon];
+  if (!b) return [`icon: ${icon} is not among the files`];
+  if (b.byteLength > APP_ICON_LIMITS.bytes) return [`icon: ${icon} is ${b.byteLength} bytes; an icon is at most ${APP_ICON_LIMITS.bytes}`];
+  const { minPx, maxPx } = APP_ICON_LIMITS;
+  if (appIconType(icon) === 'image/png') {
+    const size = pngSize(b);
+    if (!size) return [`icon: ${icon} is not a PNG`];
+    if (size.w !== size.h) return [`icon: ${icon} is ${size.w}×${size.h}; an icon is square`];
+    if (size.w < minPx || size.w > maxPx) return [`icon: ${icon} is ${size.w}×${size.h}; an icon is ${minPx} to ${maxPx} pixels square`];
+    return [];
+  }
+  // Its start, as text: enough to find the <svg> tag (an SVG's markup is ASCII there).
+  let text = '';
+  for (let i = 0; i < Math.min(b.length, 8192); i++) text += String.fromCharCode(b[i]!);
+  if (!/<svg\b/i.test(text)) return [`icon: ${icon} is not an SVG`];
+  const size = svgSize(text);
+  if (size && Math.abs(size.w - size.h) > 0.01 * Math.max(size.w, size.h)) return [`icon: ${icon} is ${size.w}×${size.h}; an icon is square`];
+  return [];
+}
 
 /**
  * Checks a hosted app version's files (§14 phase 2, step 1), given their sizes in bytes: `server.js` (one ES module),
@@ -226,7 +296,10 @@ export type AppGrantee = 'members' | { accountId: string };
 export interface InstalledAppDTO {
   name: string;
   label: string;
+  /** An emoji icon. */
   icon?: string;
+  /** An image icon (§4): its address on the suite's origin (GET /v1/workspaces/:id/apps/:name/icon). */
+  iconUrl?: string;
   description?: string;
   manifestUrl: string;
   /** An external app's server origin, for the install card's notice (§7.1); null for a hosted app. */

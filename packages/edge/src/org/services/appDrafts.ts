@@ -3,7 +3,7 @@
 // admin installs. These functions run inside the Org object's database scope (withDb).
 import { and, eq } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
-import { APP_NAME, checkHostedFiles, checkUserAppManifest, HOSTED_APP_LIMITS, RESERVED_APP_NAMES, type UserAppManifest } from '@flow/shared';
+import { APP_NAME, checkAppIcon, checkHostedFiles, checkUserAppManifest, HOSTED_APP_LIMITS, RESERVED_APP_NAMES, type UserAppManifest } from '@flow/shared';
 import { db, schema } from '../db/index.js';
 import { decryptBody, encryptBody } from '../crypto/index.js';
 import { ApiError, badRequest, notFound } from '../../errors';
@@ -124,7 +124,7 @@ export function draftProblems(files: Record<string, Uint8Array>): string[] {
   const checked = checkUserAppManifest(json);
   if (!checked.ok) return checked.problems;
   const sizes = Object.fromEntries(Object.entries(files).filter(([p]) => p !== MANIFEST_FILE).map(([p, b]) => [p, b.byteLength]));
-  return checkHostedFiles(checked.manifest, sizes);
+  return [...checkHostedFiles(checked.manifest, sizes), ...checkAppIcon(checked.manifest, files)];
 }
 
 async function filesOf(name: string, author: string): Promise<Record<string, Uint8Array>> {

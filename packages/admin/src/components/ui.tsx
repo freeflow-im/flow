@@ -13,7 +13,7 @@ export function Card({ title, intro, children, testid }: { title: string; intro?
 }
 
 /** One setting: its name and a line of help on the left, the control on the right; stacked on a narrow screen. */
-export function Row({ label, help, children, testid }: { label: string; help?: ReactNode; children: ReactNode; testid?: string }) {
+export function Row({ label, help, children, testid }: { label: ReactNode; help?: ReactNode; children: ReactNode; testid?: string }) {
   return (
     <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-6" data-testid={testid}>
       <div className="min-w-0 sm:max-w-sm">

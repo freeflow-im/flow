@@ -6,6 +6,8 @@ export interface InstalledApp {
   name: string;
   label: string;
   icon?: string;
+  /** An image icon (user-apps.md §4), on the suite's origin. */
+  iconUrl?: string;
   description?: string;
   serverOrigin: string | null;
   hasScreen: boolean;

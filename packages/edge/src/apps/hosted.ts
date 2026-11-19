@@ -220,6 +220,13 @@ export class AppSuite extends WorkerEntrypoint<HostedEnv, AppProps> {
     return { id: r.id };
   }
 
+  /** `members:read`: the organization's people and agents as the caller sees them (no emails, no guests), or those matching `search`. */
+  async members(ticket: string, search?: string): Promise<unknown[]> {
+    const r = await this.org().membersForAppCaller({ organizationId: this.ctx.props.org, name: this.ctx.props.app, ticket, ...(typeof search === 'string' ? { search: search.slice(0, 100) } : {}), ...(this.ctx.props.dev ? { dev: this.ctx.props.dev } : {}) });
+    if (!r.ok) throw new Error(r.error);
+    return r.members;
+  }
+
   async publish(type: string, data?: unknown, ref?: { kind: string; id: string }, about?: string[]): Promise<{ id: string }> {
     const r = await this.org().publishHostedAppEvent({ organizationId: this.ctx.props.org, name: this.ctx.props.app, event: { type, data, ref, about }, ...(this.ctx.props.dev ? { dev: this.ctx.props.dev } : {}) });
     if (!r.ok) throw new Error(r.error);
