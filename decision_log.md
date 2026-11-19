@@ -2135,3 +2135,10 @@ one-recipient MCP correction).
 - **Sign-in screen follows the "Sign up or log in" design; password login stays the main action** (operator ruling
   2026-11-17). New: a 6-digit email code that logs in an account or starts a sign-up, and "Your name" on the password
   step. The email label is "Email" (personal addresses are fine).
+
+## 2026-11-19 — Booking page shows the owner's email (taskboard task 4)
+
+- **The public booking page shows the owner's email under their name** (operator ruling, Taskboard task 4).
+  It is the address the page books with (the native account's, else the first linked one), the same one the
+  guest's invitation comes from. This reverses the spec's "no email" rule for the page; ids and calendar names
+  stay hidden.

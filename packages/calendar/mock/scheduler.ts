@@ -48,7 +48,7 @@ export function createSchedulerMock() {
     return out.sort((x, y) => x - y);
   };
   const page = () => ({
-    ownerName: 'Ann Lee', title: config.title, description: config.description, durations: config.durations, defaultDuration: config.defaultDuration,
+    ownerName: 'Ann Lee', ownerEmail: 'ann@example.com', title: config.title, description: config.description, durations: config.durations, defaultDuration: config.defaultDuration,
     location: config.location.kind === 'none' ? { kind: 'none', label: null } : /^https?:/.test(config.location.value) ? { kind: 'link', label: null } : { kind: 'text', label: config.location.value },
     ownerTimezone: config.timezone, horizonEnd: new Date(horizon()).toISOString(),
   });

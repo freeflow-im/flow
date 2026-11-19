@@ -4,6 +4,8 @@
 
 export interface PageInfo {
   ownerName: string;
+  /** The address the owner books with; empty when they have none. */
+  ownerEmail: string;
   title: string;
   description: string;
   durations: number[];
