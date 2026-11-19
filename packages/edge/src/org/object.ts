@@ -1358,8 +1358,13 @@ export class Org extends DurableObject<OrgEnv> {
   }
 
   /** Where an app's image icon is kept (§4): the installed version's, or `version`'s. */
-  async userAppIcon(name: string, version?: number): Promise<{ key: string; type: string } | null> {
-    return withDb(this.db, () => appIconFile(name, version));
+  async userAppIcon(p: { name: string; version: number | null }): Promise<{ ok: true; icon: { key: string; type: string } | null } | { ok: false; error: string }> {
+    try {
+      return { ok: true, icon: await withDb(this.db, () => appIconFile(p.name, p.version)) };
+    } catch (err) {
+      // Its reason, back to the route, which logs it: an RPC's own error says only "internal".
+      return { ok: false, error: (err as Error).message };
+    }
   }
 
   /** A hosted app posts in Chat as its caller (§6.3, `chat:write`): Chat's own checks apply, as for the caller's own post. */
