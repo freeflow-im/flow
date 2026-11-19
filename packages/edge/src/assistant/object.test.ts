@@ -3,7 +3,7 @@
 // tools by the turn's page, one assistant across Docs' and Mail's chats, settings, the owner guard, and the one-time move
 // from the Docs objects (routes/admin.ts' moveAssistantRows), run twice.
 import { DatabaseSync } from 'node:sqlite';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import type { AccountDTO, MailApprovalDTO } from '@flow/shared';
 import type { ModelCall } from '@flow/docs/server/agent/agent.ts';
 import type { AgentEvent } from '@flow/docs/shared/agent/protocol.ts';
@@ -80,8 +80,16 @@ const ACCOUNT = { id: 'acct-1', principalId: 'user-1', organizationId: 'org-1', 
 const CALLER = { user: { id: 'user-1' }, token: 't', authKind: 'session', ip: '', organizationId: 'org-1', account: ACCOUNT } as never;
 const DOCS_CALLER: DocsCaller = { userId: 'user-1', email: 'ann@acme.test', token: 't', ip: '', accountId: 'acct-1', channelIds: ['ch-1'] };
 
+// The object loads its agent code in its constructor (agentLib.ts), and the runtime holds requests until that is done:
+// here the first object's load is waited for once, before any test.
+const loading: Promise<unknown>[] = [];
+beforeAll(async () => {
+  assistant('warm-up');
+  await Promise.all(loading);
+});
+
 function assistant(name = 'acct-1', env: AssistantEnv = {}) {
-  const ctx = { storage: storage(), id: { toString: () => name, name }, waitUntil: () => {} };
+  const ctx = { storage: storage(), id: { toString: () => name, name }, waitUntil: () => {}, blockConcurrencyWhile: (fn: () => Promise<unknown>) => loading.push(fn()) };
   return new TestAssistant(ctx as never, { FLOW_DATA_KEY: 'test-data-key', FLOW_WEB_URL: 'https://app.test', ANTHROPIC_API_KEY: 'test-platform-key', ...env });
 }
 

@@ -11,7 +11,6 @@
 // in each organization's Docs object; POST /v1/admin/assistant/migrate copies them here once (`importChat`, `importRows`).
 import { subscriptionsAs } from '../events/subscriptions';
 import type { EventToolContext } from '../events/eventTools';
-import Anthropic from '@anthropic-ai/sdk';
 import { DurableObject } from 'cloudflare:workers';
 import { Hono, type Context } from 'hono';
 import { mailApprovalPath, type AccountDTO, type AgentJobDTO, type HostedRuntimeDTO, type MailApprovalDTO, type UserDTO } from '@flow/shared';
@@ -31,28 +30,25 @@ import { mailWakeSubscription } from './mailWake.ts';
 import { withDocsContext, type DocsContext } from '@flow/docs/server/runtime/workerd/context.ts';
 import type { Caller as DocsCaller } from '@flow/docs/server/runtime/workerd/http.ts';
 import { DatabaseSync } from '@flow/docs/server/runtime/workerd/sqlite.ts';
-import { AgentError, AgentService, type ModelCall } from '@flow/docs/server/agent/agent.ts';
-import { openaiErrorMessage } from '@flow/docs/server/agent/openai.ts';
-import { OpenRouterError } from '@flow/docs/server/agent/openrouter.ts';
-import { checkAssistantKey, OwnKeyError } from '@flow/docs/server/agent/providers.ts';
+import type { AgentService, ModelCall } from '@flow/docs/server/agent/agent.ts';
 import { AssistantSettingsStore, SettingsError, type KeyCheck, type SearchKeyCheck } from '@flow/docs/server/agent/settings.ts';
 import { ORG_ROW, OrgModelSettings, orgModelKey, type OrgModel } from './orgModel';
 import { appToolsFor, runAppTool, type AppToolCaller } from '../registry/userApps';
 import type { AppToolOffer } from '@flow/docs/shared/agent/protocol.ts';
 import type { AssistantSettings } from '@flow/shared/assistant';
-import { AgentStore } from '@flow/docs/server/agent/store.ts';
-import { checkBraveKey } from '@flow/docs/server/agent/tools.ts';
-import { ASSISTANT_PAGES, SUITE_GUIDANCE } from '../docs/assistantTools.ts';
 import { isFileId } from '@flow/docs/server/ids.ts';
 import { scopeOf, type ScopeArg } from '@flow/docs/server/scope.ts';
 import { chatScope, HOME_CHAT, isChatScope, type AgentContext, type AgentDefinition, type AgentEvent, type AgentTurnRequest, type AssistantSettingsUpdate, type ClientToolCall, type ClientToolResult } from '@flow/docs/shared/agent/protocol.ts';
 import { ASSISTANT_CHAT_TOOLS } from './chatTools.ts';
-import { HEADLESS_DOCS_TOOLS, headlessRefusal } from '../docs/assistantTools.ts';
 import type { McpRequestCaller } from '../docs/mcp.ts';
 import { ADMIN_GUIDANCE, AdminToolError, type AdminToolContext } from './adminTools.ts';
 import { MEMORY_DDL, MemoryError, MemoryStore, type MemoryScope } from './memory.ts';
 import type { Org } from '../org/object';
-import { docsPageUrl, docsToolContext, importToDocs, type DocsFetch, type DocsPlace } from './docsTools.ts';
+import type { DocsFetch, DocsPlace } from './docsTools.ts';
+
+/** agentLib.ts, loaded by the first object made (the constructor waits for it before any request); see that file for why. */
+let lib!: typeof import('./agentLib.ts');
+const loadLib = async () => { lib ??= await import('./agentLib.ts'); };
 
 export type { DocsCaller };
 
@@ -136,13 +132,13 @@ const NO_MODEL = 'No model is set for this organization yet. An owner or admin c
 
 /** What the panel is told of a failed turn (the Docs server's agentErrorMessage, as it was). */
 function agentErrorMessage(e: unknown): string {
-  if (e instanceof AgentError || e instanceof OwnKeyError || e instanceof OpenRouterError) return e.message;
-  const openai = openaiErrorMessage(e);
+  if (e instanceof lib.AgentError || e instanceof lib.OwnKeyError || e instanceof lib.OpenRouterError) return e.message;
+  const openai = lib.openaiErrorMessage(e);
   if (openai) return openai;
-  if (e instanceof Anthropic.RateLimitError) return 'The assistant is getting too many requests right now. Try again in a minute.';
-  if (e instanceof Anthropic.AuthenticationError) return 'The assistant is not configured correctly on this server (API key).';
-  if (e instanceof Anthropic.APIError && e.status && e.status >= 500) return 'The AI service had a problem. Try again in a moment.';
-  if (e instanceof Anthropic.AnthropicError && /api ?key|authentication/i.test(e.message)) return NO_MODEL;
+  if (e instanceof lib.Anthropic.RateLimitError) return 'The assistant is getting too many requests right now. Try again in a minute.';
+  if (e instanceof lib.Anthropic.AuthenticationError) return 'The assistant is not configured correctly on this server (API key).';
+  if (e instanceof lib.Anthropic.APIError && e.status && e.status >= 500) return 'The AI service had a problem. Try again in a moment.';
+  if (e instanceof lib.Anthropic.AnthropicError && /api ?key|authentication/i.test(e.message)) return NO_MODEL;
   // The SDK made with no key at all says so before any request.
   if (e instanceof Error && /resolve authentication method/i.test(e.message)) return NO_MODEL;
   return 'Something went wrong while the assistant was working. Try again.';
@@ -196,6 +192,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
     // The Docs stores (AgentStore, AssistantSettingsStore) run on this object's SQLite through the Docs runtime's node:sqlite.
     this.context = { sql: this.sql, bucket: env.BLOBS as R2Bucket, prefix: `assistant/${ctx.id.toString()}/`, transactionSync: (fn) => ctx.storage.transactionSync(fn) };
     this.routes();
+    void ctx.blockConcurrencyWhile(loadLib);
   }
 
   private migrate(): void {
@@ -216,7 +213,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
   private refreshGuidance(): string[] {
     const d = this.definition();
     const admin = this.isAdminAgent() ? ADMIN_GUIDANCE : [];
-    this.guidanceLines.splice(0, this.guidanceLines.length, ...SUITE_GUIDANCE, ...admin, ...definitionGuidance(d, this.state('definition_default_name') ?? d.name), ...this.mailboxGuidance());
+    this.guidanceLines.splice(0, this.guidanceLines.length, ...lib.SUITE_GUIDANCE, ...admin, ...definitionGuidance(d, this.state('definition_default_name') ?? d.name), ...this.mailboxGuidance());
     return this.guidanceLines;
   }
 
@@ -388,7 +385,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
 
   /** How a key is checked before Settings saves it (the provider's API). Tests give one that answers at once. */
   protected keyChecks(): { key: KeyCheck; search: SearchKeyCheck } {
-    return { key: checkAssistantKey, search: checkBraveKey };
+    return { key: lib.checkAssistantKey, search: lib.checkBraveKey };
   }
 
   private get origin(): string {
@@ -402,11 +399,11 @@ export class Assistant extends DurableObject<AssistantEnv> {
     // Every agent runs on its organization's model (operator ruling 2026-11-11): the loop reads it through this store.
     const settings = new OrgModelSettings(db as never, 'data/connector.key', { builtIn: !!this.env.ANTHROPIC_API_KEY, agents: false });
     const model = this.model();
-    const agent = new AgentService(new AgentStore(db as never), null as never, settings, {
+    const agent = new lib.AgentService(new lib.AgentStore(db as never), null as never, settings, {
       jobs: false,
       ...(model ? { model } : {}),
       // The suite's assistant (docs/assistantTools.ts): the pages of every app, its tools' environment, its prompt lines.
-      pages: ASSISTANT_PAGES,
+      pages: lib.ASSISTANT_PAGES,
       // The definition's instructions (agents.md §6) ride with the suite's guidance; a change remakes the service.
       guidance: this.refreshGuidance(),
       extend: (userId: string, scope: ScopeArg) => {
@@ -414,7 +411,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
         const who = this.turnWho.get(userId) ?? this.who;
         const place = placeOf(scope);
         const docsFetch = place ? this.docsFetch(place.workspace, who) : undefined;
-        const docs = place && docsFetch ? docsToolContext(docsFetch, place, this.origin) : undefined;
+        const docs = place && docsFetch ? lib.docsToolContext(docsFetch, place, this.origin) : undefined;
         const mail = this.mailContext(scope, who);
         // Calendar's shared calendars go by the channels of whom the turn runs as: the agent's own, not its asker's.
         const calendar = this.calendarContext(who?.docs.userId ?? userId, who);
@@ -482,12 +479,12 @@ export class Assistant extends DurableObject<AssistantEnv> {
       ...(docs && place
         ? {
             saveToDocs: async (bytes: Buffer, filename: string) => {
-              const made = await importToDocs(docs, place, bytes, filename);
+              const made = await lib.importToDocs(docs, place, bytes, filename);
               const s = made.sheet;
               // With its page in the suite: the user in Mail gets a link, not a guess (docsTools.ts docsPageUrl).
               const file = s
-                ? { id: s.id, kind: s.kind, title: s.title, [s.kind === 'deck' ? 'deck_id' : s.kind === 'sheet' ? 'sheet_id' : 'doc_id']: s.id, url: docsPageUrl(this.origin, place, 'sheet', s.id, s.kind) }
-                : { id: made.file.id, kind: 'file', file_id: made.file.id, filename: made.file.filename, type: made.file.type, url: docsPageUrl(this.origin, place, 'file', made.file.id) };
+                ? { id: s.id, kind: s.kind, title: s.title, [s.kind === 'deck' ? 'deck_id' : s.kind === 'sheet' ? 'sheet_id' : 'doc_id']: s.id, url: lib.docsPageUrl(this.origin, place, 'sheet', s.id, s.kind) }
+                : { id: made.file.id, kind: 'file', file_id: made.file.id, filename: made.file.filename, type: made.file.type, url: lib.docsPageUrl(this.origin, place, 'file', made.file.id) };
               return { file, warnings: made.warnings };
             },
           }
@@ -818,8 +815,8 @@ export class Assistant extends DurableObject<AssistantEnv> {
    */
   private async runHeadlessTool(c: ClientToolCall, t: HeadlessTurn, org: OrgStub | undefined): Promise<ClientToolResult> {
     if (ASSISTANT_CHAT_TOOLS.has(c.name)) return this.runChatTool(c, t, org);
-    if (HEADLESS_DOCS_TOOLS.has(c.name)) return this.runDocsHeadless(c, t);
-    return { id: c.id, content: headlessRefusal(c.name), isError: true };
+    if (lib.HEADLESS_DOCS_TOOLS.has(c.name)) return this.runDocsHeadless(c, t);
+    return { id: c.id, content: lib.headlessRefusal(c.name), isError: true };
   }
 
   /** A Chat tool, through the Org object: with the sponsor's reach for a person's assistant, the agent's own for a shared one. */
@@ -1077,7 +1074,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
   /** Before a turn the person is not watching (Chat, mail, a wake): a plain reason when nothing can run it. */
   private requireModel(): void {
     const settings = withDocsContext(this.context, () => this.service().settings);
-    if (!settings.current?.choice && !settings.builtIn) throw new AgentError(400, NO_MODEL);
+    if (!settings.current?.choice && !settings.builtIn) throw new lib.AgentError(400, NO_MODEL);
   }
 
   /** In the `org:<id>` object: the organization's model, for the runtimes (its keys opened). */
@@ -1121,7 +1118,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
     const app = this.app;
     const userOf = conversationUserOf;
     const fail = (c: C, e: unknown) => {
-      if (e instanceof AgentError) return c.json({ error: e.message }, e.status as 400);
+      if (e instanceof lib.AgentError) return c.json({ error: e.message }, e.status as 400);
       throw e;
     };
 
@@ -1283,7 +1280,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
       this.requireModel();
       agent.checkTurn(userId, body);
     } catch (e) {
-      if (e instanceof AgentError) return c.json({ error: e.message }, e.status as 400);
+      if (e instanceof lib.AgentError) return c.json({ error: e.message }, e.status as 400);
       throw e;
     }
     // The root the server tools work in (Docs' server/scope.ts): a file's chat, that file's (an organization file's chat
