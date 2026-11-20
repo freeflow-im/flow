@@ -7,6 +7,7 @@ import { BOOKING_SETTINGS_PATH, useBookingLink } from './bookingLink';
 import { isInHome, routeLinksToHome } from './lib/embed';
 import { SuiteMark } from './SuiteMark';
 import { SuiteAlerts, useClosedAlerts, useMeetingAlerts, type SuiteAlert } from './alerts';
+import { useAlertNotifications, useDesktopPermission } from './desktopNotify';
 import './suite-bar.css';
 
 /** One entry of a tab's menu: a link, or a line apart (`divider`). */
@@ -268,6 +269,9 @@ function TheSuiteBar({ tabs, organization, search, assistant, notifications, acc
   const [closedAlerts, closeAlert] = useClosedAlerts();
   const meetings = useMeetingAlerts(meetingAlerts === false ? null : organization?.entries.find((e) => e.active)?.id ?? null, closedAlerts);
   const shownAlerts = [...(alerts ?? []).filter((a) => !closedAlerts.has(a.id)), ...meetings];
+  // …and each meeting alert as a desktop notification too, once across tabs (task 15); permission is asked from a click.
+  const [desktopPermission, askDesktop] = useDesktopPermission();
+  useAlertNotifications(meetings, desktopPermission);
   const [menu, setMenu] = useState<Menu>(null);
   const [searching, setSearching] = useState(false);
   const [ownQuery, setOwnQuery] = useState('');
@@ -644,6 +648,12 @@ function TheSuiteBar({ tabs, organization, search, assistant, notifications, acc
                   Create booking page
                 </button>
               )}
+              {desktopPermission === 'default' && (
+                <button type="button" role="menuitem" className="sb-menu-item" data-testid="suite-desktop-notifications" onClick={pick(askDesktop)}>
+                  <span className="sb-menu-icon"><Bell /></span>
+                  Turn on desktop notifications
+                </button>
+              )}
               {account.extra?.map((x) => (
                 <button key={x.label} type="button" role="menuitem" className="sb-menu-item" onClick={pick(x.onSelect)}>
                   <span className="sb-menu-icon">{ICONS[x.label.toLowerCase()] ?? null}</span>
@@ -659,7 +669,7 @@ function TheSuiteBar({ tabs, organization, search, assistant, notifications, acc
           )}
         </div>
       </div>
-      <SuiteAlerts alerts={shownAlerts} onClose={closeAlert} />
+      <SuiteAlerts alerts={shownAlerts} onClose={closeAlert} onTurnOnDesktop={desktopPermission === 'default' && meetings.length ? askDesktop : undefined} />
     </header>
   );
 }
