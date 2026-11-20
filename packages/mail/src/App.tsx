@@ -20,6 +20,7 @@ import { ResizeHandle } from './components/ResizeHandle';
 import { DocsDropZone } from './components/DocsDropZone';
 import type { DocsFile } from './lib/docsFiles';
 import { setReadingPane, useReadingPane } from './lib/layoutPref';
+import { listMove } from './lib/listKeys';
 import { Sidebar } from './components/Sidebar';
 import { ADD_ACCOUNT_ITEM, COMPOSE_ITEM, folderItem, mailMenu, mailPicker } from './lib/homeMenu';
 import { useMediaQuery, useResizableWidth } from './hooks/layout';
@@ -700,8 +701,11 @@ export function App() {
       const { visible: v, cursorId: cur, openId: open, narrow: isNarrow } = keyState.current;
       const h = handlers.current;
       const at = v.findIndex((x) => x.threadId === (cur ?? open));
-      const go = (i: number) => {
-        const x = v[Math.max(0, Math.min(v.length - 1, i))];
+      const go = (by: 1 | -1) => {
+        const move = listMove(v.length, at, by, open !== null && v[at]?.threadId === open);
+        // k on the newest open conversation: nothing above it, so back to the list (the cursor stays on it).
+        if (move.kind === 'close') return setOpenId(null);
+        const x = move.kind === 'select' ? v[move.index] : undefined;
         if (!x) return;
         setCursorId(x.threadId);
         // Side by side, the thread follows the keyboard. In place of the list, j/k move the selection in the list, and
@@ -710,10 +714,10 @@ export function App() {
       };
       switch (e.key) {
         case 'j':
-          go(at < 0 ? 0 : at + 1);
+          go(1);
           break;
         case 'k':
-          go(at < 0 ? 0 : at - 1);
+          go(-1);
           break;
         case 'n':
           if (open === null) return;
