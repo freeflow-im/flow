@@ -27,6 +27,7 @@ describe('a dropped Docs file: link or attachment (side-panel.md §7.1)', () => 
   it('links to the file\'s page in Docs, escaped, after what was written', () => {
     expect(docsFileUrl({ kind: 'sheet', id: 'x1' }, 'https://app.test')).toBe('https://app.test/docs/s/x1');
     expect(docsFileUrl({ kind: 'deck', id: 'x2' }, 'https://app.test')).toBe('https://app.test/docs/d/x2');
+    expect(docsFileUrl({ kind: 'whiteboard', id: 'x3' }, 'https://app.test')).toBe('https://app.test/docs/w/x3');
     const b = linksBlock([{ kind: 'doc', id: 'd1', name: 'Q&A <draft>' }], 'https://app.test');
     expect(b.html).toBe('<p><a href="https://app.test/docs/doc/d1">Q&amp;A &lt;draft&gt;</a></p>');
     expect(b.text).toBe('Q&A <draft>: https://app.test/docs/doc/d1');

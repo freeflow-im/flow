@@ -38,10 +38,12 @@ export function linkByDefault(from: string, recipients: readonly string[], membe
   return recipients.every((r) => domainOf(r) === domain && !!memberOf(r, members));
 }
 
+/** Docs' page of each kind, keyed by every kind so a new one fails the typecheck. */
+const DOCS_PAGES: Record<DocsFile['kind'], string> = { sheet: 's', deck: 'd', doc: 'doc', markdown: 'md', whiteboard: 'w', file: 'f' };
+
 /** The page a Docs file opens on (Docs' own addresses, client/src/components/WebCopyDialogs.tsx pathOfFile). */
 export function docsFileUrl(f: Pick<DocsFile, 'kind' | 'id'>, origin = window.location.origin): string {
-  const seg = f.kind === 'deck' ? 'd' : f.kind === 'doc' ? 'doc' : f.kind === 'markdown' ? 'md' : f.kind === 'file' ? 'f' : 's';
-  return `${origin}/docs/${seg}/${encodeURIComponent(f.id)}`;
+  return `${origin}/docs/${DOCS_PAGES[f.kind]}/${encodeURIComponent(f.id)}`;
 }
 
 const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
