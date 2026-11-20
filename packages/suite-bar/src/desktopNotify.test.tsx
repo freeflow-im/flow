@@ -40,6 +40,11 @@ function Tab({ alerts, permission = 'granted' }: { alerts: SuiteAlert[]; permiss
   return null;
 }
 
+function OffTab({ alerts, off }: { alerts: SuiteAlert[]; off: boolean }) {
+  useAlertNotifications(alerts, 'granted', off);
+  return null;
+}
+
 describe('desktop notifications for alerts (task 15)', () => {
   it('claims an alert once across tabs', async () => {
     expect(await claimNotification('meeting:a')).toBe(true);
@@ -91,6 +96,15 @@ describe('desktop notifications for alerts (task 15)', () => {
     expect(FakeNotification.made).toHaveLength(1);
   });
 
+  it('shows nothing while switched off for Flow, and notifies again when switched back on', async () => {
+    const { rerender } = render(<OffTab alerts={[meeting()]} off />);
+    await flush();
+    expect(FakeNotification.made).toHaveLength(0);
+    rerender(<OffTab alerts={[meeting()]} off={false} />);
+    await flush();
+    expect(FakeNotification.made).toHaveLength(1);
+  });
+
   it('takes the banner down when its alert goes', async () => {
     const { rerender } = render(<Tab alerts={[meeting()]} />);
     await flush();
@@ -125,10 +139,40 @@ describe('asking for permission in the suite bar', () => {
     await flush();
     expect(FakeNotification.requestPermission).toHaveBeenCalledTimes(1);
     expect(FakeNotification.made).toHaveLength(1);
-    // Granted: the offers are gone.
+    // Granted: the card's offer is gone, and the menu's row is now the on/off switch.
     expect(screen.queryByTestId('suite-alert-desktop')).toBeNull();
     fireEvent.click(screen.getByTestId('suite-account-button'));
-    expect(screen.queryByTestId('suite-desktop-notifications')).toBeNull();
+    const row = screen.getByTestId('suite-desktop-notifications');
+    expect(row.textContent).toContain('Desktop notifications');
+    expect(row.getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('switches them off and on for Flow once the browser allows them', async () => {
+    vi.useFakeTimers({ now: T0 - 60_000, toFake: ['Date', 'setInterval', 'clearInterval'] });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ events: [] }), { status: 200 })));
+    render(<SuiteBar tabs={[]} organization={organization} account={account} />);
+    await flush();
+    fireEvent.click(screen.getByTestId('suite-account-button'));
+    fireEvent.click(screen.getByTestId('suite-desktop-notifications'));
+    // The menu stays open to show the switch move; the choice is kept for every tab.
+    expect(screen.getByTestId('suite-desktop-notifications').getAttribute('aria-checked')).toBe('false');
+    expect(localStorage.getItem('suite-desktop-notify-off')).toBe('1');
+    fireEvent.click(screen.getByTestId('suite-desktop-notifications'));
+    expect(screen.getByTestId('suite-desktop-notifications').getAttribute('aria-checked')).toBe('true');
+    expect(localStorage.getItem('suite-desktop-notify-off')).toBeNull();
+    expect(FakeNotification.requestPermission).not.toHaveBeenCalled();
+  });
+
+  it('says where to allow them when the browser blocks them', async () => {
+    FakeNotification.permission = 'denied';
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })));
+    render(<SuiteBar tabs={[]} organization={organization} account={account} />);
+    fireEvent.click(screen.getByTestId('suite-account-button'));
+    const row = screen.getByTestId('suite-desktop-notifications');
+    expect(row.textContent).toContain('blocked');
+    expect(row.textContent).toContain("browser's settings");
+    fireEvent.click(row);
+    expect(FakeNotification.requestPermission).not.toHaveBeenCalled();
   });
 
   it('offers nothing where the browser has no notifications', async () => {
