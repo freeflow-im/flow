@@ -12,6 +12,7 @@ This file keeps two things:
 
 ## Parity
 
+- **Muting a mail conversation is web only (2026-11-19, Taskboard task 10).** Mail is web only; macOS and iOS have no Mail (deliberate).
 - **Meeting alerts under the suite bar are web only (2026-11-19, Taskboard task 12).** A card slides down from the suite bar 2 minutes before an accepted meeting, with Join, on every web page and in the desktop shell; macOS and iOS show none (gap to close: a native banner, or the meeting's notification).
 - **Email sign-in codes and the new sign-in design are on web only (2026-11-17, docs/specs/onboarding.md §1).** macOS and iOS keep their own sign-in (password, links, Google, Apple); the server's code routes are ready for them (gap to close).
 - **Workspace setup and the Welcome page are on web only (2026-11-17, docs/specs/onboarding.md).** The five setup steps run in web Home (and the desktop shell); a new person on macOS or iOS starts in the workspace chooser as before, and Omni and the ready-made automations reach them through the server (gap to close: open setup in the browser from the native chooser).

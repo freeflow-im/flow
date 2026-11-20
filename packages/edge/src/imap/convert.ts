@@ -42,6 +42,8 @@ export interface ThreadSummary {
   date: string;
   folders: string[];
   category?: string; categoryReason?: string;
+  /** Muted (Gmail's Mute): its new mail skips the inbox. Only outside INBOX, where muted threads are not listed. */
+  muted?: true;
 }
 export interface ThreadPage { threads: ThreadSummary[]; next: number | null; sorting?: true }
 

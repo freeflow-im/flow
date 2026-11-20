@@ -19,6 +19,8 @@ export interface Mailbox {
   folders: MailFolder[];
   messages: StoredMessage[];
   nextUid: number;
+  /** Muted conversations (the threads' ids). */
+  muted?: Set<string>;
   /** "Move to tab": the tab chosen per sender address. */
   overrides: Map<string, Category>;
 }

@@ -120,6 +120,8 @@ export const DDL = [
   // The people written to and heard from, from the cached messages (Contacts below): what the composer completes addresses from.
   `CREATE TABLE IF NOT EXISTS mail_contacts (account_id TEXT NOT NULL, address TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', sent INTEGER NOT NULL DEFAULT 0, received INTEGER NOT NULL DEFAULT 0,
     last_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (account_id, address))`,
+  // Muted conversations (Gmail's Mute): kept out of the inbox's list, and their new mail moved out of INBOX as it arrives.
+  `CREATE TABLE IF NOT EXISTS mail_muted_threads (account_id TEXT NOT NULL, thread_id TEXT NOT NULL, muted_at INTEGER NOT NULL, PRIMARY KEY (account_id, thread_id))`,
 ];
 /** Message ids remembered per account after their rows left the cache, at most. */
 export const THREAD_INDEX_CAP = 20_000;
@@ -192,9 +194,11 @@ const headerText = (h: Uint8Array | string | undefined) => (h === undefined ? nu
  * there (`tops`, at most CACHE_ROWS rows). With a tab's filter, `tops` is materialized and scanned first, and each top's
  * row of `mail_categories` found by its key (CROSS JOIN fixes the order: left to itself SQLite scanned every cached
  * category row of the folder — tens of thousands on a long-used inbox — re-running the GROUP BY for each, 30 s of CPU).
+ * `hideMuted` (INBOX) leaves out muted threads.
  */
-export function threadPageSql(tab?: string): string {
-  const tops = 'SELECT thread_id, MAX(uid) AS top_uid FROM mail_messages WHERE account_id = ? AND folder = ? AND uid_validity = ? AND uid >= ? AND thread_id IS NOT NULL GROUP BY thread_id HAVING MAX(uid) < ?';
+export function threadPageSql(tab?: string, hideMuted = false): string {
+  const muted = hideMuted ? ' AND thread_id NOT IN (SELECT thread_id FROM mail_muted_threads WHERE account_id = mail_messages.account_id)' : '';
+  const tops = `SELECT thread_id, MAX(uid) AS top_uid FROM mail_messages WHERE account_id = ? AND folder = ? AND uid_validity = ? AND uid >= ? AND thread_id IS NOT NULL${muted} GROUP BY thread_id HAVING MAX(uid) < ?`;
   if (!tab) return `SELECT thread_id, top_uid FROM (${tops}) ORDER BY top_uid DESC LIMIT ?`;
   return `WITH t AS MATERIALIZED (${tops}) SELECT t.thread_id, t.top_uid FROM t CROSS JOIN mail_categories c ON c.account_id = ? AND c.folder = ? AND c.uid_validity = ? AND c.uid = t.top_uid
     LEFT JOIN mail_category_overrides o ON o.account_id = c.account_id AND o.sender = c.sender WHERE ${tab} = ? ORDER BY t.top_uid DESC LIMIT ?`;
@@ -374,6 +378,30 @@ export class MailCache {
     const list = JSON.stringify(losers);
     this.sql.exec('UPDATE mail_messages SET thread_id = ? WHERE account_id = ? AND thread_id IN (SELECT value FROM json_each(?))', winner, accountId, list);
     this.sql.exec('UPDATE mail_thread_index SET thread_id = ? WHERE account_id = ? AND thread_id IN (SELECT value FROM json_each(?))', winner, accountId, list);
+    // A muted thread stays muted when another joins it.
+    this.sql.exec('INSERT OR IGNORE INTO mail_muted_threads (account_id, thread_id, muted_at) SELECT account_id, ?, MAX(muted_at) FROM mail_muted_threads WHERE account_id = ? AND thread_id IN (SELECT value FROM json_each(?)) GROUP BY account_id', winner, accountId, list);
+    this.sql.exec('DELETE FROM mail_muted_threads WHERE account_id = ? AND thread_id IN (SELECT value FROM json_each(?))', accountId, list);
+  }
+
+  // ---- muted threads ----------------------------------------------------------------------------------------------
+
+  /** Mutes a thread (or unmutes it): a muted thread is left out of the inbox's list, and its new mail moved out of INBOX. */
+  setMuted(accountId: string, threadId: string, muted: boolean, now: number): void {
+    if (muted) this.sql.exec('INSERT OR IGNORE INTO mail_muted_threads (account_id, thread_id, muted_at) VALUES (?, ?, ?)', accountId, threadId, now);
+    else this.sql.exec('DELETE FROM mail_muted_threads WHERE account_id = ? AND thread_id = ?', accountId, threadId);
+  }
+
+  /** Which of these threads are muted. */
+  mutedOf(accountId: string, threadIds: readonly string[]): Set<string> {
+    if (!threadIds.length) return new Set();
+    return new Set(this.sql.exec<{ thread_id: string }>('SELECT thread_id FROM mail_muted_threads WHERE account_id = ? AND thread_id IN (SELECT value FROM json_each(?))', accountId, JSON.stringify([...new Set(threadIds)])).toArray().map((r) => r.thread_id));
+  }
+
+  /** The cached messages of a folder that belong to a muted thread, of these UIDs (all of them without). */
+  mutedUids(accountId: string, folder: string, uids?: readonly number[]): number[] {
+    return this.sql.exec<{ uid: number }>(
+      `SELECT m.uid FROM mail_messages m JOIN mail_muted_threads x ON x.account_id = m.account_id AND x.thread_id = m.thread_id WHERE m.account_id = ? AND m.folder = ?${uids ? ' AND m.uid IN (SELECT value FROM json_each(?))' : ''} ORDER BY m.uid`,
+      accountId, folder, ...(uids ? [JSON.stringify(uids)] : [])).toArray().map((r) => r.uid);
   }
 
   /** Before rows leave the cache: their message ids keep pointing at their threads, so a later reply finds them. */
@@ -395,10 +423,10 @@ export class MailCache {
    * by its newest UID there, those below `cursor`. `tab` (INBOX with tabs on) keeps the threads whose newest message is in
    * the tab: `mail_categories` joined on that UID, with the overrides (categorize.ts `effectiveSql`, as object.ts `tabRows` uses it).
    */
-  threadPage(accountId: string, folder: string, validity: string, cursor: number, low: number, limit: number, tab?: { tab: string; params: string[]; category: string }): { threadId: string; uid: number }[] {
+  threadPage(accountId: string, folder: string, validity: string, cursor: number, low: number, limit: number, tab?: { tab: string; params: string[]; category: string }, hideMuted = false): { threadId: string; uid: number }[] {
     const rows = tab
-      ? this.sql.exec<{ thread_id: string; top_uid: number }>(threadPageSql(tab.tab), accountId, folder, validity, Math.max(1, low), cursor, accountId, folder, validity, ...tab.params, tab.category, limit).toArray()
-      : this.sql.exec<{ thread_id: string; top_uid: number }>(threadPageSql(), accountId, folder, validity, Math.max(1, low), cursor, limit).toArray();
+      ? this.sql.exec<{ thread_id: string; top_uid: number }>(threadPageSql(tab.tab, hideMuted), accountId, folder, validity, Math.max(1, low), cursor, accountId, folder, validity, ...tab.params, tab.category, limit).toArray()
+      : this.sql.exec<{ thread_id: string; top_uid: number }>(threadPageSql(undefined, hideMuted), accountId, folder, validity, Math.max(1, low), cursor, limit).toArray();
     return rows.map((r) => ({ threadId: r.thread_id, uid: r.top_uid }));
   }
 
@@ -425,7 +453,8 @@ export class MailCache {
       `SELECT m.uid, m.seen, ${tab.tab} AS tab FROM mail_messages m
        LEFT JOIN mail_categories c ON c.account_id = m.account_id AND c.folder = m.folder AND c.uid_validity = m.uid_validity AND c.uid = m.uid
        LEFT JOIN mail_category_overrides o ON o.account_id = c.account_id AND o.sender = c.sender
-       WHERE m.account_id = ? AND m.folder = ? AND m.uid_validity = ? AND m.uid >= ?`,
+       WHERE m.account_id = ? AND m.folder = ? AND m.uid_validity = ? AND m.uid >= ?
+         AND (m.thread_id IS NULL OR m.thread_id NOT IN (SELECT thread_id FROM mail_muted_threads WHERE account_id = m.account_id))`,
       ...tab.params, accountId, folder, validity, Math.max(1, low)).toArray();
     const by = new Map<string, { total: number; unread: number; new: number; newest: number }>();
     for (const r of rows) {
@@ -702,6 +731,7 @@ export class MailCache {
     this.sql.exec('DELETE FROM mail_cache_folders WHERE account_id = ?', accountId);
     this.sql.exec('DELETE FROM mail_refs WHERE account_id = ?', accountId);
     this.sql.exec('DELETE FROM mail_thread_index WHERE account_id = ?', accountId);
+    this.sql.exec('DELETE FROM mail_muted_threads WHERE account_id = ?', accountId);
   }
 
   /** For the debug route: each cached folder with how many rows it holds, how many of them with their body, and the bodies' bytes. */

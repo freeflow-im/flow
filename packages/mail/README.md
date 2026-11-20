@@ -22,7 +22,7 @@ Worker holds the credentials and speaks IMAP and SMTP.
   the thread's messages stacked oldest first, the unread and last ones open, runs of read ones folded; `MessageBody.tsx`
   mounted only for an open message), side by
   side from 900px, one at a time below, with the folders behind a button under 760px. It also owns the keyboard
-  (j/k over the conversations, n/p over the open thread's messages, Enter, e, #, r, a, f, c, u, /, Esc). Reply, reply all
+  (j/k over the conversations, n/p over the open thread's messages, Enter, e, #, r, a, f, c, u, m (mute), /, Esc). Reply, reply all
   and forward answer the thread's last message (`lib/threads.ts` `replyTarget`), or the one whose own buttons were used.
 - `src/components/Compose.tsx` — compose, reply, reply all, forward: address chips (`AddressField.tsx`), TipTap
   StarterKit with Link and a picture node (`Editor.tsx`, loaded on first use; a picture pasted from the clipboard goes in at

@@ -484,5 +484,24 @@ export function useMessageActions(accountId: string | null, folder: string | nul
     onSettled: () => refresh(true),
   });
 
-  return { flags, threadSeen, move, remove, moveToTab };
+  /**
+   * Mute (or unmute) a conversation. Muting from INBOX takes its messages here (`uids`) out of the list at once, to the
+   * archive (`to`), as the server does; the open thread says it is muted either way.
+   */
+  const mute = useMutation({
+    mutationKey,
+    mutationFn: (v: { threadId: string; muted: boolean; uids: number[]; to: string | null }) => mailApi.mute(accountId!, v.threadId, v.muted),
+    onMutate: (v) => {
+      const rows = v.muted && v.uids.length ? leave(v.uids, v.to) : patchThreads((x) => (x.threadId !== v.threadId ? x : v.muted ? { ...x, muted: true } : (({ muted: _m, ...rest }) => rest)(x)));
+      // The open thread's mark, restored first, so the snapshots taken before `leave` changed it win.
+      const key = keys.thread(accountId ?? '', v.threadId);
+      const t = qc.getQueryData<ThreadDetail>(key);
+      if (t) qc.setQueryData<ThreadDetail>(key, { ...t, muted: v.muted });
+      return { snapshots: [...(t ? [[key, t] as [readonly unknown[], unknown]] : []), ...rows] };
+    },
+    onError: (_e, _v, ctx) => ctx && restore(ctx.snapshots),
+    onSettled: () => refresh(true),
+  });
+
+  return { flags, threadSeen, move, remove, moveToTab, mute };
 }

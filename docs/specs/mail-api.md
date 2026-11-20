@@ -277,6 +277,20 @@ Gmail-style threads, on the prefetch cache (below): every cached message has a `
   INBOX and Sent, read oldest first, bodies after an alarm pass, a merge, the subject fallback and its limits, a tab's
   conversations, paging).
 
+### Muted conversations (2026-11-19)
+
+Gmail's Mute. `mail_muted_threads (account_id, thread_id, muted_at)` in the Mail object (`cache.ts`).
+
+- `POST /v1/mail/accounts/:id/threads/:threadId/mute` body `{ muted: boolean }` → `{ ok: true, muted, moved }`. Muting moves
+  the thread's cached INBOX messages to the archive (the `archive` folder, else `all`; none without either) and says how
+  many moved; unmuting moves nothing back. An unknown thread is `not_found`.
+- New mail of a muted thread, when the cache takes it in from INBOX (`cacheRows`), is moved out the same way in the
+  background. Until then, INBOX's `…/threads` (each tab included) and the tab badges (`…/tabs`) leave muted threads out.
+- Elsewhere a muted thread is listed with `muted: true`, and `GET …/threads/:threadId` answers `muted`. Merging threads
+  keeps the mute on the merged one.
+- The client: Mute thread / Unmute thread in the conversation's and each message's ⋮ menu, and `m` with a conversation
+  open (muting from INBOX takes it out of the list at once, with Undo); a muted conversation shows a note with Unmute.
+
 ## Contacts (2026-11-04)
 
 `mail_contacts (account_id, address, name, sent, received, last_at)`, kept by the prefetch cache as messages are cached

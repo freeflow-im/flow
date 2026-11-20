@@ -99,6 +99,8 @@ export interface ThreadSummary {
   folders: string[];
   category?: Category;
   categoryReason?: string;
+  /** Muted (listed outside INBOX only: the inbox leaves muted threads out). */
+  muted?: true;
 }
 export interface ThreadPage {
   threads: ThreadSummary[];
@@ -114,6 +116,8 @@ export interface ThreadPage {
 export type ThreadMessage = MessageDetail & { bodyPending?: true; bodyFailed?: true; sending?: true };
 export interface ThreadDetail {
   threadId: string;
+  /** Muted (Gmail's Mute): it left the inbox, and its later mail skips the inbox too. */
+  muted?: boolean;
   /** Oldest first, across the account's folders. */
   messages: ThreadMessage[];
 }
@@ -278,6 +282,9 @@ export const mailApi = {
   thread: async (accountId: string, threadId: string, folder: string) =>
     (await request<{ thread: ThreadDetail }>('GET', `${base(accountId)}/threads/${enc(threadId)}${query({ folder })}`)).thread,
   setFlags: (accountId: string, body: { folder: string; uids: number[]; seen?: boolean; flagged?: boolean }) => request<{ ok: true }>('PATCH', `${base(accountId)}/messages`, body),
+  /** Mute a conversation (it leaves INBOX, and so does its later mail) or unmute it; `moved`: how many left INBOX. */
+  mute: (accountId: string, threadId: string, muted: boolean) =>
+    request<{ ok: true; muted: boolean; moved: number }>('POST', `${base(accountId)}/threads/${enc(threadId)}/mute`, { muted }),
   move: (accountId: string, body: { folder: string; uids: number[]; to: string }) => request<{ ok: true }>('POST', `${base(accountId)}/messages/move`, body),
   remove: (accountId: string, body: { folder: string; uids: number[] }) => request<{ ok: true }>('POST', `${base(accountId)}/messages/delete`, body),
   /** "Move to tab": the messages' senders go there from now on; `previous` is what to restore to undo it. */
