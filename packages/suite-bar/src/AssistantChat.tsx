@@ -7,6 +7,7 @@ import { AssistantDock, AssistantDockControls, ChatHistoryNav, orgChatHistory, S
 import { adminAddress } from '@flow/shared/addresses';
 import { HOME_CHAT, useSuiteAssistant } from './suiteChat';
 import { useSuggestedPrompts, type PromptPage } from './lib/prompts';
+import { CHAT_IMAGE_TYPES, imageFiles, MAX_CHAT_IMAGES, prepareChatImage, type ChatImage } from './lib/chatImages';
 import { EmailApprovalCard, WaitingEmails, emailApprovalOf } from './EmailApproval';
 import './assistant-chat.css';
 
@@ -89,18 +90,55 @@ function SuiteAssistantPanel({ organizationId, page, agents, chosen, onPick, con
   const orgPrompts = useSuggestedPrompts(organizationId, page);
   const suggestions = prompts ?? orgPrompts;
   const [draft, setDraft] = useState('');
+  // Images for the next message: pasted (⌘V), dropped or picked, shown as thumbnails until sent.
+  const [attachments, setAttachments] = useState<ChatImage[]>([]);
+  const [attachError, setAttachError] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const input = useRef<HTMLTextAreaElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = list.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [chat.items]);
   const submit = () => {
-    if (!draft.trim() || chat.running) return;
-    chat.send(draft);
+    if ((!draft.trim() && !attachments.length) || chat.running) return;
+    chat.send(draft, attachments.map(({ mediaType, data }) => ({ mediaType, data })));
     setDraft('');
+    setAttachments([]);
+    setAttachError(null);
+  };
+  /** Adds images to the next message, at most MAX_CHAT_IMAGES; the rest are left out, and the panel says so. */
+  const attach = async (files: File[]) => {
+    if (!files.length) return;
+    setAttachError(null);
+    const room = MAX_CHAT_IMAGES - attachments.length;
+    if (room <= 0) return setAttachError(`At most ${MAX_CHAT_IMAGES} images per message.`);
+    try {
+      const prepared = await Promise.all(files.slice(0, room).map(prepareChatImage));
+      setAttachments((prev) => [...prev, ...prepared].slice(0, MAX_CHAT_IMAGES));
+      if (files.length > room) setAttachError(`Only ${MAX_CHAT_IMAGES} images fit in one message; the rest were left out.`);
+    } catch {
+      setAttachError('That image could not be read.');
+    }
+    input.current?.focus();
   };
   return (
-    <div className="suite-chat" data-testid="suite-assistant-panel">
+    <div
+      className={`suite-chat${dragging ? ' dragging' : ''}`}
+      data-testid="suite-assistant-panel"
+      onDragOver={(e) => {
+        if (Array.from(e.dataTransfer.types).includes('Files')) { e.preventDefault(); setDragging(true); }
+      }}
+      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false); }}
+      onDrop={(e) => {
+        setDragging(false);
+        const files = imageFiles(e.dataTransfer);
+        if (!files.length) return;
+        e.preventDefault();
+        void attach(files);
+      }}
+    >
       <div className="suite-chat-head">
         {avatarUrl ? <img className="suite-chat-avatar" src={avatarUrl} alt="" /> : <SparkIcon />}
         {agents.length > 1 ? (
@@ -132,7 +170,14 @@ function SuiteAssistantPanel({ organizationId, page, agents, chosen, onPick, con
           ))}
         {chat.items.map((item, i) =>
           item.kind === 'user' ? (
-            <div key={i} className="suite-chat-user">{item.text}</div>
+            <div key={i} className="suite-chat-user">
+              {item.images?.length ? (
+                <div className="suite-chat-user-images">
+                  {item.images.map((src, j) => <a key={j} href={src} target="_blank" rel="noreferrer" title="Open the image"><img src={src} alt={`Attached image ${j + 1}`} /></a>)}
+                </div>
+              ) : null}
+              {item.text}
+            </div>
           ) : item.kind === 'assistant' ? (
             <div key={i} className="suite-chat-assistant"><ReactMarkdown remarkPlugins={[remarkGfm]}>{item.text}</ReactMarkdown></div>
           ) : emailApprovalOf(item.name, item.result) ? (
@@ -144,19 +189,53 @@ function SuiteAssistantPanel({ organizationId, page, agents, chosen, onPick, con
         {chat.running && chat.items[chat.items.length - 1]?.kind !== 'assistant' && <div className="suite-chat-thinking">Thinking…</div>}
         {chat.error && <div className="suite-chat-error">{chat.error}</div>}
       </div>
+      {(attachments.length > 0 || attachError) && (
+        <div className="suite-chat-attachments" data-testid="suite-assistant-attachments">
+          {attachments.map((img, i) => (
+            <span key={i} className="suite-chat-thumb">
+              <img src={img.dataUrl} alt={`Attached image ${i + 1}`} />
+              <button type="button" aria-label="Remove image" title="Remove" onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}>×</button>
+            </span>
+          ))}
+          {attachError && <span className="suite-chat-attach-error">{attachError}</span>}
+        </div>
+      )}
       <form className="suite-chat-form" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+        <input
+          ref={picker}
+          type="file"
+          accept={[...CHAT_IMAGE_TYPES].join(',')}
+          multiple
+          hidden
+          onChange={(e) => {
+            const files = Array.from(e.target.files ?? []);
+            e.target.value = '';
+            void attach(files);
+          }}
+          data-testid="suite-assistant-file"
+        />
+        <button type="button" className="suite-chat-attach" onClick={() => picker.current?.click()} disabled={chat.running || attachments.length >= MAX_CHAT_IMAGES} title="Attach an image (or paste a screenshot)" aria-label="Attach an image">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="M21 15l-5-5L5 21" /></svg>
+        </button>
         <textarea
+          ref={input}
           value={draft}
           rows={2}
-          placeholder={`Message ${name}`}
+          placeholder={`Message ${name}, or paste a screenshot`}
           onChange={(e) => setDraft(e.target.value)}
+          onPaste={(e) => {
+            const files = imageFiles(e.clipboardData);
+            if (!files.length) return;
+            e.preventDefault();
+            void attach(files);
+          }}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } }}
           data-testid="suite-assistant-input"
         />
         {chat.running ? (
           <button type="button" className="suite-chat-send" onClick={chat.stop}>Stop</button>
         ) : (
-          <button type="submit" className="suite-chat-send" disabled={!draft.trim()} data-testid="suite-assistant-send">Send</button>
+          <button type="submit" className="suite-chat-send" disabled={!draft.trim() && !attachments.length} data-testid="suite-assistant-send">Send</button>
         )}
       </form>
     </div>

@@ -9,10 +9,14 @@ afterEach(() => {
 beforeEach(() => localStorage.clear());
 
 /** The server: the agents the person may use (with `?app=`, those that may use the app), and empty answers elsewhere. */
-function serve(agents: unknown[]) {
+function serve(agents: unknown[], bodies: unknown[] = []) {
   const asked: string[] = [];
-  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     asked.push(url);
+    if (url.startsWith('/api/agent/turn')) {
+      bodies.push(JSON.parse(String(init?.body)));
+      return new Response('data: {"type":"done"}\n\n', { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    }
     const body = url.startsWith('/api/agent/agents') ? { agents } : url.startsWith('/api/agent/history') ? { chats: [] } : { items: [], prompts: {} };
     return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
   }));
@@ -41,5 +45,51 @@ describe('SuiteAssistant over an installed app', () => {
     render(<SuiteAssistant organizationId="org1" page="home" app={taskboard} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Open Assistant' }));
     expect((await screen.findByTestId('suite-assistant-no-agent')).textContent).toMatch(/None of your agents can use Taskboard yet/);
+  });
+});
+
+describe('images in the panel (⌘V, drop, attach)', () => {
+  const png = () => new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], 'shot.png', { type: 'image/png' });
+  const clipboard = (files: File[]) => ({ items: files.map((f) => ({ kind: 'file', getAsFile: () => f })), files, types: ['Files'] });
+
+  it('takes a pasted screenshot as a thumbnail, and sends it with the message', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    serve([{ id: 'a1', accountId: 'acc1', displayName: 'Ada', mode: 'personal', self: true }], bodies);
+    render(<SuiteAssistant organizationId="org1" page="home" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Open Assistant' }));
+    const box = screen.getByTestId('suite-assistant-input');
+    fireEvent.paste(box, { clipboardData: clipboard([png()]) });
+    const thumbs = await screen.findByTestId('suite-assistant-attachments');
+    expect(thumbs.querySelectorAll('img')).toHaveLength(1);
+    // An image alone may be sent.
+    expect((screen.getByTestId('suite-assistant-send') as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.change(box, { target: { value: 'what is this?' } });
+    fireEvent.click(screen.getByTestId('suite-assistant-send'));
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies[0]!.message).toBe('what is this?');
+    expect(bodies[0]!.images).toEqual([{ mediaType: 'image/png', data: 'iVBORw0KGgo=' }]);
+    // The thumbnails go; the sent message shows the image.
+    expect(screen.queryByTestId('suite-assistant-attachments')).toBeNull();
+    expect(screen.getByAltText('Attached image 1').getAttribute('src')).toBe('data:image/png;base64,iVBORw0KGgo=');
+  });
+
+  it('keeps at most four, says so, and removes one on ×', async () => {
+    serve([{ id: 'a1', accountId: 'acc1', displayName: 'Ada', mode: 'personal', self: true }]);
+    render(<SuiteAssistant organizationId="org1" page="home" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Open Assistant' }));
+    fireEvent.paste(screen.getByTestId('suite-assistant-input'), { clipboardData: clipboard([png(), png(), png(), png(), png()]) });
+    const thumbs = await screen.findByTestId('suite-assistant-attachments');
+    await waitFor(() => expect(thumbs.querySelectorAll('img')).toHaveLength(4));
+    expect(thumbs.textContent).toMatch(/Only 4 images fit in one message/);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Remove image' })[0]!);
+    expect(screen.getByTestId('suite-assistant-attachments').querySelectorAll('img')).toHaveLength(3);
+  });
+
+  it('leaves a text paste to the box', async () => {
+    serve([{ id: 'a1', accountId: 'acc1', displayName: 'Ada', mode: 'personal', self: true }]);
+    render(<SuiteAssistant organizationId="org1" page="home" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Open Assistant' }));
+    fireEvent.paste(screen.getByTestId('suite-assistant-input'), { clipboardData: { items: [{ kind: 'string', getAsFile: () => null }], files: [], types: ['text/plain'] } });
+    expect(screen.queryByTestId('suite-assistant-attachments')).toBeNull();
   });
 });

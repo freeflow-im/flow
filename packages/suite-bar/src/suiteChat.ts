@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 export const HOME_CHAT = 'home';
 
 export type ChatItem =
-  | { kind: 'user'; text: string }
+  | { kind: 'user'; text: string; /** data: URLs of the images sent with it */ images?: string[] }
   | { kind: 'assistant'; text: string }
   | { kind: 'tool'; id: string; name: string; status: 'running' | 'ok' | 'error'; error?: string; result?: string };
 
@@ -73,12 +73,13 @@ export function useSuiteAssistant(org: string | null, agent: string | null = nul
     return () => { live = false; };
   }, [org, agent, loads]);
 
-  const send = useCallback((text: string) => {
+  /** Sends a message, with images (pasted screenshots, lib/chatImages.ts) when there are some. */
+  const send = useCallback((text: string, images: { mediaType: string; data: string }[] = []) => {
     const message = text.trim();
-    if (!message || abortRef.current) return;
+    if ((!message && !images.length) || abortRef.current) return;
     const abort = new AbortController();
     abortRef.current = abort;
-    setItems((prev) => [...prev, { kind: 'user', text: message }]);
+    setItems((prev) => [...prev, { kind: 'user', text: message, ...(images.length ? { images: images.map((i) => `data:${i.mediaType};base64,${i.data}`) } : {}) }]);
     setError(null);
     setRunning(true);
     const appendText = (t: string) => setItems((prev) => {
@@ -88,7 +89,7 @@ export function useSuiteAssistant(org: string | null, agent: string | null = nul
     const setTool = (id: string, status: 'ok' | 'error', err?: string, result?: string) => setItems((prev) => prev.map((i) => (i.kind === 'tool' && i.id === id ? { ...i, status, ...(err ? { error: err } : {}), ...(result !== undefined ? { result } : {}) } : i)));
     void (async () => {
       const whose = { ...(org ? { workspace: org } : {}), ...(agent ? { agent } : {}) };
-      let body: Record<string, unknown> = { message, context: { page: 'home', ...contextRef.current }, scope: HOME_CHAT, ...whose };
+      let body: Record<string, unknown> = { message, context: { page: 'home', ...contextRef.current }, scope: HOME_CHAT, ...whose, ...(images.length ? { images: images.map(({ mediaType, data }) => ({ mediaType, data })) } : {}) };
       try {
         for (;;) {
           const res = await fetch(withOrg('/api/agent/turn', org), { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Timezone': zone() }, body: JSON.stringify(body), signal: abort.signal });
