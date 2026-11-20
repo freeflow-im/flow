@@ -305,6 +305,15 @@ account id in an event's `about` can wake that agent (§5.1). `picture` is a pat
 (`/__freeflow/avatars/<key>`), which serves the suite's avatar to the app's viewer, and only for an app that declares
 `members:read`: the screen's origin cannot reach the suite's signed-in avatar route.
 
+`files:read` (2026-11-20): a Chat file by its id, the id an agent sees in a message's attachments. `ctx.chat.file(id)`
+gives `{ id, name, type, size, width, height }`; `ctx.files.copyFromChat(id, key?)` copies the bytes into the app's own
+files (key `chat/<id>` unless it names one) and returns the same facts with the key. Both act as the caller through
+Chat's own file check (`requireFileAccess`), so a file the caller cannot open is "file not found". The app keeps a
+**copy**, not a reference: its screen shows the copy to whoever may see the app, with no second check against Chat, and
+the copy stays when the Chat message or file is deleted (it goes with the app's other files, §8). This is how an agent
+attaches a picture someone posted (`attach_image({ task_id, file_id })`) without base64 in the tool call and without the
+app fetching a URL.
+
 ### 6.4 The SDK
 
 `@freeflow/app-sdk`, published from this repository the way the bridge is:

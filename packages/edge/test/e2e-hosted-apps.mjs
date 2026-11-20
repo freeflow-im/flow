@@ -510,5 +510,71 @@ await api(O.token, 'PUT', `/v1/workspaces/${A}/apps/crew`, { version: r.j.versio
 r = await call(U.token, A, 'crew__people', {});
 t('without members:read in its uses, the app cannot list members', r.j.ok === false && /does not declare "members:read"/.test(r.j.error), JSON.stringify(r.j));
 
+
+// --- files:read: a Chat file by its id (user-apps.md §6.3) ----------------------------------------------------------------
+/** Olga posts a file in a channel; back comes its id, as an agent sees it in the message's attachments. */
+async function chatFile(channel, name, type, bytes) {
+  let x = await api(O.token, 'POST', `/v1/workspaces/${A}/files/presign`, { channelId: channel, filename: name, name, mimeType: type, sizeBytes: bytes.length });
+  const f = x.j.file;
+  await fetch(B + x.j.upload.url, { method: 'PUT', headers: { authorization: 'Bearer ' + O.token, 'content-type': type }, body: bytes });
+  await api(O.token, 'POST', `/v1/files/${f.id}/complete`);
+  x = await api(O.token, 'POST', `/v1/channels/${channel}/messages`, { clientMsgId: crypto.randomUUID(), body: 'a picture', fileIds: [f.id] });
+  return x.s === 201 ? f.id : null;
+}
+r = await api(O.token, 'POST', `/v1/workspaces/${A}/channels`, { name: `secret-${tag}`, isPrivate: true });
+const secret = r.j.id;
+const pic = pngOf(8, 8);
+const openPic = await chatFile(general, 'board.png', 'image/png', pic);
+const secretPic = await chatFile(secret, 'secret.png', 'image/png', pngOf(4, 4));
+t('Olga posts a picture in #general and one in her private channel', openPic && secretPic, JSON.stringify([openPic, secretPic]));
+const clipsManifest = (uses = ['files:read']) => ({
+  name: 'clips', label: 'Clips', server: { hosted: true }, ui: { hosted: true }, uses,
+  scopes: [{ id: 'clips:use', label: 'Use it', read: true }],
+  tools: [
+    { name: 'info', description: 'A Chat file.', input: { type: 'object', properties: { file_id: { type: 'string' } } }, scopes: ['clips:use'] },
+    { name: 'attach', description: 'Keeps a copy.', input: { type: 'object', properties: { file_id: { type: 'string' }, key: { type: 'string' } } }, scopes: ['clips:use'] },
+  ],
+});
+const clipsServer = `import { defineApp } from 'freeflow';
+export default defineApp({
+  tools: {
+    info: async (input, ctx) => ctx.chat.file(input.file_id),
+    attach: async (input, ctx) => {
+      const c = await ctx.files.copyFromChat(input.file_id, input.key);
+      const f = await ctx.files.get(c.key);
+      return { ...c, stored: f.size, storedType: f.type, first: Array.from(new Uint8Array(f.data).slice(0, 4)) };
+    },
+  },
+  routes: { 'GET /api/files/*': async (request, ctx) => ctx.files.response(new URL(request.url).pathname.slice('/api/files/'.length)) },
+});`;
+const clipsFiles = { 'server.js': b64(clipsServer), 'ui/index.html': b64('<h1>Clips</h1>') };
+r = await api(O.token, 'POST', `/v1/workspaces/${A}/apps/versions`, { manifest: clipsManifest(), files: clipsFiles });
+r = await api(O.token, 'POST', `/v1/workspaces/${A}/apps`, { name: 'clips', version: r.j.version, grants: { members: true, accounts: [] } });
+t('an app that declares files:read installs', r.s === 201, JSON.stringify(r.j).slice(0, 160));
+r = await call(U.token, A, 'clips__info', { file_id: openPic });
+t("it reads a Chat file's facts by id, as Uma", r.j.ok && r.j.result.id === openPic && r.j.result.name === 'board.png' && r.j.result.type === 'image/png' && r.j.result.size === pic.length, JSON.stringify(r.j).slice(0, 200));
+r = await call(U.token, A, 'clips__attach', { file_id: openPic });
+t('and copies it into its own files, under chat/<id> by default', r.j.ok && r.j.result.key === `chat/${openPic}` && r.j.result.stored === pic.length && r.j.result.storedType === 'image/png' && r.j.result.first.join() === '137,80,78,71', JSON.stringify(r.j).slice(0, 220));
+r = await call(U.token, A, 'clips__attach', { file_id: openPic, key: 'tasks/7/board.png' });
+t('or under a key it names', r.j.ok && r.j.result.key === 'tasks/7/board.png', JSON.stringify(r.j).slice(0, 160));
+r = await call(U.token, A, 'clips__attach', { file_id: openPic, key: '../escape' });
+t('never under a key outside its files', r.j.ok === false && /file key/.test(r.j.error), JSON.stringify(r.j).slice(0, 160));
+r = await call(U.token, A, 'clips__info', { file_id: secretPic });
+t('Uma cannot read a file in a channel she is not in', r.j.ok === false && /file not found/.test(r.j.error), JSON.stringify(r.j).slice(0, 160));
+r = await call(U.token, A, 'clips__attach', { file_id: secretPic });
+t('nor copy it', r.j.ok === false && /file not found/.test(r.j.error), JSON.stringify(r.j).slice(0, 160));
+r = await call(O.token, A, 'clips__info', { file_id: secretPic });
+t('Olga can', r.j.ok && r.j.result.name === 'secret.png', JSON.stringify(r.j).slice(0, 160));
+r = await call(U.token, A, 'clips__info', { file_id: 'no-such-file' });
+t('an unknown id is not found', r.j.ok === false && /file not found/.test(r.j.error), JSON.stringify(r.j).slice(0, 160));
+r = await api(P.token, 'POST', `/v1/workspaces/${Bo}/apps/versions`, { manifest: clipsManifest(), files: clipsFiles });
+await api(P.token, 'POST', `/v1/workspaces/${Bo}/apps`, { name: 'clips', version: r.j.version, grants: { members: true, accounts: [] } });
+r = await call(P.token, Bo, 'clips__info', { file_id: openPic });
+t("another organization's install cannot read Acme's file", r.j.ok === false && /file not found/.test(r.j.error), JSON.stringify(r.j).slice(0, 160));
+r = await api(O.token, 'POST', `/v1/workspaces/${A}/apps/versions`, { manifest: clipsManifest([]), files: clipsFiles });
+await api(O.token, 'PUT', `/v1/workspaces/${A}/apps/clips`, { version: r.j.version, grants: { members: true, accounts: [] } });
+r = await call(U.token, A, 'clips__info', { file_id: openPic });
+t('without files:read in its uses, the app cannot read Chat files', r.j.ok === false && /does not declare "files:read"/.test(r.j.error), JSON.stringify(r.j));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
