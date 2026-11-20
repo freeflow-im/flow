@@ -2,7 +2,9 @@
 // Notification API raises one banner for it, once across every open Flow tab: the first tab to claim the alert's id
 // (under a Web Lock, in localStorage) shows it, the others do not. Clicking the banner focuses the tab and opens the
 // meeting's Join link. Permission is asked only from a click (the account menu's row, the alert card's button), never
-// on page load. The desktop shell grants it itself, and its banners are the OS's own.
+// on page load. The desktop shell grants it itself, and its banners are the OS's own. Once allowed, the account menu's
+// row switches them off and on for Flow alone (a per-browser choice, kept in localStorage), since a site cannot take
+// back the browser's permission.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SuiteAlert } from './alerts';
 
@@ -31,6 +33,34 @@ export function useDesktopPermission(): [DesktopPermission, () => void] {
     void asked?.then(done, () => undefined);
   }, []);
   return [permission, ask];
+}
+
+const OFF_KEY = 'suite-desktop-notify-off';
+
+const readOff = (): boolean => {
+  try {
+    return localStorage.getItem(OFF_KEY) === '1';
+  } catch {
+    return false;
+  }
+};
+
+/** Whether the person switched Flow's desktop notifications off in this browser, and the switch; every tab follows. */
+export function useDesktopOff(): [boolean, (off: boolean) => void] {
+  const [off, setOff] = useState(readOff);
+  useEffect(() => {
+    const again = (e: StorageEvent) => { if (e.key === OFF_KEY || e.key === null) setOff(readOff()); };
+    window.addEventListener('storage', again);
+    return () => window.removeEventListener('storage', again);
+  }, []);
+  const set = useCallback((next: boolean) => {
+    try {
+      if (next) localStorage.setItem(OFF_KEY, '1');
+      else localStorage.removeItem(OFF_KEY);
+    } catch { /* storage unavailable: this tab alone */ }
+    setOff(next);
+  }, []);
+  return [off, set];
 }
 
 // ---- once across tabs ----
@@ -91,16 +121,16 @@ export function showAlertNotification(alert: SuiteAlert): Notification | null {
 }
 
 /**
- * Raise a desktop notification for each alert as it appears, once across tabs, while permission is granted; take a
- * banner down when its alert goes (closed in any tab, or its time is over).
+ * Raise a desktop notification for each alert as it appears, once across tabs, while permission is granted and the
+ * person has not switched them `off`; take a banner down when its alert goes (closed in any tab, or its time is over).
  */
-export function useAlertNotifications(alerts: readonly SuiteAlert[], permission: DesktopPermission): void {
+export function useAlertNotifications(alerts: readonly SuiteAlert[], permission: DesktopPermission, off = false): void {
   const tried = useRef(new Set<string>());
   const shown = useRef(new Map<string, Notification>());
   useEffect(() => {
     const ids = new Set(alerts.map((a) => a.id));
     for (const [id, banner] of shown.current) if (!ids.has(id)) { banner.close(); shown.current.delete(id); }
-    if (permission !== 'granted') return;
+    if (permission !== 'granted' || off) return;
     for (const alert of alerts) {
       if (tried.current.has(alert.id)) continue;
       tried.current.add(alert.id);
@@ -110,5 +140,5 @@ export function useAlertNotifications(alerts: readonly SuiteAlert[], permission:
         if (banner) shown.current.set(alert.id, banner);
       });
     }
-  }, [alerts, permission]);
+  }, [alerts, permission, off]);
 }

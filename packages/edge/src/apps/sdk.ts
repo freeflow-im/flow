@@ -10,10 +10,12 @@
 //
 // ctx.caller   who is calling: { accountId, userId, displayName, kind, scopes, ... } (the tool's caller, or the viewer)
 // ctx.db       the app's SQLite here: all(sql, ...params), one(sql, ...params), run(sql, ...params), batch([{ sql, params }])
-// ctx.files    put(key, data, { type }), get(key), delete(key), list(prefix), response(key): the app's files in R2
+// ctx.files    put(key, data, { type }), get(key), delete(key), list(prefix), response(key): the app's files in R2;
+//              copyFromChat(fileId, key?): a copy of a Chat file the caller may open (needs "files:read")
 // ctx.publish  publish(type, data, { ref: { kind, id }, about: [accountId] }): one of the manifest's events
 // ctx.docs     read(path): a Docs read path as the caller (needs "docs:read" in uses)
-// ctx.chat     post(channelId, text): a message as the caller (needs "chat:write" in uses)
+// ctx.chat     post(channelId, text): a message as the caller (needs "chat:write" in uses);
+//              file(fileId): a Chat file's name, type and size, if the caller may open it (needs "files:read")
 // ctx.members  list(), search(text): the organization's people and agents as the caller sees them (needs "members:read")
 
 /** The module's name in the app's isolate: `import { defineApp } from 'freeflow'`. */
@@ -45,6 +47,8 @@ function makeCtx(env, caller) {
     get: (key) => env.FILES.get(String(key)),
     delete: (key) => env.FILES.delete(String(key)),
     list: (prefix = '') => env.FILES.list(String(prefix)),
+    // A Chat file the caller may open, by its id, copied into the app's files: { key, id, name, type, size, width, height }.
+    copyFromChat: (fileId, key) => env.SUITE.copyChatFile(ticket, String(fileId), key === undefined ? undefined : String(key)),
     // The file as a Response for the screen (a route that shows an image), or 404.
     response: async (key) => {
       const f = await env.FILES.get(String(key));
@@ -57,7 +61,7 @@ function makeCtx(env, caller) {
     files,
     publish: (type, data, opts = {}) => env.SUITE.publish(type, data ?? null, opts.ref, opts.about),
     docs: { read: (path) => env.SUITE.readDocs(ticket, path) },
-    chat: { post: (channelId, text) => env.SUITE.postMessage(ticket, channelId, text) },
+    chat: { post: (channelId, text) => env.SUITE.postMessage(ticket, channelId, text), file: (fileId) => env.SUITE.chatFile(ticket, String(fileId)) },
     members: { list: () => env.SUITE.members(ticket), search: (text) => env.SUITE.members(ticket, String(text ?? '')) },
   };
 }
@@ -138,6 +142,7 @@ export const FREEFLOW_SDK_DOC = `A hosted app's server.js is one ES module, run 
 ctx.caller: { accountId, userId, displayName, kind, scopes } of who called the tool or is viewing the screen.
 ctx.db: all(sql, ...params) → rows; one(sql, ...params) → a row or null; run(sql, ...params); batch([{ sql, params }]) in one transaction. The tables come from migrations/NNNN_name.sql, applied once each in order.
 ctx.files: the app's own file storage (images, attachments, any upload). put(key, data, { type }) takes a File or Blob (from request.formData()), an ArrayBuffer or text; get(key) → { data, type, size } or null; delete(key); list(prefix) → [{ key, size, type }]; response(key) → a Response to return from a route. At most 10 MB a file. Keep the key in the database row (e.g. 'tasks/42/photo.png'); never put file contents in the database. The screen uploads with fetch('api/...', { method: 'POST', body: formData }) to a route that calls ctx.files.put, and shows a file with <img src="api/files/..."> from a route that returns ctx.files.response(key). Nothing is public: routes check who is looking.
+Chat files (uses "files:read"): a person or agent names a file in Chat by its id (an agent sees it in a message as [attachments: <id> "photo.png" ...]). ctx.chat.file(fileId) → { id, name, type, size, width, height } (width and height for an image, else null). ctx.files.copyFromChat(fileId, key?) copies it into the app's own files (key defaults to 'chat/<fileId>') and returns those facts with its key; keep the key in the row and show it like any other file. Both act as the caller: a file the caller cannot open is 'file not found'. The copy is the app's: it stays if the Chat message is deleted, and anyone who may see the app's screen sees it. For an image tool, attach_image({ task_id, file_id }): const f = await ctx.chat.file(input.file_id); if (!f.type.startsWith('image/')) throw new Error('not an image'); const c = await ctx.files.copyFromChat(input.file_id, 'tasks/' + input.task_id + '/' + f.id); then keep c.key on the task.
 ctx.publish(type, data, { ref: { kind, id }, about: [accountId] }): one of the manifest's events; "about" makes a self subscription wake that account.
 ctx.docs.read(path) (uses "docs:read") and ctx.chat.post(channelId, text) (uses "chat:write") act as the caller.
 ctx.members.list() and ctx.members.search(text) (uses "members:read"): the organization's people and agents as the caller sees them in Chat, no guests and no email addresses: [{ accountId, displayName, picture, kind: 'person' | 'agent' }], by name. For an assignee picker: keep the accountId; ctx.publish(..., { about: [accountId] }) can wake an assigned agent. picture is a URL the screen can show in <img> as it is, or null.
@@ -159,7 +164,7 @@ export const FREEFLOW_MANIFEST_DOC = `freeflow-app.json, the manifest of a hoste
   "tools": [{ "name": "list_tasks", "description": "What it does and when to use it.",
               "input": { "type": "object", "properties": { "status": { "type": "string" } } }, "scopes": ["tasks:read"] }],
   "events": ["task.created", "task.assigned"],                what it publishes with ctx.publish
-  "uses": ["docs:read", "chat:write", "members:read"],        optional: what of FreeFlow it uses, as its caller
+  "uses": ["docs:read", "chat:write", "members:read", "files:read"],  optional: what of FreeFlow it uses, as its caller
   "egress": ["api.example.com"]                               optional: the only hosts its server may fetch
 }
 Files: server.js (one ES module, with the SDK), migrations/0001_name.sql (applied once each in order; add a new file for a change, never edit an applied one), ui/index.html and other ui/ files.`;

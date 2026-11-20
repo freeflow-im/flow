@@ -40,7 +40,7 @@ import {
   type AppCallerContext, type AgentForApp, type AppGrants, type AppHolder, type AppSource, type AppToolAnswer, type AppUpload, type OfferedAppTool,
 } from './services/userApps';
 import { APP_SESSION_SECONDS, mintUserAppToken, signAppSession, signAppTicket, verifyAppSession, verifyAppTicket, verifyBody, verifyUserAppToken, type AppSession, type AppTicket } from './lib/appSigning';
-import { appOrigin, callHostedTool, devHostLabel, draftWorker, filesPrefix, hostedWorker, storeName, type HostedEnv, type HostedExports } from '../apps/hosted';
+import { appOrigin, callHostedTool, devHostLabel, draftWorker, filesPrefix, hostedWorker, storeName, type AppChatFile, type HostedEnv, type HostedExports } from '../apps/hosted';
 import { BUILDING_APP, BUILDING_GUIDE, BUILDING_LABEL, BUILDING_TOOLS } from '../apps/buildingTools';
 import { createDraft, deleteDraft, deleteDraftFile, draftByDevHost, draftCode, getDraft, listDrafts, readDraftFile, writeDraftFile, type AppDraftDTO } from './services/appDrafts';
 
@@ -1355,6 +1355,29 @@ export class Org extends DurableObject<OrgEnv> {
     const adminAgentId = await this.adminAgentId();
     const members = await withDb(this.db, () => appMembers({ organizationId: p.organizationId, callerUserId: who.docs.userId, adminAgentId, ...(p.search !== undefined ? { search: p.search } : {}) }));
     return { ok: true, members };
+  }
+
+  /**
+   * A hosted app reads a Chat file by its id as its caller (§6.3, `files:read`): Chat's own access check, so only a file
+   * the caller may open. Back come its facts and, with `data`, its bytes (at most `maxBytes`), for the app to keep a copy.
+   */
+  async chatFileForAppCaller(p: { organizationId: string; name: string; ticket: string; fileId: string; data?: boolean; maxBytes?: number; dev?: string }): Promise<{ ok: true; file: AppChatFile; data?: ArrayBuffer } | { ok: false; error: string }> {
+    const who = await this.appSuiteCaller({ organizationId: p.organizationId, name: p.name, ticket: p.ticket, use: 'files:read', ...(p.dev ? { dev: p.dev } : {}) });
+    if (!who.ok) return who;
+    if (!/^[A-Za-z0-9_-]{1,80}$/.test(p.fileId)) return { ok: false, error: 'file not found' };
+    try {
+      return await this.scoped(async () => {
+        const { requireFileAccess, readBlob } = await import('./services/files');
+        const f = await requireFileAccess(p.fileId, who.docs.userId);
+        const file: AppChatFile = { id: f.id, name: f.name, type: f.mimeType, size: f.sizeBytes, width: f.width ?? null, height: f.height ?? null };
+        if (!p.data) return { ok: true as const, file };
+        if (p.maxBytes !== undefined && f.sizeBytes > p.maxBytes) return { ok: false as const, error: `the file is ${f.sizeBytes} bytes; an app's file is at most ${p.maxBytes}` };
+        const bytes = await readBlob(f.storageKey, f.encKeyId);
+        return { ok: true as const, file, data: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer };
+      });
+    } catch (err) {
+      return { ok: false, error: (err as Error).message || 'file not found' };
+    }
   }
 
   /** Where an app's image icon is kept (§4): the installed version's, or `version`'s. */

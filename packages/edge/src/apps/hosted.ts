@@ -154,25 +154,38 @@ const DOCS_READ = /^\/api\/(files\/[A-Za-z0-9_-]{1,80}\/(text|meta)|(docs|sheets
 /** One file as the app gets it back. */
 export interface AppFile { data: ArrayBuffer; type: string; size: number }
 
+/** A file's full key in R2 under the install's prefix; throws on a key the app may not use. */
+function fileKeyOf(env: HostedEnv, props: AppProps, key: string): string {
+  if (typeof key !== 'string' || !FILE_KEY.test(key)) throw new Error('a file key is letters, digits and . _ - /, at most 300, not starting with /');
+  if (!env.BLOBS) throw new Error('this server has no file storage');
+  return filesPrefix(props) + key;
+}
+
+/** Writes one of the install's files (§8), within its limits: AppFiles.put, and AppSuite's copy of a Chat file. */
+async function putAppFile(env: HostedEnv, props: AppProps, key: string, data: ArrayBuffer | ArrayBufferView | string, type: string): Promise<{ key: string; size: number }> {
+  const full = fileKeyOf(env, props, key);
+  const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  if (bytes.byteLength > APP_FILE_MAX_BYTES) throw new Error(`a file is at most ${APP_FILE_MAX_BYTES} bytes`);
+  const kind = String(type).slice(0, 100) || 'application/octet-stream';
+  if (!(await storeOf(env, props).fileWillPut(key, bytes.byteLength, kind))) throw new Error('this app has used its 10 GB of files here');
+  await env.BLOBS!.put(full, bytes, { httpMetadata: { contentType: kind } });
+  return { key, size: bytes.byteLength };
+}
+
+/** A Chat file as a hosted app sees it (`files:read`): its id, name, type, size, and an image's size in pixels. */
+export interface AppChatFile { id: string; name: string; type: string; size: number; width: number | null; height: number | null }
+
 /**
  * The app's `env.FILES` (§8): files in R2 under its install's prefix, at most 10 MB each and 10 GB in all. The app's screen
  * uploads and shows them through its own routes, which check who is looking; nothing here is public.
  */
 export class AppFiles extends WorkerEntrypoint<HostedEnv, AppProps> {
   private check(key: string): string {
-    if (typeof key !== 'string' || !FILE_KEY.test(key)) throw new Error('a file key is letters, digits and . _ - /, at most 300, not starting with /');
-    if (!this.env.BLOBS) throw new Error('this server has no file storage');
-    return filesPrefix(this.ctx.props) + key;
+    return fileKeyOf(this.env, this.ctx.props, key);
   }
 
-  async put(key: string, data: ArrayBuffer | ArrayBufferView | string, type = 'application/octet-stream'): Promise<{ key: string; size: number }> {
-    const full = this.check(key);
-    const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-    if (bytes.byteLength > APP_FILE_MAX_BYTES) throw new Error(`a file is at most ${APP_FILE_MAX_BYTES} bytes`);
-    const kind = String(type).slice(0, 100) || 'application/octet-stream';
-    if (!(await storeOf(this.env, this.ctx.props).fileWillPut(key, bytes.byteLength, kind))) throw new Error('this app has used its 10 GB of files here');
-    await this.env.BLOBS!.put(full, bytes, { httpMetadata: { contentType: kind } });
-    return { key, size: bytes.byteLength };
+  put(key: string, data: ArrayBuffer | ArrayBufferView | string, type = 'application/octet-stream'): Promise<{ key: string; size: number }> {
+    return putAppFile(this.env, this.ctx.props, key, data, type);
   }
 
   async get(key: string): Promise<AppFile | null> {
@@ -225,6 +238,28 @@ export class AppSuite extends WorkerEntrypoint<HostedEnv, AppProps> {
     const r = await this.org().membersForAppCaller({ organizationId: this.ctx.props.org, name: this.ctx.props.app, ticket, ...(typeof search === 'string' ? { search: search.slice(0, 100) } : {}), ...(this.ctx.props.dev ? { dev: this.ctx.props.dev } : {}) });
     if (!r.ok) throw new Error(r.error);
     return r.members;
+  }
+
+  /** `files:read`: a Chat file's facts by its id (the id an agent sees in a message's attachments), as the caller. */
+  async chatFile(ticket: string, fileId: string): Promise<AppChatFile> {
+    const r = await this.org().chatFileForAppCaller({ organizationId: this.ctx.props.org, name: this.ctx.props.app, ticket, fileId: String(fileId), ...(this.ctx.props.dev ? { dev: this.ctx.props.dev } : {}) });
+    if (!r.ok) throw new Error(r.error);
+    return r.file;
+  }
+
+  /**
+   * `files:read`: copies a Chat file the caller may open into the app's own files under `key` (by default
+   * `chat/<file id>`). The copy is the app's from then on: its screen shows it under the app's rules, and it stays when
+   * the Chat message or file is deleted.
+   */
+  async copyChatFile(ticket: string, fileId: string, key?: string): Promise<AppChatFile & { key: string }> {
+    const id = String(fileId);
+    const to = key === undefined || key === null || key === '' ? `chat/${id}` : String(key);
+    fileKeyOf(this.env, this.ctx.props, to);
+    const r = await this.org().chatFileForAppCaller({ organizationId: this.ctx.props.org, name: this.ctx.props.app, ticket, fileId: id, data: true, maxBytes: APP_FILE_MAX_BYTES, ...(this.ctx.props.dev ? { dev: this.ctx.props.dev } : {}) });
+    if (!r.ok) throw new Error(r.error);
+    await putAppFile(this.env, this.ctx.props, to, r.data!, r.file.type);
+    return { ...r.file, key: to };
   }
 
   async publish(type: string, data?: unknown, ref?: { kind: string; id: string }, about?: string[]): Promise<{ id: string }> {
