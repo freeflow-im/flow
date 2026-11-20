@@ -128,3 +128,32 @@ describe('tables on a slide', () => {
     expect(ctl.tableCell).toBeNull();
   });
 });
+
+describe('a pasted picture getting its stored address after its upload', () => {
+  const src = (ctl: DeckController, id: string) => (ctl.deck.slides.flatMap((s) => s.elements).find((e) => e.id === id) as { src?: string } | undefined)?.src;
+
+  it('takes the address everywhere, undo and redo included, without a step of its own', () => {
+    const ctl = new DeckController(newDeck(), async () => {});
+    const id = ctl.addImage('blob:local', { w: 400, h: 300 });
+    ctl.addText(); // the user goes on working while the picture uploads
+    ctl.undo();
+    expect(ctl.store.rewriteElements((el) => (el.type === 'image' && el.src === 'blob:local' ? { ...el, src: '/api/images/up' } : el))).toBe(true);
+    expect(src(ctl, id)).toBe('/api/images/up');
+    ctl.undo();
+    expect(src(ctl, id)).toBeUndefined();
+    ctl.redo();
+    expect(src(ctl, id)).toBe('/api/images/up');
+    ctl.redo();
+    expect(ctl.slide.elements.some((e) => e.type === 'text')).toBe(true);
+  });
+
+  it('drops the picture everywhere when the upload failed', () => {
+    const ctl = new DeckController(newDeck(), async () => {});
+    const id = ctl.addImage('blob:local');
+    ctl.store.rewriteElements((el) => (el.type === 'image' && el.src === 'blob:local' ? null : el));
+    expect(src(ctl, id)).toBeUndefined();
+    ctl.undo();
+    ctl.redo();
+    expect(src(ctl, id)).toBeUndefined();
+  });
+});

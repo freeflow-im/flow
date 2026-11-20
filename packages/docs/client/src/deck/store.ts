@@ -1,7 +1,7 @@
 // Deck state with patch-based undo/redo, mirroring WorkbookStore. Unlike the workbook (mutated in place for
 // speed), the deck is small and replaced immutably on every change, so React components can compare by
 // reference. An undo step records whole slides before and after, which keeps the patch set tiny.
-import { migrateArcs, type Deck, type Slide, type ThemeId } from '../../../shared/deck.ts';
+import { migrateArcs, type Deck, type Slide, type SlideElement, type ThemeId } from '../../../shared/deck.ts';
 import { reconnectLines } from '../../../shared/lines.ts';
 import { newPptxGap } from '../../../shared/pptxFormat.ts';
 import { TransactionRefused } from '../state/store.ts';
@@ -163,6 +163,34 @@ export class DeckStore<M = unknown> {
     if (!tx.patches.length) return false;
     const top = this.undoStack[this.undoStack.length - 1];
     if (top && !this.redoStack.length) top.patches.push(...tx.patches);
+    this.emit();
+    return true;
+  }
+
+  /**
+   * Change elements in the deck and in every undo and redo step, as if they had always been so, without a step of
+   * its own: a pasted picture shown from the browser's copy gets its stored address when its upload finishes
+   * (null drops the element, when the upload failed). Saves like any change.
+   */
+  rewriteElements(fn: (el: SlideElement) => SlideElement | null): boolean {
+    const slide = (s: Slide | undefined): Slide | undefined => {
+      if (!s) return s;
+      let changed = false;
+      const elements: SlideElement[] = [];
+      for (const el of s.elements) {
+        const next = fn(el);
+        if (next !== el) changed = true;
+        if (next) elements.push(next);
+      }
+      return changed ? { ...s, elements } : s;
+    };
+    const before = this.deck;
+    const slides = this.deck.slides.map((s) => slide(s)!);
+    if (slides.some((s, i) => s !== before.slides[i])) this.deck = { ...this.deck, slides };
+    for (const e of [...this.undoStack, ...this.redoStack]) {
+      e.patches = e.patches.map((p) => (p.k === 'slide' ? { ...p, before: slide(p.before), after: slide(p.after) } : p));
+    }
+    if (this.deck === before) return false;
     this.emit();
     return true;
   }

@@ -3,14 +3,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { nameWithExt } from '../../../shared/docNames.ts';
-import type { Deck } from '../../../shared/deck.ts';
+import type { Deck, SlideElement } from '../../../shared/deck.ts';
 import type { SheetMeta } from '../../../shared/types.ts';
 import { BOARD_H, BOARD_W, boardAsDeck, deckAsBoard, GRID } from '../../../shared/whiteboard.ts';
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { useRegisterWhiteboard } from '../agent/AgentProvider.tsx';
 import { api, ApiError } from '../api.ts';
 import { useAuth } from '../auth.tsx';
-import { uploadImageFile, pickImageFile } from '../cellImage.ts';
+import { imageFileProblem, uploadImageFile, pickImageFile } from '../cellImage.ts';
 import { isMac, MOD } from '../commands.ts';
 import { Account } from '../components/Account.tsx';
 import { FavoriteStar } from '../components/FavoriteStar.tsx';
@@ -45,6 +45,13 @@ function imageSize(src: string): Promise<{ w: number; h: number } | undefined> {
   });
 }
 
+/** A picture shown from the browser's copy while it uploads (addImageFiles): not saved until it has its stored address. */
+const isPending = (el: SlideElement) => el.type === 'image' && el.src.startsWith('blob:');
+const savedBoard = (d: Deck) => {
+  const board = deckAsBoard(d);
+  return board.elements.some(isPending) ? { ...board, elements: board.elements.filter((el) => !isPending(el)) } : board;
+};
+
 const isTyping = (t: EventTarget | null) => t instanceof HTMLElement && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
 
 export function WhiteboardPage() {
@@ -62,7 +69,7 @@ export function WhiteboardPage() {
         if (cancelled) return;
         // Saves name the revision loaded, and the editor follows saves made elsewhere (revisionSync.ts).
         const sync = new RevisionSync<Deck>(meta.id, meta.updatedAt, {
-          save: (d, rev) => api.saveWhiteboard(meta.id, deckAsBoard(d), rev),
+          save: (d, rev) => api.saveWhiteboard(meta.id, savedBoard(d), rev),
           load: async () => {
             const latest = await api.getWhiteboard(meta.id);
             return { meta: latest.meta, doc: boardAsDeck(latest.board) };
@@ -156,14 +163,27 @@ function WhiteboardWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMet
 
   const addImageFiles = useCallback(
     async (files: File[]) => {
+      // Each picture shows at once, from the browser's copy and at its own size; its upload runs behind it, and
+      // the stored address takes the copy's place everywhere (undo steps too) when it is done.
       for (const file of files.slice(0, 10)) {
-        try {
-          const url = await uploadImageFile(file);
-          ctl.setPlace(null);
-          ctl.addImage(url, await imageSize(url));
-        } catch (e) {
-          notify(e instanceof Error ? e.message : String(e));
+        const problem = imageFileProblem(file);
+        if (problem) {
+          notify(problem);
+          continue;
         }
+        const local = URL.createObjectURL(file);
+        ctl.setPlace(null);
+        ctl.addImage(local, await imageSize(local));
+        uploadImageFile(file)
+          .then(async (url) => {
+            await imageSize(url); // loaded before the swap, so the picture does not blink
+            ctl.store.rewriteElements((el) => (el.type === 'image' && el.src === local ? { ...el, src: url } : el));
+          })
+          .catch((e: unknown) => {
+            ctl.store.rewriteElements((el) => (el.type === 'image' && el.src === local ? null : el));
+            notify(e instanceof Error ? e.message : String(e));
+          })
+          .finally(() => setTimeout(() => URL.revokeObjectURL(local), 5000));
       }
     },
     [ctl, notify],
