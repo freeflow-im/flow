@@ -137,7 +137,7 @@ export const APP_MANIFESTS: AppManifest[] = [
       { path: '/mail', html: 'mail.html', signIn: true },
       { path: '/mail/*', html: 'mail.html', signIn: true, passFiles: true },
     ],
-    events: ['mail.received'],
+    events: ['mail.received', 'mail.sent'],
   },
   {
     name: 'calendar',

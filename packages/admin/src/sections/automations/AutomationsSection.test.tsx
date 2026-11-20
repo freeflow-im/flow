@@ -45,7 +45,9 @@ const change = (id: string, value: string) => act(async () => {
   el.dispatchEvent(new Event(el instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }));
 });
 
-async function mount(list: SubscriptionDTO[] = subs) {
+const taskboard = { name: 'taskboard', label: 'Taskboard', events: ['task.created', 'task.updated', 'task.deleted'] };
+
+async function mount(list: SubscriptionDTO[] = subs, apps: typeof taskboard[] = []) {
   api.mockImplementation(async (method: string, path: string) => {
     if (method === 'GET' && path.startsWith('/v1/events/subscriptions')) return { subscriptions: list };
     if (method === 'GET' && path.startsWith('/v1/events/jobs')) {
@@ -54,7 +56,7 @@ async function mount(list: SubscriptionDTO[] = subs) {
     return { ok: true, subscription: {} };
   });
   await act(async () => {
-    root.render(<AutomationsSection workspaceId="w1" members={members} channels={channels} />);
+    root.render(<AutomationsSection workspaceId="w1" members={members} channels={channels} apps={apps} />);
   });
   await flush();
 }
@@ -205,5 +207,41 @@ describe('the new-automation form', () => {
     expect(buildSubscriptionBody({ ...d, freq: 'hourly' }, names).schedule).toEqual({ every: 'hourly', timezone: 'UTC' });
     expect(buildSubscriptionBody({ ...d, freq: 'daily', time: '17:45' }, names).schedule).toEqual({ every: 'daily@17:45', timezone: 'UTC' });
     expect(buildSubscriptionBody({ ...d, freq: 'hourly' }, names).name).toBe('Post in #x every hour');
+  });
+});
+
+describe('the event picker', () => {
+  const groups = () => [...($('automation-type') as HTMLSelectElement).querySelectorAll('optgroup')].map((g) => g.label);
+
+  it('groups every event by the app that publishes it, installed apps included', async () => {
+    await mount([], [taskboard]);
+    expect(groups()).toEqual(expect.arrayContaining(['Chat', 'Mail', 'Calendar', 'Sharing', 'Taskboard (installed app)']));
+    const board = [...($('automation-type') as HTMLSelectElement).querySelectorAll('optgroup[label="Taskboard (installed app)"] option')].map((o) => [o.getAttribute('value'), o.textContent]);
+    expect(board).toEqual([['app.taskboard.task.created', 'Task created'], ['app.taskboard.task.updated', 'Task updated'], ['app.taskboard.task.deleted', 'Task deleted']]);
+    // The default is shown by its name, with its type and app below.
+    expect($('automation-type-source')!.textContent).toBe('From Chat · chat.message.created');
+  });
+
+  it('saves an installed app\'s event by its full type', async () => {
+    await mount([], [taskboard]);
+    await change('automation-type', 'app.taskboard.task.updated');
+    expect($('automation-type-source')!.textContent).toBe('From Taskboard (installed app) · app.taskboard.task.updated');
+    await change('automation-agent', 'acct-botty');
+    await change('automation-prompt', 'Look at {{ref}}');
+    await click('automation-create');
+    await flush();
+    expect(api.mock.calls.find(([m]) => m === 'POST')![2]).toMatchObject({ filter: { types: ['app.taskboard.task.updated'] } });
+  });
+
+  it('takes any type by hand under Other', async () => {
+    await mount([]);
+    await change('automation-type', '__other__');
+    expect($('automation-type-source')).toBeNull();
+    await change('automation-type-other', 'app.crm.deal.won');
+    await change('automation-agent', 'acct-botty');
+    await change('automation-prompt', 'Celebrate');
+    await click('automation-create');
+    await flush();
+    expect(api.mock.calls.find(([m]) => m === 'POST')![2]).toMatchObject({ filter: { types: ['app.crm.deal.won'] } });
   });
 });

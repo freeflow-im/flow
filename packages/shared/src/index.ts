@@ -13,3 +13,4 @@ export * from './callLinks.js';
 export * from './meetingChat.js';
 export * from './mailApproval.js';
 export * from './userApps.js';
+export * from './eventCatalog.js';
