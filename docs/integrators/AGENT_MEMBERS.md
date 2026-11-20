@@ -180,7 +180,8 @@ the same place the profile popup goes.
 | `runtime.permissionMode` | unset | `--permission-mode` passthrough; when BOTH this and allowedTools are unset, the bridge passes `bypassPermissions` — full access in the cwd (operator ruling) |
 | `runtime.allowedTools` | `[]` (= allow everything) | set to scope the agent, e.g. `["Read", "Bash(pnpm test:*)"]` — disables the bypass default |
 | `runtime.maxTurns` | 200 | `--max-turns` runaway cap |
-| `runtime.idleTimeoutSec` | 120 | kill a run after this many seconds with **no output at all**. stream-json narrates every tool call, so a run that is still working keeps rearming this and never expires — silence is what marks a wedged run |
+| `runtime.idleTimeoutSec` | 120 | kill a run after this many seconds with **no output at all** between steps. stream-json narrates every tool call, so a run that is still working keeps rearming this and never expires — silence is what marks a wedged run |
+| `runtime.toolIdleTimeoutSec` | 660 | the same limit while a tool call is running (the CLI prints nothing until the tool returns). Above Claude Code's 10-minute Bash cap, so a hung command ends with the tool's own timeout, which the agent sees |
 | `runtime.timeoutSec` | 3600 | absolute wall-clock backstop per run — the runaway cap, not the normal limit |
 | `runtime.sessionIdleSec` | 600 | the conversation's CLI process is a persistent one; end it after this long with no turn running **and** no background task open. The next message respawns it with `--resume`, so reaping costs context nothing |
 | `runtime.sessionHardCapSec` | 3600 | ceiling on the reprieve an open background task buys, measured from the end of the last turn |

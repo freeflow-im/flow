@@ -232,6 +232,28 @@ describe.skipIf(!posix)('persistent session', () => {
     expect(alive(h.session.pid)).toBe(true); // the session itself is fine
   });
 
+  // The CLI prints nothing while a tool runs: a long build or a slow `gh` must not read as a wedged turn.
+  it('allows the longer tool limit while a tool call is running', async () => {
+    const h = harness({ idleTimeoutSec: 1, toolIdleTimeoutSec: 5 });
+    const result = await h.session.runTurn('tool Bash pnpm test\nwait 2000\nresult\ndone finished');
+    expect(result.ok).toBe(true);
+    expect(result.text).toBe('finished');
+  });
+
+  it('still expires a tool call that hangs past the tool limit', async () => {
+    const h = harness({ idleTimeoutSec: 1, toolIdleTimeoutSec: 2 });
+    const result = await h.session.runTurn('say pushing\ntool Bash gh pr create\nhang');
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe('no output for 2s');
+    expect(result.text).toBe('pushing');
+  });
+
+  it('goes back to the short limit once the tool has returned', async () => {
+    const h = harness({ idleTimeoutSec: 1, toolIdleTimeoutSec: 5 });
+    const result = await h.session.runTurn('tool Bash ls\nresult\nhang');
+    expect(result.error).toBe('no output for 1s');
+  });
+
   // AC 8: the failure reporting a turn already had, unchanged.
   it('reports a max-turns result the way it always did', async () => {
     const h = harness();

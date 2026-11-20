@@ -18,7 +18,7 @@
 // an interrupt that ends the turn without ending the session.
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import type { RuntimeConfig } from './config.js';
+import { idleLimitSec, type RuntimeConfig } from './config.js';
 import {
   StreamJsonParser,
   buildClaudeArgs,
@@ -408,10 +408,8 @@ export class RuntimeSession {
     const turn = this.turn;
     if (!turn || turn.ending) return;
     if (turn.idleTimer) clearTimeout(turn.idleTimer);
-    turn.idleTimer = setTimeout(
-      () => this.endTurnEarly(`no output for ${this.cfg.idleTimeoutSec}s`),
-      this.cfg.idleTimeoutSec * 1000,
-    );
+    const limit = idleLimitSec(this.cfg, this.parser.running.size > 0);
+    turn.idleTimer = setTimeout(() => this.endTurnEarly(`no output for ${limit}s`), limit * 1000);
     turn.idleTimer.unref();
   }
 
@@ -454,8 +452,9 @@ export class RuntimeSession {
       /* the close handler reports a dead CLI */
     });
     child.stdout?.on('data', (d: Buffer) => {
-      this.bumpIdle();
       this.parser.feed(d.toString('utf8'));
+      // After the feed, so a tool call that just started gets the longer limit.
+      this.bumpIdle();
     });
     child.stderr?.on('data', (d: Buffer) => {
       this.bumpIdle();
