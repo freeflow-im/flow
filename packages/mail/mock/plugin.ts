@@ -235,6 +235,8 @@ export function createMockApi(empty = false) {
         for (const x of [...b.messages].sort((x, y) => y.uid - x.uid)) {
           if (x.folder !== folder || x.uid >= before || (category && tabOf(b, x) !== category)) continue;
           const id = ids.get(x)!;
+          // Muted conversations are left out of the inbox, as the server does.
+          if (folder === 'INBOX' && b.muted?.has(id)) continue;
           const all = b.messages.filter((y) => ids.get(y) === id).sort((x, y) => x.date.localeCompare(y.date));
           const row = rows.get(id);
           if (row) {
@@ -245,7 +247,7 @@ export function createMockApi(empty = false) {
           rows.set(id, {
             threadId: id, folder, uid: x.uid, uids: [x.uid], latest, count: all.length, unread: all.filter((y) => !y.seen).length, flagged: all.some((y) => y.flagged),
             participants: all.flatMap((y) => (y.from ? [y.from] : [])).filter((a, i, list) => list.findIndex((o) => o.address === a.address) === i),
-            date: all[all.length - 1]!.date, folders: [...new Set(all.map((y) => y.folder))], ...(latest.category ? { category: latest.category } : {}),
+            date: all[all.length - 1]!.date, folders: [...new Set(all.map((y) => y.folder))], ...(latest.category ? { category: latest.category } : {}), ...(b.muted?.has(id) ? { muted: true as const } : {}),
           });
         }
         const page = [...rows.values()].slice(0, limit);
@@ -260,7 +262,7 @@ export function createMockApi(empty = false) {
         await new Promise((r) => setTimeout(r, 100));
         return {
           status: 200,
-          json: { thread: { threadId: id, messages: all.map((x) => ({ ...x, threadId: id, attachments: x.attachments.map((a, index) => ({ index, filename: a.filename, mimeType: a.mimeType, size: a.bytes.length, contentId: a.contentId, inline: a.inline })) })) } },
+          json: { thread: { threadId: id, muted: !!b.muted?.has(id), messages: all.map((x) => ({ ...x, threadId: id, attachments: x.attachments.map((a, index) => ({ index, filename: a.filename, mimeType: a.mimeType, size: a.bytes.length, contentId: a.contentId, inline: a.inline })) })) } },
         };
       }
       if (rest === 'messages' && method === 'GET') {
@@ -331,6 +333,19 @@ export function createMockApi(empty = false) {
           if (flagged !== undefined) x.flagged = flagged;
         }
         return { status: 200, json: { ok: true } };
+      }
+      // Mute: the conversation leaves INBOX for Archive (its later mail would too); unmute moves nothing back.
+      if ((m = rest.match(/^threads\/(.+)\/mute$/)) && method === 'POST') {
+        const id = decodeURIComponent(m[1]!);
+        const muted = !!(body as { muted?: boolean }).muted;
+        const ids = threadIds(b);
+        b.muted ??= new Set();
+        if (!muted) { b.muted.delete(id); return { status: 200, json: { ok: true, muted, moved: 0 } }; }
+        b.muted.add(id);
+        const archive = b.folders.find((f) => f.specialUse === 'archive')?.path;
+        const moving = archive ? b.messages.filter((x) => x.folder === 'INBOX' && ids.get(x) === id) : [];
+        for (const x of moving) { x.folder = archive!; x.uid = b.nextUid++; }
+        return { status: 200, json: { ok: true, muted, moved: moving.length } };
       }
       if (rest === 'messages/move' || rest === 'messages/delete') {
         const { folder, uids, to } = body as { folder: string; uids: number[]; to?: string };

@@ -107,6 +107,7 @@ export const AccountPatch = z.object({
   tabs: z.array(z.enum(TAB_CATEGORIES)).max(8).optional(),
 });
 const Uids = z.array(z.number().int().positive()).min(1).max(1000);
+export const MuteBody = z.object({ muted: z.boolean() });
 export const FlagsBody = z.object({ folder: z.string().min(1), uids: Uids, seen: z.boolean().optional(), flagged: z.boolean().optional() });
 export const MoveBody = z.object({ folder: z.string().min(1), uids: Uids, to: z.string().min(1) });
 /** "Move to tab": the messages' senders go to `category` from now on. */

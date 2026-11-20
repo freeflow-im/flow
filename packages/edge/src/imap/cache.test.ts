@@ -351,6 +351,36 @@ describe('MailCache threads', () => {
     expect(rows[0].key).toBe('m1@example.com');
   });
 
+  it('mutes a thread: left out of a hidden page, its later mail found, kept through a merge, and unmuted', () => {
+    const cache = cacheWith([withRefs(1, { subject: 'A' }), withRefs(2, { subject: 'B' }), withRefs(3, { subject: 'C' })]);
+    cache.setMarks(A, F, { high: 3, low: 1 });
+    const page = (hide: boolean) => cache.threadPage(A, F, V, Number.MAX_SAFE_INTEGER, 1, 10, undefined, hide).map((p) => p.uid);
+    const a = threadOf(cache, 1)!, b = threadOf(cache, 2)!;
+    cache.setMuted(A, a, true, 5000);
+    cache.setMuted(A, a, true, 6000);
+    expect(cache.mutedOf(A, [a, b])).toEqual(new Set([a]));
+    expect(page(true)).toEqual([3, 2]);
+    expect(page(false)).toEqual([3, 2, 1]);
+    // A reply to the muted thread is found as muted mail of the folder; another thread's is not.
+    cache.insert(A, F, V, [withRefs(4, { subject: 'Re: A', inReplyTo: 1 }), withRefs(5, { subject: 'Re: B', inReplyTo: 2 })], 1000);
+    expect(cache.mutedUids(A, F, [4, 5])).toEqual([4]);
+    expect(cache.mutedUids(A, F)).toEqual([1, 4]);
+    expect(cache.mutedUids(A, 'Archive')).toEqual([]);
+    // A message joining the muted thread with another: the merged thread is muted, under whichever id won.
+    cache.insert(A, F, V, [withRefs(6, { subject: 'Re: A', references: [2, 1] })], 1000);
+    const merged = threadOf(cache, 6)!;
+    expect(threadOf(cache, 2)).toBe(merged);
+    expect(cache.mutedOf(A, [merged, a, b])).toEqual(new Set([merged]));
+    expect(page(true)).toEqual([3]);
+    cache.setMuted(A, merged, false, 7000);
+    expect(cache.mutedOf(A, [merged])).toEqual(new Set());
+    expect(page(true)).toEqual([6, 3]);
+    // Forgetting the account forgets its mutes.
+    cache.setMuted(A, merged, true, 8000);
+    cache.forgetAccount(A);
+    expect(cache.mutedOf(A, [merged])).toEqual(new Set());
+  });
+
   it('describes a message whose body is not cached yet for a conversation', () => {
     const cache = cacheWith([withRefs(2, { subject: 'Re: Plans', inReplyTo: 1, references: [1] })]);
     const d = cache.pendingDetail(A, F, 2)!;
@@ -379,6 +409,14 @@ describe("a tab's thread page", () => {
     expect(cache.threadPage(A, F, V, Number.MAX_SAFE_INTEGER, 1, 10, { tab: e.sql, params: e.params, category: 'promotions' })).toEqual([{ threadId: 's:0', uid: 4 }]);
     expect(cache.threadPage(A, F, V, Number.MAX_SAFE_INTEGER, 1, 10, { tab: e.sql, params: e.params, category: 'primary' })).toEqual([{ threadId: 's:1', uid: 3 }]);
     expect(cache.threadPage(A, F, V, Number.MAX_SAFE_INTEGER, 1, 10).map((p) => p.uid)).toEqual([4, 3]);
+    // A muted thread leaves its tab's page and its badge counts, and the plan still finds categories by key.
+    cache.setMuted(A, 's:0', true, 1000);
+    const hidden = sql.db.prepare(`EXPLAIN QUERY PLAN ${threadPageSql(e.sql, true)}`).all(A, F, V, 1, Number.MAX_SAFE_INTEGER, A, F, V, ...e.params, 'promotions', 10).map((r) => String(r.detail));
+    expect(hidden.some((d) => /^SCAN c\b/.test(d))).toBe(false);
+    expect(cache.threadPage(A, F, V, Number.MAX_SAFE_INTEGER, 1, 10, { tab: e.sql, params: e.params, category: 'promotions' }, true)).toEqual([]);
+    expect(cache.threadPage(A, F, V, Number.MAX_SAFE_INTEGER, 1, 10, undefined, true).map((p) => p.uid)).toEqual([3]);
+    const status = cache.tabStatus(A, F, V, 1, { tab: e.sql, params: e.params }, new Map());
+    expect(status.map((t) => [t.category, t.total])).toEqual([['primary', 2]]);
   });
 });
 

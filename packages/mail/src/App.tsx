@@ -320,6 +320,28 @@ export function App() {
     const inTrash = folderInfo?.specialUse === 'trash';
     actions.remove.mutate({ uids }, { onSuccess: () => setToast(inTrash ? `${plural(ids.length)} deleted forever.` : `${plural(ids.length)} moved to Trash.`), onError: (e) => setToast(`Could not delete: ${errorText(e)}`) });
   };
+  /** Mute (m) or unmute the open conversation, as Gmail does: muting from the inbox takes it out of the list, with Undo. */
+  const toggleMute = () => {
+    if (openId === null || !threadLoaded) return;
+    const threadId = openId;
+    const muted = !thread.data!.muted;
+    const inbox = folderInfo?.specialUse === 'inbox' || folder?.toUpperCase() === 'INBOX';
+    const to = findSpecial(folders.data, 'archive') ?? findSpecial(folders.data, 'all');
+    const uids = muted && inbox ? uidsOf([threadId]) : [];
+    if (uids.length) afterRemoving([threadId]);
+    actions.mute.mutate(
+      { threadId, muted, uids, to: to?.path ?? null },
+      {
+        onSuccess: () =>
+          setToast(
+            muted
+              ? { text: 'Conversation muted. New replies will skip your inbox.', action: { label: 'Undo', run: () => actions.mute.mutate({ threadId, muted: false, uids: [], to: null }, { onSuccess: () => setToast('Conversation unmuted.') }) } }
+              : 'Conversation unmuted.',
+          ),
+        onError: (e) => setToast(`Could not ${muted ? 'mute' : 'unmute'}: ${errorText(e)}`),
+      },
+    );
+  };
   const moveTo = (to: string, ids = targetIds()) => {
     const uids = uidsOf(ids);
     if (!uids.length) return;
@@ -666,8 +688,8 @@ export function App() {
   // The keyboard, as in other mail apps. Not while typing, and not under a dialog.
   const keyState = useRef({ visible, cursorId, openId, narrow: stacked });
   keyState.current = { visible, cursorId, openId, narrow: stacked };
-  const handlers = useRef({ archive, remove, toggleSeen, startCompose });
-  handlers.current = { archive, remove, toggleSeen, startCompose };
+  const handlers = useRef({ archive, remove, toggleSeen, toggleMute, startCompose });
+  handlers.current = { archive, remove, toggleSeen, toggleMute, startCompose };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
@@ -713,6 +735,11 @@ export function App() {
           break;
         case 'u':
           h.toggleSeen();
+          break;
+        case 'm':
+          // Mute the open conversation (Gmail's m); with none open, nothing.
+          if (open === null) return;
+          h.toggleMute();
           break;
         case 'r':
           if (!pane.current?.compose('reply')) h.startCompose('reply');
@@ -994,6 +1021,7 @@ export function App() {
       onDelete={() => remove(openId !== null ? [openId] : [])}
       onToggleSeen={() => toggleSeen(openId !== null ? [openId] : [])}
       onToggleFlag={() => toggleFlag(openId !== null ? [openId] : [])}
+      onToggleMute={toggleMute}
       onNeedBody={(m) => openId !== null && void fetchBody(qc, account.id, openId, m)}
       onNotice={setToast}
       inline={narrow ? undefined : { account, onSend: sendMail, onDetach: (request) => openCompose(account.id, request) }}

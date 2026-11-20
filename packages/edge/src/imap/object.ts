@@ -36,7 +36,7 @@ import type { AccountDTO } from '@flow/shared';
 import type { CallerContext, ObjectBindings } from '../org/routes/compat';
 import type { ImportRow } from '../importing';
 import { exportTables, importTable, ownerMismatch, ownerRefusal } from '../perAccount';
-import { AccountPatch, CategoryBody, DeleteBody, DraftBody, FlagsBody, MAX_SEND_BYTES, MoveBody, NewAccount, SendBody, SendersCategoryBody, TIMING_HEADER, checkServer, mailError, notFound, parse, savesSentCopy, sendSize, badRequest, type ServerSettings } from './rules';
+import { AccountPatch, CategoryBody, DeleteBody, DraftBody, FlagsBody, MAX_SEND_BYTES, MoveBody, MuteBody, NewAccount, SendBody, SendersCategoryBody, TIMING_HEADER, checkServer, mailError, notFound, parse, savesSentCopy, sendSize, badRequest, type ServerSettings } from './rules';
 
 /** A Mail tab's heartbeat (`POST /v1/mail/heartbeat`), which must not count as the person being active. */
 const isHeartbeat = (request: Request) => request.method === 'POST' && new URL(request.url).pathname === '/v1/mail/heartbeat';
@@ -175,7 +175,7 @@ const ADDED_COLUMNS: { add: string; then?: string }[] = [
   },
 ];
 /** Every table of the object (DDL above, cache.ts's), for the move between objects (`exportRows`, `importRows`). */
-export const MAIL_TABLES = ['accounts', 'rate_limit_windows', 'mail_categories', 'mail_category_overrides', 'mail_sync', 'mail_messages', 'mail_cache_folders', 'mail_state', 'mail_refs', 'mail_thread_index', 'mail_contacts'] as const;
+export const MAIL_TABLES = ['accounts', 'rate_limit_windows', 'mail_categories', 'mail_category_overrides', 'mail_sync', 'mail_messages', 'mail_cache_folders', 'mail_state', 'mail_refs', 'mail_thread_index', 'mail_contacts', 'mail_muted_threads'] as const;
 /** New mail sorted into tabs by a list request at most (above the high-water mark); the rest is the sorter's. */
 const SYNC_CAP = 100;
 /** Older mail sorted per step of the background sorter, each step under the sorter's lock by itself. */
@@ -1242,12 +1242,13 @@ export class Mail extends DurableObject<MailEnv> {
         if (state.high === 0 || (before !== null && before <= 1)) return { threads: [], next: null };
         const cursor = before ?? Number.MAX_SAFE_INTEGER;
         const floor = () => (tabState ? Math.max(state.low, tabState.low) : state.low);
-        let tops = this.cache.threadPage(r.id, folder, validity, cursor, floor(), limit + 1, tab);
+        const inbox = folder.toUpperCase() === INBOX;
+        let tops = this.cache.threadPage(r.id, folder, validity, cursor, floor(), limit + 1, tab, inbox);
         if (tops.length <= limit && state.low > 1 && !tabState) {
           // The cache ends before the page is full: one step further down, then look again.
           await this.backfill(r, c, folder, state, this.budget(BACKFILL_STEP));
           state = this.cache.folder(r.id, folder)!;
-          tops = this.cache.threadPage(r.id, folder, validity, cursor, floor(), limit + 1, tab);
+          tops = this.cache.threadPage(r.id, folder, validity, cursor, floor(), limit + 1, tab, inbox);
         }
         const page = tops.slice(0, limit);
         const more = tops.length > limit || floor() > 1;
@@ -1261,7 +1262,9 @@ export class Mail extends DurableObject<MailEnv> {
           if (vanished.size) { this.left(r.id, folder, [...vanished]); kept = rows.filter((x) => !(x.folder === folder && vanished.has(x.uid))); }
           if (changed.size) kept = kept.map((x) => { const f = x.folder === folder ? changed.get(x.uid) : undefined; return f ? { ...x, summary: { ...x.summary, seen: f.seen, flagged: f.flagged, answered: f.answered } } : x; });
         }
-        let threads = page.map((p) => this.threadSummary(r, folder, p, kept.filter((x) => x.threadId === p.threadId))).filter((x): x is ThreadSummary => !!x);
+        const muted = inbox ? new Set<string>() : this.cache.mutedOf(r.id, page.map((p) => p.threadId));
+        let threads = page.map((p) => this.threadSummary(r, folder, p, kept.filter((x) => x.threadId === p.threadId))).filter((x): x is ThreadSummary => !!x)
+          .map((x) => (muted.has(x.threadId) ? { ...x, muted: true as const } : x));
         if (tabs.length) {
           const categories = await this.categoriesOf(r, c, folder, tabs, threads.map((x) => x.uid), gmail, new Map());
           threads = threads.map((x) => { const tab = categories.get(x.uid); return { ...x, category: tab?.category ?? 'primary', ...(tab?.reason ? { categoryReason: tab.reason } : {}) }; });
@@ -1300,7 +1303,7 @@ export class Mail extends DurableObject<MailEnv> {
    * copy in the folder it was opened from preferred, then INBOX), with its body when the cache has it; else without, as
    * `bodyPending`, and those bodies are fetched now in the background for the next read.
    */
-  private threadRead(r: AccountRow, threadId: string, folder: string | null): { threadId: string; messages: (MessageDetail & { bodyPending?: true })[] } {
+  private threadRead(r: AccountRow, threadId: string, folder: string | null): { threadId: string; muted: boolean; messages: (MessageDetail & { bodyPending?: true })[] } {
     const rows = this.cache.threadRows(r.id, [threadId]);
     if (!rows.length) throw notFound('no such conversation');
     const rank = (x: ThreadRow) => (x.folder === folder ? 0 : x.folder.toUpperCase() === INBOX ? 1 : 2);
@@ -1318,7 +1321,45 @@ export class Mail extends DurableObject<MailEnv> {
     }
     // Newest first: the last message is the one shown open.
     if (pending.length) this.fetchBodiesSoon(r, pending.reverse().slice(0, 10));
-    return { threadId, messages };
+    return { threadId, muted: this.cache.mutedOf(r.id, [threadId]).size > 0, messages };
+  }
+
+  /**
+   * Mutes a thread (Gmail's Mute) or unmutes it. Muting moves its messages out of INBOX to the archive (Archive, else
+   * All Mail), as later mail of the thread will be (`archiveMuted`); unmuting moves nothing back. Returns how many moved.
+   */
+  private async mute(r: AccountRow, threadId: string, muted: boolean): Promise<{ muted: boolean; moved: number }> {
+    if (!this.cache.threadRows(r.id, [threadId]).length) throw notFound('no such conversation');
+    this.cache.setMuted(r.id, threadId, muted, Date.now());
+    if (!muted) return { muted, moved: 0 };
+    const inbox = this.cache.threadRows(r.id, [threadId]).filter((x) => x.folder.toUpperCase() === INBOX);
+    if (!inbox.length) return { muted, moved: 0 };
+    return { muted, moved: await this.archiveMuted(r, inbox[0]!.folder, 'interactive') };
+  }
+
+  /** Moves the cached INBOX messages of muted threads to the archive (Archive, else All Mail); none without one. */
+  private async archiveMuted(r: AccountRow, folder: string, kind: Kind): Promise<number> {
+    return this.withImap(r, kind, async (c) => {
+      const to = (await this.special(r, c, 'archive')) ?? (await this.special(r, c, 'all'));
+      if (!to || to === folder) return 0;
+      const uids = this.cache.mutedUids(r.id, folder);
+      if (!uids.length) return 0;
+      await this.locked(c, folder, async () => {
+        if (!(await c.messageMove(uidSet(uids), to, { uid: true }))) throw badRequest('the mail server did not move the messages');
+      });
+      this.left(r.id, folder, uids);
+      return uids.length;
+    });
+  }
+
+  /** New mail of a muted thread arrived in INBOX: moved out in the background (the inbox's list already leaves it out). */
+  private archiveMutedSoon(r: AccountRow, folder: string): void {
+    const key = `${r.id}/muted`;
+    if (this.fetchingBodies.has(key)) return;
+    this.fetchingBodies.add(key);
+    this.background('muted', async () => {
+      try { return `${await this.archiveMuted(r, folder, 'interactive')} moved`; } finally { this.fetchingBodies.delete(key); }
+    });
   }
 
   /** Reads these messages in the background (each is kept by `read`), for a conversation opened before the alarm got to them. */
@@ -1725,6 +1766,10 @@ export class Mail extends DurableObject<MailEnv> {
     const snippets = await this.snippets(c, fetched).catch((err) => { console.warn(`[mail] snippets: ${(err as Error).message}`); return new Map<number, string>(); });
     const rows: NewRow[] = fetched.map((m) => ({ m, summary: toSummary(m, folder, snippets.get(m.uid) ?? ''), headers: m.headers ? Buffer.from(m.headers).toString('latin1') : null, plan: m.bodyStructure ? planBody(m.bodyStructure) : null }));
     const threads = this.timed('insert', `${folder} ${rows.length} rows`, () => this.cache.insert(r.id, folder, validity, rows, now, r.email));
+    if (folder.toUpperCase() === INBOX) {
+      const muted = this.cache.mutedUids(r.id, folder, rows.map((row) => row.m.uid));
+      if (muted.length) this.archiveMutedSoon(r, folder);
+    }
     return { summaries: rows.map((row) => { const threadId = threads.get(row.m.uid); return threadId ? { ...row.summary, threadId } : row.summary; }) };
   }
 
@@ -2405,6 +2450,14 @@ export class Mail extends DurableObject<MailEnv> {
       const threadId = c.req.param('threadId');
       if (!threadId) throw badRequest('threadId: required');
       return c.json({ thread: this.threadRead(c.get('account'), threadId, c.req.query('folder') || null) });
+    });
+
+    // Mute (or unmute) a conversation: muting moves it out of INBOX, and its later mail skips INBOX too.
+    app.post('/v1/mail/accounts/:id/threads/:threadId/mute', async (c: MailContext) => {
+      const threadId = c.req.param('threadId');
+      if (!threadId) throw badRequest('threadId: required');
+      const b = parse(MuteBody, await json(c));
+      return c.json({ ok: true, ...(await this.mute(c.get('account'), threadId, b.muted)) });
     });
 
     app.get('/v1/mail/accounts/:id/messages/:uid', async (c: MailContext) => {

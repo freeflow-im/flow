@@ -8,7 +8,7 @@ vi.mock('../api', async (orig) => {
   const real = await orig<typeof import('../api')>();
   return {
     ...real,
-    mailApi: { ...real.mailApi, setFlags: vi.fn(async () => ({ ok: true })), move: vi.fn(async () => ({ ok: true })), remove: vi.fn(async () => ({ ok: true })), moveToTab: vi.fn(async () => ({ ok: true, senders: [], previous: [] })), messages: vi.fn(), threads: vi.fn(), thread: vi.fn() },
+    mailApi: { ...real.mailApi, setFlags: vi.fn(async () => ({ ok: true })), move: vi.fn(async () => ({ ok: true })), remove: vi.fn(async () => ({ ok: true })), moveToTab: vi.fn(async () => ({ ok: true, senders: [], previous: [] })), mute: vi.fn(async (_a: string, _t: string, muted: boolean) => ({ ok: true, muted, moved: 0 })), messages: vi.fn(), threads: vi.fn(), thread: vi.fn() },
   };
 });
 const { fetchBody, keys, nextPageParam, REFRESH_DELAY_MS, replaceLastPage, SORTING_RETRY_MS, useMessageActions, useMessages, useThread, useThreads } = await import('./mail');
@@ -197,6 +197,27 @@ describe('thread rows and the open thread follow the actions', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(10); });
     expect(threadRows().map((t) => t.threadId)).toEqual(['t:a', 't:b']);
     expect(threadMessages()).toHaveLength(3);
+  });
+
+  it('muting a thread from the inbox takes it out of the list at once, to the archive, and the open thread says it is muted', async () => {
+    await act(async () => { actions.mute.mutate({ threadId: 't:a', muted: true, uids: [30, 20, 13], to: 'Archive' }); });
+    expect(vi.mocked(mailApi.mute)).toHaveBeenCalledWith('acc', 't:a', true);
+    expect(threadRows().map((t) => t.threadId)).toEqual(['t:b']);
+    expect(qc.getQueryData<ThreadDetail>(keys.thread('acc', 't:a'))!.muted).toBe(true);
+    expect([unreadOf('INBOX'), unreadOf('Archive')]).toEqual([3, 2]);
+  });
+
+  it('unmuting keeps the row and clears its mark; a refused mute puts everything back', async () => {
+    qc.setQueryData(keys.threads('acc', 'INBOX', null), { pages: [{ threads: [thread('t:a', [30], summary(30, true), { muted: true })], next: null } as ThreadPage], pageParams: [0] });
+    qc.setQueryData(keys.thread('acc', 't:a'), { threadId: 't:a', muted: true, messages: [detail(30, true)] } as ThreadDetail);
+    await act(async () => { actions.mute.mutate({ threadId: 't:a', muted: false, uids: [], to: null }); });
+    expect(threadRows()[0]).not.toHaveProperty('muted');
+    expect(qc.getQueryData<ThreadDetail>(keys.thread('acc', 't:a'))!.muted).toBe(false);
+    vi.mocked(mailApi.mute).mockRejectedValueOnce(new Error('no'));
+    await act(async () => { actions.mute.mutate({ threadId: 't:a', muted: true, uids: [30], to: 'Archive' }); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+    expect(threadRows().map((t) => t.threadId)).toEqual(['t:a']);
+    expect(qc.getQueryData<ThreadDetail>(keys.thread('acc', 't:a'))!.muted).toBe(false);
   });
 
   it('moving a thread to a tab takes it out of the open tab at once', async () => {

@@ -156,6 +156,36 @@ describe('ThreadView', () => {
     expect(needed).toEqual([1]);
   });
 
+  it('Mute thread is in the toolbar\'s ⋮ menu and each message\'s; a muted thread says so and offers Unmute', async () => {
+    let toggled = 0;
+    await render({ onToggleMute: () => toggled++ });
+    const menuItem = async (trigger: HTMLElement, text: string) => {
+      await act(() => { trigger.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 })); });
+      return [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((el) => el.textContent?.includes(text));
+    };
+    const more = host.querySelector<HTMLElement>('button[aria-label="More"]')!;
+    const item = await menuItem(more, 'Mute thread');
+    expect(item?.textContent).toContain('m');
+    await act(() => item!.click());
+    expect(toggled).toBe(1);
+    const own = article(5).querySelector<HTMLElement>('button[aria-label="More"]') ?? article(5).querySelector<HTMLElement>('button[aria-haspopup="menu"]')!;
+    const ownItem = await menuItem(own, 'Mute thread');
+    await act(() => ownItem!.click());
+    expect(toggled).toBe(2);
+    expect(host.textContent).not.toContain('Muted.');
+    await render({ thread: { ...thread, muted: true }, onToggleMute: () => toggled++ });
+    expect(host.querySelector('[role="status"]')?.textContent).toContain('Muted. New replies to this conversation skip your inbox.');
+    await act(() => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Unmute')!.click());
+    expect(toggled).toBe(3);
+    expect((await menuItem(host.querySelector<HTMLElement>('button[aria-label="More"]')!, 'Unmute thread'))).toBeTruthy();
+  });
+
+  it('without a mute action there is no Mute item', async () => {
+    await render();
+    await act(() => { host.querySelector<HTMLElement>('button[aria-label="More"]')!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 })); });
+    expect([...document.querySelectorAll('[role="menuitem"]')].some((el) => el.textContent?.includes('Mute'))).toBe(false);
+  });
+
   describe('answering in the conversation (wide screens)', () => {
     const account = { id: 'acc', email: me, displayName: 'Ann' } as MailAccount;
     const sent: Outgoing[] = [];

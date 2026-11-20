@@ -6,7 +6,7 @@
 // frame measures itself on load). n and p (App.tsx) step through the messages. On wide screens (`inline`), Reply, Reply all
 // and Forward, from the buttons or r / a / f, open a composer under the message answered (InlineCompose.tsx, loaded with the
 // editor); one at a time, and one with something written in it is not replaced, it takes the focus again.
-import { Archive, ArrowLeft, CalendarPlus, ChevronLeft, ChevronRight, Download, FolderInput, Forward, Loader2, Mail, MoreVertical, Pencil, Reply, ReplyAll, Star, Trash2 } from 'lucide-react';
+import { Archive, ArrowLeft, BellOff, BellRing, CalendarPlus, ChevronLeft, ChevronRight, Download, FolderInput, Forward, Loader2, Mail, MoreVertical, Pencil, Reply, ReplyAll, Star, Trash2 } from 'lucide-react';
 import { Fragment, lazy, Suspense, useEffect, useImperativeHandle, useRef, useState, type Ref } from 'react';
 import { attachmentUrl, type Address, type Category, type MailAccount, type MailFolder, type MessageDetail, type ThreadDetail, type ThreadMessage } from '../api';
 import { cidUrlOf, prefill, type AnswerMode, type ComposeRequest, type Outgoing } from '../lib/compose';
@@ -75,6 +75,8 @@ export interface ThreadViewProps {
   onDelete(): void;
   onToggleSeen(): void;
   onToggleFlag(): void;
+  /** Mute the conversation (m), as Gmail does: it leaves the inbox and so does its later mail; or unmute a muted one. */
+  onToggleMute?: (() => void) | undefined;
   /** One message's star. */
   onFlagMessage(m: MessageDetail, flagged: boolean): void;
   /** A message whose body the server has not fetched yet was opened (or Retry pressed): read it now (hooks/mail.ts `fetchBody`). */
@@ -320,6 +322,7 @@ export function ThreadView(p: ThreadViewProps) {
             <DropdownMenuContent align="end">
               <DropdownMenuItem onSelect={p.onToggleSeen}>{anyUnread ? 'Mark as read' : 'Mark as unread'}</DropdownMenuItem>
               <DropdownMenuItem onSelect={p.onToggleFlag}>{anyFlagged ? 'Remove star' : 'Star'}</DropdownMenuItem>
+              {p.onToggleMute && <MuteItem muted={!!t?.muted} onSelect={p.onToggleMute} />}
               <DropdownMenuItem
                 onSelect={() => {
                   // The suite's `create` intent to Calendar (@flow/suite-bar intents), in a new tab.
@@ -356,6 +359,17 @@ export function ThreadView(p: ThreadViewProps) {
               <span className="min-w-0">{threadSubject(messages) || '(no subject)'}</span>
               {messages.length > 1 && <span className="shrink-0 text-sm text-muted">{messages.length}</span>}
             </h2>
+            {t.muted && (
+              <div className="mb-3 flex items-center gap-2 rounded-lg bg-panel px-3 py-2 text-[14px] text-muted" role="status">
+                <BellOff className="size-4 shrink-0" aria-hidden />
+                <span className="min-w-0 flex-1">Muted. New replies to this conversation skip your inbox.</span>
+                {p.onToggleMute && (
+                  <Button variant="ghost" size="sm" onClick={p.onToggleMute}>
+                    Unmute
+                  </Button>
+                )}
+              </div>
+            )}
             {segments.map((s) =>
               s.kind === 'fold' && !unfolded ? (
                 <button
@@ -389,6 +403,7 @@ export function ThreadView(p: ThreadViewProps) {
                       onForward={() => answer('forward', m)}
                       onEditDraft={p.onEditDraft && m.folder === p.folder ? () => p.onEditDraft!(m) : undefined}
                       onFlag={() => p.onFlagMessage(m, !m.flagged)}
+                      mute={p.onToggleMute ? { muted: !!t.muted, onToggle: p.onToggleMute } : undefined}
                       onRetry={() => p.onNeedBody(m)}
                       onPreview={(at) => setPreviewing({ index: i, at })}
                       onNotice={p.onNotice ?? (() => {})}
@@ -463,6 +478,16 @@ const shownFiles = (m: ThreadMessage) => {
   return m.attachments.filter((a) => !(invite && isCalendarFile(a)));
 };
 
+/** "Mute thread (m)" in a ⋯ menu, or "Unmute thread" on a muted one. */
+function MuteItem({ muted, onSelect }: { muted: boolean; onSelect(): void }) {
+  return (
+    <DropdownMenuItem onSelect={onSelect}>
+      {muted ? <BellRing /> : <BellOff />} {muted ? 'Unmute thread' : 'Mute thread'}
+      {!muted && <span className="ml-auto pl-4 text-xs text-muted">m</span>}
+    </DropdownMenuItem>
+  );
+}
+
 interface ItemProps {
   ref: Ref<HTMLElement>;
   accountId: string;
@@ -477,13 +502,15 @@ interface ItemProps {
   onForward(): void;
   onEditDraft?: (() => void) | undefined;
   onFlag(): void;
+  /** The conversation's Mute (or Unmute), offered in each message's menu as well. */
+  mute?: { muted: boolean; onToggle(): void } | undefined;
   onRetry(): void;
   onPreview(at: number): void;
   onNotice(notice: Notice): void;
 }
 
 /** One message of the thread: a line when collapsed; its header, body and attachments when open. */
-function ThreadMessageItem({ ref, accountId, me, message: m, open, last, focused, onToggle, onReply, onReplyAll, onForward, onEditDraft, onFlag, onRetry, onPreview, onNotice }: ItemProps) {
+function ThreadMessageItem({ ref, accountId, me, message: m, open, last, focused, onToggle, onReply, onReplyAll, onForward, onEditDraft, onFlag, mute, onRetry, onPreview, onNotice }: ItemProps) {
   const files = shownFiles(m);
   const invite = m.bodyPending ? null : invitationPart(m);
   const fromMe = m.from?.address.toLowerCase() === me.toLowerCase();
@@ -559,6 +586,7 @@ function ThreadMessageItem({ ref, accountId, me, message: m, open, last, focused
                       {onEditDraft && <DropdownMenuItem onSelect={onEditDraft}>Edit draft</DropdownMenuItem>}
                       <DropdownMenuSeparator />
                       <DropdownMenuItem onSelect={onFlag}>{m.flagged ? 'Remove star' : 'Star'}</DropdownMenuItem>
+                      {mute && <MuteItem muted={mute.muted} onSelect={mute.onToggle} />}
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </>
