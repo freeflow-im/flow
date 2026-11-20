@@ -348,7 +348,7 @@ export interface SavedToDocs {
 }
 export interface DocsPreview {
   id: string;
-  kind: 'doc' | 'deck' | 'sheet' | 'markdown' | 'pdf' | 'file';
+  kind: 'doc' | 'deck' | 'sheet' | 'markdown' | 'whiteboard' | 'pdf' | 'file';
   filename: string;
   size: number;
   expiresAt: number;

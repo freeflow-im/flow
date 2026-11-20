@@ -11,6 +11,7 @@ describe('docsFiles', () => {
     expect(exportFormat({ kind: 'sheet' })).toBe('xlsx');
     expect(exportFormat({ kind: 'sheet', format: 'csv' })).toBe('csv');
     expect(exportFormat({ kind: 'deck' })).toBe('pptx');
+    expect(exportFormat({ kind: 'whiteboard' })).toBe('json');
     expect(exportFormat({ kind: 'markdown' })).toBe('md');
     expect(exportFormat({ kind: 'file' })).toBeNull();
     expect(attachedAs(file({ kind: 'doc', name: 'Plan' })).name).toBe('Plan.docx');

@@ -57,7 +57,7 @@ export interface CalendarEvent {
 export interface RecentFile {
   id?: string;
   name: string;
-  kind: 'doc' | 'deck' | 'sheet' | 'markdown' | 'pdf' | 'file';
+  kind: 'doc' | 'deck' | 'sheet' | 'markdown' | 'whiteboard' | 'pdf' | 'file';
   lastUsed: string;
 }
 

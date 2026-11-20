@@ -137,6 +137,7 @@ const FILE_BADGE: Record<RecentFile['kind'], { letter: string; tone: string }> =
   markdown: { letter: 'M', tone: 'bg-primary-tint text-primary-deep' },
   sheet: { letter: 'S', tone: 'bg-[#e6f4ea] text-ok' },
   deck: { letter: 'P', tone: 'bg-warn-bg text-warn' },
+  whiteboard: { letter: 'W', tone: 'bg-[#fdeee0] text-[#e8710a]' },
   pdf: { letter: 'F', tone: 'bg-track text-muted' },
   file: { letter: 'F', tone: 'bg-track text-muted' },
 };
@@ -154,9 +155,10 @@ export function FilesCard(props: { files: RecentFile[] | null; error: unknown; n
       ) : (
         <ul className="flex flex-col gap-1">
           {files.slice(0, 5).map((f) => (
+            // A kind this page does not know yet (a newer Docs) shows as a plain file rather than failing the page.
             <li key={f.id}>
               <a href={fileAddress(f)!} className="flex items-center gap-3 rounded-md py-1.5 hover:bg-hover">
-                <span className={`flex size-7 shrink-0 items-center justify-center rounded text-xs font-semibold ${FILE_BADGE[f.kind].tone}`}>{FILE_BADGE[f.kind].letter}</span>
+                <span className={`flex size-7 shrink-0 items-center justify-center rounded text-xs font-semibold ${(FILE_BADGE[f.kind] ?? FILE_BADGE.file).tone}`}>{(FILE_BADGE[f.kind] ?? FILE_BADGE.file).letter}</span>
                 <span className="min-w-0 flex-1 truncate text-sm">{f.name}</span>
                 <span className="text-xs text-muted">{shortWhen(f.lastUsed, props.now)}</span>
               </a>

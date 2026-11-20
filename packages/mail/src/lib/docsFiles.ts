@@ -3,7 +3,7 @@
 // shared files) or, before anything is typed, the ones they opened last (`/api/recents`). A document is attached as the
 // file Docs downloads it as (a Word, Excel or PowerPoint file, or Markdown); any other file as it is stored.
 
-export type DocsKind = 'doc' | 'sheet' | 'deck' | 'markdown' | 'file';
+export type DocsKind = 'doc' | 'sheet' | 'deck' | 'markdown' | 'whiteboard' | 'file';
 
 export interface DocsFile {
   kind: DocsKind;
@@ -31,6 +31,8 @@ export function exportFormat(f: Pick<DocsFile, 'kind' | 'format'>): string | nul
       return 'pptx';
     case 'markdown':
       return 'md';
+    case 'whiteboard':
+      return 'json';
     default:
       return null;
   }
@@ -42,6 +44,7 @@ const EXT_TYPES: Record<string, string> = {
   pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   csv: 'text/csv',
   md: 'text/markdown',
+  json: 'application/json',
 };
 
 /** The name and type a file will be attached as, to show before its bytes arrive. */
