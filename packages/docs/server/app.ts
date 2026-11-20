@@ -16,7 +16,7 @@ import { chatScope, HOME_CHAT, isChatScope, type AgentEvent, type AgentTurnReque
 import { newDeck, validateDeck, type Deck } from '../shared/deck.ts';
 import { newDoc, validateDoc, type Doc } from '../shared/doc.ts';
 import { MAX_MARKDOWN_CHARS, newMarkdownDoc, validateMarkdownDoc, type MarkdownDoc } from '../shared/markdown.ts';
-import { newWhiteboard, validateWhiteboard, type Whiteboard } from '../shared/whiteboard.ts';
+import { newWhiteboard, SCRATCHPAD_TITLE, validateWhiteboard, type Whiteboard } from '../shared/whiteboard.ts';
 import { CsvError, MAX_CSV_CHARS } from '../shared/csv.ts';
 import { importDocx } from './docxImport.ts';
 import { closePdfReaders, isPdf, PdfError, pdfToMarkdownFile } from './pdfMarkdown.ts';
@@ -1267,6 +1267,15 @@ export async function buildApp(opts: AppOptions) {
       const problem = validateWhiteboard(board);
       if (problem) return reply.code(400).send({ error: problem });
       return { board: await sheets.createWhiteboard(req.scope, title, board as Whiteboard, req.folder) };
+    });
+
+    // The global scratchpad (suite bar's scratchpad button): the whiteboard named SCRATCHPAD_TITLE at the top of the
+    // user's own files (My files, in the organization the request names), made on first use. Found by its name, so a
+    // renamed or moved one is just a board, and the next open makes a fresh scratchpad.
+    r.post('/api/whiteboards/scratchpad', async (req) => {
+      const mine: ScopeArg = typeof req.scope === 'string' ? req.scope : { ...req.scope, private: true };
+      const found = sheets.list(mine, 'whiteboard').find((b) => !b.folder && b.title === SCRATCHPAD_TITLE);
+      return { board: found ?? (await sheets.createWhiteboard(mine, SCRATCHPAD_TITLE, newWhiteboard(), '')) };
     });
 
     r.get('/api/whiteboards/:id', async (req, reply) => {

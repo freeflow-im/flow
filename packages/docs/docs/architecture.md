@@ -81,6 +81,9 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   `edit_elements` takes them plus `note` and typed `text`, **bold**/*italic* in text): browser tools on the open board
   (`useRegisterWhiteboard`, page `whiteboard`), and over MCP (version 2, with `board_id`, plus `list_whiteboards` and
   `create_whiteboard`) the same code on a stored board through a headless controller (`FileService.editWhiteboard`).
+  The global scratchpad is the whiteboard named "Global Scratchpad" (`SCRATCHPAD_TITLE`) at the top of My files, found
+  or made by `POST /api/whiteboards/scratchpad`; `pages/ScratchpadPage.tsx` (`/scratchpad`, framed: no bar, folders or
+  assistant) shows it with `WhiteboardPage`'s `framed` mode in the suite bar's scratchpad popup (`@flow/suite-bar` `Scratchpad.tsx`).
 - A video in a presentation or a document is named by its address (`shared/video.ts`): a stored video
   file (`/api/files/<id>`) or a YouTube video's watch address. It is a slide element of type `video`
   (`shared/deck.ts`) and a `video` block in a document (`shared/doc.ts`; in Markdown an image whose address

@@ -54,8 +54,13 @@ const savedBoard = (d: Deck) => {
 
 const isTyping = (t: EventTarget | null) => t instanceof HTMLElement && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
 
-export function WhiteboardPage() {
-  const { id } = useParams<{ id: string }>();
+/**
+ * A whiteboard's page (`/w/:id`), or, with `id` and `framed`, a board in another page's frame (the global scratchpad,
+ * pages/ScratchpadPage.tsx): the toolbar and the board only, no title, menus or file actions.
+ */
+export function WhiteboardPage(props: { id?: string; framed?: boolean } = {}) {
+  const params = useParams<{ id: string }>();
+  const id = props.id ?? params.id;
   const [state, setState] = useState<{ meta: SheetMeta; ctl: DeckController; sync: RevisionSync<Deck> } | { error: string } | null>(null);
 
   useEffect(() => {
@@ -106,12 +111,12 @@ export function WhiteboardPage() {
       </div>
     );
   }
-  return <WhiteboardWorkbench key={state.meta.id} initialMeta={state.meta} ctl={state.ctl} sync={state.sync} />;
+  return <WhiteboardWorkbench key={state.meta.id} initialMeta={state.meta} ctl={state.ctl} sync={state.sync} framed={!!props.framed} />;
 }
 
 type Dialog = { kind: 'rename' } | { kind: 'delete' } | null;
 
-function WhiteboardWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMeta; ctl: DeckController; sync: RevisionSync<Deck> }) {
+function WhiteboardWorkbench({ initialMeta, ctl, sync, framed }: { initialMeta: SheetMeta; ctl: DeckController; sync: RevisionSync<Deck>; framed: boolean }) {
   // In the FreeFlow suite the suite bar replaces the logo, the Assistant button and Sign out.
   const inSuite = !!useAuth().suite;
   useEffect(() => onBeforeLeave(() => ctl.saver.flush()), [ctl]);
@@ -380,10 +385,11 @@ function WhiteboardWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMet
         ];
 
   return (
-    <div className="workbench deck-page whiteboard-page">
+    <div className={`workbench deck-page whiteboard-page${framed ? ' wb-framed' : ''}`}>
       {openInTab.dialog}
       {orgMenu.dialog}
-      <header className="wb-header">
+      {framed && <span className={`save-status wb-framed-status ${ctl.saver.status}`}>{saveLabel}</span>}
+      {!framed && <header className="wb-header">
         {!inSuite && (
           <Link to={lastListingHref()} className="wb-logo" title="Back to the file list" onClick={() => void ctl.saver.flush()}>
             <WhiteboardIcon size={32} />
@@ -419,7 +425,7 @@ function WhiteboardWorkbench({ initialMeta, ctl, sync }: { initialMeta: SheetMet
           {!inSuite && <AgentButton />}
           {!inSuite && <Account before={() => ctl.saver.flush()} />}
         </div>
-      </header>
+      </header>}
       <DeckToolbar board ctl={ctl} onInsertImage={() => void uploadImage()} />
       <div className="deck-body">
         <div className="deck-main">

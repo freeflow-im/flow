@@ -1,13 +1,14 @@
 // The suite bar (docs/specs/freeflow-suite.md §2.5): one 56px bar above every signed-in page of Chat and Docs.
 // Left, where you are: the mark, "FreeFlow", the organization's name with its switcher. Centre, which app: Docs,
 // Chat, Mail, Calendar, then any app added since (⌘1 onwards, by the manifests). Right, tools then you: search (opens in place, ⌘K), the Assistant,
-// notifications, the account menu. Presentational: every app passes its data and callbacks, the bar fetches nothing.
+// the scratchpad, notifications, the account menu. Presentational: every app passes its data and callbacks, the bar fetches nothing.
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { BOOKING_SETTINGS_PATH, useBookingLink } from './bookingLink';
 import { isInHome, routeLinksToHome } from './lib/embed';
 import { SuiteMark } from './SuiteMark';
 import { SuiteAlerts, useClosedAlerts, useMeetingAlerts, type SuiteAlert } from './alerts';
 import { useAlertNotifications, useDesktopOff, useDesktopPermission } from './desktopNotify';
+import { Scratchpad } from './Scratchpad';
 import './suite-bar.css';
 
 /** One entry of a tab's menu: a link, or a line apart (`divider`). */
@@ -113,6 +114,8 @@ export interface SuiteBarProps {
   alerts?: SuiteAlert[];
   /** `false`: no meeting alerts on this page (a page with no calendar). On by default, for the organization the bar shows. */
   meetingAlerts?: false;
+  /** `false`: no scratchpad button (Scratchpad.tsx). On by default, beside the bell. */
+  scratchpad?: false;
 }
 
 type Menu = 'org' | 'account' | 'apps' | null;
@@ -264,7 +267,7 @@ export function SuiteBar(props: SuiteBarProps) {
   return inHome ? null : <TheSuiteBar {...props} />;
 }
 
-function TheSuiteBar({ tabs, organization, search, assistant, notifications, account, home, alerts, meetingAlerts }: SuiteBarProps) {
+function TheSuiteBar({ tabs, organization, search, assistant, notifications, account, home, alerts, meetingAlerts, scratchpad }: SuiteBarProps) {
   // The alerts under the bar (Taskboard task 12): the page's own, then the meetings about to start; closed ones stay closed.
   const [closedAlerts, closeAlert] = useClosedAlerts();
   const meetings = useMeetingAlerts(meetingAlerts === false ? null : organization?.entries.find((e) => e.active)?.id ?? null, closedAlerts);
@@ -581,6 +584,7 @@ function TheSuiteBar({ tabs, organization, search, assistant, notifications, acc
             <span className="sb-assistant-label">Assistant</span>
           </button>
         )}
+        {scratchpad !== false && <Scratchpad />}
         {notifications && (
           <button type="button" className="sb-icon-btn sb-notifications" aria-label="Notifications" title="Notifications" data-testid="suite-notifications" onClick={notifications.onOpen}>
             <Bell />

@@ -41,7 +41,7 @@ function writeSpot(spot: Spot): void {
 }
 
 /** The organization the suite selected, for the API's `workspace`; again when another page changes it. */
-function useSuiteOrganization(): string | null {
+export function useSuiteOrganization(): string | null {
   const [id, setId] = useState(() => readActiveOrganization());
   useEffect(() => {
     const onStorage = () => setId(readActiveOrganization());

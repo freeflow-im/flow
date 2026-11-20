@@ -10,6 +10,8 @@ export const BOARD_W = 5760;
 export const BOARD_H = 3600;
 /** The invisible grid, in points: moved, resized and new elements land on it. */
 export const GRID = 4;
+/** The name of the global scratchpad, the whiteboard at the top of My files the suite bar's scratchpad button opens. */
+export const SCRATCHPAD_TITLE = 'Global Scratchpad';
 export const MAX_BOARD_ELEMENTS = 5000;
 
 export interface Whiteboard {

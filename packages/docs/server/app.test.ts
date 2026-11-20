@@ -667,6 +667,26 @@ describe('whiteboards', () => {
     res = await app.inject({ method: 'GET', url: `/api/whiteboards/${meta.id}`, headers: { cookie } });
     expect(res.statusCode).toBe(404);
   });
+
+  it('opens the global scratchpad: made once at the top of My files, then the same board; a renamed one is left alone', async () => {
+    const { cookie } = await signUp(app, box, 'pad@x.com');
+    const { cookie: other } = await signUp(app, box, 'pad2@x.com');
+    let res = await app.inject({ method: 'POST', url: '/api/whiteboards/scratchpad', headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    const pad = res.json().board;
+    expect(pad).toMatchObject({ title: 'Global Scratchpad', kind: 'whiteboard' });
+    expect(pad.folder).toBeUndefined();
+    res = await app.inject({ method: 'POST', url: '/api/whiteboards/scratchpad', headers: { cookie } });
+    expect(res.json().board.id).toBe(pad.id);
+    // Each user has their own.
+    res = await app.inject({ method: 'POST', url: '/api/whiteboards/scratchpad', headers: { cookie: other } });
+    expect(res.json().board.id).not.toBe(pad.id);
+    // Renamed, it is just a board: the next open makes a new scratchpad.
+    await app.inject({ method: 'PATCH', url: `/api/whiteboards/${pad.id}`, headers: { cookie }, payload: { title: 'Ideas' } });
+    res = await app.inject({ method: 'POST', url: '/api/whiteboards/scratchpad', headers: { cookie } });
+    expect(res.json().board.id).not.toBe(pad.id);
+    expect((await app.inject({ method: 'POST', url: '/api/whiteboards/scratchpad' })).statusCode).toBe(401);
+  });
 });
 
 describe('markdown documents', () => {
