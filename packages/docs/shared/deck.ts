@@ -843,7 +843,7 @@ export function deckOutline(deck: Deck, current?: number) {
       elements: s.elements.map((e) => {
         if (e.type === 'shape' && e.shape === 'arc') e = tightArc(e);
         const box = { id: e.id, x: e.x, y: e.y, w: e.w, h: e.h };
-        if (e.type === 'text') return { ...box, type: 'text', ...(e.role ? { role: e.role } : {}), text: fromParagraphs(e.paragraphs).join('\n'), ...(e.style ? { style: e.style } : {}) };
+        if (e.type === 'text') return { ...box, type: 'text', ...(e.role ? { role: e.role } : {}), text: fromParagraphs(e.paragraphs).join('\n'), ...(e.style ? { style: e.style } : {}), ...(e.fill ? { fill: e.fill } : {}) };
         if (e.type === 'image') return { ...box, type: 'image', src: e.src.length > 80 ? `${e.src.slice(0, 77)}...` : e.src };
         if (e.type === 'video') return { ...box, type: 'video', src: e.src };
         if (e.type === 'table') return { ...box, ...tableOutline(e) };

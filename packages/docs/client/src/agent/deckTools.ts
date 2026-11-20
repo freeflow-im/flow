@@ -331,7 +331,9 @@ export function applyElementSpec(existing: SlideElement | undefined, s: Input, b
     set('lineHeight', s.line_height);
     const role = (s.role as TextElement['role']) ?? prev?.role;
     const paragraphs = typeof s.text === 'string' ? toParagraphs(s.text.split('\n')) : (prev?.paragraphs ?? [{ text: '' }]);
-    const el: TextElement = { id, type: 'text', ...box, paragraphs, ...(role ? { role } : {}), ...(Object.keys(style).length ? { style: style as TextStyle } : {}) };
+    // A fill makes the text a sticky note; "" or "none" takes it away.
+    const fill = s.fill !== undefined ? (s.fill === '' || s.fill === 'none' ? undefined : (s.fill as string)) : prev?.fill;
+    const el: TextElement = { id, type: 'text', ...box, paragraphs, ...(role ? { role } : {}), ...(Object.keys(style).length ? { style: style as TextStyle } : {}), ...(fill ? { fill } : {}) };
     return el;
   }
   if (type === 'image') {

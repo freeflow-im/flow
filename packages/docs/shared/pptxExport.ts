@@ -57,6 +57,8 @@ function textOptions(el: TextElement, theme: (typeof THEMES)[keyof typeof THEMES
   const heading = role === 'title' || role === 'subtitle';
   const color = hexColor(s.color) ?? hexColor(role === 'title' ? theme.heading : role === 'caption' || role === 'subtitle' ? theme.muted : theme.text);
   const size = s.size ?? ROLE_SIZE[role];
+  // A sticky note: its paper behind the text, which is inset as on the slide (SlideView's 14px padding).
+  const paper = hexColor(fillColor(el.fill));
   return {
     x: inch(el.x),
     y: inch(el.y),
@@ -69,7 +71,8 @@ function textOptions(el: TextElement, theme: (typeof THEMES)[keyof typeof THEMES
     ...(color ? { color } : {}),
     align: s.align ?? 'left',
     valign: s.valign ?? 'top',
-    margin: 0,
+    margin: paper ? pt(14) : 0,
+    ...(paper ? { fill: { color: paper, transparency: transparencyOf(fillColor(el.fill)) } } : {}),
     paraSpaceAfter: pt(s.paraSpacing ?? size * 0.3),
     // PowerPoint's single spacing is about 1.2 × the font size; ours defaults to 1.25.
     lineSpacingMultiple: Math.round(((s.lineHeight ?? 1.25) / 1.2) * 100) / 100,

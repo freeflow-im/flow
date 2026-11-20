@@ -479,9 +479,10 @@ export class DeckController {
     return id;
   }
 
-  /** A whiteboard's sticky note at (x, y) (its top left), being edited. */
-  addNote(x: number, y: number, fill = '#fff59d'): string {
-    const id = this.addElement({ type: 'text', x, y, w: 200, h: 200, fill, paragraphs: [{ text: '' }], style: { size: 18, color: '#202124' } });
+  /** A sticky note at (x, y) (its top left), or in the middle of the view, being edited. */
+  addNote(x?: number, y?: number, fill = '#fff59d'): string {
+    const at = x === undefined || y === undefined ? this.centered(200, 200) : { x, y };
+    const id = this.addElement({ type: 'text', ...at, w: 200, h: 200, fill, paragraphs: [{ text: '' }], style: { size: 18, color: '#202124' } });
     this.startEditing(id);
     return id;
   }

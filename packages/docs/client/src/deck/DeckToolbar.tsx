@@ -439,7 +439,7 @@ function ChartLinkControls({ ctl, el, linked, onOpenSheet }: { ctl: DeckControll
   );
 }
 
-/** The colors a whiteboard's sticky note comes in. */
+/** The colors a sticky note comes in. */
 const NOTE_COLORS: [string, string][] = [
   ['#fff59d', 'Yellow'],
   ['#ffcc80', 'Orange'],
@@ -526,6 +526,9 @@ export function DeckToolbar({ ctl, onPresent, onInsertImage, onInsertVideo, onEd
       <span className="tb-sep" />
       <Btn title="Text box" onClick={() => ctl.addText('body')}>
         <span className="a-icon">T</span>
+      </Btn>
+      <Btn title="Sticky note" onClick={() => ctl.addNote()}>
+        {noteIcon}
       </Btn>
       <Btn title="Image" onClick={onInsertImage}>
         <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
@@ -693,7 +696,7 @@ export function DeckToolbar({ ctl, onPresent, onInsertImage, onInsertVideo, onEd
           <ColorPicker title="Text color (shape)" icon={<span className="a-icon">A</span>} value={label.textColor} onPick={(c) => styleLabels({ textColor: c })} />
         </>
       )}
-      {board && texts.some((t) => t.fill) && (
+      {texts.some((t) => t.fill) && (
         <Drop
           title="Note color"
           label={<span className="note-swatch" style={{ background: texts.find((t) => t.fill)?.fill }} />}
