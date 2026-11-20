@@ -12,6 +12,7 @@ This file keeps two things:
 
 ## Parity
 
+- **The global scratchpad is web only (2026-11-20, Taskboard task 16).** The button beside the suite bar's bell and its popup are on every web page and in the desktop shell; macOS and iOS have no suite bar and show no button, though the "Global Scratchpad" whiteboard is an ordinary Docs file (gap to close: a native button opening it).
 - **Muting a mail conversation is web only (2026-11-19, Taskboard task 10).** Mail is web only; macOS and iOS have no Mail (deliberate).
 - **Meeting alerts under the suite bar and their desktop notifications are web only (2026-11-19, Taskboard tasks 12 and 15).** A card slides down from the suite bar 2 minutes before an accepted meeting, with Join, on every web page and in the desktop shell, and since task 15 it raises a desktop notification too; macOS and iOS show neither the card nor the notification (gap to close: a native banner, or the meeting's notification).
 - **Email sign-in codes and the new sign-in design are on web only (2026-11-17, docs/specs/onboarding.md §1).** macOS and iOS keep their own sign-in (password, links, Google, Apple); the server's code routes are ready for them (gap to close).

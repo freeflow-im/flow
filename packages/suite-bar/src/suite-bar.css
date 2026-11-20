@@ -643,6 +643,7 @@
   .sb-bar .sb-divider,
   .sb-search-btn,
   .sb-search,
+  .sb-scratchpad,
   .sb-notifications {
     display: none;
   }

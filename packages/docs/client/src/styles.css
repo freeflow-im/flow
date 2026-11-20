@@ -658,6 +658,20 @@ textarea {
   background: var(--chrome);
   overflow: hidden;
 }
+.wb-framed {
+  position: relative;
+}
+/* The global scratchpad (pages/ScratchpadPage.tsx): no header, so the save state sits in the board's bottom left. */
+.wb-framed-status {
+  position: absolute;
+  bottom: 14px;
+  left: 20px;
+  z-index: 2;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.85);
+  pointer-events: none;
+}
 .wb-header {
   display: flex;
   align-items: center;

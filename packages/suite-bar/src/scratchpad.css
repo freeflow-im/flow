@@ -1,0 +1,85 @@
+/* The global scratchpad's popup (Scratchpad.tsx): a window over the page, outside the bar (in <body>), so it carries
+   its own colours rather than the bar's --sb-* tokens. Above the bar's menus and the assistant, below modal dialogs. */
+.sb-scratchpad-popup {
+  position: fixed;
+  z-index: 900;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid #dadce0;
+  border-radius: 12px;
+  box-shadow:
+    0 1px 2px rgba(16, 24, 40, 0.06),
+    0 18px 48px -8px rgba(16, 24, 40, 0.32);
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+}
+.sb-scratchpad-popup[hidden] {
+  display: none;
+}
+.sb-scratchpad-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 6px 0 14px;
+  background: #f8f9fa;
+  border-bottom: 1px solid #e3e6ea;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.sb-scratchpad-head:active {
+  cursor: grabbing;
+}
+.sb-scratchpad-title {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f1f1f;
+}
+.sb-scratchpad-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: #5f6368;
+  cursor: pointer;
+}
+.sb-scratchpad-close:hover {
+  background: #e8eaed;
+  color: #1f1f1f;
+}
+.sb-scratchpad-frame {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  display: block;
+}
+/* Over the frame while the popup moves or resizes, so the frame does not take the pointer. */
+.sb-scratchpad-sheet {
+  position: absolute;
+  inset: 36px 0 0 0;
+}
+.sb-scratchpad-grip {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  touch-action: none;
+  background: linear-gradient(135deg, transparent 50%, #bdc1c6 50%, #bdc1c6 58%, transparent 58%, transparent 70%, #bdc1c6 70%, #bdc1c6 78%, transparent 78%);
+}
+.sb-scratchpad[aria-pressed='true'] {
+  background: var(--sb-selected);
+  color: var(--sb-accent);
+}

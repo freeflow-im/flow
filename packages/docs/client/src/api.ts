@@ -449,6 +449,8 @@ export const api = {
   deleteDoc: (id: string) => request<{ ok: true }>('DELETE', `/api/docs/${encodeURIComponent(id)}`),
 
   createWhiteboard: (title: string, folder?: Place) => request<{ board: SheetMeta }>('POST', '/api/whiteboards', { title, ...placeFields(folder) }),
+  /** The global scratchpad: the user's "Global Scratchpad" whiteboard at the top of My files, made on first use. */
+  openScratchpad: () => request<{ board: SheetMeta }>('POST', '/api/whiteboards/scratchpad', placeFields('')),
   getWhiteboard: (id: string) => request<{ meta: SheetMeta; board: Whiteboard }>('GET', `/api/whiteboards/${encodeURIComponent(id)}`),
   saveWhiteboard: (id: string, board: Whiteboard, rev?: string, keepalive = false) =>
     request<{ meta: SheetMeta }>('PUT', `/api/whiteboards/${encodeURIComponent(id)}`, { board, rev }, keepalive ? { keepalive: true } : undefined),
