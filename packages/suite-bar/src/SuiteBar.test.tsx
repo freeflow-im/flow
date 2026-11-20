@@ -293,7 +293,8 @@ describe('SuiteBar', () => {
     setup();
     fireEvent.click(screen.getByTestId('suite-account-button'));
     const copy = await screen.findByTestId('suite-booking-copy');
-    expect(String((fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]![0])).toMatch(/^\/v1\/calendar\/scheduler\?/);
+    // The bar reads the meeting alerts' calendar too (alerts.tsx); the menu's own read is the scheduler's.
+    expect((fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.some((c) => /^\/v1\/calendar\/scheduler\?/.test(String(c[0])))).toBe(true);
     fireEvent.click(copy);
     expect(writeText).toHaveBeenCalledWith('https://app.test/calendar/book/k7mq-x3vd-p9tr');
     expect(screen.getByTestId('suite-booking-copy').textContent).toContain('Link copied');
