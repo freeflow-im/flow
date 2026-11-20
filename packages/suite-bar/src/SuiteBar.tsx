@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, 
 import { BOOKING_SETTINGS_PATH, useBookingLink } from './bookingLink';
 import { isInHome, routeLinksToHome } from './lib/embed';
 import { SuiteMark } from './SuiteMark';
+import { SuiteAlerts, useClosedAlerts, useMeetingAlerts, type SuiteAlert } from './alerts';
 import './suite-bar.css';
 
 /** One entry of a tab's menu: a link, or a line apart (`divider`). */
@@ -107,6 +108,10 @@ export interface SuiteBarProps {
    * Without it, the active tab's own link.
    */
   home?: { href: string; onSelect?: () => void };
+  /** The page's own alerts, slid down under the bar beside the meeting alerts (alerts.tsx). */
+  alerts?: SuiteAlert[];
+  /** `false`: no meeting alerts on this page (a page with no calendar). On by default, for the organization the bar shows. */
+  meetingAlerts?: false;
 }
 
 type Menu = 'org' | 'account' | 'apps' | null;
@@ -258,7 +263,11 @@ export function SuiteBar(props: SuiteBarProps) {
   return inHome ? null : <TheSuiteBar {...props} />;
 }
 
-function TheSuiteBar({ tabs, organization, search, assistant, notifications, account, home }: SuiteBarProps) {
+function TheSuiteBar({ tabs, organization, search, assistant, notifications, account, home, alerts, meetingAlerts }: SuiteBarProps) {
+  // The alerts under the bar (Taskboard task 12): the page's own, then the meetings about to start; closed ones stay closed.
+  const [closedAlerts, closeAlert] = useClosedAlerts();
+  const meetings = useMeetingAlerts(meetingAlerts === false ? null : organization?.entries.find((e) => e.active)?.id ?? null, closedAlerts);
+  const shownAlerts = [...(alerts ?? []).filter((a) => !closedAlerts.has(a.id)), ...meetings];
   const [menu, setMenu] = useState<Menu>(null);
   const [searching, setSearching] = useState(false);
   const [ownQuery, setOwnQuery] = useState('');
@@ -650,6 +659,7 @@ function TheSuiteBar({ tabs, organization, search, assistant, notifications, acc
           )}
         </div>
       </div>
+      <SuiteAlerts alerts={shownAlerts} onClose={closeAlert} />
     </header>
   );
 }
