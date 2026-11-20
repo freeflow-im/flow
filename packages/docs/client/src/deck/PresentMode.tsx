@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { SLIDE_H, SLIDE_W } from '../../../shared/deck.ts';
 import type { DeckController } from './controller.ts';
 import { SlideView } from './SlideView.tsx';
+import { useSlideFragment } from './slideFragment.ts';
 
 const NOTES_HEIGHT = 0.28; // share of the window given to the notes panel
 
@@ -18,6 +19,8 @@ export function PresentMode({ ctl, withNotes = true, onExit }: { ctl: Pick<DeckC
   exitRef.current = onExit;
   const indexRef = useRef(index);
   indexRef.current = index;
+  // The address follows the show too, so it can be passed on at the slide on screen.
+  useSlideFragment(Math.min(index, n - 1), n, setIndex);
 
   useEffect(() => {
     const el = document.querySelector('.present');
