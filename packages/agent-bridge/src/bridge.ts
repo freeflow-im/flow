@@ -174,6 +174,18 @@ class Semaphore {
   }
 }
 
+
+/**
+ * How an agent waits for something (CI, a deploy) and reports back. The bridge keeps a session's process alive while a
+ * `run_in_background` task is open (up to sessionHardCapSec) and posts the turn Claude Code starts when it ends; a cron,
+ * a scheduled wakeup or a detached process is invisible to it, dies when the idle session is ended, and the agent's
+ * "I'll post when CI finishes" never happens.
+ */
+export function waitingRule(hardCapSec: number): string {
+  const minutes = Math.round(hardCapSec / 60);
+  return `To wait for something to finish (CI, a deploy), run one Bash command that blocks until it is done, with run_in_background, for example \`gh pr checks <number> --watch\`. When it ends you get a new turn, and your answer is posted in this conversation. It may run up to ${minutes} minutes. Do not use scheduled checks, cron, or detached processes (nohup, &): they stop when your session ends, so you would never report back. Only say you will report back when you have started such a command.`;
+}
+
 export class AgentBridge {
   private readonly api: FlowApi;
   private socket!: ReturnType<typeof openFlowSocket>;
@@ -1546,6 +1558,7 @@ export class AgentBridge {
       mcp
         ? 'You have Flow MCP tools: send_message, react, upload_file, download_file (fetch a file attached to any message — read_messages notes attachments with their file ids), search_history, set_avatar (change your own profile picture from a local image), create_artifact, list_artifacts, deliver_artifact, update_artifact, plus channel operations (list_channels, list_users, join_channel, leave_channel, create_channel, invite_to_channel — add several userIds in one call, read_messages — newest first, page with before=<oldest id>), and start_task — hand long-running work off to a separate run of yourself homed in another channel (that channel becomes the run’s conversation: progress, replies and human steering all live there; the prompt must be self-contained, and after handing off you reply here with a one-line pointer instead of doing the work). Messages sent with send_message deliver immediately. Your final response text is ALSO posted to the conversation — if you already replied via send_message, keep the final text short or empty.'
         : 'Your final response text is posted to the conversation as your reply.',
+      this.cfg.runtime.kind === 'claude' ? waitingRule(this.cfg.runtime.sessionHardCapSec) : '',
       this.cfg.runtime.systemPromptExtra ?? '',
       mcp ? 'For a report, comparison matrix, or substantial deliverable, call create_artifact with the finished content. It saves the report and posts an Open report card. upload_file alone is not completion. Check the returned delivery status before claiming it is delivered; do not claim client rendering was observed. Use list_artifacts and update_artifact for revisions, and deliver_artifact to recover a failed card delivery without creating a duplicate.' : '',
     ];

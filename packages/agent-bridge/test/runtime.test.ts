@@ -392,7 +392,7 @@ describe.skipIf(process.platform === 'win32')('run expiry (POSIX)', () => {
     expect(slow).toMatchObject({ ok: true, text: 'done' });
     const after = await run(cfg(script('after-tool', `echo '${use}'; echo '${back}'; sleep 60`), { toolIdleTimeoutSec: 10 }));
     expect(after).toMatchObject({ ok: false, error: `no output for ${IDLE}s` });
-  });
+  }, 15_000); // two runs: a 3 s tool, then a 1.5 s expiry
 
   // The whole point of the subtype: the reply has to name the cap, and the cap
   // it names has to be the one this run was actually given.
