@@ -1,6 +1,6 @@
 // Toolbar for the deck editor: slides, layout, theme, inserting elements, text styling and arrangement.
 import { useEffect, useState, type ReactNode } from 'react';
-import { buildSlide, type ChartElement, LAYOUT_IDS, SLIDE_H, SLIDE_W, THEME_IDS, THEMES, type ArrowStyle, type LayoutId, type LineElement, type LineKind, type TextElement, type ThemeId } from '../../../shared/deck.ts';
+import { buildSlide, type ChartElement, LAYOUT_IDS, SLIDE_H, SLIDE_W, THEME_IDS, THEMES, type ArrowStyle, type LayoutId, type LineElement, type LineKind, type ShapeElement, type TextElement, type ThemeId } from '../../../shared/deck.ts';
 import { ARROW_STYLES, DASH_STYLES, DEFAULT_LINE_WIDTH } from '../../../shared/lines.ts';
 import { SHAPE_KINDS, SHAPES } from '../../../shared/shapes.ts';
 import { sourceLabel, TABLE_SIZE } from '../../../shared/deckTable.ts';
@@ -488,7 +488,21 @@ export function DeckToolbar({ ctl, onPresent, onInsertImage, onInsertVideo, onEd
   const texts = selected.filter((e): e is TextElement => e.type === 'text');
   const text = texts[0];
   const shapes = selected.filter((e) => e.type === 'shape');
-  const line = selected.find((e): e is LineElement => e.type === 'line');
+  // Every shape but a line can hold a label; its style lives on the shape (textColor, textBold, ...).
+  const labelled = shapes.filter((e): e is ShapeElement => e.type === 'shape' && e.shape !== 'line');
+  const label = labelled[0];
+  const labelSize = label?.textSize ?? 18;
+  const styleLabels = (patch: Partial<Pick<ShapeElement, 'textColor' | 'textBold' | 'textItalic' | 'textFont' | 'textSize'>>) =>
+    ctl.updateElements(
+      labelled.map((s) => s.id),
+      (e) => {
+        if (e.type !== 'shape') return e;
+        const next: ShapeElement = { ...e, ...patch };
+        for (const k of Object.keys(patch) as (keyof typeof patch)[]) if (patch[k] === undefined) delete next[k];
+        return next;
+      },
+    );
+  const line =selected.find((e): e is LineElement => e.type === 'line');
   const table = ctl.table;
   const chartEl = selected.length === 1 && selected[0].type === 'chart' ? selected[0] : null;
   const role = text?.role ?? 'body';
@@ -650,6 +664,34 @@ export function DeckToolbar({ ctl, onPresent, onInsertImage, onInsertVideo, onEd
             )
           }
         />
+      )}
+      {label && !text && (
+        <>
+          <Btn title="Bold (shape text)" active={!!label.textBold} onClick={() => styleLabels({ textBold: label.textBold ? undefined : true })}>
+            <b>B</b>
+          </Btn>
+          <Btn title="Italic (shape text)" active={!!label.textItalic} onClick={() => styleLabels({ textItalic: label.textItalic ? undefined : true })}>
+            <i>I</i>
+          </Btn>
+          <select className="tb-select" title="Shape text font" aria-label="Shape text font" value={label.textFont ?? ''} onMouseDown={(e) => e.stopPropagation()} onChange={(e) => styleLabels({ textFont: e.target.value || undefined })}>
+            <option value="">Theme font</option>
+            {label.textFont && !FONTS.includes(label.textFont) && <option value={label.textFont}>{label.textFont}</option>}
+            {FONTS.map((f) => (
+              <option key={f} value={f}>
+                {f}
+              </option>
+            ))}
+          </select>
+          <select className="tb-select" title="Shape text size" aria-label="Shape text size" value={SIZES.includes(labelSize) ? labelSize : ''} onMouseDown={(e) => e.stopPropagation()} onChange={(e) => styleLabels({ textSize: Number(e.target.value) === 18 ? undefined : Number(e.target.value) })}>
+            {!SIZES.includes(labelSize) && <option value="">{labelSize}</option>}
+            {SIZES.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+          <ColorPicker title="Text color (shape)" icon={<span className="a-icon">A</span>} value={label.textColor} onPick={(c) => styleLabels({ textColor: c })} />
+        </>
       )}
       {board && texts.some((t) => t.fill) && (
         <Drop
