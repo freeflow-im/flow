@@ -45,6 +45,13 @@ export interface RuntimeConfig {
   /** Kill a run after this many seconds with no output of any kind. */
   idleTimeoutSec: number;
   /**
+   * The same, while a tool call is running: the CLI prints nothing between a
+   * tool's start and its result, so a long build or a hung command would hit
+   * idleTimeoutSec. Above Claude Code's 10-minute Bash cap, so a hung command
+   * ends with the tool's own timeout, which the agent sees. Default 660.
+   */
+  toolIdleTimeoutSec?: number;
+  /**
    * Persistent sessions (#519): end a conversation's CLI process after this
    * many seconds with no turn running *and* no background task open. The next
    * message respawns it with `--resume`, so reaping costs context nothing —
@@ -158,6 +165,14 @@ interface RawConfig {
   mail?: { fromOutside?: string };
 }
 
+/** toolIdleTimeoutSec's default: just over Claude Code's 10-minute Bash cap. */
+export const TOOL_IDLE_TIMEOUT_SEC = 660;
+
+/** How long a run may be silent now: longer while a tool call is running (toolIdleTimeoutSec). */
+export function idleLimitSec(cfg: Pick<RuntimeConfig, 'idleTimeoutSec' | 'toolIdleTimeoutSec'>, toolRunning: boolean): number {
+  return toolRunning ? Math.max(cfg.idleTimeoutSec, cfg.toolIdleTimeoutSec ?? TOOL_IDLE_TIMEOUT_SEC) : cfg.idleTimeoutSec;
+}
+
 export function loadConfig(configPath: string): BridgeConfig {
   const abs = path.resolve(configPath);
   let raw: RawConfig;
@@ -193,6 +208,7 @@ export function loadConfig(configPath: string): BridgeConfig {
     // killed real multi-hour work at exactly 10 minutes. timeoutSec remains as
     // an absolute runaway backstop, set far above any healthy turn.
     idleTimeoutSec: r.idleTimeoutSec ?? 120,
+    toolIdleTimeoutSec: r.toolIdleTimeoutSec ?? TOOL_IDLE_TIMEOUT_SEC,
     timeoutSec: r.timeoutSec ?? 3600,
     // Ten minutes of true quiet is plenty: a resumed session is indistinguishable
     // from one that never stopped, so the only cost of reaping early is losing
@@ -204,8 +220,8 @@ export function loadConfig(configPath: string): BridgeConfig {
   };
 
   // Zero or negative would expire every run the instant it starts.
-  for (const k of ['timeoutSec', 'idleTimeoutSec', 'sessionIdleSec', 'sessionHardCapSec'] as const) {
-    if (!(runtime[k] > 0)) throw new Error(`config: runtime.${k} must be a positive number`);
+  for (const k of ['timeoutSec', 'idleTimeoutSec', 'toolIdleTimeoutSec', 'sessionIdleSec', 'sessionHardCapSec'] as const) {
+    if (!((runtime[k] ?? 0) > 0)) throw new Error(`config: runtime.${k} must be a positive number`);
   }
 
   // A missing cwd would otherwise surface as a misleading "spawn <cli> ENOENT"

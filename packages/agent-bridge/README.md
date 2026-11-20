@@ -120,7 +120,8 @@ onboarding.
 | `runtime.kind` | `claude` | `claude`, `codex` (baseline CLI adapter), or `demo` (canned reply — wiring check) |
 | `runtime.cwd` | config dir | working directory the CLI runs in (`~` expands) |
 | `runtime.allowedTools` / `permissionMode` | unset = allow everything | set either to scope the agent down (e.g. `["Read", "Grep"]`) |
-| `runtime.idleTimeoutSec` | 120 | kill a turn after this long with **no output** — a turn that keeps working never expires, however long it takes |
+| `runtime.idleTimeoutSec` | 120 | kill a turn after this long with **no output** between steps — a turn that keeps working never expires, however long it takes |
+| `runtime.toolIdleTimeoutSec` | 660 | the same, while a tool call is running (a long build, a slow `gh`): the CLI is silent until the tool returns |
 | `runtime.maxTurns` / `timeoutSec` | 200 / 3600 | runaway backstops (`timeoutSec` is the absolute per-turn wall clock, in seconds) |
 | `runtime.sessionIdleSec` | 600 | end a conversation's CLI process after this long with no turn running **and** no background task open; the next message resumes it |
 | `runtime.sessionHardCapSec` | 3600 | ceiling on the reprieve a pending background task buys, counted from the last turn — a wedged task can't pin a session open forever |

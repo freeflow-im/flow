@@ -6,6 +6,7 @@
 //
 //   say <text>        one assistant text block
 //   tool <name> <arg> one tool_use block
+//   result            the tool_result of the last tool_use (it returned)
 //   bg <ms> <desc>    background a task: tool_use(run_in_background) +
 //                     task_started now, and <ms> later the completion events
 //                     followed by a *self-started* turn, exactly as the SDK's
@@ -102,6 +103,9 @@ async function runTurn(script) {
         break;
       case 'tool':
         out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: `toolu_${++seq}`, name: rest[0], input: { command: rest.slice(1).join(' ') } }] } });
+        break;
+      case 'result':
+        out({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `toolu_${seq}`, content: 'ok' }] } });
         break;
       case 'bg':
         background(Number(rest[0]), rest.slice(1).join(' ') || 'background work');

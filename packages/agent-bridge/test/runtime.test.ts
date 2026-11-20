@@ -385,6 +385,15 @@ describe.skipIf(process.platform === 'win32')('run expiry (POSIX)', () => {
 
   afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
 
+  it('a one-shot run allows the tool limit while a tool call is running, and the short one after', async () => {
+    const use = '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"pnpm test"}}]}}';
+    const back = '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}';
+    const slow = await run(cfg(script('slow-tool', `echo '${use}'; sleep 3; echo '${back}'; echo '${DONE}'`), { toolIdleTimeoutSec: 10 }));
+    expect(slow).toMatchObject({ ok: true, text: 'done' });
+    const after = await run(cfg(script('after-tool', `echo '${use}'; echo '${back}'; sleep 60`), { toolIdleTimeoutSec: 10 }));
+    expect(after).toMatchObject({ ok: false, error: `no output for ${IDLE}s` });
+  });
+
   // The whole point of the subtype: the reply has to name the cap, and the cap
   // it names has to be the one this run was actually given.
   it('reports a turn-cap failure by name, with the run’s own cap', async () => {
@@ -656,6 +665,7 @@ describe('loadConfig', () => {
     expect(cfg.runtime.mcp).toBe(true);
     expect(cfg.runtime.maxTurns).toBe(200); // a runaway backstop, not a work limit
     expect(cfg.runtime.idleTimeoutSec).toBe(120);
+    expect(cfg.runtime.toolIdleTimeoutSec).toBe(660);
     // #519: reaper defaults — 10 minutes idle, an hour of held-off cap.
     expect(cfg.runtime.sessionIdleSec).toBe(600);
     expect(cfg.runtime.sessionHardCapSec).toBe(3600);

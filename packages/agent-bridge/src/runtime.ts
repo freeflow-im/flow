@@ -10,7 +10,7 @@
 // its tool steps and the session its resumable thread id (see CodexJsonParser).
 // The system prompt is folded into the first invocation of a session.
 import { spawn } from 'node:child_process';
-import type { RuntimeConfig } from './config.js';
+import { idleLimitSec, type RuntimeConfig } from './config.js';
 
 export interface RunOpts {
   /** Prepared call images/PDF previews. Claude reads paths; Codex receives image inputs. */
@@ -173,7 +173,7 @@ interface StreamEvent {
   result?: string;
   is_error?: boolean;
   message?: {
-    content?: Array<{ type?: string; id?: string; name?: string; input?: unknown; text?: string }>;
+    content?: Array<{ type?: string; id?: string; name?: string; input?: unknown; text?: string; tool_use_id?: string }> | string;
   };
   /** system/background_tasks_changed: the complete set of tasks running right now. */
   tasks?: Array<{ task_id?: string; description?: string }>;
@@ -237,6 +237,12 @@ export class StreamJsonParser {
    * `task:<task_id>`; the value is a human description for the logs.
    */
   readonly pending = new Map<string, string>();
+  /**
+   * Tool calls of this turn that have started and not yet returned (their
+   * tool_use ids). The CLI is silent while one runs, so the idle timer allows
+   * longer then (idleLimitSec).
+   */
+  readonly running = new Set<string>();
 
   constructor(
     private readonly onToolStep: (step: string) => void,
@@ -256,6 +262,7 @@ export class StreamJsonParser {
     this.sawResult = false;
     this.errorSubtype = '';
     this.lastText = '';
+    this.running.clear();
   }
 
   feed(chunk: string): void {
@@ -278,9 +285,16 @@ export class StreamJsonParser {
     }
     if (typeof ev.type === 'string') this.sawEvent = true;
     if (ev.type === 'system') return this.handleSystem(ev);
+    const raw = ev.message?.content;
+    const content = Array.isArray(raw) ? raw : [];
+    if (ev.type === 'user') {
+      for (const block of content) if (block.type === 'tool_result' && block.tool_use_id) this.running.delete(block.tool_use_id);
+      return;
+    }
     if (ev.type === 'assistant') {
-      for (const block of ev.message?.content ?? []) {
+      for (const block of content) {
         if (block.type === 'tool_use' && block.name) {
+          if (block.id) this.running.add(block.id);
           this.openIfBackgrounded(block.id, block.name, block.input);
           this.onToolStep(formatToolStep(block.name, block.input));
         }
@@ -292,6 +306,7 @@ export class StreamJsonParser {
         }
       }
     } else if (ev.type === 'result') {
+      this.running.clear();
       this.sawResult = true;
       this.isError = ev.is_error === true || (ev.subtype !== undefined && ev.subtype !== 'success');
       this.errorSubtype = this.isError ? (ev.subtype ?? '') : '';
@@ -681,17 +696,19 @@ export async function runRuntime(cfg: RuntimeConfig, opts: RunOpts): Promise<Run
     const bumpIdle = (): void => {
       if (settled) return;
       if (idleTimer) clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => expire(`no output for ${cfg.idleTimeoutSec}s`), cfg.idleTimeoutSec * 1000);
+      const limit = idleLimitSec(cfg, cfg.kind === 'claude' && parser.running.size > 0);
+      idleTimer = setTimeout(() => expire(`no output for ${limit}s`), limit * 1000);
     };
     capTimer = setTimeout(() => expire(`hit the ${cfg.timeoutSec}s run cap`), cfg.timeoutSec * 1000);
     bumpIdle();
 
     child.stdout!.on('data', (d: Buffer) => {
-      bumpIdle();
       const s = d.toString('utf8');
       stdout += s;
       if (cfg.kind === 'claude') parser.feed(s);
       else if (cfg.kind === 'codex') codex.feed(s);
+      // After the feed, so a tool call that just started gets the longer limit.
+      bumpIdle();
     });
     child.stderr!.on('data', (d: Buffer) => {
       bumpIdle();
