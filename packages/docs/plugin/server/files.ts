@@ -9,6 +9,7 @@ import { runClientTool, type ClientToolEnv } from '../../client/src/agent/client
 import { linkDeckTables, runDeckTool } from '../../client/src/agent/deckTools.ts';
 import { runWhiteboardTool } from '../../client/src/agent/whiteboardTools.ts';
 import { BOARD_H, BOARD_W, boardAsDeck, deckAsBoard, newWhiteboard } from '../../shared/whiteboard.ts';
+import { FILE_PAGES, type FileKind as PageKind } from '../../shared/pages.ts';
 import { loadLinkedChart, loadLinkedTable } from '../../server/linkedTable.ts';
 import { importExcel, ImportError } from '../../server/xlsxImport.ts';
 import { runDocTool } from '../../client/src/agent/docTools.ts';
@@ -470,7 +471,7 @@ export class FileService {
   /** In the suite: which root a file is in, and its page in the app. */
   placed<T extends FileSummary>(f: T, meta?: { shared?: boolean }): T {
     if (!this.orgId && !this.hub.appUrl) return f;
-    const page = ({ sheet: 's', doc: 'doc', deck: 'd', markdown: 'md', whiteboard: 'w', file: 'f' } as Record<string, string>)[f.kind] ?? 'f';
+    const page = FILE_PAGES[f.kind as PageKind] ?? 'f';
     return {
       ...f,
       ...(this.orgId && meta ? { root: meta.shared ? 'Organization files' : 'My files' } : {}),

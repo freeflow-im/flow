@@ -5,6 +5,7 @@ import { isHtmlName, type DeletedFile, type StoredFile } from '../../../shared/t
 import { AgentButton } from '../agent/AgentPanel.tsx';
 import { useAgent } from '../agent/AgentProvider.tsx';
 import { api, placeFields as placeFieldsOf, type ContentHit, type FolderInfo, type Place, type RecentFile } from '../api.ts';
+import { filePath } from '../../../shared/pages.ts';
 import { OrganizationPicker, scopeActionLabels } from '../components/OrganizationActions.tsx';
 import { ShareWithDialog } from '../components/ShareWithDialog.tsx';
 import { useOrganization } from '../organization.ts';
@@ -35,7 +36,7 @@ import { inDesktopApp, PlaceSwitch } from '../components/PlaceSwitch.tsx';
 import { downloadLink, DownloadFromWebDialog, pathOfFile, UploadToWebDialog } from '../components/WebCopyDialogs.tsx';
 import { downloadPdf } from '../print.ts';
 
-const pathOf = (s: LibraryItem) => (s.kind === 'deck' ? `/d/${s.id}` : s.kind === 'doc' ? `/doc/${s.id}` : s.kind === 'markdown' ? `/md/${s.id}` : s.kind === 'file' ? `/f/${s.id}` : `/s/${s.id}`);
+const pathOf = (s: LibraryItem) => filePath(s.kind, s.id);
 
 /** The last "Find files" search and its results, kept while the list is unchanged. */
 let lastFind: { text: string; result: Promise<{ folders: FolderInfo[]; items: LibraryItem[]; truncated: boolean }> } | null = null;
