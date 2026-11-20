@@ -39,6 +39,7 @@ import Main from './components/Main';
 import ChatSuiteBar from './components/ChatSuiteBar';
 import ChatIntents from './components/ChatIntents';
 import { readChatIntent, withoutChatIntent, type ChatIntent } from './lib/chatIntents';
+import { useChatFavicon } from './lib/favicon';
 
 // Names, not keys. Every one of these is per connection+identity: the runtime
 // turns a name into the storage key its session owns, and the connection the
@@ -240,6 +241,8 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
   // The connection this window is pointed at. One today (the migrated default);
   // the manager is what phase 3's switcher will drive.
   const [user, setUser] = useState<UserDTO | null>(null);
+  // The tab shows Chat's icon once someone is signed in; the sign-in screen keeps the suite mark (lib/favicon.ts).
+  useChatFavicon(user !== null);
   // Sent here to sign in by another part of the suite (?next=, kept above): back there once signed in. The
   // session is set as the cookie first (a session from before the cookie existed has none), as the Workspace
   // app's pages carry the cookie alone.
