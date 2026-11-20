@@ -168,5 +168,6 @@ describe('image icons (user-apps.md §4)', () => {
 
   it('accepts members:read in uses', () => {
     expect(problems({ ...hosted('🗂️'), uses: ['members:read'] })).toEqual([]);
+    expect(problems({ ...hosted('🗂️'), uses: ['files:read'] })).toEqual([]);
   });
 });

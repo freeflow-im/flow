@@ -68,7 +68,7 @@ export interface UserAppManifest {
 }
 
 /** What a hosted app may ask to use of the suite (§6.3): each is an AppSuite method the platform checks. */
-export const APP_USES = ['docs:read', 'chat:write', 'members:read'] as const;
+export const APP_USES = ['docs:read', 'chat:write', 'members:read', 'files:read'] as const;
 export type AppUse = (typeof APP_USES)[number];
 
 /** Whether the app's server is the platform's (§7.1). */
