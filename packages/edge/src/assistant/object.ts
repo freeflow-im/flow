@@ -607,7 +607,9 @@ export class Assistant extends DurableObject<AssistantEnv> {
       const replyByMail = sub?.action?.kind === 'wake' && sub.action.reply === 'mail' && runtime.mode === 'personal';
       let conversation = `auto:${job.subscriptionId}`;
       const { who, user, actorAccountId } = await this.actorOf(runtime, organizationId, conversation, 'the agent runtime');
-      let prompt = job.prompt;
+      // The brief (events/core.ts wakeBrief) says an automation woke the agent and for which event; a mail reply job's
+      // turn is framed by its own prompt and the email below it instead.
+      let prompt = replyByMail ? job.prompt : ((await Promise.resolve().then(() => events?.jobBrief(job.id, job.agent)).catch(() => null)) ?? job.prompt);
       if (replyByMail) {
         mail = await this.triggeringMail(job, organizationId, who.caller);
         if (!mail) throw new Error('the email that woke this job is no longer in the mailbox');

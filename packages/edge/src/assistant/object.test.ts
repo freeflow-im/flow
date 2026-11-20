@@ -429,7 +429,10 @@ describe('a hosted agent’s runtime takes a wake job (agents.md §6)', () => {
       env: {
         DIRECTORY: { idFromName: (n: string) => n, get: () => ({ call: async (m: string, args: unknown[]) => ({ ok: true, value: m === 'getUser' ? users[args[0] as string] : m === 'accountById' ? accounts[args[0] as string] : null }) }) },
         ORG: { idFromName: (n: string) => n, get: () => ({ channelIdsOf: async () => ['ch-1'], postAutomation: async (p: Record<string, unknown>) => { posted.push(p); return 'm1'; } }) },
-        EVENTS: { idFromName: (n: string) => n, get: () => ({ jobStep: async (job: string, _agent: string, step: string, opts?: unknown) => { steps.push({ job, step, opts }); return { id: job, state: step === 'ack' ? 'running' : 'done' }; } }) },
+        EVENTS: { idFromName: (n: string) => n, get: () => ({
+          jobStep: async (job: string, _agent: string, step: string, opts?: unknown) => { steps.push({ job, step, opts }); return { id: job, state: step === 'ack' ? 'running' : 'done' }; },
+          jobBrief: async (job: string) => (job === 'job-1' ? 'An automation woke you: "s". It fired for this event: …\n\nSummarize: hello' : null),
+        }) },
       } as unknown as AssistantEnv,
     };
   }
@@ -438,8 +441,10 @@ describe('a hosted agent’s runtime takes a wake job (agents.md §6)', () => {
     const e = env();
     const a = assistant('acct-omni', e.env);
     const systems: string[] = [];
+    const asked: string[] = [];
     a.script = async (params, { onText }) => {
       systems.push(JSON.stringify(params.system));
+      asked.push(JSON.stringify(params.messages));
       onText('Hello was said.');
       return message([{ type: 'text', text: 'Hello was said.' }], 'end_turn') as never;
     };
@@ -449,6 +454,8 @@ describe('a hosted agent’s runtime takes a wake job (agents.md §6)', () => {
     expect(e.steps[1]!.opts).toMatchObject({ ok: true, note: 'Hello was said.' });
     expect(e.posted).toEqual([{ ownerAccountId: 'acct-omni', channelId: 'ch-1', body: 'Hello was said.', clientMsgId: 'job-1', depth: 2, causedBy: 'job-1' }]);
     expect(systems[0]).toContain('Keep it short.');
+    // The turn runs the brief (the automation and its event), not the bare prompt.
+    expect(asked[0]).toContain('An automation woke you');
     // The runtime is the agent's now: a person's request for it is refused as another account's.
     expect((await a.handle(req('GET', '/api/agent?scope=home'), CALLER, DOCS_CALLER)).status).toBe(500);
   });

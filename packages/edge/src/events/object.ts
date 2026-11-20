@@ -188,6 +188,11 @@ export class Events extends DurableObject<EventsEnv> {
     return this.core.triggerOf(id, agent);
   }
 
+  /** What the agent's runtime runs for the job: the automation's prompt with the event that fired it (core.wakeBrief). */
+  jobBrief(id: string, agent: string): string | null {
+    return this.core.briefOf(id, agent);
+  }
+
   jobDepth(id: string, agent: string): number | null {
     return this.core.jobDepth(id, agent);
   }

@@ -71,6 +71,15 @@ describe('wake subscriptions', () => {
     const job = read.events[0]!;
     expect(job).toMatchObject({ causedBy: jobs[0]!.id, depth: 1, actor: null, ref: { app: 'events', kind: 'job', id: jobs[0]!.id } });
     expect((job.data as AgentJobEventData)).toMatchObject({ jobId: jobs[0]!.id, subscriptionId: sub.id, event: { seq: 1, type: 'chat.message.created', channelId: 'general' } });
+    // The agent is told an automation woke it, for which event, and to act on that one event.
+    expect((job.data as AgentJobEventData).prompt).toBe([
+      'An automation woke you: "summaries". It fired for this event:',
+      '- type: chat.message.created', '- by: acct-ann', '- channel: general', '- data: {"body":"hi"}',
+      '', "The automation's instruction:", 'Summarize: {"body":"hi"} (chat.message.created in general by acct-ann)',
+      '', "Act on this one event. If the event does not meet the instruction's condition, do nothing.",
+    ].join('\n'));
+    expect(h.o.jobBrief(jobs[0]!.id, BOT)).toBe((job.data as AgentJobEventData).prompt);
+    expect(h.o.jobBrief(jobs[0]!.id, BOB)).toBeNull();
     // Only the agent sees it.
     expect((await h.o.read({ since: 0, types: ['agent.job'] }, { accountId: BOB, channelIds: [] })).events).toHaveLength(0);
     expect(h.sent).toEqual([{ body: { organizationId: ORG, jobId: jobs[0]!.id, check: 'ack' }, delaySeconds: 2 }]);
@@ -148,6 +157,8 @@ describe('a job', () => {
     const deliveries = (await h.o.read({ since: 0, types: ['agent.job'] }, { accountId: BOT, channelIds: [] })).events;
     expect(deliveries.map((e) => (e.data as AgentJobEventData).jobId)).toEqual(Array(4).fill(job!.id));
     expect(new Set(deliveries.map((e) => e.id)).size).toBe(4);
+    // Each delivery again carries the first one's brief.
+    expect(new Set(deliveries.map((e) => (e.data as AgentJobEventData).prompt)).size).toBe(1);
     expect(h.o.getJob(job!.id)).toMatchObject({ state: 'parked', attempts: 3 });
     expect(h.notices).toEqual([{ ownerAccountId: BOB, agentAccountId: BOT, name: 'summaries', why: 'parked' }]);
   });
@@ -188,6 +199,8 @@ describe('schedules', () => {
     expect(ticks).toHaveLength(1);
     expect(ticks[0]).toMatchObject({ actor: null, ref: { kind: 'schedule', id: sub.schedule!.id }, data: { subscriptionId: sub.id, at: new Date(next).toISOString() } });
     expect(h.o.listJobs(sub.id)).toMatchObject([{ state: 'delivered', prompt: expect.stringContaining('"every":"hourly"') }]);
+    const woke = (await h.o.read({ since: 0, types: ['agent.job'] }, { accountId: BOT, channelIds: [] })).events;
+    expect((woke[0]!.data as AgentJobEventData).prompt).toMatch(new RegExp(`^An automation woke you: "hourly digest". It runs on a schedule; this is the run for ${new Date(next).toISOString()}\\.\n\nThe automation's instruction:\nDigest at `));
     const after = h.o.getSubscription(sub.id)!.schedule!;
     expect(Date.parse(after.nextAt)).toBe(next + 3_600_000);
     expect(h.alarms.at(-1)).toBe(next + 3_600_000);
