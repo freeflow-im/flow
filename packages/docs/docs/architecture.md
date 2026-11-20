@@ -77,7 +77,8 @@ How each part of MCP Docs works, area by area: what CLAUDE.md points to. Read th
   read back into runs by `editedRuns`) and `imagesOnTop`. Typed text is a text element with `anchored`: placed at the click,
   edited where it is (never dragged), with no paragraph spacing, its stored box measured from the page after each change
   and merged into that change's undo step (`DeckStore.amend`); left empty, it goes. A sticky note is a text element with a
-  `fill`. The assistant's tools are `read_whiteboard` and `edit_whiteboard` (`client/src/agent/whiteboardTools.ts`, items as
+  `fill`; slides have them too (the toolbar's Sticky note button, `addNote()` with no point centers it; `fill` on an
+  `edit_elements` text element; PowerPoint export draws the paper behind the text). The assistant's tools are `read_whiteboard` and `edit_whiteboard` (`client/src/agent/whiteboardTools.ts`, items as
   `edit_elements` takes them plus `note` and typed `text`, **bold**/*italic* in text): browser tools on the open board
   (`useRegisterWhiteboard`, page `whiteboard`), and over MCP (version 2, with `board_id`, plus `list_whiteboards` and
   `create_whiteboard`) the same code on a stored board through a headless controller (`FileService.editWhiteboard`).

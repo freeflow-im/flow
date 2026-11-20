@@ -157,3 +157,14 @@ describe('a pasted picture getting its stored address after its upload', () => {
     expect(src(ctl, id)).toBeUndefined();
   });
 });
+
+describe('sticky notes on a slide', () => {
+  it('puts a yellow 200×200 note in the middle of the slide, selected and being edited', () => {
+    const ctl = new DeckController(newDeck(), async () => {});
+    const id = ctl.addNote();
+    const note = ctl.slide.elements.find((e) => e.id === id)!;
+    expect(note).toMatchObject({ type: 'text', fill: '#fff59d', w: 200, h: 200, x: (960 - 200) / 2, y: (540 - 200) / 2 });
+    expect(ctl.selection).toEqual([id]);
+    expect(ctl.editing).toBe(id);
+  });
+});

@@ -179,6 +179,11 @@ const elementSpec = elementSpecV1
     size: z.number().min(4).max(400).optional().describe('Font size in points (text elements and shape labels, which default to 18; tables, which default to 16).'),
     color: z.string().max(64).optional().describe('Text CSS color of text elements, shape labels and tables; "" uses the theme color.'),
     font: z.string().max(64).optional().describe('Font family of text elements, shape labels and tables, e.g. "Inter"; "" uses the theme font.'),
+    fill: z
+      .string()
+      .max(64)
+      .optional()
+      .describe('Shapes: the fill CSS color, or "none". Text elements: a background color, which makes the text a sticky note (a square of colored paper, about 200×200, with dark text: #fff59d yellow, #ffcc80 orange, #f8bbd0 pink, #b3e5fc blue, #c8e6c9 green, #e1bee7 purple); "" or "none" removes it.'),
     rows: z
       .array(z.array(z.string().max(2000)).max(MAX_TABLE_COLS))
       .min(1)

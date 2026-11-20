@@ -244,6 +244,16 @@ describe('pptx export and import', () => {
     expect(backBars).not.toHaveProperty('source');
   });
 
+  it("exports a sticky note's paper color behind its text", async () => {
+    const s = buildSlide('blank', {}, newId);
+    const note: TextElement = { id: newId(), type: 'text', x: 100, y: 100, w: 200, h: 200, fill: '#fff59d', paragraphs: [{ text: 'Remember' }], style: { size: 18, color: '#202124' } };
+    s.elements.push(note);
+    const { buf } = await pptxBuffer({ version: 1, theme: 'light', slides: [s] });
+    const xml = await (await JSZip.loadAsync(buf)).file('ppt/slides/slide1.xml')!.async('string');
+    const sp = xml.split('<p:sp>').find((x) => x.includes('Remember'))!;
+    expect(sp).toMatch(/<p:spPr>.*<a:solidFill><a:srgbClr val="FFF59D"/);
+  });
+
   it('keeps the spreadsheet range a table is linked to', async () => {
     const s = buildSlide('blank', {}, newId);
     const source = { sheet: 'abc123', title: 'Q3 "final" & more', tabId: 't1', tab: 'Sales <EU>', range: 'A1:B2', rev: '2026-10-19T10:00:00.000Z' };

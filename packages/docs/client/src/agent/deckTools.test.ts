@@ -27,6 +27,20 @@ function setup() {
 }
 
 describe('agent deck tools', () => {
+  it('makes a text element a sticky note with a fill, keeps it on later edits and takes it away with ""', async () => {
+    const { deck, call } = setup();
+    const added = await call('edit_elements', { slide: 1, set: [{ type: 'text', text: 'Remember', fill: '#fff59d', x: 100, y: 100, w: 200, h: 200 }] });
+    const id = added.set[0].id as string;
+    const note = () => deck.deck.slides[0].elements.find((e) => e.id === id) as TextElement;
+    expect(note()).toMatchObject({ type: 'text', fill: '#fff59d' });
+    await call('edit_elements', { slide: 1, set: [{ id, x: 40 }] });
+    expect(note()).toMatchObject({ x: 40, fill: '#fff59d' });
+    const outline = await call('read_deck');
+    expect(outline.slides[0].elements.find((e: { id: string }) => e.id === id)).toMatchObject({ fill: '#fff59d' });
+    await call('edit_elements', { slide: 1, set: [{ id, fill: '' }] });
+    expect(note()).not.toHaveProperty('fill');
+  });
+
   it('adds slides from layouts, reads the outline and undoes one request as a single step', async () => {
     const { deck, call } = setup();
     const res = await call('add_slides', {
