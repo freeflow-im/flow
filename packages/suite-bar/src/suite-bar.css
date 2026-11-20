@@ -736,7 +736,8 @@
    menu, opened, stays above them. */
 .sb-alerts {
   position: absolute;
-  top: calc(100% + 8px);
+  /* At the top edge of the window, over the bar's right side, like the system's own notifications. */
+  top: 8px;
   right: 12px;
   z-index: 55;
   display: flex;

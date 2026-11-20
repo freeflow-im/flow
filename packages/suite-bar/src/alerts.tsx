@@ -1,4 +1,4 @@
-// The suite bar's alerts (Taskboard task 12): cards that slide down from under the account menu, on every page that
+// The suite bar's alerts (Taskboard task 12): cards that slide down at the window's top edge, over the account menu, on every page that
 // draws the suite bar. Generic: an alert is a title, a line or two and links, closed by the person or ended by its own
 // time. The first kind is the meeting alert (useMeetingAlerts): an accepted meeting, from two minutes before it starts
 // until it is closed or five minutes have passed since its start, with its Join link. Closing one closes it in every tab.
@@ -164,7 +164,7 @@ export function useMeetingAlerts(organizationId: string | null, closed: Readonly
 
 const isElsewhere = (href: string) => /^https?:\/\//i.test(href) && !href.startsWith(window.location.origin);
 
-/** The alerts as cards sliding down under the bar's right side; each closes on ×. Nothing when there are none. */
+/** The alerts as cards sliding down at the window's top edge, over the bar's right side; each closes on ×. Nothing when there are none. */
 export function SuiteAlerts({ alerts, onClose }: { alerts: readonly SuiteAlert[]; onClose: (id: string) => void }) {
   if (!alerts.length) return null;
   return (
