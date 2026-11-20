@@ -122,6 +122,7 @@ export interface AgentJobDTO {
 export interface AgentJobEventData {
   jobId: string;
   subscriptionId: string;
+  /** What the agent runs: the automation's prompt inside a brief naming the automation and the event that fired it. */
   prompt: string;
   channelId?: string;
   event: { id: string; seq: number; type: string; ref?: string; channelId?: string };

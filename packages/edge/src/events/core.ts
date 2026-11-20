@@ -390,17 +390,21 @@ export class EventsCore {
          VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?)`,
         id, sub.id, sub.consumer, e.id, e.seq, renderTemplate(action.prompt, e), action.channelId ?? null, depth, now, now,
       );
-      const published = this.publishJob(this.getJob(id)!, e, now);
+      const job = this.getJob(id)!;
+      const published = this.publishJob(job, e, wakeBrief(sub.name, job.prompt, e), now);
       return { job: this.getJob(id)!, published };
     });
   }
 
-  /** The job's `agent.job` event (a new one on each delivery), and the job `delivered`. */
-  private publishJob(job: AgentJobDTO, trigger: Pick<PlatformEvent, 'id' | 'seq' | 'type' | 'ref' | 'channelId'> | null, now: number): { seq: number; id: string } {
+  /**
+   * The job's `agent.job` event (a new one on each delivery), and the job `delivered`. Its `prompt` is the brief
+   * (wakeBrief), which a delivery again copies from the first; the job's own row keeps the automation's prompt.
+   */
+  private publishJob(job: AgentJobDTO, trigger: Pick<PlatformEvent, 'id' | 'seq' | 'type' | 'ref' | 'channelId'> | null, brief: string | null, now: number): { seq: number; id: string } {
     const org = this.organizationId() ?? '';
     const t = trigger ?? this.jobTrigger(job);
     const data: AgentJobEventData = {
-      jobId: job.id, subscriptionId: job.subscriptionId, prompt: job.prompt, ...(job.channelId ? { channelId: job.channelId } : {}),
+      jobId: job.id, subscriptionId: job.subscriptionId, prompt: brief ?? this.jobBrief(job), ...(job.channelId ? { channelId: job.channelId } : {}),
       event: { id: t.id, seq: t.seq, type: t.type, ...(t.ref ? { ref: formatReference(t.ref) } : {}), ...(t.channelId ? { channelId: t.channelId } : {}) },
     };
     const out = this.publish({
@@ -417,10 +421,25 @@ export class EventsCore {
     return job && job.agent === agent ? this.jobTrigger(job) : null;
   }
 
+  /** The brief the agent's runtime runs for the job (wakeBrief), as its first `agent.job` carried it; null for another agent's job. */
+  briefOf(jobId: string, agent: string): string | null {
+    const job = this.getJob(jobId);
+    return job && job.agent === agent ? this.jobBrief(job) : null;
+  }
+
+  /** The job's first `agent.job` event's data (the trigger itself may have aged out). */
+  private firstJobEvent(job: AgentJobDTO): AgentJobEventData | null {
+    const row = this.sql.exec("SELECT data FROM events WHERE type = 'agent.job' AND caused_by = ? ORDER BY seq LIMIT 1", job.id).toArray()[0];
+    return row ? (JSON.parse(row.data as string) as AgentJobEventData) : null;
+  }
+
+  private jobBrief(job: AgentJobDTO): string {
+    return this.firstJobEvent(job)?.prompt ?? job.prompt;
+  }
+
   /** The event that woke a job, as its first `agent.job` named it (the trigger itself may have aged out). */
   private jobTrigger(job: AgentJobDTO): Pick<PlatformEvent, 'id' | 'seq' | 'type' | 'ref' | 'channelId'> {
-    const row = this.sql.exec("SELECT data FROM events WHERE type = 'agent.job' AND caused_by = ? ORDER BY seq LIMIT 1", job.id).toArray()[0];
-    const ev = row ? (JSON.parse(row.data as string) as AgentJobEventData).event : null;
+    const ev = this.firstJobEvent(job)?.event ?? null;
     const ref = ev?.ref ? parseReference(ev.ref) : null;
     return { id: job.eventId, seq: job.eventSeq, type: ev?.type ?? 'unknown', ...(ref ? { ref } : {}), ...(ev?.channelId ? { channelId: ev.channelId } : {}) };
   }
@@ -502,7 +521,7 @@ export class EventsCore {
       }
       const attempts = job.attempts + 1;
       this.sql.exec('UPDATE agent_jobs SET attempts = ?, note = ?, updated_at = ? WHERE id = ?', attempts, `delivered again: ${why}`, now, id);
-      this.publishJob(this.getJob(id)!, null, now);
+      this.publishJob(this.getJob(id)!, null, null, now);
       return { kind: 'redeliver', job: this.getJob(id)!, delayS: 120 * attempts } as const;
     });
   }
@@ -602,6 +621,29 @@ export function renderTemplate(template: string, e: PlatformEvent): string {
     const data = JSON.stringify(e.data ?? null);
     return data.length > DATA_MAX ? `${data.slice(0, DATA_MAX)}…` : data;
   });
+}
+
+/**
+ * What a woken agent is told: that an automation woke it, the event that fired it (a schedule's run time instead), and
+ * the automation's prompt, to act on for this one event. Without it the agent saw a bare prompt, posted as if it wrote it,
+ * and read a rule like "when a task appears…" as a standing order to watch for itself.
+ */
+export function wakeBrief(name: string, prompt: string, e: PlatformEvent): string {
+  const head = `An automation woke you: "${name}".`;
+  if (e.type === 'schedule.tick') {
+    const at = (e.data as { at?: unknown } | null)?.at;
+    return `${head} It runs on a schedule; this is the run for ${typeof at === 'string' ? at : e.ts}.\n\nThe automation's instruction:\n${prompt}`;
+  }
+  const data = JSON.stringify(e.data ?? null);
+  const lines = [
+    `- type: ${e.type}`,
+    ...(e.ref ? [`- object: ${formatReference(e.ref)}`] : []),
+    `- by: ${e.actor ?? 'the platform'}`,
+    ...(e.channelId ? [`- channel: ${e.channelId}`] : []),
+    `- data: ${data.length > DATA_MAX ? `${data.slice(0, DATA_MAX)}…` : data}`,
+  ];
+  return `${head} It fired for this event:\n${lines.join('\n')}\n\nThe automation's instruction:\n${prompt}\n\n` +
+    'Act on this one event. If the event does not meet the instruction\'s condition, do nothing.';
 }
 
 /** A query's filters as SQL (` AND ...`, or empty) and its bindings. */
