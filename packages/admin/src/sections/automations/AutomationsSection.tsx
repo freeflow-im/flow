@@ -2,22 +2,12 @@
 // admin panel: the event-bus subscriptions the caller consumes or owns, their wake jobs, and a form for a new one — wake
 // an agent or post a message, when an event happens or on a schedule. Every member sees it; the server decides what each
 // may create (a wake needs the agent's sponsor, or an owner or admin).
-import { useCallback, useEffect, useState } from 'react';
-import type { AgentJobDTO, ChannelDTO, CreateSubscriptionBody, SubscriptionDTO, WorkspaceMemberDTO } from '@flow/shared';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { eventCatalog, findEvent, type AgentJobDTO, type ChannelDTO, type CreateSubscriptionBody, type EventGroup, type InstalledAppDTO, type SubscriptionDTO, type WorkspaceMemberDTO } from '@flow/shared';
 import { request } from '../../api';
 
 /** The suite's API with the session cookie, in the shape Chat's bound api had. */
 const useBoundApi = () => ({ api: request });
-
-export const EVENT_TYPE_SUGGESTIONS = [
-  'chat.message.created',
-  'chat.thread.reply',
-  'chat.reaction.added',
-  'chat.channel.created',
-  'chat.member.joined',
-  'mail.received',
-  'sharing.granted',
-] as const;
 
 export const WEEKDAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'] as const;
 type Weekday = (typeof WEEKDAYS)[number];
@@ -154,10 +144,13 @@ export function AutomationsSection({
   workspaceId,
   members,
   channels,
+  apps = [],
 }: {
   workspaceId: string;
   members: WorkspaceMemberDTO[];
   channels: ChannelDTO[];
+  /** The organization's installed apps: their events are offered beside the suite's. */
+  apps?: Pick<InstalledAppDTO, 'name' | 'label' | 'events'>[];
 }) {
   const { api } = useBoundApi();
   const [subs, setSubs] = useState<SubscriptionDTO[] | null>(null);
@@ -187,7 +180,7 @@ export function AutomationsSection({
 
   return (
     <section data-testid="automations" className="mb-6">
-      <AutomationForm workspaceId={workspaceId} members={members} channels={channels} names={names} onCreated={load} />
+      <AutomationForm workspaceId={workspaceId} members={members} channels={channels} names={names} apps={apps} onCreated={load} />
       <div className="rounded-lg border border-hairline p-4">
         <h3 className="mb-3 text-sm font-bold">Your automations</h3>
         {error && <p data-testid="automations-error" className="mb-2 text-xs text-red-600">{error}</p>}
@@ -365,16 +358,21 @@ function AutomationForm({
   members,
   channels,
   names,
+  apps,
   onCreated,
 }: {
   workspaceId: string;
   members: WorkspaceMemberDTO[];
   channels: ChannelDTO[];
   names: Names;
+  apps: Pick<InstalledAppDTO, 'name' | 'label' | 'events'>[];
   onCreated: () => Promise<void>;
 }) {
+  const groups = useMemo(() => eventCatalog(apps), [apps]);
   const { api } = useBoundApi();
   const [d, setD] = useState<AutomationDraft>(emptyDraft);
+  // A new form after each automation made: the event picker starts over too.
+  const [made, setMade] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const set = <K extends keyof AutomationDraft>(key: K, value: AutomationDraft[K]) => setD((cur) => ({ ...cur, [key]: value }));
@@ -391,6 +389,7 @@ function AutomationForm({
     try {
       await api('POST', `/v1/events/subscriptions?workspace=${encodeURIComponent(workspaceId)}`, buildSubscriptionBody(d, names));
       setD(emptyDraft());
+      setMade((n) => n + 1);
       await onCreated();
     } catch (err) {
       setError(errorText(err));
@@ -432,12 +431,7 @@ function AutomationForm({
         <div className="mb-3 grid gap-2 sm:grid-cols-3">
           <label className="flex flex-col gap-1">
             <span className="text-xs text-muted">Event type</span>
-            <input data-testid="automation-type" className={inputCls} list="automation-type-suggestions" value={d.type} onChange={(e) => set('type', e.target.value)} />
-            <datalist id="automation-type-suggestions">
-              {EVENT_TYPE_SUGGESTIONS.map((t) => (
-                <option key={t} value={t} />
-              ))}
-            </datalist>
+            <EventTypePicker key={made} groups={groups} value={d.type} onChange={(t) => set('type', t)} />
           </label>
           <label className="flex flex-col gap-1">
             <span className="text-xs text-muted">In channel (optional)</span>
@@ -574,5 +568,53 @@ function AutomationForm({
         Create automation
       </button>
     </form>
+  );
+}
+
+const OTHER = '__other__';
+
+/**
+ * The event to listen to: every app's events, grouped by the app that publishes them (eventCatalog), each by its
+ * name for people. "Other event type…" takes any type by hand (an app's event it does not declare, say). Below it,
+ * the chosen type and who publishes it.
+ */
+export function EventTypePicker({ groups, value, onChange }: { groups: EventGroup[]; value: string; onChange: (type: string) => void }) {
+  const found = findEvent(groups, value);
+  const [other, setOther] = useState(() => !found);
+  return (
+    <>
+      <select
+        data-testid="automation-type"
+        className={inputCls}
+        value={other ? OTHER : value}
+        onChange={(e) => {
+          if (e.target.value === OTHER) {
+            setOther(true);
+            onChange('');
+          } else {
+            setOther(false);
+            onChange(e.target.value);
+          }
+        }}
+      >
+        {groups.map((g) => (
+          <optgroup key={g.app} label={g.installed ? `${g.label} (installed app)` : g.label}>
+            {g.events.map((e) => (
+              <option key={e.type} value={e.type}>{e.label}</option>
+            ))}
+          </optgroup>
+        ))}
+        <option value={OTHER}>Other event type…</option>
+      </select>
+      {other ? (
+        <input data-testid="automation-type-other" className={inputCls} placeholder="app.taskboard.task.created" value={value} onChange={(e) => onChange(e.target.value)} autoFocus />
+      ) : (
+        found && (
+          <span data-testid="automation-type-source" className="text-xs text-muted">
+            From {found.group.label}{found.group.installed ? ' (installed app)' : ''} · <code>{found.event.type}</code>
+          </span>
+        )
+      )}
+    </>
   );
 }
