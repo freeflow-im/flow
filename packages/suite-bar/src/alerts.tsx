@@ -164,8 +164,11 @@ export function useMeetingAlerts(organizationId: string | null, closed: Readonly
 
 const isElsewhere = (href: string) => /^https?:\/\//i.test(href) && !href.startsWith(window.location.origin);
 
-/** The alerts as cards sliding down at the window's top edge, over the bar's right side; each closes on ×. Nothing when there are none. */
-export function SuiteAlerts({ alerts, onClose }: { alerts: readonly SuiteAlert[]; onClose: (id: string) => void }) {
+/**
+ * The alerts as cards sliding down at the window's top edge, over the bar's right side; each closes on ×. Nothing when
+ * there are none. `onTurnOnDesktop`: desktop notifications are not yet allowed, so a meeting's card offers to turn them on.
+ */
+export function SuiteAlerts({ alerts, onClose, onTurnOnDesktop }: { alerts: readonly SuiteAlert[]; onClose: (id: string) => void; onTurnOnDesktop?: () => void }) {
   if (!alerts.length) return null;
   return (
     <div className="sb-alerts" role="region" aria-label="Alerts" data-testid="suite-alerts">
@@ -183,6 +186,9 @@ export function SuiteAlerts({ alerts, onClose }: { alerts: readonly SuiteAlert[]
                 <a key={x.label} className={`sb-alert-action${x.primary ? ' primary' : ''}`} href={x.href} {...(isElsewhere(x.href) ? { target: '_blank', rel: 'noreferrer' } : {})}>{x.label}</a>
               ))}
             </div>
+          )}
+          {onTurnOnDesktop && a.kind === 'Meeting' && (
+            <button type="button" className="sb-alert-desktop" data-testid="suite-alert-desktop" onClick={onTurnOnDesktop}>Notify me on the desktop too</button>
           )}
         </div>
       ))}

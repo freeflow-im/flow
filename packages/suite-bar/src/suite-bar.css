@@ -831,3 +831,17 @@
   filter: brightness(0.95);
   background: var(--sb-accent, #1a73e8);
 }
+.sb-alert-desktop {
+  display: block;
+  margin-top: 10px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--sb-accent, #1a73e8);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.sb-alert-desktop:hover {
+  text-decoration: underline;
+}
