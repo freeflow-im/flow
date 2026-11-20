@@ -6,7 +6,7 @@
 // shutdown end the process rather than leaking it.
 import { describe, expect, it, vi } from 'vitest';
 import type { ChannelDTO, MessageDTO } from '@flow/shared';
-import { AgentBridge } from '../src/bridge.js';
+import { AgentBridge, waitingRule } from '../src/bridge.js';
 import type { BridgeConfig, RuntimeConfig } from '../src/config.js';
 
 const AGENT = 'aaaaaaaa-0000-0000-0000-000000000001';
@@ -200,6 +200,9 @@ describe('session lifecycle from the bridge', () => {
     expect(opts.resume).toBe(true);
     const spec = opts.makeSpawn();
     expect(spec.systemPrompt).toContain('Omni');
+    // How to wait for CI and report back: a blocking background command, never a cron or a detached process.
+    expect(spec.systemPrompt).toContain(waitingRule(3600));
+    expect(waitingRule(3600)).toContain('up to 60 minutes');
     expect(spec.mcpConfigPath).toBeUndefined(); // mcp off in this config
   });
 });
