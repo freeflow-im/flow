@@ -3,10 +3,11 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, type RecentFile } from '../api.ts';
+import { filePath } from '../../../shared/pages.ts';
 import { FAVORITES_PARAM, listHref, RECENTS_PARAM, rememberList, rememberListing, rememberReturn, type OtherListName } from '../listing.ts';
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
-const pathOf = (kind: RecentFile['kind'], id: string) => (kind === 'deck' ? `/d/${id}` : kind === 'doc' ? `/doc/${id}` : kind === 'markdown' ? `/md/${id}` : kind === 'file' ? `/f/${id}` : `/s/${id}`);
+const pathOf = (kind: RecentFile['kind'], id: string) => filePath(kind, id);
 /** The address that shows the file at a path inside the open folder, as one opened from Recents (or Favorites). */
 export const openFromRecents = (file: string, from: OtherListName = RECENTS_PARAM) => `/open?file=${encodeURIComponent(file)}&from=${from}`;
 

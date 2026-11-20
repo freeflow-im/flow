@@ -3,6 +3,7 @@
 // (the iframe has no session cookie).
 import { App, applyDocumentTheme, applyHostStyleVariables, type McpUiHostContext } from '@modelcontextprotocol/ext-apps';
 import { OpenAIExtensions } from '@openai/mcp-extensions/app';
+import { filePath } from '../../shared/pages.ts';
 
 export type FileKind = 'doc' | 'deck' | 'sheet' | 'markdown';
 /** Everything the library lists: the editable kinds, and stored files (PDFs and videos) shown in the viewer. */
@@ -104,8 +105,7 @@ export class Host {
   appLink(file?: { kind: LibraryKind; id: string }): string | null {
     if (!this.appUrl) return null;
     if (!file) return this.appUrl;
-    const prefix = { doc: '/doc/', deck: '/d/', sheet: '/s/', markdown: '/md/', file: '/f/' }[file.kind];
-    return `${this.appUrl}${prefix}${encodeURIComponent(file.id)}`;
+    return `${this.appUrl}${filePath(file.kind, file.id)}`;
   }
 
   /** Open a web address in a new browser tab: through the host (the iframe cannot navigate the top window),

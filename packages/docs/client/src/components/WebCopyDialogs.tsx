@@ -4,13 +4,14 @@
 // which opens the home page with ?webDownload=). A copy is a new file; the two libraries stay separate.
 import { useEffect, useState } from 'react';
 import { api, ApiError, type CopiedFile, type DownloadFormat } from '../api.ts';
+import { filePath } from '../../../shared/pages.ts';
 import { FolderBrowser, folderNameOf } from './MoveModal.tsx';
 import { Modal } from './Modal.tsx';
 
 type Kind = CopiedFile['kind'];
 
 /** The app's address of a file. */
-export const pathOfFile = (kind: Kind, id: string): string => `/${kind === 'deck' ? 'd' : kind === 'doc' ? 'doc' : kind === 'markdown' ? 'md' : kind === 'whiteboard' ? 'w' : kind === 'file' ? 'f' : 's'}/${id}`;
+export const pathOfFile = (kind: Kind, id: string): string => filePath(kind, id);
 
 /** A web file's address for the app's Download to Folder… (a Web tab) or Download to MCP Docs (a browser). */
 export const downloadLink = (file: { kind: Kind; id: string; title: string }): string => `mcpdocs://download?${new URLSearchParams({ kind: file.kind, id: file.id, title: file.title })}`;
