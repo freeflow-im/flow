@@ -22,6 +22,7 @@ import { conversationSubject, expandedByDefault, foldRuns, replyTarget } from '.
 import { cn } from '../lib/utils';
 import { AttachmentPreview } from './AttachmentPreview';
 import { FileIcon } from './FileIcon';
+import { AccessCodeCard } from './AccessCodeCard';
 import { InviteCard } from './InviteCard';
 import { TAB_ICONS } from './InboxTabs';
 import { MessageBody } from './MessageBody';
@@ -637,6 +638,7 @@ function ThreadMessageItem({ ref, accountId, me, message: m, open, last, focused
             </div>
           ) : (
             <>
+              {m.accessCode && <AccessCodeCard code={m.accessCode} onNotice={onNotice} />}
               {invite && <InviteCard invite={{ account: accountId, folder: m.folder, uid: m.uid, part: invite.index }} onNotice={onNotice} />}
               <MessageBody accountId={accountId} message={m} />
             </>

@@ -48,6 +48,7 @@ interface MessageDetail extends Omit<MessageSummary, 'attachments'> {
   html: string | null;                         // raw HTML from the message; THE CLIENT SANITIZES (DOMPurify + sandboxed iframe)
   text: string | null;
   attachments: { index: number; filename: string; mimeType: string; size: number; contentId: string | null; inline: boolean }[];
+  accessCode?: string;                         // a one-time sign-in code in new INBOX mail (imap/accessCode.ts), when found
 }
 ```
 

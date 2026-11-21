@@ -147,6 +147,8 @@ export interface MessageDetail extends Omit<MessageSummary, 'attachments'> {
   html: string | null;
   text: string | null;
   attachments: Attachment[];
+  /** A one-time sign-in or verification code found in the message (the server's imap/accessCode.ts), when one was. */
+  accessCode?: string;
 }
 export interface ProviderPreset {
   imap: ServerSettings;

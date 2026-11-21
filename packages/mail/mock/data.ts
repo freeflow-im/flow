@@ -157,6 +157,14 @@ export function sampleMailbox(): Mailbox {
     messages.push(m);
   }
 
+  // A sign-in code (the server's accessCode.ts would have found it on the organization's OpenAI key).
+  {
+    const m = base('INBOX', { name: 'Acme Cloud', address: 'no-reply@acme.test' }, 3, 'Your Acme sign-in code', 'Hi Ann,\n\nYour verification code is 482 913. It expires in 10 minutes.\n\nIf you did not try to sign in, you can ignore this email.\n\n— The Acme team');
+    m.seen = false;
+    m.accessCode = '482 913';
+    messages.push(m);
+  }
+
   // A thread with attachments: Bob asks, Ann answers (in Sent), Bob answers with the signed copy.
   const t1 = base('INBOX', people[0]!, 60 * 5, 'Acme proposal — final draft', 'Hi Ann,\n\nAttached is the final draft of the proposal and the budget sheet. Could you take a look before we send it to the client tomorrow?\n\nThanks,\nBob');
   t1.cc = [people[1]!];

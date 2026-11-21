@@ -24,6 +24,8 @@ export interface MessageDetail extends Omit<MessageSummary, 'attachments'> {
   inReplyTo: string | null; references: string[];
   html: string | null; text: string | null;
   attachments: AttachmentInfo[];
+  /** A one-time sign-in or verification code found in the message (accessCode.ts), when one was. */
+  accessCode?: string;
 }
 /** A conversation as a folder's threaded list shows it (docs/specs/mail-api.md, Conversations). */
 export interface ThreadSummary {
