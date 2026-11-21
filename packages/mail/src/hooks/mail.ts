@@ -5,7 +5,7 @@
 // (`bodyPending`) likewise. Flag changes, moves and deletes show at once, in the lists and in the folders' unread counts
 // (lib/counts.ts), and are undone if the server refuses them; the counts are read again once, quietly, a few seconds
 // after the last change.
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/react-query';
 import { mailApi, type Category, type MailFolder, type MessageDetail, type MessagePage, type MessageSummary, type ThreadDetail, type ThreadMessage, type ThreadPage, type ThreadSummary } from '../api';
 import { adjustFolders, debounced } from '../lib/counts';
@@ -16,6 +16,9 @@ export const POLL_MS = 60_000;
 export const SORTING_RETRY_MS = 2_000;
 /** And how many times at most (a few minutes), in case the sorting never gets there. */
 export const SORTING_RETRIES = 90;
+/** How soon a conversation list's first page is asked for again while the server checks it (`refreshing`), and how often. */
+export const REFRESHING_RETRY_MS = 1_000;
+export const REFRESHING_RETRIES = 20;
 /** How many times an open thread is asked for again while a body of it is still to come. */
 export const BODY_RETRIES = 5;
 /** The quiet refresh after a burst of changes. */
@@ -92,6 +95,43 @@ export function replaceLastPage<P>(data: InfiniteData<P, number> | undefined, pa
   return { ...data, pages: [...data.pages.slice(0, -1), page] };
 }
 
+/** A list's data with its first page replaced, when the list still starts with that page. */
+export function replaceFirstPage<P>(data: InfiniteData<P, number> | undefined, page: P): InfiniteData<P, number> | undefined {
+  if (!data || !data.pages.length || data.pageParams[0] !== 0) return data;
+  return { ...data, pages: [page, ...data.pages.slice(1)] };
+}
+
+/**
+ * Asks for a conversation list's first page again every REFRESHING_RETRY_MS while it says `refreshing`: the server
+ * answered from its cache at once and is checking for new mail and flag changes; the page after the check has them.
+ */
+function useRefreshingRetry<P extends { refreshing?: true }>(queryKey: readonly unknown[], data: InfiniteData<P, number> | undefined, enabled: boolean, fetchPage: (before: number) => Promise<P>) {
+  const qc = useQueryClient();
+  const first = data?.pages[0];
+  const keyText = JSON.stringify(queryKey);
+  const retries = useRef({ key: '', n: 0 });
+  // Bumped after each ask: an answer equal to the last leaves the page the same object (React Query keeps it), and the
+  // next ask must still be scheduled.
+  const [asked, setAsked] = useState(0);
+  useEffect(() => {
+    if (!first?.refreshing || !enabled) {
+      if (!first?.refreshing) retries.current = { key: '', n: 0 };
+      return;
+    }
+    if (retries.current.key !== keyText) retries.current = { key: keyText, n: 0 };
+    if (retries.current.n >= REFRESHING_RETRIES) return;
+    const timer = setTimeout(() => {
+      retries.current.n++;
+      fetchPage(0).then(
+        (page) => { qc.setQueryData<InfiniteData<P, number>>(queryKey, (old) => replaceFirstPage(old, page)); setAsked((n) => n + 1); },
+        () => {}, // the next poll asks again
+      );
+    }, REFRESHING_RETRY_MS);
+    return () => clearTimeout(timer);
+    // (queryKey and fetchPage change with keyText.)
+  }, [first, keyText, enabled, qc, asked]);
+}
+
 /**
  * Asks for a list's last page again every SORTING_RETRY_MS while it says `sorting` (an inbox tab's page that came back
  * short while the server sorts older mail), until it is full or the sorting is done; only then does the list go on.
@@ -152,6 +192,7 @@ export function useThreads(accountId: string | null, folder: string | null, cate
     refetchInterval: POLL_MS,
   });
   useSortingRetry(queryKey, query.data as InfiniteData<ThreadPage, number> | undefined, on, fetchPage);
+  useRefreshingRetry(queryKey, query.data as InfiniteData<ThreadPage, number> | undefined, on, fetchPage);
   return query;
 }
 

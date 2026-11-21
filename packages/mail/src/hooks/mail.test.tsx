@@ -11,7 +11,7 @@ vi.mock('../api', async (orig) => {
     mailApi: { ...real.mailApi, setFlags: vi.fn(async () => ({ ok: true })), move: vi.fn(async () => ({ ok: true })), remove: vi.fn(async () => ({ ok: true })), moveToTab: vi.fn(async () => ({ ok: true, senders: [], previous: [] })), mute: vi.fn(async (_a: string, _t: string, muted: boolean) => ({ ok: true, muted, moved: 0 })), messages: vi.fn(), threads: vi.fn(), thread: vi.fn() },
   };
 });
-const { fetchBody, keys, nextPageParam, REFRESH_DELAY_MS, replaceLastPage, SORTING_RETRY_MS, useMessageActions, useMessages, useThread, useThreads } = await import('./mail');
+const { fetchBody, keys, nextPageParam, REFRESH_DELAY_MS, REFRESHING_RETRY_MS, replaceLastPage, SORTING_RETRY_MS, useMessageActions, useMessages, useThread, useThreads } = await import('./mail');
 const { mailApi } = await import('../api');
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -246,6 +246,25 @@ describe('thread pages and the open thread ask again while the server is not don
     expect(tab!.data?.pages[0]?.threads.map((t) => t.uid)).toEqual([300, 290, 280]);
     expect(tab!.hasNextPage).toBe(true);
     expect(vi.mocked(mailApi.threads).mock.calls.every((c) => c[1].category === 'forums' && c[1].before === undefined)).toBe(true);
+  });
+
+  it('a list page from the server\'s cache while it checks is shown at once, and its first page asked for again until the check is done', async () => {
+    let list: ReturnType<typeof useThreads> | undefined;
+    function List() {
+      list = useThreads('acc', 'INBOX');
+      return null;
+    }
+    const checking: ThreadPage = { ...page([300, 290], 290), refreshing: true };
+    vi.mocked(mailApi.threads).mockResolvedValueOnce(checking).mockResolvedValueOnce(checking).mockResolvedValue(page([310, 300], 300));
+    mount(createElement(List));
+    await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+    expect(list!.data?.pages[0]?.threads.map((t) => t.uid)).toEqual([300, 290]);
+    await act(async () => { await vi.advanceTimersByTimeAsync(REFRESHING_RETRY_MS + 10); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(REFRESHING_RETRY_MS + 10); });
+    expect(list!.data?.pages[0]?.threads.map((t) => t.uid)).toEqual([310, 300]);
+    await act(async () => { await vi.advanceTimersByTimeAsync(REFRESHING_RETRY_MS * 5); });
+    expect(vi.mocked(mailApi.threads)).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(mailApi.threads).mock.calls.every((c) => c[1].before === undefined)).toBe(true);
   });
 
   it('a thread with a body still to come is asked for again, a few times, then left', async () => {

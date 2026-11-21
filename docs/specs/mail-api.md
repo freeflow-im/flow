@@ -250,6 +250,12 @@ Gmail-style threads, on the prefetch cache (below): every cached message has a `
   of the messages shown are checked in one FLAGS fetch. With `category` (INBOX, tabs on): new mail is sorted first (`sync`,
   as a tab's page does) and the threads whose newest message is in the tab are kept, with `category` and `categoryReason`
   from it; a short page while older mail is not sorted yet says `sorting` (ask again shortly), and the sorter runs.
+  **Cache first** (2026-11-20): where the cache can answer the page as above (the folder cached, no backfill step needed,
+  a tab's page fully sorted), it does so at once, with no IMAP connection or folder lock (`threadListCached`), so a list
+  never waits behind a connection being opened or another call's round trips. Page one of a folder not checked within
+  FRESH_MS then starts that check in the background (the path above: new mail, flags, tabs; one per folder at a time)
+  and says `refreshing: true` until it is done; the app asks for page one again every second meanwhile (at most 20
+  times), and the page after the check has what it found. Otherwise the page is made as above, on the request.
   ```ts
   interface ThreadSummary {
     threadId: string; folder: string;
@@ -316,7 +322,7 @@ from it and the server is asked only for what is new.
 - **How far it reaches**: `mail_cache_folders (account_id, folder) → uid_validity, high, low, modseq, kind, synced_at, opened_at,
   error, error_at`. Every UID of the folder in [low, high] has a row, less what the server no longer has; at most CACHE_ROWS
   (1000) per folder, the newest. A new UIDVALIDITY drops the folder's rows.
-- **Fresh folders** (2026-11-04): a folder the alarm synced within FRESH_MS = 45 s (`synced_at`) is served as the cache
+- **Fresh folders** (2026-11-04): a folder the alarm synced, or (2026-11-20) a list checked, within FRESH_MS = 45 s (`synced_at`) is served as the cache
   stands — a plain page, a tab's page (`tabList`) and the conversations (`threadList`) do none of the round trips below (no
   NOOP, `UID SEARCH`, tab sort or FLAGS fetch; the timing line shows `imap 0ms`), since the alarm takes in new mail, sorts
   INBOX's new mail into the tabs and refreshes flags every 30 s while the person is active. A folder synced longer ago, or

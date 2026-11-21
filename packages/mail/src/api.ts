@@ -107,6 +107,8 @@ export interface ThreadPage {
   next: number | null;
   /** As a message page's: a tab's page came back short while the server sorts older mail; ask again shortly. */
   sorting?: true;
+  /** Page one came from the server's cache while it checks for new mail and flag changes; ask again shortly. */
+  refreshing?: true;
 }
 /**
  * A message of an open conversation: its body is `null` with `bodyPending` while the server has not fetched it yet (ask

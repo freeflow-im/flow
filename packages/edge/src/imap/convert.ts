@@ -45,7 +45,11 @@ export interface ThreadSummary {
   /** Muted (Gmail's Mute): its new mail skips the inbox. Only outside INBOX, where muted threads are not listed. */
   muted?: true;
 }
-export interface ThreadPage { threads: ThreadSummary[]; next: number | null; sorting?: true }
+export interface ThreadPage {
+  threads: ThreadSummary[]; next: number | null; sorting?: true;
+  /** Page one came from the cache while the server is checked for new mail and flags: ask again shortly. */
+  refreshing?: true;
+}
 
 const address = (a: { name?: string; address?: string }): Address => ({ name: a.name ?? '', address: a.address ?? '' });
 const addresses = (list: MessageAddressObject[] | undefined): Address[] => (list ?? []).filter((a) => a.address || a.name).map(address);

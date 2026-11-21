@@ -305,6 +305,12 @@ export class Mail extends DurableObject<MailEnv> {
   private lastTouch = 0;
   /** Accounts whose conversation bodies are being read in the background (`fetchBodiesSoon`). */
   private readonly fetchingBodies = new Set<string>();
+  /**
+   * When a list last checked the server itself for each folder (`<account>/<folder>`), and the checks running now: a
+   * list answered from the cache (`threadListCached`) checks in the background, and the page says `refreshing` meanwhile.
+   */
+  private readonly listChecked = new Map<string, number>();
+  private readonly listRefresh = new Map<string, Promise<void>>();
 
   constructor(ctx: DurableObjectState, env: MailEnv) {
     super(ctx, env);
@@ -1232,12 +1238,13 @@ export class Mail extends DurableObject<MailEnv> {
         const now = Date.now();
         let state = this.cache.touchFolder(r.id, folder, await this.kindOf(r, c, folder), now, true);
         if (state.validity !== validity) state = this.cache.resetFolder(r.id, folder, validity);
-        // Synced by the alarm lately: the page as the cache stands, with no round trip.
-        const fresh = now - state.syncedAt < FRESH_MS;
+        // Synced by the alarm, or checked by a list, lately: the page as the cache stands, with no round trip.
+        const fresh = this.checkedLately(r, state, now);
         if (before === null && !fresh) {
           if (wasOpen) await c.noop();
           await this.cacheNew(r, c, folder, state, this.budget(NEW_CAP));
           state = this.cache.folder(r.id, folder)!;
+          this.listChecked.set(`${r.id}/${folder}`, now);
         }
         let tab: { from: string; tab: string; params: string[]; category: string } | undefined;
         let tabState: SyncState | null = null;
@@ -1286,6 +1293,79 @@ export class Mail extends DurableObject<MailEnv> {
     if (result.ahead) this.sortSoon(r, folder, result.ahead);
     const { ahead: _ahead, ...page } = result;
     return page;
+  }
+
+  /** Whether a folder was synced by the alarm, or checked by a list, within FRESH_MS. */
+  private checkedLately(r: AccountRow, state: CachedFolder, now: number): boolean {
+    return now - Math.max(state.syncedAt, this.listChecked.get(`${r.id}/${state.folder}`) ?? 0) < FRESH_MS;
+  }
+
+  /**
+   * A page of a folder's conversations from the cache alone, with no IMAP connection or folder lock, so a list never
+   * waits behind a connection being opened or another list's round trips. Null where the cache cannot answer as
+   * `threadList` would: a folder not cached yet, a page that needs a backfill step, a tab's page still being sorted, or a
+   * message not sorted into its tab. Page one of a folder not checked within FRESH_MS starts that check in the
+   * background (`threadList`, as before: new mail, flags, tabs), and says `refreshing` until it is done, so the app asks
+   * again; the page after the check has what it found.
+   */
+  private threadListCached(r: AccountRow, folder: string, tabs: TabCategory[], category: Category | null, limit: number, before: number | null): ThreadPage | null {
+    const state = this.cache.folder(r.id, folder);
+    if (!state || !state.validity || state.high === 0) return null;
+    const validity = state.validity;
+    const now = Date.now();
+    let tab: { from: string; tab: string; params: string[]; category: string } | undefined;
+    let tabState: SyncState | null = null;
+    if (category && tabs.length) {
+      if (category !== 'primary' && !tabs.includes(category as TabCategory)) return { threads: [], next: null };
+      tabState = this.syncState(r, folder);
+      if (!tabState || tabState.validity !== validity) return null;
+      tab = { ...this.tabRows(tabs), category };
+    }
+    if (before !== null && before <= 1) return { threads: [], next: null };
+    const cursor = before ?? Number.MAX_SAFE_INTEGER;
+    const floor = tabState ? Math.max(state.low, tabState.low) : state.low;
+    const inbox = folder.toUpperCase() === INBOX;
+    const tops = this.cache.threadPage(r.id, folder, validity, cursor, floor, limit + 1, tab, inbox);
+    if (tops.length <= limit && floor > 1) return null;
+    const page = tops.slice(0, limit);
+    const rows = this.cache.threadRows(r.id, page.map((p) => p.threadId));
+    const muted = inbox ? new Set<string>() : this.cache.mutedOf(r.id, page.map((p) => p.threadId));
+    let threads = page.map((p) => this.threadSummary(r, folder, p, rows.filter((x) => x.threadId === p.threadId))).filter((x): x is ThreadSummary => !!x)
+      .map((x) => (muted.has(x.threadId) ? { ...x, muted: true as const } : x));
+    if (tabs.length) {
+      const sorted = this.cachedRows(r, folder, validity, threads.map((x) => x.uid));
+      if (threads.some((x) => !sorted.has(x.uid))) return null;
+      const overrides = this.overrides(r.id);
+      threads = threads.map((x) => { const row = sorted.get(x.uid)!; const reason = reasonOf(row.reason, overrides.get(row.sender)); return { ...x, category: this.tabOf(row, overrides, tabs), ...(reason ? { categoryReason: reason } : {}) }; });
+    }
+    const t = timing.getStore();
+    if (t) t.cache = 'hit';
+    const last = threads[threads.length - 1];
+    const out: ThreadPage = { threads, next: tops.length > limit && last ? last.uid : null };
+    if (before === null && (!this.checkedLately(r, state, now) || this.listRefresh.has(`${r.id}/${folder}`))) {
+      this.refreshListSoon(r, folder, tabs, category, limit);
+      out.refreshing = true;
+    }
+    return out;
+  }
+
+  /** Checks a folder's list against the server in the background (`threadList`), one check per folder at a time. */
+  private refreshListSoon(r: AccountRow, folder: string, tabs: TabCategory[], category: Category | null, limit: number): void {
+    const key = `${r.id}/${folder}`;
+    if (this.listRefresh.has(key)) return;
+    let done!: () => void;
+    this.listRefresh.set(key, new Promise<void>((resolve) => { done = resolve; }));
+    this.background('list refresh', async () => {
+      try {
+        const page = await this.threadList(r, folder, tabs, category, limit, null);
+        // A failed check is not retried at once: the next one waits FRESH_MS as after a good one.
+        return `${page.threads.length} threads`;
+      } finally {
+        this.listChecked.set(key, Date.now());
+        this.listRefresh.delete(key);
+        done();
+      }
+    });
   }
 
   /** A thread's row for a folder's list, from its cached messages account-wide (each message counted once). */
@@ -2533,7 +2613,9 @@ export class Mail extends DurableObject<MailEnv> {
       const r = c.get('account');
       const folder = c.req.query('folder') || 'INBOX';
       const tabs = folder.toUpperCase() === INBOX ? this.tabsOf(r) : [];
-      return c.json(await this.threadList(r, folder, tabs, tabs.length ? (category as Category | null) : null, limit, before));
+      const cat = tabs.length ? (category as Category | null) : null;
+      // From the cache at once where it can answer, the server checked in the background; else as it always was.
+      return c.json(this.threadListCached(r, folder, tabs, cat, limit, before) ?? await this.threadList(r, folder, tabs, cat, limit, before));
     });
 
     app.get('/v1/mail/accounts/:id/threads/:threadId', (c: MailContext) => {
