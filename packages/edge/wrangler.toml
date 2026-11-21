@@ -244,5 +244,7 @@ binding = "IMAGES"
 [browser]
 binding = "BROWSER"
 
+# Workers Logs keeps every console.log, queryable by field in the dashboard (Workers & Pages > freeflow-edge > Logs):
+# Mail and Calendar log one record per request, and POST /v1/perf the browser's timings (src/perf.ts, scripts/perf/README.md).
 [observability]
 enabled = true

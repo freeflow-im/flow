@@ -14,6 +14,7 @@ import { cardWhen, describeRecurrence } from '../lib/calendarShared';
 import { answeredText, guestCount, nameOf, replyLine, responseWord } from '../lib/invites';
 import type { Notice } from '../lib/notice';
 import { cn } from '../lib/utils';
+import { useTimedLoad } from '../lib/perf';
 
 type Answer = Exclude<InviteResponse, 'needs-action'>;
 const CHOICES: { value: Answer; label: string }[] = [
@@ -133,6 +134,7 @@ export function InviteCard({ invite, onNotice }: { invite: InviteRef; onNotice(n
   const qc = useQueryClient();
   const key = inviteKey(invite);
   const q = useQuery({ queryKey: key, queryFn: () => inviteApi.read(invite), staleTime: 30_000, retry: (n, err) => n < 1 && !(err instanceof MailApiError && err.status < 500) });
+  useTimedLoad('invite.card', JSON.stringify(key), q.isError ? 'error' : q.data ? 'ok' : 'loading');
   const respond = useMutation({
     mutationFn: ({ response, calendarId }: { response: Answer; calendarId: string | undefined }) => inviteApi.respond(invite, response, calendarId),
     onMutate: async ({ response, calendarId }) => {

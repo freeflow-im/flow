@@ -492,7 +492,8 @@ r=await api(Cy.token,'GET',`${P3}/debug/cache`);const bulkInbox=r.j.folders?.fin
 t('cold cache: after an alarm pass the cache holds the whole folder',bulkInbox?.rows===320&&bulkInbox.low===1&&bulkInbox.high>=bulkInbox.low,JSON.stringify(bulkInbox));
 await api(Cy.token,'DELETE',P3);
 await bulkImap(async(c)=>{const lock=await c.getMailboxLock('INBOX');try{await c.messageDelete('1:*');}finally{lock.release();}}).catch(()=>{});
-const logText=fs.readFileSync(log,'utf8');const timingLines=logText.split('\n').filter(l=>/\[mail\] (GET|POST|PATCH|DELETE) \/v1\/mail/.test(l));
+// Each request logs a record (src/perf.ts) whose `message` is the line: taken out of however the log prints it.
+const logText=fs.readFileSync(log,'utf8');const timingLines=logText.match(/\[mail\] (GET|POST|PATCH|DELETE) \/v1\/mail[^'"\n]*/g)??[];
 t('timing: one line per request, with the lock wait and IMAP time',timingLines.some(l=>/\[mail\] GET \/v1\/mail\/accounts\/:id\/messages\/:uid 200 \d+ms \(lock wait \d+ms, imap \d+ms\)/.test(l)),timingLines.at(-1));
 t('timing: and nothing of the mail in them',timingLines.length>20&&!timingLines.some(l=>l.includes(tag)||l.includes(ACC)||l.includes(MAIL_USER)),timingLines.find(l=>l.includes(tag)||l.includes(ACC)));
 

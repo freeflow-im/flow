@@ -212,7 +212,8 @@ r=await api(A.token,'POST','/v1/calendar/debug/sync');t('debug: sync now',r.s===
 t('an event deleted on the server goes',!(await seen()));
 
 // ---- timing lines, and forgetting the account
-const lines=fs.readFileSync(log,'utf8').split('\n').filter(l=>l.includes('[calendar] '));
+// A request's record (src/perf.ts) carries its line as `message`: the lines are taken out of however the log prints them.
+const lines=fs.readFileSync(log,'utf8').match(/\[calendar\] [^'"\n]*/g)??[];
 t('a timing line per request, the route without ids',lines.some(l=>/\[calendar\] PATCH \/v1\/calendar\/events\/:id 200 \d+ms \(server \d+ms\)/.test(l))&&lines.some(l=>/\[calendar\] POST \/v1\/calendar\/events\/:id\/respond 200/.test(l)),lines.slice(-3).join(' | '));
 t('no address, summary or id in a log line',!lines.some(l=>l.includes(EMAIL)||l.includes(tag)||l.includes(work.id)||l.includes('Lunch')));
 r=await api(A.token,'GET',`/v1/calendar/events/${enc(LUNCH2.id)}`);const timingHeader=r.h.get('x-calendar-timing');t('the timing header (local dev only)',/^server=\d+$/.test(timingHeader??''),timingHeader);

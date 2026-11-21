@@ -7,6 +7,7 @@ import { Hono, type Context } from 'hono';
 import type { Calendar, GoogleGrant } from '../calendar/object';
 import { consentUrl, exchangeCode, openState, returnUrl, sealState, type GoogleClient, type Tokens } from '../calendar/google';
 import { TIMING_HEADER, providerFor, timingLine } from '../calendar/rules';
+import { parseParts, rayOf, requestRecord, serverTiming } from '../perf';
 import { calendarRequest, sharedWithCaller } from '../calendar/forward';
 import { googleProfile } from '../oauth';
 import { ApiError, unauthorized } from '../errors';
@@ -119,11 +120,13 @@ calendarRoutes.all('/v1/calendar/*', async (c) => {
     timing = res.headers.get(TIMING_HEADER);
     const out = new Response(res.body, res);
     if (c.env.CALENDAR_ALLOW_INSECURE !== '1') out.headers.delete(TIMING_HEADER);
+    out.headers.set('Server-Timing', serverTiming(Date.now() - start, parseParts(timing), rayOf(c.req.raw)));
     return out;
   } catch (err) {
     if (err instanceof ApiError) status = err.statusCode;
     throw err;
   } finally {
-    console.log(timingLine(c.req.method, c.req.url, status, Date.now() - start, timing));
+    const ms = Date.now() - start;
+    console.log(requestRecord('calendar', timingLine(c.req.method, c.req.url, status, ms, timing), c.req.raw, status, ms, parseParts(timing)));
   }
 });

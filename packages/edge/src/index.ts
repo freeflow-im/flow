@@ -28,6 +28,7 @@ import { toolRoutes } from './routes/tools';
 import { assistantRoutes } from './routes/assistant';
 import { referenceRoutes } from './routes/references';
 import { contactsRoutes } from './routes/contacts';
+import { perfRoutes } from './routes/perf';
 import { APP_MANIFESTS } from '@flow/shared/manifests';
 
 export { Directory } from './directory/object';
@@ -130,6 +131,7 @@ ported.route('/', authRoutes as never);
 ported.route('/', helpRoutes as never);
 ported.route('/', mailRoutes as never);
 ported.route('/', calendarRoutes as never);
+ported.route('/', perfRoutes as never);
 // The guest scheduler's public API (no session): /v1/book/*.
 ported.route('/', bookRoutes as never);
 ported.route('/', contactsRoutes as never);
