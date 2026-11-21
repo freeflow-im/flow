@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import type { FetchMessageObject } from 'imapflow';
-import { ACTIVE_CADENCE_MS, ACTIVE_MS, BODY, TAB_CADENCE_MS, TAB_IDLE_CADENCE_MS, TAB_IDLE_MS, TAB_OPEN_MS, MailCache, cadenceMs, flagDiff, nextAlarmAt, threadPageSql, walkDown, type Flags, type NewRow, type Sql } from './cache';
+import { ACCESS_CODE_KEEP_MS, ACTIVE_CADENCE_MS, ACTIVE_MS, BODY, TAB_CADENCE_MS, TAB_IDLE_CADENCE_MS, TAB_IDLE_MS, TAB_OPEN_MS, MailCache, cadenceMs, flagDiff, nextAlarmAt, threadPageSql, walkDown, type Flags, type NewRow, type Sql } from './cache';
 import { effectiveSql } from './categorize';
 import { toSummary } from './convert';
 
@@ -556,5 +556,21 @@ describe('attachments kept in R2', () => {
     expect(cache.storedAttachment(A, 'All', 40, 0)?.blobKey).toBe('blob-1');
     // Its object is deleted only once neither row uses it.
     expect(cache.expireAttachments(A, Number.MAX_SAFE_INTEGER)).toEqual(['blob-1']);
+  });
+});
+
+describe('access codes', () => {
+  it('keeps what a scan found, "none" included, and drops old rows', () => {
+    const cache = cacheWith([]);
+    expect(cache.accessCodeChecked(A, 'id:<a@x>')).toBe(false);
+    cache.setAccessCode(A, 'id:<a@x>', '482913', 1000);
+    cache.setAccessCode(A, 'id:<b@x>', '', 1000);
+    expect(cache.accessCodeChecked(A, 'id:<a@x>')).toBe(true);
+    expect(cache.accessCodeChecked(A, 'id:<b@x>')).toBe(true);
+    expect([...cache.accessCodes(A, ['id:<a@x>', 'id:<b@x>', 'id:<c@x>'])]).toEqual([['id:<a@x>', '482913']]);
+    expect(cache.accessCodes('other', ['id:<a@x>']).size).toBe(0);
+    cache.setAccessCode(A, 'id:<c@x>', 'ZX81', 1000 + ACCESS_CODE_KEEP_MS + 1);
+    expect(cache.accessCodeChecked(A, 'id:<a@x>')).toBe(false);
+    expect(cache.accessCodes(A, ['id:<c@x>']).get('id:<c@x>')).toBe('ZX81');
   });
 });

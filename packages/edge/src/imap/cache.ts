@@ -42,6 +42,10 @@ export const TAB_IDLE_MS = 24 * 60 * 60_000;
 export const TAB_IDLE_CADENCE_MS = 15 * 60_000;
 /** A folder opened in the list stays cached this long after it was last looked at (the main folders always are). */
 export const RECENT_MS = 7 * 24 * 60 * 60_000;
+/** How long a found access code (or "none") is kept: the codes are for minutes, the row only stops a second scan. */
+export const ACCESS_CODE_KEEP_MS = 7 * 24 * 60 * 60_000;
+/** How new a message must be for its access code to be looked for: an older code has expired. */
+export const ACCESS_CODE_NEW_MS = 24 * 60 * 60_000;
 /** A folder whose sync failed is left alone this long. */
 export const ERROR_BACKOFF_MS = 10 * 60_000;
 /** A folder the alarm synced this recently is served as it stands: no new-mail, tab-sort or flags round trip for a page. */
@@ -139,6 +143,9 @@ export const DDL = [
     last_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (account_id, address))`,
   // Muted conversations (Gmail's Mute): kept out of the inbox's list, and their new mail moved out of INBOX as it arrives.
   `CREATE TABLE IF NOT EXISTS mail_muted_threads (account_id TEXT NOT NULL, thread_id TEXT NOT NULL, muted_at INTEGER NOT NULL, PRIMARY KEY (account_id, thread_id))`,
+  // Access codes found in new INBOX mail (accessCode.ts), by the message's key (`accessCodeKey`): `code` is '' when the
+  // message was asked about and has none, so it is asked about once. Rows older than ACCESS_CODE_KEEP_MS are dropped.
+  `CREATE TABLE IF NOT EXISTS mail_access_codes (account_id TEXT NOT NULL, message_key TEXT NOT NULL, code TEXT NOT NULL, checked_at INTEGER NOT NULL, PRIMARY KEY (account_id, message_key))`,
   // Attachments kept in R2 (ATTACH_KEEP_MS): one row per message's attachment, the same R2 object shared by the copies of
   // one message in several folders (Gmail's labels, by email_id). `date` is the message's, for the expiry.
   `CREATE TABLE IF NOT EXISTS mail_attachments (account_id TEXT NOT NULL, folder TEXT NOT NULL, uid_validity TEXT NOT NULL, uid INTEGER NOT NULL, idx INTEGER NOT NULL,
@@ -405,6 +412,26 @@ export class MailCache {
     // A muted thread stays muted when another joins it.
     this.sql.exec('INSERT OR IGNORE INTO mail_muted_threads (account_id, thread_id, muted_at) SELECT account_id, ?, MAX(muted_at) FROM mail_muted_threads WHERE account_id = ? AND thread_id IN (SELECT value FROM json_each(?)) GROUP BY account_id', winner, accountId, list);
     this.sql.exec('DELETE FROM mail_muted_threads WHERE account_id = ? AND thread_id IN (SELECT value FROM json_each(?))', accountId, list);
+  }
+
+  // ---- access codes (accessCode.ts) ----------------------------------------------------------------------------------
+
+  /** Whether a message was asked about already (with or without a code found). */
+  accessCodeChecked(accountId: string, key: string): boolean {
+    return this.sql.exec('SELECT 1 FROM mail_access_codes WHERE account_id = ? AND message_key = ?', accountId, key).toArray().length > 0;
+  }
+
+  /** What the scan found for a message ('' for none), and the old rows dropped. */
+  setAccessCode(accountId: string, key: string, code: string, now: number): void {
+    this.sql.exec('INSERT OR REPLACE INTO mail_access_codes (account_id, message_key, code, checked_at) VALUES (?, ?, ?, ?)', accountId, key, code, now);
+    this.sql.exec('DELETE FROM mail_access_codes WHERE checked_at < ?', now - ACCESS_CODE_KEEP_MS);
+  }
+
+  /** The codes found for these messages, by key (those with none are left out). */
+  accessCodes(accountId: string, keys: readonly string[]): Map<string, string> {
+    if (!keys.length) return new Map();
+    return new Map(this.sql.exec<{ message_key: string; code: string }>("SELECT message_key, code FROM mail_access_codes WHERE account_id = ? AND code != '' AND message_key IN (SELECT value FROM json_each(?))",
+      accountId, JSON.stringify([...new Set(keys)])).toArray().map((r) => [r.message_key, r.code]));
   }
 
   // ---- muted threads ----------------------------------------------------------------------------------------------
@@ -821,6 +848,7 @@ export class MailCache {
     this.sql.exec('DELETE FROM mail_refs WHERE account_id = ?', accountId);
     this.sql.exec('DELETE FROM mail_thread_index WHERE account_id = ?', accountId);
     this.sql.exec('DELETE FROM mail_muted_threads WHERE account_id = ?', accountId);
+    this.sql.exec('DELETE FROM mail_access_codes WHERE account_id = ?', accountId);
     this.sql.exec('DELETE FROM mail_attachments WHERE account_id = ?', accountId);
   }
 

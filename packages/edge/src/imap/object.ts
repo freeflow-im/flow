@@ -25,7 +25,9 @@ import PostalMime, { type Email } from 'postal-mime';
 import { ApiError } from '../errors';
 import { decryptBlob, encryptBlob } from '../org/crypto/index';
 import { decodeTransfer, decodedSize, minimalMessage, planBody, prefetch, type BodyPlan } from './body';
-import { ALARM_BUDGET_MS, ATTACH_BATCH_BYTES, ATTACH_KEEP_MS, ATTACH_MAX_BYTES, BACKFILL_STEP, BODY, FRESH_MS, BODY_BATCH, BODY_BATCH_BYTES, BODY_BUDGET_PER_FOLDER, BODY_MAX_HTML, BODY_MAX_TEXT, CACHE_ROWS, ERROR_BACKOFF_MS, MAIN_KINDS, MailCache, NEW_CAP, flagDiff, flagsOf, nextAlarmAt, walkDown, type CachedFolder, type Flags, type FolderKind, type NewRow, type QueuedAttachment, type QueuedBody, type ThreadRow } from './cache';
+import { accessCodeKey, findAccessCode } from './accessCode';
+import { orgModelKey } from '../assistant/orgModel';
+import { ACCESS_CODE_NEW_MS, ALARM_BUDGET_MS, ATTACH_BATCH_BYTES, ATTACH_KEEP_MS, ATTACH_MAX_BYTES, BACKFILL_STEP, BODY, FRESH_MS, BODY_BATCH, BODY_BATCH_BYTES, BODY_BUDGET_PER_FOLDER, BODY_MAX_HTML, BODY_MAX_TEXT, CACHE_ROWS, ERROR_BACKOFF_MS, MAIN_KINDS, MailCache, NEW_CAP, flagDiff, flagsOf, nextAlarmAt, walkDown, type CachedFolder, type Flags, type FolderKind, type NewRow, type QueuedAttachment, type QueuedBody, type ThreadRow } from './cache';
 import { contentDisposition, specialUseOf, snippetOf, textPartOf, toDetail, toFolders, toSummary, type AttachmentInfo, type MessageDetail, type MessageSummary, type SpecialUse, type TextPart, type ThreadPage, type ThreadSummary } from './convert';
 import { participants } from './threads';
 import { CATEGORIES, CATEGORY_HEADERS, classifyHeaders, effective, effectiveSql, isGmailHost, normalizeTabs, parseHeaders, tabPage, uidSet, type Category, type TabCategory } from './categorize';
@@ -177,7 +179,7 @@ const ADDED_COLUMNS: { add: string; then?: string }[] = [
   },
 ];
 /** Every table of the object (DDL above, cache.ts's), for the move between objects (`exportRows`, `importRows`). */
-export const MAIL_TABLES = ['accounts', 'rate_limit_windows', 'mail_categories', 'mail_category_overrides', 'mail_sync', 'mail_messages', 'mail_cache_folders', 'mail_state', 'mail_refs', 'mail_thread_index', 'mail_contacts', 'mail_muted_threads'] as const;
+export const MAIL_TABLES = ['accounts', 'rate_limit_windows', 'mail_categories', 'mail_category_overrides', 'mail_sync', 'mail_messages', 'mail_cache_folders', 'mail_state', 'mail_refs', 'mail_thread_index', 'mail_contacts', 'mail_muted_threads', 'mail_access_codes'] as const;
 /** New mail sorted into tabs by a list request at most (above the high-water mark); the rest is the sorter's. */
 const SYNC_CAP = 100;
 /** Older mail sorted per step of the background sorter, each step under the sorter's lock by itself. */
@@ -187,6 +189,8 @@ const SORT_RUN_CAP = 3000;
 /** How many pages past the one asked for the sorter has cached, so scrolling on does not wait for it. */
 const SORT_AHEAD_PAGES = 2;
 const INBOX = 'INBOX';
+/** How long the organization's OpenAI key is used before it is asked for again (a key added or removed shows within it). */
+const ORG_KEY_TTL_MS = 5 * 60_000;
 
 type Failure = { code: 'auth_failed' | 'connect_failed'; message: string };
 const SUMMARY_QUERY: FetchQueryObject = { uid: true, envelope: true, flags: true, bodyStructure: true, size: true, internalDate: true };
@@ -311,6 +315,10 @@ export class Mail extends DurableObject<MailEnv> {
    */
   private readonly listChecked = new Map<string, number>();
   private readonly listRefresh = new Map<string, Promise<void>>();
+  /** Messages whose access code is being looked for now (accessCode.ts), by `accessCodeKey`. */
+  private readonly codeScans = new Set<string>();
+  /** The organization's OpenAI key as last asked for (null: none set), and when; asked again after ORG_KEY_TTL_MS. */
+  private orgKey: { key: string | null; at: number } | null = null;
 
   constructor(ctx: DurableObjectState, env: MailEnv) {
     super(ctx, env);
@@ -1408,7 +1416,7 @@ export class Mail extends DurableObject<MailEnv> {
     }
     // Newest first: the last message is the one shown open.
     if (pending.length) this.fetchBodiesSoon(r, pending.reverse().slice(0, 10));
-    return { threadId, muted: this.cache.mutedOf(r.id, [threadId]).size > 0, messages };
+    return { threadId, muted: this.cache.mutedOf(r.id, [threadId]).size > 0, messages: this.withAccessCodes(r.id, messages) };
   }
 
   /**
@@ -1966,6 +1974,50 @@ export class Mail extends DurableObject<MailEnv> {
     if (!plan) { this.cache.setBody(accountId, folder, uid, null, BODY.notByParts); return; }
     if ((html?.length ?? 0) > BODY_MAX_HTML || (text?.length ?? 0) > BODY_MAX_TEXT) { this.cache.setBody(accountId, folder, uid, null, BODY.tooLarge); return; }
     this.cache.setBody(accountId, folder, uid, { detail: rest, html, text, plan }, BODY.cached);
+    this.scanAccessCodeSoon(accountId, detail);
+  }
+
+  /**
+   * Looks for an access code in a new INBOX message (accessCode.ts) once its body is here, in the background, on the
+   * organization's OpenAI key; with no key set, nothing is asked. A message is asked about once (`mail_access_codes`);
+   * a failed call is logged and not kept, so the message is asked about again only if its body is cached again.
+   */
+  private scanAccessCodeSoon(accountId: string, detail: MessageDetail): void {
+    if (detail.folder.toUpperCase() !== INBOX) return;
+    const date = Date.parse(detail.date);
+    if (!Number.isFinite(date) || Date.now() - date > ACCESS_CODE_NEW_MS) return;
+    const key = accessCodeKey(detail);
+    if (this.codeScans.has(key) || this.cache.accessCodeChecked(accountId, key)) return;
+    this.codeScans.add(key);
+    this.background('access code', async () => {
+      try {
+        const apiKey = await this.orgOpenAIKey();
+        if (!apiKey) return 'no OpenAI key';
+        const found = await findAccessCode(apiKey, detail);
+        this.cache.setAccessCode(accountId, key, found?.code ?? '', Date.now());
+        return found ? 'found' : 'none';
+      } finally {
+        this.codeScans.delete(key);
+      }
+    });
+  }
+
+  /** The OpenAI key of the object's organization (its model settings, assistant/orgModel.ts), or null when none is set. */
+  private async orgOpenAIKey(): Promise<string | null> {
+    if (this.orgKey && Date.now() - this.orgKey.at < ORG_KEY_TTL_MS) return this.orgKey.key;
+    const org = this.cache.state('owner_organization_id');
+    const ns = this.env.ASSISTANT;
+    if (!org || !ns) return null;
+    const key = (await ns.get(ns.idFromName(orgModelKey(org))).orgModel()).openaiKey;
+    this.orgKey = { key, at: Date.now() };
+    return key;
+  }
+
+  /** The access codes found for these messages, on each one that has one. */
+  private withAccessCodes<M extends MessageDetail>(accountId: string, messages: M[]): M[] {
+    const codes = this.cache.accessCodes(accountId, messages.map(accessCodeKey));
+    if (!codes.size) return messages;
+    return messages.map((m) => { const code = codes.get(accessCodeKey(m)); return code ? { ...m, accessCode: code } : m; });
   }
 
   /**
@@ -2633,8 +2685,9 @@ export class Mail extends DurableObject<MailEnv> {
     });
 
     app.get('/v1/mail/accounts/:id/messages/:uid', async (c: MailContext) => {
-      const { detail } = await this.read(c.get('account'), folderOf(c), uidOf(c));
-      return c.json({ message: detail });
+      const r = c.get('account');
+      const { detail } = await this.read(r, folderOf(c), uidOf(c));
+      return c.json({ message: this.withAccessCodes(r.id, [detail])[0] });
     });
 
     app.get('/v1/mail/accounts/:id/messages/:uid/attachments/:index', async (c: MailContext) => {
