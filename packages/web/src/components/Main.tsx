@@ -44,6 +44,7 @@ import SidePanel from './SidePanel';
 import { OpenInAppBanner } from './OpenInApp';
 import IncomingHuddle from './IncomingHuddle';
 import { MobileMenuButton } from './MobileMenuButton';
+import { useFaviconDot } from '../lib/favicon';
 
 /** `onActivityUnread`: the Activity count as it changes, for the suite bar's Chat tab (App.tsx), and null once gone. */
 export default function Main({ onActivityUnread }: { onActivityUnread?: (count: number | null) => void } = {}) {
@@ -117,12 +118,14 @@ export default function Main({ onActivityUnread }: { onActivityUnread?: (count: 
   // comes back to the front, so a count that moved on the phone catches up.
   const workspacesForBadge = useWorkspaces();
   const syncStates = useConnectionSync();
+  const ownUnread = (workspacesForBadge.data ?? []).reduce((sum, ws) => sum + (ws.unreadCount ?? 0), 0);
   useEffect(() => {
     if (!getHost().isDesktop) return;
-    const own = (workspacesForBadge.data ?? []).reduce((sum, ws) => sum + (ws.unreadCount ?? 0), 0);
     const others = syncStates.filter((s) => s.connectionId !== runtime.connectionId).reduce((sum, s) => sum + s.unread, 0);
-    getHost().badge.set(own + others);
-  }, [workspacesForBadge.data, syncStates, runtime.connectionId]);
+    getHost().badge.set(ownUnread + others);
+  }, [ownUnread, syncStates, runtime.connectionId]);
+  // The browser tab's stand-in for that badge: a dot on Chat's favicon while this connection has anything unread.
+  useFaviconDot(ownUnread);
   useEffect(() => {
     if (!getHost().isDesktop) return;
     return onLookingChange(() => {
