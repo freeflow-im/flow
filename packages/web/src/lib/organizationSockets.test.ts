@@ -36,6 +36,17 @@ describe('OrganizationSockets', () => {
     expect(handlers.onStatus.mock.calls.filter((c) => c[0] === 'connected')).toHaveLength(1);
   });
 
+  it('names the organization whose socket said hello, so only its presence is cleared', async () => {
+    const { sockets, made, handlers } = setup(['a', 'b']);
+    const onConnected = vi.fn();
+    (handlers as SocketHandlers).onConnected = onConnected;
+    sockets.start();
+    await flush();
+    made.get('a')!.handlers.onConnected!(null);
+    made.get('b')!.handlers.onConnected!(null);
+    expect(onConnected.mock.calls).toEqual([['a'], ['b']]);
+  });
+
   it('passes every organization\'s events on, and sends typing to each', async () => {
     const { sockets, made, handlers } = setup(['a', 'b']);
     sockets.start();

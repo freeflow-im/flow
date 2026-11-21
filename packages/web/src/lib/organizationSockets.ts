@@ -53,6 +53,8 @@ export class OrganizationSockets {
           const all = [...this.statuses.values()];
           this.announce(all.length === this.sockets.size && all.every((s) => s === 'connected') ? 'connected' : all.includes('reconnecting') ? 'reconnecting' : 'connecting');
         },
+        // Each socket reports its own hello, so the app clears only that organization's presence before its snapshot.
+        onConnected: () => this.handlers.onConnected?.(id),
         onEvent: (event: Event) => {
           this.handlers.onEvent(event);
           if (event.type === 'workspace.joined') void this.sync();

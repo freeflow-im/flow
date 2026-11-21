@@ -265,14 +265,14 @@ export default function Main({ onActivityUnread }: { onActivityUnread?: (count: 
     const socketHandlers: SocketHandlers = {
       onStatus: (s) => {
         setStatus(s);
-        if (s === 'connected') {
-          // reconnect backfill = refetch everything (online-only client).
-          // the server sends a fresh presence snapshot right after hello, and
-          // nobody sends `offline` for a user who left while we were down
-          setPresence({});
-          void qc.invalidateQueries();
-        }
+        // reconnect backfill = refetch everything (online-only client).
+        if (s === 'connected') void qc.invalidateQueries();
       },
+      // The server sends a fresh presence snapshot right after hello, and nobody sends `offline` for a user who left
+      // while we were down, so the old presence goes — but only the reconnecting socket's: with one socket per
+      // organization, clearing them all wiped snapshots the other sockets had already sent, and a hosted agent (always
+      // online, never sent again) stayed gray.
+      onConnected: (workspaceId) => setPresence((prev) => (workspaceId ? { ...prev, [workspaceId]: {} } : {})),
       onEvent: (event: Event) => handleEvent(event),
       onSession: (sessionId) => huddleBridge.current?.setSessionId(sessionId),
     };
