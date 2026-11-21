@@ -87,6 +87,23 @@ describe('the automations list', () => {
     expect($('automation-jobs-s-post')).toBeNull();
   });
 
+  it('shows an agent\'s wake for itself as one time, with Cancel and no Run now (agent-self-wake.md)', async () => {
+    const self: SubscriptionDTO = {
+      ...base, id: 's-self', name: 'Check the deploy', consumer: 'acct-botty', createdBy: 'acct-botty', filter: { types: ['schedule.tick'] }, delivery: 'wake',
+      action: { kind: 'wake', prompt: 'Is it green?', channelId: 'c-gen', threadRootId: 'm-1' }, schedule: { id: 'sc2', every: 'once', timezone: 'UTC', nextAt: '2026-11-21T17:00:00.000Z' },
+    };
+    await mount([self]);
+    expect($('automation-filter-s-self')!.textContent).toMatch(/^once, at .+ · Botty set this itself$/);
+    expect($('automation-action-s-self')!.textContent).toBe('Wake Botty in #general, in a thread: “Is it green?”');
+    expect($('automation-run-s-self')).toBeNull();
+    expect($('automation-delete-s-self')!.textContent).toBe('Cancel');
+    await click('automation-delete-s-self');
+    expect($('automation-s-self')!.textContent).toContain('Cancel this wake?');
+    await click('automation-delete-confirm-s-self');
+    await flush();
+    expect(api).toHaveBeenCalledWith('DELETE', '/v1/events/subscriptions/s-self?workspace=w1');
+  });
+
   it('expands a wake row\'s recent jobs', async () => {
     await mount();
     await click('automation-jobs-s-wake');

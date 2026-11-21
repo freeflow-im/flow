@@ -2,7 +2,8 @@
 // Publishers say who may read each event (`audience`); a read returns what follows a cursor that the reader may see.
 // It runs over any `SqlStorage`-shaped database, so tests can use node:sqlite. Presence and typing are never logged.
 import {
-  formatReference, MAX_EVENT_DEPTH, parseReference, type AgentJobDTO, type AgentJobEventData, type DeliveryMode, type EventFilter,
+  formatReference, MAX_EVENT_DEPTH, parseReference, SELF_WAKE_KEEP_MS, SELF_WAKE_MAX_DELAY_MS, SELF_WAKE_MAX_PENDING, SELF_WAKE_MAX_PER_DAY,
+  SELF_WAKE_MIN_DELAY_MS, type AgentJobDTO, type AgentJobEventData, type DeliveryMode, type EventFilter,
   type JobState, type PlatformEvent, type Reference, type ScheduleDTO, type SubscriptionAction, type SubscriptionDTO,
 } from '@flow/shared';
 import { appOfEventType } from '@flow/shared';
@@ -78,8 +79,23 @@ export interface NewSubscription {
   action?: SubscriptionAction;
   /** A schedule's subscription: its filter becomes the schedule's own ticks. Needs `organizationId`. */
   schedule?: { every: string; timezone: string };
+  /** A one-time schedule instead (an agent's self-wake): it fires once at this instant (ms), and the subscription is spent. */
+  onceAt?: number;
   organizationId?: string;
 }
+
+/** An agent's wake for itself (docs/specs/agent-self-wake.md): `owner` is its sponsor's account, or its own without one. */
+export interface NewSelfWake {
+  name: string; agent: string; owner: string; prompt: string; at: number; channelId?: string; threadRootId?: string; organizationId?: string;
+}
+
+/** Why a self-wake was refused, for the agent to read: too many waiting, too soon, or too far ahead. */
+export class SelfWakeError extends Error {
+  constructor(readonly code: 'too_many_wakes' | 'wake_too_soon' | 'wake_too_far', message: string) { super(message); }
+}
+
+/** A self-wake that came due past its agent's daily cap: dropped, and its owner told the first time that day (`notify`). */
+export interface CappedWake { subscription: SubscriptionDTO; notify: boolean }
 /** A job's lease: an acked job is the agent's for this long, extended by `extend`. */
 export const JOB_LEASE_MS = 10 * 60_000;
 /** Deliveries past the first before a job nobody takes is parked. */
@@ -129,6 +145,10 @@ export const EVENTS_MIGRATIONS: string[] = [
   // app events a read asks about before it fetches the reader's apps.
   `ALTER TABLE events ADD COLUMN about TEXT;
   CREATE INDEX events_app ON events (seq) WHERE type LIKE 'app.%';`,
+  // Agents that wake themselves (docs/specs/agent-self-wake.md): the thread a job answers in, and when a one-time
+  // schedule's subscription fired (it is swept SELF_WAKE_KEEP_MS later).
+  `ALTER TABLE agent_jobs ADD COLUMN thread_root_id TEXT;
+  ALTER TABLE subscriptions ADD COLUMN spent_at INTEGER;`,
 ];
 
 const AUDIENCE = /^(org|channel:.+|account:.+|ref:.+)$/;
@@ -239,7 +259,14 @@ export class EventsCore {
     const id = crypto.randomUUID();
     let filter = s.filter ?? {};
     return this.transact(() => {
-      if (s.schedule) {
+      if (s.onceAt !== undefined) {
+        const org = s.organizationId ?? this.organizationId();
+        if (!org) throw new Error('a schedule needs its organization');
+        const scheduleId = crypto.randomUUID();
+        filter = { types: ['schedule.tick'], ref: scheduleRef(org, scheduleId) };
+        this.sql.exec("INSERT INTO schedules (id, subscription_id, every, timezone, next_at, created_at) VALUES (?, ?, 'once', 'UTC', ?, ?)",
+          scheduleId, id, Math.floor(s.onceAt), now);
+      } else if (s.schedule) {
         const org = s.organizationId ?? this.organizationId();
         if (!org) throw new Error('a schedule needs its organization');
         const next = nextScheduleAt(s.schedule.every, s.schedule.timezone, now);
@@ -258,9 +285,37 @@ export class EventsCore {
     });
   }
 
-  /** The subscriptions an account consumes or owns (a sponsor's automations for its agent). */
+  /** The subscriptions an account consumes or owns (a sponsor's automations for its agent); a spent self-wake is not listed. */
   listSubscriptions(account: string): SubscriptionDTO[] {
-    return this.sql.exec('SELECT * FROM subscriptions WHERE consumer = ? OR owner = ? ORDER BY created_at, id', account, account).toArray().map((r) => this.withSchedule(r));
+    return this.sql.exec('SELECT * FROM subscriptions WHERE (consumer = ? OR owner = ?) AND spent_at IS NULL ORDER BY created_at, id', account, account).toArray().map((r) => this.withSchedule(r));
+  }
+
+  /**
+   * An agent's wake for itself (docs/specs/agent-self-wake.md): a `wake` subscription on a one-time schedule, its consumer
+   * the agent. Refused (SelfWakeError) when `at` is under a minute away or over a year, or the agent has
+   * SELF_WAKE_MAX_PENDING waiting; counted and made in one transaction.
+   */
+  scheduleSelfWake(w: NewSelfWake, now = Date.now()): SubscriptionDTO {
+    if (!(w.at >= now + SELF_WAKE_MIN_DELAY_MS)) throw new SelfWakeError('wake_too_soon', 'A wake must be at least a minute from now.');
+    if (w.at > now + SELF_WAKE_MAX_DELAY_MS) throw new SelfWakeError('wake_too_far', 'A wake can be at most a year from now.');
+    return this.transact(() => {
+      if (this.selfWakes(w.agent).length >= SELF_WAKE_MAX_PENDING) {
+        throw new SelfWakeError('too_many_wakes', `You already have ${SELF_WAKE_MAX_PENDING} wakes waiting. Cancel one (cancel_wake) before you set another.`);
+      }
+      return this.createSubscription({
+        name: w.name, consumer: w.agent, owner: w.owner, createdBy: w.agent, filter: {}, delivery: 'wake', onceAt: w.at,
+        action: { kind: 'wake', prompt: w.prompt, ...(w.channelId ? { channelId: w.channelId } : {}), ...(w.channelId && w.threadRootId ? { threadRootId: w.threadRootId } : {}) },
+        ...(w.organizationId ? { organizationId: w.organizationId } : {}),
+      }, now);
+    });
+  }
+
+  /** The agent's self-wakes still waiting to fire, soonest first. */
+  selfWakes(agent: string): SubscriptionDTO[] {
+    return this.sql.exec(
+      "SELECT u.* FROM subscriptions u JOIN schedules s ON s.subscription_id = u.id WHERE u.consumer = ? AND s.every = 'once' AND u.spent_at IS NULL ORDER BY s.next_at, u.id",
+      agent,
+    ).toArray().map((r) => this.withSchedule(r));
   }
 
   getSubscription(id: string): SubscriptionDTO | null {
@@ -386,12 +441,13 @@ export class EventsCore {
       const id = crypto.randomUUID();
       const depth = (e.depth ?? 0) + 1;
       this.sql.exec(
-        `INSERT INTO agent_jobs (id, subscription_id, agent, event_id, event_seq, prompt, channel_id, state, attempts, depth, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?)`,
-        id, sub.id, sub.consumer, e.id, e.seq, renderTemplate(action.prompt, e), action.channelId ?? null, depth, now, now,
+        `INSERT INTO agent_jobs (id, subscription_id, agent, event_id, event_seq, prompt, channel_id, thread_root_id, state, attempts, depth, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?)`,
+        id, sub.id, sub.consumer, e.id, e.seq, renderTemplate(action.prompt, e), action.channelId ?? null,
+        (action.channelId && action.threadRootId) || null, depth, now, now,
       );
       const job = this.getJob(id)!;
-      const published = this.publishJob(job, e, wakeBrief(sub.name, job.prompt, e), now);
+      const published = this.publishJob(job, e, wakeBrief(sub.name, job.prompt, e, job), now);
       return { job: this.getJob(id)!, published };
     });
   }
@@ -405,6 +461,7 @@ export class EventsCore {
     const t = trigger ?? this.jobTrigger(job);
     const data: AgentJobEventData = {
       jobId: job.id, subscriptionId: job.subscriptionId, prompt: brief ?? this.jobBrief(job), ...(job.channelId ? { channelId: job.channelId } : {}),
+      ...(job.threadRootId ? { threadRootId: job.threadRootId } : {}),
       event: { id: t.id, seq: t.seq, type: t.type, ...(t.ref ? { ref: formatReference(t.ref) } : {}), ...(t.channelId ? { channelId: t.channelId } : {}) },
     };
     const out = this.publish({
@@ -535,21 +592,39 @@ export class EventsCore {
 
   /**
    * One `schedule.tick` per schedule due by `now`, on its owner's account, and each schedule's next instant from now (a
-   * schedule that missed several fires once). Returns what was published, in order.
+   * schedule that missed several fires once). A one-time schedule (a self-wake) fires once and is gone, its subscription
+   * spent; past its agent's SELF_WAKE_MAX_PER_DAY for the UTC day it is dropped instead, into `capped`. Returns what was
+   * published, in order.
    */
-  tickSchedules(now = Date.now()): { seq: number; id: string }[] {
+  tickSchedules(now = Date.now(), capped: CappedWake[] = []): { seq: number; id: string }[] {
     return this.transact(() => {
       const org = this.organizationId() ?? '';
       const due = this.sql.exec(
-        'SELECT s.*, u.owner FROM schedules s JOIN subscriptions u ON u.id = s.subscription_id WHERE s.next_at <= ? ORDER BY s.next_at, s.id', now,
+        'SELECT s.*, u.owner, u.consumer FROM schedules s JOIN subscriptions u ON u.id = s.subscription_id WHERE s.next_at <= ? ORDER BY s.next_at, s.id', now,
       ).toArray();
       const out: { seq: number; id: string }[] = [];
+      const day = new Date(now).toISOString().slice(0, 10);
       for (const r of due) {
         const at = r.next_at as number;
+        const once = r.every === 'once';
+        if (once) {
+          this.sql.exec('DELETE FROM schedules WHERE id = ?', r.id);
+          this.sql.exec('UPDATE subscriptions SET spent_at = ? WHERE id = ?', now, r.subscription_id);
+          const key = `self_wake:${day}:${r.consumer as string}`;
+          const before = Number(this.meta(key) ?? 0);
+          this.setMeta(key, String(before + 1));
+          if (before >= SELF_WAKE_MAX_PER_DAY) {
+            const sub = this.getSubscription(r.subscription_id as string);
+            if (sub) capped.push({ subscription: sub, notify: before === SELF_WAKE_MAX_PER_DAY });
+            continue;
+          }
+        }
         out.push(this.publish({
           type: 'schedule.tick', organizationId: org, actor: null, audience: `account:${r.owner as string}`, ref: scheduleRef(org, r.id as string),
-          ts: new Date(now).toISOString(), data: { scheduleId: r.id, subscriptionId: r.subscription_id, every: r.every, timezone: r.timezone, at: new Date(at).toISOString() },
+          ts: new Date(now).toISOString(),
+          data: { scheduleId: r.id, subscriptionId: r.subscription_id, every: r.every, timezone: r.timezone, at: new Date(at).toISOString(), ...(once ? { once: true } : {}) },
         }));
+        if (once) continue;
         const next = nextScheduleAt(r.every as string, r.timezone as string, Math.max(now, at));
         if (next === null) this.sql.exec('DELETE FROM schedules WHERE id = ?', r.id);
         else this.sql.exec('UPDATE schedules SET next_at = ? WHERE id = ?', next, r.id);
@@ -564,7 +639,7 @@ export class EventsCore {
    */
   tickNow(subscriptionId: string, actor: string, now = Date.now()): { seq: number; id: string } | null {
     return this.transact(() => {
-      const r = this.sql.exec('SELECT s.*, u.owner FROM schedules s JOIN subscriptions u ON u.id = s.subscription_id WHERE s.subscription_id = ?', subscriptionId).toArray()[0];
+      const r = this.sql.exec("SELECT s.*, u.owner FROM schedules s JOIN subscriptions u ON u.id = s.subscription_id WHERE s.subscription_id = ? AND s.every <> 'once'", subscriptionId).toArray()[0];
       if (!r) return null;
       const org = this.organizationId() ?? '';
       return this.publish({
@@ -590,6 +665,10 @@ export class EventsCore {
     const capped = cut === undefined ? 0 : count('seq <= ?', cut);
     if (capped) this.sql.exec('DELETE FROM events WHERE seq <= ?', cut);
     if (aged || capped) this.sql.exec("INSERT INTO events_meta (key, value) VALUES ('deleted_through', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", String(head));
+    // Self-wakes that fired SELF_WAKE_KEEP_MS ago go, with their jobs; and the daily counts before yesterday.
+    const spent = this.sql.exec('SELECT id FROM subscriptions WHERE spent_at IS NOT NULL AND spent_at < ?', now - SELF_WAKE_KEEP_MS).toArray();
+    for (const r of spent) this.deleteSubscription(r.id as string);
+    this.sql.exec("DELETE FROM events_meta WHERE key LIKE 'self_wake:%' AND key < ?", `self_wake:${new Date(now - 86_400_000).toISOString().slice(0, 10)}`);
     return { aged, capped };
   }
 
@@ -628,10 +707,16 @@ export function renderTemplate(template: string, e: PlatformEvent): string {
  * the automation's prompt, to act on for this one event. Without it the agent saw a bare prompt, posted as if it wrote it,
  * and read a rule like "when a task appears…" as a standing order to watch for itself.
  */
-export function wakeBrief(name: string, prompt: string, e: PlatformEvent): string {
+export function wakeBrief(name: string, prompt: string, e: PlatformEvent, job?: Pick<AgentJobDTO, 'channelId' | 'threadRootId'>): string {
+  const at = (e.data as { at?: unknown; once?: unknown } | null)?.at;
+  if (e.type === 'schedule.tick' && (e.data as { once?: unknown } | null)?.once === true) {
+    const where = job?.threadRootId ? `\n\nYou set it from a thread: your answer is posted in that thread (channel ${job.channelId}, thread ${job.threadRootId}).`
+      : job?.channelId ? `\n\nYour answer is posted in channel ${job.channelId}.` : '';
+    return `You asked to be woken now ("${name}", for ${typeof at === 'string' ? at : e.ts}). This is a wake you set for yourself, not a person's message.\n\n` +
+      `Your note to yourself:\n${prompt}${where}\n\nDo what the note says. To check again later, set a new wake with schedule_wake.`;
+  }
   const head = `An automation woke you: "${name}".`;
   if (e.type === 'schedule.tick') {
-    const at = (e.data as { at?: unknown } | null)?.at;
     return `${head} It runs on a schedule; this is the run for ${typeof at === 'string' ? at : e.ts}.\n\nThe automation's instruction:\n${prompt}`;
   }
   const data = JSON.stringify(e.data ?? null);
@@ -691,6 +776,7 @@ function toJob(r: Record<string, unknown>): AgentJobDTO {
   return {
     id: r.id as string, subscriptionId: r.subscription_id as string, agent: r.agent as string, eventId: r.event_id as string,
     eventSeq: r.event_seq as number, prompt: r.prompt as string, ...(r.channel_id ? { channelId: r.channel_id as string } : {}),
+    ...(r.thread_root_id ? { threadRootId: r.thread_root_id as string } : {}),
     state: r.state as JobState, attempts: r.attempts as number,
     ...(r.lease_until != null ? { leaseUntil: new Date(r.lease_until as number).toISOString() } : {}),
     ...(r.note ? { note: r.note as string } : {}), depth: r.depth as number,

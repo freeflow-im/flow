@@ -1,6 +1,6 @@
 // One organization: its database and its sockets. HTTP requests arrive from the Worker with the caller already known.
 import { DurableObject } from 'cloudflare:workers';
-import { MAX_EVENT_DEPTH, type AccountDTO, type AccountKind, type HostedRuntimeDTO, type MessageDTO, type Event, type MemberRole, type UserDTO, type WorkspaceMemberDTO } from '@flow/shared';
+import { MAX_EVENT_DEPTH, SELF_WAKE_MAX_PER_DAY, type AccountDTO, type AccountKind, type HostedRuntimeDTO, type MessageDTO, type Event, type MemberRole, type UserDTO, type WorkspaceMemberDTO } from '@flow/shared';
 import { accountGate, type DirectoryCore } from '../directory/core';
 import { ApiError } from '../errors';
 import { OutboxFlusher } from './outbox';
@@ -857,15 +857,45 @@ export class Org extends DurableObject<OrgEnv> {
   }
 
   /**
+   * Who owns an agent's wake for itself (docs/specs/agent-self-wake.md §2): its sponsor's account in this organization, so
+   * the sponsor sees it among their automations and is told when it stops; the agent's own account when it has no sponsor
+   * here. Also the user whose channels an explicit `channelId` must be among: the sponsor's for a personal agent (it posts
+   * through them), the agent's own otherwise. Null when the account is no agent of this organization.
+   */
+  async selfWakeOwnerOf(agentAccountId: string): Promise<{ ownerAccountId: string; agentUserId: string; channelUserId: string; personal: boolean } | null> {
+    const agent = await this.agentSponsorOf(agentAccountId);
+    if (!agent) return null;
+    const sponsorAccount = agent.sponsorUserId
+      ? (this.ctx.storage.sql.exec("SELECT account_id FROM workspace_members WHERE user_id = ? AND account_id IS NOT NULL AND kind <> 'personal_agent'", agent.sponsorUserId).toArray()[0]?.account_id as string | undefined)
+      : undefined;
+    return {
+      ownerAccountId: sponsorAccount ?? agentAccountId, agentUserId: agent.userId,
+      channelUserId: agent.personal && agent.sponsorUserId ? agent.sponsorUserId : agent.userId, personal: agent.personal,
+    };
+  }
+
+  /**
+   * A person's assistant's DM with its sponsor, made if it is not there yet (as noteInDm makes it): where a self-wake set
+   * from the panel, which has no channel, answers. Null for an agent that is no hosted personal one.
+   */
+  async sponsorDmOf(agentUserId: string): Promise<string | null> {
+    const sponsor = this.assistantSponsor(agentUserId);
+    const workspace = this.db.select({ id: schema.workspaces.id }).from(schema.workspaces).get();
+    if (!sponsor || !workspace) return null;
+    const { createDm } = await import('./services/channels');
+    return this.scoped(async () => (await createDm(workspace.id, sponsor, [agentUserId])).id, { depth: MAX_EVENT_DEPTH });
+  }
+
+  /**
    * A `post` subscription's action: the message posted into the channel as the owner, through the message service, with
    * the trigger's depth plus one on its event. `clientMsgId` names the subscription and the event, so it posts once.
    */
-  async postAutomation(p: { ownerAccountId: string; channelId: string; body: string; clientMsgId: string; depth: number; causedBy?: string; via?: string; invokedBy?: string }): Promise<string | null> {
+  async postAutomation(p: { ownerAccountId: string; channelId: string; threadRootId?: string | null; body: string; clientMsgId: string; depth: number; causedBy?: string; via?: string; invokedBy?: string }): Promise<string | null> {
     const user = this.userOfAccount(p.ownerAccountId);
     if (!user) return null;
     const { sendMessage } = await import('./services/messages');
     const stamp: Stamp = { depth: p.depth, ...(p.causedBy ? { causedBy: p.causedBy } : {}), ...(p.via ? { via: p.via } : {}), ...(p.invokedBy ? { invokedBy: p.invokedBy } : {}) };
-    const msg = await this.scoped(() => sendMessage(p.channelId, user, p.clientMsgId, p.body, undefined, undefined, undefined, { expandMentions: true }), stamp);
+    const msg = await this.scoped(() => sendMessage(p.channelId, user, p.clientMsgId, p.body, p.threadRootId ?? undefined, undefined, undefined, { expandMentions: true }), stamp);
     await this.logging;
     await this.armAlarm();
     return msg.id;
@@ -876,7 +906,7 @@ export class Org extends DurableObject<OrgEnv> {
    * The agent says so in its DM with the owner, so it arrives as a DM notification; its event is at the depth cap, so it
    * wakes nothing. With no agent (a post automation) it is a log line.
    */
-  async automationNotice(p: { ownerAccountId: string; agentAccountId: string | null; name: string; why: 'parked' | 'capped' }): Promise<void> {
+  async automationNotice(p: { ownerAccountId: string; agentAccountId: string | null; name: string; why: 'parked' | 'capped' | 'daily' }): Promise<void> {
     const owner = this.userOfAccount(p.ownerAccountId);
     const agent = p.agentAccountId ? this.userOfAccount(p.agentAccountId) : null;
     const workspace = this.db.select({ id: schema.workspaces.id }).from(schema.workspaces).get();
@@ -884,7 +914,9 @@ export class Org extends DurableObject<OrgEnv> {
     const agentName = (this.ctx.storage.sql.exec('SELECT display_name FROM users WHERE id = ?', agent).toArray()[0]?.display_name as string | undefined) ?? 'its agent';
     const text = p.why === 'parked'
       ? `⚠️ Automation “${p.name}” could not wake ${agentName}: the job was delivered several times and never finished, so it is parked.`
-      : `⚠️ Automation “${p.name}” stopped waking ${agentName}: a chain of events it set off reached the depth limit (${MAX_EVENT_DEPTH}).`;
+      : p.why === 'daily'
+        ? `⚠️ ${agentName} woke itself ${SELF_WAKE_MAX_PER_DAY} times today, the most a day allows, so “${p.name}” and any other wake it set for itself are skipped until tomorrow (UTC).`
+        : `⚠️ Automation “${p.name}” stopped waking ${agentName}: a chain of events it set off reached the depth limit (${MAX_EVENT_DEPTH}).`;
     await this.noteInDm(workspace.id, agent, owner, text);
   }
 

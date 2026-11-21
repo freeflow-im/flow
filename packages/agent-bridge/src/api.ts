@@ -237,6 +237,11 @@ export class FlowApi {
     return this.req(method, `/v1/calendar/${path}${path.includes('?') ? '&' : '?'}workspace=${encodeURIComponent(workspaceId)}`, body);
   }
 
+  /** The agent's wakes for itself (`/v1/events/wakes`, docs/specs/agent-self-wake.md) in one organization (`?workspace=`). */
+  wakes<T>(method: 'GET' | 'POST' | 'DELETE', path: string, workspaceId: string, body?: unknown): Promise<T> {
+    return this.req(method, `/v1/events/wakes${path ? `/${path}` : ''}?workspace=${encodeURIComponent(workspaceId)}`, body);
+  }
+
   /** Mail (`/v1/mail/<path>`), as the agent's account in one organization (`?workspace=`): its own mailbox (phase 5.4). */
   mail<T>(method: 'GET' | 'POST' | 'PATCH', path: string, workspaceId: string, body?: unknown): Promise<T> {
     return this.req(method, `/v1/mail/${path}${path.includes('?') ? '&' : '?'}workspace=${encodeURIComponent(workspaceId)}`, body);

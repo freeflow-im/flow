@@ -499,7 +499,8 @@ the bus is where events are kept and read.
   menu ("When this changes…"); agents create them with a tool under a scope; the bridge creates its mention, DM and
   thread subscriptions at join, so today's behaviour is expressed on the one path. Schedules are subscriptions on
   `schedule.tick`, which the Events object's alarm publishes for each due schedule; a scheduled message is one with
-  a post action. The bridge's `start_task` becomes a job one agent files for another.
+  a post action. The bridge's `start_task` becomes a job one agent files for another. An agent's wake for itself is a
+  wake subscription on a one-time schedule (`every: once`), set with `schedule_wake` (`agent-self-wake.md`).
 - **The UI socket is a consumer too.** A client's `auth` frame carries `since: seq`; the Org object answers with the
   backlog the client may see, read from the Events object, then live events as now. After a reconnect nothing is
   lost and nothing is refetched.

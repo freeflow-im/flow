@@ -5,7 +5,7 @@
 // fires the schedules.
 import { DurableObject } from 'cloudflare:workers';
 import type { AgentJobDTO, JobState, PlatformEvent, SubscriptionDTO, HostedRuntimeDTO } from '@flow/shared';
-import { EventsCore, renderTemplate, type EventStats, type JobCheck, type NewSubscription, type PublishInput, type ReadQuery, type Reader, type SubscriptionRead } from './core';
+import { EventsCore, renderTemplate, type CappedWake, type EventStats, type JobCheck, type NewSelfWake, type NewSubscription, type PublishInput, type ReadQuery, type Reader, type SubscriptionRead } from './core';
 import type { Org } from '../org/object';
 
 /** One message on the `flow-jobs` Queue: check this job once its delay is up (index.ts's `queue`). */
@@ -139,6 +139,25 @@ export class Events extends DurableObject<EventsEnv> {
     return this.core.listSubscriptions(account);
   }
 
+  /** An agent's wake for itself (core.scheduleSelfWake); a SelfWakeError's `code` and message say why it was refused. */
+  async scheduleSelfWake(w: NewSelfWake): Promise<SubscriptionDTO | { refused: string; message: string }> {
+    let sub: SubscriptionDTO;
+    try {
+      sub = this.core.scheduleSelfWake(w);
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code) return { refused: code, message: (err as Error).message };
+      throw err;
+    }
+    await this.rearm();
+    return sub;
+  }
+
+  /** The agent's self-wakes still waiting, soonest first. */
+  selfWakes(agent: string): SubscriptionDTO[] {
+    return this.core.selfWakes(agent);
+  }
+
   getSubscription(id: string): SubscriptionDTO | null {
     return this.core.getSubscription(id);
   }
@@ -240,8 +259,13 @@ export class Events extends DurableObject<EventsEnv> {
       if (aged || capped) console.log(`[events] retention: ${aged} aged out, ${capped} over the cap`);
       this.core.setMeta('retention_at', String(now + DAY_MS));
     }
-    const ticks = this.core.tickSchedules(now);
+    const capped: CappedWake[] = [];
+    const ticks = this.core.tickSchedules(now, capped);
     if (ticks.length) this.published(this.core.organizationId() ?? '', ticks[0]!.seq - 1, ticks.at(-1)!.seq);
+    for (const c of capped) {
+      console.log(`[events] self-wake ${c.subscription.id} of ${c.subscription.consumer}: dropped, past the daily cap`);
+      if (c.notify) await this.notify(this.core.organizationId() ?? '', c.subscription, 'daily');
+    }
     await this.rearm();
   }
 
@@ -332,6 +356,12 @@ export class Events extends DurableObject<EventsEnv> {
           }
           continue;
         }
+        if (d.kind === 'wake' && sub.createdBy === sub.consumer && org && !(await org.agentSponsorOf(sub.consumer).catch(() => true))) {
+          // An agent's own wake whose agent is gone (removed since): dropped, not filed (agent-self-wake.md §4).
+          console.log(`[events] subscription ${sub.id}: its agent ${sub.consumer} is gone, so it is deleted`);
+          this.core.deleteSubscription(sub.id);
+          break;
+        }
         if (d.kind === 'wake') await this.fileJob(organizationId, sub, e);
         else if (org && sub.action?.kind === 'post') {
           await org.postAutomation({
@@ -379,7 +409,7 @@ export class Events extends DurableObject<EventsEnv> {
   }
 
   /** "Automation X could not wake Y" (a parked job), or "… reached the depth cap", to the subscription's owner. */
-  private async notify(organizationId: string, sub: SubscriptionDTO, why: 'parked' | 'capped'): Promise<void> {
+  private async notify(organizationId: string, sub: SubscriptionDTO, why: 'parked' | 'capped' | 'daily'): Promise<void> {
     if (!this.env.ORG || !organizationId) return;
     const org = this.env.ORG.get(this.env.ORG.idFromName(organizationId));
     await org.automationNotice({ ownerAccountId: sub.owner, agentAccountId: sub.delivery === 'wake' ? sub.consumer : null, name: sub.name, why })

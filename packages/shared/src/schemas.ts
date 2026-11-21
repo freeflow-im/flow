@@ -819,7 +819,7 @@ export type EventFilterSchema = z.infer<typeof EventFilterSchema>;
 const channelIdField = z.string().min(1).max(100);
 /** A `wake` or `post` subscription's action (`SubscriptionAction`). */
 export const SubscriptionActionSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('wake'), prompt: z.string().trim().min(1).max(4000), channelId: channelIdField.optional(), includeSelf: z.boolean().optional() }).strict(),
+  z.object({ kind: z.literal('wake'), prompt: z.string().trim().min(1).max(4000), channelId: channelIdField.optional(), threadRootId: z.string().min(1).max(100).optional(), includeSelf: z.boolean().optional() }).strict(),
   z.object({ kind: z.literal('post'), channelId: channelIdField, body: z.string().trim().min(1).max(4000), includeSelf: z.boolean().optional() }).strict(),
 ]);
 
@@ -847,8 +847,23 @@ export const CreateSubscriptionBody = z.object({
   if (b.delivery === 'wake' && !b.consumer) say('consumer', 'a wake subscription names the agent it wakes');
   if ((b.delivery === 'wake' || b.delivery === 'post') && b.action?.kind !== b.delivery) say('action', `a ${b.delivery} subscription needs a ${b.delivery} action`);
   if (b.action && b.delivery !== b.action.kind) say('action', `a ${b.action.kind} action needs delivery ${b.action.kind}`);
+  if (b.action?.kind === 'wake' && b.action.threadRootId && !b.action.channelId) say('action', 'a thread needs its channel');
 });
 export type CreateSubscriptionBody = z.infer<typeof CreateSubscriptionBody>;
+
+/**
+ * POST /v1/events/wakes: an agent's one-time wake for itself (docs/specs/agent-self-wake.md), as the caller's account.
+ * Exactly one of `at` (an ISO time with its offset) or `inMinutes`; where to answer (`channelId`, `threadRootId` in it).
+ */
+export const ScheduleWakeBody = z.object({
+  prompt: z.string().trim().min(1).max(4000),
+  at: z.string().trim().min(10).max(40).optional(),
+  inMinutes: z.number().int().min(1).max(525_600).optional(),
+  channelId: channelIdField.optional(),
+  threadRootId: z.string().min(1).max(100).optional(),
+  name: z.string().trim().min(1).max(100).optional(),
+}).strict();
+export type ScheduleWakeBody = z.infer<typeof ScheduleWakeBody>;
 
 /** POST /v1/events/jobs/:id/done: how the agent's turn ended, and a line about it. */
 export const JobDoneBody = z.object({
