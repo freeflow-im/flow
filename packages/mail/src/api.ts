@@ -259,6 +259,9 @@ export function attachmentUrl(accountId: string, folder: string, uid: number, in
   return inWorkspace(`${base(accountId)}/messages/${uid}/attachments/${index}${query({ folder, inline: inline ? 1 : undefined })}`);
 }
 
+/** An attachment's address for its Download button: marked so the server's log tells a download from a preview. */
+export const downloadUrl = (url: string) => `${url}${url.includes('?') ? '&' : '?'}download=1`;
+
 export const mailApi = {
   provider: (email: string) => request<ProviderPreset | null>('GET', `/v1/mail/providers${query({ email })}`),
   accounts: async () => (await request<{ accounts: MailAccount[] }>('GET', '/v1/mail/accounts')).accounts,

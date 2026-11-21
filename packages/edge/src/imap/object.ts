@@ -111,7 +111,7 @@ const KINDS: readonly Kind[] = ['interactive', 'background', 'sorter', 'cache'];
  * Where one request's time went, for its log line: waiting for a connection and a folder's lock, and talking IMAP; and for
  * a list, whether its rows came from the cache (`hit`), partly (`fill`) or from the server (`live`).
  */
-interface Timing { wait: number; imap: number; cache?: 'hit' | 'fill' | 'live'; test: TestHooks }
+interface Timing { wait: number; imap: number; cache?: 'hit' | 'fill' | 'live'; read?: 'kept' | 'part' | 'whole'; bytes?: number; test: TestHooks }
 /**
  * Local dev only (MAIL_ALLOW_INSECURE=1), from x-mail-test-* headers, for test/e2e-mail.mjs, and carried into the
  * background work a request starts: a pause in each of the sorter's steps (holding its lock), a smaller sorting budget
@@ -337,7 +337,7 @@ export class Mail extends DurableObject<MailEnv> {
     if (!isHeartbeat(request)) this.touch();
     await this.armAlarm().catch((err) => console.warn(`[mail] alarm: ${(err as Error).message}`));
     const out = new Response(res.body, res);
-    out.headers.set(TIMING_HEADER, `wait=${Math.round(t.wait)};imap=${Math.round(t.imap)}${t.cache ? `;cache=${t.cache}` : ''}`);
+    out.headers.set(TIMING_HEADER, `wait=${Math.round(t.wait)};imap=${Math.round(t.imap)}${t.cache ? `;cache=${t.cache}` : ''}${t.read ? `;read=${t.read}` : ''}${t.bytes !== undefined ? `;bytes=${t.bytes}` : ''}`);
     return out;
   }
 
@@ -1938,7 +1938,9 @@ export class Mail extends DurableObject<MailEnv> {
   private async attachment(r: AccountRow, folder: string, uid: number, index: number): Promise<{ content: Buffer; mimeType: string; filename: string }> {
     const opened = this.opened.get(`${r.id}/${folder}/${uid}`);
     const kept = opened?.parts.get(index);
-    if (kept) return kept;
+    // How it was read goes in the request's timing: kept from the open message, its own part, or the whole message parsed.
+    const t = timing.getStore();
+    if (kept) { if (t) t.read = 'kept'; return kept; }
     return this.withFolder(r, folder, 'interactive', async (c) => {
       // The plan from the message as opened, else from its cached row, else from the server.
       let plan = opened?.plan ?? this.cache.plan(r.id, folder, uid);
@@ -1949,6 +1951,7 @@ export class Mail extends DurableObject<MailEnv> {
       }
       if (!plan.simple) {
         // Read whole, as it was opened.
+        if (t) t.read = 'whole';
         const download = await c.download(String(uid), undefined, { uid: true, chunkSize: 1024 * 1024 });
         if (!download?.content) throw notFound('no such message');
         const email = await PostalMime.parse(await streamBytes(download.content, MAX_MESSAGE_BYTES), { attachmentEncoding: 'arraybuffer' });
@@ -1959,6 +1962,7 @@ export class Mail extends DurableObject<MailEnv> {
       const a = plan.attachments[index];
       if (!a) throw notFound('no such attachment');
       if (a.leaf.size > MAX_MESSAGE_BYTES) throw mailError(413, 'bad_request', 'the attachment is too large to download here');
+      if (t) t.read = 'part';
       const got = await c.fetchOne(String(uid), { uid: true, bodyParts: [a.leaf.section] }, { uid: true });
       const bytes = section(got, a.leaf.section);
       if (!bytes) throw notFound('no such attachment');
@@ -2469,6 +2473,8 @@ export class Mail extends DurableObject<MailEnv> {
       const index = Number(c.req.param('index'));
       if (!Number.isInteger(index) || index < 0) throw notFound('no such attachment');
       const a = await this.attachment(c.get('account'), folderOf(c), uidOf(c), index);
+      const t = timing.getStore();
+      if (t) t.bytes = a.content.length;
       const type = a.mimeType || 'application/octet-stream';
       // Served from the app's own origin: only a picture may be shown inline, and nothing it holds may run.
       const inline = c.req.query('inline') === '1' && /^image\/(png|jpe?g|gif|webp|bmp|avif)$/i.test(type);

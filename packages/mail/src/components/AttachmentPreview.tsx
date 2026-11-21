@@ -6,7 +6,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, Code, Download, ExternalLink, FileText, Globe, Loader2, Save, X } from 'lucide-react';
-import { attachmentUrl, previewApi, previewPageUrl, type AttachmentSummary, type DocsPreview, type SavedToDocs } from '../api';
+import { attachmentUrl, downloadUrl, previewApi, previewPageUrl, type AttachmentSummary, type DocsPreview, type SavedToDocs } from '../api';
 import { fileSize } from '../lib/format';
 import { inertHtml, isSvg, MAX_PREVIEW_BYTES, previewLimit, typeLabel, viewerFor } from '../lib/preview';
 import { readActiveOrganization } from '../suite';
@@ -154,6 +154,7 @@ export function AttachmentPreview({ accountId, message, files, index, onIndex, o
             )}
           </div>
         </div>
+        {/* Not marked as a download: the same address as the preview's, so the browser can reuse what it fetched. */}
         <BarButton label="Download" href={download} download={a.filename || true}>
           <Download />
         </BarButton>
@@ -359,7 +360,7 @@ function NoPreview({ a, download, why }: { a: Attachment; download: string; why:
       <FileText className="size-12 text-[#8ab4f8]" strokeWidth={1.25} />
       <div className="max-w-full truncate text-sm font-medium">{a.filename || 'attachment'}</div>
       <div className="text-sm text-white/70">{why}</div>
-      <a href={download} download={a.filename || true} className="mt-1 inline-flex h-9 items-center gap-2 rounded-full bg-[#8ab4f8] px-5 text-sm font-medium text-[#202124] hover:bg-[#aecbfa]">
+      <a href={downloadUrl(download)} download={a.filename || true} className="mt-1 inline-flex h-9 items-center gap-2 rounded-full bg-[#8ab4f8] px-5 text-sm font-medium text-[#202124] hover:bg-[#aecbfa]">
         <Download className="size-4" /> Download
       </a>
     </div>
