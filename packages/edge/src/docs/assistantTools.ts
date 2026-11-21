@@ -14,7 +14,7 @@ import { ASSISTANT_CALENDAR_TOOLS, assistantCalendarSchemas, type CalendarToolCo
 import { register, runnerOf, toolsFor } from '../registry/index.ts';
 import type { DocsToolContext } from '../assistant/docsTools.ts';
 // The event tools register themselves (a person's assistant makes automations with them, onboarding.md §4).
-import { ASSISTANT_EVENT_TOOLS, EVENT_TOOLS, type EventToolContext } from '../events/eventTools.ts';
+import { ASSISTANT_EVENT_TOOLS, EVENT_TOOLS, WAKE_TOOLS, type EventToolContext, type WakeToolContext } from '../events/eventTools.ts';
 import type { AppToolContext } from '../apps.ts';
 import { BROWSER_GUIDANCE, browserTools, isBrowserWebTool, validateBrowserTool } from '../assistant/browserTools.ts';
 import { ASSISTANT_CHAT_TOOLS, assistantChatSchemas } from '../assistant/chatTools.ts';
@@ -32,6 +32,8 @@ declare module '@flow/docs/server/agent/tools.ts' {
     calendar?: CalendarToolContext;
     /** The organization's automations as the person, in their own assistant's turn (events/eventTools.ts); absent otherwise. */
     events?: EventToolContext;
+    /** The turn's agent's wakes for itself (events/eventTools.ts WAKE_TOOLS), in every hosted agent's turn; absent otherwise. */
+    wakes?: WakeToolContext;
     /** The organization's Docs object over HTTP, as the person (the Assistant object): Docs' tools then run there, not on `sheets`. */
     docs?: DocsToolContext;
     /** The objects of the apps added by manifest, by name (apps.ts), for their tools. */
@@ -90,6 +92,8 @@ export const SUITE_SCHEMAS: Record<string, z.ZodObject> = {
   memory: memorySchema,
   // Automations (onboarding.md §4): a person's own assistant makes and lists them as the person (events/eventTools.ts).
   ...Object.fromEntries(EVENT_TOOLS.filter((t) => ASSISTANT_EVENT_TOOLS.has(t.name)).map((t) => [t.name, z.object(t.shape).describe(t.description)])),
+  // An agent's wakes for itself (agent-self-wake.md).
+  ...Object.fromEntries(WAKE_TOOLS.map((t) => [t.name, z.object(t.shape).describe(t.description)])),
   // Browser tools in FreeFlow Calendar (packages/calendar, src/lib/assistant.ts): the event opens, the view moves.
   open_calendar_event: z
     .object({ id: z.string().min(3).max(1200).describe('The event to show: an id from list_events, get_event, create_event or the <app_context>.') })

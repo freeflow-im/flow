@@ -5,10 +5,10 @@
 // agent it sponsors, for `wake`). A wake job's agent acks it, extends its lease and says it is done under /v1/events/jobs.
 import { Hono, type Context } from 'hono';
 import type { ZodTypeAny, z } from 'zod';
-import { AckSubscriptionBody, CreateSubscriptionBody, JobDoneBody } from '@flow/shared';
+import { AckSubscriptionBody, CreateSubscriptionBody, JobDoneBody, ScheduleWakeBody } from '@flow/shared';
 import type { Events } from '../events/object';
 import type { ReadQuery } from '../events/core';
-import { subscriptionsAs } from '../events/subscriptions';
+import { subscriptionsAs, wakesAs } from '../events/subscriptions';
 import { badRequest, notFound } from '../errors';
 import { ApiError } from '../errors';
 import { resolveAccountCaller, resolveCaller, type AuthEnv } from './auth';
@@ -113,6 +113,28 @@ eventRoutes.post('/v1/events/subscriptions/:id/run', async (c) => {
 
 eventRoutes.delete('/v1/events/subscriptions/:id', async (c) => {
   if (!(await (await opsOf(c)).remove(c.req.param('id')))) throw noSuch();
+  return c.json({ ok: true });
+});
+
+// ---- an agent's wakes for itself (docs/specs/agent-self-wake.md): what the bridge's schedule_wake calls ----------------
+
+async function wakeOpsOf(c: Context<{ Bindings: EventRouteEnv }>) {
+  const who = await resolveAccountCaller(c, 'events');
+  const org = who.account.organizationId;
+  c.header('Cache-Control', 'no-store');
+  return wakesAs(c.env.EVENTS.get(c.env.EVENTS.idFromName(org)), c.env.ORG.get(c.env.ORG.idFromName(org)), { agentAccountId: who.account.id, organizationId: org });
+}
+
+eventRoutes.post('/v1/events/wakes', async (c) => {
+  const ops = await wakeOpsOf(c);
+  const body = await bodyOf(ScheduleWakeBody, c);
+  return c.json({ wake: await ops.schedule(body) }, 201);
+});
+
+eventRoutes.get('/v1/events/wakes', async (c) => c.json({ wakes: await (await wakeOpsOf(c)).list() }));
+
+eventRoutes.delete('/v1/events/wakes/:id', async (c) => {
+  if (!(await (await wakeOpsOf(c)).cancel(c.req.param('id')))) throw notFound('no such wake waiting');
   return c.json({ ok: true });
 });
 

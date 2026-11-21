@@ -428,8 +428,13 @@ describe('a hosted agent’s runtime takes a wake job (agents.md §6)', () => {
       posted, steps,
       env: {
         DIRECTORY: { idFromName: (n: string) => n, get: () => ({ call: async (m: string, args: unknown[]) => ({ ok: true, value: m === 'getUser' ? users[args[0] as string] : m === 'accountById' ? accounts[args[0] as string] : null }) }) },
-        ORG: { idFromName: (n: string) => n, get: () => ({ channelIdsOf: async () => ['ch-1'], postAutomation: async (p: Record<string, unknown>) => { posted.push(p); return 'm1'; } }) },
+        ORG: { idFromName: (n: string) => n, get: () => ({
+          channelIdsOf: async () => ['ch-1'],
+          postAutomation: async (p: Record<string, unknown>) => { posted.push(p); return 'm1'; },
+          postAsAssistant: async (p: Record<string, unknown>) => { posted.push({ asAssistant: true, ...p }); return 'm2'; },
+        }) },
         EVENTS: { idFromName: (n: string) => n, get: () => ({
+          getSubscription: async (id: string) => (id === 'sub-self' ? { id, consumer: 'acct-asst', createdBy: 'acct-asst', owner: 'acct-1', delivery: 'wake', action: { kind: 'wake', prompt: 'p' } } : id === 'sub-omni-self' ? { id, consumer: 'acct-omni', createdBy: 'acct-omni', owner: 'acct-1', delivery: 'wake', action: { kind: 'wake', prompt: 'p' } } : null),
           jobStep: async (job: string, _agent: string, step: string, opts?: unknown) => { steps.push({ job, step, opts }); return { id: job, state: step === 'ack' ? 'running' : 'done' }; },
           jobBrief: async (job: string) => (job === 'job-1' ? 'An automation woke you: "s". It fired for this event: …\n\nSummarize: hello' : null),
         }) },
@@ -458,6 +463,24 @@ describe('a hosted agent’s runtime takes a wake job (agents.md §6)', () => {
     expect(asked[0]).toContain('An automation woke you');
     // The runtime is the agent's now: a person's request for it is refused as another account's.
     expect((await a.handle(req('GET', '/api/agent?scope=home'), CALLER, DOCS_CALLER)).status).toBe(500);
+  });
+
+  it('answers a self-wake in its thread: a shared agent as itself, a person’s assistant as the assistant (agent-self-wake.md)', async () => {
+    const e = env();
+    const a = assistant('acct-omni', e.env);
+    const tools: string[][] = [];
+    a.script = async (params, { onText }) => { tools.push((params.tools ?? []).map((t) => ('name' in t ? t.name : ''))); onText('Still red.'); return message([{ type: 'text', text: 'Still red.' }], 'end_turn') as never; };
+    await a.wake({ organizationId: 'org-1', job: job('job-s1', { subscriptionId: 'sub-omni-self', threadRootId: 'm-root' }), runtime: { runtimeKey: 'acct-omni', agentId: 'omni', agentAccountId: 'acct-omni', mode: 'shared', organizationId: 'org-1', sponsorId: 'user-1', sponsorAccountId: 'acct-1' } });
+    expect(e.posted).toEqual([expect.objectContaining({ ownerAccountId: 'acct-omni', channelId: 'ch-1', threadRootId: 'm-root', body: 'Still red.', causedBy: 'job-s1' })]);
+    // The woken turn may set its next wake.
+    expect(tools[0]).toEqual(expect.arrayContaining(['schedule_wake', 'list_wakes', 'cancel_wake']));
+
+    const p = env();
+    const b = assistant('acct-1', p.env);
+    b.script = async (_p, { onText }) => { onText('Reminder: the review is at 3.'); return message([{ type: 'text', text: 'Reminder: the review is at 3.' }], 'end_turn') as never; };
+    const runtime = { runtimeKey: 'acct-1', agentId: 'asst', agentAccountId: 'acct-asst', mode: 'personal' as const, organizationId: 'org-1', sponsorId: 'user-1', sponsorAccountId: 'acct-1' };
+    await b.wake({ organizationId: 'org-1', job: job('job-s2', { agent: 'acct-asst', subscriptionId: 'sub-self', threadRootId: 'm-root' }), runtime });
+    expect(p.posted).toEqual([{ asAssistant: true, agentUserId: 'asst', channelId: 'ch-1', threadRootId: 'm-root', body: 'Reminder: the review is at 3.', clientMsgId: 'job-s2', depth: 2, causedBy: 'job-s2' }]);
   });
 
   it('runs a personal agent’s job as its sponsor, marked via, and reports a failed turn as a failed job', async () => {
