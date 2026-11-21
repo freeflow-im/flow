@@ -876,6 +876,20 @@
   filter: brightness(0.95);
   background: var(--sb-accent, #1a73e8);
 }
+/* An action that is a button (Copy code): as the links, over `.sb-bar button`'s inherited font. */
+.sb-alert button.sb-alert-action {
+  background: none;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.sb-alert button.sb-alert-action:hover {
+  background: var(--sb-hover, #f1f3f4);
+}
+.sb-alert button.sb-alert-action.primary {
+  background: var(--sb-accent, #1a73e8);
+  color: #fff;
+}
 /* Over `.sb-bar button`'s inherited colour. */
 .sb-alert .sb-alert-desktop {
   display: block;

@@ -3,7 +3,8 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mailApi, type CodeAlert, type MailAccount } from '../api';
-import { useCodeAlertNotifications } from './codeAlerts';
+import type { SuiteAlert } from '@flow/suite-bar';
+import { useCodeAlerts } from './codeAlerts';
 
 class FakeNotification {
   static permission: NotificationPermission = 'granted';
@@ -21,8 +22,10 @@ const account = (over: Partial<MailAccount> = {}): MailAccount => ({
 } as MailAccount);
 const alert = (over: Partial<CodeAlert> = {}): CodeAlert => ({ key: 'id:<a@x>', code: '482-913', folder: 'INBOX', uid: 7, from: 'Acme', subject: 'Your sign-in code', foundAt: Date.now(), ...over });
 
+let cards: SuiteAlert[] = [];
+const onCopy = vi.fn(), onShow = vi.fn();
 function Page({ accounts, onOpen }: { accounts: MailAccount[]; onOpen: (...a: unknown[]) => void }) {
-  useCodeAlertNotifications(accounts, onOpen);
+  cards = useCodeAlerts(accounts, { onOpen, onCopy, onShow });
   return null;
 }
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -39,6 +42,9 @@ beforeEach(() => {
   localStorage.clear();
   FakeNotification.permission = 'granted';
   FakeNotification.made = [];
+  cards = [];
+  onCopy.mockClear();
+  onShow.mockClear();
   vi.stubGlobal('Notification', FakeNotification);
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
@@ -51,6 +57,7 @@ describe('code alert notifications', () => {
     await flush();
     expect(FakeNotification.made.map((n) => n.title)).toEqual(['Code 482-913']);
     expect(FakeNotification.made[0]!.options.body).toContain('Acme: Your sign-in code');
+    expect(FakeNotification.made[0]!.options.requireInteraction).toBe(true);
     FakeNotification.made[0]!.onclick!();
     expect(onOpen).toHaveBeenCalledWith({ account: 'a1', folder: 'INBOX', uid: 7 }, expect.objectContaining({ code: '482-913' }));
     cleanup();
@@ -59,16 +66,25 @@ describe('code alert notifications', () => {
     expect(FakeNotification.made).toHaveLength(1);
   });
 
-  it('asks nothing for an account with the setting off, or without permission', async () => {
+  it('asks nothing for an account with the setting off', async () => {
     const asked = vi.spyOn(mailApi, 'codeAlerts').mockResolvedValue([alert()]);
     show([account({ codeAlerts: false })]);
     await flush();
-    cleanup();
-    FakeNotification.permission = 'denied';
-    show([account()]);
-    await flush();
     expect(asked).not.toHaveBeenCalled();
     expect(FakeNotification.made).toHaveLength(0);
+    expect(cards).toEqual([]);
+  });
+
+  it('shows the card without desktop permission; Copy code and Open message use it up', async () => {
+    FakeNotification.permission = 'denied';
+    vi.spyOn(mailApi, 'codeAlerts').mockResolvedValue([alert()]);
+    show([account()]);
+    await flush();
+    expect(FakeNotification.made).toHaveLength(0);
+    expect(cards.map((c) => [c.kind, c.title, c.lines[0], c.actions.map((x) => x.label)])).toEqual([['Sign-in code', '482-913', 'Acme: Your sign-in code', ['Copy code', 'Open message']]]);
+    act(() => cards[0]!.actions[0]!.onClick!());
+    expect(onCopy).toHaveBeenCalledWith(expect.objectContaining({ code: '482-913' }));
+    expect(cards).toEqual([]);
   });
 
   it('skips a code found too long ago', async () => {
@@ -76,5 +92,6 @@ describe('code alert notifications', () => {
     show([account()]);
     await flush();
     expect(FakeNotification.made).toHaveLength(0);
+    expect(cards).toEqual([]);
   });
 });

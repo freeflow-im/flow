@@ -7,7 +7,7 @@ import { AlertTriangle, Loader2 } from 'lucide-react';
 import { isInHome, useHomeMenu } from '@flow/suite-bar';
 import { AssistantDock, AssistantDockScope, useAssistantDockState, useMyAssistant, useNewChatOnClose } from '@flow/suite-bar/assistant-dock';
 import { SidePanel, sidePanelsOf } from '@flow/suite-bar/side-panel';
-import { MailApiError, mailApi, setMailWorkspace, type Category, type MailAccount, type MessageDetail, type ThreadDetail, type ThreadMessage, type ThreadSummary, type TabStatus } from './api';
+import { MailApiError, mailApi, setMailWorkspace, type Category, type CodeAlert, type MailAccount, type MessageDetail, type ThreadDetail, type ThreadMessage, type ThreadSummary, type TabStatus } from './api';
 import { AccountSettingsDialog, AddAccountDialog } from './components/AccountForms';
 import { ConnectMail } from './components/ConnectMail';
 import { GuestsChatOnly, MailboxSettingUp, NoOrganization } from './components/NoOrganization';
@@ -17,7 +17,7 @@ import { MessageList, type ListTab } from './components/MessageList';
 import type { PersonActions } from './components/PersonCard';
 import { ThreadView, type ThreadViewHandle } from './components/ThreadView';
 import { copyCode } from './components/AccessCodeCard';
-import { useCodeAlertNotifications } from './lib/codeAlerts';
+import { useCodeAlerts } from './lib/codeAlerts';
 import { ResizeHandle } from './components/ResizeHandle';
 import { DocsDropZone } from './components/DocsDropZone';
 import type { DocsFile } from './lib/docsFiles';
@@ -556,10 +556,13 @@ export function App() {
     setDrawer(false);
     return true;
   };
-  // A code found in new mail before it was opened, as a desktop notification; its click copies the code and shows the message.
-  useCodeAlertNotifications(list, (ref, alert) => {
-    void copyCode(alert.code).then((ok) => { if (ok) setToast(`Code ${alert.code} copied.`); });
-    showMessage(ref);
+  // A code found in new mail before it was opened: a desktop notification (its click copies the code and shows the
+  // message) and an alert card under the suite bar.
+  const copyAndSay = (alert: CodeAlert) => void copyCode(alert.code).then((ok) => setToast(ok ? `Code ${alert.code} copied.` : "Couldn't copy the code."));
+  const codeAlerts = useCodeAlerts(list, {
+    onOpen: (ref, alert) => { copyAndSay(alert); showMessage(ref); },
+    onCopy: copyAndSay,
+    onShow: (ref) => { showMessage(ref); },
   });
   // "Open draft" in the assistant's chat: the draft is shown, then opens in Compose once it has loaded.
   const [pendingDraft, setPendingDraft] = useState<MessageRef | null>(null);
@@ -808,6 +811,7 @@ export function App() {
   const bar = (
     <MailSuiteBar
       guest={guest}
+      alerts={codeAlerts}
       // The logo and the Mail tab: the inbox list, as Gmail's logo does (Primary, no search, nothing open).
       onHome={() => {
         chooseFolder(findSpecial(folders.data, 'inbox')?.path ?? 'INBOX');
