@@ -20,7 +20,11 @@ describe('AccessCodeCard', () => {
     vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
     const onNotice = vi.fn();
     act(() => root.render(createElement(AccessCodeCard, { code: '482 913', onNotice })));
-    expect(host.querySelector('[aria-label="Access code"]')?.textContent).toContain('482 913');
+    const card = host.querySelector('[aria-label="Code requested"]')!;
+    expect(card.textContent).toContain('Code Requested');
+    // One box per character, the space a gap; the whole code is the group's label.
+    expect([...card.querySelectorAll('[role="text"] > span')].map((b) => b.textContent)).toEqual(['4', '8', '2', '', '9', '1', '3']);
+    expect(card.querySelector('[role="text"]')?.getAttribute('aria-label')).toBe('482 913');
     const button = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('Copy code'))!;
     await act(async () => { button.click(); });
     expect(writeText).toHaveBeenCalledWith('482913');

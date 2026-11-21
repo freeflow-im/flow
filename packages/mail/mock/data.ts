@@ -159,9 +159,9 @@ export function sampleMailbox(): Mailbox {
 
   // A sign-in code (the server's accessCode.ts would have found it on the organization's OpenAI key).
   {
-    const m = base('INBOX', { name: 'Acme Cloud', address: 'no-reply@acme.test' }, 3, 'Your Acme sign-in code', 'Hi Ann,\n\nYour verification code is 482 913. It expires in 10 minutes.\n\nIf you did not try to sign in, you can ignore this email.\n\n— The Acme team');
+    const m = base('INBOX', { name: 'Acme Cloud', address: 'no-reply@acme.test' }, 3, 'Your Acme sign-in code', 'Hi Ann,\n\nYour verification code is 482-913. It expires in 10 minutes.\n\nIf you did not try to sign in, you can ignore this email.\n\n— The Acme team');
     m.seen = false;
-    m.accessCode = '482 913';
+    m.accessCode = '482-913';
     messages.push(m);
   }
 

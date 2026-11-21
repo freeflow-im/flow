@@ -1,7 +1,7 @@
 // A one-time sign-in or verification code found in a message (the server's imap/accessCode.ts, on the organization's
 // OpenAI key), shown above its body with a Copy button. The code is copied without its spaces and dashes ("482 913" is
 // pasted as "482913"), the way a code field takes it.
-import { Check, Copy, KeyRound } from 'lucide-react';
+import { Check } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import type { Notice } from '../lib/notice';
 
@@ -40,14 +40,22 @@ export function AccessCodeCard({ code, onNotice }: { code: string; onNotice(noti
     write.then(done, () => (copyBySelection(text) ? done() : onNotice({ text: "Couldn't copy the code" })));
   };
   return (
-    <section aria-label="Access code" className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-white px-4 py-3">
-      <KeyRound className="size-5 shrink-0 text-primary" aria-hidden />
-      <div className="min-w-0 flex-1">
-        <div className="text-[12px] font-medium uppercase tracking-[.06em] text-muted">Access code</div>
-        <div className="select-all font-mono text-[22px] font-semibold leading-tight tracking-[.12em] text-ink">{code}</div>
+    <section aria-label="Code requested" className="mb-3 rounded-2xl bg-[#eef2f7] px-5 py-4">
+      <div className="text-[15px] text-[#444746]">Code Requested</div>
+      {/* One white box per character (a dash too); a space is a gap. The code is read out whole, not box by box. */}
+      <div role="text" aria-label={code} className="mt-3 flex flex-wrap items-center gap-1.5">
+        {[...code].map((ch, i) =>
+          ch === ' ' ? (
+            <span key={i} className="w-2" aria-hidden />
+          ) : (
+            <span key={i} aria-hidden className="flex h-11 w-9 items-center justify-center rounded-md bg-white font-mono text-[26px] leading-none text-[#1f1f1f]">
+              {ch}
+            </span>
+          ),
+        )}
       </div>
-      <button type="button" onClick={copy} className="inline-flex h-9 items-center gap-1.5 rounded-full bg-primary px-4 text-[14px] font-medium text-white hover:opacity-90">
-        {copied ? <Check className="size-4" aria-hidden /> : <Copy className="size-4" aria-hidden />}
+      <button type="button" onClick={copy} className="mt-4 inline-flex h-11 items-center gap-1.5 rounded-full bg-[#2a6197] px-7 text-[16px] font-medium text-white hover:bg-[#245485]">
+        {copied && <Check className="size-4" aria-hidden />}
         {copied ? 'Copied' : 'Copy code'}
       </button>
     </section>
