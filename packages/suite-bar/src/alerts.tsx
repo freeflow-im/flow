@@ -1,6 +1,6 @@
 // The suite bar's alerts (Taskboard task 12): cards that slide down at the window's top edge, over the account menu, on every page that
 // draws the suite bar. Generic: an alert is a title, a line or two and links, closed by the person or ended by its own
-// time. The first kind is the meeting alert (useMeetingAlerts): an accepted meeting, from two minutes before it starts
+// time. The first kind is the meeting alert (useMeetingAlerts): any timed event not declined, from two minutes before it starts
 // until it is closed or five minutes have passed since its start, with its Join link. Closing one closes it in every tab.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
@@ -83,11 +83,12 @@ export function callLinkOf(e: Pick<AlertEvent, 'conference' | 'location' | 'desc
   return e.conference?.url ?? CALL_LINK.exec(e.location ?? '')?.[0] ?? CALL_LINK.exec(e.description ?? '')?.[0] ?? null;
 }
 
-/** A meeting the person is going to: timed, not cancelled, accepted, or organized by them with guests or a call. */
+/**
+ * An event worth an alert: timed, not cancelled, and not declined. That takes in events with no guests, and invitations
+ * not yet answered (task 15: every calendar event). The events come from the person's own shown calendars only.
+ */
 export function isMyMeeting(e: AlertEvent): boolean {
-  if (e.allDay || e.status === 'cancelled') return false;
-  if (e.myResponse === 'accepted') return true;
-  return !!e.organizer?.self && e.myResponse !== 'declined' && (e.attendees.some((a) => !a.self) || !!callLinkOf(e));
+  return !e.allDay && e.status !== 'cancelled' && e.myResponse !== 'declined';
 }
 
 const clock = (d: Date) => d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });

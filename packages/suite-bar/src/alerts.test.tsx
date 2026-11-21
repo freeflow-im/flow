@@ -24,17 +24,15 @@ describe('meeting alerts (task 12)', () => {
     expect(at(5 * min)).toBe(0);
   });
 
-  it('only for meetings the person goes to', () => {
+  it('for every timed event the person has not declined', () => {
     expect(isMyMeeting(event())).toBe(true);
+    expect(isMyMeeting(event({ myResponse: 'needs-action' }))).toBe(true);
+    expect(isMyMeeting(event({ myResponse: 'tentative' }))).toBe(true);
+    // An event of the person's own, with no guests and no call.
+    expect(isMyMeeting(event({ myResponse: undefined, organizer: null, attendees: [] }))).toBe(true);
     expect(isMyMeeting(event({ myResponse: 'declined' }))).toBe(false);
-    expect(isMyMeeting(event({ myResponse: 'needs-action' }))).toBe(false);
-    expect(isMyMeeting(event({ myResponse: 'tentative' }))).toBe(false);
     expect(isMyMeeting(event({ allDay: true }))).toBe(false);
     expect(isMyMeeting(event({ status: 'cancelled' }))).toBe(false);
-    // Organized by the person, with guests or a call.
-    expect(isMyMeeting(event({ myResponse: undefined, organizer: { self: true } }))).toBe(true);
-    expect(isMyMeeting(event({ myResponse: undefined, organizer: { self: true }, attendees: [] }))).toBe(false);
-    expect(isMyMeeting(event({ myResponse: undefined, organizer: { self: true }, attendees: [], location: 'https://meet.google.com/abc-defg-hij' }))).toBe(true);
   });
 
   it('has a Join link for its call, and Open in Calendar', () => {
