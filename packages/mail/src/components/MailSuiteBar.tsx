@@ -4,7 +4,7 @@
 // Settings page.
 import { useCallback, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { APP_MANIFESTS, AWAY_STATUS, guestTabs, intent, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type ChatPage, type StatusOption, useUserAppTabs } from '@flow/suite-bar';
+import { APP_MANIFESTS, AWAY_STATUS, guestTabs, intent, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type ChatPage, type StatusOption, type SuiteAlert, useUserAppTabs } from '@flow/suite-bar';
 import { chooseOrganization, useOrganizations } from '../hooks/organization';
 import { suite, type SuiteUser } from '../suite';
 
@@ -22,9 +22,11 @@ export interface MailSuiteBarProps {
   assistant: { open: boolean; onToggle(): void };
   /** The caller is a guest in the organization shown: the other apps' tabs cannot be followed (docs/specs/workspace-admin.md §6.5). */
   guest?: boolean;
+  /** Mail's own alerts under the bar (sign-in codes, lib/codeAlerts.ts). */
+  alerts?: SuiteAlert[];
 }
 
-export function MailSuiteBar({ search, unread, onSettings, onHome, assistant, guest = false }: MailSuiteBarProps) {
+export function MailSuiteBar({ search, unread, onSettings, onHome, assistant, guest = false, alerts }: MailSuiteBarProps) {
   const me = useQuery({ queryKey: ['suite', 'me'], queryFn: suite.me, refetchInterval: REFRESH_MS });
   const { list, active } = useOrganizations();
   // The organization's installed apps, after the built-in ones (docs/specs/user-apps.md §6).
@@ -56,6 +58,7 @@ export function MailSuiteBar({ search, unread, onSettings, onHome, assistant, gu
   return (
     <>
       <SuiteBar
+        {...(alerts?.length ? { alerts } : {})}
         home={{ href: import.meta.env.BASE_URL, onSelect: () => onHome?.() }}
         tabs={suiteTabsFrom(APP_MANIFESTS, 'mail', { 'chat-unread': active?.unreadCount ?? 0, 'mail-unread': unread }, { activeHref: import.meta.env.BASE_URL, onSelect: () => onHome?.(), unavailable: guestTabs(guest), extra: appTabs })}
         organization={{

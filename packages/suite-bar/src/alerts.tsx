@@ -4,8 +4,9 @@
 // until it is closed or five minutes have passed since its start, with its Join link. Closing one closes it in every tab.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-/** A link on an alert: `primary` is its main one (Join). An address on another site opens in a new tab. */
-export interface SuiteAlertAction { label: string; href: string; primary?: boolean }
+/** A link or button on an alert: `primary` is its main one (Join). An address on another site opens in a new tab; an action
+ * with `onClick` and no `href` is a button (Copy code). */
+export interface SuiteAlertAction { label: string; href?: string; onClick?: () => void; primary?: boolean }
 
 export interface SuiteAlert {
   /** Unique while it shows; a closed alert stays closed by this id. */
@@ -183,8 +184,10 @@ export function SuiteAlerts({ alerts, onClose, onTurnOnDesktop }: { alerts: read
           {a.lines.map((l, i) => <div key={i} className="sb-alert-line">{l}</div>)}
           {a.actions.length > 0 && (
             <div className="sb-alert-actions">
-              {a.actions.map((x) => (
-                <a key={x.label} className={`sb-alert-action${x.primary ? ' primary' : ''}`} href={x.href} {...(isElsewhere(x.href) ? { target: '_blank', rel: 'noreferrer' } : {})}>{x.label}</a>
+              {a.actions.map((x) => x.href === undefined ? (
+                <button key={x.label} type="button" className={`sb-alert-action${x.primary ? ' primary' : ''}`} onClick={x.onClick}>{x.label}</button>
+              ) : (
+                <a key={x.label} className={`sb-alert-action${x.primary ? ' primary' : ''}`} href={x.href} onClick={x.onClick} {...(isElsewhere(x.href) ? { target: '_blank', rel: 'noreferrer' } : {})}>{x.label}</a>
               ))}
             </div>
           )}

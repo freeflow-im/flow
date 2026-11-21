@@ -90,7 +90,8 @@ interface MessageDetail extends Omit<MessageSummary, 'attachments'> {
 - `GET  /v1/mail/accounts/:id/code-alerts?since=<ms>` → `{ alerts: [{ key, code, folder, uid, from, subject, foundAt }] }`
   (2026-11-21): the sign-in codes found in new INBOX mail while the cache prefetched it (before the person opened it), found
   after `since`, newest first, kept an hour; `[]` when the account's `codeAlerts` is off. The Mail page asks every 30 s, also
-  while hidden, and shows each as a desktop notification once across the browser's tabs (`lib/codeAlerts.ts`). PATCH the
+  while hidden, and shows each as a desktop notification that stays until closed, once across the browser's tabs, and as
+  an alert card under the suite bar with Copy code and Open message (`lib/codeAlerts.ts`). PATCH the
   account with `{ codeAlerts }` to switch them.
 - `GET  /v1/mail/accounts/:id/tabs?folder=INBOX&after=<tab>:<uid>,…` → `{ tabs: [{ category, total, unread, new, newest: MessageSummary | null }] }`
   (2026-11-04): the inbox tabs' badges, from the prefetch cache (no round trip): per tab (Primary first, then the enabled ones),
