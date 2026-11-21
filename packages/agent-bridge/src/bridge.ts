@@ -590,7 +590,8 @@ export class AgentBridge {
         setTimeout(() => once({ ok: false, note: 'the turn never ran' }), JOB_WAIT_MAX_MS).unref();
       });
       this.taskChannels.add(channelId);
-      this.enqueue(this.taskMessage(msgId, channelId, this.me.id, d.prompt));
+      // A wake the agent set for itself from a thread runs in that thread (agent-self-wake.md).
+      this.enqueue(this.taskMessage(msgId, channelId, this.me.id, d.prompt, channelId === d.channelId ? d.threadRootId ?? null : null));
       outcome = await ended;
     } catch (err) {
       outcome = { ok: false, note: (err as Error).message };
@@ -771,12 +772,12 @@ export class AgentBridge {
   }
 
   /** A run's opening message: what a task run (or a wake job) is asked, as if posted to its channel. */
-  private taskMessage(id: string, channelId: string, userId: string, body: string): MessageDTO {
+  private taskMessage(id: string, channelId: string, userId: string, body: string, threadRootId: string | null = null): MessageDTO {
     return {
       id,
       channelId,
       userId,
-      threadRootId: null,
+      threadRootId,
       clientMsgId: id,
       body,
       createdAt: new Date().toISOString(),

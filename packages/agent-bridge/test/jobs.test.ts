@@ -147,6 +147,18 @@ describe('a wake job', () => {
     expect(ours.every((h) => h.job === 'job-1')).toBe(true);
   });
 
+  it('set by the agent for itself from a thread runs in that thread (agent-self-wake.md)', async () => {
+    const b = bridge();
+    const e = jobEvent('job-t', 'chan-1');
+    (e.data as AgentJobEventData).threadRootId = 'm-root';
+    await b.handleJob(e);
+    await until(() => b.activeJobs.size > 0);
+    expect([...b.activeJobs]).toEqual([['chan-1|m-root', 'job-t']]);
+    await until(() => server.of(/\/jobs\/job-t\/done$/).length > 0);
+    const reply = server.of(/^POST \/v1\/channels\/chan-1\/messages$/);
+    expect(reply.map((h) => (h.body as { threadRootId?: string }).threadRootId)).toEqual(['m-root']);
+  });
+
   it('without a channel runs in a new job channel of its own', async () => {
     const b = bridge();
     await b.handleJob(jobEvent('0123456789abcdef'));
