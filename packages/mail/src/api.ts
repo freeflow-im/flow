@@ -107,6 +107,8 @@ export interface ThreadPage {
   next: number | null;
   /** As a message page's: a tab's page came back short while the server sorts older mail; ask again shortly. */
   sorting?: true;
+  /** Page one came from the server's cache while it checks for new mail and flag changes; ask again shortly. */
+  refreshing?: true;
 }
 /**
  * A message of an open conversation: its body is `null` with `bodyPending` while the server has not fetched it yet (ask
@@ -258,6 +260,9 @@ const query = (params: Record<string, string | number | undefined | null>) => {
 export function attachmentUrl(accountId: string, folder: string, uid: number, index: number, inline = false): string {
   return inWorkspace(`${base(accountId)}/messages/${uid}/attachments/${index}${query({ folder, inline: inline ? 1 : undefined })}`);
 }
+
+/** An attachment's address for its Download button: marked so the server's log tells a download from a preview. */
+export const downloadUrl = (url: string) => `${url}${url.includes('?') ? '&' : '?'}download=1`;
 
 export const mailApi = {
   provider: (email: string) => request<ProviderPreset | null>('GET', `/v1/mail/providers${query({ email })}`),

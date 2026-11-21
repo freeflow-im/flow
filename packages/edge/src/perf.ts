@@ -7,27 +7,34 @@ import { z } from 'zod';
 import { routeOf as mailRoute } from './imap/rules';
 import { routeOf as calendarRoute } from './calendar/rules';
 
-/** When this isolate began: a request in its first seconds paid for a cold start. */
-const ISOLATE_START = Date.now();
+/**
+ * When this isolate served its first timed request. Not taken at load: a Worker's clock reads 0 outside a request, so a
+ * start taken then made every age the time since 1970.
+ */
+let isolateStart = 0;
 let served = 0;
 
 /** This isolate's age at a request, and how many timed requests it served before it (0: the first, likely a cold start). */
 export function isolate(): { isolateAgeMs: number; isolateRequest: number } {
-  return { isolateAgeMs: Date.now() - ISOLATE_START, isolateRequest: served++ };
+  const now = Date.now();
+  if (!isolateStart) isolateStart = now;
+  return { isolateAgeMs: now - isolateStart, isolateRequest: served++ };
 }
 
 /** The parts of a request's time that the Mail or Calendar object reported in its timing header. */
-export interface Parts { wait?: number; imap?: number; server?: number; cache?: string }
+export interface Parts { wait?: number; imap?: number; server?: number; cache?: string; read?: string; bytes?: number }
 
-/** Reads `wait=<ms>;imap=<ms>;cache=hit` (Mail) or `server=<ms>` (Calendar). */
+/** Reads `wait=<ms>;imap=<ms>;cache=hit` (Mail; an attachment adds `read=kept|stored|part|whole;bytes=<n>`) or `server=<ms>` (Calendar). */
 export function parseParts(header: string | null | undefined): Parts {
   const out: Parts = {};
-  for (const key of ['wait', 'imap', 'server'] as const) {
+  for (const key of ['wait', 'imap', 'server', 'bytes'] as const) {
     const m = new RegExp(`(?:^|;)${key}=(\\d+)`).exec(header ?? '');
     if (m) out[key] = Number(m[1]);
   }
   const cache = /(?:^|;)cache=(hit|fill|live)/.exec(header ?? '')?.[1];
   if (cache) out.cache = cache;
+  const read = /(?:^|;)read=(kept|stored|part|whole)/.exec(header ?? '')?.[1];
+  if (read) out.read = read;
   return out;
 }
 
@@ -41,6 +48,8 @@ export function serverTiming(totalMs: number, parts: Parts, ray: string | null):
   if (parts.imap !== undefined) items.push(`imap;dur=${parts.imap}`);
   if (parts.server !== undefined) items.push(`upstream;dur=${parts.server}`);
   if (parts.cache) items.push(`cache;desc=${parts.cache}`);
+  if (parts.read) items.push(`read;desc=${parts.read}`);
+  if (parts.bytes !== undefined) items.push(`bytes;desc=${parts.bytes}`);
   if (ray && /^[\w-]+$/.test(ray)) items.push(`ray;desc=${ray}`);
   return items.join(', ');
 }
@@ -57,7 +66,9 @@ export const coloOf = (req: Request) => (req as Request & { cf?: { colo?: unknow
  */
 export function requestRecord(app: 'mail' | 'calendar', message: string, req: Request, status: number, ms: number, parts: Parts) {
   const route = (app === 'mail' ? mailRoute : calendarRoute)(req.method, req.url);
-  return { message, perf: 'request', app, route, status, ms, ...parts, ray: rayOf(req), colo: coloOf(req), ...isolate() };
+  // A download (Mail's Download buttons add `download=1`) is a file saved, which the browser cannot time: its record says so.
+  const download = new URL(req.url).searchParams.get('download') === '1' ? { download: true } : {};
+  return { message, perf: 'request', app, route, status, ms, ...parts, ...download, ray: rayOf(req), colo: coloOf(req), ...isolate() };
 }
 
 // ---- the browser's timings (POST /v1/perf) --------------------------------------------------------------------------
@@ -74,7 +85,12 @@ export const ClientCall = z.object({
   /** The response's `Server-Timing`, as the browser read it: name → duration, and the ray and cache answer. */
   server: z.record(z.string().max(20), z.number().nonnegative().max(600_000)).optional(),
   ray: z.string().max(40).regex(/^[\w-]*$/).optional(),
+  /** The server's cache answer (hit, fill, live), or `browser` when the browser answered from its own cache. */
   cache: z.string().max(10).optional(),
+  /** Bytes received (encoded, as sent), when the browser could tell. */
+  bytes: z.number().int().nonnegative().max(2 ** 40).optional(),
+  /** How the server read an attachment: `kept` (from the open message), `stored` (kept in R2), `part` (its own part) or `whole` (the whole message parsed). */
+  read: z.enum(['kept', 'stored', 'part', 'whole']).optional(),
 });
 
 /** One thing a person did, timed from its start until its result was on screen. */

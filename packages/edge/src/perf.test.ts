@@ -6,6 +6,14 @@ describe('request timing', () => {
     expect(parseParts('wait=3;imap=640;cache=hit')).toEqual({ wait: 3, imap: 640, cache: 'hit' });
     expect(parseParts('server=120')).toEqual({ server: 120 });
     expect(parseParts(null)).toEqual({});
+    expect(parseParts('wait=0;imap=900;read=whole;bytes=5242880')).toEqual({ wait: 0, imap: 900, read: 'whole', bytes: 5242880 });
+  });
+
+  it('says how an attachment was read, its size, and whether it was a download', () => {
+    expect(serverTiming(950, { wait: 0, imap: 900, read: 'whole', bytes: 5242880 }, null)).toBe('total;dur=950, lock;dur=0, imap;dur=900, read;desc=whole, bytes;desc=5242880');
+    const req = new Request('https://x/v1/mail/accounts/a1/messages/7/attachments/0?folder=INBOX&download=1');
+    expect(requestRecord('mail', 'line', req, 200, 950, { read: 'part', bytes: 10 })).toMatchObject({ read: 'part', bytes: 10, download: true });
+    expect(requestRecord('mail', 'line', new Request('https://x/v1/mail/accounts'), 200, 5, {})).not.toHaveProperty('download');
   });
 
   it('writes a Server-Timing header with the parts and the ray id', () => {

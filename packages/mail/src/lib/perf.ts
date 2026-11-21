@@ -15,6 +15,8 @@ export interface Call {
   server?: Record<string, number>;
   ray?: string;
   cache?: string;
+  bytes?: number;
+  read?: 'kept' | 'stored' | 'part' | 'whole';
 }
 
 export interface PerfEvent {
@@ -53,9 +55,17 @@ export function toCall(e: PerformanceResourceTiming): Call {
   }
   const status = (e as PerformanceResourceTiming & { responseStatus?: number }).responseStatus;
   if (status) call.status = status;
+  if (e.encodedBodySize > 0) call.bytes = e.encodedBodySize;
+  // Answered from the browser's own cache: nothing crossed the network, and its Server-Timing is the stored one.
+  if (e.transferSize === 0 && e.encodedBodySize > 0) {
+    call.cache = 'browser';
+    return call;
+  }
   for (const t of e.serverTiming ?? []) {
     if (t.name === 'ray' && /^[\w-]{1,40}$/.test(t.description)) call.ray = t.description;
     else if (t.name === 'cache' && /^\w{1,10}$/.test(t.description)) call.cache = t.description;
+    else if (t.name === 'read' && /^(kept|stored|part|whole)$/.test(t.description)) call.read = t.description as Call['read'];
+    else if (t.name === 'bytes') continue; // the browser's own size is the one kept
     else if (t.duration > 0 || t.name === 'total') (call.server ??= {})[t.name.slice(0, 20)] = round(t.duration);
   }
   return call;

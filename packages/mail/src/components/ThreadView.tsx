@@ -8,7 +8,7 @@
 // editor); one at a time, and one with something written in it is not replaced, it takes the focus again.
 import { Archive, ArrowLeft, BellOff, BellRing, CalendarPlus, ChevronLeft, ChevronRight, Download, FolderInput, Forward, Loader2, Mail, MoreVertical, Pencil, Reply, ReplyAll, Star, Trash2 } from 'lucide-react';
 import { Fragment, lazy, Suspense, useEffect, useImperativeHandle, useRef, useState, type Ref } from 'react';
-import { attachmentUrl, type Address, type Category, type MailAccount, type MailFolder, type MessageDetail, type ThreadDetail, type ThreadMessage } from '../api';
+import { attachmentUrl, downloadUrl, type Address, type Category, type MailAccount, type MailFolder, type MessageDetail, type ThreadDetail, type ThreadMessage } from '../api';
 import { cidUrlOf, prefill, type AnswerMode, type ComposeRequest, type Outgoing } from '../lib/compose';
 import type { DocsFile } from '../lib/docsFiles';
 import type { Notice } from '../lib/notice';
@@ -669,7 +669,7 @@ function ThreadMessageItem({ ref, accountId, me, message: m, open, last, focused
                       </span>
                     </button>
                     <a
-                      href={attachmentUrl(accountId, m.folder, m.uid, a.index)}
+                      href={downloadUrl(attachmentUrl(accountId, m.folder, m.uid, a.index))}
                       download={a.filename}
                       className="mr-1.5 flex size-7 shrink-0 items-center justify-center rounded-full text-muted hover:bg-black/5 hover:text-ink focus-visible:ring-2 focus-visible:ring-primary/40 outline-none"
                       title={`Download ${a.filename}`}

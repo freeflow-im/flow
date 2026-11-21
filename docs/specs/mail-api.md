@@ -250,6 +250,12 @@ Gmail-style threads, on the prefetch cache (below): every cached message has a `
   of the messages shown are checked in one FLAGS fetch. With `category` (INBOX, tabs on): new mail is sorted first (`sync`,
   as a tab's page does) and the threads whose newest message is in the tab are kept, with `category` and `categoryReason`
   from it; a short page while older mail is not sorted yet says `sorting` (ask again shortly), and the sorter runs.
+  **Cache first** (2026-11-20): where the cache can answer the page as above (the folder cached, no backfill step needed,
+  a tab's page fully sorted), it does so at once, with no IMAP connection or folder lock (`threadListCached`), so a list
+  never waits behind a connection being opened or another call's round trips. Page one of a folder not checked within
+  FRESH_MS then starts that check in the background (the path above: new mail, flags, tabs; one per folder at a time)
+  and says `refreshing: true` until it is done; the app asks for page one again every second meanwhile (at most 20
+  times), and the page after the check has what it found. Otherwise the page is made as above, on the request.
   ```ts
   interface ThreadSummary {
     threadId: string; folder: string;
@@ -316,7 +322,7 @@ from it and the server is asked only for what is new.
 - **How far it reaches**: `mail_cache_folders (account_id, folder) → uid_validity, high, low, modseq, kind, synced_at, opened_at,
   error, error_at`. Every UID of the folder in [low, high] has a row, less what the server no longer has; at most CACHE_ROWS
   (1000) per folder, the newest. A new UIDVALIDITY drops the folder's rows.
-- **Fresh folders** (2026-11-04): a folder the alarm synced within FRESH_MS = 45 s (`synced_at`) is served as the cache
+- **Fresh folders** (2026-11-04): a folder the alarm synced, or (2026-11-20) a list checked, within FRESH_MS = 45 s (`synced_at`) is served as the cache
   stands — a plain page, a tab's page (`tabList`) and the conversations (`threadList`) do none of the round trips below (no
   NOOP, `UID SEARCH`, tab sort or FLAGS fetch; the timing line shows `imap 0ms`), since the alarm takes in new mail, sorts
   INBOX's new mail into the tabs and refreshes flags every 30 s while the person is active. A folder synced longer ago, or
@@ -354,6 +360,13 @@ from it and the server is asked only for what is new.
   `GET …/messages/:uid` answers from the cache when the body is there (the flags from the row; the timing line says
   `cache=hit`, else `live`); a message opened from the server whose row is pending or evicted is kept then too. An
   attachment of a cached message is fetched by the stored plan, in one FETCH, with no BODYSTRUCTURE round trip.
+- **Attachments** (2026-11-20): after the bodies, the alarm fetches every attachment (not inline pictures) of the cached
+  mail dated within ATTACH_KEEP_MS = 7 days, newest first, ATTACH_BATCH_BYTES = 32 MB per run, and keeps it in R2
+  (`BLOBS`, `mail-attachments/<account>/<uuid>`) sealed with FLOW_DATA_KEY; `mail_attachments` records each (one R2
+  object for the copies of a message in several folders, by email_id). One over ATTACH_MAX_BYTES = 25 MB, or one the
+  server no longer returns, is marked skipped; a message `planBody` says must be read whole is read whole once for all
+  its attachments. `GET …/attachments/:index` (and Docs' previews of mail) read a kept one from R2 (`read=stored`), else
+  from the server as before. Each run first deletes those of mail older than 7 days; removing an account deletes its own.
 - **Inbox tabs' pages** (`tabList`) take their summaries from the cache (`pageSummaries`): the cached rows, their flags
   checked in one FLAGS fetch (a message the server no longer has is dropped), and only the rest fetched and cached.
   Searches and `unread=1` are not from the cache.
