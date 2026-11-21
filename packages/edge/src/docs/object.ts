@@ -12,7 +12,7 @@ import { setOcrBinding } from '@flow/docs/server/runtime/workerd/pdfOcr.ts';
 import type { McpRequestCaller, suiteHub } from './mcp.ts';
 import type { FileHub } from '@flow/docs/plugin/server/files.ts';
 import { DatabaseSync } from '@flow/docs/server/runtime/workerd/sqlite.ts';
-import { lazySubscriptions, subscriptionsAs, type SubscriptionOps } from '../events/subscriptions.ts';
+import { lazySubscriptions, subscriptionsAs, wakesAs, type SubscriptionOps, type WakeOps } from '../events/subscriptions.ts';
 import { addressOf } from '@flow/shared/addresses';
 import { calendarRequest, type AccountCaller } from '../calendar/forward';
 import { appToolContexts } from '../apps';
@@ -326,7 +326,7 @@ export class Docs extends DurableObject<DocsEnv> {
     const agent = { via: caller.via ?? null, invokedBy: caller.invokedBy ?? null };
     const accountCaller = this.accountCaller(caller.userId, caller.orgId, agent);
     const userAppTools = await this.userAppToolsOf(caller, accountCaller);
-    return this.inOrganization(caller.orgId, () => this.lazy!.mcp.handleMcp(request, this.hub!, caller, this.mailOf(caller.userId, caller.origin, caller.orgId, agent), this.calendarOf(caller.userId, caller.origin, caller.orgId, agent), this.eventsOf(caller.userId, caller.orgId), this.memberOf(caller.orgId), appToolContexts(this.env, accountCaller, caller.origin), userAppTools));
+    return this.inOrganization(caller.orgId, () => this.lazy!.mcp.handleMcp(request, this.hub!, caller, this.mailOf(caller.userId, caller.origin, caller.orgId, agent), this.calendarOf(caller.userId, caller.origin, caller.orgId, agent), this.eventsOf(caller.userId, caller.orgId), this.memberOf(caller.orgId), appToolContexts(this.env, accountCaller, caller.origin), userAppTools, this.wakesOf(caller.userId, caller.orgId)));
   }
 
   /**
@@ -410,6 +410,27 @@ export class Docs extends DurableObject<DocsEnv> {
       if (!who?.account) throw Object.assign(new Error('no account in this organization'), { status: 403 });
       return subscriptionsAs(events.get(events.idFromName(organizationId)), org.get(org.idFromName(organizationId)), who.account.id, userId, who.account.role, organizationId);
     });
+  }
+
+  /**
+   * An agent's wakes for itself (agent-self-wake.md), as the /mcp caller's account: the account must be an agent's, which
+   * wakesAs checks on each call (a person's token is refused).
+   */
+  private wakesOf(userId: string, organizationId: string): WakeOps | undefined {
+    const { EVENTS: events, ORG: org } = this.env;
+    if (!events || !org) return undefined;
+    const caller = this.accountCaller(userId, organizationId);
+    let ops: Promise<WakeOps> | null = null;
+    const get = () => (ops ??= (async () => {
+      const who = await caller();
+      if (!who?.account) throw Object.assign(new Error('no account in this organization'), { status: 403 });
+      return wakesAs(events.get(events.idFromName(organizationId)), org.get(org.idFromName(organizationId)), { agentAccountId: who.account.id, organizationId });
+    })());
+    return {
+      schedule: async (w) => (await get()).schedule(w),
+      list: async () => (await get()).list(),
+      cancel: async (id) => (await get()).cancel(id),
+    };
   }
 
   /** An agent's upload to the address upload_file gave it; the ticket in it is the credential. */

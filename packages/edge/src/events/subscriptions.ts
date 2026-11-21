@@ -110,3 +110,83 @@ export function lazySubscriptions(make: () => Promise<SubscriptionOps>): Subscri
     jobStep: async (id, step, opts) => (await get()).jobStep(id, step, opts),
   };
 }
+
+// ---- an agent's wakes for itself (docs/specs/agent-self-wake.md) -------------------------------------------------------
+
+/** Where a turn runs: a self-wake set in it answers there unless it names another channel. */
+export interface WakePlace { channelId: string; threadRootId: string | null }
+
+/** One of an agent's own wakes, as the tools show it. */
+export interface WakeDTO { id: string; name: string; prompt: string; at: string; channelId?: string; threadRootId?: string }
+
+export interface WakeInput { prompt: string; at?: string; inMinutes?: number; channelId?: string; threadRootId?: string; name?: string }
+
+export interface WakeOps {
+  schedule(input: WakeInput): Promise<WakeDTO>;
+  list(): Promise<WakeDTO[]>;
+  /** False when it is not one of the agent's waiting wakes. */
+  cancel(id: string): Promise<boolean>;
+}
+
+const wakeOf = (s: SubscriptionDTO): WakeDTO => {
+  const a = s.action?.kind === 'wake' ? s.action : null;
+  return {
+    id: s.id, name: s.name, prompt: a?.prompt ?? '', at: s.schedule?.nextAt ?? '',
+    ...(a?.channelId ? { channelId: a.channelId } : {}), ...(a?.threadRootId ? { threadRootId: a.threadRootId } : {}),
+  };
+};
+
+/**
+ * The self-wake operations as `agentAccountId` (the /mcp caller's account, or a hosted turn's agent). No sponsor check: an
+ * agent may always queue work for itself. A wake answers in `channelId` (one whose members include the user the agent posts
+ * as), else where the turn runs (`place`), else, for a person's assistant, its DM with its sponsor; with none of these it is
+ * refused. A caller that is no agent is refused (`not_an_agent`).
+ */
+export function wakesAs(
+  events: DurableObjectStub<Events>, org: DurableObjectStub<Org>, opts: { agentAccountId: string; organizationId?: string; place?: () => WakePlace | null; now?: () => number },
+): WakeOps {
+  const now = opts.now ?? Date.now;
+  const agent = async () => {
+    const a = (await org.selfWakeOwnerOf(opts.agentAccountId)) as { ownerAccountId: string; agentUserId: string; channelUserId: string; personal: boolean } | null;
+    if (!a) throw new ApiError(403, 'not_an_agent', 'Only an agent can set a wake for itself.');
+    return a;
+  };
+  const pending = async () => (await events.selfWakes(opts.agentAccountId)) as SubscriptionDTO[];
+  return {
+    schedule: async (w) => {
+      const a = await agent();
+      if ((w.at === undefined) === (w.inMinutes === undefined)) throw badRequest('bad_wake', 'Give exactly one of at (a time with its offset) or in_minutes.');
+      const at = w.at !== undefined ? Date.parse(w.at) : now() + Number(w.inMinutes) * 60_000;
+      if (!Number.isFinite(at)) throw badRequest('bad_wake', 'at is not a time: give an ISO time with its offset, like 2026-11-21T09:00:00-08:00.');
+      if (w.threadRootId && !w.channelId) throw badRequest('bad_wake', 'threadRootId needs its channelId.');
+      let where: { channelId?: string; threadRootId?: string } = {};
+      if (w.channelId) {
+        const mine = (await org.channelIdsOf(a.channelUserId)) as string[];
+        if (!mine.includes(w.channelId)) throw badRequest('bad_wake', 'You can only be woken in a channel you are in.');
+        where = { channelId: w.channelId, ...(w.threadRootId ? { threadRootId: w.threadRootId } : {}) };
+      } else {
+        const here = opts.place?.() ?? null;
+        const dm = here ? null : a.personal ? ((await org.sponsorDmOf(a.agentUserId)) as string | null) : null;
+        if (here) where = { channelId: here.channelId, ...(here.threadRootId ? { threadRootId: here.threadRootId } : {}) };
+        else if (dm) where = { channelId: dm };
+        else throw badRequest('bad_wake', 'Say where to answer: channelId, and threadRootId to answer in a thread.');
+      }
+      const prompt = w.prompt.trim();
+      const name = w.name?.trim() || (prompt.length > 60 ? `${prompt.slice(0, 59)}…` : prompt);
+      const out = (await events.scheduleSelfWake({
+        name, agent: opts.agentAccountId, owner: a.ownerAccountId, prompt, at, ...where, ...(opts.organizationId ? { organizationId: opts.organizationId } : {}),
+      })) as SubscriptionDTO | { refused: string; message: string };
+      if ('refused' in out) throw new ApiError(out.refused === 'too_many_wakes' ? 409 : 400, out.refused, out.message);
+      return wakeOf(out);
+    },
+    list: async () => {
+      await agent();
+      return (await pending()).map(wakeOf);
+    },
+    cancel: async (id) => {
+      await agent();
+      if (!(await pending()).some((s) => s.id === id)) return false;
+      return (await events.deleteSubscription(id)) as boolean;
+    },
+  };
+}

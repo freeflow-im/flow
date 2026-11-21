@@ -9,8 +9,8 @@
 // The Worker (routes/assistant.ts) serves Docs' old paths here (/api/agent, /api/agent/turn, /api/agent/reset,
 // /api/agent/permission, /api/settings/assistant), so the three clients' panels talk to it unchanged. The chats used to be
 // in each organization's Docs object; POST /v1/admin/assistant/migrate copies them here once (`importChat`, `importRows`).
-import { subscriptionsAs } from '../events/subscriptions';
-import type { EventToolContext } from '../events/eventTools';
+import { subscriptionsAs, wakesAs, type WakePlace } from '../events/subscriptions';
+import type { EventToolContext, WakeToolContext } from '../events/eventTools';
 import { DurableObject } from 'cloudflare:workers';
 import { Hono, type Context } from 'hono';
 import { mailApprovalPath, type AccountDTO, type AgentJobDTO, type HostedRuntimeDTO, type MailApprovalDTO, type UserDTO } from '@flow/shared';
@@ -123,7 +123,13 @@ export interface MovedChats { conversations: string[]; usage: { user_id: string;
 /** Who is asking, per request: the caller context (the account) and the same person as the Docs object's caller. */
 /** `conversationUser`: whose conversation a request is in; the agent's own identity when it is not the caller's (a shared agent asked by a person). */
 /** `asker`: the person a shared agent's turn is for, where the conversation is not named after them (a Chat turn). */
-interface Who { caller: AccountCaller; docs: DocsCaller; conversationUser?: string; asker?: string }
+interface Who {
+  caller: AccountCaller; docs: DocsCaller; conversationUser?: string; asker?: string;
+  /** The hosted agent the turn is (its own account), for its self-wakes (agent-self-wake.md); absent when unknown. */
+  agentAccountId?: string;
+  /** Where the turn runs in Chat: a self-wake set in it answers there. */
+  place?: WakePlace;
+}
 type Bindings = { who: Who };
 type C = Context<{ Bindings: Bindings }>;
 
@@ -421,13 +427,15 @@ export class Assistant extends DurableObject<AssistantEnv> {
         const admin = this.adminContext(who);
         // Automations (onboarding.md §4): a person's own assistant makes and lists them as the person; a shared agent none.
         const events = who && personalTurn(who) ? this.eventsContext(who) : undefined;
+        // An agent's wakes for itself (agent-self-wake.md): every hosted agent's turn, personal or shared.
+        const wakes = who?.agentAccountId ? this.wakesContext(who) : undefined;
         // send_email (mailApprovals.ts): a personal agent's, as its person; a shared agent sends none.
         const mailApproval = mail && who && personalTurn(who) ? (input: DraftInput) => this.requestMailApproval(input, mail, who, userId) : undefined;
         // The installed apps' tools (user-apps.md §5), as the turn's caller: the Org object checks the scopes again.
         const appCaller = this.appCallerOf(who);
         const ORG = this.env.ORG;
         const userApps = appCaller && ORG ? (name: string, input: Record<string, unknown>) => runAppTool({ ORG }, appCaller, name, input) : undefined;
-        return { ...(docs ? { docs } : {}), ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}), ...(apps ? { apps } : {}), ...(admin ? { admin } : {}), ...(mailApproval ? { mailApproval } : {}), ...(userApps ? { userApps } : {}), ...(events ? { events } : {}), memory };
+        return { ...(docs ? { docs } : {}), ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}), ...(apps ? { apps } : {}), ...(admin ? { admin } : {}), ...(mailApproval ? { mailApproval } : {}), ...(userApps ? { userApps } : {}), ...(events ? { events } : {}), ...(wakes ? { wakes } : {}), memory };
       },
       // The agent's memory files, listed at the start of each request (agents.md §6.1, loading).
       notes: (userId: string) => new MemoryStore(this.sql, this.memoryScope(userId, this.turnWho.get(userId) ?? this.who)).listing(),
@@ -501,6 +509,14 @@ export class Assistant extends DurableObject<AssistantEnv> {
     return { subscriptions: subscriptionsAs(EVENTS.get(EVENTS.idFromName(org)), ORG.get(ORG.idFromName(org)) as never, c.account.id, c.user.id, c.account.role, org) };
   }
 
+  /** The self-wake tools' context (events/eventTools.ts WAKE_TOOLS): the turn's agent, answering where the turn runs. */
+  private wakesContext(who: Who): WakeToolContext | undefined {
+    const { EVENTS, ORG } = this.env;
+    const org = who.caller.account?.organizationId || who.caller.organizationId;
+    if (!EVENTS || !ORG || !org || !who.agentAccountId) return undefined;
+    return { wakes: wakesAs(EVENTS.get(EVENTS.idFromName(org)), ORG.get(ORG.idFromName(org)) as never, { agentAccountId: who.agentAccountId, organizationId: org, place: () => who.place ?? null }) };
+  }
+
   /** Calendar's tools: the account's Calendar object (or a shared calendar's owner's), as routes/calendar.ts reaches them. */
   private calendarContext(userId: string, who: Who | null = this.who): CalendarToolContext | undefined {
     const { CALENDAR, ORG } = this.env;
@@ -536,7 +552,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
     this.learnName(agentName);
     this.learnRole(opts.agentRole);
     await this.learnAgentAccount(opts.agentAccountId, opts.agentMode ?? 'personal');
-    const who: Who = { caller: caller as AccountCaller, docs, ...(opts.conversationUser ? { conversationUser: opts.conversationUser } : {}) };
+    const who: Who = { caller: caller as AccountCaller, docs, ...(opts.conversationUser ? { conversationUser: opts.conversationUser } : {}), ...(opts.agentAccountId ? { agentAccountId: opts.agentAccountId } : {}) };
     this.who = who;
     return withDocsContext(this.context, () => this.app.fetch(request, { who } satisfies Bindings));
   }
@@ -607,6 +623,8 @@ export class Assistant extends DurableObject<AssistantEnv> {
       const replyByMail = sub?.action?.kind === 'wake' && sub.action.reply === 'mail' && runtime.mode === 'personal';
       let conversation = `auto:${job.subscriptionId}`;
       const { who, user, actorAccountId } = await this.actorOf(runtime, organizationId, conversation, 'the agent runtime');
+      // A wake set in this turn answers where this job does (agent-self-wake.md).
+      if (job.channelId) who.place = { channelId: job.channelId, threadRootId: job.threadRootId ?? null };
       // The brief (events/core.ts wakeBrief) says an automation woke the agent and for which event; a mail reply job's
       // turn is framed by its own prompt and the email below it instead.
       let prompt = replyByMail ? job.prompt : ((await Promise.resolve().then(() => events?.jobBrief(job.id, job.agent)).catch(() => null)) ?? job.prompt);
@@ -629,8 +647,11 @@ export class Assistant extends DurableObject<AssistantEnv> {
       if (mail && text && mailbox) {
         const sent = await mailbox.sendAsAssistant({ to: mail.from, subject: reSubject(mail.subject), text, ...(mail.messageId ? { inReplyTo: mail.messageId } : {}) });
         if (!sent.ok) throw new Error(`the answer could not be mailed: ${sent.message ?? 'refused'}`);
+      } else if (job.channelId && text && org && runtime.mode === 'personal' && !!sub && sub.createdBy === sub.consumer) {
+        // A person's assistant's wake for itself answers as the assistant, where it was asked (agent-self-wake.md §1).
+        await org.postAsAssistant({ agentUserId: runtime.agentId, channelId: job.channelId, threadRootId: job.threadRootId ?? null, body: text, clientMsgId: job.id, depth: job.depth + 1, causedBy: job.id });
       } else if (job.channelId && text && org) {
-        await org.postAutomation({ ownerAccountId: actorAccountId, channelId: job.channelId, body: text, clientMsgId: job.id, depth: job.depth + 1, causedBy: job.id, ...(runtime.mode === 'personal' ? { via: runtime.agentId } : {}) });
+        await org.postAutomation({ ownerAccountId: actorAccountId, channelId: job.channelId, ...(job.threadRootId ? { threadRootId: job.threadRootId } : {}), body: text, clientMsgId: job.id, depth: job.depth + 1, causedBy: job.id, ...(runtime.mode === 'personal' ? { via: runtime.agentId } : {}) });
       }
       ok = true;
       note = text ? text.slice(0, 200) : 'nothing to say';
@@ -677,6 +698,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
     try {
       this.requireModel();
       const { who, user } = await this.actorOf(runtime, organizationId, conversation, 'the shared agent in Chat', { invokedBy: p.askerAccountId, asker: p.askerUserId });
+      who.place = { channelId: p.channelId, threadRootId: p.threadRootId };
       const typing = () => void org?.agentTyping({ agentUserId: runtime.agentId, channelId: p.channelId, threadRootId: p.threadRootId }).catch(() => undefined);
       typing();
       stopTyping = setInterval(typing, TYPING_EVERY_MS);
@@ -714,6 +736,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
     try {
       this.requireModel();
       const { who, user } = await this.actorOf(runtime, organizationId, conversation, 'the assistant in Chat');
+      who.place = { channelId: run.channelId, threadRootId: run.threadRootId };
       // "Thinking…" in Chat while the turn runs: a typing event now and every few seconds (the clients drop one after 5 s).
       const typing = () => void org?.agentTyping({ agentUserId: runtime.agentId, channelId: run.channelId, threadRootId: run.threadRootId }).catch(() => undefined);
       typing();
@@ -758,7 +781,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
     const wrong = ownerMismatch(this, caller, label);
     if (wrong) throw new Error(wrong);
     const docs: DocsCaller = { userId: actorId, email: user.email, token: '', ip: '', accountId: account.id, channelIds };
-    return { who: { caller, docs, conversationUser: conversation, ...(opts.asker ? { asker: opts.asker } : {}) }, user, actorId, actorAccountId };
+    return { who: { caller, docs, conversationUser: conversation, agentAccountId: runtime.agentAccountId, ...(opts.asker ? { asker: opts.asker } : {}) }, user, actorId, actorAccountId };
   }
 
   /**

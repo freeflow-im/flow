@@ -467,6 +467,8 @@ code. As of 2026-11-10:
 - **The Admin app's Agents section** (`workspace-admin.md` §3.4) lists the organization's shared agents with their
   sponsors. Personal agents do not appear because none exist as principals yet.
 - **The Share dialog** does not yet warn "Everyone in Acme will be able to ask Omni about this".
+- **Agents wake themselves** (`agent-self-wake.md`, 2026-11-20): `schedule_wake`, `list_wakes`, `cancel_wake` for every
+  agent, hosted or on the bridge; one-time, answering in the thread they were set from, with limits per agent.
 
 ## 9. Open questions
 

@@ -103,6 +103,8 @@ export function buildSubscriptionBody(d: AutomationDraft, names: Names): CreateS
 
 /** One line on what a subscription listens for. */
 export function filterSummary(sub: SubscriptionDTO, names: Names): string {
+  // An agent's wake for itself (docs/specs/agent-self-wake.md): one time, then gone.
+  if (sub.schedule?.every === 'once') return `once, at ${when(sub.schedule.nextAt)} · ${names.member(sub.consumer)} set this itself`;
   if (sub.schedule) return `${everyInWords(sub.schedule.every)} (${sub.schedule.timezone})`;
   const f = sub.filter;
   const parts = [f.types?.length ? f.types.join(', ') : 'every event'];
@@ -124,7 +126,7 @@ export function actionSummary(sub: SubscriptionDTO, names: Names): string {
 function actionLine(sub: SubscriptionDTO, names: Names): string {
   const a = sub.action;
   if (sub.delivery === 'wake' && a?.kind === 'wake') {
-    return `Wake ${names.member(sub.consumer)}${a.channelId ? ` in ${names.channel(a.channelId)}` : ''}: “${a.prompt}”`;
+    return `Wake ${names.member(sub.consumer)}${a.channelId ? ` in ${names.channel(a.channelId)}${a.threadRootId ? ', in a thread' : ''}` : ''}: “${a.prompt}”`;
   }
   if (sub.delivery === 'post' && a?.kind === 'post') return `Post in ${names.channel(a.channelId)}: “${a.body}”`;
   if (sub.delivery === 'socket') return 'Socket: pokes the open app';
@@ -203,6 +205,7 @@ export function AutomationsSection({
 function SubscriptionRow({ sub, workspaceId, names, onDeleted }: { sub: SubscriptionDTO; workspaceId: string; names: Names; onDeleted: () => Promise<void> }) {
   const { api } = useBoundApi();
   const [confirming, setConfirming] = useState(false);
+  const selfWake = sub.schedule?.every === 'once';
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [jobs, setJobs] = useState<AgentJobDTO[] | null>(null);
@@ -276,7 +279,7 @@ function SubscriptionRow({ sub, workspaceId, names, onDeleted }: { sub: Subscrip
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {sub.schedule && sub.delivery === 'wake' && !confirming && (
+          {sub.schedule && sub.schedule.every !== 'once' && sub.delivery === 'wake' && !confirming && (
             <button
               data-testid={`automation-run-${sub.id}`}
               className="rounded border border-border px-2.5 py-1 text-xs hover:bg-hover disabled:opacity-50"
@@ -289,7 +292,7 @@ function SubscriptionRow({ sub, workspaceId, names, onDeleted }: { sub: Subscrip
           )}
           {confirming ? (
             <span className="inline-flex items-center gap-2">
-              <span className="text-xs text-muted">Delete?</span>
+              <span className="text-xs text-muted">{selfWake ? 'Cancel this wake?' : 'Delete?'}</span>
               <button
                 data-testid={`automation-delete-confirm-${sub.id}`}
                 className="rounded bg-red-600 px-2 py-1 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
@@ -308,7 +311,7 @@ function SubscriptionRow({ sub, workspaceId, names, onDeleted }: { sub: Subscrip
               className="rounded border border-red-200 px-2.5 py-1 text-xs text-red-600 hover:bg-red-50"
               onClick={() => setConfirming(true)}
             >
-              Delete
+              {selfWake ? 'Cancel' : 'Delete'}
             </button>
           )}
         </div>

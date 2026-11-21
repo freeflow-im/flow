@@ -2142,3 +2142,11 @@ one-recipient MCP correction).
   It is the address the page books with (the native account's, else the first linked one), the same one the
   guest's invitation comes from. This reverses the spec's "no email" rule for the page; ids and calendar names
   stay hidden.
+
+## 2026-11-20 — Agents that wake themselves (`docs/specs/agent-self-wake.md`)
+
+- **An agent may schedule a wake for itself with no sponsor check** (`schedule_wake`, `list_wakes`, `cancel_wake`);
+  waking another agent keeps the sponsor rule (operator ruling).
+- **Self-wakes are one-time only** and answer in the thread of the turn that scheduled them (operator ruling).
+- **Limits: 10 pending per agent, 1 minute to 365 days ahead, 100 self-woken turns per agent a day** (operator ruling).
+- **No sponsor approval**; the sponsor sees and cancels them on the Automations page (operator ruling).

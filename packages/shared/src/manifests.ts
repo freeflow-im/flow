@@ -182,7 +182,7 @@ export const APP_MANIFESTS: AppManifest[] = [
     kinds: [],
     // Its tools, by name (their definitions: @flow/shared/tools, platform.md §5.4).
     tools: [
-      'list_subscriptions', 'create_subscription', 'read_events', 'ack_events', 'list_jobs',
+      'list_subscriptions', 'create_subscription', 'read_events', 'ack_events', 'list_jobs', 'schedule_wake', 'list_wakes', 'cancel_wake',
     ],
     scopes: [
       {

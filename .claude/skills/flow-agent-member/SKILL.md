@@ -177,6 +177,7 @@ channel/thread and the person you're replying to** — you rarely pass ids.
 | `create_channel` | Create a channel (`name`, optional `topic`, `isPrivate`) and join it. Returns the new id. |
 | `invite_to_channel` | Add workspace members to a channel — pass several `userIds` in one call; the result names any that failed. |
 | `start_task` | Hand long-running work off to a separate run of yourself homed in another channel, and return immediately. The prompt is that run's entire context — self-contained, nothing inherited. The channel becomes the run's conversation: progress, replies and human steering all live there top-level. Daemon-only (absent in pull mode). |
+| `schedule_wake` / `list_wakes` / `cancel_wake` | Wake yourself once, later (`in_minutes` or an ISO `at`, 1 minute to 365 days, at most 10 waiting): the prompt is your note to yourself, and the new turn runs in this conversation and thread. Set a new one from that turn to check again. |
 | `set_avatar` | Set your own profile picture from a local image (png/jpeg/gif/webp; server crops to 512px). |
 | `set_channel_indicator` | Spin (`busy`) or clear (`none`) the working-here marker on a channel's sidebar row. The channel you're answering in is handled for you — use this only for another channel, and clear it when done (it lapses after 5 minutes). |
 | `set_channel_emoji` | Set the emoji shown after a channel's name in the sidebar (🚧 building, ✅ done, 🔥 incident) — persistent decoration, not the temporary spinner above. Empty clears it; members only. |

@@ -82,6 +82,8 @@ export const MAX_EVENT_DEPTH = 4;
  * itself caused wake it too. */
 export interface WakeAction {
   kind: 'wake'; prompt: string; channelId?: string; includeSelf?: boolean;
+  /** The thread in `channelId` the turn answers in (a self-wake answers where it was asked; agent-self-wake.md). */
+  threadRootId?: string;
   /** The turn's answer is mailed back to the sender of the `mail.received` that woke it, from the agent's own mailbox
    * (agents.md §1.1: a person's assistant answering its allowlisted senders). Set by the platform, never by the API. */
   reply?: 'mail';
@@ -93,7 +95,19 @@ export type SubscriptionAction = WakeAction | PostAction;
 /** When a schedule fires: `hourly`, `daily@HH:MM`, `weekdays@HH:MM` (Monday to Friday), `weekly@DAY HH:MM` (MON..SUN) or
  * `monthly@D HH:MM`, local to its timezone. */
 export const SCHEDULE_EVERY = /^(hourly|(daily|weekdays)@([01]\d|2[0-3]):[0-5]\d|weekly@(MON|TUE|WED|THU|FRI|SAT|SUN) ([01]\d|2[0-3]):[0-5]\d|monthly@([1-9]|[12]\d|3[01]) ([01]\d|2[0-3]):[0-5]\d)$/i;
+/** `every` is `once` for a one-time schedule (an agent's self-wake, docs/specs/agent-self-wake.md): it fires at `nextAt`, then is gone. */
 export interface ScheduleDTO { id: string; every: string; timezone: string; nextAt: string }
+
+/**
+ * An agent's self-wakes (docs/specs/agent-self-wake.md §3): how many may wait at once, how soon and how far ahead one may be
+ * set, and how many may fire for one agent in one UTC day (past it a tick is dropped and the owner told once that day).
+ */
+export const SELF_WAKE_MAX_PENDING = 10;
+export const SELF_WAKE_MIN_DELAY_MS = 60_000;
+export const SELF_WAKE_MAX_DELAY_MS = 365 * 86_400_000;
+export const SELF_WAKE_MAX_PER_DAY = 100;
+/** A self-wake's subscription is kept this long after it fires, so its job can still be listed. */
+export const SELF_WAKE_KEEP_MS = 7 * 86_400_000;
 
 /** A wake job's states: `queued`, `delivered` (its `agent.job` event is out), `running` (acked, under a lease), then
  * `done` or `failed`; `parked` after three deliveries nobody took. */
@@ -109,6 +123,7 @@ export interface AgentJobDTO {
   eventSeq: number;
   prompt: string;
   channelId?: string;
+  threadRootId?: string;
   state: JobState;
   attempts: number;
   leaseUntil?: string;
@@ -125,6 +140,8 @@ export interface AgentJobEventData {
   /** What the agent runs: the automation's prompt inside a brief naming the automation and the event that fired it. */
   prompt: string;
   channelId?: string;
+  /** The thread in `channelId` the turn answers in. */
+  threadRootId?: string;
   event: { id: string; seq: number; type: string; ref?: string; channelId?: string };
 }
 

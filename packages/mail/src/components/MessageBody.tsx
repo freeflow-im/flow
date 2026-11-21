@@ -55,7 +55,7 @@ export function MessageBody({ accountId, message }: { accountId: string; message
     const text = message.text ?? '';
     const split = splitQuotedText(text);
     return (
-      <div className="px-1 pb-4 text-sm leading-relaxed text-ink">
+      <div className="mail-reading px-1 pb-4 text-sm leading-relaxed">
         <div className="whitespace-pre-wrap break-words" onClick={(e: ReactMouseEvent) => composeFromLink(e, people)}>{renderText(split ? split.head : text)}</div>
         {split && <QuoteToggle open={showQuote} onClick={() => setShowQuote((v) => !v)} className="my-2" />}
         {split && showQuote && <div className="whitespace-pre-wrap break-words border-l-[3px] border-border pl-3 text-muted" onClick={(e: ReactMouseEvent) => composeFromLink(e, people)}>{renderText(split.quote)}</div>}
