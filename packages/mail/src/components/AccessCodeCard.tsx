@@ -26,6 +26,13 @@ function copyBySelection(text: string): boolean {
   }
 }
 
+/** Copies a code (without its spaces and dashes); false when the browser refused both ways. */
+export function copyCode(code: string): Promise<boolean> {
+  const text = copiedCode(code);
+  const write = navigator.clipboard?.writeText(text) ?? Promise.reject(new Error('no clipboard'));
+  return write.then(() => true, () => copyBySelection(text));
+}
+
 export function AccessCodeCard({ code, onNotice }: { code: string; onNotice(notice: Notice): void }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
@@ -34,10 +41,11 @@ export function AccessCodeCard({ code, onNotice }: { code: string; onNotice(noti
     return () => clearTimeout(t);
   }, [copied]);
   const copy = () => {
-    const text = copiedCode(code);
-    const done = () => { setCopied(true); onNotice({ text: 'Code copied' }); };
-    const write = navigator.clipboard?.writeText(text) ?? Promise.reject(new Error('no clipboard'));
-    write.then(done, () => (copyBySelection(text) ? done() : onNotice({ text: "Couldn't copy the code" })));
+    void copyCode(code).then((ok) => {
+      if (!ok) { onNotice({ text: "Couldn't copy the code" }); return; }
+      setCopied(true);
+      onNotice({ text: 'Code copied' });
+    });
   };
   return (
     <section aria-label="Code requested" className="mb-3 rounded-2xl bg-[#eef2f7] px-5 py-4">

@@ -1,6 +1,7 @@
 export { SuiteBar, initials, openSuiteSearch, SUITE_SEARCH_EVENT, type SuiteBarProps, type SuiteTab, type SuiteTabMenuItem, type SuiteOrganization, type SuiteOrganizationEntry, type SuiteSearch, type SuiteAccount } from './SuiteBar';
 export { SuiteMark } from './SuiteMark';
 export { AppIcon } from './AppIcon';
+export { claimNotification, useDesktopOff, useDesktopPermission, type DesktopPermission } from './desktopNotify';
 export { SuiteAlerts, meetingAlertsAt, type SuiteAlert, type SuiteAlertAction } from './alerts';
 export { appIconUrl, isImageIcon } from '@flow/shared';
 export { StatusDialog, type StatusDialogProps } from './StatusDialog';

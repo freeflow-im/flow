@@ -18,6 +18,7 @@ interface MailAccount {
   imap: ServerSettings; smtp: ServerSettings;
   status: 'ok' | 'auth_failed' | 'connect_failed'; statusMessage?: string;
   tabs: TabCategory[];                         // inbox tabs that are on besides Primary; [] (the default) = tabs off
+  codeAlerts: boolean;                         // (2026-11-21) desktop notifications of sign-in codes in new mail; true by default
 }
 type Category = 'primary' | 'promotions' | 'social' | 'updates' | 'forums';
 type TabCategory = Exclude<Category, 'primary'>;
@@ -86,6 +87,11 @@ interface MessageDetail extends Omit<MessageSummary, 'attachments'> {
   ... }` with `categorized`/`primary`/`skipped`/`confirmed` for a sort and `promoted`/`moved`/`demoted`/`confirmed`/`gone`
   for a re-check. `sync` is the folder's `mail_sync` row, `counts` the cached rows per `(category, reason)`, and `messages`
   `{ uid, category, reason }` for the UIDs asked about.
+- `GET  /v1/mail/accounts/:id/code-alerts?since=<ms>` → `{ alerts: [{ key, code, folder, uid, from, subject, foundAt }] }`
+  (2026-11-21): the sign-in codes found in new INBOX mail while the cache prefetched it (before the person opened it), found
+  after `since`, newest first, kept an hour; `[]` when the account's `codeAlerts` is off. The Mail page asks every 30 s, also
+  while hidden, and shows each as a desktop notification once across the browser's tabs (`lib/codeAlerts.ts`). PATCH the
+  account with `{ codeAlerts }` to switch them.
 - `GET  /v1/mail/accounts/:id/tabs?folder=INBOX&after=<tab>:<uid>,…` → `{ tabs: [{ category, total, unread, new, newest: MessageSummary | null }] }`
   (2026-11-04): the inbox tabs' badges, from the prefetch cache (no round trip): per tab (Primary first, then the enabled ones),
   how many cached messages of the folder are in it, how many unread, how many arrived after the newest the person saw there

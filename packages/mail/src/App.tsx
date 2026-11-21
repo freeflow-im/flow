@@ -16,6 +16,8 @@ import { MailSuiteBar } from './components/MailSuiteBar';
 import { MessageList, type ListTab } from './components/MessageList';
 import type { PersonActions } from './components/PersonCard';
 import { ThreadView, type ThreadViewHandle } from './components/ThreadView';
+import { copyCode } from './components/AccessCodeCard';
+import { useCodeAlertNotifications } from './lib/codeAlerts';
 import { ResizeHandle } from './components/ResizeHandle';
 import { DocsDropZone } from './components/DocsDropZone';
 import type { DocsFile } from './lib/docsFiles';
@@ -554,6 +556,11 @@ export function App() {
     setDrawer(false);
     return true;
   };
+  // A code found in new mail before it was opened, as a desktop notification; its click copies the code and shows the message.
+  useCodeAlertNotifications(list, (ref, alert) => {
+    void copyCode(alert.code).then((ok) => { if (ok) setToast(`Code ${alert.code} copied.`); });
+    showMessage(ref);
+  });
   // "Open draft" in the assistant's chat: the draft is shown, then opens in Compose once it has loaded.
   const [pendingDraft, setPendingDraft] = useState<MessageRef | null>(null);
   const openDraft = (ref: MessageRef) => {

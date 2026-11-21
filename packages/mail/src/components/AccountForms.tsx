@@ -184,6 +184,7 @@ export function AccountSettingsDialog({ accounts, initialId, focusPassword, onCl
           <p className="text-sm text-muted">No accounts yet.</p>
         )}
         {account && <InboxTabsSetting key={`tabs-${account.id}`} account={account} onSaved={(a) => qc.setQueryData<MailAccount[]>(keys.accounts, (old) => (old ?? []).map((x) => (x.id === a.id ? a : x)))} />}
+        {account && <CodeAlertsSetting key={`codes-${account.id}`} account={account} onSaved={(a) => qc.setQueryData<MailAccount[]>(keys.accounts, (old) => (old ?? []).map((x) => (x.id === a.id ? a : x)))} />}
         <ImagesSetting />
       </DialogContent>
     </Dialog>
@@ -235,6 +236,28 @@ function InboxTabsSetting({ account, onSaved }: { account: MailAccount; onSaved(
       </div>
       {save.error && <p className="mt-1 text-danger">Could not save: {save.error.message}</p>}
     </section>
+  );
+}
+
+/** Per account: a desktop notification with the code when new mail carries a sign-in or verification code. Saved at once. */
+function CodeAlertsSetting({ account, onSaved }: { account: MailAccount; onSaved(a: MailAccount): void }) {
+  const [on, setOn] = useState(account.codeAlerts !== false);
+  const save = useMutation({
+    mutationFn: (next: boolean) => mailApi.updateAccount(account.id, { codeAlerts: next }),
+    onSuccess: onSaved,
+    onError: () => setOn(account.codeAlerts !== false),
+  });
+  return (
+    <label className="flex items-start gap-2.5 border-t border-border pt-4 text-[14px]">
+      <input type="checkbox" className="mt-0.5 size-4 accent-primary" checked={on} onChange={(e) => { setOn(e.target.checked); save.mutate(e.target.checked); }} />
+      <span>
+        <b className="font-semibold">Notify me of sign-in codes</b>
+        <span className="text-muted"> for {account.email}</span>
+        {save.isPending && <Loader2 className="ml-2 inline size-3.5 animate-spin text-muted" />}
+        <span className="block text-muted">When new mail has a sign-in or verification code, show it in a desktop notification. Needs desktop notifications on, and an OpenAI key in your organization's model settings.</span>
+        {save.error && <span className="block text-danger">Could not save: {save.error.message}</span>}
+      </span>
+    </label>
   );
 }
 

@@ -73,7 +73,7 @@ const ASSISTANT_MAIL_EVERY_MS = 10 * 60_000;
 
 interface AccountRow {
   id: string; email: string; display_name: string; imap: string; smtp: string;
-  secret: ArrayBuffer; key_id: string; status: string; status_message: string | null; created_at: number; tabs: string | null; kind: string;
+  secret: ArrayBuffer; key_id: string; status: string; status_message: string | null; created_at: number; tabs: string | null; kind: string; code_alerts: number;
 }
 /** `connected`: one the person added, with their password; `hosted`: the organization's mailbox at the hosted provider,
  * made by provisioning (platform.md §3.4) with a password the platform set, which the person neither sees nor changes. */
@@ -86,6 +86,8 @@ interface Account {
   id: string; kind: MailAccountKind; email: string; displayName: string; imap: ServerSettings; smtp: ServerSettings;
   status: 'ok' | 'auth_failed' | 'connect_failed'; statusMessage?: string;
   tabs: TabCategory[];
+  /** Show a desktop notification with an access code found in new mail before it was opened. On by default. */
+  codeAlerts: boolean;
 }
 /** One INBOX message's tab (Gmail's own, or as its headers decide it), with its sender, subject and date. */
 interface CategoryRow { uid: number; sender: string; from_name: string; subject: string; date: number; category: string; reason: string }
@@ -169,6 +171,8 @@ const ADDED_COLUMNS: { add: string; then?: string }[] = [
   { add: `ALTER TABLE accounts ADD COLUMN tabs TEXT NOT NULL DEFAULT '[]'` },
   // The hosted mailbox (phase 5.3) beside the accounts the person connected.
   { add: `ALTER TABLE accounts ADD COLUMN kind TEXT NOT NULL DEFAULT 'connected'` },
+  // Desktop notifications of access codes found in new mail (on by default).
+  { add: `ALTER TABLE accounts ADD COLUMN code_alerts INTEGER NOT NULL DEFAULT 1` },
   // The repair of Gmail rows wrongly cached as Primary (a re-check that read an incomplete or refused category search as
   // "no category"): every folder with such rows is re-checked on its next list, and its older such rows are asked about
   // again, a batch per re-check, from the top down (`repair_below`, 0 when there is nothing to repair).
@@ -179,7 +183,7 @@ const ADDED_COLUMNS: { add: string; then?: string }[] = [
   },
 ];
 /** Every table of the object (DDL above, cache.ts's), for the move between objects (`exportRows`, `importRows`). */
-export const MAIL_TABLES = ['accounts', 'rate_limit_windows', 'mail_categories', 'mail_category_overrides', 'mail_sync', 'mail_messages', 'mail_cache_folders', 'mail_state', 'mail_refs', 'mail_thread_index', 'mail_contacts', 'mail_muted_threads', 'mail_access_codes'] as const;
+export const MAIL_TABLES = ['accounts', 'rate_limit_windows', 'mail_categories', 'mail_category_overrides', 'mail_sync', 'mail_messages', 'mail_cache_folders', 'mail_state', 'mail_refs', 'mail_thread_index', 'mail_contacts', 'mail_muted_threads', 'mail_access_codes', 'mail_code_alerts'] as const;
 /** New mail sorted into tabs by a list request at most (above the high-water mark); the rest is the sorter's. */
 const SYNC_CAP = 100;
 /** Older mail sorted per step of the background sorter, each step under the sorter's lock by itself. */
@@ -383,7 +387,7 @@ export class Mail extends DurableObject<MailEnv> {
   }
 
   private toAccount(r: AccountRow): Account {
-    return { id: r.id, kind: r.kind === 'hosted' ? 'hosted' : 'connected', email: r.email, displayName: r.display_name, imap: JSON.parse(r.imap), smtp: JSON.parse(r.smtp), status: r.status as Account['status'], ...(r.status_message ? { statusMessage: r.status_message } : {}), tabs: this.tabsOf(r) };
+    return { id: r.id, kind: r.kind === 'hosted' ? 'hosted' : 'connected', email: r.email, displayName: r.display_name, imap: JSON.parse(r.imap), smtp: JSON.parse(r.smtp), status: r.status as Account['status'], ...(r.status_message ? { statusMessage: r.status_message } : {}), tabs: this.tabsOf(r), codeAlerts: r.code_alerts !== 0 };
   }
 
   private tabsOf(r: AccountRow): TabCategory[] {
@@ -1969,20 +1973,22 @@ export class Mail extends DurableObject<MailEnv> {
   }
 
   /** Keeps a message's body in the cache (its row must exist), unless it is too large or was read whole (not by its parts). */
-  private cacheBody(accountId: string, folder: string, uid: number, detail: MessageDetail, plan: BodyPlan | null): void {
+  private cacheBody(accountId: string, folder: string, uid: number, detail: MessageDetail, plan: BodyPlan | null, prefetched = false): void {
     const { html, text, ...rest } = detail;
     if (!plan) { this.cache.setBody(accountId, folder, uid, null, BODY.notByParts); return; }
     if ((html?.length ?? 0) > BODY_MAX_HTML || (text?.length ?? 0) > BODY_MAX_TEXT) { this.cache.setBody(accountId, folder, uid, null, BODY.tooLarge); return; }
     this.cache.setBody(accountId, folder, uid, { detail: rest, html, text, plan }, BODY.cached);
-    this.scanAccessCodeSoon(accountId, detail);
+    this.scanAccessCodeSoon(accountId, detail, prefetched);
   }
 
   /**
    * Looks for an access code in a new INBOX message (accessCode.ts) once its body is here, in the background, on the
    * organization's OpenAI key; with no key set, nothing is asked. A message is asked about once (`mail_access_codes`);
-   * a failed call is logged and not kept, so the message is asked about again only if its body is cached again.
+   * a failed call is logged and not kept, so the message is asked about again only if its body is cached again. A code
+   * found while `prefetched` (before the person opened the message) is also kept as a code alert, when the account has
+   * them on, for the Mail page to show as a desktop notification.
    */
-  private scanAccessCodeSoon(accountId: string, detail: MessageDetail): void {
+  private scanAccessCodeSoon(accountId: string, detail: MessageDetail, prefetched: boolean): void {
     if (detail.folder.toUpperCase() !== INBOX) return;
     const date = Date.parse(detail.date);
     if (!Number.isFinite(date) || Date.now() - date > ACCESS_CODE_NEW_MS) return;
@@ -1994,12 +2000,22 @@ export class Mail extends DurableObject<MailEnv> {
         const apiKey = await this.orgOpenAIKey();
         if (!apiKey) return 'no OpenAI key';
         const found = await findAccessCode(apiKey, detail);
-        this.cache.setAccessCode(accountId, key, found?.code ?? '', Date.now());
+        const now = Date.now();
+        this.cache.setAccessCode(accountId, key, found?.code ?? '', now);
+        if (found && prefetched && this.codeAlertsOn(accountId)) {
+          this.cache.addCodeAlert(accountId, { key, code: found.code, folder: detail.folder, uid: detail.uid, from: detail.from?.name || detail.from?.address || '', subject: detail.subject, foundAt: now });
+          return 'found, alert';
+        }
         return found ? 'found' : 'none';
       } finally {
         this.codeScans.delete(key);
       }
     });
+  }
+
+  private codeAlertsOn(accountId: string): boolean {
+    const r = this.sql.exec<{ code_alerts: number }>('SELECT code_alerts FROM accounts WHERE id = ?', accountId).toArray()[0];
+    return !!r && r.code_alerts !== 0;
   }
 
   /** The OpenAI key of the object's organization (its model settings, assistant/orgModel.ts), or null when none is set. */
@@ -2063,7 +2079,7 @@ export class Mail extends DurableObject<MailEnv> {
             const email = await PostalMime.parse(raw, { attachmentEncoding: 'arraybuffer' });
             this.timed('parse', `${f.folder} uid ${m.uid} ${raw.length} bytes (${Date.now() - t0}ms)`, () => undefined);
             const attachments: AttachmentInfo[] = q.plan.attachments.map((a) => ({ index: a.index, filename: a.filename, mimeType: a.mimeType, size: decodedSize(a.leaf), contentId: a.contentId, inline: a.inline }));
-            this.timed('cacheBody', `${f.folder} uid ${m.uid}`, () => this.cacheBody(r.id, f.folder, q.uid, toDetail(q.summary, email, attachments), q.plan));
+            this.timed('cacheBody', `${f.folder} uid ${m.uid}`, () => this.cacheBody(r.id, f.folder, q.uid, toDetail(q.summary, email, attachments), q.plan, true));
             byUid.delete(m.uid);
             fetched++;
           }
@@ -2546,6 +2562,7 @@ export class Mail extends DurableObject<MailEnv> {
       }
       if (b.displayName !== undefined) this.sql.exec('UPDATE accounts SET display_name = ? WHERE id = ?', b.displayName.trim() || r.email.split('@')[0], r.id);
       if (b.tabs !== undefined) this.sql.exec('UPDATE accounts SET tabs = ? WHERE id = ?', JSON.stringify(normalizeTabs(b.tabs)), r.id);
+      if (b.codeAlerts !== undefined) this.sql.exec('UPDATE accounts SET code_alerts = ? WHERE id = ?', b.codeAlerts ? 1 : 0, r.id);
       return c.json({ account: this.toAccount(this.row(r.id)) });
     });
 
@@ -2634,6 +2651,15 @@ export class Mail extends DurableObject<MailEnv> {
       const start = Date.now();
       await this.runCache(Date.now() + ALARM_BUDGET_MS);
       return c.json({ ok: true, ms: Date.now() - start, run: this.cacheLog[this.cacheLog.length - 1] ?? null, alarmProfile: JSON.parse(this.cache.state('alarm_profile') || '{}') });
+    });
+
+    // The access codes found in new mail while prefetching, after `since` (ms), for desktop notifications; none when the
+    // account has them off.
+    app.get('/v1/mail/accounts/:id/code-alerts', (c: MailContext) => {
+      const r = c.get('account');
+      const since = Number(c.req.query('since') ?? 0);
+      if (r.code_alerts === 0) return c.json({ alerts: [] });
+      return c.json({ alerts: this.cache.codeAlerts(r.id, Number.isFinite(since) ? since : 0) });
     });
 
     // The inbox tabs' badges: per tab, how many messages arrived after the newest the person saw there (`after=tab:uid,…`),

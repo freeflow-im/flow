@@ -27,7 +27,11 @@ export interface MailAccount {
   statusMessage?: string;
   /** The inbox tabs that are on besides Primary; [] means tabs off. */
   tabs: TabCategory[];
+  /** Desktop notifications of access codes found in new mail before it is opened (on unless the server says false). */
+  codeAlerts?: boolean;
 }
+/** An access code the server found in new mail while prefetching it (GET …/code-alerts). `key` names the message. */
+export interface CodeAlert { key: string; code: string; folder: string; uid: number; from: string; subject: string; foundAt: number }
 export type SpecialUse = 'inbox' | 'sent' | 'drafts' | 'trash' | 'junk' | 'archive' | 'all' | 'flagged';
 export interface MailFolder {
   path: string;
@@ -163,7 +167,7 @@ export interface NewAccount {
   imap: ServerSettings;
   smtp: ServerSettings;
 }
-export type AccountPatch = Partial<Pick<NewAccount, 'displayName' | 'password' | 'imap' | 'smtp'> & { tabs: TabCategory[] }>;
+export type AccountPatch = Partial<Pick<NewAccount, 'displayName' | 'password' | 'imap' | 'smtp'> & { tabs: TabCategory[]; codeAlerts: boolean }>;
 export interface OutgoingAttachment {
   filename: string;
   contentType: string;
@@ -275,6 +279,7 @@ export const mailApi = {
   updateAccount: async (id: string, patch: AccountPatch) => (await request<{ account: MailAccount }>('PATCH', base(id), patch)).account,
   deleteAccount: (id: string) => request<{ ok: true }>('DELETE', base(id)),
   folders: async (accountId: string) => (await request<{ folders: MailFolder[] }>('GET', `${base(accountId)}/folders`)).folders,
+  codeAlerts: async (accountId: string, since: number) => (await request<{ alerts: CodeAlert[] }>('GET', `${base(accountId)}/code-alerts?since=${Math.floor(since)}`)).alerts,
   tabStatus: async (accountId: string, after: Partial<Record<Category, number>>) =>
     (await request<{ tabs: TabStatus[] }>('GET', `${base(accountId)}/tabs${query({ folder: 'INBOX', after: Object.entries(after).map(([t, u]) => `${t}:${u}`).join(',') || undefined })}`)).tabs,
   contacts: async (accountId: string, q: string, limit = 8) => (await request<{ contacts: Contact[] }>('GET', `${base(accountId)}/contacts?q=${encodeURIComponent(q)}&limit=${limit}`)).contacts,
