@@ -69,10 +69,13 @@ up afterwards: Cloudflare dashboard → Workers & Pages → freeflow-edge → Lo
   data was already in the browser; `hidden` means the page was hidden, so the browser slowed it (leave those out).
   `calls` lists every call that ran meanwhile, with `queuedMs` (held in the browser), `waitMs` (waiting for the server),
   the server's split and its `ray`, which finds that call's request record.
-- An attachment request also records `read` (`kept` from the opened message, its own `part`, or `whole`: the whole
+- An attachment request also records `read` (`kept` from the opened message, `stored` in R2 by the alarm, its own `part`, or `whole`: the whole
   message downloaded and parsed for one attachment, the slow path), `bytes`, and `download: true` when it came from a
   Download link (a download is not timed in the browser, so this record is all there is). In the browser's `calls`,
   `bytes` is what came over the network, and `cache: browser` marks a call the browser answered from its own cache.
+- A preview of a mail attachment in Docs (`POST /api/previews/mail`, `[previews]` lines) records its steps: `lookup`
+  (a preview made already), `auth`, `mail` (reading the attachment, with the Mail object's `wait`, `imap`, `read`,
+  `bytes`) and `store` (Docs keeping it, converting what is not a PDF), also in its `Server-Timing`.
 - Every Mail and Calendar response carries `Server-Timing` (`total`, `lock`, `imap`, `upstream`, `cache`, `ray`), so
   DevTools' Network → Timing tab shows the server's split of one call. In the console, `window.__flowPerf` holds the
   page's last 50 timings.

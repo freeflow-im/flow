@@ -509,3 +509,52 @@ describe("the inbox tabs' badges", () => {
     expect(off).toEqual([expect.objectContaining({ category: 'primary', total: 4 })]);
   });
 });
+
+describe('attachments kept in R2', () => {
+  const DAY = 24 * 60 * MIN;
+  const now = Date.UTC(2026, 10, 20);
+  const leaf = (section: string, size: number) => ({ section, type: 'application/pdf', encoding: 'base64', parameters: {}, disposition: 'attachment', id: null, size, lines: 0, md5: null, language: null, location: null } as never);
+  const plan = (o: { simple?: boolean; inline?: boolean } = {}) => ({
+    simple: o.simple ?? true, texts: [], tree: null,
+    attachments: [{ index: 0, leaf: leaf('2', 1000), filename: 'report.pdf', mimeType: 'application/pdf', contentId: null, inline: o.inline ?? false }],
+  });
+  const withPlan = (uid: number, daysAgo: number, p: object | null, emailId?: string, folder = F): NewRow =>
+    ({ ...row(fetched(uid, { date: new Date(now - daysAgo * DAY), ...(emailId ? { emailId } : {}) })), summary: toSummary(fetched(uid, { date: new Date(now - daysAgo * DAY) }), folder, 's'), plan: p as never });
+  const stored = (key: string) => ({ blobKey: key, keyId: 'k1', size: 1000, filename: 'report.pdf', mimeType: 'application/pdf' });
+
+  it('queues the attachments of the last week’s mail, newest first, and not inline pictures or older mail', () => {
+    const cache = cacheWith([withPlan(1, 1, plan()), withPlan(2, 3, plan()), withPlan(3, 2, plan({ inline: true })), withPlan(4, 9, plan()), withPlan(5, 1, null)]);
+    const q = cache.attachmentQueue(A, F, V, now - 7 * DAY, 10, now);
+    expect(q.map((x) => x.uid)).toEqual([1, 2]);
+    expect(q[0]).toMatchObject({ index: 0, section: '2', encoding: 'base64', filename: 'report.pdf', simple: true });
+  });
+
+  it('serves a kept one, queues it no more, and forgets it once its mail is older than a week', () => {
+    const cache = cacheWith([withPlan(1, 1, plan()), withPlan(2, 6, plan())]);
+    const [a, b] = cache.attachmentQueue(A, F, V, now - 7 * DAY, 10, now);
+    cache.keepAttachment(A, a!, stored('blob-1'), now);
+    cache.keepAttachment(A, b!, null, now); // too large
+    expect(cache.attachmentQueue(A, F, V, now - 7 * DAY, 10, now)).toEqual([]);
+    expect(cache.storedAttachment(A, F, 1, 0)).toEqual(stored('blob-1'));
+    expect(cache.storedAttachment(A, F, 2, 0)).toBeNull();
+    expect(cache.attachmentBytes(A)).toEqual({ count: 1, bytes: 1000 });
+    // Two days on, the 6-day-old one's row goes (it kept nothing); a week on, the other's, with its R2 object.
+    expect(cache.expireAttachments(A, now + 2 * DAY - 7 * DAY)).toEqual([]);
+    expect(cache.expireAttachments(A, now + 7 * DAY)).toEqual(['blob-1']);
+    expect(cache.storedAttachment(A, F, 1, 0)).toBeNull();
+  });
+
+  it('shares one R2 object between the copies of a message in several folders', () => {
+    const cache = cacheWith([withPlan(1, 1, plan(), 'gm-1')]);
+    cache.touchFolder(A, 'All', 'all', now, true);
+    cache.resetFolder(A, 'All', V);
+    cache.insert(A, 'All', V, [withPlan(40, 1, plan(), 'gm-1', 'All')], now);
+    const [a] = cache.attachmentQueue(A, F, V, now - 7 * DAY, 10, now);
+    cache.keepAttachment(A, a!, stored('blob-1'), now);
+    // The All Mail copy takes the same object instead of being fetched again.
+    expect(cache.attachmentQueue(A, 'All', V, now - 7 * DAY, 10, now)).toEqual([]);
+    expect(cache.storedAttachment(A, 'All', 40, 0)?.blobKey).toBe('blob-1');
+    // Its object is deleted only once neither row uses it.
+    expect(cache.expireAttachments(A, Number.MAX_SAFE_INTEGER)).toEqual(['blob-1']);
+  });
+});

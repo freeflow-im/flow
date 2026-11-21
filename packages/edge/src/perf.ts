@@ -7,19 +7,24 @@ import { z } from 'zod';
 import { routeOf as mailRoute } from './imap/rules';
 import { routeOf as calendarRoute } from './calendar/rules';
 
-/** When this isolate began: a request in its first seconds paid for a cold start. */
-const ISOLATE_START = Date.now();
+/**
+ * When this isolate served its first timed request. Not taken at load: a Worker's clock reads 0 outside a request, so a
+ * start taken then made every age the time since 1970.
+ */
+let isolateStart = 0;
 let served = 0;
 
 /** This isolate's age at a request, and how many timed requests it served before it (0: the first, likely a cold start). */
 export function isolate(): { isolateAgeMs: number; isolateRequest: number } {
-  return { isolateAgeMs: Date.now() - ISOLATE_START, isolateRequest: served++ };
+  const now = Date.now();
+  if (!isolateStart) isolateStart = now;
+  return { isolateAgeMs: now - isolateStart, isolateRequest: served++ };
 }
 
 /** The parts of a request's time that the Mail or Calendar object reported in its timing header. */
 export interface Parts { wait?: number; imap?: number; server?: number; cache?: string; read?: string; bytes?: number }
 
-/** Reads `wait=<ms>;imap=<ms>;cache=hit` (Mail; an attachment adds `read=part|whole|kept;bytes=<n>`) or `server=<ms>` (Calendar). */
+/** Reads `wait=<ms>;imap=<ms>;cache=hit` (Mail; an attachment adds `read=kept|stored|part|whole;bytes=<n>`) or `server=<ms>` (Calendar). */
 export function parseParts(header: string | null | undefined): Parts {
   const out: Parts = {};
   for (const key of ['wait', 'imap', 'server', 'bytes'] as const) {
@@ -28,7 +33,7 @@ export function parseParts(header: string | null | undefined): Parts {
   }
   const cache = /(?:^|;)cache=(hit|fill|live)/.exec(header ?? '')?.[1];
   if (cache) out.cache = cache;
-  const read = /(?:^|;)read=(kept|part|whole)/.exec(header ?? '')?.[1];
+  const read = /(?:^|;)read=(kept|stored|part|whole)/.exec(header ?? '')?.[1];
   if (read) out.read = read;
   return out;
 }
@@ -84,8 +89,8 @@ export const ClientCall = z.object({
   cache: z.string().max(10).optional(),
   /** Bytes received (encoded, as sent), when the browser could tell. */
   bytes: z.number().int().nonnegative().max(2 ** 40).optional(),
-  /** How the server read an attachment: `kept`, `part` (its own part) or `whole` (the whole message parsed). */
-  read: z.enum(['kept', 'part', 'whole']).optional(),
+  /** How the server read an attachment: `kept` (from the open message), `stored` (kept in R2), `part` (its own part) or `whole` (the whole message parsed). */
+  read: z.enum(['kept', 'stored', 'part', 'whole']).optional(),
 });
 
 /** One thing a person did, timed from its start until its result was on screen. */

@@ -55,6 +55,23 @@ export const BODY_BATCH_BYTES = 4 * 1024 * 1024;
 /** Bodies kept per folder at most; past it the oldest go (their rows stay, to be opened from the server). */
 export const BODY_BUDGET_PER_FOLDER = 150 * 1024 * 1024;
 
+/**
+ * Attachments (docs/specs/mail-api.md): every attachment of the mail of the last ATTACH_KEEP_MS is fetched by the alarm
+ * as it arrives and kept, sealed, in R2, so opening or previewing one needs no IMAP round trip. Past ATTACH_KEEP_MS (by
+ * the message's date) they are deleted; a larger one than ATTACH_MAX_BYTES is not kept; ATTACH_BATCH_BYTES per run.
+ */
+export const ATTACH_KEEP_MS = 7 * 24 * 60 * 60_000;
+export const ATTACH_MAX_BYTES = 25 * 1024 * 1024;
+export const ATTACH_BATCH_BYTES = 32 * 1024 * 1024;
+/** How a message's attachment stands: kept in R2, or not to be kept (too large, or the message cannot be read by its parts). */
+export const ATTACH = { stored: 1, skipped: 2 } as const;
+
+/** An attachment to fetch for keeping: its message, its part, and what it is. */
+export interface QueuedAttachment { folder: string; validity: string; uid: number; emailId: string | null; date: number; index: number; section: string; encoding: string; size: number; filename: string; mimeType: string; simple: boolean }
+
+/** A kept attachment: where its sealed bytes are in R2, and what they are. */
+export interface StoredAttachment { blobKey: string; keyId: string; size: number; filename: string; mimeType: string }
+
 /** How a cached row's body stands. */
 export const BODY = { pending: 0, cached: 1, tooLarge: 2, notByParts: 3, evicted: 4 } as const;
 
@@ -122,6 +139,13 @@ export const DDL = [
     last_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (account_id, address))`,
   // Muted conversations (Gmail's Mute): kept out of the inbox's list, and their new mail moved out of INBOX as it arrives.
   `CREATE TABLE IF NOT EXISTS mail_muted_threads (account_id TEXT NOT NULL, thread_id TEXT NOT NULL, muted_at INTEGER NOT NULL, PRIMARY KEY (account_id, thread_id))`,
+  // Attachments kept in R2 (ATTACH_KEEP_MS): one row per message's attachment, the same R2 object shared by the copies of
+  // one message in several folders (Gmail's labels, by email_id). `date` is the message's, for the expiry.
+  `CREATE TABLE IF NOT EXISTS mail_attachments (account_id TEXT NOT NULL, folder TEXT NOT NULL, uid_validity TEXT NOT NULL, uid INTEGER NOT NULL, idx INTEGER NOT NULL,
+    email_id TEXT, state INTEGER NOT NULL, blob_key TEXT, key_id TEXT, size INTEGER NOT NULL DEFAULT 0, filename TEXT NOT NULL DEFAULT '', mime_type TEXT NOT NULL DEFAULT '',
+    date INTEGER NOT NULL DEFAULT 0, at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (account_id, folder, uid_validity, uid, idx))`,
+  `CREATE INDEX IF NOT EXISTS mail_attachments_email ON mail_attachments (account_id, email_id, idx)`,
+  `CREATE INDEX IF NOT EXISTS mail_attachments_date ON mail_attachments (date)`,
 ];
 /** Message ids remembered per account after their rows left the cache, at most. */
 export const THREAD_INDEX_CAP = 20_000;
@@ -724,6 +748,71 @@ export class MailCache {
     return rows.map((r) => ({ name: r.name, address: r.address, sent: r.sent, received: r.received, lastAt: r.last_at }));
   }
 
+  // ---- attachments kept in R2 -------------------------------------------------------------------------------------------
+
+  /**
+   * The attachments of a folder's mail since `since` (by the message's date) not kept or skipped yet, newest first, at
+   * most `limit`. Inline pictures are left out: they come with the bodies. One the account already keeps for the same
+   * message in another folder (the same email_id) is taken from there now, and not queued.
+   */
+  attachmentQueue(accountId: string, folder: string, validity: string, since: number, limit: number, now: number): QueuedAttachment[] {
+    const rows = this.sql.exec<{ uid: number; email_id: string | null; date: number; plan: string }>(
+      `SELECT uid, email_id, date, plan FROM mail_messages WHERE account_id = ? AND folder = ? AND uid_validity = ? AND date >= ? AND plan IS NOT NULL
+       AND plan LIKE '%"filename"%' ORDER BY date DESC LIMIT 500`, accountId, folder, validity, since).toArray();
+    const out: QueuedAttachment[] = [];
+    for (const r of rows) {
+      const plan = JSON.parse(r.plan) as BodyPlan;
+      for (const a of plan.attachments) {
+        if (a.inline) continue;
+        if (this.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM mail_attachments WHERE account_id = ? AND folder = ? AND uid_validity = ? AND uid = ? AND idx = ?',
+          accountId, folder, validity, r.uid, a.index).toArray()[0]?.n) continue;
+        const same = r.email_id ? this.sql.exec<{ blob_key: string; key_id: string; size: number; filename: string; mime_type: string }>(
+          'SELECT blob_key, key_id, size, filename, mime_type FROM mail_attachments WHERE account_id = ? AND email_id = ? AND idx = ? AND state = ? LIMIT 1',
+          accountId, r.email_id, a.index, ATTACH.stored).toArray()[0] : undefined;
+        if (same) {
+          this.keepAttachment(accountId, { folder, validity, uid: r.uid, emailId: r.email_id, date: r.date, index: a.index }, { blobKey: same.blob_key, keyId: same.key_id, size: same.size, filename: same.filename, mimeType: same.mime_type }, now);
+          continue;
+        }
+        out.push({ folder, validity, uid: r.uid, emailId: r.email_id, date: r.date, index: a.index, section: a.leaf.section, encoding: a.leaf.encoding, size: a.leaf.size, filename: a.filename, mimeType: a.mimeType, simple: plan.simple });
+        if (out.length >= limit) return out;
+      }
+    }
+    return out;
+  }
+
+  /** Records an attachment as kept in R2 (`stored`), or as not to be kept (`null`). */
+  keepAttachment(accountId: string, q: Pick<QueuedAttachment, 'folder' | 'validity' | 'uid' | 'emailId' | 'date' | 'index'>, stored: StoredAttachment | null, now: number): void {
+    this.sql.exec(
+      `INSERT OR REPLACE INTO mail_attachments (account_id, folder, uid_validity, uid, idx, email_id, state, blob_key, key_id, size, filename, mime_type, date, at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      accountId, q.folder, q.validity, q.uid, q.index, q.emailId, stored ? ATTACH.stored : ATTACH.skipped, stored?.blobKey ?? null, stored?.keyId ?? null,
+      stored?.size ?? 0, stored?.filename ?? '', stored?.mimeType ?? '', q.date, now);
+  }
+
+  /** A kept attachment of a cached folder's message, if there is one. */
+  storedAttachment(accountId: string, folder: string, uid: number, index: number): StoredAttachment | null {
+    const r = this.sql.exec<{ blob_key: string; key_id: string; size: number; filename: string; mime_type: string }>(
+      `SELECT a.blob_key, a.key_id, a.size, a.filename, a.mime_type FROM mail_attachments a JOIN mail_cache_folders f ON f.account_id = a.account_id AND f.folder = a.folder AND f.uid_validity = a.uid_validity
+       WHERE a.account_id = ? AND a.folder = ? AND a.uid = ? AND a.idx = ? AND a.state = ?`, accountId, folder, uid, index, ATTACH.stored).toArray()[0];
+    return r ? { blobKey: r.blob_key, keyId: r.key_id, size: r.size, filename: r.filename, mimeType: r.mime_type } : null;
+  }
+
+  /**
+   * Forgets the attachments of messages dated before `before` (every one of the account's, with no date): returns the
+   * R2 objects no row uses any more, for the caller to delete.
+   */
+  expireAttachments(accountId: string, before: number): string[] {
+    const gone = this.sql.exec<{ blob_key: string | null }>('DELETE FROM mail_attachments WHERE account_id = ? AND date < ? RETURNING blob_key', accountId, before).toArray();
+    const keys = [...new Set(gone.map((g) => g.blob_key).filter((k): k is string => !!k))];
+    return keys.filter((k) => !this.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM mail_attachments WHERE blob_key = ?', k).toArray()[0]?.n);
+  }
+
+  /** What the account keeps in R2: how many attachments, and their bytes. */
+  attachmentBytes(accountId: string): { count: number; bytes: number } {
+    const r = this.sql.exec<{ n: number; b: number | null }>('SELECT COUNT(DISTINCT blob_key) AS n, SUM(size) AS b FROM mail_attachments WHERE account_id = ? AND state = ?', accountId, ATTACH.stored).toArray()[0];
+    return { count: r?.n ?? 0, bytes: r?.b ?? 0 };
+  }
+
   forgetAccount(accountId: string): void {
     this.sql.exec('DELETE FROM mail_contacts WHERE account_id = ?', accountId);
     this.sql.exec('DELETE FROM mail_state WHERE key = ?', `contacts_built:${accountId}`);
@@ -732,6 +821,7 @@ export class MailCache {
     this.sql.exec('DELETE FROM mail_refs WHERE account_id = ?', accountId);
     this.sql.exec('DELETE FROM mail_thread_index WHERE account_id = ?', accountId);
     this.sql.exec('DELETE FROM mail_muted_threads WHERE account_id = ?', accountId);
+    this.sql.exec('DELETE FROM mail_attachments WHERE account_id = ?', accountId);
   }
 
   /** For the debug route: each cached folder with how many rows it holds, how many of them with their body, and the bodies' bytes. */

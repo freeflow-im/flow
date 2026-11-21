@@ -25,7 +25,7 @@ import PostalMime, { type Email } from 'postal-mime';
 import { ApiError } from '../errors';
 import { decryptBlob, encryptBlob } from '../org/crypto/index';
 import { decodeTransfer, decodedSize, minimalMessage, planBody, prefetch, type BodyPlan } from './body';
-import { ALARM_BUDGET_MS, BACKFILL_STEP, BODY, FRESH_MS, BODY_BATCH, BODY_BATCH_BYTES, BODY_BUDGET_PER_FOLDER, BODY_MAX_HTML, BODY_MAX_TEXT, CACHE_ROWS, ERROR_BACKOFF_MS, MAIN_KINDS, MailCache, NEW_CAP, flagDiff, flagsOf, nextAlarmAt, walkDown, type CachedFolder, type Flags, type FolderKind, type NewRow, type QueuedBody, type ThreadRow } from './cache';
+import { ALARM_BUDGET_MS, ATTACH_BATCH_BYTES, ATTACH_KEEP_MS, ATTACH_MAX_BYTES, BACKFILL_STEP, BODY, FRESH_MS, BODY_BATCH, BODY_BATCH_BYTES, BODY_BUDGET_PER_FOLDER, BODY_MAX_HTML, BODY_MAX_TEXT, CACHE_ROWS, ERROR_BACKOFF_MS, MAIN_KINDS, MailCache, NEW_CAP, flagDiff, flagsOf, nextAlarmAt, walkDown, type CachedFolder, type Flags, type FolderKind, type NewRow, type QueuedAttachment, type QueuedBody, type ThreadRow } from './cache';
 import { contentDisposition, specialUseOf, snippetOf, textPartOf, toDetail, toFolders, toSummary, type AttachmentInfo, type MessageDetail, type MessageSummary, type SpecialUse, type TextPart, type ThreadPage, type ThreadSummary } from './convert';
 import { participants } from './threads';
 import { CATEGORIES, CATEGORY_HEADERS, classifyHeaders, effective, effectiveSql, isGmailHost, normalizeTabs, parseHeaders, tabPage, uidSet, type Category, type TabCategory } from './categorize';
@@ -43,6 +43,8 @@ const isHeartbeat = (request: Request) => request.method === 'POST' && new URL(r
 
 export interface MailEnv {
   FLOW_DATA_KEY?: string;
+  /** Where the attachments of the last week's mail are kept, sealed (`mail-attachments/<account>/…`; cache.ts ATTACH_KEEP_MS). */
+  BLOBS?: R2Bucket;
   /** `off` stops the prefetch cache's alarm (a kill switch): pages then check the server themselves, as before it. */
   MAIL_ALARM?: string;
   /** `1` lets an account use `security: 'none'`, any port and a local host: local dev against GreenMail only. */
@@ -111,7 +113,7 @@ const KINDS: readonly Kind[] = ['interactive', 'background', 'sorter', 'cache'];
  * Where one request's time went, for its log line: waiting for a connection and a folder's lock, and talking IMAP; and for
  * a list, whether its rows came from the cache (`hit`), partly (`fill`) or from the server (`live`).
  */
-interface Timing { wait: number; imap: number; cache?: 'hit' | 'fill' | 'live'; read?: 'kept' | 'part' | 'whole'; bytes?: number; test: TestHooks }
+interface Timing { wait: number; imap: number; cache?: 'hit' | 'fill' | 'live'; read?: 'kept' | 'stored' | 'part' | 'whole'; bytes?: number; test: TestHooks }
 /**
  * Local dev only (MAIL_ALLOW_INSECURE=1), from x-mail-test-* headers, for test/e2e-mail.mjs, and carried into the
  * background work a request starts: a pause in each of the sorter's steps (holding its lock), a smaller sorting budget
@@ -245,6 +247,11 @@ async function smtpTransport(s: ServerSettings, user: string, pass: string) {
     host: s.host, port: s.port, secure: s.security === 'tls', requireTLS: s.security === 'starttls', ignoreTLS: s.security === 'none',
     auth: { user, pass }, connectionTimeout: 15_000, greetingTimeout: 15_000, socketTimeout: 60_000, logger: false,
   });
+}
+
+/** Deletes R2 objects, 1000 to a call (R2's most). */
+async function deleteBlobs(blobs: R2Bucket, keys: string[]): Promise<void> {
+  for (let i = 0; i < keys.length; i += 1000) await blobs.delete(keys.slice(i, i + 1000));
 }
 
 async function streamBytes(stream: AsyncIterable<Uint8Array>, max: number): Promise<Buffer> {
@@ -1478,6 +1485,11 @@ export class Mail extends DurableObject<MailEnv> {
                 this.step('bodies');
                 try { entry.folders.push(`bodies: ${await this.prefetchBodies(r, c, deadline)}`); } catch (err) { entry.errors.push(`bodies: ${(err as Error).message}`); }
               }
+              // Then the attachments of the last week's mail.
+              if (Date.now() < deadline && this.env.BLOBS) {
+                this.step('attachments');
+                try { entry.folders.push(`attachments: ${await this.prefetchAttachments(r, c, deadline)}`); } catch (err) { entry.errors.push(`attachments: ${(err as Error).message}`); }
+              }
             });
           } catch (err) {
             entry.errors.push((err as Error).message);
@@ -1934,6 +1946,68 @@ export class Mail extends DurableObject<MailEnv> {
     return `${fetched} bodies${skipped ? `, ${skipped} skipped` : ''}`;
   }
 
+  /**
+   * The alarm's attachment step: every attachment of the mail of the last ATTACH_KEEP_MS, newest first, fetched and kept
+   * in R2 sealed with FLOW_DATA_KEY, ATTACH_BATCH_BYTES per run, so opening one needs no round trip to the mail server
+   * (`attachment`). One larger than ATTACH_MAX_BYTES is not kept. A message that cannot be read by its parts is read
+   * whole once, and all its attachments kept from it. Older ones are deleted first.
+   */
+  private async prefetchAttachments(r: AccountRow, c: ImapFlow, deadline: number): Promise<string> {
+    const blobs = this.env.BLOBS!;
+    const now = Date.now();
+    const expired = this.cache.expireAttachments(r.id, now - ATTACH_KEEP_MS);
+    if (expired.length) await deleteBlobs(blobs, expired);
+    let kept = 0, bytes = 0, skipped = 0;
+    const folders = this.cache.folders(r.id).sort((a, b) => b.openedAt - a.openedAt);
+    for (const f of folders) {
+      if (bytes >= ATTACH_BATCH_BYTES || Date.now() > deadline) break;
+      if (!f.validity || f.high === 0) continue;
+      const queue = this.cache.attachmentQueue(r.id, f.folder, f.validity, now - ATTACH_KEEP_MS, 50, now);
+      if (!queue.length) continue;
+      await this.locked(c, f.folder, async () => {
+        if (this.validity(c) !== f.validity) return;
+        const wholeDone = new Set<number>();
+        for (const q of queue) {
+          if (bytes >= ATTACH_BATCH_BYTES || Date.now() > deadline) break;
+          if (q.size > ATTACH_MAX_BYTES * 1.4) { this.cache.keepAttachment(r.id, q, null, now); skipped++; continue; }
+          if (!q.simple) {
+            if (wholeDone.has(q.uid)) continue;
+            wholeDone.add(q.uid);
+            this.step(`attachments ${f.kind}: whole uid ${q.uid}`);
+            const download = await c.download(String(q.uid), undefined, { uid: true, chunkSize: 1024 * 1024 });
+            if (!download?.content) { this.cache.keepAttachment(r.id, q, null, now); skipped++; continue; }
+            const email = await PostalMime.parse(await streamBytes(download.content, MAX_MESSAGE_BYTES), { attachmentEncoding: 'arraybuffer' });
+            for (const other of queue.filter((x) => x.uid === q.uid)) {
+              const a = email.attachments[other.index];
+              const content = a ? (typeof a.content === 'string' ? Buffer.from(a.content) : Buffer.from(a.content as ArrayBuffer)) : null;
+              if (!content || content.length > ATTACH_MAX_BYTES) { this.cache.keepAttachment(r.id, other, null, now); skipped++; continue; }
+              await this.storeAttachment(r, other, content, a!.filename ?? other.filename, a!.mimeType || other.mimeType, now);
+              kept++; bytes += content.length;
+            }
+            continue;
+          }
+          this.step(`attachments ${f.kind}: uid ${q.uid} part ${q.section} (${q.size} bytes)`);
+          const got = await c.fetchOne(String(q.uid), { uid: true, bodyParts: [q.section] }, { uid: true });
+          const raw = section(got, q.section);
+          if (!raw) { this.cache.keepAttachment(r.id, q, null, now); skipped++; continue; }
+          const content = decodeTransfer(raw, q.encoding);
+          if (content.length > ATTACH_MAX_BYTES) { this.cache.keepAttachment(r.id, q, null, now); skipped++; continue; }
+          await this.storeAttachment(r, q, content, q.filename, q.mimeType, now);
+          kept++; bytes += content.length;
+        }
+      });
+    }
+    return `${kept} kept (${bytes} bytes)${skipped ? `, ${skipped} skipped` : ''}${expired.length ? `, ${expired.length} expired` : ''}`;
+  }
+
+  /** Seals one attachment into R2 and records it. */
+  private async storeAttachment(r: AccountRow, q: QueuedAttachment, content: Buffer, filename: string, mimeType: string, now: number): Promise<void> {
+    const sealed = encryptBlob(content);
+    const blobKey = `mail-attachments/${r.id}/${crypto.randomUUID()}`;
+    await this.env.BLOBS!.put(blobKey, sealed.blob);
+    this.cache.keepAttachment(r.id, q, { blobKey, keyId: sealed.encKeyId, size: content.length, filename, mimeType }, now);
+  }
+
   /** One attachment's bytes: kept from opening the message, else that part alone, in one FETCH. */
   private async attachment(r: AccountRow, folder: string, uid: number, index: number): Promise<{ content: Buffer; mimeType: string; filename: string }> {
     const opened = this.opened.get(`${r.id}/${folder}/${uid}`);
@@ -1941,6 +2015,15 @@ export class Mail extends DurableObject<MailEnv> {
     // How it was read goes in the request's timing: kept from the open message, its own part, or the whole message parsed.
     const t = timing.getStore();
     if (kept) { if (t) t.read = 'kept'; return kept; }
+    // Kept in R2 by the alarm (the last week's mail): no round trip to the mail server.
+    const stored = this.env.BLOBS ? this.cache.storedAttachment(r.id, folder, uid, index) : null;
+    if (stored) {
+      const object = await this.env.BLOBS!.get(stored.blobKey).catch(() => null);
+      if (object) {
+        if (t) t.read = 'stored';
+        return { content: decryptBlob(Buffer.from(await object.arrayBuffer()), stored.keyId), mimeType: stored.mimeType, filename: stored.filename };
+      }
+    }
     return this.withFolder(r, folder, 'interactive', async (c) => {
       // The plan from the message as opened, else from its cached row, else from the server.
       let plan = opened?.plan ?? this.cache.plan(r.id, folder, uid);
@@ -2106,6 +2189,9 @@ export class Mail extends DurableObject<MailEnv> {
   /** A mail account and everything kept for it. */
   private dropAccount(id: string): void {
     this.forget(id);
+    // Its kept attachments first: their rows go with the cache below.
+    const blobs = this.cache.expireAttachments(id, Number.MAX_SAFE_INTEGER);
+    if (blobs.length && this.env.BLOBS) this.ctx.waitUntil(deleteBlobs(this.env.BLOBS, blobs).catch((err) => console.warn(`[mail] attachments of ${id}: ${(err as Error).message}`)));
     this.sql.exec('DELETE FROM accounts WHERE id = ?', id);
     this.sql.exec('DELETE FROM mail_categories WHERE account_id = ?', id);
     this.sql.exec('DELETE FROM mail_category_overrides WHERE account_id = ?', id);

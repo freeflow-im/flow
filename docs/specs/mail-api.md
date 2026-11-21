@@ -354,6 +354,13 @@ from it and the server is asked only for what is new.
   `GET …/messages/:uid` answers from the cache when the body is there (the flags from the row; the timing line says
   `cache=hit`, else `live`); a message opened from the server whose row is pending or evicted is kept then too. An
   attachment of a cached message is fetched by the stored plan, in one FETCH, with no BODYSTRUCTURE round trip.
+- **Attachments** (2026-11-20): after the bodies, the alarm fetches every attachment (not inline pictures) of the cached
+  mail dated within ATTACH_KEEP_MS = 7 days, newest first, ATTACH_BATCH_BYTES = 32 MB per run, and keeps it in R2
+  (`BLOBS`, `mail-attachments/<account>/<uuid>`) sealed with FLOW_DATA_KEY; `mail_attachments` records each (one R2
+  object for the copies of a message in several folders, by email_id). One over ATTACH_MAX_BYTES = 25 MB, or one the
+  server no longer returns, is marked skipped; a message `planBody` says must be read whole is read whole once for all
+  its attachments. `GET …/attachments/:index` (and Docs' previews of mail) read a kept one from R2 (`read=stored`), else
+  from the server as before. Each run first deletes those of mail older than 7 days; removing an account deletes its own.
 - **Inbox tabs' pages** (`tabList`) take their summaries from the cache (`pageSummaries`): the cached rows, their flags
   checked in one FLAGS fetch (a message the server no longer has is dropped), and only the rest fetched and cached.
   Searches and `unread=1` are not from the cache.
