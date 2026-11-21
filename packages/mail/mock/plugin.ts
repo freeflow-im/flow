@@ -66,6 +66,7 @@ export function createMockApi(empty = false) {
   };
   /** Invitations answered in the mock (by UID): the person's response. */
   const invites = new Map<string, 'accepted' | 'declined' | 'tentative'>();
+  let codeFoundAt: number | null = null;
   const counted = (b: Mailbox) =>
     b.folders.map((f) => {
       const inFolder = b.messages.filter((m) => m.folder === f.path);
@@ -212,11 +213,12 @@ export function createMockApi(empty = false) {
         boxes.delete(b.account.id);
         return { status: 200, json: { ok: true } };
       }
-      const patch = body as Partial<NewAccount> & { tabs?: TabCategory[] };
+      const patch = body as Partial<NewAccount> & { tabs?: TabCategory[]; codeAlerts?: boolean };
       verify(patch);
       if (patch.tabs) b.account = { ...b.account, tabs: (['promotions', 'social', 'updates', 'forums'] as const).filter((t) => patch.tabs!.includes(t)) };
       b.account = { ...b.account, ...(patch.displayName ? { displayName: patch.displayName } : {}), ...(patch.imap ? { imap: patch.imap } : {}), ...(patch.smtp ? { smtp: patch.smtp } : {}) };
       if (patch.password) b.account = { ...b.account, status: 'ok' };
+      if (patch.codeAlerts !== undefined) b.account = { ...b.account, codeAlerts: patch.codeAlerts };
       delete b.account.statusMessage;
       return { status: 200, json: { account: b.account } };
     }
@@ -281,6 +283,15 @@ export function createMockApi(empty = false) {
         await new Promise((r) => setTimeout(r, 150));
         const ids = threadIds(b);
         return { status: 200, json: { messages: page.map((x) => withTab(b, x, summary(x, ids.get(x)))), next: all.length > limit ? page[page.length - 1]!.uid : null } };
+      }
+      if (rest === 'code-alerts') {
+        // The sample sign-in code, as if found while prefetching when the page first asked.
+        if (b.account.codeAlerts === false) return { status: 200, json: { alerts: [] } };
+        codeFoundAt ??= Date.now();
+        const since = Number(q.get('since') ?? 0);
+        const alerts = b.messages.filter((x) => x.folder === 'INBOX' && x.accessCode && codeFoundAt! > since)
+          .map((x) => ({ key: `uid:${x.folder}/${x.uid}`, code: x.accessCode!, folder: x.folder, uid: x.uid, from: x.from?.name || x.from?.address || '', subject: x.subject, foundAt: codeFoundAt! }));
+        return { status: 200, json: { alerts } };
       }
       if (rest === 'tabs') {
         // The badges, as the server counts them from its cache: by the message's tab, after what was seen.

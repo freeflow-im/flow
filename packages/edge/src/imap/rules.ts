@@ -105,6 +105,8 @@ export const AccountPatch = z.object({
   smtp: Server.optional(),
   /** The inbox tabs that are on, besides Primary. Changing only these never re-verifies the login. */
   tabs: z.array(z.enum(TAB_CATEGORIES)).max(8).optional(),
+  /** Desktop notifications of access codes found in new mail. */
+  codeAlerts: z.boolean().optional(),
 });
 const Uids = z.array(z.number().int().positive()).min(1).max(1000);
 export const MuteBody = z.object({ muted: z.boolean() });

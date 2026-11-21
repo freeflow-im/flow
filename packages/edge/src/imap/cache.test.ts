@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import type { FetchMessageObject } from 'imapflow';
-import { ACCESS_CODE_KEEP_MS, ACTIVE_CADENCE_MS, ACTIVE_MS, BODY, TAB_CADENCE_MS, TAB_IDLE_CADENCE_MS, TAB_IDLE_MS, TAB_OPEN_MS, MailCache, cadenceMs, flagDiff, nextAlarmAt, threadPageSql, walkDown, type Flags, type NewRow, type Sql } from './cache';
+import { ACCESS_CODE_KEEP_MS, CODE_ALERT_KEEP_MS, ACTIVE_CADENCE_MS, ACTIVE_MS, BODY, TAB_CADENCE_MS, TAB_IDLE_CADENCE_MS, TAB_IDLE_MS, TAB_OPEN_MS, MailCache, cadenceMs, flagDiff, nextAlarmAt, threadPageSql, walkDown, type Flags, type NewRow, type Sql } from './cache';
 import { effectiveSql } from './categorize';
 import { toSummary } from './convert';
 
@@ -572,5 +572,20 @@ describe('access codes', () => {
     cache.setAccessCode(A, 'id:<c@x>', 'ZX81', 1000 + ACCESS_CODE_KEEP_MS + 1);
     expect(cache.accessCodeChecked(A, 'id:<a@x>')).toBe(false);
     expect(cache.accessCodes(A, ['id:<c@x>']).get('id:<c@x>')).toBe('ZX81');
+  });
+});
+
+describe('code alerts', () => {
+  it('lists the alerts found after `since`, newest first, per account, and drops old ones', () => {
+    const cache = cacheWith([]);
+    const alert = (key: string, foundAt: number) => ({ key, code: '482-913', folder: 'INBOX', uid: 7, from: 'Acme', subject: 'Your code', foundAt });
+    cache.addCodeAlert(A, alert('id:<a@x>', 1000));
+    cache.addCodeAlert(A, alert('id:<b@x>', 2000));
+    expect(cache.codeAlerts(A, 0).map((a) => a.key)).toEqual(['id:<b@x>', 'id:<a@x>']);
+    expect(cache.codeAlerts(A, 1000).map((a) => a.key)).toEqual(['id:<b@x>']);
+    expect(cache.codeAlerts('other', 0)).toEqual([]);
+    expect(cache.codeAlerts(A, 1500)[0]).toEqual(alert('id:<b@x>', 2000));
+    cache.addCodeAlert(A, alert('id:<c@x>', 2001 + CODE_ALERT_KEEP_MS));
+    expect(cache.codeAlerts(A, 0).map((a) => a.key)).toEqual(['id:<c@x>']);
   });
 });

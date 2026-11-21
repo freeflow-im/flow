@@ -42,10 +42,14 @@ export const TAB_IDLE_MS = 24 * 60 * 60_000;
 export const TAB_IDLE_CADENCE_MS = 15 * 60_000;
 /** A folder opened in the list stays cached this long after it was last looked at (the main folders always are). */
 export const RECENT_MS = 7 * 24 * 60 * 60_000;
+/** A code found while prefetching (`mail_code_alerts`): `from` is the sender's name or address. */
+export interface CodeAlert { key: string; code: string; folder: string; uid: number; from: string; subject: string; foundAt: number }
 /** How long a found access code (or "none") is kept: the codes are for minutes, the row only stops a second scan. */
 export const ACCESS_CODE_KEEP_MS = 7 * 24 * 60 * 60_000;
 /** How new a message must be for its access code to be looked for: an older code has expired. */
 export const ACCESS_CODE_NEW_MS = 24 * 60 * 60_000;
+/** A code alert is kept this long: a code is rarely good for more than a few minutes. */
+export const CODE_ALERT_KEEP_MS = 60 * 60_000;
 /** A folder whose sync failed is left alone this long. */
 export const ERROR_BACKOFF_MS = 10 * 60_000;
 /** A folder the alarm synced this recently is served as it stands: no new-mail, tab-sort or flags round trip for a page. */
@@ -146,6 +150,10 @@ export const DDL = [
   // Access codes found in new INBOX mail (accessCode.ts), by the message's key (`accessCodeKey`): `code` is '' when the
   // message was asked about and has none, so it is asked about once. Rows older than ACCESS_CODE_KEEP_MS are dropped.
   `CREATE TABLE IF NOT EXISTS mail_access_codes (account_id TEXT NOT NULL, message_key TEXT NOT NULL, code TEXT NOT NULL, checked_at INTEGER NOT NULL, PRIMARY KEY (account_id, message_key))`,
+  // Codes found while prefetching (before the person opened the message), for the Mail page to show as desktop
+  // notifications (`GET /v1/mail/accounts/:id/code-alerts`). Rows older than CODE_ALERT_KEEP_MS are dropped.
+  `CREATE TABLE IF NOT EXISTS mail_code_alerts (account_id TEXT NOT NULL, message_key TEXT NOT NULL, code TEXT NOT NULL, folder TEXT NOT NULL, uid INTEGER NOT NULL,
+    sender TEXT NOT NULL, subject TEXT NOT NULL, found_at INTEGER NOT NULL, PRIMARY KEY (account_id, message_key))`,
   // Attachments kept in R2 (ATTACH_KEEP_MS): one row per message's attachment, the same R2 object shared by the copies of
   // one message in several folders (Gmail's labels, by email_id). `date` is the message's, for the expiry.
   `CREATE TABLE IF NOT EXISTS mail_attachments (account_id TEXT NOT NULL, folder TEXT NOT NULL, uid_validity TEXT NOT NULL, uid INTEGER NOT NULL, idx INTEGER NOT NULL,
@@ -432,6 +440,20 @@ export class MailCache {
     if (!keys.length) return new Map();
     return new Map(this.sql.exec<{ message_key: string; code: string }>("SELECT message_key, code FROM mail_access_codes WHERE account_id = ? AND code != '' AND message_key IN (SELECT value FROM json_each(?))",
       accountId, JSON.stringify([...new Set(keys)])).toArray().map((r) => [r.message_key, r.code]));
+  }
+
+  /** A code found while prefetching, for a desktop notification; old alerts are dropped. */
+  addCodeAlert(accountId: string, a: CodeAlert): void {
+    this.sql.exec('INSERT OR REPLACE INTO mail_code_alerts (account_id, message_key, code, folder, uid, sender, subject, found_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      accountId, a.key, a.code, a.folder, a.uid, a.from, a.subject, a.foundAt);
+    this.sql.exec('DELETE FROM mail_code_alerts WHERE found_at < ?', a.foundAt - CODE_ALERT_KEEP_MS);
+  }
+
+  /** The code alerts found after `since`, newest first. */
+  codeAlerts(accountId: string, since: number): CodeAlert[] {
+    return this.sql.exec<{ message_key: string; code: string; folder: string; uid: number; sender: string; subject: string; found_at: number }>(
+      'SELECT message_key, code, folder, uid, sender, subject, found_at FROM mail_code_alerts WHERE account_id = ? AND found_at > ? ORDER BY found_at DESC LIMIT 20', accountId, since)
+      .toArray().map((r) => ({ key: r.message_key, code: r.code, folder: r.folder, uid: r.uid, from: r.sender, subject: r.subject, foundAt: r.found_at }));
   }
 
   // ---- muted threads ----------------------------------------------------------------------------------------------
@@ -849,6 +871,7 @@ export class MailCache {
     this.sql.exec('DELETE FROM mail_thread_index WHERE account_id = ?', accountId);
     this.sql.exec('DELETE FROM mail_muted_threads WHERE account_id = ?', accountId);
     this.sql.exec('DELETE FROM mail_access_codes WHERE account_id = ?', accountId);
+    this.sql.exec('DELETE FROM mail_code_alerts WHERE account_id = ?', accountId);
     this.sql.exec('DELETE FROM mail_attachments WHERE account_id = ?', accountId);
   }
 
