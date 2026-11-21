@@ -41,6 +41,7 @@ import { VideoDialog } from '../components/VideoDialog.tsx';
 import { SheetTableDialog } from '../deck/SheetTableDialog.tsx';
 import { SheetChartDialog } from '../deck/SheetChartDialog.tsx';
 import { useLinkedTables } from '../deck/linkedTables.ts';
+import { initialSlide, useSlideFragment } from '../deck/slideFragment.ts';
 import { PresentMode } from '../deck/PresentMode.tsx';
 import { useAuth } from '../auth.tsx';
 import { onBeforeLeave } from '../suite.ts';
@@ -106,6 +107,8 @@ export function DeckPage() {
           },
         });
         ctl = new DeckController(deck, sync.save);
+        // An address with #slide=N opens at that slide (deck/slideFragment.ts).
+        ctl.current = initialSlide(deck.slides.length);
         stopSync = sync.attach(ctl);
         // A PowerPoint file only takes the changes it can hold, and none while it waits for the user's
         // yes to removing what the app cannot keep (useOfficeFile).
@@ -157,6 +160,7 @@ function DeckWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta
   // The suite bar's Log out saves first, as Sign out here did.
   useEffect(() => onBeforeLeave(() => ctl.saver.flush()), [ctl]);
   useDeckController(ctl);
+  useSlideFragment(ctl.current, ctl.deck.slides.length, (i) => ctl.goTo(i));
   useDeckFonts(ctl.deck);
   useFavicon('deck');
   const navigate = useNavigate();
@@ -165,7 +169,7 @@ function DeckWorkbench({ initialMeta, initialNotKept, ctl, sync }: { initialMeta
   const [importWarnings, setImportWarnings] = useState<string[]>(() => (location.state as { importWarnings?: string[] } | null)?.importWarnings ?? []);
   const dismissImportWarnings = () => {
     setImportWarnings([]);
-    if (location.state) navigate(location.pathname, { replace: true, state: null });
+    if (location.state) navigate(location.pathname + window.location.hash, { replace: true, state: null });
   };
   const [meta, setMeta] = useState(initialMeta);
   useRegisterDeck(ctl, meta);

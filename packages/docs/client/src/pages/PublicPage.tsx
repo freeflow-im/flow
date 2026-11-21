@@ -8,6 +8,7 @@ import { HomeIcon } from '../components/Logo.tsx';
 import { useDeckFonts } from '../deck/fonts.ts';
 import { PresentMode } from '../deck/PresentMode.tsx';
 import { SlideView } from '../deck/SlideView.tsx';
+import { initialSlide, useSlideFragment } from '../deck/slideFragment.ts';
 import { useFavicon } from '../favicon.ts';
 
 // Room around the slide: the page's header and the bar under the slide, and the margins.
@@ -16,10 +17,11 @@ const MARGIN_W = 32;
 
 function PublicDeck({ deck }: { deck: Deck }) {
   useDeckFonts(deck);
-  const [index, setIndex] = useState(0);
+  const [index, setIndex] = useState(() => initialSlide(deck.slides.length));
   const [presenting, setPresenting] = useState(false);
   const [size, setSize] = useState({ w: window.innerWidth, h: window.innerHeight });
   const n = deck.slides.length;
+  useSlideFragment(index, n, setIndex);
 
   useEffect(() => {
     const onResize = () => setSize({ w: window.innerWidth, h: window.innerHeight });

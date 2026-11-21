@@ -42,14 +42,14 @@ if (PREVIEW) document.documentElement.classList.add('file-preview-page');
 
 /** In the suite, the sign-in is the suite's own page at /, which comes back here (?next=) once signed in. */
 function toSuiteSignIn(): null {
-  window.location.assign(`/?next=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`);
+  window.location.assign(`/?next=${encodeURIComponent(`${window.location.pathname}${window.location.search}${window.location.hash}`)}`);
   return null;
 }
 
 function RequireAuth({ children }: { children: ReactElement }) {
   const { user, loading, suite } = useAuth();
   if (loading) return <div className="page-loading">Loading…</div>;
-  if (!user) return suite ? toSuiteSignIn() : <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  if (!user) return suite ? toSuiteSignIn() : <Navigate to="/login" replace state={{ from: location.pathname + location.hash }} />;
   return children;
 }
 
