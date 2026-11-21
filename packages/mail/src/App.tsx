@@ -36,6 +36,7 @@ import { folderDropTarget, tabDropTarget, useCanDrag } from './lib/dnd';
 import { TAB_INFO, reasonText, tabFromParam, tabsOf, writeTabParam, markTabSeen, readTabSeen, type TabSeen } from './lib/tabs';
 import { expandedByDefault, groupByThread, replyTarget, sendingCopy, soloThreadId } from './lib/threads';
 import { cn } from './lib/utils';
+import { startAction, useTimedLoad } from './lib/perf';
 
 // The editor (TipTap) is most of the code: it loads when compose first opens.
 const Compose = lazy(() => import('./components/Compose').then((m) => ({ default: m.Compose })));
@@ -171,6 +172,27 @@ export function App() {
   const rowOf = useCallback((id: string | null) => (id === null ? undefined : rows.find((t) => t.threadId === id)), [rows]);
   const thread = useThread(account?.id ?? null, openId, folder);
   const actions = useMessageActions(account?.id ?? null, folder);
+
+  // Timings (lib/perf.ts): a list until its rows show, a conversation until the bodies that open with it show, and the
+  // page itself until its first list shows (a switch from another app of the suite is a page load).
+  const listState = listing.isError ? 'error' : listing.data ? 'ok' : 'loading';
+  useTimedLoad(q ? 'list.search' : 'list.folder', account && folder ? `${account.id}|${folder}|${category ?? ''}|${q}` : null, listState);
+  const pageTimed = useRef(false);
+  useEffect(() => {
+    if (pageTimed.current || listState === 'loading') return;
+    pageTimed.current = true;
+    startAction('page.load', { t0: 0 }).end(listState === 'ok');
+  }, [listState]);
+  const threadState = useMemo(() => {
+    const t = thread.data;
+    if (thread.isError) return 'error' as const;
+    if (!t || t.threadId !== openId) return 'loading' as const;
+    const opened = expandedByDefault(t.messages);
+    const shown = t.messages.filter((_, i) => opened.has(i));
+    if (shown.some((m) => m.bodyPending && !m.bodyFailed)) return 'loading' as const;
+    return shown.some((m) => m.bodyFailed) ? ('error' as const) : ('ok' as const);
+  }, [thread.data, thread.isError, openId]);
+  useTimedLoad('thread.open', account && openId ? `${account.id}|${openId}` : null, threadState);
 
   // A link to one message: its thread, from the list when it is there, else asked of the server (a message the server
   // does not place in a thread opens on its own).

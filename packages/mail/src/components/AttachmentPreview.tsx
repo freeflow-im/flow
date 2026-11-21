@@ -3,7 +3,7 @@
 // What is shown depends on the file (lib/preview.ts): the browser shows pictures, video and audio; Docs shows PDFs and
 // Office, CSV and Markdown files read-only, from a preview it makes of the bytes (/docs/preview/<id>, framed here);
 // text and HTML are shown as text, an HTML page also in a frame where nothing runs.
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, Code, Download, ExternalLink, FileText, Globe, Loader2, Save, X } from 'lucide-react';
 import { attachmentUrl, previewApi, previewPageUrl, type AttachmentSummary, type DocsPreview, type SavedToDocs } from '../api';
@@ -11,6 +11,7 @@ import { fileSize } from '../lib/format';
 import { inertHtml, isSvg, MAX_PREVIEW_BYTES, previewLimit, typeLabel, viewerFor } from '../lib/preview';
 import { readActiveOrganization } from '../suite';
 import { cn } from '../lib/utils';
+import { useTimedLoad } from '../lib/perf';
 import { FileIcon } from './FileIcon';
 
 /** What Docs' preview page sends up when a key is pressed in its frame (packages/docs/client/src/pages/PreviewPage.tsx). */
@@ -25,6 +26,16 @@ export type PreviewMessage = { folder: string; uid: number };
 type Attachment = AttachmentSummary;
 
 const keyOf = (accountId: string, m: PreviewMessage, a: Attachment) => `${accountId}\u0000${m.folder}\u0000${m.uid}\u0000${a.index}`;
+
+/** Told by the viewer once the file is on screen (true) or could not be shown (false): the end of its timing (lib/perf.ts). */
+const ShownSignal = createContext<(ok: boolean) => void>(() => {});
+/** Says the file is shown, once, when `ok` stops being null. */
+function useShown(ok: boolean | null) {
+  const shown = useContext(ShownSignal);
+  useEffect(() => {
+    if (ok !== null) shown(ok);
+  }, [ok, shown]);
+}
 
 function docsPreview(accountId: string, m: PreviewMessage, a: Attachment): Promise<Made> {
   const key = keyOf(accountId, m, a);
@@ -59,6 +70,10 @@ export function AttachmentPreview({ accountId, message, files, index, onIndex, o
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [saving, setSaving] = useState<Record<string, 'saving' | SavedToDocs | { error: string }>>({});
   const saveState = saving[keyOf(accountId, message, a)];
+  const fileKey = keyOf(accountId, message, a);
+  const [shownAs, setShownAs] = useState<{ key: string; ok: boolean } | null>(null);
+  const onShown = useCallback((ok: boolean) => setShownAs((s) => (s?.key === fileKey ? s : { key: fileKey, ok })), [fileKey]);
+  useTimedLoad(`attachment.${viewer}`, fileKey, shownAs?.key !== fileKey ? 'loading' : shownAs.ok ? 'ok' : 'error');
 
   const prev = index > 0 ? () => onIndex(index - 1) : null;
   const next = index < files.length - 1 ? () => onIndex(index + 1) : null;
@@ -173,7 +188,9 @@ export function AttachmentPreview({ accountId, message, files, index, onIndex, o
       )}
       <div className="relative min-h-0 flex-1" onClick={(e) => e.target === e.currentTarget && onClose()}>
         <div className="absolute inset-0 flex items-center justify-center px-2 pb-2 sm:px-16 sm:pb-6" onClick={(e) => e.target === e.currentTarget && onClose()}>
-          <Shown key={keyOf(accountId, message, a)} accountId={accountId} message={message} a={a} viewer={viewer} download={download} frameRef={frameRef} />
+          <ShownSignal.Provider value={onShown}>
+            <Shown key={fileKey} accountId={accountId} message={message} a={a} viewer={viewer} download={download} frameRef={frameRef} />
+          </ShownSignal.Provider>
         </div>
         {prev && <NavButton side="left" label="Previous attachment (←)" onClick={prev} />}
         {next && <NavButton side="right" label="Next attachment (→)" onClick={next} />}
@@ -190,12 +207,12 @@ function Shown({ accountId, message, a, viewer, download, frameRef }: { accountI
     case 'image':
       return <Picture a={a} url={attachmentUrl(accountId, message.folder, message.uid, a.index, true)} />;
     case 'video':
-      return <video className="max-h-full max-w-full rounded bg-black" src={download} controls autoPlay playsInline aria-label={a.filename} />;
+      return <Media kind="video" src={download} label={a.filename} />;
     case 'audio':
       return (
         <div className="flex w-full max-w-md flex-col items-center gap-4 rounded-xl bg-white/10 p-6">
           <div className="truncate text-sm">{a.filename}</div>
-          <audio className="w-full" src={download} controls autoPlay aria-label={a.filename} />
+          <Media kind="audio" src={download} label={a.filename} />
         </div>
       );
     case 'docs':
@@ -208,11 +225,21 @@ function Shown({ accountId, message, a, viewer, download, frameRef }: { accountI
   }
 }
 
+/** A video or a sound, shown once it has its first frame. */
+function Media({ kind, src, label }: { kind: 'video' | 'audio'; src: string; label: string }) {
+  const [ok, setOk] = useState<boolean | null>(null);
+  useShown(ok);
+  const props = { src, controls: true, autoPlay: true, 'aria-label': label, onLoadedData: () => setOk(true), onError: () => setOk(false) };
+  return kind === 'video' ? <video className="max-h-full max-w-full rounded bg-black" playsInline {...props} /> : <audio className="w-full" {...props} />;
+}
+
 /** A picture: an SVG from a blob of its own type (as an <img>, which runs nothing in it), others from the server inline. */
 function Picture({ a, url }: { a: Attachment; url: string }) {
   const svg = isSvg(a);
   const [src, setSrc] = useState<string | null>(svg ? null : url);
   const [failed, setFailed] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  useShown(failed ? false : loaded ? true : null);
   useEffect(() => {
     if (!svg) return;
     let objectUrl: string | null = null;
@@ -232,13 +259,14 @@ function Picture({ a, url }: { a: Attachment; url: string }) {
   }, [svg, url]);
   if (failed) return <Message>This picture could not be shown.</Message>;
   if (!src) return <Spinner />;
-  return <img src={src} alt={a.filename} className="max-h-full max-w-full bg-[repeating-conic-gradient(#3c4043_0_25%,#2d2e30_0_50%)] bg-[length:16px_16px] object-contain shadow-2xl" onError={() => setFailed(true)} />;
+  return <img src={src} alt={a.filename} className="max-h-full max-w-full bg-[repeating-conic-gradient(#3c4043_0_25%,#2d2e30_0_50%)] bg-[length:16px_16px] object-contain shadow-2xl" onLoad={() => setLoaded(true)} onError={() => setFailed(true)} />;
 }
 
 /** Docs' read-only view of the file, from the preview Docs makes of it. */
 function DocsFrame({ accountId, message, a, download, frameRef }: { accountId: string; message: PreviewMessage; a: Attachment; download: string; frameRef: React.RefObject<HTMLIFrameElement | null> }) {
   const [state, setState] = useState<{ url: string } | { error: string } | null>(null);
   const [loaded, setLoaded] = useState(false);
+  useShown(state && 'error' in state ? false : loaded ? true : null);
   useEffect(() => {
     let gone = false;
     docsPreview(accountId, message, a).then(
@@ -276,6 +304,7 @@ function TextView({ a, url, html }: { a: Attachment; url: string; html: boolean 
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [asPage, setAsPage] = useState(false);
+  useShown(error ? false : text !== null ? true : null);
   useEffect(() => {
     let gone = false;
     fetch(url, { credentials: 'same-origin' })
@@ -324,6 +353,7 @@ function ToggleButton({ on, onClick, children }: { on: boolean; onClick(): void;
 }
 
 function NoPreview({ a, download, why }: { a: Attachment; download: string; why: string }) {
+  useShown(true);
   return (
     <div className="flex max-w-sm flex-col items-center gap-3 rounded-xl bg-[#3c4043] px-8 py-8 text-center shadow-2xl">
       <FileText className="size-12 text-[#8ab4f8]" strokeWidth={1.25} />

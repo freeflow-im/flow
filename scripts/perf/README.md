@@ -54,3 +54,25 @@ temporary folder in `packages/docs`; delete it afterwards with `wrangler delete`
 - Loading a library late (`import()`) does not help while it is in the same script: the two 5 MB Workers stall alike.
 - So the fix is a smaller script: minify it (12.0 MB), and move what a page load never uses (the assistant's AI
   libraries, browser control, PDF and Office conversion) to a Worker of its own.
+
+## Stored logs (Mail and Calendar), from 2026-11-20
+
+Workers Logs (`[observability]` in `packages/edge/wrangler.toml`) keeps every record below, so a slow moment can be looked
+up afterwards: Cloudflare dashboard → Workers & Pages → freeflow-edge → Logs, then filter on the fields.
+
+- **One record per Mail and Calendar request** (`perf = request`): `app`, `route` (ids taken out), `status`, `ms`, the
+  object's split (`wait` = lock and connection wait, `imap`, `server` = Calendar's upstream time, `cache`), `ray`,
+  `colo`, and `isolateAgeMs` / `isolateRequest` (a request in an isolate's first seconds, or its first, paid a cold start).
+- **One record per thing a person did in Mail** (`perf = client`), sent by the browser to `POST /v1/perf`
+  (`packages/mail/src/lib/perf.ts`): `action` is `page.load`, `list.folder`, `list.search`, `thread.open`,
+  `attachment.<viewer>` or `invite.card`; `ms` runs from its start until its result is painted. `cached` means the
+  data was already in the browser; `hidden` means the page was hidden, so the browser slowed it (leave those out).
+  `calls` lists every call that ran meanwhile, with `queuedMs` (held in the browser), `waitMs` (waiting for the server),
+  the server's split and its `ray`, which finds that call's request record.
+- Every Mail and Calendar response carries `Server-Timing` (`total`, `lock`, `imap`, `upstream`, `cache`, `ray`), so
+  DevTools' Network → Timing tab shows the server's split of one call. In the console, `window.__flowPerf` holds the
+  page's last 50 timings.
+
+Reading a slow action: large `queuedMs` = the browser held the call (too many calls at once, e.g. every query reloading
+when the window gets focus); large `waitMs` with a small server `total` = time before the Worker answered (cold start,
+network); a large `lock` = waiting behind another IMAP operation on that account; a large `imap` = the mail server.

@@ -1,12 +1,13 @@
 // FreeFlow Mail's API, /v1/mail/* (docs/specs/mail-api.md): the caller is authenticated here, then the request goes to
 // the Mail object of their account in the organization named (src/imap/object.ts, platform.md §3.6), which holds the
 // mail accounts connected there. Only the provider presets are answered here.
-// Each request logs one timing line here, not in the object: see `Mail.handle`.
+// Each request logs one timing record here, not in the object (see `Mail.handle`), and answers with Server-Timing (src/perf.ts).
 import { Hono, type Context } from 'hono';
 import { SetLinkedAddressBody, type AccountDTO } from '@flow/shared';
 import type { Mail } from '../imap/object';
 import { TIMING_HEADER, providerFor, timingLine } from '../imap/rules';
 import { ApiError, badRequest, unauthorized } from '../errors';
+import { parseParts, rayOf, requestRecord, serverTiming } from '../perf';
 import { directory, resolveAccountCaller, resolveCaller, type AuthEnv } from './auth';
 
 export interface MailRouteEnv extends AuthEnv { MAIL: DurableObjectNamespace<Mail>; MAIL_ALLOW_INSECURE?: string }
@@ -64,13 +65,15 @@ mailRoutes.all('/v1/mail/*', async (c) => {
     const linking = /^\/v1\/mail\/accounts(\/[^/]+)?$/.test(new URL(c.req.url).pathname) && ((c.req.method === 'POST' && status === 201) || (c.req.method === 'DELETE' && status === 200));
     if (linking) c.executionCtx.waitUntil(followLinked(c, who.account).catch((err: Error) => console.error(`linked address ${who.account.id}: ${err.message}`)));
     const out = new Response(res.body, res);
-    // The timing is for the log line; the e2e (local dev only) reads it from the header.
+    // The timing is for the log line; the e2e (local dev only) reads it from the header. The browser gets it as Server-Timing.
     if (c.env.MAIL_ALLOW_INSECURE !== '1') out.headers.delete(TIMING_HEADER);
+    out.headers.set('Server-Timing', serverTiming(Date.now() - start, parseParts(timing), rayOf(c.req.raw)));
     return out;
   } catch (err) {
     if (err instanceof ApiError) status = err.statusCode;
     throw err;
   } finally {
-    console.log(timingLine(c.req.method, c.req.url, status, Date.now() - start, timing));
+    const ms = Date.now() - start;
+    console.log(requestRecord('mail', timingLine(c.req.method, c.req.url, status, ms, timing), c.req.raw, status, ms, parseParts(timing)));
   }
 });
