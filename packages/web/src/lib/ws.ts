@@ -15,6 +15,9 @@ export interface SocketHandlers {
    * is how a DM ring answered here is told apart from the same ring answered on
    * your phone (#436). Fires again on every reconnect — the id is new each time. */
   onSession?(sessionId: string): void;
+  /** A socket said hello: its server now sends a fresh presence snapshot, so the presence it gave before is stale.
+   * `workspaceId` names the one organization that socket serves; null means a socket that serves them all. */
+  onConnected?(workspaceId: string | null): void;
 }
 
 // How long silence from the server means the socket is dead (#271). The
@@ -186,6 +189,7 @@ export class SocketClient {
         this.backoff = 500;
         this.connectedBefore = true;
         this.handlers.onSession?.(frame.sessionId);
+        this.handlers.onConnected?.(null);
         this.handlers.onStatus('connected');
       } else if (frame.op === 'event') {
         if (this.cursors.accept(this.url, frame.seq)) this.handlers.onEvent(frame.event);
