@@ -612,7 +612,7 @@ describe('every turn with no page open runs its tools (decision_log 2026-11-17)'
     expect(shared).toEqual([expect.objectContaining({ body: 'You have no channels in common with me.', invokedBy: 'acct-1' })]);
     // Each of the two model calls is counted for Omni's own account, whoever asked (Admin › Members › Usage).
     await new Promise((r) => setTimeout(r, 0));
-    expect(usage).toEqual([{ accountId: 'acct-omni', u: { input: 10, output: 5 } }, { accountId: 'acct-omni', u: { input: 10, output: 5 } }]);
+    expect(usage).toEqual([{ accountId: 'acct-omni', u: { input: 10, output: 5, cacheWrite: 0, cacheRead: 0, model: 'scripted' } }, { accountId: 'acct-omni', u: { input: 10, output: 5, cacheWrite: 0, cacheRead: 0, model: 'scripted' } }]);
   });
 });
 

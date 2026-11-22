@@ -67,8 +67,8 @@ const orgOf = (c: C, organizationId: string) => c.env.ORG.get(c.env.ORG.idFromNa
   addHostedPersonalAgent(account: AccountDTO): Promise<void>;
   renameAssistant(agentId: string, name: string, address: string | null): Promise<void>;
   dropPersonalAgent(userId: string): Promise<void>;
-  recordAgentUsage(accountId: string, usage: { input: number; output: number; requests?: number }): Promise<void>;
-  agentUsage(accountId: string, range: AgentUsageRange, tzOffsetMinutes?: number): Promise<AgentUsageDTO>;
+  recordAgentUsage(accountId: string, usage: { input: number; output: number; cacheWrite?: number; cacheRead?: number; requests?: number; model?: string }): Promise<void>;
+  agentUsage(accountId: string, range: AgentUsageRange, tzOffsetMinutes?: number, model?: string | null): Promise<AgentUsageDTO>;
 };
 
 /** The caller's own hosted agents here (agents.md §1.3): their assistant first (`self`), then the others they made. */
@@ -194,7 +194,7 @@ agentRoutes.put('/v1/workspaces/:id/agents/:userId/definition', async (c) => {
 
 /**
  * An agent's AI usage (Taskboard #22), for Admin › Members › Usage: its model tokens over the last day by hour, or the last
- * 7 or 30 days by day, in thousands. Owners and admins only, like the Members page; any agent of the organization, hosted
+ * 7 or 30 days by day, in thousands, with each model's totals (`?model=` filters to one). Owners and admins only, like the Members page; any agent of the organization, hosted
  * or on the bridge (an agent on bare /mcp reports nothing, so its chart is empty). `tz`: the viewer's minutes east of UTC.
  */
 agentRoutes.get('/v1/workspaces/:id/agents/:userId/usage', async (c) => {
@@ -205,10 +205,12 @@ agentRoutes.get('/v1/workspaces/:id/agents/:userId/usage', async (c) => {
   const tz = Number(c.req.query('tz') ?? 0);
   const account = await directory(c, 'accountFor', c.req.param('userId'), organizationId);
   if (!account || !account.agentMode) throw notFound('no such agent here');
-  return c.json(await orgOf(c, organizationId).agentUsage(account.id, range, Number.isFinite(tz) ? tz : 0));
+  // `model` present (even empty, for usage with no model known) filters the buckets and total; absent means every model.
+  const model = c.req.query('model');
+  return c.json(await orgOf(c, organizationId).agentUsage(account.id, range, Number.isFinite(tz) ? tz : 0, model === undefined ? null : model));
 });
 
-const UsageReport = z.object({ inputTokens: z.number().int().min(0), outputTokens: z.number().int().min(0), requests: z.number().int().min(1).max(10_000).optional() });
+const UsageReport = z.object({ inputTokens: z.number().int().min(0), outputTokens: z.number().int().min(0), cacheWriteTokens: z.number().int().min(0).optional(), cacheReadTokens: z.number().int().min(0).optional(), requests: z.number().int().min(0).max(10_000).optional(), model: z.string().max(200).optional() });
 
 /** An agent on the bridge reports a turn's tokens (its CLI's own count); a hosted agent's runtime records its own. */
 agentRoutes.post('/v1/workspaces/:id/agents/me/usage', async (c) => {
@@ -219,6 +221,8 @@ agentRoutes.post('/v1/workspaces/:id/agents/me/usage', async (c) => {
   if (!who.user.isAgent || !who.account) throw forbidden('only an agent of this organization reports its usage');
   const r = UsageReport.safeParse(await c.req.json().catch(() => undefined));
   if (!r.success) throw badRequest('validation', r.error.issues[0]?.message ?? 'invalid request');
-  await orgOf(c, organizationId).recordAgentUsage(who.account.id, { input: r.data.inputTokens, output: r.data.outputTokens, ...(r.data.requests ? { requests: r.data.requests } : {}) });
+  const d = r.data;
+  // inputTokens is the uncached input; a bridge older than 0.44 sends all of it there, with no cache counts.
+  await orgOf(c, organizationId).recordAgentUsage(who.account.id, { input: d.inputTokens, output: d.outputTokens, cacheWrite: d.cacheWriteTokens ?? 0, cacheRead: d.cacheReadTokens ?? 0, ...(d.requests !== undefined ? { requests: d.requests } : {}), ...(d.model ? { model: d.model } : {}) });
   return c.json({ ok: true });
 });

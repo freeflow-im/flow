@@ -202,7 +202,7 @@ export class FlowApi {
   }
 
   /** A turn's model tokens, for the organization's usage count (Admin › Members › Usage). */
-  async reportUsage(workspaceId: string, usage: { inputTokens: number; outputTokens: number }): Promise<void> {
+  async reportUsage(workspaceId: string, usage: { model?: string; inputTokens: number; outputTokens: number; cacheWriteTokens: number; cacheReadTokens: number; requests?: number }): Promise<void> {
     await this.req('POST', `/v1/workspaces/${encodeURIComponent(workspaceId)}/agents/me/usage`, usage);
   }
 

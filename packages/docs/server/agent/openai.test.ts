@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../app.ts';
 import { mailbox, signUp } from '../testing.ts';
 import type { ModelCall } from './agent.ts';
-import { toInput, toMessage, toRequest } from './openai.ts';
+import { openAiUsage, toInput, toMessage, toRequest } from './openai.ts';
 import { SettingsError } from './settings.ts';
 
 type Params = Parameters<ModelCall>[0];
@@ -99,6 +99,8 @@ describe('OpenAI translation', () => {
     ]);
     expect(msg.stop_reason).toBe('tool_use');
     expect(msg.usage).toMatchObject({ input_tokens: 12, output_tokens: 7 });
+    // Cached input is kept apart, as Claude's usage keeps it.
+    expect(openAiUsage({ input_tokens: 1000, input_tokens_details: { cached_tokens: 800 }, output_tokens: 9 } as never)).toEqual({ input_tokens: 200, output_tokens: 9, cache_read_input_tokens: 800 });
   });
 
   it('turns deferred tools and the tool search into OpenAI\'s, and replays a search with what it loaded', () => {

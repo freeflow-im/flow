@@ -64,8 +64,9 @@ export interface AgentOptions {
   guidance?: readonly string[];
   /** A block a host adds to each new user message after the context (the suite: the agent's memory files), or null. */
   notes?: (userId: string, scope: ScopeArg) => string | null;
-  /** Every model call's tokens, whoever's key paid for it (the suite: the agent's AI usage, Admin › Members › Usage). */
-  onUsage?: (userId: string, usage: Message['usage']) => void;
+  /** Every model call's tokens, whoever's key paid for it, and the model that answered (the suite: the agent's AI usage,
+   * Admin › Members › Usage). */
+  onUsage?: (userId: string, usage: Message['usage'], model: string) => void;
 }
 
 /** The pages of this app a turn may come from. */
@@ -315,7 +316,7 @@ export class AgentService {
       }
       if (!own) this.store.recordUsage(userId, message.usage);
       try {
-        this.onUsage?.(userId, message.usage);
+        this.onUsage?.(userId, message.usage, message.model);
       } catch {
         // Counting is never a reason to fail the turn.
       }

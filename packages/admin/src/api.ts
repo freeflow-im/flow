@@ -194,8 +194,9 @@ export const adminApi = {
   myAgents: (id: string) => request<{ agents: UsableAgentDTO[]; limit: number }>('GET', `${ws(id)}/agents/mine`),
   makePersonalAgent: (id: string, body: { name: string; instructions?: string }) => request<{ agent: UsableAgentDTO; definition: AgentDefinitionDTO }>('POST', `${ws(id)}/agents/personal`, body),
   removeMyAgent: (id: string, userId: string) => request<{ account: AccountDTO }>('DELETE', `${ws(id)}/agents/personal/${encodeURIComponent(userId)}`),
-  // An agent's AI usage (Members › Usage): its model tokens in thousands, by hour for a day or by day for 7 or 30; `tz` puts a day at the viewer's midnight.
-  agentUsage: (id: string, userId: string, range: AgentUsageRange) => request<AgentUsageDTO>('GET', `${ws(id)}/agents/${encodeURIComponent(userId)}/usage?range=${range}&tz=${-new Date().getTimezoneOffset()}`),
+  // An agent's AI usage (Members › Usage): its model tokens in thousands, by hour for a day or by day for 7 or 30, and per model; `tz` puts a day at the viewer's midnight.
+  // `model`: one model's usage (its id, '' for usage with no model known); null for every model.
+  agentUsage: (id: string, userId: string, range: AgentUsageRange, model: string | null = null) => request<AgentUsageDTO>('GET', `${ws(id)}/agents/${encodeURIComponent(userId)}/usage?range=${range}&tz=${-new Date().getTimezoneOffset()}${model === null ? '' : `&model=${encodeURIComponent(model)}`}`),
   // An agent's memory files (docs/specs/agents.md §6.1): what the caller may see of them, edit, and delete.
   agentMemory: (id: string, userId: string) => request<{ files: MemoryFileDTO[]; shared: boolean; mayEditTeam: boolean }>('GET', `${ws(id)}/agents/${encodeURIComponent(userId)}/memory`),
   saveAgentMemory: (id: string, userId: string, body: { path: string; body: string }) => request<{ ok: true }>('PUT', `${ws(id)}/agents/${encodeURIComponent(userId)}/memory`, body),

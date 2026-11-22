@@ -144,8 +144,16 @@ export function toMessage(res: OpenAI.Responses.Response): Message {
     content,
     stop_reason,
     stop_sequence: null,
-    usage: { input_tokens: res.usage?.input_tokens ?? 0, output_tokens: res.usage?.output_tokens ?? 0 },
+    // OpenAI counts cached input inside input_tokens; Claude's shape keeps it apart, which the usage counts read.
+    usage: openAiUsage(res.usage),
   } as unknown as Message;
+}
+
+/** OpenAI's usage in Claude's shape: cached input as cache reads, the rest as input (OpenAI has no cache writes). */
+export function openAiUsage(u: OpenAI.Responses.Response['usage'] | undefined): { input_tokens: number; output_tokens: number; cache_read_input_tokens: number } {
+  const input = u?.input_tokens ?? 0;
+  const cached = Math.min(input, u?.input_tokens_details?.cached_tokens ?? 0);
+  return { input_tokens: input - cached, output_tokens: u?.output_tokens ?? 0, cache_read_input_tokens: cached };
 }
 
 /** Arguments that are not a JSON object become an empty input, which input validation then reports to the model. */
