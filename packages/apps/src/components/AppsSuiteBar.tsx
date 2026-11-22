@@ -1,10 +1,11 @@
 // The suite bar on an installed app's page (packages/suite-bar), as Contacts draws it: the organization switcher, the apps with
 // the installed app active (userAppTabs), notifications and the account menu. What
 // belongs to Chat (organizations, invitations, notifications) opens Chat at `/chat/?open=…`; My profile and Settings open
-// Home's Settings page.
+// Home's Settings page. Inside Home the bar draws nothing, and the page sends Home its menu instead (homeMenu.ts).
 import { useCallback, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { APP_MANIFESTS, AWAY_STATUS, intent, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type ChatPage, type StatusOption, useUserAppTabs } from '@flow/suite-bar';
+import { APP_MANIFESTS, AWAY_STATUS, intent, isAway, StatusDialog, statusPatch, SuiteBar, suiteTabsFrom, type ChatPage, type StatusOption, useHomeMenu, useUserAppTabs } from '@flow/suite-bar';
+import { appsHomeMenu, appsHomeSelected } from '../homeMenu';
 import { chooseOrganization, useOrganizations } from '../hooks/organization';
 import { suite, type SuiteUser } from '../suite';
 
@@ -17,6 +18,13 @@ export function AppsSuiteBar({ app }: { app: string | null }) {
   // The organization's installed apps, after the built-in ones (docs/specs/user-apps.md §6).
   // The app whose page this is; '' marks the apps home (Build an app) in the menu.
   const appTabs = useUserAppTabs(active?.id, app ?? '');
+  // Inside Home: the Apps row's menu in Home's sidebar, and this page's address so Home's follows it. A click there
+  // loads that page in this frame.
+  const menu = appsHomeMenu(appTabs);
+  useHomeMenu('apps', menu, appsHomeSelected(app), (id) => {
+    const href = menu?.find((m) => m.id === id)?.href;
+    if (href) window.location.assign(href);
+  }, window.location.pathname + window.location.search);
   const [user, setUser] = useState<SuiteUser | null>(null);
   const [statusOpen, setStatusOpen] = useState(false);
   const [statusBusy, setStatusBusy] = useState(false);

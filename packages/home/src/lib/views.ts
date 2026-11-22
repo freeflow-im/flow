@@ -4,7 +4,7 @@
 import { appOfPath, settingsSectionOf } from '@flow/suite-bar';
 
 /** The apps Home opens in a frame. Anything else (another site) is followed as a link. */
-export const FRAMED_APPS = ['mail', 'calendar', 'docs', 'chat', 'admin', 'contacts'] as const;
+export const FRAMED_APPS = ['mail', 'calendar', 'docs', 'chat', 'admin', 'contacts', 'apps'] as const;
 export type FramedApp = (typeof FRAMED_APPS)[number];
 export type View = 'home' | 'settings' | FramedApp;
 

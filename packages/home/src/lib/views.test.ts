@@ -9,6 +9,9 @@ describe('views', () => {
     expect(viewOf('/chat/?open=channel%3Aabc', O)).toBe('chat');
     expect(viewOf('/docs/doc/x1', O)).toBe('docs');
     expect(viewOf('/admin/agents', O)).toBe('admin');
+    expect(viewOf('/apps/', O)).toBe('apps');
+    expect(viewOf('/apps/taskboard', O)).toBe('apps');
+    expect(viewOf('/apps/?build=tasks', O)).toBe('apps');
     expect(viewOf('/home/', O)).toBe('home');
     expect(viewOf('https://example.com/mail/', O)).toBeNull();
     expect(viewOf('/privacy', O)).toBeNull();
