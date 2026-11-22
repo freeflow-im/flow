@@ -13,6 +13,7 @@ import { appToolContexts, type AppToolContext } from '../apps';
 import type { DoorTool } from '../registry';
 import { appDoorTools } from '../registry/userApps';
 import type { DocsPort, McpRequestCaller, SuiteDeps } from './suite.ts';
+import type { ChatToolContext } from '../chat/mcpTools.ts';
 
 export interface McpContextEnv {
   DIRECTORY: DurableObjectNamespace<Directory>;
@@ -115,7 +116,25 @@ export async function mcpContexts(env: McpContextEnv, caller: McpRequestCaller):
 
   const apps: Record<string, AppToolContext> = appToolContexts(env, who, caller.origin);
   const userAppTools = await userAppToolsOf(env, caller, who);
-  return { docs: docsPort(env, caller), mail, calendar, events, wakes, member, apps, userAppTools };
+  return { docs: docsPort(env, caller), mail, calendar, events, wakes, member, chat: chatOf(env, caller), apps, userAppTools };
+}
+
+/**
+ * The organization's Chat as the caller's agent (docs/specs/suite-mcp.md §4.2): the personal agent the client acts through
+ * (`via`, with its account, so the Org object can give it a member row the first time), or the shared agent itself. A
+ * connection made before agents had kinds has no agent, and so no Chat.
+ */
+function chatOf(env: McpContextEnv, caller: McpRequestCaller): ChatToolContext | undefined {
+  const { ORG } = env;
+  const shared = caller.agentMode === 'shared';
+  const agentUserId = shared ? caller.userId : caller.agentMode === 'personal' ? caller.via ?? null : null;
+  if (!ORG || !agentUserId) return undefined;
+  let account: Promise<AccountDTO | null> | null = null;
+  const agentAccount = () => (account ??= caller.via ? directory<AccountDTO | null>(env, 'accountFor', caller.via, caller.orgId).catch(() => null) : Promise.resolve(null));
+  return {
+    chat: async (tool, input) =>
+      ORG.get(ORG.idFromName(caller.orgId)).mcpChat({ agentUserId, agentAccount: await agentAccount(), tool, input, invokedBy: shared ? caller.invokedBy ?? null : null }),
+  };
 }
 
 /**

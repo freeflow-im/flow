@@ -276,7 +276,7 @@ async function mcpEndpoint(c: C): Promise<Response> {
   }
   const { userId, email, orgId, accountId, scope, agentId, agentMode, sponsorAccountId } = who.caller;
   // A personal agent acts as its sponsor, marked `via`; a shared agent acts as itself, asked by the person whose client it is.
-  const caller = { userId, email, orgId, accountId, via: agentMode === 'shared' ? null : agentId, invokedBy: agentMode === 'shared' ? sponsorAccountId : null, scope, endpoint, origin: issuer };
+  const caller = { userId, email, orgId, accountId, via: agentMode === 'shared' ? null : agentId, invokedBy: agentMode === 'shared' ? sponsorAccountId : null, agentMode: agentId ? agentMode : null, scope, endpoint, origin: issuer };
   // The suite's server, loaded on the first /mcp request rather than when the Worker starts (its startup CPU is capped).
   const [{ handleSuiteMcp }, { mcpContexts }] = await Promise.all([import('../mcp/suite.ts'), import('../mcp/contexts.ts')]);
   const res = await handleSuiteMcp(c.req.raw, caller, await mcpContexts(c.env as unknown as McpContextEnv, caller));

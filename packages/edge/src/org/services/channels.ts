@@ -551,7 +551,7 @@ export async function addMember(channelId: string, actorId: string, targetUserId
     .limit(1);
   if (!target[0]) throw badRequest('bad_user', 'user is not a member of this workspace');
   // A person's assistant joins only channels its sponsor brings it into, and only ones the sponsor is in (agents.md §1.1).
-  if (target[0].kind === 'personal_agent' && (target[0].runtime !== 'hosted' || target[0].sponsorUserId !== actorId || !isMember)) {
+  if (target[0].kind === 'personal_agent' && (!target[0].runtime || target[0].sponsorUserId !== actorId || !isMember)) {
     throw forbidden("only its sponsor may bring a personal agent into a channel they are in");
   }
   const inserted = await db
@@ -593,7 +593,7 @@ export async function removeMember(channelId: string, actorId: string, targetUse
       .where(and(eq(workspaceMembers.workspaceId, chan.workspaceId), eq(workspaceMembers.userId, targetUserId)))
       .limit(1)
   )[0];
-  const assistant = target?.kind === 'personal_agent' && target.runtime === 'hosted';
+  const assistant = target?.kind === 'personal_agent' && !!target.runtime;
   if (self) {
     if (!isMember) throw badRequest('not_member', 'not a member of this channel');
     if (chan.kind === 'standard' && chan.name === 'general' && !assistant) throw badRequest('general_channel', 'cannot leave #general');

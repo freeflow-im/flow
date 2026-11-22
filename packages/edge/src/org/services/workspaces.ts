@@ -337,7 +337,7 @@ export async function requireMembership(workspaceId: string, userId: string) {
   if (!m) throw notFound('workspace not found'); // don't leak existence
   // A personal agent never acts here as itself (agents.md §1): it acts through its sponsor, marked `via`. The one
   // exception is a person's assistant posting its answer to its sponsor (Org.postAsAssistant, agents.md §1.1).
-  if (m.kind === 'personal_agent' && !(m.runtime === 'hosted' && assistantPosting.getStore() === m.userId)) throw forbidden('a personal agent acts only through its sponsor');
+  if (m.kind === 'personal_agent' && !((m.runtime === 'hosted' || m.runtime === 'external') && assistantPosting.getStore() === m.userId)) throw forbidden('a personal agent acts only through its sponsor');
   return m;
 }
 
@@ -481,7 +481,7 @@ export async function listMembers(workspaceId: string, userId: string, all = fal
     ...(r.m.address ? { address: r.m.address } : {}),
     ...(r.m.accountId ? { accountId: r.m.accountId } : {}),
     kind: r.m.kind,
-    ...(r.m.runtime ? { agentRuntime: r.m.runtime } : {}),
+    ...(r.m.runtime === 'hosted' ? { agentRuntime: 'hosted' as const } : {}),
   }));
 }
 
@@ -519,7 +519,7 @@ export async function toMemberDTO(
     ...(r.m.address ? { address: r.m.address } : {}),
     ...(r.m.accountId ? { accountId: r.m.accountId } : {}),
     kind: r.m.kind,
-    ...(r.m.runtime ? { agentRuntime: r.m.runtime } : {}),
+    ...(r.m.runtime === 'hosted' ? { agentRuntime: 'hosted' as const } : {}),
   };
 }
 

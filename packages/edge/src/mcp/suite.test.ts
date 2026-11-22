@@ -72,4 +72,18 @@ describe('the suite’s /mcp server', () => {
     const req = new Request('https://app.test/mcp/v9', { method: 'POST', body: '{}' });
     expect((await handleSuiteMcp(req, { userId: 'u1', email: 'u1@test', orgId: 'o1', scope: 'files:read', endpoint: '/mcp/v9', origin: 'https://app.test' }, {})).status).toBe(404);
   }, 60_000);
+
+  it('lists Chat’s tools by chat:read and chat:write where it has an agent, and passes a picture on as one', async () => {
+    const seen: { tool: string; input: Record<string, unknown> }[] = [];
+    const chat = { chat: async (tool: string, input: Record<string, unknown>) => { seen.push({ tool, input }); return tool === 'read_chat_file' ? { name: 'a.png', type: 'image/png', size: 3, base64: 'AAAA' } : { channels: [] }; } };
+    const CHAT = ['list_channels', 'list_members', 'read_messages', 'search_messages', 'read_chat_file', 'send_message', 'react', 'create_channel', 'invite_to_channel'];
+    expect((await names('chat:read', { chat })).sort()).toEqual(['list_channels', 'list_members', 'read_chat_file', 'read_messages', 'search_messages']);
+    expect((await names('chat:read chat:write', { chat })).sort()).toEqual([...CHAT].sort());
+    expect(await names('chat:read chat:write', {})).toEqual([]);
+    const init = await rpc('chat:read', 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } }, { chat });
+    expect(init.result?.instructions).toMatch(/\nChat:/);
+    const pic = await rpc('chat:read', 'tools/call', { name: 'read_chat_file', arguments: { fileId: 'f1' } }, { chat });
+    expect(pic.result?.content?.[0]).toMatchObject({ type: 'image', mimeType: 'image/png' });
+    expect(seen).toEqual([{ tool: 'read_chat_file', input: { fileId: 'f1' } }]);
+  }, 60_000);
 });

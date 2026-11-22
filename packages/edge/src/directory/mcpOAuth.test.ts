@@ -72,7 +72,7 @@ describe('MCP OAuth in the directory', () => {
     expect(isResource(ISSUER, 'https://docs.freeflow.im/mcp')).toBe(false);
     // Every scope the manifests' consent groups declare, in their order (the first eight the suite's first four apps').
     const declared = APP_MANIFESTS.flatMap((m) => m.scopes ?? []).flatMap((g) => g.scopes);
-    expect(declared.slice(0, 8)).toEqual(['files:read', 'files:write', 'mail:read', 'mail:write', 'mail:send', 'calendar:read', 'calendar:write', 'events:read']);
+    expect(declared.slice(0, 10)).toEqual(['chat:read', 'chat:write', 'files:read', 'files:write', 'mail:read', 'mail:write', 'mail:send', 'calendar:read', 'calendar:write', 'events:read']);
     expect(cleanScope(undefined)).toBe(declared.join(' '));
     expect(protectedResourceMetadata(ISSUER).scopes_supported).toEqual(declared);
     expect(authorizationServerMetadata(ISSUER).scopes_supported).toContain('mail:send');
@@ -97,7 +97,7 @@ describe('MCP OAuth in the directory', () => {
     const t = oauth.token(ISSUER, { grant_type: 'authorization_code', code, code_verifier: verifier, client_id: client });
     // Nothing ticked on the page (a form without its checkboxes): every group that starts ticked; never sending.
     const ticked = APP_MANIFESTS.flatMap((m) => m.scopes ?? []).filter((g) => g.checkedByDefault).flatMap((g) => g.scopes).join(' ');
-    expect(ticked.startsWith('files:read files:write mail:read mail:write calendar:read calendar:write events:read')).toBe(true);
+    expect(ticked.startsWith('chat:read chat:write files:read files:write mail:read mail:write calendar:read calendar:write events:read')).toBe(true);
     expect(oauth.authenticate(ISSUER, `Bearer ${t.access_token}`)).toEqual({ ok: true, caller: { userId: 'u1', email: 'u1@example.com', orgId: 'orgB', accountId: 'acc-u1-orgB', scope: ticked, agentId: expect.any(String), agentMode: 'personal', sponsorAccountId: null } });
     const r = oauth.token(ISSUER, { grant_type: 'refresh_token', refresh_token: t.refresh_token, client_id: client });
     expect(oauth.authenticate(ISSUER, `Bearer ${r.access_token}`)).toMatchObject({ ok: true, caller: { orgId: 'orgB' } });
