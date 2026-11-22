@@ -1,6 +1,6 @@
 // One organization: its database and its sockets. HTTP requests arrive from the Worker with the caller already known.
 import { DurableObject } from 'cloudflare:workers';
-import { MAX_EVENT_DEPTH, SELF_WAKE_MAX_PER_DAY, type AccountDTO, type AgentUsageDTO, type AgentUsageRange, type AccountKind, type HostedRuntimeDTO, type MessageDTO, type Event, type MemberRole, type UserDTO, type WorkspaceMemberDTO } from '@flow/shared';
+import { MAX_EVENT_DEPTH, SELF_WAKE_MAX_PER_DAY, type AccountDTO, type AlertFrame, type AgentUsageDTO, type AgentUsageRange, type AccountKind, type HostedRuntimeDTO, type MessageDTO, type Event, type MemberRole, type UserDTO, type WorkspaceMemberDTO } from '@flow/shared';
 import { accountGate, type DirectoryCore } from '../directory/core';
 import { ApiError } from '../errors';
 import { OutboxFlusher } from './outbox';
@@ -129,8 +129,10 @@ const app = new CompatApp();
 registerRoutes(app as never);
 
 /** A socket's identity: a member's (userId, accountId), or a channel visitor's (`visitor`, docs/specs/chat-visitors.md §6).
- * A visitor's socket opened with its cookie keeps the cookie's value until its first frame (`visitorToken`). */
-interface Attachment { userId?: string; accountId: string | null; visitor?: VisitorSocket; visitorToken?: string }
+ * A visitor's socket opened with its cookie keeps the cookie's value until its first frame (`visitorToken`); so does a
+ * member's socket opened from a page of the suite on this origin (`sessionToken`). `alertsOnly`: a suite bar's socket
+ * (shared/alerts.ts), which gets its person's alerts and nothing else, and is not presence. */
+interface Attachment { userId?: string; accountId: string | null; visitor?: VisitorSocket; visitorToken?: string; sessionToken?: string; alertsOnly?: boolean }
 const pushLog = { info: (o: unknown, msg?: string) => console.log(`[push] ${msg}`, JSON.stringify(o)), warn: (o: unknown, msg?: string) => console.warn(`[push] ${msg}`, JSON.stringify(o)) };
 const USER_SUBJECT = /(?:^|\.)user\.([0-9a-f-]{36})(?:\.|$)/;
 /** A reconnecting socket's backlog: read in pages of this many, and no more than the cap (the client refetches past it). */
@@ -331,10 +333,15 @@ export class Org extends DurableObject<OrgEnv> {
       .onConflictDoUpdate({ target: schema.users.id, set: copy }).run();
   }
 
+  /** The sockets that get Chat's events and are presence: every one but the suite bars' alert sockets. */
   private sockets(): { ws: WebSocket; userId: string | undefined; visitor: VisitorSocket | undefined }[] {
+    return this.allSockets().filter((s) => !s.alertsOnly);
+  }
+
+  private allSockets(): { ws: WebSocket; userId: string | undefined; accountId: string | null; visitor: VisitorSocket | undefined; alertsOnly: boolean }[] {
     return this.ctx.getWebSockets().map((ws) => {
       const att = ws.deserializeAttachment() as Attachment | null;
-      return { ws, userId: att?.userId, visitor: att?.visitor };
+      return { ws, userId: att?.userId, accountId: att?.accountId ?? null, visitor: att?.visitor, alertsOnly: !!att?.alertsOnly };
     });
   }
 
@@ -960,6 +967,46 @@ export class Org extends DurableObject<OrgEnv> {
       try { ws.send(frame); sent++; } catch { /* the socket is closing */ }
     }
     return sent;
+  }
+
+  /** An `alert.*` event for one account (shared/alerts.ts), from the Events object as it is published: to that account's suite-bar sockets. */
+  pushAlert(accountId: string, frame: AlertFrame): number {
+    const text = JSON.stringify(frame);
+    let sent = 0;
+    for (const s of this.allSockets()) {
+      if (!s.alertsOnly || s.accountId !== accountId) continue;
+      try { s.ws.send(text); sent++; } catch { /* the socket is closing */ }
+    }
+    return sent;
+  }
+
+  /**
+   * Who an alert from `accountId` goes to (decision_log 2026-11-22): never someone the sender picks. A person's own call
+   * (their assistant, their token) alerts that person. A personal agent alerts its sponsor. A shared agent alerts the person
+   * whose request started its turn (`invokedBy`) when that person is an active member who shares a channel with it, and
+   * otherwise its owner. Null when there is no one (an agent with no owner).
+   */
+  async alertRecipientOf(accountId: string, invokedBy?: string | null): Promise<{ accountId: string; agentName?: string } | null> {
+    const active = (id: string) => this.ctx.storage.sql.exec(
+      "SELECT 1 AS x FROM workspace_members m JOIN users u ON u.id = m.user_id WHERE m.account_id = ? AND u.deleted_at IS NULL AND m.kind <> 'personal_agent'", id,
+    ).toArray().length > 0;
+    const agent = await this.agentSponsorOf(accountId);
+    if (!agent) return active(accountId) ? { accountId } : null;
+    const name = (this.ctx.storage.sql.exec('SELECT display_name FROM users WHERE id = ?', agent.userId).toArray()[0]?.display_name as string | undefined) ?? undefined;
+    const named = (id: string) => ({ accountId: id, ...(name ? { agentName: name } : {}) });
+    if (!agent.personal && invokedBy && invokedBy !== accountId) {
+      const asker = this.ctx.storage.sql.exec(
+        "SELECT m.user_id FROM workspace_members m JOIN users u ON u.id = m.user_id WHERE m.account_id = ? AND NOT u.is_agent AND m.kind <> 'personal_agent'",
+        invokedBy,
+      ).toArray()[0]?.user_id as string | undefined;
+      const together = asker && this.ctx.storage.sql.exec(
+        'SELECT 1 AS x FROM channel_members a JOIN channel_members b ON a.channel_id = b.channel_id WHERE a.user_id = ? AND b.user_id = ? LIMIT 1',
+        asker, agent.userId,
+      ).toArray().length > 0;
+      if (together && active(invokedBy)) return named(invokedBy);
+    }
+    const owner = (await this.selfWakeOwnerOf(accountId))?.ownerAccountId;
+    return owner && owner !== accountId ? named(owner) : null;
   }
 
   /**
@@ -1796,7 +1843,7 @@ export class Org extends DurableObject<OrgEnv> {
   }
 
   private closeUser(userId: string): void {
-    for (const s of this.sockets()) if (s.userId === userId) s.ws.close(4003, 'removed');
+    for (const s of this.allSockets()) if (s.userId === userId) s.ws.close(4003, 'removed');
   }
 
   /** Tells the directory about new ids and changed memberships before the caller gets its answer, so a following request can be routed. */
@@ -2194,9 +2241,15 @@ export class Org extends DurableObject<OrgEnv> {
     this.ctx.acceptWebSocket(server);
     // A visitor's socket (GET /v1/visitor/ws): the browser sent the HttpOnly cookie, which the page cannot read, so the
     // socket keeps it for the first frame, `{op: 'visitor'}`, to prove who it is.
-    if (new URL(request.url).pathname === '/v1/visitor/ws') {
+    const url = new URL(request.url);
+    if (url.pathname === '/v1/visitor/ws') {
       const token = /(?:^|;\s*)vsid=([^;]+)/.exec(request.headers.get('cookie') ?? '')?.[1];
       if (token) server.serializeAttachment({ accountId: null, visitorToken: decodeURIComponent(token) } satisfies Attachment);
+    } else if (request.headers.get('origin') === url.origin) {
+      // A page of the suite (the suite bar's alert socket): its session cookie, which the page cannot read, kept for the
+      // first frame. Only from this origin, so another site's page cannot open a socket as its visitor.
+      const token = /(?:^|;\s*)sid=([^;]+)/.exec(request.headers.get('cookie') ?? '')?.[1];
+      if (token) server.serializeAttachment({ accountId: null, sessionToken: decodeURIComponent(token) } satisfies Attachment);
     }
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -2226,7 +2279,7 @@ export class Org extends DurableObject<OrgEnv> {
   }
 
   override async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
-    let frame: { op?: string; token?: string; channelId?: string; threadRootId?: string; since?: unknown };
+    let frame: { op?: string; token?: string; channelId?: string; threadRootId?: string; since?: unknown; alerts?: unknown };
     try { frame = JSON.parse(String(raw)); } catch { return ws.send(JSON.stringify({ op: 'error', code: 'bad_frame', message: 'invalid JSON' })); }
     const att = ws.deserializeAttachment() as Attachment | null;
     const workspace = this.db.select().from(schema.workspaces).get();
@@ -2246,8 +2299,11 @@ export class Org extends DurableObject<OrgEnv> {
 
     if (frame.op === 'auth') {
       if (att?.userId) return;
+      // A suite bar's socket (`alerts: true`) may prove who it is by the cookie it opened with.
+      const alertsOnly = frame.alerts === true;
+      const token = typeof frame.token === 'string' && frame.token ? frame.token : alertsOnly ? att?.sessionToken : undefined;
       // The principal and its account here, in one call (platform.md §3.6): a suspended or removed account is refused.
-      const answer = workspace ? await this.directory().call('authenticateIn' as never, [frame.token, workspace.id] as never) : null;
+      const answer = workspace && token ? await this.directory().call('authenticateIn' as never, [token, workspace.id] as never) : null;
       const value = answer?.ok ? (answer as unknown as { value: { user: UserDTO; account: AccountDTO | null } }).value : null;
       const user = value?.user ?? null;
       if (user && accountGate(value!.account)) {
@@ -2258,6 +2314,11 @@ export class Org extends DurableObject<OrgEnv> {
       if (!user || !member) {
         ws.send(JSON.stringify({ op: 'error', code: 'unauthorized', message: 'invalid token' }));
         return ws.close(4003, 'unauthorized');
+      }
+      if (alertsOnly) {
+        // Alerts only: no backlog of Chat's events and no presence (the page reads its open alerts over HTTP, GET /v1/alerts).
+        ws.serializeAttachment({ userId: user.id, accountId: value!.account?.id ?? null, alertsOnly: true } satisfies Attachment);
+        return ws.send(JSON.stringify({ op: 'hello', sessionId: crypto.randomUUID(), heartbeat: 'client' }));
       }
       const alreadyOnline = this.sockets().some((s) => s.userId === user.id);
       ws.serializeAttachment({ userId: user.id, accountId: value!.account?.id ?? null } satisfies Attachment);
@@ -2275,6 +2336,7 @@ export class Org extends DurableObject<OrgEnv> {
       return;
     }
     if (!att?.userId) return ws.send(JSON.stringify({ op: 'error', code: 'unauthorized', message: 'authenticate first' }));
+    if (att.alertsOnly) return;
     // A client sends typing to all its organizations' sockets, since it does not track which holds a channel.
     if (frame.op === 'typing' && frame.channelId && workspace && this.ctx.storage.sql.exec('SELECT 1 FROM channels WHERE id = ?', frame.channelId).toArray().length) {
       this.broadcast(`ws.${workspace.id}.chan.${frame.channelId}.typing`, {
@@ -2286,8 +2348,8 @@ export class Org extends DurableObject<OrgEnv> {
 
   override async webSocketClose(ws: WebSocket): Promise<void> {
     const att = ws.deserializeAttachment() as Attachment | null;
-    // A visitor has no presence (§1.3); a socket that never authenticated has no one to mark offline.
-    if (!att?.userId || att.visitor) return;
+    // A visitor and a suite bar's alert socket have no presence (§1.3); a socket that never authenticated has no one to mark offline.
+    if (!att?.userId || att.visitor || att.alertsOnly) return;
     const userId = att.userId;
     const workspace = this.db.select({ id: schema.workspaces.id }).from(schema.workspaces).get();
     const stillHere = this.sockets().some((s) => s.ws !== ws && s.userId === userId);

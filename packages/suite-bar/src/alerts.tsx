@@ -2,7 +2,7 @@
 // draws the suite bar. Generic: an alert is a title, a line or two and links, closed by the person or ended by its own
 // time. The first kind is the meeting alert (useMeetingAlerts): any timed event not declined, from two minutes before it starts
 // until it is closed or five minutes have passed since its start, with its Join link. Closing one closes it in every tab.
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 /** A link or button on an alert: `primary` is its main one (Join). An address on another site opens in a new tab; an action
  * with `onClick` and no `href` is a button (Copy code). */
@@ -166,16 +166,73 @@ export function useMeetingAlerts(organizationId: string | null, closed: Readonly
 
 const isElsewhere = (href: string) => /^https?:\/\//i.test(href) && !href.startsWith(window.location.origin);
 
+/** The longest the slide out may take before the card goes anyway (a tab in the background runs no animations). */
+const LEAVE_MS = 400;
+
+/** Whether cards may move: not where the person asked for less motion, nor where the page cannot tell (tests). */
+const mayAnimate = () => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
 /**
- * The alerts as cards sliding down at the window's top edge, over the bar's right side; each closes on ×. Nothing when
- * there are none. `onTurnOnDesktop`: desktop notifications are not yet allowed, so a meeting's card offers to turn them on.
+ * The cards on screen: the alerts, and those just gone (closed here or elsewhere, or ended), kept in their place while
+ * they slide up and out. A card that comes back while leaving stays.
+ */
+function useLeavingCards(alerts: readonly SuiteAlert[]): { cards: { alert: SuiteAlert; leaving: boolean }[]; gone: (id: string) => void } {
+  const [leaving, setLeaving] = useState<SuiteAlert[]>([]);
+  const last = useRef<readonly SuiteAlert[]>(alerts);
+  /** The ids in the order they are on screen, so a leaving card keeps its place. */
+  const order = useRef<string[]>(alerts.map((a) => a.id));
+  const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const gone = useCallback((id: string) => {
+    clearTimeout(timers.current.get(id));
+    timers.current.delete(id);
+    if (!last.current.some((a) => a.id === id)) order.current = order.current.filter((x) => x !== id);
+    setLeaving((cur) => cur.filter((a) => a.id !== id));
+  }, []);
+  useEffect(() => {
+    const now = new Set(alerts.map((a) => a.id));
+    const left = last.current.filter((a) => !now.has(a.id));
+    last.current = alerts;
+    const animate = mayAnimate();
+    setLeaving((cur) => {
+      if (!animate) return [];
+      const kept = cur.filter((a) => !now.has(a.id));
+      return [...kept, ...left.filter((a) => !kept.some((k) => k.id === a.id))];
+    });
+    if (!animate) {
+      order.current = order.current.filter((id) => now.has(id));
+      return;
+    }
+    for (const a of left) if (!timers.current.has(a.id)) timers.current.set(a.id, setTimeout(() => gone(a.id), LEAVE_MS));
+  }, [alerts, gone]);
+  useEffect(() => () => { for (const t of timers.current.values()) clearTimeout(t); }, []);
+  const byId = new Map<string, { alert: SuiteAlert; leaving: boolean }>();
+  for (const l of leaving) byId.set(l.id, { alert: l, leaving: true });
+  for (const a of alerts) byId.set(a.id, { alert: a, leaving: false });
+  // An id stays in the order until its card has gone (`gone`), so a card just closed keeps its place on the render
+  // before it is marked as leaving.
+  order.current = [...order.current, ...[...byId.keys()].filter((id) => !order.current.includes(id))];
+  return { cards: order.current.filter((id) => byId.has(id)).map((id) => byId.get(id)!), gone };
+}
+
+/**
+ * The alerts as cards that slide down into view at the window's top edge, over the bar's right side, and slide up and out
+ * when they go; each closes on ×. Nothing when there are none. `onTurnOnDesktop`: desktop notifications are not yet
+ * allowed, so a meeting's card offers to turn them on.
  */
 export function SuiteAlerts({ alerts, onClose, onTurnOnDesktop }: { alerts: readonly SuiteAlert[]; onClose: (id: string) => void; onTurnOnDesktop?: () => void }) {
-  if (!alerts.length) return null;
+  const { cards, gone } = useLeavingCards(alerts);
+  if (!cards.length) return null;
   return (
     <div className="sb-alerts" role="region" aria-label="Alerts" data-testid="suite-alerts">
-      {alerts.map((a) => (
-        <div key={a.id} className="sb-alert" role="alert" data-testid="suite-alert">
+      {cards.map(({ alert: a, leaving }) => (
+        <div
+          key={a.id}
+          className={`sb-alert${leaving ? ' sb-alert-leaving' : ''}`}
+          role={leaving ? undefined : 'alert'}
+          aria-hidden={leaving || undefined}
+          data-testid={leaving ? 'suite-alert-leaving' : 'suite-alert'}
+          onAnimationEnd={(e) => { if (leaving && e.target === e.currentTarget) gone(a.id); }}
+        >
           <div className="sb-alert-head">
             <span className="sb-alert-kind">{a.kind}</span>
             <button type="button" className="sb-alert-close" aria-label="Close alert" title="Close" onClick={() => onClose(a.id)}>×</button>

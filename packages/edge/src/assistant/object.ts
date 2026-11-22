@@ -10,7 +10,8 @@
 // /api/agent/permission, /api/settings/assistant), so the three clients' panels talk to it unchanged. The chats used to be
 // in each organization's Docs object; POST /v1/admin/assistant/migrate copies them here once (`importChat`, `importRows`).
 import { subscriptionsAs, wakesAs, type WakePlace } from '../events/subscriptions';
-import type { EventToolContext, WakeToolContext } from '../events/eventTools';
+import { alertsAs } from '../events/alerts';
+import type { AlertToolContext, EventToolContext, WakeToolContext } from '../events/eventTools';
 import { DurableObject } from 'cloudflare:workers';
 import { Hono, type Context } from 'hono';
 import { mailApprovalPath, type AccountDTO, type AgentJobDTO, type HostedRuntimeDTO, type MailApprovalDTO, type UserDTO } from '@flow/shared';
@@ -430,13 +431,15 @@ export class Assistant extends DurableObject<AssistantEnv> {
         const events = who && personalTurn(who) ? this.eventsContext(who) : undefined;
         // An agent's wakes for itself (agent-self-wake.md): every hosted agent's turn, personal or shared.
         const wakes = who?.agentAccountId ? this.wakesContext(who) : undefined;
+        // show_alert (shared/alerts.ts): every turn; the Org object picks the person (the asker, the sponsor, the owner).
+        const alerts = who ? this.alertsContext(who) : undefined;
         // send_email (mailApprovals.ts): a personal agent's, as its person; a shared agent sends none.
         const mailApproval = mail && who && personalTurn(who) ? (input: DraftInput) => this.requestMailApproval(input, mail, who, userId) : undefined;
         // The installed apps' tools (user-apps.md §5), as the turn's caller: the Org object checks the scopes again.
         const appCaller = this.appCallerOf(who);
         const ORG = this.env.ORG;
         const userApps = appCaller && ORG ? (name: string, input: Record<string, unknown>) => runAppTool({ ORG }, appCaller, name, input) : undefined;
-        return { ...(docs ? { docs } : {}), ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}), ...(apps ? { apps } : {}), ...(admin ? { admin } : {}), ...(mailApproval ? { mailApproval } : {}), ...(userApps ? { userApps } : {}), ...(events ? { events } : {}), ...(wakes ? { wakes } : {}), memory };
+        return { ...(docs ? { docs } : {}), ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}), ...(apps ? { apps } : {}), ...(admin ? { admin } : {}), ...(mailApproval ? { mailApproval } : {}), ...(userApps ? { userApps } : {}), ...(events ? { events } : {}), ...(wakes ? { wakes } : {}), ...(alerts ? { alerts } : {}), memory };
       },
       // Every model call's tokens, to the organization's count for this agent (org/agentUsage.ts, Admin › Members › Usage).
       onUsage: (userId: string, usage, model) => this.recordUsage(this.turnWho.get(userId) ?? this.who, usage, model),
@@ -533,6 +536,15 @@ export class Assistant extends DurableObject<AssistantEnv> {
     const org = who.caller.account?.organizationId || who.caller.organizationId;
     if (!EVENTS || !ORG || !org || !who.agentAccountId) return undefined;
     return { wakes: wakesAs(EVENTS.get(EVENTS.idFromName(org)), ORG.get(ORG.idFromName(org)) as never, { agentAccountId: who.agentAccountId, organizationId: org, place: () => who.place ?? null }) };
+  }
+
+  /** The alert tool's context (events/eventTools.ts ALERT_TOOLS): alerts as the turn's account, for the person it works for. */
+  private alertsContext(who: Who): AlertToolContext | undefined {
+    const { EVENTS, ORG } = this.env;
+    const c = who.caller;
+    const org = c.account?.organizationId || c.organizationId;
+    if (!EVENTS || !ORG || !org || !c.account) return undefined;
+    return { alerts: alertsAs(EVENTS.get(EVENTS.idFromName(org)), ORG.get(ORG.idFromName(org)) as never, { accountId: c.account.id, organizationId: org, invokedBy: c.invokedBy ?? null, via: c.via ?? null }) };
   }
 
   /** Calendar's tools: the account's Calendar object (or a shared calendar's owner's), as routes/calendar.ts reaches them. */

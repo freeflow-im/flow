@@ -12,8 +12,9 @@ import { createMcpServer, instructionsFor, MCP_VERSIONS, type McpVersion } from 
 import { adaptTransport, discoverResult, isDiscover, SDK_VERSION, STATELESS_VERSION } from '@flow/docs/plugin/server/stateless.ts';
 import { MAIL_INSTRUCTIONS, type MailFetch, type MailToolContext } from '../imap/mailTools.ts';
 import { CALENDAR_INSTRUCTIONS, type CalendarFetch, type CalendarToolContext } from '../calendar/calendarTools.ts';
-import { EVENT_INSTRUCTIONS, type EventToolContext, type WakeToolContext } from '../events/eventTools.ts';
+import { EVENT_INSTRUCTIONS, type AlertToolContext, type EventToolContext, type WakeToolContext } from '../events/eventTools.ts';
 import type { SubscriptionOps, WakeOps } from '../events/subscriptions.ts';
+import type { AlertOps } from '../events/alerts.ts';
 import { toolsFor, type DoorTool } from '../registry';
 import type { AppToolContext } from '../apps';
 import { CHAT_INSTRUCTIONS, type ChatToolContext } from '../chat/mcpTools.ts';
@@ -56,6 +57,8 @@ export interface SuiteDeps {
   calendar?: CalendarFetch;
   events?: SubscriptionOps;
   wakes?: WakeOps;
+  /** Alerts as the caller's account (shared/alerts.ts). */
+  alerts?: AlertOps;
   /** An account of the organization by address (share_calendar). */
   member?: CalendarToolContext['member'];
   /** The organization's Chat, as the caller's agent (chat/mcpTools.ts). */
@@ -93,7 +96,7 @@ export const suiteServerInfo = (version: McpVersion, origin: string) => ({
 export function mcpAccess(scope: string, mailAvailable: boolean, calendarAvailable = false, eventsAvailable = false, apps: readonly string[] = []): { files: 'none' | 'read' | 'write'; docs: Set<string>; mail: DoorTool[]; calendar: DoorTool[]; events: DoorTool[]; others: DoorTool[] } {
   const scopes = scope.split(' ').filter(Boolean);
   const files = scopes.includes('files:write') ? 'write' : scopes.includes('files:read') ? 'read' : 'none';
-  const reach = { ...Object.fromEntries(apps.map((a) => [a, true])), ...(mailAvailable ? { mail: true } : {}), ...(calendarAvailable ? { calendar: true } : {}), ...(eventsAvailable ? { events: true, wakes: true } : {}) };
+  const reach = { ...Object.fromEntries(apps.map((a) => [a, true])), ...(mailAvailable ? { mail: true } : {}), ...(calendarAvailable ? { calendar: true } : {}), ...(eventsAvailable ? { events: true, wakes: true, alerts: true } : {}) };
   const tools = toolsFor('mcp', { scopes, reach });
   const of = (app: string) => tools.filter((t) => t.definition.app === app);
   // The apps added by manifest (apps.ts): their tools run with `ctx.apps[<app>]`.
@@ -126,7 +129,7 @@ const json = (status: number, body: unknown, headers: Record<string, string> = {
 const toolResult = (data: Record<string, unknown>) => ({ content: [{ type: 'text' as const, text: JSON.stringify(data) }], structuredContent: data });
 const toolError = (message: string) => ({ content: [{ type: 'text' as const, text: message }], isError: true });
 
-interface RunnerContext { mail?: MailToolContext; calendar?: CalendarToolContext; events?: EventToolContext; wakes?: WakeToolContext; chat?: ChatToolContext; meet?: MeetToolContext; search?: SearchToolContext; apps?: Record<string, AppToolContext> }
+interface RunnerContext { mail?: MailToolContext; calendar?: CalendarToolContext; events?: EventToolContext; wakes?: WakeToolContext; alerts?: AlertToolContext; chat?: ChatToolContext; meet?: MeetToolContext; search?: SearchToolContext; apps?: Record<string, AppToolContext> }
 
 /** The registry's tools that run in the Worker, on the server, each with the caller's own objects. */
 function registerRunners(mcp: McpServer, tools: DoorTool[], ctx: RunnerContext): void {
@@ -223,6 +226,7 @@ export async function handleSuiteMcp(request: Request, caller: McpRequestCaller,
     ...(deps.calendar ? { calendar: { calendar: deps.calendar, origin: caller.origin, ...(deps.member ? { member: deps.member } : {}) } } : {}),
     ...(deps.events ? { events: { subscriptions: deps.events } } : {}),
     ...(deps.events && deps.wakes ? { wakes: { wakes: deps.wakes } } : {}),
+    ...(deps.events && deps.alerts ? { alerts: { alerts: deps.alerts } } : {}),
     ...(deps.chat ? { chat: deps.chat } : {}),
     ...(deps.meet ? { meet: deps.meet } : {}),
     apps,

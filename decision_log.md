@@ -2160,3 +2160,11 @@ one-recipient MCP correction).
 - **Self-wakes are one-time only** and answer in the thread of the turn that scheduled them (operator ruling).
 - **Limits: 10 pending per agent, 1 minute to 365 days ahead, 100 self-woken turns per agent a day** (operator ruling).
 - **No sponsor approval**; the sponsor sees and cancels them on the Automations page (operator ruling).
+
+## 2026-11-22 — Agent alerts in the suite bar (`show_alert`)
+
+- **An alert is an event like any other** (operator ruling): `alert.created` for one account and `alert.closed` when
+  that person closes it, in the organization's event log, delivered by websocket push to the person's suite bars.
+- **An alert goes only to the agent's owner or the person who asked** (operator ruling): the in-app assistant's
+  person, a personal agent's sponsor, or the person whose request started a shared agent's turn (who must share a
+  channel with it), else its owner. The tool names no recipient. Telling other members is a Chat message.

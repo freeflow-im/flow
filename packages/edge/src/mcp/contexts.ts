@@ -8,6 +8,7 @@ import type { CallerContext } from '../org/routes/compat';
 import type { Directory } from '../directory/object';
 import type { Docs } from '../docs/object';
 import { lazySubscriptions, subscriptionsAs, wakesAs, type SubscriptionOps, type WakeOps } from '../events/subscriptions.ts';
+import { alertsAs, type AlertOps } from '../events/alerts.ts';
 import { calendarRequest, type AccountCaller } from '../calendar/forward';
 import { appToolContexts, type AppToolContext } from '../apps';
 import type { DoorTool } from '../registry';
@@ -99,7 +100,17 @@ export async function mcpContexts(env: McpContextEnv, caller: McpRequestCaller):
 
   let events: SubscriptionOps | undefined;
   let wakes: WakeOps | undefined;
+  let alerts: AlertOps | undefined;
   if (EVENTS && ORG) {
+    // Alerts as the caller's account (shared/alerts.ts): the Org object picks who gets one, from the account and the
+    // person the agent says it works for (`invokedBy`, which the directory checked).
+    let alertOps: Promise<AlertOps> | null = null;
+    const alertsGet = () => (alertOps ??= (async () => {
+      const w = await who();
+      if (!w?.account) throw Object.assign(new Error('no account in this organization'), { status: 403 });
+      return alertsAs(EVENTS.get(EVENTS.idFromName(caller.orgId)), ORG.get(ORG.idFromName(caller.orgId)), { accountId: w.account.id, organizationId: caller.orgId, invokedBy: agent.invokedBy ?? null, via: agent.via ?? null });
+    })());
+    alerts = { show: async (x) => (await alertsGet()).show(x), open: async () => (await alertsGet()).open(), close: async (id) => (await alertsGet()).close(id) };
     events = lazySubscriptions(async () => {
       const w = await plain();
       if (!w?.account) throw Object.assign(new Error('no account in this organization'), { status: 403 });
@@ -117,7 +128,7 @@ export async function mcpContexts(env: McpContextEnv, caller: McpRequestCaller):
 
   const apps: Record<string, AppToolContext> = appToolContexts(env, who, caller.origin);
   const userAppTools = await userAppToolsOf(env, caller, who);
-  return { docs: docsPort(env, caller), mail, calendar, events, wakes, member, chat: chatOf(env, caller), meet: meetOf(env, caller), apps, userAppTools };
+  return { docs: docsPort(env, caller), mail, calendar, events, wakes, alerts, member, chat: chatOf(env, caller), meet: meetOf(env, caller), apps, userAppTools };
 }
 
 /**
