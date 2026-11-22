@@ -31,6 +31,7 @@ const domain = (name: string, extra: Partial<DomainDTO> = {}): DomainDTO => ({ d
 const domains: DomainDTO[] = [domain('acme.freeflow.im', { kind: 'platform' }), domain('acme.com', { primary: true }), domain('pending.com', { verified: false })];
 
 beforeEach(() => {
+  window.history.replaceState(null, '', '/admin/members');
   calls = [];
   hostedMail = true;
   members = [member('Ann', { role: 'owner' }), member('Bob'), member('Cal'), member('Dee'), member('Botty', { isAgent: true, email: 'agent-u-botty@agents.flow.local', sponsorId: 'u-ann' }), member('Hosty', { isAgent: true, agentRuntime: undefined, email: 'agent-u-hosty@agents.flow.local', sponsorId: 'u-bob' })];
@@ -67,6 +68,12 @@ beforeEach(() => {
     if (path.includes('/assistant/avatar')) return json({ avatarUrl: '/x.png' });
     if (path.endsWith('/agent-invites')) return json({ code: 'flow-ABCD-EFGH', command: 'npx flow-agent-bridge flow-ABCD-EFGH', expiresAt: '2026-01-09T00:00:00.000Z' }, 201);
     if (path === '/v1/me/agent-connections') return json({ mcpUrl: 'https://app.test/mcp', agents: [] });
+    if ((path.split('?')[0] ?? '').endsWith('/usage')) {
+      const range = new URLSearchParams(path.split('?')[1]).get('range');
+      const n = range === '1d' ? 24 : range === '30d' ? 30 : 7;
+      const buckets = Array.from({ length: n }, (_, i) => ({ start: new Date(Date.UTC(2026, 10, 1 + i)).toISOString(), inputK: i === n - 1 ? 120.5 : 0, outputK: i === n - 1 ? 1.5 : 0, requests: i === n - 1 ? 3 : 0 }));
+      return json({ range, bucket: range === '1d' ? 'hour' : 'day', buckets, total: { inputK: 120.5, outputK: 1.5, requests: 3 } });
+    }
     if (path.endsWith('/provision')) return json(path.includes('/accounts/') ? { queued: true } : { queued: 2 });
     if (path.endsWith('/accounts/kind')) return json({ changed: 2, unchanged: 1 });
     return json({ ok: true });
@@ -87,6 +94,31 @@ const show = () => {
 };
 
 describe('Members', () => {
+  it('links each agent to its usage page: totals, a chart per token kind, the ranges, the table, and back', async () => {
+    window.history.replaceState(null, '', '/admin/members');
+    show();
+    await screen.findByTestId('member-bob@example.com');
+    expect(screen.queryByTestId('usage-bob@example.com')).toBeNull();
+    fireEvent.click(screen.getByTestId('usage-agent-u-botty@agents.flow.local'));
+    expect(window.location.pathname).toBe('/admin/members/u-botty/usage');
+    await waitFor(() => expect(screen.getByTestId('usage-total-input').textContent).toContain('121K'));
+    expect(screen.getByTestId('card-usage').textContent).toContain('Botty');
+    expect(screen.getByTestId('usage-total-output').textContent).toContain('1.5K');
+    expect(screen.getByTestId('usage-total-requests').textContent).toContain('3');
+    expect(screen.getByTestId('usage-chart-input')).toBeTruthy();
+    expect(screen.getByTestId('usage-chart-output')).toBeTruthy();
+    expect(calls.some((c) => c.path.startsWith('/v1/workspaces/o1/agents/u-botty/usage?range=7d'))).toBe(true);
+    fireEvent.focus(screen.getByTestId('usage-chart-input-bar-6'));
+    expect(screen.getByTestId('usage-chart-input-tooltip').textContent).toContain('121K');
+    fireEvent.click(screen.getByTestId('usage-range-1d'));
+    await waitFor(() => expect(calls.some((c) => c.path.includes('/usage?range=1d'))).toBe(true));
+    fireEvent.click(screen.getByTestId('usage-table-toggle'));
+    await waitFor(() => expect(screen.getByTestId('usage-table').querySelectorAll('tbody tr')).toHaveLength(24));
+    fireEvent.click(screen.getByTestId('usage-back'));
+    await screen.findByTestId('member-bob@example.com');
+    expect(window.location.pathname).toBe('/admin/members');
+  });
+
   it('lists the roster owner first, one line each: the address here or a guest’s own email, role, kind and mail state', async () => {
     show();
     await screen.findByTestId('member-bob@example.com');

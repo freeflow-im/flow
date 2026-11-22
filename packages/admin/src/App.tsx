@@ -33,7 +33,13 @@ function useSection(sections: readonly AdminSection[]): [AdminSection, (s: Admin
   const section = sectionOf(wanted, sections);
   const setSection = (s: AdminSection) => setWanted(sectionPath(s));
   const go = (s: AdminSection) => {
-    if (s === section) return;
+    if (s === section) {
+      // A page inside the section (Members › Usage) goes back to the section's own page, which listens for the change.
+      if (window.location.pathname === sectionPath(s)) return;
+      window.history.pushState(null, '', sectionPath(s));
+      window.dispatchEvent(new PopStateEvent('popstate'));
+      return;
+    }
     window.history.pushState(null, '', sectionPath(s));
     setSection(s);
   };

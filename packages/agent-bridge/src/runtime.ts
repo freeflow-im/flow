@@ -40,6 +40,8 @@ export interface RunOpts {
   onToolStep(step: string): void;
   /** Each assistant text block as it is produced — the agent's narration (#162). */
   onText?(text: string): void;
+  /** The run's model tokens, when the CLI reports them. */
+  onUsage?(usage: TokenUsage): void;
   log(msg: string): void;
 }
 
@@ -184,6 +186,20 @@ interface StreamEvent {
   is_backgrounded?: boolean;
   status?: string;
   summary?: string;
+  /** result: the turn's tokens, as the CLI counted them. */
+  usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
+}
+
+/** A turn's model tokens, reported to Flow (Admin › Members › Usage): input includes prompt-cache reads and writes. */
+export interface TokenUsage { inputTokens: number; outputTokens: number }
+
+const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
+
+/** A `result` event's usage as a TokenUsage, or null when it carries none. */
+export function claudeUsage(u: StreamEvent['usage']): TokenUsage | null {
+  if (!u) return null;
+  const usage = { inputTokens: n(u.input_tokens) + n(u.cache_read_input_tokens) + n(u.cache_creation_input_tokens), outputTokens: n(u.output_tokens) };
+  return usage.inputTokens || usage.outputTokens ? usage : null;
 }
 
 /**
@@ -198,6 +214,8 @@ export interface StreamHooks {
   onResult?(): void;
   /** The count of open background tasks changed. */
   onPendingChange?(pending: number): void;
+  /** A turn's tokens, from its `result` event (any turn: asked for, follow-up, or failed). */
+  onUsage?(usage: TokenUsage): void;
 }
 
 /**
@@ -311,6 +329,8 @@ export class StreamJsonParser {
       this.isError = ev.is_error === true || (ev.subtype !== undefined && ev.subtype !== 'success');
       this.errorSubtype = this.isError ? (ev.subtype ?? '') : '';
       this.finalText = ev.result ?? '';
+      const usage = claudeUsage(ev.usage);
+      if (usage) this.hooks.onUsage?.(usage);
       this.hooks.onResult?.();
     }
   }
@@ -385,6 +405,8 @@ interface CodexEvent {
     /** agent_message: what the agent said. */
     text?: string;
   };
+  /** turn.completed: the turn's tokens. */
+  usage?: { input_tokens?: number; cached_input_tokens?: number; output_tokens?: number };
 }
 
 /**
@@ -421,6 +443,7 @@ export class CodexJsonParser {
   constructor(
     private readonly onToolStep: (step: string) => void,
     private readonly onText: (text: string) => void = () => {},
+    private readonly onUsage: (usage: TokenUsage) => void = () => {},
   ) {}
 
   feed(chunk: string): void {
@@ -444,6 +467,12 @@ export class CodexJsonParser {
     this.sawEvent = true;
     if (ev.type === 'thread.started') {
       if (typeof ev.thread_id === 'string' && ev.thread_id) this.threadId = ev.thread_id;
+      return;
+    }
+    if (ev.type === 'turn.completed') {
+      // codex counts cached input inside input_tokens.
+      const u = ev.usage, usage = { inputTokens: n(u?.input_tokens), outputTokens: n(u?.output_tokens) };
+      if (usage.inputTokens || usage.outputTokens) this.onUsage(usage);
       return;
     }
     const item = ev.item;
@@ -638,8 +667,8 @@ export async function runRuntime(cfg: RuntimeConfig, opts: RunOpts): Promise<Run
       const freshCodex = cfg.kind === 'codex' && opts.codexSessionId === undefined;
       child.stdin.end(freshCodex ? `${opts.systemPrompt}\n\n${opts.prompt}` : opts.prompt);
     }
-    const parser = new StreamJsonParser(opts.onToolStep, (t) => opts.onText?.(t));
-    const codex = new CodexJsonParser(opts.onToolStep, (t) => opts.onText?.(t));
+    const parser = new StreamJsonParser(opts.onToolStep, (t) => opts.onText?.(t), { onUsage: (u) => opts.onUsage?.(u) });
+    const codex = new CodexJsonParser(opts.onToolStep, (t) => opts.onText?.(t), (u) => opts.onUsage?.(u));
     let stdout = '';
     let stderr = '';
     /** The id to resume this codex session by, structural source first. */

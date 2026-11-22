@@ -201,6 +201,11 @@ export class FlowApi {
     await this.req('DELETE', `/v1/events/subscriptions/${encodeURIComponent(id)}?workspace=${encodeURIComponent(workspaceId)}`);
   }
 
+  /** A turn's model tokens, for the organization's usage count (Admin › Members › Usage). */
+  async reportUsage(workspaceId: string, usage: { inputTokens: number; outputTokens: number }): Promise<void> {
+    await this.req('POST', `/v1/workspaces/${encodeURIComponent(workspaceId)}/agents/me/usage`, usage);
+  }
+
   /** A wake job's steps (platform.md §5.2), as its agent: `ack` takes it under a lease, `extend` renews it, `done` closes it. */
   async jobStep(workspaceId: string, jobId: string, step: 'ack' | 'extend' | 'done', body?: { ok: boolean; note?: string }): Promise<AgentJobDTO> {
     const r = await this.req<{ job: AgentJobDTO }>('POST', `/v1/events/jobs/${encodeURIComponent(jobId)}/${step}?workspace=${encodeURIComponent(workspaceId)}`, body ?? {});

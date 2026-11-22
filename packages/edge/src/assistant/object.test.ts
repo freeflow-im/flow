@@ -594,10 +594,11 @@ describe('every turn with no page open runs its tools (decision_log 2026-11-17)'
     const omniUsers: Record<string, unknown> = { omni: { id: 'omni', email: 'omni@agents.flow.local', displayName: 'Omni', isAgent: true } };
     const OMNI = { id: 'acct-omni', principalId: 'omni', organizationId: 'org-1', state: 'active', role: 'member', displayName: 'Omni', kind: 'native', agentMode: 'shared' } as unknown as AccountDTO;
     const shared: Record<string, unknown>[] = [];
+    const usage: unknown[] = [];
     const env2 = {
       ...e.env,
       DIRECTORY: { idFromName: (n: string) => n, get: () => ({ call: async (m: string, args: unknown[]) => ({ ok: true, value: m === 'getUser' ? omniUsers[args[0] as string] : m === 'accountById' ? OMNI : null }) }) },
-      ORG: { idFromName: (n: string) => n, get: () => ({ channelIdsOf: async () => ['ch-1'], agentTyping: async () => undefined, assistantChat: async (p: Record<string, unknown>) => { e.chat.push(p); return []; }, postAsSharedAgent: async (p: Record<string, unknown>) => { shared.push(p); return 'm1'; } }) },
+      ORG: { idFromName: (n: string) => n, get: () => ({ channelIdsOf: async () => ['ch-1'], agentTyping: async () => undefined, assistantChat: async (p: Record<string, unknown>) => { e.chat.push(p); return []; }, postAsSharedAgent: async (p: Record<string, unknown>) => { shared.push(p); return 'm1'; }, recordAgentUsage: async (accountId: string, u: unknown) => { usage.push({ accountId, u }); } }) },
     } as unknown as AssistantEnv;
     const a = assistant('acct-omni', env2);
     a.script = async (params, { onText }) => {
@@ -609,6 +610,9 @@ describe('every turn with no page open runs its tools (decision_log 2026-11-17)'
     await a.sharedChatTurn({ organizationId: 'org-1', runtime: omniRuntime, askerUserId: 'user-1', askerAccountId: 'acct-1', channelId: 'ch-1', threadRootId: null, messageId: 'msg-s1', prompt: 'Which channels are you in?', audience: 'private' });
     expect(e.chat).toEqual([expect.objectContaining({ agentUserId: 'omni', op: 'channels' })]);
     expect(shared).toEqual([expect.objectContaining({ body: 'You have no channels in common with me.', invokedBy: 'acct-1' })]);
+    // Each of the two model calls is counted for Omni's own account, whoever asked (Admin › Members › Usage).
+    await new Promise((r) => setTimeout(r, 0));
+    expect(usage).toEqual([{ accountId: 'acct-omni', u: { input: 10, output: 5 } }, { accountId: 'acct-omni', u: { input: 10, output: 5 } }]);
   });
 });
 

@@ -748,3 +748,20 @@ describe('loadConfig', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe('token usage (Admin › Members › Usage)', () => {
+  it('reports a claude result’s tokens, cache reads and writes as input', () => {
+    const seen: Array<{ inputTokens: number; outputTokens: number }> = [];
+    const p = new StreamJsonParser(() => {}, () => {}, { onUsage: (u) => seen.push(u) });
+    p.feed(`${JSON.stringify({ type: 'result', subtype: 'success', result: 'ok', usage: { input_tokens: 10, cache_read_input_tokens: 2000, cache_creation_input_tokens: 300, output_tokens: 45 } })}\n`);
+    p.feed(`${JSON.stringify({ type: 'result', subtype: 'success', result: 'none' })}\n`);
+    expect(seen).toEqual([{ inputTokens: 2310, outputTokens: 45 }]);
+  });
+
+  it('reports a codex turn’s tokens', () => {
+    const seen: Array<{ inputTokens: number; outputTokens: number }> = [];
+    const p = new CodexJsonParser(() => {}, () => {}, (u) => seen.push(u));
+    p.feed(`${JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 900, cached_input_tokens: 800, output_tokens: 12 } })}\n`);
+    expect(seen).toEqual([{ inputTokens: 900, outputTokens: 12 }]);
+  });
+});
