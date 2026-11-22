@@ -3,9 +3,9 @@ import { EmailApprovalCard, WaitingEmails, emailApprovalOf } from '@flow/suite-b
 import { activeOrganizationId } from '../suite.ts';
 import { api } from '../api';
 import { Link, useLocation } from 'react-router-dom';
-import { AssistantDock, AssistantDockControls, ChatHistoryNav, SparkIcon, useIdleMinimize } from '@flow/suite-bar/assistant-dock';
+import { AssistantDock, AssistantDockControls, ChatHistoryNav, SparkIcon, useIdleMinimize, useModelTooltip } from '@flow/suite-bar/assistant-dock';
 import { useSuggestedPrompts } from '@flow/suite-bar';
-import { HOME_CHAT, JOB_ACTIVE_STATUSES, type AgentJob, type ChatItem } from '../../../shared/agent/protocol.ts';
+import { assistantModelLabel, HOME_CHAT, JOB_ACTIVE_STATUSES, type AgentJob, type ChatItem } from '../../../shared/agent/protocol.ts';
 import { MOD } from '../commands.ts';
 import { FileChip, fileOfResult } from '../components/FileChip.tsx';
 import { ResizeHandle, usePanelWidth } from '../components/ResizeHandle.tsx';
@@ -63,6 +63,16 @@ export function AgentPanel() {
   // Docked, the panel and the page beside it share the window; the panel takes at most half of it.
   const panel = usePanelWidth(ASSISTANT_PANEL, () => ({ available: window.innerWidth, viewport: window.innerWidth, maxFraction: 0.5 }));
   const [draft, setDraft] = useState('');
+  // What the agents run on (the organization's model in the suite; the person's own choice in the desktop app): on
+  // hovering (or focusing) the agent's name, as in Mail's and Calendar's panels.
+  const orgId = useOrganization().active?.id ?? null;
+  const [model, setModel] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    api.assistantSettings().then((r) => live && setModel(assistantModelLabel(r.settings)), () => live && setModel(null));
+    return () => { live = false; };
+  }, [orgId]);
+  const modelTip = useModelTooltip(model);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const onSheet = !!agent.sheet;
@@ -130,7 +140,7 @@ export function AgentPanel() {
         <SparkIcon />
         {agent.agents.length > 1 ? (
           // The agent the panel talks to (docs/specs/agents.md §6): the person's assistant, or a hosted shared agent of the organization.
-          <select className="agent-title agent-pick" aria-label="Agent" value={agent.agentId ?? ''} disabled={agent.running} onChange={(e) => agent.setAgent(e.target.value || null)} data-testid="agent-pick">
+          <select className="agent-title agent-pick" aria-label="Agent" value={agent.agentId ?? ''} disabled={agent.running} onChange={(e) => agent.setAgent(e.target.value || null)} data-testid="agent-pick" {...modelTip.trigger}>
             {agent.agents.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.displayName}{a.self ? '' : a.mode === 'personal' ? ' · only you' : ' · everyone in the organization'}
@@ -138,8 +148,9 @@ export function AgentPanel() {
             ))}
           </select>
         ) : (
-          <span className="agent-title" title={agent.assistantName ?? undefined}>{agent.assistantName ?? 'Assistant'}</span>
+          <span className="agent-title" tabIndex={0} data-testid="agent-name" {...modelTip.trigger}>{agent.assistantName ?? 'Assistant'}</span>
         )}
+        {modelTip.tooltip}
         <Link className="link agent-changes" to="/changes" title="Changes the assistant made to the app">
           Changes
         </Link>

@@ -17,7 +17,7 @@ function serve(agents: unknown[], bodies: unknown[] = []) {
       bodies.push(JSON.parse(String(init?.body)));
       return new Response('data: {"type":"done"}\n\n', { status: 200, headers: { 'content-type': 'text/event-stream' } });
     }
-    const body = url.startsWith('/api/agent/agents') ? { agents } : url.startsWith('/api/agent/history') ? { chats: [] } : { items: [], prompts: {} };
+    const body = url.startsWith('/api/settings/assistant') ? { settings: { provider: 'openai', openaiModel: 'gpt-6-astra', anthropicModel: 'claude-sonnet-5-5', openrouterModel: '' } } : url.startsWith('/api/agent/agents') ? { agents } : url.startsWith('/api/agent/history') ? { chats: [] } : { items: [], prompts: {} };
     return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
   }));
   return asked;
@@ -45,6 +45,22 @@ describe('SuiteAssistant over an installed app', () => {
     render(<SuiteAssistant organizationId="org1" page="home" app={taskboard} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Open Assistant' }));
     expect((await screen.findByTestId('suite-assistant-no-agent')).textContent).toMatch(/None of your agents can use Taskboard yet/);
+  });
+});
+
+describe("the panel's header", () => {
+  it("names the agent, and shows the organization's model on focus", async () => {
+    const asked = serve([{ id: 'a1', accountId: 'acc1', displayName: 'Ada', mode: 'personal', self: true }]);
+    render(<SuiteAssistant organizationId="org1" page="home" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Open Assistant' }));
+    const name = await screen.findByTestId('suite-assistant-name');
+    await waitFor(() => expect(name.textContent).toBe('Ada'));
+    await waitFor(() => expect(asked).toContain('/api/settings/assistant?workspace=org1'));
+    fireEvent.focus(name);
+    expect((await screen.findByRole('tooltip')).textContent).toBe('OpenAI · Astra');
+    expect(name.getAttribute('aria-describedby')).toBe(screen.getByRole('tooltip').id);
+    fireEvent.blur(name);
+    expect(screen.queryByRole('tooltip')).toBeNull();
   });
 });
 

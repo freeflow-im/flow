@@ -3,7 +3,7 @@
 // links to events in Calendar open their card here, and a delete the assistant asks for waits for Delete or Keep.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AlertCircle, CalendarDays, Check, Loader2, Sparkles } from 'lucide-react';
-import { AssistantDockControls, ChatHistoryNav, orgChatHistory, useAssistantDock, useIdleMinimize } from '@flow/suite-bar/assistant-dock';
+import { AssistantDockControls, ChatHistoryNav, orgChatHistory, useAssistantDock, useAssistantModel, useIdleMinimize, useModelTooltip } from '@flow/suite-bar/assistant-dock';
 import { useSuggestedPrompts } from '@flow/suite-bar';
 import { eventOfLink, madeEventOf } from '../lib/assistant';
 import { ChatMarkdown, toolLabel, ToolPictures, CALENDAR_CHAT, type ChatItem } from '../lib/docsAgent';
@@ -20,6 +20,8 @@ export interface AssistantPanelProps {
   chat: ReturnType<typeof useCalendarAssistant>;
   /** The organization whose suggested prompts it offers (Admin → Prompts). */
   organizationId: string | null;
+  /** The person's assistant's name ("Ada"), for the header; until it is known (or for none), "Assistant". */
+  assistantName?: string | null;
   /** Whether an event's card is open (the suggestions are about it). */
   onEvent: boolean;
   /** Over the calendar, the whole width of a narrow screen, rather than beside it. */
@@ -29,9 +31,12 @@ export interface AssistantPanelProps {
   onOpenEvent(id: string, start?: string): void;
 }
 
-export function AssistantPanel({ chat, organizationId, onEvent, overlay, width, onClose, onOpenEvent }: AssistantPanelProps) {
+export function AssistantPanel({ chat, organizationId, assistantName, onEvent, overlay, width, onClose, onOpenEvent }: AssistantPanelProps) {
   const suggestions = useSuggestedPrompts(organizationId, 'calendar', onEvent ? EVENT_SUGGESTIONS : undefined);
   const [draft, setDraft] = useState('');
+  // Its name, and on hovering (or focusing) it, the organization's model, which every agent runs on.
+  const name = assistantName?.trim() || 'Assistant';
+  const modelTip = useModelTooltip(useAssistantModel(organizationId));
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const docked = useAssistantDock().placement === 'docked';
@@ -63,7 +68,8 @@ export function AssistantPanel({ chat, organizationId, onEvent, overlay, width, 
       className={cn('flex min-h-0 flex-col bg-white', !docked ? 'relative' : overlay ? 'absolute inset-0 z-30 shadow-xl' : 'relative shrink-0 border-l border-hairline')}>
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-hairline px-4">
         <Sparkles className="size-4 text-primary" />
-        <span className="text-[16px] font-semibold">Assistant</span>
+        <span tabIndex={0} className="min-w-0 truncate text-[16px] font-semibold outline-none" data-testid="calendar-assistant-name" {...modelTip.trigger}>{name}</span>
+        {modelTip.tooltip}
         <span className="flex-1" />
         <ChatHistoryNav history={orgChatHistory(organizationId, CALENDAR_CHAT)} busy={chat.running} refreshKey={`${organizationId}:${chat.items.length}:${chat.running}`} onReopened={chat.reload} />
         <Button variant="link" size="sm" className="h-7 px-1.5" onClick={() => void chat.reset()} disabled={chat.running || !chat.items.length} title="Start a new conversation">New chat</Button>

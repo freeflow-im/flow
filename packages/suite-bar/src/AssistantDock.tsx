@@ -4,7 +4,8 @@
 // layout. One wrapper for every state (`display: contents` once docked), so the app's panel keeps its draft when it
 // is anchored or set afloat. Each app keeps its chat; this is only the box around it, the pill, the header buttons
 // (AssistantDockControls), the idle timer (useIdleMinimize) and the new chat after a close (useNewChatOnClose).
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useId, useRef, useState, type FocusEvent, type MouseEvent, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { assistantModelLabel, type AssistantSettings } from '@flow/shared/assistant';
 import './assistant-dock.css';
 
@@ -45,6 +46,34 @@ export function useAssistantModel(organizationId: string | null): string | null 
     return () => { live = false; };
   }, [organizationId]);
   return label;
+}
+
+/**
+ * The assistant panels' name tooltip (Mail, Calendar, Docs, the suite's panel): what the agent runs on, below its name
+ * while the pointer is on it (after a moment) or it has focus. Spread `trigger` on the name (a focusable element: give a
+ * span tabIndex 0) and render `tooltip` anywhere; it is drawn over the page, so no panel's overflow clips it. With no
+ * `model` (not known yet), nothing.
+ */
+export function useModelTooltip(model: string | null): { trigger: Record<string, unknown>; tooltip: ReactNode } {
+  const id = useId();
+  const [at, setAt] = useState<DOMRect | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  if (!model) return { trigger: {}, tooltip: null };
+  const clear = () => { if (timer.current) clearTimeout(timer.current); timer.current = null; };
+  const show = (el: Element) => { clear(); setAt(el.getBoundingClientRect()); };
+  const hide = () => { clear(); setAt(null); };
+  const trigger = {
+    onMouseEnter: (e: MouseEvent<Element>) => { const el = e.currentTarget; clear(); timer.current = setTimeout(() => show(el), 300); },
+    onMouseLeave: hide,
+    onFocus: (e: FocusEvent<Element>) => show(e.currentTarget),
+    onBlur: hide,
+    ...(at ? { 'aria-describedby': id } : {}),
+  };
+  const tooltip = at && typeof document !== 'undefined'
+    ? createPortal(<div role="tooltip" id={id} className="assistant-model-tip" data-testid="assistant-model-tip" style={{ left: Math.max(8, Math.min(at.left, window.innerWidth - 288)), top: at.bottom + 6 }}>{model}</div>, document.body)
+    : null;
+  return { trigger, tooltip };
 }
 
 /** An agent the person may talk to from the panel (GET /api/agent/agents, agents.md §6): their own or a shared one. */

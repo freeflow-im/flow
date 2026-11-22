@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { AssistantDock, AssistantDockControls, ChatHistoryNav, orgChatHistory, SparkIcon, useAssistantDockState, useUsableAgents, type UsableAgent } from './AssistantDock';
+import { AssistantDock, AssistantDockControls, ChatHistoryNav, orgChatHistory, SparkIcon, useAssistantDockState, useAssistantModel, useModelTooltip, useUsableAgents, type UsableAgent } from './AssistantDock';
 import { adminAddress } from '@flow/shared/addresses';
 import { HOME_CHAT, useSuiteAssistant } from './suiteChat';
 import { useSuggestedPrompts, type PromptPage } from './lib/prompts';
@@ -83,6 +83,8 @@ export function SuiteAssistantColumn({ organizationId, page, context, intro, pro
 
 function SuiteAssistantPanel({ organizationId, page, agents, chosen, onPick, context, bare = false, intro, prompts }: { organizationId: string | null; page: PromptPage; agents: UsableAgent[]; chosen: UsableAgent | null; onPick: (id: string) => void; context?: Record<string, unknown>; bare?: boolean; intro?: string; prompts?: string[] }) {
   const name = chosen?.displayName ?? 'Assistant';
+  // Every agent runs on the organization's model: on hovering (or focusing) the name, which.
+  const modelTip = useModelTooltip(useAssistantModel(organizationId));
   const avatarUrl = chosen?.avatarUrl ?? null;
   // The person's own assistant goes by no id (the routes' default); any other agent by its own.
   const agentId = chosen && !chosen.self ? chosen.id : null;
@@ -144,6 +146,7 @@ function SuiteAssistantPanel({ organizationId, page, agents, chosen, onPick, con
         {agents.length > 1 ? (
           <select
             className="suite-chat-title suite-chat-picker"
+            {...modelTip.trigger}
             value={chosen?.id ?? ''}
             disabled={chat.running}
             onChange={(e) => onPick(e.target.value)}
@@ -153,8 +156,9 @@ function SuiteAssistantPanel({ organizationId, page, agents, chosen, onPick, con
             {agents.map((a) => <option key={a.id} value={a.id}>{agentLabel(a)}</option>)}
           </select>
         ) : (
-          <span className="suite-chat-title">{name}</span>
+          <span className="suite-chat-title" tabIndex={0} data-testid="suite-assistant-name" {...modelTip.trigger}>{name}</span>
         )}
+        {modelTip.tooltip}
         <ChatHistoryNav history={orgChatHistory(organizationId, HOME_CHAT, agentId)} busy={chat.running} refreshKey={`${organizationId}:${agentId}:${chat.items.length}:${chat.running}`} onReopened={chat.reload} />
         <button type="button" className="suite-chat-link" onClick={() => void chat.reset()} disabled={chat.running || !chat.items.length}>New chat</button>
         {!bare && <AssistantDockControls />}

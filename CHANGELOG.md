@@ -12,7 +12,7 @@ This file keeps two things:
 
 ## Parity
 
-- **Mail's assistant panel names the assistant and its model (2026-11-22, Taskboard task 23).** Mail is web only; macOS and iOS have no Mail (deliberate). Docs' panel shows the name without the model tooltip, and Calendar's still says "Assistant" (gap to close).
+- **The assistant panels name the agent and its model (2026-11-22, Taskboard task 23).** Mail, Calendar, Docs and the suite panel (Home, Admin, installed apps) on web and in the desktop shell; macOS and iOS have no assistant panel yet (gap to close with the native assistant panel).
 - **Agents' AI usage is in web Admin only (2026-11-21, Taskboard task 22).** The Usage link and chart (input by uncached, cache writes and cache reads; a By model table and filter) are in Admin › Members, which macOS and iOS do not have (deliberate, as for the rest of Admin).
 - **Sign-in codes found in mail, and their desktop notifications, are on web only (2026-11-20, Taskboard task 21; 2026-11-21).** Mail is web only; macOS and iOS have no Mail (deliberate).
 - **The unread dot on the tab icon is web only (2026-11-20, Taskboard task 20).** A browser tab has no app badge, so web Chat dots its favicon; macOS, iOS and the desktop shell show their dock/app badge instead (deliberate).

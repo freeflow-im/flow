@@ -537,6 +537,6 @@ export const SHOWN_RESULTS: ReadonlySet<string> = new Set(['create_mail_draft', 
 // The model catalogue and the assistant's settings are the platform's (decision_log 2026-11-11: identity, agents and their
 // settings sit below the apps), so the Admin app reads them without Docs: they live in @flow/shared/assistant.
 export {
-  ANTHROPIC_MODELS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_OPENAI_MODEL, DEFAULT_OPENROUTER_MODEL, OPENAI_MODELS, OPENROUTER_MODELS, OPENROUTER_MODEL_RE,
+  ANTHROPIC_MODELS, assistantModelLabel, DEFAULT_ANTHROPIC_MODEL, DEFAULT_OPENAI_MODEL, DEFAULT_OPENROUTER_MODEL, OPENAI_MODELS, OPENROUTER_MODELS, OPENROUTER_MODEL_RE,
   type AnthropicModelId, type AssistantProvider, type AssistantSettings, type AssistantSettingsUpdate, type KeyProvider, type OpenAIModelId,
 } from '@flow/shared/assistant';

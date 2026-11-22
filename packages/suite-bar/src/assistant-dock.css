@@ -169,3 +169,17 @@
     display: none !important;
   }
 }
+
+/* The model an agent runs on, below its name in an assistant panel (useModelTooltip): over everything, the dock included. */
+.assistant-model-tip {
+  position: fixed;
+  z-index: 2147483000;
+  max-width: 280px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--assistant-dock-ink, #1f1f1f);
+  color: #fff;
+  font: 12px/1.35 system-ui, -apple-system, 'Segoe UI', sans-serif;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+}
