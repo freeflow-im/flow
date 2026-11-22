@@ -176,6 +176,8 @@ interface StreamEvent {
   is_error?: boolean;
   message?: {
     content?: Array<{ type?: string; id?: string; name?: string; input?: unknown; text?: string; tool_use_id?: string }> | string;
+    /** assistant: the model that answered. */
+    model?: string;
   };
   /** system/background_tasks_changed: the complete set of tasks running right now. */
   tasks?: Array<{ task_id?: string; description?: string }>;
@@ -186,31 +188,47 @@ interface StreamEvent {
   is_backgrounded?: boolean;
   status?: string;
   summary?: string;
-  /** result: the turn's tokens, as the CLI counted them. */
+  /** result: the main loop's tokens for this turn alone (subagents and other calls left out). */
   usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
+  /**
+   * result: each model's tokens since the process's previous result, subagents and every other call included. The
+   * CLI's own advice: sum these, never subtract `modelUsage`, which runs on across turns. Absent on older CLIs.
+   */
+  model_usage_since_last_result?: Record<string, { inputTokens?: number; outputTokens?: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number }>;
 }
 
 /**
- * A turn's model tokens, reported to Flow (Admin › Members › Usage). Input comes in its three billing kinds:
- * `inputTokens` is the uncached input, apart from prompt-cache writes and reads.
+ * A turn's model tokens on one model, reported to Flow (Admin › Members › Usage). Input comes in its three billing kinds:
+ * `inputTokens` is the uncached input, apart from prompt-cache writes and reads. `model` is '' when the CLI did not say
+ * (the bridge then names its configured model). `requests` is 1 on a turn's first entry and 0 on the others, so a turn
+ * that used several models counts as one call.
  */
-export interface TokenUsage { inputTokens: number; outputTokens: number; cacheWriteTokens: number; cacheReadTokens: number }
+export interface TokenUsage { model: string; inputTokens: number; outputTokens: number; cacheWriteTokens: number; cacheReadTokens: number; requests: number }
 
 const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
 const any = (u: TokenUsage) => u.inputTokens + u.outputTokens + u.cacheWriteTokens + u.cacheReadTokens > 0;
 
-/** A `result` event's usage as a TokenUsage, or null when it carries none. Claude's input_tokens is already uncached. */
-export function claudeUsage(u: StreamEvent['usage']): TokenUsage | null {
-  if (!u) return null;
-  const usage = { inputTokens: n(u.input_tokens), outputTokens: n(u.output_tokens), cacheWriteTokens: n(u.cache_creation_input_tokens), cacheReadTokens: n(u.cache_read_input_tokens) };
-  return any(usage) ? usage : null;
+/**
+ * A `result` event's tokens, one entry per model: the per-model count since the previous result where the CLI gives
+ * it, else the turn's main-loop usage on the model its last answer came from (`lastModel`). Empty when it used none.
+ */
+export function claudeUsage(ev: Pick<StreamEvent, 'usage' | 'model_usage_since_last_result'>, lastModel = ''): TokenUsage[] {
+  const per = ev.model_usage_since_last_result;
+  const list: TokenUsage[] = per && typeof per === 'object'
+    ? Object.entries(per).map(([model, u]) => ({ model, inputTokens: n(u?.inputTokens), outputTokens: n(u?.outputTokens), cacheWriteTokens: n(u?.cacheCreationInputTokens), cacheReadTokens: n(u?.cacheReadInputTokens), requests: 0 }))
+    : ev.usage
+      ? [{ model: lastModel, inputTokens: n(ev.usage.input_tokens), outputTokens: n(ev.usage.output_tokens), cacheWriteTokens: n(ev.usage.cache_creation_input_tokens), cacheReadTokens: n(ev.usage.cache_read_input_tokens), requests: 0 }]
+      : [];
+  const used = list.filter(any);
+  if (used[0]) used[0].requests = 1;
+  return used;
 }
 
 /** A codex `turn.completed` usage as a TokenUsage: codex counts cached input inside input_tokens, and reports no writes. */
 export function codexUsage(u: CodexEvent['usage']): TokenUsage | null {
   if (!u) return null;
   const cached = Math.min(n(u.cached_input_tokens), n(u.input_tokens));
-  const usage = { inputTokens: n(u.input_tokens) - cached, outputTokens: n(u.output_tokens), cacheWriteTokens: 0, cacheReadTokens: cached };
+  const usage = { model: '', inputTokens: n(u.input_tokens) - cached, outputTokens: n(u.output_tokens), cacheWriteTokens: 0, cacheReadTokens: cached, requests: 1 };
   return any(usage) ? usage : null;
 }
 
@@ -253,6 +271,8 @@ export class StreamJsonParser {
    * to show for it.
    */
   lastText = '';
+  /** The model the latest answer came from: what an older CLI's result usage is put down to. */
+  lastModel = '';
 
   /**
    * `onText` receives every assistant text block as it arrives — the agent's
@@ -322,6 +342,8 @@ export class StreamJsonParser {
       return;
     }
     if (ev.type === 'assistant') {
+      const model = ev.message?.model;
+      if (typeof model === 'string' && model && !model.startsWith('<')) this.lastModel = model;
       for (const block of content) {
         if (block.type === 'tool_use' && block.name) {
           if (block.id) this.running.add(block.id);
@@ -341,8 +363,7 @@ export class StreamJsonParser {
       this.isError = ev.is_error === true || (ev.subtype !== undefined && ev.subtype !== 'success');
       this.errorSubtype = this.isError ? (ev.subtype ?? '') : '';
       this.finalText = ev.result ?? '';
-      const usage = claudeUsage(ev.usage);
-      if (usage) this.hooks.onUsage?.(usage);
+      for (const usage of claudeUsage(ev, this.lastModel)) this.hooks.onUsage?.(usage);
       this.hooks.onResult?.();
     }
   }

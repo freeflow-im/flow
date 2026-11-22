@@ -67,7 +67,7 @@ describe('agent usage', () => {
     expect(agentUsageSeries(sql, 'a1', '1d', 0, NOW).total).toMatchObject({ inputK: 1.2, outputK: 0.1, requests: 1 });
     recordAgentUsage(sql, 'old', { input: 1_000, output: 1_000 }, NOW - 40 * 24 * H);
     recordAgentUsage(sql, 'a1', { input: 1, output: 1 }, NOW);
-    expect(sql.exec("SELECT * FROM _agent_usage_hourly WHERE account_id = 'old'").toArray()).toEqual([]);
+    expect(sql.exec("SELECT * FROM _agent_usage WHERE account_id = 'old'").toArray()).toEqual([]);
   });
 
   it('keeps cache writes and reads apart from uncached input, and inputK is all three', () => {
@@ -77,11 +77,45 @@ describe('agent usage', () => {
     expect(agentUsageSeries(sql, 'a1', '1d', 0, NOW).total).toEqual({ inputK: 533, uncachedK: 3, cacheWriteK: 30, cacheReadK: 500, outputK: 2, requests: 2 });
   });
 
-  it('adds the cache columns to a table made before the split, keeping its rows as uncached input', () => {
-    const sql = table('CREATE TABLE _agent_usage_hourly (account_id TEXT NOT NULL, hour INTEGER NOT NULL, requests INTEGER NOT NULL DEFAULT 0, input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (account_id, hour))');
-    ensureAgentUsageTable(sql);
-    recordAgentUsage(sql, 'a1', { input: 5_000, cacheRead: 7_000, output: 100 }, NOW);
-    expect(agentUsageSeries(sql, 'a1', '1d', 0, NOW).total).toMatchObject({ uncachedK: 5, cacheReadK: 7, inputK: 12 });
+  it('moves the rows of the tables from before models (with or without the cache columns) in as model unknown', () => {
+    for (const ddl of [
+      'CREATE TABLE _agent_usage_hourly (account_id TEXT NOT NULL, hour INTEGER NOT NULL, requests INTEGER NOT NULL DEFAULT 0, input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (account_id, hour))',
+      'CREATE TABLE _agent_usage_hourly (account_id TEXT NOT NULL, hour INTEGER NOT NULL, requests INTEGER NOT NULL DEFAULT 0, input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, cache_write_tokens INTEGER NOT NULL DEFAULT 0, cache_read_tokens INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (account_id, hour))',
+    ]) {
+      const sql = sqlOf(ddl);
+      const cache = ddl.includes('cache_read');
+      sql.exec(`INSERT INTO _agent_usage_hourly (account_id, hour, requests, input_tokens, output_tokens${cache ? ', cache_read_tokens' : ''}) VALUES ('a1', ?, 2, 4000, 100${cache ? ', 9000' : ''})`, Math.floor(NOW / H) * H);
+      ensureAgentUsageTable(sql);
+      ensureAgentUsageTable(sql);
+      expect(sql.exec("SELECT name FROM sqlite_master WHERE name = '_agent_usage_hourly'").toArray()).toEqual([]);
+      recordAgentUsage(sql, 'a1', { input: 1_000, cacheRead: 7_000, output: 100, model: 'claude-sonnet-5-5' }, NOW);
+      const u = agentUsageSeries(sql, 'a1', '1d', 0, NOW);
+      expect(u.total).toMatchObject({ uncachedK: 5, cacheReadK: cache ? 16 : 7, requests: 3 });
+      expect(u.models.map((m) => [m.model, m.uncachedK])).toEqual(cache ? [['', 4], ['claude-sonnet-5-5', 1]] : [['claude-sonnet-5-5', 1], ['', 4]]);
+    }
+  });
+
+  it('keeps each model apart: totals per model whatever the filter, and the buckets and total of one model on request', () => {
+    const sql = table();
+    recordAgentUsage(sql, 'a1', { input: 1_000, cacheRead: 50_000, output: 2_000, model: 'claude-opus-5-5' }, NOW);
+    recordAgentUsage(sql, 'a1', { input: 3_000, output: 500, model: 'claude-haiku-5-5', requests: 0 }, NOW);
+    recordAgentUsage(sql, 'a1', { input: 2_000, output: 400, model: '  claude-haiku-5-5 ' }, NOW - 3 * H);
+    recordAgentUsage(sql, 'a1', { input: 700, output: 70 }, NOW);
+    const all = agentUsageSeries(sql, 'a1', '1d', 0, NOW);
+    expect(all.model).toBeNull();
+    expect(all.total).toMatchObject({ inputK: 56.7, outputK: 3, requests: 3 });
+    expect(all.models).toEqual([
+      { model: 'claude-opus-5-5', inputK: 51, uncachedK: 1, cacheWriteK: 0, cacheReadK: 50, outputK: 2, requests: 1 },
+      { model: 'claude-haiku-5-5', inputK: 5, uncachedK: 5, cacheWriteK: 0, cacheReadK: 0, outputK: 0.9, requests: 1 },
+      { model: '', inputK: 0.7, uncachedK: 0.7, cacheWriteK: 0, cacheReadK: 0, outputK: 0.1, requests: 1 },
+    ]);
+    const haiku = agentUsageSeries(sql, 'a1', '1d', 0, NOW, 'claude-haiku-5-5');
+    expect(haiku.model).toBe('claude-haiku-5-5');
+    expect(haiku.total).toMatchObject({ inputK: 5, outputK: 0.9 });
+    expect(haiku.buckets.at(-1)).toMatchObject({ uncachedK: 3 });
+    expect(haiku.buckets.at(-4)).toMatchObject({ uncachedK: 2 });
+    expect(haiku.models).toHaveLength(3);
+    expect(agentUsageSeries(sql, 'a1', '1d', 0, NOW, '').total).toMatchObject({ inputK: 0.7 });
   });
 
   it('knows its ranges', () => {

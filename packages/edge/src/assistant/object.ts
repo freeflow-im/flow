@@ -438,7 +438,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
         return { ...(docs ? { docs } : {}), ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}), ...(apps ? { apps } : {}), ...(admin ? { admin } : {}), ...(mailApproval ? { mailApproval } : {}), ...(userApps ? { userApps } : {}), ...(events ? { events } : {}), ...(wakes ? { wakes } : {}), memory };
       },
       // Every model call's tokens, to the organization's count for this agent (org/agentUsage.ts, Admin › Members › Usage).
-      onUsage: (userId: string, usage) => this.recordUsage(this.turnWho.get(userId) ?? this.who, usage),
+      onUsage: (userId: string, usage, model) => this.recordUsage(this.turnWho.get(userId) ?? this.who, usage, model),
       // The agent's memory files, listed at the start of each request (agents.md §6.1, loading).
       notes: (userId: string) => new MemoryStore(this.sql, this.memoryScope(userId, this.turnWho.get(userId) ?? this.who)).listing(),
     });
@@ -449,14 +449,14 @@ export class Assistant extends DurableObject<AssistantEnv> {
    * One model call's tokens, counted for the agent this runtime is (its own account, as the turn names it or as it last
    * learned it) in the turn's organization. Not awaited: the turn goes on, and the object stays up until it lands.
    */
-  private recordUsage(who: Who | null, usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null }): void {
+  private recordUsage(who: Who | null, usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null }, model: string): void {
     const accountId = who?.agentAccountId ?? this.state('agent_account_id');
     const org = who?.caller.account?.organizationId || who?.caller.organizationId;
     const ORG = this.env.ORG;
     if (!accountId || !org || !ORG) return;
     // The three kinds of input apart: a provider bills a cache read far below uncached input, and a cache write above it.
-    const u = { input: usage.input_tokens, output: usage.output_tokens, cacheWrite: usage.cache_creation_input_tokens ?? 0, cacheRead: usage.cache_read_input_tokens ?? 0 };
-    const stub = ORG.get(ORG.idFromName(org)) as unknown as { recordAgentUsage(accountId: string, u: { input: number; output: number; cacheWrite: number; cacheRead: number }): Promise<void> };
+    const u = { input: usage.input_tokens, output: usage.output_tokens, cacheWrite: usage.cache_creation_input_tokens ?? 0, cacheRead: usage.cache_read_input_tokens ?? 0, model };
+    const stub = ORG.get(ORG.idFromName(org)) as unknown as { recordAgentUsage(accountId: string, u: { input: number; output: number; cacheWrite: number; cacheRead: number; model: string }): Promise<void> };
     this.ctx.waitUntil(stub.recordAgentUsage(accountId, u).catch((e) => console.warn('[assistant] usage not recorded', e)));
   }
 

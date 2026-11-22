@@ -2,13 +2,14 @@
 // hour, or the last 7 or 30 days by day, in thousands. No prices, only raw tokens, but input comes in its three billing
 // kinds (uncached, cache writes, cache reads), stacked, because a provider charges them very differently. Input runs about
 // a hundred times output, so output is a second chart with its own axis (never one chart with two scales), under a row
-// of totals; every column has a tooltip, and the table view has every number.
+// of totals; every column has a tooltip, and the table view has every number. Below, a table of each model's totals
+// over the range; the model filter (or a row of that table) narrows the totals, charts and table to one model.
 import { useLayoutEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { AgentUsageAmounts, AgentUsageDTO, AgentUsageRange, WorkspaceDTO } from '@flow/shared';
 import { ArrowLeft } from 'lucide-react';
 import { adminApi } from '../api';
-import { Card, ErrorLine } from '../components/ui';
+import { Card, ErrorLine, Select } from '../components/ui';
 
 const RANGES: { id: AgentUsageRange; label: string }[] = [
   { id: '1d', label: '1 day' },
@@ -30,6 +31,12 @@ const INPUT_STACK: Series[] = [
   { key: 'cacheWriteK', label: 'Cache writes', color: '#e87ba4' },
 ];
 const OUTPUT: Series[] = [{ key: 'outputK', label: 'Output', color: '#eb6834' }];
+
+/** A model as the page names it: its id, or what usage with no model known is called. */
+export const modelLabel = (m: string): string => m || 'Unknown model';
+
+/** The Select's value for a model filter: `*` for every model (a model id is never `*`). */
+const ALL = '*';
 
 /** Thousands of tokens as a reader says them: 0.4K, 12.3K, 1.2M. */
 export function formatK(k: number): string {
@@ -205,10 +212,61 @@ function Stat({ label, value, testid }: { label: string; value: string; testid: 
   );
 }
 
+/** Each model's totals over the range, all models whatever the filter; a row narrows the page to its model, and the
+ * selected row's again widens it to all. */
+function ByModel({ models, selected, onSelect }: { models: AgentUsageDTO['models']; selected: string | null; onSelect(m: string | null): void }) {
+  const num = 'px-3 py-1 text-right tabular-nums';
+  return (
+    <div className="flex flex-col gap-1">
+      <h3 className="text-sm font-medium">By model</h3>
+      <div className="overflow-x-auto rounded-lg border border-hairline">
+        <table className="w-full text-sm" data-testid="usage-by-model">
+          <thead>
+            <tr className="border-b border-hairline bg-panel text-left text-xs text-faint uppercase">
+              <th className="px-3 py-1.5 font-semibold">Model</th>
+              <th className="px-3 py-1.5 text-right font-semibold">Uncached (K)</th>
+              <th className="px-3 py-1.5 text-right font-semibold">Cache writes (K)</th>
+              <th className="px-3 py-1.5 text-right font-semibold">Cache reads (K)</th>
+              <th className="px-3 py-1.5 text-right font-semibold">Output (K)</th>
+              <th className="px-3 py-1.5 text-right font-semibold">Calls</th>
+            </tr>
+          </thead>
+          <tbody>
+            {models.map((m) => {
+              const on = selected === m.model;
+              return (
+                <tr key={m.model} className={`border-b border-hairline last:border-0 ${on ? 'bg-selected-blue' : ''}`} data-testid={`usage-model-row-${m.model || 'unknown'}`}>
+                  <td className="px-3 py-1">
+                    <button type="button" className={`text-left hover:underline ${m.model ? 'font-mono text-xs' : 'text-muted'} ${on ? 'font-semibold text-primary' : ''}`} title={on ? 'Show all models' : `Show only ${modelLabel(m.model)}`} onClick={() => onSelect(on ? null : m.model)}>
+                      {modelLabel(m.model)}
+                    </button>
+                  </td>
+                  <td className={num}>{m.uncachedK.toLocaleString()}</td>
+                  <td className={num}>{m.cacheWriteK.toLocaleString()}</td>
+                  <td className={num}>{m.cacheReadK.toLocaleString()}</td>
+                  <td className={num}>{m.outputK.toLocaleString()}</td>
+                  <td className={num}>{m.requests.toLocaleString()}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export function AgentUsage({ org, userId, name, onBack }: { org: WorkspaceDTO; userId: string; name: string; onBack(): void }) {
   const [range, setRange] = useState<AgentUsageRange>('7d');
   const [table, setTable] = useState(false);
-  const usage = useQuery({ queryKey: ['agent-usage', org.id, userId, range], queryFn: () => adminApi.agentUsage(org.id, userId, range), refetchInterval: 60_000 });
+  const [model, setModel] = useState<string | null>(null);
+  const usage = useQuery({
+    queryKey: ['agent-usage', org.id, userId, range, model],
+    queryFn: () => adminApi.agentUsage(org.id, userId, range, model),
+    refetchInterval: 60_000,
+    // The page keeps the last answer while another range or model loads, rather than blinking to "Loading…".
+    placeholderData: (prev) => prev,
+  });
   const u = usage.data;
   const empty = !!u && u.total.requests === 0;
   return (
@@ -227,6 +285,16 @@ export function AgentUsage({ org, userId, name, onBack }: { org: WorkspaceDTO; u
             </button>
           ))}
           <span className="flex-1" />
+          {u && (u.models.length > 1 || model !== null) && (
+            <Select
+              compact
+              label="Model"
+              value={model ?? ALL}
+              options={[{ value: ALL, label: 'All models' }, ...[...new Set([...u.models.map((m) => m.model), ...(model !== null ? [model] : [])])].map((m) => ({ value: m, label: modelLabel(m) }))]}
+              onChange={(v) => setModel(v === ALL ? null : v)}
+              testid="usage-model"
+            />
+          )}
           <button type="button" className="text-primary hover:underline" onClick={() => setTable((t) => !t)} data-testid="usage-table-toggle">
             {table ? 'Show charts' : 'Show table'}
           </button>
@@ -245,7 +313,7 @@ export function AgentUsage({ org, userId, name, onBack }: { org: WorkspaceDTO; u
             </div>
             {empty && (
               <p className="text-xs text-muted" data-testid="usage-empty">
-                No usage in this range. Hosted agents report every model call; agents on the Flow bridge report each turn from version 0.43. An agent connected over MCP alone runs its model elsewhere, so nothing is counted here.
+                No usage in this range. Hosted agents report every model call; agents on the Flow bridge report each turn from version 0.43 (per model from 0.44). An agent connected over MCP alone runs its model elsewhere, so nothing is counted here.
               </p>
             )}
             {table ? (
@@ -281,6 +349,7 @@ export function AgentUsage({ org, userId, name, onBack }: { org: WorkspaceDTO; u
                 <ColumnChart title="Output tokens" series={OUTPUT} data={u.buckets} bucket={u.bucket} testid="usage-chart-output" />
               </div>
             )}
+            {u.models.length > 0 && <ByModel models={u.models} selected={model} onSelect={setModel} />}
           </>
         )}
       </Card>

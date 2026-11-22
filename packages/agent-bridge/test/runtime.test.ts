@@ -750,18 +750,41 @@ describe('loadConfig', () => {
 });
 
 describe('token usage (Admin › Members › Usage)', () => {
-  it('reports a claude result’s tokens, uncached input apart from cache writes and reads', () => {
+  const feed = (p: StreamJsonParser, ev: unknown) => p.feed(`${JSON.stringify(ev)}\n`);
+
+  it('reports each model’s tokens since the last result, subagents included, as one call', () => {
     const seen: unknown[] = [];
     const p = new StreamJsonParser(() => {}, () => {}, { onUsage: (u) => seen.push(u) });
-    p.feed(`${JSON.stringify({ type: 'result', subtype: 'success', result: 'ok', usage: { input_tokens: 10, cache_read_input_tokens: 2000, cache_creation_input_tokens: 300, output_tokens: 45 } })}\n`);
-    p.feed(`${JSON.stringify({ type: 'result', subtype: 'success', result: 'none' })}\n`);
-    expect(seen).toEqual([{ inputTokens: 10, outputTokens: 45, cacheWriteTokens: 300, cacheReadTokens: 2000 }]);
+    feed(p, {
+      type: 'result', subtype: 'success', result: 'ok',
+      usage: { input_tokens: 1, output_tokens: 1 },
+      modelUsage: { 'claude-opus-5-5': { inputTokens: 999999, outputTokens: 999999, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 } },
+      model_usage_since_last_result: {
+        'claude-opus-5-5': { inputTokens: 10, outputTokens: 45, cacheReadInputTokens: 2000, cacheCreationInputTokens: 300 },
+        'claude-haiku-5-5': { inputTokens: 500, outputTokens: 20, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+        'claude-idle': { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+      },
+    });
+    feed(p, { type: 'result', subtype: 'success', result: 'none', model_usage_since_last_result: {} });
+    expect(seen).toEqual([
+      { model: 'claude-opus-5-5', inputTokens: 10, outputTokens: 45, cacheWriteTokens: 300, cacheReadTokens: 2000, requests: 1 },
+      { model: 'claude-haiku-5-5', inputTokens: 500, outputTokens: 20, cacheWriteTokens: 0, cacheReadTokens: 0, requests: 0 },
+    ]);
   });
 
-  it('reports a codex turn’s tokens', () => {
+  it('on an older CLI, puts the turn’s usage down to the model of its last answer', () => {
+    const seen: unknown[] = [];
+    const p = new StreamJsonParser(() => {}, () => {}, { onUsage: (u) => seen.push(u) });
+    feed(p, { type: 'assistant', message: { model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'hi' }] } });
+    feed(p, { type: 'result', subtype: 'success', result: 'ok', usage: { input_tokens: 10, cache_read_input_tokens: 2000, cache_creation_input_tokens: 300, output_tokens: 45 } });
+    feed(p, { type: 'result', subtype: 'success', result: 'none' });
+    expect(seen).toEqual([{ model: 'claude-sonnet-5-5', inputTokens: 10, outputTokens: 45, cacheWriteTokens: 300, cacheReadTokens: 2000, requests: 1 }]);
+  });
+
+  it('reports a codex turn’s tokens, cached input as cache reads, the model left to the bridge', () => {
     const seen: unknown[] = [];
     const p = new CodexJsonParser(() => {}, () => {}, (u) => seen.push(u));
     p.feed(`${JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 900, cached_input_tokens: 800, output_tokens: 12 } })}\n`);
-    expect(seen).toEqual([{ inputTokens: 100, outputTokens: 12, cacheWriteTokens: 0, cacheReadTokens: 800 }]);
+    expect(seen).toEqual([{ model: '', inputTokens: 100, outputTokens: 12, cacheWriteTokens: 0, cacheReadTokens: 800, requests: 1 }]);
   });
 });

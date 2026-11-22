@@ -299,7 +299,9 @@ export class AgentBridge {
    */
   private reportUsage(usage: TokenUsage): void {
     if (!this.workspace) return;
-    this.api.reportUsage(this.workspace.id, usage).catch((err: Error) => {
+    // A model the CLI did not name (Codex, an older Claude Code before its first answer) is the one it was started with.
+    const model = usage.model || this.cfg.runtime.model || '';
+    this.api.reportUsage(this.workspace.id, { ...usage, model }).catch((err: Error) => {
       if (this.usageWarned) return;
       this.usageWarned = true;
       this.log(`could not report token usage (${err.message}); carrying on`);

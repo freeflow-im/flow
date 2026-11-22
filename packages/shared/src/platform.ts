@@ -246,13 +246,18 @@ export interface AgentUsageAmounts { inputK: number; uncachedK: number; cacheWri
 export interface AgentUsageDTO {
   range: AgentUsageRange;
   bucket: 'hour' | 'day';
+  /** The model the buckets and total are filtered to (`?model=`), '' for usage with no model known; null for all. */
+  model: string | null;
   buckets: ({ start: string } & AgentUsageAmounts)[];
   total: AgentUsageAmounts;
+  /** Each model's totals over the range, whatever the filter, the most input first. `model` is the id the provider
+   * answered as, or '' where it is not known (usage from before models were counted, a Codex bridge with none set). */
+  models: ({ model: string } & AgentUsageAmounts)[];
 }
 
-/** What an agent on the bridge reports after a turn (POST /v1/workspaces/:id/agents/me/usage). `inputTokens` is the
+/** What an agent on the bridge reports after a turn (POST /v1/workspaces/:id/agents/me/usage), one report per model. `inputTokens` is the
  * uncached input when the cache counts are given; a bridge older than 0.44 sends all input there. */
-export interface AgentUsageReport { inputTokens: number; outputTokens: number; cacheWriteTokens?: number; cacheReadTokens?: number; requests?: number }
+export interface AgentUsageReport { inputTokens: number; outputTokens: number; cacheWriteTokens?: number; cacheReadTokens?: number; requests?: number; model?: string }
 
 /** A hosted agent's special role (agents.md §1.4). Only `admin` exists: the admin agent every organization has. */
 export type AgentRole = 'admin';

@@ -850,8 +850,8 @@ export class Org extends DurableObject<OrgEnv> {
   }
 
   /** An agent's usage over a range, for Admin › Members › Usage (routes/agents.ts checks who may ask). */
-  async agentUsage(accountId: string, range: AgentUsageRange, tzOffsetMinutes = 0): Promise<AgentUsageDTO> {
-    return agentUsageSeries(this.ctx.storage.sql, accountId, range, tzOffsetMinutes);
+  async agentUsage(accountId: string, range: AgentUsageRange, tzOffsetMinutes = 0, model: string | null = null): Promise<AgentUsageDTO> {
+    return agentUsageSeries(this.ctx.storage.sql, accountId, range, tzOffsetMinutes, Date.now(), model);
   }
 
   async agentSponsorOf(agentAccountId: string): Promise<{ userId: string; sponsorUserId: string | null; personal: boolean } | null> {
