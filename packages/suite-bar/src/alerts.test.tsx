@@ -95,3 +95,39 @@ describe('the alerts under the suite bar', () => {
     expect(screen.getByTestId('suite-alert').textContent).toContain('Send the report');
   });
 });
+
+describe('the cards’ motion', () => {
+  const card = (id: string, title: string) => ({ id, kind: 'Reminder', title, lines: [], actions: [] });
+  const motion = (reduce: boolean) => vi.stubGlobal('matchMedia', (q: string) => ({ matches: reduce && q.includes('reduce'), media: q, addEventListener() {}, removeEventListener() {} }));
+
+  it('slides a closed card up and out, in its place, before it goes', () => {
+    vi.useFakeTimers();
+    motion(false);
+    const { rerender } = render(<SuiteAlerts alerts={[card('a', 'First'), card('b', 'Second')]} onClose={() => {}} />);
+    rerender(<SuiteAlerts alerts={[card('b', 'Second')]} onClose={() => {}} />);
+    const leaving = screen.getByTestId('suite-alert-leaving');
+    expect(leaving.className).toContain('sb-alert-leaving');
+    expect(leaving.textContent).toContain('First');
+    // Still first in the stack while it slides out.
+    expect(screen.getByTestId('suite-alerts').firstElementChild).toBe(leaving);
+    // Gone once its slide is done (the browser's animationend; jsdom runs none, so the time limit stands in).
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(screen.queryByTestId('suite-alert-leaving')).toBeNull();
+    expect(screen.getAllByTestId('suite-alert')).toHaveLength(1);
+  });
+
+  it('goes anyway when no animation ends (a tab in the background), and at once for less motion', () => {
+    vi.useFakeTimers();
+    motion(false);
+    const { rerender } = render(<SuiteAlerts alerts={[card('a', 'First')]} onClose={() => {}} />);
+    rerender(<SuiteAlerts alerts={[]} onClose={() => {}} />);
+    expect(screen.getByTestId('suite-alert-leaving')).toBeTruthy();
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(screen.queryByTestId('suite-alerts')).toBeNull();
+    cleanup();
+    motion(true);
+    const again = render(<SuiteAlerts alerts={[card('a', 'First')]} onClose={() => {}} />);
+    again.rerender(<SuiteAlerts alerts={[]} onClose={() => {}} />);
+    expect(screen.queryByTestId('suite-alerts')).toBeNull();
+  });
+});
