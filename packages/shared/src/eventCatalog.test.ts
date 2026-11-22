@@ -11,7 +11,7 @@ describe('eventCatalog', () => {
 
   it('groups the suite\'s apps, sharing, and installed apps with their full types', () => {
     const groups = eventCatalog([{ name: 'taskboard', label: 'Taskboard', events: ['task.created'] }, { name: 'quiet', label: 'Quiet', events: [] }]);
-    expect(groups.map((g) => g.label)).toEqual(['Chat', 'Docs', 'Mail', 'Calendar', 'Contacts', 'Sharing', 'Agents', 'Taskboard']);
+    expect(groups.map((g) => g.label)).toEqual(['Chat', 'Docs', 'Mail', 'Calendar', 'Contacts', 'Sharing', 'Agents', 'Alerts', 'Taskboard']);
     expect(findEvent(groups, 'app.taskboard.task.created')).toMatchObject({ group: { label: 'Taskboard', installed: true }, event: { label: 'Task created' } });
     expect(findEvent(groups, 'sharing.granted')?.group.label).toBe('Sharing');
     expect(findEvent(groups, 'app.crm.deal.won')).toBeNull();
