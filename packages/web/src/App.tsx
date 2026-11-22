@@ -38,6 +38,8 @@ import WorkspaceChooser from './components/WorkspaceChooser';
 import Main from './components/Main';
 import ChatSuiteBar from './components/ChatSuiteBar';
 import ChatIntents from './components/ChatIntents';
+import ChatAddress from './components/ChatAddress';
+import { parseChatPath } from './lib/chatPath';
 import { readChatIntent, withoutChatIntent, type ChatIntent } from './lib/chatIntents';
 import { useChatFavicon } from './lib/favicon';
 
@@ -246,11 +248,14 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
   // Sent here to sign in by another part of the suite (?next=, kept above): back there once signed in. The
   // session is set as the cookie first (a session from before the cookie existed has none), as the Workspace
   // app's pages carry the cookie alone.
+  // Set once this is on its way there, so the sign-in page's own landing (below) does not send it to Home instead.
+  const leaving = useRef(false);
   useEffect(() => {
     if (!user) return;
     const next = sessionStorage.getItem(NEXT_AFTER_SIGN_IN);
     if (!next) return;
     sessionStorage.removeItem(NEXT_AFTER_SIGN_IN);
+    leaving.current = true;
     void runtime.api('POST', '/v1/auth/session-cookie').catch(() => {}).then(() => location.assign(next));
   }, [user, runtime]);
   const [booting, setBooting] = useState(true);
@@ -259,7 +264,7 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
     consumeEmailLinkParams(runtime),
   );
   // Signed out, the sign-in screen goes by its own address (docs/specs/onboarding.md §1): /login, or /signup for a new
-  // account. An app page opened signed out (/chat) is kept as where to go back to; /login itself goes on to Home (which
+  // account. An app page opened signed out (/chat, /chat/<org>/<channel>) is kept as where to go back to; /login itself goes on to Home (which
   // sends a person with no workspace to setup). Not while an invite or join link is being carried through sign-in.
   useEffect(() => {
     if (booting) return;
@@ -267,6 +272,7 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
     // Already signed in on the sign-in page, with no link to redeem: on to where it was going.
     const carrying = !!runtime.read(PENDING_INVITE) || !!readJoinToken(Date.now(), runtime.key('pendingJoinLink'));
     if (user) {
+      if (leaving.current) return;
       if ((path === '/login' || path === '/signup') && !carrying && !signinToken && !resetToken && !setupToken && !signupToken) {
         const next = sessionStorage.getItem(NEXT_AFTER_SIGN_IN) ?? (opensInHome() ? '/home/' : CHAT_PATH);
         sessionStorage.removeItem(NEXT_AFTER_SIGN_IN);
@@ -279,7 +285,7 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
       if (!sessionStorage.getItem(NEXT_AFTER_SIGN_IN)) sessionStorage.setItem(NEXT_AFTER_SIGN_IN, opensInHome() ? '/home/' : CHAT_PATH);
       return;
     }
-    if (!/^\/(chat\/?)?$/.test(path) || location.search) return;
+    if (!/^\/(chat(\/.*)?)?$/.test(path) || location.search) return;
     if (!sessionStorage.getItem(NEXT_AFTER_SIGN_IN)) sessionStorage.setItem(NEXT_AFTER_SIGN_IN, path === '/' ? (opensInHome() ? '/home/' : CHAT_PATH) : path);
     history.replaceState(null, '', '/login');
   }, [user, booting, runtime, signinToken, resetToken, setupToken, signupToken]);
@@ -287,6 +293,8 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
   // A sign-in or reset link opened in a browser signed in as someone else: see below.
   const [linkOpen, setLinkOpen] = useState(true);
   const [intent] = useState(consumeChatIntent);
+  // `/chat/<org-slug>/<channel>` (lib/chatPath.ts), read once; an object's address (?open=) wins over it.
+  const [pathTarget] = useState(() => (intent && intent.kind !== 'page' ? null : parseChatPath(location.pathname)));
   const page = intent?.kind === 'page' ? intent.page : null;
   // The Activity count Main keeps live, for the suite bar's Chat tab (null while Main is not mounted).
   const [activityUnread, setActivityUnread] = useState<number | null>(null);
@@ -803,6 +811,7 @@ function SessionApp({ runtime }: { runtime: ConnectionRuntime }) {
         {/* The suite bar above whichever is showing (packages/suite-bar); Main scrolls under it. */}
         <div className="flex h-full flex-col">
           <ChatSuiteBar activityUnread={workspaceId ? activityUnread : null} intent={page} />
+          <ChatAddress target={pathTarget} onNotice={setNotice} />
           {workspaceId && <ChatIntents intent={intent?.kind === 'page' ? null : intent} onNotice={setNotice} />}
           <div className="relative min-h-0 flex-1">
             {workspaceId ? <Main onActivityUnread={setActivityUnread} /> : <WorkspaceChooser />}

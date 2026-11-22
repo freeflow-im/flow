@@ -12,6 +12,7 @@ This file keeps two things:
 
 ## Parity
 
+- **Chat's address names the organization and channel on web and the desktop shell only (2026-11-22, Taskboard task 24).** `/chat/<org-slug>/<channel>`; macOS and iOS have no address bar, and their share and deep links still use `?open=channel:<id>`, which keeps working (deliberate, unless native apps learn to open these paths).
 - **The assistant panels name the agent and its model (2026-11-22, Taskboard task 23).** Mail, Calendar, Docs and the suite panel (Home, Admin, installed apps) on web and in the desktop shell; macOS and iOS have no assistant panel yet (gap to close with the native assistant panel).
 - **Agents' AI usage is in web Admin only (2026-11-21, Taskboard task 22).** The Usage link and chart (input by uncached, cache writes and cache reads; a By model table and filter) are in Admin › Members, which macOS and iOS do not have (deliberate, as for the rest of Admin).
 - **Sign-in codes found in mail, and their desktop notifications, are on web only (2026-11-20, Taskboard task 21; 2026-11-21).** Mail is web only; macOS and iOS have no Mail (deliberate).
