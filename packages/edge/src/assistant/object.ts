@@ -40,6 +40,7 @@ import { isFileId } from '@flow/docs/server/ids.ts';
 import { scopeOf, type ScopeArg } from '@flow/docs/server/scope.ts';
 import { chatScope, HOME_CHAT, isChatScope, type AgentContext, type AgentDefinition, type AgentEvent, type AgentTurnRequest, type AssistantSettingsUpdate, type ClientToolCall, type ClientToolResult } from '@flow/docs/shared/agent/protocol.ts';
 import { ASSISTANT_CHAT_TOOLS } from './chatTools.ts';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { McpRequestCaller } from '../docs/mcp.ts';
 import { ADMIN_GUIDANCE, AdminToolError, type AdminToolContext } from './adminTools.ts';
 import { MEMORY_DDL, MemoryError, MemoryStore, type MemoryScope } from './memory.ts';
@@ -892,17 +893,10 @@ export class Assistant extends DurableObject<AssistantEnv> {
       userId: docs.userId!, email: docs.email ?? '', orgId: t.organizationId, accountId: caller.account.id,
       via: caller.via ?? null, invokedBy: caller.invokedBy ?? null, scope: 'files:read files:write', endpoint: '/mcp', origin: this.origin,
     };
-    const request = new Request(`${this.origin}/mcp`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2025-11-25' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: c.name, arguments: c.input ?? {} } }),
-    });
     try {
-      const res = await ns.get(ns.idFromName(t.organizationId)).mcp(request, as);
-      const body = (await res.json().catch(() => null)) as { result?: { content?: { type: string; text?: string }[]; structuredContent?: unknown; isError?: boolean }; error?: { message?: string } } | null;
-      if (!body || body.error || !body.result) return { id: c.id, content: body?.error?.message ?? `Docs answered ${res.status}.`, isError: true };
-      const text = (body.result.content ?? []).filter((x) => x.type === 'text' && x.text).map((x) => x.text).join('\n') || JSON.stringify(body.result.structuredContent ?? {});
-      return { id: c.id, content: text.length > MAX_HEADLESS_RESULT ? `${text.slice(0, MAX_HEADLESS_RESULT)}\n[Result truncated.]` : text, ...(body.result.isError ? { isError: true } : {}) };
+      const result = (await ns.get(ns.idFromName(t.organizationId)).runMcpTool(as, c.name, (c.input ?? {}) as Record<string, unknown>)) as unknown as CallToolResult;
+      const text = (result.content ?? []).flatMap((x: CallToolResult['content'][number]) => (x.type === 'text' && x.text ? [x.text] : [])).join('\n') || JSON.stringify(result.structuredContent ?? {});
+      return { id: c.id, content: text.length > MAX_HEADLESS_RESULT ? `${text.slice(0, MAX_HEADLESS_RESULT)}\n[Result truncated.]` : text, ...(result.isError ? { isError: true } : {}) };
     } catch (err) {
       return { id: c.id, content: `Docs could not run ${c.name}: ${(err as Error).message}`, isError: true };
     }
