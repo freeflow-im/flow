@@ -1,6 +1,6 @@
 // One organization: its database and its sockets. HTTP requests arrive from the Worker with the caller already known.
 import { DurableObject } from 'cloudflare:workers';
-import { MAX_EVENT_DEPTH, SELF_WAKE_MAX_PER_DAY, type AccountDTO, type AccountKind, type HostedRuntimeDTO, type MessageDTO, type Event, type MemberRole, type UserDTO, type WorkspaceMemberDTO } from '@flow/shared';
+import { MAX_EVENT_DEPTH, SELF_WAKE_MAX_PER_DAY, type AccountDTO, type AgentUsageDTO, type AgentUsageRange, type AccountKind, type HostedRuntimeDTO, type MessageDTO, type Event, type MemberRole, type UserDTO, type WorkspaceMemberDTO } from '@flow/shared';
 import { accountGate, type DirectoryCore } from '../directory/core';
 import { ApiError } from '../errors';
 import { OutboxFlusher } from './outbox';
@@ -8,6 +8,7 @@ import { directoryLink } from './directoryLink';
 import type { Directory, DirectoryAnswer } from '../directory/object';
 import { publishEvent, subjectMeta, withPublisher } from './bus';
 import { HUDDLE_ROSTER_DDL } from './huddles';
+import { AGENT_USAGE_DDL, agentUsageSeries, recordAgentUsage } from './agentUsage';
 import { MESSAGE_SEARCH_DDL, reindexMessages, searchMessages } from './services/search';
 import { parseSearch } from '@flow/shared/search';
 import { openDb, withDb, type DB, schema } from './db/index';
@@ -161,6 +162,7 @@ export class Org extends DurableObject<OrgEnv> {
     });
     for (const statement of OUTBOX) sql.exec(statement);
     sql.exec(HUDDLE_ROSTER_DDL);
+    sql.exec(AGENT_USAGE_DDL);
     for (const ddl of MESSAGE_SEARCH_DDL) sql.exec(ddl);
     // Messages the search index does not have yet (sent before it, or missed) are indexed in the background from the start.
     void this.indexMessages();
@@ -842,6 +844,16 @@ export class Org extends DurableObject<OrgEnv> {
    * Who may make a `wake` subscription for the agent whose account this is (routes/events.ts): its sponsor, or an
    * owner or admin of the organization. Null when the account is no agent of this organization.
    */
+  /** An agent's model tokens (agentUsage.ts): a hosted runtime's model call, or a bridge agent's turn. */
+  async recordAgentUsage(accountId: string, usage: { input: number; output: number; requests?: number }): Promise<void> {
+    recordAgentUsage(this.ctx.storage.sql, accountId, usage);
+  }
+
+  /** An agent's usage over a range, for Admin › Members › Usage (routes/agents.ts checks who may ask). */
+  async agentUsage(accountId: string, range: AgentUsageRange, tzOffsetMinutes = 0): Promise<AgentUsageDTO> {
+    return agentUsageSeries(this.ctx.storage.sql, accountId, range, tzOffsetMinutes);
+  }
+
   async agentSponsorOf(agentAccountId: string): Promise<{ userId: string; sponsorUserId: string | null; personal: boolean } | null> {
     const row = this.ctx.storage.sql.exec(
       'SELECT m.user_id, m.kind, COALESCE(m.sponsor_user_id, u.sponsor_user_id) AS sponsor FROM workspace_members m JOIN users u ON u.id = m.user_id WHERE m.account_id = ? AND u.is_agent',

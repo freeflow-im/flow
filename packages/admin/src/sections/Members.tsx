@@ -11,6 +11,7 @@ import { tellHome } from '@flow/suite-bar';
 import { Button, Card, Confirm, ErrorLine, Select } from '../components/ui';
 import { AddMemberModal, ConnectAgentModal, type Added } from './AddMember';
 import { AddressesModal } from './Addresses';
+import { AgentUsage } from './AgentUsage';
 
 export { suggestUsername } from './AddMember';
 
@@ -54,7 +55,35 @@ export function kindLabel(m: WorkspaceMemberDTO, a: AccountDTO | undefined): str
 /** An address a person can write to: never an agent's synthetic sign-in (`agent-<id>@agents.flow.local`) or a hidden one. */
 export const visibleEmail = (e: string | null | undefined): string | null => (e && !/@(agents\.flow\.local|hidden\.invalid)$/i.test(e) ? e : null);
 
+/** The agent whose usage page the address names (`/admin/members/<userId>/usage`), or null for the roster. */
+export const usageOf = (pathname: string): string | null => /^\/admin\/members\/([^/]+)\/usage\/?$/.exec(pathname)?.[1] ?? null;
+
+/** Members › Usage as an address of its own, so Back and a shared link work. */
+function useUsagePage(): [string | null, (userId: string | null) => void] {
+  const [userId, setUserId] = useState(() => usageOf(window.location.pathname));
+  useEffect(() => {
+    const onPop = () => setUserId(usageOf(window.location.pathname));
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+  const go = (id: string | null) => {
+    window.history.pushState(null, '', id ? `/admin/members/${encodeURIComponent(id)}/usage` : '/admin/members');
+    setUserId(id);
+  };
+  return [userId, go];
+}
+
 export function Members({ org }: { org: WorkspaceDTO }) {
+  const [usageFor, openUsage] = useUsagePage();
+  const members = useQuery({ queryKey: ['members', org.id], queryFn: () => adminApi.members(org.id) });
+  if (usageFor) {
+    const agent = (members.data ?? []).find((m) => m.userId === usageFor);
+    return <AgentUsage org={org} userId={usageFor} name={agent?.displayName ?? 'Agent'} onBack={() => openUsage(null)} />;
+  }
+  return <Roster org={org} onUsage={(id) => openUsage(id)} />;
+}
+
+function Roster({ org, onUsage }: { org: WorkspaceDTO; onUsage(userId: string): void }) {
   const qc = useQueryClient();
   const config = useQuery({ queryKey: ['config'], queryFn: adminApi.config, staleTime: Infinity });
   const hostedMail = !!config.data?.hostedMail;
@@ -136,13 +165,13 @@ export function Members({ org }: { org: WorkspaceDTO }) {
         </div>
         {members.isError && <ErrorLine error={errorText(members.error)} />}
         <div className="overflow-x-auto rounded-lg border border-hairline">
-          <table className="w-full min-w-[720px] table-fixed text-sm">
+          <table className="w-full min-w-[800px] table-fixed text-sm">
             <colgroup>
               <col className="w-[24%]" />
               <col className="w-[29%]" />
               <col className="w-[96px]" />
               <col />
-              <col className="w-[76px]" />
+              <col className="w-[196px]" />
             </colgroup>
             <thead>
               <tr className="border-b border-hairline bg-panel text-left text-xs text-faint uppercase">
@@ -157,7 +186,7 @@ export function Members({ org }: { org: WorkspaceDTO }) {
             </thead>
             <tbody>
               {shown.map((m) => (
-                <MemberRow key={m.userId} org={org} member={m} account={accountOf(m)} sponsorName={nameOf(m.sponsorId ?? accountOf(m)?.sponsorId)} meId={me.data?.id} hostedMail={hostedMail} fresh={added?.userId === m.userId} onChanged={refresh} onProvisioned={() => setProvisioning(true)} />
+                <MemberRow key={m.userId} org={org} onUsage={() => onUsage(m.userId)} member={m} account={accountOf(m)} sponsorName={nameOf(m.sponsorId ?? accountOf(m)?.sponsorId)} meId={me.data?.id} hostedMail={hostedMail} fresh={added?.userId === m.userId} onChanged={refresh} onProvisioned={() => setProvisioning(true)} />
               ))}
               {members.isSuccess && shown.length === 0 && (
                 <tr>
@@ -241,7 +270,7 @@ function EmailCell({ m, a, hostedMail, keyId, busy, queued, onProvision }: { m: 
   );
 }
 
-function MemberRow({ org, member: m, account: a, sponsorName, meId, hostedMail, fresh, onChanged, onProvisioned }: { org: WorkspaceDTO; member: WorkspaceMemberDTO; account: AccountDTO | undefined; sponsorName: string | undefined; meId: string | undefined; hostedMail: boolean; fresh: boolean; onChanged(): Promise<unknown>; onProvisioned(): void }) {
+function MemberRow({ org, onUsage, member: m, account: a, sponsorName, meId, hostedMail, fresh, onChanged, onProvisioned }: { org: WorkspaceDTO; onUsage(): void; member: WorkspaceMemberDTO; account: AccountDTO | undefined; sponsorName: string | undefined; meId: string | undefined; hostedMail: boolean; fresh: boolean; onChanged(): Promise<unknown>; onProvisioned(): void }) {
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [addresses, setAddresses] = useState(false);
@@ -346,6 +375,11 @@ function MemberRow({ org, member: m, account: a, sponsorName, meId, hostedMail, 
       </td>
       <td className={`${cell} relative text-right`}>
         <div className="flex items-center justify-end gap-3 whitespace-nowrap">
+          {m.isAgent && !confirming && (
+            <Button kind="link" onClick={onUsage} testid={`usage-${key}`}>
+              Usage
+            </Button>
+          )}
           {hasMailbox && !confirming && (
             <Button kind="link" disabled={busy} onClick={() => setAddresses(true)} testid={`addresses-${key}`}>
               Addresses

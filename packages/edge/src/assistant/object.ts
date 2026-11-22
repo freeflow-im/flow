@@ -437,10 +437,26 @@ export class Assistant extends DurableObject<AssistantEnv> {
         const userApps = appCaller && ORG ? (name: string, input: Record<string, unknown>) => runAppTool({ ORG }, appCaller, name, input) : undefined;
         return { ...(docs ? { docs } : {}), ...(mail ? { mail } : {}), ...(calendar ? { calendar } : {}), ...(apps ? { apps } : {}), ...(admin ? { admin } : {}), ...(mailApproval ? { mailApproval } : {}), ...(userApps ? { userApps } : {}), ...(events ? { events } : {}), ...(wakes ? { wakes } : {}), memory };
       },
+      // Every model call's tokens, to the organization's count for this agent (org/agentUsage.ts, Admin › Members › Usage).
+      onUsage: (userId: string, usage) => this.recordUsage(this.turnWho.get(userId) ?? this.who, usage),
       // The agent's memory files, listed at the start of each request (agents.md §6.1, loading).
       notes: (userId: string) => new MemoryStore(this.sql, this.memoryScope(userId, this.turnWho.get(userId) ?? this.who)).listing(),
     });
     return (this.services = { agent, settings });
+  }
+
+  /**
+   * One model call's tokens, counted for the agent this runtime is (its own account, as the turn names it or as it last
+   * learned it) in the turn's organization. Not awaited: the turn goes on, and the object stays up until it lands.
+   */
+  private recordUsage(who: Who | null, usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null }): void {
+    const accountId = who?.agentAccountId ?? this.state('agent_account_id');
+    const org = who?.caller.account?.organizationId || who?.caller.organizationId;
+    const ORG = this.env.ORG;
+    if (!accountId || !org || !ORG) return;
+    const input = usage.input_tokens + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
+    const stub = ORG.get(ORG.idFromName(org)) as unknown as { recordAgentUsage(accountId: string, u: { input: number; output: number }): Promise<void> };
+    this.ctx.waitUntil(stub.recordAgentUsage(accountId, { input, output: usage.output_tokens }).catch((e) => console.warn('[assistant] usage not recorded', e)));
   }
 
   /**

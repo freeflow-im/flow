@@ -27,6 +27,7 @@ import {
   registerGroup,
   unregisterGroup,
   type RunResult,
+  type TokenUsage,
 } from './runtime.js';
 
 /** What an interrupted turn resolves to — no CLI error, just a stopped run. */
@@ -62,6 +63,8 @@ export interface SessionHooks {
   onAmbientStart(): void;
   /** …and it ended — post its reply to the conversation like any other. */
   onAmbientEnd(result: RunResult): void;
+  /** A turn's model tokens (any turn), for Flow's usage count. */
+  onUsage?(usage: TokenUsage): void;
   log(msg: string): void;
 }
 
@@ -233,6 +236,7 @@ export class RuntimeSession {
       {
         onTurnStart: () => this.onTurnStart(),
         onResult: () => this.onResult(),
+        onUsage: (usage) => this.hooks.onUsage?.(usage),
         onPendingChange: (pending) =>
           this.hooks.log(`background tasks open: ${pending}`),
       },

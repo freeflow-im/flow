@@ -29,7 +29,7 @@ import { accountLines, addressIn, FlowApi, FlowApiError, type MeDTO, withInvoker
 import { attachmentFilename, formatAttachments } from './attachments.js';
 import { FlowSocket, openFlowSocket } from './gateway.js';
 import { ChannelIndicatorLeases, ProgressReporter } from './progress.js';
-import { killAllRuntimes, runRuntime, type RunResult } from './runtime.js';
+import { killAllRuntimes, runRuntime, type RunResult, type TokenUsage } from './runtime.js';
 import { SessionManager, type SessionOpts } from './session.js';
 import { EXIT_RESTART, EXIT_UPDATE } from './supervisor.js';
 import { currentVersion, isOutdated, latestPublishedVersion } from './version.js';
@@ -292,6 +292,20 @@ export class AgentBridge {
       }
     }
   }
+
+  /**
+   * A turn's tokens to Flow's count for this agent (Admin › Members › Usage). Best effort and never awaited: a server
+   * without the route (older than the bridge) is said once in the log, and counting never holds up a reply.
+   */
+  private reportUsage(usage: TokenUsage): void {
+    if (!this.workspace) return;
+    this.api.reportUsage(this.workspace.id, usage).catch((err: Error) => {
+      if (this.usageWarned) return;
+      this.usageWarned = true;
+      this.log(`could not report token usage (${err.message}); carrying on`);
+    });
+  }
+  private usageWarned = false;
 
   log(msg: string): void {
     const line = `[bridge ${new Date().toISOString()}] ${msg}`;
@@ -1367,6 +1381,7 @@ export class AgentBridge {
           signal: live.controller.signal,
           onToolStep: (step) => progress.onStep(step),
           onText: (text) => progress.onText(text),
+          onUsage: (u) => this.reportUsage(u),
           log: (m) => this.log(m),
         });
       }
@@ -1468,6 +1483,7 @@ export class AgentBridge {
         onText: (text) => this.runningRun(key)?.progress.onText(text),
         onAmbientStart: () => this.startAmbientTurn(key, conv),
         onAmbientEnd: (result) => void this.finishAmbientTurn(key, conv, result),
+        onUsage: (u) => this.reportUsage(u),
         log: (m) => this.log(m),
       },
     };

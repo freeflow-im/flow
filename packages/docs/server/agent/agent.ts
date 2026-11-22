@@ -64,6 +64,8 @@ export interface AgentOptions {
   guidance?: readonly string[];
   /** A block a host adds to each new user message after the context (the suite: the agent's memory files), or null. */
   notes?: (userId: string, scope: ScopeArg) => string | null;
+  /** Every model call's tokens, whoever's key paid for it (the suite: the agent's AI usage, Admin › Members › Usage). */
+  onUsage?: (userId: string, usage: Message['usage']) => void;
 }
 
 /** The pages of this app a turn may come from. */
@@ -100,6 +102,7 @@ export class AgentService {
   private pages: ReadonlySet<string>;
   private extend: AgentOptions['extend'];
   private notes: AgentOptions['notes'];
+  private onUsage: AgentOptions['onUsage'];
   private guidance: readonly string[];
   /** Users with a turn in progress (one at a time per user). */
   private busy = new Set<string>();
@@ -119,6 +122,7 @@ export class AgentService {
     this.pages = opts.pages ?? OWN_PAGES;
     this.extend = opts.extend;
     this.notes = opts.notes;
+    this.onUsage = opts.onUsage;
     this.guidance = opts.guidance ?? [];
     this.dailyLimit = opts.dailyRequestLimit ?? Number(process.env.AGENT_DAILY_REQUEST_LIMIT ?? 500);
   }
@@ -310,6 +314,11 @@ export class AgentService {
         throw err;
       }
       if (!own) this.store.recordUsage(userId, message.usage);
+      try {
+        this.onUsage?.(userId, message.usage);
+      } catch {
+        // Counting is never a reason to fail the turn.
+      }
       // Keep the whole content (thinking blocks included) so later requests replay it unchanged.
       this.store.append(conv.id, { role: 'assistant', content: message.content as Anthropic.Beta.BetaContentBlockParam[] });
 

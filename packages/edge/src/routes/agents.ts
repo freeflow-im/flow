@@ -8,11 +8,12 @@
 // removes it (never the assistant, which goes only with its person).
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
-import type { AccountDTO, UsableAgentDTO } from '@flow/shared';
+import type { AccountDTO, AgentUsageDTO, AgentUsageRange, UsableAgentDTO } from '@flow/shared';
 import type { Assistant } from '../assistant/object';
 import { ApiError, badRequest, forbidden, notFound, unauthorized } from '../errors';
 import { directory, guestRefusal, resolveCaller, type AuthEnv } from './auth';
 import { MAX_PERSONAL_AGENTS } from '../directory/agents';
+import { isUsageRange } from '../org/agentUsage';
 
 export interface AgentRouteEnv extends AuthEnv { ASSISTANT: DurableObjectNamespace<Assistant> }
 export type C = Context<{ Bindings: AgentRouteEnv }>;
@@ -66,6 +67,8 @@ const orgOf = (c: C, organizationId: string) => c.env.ORG.get(c.env.ORG.idFromNa
   addHostedPersonalAgent(account: AccountDTO): Promise<void>;
   renameAssistant(agentId: string, name: string, address: string | null): Promise<void>;
   dropPersonalAgent(userId: string): Promise<void>;
+  recordAgentUsage(accountId: string, usage: { input: number; output: number; requests?: number }): Promise<void>;
+  agentUsage(accountId: string, range: AgentUsageRange, tzOffsetMinutes?: number): Promise<AgentUsageDTO>;
 };
 
 /** The caller's own hosted agents here (agents.md §1.3): their assistant first (`self`), then the others they made. */
@@ -187,4 +190,35 @@ agentRoutes.put('/v1/workspaces/:id/agents/:userId/definition', async (c) => {
     if (account.agentMode === 'personal') await orgOf(c, organizationId).renameAssistant(account.principalId, r.data.name.trim(), account.address);
   }
   return c.json({ definition: await runtimeOf(c, await runtimeKeyOf(c, account)).updateDefinition(r.data), mayEdit });
+});
+
+/**
+ * An agent's AI usage (Taskboard #22), for Admin › Members › Usage: its model tokens over the last day by hour, or the last
+ * 7 or 30 days by day, in thousands. Owners and admins only, like the Members page; any agent of the organization, hosted
+ * or on the bridge (an agent on bare /mcp reports nothing, so its chart is empty). `tz`: the viewer's minutes east of UTC.
+ */
+agentRoutes.get('/v1/workspaces/:id/agents/:userId/usage', async (c) => {
+  const { organizationId, account: me } = await memberOf(c);
+  if (me.role !== 'owner' && me.role !== 'admin') throw forbidden('only an owner or an admin sees an agent’s usage');
+  const range = c.req.query('range') ?? '7d';
+  if (!isUsageRange(range)) throw badRequest('validation', 'range is 1d, 7d or 30d');
+  const tz = Number(c.req.query('tz') ?? 0);
+  const account = await directory(c, 'accountFor', c.req.param('userId'), organizationId);
+  if (!account || !account.agentMode) throw notFound('no such agent here');
+  return c.json(await orgOf(c, organizationId).agentUsage(account.id, range, Number.isFinite(tz) ? tz : 0));
+});
+
+const UsageReport = z.object({ inputTokens: z.number().int().min(0), outputTokens: z.number().int().min(0), requests: z.number().int().min(1).max(10_000).optional() });
+
+/** An agent on the bridge reports a turn's tokens (its CLI's own count); a hosted agent's runtime records its own. */
+agentRoutes.post('/v1/workspaces/:id/agents/me/usage', async (c) => {
+  const organizationId = c.req.param('id');
+  if (!ORG_ID.test(organizationId)) throw badRequest('validation', 'not an organization id');
+  const who = await resolveCaller(c, organizationId);
+  if (!who.user) throw unauthorized('missing bearer token');
+  if (!who.user.isAgent || !who.account) throw forbidden('only an agent of this organization reports its usage');
+  const r = UsageReport.safeParse(await c.req.json().catch(() => undefined));
+  if (!r.success) throw badRequest('validation', r.error.issues[0]?.message ?? 'invalid request');
+  await orgOf(c, organizationId).recordAgentUsage(who.account.id, { input: r.data.inputTokens, output: r.data.outputTokens, ...(r.data.requests ? { requests: r.data.requests } : {}) });
+  return c.json({ ok: true });
 });

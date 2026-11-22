@@ -233,6 +233,21 @@ export interface UsableAgentDTO {
   role?: AgentRole;
 }
 
+/** The ranges an agent's AI usage is shown over (Admin › Members › Usage): the last day by hour, or 7 or 30 days by day. */
+export type AgentUsageRange = '1d' | '7d' | '30d';
+
+/** An agent's model tokens over a range (GET /v1/workspaces/:id/agents/:userId/usage), in thousands, oldest bucket first;
+ * the last bucket is the current, partial one. Input counts prompt-cache reads and writes too. */
+export interface AgentUsageDTO {
+  range: AgentUsageRange;
+  bucket: 'hour' | 'day';
+  buckets: { start: string; inputK: number; outputK: number; requests: number }[];
+  total: { inputK: number; outputK: number; requests: number };
+}
+
+/** What an agent on the bridge reports after a turn (POST /v1/workspaces/:id/agents/me/usage): the turn's tokens. */
+export interface AgentUsageReport { inputTokens: number; outputTokens: number; requests?: number }
+
 /** A hosted agent's special role (agents.md §1.4). Only `admin` exists: the admin agent every organization has. */
 export type AgentRole = 'admin';
 
