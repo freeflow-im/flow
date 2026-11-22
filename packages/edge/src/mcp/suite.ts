@@ -153,6 +153,7 @@ export const docsToolOptions = (version: McpVersion, caller: Pick<McpRequestCall
   },
   publicUrl: null,
   level: 'tools' as const,
+  suite: true,
   version,
   uploadUrl: `${caller.origin}/mcp/import/${encodeURIComponent(caller.orgId)}`,
   appUrl: `${caller.origin}/docs`,

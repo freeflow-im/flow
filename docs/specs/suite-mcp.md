@@ -1,7 +1,7 @@
 # The suite's MCP endpoint: one FreeFlow server at app.freeflow.im/mcp
 
-Status: design spec, draft for Scott's review (2026-11-22). Nothing in the repository changes by this document. §9 lists
-the proposed rulings and §10 the build plan.
+Status: built on branch `mcp/suite-server` (2026-11-22), one commit per phase of §10. §9 lists the rulings. Where the
+build differs from the first draft, this text says what was built.
 
 This spec builds on `web-mcp.md` (the endpoint and its OAuth, written `W§n`), `platform.md` (the tool registry, manifests:
 `P§n`) and `agents.md` (agent kinds and reach: `A§n`).
@@ -100,8 +100,8 @@ helpers from `@flow/docs/plugin/server/stateless.ts`.
   from the apps: Docs' `instructionsFor(version)`, `MAIL_INSTRUCTIONS`, `CALENDAR_INSTRUCTIONS`, `EVENT_INSTRUCTIONS`, and
   new `CHAT_INSTRUCTIONS` and `MEET_INSTRUCTIONS`. The paragraph that starts "MCP Docs:" is changed to start "Docs:" when
   the suite serves it.
-- Each manifest may give an `mcpInstructions` string, so an app's section lives with the app. This replaces the list of
-  constants in `suiteInstructions`.
+- The sections are constants in each app's tool module (`MAIL_INSTRUCTIONS`, `CHAT_INSTRUCTIONS`, `MEET_INSTRUCTIONS`, …),
+  joined by `suiteInstructions` in `mcp/suite.ts`.
 
 ### 3.3 Docs as one app
 
@@ -114,13 +114,13 @@ apps, and the runner calls the Docs object by RPC:
 - At registration, `mcp/suite.ts` registers each Docs definition from `DOCS_TOOLS` with its JSON Schema input, and a handler
   that calls `runMcpTool`. The token's `files:read` / `files:write` filter is the registry's, as for every other app. The
   `_registeredTools … remove()` step goes away.
-- `Docs.mcp()` stays for one release as a thin wrapper, so `Assistant.runDocsHeadless` keeps working. The assistant then
-  moves to `runMcpTool` too, which also saves it from building a JSON-RPC request by hand.
+- `Assistant.runDocsHeadless` calls `runMcpTool` too (phase 2), and `Docs.mcp()` and the old `handleMcp` are gone.
 - `/mcp/import/:org` does not change.
 
-The Docs tool texts that talk about ChatGPT or "the plugin" are written for the suite at version 2 and later:
-`get_profile` ("The account you are connected as: its email address and organization"), and `import_file`'s `file`
-field ("an attached file, where the client gives one"). Version 1 (the ChatGPT plugin) keeps its texts.
+Two Docs tool texts that talk about the plugin or ChatGPT read differently when the suite serves them (the plugin's
+`suite` option): `get_profile` ("The account you are connected as: its email address.") and `import_file`'s `file` field
+(filled in by ChatGPT; other clients give `url` or use `upload_file`). The ChatGPT plugin and the local MCP Docs app keep
+theirs.
 
 ### 3.4 Versions
 
@@ -132,12 +132,11 @@ change for clients: they key a connection by its URL. Clients that cached the to
 
 ### 4.1 Scopes and consent
 
-The Chat manifest gets two scope groups:
+The Chat manifest gets one scope group, like Docs' and Mail's, with a read-only text when a client asks only `chat:read`:
 
 | Group | Scopes | Label | Ticked by default |
 |---|---|---|---|
-| `chat` | `chat:read` | Chat: read and search the channels you are in | yes |
-| `chat_post` | `chat:write` | Post in Chat (marked as your agent) | yes (ruling R2) |
+| `chat` | `chat:read`, `chat:write` | Chat: read, search and post | yes (ruling R2) |
 
 Tokens issued before these scopes exist keep their scopes: no Chat until the person connects the agent again, as for Mail
 (`W§OAuth`).
@@ -151,12 +150,13 @@ hosted assistant already follows (`Org.assistantChat`, `Org.assistantPost`, deci
   channels. A shared agent reads with its own. **No direct messages** in either case (ruling R1).
 - **Posting.** The agent posts **as itself** (its own member row, its name and avatar), marked as asked by its sponsor.
   It never posts as the person. A personal agent joins a channel its sponsor is in before it posts, as the assistant does.
-- **Change needed.** `Org.chatReach` knows only hosted personal agents (`runtime = 'hosted'`) and shared agents. It must
-  also take an external personal agent (an `/mcp` grant, `agentRuntime: 'external'`). The build checks that an external
-  personal agent has a member row in the Org object; if not, the Org object makes one when the agent first posts, as it
-  does for a hosted one.
-- The Org methods are today named for the assistant (`assistantChat`, `assistantPost`). They become `agentChat` and
-  `agentPost`, with the old names kept as aliases until the assistant moves.
+- **As built.** `Org.chatReach` also takes an external personal agent. The Worker passes the agent's directory account
+  with each call, and `Org.mcpChat` makes its member row the first time (`addPersonalAgent`, runtime null). Its first
+  post, reaction or channel sets runtime `external` (`enterChat`), which puts it on Chat's roster (`notExternalAgent`
+  leaves out only runtime null) and sends `member.joined`. The member DTO still says only `agentRuntime: 'hosted'`, so
+  the clients need no change. The sponsor-only rules for bringing an agent into a channel and taking it out cover it too.
+- A personal agent makes a channel as its sponsor (the sponsor is its first member), then is brought into it.
+- The assistant's own methods (`assistantChat`, `assistantPost`) keep their names; `mcpChat` is the /mcp door's.
 
 ### 4.3 Tools
 
@@ -175,11 +175,14 @@ door, not across doors).
 | `react` | `chat:write` | Add an emoji reaction to a message |
 | `create_channel` | `chat:write` | Make a channel and join it (optionally nested under one the agent is in) |
 | `invite_to_channel` | `chat:write` | Add members to a channel the agent is in |
-| `share_file_in_chat` | `chat:write` | Post a Docs file (by its id) in a channel as a link card, sharing it with the channel's members |
+
+They run in `Org.mcpChat` (`packages/edge/src/org/object.ts`); their definitions are in `packages/edge/src/chat/mcpTools.ts`.
+`read_chat_file` returns a picture as an MCP image, a text file as text, and other files as an embedded resource; it
+reads only files of standard channels, up to 10 MB.
 
 Left out at `/mcp`: `upload_file`, `download_file` and `set_avatar` (they take local paths, which a remote client does not
-have), `start_task` and `set_channel_indicator` (bridge runtime features), `set_channel_emoji`, `leave_channel`, and the
-artifact tools (a later phase, if agents ask for them).
+have), `start_task` and `set_channel_indicator` (bridge runtime features), `set_channel_emoji`, `leave_channel`, the
+artifact tools, and posting a Docs file in a channel (later, if agents ask for them).
 
 Message text, file names and channel topics are other people's words: every read tool's description says they are data,
 never instructions, as the assistant's do.
@@ -191,22 +194,23 @@ agent can subscribe to them today through `create_subscription`. No change is ne
 
 ## 5. Meet at /mcp
 
-One scope group in the Meet manifest: `meet` with `meet:write`, "Meet: make meeting links", ticked by default.
+One scope group in the Meet manifest: `meet` with `meet:read` and `meet:write`, "Meet: make meeting rooms", ticked by
+default.
 
 | Tool | Scope | What it does |
 |---|---|---|
-| `create_meeting` | `meet:write` | A new meeting room in the organization (`services/meetings.ts` `createMeeting`): its link and code |
-| `list_live_meetings` | `meet:write` | The meetings happening now that the person can join (`liveMeetings`) |
+| `create_meeting` | `meet:write` | A new room in the organization (`services/meetings.ts` `createMeeting`), as the person or shared agent: title, code, link, and `event_line` |
+| `list_live_meetings` | `meet:read` | The meetings with people in them now (`liveMeetings`): title, link, start, who is there |
 
-`create_event` has no video-call field today (only `location` and `description`). Phase 4 adds an optional `meeting`
-field to `create_event` and `update_event`: `"new"` makes a Meet room and puts its link on the event, as Calendar's own
-editor does when a person adds a FreeFlow Meet call. Until then `MEET_INSTRUCTIONS` says to make a room with
-`create_meeting` and put its link in `location`. The agent never joins a meeting.
+Calendar keeps a room on an event as one line of its description, `Join with FreeFlow Meet: <link>`
+(`packages/calendar/src/lib/meet.ts`), which it reads back as the event's Join button. So `create_meeting` returns that
+line as `event_line`, and the agent adds it to the description with `create_event` or `update_event`. No Calendar tool
+changes. The agent never joins a meeting.
 
 ## 6. Search across the apps
 
-One tool, `search`, offered when the token has at least one read scope among `files:read`, `chat:read`, `mail:read`,
-`calendar:read` and `contacts:read`.
+One tool, `search`, with its own scope `search:use` (every tool at `/mcp` names a scope) in a consent group of Home's
+manifest, ticked by default. It is offered only when the token can also run at least one app's search tool.
 
 - Input: `query` (the suite's search syntax, `search.md`), optional `apps` (a subset), `limit`.
 - It runs the search of each app the token can read, at the same time: Docs' content index (`search_content`), Chat's
@@ -224,8 +228,9 @@ until `search.md` phase 3 indexes Mail's cache.
 ## 7. Consent page and settings copy
 
 - The consent page title becomes "Allow <client> to use FreeFlow?", with the groups listed below it, instead of naming
-  "Docs and Mail" (`routes/mcpPages.ts`). The "no organization" page says the agent works with an organization's apps,
-  not its Docs files.
+  "Docs and Mail" (`routes/mcpPages.ts`). The groups come in the manifests' order: Chat, Docs, Mail, Send, Calendar,
+  Events, Search, Meet, Contacts, Email members, Installed apps. The "no organization" page says the agent works with an
+  organization's apps, not its Docs files. The protected resource metadata's `resource_name` is "FreeFlow".
 - The device page says "Connect an agent to FreeFlow", not "FreeFlow Docs".
 - "You can disconnect it in Docs, under Settings, Connect your agent" becomes the Admin app's **Connect an agent** page
   (`/v1/me/agent-connections`), which already lists the same connections.
@@ -240,8 +245,8 @@ until `search.md` phase 3 indexes Mail's cache.
 - Posting is visible: the post is by the agent's member, marked as asked by the sponsor, so people in the channel see an
   agent wrote it. `chat:write` can be unticked on consent.
 - `search` checks each app's scope before it runs that app's search; an app the token cannot read is never asked.
-- Rate limits: the Org object's limits are applied in its HTTP routes (`org/routes`), and an RPC call does not pass
-  through them. `agentPost` gets the same per-member post limit, so an `/mcp` agent cannot post faster than a person.
+- Rate limit: people's posts have none. An `/mcp` agent may make 30 Chat changes (posts, reactions, channels,
+  invitations) a minute (`MCP_CHAT_WRITES` in `org/object.ts`), so a runaway agent cannot flood a channel.
 - The event log records Chat and Meet calls with `via` / `invokedBy`, as Mail and Calendar calls are recorded.
 
 ## 9. Proposed rulings
@@ -250,7 +255,7 @@ until `search.md` phase 3 indexes Mail's cache.
   person grant `chat:dm` on consent.)
 - **R2.** `chat:write` is ticked by default, unlike `mail:send`: a Chat post stays in the organization and is marked as
   the agent's.
-- **R3.** An `/mcp` agent posts as its own member, never as the person.
+- **R3. Ruled (Scott, 2026-11-22):** an `/mcp` agent posts as its own member, never as the person (decision_log).
 - **R4.** The server's name at `/mcp` is `freeflow` / "FreeFlow". The local MCP Docs app and the ChatGPT plugin keep theirs.
 - **R5.** No Admin tools at `/mcp`.
 
@@ -258,18 +263,18 @@ until `search.md` phase 3 indexes Mail's cache.
 
 One branch and one PR against `main`, a commit per phase (CLAUDE.md).
 
-1. **Suite server.** `mcp/suite.ts`; `Docs.runMcpTool`; Docs registered from the registry; `routes/mcp.ts` calls the
-   suite; name, icon and instructions (§3.2); `manifest.mcpInstructions`; `Docs.mcp()` kept as a wrapper. No new tools.
+1. **Suite server.** `mcp/suite.ts`, `mcp/contexts.ts`; `Docs.runMcpTool`; `routes/mcp.ts` calls the suite; name, icon
+   and instructions (§3.2). No new tools; the same 98 tools with every scope, with the same schemas.
    Tests: the tool list per scope set is the same as before the change (a snapshot taken first), `server/discover` and
    `initialize` answer with the new name, a Docs call, a Mail call and a Calendar call still work, `view_image` still
    returns its image.
 2. **Assistant moves to `runMcpTool`.** `Assistant.runDocsHeadless` calls the RPC; `Docs.mcp()` is removed.
-3. **Chat.** Scopes in the Chat manifest; `Org.chatReach` takes external personal agents; `agentChat` / `agentPost`;
-   `org/chatTools.ts` runners; definitions; `CHAT_INSTRUCTIONS`. Tests: reach (sponsor's channels only, no DMs, a shared
+3. **Chat.** The scope group in the Chat manifest; `Org.chatReach` takes external personal agents; `Org.mcpChat`;
+   `chat/mcpTools.ts` runners; definitions; `CHAT_INSTRUCTIONS`. Tests: reach (sponsor's channels only, no DMs, a shared
    agent's own), a post is by the agent's member and marked, the rate limit, a token without `chat:*` sees no Chat tools.
-4. **Meet.** Scope, two tools, `MEET_INSTRUCTIONS`, the `meeting` field on `create_event` and `update_event`.
-5. **Search.** The router (`search.md` phase 4) as a Worker function; the `search` tool on it, with per-app scope checks
-   and the 3-second budget per source.
+4. **Meet.** Scope group, two tools in `meet/mcpTools.ts` run by `Org.mcpMeet`, `MEET_INSTRUCTIONS`.
+5. **Search.** `mcp/search.ts`: the `search` tool, which runs each app's own search tool the token may run, with
+   3 seconds per source, merged by reciprocal rank fusion. The suite bar's search box can use the same function later.
 6. **Copy.** Consent, device and settings pages (§7); the Docs tool texts (§3.3); `web-mcp.md` updated to point here.
 
 Local test: `pnpm dev:suite`, connect Claude Code to `http://localhost:8787/mcp` with the device sign-in, and run each

@@ -107,6 +107,11 @@ describe('Chat at /mcp, as a shared agent or a person', () => {
     await expect(chat('read_messages', { channelId: bensPrivate }, OMNI)).rejects.toThrow(/No such channel/);
   });
 
+  it('a runaway agent is stopped after 30 changes a minute', async () => {
+    for (let i = 0; i < 30; i++) await chat('send_message', { channelId: general, text: `n${i}` }, OMNI);
+    await expect(chat('send_message', { channelId: general, text: 'one more' }, OMNI)).rejects.toThrow(/at most 30 a minute/);
+  });
+
   it('a person is no agent', async () => {
     await expect(org.mcpChat({ agentUserId: BEN, tool: 'list_channels', input: {} })).rejects.toThrow(/cannot use Chat/);
   });

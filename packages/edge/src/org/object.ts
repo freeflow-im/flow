@@ -76,6 +76,9 @@ const VISITOR_SWEEP_KEY = 'visitor_sweep_at';
 const MESSAGE_INDEX_BATCH = 200;
 /** The largest Chat file an /mcp agent reads through read_chat_file (docs/specs/suite-mcp.md §4.3). */
 const MCP_FILE_MAX = 10 * 1024 * 1024;
+/** How many Chat changes an /mcp agent may make a minute, and which tools make them. */
+const MCP_CHAT_WRITES = 30;
+const MCP_CHAT_WRITE_TOOLS = new Set(['send_message', 'react', 'create_channel', 'invite_to_channel']);
 /** The storage key of the next mailbox retention sweep's time. */
 const SWEEP_KEY = 'mail_sweep_at';
 /** Set once the agents the directory retired when agents gained kinds (agents.md phase A) have left this roster. */
@@ -767,6 +770,11 @@ export class Org extends DurableObject<OrgEnv> {
       return reach.personal ? assistantPosting.run(p.agentUserId, fn) : fn();
     };
     const stamp: Stamp = { depth: 1, ...(p.invokedBy ? { invokedBy: p.invokedBy } : {}) };
+    // A runaway agent cannot flood Chat: its posts, reactions, channels and invitations, MCP_CHAT_WRITES a minute.
+    if (MCP_CHAT_WRITE_TOOLS.has(p.tool)) {
+      const { rateAllow } = await import('./lib/rateLimit');
+      if (!rateAllow(`mcp-chat:${p.agentUserId}`, MCP_CHAT_WRITES, 60_000)) throw new Error(`Too many Chat changes: at most ${MCP_CHAT_WRITES} a minute. Wait a minute, then go on.`);
+    }
 
     switch (p.tool) {
       case 'list_channels': {
