@@ -1,5 +1,8 @@
 # Flow — working conventions
 
+- **Read the task board protocol before any coding task, and follow it.**
+  Call the FreeFlow MCP tool `taskboard__get_protocol` first; the protocol
+  lives on the board and can change, so do not work from a remembered copy.
 - **Every feature or fix PR adds one file to `changelog/`** — named
   `YYYY-MM-DD-short-slug.md`, format in `changelog/README.md`: a `#` title,
   then succinct bullets with platform tags (`[server]` `[web]` `[macos]`
