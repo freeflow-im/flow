@@ -2,11 +2,12 @@
 // Left, where you are: the mark, "FreeFlow", the organization's name with its switcher. Centre, which app: Docs,
 // Chat, Mail, Calendar, then any app added since (⌘1 onwards, by the manifests). Right, tools then you: search (opens in place, ⌘K), the Assistant,
 // the scratchpad, notifications, the account menu. Presentational: every app passes its data and callbacks, the bar fetches nothing.
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { BOOKING_SETTINGS_PATH, useBookingLink } from './bookingLink';
 import { isInHome, routeLinksToHome } from './lib/embed';
 import { SuiteMark } from './SuiteMark';
 import { SuiteAlerts, useClosedAlerts, useMeetingAlerts, type SuiteAlert } from './alerts';
+import { useServerAlerts } from './serverAlerts';
 import { useAlertNotifications, useDesktopOff, useDesktopPermission } from './desktopNotify';
 import { Scratchpad } from './Scratchpad';
 import './suite-bar.css';
@@ -268,14 +269,19 @@ export function SuiteBar(props: SuiteBarProps) {
 }
 
 function TheSuiteBar({ tabs, organization, search, assistant, notifications, account, home, alerts, meetingAlerts, scratchpad }: SuiteBarProps) {
-  // The alerts under the bar (Taskboard task 12): the page's own, then the meetings about to start; closed ones stay closed.
-  const [closedAlerts, closeAlert] = useClosedAlerts();
-  const meetings = useMeetingAlerts(meetingAlerts === false ? null : organization?.entries.find((e) => e.active)?.id ?? null, closedAlerts);
-  const shownAlerts = [...(alerts ?? []).filter((a) => !closedAlerts.has(a.id)), ...meetings];
+  // The alerts under the bar (Taskboard task 12): the page's own, then the meetings about to start, then the server's (an
+  // agent's show_alert, pushed as it happens); closed ones stay closed, and a server one is closed on the server too.
+  const [closedAlerts, closeLocally] = useClosedAlerts();
+  const activeOrganization = organization?.entries.find((e) => e.active)?.id ?? null;
+  const meetings = useMeetingAlerts(meetingAlerts === false ? null : activeOrganization, closedAlerts);
+  const [fromServer, closeOnServer] = useServerAlerts(activeOrganization);
+  const shownAlerts = [...(alerts ?? []).filter((a) => !closedAlerts.has(a.id)), ...meetings, ...fromServer];
+  const closeAlert = (id: string) => { if (!closeOnServer(id)) closeLocally(id); };
   // …and each meeting alert as a desktop notification too, once across tabs (task 15); permission is asked from a click.
   const [desktopPermission, askDesktop] = useDesktopPermission();
   const [desktopOff, setDesktopOff] = useDesktopOff();
-  useAlertNotifications(meetings, desktopPermission, desktopOff);
+  const notified = useMemo(() => [...meetings, ...fromServer], [meetings, fromServer]);
+  useAlertNotifications(notified, desktopPermission, desktopOff);
   const turnOnDesktop = () => { setDesktopOff(false); askDesktop(); };
   const [menu, setMenu] = useState<Menu>(null);
   const [searching, setSearching] = useState(false);
@@ -289,7 +295,7 @@ function TheSuiteBar({ tabs, organization, search, assistant, notifications, acc
   const accountRef = useRef<HTMLDivElement>(null);
   const appsRef = useRef<HTMLSpanElement>(null);
   // The booking page row: asked for when the account menu opens, in the organization the bar shows.
-  const booking = useBookingLink(menu === 'account', organization?.entries.find((e) => e.active)?.id ?? null);
+  const booking = useBookingLink(menu === 'account', activeOrganization);
   const [copied, setCopied] = useState(false);
   const copyBooking = (url: string) => {
     void navigator.clipboard?.writeText(url).catch(() => {});

@@ -4,7 +4,7 @@
 // sets off (`wake` jobs, through the `flow-jobs` Queue, and `post`s), and the alarm that keeps the retention window and
 // fires the schedules.
 import { DurableObject } from 'cloudflare:workers';
-import type { AgentJobDTO, JobState, PlatformEvent, SubscriptionDTO, HostedRuntimeDTO } from '@flow/shared';
+import { ALERT_CLOSED, ALERT_CREATED, type AgentJobDTO, type AlertDTO, type JobState, type PlatformEvent, type SubscriptionDTO, type HostedRuntimeDTO } from '@flow/shared';
 import { EventsCore, renderTemplate, type CappedWake, type EventStats, type JobCheck, type NewSelfWake, type NewSubscription, type PublishInput, type ReadQuery, type Reader, type SubscriptionRead } from './core';
 import type { Org } from '../org/object';
 
@@ -50,6 +50,7 @@ export class Events extends DurableObject<EventsEnv> {
   async publish(input: PublishInput): Promise<{ seq: number; id: string }> {
     const out = this.core.publish(input);
     this.published(input.organizationId, out.seq - 1, out.seq);
+    this.pushAlerts([input], [out]);
     await this.arm();
     return out;
   }
@@ -58,6 +59,7 @@ export class Events extends DurableObject<EventsEnv> {
     if (!inputs.length) return [];
     const out = this.core.publishMany(inputs);
     this.published(inputs[0]!.organizationId, out[0]!.seq - 1, out.at(-1)!.seq);
+    this.pushAlerts(inputs, out);
     await this.arm();
     return out;
   }
@@ -296,6 +298,21 @@ export class Events extends DurableObject<EventsEnv> {
     const send = Promise.all(hits.map((s) => org.pokeSubscription(s.consumer, s.id)))
       .catch((err: Error) => console.error(`[events] socket poke: ${err.message}`));
     this.ctx.waitUntil?.(send);
+  }
+
+  /**
+   * An alert (shared/alerts.ts) is for one account: as it goes into the log, the Org object that holds that person's
+   * suite-bar sockets sends it on. Not awaited; a page that misses it reads its open alerts when it loads.
+   */
+  private pushAlerts(inputs: PublishInput[], out: { seq: number }[]): void {
+    if (!this.env.ORG) return;
+    inputs.forEach((e, i) => {
+      if ((e.type !== ALERT_CREATED && e.type !== ALERT_CLOSED) || !e.audience.startsWith('account:')) return;
+      const org = this.env.ORG!.get(this.env.ORG!.idFromName(e.organizationId));
+      const send = org.pushAlert(e.audience.slice('account:'.length), { op: 'alert', type: e.type, seq: out[i]!.seq, data: e.data as AlertDTO })
+        .catch((err: Error) => console.error(`[events] alert push: ${err.message}`));
+      this.ctx.waitUntil?.(send);
+    });
   }
 
   /** Every waiting read (or one subscription's) reads again. */

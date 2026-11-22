@@ -14,3 +14,4 @@ export * from './meetingChat.js';
 export * from './mailApproval.js';
 export * from './userApps.js';
 export * from './eventCatalog.js';
+export * from './alerts.js';

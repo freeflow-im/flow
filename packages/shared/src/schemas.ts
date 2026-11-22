@@ -865,6 +865,19 @@ export const ScheduleWakeBody = z.object({
 }).strict();
 export type ScheduleWakeBody = z.infer<typeof ScheduleWakeBody>;
 
+/**
+ * POST /v1/alerts: an alert in the suite bar (shared/alerts.ts), as the bridge's show_alert sends it. It names no one: the
+ * server picks the person (decision_log 2026-11-22). The server checks the links and the time again.
+ */
+export const ShowAlertBody = z.object({
+  title: z.string().trim().min(1).max(120),
+  lines: z.array(z.string().max(200)).max(4).optional(),
+  kind: z.string().max(24).optional(),
+  links: z.array(z.object({ label: z.string().max(40), url: z.string().max(2000) }).strict()).max(3).optional(),
+  minutes: z.number().int().min(1).max(1440).optional(),
+}).strict();
+export type ShowAlertBody = z.infer<typeof ShowAlertBody>;
+
 /** POST /v1/events/jobs/:id/done: how the agent's turn ended, and a line about it. */
 export const JobDoneBody = z.object({
   ok: z.boolean(),

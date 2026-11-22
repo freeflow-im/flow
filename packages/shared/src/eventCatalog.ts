@@ -51,14 +51,17 @@ export const EVENT_LABELS: Record<string, string> = {
   'calendar.booked': 'Booking made',
   'contacts.changed': 'Contacts changed',
   'agent.job.finished': 'Agent job finished',
+  'alert.created': 'Alert shown',
+  'alert.closed': 'Alert closed',
   'sharing.granted': 'Something shared',
   'sharing.revoked': 'Sharing removed',
 };
 
-/** Events of the suite itself, in no app's manifest: shares of any app's objects (org/services/shares.ts) and agents' jobs (events/core.ts). */
+/** Events of the suite itself, in no app's manifest: shares of any app's objects (org/services/shares.ts), agents' jobs (events/core.ts) and the suite bar's alerts (shared/alerts.ts). */
 const SUITE_GROUPS: EventGroup[] = [
   { app: 'sharing', label: 'Sharing', types: ['sharing.granted', 'sharing.revoked'] },
   { app: 'agents', label: 'Agents', types: ['agent.job.finished'] },
+  { app: 'alerts', label: 'Alerts', types: ['alert.created', 'alert.closed'] },
 ].map(({ types, ...g }) => ({ ...g, installed: false, events: types.map((type) => ({ type, label: EVENT_LABELS[type]! })) }));
 
 /** A name for an event no table names: its short name as words ("task.created" → "Task created"). */

@@ -13,6 +13,7 @@ import type { McpRequestCaller, suiteHub } from './mcp.ts';
 import type { FileHub } from '@flow/docs/plugin/server/files.ts';
 import { DatabaseSync } from '@flow/docs/server/runtime/workerd/sqlite.ts';
 import { lazySubscriptions, subscriptionsAs, wakesAs, type SubscriptionOps, type WakeOps } from '../events/subscriptions.ts';
+import { alertsAs, type AlertOps } from '../events/alerts.ts';
 import { addressOf } from '@flow/shared/addresses';
 import { calendarRequest, type AccountCaller } from '../calendar/forward';
 import { appToolContexts } from '../apps';
@@ -326,7 +327,7 @@ export class Docs extends DurableObject<DocsEnv> {
     const agent = { via: caller.via ?? null, invokedBy: caller.invokedBy ?? null };
     const accountCaller = this.accountCaller(caller.userId, caller.orgId, agent);
     const userAppTools = await this.userAppToolsOf(caller, accountCaller);
-    return this.inOrganization(caller.orgId, () => this.lazy!.mcp.handleMcp(request, this.hub!, caller, this.mailOf(caller.userId, caller.origin, caller.orgId, agent), this.calendarOf(caller.userId, caller.origin, caller.orgId, agent), this.eventsOf(caller.userId, caller.orgId), this.memberOf(caller.orgId), appToolContexts(this.env, accountCaller, caller.origin), userAppTools, this.wakesOf(caller.userId, caller.orgId)));
+    return this.inOrganization(caller.orgId, () => this.lazy!.mcp.handleMcp(request, this.hub!, caller, this.mailOf(caller.userId, caller.origin, caller.orgId, agent), this.calendarOf(caller.userId, caller.origin, caller.orgId, agent), this.eventsOf(caller.userId, caller.orgId), this.memberOf(caller.orgId), appToolContexts(this.env, accountCaller, caller.origin), userAppTools, this.wakesOf(caller.userId, caller.orgId), this.alertsOf(caller.userId, caller.orgId, agent)));
   }
 
   /**
@@ -430,6 +431,27 @@ export class Docs extends DurableObject<DocsEnv> {
       schedule: async (w) => (await get()).schedule(w),
       list: async () => (await get()).list(),
       cancel: async (id) => (await get()).cancel(id),
+    };
+  }
+
+  /**
+   * Alerts as the /mcp caller's account (shared/alerts.ts): the Org object picks who gets one, from the account and the
+   * person the agent says it works for (`invokedBy`, which the directory checked).
+   */
+  private alertsOf(userId: string, organizationId: string, agent: AgentFields): AlertOps | undefined {
+    const { EVENTS: events, ORG: org } = this.env;
+    if (!events || !org) return undefined;
+    const caller = this.accountCaller(userId, organizationId, agent);
+    let ops: Promise<AlertOps> | null = null;
+    const get = () => (ops ??= (async () => {
+      const who = await caller();
+      if (!who?.account) throw Object.assign(new Error('no account in this organization'), { status: 403 });
+      return alertsAs(events.get(events.idFromName(organizationId)), org.get(org.idFromName(organizationId)), { accountId: who.account.id, organizationId, invokedBy: agent.invokedBy ?? null, via: agent.via ?? null });
+    })());
+    return {
+      show: async (input) => (await get()).show(input),
+      open: async () => (await get()).open(),
+      close: async (id) => (await get()).close(id),
     };
   }
 
