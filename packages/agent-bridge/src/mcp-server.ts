@@ -21,6 +21,7 @@ import { attachmentFilename, formatAttachments } from './attachments.js';
 import { deliverArtifact, deliveryId, inlineArtifactFile } from './artifact-delivery.js';
 import { CALENDAR_TOOLS, CALENDAR_TOOL_NAMES, calendarTool } from './calendar-tools.js';
 import { WAKE_TOOLS, WAKE_TOOL_NAMES, wakeTool } from './wake-tools.js';
+import { ALERT_TOOLS, ALERT_TOOL_NAMES, alertTool } from './alert-tools.js';
 import { MAIL_TOOLS, MAIL_TOOL_NAMES, mailTool } from './mail-tools.js';
 import { APP_TOOL, loadToolList, type McpToolEntry } from './tool-list.js';
 
@@ -393,6 +394,7 @@ export const BUILT_IN_TOOLS: McpToolEntry[] = [
   ...CALENDAR_TOOLS,
   ...MAIL_TOOLS,
   ...WAKE_TOOLS,
+  ...ALERT_TOOLS,
 ];
 
 const MIME_BY_EXT: Record<string, string> = {
@@ -630,6 +632,11 @@ export async function runMcpServer(): Promise<void> {
     // A wake for itself answers in this conversation unless it names another channel (agent-self-wake.md).
     if (WAKE_TOOL_NAMES.has(name)) {
       const out = await wakeTool(api, workspaceId, name, args, { channelId: defaultChannelId, ...(defaultThreadRootId ? { threadRootId: defaultThreadRootId } : {}) });
+      return toolText(out.text, out.isError);
+    }
+    // An alert for the person this turn is for (shared/alerts.ts): the server picks them from x-flow-invoked-by.
+    if (ALERT_TOOL_NAMES.has(name)) {
+      const out = await alertTool(api, workspaceId, name, args);
       return toolText(out.text, out.isError);
     }
     // An installed app's tool (docs/specs/user-apps.md §5): the suite checks the scopes and calls the app.

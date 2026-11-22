@@ -5,13 +5,14 @@
 // agent it sponsors, for `wake`). A wake job's agent acks it, extends its lease and says it is done under /v1/events/jobs.
 import { Hono, type Context } from 'hono';
 import type { ZodTypeAny, z } from 'zod';
-import { AckSubscriptionBody, CreateSubscriptionBody, JobDoneBody, ScheduleWakeBody } from '@flow/shared';
+import { AckSubscriptionBody, CreateSubscriptionBody, JobDoneBody, ScheduleWakeBody, ShowAlertBody } from '@flow/shared';
 import type { Events } from '../events/object';
 import type { ReadQuery } from '../events/core';
 import { subscriptionsAs, wakesAs } from '../events/subscriptions';
+import { alertsAs } from '../events/alerts';
 import { badRequest, notFound } from '../errors';
 import { ApiError } from '../errors';
-import { resolveAccountCaller, resolveCaller, type AuthEnv } from './auth';
+import { resolveAccountCaller, resolveAppCaller, resolveCaller, type AuthEnv } from './auth';
 
 export interface EventRouteEnv extends AuthEnv { EVENTS: DurableObjectNamespace<Events> }
 
@@ -58,6 +59,33 @@ eventRoutes.get('/v1/workspaces/:id/shared-with-me', async (c) => {
   const shares = await c.env.ORG.get(c.env.ORG.idFromName(org)).sharedWith({ accountId: who.account.id }, { includeOrg });
   c.header('Cache-Control', 'no-store');
   return c.json({ shares: shares.map(({ ref, kind, title, role, principal, grantedBy, at, url }) => ({ ref, kind, title, role, principal: principal.startsWith('link:') ? 'link' : principal, grantedBy, at, url })) });
+});
+
+// ---- alerts (shared/alerts.ts): the suite bar reads the caller's open alerts when a page loads, and closes them -----------
+
+/** The caller's alerts in the organization (`?workspace=`), as its account. A guest too: a shared agent may alert one in Chat. */
+async function alertOpsOf(c: Context<{ Bindings: EventRouteEnv }>) {
+  const who = await resolveAppCaller(c);
+  if (!who.account) throw new ApiError(403, 'no_account', 'not a member of this organization');
+  const org = who.account.organizationId;
+  c.header('Cache-Control', 'no-store');
+  // `invokedBy` as the directory checked it (the bridge's `x-flow-invoked-by`): the person a shared agent's turn is for.
+  return alertsAs(c.env.EVENTS.get(c.env.EVENTS.idFromName(org)), c.env.ORG.get(c.env.ORG.idFromName(org)), {
+    accountId: who.account.id, organizationId: org, invokedBy: who.invokedBy ?? null, via: who.via ?? null,
+  });
+}
+
+eventRoutes.get('/v1/alerts', async (c) => c.json({ alerts: await (await alertOpsOf(c)).open() }));
+
+// The bridge's show_alert: the tool's input; the server picks who gets it.
+eventRoutes.post('/v1/alerts', async (c) => {
+  const body = await bodyOf(ShowAlertBody, c);
+  return c.json({ alert: await (await alertOpsOf(c)).show(body) }, 201);
+});
+
+eventRoutes.post('/v1/alerts/:id/close', async (c) => {
+  if (!(await (await alertOpsOf(c)).close(c.req.param('id')))) throw notFound('no such alert');
+  return c.json({ ok: true });
 });
 
 // ---- subscriptions -------------------------------------------------------------------------------------------------

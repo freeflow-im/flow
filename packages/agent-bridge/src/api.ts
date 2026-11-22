@@ -247,6 +247,11 @@ export class FlowApi {
     return this.req(method, `/v1/events/wakes${path ? `/${path}` : ''}?workspace=${encodeURIComponent(workspaceId)}`, body);
   }
 
+  /** An alert in the suite bar (`POST /v1/alerts`, shared/alerts.ts) in one organization (`?workspace=`): the server picks the person. */
+  alerts<T>(workspaceId: string, body: unknown): Promise<T> {
+    return this.req('POST', `/v1/alerts?workspace=${encodeURIComponent(workspaceId)}`, body);
+  }
+
   /** Mail (`/v1/mail/<path>`), as the agent's account in one organization (`?workspace=`): its own mailbox (phase 5.4). */
   mail<T>(method: 'GET' | 'POST' | 'PATCH', path: string, workspaceId: string, body?: unknown): Promise<T> {
     return this.req(method, `/v1/mail/${path}${path.includes('?') ? '&' : '?'}workspace=${encodeURIComponent(workspaceId)}`, body);

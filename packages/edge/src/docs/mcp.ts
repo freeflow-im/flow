@@ -11,8 +11,9 @@ import { FileHub, importLimit, ToolError, type FileHubOptions } from '@flow/docs
 import { createMcpServer, instructionsFor, MCP_VERSIONS, serverInfo, type McpVersion } from '@flow/docs/plugin/server/mcp.ts';
 import { MAIL_INSTRUCTIONS, type MailFetch, type MailToolContext } from '../imap/mailTools.ts';
 import { CALENDAR_INSTRUCTIONS, type CalendarFetch, type CalendarToolContext } from '../calendar/calendarTools.ts';
-import { EVENT_INSTRUCTIONS, type EventToolContext, type WakeToolContext } from '../events/eventTools.ts';
+import { EVENT_INSTRUCTIONS, type AlertToolContext, type EventToolContext, type WakeToolContext } from '../events/eventTools.ts';
 import type { WakeOps } from '../events/subscriptions.ts';
+import type { AlertOps } from '../events/alerts.ts';
 import { toolsFor, type DoorTool } from '../registry';
 import type { AppToolContext } from '../apps';
 import type { SubscriptionOps } from '../events/subscriptions.ts';
@@ -97,7 +98,7 @@ export function suiteHub(opts: FileHubOptions, appUrl: string): FileHub {
 export function mcpAccess(scope: string, mailAvailable: boolean, calendarAvailable = false, eventsAvailable = false, apps: readonly string[] = []): { files: 'none' | 'read' | 'write'; docs: Set<string>; mail: DoorTool[]; calendar: DoorTool[]; events: DoorTool[]; others: DoorTool[] } {
   const scopes = scope.split(' ').filter(Boolean);
   const files = scopes.includes('files:write') ? 'write' : scopes.includes('files:read') ? 'read' : 'none';
-  const reach = { ...Object.fromEntries(apps.map((a) => [a, true])), ...(mailAvailable ? { mail: true } : {}), ...(calendarAvailable ? { calendar: true } : {}), ...(eventsAvailable ? { events: true, wakes: true } : {}) };
+  const reach = { ...Object.fromEntries(apps.map((a) => [a, true])), ...(mailAvailable ? { mail: true } : {}), ...(calendarAvailable ? { calendar: true } : {}), ...(eventsAvailable ? { events: true, wakes: true, alerts: true } : {}) };
   const tools = toolsFor('mcp', { scopes, reach });
   const of = (app: string) => tools.filter((t) => t.definition.app === app);
   // The apps added by manifest (apps.ts): their tools run with `ctx.apps[<app>]`.
@@ -113,7 +114,7 @@ const toolResult = (data: Record<string, unknown>) => ({ content: [{ type: 'text
 const toolError = (message: string) => ({ content: [{ type: 'text' as const, text: message }], isError: true });
 
 /** The registry's tools that run in the Worker (Mail's, Calendar's, Events', the apps' added by manifest), on an MCP server, each with the caller's own objects. */
-function registerTools(mcp: ReturnType<typeof createMcpServer>, tools: DoorTool[], ctx: { mail?: MailToolContext; calendar?: CalendarToolContext; events?: EventToolContext; wakes?: WakeToolContext; apps?: Record<string, AppToolContext> }): void {
+function registerTools(mcp: ReturnType<typeof createMcpServer>, tools: DoorTool[], ctx: { mail?: MailToolContext; calendar?: CalendarToolContext; events?: EventToolContext; wakes?: WakeToolContext; alerts?: AlertToolContext; apps?: Record<string, AppToolContext> }): void {
   for (const { definition, runner } of tools) {
     if (!runner) continue;
     mcp.registerTool(definition.name, { title: runner.title, description: definition.description, inputSchema: runner.shape as never, annotations: runner.annotations as never }, (async (args: Record<string, unknown>) => {
@@ -134,7 +135,7 @@ function registerTools(mcp: ReturnType<typeof createMcpServer>, tools: DoorTool[
  * organization by address (share_calendar); `apps` are the objects of the apps added by manifest (apps.ts), by name;
  * `userAppTools` the tools of the apps installed in the organization that the caller may use (user-apps.md §3.3).
  */
-export async function handleMcp(request: Request, hub: FileHub, caller: McpRequestCaller, mail?: MailFetch, calendar?: CalendarFetch, events?: SubscriptionOps, member?: CalendarToolContext['member'], apps: Record<string, AppToolContext> = {}, userAppTools: DoorTool[] = [], wakes?: WakeOps): Promise<Response> {
+export async function handleMcp(request: Request, hub: FileHub, caller: McpRequestCaller, mail?: MailFetch, calendar?: CalendarFetch, events?: SubscriptionOps, member?: CalendarToolContext['member'], apps: Record<string, AppToolContext> = {}, userAppTools: DoorTool[] = [], wakes?: WakeOps, alerts?: AlertOps): Promise<Response> {
   const version = suiteMcpVersion(caller.endpoint);
   if (!version) return json(404, { error: 'Not found' });
   if (request.method !== 'POST') return json(405, { error: 'This endpoint takes POST (Streamable HTTP, JSON responses); it has no GET stream.' }, { allow: 'POST' });
@@ -183,6 +184,7 @@ export async function handleMcp(request: Request, hub: FileHub, caller: McpReque
     ...(calendar ? { calendar: { calendar, origin: caller.origin, ...(member ? { member } : {}) } } : {}),
     ...(events ? { events: { subscriptions: events } } : {}),
     ...(events && wakes ? { wakes: { wakes } } : {}),
+    ...(events && alerts ? { alerts: { alerts } } : {}),
     apps,
   };
   // The installed apps' tools (user-apps.md §3.3), already filtered to the caller's scopes, each with its runner.
