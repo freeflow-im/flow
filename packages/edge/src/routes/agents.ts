@@ -67,7 +67,7 @@ const orgOf = (c: C, organizationId: string) => c.env.ORG.get(c.env.ORG.idFromNa
   addHostedPersonalAgent(account: AccountDTO): Promise<void>;
   renameAssistant(agentId: string, name: string, address: string | null): Promise<void>;
   dropPersonalAgent(userId: string): Promise<void>;
-  recordAgentUsage(accountId: string, usage: { input: number; output: number; requests?: number }): Promise<void>;
+  recordAgentUsage(accountId: string, usage: { input: number; output: number; cacheWrite?: number; cacheRead?: number; requests?: number }): Promise<void>;
   agentUsage(accountId: string, range: AgentUsageRange, tzOffsetMinutes?: number): Promise<AgentUsageDTO>;
 };
 
@@ -208,7 +208,7 @@ agentRoutes.get('/v1/workspaces/:id/agents/:userId/usage', async (c) => {
   return c.json(await orgOf(c, organizationId).agentUsage(account.id, range, Number.isFinite(tz) ? tz : 0));
 });
 
-const UsageReport = z.object({ inputTokens: z.number().int().min(0), outputTokens: z.number().int().min(0), requests: z.number().int().min(1).max(10_000).optional() });
+const UsageReport = z.object({ inputTokens: z.number().int().min(0), outputTokens: z.number().int().min(0), cacheWriteTokens: z.number().int().min(0).optional(), cacheReadTokens: z.number().int().min(0).optional(), requests: z.number().int().min(1).max(10_000).optional() });
 
 /** An agent on the bridge reports a turn's tokens (its CLI's own count); a hosted agent's runtime records its own. */
 agentRoutes.post('/v1/workspaces/:id/agents/me/usage', async (c) => {
@@ -219,6 +219,8 @@ agentRoutes.post('/v1/workspaces/:id/agents/me/usage', async (c) => {
   if (!who.user.isAgent || !who.account) throw forbidden('only an agent of this organization reports its usage');
   const r = UsageReport.safeParse(await c.req.json().catch(() => undefined));
   if (!r.success) throw badRequest('validation', r.error.issues[0]?.message ?? 'invalid request');
-  await orgOf(c, organizationId).recordAgentUsage(who.account.id, { input: r.data.inputTokens, output: r.data.outputTokens, ...(r.data.requests ? { requests: r.data.requests } : {}) });
+  const d = r.data;
+  // inputTokens is the uncached input; a bridge older than 0.44 sends all of it there, with no cache counts.
+  await orgOf(c, organizationId).recordAgentUsage(who.account.id, { input: d.inputTokens, output: d.outputTokens, cacheWrite: d.cacheWriteTokens ?? 0, cacheRead: d.cacheReadTokens ?? 0, ...(d.requests ? { requests: d.requests } : {}) });
   return c.json({ ok: true });
 });

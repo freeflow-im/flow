@@ -12,7 +12,7 @@ This file keeps two things:
 
 ## Parity
 
-- **Agents' AI usage is in web Admin only (2026-11-21, Taskboard task 22).** The Usage link and chart are in Admin › Members, which macOS and iOS do not have (deliberate, as for the rest of Admin).
+- **Agents' AI usage is in web Admin only (2026-11-21, Taskboard task 22).** The Usage link and chart (input by uncached, cache writes and cache reads) are in Admin › Members, which macOS and iOS do not have (deliberate, as for the rest of Admin).
 - **Sign-in codes found in mail, and their desktop notifications, are on web only (2026-11-20, Taskboard task 21; 2026-11-21).** Mail is web only; macOS and iOS have no Mail (deliberate).
 - **The unread dot on the tab icon is web only (2026-11-20, Taskboard task 20).** A browser tab has no app badge, so web Chat dots its favicon; macOS, iOS and the desktop shell show their dock/app badge instead (deliberate).
 - **The global scratchpad is web only (2026-11-20, Taskboard task 16).** The button beside the suite bar's bell and its popup are on every web page and in the desktop shell; macOS and iOS have no suite bar and show no button, though the "Global Scratchpad" whiteboard is an ordinary Docs file (gap to close: a native button opening it).

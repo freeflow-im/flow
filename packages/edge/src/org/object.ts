@@ -8,7 +8,7 @@ import { directoryLink } from './directoryLink';
 import type { Directory, DirectoryAnswer } from '../directory/object';
 import { publishEvent, subjectMeta, withPublisher } from './bus';
 import { HUDDLE_ROSTER_DDL } from './huddles';
-import { AGENT_USAGE_DDL, agentUsageSeries, recordAgentUsage } from './agentUsage';
+import { agentUsageSeries, ensureAgentUsageTable, recordAgentUsage, type UsageReport } from './agentUsage';
 import { MESSAGE_SEARCH_DDL, reindexMessages, searchMessages } from './services/search';
 import { parseSearch } from '@flow/shared/search';
 import { openDb, withDb, type DB, schema } from './db/index';
@@ -162,7 +162,7 @@ export class Org extends DurableObject<OrgEnv> {
     });
     for (const statement of OUTBOX) sql.exec(statement);
     sql.exec(HUDDLE_ROSTER_DDL);
-    sql.exec(AGENT_USAGE_DDL);
+    ensureAgentUsageTable(sql);
     for (const ddl of MESSAGE_SEARCH_DDL) sql.exec(ddl);
     // Messages the search index does not have yet (sent before it, or missed) are indexed in the background from the start.
     void this.indexMessages();
@@ -845,7 +845,7 @@ export class Org extends DurableObject<OrgEnv> {
    * owner or admin of the organization. Null when the account is no agent of this organization.
    */
   /** An agent's model tokens (agentUsage.ts): a hosted runtime's model call, or a bridge agent's turn. */
-  async recordAgentUsage(accountId: string, usage: { input: number; output: number; requests?: number }): Promise<void> {
+  async recordAgentUsage(accountId: string, usage: UsageReport): Promise<void> {
     recordAgentUsage(this.ctx.storage.sql, accountId, usage);
   }
 

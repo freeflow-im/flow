@@ -236,17 +236,23 @@ export interface UsableAgentDTO {
 /** The ranges an agent's AI usage is shown over (Admin › Members › Usage): the last day by hour, or 7 or 30 days by day. */
 export type AgentUsageRange = '1d' | '7d' | '30d';
 
-/** An agent's model tokens over a range (GET /v1/workspaces/:id/agents/:userId/usage), in thousands, oldest bucket first;
- * the last bucket is the current, partial one. Input counts prompt-cache reads and writes too. */
+/** One bucket's (or a range's) tokens in thousands. `inputK` is all input: uncached input, prompt-cache writes and
+ * prompt-cache reads, which providers bill very differently and so come apart too. Usage counted before the split (or
+ * reported by a bridge older than 0.44) is all in `uncachedK`. */
+export interface AgentUsageAmounts { inputK: number; uncachedK: number; cacheWriteK: number; cacheReadK: number; outputK: number; requests: number }
+
+/** An agent's model tokens over a range (GET /v1/workspaces/:id/agents/:userId/usage), oldest bucket first; the last
+ * bucket is the current, partial one. */
 export interface AgentUsageDTO {
   range: AgentUsageRange;
   bucket: 'hour' | 'day';
-  buckets: { start: string; inputK: number; outputK: number; requests: number }[];
-  total: { inputK: number; outputK: number; requests: number };
+  buckets: ({ start: string } & AgentUsageAmounts)[];
+  total: AgentUsageAmounts;
 }
 
-/** What an agent on the bridge reports after a turn (POST /v1/workspaces/:id/agents/me/usage): the turn's tokens. */
-export interface AgentUsageReport { inputTokens: number; outputTokens: number; requests?: number }
+/** What an agent on the bridge reports after a turn (POST /v1/workspaces/:id/agents/me/usage). `inputTokens` is the
+ * uncached input when the cache counts are given; a bridge older than 0.44 sends all input there. */
+export interface AgentUsageReport { inputTokens: number; outputTokens: number; cacheWriteTokens?: number; cacheReadTokens?: number; requests?: number }
 
 /** A hosted agent's special role (agents.md §1.4). Only `admin` exists: the admin agent every organization has. */
 export type AgentRole = 'admin';

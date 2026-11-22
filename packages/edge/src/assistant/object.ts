@@ -454,9 +454,10 @@ export class Assistant extends DurableObject<AssistantEnv> {
     const org = who?.caller.account?.organizationId || who?.caller.organizationId;
     const ORG = this.env.ORG;
     if (!accountId || !org || !ORG) return;
-    const input = usage.input_tokens + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
-    const stub = ORG.get(ORG.idFromName(org)) as unknown as { recordAgentUsage(accountId: string, u: { input: number; output: number }): Promise<void> };
-    this.ctx.waitUntil(stub.recordAgentUsage(accountId, { input, output: usage.output_tokens }).catch((e) => console.warn('[assistant] usage not recorded', e)));
+    // The three kinds of input apart: a provider bills a cache read far below uncached input, and a cache write above it.
+    const u = { input: usage.input_tokens, output: usage.output_tokens, cacheWrite: usage.cache_creation_input_tokens ?? 0, cacheRead: usage.cache_read_input_tokens ?? 0 };
+    const stub = ORG.get(ORG.idFromName(org)) as unknown as { recordAgentUsage(accountId: string, u: { input: number; output: number; cacheWrite: number; cacheRead: number }): Promise<void> };
+    this.ctx.waitUntil(stub.recordAgentUsage(accountId, u).catch((e) => console.warn('[assistant] usage not recorded', e)));
   }
 
   /**

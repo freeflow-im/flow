@@ -190,16 +190,28 @@ interface StreamEvent {
   usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
 }
 
-/** A turn's model tokens, reported to Flow (Admin › Members › Usage): input includes prompt-cache reads and writes. */
-export interface TokenUsage { inputTokens: number; outputTokens: number }
+/**
+ * A turn's model tokens, reported to Flow (Admin › Members › Usage). Input comes in its three billing kinds:
+ * `inputTokens` is the uncached input, apart from prompt-cache writes and reads.
+ */
+export interface TokenUsage { inputTokens: number; outputTokens: number; cacheWriteTokens: number; cacheReadTokens: number }
 
 const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
+const any = (u: TokenUsage) => u.inputTokens + u.outputTokens + u.cacheWriteTokens + u.cacheReadTokens > 0;
 
-/** A `result` event's usage as a TokenUsage, or null when it carries none. */
+/** A `result` event's usage as a TokenUsage, or null when it carries none. Claude's input_tokens is already uncached. */
 export function claudeUsage(u: StreamEvent['usage']): TokenUsage | null {
   if (!u) return null;
-  const usage = { inputTokens: n(u.input_tokens) + n(u.cache_read_input_tokens) + n(u.cache_creation_input_tokens), outputTokens: n(u.output_tokens) };
-  return usage.inputTokens || usage.outputTokens ? usage : null;
+  const usage = { inputTokens: n(u.input_tokens), outputTokens: n(u.output_tokens), cacheWriteTokens: n(u.cache_creation_input_tokens), cacheReadTokens: n(u.cache_read_input_tokens) };
+  return any(usage) ? usage : null;
+}
+
+/** A codex `turn.completed` usage as a TokenUsage: codex counts cached input inside input_tokens, and reports no writes. */
+export function codexUsage(u: CodexEvent['usage']): TokenUsage | null {
+  if (!u) return null;
+  const cached = Math.min(n(u.cached_input_tokens), n(u.input_tokens));
+  const usage = { inputTokens: n(u.input_tokens) - cached, outputTokens: n(u.output_tokens), cacheWriteTokens: 0, cacheReadTokens: cached };
+  return any(usage) ? usage : null;
 }
 
 /**
@@ -470,9 +482,8 @@ export class CodexJsonParser {
       return;
     }
     if (ev.type === 'turn.completed') {
-      // codex counts cached input inside input_tokens.
-      const u = ev.usage, usage = { inputTokens: n(u?.input_tokens), outputTokens: n(u?.output_tokens) };
-      if (usage.inputTokens || usage.outputTokens) this.onUsage(usage);
+      const usage = codexUsage(ev.usage);
+      if (usage) this.onUsage(usage);
       return;
     }
     const item = ev.item;
