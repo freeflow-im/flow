@@ -229,6 +229,18 @@ export const APP_MANIFESTS: AppManifest[] = [
     path: '/meet',
     scope: 'organization',
     kinds: [],
+    // Its tools at /mcp (docs/specs/suite-mcp.md §5).
+    tools: ['create_meeting', 'list_live_meetings'],
+    scopes: [
+      {
+        id: 'meet',
+        label: 'Meet: make meeting rooms',
+        detail: 'Make FreeFlow Meet rooms in the organization below, to put on events or send to people, and see the meetings happening now. It never joins a meeting.',
+        readOnly: { label: 'Meet: see the meetings happening now', detail: 'The FreeFlow Meet meetings of the organization below that have people in them now.' },
+        scopes: ['meet:read', 'meet:write'],
+        checkedByDefault: true,
+      },
+    ],
     tab: { label: 'Meet', shortcut: '5', badge: 'none' },
     client: { dist: 'packages/meet/dist', basePath: '/meet/', optional: true },
     pages: [

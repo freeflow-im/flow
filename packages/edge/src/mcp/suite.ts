@@ -17,6 +17,7 @@ import type { SubscriptionOps, WakeOps } from '../events/subscriptions.ts';
 import { toolsFor, type DoorTool } from '../registry';
 import type { AppToolContext } from '../apps';
 import { CHAT_INSTRUCTIONS, type ChatToolContext } from '../chat/mcpTools.ts';
+import { MEET_INSTRUCTIONS, type MeetToolContext } from '../meet/mcpTools.ts';
 
 export interface McpRequestCaller {
   userId: string;
@@ -58,6 +59,8 @@ export interface SuiteDeps {
   member?: CalendarToolContext['member'];
   /** The organization's Chat, as the caller's agent (chat/mcpTools.ts). */
   chat?: ChatToolContext;
+  /** The organization's Meet, as the caller (meet/mcpTools.ts). */
+  meet?: MeetToolContext;
   /** The objects of the apps added by manifest (apps.ts), by name. */
   apps?: Record<string, AppToolContext>;
   /** The tools of the apps installed in the organization that the caller may use (user-apps.md §3.3). */
@@ -112,6 +115,7 @@ export const suiteInstructions = (version: McpVersion, access: ReturnType<typeof
     access.calendar.length ? CALENDAR_INSTRUCTIONS : '',
     access.events.length ? EVENT_INSTRUCTIONS : '',
     access.others.some((t) => t.definition.app === 'chat') ? CHAT_INSTRUCTIONS : '',
+    access.others.some((t) => t.definition.app === 'meet') ? MEET_INSTRUCTIONS : '',
   ]
     .filter(Boolean)
     .join('\n');
@@ -121,7 +125,7 @@ const json = (status: number, body: unknown, headers: Record<string, string> = {
 const toolResult = (data: Record<string, unknown>) => ({ content: [{ type: 'text' as const, text: JSON.stringify(data) }], structuredContent: data });
 const toolError = (message: string) => ({ content: [{ type: 'text' as const, text: message }], isError: true });
 
-interface RunnerContext { mail?: MailToolContext; calendar?: CalendarToolContext; events?: EventToolContext; wakes?: WakeToolContext; chat?: ChatToolContext; apps?: Record<string, AppToolContext> }
+interface RunnerContext { mail?: MailToolContext; calendar?: CalendarToolContext; events?: EventToolContext; wakes?: WakeToolContext; chat?: ChatToolContext; meet?: MeetToolContext; apps?: Record<string, AppToolContext> }
 
 /** The registry's tools that run in the Worker, on the server, each with the caller's own objects. */
 function registerRunners(mcp: McpServer, tools: DoorTool[], ctx: RunnerContext): void {
@@ -183,7 +187,7 @@ export async function handleSuiteMcp(request: Request, caller: McpRequestCaller,
   const body = await request.json().catch(() => undefined);
   const info = suiteServerInfo(version, caller.origin);
   const apps = deps.apps ?? {};
-  const access = mcpAccess(caller.scope, !!deps.mail, !!deps.calendar, !!deps.events, [...Object.keys(apps), ...(deps.chat ? ['chat'] : [])]);
+  const access = mcpAccess(caller.scope, !!deps.mail, !!deps.calendar, !!deps.events, [...Object.keys(apps), ...(deps.chat ? ['chat'] : []), ...(deps.meet ? ['meet'] : [])]);
   if (!deps.docs) access.docs.clear();
   const instructions = suiteInstructions(version, access);
   // ChatGPT and newer clients speak 2026-07-28 (no initialize: server/discover); the SDK speaks 2025-11-25.
@@ -214,6 +218,7 @@ export async function handleSuiteMcp(request: Request, caller: McpRequestCaller,
     ...(deps.events ? { events: { subscriptions: deps.events } } : {}),
     ...(deps.events && deps.wakes ? { wakes: { wakes: deps.wakes } } : {}),
     ...(deps.chat ? { chat: deps.chat } : {}),
+    ...(deps.meet ? { meet: deps.meet } : {}),
     apps,
   };
   registerRunners(mcp, [...access.mail, ...access.calendar, ...access.events, ...access.others, ...(deps.userAppTools ?? [])], ctx);

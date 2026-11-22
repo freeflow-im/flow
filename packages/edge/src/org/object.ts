@@ -876,6 +876,27 @@ export class Org extends DurableObject<OrgEnv> {
   }
 
   /**
+   * An /mcp agent's Meet tools (docs/specs/suite-mcp.md §5, meet/mcpTools.ts), as `userId`: the person a personal agent
+   * acts for, or the shared agent itself. `origin` makes the room's link.
+   */
+  async mcpMeet(p: { userId: string; tool: string; input: Record<string, unknown>; origin: string; via?: string | null; invokedBy?: string | null }): Promise<unknown> {
+    const org = this.ctx.storage.sql.exec('SELECT id FROM workspaces LIMIT 1').toArray()[0]?.id as string | undefined;
+    if (!org) throw new Error('This organization has no Meet yet.');
+    const { createMeeting, liveMeetings } = await import('./services/meetings');
+    const link = (code: string) => `${p.origin}/meet/${code}`;
+    if (p.tool === 'create_meeting') {
+      const title = typeof p.input.title === 'string' ? p.input.title : undefined;
+      const m = await this.scoped(() => createMeeting(org, p.userId, title), { depth: 1, ...(p.invokedBy ? { invokedBy: p.invokedBy } : {}) });
+      return { title: m.title, code: m.code, link: link(m.code), event_line: `Join with FreeFlow Meet: ${link(m.code)}` };
+    }
+    if (p.tool === 'list_live_meetings') {
+      const live = await this.scoped(() => liveMeetings(org, p.userId));
+      return { meetings: live.map((m) => ({ title: m.title, link: link(m.code), started_at: m.startedAt, people: m.people.map((x) => x.name) })) };
+    }
+    throw new Error(`Unknown Meet tool ${p.tool}.`);
+  }
+
+  /**
    * A personal agent on /mcp enters Chat (docs/specs/suite-mcp.md §4.2): its row's runtime becomes `external`, which puts
    * it on Chat's roster (notExternalAgent leaves out only those that have not), and the sockets hear `member.joined`.
    */

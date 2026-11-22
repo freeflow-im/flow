@@ -86,4 +86,11 @@ describe('the suite’s /mcp server', () => {
     expect(pic.result?.content?.[0]).toMatchObject({ type: 'image', mimeType: 'image/png' });
     expect(seen).toEqual([{ tool: 'read_chat_file', input: { fileId: 'f1' } }]);
   }, 60_000);
+
+  it('lists Meet’s tools by meet:read and meet:write', async () => {
+    const meet = { meet: async () => ({}) };
+    expect(await names('meet:read', { meet })).toEqual(['list_live_meetings']);
+    expect((await names('meet:read meet:write', { meet })).sort()).toEqual(['create_meeting', 'list_live_meetings']);
+    expect(await names('meet:read meet:write', {})).toEqual([]);
+  }, 60_000);
 });

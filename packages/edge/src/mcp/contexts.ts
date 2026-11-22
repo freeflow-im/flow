@@ -14,6 +14,7 @@ import type { DoorTool } from '../registry';
 import { appDoorTools } from '../registry/userApps';
 import type { DocsPort, McpRequestCaller, SuiteDeps } from './suite.ts';
 import type { ChatToolContext } from '../chat/mcpTools.ts';
+import type { MeetToolContext } from '../meet/mcpTools.ts';
 
 export interface McpContextEnv {
   DIRECTORY: DurableObjectNamespace<Directory>;
@@ -116,7 +117,7 @@ export async function mcpContexts(env: McpContextEnv, caller: McpRequestCaller):
 
   const apps: Record<string, AppToolContext> = appToolContexts(env, who, caller.origin);
   const userAppTools = await userAppToolsOf(env, caller, who);
-  return { docs: docsPort(env, caller), mail, calendar, events, wakes, member, chat: chatOf(env, caller), apps, userAppTools };
+  return { docs: docsPort(env, caller), mail, calendar, events, wakes, member, chat: chatOf(env, caller), meet: meetOf(env, caller), apps, userAppTools };
 }
 
 /**
@@ -148,4 +149,13 @@ async function userAppToolsOf(env: McpContextEnv, caller: McpRequestCaller, who:
   return appDoorTools({ ORG: env.ORG }, {
     organizationId: caller.orgId, account: w.account, userId: caller.userId, displayName: w.account.displayName, via: w.via ?? null, invokedBy: w.invokedBy ?? null,
   }, 'mcp');
+}
+
+/** The organization's Meet as the caller (docs/specs/suite-mcp.md §5): the person a personal agent acts for, or the shared agent. */
+function meetOf(env: McpContextEnv, caller: McpRequestCaller): MeetToolContext | undefined {
+  const { ORG } = env;
+  if (!ORG) return undefined;
+  return {
+    meet: (tool, input) => ORG.get(ORG.idFromName(caller.orgId)).mcpMeet({ userId: caller.userId, tool, input, origin: caller.origin, via: caller.via ?? null, invokedBy: caller.invokedBy ?? null }),
+  };
 }

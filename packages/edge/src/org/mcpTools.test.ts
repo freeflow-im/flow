@@ -1,4 +1,4 @@
-// Chat's /mcp tools in the Org object (docs/specs/suite-mcp.md §4): a personal agent reads with its sponsor's reach and
+// Chat's and Meet's /mcp tools in the Org object (docs/specs/suite-mcp.md §4, §5): a personal agent reads with its sponsor's reach and
 // never a direct message; its first post brings it into Chat as itself (runtime `external`), where every client lists it;
 // a shared agent posts as itself where it is a member; a person is no agent. Run through the Org object over node:sqlite.
 import { randomBytes } from 'node:crypto';
@@ -109,5 +109,21 @@ describe('Chat at /mcp, as a shared agent or a person', () => {
 
   it('a person is no agent', async () => {
     await expect(org.mcpChat({ agentUserId: BEN, tool: 'list_channels', input: {} })).rejects.toThrow(/cannot use Chat/);
+  });
+});
+
+describe('Meet at /mcp', () => {
+  it('makes a room as the person, with its link and the line for an event, and lists none live', async () => {
+    Object.assign(process.env, { RTK_ACCOUNT_ID: 'acct', RTK_APP_ID: 'app', RTK_API_TOKEN: 'secret' });
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ success: true, data: { id: 'rtk-1' } })));
+    try {
+      const made = await org.mcpMeet({ userId: ANN, tool: 'create_meeting', input: { title: 'Launch review' }, origin: 'https://app.test' }) as { title: string; link: string; event_line: string };
+      expect(made.title).toBe('Launch review');
+      expect(made.link).toMatch(/^https:\/\/app\.test\/meet\/[a-z]{3}-[a-z]{4}-[a-z]{3}$/);
+      expect(made.event_line).toBe(`Join with FreeFlow Meet: ${made.link}`);
+      expect(await org.mcpMeet({ userId: ANN, tool: 'list_live_meetings', input: {}, origin: 'https://app.test' })).toEqual({ meetings: [] });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
