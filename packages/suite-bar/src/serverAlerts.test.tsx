@@ -23,7 +23,8 @@ class FakeSocket {
   onopen: (() => void) | null = null;
   onmessage: ((m: { data: string }) => void) | null = null;
   onclose: ((e: { code: number }) => void) | null = null;
-  constructor(public url: string) { FakeSocket.all.push(this); }
+  url: string;
+  constructor(url: string) { this.url = url; FakeSocket.all.push(this); }
   send(text: string) { this.sent.push(text); }
   close() { this.readyState = 3; }
   open() { this.readyState = 1; this.onopen?.(); }
