@@ -41,7 +41,7 @@ subscribes (§6). There is no single "Assistant": the assistant a person sees is
 | --- | --- | --- |
 | Access | its sponsor's in the same organization, limited by scopes | only its own grants; **never inherits from its sponsor** |
 | Who may start a turn | the sponsor only | every member of its organization |
-| Its account | `personal_agent`; the assistant has its own address, mailbox, calendars and channels (§1.1), an external one none; it acts with the sponsor's access, marked `via` | `native`: its own address, mailbox, calendars (P§3.3) |
+| Its account | `personal_agent`; the assistant has its own address, mailbox, calendars and channels (§1.1), an external one none of these but channels, which its sponsor brings it into when it first posts at `/mcp` (suite-mcp.md §4.2); it acts with the sponsor's access, marked `via` | `native`: its own address, mailbox, calendars (P§3.3) |
 | Channels, mentions, DMs | the assistant: the sponsor's alone start turns; others see its replies but are never answered (§1.1) | yes, from anyone, like any member |
 | Things shared with it | not possible; it already sees what the sponsor sees | by grants, like any member |
 | The sponsor's part | owner and source of access | answers for it; gives it no access |
@@ -214,7 +214,8 @@ hold the admin role.
    mark and "sponsored by" (P§3.2); the address itself is plain. A shared agent is always `native`: it is brought in
    to work and needs its address and mailbox for it.
 4. A personal agent's account has kind `personal_agent` and holds no grants; its kind never changes. The assistant's has
-   an address, a mailbox and calendars (§1.1); an external personal agent's has none of them, and no channels.
+   an address, a mailbox and calendars (§1.1); an external personal agent's has none of them. It enters Chat only when it
+   posts at `/mcp`, brought into channels its sponsor is in, and never into direct messages (decision_log 2026-11-22).
 
 **Admins see every principal.** The member list shows people, guests, shared agents and personal agents, each with
 its kind and sponsor ("Tom's assistant · personal agent of Tom"). An admin may suspend or remove any agent, as they

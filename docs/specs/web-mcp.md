@@ -1,5 +1,10 @@
 # Docs' MCP endpoint on the suite's host: app.freeflow.im/mcp
 
+> **Since 2026-11-22 the endpoint is the FreeFlow server, not Docs'.** `docs/specs/suite-mcp.md` describes it: it runs in
+> the Worker (`packages/edge/src/mcp/suite.ts`), Docs is one app it calls (`Docs.runMcpTool`), and Chat, Meet and one
+> search were added. This document still holds for the OAuth, the consent page's flow, the tokens and the uploads; where
+> it says `/mcp` runs in the Docs object, read suite-mcp.md §3.
+
 Agents (Claude Code, Codex, Cursor, claude.ai's connectors) connect to `https://app.freeflow.im/mcp` and work on the same
 Docs files people see in FreeFlow Docs at `/docs`. Built 2026-11-03 on the Worker (`packages/edge`). The ChatGPT
 plugin's `/mcp` on `docs.freeflow.im` and `mcpdocs.freeflow.im` is a different server and stays on AWS

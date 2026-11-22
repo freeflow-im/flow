@@ -179,7 +179,7 @@ export const isResource = (issuer: string, resource: string): boolean => resourc
 
 /** RFC 9728: where the resource server's tokens come from. */
 export function protectedResourceMetadata(issuer: string, endpoint = '/mcp') {
-  return { resource: resourceAt(issuer, endpoint), authorization_servers: [issuer], scopes_supported: [...MCP_SCOPES], bearer_methods_supported: ['header'], resource_name: 'FreeFlow Docs and Mail' };
+  return { resource: resourceAt(issuer, endpoint), authorization_servers: [issuer], scopes_supported: [...MCP_SCOPES], bearer_methods_supported: ['header'], resource_name: 'FreeFlow' };
 }
 
 /** RFC 8414: the authorization server's endpoints and features. */

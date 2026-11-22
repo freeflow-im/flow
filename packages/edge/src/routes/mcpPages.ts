@@ -1,5 +1,5 @@
-// The pages of the MCP endpoint's OAuth (routes/mcp.ts): consent with what the agent may use (Docs files, Mail, sending
-// email, Calendar, Events) and the choice of organization, the device code, and the errors. The ChatGPT plugin's pages
+// The pages of the MCP endpoint's OAuth (routes/mcp.ts): consent with what the agent may use (one group per app's scopes,
+// from the manifests: Chat, Docs, Mail, sending email, Calendar, Events, search, Meet, Contacts, installed apps) and the choice of organization, the device code, and the errors. The ChatGPT plugin's pages
 // (docs/plugin/server/oauth.ts), in FreeFlow's colours: plain, centred, neutral.
 import { offeredGroups, SCOPE_GROUPS, type OfferedGroup } from '../directory/mcpOAuth';
 
@@ -69,13 +69,12 @@ export function consentPage(v: ConsentView): string {
       return `<label class="org pick"><input type="checkbox" name="grant_${g.id}" value="on"${g.checked ? ' checked' : ''}> <span><strong>${escapeHtml(t.title)}</strong><span class="muted small">${escapeHtml(t.detail)}</span>${t.warning ? `<span class="small warn">${escapeHtml(t.warning)}</span>` : ''}</span></label>`;
     })
     .join('');
-  const mail = groups.some((g) => g.id !== 'docs');
-  const docs = groups.some((g) => g.id === 'docs');
+  const mail = groups.some((g) => g.id === 'mail' || g.id === 'send');
   const device = v.device
     ? `<p class="error">Only allow this if you started this sign-in yourself, from an agent you trust. The request came from ${escapeHtml(v.device.origin)}, and "${name}" is the name the agent gave itself.</p>`
     : '';
   if (!v.organizations.length) {
-    return page('No organization', `<h1>No organization yet</h1><p class="muted">Signed in as <strong>${escapeHtml(v.email)}</strong>.</p><p>${name} works with the Docs files of an organization, and you are not in one yet. <a href="/">Create or join one</a>, then start again from your agent.</p>`);
+    return page('No organization', `<h1>No organization yet</h1><p class="muted">Signed in as <strong>${escapeHtml(v.email)}</strong>.</p><p>${name} works in an organization’s FreeFlow apps, and you are not in one yet. <a href="/">Create or join one</a>, then start again from your agent.</p>`);
   }
   const orgs = v.organizations
     .map((o) => `<label class="org"><input type="radio" name="org" value="${escapeHtml(o.id)}"${o.id === v.preselect ? ' checked' : ''} required> <span>${escapeHtml(o.name || 'Unnamed organization')}</span></label>`)
@@ -92,7 +91,7 @@ export function consentPage(v: ConsentView): string {
   </fieldset>`;
   return page(
     `Allow ${v.clientName}?`,
-    `<h1>Allow ${name} to use your ${docs && mail ? 'Docs and Mail' : mail ? 'Mail' : 'Docs'}?</h1>
+    `<h1>Allow ${name} to use FreeFlow?</h1>
 <p class="muted">Signed in as <strong>${escapeHtml(v.email)}</strong>.</p>
 ${device}
 ${v.error ? `<p class="error">${escapeHtml(v.error)}</p>` : ''}
@@ -115,7 +114,7 @@ ${v.error ? `<p class="error">${escapeHtml(v.error)}</p>` : ''}
     <button class="btn primary" type="submit" name="allow" value="yes">Allow</button>
   </div>
 </form>
-<p class="muted small">A personal agent acts as you and sees this account's email address. You can disconnect it in Docs, under Settings, Connect your agent.</p>
+<p class="muted small">A personal agent acts as you and sees this account's email address. You can disconnect it in <a href="/admin/connect">Connect an agent</a>.</p>
 ${POLICY_LINKS}`,
   );
 }
@@ -124,9 +123,9 @@ ${POLICY_LINKS}`,
 export function devicePage(error?: string): string {
   return page(
     'Connect an agent',
-    `<h1>Connect an agent to FreeFlow Docs</h1>
+    `<h1>Connect an agent to FreeFlow</h1>
 <p class="muted">Enter the code your agent showed you.</p>
-<p><strong>Only enter a code from an agent you started yourself.</strong> Whoever started it will be able to read and change your files.</p>
+<p><strong>Only enter a code from an agent you started yourself.</strong> Whoever started it will be able to use your FreeFlow apps as you allow on the next page.</p>
 ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
 <form method="post" action="/oauth/device" class="single">
   <label class="field" for="code">Code</label>

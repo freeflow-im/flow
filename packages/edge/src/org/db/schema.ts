@@ -183,7 +183,8 @@ export const workspaceMembers = sqliteTable(
     // The member's kind (decision_log 2026-11-11): this list is the truth, the directory's account follows. A personal
     // agent's row has `personal_agent`; `runtime` says whether it is the person's hosted assistant or an external client.
     kind: text('kind', { enum: ['native', 'guest', 'personal_agent'] as const }).notNull().default('native'),
-    runtime: text('runtime', { enum: ['hosted'] as const }),
+    // `external`: a personal agent on /mcp that has joined Chat (docs/specs/suite-mcp.md §4.2); null: one that has not.
+    runtime: text('runtime', { enum: ['hosted', 'external'] as const }),
   },
   (t) => [primaryKey({ columns: [t.workspaceId, t.userId] }), index('ix_1').on(t.userId)],
 );

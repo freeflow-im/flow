@@ -3,7 +3,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import type { Directory } from '../directory/object';
 import { formatReference, type AccountDTO } from '@flow/shared';
-import type { CallerContext } from '../org/routes/compat';
 import { withDocsContext, type DocsContext } from '@flow/docs/server/runtime/workerd/context.ts';
 import { DocsApp, type Caller, type DocsRequest } from '@flow/docs/server/runtime/workerd/http.ts';
 import { insertRows, tableCounts } from '../importing';
@@ -12,14 +11,7 @@ import { setOcrBinding } from '@flow/docs/server/runtime/workerd/pdfOcr.ts';
 import type { McpRequestCaller, suiteHub } from './mcp.ts';
 import type { FileHub } from '@flow/docs/plugin/server/files.ts';
 import { DatabaseSync } from '@flow/docs/server/runtime/workerd/sqlite.ts';
-import { lazySubscriptions, subscriptionsAs, wakesAs, type SubscriptionOps, type WakeOps } from '../events/subscriptions.ts';
-import { alertsAs, type AlertOps } from '../events/alerts.ts';
 import { addressOf } from '@flow/shared/addresses';
-import { calendarRequest, type AccountCaller } from '../calendar/forward';
-import { appToolContexts } from '../apps';
-import type { DoorTool } from '../registry';
-import { appDoorTools } from '../registry/userApps';
-import { USER_APPS_SCOPE } from '@flow/shared';
 import type { FileChange, GrantChange } from '@flow/docs/server/app.ts';
 import { MOVED_TABLES, OWNED_TABLES, parseKey, type MovedTable, type OwnedTable, type PruneSelection, type Row } from './move';
 
@@ -43,14 +35,10 @@ export interface DocsEnv {
   ASSISTANT?: DurableObjectNamespace<import('../assistant/object').Assistant>;
 }
 const BASE = '/docs';
-/** The agent fields of a caller context (agents.md §3), as the /mcp door resolves them. */
-interface AgentFields { via?: string | null; invokedBy?: string | null }
 
 /** A file's saves publish `docs.file.changed` at most this often, so a typing session does not flood the log. */
 export const FILE_CHANGED_EVERY_MS = 30_000;
 
-/** Mail's or Calendar's namespace, as the tools reach an account's object. */
-type AccountObjects = { idFromName(name: string): DurableObjectId; get(id: DurableObjectId): { handle(request: Request, caller: CallerContext): Promise<Response> } };
 
 export class Docs extends DurableObject<DocsEnv> {
   private readonly app = new DocsApp();
@@ -322,137 +310,14 @@ export class Docs extends DurableObject<DocsEnv> {
     return withDocsContext(this.context, async () => { await this.ready; return tableCounts(this.ctx.storage.sql); });
   }
 
-  /** A request to /mcp, authenticated by the Worker against the directory (routes/mcp.ts), as `caller` in this organization. */
-  async mcp(request: Request, caller: McpRequestCaller): Promise<Response> {
-    const agent = { via: caller.via ?? null, invokedBy: caller.invokedBy ?? null };
-    const accountCaller = this.accountCaller(caller.userId, caller.orgId, agent);
-    const userAppTools = await this.userAppToolsOf(caller, accountCaller);
-    return this.inOrganization(caller.orgId, () => this.lazy!.mcp.handleMcp(request, this.hub!, caller, this.mailOf(caller.userId, caller.origin, caller.orgId, agent), this.calendarOf(caller.userId, caller.origin, caller.orgId, agent), this.eventsOf(caller.userId, caller.orgId), this.memberOf(caller.orgId), appToolContexts(this.env, accountCaller, caller.origin), userAppTools, this.wakesOf(caller.userId, caller.orgId), this.alertsOf(caller.userId, caller.orgId, agent)));
+  /** One Docs tool for the suite's /mcp server in the Worker (mcp/suite.ts), as `caller`, in this organization. */
+  async runMcpTool(caller: McpRequestCaller, name: string, args: Record<string, unknown>): Promise<import('@modelcontextprotocol/sdk/types.js').CallToolResult> {
+    return this.inOrganization(caller.orgId, () => this.lazy!.mcp.runDocsTool(this.hub!, caller, name, args));
   }
 
-  /**
-   * The tools of the apps installed in the organization (docs/specs/user-apps.md §3.3), for a token granted `apps:use`: the
-   * ones the caller's account holds the scopes of, and for a personal agent only the apps its person turned on (§5.2).
-   */
-  private async userAppToolsOf(caller: McpRequestCaller, accountCaller: () => Promise<CallerContext | null>): Promise<DoorTool[]> {
-    if (!this.env.ORG || !caller.scope.split(' ').includes(USER_APPS_SCOPE)) return [];
-    const who = await accountCaller();
-    if (!who?.account) return [];
-    return appDoorTools({ ORG: this.env.ORG }, {
-      organizationId: caller.orgId, account: who.account, userId: caller.userId, displayName: who.account.displayName, via: who.via ?? null, invokedBy: who.invokedBy ?? null,
-    }, 'mcp');
-  }
-
-  /**
-   * The caller context for the Mail and Calendar objects of the person's account in this organization (platform.md §3.6),
-   * asked of the directory once per tool context. Null for no account here, or one suspended or removed.
-   */
-  private accountCaller(userId: string, organizationId: string, agent: AgentFields = {}): () => Promise<CallerContext | null> {
-    let found: Promise<CallerContext | null> | null = null;
-    return () =>
-      (found ??= this.directory<AccountDTO | null>('accountFor', userId, organizationId).then((account) =>
-        // `via`, the personal agent the /mcp client acts through, or `invokedBy`, who asked a shared one (agents.md §3), so
-        // the objects' events say so.
-        account && account.state !== 'suspended' && account.state !== 'removed' ? { user: null, token: null, authKind: null, ip: '', organizationId, account, ...(agent.via ? { via: agent.via } : {}), ...(agent.invokedBy ? { invokedBy: agent.invokedBy } : {}) } : null,
-      ));
-  }
-
-  /** A per-account object's HTTP API, as the tools call it: the account's object, or a 403 `no_account`. */
-  private accountFetch(ns: AccountObjects, app: string, userId: string, origin: string, organizationId: string, agent: AgentFields = {}) {
-    const caller = this.accountCaller(userId, organizationId, agent);
-    return async (path: string, init?: RequestInit): Promise<Response> => {
-      const who = await caller();
-      if (!who?.account) return Response.json({ error: { code: 'no_account', message: `join an organization to use ${app}` } }, { status: 403 });
-      return ns.get(ns.idFromName(who.account.id)).handle(new Request(`${origin}${path}`, init), who);
-    };
-  }
-
-  /**
-   * The Mail object of the person's account in this organization, as its HTTP API (docs/specs/mail-api.md), for the Mail
-   * tools. Undefined where the Worker has no Mail.
-   */
-  private mailOf(userId: string, origin: string, organizationId: string, agent: AgentFields = {}): ((path: string, init?: RequestInit) => Promise<Response>) | undefined {
-    const ns = this.env.MAIL;
-    return ns ? this.accountFetch(ns as unknown as AccountObjects, 'Mail', userId, origin, organizationId, agent) : undefined;
-  }
-
-  /**
-   * The Calendar object of the person's account in this organization, as its HTTP API (docs/specs/calendar.md §4), for the
-   * Calendar tools. Undefined where the Worker has no Calendar.
-   */
-  private calendarOf(userId: string, origin: string, organizationId: string, agent: AgentFields = {}): ((path: string, init?: RequestInit) => Promise<Response>) | undefined {
-    const { CALENDAR: ns, ORG: org } = this.env;
-    if (!ns) return undefined;
-    if (!org) return this.accountFetch(ns as unknown as AccountObjects, 'Calendar', userId, origin, organizationId, agent);
-    // As the routes do (calendar/forward.ts): a shared calendar's id reaches its owner's object, `/shared` the share index.
-    const caller = this.accountCaller(userId, organizationId, agent);
-    return async (path: string, init?: RequestInit): Promise<Response> => {
-      const who = await caller();
-      if (!who?.account) return Response.json({ error: { code: 'no_account', message: 'join an organization to use Calendar' } }, { status: 403 });
-      return calendarRequest({ CALENDAR: ns, ORG: org }, new Request(`${origin}${path}`, init), who as AccountCaller, userId);
-    };
-  }
-
-  /** An address of an account in this organization (not suspended or removed), for share_calendar; null for anyone else. */
-  private memberOf(organizationId: string): (address: string) => Promise<{ accountId: string; name: string } | null> {
-    return async (address) => {
-      const a = await this.directory<AccountDTO | null>('accountByAddress', address).catch(() => null);
-      return a && a.organizationId === organizationId && a.state !== 'suspended' && a.state !== 'removed' ? { accountId: a.id, name: a.displayName ?? address } : null;
-    };
-  }
-
-  /** The organization's event subscriptions as the person's account here, for the event tools. Undefined where the Worker has no Events. */
-  private eventsOf(userId: string, organizationId: string): SubscriptionOps | undefined {
-    const { EVENTS: events, ORG: org } = this.env;
-    if (!events || !org) return undefined;
-    const caller = this.accountCaller(userId, organizationId);
-    return lazySubscriptions(async () => {
-      const who = await caller();
-      if (!who?.account) throw Object.assign(new Error('no account in this organization'), { status: 403 });
-      return subscriptionsAs(events.get(events.idFromName(organizationId)), org.get(org.idFromName(organizationId)), who.account.id, userId, who.account.role, organizationId);
-    });
-  }
-
-  /**
-   * An agent's wakes for itself (agent-self-wake.md), as the /mcp caller's account: the account must be an agent's, which
-   * wakesAs checks on each call (a person's token is refused).
-   */
-  private wakesOf(userId: string, organizationId: string): WakeOps | undefined {
-    const { EVENTS: events, ORG: org } = this.env;
-    if (!events || !org) return undefined;
-    const caller = this.accountCaller(userId, organizationId);
-    let ops: Promise<WakeOps> | null = null;
-    const get = () => (ops ??= (async () => {
-      const who = await caller();
-      if (!who?.account) throw Object.assign(new Error('no account in this organization'), { status: 403 });
-      return wakesAs(events.get(events.idFromName(organizationId)), org.get(org.idFromName(organizationId)), { agentAccountId: who.account.id, organizationId });
-    })());
-    return {
-      schedule: async (w) => (await get()).schedule(w),
-      list: async () => (await get()).list(),
-      cancel: async (id) => (await get()).cancel(id),
-    };
-  }
-
-  /**
-   * Alerts as the /mcp caller's account (shared/alerts.ts): the Org object picks who gets one, from the account and the
-   * person the agent says it works for (`invokedBy`, which the directory checked).
-   */
-  private alertsOf(userId: string, organizationId: string, agent: AgentFields): AlertOps | undefined {
-    const { EVENTS: events, ORG: org } = this.env;
-    if (!events || !org) return undefined;
-    const caller = this.accountCaller(userId, organizationId, agent);
-    let ops: Promise<AlertOps> | null = null;
-    const get = () => (ops ??= (async () => {
-      const who = await caller();
-      if (!who?.account) throw Object.assign(new Error('no account in this organization'), { status: 403 });
-      return alertsAs(events.get(events.idFromName(organizationId)), org.get(org.idFromName(organizationId)), { accountId: who.account.id, organizationId, invokedBy: agent.invokedBy ?? null, via: agent.via ?? null });
-    })());
-    return {
-      show: async (input) => (await get()).show(input),
-      open: async () => (await get()).open(),
-      close: async (id) => (await get()).close(id),
-    };
+  /** A file put in the caller's Docs by another app's /mcp tool (save_mail_attachment_to_docs). */
+  async mcpImportBytes(caller: McpRequestCaller, bytes: Uint8Array, filename: string): Promise<{ file: Record<string, unknown>; warnings: string[] }> {
+    return this.inOrganization(caller.orgId, () => this.lazy!.mcp.importDocsFile(this.hub!, caller, bytes, filename));
   }
 
   /** An agent's upload to the address upload_file gave it; the ticket in it is the credential. */
@@ -460,7 +325,7 @@ export class Docs extends DurableObject<DocsEnv> {
     return this.inOrganization(organizationId, () => this.lazy!.mcp.handleMcpImport(request, this.hub!));
   }
 
-  private async inOrganization(organizationId: string, fn: () => Promise<Response>): Promise<Response> {
+  private async inOrganization<T>(organizationId: string, fn: () => Promise<T>): Promise<T> {
     const res = await withDocsContext({ ...this.context, organizationId }, async () => {
       await this.ready;
       this.outbox();

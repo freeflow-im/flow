@@ -1,5 +1,15 @@
 # Decision log
 
+## 2026-11-22 — An /mcp personal agent posts in Chat as its own member (operator ruling)
+
+- **Ruling (Scott):** a personal agent on `/mcp` (Claude Desktop acting for a person) may use Chat, and posts **as
+  itself**, not as the person: it is brought into a channel by its sponsor, as the hosted assistant is, and its first
+  post puts it on Chat's roster (member runtime `external`), so every client shows it with the 🤖 mark.
+- **Reverses** "an external personal agent has no channels" (2026-11-17, agents.md §1.1). It still has no address,
+  mailbox or calendars, never reads or joins direct messages, and reads only with its sponsor's reach.
+- **Why:** posting as the person would show the person's name on words an agent wrote, and no client shows `via`.
+- **Where:** `docs/specs/suite-mcp.md` §4.2, `packages/edge/src/org/object.ts` (`mcpChat`, `enterChat`).
+
 ## 2026-11-17 — Apps are built in the suite with the assistant; every member may build (operator rulings)
 
 - **Ruling (Scott):** a person builds or edits a hosted app in the suite, with the built-in assistant: a **Build app**

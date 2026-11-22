@@ -1,10 +1,9 @@
 // The suite's /mcp lists the Calendar tools by calendar:read and calendar:write, beside Docs' and Mail's, and nothing a
-// scope does not allow; where the Worker has no Calendar, none. Listing tools needs no files, so the hub is a stand-in.
+// scope does not allow; where the Worker has no Calendar, none. Listing tools needs no files, so Docs is a stand-in.
 import { describe, expect, it } from 'vitest';
-import { handleMcp, mcpAccess } from '../docs/mcp.ts';
-import type { FileHub } from '@flow/docs/plugin/server/files.ts';
+import { handleSuiteMcp, mcpAccess, type DocsPort } from '../mcp/suite.ts';
 
-const hub = { forUser: () => ({ hub: {} }) } as unknown as FileHub;
+const docs: DocsPort = { pdf: false, call: async () => ({ content: [] }), importFile: async () => ({ file: {}, warnings: [] }) };
 const mail = async () => Response.json({ accounts: [] });
 const calendar = async (path: string) => (path.endsWith('/calendars') || path.endsWith('/shared') ? Response.json({ calendars: [] }) : Response.json({ accounts: [] }));
 
@@ -14,7 +13,7 @@ async function rpc(scope: string, method: string, params: Record<string, unknown
     headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2025-11-25' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
   });
-  const res = await handleMcp(req, hub, { userId: 'u1', email: 'u1@test', orgId: 'o1', scope, endpoint: '/mcp', origin: 'https://app.test' }, mail, withCalendar ? calendar : undefined);
+  const res = await handleSuiteMcp(req, { userId: 'u1', email: 'u1@test', orgId: 'o1', scope, endpoint: '/mcp', origin: 'https://app.test' }, { docs, mail, ...(withCalendar ? { calendar } : {}) });
   return (await res.json()) as { result?: { tools?: { name: string; annotations?: { destructiveHint?: boolean } }[]; content?: { text: string }[]; isError?: boolean; instructions?: string } };
 }
 const CAL = ['list_calendars', 'list_shared_calendars', 'list_events', 'get_event', 'find_free_time', 'create_event', 'update_event', 'delete_event', 'respond_to_event', 'share_calendar', 'unshare_calendar'];

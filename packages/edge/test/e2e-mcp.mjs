@@ -83,7 +83,7 @@ let TOK=r.j;t('the code exchanges for tokens',r.s===200&&TOK.access_token&&TOK.r
 let rpcId=0;
 async function mcp(tok,method,params={},extra={},path='/mcp'){const x=await api(tok,'POST',path,{jsonrpc:'2.0',id:++rpcId,method,params},undefined,{accept:'application/json, text/event-stream',...extra});return x;}
 const call=async(tok,name,args)=>{const x=await mcp(tok,'tools/call',{name,arguments:args});const text=x.j?.result?.content?.[0]?.text;let v;try{v=JSON.parse(text)}catch{v=text}return{...x,v,isError:x.j?.result?.isError}};
-r=await mcp(TOK.access_token,'initialize',{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'e2e',version:'1'}});t('initialize',r.s===200&&r.j.result?.serverInfo?.name==='universal-docs',r.s+' '+JSON.stringify(r.j).slice(0,160));
+r=await mcp(TOK.access_token,'initialize',{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'e2e',version:'1'}});t('initialize',r.s===200&&r.j.result?.serverInfo?.name==='freeflow'&&r.j.result?.serverInfo?.title==='FreeFlow',r.s+' '+JSON.stringify(r.j).slice(0,160));
 r=await mcp(TOK.access_token,'tools/list');const names=(r.j.result?.tools??[]).map((x)=>x.name);
 t('tools/list has the file and spreadsheet tools, and no ChatGPT app tools',['list_files','search_files','read_range','write_range','create_sheet','upload_file'].every((n)=>names.includes(n))&&!names.includes('docs_app')&&!names.includes('app_state'),names.length+' '+names.slice(0,12).join(','));
 t('and the event tools, with events:read',['list_subscriptions','create_subscription','read_events','ack_events','list_jobs'].every((n)=>names.includes(n)),names.filter((n)=>/subscri|events|jobs/.test(n)).join(','));
@@ -259,5 +259,19 @@ r=await api(O.token,'GET',`/v1/events?workspace=${A}&since=0&limit=500`);{const 
  t('an account that is no member is not carried',ev(UNKNOWN)&&ev(UNKNOWN).invokedBy===undefined,JSON.stringify(ev(UNKNOWN)).slice(0,160));
  t('a person’s claim is not carried',ev(CLAIM)&&ev(CLAIM).invokedBy===undefined,JSON.stringify(ev(CLAIM)).slice(0,160));}
 r=await api(null,'GET','/v1/tools?door=bridge');t('and not without a token',r.s===401,r.s);
+
+// --- The FreeFlow server (docs/specs/suite-mcp.md): Chat, Meet and search beside Docs, as Olga's personal agent ----------
+{const call=async(name,args={})=>{const x=await mcp(OP.access_token,'tools/call',{name,arguments:args});const c=x.j.result;return{c,j:c?.structuredContent??(()=>{try{return JSON.parse(c?.content?.[0]?.text??'null')}catch{return null}})()};};
+ r=await mcp(OP.access_token,'tools/list');const names=(r.j.result?.tools??[]).map(t=>t.name);
+ t('the suite lists Chat, Meet and search beside Docs',['list_channels','send_message','read_messages','create_meeting','list_live_meetings','search','read_doc'].every(n=>names.includes(n)),names.filter(n=>/channel|message|meeting|^search$/.test(n)).join(','));
+ let x=await call('list_channels');const gen=(x.j?.channels??[]).find(c=>c.name==='general');t('list_channels: Olga’s #general, the agent not in it yet',gen&&gen.userIsMember===true&&gen.agentIsMember===false,JSON.stringify(x.j).slice(0,160));
+ r=await api(O.token,'GET',`/v1/workspaces/${A}/members`);const before=(r.j.members??[]).map(m=>m.displayName);t('the agent is not on Chat’s roster before it posts',!before.includes('E2E Agent'),before.join(','));
+ x=await call('send_message',{channelId:gen?.id,text:`Hello from the agent ${tag}`});t('send_message posts as the agent, which joins',x.j?.messageId&&x.j?.joined===true,JSON.stringify(x.c).slice(0,160));
+ r=await api(O.token,'GET',`/v1/channels/${gen?.id}/messages?limit=5`);const mine=(r.j.messages??[]).find(m=>m.body===`Hello from the agent ${tag}`);
+ r=await api(O.token,'GET',`/v1/workspaces/${A}/members`);const agentRow=(r.j.members??[]).find(m=>m.displayName==='E2E Agent');
+ t('the post is the agent’s, and the agent is on the roster now, as an agent',mine&&agentRow&&mine.userId===agentRow.userId&&agentRow.isAgent===true,JSON.stringify(agentRow).slice(0,140));
+ x=await call('read_messages',{channelId:gen?.id});t('read_messages reads it back',(x.j?.messages??[]).some(m=>m.text===`Hello from the agent ${tag}`),JSON.stringify(x.j).slice(0,120));
+ x=await call('search',{query:'Budget'});t('search answers with what it searched',Array.isArray(x.j?.hits)&&Array.isArray(x.j?.searched)&&x.j.searched.includes('docs'),JSON.stringify(x.j).slice(0,200));
+ x=await call('create_meeting',{title:'Review'});t('create_meeting answers (an error without RealtimeKit here)',!!x.c,JSON.stringify(x.c).slice(0,140));}
 
 console.log(`\n${pass} passed, ${fail} failed`);process.exit(fail?1:0);

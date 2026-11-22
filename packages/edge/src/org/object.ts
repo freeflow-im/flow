@@ -74,6 +74,11 @@ const DAY_MS = 86_400_000;
 const VISITOR_SWEEP_KEY = 'visitor_sweep_at';
 /** Messages indexed for search in one go, between other requests (indexMessages). */
 const MESSAGE_INDEX_BATCH = 200;
+/** The largest Chat file an /mcp agent reads through read_chat_file (docs/specs/suite-mcp.md §4.3). */
+const MCP_FILE_MAX = 10 * 1024 * 1024;
+/** How many Chat changes an /mcp agent may make a minute, and which tools make them. */
+const MCP_CHAT_WRITES = 30;
+const MCP_CHAT_WRITE_TOOLS = new Set(['send_message', 'react', 'create_channel', 'invite_to_channel']);
 /** The storage key of the next mailbox retention sweep's time. */
 const SWEEP_KEY = 'mail_sweep_at';
 /** Set once the agents the directory retired when agents gained kinds (agents.md phase A) have left this roster. */
@@ -604,7 +609,7 @@ export class Org extends DurableObject<OrgEnv> {
    * person's assistant, only where it is a channel member. Returns the message id, or null.
    */
   async postAsAssistant(p: { agentUserId: string; channelId: string; threadRootId: string | null; body: string; clientMsgId: string; depth?: number; causedBy?: string }): Promise<string | null> {
-    const row = this.ctx.storage.sql.exec("SELECT m.sponsor_user_id, s.account_id AS sponsor_account FROM workspace_members m LEFT JOIN workspace_members s ON s.user_id = m.sponsor_user_id WHERE m.user_id = ? AND m.kind = 'personal_agent' AND m.runtime = 'hosted'", p.agentUserId).toArray()[0];
+    const row = this.ctx.storage.sql.exec("SELECT m.sponsor_user_id, s.account_id AS sponsor_account FROM workspace_members m LEFT JOIN workspace_members s ON s.user_id = m.sponsor_user_id WHERE m.user_id = ? AND m.kind = 'personal_agent' AND m.runtime IN ('hosted', 'external')", p.agentUserId).toArray()[0];
     if (!row) return null;
     const { sendMessage } = await import('./services/messages');
     const { assistantPosting } = await import('./services/workspaces');
@@ -629,6 +634,9 @@ export class Org extends DurableObject<OrgEnv> {
   private chatReach(agentUserId: string): { reachId: string; personal: boolean } | null {
     const sponsor = this.assistantSponsor(agentUserId);
     if (sponsor) return { reachId: sponsor, personal: true };
+    // A personal agent on /mcp (docs/specs/suite-mcp.md §4.2): its sponsor's reach, as a person's assistant has.
+    const external = this.ctx.storage.sql.exec("SELECT sponsor_user_id FROM workspace_members WHERE user_id = ? AND kind = 'personal_agent' AND (runtime IS NULL OR runtime = 'external')", agentUserId).toArray()[0];
+    if (external?.sponsor_user_id) return { reachId: external.sponsor_user_id as string, personal: true };
     const shared = this.ctx.storage.sql.exec("SELECT 1 FROM workspace_members m JOIN users u ON u.id = m.user_id WHERE m.user_id = ? AND m.kind = 'native' AND u.is_agent", agentUserId).toArray().length > 0;
     return shared ? { reachId: agentUserId, personal: false } : null;
   }
@@ -717,6 +725,203 @@ export class Org extends DurableObject<OrgEnv> {
       joined = true;
     }
     return { messageId: await this.postAsAssistant(p), joined, channel: target.name };
+  }
+
+  /**
+   * An /mcp agent's Chat tools (docs/specs/suite-mcp.md §4), as the Worker's suite server runs them (org/chatTools.ts):
+   * with its sponsor's reach for a personal agent and its own for a shared one (chatReach), never in direct messages
+   * (ruling R1). A personal agent on /mcp has no member row until it first needs one: `agentAccount`, its account in the
+   * directory, makes it (addPersonalAgent). Its first post or reaction brings it into Chat (runtime `external`), so every
+   * client lists it as an agent; it then posts as itself, marked as asked by its sponsor (ruling R3).
+   */
+  async mcpChat(p: { agentUserId: string; agentAccount?: AccountDTO | null; tool: string; input: Record<string, unknown>; clientMsgId?: string; invokedBy?: string | null }): Promise<unknown> {
+    const sql = this.ctx.storage.sql;
+    const org = sql.exec('SELECT id FROM workspaces LIMIT 1').toArray()[0]?.id as string | undefined;
+    if (!org) throw new Error('This organization has no Chat yet.');
+    const a = p.agentAccount;
+    if (a && a.kind === 'personal_agent' && a.principalId === p.agentUserId && a.sponsorId && !sql.exec('SELECT 1 FROM workspace_members WHERE user_id = ?', p.agentUserId).toArray().length) {
+      if (!this.isPersonMember(org, a.sponsorId)) throw new Error('Your account is not a member of this organization’s Chat.');
+      this.addPersonalAgent(org, a);
+    }
+    const reach = this.chatReach(p.agentUserId);
+    if (!reach) throw new Error('This agent cannot use Chat in this organization.');
+    const reachId = reach.reachId;
+    const input = p.input;
+    const str = (k: string) => (typeof input[k] === 'string' ? (input[k] as string) : undefined);
+    const num = (k: string, d: number, max: number) => Math.min(Math.max(Math.trunc(Number(input[k] ?? d)) || d, 1), max);
+    const names = () => new Map(sql.exec('SELECT id, display_name FROM users').toArray().map((r) => [r.id as string, r.display_name as string]));
+    const memberOf = (channelId: string, userId: string) => sql.exec('SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?', channelId, userId).toArray().length > 0;
+    /** A standard channel the reach may read (a member, or a public one), else an error saying so. */
+    const readable = (channelId: string) => {
+      const chan = sql.exec('SELECT id, name, kind, is_private, archived_at FROM channels WHERE id = ?', channelId).toArray()[0];
+      if (!chan || chan.kind !== 'standard' || (!memberOf(channelId, reachId) && chan.is_private)) throw new Error('No such channel among the ones you can read. list_channels lists them.');
+      return chan;
+    };
+    /** A personal agent that is not yet in a channel its sponsor is in joins it, brought in by the sponsor, as the assistant is. */
+    const bringIn = async (channelId: string): Promise<boolean> => {
+      const chan = readable(channelId);
+      if (chan.archived_at) throw new Error('That channel is archived.');
+      if (memberOf(channelId, p.agentUserId)) return false;
+      if (!reach.personal) {
+        if (chan.is_private) throw new Error('This agent is not a member of that private channel.');
+        await this.scoped(async () => (await import('./services/channels')).joinChannel(channelId, p.agentUserId));
+        return true;
+      }
+      if (!memberOf(channelId, reachId)) throw new Error('You can post only in channels the user is in. list_channels says which.');
+      await this.enterChat(org, p.agentUserId);
+      await this.scoped(async () => (await import('./services/channels')).addMember(channelId, reachId, p.agentUserId));
+      return true;
+    };
+    const asAgent = async <T>(fn: () => Promise<T>): Promise<T> => {
+      const { assistantPosting } = await import('./services/workspaces');
+      return reach.personal ? assistantPosting.run(p.agentUserId, fn) : fn();
+    };
+    const stamp: Stamp = { depth: 1, ...(p.invokedBy ? { invokedBy: p.invokedBy } : {}) };
+    // A runaway agent cannot flood Chat: its posts, reactions, channels and invitations, MCP_CHAT_WRITES a minute.
+    if (MCP_CHAT_WRITE_TOOLS.has(p.tool)) {
+      const { rateAllow } = await import('./lib/rateLimit');
+      if (!rateAllow(`mcp-chat:${p.agentUserId}`, MCP_CHAT_WRITES, 60_000)) throw new Error(`Too many Chat changes: at most ${MCP_CHAT_WRITES} a minute. Wait a minute, then go on.`);
+    }
+
+    switch (p.tool) {
+      case 'list_channels': {
+        const list = await this.scoped(async () => (await import('./services/channels')).listChannels(org, reachId));
+        return {
+          channels: list
+            .filter((c) => c.kind === 'standard' && !c.archivedAt && (c.isMember || !c.isPrivate))
+            .map((c) => ({ id: c.id, name: c.name, private: c.isPrivate, topic: c.topic ?? '', userIsMember: !!c.isMember, agentIsMember: memberOf(c.id, p.agentUserId), ...(c.parentId ? { parentId: c.parentId } : {}) })),
+        };
+      }
+      case 'list_members': {
+        const list = await this.scoped(async () => (await import('./services/workspaces')).listMembers(org, reachId));
+        return { members: list.map((m) => ({ id: m.userId, name: m.displayName, ...(m.isAgent || m.isBot ? { agent: true } : {}), ...(m.title ? { title: m.title } : {}) })) };
+      }
+      case 'read_messages': {
+        const channelId = str('channelId') ?? '';
+        const chan = readable(channelId);
+        const limit = num('limit', 25, 100);
+        const rootId = str('threadRootId');
+        const { listMessages, listThread } = await import('./services/messages');
+        const page = await this.scoped(() => (rootId ? listThread(rootId, reachId, undefined, limit) : listMessages(channelId, reachId, str('before'), limit)));
+        const who = names();
+        const render = (body: string) => body.replace(/<@([0-9a-f-]{36})>/g, (_, id: string) => `@${who.get(id) ?? 'someone'}`);
+        const root = 'root' in page ? (page as { root: MessageDTO }).root : null;
+        const rows: MessageDTO[] = [...(root ? [root] : []), ...(rootId ? page.messages : [...page.messages].reverse())];
+        if (rows.some((m) => m.channelId !== channelId)) throw new Error('That thread is in another channel.');
+        return {
+          channel: chan.name,
+          messages: rows.filter((m) => !m.systemKind && !m.deletedAt).map((m) => ({
+            id: m.id, from: who.get(m.userId) ?? 'someone', fromId: m.userId, at: m.createdAt, text: render(m.body),
+            ...(m.replyCount ? { replies: m.replyCount } : {}), ...(m.threadRootId ? { threadRootId: m.threadRootId } : {}),
+            ...(m.files?.length ? { files: m.files.map((f) => ({ id: f.id, name: f.name, type: f.mimeType, size: f.sizeBytes })) } : {}),
+          })),
+          ...(!rootId && page.messages.length === limit ? { older: `before: ${page.messages[page.messages.length - 1]!.id}` } : {}),
+        };
+      }
+      case 'search_messages':
+        return { hits: await this.assistantChat({ agentUserId: p.agentUserId, op: 'search', query: str('query'), limit: num('limit', 15, 50), sort: str('sort') === 'recent' ? 'recent' : 'relevance' }) };
+      case 'read_chat_file': {
+        const fileId = str('fileId') ?? '';
+        // Only files of standard channels: never a direct message's (ruling R1).
+        const where = sql.exec(`SELECT c.id FROM message_files mf JOIN messages m ON m.id = mf.message_id JOIN channels c ON c.id = m.channel_id
+          WHERE mf.file_id = ? AND c.kind = 'standard' LIMIT 1`, fileId).toArray()[0];
+        if (!where) throw new Error('No such file in the channels you can read.');
+        readable(where.id as string);
+        const { requireFileAccess, readBlob } = await import('./services/files');
+        const f = await this.scoped(() => requireFileAccess(fileId, reachId));
+        if (f.sizeBytes > MCP_FILE_MAX) return { name: f.name, type: f.mimeType, size: f.sizeBytes, tooLarge: true };
+        const data = await this.scoped(() => readBlob(f.storageKey, f.encKeyId));
+        return { name: f.name, type: f.mimeType, size: f.sizeBytes, base64: Buffer.from(data).toString('base64') };
+      }
+      case 'send_message': {
+        const channelId = str('channelId') ?? '';
+        const text = (str('text') ?? '').trim();
+        if (!text) throw new Error('Say what to post in text.');
+        const joined = await bringIn(channelId);
+        const { sendMessage } = await import('./services/messages');
+        const sponsorAccount = reach.personal ? (sql.exec('SELECT account_id FROM workspace_members WHERE user_id = ?', reachId).toArray()[0]?.account_id as string | undefined) : undefined;
+        const msg = await this.scoped(() => asAgent(() => sendMessage(channelId, p.agentUserId, p.clientMsgId ?? crypto.randomUUID(), text, str('threadRootId') || undefined, undefined, undefined, { expandMentions: true })), { ...stamp, ...(sponsorAccount ? { invokedBy: sponsorAccount } : {}) });
+        await this.logging;
+        return { messageId: msg.id, channel: readable(channelId).name, ...(joined ? { joined: true } : {}) };
+      }
+      case 'react': {
+        const messageId = str('messageId') ?? '';
+        const emoji = str('emoji') ?? '';
+        const m = sql.exec('SELECT channel_id FROM messages WHERE id = ?', messageId).toArray()[0];
+        if (!m) throw new Error('No such message.');
+        await bringIn(m.channel_id as string);
+        const { addReaction } = await import('./services/reactions');
+        await this.scoped(() => asAgent(() => addReaction(messageId, p.agentUserId, emoji)), stamp);
+        await this.logging;
+        return { reacted: emoji };
+      }
+      case 'create_channel': {
+        const name = str('name') ?? '';
+        const { createChannel, addMember } = await import('./services/channels');
+        // A personal agent makes it as its sponsor, who is its first member, and is brought in; a shared agent as itself.
+        const made = await this.scoped(() => createChannel(org, reachId, name, str('topic'), input.isPrivate === true, str('parentId')), stamp);
+        if (reach.personal) {
+          await this.enterChat(org, p.agentUserId);
+          await this.scoped(() => addMember(made.id, reachId, p.agentUserId), stamp);
+        }
+        await this.logging;
+        return { id: made.id, name: made.name, private: made.isPrivate };
+      }
+      case 'invite_to_channel': {
+        const channelId = str('channelId') ?? '';
+        readable(channelId);
+        const ids = Array.isArray(input.userIds) ? (input.userIds as unknown[]).filter((x): x is string => typeof x === 'string').slice(0, 50) : [];
+        const { addMember } = await import('./services/channels');
+        const added: string[] = [];
+        const failed: { id: string; error: string }[] = [];
+        for (const id of ids) {
+          try {
+            await this.scoped(() => addMember(channelId, reachId, id), stamp);
+            added.push(id);
+          } catch (err) {
+            failed.push({ id, error: (err as Error).message });
+          }
+        }
+        await this.logging;
+        return { added, ...(failed.length ? { failed } : {}) };
+      }
+      default:
+        throw new Error(`Unknown Chat tool ${p.tool}.`);
+    }
+  }
+
+  /**
+   * An /mcp agent's Meet tools (docs/specs/suite-mcp.md §5, meet/mcpTools.ts), as `userId`: the person a personal agent
+   * acts for, or the shared agent itself. `origin` makes the room's link.
+   */
+  async mcpMeet(p: { userId: string; tool: string; input: Record<string, unknown>; origin: string; via?: string | null; invokedBy?: string | null }): Promise<unknown> {
+    const org = this.ctx.storage.sql.exec('SELECT id FROM workspaces LIMIT 1').toArray()[0]?.id as string | undefined;
+    if (!org) throw new Error('This organization has no Meet yet.');
+    const { createMeeting, liveMeetings } = await import('./services/meetings');
+    const link = (code: string) => `${p.origin}/meet/${code}`;
+    if (p.tool === 'create_meeting') {
+      const title = typeof p.input.title === 'string' ? p.input.title : undefined;
+      const m = await this.scoped(() => createMeeting(org, p.userId, title), { depth: 1, ...(p.invokedBy ? { invokedBy: p.invokedBy } : {}) });
+      return { title: m.title, code: m.code, link: link(m.code), event_line: `Join with FreeFlow Meet: ${link(m.code)}` };
+    }
+    if (p.tool === 'list_live_meetings') {
+      const live = await this.scoped(() => liveMeetings(org, p.userId));
+      return { meetings: live.map((m) => ({ title: m.title, link: link(m.code), started_at: m.startedAt, people: m.people.map((x) => x.name) })) };
+    }
+    throw new Error(`Unknown Meet tool ${p.tool}.`);
+  }
+
+  /**
+   * A personal agent on /mcp enters Chat (docs/specs/suite-mcp.md §4.2): its row's runtime becomes `external`, which puts
+   * it on Chat's roster (notExternalAgent leaves out only those that have not), and the sockets hear `member.joined`.
+   */
+  private async enterChat(org: string, agentUserId: string): Promise<void> {
+    const sql = this.ctx.storage.sql;
+    const changed = sql.exec("UPDATE workspace_members SET runtime = 'external' WHERE user_id = ? AND kind = 'personal_agent' AND runtime IS NULL RETURNING user_id", agentUserId).toArray().length > 0;
+    if (!changed) return;
+    await this.scoped(async () => {
+      publishEvent(subjectMeta(org), { type: 'member.joined', workspaceId: org, ts: new Date().toISOString(), data: await toMemberDTO(org, agentUserId) } as Event);
+    });
   }
 
   /** Into the organization's event log as well (platform.md §5.2), in order, batched per turn of the event loop. */
@@ -1723,7 +1928,7 @@ export class Org extends DurableObject<OrgEnv> {
     // A hosted assistant needs a native sponsor here; an external personal agent, a sponsor who is still a member.
     const stale = sql.exec(`SELECT h.user_id FROM workspace_members h WHERE h.workspace_id = ? AND h.kind = 'personal_agent'
       AND NOT EXISTS (SELECT 1 FROM workspace_members m JOIN users u ON u.id = m.user_id WHERE m.workspace_id = h.workspace_id AND m.user_id = h.sponsor_user_id
-        AND NOT u.is_agent AND (h.runtime IS NULL OR m.kind = 'native'))`, org).toArray();
+        AND NOT u.is_agent AND (h.runtime IS NULL OR h.runtime = 'external' OR m.kind = 'native'))`, org).toArray();
     if (!missing.length && !stale.length) return;
     if (stale.length) {
       await this.scoped(async () => {

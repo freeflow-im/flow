@@ -75,6 +75,8 @@ export interface McpOptions {
    *  rendering it, 'app' adds the app-only tools and the docs_app tool, 'full' (default) adds the sidebar
    *  entrypoint. */
   level?: 'minimal' | 'tools' | 'render' | 'app' | 'full';
+  /** Served as one app of the FreeFlow suite's /mcp (edge mcp/suite.ts): a few texts speak of the suite, not of ChatGPT. */
+  suite?: boolean;
   /** Which version of the tools to serve (MCP_VERSIONS); 1 when not given. */
   version?: McpVersion;
   /** The desktop app's server, for agents on the same machine: it is named MCP Docs. */
@@ -463,7 +465,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
     'get_profile',
     {
       title: 'Linked account',
-      description: 'The account the plugin is signed in as: its email address.',
+      description: opts.suite ? 'The account you are connected as: its email address.' : 'The account the plugin is signed in as: its email address.',
       inputSchema: {},
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: { 'openai/profile': true },
@@ -537,7 +539,7 @@ export function createMcpServer(service: FileService, opts: McpOptions): McpServ
           ? "Import a file into the user's library and open it in the app. The file is either one the user attached in the chat (file) or one at a public web address (url). Use this whenever the user wants a file uploaded, saved or added to their files. A Word, PowerPoint, Excel, CSV or Markdown file becomes an editable document, presentation, spreadsheet or Markdown document. A PDF, web page (.html), video or image is stored as it is and shown in the app's viewer. Any other type returns an error saying it cannot be imported; tell the user rather than working around it."
           : "Import a file into the user's library and open it in the app. The file is either one the user attached in the chat (file) or one at a public web address (url). Use this whenever the user wants a file uploaded, saved or added to their files. A Word, PowerPoint, Excel, CSV or Markdown file becomes an editable document, presentation, spreadsheet or Markdown document. A PDF, web page (.html), video or image is stored as it is and shown in the app's viewer, and any other plain text file (.txt, .yaml, .json, a config or source file) is stored as it is and edited with edit_file. Any other type returns an error saying it cannot be imported; tell the user rather than working around it.",
       inputSchema: {
-        file: attachedFile.optional().describe('The attached file. Give this or url.'),
+        file: attachedFile.optional().describe(opts.suite ? 'A file attached in ChatGPT, which fills this in. Other clients give url, or upload a file from their own computer with upload_file.' : 'The attached file. Give this or url.'),
         url: z.string().max(2000).optional().describe('The https address of a file on the web to import instead of an attachment: the file itself (an image, a PDF, a .docx), not a page that shows it.'),
         title: z.string().max(200).optional().describe('Title for the new file. Defaults to the file name.'),
       },

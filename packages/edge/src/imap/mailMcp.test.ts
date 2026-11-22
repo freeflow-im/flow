@@ -1,11 +1,10 @@
 // The suite's /mcp (docs/plugin/server/worker.ts) lists exactly what a token's scopes allow: Docs' tools by files:read and
 // files:write, the Mail tools by mail:read, mail:write and mail:send, and nothing a scope does not allow. Listing tools
-// needs no files, so the hub here is a stand-in.
+// needs no files, so Docs here is a stand-in.
 import { describe, expect, it } from 'vitest';
-import { handleMcp, mcpAccess } from '../docs/mcp.ts';
-import type { FileHub } from '@flow/docs/plugin/server/files.ts';
+import { handleSuiteMcp, mcpAccess, type DocsPort } from '../mcp/suite.ts';
 
-const hub = { forUser: () => ({ hub: {} }) } as unknown as FileHub;
+const docs: DocsPort = { pdf: false, call: async () => ({ content: [] }), importFile: async () => ({ file: {}, warnings: [] }) };
 const mail = async () => Response.json({ accounts: [] });
 
 async function rpc(scope: string, method: string, params: Record<string, unknown> = {}, withMail = true) {
@@ -14,7 +13,7 @@ async function rpc(scope: string, method: string, params: Record<string, unknown
     headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2025-11-25' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
   });
-  const res = await handleMcp(req, hub, { userId: 'u1', email: 'u1@test', orgId: 'o1', scope, endpoint: '/mcp', origin: 'https://app.test' }, withMail ? mail : undefined);
+  const res = await handleSuiteMcp(req, { userId: 'u1', email: 'u1@test', orgId: 'o1', scope, endpoint: '/mcp', origin: 'https://app.test' }, { docs, ...(withMail ? { mail } : {}) });
   return (await res.json()) as { result?: { tools?: { name: string }[]; content?: { text: string }[]; isError?: boolean }; error?: { message: string } };
 }
 const listed = async (scope: string, withMail = true) => ((await rpc(scope, 'tools/list', {}, withMail)).result?.tools ?? []).map((t) => t.name);

@@ -524,7 +524,7 @@ describe('every turn with no page open runs its tools (decision_log 2026-11-17)'
   const job = (id: string) => ({ id, subscriptionId: 'sub-9', agent: 'acct-asst', eventId: 'e1', eventSeq: 1, prompt: 'Summarize #general into the notes doc.', channelId: 'ch-1', state: 'queued', attempts: 0, depth: 1, createdAt: '', updatedAt: '' }) as never;
   function env() {
     const chat: Record<string, unknown>[] = [];
-    const mcp: { body: { method: string; params: { name: string; arguments: Record<string, unknown> } }; caller: Record<string, unknown> }[] = [];
+    const mcp: { name: string; args: Record<string, unknown>; caller: Record<string, unknown> }[] = [];
     const posted: Record<string, unknown>[] = [];
     return {
       chat, mcp, posted,
@@ -541,10 +541,9 @@ describe('every turn with no page open runs its tools (decision_log 2026-11-17)'
         DOCS: {
           idFromName: (n: string) => n,
           get: () => ({
-            mcp: async (req: Request, caller: Record<string, unknown>) => {
-              const body = (await req.json()) as (typeof mcp)[number]['body'];
-              mcp.push({ body, caller });
-              return Response.json({ jsonrpc: '2.0', id: 1, result: { content: [{ type: 'text', text: JSON.stringify({ doc_id: 'd0c000000001', inserted: 1 }) }] } });
+            runMcpTool: async (caller: Record<string, unknown>, name: string, args: Record<string, unknown>) => {
+              mcp.push({ name, args, caller });
+              return { content: [{ type: 'text', text: JSON.stringify({ doc_id: 'd0c000000001', inserted: 1 }) }] };
             },
           }),
         },
@@ -577,9 +576,9 @@ describe('every turn with no page open runs its tools (decision_log 2026-11-17)'
     // read_messages ran through the Org object as the assistant (its sponsor's reach), and its result went back.
     expect(e.chat).toEqual([expect.objectContaining({ agentUserId: 'asst', op: 'read', channelId: 'ch-gen' })]);
     expect(String(seen[1]!.results[0]!.content)).toContain('Ship it Friday.');
-    // insert_content ran headless in the Docs object's /mcp door, as the sponsor via the assistant.
+    // insert_content ran headless in the Docs object (Docs.runMcpTool), as the sponsor via the assistant.
     expect(e.mcp).toHaveLength(1);
-    expect(e.mcp[0]!.body).toMatchObject({ method: 'tools/call', params: { name: 'insert_content', arguments: { doc_id: 'd0c000000001' } } });
+    expect(e.mcp[0]).toMatchObject({ name: 'insert_content', args: { doc_id: 'd0c000000001' } });
     expect(e.mcp[0]!.caller).toMatchObject({ userId: 'user-1', orgId: 'org-1', via: 'asst', scope: 'files:read files:write' });
     const [ins, open] = seen[2]!.results;
     expect(String(ins!.content)).toContain('"inserted":1');

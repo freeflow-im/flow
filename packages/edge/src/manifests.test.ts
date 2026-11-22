@@ -73,14 +73,15 @@ describe('the manifests and the Worker', () => {
   });
 
   it('keeps the consent groups and scopes as they were', () => {
-    expect(SCOPE_GROUPS.slice(0, 5).map((g) => [g.id, g.scopes, g.checkedByDefault])).toEqual([
+    expect(SCOPE_GROUPS.slice(0, 6).map((g) => [g.id, g.scopes, g.checkedByDefault])).toEqual([
+      ['chat', ['chat:read', 'chat:write'], true],
       ['docs', ['files:read', 'files:write'], true],
       ['mail', ['mail:read', 'mail:write'], true],
       ['send', ['mail:send'], false],
       ['calendar', ['calendar:read', 'calendar:write'], true],
       ['events', ['events:read'], true],
     ]);
-    expect(MCP_SCOPES.slice(0, 8)).toEqual(['files:read', 'files:write', 'mail:read', 'mail:write', 'mail:send', 'calendar:read', 'calendar:write', 'events:read']);
+    expect(MCP_SCOPES.slice(0, 10)).toEqual(['chat:read', 'chat:write', 'files:read', 'files:write', 'mail:read', 'mail:write', 'mail:send', 'calendar:read', 'calendar:write', 'events:read']);
     expect(MCP_SCOPES).toEqual(APP_MANIFESTS.flatMap((m) => m.scopes ?? []).flatMap((g) => g.scopes));
     expect(offeredGroups('mail:read mail:send').map((g) => g.id)).toEqual(['mail', 'send']);
   });

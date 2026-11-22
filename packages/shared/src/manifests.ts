@@ -17,8 +17,19 @@ export const APP_MANIFESTS: AppManifest[] = [
     kinds: [{ kind: 'channel', container: true, resolve: 'org' }, { kind: 'message', resolve: 'org' }, { kind: 'artifact', resolve: 'org' }, { kind: 'file', resolve: 'org' }],
     // Its tools, by name (their definitions: @flow/shared/tools, platform.md §5.4).
     tools: [
-      'list_channels', 'read_messages', 'search_messages', 'send_message', 'leave_channel', 'react', 'upload_file', 'search_history', 'list_users', 'join_channel', 'set_channel_indicator', 'set_channel_emoji',
-      'create_channel', 'start_task', 'invite_to_channel', 'set_avatar', 'create_artifact', 'deliver_artifact', 'update_artifact', 'delete_artifact', 'list_artifacts', 'download_file',
+      'list_channels', 'list_members', 'read_messages', 'search_messages', 'read_chat_file', 'send_message', 'react', 'create_channel', 'invite_to_channel', 'leave_channel', 'upload_file', 'search_history',
+      'list_users', 'join_channel', 'set_channel_indicator', 'set_channel_emoji', 'start_task', 'set_avatar', 'create_artifact', 'deliver_artifact', 'update_artifact', 'delete_artifact', 'list_artifacts', 'download_file',
+    ],
+    // /mcp's Chat tools (docs/specs/suite-mcp.md §4): an agent reads its channels, and posts as itself.
+    scopes: [
+      {
+        id: 'chat',
+        label: 'Chat: read, search and post',
+        detail: 'The channels of the organization below that you are in, and its public channels, never your direct messages: read and search them, and post, react, make channels and add people, as the agent (marked as asked by you).',
+        readOnly: { label: 'Chat: read and search', detail: 'The channels of the organization below that you are in, and its public channels, never your direct messages: read and search them.' },
+        scopes: ['chat:read', 'chat:write'],
+        checkedByDefault: true,
+      },
     ],
     // A person's assistant asked in Chat (agents.md §1.1): the Worker runs the turn with Chat's page and its Chat tools.
     assistant: { pages: ['chat'] },
@@ -203,6 +214,17 @@ export const APP_MANIFESTS: AppManifest[] = [
     path: '/home',
     scope: 'organization',
     kinds: [],
+    // The suite's one search at /mcp (docs/specs/suite-mcp.md §6), over the apps the token can also read.
+    tools: ['search'],
+    scopes: [
+      {
+        id: 'search',
+        label: 'Search across your apps',
+        detail: 'One search, at once, over everything on this page that the agent may read.',
+        scopes: ['search:use'],
+        checkedByDefault: true,
+      },
+    ],
     tab: { label: 'Home', shortcut: '0', badge: 'none' },
     client: { dist: 'packages/home/dist', basePath: '/home/', optional: true },
     pages: [
@@ -218,6 +240,18 @@ export const APP_MANIFESTS: AppManifest[] = [
     path: '/meet',
     scope: 'organization',
     kinds: [],
+    // Its tools at /mcp (docs/specs/suite-mcp.md §5).
+    tools: ['create_meeting', 'list_live_meetings'],
+    scopes: [
+      {
+        id: 'meet',
+        label: 'Meet: make meeting rooms',
+        detail: 'Make FreeFlow Meet rooms in the organization below, to put on events or send to people, and see the meetings happening now. It never joins a meeting.',
+        readOnly: { label: 'Meet: see the meetings happening now', detail: 'The FreeFlow Meet meetings of the organization below that have people in them now.' },
+        scopes: ['meet:read', 'meet:write'],
+        checkedByDefault: true,
+      },
+    ],
     tab: { label: 'Meet', shortcut: '5', badge: 'none' },
     client: { dist: 'packages/meet/dist', basePath: '/meet/', optional: true },
     pages: [
