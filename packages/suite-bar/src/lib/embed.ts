@@ -24,7 +24,7 @@ export function isInHome(): boolean {
 /** The app an address belongs to, by its first path segment, for the apps Home shows in a frame; null for anything else. */
 export function appOfPath(pathname: string): string | null {
   const first = pathname.split('/')[1] ?? '';
-  return ['mail', 'calendar', 'docs', 'chat', 'admin', 'contacts', 'home'].includes(first) ? first : null;
+  return ['mail', 'calendar', 'docs', 'chat', 'admin', 'contacts', 'apps', 'home'].includes(first) ? first : null;
 }
 
 /**
