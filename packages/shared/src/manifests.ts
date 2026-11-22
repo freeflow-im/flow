@@ -214,6 +214,17 @@ export const APP_MANIFESTS: AppManifest[] = [
     path: '/home',
     scope: 'organization',
     kinds: [],
+    // The suite's one search at /mcp (docs/specs/suite-mcp.md §6), over the apps the token can also read.
+    tools: ['search'],
+    scopes: [
+      {
+        id: 'search',
+        label: 'Search across your apps',
+        detail: 'One search, at once, over everything on this page that the agent may read.',
+        scopes: ['search:use'],
+        checkedByDefault: true,
+      },
+    ],
     tab: { label: 'Home', shortcut: '0', badge: 'none' },
     client: { dist: 'packages/home/dist', basePath: '/home/', optional: true },
     pages: [

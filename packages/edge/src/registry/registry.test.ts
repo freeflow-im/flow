@@ -6,6 +6,7 @@
 import { ASSISTANT_CHAT_TOOLS } from '../assistant/chatTools.ts';
 import { CHAT_MCP_TOOLS } from '../chat/mcpTools.ts';
 import { MEET_MCP_TOOLS } from '../meet/mcpTools.ts';
+import { SEARCH_TOOL } from '../mcp/search.ts';
 import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -36,7 +37,7 @@ import { SUITE_SCHEMAS } from '../docs/assistantTools.ts';
 
 /** The apps whose tools this test reads from their own modules (above); every other app with tools was added by manifest
  * and registers them from its object module, src/<app>/object.ts, with their descriptions and scopes (apps.ts). */
-const OWN_MODULES = new Set(['chat', 'docs', 'mail', 'calendar', 'events', 'meet']);
+const OWN_MODULES = new Set(['chat', 'docs', 'mail', 'calendar', 'events', 'meet', 'home']);
 const BY_MANIFEST = APP_MANIFESTS.filter((m) => m.tools?.length && !OWN_MODULES.has(m.name)).map((m) => m.name);
 for (const app of BY_MANIFEST) await import(`../${app}/object.ts`);
 /** Their registrations, by tool: the app and the doors. */
@@ -57,7 +58,7 @@ const RUNS_IN: Record<string, string[]> = { delete_event: ['docs'] };
 async function mcpTools(): Promise<{ name: string; description?: string; inputSchema: Input; annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean } }[]> {
   // A hub that can make PDFs, so export_pdf is listed (where the Worker cannot, the plugin's server leaves it out).
   const mcp = createMcpServer({ hub: { pdf: {} } } as never, { bundle: () => { throw new Error('no app'); }, publicUrl: null, level: 'tools', version: Math.max(...MCP_VERSIONS) as McpVersion, uploadUrl: 'https://app.test/mcp/import/o1', appUrl: 'https://app.test/docs' });
-  for (const t of [...MAIL_TOOLS, ...CALENDAR_TOOLS, ...EVENT_TOOLS, ...CHAT_MCP_TOOLS, ...MEET_MCP_TOOLS]) mcp.registerTool(t.name, { title: t.title, description: t.description, inputSchema: t.shape as never, annotations: t.annotations }, (async () => ({ content: [] })) as never);
+  for (const t of [...MAIL_TOOLS, ...CALENDAR_TOOLS, ...EVENT_TOOLS, ...CHAT_MCP_TOOLS, ...MEET_MCP_TOOLS, SEARCH_TOOL]) mcp.registerTool(t.name, { title: t.title, description: t.description, inputSchema: t.shape as never, annotations: t.annotations }, (async () => ({ content: [] })) as never);
   for (const [name, { app, doors }] of manifestTools()) {
     const r = registered(doors[0]!, app, name)!;
     mcp.registerTool(name, { title: r.title, description: r.description, inputSchema: r.shape as never, annotations: r.annotations }, (async () => ({ content: [] })) as never);
@@ -73,8 +74,8 @@ async function mcpTools(): Promise<{ name: string; description?: string; inputSc
 
 /** The definitions, from the implementations. The same tool at two doors is one definition when the doors tell it alike. */
 async function fromImplementations(): Promise<ToolDefinition[]> {
-  const mail = new Set(MAIL_TOOLS.map((t) => t.name)), calendar = new Set(CALENDAR_TOOLS.map((t) => t.name)), events = new Set(EVENT_TOOLS.map((t) => t.name)), chat = new Set(CHAT_MCP_TOOLS.map((t) => t.name)), meet = new Set<string>(MEET_MCP_TOOLS.map((t) => t.name));
-  const scoped = new Map([...MAIL_TOOLS, ...CALENDAR_TOOLS, ...EVENT_TOOLS, ...CHAT_MCP_TOOLS, ...MEET_MCP_TOOLS].map((t) => [t.name, [...t.scopes]]));
+  const mail = new Set(MAIL_TOOLS.map((t) => t.name)), calendar = new Set(CALENDAR_TOOLS.map((t) => t.name)), events = new Set(EVENT_TOOLS.map((t) => t.name)), chat = new Set(CHAT_MCP_TOOLS.map((t) => t.name)), meet = new Set<string>(MEET_MCP_TOOLS.map((t) => t.name)), home = new Set([SEARCH_TOOL.name]);
+  const scoped = new Map([...MAIL_TOOLS, ...CALENDAR_TOOLS, ...EVENT_TOOLS, ...CHAT_MCP_TOOLS, ...MEET_MCP_TOOLS, SEARCH_TOOL].map((t) => [t.name, [...t.scopes]]));
   const rows: { door: ToolDoor; def: ToolDefinition }[] = [];
   const byManifest = manifestTools();
   for (const t of await mcpTools()) {
@@ -85,7 +86,7 @@ async function fromImplementations(): Promise<ToolDefinition[]> {
       for (const door of m.doors) rows.push({ door, def: { name: t.name, app: m.app, kind: 'server', doors: [], scopes: r.scopes ?? [], ...(t.annotations?.destructiveHint === true ? { destructive: true } : {}), description: t.description ?? '', input: t.inputSchema } });
       continue;
     }
-    const app = mail.has(t.name) ? 'mail' : calendar.has(t.name) ? 'calendar' : events.has(t.name) ? 'events' : chat.has(t.name) ? 'chat' : meet.has(t.name) ? 'meet' : 'docs';
+    const app = mail.has(t.name) ? 'mail' : calendar.has(t.name) ? 'calendar' : events.has(t.name) ? 'events' : chat.has(t.name) ? 'chat' : meet.has(t.name) ? 'meet' : home.has(t.name) ? 'home' : 'docs';
     const scopes = app === 'docs' ? [t.annotations?.readOnlyHint === true ? 'files:read' : 'files:write'] : scoped.get(t.name)!;
     rows.push({ door: 'mcp', def: { name: t.name, app, kind: 'server', doors: [], scopes, ...(t.annotations?.destructiveHint === true ? { destructive: true } : {}), description: t.description ?? '', input: t.inputSchema } });
   }

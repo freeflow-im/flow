@@ -8,7 +8,8 @@ import { DOCS_TOOLS } from './docs.js';
 import { EVENTS_TOOLS } from './events.js';
 import { MAIL_TOOLS } from './mail.js';
 import { MEET_TOOLS } from './meet.js';
+import { HOME_TOOLS } from './home.js';
 
-export { CALENDAR_TOOLS, CHAT_TOOLS, CONTACTS_TOOLS, DOCS_TOOLS, EVENTS_TOOLS, MAIL_TOOLS, MEET_TOOLS };
+export { CALENDAR_TOOLS, CHAT_TOOLS, CONTACTS_TOOLS, DOCS_TOOLS, EVENTS_TOOLS, HOME_TOOLS, MAIL_TOOLS, MEET_TOOLS };
 
-export const APP_TOOLS: readonly (readonly ToolDefinition[])[] = [CHAT_TOOLS, DOCS_TOOLS, MAIL_TOOLS, CALENDAR_TOOLS, EVENTS_TOOLS, MEET_TOOLS, CONTACTS_TOOLS];
+export const APP_TOOLS: readonly (readonly ToolDefinition[])[] = [CHAT_TOOLS, DOCS_TOOLS, MAIL_TOOLS, CALENDAR_TOOLS, EVENTS_TOOLS, HOME_TOOLS, MEET_TOOLS, CONTACTS_TOOLS];

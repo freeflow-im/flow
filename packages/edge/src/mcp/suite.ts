@@ -18,6 +18,7 @@ import { toolsFor, type DoorTool } from '../registry';
 import type { AppToolContext } from '../apps';
 import { CHAT_INSTRUCTIONS, type ChatToolContext } from '../chat/mcpTools.ts';
 import { MEET_INSTRUCTIONS, type MeetToolContext } from '../meet/mcpTools.ts';
+import { searchableApps, type SearchToolContext } from './search.ts';
 
 export interface McpRequestCaller {
   userId: string;
@@ -125,7 +126,7 @@ const json = (status: number, body: unknown, headers: Record<string, string> = {
 const toolResult = (data: Record<string, unknown>) => ({ content: [{ type: 'text' as const, text: JSON.stringify(data) }], structuredContent: data });
 const toolError = (message: string) => ({ content: [{ type: 'text' as const, text: message }], isError: true });
 
-interface RunnerContext { mail?: MailToolContext; calendar?: CalendarToolContext; events?: EventToolContext; wakes?: WakeToolContext; chat?: ChatToolContext; meet?: MeetToolContext; apps?: Record<string, AppToolContext> }
+interface RunnerContext { mail?: MailToolContext; calendar?: CalendarToolContext; events?: EventToolContext; wakes?: WakeToolContext; chat?: ChatToolContext; meet?: MeetToolContext; search?: SearchToolContext; apps?: Record<string, AppToolContext> }
 
 /** The registry's tools that run in the Worker, on the server, each with the caller's own objects. */
 function registerRunners(mcp: McpServer, tools: DoorTool[], ctx: RunnerContext): void {
@@ -187,8 +188,12 @@ export async function handleSuiteMcp(request: Request, caller: McpRequestCaller,
   const body = await request.json().catch(() => undefined);
   const info = suiteServerInfo(version, caller.origin);
   const apps = deps.apps ?? {};
-  const access = mcpAccess(caller.scope, !!deps.mail, !!deps.calendar, !!deps.events, [...Object.keys(apps), ...(deps.chat ? ['chat'] : []), ...(deps.meet ? ['meet'] : [])]);
+  const access = mcpAccess(caller.scope, !!deps.mail, !!deps.calendar, !!deps.events, [...Object.keys(apps), ...(deps.chat ? ['chat'] : []), ...(deps.meet ? ['meet'] : []), 'search']);
   if (!deps.docs) access.docs.clear();
+  // The suite's search (search.ts) runs the apps' own search tools the token has; with none of them, it is not offered.
+  const runnable = [...access.mail, ...access.calendar, ...access.events, ...access.others].filter((t) => t.definition.name !== 'search');
+  const allowed = new Set([...access.docs, ...runnable.map((t) => t.definition.name)]);
+  if (!searchableApps(allowed).length) access.others = access.others.filter((t) => t.definition.name !== 'search');
   const instructions = suiteInstructions(version, access);
   // ChatGPT and newer clients speak 2026-07-28 (no initialize: server/discover); the SDK speaks 2025-11-25.
   if (isDiscover(body)) return json(200, discoverResult(body, info, { tools: { listChanged: true } }, instructions));
@@ -220,6 +225,20 @@ export async function handleSuiteMcp(request: Request, caller: McpRequestCaller,
     ...(deps.chat ? { chat: deps.chat } : {}),
     ...(deps.meet ? { meet: deps.meet } : {}),
     apps,
+  };
+  ctx.search = {
+    allowed,
+    call: async (tool, input) => {
+      if (access.docs.has(tool) && docs) {
+        const r = await docs.call(tool, input);
+        const text = r.content.flatMap((c) => (c.type === 'text' ? [c.text] : [])).join('\n');
+        if (r.isError) throw new Error(text || `${tool} failed`);
+        return (r.structuredContent as Record<string, unknown> | undefined) ?? (JSON.parse(text || '{}') as Record<string, unknown>);
+      }
+      const t = runnable.find((x) => x.definition.name === tool);
+      if (!t?.runner) throw new Error(`${tool} is not available`);
+      return (await t.runner.run(ctx as never, input)) as Record<string, unknown>;
+    },
   };
   registerRunners(mcp, [...access.mail, ...access.calendar, ...access.events, ...access.others, ...(deps.userAppTools ?? [])], ctx);
   const transport = adaptTransport(new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true }) as never, info, stateless) as unknown as WebStandardStreamableHTTPServerTransport;
