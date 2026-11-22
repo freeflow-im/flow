@@ -3,12 +3,13 @@
 // "Open draft", which opens it in Compose, and links to messages in Mail open them here rather than in a new tab.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Check, ExternalLink, Loader2, Pencil, Sparkles } from 'lucide-react';
-import { AssistantDockControls, ChatHistoryNav, orgChatHistory, useAssistantDock, useIdleMinimize } from '@flow/suite-bar/assistant-dock';
+import { AssistantDockControls, ChatHistoryNav, orgChatHistory, useAssistantDock, useAssistantModel, useIdleMinimize } from '@flow/suite-bar/assistant-dock';
 import { useSuggestedPrompts } from '@flow/suite-bar';
 import { draftOf, refOfLink, savedFileOf, type MessageRef } from '../lib/assistant';
 import { ChatMarkdown, picturesOf, toolLabel, ToolPictures, MAIL_CHAT, type ChatItem } from '../lib/docsAgent';
 import { cn } from '../lib/utils';
 import { Button } from './ui/button';
+import { Tooltip } from './ui/tooltip';
 import type { useMailAssistant } from '../hooks/assistant';
 
 type ToolItem = Extract<ChatItem, { kind: 'tool' }>;
@@ -18,6 +19,8 @@ export interface AssistantPanelProps {
   chat: ReturnType<typeof useMailAssistant>;
   /** The organization whose suggested prompts it offers (Admin → Prompts). */
   organizationId: string | null;
+  /** The person's assistant's name ("Ada"), for the header; until it is known (or for none), "Assistant". */
+  assistantName?: string | null;
   /** Whether a message is open (the suggestions are about it). */
   onMessage: boolean;
   /** Over the mail, the whole width of a narrow screen, rather than beside it. */
@@ -33,8 +36,11 @@ export interface AssistantPanelProps {
 /** The draft, kept across the panel being drawn again elsewhere (floated, or anchored in the side panel). */
 let keptDraft = '';
 
-export function AssistantPanel({ chat, organizationId, onMessage, overlay, width, inSidePanel = false, onClose, onShow, onOpenDraft }: AssistantPanelProps) {
+export function AssistantPanel({ chat, organizationId, assistantName, onMessage, overlay, width, inSidePanel = false, onClose, onShow, onOpenDraft }: AssistantPanelProps) {
   const suggestions = useSuggestedPrompts(organizationId, onMessage ? 'mail-message' : 'mail-inbox');
+  // What it runs on (the organization's model), shown on hovering its name.
+  const model = useAssistantModel(organizationId);
+  const name = assistantName?.trim() || 'Assistant';
   const [draft, setDraftState] = useState(() => keptDraft);
   const setDraft = (text: string) => {
     keptDraft = text;
@@ -78,7 +84,15 @@ export function AssistantPanel({ chat, organizationId, onMessage, overlay, width
     >
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-hairline px-4">
         <Sparkles className="size-4 text-primary" />
-        <span className="text-[16px] font-semibold">Assistant</span>
+        {model ? (
+          <Tooltip content={model}>
+            <span tabIndex={0} className="min-w-0 truncate text-[16px] font-semibold outline-none" data-testid="mail-assistant-name">
+              {name}
+            </span>
+          </Tooltip>
+        ) : (
+          <span className="min-w-0 truncate text-[16px] font-semibold" data-testid="mail-assistant-name">{name}</span>
+        )}
         <span className="flex-1" />
         <ChatHistoryNav history={orgChatHistory(organizationId, MAIL_CHAT)} busy={chat.running} refreshKey={`${organizationId}:${chat.items.length}:${chat.running}`} onReopened={chat.reload} />
         <Button variant="link" size="sm" className="h-7 px-1.5" onClick={() => void chat.reset()} disabled={chat.running || !chat.items.length} title="Start a new conversation">

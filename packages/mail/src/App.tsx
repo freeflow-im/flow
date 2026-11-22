@@ -1076,6 +1076,7 @@ export function App() {
       <AssistantPanel
         chat={chat}
         organizationId={org}
+        assistantName={myAssistant?.displayName}
         onMessage={openId !== null}
         overlay={assistantOverlay}
         width={assistantPane.width}

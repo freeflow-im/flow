@@ -79,6 +79,26 @@ export interface AssistantSettings {
 }
 
 /**
+ * What an agent runs on, in words ("Anthropic · Claude Sonnet 5.5"): the provider and its model, named as the
+ * catalogues above name them. The keys are never part of it.
+ */
+export function assistantModelLabel(s: Pick<AssistantSettings, 'provider' | 'anthropicModel' | 'openaiModel' | 'openrouterModel'> & { builtIn?: boolean }): string {
+  switch (s.provider) {
+    case 'anthropic':
+      return `Anthropic · ${ANTHROPIC_MODELS.find((m) => m.id === s.anthropicModel)?.name ?? s.anthropicModel}`;
+    case 'openai':
+      return `OpenAI · ${OPENAI_MODELS.find((m) => m.id === s.openaiModel)?.name ?? s.openaiModel}`;
+    case 'openrouter':
+      return `OpenRouter · ${s.openrouterModel}`;
+    case 'claude-agent':
+      return 'Claude Code (on this computer)';
+    default:
+      // 'default' on a server with no model of its own: nothing is chosen yet (an owner or admin picks one).
+      return s.builtIn === false ? 'No model chosen yet' : 'The built-in model';
+  }
+}
+
+/**
  * Body of PUT /api/settings/assistant. A new key replaces the saved one, null removes it, omitted keeps it;
  * an omitted model keeps the saved one.
  */

@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { WorkspaceDTO } from '@flow/shared';
-import { AGENT_AVATAR_PRESETS, ANTHROPIC_MODELS, OPENAI_MODELS, OPENROUTER_MODELS, type AssistantProvider, type AssistantSettings, type AssistantSettingsUpdate } from '@flow/shared/assistant';
+import { AGENT_AVATAR_PRESETS, ANTHROPIC_MODELS, assistantModelLabel, OPENAI_MODELS, OPENROUTER_MODELS, type AssistantProvider, type AssistantSettings, type AssistantSettingsUpdate } from '@flow/shared/assistant';
 import { adminApi, assistantApi } from '../api';
 import { tellHome } from '@flow/suite-bar';
 import { assistantChanged } from '@flow/suite-bar/assistant-dock';
@@ -182,7 +182,7 @@ function WhoMayMail({ org }: { org: WorkspaceDTO }) {
 function RunsOn({ org }: { org: WorkspaceDTO }) {
   const settings = useQuery({ queryKey: ['assistant', org.id, 'settings'], queryFn: () => assistantApi.settings(org.id) });
   const s = settings.data;
-  const label = !s ? null : s.provider === 'anthropic' ? `Anthropic · ${ANTHROPIC_MODELS.find((m) => m.id === s.anthropicModel)?.name ?? s.anthropicModel}` : s.provider === 'openai' ? `OpenAI · ${OPENAI_MODELS.find((m) => m.id === s.openaiModel)?.name ?? s.openaiModel}` : s.provider === 'openrouter' ? `OpenRouter · ${s.openrouterModel}` : 'The built-in model';
+  const label = s ? assistantModelLabel(s) : null;
   return (
     <Card title="Model" intro="Every agent in this organization runs on the model its owners and admins choose, under Agents." testid="card-assistant-runs-on">
       {settings.isError && <ErrorLine error={errorText(settings.error)} />}

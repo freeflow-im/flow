@@ -5,6 +5,7 @@
 // is anchored or set afloat. Each app keeps its chat; this is only the box around it, the pill, the header buttons
 // (AssistantDockControls), the idle timer (useIdleMinimize) and the new chat after a close (useNewChatOnClose).
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { assistantModelLabel, type AssistantSettings } from '@flow/shared/assistant';
 import './assistant-dock.css';
 
 /** The person's own assistant in an organization (agents.md §1.1): its name and picture, for the pill. */
@@ -24,6 +25,26 @@ export function useMyAssistant(organizationId: string | null): MyAssistant | nul
   const agents = useUsableAgents(organizationId);
   const self = agents?.find((a) => a.self);
   return self?.displayName ? { displayName: self.displayName, avatarUrl: self.avatarUrl ?? null } : null;
+}
+
+/**
+ * What the person's assistant runs on in the organization, in words (`GET /api/settings/assistant`: the organization's
+ * model, which anyone in it may see and its owners and admins set): for the panel's name, as its tooltip. Null until known.
+ */
+export function useAssistantModel(organizationId: string | null): string | null {
+  const [label, setLabel] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    const url = organizationId ? `/api/settings/assistant?workspace=${encodeURIComponent(organizationId)}` : '/api/settings/assistant';
+    fetch(url, { credentials: 'same-origin', headers: { accept: 'application/json' } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body: { settings?: AssistantSettings } | null) => {
+        if (live) setLabel(body?.settings ? assistantModelLabel(body.settings) : null);
+      })
+      .catch(() => live && setLabel(null));
+    return () => { live = false; };
+  }, [organizationId]);
+  return label;
 }
 
 /** An agent the person may talk to from the panel (GET /api/agent/agents, agents.md §6): their own or a shared one. */
