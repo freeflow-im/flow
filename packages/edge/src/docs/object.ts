@@ -433,12 +433,22 @@ export class Docs extends DurableObject<DocsEnv> {
     };
   }
 
+  /** One Docs tool for the suite's /mcp server in the Worker (mcp/suite.ts), as `caller`, in this organization. */
+  async runMcpTool(caller: McpRequestCaller, name: string, args: Record<string, unknown>): Promise<import('@modelcontextprotocol/sdk/types.js').CallToolResult> {
+    return this.inOrganization(caller.orgId, () => this.lazy!.mcp.runDocsTool(this.hub!, caller, name, args));
+  }
+
+  /** A file put in the caller's Docs by another app's /mcp tool (save_mail_attachment_to_docs). */
+  async mcpImportBytes(caller: McpRequestCaller, bytes: Uint8Array, filename: string): Promise<{ file: Record<string, unknown>; warnings: string[] }> {
+    return this.inOrganization(caller.orgId, () => this.lazy!.mcp.importDocsFile(this.hub!, caller, bytes, filename));
+  }
+
   /** An agent's upload to the address upload_file gave it; the ticket in it is the credential. */
   async mcpImport(request: Request, organizationId: string): Promise<Response> {
     return this.inOrganization(organizationId, () => this.lazy!.mcp.handleMcpImport(request, this.hub!));
   }
 
-  private async inOrganization(organizationId: string, fn: () => Promise<Response>): Promise<Response> {
+  private async inOrganization<T>(organizationId: string, fn: () => Promise<T>): Promise<T> {
     const res = await withDocsContext({ ...this.context, organizationId }, async () => {
       await this.ready;
       this.outbox();

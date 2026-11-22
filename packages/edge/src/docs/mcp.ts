@@ -17,33 +17,13 @@ import { toolsFor, type DoorTool } from '../registry';
 import type { AppToolContext } from '../apps';
 import type { SubscriptionOps } from '../events/subscriptions.ts';
 import { adaptTransport, discoverResult, isDiscover, SDK_VERSION, STATELESS_VERSION } from '@flow/docs/plugin/server/stateless.ts';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { docsToolOptions, mcpAccess, suiteInstructions, suiteMcpVersion, type McpRequestCaller } from '../mcp/suite.ts';
 
-export interface McpRequestCaller {
-  userId: string;
-  email: string;
-  orgId: string;
-  /** The person's account in `orgId` (platform.md §3.6), when the directory has one. */
-  accountId?: string | null;
-  /** The personal agent the client acts through (agents.md §3): the caller context's `via`. Null for a shared agent. */
-  via?: string | null;
-  /** A shared agent's client (agents.md §3): the account of the person whose client it is, the caller context's `invokedBy`. */
-  invokedBy?: string | null;
-  scope: string;
-  /** The MCP path asked for: /mcp, or a version of it (/mcp/v2). */
-  endpoint: string;
-  /** The public origin: links in what the tools return point at its /docs pages. */
-  origin: string;
-}
-
-/** The newest version of the tools; /mcp serves it here (the ChatGPT plugin's /mcp keeps version 1 on its own host). */
-const NEWEST = Math.max(...MCP_VERSIONS) as McpVersion;
-
-/** The version an MCP path serves on the suite's host, or null for a path that is not one. */
-export function suiteMcpVersion(endpoint: string): McpVersion | null {
-  if (endpoint === '/mcp') return NEWEST;
-  const n = Number(/^\/mcp\/v(\d+)$/.exec(endpoint)?.[1]);
-  return (MCP_VERSIONS as readonly number[]).includes(n) ? (n as McpVersion) : null;
-}
+export type { McpRequestCaller } from '../mcp/suite.ts';
+export { mcpAccess, suiteInstructions, suiteMcpVersion } from '../mcp/suite.ts';
 
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...headers } });
@@ -89,25 +69,6 @@ export function suiteHub(opts: FileHubOptions, appUrl: string): FileHub {
   persistTickets(hub);
   return hub;
 }
-
-/**
- * What a token's scopes allow on /mcp, from the registry (platform.md §5.4): Docs' tools (to read only, or to change too),
- * and the Mail, Calendar and event tools the Worker can reach for this caller.
- */
-export function mcpAccess(scope: string, mailAvailable: boolean, calendarAvailable = false, eventsAvailable = false, apps: readonly string[] = []): { files: 'none' | 'read' | 'write'; docs: Set<string>; mail: DoorTool[]; calendar: DoorTool[]; events: DoorTool[]; others: DoorTool[] } {
-  const scopes = scope.split(' ').filter(Boolean);
-  const files = scopes.includes('files:write') ? 'write' : scopes.includes('files:read') ? 'read' : 'none';
-  const reach = { ...Object.fromEntries(apps.map((a) => [a, true])), ...(mailAvailable ? { mail: true } : {}), ...(calendarAvailable ? { calendar: true } : {}), ...(eventsAvailable ? { events: true, wakes: true } : {}) };
-  const tools = toolsFor('mcp', { scopes, reach });
-  const of = (app: string) => tools.filter((t) => t.definition.app === app);
-  // The apps added by manifest (apps.ts): their tools run with `ctx.apps[<app>]`.
-  const others = tools.filter((t) => !['docs', 'mail', 'calendar', 'events'].includes(t.definition.app));
-  return { files, docs: new Set(of('docs').map((t) => t.definition.name)), mail: of('mail'), calendar: of('calendar'), events: of('events'), others };
-}
-
-/** The server's instructions for what the token can use: Docs' (when it has files), then Mail's, Calendar's and Events' (when it has them). */
-export const suiteInstructions = (version: McpVersion, access: ReturnType<typeof mcpAccess>): string =>
-  [access.files !== 'none' ? instructionsFor(version) : 'FreeFlow, as the user allowed this agent to use it.', access.mail.length ? MAIL_INSTRUCTIONS : '', access.calendar.length ? CALENDAR_INSTRUCTIONS : '', access.events.length ? EVENT_INSTRUCTIONS : ''].filter(Boolean).join('\n');
 
 const toolResult = (data: Record<string, unknown>) => ({ content: [{ type: 'text' as const, text: JSON.stringify(data) }], structuredContent: data });
 const toolError = (message: string) => ({ content: [{ type: 'text' as const, text: message }], isError: true });
@@ -216,4 +177,34 @@ export async function handleMcpImport(request: Request, hub: FileHub): Promise<R
     if (e instanceof ToolError) return json(400, { error: e.message });
     throw e;
   }
+}
+
+/**
+ * One Docs tool, as `caller`, for the suite's server in the Worker (mcp/suite.ts): the plugin's server on this object's
+ * stores, asked over an in-memory connection, so the tool's input is checked and its result shaped as on /mcp. The token's
+ * scopes are checked here too.
+ */
+export async function runDocsTool(hub: FileHub, caller: McpRequestCaller, name: string, args: Record<string, unknown>): Promise<CallToolResult> {
+  const version = suiteMcpVersion(caller.endpoint);
+  if (!version) return { content: [{ type: 'text', text: 'Not found.' }], isError: true };
+  if (!mcpAccess(caller.scope, false).docs.has(name)) return { content: [{ type: 'text', text: `${name} is not allowed for this connection.` }], isError: true };
+  mirrorUser(caller.userId, caller.email);
+  const mcp = createMcpServer(hub.forUser(caller.userId, caller.orgId), docsToolOptions(version, caller));
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'freeflow-suite', version: '1' });
+  await mcp.connect(a);
+  await client.connect(b);
+  try {
+    return (await client.callTool({ name, arguments: args })) as CallToolResult;
+  } finally {
+    void client.close();
+    void mcp.close();
+  }
+}
+
+/** A file put in the caller's Docs from another app (save_mail_attachment_to_docs). */
+export async function importDocsFile(hub: FileHub, caller: Pick<McpRequestCaller, 'userId' | 'email' | 'orgId'>, bytes: Uint8Array, filename: string): Promise<{ file: Record<string, unknown>; warnings: string[] }> {
+  mirrorUser(caller.userId, caller.email);
+  const r = await hub.forUser(caller.userId, caller.orgId).importFile(Buffer.from(bytes), filename, undefined);
+  return { file: r.file as unknown as Record<string, unknown>, warnings: r.warnings };
 }

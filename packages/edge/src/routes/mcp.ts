@@ -9,9 +9,10 @@ import type { Docs } from '../docs/object';
 import type { OAuthMethod } from '../directory/object';
 import { authorizationServerMetadata, OAuthError, protectedResourceMetadata, SCOPE_GROUPS, wwwAuthenticate, type AgentChoice, type McpOAuth, type OAuthAnswer } from '../directory/mcpOAuth';
 import { directory, type AuthEnv } from './auth';
+import type { McpContextEnv } from '../mcp/contexts';
 import { consentPage, deviceDonePage, devicePage, errorPage } from './mcpPages';
 
-export interface McpRouteEnv extends AuthEnv { DOCS: DurableObjectNamespace<Docs> }
+export interface McpRouteEnv extends AuthEnv, Omit<McpContextEnv, 'DIRECTORY' | 'ORG'> { DOCS: DurableObjectNamespace<Docs> }
 type C = Context<{ Bindings: McpRouteEnv }>;
 
 export const mcpRoutes = new Hono<{ Bindings: McpRouteEnv }>();
@@ -275,7 +276,10 @@ async function mcpEndpoint(c: C): Promise<Response> {
   }
   const { userId, email, orgId, accountId, scope, agentId, agentMode, sponsorAccountId } = who.caller;
   // A personal agent acts as its sponsor, marked `via`; a shared agent acts as itself, asked by the person whose client it is.
-  const res = await c.env.DOCS.get(c.env.DOCS.idFromName(orgId)).mcp(c.req.raw, { userId, email, orgId, accountId, via: agentMode === 'shared' ? null : agentId, invokedBy: agentMode === 'shared' ? sponsorAccountId : null, scope, endpoint, origin: issuer });
+  const caller = { userId, email, orgId, accountId, via: agentMode === 'shared' ? null : agentId, invokedBy: agentMode === 'shared' ? sponsorAccountId : null, scope, endpoint, origin: issuer };
+  // The suite's server, loaded on the first /mcp request rather than when the Worker starts (its startup CPU is capped).
+  const [{ handleSuiteMcp }, { mcpContexts }] = await Promise.all([import('../mcp/suite.ts'), import('../mcp/contexts.ts')]);
+  const res = await handleSuiteMcp(c.req.raw, caller, await mcpContexts(c.env as unknown as McpContextEnv, caller));
   return withHeaders(res, CORS);
 }
 mcpRoutes.all('/mcp', mcpEndpoint);
