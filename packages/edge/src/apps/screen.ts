@@ -10,10 +10,13 @@
 //     GET /__freeflow/avatars/<key>  a member's picture, for an app that declares "members:read" (ctx.members' `picture`)
 //     /__freeflow/oauth/<provider>   the viewer's sign-in to a service the manifest declares under "oauth" (§6.5):
 //                                    GET status, POST …/start → { url } to open in a window, DELETE to disconnect
+//   POST /__freeflow/upload/<token>  an upload address (§8.1, ctx.files.uploadUrl): no session, the token is the
+//                           credential, used once; the body (at most 10 MB) goes to the app route it names, as the caller
+//                           who asked for it
 //   neither                 401, one line: the screen is opened from its tab
 import type { HostedCode, HostedEnv, HostedExports } from './hosted';
 import type { UserAppManifest } from '@flow/shared';
-import { draftWorker, HOST_PATH, hostedWorker, parseAppHost, parseDevHost } from './hosted';
+import { APP_FILE_MAX_BYTES, APP_UPLOAD_PATH, draftWorker, HOST_PATH, hostedWorker, parseAppHost, parseDevHost } from './hosted';
 
 export const APP_SESSION_COOKIE = 'ff_app_session';
 const TOKEN_PARAM = 'flow_token';
@@ -79,6 +82,45 @@ function hostOf(env: HostedEnv, req: Request): string {
 export const isAppHost = (env: HostedEnv, req: Request): boolean =>
   !!env.APPS_DOMAIN && (!!parseAppHost(hostOf(env, req), env.APPS_DOMAIN) || !!parseDevHost(hostOf(env, req), env.APPS_DOMAIN));
 
+/**
+ * An upload address redeemed (§8.1): the size checked before the token is spent, then the token (the Org object checks it
+ * and marks it used), then the body to the app route it names, with its caller as the viewer.
+ */
+async function serveUpload(req: Request, url: URL, org: DurableObjectStub<import('../org/object').Org>, p: { organizationId: string; app?: string; devHost?: string }, env: HostedEnv, exports: HostedExports): Promise<Response> {
+  const headers = { 'cache-control': 'no-store' };
+  const no = (status: number, error: string, more: Record<string, string> = {}) => Response.json({ error }, { status, headers: { ...headers, ...more } });
+  if (req.method !== 'POST') return no(405, 'POST the file’s bytes to this address.', { allow: 'POST' });
+  const length = Number(req.headers.get('content-length'));
+  if (!req.headers.has('content-length') || !Number.isFinite(length)) return no(411, 'Send the file with its length (curl --data-binary @file does).');
+  if (length < 1) return no(400, 'The body is empty: send the file’s bytes (curl --data-binary @file).');
+  if (length > APP_FILE_MAX_BYTES) return no(413, `A file is at most ${APP_FILE_MAX_BYTES} bytes; this one is ${length}.`);
+  const answer = await org.redeemAppUpload({ organizationId: p.organizationId, token: url.pathname.slice(APP_UPLOAD_PATH.length), ...(p.app ? { app: p.app } : {}), ...(p.devHost ? { devHost: p.devHost } : {}) });
+  if (!answer.ok) return no((answer as { status: number }).status, (answer as { error: string }).error);
+  // RPC's types lose the union's narrowing.
+  const r = answer as unknown as { path: string; viewer: Record<string, unknown>; draft?: { name: string; author: string; manifest: UserAppManifest; files: Record<string, Uint8Array>; key: string; egress: string[] } };
+  const draft = r.draft;
+  const fwd = new Headers({ 'content-length': String(length), 'x-freeflow-viewer': JSON.stringify(r.viewer) });
+  const type = req.headers.get('content-type');
+  // curl --data-binary sends a form's type by default; the bytes are the file's, so the app reads them as they are.
+  if (type && !/^application\/x-www-form-urlencoded/i.test(type)) fwd.set('content-type', type);
+  try {
+    let worker;
+    if (draft) worker = await draftWorker(env, exports, p.organizationId, draft.author, draft);
+    else {
+      const code = (await org.userAppCode(p.app!)) as HostedCode | null;
+      if (!code) return no(404, 'This app has no installed version.');
+      worker = await hostedWorker(env, exports, p.organizationId, code);
+    }
+    const to = new URL(r.path, url.origin);
+    const res = await worker.getEntrypoint().fetch(new Request(to.toString(), { method: 'POST', headers: fwd, body: req.body, redirect: 'manual' }));
+    const out = new Response(res.body, res);
+    out.headers.set('cache-control', 'no-store');
+    return out;
+  } catch (err) {
+    return no(502, `The app failed: ${(err as Error).message}`.slice(0, 300));
+  }
+}
+
 /** Serves one request to a hosted app's host. `exports` are the Worker's own (`ctx.exports`), to bind the app's isolate. */
 export async function serveAppScreen(req: Request, env: HostedEnv, exports: HostedExports): Promise<Response> {
   const url = new URL(req.url);
@@ -88,6 +130,7 @@ export async function serveAppScreen(req: Request, env: HostedEnv, exports: Host
   const at = parseAppHost(url.host, env.APPS_DOMAIN ?? '');
   if (!at || !env.ORG) return new Response('not found', { status: 404 });
   const org = env.ORG.get(env.ORG.idFromName(at.org));
+  if (url.pathname.startsWith(APP_UPLOAD_PATH)) return serveUpload(req, url, org, { organizationId: at.org, app: at.app }, env, exports);
 
   const token = url.searchParams.get(TOKEN_PARAM);
   if (token) {
@@ -139,6 +182,7 @@ export async function serveAppScreen(req: Request, env: HostedEnv, exports: Host
 async function serveDraftScreen(req: Request, url: URL, at: { devHost: string; org: string }, env: HostedEnv, exports: HostedExports): Promise<Response> {
   if (!env.ORG) return new Response('not found', { status: 404 });
   const org = env.ORG.get(env.ORG.idFromName(at.org));
+  if (url.pathname.startsWith(APP_UPLOAD_PATH)) return serveUpload(req, url, org, { organizationId: at.org, devHost: at.devHost }, env, exports);
   const token = url.searchParams.get(TOKEN_PARAM);
   if (token) {
     const opened = await org.openDraftSession({ organizationId: at.org, devHost: at.devHost, token });

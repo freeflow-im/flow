@@ -440,6 +440,25 @@ Each install of a hosted app gets one SQLite store and one file prefix, keyed by
 Whether the store lives in the user Worker or in a platform object the dispatcher exposes is the spike's question
 (§12); the SDK's `ctx.db` and `ctx.files` stay the same either way.
 
+### 8.1 Upload addresses (2026-11-23, Taskboard #33)
+
+A tool's caller has no screen to upload from: an agent over MCP has its file (a screenshot) on its own disk and can run
+curl, and base64 in a tool call is ruled out. So a tool hands it an address, as Docs' `upload_file` does:
+
+- `ctx.files.uploadUrl(path)` → `{ url, method: 'POST', expiresAt, expiresInSeconds, maxBytes }`. `path` is one of the
+  app's own routes with its query (`/api/upload/42?name=shot.png`), never `/__freeflow/` and never another host. The
+  Org object checks the caller's ticket (as for every suite use, §6.3) and signs a token with the install's secret
+  (a draft's for a dev install): the app, organization, caller (account, user, `via`, `invokedBy`), its scopes, the
+  route, a one-use id and five minutes.
+- The address is `https://<app host>/__freeflow/upload/<token>` (a draft's preview host for a dev install). A POST there
+  needs no session: the token is the credential. The host refuses a body over 10 MB (by its length, before the token
+  is spent), then has the Org object check the token for this host's app, mark it used, and check that the caller is
+  still a member who still holds the app's scopes. The body then goes to the named route with the caller as the viewer
+  (`ctx.caller.upload` true, a fresh ticket); the route stores it with `ctx.files.put` under the app's own rules, and
+  its answer goes back to the uploader. A form content type (curl's default) is dropped: the route reads the bytes.
+- Used ids are kept in the Org object's memory until they expire, as screen door keys are; an object restart inside
+  the five minutes could let an address be used twice, by the same caller, to the same route.
+
 ## 9. Agents as authors
 
 ### 9.1 Who can author

@@ -40,8 +40,8 @@ import {
   removeApp, rotateAppSecret, setAgentsOn, agentsWithApp, appMembers, appIconFile, type AppMember, setAppGrants, updateApp, recordUpload, listUploads, installedCode, restorePointOf, revertApp,
   type AppCallerContext, type AgentForApp, type AppGrants, type AppHolder, type AppSource, type AppToolAnswer, type AppUpload, type OfferedAppTool,
 } from './services/userApps';
-import { APP_SESSION_SECONDS, mintUserAppToken, signAppSession, signAppTicket, verifyAppSession, verifyAppTicket, verifyBody, verifyUserAppToken, type AppSession, type AppTicket } from './lib/appSigning';
-import { appOrigin, callHostedTool, devHostLabel, draftEgress, draftWorker, filesPrefix, hostedWorker, storeName, type AppChatFile, type HostedEnv, type HostedExports } from '../apps/hosted';
+import { APP_SESSION_SECONDS, APP_UPLOAD_SECONDS, mintUserAppToken, peekAppUpload, signAppSession, signAppTicket, signAppUpload, verifyAppSession, verifyAppTicket, verifyAppUpload, verifyBody, verifyUserAppToken, type AppSession, type AppTicket } from './lib/appSigning';
+import { APP_UPLOAD_PATH, appOrigin, callHostedTool, uploadRoute, devHostLabel, draftEgress, draftWorker, filesPrefix, hostedWorker, storeName, type AppChatFile, type HostedEnv, type HostedExports } from '../apps/hosted';
 import { BUILDING_APP, BUILDING_GUIDE, BUILDING_LABEL, BUILDING_TOOLS } from '../apps/buildingTools';
 import { addDraftEditor, createDraft, deleteDraft, deleteDraftFile, draftAuthorFor, draftByDevHost, draftCode, draftsEditableBy, getDraft, listDrafts, mayEditDraft, readDraftFile, removeDraftEditor, writeDraftFile, type AppDraftDTO } from './services/appDrafts';
 import { beginOAuth, deleteOAuthClient, finishOAuth, listOAuthClients, oauthCallbackUrl, oauthDisconnect, oauthStatus, oauthToken, removeAppOAuth, setOAuthClient, takeOAuthState, type AppOAuthClientDTO, type AppOAuthStatus, type AppOAuthToken } from './services/appOAuth';
@@ -1711,6 +1711,93 @@ export class Org extends DurableObject<OrgEnv> {
     if (!scopes) return null;
     const ticket = signAppTicket(app.secret, { app: p.name, org: p.organizationId, accountId: s.accountId, userId: s.userId, via: null, invokedBy: null });
     return { ...s, scopes, ticket };
+  }
+
+  /**
+   * An upload address for a hosted app's caller (§8.1, ctx.files.uploadUrl): the ticket must be this install's (or this
+   * draft's, and its author's or an editor's) and the caller still a member. Back comes a one-use address on the app's own
+   * host that, for APP_UPLOAD_SECONDS, POSTs its body to `path`, one of the app's routes, as this caller.
+   */
+  async appUploadUrlForCaller(p: { organizationId: string; name: string; ticket: string; path: string; displayName?: string; dev?: string }): Promise<{ ok: true; url: string; expiresAt: string; expiresInSeconds: number } | { ok: false; error: string }> {
+    if (!this.env.APPS_DOMAIN) return { ok: false, error: 'this server does not serve app hosts, so it has no upload address' };
+    const path = uploadRoute(p.path);
+    if (!path) return { ok: false, error: 'uploadUrl takes one of the app\'s own paths, such as /api/tasks/42/images?name=shot.png' };
+    const app = p.dev
+      ? await withDb(this.db, () => draftCode(p.name, p.dev!)).then((d) => ({ manifest: d.manifest, secret: d.secret, devHost: d.devHost }), () => null)
+      : await withDb(this.db, () => appForUse(p.name)).then((a) => (a ? { manifest: a.manifest, secret: a.secret, devHost: null } : null));
+    if (!app || !isHosted(app.manifest)) return { ok: false, error: 'no such hosted app here' };
+    const t = verifyAppTicket(app.secret, p.ticket);
+    if (!t || t.app !== p.name || t.org !== p.organizationId) return { ok: false, error: 'the ticket is not valid: use the one from this request' };
+    if (p.dev && t.accountId !== p.dev && !(await withDb(this.db, () => mayEditDraft(p.name, p.dev!, t.accountId)))) return { ok: false, error: 'a draft acts only as its author or its editors' };
+    const userId = this.userOfAccount(t.accountId);
+    if (!userId) return { ok: false, error: 'the caller is not a member here any more' };
+    const scopes = p.dev ? app.manifest.scopes.map((s) => s.id) : await this.uploaderHolds(p.name, t.accountId, t.via);
+    if (!scopes) return { ok: false, error: 'the caller holds none of this app\'s scopes' };
+    const { token, exp } = signAppUpload(app.secret, {
+      app: p.name, org: p.organizationId, dev: p.dev ?? null, accountId: t.accountId, userId, via: t.via, invokedBy: t.invokedBy,
+      displayName: String(p.displayName ?? '').slice(0, 200), isAgent: this.isAgentUser(userId), scopes, path,
+    });
+    const label = app.devHost ? devHostLabel(app.devHost, p.organizationId) : null;
+    const origin = label ? `${this.env.APPS_SCHEME ?? 'https'}://${label}.${this.env.APPS_DOMAIN}` : appOrigin(p.name, p.organizationId, this.env.APPS_DOMAIN, this.env.APPS_SCHEME ?? 'https');
+    return { ok: true, url: `${origin}${APP_UPLOAD_PATH}${token}`, expiresAt: new Date(exp * 1000).toISOString(), expiresInSeconds: APP_UPLOAD_SECONDS };
+  }
+
+  /**
+   * An upload address redeemed on an app's host (§8.1): checked against the install's (or the draft's) secret, for this
+   * host's app, used once, and its caller still a member who still holds the app's scopes. Back comes the viewer to run the
+   * app's route as, with a fresh ticket; for a draft, its files too, to run its dev install.
+   */
+  async redeemAppUpload(p: { organizationId: string; token: string; app?: string; devHost?: string }): Promise<
+    | { ok: true; path: string; viewer: { organizationId: string; accountId: string; userId: string; displayName: string; isAgent: boolean; scopes: string[]; via: string | null; invokedBy: string | null; upload: true; ticket: string };
+        draft?: { name: string; author: string; manifest: UserAppManifest; files: Record<string, Uint8Array>; key: string; egress: string[] } }
+    | { ok: false; status: number; error: string }
+  > {
+    const gone = { ok: false as const, status: 401, error: 'This upload address is not valid, was used already or has expired. Ask the tool for a new one.' };
+    const peek = peekAppUpload(p.token);
+    if (!peek || peek.org !== p.organizationId) return gone;
+    let secret: Buffer, draft: { name: string; author: string; manifest: UserAppManifest; files: Record<string, Uint8Array>; key: string; egress: string[] } | undefined;
+    if (p.devHost) {
+      const d = await withDb(this.db, () => draftByDevHost(p.devHost!));
+      if (!d || d.name !== peek.app || d.author !== peek.dev) return gone;
+      const code = await withDb(this.db, () => draftCode(d.name, d.author)).catch(() => null);
+      if (!code) return gone;
+      const installed = await withDb(this.db, () => appForUse(d.name));
+      const egress = draftEgress(code.manifest, installed && isHosted(installed.manifest) ? installed.manifest : null);
+      secret = code.secret;
+      draft = { name: d.name, author: d.author, manifest: code.manifest, files: code.files, key: code.key, egress };
+    } else {
+      if (peek.app !== p.app || peek.dev) return gone;
+      const app = await withDb(this.db, () => appForUse(peek.app));
+      if (!app || !isHosted(app.manifest)) return gone;
+      secret = app.secret;
+    }
+    const u = verifyAppUpload(secret, p.token);
+    if (!u || u.app !== peek.app || u.org !== p.organizationId || (u.dev ?? null) !== (peek.dev ?? null)) return gone;
+    const now = Date.now();
+    for (const [jti, exp] of this.usedKeys) if (exp * 1000 < now) this.usedKeys.delete(jti);
+    if (this.usedKeys.has(`upload:${u.jti}`)) return gone;
+    this.usedKeys.set(`upload:${u.jti}`, u.exp);
+    if (this.userOfAccount(u.accountId) !== u.userId) return { ok: false, status: 403, error: 'The caller who asked for this address is not a member here any more.' };
+    let scopes = u.scopes;
+    if (!draft) {
+      const held = new Set((await this.uploaderHolds(u.app, u.accountId, u.via)) ?? []);
+      scopes = u.scopes.filter((s) => held.has(s));
+    }
+    if (!scopes.length) return { ok: false, status: 403, error: 'The caller who asked for this address no longer holds this app\'s scopes.' };
+    const ticket = signAppTicket(secret, { app: u.app, org: u.org, accountId: u.accountId, userId: u.userId, via: u.via, invokedBy: u.invokedBy });
+    return {
+      ok: true, path: u.path, ...(draft ? { draft } : {}),
+      viewer: { organizationId: u.org, accountId: u.accountId, userId: u.userId, displayName: u.displayName, isAgent: u.isAgent, scopes, via: u.via, invokedBy: u.invokedBy, upload: true, ticket },
+    };
+  }
+
+  /** The scopes of an app an upload's caller holds now: a tool caller's, with its agent (`via`) as at the call. */
+  private async uploaderHolds(name: string, accountId: string, via: string | null): Promise<string[] | null> {
+    return withDb(this.db, async () => {
+      const holder = await appHolderOf(accountId);
+      const held = holder ? (await heldScopes({ ...holder, via })).get(name) : undefined;
+      return held?.size ? [...held] : null;
+    });
   }
 
   /**
