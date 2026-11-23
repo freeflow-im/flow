@@ -43,7 +43,7 @@ import {
 import { APP_SESSION_SECONDS, mintUserAppToken, signAppSession, signAppTicket, verifyAppSession, verifyAppTicket, verifyBody, verifyUserAppToken, type AppSession, type AppTicket } from './lib/appSigning';
 import { appOrigin, callHostedTool, devHostLabel, draftWorker, filesPrefix, hostedWorker, storeName, type AppChatFile, type HostedEnv, type HostedExports } from '../apps/hosted';
 import { BUILDING_APP, BUILDING_GUIDE, BUILDING_LABEL, BUILDING_TOOLS } from '../apps/buildingTools';
-import { createDraft, deleteDraft, deleteDraftFile, draftByDevHost, draftCode, getDraft, listDrafts, readDraftFile, writeDraftFile, type AppDraftDTO } from './services/appDrafts';
+import { addDraftEditor, createDraft, deleteDraft, deleteDraftFile, draftAuthorFor, draftByDevHost, draftCode, draftsEditableBy, getDraft, listDrafts, mayEditDraft, readDraftFile, removeDraftEditor, writeDraftFile, type AppDraftDTO } from './services/appDrafts';
 
 /** A user-app change's outcome for the Worker's routes: the value, or the ApiError's status, code and message. */
 async function answered<T>(fn: () => Promise<T>): Promise<DirectoryAnswer<T>> {
@@ -1353,6 +1353,18 @@ export class Org extends DurableObject<OrgEnv> {
     });
   }
 
+  /** Lets an agent edit the author's draft (§9.6): the author picked it in the Build page's panel. No draft of that name: nothing. */
+  async addAppDraftEditor(name: string, author: string, editor: string): Promise<DirectoryAnswer<void>> {
+    return answered(() => withDb(this.db, () => addDraftEditor(name, author, editor)));
+  }
+
+  async removeAppDraftEditor(name: string, author: string, editor: string): Promise<DirectoryAnswer<AppDraftDTO>> {
+    return answered(() => withDb(this.db, async () => {
+      await removeDraftEditor(name, author, editor);
+      return getDraft(name, author);
+    }));
+  }
+
   async readAppDraftFile(name: string, author: string, path: string): Promise<DirectoryAnswer<string>> {
     return answered(() => withDb(this.db, () => readDraftFile(name, author, path)));
   }
@@ -1386,10 +1398,10 @@ export class Org extends DurableObject<OrgEnv> {
   }
 
   /**
-   * Tries one of a draft's tools in its dev install (§9.3), as its author: its own store, no internet, the author's access
-   * at most. Any other caller is refused: a draft is its author's alone.
+   * Tries one of a draft's tools in its dev install (§9.3): its own store, no internet. It runs as its author, or (`as`) as
+   * one of its editors, with that editor's own access at most: an agent editing a person's draft never gets their access.
    */
-  async tryAppDraftTool(p: { organizationId: string; name: string; author: string; userId: string; displayName: string; role: string; tool: string; input: unknown }): Promise<AppToolAnswer> {
+  async tryAppDraftTool(p: { organizationId: string; name: string; author: string; as?: string; userId: string; displayName: string; role: string; tool: string; input: unknown }): Promise<AppToolAnswer> {
     let draft;
     try {
       draft = await withDb(this.db, () => draftCode(p.name, p.author));
@@ -1397,10 +1409,11 @@ export class Org extends DurableObject<OrgEnv> {
       return { ok: false, error: (err as Error).message };
     }
     if (!draft.manifest.tools.some((t) => t.name === p.tool)) return { ok: false, error: `the draft has no tool ${p.tool}` };
+    const accountId = p.as ?? p.author;
     const caller = {
-      organizationId: p.organizationId, accountId: p.author, userId: p.userId, displayName: p.displayName, kind: 'person' as const, role: p.role,
+      organizationId: p.organizationId, accountId, userId: p.userId, displayName: p.displayName, kind: p.as ? 'shared_agent' as const : 'person' as const, role: p.role,
       via: null, invokedBy: null, scopes: draft.manifest.scopes.map((s) => s.id),
-      ticket: signAppTicket(draft.secret, { app: p.name, org: p.organizationId, accountId: p.author, userId: p.userId, via: null, invokedBy: null }),
+      ticket: signAppTicket(draft.secret, { app: p.name, org: p.organizationId, accountId, userId: p.userId, via: null, invokedBy: null }),
     };
     try {
       const worker = await draftWorker(this.env, this.ctx.exports as unknown as HostedExports, p.organizationId, p.author, draft);
@@ -1455,14 +1468,14 @@ export class Org extends DurableObject<OrgEnv> {
   }
 
   /** Publishes a draft as a hosted version (§9.6): its files to R2 and a version an owner or admin installs. */
-  async publishAppDraft(p: { organizationId: string; name: string; author: string }): Promise<DirectoryAnswer<{ name: string; version: number }>> {
+  async publishAppDraft(p: { organizationId: string; name: string; author: string; by?: string }): Promise<DirectoryAnswer<{ name: string; version: number }>> {
     return answered(async () => {
       const draft = await withDb(this.db, () => draftCode(p.name, p.author));
       if (!this.env.BLOBS) throw new ApiError(503, 'no_storage', 'this server has no file storage for apps');
       const prefix = `apps/${p.organizationId}/${p.name}/${crypto.randomUUID()}/`;
       const files = Object.fromEntries(Object.entries(draft.files).filter(([path]) => path !== 'freeflow-app.json'));
       await Promise.all(Object.entries(files).map(([path, b]) => this.env.BLOBS!.put(prefix + path, b)));
-      return withDb(this.db, () => recordUpload({ manifest: draft.manifest, files: Object.fromEntries(Object.entries(files).map(([path, b]) => [path, b.byteLength])), prefix, by: p.author }));
+      return withDb(this.db, () => recordUpload({ manifest: draft.manifest, files: Object.fromEntries(Object.entries(files).map(([path, b]) => [path, b.byteLength])), prefix, by: p.by ?? p.author }));
     });
   }
 
@@ -1519,24 +1532,31 @@ export class Org extends DurableObject<OrgEnv> {
     return [...installed, ...BUILDING_TOOLS.map((tool) => ({ name: `${BUILDING_APP}__${tool.name}`, app: BUILDING_APP, label: BUILDING_LABEL, tool }))];
   }
 
-  /** One building tool (§9.6), as its caller: the drafts are the caller's account's. */
-  private async runBuildingTool(p: { organizationId: string; tool: string; input: Record<string, unknown>; holder: AppHolder; userId: string; displayName: string; role: string }): Promise<AppToolAnswer> {
+  /**
+   * One building tool (§9.6), as its caller: the caller's own drafts, and those whose authors let it edit them (an agent
+   * the author picked in the Build page's panel). Among several drafts of one name, `owner` picks, else the asker's.
+   */
+  private async runBuildingTool(p: { organizationId: string; tool: string; input: Record<string, unknown>; holder: AppHolder; userId: string; displayName: string; role: string; invokedBy?: string | null }): Promise<AppToolAnswer> {
     if (p.holder.kind === 'guest') return { ok: false, error: 'guests do not build apps' };
-    const author = p.holder.accountId;
+    const me = p.holder.accountId;
     const str = (k: string) => (typeof p.input[k] === 'string' ? (p.input[k] as string) : '');
     const ok = (result: unknown): AppToolAnswer => ({ ok: true, result });
     const of = <T,>(a: DirectoryAnswer<T>): AppToolAnswer => (a.ok ? ok(a.value) : { ok: false, error: a.message });
+    if (p.tool === 'guide') return ok({ guide: BUILDING_GUIDE });
+    if (p.tool === 'list_drafts') return ok({ drafts: await withDb(this.db, () => draftsEditableBy(me)) });
+    if (p.tool === 'create_draft') return of(await this.createAppDraft({ name: str('name'), label: str('label') || str('name'), author: me, ...(p.input.from_installed === true ? { fromInstalled: true } : {}) }));
+    // `invokedBy` is only a preference among drafts the caller may already edit, never a permission.
+    const whose = await answered(() => withDb(this.db, () => draftAuthorFor(str('app'), me, { ...(str('owner') ? { owner: str('owner') } : {}), prefer: p.invokedBy ?? null })));
+    if (!whose.ok) return { ok: false, error: whose.message };
+    const author = whose.value;
     switch (p.tool) {
-      case 'guide': return ok({ guide: BUILDING_GUIDE });
-      case 'list_drafts': return ok({ drafts: await this.listAppDrafts(author) });
-      case 'create_draft': return of(await this.createAppDraft({ name: str('name'), label: str('label') || str('name'), author, ...(p.input.from_installed === true ? { fromInstalled: true } : {}) }));
       case 'read_file': return of(await this.readAppDraftFile(str('app'), author, str('path')));
       case 'write_file': return of(await this.writeAppDraftFile(str('app'), author, str('path'), str('text')));
       case 'delete_file': return of(await this.deleteAppDraftFile(str('app'), author, str('path')));
       case 'check_draft': return of(await this.getAppDraft(str('app'), author));
-      case 'try_tool': return this.tryAppDraftTool({ organizationId: p.organizationId, name: str('app'), author, userId: p.userId, displayName: p.displayName, role: p.role, tool: str('tool'), input: (p.input.input as Record<string, unknown>) ?? {} });
+      case 'try_tool': return this.tryAppDraftTool({ organizationId: p.organizationId, name: str('app'), author, ...(me !== author ? { as: me } : {}), userId: p.userId, displayName: p.displayName, role: p.role, tool: str('tool'), input: (p.input.input as Record<string, unknown>) ?? {} });
       case 'publish_draft': {
-        const r = await this.publishAppDraft({ organizationId: p.organizationId, name: str('app'), author });
+        const r = await this.publishAppDraft({ organizationId: p.organizationId, name: str('app'), author, by: me });
         return r.ok ? ok({ ...r.value, next: 'An owner or admin installs or updates to it in Organization settings → Apps.' }) : { ok: false, error: r.message };
       }
       default: return { ok: false, error: `no building tool ${p.tool}` };
@@ -1639,8 +1659,8 @@ export class Org extends DurableObject<OrgEnv> {
     if (!(app.manifest.uses ?? []).includes(p.use)) return { ok: false, error: `this app does not declare "${p.use}" in its manifest's uses` };
     const t = verifyAppTicket(app.secret, p.ticket);
     if (!t || t.app !== p.name || t.org !== p.organizationId) return { ok: false, error: 'the ticket is not valid: use the one from this request' };
-    // A dev install acts only as its author: never with anyone else's access (§9.3).
-    if (p.dev && t.accountId !== p.dev) return { ok: false, error: 'a draft acts only as its author' };
+    // A dev install acts only as its author or one of its editors, each with its own access, never another's (§9.3).
+    if (p.dev && t.accountId !== p.dev && !(await withDb(this.db, () => mayEditDraft(p.name, p.dev!, t.accountId)))) return { ok: false, error: 'a draft acts only as its author or its editors' };
     const userId = this.userOfAccount(t.accountId);
     if (!userId) return { ok: false, error: 'the caller is not a member here any more' };
     const email = (this.ctx.storage.sql.exec('SELECT email FROM users WHERE id = ?', userId).toArray()[0]?.email as string | undefined) ?? null;

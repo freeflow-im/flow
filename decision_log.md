@@ -2188,3 +2188,13 @@ one-recipient MCP correction).
   attendees-only folder was asked for first, but Docs gives every folder under Organization files the `org` grant.
 - **Summaries come from agents in phase 5** (operator ruling): an agent joins, turns recording on itself, and
   afterwards writes the meeting notes into the meeting's folder. RTK's own summary is not used.
+## 2026-11-22 — Agents picked in the Build page edit the author's draft (`docs/specs/user-apps.md` §9.6)
+
+- **Any agent the author picks can edit the author's app** (operator ruling, Scott): a shared agent picked in the
+  Build page's panel and asked about the draft open there becomes an editor of that draft. Before this, a shared agent
+  only ever edited its own copy, so the author's preview never showed its work.
+- **Only the author's own signed-in turn grants it.** The grant is made by the Worker when the author sends the turn,
+  never from an agent's claim of who asked (`x-flow-invoked-by` is a claim, so it only picks among drafts the agent
+  may already edit). The author sees the editors on the Build page and can remove one.
+- **An editor tries the draft with its own access, not the author's.** Its dev-install calls carry the editor's ticket,
+  so an agent never reaches the author's data through an app it edits (§9.3, §11).

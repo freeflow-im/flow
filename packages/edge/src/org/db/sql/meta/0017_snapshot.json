@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "56f2d766-0e4b-4edc-9dd6-5e0827f3f882",
+  "id": "491ff9ae-adf0-488f-8c90-7f87e480b7a5",
   "prevId": "1d18d88e-c90c-4907-91df-e8d7244058a8",
   "tables": {
     "agent_invites": {
@@ -1841,136 +1841,6 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
-    "meeting_recordings": {
-      "name": "meeting_recordings",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "meeting_id": {
-          "name": "meeting_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "session_id": {
-          "name": "session_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "started_by": {
-          "name": "started_by",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "started_at": {
-          "name": "started_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "folder": {
-          "name": "folder",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "download_url": {
-          "name": "download_url",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "video_url": {
-          "name": "video_url",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "transcript_download_url": {
-          "name": "transcript_download_url",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "transcript_url": {
-          "name": "transcript_url",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "meeting_recordings_meeting_idx": {
-          "name": "meeting_recordings_meeting_idx",
-          "columns": [
-            "meeting_id",
-            "started_at"
-          ],
-          "isUnique": false
-        },
-        "meeting_recordings_session_idx": {
-          "name": "meeting_recordings_session_idx",
-          "columns": [
-            "session_id"
-          ],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "meeting_recordings_meeting_id_meetings_id_fk": {
-          "name": "meeting_recordings_meeting_id_meetings_id_fk",
-          "tableFrom": "meeting_recordings",
-          "tableTo": "meetings",
-          "columnsFrom": [
-            "meeting_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "meeting_recordings_started_by_users_id_fk": {
-          "name": "meeting_recordings_started_by_users_id_fk",
-          "tableFrom": "meeting_recordings",
-          "tableTo": "users",
-          "columnsFrom": [
-            "started_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
     "meetings": {
       "name": "meetings",
       "columns": {
@@ -3593,6 +3463,61 @@
             "account_id"
           ],
           "name": "user_app_agents_name_account_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "user_app_draft_editors": {
+      "name": "user_app_draft_editors",
+      "columns": {
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "author": {
+          "name": "author",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "editor": {
+          "name": "editor",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "added_at": {
+          "name": "added_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "user_app_draft_editors_editor": {
+          "name": "user_app_draft_editors_editor",
+          "columns": [
+            "editor"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "user_app_draft_editors_name_author_editor_pk": {
+          "columns": [
+            "name",
+            "author",
+            "editor"
+          ],
+          "name": "user_app_draft_editors_name_author_editor_pk"
         }
       },
       "uniqueConstraints": {},

@@ -281,6 +281,12 @@ userAppRoutes.delete('/v1/workspaces/:id/apps/drafts/:name', async (c) => {
   return c.json({ ok: true });
 });
 
+/** Stops an agent editing the draft (§9.6): the author's call alone. The agent got it when picked in the Build page's panel. */
+userAppRoutes.delete('/v1/workspaces/:id/apps/drafts/:name/editors/:editor', async (c) => {
+  const m = await builderOf(c);
+  return c.json({ draft: unwrap(await orgStub(c, m.organizationId).removeAppDraftEditor(c.req.param('name'), m.account.id, c.req.param('editor'))) });
+});
+
 /** One file's text: `?path=server.js`. */
 userAppRoutes.get('/v1/workspaces/:id/apps/drafts/:name/file', async (c) => {
   const m = await builderOf(c);

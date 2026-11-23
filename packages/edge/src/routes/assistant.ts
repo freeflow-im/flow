@@ -145,6 +145,12 @@ async function forward(c: C, req: Request = c.req.raw): Promise<Response> {
       // The admin agent (agents.md §1.4) is for owners and admins alone: usableAgents lists it only for them, and a role
       // lost since is checked here. Its admin tools act with this person's token (assistant/adminTools.ts).
       if (chosen.role === 'admin' && who.account.role !== 'owner' && who.account.role !== 'admin') return c.json({ error: 'Only owners and admins can use the admin agent.', code: 'not_admin' }, 403);
+      // Asked from the Build page about the person's own draft (user-apps.md §9.6): the agent they picked may edit that
+      // draft from now on (Scott, 2026-11-22). Only the author's own signed-in turn grants it, never the agent.
+      if (req.method === 'POST' && path === '/api/agent/turn') {
+        const building = ((await req.clone().json().catch(() => null)) as { context?: { building?: { app?: unknown } } } | null)?.context?.building;
+        if (typeof building?.app === 'string') await org.addAppDraftEditor(building.app, who.account.id, identity.account.id).catch((err: Error) => console.error(`[apps] draft editor: ${err.message}`));
+      }
       const asAgent = { user: identity.user, token: who.token, authKind: 'agent' as const, ip: who.ip, organizationId: who.account.organizationId, account: identity.account, invokedBy: who.account.id };
       return await c.env.ASSISTANT.get(c.env.ASSISTANT.idFromName(identity.account.id)).handle(req, asAgent, agentDocs, chosen.displayName, { conversationUser: who.user.id, agentAccountId: identity.account.id, agentMode: 'shared', ...(chosen.role ? { agentRole: chosen.role } : {}) });
     }

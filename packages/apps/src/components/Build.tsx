@@ -219,6 +219,16 @@ export function Builder({ org, name, admin }: { org: string; name: string; admin
     }
   };
 
+  /** Stops an agent editing this draft: it got it when picked in the assistant panel (§9.6). */
+  const removeEditor = async (account: string, who: string) => {
+    if (!window.confirm(`${who} will no longer edit ${d?.label ?? name}. Picking ${who} in the panel again lets it edit again.`)) return;
+    try {
+      qc.setQueryData(['draft', org, name], await appsApi.removeEditor(org, name, account));
+    } catch (e) {
+      setNotice(errorText(e));
+    }
+  };
+
   /** Install… opens the popup for the newest published version that is not the one installed. */
   const openInstall = async () => {
     try {
@@ -254,6 +264,17 @@ export function Builder({ org, name, admin }: { org: string; name: string; admin
           {notice}
           {noticeLink && <a className="ml-2 font-semibold text-primary hover:underline" href={noticeLink.href} data-testid="build-notice-open">{noticeLink.label}</a>}
           <button type="button" className="ml-2 text-primary" onClick={() => { setNotice(null); setNoticeLink(null); }}>Close</button>
+        </div>
+      )}
+      {d.editors.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-hairline bg-white px-3 py-1 text-xs text-muted" data-testid="draft-editors">
+          <span>Also edits this draft:</span>
+          {d.editors.map((e) => (
+            <span key={e.account} className="flex items-center gap-1 text-ink">
+              {e.name}
+              <button type="button" className="text-primary hover:underline" onClick={() => void removeEditor(e.account, e.name)} data-testid="remove-editor">Remove</button>
+            </span>
+          ))}
         </div>
       )}
       {d.problems.length > 0 && (

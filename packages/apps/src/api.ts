@@ -19,7 +19,7 @@ export interface InstalledApp {
 }
 
 /** One of the person's drafts (§9.6): its files (path → bytes) and what stands between it and a version. */
-export interface AppDraft { name: string; label: string; files: Record<string, number>; problems: string[]; devHost: string; createdAt: string; updatedAt: string }
+export interface AppDraft { name: string; label: string; author: string; editors: { account: string; name: string }[]; files: Record<string, number>; problems: string[]; devHost: string; createdAt: string; updatedAt: string }
 
 /** A tool call's answer, as the Worker gives it. */
 export type ToolAnswer = { ok: true; result: unknown } | { ok: false; error: string };
@@ -61,6 +61,7 @@ export const appsApi = {
   deleteDraft: (org: string, name: string) => request<{ ok: true }>('DELETE', `${ws(org)}/apps/drafts/${encodeURIComponent(name)}`),
   readFile: async (org: string, name: string, path: string) => (await request<{ text: string }>('GET', `${ws(org)}/apps/drafts/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}`)).text,
   writeFile: async (org: string, name: string, path: string, text: string) => (await request<{ draft: AppDraft }>('PUT', `${ws(org)}/apps/drafts/${encodeURIComponent(name)}/file`, { path, text })).draft,
+  removeEditor: async (org: string, name: string, editor: string) => (await request<{ draft: AppDraft }>('DELETE', `${ws(org)}/apps/drafts/${encodeURIComponent(name)}/editors/${encodeURIComponent(editor)}`)).draft,
   deleteFile: async (org: string, name: string, path: string) => (await request<{ draft: AppDraft }>('DELETE', `${ws(org)}/apps/drafts/${encodeURIComponent(name)}/file?path=${encodeURIComponent(path)}`)).draft,
   tryTool: (org: string, name: string, tool: string, input: Record<string, unknown>) => request<ToolAnswer>('POST', `${ws(org)}/apps/drafts/${encodeURIComponent(name)}/try`, { tool, input }),
   preview: (org: string, name: string) => request<{ url: string }>('POST', `${ws(org)}/apps/drafts/${encodeURIComponent(name)}/preview`, {}),

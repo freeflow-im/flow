@@ -336,6 +336,22 @@ t('and publishes it, told an owner or admin installs it', r.j.ok && r.j.result.n
 r = await api(BLD, 'POST', `/v1/workspaces/${A}/apps`, { name: 'polls', version: r.j.result?.version, grants: { members: true, accounts: [] } });
 t('Builder cannot install it itself', r.s === 403, r.s);
 
+// --- An agent the author picks in the Build page's panel edits the author's draft (Scott, 2026-11-22) ------------------
+r = await api(O.token, 'GET', `/v1/workspaces/${A}/apps/drafts/shop`);
+const OACC = r.j.draft?.author;
+t("a draft says whose it is, with no editors yet", typeof OACC === 'string' && Array.isArray(r.j.draft.editors) && r.j.draft.editors.length === 0, JSON.stringify(r.j).slice(0, 160));
+r = await fetch(`${B}/v1/workspaces/${A}/tools/call`, { method: 'POST', headers: { authorization: 'Bearer ' + BLD, 'content-type': 'application/json', 'x-flow-invoked-by': OACC }, body: JSON.stringify({ name: 'apps__read_file', input: { app: 'shop', path: 'server.js' } }) }).then((x) => x.json());
+t("an agent saying Olga asked does not reach Olga's draft", r.ok === false, JSON.stringify(r).slice(0, 160));
+r = await api(O.token, 'POST', `/v1/workspaces/${A}/agents/hosted`, { name: `Helper ${tag}` });
+const HELPER = r.j.agent;
+t('Olga makes a hosted shared agent', r.s === 201 && HELPER?.mode === 'shared', r.s + ' ' + JSON.stringify(r.j).slice(0, 120));
+// The model may not answer here: the edit right is given before the turn runs.
+await fetch(`${B}/api/agent/turn?workspace=${A}&agent=${encodeURIComponent(HELPER.id)}`, { method: 'POST', headers: { authorization: 'Bearer ' + O.token, 'content-type': 'application/json' }, body: JSON.stringify({ message: 'Add a settings page', scope: 'home', agent: HELPER.id, context: { page: 'home', building: { app: 'shop', label: 'x' } } }) }).then((x) => x.text()).catch(() => '');
+r = await api(O.token, 'GET', `/v1/workspaces/${A}/apps/drafts/shop`);
+t('asking it from the Build page lets it edit her draft', r.j.draft?.editors?.length === 1 && r.j.draft.editors[0].account === HELPER.accountId && r.j.draft.editors[0].name === HELPER.displayName, JSON.stringify(r.j.draft?.editors));
+r = await api(O.token, 'DELETE', `/v1/workspaces/${A}/apps/drafts/shop/editors/${encodeURIComponent(HELPER.accountId)}`);
+t('Olga takes it back', r.s === 200 && r.j.draft.editors.length === 0, r.s + ' ' + JSON.stringify(r.j).slice(0, 120));
+
 // --- A draft's preview (step 9) --------------------------------------------------------------------------------------
 r = await api(U.token, 'POST', `/v1/workspaces/${A}/apps/drafts/shop/preview`, {});
 const prevUrl = r.j.url ?? '';
