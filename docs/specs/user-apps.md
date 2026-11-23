@@ -492,6 +492,11 @@ A person builds or changes an app in the suite itself, with the assistant: no ma
   `ctx.publish`, `ctx.docs` and `ctx.chat` (the ticket of §6.3 is passed for the app). Nothing to bundle.
 - **Drafts.** Each app being built has one working copy per author: the manifest and the files of a version (§14
   phase 2, step 1), saved as they change. A draft runs nothing until it is tried.
+- **Editors** (Scott, 2026-11-22). A shared agent the author picks in the Build page's panel, asked about the draft
+  open there, may edit that draft from then on; the page lists the editors and the author can remove one. Only the
+  author's own turn grants it, never an agent's claim of who asked. The building tools act on the drafts the caller
+  may edit; among several of one name, `owner` picks, else the asker's. An editor tries the draft as itself, with its
+  own access, in the author's dev install. (A personal agent already acts as its person, so it edits their drafts.)
 - **Dev installs** (§9.3): trying a draft runs it in its own store, visible to its author alone, its `uses` cut down to
   the author's access and no egress.
 - **The Build app page** is the apps home, `/apps/`: the installed apps and the person's drafts, and **New app**. A

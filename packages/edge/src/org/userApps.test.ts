@@ -293,4 +293,28 @@ describe('the building tools (§9.6)', () => {
     const guide = await run(ben, 'apps__guide', {});
     expect(guide.ok && JSON.stringify(guide.result)).toContain('defineApp');
   });
+
+  it('let an agent the author picked edit the author\'s draft, and only that agent (Scott, 2026-11-22)', async () => {
+    const run = (holder: AppHolder, toolName: string, input: unknown, invokedBy?: string) => org.callUserAppTool({ organizationId: ORG_ID, toolName, input, holder, userId: BEN, displayName: 'ben', role: 'member', ...(invokedBy ? { invokedBy } : {}) });
+    await run(ben, 'apps__create_draft', { name: 'shop', label: 'Shopping' });
+    // Claiming to act for Ben is not enough: the agent edits only what Ben let it edit.
+    expect(await run(bot, 'apps__write_file', { app: 'shop', path: 'ui/a.html', text: 'x' }, ACCT.ben)).toMatchObject({ ok: false });
+    expect(await org.addAppDraftEditor('shop', ACCT.ben, ACCT.bot)).toEqual({ ok: true, value: undefined });
+    expect(await run(bot, 'apps__write_file', { app: 'shop', path: 'ui/a.html', text: 'from bot' })).toMatchObject({ ok: true, result: { author: ACCT.ben } });
+    expect(await run(ben, 'apps__read_file', { app: 'shop', path: 'ui/a.html' })).toEqual({ ok: true, result: 'from bot' });
+    const listed = await run(bot, 'apps__list_drafts', {});
+    expect(listed.ok && (listed.result as { drafts: { name: string; author: string }[] }).drafts).toEqual([expect.objectContaining({ name: 'shop', author: ACCT.ben })]);
+    expect((await org.getAppDraft('shop', ACCT.ben))).toMatchObject({ ok: true, value: { editors: [{ account: ACCT.bot, name: expect.any(String) }] } });
+    // With a draft of its own by the same name, the asker's is the one it works on; with no asker, it must say whose.
+    await run(bot, 'apps__create_draft', { name: 'shop', label: 'Bot shop' });
+    expect(await run(bot, 'apps__read_file', { app: 'shop', path: 'ui/a.html' })).toMatchObject({ ok: false, error: expect.stringContaining('name one as owner') });
+    expect(await run(bot, 'apps__read_file', { app: 'shop', path: 'ui/a.html' }, ACCT.ben)).toEqual({ ok: true, result: 'from bot' });
+    expect(await run(bot, 'apps__check_draft', { app: 'shop', owner: ACCT.bot })).toMatchObject({ ok: true, result: { author: ACCT.bot, label: 'Bot shop' } });
+    expect(await run(bot, 'apps__check_draft', { app: 'shop', owner: ACCT.ann })).toMatchObject({ ok: false });
+    // The author takes it back.
+    await org.removeAppDraftEditor('shop', ACCT.ben, ACCT.bot);
+    expect(await run(bot, 'apps__read_file', { app: 'shop', path: 'ui/a.html' }, ACCT.ben)).toMatchObject({ ok: false });
+    // Ben's own building is unchanged by it all.
+    expect(await run(ben, 'apps__check_draft', { app: 'shop' })).toMatchObject({ ok: true, result: { author: ACCT.ben, editors: [] } });
+  });
 });
