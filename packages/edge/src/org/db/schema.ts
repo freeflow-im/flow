@@ -948,3 +948,18 @@ export const userAppDraftFiles = sqliteTable(
   },
   (t) => [primaryKey({ columns: [t.name, t.author, t.path] })],
 );
+
+/**
+ * The agents that may edit a person's draft besides its author (§9.6, Scott 2026-11-22): the agents the author picked in the
+ * Build page's panel. `editor` is the agent's account.
+ */
+export const userAppDraftEditors = sqliteTable(
+  'user_app_draft_editors',
+  {
+    name: text('name').notNull(),
+    author: text('author').notNull(),
+    editor: text('editor').notNull(),
+    addedAt: integer('added_at').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.name, t.author, t.editor] }), index('user_app_draft_editors_editor').on(t.editor)],
+);

@@ -2178,3 +2178,14 @@ one-recipient MCP correction).
 - **An alert goes only to the agent's owner or the person who asked** (operator ruling): the in-app assistant's
   person, a personal agent's sponsor, or the person whose request started a shared agent's turn (who must share a
   channel with it), else its owner. The tool names no recipient. Telling other members is a Chat message.
+
+## 2026-11-22 — Agents picked in the Build page edit the author's draft (`docs/specs/user-apps.md` §9.6)
+
+- **Any agent the author picks can edit the author's app** (operator ruling, Scott): a shared agent picked in the
+  Build page's panel and asked about the draft open there becomes an editor of that draft. Before this, a shared agent
+  only ever edited its own copy, so the author's preview never showed its work.
+- **Only the author's own signed-in turn grants it.** The grant is made by the Worker when the author sends the turn,
+  never from an agent's claim of who asked (`x-flow-invoked-by` is a claim, so it only picks among drafts the agent
+  may already edit). The author sees the editors on the Build page and can remove one.
+- **An editor tries the draft with its own access, not the author's.** Its dev-install calls carry the editor's ticket,
+  so an agent never reaches the author's data through an app it edits (§9.3, §11).

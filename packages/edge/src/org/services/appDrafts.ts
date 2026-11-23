@@ -1,5 +1,5 @@
 // Apps being built in the suite (docs/specs/user-apps.md §9.6): one draft per app and author, its files kept here as they
-// change. A draft runs nowhere until its author tries it (a dev install, §9.3) or publishes it as a version an owner or
+// change. The author may let agents edit it too (its editors: the agents picked in the Build page's panel). A draft runs nowhere until its author tries it (a dev install, §9.3) or publishes it as a version an owner or
 // admin installs. These functions run inside the Org object's database scope (withDb).
 import { and, eq } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
@@ -8,7 +8,7 @@ import { db, schema } from '../db/index.js';
 import { decryptBody, encryptBody } from '../crypto/index.js';
 import { ApiError, badRequest, notFound } from '../../errors';
 
-const { userAppDrafts, userAppDraftFiles } = schema;
+const { userAppDrafts, userAppDraftFiles, userAppDraftEditors, workspaceMembers, users } = schema;
 
 export const MANIFEST_FILE = 'freeflow-app.json';
 /** A draft's files: the manifest and a version's files (checkHostedFiles says which those are). */
@@ -23,6 +23,10 @@ const dec = new TextDecoder();
 export interface AppDraftDTO {
   name: string;
   label: string;
+  /** The author's account: whose draft it is (an editor's tools may name it as `owner`). */
+  author: string;
+  /** The agents that may edit it besides its author: their accounts and names. */
+  editors: { account: string; name: string }[];
   files: Record<string, number>;
   /** What stands between the draft and a version: the manifest's and the files' problems. Empty when it may be published. */
   problems: string[];
@@ -138,11 +142,19 @@ async function draftRow(name: string, author: string) {
   return row;
 }
 
-function toDTO(row: typeof userAppDrafts.$inferSelect, files: Record<string, Uint8Array>): AppDraftDTO {
+async function editorsOf(name: string, author: string): Promise<{ account: string; name: string }[]> {
+  const rows = await db.select({ account: userAppDraftEditors.editor, name: users.displayName }).from(userAppDraftEditors)
+    .leftJoin(workspaceMembers, eq(workspaceMembers.accountId, userAppDraftEditors.editor))
+    .leftJoin(users, eq(users.id, workspaceMembers.userId))
+    .where(and(eq(userAppDraftEditors.name, name), eq(userAppDraftEditors.author, author)));
+  return rows.map((r) => ({ account: r.account, name: r.name ?? 'An agent' })).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function toDTO(row: typeof userAppDrafts.$inferSelect, files: Record<string, Uint8Array>, editors: { account: string; name: string }[]): AppDraftDTO {
   let label = row.name;
   try { label = (JSON.parse(dec.decode(files[MANIFEST_FILE] ?? new Uint8Array())) as { label?: string }).label ?? row.name; } catch { /* the name */ }
   return {
-    name: row.name, label, files: Object.fromEntries(Object.entries(files).map(([p, b]) => [p, b.byteLength])), problems: draftProblems(files),
+    name: row.name, label, author: row.author, editors, files: Object.fromEntries(Object.entries(files).map(([p, b]) => [p, b.byteLength])), problems: draftProblems(files),
     devHost: row.devHost, createdAt: new Date(row.createdAt).toISOString(), updatedAt: new Date(row.updatedAt).toISOString(),
   };
 }
@@ -151,12 +163,58 @@ function toDTO(row: typeof userAppDrafts.$inferSelect, files: Record<string, Uin
 export async function listDrafts(author: string): Promise<AppDraftDTO[]> {
   const rows = await db.select().from(userAppDrafts).where(eq(userAppDrafts.author, author));
   const out: AppDraftDTO[] = [];
-  for (const row of rows.sort((a, b) => b.updatedAt - a.updatedAt)) out.push(toDTO(row, await filesOf(row.name, author)));
+  for (const row of rows.sort((a, b) => b.updatedAt - a.updatedAt)) out.push(toDTO(row, await filesOf(row.name, author), await editorsOf(row.name, author)));
   return out;
 }
 
 export async function getDraft(name: string, author: string): Promise<AppDraftDTO> {
-  return toDTO(await draftRow(name, author), await filesOf(name, author));
+  return toDTO(await draftRow(name, author), await filesOf(name, author), await editorsOf(name, author));
+}
+
+/** The drafts an account may edit: its own and those whose authors let it edit them, newest change first. */
+export async function draftsEditableBy(account: string): Promise<AppDraftDTO[]> {
+  const shared = await db.select({ name: userAppDraftEditors.name, author: userAppDraftEditors.author }).from(userAppDraftEditors).where(eq(userAppDraftEditors.editor, account));
+  const out = await listDrafts(account);
+  for (const s of shared) out.push(await getDraft(s.name, s.author));
+  return out.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+/** Whether the account may edit the draft: its author, or one of its editors. */
+export async function mayEditDraft(name: string, author: string, account: string): Promise<boolean> {
+  if (account === author) return true;
+  const [row] = await db.select({ editor: userAppDraftEditors.editor }).from(userAppDraftEditors)
+    .where(and(eq(userAppDraftEditors.name, name), eq(userAppDraftEditors.author, author), eq(userAppDraftEditors.editor, account))).limit(1);
+  return !!row;
+}
+
+/**
+ * Whose draft of `name` an account's building tools act on. `owner` names it; without it, the one draft of that name the
+ * account may edit, and among several the one of `prefer` (the person who asked the agent, when they are an author).
+ */
+export async function draftAuthorFor(name: string, account: string, opts: { owner?: string; prefer?: string | null } = {}): Promise<string> {
+  const own = await db.select({ author: userAppDrafts.author }).from(userAppDrafts).where(and(eq(userAppDrafts.name, name), eq(userAppDrafts.author, account)));
+  const shared = await db.select({ author: userAppDraftEditors.author }).from(userAppDraftEditors).where(and(eq(userAppDraftEditors.name, name), eq(userAppDraftEditors.editor, account)));
+  const authors = [...own.map((r) => r.author), ...shared.map((r) => r.author)];
+  if (opts.owner) {
+    if (!authors.includes(opts.owner)) throw notFound(`you may not edit a draft of "${name}" by ${opts.owner}`);
+    return opts.owner;
+  }
+  if (authors.length === 1) return authors[0]!;
+  if (!authors.length) throw notFound(`you have no draft of "${name}"`);
+  if (opts.prefer && authors.includes(opts.prefer)) return opts.prefer;
+  throw badRequest('ambiguous', `you may edit several drafts of "${name}" (authors ${authors.join(', ')}): name one as owner`);
+}
+
+/** Lets an agent edit the author's draft (the author picked it in the Build page's panel). */
+export async function addDraftEditor(name: string, author: string, editor: string): Promise<void> {
+  await draftRow(name, author);
+  if (editor === author) return;
+  await db.insert(userAppDraftEditors).values({ name, author, editor, addedAt: Date.now() }).onConflictDoNothing();
+}
+
+export async function removeDraftEditor(name: string, author: string, editor: string): Promise<void> {
+  await draftRow(name, author);
+  await db.delete(userAppDraftEditors).where(and(eq(userAppDraftEditors.name, name), eq(userAppDraftEditors.author, author), eq(userAppDraftEditors.editor, editor)));
 }
 
 /**
@@ -213,6 +271,7 @@ export async function deleteDraftFile(name: string, author: string, path: string
 export async function deleteDraft(name: string, author: string): Promise<void> {
   await draftRow(name, author);
   await db.delete(userAppDraftFiles).where(and(eq(userAppDraftFiles.name, name), eq(userAppDraftFiles.author, author)));
+  await db.delete(userAppDraftEditors).where(and(eq(userAppDraftEditors.name, name), eq(userAppDraftEditors.author, author)));
   await db.delete(userAppDrafts).where(and(eq(userAppDrafts.name, name), eq(userAppDrafts.author, author)));
 }
 
