@@ -64,7 +64,7 @@ export function AppsHelpDialog({ onClose }: { onClose(): void }) {
         </div>
         <div className="flex flex-col gap-5 overflow-y-auto px-5 py-4 text-xs leading-relaxed text-ink">
           <Section title="How apps work">
-            <p>An app adds something of your own to FreeFlow: a screen people open from the Apps menu, tools agents can call, or both. FreeFlow runs it for your organization, and its data stays in the organization.</p>
+            <p>Apps let you extend FreeFlow with new custom experiences. Apps are implemented in HTML and JavaScript, and can have a backend with persistent storage. Apps are hosted and executed inside of the FreeFlow system — you don’t host them yourself.</p>
             <p>An app is a few files: <Code>freeflow-app.json</Code> (its name, scopes, tools and events), <Code>server.js</Code> (the code behind the tools and the screen’s routes), <Code>migrations/</Code> (its database tables) and <Code>ui/</Code> (its screen, served from the app’s own origin in a sandboxed frame).</p>
           </Section>
           <Section title="Build one with the app builder">
