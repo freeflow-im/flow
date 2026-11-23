@@ -1,0 +1,1 @@
+ALTER TABLE `meetings` ADD `transcribe_on` integer DEFAULT false NOT NULL;

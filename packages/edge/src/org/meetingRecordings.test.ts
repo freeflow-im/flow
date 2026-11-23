@@ -135,6 +135,16 @@ describe('folder names and the transcript', () => {
     expect(transcriptMarkdown('X', 'd', [])).toContain('_Nothing was said._');
   });
 
+  it('reads RTK\'s real times, clock seconds, from the first line', () => {
+    const md = transcriptMarkdown('Q4', 'd', [
+      { startTime: 1795407727.081, sentence: 'is going well.', peerData: { displayName: 'Scott' } },
+      { startTime: 1795407720.681, sentence: 'Okay, everything', peerData: { displayName: 'Scott' } },
+      { startTime: 1795407795.5, sentence: 'Agreed.', peerData: { displayName: 'Ben' } },
+    ]);
+    expect(md).toContain('**Scott** · 0:00\nOkay, everything is going well.');
+    expect(md).toContain('**Ben** · 1:14\nAgreed.');
+  });
+
   it('reads RTK\'s transcript as JSON or as its header-less CSV, and an empty file as nothing said', () => {
     const csv = '"1000","peer-1","user-1","cpi-1","Ann Lee","Hello, everyone"\n"3000","peer-2","user-2","cpi-2","Ben ""B"" Kim","Hi Ann"\n';
     expect(parseTranscript(csv)).toEqual([
@@ -148,16 +158,15 @@ describe('folder names and the transcript', () => {
 });
 
 describe('starting and stopping', () => {
-  it('lets any member in the room record: transcribing is turned on, then RTK records one H.264 file', async () => {
+  it('lets any member in the room record: RTK records one H.264 file (the room is transcribed from its creation)', async () => {
     fakeDocs();
     const m = await room();
+    expect(calls.find((c) => c.method === 'POST' && c.url === `${BASE}/meetings`)?.body).toMatchObject({ transcribe_on_end: true });
     const r = await withDb(db, () => startRecording(m.code, BEN));
     expect(r).toEqual({ ok: true, recordingId: 'rec-1' });
-    const patch = calls.find((c) => c.method === 'PATCH');
     const post = calls.find((c) => c.method === 'POST' && c.url === `${BASE}/recordings`);
-    expect(patch?.body).toEqual({ transcribe_on_end: true });
     expect(post?.body).toMatchObject({ meeting_id: 'rtk-m1', video_config: { codec: 'H264' } });
-    expect(calls.indexOf(patch!)).toBeLessThan(calls.indexOf(post!));
+    expect(calls.some((c) => c.method === 'PATCH')).toBe(false);
     const row = sqlite.prepare('SELECT session_id, started_by, status, folder FROM meeting_recordings WHERE id = ?').get('rec-1') as Record<string, string>;
     expect(row).toMatchObject({ session_id: 'sess-1', started_by: BEN, status: 'INVOKED' });
     expect(row.folder).toMatch(/^Meetings\/\d{4}-\d{2}-\d{2} Weekly planning$/);
@@ -242,7 +251,7 @@ describe('after the meeting', () => {
     expect(saved[0]!.input.markdown?.title).toBe('Transcript');
     expect(saved[0]!.input.markdown?.text).toContain('**Ann Lee** · 0:01\nHello everyone. Shall we start?');
     expect(sqlite.prepare('SELECT transcript_url FROM meeting_recordings WHERE id = ?').get('rec-1')).toEqual({ transcript_url: '/docs/md/s1' });
-    expect(calls.filter((c) => c.method === 'PATCH').at(-1)?.body).toEqual({ transcribe_on_end: false });
+    expect(calls.some((c) => c.method === 'PATCH')).toBe(false);
   });
 
   it('drops a transcript of a session nobody recorded, and recordings that are not ours', async () => {
@@ -253,7 +262,7 @@ describe('after the meeting', () => {
     expect(due()).toBe(false);
     await withDb(db, () => saveDueMeetingFiles());
     expect(saved).toHaveLength(0);
-    expect(calls.filter((c) => c.method === 'PATCH').at(-1)?.body).toEqual({ transcribe_on_end: false });
+    expect(calls.some((c) => c.method === 'PATCH')).toBe(false);
   });
 
   it('a copy that fails is logged and given up, not retried forever', async () => {

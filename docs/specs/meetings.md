@@ -54,6 +54,7 @@ webhooks, recording, Meeting AI, Agent Participant and its capability matrix, au
 | R5 | **Huddles only in rooms of 6 or fewer people** (channel, DM or group DM). Bigger rooms start a meeting from Meet. |
 | R6 | **Delete agent voice calls in DM huddles** (the bridge's LiveKit voice session). It never worked well; not a "later" item. |
 | R7 | **Recording and transcripts off by default**, one click to turn on, a badge for everyone while on (was P1). |
+| R7a | **RTK transcribes every session; only a recorded session's transcript is kept** (2026-11-23, amends R7). RTK makes a post-meeting transcript only when `transcribe_on_end` was on before the session began (tested: turning it on at Record is ignored), so every room is created with it on (older rooms at their next join). Recording stays opt-in; an unrecorded session's transcript is dropped (RTK keeps its copy 7 days). |
 | R8 | **Anyone in the meeting can turn recording on** (2026-11-22). Recording always makes a transcript too; there is no separate transcribe button. |
 | R9 | **Recordings live in Docs** (2026-11-22): a global **Meetings** folder in the organization's Organization files, one folder per meeting session, holding the recording (video + audio) and the transcript. Every meeting's folder is open to the whole organization, private huddles included (2026-11-22: Docs cannot keep an attendees-only folder inside Organization files). |
 | R10 | **Summaries come from agents, in phase 5** (2026-11-22): an agent can join a meeting, turn recording on itself, and afterwards write the meeting notes into the meeting's folder. Phase 4 makes no summary. |
@@ -133,7 +134,7 @@ Still open (proposed):
   in a session. It holds `Recording.mp4` (everyone's video and audio in one file) and `Transcript` (a Markdown doc:
   speaker, time, words), and in phase 5 the agent's `Notes`. Files stay until someone deletes them.
   A second recording in one session goes in the same folder (`Recording 2.mp4`); another session with the same date
-  and title gets its own folder (`… (2)`). RTK's transcript covers the whole session, from when it was turned on.
+  and title gets its own folder (`… (2)`). RTK's transcript covers the whole session (R7a). Its JSON times are clock seconds, not the documented offsets.
   Every member of the organization can open every meeting's folder, private huddles included. The person who pressed
   Record owns the files.
 - A **meeting page** in Meet's "Past" list: date, length, who came, links to the folder's files, and the chat.
@@ -325,7 +326,7 @@ by hosts; RTK enforces the preset, the webhooks tell us the result.
   "Live now", Home). Replaces `huddle.updated`.
 - `meeting.participantJoined` / `Left` → roster, same event.
 - Recording starts with RTK's Start Recording REST API from our server (`POST /v1/meetings/:id/recording`, any
-  member in the session, R8), composite mode, with `transcribe_on_end` set on the meeting. RTK's `summarize_on_end`
+  member in the session, R8), composite mode. `transcribe_on_end` is on for every room from its creation (R7a). RTK's `summarize_on_end`
   is not used (R10).
 - `recording.statusUpdate` `UPLOADED` → `Recording.mp4` in the meeting's folder (R9). Configure RTK custom storage to
   our R2 bucket so nothing is copied; otherwise copy (RTK deletes after 7 days).
