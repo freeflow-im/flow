@@ -22,10 +22,10 @@ the PR that changes it.
 
 1. Operator: release macOS and iOS (§7 step 2), then remove the `LIVEKIT_*` Worker secrets and close LiveKit Cloud
    (§7 step 3).
-2. Phase 4, after the meeting (recording, transcript, summary, meeting page). Waiting on four answers: who can turn
-   recording on (proposed: the host, per meeting); transcript a separate button (proposed: yes); same buttons in
-   huddles (proposed: yes); how long recordings are kept (proposed: until deleted). Outputs go to the meeting's chat.
-3. Phase 5, agents as note takers. Phase 6, native (iOS on RTK, a Meet window on macOS).
+2. Phase 4, recording (R8, R9): anyone in the meeting turns it on; the recording (video + audio) and the transcript
+   go to a meeting folder under **Meetings** in Organization files.
+3. Phase 5, agents (R10): an agent joins, turns recording on itself, and afterwards writes the meeting notes (summary)
+   into the same folder. Phase 6, native (iOS on RTK, a Meet window on macOS).
 4. Smaller items:
    - Turnstile on Meet guest join (Chat visitor join has it).
    - "Make a new link" for a meeting; more than one host per meeting.
@@ -54,6 +54,9 @@ webhooks, recording, Meeting AI, Agent Participant and its capability matrix, au
 | R5 | **Huddles only in rooms of 6 or fewer people** (channel, DM or group DM). Bigger rooms start a meeting from Meet. |
 | R6 | **Delete agent voice calls in DM huddles** (the bridge's LiveKit voice session). It never worked well; not a "later" item. |
 | R7 | **Recording and transcripts off by default**, one click to turn on, a badge for everyone while on (was P1). |
+| R8 | **Anyone in the meeting can turn recording on** (2026-11-22). Recording always makes a transcript too; there is no separate transcribe button. |
+| R9 | **Recordings live in Docs** (2026-11-22): a global **Meetings** folder in the organization's Organization files, one folder per meeting session, holding the recording (video + audio) and the transcript. Every meeting's folder is open to the whole organization, private huddles included (2026-11-22: Docs cannot keep an attendees-only folder inside Organization files). |
+| R10 | **Summaries come from agents, in phase 5** (2026-11-22): an agent can join a meeting, turn recording on itself, and afterwards write the meeting notes into the meeting's folder. Phase 4 makes no summary. |
 
 Still open (proposed):
 
@@ -117,7 +120,8 @@ Still open (proposed):
     posts into the channel thread under the huddle card, so nothing is split between two chats.
   - **People**: who is in; invited and not here (with **Ring**); guests labelled. Hosts can mute, remove, make host.
   - **Notes**: the live transcript when transcribing is on.
-- **More** (hosts): record, transcribe, lock, copy link, end for everyone.
+- **Record** (anyone in the meeting, R8): starts recording and transcription; anyone can stop it.
+- **More** (hosts): lock, copy link, end for everyone.
 - **Leave** (just you) or **End for everyone** (hosts; asks first). A huddle with no one left ends by itself.
 - **Keep using the suite**: the meeting keeps running when you go to Chat, Mail or Docs. A **mini window** shows the
   speaker with mute, camera and leave; clicking it returns to Meet. This takes the place of today's `HuddleMiniBar`.
@@ -125,18 +129,30 @@ Still open (proposed):
 
 ### 1.5 After the meeting
 
-- A **meeting page** in Meet's "Past" list: date, length, who came; and, when they were on, **summary**,
-  **transcript** (search, speaker names, times), **recording**, and the chat.
+- **The meeting's folder** (R9): `Meetings/<date> <title>/` in Organization files, made when recording first starts
+  in a session. It holds `Recording.mp4` (everyone's video and audio in one file) and `Transcript` (a Markdown doc:
+  speaker, time, words), and in phase 5 the agent's `Notes`. Files stay until someone deletes them.
+  A second recording in one session goes in the same folder (`Recording 2.mp4`); another session with the same date
+  and title gets its own folder (`… (2)`). RTK's transcript covers the whole session, from when it was turned on.
+  Every member of the organization can open every meeting's folder, private huddles included. The person who pressed
+  Record owns the files.
+- A **meeting page** in Meet's "Past" list: date, length, who came, links to the folder's files, and the chat.
 - The summary goes back where the meeting came from: the Chat huddle card, the calendar event (a link in its
   description).
 - Suite search (⌘K) and the assistant can find transcripts and summaries.
 - Who can open the meeting page: people who were invited or who attended (members). Guests cannot.
 
-### 1.6 Agents
+### 1.6 Agents (phase 5)
 
 - In a DM or group DM huddle, agents who are members join as **note takers**; in any meeting a host can add one
-  ("Add an agent" in People). The agent shows as "Agent" in People, reads the live transcript and the chat, answers
-  @mentions in the chat, and writes its notes to the meeting page at the end.
+  ("Add an agent" in People), and a person can send their own agent. The agent shows as "Agent" in People, reads the
+  live transcript and the chat, and answers @mentions in the chat.
+- An agent can **turn recording on itself** (R10). RTK agents have no meeting controls, so the agent asks our server,
+  which starts it with the REST API; everyone sees the same badge.
+- At the end the agent reads the transcript and writes **Notes** (a summary and action items, as a Markdown doc) into
+  the meeting's folder, and links them in the meeting's chat.
+- RTK agents cannot hear, see or speak (capability matrix, 2026-11-22: audio and video "No (Planned)"); they work from
+  the transcript.
 - **Deleted (R6)**: talking to an agent by voice in a DM huddle (the bridge's LiveKit voice session). The iOS
   one-to-one agent call (`AgentCallCoordinator`) is not affected: it uses on-device speech, not LiveKit.
 
@@ -303,10 +319,13 @@ by hosts; RTK enforces the preset, the webhooks tell us the result.
 - `meeting.started` / `meeting.ended` → session row; `meeting.updated` on the event bus (Chat card and header, Meet
   "Live now", Home). Replaces `huddle.updated`.
 - `meeting.participantJoined` / `Left` → roster, same event.
-- `recording.statusUpdate` `UPLOADED` → recording in our R2 (configure RTK storage to our bucket; otherwise copy —
-  RTK deletes after 7 days).
-- `meeting.transcript`, `meeting.summary` → download (short-lived URL) to R2, index in search, post to the huddle card /
-  calendar event.
+- Recording starts with RTK's Start Recording REST API from our server (`POST /v1/meetings/:id/recording`, any
+  member in the session, R8), composite mode, with `transcribe_on_end` set on the meeting. RTK's `summarize_on_end`
+  is not used (R10).
+- `recording.statusUpdate` `UPLOADED` → `Recording.mp4` in the meeting's folder (R9). Configure RTK custom storage to
+  our R2 bucket so nothing is copied; otherwise copy (RTK deletes after 7 days).
+- `meeting.transcript` → download (short-lived URL), turn RTK's JSON into the `Transcript` Markdown doc in the same
+  folder (so Docs search indexes it), and post a link in the meeting's chat.
 - `meeting.chatSynced` → only for non-huddle meetings (huddle chat already is Chat messages).
 - RTK is the source of truth for who is in (as ADR 0002 says of LiveKit); our roster is a cache, repaired from RTK's
   active session API when a live meeting is read.
@@ -438,9 +457,10 @@ RTK file retention (7 days).
      composer, as the visitor page reuses them), for members and guests alike. A dot on the tab for new messages.
    - Native apps: no Meetings list yet (Parity line); a meeting channel's messages and mentions still arrive, and
      opening one from a mention shows the channel.
-4. **After the meeting** — recording to R2, transcript, summary, meeting page, search, summary back to Chat and
-   Calendar, Save as doc.
-5. **Agents** — MeetingAgent DO, note takers, bridge events and tools.
+4. **Recording** (R8, R9) — a Record button for anyone in the meeting, badge for all, recording and transcript into
+   `Meetings/<date> <title>/` in Organization files, links in the meeting's chat, meeting page in "Past".
+5. **Agents** (R10) — MeetingAgent DO, note takers, an agent turns recording on, the agent writes `Notes` into the
+   meeting's folder; bridge events and tools.
 6. **Native** — iOS RTK; macOS Meet window; then step 3 of §7 (remove LiveKit for good).
 
 Later: breakout rooms (connected meetings); webinars (stage); livestream;

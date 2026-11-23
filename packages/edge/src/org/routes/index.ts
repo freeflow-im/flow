@@ -79,6 +79,7 @@ import * as ce from '../services/channelEmoji.js';
 import * as hd from '../services/huddles.js';
 import * as hi from '../services/huddleInvites.js';
 import * as mt from '../services/meetings.js';
+import * as mr from '../services/meetingRecordings.js';
 import * as msg from '../services/messages.js';
 import { searchMessages } from '../services/search.js';
 import { parseSearch } from '@flow/shared/search';
@@ -733,6 +734,16 @@ export function registerRoutes(app: FastifyInstance): void {
     return reply.send(join);
   });
 
+  // Recording (phase 4, ruling R8): anyone in the room who is a member starts or stops it; the files go to Docs.
+  app.post('/v1/meetings/:id/recording', { preHandler: requireAuth }, async (req) => {
+    const { id } = req.params as { id: string };
+    return mr.startRecording(id, req.user.id);
+  });
+  app.delete('/v1/meetings/:id/recording', { preHandler: requireAuth }, async (req) => {
+    const { id } = req.params as { id: string };
+    return mr.stopRecording(id, req.user.id);
+  });
+
   app.post('/v1/meetings/:id/leave', { preHandler: requireAuth }, async (req) => {
     const { id } = req.params as { id: string };
     await mt.leaveMeeting(id, req.user.id);
@@ -740,7 +751,8 @@ export function registerRoutes(app: FastifyInstance): void {
   });
 
   // RealtimeKit's webhook, already verified by the Worker (routes/org.ts) against RealtimeKit's published key, which
-  // also found this organization by the meeting's RTK id. Not a Flow user, so no requireAuth; it only moves huddle rosters.
+  // also found this organization by the meeting's RTK id. Not a Flow user, so no requireAuth. It moves huddle rosters and
+  // notes recordings and transcripts for the copy to Docs.
   app.post('/v1/rtk/webhook', async (req) => {
     if (!req.headers['x-flow-rtk-verified']) throw new ApiError(401, 'invalid_webhook', 'invalid webhook');
     await mt.handleRtkWebhook((req.body ?? {}) as Parameters<typeof mt.handleRtkWebhook>[0]);

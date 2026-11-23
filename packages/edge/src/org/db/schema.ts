@@ -756,6 +756,38 @@ export const meetingParticipants = sqliteTable(
   (t) => [primaryKey({ columns: [t.meetingId, t.userId] })],
 );
 
+/**
+ * A meeting's recordings (Meet phase 4, docs/specs/meetings.md R8, R9): one row per RTK recording, started by anyone in
+ * the room. When RTK has uploaded it, the video goes to Docs (Organization files, `Meetings/<date> <title>/`), and the
+ * session's transcript joins it there when RTK sends it.
+ */
+export const meetingRecordings = sqliteTable(
+  'meeting_recordings',
+  {
+    /** RTK's recording id. */
+    id: text('id').primaryKey(),
+    meetingId: text('meeting_id').notNull().references(() => meetings.id, { onDelete: 'cascade' }),
+    /** RTK's session id, which the transcript webhook names; known once RTK reports it. */
+    sessionId: text('session_id'),
+    /** Who pressed Record: the owner of the files in Docs. */
+    startedBy: text('started_by').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    startedAt: integer('started_at', { mode: 'timestamp_ms' }).notNull(),
+    /** RTK's status: INVOKED, RECORDING, UPLOADING, UPLOADED, ERRORED, PAUSED; and ours once saved: SAVED, SAVE_FAILED. */
+    status: text('status').notNull(),
+    /** The Docs folder (`Meetings/2026-11-22 Weekly planning`), fixed when the recording starts. */
+    folder: text('folder').notNull(),
+    /** RTK's short-lived address of the uploaded file, kept until the alarm has copied it to Docs. */
+    downloadUrl: text('download_url'),
+    /** The video's address in Docs, once copied. */
+    videoUrl: text('video_url'),
+    /** RTK's short-lived address of the session's transcript (on the session's first recording), until it is saved. */
+    transcriptDownloadUrl: text('transcript_download_url'),
+    /** The transcript's address in Docs, once saved. */
+    transcriptUrl: text('transcript_url'),
+  },
+  (t) => [index('meeting_recordings_meeting_idx').on(t.meetingId, t.startedAt), index('meeting_recordings_session_idx').on(t.sessionId)],
+);
+
 export const huddleInviteTargets = sqliteTable(
   'huddle_invite_targets',
   {

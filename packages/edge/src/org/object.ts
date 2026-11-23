@@ -60,6 +60,8 @@ import { isHosted, parseAppToolName, type AppUse, type InstalledAppDTO, type Use
 const ASSISTANT_PROMPTS_KEY = 'assistant-prompts';
 import { resolveInOrg, type OrgReferenceAnswer } from './services/references';
 import { hostedMailEnabled, type MailProviderEnv } from '../mailprovider/index';
+import { MEETING_FILES_DUE_SQL, saveDueMeetingFiles, setMeetingDocs } from './services/meetingRecordings';
+import type { Docs } from '../docs/object';
 
 /** IMAGES (Cloudflare Images) resizes preview images and thumbnails; without it they are kept as they came (lib/images.ts). */
 /** EVENTS is the organization's event log (events/object.ts), which every socket event but presence and typing also goes to. */
@@ -67,6 +69,8 @@ import { hostedMailEnabled, type MailProviderEnv } from '../mailprovider/index';
 export type OrgEnv = StorageEnv & MailProviderEnv & {
   FLOW_DATA_KEY?: string; DIRECTORY: DurableObjectNamespace<Directory>; IMAGES?: ImagesBinding; EVENTS?: DurableObjectNamespace<Events>;
   PROVISIONING?: Queue<unknown>; MAIL_RETENTION_DAYS?: string; ASSISTANT?: DurableObjectNamespace<Assistant>;
+  /** The organizations' Docs objects (docs/object.ts): Meet saves recordings and transcripts there (phase 4). */
+  DOCS?: DurableObjectNamespace<Docs>;
 } & HostedEnv;
 
 const DAY_MS = 86_400_000;
@@ -159,6 +163,8 @@ export class Org extends DurableObject<OrgEnv> {
     setStorageEnv(env);
     setImagesEnv(env);
     setMailEnv(env as never);
+    const docs = env.DOCS;
+    setMeetingDocs(docs ? (orgId) => docs.get(docs.idFromName(orgId)) : null);
     this.db = openDb(ctx.storage);
     const sql = ctx.storage.sql;
     sql.exec('CREATE TABLE IF NOT EXISTS _migrations (n INTEGER PRIMARY KEY)');
@@ -2123,7 +2129,9 @@ export class Org extends DurableObject<OrgEnv> {
       visitorSweep = (await this.ctx.storage.get<number>(VISITOR_SWEEP_KEY)) ?? null;
       if (visitorSweep === null) await this.ctx.storage.put(VISITOR_SWEEP_KEY, (visitorSweep = Date.now() + DAY_MS));
     }
-    const due = [scheduled, push, sweep, visitorSweep].filter((n): n is number => n !== null);
+    // A meeting's recording or transcript RealtimeKit has made ready, for the copy to Docs (Meet phase 4): now.
+    const meetingFiles = this.ctx.storage.sql.exec(MEETING_FILES_DUE_SQL).toArray().length ? Date.now() : null;
+    const due = [scheduled, push, sweep, visitorSweep, meetingFiles].filter((n): n is number => n !== null);
     if (!due.length) await this.ctx.storage.deleteAlarm();
     else await this.ctx.storage.setAlarm(Math.min(...due));
   }
@@ -2138,6 +2146,9 @@ export class Org extends DurableObject<OrgEnv> {
     await this.flushOutbox(null);
     await this.sweepMailboxes().catch((err) => console.error(`[provisioning] sweep: ${(err as Error).message}`));
     await this.sweepVisitors().catch((err) => console.error(`[visitors] sweep: ${(err as Error).message}`));
+    await this.scoped(() => saveDueMeetingFiles()).catch((err) => console.error(`[meet] recordings: ${(err as Error).message}`));
+    await this.logging;
+    await this.flushOutbox(null);
     await this.armAlarm();
   }
 

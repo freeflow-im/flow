@@ -41,7 +41,7 @@ function persistTickets(hub: FileHub): void {
  * The directory's people are mirrored into the object's `users` as they are seen (server/app.ts does the same for /api), so
  * that what the agent makes keeps its foreign key to its owner. Someone who never opened Docs in this organization has none.
  */
-function mirrorUser(userId: string, email: string): void {
+export function mirrorUser(userId: string, email: string): void {
   try {
     docsContext().sql.exec("INSERT INTO users (id, email, password_hash, created_at) VALUES (?, ?, '', ?) ON CONFLICT(id) DO UPDATE SET email = excluded.email WHERE email <> excluded.email", userId, email, new Date().toISOString());
   } catch (err) {

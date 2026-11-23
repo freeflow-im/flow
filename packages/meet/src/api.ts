@@ -35,6 +35,9 @@ export const api = {
   joinAsGuest: (code: string, name: string) => call<MeetingGuestJoinDTO>('POST', `/v1/meetings/${code}/guest`, { name }),
   setLocked: (ref: string, locked: boolean) => call<MeetingDTO>('PATCH', `/v1/meetings/${ref}`, { locked }),
   leave: (ref: string) => call<{ ok: true }>('POST', `/v1/meetings/${ref}/leave`, {}),
+  /** Start or stop recording (anyone in the room who is a member, ruling R8). The room hears the change from RealtimeKit. */
+  startRecording: (ref: string) => call<{ ok: true }>('POST', `/v1/meetings/${ref}/recording`, {}),
+  stopRecording: (ref: string) => call<{ ok: true }>('DELETE', `/v1/meetings/${ref}/recording`),
   /** The tab is closing: a request that outlives the page (no answer is read). */
   leaveOnClose: (ref: string) => navigator.sendBeacon(`/v1/meetings/${ref}/leave`),
   /** The person's events between two times, from Calendar's API, in this organization (Meet home's Today list). */

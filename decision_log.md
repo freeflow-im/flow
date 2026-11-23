@@ -2179,6 +2179,15 @@ one-recipient MCP correction).
   person, a personal agent's sponsor, or the person whose request started a shared agent's turn (who must share a
   channel with it), else its owner. The tool names no recipient. Telling other members is a Chat message.
 
+## 2026-11-22 — Meet recording and agents (`docs/specs/meetings.md` R8–R10)
+
+- **Anyone in a meeting can turn recording on** (operator ruling). Recording always makes a transcript too.
+- **Recordings and transcripts are stored in Docs**, in a global **Meetings** folder in Organization files, one folder
+  per meeting session (operator ruling). This is Meet phase 4.
+- **Every meeting's folder is open to the whole organization, private huddles included** (operator ruling). An
+  attendees-only folder was asked for first, but Docs gives every folder under Organization files the `org` grant.
+- **Summaries come from agents in phase 5** (operator ruling): an agent joins, turns recording on itself, and
+  afterwards writes the meeting notes into the meeting's folder. RTK's own summary is not used.
 ## 2026-11-22 — Agents picked in the Build page edit the author's draft (`docs/specs/user-apps.md` §9.6)
 
 - **Any agent the author picks can edit the author's app** (operator ruling, Scott): a shared agent picked in the
