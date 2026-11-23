@@ -10,6 +10,7 @@ import { SuiteAssistantColumn } from '@flow/suite-bar/assistant-chat';
 import { AppIcon, intent } from '@flow/suite-bar';
 import { appsApi, type AppDraft, type InstalledApp, type ToolAnswer } from '../api';
 import { InstallDialog } from './InstallDialog';
+import { AppsHelpCallout } from './AppsHelp';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const POLL_MS = 3000;
@@ -54,6 +55,7 @@ export function AppsHome({ org, apps, admin }: { org: string; apps: InstalledApp
       <div className="mx-auto flex max-w-3xl flex-col gap-8">
         <section>
           <h1 className="mb-3 text-lg font-semibold text-ink">Apps</h1>
+          <div className="mb-4"><AppsHelpCallout /></div>
           {shown.length === 0 && <p className="text-sm text-muted">No apps are installed for you in this organization yet.</p>}
           <ul className="grid gap-3 sm:grid-cols-2" data-testid="app-list">
             {shown.map((a) => (
