@@ -17,8 +17,9 @@ import type { PublishInput } from '../../events/core.js';
 import { db, schema } from '../db/index.js';
 import { newId } from '../lib/ids.js';
 import { ApiError } from '../lib/errors.js';
-import { meetingRow, requireRoomAccess, rtk, type MeetingRow } from './meetings.js';
+import { meetingRow, pictureOf, requireRoomAccess, rtk, type MeetingRow } from './meetings.js';
 import { config } from '../config.js';
+import { AGENT_AVATAR_PRESETS, agentAvatarUrl } from '@flow/shared/assistant';
 import { meetingDocs, postFileLine, sessionFolder, startRecording } from './meetingRecordings.js';
 
 /** Our RTK preset for agents (scripts/rtk-presets.mjs makes it on each RTK app). */
@@ -59,14 +60,22 @@ export interface MeetingAgentDTO {
   joinedAt: string;
 }
 
+/** An agent with no picture of its own shows one of the preset agent pictures, the same one each time (by its id). */
+export function defaultAgentPicture(agentId: string): string {
+  let h = 0;
+  for (const ch of agentId) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return agentAvatarUrl(AGENT_AVATAR_PRESETS[h % AGENT_AVATAR_PRESETS.length]!);
+}
+
 const tokenExpiry = () => new Date(Date.now() + TOKEN_TTL_MS).toISOString().replace(/\.\d{3}Z$/, 'Z');
 
 /** The agent as a member of the room's organization, if it may be sent by this person: theirs, or a shared hosted one. */
-async function sendable(m: MeetingRow, userId: string, agentId: string): Promise<{ name: string; accountId: string | null } | null> {
+async function sendable(m: MeetingRow, userId: string, agentId: string): Promise<{ name: string; accountId: string | null; avatarUrl: string | null } | null> {
   const [a] = await db
     .select({
       isAgent: schema.users.isAgent,
       name: schema.users.displayName,
+      avatarUrl: schema.users.avatarUrl,
       kind: schema.workspaceMembers.kind,
       runtime: schema.workspaceMembers.runtime,
       sponsor: schema.workspaceMembers.sponsorUserId,
@@ -77,8 +86,9 @@ async function sendable(m: MeetingRow, userId: string, agentId: string): Promise
     .where(and(eq(schema.workspaceMembers.workspaceId, m.workspaceId), eq(schema.workspaceMembers.userId, agentId)))
     .limit(1);
   if (!a?.isAgent || a.runtime !== 'hosted') return null;
-  if (a.kind === 'personal_agent') return a.sponsor === userId ? { name: a.name, accountId: a.accountId } : null;
-  if (a.kind === 'native' && agentId !== (await hooks?.adminAgentId())) return { name: a.name, accountId: a.accountId };
+  const found = { name: a.name, accountId: a.accountId, avatarUrl: a.avatarUrl ?? null };
+  if (a.kind === 'personal_agent') return a.sponsor === userId ? found : null;
+  if (a.kind === 'native' && agentId !== (await hooks?.adminAgentId())) return found;
   return null;
 }
 
@@ -114,6 +124,8 @@ export async function sendAgent(ref: string, userId: string, agentId: string): P
     preset_name: AGENT_PRESET,
     custom_participant_id: `${AGENT_ID_PREFIX}${agentId}`,
     expires_on: tokenExpiry(),
+    // Its picture on its tile (it sends no video): a public address, as RTK loads it for everyone in the room.
+    ...pictureOf(agent.avatarUrl ?? defaultAgentPicture(agentId)),
   });
   if (!added) throw new ApiError(502, 'meet_upstream', 'The meeting service did not answer');
   const row = { id: newId(), meetingId: m.id, agentId, sentBy: userId, sessionId: session.id, joinedAt: new Date(), leftAt: null, notesUrl: null, endedAt: null };

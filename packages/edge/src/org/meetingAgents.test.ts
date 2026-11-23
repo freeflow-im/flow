@@ -11,7 +11,7 @@ import { withDb, schema, type DB } from './db/index';
 import { createMeeting, handleRtkWebhook, joinMeeting } from './services/meetings';
 import { saveDueMeetingFiles, setMeetingDocs, startRecording, type MeetingDocs } from './services/meetingRecordings';
 import type { PublishInput } from '../events/core';
-import { agentLeft, endOverdueMeetingAgents, ENDED_GRACE_MS, listAgents, recallAgent, saveMeetingNotes, sendAgent, setMeetingAgentHooks, type MeetingAgentHooks } from './services/meetingAgents';
+import { agentLeft, defaultAgentPicture, endOverdueMeetingAgents, ENDED_GRACE_MS, listAgents, recallAgent, saveMeetingNotes, sendAgent, setMeetingAgentHooks, type MeetingAgentHooks } from './services/meetingAgents';
 import { createWorkspace } from './services/workspaces';
 
 const ANN = '00000000-0000-7000-8000-00000000000a';
@@ -122,6 +122,8 @@ describe('sending an agent', () => {
     expect(a).toMatchObject({ agentId: ADA, name: 'Ada', sentBy: ANN });
     const add = calls.find((c) => c.method === 'POST' && c.url === `${BASE}/meetings/rtk-m1/participants` && c.body?.preset_name === 'flow_agent');
     expect(add?.body).toMatchObject({ name: 'Ada', preset_name: 'flow_agent', custom_participant_id: `agent:${ADA}` });
+    // No picture of its own: a preset agent picture, at a public address.
+    expect(String(add?.body?.picture)).toMatch(/\/agent-avatars\/[a-z]+\.svg$/);
     expect(joined).toEqual([{ organizationId: workspaceId, meetingAgentId: a.id, rtkMeetingId: 'rtk-m1', token: 'tok-agent' }]);
     const chat = sqlite.prepare('SELECT chat_channel_id AS id FROM meetings WHERE id = ?').get(m.id) as { id: string };
     expect(sqlite.prepare('SELECT 1 FROM channel_members WHERE channel_id = ? AND user_id = ?').get(chat.id, ADA)).toBeTruthy();
@@ -139,6 +141,16 @@ describe('sending an agent', () => {
       data: { meetingId: m.id, title: 'Weekly planning', sessionId: 'sess-1', sentBy: { accountId: 'acct-ben', name: 'Ben Kim' } },
     });
     expect((published[0]!.data as { link: string }).link).toMatch(new RegExp(`/meet/${m.code}$`));
+  });
+
+  it("gives RTK the agent's own picture as a public link, and the same preset each time when it has none", async () => {
+    const m = await room();
+    sqlite.prepare('UPDATE users SET avatar_url = ? WHERE id = ?').run(`/v1/avatars/${OMNI}-1795412000000.webp`, OMNI);
+    await withDb(db, () => sendAgent(m.code, BEN, OMNI));
+    const add = calls.find((c) => c.method === 'POST' && c.body?.custom_participant_id === `agent:${OMNI}`);
+    expect(String(add?.body?.picture)).toMatch(new RegExp(`/v1/public/avatars/${OMNI}-1795412000000\\.webp\\?s=`));
+    expect(defaultAgentPicture(ADA)).toBe(defaultAgentPicture(ADA));
+    expect(defaultAgentPicture(ADA)).toMatch(/^\/agent-avatars\/[a-z]+\.svg$/);
   });
 
   it('sends your own agents and shared ones; not someone else\'s, nor the admin agent, nor one already there', async () => {

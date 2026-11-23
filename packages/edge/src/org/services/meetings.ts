@@ -19,6 +19,7 @@ import type {
 } from '@flow/shared';
 import { db, schema } from '../db/index.js';
 import { config } from '../config.js';
+import { publicPictureUrl } from '../../avatarLinks.js';
 import { newId } from '../lib/ids.js';
 import { ApiError, badRequest, notFound } from '../lib/errors.js';
 import { isUniqueViolation, requireMembership } from './workspaces.js';
@@ -53,6 +54,12 @@ export function newMeetingCode(random: (n: number) => Uint8Array = (n) => crypto
 }
 
 export type MeetingRow = typeof schema.meetings.$inferSelect;
+
+/** A participant's `picture` for RTK: their picture's public address (avatarLinks.ts), or nothing when they have none. */
+export function pictureOf(avatarUrl: string | null | undefined): { picture: string } | Record<string, never> {
+  const url = publicPictureUrl(avatarUrl, { origin: config.webUrlBase, secret: config.dataKeyInline });
+  return url ? { picture: url } : {};
+}
 type ChannelRow = typeof schema.channels.$inferSelect;
 
 function requireMeet(): { accountId: string; appId: string; token: string } {
@@ -187,8 +194,8 @@ export async function joinMeeting(ref: string, userId: string): Promise<MeetingJ
       preset_name: preset,
       custom_participant_id: userId,
       expires_on: expiresOn,
-      // RTK fetches the picture itself, so only an absolute URL is any use to it.
-      ...(me?.avatarUrl && /^https:\/\//.test(me.avatarUrl) ? { picture: me.avatarUrl } : {}),
+      // RTK draws the picture from this address for everyone in the room, guests too, so it must load without signing in.
+      ...pictureOf(me?.avatarUrl),
     });
     if (!added) throw new ApiError(502, 'meet_upstream', 'The meeting service did not answer');
     authToken = added.token;

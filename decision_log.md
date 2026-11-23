@@ -1,5 +1,13 @@
 # Decision log
 
+## 2026-11-23 — Public links to profile pictures, for Meet tiles (`packages/edge/src/avatarLinks.ts`)
+
+- **An uploaded picture gets a signed public link that does not expire** (operator ask: agents should show a picture
+  when they join a meeting). RealtimeKit loads a participant's picture from the address we give it, for everyone in the
+  room, guests too, and `/v1/avatars/<key>` needs a session. The link is an HMAC of the key under a secret derived from
+  `FLOW_DATA_KEY`; it opens one picture only, and a new upload gets a new key, so an old link never shows a new picture.
+- **An agent with no picture shows a preset agent picture**, picked from its id, so it is never just initials.
+
 ## 2026-11-22 — The suite runs hosted apps' OAuth sign-ins; drafts reach approved hosts (Taskboard task 30)
 
 - **Decision:** a hosted app declares the services it signs people in to (`"oauth"` in its manifest), and the suite does

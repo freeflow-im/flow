@@ -3,6 +3,7 @@
 // Live now asks RTK who is in each recently used room.
 import { randomBytes } from 'node:crypto';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { checkAvatarSignature } from '../avatarLinks';
 import type { DatabaseSync } from 'node:sqlite';
 import { orgStorage } from '../../test/orgStorage';
 import { orgRoutes } from '../routes/org';
@@ -86,6 +87,17 @@ describe('a meeting room', () => {
     const again = await withDb(db, () => joinMeeting(m.id, ANN));
     expect(again).toMatchObject({ authToken: 'tok-2', host: true });
     expect(calls.filter((c) => c.url.endsWith('/participants'))).toHaveLength(1);
+  });
+
+  it("gives RTK the person's picture as a public link, which needs no sign-in", async () => {
+    fakeRtk({ 'POST /meetings': { id: 'rtk-m1' }, 'POST /meetings/rtk-m1/participants': { id: 'p-ann', token: 'tok-1' } });
+    const key = `${ANN}-1795412000000.png`;
+    sqlite.prepare('UPDATE users SET avatar_url = ? WHERE id = ?').run(`/v1/avatars/${key}`, ANN);
+    const m = await withDb(db, () => createMeeting(workspaceId, ANN, 'Design review'));
+    await withDb(db, () => joinMeeting(m.id, ANN));
+    const picture = String(calls[1]?.body?.picture ?? '');
+    expect(picture).toMatch(new RegExp(`/v1/public/avatars/${key}\\?s=[A-Za-z0-9_-]{43}$`));
+    expect(checkAvatarSignature(process.env.FLOW_DATA_KEY, key, new URL(picture).searchParams.get('s')!)).toBe(true);
   });
 
   it('lets another member join as a participant, and hides the room from people outside the organization', async () => {

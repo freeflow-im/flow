@@ -1,5 +1,6 @@
 // Everything an organization owns goes to its object: the path names the organization, or an id the directory can look up.
 import { Hono, type Context } from 'hono';
+import { checkAvatarSignature, PUBLIC_AVATAR_PATH } from '../avatarLinks';
 import { verifyRtkWebhook } from '../rtkWebhook';
 import { PatchMeBody, type UserDTO } from '@flow/shared';
 import { AGENT_AVATAR_PRESETS, agentAvatarUrl, type AgentAvatarPreset } from '@flow/shared/assistant';
@@ -13,6 +14,8 @@ import { hostedMailEnabled, mailProviderFor, type MailProviderEnv } from '../mai
 
 export interface OrgRouteEnv extends AuthEnv, PlatformDnsEnv, MailProviderEnv {
   BLOBS: R2Bucket;
+  /** Signs and checks public picture links (avatarLinks.ts). */
+  FLOW_DATA_KEY?: string;
   GOOGLE_CLIENT_ID?: string;
   APPLE_AUDIENCE?: string;
   FLOW_SERVER_NAME?: string;
@@ -229,6 +232,17 @@ orgRoutes.get('/v1/avatars/:key', async (c) => {
   const object = /^[0-9a-f-]{36}-\d+(\.[a-z]+)?$/.test(key) || AVATAR_KEY.test(key) ? await c.env.BLOBS.get(`avatars/${key}`) : null;
   if (!object) throw notFound('avatar not found');
   return new Response(object.body, { headers: { 'content-type': object.httpMetadata?.contentType ?? 'image/webp', 'cache-control': 'private, max-age=31536000, immutable', 'x-content-type-options': 'nosniff' } });
+});
+
+// A picture by a signed link (avatarLinks.ts), for a service that loads it without signing in (RealtimeKit's participant
+// pictures). Only a picture is served, never another kind of file kept under avatars/.
+orgRoutes.get(`${PUBLIC_AVATAR_PATH}:key`, async (c) => {
+  const key = c.req.param('key');
+  if (!checkAvatarSignature(c.env.FLOW_DATA_KEY, key, c.req.query('s'))) throw notFound('avatar not found');
+  const object = await c.env.BLOBS.get(`avatars/${key}`);
+  const type = object?.httpMetadata?.contentType ?? 'image/webp';
+  if (!object || !/^image\/(png|jpeg|gif|webp)$/.test(type)) throw notFound('avatar not found');
+  return new Response(object.body, { headers: { 'content-type': type, 'cache-control': 'public, max-age=31536000, immutable', 'x-content-type-options': 'nosniff' } });
 });
 
 /** The same request to each of a person's organizations, with the answers joined: lists concatenated, counts added. */
