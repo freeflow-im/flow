@@ -68,6 +68,8 @@ export const assistantApi = {
   definition: async (org: string) => (await request<{ definition: AgentDefinitionDTO }>('GET', mine(org, 'definition'))).definition,
   saveDefinition: async (org: string, body: { name?: string; instructions?: string; modelId?: string | null }) => (await request<{ definition: AgentDefinitionDTO }>('PUT', mine(org, 'definition'), body)).definition,
   allowlist: async (org: string) => (await request<{ senders: string[] }>('GET', mine(org, 'senders'))).senders,
+  /** The person's own addresses (their FreeFlow one, their connected mail and calendar accounts): always allowed. */
+  ownAddresses: async (org: string) => (await request<{ own?: string[] }>('GET', mine(org, 'senders'))).own ?? [],
   saveAllowlist: async (org: string, senders: string[]) => (await request<{ senders: string[] }>('PUT', mine(org, 'senders'), { senders })).senders,
   /** Whether it answers allowlisted mail on its own (off by default). */
   autoReply: async (org: string) => (await request<{ autoReply?: boolean }>('GET', mine(org, 'senders'))).autoReply === true,

@@ -1754,9 +1754,10 @@ export class Mail extends DurableObject<MailEnv> {
     if (!me || me.kind !== 'personal_agent' || me.agentRuntime !== 'hosted' || !me.sponsorId) return (this.policy = null);
     const sponsor = await ask<AccountDTO | null>('accountFor', me.sponsorId, me.organizationId);
     if (!sponsor) return (this.policy = null);
-    // Only the senders the sponsor named (operator ruling 2026-11-11): the list starts empty, and empty means no mail at all.
+    // The senders the sponsor named (operator ruling 2026-11-11: the list starts empty, and empty means no mail at all).
     const runtime = ASSISTANT.get(ASSISTANT.idFromName(sponsor.id));
-    const extra = await runtime.mailAllowlist().catch(() => [] as string[]);
+    // And the sponsor's own addresses, always (operator ruling 2026-11-23): their invitations and mail reach their assistant.
+    const extra = await runtime.mailSenders().catch(() => [] as string[]);
     const allowed = new Set(extra.map((x) => x.toLowerCase()));
     // Answering is a `wake` subscription on this mailbox's mail.received (assistant/mailWake.ts), which the runtime keeps in
     // step with "Agent always responds to incoming email". Asked here as well as when the setting changes, so an assistant

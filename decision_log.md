@@ -2226,3 +2226,13 @@ one-recipient MCP correction).
   (operator ruling, amends R7). A local test showed RTK makes a post-meeting transcript only when it was on before the
   session began: turning it on when Record is pressed (phase 4's design) gave empty transcripts in production.
   Recording stays opt-in; unrecorded sessions' transcripts are dropped by us, though RTK keeps its copy 7 days.
+
+## 2026-11-23 — A sponsor's own addresses may always mail their assistant (`docs/specs/agents.md` §1.1)
+
+- **The sponsor's own addresses are always allowed** (operator ruling, Scott; amends 2026-11-11 "Assistant mail is
+  opt-in"): their FreeFlow address and every mail and calendar account they connected, without being typed into the
+  allowlist. The allowlist is now only for other senders. Why: invitations reach an assistant's calendar through its
+  mailbox check, and a person inviting their assistant from their own Google calendar should not have to list
+  themself first.
+- **So every hosted personal agent's mailbox is checked every ten minutes** once its sponsor has an address, and an
+  email invitation it keeps goes on its own calendar. Answering mail on its own stays off by default.

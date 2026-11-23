@@ -985,6 +985,29 @@ export class Assistant extends DurableObject<AssistantEnv> {
   }
 
   /**
+   * The sponsor's own addresses (operator ruling 2026-11-23): their FreeFlow address and every mail and calendar account
+   * they connected, lower-cased. They may always mail their assistant, without being on the allowlist: an invitation the
+   * sponsor sends from their Google calendar, or mail from their own Gmail, reaches it. None for a shared agent's runtime.
+   */
+  async ownerAddresses(): Promise<string[]> {
+    const sponsor = this.state('owner_account_id');
+    if (!sponsor || this.state('agent_mode') === 'shared') return [];
+    const { MAIL, CALENDAR } = this.env;
+    const [account, mail, calendar] = await Promise.all([
+      this.directory<AccountDTO | null>('accountById', sponsor).catch(() => null),
+      MAIL ? MAIL.get(MAIL.idFromName(sponsor)).calendarIdentities().then((ids) => ids.map((i) => i.email)).catch(() => [] as string[]) : Promise.resolve([] as string[]),
+      CALENDAR ? CALENDAR.get(CALENDAR.idFromName(sponsor)).accountEmails().catch(() => [] as string[]) : Promise.resolve([] as string[]),
+    ]);
+    const agent = this.state('agent_address')?.toLowerCase();
+    return [...new Set([account?.address ?? '', ...mail, ...calendar].map((a) => a.trim().toLowerCase()).filter((a) => a.includes('@') && a !== agent))].sort();
+  }
+
+  /** Who may mail the assistant: the allowlist the sponsor wrote and the sponsor's own addresses. */
+  async mailSenders(): Promise<string[]> {
+    return [...new Set([...(await this.mailAllowlist()), ...(await this.ownerAddresses())])];
+  }
+
+  /**
    * Keeps the assistant's answering subscription in step with its settings (assistant/mailWake.ts; decision_log 2026-11-17,
    * R-B): one `wake` subscription on its own mailbox's `mail.received` while "Agent always responds to incoming email" is
    * on and the allowlist names a sender, none otherwise. Asked when the sponsor changes either, and by the assistant's Mail
@@ -1005,7 +1028,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
     const events = ns.get(ns.idFromName(p.organizationId));
     const agent = p.agentAccountId || this.state('agent_account_id');
     const sponsor = this.state('owner_account_id');
-    const want = !!agent && !!sponsor && agent !== sponsor && this.state('agent_mode') !== 'shared' && (await this.mailAutoReply()) && (await this.mailAllowlist()).length > 0;
+    const want = !!agent && !!sponsor && agent !== sponsor && this.state('agent_mode') !== 'shared' && (await this.mailAutoReply()) && (await this.mailSenders()).length > 0;
     const id = this.state('mail_wake_subscription');
     const existing = id ? await events.getSubscription(id) : null;
     if (id && !existing) {
@@ -1401,7 +1424,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
         return c.json({ error: `It could not be sent: ${(e as Error).message.slice(0, 300)}`, approval: store.get(id) }, 502);
       }
     });
-    app.get('/api/agent/mail-allowlist', async (c) => c.json({ senders: await this.mailAllowlist(), autoReply: await this.mailAutoReply() }));
+    app.get('/api/agent/mail-allowlist', async (c) => c.json({ senders: await this.mailAllowlist(), own: await this.ownerAddresses(), autoReply: await this.mailAutoReply() }));
     app.put('/api/agent/mail-allowlist', async (c) => {
       const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { senders?: unknown; autoReply?: unknown };
       if (body.senders !== undefined) {
@@ -1415,7 +1438,7 @@ export class Assistant extends DurableObject<AssistantEnv> {
       // Answering is a subscription on the mailbox's mail.received (assistant/mailWake.ts): made or removed to match.
       const organizationId = c.env.who.caller.account.organizationId || c.env.who.caller.organizationId;
       if (organizationId) await this.syncMailWake({ organizationId }).catch((err: Error) => console.error(`[assistant] mail wake: ${err.message}`));
-      return c.json({ senders: await this.mailAllowlist(), autoReply: await this.mailAutoReply() });
+      return c.json({ senders: await this.mailAllowlist(), own: await this.ownerAddresses(), autoReply: await this.mailAutoReply() });
     });
     app.put('/api/agent/definition', async (c) => {
       const body = ((await c.req.json().catch(() => ({}))) ?? {}) as { name?: unknown; instructions?: unknown; modelId?: unknown };

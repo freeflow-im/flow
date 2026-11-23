@@ -352,6 +352,14 @@ export class Calendar extends DurableObject<CalendarEnv> {
     }
   }
 
+  /**
+   * The addresses of this account's calendar accounts (its FreeFlow one's and the ones it connected), lower-cased: a
+   * sponsor's own addresses, which may always mail their assistant (Assistant.ownerAddresses, decision_log 2026-11-23).
+   */
+  async accountEmails(): Promise<string[]> {
+    return [...new Set(this.accountRows().map((r) => r.email.trim().toLowerCase()).filter(Boolean))];
+  }
+
   /** `receiveItip`'s work, on the native calendar holding the event (else the default native one), under its lock. */
   private async applyItip(m: ItipDelivery): Promise<ItipAnswer> {
     const incoming = summaryOf(m.ics);
