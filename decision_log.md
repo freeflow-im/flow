@@ -2178,3 +2178,13 @@ one-recipient MCP correction).
 - **An alert goes only to the agent's owner or the person who asked** (operator ruling): the in-app assistant's
   person, a personal agent's sponsor, or the person whose request started a shared agent's turn (who must share a
   channel with it), else its owner. The tool names no recipient. Telling other members is a Chat message.
+
+## 2026-11-22 — Meet recording and agents (`docs/specs/meetings.md` R8–R10)
+
+- **Anyone in a meeting can turn recording on** (operator ruling). Recording always makes a transcript too.
+- **Recordings and transcripts are stored in Docs**, in a global **Meetings** folder in Organization files, one folder
+  per meeting session (operator ruling). This is Meet phase 4.
+- **A private huddle's folder is open only to the members who attended** (operator ruling): huddles from a DM,
+  group DM or private channel. Other meetings' folders are open to the whole organization.
+- **Summaries come from agents in phase 5** (operator ruling): an agent joins, turns recording on itself, and
+  afterwards writes the meeting notes into the meeting's folder. RTK's own summary is not used.
