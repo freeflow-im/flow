@@ -1,4 +1,4 @@
-// The join chime (lib/chime.ts): two notes, rising, each faded in and out, and the audio closed after; a browser that
+// The join chime (lib/chime.ts): a low chord, each note faded in and out, and the audio closed after; a browser that
 // refuses audio leaves no error behind.
 import { describe, expect, it, vi } from 'vitest';
 import { CHIME_NOTES, playJoinChime } from './chime';
@@ -21,14 +21,13 @@ function fakeCtx() {
 }
 
 describe('playJoinChime', () => {
-  it('plays two rising notes, one after the other, then closes the audio', async () => {
+  it('plays the chord, its notes together, then closes the audio', async () => {
     vi.useFakeTimers();
     const { ctx, started, freqs } = fakeCtx();
     await playJoinChime(() => ctx as never);
-    expect(freqs).toEqual([...CHIME_NOTES]);
-    expect(freqs[1]!).toBeGreaterThan(freqs[0]!);
-    expect(started[0]).toBe(10);
-    expect(started[1]!).toBeGreaterThan(10);
+    expect(freqs).toEqual([440, 659.25, 880]);
+    expect(CHIME_NOTES).toHaveLength(3);
+    expect(started.every((t) => t >= 10 && t < 10.1)).toBe(true);
     expect(ctx.close).not.toHaveBeenCalled();
     vi.advanceTimersByTime(2000);
     expect(ctx.close).toHaveBeenCalled();

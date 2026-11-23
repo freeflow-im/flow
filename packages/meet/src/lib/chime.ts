@@ -1,13 +1,15 @@
-// The "you're in" chime (Meet room, Room.tsx): two soft rising notes, played once the join to RealtimeKit has finished,
-// so a person knows they are in the meeting. It is made with Web Audio rather than shipped as a file, as Chat's ringtone
-// is (packages/web IncomingHuddle.tsx). A browser may refuse to play before the page was clicked (a huddle opened
-// straight from Chat); then there is no chime, and nothing else changes.
+// The "you're in" chime (Meet room, Room.tsx): a soft, low chord (A4 and E5, with a quiet A5 on top), played once the
+// join to RealtimeKit has finished, so a person knows they are in the meeting. Scott picked it from seven candidates
+// (2026-11-23). It is made with Web Audio rather than shipped as a file, as Chat's ringtone is (packages/web
+// IncomingHuddle.tsx). A browser may refuse to play before the page was clicked (a huddle opened straight from Chat);
+// then there is no chime, and nothing else changes.
 
-/** The two notes (E5, then A5), each this long, the second starting this much after the first. */
-export const CHIME_NOTES = [659.25, 880] as const;
-const NOTE_S = 0.35;
-const GAP_S = 0.12;
-const VOLUME = 0.12;
+/** The chord's notes: frequency (Hz), start after the chord starts (s), length (s), volume. */
+export const CHIME_NOTES = [
+  { freq: 440, at: 0, length: 0.9, volume: 0.12 },
+  { freq: 659.25, at: 0, length: 0.9, volume: 0.08 },
+  { freq: 880, at: 0.02, length: 0.5, volume: 0.03 },
+] as const;
 
 type Ctx = Pick<AudioContext, 'currentTime' | 'destination' | 'createOscillator' | 'createGain' | 'resume' | 'close'>;
 
@@ -22,21 +24,21 @@ export async function playJoinChime(make: () => Ctx = () => new AudioContext()):
   try {
     await ctx.resume();
     const start = ctx.currentTime;
-    CHIME_NOTES.forEach((freq, i) => {
-      const at = start + i * GAP_S;
+    for (const note of CHIME_NOTES) {
+      const at = start + note.at;
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'sine';
-      osc.frequency.setValueAtTime(freq, at);
+      osc.frequency.setValueAtTime(note.freq, at);
       // A quick rise and a soft fade, so the notes do not click.
       gain.gain.setValueAtTime(0, at);
-      gain.gain.linearRampToValueAtTime(VOLUME, at + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, at + NOTE_S);
+      gain.gain.linearRampToValueAtTime(note.volume, at + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, at + note.length);
       osc.connect(gain).connect(ctx.destination);
       osc.start(at);
-      osc.stop(at + NOTE_S + 0.05);
-    });
-    const done = (GAP_S * (CHIME_NOTES.length - 1) + NOTE_S + 0.2) * 1000;
+      osc.stop(at + note.length + 0.05);
+    }
+    const done = (Math.max(...CHIME_NOTES.map((n) => n.at + n.length)) + 0.2) * 1000;
     setTimeout(() => void ctx.close().catch(() => {}), done);
   } catch {
     void ctx.close().catch(() => {});
